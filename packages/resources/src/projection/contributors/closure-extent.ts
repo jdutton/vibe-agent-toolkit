@@ -1364,6 +1364,7 @@ function unresolvedCondition(
     targetExists: null,
     matchedPattern: null,
     matchedPayload: null,
+    targetFaultClass: null,
   };
 }
 
@@ -1407,6 +1408,7 @@ function outsideRootCondition(
     targetExists: null,
     matchedPattern: null,
     matchedPayload: null,
+    targetFaultClass: null,
   };
 }
 
@@ -1493,6 +1495,7 @@ function refusedCondition(
     targetExists: target.exists,
     matchedPattern: rule.patterns[0] ?? null,
     matchedPayload: rule.payload,
+    targetFaultClass: null,
   };
 }
 
@@ -1548,6 +1551,7 @@ function depthExceededCondition(
     targetExists: target.exists,
     matchedPattern: null,
     matchedPayload: null,
+    targetFaultClass: null,
   };
 }
 

@@ -7,10 +7,10 @@
  * falling back to an absolute path.
  */
 
-import { existsSync } from 'node:fs';
 import { dirname, parse } from 'node:path';
 
 import { isPathAbsentError } from './errors/errno-table.js';
+import { entryPresentIn } from './errors/path-present.js';
 import { resetGitRootCache } from './git-root-cache.js';
 import { safePath } from './path-utils.js';
 import { readTextContentSync } from './text-file.js';
@@ -31,8 +31,7 @@ export function findConfigFile(startDir: string): string | null {
   let current = safePath.resolve(startDir);
   const root = parse(current).root;
   while (true) {
-    const candidate = safePath.join(current, CONFIG_FILENAME);
-    if (existsSync(candidate)) return candidate;
+    if (entryPresentIn(current, CONFIG_FILENAME)) return safePath.join(current, CONFIG_FILENAME);
     if (current === root) return null;
     const parent = dirname(current);
     if (parent === current) return null;
@@ -54,7 +53,7 @@ export function findNodeWorkspaceRoot(startDir: string): string | null {
   let current = safePath.resolve(startDir);
   while (current !== dirname(current)) {
     const pkgPath = safePath.join(current, PACKAGE_JSON_FILENAME);
-    if (existsSync(pkgPath)) {
+    if (entryPresentIn(current, PACKAGE_JSON_FILENAME)) {
       try {
         // Through the decoding seam: this is the ADOPTER's manifest, not ours,
         // and a UTF-8 BOM in front of `{` makes `JSON.parse` throw — which the
@@ -65,7 +64,7 @@ export function findNodeWorkspaceRoot(startDir: string): string | null {
         }
       } catch (error) {
         // Not JSON: not a manifest this walk can read, so skip it and keep
-        // walking up. Gone between `existsSync` and the read counts the same. A
+        // walking up. Gone between the probe and the read counts the same. A
         // manifest the OS refused (`EACCES`), or a directory named
         // `package.json` (`EISDIR`), is neither — reading past it would make
         // the walk settle on the WRONG root, silently.
@@ -138,7 +137,7 @@ function configWalkPhase(
     }
     visited.push(current);
 
-    if (existsSync(safePath.join(current, CONFIG_FILENAME))) {
+    if (entryPresentIn(current, CONFIG_FILENAME)) {
       const entry = { configRoot: current };
       propagateCache(visited, entry);
       return { kind: 'found', configRoot: current };
@@ -158,7 +157,7 @@ function configWalkPhase(
 function gitWalkPhase(startDir: string, visited: ReadonlyArray<string>): string | null {
   let current = safePath.resolve(startDir);
   while (true) {
-    if (existsSync(safePath.join(current, '.git'))) {
+    if (entryPresentIn(current, '.git')) {
       const entry = { configRoot: current };
       propagateCache(visited, entry);
       return current;

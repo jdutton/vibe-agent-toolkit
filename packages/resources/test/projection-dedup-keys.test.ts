@@ -265,6 +265,7 @@ const FIXTURES: readonly TableFixture[] = [
       targetExists: false,
       matchedPattern: 'lib/**',
       matchedPayload: null,
+      targetFaultClass: null,
     },
     {
       extentId: 'ctx-alt',
@@ -279,6 +280,7 @@ const FIXTURES: readonly TableFixture[] = [
       targetExists: null,
       matchedPattern: null,
       matchedPayload: { rule: 1 },
+      targetFaultClass: 'refused',
     },
   ),
   fixture(

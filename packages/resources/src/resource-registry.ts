@@ -28,6 +28,7 @@ import {
   issueLocation,
   isVatError,
   recordRegistryPass,
+  requireFollowedStat,
   resolveAssetReference,
   safePath,
   toForwardSlash,
@@ -162,8 +163,10 @@ function isReadFailure(error: unknown): error is Error {
 function readFault(error: Error): { faultClass: FsFaultClass; errno: string } | undefined {
   if (isFsFaultError(error)) return { faultClass: error.faultClass, errno: error.errno };
   if (isVatError(error)) return undefined;
-  const { code } = error as { code?: unknown };
-  return typeof code === 'string' ? fsFaultOf({ code }) : undefined;
+  // The classifier asked of the error itself (its syscall and path decide an unlisted or network
+  // errno), and kept only when the errno it found is this error's own, never one down its cause chain.
+  const facts = fsFaultOf(error);
+  return facts !== undefined && facts.errno === (error as { code?: unknown }).code ? facts : undefined;
 }
 
 /**
@@ -641,7 +644,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * it caches directory *listings*, so a registry that outlives an edit (watch mode,
    * a server) must not answer the next run from the previous run's snapshot.
    */
-  private fsCache: FsLookupCache = new FsLookupCache();
+  private fsCache: FsLookupCache = new FsLookupCache(locationRoot(undefined));
 
   /**
    * Disk-backed parse cache, created on first parse unless injected.
@@ -1139,7 +1142,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // extra `stat` on a path that has already paid a whole read and a parse.
     //
     // THE stat — one call serving both `modifiedAt` and `sizeBytes`.
-    const stats = await fs.stat(absolutePath);
+    // Its link chain read beneath the crawl base first (`link-following.ts`).
+    const stats = await requireFollowedStat(absolutePath, locationRoot(this.baseDir));
 
     // Checksum from the bytes already decoded, not a second read of the file.
     // It hashes the DECODED STRING, which is a different keyspace from
@@ -1919,7 +1923,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // false statement about it. The same reasoning applies more sharply to
     // `validateFrontmatterLinks` below: it is link validation, not schema
     // handling, and the fact tables it reads throw ON PURPOSE
-    // (`realpathFrom`/`pathSpellingFrom` crash on a missing row so that a
+    // (`realpathRowFrom`/`pathSpellingFrom` crash on a missing row so that a
     // fill/judge divergence names its own remedy). That crash must reach the
     // operator intact rather than be reworded into a schema complaint — do not
     // re-wrap either call.
@@ -2051,7 +2055,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
 
     // Fresh per run: directory listings are a snapshot, and a registry can outlive
     // the state it was validated against.
-    this.fsCache = new FsLookupCache();
+    this.fsCache = new FsLookupCache(locationRoot(this.baseDir));
 
     // Build fragment index for anchor validation
     const fragmentsByFile = this.buildFragmentIndex();

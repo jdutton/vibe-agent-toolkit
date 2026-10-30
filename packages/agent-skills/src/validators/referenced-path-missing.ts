@@ -108,11 +108,9 @@
  * bundled subdirectory and which carries no glob character.
  */
 
-import { existsSync } from 'node:fs';
-
 import { parseMarkdown } from '@vibe-agent-toolkit/resources';
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { mapConcurrentFailingInOrder, safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { everywhere, mapConcurrentFailingInOrder, pathPresent, safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
 import {
   CLAUDE_WEB_REFERENCES_SUBDIR,
@@ -160,7 +158,7 @@ const NON_LITERAL = /[*?<>{}[\]]/u;
  * matters for what happens downstream — any `..`. A token carrying `..` is not a
  * claim about the bundle's contents, and it is the segment that would otherwise
  * turn verbatim markdown content into a traversal by the time it reaches
- * `existsSync`.
+ * the presence probe.
  */
 function bundleRelativeSegments(token: string): string[] | null {
   if (NON_LITERAL.test(token)) return null;
@@ -248,7 +246,9 @@ export async function bundledPathCandidates(filePath: string): Promise<string[]>
  * argument rather than needing its own.
  */
 function bundleHas(skillDir: string, rel: string): boolean {
-  return existsSync(safePath.join(skillDir, rel));
+  // `skillDir` is VAT's own packaged output: the tree the probe is in. A refused probe or link chain
+  // is the output's fault, thrown — never a "missing" warning about a path VAT could not look at.
+  return pathPresent(safePath.join(skillDir, rel), { follow: skillDir }, everywhere('destination'), 'probe');
 }
 
 /**
@@ -287,7 +287,7 @@ function bundleHas(skillDir: string, rel: string): boolean {
  * So a candidate is only missing if it is absent under BOTH its authored
  * spelling and its routed one. The suppression is deliberately narrow — a
  * basename-for-basename relocation, which is exactly the shape routing produces
- * — and it costs one extra `existsSync` on a path that already failed one.
+ * — and it costs one extra presence probe on a path that already failed one.
  */
 function routedSpelling(rel: string, target: PackagingTarget): string {
   const basename = rel.slice(rel.lastIndexOf('/') + 1);

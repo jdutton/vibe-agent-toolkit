@@ -11,7 +11,7 @@
 
 import fs from 'node:fs';
 
-import { applyTreePlanOrLeftover, fsFaultOf, isPathAbsentError, type OwnershipVerdict, planTreeChanges, safePath, toForwardSlash, withFsFaultSync } from '@vibe-agent-toolkit/utils';
+import { applyTreePlanOrLeftover, assertUnresolvableLink, fsFaultOf, isPathAbsentError, type OwnershipVerdict, planTreeChanges, realpathNativeSync, safePath, withFsFaultSync } from '@vibe-agent-toolkit/utils';
 
 /** The chunk table: every indexed chunk and its embedding. */
 export const TABLE_NAME = 'rag_chunks';
@@ -105,7 +105,8 @@ export function foreignDatabaseEntries(dbPath: string, entries: readonly Databas
  * as far as its own target): what a caller names to clear the database itself.
  *
  * @returns The real path, or `undefined` when `dbPath` is not a link (or not there)
- * @throws {FsFaultError} (side `destination`) when the OS refuses to examine the link or its target
+ * @throws {FsFaultError} (side `destination`) when the OS refuses to examine the link or its target,
+ *   or the link's chain names a network or device path VAT never asks the OS to follow
  */
 export function linkedDatabasePath(dbPath: string): string | undefined {
   const fault = { side: 'destination', path: dbPath, action: 'examine the link at the RAG database path' } as const;
@@ -119,11 +120,13 @@ export function linkedDatabasePath(dbPath: string): string | undefined {
     }
     if (!stats.isSymbolicLink()) return undefined;
     try {
-      return toForwardSlash(fs.realpathSync.native(dbPath));
+      // Within the link's own directory: the link itself is read before the kernel follows it.
+      return realpathNativeSync(dbPath, safePath.resolve(dbPath, '..'));
     } catch (error: unknown) {
-      // Dangling: name where it points, absolute.
-      if (isPathAbsentError(error)) return safePath.resolve(safePath.join(dbPath, '..'), fs.readlinkSync(dbPath));
-      throw error;
+      // Resolves to nothing (dangling, a cycle, a share that is not there): name where it
+      // points, absolute. A refusal stops the removal — the one link predicate's write lane.
+      assertUnresolvableLink(error, fault);
+      return safePath.resolve(safePath.join(dbPath, '..'), fs.readlinkSync(dbPath));
     }
   });
 }

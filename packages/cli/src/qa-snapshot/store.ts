@@ -23,11 +23,11 @@
  * a capture taken on macOS is comparable against a Windows checkout.
  */
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { applyTreePlan, forEachInOrder, planTreeChanges, relativeEscapesRoot, safePath } from '@vibe-agent-toolkit/utils';
+import { applyTreePlan, followedKindSync, forEachInOrder, planTreeChanges, relativeEscapesRoot, safePath } from '@vibe-agent-toolkit/utils';
 
 import {
   MANIFEST_FILENAME,
@@ -156,8 +156,9 @@ export function readSnapshot(dir: string): LoadedSnapshot {
  * @throws {Error} When the directory is non-empty and holds no manifest
  */
 function assertWritableSnapshotDir(root: string, manifestPath: string): void {
-  if (!existsSync(root)) return;
-  if (existsSync(manifestPath)) return;
+  // The snapshot directory is the caller's own: its own `within`, and everything in it is read beneath it.
+  if (followedKindSync(root, root) === 'absent') return;
+  if (followedKindSync(manifestPath, root) !== 'absent') return;
 
   const entries = readdirSync(root);
   if (entries.length === 0) return;
@@ -182,7 +183,7 @@ function assertWritableSnapshotDir(root: string, manifestPath: string): void {
  * @throws {Error} When it is absent, unparseable, or not this build's layout
  */
 function readManifest(root: string, manifestPath: string): SnapshotManifest {
-  if (!existsSync(manifestPath)) {
+  if (followedKindSync(manifestPath, root) === 'absent') {
     throw new Error(
       `Not a snapshot directory: ${root}\n` +
         `  Expected ${MANIFEST_FILENAME} at its top level. Capture one with captureSnapshot() + writeSnapshot(${root}, …) from a test.`,
@@ -246,7 +247,7 @@ function manifestArtifactNames(manifest: SnapshotManifest): string[] {
 function readArtifact(root: string, name: string): string {
   const file = safePath.joinUnderRoot(root, name);
 
-  if (!existsSync(file)) {
+  if (followedKindSync(file, root) === 'absent') {
     throw new Error(
       `Snapshot at ${root} names an artifact that is not on disk: ${name}\n` +
         `  Reading it as an empty string would compare as a wholesale deletion and present as a catastrophic regression, so the load is refused. Re-capture the snapshot.`,

@@ -162,13 +162,23 @@ describe('planInstall (the skills lanes)', () => {
       ['/tmp/pkg/dist/skills/pkg__sub', 'environment', 'must-be-free'],
     ]);
     // The build is confirmed present on the side the package is on, before anything is planned to change.
-    expect(pathPresent).toHaveBeenCalledWith('/tmp/pkg/dist/skills/plain', 'follow', 'environment', 'confirmed');
+    expect(pathPresent).toHaveBeenCalledWith('/tmp/pkg/dist/skills/plain', { follow: '/tmp/pkg' }, expect.any(Function), 'confirmed');
+    // Every path the probe touches — the build, the package walked to it, the parent it lists — is VAT's staging.
+    const sideOf = pathPresent.mock.calls.find(([path]) => path === '/tmp/pkg/dist/skills/plain')?.[2] as ((path: string) => string) | undefined;
+    expect(['/tmp/pkg/dist/skills/plain', '/tmp/pkg/dist', '/tmp/pkg'].map((path) => sideOf?.(path))).toEqual(['environment', 'environment', 'environment']);
   });
 
   it('one skill directory is one copy from that directory, and --force may take what is there', async () => {
     pathPresent.mockReturnValue(true);
-    const planned = await planInstall(runWith({ force: true }), { kind: 'skill-dir', side: 'source', skillPath: '/src/my-skill', skillName: 'my-skill' } as never, 'copy');
-    expect(planned.changes).toEqual([expect.objectContaining({ dest: `${SKILLS_DIR}/my-skill`, ownership: { kind: 'force' }, label: 'skill my-skill' })]);
+    // A skill extracted into staging: a tree in the operator's own directory is examined on disk first (`installUnit`).
+    const planned = await planInstall(runWith({ force: true }), { kind: 'skill-dir', side: 'environment', skillPath: '/tmp/staged/my-skill', skillName: 'my-skill' } as never, 'copy');
+    expect(planned.changes).toEqual([expect.objectContaining({
+      dest: `${SKILLS_DIR}/my-skill`,
+      ownership: { kind: 'force' },
+      label: 'skill my-skill',
+      // What the archive module extracted holds no link: one found there refuses the copy.
+      fill: { from: 'copy', source: '/tmp/staged/my-skill', side: 'environment', links: 'refuse' },
+    })]);
   });
 
   it('a declared skill with no build rejects as the invocation\'s mistake, naming the path', async () => {

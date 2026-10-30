@@ -32,7 +32,7 @@
 import { readdirSync } from 'node:fs';
 
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, FollowedWalk, type FsSide, isPathAbsentError, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, FollowedWalk, type FsSide, isPathAbsentError, issueLocation, safePath, withFsFaultSync } from '@vibe-agent-toolkit/utils';
 
 import { CLAUDE_WEB_REFERENCES_SUBDIR, TARGET_SUBDIR_CATEGORIES } from '../content-type-routing.js';
 
@@ -58,7 +58,13 @@ const MAX_LISTED_FILES = 5;
  * this check's "nothing bundled, nothing to say", and a listing the OS would
  * not hand over has not established that.
  */
-function listFilesRelative(dir: string, baseDir: string, side: FsSide, walk?: FollowedWalk): string[] {
+function listFilesRelative(dir: string, baseDir: string, side: FsSide): string[] {
+  // The skill directory is the tree walked: every link beneath it is read before the kernel follows it,
+  // and a directory the walk cannot resolve is a fault on the side the caller says the skill tree is on.
+  return listFilesUnder(dir, baseDir, side, undefined);
+}
+
+function listFilesUnder(dir: string, baseDir: string, side: FsSide, walk: FollowedWalk | undefined): string[] {
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
@@ -66,20 +72,23 @@ function listFilesRelative(dir: string, baseDir: string, side: FsSide, walk?: Fo
     if (isPathAbsentError(error)) return [];
     throw error;
   }
-  // A directory the walk cannot resolve is a fault on the side the caller says the skill tree is on.
-  const guard = walk ?? new FollowedWalk(side);
+  const guard = walk ?? new FollowedWalk(side, baseDir);
   if (walk === undefined) guard.enter(dir);
   const found: string[] = [];
   for (const entry of entries) {
     const child = safePath.join(dir, entry.name);
     // Followed: a linked resource is a bundled resource for link purposes. A
-    // link back into the tree is refused by the walk guard, not recursed.
-    const kind = direntKindFollowingSync(dir, entry);
+    // link back into the tree is refused by the walk guard, not recursed. A
+    // refused probe or link chain is a fault on the skill tree's side, never "absent".
+    const kind = withFsFaultSync(
+      { side, origin: 'content', action: `examine the bundled resource at ${child}`, path: child },
+      () => direntKindFollowingSync(dir, entry, baseDir),
+    );
     if (kind === 'file') {
       found.push(safePath.relative(baseDir, child));
     } else if (kind === 'directory') {
       guard.enter(child);
-      found.push(...listFilesRelative(child, baseDir, side, guard));
+      found.push(...listFilesUnder(child, baseDir, side, guard));
     }
   }
   return found;

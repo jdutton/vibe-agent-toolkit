@@ -46,8 +46,8 @@ function expectSingleResource(resources: Array<{ headings: Array<{ text: string 
  * Helper to assert result paths match expected values
  */
 function expectProjectPaths(result: { scanPath: string; projectRoot: string }, expectedPath: string): void {
-  expect(normalizePath(result.scanPath)).toBe(normalizePath(expectedPath));
-  expect(normalizePath(result.projectRoot)).toBe(normalizePath(expectedPath));
+  expect(normalizePath(result.scanPath, result.scanPath)).toBe(normalizePath(expectedPath, expectedPath));
+  expect(normalizePath(result.projectRoot, result.projectRoot)).toBe(normalizePath(expectedPath, expectedPath));
 }
 
 /**
@@ -115,8 +115,8 @@ describe('loadResourcesWithConfig (integration test)', () => {
         const docsPath = safePath.join(projectDir, 'docs');
         const result = await loadResourcesWithConfig(docsPath, projectDir, logger);
 
-        expect(normalizePath(result.scanPath)).toBe(normalizePath(docsPath));
-        expect(normalizePath(result.projectRoot)).toBe(normalizePath(projectDir));
+        expect(normalizePath(result.scanPath, result.scanPath)).toBe(normalizePath(docsPath, docsPath));
+        expect(normalizePath(result.projectRoot, result.projectRoot)).toBe(normalizePath(projectDir, projectDir));
         expect(result.config).toBeDefined();
 
         // Scoped to docs/ (so README.md and other/notes.md are out) AND the
@@ -138,7 +138,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
         const otherPath = safePath.join(projectDir, 'other');
         const result = await loadResourcesWithConfig(otherPath, projectDir, logger);
 
-        expect(normalizePath(result.scanPath)).toBe(normalizePath(otherPath));
+        expect(normalizePath(result.scanPath, result.scanPath)).toBe(normalizePath(otherPath, otherPath));
 
         // Should find other/notes.md
         expectSingleResource(result.registry.getAllResources(), 'Notes');
@@ -217,7 +217,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
 
       const result = await loadResourcesWithConfig(isolatedDir, isolatedDir, logger);
 
-      expect(normalizePath(result.projectRoot)).toBe(normalizePath(isolatedDir));
+      expect(normalizePath(result.projectRoot, result.projectRoot)).toBe(normalizePath(isolatedDir, isolatedDir));
       expect(result.gitTracker).toBeDefined();
     });
   });

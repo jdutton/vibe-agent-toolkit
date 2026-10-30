@@ -5,8 +5,10 @@
  *
  * The errno → class table and the single-errno questions (`isPathAbsentError`,
  * `isRenameContentionError`, …) live in the leaf `errno-table.ts`. This module
- * imports only that table and `vat-error.ts`, so the path helpers below it
- * (`path-utils.ts`: `normalizedTmpdir`) can classify their own faults. Deciding a
+ * imports only that table, `vat-error.ts` and the link-chain refusal
+ * (`tree-change/host-chain.ts`, which imports neither this module nor
+ * `path-utils.ts`), so the path helpers below it (`path-utils.ts`:
+ * `normalizedTmpdir`) can classify their own faults. Deciding a
  * side by containment needs `path-containment.ts`, which imports `path-utils.ts`:
  * that is `fs-boundary.ts`, one level up, never imported back.
  *
@@ -15,9 +17,10 @@
  * produces the facts.
  */
 
-import { toForwardSlash } from '../path-core.js';
+import { relativeEscapesRoot, safePath, toForwardSlash } from '../path-core.js';
+import { isLinkChainRefusedError } from '../tree-change/host-chain.js';
 
-import { type FsFaultClass, fsFaultOf, isFileInTheWayError } from './errno-table.js';
+import { type FsFaultClass, type FsFaultFacts, fsFaultOf, isFileInTheWayError, isUnresolvableLinkError, LINK_CHAIN_REFUSED_CODE, movedFromOf, pathsActedOn } from './errno-table.js';
 import { isVatError, VatError } from './vat-error.js';
 
 /** The one code every classified filesystem refusal carries. */
@@ -33,6 +36,44 @@ export type FsSide = (typeof FS_SIDES)[number];
 /** Every {@link FsSide}, for a consumer that must key a table by them (the schema refusal table's drift test). */
 export const FS_SIDES = ['source', 'destination', 'environment'] as const;
 
+/**
+ * The side of any path an operation touches, decided the way the verb decides every other path's.
+ *
+ * One probe touches more than its own path — a link walk `lstat`s each component beneath its tree,
+ * a confirmed absence lists the parent — and those paths can lie on another side than the one
+ * asked about (`<project>/dist` is the project's, `dist/skills` an input). A fault is charged to the
+ * side of the path the OS REFUSED, never to the side of the question the read was answering.
+ */
+export type SideOfPath = (path: string) => FsSide;
+
+/** A {@link SideOfPath} for an operation every path of which is on one side: VAT's own scratch, one input tree. */
+export function everywhere(side: FsSide): SideOfPath {
+  return () => side;
+}
+
+/**
+ * A {@link SideOfPath} for a probe of ONE input inside a tree on another side: `root` and what lies
+ * beneath it are on `side`, every other path the probe touches — a component above it, the parent
+ * a confirmed absence lists — on `outside`. E.g. the project config (`source`) in a project a build
+ * writes `dist/` into (`destination`).
+ */
+export function sideWithin(root: string, side: FsSide, outside: FsSide): SideOfPath {
+  return (path) => (relativeEscapesRoot(safePath.relative(root, path)) ? outside : side);
+}
+
+/**
+ * The path a refusal names — the one a {@link SideOfPath} is asked about: a refused link chain's
+ * path, the path the failing syscall acted on, or `fallback` when the error names none.
+ *
+ * @returns Forward slashes, as every path VAT compares
+ */
+export function refusedPathOf(error: unknown, fallback: string): string {
+  if (isLinkChainRefusedError(error)) return toForwardSlash(error.path);
+  const facts = fsFaultOf(error);
+  const acted = facts === undefined ? undefined : pathsActedOn(facts)[0];
+  return toForwardSlash(acted ?? fallback);
+}
+
 /** For a `source` fault, who named the input: a CLI argument, a config value, or content read from inside another input. */
 export type SourceOrigin = (typeof SOURCE_ORIGINS)[number];
 
@@ -44,7 +85,10 @@ export class FsFaultError extends VatError {
   readonly side: FsSide;
   readonly faultClass: FsFaultClass;
   readonly errno: string;
+  /** The path the failing call acted on: for a link it could not create, the link; for a rename, where the entry could not land. */
   readonly path: string | undefined;
+  /** For a refused rename, the entry that was being moved to {@link path}; `undefined` for every other call. */
+  readonly movedFrom: string | undefined;
   readonly origin: SourceOrigin;
   readonly action: string;
 
@@ -53,20 +97,26 @@ export class FsFaultError extends VatError {
     faultClass: FsFaultClass;
     errno: string;
     path: string | undefined;
+    /** Only a refused rename has one. */
+    movedFrom?: string | undefined;
     origin: SourceOrigin;
     action: string;
     cause: unknown;
   }) {
     // The ONE place a fault gets its path, so the one place it gets its spelling: forward slashes,
     // as every path VAT displays or compares. An errno's own `path` is the host's — on Windows Node
-    // hands back the backslash form whatever the caller passed — while a context's is VAT's.
+    // hands back the backslash form whatever the caller passed — while a context's is VAT's. (The
+    // win32 namespace prefix is already gone: `fsFaultOf` reads every errno path without it.)
     const path = facts.path === undefined ? undefined : toForwardSlash(facts.path);
-    const where = path === undefined ? '' : `: ${path}`;
+    const movedFrom = facts.movedFrom === undefined ? undefined : toForwardSlash(facts.movedFrom);
+    const ends = [movedFrom, path].filter((end) => end !== undefined).join(' -> ');
+    const where = ends === '' ? '' : `: ${ends}`;
     super(FS_FAULT_CODE, `Could not ${facts.action} (${facts.errno})${where}`, { cause: facts.cause });
     this.side = facts.side;
     this.faultClass = facts.faultClass;
     this.errno = facts.errno;
     this.path = path;
+    this.movedFrom = movedFrom;
     this.origin = facts.origin;
     this.action = facts.action;
   }
@@ -144,6 +194,11 @@ export function isCapacityFault(fault: { readonly faultClass: FsFaultClass }): b
  * {@link VatError} already says what it means.
  */
 export function classifyFsFault(error: unknown, ctx: FsFaultContext): unknown {
+  // A chain VAT would not hand the kernel is a refusal on the caller's side like any other — the one
+  // side × class table decides its refusal and remedy, never a fixed code of its own.
+  if (isLinkChainRefusedError(error)) {
+    return new FsFaultError({ side: ctx.side, faultClass: 'refused', errno: LINK_CHAIN_REFUSED_CODE, path: error.path, origin: ctx.origin ?? 'argument', action: `${ctx.action} — ${error.message}`, cause: error });
+  }
   if (isVatError(error)) return error;
   const facts = fsFaultOf(error);
   if (facts === undefined) return error;
@@ -153,7 +208,8 @@ export function classifyFsFault(error: unknown, ctx: FsFaultContext): unknown {
     side,
     faultClass: facts.faultClass,
     errno: facts.errno,
-    path: facts.path ?? facts.dest ?? ctx.path,
+    path: pathsActedOn(facts)[0] ?? ctx.path,
+    movedFrom: movedFromOf(facts),
     origin: ctx.origin ?? (ctx.shapeFromSource === true && side === 'source' ? 'content' : 'argument'),
     action: ctx.action,
     cause: error,
@@ -167,6 +223,47 @@ export async function withFsFault<T>(ctx: FsFaultContext, work: () => Promise<T>
   } catch (error: unknown) {
     throw classifyFsFault(error, ctx);
   }
+}
+
+/**
+ * The catch body of a WRITE lane that resolves a link, or a path through links, and has an answer
+ * for one that resolves to nothing (a dangling link's own spelling, `null`, its nearest ancestor):
+ * returns when `error` says so ({@link isUnresolvableLinkError}), and otherwise throws it —
+ * a filesystem errno classified on `ctx` (the OS declined, ran short or could not look, which says
+ * nothing about the link), anything else as it was. A lane that acts on the path cannot act on one
+ * it could not resolve, so the run stops.
+ *
+ * A READ/report lane asks {@link linkResolutionFault} instead: one bad target is a finding about
+ * that target, never the end of the run.
+ *
+ * @throws FsFaultError on `ctx.side` for every other filesystem errno; `error` itself for a non-filesystem error
+ */
+export function assertUnresolvableLink(error: unknown, ctx: FsFaultContext): void {
+  if (!isUnresolvableLinkError(error)) throw classifyFsFault(error, ctx);
+}
+
+/**
+ * The catch body of a READ/report lane that resolves a link target: the same one predicate as
+ * {@link assertUnresolvableLink} ({@link isUnresolvableLinkError}), but a fault is handed back for
+ * the lane to report against that ONE target (a row, a finding, carrying `errno` and `faultClass`)
+ * instead of thrown — one target the OS declined to resolve never rejects a batch, never aborts the
+ * run and never loses another target's finding. No side is picked: nothing is thrown.
+ *
+ * A chain VAT would not hand the kernel (`LinkChainRefusedError`: a link on the way names a
+ * network path, or the chain never ends) is a fault of the `refused` class on that one target,
+ * its `errno` the refusal's code — VAT, not the OS, declined to look.
+ *
+ * @returns `undefined` when the link resolves to nothing; the fault's facts when the OS declined,
+ *   ran short or could not look, or VAT declined to ask it
+ * @throws `error` itself when it carries no filesystem errno — a bug stays loud
+ */
+export function linkResolutionFault(error: unknown): FsFaultFacts | undefined {
+  // No syscall: VAT, not the OS, declined — and a hop-limit refusal read every `readlink` it asked.
+  if (isLinkChainRefusedError(error)) return { errno: LINK_CHAIN_REFUSED_CODE, faultClass: 'refused', path: error.path, dest: undefined, syscall: undefined };
+  if (isUnresolvableLinkError(error)) return undefined;
+  const facts = fsFaultOf(error);
+  if (facts === undefined || isVatError(error)) throw error;
+  return facts;
 }
 
 /** Synchronous {@link withFsFault}. */

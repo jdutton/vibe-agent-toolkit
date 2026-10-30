@@ -10,7 +10,8 @@
  * rather than by `chmod`, for the reason `file-crawler-refused-listing.test.ts`
  * gives: `chmod` reaches one errno, only where POSIX modes bind, and not as root.
  * The absence errnos are the negative control: a directory that vanished
- * between being listed and being canonicalised is not in the population.
+ * between being listed and being canonicalised is not in the population, and
+ * one the native call merely CALLS absent is asked again of the JS walk.
  */
 import fs from 'node:fs';
 
@@ -113,10 +114,14 @@ describe('crawlDirectorySync (followSymlinks): a refused realpath never becomes 
     expect(refusals).toEqual([]);
   });
 
-  it.each(ABSENCE_ERRNOS)('refuses a directory canonicalising to %s while the parent still names it: absence is confirmed, never assumed', (code) => {
+  // The one native fallback rule (`realpathNativeSync`): a native "absent" is asked again of the JS
+  // walk, which finds the directory still there and canonicalises it — absence is confirmed, never
+  // assumed, and a native answer the JS walk contradicts loses no files.
+  it.each(ABSENCE_ERRNOS)('walks a directory the native realpath calls %s while it is still there: the JS walk answers', (code) => {
     restore = refuseRealpathOf(locked, code);
     const refusals: DirectoryRefusal[] = [];
-    expect(crawlFollowing(root, { degrade: (refusal) => refusals.push(refusal) })).toEqual([OPEN_FILE]);
-    expect(refusals).toEqual([{ kind: 'directory_unreadable', code, directory: toForwardSlash(locked), transient: false }]);
+    const files = crawlFollowing(root, { degrade: (refusal) => refusals.push(refusal) });
+    expect(files.toSorted((a, b) => a.localeCompare(b))).toEqual([LOCKED_FILE, OPEN_FILE]);
+    expect(refusals).toEqual([]);
   });
 });

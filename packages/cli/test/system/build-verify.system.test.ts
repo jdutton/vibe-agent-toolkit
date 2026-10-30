@@ -169,6 +169,35 @@ describe('vat build command (system test)', () => {
     ).toBe(true);
   });
 
+  // `skills.include` is required, and a plugin-local skill reads its packaging config from the same
+  // `skills:` block — so a project whose skills are all plugin-local has an include that matches
+  // nothing in the pool. That is not a build that examined nothing: the plugin still ships its skill.
+  it('builds a project whose skills are all plugin-local, with an include that matches no pool skill', async () => {
+    const tempDir = suite.createTempDir();
+    suite.setupSingleSkillFixture(tempDir, MARKETPLACE_NAME, PLUGIN_NAME);
+    createVatConfig(tempDir, MARKETPLACE_NAME, PLUGIN_NAME, ['pool-that-does-not-exist/**/SKILL.md']);
+
+    const result = await suite.runBuild(tempDir);
+
+    expect(result.status, result.stdout).toBe(0);
+    const report = orchestratorReportOf(result.stdout);
+    expect(report.data?.phases.map((phase) => [phase.name, phase.examined > 0])).toEqual([['skills', false], ['claude', true], ['shipped-links', true]]);
+    expect(report.findings.map((finding) => finding.code)).not.toContain('RESOURCE_CHECK_BROKEN');
+    expect(existsSync(safePath.join(tempDir, 'dist', '.claude', 'plugins', 'marketplaces', MARKETPLACE_NAME, 'plugins', PLUGIN_NAME, 'skills', TEST_SKILL_NAME, 'SKILL.md'))).toBe(true);
+  });
+
+  // The other side: no pool match AND no plugin-local skill is a build of nothing, refused as `vat skills build` refuses it.
+  it('refuses a build whose include matches nothing when the project ships no plugin-local skill either', async () => {
+    const tempDir = suite.createTempDir();
+    mkdirSyncReal(safePath.join(tempDir, 'plugins', PLUGIN_NAME), { recursive: true });
+    createVatConfig(tempDir, MARKETPLACE_NAME, PLUGIN_NAME, ['pool-that-does-not-exist/**/SKILL.md']);
+
+    const result = await suite.runBuild(tempDir);
+
+    expect(result.status, result.stdout).toBe(1);
+    expect(orchestratorReportOf(result.stdout).findings.map((finding) => finding.code)).toContain('RESOURCE_CHECK_BROKEN');
+  });
+
   it('should build --only skills when no claude config', async () => {
     const tempDir = suite.createTempDir();
     // Config with skills only, no claude section

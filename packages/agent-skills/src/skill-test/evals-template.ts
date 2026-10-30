@@ -13,9 +13,9 @@
  * read `_comment`.
  */
 
-import { existsSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { everywhere, mkdirSyncReal, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
 
 /** Build the annotated evals.json template text for a given skill name. */
 export function buildEvalsTemplate(skillName: string): string {
@@ -74,7 +74,8 @@ export function writeEvalsTemplate(evalsPath: string, skillName: string): string
   mkdirSyncReal(parent, { recursive: true });
   // Defensive: never clobber an authored eval suite. Callers only reach here when
   // the suite is absent, but guard so a stray call can never destroy real evals.
-  if (!existsSync(evalsPath)) {
+  // The ENTRY (lstat): a dangling link there is not "absent", and is never written through.
+  if (!pathPresent(evalsPath, 'entry', everywhere('destination'), 'probe')) {
     writeFileSync(evalsPath, buildEvalsTemplate(skillName), 'utf8');
   }
   return evalsPath;

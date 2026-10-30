@@ -13,7 +13,7 @@
  * declared local plugin walked.
  */
 
-import { existsSync, readdirSync, statSync, type Dirent } from 'node:fs';
+import { readdirSync, type Dirent } from 'node:fs';
 
 import {
   materializeIssue,
@@ -31,7 +31,7 @@ import {
   type ValidationConfig,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, findProjectRoot, forEachInOrder, fsFaultOf, isPathAbsentError, issueLocation, isVatError, mapInOrder, normalizePath, PathEscapesRootError, pathPresent, relativeEscapesRoot, safePath, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, everywhere, findProjectRoot, followedKindSync, forEachInOrder, fsFaultOf, isLinkChainRefusedError, isPathAbsentError, issueLocation, isVatError, mapInOrder, normalizePath, PathEscapesRootError, pathPresent, relativeEscapesRoot, safePath, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { refusalCodeOf } from '../../../utils/command-refusal.js';
@@ -68,7 +68,8 @@ function checkMarketplaceFiles(marketplacePath: string): ValidationIssue[] {
   ];
 
   for (const check of fileChecks) {
-    if (!existsSync(safePath.join(marketplacePath, check.file))) {
+    // A probe the OS refuses is the marketplace's source fault, never "missing".
+    if (!pathPresent(safePath.join(marketplacePath, check.file), { follow: marketplacePath }, everywhere('source'), 'probe')) {
       issues.push({
         severity: check.severity,
         code: check.code as ValidationIssue['code'],
@@ -119,10 +120,23 @@ class WalkBoundary {
    * beneath it is visited either, because nothing beneath it was read.
    */
   contains(abs: string): boolean {
-    const real = toForwardSlash(normalizePath(abs));
-    if (!relativeEscapesRoot(safePath.relative(this.realRoot, real))) return true;
+    if (this.resolvesInside(abs)) return true;
     this.refused.push(issueLocation(abs, this.marketplacePath));
     return false;
+  }
+
+  /**
+   * Whether `abs`'s real path — its links read beneath the root first — sits under the root. A
+   * chain through a network or device path leaves the root by definition, and is never handed to
+   * the kernel: it is outside.
+   */
+  private resolvesInside(abs: string): boolean {
+    try {
+      return !relativeEscapesRoot(safePath.relative(this.realRoot, toForwardSlash(normalizePath(abs, this.marketplacePath))));
+    } catch (error) {
+      if (!isLinkChainRefusedError(error)) throw error;
+      return false;
+    }
   }
 
   /**
@@ -158,10 +172,13 @@ async function validatePluginSkills(
   validation: ValidationConfig | undefined,
 ): Promise<ValidationIssue[]> {
   const skillsDir = safePath.join(pluginDir, 'skills');
-  if (!existsSync(skillsDir) || !boundary.contains(skillsDir)) return [];
+  // Containment first: it reads the chain, so a link out (a network one included) is refused by
+  // name before anything follows it; an absent `skills/` is inside and then not present.
+  if (!boundary.contains(skillsDir)) return [];
 
   let skillEntries: Dirent[];
   try {
+    if (!pathPresent(skillsDir, { follow: marketplacePath }, everywhere('source'), 'probe')) return [];
     skillEntries = readdirSync(skillsDir, { withFileTypes: true });
   } catch (error) {
     return resolveIssueSeverity([boundary.unreadable(skillsDir, error)], validation);
@@ -187,14 +204,16 @@ async function validateOneSkill(
 ): Promise<ValidationIssue[]> {
   const refusedAt = (path: string, error: unknown): ValidationIssue[] =>
     resolveIssueSeverity([boundary.unreadable(path, error)], validation);
+  // Containment before every followed probe: `contains` reads the chain and refuses a link out
+  // (a network one included) by name, so the probe after it only ever follows a chain in the root.
   try {
-    if (!isDirectory(skillDir) || !boundary.contains(skillDir)) return [];
+    if (!boundary.contains(skillDir) || !isDirectory(skillDir, marketplacePath)) return [];
   } catch (error) {
     return refusedAt(skillDir, error);
   }
   const skillMdPath = safePath.join(skillDir, 'SKILL.md');
   try {
-    if (!pathPresent(skillMdPath, 'follow', 'source', 'probe') || !boundary.contains(skillMdPath)) return [];
+    if (!boundary.contains(skillMdPath) || !pathPresent(skillMdPath, { follow: marketplacePath }, everywhere('source'), 'probe')) return [];
     // Severity only (no `allow`), resolved here so a default-`ignore` code can still be raised.
     const severity = validation?.severity === undefined ? {} : { severity: validation.severity };
     const skillResult = await validateSkill({ skillPath: skillMdPath, rootDir: skillDir, locationRoot: marketplacePath, validation: severity, side: 'source' });
@@ -229,9 +248,9 @@ export interface LocalPluginResult extends LocalPluginSource {
  * resolve, sending the reader to create a directory that is there. The refusal
  * propagates and the command refuses the run by errno, like every other verb.
  */
-function isDirectory(dir: string): boolean {
+function isDirectory(dir: string, within: string): boolean {
   try {
-    return statSync(dir).isDirectory();
+    return followedKindSync(dir, within) === 'directory';
   } catch (error) {
     if (isPathAbsentError(error)) return false;
     throw error;
@@ -286,8 +305,16 @@ function containedPluginDir(
     if (!isVatError(error, PathEscapesRootError.code)) throw error;
     return undefined;
   }
-  if (!isDirectory(lexical)) return undefined;
-  const real = toForwardSlash(normalizePath(lexical));
+  let real: string;
+  try {
+    if (!isDirectory(lexical, marketplacePath)) return undefined;
+    real = toForwardSlash(normalizePath(lexical, marketplacePath));
+  } catch (error) {
+    // A source whose link chain names a network or device path leaves the root by definition: it
+    // names nothing this command may enter, and the builder refuses the run by name from its absence.
+    if (!isLinkChainRefusedError(error)) throw error;
+    return undefined;
+  }
   return relativeEscapesRoot(safePath.relative(realRoot, real)) ? undefined : { lexical, real };
 }
 
@@ -335,7 +362,8 @@ async function validateDeclaredPlugins(
   // Keyed by REAL path: one directory is validated once however many entries
   // name it, and the same key is what `undeclaredPluginDirs` compares against.
   const validatedByDir = new Map<string, ContainedPlugin>();
-  const realRoot = toForwardSlash(normalizePath(marketplacePath));
+  // The marketplace root is the operator's own argument: its own `within`.
+  const realRoot = toForwardSlash(normalizePath(marketplacePath, marketplacePath));
   const boundary = new WalkBoundary(marketplacePath, realRoot);
 
   // In order: `validatedByDir` dedupes a directory two entries name, which a
@@ -393,7 +421,8 @@ async function validateContainedPlugin(
   validation: ValidationConfig | undefined,
 ): Promise<ContainedPlugin> {
   const manifestPath = safePath.join(pluginDir, '.claude-plugin', 'plugin.json');
-  if (existsSync(manifestPath) && !boundary.contains(manifestPath)) {
+  // No presence probe: `contains` reads the chain, and an absent (or dangling) manifest is inside.
+  if (!boundary.contains(manifestPath)) {
     return {
       manifestRead: false,
       result: {
@@ -443,14 +472,32 @@ type ContainedPlugin = Pick<LocalPluginResult, 'result' | 'manifestRead'>;
  */
 function undeclaredPluginDirs(marketplacePath: string, validatedDirs: ReadonlySet<string>): string[] {
   const pluginsDir = safePath.join(marketplacePath, 'plugins');
-  if (!existsSync(pluginsDir)) return [];
+  if (!pathPresent(pluginsDir, { follow: marketplacePath }, everywhere('source'), 'probe')) return [];
   return readdirSync(pluginsDir, { withFileTypes: true })
     // Followed: a plugin directory that is a link is a plugin the marketplace
     // ships, and `validatedDirs` is real paths for exactly that reason.
-    .filter((entry) => direntKindFollowingSync(pluginsDir, entry) === 'directory')
-    .map((entry) => safePath.join(pluginsDir, entry.name))
-    .filter((dir) => !validatedDirs.has(toForwardSlash(normalizePath(dir))))
-    .map((dir) => issueLocation(dir, marketplacePath));
+    .flatMap((entry) => {
+      const dir = safePath.join(pluginsDir, entry.name);
+      const real = undeclaredCandidateIdentity(pluginsDir, entry, marketplacePath);
+      return real === undefined || validatedDirs.has(real) ? [] : [issueLocation(dir, marketplacePath)];
+    });
+}
+
+/**
+ * The real path of a `plugins/` entry that resolves to a directory, or `undefined` when it does
+ * not. An entry whose link chain names a network or device path is never followed: no declared
+ * source can resolve to it (the source lane refuses the same chain), so it is listed by its own
+ * spelling — named, never silently dropped.
+ */
+function undeclaredCandidateIdentity(pluginsDir: string, entry: Dirent, within: string): string | undefined {
+  const dir = safePath.join(pluginsDir, entry.name);
+  try {
+    if (direntKindFollowingSync(pluginsDir, entry, within) !== 'directory') return undefined;
+    return toForwardSlash(normalizePath(dir, within));
+  } catch (error) {
+    if (!isLinkChainRefusedError(error)) throw error;
+    return dir;
+  }
 }
 
 /**
@@ -493,7 +540,7 @@ function resolveProjectValidationConfig(
   const projectRoot = findProjectRoot(marketplacePath);
   if (projectRoot === null) return undefined;
   try {
-    return loadConfig(projectRoot)?.skills?.defaults?.validation;
+    return loadConfig(projectRoot, 'source')?.skills?.defaults?.validation;
   } catch (error) {
     logger.error(
       `Warning: could not read ${projectRoot} config for validation.severity overrides — ` +
@@ -862,8 +909,8 @@ function logFindings(report: Report<unknown>, verbose: boolean, logger: Logger):
  *
  * The phase entry point for `vat verify`, which runs this once per configured
  * marketplace, and the command's own. The report is the one BEFORE the
- * writer's run-integrity pass: inside an orchestrator, zero examined is judged
- * on the whole run, not on this phase. A refusal is the envelope's error
+ * writer's run-integrity pass: inside an orchestrator, `runPhase` applies the same
+ * pass to this phase's report, by the declaration this verb gives its own writer. A refusal is the envelope's error
  * branch, its message already on stderr.
  */
 export async function runMarketplaceValidatePhase(

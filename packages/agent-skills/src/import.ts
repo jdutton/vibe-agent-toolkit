@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import type { RefusalCode } from '@vibe-agent-toolkit/schema';
-import { applyTreePlan, isPathAbsentError, pathPresent, planTreeChanges, safePath } from '@vibe-agent-toolkit/utils';
+import { applyTreePlan, followedKindSync, isPathAbsentError, planTreeChanges, safePath, withFsFaultSync } from '@vibe-agent-toolkit/utils';
 import { stringify as stringifyYaml } from 'yaml';
 
 import { parseFrontmatter } from './parsers/frontmatter-parser.js';
@@ -118,7 +118,14 @@ export async function importSkillToAgent(options: ImportOptions): Promise<Import
 
   // A file is never written over a directory, `force` or not (the plan refuses it too): said here in
   // the output's own words, because `--force` is no remedy for it.
-  if (pathPresent(agentPath, 'follow', 'destination', 'probe') && fs.statSync(agentPath).isDirectory()) {
+  // The directory the manifest is written into is the operator's own (named, or the skill's): the
+  // entry beneath it is read by its text before the kernel follows it, and a refused probe is the
+  // destination's fault.
+  const agentKind = withFsFaultSync(
+    { side: 'destination', origin: 'content', action: 'examine the path', path: agentPath },
+    () => followedKindSync(agentPath, path.dirname(agentPath)),
+  );
+  if (agentKind === 'directory') {
     return {
       success: false,
       error: `Cannot write agent.yaml: ${agentPath} is a directory. Name the file to write, such as ${safePath.join(agentPath, AGENT_YAML)}.`,

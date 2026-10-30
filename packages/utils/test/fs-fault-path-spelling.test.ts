@@ -40,3 +40,34 @@ describe('FsFaultError.path where the separator is a backslash', () => {
     expect(new FsFaultError({ ...facts, path: undefined })).toMatchObject({ path: undefined, message: 'Could not write the marker (EEXIST)' });
   });
 });
+
+// Node namespaces the paths it hands a win32 syscall and reports them back so: `\\?\C:\…` and
+// `\\?\UNC\host\share\…`. A fault names the path the caller's own paths spell, never `//?/C:/…`.
+describe('FsFaultError.path when the errno carries a win32 namespace prefix', () => {
+  const BACKSLASH = String.fromCodePoint(0x5c);
+  const NAMESPACE = `${BACKSLASH.repeat(2)}?${BACKSLASH}`;
+  const context = { side: 'destination', origin: 'content', action: 'move the entry' } as const;
+
+  it('strips it from the path and from where a rename moved the entry from', () => {
+    const errno = Object.assign(new Error('EPERM'), { code: 'EPERM', syscall: 'rename', path: String.raw`${NAMESPACE}C:\Users\dev\staged`, dest: `${NAMESPACE}${NATIVE}` });
+
+    const fault = classifyFsFault(errno, context) as InstanceType<typeof FsFaultError>;
+
+    expect(fault.path).toBe(FORWARD);
+    expect(fault.movedFrom).toBe('C:/Users/dev/staged');
+    expect(fault.message).toBe(`Could not move the entry (EPERM): C:/Users/dev/staged -> ${FORWARD}`);
+  });
+
+  it('reads a namespaced UNC path as the UNC path it is', () => {
+    const errno = Object.assign(new Error('EPERM'), { code: 'EPERM', syscall: 'open', path: `${NAMESPACE}UNC${BACKSLASH}host${BACKSLASH}share${BACKSLASH}x.md` });
+
+    expect(classifyFsFault(errno, context)).toMatchObject({ path: '//host/share/x.md' });
+  });
+
+  it('strips it from an errno a classified fault is built from', () => {
+    const errno = Object.assign(new Error('EACCES'), { code: 'EACCES', syscall: 'symlink', path: String.raw`..\x`, dest: `${NAMESPACE}${NATIVE}` });
+
+    expect(classifyFsFault(errno, { side: 'destination', origin: 'content', action: 'make the link' })).toMatchObject({ path: FORWARD });
+  });
+});
+

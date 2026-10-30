@@ -264,6 +264,26 @@ function foreignMarketplace(paths: ClaudeUserPaths, source: Record<string, unkno
 
 const planOf = (opts: PackageInstallOptions): Promise<unknown> => planTreeChanges(planPackageInstall(opts).changes);
 
+/** Install `opts` expecting the ownership refusal with nothing under the Claude directory changed; the refusal as text. */
+async function expectNotOwnedAndUnchanged(paths: ClaudeUserPaths, opts: PackageInstallOptions): Promise<string> {
+  const before = snapshotTree(paths.claudeDir);
+  const refused = await rejectionOf(() => install(opts));
+  expect(refused, String(refused)).toMatchObject({ code: TREE_DEST_NOT_OWNED_CODE });
+  expect(diffSnapshots(before, snapshotTree(paths.claudeDir))).toEqual([]);
+  return String(refused);
+}
+
+/** A known_marketplaces.json holding one entry for {@link MP}, and no directory under `marketplaces/`. */
+function entryOnly(paths: ClaudeUserPaths, entry: object): void {
+  writeFileSync(paths.knownMarketplacesPath, JSON.stringify({ [MP]: entry }));
+}
+
+/** A marketplace registered from a directory outside `marketplaces/`: an entry, and nothing under it. */
+function elsewhere(paths: ClaudeUserPaths): object {
+  const path = safePath.join(paths.claudeDir, 'my-marketplace');
+  return { source: { source: 'directory', path }, installLocation: path, lastUpdated: '' };
+}
+
 // Ruling R1: the marker is the only witness that VAT made a marketplace directory. An install that
 // replaced whatever stood at marketplaces/<name> deleted a clone Claude Code added, then claimed it.
 describe('planPackageInstall never replaces a marketplace VAT cannot prove it installed', () => {
@@ -272,14 +292,11 @@ describe('planPackageInstall never replaces a marketplace VAT cannot prove it in
   it('refuses an unmarked directory before anything changes, naming it, its registry entry untouched', async () => {
     const paths = getPaths();
     const dir = foreignMarketplace(paths, { source: 'github', repo: 'o/r' });
-    const before = snapshotTree(paths.claudeDir);
 
-    const refused = await rejectionOf(() => install(options(paths)));
+    const refused = await expectNotOwnedAndUnchanged(paths, options(paths));
 
-    expect(refused, String(refused)).toMatchObject({ code: TREE_DEST_NOT_OWNED_CODE });
-    expect(String(refused)).toContain(dir);
-    expect(String(refused)).toContain('github:o/r');
-    expect(diffSnapshots(before, snapshotTree(paths.claudeDir))).toEqual([]);
+    expect(refused).toContain(dir);
+    expect(refused).toContain('github:o/r');
   });
 
   it('--force is the one way past: the directory is replaced and marked', async () => {
@@ -341,6 +358,55 @@ describe('planPackageInstall never replaces a marketplace VAT cannot prove it in
     writeFileSync(safePath.join(paths.marketplacesDir, MP, VAT_MARKETPLACE_MARKER), 'vat\n');
 
     expect(await rejectionOf(() => planOf(options(paths)))).toMatchObject({ code: TREE_DEST_NOT_OWNED_CODE });
+  });
+
+  // A marketplace is two things: its directory and its known_marketplaces.json entry. One whose entry
+  // points elsewhere (a directory-source marketplace, or one whose clone was deleted) has nothing at
+  // marketplaces/<name>, so the directory's marker was never asked — and the entry was rewritten.
+  describe('with a registry entry and NO directory under marketplaces/', () => {
+    it('refuses an entry another source registered, before anything changes, naming what recorded it', async () => {
+      const paths = getPaths();
+      entryOnly(paths, elsewhere(paths));
+
+      const refused = await expectNotOwnedAndUnchanged(paths, options(paths));
+
+      expect(refused).toContain('a directory marketplace');
+      expect(refused).toContain('npm:@t/p');
+    });
+
+    // An EMPTY directory there says no more than none: a failed clone, a removed marketplace's leftover, a `mkdir`.
+    it('refuses the same entry when an empty directory stands under marketplaces/', async () => {
+      const paths = getPaths();
+      entryOnly(paths, elsewhere(paths));
+      mkdirSyncReal(safePath.join(paths.marketplacesDir, MP), { recursive: true });
+
+      const refused = await expectNotOwnedAndUnchanged(paths, options(paths));
+
+      expect(refused).toContain('a directory marketplace');
+    });
+
+    it('--force is the one way past: the entry becomes this install\'s', async () => {
+      const paths = getPaths();
+      entryOnly(paths, elsewhere(paths));
+
+      await install({ ...options(paths), force: true });
+
+      expect(readJson(paths.knownMarketplacesPath)).toMatchObject({ [MP]: { source: { source: 'npm', package: '@t/p' } } });
+    });
+
+    // The controls: an entry this very package wrote (its directory deleted since), and no entry at all.
+    it('takes an entry this very package registered, and a name the registry does not list', async () => {
+      const paths = getPaths();
+      entryOnly(paths, { source: { source: 'npm', package: '@t/p', version: '1.0.0' }, installLocation: '', lastUpdated: '' });
+      await install(options(paths));
+      expect(readFileSync(safePath.join(paths.marketplacesDir, MP, VAT_MARKETPLACE_MARKER), 'utf8')).toContain('"npm:@t/p"');
+
+      const fresh = getPaths();
+      await fs.rm(safePath.join(fresh.marketplacesDir, MP), { recursive: true, force: true });
+      writeFileSync(fresh.knownMarketplacesPath, '{}');
+      await install(options(fresh));
+      expect(readJson(fresh.knownMarketplacesPath)).toHaveProperty(MP);
+    });
   });
 
   // The registry is read by its OWN keys: a marketplace named like a member of `Object.prototype` has

@@ -40,7 +40,7 @@ describe('loadClaudeProjectConfig', () => {
 
     const loaded = loadClaudeProjectConfig();
 
-    expect(doubles.loadConfig).toHaveBeenCalledWith('/proj');
+    expect(doubles.loadConfig).toHaveBeenCalledWith('/proj', 'source');
     expect(loaded).toMatchObject({ configPath: '/proj/vibe-agent-toolkit.config.yaml', configDir: '/proj', claudeConfig: claude });
   });
 });

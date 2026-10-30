@@ -1,15 +1,17 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import type { SkillSourceDescriptor } from '@vibe-agent-toolkit/resources';
 import {
   applyTreePlan,
   copyTree,
+  followedKindSync,
   forEachInOrder,
   planTreeChanges,
   proveTreeReadable,
   recordSuppressedFault,
+  requireFollowedStatSync,
   safePath,
   suppressedFaultsOf,
   toForwardSlashAnyPlatform,
@@ -259,7 +261,8 @@ export function computeDirContentHash(dir: string): string {
     for (const name of readdirSync(current).sort((a, b) => a.localeCompare(b))) {
       const abs = safePath.join(current, name);
       const childRel = rel ? `${rel}/${name}` : name;
-      const st = statSync(abs);
+      // Followed beneath the staged tree: every link's chain is read by its text first.
+      const st = requireFollowedStatSync(abs, dir);
       if (st.isDirectory()) {
         walk(abs, childRel);
       } else {
@@ -274,7 +277,8 @@ export function computeDirContentHash(dir: string): string {
 
 function readExistingManifest(harnessRoot: string): StagedManifest | null {
   const manifestPath = safePath.joinUnderRoot(harnessRoot, 'staged.manifest.json');
-  if (!existsSync(manifestPath)) return null;
+  // The harness root is VAT's own scratch: the tree probed. A refused probe surfaces, never "no manifest".
+  if (followedKindSync(manifestPath, harnessRoot) === 'absent') return null;
   try {
     return StagedManifestSchema.parse(JSON.parse(readFileSync(manifestPath, 'utf8')));
   } catch (error) {

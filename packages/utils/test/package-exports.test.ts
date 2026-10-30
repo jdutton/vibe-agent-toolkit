@@ -8,7 +8,7 @@ import { safePath, toForwardSlash } from '../src/path.js';
 /**
  * A value in the `exports` map: either a bare target, or conditions.
  *
- * The fourteen compiled entries use `{types, import}` (ESM, emitted by `tsc`).
+ * The fifteen compiled entries use `{types, import}` (ESM, emitted by `tsc`).
  * `./eslint` uses `{types, default}` — it is hand-written CommonJS, and `default`
  * rather than `import` is what lets both `require()` and `import` reach it.
  */
@@ -82,6 +82,7 @@ describe('utils package manifest', () => {
     ['./zod', 'zod'],
     ['./yaml', 'yaml'],
     ['./testing', 'testing'],
+    ['./archive', 'archive'],
     ['./asset', 'asset'],
     ['./crawl', 'crawl'],
     ['./project', 'project'],
@@ -122,9 +123,9 @@ describe('utils package manifest', () => {
    * ESLint is a peer, and an OPTIONAL one.
    *
    * Optional because an ESLint plugin is data rather than code that runs: the rule
-   * modules export plain objects and never `require('eslint')`, so all fourteen
-   * other code entries resolve fine with no ESLint anywhere in the tree. (Fourteen,
-   * not fifteen: the map has 16 keys, and `./package.json` is a data file rather
+   * modules export plain objects and never `require('eslint')`, so all fifteen
+   * other code entries resolve fine with no ESLint anywhere in the tree. (Fifteen,
+   * not sixteen: the map has 17 keys, and `./package.json` is a data file rather
    * than an entry point.) Without
    * `peerDependenciesMeta`, every consumer taking this package for `safePath.join()`
    * would get an unmet-peer warning for a package it will never load.
@@ -180,6 +181,7 @@ describe('utils package manifest', () => {
   it('exports exactly the recorded key set', () => {
     expect(Object.keys(manifest.exports).sort((a, b) => a.localeCompare(b))).toEqual([
       '.',
+      './archive',
       './asset',
       './crawl',
       './eslint',

@@ -1,13 +1,13 @@
 /**
  * `vat claude plugin install` and `vat skills install` from an archive, with `$TMPDIR` on a filesystem too
  * small for the extraction: the disk VAT stages on giving out is the run not
- * finishing (`RUN_INCOMPLETE`), never an install. node-tar reports a failed
- * entry write as a warning and resolves, so a `.tgz` used to install a TRUNCATED
- * file, exit 0, `status: ok`.
+ * finishing (`RUN_INCOMPLETE`), never an install. A failed entry write was once
+ * a warning the extraction resolved past, so a `.tgz` installed a TRUNCATED file,
+ * exit 0, `status: ok`.
  *
  * ⚠️ darwin only, and only where macOS will make a RAM disk: a real full
- * filesystem is the only honest fixture (an injected errno never shows what the
- * archive library does with it), and only macOS lets an unprivileged user make
+ * filesystem is the only honest fixture (an injected errno never shows what a
+ * real write does on one), and only macOS lets an unprivileged user make
  * and mount one. Linux and Windows CI cannot, so they skip.
  */
 import { randomBytes } from 'node:crypto';
@@ -16,8 +16,7 @@ import { basename, dirname } from 'node:path';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { safeExecResult } from '@vibe-agent-toolkit/utils/process';
-import AdmZip from 'adm-zip';
-import * as tar from 'tar';
+import { archiveEntriesOfDirectory, tarFixture, zipFixture } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { createTempDirTracker, executeCliAndParseYaml, fakeHomeEnv, getBinPath } from './test-common.js';
@@ -67,7 +66,7 @@ async function expectRunIncomplete(
 }
 
 /** An npm-pack-shaped tarball declaring one skill `big` whose payload no extraction onto the volume can hold. */
-async function bigTarball(fixtures: string): Promise<string> {
+function bigTarball(fixtures: string): string {
   const pkg = safePath.join(fixtures, 'tgz-pkg');
   const skill = safePath.join(pkg, 'dist', 'skills', 'big');
   mkdirSyncReal(skill, { recursive: true });
@@ -75,7 +74,7 @@ async function bigTarball(fixtures: string): Promise<string> {
   fs.writeFileSync(safePath.join(skill, 'SKILL.md'), '---\nname: big\ndescription: Says hello to the user.\n---\n\n# big\n');
   fs.writeFileSync(safePath.join(skill, 'payload.bin'), randomBytes(PAYLOAD_BYTES));
   const archive = safePath.join(fixtures, 'big-1.0.0.tgz');
-  await tar.create({ gzip: true, file: archive, cwd: pkg, prefix: 'package' }, ['.']);
+  fs.writeFileSync(archive, tarFixture(archiveEntriesOfDirectory(pkg, 'package/')));
   return archive;
 }
 
@@ -112,16 +111,13 @@ describe.skipIf(process.platform !== 'darwin')('archive installs with $TMPDIR on
   ] as const)('%s: refuses a .tgz it runs out of space extracting as RUN_INCOMPLETE, installing nothing', async ([, verb, after], { skip }) => {
     if (detach === undefined) skip();
 
-    await expectRunIncomplete(binPath, volume, { verb: [...verb], archive: await bigTarball(fixtures), after: [...after] }, 'big');
+    await expectRunIncomplete(binPath, volume, { verb: [...verb], archive: bigTarball(fixtures), after: [...after] }, 'big');
   });
 
   it('refuses a .zip it runs out of space extracting as RUN_INCOMPLETE, installing nothing', async ({ skip }) => {
     if (detach === undefined) skip();
-    const zip = new AdmZip();
-    zip.addFile('SKILL.md', Buffer.from('# huge\n'));
-    zip.addFile('payload.bin', randomBytes(PAYLOAD_BYTES));
     const archive = safePath.join(fixtures, 'huge.zip');
-    zip.writeZip(archive);
+    fs.writeFileSync(archive, zipFixture([{ name: 'SKILL.md', data: '# huge\n' }, { name: 'payload.bin', data: randomBytes(PAYLOAD_BYTES) }]));
 
     await expectRunIncomplete(binPath, volume, { verb: ['claude', 'plugin', 'install'], archive }, 'huge');
   });

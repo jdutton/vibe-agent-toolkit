@@ -11,9 +11,17 @@ import { constants } from 'node:os';
 /**
  * Every errno the injector raises (`EDQUOT` too on a host whose `os.constants.errno` lacks it: it gets
  * `-1`). At least one of every class of the errno table: `EEXIST` / `ENOTEMPTY` (`occupied`) are what a
- * concurrent writer or a name collision produces, `EIO` (`device`) what a failing disk does.
+ * concurrent writer or a name collision produces, `EIO` (`device`) what a failing disk does, `UNKNOWN`
+ * (`device` too) what Windows reports for a network share that is not there AND for credentials the
+ * share refused (libuv `src/win/error.c:172`; `-1` too). `ENETUNREACH`, `EHOSTUNREACH`, `ECONNRESET`
+ * and `ENOTCONN` are what a file call on a share raises when the network fails (`device`);
+ * `EINVAL` and `ENAMETOOLONG` are Windows' ambiguous answers for a link (:102-105, :129). `EWHATEVER`
+ * is no errno at all: one no table lists, which must still be classified, never handed back raw.
  */
-export const INJECTED_ERRNOS = ['EACCES', 'EPERM', 'ENOSPC', 'EDQUOT', 'EROFS', 'EMFILE', 'ENFILE', 'ENOENT', 'EISDIR', 'ENOTDIR', 'EBUSY', 'EXDEV', 'EEXIST', 'ENOTEMPTY', 'EIO'] as const;
+export const INJECTED_ERRNOS = [
+  'EACCES', 'EPERM', 'ENOSPC', 'EDQUOT', 'EROFS', 'EMFILE', 'ENFILE', 'ENOENT', 'EISDIR', 'ENOTDIR', 'EBUSY', 'EXDEV', 'EEXIST', 'ENOTEMPTY',
+  'EIO', 'UNKNOWN', 'ENETUNREACH', 'EHOSTUNREACH', 'ECONNRESET', 'ENOTCONN', 'EINVAL', 'ENAMETOOLONG', 'EWHATEVER',
+] as const;
 export type InjectedErrno = (typeof INJECTED_ERRNOS)[number];
 
 const FS_OP_FAMILIES = ['read', 'write', 'meta', 'list', 'remove', 'rename', 'create'] as const;

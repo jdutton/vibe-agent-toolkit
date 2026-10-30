@@ -69,11 +69,12 @@ function trySymlink(target: string, link: string): boolean {
 async function classifyWithInstallRoot(
   claudeDir: string,
   skillMd: string,
+  within: string,
 ): ReturnType<typeof classifyScannedSkillTree> {
   const previous = process.env['CLAUDE_CONFIG_DIR'];
   process.env['CLAUDE_CONFIG_DIR'] = claudeDir;
   try {
-    return await classifyScannedSkillTree(skillMd);
+    return await classifyScannedSkillTree(skillMd, within);
   } finally {
     if (previous === undefined) delete process.env['CLAUDE_CONFIG_DIR'];
     else process.env['CLAUDE_CONFIG_DIR'] = previous;
@@ -93,7 +94,7 @@ describe('classifyScannedSkillTree', () => {
     const skillMd = placeSkill(root, SKILL_REL_DIR);
     commitTestFixture(root);
 
-    await expect(classifyScannedSkillTree(skillMd)).resolves.toBe(SOURCE);
+    await expect(classifyScannedSkillTree(skillMd, root)).resolves.toBe(SOURCE);
   });
 
   it('calls an untracked-but-not-ignored skill repo-source', async () => {
@@ -103,7 +104,7 @@ describe('classifyScannedSkillTree', () => {
     initTestGitRepo(root);
     const skillMd = placeSkill(root, SKILL_REL_DIR);
 
-    await expect(classifyScannedSkillTree(skillMd)).resolves.toBe(SOURCE);
+    await expect(classifyScannedSkillTree(skillMd, root)).resolves.toBe(SOURCE);
   });
 
   it('calls a gitignored build output distributed', async () => {
@@ -113,13 +114,13 @@ describe('classifyScannedSkillTree', () => {
     commitTestFixture(root);
     const bundled = placeSkill(root, `dist/${SKILL_REL_DIR}`);
 
-    await expect(classifyScannedSkillTree(bundled)).resolves.toBe(DISTRIBUTED);
+    await expect(classifyScannedSkillTree(bundled, root)).resolves.toBe(DISTRIBUTED);
   });
 
   it('calls a tree outside any git repository distributed', async () => {
     const skillMd = placeSkill(createTempDir(), 'unpacked/demo');
 
-    await expect(classifyScannedSkillTree(skillMd)).resolves.toBe(DISTRIBUTED);
+    await expect(classifyScannedSkillTree(skillMd, safePath.resolve(skillMd, '..'))).resolves.toBe(DISTRIBUTED);
   });
 
   it('calls an install-root tree distributed even when git tracks it', async () => {
@@ -130,7 +131,7 @@ describe('classifyScannedSkillTree', () => {
     const skillMd = placeSkill(claudeDir, SKILL_REL_DIR);
     commitTestFixture(claudeDir);
 
-    await expect(classifyWithInstallRoot(claudeDir, skillMd)).resolves.toBe(DISTRIBUTED);
+    await expect(classifyWithInstallRoot(claudeDir, skillMd, claudeDir)).resolves.toBe(DISTRIBUTED);
   });
 
   it('leaves a tree that merely sits NEXT TO an install root alone', async () => {
@@ -151,7 +152,7 @@ describe('classifyScannedSkillTree', () => {
     // separator can produce `distributed` here.
     commitTestFixture(parent);
 
-    await expect(classifyWithInstallRoot(claudeDir, skillMd)).resolves.toBe(SOURCE);
+    await expect(classifyWithInstallRoot(claudeDir, skillMd, parent)).resolves.toBe(SOURCE);
   });
 
   // A3 — the classifier used to FAIL OPEN here. `gitLsFiles` returns null for a
@@ -167,12 +168,12 @@ describe('classifyScannedSkillTree', () => {
     // Control, same fixture, same call: with git healthy this IS source. Without
     // it the two answers would be indistinguishable and this test would agree
     // with any implementation.
-    await expect(classifyScannedSkillTree(skillMd)).resolves.toBe(SOURCE);
+    await expect(classifyScannedSkillTree(skillMd, root)).resolves.toBe(SOURCE);
 
     resetGitTrackerCache();
     breakGitMetadata(root);
 
-    await expect(classifyScannedSkillTree(skillMd)).resolves.toBe(INDETERMINATE);
+    await expect(classifyScannedSkillTree(skillMd, root)).resolves.toBe(INDETERMINATE);
   });
 
   // A9 — `~/.claude` symlinked into a dotfiles checkout is a common setup, and
@@ -188,7 +189,7 @@ describe('classifyScannedSkillTree', () => {
 
     // Everything is committed, so clause 2 says `repo-source`; only clause 1 can
     // produce the right answer, and only if it canonicalises first.
-    await expect(classifyWithInstallRoot(linkDir, skillMd)).resolves.toBe(DISTRIBUTED);
+    await expect(classifyWithInstallRoot(linkDir, skillMd, repo)).resolves.toBe(DISTRIBUTED);
   });
 
   // C7 — `Set.has` on the git active set is case-SENSITIVE while the `existsSync`
@@ -205,7 +206,7 @@ describe('classifyScannedSkillTree', () => {
     // second spelling to be confused by and nothing to assert.
     if (!existsSync(variant)) return;
 
-    await expect(classifyScannedSkillTree(variant)).resolves.toBe(SOURCE);
+    await expect(classifyScannedSkillTree(variant, root)).resolves.toBe(SOURCE);
   });
 });
 

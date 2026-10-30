@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, lstatSync, statSync } from 'node:fs';
+import { chmodSync, lstatSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, relativeEscapesRoot, safePath, VatError, withFsFaultSync } from '@vibe-agent-toolkit/utils';
+import { everywhere, mkdirSyncReal, normalizedTmpdir, pathPresent, relativeEscapesRoot, safePath, VatError, withFsFaultSync } from '@vibe-agent-toolkit/utils';
 
 /** Harness-location failure — maps to exit code 2. */
 export class HarnessLocationError extends VatError {
@@ -55,10 +55,12 @@ export function assertSafeWorkdir(dir: string, stopAt?: string): void {
   let current = safePath.resolve(dir);
   let previous = '';
   while (current !== previous && current !== boundary) {
-    if (existsSync(safePath.join(current, 'CLAUDE.md'))) {
+    // Each ancestor is the operator's own (their --workdir's): the entry beneath it is read by its
+    // text before the kernel follows it, and a refused probe stops the run — never "no project here".
+    if (pathPresent(safePath.join(current, 'CLAUDE.md'), { follow: current }, everywhere('environment'), 'probe')) {
       throw new HarnessLocationError(`--workdir is inside a project: CLAUDE.md found at ${current}. Use an OS-tmp location.`);
     }
-    if (existsSync(safePath.join(current, '.claude'))) {
+    if (pathPresent(safePath.join(current, '.claude'), { follow: current }, everywhere('environment'), 'probe')) {
       throw new HarnessLocationError(`--workdir is inside a project: .claude/ found at ${current}. Use an OS-tmp location.`);
     }
     previous = current;
@@ -84,7 +86,9 @@ export function assertSafeWorkdir(dir: string, stopAt?: string): void {
  * assertSafeHarnessRoot's platform guard).
  */
 export function prepareHarnessRoot(dir: string, owner: 'vat' | 'operator'): void {
-  if (!existsSync(dir)) return;
+  // The ENTRY, not what it resolves to: a dangling link is still a link, refused below — never
+  // treated as absent and then created through.
+  if (!pathPresent(dir, 'entry', everywhere('destination'), 'probe')) return;
 
   const ls = lstatSync(dir);
   if (ls.isSymbolicLink()) {
@@ -98,7 +102,7 @@ export function prepareHarnessRoot(dir: string, owner: 'vat' | 'operator'): void
   }
 
   if (owner === 'vat' && process.platform !== 'win32') {
-    const mode = statSync(dir).mode & 0o777;
+    const mode = ls.mode & 0o777;
     if (mode !== 0o700) {
       chmodSync(dir, 0o700);
     }
@@ -148,7 +152,8 @@ function harnessAncestry(leaf: string, trustedRoot: string): string[] {
  * skipped (no real uids); the symlink refusal still applies.
  */
 function assertComponentSafe(component: string, currentUid: number): void {
-  if (!existsSync(component)) return;
+  // The entry itself (lstat): a dangling link is a link, refused below — never skipped as absent.
+  if (!pathPresent(component, 'entry', everywhere('destination'), 'probe')) return;
   const ls = lstatSync(component);
   if (ls.isSymbolicLink()) {
     throw new HarnessLocationError(`Refusing to use a symlinked harness path component: ${component}.`);
@@ -191,8 +196,10 @@ export function assertSafeHarnessRoot(
 
   // Leaf-only 0700 check (intermediates are created 0700 by recursive mkdir and
   // need only the symlink/ownership guarantees above). Skipped on win32.
-  if (!existsSync(resolved)) return; // not yet created — caller creates it 0700
-  const mode = statSync(resolved).mode & 0o777;
+  // Not yet created — the caller creates it 0700. The leaf was proven a non-link above, so its
+  // `lstat` is its `stat`.
+  if (!pathPresent(resolved, 'entry', everywhere('destination'), 'probe')) return;
+  const mode = lstatSync(resolved).mode & 0o777;
   if (mode !== 0o700 && process.platform !== 'win32') {
     throw new HarnessLocationError(
       `Harness root ${resolved} must be 0700 (found ${mode.toString(8)}). VAT does not change the mode of a `

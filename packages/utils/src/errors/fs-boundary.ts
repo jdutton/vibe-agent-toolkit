@@ -5,9 +5,11 @@
  * helpers `path-containment.ts` itself imports can classify without a cycle.
  */
 
+import { lstatSync } from 'node:fs';
+
 import { canonicalPath, isUnderRoot } from '../path-containment.js';
 
-import { fsFaultOf } from './errno-table.js';
+import { type FsFaultFacts, fsFaultOf, isPathAbsentError, pathsActedOn } from './errno-table.js';
 import { classifyFsFault, FS_SIDES, type FsSide, type SourceOrigin } from './fs-fault.js';
 
 /** The directories each side owns for one verb. */
@@ -36,16 +38,41 @@ export interface FsBoundary {
  */
 function containedBy(root: string, candidate: string): boolean {
   try {
-    return canonicalPath(root) === canonicalPath(candidate) || isUnderRoot(root, candidate) !== 'outside';
+    // Both are the verb's own roots and the paths it names: each is its own edge.
+    return canonicalPath(root, root) === canonicalPath(candidate, root) || isUnderRoot(root, candidate) !== 'outside';
   } catch (error: unknown) {
     if (fsFaultOf(error) !== undefined) return false;
     throw error;
   }
 }
 
+/** Whether nothing is at `path`; a probe the OS refuses proves nothing, so it answers `false`. */
+function nothingAt(path: string): boolean {
+  try {
+    lstatSync(path);
+    return false;
+  } catch (error: unknown) {
+    return isPathAbsentError(error);
+  }
+}
+
+/**
+ * The paths a fault is SIDED by, in order ({@link pathsActedOn}) — except a `rename` refused as
+ * absent whose SOURCE end is the one not there: an `ENOENT` rename is either a destination with
+ * no parent or an entry that was never there to move, and the second is the source's absence,
+ * with nothing wrong where it was to land. Asked of the filesystem, because the errno cannot say.
+ */
+function sidingPaths(facts: FsFaultFacts): readonly string[] {
+  const acted = pathsActedOn(facts);
+  const { path: from } = facts;
+  if (facts.syscall !== 'rename' || facts.faultClass !== 'absent' || from === undefined || !nothingAt(from)) return acted;
+  return [from, ...acted.filter((each) => each !== from)];
+}
+
 /**
  * Role by PATH, not by wrapper. A wrapper names the side its author had in mind;
- * the path the OS named is what actually failed, and one call routinely touches
+ * the path the failing call acted on ({@link pathsActedOn} — never a symlink's target
+ * text, and a rename's landing place first) is what actually failed, and one call routinely touches
  * both an input and an output (a `copyFile` whose source is unreadable fails
  * under the SOURCE root even though the wrapper says "write"). Falls back to the
  * call's declared side only when the error names no path or the path is under no
@@ -66,8 +93,7 @@ export function fsBoundary(roots: FsRoots, options: { origin?: SourceOrigin; sha
   function sideOfError(error: unknown): FsSide | undefined {
     const facts = fsFaultOf(error);
     if (facts === undefined) return undefined;
-    const named = [facts.path, facts.dest].filter((p): p is string => p !== undefined);
-    for (const path of named) {
+    for (const path of sidingPaths(facts)) {
       const side = sideOf(path);
       if (side !== undefined) return side;
     }

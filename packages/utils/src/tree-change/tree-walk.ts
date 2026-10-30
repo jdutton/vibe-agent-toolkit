@@ -10,6 +10,8 @@
  *   no `stat`, no `open`, and a directory's subtree is never listed.
  * - A link under `links: 'preserve'` is handed over as a link; its target is never
  *   examined.
+ * - A link under `links: 'refuse'` refuses the walk, naming it ({@link linkRefused}): the policy
+ *   of a tree that holds none by construction, so one found there is never followed or copied.
  * - A link under `links: 'follow-contained'` is answered by its target (`stat`, so
  *   a dangling link is an absent source). A directory target is entered first, so a
  *   link back into the walk is named as the loop it is
@@ -21,6 +23,11 @@
  *   handle, which is the one the visitor reads: a pipe swapped in after the listing
  *   is refused there, never waited on.
  *
+ * The ROOT is an entry like any other: it is `lstat`-ed, and a root that is a link is handed over
+ * (`preserve`) or refused (`refuse`) exactly as a link under it would be. Only `follow-contained`
+ * takes a root link for the directory it points at — the root is what containment is judged
+ * against, so it cannot be outside itself.
+ *
  * Every READ the walk makes (list, `stat`, `open`, `fstat`, `realpath`) that the OS
  * refuses is a classified fault on the caller's `side`, origin `content`, naming the
  * entry. What a visitor WRITES is the visitor's: the walk never classifies it.
@@ -29,8 +36,9 @@
 import type { Dirent, Stats } from 'node:fs';
 import fs, { type FileHandle } from 'node:fs/promises';
 
-import { classifyFsFault, type FsSide } from '../errors/fs-fault.js';
+import { classifyFsFault, FsFaultError, type FsSide } from '../errors/fs-fault.js';
 import { forEachInOrder } from '../in-order.js';
+import { requireFollowedStat } from '../link-following.js';
 import { isUnderRoot } from '../path-containment.js';
 import { safePath } from '../path-core.js';
 import { refuseSpecialFile } from '../special-file.js';
@@ -38,12 +46,12 @@ import { openForReading } from '../text-file.js';
 
 import { CopyLinkEscapesSourceError, FollowedWalk } from './followed-walk.js';
 
-/** How a walk treats a symlink: follow it, contained to the root, or keep it as a link. */
-export type LinkPolicy = 'follow-contained' | 'preserve';
+/** How a walk treats a symlink: follow it, contained to the root; keep it as a link; or refuse the tree that holds it. */
+export type LinkPolicy = 'follow-contained' | 'preserve' | 'refuse';
 
 /** What every walk over a tree is told. */
 export interface TreeWalkOptions {
-  /** `follow-contained`: a link is what it points at, inside the root only. `preserve`: a link is a link. */
+  /** `follow-contained`: a link is what it points at, inside the root only. `preserve`: a link is a link. `refuse`: a link refuses the walk. */
   readonly links: LinkPolicy;
   /** Keep the entry at this forward-slash path relative to the root; an excluded one is never touched. Omitted: keep everything. */
   readonly filter?: (relative: string) => boolean;
@@ -61,7 +69,7 @@ export interface TreeVisitor {
   directory(entry: WalkedEntry, stats: Stats): Promise<void>;
   /** A regular file, through the handle `fstat` judged; the walk closes it. */
   file(entry: WalkedEntry, handle: FileHandle, stats: Stats): Promise<void>;
-  /** A link under `links: 'preserve'`, never examined. */
+  /** A link under `links: 'preserve'`, never followed by the walk: the visitor decides what to read of it. */
   link(entry: WalkedEntry): Promise<void>;
 }
 
@@ -72,6 +80,23 @@ export interface TreeVisitor {
  */
 export function treeReadFault(side: FsSide, entry: string, error: unknown): unknown {
   return classifyFsFault(error, { side, origin: 'content', action: `read ${entry}`, path: entry });
+}
+
+/**
+ * The refusal of a link in a tree walked with `links: 'refuse'`: a `wrong-type` fault on `side`
+ * (origin `content`) naming the link, under the errno a special file is refused with — an entry
+ * of a kind the read does not take — so the one refusal table decides what the caller publishes.
+ */
+function linkRefused(side: FsSide, link: string): FsFaultError {
+  return new FsFaultError({
+    side,
+    faultClass: 'wrong-type',
+    errno: 'EFTYPE',
+    path: link,
+    origin: 'content',
+    action: `read ${link}: it is a symbolic link, and this tree may hold none`,
+    cause: undefined,
+  });
 }
 
 /** Run one read of the tree; a refusal is rethrown by {@link treeReadFault}. */
@@ -125,14 +150,30 @@ class TreeWalk {
     this.#options = options;
     this.#side = side;
     this.#visitor = visitor;
-    this.#guard = options.links === 'follow-contained' ? new FollowedWalk(side) : undefined;
+    this.#guard = options.links === 'follow-contained' ? new FollowedWalk(side, root) : undefined;
+  }
+
+  /**
+   * Walk from the root: judged by `lstat`, as every entry under it is by its listing. A root that is
+   * a link is the policy's to decide — except under `follow-contained`, where the root is the
+   * directory it points at.
+   */
+  async root(entry: WalkedEntry): Promise<void> {
+    if (this.#options.links !== 'follow-contained') {
+      const stats = await readingTree(this.#side, entry.path, () => fs.lstat(entry.path));
+      if (stats.isSymbolicLink()) {
+        await this.#link(entry);
+        return;
+      }
+    }
+    await this.directory(entry);
   }
 
   /** Enter the directory `entry` and visit it and everything under it, in listing order. */
   async directory(entry: WalkedEntry): Promise<void> {
     // Listed first: a root that is not a directory is refused by the listing (`ENOTDIR`), never opened.
     const listing = await this.#list(entry.path);
-    const stats = await readingTree(this.#side, entry.path, () => fs.stat(entry.path));
+    const stats = await readingTree(this.#side, entry.path, () => requireFollowedStat(entry.path, this.#root));
     this.#enter(entry.path);
     await this.#visitDirectory(entry, listing, stats);
   }
@@ -169,7 +210,8 @@ class TreeWalk {
       await this.#visitor.link(entry);
       return;
     }
-    const target = await readingTree(this.#side, entry.path, () => fs.stat(entry.path));
+    if (this.#options.links === 'refuse') throw linkRefused(this.#side, entry.path);
+    const target = await readingTree(this.#side, entry.path, () => requireFollowedStat(entry.path, this.#root));
     // Revisit first, so a link back into the tree is named as the loop it is; then
     // containment, so a link out is named as the escape it is.
     if (target.isDirectory()) this.#enter(entry.path);
@@ -198,11 +240,12 @@ class TreeWalk {
  * Walk the directory `root` under `options`, handing each accepted entry to
  * `visitor` in listing order, the root first (relative `''`).
  *
- * @param root - The directory to walk; one that is not a directory is refused by its listing
+ * @param root - The directory to walk; one that is not a directory is refused by its listing, and one
+ *   that is a link is judged by `options.links` like any link under it
  * @param options - The link policy and the filter
  * @param side - The side every read of the walk is classified on
  * @param visitor - What to do with each entry
  */
 export async function walkTree(root: string, options: TreeWalkOptions, side: FsSide, visitor: TreeVisitor): Promise<void> {
-  await new TreeWalk(root, options, side, visitor).directory({ path: root, relative: '' });
+  await new TreeWalk(root, options, side, visitor).root({ path: root, relative: '' });
 }

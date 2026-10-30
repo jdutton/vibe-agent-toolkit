@@ -789,7 +789,7 @@ interface ProvenanceComparison {
  *   would then be describing a project that no longer exists
  */
 async function corpusSkillsOf(configRoot: string, projectRoot: string): Promise<CorpusSkill[]> {
-  const skillsSection = loadConfigCached(configRoot)?.skills;
+  const skillsSection = loadConfigCached(configRoot, 'source')?.skills;
   if (skillsSection === undefined) {
     throw new Error(`${configRoot} declares no skills section; CORPORA is stale.`);
   }

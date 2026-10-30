@@ -181,6 +181,18 @@ describe('copyTree', () => {
     expect((await fs.stat(safePath.join(dest, 'run.sh'))).mode & 0o777).toBe(0o755);
   });
 
+  // A copy carries what a file may DO for its owner, group and others — never whose identity it runs under.
+  it.skipIf(process.platform === 'win32')('never carries a file\'s setuid, setgid or sticky bit', async () => {
+    const { src, dest } = await srcAndDest();
+    await fs.writeFile(safePath.join(src, 'tool'), 'x');
+    await fs.chmod(safePath.join(src, 'tool'), 0o6755);
+    // The host may itself drop a special bit on chmod; the copy is only on trial where the source really has one.
+    const sourceMode = (await fs.stat(safePath.join(src, 'tool'))).mode & 0o7777;
+    await copyTree(src, dest, '', FOLLOW);
+    expect(sourceMode & 0o7000).not.toBe(0);
+    expect((await fs.stat(safePath.join(dest, 'tool'))).mode & 0o7777).toBe(0o755);
+  });
+
   // The R7 d-I-2 invariant: a read-only source must not become a copy nothing can fill or remove.
   it.skipIf(process.platform === 'win32')('gives each directory its source\'s mode with the owner\'s rwx kept (0555 → 0755)', async () => {
     const { src, dest } = await srcAndDest();
@@ -223,7 +235,7 @@ describe('copyTree', () => {
       await expect(fs.access(safePath.join(dest, 'scripts', 'etc'))).rejects.toMatchObject({ code: 'ENOENT' });
     });
 
-    it('preserve copies a dangling link as a link, its target verbatim, never examining it', async ({ skip }) => {
+    it('preserve copies a dangling link as a link, its target verbatim, reading its chain but never following it', async ({ skip }) => {
       const cap = symlinkCapability() ?? skip(SKIP_NO_LINKS);
       const { root, src, dest } = await srcAndDest();
       const dangling = safePath.join(src, 'dangling');
@@ -234,8 +246,9 @@ describe('copyTree', () => {
 
       expect((await fs.lstat(safePath.join(dest, 'dangling'))).isSymbolicLink()).toBe(true);
       expect(await fs.readlink(safePath.join(dest, 'dangling'))).toBe('nowhere');
+      // Its text, then its chain read by `lstat` and `readlink` alone to type the copy — nothing that follows it.
       const touched = session.calls.filter((call) => call.path === dangling).map((call) => call.op);
-      expect(touched).toEqual(['readlink']);
+      expect(touched).toEqual(['readlink', 'lstat', 'readlink']);
     });
   });
 

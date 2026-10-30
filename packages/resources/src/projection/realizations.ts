@@ -7,9 +7,9 @@
  * exactly the same `lstat`, and one fact must have one implementation.
  */
 
-import { lstatSync, realpathSync, statSync } from 'node:fs';
+import { lstatSync } from 'node:fs';
 
-import { fsFaultOf, isVatError, safePath, TextTooLargeError, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { followedStatSync, type FsFaultFacts, fsFaultOf, isLinkChainRefusedError, isVatError, linkResolutionFault, realpathNativeSync, safePath, TextTooLargeError, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import { matchesCollection } from '../collection-matcher.js';
@@ -185,9 +185,11 @@ interface PathObservation {
  * Ask the filesystem.
  *
  * @param absolutePath - Path to stat
- * @returns What `lstat` (and, for a link, `stat`) said
+ * @param root - The corpus root the path is crawled in: a link's chain is read beneath it before
+ *   the kernel follows it (`link-following.ts`)
+ * @returns What `lstat` (and, for a link, a followed `stat`) said
  */
-function statObservation(absolutePath: string): PathObservation {
+function statObservation(absolutePath: string, root: string): PathObservation {
   try {
     const link = lstatSync(absolutePath);
     if (!link.isSymbolicLink()) {
@@ -200,7 +202,8 @@ function statObservation(absolutePath: string): PathObservation {
       };
     }
     try {
-      const target = statSync(absolutePath);
+      const target = followedStatSync(absolutePath, root);
+      if (target === undefined) return unresolvedLink(link.mtime);
       return {
         exists: true,
         isDirectory: target.isDirectory(),
@@ -209,17 +212,12 @@ function statObservation(absolutePath: string): PathObservation {
         mtime: link.mtime,
       };
     } catch (error) {
-      // The target is not there, or the OS will not follow the link to it
-      // (ELOOP, EACCES on the target's directory): either way this process
-      // cannot resolve it, which is what the column says.
-      if (fsFaultOf(error) === undefined) throw error;
-      return {
-        exists: true,
-        isDirectory: false,
-        isSymlink: true,
-        symlinkResolves: false,
-        mtime: link.mtime,
-      };
+      // The OS will not follow the link to its target (EACCES on the target's
+      // directory), or VAT will not hand the kernel its chain (a hop naming a
+      // network or device path): either way this process cannot resolve it,
+      // which is what the column says.
+      if (!isLinkChainRefusedError(error) && fsFaultOf(error) === undefined) throw error;
+      return unresolvedLink(link.mtime);
     }
   } catch (error) {
     // Absent, or the filesystem refused to look — `exists` is false and every
@@ -234,6 +232,17 @@ function statObservation(absolutePath: string): PathObservation {
       mtime: null,
     };
   }
+}
+
+/** A symbolic link this process cannot resolve: dangling, a loop, refused by the OS or by VAT. */
+function unresolvedLink(mtime: Date): PathObservation {
+  return {
+    exists: true,
+    isDirectory: false,
+    isSymlink: true,
+    symlinkResolves: false,
+    mtime,
+  };
 }
 
 /**
@@ -284,7 +293,7 @@ export async function collectRealization(
 ): Promise<ResourceRealizationRow> {
   const { exists, isDirectory, isSymlink, symlinkResolves, mtime }
     = context.observedShape === undefined
-      ? statObservation(absolutePath)
+      ? statObservation(absolutePath, context.root)
       : shapeObservation(context.observedShape);
 
   // `isIgnoredByActiveSet`, NOT `isIgnored`, and the difference is 59× on this
@@ -366,7 +375,19 @@ export async function collectRealization(
 }
 
 /**
- * A path's real location, or `null` when it cannot be resolved.
+ * Where a path really lives, as {@link resolveRealPath} answers it.
+ *
+ * `nowhere` is one answer with its reason: `fault: null` when the OS looked and
+ * found nothing (absent, dangling, a cycle), and the fault — errno and class —
+ * when it declined or failed to look. A read lane reports that fault against the
+ * one path; it never stops the run.
+ */
+export type RealPathResolution =
+  | { readonly kind: 'resolved'; readonly path: string }
+  | { readonly kind: 'nowhere'; readonly fault: FsFaultFacts | null };
+
+/**
+ * A path's real location, or why it has none.
  *
  * Exported so a population pass can group by identity without resolving twice,
  * and because "two paths are the same file" is a question only the real path
@@ -375,20 +396,20 @@ export async function collectRealization(
  * already contains.
  *
  * Distinct from `identity.ts`'s ancestor-walking fallback on purpose: this one
- * reports unresolvability as `null` rather than inventing a spelling, because
- * its callers are asking *whether* a path resolves.
+ * reports unresolvability rather than inventing a spelling, because its callers
+ * are asking *whether* a path resolves.
  *
  * @param absolutePath - Path to resolve
- * @returns Forward-slashed real path, or null
+ * @param within - The tree the path is crawled in (the corpus root): its link chain is read beneath
+ *   it before the kernel is asked (`link-following.ts`)
+ * @returns The forward-slashed real path, or `nowhere` with the fault (or `null`) that says why
+ * @throws The resolution's error when it carries no errno — a bug stays loud
  */
-export function realPathOrNull(absolutePath: string): string | null {
+export function resolveRealPath(absolutePath: string, within: string): RealPathResolution {
   try {
-    return toForwardSlash(realpathSync.native(absolutePath));
+    return { kind: 'resolved', path: realpathNativeSync(absolutePath, within) };
   } catch (error) {
-    // Absent, dangling, a cycle, or refused: the filesystem will not resolve
-    // it, which is the `null` this answers. A bug is not that.
-    if (fsFaultOf(error) === undefined) throw error;
-    return null;
+    return { kind: 'nowhere', fault: linkResolutionFault(error) ?? null };
   }
 }
 

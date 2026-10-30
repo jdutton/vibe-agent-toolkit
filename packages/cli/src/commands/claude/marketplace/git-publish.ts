@@ -8,13 +8,13 @@
 import { readdirSync } from 'node:fs';
 
 import type { RefusalCode } from '@vibe-agent-toolkit/schema';
-import { copyTree, disposeTempDir, disposeTempDirAfterFailure, safePath, withFsFault } from '@vibe-agent-toolkit/utils';
+import { copyTree, disposeTempDir, disposeTempDirAfterFailure, isTimedOutError, safePath, withFsFault } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
 
-import { makeStagingDir } from '../../../utils/archive-staging.js';
 import { CommandRefusalError } from '../../../utils/command-refusal.js';
 import type { Logger } from '../../../utils/logger.js';
-import { redactUrlCredentials } from '../../../utils/url-redact.js';
+import { makeStagingDir } from '../../../utils/staging-dir.js';
+import { redactUrlCredentials, redactUrlCredentialsInText } from '../../../utils/url-redact.js';
 
 export interface CommitMetadata {
   sourceRepo?: string;
@@ -79,7 +79,7 @@ export function createCommitMessage(
 function git(
   args: string[],
   options: { cwd: string; allowFailure?: boolean; timeout?: number; input?: string; trim?: boolean; refusal?: RefusalCode }
-): { stdout: string; stderr: string; status: number } {
+): GitStepResult {
   const result = runGit(args, {
     cwd: options.cwd,
     ...(options.trim === undefined ? {} : { trim: options.trim }),
@@ -98,15 +98,24 @@ function git(
   // symptom is a confident "exit 1" with empty stderr.
   const refusal = options.refusal ?? 'RUN_INCOMPLETE';
   if (result.error && !options.allowFailure) {
-    throw new CommandRefusalError(refusal, `git ${label} could not run: ${result.error.message}`, { cause: result.error });
+    throw new CommandRefusalError(refusal, `git ${label} could not run: ${redactUrlCredentialsInText(result.error.message)}`, { cause: result.error });
   }
 
   const status = result.status === -1 ? 1 : result.status;
   if (status !== 0 && !options.allowFailure) {
-    throw new CommandRefusalError(refusal, `git ${label} failed (exit ${status}):\n${result.stderr}`);
+    // git's stderr echoes the remote URL as given — a CI token injected into it included.
+    throw new CommandRefusalError(refusal, `git ${label} failed (exit ${status}):\n${redactUrlCredentialsInText(result.stderr)}`);
   }
 
-  return { stdout: result.stdout, stderr: result.stderr, status };
+  return { stdout: result.stdout, stderr: result.stderr, status, ...(result.error === undefined ? {} : { error: result.error }) };
+}
+
+/** What {@link git} reports: `error` is the spawn-level failure (never ran, killed by its timeout), present only on one. */
+interface GitStepResult {
+  stdout: string;
+  stderr: string;
+  status: number;
+  error?: Error;
 }
 
 /**
@@ -122,11 +131,25 @@ function listedPaths(cwd: string, args: string[], allowFailure = false): string[
 }
 
 /**
+ * Refuse a remote git would parse as an option (`--upload-pack=<command>` runs that command).
+ * Every call that takes the remote also puts `--` before it; this names the mistake before git runs.
+ */
+function refuseOptionShaped(value: string, subject: string): void {
+  if (value.startsWith('-')) {
+    throw new CommandRefusalError(
+      'CONFIG_INVALID',
+      `${subject} starts with "-", which git would read as an option. Set publish.remote to a remote name or a full URL.`,
+    );
+  }
+}
+
+/**
  * Resolve a remote name (e.g., "origin") to a URL.
  * If the value already looks like a URL, returns it as-is.
  * In CI, injects GITHUB_TOKEN into HTTPS URLs for push authentication.
  */
 function resolveRemoteUrl(remote: string, remoteFromConfig: boolean, cwd: string): string {
+  refuseOptionShaped(remote, `publish.remote "${redactUrlCredentials(remote)}"`);
   let url: string;
   if (remote.includes('/') || remote.includes(':')) {
     url = remote;
@@ -140,6 +163,7 @@ function resolveRemoteUrl(remote: string, remoteFromConfig: boolean, cwd: string
       );
     }
     url = urlResult.stdout;
+    refuseOptionShaped(url, `Git remote "${remote}" names the URL "${redactUrlCredentials(url)}", which`);
   }
 
   // In CI, inject token into HTTPS URLs for push authentication.
@@ -179,13 +203,13 @@ export function deliverCommit(
     const fetchSpec = force
       ? `+refs/heads/${branch}:refs/heads/${branch}`
       : `refs/heads/${branch}:refs/heads/${branch}`;
-    git(['fetch', tmpRepo, fetchSpec], { cwd });
+    git(['fetch', '--', tmpRepo, fetchSpec], { cwd });
     logger.info(`   Created local branch "${branch}" (not pushed)`);
     logger.info(`   To push later: git push ${remote} ${branch}`);
     return;
   }
 
-  const pushArgs = ['push', remoteUrl, `${branch}:${branch}`];
+  const pushArgs = ['push', '--', remoteUrl, `${branch}:${branch}`];
   if (force) {
     pushArgs.splice(1, 0, '--force');
   }
@@ -232,6 +256,47 @@ export async function publishToGitBranch(options: PublishGitOptions): Promise<un
   return dryRun ? undefined : disposeTempDir(tmpRepo);
 }
 
+/**
+ * Why the ls-remote probe failed, as the tail of its refusal: killed by its timeout, never run,
+ * or git's exit status with its (redacted) stderr. A killed child reports `status` 1 — an exit
+ * git never made — so the spawn failure is asked first.
+ */
+function probeFailure(probe: GitStepResult): string {
+  if (probe.error !== undefined) {
+    return isTimedOutError(probe.error) ? '(timed out)' : `(could not run: ${redactUrlCredentialsInText(probe.error.message)})`;
+  }
+  return `(exit ${probe.status}):\n${redactUrlCredentialsInText(probe.stderr)}`;
+}
+
+/** `git ls-remote --exit-code` exits 2 when the remote holds no matching ref. */
+const LS_REMOTE_NO_MATCH = 2;
+
+/**
+ * Point the staging repo's branch at the remote branch's tip, so the publish commit builds on it.
+ *
+ * Whether the branch exists is ASKED of the remote, never inferred from a fetch: a fetch that
+ * failed (a full-history fetch outliving its timeout on a large marketplace) once fell through to
+ * an orphan commit, and the plain push of that commit was rejected as non-fast-forward. Now only
+ * the remote's own "no such branch" makes the first commit an orphan; any other failure refuses.
+ *
+ * The tip alone is fetched (`--depth=1`): the push needs only the parent the remote already has.
+ * `--no-push` fetches the whole history, because it copies the staging repo into the caller's.
+ */
+function buildOnRemoteTip(tmpRepo: string, remoteUrl: string, options: Pick<PublishGitOptions, 'branch' | 'noPush' | 'logger'>): void {
+  const ref = `refs/heads/${options.branch}`;
+  const probe = git(['ls-remote', '--exit-code', '--heads', '--', remoteUrl, ref], { cwd: tmpRepo, allowFailure: true });
+  if (probe.status === LS_REMOTE_NO_MATCH) {
+    options.logger.info(`   Branch ${options.branch} does not exist on the remote; the first commit has no parent`);
+    return;
+  }
+  if (probe.status !== 0) {
+    throw new CommandRefusalError('EXTERNAL_API_FAILED', `git ls-remote could not read ${redactUrlCredentials(remoteUrl)} ${probeFailure(probe)}`);
+  }
+  const depth = options.noPush ? [] : ['--depth=1'];
+  git(['fetch', ...depth, '--', remoteUrl, ref], { cwd: tmpRepo, refusal: 'EXTERNAL_API_FAILED' });
+  git(['reset', '--soft', 'FETCH_HEAD'], { cwd: tmpRepo });
+}
+
 /** {@link publishToGitBranch}'s work in the temp repo: stage the tree, commit it, deliver it. */
 async function commitAndDeliver(tmpRepo: string, cwd: string, remoteUrl: string, options: PublishGitOptions): Promise<void> {
   const { publishDir, branch, commitMessage, force, dryRun, logger } = options;
@@ -240,16 +305,10 @@ async function commitAndDeliver(tmpRepo: string, cwd: string, remoteUrl: string,
   git(['config', 'user.name', 'vat marketplace publish'], { cwd: tmpRepo });
   git(['checkout', '-b', branch], { cwd: tmpRepo });
 
-  // Try to fetch existing branch history (skip for dry-run — commit parent doesn't matter)
-  if (!dryRun) {
-    const fetchResult = git(
-      ['fetch', remoteUrl, `refs/heads/${branch}`],
-      { cwd: tmpRepo, allowFailure: true, timeout: 30_000 }
-    );
-    if (fetchResult.status === 0 && !force) {
-      // Reset to fetched branch tip so our commit builds on top of it
-      git(['reset', '--soft', 'FETCH_HEAD'], { cwd: tmpRepo });
-    }
+  // Build on the branch's tip. Skipped for a dry run (the parent does not matter) and under
+  // --force (the push replaces the branch).
+  if (!dryRun && !force) {
+    buildOnRemoteTip(tmpRepo, remoteUrl, options);
   }
 
   // Copy publish tree content into temp repo. Both trees are VAT's own staging: a fault

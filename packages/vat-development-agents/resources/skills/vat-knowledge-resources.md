@@ -107,10 +107,11 @@ SELECT path FROM resource_realizations
 query. It is not silently absent: each link is a `realization_conditions` row —
 `EXTENT_SYMLINK_NOT_REALIZED` when the target is in-root, naming it and whether it is realized, or
 `EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT` when the target resolves outside the root (never named), or
-`EXTENT_SYMLINK_TARGET_UNRESOLVED` when it resolves to nothing. Ask for all three codes or links
-are missing from the answer:
+`EXTENT_SYMLINK_TARGET_UNRESOLVED` when it resolves to nothing, or `EXTENT_SYMLINK_TARGET_UNREADABLE`
+when the OS refused or failed the lookup (the class is in `targetFaultClass`). Ask for all four codes
+or links are missing from the answer:
 `SELECT path, message FROM realization_conditions
-  WHERE code IN ('EXTENT_SYMLINK_NOT_REALIZED', 'EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT', 'EXTENT_SYMLINK_TARGET_UNRESOLVED')`
+  WHERE code IN ('EXTENT_SYMLINK_NOT_REALIZED', 'EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT', 'EXTENT_SYMLINK_TARGET_UNRESOLVED', 'EXTENT_SYMLINK_TARGET_UNREADABLE')`
 lists them.
 
 **Read `population` in the output before you trust a timing.** It is `derived` or `store` — whether

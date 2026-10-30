@@ -16,12 +16,12 @@
  */
 
 import type * as FsPromises from 'node:fs/promises';
-import { mkdtemp, readdir, readFile, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, stat } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
 import type * as Utils from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
+import { installFaultFs, removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ensureModelFiles } from '../../src/embedding-providers/onnx-utils.js';
@@ -29,8 +29,6 @@ import { ensureModelFiles } from '../../src/embedding-providers/onnx-utils.js';
 const fsCalls = vi.hoisted(() => ({
   writeFilePaths: [] as string[],
   renamePairs: [] as { from: string; to: string }[],
-  /** When set, `stat` of a path ending in this suffix throws with this errno. */
-  refuseStat: null as { suffix: string; code: string } | null,
 }));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -40,13 +38,6 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     writeFile: async (path: unknown, ...rest: unknown[]) => {
       fsCalls.writeFilePaths.push(String(path));
       return (actual.writeFile as (...a: unknown[]) => Promise<void>)(path, ...rest);
-    },
-    stat: async (path: unknown, ...rest: unknown[]) => {
-      const refusal = fsCalls.refuseStat;
-      if (refusal !== null && String(path).endsWith(refusal.suffix)) {
-        throw Object.assign(new Error(`${refusal.code}: refused, stat '${String(path)}'`), { code: refusal.code });
-      }
-      return (actual.stat as (...a: unknown[]) => Promise<unknown>)(path, ...rest);
     },
   };
 });
@@ -98,7 +89,6 @@ describe('ensureModelFiles publication', () => {
   beforeEach(async () => {
     fsCalls.writeFilePaths.length = 0;
     fsCalls.renamePairs.length = 0;
-    fsCalls.refuseStat = null;
     cacheDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'vat-onnx-publish-'));
   });
 
@@ -142,11 +132,18 @@ describe('ensureModelFiles publication', () => {
   it('propagates a refusal to stat the cache path instead of downloading over it', async () => {
     // The cache is guarded by existence alone. A `stat` the OS refuses is not
     // "absent": answering so would start a download to a path that cannot be
-    // read, and report the refusal as a write failure at the wrong step.
+    // read, and report the refusal as a write failure at the wrong step. The refusal is
+    // injected on the cache path's own `lstat`: the existence probe reads the link chain
+    // beneath the cache hop by hop (`link-following.ts`) before any following `stat`.
     const fetchSpy = stubFetch();
-    fsCalls.refuseStat = { suffix: MODEL_FILE, code: 'EACCES' };
-
-    await expect(ensureModelFiles(MODEL_ID, cacheDir, true)).rejects.toMatchObject({ code: 'EACCES' });
+    // The model directory is there, so the walk reaches the model file's own `lstat`.
+    await mkdir(safePath.join(cacheDir, MODEL_ID.replaceAll('/', '_')), { recursive: true });
+    const session = installFaultFs({ within: cacheDir, faults: [{ op: 'lstat', path: (path) => path.endsWith(MODEL_FILE), errno: 'EACCES', nth: 1, everyTry: true }] });
+    try {
+      await expect(ensureModelFiles(MODEL_ID, cacheDir, true)).rejects.toMatchObject({ code: 'EACCES' });
+    } finally {
+      session.restore();
+    }
 
     expect(fetchSpy).not.toHaveBeenCalled();
   });

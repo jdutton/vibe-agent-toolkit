@@ -1043,9 +1043,8 @@ export async function readStoredRealizations(
  * tree — the gate that turns a key match into a real hit.
  *
  * One of two such gates; the other is `declinedSymlinkRowsStillHold`, which
- * re-derives every declined-link row (any of the three codes
- * `EXTENT_SYMLINK_NOT_REALIZED` / `_TARGET_OUTSIDE_ROOT` / `_TARGET_UNRESOLVED`)
- * and compares the WHOLE row, code and message, because both depend on targets
+ * re-derives every declined-link row (any of the four `DECLINED_SYMLINK_CODES`)
+ * and compares the WHOLE row — code, message and fault class — because both depend on targets
  * the tree hash does not cover — the message names the in-root path a link
  * resolves through, which an out-of-root hop can move under an unchanged code.
  * The remaining condition rows describe content the tree hash already covers. One probe per

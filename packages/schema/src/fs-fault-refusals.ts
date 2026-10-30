@@ -56,6 +56,8 @@ const MACHINE_REMEDY = {
 } as const;
 
 const SOURCE_REMEDY: Readonly<Record<Exclude<FsFaultRefusalClass, 'absent' | keyof typeof MACHINE_REMEDY>, string>> = {
+  // Host-neutral: every host prints this table. The Windows-only case (an app-execution alias under
+  // WindowsApps, which no permission opens) is documented under INPUT_UNREADABLE in docs/validation-codes.md.
   refused: 'Grant read permission on the named input, or point the command at one it can read.',
   'wrong-type': 'Point the command at the kind of entry it expects; the message names what it found.',
   occupied: 'Remove what is in the way at the named input path.',

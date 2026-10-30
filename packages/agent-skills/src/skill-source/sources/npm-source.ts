@@ -1,9 +1,18 @@
-import { existsSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { ASSET_REFERENCE_UNRESOLVED_CODE, isUnderRoot, resolveAssetReference, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import {
+  ASSET_REFERENCE_UNRESOLVED_CODE,
+  everywhere,
+  followedKindSync,
+  isUnderRoot,
+  pathPresent,
+  resolveAssetReference,
+  safePath,
+  VatError,
+  withFsFaultSync,
+} from '@vibe-agent-toolkit/utils';
 
 import { hashDirectory } from '../content-hash.js';
 import { stageDirInto } from '../stage.js';
@@ -52,34 +61,47 @@ export function splitNpmSpecVersion(spec: string): { name: string; version: stri
  *   that climbs out of the package
  */
 export function locateNpmSource(spec: string, repoRoot: string): string {
+  return locateInPackage(spec, repoRoot).located;
+}
+
+/**
+ * {@link locateNpmSource}, with the installed package directory it found — the tree every later
+ * probe of the located path is crawled in. Every probe reads the link chain beneath its tree by
+ * text before the kernel follows it, and one the OS (or VAT) refused is a `source` fault, never
+ * "not installed".
+ */
+function locateInPackage(spec: string, repoRoot: string): { located: string; packageDir: string } {
   const { name, version } = splitNpmSpecVersion(spec);
   const subpath = spec.slice(`${name}@${version}`.length); // '' or '/dir/...'
   const packageDir = installedPackageDir(spec, name, repoRoot);
-  if (subpath === '') return packageDir;
+  if (subpath === '') return { located: packageDir, packageDir };
 
   const onDisk = safePath.join(packageDir, subpath);
   if (isUnderRoot(packageDir, onDisk) === 'outside') {
     throw new VatError(SKILL_SOURCE_SPEC_INVALID_CODE, `npm skill source '${spec}' names a subpath outside the package ${packageDir}.`);
   }
-  if (existsSync(onDisk)) return onDisk;
+  if (pathPresent(onDisk, { follow: packageDir }, everywhere('source'), 'probe')) return { located: onDisk, packageDir };
 
   // Not a path in the package: an `exports` subpath, held to the package it names.
   const exported = resolveAssetReference(`${name}${subpath}`, repoRoot);
-  if (!existsSync(exported) || isUnderRoot(packageDir, exported) !== 'inside') {
+  if (isUnderRoot(packageDir, exported) !== 'inside' || !pathPresent(exported, { follow: packageDir }, everywhere('source'), 'probe')) {
     throw new VatError(
       ASSET_REFERENCE_UNRESOLVED_CODE,
       `npm skill source '${spec}' names nothing in the installed package: no ${onDisk}, and no "exports" subpath '.${subpath}' on disk.`,
     );
   }
-  return exported;
+  return { located: exported, packageDir };
 }
 
 /** The installed package's directory: the first `<node_modules>/<name>` holding a package.json along Node's lookup paths. */
 function installedPackageDir(spec: string, name: string, repoRoot: string): string {
   const lookupPaths = createRequire(pathToFileURL(safePath.join(repoRoot, 'package.json')).href).resolve.paths(name) ?? [];
+  // Each lookup directory is the operator's own (an ancestor of the repo they named): the package
+  // link beneath it — a workspace or pnpm link — is read by its text before the kernel follows it.
   const found = lookupPaths
-    .map((nodeModules) => safePath.join(nodeModules, name))
-    .find((dir) => existsSync(safePath.join(dir, 'package.json')));
+    .map((nodeModules) => ({ nodeModules, dir: safePath.join(nodeModules, name) }))
+    .find(({ nodeModules, dir }) => pathPresent(safePath.join(dir, 'package.json'), { follow: nodeModules }, everywhere('source'), 'probe'))
+    ?.dir;
   if (found === undefined) {
     throw new VatError(
       ASSET_REFERENCE_UNRESOLVED_CODE,
@@ -104,9 +126,13 @@ export async function resolveNpmSource(
   ctx: ResolveSkillSourceContext,
 ): Promise<ResolvedSkillSource> {
   const { name, version } = splitNpmSpecVersion(spec);
-  const located = locateNpmSource(spec, ctx.repoRoot);
+  const { located, packageDir } = locateInPackage(spec, ctx.repoRoot);
   // The located target may be a file or a directory; stage the directory.
-  const resolvedDir = statSync(located).isDirectory() ? located : dirname(located);
+  const kind = withFsFaultSync(
+    { side: 'source', origin: 'content', action: `examine the npm skill source at ${located}`, path: located },
+    () => followedKindSync(located, packageDir),
+  );
+  const resolvedDir = kind === 'directory' ? located : dirname(located);
   const hash = await hashDirectory(resolvedDir);
   const stagedDir = await stageDirInto(resolvedDir, ctx, `npm-${hash}`);
   return { stagedDir, identity: `npm:${name}@${version}:${hash}`, leftovers: [] };

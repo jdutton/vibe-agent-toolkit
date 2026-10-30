@@ -53,7 +53,7 @@ export function symlinkCapability(): SymlinkCapability | null {
   if (cachedCapability === undefined) {
     const probe = safePath.join(normalizedTmpdir(), `.vat-symlink-probe-${randomBytes(4).toString('hex')}`);
     try {
-      symlinkSync('.', probe);
+      symlinkSync('.', probe, 'dir');
       cachedCapability = {} as SymlinkCapability;
     } catch (error) {
       if (!isSymlinkUnsupportedError(error)) throw error;

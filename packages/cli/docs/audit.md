@@ -493,6 +493,25 @@ analyzed; the verdicts are computed WITHOUT the unchecked files, so an empty
 `verdicts` beside a non-empty `unchecked` is a verdict over fewer files than
 the plugin ships.
 
+**The blocks are also findings.** What a lane found, and what it could not look
+at, is filed on the plugin's own result, so the report's `status`, the row's
+`status` and `data.counts` say what the blocks say:
+
+- each `settings.conflicts[]` entry is a `SETTINGS_POLICY_CONFLICT` warning on
+  the plugin, naming what is blocked and the settings file and level;
+- `compatibility: { analyzed: false }` is a `COMPAT_NOT_CHECKED` warning on the
+  plugin, with the reason;
+- each path under `compatibility.unchecked` or `settings.unchecked` is a
+  `COMPAT_NOT_CHECKED` warning at that path, once — and not at all when the
+  report already carries that path's refusal (a `SCAN_PATH_UNREADABLE` or
+  `SKILL_MISSING_FRONTMATTER` finding there), since one refused path is one
+  finding. An unrelated finding at the same path does not suppress it, and a
+  plugin neither lane could run for gets one finding, not two.
+
+Both are warnings: the run's `status` becomes `findings` and its exit code
+stays 0, as for `COMPAT_TARGET_INCOMPATIBLE`. Neither can be re-levelled or
+waived by `validation.severity` / `validation.allow`.
+
 Both outcomes are also said on stderr without `--debug`: a
 `Compatibility analysis could not run for <plugin>: <reason>` line, and totals
 for conflicts found and paths the settings check could not compare.

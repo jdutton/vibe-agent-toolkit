@@ -44,7 +44,9 @@ const PATH_IMPL_EXEMPT = { exemptFiles: [
   'packages/utils/src/path-utils.ts',
   'packages/utils/test/path-utils.test.ts',
 ] };
-const PATH_UTILS_EXEMPT = { exemptFiles: ['packages/utils/src/path-utils.ts'] };
+// `link-following.ts` is the one module that asks the kernel to follow a link (`realpathSync`
+// among it), each call only once the chain is read: it is the safe replacement, as path-utils is.
+const PATH_UTILS_EXEMPT = { exemptFiles: ['packages/utils/src/path-utils.ts', 'packages/utils/src/link-following.ts'] };
 const SAFE_EXEC_EXEMPT = { exemptFiles: ['packages/utils/src/safe-exec.ts'] };
 
 /**
@@ -78,7 +80,6 @@ const UNIT_TIER_IO_RATCHET = { allowFiles: [
   'packages/agent-skills/test/skill-identity.test.ts',
   'packages/agent-skills/test/skill-source/content-hash.test.ts',
   'packages/agent-skills/test/skill-source/git-clone-env.test.ts',
-  'packages/agent-skills/test/skill-source/git-clone.test.ts',
   'packages/agent-skills/test/skill-source/stage.test.ts',
   'packages/agent-skills/test/skill-source/url-source.test.ts',
   'packages/agent-skills/test/skill-source/vendored-source.test.ts',
@@ -174,7 +175,6 @@ const UNIT_TIER_IO_RATCHET = { allowFiles: [
   'packages/utils/test/asset-reference.test.ts',
   'packages/utils/test/crawl-timing-shared.test.ts',
   'packages/utils/test/entrypoint.test.ts',
-  'packages/utils/test/git-snapshot-cache.test.ts',
   'packages/utils/test/git-tracker-snapshot-priming.test.ts',
   'packages/utils/test/git-tracker.test.ts',
   'packages/utils/test/git-utils.test.ts',
@@ -207,6 +207,9 @@ const UNIT_TIER_IO_RATCHET = { allowFiles: [
 const DOCTOR_COMMAND_FILE = 'packages/cli/src/commands/doctor.ts';
 /** Named once: the bootstrap that builds utils, so it can import none of the primitives three rules point at. */
 const CLEAN_BUILD_FILE = 'packages/dev-tools/src/clean-build.ts';
+/** Named once: three lists (existsSync, link-following, unsafe-member) name each of these maintainer tools. */
+const BUMP_VERSION_FILE = 'packages/dev-tools/src/bump-version.ts';
+const PRE_PUBLISH_CHECK_FILE = 'packages/dev-tools/src/pre-publish-check.ts';
 /** Every package's TypeScript product source — the scope of the `src`-only blocks below. */
 const PRODUCT_SOURCE_TS = 'packages/*/src/**/*.ts';
 
@@ -230,11 +233,8 @@ const COMMANDS_IMPORT_BOUNDARY_RATCHET = { allowFiles: [
   'packages/cli/src/commands/claude/plugin/build.ts',                 // ENUM: readdir; mkdir/cp/writeFile — marketplace build
   'packages/cli/src/commands/claude/plugin/helpers.ts',               // existsSync/stat probes, readFile
   'packages/cli/src/commands/claude/plugin/install.ts',               // ENUM: readdirSync ×1 (package listing); statSync; mkdir — the zip lane's staging dir
-  'packages/cli/src/commands/claude/plugin/plugin-changelog.ts',      // existsSync probes
-  'packages/cli/src/commands/claude/plugin/plugin-files.ts',          // existsSync/mkdir/copyFile
   'packages/cli/src/commands/claude/plugin/plugin-validators.ts',     // ENUM: readdir; readFile
   'packages/cli/src/commands/claude/plugin/tree-copy.ts',             // ENUM: readdir; realpath/lstat/copyFile — tree copy
-  'packages/cli/src/commands/consistency-check.ts',                   // existsSync probes
   'packages/cli/src/commands/corpus/report.ts',                       // mkdirSync — the run directory
   'packages/cli/src/commands/corpus/runner.ts',                       // writeFileSync — review.md and the validation overlay
   'packages/cli/src/commands/corpus/scan.ts',                         // mkdirSync/readFileSync
@@ -242,13 +242,7 @@ const COMMANDS_IMPORT_BOUNDARY_RATCHET = { allowFiles: [
   'packages/cli/src/commands/resources/check-progress.ts',            // appendFileSync — cost log
   'packages/cli/src/commands/resources/check-supervisor.ts',          // stat/readFileSync — child supervision (audit-A §1.2)
   'packages/cli/src/commands/resources/validate.ts',                  // readFile
-  'packages/cli/src/commands/skill/test/configure.ts',                // readFileSync/writeFileSync — config edit
-  'packages/cli/src/commands/skill/test/run.ts',                      // existsSync probe of VAT's own harness dir (the stderr Harness: line)
-  'packages/cli/src/commands/skills/package.ts',                      // existsSync/stat probes
-  'packages/cli/src/commands/skills/scope-guard.ts',                  // existsSync/stat probes
-  'packages/cli/src/commands/skills/skill-discovery.ts',              // existsSync probe
   'packages/cli/src/commands/skills/source-resolvers.ts',             // ENUM: readdirSync of an install/list source dir; existsSync — source staging
-  'packages/cli/src/commands/verify.ts',                              // stat/existsSync probes
 ] };
 
 /**
@@ -263,52 +257,9 @@ const COMMANDS_IMPORT_BOUNDARY_RATCHET = { allowFiles: [
  * only leave by not asking.
  */
 const NO_EXISTSSYNC_RATCHET = { allowFiles: [
-  'packages/agent-skills/src/plugin-distribution-layout.ts',
-  'packages/agent-skills/src/post-build-checks.ts',
-  'packages/agent-skills/src/skill-packager.ts',
-  'packages/agent-skills/src/skill-source/sources/npm-source.ts',
-  'packages/agent-skills/src/skill-test/eval-grader.ts',
-  'packages/agent-skills/src/skill-test/eval-inputs.ts',
-  'packages/agent-skills/src/skill-test/eval-suite-isolation.ts',
-  'packages/agent-skills/src/skill-test/evals-template.ts',
-  'packages/agent-skills/src/skill-test/harness-location.ts',
-  'packages/agent-skills/src/skill-test/preflight.ts',
-  'packages/agent-skills/src/skill-test/run-harness.ts',
-  'packages/agent-skills/src/skill-test/staging.ts',
-  'packages/agent-skills/src/skill-test/vendor-manifest.ts',
-  'packages/agent-skills/src/test-input.ts',
-  'packages/agent-skills/src/validators/agent-instruction-presence.ts',
-  'packages/agent-skills/src/validators/format-detection.ts',
-  'packages/agent-skills/src/validators/packaging-validator.ts',
-  'packages/agent-skills/src/validators/plugin-hosted-shape.ts',
-  'packages/agent-skills/src/validators/referenced-path-missing.ts',
-  'packages/agent-skills/src/validators/skill-validator.ts',
-  'packages/cli/src/bin/vat.ts',
-  'packages/cli/src/commands/audit.ts',
-  'packages/cli/src/commands/build.ts',
-  'packages/cli/src/commands/claude/marketplace/validate.ts',
-  'packages/cli/src/commands/claude/org/skills.ts',
-  'packages/cli/src/commands/claude/plugin/helpers.ts',
-  'packages/cli/src/commands/claude/plugin/plugin-changelog.ts',
-  'packages/cli/src/commands/claude/plugin/plugin-files.ts',
-  'packages/cli/src/commands/claude/plugin/tree-copy.ts',
-  'packages/cli/src/commands/consistency-check.ts',
-  DOCTOR_COMMAND_FILE,
-  'packages/cli/src/commands/skill/test/run.ts',
-  'packages/cli/src/commands/skills/package.ts',
-  'packages/cli/src/commands/skills/scope-guard.ts',
-  'packages/cli/src/commands/skills/skill-discovery.ts',
-  'packages/cli/src/commands/skills/source-resolvers.ts',
-  'packages/cli/src/commands/verify.ts',
-  'packages/cli/src/qa-snapshot/store.ts',
-  'packages/cli/src/skill-resolution/resolve-skill-reference.ts',
-  'packages/cli/src/utils/config-loader.ts',
-  'packages/cli/src/utils/validate-help-files.ts',
-  'packages/cli/src/utils/vat-bin-path.ts',
-  'packages/dev-tools/src/bump-version.ts',
+  BUMP_VERSION_FILE,
   CLEAN_BUILD_FILE,
   'packages/dev-tools/src/common.ts',
-  'packages/dev-tools/src/compat-empirical/corpus/fetch-sources.ts',
   'packages/dev-tools/src/compat-empirical/index.ts',
   'packages/dev-tools/src/compat-empirical/runtimes/shared/manual-driver.ts',
   'packages/dev-tools/src/derived-artifact-rules.ts',
@@ -316,7 +267,7 @@ const NO_EXISTSSYNC_RATCHET = { allowFiles: [
   'packages/dev-tools/src/import-marketplace.ts',
   'packages/dev-tools/src/jscpd-check-new.ts',
   'packages/dev-tools/src/link-workspace-packages.ts',
-  'packages/dev-tools/src/pre-publish-check.ts',
+  PRE_PUBLISH_CHECK_FILE,
   'packages/dev-tools/src/prepare-bin.ts',
   'packages/dev-tools/src/publish-with-rollback.ts',
   'packages/dev-tools/src/test-tier-budget-seed.ts',
@@ -326,22 +277,65 @@ const NO_EXISTSSYNC_RATCHET = { allowFiles: [
   'packages/lab/src/facets/io/capture.ts',
   'packages/lab/src/facets/io/counter.cts',
   'packages/lab/src/facets/verdict/capture.ts',
-  'packages/resource-compiler/src/language-service/diagnostics.ts',
-  'packages/resource-compiler/src/transformer/path-resolver.ts',
-  'packages/resource-compiler/src/utils/copy-resources.ts',
-  'packages/resources/src/parse-pool.ts',
-  'packages/resources/src/projection/contributors/filesystem-extent.ts',
-  'packages/resources/src/projection/contributors/package-extent.ts',
-  'packages/resources/src/projection/crawl-source.ts',
   'packages/utils/src/asset-reference.ts',
-  'packages/utils/src/file-crawler.ts',
-  'packages/utils/src/fs-utils.ts',
-  'packages/utils/src/git-tracker.ts',
-  'packages/utils/src/git-utils.ts',
-  'packages/utils/src/gitignore-checker.ts',
-  'packages/utils/src/project-utils.ts',
   'packages/utils/src/testing/platform-gates.ts',
 ] };
+
+/**
+ * The allowlist of `local/no-link-following-fs`: the files of product source that may ask the
+ * kernel to FOLLOW a link (`stat`, `existsSync`, `realpath`, an untyped `symlink`) with no walk of
+ * the chain first, and HOW MANY such calls each holds. NOT a ratchet of offenders — every crawled
+ * or untrusted path asks `link-following.ts`. Each entry says why every such call in it acts on the
+ * operator's own path. Asserted both ways, per call, by
+ * `dev-tools/test/eslint-allowlist-ratchets.test.ts`: a listed file whose count of flagged calls is
+ * not exactly the one pinned here — one more, or one fewer — is red, so a new call in a listed file
+ * is reviewed like a call anywhere else.
+ */
+export const LINK_FOLLOWING_FS_CALLS = {
+  // Private, unshipped maintainer tooling, run by the operator on this repository's own checkout:
+  // every probed path is the repo's own (its packages, `dist`, changelog, version files, VAT's own
+  // cache) — never an adopter's tree and never fetched content (`fetch-sources.ts`, which stages
+  // cloned repositories, asks `link-following.ts` and is not listed).
+  [BUMP_VERSION_FILE]: 1,
+  [CLEAN_BUILD_FILE]: 5,
+  'packages/dev-tools/src/common.ts': 3,
+  'packages/dev-tools/src/compat-empirical/index.ts': 5,
+  'packages/dev-tools/src/compat-empirical/runtimes/shared/manual-driver.ts': 1,
+  'packages/dev-tools/src/copy-yaml-assets.ts': 1,
+  'packages/dev-tools/src/derived-artifact-rules.ts': 3,
+  'packages/dev-tools/src/extract-changelog.ts': 1,
+  'packages/dev-tools/src/import-marketplace.ts': 1,
+  'packages/dev-tools/src/jscpd-check-new.ts': 1,
+  'packages/dev-tools/src/link-workspace-packages.ts': 5,
+  [PRE_PUBLISH_CHECK_FILE]: 6,
+  'packages/dev-tools/src/prepare-bin.ts': 2,
+  'packages/dev-tools/src/process-test-images.ts': 1,
+  'packages/dev-tools/src/publish-with-rollback.ts': 2,
+  'packages/dev-tools/src/resolve-workspace-deps.ts': 1,
+  'packages/dev-tools/src/test-tier-budget-seed.ts': 2,
+  'packages/dev-tools/src/validate-repo-structure.ts': 3,
+  'packages/dev-tools/src/validate-version.ts': 2,
+  'packages/dev-tools/src/workspace-graph.ts': 1,
+  // The quality lab (private): its instrument, harness and captures act on the operator's own
+  // checkouts and installs and on the lab's own capture directories, never on a crawled entry.
+  'packages/lab/src/facets/io/capture.ts': 1,
+  'packages/lab/src/facets/io/counter.cts': 1,
+  'packages/lab/src/facets/verdict/capture.ts': 1,
+  'packages/lab/src/harness/closure.ts': 1,
+  'packages/lab/src/harness/instrument.ts': 2,
+  'packages/lab/src/harness/subject.ts': 1,
+  // Names the file Node's resolver computed inside an installed package, for an error message only.
+  'packages/utils/src/asset-reference.ts': 1,
+  // The guarded module: every call here runs only after the chain is read, or on the operator's own root.
+  'packages/utils/src/link-following.ts': 12,
+  // Test-support fixtures: each probes a path the test itself built or the test host's own tools.
+  'packages/utils/src/testing/archive-fixtures.ts': 1,
+  'packages/utils/src/testing/executables.ts': 1,
+  'packages/utils/src/testing/fault-fs.ts': 2,
+  'packages/utils/src/testing/platform-gates.ts': 1,
+};
+
+const LINK_FOLLOWING_FS_ALLOW = { allowFiles: Object.keys(LINK_FOLLOWING_FS_CALLS) };
 
 /**
  * Files still carrying `@typescript-eslint/no-unsafe-member-access` /
@@ -356,9 +350,9 @@ export const NO_UNSAFE_BACKLOG = [
   DOCTOR_COMMAND_FILE, // 9
   'packages/cli/src/utils/config-loader.ts', // 1
   'packages/cli/src/version.ts', // 3
-  'packages/dev-tools/src/bump-version.ts', // 15
+  BUMP_VERSION_FILE, // 15
   'packages/dev-tools/src/determine-publish-tags.ts', // 3
-  'packages/dev-tools/src/pre-publish-check.ts', // 3
+  PRE_PUBLISH_CHECK_FILE, // 3
   'packages/rag/src/embedding-providers/openai-embedding-provider.ts', // 2
   'packages/resource-compiler/src/language-service/completions.ts', // 20
   'packages/resource-compiler/src/language-service/definitions.ts', // 15
@@ -673,16 +667,76 @@ const unicornRulesConfig = {
 // approved `js-yaml`; the lint rule is the durable record, so the docs point
 // here). Applied to both TS and JS blocks below.
 const OPEN_FRONTMATTER_MESSAGE = 'Use openFrontmatter from @vibe-agent-toolkit/resources — preserves comments.';
-const noRestrictedImportsConfig = ['error', {
-  paths: [
-    {
-      name: 'js-yaml',
-      message: 'Use `yaml` (eemeli) — the one YAML library in this repo; see noRestrictedImportsConfig in eslint.config.js. Frontmatter writes: openFrontmatter from @vibe-agent-toolkit/resources.',
-    },
-    { name: 'gray-matter', message: OPEN_FRONTMATTER_MESSAGE },
-    { name: 'front-matter', message: OPEN_FRONTMATTER_MESSAGE },
-  ],
-}];
+const YAML_LIBRARY_BAN = [
+  {
+    name: 'js-yaml',
+    message: 'Use `yaml` (eemeli) — the one YAML library in this repo; see noRestrictedImportsConfig in eslint.config.js. Frontmatter writes: openFrontmatter from @vibe-agent-toolkit/resources.',
+  },
+  { name: 'gray-matter', message: OPEN_FRONTMATTER_MESSAGE },
+  { name: 'front-matter', message: OPEN_FRONTMATTER_MESSAGE },
+];
+
+// The ONE owner of "which code may open an archive". Every tarball and ZIP VAT
+// reads, extracts or writes goes through `packages/utils/src/archive/`
+// (`@vibe-agent-toolkit/utils/archive`): one entry policy, one set of limits,
+// one writer that never creates a link. Five extract lanes each with their own
+// rules is how a crafted tarball came to install a directory it did not hold,
+// so `tar` and `adm-zip` are banned everywhere else — product source and tests
+// alike. A test that needs an archive builds it with `tarFixture` / `zipFixture`
+// from `@vibe-agent-toolkit/utils/testing`, which are written byte by byte so
+// they can express the archives a library refuses to write.
+const ARCHIVE_MODULE_FILES = 'packages/utils/src/archive/**';
+const ARCHIVE_LIBRARY_MESSAGE = 'Open an archive only through @vibe-agent-toolkit/utils/archive (listArchive / extractArchive / zipOfDirectory): the one entry policy and the one set of limits live there. A test builds one with tarFixture / zipFixture from @vibe-agent-toolkit/utils/testing.';
+const ARCHIVE_LIBRARY_BAN = [
+  { name: 'adm-zip', message: ARCHIVE_LIBRARY_MESSAGE },
+  { name: 'tar', message: ARCHIVE_LIBRARY_MESSAGE },
+];
+// A SUBPATH is the same library: `tar/extract` is the whole link-creating extractor, and adm-zip
+// has no `exports` map, so every file of it is importable. A group with a slash is anchored, so
+// `./tar/x.js` and `tarball` are not caught.
+const ARCHIVE_LIBRARY_SUBPATH_BAN = [{ group: ['tar/**', 'adm-zip/**'], message: ARCHIVE_LIBRARY_MESSAGE }];
+// `no-restricted-imports` reads static imports only; these are the same ban for
+// `await import('tar/x')`, `require('tar')` and `createRequire(import.meta.url)('adm-zip')` — each
+// with its specifier as a string or as a template literal that holds no expression. (TypeScript's
+// `import tar = require('tar')` is an import declaration to `no-restricted-imports`, which fires on it.)
+//
+// What a lint rule CANNOT see is a specifier computed at run time (`import(name)`, a template with
+// an expression, a `createRequire` result bound to a name other than `require`): nothing here
+// pretends to. The barrier for those is that only `packages/utils` declares the two packages.
+const ARCHIVE_LIBRARY_SPECIFIER = String.raw`/^(adm-zip|tar)(\u002f|$)/`;
+/** A call argument, or an import source, at `path`: a string literal, or a template literal with no expression. */
+const archiveSpecifierAt = (path) => [
+  `[${path}.value=${ARCHIVE_LIBRARY_SPECIFIER}]`,
+  `[${path}.type='TemplateLiteral'][${path}.expressions.length=0][${path}.quasis.0.value.cooked=${ARCHIVE_LIBRARY_SPECIFIER}]`,
+];
+const ARCHIVE_LIBRARY_RESTRICTED_SYNTAX = [
+  ...archiveSpecifierAt('source').map((specifier) => `ImportExpression${specifier}`),
+  ...archiveSpecifierAt('arguments.0').map((specifier) => `CallExpression[callee.name='require']${specifier}`),
+  ...archiveSpecifierAt('arguments.0').map((specifier) => `CallExpression[callee.type='CallExpression'][callee.callee.name='createRequire']${specifier}`),
+].map((selector) => ({ selector, message: ARCHIVE_LIBRARY_MESSAGE }));
+
+const noRestrictedImportsConfig = ['error', { paths: [...YAML_LIBRARY_BAN, ...ARCHIVE_LIBRARY_BAN], patterns: ARCHIVE_LIBRARY_SUBPATH_BAN }];
+
+// No dispatch on error PROSE, and no bare `Error` subclass: the `src`-only
+// restrictions, named so the archive module's block below can keep them while
+// dropping the archive-library ban that every other file carries.
+const ERROR_CONTRACT_RESTRICTED_SYNTAX = [
+  {
+    selector: "CallExpression[callee.type='MemberExpression'][callee.object.type='MemberExpression'][callee.object.property.name='message'][callee.property.name=/^(includes|startsWith|endsWith|match|search)$/]",
+    message: 'Do not dispatch on an error message. Dispatch on its code (`isVatError(err, code)`), its class (`instanceof`), or an errno predicate (`isPathAbsentError`) — prose is for humans and changes when it is improved.',
+  },
+  {
+    selector: "CallExpression[callee.type='MemberExpression'][callee.property.name='test'][arguments.0.type='MemberExpression'][arguments.0.property.name='message']",
+    message: 'Do not test a regex against an error message. Dispatch on its code (`isVatError(err, code)`), its class (`instanceof`), or an errno predicate (`isPathAbsentError`).',
+  },
+  // Every VAT error carries a `code`: a class that extends the bare
+  // `Error` has none, and the contract above has nothing to dispatch on.
+  // One such class survived the sweep by being added after it.
+  {
+    selector: "ClassDeclaration[superClass.name='Error']",
+    message: 'Extend `VatError` from @vibe-agent-toolkit/utils (with a SCREAMING_SNAKE code), not the bare `Error` — every VAT error carries a code a catch block can dispatch on.',
+  },
+];
 
 // General rules that apply to both TS and JS — except `no-unused-vars`,
 // which the TS block overrides with the @typescript-eslint variant.
@@ -758,6 +812,7 @@ export default [
       'vitest.shared.ts',
       'vitest.setup.js',
       '.claude/worktrees/',  // Claude Code worktrees
+      '.superpowers/',  // Gitignored working material (specs, scratch reproductions): never committed, never product
       '**/test-fixtures/**',  // Test fixture data (third-party code)
       '**/test/fixtures/**',  // Test fixture data (emulates user/3p content)
       '**/transformer-fixtures/**',  // Transformer test fixtures (sample code)
@@ -809,6 +864,9 @@ export default [
       ...generalRulesConfig,
 
       'no-restricted-imports': noRestrictedImportsConfig,
+      // The `import()` / `require` half of the archive-library ban, for every TS file. The
+      // `src`-only block below restates it beside the error-contract selectors.
+      'no-restricted-syntax': ['error', ...ARCHIVE_LIBRARY_RESTRICTED_SYNTAX],
 
       // TypeScript-specific (use @typescript-eslint variant of no-unused-vars)
       'no-unused-vars': 'off',
@@ -899,23 +957,16 @@ export default [
     files: [PRODUCT_SOURCE_TS],
     rules: {
       'local/explicit-zod-strictness': ['error', { allowDefaultStripIn: [] }],
-      'no-restricted-syntax': ['error',
-        {
-          selector: "CallExpression[callee.type='MemberExpression'][callee.object.type='MemberExpression'][callee.object.property.name='message'][callee.property.name=/^(includes|startsWith|endsWith|match|search)$/]",
-          message: 'Do not dispatch on an error message. Dispatch on its code (`isVatError(err, code)`), its class (`instanceof`), or an errno predicate (`isPathAbsentError`) — prose is for humans and changes when it is improved.',
-        },
-        {
-          selector: "CallExpression[callee.type='MemberExpression'][callee.property.name='test'][arguments.0.type='MemberExpression'][arguments.0.property.name='message']",
-          message: 'Do not test a regex against an error message. Dispatch on its code (`isVatError(err, code)`), its class (`instanceof`), or an errno predicate (`isPathAbsentError`).',
-        },
-        // Every VAT error carries a `code`: a class that extends the bare
-        // `Error` has none, and the contract above has nothing to dispatch on.
-        // One such class survived the sweep by being added after it.
-        {
-          selector: "ClassDeclaration[superClass.name='Error']",
-          message: 'Extend `VatError` from @vibe-agent-toolkit/utils (with a SCREAMING_SNAKE code), not the bare `Error` — every VAT error carries a code a catch block can dispatch on.',
-        },
-      ],
+      'no-restricted-syntax': ['error', ...ERROR_CONTRACT_RESTRICTED_SYNTAX, ...ARCHIVE_LIBRARY_RESTRICTED_SYNTAX],
+    },
+  },
+  // The archive module: the one place `tar` and `adm-zip` may be imported (see
+  // ARCHIVE_LIBRARY_BAN). It keeps every other restriction its neighbours carry.
+  {
+    files: [ARCHIVE_MODULE_FILES],
+    rules: {
+      'no-restricted-imports': ['error', { paths: YAML_LIBRARY_BAN }],
+      'no-restricted-syntax': ['error', ...ERROR_CONTRACT_RESTRICTED_SYNTAX],
     },
   },
   // `existsSync` folds "could not look" into "absent", over product `src/` (the rule
@@ -925,12 +976,14 @@ export default [
     files: [PRODUCT_SOURCE_TS, 'packages/*/src/**/*.cts'],
     rules: {
       'local/no-existssync': ['error', NO_EXISTSSYNC_RATCHET],
+      'local/no-link-following-fs': ['error', LINK_FOLLOWING_FS_ALLOW],
     },
   },
-  // The base class itself is the one legitimate `extends Error` in `src`.
+  // The base class itself is the one legitimate `extends Error` in `src`: the error-contract
+  // selectors are lifted for it, and the archive-library ban every other file carries is not.
   {
     files: ['packages/utils/src/errors/vat-error.ts'],
-    rules: { 'no-restricted-syntax': 'off' },
+    rules: { 'no-restricted-syntax': ['error', ...ARCHIVE_LIBRARY_RESTRICTED_SYNTAX] },
   },
 
   // Plain JS / CJS / MJS files (eslint configs, dev-tools scripts, the rule
@@ -967,6 +1020,7 @@ export default [
       ...generalRulesConfig,
 
       'no-restricted-imports': noRestrictedImportsConfig,
+      'no-restricted-syntax': ['error', ...ARCHIVE_LIBRARY_RESTRICTED_SYNTAX],
 
       // JS-only: use the core no-unused-vars (the TS block uses the
       // @typescript-eslint variant instead).

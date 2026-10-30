@@ -19,7 +19,8 @@ const SKILL_SOURCE = { side: 'source', origin: 'content' } as const;
  * @throws {FsFaultError} A `source` fault, when the OS will not read a file or list a directory in it.
  */
 export async function hashDirectory(dir: string): Promise<string> {
-  const walk = new FollowedWalk(SKILL_SOURCE.side);
+  // `dir` is the tree hashed: every link beneath it is read by its text before the kernel follows it.
+  const walk = new FollowedWalk(SKILL_SOURCE.side, dir);
   walk.enter(dir);
   const files = await collectFiles(dir, dir, walk);
   files.sort((a, b) => {
@@ -57,7 +58,7 @@ async function collectFiles(
     // nothing — decided here, by name, rather than by falling off the end.
     // A link back into the tree is refused by the walk guard rather than
     // followed until the stack gives out.
-    const kind = await withFsFault({ ...SKILL_SOURCE, action: `examine the skill source at ${abs}`, path: abs }, () => direntKindFollowing(current, entry));
+    const kind = await withFsFault({ ...SKILL_SOURCE, action: `examine the skill source at ${abs}`, path: abs }, () => direntKindFollowing(current, entry, root));
     switch (kind) {
       case 'directory':
         walk.enter(abs);

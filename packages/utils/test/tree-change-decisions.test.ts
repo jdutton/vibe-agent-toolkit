@@ -12,7 +12,6 @@ import {
   changedSincePlan,
   fillFaultIsDestinations,
   finalizeThrows,
-  madeDirectoryPath,
   madeParentStep,
   RENAME_TRIES,
   renameRetryDelay,
@@ -21,6 +20,7 @@ import {
 } from '../src/tree-change/apply-decisions.js';
 import { aliasFault, foldedNameIsTwin, mayTakeOver, nameOf, parentOf, sameNameWhereFolded } from '../src/tree-change/copy-decisions.js';
 import type { EntryKind, Ownership, PlannedChange } from '../src/tree-change/plan.js';
+import { withoutWin32Namespace } from '../src/win32-namespace.js';
 
 const at = (...segments: string[]): string => safePath.resolve('/vat-decisions', ...segments);
 const OUT = at('out');
@@ -34,12 +34,15 @@ describe('fillFaultIsDestinations', () => {
   const sideOf = (path: string): 'destination' | undefined => (relativeEscapesRoot(safePath.relative(at('staged'), path)) ? undefined : 'destination');
 
   it.each([
-    ['the path the OS named is under the staged tree', { path: at('staged', 'a.md'), dest: undefined }, true],
-    ['the second path of a two-path call is', { path: at('in', 'a.md'), dest: at('staged', 'a.md') }, true],
-    ['it names an input beside the destination', { path: at('in', 'a.md'), dest: undefined }, false],
-    ['the OS named no path at all', { path: undefined, dest: undefined }, false],
-  ])('%s → %s', (_label, facts, expected) => {
-    expect(fillFaultIsDestinations(facts, sideOf)).toBe(expected);
+    ['the path the OS named is under the staged tree', { path: at('staged', 'a.md'), dest: undefined, syscall: 'open' }, true],
+    ['the second path of a two-path call is', { path: at('in', 'a.md'), dest: at('staged', 'a.md'), syscall: 'copyfile' }, true],
+    ['it names an input beside the destination', { path: at('in', 'a.md'), dest: undefined, syscall: 'open' }, false],
+    ['the OS named no path at all', { path: undefined, dest: undefined, syscall: undefined }, false],
+    // A symlink's first path is its TARGET TEXT, which the call never touched: only the link sides the fault.
+    ['a link made outside the staged tree merely POINTS into it', { path: at('staged', 'a.md'), dest: at('in', 'link'), syscall: 'symlink' }, false],
+    ['a link made in the staged tree points out of it', { path: at('in', 'a.md'), dest: at('staged', 'link'), syscall: 'symlink' }, true],
+  ])('%s → %s', (_label, named, expected) => {
+    expect(fillFaultIsDestinations({ errno: 'EACCES', faultClass: 'refused', ...named }, sideOf)).toBe(expected);
   });
 });
 
@@ -87,21 +90,23 @@ describe('madeParentStep', () => {
   });
 });
 
-describe('madeDirectoryPath', () => {
+describe('withoutWin32Namespace', () => {
   const BACKSLASH = String.fromCodePoint(0x5c);
   const win = (...segments: string[]): string => segments.join(BACKSLASH);
 
-  // Held against a plain `C:\…` destination, a namespaced report reads as another root: the walk that
-  // removes the parents a failed create made would stop before removing any (Windows CI left `.claude`).
-  it('gives a win32-namespaced report the spelling the caller\'s own paths have', () => {
+  // Under win32 Node hands the OS a namespaced path and reports a recursive mkdir's first made
+  // directory, and an errno's `path` and `dest`, in that form. Held against a plain `C:\…` path it
+  // reads as another root: the walk that removes the parents a failed create made would stop before
+  // removing any (Windows CI left `.claude`), and a fault would name `//?/C:/…`.
+  it('gives a win32-namespaced path the spelling the caller\'s own paths have', () => {
     const made = win('C:', 'Users', 'me', '.claude');
-    expect(madeDirectoryPath(`${BACKSLASH.repeat(2)}?${BACKSLASH}${made}`)).toBe(made);
-    expect(madeDirectoryPath(`${BACKSLASH.repeat(2)}?${BACKSLASH}UNC${BACKSLASH}${win('server', 'share', 'x')}`)).toBe(`${BACKSLASH.repeat(2)}${win('server', 'share', 'x')}`);
+    expect(withoutWin32Namespace(`${BACKSLASH.repeat(2)}?${BACKSLASH}${made}`)).toBe(made);
+    expect(withoutWin32Namespace(`${BACKSLASH.repeat(2)}?${BACKSLASH}UNC${BACKSLASH}${win('server', 'share', 'x')}`)).toBe(`${BACKSLASH.repeat(2)}${win('server', 'share', 'x')}`);
   });
 
   it('leaves every other path as it is', () => {
-    for (const path of ['/tmp/a/b', win('C:', 'a', 'b'), `${BACKSLASH.repeat(2)}${win('server', 'share')}`, 'relative/dir']) {
-      expect(madeDirectoryPath(path)).toBe(path);
+    for (const path of ['/tmp/a/b', win('C:', 'a', 'b'), `${BACKSLASH.repeat(2)}${win('server', 'share')}`, 'relative/dir', '//?/C:/a']) {
+      expect(withoutWin32Namespace(path)).toBe(path);
     }
   });
 

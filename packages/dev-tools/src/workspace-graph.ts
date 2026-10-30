@@ -140,7 +140,7 @@ export function readWorkspaceGraph(repoRoot: string): WorkspaceGraph {
   const packagesDir = safePath.join(repoRoot, 'packages');
   const dirs = readdirSync(packagesDir, { withFileTypes: true })
     // Followed: a workspace package reached through a link is still a package.
-    .filter((entry) => direntKindFollowingSync(packagesDir, entry) === 'directory')
+    .filter((entry) => direntKindFollowingSync(packagesDir, entry, packagesDir) === 'directory')
     .map((entry) => entry.name)
     .sort((a, b) => a.localeCompare(b));
 

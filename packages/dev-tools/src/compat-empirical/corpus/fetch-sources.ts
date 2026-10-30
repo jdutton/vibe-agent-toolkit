@@ -11,11 +11,11 @@
  */
 
 
-import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import {
   applyTreePlan,
+  followedKindSync,
   isAbsolutePath,
   mkdirSyncReal,
   normalizedTmpdir,
@@ -43,8 +43,13 @@ function defaultCacheDir(): string {
   return toForwardSlash(safePath.join(normalizedTmpdir(), 'vat-compat-empirical-cache'));
 }
 
+/** Whether something resolves at `path`, its own link the edge: VAT's cache dirs and the operator's own source paths. */
+function present(path: string): boolean {
+  return followedKindSync(path, path) !== 'absent';
+}
+
 function ensureDir(dir: string): void {
-  if (!existsSync(dir)) {
+  if (!present(dir)) {
     mkdirSyncReal(dir, { recursive: true });
   }
 }
@@ -57,11 +62,11 @@ async function stageLocal(entry: CorpusEntry, source: Extract<SkillSource, { kin
     ? toForwardSlash(source.path)
     : safePath.join(projectRoot, source.path);
 
-  if (!existsSync(absSource)) {
+  if (!present(absSource)) {
     throw new Error(`local skill source does not exist: ${absSource}`);
   }
 
-  if (existsSync(stageDir)) {
+  if (present(stageDir)) {
     return finalizeStage(entry, stageDir);
   }
 
@@ -123,7 +128,7 @@ function stageGit(entry: CorpusEntry, source: Extract<SkillSource, { kind: 'git'
   const repoSlug = source.repo.replaceAll(/[^a-zA-Z0-9-]/g, '_');
   const stageDir = safePath.join(cacheDir, 'git', `${repoSlug}-${source.ref}`);
 
-  if (existsSync(stageDir)) {
+  if (present(stageDir)) {
     if (!SHA_REF_RE.test(source.ref)) {
       refreshGitRef(stageDir, source.ref);
     }
@@ -148,7 +153,8 @@ function stageGit(entry: CorpusEntry, source: Extract<SkillSource, { kind: 'git'
 function finalizeStage(entry: CorpusEntry, stageDir: string): StagedSkill {
   const rootDir = toForwardSlash(stageDir);
   const skillPath = safePath.join(rootDir, entry.skillRelPath);
-  if (!existsSync(skillPath)) {
+  // A cloned repository's content: its links are read beneath the stage before the kernel is asked.
+  if (followedKindSync(skillPath, rootDir) === 'absent') {
     throw new Error(`skill file missing at ${skillPath} (rel=${entry.skillRelPath}) for entry ${entry.id}`);
   }
   return { entryId: entry.id, rootDir, skillPath };

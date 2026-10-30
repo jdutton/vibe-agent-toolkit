@@ -51,8 +51,9 @@ import { recordSuppressedFault } from '../errors/suppressed-faults.js';
 import { isVatError } from '../errors/vat-error.js';
 import { forEachInOrder, mapInOrder } from '../in-order.js';
 import { safePath, toForwardSlash } from '../path-core.js';
+import { withoutWin32Namespace } from '../win32-namespace.js';
 
-import { changedDestinationFault, changedSincePlan, fillFaultIsDestinations, finalizeThrows, madeDirectoryPath, madeParentStep, TREE_CLEANUP_INCOMPLETE_CODE } from './apply-decisions.js';
+import { changedDestinationFault, changedSincePlan, fillFaultIsDestinations, finalizeThrows, madeParentStep, TREE_CLEANUP_INCOMPLETE_CODE } from './apply-decisions.js';
 import { copyTree } from './copy-tree.js';
 import { removeEntry, renameFileAtomic } from './files.js';
 import { sameEntry } from './identity.js';
@@ -128,7 +129,7 @@ function writeFillFault(error: unknown, slot: Slot, staged: string): unknown {
 /** The parent of the destination, made when absent; the first directory made is remembered. */
 async function makeParent(slot: Slot): Promise<void> {
   const made = await onDestination(slot, 'make the parent directory of', () => fs.mkdir(path.dirname(destOf(slot)), { recursive: true }));
-  slot.createdParent = made === undefined ? undefined : toForwardSlash(madeDirectoryPath(made));
+  slot.createdParent = made === undefined ? undefined : toForwardSlash(withoutWin32Namespace(made));
 }
 
 /** How many fresh names a `write` fill tries before an `EEXIST` is the answer (as `mkdtemp` retries its own). */

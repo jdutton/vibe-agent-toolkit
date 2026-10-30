@@ -66,11 +66,13 @@
  * empty.
  */
 
-import { existsSync, lstatSync, statSync } from 'node:fs';
+import { lstatSync } from 'node:fs';
 
 import {
+  followedKindSync,
   forEachInOrder,
   fsFaultOf,
+  isLinkChainRefusedError,
   readTextContentSync,
   safePath,
   toForwardSlash,
@@ -324,7 +326,8 @@ export interface CrawlSource {
    * with nothing saying so. `FilesystemExtentContributor` carries each as an
    * declined-link condition row — `EXTENT_SYMLINK_NOT_REALIZED`, or
    * `EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT` when the target resolves outside the root, or
-   * `EXTENT_SYMLINK_TARGET_UNRESOLVED` when it resolves to nothing. Both
+   * `EXTENT_SYMLINK_TARGET_UNRESOLVED` when it resolves to nothing, or
+   * `EXTENT_SYMLINK_TARGET_UNREADABLE` when the OS would not resolve it. Both
    * sources report the same set for the same tree, as they do for members.
    */
   readonly symlinks: readonly string[];
@@ -1104,10 +1107,13 @@ export function crawlSourceFor(root: string, outputs: readonly string[]): CrawlS
  */
 function gitMarkerIsReadable(gitRoot: string): boolean {
   const marker = safePath.join(gitRoot, '.git');
+  // Every probe reads its link chain beneath the repository root first (`link-following.ts`).
+  const present = (path: string): boolean => followedKindSync(path, gitRoot) !== 'absent';
   try {
-    const stat = statSync(marker);
-    if (stat.isDirectory()) {
-      return existsSync(safePath.join(marker, 'HEAD'));
+    const kind = followedKindSync(marker, gitRoot);
+    if (kind === 'absent') return false;
+    if (kind === 'directory') {
+      return present(safePath.join(marker, 'HEAD'));
     }
 
     // A `.git` FILE is a pointer — a linked worktree or a submodule. It is only
@@ -1119,12 +1125,15 @@ function gitMarkerIsReadable(gitRoot: string): boolean {
       .find((line) => line.startsWith(GITDIR_PREFIX));
     if (pointer === undefined) return false;
     const target = safePath.resolve(gitRoot, pointer.slice(GITDIR_PREFIX.length).trim());
-    return existsSync(safePath.join(target, 'HEAD'));
+    return present(safePath.join(target, 'HEAD'));
   } catch (error) {
     // The filesystem refusing the marker is the same answer as absent: do not
     // select an enumerator that will throw on it. The command then reports
     // `extentSource: filesystem`, which is where the refusal becomes visible.
-    if (fsFaultOf(error) === undefined) throw error;
+    // A marker whose chain VAT will not hand the kernel (a `.git` or `HEAD`
+    // linked to a network path) is never handed to git either — git would
+    // follow it — so it is not selected, on the same terms.
+    if (!isLinkChainRefusedError(error) && fsFaultOf(error) === undefined) throw error;
     return false;
   }
 }

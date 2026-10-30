@@ -26,7 +26,9 @@ import { lstatSync } from 'node:fs';
 import path from 'node:path';
 
 import { isPathAbsentError } from './errors/errno-table.js';
+import { assertLocalChain } from './link-following.js';
 import { normalizePath, safePath, toForwardSlash } from './path-utils.js';
+import { HOST_PATH_FLAVOR } from './tree-change/link-chain.js';
 
 /**
  * Where a candidate stands relative to a root, as the filesystem sees it.
@@ -57,14 +59,16 @@ export type Containment = 'inside' | 'outside' | 'absent';
  * failing is answered by {@link normalizePath} with the lexical spelling, which
  * is where the entry is.
  */
-function canonicalFromAncestor(target: string): { canonical: string; exists: boolean } {
+function canonicalFromAncestor(target: string, within: string): { canonical: string; exists: boolean } {
   const absolute = safePath.resolve(target);
+  // An `lstat` follows every component but the last, so the chain is read and shown local first.
+  assertLocalChain(absolute, within, HOST_PATH_FLAVOR);
   const missing: string[] = [];
   let candidate = absolute;
   for (;;) {
     if (entryExists(candidate)) {
       return {
-        canonical: safePath.join(toForwardSlash(normalizePath(candidate)), ...missing),
+        canonical: safePath.join(toForwardSlash(normalizePath(candidate, within)), ...missing),
         exists: missing.length === 0,
       };
     }
@@ -90,11 +94,13 @@ function canonicalFromAncestor(target: string): { canonical: string; exists: boo
  * ancestor with the missing tail re-appended.
  *
  * @param target - Absolute, or relative to cwd; either separator
+ * @param within - The tree `target` is crawled in, whose links are read before the kernel follows
+ *   them (`normalizePath`); `target` itself when it IS the operator's own path
  * @returns The canonical spelling, forward-slashed
  * @throws When the OS refuses to examine the path for any reason but absence
  */
-export function canonicalPath(target: string): string {
-  return canonicalFromAncestor(target).canonical;
+export function canonicalPath(target: string, within: string): string {
+  return canonicalFromAncestor(target, within).canonical;
 }
 
 /** Whether an entry (a file, a directory, or a link — dangling or not) is at `p`. */
@@ -135,8 +141,8 @@ function entryExists(p: string): boolean {
  * if (isUnderRoot(skillsDir, dest) === 'outside') throw new Error(`refusing to install to ${dest}: not inside ${skillsDir}`);
  */
 export function isUnderRoot(root: string, candidate: string): Containment {
-  const rootReal = canonicalFromAncestor(root).canonical;
-  const target = canonicalFromAncestor(candidate);
+  const rootReal = canonicalFromAncestor(root, root).canonical;
+  const target = canonicalFromAncestor(candidate, root);
   const prefix = rootReal.endsWith('/') ? rootReal : `${rootReal}/`;
   if (!target.canonical.startsWith(prefix)) {
     return 'outside';

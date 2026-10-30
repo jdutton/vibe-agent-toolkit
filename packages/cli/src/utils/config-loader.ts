@@ -5,7 +5,6 @@
  * - VAT_TEST_CONFIG: Override config file path for testing (absolute path)
  */
 
-import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import {
@@ -15,7 +14,7 @@ import {
   readConfigTextSync,
   type ProjectConfig,
 } from '@vibe-agent-toolkit/resources';
-import { isFsFaultError, isVatError, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { classifyFsFault, type FsSide, isFsFaultError, isUnresolvableLinkError, isVatError, refusedPathOf, requireConfirmedAbsent, requireFollowedStatSync, safePath, sideWithin, VatError } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 
 import { errorMessageOf } from './command-refusal.js';
@@ -61,6 +60,9 @@ export class ConfigLoadError extends VatError {
  * Load and validate project configuration
  *
  * @param projectRoot - Project root directory
+ * @param projectSide - The calling verb's side for a path in the project it does not declare an input:
+ *   `destination` for a verb that writes into the project (`build`), `source` for one that only reads it.
+ *   A refusal on the way to the config, or of the listing that confirms it absent, lands there.
  * @returns Validated configuration or undefined if not found
  * @throws Error if config file exists but is invalid
  *
@@ -71,18 +73,22 @@ export class ConfigLoadError extends VatError {
  * @example
  * ```typescript
  * // Normal usage
- * const config = loadConfig('/path/to/project');
+ * const config = loadConfig('/path/to/project', 'source');
  *
  * // Test usage with override
  * process.env.VAT_TEST_CONFIG = '/path/to/test/fixtures/config.yaml';
- * const config = loadConfig('/any/path'); // Uses override path
+ * const config = loadConfig('/any/path', 'source'); // Uses override path
  * ```
  */
-export function loadConfig(projectRoot: string): ProjectConfig | undefined {
+export function loadConfig(projectRoot: string, projectSide: FsSide): ProjectConfig | undefined {
   // Override for testing: VAT_TEST_CONFIG provides explicit config path
-  const configPath = process.env['VAT_TEST_CONFIG'] ?? safePath.join(projectRoot, CONFIG_FILENAME);
+  const override = process.env['VAT_TEST_CONFIG'];
+  const configPath = override ?? safePath.join(projectRoot, CONFIG_FILENAME);
+  // The override is the operator's own path (its own `within`); the config sits beneath the project root.
+  // A probe the OS refuses is a fault, never "no config here".
+  const within = override ?? projectRoot;
 
-  if (!existsSync(configPath)) {
+  if (!configPresent(configPath, within, projectSide)) {
     return undefined;
   }
 
@@ -130,6 +136,27 @@ export function loadConfig(projectRoot: string): ProjectConfig | undefined {
 }
 
 /**
+ * Whether the config resolves to something, its links read beneath `within` first. A probe the OS
+ * refuses (or a chain naming a network path) is the config's source fault, classified as its read
+ * is (origin `config`), never "no config here". "Absent" is believed only once the directory's
+ * listing agrees: a wrong "no config" silently runs the verb with none, which does less. The config
+ * is the input; every other path refused on the way to it, or listed to confirm it absent, is on the
+ * verb's own side for the project (`projectSide`).
+ */
+function configPresent(configPath: string, within: string, projectSide: FsSide): boolean {
+  const ctx = { origin: 'config', action: 'find the project config', path: configPath } as const;
+  const sideOf = sideWithin(configPath, 'source', projectSide);
+  try {
+    requireFollowedStatSync(configPath, within);
+    return true;
+  } catch (error) {
+    if (!isUnresolvableLinkError(error)) throw classifyFsFault(error, { ...ctx, side: sideOf(refusedPathOf(error, configPath)) });
+    requireConfirmedAbsent(configPath, error, ctx, { follows: true, sideOf });
+    return false;
+  }
+}
+
+/**
  * Get the directory containing a config file path.
  */
 export function getConfigDir(configPath: string): string {
@@ -150,7 +177,7 @@ const loadedConfigCache: Map<string, ProjectConfig | null> = new Map();
 
 /**
  * Companion cache for {@link loadConfigCached}: what a failed load threw, keyed
- * by `projectRoot`, so a broken config re-throws the same error on every skill
+ * by `projectRoot` and the verb's `projectSide` (a refusal's side is the verb's), so a broken config re-throws the same error on every skill
  * in a scan without re-parsing.
  */
 const loadErrorCache: Map<string, unknown> = new Map();
@@ -184,13 +211,14 @@ export function resetLoadedConfigCache(): void {
  * Callers that intentionally tolerate a broken config (e.g. `vat audit`, a bulk
  * linter that should still validate the skill itself) catch `ConfigLoadError`.
  */
-export function loadConfigCached(projectRoot: string): ProjectConfig | undefined {
-  const cachedError = loadErrorCache.get(projectRoot);
+export function loadConfigCached(projectRoot: string, projectSide: FsSide): ProjectConfig | undefined {
+  const errorKey = `${projectSide}\0${projectRoot}`;
+  const cachedError = loadErrorCache.get(errorKey);
   if (cachedError !== undefined) throw cachedError;
   const cached = loadedConfigCache.get(projectRoot);
   if (cached !== undefined) return cached ?? undefined;
   try {
-    const config = loadConfig(projectRoot);
+    const config = loadConfig(projectRoot, projectSide);
     loadedConfigCache.set(projectRoot, config ?? null);
     return config;
   } catch (err) {
@@ -199,7 +227,7 @@ export function loadConfigCached(projectRoot: string): ProjectConfig | undefined
     // invariant) is cached and rethrown UNCHANGED, so it surfaces as the defect
     // it is instead of being relabelled a broken config by its throw site.
     const thrown = isConfigFailure(err) ? new ConfigLoadError(projectRoot, err) : err;
-    loadErrorCache.set(projectRoot, thrown);
+    loadErrorCache.set(errorKey, thrown);
     throw thrown;
   }
 }

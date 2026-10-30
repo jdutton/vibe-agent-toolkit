@@ -4,10 +4,9 @@
  * Scan user-level Claude directories for plugins, skills, and marketplaces.
  */
 
-import { statSync } from 'node:fs';
-
 import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { scan, type ScanResult } from '@vibe-agent-toolkit/discovery';
+import { requireFollowedStatSync } from '@vibe-agent-toolkit/utils';
 import { rootListingRefusal, type DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
 
 /**
@@ -17,7 +16,8 @@ import { rootListingRefusal, type DirectoryRefusal } from '@vibe-agent-toolkit/u
  */
 function rootToScan(dir: string, unreadable: DirectoryRefusal[]): boolean {
   try {
-    statSync(dir);
+    // A user-level root is the operator's own configuration: its own `within`.
+    requireFollowedStatSync(dir, dir);
     return true;
   } catch (error) {
     const refusal = rootListingRefusal(error, dir);

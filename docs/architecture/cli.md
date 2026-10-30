@@ -582,7 +582,7 @@ both checks above pass on it — while Claude Code loads it when the link's targ
 root, skips it when the target resolves outside, and loads nothing when the link resolves to nothing
 ([evidence](../external/claude-code-rules-paths-behaviour.md)). It reads the `realization_conditions`
 rows the extents record under any declined-link code (`EXTENT_SYMLINK_NOT_REALIZED`,
-`EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT` or `EXTENT_SYMLINK_TARGET_UNRESOLVED`, all `info`, read together through `DECLINED_SYMLINK_CODES`)
+`EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT`, `EXTENT_SYMLINK_TARGET_UNRESOLVED` or `EXTENT_SYMLINK_TARGET_UNREADABLE`, all `info`, read together through `DECLINED_SYMLINK_CODES`)
 and reports the ones at or under a rules directory, or at a
 `.claude` directory itself — which carries a rules directory with it while its own path stops short
 of the `rules` segment — which is why `BuiltinCheckInput` carries that table, REQUIRED like every
@@ -831,8 +831,16 @@ runner exits on the uncaught throw.
   `<VERB>_REPORT_SCHEMA`, an in-process one `DATALESS_PHASE_REPORT_SCHEMA` or
   `PACKAGED_CONTENT_REPORT_SCHEMA`, and a report its schema rejects is that phase's
   `INTERNAL_ERROR`. Run integrity
-  is applied ONCE, to the sum, so a project lacking one phase's config does not fail on the phase
-  that had nothing to examine. A phase that did not finish makes the run `error` /
+  is applied PER PHASE (`phaseVerdict`), with the very declaration the phase's verb gives its
+  writer when it runs alone (`Phase.examined`, required): a configured phase that examined nothing
+  is that phase's `RESOURCE_CHECK_BROKEN`, so an orchestrated phase and its verb cannot disagree —
+  judged on the sum alone, a `skills.include` matching nothing beside a healthy `resources:`
+  surface was `status: ok`, exit 0. A project lacking a phase's config does not select that phase
+  at all; a phase for which zero IS an answer declares `{ zeroIsAnAnswer: <reason> }` in place of
+  the declaration. One such answer is decided from the project: a `skills` phase whose pool is
+  empty in a project that ships plugin-local skills (`skillsPhaseExamined` — the `skills:` block is
+  required for their config, so its include legitimately matches nothing). The writer still judges the sum, for a run in which no phase ran. A phase that
+  did not finish makes the run `error` /
   `RUN_INCOMPLETE` with the finished phases still in `data.phases`; a refusal of the run itself (a
   path argument, the retired `--only`, no project root) is the error branch with every phase that
   already finished. There is no second status vocabulary.

@@ -21,7 +21,7 @@
 import type { Dirent } from 'node:fs';
 import * as fs from 'node:fs/promises';
 
-import { forEachInOrder, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, isPathAbsentError, realpathNative, requireFollowedStat, safePath } from '@vibe-agent-toolkit/utils';
 
 /** A path the walk could not list, and the OS message for it. Absolute. */
 export interface WalkRefusal {
@@ -58,17 +58,20 @@ interface FileKind {
  * target the OS REFUSES to examine (`EACCES` on a component, `ELOOP` on a link
  * chain) is recorded in `unlistable`, the same row a directory that cannot be
  * listed gets: it used to take the "gone" exit, and a refused skill directory
- * behind a link vanished from both compat lanes with no row saying so.
+ * behind a link vanished from both compat lanes with no row saying so. A link
+ * whose chain VAT will not hand the kernel (a hop naming a network or device
+ * path, `link-following.ts`) is recorded the same way.
  */
 async function entryKind(
   entry: Dirent<string>,
   entryPath: string,
+  rootDir: string,
   unlistable: WalkRefusal[],
 ): Promise<'file' | 'directory' | 'other'> {
   let target: FileKind = entry;
   if (entry.isSymbolicLink()) {
     try {
-      target = await fs.stat(entryPath);
+      target = await requireFollowedStat(entryPath, rootDir);
     } catch (error) {
       if (!isPathAbsentError(error)) unlistable.push({ path: entryPath, reason: reasonOf(error) });
       return 'other';
@@ -91,7 +94,8 @@ export async function walkFollowingLinks(rootDir: string, options: WalkOptions =
   const visited = new Set<string>();
 
   async function listDir(dir: string): Promise<Dirent<string>[]> {
-    const real = await fs.realpath(dir);
+    // The one native realpath rule: a volume that cannot answer a final-path query is asked again by the JS walk.
+    const real = await realpathNative(dir, rootDir);
     if (visited.has(real)) return [];
     visited.add(real);
     return fs.readdir(dir, { withFileTypes: true, encoding: 'utf-8' });
@@ -101,7 +105,7 @@ export async function walkFollowingLinks(rootDir: string, options: WalkOptions =
     // In order: the shared `visited` set and the file order of the walk.
     await forEachInOrder(entries, async (entry) => {
       const entryPath = safePath.join(dir, entry.name);
-      const kind = await entryKind(entry, entryPath, unlistable);
+      const kind = await entryKind(entry, entryPath, rootDir, unlistable);
       if (kind === 'file') {
         files.push(entryPath);
       } else if (kind === 'directory' && options.skipDirectory?.(entry.name) !== true) {

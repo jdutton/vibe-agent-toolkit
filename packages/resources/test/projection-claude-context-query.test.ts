@@ -483,6 +483,7 @@ describe('whatLoadsAt', () => {
       targetExists: null,
       matchedPattern: null,
       matchedPayload: null,
+      targetFaultClass: null,
     };
     const answer = narrowed(whatLoadsAt(withCondition(projection, storedWarning), ''));
 
@@ -833,6 +834,7 @@ function rootAbsentRow(projection: Projection): RealizationConditionRow {
     targetExists: null,
     matchedPattern: null,
     matchedPayload: null,
+    targetFaultClass: null,
   };
 }
 
@@ -864,6 +866,7 @@ function symlinkRow(
     targetExists: null,
     matchedPattern: null,
     matchedPayload: null,
+    targetFaultClass: null,
   };
 }
 

@@ -44,7 +44,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { classifyLink } from '../src/link-classify.js';
 import { fragmentIndex, resolveLinkEntry, validateLink } from '../src/link-validator.js';
 
-import { REFUSAL_ERRNOS, withReaddirRefused } from './helpers/refused-listing.js';
+import { LINK_ABSENCE_ERRNOS, REFUSAL_ERRNOS, withReaddirRefused } from './helpers/refused-listing.js';
 import { createLink, writeFileIn } from './test-helpers.js';
 
 const suite = setupAsyncTempDirSuite('link-path-components');
@@ -65,7 +65,7 @@ async function judgeIn(
   projectRoot: string,
   source: string,
   href: string,
-  fsCache = new FsLookupCache(),
+  fsCache = new FsLookupCache(projectRoot),
 ) {
   return await validateLink(
     createLink('local_file', href),
@@ -85,7 +85,7 @@ function stripHref(issue: Awaited<ReturnType<typeof validateLink>>): Record<stri
 }
 
 /** Judge one href written in `<root>/a.md`. */
-async function judge(root: string, href: string, fsCache = new FsLookupCache()) {
+async function judge(root: string, href: string, fsCache = new FsLookupCache(root)) {
   return await judgeIn(root, 'a.md', href, fsCache);
 }
 
@@ -133,6 +133,13 @@ const DEEP_BUNDLE = { 'a.md': '# a\n', [DEEP_TARGET]: '# three\n' };
 const REFUSAL_HREF = './docs/open/inner/target.md';
 const REFUSAL_TREE = { 'a.md': '# a\n', 'docs/open/inner/target.md': '# t\n' };
 
+/** Judge {@link REFUSAL_HREF} in a fresh {@link REFUSAL_TREE} while listing `docs/open` fails with `code`. */
+async function judgeWithOpenListingFailing(code: string): Promise<{ root: string; issue: Awaited<ReturnType<typeof judge>> }> {
+  const root = plant(REFUSAL_TREE);
+  const issue = await withReaddirRefused(safePath.join(root, 'docs', 'open'), code, async () => await judge(root, REFUSAL_HREF));
+  return { root, issue };
+}
+
 /** The components of a bundle-relative path, which is always forward-slashed. */
 function componentsOf(relativePath: string): string[] {
   return toForwardSlash(relativePath).split('/');
@@ -174,7 +181,7 @@ async function entryReadsFor(root: string, links: number): Promise<number> {
   }) as unknown as typeof nodeFsPromises.readdir);
 
   try {
-    const fsCache = new FsLookupCache();
+    const fsCache = new FsLookupCache(root);
     for (let n = 0; n < links; n += 1) {
       await judge(root, `./missing-${n}.md`, fsCache);
     }
@@ -279,17 +286,11 @@ describe('a link path is judged component by component', () => {
        * `chmod` reaches exactly one of the four errnos that mean "refused", and
        * only where POSIX modes bind. The other three are reachable in ordinary
        * operation — `EMFILE`/`ENFILE` are descriptor exhaustion under
-       * concurrency, `ELOOP` a committed symlink cycle — and a fix narrowed to
+       * concurrency, `EPERM` a refusal no mode bit makes — and a fix narrowed to
        * `EACCES` would leave them reported as broken links.
        */
       it.each(REFUSAL_ERRNOS)('reports %s rather than a missing file', async (code) => {
-        const root = plant(REFUSAL_TREE);
-
-        const issue = await withReaddirRefused(
-          safePath.join(root, 'docs', 'open'),
-          code,
-          async () => await judge(root, REFUSAL_HREF),
-        );
+        const { root, issue } = await judgeWithOpenListingFailing(code);
 
         expect(issue?.code).toBe('LINK_TARGET_UNREADABLE');
         // The whole complaint about the old behaviour: it said the file was not
@@ -303,6 +304,13 @@ describe('a link path is judged component by component', () => {
         // project-relative, and WHY.
         expect(issue?.message).toContain('"docs/open"');
         expect(issue?.message).toContain(code);
+      });
+
+      // One link, one answer: the realpath beside the walk calls these "leads nowhere", so the walk does too.
+      it.each(LINK_ABSENCE_ERRNOS)('reports a listing that fails %s as a missing file, as the realpath beside it does', async (code) => {
+        const { issue } = await judgeWithOpenListingFailing(code);
+
+        expect(issue?.code).toBe('LINK_BROKEN_FILE');
       });
 
       it('tells the reader to re-run only when the refusal was a transient shortage', async () => {
@@ -356,7 +364,7 @@ describe('a link path is judged component by component', () => {
             createLink('local_file', REFUSAL_HREF),
             safePath.join(root, 'a.md'),
             fragmentIndex(),
-            { fsCache: new FsLookupCache(), skipGitIgnoreCheck: true },
+            { fsCache: new FsLookupCache(root), skipGitIgnoreCheck: true },
           ),
         );
 

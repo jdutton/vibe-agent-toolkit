@@ -69,6 +69,11 @@ validation:
           description: 'knip unused-export ratchet: a new unused export or a stale allowlist entry fails. Full tier only.'
           runScope: ci
 
+        - name: 'Dependency advisory scope: zod'
+          command: 'bun run check:zod-advisory-scope'
+          description: 'Holds the osv-scanner.toml zod entry to zod@3.25.76: red on another affected zod, and red once 3.25.76 or the entry is gone. Full tier only.'
+          runScope: ci
+
         - name: 'Repository structure validation'
           command: 'bun run validate-structure'
           description: 'Validates repo structure conventions (no runtime /examples, no /staging, etc.). Full tier only.'

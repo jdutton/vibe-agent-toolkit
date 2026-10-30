@@ -76,7 +76,7 @@ function walkFiles(root: string): string[] {
   const visit = (dir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const abs = safePath.join(dir, entry.name);
-      const kind = direntKindFollowingSync(dir, entry);
+      const kind = direntKindFollowingSync(dir, entry, root);
       if (kind === 'directory') visit(abs);
       else if (kind === 'file') out.push(abs);
     }

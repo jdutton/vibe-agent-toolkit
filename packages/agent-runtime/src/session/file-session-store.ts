@@ -5,10 +5,10 @@
  * Claude Agent SDK's storage patterns.
  */
 
-import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 
-import { direntKindFollowing, forEachInOrder, isNoSuchEntryError, isPathAbsentError, requireTestScratch, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, forEachInOrder, isNoSuchEntryError, isPathAbsentError, requireFollowedStat, requireTestScratch, safePath } from '@vibe-agent-toolkit/utils';
 
 import { SessionNotFoundError } from './errors.js';
 import {
@@ -114,7 +114,8 @@ export class FileSessionStore<TState = unknown> implements SessionStore<TState> 
 
   async exists(sessionId: string): Promise<boolean> {
     try {
-      return (await stat(this.getSessionPath(sessionId))).isFile();
+      // The store's own directory is the tree a session's link chain is read within (`link-following.ts`).
+      return (await requireFollowedStat(this.getSessionPath(sessionId), this.baseDir)).isFile();
     } catch (error) {
       // Only absence is "no session"; a refusal stays loud (the `SessionStore.exists` contract).
       if (isPathAbsentError(error)) return false;
@@ -126,7 +127,7 @@ export class FileSessionStore<TState = unknown> implements SessionStore<TState> 
     try {
       const entries = await readdir(this.baseDir, { withFileTypes: true });
       // A symlinked session directory is a session: follow it rather than drop it.
-      const kinds = await Promise.all(entries.map(e => direntKindFollowing(this.baseDir, e)));
+      const kinds = await Promise.all(entries.map(e => direntKindFollowing(this.baseDir, e, this.baseDir)));
       return entries.filter((_, i) => kinds[i] === 'directory').map(e => e.name);
     } catch (error) {
       // ENOENT only: a store never written has no sessions. A base directory that is a FILE

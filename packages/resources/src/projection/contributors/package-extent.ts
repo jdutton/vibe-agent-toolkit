@@ -35,13 +35,16 @@
  * limitation of predicting a location, not a claim of stability.
  */
 
-import { existsSync, readdirSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 
 import type { Severity } from '@vibe-agent-toolkit/schema';
 import {
   direntKindFollowingSync,
+  type FollowedPathKind,
+  followedKindSync,
   forEachInOrder,
   isPathAbsentError,
+  linkResolutionFault,
   resolveAssetReference,
   safePath,
   toForwardSlash,
@@ -309,7 +312,19 @@ function resolveSpecifier(
   } catch (error) {
     return { failure: failureCodeFor(error) };
   }
-  return existsSync(resolved) ? { path: toForwardSlash(resolved) } : { failure: failureCodeFor(undefined) };
+  let kind: FollowedPathKind;
+  try {
+    // Its link chain read beneath the corpus root first (`link-following.ts`): an npm link to a
+    // network path is never handed to the kernel.
+    kind = followedKindSync(resolved, root);
+  } catch (error) {
+    // The target was located but could not be looked at — a chain VAT will not hand the kernel, or
+    // a probe the OS refused. Neither is "not installed": it is a resolution that failed, recorded
+    // as this one dependency's condition. A bug (no errno) stays loud.
+    linkResolutionFault(error);
+    return { failure: PACKAGE_RESOLUTION_FAILED };
+  }
+  return kind === 'absent' ? { failure: failureCodeFor(undefined) } : { path: toForwardSlash(resolved) };
 }
 
 /**
@@ -430,7 +445,7 @@ function workspacePatterns(raw: unknown): unknown[] {
 function expandWorkspacePattern(root: string, pattern: string): string[] {
   if (pattern.endsWith('/*')) {
     const parent = safePath.join(root, pattern.slice(0, -2));
-    return childDirectories(parent);
+    return childDirectories(parent, root);
   }
   return pattern.includes('*') ? [] : [safePath.join(root, pattern)];
 }
@@ -442,12 +457,15 @@ function expandWorkspacePattern(root: string, pattern: string): string[] {
  * fact about the corpus. A parent that exists and REFUSES to be listed is not:
  * every package beneath it would silently leave the population, so the refusal
  * propagates and the build says which directory it could not read.
+ *
+ * @param parent - The directory a `/*` workspace pattern names
+ * @param root - The corpus root every link beneath it is read within (`link-following.ts`)
  */
-function childDirectories(parent: string): string[] {
+function childDirectories(parent: string, root: string): string[] {
   try {
     return readdirSync(parent, { withFileTypes: true })
       // Followed: a linked package directory (an npm link) is a package.
-      .filter((entry) => direntKindFollowingSync(parent, entry) === 'directory')
+      .filter((entry) => direntKindFollowingSync(parent, entry, root) === 'directory')
       .map((entry) => safePath.join(parent, entry.name));
   } catch (error) {
     if (!isPathAbsentError(error)) throw error;

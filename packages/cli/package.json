@@ -57,16 +57,13 @@
     "@vibe-agent-toolkit/resources": "workspace:*",
     "@vibe-agent-toolkit/schema": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
-    "adm-zip": "^0.6.1",
     "commander": "^12.1.0",
     "picomatch": "^4.0.3",
     "semver": "^7.8.5",
-    "tar": "^7.5.7",
     "yaml": "^2.9.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {
-    "@types/tar": "^6.1.13",
     "@vibe-agent-toolkit/dev-tools": "workspace:*",
     "@vibe-agent-toolkit/rag": "workspace:*",
     "@vibe-agent-toolkit/rag-lancedb": "workspace:*"

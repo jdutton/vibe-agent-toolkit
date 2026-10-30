@@ -27,6 +27,9 @@
 // block dispatches on, never `message`.
 export * from './errors/vat-error.js';
 export { RAG_DATABASE_UNREADABLE_CODE, RAG_INDEX_EMPTY_CODE } from './errors/rag-index-empty.js';
+// The code and the one-entry predicate alone: the archive readers are on `./archive` (they load
+// `tar` and `adm-zip`), and a refusal map, or a lane that skips one member, needs only these.
+export { ARCHIVE_ENTRY_UNREADABLE_CODE, ARCHIVE_REFUSED_CODE, isArchiveEntryReadRefusal, placeOf as archiveEntryPlace } from './archive/entries.js';
 // The code alone: its error class is on `./crawl`, and the CLI's refusal map needs only the code.
 
 // Cross-platform path utilities
@@ -68,7 +71,7 @@ export * from './asset-reference.js';
 //     published too, for the lazy caller that cannot enumerate its targets up
 //     front.
 //   - realpaths — `fillRealpaths` (every canonicalization, once, up front) plus
-//     `realpathFrom`.
+//     `realpathRowFrom`.
 //
 // In both, the row lookup IS the judge: the row is the answer, so there is
 // nothing left to keep internal.
@@ -93,8 +96,8 @@ export {
   fsFaultOf,
   isAlreadyExistsError,
   isFileInTheWayError,
+  isFinalPathUnanswerableError,
   isInvalidArgumentError,
-  isLinkLoopError,
   isNoSuchEntryError,
   isNotARegularFileError,
   isPathAbsentError,
@@ -102,25 +105,49 @@ export {
   isRenameContentionError,
   isSymlinkUnsupportedError,
   isTimedOutError,
+  isUnresolvableLinkError,
   isWouldBlockError,
+  LINK_CHAIN_REFUSED_CODE,
 } from './errors/errno-table.js';
 export type { FsFaultClass, FsFaultFacts } from './errors/errno-table.js';
 export {
+  assertUnresolvableLink,
   classifyFsFault,
+  everywhere,
   FS_FAULT_CODE,
   FS_SIDES,
   FsFaultError,
   isCapacityFault,
   isFsFaultError,
   isLayoutFault,
+  linkResolutionFault,
+  refusedPathOf,
+  sideWithin,
   SOURCE_ORIGINS,
   withFsFault,
   withFsFaultSync,
 } from './errors/fs-fault.js';
-export type { FsFaultContext, FsSide, SourceOrigin } from './errors/fs-fault.js';
+export type { FsFaultContext, FsSide, SideOfPath, SourceOrigin } from './errors/fs-fault.js';
 export { fsBoundary } from './errors/fs-boundary.js';
-export { requireConfirmedAbsent } from './errors/confirmed-absent.js';
-export { pathPresent } from './errors/path-present.js';
+export { requireConfirmedAbsent, type ConfirmationContext, type ConfirmationProbe } from './errors/confirmed-absent.js';
+export { pathPresent, type PresenceMode } from './errors/path-present.js';
+// The one module that asks the kernel to follow a link, each call once the chain beneath `within` is read.
+export {
+  assertLocalChain,
+  type FollowedPathKind,
+  followedKind,
+  followedKindSync,
+  followedRealpath,
+  followedRealpathSync,
+  followedStat,
+  followedStatSync,
+  realpathNative,
+  realpathNativeSync,
+  requireFollowedStat,
+  requireFollowedStatSync,
+} from './link-following.js';
+// The one fold for "are these two names one entry on some volume".
+export { foldedSegment } from './name-fold.js';
 // Faults raised while a failure was being handled, recorded beside it (never on its cause chain).
 export { recordSuppressedFault, suppressedFaultsOf } from './errors/suppressed-faults.js';
 export type { FsBoundary, FsRoots } from './errors/fs-boundary.js';
@@ -132,7 +159,7 @@ export {
   fillPathSpellings,
   fillRealpaths,
   pathSpellingFrom,
-  realpathFrom,
+  realpathRowFrom,
   spellingWalkRoot,
 } from './fs-utils.js';
 export type {
@@ -144,6 +171,8 @@ export type {
   PathSpelling,
   PathSpellingRequest,
   PathSpellingTable,
+  RealpathFault,
+  RealpathRow,
   RealpathTable,
   VerifiedPrefix,
 } from './fs-utils.js';
@@ -200,6 +229,8 @@ export {
   disposeTempDirAfterFailure,
   entryIdentities,
   FollowedWalk,
+  isLinkChainRefusedError,
+  HOST_PATH_FLAVOR,
   isInsideByIdentity,
   isParkedTreeEntry,
   isTreeChangeResidue,
@@ -207,6 +238,7 @@ export {
   proveTreeReadable,
   readRegularFile,
   makeDirectoryUnder,
+  refuseEscapingLinks,
   renameFileAtomic,
   replaceFile,
   writeFileUnder,
@@ -219,7 +251,13 @@ export {
   TREE_DESTS_OVERLAP_CODE,
   TREE_ROLLBACK_INCOMPLETE_CODE,
   TREE_SOURCE_HOLDS_DEST_CODE,
+  treeChain,
+  treeContainment,
   TreeRollbackIncompleteError,
+  untrustedTextRefusal,
+  untrustedLinkRefusal,
+  isWithinUnder,
+  win32FoldedName,
   withTempDir,
 } from './tree-change/index.js';
 export type {
@@ -234,6 +272,7 @@ export type {
   EntrySameness,
   FileContents,
   Identity,
+  LinkContainmentCheck,
   LinkPolicy,
   Ownership,
   OwnershipVerdict,

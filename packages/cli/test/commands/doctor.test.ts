@@ -55,7 +55,25 @@ vi.mock('node:fs', () => ({
 }));
 vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
-  return { ...actual, resolveAssetReference: vi.fn(actual['resolveAssetReference'] as (...args: unknown[]) => unknown) };
+  // doctor's presence probes go through utils' link-following; in this fake filesystem they answer
+  // from the same `existsSync` script as every other presence question the tests stage.
+  const fakeFs = await import('node:fs');
+  const { dirname } = await import('node:path');
+  return {
+    ...actual,
+    resolveAssetReference: vi.fn(actual['resolveAssetReference'] as (...args: unknown[]) => unknown),
+    followedKindSync: vi.fn((path: string) => (fakeFs.existsSync(path) ? 'directory' : 'absent')),
+    pathPresent: vi.fn((path: string) => fakeFs.existsSync(path)),
+    // The config walk-up probes each level through utils' own link-chain walk, which this fake
+    // filesystem cannot answer: it climbs the same `existsSync` script instead.
+    findConfigFile: vi.fn((start: string): string | null => {
+      for (let dir = start; ; dir = dirname(dir)) {
+        const candidate = `${dir}/vibe-agent-toolkit.config.yaml`;
+        if (fakeFs.existsSync(candidate)) return candidate;
+        if (dirname(dir) === dir) return null;
+      }
+    }),
+  };
 });
 vi.mock('../../src/utils/config-loader.js', () => ({
   loadConfig: vi.fn(),

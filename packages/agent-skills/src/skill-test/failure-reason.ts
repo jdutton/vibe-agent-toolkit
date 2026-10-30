@@ -2,6 +2,8 @@ import type { RefusalCode } from '@vibe-agent-toolkit/schema';
 import { isFsFaultError, isVatError, VatError } from '@vibe-agent-toolkit/utils';
 
 import { FETCH_CACHE_NOT_OWNED_CODE } from '../skill-source/fetch-cache.js';
+import { GIT_CLONE_FAILED_CODE } from '../skill-source/git-clone.js';
+import { SKILL_SOURCE_DIGEST_REQUIRED_CODE, SKILL_SOURCE_FETCH_FAILED_CODE, SKILL_STAGING_NOT_OWNED_CODE } from '../skill-source/source-errors.js';
 import { SKILL_SOURCE_UNREADABLE_CODE } from '../skill-source/stage.js';
 
 /**
@@ -74,16 +76,21 @@ export function skillTestFailureReason(err: unknown): SkillTestFailureReason {
  * never by its message.
  *
  * - `INPUT_UNREADABLE` — an input the run must read is absent or unusable: no
- *   `evals.json` (bootstrap), a suite / declared input file that is not, or a
- *   staged skill source (a `--with` companion) the OS will not read.
+ *   `evals.json` (bootstrap), a suite / declared input file that is not, a
+ *   staged skill source (a `--with` companion) the OS will not read, or a `url`
+ *   source that could not be obtained — a clone that did not happen
+ *   (`GIT_CLONE_FAILED`), an archive that could not be fetched or does not match
+ *   its pinned digest (`SKILL_SOURCE_FETCH_FAILED`).
  * - `USAGE_INVALID` — everything else the operator fixes: a flag, a declared
- *   `env` token, the `test.build` hook, a skill reference the config does not
+ *   `env` token, a `url` source naming a `.zip` with no `sha256`
+ *   (`SKILL_SOURCE_DIGEST_REQUIRED`), the `test.build` hook, a skill reference the config does not
  *   declare (or `--no-build` with no dist), an unsafe `--workdir`, a held harness
  *   lock, the missing security ack. A `SkillBuildError` carrying a `cause` is
  *   classified by that cause, not by this row (see {@link SkillBuildError}).
  * - `CONFIG_INVALID` — a `test.evals` npm specifier that names nothing installed.
- * - `RUN_INCOMPLETE` — the fetch cache a `url` skill source is cached in is another
- *   user's (`FETCH_CACHE_NOT_OWNED`): VAT's own scratch, which it will not use.
+ * - `RUN_INCOMPLETE` — the fetch cache a `url` skill source is cached in, or the
+ *   staging a source is copied into, is another user's (`FETCH_CACHE_NOT_OWNED`,
+ *   `SKILL_STAGING_NOT_OWNED`): VAT's own scratch, which it will not use.
  *
  * A filesystem refusal is none of these: it is a classified `FsFaultError`, whose
  * refusal the schema table decides by side and class — an unreadable source
@@ -99,7 +106,11 @@ export const SKILL_TEST_REFUSAL_BY_ERROR_CODE = {
   SKILL_TEST_BOOTSTRAP_NEEDED: 'INPUT_UNREADABLE',
   EVAL_INPUT: 'INPUT_UNREADABLE',
   [SKILL_SOURCE_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
+  [GIT_CLONE_FAILED_CODE]: 'INPUT_UNREADABLE',
+  [SKILL_SOURCE_FETCH_FAILED_CODE]: 'INPUT_UNREADABLE',
+  [SKILL_SOURCE_DIGEST_REQUIRED_CODE]: 'USAGE_INVALID',
   [FETCH_CACHE_NOT_OWNED_CODE]: 'RUN_INCOMPLETE',
+  [SKILL_STAGING_NOT_OWNED_CODE]: 'RUN_INCOMPLETE',
   AUTH_PREFLIGHT: 'USAGE_INVALID',
   BUILD_HOOK: 'USAGE_INVALID',
   HARNESS_LOCATION: 'USAGE_INVALID',

@@ -16,7 +16,7 @@ import { describe, expect, it } from 'vitest';
 import { BundleDirectoryIndex, linkFindings } from '../../src/okf/links.js';
 import { validateOkfBundle } from '../../src/okf/validate.js';
 import type { ResourceLink } from '../../src/types.js';
-import { REFUSAL_ERRNOS, withReaddirRefused } from '../helpers/refused-listing.js';
+import { LINK_ABSENCE_ERRNOS, REFUSAL_ERRNOS, withReaddirRefused } from '../helpers/refused-listing.js';
 
 import {
   NFC_CAFE_DIR,
@@ -97,7 +97,7 @@ const PERMISSIONS_ENFORCED = process.platform !== 'win32';
  * instance can report that.
  */
 async function judgeHrefs(root: string, hrefs: readonly string[]) {
-  const index = new BundleDirectoryIndex(root, new FsLookupCache());
+  const index = new BundleDirectoryIndex(root, new FsLookupCache(root));
   const links: ResourceLink[] = hrefs.map((href, offset) => ({
     text: 'link',
     href,
@@ -915,6 +915,15 @@ describe('validateOkfBundle', () => {
         expect(drafts[0]?.message).toContain(code);
       },
     );
+
+    // One link, one answer: the link predicate calls these "leads nowhere", so the cross-link judge does too.
+    it.each(LINK_ABSENCE_ERRNOS)('reports a listing that fails %s as a broken cross-link, not a refusal', async (code) => {
+      const root = plantOkfBundle(LINKED);
+
+      const { drafts } = await withReaddirRefused(safePath.join(root, 'sub'), code, async () => await judgeHrefs(root, [HREF]));
+
+      expect(codesOf(drafts)).toEqual(['OKF_BROKEN_CROSS_LINK']);
+    });
 
     it('tells the author to re-run only when the refusal was a transient shortage', async () => {
       // The remedies genuinely differ: a mode bit inside the bundle is the

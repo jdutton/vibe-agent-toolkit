@@ -60,7 +60,7 @@ export async function resolveProjectDeclaredEvalSuites(
 
   let suites: DeclaredEvalSuite[] = [];
   try {
-    const config = loadConfigCached(projectRoot);
+    const config = loadConfigCached(projectRoot, 'source');
     if (config?.skills !== undefined) {
       const byPath = await getDiscoveredSkillsByPath(config.skills, projectRoot, unreadable);
       suites = collectDeclaredEvalSuites(
@@ -145,7 +145,7 @@ export async function resolveSkillPackagingConfig(
   const skillDir = safePath.resolve(safePath.join(absSkillPath, '..'));
   const projectRoot = findProjectRoot(skillDir);
   if (projectRoot === null) return null;
-  const config = loadConfigCached(projectRoot);
+  const config = loadConfigCached(projectRoot, 'source');
   if (config?.skills === undefined) return null;
 
   const byPath = await getDiscoveredSkillsByPath(config.skills, projectRoot, unreadable);

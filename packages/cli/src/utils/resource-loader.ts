@@ -242,9 +242,10 @@ export const RESOURCES_CRAWL_WALK = 'walk';
  * known, and it is the cost this default was accepted at; closing it is its own
  * change (teaching an extent to admit `120000` entries as their own paths).
  * The omission is no longer SILENT — each declined link is an `info` row under
- * one of the three declined-link codes (`EXTENT_SYMLINK_NOT_REALIZED`,
- * `EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT`, `EXTENT_SYMLINK_TARGET_UNRESOLVED` — the
- * last is a dangling in-root target) — but no such row is a `LINK_BROKEN_FILE`
+ * one of the four declined-link codes (`EXTENT_SYMLINK_NOT_REALIZED`,
+ * `EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT`, `EXTENT_SYMLINK_TARGET_UNRESOLVED` for a
+ * dangling in-root target, `EXTENT_SYMLINK_TARGET_UNREADABLE` for one the OS
+ * would not resolve) — but no such row is a `LINK_BROKEN_FILE`
  * finding.
  * {@link RESOURCES_CRAWL_WALK} is the one-value escape hatch meanwhile.
  *
@@ -433,7 +434,7 @@ export async function loadResourcesWithConfig(
   logger: Logger,
 ): Promise<ResourceLoadResult> {
   // Config lookup is anchored at the resolved projectRoot.
-  const config = loadConfig(projectRoot);
+  const config = loadConfig(projectRoot, 'source');
 
   if (config) {
     logger.debug(`Loaded config from ${projectRoot}`);

@@ -39,10 +39,8 @@
  * difference removed before it is counted is a difference nobody can audit.
  */
 
-import { realpathSync } from 'node:fs';
-
-import { relativize } from '@vibe-agent-toolkit/resources';
-import { isLinkLoopError, isPathAbsentError, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { relativize, resolveRealPath } from '@vibe-agent-toolkit/resources';
+import { relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import {
   crawlDirectory,
 } from '@vibe-agent-toolkit/utils/crawl';
@@ -65,7 +63,9 @@ export type DivergenceClass =
   /** Its real path is also reached under a different enumerated path. */
   | 'alias'
   /** Its real path lies outside the corpus root. */
-  | 'escapes-root';
+  | 'escapes-root'
+  /** The OS declined or could not complete resolving it; the row's `fault` names the errno. */
+  | 'resolution-fault';
 
 /** One diverging path, with every reason it diverged. */
 export interface DivergenceRow {
@@ -75,6 +75,8 @@ export interface DivergenceRow {
   realPath: string;
   /** Every class that applies. A single path routinely earns several. */
   classes: DivergenceClass[];
+  /** The errno when the OS declined or could not complete resolving the path (`resolution-fault`), else null. */
+  fault: string | null;
 }
 
 /** The three populations one corpus can present, and their differences. */
@@ -148,12 +150,12 @@ export async function captureSymlinkDivergence(
 
   // Real paths across the widest population, so aliasing is answered against
   // everything the corpus can present rather than against one arm of it.
-  const realPaths = new Map<string, string>();
+  const realPaths = new Map<string, Resolved>();
   const realPathCounts = new Map<string, number>();
   for (const absolutePath of walkFollow) {
-    const real = realPathOrSelf(absolutePath);
-    realPaths.set(absolutePath, real);
-    realPathCounts.set(real, (realPathCounts.get(real) ?? 0) + 1);
+    const resolved = realPathOrSelf(absolutePath, corpusRoot);
+    realPaths.set(absolutePath, resolved);
+    realPathCounts.set(resolved.real, (realPathCounts.get(resolved.real) ?? 0) + 1);
   }
 
   const everyPath = new Set<string>([
@@ -165,11 +167,12 @@ export async function captureSymlinkDivergence(
   const rows: DivergenceRow[] = [];
   for (const absolutePath of everyPath) {
     const path = relativize(absolutePath, corpusRoot);
-    const real = realPaths.get(absolutePath) ?? realPathOrSelf(absolutePath);
+    const { real, fault } = realPaths.get(absolutePath) ?? realPathOrSelf(absolutePath, corpusRoot);
     const classes = classify({
       path,
       absolutePath,
       real,
+      fault,
       corpusRoot,
       gitSet,
       noFollowSet,
@@ -178,7 +181,7 @@ export async function captureSymlinkDivergence(
     });
 
     if (classes.length > 0) {
-      rows.push({ path, realPath: relativizeReal(real, corpusRoot), classes });
+      rows.push({ path, realPath: relativizeReal(real, corpusRoot), classes, fault });
     }
   }
 
@@ -202,6 +205,7 @@ interface ClassifyInput {
   path: string;
   absolutePath: string;
   real: string;
+  fault: string | null;
   corpusRoot: string;
   gitSet: Set<string> | null;
   noFollowSet: Set<string>;
@@ -238,28 +242,38 @@ function classify(input: ClassifyInput): DivergenceClass[] {
   if (!isInside(input.real, input.corpusRoot)) {
     classes.push('escapes-root');
   }
+  if (input.fault !== null) {
+    classes.push('resolution-fault');
+  }
 
   return classes;
+}
+
+/** A path's real location, and the errno when the OS declined or failed to resolve it. */
+interface Resolved {
+  readonly real: string;
+  readonly fault: string | null;
 }
 
 /**
  * Resolve a path's real location, falling back to the path itself.
  *
- * A dangling symlink (or a loop) cannot be resolved, and that is a corpus fact
- * rather than a harness error — reporting the link's own path keeps the row in
- * the report instead of dropping the one entry most likely to be interesting.
- * A path the OS REFUSES to resolve is a harness error, and stays one.
+ * A report lane, as the enumeration oracle's `aliases` is: the one read-lane catch body
+ * (`resolveRealPath`, through `linkResolutionFault`). A dangling symlink (or a loop) cannot be
+ * resolved, and that is a corpus fact — reporting the link's own path keeps the row in the report
+ * instead of dropping the one entry most likely to be interesting. A path the OS REFUSES to
+ * resolve, or could not look at (`EIO`, Windows' ambiguous `UNKNOWN`), is that one row's fact too:
+ * kept under its own path, with the errno in `fault` and the `resolution-fault` class — never the
+ * end of the capture.
  *
  * @param absolutePath - Path to resolve
- * @returns The real path, or the input when it cannot be resolved
+ * @param corpusRoot - The corpus it was crawled in: every link beneath it is read before the kernel follows it
+ * @returns The real path (the input when it cannot be resolved), and the errno of a fault
  */
-function realPathOrSelf(absolutePath: string): string {
-  try {
-    return toForwardSlash(realpathSync.native(absolutePath));
-  } catch (error) {
-    if (!isPathAbsentError(error) && !isLinkLoopError(error)) throw error;
-    return toForwardSlash(absolutePath);
-  }
+function realPathOrSelf(absolutePath: string, corpusRoot: string): Resolved {
+  const resolution = resolveRealPath(absolutePath, corpusRoot);
+  if (resolution.kind === 'resolved') return { real: resolution.path, fault: null };
+  return { real: toForwardSlash(absolutePath), fault: resolution.fault?.errno ?? null };
 }
 
 /**

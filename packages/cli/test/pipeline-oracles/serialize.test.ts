@@ -13,7 +13,9 @@ import {
   renderEnumerationSnapshot,
   renderEnumerationSnapshotUnordered,
   renderParseFactSnapshot,
+  renderSymlinkDivergence,
 } from '../../src/pipeline-oracles/serialize.js';
+import type { SymlinkDivergenceReport } from '../../src/pipeline-oracles/symlink-divergence.js';
 import type {
   ContentMeasuresFact,
   EnumerationRow,
@@ -105,6 +107,15 @@ describe('renderEnumerationSnapshot', () => {
     // to pass while no longer checking the field it is named for.
     const rendered = renderEnumerationSnapshot(snapshot([row('plain.md')]));
     expect(rendered.split('\n')).toContain('0\tplain.md\ttrue\tfalse\tfalse\tfalse\t-\t-\tfalse\tk1.markdown.plain.md');
+  });
+
+  it('renders a link whose target could not be resolved as fault:<errno>, never as outside the root', () => {
+    // A refused target is not a placement: `false` would claim it escapes the root, `-` that no
+    // question was asked. The row keeps the errno so the snapshot names the fault.
+    const rendered = renderEnumerationSnapshot(
+      snapshot([row('alias.md', { isSymlink: true, symlinkResolves: true, targetInsideRoot: { fault: 'EACCES' } })]),
+    );
+    expect(rendered.split('\n')).toContain('0\talias.md\ttrue\tfalse\tfalse\ttrue\ttrue\tfault:EACCES\tfalse\tk1.markdown.alias.md');
   });
 
   it('renders a missing content key as - rather than omitting the column', () => {
@@ -526,5 +537,30 @@ describe('relativize', () => {
     // is one of the classifications the skills walker makes — so it must render,
     // not vanish.
     expect(relativize('/elsewhere/x.md', '/corpus')).toBe('../elsewhere/x.md');
+  });
+});
+
+/** A one-row divergence report whose row carries `fault`. */
+function reportFaulting(fault: string | null): SymlinkDivergenceReport {
+  return {
+    laneId: 'resources-validate',
+    corpus: 'c',
+    inGitRepo: false,
+    counts: { gitRoute: null, walkNoFollow: 1, walkFollow: 1 },
+    rows: [{ path: 'docs/a.md', realPath: 'docs/a.md', classes: fault === null ? ['alias'] : ['resolution-fault'], fault }],
+  };
+}
+
+// The divergence oracle records a link fault exactly as the enumeration oracle does — one encoding,
+// `fault:<errno>` — so a change of errno is a diff in either golden.
+describe('renderSymlinkDivergence', () => {
+
+  it('renders a resolution fault as fault:<errno>, and a row with none as -', () => {
+    expect(renderSymlinkDivergence(reportFaulting('EACCES')).split('\n')).toContain('docs/a.md\tdocs/a.md\tresolution-fault\tfault:EACCES');
+    expect(renderSymlinkDivergence(reportFaulting(null)).split('\n')).toContain('docs/a.md\tdocs/a.md\talias\t-');
+  });
+
+  it('turns a change of errno into a diff', () => {
+    expect(renderSymlinkDivergence(reportFaulting('EACCES'))).not.toBe(renderSymlinkDivergence(reportFaulting('UNKNOWN')));
   });
 });

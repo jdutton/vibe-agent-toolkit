@@ -92,7 +92,7 @@ describe('resolveNpmSource', () => {
     mkdirSyncReal(safePath.join(pkgDir, 'dist', 'real'), { recursive: true });
     writeFileSync(safePath.join(pkgDir, 'dist', 'real', 'SKILL.md'), '# real');
     expect(toForwardSlash(locateNpmSource('@scope/alias-skill@2.0.0/skill', suite.root))).toBe(
-      toForwardSlash(normalizePath(safePath.join(pkgDir, 'dist', 'real', 'SKILL.md'))),
+      toForwardSlash(normalizePath(safePath.join(pkgDir, 'dist', 'real', 'SKILL.md'), pkgDir)),
     );
   });
 

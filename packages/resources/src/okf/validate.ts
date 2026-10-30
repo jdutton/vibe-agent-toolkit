@@ -382,7 +382,7 @@ export async function validateOkfBundle(
   // One cache for the whole bundle: link targets cluster into far fewer
   // directories than there are links, so a per-document cache would re-list the
   // same directory once per document that points into it.
-  const index = new BundleDirectoryIndex(root, new FsLookupCache());
+  const index = new BundleDirectoryIndex(root, new FsLookupCache(root));
   const drafts: OkfFindingDraft[] = files.unpackableDocuments.map(unpackableDocumentDraft);
   const hardFindings: OkfFinding[] = [
     ...files.unreadableDirectories.map(unreadableDirectoryFinding),

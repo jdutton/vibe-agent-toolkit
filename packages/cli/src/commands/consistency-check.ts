@@ -6,13 +6,12 @@
  * package.json is a SUSPECT being validated, never an input for truth.
  */
 
-import { existsSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 import type { PluginLocalSkillIndex, PluginSkillExclusion, SkillPackagingConfig } from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
 import type { Severity } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { everywhere, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
 
 import { readPackageJsonOrAbsent } from '../utils/package-json.js';
@@ -487,7 +486,7 @@ function readPackageJsonFilesAllowlist(packageDir: string): string[] {
  */
 function checkVendoredLicensing(projectRoot: string): ConsistencyIssue[] {
   const agentSkillsDir = safePath.join(projectRoot, 'packages/agent-skills');
-  if (!existsSync(agentSkillsDir)) {
+  if (!pathPresent(agentSkillsDir, { follow: projectRoot }, everywhere('source'), 'probe')) {
     return []; // not in this monorepo — skip
   }
 
@@ -526,16 +525,19 @@ export function assertVendoredLicensingShipped(
 
   const licensePath = safePath.join(packageDir, 'vendor/skill-creator/LICENSE.txt');
   const attributionPath = safePath.join(packageDir, 'vendor/skill-creator/ATTRIBUTION.md');
+  // Beneath the package being checked: a probe the OS refuses is its source fault, never "missing".
+  const present = (path: string): boolean => pathPresent(path, { follow: packageDir }, everywhere('source'), 'probe');
+  const licensePresent = present(licensePath);
 
   // (1) LICENSE.txt present on disk
-  if (!existsSync(licensePath)) {
+  if (!licensePresent) {
     problems.push(
       'vendor/skill-creator/LICENSE.txt is missing — Apache-2.0 requires distributing the license with the code. Add the LICENSE.txt from the upstream skill-creator repository.',
     );
   }
 
   // (2) ATTRIBUTION.md present on disk
-  if (!existsSync(attributionPath)) {
+  if (!present(attributionPath)) {
     problems.push(
       'vendor/skill-creator/ATTRIBUTION.md is missing — attribution file must document the upstream source, pinned commit, and Apache-2.0 §4(b) modifications list.',
     );
@@ -552,7 +554,7 @@ export function assertVendoredLicensingShipped(
   }
 
   // (4) LICENSE.txt not gitignored (best-effort; skip if git is unavailable)
-  if (existsSync(licensePath)) {
+  if (licensePresent) {
     const gitResult = runGit(['check-ignore', '--quiet', licensePath], { cwd: packageDir });
     // git check-ignore exits 0 if the path IS ignored, 1 if not ignored, error(-1) if git unavailable
     if (gitResult.ok) {

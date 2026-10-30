@@ -16,11 +16,9 @@
  * the file's own directory, not a document base.
  */
 
-import { stat } from 'node:fs/promises';
-
-import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import { parse, type DefaultTreeAdapterMap } from 'parse5';
 
+import { readCorpusDocument } from './corpus-document.js';
 import { classifyLink, estimateTokens } from './link-classify.js';
 import type { ParseResult } from './link-parser.js';
 import {
@@ -552,12 +550,6 @@ export function parseHtmlContent(content: string, sizeBytes: number): ParseResul
  * @param filePath - Absolute path to the HTML file.
  */
 export async function parseHtml(filePath: string): Promise<ParseResult> {
-  // `readTextContent`, never `readFile(path, 'utf-8')`: this reads a CORPUS
-  // document, whose encoding VAT does not choose. See text-content.ts.
-  const [decoded, stats] = await Promise.all([
-    readTextContent(filePath),
-    stat(filePath),
-  ]);
-
-  return parseHtmlContent(decoded.text, stats.size);
+  const { text, sizeBytes } = await readCorpusDocument(filePath);
+  return parseHtmlContent(text, sizeBytes);
 }

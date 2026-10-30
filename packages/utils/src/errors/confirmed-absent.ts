@@ -15,28 +15,43 @@ import { readdirSync } from 'node:fs';
 import path from 'node:path';
 
 import { isPathAbsentError } from './errno-table.js';
-import { classifyFsFault, type FsFaultContext } from './fs-fault.js';
+import { classifyFsFault, type FsFaultContext, refusedPathOf, type SideOfPath } from './fs-fault.js';
+
+/**
+ * The caller's action for a confirmation's fault, with no side of its own: the side is
+ * `sideOf(<the path refused>)` — the listed parent's for a refused listing, the entry's for a
+ * contradicted probe — never the side of the question the probe was answering.
+ */
+export type ConfirmationContext = Omit<FsFaultContext, 'side'> & { readonly side?: never };
+
+/** How the probe that said "absent" looked, and whose each path it may touch is. */
+export interface ConfirmationProbe {
+  /** Whether the probe followed a link (a read, a `stat`) or saw it (`lstat`). */
+  readonly follows: boolean;
+  /** The side of each path: the entry, and the parent whose listing is the second witness. */
+  readonly sideOf: SideOfPath;
+}
 
 /**
  * Confirm that nothing is at `entry` after a probe of it said "absent".
  *
  * @param entry - The path the probe examined
  * @param absent - What the probe threw (`ENOENT` / `ENOTDIR`)
- * @param ctx - The caller's side and action, for the fault
- * @param probe - `follows`: whether the probe followed a link (a read, a `stat`) or saw it (`lstat`)
- * @throws the probe's own error classified on `ctx` (naming `entry`) when the parent
- *   lists it (a link only to a probe that does not follow); the listing's error
- *   classified on `ctx` when the parent is there but cannot be listed — absence was never shown
+ * @param ctx - The caller's action, for the fault
+ * @param probe - How the probe looked, and the side of each path it may charge
+ * @throws the probe's own error classified on `sideOf(entry)` (naming `entry`) when the parent
+ *   lists it (a link only to a probe that does not follow); the listing's error classified on
+ *   `sideOf(parent)` when the parent is there but cannot be listed — absence was never shown
  */
-export function requireConfirmedAbsent(entry: string, absent: unknown, ctx: FsFaultContext, probe: { readonly follows: boolean }): void {
+export function requireConfirmedAbsent(entry: string, absent: unknown, ctx: ConfirmationContext, probe: ConfirmationProbe): void {
   const parent = path.dirname(entry);
   let listed;
   try {
     listed = readdirSync(parent, { withFileTypes: true }).find((dirent) => dirent.name === path.basename(entry));
   } catch (error: unknown) {
     if (isPathAbsentError(error)) return;
-    throw classifyFsFault(error, { ...ctx, path: parent });
+    throw classifyFsFault(error, { ...ctx, side: probe.sideOf(refusedPathOf(error, parent)), path: parent });
   }
   if (listed === undefined || (probe.follows && listed.isSymbolicLink())) return;
-  throw classifyFsFault(absent, { ...ctx, path: entry });
+  throw classifyFsFault(absent, { ...ctx, side: probe.sideOf(entry), path: entry });
 }

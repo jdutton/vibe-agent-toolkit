@@ -4,7 +4,7 @@
 
 import fs from 'node:fs';
 
-import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, requireFollowedStatSync, safePath } from '@vibe-agent-toolkit/utils';
 
 /**
  * Total size of every file under `dirPath`, recursively.
@@ -15,10 +15,15 @@ import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
  * the OS REFUSES throws — "0 bytes" is the answer a reader trusts least at
  * exactly the moment it is most wrong.
  *
- * @param dirPath - Directory to measure
+ * @param dirPath - Directory to measure (VAT's own database directory, the tree its links are read within)
  * @returns Total size in bytes
  */
 export function getDirectorySize(dirPath: string): number {
+  return sizeBeneath(dirPath, dirPath);
+}
+
+/** {@link getDirectorySize} of `dirPath`, its links followed only once their chain beneath `within` is read. */
+function sizeBeneath(dirPath: string, within: string): number {
   let items: string[];
   try {
     items = fs.readdirSync(dirPath);
@@ -32,12 +37,12 @@ export function getDirectorySize(dirPath: string): number {
     const itemPath = safePath.join(dirPath, item);
     let stats: fs.Stats;
     try {
-      stats = fs.statSync(itemPath);
+      stats = requireFollowedStatSync(itemPath, within);
     } catch (error) {
       if (isPathAbsentError(error)) continue;
       throw error;
     }
-    totalSize += stats.isDirectory() ? getDirectorySize(itemPath) : stats.size;
+    totalSize += stats.isDirectory() ? sizeBeneath(itemPath, within) : stats.size;
   }
   return totalSize;
 }

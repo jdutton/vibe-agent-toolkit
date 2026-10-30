@@ -235,7 +235,7 @@ async function processDirectory(inputDir: string, outputDir: string, config?: Pr
 
   // In order: CPU-heavy image work, one image at a time, with a running count.
   await forEachInOrder(entries, async (entry) => {
-    if (direntKindFollowingSync(inputDir, entry) !== 'file') {
+    if (direntKindFollowingSync(inputDir, entry, inputDir) !== 'file') {
       return;
     }
 

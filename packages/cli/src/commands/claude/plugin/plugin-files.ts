@@ -11,10 +11,8 @@
  *     directory at the dest name refuses the build, naming the entry
  */
 
-import { existsSync } from 'node:fs';
-
 import type { SkillFileEntry } from '@vibe-agent-toolkit/resources';
-import { forEachInOrder, issueLocation, safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { everywhere, foldedSegment, forEachInOrder, issueLocation, pathPresent, safePath, sideWithin, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError } from '../../../utils/command-refusal.js';
 import { copyFileIntoMarketplace } from '../../../utils/marketplace-io.js';
@@ -31,25 +29,6 @@ export interface ApplyPluginFilesArgs {
   pluginOutputDir: string;
   entries: readonly SkillFileEntry[];
   info?: (message: string) => void;
-}
-
-/** The characters Windows drops from the end of a path segment: `skills.` and `skills ` are `skills` there. */
-const DROPPED_AT_SEGMENT_END: ReadonlySet<string> = new Set(['.', ' ']);
-
-/**
- * A path segment as a filesystem that folds names compares it: letter case and Unicode form (APFS,
- * NTFS, exFAT, SMB), the trailing dots and spaces Windows drops, and — NTFS — whatever follows a
- * `:` (`skills::$INDEX_ALLOCATION` is the directory `skills` by its stream name). The cut is made on
- * every host, so a POSIX directory really named `skills:notes` compares as `skills` too.
- *
- * Case is folded UP and then down: NTFS compares upper-cased names, and a dotless `ı` (U+0131) is
- * `I` there, which lower-casing alone leaves apart from `i`.
- */
-export function foldedSegment(segment: string): string {
-  const stream = segment.indexOf(':');
-  let end = stream === -1 ? segment.length : stream;
-  while (end > 0 && DROPPED_AT_SEGMENT_END.has(segment.charAt(end - 1))) end -= 1;
-  return segment.slice(0, end).normalize('NFKD').toUpperCase().toLowerCase();
 }
 
 /**
@@ -81,7 +60,7 @@ export function pluginFilesDest(rawDest: string): string {
     if (segment !== '..') segments.push(segment);
     else if (segments.pop() === undefined) throw outside();
   }
-  const folded = segments.map(foldedSegment);
+  const folded = segments.map((segment) => foldedSegment(segment));
   // Nothing left names the plugin output dir itself, which is not a file in it.
   if (folded.length === 0) throw outside();
   if (folded[0] === 'skills') {
@@ -109,13 +88,14 @@ export async function applyPluginFiles(args: ApplyPluginFilesArgs): Promise<void
     // Project-relative, never absolute: this refusal is published on
     // machine-readable stdout, where an absolute path publishes the developer's
     // home directory into whatever issue or CI log it lands in.
-    requireInputPath(sourceAbs, {
+    requireInputPath(sourceAbs, projectRoot, {
       origin: 'content',
       message: `plugin files[].source not found: ${entry.source} (resolved to ${issueLocation(sourceAbs, projectRoot) || '.'})`,
-    });
+    }, sideWithin(sourceAbs, 'source', 'destination')); // the named input; the directories above it are the project the build writes into
     const dest = pluginFilesDest(entry.dest);
 
-    if (existsSync(safePath.join(pluginOutputDir, dest)) && info) {
+    // The run's own output, about to be written: an entry (a link included) is asked, never followed.
+    if (info && pathPresent(safePath.join(pluginOutputDir, dest), 'entry', everywhere('destination'), 'probe')) {
       info(`plugin files[]: overwriting existing ${toForwardSlashAnyPlatform(entry.dest)}`);
     }
 

@@ -126,7 +126,7 @@ export default defineConfig({
         statements: 85,
         branches: 79,
         functions: 87,
-        lines: 85,
+        lines: 86,
         autoUpdate: process.env['COVERAGE_RATCHET'] === 'write' ? (measured: number) => Math.floor(measured) : false,
       },
     },

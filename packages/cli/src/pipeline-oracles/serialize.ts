@@ -10,11 +10,24 @@
  */
 
 import type { SymlinkDivergenceReport } from './symlink-divergence.js';
-import type { ContentMeasuresFact, EnumerationSnapshot, ParseFactSnapshot } from './types.js';
+import type { ContentMeasuresFact, EnumerationSnapshot, ParseFactSnapshot, TargetPlacement } from './types.js';
 
 /** `true` / `false` / `-` for an unanswered column, so columns stay aligned in width. */
 function flag(value: boolean | null): string {
   return value === null ? '-' : String(value);
+}
+
+/**
+ * The ONE encoding of a link fault in every oracle report: `fault:<errno>`. Both oracles render a
+ * fault through it, so the same errno reads the same in either golden and a change of errno is a diff.
+ */
+function linkFault(errno: string): string {
+  return `fault:${errno}`;
+}
+
+/** A {@link TargetPlacement} cell: a flag, or a {@link linkFault}. */
+function placement(value: TargetPlacement): string {
+  return typeof value === 'object' && value !== null ? linkFault(value.fault) : flag(value);
 }
 
 /**
@@ -53,7 +66,7 @@ export function renderEnumerationSnapshot(snapshot: EnumerationSnapshot): string
         flag(row.gitignored),
         flag(row.isSymlink),
         flag(row.symlinkResolves),
-        flag(row.targetInsideRoot),
+        placement(row.targetInsideRoot),
         flag(row.aliasesEnumeratedPath),
         row.contentKey ?? '-',
       ].join('\t'),
@@ -105,11 +118,11 @@ export function renderSymlinkDivergence(report: SymlinkDivergenceReport): string
     `divergingRowCount: ${String(report.rows.length)}`,
     '',
     '## diverging paths (sorted)',
-    '# path\trealPath\tclasses',
+    '# path\trealPath\tclasses\tfault',
   ];
 
   for (const row of report.rows) {
-    lines.push([row.path, row.realPath, row.classes.join(',')].join('\t'));
+    lines.push([row.path, row.realPath, row.classes.join(','), row.fault === null ? '-' : linkFault(row.fault)].join('\t'));
   }
 
   return `${lines.join('\n')}\n`;

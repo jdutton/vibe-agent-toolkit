@@ -89,9 +89,9 @@
  */
 
 import { spawn } from 'node:child_process';
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 
-import { isPathAbsentError, safePath, type TempDirOutcome, withTempDir } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, requireFollowedStatSync, safePath, type TempDirOutcome, withTempDir } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError, errorMessageOf } from '../../utils/command-refusal.js';
 import { readForwardedDocument, type ForwardedDocument } from '../../utils/document-writer.js';
@@ -685,7 +685,8 @@ function pollIntervalMs(budgetMs: number): number {
  */
 function logSize(path: string): number {
   try {
-    return statSync(path).size;
+    // A file in a directory this process minted: its own `within`.
+    return requireFollowedStatSync(path, path).size;
   } catch (error) {
     if (isPathAbsentError(error)) return 0;
     throw error;

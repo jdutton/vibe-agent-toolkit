@@ -47,6 +47,7 @@
 import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
   type AbsenceCause,
+  classifyFsFault,
   type FilenameMatch,
   fillPathSpellings,
   fillRealpaths,
@@ -55,6 +56,8 @@ import {
   pathSpellingFrom,
   type PathSpellingRequest,
   type PathSpellingTable,
+  type RealpathFault,
+  realpathRowFrom,
   type RealpathTable,
   safePath,
   spellingWalkRoot,
@@ -73,6 +76,7 @@ import type { ResourceLink } from './types.js';
 import {
   isWithinProjectFrom,
   locationRoot,
+  projectRootResolution,
   resolveLocalHref,
   type ResolveLocalHrefResult,
 } from './utils.js';
@@ -230,7 +234,7 @@ export function linkTargets(resolved: Iterable<ResolvedLinkEntry>): PathSpelling
  * The pass-1′ columns the judge reads. Fill both with {@link fillLinkFacts}.
  *
  * ⚠️ **A missing row in either table THROWS**, by design (`pathSpellingFrom`,
- * `realpathFrom`): a divergence between the filled set and the judged set is a
+ * `realpathRowFrom`): a divergence between the filled set and the judged set is a
  * programming error, and a crash names it — where a silent recompute would only
  * make the run slower and a `null` degradation would answer wrongly. The
  * corollary is that the fill and the judge must also agree on *whether a column
@@ -401,7 +405,7 @@ export interface ValidateLinkOptions extends LinkPolicyOptions {
  * exact regression the realpath column exists to remove. So the fill asks this
  * predicate too, and fills an EMPTY table when it is false.
  *
- * ⚠️ **Never inline this condition on either side.** `realpathFrom` throws on a
+ * ⚠️ **Never inline this condition on either side.** `realpathRowFrom` throws on a
  * missing row, so a fill that skips the column while the judge still reads it is
  * not a slow path — it is a crash in a shipped command, and in the frontmatter
  * lane not even a legible one (see {@link LinkFactTables}).
@@ -464,9 +468,16 @@ export function needsRealpathColumn<
  * this canonicalizes every resolved target. Narrowing it to "targets that exist"
  * would mean recomputing the existence verdict here, i.e. two computations kept
  * in step: precisely the drift hazard {@link linkTargets} exists to close. A
- * superset is always safe (`realpathFrom` throws only on a *missing* row), and
- * it costs one failed `realpath` per broken link — which a green corpus does not
- * pay at all. Do not "optimize" this into a bug.
+ * superset is always safe (`realpathRowFrom` throws only on a *missing* row, and
+ * a target the OS declined to resolve is a row carrying its fault, never a
+ * rejection), and it costs one failed `realpath` per broken link — which a green
+ * corpus does not pay at all. Do not "optimize" this into a bug.
+ *
+ * The project root is the one row whose fault stops the run: it is not a link
+ * target but the namespace every target is compared in, and a containment answer
+ * against a root the OS would not resolve is no answer.
+ *
+ * @throws FsFaultError (source) when the OS declines or fails to resolve the project root
  *
  * The project root is a row of its own, and that is where half the measured
  * syscalls went: canonicalizing a run-constant root once per *link* was the
@@ -490,8 +501,21 @@ export async function fillLinkFacts(
       ? fillRealpaths([...targets.map(({ target }) => target), policy.projectRoot], fsCache)
       : Promise.resolve<RealpathTable>(new Map()),
   ]);
+  if (policy.projectRoot !== undefined) refuseUnresolvedRoot(realpaths, policy.projectRoot);
 
   return { spellings, realpaths };
+}
+
+/**
+ * Throw the project root's resolution fault, if its row carries one.
+ *
+ * @param realpaths - The filled column (empty when the gate is closed)
+ * @param projectRoot - The project root, a row of that column when it is filled
+ */
+function refuseUnresolvedRoot(realpaths: RealpathTable, projectRoot: string): void {
+  const fault = realpaths.get(projectRoot)?.fault;
+  if (fault === undefined || fault === null) return;
+  throw classifyFsFault(fault.error, projectRootResolution(projectRoot));
 }
 
 /**
@@ -643,7 +667,7 @@ export async function validateLink(
   // a fresh instance is exactly the old, un-memoized behaviour.
   const tables = await fillLinkFacts(
     [entry],
-    options?.fsCache ?? new FsLookupCache(),
+    options?.fsCache ?? new FsLookupCache(locationRoot(options?.projectRoot)),
     options ?? {},
   );
 
@@ -986,14 +1010,29 @@ export function gitIgnoreSafetyIssue(
   // the per-path spawn.
   //
   // When no tracker is threaded in, fall back to isGitIgnored (one-off spawn).
-  const sourceIsIgnored = options.gitTracker
-    ? options.gitTracker.isIgnoredByActiveSet(sourceFilePath)
-    : isGitIgnored(sourceFilePath, options.projectRoot);
-  const targetIsIgnored = options.gitTracker
-    ? options.gitTracker.isIgnoredByActiveSet(resolvedTarget)
-    : isGitIgnored(resolvedTarget, options.projectRoot);
+  const isIgnored = (path: string): boolean => options.gitTracker
+    ? options.gitTracker.isIgnoredByActiveSet(path)
+    : isGitIgnored(path, options.projectRoot);
 
-  if (sourceIsIgnored || !targetIsIgnored) return null;
+  // An ignored source can leak nothing, whatever its target is — asked before the
+  // target's resolution, so a refused target never draws a "check could not run"
+  // for a check whose answer was already "no leak".
+  if (isIgnored(sourceFilePath)) return null;
+
+  // Inside by its ancestor, but the OS declined (or failed) to resolve the
+  // target itself: where it really leads is unknown. FAIL-CLOSED: the lexical
+  // path is still asked, and a target git ignores AS WRITTEN is the leak itself
+  // (`LINK_TO_GITIGNORED`), never the overridable "not checked" finding — so an
+  // adopter who downgrades `LINK_TARGET_UNREADABLE` silences only the case no
+  // answer exists for (the written path is tracked, where a hop leads is not).
+  // Reported against this one link — never a reason to stop the run.
+  const targetIsIgnored = isIgnored(resolvedTarget);
+  const { fault } = realpathRowFrom(options.realpaths, resolvedTarget);
+  if (fault !== null && !targetIsIgnored) {
+    return unresolvedTargetIssue(fault, link, sourceFilePath, resolvedTarget, options.projectRoot);
+  }
+
+  if (!targetIsIgnored) return null;
 
   // A files:-declared DEST that already exists on disk and is gitignored is
   // the expected post-build state of a materialized build artifact (gitignored
@@ -1148,6 +1187,30 @@ function unreadableTargetIssue(
   return createRegistryIssue(
     'LINK_TARGET_UNREADABLE',
     `Link target ${target} was NOT checked: listing the directory "${directory}" was refused (${refusal.code}). This is not a report that the link is broken — a directory can be traversable while refusing a listing (POSIX \`--x\`), in which case the target opens exactly as written. ${unverified}, so treat this as a gap in the run rather than as a clean result. ${remedy}`,
+    linkExtras(link, sourceFilePath, projectRoot),
+  );
+}
+
+/**
+ * The issue for a link target the walk found but the OS would not RESOLVE
+ * (`EACCES`/`EPERM` on a hop of a link chain, a device fault): its errno and
+ * class named, so the remedy can be aimed.
+ *
+ * 🔑 `LINK_TARGET_UNREADABLE`, the registry's word for "this target was not
+ * checked", for the same reason {@link unreadableTargetIssue} uses it — the
+ * realpath column's refusal is that same fact reached through a different
+ * syscall, and a second code would be a second vocabulary for it.
+ */
+function unresolvedTargetIssue(
+  fault: RealpathFault,
+  link: ResourceLink,
+  sourceFilePath: string,
+  resolvedTarget: string,
+  projectRoot: string,
+): ValidationIssue {
+  return createRegistryIssue(
+    'LINK_TARGET_UNREADABLE',
+    `Link target ${messagePath(resolvedTarget, projectRoot)} was NOT checked for a gitignore leak: resolving where it really leads failed (${fault.errno}, ${fault.faultClass}). The file is there; where a link on its path points is unknown, so treat this as a gap in the run rather than as a clean result. Fix the permission or the device on that path, then validate again.`,
     linkExtras(link, sourceFilePath, projectRoot),
   );
 }

@@ -434,7 +434,8 @@ function inCollectionScope(
  *
  * The phase entry point for `vat validate` and `vat verify`, and the command's
  * own. The report is the one BEFORE the writer's run-integrity pass: inside an
- * orchestrator, zero examined is judged on the whole run, not on this phase. A
+ * orchestrator, `runPhase` applies the same pass to this phase's report, by the
+ * declaration this verb gives its own writer. A
  * refusal is the envelope's error branch, its message already on stderr, and a
  * site-specific run-integrity finding is warned here, where both lanes see it.
  */

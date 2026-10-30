@@ -123,6 +123,6 @@ export function populationWiring(
 export function collectionsOption(
   root: string,
 ): { collections?: Readonly<Record<string, CollectionConfig>> } {
-  const collections = loadConfigCached(root)?.resources?.collections;
+  const collections = loadConfigCached(root, 'source')?.resources?.collections;
   return collections === undefined ? {} : { collections };
 }

@@ -1,7 +1,7 @@
 import { chmodSync, existsSync } from 'node:fs';
 
 import type { RefusalCode } from '@vibe-agent-toolkit/schema';
-import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { createSymlink, mkdirSyncReal, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -297,6 +297,34 @@ claude:
       expectRefusal(result, 'INPUT_UNREADABLE');
       expect(result.stderr).toContain('dist/skills/pool-a/SKILL.md');
     });
+  });
+
+  // A plugin symlink whose resolution the OS declines (its target sits under a directory the user
+  // may not search) is the input's fault, classified as every write lane classifies it — never a
+  // raw errno that ends INTERNAL_ERROR with a stack, and never a dangling link.
+  it.skipIf(CANNOT_DENY_READS || symlinkCapability() === null)('a plugin symlink whose resolution the OS declines is INPUT_UNREADABLE, naming the link', async () => {
+    const cap = symlinkCapability();
+    if (cap === null) throw new Error('unreachable — skipped without the capability');
+    const tempDir = createTempDir();
+    seedPluginP1WithMinimalConfig(tempDir);
+    // Outside the project, so the project's own crawl never meets the locked directory.
+    const away = safePath.join(createTempDir(), 'away');
+    mkdirSyncReal(away);
+    writeTestFile(safePath.join(away, 'hooks.json'), '{}\n');
+    const hooks = safePath.join(tempDir, 'plugins', 'p1', 'hooks');
+    mkdirSyncReal(hooks, { recursive: true });
+    createSymlink(cap, safePath.relative(hooks, safePath.join(away, 'hooks.json')), safePath.join(hooks, 'alias.json'));
+    chmodSync(away, 0o000);
+
+    try {
+      const result = await runSkillsThenPluginBuild(tempDir);
+
+      expectRefusal(result, 'INPUT_UNREADABLE');
+      expect(result.stderr).toContain('hooks/alias.json');
+      expect(result.stderr).toContain('EACCES');
+    } finally {
+      chmodSync(away, 0o755);
+    }
   });
 
   it('errors when the same plugin name is declared in two marketplaces', async () => {

@@ -24,7 +24,7 @@ import {
   type OkReport,
   type RefusalCode,
 } from '@vibe-agent-toolkit/schema';
-import { pathPresent, safePath, VatError, withFsFault } from '@vibe-agent-toolkit/utils';
+import { everywhere, pathPresent, safePath, VatError, withFsFault } from '@vibe-agent-toolkit/utils';
 
 import { refusalCodeOf } from '../../utils/command-refusal.js';
 import { loadConfig } from '../../utils/config-loader.js';
@@ -146,10 +146,11 @@ export async function runArdEmit(options: ArdEmitOptions): Promise<ArdEmitResult
   const projectRoot = options.projectRoot ?? process.cwd();
   // Absent is the invocation naming nothing; a stat the OS refuses is the
   // input's refusal (INPUT_UNREADABLE), never read as absent.
-  if (!pathPresent(projectRoot, 'follow', 'source', 'probe')) {
+  // The project root is the operator's own (`--project-root` or cwd): its own `within`.
+  if (!pathPresent(projectRoot, { follow: projectRoot }, everywhere('source'), 'probe')) {
     throw new ArdConfigMissingError(projectRoot, 'no-project-root');
   }
-  const config = loadConfig(projectRoot);
+  const config = loadConfig(projectRoot, 'source');
   if (config === undefined) {
     throw new ArdConfigMissingError(projectRoot, 'no-config-file');
   }

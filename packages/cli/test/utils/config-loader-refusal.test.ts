@@ -52,7 +52,7 @@ describe('loadConfigCached — the refusal a failure becomes', () => {
     // under root and on Windows, where `chmod 000` does not.
     vi.stubEnv('VAT_TEST_CONFIG', normalizedTmpdir());
 
-    const error = thrownBy(() => loadConfigCached('/project'));
+    const error = thrownBy(() => loadConfigCached('/project', 'source'));
 
     expect(error).toBeInstanceOf(ConfigLoadError);
     expect(refusalCodeOf(error)).toBe('INPUT_UNREADABLE');
@@ -62,12 +62,12 @@ describe('loadConfigCached — the refusal a failure becomes', () => {
     vi.stubEnv('VAT_TEST_CONFIG', resolveFromImportMeta(import.meta.url, '..', '..', '..', '..', 'vibe-agent-toolkit.config.yaml'));
     vi.stubEnv('VAT_TEST_CONFIG_DEFECT', DEFECT_MARKER);
 
-    const error = thrownBy(() => loadConfigCached('/project'));
+    const error = thrownBy(() => loadConfigCached('/project', 'source'));
 
     expect(error).toBeInstanceOf(TypeError);
     expect(error).not.toBeInstanceOf(ConfigLoadError);
     expect(refusalCodeOf(error)).toBe('INTERNAL_ERROR');
     // Cached: the second call rethrows the same defect without re-running the loader.
-    expect(thrownBy(() => loadConfigCached('/project'))).toBe(error);
+    expect(thrownBy(() => loadConfigCached('/project', 'source'))).toBe(error);
   });
 });

@@ -9,6 +9,7 @@ import { AGENT_MANIFEST_INVALID_CODE, loadAgentManifest, type LoadedAgentManifes
 import {
   applyTreePlan,
   copyTree,
+  everywhere,
   findProjectRoot,
   type FsBoundary,
   fsBoundary,
@@ -281,7 +282,7 @@ async function readAgentSources(manifest: LoadedAgentManifest, agentDir: string,
   const paths = [manifest.__manifestPath ?? agentDir, systemPromptPath];
 
   const scriptsCandidate = safePath.join(agentDir, 'scripts');
-  const scriptsPath = pathPresent(scriptsCandidate, 'follow', 'source', 'probe') ? scriptsCandidate : undefined;
+  const scriptsPath = pathPresent(scriptsCandidate, { follow: agentDir }, everywhere('source'), 'probe') ? scriptsCandidate : undefined;
   if (scriptsPath !== undefined) {
     // Proven by the walk the copy below follows, before anything is written.
     await proveTreeReadable(scriptsPath, SCRIPTS_LINKS);
@@ -290,7 +291,7 @@ async function readAgentSources(manifest: LoadedAgentManifest, agentDir: string,
 
   const licensePath = safePath.join(agentDir, 'LICENSE.txt');
   let license: Buffer | undefined;
-  if (pathPresent(licensePath, 'follow', 'source', 'probe')) {
+  if (pathPresent(licensePath, { follow: agentDir }, everywhere('source'), 'probe')) {
     license = await boundary.run(`read ${licensePath}`, 'source', () => readRegularFile(licensePath));
     paths.push(licensePath);
   }
@@ -776,7 +777,8 @@ function findAgentPackageRoot(manifestPath: string): string {
   // Walk up until we find a package.json or hit the filesystem root
   while (currentDir !== path.dirname(currentDir)) {
     const packageJsonPath = safePath.join(currentDir, 'package.json');
-    if (pathPresent(packageJsonPath, 'follow', 'source', 'probe')) {
+    // Each ancestor is the operator's own (the manifest's): the entry beneath it is read first.
+    if (pathPresent(packageJsonPath, { follow: currentDir }, everywhere('source'), 'probe')) {
       return currentDir;
     }
     currentDir = path.dirname(currentDir);

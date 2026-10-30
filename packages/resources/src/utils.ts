@@ -3,13 +3,16 @@
  * These are not exported from the public API.
  */
 
-import fs from 'node:fs';
 import path from 'node:path';
 
 import {
-  fsFaultOf,
+  followedRealpathSync,
+  type FsFaultContext,
+  isLinkChainRefusedError,
+  LINK_CHAIN_REFUSED_CODE,
+  linkResolutionFault,
   normalizePath,
-  realpathFrom,
+  realpathRowFrom,
   type RealpathTable,
   safePath,
   toForwardSlash,
@@ -257,7 +260,7 @@ export function resolveLocalHref(
  * are also what satisfies the `local/no-path-startswith` rule: the guarantee it
  * enforces is discharged by the two callers below, which canonicalize through
  * `toForwardSlash` (`canonicalizeSync`) or read an already-forward-slashed row
- * out of the filled table (`realpathFrom`).
+ * out of the filled table (`realpathRowFrom`).
  *
  * It exists so the two `isWithinProject*` forms share **one** definition of
  * containment. Two copies of the `startsWith(root + '/') || === root` pair would
@@ -333,12 +336,16 @@ export function sameDirectory(left: string, right: string): boolean {
  * What the filesystem calls this path — symlinks resolved, and the casing it
  * actually stores rather than the casing the caller typed.
  *
- * @param resolvedPath - An already-resolved absolute path
+ * Both callers' sides are the operator's OWN roots (a crawl base and the root a
+ * population source was bound to), so each is its own `within`: the kernel
+ * answers the operator's input directly, as `link-following.ts` rules for an edge.
+ *
+ * @param resolvedPath - An already-resolved absolute path the operator named
  * @returns Its on-disk, forward-slashed spelling, or the input when it is not on
  *   disk (`normalizePath`'s own last resort)
  */
 function onDiskSpelling(resolvedPath: string): string {
-  return toForwardSlash(normalizePath(resolvedPath));
+  return toForwardSlash(normalizePath(resolvedPath, resolvedPath));
 }
 
 /**
@@ -359,9 +366,12 @@ function onDiskSpelling(resolvedPath: string): string {
  *
  * The walk widens containment nowhere, because the deepest existing ancestor is
  * exactly where an escaping directory symlink lives — a missing file behind one
- * still canonicalizes outside the root. Errno is deliberately not inspected:
- * EACCES on an existing file and ELOOP on a cycle land in the same catch as
- * ENOENT, and the ancestor's namespace beats the lexical answer for all three.
+ * still canonicalizes outside the root. The errno decides only that a bug (no
+ * errno) stays loud: EACCES on an existing file and ELOOP on a cycle land in the
+ * same catch as ENOENT, and the ancestor's namespace beats the lexical answer for
+ * all three. ⛔ Never a throw on a filesystem errno — this is a containment
+ * answer inside read lanes, and a declined target is reported against its link by
+ * the lane's own existence check, not by stopping the run.
  *
  * **The fixpoint guard is mandatory.** `path.dirname` is idempotent at a
  * filesystem root (`'/'` on posix, `'C:/'` for a drive, `'//server/share/'` for a
@@ -403,7 +413,7 @@ function onDiskSpelling(resolvedPath: string): string {
  * boundary. `src/index.ts` does not re-export it, so the package's public API is
  * unchanged.
  */
-export function canonicalizeSync(filePath: string): string {
+export function canonicalizeSync(filePath: string, within: string): string {
   // Resolve up front so the walk only ever sees absolute, `..`-free paths.
   // Costs nothing: Node's `fs.realpathSync` opens with the same `path.resolve`.
   const absolutePath = safePath.resolve(filePath);
@@ -414,14 +424,21 @@ export function canonicalizeSync(filePath: string): string {
 
   for (;;) {
     try {
-      return safePath.join(toForwardSlash(fs.realpathSync(candidate)), ...missingRemainder);
+      // The kernel is asked only once the link chain beneath `within` has been read and shown local.
+      return safePath.join(toForwardSlash(followedRealpathSync(candidate, within)), ...missingRemainder);
     } catch (error) {
-      // The filesystem refused this candidate — ENOENT, and equally EACCES on
-      // an existing file or ELOOP on a symlink cycle: for all three the
-      // ancestor's namespace is a strictly better answer than the lexical one,
-      // which is the ruling `FsLookupCache.realpath` documents and this
-      // function must match. A bug is none of those and stays loud.
-      if (fsFaultOf(error) === undefined) throw error;
+      // A chain VAT will not hand the kernel (a link to a network or device path, a chain that never
+      // ends) has no namespace at all: it is never inside, so no ancestor answers for it.
+      if (isLinkChainRefusedError(error)) throw error;
+      // A containment answer, never a verdict on the target: it resolves to
+      // nothing (ENOENT, ELOOP on a cycle) or the OS declined or could not look
+      // (EACCES, EIO) — for every one the ancestor's namespace is the answer, the
+      // ruling `FsLookupCache.realpath` documents and this function must match.
+      // A target outside the root is outside whatever refused beneath it; the
+      // refusal itself is the lane's existence check to report against the link
+      // (`LINK_TARGET_UNREADABLE`), never a reason to stop the run. A bug (no
+      // errno) stays loud.
+      linkResolutionFault(error);
       const parent = toForwardSlash(path.dirname(candidate));
       // Fixpoint at a filesystem root, where `dirname` returns its own input.
       // Nothing left to walk, and nothing on the path resolved, so the lexical
@@ -495,13 +512,21 @@ export function canonicalizeSync(filePath: string): string {
  * ```
  */
 export function isWithinProject(filePath: string, projectRoot: string): boolean {
-  return isPathUnderRoot(canonicalizeSync(filePath), canonicalizeSync(projectRoot));
+  let canonical: string;
+  try {
+    canonical = canonicalizeSync(filePath, projectRoot);
+  } catch (error) {
+    // A chain VAT will not hand the kernel is never inside, whatever its spelling says.
+    if (isLinkChainRefusedError(error)) return false;
+    throw error;
+  }
+  return isPathUnderRoot(canonical, canonicalizeSync(projectRoot, projectRoot));
 }
 
 /**
  * The same containment question, answered out of an already-filled realpath
  * column. **Pure: no filesystem, no cache** — both canonical paths are read from
- * the table with `realpathFrom`.
+ * the table with `realpathRowFrom`.
  *
  * The judgement-time form. `projectRoot` is looked up like any other row, which
  * is the point: canonicalizing the run-constant root once per run instead of
@@ -515,14 +540,17 @@ export function isWithinProject(filePath: string, projectRoot: string): boolean 
  * @param filePath - Absolute path to check
  * @param projectRoot - Absolute path to project root
  * @returns True if filePath is under projectRoot (after symlink resolution)
- * @throws If the table holds no row for either path — see `realpathFrom`
+ * @throws If the table holds no row for either path — see `realpathRowFrom`
  */
 export function isWithinProjectFrom(
   table: RealpathTable,
   filePath: string,
   projectRoot: string,
 ): boolean {
-  return isPathUnderRoot(realpathFrom(table, filePath), realpathFrom(table, projectRoot));
+  const row = realpathRowFrom(table, filePath);
+  // As in `isWithinProject`: a refused chain is never inside, whatever ancestor answered for its spelling.
+  if (row.fault?.errno === LINK_CHAIN_REFUSED_CODE) return false;
+  return isPathUnderRoot(row.path, realpathRowFrom(table, projectRoot).path);
 }
 
 /**
@@ -577,4 +605,18 @@ export function isCanonicalArrayIndex(s: string): boolean {
     if (ch < '0' || ch > '9') return false;
   }
   return true;
+}
+
+/**
+ * The fault context of resolving the project (corpus) root — ONE answer for every lane that
+ * resolves it (the link validator's `refuseUnresolvedRoot`, the projection extent's `realRootOf`),
+ * so one refused root draws one cause sentence whichever lane met it first. The root is the run's
+ * own subject — named on the command line, or the directory the run was started in — so its origin
+ * is `argument`, never `content` ("found inside another input"), which the root never is.
+ *
+ * @param projectRoot - The root being resolved
+ * @returns The context to classify its resolution fault with
+ */
+export function projectRootResolution(projectRoot: string): FsFaultContext {
+  return { side: 'source', origin: 'argument', action: 'resolve the project root', path: projectRoot };
 }

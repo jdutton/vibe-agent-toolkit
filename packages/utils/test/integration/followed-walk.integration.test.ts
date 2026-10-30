@@ -36,7 +36,7 @@ describe('FollowedWalk', () => {
 
   it('admits each directory once and refuses the same directory under a second spelling', ({ skip }) => {
     if (tree().linkIn === null) skip('host cannot create symlinks');
-    const walk = new FollowedWalk('source');
+    const walk = new FollowedWalk('source', tree().root);
     walk.enter(tree().root);
     walk.enter(tree().member);
     expect(() => walk.enter(tree().linkIn ?? '')).toThrow(DirectoryWalkRevisitedError);
@@ -44,7 +44,7 @@ describe('FollowedWalk', () => {
 
   it('refuses the loop back to the root by its realpath, not its spelling', ({ skip }) => {
     if (tree().linkLoop === null) skip('host cannot create symlinks');
-    const walk = new FollowedWalk('source');
+    const walk = new FollowedWalk('source', tree().root);
     walk.enter(tree().root);
     expect(() => walk.enter(tree().linkLoop ?? '')).toThrow(/already walked/);
   });
@@ -55,7 +55,7 @@ describe('FollowedWalk', () => {
     session = installFaultFs({ within: tree().root, faults: [{ family: 'meta', op: 'realpath', path: (p) => p === member, errno: 'EACCES' }] });
     const failure = (() => {
       try {
-        new FollowedWalk(side).enter(member);
+        new FollowedWalk(side, tree().root).enter(member);
         return undefined;
       } catch (error: unknown) {
         return error;

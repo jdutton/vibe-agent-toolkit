@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { fsFaultOf, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { followedKindSync, fsFaultOf, isPathAbsentError, requireFollowedStatSync, safePath } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory, type DirectoryRefusal, NEVER_CRAWL_GLOBS } from '@vibe-agent-toolkit/utils/crawl';
 import { gitFindRoot, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
@@ -30,11 +30,12 @@ const PERFORMANCE_POISON: readonly string[] = NEVER_CRAWL_GLOBS;
  * Stat the scan root, telling absence from refusal. `existsSync` answers false
  * for a path under a directory without search permission, which used to be
  * reported as "does not exist". A refusal keeps the OS error as `cause`, so a
- * caller classifying by errno (`fsFaultOf`) still sees it.
+ * caller classifying by errno (`fsFaultOf`) still sees it. The root is the operator's own
+ * argument, so it is its own `within` (`link-following.ts`).
  */
 function statScanRoot(absolutePath: string): fs.Stats {
   try {
-    return fs.statSync(absolutePath);
+    return requireFollowedStatSync(absolutePath, absolutePath);
   } catch (error) {
     if (isPathAbsentError(error)) {
       throw new Error(`Path does not exist: ${absolutePath}`, { cause: error });
@@ -83,10 +84,11 @@ export async function scan(options: ScanOptions): Promise<ScanSummary> {
         unreadable: { degrade: (refusal) => unreadable.push(refusal) },
       });
     } else {
-      // Non-recursive: only immediate children
+      // Non-recursive: only immediate children, a linked one followed with its chain read
+      // beneath the scan root first (`link-following.ts`). A dangling link is not a file.
       filePaths = fs.readdirSync(absolutePath)
         .map(name => safePath.join(absolutePath, name))
-        .filter(p => fs.statSync(p).isFile());
+        .filter(p => followedKindSync(p, absolutePath) === 'file');
     }
   } else {
     throw new Error(`Path is neither file nor directory: ${absolutePath}`);

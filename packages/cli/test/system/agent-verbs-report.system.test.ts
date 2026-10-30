@@ -315,7 +315,7 @@ describe('vat agent build / import / installed / list / install / uninstall (sys
       expect(report).toMatchObject({ status: 'ok', data: { symlink: true } });
       const installPath = safePath.join(home, '.claude', 'skills', 'widget-reviewer');
       expect(lstatSync(installPath).isSymbolicLink()).toBe(true);
-      expect(toForwardSlash(normalizePath(installPath))).toBe(toForwardSlash(normalizePath(safePath.join(cwd, 'dist/vat-bundles/skill/widget-reviewer'))));
+      expect(toForwardSlash(normalizePath(installPath, installPath))).toBe(toForwardSlash(normalizePath(safePath.join(cwd, 'dist/vat-bundles/skill/widget-reviewer'), cwd)));
     });
 
     // A bundle holding a link that escapes it: copying would ship content the bundle does not own.
@@ -440,8 +440,8 @@ describe('vat agent build / import / installed / list / install / uninstall (sys
       const { status, stderr, report } = await vat(AGENT_UNINSTALL_REPORT_SCHEMA, ['--cwd', target, ...UNINSTALL, '--scope', 'project'], launch);
 
       expect(status, stderr).toBe(ExitCode.OK);
-      expect(report.status === 'ok' && toForwardSlash(normalizePath(report.data.installPath)))
-        .toBe(toForwardSlash(normalizePath(safePath.join(target, '.claude', 'skills', 'widget-reviewer'))));
+      expect(report.status === 'ok' && toForwardSlash(normalizePath(report.data.installPath, report.data.installPath)))
+        .toBe(toForwardSlash(normalizePath(safePath.join(target, '.claude', 'skills', 'widget-reviewer'), target)));
       expect(() => lstatSync(safePath.join(target, '.claude', 'skills', 'widget-reviewer'))).toThrow(expect.objectContaining({ code: 'ENOENT' }));
       expect(lstatSync(safePath.join(launch, '.claude', 'skills', 'widget-reviewer')).isDirectory()).toBe(true);
     });

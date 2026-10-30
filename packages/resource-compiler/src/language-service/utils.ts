@@ -5,6 +5,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/explicit-module-boundary-types, sonarjs/cognitive-complexity, security/detect-non-literal-regexp, import/order -- TypeScript Language Service plugin API requires any and complex AST traversal */
 
 import { readFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 import { toMarkdownResource } from '../compiler/markdown-parser.js';
 import { resolveMarkdownPath as resolveMarkdownPathFromTransformer } from '../transformer/path-resolver.js';
@@ -208,10 +209,11 @@ export function resolveMarkdownPath(
  * Load and parse a markdown file with caching
  *
  * @param filePath - Absolute path to markdown file
+ * @param within - The tree it is read in: the importing file's directory
  * @returns Parsed markdown resource
  */
-export function loadMarkdownResource(filePath: string): MarkdownResource {
-  return getMarkdownResource(filePath, () => {
+export function loadMarkdownResource(filePath: string, within: string): MarkdownResource {
+  return getMarkdownResource(filePath, within, () => {
     const content = readFileSync(filePath, 'utf-8');
     return toMarkdownResource(content);
   });
@@ -305,7 +307,7 @@ export function resolveAndLoadMarkdown(
     return null;
   }
 
-  const resource = loadMarkdownResource(absolutePath);
+  const resource = loadMarkdownResource(absolutePath, dirname(containingFile));
   return { absolutePath, resource };
 }
 

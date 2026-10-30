@@ -7,7 +7,6 @@
  * not run a coded refusal. All domain logic lives in run-harness.ts (agent-skills package).
  */
 
-import { existsSync } from 'node:fs';
 import { basename, dirname, extname } from 'node:path';
 
 import {
@@ -35,10 +34,13 @@ import type { ProjectConfig, SkillSourceDescriptor, TestConfig } from '@vibe-age
 import { buildReport, ExitCode, toFindings, type Gate, type RefusalCode, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
   ASSET_REFERENCE_UNRESOLVED_CODE,
+  everywhere,
   findProjectRoot,
+  followedKindSync,
   forEachInOrder,
-  isVatError,
+  fsFaultOf,
   issueLocation,
+  isVatError,
   pathPresent,
   prefixMessageOnce,
   relativeEscapesRoot,
@@ -327,7 +329,7 @@ export function descriptorsToRecord(
  * subject's block.
  */
 function declaredSkillTestConfig(link: { configRoot: string; name: string }): TestConfig | undefined {
-  return loadConfigCached(link.configRoot)?.skills?.config?.[link.name]?.test;
+  return loadConfigCached(link.configRoot, 'source')?.skills?.config?.[link.name]?.test;
 }
 
 /**
@@ -367,7 +369,7 @@ async function loadTestConfig(subject: string, cwd: string): Promise<TestConfig 
   if (link !== undefined) return declaredSkillTestConfig(link);
   const projectRoot = findProjectRoot(cwd);
   if (projectRoot === null) return undefined;
-  const perSkill = loadConfig(projectRoot)?.skills?.config;
+  const perSkill = loadConfig(projectRoot, 'source')?.skills?.config;
   if (perSkill === undefined) return undefined;
   // Last-resort basename fallback (see doc comment above): only reached when neither
   // lookup above found a declared-skill link for `subject`.
@@ -398,7 +400,7 @@ type SkillTestGlobalConfig = ProjectConfig['test'];
 function loadGlobalTestConfig(cwd: string): SkillTestGlobalConfig {
   const projectRoot = findProjectRoot(cwd);
   if (projectRoot === null) return undefined;
-  return loadConfig(projectRoot)?.test;
+  return loadConfig(projectRoot, 'source')?.test;
 }
 
 /** Copy flag-only passthrough options (no config counterpart) onto opts. */
@@ -849,7 +851,7 @@ function resolveExistingDistOrThrow(
   ref: BuildableReference,
   flags: { noBuild: boolean; dryRun: boolean },
 ): BuildDeclaredSkillResult {
-  if (pathPresent(ref.expectedDistDir, 'follow', 'source', 'probe')) {
+  if (pathPresent(ref.expectedDistDir, { follow: ref.configRoot }, everywhere('source'), 'probe')) {
     if (flags.noBuild) {
       process.stderr.write(`Using existing dist (NOT rebuilt): ${ref.expectedDistDir}\n`);
     }
@@ -921,14 +923,14 @@ export function buildMemoKey(ref: BuildableReference): string {
  * and is always checked.
  */
 function verifyBuiltDist(ref: BuildableReference): BuildDeclaredSkillResult {
-  if (!pathPresent(ref.expectedDistDir, 'follow', 'source', 'probe')) {
+  if (!pathPresent(ref.expectedDistDir, { follow: ref.configRoot }, everywhere('source'), 'probe')) {
     throw new SkillBuildError(
       `Skill build for '${ref.name}' reported success but produced no output at ${ref.expectedDistDir}. ` +
         `Check the skill's packaging config (\`vat build\` should create this directory).`,
     );
   }
   const skillMdPath = safePath.join(ref.expectedDistDir, 'SKILL.md');
-  if (!pathPresent(skillMdPath, 'follow', 'source', 'probe')) {
+  if (!pathPresent(skillMdPath, { follow: ref.configRoot }, everywhere('source'), 'probe')) {
     throw new SkillBuildError(
       `Skill build for '${ref.name}' reported success but produced no SKILL.md at ${ref.expectedDistDir}. ` +
         `Check the skill's packaging config (\`vat build\` should create this file).`,
@@ -1436,7 +1438,7 @@ function refuseRun(err: unknown): void {
  * `Harness:` is asked of the PATH rather than re-derived from --keep/--out/--workdir:
  * the retention rule has ONE author (cleanupHarness), which runs inside the harness's
  * own `finally` before this result arrives — a run that returns before Step 7 creates
- * `results/` has had its root removed outright. `existsSync` is right here and only
+ * `results/` has had its root removed outright. Swallowing a refused probe is right here and only
  * here: the question is whether a cosmetic line about VAT's own scratch dir is worth
  * printing, and a root the OS refuses to stat is not one worth sending anyone to.
  *
@@ -1446,9 +1448,23 @@ function refuseRun(err: unknown): void {
  * token and survive only under --keep; the harness reports them only then.
  */
 function reportHarnessPaths(result: RunHarnessResult): void {
-  if (existsSync(result.harnessPath)) process.stderr.write(`Harness: ${result.harnessPath}\n`);
+  if (harnessRootPresent(result.harnessPath)) process.stderr.write(`Harness: ${result.harnessPath}\n`);
   if (result.resultsPath !== undefined) process.stderr.write(`Results: ${result.resultsPath}\n`);
   if (result.workspacesPath !== undefined) process.stderr.write(`Workspaces: ${result.workspacesPath}\n`);
+}
+
+/**
+ * Whether VAT's own harness root (a directory this run minted: its own `within`) is still there.
+ * A probe the OS refuses answers "no" — see {@link reportHarnessPaths} for why that, and only
+ * that, is swallowed here; anything but a filesystem fault is a defect and stays loud.
+ */
+function harnessRootPresent(harnessPath: string): boolean {
+  try {
+    return followedKindSync(harnessPath, harnessPath) !== 'absent';
+  } catch (error) {
+    if (fsFaultOf(error) === undefined) throw error;
+    return false;
+  }
 }
 
 /**

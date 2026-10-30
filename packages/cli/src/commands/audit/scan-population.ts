@@ -113,7 +113,7 @@ export function resolveProjectExcludes(scanDir: string, logger: ScanLogger): Exc
 
   let patterns: readonly string[];
   try {
-    patterns = loadConfig(projectRoot)?.resources?.exclude ?? [];
+    patterns = loadConfig(projectRoot, 'source')?.resources?.exclude ?? [];
   } catch (err) {
     // Audit is a bulk linter over trees it does not own; a broken governing
     // config must not abort the scan. `warn`, not `debug`: EVERY

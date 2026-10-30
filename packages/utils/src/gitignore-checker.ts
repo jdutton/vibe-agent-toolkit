@@ -6,12 +6,12 @@
  * Use git-utils.ts for authoritative git commands (gitFindRoot, isGitIgnored, gitLsFiles).
  */
 
-import fs from 'node:fs';
 import path from 'node:path';
 
 import ignore, { type Ignore } from 'ignore';
 
 import { isPathAbsentError } from './errors/errno-table.js';
+import { followedKindSync } from './link-following.js';
 import { safePath , toForwardSlash } from './path-utils.js';
 import { readTextContentSync } from './text-file.js';
 
@@ -50,7 +50,8 @@ export function loadGitignoreRules(gitRoot: string, baseDir?: string): Ignore | 
   // Load .gitignore files from git root down to baseDir
   for (const dir of dirsToCheck) {
     const gitignorePath = safePath.join(dir, '.gitignore');
-    if (fs.existsSync(gitignorePath)) {
+    // Committed content: a `.gitignore` that is a link is read only once its chain beneath the repository is.
+    if (followedKindSync(gitignorePath, resolvedGitRoot) !== 'absent') {
       try {
         // Through the decoding seam. A `.gitignore` written by PowerShell's `>`
         // is UTF-16LE, and `readFileSync(p, 'utf-8')` would hand `ignore` a
@@ -58,7 +59,7 @@ export function loadGitignoreRules(gitRoot: string, baseDir?: string): Ignore | 
         // no error anywhere.
         ig.add(readTextContentSync(gitignorePath).text);
       } catch (error) {
-        // Gone between `existsSync` and the read: no rules here. A `.gitignore`
+        // Gone between the probe and the read: no rules here. A `.gitignore`
         // the OS refuses to read (`EACCES`), or one that is a directory
         // (`EISDIR`), holds rules this checker cannot honour — and a crawl that
         // quietly proceeded without them enumerated the ignored tree with

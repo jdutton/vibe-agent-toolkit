@@ -17,8 +17,6 @@
  * Both sets are config-gated, and both are announced on startup.
  */
 
-import { existsSync, statSync } from 'node:fs';
-
 import {
   detectPackagedAgentInstructionFiles,
   explicitFilesConfigDests,
@@ -34,7 +32,7 @@ import {
   type Report,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { forEachInOrder, isPathAbsentError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { everywhere, followedKindSync, forEachInOrder, isPathAbsentError, pathPresent, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { marksOperandRefusalByHand } from '../command-tree.js';
@@ -47,13 +45,13 @@ import { requireProjectRoot } from '../utils/project-root-policy.js';
 import { runIntegrityFinding } from '../utils/run-integrity.js';
 import { isSkillPublished, mergeSkillPackagingConfig, pluginLocalSkillConfigEntry, publishScope } from '../utils/skill-packaging-config.js';
 
-import { MARKETPLACE_VALIDATE_REPORT_SCHEMA } from './claude/marketplace/validate-schema.js';
+import { MARKETPLACE_VALIDATE_EXAMINED, MARKETPLACE_VALIDATE_REPORT_SCHEMA } from './claude/marketplace/validate-schema.js';
 import { runMarketplaceValidatePhase } from './claude/marketplace/validate.js';
 import {
   runConsistencyChecks,
   type ConsistencyIssue,
 } from './consistency-check.js';
-import { PACKAGED_CONTENT_REPORT_SCHEMA, type PackagedContentData } from './orchestrator-schema.js';
+import { PACKAGED_CONTENT_EXAMINED, PACKAGED_CONTENT_REPORT_SCHEMA, type PackagedContentData } from './orchestrator-schema.js';
 import {
   addRetiredOnlyOption,
   applyPhaseSelection,
@@ -65,18 +63,20 @@ import {
   ORCHESTRATOR_GATE,
   rejectRetiredOnly,
   runPhase,
+  shipsPluginLocalSkills,
+  skillsPhaseExamined,
   type Phase,
-  type PhaseReportSchema,
+  type PhaseExamined,
   type PhaseResult,
   type PhaseSelection,
   type PhaseVocabulary,
 } from './phase-utils.js';
 import { rejectPositionalArguments } from './positional-args.js';
-import { RESOURCES_VALIDATE_REPORT_SCHEMA } from './resources/validate-schema.js';
+import { RESOURCES_VALIDATE_EXAMINED, RESOURCES_VALIDATE_REPORT_SCHEMA } from './resources/validate-schema.js';
 import { runResourcesValidatePhase } from './resources/validate.js';
 import type { DiscoveredSkill } from './skills/command-helpers.js';
 import { discoverSkillsFromConfig, readPluginLocalSkillNames, type PluginLocalSkillNames } from './skills/skill-discovery.js';
-import { SKILLS_VALIDATE_REPORT_SCHEMA } from './skills/validate-schema.js';
+import { SKILLS_VALIDATE_EXAMINED, SKILLS_VALIDATE_REPORT_SCHEMA } from './skills/validate-schema.js';
 import { runSkillsValidatePhase } from './skills/validate.js';
 
 export interface VerifyCommandOptions {
@@ -169,7 +169,8 @@ Output:
 
 Exit Codes:
   0 - Every phase finished and no finding is an error (warnings never fail)
-  1 - An error finding, or nothing was examined at all (RESOURCE_CHECK_BROKEN)
+  1 - An error finding, or a configured phase examined nothing — an include
+      that matches no file, say (RESOURCE_CHECK_BROKEN, naming the phase's unit)
   2 - The run could not do its job: a phase did not finish (RUN_INCOMPLETE,
       the finished phases still in data.phases), a path argument or the
       retired '--only' (USAGE_INVALID), no project root, a population it
@@ -264,9 +265,10 @@ interface BuiltSkillOutputs {
  * refused `dist/skills/x` as missing would name it under `missing` with a
  * remedy ("run vat build") that cannot help.
  */
-function isDirectory(dir: string): boolean {
+function isDirectory(dir: string, within: string): boolean {
   try {
-    return statSync(dir).isDirectory();
+    // Beneath the project root: every link on the way is read before the kernel follows it.
+    return followedKindSync(dir, within) === 'directory';
   } catch (error) {
     if (isPathAbsentError(error)) return false;
     throw error;
@@ -297,7 +299,7 @@ function addCheckCandidate(
   const key = `${candidate.skillName}\0${candidate.outputDir}`;
   if (seen.has(key)) return;
   seen.add(key);
-  const exists = isDirectory(candidate.outputDir);
+  const exists = isDirectory(candidate.outputDir, cwd);
   if (exists) outputs.built.push(candidate);
   if (!expected) return;
   outputs.expected += 1;
@@ -363,7 +365,7 @@ function collectBuiltSkillOutputs(
   // used to wrap this whole body could only ever absorb a DEFECT — and it
   // absorbed it into an empty candidate list, which every phase below then
   // verified against: zero bundles, zero findings, exit 0.
-  const config = loadConfig(cwd);
+  const config = loadConfig(cwd, 'source');
   if (!config) return outputs;
 
   const skillsConfig = config.skills;
@@ -428,7 +430,7 @@ function collectBuiltSkillOutputs(
  * with no existing candidate dir is not reported (the build did not run for that
  * mode) — the packaged-content phase names the unbuilt bundles.
  */
-function checkFilesConfigDestsOf(built: readonly CheckEntry[]): { checked: number; missing: MissingDests[] } {
+function checkFilesConfigDestsOf(built: readonly CheckEntry[], projectRoot: string): { checked: number; missing: MissingDests[] } {
   const results: MissingDests[] = [];
   let checked = 0;
   for (const check of built) {
@@ -439,7 +441,8 @@ function checkFilesConfigDestsOf(built: readonly CheckEntry[]): { checked: numbe
     const missing: string[] = [];
     for (const entry of mergedFiles) {
       const destPath = safePath.resolve(outputDir, entry.dest);
-      if (!existsSync(destPath)) {
+      // A probe the OS refuses is the bundle's source fault, never "missing" (a remedy that cannot help).
+      if (!pathPresent(destPath, { follow: projectRoot }, everywhere('source'), 'probe')) {
         missing.push(entry.dest);
       }
     }
@@ -553,7 +556,7 @@ export interface PackagedContentCrawl {
  */
 function loadConfigTolerant(cwd: string): { config: ProjectConfig | undefined; error?: string } {
   try {
-    return { config: loadConfig(cwd) };
+    return { config: loadConfig(cwd, 'source') };
   } catch (error) {
     return { config: undefined, error: error instanceof Error ? error.message : String(error) };
   }
@@ -676,6 +679,7 @@ export function selectVerifyPhases(
     phases.push({
       name: 'resources',
       schema: RESOURCES_VALIDATE_REPORT_SCHEMA,
+      examined: RESOURCES_VALIDATE_EXAMINED,
       run: () => runResourcesValidatePhase(undefined, { verbose: detail }),
     });
   }
@@ -684,6 +688,8 @@ export function selectVerifyPhases(
     phases.push({
       name: 'skills',
       schema: SKILLS_VALIDATE_REPORT_SCHEMA,
+      // As `vat validate`: the phase validates the pool, and a plugin-local project has none.
+      examined: skillsPhaseExamined(SKILLS_VALIDATE_EXAMINED, () => shipsPluginLocalSkills(config, process.cwd())),
       run: () => runSkillsValidatePhase(undefined, { verbose: detail }),
     });
   }
@@ -696,6 +702,9 @@ export function selectVerifyPhases(
     phases.push({
       name: `marketplace:${name}`,
       schema: MARKETPLACE_VALIDATE_REPORT_SCHEMA,
+      // The verb's declaration, its unit naming WHICH marketplace: this phase runs once per marketplace,
+      // and two that examined nothing would otherwise publish one location-less finding twice.
+      examined: { ...MARKETPLACE_VALIDATE_EXAMINED, unit: `${MARKETPLACE_VALIDATE_EXAMINED.unit} of marketplace ${name}` },
       run: () => runMarketplaceValidatePhase(marketplacePath, { verbose: detail }),
     });
   }
@@ -788,16 +797,23 @@ function missingBundlesFinding(crawl: PackagedContentCrawl): readonly Validation
   )];
 }
 
-/** The refusal for a crawl that found no bundle at all where one was expected. */
-function noBundleFinding(): ValidationIssue {
-  return runIntegrityFinding(
-    'The packaged-content phase inspected 0 built skill bundles, so this phase is not a'
-    + ' verdict: nothing was crawled for files that must not ship, and the document reads'
-    + ' the same as a run over clean bundles. Either `vat build` has not run (or wrote'
-    + ' somewhere other than dist/), or `skills.include` in vibe-agent-toolkit.config.yaml'
-    + ' matched no SKILL.md — usually a typo in the glob. Run `vat build` first; `vat skills'
-    + ' validate` lists what the globs discover.',
-  );
+/**
+ * What a zero means for the `packaged-content` phase, read from its own `data`: nothing expected
+ * because every discovered skill is in place (`bundlesInPlace > 0`) IS a verdict; anything else
+ * is the zero every phase refuses, by {@link PACKAGED_CONTENT_EXAMINED}.
+ *
+ * The phase's `examined` declaration (`Phase.examined`): `runPhase` judges the phase with it
+ * through the one zero-examined helper, so this phase holds no refusal of its own for "crawled
+ * nothing" — only the one for "crawled part" ({@link missingBundlesFinding}).
+ *
+ * Pure, and exported so the refusal is pinned without a project on disk.
+ */
+function packagedContentExamined(report: Report<unknown>): PhaseExamined {
+  const data = report.data as PackagedContentData | null;
+  if (data !== null && data.bundlesExpected === 0 && data.bundlesInPlace > 0) {
+    return { zeroIsAnAnswer: 'every discovered skill is in place (publish: false), so no built bundle is expected' };
+  }
+  return PACKAGED_CONTENT_EXAMINED;
 }
 
 /**
@@ -805,27 +821,22 @@ function noBundleFinding(): ValidationIssue {
  *
  * 🚨 **Zero bundles is an ERROR, not a clean phase — and so is a MISSING one.**
  * `vat verify` exists to check the BUILT tree; a run that found none of it is
- * not a verdict on it, and neither is a run that found half of it. This phase
- * refuses both itself, with the specific cause, rather than leaving it to the
- * writer's zero-examined pass — which judges the whole run's sum, and the skills
- * phase beside this one always examined something. One `RESOURCE_CHECK_BROKEN`
- * at `error`, never two: the missing-bundle refusal names paths, so it wins.
+ * not a verdict on it, and neither is a run that found half of it. A crawl that
+ * found PART is refused here, naming the missing paths; one that found NONE is
+ * refused by `runPhase`, through the declaration {@link packagedContentExamined}
+ * answers — the same helper every phase's zero goes through. One
+ * `RESOURCE_CHECK_BROKEN` at `error`, never two: the helper stands down when the
+ * missing-bundle refusal is already there.
  *
- * One zero IS a verdict: nothing expected because every discovered skill is in
- * place (`bundlesInPlace > 0`). Zero discovered skills stays refused.
- *
- * Pure, and exported so the refusal is pinned without a project on disk.
+ * Pure, and exported so the phase is pinned without a project on disk.
  */
 export function buildPackagedContentPhase(crawl: PackagedContentCrawl): PackagedContentPhaseResult {
   const { issues: found, bundlesInspected, ...data } = crawl;
-  const missing = missingBundlesFinding(crawl);
-  const accountedFor = data.bundlesExpected === 0 ? bundlesInspected + data.bundlesInPlace : bundlesInspected;
-  const nothing = accountedFor === 0 && missing.length === 0 ? [noBundleFinding()] : [];
   return {
     name: PACKAGED_CONTENT,
     report: buildReport({
       examined: bundlesInspected,
-      findings: toFindings([...missing, ...nothing, ...found]),
+      findings: toFindings([...missingBundlesFinding(crawl), ...found]),
       data,
       gate: ORCHESTRATOR_GATE,
     }),
@@ -892,7 +903,7 @@ export function runFilesConfigDestsPhase(
   logger: ReturnType<typeof createLogger>,
 ): PhaseResult {
   const built = collectBuiltSkillOutputs(projectRoot, discovered, pluginLocal, pluginLocalNames).built;
-  const { checked, missing } = checkFilesConfigDestsOf(built);
+  const { checked, missing } = checkFilesConfigDestsOf(built, projectRoot);
   if (missing.length > 0) reportFilesDestErrors(missing, logger);
   return {
     name: FILES_CONFIG_DESTS,
@@ -929,9 +940,28 @@ function runConsistencyPhase(
  * `package.json` the OS will not read, coded `INPUT_UNREADABLE` — becomes THAT
  * phase's refusal with its own code, and the phases that finished still publish.
  */
-function inProcess(name: string, schema: PhaseReportSchema, run: () => PhaseResult): Promise<PhaseResult> {
-  return runPhase({ name, schema, run: () => Promise.resolve({ report: run().report }) });
+function inProcess(phase: Pick<Phase, 'name' | 'schema' | 'examined'>, run: () => PhaseResult): Promise<PhaseResult> {
+  return runPhase({ ...phase, run: () => Promise.resolve({ report: run().report }) });
 }
+
+/**
+ * The three in-process phases, each with the schema its report is held to and what a zero means
+ * for it. Two check what the `skills` phase beside them discovered — it is that phase that refuses
+ * a discovery of none — and for them a zero of their own is an answer.
+ */
+export const IN_PROCESS_PHASES = {
+  [FILES_CONFIG_DESTS]: {
+    name: FILES_CONFIG_DESTS,
+    schema: DATALESS_PHASE_REPORT_SCHEMA,
+    examined: { zeroIsAnAnswer: 'it checks the built bundles that declare a files: dest, and a project that declares none has nothing for it to check' },
+  },
+  [PACKAGED_CONTENT]: { name: PACKAGED_CONTENT, schema: PACKAGED_CONTENT_REPORT_SCHEMA, examined: packagedContentExamined },
+  consistency: {
+    name: 'consistency',
+    schema: DATALESS_PHASE_REPORT_SCHEMA,
+    examined: { zeroIsAnAnswer: 'it checks the skills the `skills` phase discovered, and that phase refuses a discovery of none' },
+  },
+} as const satisfies Readonly<Record<InProcessPhaseName, Pick<Phase, 'name' | 'schema' | 'examined'>>>;
 
 /**
  * The in-process half of `vat verify`: `files-config-dests`, `packaged-content` and
@@ -958,15 +988,15 @@ async function runInProcessPhases(run: {
   const pluginLocalNames = await readPluginLocalSkillNames(pluginLocal);
 
   if (phases.includes(FILES_CONFIG_DESTS)) {
-    results.push(await inProcess(FILES_CONFIG_DESTS, DATALESS_PHASE_REPORT_SCHEMA, () =>
+    results.push(await inProcess(IN_PROCESS_PHASES[FILES_CONFIG_DESTS], () =>
       runFilesConfigDestsPhase(projectRoot, discoveredSkills, pluginLocal, pluginLocalNames, logger)));
   }
   if (phases.includes(PACKAGED_CONTENT)) {
-    results.push(await inProcess(PACKAGED_CONTENT, PACKAGED_CONTENT_REPORT_SCHEMA, () =>
+    results.push(await inProcess(IN_PROCESS_PHASES[PACKAGED_CONTENT], () =>
       runPackagedContentPhase(projectRoot, discoveredSkills, pluginLocal, pluginLocalNames, logger)));
   }
   if (phases.includes('consistency')) {
-    results.push(await inProcess('consistency', DATALESS_PHASE_REPORT_SCHEMA, () =>
+    results.push(await inProcess(IN_PROCESS_PHASES.consistency, () =>
       runConsistencyPhase(logger, config, projectRoot, discoveredSkills, pluginLocal)));
   }
 }

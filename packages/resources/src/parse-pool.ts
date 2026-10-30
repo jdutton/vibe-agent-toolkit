@@ -89,10 +89,11 @@
  */
 
 import { once } from 'node:events';
-import { existsSync } from 'node:fs';
 import { availableParallelism } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
+
+import { followedKindSync } from '@vibe-agent-toolkit/utils';
 
 import { parseFrontmatterSource } from './frontmatter-source.js';
 import type { ParseResult } from './link-parser.js';
@@ -469,7 +470,8 @@ function resolveWorkerEntry(): string {
   const candidates = ['./parse-worker.js', '../dist/parse-worker.js'].map((specifier) =>
     fileURLToPath(new URL(specifier, import.meta.url)),
   );
-  const found = candidates.find((candidate) => existsSync(candidate));
+  // VAT's OWN installed files, never a crawled path: each candidate is its own `within` (`link-following.ts`).
+  const found = candidates.find((candidate) => followedKindSync(candidate, candidate) !== 'absent');
   if (found === undefined) {
     throw new Error(
       `Cannot locate VAT's parse worker. Looked for ${candidates.join(' and ')}. ` +

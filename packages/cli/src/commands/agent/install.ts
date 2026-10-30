@@ -7,7 +7,7 @@ import path from 'node:path';
 
 import { loadAgentManifest } from '@vibe-agent-toolkit/agent-config';
 import { buildReport, toFindings, type Gate } from '@vibe-agent-toolkit/schema';
-import { applyTreePlan, classifyFsFault, isPathAbsentError, pathPresent, planTreeChanges, safePath } from '@vibe-agent-toolkit/utils';
+import { applyTreePlan, classifyFsFault, everywhere, isPathAbsentError, pathPresent, planTreeChanges, safePath } from '@vibe-agent-toolkit/utils';
 
 import { resolveAgentPath } from '../../utils/agent-discovery.js';
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
@@ -143,7 +143,7 @@ async function findBuiltSkill(
   );
 
   // Only an absence is "not built"; a probe the OS refuses is its own INPUT_UNREADABLE.
-  if (!pathPresent(builtPath, 'follow', 'source', 'probe')) {
+  if (!pathPresent(builtPath, { follow: packageRoot }, everywhere('source'), 'probe')) {
     throw new CommandRefusalError(
       'INPUT_UNREADABLE',
       `Built skill not found at ${builtPath}\n` +

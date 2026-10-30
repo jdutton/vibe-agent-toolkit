@@ -8,7 +8,20 @@ import {
   type ValidationConfig,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, forEachInOrder, isPathAbsentError, issueLocation, relativeEscapesRoot, safePath } from '@vibe-agent-toolkit/utils';
+import {
+  everywhere,
+  findProjectRoot,
+  followedKindSync,
+  type FollowedPathKind,
+  forEachInOrder,
+  type FsFaultFacts,
+  isPathAbsentError,
+  issueLocation,
+  linkResolutionFault,
+  pathPresent,
+  relativeEscapesRoot,
+  safePath,
+} from '@vibe-agent-toolkit/utils';
 
 
 import type { EvidenceRecord } from '../evidence/index.js';
@@ -49,8 +62,9 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   const issues: ValidationIssue[] = [];
   const allEvidence: EvidenceRecord[] = [];
 
-  // Validate file exists
-  if (!fs.existsSync(skillPath)) {
+  // Validate file exists. The skill's directory is the tree: the SKILL.md entry's link chain is read
+  // by text before the kernel follows it, and a refused probe is the caller's side's fault — never "does not exist".
+  if (!pathPresent(skillPath, { follow: dirname(skillPath) }, everywhere(options.side), 'probe')) {
     issues.push({
       severity: 'error',
       code: 'SKILL_MISSING_FRONTMATTER',
@@ -191,13 +205,18 @@ function isExemptFromUnreferencedCheck(fileName: string): boolean {
 }
 
 /**
- * Whether `path` (followed through links) is neither a regular file nor a
- * directory. Asked only after `existsSync` said the path is there; one gone in
- * between answers `false`, and the parse that follows reports it.
+ * What a link target resolves to, beneath the skill directory `within`: its link chain is read by
+ * text before the kernel follows it. A probe the OS refused, or a chain VAT will not hand the kernel
+ * (a link to a network or device path), is that ONE target's fault — returned for the caller to
+ * report, never read as "not found" and never the end of the walk.
  */
-function isSpecialFile(path: string): boolean {
-  const stats = fs.statSync(path, { throwIfNoEntry: false });
-  return stats !== undefined && !stats.isFile() && !stats.isDirectory();
+function linkTargetKind(target: string, within: string): { kind: FollowedPathKind; fault: FsFaultFacts | undefined } {
+  try {
+    return { kind: followedKindSync(target, within), fault: undefined };
+  } catch (error) {
+    const fault = linkResolutionFault(error);
+    return { kind: 'absent', fault };
+  }
 }
 
 /**
@@ -231,7 +250,20 @@ function validateLocalLink(
   // broken link (error), not be silently swallowed as a boundary warning.
   // LINK_OUTSIDE_SKILL_DIR (below) only applies when the target actually
   // exists outside the boundary.
-  if (!fs.existsSync(resolvedPath)) {
+  // A target VAT could not check: reported, never bundled, never parsed.
+  const unreadable = (why: string): { status: 'broken'; resolvedPath: string } => {
+    issues.push(createRegistryIssue('LINK_TARGET_UNREADABLE', `${why}: ${link.href}`, {
+      location: issueLocation(currentPath, locationRoot),
+      ...(link.line !== undefined && { line: link.line }),
+      link: link.href,
+    }));
+    return { status: 'broken', resolvedPath };
+  };
+  const { kind, fault } = linkTargetKind(resolvedPath, skillDir);
+  if (fault !== undefined) {
+    return unreadable(`Link target could not be examined (${fault.errno}), so it has not been checked`);
+  }
+  if (kind === 'absent') {
     issues.push({
       severity: 'error',
       code: 'LINK_INTEGRITY_BROKEN',
@@ -248,17 +280,8 @@ function validateLocalLink(
   // a pipe blocks until a writer appears — so it is refused here, before the walk
   // would parse it or the packager copy it (a non-markdown one used to be dropped
   // from the bundle silently, leaving the packaged link dangling).
-  if (isSpecialFile(resolvedPath)) {
-    issues.push(createRegistryIssue(
-      'LINK_TARGET_UNREADABLE',
-      `Link target is not a regular file (a named pipe, socket or device), so it has no content to check or bundle: ${link.href}`,
-      {
-        location: issueLocation(currentPath, locationRoot),
-        ...(link.line !== undefined && { line: link.line }),
-        link: link.href,
-      },
-    ));
-    return { status: 'broken', resolvedPath };
+  if (kind === 'other') {
+    return unreadable('Link target is not a regular file (a named pipe, socket or device), so it has no content to check or bundle');
   }
 
   if (escapesBoundary) {

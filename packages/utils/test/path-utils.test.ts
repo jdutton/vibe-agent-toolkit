@@ -11,7 +11,6 @@ import {
   isAbsoluteAnyPlatform,
   isAbsolutePath,
   isSingleFsSegment,
-  normalizePath,
   relativeEscapesRoot,
   resolveFromImportMeta,
   safePath,
@@ -29,42 +28,6 @@ const BACKSLASH_IS_SEPARATOR = path.sep === '\\';
 describe('path-utils', () => {
   const TEST_PROJECT_PATH = '/project';
   const TEST_DOCS_README = './docs/README.md';
-  const TEST_DOCS_PATH = './docs';
-
-  describe('normalizePath', () => {
-    it('should normalize a simple relative path', () => {
-      const result = normalizePath(TEST_DOCS_README);
-      expect(result).toBe(path.normalize(TEST_DOCS_README));
-    });
-
-    it('should resolve relative path with baseDir', () => {
-      const result = normalizePath(TEST_DOCS_README, TEST_PROJECT_PATH);
-      expect(result).toBe(path.resolve(TEST_PROJECT_PATH, TEST_DOCS_README));
-    });
-
-    it('should resolve parent directory references', () => {
-      const result = normalizePath('./docs/../README.md', TEST_PROJECT_PATH);
-      expect(result).toBe(path.resolve(TEST_PROJECT_PATH, 'README.md'));
-    });
-
-    it('should remove trailing slashes', () => {
-      const result = normalizePath(`${TEST_PROJECT_PATH}/docs/`, '/base');
-      expect(result).not.toMatch(/[/\\]$/);
-    });
-
-    it('should handle absolute paths without baseDir', () => {
-      const absolutePath = path.resolve(`${TEST_PROJECT_PATH}/docs/README.md`);
-      const result = normalizePath(absolutePath);
-      expect(result).toBe(absolutePath);
-    });
-
-    it('should normalize mixed separators on Windows', () => {
-      // This test behavior depends on platform but should always return consistent separators
-      const result = normalizePath(String.raw`${TEST_DOCS_PATH}\README.md`);
-      expect(result).toBeTruthy();
-      expect(typeof result).toBe('string');
-    });
-  });
 
   describe('isAbsolutePath', () => {
     it('should return true for Unix absolute paths', () => {
@@ -318,7 +281,7 @@ describe('path-utils', () => {
 
   describe('cross-platform behavior', () => {
     it('should handle paths consistently across platforms', () => {
-      const normalized = normalizePath('./docs/README.md', '/base');
+      const normalized = toAbsolutePath(TEST_DOCS_README, TEST_PROJECT_PATH);
       expect(path.isAbsolute(normalized)).toBe(true);
 
       const absolute = toAbsolutePath('./file.md', normalized);

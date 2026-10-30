@@ -109,6 +109,7 @@ const PROBE_FILES: Readonly<Record<string, string>> = {
   // Scoped to `packages/*/src/**` with a shrink-only `allowFiles` ratchet; the probe
   // asks `pathPresent`, so it is NOT on the list.
   'no-existssync': 'packages/claude-marketplace/src/inventory/extract-plugin.ts',
+  'no-link-following-fs': 'packages/agent-skills/src/walk-link-graph.ts',
   // The exit-code contract, declared repo-wide with no ratchet of product code
   // (its `allow` names three example scripts that are not vat verbs).
   'no-literal-process-exit': REPO_WIDE_PROBE,

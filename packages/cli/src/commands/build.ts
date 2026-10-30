@@ -6,7 +6,6 @@
  *   2. vat claude plugin build (Claude plugin tree, skipped if no claude config)
  */
 
-import { existsSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 
 import { checkBrokenPackagedLinks } from '@vibe-agent-toolkit/agent-skills';
@@ -18,7 +17,7 @@ import {
   type Report,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowing, everyInOrder, findConfigFile, mapConcurrentFailingInOrder, mapInOrder, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, everyInOrder, everywhere, findConfigFile, mapConcurrentFailingInOrder, mapInOrder, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { marksOperandRefusalByHand } from '../command-tree.js';
@@ -27,7 +26,7 @@ import { endWithReport } from '../utils/document-writer.js';
 import { formatIssueLines } from '../utils/issue-rendering.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
 
-import { PLUGIN_BUILD_REPORT_SCHEMA } from './claude/plugin/build-schema.js';
+import { PLUGIN_BUILD_EXAMINED, PLUGIN_BUILD_REPORT_SCHEMA } from './claude/plugin/build-schema.js';
 import { pluginBuildOutput, runClaudePluginBuildPhase } from './claude/plugin/build.js';
 import {
   applyPhaseSelection,
@@ -38,13 +37,15 @@ import {
   ORCHESTRATOR_FORMAT,
   ORCHESTRATOR_GATE,
   runPhase,
+  shipsPluginLocalSkills,
+  skillsPhaseExamined,
   type Phase,
   type PhaseResult,
   type PhaseSelection,
   type PhaseVocabulary,
 } from './phase-utils.js';
 import { rejectPositionalArguments } from './positional-args.js';
-import { SKILLS_BUILD_REPORT_SCHEMA } from './skills/build-schema.js';
+import { SKILLS_BUILD_EXAMINED, SKILLS_BUILD_REPORT_SCHEMA } from './skills/build-schema.js';
 import { distSkillsDir, runSkillsBuildPhase } from './skills/build.js';
 
 export interface BuildCommandOptions {
@@ -104,7 +105,8 @@ Output:
 
 Exit Codes:
   0 - Every phase finished and no finding is an error (warnings never fail)
-  1 - An error finding, or nothing was examined at all (RESOURCE_CHECK_BROKEN)
+  1 - An error finding, or a configured phase examined nothing — an include
+      that matches no file, say (RESOURCE_CHECK_BROKEN, naming the phase's unit)
   2 - The run could not do its job: a phase did not finish (RUN_INCOMPLETE,
       the finished phases still in data.phases), '--only' naming an unknown or
       unconfigured phase, a path argument (USAGE_INVALID), no project root
@@ -126,8 +128,8 @@ Example:
 }
 
 /**
- * Check whether the current project has a claude.marketplaces config.
- * Returns false if no config file found or no claude section.
+ * Which build surfaces the current project's config declares: a `skills:` block,
+ * and a `claude.marketplaces` entry. Neither when no config file is found.
  *
  * A config that EXISTS and cannot be loaded throws (`ConfigLoadError`), and
  * that is left to `buildCommand`'s own catch, which publishes it as the
@@ -135,9 +137,23 @@ Example:
  * unreadable config announced a build with no claude phase, and `--only claude`
  * on it was refused as "not configured", which was not the problem.
  */
-function hasClaudeMarketplacesConfig(cwd: string): boolean {
-  const config = loadConfig(cwd);
-  return Boolean(config?.claude?.marketplaces && Object.keys(config.claude.marketplaces).length > 0);
+export function configuredBuildSurfaces(cwd: string): ConfiguredBuildSurfaces {
+  const config = loadConfig(cwd, 'destination');
+  return {
+    skills: config?.skills !== undefined,
+    claudeMarketplaces: Boolean(config?.claude?.marketplaces && Object.keys(config.claude.marketplaces).length > 0),
+    pluginLocalSkills: () => shipsPluginLocalSkills(config, cwd),
+  };
+}
+
+/** Which of the two build surfaces the project's config declares. */
+export interface ConfiguredBuildSurfaces {
+  /** A `skills:` block: the pool the `skills` phase builds. */
+  readonly skills: boolean;
+  /** At least one `claude.marketplaces` entry: what the `claude` phase builds. */
+  readonly claudeMarketplaces: boolean;
+  /** Whether the project ships a plugin-local skill; asked only when the `skills` phase built nothing (it lists the plugins). */
+  readonly pluginLocalSkills: () => boolean;
 }
 
 // Skill directories shipped inside a built plugin tree — every
@@ -146,7 +162,9 @@ function hasClaudeMarketplacesConfig(cwd: string): boolean {
 // pool import or verbatim tree-copy.
 async function collectShippedSkillDirs(marketplacesDir: string): Promise<string[]> {
   const skillDirs: string[] = [];
-  if (!existsSync(marketplacesDir)) {
+  // The tree the run itself built: every probe beneath it reads its links first (`within` is the
+  // marketplaces root), and a probe the OS refuses is a destination fault, never "nothing shipped".
+  if (!shippedPresent(marketplacesDir, marketplacesDir)) {
     return skillDirs;
   }
 
@@ -154,34 +172,39 @@ async function collectShippedSkillDirs(marketplacesDir: string): Promise<string[
   // multiply it, so the outer levels walk in listing order.
   const marketplaceEntries = await readdir(marketplacesDir, { withFileTypes: true });
   const perMarketplace = await mapInOrder(marketplaceEntries, async (marketplaceEntry) => {
-    if ((await direntKindFollowing(marketplacesDir, marketplaceEntry)) !== 'directory') return [];
+    if ((await direntKindFollowing(marketplacesDir, marketplaceEntry, marketplacesDir)) !== 'directory') return [];
     const pluginsDir = safePath.join(marketplacesDir, marketplaceEntry.name, 'plugins');
-    if (!existsSync(pluginsDir)) return [];
-    return collectPluginSkillDirs(pluginsDir);
+    if (!shippedPresent(pluginsDir, marketplacesDir)) return [];
+    return collectPluginSkillDirs(pluginsDir, marketplacesDir);
   });
   skillDirs.push(...perMarketplace.flat());
 
   return skillDirs;
 }
 
-async function collectPluginSkillDirs(pluginsDir: string): Promise<string[]> {
+/** Whether `path` (in the shipped tree under `within`) resolves to something: see {@link collectShippedSkillDirs}. */
+function shippedPresent(path: string, within: string): boolean {
+  return pathPresent(path, { follow: within }, everywhere('destination'), 'confirmed');
+}
+
+async function collectPluginSkillDirs(pluginsDir: string, within: string): Promise<string[]> {
   const pluginEntries = await readdir(pluginsDir, { withFileTypes: true });
   const perPlugin = await mapInOrder(pluginEntries, async (pluginEntry) => {
-    if ((await direntKindFollowing(pluginsDir, pluginEntry)) !== 'directory') return [];
+    if ((await direntKindFollowing(pluginsDir, pluginEntry, within)) !== 'directory') return [];
     const skillsDir = safePath.join(pluginsDir, pluginEntry.name, 'skills');
-    if (!existsSync(skillsDir)) return [];
-    return collectSkillsInDir(skillsDir);
+    if (!shippedPresent(skillsDir, within)) return [];
+    return collectSkillsInDir(skillsDir, within);
   });
   return perPlugin.flat();
 }
 
-async function collectSkillsInDir(skillsDir: string): Promise<string[]> {
+async function collectSkillsInDir(skillsDir: string, within: string): Promise<string[]> {
   const skillEntries = await readdir(skillsDir, { withFileTypes: true });
   const perSkill = await mapConcurrentFailingInOrder(skillEntries, async (skillEntry) => {
     // Followed: a symlinked skill directory (a dev install) ships like any other.
-    if ((await direntKindFollowing(skillsDir, skillEntry)) !== 'directory') return [];
+    if ((await direntKindFollowing(skillsDir, skillEntry, within)) !== 'directory') return [];
     const skillDir = safePath.join(skillsDir, skillEntry.name);
-    return existsSync(safePath.join(skillDir, 'SKILL.md')) ? [skillDir] : [];
+    return shippedPresent(safePath.join(skillDir, 'SKILL.md'), within) ? [skillDir] : [];
   });
   return perSkill.flat();
 }
@@ -222,10 +245,11 @@ export async function checkShippedPluginSkillLinks(cwd: string): Promise<Report<
  * refusal with the finished phases still published, and its report is held to
  * its schema.
  */
-function shippedLinksPhase(cwd: string): Phase {
+export function shippedLinksPhase(cwd: string): Phase {
   return {
     name: SHIPPED_LINKS,
     schema: DATALESS_PHASE_REPORT_SCHEMA,
+    examined: { zeroIsAnAnswer: 'it checks the skills the built plugins ship, and a build whose plugins ship none has no link to check' },
     run: async () => ({ report: await checkShippedPluginSkillLinks(cwd) }),
   };
 }
@@ -252,9 +276,10 @@ const BUILD_VOCABULARY: PhaseVocabulary = {
  */
 export function selectBuildPhases(
   only: string | undefined,
-  hasClaudeMarketplaces: boolean,
+  configured: ConfiguredBuildSurfaces,
   verbose = false,
 ): PhaseSelection {
+  const hasClaudeMarketplaces = configured.claudeMarketplaces;
   const phases: Phase[] = [];
   // A flag not forwarded here is a flag the composite command silently cannot
   // express: `vat build` would always get the collapsed report with no way to
@@ -266,14 +291,24 @@ export function selectBuildPhases(
     // directory holding the config the claude phase loads (it finds it the same way), not the cwd.
     const configPath = findConfigFile(process.cwd());
     const runOutputs = buildsClaude ? [pluginBuildOutput(configPath === null ? process.cwd() : safePath.resolve(configPath, '..'))] : [];
-    phases.push({ name: 'skills', schema: SKILLS_BUILD_REPORT_SCHEMA, run: () => runSkillsBuildPhase(undefined, { verbose }, runOutputs) });
+    phases.push({
+      name: 'skills',
+      schema: SKILLS_BUILD_REPORT_SCHEMA,
+      // The phase runs whether or not the project has a pool. Without a `skills:` block there is no
+      // pool to build; with one, building none is the refusal `vat skills build` gives alone — unless
+      // the project ships plugin-local skills, whose config the block carries (`skillsPhaseExamined`).
+      examined: configured.skills
+        ? skillsPhaseExamined(SKILLS_BUILD_EXAMINED, configured.pluginLocalSkills)
+        : { zeroIsAnAnswer: 'the config declares no skills: block, so there is no skill pool to build' },
+      run: () => runSkillsBuildPhase(undefined, { verbose }, runOutputs),
+    });
   }
 
   if (buildsClaude) {
     // What this run wrote before the claude phase reads it: the skills phase's `dist/skills`, so a
     // fault there is the run's own output (`destination`), not an input another build wrote.
     const runOutputs = buildsSkills ? [distSkillsDir(process.cwd())] : [];
-    phases.push({ name: 'claude', schema: PLUGIN_BUILD_REPORT_SCHEMA, run: () => runClaudePluginBuildPhase({ verbose }, runOutputs) });
+    phases.push({ name: 'claude', schema: PLUGIN_BUILD_REPORT_SCHEMA, examined: PLUGIN_BUILD_EXAMINED, run: () => runClaudePluginBuildPhase({ verbose }, runOutputs) });
   }
 
   return decidePhaseSelection(only, phases, BUILD_VOCABULARY);
@@ -305,7 +340,7 @@ async function buildTopLevelCommand(
     // Spec §7: `vat build` requires a projectRoot.
     requireProjectRoot(cwd, 'vat build');
     const phases = applyPhaseSelection(
-      selectBuildPhases(options.only, hasClaudeMarketplacesConfig(cwd), options.verbose === true),
+      selectBuildPhases(options.only, configuredBuildSurfaces(cwd), options.verbose === true),
       logger,
     );
 

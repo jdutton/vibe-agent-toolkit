@@ -10,12 +10,8 @@ import { chmodSync } from 'node:fs';
 
 
 import { createSymlink, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
-import { CANNOT_DENY_READS, resolveExecutable } from '@vibe-agent-toolkit/utils/testing';
-import AdmZip from 'adm-zip';
-import * as tar from 'tar';
+import { archiveEntriesOfDirectory, CANNOT_DENY_READS, resolveExecutable, tarFixture, zipFixture } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
-
-import { tarballOf } from '../helpers/tarball.js';
 
 import {
   createTempDirTracker,
@@ -228,7 +224,7 @@ describe('claude plugin install command (system test)', () => {
 
     // Create tarball in npm pack format: all files under package/ prefix
     const tgzPath = safePath.join(tempDir, 'my-pkg-1.0.0.tgz');
-    await tar.create({ gzip: true, file: tgzPath, cwd: projectDir, prefix: 'package' }, ['.']);
+    fs.writeFileSync(tgzPath, tarFixture(archiveEntriesOfDirectory(projectDir, 'package/')));
 
     await runPluginInstall(binPath, tgzPath, fakeHome);
     expect(
@@ -321,7 +317,7 @@ describe('claude plugin install command (system test)', () => {
     expect(fs.existsSync(safePath.join(claudeDir, 'skills', 'docs'))).toBe(false);
   });
 
-  // `new AdmZip()` threw uncoded (INTERNAL_ERROR) — and only AFTER --force had removed the skill
+  // Opening the archive threw uncoded (INTERNAL_ERROR) — and only AFTER --force had removed the skill
   // it was about to replace.
   it('refuses a .zip that is not a zip as INPUT_UNREADABLE, naming it, and keeps the skill --force would replace', async () => {
     const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
@@ -338,13 +334,11 @@ describe('claude plugin install command (system test)', () => {
     expect(fs.readFileSync(existing, 'utf-8')).toBe('# keep me\n');
   });
 
-  // adm-zip reads only the central directory when it opens an archive; entry data is inflated
-  // in `extractAllTo` — which ran AFTER --force had removed the skill, and threw uncoded.
+  // Only the central directory is read when an archive is opened; entry data is inflated as it is
+  // extracted — which ran AFTER --force had removed the skill, and threw uncoded.
   it('refuses a .zip whose entry data is corrupt as INPUT_UNREADABLE, and keeps the skill --force would replace', async () => {
     const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
-    const zip = new AdmZip();
-    zip.addFile('SKILL.md', Buffer.from('# crc\n'.repeat(200)));
-    const bytes = zip.toBuffer();
+    const bytes = zipFixture([{ name: 'SKILL.md', data: '# crc\n'.repeat(200) }]);
     // Inside the first entry's data: past its 30-byte local header and its name.
     const dataStart = 30 + bytes.readUInt16LE(26) + bytes.readUInt16LE(28);
     for (const offset of [dataStart + 2, dataStart + 3]) bytes[offset] = (bytes[offset] ?? 0) ^ 0xff;
@@ -380,15 +374,12 @@ describe('claude plugin install command (system test)', () => {
     }
   });
 
-  // The pre-read inflates every entry, but a file `a` beside a file `a/b` fails only at
-  // EXTRACTION — which ran in place, after --force had removed the skill being replaced.
+  // Every entry inflates, but a file `a` beside a file `a/b` cannot be extracted — which once ran
+  // in place, after --force had removed the skill being replaced.
   it('refuses a .zip that cannot be extracted as INPUT_UNREADABLE, and keeps the skill --force would replace', async () => {
     const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
-    const zip = new AdmZip();
-    zip.addFile('a', Buffer.from('file a\n'));
-    zip.addFile('a/b', Buffer.from('file a/b\n'));
     const clash = safePath.join(tempDir, 'clash.zip');
-    zip.writeZip(clash);
+    fs.writeFileSync(clash, zipFixture([{ name: 'a', data: 'file a\n' }, { name: 'a/b', data: 'file a/b\n' }]));
     const existing = safePath.join(claudeDir, 'skills', 'clash', 'SKILL.md');
     plantFile(existing, '# precious\n');
 
@@ -397,19 +388,19 @@ describe('claude plugin install command (system test)', () => {
     expect(fs.readFileSync(existing, 'utf-8')).toBe('# precious\n');
   });
 
-  // node-tar turns an entry it cannot write into a WARNING and resolves: a `.tgz` holding a file
-  // `a` beside a file `a/b` installed without `a/b`, exit 0. A tarball it cannot read at all
-  // escaped uncoded. Both are the archive's, refused before --force removes anything.
+  // A `.tgz` holding a file `a` beside a file `a/b` once installed without `a/b`, exit 0, and a
+  // tarball that could not be read at all escaped uncoded. Both are the archive's, refused before
+  // --force removes anything.
   it.each([
     ['holds a file `a` beside a file `a/b`', [['package/a', 'A'], ['package/a/b', 'B']]],
     ['is not a tarball', undefined],
   ] as const)('refuses a .tgz that %s as INPUT_UNREADABLE, naming it, and keeps the skill --force would replace', async (_label, clash) => {
     const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
     const archive = safePath.join(tempDir, 't-pkg-1.0.0.tgz');
-    fs.writeFileSync(archive, clash === undefined ? 'not a tarball, only text\n' : tarballOf([
-      ['package/package.json', JSON.stringify({ name: '@test/t-pkg', version: '1.0.0', vat: { skills: ['t-skill'] } })],
-      ['package/dist/skills/t-skill/SKILL.md', '# replacement\n'],
-      ...clash,
+    fs.writeFileSync(archive, clash === undefined ? 'not a tarball, only text\n' : tarFixture([
+      { name: 'package/package.json', data: JSON.stringify({ name: '@test/t-pkg', version: '1.0.0', vat: { skills: ['t-skill'] } }) },
+      { name: 'package/dist/skills/t-skill/SKILL.md', data: '# replacement\n' },
+      ...clash.map(([name, data]) => ({ name, data })),
     ]));
     const existing = safePath.join(claudeDir, 'skills', 't-skill', 'SKILL.md');
     plantFile(existing, '# precious\n');
@@ -422,10 +413,8 @@ describe('claude plugin install command (system test)', () => {
   // an unwritable or full $TMPDIR was INTERNAL_ERROR — and inside it, it would have blamed the archive.
   it.skipIf(CANNOT_DENY_READS)('reports a staging directory it cannot create as RUN_INCOMPLETE, and keeps the skill --force would replace', async () => {
     const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
-    const zip = new AdmZip();
-    zip.addFile('SKILL.md', Buffer.from('# good\n'));
     const good = safePath.join(tempDir, 'good.zip');
-    zip.writeZip(good);
+    fs.writeFileSync(good, zipFixture([{ name: 'SKILL.md', data: '# good\n' }]));
     const existing = safePath.join(claudeDir, 'skills', 'good', 'SKILL.md');
     plantFile(existing, '# precious\n');
     const lockedTmp = safePath.join(tempDir, 'locked-tmp');
@@ -507,16 +496,12 @@ describe('claude plugin install command (system test)', () => {
     expect(fs.readdirSync(versionsDir)).toEqual(['1.2.3']);
   });
 
-  // A plugin directory the package ships read-only (here through a link, so the cache copy reads
-  // the 0555 directory itself): the install used to abort the process (SIGABRT, no report).
-  it.skipIf(CANNOT_DENY_READS)('installs a read-only plugin directory, exit 0, and leaves no staging directory', async ({ skip }) => {
-    const cap = symlinkCapability() ?? skip();
+  // A plugin directory the package ships read-only (0555): the install used to abort the process
+  // (SIGABRT, no report).
+  it.skipIf(CANNOT_DENY_READS)('installs a read-only plugin directory, exit 0, and leaves no staging directory', async () => {
     const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
     const { projectDir, marketplacesDir } = setupPluginTestProject(tempDir, 'ro-pkg', 'ro-market', [{ name: 'ro-plugin', skills: ['ro-skill'] }]);
-    const pluginLink = safePath.join(marketplacesDir, 'ro-market', 'plugins', 'ro-plugin');
-    const readOnly = safePath.join(tempDir, 'ro-source');
-    fs.renameSync(pluginLink, readOnly);
-    createSymlink(cap, readOnly, pluginLink, 'dir');
+    const readOnly = safePath.join(marketplacesDir, 'ro-market', 'plugins', 'ro-plugin');
     chmodSync(readOnly, 0o555);
     const versionsDir = safePath.join(claudeDir, 'plugins', 'cache', 'ro-market', 'ro-plugin');
     try {
@@ -530,5 +515,26 @@ describe('claude plugin install command (system test)', () => {
         for (const entry of fs.readdirSync(versionsDir)) chmodSync(safePath.join(versionsDir, entry), 0o755);
       }
     }
+  });
+
+  // An install keeps a link as a link, verbatim. A plugin directory that is a link out of the package
+  // used to install: the marketplace then held a link into the directory it was installed FROM, and
+  // the cache a copy of files the package never held.
+  it('refuses a package whose plugin directory is a link out of the package as INPUT_UNREADABLE, installing nothing', async ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
+    const { projectDir, marketplacesDir } = setupPluginTestProject(tempDir, 'out-pkg', 'out-market', [{ name: 'out-plugin', skills: ['out-skill'] }]);
+    const pluginLink = safePath.join(marketplacesDir, 'out-market', 'plugins', 'out-plugin');
+    const outside = safePath.join(tempDir, 'outside-the-package');
+    fs.renameSync(pluginLink, outside);
+    // A RELATIVE link: an absolute one is refused for being absolute, wherever it points.
+    createSymlink(cap, safePath.relative(safePath.join(pluginLink, '..'), outside), pluginLink, 'dir');
+
+    const { status, report } = await runInstall(binPath, fakeHome, [projectDir]);
+
+    expect(status, JSON.stringify(report)).toBe(2);
+    expect(report).toMatchObject({ status: 'error', error: { code: 'INPUT_UNREADABLE' } });
+    expect(report.error?.message).toContain('plugins/out-plugin is a symbolic link to a path outside it');
+    expect(fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES))).toBe(false);
   });
 });

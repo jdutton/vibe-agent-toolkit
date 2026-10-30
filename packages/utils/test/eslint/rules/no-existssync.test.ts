@@ -28,7 +28,7 @@ const CASES: RuleCases = {
     { code: NAMED, filename: TEST_SUPPORT },
     { code: NAMED, filename: OUTSIDE },
     // The replacement.
-    { code: "import { pathPresent } from '@vibe-agent-toolkit/utils'; if (pathPresent(p, 'follow', 'source', 'probe')) go();", filename: SRC },
+    { code: "import { everywhere, pathPresent } from '@vibe-agent-toolkit/utils'; if (pathPresent(p, { follow: root }, everywhere('source'), 'probe')) go();", filename: SRC },
     // Decoys: a same-named function that is not node:fs's, and a receiver that is not fs.
     { code: "import { existsSync } from './my-fs.js'; existsSync(p);", filename: SRC },
     { code: 'const existsSync = (p: string) => p.length > 0; existsSync(p);', filename: SRC },

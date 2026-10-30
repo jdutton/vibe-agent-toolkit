@@ -12,6 +12,7 @@ import {
 } from './fs-utils.js';
 import { gitFindRoot, gitLsFiles } from './git-utils.js';
 import { promised } from './in-order.js';
+import { edgeStatSync, followedStatSync, realpathNativeSync } from './link-following.js';
 import { crawlSideOf, requireUnreadablePolicy, settleCrawlRefusal, type UnreadablePolicy } from './listing-refusal.js';
 import { toForwardSlash, safePath } from './path-utils.js';
 
@@ -288,12 +289,46 @@ function requireOutputs(outputs: readonly string[] | undefined): asserts outputs
   }
 }
 
-/** `stat` the crawl's base; a fault is classified on the context decided only then (see `crawlDirectorySync`). */
+/**
+ * `stat` the crawl's base; every fault — an absent base too, as the walk's own listing of it answers — is
+ * classified on the context decided only then (see `crawlDirectorySync`).
+ */
 function statCrawlBase(base: string, context: () => FsFaultContext): fs.Stats {
   try {
-    return fs.statSync(base);
+    // The base is the operator's own input: its own link is the edge the kernel answers.
+    return edgeStatSync(base);
   } catch (error: unknown) {
     throw classifyFsFault(error, context());
+  }
+}
+
+/**
+ * Whether a member `git ls-files` listed may be handed on. A committed symbolic link (mode 120000)
+ * is read by its chain beneath the crawl's base first, as the walk's `processSymlink` reads one: a
+ * chain VAT will not follow, or a probe the OS refuses, is a gap settled by `settle` and the member
+ * is dropped, so no caller's `readFile` makes the kernel resolve it. A link that resolves to nothing
+ * stays a member (its read reports it); a non-link costs one `lstat`.
+ *
+ * @param fullPath - The member, absolute
+ * @param base - The crawl's base, the tree its links are read within
+ * @param settle - The walk's `settleLinkFault`: settles a fault on `fullPath` under the caller's policy
+ */
+function gitMemberHandedOn(fullPath: string, base: string, settle: (error: unknown, link: string) => void): boolean {
+  try {
+    if (!fs.lstatSync(fullPath).isSymbolicLink()) return true;
+  } catch (error: unknown) {
+    if (fsFaultOf(error) === undefined) throw error;
+    // Absent (a tracked file deleted from the working tree), or a member whose own `lstat` is refused —
+    // under a directory git already reported as unlistable: no kernel can follow what it cannot reach,
+    // so it stays a member, as it always was, and its read reports it.
+    return true;
+  }
+  try {
+    followedStatSync(fullPath, base);
+    return true;
+  } catch (error: unknown) {
+    settle(error, fullPath);
+    return false;
   }
 }
 
@@ -342,17 +377,12 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     settleCrawlRefusal(unreadable, refusal, outputs);
   }
 
-  // Ensure base directory exists
-  if (!fs.existsSync(resolvedBaseDir)) {
-    throw new Error(`Base directory does not exist: ${resolvedBaseDir}`);
-  }
-
   // A refusal at the base is the destination's when the base is on what the verb writes, else
   // the input's — the tree this crawl reads, whose content decides what is in it.
   // Decided only once a fault needs it: deciding resolves paths, which a crawl that meets no fault never pays for.
   const crawlBase = (): FsFaultContext => ({ side: crawlSideOf(resolvedBaseDir, outputs, unreadable), origin: 'content', action: `crawl ${resolvedBaseDir}`, path: resolvedBaseDir });
 
-  // Ensure base directory is actually a directory
+  // Ensure base directory exists and is actually a directory
   const baseStat = statCrawlBase(resolvedBaseDir, crawlBase);
   if (!baseStat.isDirectory()) {
     throw new Error(`Base path is not a directory: ${resolvedBaseDir}`);
@@ -413,6 +443,7 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
 
         return gitFiles
           .filter((relativePath) => isMember(relativePath))
+          .filter((relativePath) => gitMemberHandedOn(safePath.resolve(resolvedBaseDir, relativePath), resolvedBaseDir, settleLinkFault))
           .map((relativePath) => {
             // git ls-files returns paths relative to cwd
             return absolute ? safePath.resolve(resolvedBaseDir, relativePath) : relativePath;
@@ -481,6 +512,22 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
   }
 
   /**
+   * Settle a symbolic link whose chain could not be followed — a probe the OS refused, or a chain VAT
+   * will not hand the kernel — on either route. A link is not a directory, so under `refuse` it is the
+   * classified fault on the link itself (its side from the crawl's one rule), never a "listing
+   * refused" for a path that was never listed; under `degrade` it is the gap the caller records.
+   *
+   * @param error - What following the link threw
+   * @param link - The link, absolute
+   */
+  function settleLinkFault(error: unknown, link: string): void {
+    if ('refuse' in unreadable) {
+      throw classifyFsFault(error, { side: crawlSideOf(link, outputs, unreadable), origin: 'content', action: 'follow the symbolic link', path: link });
+    }
+    reportOrSkip(error, link);
+  }
+
+  /**
    * Whether `target`, whose probe answered absent, really is gone: the parent's
    * listing is the second witness (`requireConfirmedAbsent`). A link the parent
    * names is gone when its target is (the probe followed it). An entry the parent
@@ -489,7 +536,7 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
    */
   function vanished(error: unknown, target: string): boolean {
     try {
-      requireConfirmedAbsent(target, error, { side: crawlSideOf(target, outputs, unreadable), origin: 'content', action: `crawl ${target}` }, { follows: true });
+      requireConfirmedAbsent(target, error, { origin: 'content', action: `crawl ${target}` }, { follows: true, sideOf: (refused) => crawlSideOf(refused, outputs, unreadable) });
       return true;
     } catch (error_: unknown) {
       const facts = fsFaultOf(error_);
@@ -517,7 +564,9 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
   function alreadyWalked(dir: string): boolean {
     let realPath: string;
     try {
-      realPath = fs.realpathSync.native(dir);
+      // The one native fallback rule (`realpathNativeSync`): a volume that cannot answer a
+      // final-path query is asked of the JS walk rather than reported as a refused directory.
+      realPath = realpathNativeSync(dir, resolvedBaseDir);
     } catch (error) {
       reportOrSkip(error, dir);
       return true;
@@ -541,16 +590,18 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
       return;
     }
 
-    // Resolve symlink and check if it's a directory or file
-    let targetStat: fs.Stats;
+    // Resolve symlink and check if it's a directory or file: its chain is read beneath the base
+    // first, so the kernel never follows a text VAT has not read.
+    let targetStat: fs.Stats | undefined;
     try {
-      targetStat = fs.statSync(fullPath);
+      targetStat = followedStatSync(fullPath, resolvedBaseDir);
     } catch (error) {
-      // A broken symlink is absence and is skipped; a target the OS refused to
-      // stat is a gap, and goes the same way a refused listing does.
-      reportOrSkip(error, fullPath);
+      // A target the OS refused to stat, or a chain VAT will not follow: the link's own fault.
+      settleLinkFault(error, fullPath);
       return;
     }
+    // A broken symlink (or a cycle) is absence and is skipped.
+    if (targetStat === undefined) return;
 
     if (targetStat.isDirectory()) {
       walkDirectory(fullPath);

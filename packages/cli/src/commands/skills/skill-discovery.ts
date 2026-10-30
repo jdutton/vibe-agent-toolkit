@@ -5,13 +5,12 @@
  * finds matching SKILL.md files, and extracts skill names from frontmatter.
  */
 
-import { existsSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import type { PluginLocalSkillIndex } from '@vibe-agent-toolkit/agent-skills';
 import { parseFileCached } from '@vibe-agent-toolkit/resources';
 import type { SkillsConfig } from '@vibe-agent-toolkit/resources';
-import { forEachInOrder, mapConcurrentFailingInOrder, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { followedKindSync, forEachInOrder, fsFaultOf, mapConcurrentFailingInOrder, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory, type UnreadablePolicy } from '@vibe-agent-toolkit/utils/crawl';
 import picomatch from 'picomatch';
 
@@ -160,6 +159,21 @@ function groupIncludePatternsByBase(
 }
 
 /**
+ * Whether a scan root resolves to nothing, its links read beneath the project root first. A probe
+ * that could not examine it (the OS refused it, or its chain names a network path) is NOT absent:
+ * the crawl is asked, and its `unreadable` policy decides — refusing the run or degrading past the
+ * base by name — exactly as for a base whose listing is refused.
+ */
+function baseAbsent(base: string, projectRoot: string): boolean {
+  try {
+    return followedKindSync(base, projectRoot) === 'absent';
+  } catch (error) {
+    if (fsFaultOf(error) === undefined) throw error;
+    return false;
+  }
+}
+
+/**
  * Crawl one effective scan root. Returns absolute paths, or an empty array if
  * the root does not exist (mirrors audit's filesystem-first tolerance for
  * patterns pointing at nothing).
@@ -170,7 +184,7 @@ function crawlOneBase(
   projectRoot: string,
   unreadable: DiscoveryUnreadablePolicy,
 ): Promise<string[]> {
-  if (!existsSync(base)) {
+  if (baseAbsent(base, projectRoot)) {
     return Promise.resolve([]);
   }
   return crawlDirectory({

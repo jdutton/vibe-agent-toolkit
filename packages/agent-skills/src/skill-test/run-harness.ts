@@ -12,7 +12,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync, readdirSync, rmSync, writeFileSync, type Stats } from 'node:fs';
+import { lstatSync, readFileSync, readdirSync, rmSync, writeFileSync, type Stats } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,11 +26,13 @@ import {
   direntKind,
   disposeTempDir,
   everyInOrder,
+  everywhere,
   isPathAbsentError,
   isVatError,
   mapInOrder,
   mkdirSyncReal,
   normalizedTmpdir,
+  pathPresent,
   planTreeChanges,
   prefixMessageOnce,
   recordSuppressedFault,
@@ -506,7 +508,7 @@ function detectItemPluginLayout(
     if (!isVatError(error, ASSET_REFERENCE_UNRESOLVED_CODE)) throw error;
     return undefined;
   }
-  return detectPluginLayout(sourceDir, existsSync) ?? undefined;
+  return detectPluginLayout(sourceDir, (marker, within) => pathPresent(marker, { follow: within }, everywhere('source'), 'probe')) ?? undefined;
 }
 
 function makeStageItem(
@@ -777,9 +779,11 @@ export function formatFrictionReport(items: readonly FrictionItem[]): string {
  */
 function emitFrictionReport(frictionPath: string | undefined): void {
   if (frictionPath === undefined) return;
-  if (!existsSync(frictionPath)) return;
   let raw: unknown;
   try {
+    // VAT's own results dir is the tree: the report's link chain is read by text before the kernel
+    // follows it. A refused probe is a warning line like a refused read — never "no report".
+    if (!pathPresent(frictionPath, { follow: dirname(frictionPath) }, everywhere('destination'), 'probe')) return;
     raw = JSON.parse(readFileSync(frictionPath, 'utf-8'));
   } catch (err) {
     process.stderr.write(
@@ -942,9 +946,19 @@ function resolveEvalSuitePath(input: {
   subjectEvalSuiteHeld: boolean;
 }): string | undefined {
   const authored = resolveScaffoldEvalsPath(input.opts, input.repoRoot, input.evalsRef);
-  if (existsSync(authored)) return authored;
+  if (authoredSuitePresent(authored)) return authored;
   if (!input.subjectEvalSuiteHeld) return undefined;
   return safePath.join(input.holdDir, basename(input.evalsSubpath));
+}
+
+/**
+ * Whether the authored eval suite is there — the ONE predicate both {@link resolveEvalSuitePath}
+ * and the hold decision ask, so they cannot disagree about which copy a run uses. Probed beneath
+ * its own directory (the operator's source): the entry's link chain is read by text before the
+ * kernel follows it, and a refused probe is the source's fault — never "no authored suite".
+ */
+function authoredSuitePresent(authored: string): boolean {
+  return pathPresent(authored, { follow: dirname(authored) }, everywhere('source'), 'probe');
 }
 
 /**
@@ -1388,7 +1402,7 @@ async function cleanupHarness(harnessRoot: string, opts: CleanupHarnessOptions):
   // for the run's result to carry as a warning naming it.
   let entries: string[];
   try {
-    if (!existsSync(harnessRoot)) return [];
+    if (!pathPresent(harnessRoot, 'entry', everywhere('environment'), 'probe')) return [];
     if (lstatSync(harnessRoot).isSymbolicLink()) return [];
     entries = readdirSync(harnessRoot);
   } catch (err) {
@@ -1596,7 +1610,7 @@ function leftoversOf(outcomes: readonly unknown[]): unknown[] {
 async function removeVatOnlyDir(dir: string | undefined): Promise<unknown[]> {
   if (dir === undefined) return [];
   try {
-    if (!existsSync(dir)) return [];
+    if (!pathPresent(dir, 'entry', everywhere('environment'), 'probe')) return [];
     if (lstatSync(dir).isSymbolicLink()) return [];
   } catch (err) {
     return [unexaminedLeftover(err, dir)];
@@ -2852,7 +2866,8 @@ function buildRunSummaryWithSkips(
  * safe precisely because vat always writes these after the merge succeeds.
  */
 async function assertVatWroteArtifact(path: string, validate: (raw: unknown) => void, label: string): Promise<void> {
-  if (!existsSync(path)) {
+  // VAT's own results dir is the tree: the entry it wrote is read by its text before the kernel follows it.
+  if (!pathPresent(path, { follow: dirname(path) }, everywhere('destination'), 'probe')) {
     throw new InternalHarnessError(`vat did not write ${label} at ${path} after the merge — harness bug.`);
   }
   let raw: unknown;
@@ -3184,7 +3199,7 @@ async function runHarnessCollecting(opts: RunHarnessOptions, leftovers: unknown[
     // "can the executor reach the answer key" is not to write it there.
     // Same predicate as `resolveEvalSuitePath`'s rule 1, so the two cannot disagree
     // about which copy this run uses.
-    const authoredSuiteExists = existsSync(resolveScaffoldEvalsPath(opts, repoRoot, evalsRef));
+    const authoredSuiteExists = authoredSuitePresent(resolveScaffoldEvalsPath(opts, repoRoot, evalsRef));
 
     const stageResult = await stageHarness({
       harnessRoot,

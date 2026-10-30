@@ -18,7 +18,7 @@
  * adopters are not typechecked: an omitted policy is refused up front, by
  * name, before any directory is listed — not on the first refusal, and never
  * silently. What each arm DOES is pinned beside the walk and the git route in
- * `file-crawler-refused-listing.test.ts` / `file-crawler-git-refused-listing.test.ts`.
+ * `file-crawler-refused-listing.test.ts` / `integration/file-crawler-git-refused-listing.integration.test.ts`.
  */
 import { writeFileSync } from 'node:fs';
 

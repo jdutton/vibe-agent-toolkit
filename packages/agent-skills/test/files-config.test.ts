@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 
 import type { SymlinkCapability } from '@vibe-agent-toolkit/utils';
 import { createSymlink, FS_FAULT_CODE, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { CANNOT_DENY_READS, refuseAsyncFs } from '@vibe-agent-toolkit/utils/testing';
+import { CANNOT_DENY_READS, installFaultFs, refuseAsyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -672,6 +672,29 @@ describe('applyFilesConfig', () => {
     await expect(applyFilesConfig({ filesConfig, projectRoot, skillOutputDir })).rejects.toMatchObject({
       code: SKILL_PACKAGING_INPUT_INVALID_CODE,
     });
+  });
+
+  // The source's link chain is read hop by hop (`lstat`) before the kernel follows it: a hop the OS
+  // refused is the source's fault, named — never "does not exist", and the link is never followed.
+  it('refuses a declared source whose link chain the OS would not read, without following the link', async ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const { projectRoot, skillOutputDir } = makeApplySandbox();
+    const realDir = safePath.join(projectRoot, 'real');
+    mkdirSyncReal(realDir, { recursive: true });
+    writeFileSync(safePath.join(realDir, DATA_FILE), DATA_BYTES);
+    const link = safePath.join(projectRoot, 'dist', 'gen', 'linked.json');
+    createSymlink(cap, `../../real/${DATA_FILE}`, link, 'file');
+    const filesConfig: SkillFileEntry[] = [{ source: 'dist/gen/linked.json', dest: 'x.json' }];
+
+    const session = installFaultFs({ within: projectRoot, faults: [{ op: 'lstat', path: (path) => path === realDir, errno: 'EACCES' }] });
+    try {
+      await expect(applyFilesConfig({ filesConfig, projectRoot, skillOutputDir }))
+        .rejects.toMatchObject({ code: FS_FAULT_CODE, side: 'source', errno: 'EACCES' });
+    } finally {
+      session.restore();
+    }
+    expect(session.calls.filter(c => c.op === 'stat' && c.path === toForwardSlash(link))).toEqual([]);
+    expect(existsSync(safePath.join(skillOutputDir, 'x.json'))).toBe(false);
   });
 
   it('throws a helpful error when non-glob source is a directory', async () => {

@@ -852,7 +852,7 @@ function headerTokensFor(
  * non-closure extent, and only an import extent can be "some other directory's
  * session". {@link ImportIndex.extentIds} is the half that does not vary.
  *
- * A declined-link row (any of the three codes {@link isDeclinedSymlinkCode} accepts) is
+ * A declined-link row (any code {@link isDeclinedSymlinkCode} accepts) is
  * base-extent and so tree-global too, and is scoped the same way — see
  * {@link linkBearsOn}. ⛔ Every declined-link code, never one: an out-of-root or
  * unresolved link is recorded under its own code and is exactly as absent from

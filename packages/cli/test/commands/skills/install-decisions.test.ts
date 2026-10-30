@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import { __internal } from '../../../src/commands/skills/install.js';
 import { CommandRefusalError } from '../../../src/utils/command-refusal.js';
-import { occupiedRefusal, skillCopyChange, skillOwnership } from '../../../src/utils/install-plan.js';
+import { installLinks, occupiedRefusal, skillCopyChange, skillOwnership } from '../../../src/utils/install-plan.js';
 import { refusalOf } from '../../helpers/refusal-of.js';
 
 const { assertInstallableName, assertNameOverrideApplies, assertNoNameCollisions, assertPlacement, planRow } = __internal;
@@ -80,14 +80,23 @@ describe('install-plan', () => {
     expect(skillOwnership(false)).toEqual({ kind: 'must-be-free' });
   });
 
-  it('a skill copy is one replace that keeps links as links and reads its source on the side given', () => {
-    expect(skillCopyChange({ name: 'a', source: '/tmp/staged/a', dest: '/home/u/.claude/skills/a' }, 'environment', false)).toEqual({
+  // The link policy follows the side: what VAT extracted from an archive holds no link, so one found
+  // there refuses the copy; the operator's own directory keeps its links as links.
+  it.each([
+    ['environment', 'refuse'],
+    ['source', 'preserve'],
+  ] as const)('a skill copy is one replace that reads its source on the side given (%s) and holds its links to that side\'s policy (%s)', (side, links) => {
+    expect(skillCopyChange({ name: 'a', source: '/tmp/staged/a', dest: '/home/u/.claude/skills/a' }, side, false)).toEqual({
       op: 'replace',
       dest: '/home/u/.claude/skills/a',
       ownership: { kind: 'must-be-free' },
-      fill: { from: 'copy', source: '/tmp/staged/a', side: 'environment', links: 'preserve' },
+      fill: { from: 'copy', source: '/tmp/staged/a', side, links },
       label: 'skill a',
     });
+  });
+
+  it('an install copies a staged tree refusing links, and an operator\'s tree keeping them', () => {
+    expect([installLinks('environment'), installLinks('source'), installLinks('destination')]).toEqual(['refuse', 'preserve', 'preserve']);
   });
 
   it('an occupied destination becomes the invocation\'s refusal naming --force, the plan\'s refusal kept as its cause', () => {

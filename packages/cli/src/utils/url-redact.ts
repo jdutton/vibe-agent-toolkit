@@ -40,3 +40,18 @@ export function redactUrlCredentials(url: string): string {
   parsed.password = '';
   return parsed.toString();
 }
+
+/** A URL's `scheme://userinfo@` prefix inside free text; the userinfo stops at whitespace, a quote or a `/`. */
+const URL_USERINFO_IN_TEXT = /\b([a-z][\d+.a-z-]*:\/\/)[^\s"'/@]+@/gi;
+
+/**
+ * Strip the userinfo of every URL embedded in free text — a git child's stderr, which echoes
+ * the remote URL as it was given, injected CI token included.
+ *
+ * {@link redactUrlCredentials} takes one URL and returns any other string unchanged, so it
+ * cannot be pointed at a message: `fatal: unable to access 'https://x-access-token:<t>@…'`
+ * does not parse as a URL and passed through whole.
+ */
+export function redactUrlCredentialsInText(text: string): string {
+  return text.replaceAll(URL_USERINFO_IN_TEXT, '$1');
+}

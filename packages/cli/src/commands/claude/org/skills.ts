@@ -1,7 +1,7 @@
 /**
  * `vat claude org skills` — manage organization skills via Skills API.
  */
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import type { Dirent, Stats } from 'node:fs';
 import {   basename } from 'node:path';
 
@@ -14,6 +14,7 @@ import {
   describeOversizeBundle,
   evalSuiteUnitPath,
   formatBytes,
+  hostAddedToSkillZip,
   NEVER_UPLOADED_DIR_NAMES,
   readDeclaredSkillName,
 } from '@vibe-agent-toolkit/agent-skills';
@@ -30,15 +31,16 @@ import type {
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { createAllowUsageLedger, runValidationFramework } from '@vibe-agent-toolkit/schema';
 import type { RefusalCode, ValidationConfig, ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { classifyFsFault, direntKindFollowingSync, forEachInOrder, fsFaultOf, isAbsoluteAnyPlatform, safePath, toForwardSlashAnyPlatform, withTempDir } from '@vibe-agent-toolkit/utils';
+import { ARCHIVE_REFUSED_CODE, archiveEntryPlace, direntKindFollowingSync, everywhere, forEachInOrder, isAbsoluteAnyPlatform, isArchiveEntryReadRefusal, isVatError, pathPresent, requireFollowedStatSync, safePath, toForwardSlash, toForwardSlashAnyPlatform, withTempDir } from '@vibe-agent-toolkit/utils';
 // Type-only: the runtime import stays lazy inside `inspectZipArchive`, so the
-// archive reader is loaded on the one path that parses an archive.
-import type AdmZipArchive from 'adm-zip';
+// archive readers are loaded on the one path that parses an archive.
+import type { ArchiveEntry, ArchiveRefusedError, OpenedArchive } from '@vibe-agent-toolkit/utils/archive';
 import { Command } from 'commander';
 
 import { resolveSkillPackagingConfig } from '../../../skill-resolution/packaging-config.js';
 import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../../utils/command-refusal.js';
 import { leftoverIssueOf } from '../../../utils/document-writer.js';
+import { requireSkillZipLayout } from '../../../utils/install-plan.js';
 import { requireInputPath } from '../../../utils/project-root-policy.js';
 import { downloadNpmPackage } from '../plugin/helpers.js';
 
@@ -626,9 +628,6 @@ export function resolveSourceArgument(source: string): string {
  * The body is built through the ceiling gate, so every create — a directory or a
  * ZIP — is weighed as the request it will become before a byte is sent.
  */
-/** One entry of a ZIP's central directory, as `adm-zip` hands it back. */
-type ZipEntry = ReturnType<AdmZipArchive['getEntries']>[number];
-
 /** What {@link inspectZipArchive} can tell a caller about an archive. */
 export interface ZipInspection {
 	/** The API-enforced quantity: the sum of every entry's declared size. */
@@ -659,12 +658,25 @@ export interface ZipInspection {
 	 */
 	readonly bundleRoot: string | undefined;
 	/**
+	 * Entries the host that made the archive added beside the skill (`hostAddedToSkillZip`: a
+	 * top-level `__MACOSX/`, a `.DS_Store`). Not part of the skill, so not sent ({@link upload}).
+	 */
+	readonly hostAdded: readonly string[];
+	/** The size of the operator's file, in bytes: what the log reports, never what is sent. */
+	readonly fileBytes: number;
+	/**
+	 * The bytes to send: VAT's own ZIP of the entries it judged, {@link hostAdded} left out
+	 * (`zipOfArchive`) — never the operator's file, whose local headers may hold entries its
+	 * central directory does not list, or a stub before them, that VAT never judged.
+	 */
+	readonly upload: () => Promise<Buffer>;
+	/**
 	 * Members this inspection wanted and could not inflate — a bad CRC, a
 	 * compression method that is not store/deflate, an encrypted entry — each
-	 * with the reader's reason. Skipped, never fatal (an archive VAT cannot read
-	 * is not an archive VAT should block), but NAMED: a document that was not
-	 * checked is a promise `install --help` makes that this run did not keep,
-	 * and the operator is owed the list.
+	 * with the reader's reason. NAMED, because a document that was not checked
+	 * is a promise `install --help` makes that this run did not keep. The
+	 * upload then refuses ({@link upload} sends only what VAT read, and it could
+	 * not read these), so the list is the operator's explanation, not a waiver.
 	 */
 	readonly unreadable: readonly ZipEntryFailure[];
 }
@@ -678,6 +690,8 @@ export interface ZipEntryFailure {
 /** An archive the reader could not open at all, and why. */
 export interface ZipUnreadable {
 	readonly archiveUnreadable: string;
+	/** The operator's file, as read: bytes that are no ZIP at all, which the API is the authority on, sent as they are. */
+	readonly bytes: Buffer;
 }
 
 /**
@@ -685,9 +699,9 @@ export interface ZipUnreadable {
  *
  * Not a limit on what may be PUBLISHED — the API's own ceiling decides that, and
  * a bigger document simply goes unread rather than refused. It bounds the
- * allocations this module performs on attacker-supplied metadata: `getData()`
- * inflates whatever `header.size` claims, and a header can claim anything. A
- * megabyte is two orders of magnitude above any real skill document.
+ * allocations this module performs on attacker-supplied metadata: reading an
+ * entry inflates up to the size its header claims, and a header can claim
+ * anything. A megabyte is two orders of magnitude above any real skill document.
  *
  * ⚠️ It is a PER-ENTRY bound. The total is bounded separately, and more
  * tightly: nothing is inflated at all until the archive's declared uncompressed
@@ -725,45 +739,67 @@ const MAX_INSPECTED_DOCUMENT_BYTES = 1024 * 1024;
  *
  * ⚠️ **Reading an entry is not free, and the docstring here used to claim it
  * was** — "no zip-slip or zip-bomb surface is opened — the entries are read, not
- * written" was true of the enumeration half and FALSE of the one `getData()`
- * call, which inflates `header.size` bytes into memory. Worse, it ran BEFORE the
+ * written" was true of the enumeration half and FALSE of the one read of an
+ * entry, which inflates up to its declared size into memory. Worse, it ran BEFORE the
  * caller's uncompressed-total gate, so the ceiling this function exists to
  * enforce could not protect the inflation this function performed. Nothing is
  * written to disk — that part stands — but the decompression is now ordered
  * after the total is known and bounded by {@link MAX_INSPECTED_DOCUMENT_BYTES},
  * so an archive declaring a 4 GiB SKILL.md is enumerated and never inflated.
+ *
+ * 🔑 **The archive is read through the ONE archive primitive, and held to its ONE
+ * entry policy.** An archive holding an entry VAT would refuse to extract — a
+ * symbolic link, a device, a name outside the archive, two entries that are one
+ * name (a name listed twice included) — or one past the archive limits, or one
+ * that is not a skill ZIP by the one layout rule (`requireSkillZipLayout`), is
+ * refused here (`INPUT_UNREADABLE`), before anything is sent: the same archive is
+ * refused by every verb that takes one. Only bytes the reader cannot PARSE as a
+ * ZIP at all are let through, announced (see the catch).
+ *
+ * @throws ArchiveRefusedError (`INPUT_UNREADABLE`) for an archive the entry policy
+ *   or the archive limits refuse; FsFaultError side `source` when the OS refuses the read
  */
 export async function inspectZipArchive(zipPath: string): Promise<ZipInspection | ZipUnreadable> {
-	// `adm-zip` is already a runtime dependency of this package (the packager and
-	// the url skill-source both use it). An earlier comment here reasoned that
-	// reading the archive would mean "adding a dependency … for a log line" and
-	// declined on that basis; the premise was false, and the payoff is not a log
-	// line but a refusal that saves a doomed upload of up to 30 MiB.
-	const AdmZip = (await import('adm-zip')).default;
-	let entries: ZipEntry[];
+	// Loaded on demand: the archive readers are needed by this one lane of the org commands.
+	const { ARCHIVE_LIMITS, archiveEntryRefusal, ArchiveRefusedError: Refused, openArchive, readArchiveFile, zipOfArchive } = await import('@vibe-agent-toolkit/utils/archive');
+	// Read ONCE: what is judged below, what is re-zipped and what an unreadable upload sends are these bytes.
+	const bytes = await readArchiveFile(zipPath, 'source', ARCHIVE_LIMITS);
+	const source = { bytes, label: toForwardSlash(zipPath) };
+	let opened: OpenedArchive;
 	try {
-		entries = new AdmZip(zipPath).getEntries();
+		opened = await openArchive(source, { format: 'zip', limits: ARCHIVE_LIMITS });
 	} catch (error) {
-		// An archive VAT cannot PARSE is not an archive VAT should block. The API
-		// is the authority on the upload either way, and refusing here would turn
-		// "our reader disagrees with your zip tool" into a failed publish. The
+		// Bytes that are no ZIP at all (`unreadable`: no ZIP signature anywhere) are
+		// not VAT's to block: the API is the authority on that upload, and the
 		// caller is told why, so "checks skipped" is never silent.
 		//
-		// An archive the FILESYSTEM refuses is a different thing: the path was
-		// readable a moment ago (the caller holds its bytes), so a refusal here
-		// is not a parse disagreement and stays loud.
-		if (fsFaultOf(error) !== undefined) {
-			throw classifyFsFault(error, { side: 'source', origin: 'argument', action: `read ${zipPath}`, path: zipPath });
-		}
-		return { archiveUnreadable: describeZipFailure(error) };
+		// That is the ONLY reason let through. A ZIP VAT will not take
+		// (`unsupported`: ZIP64, an ambiguous end record, a directory two readers
+		// would read differently, an end record padded past the 64 KiB a reader
+		// searches) stays loud, like an archive past the limits — were it passed
+		// on, a 20-byte edit or a 64 KiB append to any refused ZIP would send it
+		// with every check skipped. So does one the FILESYSTEM refuses (the path
+		// was readable a moment ago — the caller holds its bytes).
+		if (isUnparseableArchive(error)) return { archiveUnreadable: error.message, bytes };
+		throw error;
 	}
+	const refusal = archiveEntryRefusal(opened.entries);
+	if (refusal !== undefined) throw new Refused(opened.label, refusal);
+	// The one layout rule for a skill ZIP, shared with the two install verbs: an archive that is
+	// not a skill by it is refused here, never sent for the API to make what it can of.
+	const skillRoot = requireSkillZipLayout(opened.label, opened.entries);
 
 	// PASS 1 — headers only. Nothing is decompressed while this runs, so both
 	// refusals the caller can reach are decided on metadata alone.
-	const files = entries.filter(entry => !entry.isDirectory);
-	const uncompressedBytes = files.reduce((sum, entry) => sum + entry.header.size, 0);
+	const hostAdded = opened.entries.map(entry => entry.name).filter(name => hostAddedToSkillZip(name));
+	const sent = {
+		fileBytes: bytes.length,
+		upload: () => zipOfArchive(source, { format: 'zip', limits: ARCHIVE_LIMITS, omit: (entry) => hostAddedToSkillZip(entry.name) }),
+	};
+	const files = opened.entries.filter(entry => entry.kind === 'file' && !hostAddedToSkillZip(entry.name));
+	const uncompressedBytes = files.reduce((sum, entry) => sum + entry.size, 0);
 	const neverUploaded = files
-		.map(entry => toForwardSlashAnyPlatform(entry.entryName))
+		.map(entry => toForwardSlashAnyPlatform(entry.name))
 		.filter(name => name.split('/').some(segment => NEVER_UPLOADED_DIR_NAMES.has(segment)));
 
 	// PASS 2 — the entries worth inflating, and only once the total says this
@@ -772,24 +808,26 @@ export async function inspectZipArchive(zipPath: string): Promise<ZipInspection 
 	// on an upload that cannot happen.
 	if (uncompressedBytes > API_SKILL_MAX_UPLOAD_BYTES) {
 		return {
-			uncompressedBytes, declaredName: undefined, neverUploaded, documents: [], bundleRoot: undefined, unreadable: [],
+			uncompressedBytes, declaredName: undefined, neverUploaded, documents: [], bundleRoot: undefined, hostAdded, unreadable: [], ...sent,
 		};
 	}
-	const elected = electShallowestSkillMd(files);
+	const elected = skillMdOf(files, skillRoot);
 	const unreadable: ZipEntryFailure[] = [];
 	return {
 		uncompressedBytes,
-		declaredName: declaredNameOf(elected, unreadable),
+		declaredName: declaredNameOf(opened, elected, unreadable),
 		neverUploaded,
-		documents: inflateMarkdownMembers(files, unreadable),
-		bundleRoot: archiveRootOf(elected?.entryName),
+		documents: inflateMarkdownMembers(opened, files, unreadable),
+		bundleRoot: skillRoot === '' ? undefined : skillRoot,
+		hostAdded,
 		unreadable,
+		...sent,
 	};
 }
 
-/** adm-zip throws plain `Error`s; the message is all it has to say. */
-function describeZipFailure(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
+/** Whether `error` is the archive module saying the bytes are no ZIP at all — by its code and reason, never its prose. A ZIP it will not take, an entry that does not inflate included, is `unsupported`, and is not this. */
+function isUnparseableArchive(error: unknown): error is ArchiveRefusedError {
+	return isVatError(error, ARCHIVE_REFUSED_CODE) && (error as ArchiveRefusedError).reason === 'unreadable';
 }
 
 /**
@@ -804,17 +842,17 @@ function describeZipFailure(error: unknown): string {
  * {@link warnUnportableReferences} keeps ONE implementation of the checks — a
  * second copy of the three collector calls is how the two lanes start disagreeing.
  *
- * An entry that will not inflate is SKIPPED, never fatal: this module's standing
- * position is that an archive VAT cannot read is not an archive VAT should block,
- * and the checks it feeds only ever warn.
+ * An entry that will not inflate is SKIPPED here and named: the checks it feeds
+ * only ever warn. The upload is what refuses it — VAT sends its own ZIP of what
+ * it read, and it could not read this.
  */
-function inflateMarkdownMembers(files: readonly ZipEntry[], unreadable: ZipEntryFailure[]): MultipartFile[] {
+function inflateMarkdownMembers(archive: OpenedArchive, files: readonly ArchiveEntry[], unreadable: ZipEntryFailure[]): MultipartFile[] {
 	const documents: MultipartFile[] = [];
 	for (const entry of files) {
-		const filename = toForwardSlashAnyPlatform(entry.entryName);
+		const filename = toForwardSlashAnyPlatform(entry.name);
 		if (!filename.toLowerCase().endsWith('.md')) continue;
-		if (entry.header.size > MAX_INSPECTED_DOCUMENT_BYTES) continue;
-		const content = inflateOrRecord(entry, unreadable);
+		if (entry.size > MAX_INSPECTED_DOCUMENT_BYTES) continue;
+		const content = inflateOrRecord(archive, entry, unreadable);
 		if (content !== undefined) documents.push({ fieldName: 'files[]', filename, content });
 	}
 	return documents;
@@ -823,86 +861,41 @@ function inflateMarkdownMembers(files: readonly ZipEntry[], unreadable: ZipEntry
 /**
  * One member's bytes, or `undefined` with the refusal RECORDED.
  *
- * `getData()` is the only decompression in this module, so it is the only thing
- * that can throw here: adm-zip raises on BAD_CRC, on any compression method but
- * store/deflate, and on an encrypted entry. Those used to escape and abort the
- * publish on exit 2 — contradicting this module's own stance that an archive VAT
- * cannot parse is not an archive VAT should block — and then, once caught, were
- * dropped without a word. The member is skipped AND named.
+ * Reading an entry is the only decompression in this module, so it is the only
+ * thing that can throw here: the archive module refuses an entry with a bad CRC,
+ * a compression method that is not store/deflate, an encrypted entry, or one
+ * that does not hold what it declares (`ArchiveEntryReadError`, `ARCHIVE_ENTRY_UNREADABLE`).
+ * The inspection skips the member AND names it, so every finding the other
+ * members earn is still reported; the archive is not thereby accepted — the
+ * upload re-reads every entry for VAT's own ZIP and refuses this one, so nothing
+ * is sent.
  */
-function inflateOrRecord(entry: ZipEntry, unreadable: ZipEntryFailure[]): Buffer | undefined {
+function inflateOrRecord(archive: OpenedArchive, entry: ArchiveEntry, unreadable: ZipEntryFailure[]): Buffer | undefined {
 	try {
-		return entry.getData();
+		return archive.read(entry);
 	} catch (error) {
+		if (!isArchiveEntryReadRefusal(error)) throw error;
 		// Once per member: the elected SKILL.md is asked for twice (its name, then
 		// its text), and one refusal is one fact.
-		const name = toForwardSlashAnyPlatform(entry.entryName);
+		const name = toForwardSlashAnyPlatform(entry.name);
 		if (!unreadable.some((failure) => failure.entry === name)) {
-			unreadable.push({ entry: name, reason: describeZipFailure(error) });
+			unreadable.push({ entry: name, reason: error.message });
 		}
 		return undefined;
 	}
 }
 
 /**
- * The directory the elected SKILL.md sits in, which is the archive's bundle root.
+ * The archive's own SKILL.md: the one at the place the layout rule found the skill
+ * (`requireSkillZipLayout`), which is the one whose `name` the API keys the skill by.
+ * Never a `SKILL.md` deeper in the bundle — a fixture a skill ships is not the skill.
  *
- * `my-skill/SKILL.md` roots the bundle at `my-skill`; a SKILL.md at the archive
- * root has no prefix, and neither does an archive with no SKILL.md at all. ZIP
- * fixes `/` as the entry separator, so this reads the format rather than handling
- * a host path.
+ * @param files - The archive's file entries
+ * @param root - Where the skill is: `''` for the archive's top level, or its one top-level folder
  */
-function archiveRootOf(entryName: string | undefined): string | undefined {
-	if (entryName === undefined) return undefined;
-	const cut = toForwardSlashAnyPlatform(entryName).lastIndexOf('/');
-	return cut === -1 ? undefined : entryName.slice(0, cut);
-}
-
-/**
- * The SKILL.md nearest the archive root, which is the one whose `name` the API
- * will key the skill by.
- *
- * 🪤 Compared on DEPTH, with name length only as a tiebreak. It used to compare
- * `entryName.length` alone, on the reasoning that "a shortest-path comparison
- * needs no separator at all" — but shortest string is not shallowest path:
- * `a/b/SKILL.md` (12 chars, depth 2) beats `my-skill-bundle/SKILL.md` (24
- * chars, depth 1), so a bundled FIXTURE supplied the name and the operator was
- * advised to `--title` it. ZIP fixes `/` as the entry separator on every
- * platform, so splitting on it is not path handling — it is reading the format.
- */
-function electShallowestSkillMd(files: readonly ZipEntry[]): ZipEntry | undefined {
-	let elected: ZipEntry | undefined;
-	for (const entry of files) {
-		if (basename(entry.entryName) !== 'SKILL.md') continue;
-		if (elected !== undefined && !isShallower(entry.entryName, elected.entryName)) continue;
-		elected = entry;
-	}
-	return elected;
-}
-
-/** Fewer path segments wins; equal depth falls back to the shorter name. */
-function isShallower(candidate: string, incumbent: string): boolean {
-	const candidateDepth = zipEntryDepth(candidate);
-	const incumbentDepth = zipEntryDepth(incumbent);
-	return candidateDepth === incumbentDepth
-		? candidate.length < incumbent.length
-		: candidateDepth < incumbentDepth;
-}
-
-/**
- * How many segments a ZIP entry name has.
- *
- * Counted rather than `split('/')`-ed because the linter — correctly, for
- * FILESYSTEM paths — refuses that idiom: a host path's separator depends on the
- * platform. A ZIP entry name's does not; the format fixes it as `/`. Counting
- * the separator states that, and needs no exemption.
- */
-function zipEntryDepth(entryName: string): number {
-	let depth = 1;
-	for (const character of entryName) {
-		if (character === '/') depth += 1;
-	}
-	return depth;
+function skillMdOf(files: readonly ArchiveEntry[], root: string): ArchiveEntry | undefined {
+	const place = root === '' ? 'SKILL.md' : `${root}/SKILL.md`;
+	return files.find(entry => archiveEntryPlace(entry.name).join('/') === place);
 }
 
 /**
@@ -920,9 +913,9 @@ function zipEntryDepth(entryName: string): number {
  * is already computed from headers) — see {@link inflateOrRecord}, which records
  * the refusal so the operator learns why no name was read.
  */
-function declaredNameOf(entry: ZipEntry | undefined, unreadable: ZipEntryFailure[]): string | undefined {
-	if (entry === undefined || entry.header.size > MAX_INSPECTED_DOCUMENT_BYTES) return undefined;
-	const content = inflateOrRecord(entry, unreadable);
+function declaredNameOf(archive: OpenedArchive, entry: ArchiveEntry | undefined, unreadable: ZipEntryFailure[]): string | undefined {
+	if (entry === undefined || entry.size > MAX_INSPECTED_DOCUMENT_BYTES) return undefined;
+	const content = inflateOrRecord(archive, entry, unreadable);
 	return content === undefined ? undefined : declaredSkillNameIn(content.toString('utf8'));
 }
 
@@ -1043,14 +1036,16 @@ async function declaredTestInputPaths(skillDir: string): Promise<ReadonlySet<str
  * named no path and said nothing about what to do. A dangling link produced the
  * same shape of failure with `ENOENT`.
  *
- * `statSync` follows the link, which is the same thing the build-time size walk
+ * `requireFollowedStatSync` follows the link (its chain read first), which is the same thing the build-time size walk
  * does to classify one — so both lanes reach the same verdict about the same
  * entry.
  */
-function resolvesToDirectory(entry: Dirent, fullPath: string, relativePath: string): boolean {
+function resolvesToDirectory(entry: Dirent, fullPath: string, relativePath: string, within: string): boolean {
 	if (!entry.isSymbolicLink()) return false;
 	try {
-		return statSync(fullPath).isDirectory();
+		// The chain is read beneath the skill directory first: a link to a network path is refused
+		// here, by name, before the kernel is asked to follow it.
+		return requireFollowedStatSync(fullPath, within).isDirectory();
 	} catch (error) {
 		const cause = error instanceof Error ? error.message : String(error);
 		throw new CommandRefusalError(
@@ -1102,7 +1097,7 @@ function collectFiles(
 	for (const entry of readdirSync(dir, { withFileTypes: true })) {
 		const fullPath = safePath.join(dir, entry.name);
 		const relativePath = safePath.relative(base, fullPath);
-		const linkedDirectory = resolvesToDirectory(entry, fullPath, relativePath);
+		const linkedDirectory = resolvesToDirectory(entry, fullPath, relativePath, base);
 		const directoryLike = entry.isDirectory() || linkedDirectory;
 
 		if (
@@ -1162,8 +1157,9 @@ interface PreparedUpload {
  * whether it exists is unknown, the INPUT's refusal (`INPUT_UNREADABLE`).
  * Never `existsSync`: it answers `false` for both.
  */
-function statNamedPath(path: string, absentMessage: string): Stats {
-	return requireInputPath(path, { origin: 'argument', message: absentMessage });
+function statNamedPath(path: string, within: string, absentMessage: string): Stats {
+	// Every path from the operator's named tree down to it is the operator's input.
+	return requireInputPath(path, within, { origin: 'argument', message: absentMessage }, everywhere('source'));
 }
 
 /**
@@ -1181,7 +1177,7 @@ async function prepareSkillUpload(
 	logger: UploadLogger,
 ): Promise<PreparedUpload> {
 	const skillMdPath = safePath.join(skillDir, 'SKILL.md');
-	statNamedPath(skillMdPath, `SKILL.md not found in ${skillDir}. Is this a built skill directory?`);
+	statNamedPath(skillMdPath, skillDir, `SKILL.md not found in ${skillDir}. Is this a built skill directory?`);
 
 	// The skill's own declared name — not the directory it happens to sit in,
 	// which for a built or extracted tree carries no reliable identity.
@@ -1380,18 +1376,18 @@ async function uploadSkillVersionDir(
  * untested — `packages/cli/src/commands/**` is coverage-excluded, so nothing in
  * any report said so.
  */
-export function listNodeModulePackages(nodeModulesDir: string): string[] {
-	if (!existsSync(nodeModulesDir)) return [];
+export function listNodeModulePackages(nodeModulesDir: string, within: string): string[] {
+	if (!pathPresent(nodeModulesDir, { follow: within }, everywhere('source'), 'probe')) return [];
 
 	const results: string[] = [];
 	// Followed: a workspace package under node_modules IS a symlink, and a walk
 	// that tested `isDirectory()` on the link skipped every one of them.
 	for (const entry of readdirSync(nodeModulesDir, { withFileTypes: true })) {
-		if (direntKindFollowingSync(nodeModulesDir, entry) !== 'directory') continue;
+		if (direntKindFollowingSync(nodeModulesDir, entry, within) !== 'directory') continue;
 		if (entry.name.startsWith('@')) {
 			const scopeDir = safePath.join(nodeModulesDir, entry.name);
 			for (const scopedEntry of readdirSync(scopeDir, { withFileTypes: true })) {
-				if (direntKindFollowingSync(scopeDir, scopedEntry) === 'directory') results.push(safePath.join(scopeDir, scopedEntry.name));
+				if (direntKindFollowingSync(scopeDir, scopedEntry, within) === 'directory') results.push(safePath.join(scopeDir, scopedEntry.name));
 			}
 		} else {
 			results.push(safePath.join(nodeModulesDir, entry.name));
@@ -1405,13 +1401,16 @@ export function listNodeModulePackages(nodeModulesDir: string): string[] {
  * first, then scans node_modules for sub-packages that contain built skills.
  */
 export function findSkillsDir(packageDir: string): string | undefined {
+	// Every probe is beneath the package directory: its links are read before the kernel follows them,
+	// and a probe the OS refuses is the package's source fault, never "no skills here".
+	const present = (path: string): boolean => pathPresent(path, { follow: packageDir }, everywhere('source'), 'probe');
 	const direct = safePath.join(packageDir, 'dist', 'skills');
-	if (existsSync(direct)) return direct;
+	if (present(direct)) return direct;
 
-	const candidates = listNodeModulePackages(safePath.join(packageDir, 'node_modules'));
+	const candidates = listNodeModulePackages(safePath.join(packageDir, 'node_modules'), packageDir);
 	for (const pkgDir of candidates) {
 		const candidate = safePath.join(pkgDir, 'dist', 'skills');
-		if (existsSync(candidate)) return candidate;
+		if (present(candidate)) return candidate;
 	}
 
 	return undefined;
@@ -1485,9 +1484,9 @@ export function summarizeNpmInstall(
 }
 
 /**
- * Upload skills from an npm package.
+ * Upload skills from an npm package. Exported for testing.
  */
-async function installFromNpm(
+export async function installFromNpm(
 	npmPackage: string,
 	skillFilter: string | undefined,
 	client: OrgApiClient,
@@ -1497,7 +1496,7 @@ async function installFromNpm(
 	// remove after the uploads is reported beside them, never in their place: they landed.
 	const { value, leftover } = await withTempDir('vat-org-skills-', async (tempDir) => {
 		logger.info(`Downloading: ${npmPackage}`);
-		const packageDir = downloadNpmPackage(npmPackage, tempDir);
+		const packageDir = await downloadNpmPackage(npmPackage, tempDir);
 
 		const skillsDir = findSkillsDir(packageDir);
 		if (!skillsDir) {
@@ -1507,7 +1506,7 @@ async function installFromNpm(
 
 		// Followed: a built skill directory that is a link is still a skill to upload.
 		const skillDirs = readdirSync(skillsDir, { withFileTypes: true })
-			.filter(e => direntKindFollowingSync(skillsDir, e) === 'directory')
+			.filter(e => direntKindFollowingSync(skillsDir, e, packageDir) === 'directory')
 			.map(e => e.name);
 
 		if (skillDirs.length === 0) {
@@ -1556,7 +1555,8 @@ export async function installFromLocal(
 ): Promise<object> {
 	const sourcePath = resolveSourceArgument(source);
 
-	const stat = statNamedPath(sourcePath, `Source not found: ${sourcePath}`);
+	// The operator's own argument: its own `within`.
+	const stat = statNamedPath(sourcePath, sourcePath, `Source not found: ${sourcePath}`);
 
 	// Case-INSENSITIVE. `endsWith('.zip')` refused `MySkill.ZIP` as "not a directory
 	// or .zip file" — a file Windows and macOS both consider a zip archive, and one
@@ -1599,12 +1599,9 @@ async function installZipArchive(
 	// `basename(path, ext)` matches the extension exactly, so the literal '.zip'
 	// leaves `.ZIP` on the title. Slice the length instead.
 	const displayTitle = titleOverride ?? basename(sourcePath).slice(0, -'.zip'.length);
-	const zipContent = readFileSync(sourcePath);
-	const files: MultipartFile[] = [{
-		fieldName: 'files[]',
-		filename: basename(sourcePath),
-		content: zipContent,
-	}];
+	// The ONE read of the file: everything below is decided on, and sent from, what this read.
+	const inspected = await inspectZipArchive(sourcePath);
+	const fileBytes = 'archiveUnreadable' in inspected ? inspected.bytes.length : inspected.fileBytes;
 	// A ZIP is by construction a single large binary, so this is the shape most
 	// likely to be over the ceiling — and the one that reached the wire unmeasured
 	// while the check lived only in the directory-packaging path. It is gated in
@@ -1614,28 +1611,19 @@ async function installZipArchive(
 	// "Preparing", not "Uploading": nothing has been sent at this point, and the
 	// very next step can refuse locally. A line that claims an upload started is
 	// the log telling the operator about work that never happened.
-	logger.info(`Preparing ZIP: ${sourcePath} (${formatBytes(zipContent.length)} of file content)`);
+	logger.info(`Preparing ZIP: ${sourcePath} (${formatBytes(fileBytes)} of file content)`);
 	// Where the title came FROM, not just what it is. A ZIP's title is the
 	// filename — `wiki-lint-v2.zip` publishes a skill called `wiki-lint-v2`,
 	// which is a DIFFERENT skill from `wiki-lint` and is not refused, because
 	// display_title uniqueness is enforced only when the field is sent. A
 	// directory takes its title from SKILL.md instead, so the same tree zipped
-	// and unzipped can publish under two names.
-	//
-	// ⛔ This comment used to end "VAT cannot read the SKILL.md inside the
-	// archive: Node ships no ZIP reader, and adding a dependency to parse one
-	// here would mean owning central-directory, zip64 and zip-slip handling for
-	// a log line." The PREMISE was false — `adm-zip` is already a runtime
-	// dependency of this package — and the cost/benefit was weighed against the
-	// wrong benefit: the same read also answers whether the archive EXPANDS
-	// past the ceiling, which is a refusal, not a log line. So the archive is
-	// now read (see {@link inspectZipArchive}) and the divergence is reported
-	// as a fact below, in addition to this provenance line.
+	// and unzipped can publish under two names — the inspection reads the name
+	// the archive's SKILL.md declares, and the divergence is reported below.
 	logger.info(`Display title: "${displayTitle}" (${titleOverride === undefined
 		? 'from the ZIP filename — NOT from the SKILL.md inside it; pass --title to set it'
 		: 'from --title'})`);
 
-	const inspected = await inspectZipArchive(sourcePath);
+	let content: Buffer;
 	if ('archiveUnreadable' in inspected) {
 		// Degrade, and SAY so. Every check below is skipped, and a skipped check
 		// that is not announced is indistinguishable from one that passed.
@@ -1643,11 +1631,17 @@ async function installZipArchive(
 			`Could not read the archive (${inspected.archiveUnreadable}); the answer-key, expanded-size, `
 			+ `name and portability checks were not run on it. The API decides the upload.`,
 		);
+		content = inspected.bytes;
 	} else {
-		refuseOrWarnOnArchive(inspected, displayTitle, zipContent.length, logger);
+		refuseOrWarnOnArchive(inspected, displayTitle, fileBytes, logger);
+		if (inspected.hostAdded.length > 0) {
+			logger.info(`Left out of the upload (added by the host that made the archive, not part of the skill): ${inspected.hostAdded.join(', ')}`);
+		}
+		// What is sent is what was judged: VAT's own ZIP of the entries it read, never the operator's bytes.
+		content = await inspected.upload();
 	}
 
-	return sendSkillUpload(client, displayTitle, files);
+	return sendSkillUpload(client, displayTitle, [{ fieldName: 'files[]', filename: basename(sourcePath), content }]);
 }
 
 /**
@@ -1730,8 +1724,8 @@ function refuseOrWarnOnArchive(
 	if (inspected.unreadable.length > 0) {
 		const named = inspected.unreadable.map(({ entry, reason }) => `${entry} (${reason})`).join(', ');
 		logger.warn(
-			`${String(inspected.unreadable.length)} archive member(s) could not be inflated and were `
-			+ `not checked: ${named}`,
+			`${String(inspected.unreadable.length)} archive member(s) could not be inflated: ${named}. `
+			+ 'They were not checked, and the upload will refuse the archive when it re-reads them — nothing is sent.',
 		);
 	}
 }
@@ -1932,10 +1926,27 @@ Description:
 
   A ZIP takes its display_title from the ZIP FILENAME, so my-skill-v2.zip
   publishes a skill titled "my-skill-v2", which is a separate skill from
-  "my-skill" and is not refused as a duplicate. VAT reads the SKILL.md nearest
-  the root of the archive and WARNS when the name it declares differs from that
-  title, because every version the skill ever gets will carry the declared name.
-  Pass --title to set the title explicitly.
+  "my-skill" and is not refused as a duplicate. VAT reads the archive's SKILL.md
+  and WARNS when the name it declares differs from that title, because every
+  version the skill ever gets will carry the declared name. Pass --title to set
+  the title explicitly.
+
+  A ZIP holds SKILL.md at its top level, or exactly one top-level folder with
+  SKILL.md directly inside (a skill folder, compressed) — the layout the install
+  verbs take. Any other layout is refused (INPUT_UNREADABLE), and so is a ZIP
+  holding a symbolic link, a name that leaves the archive, one name twice, or
+  more than 50,000 entries / 256 MiB expanded, a name Windows cannot hold (a
+  ":", < > " | ? *, a control character, a device name such as CON or aux.md,
+  a trailing "." or space), a ZIP64 archive, one whose end record two readers
+  could read differently or is not in its last 64 KiB, one with data before its
+  first local header (a self-extracting ZIP) or a directory entry whose local
+  header is not its own, or one holding an entry VAT cannot inflate. What is
+  sent is VAT's own ZIP of the entries it read and checked (its names, order,
+  timestamps, compression and 0644/0755 modes) — never your file's bytes — so a
+  top-level __MACOSX/ folder or .DS_Store (what macOS adds) is left out.
+  Only bytes that are no ZIP at all (no local-file-header or end-record
+  signature anywhere in them) are sent as they are, with a warning that the
+  checks below were skipped.
 
   A skill's eval suite is its answer key and is never uploaded: whatever the
   governing vibe-agent-toolkit.config.yaml declares as this skill's test input
@@ -2186,7 +2197,7 @@ Example:
 		.action(async (skillId: string, source: string, options: { debug?: boolean }) => {
 			await executeOrgCommand('claude org skills versions add', options.debug, ({ client, logger }) => {
 				const resolved = resolveSourceArgument(source);
-				if (!statNamedPath(resolved, `Source not found: ${resolved}`).isDirectory()) {
+				if (!statNamedPath(resolved, resolved, `Source not found: ${resolved}`).isDirectory()) {
 					// Name the asymmetry IN the refusal, not only in --help. `install`
 					// accepts a ZIP and this verb does not, so the operator most likely to
 					// hit this is the one who just read that `install` takes one — and a

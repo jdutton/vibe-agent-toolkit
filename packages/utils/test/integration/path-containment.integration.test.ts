@@ -131,12 +131,12 @@ describe('canonicalPath', () => {
   it('spells a path reached through a link to the root exactly as the root\'s own members', ({ skip }) => {
     const alias = tree().rootAlias;
     if (alias === null) skip('host cannot create symlinks');
-    expect(canonicalPath(safePath.join(alias, 'member'))).toBe(canonicalPath(tree().member));
+    expect(canonicalPath(safePath.join(alias, 'member'), alias)).toBe(canonicalPath(tree().member, tree().root));
   });
 
   it('canonicalizes a missing path from its deepest existing ancestor, keeping the missing tail', ({ skip }) => {
     const alias = tree().rootAlias;
     if (alias === null) skip('host cannot create symlinks');
-    expect(canonicalPath(safePath.join(alias, 'not', 'there'))).toBe(`${canonicalPath(tree().root)}/not/there`);
+    expect(canonicalPath(safePath.join(alias, 'not', 'there'), alias)).toBe(`${canonicalPath(tree().root, tree().root)}/not/there`);
   });
 });

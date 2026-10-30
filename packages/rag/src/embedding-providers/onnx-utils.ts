@@ -8,10 +8,10 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { stat, mkdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { isPathAbsentError, renameFileAtomic, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, renameFileAtomic, requireFollowedStat, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 
 // ---------------------------------------------------------------------------
@@ -633,11 +633,14 @@ export function l2Normalize(vector: number[]): number[] {
  * Only a path that is not there is `false`. The cache is guarded by existence
  * alone, so a `stat` the OS refuses must not read as "absent": that would
  * start a download onto a path that cannot even be read, and surface the
- * refusal as a write failure at the wrong step.
+ * refusal as a write failure at the wrong step; so does a link chain VAT will not follow.
+ *
+ * @param filePath - The cached file
+ * @param within - The model cache directory it lives in
  */
-async function fileExists(filePath: string): Promise<boolean> {
+async function fileExists(filePath: string, within: string): Promise<boolean> {
   try {
-    await stat(filePath);
+    await requireFollowedStat(filePath, within);
     return true;
   } catch (error) {
     if (isPathAbsentError(error)) return false;
@@ -687,7 +690,7 @@ function assertCompleteBody(url: string, received: number, declared: string | nu
  * unrelated-looking `Failed to load model because protobuf parsing failed`. A
  * rename is atomic, so a reader sees either no file or a complete one.
  */
-async function downloadFile(url: string, destination: string): Promise<void> {
+async function downloadFile(url: string, destination: string, cacheDir: string): Promise<void> {
   const directory = dirname(destination);
   await mkdir(directory, { recursive: true });
 
@@ -713,7 +716,7 @@ async function downloadFile(url: string, destination: string): Promise<void> {
     // Windows makes the replace fail. Its copy is just as complete as ours, so
     // losing the race is success, not an error.
     await unlink(temporary).catch(() => undefined);
-    if (!(await fileExists(destination))) throw cause;
+    if (!(await fileExists(destination, cacheDir))) throw cause;
   }
 }
 
@@ -748,20 +751,20 @@ export async function ensureModelFiles(
 
   const baseUrl = `https://huggingface.co/${modelId}/resolve/main`;
 
-  const modelExists = await fileExists(modelPath);
+  const modelExists = await fileExists(modelPath, cacheDir);
   if (!modelExists) {
     const modelUrl = `${baseUrl}/onnx/${onnxFileName}`;
     progress(`Downloading model: ${modelUrl}`);
     progress(`Destination: ${modelPath}`);
-    await downloadFile(modelUrl, modelPath);
+    await downloadFile(modelUrl, modelPath, cacheDir);
     progress('Model download complete.');
   }
 
-  const vocabExists = await fileExists(vocabPath);
+  const vocabExists = await fileExists(vocabPath, cacheDir);
   if (!vocabExists) {
     const vocabUrl = `${baseUrl}/vocab.txt`;
     progress(`Downloading vocab: ${vocabUrl}`);
-    await downloadFile(vocabUrl, vocabPath);
+    await downloadFile(vocabUrl, vocabPath, cacheDir);
     progress('Vocab download complete.');
   }
 

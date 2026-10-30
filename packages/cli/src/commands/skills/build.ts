@@ -1244,11 +1244,11 @@ async function prepareBuild(
   // discarded: config is read from `cwd` (the package dir), not the project root.
   requireProjectRoot(cwd, 'vat skills build');
 
-  const config = loadConfig(cwd);
+  const config = loadConfig(cwd, 'destination');
   if (!config?.skills) {
-    // Examined nothing: the writer refuses the command lane's report; `vat
-    // build` folds the same report into its sum, where another phase may have
-    // examined something (see `runSkillsBuildPhase`).
+    // Examined nothing: the writer refuses the command lane's report. In `vat
+    // build` this phase's zero is an answer, since a project with no `skills:`
+    // block has no pool to build (see `selectBuildPhases`).
     logger.info('No skills configuration found — nothing to build');
     return { kind: 'done', report: earlyReport(empty, startTime) };
   }
@@ -1309,9 +1309,9 @@ async function prepareBuild(
  *
  * ONE function for both lanes: the command publishes it with `endWithReport`,
  * and `vat build`'s `skills` phase folds it. The report is the one BEFORE the
- * writer's run-integrity pass: a project with no `skills:` block reports zero
- * skills, which fails `vat skills build` and does not fail a `vat build` whose
- * claude phase built something.
+ * writer's run-integrity pass: zero skills fails `vat skills build`, and in
+ * `vat build` is judged per phase (`selectBuildPhases`) — an answer for a project
+ * with no `skills:` block or one that ships plugin-local skills, the same refusal otherwise.
  */
 export async function runSkillsBuildPhase(
   pathArg: string | undefined,

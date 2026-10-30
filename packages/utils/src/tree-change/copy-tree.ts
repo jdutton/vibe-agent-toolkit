@@ -7,6 +7,7 @@ import fs, { type FileHandle } from 'node:fs/promises';
 
 import { isAlreadyExistsError, isPathAbsentError } from '../errors/errno-table.js';
 import { classifyFsFault, type FsSide } from '../errors/fs-fault.js';
+import { linkCopyType } from '../link-following.js';
 import { safePath } from '../path-core.js';
 import { openForReading } from '../text-file.js';
 
@@ -33,8 +34,8 @@ async function* sourceBytes(source: FileHandle, readFault: ReadFault): AsyncGene
 
 /**
  * Copy the bytes of an open file — one already judged a regular file on that very handle — into
- * `claimed`, a file this copy has just made exclusively (opened `wx`), and carry its mode over, as
- * `copyFile` does, so a script stays executable. The ONE file copy of the tree copy and the
+ * `claimed`, a file this copy has just made exclusively (opened `wx`), and carry its permission bits
+ * over, so a script stays executable — never its setuid, setgid or sticky bit. The ONE file copy of the tree copy and the
  * single-file copy: bytes and mode both go to that very handle, never to a path, so nothing swapped
  * in after the claim — a link least of all — is written or chmod-ed through. Closes `claimed`.
  */
@@ -43,7 +44,8 @@ async function copyOpenFileInto(handle: FileHandle, claimed: FileHandle, mode: n
     // On the handle, not through a stream of it: a stream owns the handle it writes and closes it
     // with itself, before the mode could be set on it.
     await claimed.writeFile(sourceBytes(handle, readFault));
-    await claimed.chmod(mode & 0o7777);
+    // The permission bits only: setuid, setgid and sticky never travel with a copy.
+    await claimed.chmod(mode & 0o777);
   } catch (error: unknown) {
     // The copy's own failure is the answer: a close refused after it is not a second one.
     await claimed.close().catch(() => undefined);
@@ -93,6 +95,23 @@ interface CopyDestination {
 async function claimDestination(into: CopyDestination, copied: string): Promise<string> {
   await claimRoot(into.root);
   return into.relative === '' ? into.root : await makeDirectoryUnder(into.root, into.relative, `the copy of ${copied}`);
+}
+
+/**
+ * Make the directory a copy's own entry goes IN, for a source that is not a directory at all — a
+ * root that is a link, kept as one (`links: 'preserve'`): the destination root's parents as the
+ * caller's, every component under the root as a real directory or not at all.
+ *
+ * @param copied - What is copied, for a refusal's message
+ */
+async function claimParentOfDestination(into: CopyDestination, copied: string): Promise<void> {
+  if (into.relative === '') {
+    await fs.mkdir(parentOf(into.root), { recursive: true });
+    return;
+  }
+  await claimRoot(into.root);
+  const parent = parentOf(into.relative);
+  if (parent !== '') await makeDirectoryUnder(into.root, parent, `the copy of ${copied}`);
 }
 
 /** What {@link copyTree} is told: the walk, the side its reads are on, and what it does about what is already there. */
@@ -177,10 +196,16 @@ export function copyVisitor(where: CopyDestination, copied: string, side: FsSide
     },
     async link(entry) {
       const linkTarget = await readingTree(side, entry.path, () => fs.readlink(entry.path));
-      // Verbatim, and untyped: on Windows Node picks `file` or `dir` from the target. A host that
-      // cannot make the link (Windows without the privilege: EPERM; a filesystem with none: ENOTSUP)
-      // raises the raw errno, a write like any other, for the caller's boundary to classify.
-      await create(entry, 'leaf', (into) => fs.symlink(linkTarget, into));
+      // Typed from the chain read by its text, before anything is made: an untyped `symlink` has
+      // Node on Windows ask the kernel to follow the target to pick `file` or `dir`, so a network or
+      // device text — at any hop — is refused here, on the copied tree's side, never handed on.
+      const type = await readingTree(side, entry.path, () => Promise.resolve().then(() => linkCopyType(entry.path, copied)));
+      // The source itself is a link: there is no copied directory to hold it, so its place is made first.
+      if (entry.relative === '') await claimParentOfDestination(where, copied);
+      // Verbatim. A host that cannot make the link (Windows without the privilege: EPERM; a
+      // filesystem with none: ENOTSUP) raises the raw errno, a write like any other, for the
+      // caller's boundary to classify.
+      await create(entry, 'leaf', (into) => fs.symlink(linkTarget, into, type));
     },
   };
 }
@@ -200,7 +225,9 @@ export function copyVisitor(where: CopyDestination, copied: string, side: FsSide
  * Entries are walked, and refused, exactly as `proveTreeReadable` proves them (see
  * `tree-walk.ts`): a `follow-contained` link is copied as what it points at, inside
  * the source only; a `preserve` link is copied as a link, its target string
- * verbatim and never examined; an entry `filter` excludes is never touched; a named
+ * verbatim and never followed — its chain is read by text alone to give the copy its `file`/`dir`
+ * type, and one through a network or device path is refused (a `refused` fault on `options.side`)
+ * before anything is made; an entry `filter` excludes is never touched; a named
  * pipe, socket or device is refused unopened. Each file is copied from the handle
  * `fstat` judged, with its mode. Each directory takes its source's mode with the
  * owner's rwx kept (`| 0o700`): a read-only source must not become a copy nothing

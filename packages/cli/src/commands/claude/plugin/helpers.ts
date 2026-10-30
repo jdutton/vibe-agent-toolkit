@@ -8,16 +8,16 @@
  * - npm postinstall hook
  */
 
-import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 
-import { type FsSide, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
-import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
+import { everywhere, type FsSide, pathPresent, safePath, withFsFault } from '@vibe-agent-toolkit/utils';
+import { ARCHIVE_LIMITS, extractArchive } from '@vibe-agent-toolkit/utils/archive';
 import { z } from 'zod';
 
-import { extractTarballSync } from '../../../utils/archive-staging.js';
 import { CommandRefusalError } from '../../../utils/command-refusal.js';
 import { requireInputPath } from '../../../utils/project-root-policy.js';
+
+import { packNpmPackage } from './npm-pack.js';
 
 
 export type SkillSource = 'npm' | 'local' | 'zip' | 'tgz' | 'npm-postinstall' | 'dev';
@@ -98,7 +98,7 @@ export function detectSource(input: string): SkillSource {
   // Check filesystem: a path naming nothing is the invocation's mistake, one the OS refuses the input's.
   const absolutePath = safePath.resolve(input);
   // A bare word that names nothing is most often a source typed wrong: say what a source looks like.
-  const stat = requireInputPath(absolutePath, { origin: 'argument', message: `Path does not exist: ${absolutePath}\n${SOURCE_FORMS_HINT}` });
+  const stat = requireInputPath(absolutePath, absolutePath, { origin: 'argument', message: `Path does not exist: ${absolutePath}\n${SOURCE_FORMS_HINT}` }, everywhere('source'));
 
   if (stat.isDirectory()) {
     return 'local';
@@ -126,7 +126,7 @@ export async function readPackageJson(dir: string, from: { readonly side: FsSide
   const packageJsonPath = safePath.join(dir, 'package.json');
   // Asked first, and believed only when the directory's listing agrees: a package with no
   // package.json is the input's shape, never "VAT's scratch space vanished".
-  if (!pathPresent(packageJsonPath, 'follow', from.side, 'confirmed')) {
+  if (!pathPresent(packageJsonPath, { follow: dir }, everywhere(from.side), 'confirmed')) {
     throw new CommandRefusalError('INPUT_UNREADABLE', `${from.label} holds no package.json, so it is not a package VAT can install; nothing was changed.`);
   }
   // A read the OS refuses propagates as the errno: the install classifies it by the path it
@@ -176,50 +176,32 @@ export async function readPackageJsonVatMetadata(
 }
 
 /**
- * Download and extract npm package to temp directory
- * Returns path to extracted package
+ * Download an npm package into `tempDir` and extract it there, through the one archive
+ * primitive: a tarball holding an entry VAT does not extract (a link, a name outside the
+ * archive) refuses the whole package, never installs without it.
  *
- * Uses npm pack to download, then tar npm package for cross-platform extraction
+ * @param packageName - The npm spec, with or without its `npm:` prefix
+ * @param tempDir - VAT's own staging directory: the tarball is downloaded into it and extracted beside it
+ * @returns The extracted package directory
+ * @throws CommandRefusalError `EXTERNAL_API_FAILED` when `npm pack` fails or hands over no package;
+ *   ArchiveRefusedError (`INPUT_UNREADABLE`) for a tarball VAT will not extract; FsFaultError
+ *   side `environment` when the staging cannot be read or written
  */
-export function downloadNpmPackage(packageName: string, tempDir: string): string {
-  // Remove npm: prefix if present
-  const actualPackageName = packageName.startsWith('npm:')
-    ? packageName.slice(4)
-    : packageName;
+export async function downloadNpmPackage(packageName: string, tempDir: string): Promise<string> {
+  const actualPackageName = packageName.startsWith('npm:') ? packageName.slice(4) : packageName;
+  const tarballPath = packNpmPackage(actualPackageName, tempDir);
 
-  // Use npm pack to download package (creates .tgz in current dir). A failure
-  // here is the registry's or the network's answer, not VAT's defect.
-  let packOutput: string | Buffer;
-  try {
-    packOutput = safeExecSync('npm', ['pack', actualPackageName], {
-      cwd: tempDir,
-      encoding: 'utf-8',
-    });
-  } catch (error) {
-    throw new CommandRefusalError('EXTERNAL_API_FAILED', `npm pack failed for package ${actualPackageName}: ${String(error)}`, { cause: error });
-  }
+  // Into its own directory, never beside the tarball: an entry named like the download would land on it.
+  const extracted = safePath.join(tempDir, 'extracted');
+  await withFsFault({ side: 'environment', action: 'create the staging directory', path: extracted }, () => mkdir(extracted));
+  // VAT downloaded this tarball into its own staging: a read of it the OS refuses is the environment's.
+  await extractArchive({ file: tarballPath, side: 'environment' }, extracted, { format: 'tar', limits: ARCHIVE_LIMITS });
 
-  if (!packOutput) {
-    throw new CommandRefusalError('EXTERNAL_API_FAILED', `npm pack failed for package: ${actualPackageName}`);
-  }
-
-  // npm pack outputs the filename (e.g., "package-1.0.0.tgz")
-  const tarballName = packOutput.toString().trim();
-  const tarballPath = safePath.join(tempDir, tarballName);
-
-  if (!existsSync(tarballPath)) {
-    throw new CommandRefusalError('EXTERNAL_API_FAILED', `npm pack succeeded but tarball not found: ${tarballPath}`);
-  }
-
-  // Creates package/ subdirectory; an entry that cannot be extracted refuses, never installs without it
-  extractTarballSync(tarballPath, tempDir);
-
-  const packageDir = safePath.join(tempDir, 'package');
-
-  if (!existsSync(packageDir)) {
+  // npm pack tarballs hold everything under package/.
+  const packageDir = safePath.join(extracted, 'package');
+  if (!pathPresent(packageDir, { follow: tempDir }, everywhere('environment'), 'confirmed')) {
     throw new CommandRefusalError('EXTERNAL_API_FAILED', 'npm tarball extracted but package/ directory not found');
   }
-
   return packageDir;
 }
 

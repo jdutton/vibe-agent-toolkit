@@ -7,7 +7,7 @@ import { resolveWorkspaceSource } from './sources/workspace-source.js';
 import type { ResolvedSkillSource, ResolveSkillSourceContext, SkillSource } from './types.js';
 
 // NOTE: the url resolver is loaded lazily (see the `url` arm below). It is the only
-// source that pulls in network + zip machinery (global `fetch`, `adm-zip`), and
+// source that pulls in network + archive machinery (global `fetch`, the archive module), and
 // eagerly importing that subgraph into every consumer of this barrel (e.g. `vat audit`,
 // which only needs `cloneGitSource`) left a pending async operation that rejected during
 // vitest forks-pool worker teardown, surfacing as `ERR_IPC_CHANNEL_CLOSED`. Loading it on

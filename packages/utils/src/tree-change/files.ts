@@ -12,9 +12,10 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 import { requireConfirmedAbsent } from '../errors/confirmed-absent.js';
 import { isAccessRefusedError, isAlreadyExistsError, isPathAbsentError, isRenameContentionError } from '../errors/errno-table.js';
-import { classifyFsFault, isFsFaultError, withFsFault } from '../errors/fs-fault.js';
+import { classifyFsFault, everywhere, isFsFaultError, withFsFault } from '../errors/fs-fault.js';
 import { recordSuppressedFault } from '../errors/suppressed-faults.js';
 import { mapWithConcurrency } from '../in-order.js';
+import { realpathNative, requireFollowedStat } from '../link-following.js';
 import { isUnderRoot } from '../path-containment.js';
 import { safePath, toForwardSlash } from '../path-core.js';
 import { normalizedTmpdir } from '../path-utils.js';
@@ -108,7 +109,7 @@ async function examined(entry: string): Promise<Stats | undefined> {
     return await fs.lstat(entry);
   } catch (error: unknown) {
     if (!isPathAbsentError(error)) throw error;
-    requireConfirmedAbsent(entry, error, { side: 'destination', action: 'remove the entry', path: entry }, { follows: false });
+    requireConfirmedAbsent(entry, error, { action: 'remove the entry', path: entry }, { follows: false, sideOf: everywhere('destination') });
     return undefined;
   }
 }
@@ -138,8 +139,10 @@ async function removeOnce(entry: string): Promise<boolean> {
 /** Where a write to `dest` really lands: a link's target (so a dotfiles link stays a link), or `dest` itself. */
 async function writeTarget(dest: string): Promise<{ path: string; mode: number | undefined }> {
   try {
-    const real = toForwardSlash(await fs.realpath(dest));
-    return { path: real, mode: (await fs.stat(real)).mode & 0o7777 };
+    // The one native realpath rule (`realpathNative`): an unanswerable volume is asked again by the JS walk.
+    // `dest` is the path the verb itself names — the operator's own, so its own link is the edge.
+    const real = await realpathNative(dest, dest);
+    return { path: real, mode: (await requireFollowedStat(real, real)).mode & 0o7777 };
   } catch (error: unknown) {
     if (isPathAbsentError(error)) return { path: dest, mode: undefined };
     throw error;

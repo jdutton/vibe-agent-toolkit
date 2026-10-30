@@ -3,9 +3,9 @@
  * gives: the same fault, injected into a spawned `vat` through `fault-fs-preload`, ends the run
  * with the same exit code and the same refusal as the matrix's in-process run of the same rule.
  *
- * Two shapes the matrix exists for: a full disk while node-tar writes a plugin tarball into
- * staging (R7: that once exited 0 with a truncated install), and a file table exhausted at the
- * first file adm-zip opens for writing.
+ * Two shapes the matrix exists for: a full disk while the archive module writes a plugin tarball's
+ * files into staging (R7: that once exited 0 with a truncated install), and a file table exhausted
+ * at the first file it opens for writing out of a ZIP.
  */
 import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { faultRuleOf, installFaultFs, type FaultFsSpec, type FaultSpec } from '@vibe-agent-toolkit/utils/testing';
@@ -33,10 +33,11 @@ interface Smoke {
 
 const SMOKES: readonly Smoke[] = [
   {
-    name: 'plugin install <tgz>, ENOSPC on the 2nd write into its $TMPDIR staging',
+    name: 'plugin install <tgz>, ENOSPC on the 2nd file written into its $TMPDIR staging',
     c: pluginInstallCase('tgz', 'fresh'),
     command: ['claude', 'plugin'],
-    fault: (r) => ({ family: 'write', op: 'write', pathIncludes: `${toForwardSlash(r.tmp)}/vat-install-tgz-`, nth: 2, errno: 'ENOSPC' }),
+    // The archive module writes each extracted file whole, on the handle it created exclusively.
+    fault: (r) => ({ family: 'write', op: 'writeFile', pathIncludes: `${toForwardSlash(r.tmp)}/vat-install-tgz-`, nth: 2, errno: 'ENOSPC' }),
   },
   {
     name: 'skills install <zip>, EMFILE on the first open for write',

@@ -368,14 +368,14 @@ function cacheClearCase(): VerbCase {
  * `fault-matrix-shards.integration.test.ts` holds each file to this table.
  */
 export const BUILD_FAMILY_SHARDS = {
-  'skills/build': { make: skillsBuildCase, files: 18 },
+  'skills/build': { make: skillsBuildCase, files: 26 },
   'skills/package/o-fresh': { make: () => skillsPackageCase('o-fresh'), files: 15 },
   'skills/package/o-force': { make: () => skillsPackageCase('o-force'), files: 19 },
   'skills/package/o-occupied': { make: () => skillsPackageCase('o-occupied'), files: 16 },
   'agent/build/output': { make: () => agentBuildCase('output'), files: 13 },
   'agent/build/force': { make: () => agentBuildCase('force'), files: 15 },
-  'plugin/build': { make: pluginBuildCase, files: 16 },
-  'top-level-build': { make: topLevelBuildCase, files: 36 },
+  'plugin/build': { make: pluginBuildCase, files: 24 },
+  'top-level-build': { make: topLevelBuildCase, files: 61 },
   'rag/clear/default': { make: () => ragClearCase('default'), files: 4 },
   'rag/clear/db': { make: () => ragClearCase('db'), files: 4 },
   'cache/clear': { make: cacheClearCase, files: 3 },

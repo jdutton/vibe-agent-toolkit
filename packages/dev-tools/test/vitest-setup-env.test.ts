@@ -11,7 +11,8 @@ import { homedir } from 'node:os';
 import { canonicalPath, normalizedTmpdir, relativeEscapesRoot, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-const isUnder = (root: string, path: string): boolean => !relativeEscapesRoot(safePath.relative(canonicalPath(root), canonicalPath(path)));
+// Both are the test process's own environment paths: each is its own edge.
+const isUnder = (root: string, path: string): boolean => !relativeEscapesRoot(safePath.relative(canonicalPath(root, root), canonicalPath(path, path)));
 
 describe('vitest.setup.js — the Claude configuration a test sees by default', () => {
   const configured = process.env['CLAUDE_CONFIG_DIR'] ?? '';

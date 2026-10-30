@@ -3,11 +3,15 @@
  * Resolves relative and node_modules paths using TypeScript's module resolution
  */
 
-import { existsSync } from 'node:fs';
-import { dirname,   isAbsolute } from 'node:path';
+import { dirname, isAbsolute } from 'node:path';
 
-import { toForwardSlashAnyPlatform, safePath } from '@vibe-agent-toolkit/utils';
+import { followedKindSync, safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 import ts from 'typescript';
+
+/** Whether `candidate` resolves, its link chain read beneath the importing file's directory (a refusal throws). */
+export function markdownPathPresent(candidate: string, containingFile: string): boolean {
+  return followedKindSync(candidate, dirname(containingFile)) !== 'absent';
+}
 
 /**
  * Resolve a markdown import path to an absolute file path
@@ -42,7 +46,7 @@ export function resolveMarkdownPath(
 
   // Handle absolute paths (rare, but possible)
   if (isAbsolute(modulePath)) {
-    return existsSync(modulePath) ? modulePath : null;
+    return markdownPathPresent(modulePath, containingFile) ? modulePath : null;
   }
 
   // Handle node_modules paths
@@ -60,7 +64,7 @@ function resolveRelativePath(modulePath: string, containingFile: string): string
   const containingDir = dirname(containingFile);
   const absolutePath = safePath.resolve(containingDir, modulePath);
 
-  return existsSync(absolutePath) ? absolutePath : null;
+  return markdownPathPresent(absolutePath, containingFile) ? absolutePath : null;
 }
 
 /**
@@ -106,7 +110,7 @@ function searchNodeModules(modulePath: string, containingFile: string): string |
   while (true) {
     const nodeModulesPath = safePath.join(currentDir, 'node_modules', modulePath);
 
-    if (existsSync(nodeModulesPath)) {
+    if (markdownPathPresent(nodeModulesPath, containingFile)) {
       return nodeModulesPath;
     }
 

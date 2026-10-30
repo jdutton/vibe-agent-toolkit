@@ -1,10 +1,11 @@
-import { mkdirSync, realpathSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { isPathAbsentError } from './errors/errno-table.js';
 import { classifyFsFault } from './errors/fs-fault.js';
+import { edgeRealpathSync, requireSomethingAt } from './link-following.js';
 import { safePath } from './path-core.js';
 
 /**
@@ -33,20 +34,17 @@ export * from './path-core.js';
  * containment check judged such a path by the spelling the OS had just refused
  * to resolve. They stay loud.
  *
- * The JS `realpathSync` is asked before absence is concluded, because the
- * native call can fail where the JS walk succeeds — Node's docs note that on a
- * musl libc without procfs the native `realpath(3)` cannot work at all, and it
- * reports that as `ENOENT` for a path that exists. Only when both agree that
- * nothing is there is the lexical path the answer.
+ * Only when the native call AND the JS walk agree that nothing is there is the
+ * lexical path the answer — the one fallback rule every native site shares
+ * (`link-following.ts`), here with native separators kept. A chain beneath
+ * `within` is read hop by hop before the kernel is asked (`requireSomethingAt`);
+ * one that leads to nothing is absent.
  */
-function realpathOrSelf(target: string): string {
+function realpathOrSelf(target: string, within: string): string {
   try {
-    return realpathSync.native(target);
-  } catch (error) {
-    if (!isPathAbsentError(error)) throw error;
-  }
-  try {
-    return realpathSync(target);
+    // A dangle is `ENOENT` (absent, so the lexical path); a cycle is `ELOOP`, and stays loud.
+    requireSomethingAt(target, within, 'realpath');
+    return edgeRealpathSync(target);
   } catch (error) {
     if (isPathAbsentError(error)) return target;
     throw error;
@@ -56,8 +54,9 @@ function realpathOrSelf(target: string): string {
 /**
  * Normalize any path (resolve short names on Windows)
  *
- * Resolves Windows 8.3 short names (e.g., RUNNER~1) and symlinks.
- * Accepts multiple path segments like path.resolve() for convenience.
+ * Resolves Windows 8.3 short names (e.g., RUNNER~1) and symlinks — every link
+ * beneath `within` read by its text first, so a link to `\\host\share` is
+ * refused before the kernel is asked (`LinkChainRefusedError`).
  *
  * **Why this matters:**
  * - Windows may create paths with short names (8.3 format)
@@ -65,47 +64,23 @@ function realpathOrSelf(target: string): string {
  * - This causes path comparison failures and existsSync() issues
  * - realpathSync.native() resolves these to their actual filesystem paths
  *
- * @param paths - Path segments to join and normalize
- * @returns Real (normalized) path with **OS-native separators** (backslashes on Windows).
- * Use `toForwardSlash()` if you need forward slashes for string comparison or display.
+ * @param target - The path, absolute or relative to cwd
+ * @param within - The tree it is crawled in — the operator's own input, whose own
+ *   ancestors are never probed — or `target` itself when it IS the operator's own path
+ * @returns Real (normalized) path with **OS-native separators** (backslashes on Windows),
+ * or the resolved spelling of a path that is not there. Use `toForwardSlash()` if you need
+ * forward slashes for string comparison or display.
+ * @throws LinkChainRefusedError for a chain through a network or device path; the OS's refusal of a probe, raw
  *
  * @example
  * ```typescript
- * // Single path
- * const shortPath = 'C:\\PROGRA~1\\nodejs';
- * const longPath = normalizePath(shortPath);
+ * const longPath = normalizePath('C:\\PROGRA~1\\nodejs', 'C:\\PROGRA~1\\nodejs');
  * // Result: 'C:\\Program Files\\nodejs'
- *
- * // Multiple segments (like path.resolve)
- * const cliPath = normalizePath(__dirname, '../../dist/bin.js');
- * // Resolves to absolute path AND normalizes short names
- *
- * // Backward compatible with old signature
- * normalizePath('./docs/../README.md', '/project')
- * // Returns: '/project/README.md' (normalized)
+ * const real = normalizePath(safePath.join(projectRoot, 'docs/a.md'), projectRoot);
  * ```
  */
-export function normalizePath(...paths: string[]): string {
-  // Handle single relative path without filesystem resolution
-  if (paths.length === 1 && paths[0] && !path.isAbsolute(paths[0])) {
-    return path.normalize(paths[0]);
-  }
-
-  // Resolve to absolute path
-  // For 2 args: treat as (relativePath, baseDir) - reverse for path.resolve(baseDir, relativePath)
-  // For 3+ args or single absolute: use as-is
-  let resolved: string;
-  if (paths.length === 1) {
-    resolved = paths[0] ?? '';
-  } else if (paths.length === 2) {
-    resolved = path.resolve(paths[1] ?? '', paths[0] ?? '');
-  } else {
-    resolved = path.resolve(...paths);
-  }
-
-  // Native OS realpath first (resolves Windows short names); a path that is not
-  // there is answered with `resolved` — better than the original input.
-  return realpathOrSelf(resolved);
+export function normalizePath(target: string, within: string): string {
+  return realpathOrSelf(path.resolve(target), within);
 }
 
 /**
@@ -137,7 +112,7 @@ export function normalizePath(...paths: string[]): string {
 export function normalizedTmpdir(): string {
   const tmp = tmpdir();
   try {
-    return realpathOrSelf(tmp);
+    return realpathOrSelf(tmp, tmp);
   } catch (error: unknown) {
     // Every verb roots its scratch, staging and caches here: a refusal is VAT's scratch space failing.
     throw classifyFsFault(error, { side: 'environment', action: 'resolve the temporary directory', path: tmp });
@@ -181,7 +156,7 @@ export function mkdirSyncReal(
 ): string {
   mkdirSync(dirPath, options);
 
-  return realpathOrSelf(dirPath);
+  return realpathOrSelf(dirPath, dirPath);
 }
 
 /**

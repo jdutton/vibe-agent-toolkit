@@ -15,10 +15,8 @@
  * the walker.
  */
 
-import { existsSync } from 'node:fs';
-
 import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { issueLocation, safePath, transientRefusalClause } from '@vibe-agent-toolkit/utils';
+import { everywhere, issueLocation, pathPresent, safePath, transientRefusalClause } from '@vibe-agent-toolkit/utils';
 import { crawlDirectorySync, type DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
 
 import { normalizeRelPath } from '../files-config.js';
@@ -63,7 +61,8 @@ export function detectPackagedAgentInstructionFiles(
   declaredDests: readonly string[],
   outputs: readonly string[],
 ): ValidationIssue[] {
-  if (!existsSync(rootDir)) return [];
+  // `rootDir` is the caller's own tree (the output it wrote, or the one it examines): its own `within`.
+  if (!pathPresent(rootDir, { follow: rootDir }, everywhere(outputs.includes(rootDir) ? 'destination' : 'source'), 'probe')) return [];
 
   const declared = new Set(declaredDests.map((d) => normalizeRelPath(d)));
 

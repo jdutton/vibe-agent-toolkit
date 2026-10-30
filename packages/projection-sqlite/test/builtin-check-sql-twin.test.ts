@@ -108,6 +108,14 @@ const UNRESOLVED_PATHS = [
   '.claude/rules/dangling.md',
 ] as const;
 
+/**
+ * The declined links recorded under the COULD-NOT-LOOK code — the fourth
+ * member of the set, for the same reason as {@link OUTSIDE_ROOT_PATHS}.
+ */
+const UNREADABLE_PATHS = [
+  '.claude/rules/locked.md',
+] as const;
+
 /** Every declined link this differential is about, and one that is not a rules link. */
 const LINK_PATHS = [
   // The two `=` arms: the root's own `.claude` and its own rules directory.
@@ -161,6 +169,7 @@ function linkConditionRows(): ExtentScopedRows {
       ...LINK_PATHS.map((path) => condition(path, 'ext-1')),
       ...OUTSIDE_ROOT_PATHS.map((path) => condition(path, 'ext-1', 'EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT')),
       ...UNRESOLVED_PATHS.map((path) => condition(path, 'ext-1', 'EXTENT_SYMLINK_TARGET_UNRESOLVED')),
+      ...UNREADABLE_PATHS.map((path) => condition(path, 'ext-1', 'EXTENT_SYMLINK_TARGET_UNREADABLE')),
       condition('.claude/rules/x.md', 'ext-2'),
     ],
   };
@@ -270,6 +279,7 @@ describe('built-in SQL twins', () => {
       '.claude',
       '.claude/rules',
       '.claude/rules/dangling.md',
+      '.claude/rules/locked.md',
       '.claude/rules/nested/deep.md',
       '.claude/rules/vendored.md',
       '.claude/rules/x.md',
@@ -282,7 +292,7 @@ describe('built-in SQL twins', () => {
     // ⭐ Every declined-link code is in the fixture and in both lists: the twin
     // is proven over the set, not over one of its members. Narrow either side to
     // fewer codes and the two lists stop agreeing.
-    for (const path of [...OUTSIDE_ROOT_PATHS, ...UNRESOLVED_PATHS]) {
+    for (const path of [...OUTSIDE_ROOT_PATHS, ...UNRESOLVED_PATHS, ...UNREADABLE_PATHS]) {
       expect(fromSql, `SQL missed the non-in-root ${path}`).toContain(path);
       expect(fromPredicate, `the predicate missed the non-in-root ${path}`).toContain(path);
     }

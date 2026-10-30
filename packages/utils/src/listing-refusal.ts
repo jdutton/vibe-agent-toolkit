@@ -18,7 +18,7 @@
  * a HIGH. A required field is what makes `tsc` enumerate the callers.
  */
 
-import { fsFaultOf } from './errors/errno-table.js';
+import { filesystemErrnoClass, fsFaultOf } from './errors/errno-table.js';
 import { FS_FAULT_CODE, FsFaultError, type FsSide } from './errors/fs-fault.js';
 import { VatError } from './errors/vat-error.js';
 import { type DirectoryRefusal, transientRefusalClause } from './fs-utils.js';
@@ -83,9 +83,10 @@ export type UnreadablePolicy =
  *
  * Coded `FS_FAULT` and carrying the classified fault as its `cause` (side from
  * the caller's context, class from the errno), so the refusal is the schema
- * table's for that side and class — never a code of its own. An errno outside
- * the classifier's table carries no cause: it is not known to be the
- * filesystem's, so it stays a defect report.
+ * table's for that side and class — never a code of its own. A refused listing
+ * is a filesystem call's refusal by construction, so every errno has a class:
+ * one the table does not list is the unlisted class, as {@link fsFaultOf}
+ * answers for the error it came from.
  */
 export class DirectoryListingRefusedError extends VatError {
   readonly refusal: DirectoryRefusal;
@@ -96,14 +97,12 @@ export class DirectoryListingRefusedError extends VatError {
   }
 }
 
-/** The classified fault a refused listing stands for, or `undefined` for an errno outside the table. */
-function classifiedListingFault(refusal: DirectoryRefusal, side: FsSide): FsFaultError | undefined {
-  const facts = fsFaultOf({ code: refusal.code });
-  if (facts === undefined) return undefined;
+/** The classified fault a refused listing stands for. */
+function classifiedListingFault(refusal: DirectoryRefusal, side: FsSide): FsFaultError {
   return new FsFaultError({
     side,
-    faultClass: facts.faultClass,
-    errno: facts.errno,
+    faultClass: filesystemErrnoClass(refusal.code),
+    errno: refusal.code,
     path: refusal.directory,
     origin: 'content',
     action: 'list a directory',
@@ -210,7 +209,8 @@ export function settleCrawlRefusal(policy: UnreadablePolicy, refusal: DirectoryR
 
 function canonicalOrSpelled(path: string): string {
   try {
-    return toForwardSlash(canonicalPath(path));
+    // The refused directory and the verb's outputs are spelled by the verb: each is its own edge.
+    return toForwardSlash(canonicalPath(path, path));
   } catch (error) {
     // A directory that refused its listing may refuse resolution too: its spelling is all there is.
     if (fsFaultOf(error) === undefined) throw error;

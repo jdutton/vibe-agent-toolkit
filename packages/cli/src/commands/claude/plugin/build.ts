@@ -12,7 +12,7 @@ import { mkdir, readdir } from 'node:fs/promises';
 import { conventionalSuiteProbe, createProjectRegistry, getMarketplaceOutputDir, getPluginSourceDir, isSkillPackagingInputError, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, materializeIssue, packageSkillInto, packagingConfigToPackageOptions, pluginDirInMarketplace, skillNameToFsPath, stagedPathMapper, type ConventionalSuiteProbe, type DeclaredEvalSuite, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
 import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, ExternalPluginSource, ProjectConfig, ResourceRegistry, SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type Finding, type Gate, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { applyTreePlan, writeFileUnder, compareCodeUnits, direntKindFollowing, everyInOrder, forEachInOrder, type FsSide, isSingleFsSegment, issueLocation, isTreeChangeResidue, mapInOrder, pathPresent, planTreeChanges, relativeEscapesRoot, safePath, toForwardSlash, VatError, withFsFault } from '@vibe-agent-toolkit/utils';
+import { applyTreePlan, compareCodeUnits, direntKindFollowing, everyInOrder, foldedSegment, forEachInOrder, type FsSide, isSingleFsSegment, issueLocation, isTreeChangeResidue, mapInOrder, pathPresent, planTreeChanges, relativeEscapesRoot, safePath, type SideOfPath, sideWithin, toForwardSlash, VatError, withFsFault, writeFileUnder } from '@vibe-agent-toolkit/utils';
 import { onCrawlOutput } from '@vibe-agent-toolkit/utils/crawl';
 import { Command } from 'commander';
 
@@ -41,7 +41,7 @@ import { assertMarketplaceDeclared, loadClaudeProjectConfig } from '../claude-co
 import type { PluginBuildData } from './build-schema.js';
 import { buildMarketplaceJson, type MarketplaceJsonPluginEntry } from './marketplace-json.js';
 import { resolvePluginChangelogPath } from './plugin-changelog.js';
-import { applyPluginFiles, foldedSegment } from './plugin-files.js';
+import { applyPluginFiles } from './plugin-files.js';
 import { mergePluginJson, resolveVersion } from './plugin-json-merge.js';
 import {
   parsePluginJsonFiles,
@@ -245,6 +245,17 @@ function distSkillsSide(distSkillsDir: string, outputs: readonly string[]): FsSi
 }
 
 /**
+ * The side of each path a probe of a plugin's source directory touches, walked from the project root.
+ * The conventional `plugins/` directory (walked through, and listed to confirm an absence) is plugin
+ * source as a whole; a configured `source` is only itself — the directories above it are the project
+ * the build writes into.
+ */
+function pluginSourceSideOf(configDir: string, plugin: { readonly source?: string | undefined }, pluginSourceDir: string): SideOfPath {
+  const inputRoot = plugin.source === undefined ? safePath.join(configDir, 'plugins') : pluginSourceDir;
+  return sideWithin(inputRoot, 'source', 'destination');
+}
+
+/**
  * Discover available skill names by listing directories in dist/skills/.
  *
  * @param outputs - What the run writes (its one declaration), which decides `dist/skills`' side
@@ -252,16 +263,17 @@ function distSkillsSide(distSkillsDir: string, outputs: readonly string[]): FsSi
 function discoverBuiltSkills(configDir: string, outputs: readonly string[]): Promise<string[]> {
   const skillsDir = safePath.join(configDir, 'dist', 'skills');
 
-  // A probe or a listing the OS refuses is on dist/skills' side of the run (see `distSkillsSide`).
+  // A probe or a listing the OS refuses is on dist/skills' side of the run (see `distSkillsSide`);
+  // `dist/` itself, walked through and listed to confirm an absence, is the project's: the tree the build writes.
   const side = distSkillsSide(skillsDir, outputs);
-  // The run's own output is "not built" only once `dist/` agrees; another build's is taken at the probe's word.
-  if (!pathPresent(skillsDir, 'follow', side, side === 'destination' ? 'confirmed' : 'probe')) {
+  // "Not built" only once `dist/`'s listing agrees: a wrong absent silently builds every plugin without its skills.
+  if (!pathPresent(skillsDir, { follow: configDir }, sideWithin(skillsDir, side, 'destination'), 'confirmed')) {
     return Promise.resolve([]);
   }
 
   return withFsFault({ side, origin: 'content', action: 'list the built skills', path: skillsDir }, async () => {
     const entries = await readdir(skillsDir, { withFileTypes: true });
-    const kinds = await Promise.all(entries.map((entry) => direntKindFollowing(skillsDir, entry)));
+    const kinds = await Promise.all(entries.map((entry) => direntKindFollowing(skillsDir, entry, configDir)));
     // A staged or parked tree a concurrent or killed `vat skills build` left beside a bundle is no skill.
     return entries.filter((entry, i) => kinds[i] === 'directory' && !isTreeChangeResidue(entry.name)).map((entry) => entry.name);
   });
@@ -436,7 +448,7 @@ export async function runClaudePluginBuild(
   const built: MarketplaceBuildResult[] = [];
   await buildClaudePluginMarketplaces(
     configDir,
-    loadConfig(configDir),
+    loadConfig(configDir, 'destination'),
     { marketplace: options.marketplace, logger: options.logger ?? createLogger({}), verbose: options.verbose === true, runOutputs: options.runOutputs },
     built,
   );
@@ -522,7 +534,7 @@ function withPackagingStop(finished: FinishedWork, error: unknown, configDir: st
 function builtWork(configDir: string, built: readonly MarketplaceBuildResult[]): FinishedWork & { data: PluginBuildData; findings: Finding[] } {
   return {
     examined: built.length,
-    findings: toFindings(built.flatMap(marketplaceIssues)),
+    findings: toFindings(built.flatMap((result) => marketplaceIssues(result))),
     data: pluginBuildData(configDir, built),
   };
 }
@@ -587,8 +599,9 @@ async function copyDistributionFiles(
   await forEachInOrder(['LICENSE', 'README.md', 'CHANGELOG.md'], async (file) => {
     const override = overrides[file];
     const srcPath = override ? safePath.join(configDir, override) : safePath.join(configDir, file);
-    // Absent is skipped; a file the OS will not let the build examine refuses, never skipped as absent.
-    if (pathPresent(srcPath, 'follow', 'source', 'probe')) {
+    // Absent is skipped once the project root's listing agrees (a wrong absent silently ships less); a file the OS will not let the build examine refuses.
+    // The file is an input; the directories above it, and the root listed to confirm it absent, are the project the build writes into.
+    if (pathPresent(srcPath, { follow: configDir }, sideWithin(srcPath, 'source', 'destination'), 'confirmed')) {
       await copyFileIntoMarketplace(srcPath, { root: marketplaceDir, relative: file }, issueLocation(srcPath, configDir), issueLocation(safePath.join(marketplaceDir, file), configDir));
       if (override) {
         logger.info(`   ${file} (from publish.${file === 'README.md' ? 'readme' : 'changelog'}: ${override})`);
@@ -903,7 +916,7 @@ function poolCopyOrder(
   return selected
     .map((skillName) => {
       const fsPath = destOverrides.get(skillName) ?? skillNameToFsPath(skillName);
-      return { skillName, fsPath, placed: toForwardSlash(fsPath).split('/').map(foldedSegment).join('/') };
+      return { skillName, fsPath, placed: toForwardSlash(fsPath).split('/').map((segment) => foldedSegment(segment)).join('/') };
     })
     .toSorted((a, b) => compareCodeUnits(a.placed, b.placed) || compareCodeUnits(a.skillName, b.skillName))
     .map(({ skillName, fsPath }) => ({ skillName, fsPath }));
@@ -939,10 +952,10 @@ async function copyPoolSkills(
   // In order: each copy writes into the plugin dir, `destOverrides` may collide, and the first failure wins.
   await forEachInOrder(selected, async ({ skillName, fsPath }) => {
     const skillDistPath = safePath.join(configDir, 'dist', 'skills', skillName);
-    requireInputPath(skillDistPath, {
+    requireInputPath(skillDistPath, configDir, {
       origin: 'content',
       message: `Skill "${skillName}" not built at dist/skills/${skillName}. Run: vat skills build (or vat build to build everything)`,
-    });
+    }, sideWithin(safePath.join(configDir, 'dist', 'skills'), distSkillsSide(skillDistPath, outputs), 'destination'));
 
     const destPath = safePath.join(pluginDir, 'skills', fsPath);
     // A file in dist/skills the OS will not read is on dist/skills' side of the run (`distSkillsSide`):
@@ -1363,7 +1376,8 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildOutcome>
   // Phase 1: validators.
   await verifyPluginDirCaseMatch(configDir, pluginDef.name);
 
-  const pluginSourceExists = pathPresent(pluginSourceDir, 'follow', 'source', 'probe');
+  // Confirmed: a wrong absent would silently build the plugin without its own directory.
+  const pluginSourceExists = pathPresent(pluginSourceDir, { follow: configDir }, pluginSourceSideOf(configDir, pluginDef, pluginSourceDir), 'confirmed');
   const hasExplicitFiles = (pluginDef.files?.length ?? 0) > 0;
   const hasPoolSkills =
     pluginDef.skills === '*'
@@ -1567,7 +1581,7 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildOutcome>
   // by default, or `entry.changelog` (relative to plugin source) when configured.
   // No-op when neither resolves — marketplace-level CHANGELOG (handled in
   // copyDistributionFiles) is unaffected.
-  const changelogPath = resolvePluginChangelogPath(pluginSourceDir, pluginDef);
+  const changelogPath = resolvePluginChangelogPath(pluginSourceDir, pluginDef, configDir);
   if (changelogPath) {
     const target = { root: pluginDir, relative: 'CHANGELOG.md' };
     await copyFileIntoMarketplace(

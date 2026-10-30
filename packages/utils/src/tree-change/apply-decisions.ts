@@ -4,7 +4,7 @@
  * the halves that make the calls — and hold nothing else to decide.
  */
 
-import type { FsFaultFacts } from '../errors/errno-table.js';
+import { type FsFaultFacts, pathsActedOn } from '../errors/errno-table.js';
 import { FsFaultError, type FsSide } from '../errors/fs-fault.js';
 import { VatError } from '../errors/vat-error.js';
 import { relativeEscapesRoot, safePath } from '../path-core.js';
@@ -18,15 +18,17 @@ export const TEMP_DIR_OUTSIDE_TMPDIR_CODE = 'TEMP_DIR_OUTSIDE_TMPDIR';
 export const TREE_CLEANUP_INCOMPLETE_CODE = 'TREE_CLEANUP_INCOMPLETE';
 
 /**
- * Whether a `write` fill's failure is the DESTINATION's: the errno names a path under the staged
- * tree — all the callback may write. Anything else, an input the callback read (a sibling of the
- * destination included), is not: it is rethrown as it was, for the verb's boundary to classify.
+ * Whether a `write` fill's failure is the DESTINATION's: a path the failing call acted on
+ * ({@link pathsActedOn} — the one reading of an errno's two paths, so never a symlink's target
+ * text) is under the staged tree, all the callback may write. Anything else, an input the
+ * callback read (a sibling of the destination included), is not: it is rethrown as it was, for
+ * the verb's boundary to classify.
  *
- * @param facts - The errno and the paths the OS named
+ * @param facts - The errno, the call and the paths the OS named
  * @param sideOf - The side a path is on, with the staged tree as the only `destination`
  */
-export function fillFaultIsDestinations(facts: Pick<FsFaultFacts, 'path' | 'dest'>, sideOf: (path: string) => FsSide | undefined): boolean {
-  return [facts.path, facts.dest].some((named) => named !== undefined && sideOf(named) === 'destination');
+export function fillFaultIsDestinations(facts: FsFaultFacts, sideOf: (path: string) => FsSide | undefined): boolean {
+  return pathsActedOn(facts).some((named) => sideOf(named) === 'destination');
 }
 
 /** What is at a destination when the apply reaches it. */
@@ -119,21 +121,6 @@ export function entryInTheWayFault(entry: string, writing: string, cause: unknow
     action: `write ${writing}: the tree it goes into already holds an entry there, which VAT never writes over or through`,
     cause,
   });
-}
-
-const WIN32_NAMESPACE = String.raw`\\?` + '\\';
-const WIN32_UNC_NAMESPACE = `${WIN32_NAMESPACE}UNC\\`;
-
-/**
- * The first directory a recursive `mkdir` reports it made, in the spelling the caller's own paths
- * have. Under win32 Node hands the OS a namespaced path (`\\?\C:\…`, `\\?\UNC\server\share\…`) and
- * may report the directory it made in that form; held against a plain `C:\…` destination it reads as
- * another root, and the parents a failed create made would then never be removed
- * ({@link madeParentStep} stops at the first step). Everything else is returned as it is.
- */
-export function madeDirectoryPath(made: string): string {
-  if (made.startsWith(WIN32_UNC_NAMESPACE)) return `\\\\${made.slice(WIN32_UNC_NAMESPACE.length)}`;
-  return made.startsWith(WIN32_NAMESPACE) ? made.slice(WIN32_NAMESPACE.length) : made;
 }
 
 /** A rename is tried this many times under win32 when the OS reports contention; the waits between are 50, 100, 200, 400, 800 ms. */

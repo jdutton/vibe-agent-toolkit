@@ -33,7 +33,6 @@
  *
  * PURE LOOKUP/CLASSIFICATION — no side effects, no build. Build is the caller's job.
  */
-import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import {
@@ -41,7 +40,7 @@ import {
   skillNameToFsPath,
   type PluginLocalSkillIndex,
 } from '@vibe-agent-toolkit/agent-skills';
-import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
+import { everywhere, findProjectRoot, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
 
 import { loadConfigCached } from '../utils/config-loader.js';
 
@@ -49,8 +48,9 @@ import { classifyToken } from './classify.js';
 import { getDiscoveredSkillsByPath, resolveSkillPackagingConfig } from './packaging-config.js';
 import type { BuildableReference, DeclaredSkillLink, SkillDistribution, SkillReference } from './types.js';
 
-function existingDir(p: string): boolean {
-  return existsSync(p);
+/** Whether the bare name names something under the operator's own cwd (`within`); a refused probe is the source's fault, never "no such dir". */
+function existingDir(p: string, cwd: string): boolean {
+  return pathPresent(p, { follow: cwd }, everywhere('source'), 'probe');
 }
 
 /**
@@ -103,7 +103,7 @@ interface DeclaredSkillScope {
 async function loadDeclaredSkillScope(absPath: string): Promise<DeclaredSkillScope | undefined> {
   const configRoot = findProjectRoot(absPath);
   if (configRoot === null) return undefined;
-  const config = loadConfigCached(configRoot);
+  const config = loadConfigCached(configRoot, 'source');
   if (config?.skills === undefined) return undefined;
   // `'refuse'`: a reference resolved against a partial declared list can land
   // on `not-found` for a skill that exists. The throw propagates to the
@@ -207,7 +207,7 @@ async function resolveBareName(ref: string, cwd: string): Promise<SkillReference
   // `not-found`, never a name-miss.
   const scope = await loadDeclaredSkillScope(cwd);
   if (scope === undefined) {
-    return existingDir(dirCandidate)
+    return existingDir(dirCandidate, cwd)
       ? { kind: 'source', source: { path: ref } }
       : { kind: 'not-found', ref };
   }
@@ -217,7 +217,7 @@ async function resolveBareName(ref: string, cwd: string): Promise<SkillReference
 
   const sourcePath = byName.get(ref);
   if (sourcePath !== undefined) {
-    if (existingDir(dirCandidate)) {
+    if (existingDir(dirCandidate, cwd)) {
       process.stderr.write(
         `note: '${ref}' matched a declared skill; testing its built dist. Use './${ref}' to test the local directory as-is.\n`,
       );
@@ -225,7 +225,7 @@ async function resolveBareName(ref: string, cwd: string): Promise<SkillReference
     return buildBuildable(ref, sourcePath, scope);
   }
 
-  if (existingDir(dirCandidate)) return { kind: 'source', source: { path: ref } };
+  if (existingDir(dirCandidate, cwd)) return { kind: 'source', source: { path: ref } };
   return {
     kind: 'name-miss',
     name: ref,

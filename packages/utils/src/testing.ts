@@ -39,6 +39,7 @@ export {
 } from './crawl-timing.js';
 // The three fixture modules the sinks' suites share: the ONE temp-dir family,
 // the host gates, and the hostile tree every sink is tested against.
+export * from './testing/archive-fixtures.js';
 export * from './testing/executables.js';
 export * from './testing/fault-fs.js';
 // By name: the harness's vocabulary, not its op table (`OPS`, `OpSpec`, `PathShape` are `fault-fs.ts`'s

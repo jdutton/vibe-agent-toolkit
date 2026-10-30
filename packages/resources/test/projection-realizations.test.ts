@@ -17,7 +17,7 @@ import {
   collectionMimeConflictCondition,
   collectRealization,
   createCollectionMimeResolver,
-  realPathOrNull,
+  resolveRealPath,
   relativize,
   type CollectionMimeResolver,
   type RealizationContext,
@@ -599,6 +599,20 @@ describe('collection mime conflicts', () => {
     expect(condition?.sourcePath).toBeNull();
     expect(condition?.matchedPayload).toBeNull();
   });
+
+  // The column is the closed fault vocabulary, less `absent` (the OS looked and found nothing has no class).
+  it('accepts only a fault class the OS can decline a resolution with in targetFaultClass', async () => {
+    writeFixture(SOURCE_FILE, TS_SOURCE);
+    const { resolver } = await realizeUnder(SOURCE_FILE, disagreeing);
+    const [condition] = resolver.conflicts.map((conflict) => collectionMimeConflictCondition(conflict, EXTENT_ID, RESOURCE_ID));
+
+    for (const faultClass of ['refused', 'exhausted', 'wrong-type', 'occupied', 'busy', 'unsupported', 'device']) {
+      expect(RealizationConditionRowSchema.safeParse({ ...condition, targetFaultClass: faultClass }).success, faultClass).toBe(true);
+    }
+    for (const faultClass of ['absent', 'nonsense', '']) {
+      expect(RealizationConditionRowSchema.safeParse({ ...condition, targetFaultClass: faultClass }).success, faultClass).toBe(false);
+    }
+  });
 });
 
 describe('relativize', () => {
@@ -611,17 +625,18 @@ describe('relativize', () => {
   });
 });
 
-describe('realPathOrNull', () => {
+describe('resolveRealPath', () => {
   it('resolves a symlink to its target rather than reporting the link', ({ skip }) => {
     const cap = symlinkCapability() ?? skip();
 
     const alias = safePath.join(root, 'alias.md');
     createSymlink(cap, safePath.join(root, NESTED_RELATIVE), alias);
 
-    expect(realPathOrNull(alias)).toBe(realPathOrNull(safePath.join(root, NESTED_RELATIVE)));
+    expect(resolveRealPath(alias, root)).toEqual(resolveRealPath(safePath.join(root, NESTED_RELATIVE), root));
+    expect(resolveRealPath(alias, root)).toMatchObject({ kind: 'resolved' });
   });
 
-  it('returns null for a path that cannot be resolved', () => {
-    expect(realPathOrNull(safePath.join(root, NOWHERE))).toBeNull();
+  it('answers nowhere, with no fault, for a path that resolves to nothing', () => {
+    expect(resolveRealPath(safePath.join(root, NOWHERE), root)).toEqual({ kind: 'nowhere', fault: null });
   });
 });

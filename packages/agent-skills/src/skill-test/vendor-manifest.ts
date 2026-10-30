@@ -8,9 +8,9 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { followedKindSync, requireFollowedStatSync, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 // ---------------------------------------------------------------------------
@@ -45,7 +45,8 @@ function collectFiles(dir: string, baseDir: string): string[] {
     const entries = readdirSync(current).sort((a, b) => a.localeCompare(b));
     for (const name of entries) {
       const abs = safePath.join(current, name);
-      const st = statSync(abs);
+      // Followed beneath the vendored tree: every link's chain is read by its text first.
+      const st = requireFollowedStatSync(abs, baseDir);
       if (st.isDirectory()) {
         walk(abs);
       } else {
@@ -106,7 +107,8 @@ export function regenerateVendoredManifest(vendorDir: string): void {
  */
 export function verifyVendoredManifest(vendorDir: string): boolean {
   const manifestPath = safePath.join(vendorDir, MANIFEST_FILENAME);
-  if (!existsSync(manifestPath)) {
+  // The vendored tree is the one probed: a refused probe or link chain throws — it is not tampering.
+  if (followedKindSync(manifestPath, vendorDir) === 'absent') {
     return false;
   }
 
@@ -125,7 +127,7 @@ export function verifyVendoredManifest(vendorDir: string): boolean {
 
   for (const [rel, expectedHash] of Object.entries(manifest.files)) {
     const abs = safePath.join(vendorDir, rel);
-    if (!existsSync(abs)) {
+    if (followedKindSync(abs, vendorDir) === 'absent') {
       return false;
     }
     const actualHash = hashFile(abs);

@@ -28,7 +28,9 @@ import localRules from '@vibe-agent-toolkit/utils/eslint';
 import { ESLint } from 'eslint';
 import { describe, expect, it } from 'vitest';
 
-import { filesWithoutFinding } from './eslint-clean-files.js';
+import { LINK_FOLLOWING_FS_CALLS } from '../../../eslint.config.js';
+
+import { filesWithoutFinding, findingCounts } from './eslint-clean-files.js';
 
 const REPO_ROOT = resolveFromImportMeta(import.meta.url, '..', '..', '..');
 
@@ -58,6 +60,12 @@ const RATCHETS: readonly Ratchet[] = [
     option: 'allowFiles',
     probeFile: 'packages/cli/src/commands/doctor.ts',
     constant: 'NO_EXISTSSYNC_RATCHET',
+  },
+  {
+    rule: 'local/no-link-following-fs',
+    option: 'allowFiles',
+    probeFile: 'packages/cli/src/commands/doctor.ts',
+    constant: 'LINK_FOLLOWING_FS_ALLOW',
   },
   {
     rule: 'local/no-io-in-unit-tier',
@@ -92,12 +100,9 @@ async function configuredList(ratchet: Ratchet): Promise<readonly string[]> {
   return ((await configuredOptions(ratchet))[ratchet.option] as readonly string[] | undefined) ?? [];
 }
 
-/**
- * Lint the listed files with the ratchet lifted, in ONE pass, and return the
- * ones the rule stays silent on.
- */
-async function cleanWithoutExemption(ratchet: Ratchet, files: readonly string[]): Promise<string[]> {
-  const eslint = new ESLint({
+/** A bare-parser ESLint running only `ratchet.rule`, with the repo's own options and ONLY the list lifted. */
+async function liftedLinter(ratchet: Ratchet): Promise<ESLint> {
+  return new ESLint({
     cwd: REPO_ROOT,
     overrideConfigFile: true,
     overrideConfig: [{
@@ -110,7 +115,14 @@ async function cleanWithoutExemption(ratchet: Ratchet, files: readonly string[])
       rules: { [ratchet.rule]: ['error', { ...(await configuredOptions(ratchet)), [ratchet.option]: [] }] },
     }],
   });
-  return filesWithoutFinding(eslint, REPO_ROOT, files, (m) => m.ruleId === ratchet.rule);
+}
+
+/**
+ * Lint the listed files with the ratchet lifted, in ONE pass, and return the
+ * ones the rule stays silent on.
+ */
+async function cleanWithoutExemption(ratchet: Ratchet, files: readonly string[]): Promise<string[]> {
+  return filesWithoutFinding(await liftedLinter(ratchet), REPO_ROOT, files, (m) => m.ruleId === ratchet.rule);
 }
 
 describe.each(RATCHETS)('$rule — its allowlist only names files that still need it', (ratchet) => {
@@ -134,5 +146,31 @@ describe.each(RATCHETS)('$rule — its allowlist only names files that still nee
       `These files no longer trip ${ratchet.rule}. Delete their entries from ${ratchet.constant} `
         + 'in eslint.config.js — the list may only shrink, and a stale entry hides the next offender.',
     ).toEqual([]);
+  });
+});
+
+/**
+ * A file-level exemption cannot see a NEW call added to a file already on the list: the file trips
+ * the rule before and after, so "still trips it" stays true while an unsafe call lands unreviewed.
+ * So `local/no-link-following-fs`'s list pins, per file, the EXACT number of calls the rule flags
+ * there — one more is a call nobody has justified, one fewer a count that would hide the next one.
+ */
+describe('local/no-link-following-fs — its allowlist pins the exact number of calls in each file', () => {
+  const rule = 'local/no-link-following-fs';
+  const ratchet = RATCHETS.find((each) => each.rule === rule);
+
+  it('is the list the rule is configured with', async () => {
+    expect(ratchet).toBeDefined();
+    expect(await configuredList(ratchet as Ratchet)).toEqual(Object.keys(LINK_FOLLOWING_FS_CALLS));
+  });
+
+  it('flags exactly the pinned number of calls in every listed file — more or fewer is red', async () => {
+    const files = Object.keys(LINK_FOLLOWING_FS_CALLS);
+    const counts = await findingCounts(await liftedLinter(ratchet as Ratchet), REPO_ROOT, files, (m) => m.ruleId === rule);
+    expect(
+      counts,
+      'A listed file flags a different number of link-following calls than LINK_FOLLOWING_FS_CALLS in eslint.config.js '
+        + "pins. A call on a crawled path goes through link-following.ts; one on the operator's own path changes the count, with its reason.",
+    ).toEqual(LINK_FOLLOWING_FS_CALLS);
   });
 });

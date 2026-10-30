@@ -16,11 +16,12 @@
  * 2. It then calls `module.syncBuiltinESMExports()`, so a named import
  *    (`import { rmSync } from 'node:fs'`) sees the replacement. `restore()` undoes
  *    both steps.
- * 3. Dependencies that look methods up on the module object at call time — node-tar
- *    (`import fs from 'fs'`), adm-zip (`require('fs')`) and write streams
+ * 3. Dependencies that look methods up on the module object at call time — adm-zip
+ *    (`require('fs')`, reading the tree the archive module zips) and write streams
  *    (`createWriteStream` resolves `open`/`write` from the module) — see the
- *    replacements with no extra seam. `test/integration/fault-fs-reach` and the CLI's
- *    `fault-fs-archive-reach` pin every one of these; none is assumed.
+ *    replacements with no extra seam. `test/integration/fault-fs-reach` and
+ *    `test/integration/archive-extract` pin every one of these; none is assumed. (No archive
+ *    library WRITES for VAT: an extraction's writes are the archive module's own `fs` calls.)
  * 4. An fd to path map, filled from intercepted `open*`, gives handle and stream
  *    operations the path they act on.
  * 5. `realpathSync.native` and `realpath.native` are properties of the functions, not

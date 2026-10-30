@@ -17,17 +17,15 @@ import { copyFileSync, existsSync, readdirSync, readFileSync, writeFileSync } fr
 
 import { VAT_MARKETPLACE_MARKER } from '@vibe-agent-toolkit/claude-marketplace';
 import { isPathAbsentError, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
-import { createSymlink, type StatRewrite, symlinkCapability, tmpdirFoldsCase } from '@vibe-agent-toolkit/utils/testing';
+import { createSymlink, type StatRewrite, symlinkCapability, tarFixture, tmpdirFoldsCase } from '@vibe-agent-toolkit/utils/testing';
 import type { Command } from 'commander';
 import { vi } from 'vitest';
 
 import { createAgentCommand } from '../../../src/commands/agent/index.js';
-import { downloadNpmPackage } from '../../../src/commands/claude/plugin/helpers.js';
 import { createPluginCommand } from '../../../src/commands/claude/plugin/index.js';
+import { packNpmPackage } from '../../../src/commands/claude/plugin/npm-pack.js';
 import { createSkillsCommand } from '../../../src/commands/skills/index.js';
-import { extractTarballSync } from '../../../src/utils/archive-staging.js';
 import { CommandRefusalError } from '../../../src/utils/command-refusal.js';
-import { tarballOf } from '../../helpers/tarball.js';
 import { writeZipFixture } from '../../helpers/zip-fixtures.js';
 import type { CaseRoot, VerbCase } from '../drive.js';
 import type { MatrixShard } from '../matrix.js';
@@ -224,7 +222,7 @@ const simulatedAlias = {
 function writeLaneInput(lane: PluginLane, r: CaseRoot, files: readonly TreeFile[]): void {
   if (lane === 'tgz' || lane === 'npm') {
     mkdirSyncReal(inputDir(r), { recursive: true });
-    writeFileSync(tgzPath(r), tarballOf(prefixed('package', files)));
+    writeFileSync(tgzPath(r), tarFixture(prefixed('package', files).map(([name, data]) => ({ name, data }))));
     return;
   }
   writeTree(packageDir(r), files);
@@ -243,21 +241,20 @@ function laneArgv(lane: PluginLane, r: CaseRoot): string[] {
 }
 
 /**
- * The npm lane: `npm pack` is replaced by copying the fixture tarball into the download dir, then
- * extracted in-process as the real one is. The copy stands in for the CHILD process `npm pack`, so
- * a fault on it ends as the real seam's failure does (`EXTERNAL_API_FAILED`, `downloadNpmPackage`),
+ * The npm lane: `npm pack` is replaced by copying the fixture tarball into the download dir; the
+ * real `downloadNpmPackage` then extracts it. The copy stands in for the CHILD process `npm pack`,
+ * so a fault on it ends as the real seam's failure does (`EXTERNAL_API_FAILED`, `packNpmPackage`),
  * never as a raw errno the real code could not have seen.
  */
 function npmMocks(r: CaseRoot): void {
-  vi.mocked(downloadNpmPackage).mockImplementation((name, tempDir) => {
+  vi.mocked(packNpmPackage).mockImplementation((name, tempDir) => {
     const tarball = safePath.join(tempDir, 'fx-pkg-1.0.0.tgz');
     try {
       copyFileSync(tgzPath(r), tarball);
     } catch (error) {
       throw new CommandRefusalError('EXTERNAL_API_FAILED', `npm pack failed for package ${name}: ${String(error)}`, { cause: error });
     }
-    extractTarballSync(tarball, tempDir);
-    return safePath.join(tempDir, 'package');
+    return tarball;
   });
 }
 
@@ -288,9 +285,6 @@ export function pluginInstallCase(lane: PluginLane, variant: PluginVariant): Ver
     // The simulated alias folds the cache's spellings into one directory on every host, as the registry reads it.
     registered: (r) => pluginRegistryNames(r, flatSkills, variant === 'replaces-case-alias' || tmpdirFoldsCase()),
     ...(variant === 'replaces-case-alias' ? { statRewrites: simulatedAlias.statRewrites } : {}),
-    // The tgz and npm lanes extract an archive into staging, classified with `shapeFromSource`:
-    // a layout fault the archive decided is the archive's.
-    ...(lane === 'tgz' || lane === 'npm' ? { shapeFromSource: true } : {}),
   };
   if (lane === 'npm') return { ...base, mocks: npmMocks };
   if (lane === 'npm-postinstall') return { ...base, mocks: postinstallMocks, cwd: packageDir };
@@ -324,8 +318,6 @@ function flatSkillCase(id: string, group: () => Command, argv: (r: CaseRoot) => 
     watched: (r) => [claudeDir(r)],
     units: () => [flatSkillKey(SKILL)],
     sources: (r) => [inputDir(r)],
-    // The zip lane extracts into staging, classified with `shapeFromSource`: a layout fault the archive decided is the archive's.
-    ...(lane === 'zip' ? { shapeFromSource: true } : {}),
   };
 }
 
@@ -440,16 +432,16 @@ function agentUninstallCase(mode: 'copy' | 'dev'): VerbCase {
  * `fault-matrix-shards.integration.test.ts` holds each file to this table.
  */
 export const INSTALL_FAMILY_SHARDS = {
-  'plugin/install/local/fresh': { make: () => pluginInstallCase('local', 'fresh'), files: 14 },
-  'plugin/install/local/force': { make: () => pluginInstallCase('local', 'force'), files: 16 },
+  'plugin/install/local/fresh': { make: () => pluginInstallCase('local', 'fresh'), files: 23 },
+  'plugin/install/local/force': { make: () => pluginInstallCase('local', 'force'), files: 25 },
   'plugin/install/local/replaces': { make: () => pluginInstallCase('local', 'replaces'), files: 22 },
   'plugin/install/local/case-aliased': { make: () => pluginInstallCase('local', 'case-aliased'), files: 19 },
   'plugin/install/local/replaces-case-alias': { make: () => pluginInstallCase('local', 'replaces-case-alias'), files: 17 },
   'plugin/install/tgz/fresh': { make: () => pluginInstallCase('tgz', 'fresh'), files: 23 },
   'plugin/install/npm/fresh': { make: () => pluginInstallCase('npm', 'fresh'), files: 23 },
-  'plugin/install/npm-postinstall/fresh': { make: () => pluginInstallCase('npm-postinstall', 'fresh'), files: 14 },
-  'plugin/install/dev/fresh': { make: () => pluginInstallCase('dev', 'fresh'), files: 12, posixOnly: true },
-  'plugin/install/dev/force': { make: () => pluginInstallCase('dev', 'force'), files: 14, posixOnly: true },
+  'plugin/install/npm-postinstall/fresh': { make: () => pluginInstallCase('npm-postinstall', 'fresh'), files: 23 },
+  'plugin/install/dev/fresh': { make: () => pluginInstallCase('dev', 'fresh'), files: 20, posixOnly: true },
+  'plugin/install/dev/force': { make: () => pluginInstallCase('dev', 'force'), files: 22, posixOnly: true },
   'plugin/install/dev/replaces': { make: () => pluginInstallCase('dev', 'replaces'), files: 20, posixOnly: true },
   'plugin/install/dev/case-aliased': { make: () => pluginInstallCase('dev', 'case-aliased'), files: 17, posixOnly: true },
   'plugin/install/zip/fresh': { make: () => pluginInstallZipCase('fresh'), files: 10 },

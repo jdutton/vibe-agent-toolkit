@@ -7,9 +7,8 @@
  */
 
 import { createHash } from 'node:crypto';
-import { realpathSync } from 'node:fs';
 
-import { fsFaultOf, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { linkResolutionFault, realpathNativeSync, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 /** Hex characters kept from a SHA-256 digest. 128 bits — collision-free at any corpus size. */
@@ -47,7 +46,9 @@ export function rootIdFor(absoluteRootPath: string): string {
  * @returns Forward-slashed real root, with any unresolvable tail appended
  */
 export function resolveRootPath(absoluteRootPath: string): string {
-  return realPathOrSelf(safePath.resolve(absoluteRootPath));
+  const root = safePath.resolve(absoluteRootPath);
+  // The root is the operator's own input: its own `within`.
+  return realPathOrSelf(root, root);
 }
 
 /**
@@ -156,7 +157,7 @@ export function canonicalPathFor(absolutePath: string, context: CanonicalPathCon
   if (tracked !== null) {
     return toForwardSlash(tracked);
   }
-  return relativeTo(context.realRoot, realPathOrSelf(resolved));
+  return relativeTo(context.realRoot, realPathOrSelf(resolved, context.realRoot));
 }
 
 /**
@@ -258,11 +259,12 @@ export class ResourceIdentityMap {
  * unresolved path would put an absent file "outside" the very root it is under.
  *
  * @param absolutePath - Absolute path to resolve
+ * @param within - The tree it is crawled in (the corpus root), for `link-following.ts`
  * @returns Forward-slashed real path, with any unresolvable tail appended
  */
-function realPathOrSelf(absolutePath: string): string {
+function realPathOrSelf(absolutePath: string, within: string): string {
   const forward = toForwardSlash(absolutePath);
-  const direct = tryRealPath(forward);
+  const direct = tryRealPath(forward, within);
   if (direct !== null) {
     return direct;
   }
@@ -271,22 +273,27 @@ function realPathOrSelf(absolutePath: string): string {
   if (lastSlash <= 0) {
     return forward;
   }
-  return `${realPathOrSelf(forward.slice(0, lastSlash))}/${forward.slice(lastSlash + 1)}`;
+  return `${realPathOrSelf(forward.slice(0, lastSlash), within)}/${forward.slice(lastSlash + 1)}`;
 }
 
 /**
  * The real path, or null when the filesystem will not resolve it.
  *
- * `ENOENT` is the motivating case, but `EACCES` on an existing file and
- * `ELOOP` on a symlink cycle land here too, and for all three the ancestor's
- * namespace is the better answer — the ruling `FsLookupCache.realpath`
- * documents. A bug is none of those and stays loud.
+ * A read lane, and a SPELLING, never a link verdict: nothing downstream reads
+ * "unresolved" from this, so whatever {@link linkResolutionFault} says — the
+ * path resolves to nothing (`ENOENT`, `ELOOP` …) or the OS declined
+ * or failed (`EACCES`, `EIO`, `UNKNOWN` …), or VAT declined to hand the kernel a
+ * chain through a network path (`LINK_CHAIN_REFUSED`) — the caller takes the ancestor's namespace, the
+ * ruling `FsLookupCache.realpath` documents. Nothing is thrown for a
+ * filesystem errno, so no side is picked: identity is minted before any crawl
+ * source and its `outputs` exist, and the path's own crawl reports a refusal on
+ * the side `crawlSideOf` charges it to. A bug (no errno) stays loud.
  */
-function tryRealPath(absolutePath: string): string | null {
+function tryRealPath(absolutePath: string, within: string): string | null {
   try {
-    return toForwardSlash(realpathSync.native(absolutePath));
+    return realpathNativeSync(absolutePath, within);
   } catch (error) {
-    if (fsFaultOf(error) === undefined) throw error;
+    linkResolutionFault(error);
     return null;
   }
 }
