@@ -105,19 +105,40 @@ config reaches the child, `TMPDIR`/`TEMP`/`TMP` point at the arm's `tmp/`, and `
 exclude or `~/.claude/CLAUDE.md` therefore never decides a number. `runRepeats` requires the `arm`;
 single-command facet runs are one-step sequences under `<out>/arms/<build>-<command>-<cache>`.
 
-- Each step carries its **committed expected exits**; exiting otherwise is a failed measurement
-  (`step '<name>' exited N: <stderr>`), never a slow one. Exit 2 is never expected.
-- **Cold** clears the arm's store and parse cache before each repetition, and step 1 must leave
-  both non-empty. **Warm** primes the arm once before round 1 (a priming failure skips the arm), and
-  every step that should populate must publish its provenance.
+- Each step carries its **committed expected exits** — 0 unless `--expect-exit
+  <build>:<sequence>:<step>=<codes>` says otherwise; exiting otherwise is a failed measurement
+  (`step '<name>' exited N: <stderr>`), never a slow one. Exit 2 is never expected and is refused.
+  A committed non-zero exit ends the repetition as CI's `&&` does: completed, nothing after it run.
+- **Cold** clears the arm's store and parse cache before each repetition; when step 1 `populates`,
+  it must leave the store non-empty and at least one parse shard (a file, not an empty directory).
+- **Warm** primes the arm once before round 1 with an unmeasured run, which must leave the same
+  store and shard when any step `populates` (a priming failure fails the arm). In each measured
+  round, a step whose command reads provenance (`resources check`, `validate`) must publish
+  `population: store` — absent or `derived` fails the repetition; a step with no provenance reader
+  asserts nothing.
 - The lab never runs `vat cache clear` — it owns the directories it clears.
 
 `vat-lab perf arms` runs named CI sequences across builds in **interleaved rounds** (default 5),
 after preparing a `git clone --local` of the subject at `--commit` under `<out>/clone`: the
-`--prerequisite` commands, then one warm-up in its own scratch arm (`prepare-warmup-cold`), then a
-check that `git status --porcelain` is empty and the tree equals the committed tree. It writes
-`<out>/arms-report.json` with min, median and IQR per arm. `judgeBar` decides a bar on the **median
-AND the min**: both hold → pass, neither → fail, one → inconclusive; `<=` ties pass, `<` ties fail.
+`--prerequisite` commands, then one warm-up in its own scratch arm
+(`<out>/arms/prepare-warmup-cold/` — it stays there, outside the clone, and is never a measured
+arm), then a check that `git status --porcelain` is empty and the tree equals the committed tree.
+Every preparation git runs under the same cleared environment as the arms, so the developer's global
+config can neither hide a stray file from that check nor expose one. `--out` must lie outside the
+subject; `--rounds` is at least 5. It writes `<out>/arms-report.json` with min, median and IQR per
+arm and the inherited names its VAT and tool steps went without.
+
+`vat-lab perf bars <arms-report.json> --bar '<build>:<arm>:<state> <=|< <factor>* <build>:<arm>:<state>'`
+judges bars on the **median AND the min**: both hold → PASS, neither → FAIL, one → INCONCLUSIVE;
+`<=` ties pass, `<` ties fail. The factor is required (`1*` for a plain comparison), an arm with no
+measurement fails its bar, and the command exits 1 unless every bar passes.
+
+**Bar 2 is measurable only after S2.** Its warm `ci-c` arm needs the candidate's `validate` to
+publish the resources phase's `data.population`, and today's `resources validate` report schema
+is `.strict()` without that field — every warm `validate` step fails the warm rule as "absent"
+until S2 adds it. The lab cannot import the CLI's report schemas (they are internal to the CLI,
+and the lab measures several builds), so the extractor's `cand-C-warm` fixture is modelled ahead
+of S2, and its test names that dependency.
 
 ```bash
 vat-lab perf arms ../subject --build base=dist:/path/to/base/cli --build cand=dist:/path/to/cand/cli \

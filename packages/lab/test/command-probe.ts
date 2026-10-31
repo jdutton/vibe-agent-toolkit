@@ -113,11 +113,31 @@ export const PROBE_ECHO_ENV = 'LAB_PROBE_ECHO_ENV';
 export const PROBE_NO_LOG_ENV = 'LAB_PROBE_NO_LOG';
 
 /**
+ * Comma-separated variable names whose directory the probe stats AT START: its
+ * stdout JSON (shared with {@link PROBE_ECHO_ENV}) gains `mode:<NAME>` and
+ * `mode:<NAME>/..`, the permission bits of that directory and of its parent,
+ * or `null` when absent.
+ *
+ * Exists so a suite can tell "the directory was there, owner-only, when the
+ * verb ran" from "it was made afterwards" — a stat taken after the capture
+ * cannot.
+ */
+export const PROBE_STAT_ENV = 'LAB_PROBE_STAT_ENV';
+
+/**
  * Set (to anything) to make the probe write what a populating VAT run writes: a
  * file in `VAT_PROJECTION_STORE_DIR`, and one parse shard under the parse
  * directory the fake resources package of {@link setupProbe} resolves.
  */
 export const PROBE_POPULATE_ENV = 'LAB_PROBE_POPULATE';
+
+/**
+ * {@link PROBE_POPULATE_ENV} values for a run that populates only partly: the
+ * store and no parse directory at all, or the store and a parse directory
+ * holding only an empty subdirectory. `'1'` writes everything.
+ */
+export const PROBE_POPULATE_STORE_ONLY = 'store-only';
+export const PROBE_POPULATE_EMPTY_SHARD_DIR = 'empty-shard-dir';
 
 /** The cache namespace the probe's fake resources package names. */
 const PROBE_NAMESPACE = 'probe-ns';
@@ -142,17 +162,25 @@ const PROBE_LOG = 'probe.log';
  * zero-based and does not include the invocation making the decision.
  */
 const PROBE_SOURCE = [
-  "const { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } = require('node:fs');",
+  "const { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } = require('node:fs');",
   "const { tmpdir } = require('node:os');",
-  "const { join } = require('node:path');",
+  "const { dirname, join } = require('node:path');",
   'const store = process.env.VAT_PROJECTION_STORE_DIR;',
   'const home = process.env.HOME;',
   'const storeExisted = store === undefined ? null : existsSync(store);',
+  'const modeOf = (path) => (path !== undefined && existsSync(path) ? statSync(path).mode & 0o777 : null);',
+  'const echoed = {};',
+  `for (const name of (process.env.${PROBE_STAT_ENV} ?? '').split(',').filter((n) => n !== '')) {`,
+  '  const path = process.env[name];',
+  "  echoed['mode:' + name] = modeOf(path);",
+  "  echoed['mode:' + name + '/..'] = path === undefined ? null : modeOf(dirname(path));",
+  '}',
   'const homeEntries = home === undefined || !existsSync(home) ? null : readdirSync(home).length;',
   `if (process.env.${PROBE_POPULATE_ENV} !== undefined) {`,
   "  if (store !== undefined) { mkdirSync(store, { recursive: true }); writeFileSync(join(store, 'projection.db'), 'probe'); }",
   `  const parse = join(tmpdir(), '.vat-cache', ${JSON.stringify(PROBE_NAMESPACE)}, 'parse', 'ab');`,
-  "  mkdirSync(parse, { recursive: true }); writeFileSync(join(parse, 'key.json'), '{}');",
+  `  if (process.env.${PROBE_POPULATE_ENV} !== ${JSON.stringify(PROBE_POPULATE_STORE_ONLY)}) mkdirSync(parse, { recursive: true });`,
+  `  if (process.env.${PROBE_POPULATE_ENV} === '1') writeFileSync(join(parse, 'key.json'), '{}');`,
   '}',
   // Only ever into an ARM's home (the store's sibling), never a real one.
   "if (store !== undefined && home === join(store, '..', 'home') && existsSync(home)) writeFileSync(join(home, 'left-by-probe'), 'x');",
@@ -177,10 +205,8 @@ const PROBE_SOURCE = [
   String.raw`  appendFileSync(log, line + '\n');`,
   '}',
   `const echoSpec = process.env.${PROBE_ECHO_ENV};`,
-  'if (echoSpec !== undefined) {',
-  "  const names = echoSpec.split(',').filter((name) => name !== '');",
-  '  process.stdout.write(JSON.stringify(Object.fromEntries(names.map((name) => [name, process.env[name] ?? null]))));',
-  '}',
+  "for (const name of (echoSpec ?? '').split(',').filter((n) => n !== '')) echoed[name] = process.env[name] ?? null;",
+  `if (echoSpec !== undefined || process.env.${PROBE_STAT_ENV} !== undefined) process.stdout.write(JSON.stringify(echoed));`,
   `const outSpec = process.env.${PROBE_STDOUT_ENV};`,
   'if (outSpec !== undefined) {',
   '  const outputs = JSON.parse(outSpec);',
@@ -213,6 +239,8 @@ export function argsOf(entries: readonly ProbeEntry[]): string[][] {
 /** A temp working directory plus the instrument that logs into it. */
 export interface Probe {
   readonly cwd: string;
+  /** The lab's `--out` for this probe: a SIBLING of `cwd`, never inside it, as the lab requires. */
+  readonly out: string;
   readonly instrument: ResolvedInstrument;
   /** Every child so far, in the order they ran. */
   readonly entries: () => ProbeEntry[];
@@ -225,14 +253,16 @@ export interface Probe {
  * @returns The working directory, the instrument, and a log reader
  */
 export function setupProbe(prefix = 'lab-probe-'): Probe {
-  const cwd = mkdtempSync(safePath.join(normalizedTmpdir(), prefix));
-  createdProbeDirs.push(cwd);
+  const root = mkdtempSync(safePath.join(normalizedTmpdir(), prefix));
+  createdProbeDirs.push(root);
+  const cwd = mkdirSyncReal(safePath.join(root, 'subject'));
   const script = safePath.join(cwd, 'probe.cjs');
   writeFileSync(script, PROBE_SOURCE, 'utf-8');
   writeFakeResourcesPackage(cwd);
 
   return {
     cwd,
+    out: safePath.join(root, 'out'),
     instrument: { command: process.execPath, leadingArgs: [script], version: PROBE_VERSION },
     entries: () => readProbeLog(cwd),
   };
@@ -305,8 +335,8 @@ export function readProbeLog(cwd: string): ProbeEntry[] {
 /**
  * Build a {@link RepeatSpec} against a probe, defaulting what a case ignores.
  *
- * The arm lives under `<probe.cwd>/out`, so a suite's arm directories are
- * dropped with its probe.
+ * The arm lives under {@link Probe.out}, beside the probe's working directory,
+ * so a suite's arm directories are dropped with its probe.
  *
  * @param probe - Supplies the instrument and the working directory
  * @param overrides - What the case varies
@@ -330,7 +360,7 @@ export function probeSpec(probe: Probe, overrides: ProbeSpecOverrides = {}): Rep
  * @returns The `--out` its arms live under
  */
 export function probeOut(probe: Probe): string {
-  return safePath.join(probe.cwd, 'out');
+  return probe.out;
 }
 
 /** A command the probe always completes. */

@@ -35,6 +35,7 @@ function envelope(alias: string, instrument: InstrumentVersion): ReportEnvelope<
       instrument,
     },
     capturedAt: '2026-09-28T00:00:00.000Z',
+    removedEnv: [],
     body: {
       arm: { set: {}, unset: [] },
       rows: [

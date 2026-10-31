@@ -125,7 +125,7 @@ describe('clearedEnvironment', () => {
   const byName = (a: string, b: string): number => a.localeCompare(b);
 
   it('removes every VAT_* name and every cleared name from a VAT step, and records them', () => {
-    const cleared = clearedEnvironment(DEVELOPER, 'vat', { set: { HOME: '/arm/home' }, unset: [] });
+    const cleared = clearedEnvironment(DEVELOPER, 'vat', { set: { HOME: '/arm/home' }, unset: [] }, 'linux');
     const env = buildArmEnv(DEVELOPER, cleared.env);
     for (const name of [...CLEARED_ENV_NAMES, 'VAT_PROJECTION_STORE', 'VAT_RESOURCES_CRAWL']) {
       expect(env[name], name).toBeUndefined();
@@ -133,12 +133,12 @@ describe('clearedEnvironment', () => {
     expect(env['HOME']).toBe('/arm/home'); // the arm's own wins
     expect(env['PATH']).toBe('/bin'); // positive control: ordinary inheritance survives
     expect(cleared.removed).toStrictEqual(
-      [...CLEARED_ENV_NAMES, 'VAT_PROJECTION_STORE', 'VAT_RESOURCES_CRAWL'].toSorted(byName),
+      [...CLEARED_ENV_NAMES.filter((name) => Object.hasOwn(DEVELOPER, name)), 'VAT_PROJECTION_STORE', 'VAT_RESOURCES_CRAWL'].toSorted(byName),
     );
   });
 
   it('removes only VAT_* names from a non-VAT step, keeping the real home and temp', () => {
-    const cleared = clearedEnvironment(DEVELOPER, 'tool', { set: {}, unset: [] });
+    const cleared = clearedEnvironment(DEVELOPER, 'tool', { set: {}, unset: [] }, 'linux');
     const env = buildArmEnv(DEVELOPER, cleared.env);
     expect(env['VAT_PROJECTION_STORE']).toBeUndefined();
     expect(env['XDG_CONFIG_HOME']).toBe('/home/dev/.config');
@@ -147,8 +147,57 @@ describe('clearedEnvironment', () => {
   });
 
   it('lets the arm set a cleared name, which is then not recorded as removed', () => {
-    const cleared = clearedEnvironment(DEVELOPER, 'vat', { set: { TMPDIR: '/arm/tmp' }, unset: [] });
+    const cleared = clearedEnvironment(DEVELOPER, 'vat', { set: { TMPDIR: '/arm/tmp' }, unset: [] }, 'linux');
     expect(buildArmEnv(DEVELOPER, cleared.env)['TMPDIR']).toBe('/arm/tmp');
     expect(cleared.removed).not.toContain('TMPDIR');
+  });
+
+  /** git state a shell can carry beyond the global config file. */
+  const GIT_STATE: NodeJS.ProcessEnv = {
+    PATH: '/bin',
+    GIT_CONFIG: '/home/dev/other.gitconfig',
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'core.excludesFile',
+    GIT_CONFIG_VALUE_0: '/home/dev/ignore',
+    GIT_CONFIG_PARAMETERS: "'core.autocrlf'='true'",
+    GIT_CONFIG_SYSTEM: '/etc/dev-gitconfig',
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_DIR: '/elsewhere/.git',
+    GIT_WORK_TREE: '/elsewhere',
+    GIT_INDEX_FILE: '/elsewhere/.git/index',
+    GIT_COMMON_DIR: '/elsewhere/.git',
+    GIT_OBJECT_DIRECTORY: '/elsewhere/.git/objects',
+    GIT_AUTHOR_NAME: 'kept',
+  };
+  const CONFIG = [
+    'GIT_CONFIG',
+    'GIT_CONFIG_COUNT',
+    'GIT_CONFIG_KEY_0',
+    'GIT_CONFIG_NOSYSTEM',
+    'GIT_CONFIG_PARAMETERS',
+    'GIT_CONFIG_SYSTEM',
+    'GIT_CONFIG_VALUE_0',
+  ];
+  const LOCATING = ['GIT_COMMON_DIR', 'GIT_DIR', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_WORK_TREE'];
+
+  it('removes every git config override from a VAT step, and every repo-locating git name from both kinds', () => {
+    expect(clearedEnvironment(GIT_STATE, 'vat', { set: {}, unset: [] }, 'linux').removed).toStrictEqual(
+      [...CONFIG, ...LOCATING].toSorted(byName),
+    );
+    const tool = clearedEnvironment(GIT_STATE, 'tool', { set: {}, unset: [] }, 'linux');
+    expect(tool.removed).toStrictEqual(LOCATING.toSorted(byName));
+    // Positive controls: a tool keeps the developer's git config, and identity survives both.
+    const toolEnv = buildArmEnv(GIT_STATE, tool.env);
+    expect(toolEnv['GIT_CONFIG_COUNT']).toBe('1');
+    expect(toolEnv['GIT_AUTHOR_NAME']).toBe('kept');
+  });
+
+  it('matches names case-insensitively on Windows, where Temp and TEMP are one variable', () => {
+    const mixed: NodeJS.ProcessEnv = { Path: 'C:/bin', Temp: 'C:/dev-tmp', Vat_Bin: 'C:/dev/vat', Git_Dir: 'C:/x/.git' };
+    expect(clearedEnvironment(mixed, 'vat', { set: { TEMP: 'C:/arm/tmp' }, unset: [] }, 'win32').removed).toStrictEqual(
+      ['Git_Dir', 'Temp', 'Vat_Bin'],
+    );
+    // POSIX names are case-sensitive: Temp is not TEMP there.
+    expect(clearedEnvironment(mixed, 'vat', { set: {}, unset: [] }, 'linux').removed).toStrictEqual([]);
   });
 });

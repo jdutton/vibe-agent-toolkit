@@ -21,7 +21,15 @@ function report(data: unknown): string {
 /** rc.11 `resources check`, served from the store. */
 const RC11_CHECK = report({ root: '.', population: 'store', populationSecs: 0.1, lensSecs: 0, lensesEvaluated: [] });
 
-/** The candidate's `validate`, every phase served from the store. */
+/**
+ * The candidate's `validate`, every phase served from the store.
+ *
+ * Modelled AHEAD of S2: the resources phase's `data.population` is a field
+ * today's `.strict()` resources-validate report schema cannot emit, so a real
+ * candidate run reads as 'absent' here until S2 adds it. The CLI's report
+ * schemas are internal to the CLI (and the lab measures several builds), so
+ * this fixture cannot be parsed through the producer's schema.
+ */
 const CAND_VALIDATE = report({
   phases: [
     { name: 'resources', status: 'success', examined: 1, summary: {}, data: { population: 'store' } },
@@ -48,7 +56,7 @@ const READ_CELLS: readonly Cell[] = [
     missing: report({ root: '.', populationSecs: 0.1 }),
   },
   {
-    cell: 'cand-C-warm (validate)',
+    cell: 'cand-C-warm (validate; resources-phase population pending S2)',
     state: 'warm',
     reader: 'validate',
     correct: CAND_VALIDATE,
@@ -86,6 +94,7 @@ describe('provenanceViolation — cells that read a document', () => {
 describe('provenanceViolation — cells that read nothing', () => {
   const NOTHING: ReadonlyArray<{ readonly cell: string; readonly state: CacheMode; readonly reader: ProvenanceReader; readonly stdout: string }> = [
     { cell: 'rc11-A-warm (resources validate, skills validate)', state: 'warm', reader: 'none', stdout: '' },
+    { cell: 'rc11-A-cold (resources validate, skills validate)', state: 'cold', reader: 'none', stdout: '' },
     { cell: 'rc11-B-cold (resources check)', state: 'cold', reader: 'resources-check', stdout: '' },
     { cell: 'cand-C-cold (validate)', state: 'cold', reader: 'validate', stdout: '' },
   ];

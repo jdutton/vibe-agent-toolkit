@@ -228,6 +228,24 @@ describe('the CI commands and sequences', () => {
     expect(measurableSequence('toString')).toBeUndefined();
   });
 
+  it('agrees on `populates` for every entry naming the same vat verb', () => {
+    // Whether a verb writes the projection is the verb's property, not its
+    // argv spelling: `resources validate` populates whether or not CI typed it.
+    const verbOf = (args: readonly string[]): string => {
+      const end = args.findIndex((arg) => arg.startsWith('-') || arg.startsWith('{'));
+      return (end === -1 ? args : args.slice(0, end)).join(' ');
+    };
+    const byVerb = new Map<string, Set<boolean>>();
+    for (const spec of Object.values(MEASURABLE_COMMANDS)) {
+      const verb = verbOf(spec.args);
+      byVerb.set(verb, (byVerb.get(verb) ?? new Set()).add(spec.populates));
+    }
+    const disagreeing = [...byVerb].filter(([, values]) => values.size > 1).map(([verb]) => verb);
+    expect(disagreeing).toEqual([]);
+    // Not vacuous: the CI and non-CI spellings of these verbs both exist.
+    expect([...byVerb.keys()]).toEqual(expect.arrayContaining(['resources validate', 'validate', 'skills validate']));
+  });
+
   it('asserts the cold rule after the first step of every CI sequence', () => {
     for (const sequence of Object.values(MEASURABLE_SEQUENCES)) {
       expect(sequence.steps[0]?.populates, sequence.name).toBe(true);

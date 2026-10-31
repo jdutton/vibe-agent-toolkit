@@ -180,9 +180,9 @@ export interface AbSpec<TBody, TComparison extends ComparisonLike>
    * choice, a pool width — has to be measured as two un-interleaved captures,
    * giving up the alternation that controls for machine drift.
    *
-   * ⚠️ An arm's env applies to every child of that arm, the cache clear
-   * included. A setting that changes what the cache clear does would therefore
-   * change the two arms' starting states as well as their runs.
+   * ⚠️ An arm's env applies to every child of that arm, a warm arm's priming
+   * run included. A setting that changes what priming leaves in the store would
+   * therefore change the two arms' starting states as well as their runs.
    */
   readonly envA: ArmEnvironment;
   readonly envB: ArmEnvironment;

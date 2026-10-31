@@ -170,10 +170,8 @@ function rowFor(measurement: SpecMeasurement): PopulationCommandStats {
   const { spec, args, cache, results, failure } = measurement;
   const base: RowBase = { name: spec.name, args, cache };
 
-  // The failure first: a warm arm whose priming failed measured nothing, and
-  // its empty result list is not "no repeats were requested".
+  // `armRunFailure` owns the rule, a failed priming run and no repeats at all included.
   if (failure !== null) return failedRow(base, results.length, failure);
-  if (results.length === 0) return failedRow(base, 0, 'no repeats were requested');
 
   const documents = readEveryRepeat(measurement);
   if ('refusal' in documents) return failedRow(base, results.length, documents.refusal);

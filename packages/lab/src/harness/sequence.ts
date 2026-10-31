@@ -20,19 +20,17 @@
  *   reads a population must report `store` (see `provenance.ts`).
  */
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
-import { type ArmDirectories, entriesOf, resetArmHome, resetColdArm } from './arm-dirs.js';
+import { type ArmDirectories, armRefusal, entriesOf, resetArmHome, resetColdArm } from './arm-dirs.js';
 import type { ArmEnvironment } from './arm-env.js';
 import { type ParseDirectoryResolution } from './parse-cache.js';
 import { type ProvenanceReader, provenanceViolation, readProvenance, type StepProvenance } from './provenance.js';
 import { runCommand } from './run.js';
 import type { CacheMode, ResolvedInstrument, RunResult } from './types.js';
 
-/** vat's system-error exit: a run that did not complete, and so never a committed exit. */
-const SYSTEM_ERROR_EXIT = 2;
-
-/** How much of a failing step's stderr travels with the violation. */
+/** How much of a failing step's stderr travels with the violation — the one excerpt length every lab failure uses. */
 const STDERR_EXCERPT_CHARS = 200;
 
 /** What one step runs. */
@@ -99,7 +97,7 @@ export interface SequenceContext {
 }
 
 /** Which run of an arm this is: the priming run, or a measured one. */
-export type SequenceRole = { readonly kind: 'priming' } | { readonly kind: 'measured'; readonly vatEnv: ArmEnvironment };
+type SequenceRole = { readonly kind: 'priming' } | { readonly kind: 'measured'; readonly vatEnv: ArmEnvironment };
 
 /**
  * Refuse a step whose committed exits include vat's system-error exit.
@@ -108,8 +106,9 @@ export type SequenceRole = { readonly kind: 'priming' } | { readonly kind: 'meas
  * @throws {Error} when the step commits to exit 2
  */
 export function assertCommittedExits(step: SequenceStep): void {
-  if (step.expectedExits.includes(SYSTEM_ERROR_EXIT)) {
-    throw new Error(`step '${step.name}' commits to exit 2 — a system error is never an expected exit`);
+  // vat's system-error exit: a run that did not complete, and so never a committed exit.
+  if (step.expectedExits.includes(ExitCode.ERROR)) {
+    throw armRefusal(`step '${step.name}' commits to exit 2 — a system error is never an expected exit`);
   }
 }
 
@@ -132,7 +131,8 @@ export async function runSequence(context: SequenceContext, role: SequenceRole):
     steps.push(ran);
     const violation = stepViolation(context, role, step, ran, index);
     if (violation !== null) return aggregate(steps, violation);
-    if (ran.exitCode !== 0) return aggregate(steps, unrunViolation(context.steps, index, ran.exitCode));
+    // A committed non-zero exit ends the sequence as CI's `&&` does: completed, with nothing after it run.
+    if (ran.exitCode !== 0) return aggregate(steps, null);
   }
   const primed = role.kind === 'priming' ? populationViolation(context, 'warm rule: after priming') : null;
   return aggregate(steps, primed);
@@ -198,20 +198,6 @@ function exitFailure(ran: RunResult, expected: readonly number[]): string | null
     return `exited ${String(ran.exitCode)}: ${ran.stderr.trim().slice(0, STDERR_EXCERPT_CHARS)}`;
   }
   return null;
-}
-
-/**
- * The violation of a sequence that stopped at a non-zero but committed exit
- * while steps remained.
- *
- * @param steps - The sequence's steps
- * @param index - The step that stopped it
- * @param exitCode - Its exit
- * @returns The violation, or `null` when it was the last step
- */
-function unrunViolation(steps: readonly SequenceStep[], index: number, exitCode: number | null): string | null {
-  const next = steps[index + 1];
-  return next === undefined ? null : `step '${next.name}' did not run: an earlier step exited ${String(exitCode)}`;
 }
 
 /**

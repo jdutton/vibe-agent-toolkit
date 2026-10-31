@@ -172,7 +172,8 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   'resources-validate': Object.freeze({
     name: 'resources-validate',
     provenance: 'none',
-    populates: false,
+    // The same verb as `resources-validate-ci`: it writes the projection whatever its argv.
+    populates: true,
     args: Object.freeze(['resources', 'validate', '{subject}', '--format', 'json']),
     completedExitCodes: FINDINGS_COMPLETED_EXIT_CODES,
   }),
@@ -203,7 +204,8 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   validate: Object.freeze({
     name: 'validate',
     provenance: 'none',
-    populates: false,
+    // The same verb as `validate-ci`: its resources phase writes the projection.
+    populates: true,
     // No subject argument: `vat validate` REJECTS a positional path (exit 2) and
     // takes its scope from the config at the cwd, which the harness has already
     // set to the subject.

@@ -60,11 +60,8 @@ function rowFor(measurement: SpecMeasurement): PerfCommandStats {
   const { spec, args, cache, results, failure } = measurement;
   const empty = { medianMs: 0, minMs: 0, maxMs: 0, iqrMs: 0 };
 
-  // The failure first: a warm arm whose priming failed measured nothing, and its
-  // empty result list is not "no repeats were requested". Any failure poisons
-  // the row — see `summarizeRepeatFailures`, which owns that rule and its wording.
-  const refused = failure ?? (results.length === 0 ? 'no repeats were requested' : null);
-  if (refused !== null) {
+  // Any failure poisons the row — `armRunFailure` owns that rule and its wording.
+  if (failure !== null) {
     return {
       name: spec.name,
       args,
@@ -74,7 +71,7 @@ function rowFor(measurement: SpecMeasurement): PerfCommandStats {
       samplesMs: [],
       exitCode: null,
       failed: true,
-      failure: refused,
+      failure,
     };
   }
 

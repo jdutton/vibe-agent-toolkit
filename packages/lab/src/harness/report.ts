@@ -15,6 +15,7 @@
 
 import type { ReportEnvelope } from '../envelope/envelope.js';
 
+import { armRemovedEnv } from './arm-dirs.js';
 import type { CaptureRequest } from './types.js';
 
 /**
@@ -44,6 +45,7 @@ export function buildReportEnvelope<TBody>(
       instrument: request.instrument.version,
     },
     capturedAt: request.capturedAt,
+    removedEnv: armRemovedEnv(request.env),
     body,
   };
 }

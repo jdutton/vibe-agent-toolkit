@@ -115,17 +115,43 @@ export function mergeArmEnvironments(base: ArmEnvironment, over: ArmEnvironment)
  * config and excludes, which decide what both builds' snapshots and listings
  * admit. The arm sets its own `TMPDIR`, `HOME` and `CLAUDE_CONFIG_DIR` (see
  * `arm-dirs.ts`); with the rest removed and `HOME` pointed, git's global config is
- * the empty arm home, as on a CI runner.
+ * the empty arm home, as on a CI runner. Every other way a shell can hand git a
+ * config — {@link GIT_CONFIG_OVERRIDE} — goes with them.
  */
 export const CLEARED_ENV_NAMES = Object.freeze([
   'CLAUDE_CONFIG_DIR',
+  'GIT_CONFIG',
+  'GIT_CONFIG_COUNT',
   'GIT_CONFIG_GLOBAL',
+  'GIT_CONFIG_NOSYSTEM',
+  'GIT_CONFIG_PARAMETERS',
+  'GIT_CONFIG_SYSTEM',
   'TEMP',
   'TMP',
   'TMPDIR',
   'XDG_CACHE_HOME',
   'XDG_CONFIG_HOME',
 ] as const);
+
+/** `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>`: the numbered config pairs `GIT_CONFIG_COUNT` enables. */
+const GIT_CONFIG_OVERRIDE = /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/u;
+
+/**
+ * Variables that tell git WHICH repository it is in, removed from every step,
+ * VAT or tool. A lab run from inside a git hook inherits them, and a child
+ * would then read or write the outer repository instead of the clone it
+ * stands in.
+ */
+const GIT_LOCATING_NAMES: ReadonlySet<string> = new Set([
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_COMMON_DIR',
+  'GIT_DIR',
+  'GIT_INDEX_FILE',
+  'GIT_NAMESPACE',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_PREFIX',
+  'GIT_WORK_TREE',
+]);
 
 /**
  * Which environment a step of a sequence runs under.
@@ -136,10 +162,10 @@ export const CLEARED_ENV_NAMES = Object.freeze([
  *   only. pnpm needs the real `~/.npmrc`, and pnpm, corepack and turbo write
  *   state under `$HOME`, which must not land in the arm's home.
  */
-export type StepEnvironmentKind = 'vat' | 'tool';
+type StepEnvironmentKind = 'vat' | 'tool';
 
 /** A cleared environment, and the inherited names it removed — recorded in the run report. */
-export interface ClearedEnvironment {
+interface ClearedEnvironment {
   readonly env: ArmEnvironment;
   /** Inherited names removed, sorted; a name the arm sets itself is not listed. */
   readonly removed: readonly string[];
@@ -152,19 +178,33 @@ export interface ClearedEnvironment {
  * @param inherited - The environment being inherited, normally `process.env`
  * @param kind - Which steps' rule applies; see {@link StepEnvironmentKind}
  * @param own - What the arm itself sets and removes
+ * @param platform - Where the child runs: on `win32` a name matches whatever
+ *   its case (`Temp` is `TEMP`), and the inherited spelling is what is removed
  * @returns The arm environment to run under, and what it removed
  */
 export function clearedEnvironment(
   inherited: NodeJS.ProcessEnv,
   kind: StepEnvironmentKind,
   own: ArmEnvironment,
+  platform: NodeJS.Platform,
 ): ClearedEnvironment {
-  const cleared: ReadonlySet<string> = new Set(kind === 'vat' ? CLEARED_ENV_NAMES : []);
   const removed = Object.keys(inherited)
-    .filter((name) => name.startsWith('VAT_') || cleared.has(name))
+    .filter((name) => isCleared(platform === 'win32' ? name.toUpperCase() : name, kind))
     .filter((name) => !Object.hasOwn(own.set, name))
     .sort(compareByCodeUnit);
   return { env: mergeArmEnvironments({ set: {}, unset: removed }, own), removed };
+}
+
+const VAT_CLEARED: ReadonlySet<string> = new Set(CLEARED_ENV_NAMES);
+
+/**
+ * @param name - An inherited name, upper-cased where names are case-insensitive
+ * @param kind - Which steps' rule applies
+ * @returns Whether a step of that kind runs without it
+ */
+function isCleared(name: string, kind: StepEnvironmentKind): boolean {
+  if (name.startsWith('VAT_') || GIT_LOCATING_NAMES.has(name)) return true;
+  return kind === 'vat' && (VAT_CLEARED.has(name) || GIT_CONFIG_OVERRIDE.test(name));
 }
 
 /**

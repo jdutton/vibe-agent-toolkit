@@ -12,11 +12,11 @@
  *   is what `claude context` resolves under the developer's home; the arm
  *   resolves it under its own, empty home.
  *
- * Integration-tier: real git, the built vat at `packages/cli/dist/bin/vat.js`.
+ * System-tier: real git, the built vat at `packages/cli/dist/bin/vat.js`.
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import { normalizedTmpdir, resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
@@ -93,8 +93,16 @@ function plantDeveloperState(): string {
  * @param args - vat's arguments
  * @returns Its stdout
  */
-function uncleared(cwd: string, args: readonly string[]): string {
-  return spawnSync(process.execPath, [VAT_BIN, ...args], { cwd, encoding: 'utf-8', env: process.env }).stdout;
+function uncleared(cwd: string, args: readonly string[], env: NodeJS.ProcessEnv = process.env): string {
+  return spawnSync(process.execPath, [VAT_BIN, ...args], { cwd, encoding: 'utf-8', env }).stdout;
+}
+
+/**
+ * @param dir - A projection store directory
+ * @returns What it holds; `[]` when it was never made
+ */
+function storeEntries(dir: string): string[] {
+  return existsSync(dir) ? readdirSync(dir) : [];
 }
 
 describe('an arm never sees the developer’s VAT, git or Claude state', () => {
@@ -104,6 +112,22 @@ describe('an arm never sees the developer’s VAT, git or Claude state', () => {
 
     expect(uncleared(root, SCAN)).not.toContain('excluded.md');
     expect(uncleared(root, CONTEXT)).toContain(`${basename(home)}/.claude/CLAUDE.md`);
+  });
+
+  it('CONTROL: the planted VAT_PROJECTION_STORE=off DOES stop an uncleared vat writing its store', () => {
+    const root = subject();
+    plantDeveloperState();
+    const off = safePath.join(tempDir('lab-arm-isolation-store-'), 'store');
+    const on = safePath.join(tempDir('lab-arm-isolation-store-'), 'store');
+
+    uncleared(root, ['resources', 'validate'], { ...process.env, VAT_PROJECTION_STORE_DIR: off });
+    const unplanted = { ...process.env };
+    delete unplanted['VAT_PROJECTION_STORE'];
+    uncleared(root, ['resources', 'validate'], { ...unplanted, VAT_PROJECTION_STORE_DIR: on });
+
+    // The twin without the plant writes one, so an empty `off` is the plant's doing.
+    expect(storeEntries(off)).toEqual([]);
+    expect(storeEntries(on)).not.toEqual([]);
   });
 
   it('populates its own store despite VAT_PROJECTION_STORE=off, and still admits the globally excluded file', async () => {

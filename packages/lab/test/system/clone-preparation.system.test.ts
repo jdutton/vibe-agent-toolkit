@@ -4,13 +4,13 @@
  * prerequisites and one warm-up snapshot in its own scratch arm — and proven back
  * at the committed tree before round 1.
  *
- * Integration-tier: real git, real child processes.
+ * System-tier: real git, real child processes.
  */
 
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
 import { prepareClone, type ClonePreparation } from '../../src/harness/clone.js';
 import type { SequenceStep } from '../../src/harness/sequence.js';
@@ -18,6 +18,10 @@ import { argsOf, cleanupProbes, probeStep, readProbeLog, setupProbe, type Probe 
 import { commitAll, initRepo, writeFixtureFile } from '../git-fixtures.js';
 
 const scratch: string[] = [];
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 afterAll(() => {
   cleanupProbes();
@@ -114,5 +118,51 @@ describe('prepareClone', () => {
 
     expect(prepared.ok).toBe(false);
     expect(prepared.ok ? '' : prepared.refusal).toMatch(/not at the committed tree.*stray\.txt/su);
+  });
+
+  it('runs every preparation git without the developer’s global config, so a file only it excludes FAILS the proof', async () => {
+    const source = subject();
+    const probe = setupProbe('lab-clone-probe-');
+    // The developer's global config excludes a file the arms' git (an empty arm
+    // home, as on CI) does not: a proof run under it would certify a tree the
+    // arms never see.
+    const developer = mkdtempSync(safePath.join(normalizedTmpdir(), 'lab-clone-home-'));
+    scratch.push(developer);
+    const excludes = safePath.join(developer, 'global-ignore');
+    writeFileSync(excludes, 'globally-excluded.txt\n');
+    writeFileSync(safePath.join(developer, '.gitconfig'), `[core]\n\texcludesFile = ${excludes}\n`);
+    vi.stubEnv('HOME', developer);
+    vi.stubEnv('XDG_CONFIG_HOME', developer);
+
+    const prepared = await prepareClone(
+      preparation(source, probe, {
+        prerequisites: [nodeStep('build', "require('node:fs').writeFileSync('globally-excluded.txt', 'x')")],
+      }),
+    );
+
+    expect(prepared.ok ? '' : prepared.refusal).toMatch(/not at the committed tree.*globally-excluded\.txt/su);
+  });
+
+  it('records the inherited names the preparation’s git and warm-up ran without', async () => {
+    const source = subject();
+    const probe = setupProbe('lab-clone-probe-');
+    vi.stubEnv('VAT_LAB_PREPARE_PLANTED', 'x');
+
+    const prepared = await prepareClone(preparation(source, probe));
+
+    if (!prepared.ok) throw new Error(prepared.refusal);
+    expect(prepared.removedEnv).toContain('VAT_LAB_PREPARE_PLANTED');
+    expect(prepared.removedEnv).not.toContain('HOME');
+  });
+
+  it('refuses an --out inside the subject, before cloning anything', async () => {
+    const source = subject();
+    const probe = setupProbe('lab-clone-probe-');
+    const out = safePath.join(source, 'lab-out');
+
+    const prepared = await prepareClone({ ...preparation(source, probe), out });
+
+    expect(prepared.ok ? '' : prepared.refusal).toMatch(/inside the subject/u);
+    expect(existsSync(out)).toBe(false);
   });
 });

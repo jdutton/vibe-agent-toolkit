@@ -77,9 +77,6 @@ import type { Validated } from './yaml-file.js';
 /** Longest diff excerpt a document delta carries, in lines. */
 const EXCERPT_MAX_LINES = 80;
 
-/** Exit code vat's own contract reserves for "could not do its job". */
-const VAT_SYSTEM_ERROR_EXIT = 2;
-
 /** What a compare is judged against. */
 export interface VerdictCompareOptions {
   /** `--control`: both arms are the same instrument on purpose. */
@@ -213,7 +210,7 @@ export function compareVerdict(
  * @returns True iff the row is what an exclusion expects
  */
 function refusedAtTwo(row: VerdictRow): boolean {
-  return row.outcome === 'exited' && row.exitCode === VAT_SYSTEM_ERROR_EXIT && refusalCodes(row).length > 0;
+  return row.outcome === 'exited' && row.exitCode === ExitCode.ERROR && refusalCodes(row).length > 0;
 }
 
 /**
@@ -682,7 +679,7 @@ function sameCounts(a: ReadonlyMap<string, number>, b: ReadonlyMap<string, numbe
  */
 function unmeasuredReasons(side: string, row: VerdictRow): string[] {
   if (row.outcome === 'not-run') return [`${side} did not run: ${row.spawnError ?? 'no exit code'}`];
-  if (row.exitCode === VAT_SYSTEM_ERROR_EXIT) return [`${side} exited 2 (the command could not do its job)`];
+  if (row.exitCode === ExitCode.ERROR) return [`${side} exited 2 (the command could not do its job)`];
   if (rowVerdict(row)?.shape === 'unparsed') return [`${side} printed stdout the lab could not parse`];
   return [];
 }

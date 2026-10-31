@@ -14,13 +14,27 @@
  * 4. **Proven back at the committed tree**: `git status --porcelain` is empty
  *    and a `git add --all` snapshot of the clone has the commit's own tree hash.
  *    A step that wrote a non-ignored file fails the preparation, naming it.
+ *
+ * **Every preparation git runs where the arms' VAT runs** — under the warm-up
+ * arm's {@link armStepEnvironment}, the one environment path: the developer's
+ * global git config, excludes, `GIT_CONFIG_*` overrides and repo-locating
+ * `GIT_*` are gone and `HOME` is the empty arm home, as on a CI runner.
+ * Under the developer's own config a globally-excluded file a prerequisite
+ * wrote would vanish from the proof while every arm still saw it.
  */
 
 import { everywhere, mkdirSyncReal, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
-import { runGit } from '@vibe-agent-toolkit/utils/git';
 
-import { armDirectories } from './arm-dirs.js';
+import {
+  type ArmDirectories,
+  armDirectories,
+  armPlacementRefusal,
+  armStepEnvironment,
+  prepareArmDirectories,
+} from './arm-dirs.js';
+import { EMPTY_ARM_ENVIRONMENT } from './arm-env.js';
 import { runRepeats } from './repeat.js';
+import { runCommand } from './run.js';
 import type { SequenceStep } from './sequence.js';
 import type { ResolvedInstrument } from './types.js';
 
@@ -41,7 +55,14 @@ export interface ClonePreparation {
 
 /** A prepared clone, or why there is none. */
 export type PreparedClone =
-  | { readonly ok: true; readonly path: string; readonly commit: string; readonly tree: string }
+  | {
+      readonly ok: true;
+      readonly path: string;
+      readonly commit: string;
+      readonly tree: string;
+      /** Inherited names every preparation git and the warm-up ran without. */
+      readonly removedEnv: readonly string[];
+    }
   | { readonly ok: false; readonly refusal: string };
 
 /**
@@ -54,20 +75,24 @@ export async function prepareClone(preparation: ClonePreparation): Promise<Prepa
   const path = safePath.join(preparation.out, 'clone');
   // An entry, a dangling link included, is "already there"; a refused look throws rather than reading as absent.
   if (pathPresent(path, 'entry', everywhere('destination'), 'confirmed')) return refused(`the clone '${path}' already exists; preparation starts from nothing`);
+  const placement = armPlacementRefusal(preparation.out, [preparation.source]);
+  if (placement !== null) return refused(`--out: ${placement}`);
 
-  const commit = runGit(['rev-parse', '--verify', `${preparation.commit}^{commit}`], { cwd: preparation.source });
+  const arm = { out: preparation.out, build: 'prepare', arm: 'warmup', state: 'cold' } as const;
+  const dirs = armDirectories(arm);
+  mkdirSyncReal(preparation.out, { recursive: true });
+  prepareArmDirectories(dirs);
+  const git = preparationGit(dirs, preparation.timeoutMs);
+
+  const commit = git(['rev-parse', '--verify', `${preparation.commit}^{commit}`], preparation.source);
   if (commit.status !== 0) return refused(`'${preparation.commit}' is not a commit of '${preparation.source}'`);
   const sha = commit.stdout;
 
-  mkdirSyncReal(preparation.out, { recursive: true });
-  const cloned = runGit(['clone', '--quiet', '--local', '--no-checkout', preparation.source, path], {
-    cwd: preparation.out,
-  });
+  const cloned = git(['clone', '--quiet', '--local', '--no-checkout', preparation.source, path], preparation.out);
   if (cloned.status !== 0) return refused(`git clone --local exited ${String(cloned.status)}: ${cloned.stderr}`);
-  const checkedOut = runGit(['checkout', '--quiet', '--detach', sha], { cwd: path });
+  const checkedOut = git(['checkout', '--quiet', '--detach', sha], path);
   if (checkedOut.status !== 0) return refused(`git checkout ${sha} exited ${String(checkedOut.status)}: ${checkedOut.stderr}`);
 
-  const arm = { out: preparation.out, build: 'prepare', arm: 'warmup', state: 'cold' } as const;
   const run = await runRepeats({
     instrument: preparation.warmup.instrument,
     cwd: path,
@@ -80,29 +105,63 @@ export async function prepareClone(preparation: ClonePreparation): Promise<Prepa
   const violation = run.results[0]?.violation ?? null;
   if (violation !== null) return refused(`preparing '${path}': ${violation}`);
 
-  return proveCommitted(path, sha, safePath.join(armDirectories(arm).tmp, 'snapshot-index'));
+  const proven = proveCommitted(git, path, sha, safePath.join(dirs.tmp, 'snapshot-index'));
+  return proven.ok ? { ...proven, removedEnv: armStepEnvironment(dirs, EMPTY_ARM_ENVIRONMENT).removed } : proven;
+}
+
+/** One preparation git: its exit (`null` when it never ran or was killed), and trimmed streams. */
+type PreparationGit = (
+  args: readonly string[],
+  cwd: string,
+  set?: Readonly<Record<string, string>>,
+) => { readonly status: number | null; readonly stdout: string; readonly stderr: string };
+
+/**
+ * Git, run the way the arms run VAT: through the lab's own {@link runCommand}
+ * under {@link armStepEnvironment}, whose `unset` removes what `runGit`'s
+ * merge-over-`process.env` can only override.
+ *
+ * @param dirs - The warm-up arm, whose home is git's global config
+ * @param timeoutMs - Per-command ceiling, as for the steps
+ * @returns The runner
+ */
+function preparationGit(dirs: ArmDirectories, timeoutMs: number | undefined): PreparationGit {
+  return (args, cwd, set = {}) => {
+    const ran = runCommand({ command: 'git', leadingArgs: [] }, args, {
+      cwd,
+      env: armStepEnvironment(dirs, { set, unset: [] }).env,
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    });
+    return { status: ran.exitCode, stdout: ran.stdout.trim(), stderr: ran.stderr.trim() };
+  };
 }
 
 /**
  * Assert the clone is at the committed tree: nothing `git status` reports, and
  * a snapshot of the working tree with the commit's own tree hash.
  *
+ * @param git - The preparation's git
  * @param path - The clone
  * @param sha - The commit it must match
  * @param index - A scratch index file, so the clone's own index is untouched
  * @returns The prepared clone, or the refusal naming the offending paths
  */
-function proveCommitted(path: string, sha: string, index: string): PreparedClone {
-  const status = runGit(['status', '--porcelain', '--untracked-files=all'], { cwd: path });
+function proveCommitted(
+  git: PreparationGit,
+  path: string,
+  sha: string,
+  index: string,
+): Omit<Extract<PreparedClone, { ok: true }>, 'removedEnv'> | Extract<PreparedClone, { ok: false }> {
+  const status = git(['status', '--porcelain', '--untracked-files=all'], path);
   if (status.status !== 0) return refused(`git status exited ${String(status.status)} in '${path}'`);
   if (status.stdout !== '') {
     return refused(`the clone '${path}' is not at the committed tree after preparation:\n${status.stdout}`);
   }
 
-  const committed = runGit(['rev-parse', `${sha}^{tree}`], { cwd: path });
-  const env = { GIT_INDEX_FILE: index };
-  const added = runGit(['add', '--all'], { cwd: path, env });
-  const snapshot = runGit(['write-tree'], { cwd: path, env });
+  const committed = git(['rev-parse', `${sha}^{tree}`], path);
+  const snapshotIndex = { GIT_INDEX_FILE: index };
+  const added = git(['add', '--all'], path, snapshotIndex);
+  const snapshot = git(['write-tree'], path, snapshotIndex);
   if (committed.status !== 0 || added.status !== 0 || snapshot.status !== 0) {
     return refused(`could not take the clone's snapshot tree in '${path}'`);
   }

@@ -53,6 +53,12 @@ export interface ReportEnvelope<TBody = unknown> {
    * comparing it would report a difference between two identical measurements.
    */
   readonly capturedAt: string;
+  /**
+   * Inherited environment names the measured VAT children ran WITHOUT — the
+   * developer state (`VAT_*`, git config, temp and Claude directories) the arm
+   * cleared. Recorded for provenance and never compared.
+   */
+  readonly removedEnv: readonly string[];
   /** The facet's payload. */
   readonly body: TBody;
 }
@@ -70,6 +76,7 @@ export const ReportEnvelopeSchema = z
     facet: z.string().min(1),
     coordinate: CoordinateSchema,
     capturedAt: z.string().min(1),
+    removedEnv: z.array(z.string()),
     body: z.unknown(),
   })
   .strict();

@@ -36,7 +36,7 @@
  * probe's own temp directory.
  */
 
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
 import { readEnvelope, type ReportEnvelope } from '../src/envelope/envelope.js';
 import { capturePerf, type CapturePerfOptions } from '../src/facets/perf/capture.js';
@@ -71,6 +71,9 @@ import {
 } from './command-probe.js';
 
 afterAll(cleanupProbes);
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 /** Temp-directory prefix, so a stray directory names this suite. */
 const PREFIX = 'lab-perf-capture-';
@@ -432,6 +435,18 @@ describe('capturePerf — the envelope', () => {
     const probe = setupProbe(PREFIX);
 
     expect((await capture(probe, { runs: 1 })).capturedAt).toBe(CAPTURED_AT);
+  });
+
+  it('records the inherited names its VAT steps ran without, and not the ones the arm points', async () => {
+    const probe = setupProbe(PREFIX);
+    vi.stubEnv('VAT_LAB_REPORT_PLANTED', 'x');
+    vi.stubEnv('XDG_CONFIG_HOME', probe.cwd);
+
+    const report = await capture(probe, { runs: 1 });
+
+    expect(report.removedEnv).toEqual(expect.arrayContaining(['VAT_LAB_REPORT_PLANTED', 'XDG_CONFIG_HOME']));
+    expect(report.removedEnv).not.toContain('HOME');
+    expect(readEnvelope(report).ok).toBe(true);
   });
 
   it('produces a body that validates against the facet schema, failures included', async () => {

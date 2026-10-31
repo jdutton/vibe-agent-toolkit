@@ -27,7 +27,15 @@
 
 import { forEachInOrder, mapInOrder } from '@vibe-agent-toolkit/utils';
 
-import { type ArmDescriptor, ARM_DIRECTORY_ENV_KEYS, armDirectories, armDirectoryEnvironment, prepareArmDirectories } from './arm-dirs.js';
+import {
+  type ArmDescriptor,
+  armDirectories,
+  armOwnedEnvRefusal,
+  armPlacementRefusal,
+  armRefusal,
+  armStepEnvironment,
+  prepareArmDirectories,
+} from './arm-dirs.js';
 import { type ArmEnvironment, clearedEnvironment, mergeArmEnvironments } from './arm-env.js';
 import { completedExitCodesOf, type MeasuredCommandSpec } from './commands.js';
 import { type ParseDirectoryResolution, resolveParseCacheDirectory } from './parse-cache.js';
@@ -38,16 +46,13 @@ import {
   type SequenceResult,
   type SequenceStep,
 } from './sequence.js';
-import type { CacheMode, CaptureRequest, ResolvedInstrument, RunResult } from './types.js';
+import type { CacheMode, CaptureRequest, ResolvedInstrument } from './types.js';
 
 /** The token replaced with the subject's path in a command's arguments. */
 export const SUBJECT_TOKEN = '{subject}';
 
 /** How long a single step may run before it is killed. */
 const DEFAULT_TIMEOUT_MS = 600_000;
-
-/** How much of a failing command's stderr travels with the failure. */
-const STDERR_EXCERPT_CHARS = 200;
 
 /** One arm's sequence, repeated against one subject. */
 export interface RepeatSpec {
@@ -83,6 +88,8 @@ export type RepeatEnvFor = (index: number) => ArmEnvironment['set'] | undefined;
 export interface ArmRun {
   /** Inherited names the arm's VAT steps did not receive — recorded in the run report. */
   readonly removed: readonly string[];
+  /** Inherited names the arm's tool steps did not receive (every `VAT_*` and repo-locating git name). */
+  readonly removedTool: readonly string[];
   /** The warm arm's priming run, or `null` for a cold arm (or no repeats). */
   readonly priming: SequenceResult | null;
   /** One result per measured repeat, in order; empty when priming failed. */
@@ -101,33 +108,6 @@ export function materializeArgs(
   subjectPath: string,
 ): readonly string[] {
   return args.map((arg) => arg.replaceAll(SUBJECT_TOKEN, subjectPath));
-}
-
-/**
- * Say whether a run failed, and why, without saying what that costs.
- *
- * The order is the content. A process that never ran has no exit code worth
- * reporting, so `spawnError` is tested first; a non-zero exit is a real run and
- * keeps its code.
- *
- * "Failed" means **did not complete**, which is not the same as "did not exit
- * zero": the accepted codes come from the command being measured — see
- * `MeasuredCommandSpec.completedExitCodes` in `commands.ts`. They are a required
- * parameter: a defaulted one would silently restore the old behaviour.
- *
- * @param result - One run's raw outcome
- * @param completedExitCodes - Codes that denote a run that finished its work
- * @returns The reason it must not be treated as a completed run, or `null`
- */
-export function classifyRunFailure(
-  result: RunResult,
-  completedExitCodes: readonly number[],
-): string | null {
-  if (result.spawnError !== null) return result.spawnError;
-  if (result.exitCode === null || !completedExitCodes.includes(result.exitCode)) {
-    return `exited ${String(result.exitCode)}: ${result.stderr.trim().slice(0, STDERR_EXCERPT_CHARS)}`;
-  }
-  return null;
 }
 
 /**
@@ -228,14 +208,22 @@ export async function measureSpec(
     env: request.env,
     ...(envFor === undefined ? {} : { envFor }),
   });
+  return { spec, args, cache: request.cache, results: run.results, failure: armRunFailure(run) };
+}
+
+/**
+ * Why an arm's run yields no measurement — the one rule every facet that
+ * measures an arm applies, in order: a failed priming run (a warm arm that never
+ * primed measured nothing, and its empty result list is not "no repeats were
+ * requested"); then {@link summarizeRepeatFailures}; then no repeats at all.
+ *
+ * @param run - The arm's priming run and measured repeats
+ * @returns The failure to record, or `null` when the repeats are a measurement
+ */
+export function armRunFailure(run: Pick<ArmRun, 'priming' | 'results'>): string | null {
   const primingFailure = run.priming?.violation ?? null;
-  return {
-    spec,
-    args,
-    cache: request.cache,
-    results: run.results,
-    failure: primingFailure === null ? summarizeRepeatFailures(run.results) : `priming failed — ${primingFailure}`,
-  };
+  if (primingFailure !== null) return `priming failed — ${primingFailure}`;
+  return summarizeRepeatFailures(run.results) ?? (run.results.length === 0 ? 'no repeats were requested' : null);
 }
 
 /**
@@ -265,7 +253,7 @@ export async function runRepeats(spec: RepeatSpec): Promise<ArmRun> {
 export async function runInterleaved(specs: readonly RepeatSpec[], rounds: number): Promise<ArmRun[]> {
   const arms = specs.map((spec) => prepareArm(spec));
   refuseSharedDirectories(arms.map((arm) => arm.context.dirs.root));
-  if (rounds === 0) return arms.map((arm) => ({ removed: arm.removed, priming: null, results: [] }));
+  if (rounds === 0) return arms.map((arm) => ({ removed: arm.removed, removedTool: arm.removedTool, priming: null, results: [] }));
 
   for (const arm of arms) prepareArmDirectories(arm.context.dirs);
   // One sequence at a time, never concurrently: a measurement shares the machine with nothing of its own.
@@ -278,13 +266,19 @@ export async function runInterleaved(specs: readonly RepeatSpec[], rounds: numbe
       results[index]?.push(await runSequence(arm.context, { kind: 'measured', vatEnv: arm.measuredEnv(round) }));
     }),
   );
-  return arms.map((arm, index) => ({ removed: arm.removed, priming: priming[index] ?? null, results: results[index] ?? [] }));
+  return arms.map((arm, index) => ({
+    removed: arm.removed,
+    removedTool: arm.removedTool,
+    priming: priming[index] ?? null,
+    results: results[index] ?? [],
+  }));
 }
 
 /** One arm, prepared to run. */
 interface PreparedArm {
   readonly context: SequenceContext;
   readonly removed: readonly string[];
+  readonly removedTool: readonly string[];
   readonly measuredEnv: (round: number) => ArmEnvironment;
 }
 
@@ -297,13 +291,13 @@ interface PreparedArm {
  */
 function prepareArm(spec: RepeatSpec): PreparedArm {
   for (const step of spec.steps) assertCommittedExits(step);
-  const owned = ARM_DIRECTORY_ENV_KEYS.find((key) => Object.hasOwn(spec.env.set, key) || spec.env.unset.includes(key));
-  if (owned !== undefined) {
-    throw new Error(`arm '${spec.arm.arm}': ${owned} is set by the arm's own directories; a caller environment cannot name it`);
-  }
+  const owned = armOwnedEnvRefusal(spec.env);
+  if (owned !== null) throw armRefusal(`arm '${spec.arm.arm}': ${owned}`);
   const dirs = armDirectories(spec.arm);
-  const vat = clearedEnvironment(process.env, 'vat', mergeArmEnvironments(armDirectoryEnvironment(dirs, process.platform), spec.env));
-  const tool = clearedEnvironment(process.env, 'tool', { set: {}, unset: [] });
+  const placement = armPlacementRefusal(dirs.root, [spec.cwd]);
+  if (placement !== null) throw armRefusal(`arm '${spec.arm.arm}': ${placement}`);
+  const vat = armStepEnvironment(dirs, spec.env);
+  const tool = clearedEnvironment(process.env, 'tool', { set: {}, unset: [] }, process.platform);
   let parse: ParseDirectoryResolution | undefined;
   const context: SequenceContext = {
     instrument: spec.instrument,
@@ -319,6 +313,7 @@ function prepareArm(spec: RepeatSpec): PreparedArm {
   return {
     context,
     removed: vat.removed,
+    removedTool: tool.removed,
     measuredEnv: (round) => {
       const own = spec.envFor?.(round);
       return own === undefined ? vat.env : mergeArmEnvironments(vat.env, { set: own, unset: [] });
@@ -344,6 +339,6 @@ async function primed(arm: PreparedArm): Promise<SequenceResult> {
 function refuseSharedDirectories(roots: readonly string[]): void {
   const shared = roots.find((root, index) => roots.indexOf(root) !== index);
   if (shared !== undefined) {
-    throw new Error(`two arms would share '${shared}' — each (build, arm, state) runs in its own directories`);
+    throw armRefusal(`two arms would share '${shared}' — each (build, arm, state) runs in its own directories`);
   }
 }

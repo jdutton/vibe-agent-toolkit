@@ -13,7 +13,7 @@
 import type { ArmEnvironment } from '../../harness/arm-env.js';
 import type { MeasuredSequenceSpec } from '../../harness/commands.js';
 import type { StepProvenance } from '../../harness/provenance.js';
-import { commandStep, type RepeatSpec, runInterleaved, summarizeRepeatFailures } from '../../harness/repeat.js';
+import { armRunFailure, commandStep, type RepeatSpec, runInterleaved } from '../../harness/repeat.js';
 import type { SequenceResult, SequenceStep } from '../../harness/sequence.js';
 import type { CacheMode, ResolvedInstrument } from '../../harness/types.js';
 
@@ -77,6 +77,8 @@ export interface ArmReport {
   readonly state: CacheMode;
   /** Inherited names the arm's VAT steps did not receive. */
   readonly removedEnv: readonly string[];
+  /** Inherited names the arm's tool steps did not receive. */
+  readonly removedToolEnv: readonly string[];
   readonly priming: ArmRepetition | null;
   readonly repetitions: readonly ArmRepetition[];
   /** Min/median/IQR over the repetitions, or `null` when there is no measurement. */
@@ -93,14 +95,66 @@ export interface ArmsReport {
 }
 
 /**
- * A registered CI sequence as timed steps, each carrying its command's
+ * The exits one step of one arm commits to, as the operator set them
+ * (`perf arms --expect-exit <build>:<sequence>:<step>=<codes>`). A step no
+ * expectation names commits to its command's own exits — 0 for every CI step.
+ */
+export interface ExpectedExit {
+  readonly build: string;
+  /** A {@link MeasuredSequenceSpec.name}. */
+  readonly sequence: string;
+  /** A step's name within that sequence. */
+  readonly step: string;
+  /** Never 2: `assertCommittedExits` refuses it before anything runs. */
+  readonly exits: readonly number[];
+}
+
+/**
+ * A registered CI sequence as one build's timed steps, each carrying its
  * committed exits and population reader.
  *
  * @param sequence - A {@link MeasuredSequenceSpec}
+ * @param build - The build whose arm runs it
+ * @param expected - Every operator expectation; only this (build, sequence)'s apply
  * @returns Its steps, in order
  */
-export function sequenceSteps(sequence: MeasuredSequenceSpec): SequenceStep[] {
-  return sequence.steps.map((spec) => commandStep(spec, spec.args));
+export function sequenceSteps(
+  sequence: MeasuredSequenceSpec,
+  build: string,
+  expected: readonly ExpectedExit[],
+): SequenceStep[] {
+  return sequence.steps.map((spec) => {
+    const step = commandStep(spec, spec.args);
+    const set = expected.find(
+      (candidate) => candidate.build === build && candidate.sequence === sequence.name && candidate.step === step.name,
+    );
+    return set === undefined ? step : { ...step, expectedExits: set.exits };
+  });
+}
+
+/**
+ * Whether every expectation names an arm that will run and a step it runs —
+ * an expectation that matches nothing would silently leave the default in force.
+ *
+ * @param arms - The arms requested, by build and sequence
+ * @param expected - The operator's expectations
+ * @returns The refusal naming the first that matches nothing, or `null`
+ */
+export function expectedExitRefusal(
+  arms: readonly { readonly build: string; readonly sequence: MeasuredSequenceSpec }[],
+  expected: readonly ExpectedExit[],
+): string | null {
+  for (const expectation of expected) {
+    const arm = arms.find((candidate) => candidate.build === expectation.build && candidate.sequence.name === expectation.sequence);
+    if (arm === undefined) {
+      return `--expect-exit ${expectation.build}:${expectation.sequence} names no --arm of that build and sequence`;
+    }
+    const names = arm.sequence.steps.map((step) => step.name);
+    if (!names.includes(expectation.step)) {
+      return `--expect-exit names step '${expectation.step}', which ${expectation.sequence} does not run (its steps: ${names.join(', ')})`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -135,14 +189,13 @@ export async function captureArms(request: CaptureArmsRequest): Promise<ArmsRepo
       const run = runs[index];
       /* c8 ignore next -- one run per spec; guards noUncheckedIndexedAccess */
       if (run === undefined) throw new Error(`captureArms: no run for arm '${arm.arm}'`);
-      const primingFailure = run.priming?.violation ?? null;
-      const failure = primingFailure === null ? summarizeRepeatFailures(run.results) : `priming failed — ${primingFailure}`;
-      const refused = failure ?? (run.results.length === 0 ? 'no repeats were requested' : null);
+      const refused = armRunFailure(run);
       return {
         build: arm.build,
         arm: arm.arm,
         state: arm.state,
         removedEnv: run.removed,
+        removedToolEnv: run.removedTool,
         priming: run.priming === null ? null : repetitionOf(run.priming),
         repetitions: run.results.map((result) => repetitionOf(result)),
         summary: refused === null ? summarize(run.results.map((result) => result.wallMs)) : null,

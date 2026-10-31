@@ -46,8 +46,8 @@
  *    whatever the surrounding shell or CI had set — changing the process being
  *    measured while reporting it as the same one. See {@link nodeOptionsWith}.
  * 3. **The preload on `env` instead of `envFor`.** `env` reaches every child,
- *    including the `vat cache clear` that `cold` mode runs between repeats.
- *    Instrumenting the clear folds setup's own I/O into the measurement.
+ *    including a `warm` arm's unmeasured priming run. Instrumenting priming
+ *    folds setup's own I/O into the measurement.
  * 4. **Running uninstrumented when the counter cannot be found.** That reports
  *    zero I/O, which is the worst output this module can produce: a plausible,
  *    schema-valid report with nothing in it saying it is a lie. See
@@ -330,7 +330,7 @@ export async function captureIo(options: CaptureIoOptions): Promise<ReportEnvelo
   const commands: IoCommandStats[] = await mapInOrder(options.commands, (spec) =>
     withDumpDirs(options.runs, DUMP_DIR_PREFIX, async (directories) => {
       // Per repeat, and on `envFor` rather than `env`: only the measured run is
-      // instrumented, so `cold` mode's cache clear cannot contribute its own I/O.
+      // instrumented, so a `warm` arm's priming run cannot contribute its own I/O.
       const perRepeat = directories.map((directory) => ({
         [COUNTER_LOG_DIR_ENV]: directory,
         NODE_OPTIONS: nodeOptions,

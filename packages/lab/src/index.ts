@@ -453,7 +453,7 @@ export {
 } from './harness/load-guard.js';
 export {
   type ArmRun,
-  classifyRunFailure,
+  armRunFailure,
   commandStep,
   materializeArgs,
   measureSpec,

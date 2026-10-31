@@ -10,7 +10,7 @@
 import { writeFileSync } from 'node:fs';
 
 import { ExitCode, installLastResortExit } from '@vibe-agent-toolkit/schema';
-import { parseWholeNumberAtLeast, safePath } from '@vibe-agent-toolkit/utils';
+import { isVatError, parseWholeNumberAtLeast, safePath } from '@vibe-agent-toolkit/utils';
 import { isEntrypoint } from '@vibe-agent-toolkit/utils/process';
 import { Command, InvalidArgumentError } from 'commander';
 
@@ -24,7 +24,8 @@ import { renderIoComparison, renderIoReport } from '../facets/io/render.js';
 import { captureParse } from '../facets/parse/capture.js';
 import { compareParse } from '../facets/parse/compare.js';
 import { renderParseComparison, renderParseReport } from '../facets/parse/render.js';
-import { captureArms, renderArmsReport, sequenceSteps } from '../facets/perf/arms.js';
+import { captureArms, type ExpectedExit, expectedExitRefusal, renderArmsReport, sequenceSteps } from '../facets/perf/arms.js';
+import { type Bar, judgeBars, parseBar, readBarReport, renderBars } from '../facets/perf/bars.js';
 import { capturePerf } from '../facets/perf/capture.js';
 import { comparePerf } from '../facets/perf/compare.js';
 import { renderPerfComparison, renderPerfReport } from '../facets/perf/render.js';
@@ -52,7 +53,7 @@ import {
   runAb,
   UNMEASURABLE_VERDICT,
 } from '../harness/ab.js';
-import { buildAlias } from '../harness/arm-dirs.js';
+import { ARM_REFUSED_CODE, buildAlias } from '../harness/arm-dirs.js';
 import { type ArmEnvironment, armEnvironmentClash, sameArmEnvironment } from '../harness/arm-env.js';
 import { prepareClone } from '../harness/clone.js';
 import { indistinguishableArms } from '../harness/closure.js';
@@ -87,6 +88,35 @@ import { readReport, writeReport } from '../store.js';
 
 /** The `--out` flag's spelling, shared by every facet's `run` and `ab`. */
 const OUT_OPTION = '--out <dir>';
+/** Where reports land when `--out` is not given; resolved like any given value. */
+const DEFAULT_OUT = '.vat-lab';
+
+/**
+ * The one parser every `--out` goes through: resolved ONCE, here, against the
+ * lab's cwd. A relative value handed on would be resolved again by each child
+ * from ITS cwd — the subject — and land the arm inside the measured tree.
+ *
+ * @param value - The raw value
+ * @returns It, absolute
+ */
+export function resolvedOut(value: string): string {
+  return safePath.resolve(value);
+}
+
+/**
+ * Run an action, turning an arm refusal (`ARM_REFUSED_CODE`) into the CLI's
+ * clean REFUSED; anything else is still thrown.
+ *
+ * @param body - The action
+ */
+async function refusingArmErrors(body: () => Promise<void>): Promise<void> {
+  try {
+    await body();
+  } catch (error: unknown) {
+    if (!isVatError(error, ARM_REFUSED_CODE)) throw error;
+    refuse(`REFUSED: ${error.message}`);
+  }
+}
 /** The arm-environment options every capturing verb declares, and how a refusal names them. */
 const ENV_OPTION = '--env <KEY=VALUE>';
 const UNSET_OPTION = '--unset <KEY>';
@@ -484,7 +514,7 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
       'Remove an inherited variable from arm B only (repeatable)',
       collectUnset('--unset-b'),
     )
-    .option(OUT_OPTION, 'Directory to write the reports into', '.vat-lab')
+    .option(OUT_OPTION, 'Directory to write the reports into', resolvedOut, resolvedOut(DEFAULT_OUT))
     .option(
       '--id <name>',
       'Subject id recorded in the reports (default: the <subject> argument exactly as given)',
@@ -492,33 +522,35 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
     .description(
       `Interleave two vat builds over the ${wiring.name} facet: A B A B …, min estimator, per-pair verdicts`,
     )
-    .action(async (subjectPath: string, options: AbOptions) => {
-      const arms = await resolveAbArms(options);
-      if (arms === null) return;
+    .action((subjectPath: string, options: AbOptions) =>
+      refusingArmErrors(async () => {
+        const arms = await resolveAbArms(options);
+        if (arms === null) return;
 
-      const startedAt = new Date().toISOString();
-      const result = await runAb({
-        subject: await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath }),
-        armA: arms.a,
-        armB: arms.b,
-        commands: options.command ?? wiring.defaultCommands ?? DEFAULT_MEASURED_COMMANDS,
-        pairs: options.pairs,
-        runs: options.runs,
-        cache: options.cache,
-        control: options.control,
-        noiseFloor: options.noiseFloor ?? null,
-        envA: arms.envA,
-        envB: arms.envB,
-        outDir: abRunDirectory(options.out, startedAt),
-        now: () => new Date().toISOString(),
-        capture: wiring.capture,
-        compare: wiring.compare,
-        estimate: wiring.estimate,
-      });
+        const startedAt = new Date().toISOString();
+        const result = await runAb({
+          subject: await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath }),
+          armA: arms.a,
+          armB: arms.b,
+          commands: options.command ?? wiring.defaultCommands ?? DEFAULT_MEASURED_COMMANDS,
+          pairs: options.pairs,
+          runs: options.runs,
+          cache: options.cache,
+          control: options.control,
+          noiseFloor: options.noiseFloor ?? null,
+          envA: arms.envA,
+          envB: arms.envB,
+          outDir: abRunDirectory(options.out, startedAt),
+          now: () => new Date().toISOString(),
+          capture: wiring.capture,
+          compare: wiring.compare,
+          estimate: wiring.estimate,
+        });
 
-      process.stdout.write(`${renderAb(result)}\n`);
-      applyAbExitCode(result);
-    });
+        process.stdout.write(`${renderAb(result)}\n`);
+        applyAbExitCode(result);
+      }),
+    );
 }
 
 /**
@@ -654,32 +686,34 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
       'Remove an inherited variable from every child (repeatable)',
       collectUnset('--unset'),
     )
-    .option(OUT_OPTION, 'Directory to write the report into', '.vat-lab')
+    .option(OUT_OPTION, 'Directory to write the report into', resolvedOut, resolvedOut(DEFAULT_OUT))
     .option(
       '--id <name>',
       'Subject id recorded in the report (default: the <subject> argument exactly as given)',
     )
     .description(wiring.runSummary)
-    .action(async (subjectPath: string, options: RunOptions) => {
-      const env = armEnvironment(options.env, options.unset, ENV_OPTIONS_LABEL);
-      if (env === null) return;
-      const instrument = await resolveInstrument(options.instrument);
-      const subject = await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath });
-      const report = await wiring.capture({
-        instrument,
-        subject,
-        // No `--command` means the facet's default set, unchanged — the flag
-        // widens what can be asked for and never quietly narrows a bare run.
-        commands: options.command ?? wiring.defaultCommands ?? DEFAULT_MEASURED_COMMANDS,
-        runs: options.runs,
-        cache: options.cache,
-        env,
-        arms: { out: safePath.resolve(options.out), build: buildAlias(instrument.version) },
-        capturedAt: new Date().toISOString(),
-      });
-      const written = await writeReport(options.out, report);
-      process.stdout.write(`${wiring.renderReport(report)}\nWrote ${written}\n`);
-    });
+    .action((subjectPath: string, options: RunOptions) =>
+      refusingArmErrors(async () => {
+        const env = armEnvironment(options.env, options.unset, ENV_OPTIONS_LABEL);
+        if (env === null) return;
+        const instrument = await resolveInstrument(options.instrument);
+        const subject = await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath });
+        const report = await wiring.capture({
+          instrument,
+          subject,
+          // No `--command` means the facet's default set, unchanged — the flag
+          // widens what can be asked for and never quietly narrows a bare run.
+          commands: options.command ?? wiring.defaultCommands ?? DEFAULT_MEASURED_COMMANDS,
+          runs: options.runs,
+          cache: options.cache,
+          env,
+          arms: { out: options.out, build: buildAlias(instrument.version) },
+          capturedAt: new Date().toISOString(),
+        });
+        const written = await writeReport(options.out, report);
+        process.stdout.write(`${wiring.renderReport(report)}\nWrote ${written}\n`);
+      }),
+    );
 
   group
     .command('compare')
@@ -888,11 +922,37 @@ export function collectPrerequisite(value: string, previous: readonly SequenceSt
   return [...(previous ?? []), step];
 }
 
+/** `--expect-exit`'s shape: `<build>:<sequence>:<step>=<code>[,<code>…]`. */
+const EXPECTED_EXIT = /^([\w.-]+):([\w-]+):([\w-]+)=([\d,]+)$/u;
+
+/**
+ * A Commander parser for `perf arms --expect-exit <build>:<sequence>:<step>=<codes>`,
+ * accumulating: the exits one step of one arm commits to, in place of 0.
+ *
+ * @param value - Raw value Commander parsed
+ * @param previous - Expectations collected so far
+ * @returns The accumulated expectations
+ * @throws {InvalidArgumentError} when the value is malformed or commits to exit 2
+ */
+export function collectExpectedExit(value: string, previous: readonly ExpectedExit[] | undefined): ExpectedExit[] {
+  const match = EXPECTED_EXIT.exec(value);
+  const [, build = '', sequence = '', step = '', codes = ''] = match ?? [];
+  if (match === null || codes.split(',').some((code) => !/^\d+$/u.test(code))) {
+    throw new InvalidArgumentError(`--expect-exit expects <build>:<sequence>:<step>=<code>[,<code>…]; got '${value}'.`);
+  }
+  const exits = codes.split(',').map(Number);
+  if (exits.includes(ExitCode.ERROR)) {
+    throw new InvalidArgumentError(`--expect-exit '${value}' commits to exit 2 — a system error is never an expected exit.`);
+  }
+  return [...(previous ?? []), { build, sequence, step, exits }];
+}
+
 /** Options Commander collects for `perf arms`. */
 interface PerfArmsOptions {
   readonly build?: readonly ArmsBuildOption[];
   readonly arm?: readonly ArmsSelectionOption[];
   readonly prerequisite?: readonly SequenceStep[];
+  readonly expectExit?: readonly ExpectedExit[];
   readonly commit: string;
   readonly rounds: number;
   readonly out: string;
@@ -910,19 +970,31 @@ interface PerfArmsOptions {
 async function runPerfArms(subjectPath: string, options: PerfArmsOptions): Promise<void> {
   const env = armEnvironment(options.env, options.unset, ENV_OPTIONS_LABEL);
   if (env === null) return;
-  const [first] = options.arm ?? [];
+  const arms = options.arm ?? [];
+  const expected = options.expectExit ?? [];
+  const [first] = arms;
   if (options.build === undefined || first === undefined) {
     return refuse('REFUSED: perf arms needs at least one --build and one --arm.');
   }
+  // Every --arm and --expect-exit is checked before any build resolves or any clone is prepared.
+  const declared = new Set(options.build.map((build) => build.alias));
+  const undeclared = arms.find((arm) => !declared.has(arm.build));
+  if (undeclared !== undefined) {
+    return refuse(`REFUSED: --arm names build '${undeclared.build}', which no --build declares.`);
+  }
+  const unmatched = expectedExitRefusal(arms, expected);
+  if (unmatched !== null) return refuse(`REFUSED: ${unmatched}.`);
+
   const builds = await Promise.all(
     options.build.map(async (build) => ({ alias: build.alias, instrument: await resolveInstrument(build.source) })),
   );
   const warmupBuild = builds.find((build) => build.alias === first.build);
-  const [warmupStep] = sequenceSteps(first.sequence);
+  const [warmupStep] = sequenceSteps(first.sequence, first.build, expected);
+  /* c8 ignore next 3 -- every --arm's build was checked above, and every sequence has a step */
   if (warmupBuild === undefined || warmupStep === undefined) {
     return refuse(`REFUSED: --arm names build '${first.build}', which no --build declares.`);
   }
-  const out = safePath.resolve(options.out);
+  const out = options.out;
   const timeout = options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs };
   const prepared = await prepareClone({
     source: safePath.resolve(subjectPath),
@@ -938,11 +1010,11 @@ async function runPerfArms(subjectPath: string, options: PerfArmsOptions): Promi
     out,
     cwd: prepared.path,
     builds,
-    arms: (options.arm ?? []).map((arm) => ({
+    arms: arms.map((arm) => ({
       build: arm.build,
       arm: arm.sequence.name,
       state: arm.state,
-      steps: sequenceSteps(arm.sequence),
+      steps: sequenceSteps(arm.sequence, arm.build, expected),
     })),
     rounds: options.rounds,
     env,
@@ -973,14 +1045,69 @@ function createPerfArmsCommand(): Command {
       "A command run once in the clone before round 1, untimed and exit-checked (repeatable, in order; split on whitespace)",
       collectPrerequisite,
     )
+    .option(
+      '--expect-exit <build:sequence:step=codes>',
+      "The exits one step of one arm commits to, in place of 0, e.g. 'cand:ci-c:validate-ci=0,1' (repeatable; never 2)",
+      collectExpectedExit,
+    )
     .option('--commit <committish>', 'The commit to clone', 'HEAD')
-    .option('--rounds <n>', 'Measured rounds per arm, interleaved (the acceptance needs at least 5)', wholeNumberAtLeast('--rounds', 1), 5)
-    .requiredOption(OUT_OPTION, 'Directory for the clone, every arm and the report; outside the subject')
+    .option('--rounds <n>', 'Measured rounds per arm, interleaved; at least 5', wholeNumberAtLeast('--rounds', 5), 5)
+    .requiredOption(OUT_OPTION, 'Directory for the clone, every arm and the report; outside the subject', resolvedOut)
     .option('--timeout-ms <n>', 'Kill any one step after this long', wholeNumberAtLeast('--timeout-ms', 1))
     .option(ENV_OPTION, 'Set a variable for every VAT step of every arm (repeatable)', collectEnv('--env'))
     .option(UNSET_OPTION, 'Remove an inherited variable from every VAT step (repeatable)', collectUnset('--unset'))
     .description('Time CI command sequences per (build, arm, cache state), interleaved by round, in a prepared clone')
-    .action(runPerfArms);
+    .action((subjectPath: string, options: PerfArmsOptions) => refusingArmErrors(() => runPerfArms(subjectPath, options)));
+}
+
+/**
+ * A Commander parser for `perf bars --bar`, accumulating.
+ *
+ * @param value - Raw value Commander parsed, e.g. `cand:ci-c:cold<=1.15*rc11:ci-a:cold`
+ * @param previous - Bars collected so far
+ * @returns The accumulated bars
+ * @throws {InvalidArgumentError} when the bar does not parse or names no factor
+ */
+export function collectBar(value: string, previous: readonly Bar[] | undefined): Bar[] {
+  const bar = parseBar(value);
+  if (typeof bar === 'string') throw new InvalidArgumentError(`${bar}.`);
+  return [...(previous ?? []), bar];
+}
+
+/**
+ * Judge every bar over a `perf arms` report: exit 0 only when every bar
+ * passes; a failed or INCONCLUSIVE bar exits 1, and a report or bar that
+ * cannot be judged is REFUSED.
+ *
+ * @param reportPath - `<out>/arms-report.json`
+ * @param options - The bars
+ */
+function runPerfBars(reportPath: string, options: { readonly bar: readonly Bar[] }): void {
+  const read = readBarReport(safePath.resolve(reportPath));
+  if (!read.ok) return refuse(`REFUSED: ${read.refusal}.`);
+  const judged = judgeBars(read.report, options.bar);
+  if (!judged.ok) return refuse(`REFUSED: ${judged.refusal}.`);
+  process.stdout.write(`${renderBars(judged.results)}\n`);
+  if (judged.results.some((result) => result.verdict !== 'pass')) process.exitCode = ExitCode.FINDINGS;
+}
+
+/**
+ * Build `perf bars`: judge pass bars over a `perf arms` report.
+ *
+ * @returns The configured command
+ */
+function createPerfBarsCommand(): Command {
+  return new Command('bars')
+    .argument('<report>', "A perf arms report (<out>/arms-report.json)")
+    .requiredOption(
+      '--bar <bar>',
+      "A bar, e.g. 'cand:ci-c:cold<=1.15*rc11:ci-a:cold' — held on median AND min; the factor is required (repeatable)",
+      collectBar,
+    )
+    .description('Judge pass bars over a perf arms report: pass only when median and min both hold')
+    .action((reportPath: string, options: { readonly bar: readonly Bar[] }) => {
+      runPerfBars(reportPath, options);
+    });
 }
 
 /** Options Commander collects for `verdict run`. */
@@ -1070,7 +1197,7 @@ function createVerdictCommand(): Command {
       "Which vat to run: 'tree:<path>', 'dist:<path>' or 'npx:<pkg@version>'",
       parseInstrument,
     )
-    .requiredOption(OUT_OPTION, 'Directory to write one report per alias into; outside every subject')
+    .requiredOption(OUT_OPTION, 'Directory to write one report per alias into; outside every subject', resolvedOut)
     .option('--timeout-ms <n>', 'Kill any one verb after this long', wholeNumberAtLeast('--timeout-ms', 1))
     .option(ENV_OPTION, 'Set a variable for every child of this arm (repeatable)', collectEnv('--env'))
     .option(UNSET_OPTION, 'Remove an inherited variable from every child of this arm (repeatable)', collectUnset('--unset'))
@@ -1080,26 +1207,28 @@ function createVerdictCommand(): Command {
       collectPreparedSubject,
     )
     .description('Capture one arm: every verb of every subject, one report per alias')
-    .action(async (options: VerdictRunOptions) => {
-      const env = armEnvironment(options.env, options.unset, ENV_OPTIONS_LABEL);
-      if (env === null) return;
-      const loaded = loadVerdictSubjects(options.subjects);
-      if (!loaded.ok) return refuse(loaded.refusal);
-      const subjects = applyPreparedSubjects(loaded.subjects.subjects, options.prepared ?? {});
-      if (!subjects.ok) return refuse(subjects.refusal);
-      const result = await captureVerdict({
-        instrument: await resolveInstrument(options.instrument),
-        subjects: subjects.value,
-        subjectsDir: loaded.baseDir,
-        env,
-        outDir: safePath.resolve(options.out),
-        capturedAt: new Date().toISOString(),
-        ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-      });
-      if (!result.ok) return refuse(result.refusal);
-      for (const envelope of result.envelopes) process.stdout.write(`${renderVerdictReport(envelope)}\n`);
-      process.stdout.write(`Wrote ${result.written.join(', ')}\n`);
-    });
+    .action((options: VerdictRunOptions) =>
+      refusingArmErrors(async () => {
+        const env = armEnvironment(options.env, options.unset, ENV_OPTIONS_LABEL);
+        if (env === null) return;
+        const loaded = loadVerdictSubjects(options.subjects);
+        if (!loaded.ok) return refuse(loaded.refusal);
+        const subjects = applyPreparedSubjects(loaded.subjects.subjects, options.prepared ?? {});
+        if (!subjects.ok) return refuse(subjects.refusal);
+        const result = await captureVerdict({
+          instrument: await resolveInstrument(options.instrument),
+          subjects: subjects.value,
+          subjectsDir: loaded.baseDir,
+          env,
+          outDir: options.out,
+          capturedAt: new Date().toISOString(),
+          ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+        });
+        if (!result.ok) return refuse(result.refusal);
+        for (const envelope of result.envelopes) process.stdout.write(`${renderVerdictReport(envelope)}\n`);
+        process.stdout.write(`Wrote ${result.written.join(', ')}\n`);
+      }),
+    );
 
   group
     .command('compare')
@@ -1209,7 +1338,9 @@ export function createProgram(): Command {
         // and it is the right number to hand `ab` for the same reason `ab` then
         // takes a minimum of it — see `harness/estimator.ts`.
         estimate: (report) => rowEstimates(report.body.commands, 'ms', (row) => row.minMs),
-      }).addCommand(createPerfArmsCommand()),
+      })
+        .addCommand(createPerfArmsCommand())
+        .addCommand(createPerfBarsCommand()),
     )
     .addCommand(
       createFacetCommand({

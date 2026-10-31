@@ -7,7 +7,14 @@
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { armDirectories, armDirectoryEnvironment, buildAlias } from '../src/harness/arm-dirs.js';
+import {
+  ARM_REFUSED_CODE,
+  armDirectories,
+  armDirectoriesAt,
+  armDirectoryEnvironment,
+  armOwnedEnvRefusal,
+  buildAlias,
+} from '../src/harness/arm-dirs.js';
 
 /** An `--out` that is only ever joined, never created. */
 const out = safePath.join(normalizedTmpdir(), 'lab-arm-dirs-unit');
@@ -19,6 +26,12 @@ describe('armDirectories', () => {
     expect(dirs.store).toBe(safePath.join(dirs.root, 'store'));
     expect(dirs.tmp).toBe(safePath.join(dirs.root, 'tmp'));
     expect(dirs.home).toBe(safePath.join(dirs.root, 'home'));
+  });
+
+  it('refuses a relative --out, which a child running in the subject would resolve INSIDE it', () => {
+    const refused = (): unknown => armDirectories({ out: '.vat-lab', build: 'rc11', arm: 'B', state: 'cold' });
+    expect(refused).toThrow(/not absolute/u);
+    expect(() => armDirectoriesAt('relative/root')).toThrow(expect.objectContaining({ code: ARM_REFUSED_CODE }) as Error);
   });
 
   it('refuses a segment that could leave the arms directory', () => {
@@ -59,5 +72,18 @@ describe('armDirectoryEnvironment', () => {
     const dirs = armDirectories({ out, build: 'cand', arm: 'C', state: 'cold' });
     expect(armDirectoryEnvironment(dirs, 'win32').set['USERPROFILE']).toBe(dirs.home);
     expect(armDirectoryEnvironment(dirs, 'linux').set['USERPROFILE']).toBeUndefined();
+  });
+});
+
+describe('armOwnedEnvRefusal', () => {
+  it('refuses every variable the arm sets on ANY platform, and nothing else', () => {
+    const dirs = armDirectoriesAt(out);
+    const owned = new Set(['linux', 'darwin', 'win32'].flatMap((platform) => Object.keys(armDirectoryEnvironment(dirs, platform as NodeJS.Platform).set)));
+    expect(owned).toContain('USERPROFILE');
+    for (const name of owned) {
+      expect(armOwnedEnvRefusal({ set: { [name]: 'x' }, unset: [] })?.startsWith(`${name} is set by the lab`), name).toBe(true);
+      expect(armOwnedEnvRefusal({ set: {}, unset: [name] }), name).not.toBeNull();
+    }
+    expect(armOwnedEnvRefusal({ set: { LAB_UNOWNED: 'x' }, unset: ['XDG_CONFIG_HOME'] })).toBeNull();
   });
 });

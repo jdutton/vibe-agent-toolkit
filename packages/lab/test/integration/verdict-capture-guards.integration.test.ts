@@ -13,7 +13,7 @@
  * Integration-tier because capture spawns the probe.
  */
 
-import { statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
@@ -23,7 +23,7 @@ import { captureVerdict, type VerdictCaptureResult } from '../../src/facets/verd
 import type { VerdictSubject } from '../../src/facets/verdict/subjects.js';
 import { VerdictBodySchema } from '../../src/facets/verdict/types.js';
 import type { ArmEnvironment } from '../../src/harness/arm-env.js';
-import { PROBE_ECHO_ENV, PROBE_NO_LOG_ENV, setupProbe } from '../command-probe.js';
+import { PROBE_ECHO_ENV, PROBE_NO_LOG_ENV, PROBE_STAT_ENV, setupProbe } from '../command-probe.js';
 
 import { cleanupVerdictFixtures, FIXTURE_ALIAS, fixtureSubject, tempDir } from './verdict-fixtures.js';
 
@@ -83,27 +83,39 @@ describe('verdict capture — the per-arm overlay', () => {
     vi.stubEnv(PLANTED_ENV, 'leak');
     const outDir = tempDir('lab-verdict-out-');
 
-    const seen = echoed(await capture({ set: { [CALLER_ENV]: 'kept' }, unset: [] }, fixtureSubject(), outDir));
+    const result = await capture({ set: { [CALLER_ENV]: 'kept' }, unset: [] }, fixtureSubject(), outDir);
+    const seen = echoed(result);
 
     // The tail, not the whole path: the normalizer may rewrite an absolute
     // prefix (a temp dir under $HOME on Windows reads as <HOME>/…).
     const under = `${basename(outDir)}/${FIXTURE_ALIAS}`;
     expect(seen[STORE_ENV]?.endsWith(`${under}/store`)).toBe(true);
     for (const name of ['TMPDIR', 'TEMP', 'TMP']) expect(seen[name]?.endsWith(`${under}/tmp`), name).toBe(true);
-    for (const name of [CLAUDE_ENV, 'HOME']) expect(seen[name]?.endsWith(`${under}/home`), name).toBe(true);
+    // The child's home IS the arm home, so the normalizer must read it as <HOME> — never the operator's.
+    for (const name of [CLAUDE_ENV, 'HOME']) expect(seen[name], name).toBe('<HOME>');
     expect(seen[PLANTED_ENV]).toBeNull();
     expect(seen[CALLER_ENV]).toBe('kept');
+    // …and the envelope says which inherited names the verbs went without.
+    expect(result.ok && result.envelopes[0]?.removedEnv).toContain(PLANTED_ENV);
   });
 
   // POSIX modes only: Windows has no owner-only bits to read back.
-  it.skipIf(process.platform === 'win32')('creates <out>/<alias>/ and its tmp/ at 0700 before any verb, and leaves store/ to VAT', async () => {
+  it.skipIf(process.platform === 'win32')('has <out>/<alias>/ and its tmp/ at 0700 when the verb STARTS, and leaves store/ to VAT', async () => {
     const outDir = tempDir('lab-verdict-out-');
 
-    echoed(await capture({ set: {}, unset: [] }, fixtureSubject(), outDir));
+    // The verb itself stats its TMPDIR (<out>/<alias>/tmp) and that dir's
+    // parent (<out>/<alias>) as it starts: a directory made after the verbs
+    // reads `null` here even though a stat taken afterwards would pass.
+    const seen = echoed(await capture({ set: { [PROBE_STAT_ENV]: 'TMPDIR' }, unset: [] }, fixtureSubject(), outDir)) as Record<
+      string,
+      unknown
+    >;
 
-    for (const dir of [safePath.join(outDir, FIXTURE_ALIAS), safePath.join(outDir, FIXTURE_ALIAS, 'tmp')]) {
-      expect(statSync(dir).mode & 0o777, dir).toBe(0o700);
-    }
+    expect(seen['TMPDIR']).toMatch(/\/tmp$/u);
+    expect(seen['mode:TMPDIR']).toBe(0o700);
+    expect(seen['mode:TMPDIR/..']).toBe(0o700);
+    expect(seen[STORE_ENV]).not.toBeNull();
+    expect(existsSync(safePath.join(outDir, FIXTURE_ALIAS, 'store'))).toBe(false);
   });
 });
 
@@ -113,7 +125,21 @@ describe('verdict capture — refusals', () => {
 
     const result = await capture({ set: {}, unset: [] }, subjectPath, safePath.join(subjectPath, 'lab-out'));
 
-    expect(result).toMatchObject({ ok: false, refusal: expect.stringContaining('lies inside subject') });
+    expect(result).toMatchObject({ ok: false, refusal: expect.stringContaining('lies inside the subject') });
+  });
+
+  it('refuses an --out whose alias directory IS a subject, and neither chmods nor empties it', async () => {
+    // The operator's real mistake: --out ~/work with an alias equal to a checkout under it.
+    const outDir = tempDir('lab-verdict-parent-');
+    const subjectPath = safePath.join(outDir, FIXTURE_ALIAS);
+    mkdirSyncReal(safePath.join(subjectPath, 'home'), { recursive: true, mode: 0o755 });
+    writeFileSync(safePath.join(subjectPath, 'home', 'keep.txt'), 'the subject’s');
+
+    const result = await capture({ set: {}, unset: [] }, subjectPath, outDir);
+
+    expect(result).toMatchObject({ ok: false, refusal: expect.stringContaining(`contains the subject`) });
+    expect(readFileSync(safePath.join(subjectPath, 'home', 'keep.txt'), 'utf-8')).toBe('the subject’s');
+    if (process.platform !== 'win32') expect(statSync(subjectPath).mode & 0o777).not.toBe(0o700);
   });
 
   it('refuses a caller that names VAT_PROJECTION_STORE_DIR', async () => {
@@ -123,19 +149,19 @@ describe('verdict capture — refusals', () => {
       tempDir('lab-verdict-out-'),
     );
 
-    expect(result).toMatchObject({ ok: false, refusal: expect.stringContaining(`${STORE_ENV} is set by the verdict facet`) });
+    expect(result).toMatchObject({ ok: false, refusal: expect.stringContaining(`${STORE_ENV} is set by the lab itself`) });
   });
 
   it('refuses a caller that names TMPDIR', async () => {
     const result = await capture({ set: { TMPDIR: tempDir('lab-verdict-tmp-') }, unset: [] }, fixtureSubject(), tempDir('lab-verdict-out-'));
 
-    expect(result).toMatchObject({ ok: false, refusal: expect.stringContaining('TMPDIR is set by the verdict facet') });
+    expect(result).toMatchObject({ ok: false, refusal: expect.stringContaining('TMPDIR is set by the lab itself') });
   });
 
   it('refuses a caller that names CLAUDE_CONFIG_DIR', async () => {
     const result = await capture({ set: {}, unset: [CLAUDE_ENV] }, fixtureSubject(), tempDir('lab-verdict-out-'));
 
-    expect(result).toMatchObject({ ok: false, refusal: expect.stringContaining(`${CLAUDE_ENV} is set by the verdict facet`) });
+    expect(result).toMatchObject({ ok: false, refusal: expect.stringContaining(`${CLAUDE_ENV} is set by the lab itself`) });
   });
 
   it('refuses an --out whose private store an earlier capture already made', async () => {

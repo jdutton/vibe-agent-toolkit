@@ -67,7 +67,7 @@ export const FindingKeySchema: z.ZodType<FindingKey> = z
  * layer ({@link FindingKey}) does not carry it: a stored deltas entry is keyed
  * without one.
  */
-export interface LinedFinding extends FindingKey {
+interface LinedFinding extends FindingKey {
   readonly line: number | null;
 }
 

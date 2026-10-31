@@ -15,7 +15,7 @@
  *   `parseCacheMode`'s doc comment for the mechanism).
  */
 
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { normalizedTmpdir, resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
@@ -26,6 +26,8 @@ import {
   applyPreparedSubjects,
   collectArmsBuild,
   collectArmsSelection,
+  collectBar,
+  collectExpectedExit,
   collectMeasuredCommand,
   collectPreparedSubject,
   collectPrerequisite,
@@ -283,8 +285,8 @@ describe('vat-lab <facet> ab — every facet gets the verb, not just the one tha
   it.for(FACETS)('declares ab on %s', (facet) => {
     const group = createProgram().commands.find((candidate) => candidate.name() === facet);
 
-    // `perf` alone also times whole CI sequences.
-    const expected = facet === 'perf' ? ['run', 'compare', 'ab', 'arms'] : ['run', 'compare', 'ab'];
+    // `perf` alone also times whole CI sequences, and judges bars over them.
+    const expected = facet === 'perf' ? ['run', 'compare', 'ab', 'arms', 'bars'] : ['run', 'compare', 'ab'];
     expect(group?.commands.map((sub) => sub.name())).toEqual(expected);
   });
 
@@ -458,6 +460,39 @@ describe('vat-lab <facet> run — the arm environment flags', () => {
     expect(optionOf(facet, 'ab', '--unset-a')).toBeDefined();
     expect(optionOf(facet, 'ab', '--unset-b')).toBeDefined();
   });
+
+  it.for([
+    ['run', 'TMPDIR', () => ['--instrument', `dist:${REPO_CLI_DIST}`, '--env', 'TMPDIR=/elsewhere']],
+    ['ab', 'HOME', () => ['--instrument-a', `dist:${REPO_CLI_DIST}`, '--instrument-b', `dist:${REPO_CLI_DIST}`, '--env-a', 'HOME=/elsewhere']],
+  ] as const)('refuses an arm-owned variable on perf %s cleanly, as REFUSED, rather than throwing out of the action', async ([subcommand, name, flags]) => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+
+    await createProgram().parseAsync(['node', 'vat-lab', 'perf', subcommand, tempDir, ...flags(), '--out', safePath.join(tempDir, 'out')]);
+
+    expect(process.exitCode).toBe(ExitCode.ERROR);
+    const written = stderr.mock.calls.map(([chunk]) => String(chunk)).join('');
+    expect(written).toMatch(/^REFUSED: /mu);
+    expect(written).toContain(`${name} is set by the lab itself`);
+  });
+});
+
+describe('vat-lab — every --out is resolved once, by its parser', () => {
+  const sites = [
+    ...FACETS.flatMap((facet) => [
+      [facet, 'run'],
+      [facet, 'ab'],
+    ]),
+    ['perf', 'arms'],
+    ['verdict', 'run'],
+  ] as const;
+
+  it.for(sites)('resolves %s %s --out to an absolute path, its default included', ([facet, subcommand]) => {
+    const option = optionOf(facet, subcommand, '--out');
+    expect(option?.parseArg?.('relative/out', undefined)).toBe(safePath.resolve('relative/out'));
+    const fallback: unknown = option?.defaultValue;
+    if (typeof fallback === 'string') expect(fallback).toBe(safePath.resolve(fallback));
+    else expect(fallback).toBeUndefined();
+  });
 });
 
 describe('vat-lab <facet> run — the --command flag is wired to that parser', () => {
@@ -568,12 +603,133 @@ describe('vat-lab perf arms — the option parsers', () => {
     expect(() => collectPrerequisite('   ', undefined)).toThrow(InvalidArgumentError);
   });
 
+  it('collects --expect-exit as build:sequence:step=codes, refusing exit 2 and anything malformed', () => {
+    expect(collectExpectedExit('cand:ci-c:validate-ci=0,1', undefined)).toEqual([
+      { build: 'cand', sequence: 'ci-c', step: 'validate-ci', exits: [0, 1] },
+    ]);
+    expect(() => collectExpectedExit('cand:ci-c:validate-ci=0,2', undefined)).toThrow(/exit 2/u);
+    expect(() => collectExpectedExit('cand:ci-c=0', undefined)).toThrow(InvalidArgumentError);
+    expect(() => collectExpectedExit('cand:ci-c:validate-ci=one', undefined)).toThrow(InvalidArgumentError);
+    expect(() => collectExpectedExit('cand:ci-c:validate-ci=', undefined)).toThrow(InvalidArgumentError);
+  });
+
   it('wires every flag onto perf arms', () => {
     expect(optionOf('perf', 'arms', '--build')?.parseArg).toBe(collectArmsBuild);
     expect(optionOf('perf', 'arms', '--arm')?.parseArg).toBe(collectArmsSelection);
     expect(optionOf('perf', 'arms', '--prerequisite')?.parseArg).toBe(collectPrerequisite);
+    expect(optionOf('perf', 'arms', '--expect-exit')?.parseArg).toBe(collectExpectedExit);
     expect(optionOf('perf', 'arms', '--rounds')?.defaultValue).toBe(5);
     expect(optionOf('perf', 'arms', '--commit')?.defaultValue).toBe('HEAD');
+  });
+
+  it('refuses fewer than 5 --rounds, the fewest a median and IQR are read over', () => {
+    expect(() => optionOf('perf', 'arms', '--rounds')?.parseArg?.('4', undefined)).toThrow(InvalidArgumentError);
+    expect(optionOf('perf', 'arms', '--rounds')?.parseArg?.('5', undefined)).toBe(5);
+  });
+});
+
+/**
+ * Run `perf arms` over `tempDir` with these extra flags, into a fresh --out.
+ *
+ * @param flags - The case's flags
+ * @returns What it wrote to stderr, and the --out it was given
+ */
+async function perfArms(flags: readonly string[]): Promise<{ readonly stderr: string; readonly out: string }> {
+  const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+  const out = await mkdtemp(safePath.join(normalizedTmpdir(), 'lab-cli-arms-out-'));
+  await createProgram().parseAsync(['node', 'vat-lab', 'perf', 'arms', tempDir, '--out', out, ...flags]);
+  return { stderr: stderr.mock.calls.map(([chunk]) => String(chunk)).join(''), out };
+}
+
+describe('vat-lab perf arms — refusals before any clone is prepared', () => {
+  it('refuses a LATER --arm naming a build no --build declares, and prepares nothing', async () => {
+    const { stderr, out } = await perfArms([
+      '--build',
+      `cand=dist:${REPO_CLI_DIST}`,
+      '--arm',
+      'cand:ci-c:cold',
+      '--arm',
+      'rc11:ci-a:cold',
+    ]);
+
+    expect(process.exitCode).toBe(ExitCode.ERROR);
+    expect(stderr).toMatch(/^REFUSED: --arm names build 'rc11'/mu);
+    expect(await readdir(out)).toEqual([]);
+  });
+
+  it('refuses an --expect-exit that matches no arm, and prepares nothing', async () => {
+    const { stderr, out } = await perfArms([
+      '--build',
+      `cand=dist:${REPO_CLI_DIST}`,
+      '--arm',
+      'cand:ci-c:cold',
+      '--expect-exit',
+      'cand:ci-a:resources-validate-ci=0,1',
+    ]);
+
+    expect(process.exitCode).toBe(ExitCode.ERROR);
+    expect(stderr).toMatch(/^REFUSED: --expect-exit cand:ci-a names no --arm/mu);
+    expect(await readdir(out)).toEqual([]);
+  });
+});
+
+const measured = (build: string, arm: string, medianMs: number, minMs: number) => ({
+  build,
+  arm,
+  state: 'cold',
+  summary: { minMs, medianMs, iqrMs: 1, runs: 5 },
+  failure: null,
+});
+
+/**
+ * Write an arms report and judge these bars over it.
+ *
+ * @param bars - The bars, as typed after --bar
+ * @returns What the command wrote to stdout and stderr
+ */
+async function judge(bars: readonly string[]): Promise<{ readonly stdout: string; readonly stderr: string }> {
+  const stdout = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+  const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+  const report = safePath.join(tempDir, 'bars-arms-report.json');
+  await writeFile(
+    report,
+    JSON.stringify({ prepared: {}, cwd: tempDir, rounds: 5, arms: [measured('rc11', 'ci-a', 100, 90), measured('cand', 'ci-c', 110, 100)] }),
+  );
+  await createProgram().parseAsync(['node', 'vat-lab', 'perf', 'bars', report, ...bars.flatMap((bar) => ['--bar', bar])]);
+  const text = (spy: typeof stdout): string => spy.mock.calls.map(([chunk]) => String(chunk)).join('');
+  return { stdout: text(stdout), stderr: text(stderr) };
+}
+
+describe('vat-lab perf bars', () => {
+  it('wires a required, repeatable --bar parsed by collectBar', () => {
+    expect(optionOf('perf', 'bars', '--bar')?.parseArg).toBe(collectBar);
+    expect(optionOf('perf', 'bars', '--bar')?.required).toBe(true);
+    expect(() => collectBar('cand:ci-c:cold<=rc11:ci-a:cold', undefined)).toThrow(/factor/u);
+  });
+
+  it('exits 0 when every bar passes', async () => {
+    const { stdout } = await judge(['cand:ci-c:cold<=1.15*rc11:ci-a:cold']);
+
+    expect(process.exitCode).toBeUndefined();
+    expect(stdout).toMatch(/^PASS {2}cand:ci-c:cold<=1\.15\*rc11:ci-a:cold/mu);
+  });
+
+  it('exits non-zero on a failed bar, and on an INCONCLUSIVE one', async () => {
+    await judge(['cand:ci-c:cold<=1*rc11:ci-a:cold']);
+    expect(process.exitCode).toBe(ExitCode.FINDINGS);
+
+    process.exitCode = undefined;
+    // median 110 ≤ 1.1 × 100 holds; min 100 ≤ 1.1 × 90 does not.
+    const { stdout } = await judge(['cand:ci-c:cold<=1.1*rc11:ci-a:cold']);
+    expect(process.exitCode).toBe(ExitCode.FINDINGS);
+    expect(stdout).toMatch(/^INCONCLUSIVE/mu);
+  });
+
+  it('refuses a bar naming an arm the report does not hold', async () => {
+    const { stderr } = await judge(['cand:ci-b:cold<=1*rc11:ci-a:cold']);
+
+    expect(process.exitCode).toBe(ExitCode.ERROR);
+    expect(stderr).toMatch(/^REFUSED: .*cand:ci-b:cold is not in the report/mu);
   });
 });
 

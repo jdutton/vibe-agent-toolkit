@@ -9,11 +9,10 @@
  * cannot read refuses the union — an absent document is never an empty one.
  */
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+
 import { rowLinedFindings } from './extract.js';
 import type { VerdictBody } from './types.js';
-
-/** vat's system-error exit: a step that did not complete. */
-const SYSTEM_ERROR_EXIT = 2;
 
 /** One finding's identity in union mode. */
 export interface UnionKey {
@@ -24,12 +23,12 @@ export interface UnionKey {
 }
 
 /** A union, or why there is none. */
-export type UnionResult =
+type UnionResult =
   | { readonly ok: true; readonly keys: readonly UnionKey[] }
   | { readonly ok: false; readonly refusal: string };
 
 /** A coverage judgement, or why none could be made. */
-export type CoverageResult =
+type CoverageResult =
   | { readonly ok: true; readonly covered: boolean; readonly missing: readonly UnionKey[] }
   | { readonly ok: false; readonly refusal: string };
 
@@ -45,7 +44,7 @@ export function unionFindings(body: VerdictBody, names: readonly string[]): Unio
   for (const name of names) {
     const row = body.rows.find((candidate) => candidate.name === name);
     if (row === undefined) return refused(`no row named '${name}' in this capture`);
-    if (row.exitCode === SYSTEM_ERROR_EXIT) return refused(`row '${name}' exited 2 — a run that did not complete`);
+    if (row.exitCode === ExitCode.ERROR) return refused(`row '${name}' exited 2 — a run that did not complete`);
     const read = rowLinedFindings(row);
     if (read === null || read.shape === 'unparsed') {
       const why = row.spawnError ?? `exit ${String(row.exitCode)}`;
