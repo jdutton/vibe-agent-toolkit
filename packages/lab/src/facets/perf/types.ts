@@ -65,14 +65,14 @@ export interface PerfCommandStats {
    * failed.
    *
    * **On a successful row this is the observed code, not a constant.** A command
-   * may declare that more than one code means "finished its work" — a vat
-   * validator exits `1` when it has findings and `0` when it has none, and both
-   * ran the whole corpus (see `MeasuredCommandSpec.completedExitCodes`). Two rows
+   * be committed to `1` on a subject with findings — a vat validator exits `1`
+   * when it has findings and `0` when it has none, and both ran the whole
+   * corpus (see `MeasuredCommandSpec.expectedExit`). Two rows
    * with identical medians where one exited `0` and one exited `1` are not the
    * same measurement, and a reader who cannot tell them apart cannot tell a
    * clean project from one whose findings the run had to render. It is always a
-   * single code: repeats that disagreed are a failed row, per rule 2 of
-   * `summarizeRepeatFailures`.
+   * single code: a repeat that exited anything but the committed one is a
+   * failed row.
    *
    * **On a failed row it stays `null`**, and that reasoning is unchanged.
    * Deliberately not "the code the failing repeat produced": once any repeat

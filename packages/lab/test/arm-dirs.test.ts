@@ -72,6 +72,7 @@ describe('armDirectoryEnvironment', () => {
         HOME: dirs.home,
         CLAUDE_CONFIG_DIR: dirs.home,
         GIT_CONFIG_NOSYSTEM: '1',
+        GIT_ATTR_NOSYSTEM: '1',
         npm_config_cache: dirs.npmCache,
         npm_config_prefer_offline: 'true',
         npm_config_update_notifier: 'false',
@@ -90,9 +91,10 @@ describe('armDirectoryEnvironment', () => {
 });
 
 describe('armDirectoryEnvironment — system git config', () => {
-  it('sets GIT_CONFIG_NOSYSTEM=1 on every platform, so no system git config reaches an arm or its preparation', () => {
+  it('sets GIT_CONFIG_NOSYSTEM=1 and GIT_ATTR_NOSYSTEM=1 on every platform, so no system git config or attributes reach an arm', () => {
     for (const platform of ['linux', 'darwin', 'win32'] as const) {
       expect(armDirectoryEnvironment(armDirectoriesAt(out), platform).set['GIT_CONFIG_NOSYSTEM'], platform).toBe('1');
+      expect(armDirectoryEnvironment(armDirectoriesAt(out), platform).set['GIT_ATTR_NOSYSTEM'], platform).toBe('1');
     }
   });
 });

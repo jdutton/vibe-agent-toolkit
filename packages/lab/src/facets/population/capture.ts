@@ -217,11 +217,13 @@ export async function capturePopulation(
   options: CapturePopulationOptions,
 ): Promise<ReportEnvelope<PopulationBody>> {
   const loadBefore = readLoad();
-  const commands = await mapInOrder(options.commands, async (spec) => rowFor(await measureSpec(options, spec)));
+  const measured = await mapInOrder(options.commands, (spec) => measureSpec(options, spec));
   const loadAfter = readLoad();
 
-  return buildReportEnvelope(POPULATION_FACET, options, {
-    commands,
-    load: judgeLoad(loadBefore.loadAvg1, loadAfter.loadAvg1, loadAfter.cpus),
-  });
+  return buildReportEnvelope(
+    POPULATION_FACET,
+    options,
+    { commands: measured.map((measurement) => rowFor(measurement)), load: judgeLoad(loadBefore.loadAvg1, loadAfter.loadAvg1, loadAfter.cpus) },
+    measured,
+  );
 }

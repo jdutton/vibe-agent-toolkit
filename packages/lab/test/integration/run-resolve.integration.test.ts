@@ -87,6 +87,21 @@ describe('resolveOnPath on posix', () => {
     expect(resolveOnPath('tool', { PATH: [plain, runnable].join(':') }, 'linux')).toBe(safePath.join(runnable, 'tool'));
   });
 
+  // Mode 000 binds nothing for root, which can search any directory.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'skips a PATH entry it may not search, as execvp does, and takes the next one',
+    () => {
+      const locked = dirWith('locked', ['tool']);
+      const later = dirWith('later', ['tool']);
+      chmodSync(locked, 0o000);
+      try {
+        expect(resolveOnPath('tool', { PATH: [locked, later].join(':') }, 'linux')).toBe(safePath.join(later, 'tool'));
+      } finally {
+        chmodSync(locked, 0o755);
+      }
+    },
+  );
+
   it('is undefined for a name on no PATH entry', () => {
     expect(resolveOnPath('tool', { PATH: dirWith('a', []) }, 'darwin')).toBeUndefined();
     expect(resolveOnPath('tool', {}, 'darwin')).toBeUndefined();

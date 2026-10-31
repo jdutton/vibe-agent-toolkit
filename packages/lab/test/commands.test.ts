@@ -2,12 +2,10 @@
  * The command registry is a set of claims about vat's command line, and every
  * one of them is falsifiable against vat's own sources:
  *
- * - **Which exit codes mean the run finished its work.** vat's convention is `0`
- *   success, `1` validation findings, `2` system error. A command that reports
- *   findings by exit code must accept `1` or it is unmeasurable on any project
- *   that has findings — which is every real project, and was the defect. A
- *   command documented as always exiting `0` must NOT accept `1`, because for it
- *   a `1` really is something going wrong.
+ * - **The one exit each command commits to.** Every registered command commits
+ *   to `0`, its exit on a clean subject; a subject with findings is measured by
+ *   the caller committing to `1` for that command, never by a spec accepting
+ *   two codes. No command ever commits to vat's system-error code `2`.
  * - **Which take a subject path.** `vat validate` and `vat verify` reject a
  *   positional path (exit 2) and scope themselves from the config at the working
  *   directory, which the harness sets to the subject. A `{subject}` token in
@@ -20,8 +18,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  completedExitCodesOf,
-  DEFAULT_COMPLETED_EXIT_CODES,
   DEFAULT_MEASURED_COMMANDS,
   MEASURABLE_COMMAND_NAMES,
   MEASURABLE_COMMANDS,
@@ -81,30 +77,6 @@ const SUBJECT_NAMES = [
   'skills-list',
 ];
 
-/** Every command that reports findings by exit code, and so completes at 1. */
-const FINDINGS_NAMES = [
-  'resources-validate',
-  'validate',
-  'verify',
-  'skills-validate',
-  'audit',
-];
-
-/** Every command documented as exiting 0 whatever it finds. */
-const ALWAYS_ZERO_NAMES = [
-  'resources-scan',
-  'resources-population',
-  // `resources query` reports no findings: it exits 0 when the statement ran
-  // and 2 when it was refused or the crawl failed. A 1 from it is not a verdict
-  // about the tree, so accepting one would let a broken run count as measured.
-  'resources-query',
-  'inventory',
-  'skills-list',
-  CONTEXT_SWEEP,
-  CONTEXT_ONE,
-  ...CI_NAMES,
-];
-
 /** The paired arms that make `vat claude context`'s cost separable. */
 const CONTEXT_NAMES = [CONTEXT_SWEEP, CONTEXT_ONE];
 
@@ -124,40 +96,10 @@ function specNamed(name: string): MeasuredCommandSpec {
   return spec;
 }
 
-describe('completedExitCodesOf', () => {
-  it('defaults a spec that says nothing to 0 alone', () => {
-    const spec: MeasuredCommandSpec = { name: 'quiet', args: ['quiet'], provenance: 'none', populates: false };
-
-    expect(completedExitCodesOf(spec)).toEqual([0]);
-    expect(DEFAULT_COMPLETED_EXIT_CODES).toEqual([0]);
-  });
-
-  it('returns what the spec declared when it declared something', () => {
-    const spec: MeasuredCommandSpec = {
-      name: 'loud',
-      args: ['loud'],
-      completedExitCodes: [0, 1],
-      provenance: 'none',
-      populates: false,
-    };
-
-    expect(completedExitCodesOf(spec)).toEqual([0, 1]);
-  });
-});
-
 describe('MEASURABLE_COMMANDS', () => {
-  it.each(FINDINGS_NAMES)('completes at 0 AND 1 for %s — findings are a finished run', (name) => {
-    expect(completedExitCodesOf(specNamed(name))).toEqual([0, 1]);
-  });
-
-  it.each(ALWAYS_ZERO_NAMES)('completes only at 0 for %s — it never exits 1 on purpose', (name) => {
-    expect(completedExitCodesOf(specNamed(name))).toEqual([0]);
-  });
-
-  it('never lets any command declare vat\'s system-error code completed', () => {
-    for (const name of MEASURABLE_COMMAND_NAMES) {
-      expect(completedExitCodesOf(specNamed(name))).not.toContain(SYSTEM_ERROR_EXIT);
-    }
+  it.each(MEASURABLE_COMMAND_NAMES)('commits %s to exactly one exit, 0 — its exit on a clean subject', (name) => {
+    expect(specNamed(name).expectedExit).toBe(0);
+    expect(specNamed(name).expectedExit).not.toBe(SYSTEM_ERROR_EXIT);
   });
 
   it.each(PATHLESS_NAMES)('spells %s as the bare verb — it rejects a positional path', (name) => {
@@ -186,14 +128,6 @@ describe('MEASURABLE_COMMANDS', () => {
 
     expect(both).toEqual([]);
     expect(MEASURABLE_COMMAND_NAMES.filter((name) => !scoped.has(name))).toEqual([]);
-  });
-
-  it('classifies every registered command as findings-reporting or always-zero, never both', () => {
-    const classified = new Set([...FINDINGS_NAMES, ...ALWAYS_ZERO_NAMES]);
-    const both = FINDINGS_NAMES.filter((name) => ALWAYS_ZERO_NAMES.includes(name));
-
-    expect(both).toEqual([]);
-    expect(MEASURABLE_COMMAND_NAMES.filter((name) => !classified.has(name))).toEqual([]);
   });
 
   it('answers to every name it lists, and to nothing else', () => {
@@ -291,10 +225,4 @@ describe('the vat claude context arms', () => {
     expect(specNamed(CONTEXT_ONE).args).toEqual(['claude', 'context', SUBJECT_TOKEN]);
   });
 
-  it.each(CONTEXT_NAMES)('leaves %s on the default completed exit codes', (name) => {
-    // `vat claude context` is documented "0 - An answer was produced (there is
-    // no threshold and no gate)"; its `1` is invalid usage, which is a run that
-    // measured nothing. Accepting `1` here would time a usage error.
-    expect(completedExitCodesOf(specNamed(name))).toBe(DEFAULT_COMPLETED_EXIT_CODES);
-  });
 });

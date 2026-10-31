@@ -15,8 +15,13 @@
 
 import type { ReportEnvelope } from '../envelope/envelope.js';
 
-import { armRemovedEnv } from './arm-dirs.js';
+import { compareByCodeUnit } from './fingerprint.js';
 import type { CaptureRequest } from './types.js';
+
+/** What a measured command's children went without — `SpecMeasurement.removed`. */
+interface MeasuredRemoval {
+  readonly removed: readonly string[];
+}
 
 /**
  * Stamp a facet's body with the coordinate it was measured at.
@@ -30,12 +35,16 @@ import type { CaptureRequest } from './types.js';
  * @param request - What the capture was asked to do; the coordinate comes from
  *   the instrument and subject it actually resolved, never from what was typed
  * @param body - The facet's own measurements
+ * @param measured - Every measured command's children's removed names: the
+ *   report records what the children ran WITHOUT, as they ran, never a
+ *   recomputation from the environment the report is stamped in
  * @returns A complete report envelope, ready to store
  */
 export function buildReportEnvelope<TBody>(
   facet: string,
   request: CaptureRequest,
   body: TBody,
+  measured: readonly MeasuredRemoval[],
 ): ReportEnvelope<TBody> {
   return {
     facet,
@@ -45,7 +54,7 @@ export function buildReportEnvelope<TBody>(
       instrument: request.instrument.version,
     },
     capturedAt: request.capturedAt,
-    removedEnv: armRemovedEnv(request.env),
+    removedEnv: [...new Set(measured.flatMap((measurement) => measurement.removed))].sort(compareByCodeUnit),
     body,
   };
 }

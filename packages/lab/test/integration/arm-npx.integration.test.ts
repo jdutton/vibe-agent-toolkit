@@ -11,8 +11,10 @@
  * The npx stand-in fetches into whatever cache npm would use, exactly as npx
  * does, and logs whether each run fetched.
  *
- * A build whose parse directory a populating step needs, but that does not run
- * as `node <entry>` (npx), is refused before anything runs.
+ * A build whose parse directory a populating step needs, but that runs neither
+ * as `node <entry>` nor through npx, is refused before any measured child. (An
+ * npx build's parse directory is resolved from its install in the arm's npm
+ * cache — `repeat-npx.integration.test.ts`.)
  *
  * Integration-tier: spawns node.
  */
@@ -102,10 +104,14 @@ describe('an npx-shaped instrument under an arm', () => {
     }
   });
 
-  it('refuses, before anything runs, a populating arm whose build does not run as node <entry>', async () => {
-    const spec = coldArm({ command: 'npx', leadingArgs: ['--yes', 'vibe-agent-toolkit@0.2.0'], version: PROBE_VERSION }, true);
+  it('refuses, before any measured child, a populating arm whose build runs neither as node <entry> nor through npx', async () => {
+    // `node -e <code>`: it runs (exits 0 on `--version`), but has no entry module to resolve a parse directory from.
+    const started = safePath.join(scratch, 'started');
+    const code = `require('node:fs').appendFileSync(${JSON.stringify(started)}, 'x')`;
+    const spec = coldArm({ command: NODE_EXECUTABLE, leadingArgs: ['-e', code], version: PROBE_VERSION }, true);
 
-    await expect(runRepeats(spec)).rejects.toThrow(/arm 'a': .*does not run as `node <entry>`/u);
-    expect(existsSync(safePath.join(scratch, 'npx.log'))).toBe(false);
+    await expect(runRepeats(spec)).rejects.toThrow(/arm 'a': .*runs neither as `node <entry>` nor through npx/u);
+    // Each run of the build appends one 'x': the untimed start at most, never a measured repetition.
+    expect(existsSync(started) ? readFileSync(started, 'utf-8') : '').toMatch(/^x?$/u);
   });
 });

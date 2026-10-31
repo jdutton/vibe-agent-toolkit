@@ -29,6 +29,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { type ArmDirectories, armRefusal, entriesOf, resetArmHome, resetColdArm } from './arm-dirs.js';
 import type { ArmEnvironment } from './arm-env.js';
 import { type ParseDirectoryResolution } from './parse-cache.js';
+import type { PopulationExpectation } from './population-expectation.js';
 import { type ProvenanceReader, provenanceViolation, readProvenance, type StepProvenance } from './provenance.js';
 import { runCommand } from './run.js';
 import type { CacheMode, ResolvedInstrument, RunResult } from './types.js';
@@ -50,13 +51,13 @@ export interface SequenceStep {
   readonly command: StepCommand;
   /** Whether the step's wall time counts toward the sequence's time. */
   readonly timed: boolean;
-  /** The committed exits — what this step exits when it did its work. Never 2. */
-  readonly expectedExits: readonly number[];
+  /** The ONE committed exit — what this step exits when it did its work. Never 2. */
+  readonly expectedExit: number;
   /** Which document reader the step's stdout goes through. */
   readonly provenance: ProvenanceReader;
   /**
-   * Whether a cold run of this step, as the FIRST step, must leave the store and
-   * a parse shard. True for every verb that populates a projection.
+   * Whether this step populates a projection: a cold run of it as the FIRST step,
+   * and a priming run, are checked for what the arm's environment says it writes.
    */
   readonly populates: boolean;
 }
@@ -97,6 +98,8 @@ export interface SequenceContext {
   readonly timeoutMs: number;
   /** The build's parse directory under the arm's `tmp`, resolved lazily and once. */
   readonly parseDirectory: () => ParseDirectoryResolution;
+  /** What a populating run of THIS arm writes, from its VAT environment. */
+  readonly population: PopulationExpectation;
 }
 
 /** Which run of an arm this is: the priming run, or a measured one. */
@@ -110,7 +113,7 @@ type SequenceRole = { readonly kind: 'priming' } | { readonly kind: 'measured'; 
  */
 export function assertCommittedExits(step: SequenceStep): void {
   // vat's system-error exit: a run that did not complete, and so never a committed exit.
-  if (step.expectedExits.includes(ExitCode.ERROR)) {
+  if (step.expectedExit === ExitCode.ERROR) {
     throw armRefusal(`step '${step.name}' commits to exit 2 — a system error is never an expected exit`);
   }
 }
@@ -207,32 +210,36 @@ function stepViolation(
   ran: StepResult,
   index: number,
 ): string | null {
-  const failure = exitFailure(ran, step.expectedExits);
+  const failure = exitFailure(ran, step.expectedExit);
   if (failure !== null) return `step '${step.name}' ${failure}`;
   if (index === 0 && step.populates && context.state === 'cold') {
     const violation = populationViolation(context, `cold rule: after step '${step.name}'`);
     if (violation !== null) return violation;
   }
-  return role.kind === 'measured' ? provenanceViolation(step.name, step.provenance, ran.provenance, context.state) : null;
+  return role.kind === 'measured'
+    ? provenanceViolation(step.name, step.provenance, ran.provenance, context.state, context.population.store)
+    : null;
 }
 
 /**
  * Whether a step's exit is one it committed to.
  *
  * @param ran - The step's outcome
- * @param expected - Its committed exits
+ * @param expected - Its committed exit
  * @returns Why not, or `null`
  */
-function exitFailure(ran: RunResult, expected: readonly number[]): string | null {
+function exitFailure(ran: RunResult, expected: number): string | null {
   if (ran.spawnError !== null) return `did not run: ${ran.spawnError}`;
-  if (ran.exitCode === null || !expected.includes(ran.exitCode)) {
+  if (ran.exitCode !== expected) {
     return `exited ${String(ran.exitCode)}: ${ran.stderr.trim().slice(0, STDERR_EXCERPT_CHARS)}`;
   }
   return null;
 }
 
 /**
- * Whether the arm's store and the build's parse directory were populated.
+ * Whether the arm's store and the build's parse directory hold what this arm's
+ * environment says a populating run writes — and nothing where it says the
+ * cache is off.
  *
  * @param context - The arm
  * @param when - What the message says this was checked after
@@ -240,11 +247,27 @@ function exitFailure(ran: RunResult, expected: readonly number[]): string | null
  */
 function populationViolation(context: SequenceContext, when: string): string | null {
   if (!context.steps.some((step) => step.populates)) return null;
-  if (entriesOf(context.dirs.store).length === 0) return `${when} the store '${context.dirs.store}' is empty`;
+  const { store, parseShard } = context.population;
+  const stored = entriesOf(context.dirs.store).length > 0;
+  if (store && !stored) return `${when} the store '${context.dirs.store}' is empty`;
+  if (!store && stored) return `${when} the store '${context.dirs.store}' was written though the arm turned the store off`;
+  if (!parseShard) return parseShardWrittenWhenOff(context, when);
   const parse = context.parseDirectory();
   if (!parse.ok) return `${when}: ${parse.reason}`;
   if (!holdsAFile(parse.dir)) return `${when} the build's parse directory '${parse.dir}' holds no shard`;
   return null;
+}
+
+/**
+ * @param context - An arm whose environment turned the parse cache off
+ * @param when - What the message says this was checked after
+ * @returns The violation when the build's parse directory holds a shard anyway;
+ *   `null` when it holds none or the build cannot say where it is (nothing is claimed)
+ */
+function parseShardWrittenWhenOff(context: SequenceContext, when: string): string | null {
+  const parse = context.parseDirectory();
+  if (!parse.ok || !holdsAFile(parse.dir)) return null;
+  return `${when} the build's parse directory '${parse.dir}' was written though the arm turned the parse cache off`;
 }
 
 /**

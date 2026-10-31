@@ -117,7 +117,7 @@ describe('compareParse — refusals come before any subtraction', () => {
     const result = compareParse(older(), older());
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('unreachable');
-    expect(result.refusal).toMatch(/is not a 'parse' body/);
+    expect(result.refusal).toMatch(/'parse' report was captured by a lab whose report shape differs.*re-capture it/u);
     expect(result.refusal).toMatch(/workerThreads/);
   });
 
@@ -128,7 +128,7 @@ describe('compareParse — refusals come before any subtraction', () => {
     );
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('unreachable');
-    expect(result.refusal).toMatch(/is not a 'parse' body/);
+    expect(result.refusal).toMatch(/'parse' report was captured by a lab whose report shape differs.*re-capture it/u);
   });
 
   it('refuses when more than one axis moved', () => {

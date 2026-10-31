@@ -146,6 +146,13 @@
       "outputs": [],
       "cache": true
     },
+    // lab: the system tier times THIS checkout's built CLI as its candidate
+    // (`test/system/candidate-subject.ts`, `cli/dist`) — the same closure edge.
+    "@vibe-agent-toolkit/lab#test:system": {
+      "dependsOn": ["^build", "build", "@vibe-agent-toolkit/cli#build"],
+      "outputs": [],
+      "cache": true
+    },
     "test:system": {
       "dependsOn": ["^build", "build"],
       "outputs": [],

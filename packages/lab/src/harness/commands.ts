@@ -1,7 +1,7 @@
 /**
  * What a measurement facet is pointed at: the commands it can run, the default
- * set to run when the caller does not name their own, and — per command — which
- * exit codes mean the run finished its work.
+ * set to run when the caller does not name their own, and — per command — the
+ * one exit it commits to when it did its work.
  *
  * This lives in the harness rather than in a facet for the same reason
  * `schemas.ts` does. `perf` and `io` do not merely happen to measure the same
@@ -28,39 +28,29 @@ export interface MeasuredCommandSpec {
   /** Arguments after the vat binary, with `{subject}` substituted at capture time. */
   readonly args: readonly string[];
   /**
-   * The exit codes that mean **this run finished its work**.
+   * The ONE exit this command commits to when it did its work — what any
+   * repetition must exit, or it is a failed measurement, never a time.
    *
-   * Deliberately not "success". vat's exit codes are `0` success, `1` validation
-   * findings, `2` system error (see `docs/architecture/cli.md` and
-   * `statusFromExitCode` in the CLI's `phase-utils.ts`). A command that exits `1`
-   * ran to completion and did every byte of the work being measured — it just
-   * had something to report at the end of it. Refusing to time that made
-   * `vat validate`, `vat verify` and `vat resources validate` unmeasurable on any
-   * real project, because every real project has findings.
-   *
-   * Exit `2` is the opposite and is never listed here: the run did not complete,
-   * so its duration is the duration of giving up. Timing that measures how fast
-   * vat fails, and failures are fast enough to read as an improvement.
-   *
-   * Absent means {@link DEFAULT_COMPLETED_EXIT_CODES} — `[0]` alone. The default
-   * stays narrow on purpose: a command whose author has not thought about which
-   * of its exit codes denote a completed run must not silently start admitting
-   * crashes into a median.
-   *
-   * Whatever is listed here, the codes a row's repeats actually produce must be
-   * **uniform** — see `summarizeRepeatFailures` in `repeat.ts`.
+   * Every registered command commits to `0`, its exit on a clean subject. On a
+   * subject with findings the caller commits to `1` for that command
+   * (`--expect-exit <command>=1`), which replaces the spec's value; nothing
+   * ever accepts two codes, because a set where one repeat exited 0 and another
+   * 1 did two different amounts of work. Exit `2` is never committed: the run
+   * did not complete, and timing it times how fast vat gives up.
    */
-  readonly completedExitCodes?: readonly number[];
+  readonly expectedExit: number;
   /**
    * Which document reader this command's stdout goes through for the warm rule
    * (`provenance.ts`): `none` for a verb that publishes no population.
    */
   readonly provenance: ProvenanceReader;
   /**
-   * Whether a cold run of this command, as the first step of its sequence, must
-   * leave the arm's store non-empty and a shard in the build's parse directory
-   * (the cold rule). `false` asserts nothing after the step — say `true` only for
-   * a verb known to populate a projection on every build it is measured with.
+   * Whether this command populates a projection, so a cold run of it as the first
+   * step (the cold rule) or a priming run (the warm rule) is checked for what the
+   * ARM's environment says it writes (`populationExpectation`: no store under
+   * `VAT_PROJECTION_STORE=off`, nothing under `VAT_CACHE=0`). `false` asserts
+   * nothing — say `true` only for a verb known to populate on every build it is
+   * measured with.
    */
   readonly populates: boolean;
 }
@@ -71,36 +61,6 @@ export interface MeasuredSequenceSpec {
   readonly steps: readonly MeasuredCommandSpec[];
 }
 
-/**
- * What a spec means by "completed" when it does not say.
- *
- * `0` alone: the conservative reading, and the one that cannot turn a crash into
- * a data point without someone opting in.
- */
-export const DEFAULT_COMPLETED_EXIT_CODES: readonly number[] = Object.freeze([ExitCode.OK]);
-
-/**
- * The codes accepted for a command whose findings are reported by exit code.
- *
- * `0` (nothing to report) and `1` (findings). Never `2` — that is vat's
- * system-error code, and a system error is a run that did not complete.
- */
-const FINDINGS_COMPLETED_EXIT_CODES: readonly number[] = Object.freeze([ExitCode.OK, ExitCode.FINDINGS]);
-
-/**
- * Which exit codes denote a completed run for this command.
- *
- * One accessor rather than `spec.completedExitCodes ?? [0]` at each call site:
- * both measurement facets ask this question, and a facet that spelled the
- * default differently would measure a different population than its sibling
- * while producing an equally well-formed report.
- *
- * @param spec - The command being measured
- * @returns The accepted codes, defaulting to {@link DEFAULT_COMPLETED_EXIT_CODES}
- */
-export function completedExitCodesOf(spec: MeasuredCommandSpec): readonly number[] {
-  return spec.completedExitCodes ?? DEFAULT_COMPLETED_EXIT_CODES;
-}
 
 /**
  * Every vat command the lab knows how to measure, by name.
@@ -119,6 +79,7 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   'resources-scan': Object.freeze({
     name: 'resources-scan',
     provenance: 'none',
+    expectedExit: ExitCode.OK,
     populates: false,
     args: Object.freeze(['resources', 'scan', '{subject}']),
     // Exit 1 is only the refusal for a scan of NOTHING — no measurement — so `[0]`.
@@ -126,6 +87,7 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   'resources-population': Object.freeze({
     name: 'resources-population',
     provenance: 'none',
+    expectedExit: ExitCode.OK,
     populates: false,
     // The same scan, asked for the whole file list in a format a consumer can
     // read without a YAML parser. Three flags, each load-bearing and none of
@@ -141,11 +103,12 @@ export const MEASURABLE_COMMANDS = Object.freeze({
     // spec is what `perf` and `io` measure: widening it would change what every
     // stored timing and call count in this repo was taken over.
     args: Object.freeze(['resources', 'scan', '{subject}', '--verbose', '--format', 'json']),
-    // `[0]`, as `resources-scan`: exit 1 scanned nothing, so there is no population.
+    // Exit 1 scanned nothing, so there is no population; never a committed exit.
   }),
   'resources-query': Object.freeze({
     name: 'resources-query',
     provenance: 'none',
+    expectedExit: ExitCode.OK,
     populates: false,
     // The ONLY entry whose own output names which population arm the run took
     // (`population: derived | store`) and what that arm cost
@@ -167,28 +130,29 @@ export const MEASURABLE_COMMANDS = Object.freeze({
       'json',
     ]),
     // Exits 0 over a populated tree whatever it selected; 1 (empty population)
-    // and 2 (refused) measured no population, so the default codes.
+    // and 2 (refused) measured no population, so never a committed exit.
   }),
   'resources-validate': Object.freeze({
     name: 'resources-validate',
     provenance: 'none',
+    expectedExit: ExitCode.OK,
     // The same verb as `resources-validate-ci`: it writes the projection whatever its argv.
     populates: true,
     args: Object.freeze(['resources', 'validate', '{subject}', '--format', 'json']),
-    completedExitCodes: FINDINGS_COMPLETED_EXIT_CODES,
   }),
   audit: Object.freeze({
     name: 'audit',
     provenance: 'none',
+    expectedExit: ExitCode.OK,
     populates: false,
     args: Object.freeze(['audit', '{subject}']),
-    // Exits 1 over `status: error` like every other gate; both codes audited
-    // the whole tree.
-    completedExitCodes: FINDINGS_COMPLETED_EXIT_CODES,
+    // Exits 1 over `status: error` like every other gate — committed by the
+    // caller (`--expect-exit audit=1`) on a subject with findings.
   }),
   inventory: Object.freeze({
     name: 'inventory',
     provenance: 'none',
+    expectedExit: ExitCode.OK,
     populates: false,
     args: Object.freeze(['inventory', '{subject}']),
     // Structural extraction: reports what it found and exits 0 whatever that is.
@@ -204,26 +168,27 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   validate: Object.freeze({
     name: 'validate',
     provenance: 'none',
+    expectedExit: ExitCode.OK,
     // The same verb as `validate-ci`: its resources phase writes the projection.
     populates: true,
     // No subject argument: `vat validate` REJECTS a positional path (exit 2) and
     // takes its scope from the config at the cwd, which the harness has already
     // set to the subject.
     args: Object.freeze(['validate']),
-    completedExitCodes: FINDINGS_COMPLETED_EXIT_CODES,
   }),
   verify: Object.freeze({
     name: 'verify',
     provenance: 'none',
+    expectedExit: ExitCode.OK,
     populates: false,
     // Also path-rejecting, for the same reason. Reads the built `dist/` tree, so
     // a subject measured with this one has to have been built first.
     args: Object.freeze(['verify']),
-    completedExitCodes: FINDINGS_COMPLETED_EXIT_CODES,
   }),
   'claude-context-all': Object.freeze({
     name: 'claude-context-all',
     provenance: 'none',
+    expectedExit: ExitCode.OK,
     populates: false,
     // No subject argument: `--all` sweeps every path the projection realized and
     // takes no positional, so like `validate` and `verify` its scope comes from
@@ -238,11 +203,12 @@ export const MEASURABLE_COMMANDS = Object.freeze({
     args: Object.freeze(['claude', 'context', '--all']),
     // Documented as "0 - An answer was produced (there is no threshold and no
     // gate)". Its `1` is invalid usage — a run that measured nothing — so this
-    // takes the default codes and must never accept findings-style completion.
+    // commits to 0 and a caller must never commit it to 1.
   }),
   'claude-context': Object.freeze({
     name: 'claude-context',
     provenance: 'none',
+    expectedExit: ExitCode.OK,
     populates: false,
     // The single-path control arm for the sweep above. One path answered out of
     // the same enumeration the sweep pays for, so the pair separates what the
@@ -255,6 +221,7 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   'skills-validate': Object.freeze({
     name: 'skills-validate',
     provenance: 'none',
+    expectedExit: ExitCode.OK,
     populates: false,
     // The `registry-md-html` lane's cheapest read-only entry point. Everything
     // else that builds that registry — `skills build`, `skills package`,
@@ -263,11 +230,11 @@ export const MEASURABLE_COMMANDS = Object.freeze({
     // a build target to prepare or a tree to dirty. `audit` and `verify` reach
     // the same lane but each bundle other work on top of it.
     args: Object.freeze(['skills', 'validate', '{subject}']),
-    completedExitCodes: FINDINGS_COMPLETED_EXIT_CODES,
   }),
   'skills-list': Object.freeze({
     name: 'skills-list',
     provenance: 'none',
+    expectedExit: ExitCode.OK,
     populates: false,
     // The cheapest enumerating verb there is: one crawl, no validation, no
     // parse. That is the point of measuring it — it is the closest thing the
@@ -286,6 +253,7 @@ export const MEASURABLE_COMMANDS = Object.freeze({
     args: Object.freeze(['resources', 'validate']),
     // Today's builds publish no population on `resources validate`.
     provenance: 'none',
+    expectedExit: ExitCode.OK,
     populates: true,
   }),
   'resources-check-ci': Object.freeze({
@@ -293,12 +261,14 @@ export const MEASURABLE_COMMANDS = Object.freeze({
     args: Object.freeze(['resources', 'check']),
     // `data.population` — the field that proves arm B's baseline is warm.
     provenance: 'resources-check',
+    expectedExit: ExitCode.OK,
     populates: true,
   }),
   'skills-validate-ci': Object.freeze({
     name: 'skills-validate-ci',
     args: Object.freeze(['skills', 'validate']),
     provenance: 'none',
+    expectedExit: ExitCode.OK,
     // Never a first step in a CI sequence; nothing is asserted after it.
     populates: false,
   }),
@@ -308,6 +278,7 @@ export const MEASURABLE_COMMANDS = Object.freeze({
     // The orchestrator document: the resources phase's population, and the
     // checks phase's population and lensPopulation.
     provenance: 'validate',
+    expectedExit: ExitCode.OK,
     populates: true,
   }),
   'verify-ci': Object.freeze({
@@ -315,6 +286,7 @@ export const MEASURABLE_COMMANDS = Object.freeze({
     // Reads a built `dist/`: the subject must have been built first.
     args: Object.freeze(['verify']),
     provenance: 'none',
+    expectedExit: ExitCode.OK,
     populates: false,
   }),
 }) satisfies Readonly<Record<string, MeasuredCommandSpec>>;

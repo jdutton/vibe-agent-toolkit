@@ -247,11 +247,11 @@ export async function captureParse(
   options: CaptureParseOptions,
 ): Promise<ReportEnvelope<ParseBody>> {
   const loadBefore = readLoad();
-  const commands = await captureCommandRows(options, DUMP_DIR_PREFIX, PARSE_TIMING_DIR_ENV, rowFromDumps);
+  const { rows: commands, measured } = await captureCommandRows(options, DUMP_DIR_PREFIX, PARSE_TIMING_DIR_ENV, rowFromDumps);
   const loadAfter = readLoad();
 
   return buildReportEnvelope(PARSE_FACET, options, {
     commands,
     load: judgeLoad(loadBefore.loadAvg1, loadAfter.loadAvg1, loadAfter.cpus),
-  });
+  }, measured);
 }

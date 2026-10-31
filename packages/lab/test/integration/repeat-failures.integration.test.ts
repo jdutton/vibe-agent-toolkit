@@ -79,7 +79,7 @@ describe('runRepeats — failures and environments', () => {
 
   it('refuses a step that commits to exit 2', async () => {
     const probe = setupProbe(PREFIX);
-    await expect(runRepeats(probeSpec(probe, { steps: [probeStep(['audit'], { expectedExits: [0, 2] })] }))).rejects.toThrow(/exit 2/);
+    await expect(runRepeats(probeSpec(probe, { steps: [probeStep(['audit'], { expectedExit: 2 })] }))).rejects.toThrow(/exit 2/);
   });
 
   it('refuses a caller environment that names a variable the arm owns', async () => {

@@ -40,12 +40,30 @@
  * - **Never in a subject.** {@link armPlacementRefusal} is the one test every
  *   facet applies: an arm directory may neither be, lie inside, nor contain a
  *   measured tree.
+ * - **Chmodded only when created.** A directory the lab creates is narrowed to
+ *   0700 through a descriptor opened without following links; one it finds is
+ *   never chmodded. The arms root carries {@link ROOT_MARKER}: an existing,
+ *   non-empty `--arms-dir` without it is refused, and {@link closeArmsRoot}
+ *   removes only a marked default run directory. Every `--out` goes through
+ *   {@link openOutDirectory}, and reports through {@link writePrivateFile}.
  *
  * The lab never runs `vat cache clear` and never touches the developer's default
  * store: a cold arm is made cold by deleting its own directories.
  */
 
-import { chmodSync, type Dirent, lstatSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  constants,
+  type Dirent,
+  fchmodSync,
+  fstatSync,
+  lstatSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs';
 import { userInfo } from 'node:os';
 
 import {
@@ -72,6 +90,12 @@ export const ARM_REFUSED_CODE = 'LAB_ARM_REFUSED';
 
 /** The file the lab writes into every arm directory it creates; its absence means "not ours". */
 const ARM_MARKER = '.vat-lab-arm';
+
+/** The file the lab writes into every arms root it creates or adopts empty; its absence means "not ours". */
+const ROOT_MARKER = '.vat-lab-root';
+
+/** Owner-only, for a file the lab writes. */
+const PRIVATE_FILE_MODE = 0o600;
 
 /** Owner-only: an arm's directories hold a store and caches no one else should read or plant. */
 const PRIVATE_MODE = 0o700;
@@ -149,6 +173,13 @@ export function armDirectories(descriptor: ArmDescriptor): ArmDirectories {
   return layout(safePath.join(descriptor.root, `${descriptor.build}-${descriptor.arm}-${descriptor.state}`), [descriptor.root]);
 }
 
+/** An invocation's arms root, and whether it is the lab's to remove when the capture ends. */
+interface ArmsRoot {
+  readonly path: string;
+  /** True for the default fresh run directory; an `--arms-dir` the operator named is never removed. */
+  readonly temporary: boolean;
+}
+
 /** What {@link openArmsRoot} needs. */
 interface ArmsRootRequest {
   /** `--arms-dir`, as given; `null` for the default. */
@@ -159,33 +190,131 @@ interface ArmsRootRequest {
 
 /**
  * The one root every arm directory of an invocation lives under — never inside
- * a subject. `--arms-dir` when given (absolute, created owner-only, never a
- * link); otherwise a fresh `run-*` directory under
- * `<os tmpdir>/vat-lab-arms-<user>/`, whose base must be a real directory this
- * user owns that no one else can write into.
+ * a subject, and marked {@link ROOT_MARKER} as the lab's.
+ *
+ * `--arms-dir` when given: absolute, never a link, through
+ * {@link openOwnedDirectory} — created owner-only when absent; an existing one
+ * is used only when it carries the marker or is empty (then marked), and never
+ * chmodded, because the lab did not create it. Otherwise a fresh `run-*`
+ * directory under `<os tmpdir>/vat-lab-arms-<user>/`, whose base must be a real
+ * directory this user owns that no one else can write into.
  *
  * @param request - See {@link ArmsRootRequest}
- * @returns The root, absolute; it exists, owner-only
+ * @returns The root; it exists and is marked
  * @throws {VatError} {@link ARM_REFUSED_CODE} when the root is relative, a link,
- *   not a directory, misplaced against a subject, or its default base is not
- *   provably this user's alone
+ *   not a directory, misplaced against a subject, an unmarked non-empty
+ *   directory, or its default base is not provably this user's alone
  */
-export function openArmsRoot(request: ArmsRootRequest): string {
+export function openArmsRoot(request: ArmsRootRequest): ArmsRoot {
   if (request.override !== null) {
-    requireAbsolute(request.override, '--arms-dir');
-    requirePlaced(request.override, request.subjects);
-    requireDirectoryOrAbsent(request.override, '--arms-dir');
-    makePrivate(request.override);
-    return request.override;
+    const override = request.override;
+    const created = openOwnedDirectory(override, '--arms-dir', placementOf('the arms root', armPlacementRefusal(override, request.subjects)));
+    if (created || (!isRootMarked(override) && entriesOf(override).length === 0)) writeMarker(override, ROOT_MARKER);
+    if (!isRootMarked(override)) {
+      throw armRefusal(
+        `--arms-dir '${override}' is not empty and carries no ${ROOT_MARKER}: the lab did not make it, so it will neither write into nor chmod it. Choose a fresh or empty --arms-dir.`,
+      );
+    }
+    return { path: override, temporary: false };
   }
   const base = safePath.join(normalizedTmpdir(), `vat-lab-arms-${userSegment()}`);
   requireDirectoryOrAbsent(base, 'the arms base');
-  if (kindOf(base) === 'absent') makePrivate(base);
+  if (kindOf(base) === 'absent') createPrivateDirectory(base);
   requireOwnPrivate(base);
   const run = mkdtempSync(safePath.join(base, 'run-'));
-  chmodSync(run, PRIVATE_MODE);
+  narrowToOwner(run);
+  writeMarker(run, ROOT_MARKER);
   requirePlaced(run, request.subjects);
-  return run;
+  return { path: run, temporary: true };
+}
+
+/**
+ * End an invocation's arms root: remove a temporary one through the
+ * marker-gated tree-change protocol, unless the caller keeps it; an
+ * `--arms-dir` the operator named is always kept.
+ *
+ * @param root - From {@link openArmsRoot}
+ * @param keep - `--keep-arms`
+ * @returns What happened, naming the root, for the operator
+ * @throws {VatError} {@link ARM_REFUSED_CODE} when a temporary root no longer carries its marker
+ */
+export async function closeArmsRoot(root: ArmsRoot, keep: boolean): Promise<string> {
+  if (!root.temporary || keep) return `Kept arms under ${root.path}`;
+  const ownership: Ownership = {
+    kind: 'vat-made',
+    recognise: () => (isRootMarked(root.path) ? { owned: true } : { owned: false, reason: `'${root.path}' carries no ${ROOT_MARKER}` }),
+  };
+  if (!isRootMarked(root.path)) {
+    throw armRefusal(`'${root.path}' carries no ${ROOT_MARKER}: it is no longer provably the lab's, so it is left in place`);
+  }
+  await applyTreePlan(await planTreeChanges([{ op: 'remove', dest: root.path, ownership, label: 'arms root' }]));
+  return `Removed arms under ${root.path}`;
+}
+
+/**
+ * Open the directory a report is written into — the one gate every `--out`
+ * goes through: absolute, never a link, never a subject itself (\`--out .\`
+ * from the subject root), created owner-only only when the lab creates it.
+ * An existing `--out` is written into and never chmodded. Reports may live
+ * INSIDE a subject (the default `.vat-lab` from a checkout): no measured
+ * command reads them.
+ *
+ * @param out - `--out`, absolute
+ * @param subjects - Every tree the invocation measures
+ * @returns `out`
+ * @throws {VatError} {@link ARM_REFUSED_CODE} when it is refused
+ */
+export function openOutDirectory(out: string, subjects: readonly string[]): string {
+  const itself = subjects.find((subject) => isSubjectItself(out, subject));
+  openOwnedDirectory(out, '--out', itself === undefined ? null : `--out '${out}' is the subject '${itself}' itself; reports must not be written into the measured tree's root`);
+  return out;
+}
+
+/**
+ * Write a file owner-only, never through a link: opened `O_NOFOLLOW` (where the
+ * platform has it), and narrowed through the descriptor, not the path.
+ *
+ * @param path - The file
+ * @param content - Its content
+ */
+export function writePrivateFile(path: string, content: string): void {
+  const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0);
+  const fd = openSync(path, flags, PRIVATE_FILE_MODE);
+  try {
+    if (process.platform !== 'win32') fchmodSync(fd, PRIVATE_FILE_MODE);
+    writeSync(fd, content);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * The one placement and ownership gate every `--out` and `--arms-dir` goes
+ * through: absolute, placed, never a link or a non-directory, and created
+ * owner-only when absent. An existing directory is left exactly as it is.
+ *
+ * @param path - The directory
+ * @param what - Its flag, in any refusal
+ * @param placement - The placement refusal for it, or `null`
+ * @returns Whether the lab created it
+ * @throws {VatError} {@link ARM_REFUSED_CODE} when it is refused
+ */
+function openOwnedDirectory(path: string, what: string, placement: string | null): boolean {
+  requireAbsolute(path, what);
+  if (placement !== null) throw armRefusal(placement);
+  requireDirectoryOrAbsent(path, what);
+  if (kindOf(path) !== 'absent') return false;
+  createPrivateDirectory(path);
+  return true;
+}
+
+/**
+ * @param label - What the directory is
+ * @param placement - A placement refusal, or `null`
+ * @returns The refusal labelled, or `null`
+ */
+function placementOf(label: string, placement: string | null): string | null {
+  return placement === null ? null : `${label}: ${placement}`;
 }
 
 /** @returns This user's directory-name segment: the uid where there is one, else the sanitised user name */
@@ -255,8 +384,7 @@ export function armDirectoriesAt(root: string): ArmDirectories {
  */
 export function armPlacementRefusal(dir: string, subjects: readonly string[]): string | null {
   for (const subject of subjects) {
-    // The subject is the operator's own tree: its own path is the edge it is judged from.
-    if (canonicalPath(subject, subject) === canonicalPath(dir, subject)) {
+    if (isSubjectItself(dir, subject)) {
       return `'${dir}' is the subject '${subject}' itself; the lab's directories must lie outside every measured tree`;
     }
     if (isUnderRoot(subject, dir) !== 'outside') {
@@ -267,6 +395,16 @@ export function armPlacementRefusal(dir: string, subjects: readonly string[]): s
     }
   }
   return null;
+}
+
+/**
+ * @param dir - A directory
+ * @param subject - A measured tree
+ * @returns Whether `dir` IS the subject
+ */
+function isSubjectItself(dir: string, subject: string): boolean {
+  // The subject is the operator's own tree: its own path is the edge it is judged from.
+  return canonicalPath(subject, subject) === canonicalPath(dir, subject);
 }
 
 /**
@@ -281,13 +419,13 @@ export function armPlacementRefusal(dir: string, subjects: readonly string[]): s
 export function prepareArmDirectories(dirs: ArmDirectories): void {
   requireNoLinks(dirs);
   if (kindOf(dirs.root) === 'absent') {
-    makePrivate(dirs.root);
-    writeFileSync(safePath.join(dirs.root, ARM_MARKER), 'vat-lab arm directory\n', { flag: 'wx' });
+    createPrivateDirectory(dirs.root);
+    writeMarker(dirs.root, ARM_MARKER);
   } else {
     requireMarked(dirs);
   }
-  makePrivate(dirs.tmp);
-  makePrivate(dirs.npmCache);
+  ensurePrivateChild(dirs.tmp);
+  ensurePrivateChild(dirs.npmCache);
 }
 
 /**
@@ -300,7 +438,7 @@ export function prepareArmDirectories(dirs: ArmDirectories): void {
  */
 export async function resetArmHome(dirs: ArmDirectories): Promise<void> {
   await removeArmTrees(dirs, [dirs.home], 'arm home');
-  makePrivate(dirs.home);
+  ensurePrivateChild(dirs.home);
 }
 
 /**
@@ -312,7 +450,7 @@ export async function resetArmHome(dirs: ArmDirectories): Promise<void> {
  */
 export async function resetColdArm(dirs: ArmDirectories): Promise<string | null> {
   await removeArmTrees(dirs, [dirs.store, dirs.tmp], 'cold arm store and tmp');
-  makePrivate(dirs.tmp);
+  ensurePrivateChild(dirs.tmp);
   if (entriesOf(dirs.store).length > 0) return `cold rule: the store '${dirs.store}' is not empty before the sequence`;
   if (entriesOf(dirs.tmp).length > 0) return `cold rule: tmp '${dirs.tmp}' is not empty before the sequence`;
   return null;
@@ -334,8 +472,9 @@ export function armDirectoryEnvironment(dirs: ArmDirectories, platform: NodeJS.P
       TMP: dirs.tmp,
       HOME: dirs.home,
       CLAUDE_CONFIG_DIR: dirs.home,
-      // No system config reaches an arm's vat or the commands preparing its clone.
+      // No system config or attributes reach an arm's vat or the commands preparing its clone.
       GIT_CONFIG_NOSYSTEM: '1',
+      GIT_ATTR_NOSYSTEM: '1',
       // An npx build fetches into the arm's own cache, once, and never asks the registry again.
       npm_config_cache: dirs.npmCache,
       npm_config_prefer_offline: 'true',
@@ -366,19 +505,6 @@ export function armStepEnvironment(
     mergeArmEnvironments(armDirectoryEnvironment(dirs, process.platform), own),
     process.platform,
   );
-}
-
-/**
- * The inherited names every VAT step of an arm run under `own` goes without —
- * what a facet's report records. It is {@link armStepEnvironment}'s own
- * `removed`, which depends on the variables' NAMES alone, so any absolute arm
- * root yields it; the filesystem root is only joined, never touched.
- *
- * @param own - The caller's arm environment
- * @returns The removed names, sorted
- */
-export function armRemovedEnv(own: ArmEnvironment): readonly string[] {
-  return armStepEnvironment(armDirectoriesAt(safePath.resolve('/')), own).removed;
 }
 
 /**
@@ -505,12 +631,68 @@ function requireMarked(dirs: ArmDirectories): void {
   }
 }
 
+/** @returns Whether the lab's root marker is in `root` */
+function isRootMarked(root: string): boolean {
+  return kindOf(safePath.join(root, ROOT_MARKER)) === 'other';
+}
+
 /**
- * Create a directory (and missing parents) and force it to 0700, whatever the umask.
+ * @param dir - A directory the lab just created or adopted empty
+ * @param marker - Which marker
+ */
+function writeMarker(dir: string, marker: string): void {
+  writeFileSync(safePath.join(dir, marker), 'vat-lab\n', { flag: 'wx', mode: PRIVATE_FILE_MODE });
+}
+
+/**
+ * Create a directory the lab will own — its missing parents at the umask, the
+ * directory itself exclusively (an existing one is a race, and refused) — then
+ * narrow it to 0700 through {@link narrowToOwner}.
+ *
+ * @param dir - The directory, absent
+ */
+function createPrivateDirectory(dir: string): void {
+  const parent = safePath.resolve(dir, '..');
+  if (kindOf(parent) === 'absent') mkdirSyncReal(parent, { recursive: true });
+  mkdirSyncReal(dir, { mode: PRIVATE_MODE });
+  narrowToOwner(dir);
+}
+
+/**
+ * A child of a marked arm (links already refused): create it owner-only, or
+ * narrow the one the lab made before.
+ *
+ * @param dir - `tmp/`, `home/` or `npm-cache/`
+ */
+function ensurePrivateChild(dir: string): void {
+  if (kindOf(dir) === 'absent') createPrivateDirectory(dir);
+  else narrowToOwner(dir);
+}
+
+/**
+ * Force a directory the lab just created to 0700, whatever the umask, through a
+ * descriptor opened without following a link — so a directory swapped for a
+ * link between the creation and the chmod fails closed, never carrying the
+ * chmod to its target. Windows has no POSIX mode bits to narrow.
  *
  * @param dir - The directory
+ * @throws {VatError} {@link ARM_REFUSED_CODE} when it is no longer a directory this user owns
  */
-export function makePrivate(dir: string): void {
-  mkdirSyncReal(dir, { recursive: true, mode: PRIVATE_MODE });
-  chmodSync(dir, PRIVATE_MODE);
+function narrowToOwner(dir: string): void {
+  if (process.platform === 'win32') return;
+  let fd: number;
+  try {
+      fd = openSync(dir, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  } catch (error: unknown) {
+    throw armRefusal(`'${dir}' changed under the lab before it was made private (${String(error)}); nothing was chmodded`);
+  }
+  try {
+    const stats = fstatSync(fd);
+    if (!stats.isDirectory() || stats.uid !== process.getuid?.()) {
+      throw armRefusal(`'${dir}' is not a directory this user owns; nothing was chmodded`);
+    }
+    fchmodSync(fd, PRIVATE_MODE);
+  } finally {
+    closeSync(fd);
+  }
 }

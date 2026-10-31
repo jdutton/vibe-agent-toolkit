@@ -9,7 +9,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
@@ -19,6 +19,7 @@ import {
   readEnvelope,
   type ReportEnvelope,
 } from './envelope/envelope.js';
+import { writePrivateFile } from './harness/arm-dirs.js';
 
 /** How many characters of a commit or fingerprint appear in a filename. */
 const SHORT_ID_LENGTH = 8;
@@ -193,7 +194,8 @@ export async function writeReport(
   }
   await mkdir(directory, { recursive: true });
   const target = safePath.join(directory, reportFileName(envelope));
-  await writeFile(target, `${JSON.stringify(envelope, null, 2)}\n`, 'utf-8');
+  // Owner-only and never through a link: a report names the developer's paths.
+  writePrivateFile(target, `${JSON.stringify(envelope, null, 2)}\n`);
   return target;
 }
 

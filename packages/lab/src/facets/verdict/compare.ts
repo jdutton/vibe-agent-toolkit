@@ -48,7 +48,7 @@ import { type InstrumentVersion, movedAxes, sameInstrument } from '../../envelop
 import type { ReportEnvelope } from '../../envelope/envelope.js';
 import { sameArmEnvironment } from '../../harness/arm-env.js';
 import { indistinguishableArms } from '../../harness/closure.js';
-import { messageOf } from '../../harness/dumps.js';
+import { messageOf, recaptureRefusal } from '../../harness/dumps.js';
 import { compareByCodeUnit } from '../../harness/fingerprint.js';
 import { instrumentLabel } from '../../harness/render.js';
 import { readReport } from '../../store.js';
@@ -741,7 +741,7 @@ export async function readVerdictDirectory(dir: string): Promise<Validated<Repor
     }
     const body = VerdictBodySchema.safeParse(read.envelope.body);
     if (!body.success) {
-      refusal = `REFUSED: '${file}' has a malformed verdict body: ${body.error.issues[0]?.message ?? ''}`;
+      refusal = recaptureRefusal(`'${file}'`, body.error);
       return false;
     }
     envelopes.push({ ...read.envelope, body: body.data });

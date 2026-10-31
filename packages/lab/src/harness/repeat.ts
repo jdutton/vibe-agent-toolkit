@@ -37,8 +37,9 @@ import {
   prepareArmDirectories,
 } from './arm-dirs.js';
 import { type ArmEnvironment, clearedEnvironment, mergeArmEnvironments } from './arm-env.js';
-import { completedExitCodesOf, type MeasuredCommandSpec } from './commands.js';
+import type { MeasuredCommandSpec } from './commands.js';
 import { type ParseDirectoryResolution, resolveParseCacheDirectory } from './parse-cache.js';
+import { populationExpectation } from './population-expectation.js';
 import { runCommand } from './run.js';
 import {
   assertCommittedExits,
@@ -114,19 +115,15 @@ export function materializeArgs(
 /**
  * Say whether a set of repeats can produce a measurement at all, and why not.
  *
- * **1. Any violation poisons the whole set.** A statistic over the survivors
- * quietly answers a different question — with `perf` backwards, because a failed
- * run returns fast and would read as an improvement.
+ * Any violation poisons the whole set. A statistic over the survivors quietly
+ * answers a different question — with `perf` backwards, because a failed run
+ * returns fast and would read as an improvement.
  *
- * **2. The per-step exits must be uniform across the set.** A findings command
- * completes at `0` and at `1` alike, and two repeats that did different amounts
- * of work describe two behaviours; a median over the mixture describes neither.
- * The comparison is over every step's exit, not the sequence's folded one: a
- * repeat that stopped at step one and a repeat that ran step one clean and
- * stopped at step two both fold to `1`, and did different work.
+ * There is no separate uniformity rule: every step commits to ONE exit, so
+ * every repeat without a violation ran the same steps to the same exits.
  *
  * @param results - Every repeat's outcome, raw
- * @returns The failure to record, or `null` when every repeat completed alike
+ * @returns The failure to record, or `null` when every repeat completed
  */
 export function summarizeRepeatFailures(results: readonly SequenceResult[]): string | null {
   const reasons = results
@@ -134,15 +131,6 @@ export function summarizeRepeatFailures(results: readonly SequenceResult[]): str
     .filter((reason): reason is string => reason !== null);
   if (reasons.length > 0) {
     return `${String(reasons.length)} of ${String(results.length)} repeats failed — ${reasons[0] ?? 'unknown'}`;
-  }
-
-  const observed = [...new Set(results.map((result) => `[${result.steps.map((step) => String(step.exitCode)).join(', ')}]`))];
-  if (observed.length > 1) {
-    const codes = observed.join(' and ');
-    return (
-      `${String(results.length)} repeats exited ${codes} — every repeat completed, but not ` +
-      'with the same amount of work done, so a statistic over them describes neither run'
-    );
   }
   return null;
 }
@@ -162,6 +150,8 @@ export interface SpecMeasurement {
   readonly results: readonly SequenceResult[];
   /** Why these repeats yield no usable measurement, or `null`. */
   readonly failure: string | null;
+  /** The inherited names its VAT children ran without ({@link ArmRun.removed}). */
+  readonly removed: readonly string[];
 }
 
 /**
@@ -169,14 +159,14 @@ export interface SpecMeasurement {
  *
  * @param spec - The command
  * @param args - Its arguments, materialized
- * @returns A timed VAT step accepting the command's completed exits
+ * @returns A timed VAT step committed to the command's one exit
  */
 export function commandStep(spec: MeasuredCommandSpec, args: readonly string[]): SequenceStep {
   return {
     name: spec.name,
     command: { kind: 'vat', args },
     timed: true,
-    expectedExits: completedExitCodesOf(spec),
+    expectedExit: spec.expectedExit,
     provenance: spec.provenance,
     populates: spec.populates,
   };
@@ -212,7 +202,7 @@ export async function measureSpec(
     env: request.env,
     ...(envFor === undefined ? {} : { envFor }),
   });
-  return { spec, args, cache: request.cache, results: run.results, failure: armRunFailure(run) };
+  return { spec, args, cache: request.cache, results: run.results, failure: armRunFailure(run), removed: run.removed };
 }
 
 /**
@@ -260,9 +250,10 @@ export async function runInterleaved(specs: readonly RepeatSpec[], rounds: numbe
   if (rounds === 0) return arms.map((arm) => ({ removed: arm.removed, removedTool: arm.removedTool, priming: null, results: [] }));
 
   for (const arm of arms) prepareArmDirectories(arm.context.dirs);
-  // Before any build runs: an arm that cannot judge its population is refused whole, not after round 1.
-  for (const [index, arm] of arms.entries()) parseDirectoryRefusal(arm, specs[index]?.arm.arm ?? '');
+  // Start first: an npx build is on disk, and so askable for its parse directory, only once started.
   for (const [index, arm] of arms.entries()) startBuild(arm, specs[index]?.arm.arm ?? '');
+  // Before any measured child: an arm that cannot judge its population is refused whole, not after round 1.
+  for (const [index, arm] of arms.entries()) parseDirectoryRefusal(arm, specs[index]?.arm.arm ?? '');
   // One sequence at a time, never concurrently: a measurement shares the machine with nothing of its own.
   const priming = await mapInOrder(arms, (arm) => (arm.context.state === 'warm' ? primed(arm) : null));
   const results = arms.map((): SequenceResult[] => []);
@@ -283,15 +274,16 @@ export async function runInterleaved(specs: readonly RepeatSpec[], rounds: numbe
 
 /**
  * Refuse an arm whose populating step's rule needs the build's parse directory
- * when the build cannot say where it is (it does not run as `node <entry>`, or
- * names a directory outside the arm's `tmp/`).
+ * when the build cannot say where it is (no entry and no single npx install in
+ * the arm's npm cache, or a directory outside the arm's `tmp/`). Runs after the
+ * untimed start, which is what puts an npx build on disk.
  *
  * @param arm - A prepared arm, its directories made
  * @param name - The arm's name, for the refusal
  * @throws {Error} the arm refusal naming why
  */
 function parseDirectoryRefusal(arm: PreparedArm, name: string): void {
-  if (!arm.context.steps.some((step) => step.populates)) return;
+  if (!arm.context.steps.some((step) => step.populates) || !arm.context.population.parseShard) return;
   const parse = arm.context.parseDirectory();
   if (!parse.ok) throw armRefusal(`arm '${name}': ${parse.reason}`);
 }
@@ -352,6 +344,7 @@ function prepareArm(spec: RepeatSpec): PreparedArm {
     toolEnv: tool.env,
     timeoutMs: spec.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     parseDirectory: () => (parse ??= resolveParseCacheDirectory(spec.instrument, dirs)),
+    population: populationExpectation(vat.env, process.platform),
   };
   return {
     context,

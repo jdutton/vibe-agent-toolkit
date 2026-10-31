@@ -123,18 +123,28 @@ export function mergeArmEnvironments(base: ArmEnvironment, over: ArmEnvironment)
  * their Claude config; `TMPDIR`/`TEMP`/`TMP` their parse cache; `XDG_CACHE_HOME`
  * a cache root; `XDG_CONFIG_HOME` and `GIT_CONFIG_GLOBAL` their global git
  * config and excludes, which decide what both builds' snapshots and listings
- * admit. The arm sets its own `TMPDIR`, `HOME`, `CLAUDE_CONFIG_DIR` and
- * `GIT_CONFIG_NOSYSTEM=1` (see `arm-dirs.ts`): with the rest removed, git reads
- * no system config and its global config is the empty arm home. Every other way
- * a shell can hand git a config — {@link GIT_CONFIG_OVERRIDE} — goes with them.
+ * admit; `GIT_TEMPLATE_DIR` and `GIT_EXEC_PATH` the hooks and git helpers a
+ * clone or a git child runs. The arm sets its own `TMPDIR`, `HOME`,
+ * `CLAUDE_CONFIG_DIR`, `GIT_CONFIG_NOSYSTEM=1` and `GIT_ATTR_NOSYSTEM=1` (see
+ * `arm-dirs.ts`): with the rest removed, git reads no system config or
+ * attributes and its global config is the empty arm home. Every other way a
+ * shell can hand git a config — {@link GIT_CONFIG_OVERRIDE} — goes with them,
+ * and so does every inherited npm setting ({@link NPM_CONFIG}).
+ *
+ * Kept here, not in utils' `INHERITED_GIT_ENV`: that list is what git exports
+ * into a HOOK, pinned equal to the shipped hook scrub; these are the
+ * developer's own settings, which only a measured arm must run without.
  */
 export const CLEARED_ENV_NAMES = Object.freeze([
   'CLAUDE_CONFIG_DIR',
+  'GIT_ATTR_NOSYSTEM',
   'GIT_CONFIG',
   'GIT_CONFIG_COUNT',
   'GIT_CONFIG_GLOBAL',
   'GIT_CONFIG_NOSYSTEM',
   'GIT_CONFIG_SYSTEM',
+  'GIT_EXEC_PATH',
+  'GIT_TEMPLATE_DIR',
   'TEMP',
   'TMP',
   'TMPDIR',
@@ -144,6 +154,14 @@ export const CLEARED_ENV_NAMES = Object.freeze([
 
 /** `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>`: the numbered config pairs `GIT_CONFIG_COUNT` enables. */
 const GIT_CONFIG_OVERRIDE = /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/u;
+
+/**
+ * Every npm setting a shell can carry, in either case npm reads it in
+ * (`npm_config_userconfig`, `NPM_CONFIG_REGISTRY`, a `//host/:_authToken`): an
+ * npx arm would otherwise fetch through the developer's real `.npmrc` and
+ * credentials. The arm's own `npm_config_*` (see `arm-dirs.ts`) are set, not inherited.
+ */
+const NPM_CONFIG = /^npm_config_/iu;
 
 /**
  * What git exports into a hook — which repository, index, object store,
@@ -219,7 +237,7 @@ const VAT_CLEARED: ReadonlySet<string> = new Set(CLEARED_ENV_NAMES);
  */
 function isCleared(name: string, kind: StepEnvironmentKind): boolean {
   if (name.startsWith('VAT_') || HOOK_GIT_NAMES.has(name)) return true;
-  return kind === 'vat' && (VAT_CLEARED.has(name) || GIT_CONFIG_OVERRIDE.test(name));
+  return kind === 'vat' && (VAT_CLEARED.has(name) || GIT_CONFIG_OVERRIDE.test(name) || NPM_CONFIG.test(name));
 }
 
 /**

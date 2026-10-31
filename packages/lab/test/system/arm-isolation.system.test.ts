@@ -64,7 +64,7 @@ function subject(): string {
 
 /** A timed VAT step committed to exit 0. */
 function vatStep(name: string, args: readonly string[], overrides: Partial<SequenceStep> = {}): SequenceStep {
-  return { name, command: { kind: 'vat', args }, timed: true, expectedExits: [0], provenance: 'none', populates: false, ...overrides };
+  return { name, command: { kind: 'vat', args }, timed: true, expectedExit: 0, provenance: 'none', populates: false, ...overrides };
 }
 
 /**
@@ -110,7 +110,10 @@ describe('an arm never sees the developer’s VAT, git or Claude state', () => {
     const root = subject();
     const home = plantDeveloperState();
 
-    expect(uncleared(root, SCAN)).not.toContain('excluded.md');
+    const scanned = uncleared(root, SCAN);
+    // Positive half first: a scan that crashed prints nothing, which would pass the absence below.
+    expect(scanned).toContain('docs/tracked.md');
+    expect(scanned).not.toContain('excluded.md');
     expect(uncleared(root, CONTEXT)).toContain(`${basename(home)}/.claude/CLAUDE.md`);
   });
 

@@ -25,7 +25,7 @@ import {
 import { refuseDifferentFacets, type ReportEnvelope } from '../envelope/envelope.js';
 
 import { bothSides, pairByKey, type Pairing } from './diff.js';
-import { describeIssues } from './dumps.js';
+import { type describeIssues, recaptureRefusal } from './dumps.js';
 
 // One door for a facet's comparator. The subtraction primitives and the
 // two-sided caveat helper live in their own modules — they are useful without a
@@ -109,12 +109,7 @@ function readBody<TBody>(
 ): { body: TBody } | { refusal: string } {
   const parsed = contract.schema.safeParse(envelope.body);
   if (parsed.success) return { body: parsed.data as TBody };
-  return {
-    refusal:
-      `REFUSED: the ${side} report's header claims facet '${contract.facet}', but its body is ` +
-      `not a '${contract.facet}' body and re-capturing that side is the only fix — ` +
-      describeIssues(parsed.error),
-  };
+  return { refusal: recaptureRefusal(`the ${side} '${contract.facet}' report`, parsed.error) };
 }
 
 /**

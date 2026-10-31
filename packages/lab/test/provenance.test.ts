@@ -74,16 +74,37 @@ const READ_CELLS: readonly Cell[] = [
       phases: CAND_VALIDATE_PHASES.map((phase) => (phase.name === 'resources' ? { ...phase, data: withoutPopulation(phase.data) } : phase)),
     }),
   },
+  {
+    cell: 'cand-C-warm (validate; checks-phase population, S1 bar 4)',
+    state: 'warm',
+    reader: 'validate',
+    correct: CAND_VALIDATE,
+    // Only the checks phase loses it: the resources phase still says 'store'.
+    missing: report({
+      phases: CAND_VALIDATE_PHASES.map((phase) => (phase.name === 'checks' ? { ...phase, data: withoutPopulation(phase.data) } : phase)),
+    }),
+  },
 ];
+
+/**
+ * @param population - What the candidate's checks phase reports
+ * @returns The candidate's `validate`, its resources phase from the store and its checks phase from `population`
+ */
+function checksFrom(population: string): ReturnType<typeof readProvenance> {
+  return readProvenance(
+    'validate',
+    report({ phases: CAND_VALIDATE_PHASES.map((phase) => (phase.name === 'checks' ? { ...phase, data: { ...phase.data, population } } : phase)) }),
+  );
+}
 
 describe('provenanceViolation — cells that read a document', () => {
   for (const cell of READ_CELLS) {
     it(`${cell.cell}: a correct run passes`, () => {
-      expect(provenanceViolation('step', cell.reader, readProvenance(cell.reader, cell.correct), cell.state)).toBeNull();
+      expect(provenanceViolation('step', cell.reader, readProvenance(cell.reader, cell.correct), cell.state, true)).toBeNull();
     });
 
     it(`${cell.cell}: the run missing the field fails`, () => {
-      expect(provenanceViolation('step', cell.reader, readProvenance(cell.reader, cell.missing), cell.state)).toMatch(
+      expect(provenanceViolation('step', cell.reader, readProvenance(cell.reader, cell.missing), cell.state, true)).toMatch(
         /absent/,
       );
     });
@@ -91,13 +112,34 @@ describe('provenanceViolation — cells that read a document', () => {
 
   it('fails a warm step whose population is derived, naming what it read', () => {
     const derived = RC11_CHECK.replace('"store"', '"derived"');
-    expect(provenanceViolation('resources-check', 'resources-check', readProvenance('resources-check', derived), 'warm')).toMatch(
+    expect(provenanceViolation('resources-check', 'resources-check', readProvenance('resources-check', derived), 'warm', true)).toMatch(
       /derived/,
     );
   });
 
+  it('passes a warm store-off step whose population is derived, and fails one that claims the store', () => {
+    const derived = readProvenance('resources-check', RC11_CHECK.replace('"store"', '"derived"'));
+    const stored = readProvenance('resources-check', RC11_CHECK);
+    expect(provenanceViolation('resources-check', 'resources-check', derived, 'warm', false)).toBeNull();
+    expect(provenanceViolation('resources-check', 'resources-check', stored, 'warm', false)).toMatch(/turned the store off/u);
+  });
+
+  it("fails a warm validate whose CHECKS phase was derived though its resources phase came from the store", () => {
+    expect(provenanceViolation('validate-ci', 'validate', checksFrom('derived'), 'warm', true)).toBe(
+      "warm rule: step 'validate-ci' checks phase reports population 'derived', not 'store' — the arm is not warm",
+    );
+  });
+
+  it("fails a warm store-off validate whose checks phase claims the store, and passes one that derived it", () => {
+    const resourcesDerived = (provenance: ReturnType<typeof readProvenance>) => (provenance === null ? null : { ...provenance, resources: 'derived' });
+    expect(provenanceViolation('validate-ci', 'validate', resourcesDerived(checksFrom('store')), 'warm', false)).toBe(
+      "warm rule: step 'validate-ci' checks phase reports population 'store' though the arm turned the store off",
+    );
+    expect(provenanceViolation('validate-ci', 'validate', resourcesDerived(checksFrom('derived')), 'warm', false)).toBeNull();
+  });
+
   it('fails a warm step whose output is not a document at all', () => {
-    expect(provenanceViolation('validate', 'validate', readProvenance('validate', 'not yaml: ['), 'warm')).toMatch(/absent/);
+    expect(provenanceViolation('validate', 'validate', readProvenance('validate', 'not yaml: ['), 'warm', true)).toMatch(/absent/);
   });
 });
 
@@ -110,7 +152,7 @@ describe('provenanceViolation — cells that read nothing', () => {
   ];
   for (const cell of NOTHING) {
     it(`${cell.cell}: asserts no document field`, () => {
-      expect(provenanceViolation('step', cell.reader, readProvenance(cell.reader, cell.stdout), cell.state)).toBeNull();
+      expect(provenanceViolation('step', cell.reader, readProvenance(cell.reader, cell.stdout), cell.state, true)).toBeNull();
     });
   }
 });

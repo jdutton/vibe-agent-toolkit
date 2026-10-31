@@ -329,6 +329,7 @@ export async function captureIo(options: CaptureIoOptions): Promise<ReportEnvelo
 
   const loadBefore = readLoad();
   // In order on purpose — see this function's doc: measured runs must not overlap.
+  const measured: SpecMeasurement[] = [];
   const commands: IoCommandStats[] = await mapInOrder(options.commands, (spec) =>
     withDumpDirs(options.runs, DUMP_DIR_PREFIX, async (directories) => {
       // Per repeat, and on `envFor` rather than `env`: only the measured run is
@@ -338,6 +339,7 @@ export async function captureIo(options: CaptureIoOptions): Promise<ReportEnvelo
         NODE_OPTIONS: nodeOptions,
       }));
       const measurement = await measureSpec(options, spec, (index) => perRepeat[index]);
+      measured.push(measurement);
       return rowFromDumps(measurement, directories, roots);
     }),
   );
@@ -346,5 +348,5 @@ export async function captureIo(options: CaptureIoOptions): Promise<ReportEnvelo
   return buildReportEnvelope(IO_FACET, options, {
     commands,
     load: judgeLoad(loadBefore.loadAvg1, loadAfter.loadAvg1, loadAfter.cpus),
-  });
+  }, measured);
 }

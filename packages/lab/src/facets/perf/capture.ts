@@ -104,10 +104,10 @@ export async function capturePerf(options: CapturePerfOptions): Promise<ReportEn
   const loadBefore = readLoad();
 
   // In order on purpose: two measured commands must never overlap.
-  const commands = await mapInOrder(options.commands, async (spec) => rowFor(await measureSpec(options, spec)));
+  const measured = await mapInOrder(options.commands, (spec) => measureSpec(options, spec));
 
   const loadAfter = readLoad();
   const load = judgeLoad(loadBefore.loadAvg1, loadAfter.loadAvg1, loadAfter.cpus);
 
-  return buildReportEnvelope(PERF_FACET, options, { commands, load });
+  return buildReportEnvelope(PERF_FACET, options, { commands: measured.map((measurement) => rowFor(measurement)), load }, measured);
 }

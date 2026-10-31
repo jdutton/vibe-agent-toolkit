@@ -21,7 +21,9 @@ import {
   armDirectories,
   armDirectoriesAt,
   armPlacementRefusal,
+  closeArmsRoot,
   openArmsRoot,
+  openOutDirectory,
   prepareArmDirectories,
   resetArmHome,
   resetColdArm,
@@ -202,15 +204,15 @@ describe('openArmsRoot', () => {
     const tmp = scratchTmpdir();
     const subject = mkdtempSync(safePath.join(out, 'subject-'));
 
-    const first = openArmsRoot({ override: null, subjects: [subject] });
-    const second = openArmsRoot({ override: null, subjects: [subject] });
+    const first = openArmsRoot({ override: null, subjects: [subject] }).path;
+    const second = openArmsRoot({ override: null, subjects: [subject] }).path;
 
     expect(first).not.toBe(second);
     const base = dirname(first);
     expect(dirname(second)).toBe(base);
     expect(basename(base)).toMatch(/^vat-lab-arms-[\w.-]+$/u);
     expect(normalizePath(dirname(base), out)).toBe(tmp);
-    expect(readdirSync(first)).toStrictEqual([]);
+    expect(readdirSync(first)).toStrictEqual(['.vat-lab-root']);
     if (POSIX) {
       expect(mode(base)).toBe(0o700);
       expect(mode(first)).toBe(0o700);
@@ -219,7 +221,7 @@ describe('openArmsRoot', () => {
 
   it.skipIf(!POSIX)('refuses a default base that is a symlink, creating nothing through it', ({ skip }) => {
     scratchTmpdir();
-    const base = dirname(openArmsRoot({ override: null, subjects: [] }));
+    const base = dirname(openArmsRoot({ override: null, subjects: [] }).path);
     rmSync(base, { recursive: true });
     const elsewhere = mkdtempSync(safePath.join(out, 'elsewhere-'));
     link(skip, elsewhere, base);
@@ -230,19 +232,40 @@ describe('openArmsRoot', () => {
 
   it.skipIf(!POSIX)('refuses a default base anyone else can write into, rather than running under it', () => {
     scratchTmpdir();
-    const base = dirname(openArmsRoot({ override: null, subjects: [] }));
+    const base = dirname(openArmsRoot({ override: null, subjects: [] }).path);
     chmodSync(base, 0o777);
 
     expect(() => openArmsRoot({ override: null, subjects: [] })).toThrow(REFUSED);
     expect(readdirSync(base)).toHaveLength(1);
   });
 
-  it('takes an absolute --arms-dir as the root, creating it owner-only, and accepts it again', () => {
+  it('takes an absolute --arms-dir as the root, creating it owner-only and marked, and accepts it again', () => {
     const chosen = safePath.join(out, 'chosen', 'arms');
 
-    expect(openArmsRoot({ override: chosen, subjects: [] })).toBe(chosen);
-    expect(openArmsRoot({ override: chosen, subjects: [] })).toBe(chosen);
+    expect(openArmsRoot({ override: chosen, subjects: [] })).toStrictEqual({ path: chosen, temporary: false });
+    expect(openArmsRoot({ override: chosen, subjects: [] }).path).toBe(chosen);
+    expect(readdirSync(chosen)).toStrictEqual(['.vat-lab-root']);
     if (POSIX) expect(mode(chosen)).toBe(0o700);
+  });
+
+  it('refuses an existing, non-empty --arms-dir the lab did not make — writing nothing into it, chmodding nothing', () => {
+    const chosen = safePath.join(out, 'checkout');
+    const victim = foreignTree(chosen);
+    chmodSync(chosen, 0o755);
+
+    expect(() => openArmsRoot({ override: chosen, subjects: [] })).toThrow(/not empty and carries no \.vat-lab-root/u);
+    expect(readFileSync(victim, 'utf-8')).toBe('not the lab’s');
+    expect(readdirSync(chosen)).toStrictEqual(['home']);
+    if (POSIX) expect(mode(chosen)).toBe(0o755);
+  });
+
+  it('adopts an existing EMPTY --arms-dir by marking it, and never chmods it — the lab did not create it', () => {
+    const chosen = mkdirSyncReal(safePath.join(out, 'empty'), { mode: 0o755 });
+    chmodSync(chosen, 0o755);
+
+    expect(openArmsRoot({ override: chosen, subjects: [] }).path).toBe(chosen);
+    expect(readdirSync(chosen)).toStrictEqual(['.vat-lab-root']);
+    if (POSIX) expect(mode(chosen)).toBe(0o755);
   });
 
   it('refuses a relative --arms-dir', () => {
@@ -265,5 +288,88 @@ describe('openArmsRoot', () => {
     link(skip, elsewhere, chosen);
 
     expect(() => openArmsRoot({ override: chosen, subjects: [] })).toThrow(REFUSED);
+  });
+});
+
+describe('closeArmsRoot', () => {
+  it('removes a default run directory when the capture ends, and says so', async () => {
+    scratchTmpdir();
+    const root = openArmsRoot({ override: null, subjects: [] });
+    prepareArmDirectories(armDirectories({ root: root.path, build: 'cand', arm: 'C', state: 'cold' }));
+
+    expect(await closeArmsRoot(root, false)).toBe(`Removed arms under ${root.path}`);
+    expect(existsSync(root.path)).toBe(false);
+  });
+
+  it('keeps it when asked, and says where', async () => {
+    scratchTmpdir();
+    const root = openArmsRoot({ override: null, subjects: [] });
+
+    expect(await closeArmsRoot(root, true)).toBe(`Kept arms under ${root.path}`);
+    expect(existsSync(root.path)).toBe(true);
+  });
+
+  it('never removes an --arms-dir the operator named', async () => {
+    const root = openArmsRoot({ override: safePath.join(out, 'named'), subjects: [] });
+
+    expect(await closeArmsRoot(root, false)).toBe(`Kept arms under ${root.path}`);
+    expect(existsSync(root.path)).toBe(true);
+  });
+
+  it('refuses to remove a run directory whose marker is gone — it is no longer provably the lab’s', async () => {
+    scratchTmpdir();
+    const root = openArmsRoot({ override: null, subjects: [] });
+    rmSync(safePath.join(root.path, '.vat-lab-root'));
+    writeFileSync(safePath.join(root.path, 'keep.txt'), 'x');
+
+    await expect(closeArmsRoot(root, false)).rejects.toThrow(REFUSED);
+    expect(readFileSync(safePath.join(root.path, 'keep.txt'), 'utf-8')).toBe('x');
+  });
+});
+
+describe('openOutDirectory — the one gate every --out goes through', () => {
+  it('creates an absent --out owner-only', () => {
+    const chosen = safePath.join(out, 'reports', 'here');
+
+    expect(openOutDirectory(chosen, [])).toBe(chosen);
+    if (POSIX) expect(mode(chosen)).toBe(0o700);
+  });
+
+  it('writes into an existing --out without chmodding it — the lab did not create it', () => {
+    const chosen = mkdirSyncReal(safePath.join(out, 'shared'), { mode: 0o755 });
+    chmodSync(chosen, 0o755);
+
+    expect(openOutDirectory(chosen, [])).toBe(chosen);
+    if (POSIX) expect(mode(chosen)).toBe(0o755);
+  });
+
+  it('refuses an --out that IS a subject — `--out .` from the subject root — touching nothing', () => {
+    const subject = mkdirSyncReal(safePath.join(out, 'subject'), { mode: 0o755 });
+    chmodSync(subject, 0o755);
+
+    expect(() => openOutDirectory(subject, [subject])).toThrow(/is the subject/u);
+    expect(readdirSync(subject)).toStrictEqual([]);
+    if (POSIX) expect(mode(subject)).toBe(0o755);
+  });
+
+  it.skipIf(POSIX)('refuses a JUNCTION as --out and as --arms-dir on Windows, writing nothing through it', ({ skip }) => {
+    const elsewhere = mkdtempSync(safePath.join(out, 'elsewhere-'));
+    const outLink = safePath.join(out, 'out-junction');
+    const armsLink = safePath.join(out, 'arms-junction');
+    const capability = symlinkCapability() ?? skip();
+    createSymlink(capability, elsewhere, outLink, 'junction');
+    createSymlink(capability, elsewhere, armsLink, 'junction');
+
+    expect(() => openOutDirectory(outLink, [])).toThrow(REFUSED);
+    expect(() => openArmsRoot({ override: armsLink, subjects: [] })).toThrow(REFUSED);
+    expect(readdirSync(elsewhere)).toStrictEqual([]);
+  });
+
+  it.skipIf(!POSIX)('refuses a symlinked --out', ({ skip }) => {
+    const elsewhere = mkdtempSync(safePath.join(out, 'elsewhere-'));
+    const chosen = safePath.join(out, 'out-link');
+    link(skip, elsewhere, chosen);
+
+    expect(() => openOutDirectory(chosen, [])).toThrow(REFUSED);
   });
 });

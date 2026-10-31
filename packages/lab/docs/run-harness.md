@@ -77,7 +77,9 @@ copy was deleted with it.)
 The `npx` route is the one exception, and a known limitation: `npx` runs the published package's
 `bin` entry, which *is* the wrapper. A subject with its own vat installed can therefore capture an
 `npx:` arm. Compare published versions on a subject that does not depend on vat, or use `dist:`
-against an unpacked tarball.
+against an unpacked tarball. Its parse directory is still the build's own answer: the lab resolves
+`@vibe-agent-toolkit/resources` from the one project npx installed into the arm's npm cache during
+the untimed start.
 
 ## A dirty instrument is measured, but never mistaken for a commit
 
@@ -131,7 +133,9 @@ Every timed arm — the `verdict` facet's included — also gets lab-owned direc
 own settings: a private projection store, temp directory, empty home (`HOME` and
 `CLAUDE_CONFIG_DIR`) and npm cache under the invocation's **arms root** (`--arms-dir`, else a fresh
 `run-*` directory under `<os tmpdir>/vat-lab-arms-<user>/`), never under `--out` and never inside a
-subject. An `--env` or `--unset` naming one of those variables is refused. Because the verdict
+subject. The default `run-*` directory is removed when the capture ends, passed or failed, unless
+`--keep-arms`; the output says which (`Removed arms under …` / `Kept arms under …`). An `--env` or
+`--unset` naming one of those variables is refused. Because the verdict
 facet's subjects include VAT's own tree, it also refuses an `--out` inside any subject — see
 [The verdict facet](facets.md#the-verdict-facet).
 
@@ -280,44 +284,42 @@ is. Every capture is written through the normal store, under `<out>/ab-<stamp>/p
 per-pair directory is load-bearing, because two pairs of one arm share a coordinate and therefore a
 filename.
 
-## Which exit codes mean the run finished
+## The one exit a run commits to
 
-A command declares its own, as `completedExitCodes`; absent means `[0]`. vat's convention is `0`
-success, `1` validation findings, `2` system error — so `validate`, `verify` and `resources-validate`
-accept `[0, 1]`, because a validator exiting 1 ran the whole corpus and merely had something to
-report at the end of it. Without that, those three were unmeasurable on any real project: every real
-project has findings, so every repeat "failed" and every row was poisoned. `audit` accepts `[0, 1]`
-for the same reason; `resources-scan` keeps the `[0]` default — a scan has no finding of its own,
-so its only exit 1 is the run-integrity refusal for a scan of NOTHING, and a duration over no files
-is not a measurement.
+Every step commits to ONE exit, and a repetition that exits anything else is a failed measurement.
+Every registered command commits to `0`, its exit on a clean subject. vat's convention is `0`
+success, `1` validation findings, `2` system error, so on a subject with findings the caller commits
+the command to `1`: `--expect-exit validate=1` on `<facet> run` and `<facet> ab`, and
+`--expect-exit <build>:<sequence>:<step>=1` on `perf arms`. Nothing accepts two codes: a set where
+one repeat exited `0` and another `1` did two different amounts of work, and a median over it
+describes neither. Because each step has one committed exit, every repetition without a violation ran
+the same steps to the same exits, so there is no separate uniformity rule. An expectation naming a
+command the run does not measure is refused rather than silently leaving `0` in force.
 
-Exit `2` is never accepted. That run did not complete, and its duration is the duration of giving
+Exit `2` is never committed. That run did not complete, and its duration is the duration of giving
 up — fast enough that timing it reads as an improvement.
 
 This is a `perf`/`io` question ("is this duration worth trusting?"), not the `verdict` facet's.
-`harness/outcome.ts`'s `runOutcome` has no `completedExitCodes` and no accept list: every exit code
+`harness/outcome.ts`'s `runOutcome` has no committed exit and no accept list: every exit code
 a run produces — `2` included — comes back `{ kind: 'exited', exitCode }`, because a verdict
 measures what vat DECIDED, a refusal among those decisions. Only a process that never produced an
 exit code at all comes back `{ kind: 'not-run' }`.
 
-Two rules then apply to a row's repeats, in `summarizeRepeatFailures`, shared so both facets phrase
-them alike: **any failure poisons the whole row**, and **the accepted codes must be uniform across
-the repeats**, compared step by step: a repeat's exit is the list of its steps' exits, so
-`2 repeats exited [1] and [0, 1]` names one that stopped at step one and one that ran step one clean
-and stopped at step two, though both fold to exit 1. The second rule is what stops a set where one
-repeat exited 0 and another exited 1 from being averaged: both completed, but they did different
-amounts of work, and a median over the mixture
-describes neither.
+One rule then applies to a row's repeats, in `summarizeRepeatFailures`, shared so every facet
+phrases it alike: **any failure poisons the whole row**.
 
 ## Two properties the harness must preserve
 
 **Each arm's environment: inherited, then cleared, then the arm's own.** A child's environment is
 `process.env` minus `ARM_OWNED_ENV_KEYS`, minus every inherited `VAT_*` name and the names git
-exports into a hook, minus — for a VAT step — the temp, XDG, Claude and git-config state in
-`CLEARED_ENV_NAMES`, then the arm directories' variables, then the arm's `unset` and `set`
-([`harness/arm-env.ts`](../src/harness/arm-env.ts), [`harness/arm-dirs.ts`](../src/harness/arm-dirs.ts)).
-A tool step (`pnpm install`, a build) loses only the `VAT_*` and hook-git names: pnpm needs the
-real `~/.npmrc`. Each report records both lists of names the arm's steps went without. Every `RunOptions` and `CaptureRequest` carries
+exports into a hook, minus — for a VAT step — the temp, XDG, Claude, git-config, git-template and
+exec-path state in `CLEARED_ENV_NAMES` and every inherited `npm_config_*` (any case), then the arm
+directories' variables (which include `GIT_CONFIG_NOSYSTEM=1` and `GIT_ATTR_NOSYSTEM=1`), then the
+arm's `unset` and `set` ([`harness/arm-env.ts`](../src/harness/arm-env.ts),
+[`harness/arm-dirs.ts`](../src/harness/arm-dirs.ts)). A tool step (`pnpm install`, a build) loses
+only the `VAT_*` and hook-git names: pnpm needs the real `~/.npmrc`. One input stays outside every
+arm: the machine-level Claude managed-settings policy, read from a fixed system path no variable
+redirects — the same file for every arm on one machine, so consistent across arms, not isolated. Each report records both lists of names the arm's steps went without. Every `RunOptions` and `CaptureRequest` carries
 this `ArmEnvironment` as a **required** field — `EMPTY_ARM_ENVIRONMENT` when the arm sets nothing —
 because an optional environment is a seam whose omission compiles, and the omission is the leak.
 

@@ -82,32 +82,32 @@ const PREFIX = 'lab-perf-capture-';
 const CAPTURED_AT = '2026-08-09T12:34:56.000Z';
 
 /**
- * The same always-non-zero command, declared to COMPLETE at 1 as well as 0.
+ * The same always-non-zero command, committed to exit 1 — a subject with findings.
  *
  * The one deliberate difference from {@link PROBE_FAILS}: same name, same arguments,
- * same probe behaviour. Pairing them is what makes the exit-code acceptance
+ * same probe behaviour. Pairing them is what makes the committed exit
  * falsifiable — with one spec the row is a measurement and with the other it is
  * a poisoned row, over byte-identical repeats.
  */
 const FINDINGS: MeasuredCommandSpec = {
   name: 'broken',
   args: [PROBE_FAIL_TOKEN],
-  completedExitCodes: [0, 1],
+  expectedExit: 1,
   provenance: 'none',
   populates: false,
 };
 
 /**
- * A command that succeeds by argv but accepts a findings exit.
+ * A command that succeeds by argv, committed to a findings exit.
  *
- * Paired with {@link PROBE_FAIL_AT_ENV}, this is the only way to fixture repeats
- * that ALL completed and still disagreed: the token-driven failure applies to
- * every repeat of a command, which is uniform by construction.
+ * Paired with {@link PROBE_FAIL_AT_ENV}, this fixtures a set where one repeat
+ * exits the committed `1` and the others exit `0`: the token-driven failure
+ * applies to every repeat of a command, which is uniform by construction.
  */
 const PASSES_WITH_FINDINGS: MeasuredCommandSpec = {
   name: 'audit',
   args: ['audit'],
-  completedExitCodes: [0, 1],
+  expectedExit: 1,
   provenance: 'none',
   populates: false,
 };
@@ -285,7 +285,7 @@ describe('capturePerf — a findings exit is a completed run', () => {
     expect(results.map((run) => run.exitCode)).toEqual([1, 1, 1]);
   });
 
-  it('measures a command whose every repeat exited 1, when 1 means completed', async () => {
+  it('measures a command whose every repeat exited 1, when 1 is its committed exit', async () => {
     const probe = setupProbe(PREFIX);
 
     const row = onlyRow(await capture(probe, { runs: 3, commands: [FINDINGS], env: EXITS_ONE }));
@@ -298,7 +298,7 @@ describe('capturePerf — a findings exit is a completed run', () => {
     expect(row.exitCode).toBe(1);
   });
 
-  it('poisons the identical repeats when the command did NOT declare 1 completed', async () => {
+  it('poisons the identical repeats when the command committed to 0, not 1', async () => {
     // Same probe, same argv, same exit code — only the spec differs. This is the
     // shipped behaviour, pinned so the change cannot widen past what it declared.
     const probe = setupProbe(PREFIX);
@@ -311,7 +311,7 @@ describe('capturePerf — a findings exit is a completed run', () => {
     expect(row.failure).toBe(`3 of 3 repeats failed — ${failReason(PROBE_FAILS.name, 1)}`);
   });
 
-  it('refuses exit 2 even for a command that accepts a findings exit', async () => {
+  it('refuses exit 2 for a command committed to a findings exit', async () => {
     // vat's 2 is "system error" — a run that did not complete, whose duration is
     // the duration of giving up. No spec may opt into timing that.
     const probe = setupProbe(PREFIX);
@@ -344,13 +344,14 @@ describe('capturePerf — repeats that completed differently', () => {
     expect(results.map((run) => run.exitCode)).toEqual([0, 1, 0]);
   });
 
-  it('fails the row when accepted codes disagree, naming both codes', async () => {
+  it('fails the row when some repeats exit 0 where 1 is committed — one exit, never two', async () => {
     const probe = setupProbe(PREFIX);
 
     const row = onlyRow(
       await capture(probe, {
         runs: 3,
         commands: [PASSES_WITH_FINDINGS],
+        cache: 'cold',
         env: { ...EXITS_ONE, [PROBE_FAIL_AT_ENV]: '2' },
       }),
     );
@@ -358,8 +359,7 @@ describe('capturePerf — repeats that completed differently', () => {
     expect(row.failed).toBe(true);
     expect(row.exitCode).toBeNull();
     expect(row.samplesMs).toEqual([]);
-    expect(row.failure).toContain('exited [0] and [1]');
-    expect(row.failure).toContain('not with the same amount of work done');
+    expect(row.failure).toBe(`2 of 3 repeats failed — step 'audit' exited 0: `);
   });
 });
 
@@ -397,8 +397,8 @@ describe('capturePerf — no repeats at all', () => {
 describe('capturePerf — rows are independent', () => {
   it('keeps a failing command from poisoning the commands either side of it', async () => {
     const probe = setupProbe(PREFIX);
-    const before: MeasuredCommandSpec = { name: 'before', args: ['audit'], provenance: 'none', populates: false };
-    const after: MeasuredCommandSpec = { name: 'after', args: ['audit', '--json'], provenance: 'none', populates: false };
+    const before: MeasuredCommandSpec = { name: 'before', args: ['audit'], expectedExit: 0, provenance: 'none', populates: false };
+    const after: MeasuredCommandSpec = { name: 'after', args: ['audit', '--json'], expectedExit: 0, provenance: 'none', populates: false };
 
     const report = await capture(probe, { runs: 2, commands: [before, PROBE_FAILS, after] });
 

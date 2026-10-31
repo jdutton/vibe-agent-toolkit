@@ -89,14 +89,22 @@ describe('parseBar', () => {
 });
 
 describe('judgeBars', () => {
-  const arm = (build: string, name: string, medianMs: number, minMs: number) => ({
+  const clean = { violation: null };
+  const arm = (build: string, name: string, medianMs: number, minMs: number, repetitions: readonly { readonly violation: string | null }[] = Array.from({ length: 5 }, () => clean)) => ({
     build,
     arm: name,
     state: 'cold' as const,
     summary: { medianMs, minMs },
     failure: null,
+    repetitions,
   });
   const report = {
+    inputs: {
+      env: { set: { VAT_PROJECTION_STORE: 'off' }, unset: ['NODE_OPTIONS'] },
+      expectedExits: [{ build: 'cand', sequence: 'ci-c', step: 'validate-ci', exit: 1 }],
+      prerequisites: ['npm ci'],
+      timeoutMs: 60_000,
+    },
     builds: [
       { alias: 'rc11', source: { kind: 'dist', path: '/builds/rc11' }, instrument: { version: '0.2.0-rc.11', commit: null, dirty: null, closure: 'a'.repeat(64) } },
       { alias: 'cand', source: { kind: 'tree', path: '/work/vat' }, instrument: { version: '0.2.0', commit: 'abcdef0123456789', dirty: false, closure: 'b'.repeat(64) } },
@@ -106,7 +114,7 @@ describe('judgeBars', () => {
       arm('rc11', 'ci-a', 100, 90),
       arm('cand', 'ci-c', 110, 100),
       arm('cand', 'ci-b', 105, 101),
-      { build: 'rc11', arm: 'ci-b', state: 'cold' as const, summary: null, failure: "1 of 5 repeats failed — step 'x' exited 1" },
+      { build: 'rc11', arm: 'ci-b', state: 'cold' as const, summary: null, failure: "1 of 5 repeats failed — step 'x' exited 1", repetitions: [] },
     ],
   };
   const bar = (text: string) => {
@@ -130,6 +138,25 @@ describe('judgeBars', () => {
     });
   });
 
+  it('refuses a report holding an unfailed arm of fewer than 5 repetitions — not a measurement a bar may read', () => {
+    const short = { ...report, arms: [...report.arms, arm('cand', 'ci-a', 1, 1, [clean, clean, clean, clean])] };
+
+    expect(judgeBars(short, [bar('cand:ci-c:cold<=1.15*rc11:ci-a:cold')])).toEqual({
+      ok: false,
+      refusal: 'cand:ci-a:cold has 4 repetition(s); a judged arm needs at least 5',
+    });
+  });
+
+  it('refuses a report whose unfailed arm holds a repetition that broke its rule', () => {
+    const broken = [...Array.from({ length: 4 }, () => clean), { violation: "step 'x' reports population 'store' though the arm turned the store off" }];
+    const violated = { ...report, arms: [...report.arms, arm('cand', 'ci-a', 1, 1, broken)] };
+
+    expect(judgeBars(violated, [bar('cand:ci-c:cold<=1.15*rc11:ci-a:cold')])).toEqual({
+      ok: false,
+      refusal: expect.stringMatching(/^cand:ci-a:cold repetition 5 broke its rule: step 'x'/u) as unknown,
+    });
+  });
+
   it('refuses a bar naming an arm the report does not hold', () => {
     const judged = judgeBars(report, [bar('cand:ci-a:warm<=1*rc11:ci-a:cold')]);
 
@@ -145,13 +172,35 @@ describe('judgeBars', () => {
     );
   });
 
-  it('heads the verdicts with what every alias WAS and the machine load the arms ran under', () => {
+  /** @returns The judged bar `cand:ci-c:cold<=1.15*rc11:ci-a:cold`, and its rendering over `report` */
+  const headerCase = (): { results: Parameters<typeof renderBars>[1]; rendered: string } => {
     const judged = judgeBars(report, [bar('cand:ci-c:cold<=1.15*rc11:ci-a:cold')]);
     if (!judged.ok) throw new Error(judged.refusal);
-    const rendered = renderBars(report, judged.results);
+    return { results: judged.results, rendered: renderBars(report, judged.results) };
+  };
+
+  it('heads the verdicts with what every alias WAS and the machine load the arms ran under', () => {
+    const { rendered } = headerCase();
 
     expect(rendered).toMatch(/^ {2}rc11: vat 0\.2\.0-rc\.11 .*closure a{12}\) from dist:\/builds\/rc11$/mu);
     expect(rendered).toMatch(/^ {2}cand: vat 0\.2\.0 \(abcdef01/mu);
     expect(rendered).toMatch(/^Machine load: clean/mu);
+  });
+
+  it('heads the verdicts with every input that decided the numbers', () => {
+    const { results, rendered } = headerCase();
+
+    expect(rendered).toContain(
+      [
+        'Inputs:',
+        '  --env VAT_PROJECTION_STORE=off',
+        '  --unset NODE_OPTIONS',
+        '  --expect-exit cand:ci-c:validate-ci=1',
+        '  --prerequisite npm ci',
+        '  --timeout-ms 60000',
+      ].join('\n'),
+    );
+    const none = renderBars({ ...report, inputs: { env: { set: {}, unset: [] }, expectedExits: [], prerequisites: [], timeoutMs: null } }, results);
+    expect(none).toContain('Inputs: none — no --env, --unset, --expect-exit, --prerequisite or --timeout-ms');
   });
 });

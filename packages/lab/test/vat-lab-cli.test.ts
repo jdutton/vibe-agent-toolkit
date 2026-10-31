@@ -27,7 +27,9 @@ import {
   collectArmsBuild,
   collectArmsSelection,
   collectBar,
+  collectCommandExpectedExit,
   collectExpectedExit,
+  committedCommands,
   collectMeasuredCommand,
   collectPreparedSubject,
   collectPrerequisite,
@@ -182,6 +184,52 @@ describe('collectMeasuredCommand', () => {
     const message = (caught as Error).message;
     expect(message).toContain("got 'nonesuch'");
     for (const name of MEASURABLE_COMMAND_NAMES) expect(message).toContain(name);
+  });
+});
+
+describe('collectCommandExpectedExit — a single-command facet commits a command to its one exit', () => {
+  it('parses <command>=<code> for a registered command, accumulating', () => {
+    const first = collectCommandExpectedExit('validate=1', undefined);
+
+    expect(first).toEqual([{ command: 'validate', exit: 1 }]);
+    expect(collectCommandExpectedExit('audit=0', first)).toEqual([
+      { command: 'validate', exit: 1 },
+      { command: 'audit', exit: 0 },
+    ]);
+  });
+
+  it.for([
+    { value: 'validate=0,1', pattern: /one exit code/u },
+    { value: 'validate=2', pattern: /exit 2/u },
+    { value: 'nonesuch=1', pattern: /got 'nonesuch'/u },
+    { value: 'validate=', pattern: /<command>=<code>/u },
+    { value: 'validate', pattern: /<command>=<code>/u },
+  ])('refuses $value', ({ value, pattern }) => {
+    expect(() => collectCommandExpectedExit(value, undefined)).toThrow(InvalidArgumentError);
+    expect(() => collectCommandExpectedExit(value, undefined)).toThrow(pattern);
+  });
+
+  it('refuses the same command twice — one command, one committed exit', () => {
+    const first = collectCommandExpectedExit('validate=1', undefined);
+
+    expect(() => collectCommandExpectedExit('validate=0', first)).toThrow(/validate more than once/u);
+  });
+});
+
+describe('committedCommands — the one place a caller expectation replaces a spec\'s exit', () => {
+  it('replaces the named command\'s exit and leaves every other spec as registered', () => {
+    const specs = [MEASURABLE_COMMANDS.validate, MEASURABLE_COMMANDS.audit];
+
+    const committed = committedCommands(specs, [{ command: 'validate', exit: 1 }]);
+
+    expect(committed.map((spec) => [spec.name, spec.expectedExit])).toEqual([['validate', 1], ['audit', 0]]);
+    expect(committed[1]).toBe(MEASURABLE_COMMANDS.audit);
+  });
+
+  it('refuses an expectation for a command the run does not measure — it would leave 0 silently in force', () => {
+    expect(() => committedCommands([MEASURABLE_COMMANDS.audit], [{ command: 'validate', exit: 1 }])).toThrow(
+      /--expect-exit names validate, which this run does not measure/u,
+    );
   });
 });
 
@@ -424,6 +472,11 @@ describe('vat-lab — every --out is resolved once, by its parser', () => {
 
 describe('vat-lab <facet> run — the --command flag is wired to that parser', () => {
   for (const facet of ['perf', 'io', 'parse']) {
+    it(`declares --expect-exit on ${facet} run and ab, parsed by collectCommandExpectedExit`, () => {
+      expect(optionOf(facet, 'run', '--expect-exit')?.parseArg).toBe(collectCommandExpectedExit);
+      expect(optionOf(facet, 'ab', '--expect-exit')?.parseArg).toBe(collectCommandExpectedExit);
+    });
+
     it(`declares --command on ${facet} run, parsed by collectMeasuredCommand`, () => {
       const option = commandOption(facet);
 
@@ -523,7 +576,7 @@ describe('vat-lab perf arms — the option parsers', () => {
       name: 'pnpm install --frozen-lockfile',
       command: { kind: 'tool', command: 'pnpm', args: ['install', '--frozen-lockfile'] },
       timed: false,
-      expectedExits: [0],
+      expectedExit: 0,
       provenance: 'none',
       populates: false,
     });
@@ -563,12 +616,27 @@ describe('vat-lab perf arms — the option parsers', () => {
   });
 });
 
+/** An arms report's inputs when the caller chose none. */
+const NO_INPUTS = { env: { set: {}, unset: [] }, expectedExits: [], prerequisites: [], timeoutMs: null };
+
+/**
+ * @param steps - One round's timed steps and their exits
+ * @returns Five such rounds — the judged floor — as an arms report records them
+ */
+function cleanRounds(steps: readonly (readonly [string, number])[]): unknown[] {
+  return Array.from({ length: 5 }, () => ({
+    exitCode: steps.find(([, exit]) => exit !== 0)?.[1] ?? 0,
+    violation: null,
+    steps: steps.map(([name, exitCode]) => ({ name, timed: true, exitCode })),
+  }));
+}
+
 const measured = (build: string, arm: string, medianMs: number, minMs: number) => ({
   build,
   arm,
   state: 'cold',
   summary: { minMs, medianMs, iqrMs: 1, runs: 5 },
-  repetitions: [],
+  repetitions: cleanRounds([['s', 0]]),
   failure: null,
 });
 
@@ -598,6 +666,7 @@ async function judge(bars: readonly string[]): Promise<{ readonly stdout: string
     report,
     JSON.stringify({
       prepared: { ok: true, path: safePath.join(tempDir, 'clone'), commit: 'a'.repeat(40), tree: 'b'.repeat(40), removedEnv: [], removedToolEnv: [] },
+      inputs: NO_INPUTS,
       cwd: tempDir,
       rounds: 5,
       builds: [
@@ -686,22 +755,29 @@ describe('vat-lab verdict union', () => {
   });
 });
 
+/** The two builds bar 3 runs: CI's sequence on the baseline, the single run on the candidate. */
+const UNION_BUILDS = {
+  rc11: { version: '0.2.0-rc.11', commit: null, dirty: null, closure: null },
+  cand: { version: '0.2.0', commit: null, dirty: null, closure: null },
+} as const;
+
 /**
  * A verdict report of the `app` subject holding one row with one finding.
  *
  * @param row - The row name
  * @param preparedClone - Where it ran, or `null` for its subjects-file path
  * @param commit - The subject's commit
+ * @param build - Which build captured it
  * @returns The envelope
  */
-function unionEnvelope(row: string, preparedClone: string | null, commit: string): ReportEnvelope<VerdictBody> {
+function unionEnvelope(row: string, preparedClone: string | null, commit: string, build: keyof typeof UNION_BUILDS): ReportEnvelope<VerdictBody> {
   const finding = { code: 'LINK_BROKEN_FILE', severity: 'error', location: 'docs/a.md', line: 3, message: 'm' };
   return {
     facet: 'verdict',
     coordinate: {
       subject: { id: 'app', source: preparedClone ?? '/work/app' },
       subjectVersion: { kind: 'git', commit, ref: null, dirty: false, workingFingerprint: null },
-      instrument: { version: '0.2.0', commit: null, dirty: null, closure: null },
+      instrument: UNION_BUILDS[build],
     },
     capturedAt: '2026-10-31T00:00:00.000Z',
     removedEnv: [],
@@ -724,37 +800,31 @@ function unionEnvelope(row: string, preparedClone: string | null, commit: string
 }
 
 /**
- * @param exits - One round's step exits
- * @returns Two such rounds, as an arms report records them
- */
-function unionRounds(exits: readonly number[]): unknown[] {
-  return [1, 2].map(() => ({ exitCode: exits.find((exit) => exit !== 0) ?? 0, steps: exits.map((exitCode) => ({ name: 's', exitCode })) }));
-}
-
-/**
  * Write bar 3's inputs — two captures, an arms report, a deltas file — and run `verdict union` over them.
  *
  * @param prepared - Whether both captures ran in the arms' prepared clone
+ * @param rightFailure - The right arm's recorded failure, or `null`
  * @returns What the command wrote to stdout and stderr
  */
-async function union(prepared: boolean): Promise<{ readonly stdout: string; readonly stderr: string }> {
+async function union(prepared: boolean, rightFailure: string | null = null): Promise<{ readonly stdout: string; readonly stderr: string }> {
   const root = await mkdtemp(safePath.join(tempDir, 'union-'));
   const clone = safePath.join(root, 'clone');
   const commit = 'a'.repeat(40);
   const left = safePath.join(root, 'left');
   const right = safePath.join(root, 'right');
-  await writeReport(left, unionEnvelope('resources-validate-ci', prepared ? clone : null, commit));
-  await writeReport(right, unionEnvelope('validate', prepared ? clone : null, commit));
+  await writeReport(left, unionEnvelope('resources-validate-ci', prepared ? clone : null, commit, 'rc11'));
+  await writeReport(right, unionEnvelope('validate', prepared ? clone : null, commit, 'cand'));
   const report = safePath.join(root, 'arms-report.json');
   await writeFile(
     report,
     JSON.stringify({
       prepared: { ok: true, path: clone, commit, tree: 'b'.repeat(40), removedEnv: [], removedToolEnv: [] },
-      builds: [],
+      inputs: NO_INPUTS,
+      builds: Object.entries(UNION_BUILDS).map(([alias, instrument]) => ({ alias, source: { kind: 'dist', path: `/builds/${alias}` }, instrument })),
       load: { before: null, after: null, cpus: 1, available: false, contaminated: false },
       arms: [
-        { build: 'cand', arm: 'ci-b', state: 'cold', repetitions: unionRounds([0, 1]), summary: null, failure: null },
-        { build: 'cand', arm: 'ci-c', state: 'cold', repetitions: unionRounds([1]), summary: null, failure: null },
+        { build: 'rc11', arm: 'ci-b', state: 'cold', repetitions: cleanRounds([['resources-validate-ci', 1]]), summary: null, failure: null },
+        { build: 'cand', arm: 'ci-c', state: 'cold', repetitions: cleanRounds([['validate', 1]]), summary: null, failure: rightFailure },
       ],
     }),
   );
@@ -762,7 +832,7 @@ async function union(prepared: boolean): Promise<{ readonly stdout: string; read
   await writeFile(deltas, 'baseline: 0.2.0\ndeltas: []\n');
   return runLab([
     'verdict', 'union', left, right, '--alias', 'app', '--left', 'resources-validate-ci', '--right', 'validate',
-    '--arms', report, '--left-arm', 'cand:ci-b:cold', '--right-arm', 'cand:ci-c:cold', '--deltas', deltas,
+    '--arms', report, '--left-arm', 'rc11:ci-b:cold', '--right-arm', 'cand:ci-c:cold', '--deltas', deltas,
   ]);
 }
 
@@ -773,6 +843,13 @@ describe('vat-lab verdict union — bar 3 end to end', () => {
     expect(stderr).toBe('');
     expect(stdout).toBe('BAR 3 HOLDS\n');
     expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it('refuses an arms report whose right arm failed — its rounds are never read as complete', async () => {
+    const { stderr } = await union(true, "1 of 5 repeats failed — step 'validate' exited 2");
+
+    expect(stderr).toBe("REFUSED: cand:ci-c:cold failed: 1 of 5 repeats failed — step 'validate' exited 2\n");
+    expect(process.exitCode).toBe(ExitCode.ERROR);
   });
 
   it('refuses captures that did not run in the prepared clone', async () => {

@@ -3,9 +3,9 @@
  * pass/fail judgement, because a verdict measures what vat DECIDED, including a
  * refusal.
  *
- * ## Why this is not `commands.ts`'s `completedExitCodes`
+ * ## Why this is not `commands.ts`'s `expectedExit`
  *
- * `completedExitCodes` (`commands.ts:28-51`) answers a `perf`/`io` question:
+ * `MeasuredCommandSpec.expectedExit` answers a `perf`/`io` question:
  * "did this run take a duration worth trusting?" — narrow on purpose, because a
  * crash's wall-clock time is meaningless and must not enter a median. The
  * `verdict` facet asks a different question: "what did this run of vat REPORT?"

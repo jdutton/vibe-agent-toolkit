@@ -71,24 +71,6 @@ describe('summarizeRepeatFailures', () => {
     );
   });
 
-  it('fails a row whose repeats completed with DIFFERENT codes, naming both', () => {
-    expect(summarizeRepeatFailures([sequence(0), sequence(1), sequence(0)])).toBe(
-      '3 repeats exited [0] and [1] — every repeat completed, but not with the same amount of work ' +
-        'done, so a statistic over them describes neither run',
-    );
-  });
-
-  it('fails repeats whose SEQUENCE exit agrees but whose per-step exits differ — one stopped early, one ran on', () => {
-    // Both fold to exit 1; the first stopped at step one, the second ran step one clean and stopped at step two.
-    expect(summarizeRepeatFailures([stepsExited([1]), stepsExited([0, 1])])).toBe(
-      '2 repeats exited [1] and [0, 1] — every repeat completed, but not with the same amount of work ' +
-        'done, so a statistic over them describes neither run',
-    );
-  });
-
-  it('reports the violation, not the disagreement, when both are present', () => {
-    expect(summarizeRepeatFailures([sequence(0), sequence(1), sequence(2, 'gone')])).toBe('1 of 3 repeats failed — gone');
-  });
 
   it('says nothing about a set with no repeats — armRunFailure owns that case', () => {
     expect(summarizeRepeatFailures([])).toBeNull();

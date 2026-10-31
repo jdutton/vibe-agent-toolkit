@@ -7,7 +7,6 @@
  * vat config at all.
  */
 
-import { chmodSync, writeFileSync } from 'node:fs';
 
 import { ExitCode, installLastResortExit } from '@vibe-agent-toolkit/schema';
 import { isAbsolutePath, isVatError, parseWholeNumberAtLeast, safePath } from '@vibe-agent-toolkit/utils';
@@ -24,7 +23,15 @@ import { renderIoComparison, renderIoReport } from '../facets/io/render.js';
 import { captureParse } from '../facets/parse/capture.js';
 import { compareParse } from '../facets/parse/compare.js';
 import { renderParseComparison, renderParseReport } from '../facets/parse/render.js';
-import { type ArmName, armName, findArm, parseArmName, readArmsReportFile } from '../facets/perf/arms-report-file.js';
+import {
+  type ArmName,
+  armName,
+  type ArmsInputs,
+  type ArmsReportFile,
+  findArm,
+  parseArmName,
+  readArmsReportFile,
+} from '../facets/perf/arms-report-file.js';
 import { captureArms, type ExpectedExit, expectedExitRefusal, renderArmsReport, sequenceSteps } from '../facets/perf/arms.js';
 import { type Bar, judgeBars, parseBar, renderBars } from '../facets/perf/bars.js';
 import { capturePerf } from '../facets/perf/capture.js';
@@ -49,7 +56,13 @@ import {
 import { renderVerdictComparison, renderVerdictReport } from '../facets/verdict/render.js';
 import { loadVerdictSubjects } from '../facets/verdict/subjects.js';
 import type { VerdictBody } from '../facets/verdict/types.js';
-import { judgeUnion, type UnionJudgement, type UnionKey, type UnionRequest } from '../facets/verdict/union.js';
+import {
+  judgeUnion,
+  type UnionArmEvidence,
+  type UnionJudgement,
+  type UnionKey,
+  type UnionRequest,
+} from '../facets/verdict/union.js';
 import type { Validated } from '../facets/verdict/yaml-file.js';
 import {
   abExitCondition,
@@ -61,7 +74,15 @@ import {
   runAb,
   UNMEASURABLE_VERDICT,
 } from '../harness/ab.js';
-import { ARM_REFUSED_CODE, buildAlias, makePrivate, openArmsRoot } from '../harness/arm-dirs.js';
+import {
+  ARM_REFUSED_CODE,
+  armRefusal,
+  buildAlias,
+  closeArmsRoot,
+  openArmsRoot,
+  openOutDirectory,
+  writePrivateFile,
+} from '../harness/arm-dirs.js';
 import { type ArmEnvironment, armEnvironmentClash, sameArmEnvironment } from '../harness/arm-env.js';
 import { prepareClone } from '../harness/clone.js';
 import { indistinguishableArms } from '../harness/closure.js';
@@ -132,18 +153,45 @@ export function absoluteArmsDir(value: string): string {
   return value;
 }
 
+/** @returns The current time, ISO-8601 — `ab`'s clock */
+function isoNow(): string {
+  return new Date().toISOString();
+}
+
+/** `--keep-arms`, declared alike on every verb that opens an arms root. */
+const KEEP_ARMS_OPTION = '--keep-arms';
+const KEEP_ARMS_HELP = 'Keep the default run directory of arms (stores, caches, clone) when the capture ends';
+
+/** The arms-root options every capturing verb declares. */
+interface ArmsRootOptions {
+  /** Absent for the default arms root. */
+  readonly armsDir?: string;
+  readonly keepArms?: boolean;
+}
+
 /**
- * The invocation's arms root, said aloud: a reader of the output can find
- * (and delete) what the run left behind.
+ * Run a capture under the invocation's arms root ({@link openArmsRoot}), said
+ * aloud, and end it ({@link closeArmsRoot}) whether the capture succeeded or
+ * failed: a default run directory is removed unless `--keep-arms`, and the
+ * output says where the arms were and what became of them.
  *
- * @param armsDir - `--arms-dir`, when given
+ * @param options - `--arms-dir` and `--keep-arms`
  * @param subjects - Every tree the invocation measures
- * @returns The root ({@link openArmsRoot})
+ * @param body - The capture, handed the root's path
+ * @returns What the capture returned
  */
-function announcedArmsRoot(armsDir: string | undefined, subjects: readonly string[]): string {
-  const root = openArmsRoot({ override: armsDir ?? null, subjects });
-  process.stderr.write(`Arms under ${root}\n`);
-  return root;
+async function withArmsRoot<T>(
+  options: ArmsRootOptions,
+  subjects: readonly string[],
+  body: (armsRoot: string) => Promise<T>,
+): Promise<T> {
+  const root = openArmsRoot({ override: options.armsDir ?? null, subjects });
+  process.stderr.write(`Arms under ${root.path}\n`);
+  try {
+    return await body(root.path);
+  } finally {
+    process.stderr.write(`${await closeArmsRoot(root, options.keepArms === true)}\n`);
+  }
 }
 
 /**
@@ -164,6 +212,10 @@ async function refusingArmErrors(body: () => Promise<void>): Promise<void> {
 const ENV_OPTION = '--env <KEY=VALUE>';
 const UNSET_OPTION = '--unset <KEY>';
 const ENV_OPTIONS_LABEL = '--env and --unset';
+/** `<facet> run|ab --expect-exit`, declared once for both verbs. */
+const COMMAND_EXPECT_EXIT_OPTION = '--expect-exit <command=code>';
+const COMMAND_EXPECT_EXIT_HELP =
+  'Commit a command to this one exit instead of 0 (repeatable), e.g. validate=1 on a subject with findings; never 2';
 
 /**
  * Parse an instrument specifier into a source.
@@ -384,9 +436,12 @@ interface RunOptions {
   readonly out: string;
   /** Absent for the default arms root. */
   readonly armsDir?: string;
+  readonly keepArms?: boolean;
   readonly id?: string;
   /** Absent unless `--command` was given at least once. */
   readonly command?: readonly MeasuredCommandSpec[];
+  /** Absent unless `--expect-exit` was given at least once. */
+  readonly expectExit?: readonly CommandExpectedExit[];
   /** Variables set for every child; absent unless `--env` was given. */
   readonly env?: ArmEnvironment['set'];
   /** Variables removed from every child; absent unless `--unset` was given. */
@@ -455,8 +510,10 @@ interface AbOptions {
   readonly out: string;
   /** Absent for the default arms root. */
   readonly armsDir?: string;
+  readonly keepArms?: boolean;
   readonly id?: string;
   readonly command?: readonly MeasuredCommandSpec[];
+  readonly expectExit?: readonly CommandExpectedExit[];
   readonly control: boolean;
   readonly noiseFloor?: number;
   /** Variables set for arm A's children only. */
@@ -540,6 +597,7 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
       `Measure this command instead of the default set (repeatable). One of: ${MEASURABLE_COMMAND_NAMES.join(', ')}`,
       collectMeasuredCommand,
     )
+    .option(COMMAND_EXPECT_EXIT_OPTION, COMMAND_EXPECT_EXIT_HELP, collectCommandExpectedExit)
     .option(
       '--env-a <KEY=VALUE>',
       'Extra environment for arm A only (repeatable). Pass the same instrument to both arms ' +
@@ -563,6 +621,7 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
     )
     .option(OUT_OPTION, 'Directory to write the reports into', resolvedOut, resolvedOut(DEFAULT_OUT))
     .option(ARMS_DIR_OPTION, ARMS_DIR_HELP, absoluteArmsDir)
+    .option(KEEP_ARMS_OPTION, KEEP_ARMS_HELP, false)
     .option(
       '--id <name>',
       'Subject id recorded in the reports (default: the <subject> argument exactly as given)',
@@ -577,11 +636,15 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
 
         const startedAt = new Date().toISOString();
         const subject = await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath });
-        const result = await runAb({
+        const out = openOutDirectory(options.out, [subject.path]);
+        const result = await withArmsRoot(options, [subject.path], (armsRoot) => runAb({
           subject,
           armA: arms.a,
           armB: arms.b,
-          commands: options.command ?? wiring.defaultCommands ?? DEFAULT_MEASURED_COMMANDS,
+          commands: committedCommands(
+            options.command ?? wiring.defaultCommands ?? DEFAULT_MEASURED_COMMANDS,
+            options.expectExit ?? [],
+          ),
           pairs: options.pairs,
           runs: options.runs,
           cache: options.cache,
@@ -589,13 +652,13 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
           noiseFloor: options.noiseFloor ?? null,
           envA: arms.envA,
           envB: arms.envB,
-          outDir: abRunDirectory(options.out, startedAt),
-          armsRoot: announcedArmsRoot(options.armsDir, [subject.path]),
-          now: () => new Date().toISOString(),
+          outDir: abRunDirectory(out, startedAt),
+          armsRoot,
+          now: isoNow,
           capture: wiring.capture,
           compare: wiring.compare,
           estimate: wiring.estimate,
-        });
+        }));
 
         process.stdout.write(`${renderAb(result)}\n`);
         applyAbExitCode(result);
@@ -725,6 +788,7 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
       `Measure this command instead of the default set (repeatable). One of: ${MEASURABLE_COMMAND_NAMES.join(', ')}`,
       collectMeasuredCommand,
     )
+    .option(COMMAND_EXPECT_EXIT_OPTION, COMMAND_EXPECT_EXIT_HELP, collectCommandExpectedExit)
     .option(
       ENV_OPTION,
       'Set a variable for every child (repeatable). VAT_BIN, VAT_ROOT_DIR and the other ' +
@@ -738,6 +802,7 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
     )
     .option(OUT_OPTION, 'Directory to write the report into', resolvedOut, resolvedOut(DEFAULT_OUT))
     .option(ARMS_DIR_OPTION, ARMS_DIR_HELP, absoluteArmsDir)
+    .option(KEEP_ARMS_OPTION, KEEP_ARMS_HELP, false)
     .option(
       '--id <name>',
       'Subject id recorded in the report (default: the <subject> argument exactly as given)',
@@ -749,19 +814,23 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
         if (env === null) return;
         const instrument = await resolveInstrument(options.instrument);
         const subject = await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath });
-        const report = await wiring.capture({
+        const out = openOutDirectory(options.out, [subject.path]);
+        const report = await withArmsRoot(options, [subject.path], (root) => wiring.capture({
           instrument,
           subject,
           // No `--command` means the facet's default set, unchanged — the flag
           // widens what can be asked for and never quietly narrows a bare run.
-          commands: options.command ?? wiring.defaultCommands ?? DEFAULT_MEASURED_COMMANDS,
+          commands: committedCommands(
+            options.command ?? wiring.defaultCommands ?? DEFAULT_MEASURED_COMMANDS,
+            options.expectExit ?? [],
+          ),
           runs: options.runs,
           cache: options.cache,
           env,
-          arms: { root: announcedArmsRoot(options.armsDir, [subject.path]), build: buildAlias(instrument.version) },
+          arms: { root, build: buildAlias(instrument.version) },
           capturedAt: new Date().toISOString(),
-        });
-        const written = await writeReport(options.out, report);
+        }));
+        const written = await writeReport(out, report);
         process.stdout.write(`${wiring.renderReport(report)}\nWrote ${written}\n`);
       }),
     );
@@ -970,11 +1039,95 @@ export function collectPrerequisite(value: string, previous: readonly SequenceSt
     name: value.trim(),
     command: { kind: 'tool', command, args },
     timed: false,
-    expectedExits: [0],
+    expectedExit: 0,
     provenance: 'none',
     populates: false,
   };
   return [...(previous ?? []), step];
+}
+
+/**
+ * The code half of any `--expect-exit`: one whole number that is not vat's
+ * system-error exit.
+ *
+ * @param value - The whole raw value, for the message
+ * @param code - Its code half; empty when the value did not parse
+ * @param shape - The flag's expected spelling, for the message
+ * @returns The committed exit
+ * @throws {InvalidArgumentError} when the code is missing, a list, or 2
+ */
+function committedExitCode(value: string, code: string, shape: string): number {
+  if (code === '' || code.split(',').includes('')) {
+    throw new InvalidArgumentError(`--expect-exit expects ${shape}; got '${value}'.`);
+  }
+  if (code.includes(',')) {
+    throw new InvalidArgumentError(`--expect-exit '${value}' names a list — a step commits to one exit code.`);
+  }
+  const exit = Number(code);
+  if (exit === ExitCode.ERROR) {
+    throw new InvalidArgumentError(`--expect-exit '${value}' commits to exit 2 — a system error is never an expected exit.`);
+  }
+  return exit;
+}
+
+/** `--expect-exit`'s shape on a single-command facet: `<command>=<code>`. */
+const COMMAND_EXPECTED_EXIT = /^([\w-]+)=([\d,]*)$/u;
+
+/** One caller commitment: this command, in this run, exits this. */
+export interface CommandExpectedExit {
+  readonly command: string;
+  readonly exit: number;
+}
+
+/**
+ * A Commander parser for `<facet> run|ab --expect-exit <command>=<code>`,
+ * accumulating: the ONE exit a command commits to on this subject, in place of
+ * its registered 0 — how a subject with findings is measured at `1`.
+ *
+ * @param value - Raw value Commander parsed
+ * @param previous - Expectations collected so far
+ * @returns The accumulated expectations
+ * @throws {InvalidArgumentError} when the value is malformed, names an unknown
+ *   command or a list, commits to exit 2, or repeats a command
+ */
+export function collectCommandExpectedExit(
+  value: string,
+  previous: readonly CommandExpectedExit[] | undefined,
+): CommandExpectedExit[] {
+  const match = COMMAND_EXPECTED_EXIT.exec(value);
+  const [, command = '', code = ''] = match ?? [];
+  const exit = committedExitCode(value, code, '<command>=<code>');
+  if (measurableCommand(command) === undefined) {
+    throw new InvalidArgumentError(`--expect-exit expects one of: ${MEASURABLE_COMMAND_NAMES.join(', ')}; got '${command}'.`);
+  }
+  if ((previous ?? []).some((set) => set.command === command)) {
+    throw new InvalidArgumentError(`--expect-exit names ${command} more than once.`);
+  }
+  return [...(previous ?? []), { command, exit }];
+}
+
+/**
+ * The measured commands with every caller commitment applied — the one place an
+ * expectation replaces a spec's registered exit.
+ *
+ * @param specs - The commands this run measures
+ * @param expected - The caller's `--expect-exit` commitments
+ * @returns The specs, each committed to its one exit
+ * @throws {VatError} when an expectation names a command the run does not
+ *   measure — it would leave the registered exit silently in force
+ */
+export function committedCommands(
+  specs: readonly MeasuredCommandSpec[],
+  expected: readonly CommandExpectedExit[],
+): MeasuredCommandSpec[] {
+  const stray = expected.find((set) => !specs.some((spec) => spec.name === set.command));
+  if (stray !== undefined) {
+    throw armRefusal(`--expect-exit names ${stray.command}, which this run does not measure`);
+  }
+  return specs.map((spec) => {
+    const set = expected.find((candidate) => candidate.command === spec.name);
+    return set === undefined ? spec : { ...spec, expectedExit: set.exit };
+  });
 }
 
 /** `--expect-exit`'s shape: `<build>:<sequence>:<step>=<code>`; the code part is checked on its own. */
@@ -993,16 +1146,7 @@ const EXPECTED_EXIT = /^([\w.-]+):([\w-]+):([\w-]+)=([\d,]+)$/u;
 export function collectExpectedExit(value: string, previous: readonly ExpectedExit[] | undefined): ExpectedExit[] {
   const match = EXPECTED_EXIT.exec(value);
   const [, build = '', sequence = '', step = '', code = ''] = match ?? [];
-  if (match === null || code === '' || code.split(',').includes('')) {
-    throw new InvalidArgumentError(`--expect-exit expects <build>:<sequence>:<step>=<code>; got '${value}'.`);
-  }
-  if (code.includes(',')) {
-    throw new InvalidArgumentError(`--expect-exit '${value}' names a list — a step commits to one exit code.`);
-  }
-  const exit = Number(code);
-  if (exit === ExitCode.ERROR) {
-    throw new InvalidArgumentError(`--expect-exit '${value}' commits to exit 2 — a system error is never an expected exit.`);
-  }
+  const exit = committedExitCode(value, match === null ? '' : code, '<build>:<sequence>:<step>=<code>');
   const earlier = (previous ?? []).find((set) => set.build === build && set.sequence === sequence && set.step === step);
   if (earlier !== undefined) {
     throw new InvalidArgumentError(`--expect-exit names ${build}:${sequence}:${step} more than once (${String(earlier.exit)}, then ${code}).`);
@@ -1021,13 +1165,11 @@ interface PerfArmsOptions {
   readonly out: string;
   /** Absent for the default arms root. */
   readonly armsDir?: string;
+  readonly keepArms?: boolean;
   readonly timeoutMs?: number;
   readonly env?: ArmEnvironment['set'];
   readonly unset?: readonly string[];
 }
-
-/** Owner-only: the arms report names the developer's paths and every arm's stderr. */
-const PRIVATE_FILE_MODE = 0o600;
 
 /**
  * Prepare the clone, time every arm interleaved by round, and write the report.
@@ -1062,16 +1204,39 @@ async function runPerfArms(subjectPath: string, options: PerfArmsOptions): Promi
   if (warmupBuild === undefined || warmupStep === undefined) {
     return refuse(`REFUSED: --arm names build '${first.build}', which no --build declares.`);
   }
-  const out = options.out;
   const source = safePath.resolve(subjectPath);
-  const armsRoot = announcedArmsRoot(options.armsDir, [source]);
+  const out = openOutDirectory(options.out, [source]);
+  await withArmsRoot(options, [source], (armsRoot) => captureArmsInto(out, armsRoot, { source, options, builds, arms, expected, env, warmup: { instrument: warmupBuild.instrument, step: warmupStep } }));
+}
+
+/** Everything {@link captureArmsInto} needs, checked by {@link runPerfArms}. */
+interface ArmsCaptureInputs {
+  readonly source: string;
+  readonly options: PerfArmsOptions;
+  readonly builds: readonly (ArmsBuildOption & { readonly instrument: ResolvedInstrument })[];
+  readonly arms: readonly ArmsSelectionOption[];
+  readonly expected: readonly ExpectedExit[];
+  readonly env: ArmEnvironment;
+  readonly warmup: { readonly instrument: ResolvedInstrument; readonly step: SequenceStep };
+}
+
+/**
+ * Prepare the clone under the arms root, time every arm, and write the report
+ * owner-only into `out`.
+ *
+ * @param out - The opened `--out` ({@link openOutDirectory})
+ * @param armsRoot - The invocation's arms root
+ * @param inputs - See {@link ArmsCaptureInputs}
+ */
+async function captureArmsInto(out: string, armsRoot: string, inputs: ArmsCaptureInputs): Promise<void> {
+  const { options, expected } = inputs;
   const timeout = options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs };
   const prepared = await prepareClone({
-    source,
+    source: inputs.source,
     commit: options.commit,
     armsRoot,
     prerequisites: options.prerequisite ?? [],
-    warmup: { instrument: warmupBuild.instrument, step: warmupStep },
+    warmup: inputs.warmup,
     ...timeout,
   });
   if (!prepared.ok) return refuse(`REFUSED: ${prepared.refusal}`);
@@ -1079,21 +1244,25 @@ async function runPerfArms(subjectPath: string, options: PerfArmsOptions): Promi
   const report = await captureArms({
     armsRoot,
     cwd: prepared.path,
-    builds,
-    arms: arms.map((arm) => ({
+    builds: inputs.builds,
+    arms: inputs.arms.map((arm) => ({
       build: arm.build,
       arm: arm.sequence.name,
       state: arm.state,
       steps: sequenceSteps(arm.sequence, arm.build, expected),
     })),
     rounds: options.rounds,
-    env,
+    env: inputs.env,
     ...timeout,
   });
-  makePrivate(out);
+  const recorded: ArmsInputs = {
+    env: { set: { ...inputs.env.set }, unset: [...inputs.env.unset] },
+    expectedExits: expected.map((exit) => ({ ...exit })),
+    prerequisites: (options.prerequisite ?? []).map((step) => step.name),
+    timeoutMs: options.timeoutMs ?? null,
+  };
   const written = safePath.join(out, 'arms-report.json');
-  writeFileSync(written, `${JSON.stringify({ prepared, ...report }, null, 2)}\n`, { encoding: 'utf-8', mode: PRIVATE_FILE_MODE });
-  chmodSync(written, PRIVATE_FILE_MODE);
+  writePrivateFile(written, `${JSON.stringify({ prepared, inputs: recorded, ...report }, null, 2)}\n`);
   process.stdout.write(`${renderArmsReport(report)}\nWrote ${written}\n`);
   if (report.arms.some((arm) => arm.failure !== null)) process.exitCode = ExitCode.ERROR;
 }
@@ -1126,6 +1295,7 @@ function createPerfArmsCommand(): Command {
     .option('--rounds <n>', 'Measured rounds per arm, interleaved; at least 5', wholeNumberAtLeast('--rounds', 5), 5)
     .requiredOption(OUT_OPTION, 'Directory for the report (owner-only)', resolvedOut)
     .option(ARMS_DIR_OPTION, `${ARMS_DIR_HELP}; the clone is <arms-dir>/clone`, absoluteArmsDir)
+    .option(KEEP_ARMS_OPTION, KEEP_ARMS_HELP, false)
     .option('--timeout-ms <n>', 'Kill any one step after this long', wholeNumberAtLeast('--timeout-ms', 1))
     .option(ENV_OPTION, 'Set a variable for every VAT step of every arm (repeatable)', collectEnv('--env'))
     .option(UNSET_OPTION, 'Remove an inherited variable from every VAT step (repeatable)', collectUnset('--unset'))
@@ -1157,7 +1327,7 @@ export function collectBar(value: string, previous: readonly Bar[] | undefined):
  */
 function runPerfBars(reportPath: string, options: { readonly bar: readonly Bar[] }): void {
   const read = readArmsReportFile(safePath.resolve(reportPath));
-  if (!read.ok) return refuse(`REFUSED: ${read.refusal}.`);
+  if (!read.ok) return refuse(read.refusal);
   const judged = judgeBars(read.report, options.bar);
   if (!judged.ok) return refuse(`REFUSED: ${judged.refusal}.`);
   process.stdout.write(`${renderBars(read.report, judged.results)}\n`);
@@ -1190,6 +1360,7 @@ interface VerdictRunOptions {
   readonly out: string;
   /** Absent for the default arms root. */
   readonly armsDir?: string;
+  readonly keepArms?: boolean;
   readonly timeoutMs?: number;
   readonly env?: ArmEnvironment['set'];
   readonly unset?: readonly string[];
@@ -1250,6 +1421,7 @@ function createVerdictCommand(): Command {
     )
     .requiredOption(OUT_OPTION, 'Directory to write one report per alias into; outside every subject', resolvedOut)
     .option(ARMS_DIR_OPTION, `${ARMS_DIR_HELP}; each alias's arm is <arms-dir>/<alias>`, absoluteArmsDir)
+    .option(KEEP_ARMS_OPTION, KEEP_ARMS_HELP, false)
     .option('--timeout-ms <n>', 'Kill any one verb after this long', wholeNumberAtLeast('--timeout-ms', 1))
     .option(ENV_OPTION, 'Set a variable for every child of this arm (repeatable)', collectEnv('--env'))
     .option(UNSET_OPTION, 'Remove an inherited variable from every child of this arm (repeatable)', collectUnset('--unset'))
@@ -1267,17 +1439,19 @@ function createVerdictCommand(): Command {
         if (!loaded.ok) return refuse(loaded.refusal);
         const prepared = options.prepared ?? {};
         const { subjects } = loaded.subjects;
-        const result = await captureVerdict({
-          instrument: await resolveInstrument(options.instrument),
+        const measured = subjects.map((subject) => prepared[subject.alias] ?? subject.path);
+        const instrument = await resolveInstrument(options.instrument);
+        const result = await withArmsRoot(options, measured, (armsRoot) => captureVerdict({
+          instrument,
           subjects,
           subjectsDir: loaded.baseDir,
           env,
           prepared,
-          outDir: options.out,
-          armsRoot: announcedArmsRoot(options.armsDir, subjects.map((subject) => prepared[subject.alias] ?? subject.path)),
+          outDir: openOutDirectory(options.out, measured),
+          armsRoot,
           capturedAt: new Date().toISOString(),
           ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-        });
+        }));
         if (!result.ok) return refuse(result.refusal);
         for (const envelope of result.envelopes) process.stdout.write(`${renderVerdictReport(envelope)}\n`);
         process.stdout.write(`Wrote ${result.written.join(', ')}\n`);
@@ -1316,7 +1490,7 @@ function createVerdictCommand(): Command {
     .requiredOption('--left <rows>', 'The left sequence, as comma-separated row names', splitRowNames)
     .requiredOption('--right <rows>', 'The right sequence, as comma-separated row names', splitRowNames)
     .requiredOption('--arms <report>', "The perf arms report (<out>/arms-report.json) of the prepared clone both captures ran in")
-    .requiredOption('--left-arm <build:sequence:state>', "The left sequence's timed arm in that report, e.g. 'cand:ci-b:cold'", armNameOption)
+    .requiredOption('--left-arm <build:sequence:state>', "The left sequence's timed arm in that report, e.g. 'rc11:ci-b:cold'", armNameOption)
     .requiredOption('--right-arm <build:sequence:state>', "The right sequence's timed arm, e.g. 'cand:ci-c:cold'", armNameOption)
     .option('--deltas <file>', "The committed expected-deltas file, whose 'unions' declare the right's extra findings", COMMITTED_VERDICT_DELTAS)
     .description(
@@ -1372,11 +1546,11 @@ async function unionInputs(leftDir: string, rightDir: string, options: VerdictUn
   const right = await verdictEnvelopeFor(rightDir, options.alias);
   if (!right.ok) return right;
   const report = readArmsReportFile(safePath.resolve(options.arms));
-  if (!report.ok) return { ok: false, refusal: `REFUSED: ${report.refusal}.` };
-  const leftArm = findArm(report.report.arms, options.leftArm);
-  const rightArm = findArm(report.report.arms, options.rightArm);
-  if (typeof leftArm === 'string') return { ok: false, refusal: `REFUSED: --left-arm ${leftArm}.` };
-  if (typeof rightArm === 'string') return { ok: false, refusal: `REFUSED: --right-arm ${rightArm}.` };
+  if (!report.ok) return report;
+  const leftArm = unionArmEvidence(report.report, options.leftArm, '--left-arm');
+  if (!leftArm.ok) return leftArm;
+  const rightArm = unionArmEvidence(report.report, options.rightArm, '--right-arm');
+  if (!rightArm.ok) return rightArm;
   const deltas = loadVerdictDeltas(options.deltas);
   if (!deltas.ok) return deltas;
   const changelog = changelogRefusals(deltas.deltas, readChangelogSources(deltas.deltas, CHANGELOG_REFERENCE_ROOT));
@@ -1388,12 +1562,28 @@ async function unionInputs(leftDir: string, rightDir: string, options: VerdictUn
       right: { envelope: right.value, rows: options.right },
       arms: {
         prepared: report.report.prepared,
-        left: { name: armName(options.leftArm), repetitions: leftArm.repetitions },
-        right: { name: armName(options.rightArm), repetitions: rightArm.repetitions },
+        left: leftArm.value,
+        right: rightArm.value,
       },
       declared: deltas.deltas.unions,
     },
   };
+}
+
+/**
+ * One named arm of an arms report, with what its build resolved to.
+ *
+ * @param report - The arms report
+ * @param wanted - The arm `--left-arm`/`--right-arm` names
+ * @param flag - Which of the two, for the message
+ * @returns The arm's evidence, or why the report does not hold it
+ */
+function unionArmEvidence(report: ArmsReportFile, wanted: ArmName, flag: string): Validated<UnionArmEvidence> {
+  const arm = findArm(report.arms, wanted);
+  if (typeof arm === 'string') return { ok: false, refusal: `REFUSED: ${flag} ${arm}.` };
+  const build = report.builds.find((candidate) => candidate.alias === arm.build);
+  if (build === undefined) return { ok: false, refusal: `REFUSED: ${flag} names build '${arm.build}', which the report's builds do not hold.` };
+  return { ok: true, value: { name: armName(arm), instrument: build.instrument, failure: arm.failure, repetitions: arm.repetitions } };
 }
 
 /**

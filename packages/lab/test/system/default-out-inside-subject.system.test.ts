@@ -30,7 +30,11 @@ afterAll(cleanupVerdictFixtures);
 const LAB_BIN = resolveFromImportMeta(import.meta.url, '../../dist/bin/vat-lab.js');
 const CLI_DIST = resolveFromImportMeta(import.meta.url, '../../../cli/dist');
 
-/** One cheap command, one repeat or the facet's minimum: the subject of the test is WHERE the arms go. */
+/**
+ * One cheap command, one repeat or the facet's minimum: the subject of the test is WHERE the arms go.
+ * `--keep-arms` keeps the default run directory so its contents can be read; its removal without the
+ * flag is pinned by `perf-arms-private-output.system.test.ts`.
+ */
 const CASES: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['perf run', ['perf', 'run', '.', '--instrument', `dist:${CLI_DIST}`, '--command', 'skills-list', '--runs', '1']],
   ['perf ab', ['perf', 'ab', '.', '--instrument-a', `dist:${CLI_DIST}`, '--control', '--pairs', '1', '--command', 'skills-list', '--runs', '1']],
@@ -46,7 +50,7 @@ describe('the default --out inside the subject holds reports only', () => {
     const home = safePath.join(scratch, 'home');
     mkdirSyncReal(home);
 
-    const ran = spawnSync(NODE_EXECUTABLE, [LAB_BIN, ...args], {
+    const ran = spawnSync(NODE_EXECUTABLE, [LAB_BIN, ...args, '--keep-arms'], {
       cwd: subject,
       encoding: 'utf-8',
       env: { ...process.env, TMPDIR: scratch, TEMP: scratch, TMP: scratch, HOME: home, CLAUDE_CONFIG_DIR: home },
@@ -57,6 +61,7 @@ describe('the default --out inside the subject holds reports only', () => {
     expect(ran.stderr).not.toMatch(/REFUSED/u);
     const arms = /^Arms under (.+)$/mu.exec(ran.stderr)?.[1] ?? '';
     expect(toForwardSlash(arms).startsWith(`${toForwardSlash(scratch)}/vat-lab-arms-`), ran.stderr).toBe(true);
+    expect(ran.stderr).toContain(`Kept arms under ${arms}`);
     expect(readdirSync(arms).length).toBeGreaterThan(0);
     const out = safePath.join(subject, '.vat-lab');
     expect(readdirSync(out).length).toBeGreaterThan(0);

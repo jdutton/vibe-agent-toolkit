@@ -38,6 +38,8 @@
 
 import { z } from 'zod';
 
+import { describeIssues, recaptureRefusal } from '../harness/dumps.js';
+
 import { type Coordinate, CoordinateSchema } from './coordinate.js';
 
 /** A measurement of one facet at one coordinate. */
@@ -108,15 +110,26 @@ export type EnvelopeResult<TBody> = EnvelopeAccepted<TBody> | EnvelopeRefusal;
  */
 export function readEnvelope(value: unknown): EnvelopeResult<unknown> {
   const parsed = ReportEnvelopeSchema.safeParse(value);
-  if (!parsed.success) {
-    return {
-      ok: false,
-      refusal: `REFUSED: not a report envelope — ${parsed.error.issues
-        .map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
-        .join('; ')}`,
-    };
-  }
-  return { ok: true, envelope: parsed.data as ReportEnvelope<unknown> };
+  if (parsed.success) return { ok: true, envelope: parsed.data as ReportEnvelope<unknown> };
+  // A header naming a facet and a coordinate is a lab report whose shape moved;
+  // anything else is not a report at all, and blaming an older lab would lie.
+  const facet = labReportFacet(value);
+  return {
+    ok: false,
+    refusal:
+      facet === null
+        ? `REFUSED: not a report envelope — ${describeIssues(parsed.error)}`
+        : recaptureRefusal(`this ${facet} report`, parsed.error),
+  };
+}
+
+/**
+ * @param value - Parsed JSON from a stored report
+ * @returns The facet a lab report's header names, or `null` when `value` is not one
+ */
+function labReportFacet(value: unknown): string | null {
+  if (typeof value !== 'object' || value === null || !('coordinate' in value) || !('facet' in value)) return null;
+  return typeof value.facet === 'string' && value.facet !== '' ? value.facet : null;
 }
 
 /**

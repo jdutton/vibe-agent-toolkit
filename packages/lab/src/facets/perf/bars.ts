@@ -12,16 +12,27 @@
  * — each side in `perf arms --arm`'s spelling — and the factor is REQUIRED:
  * `1` says "no slower", and a bar that omitted it would read as a claim nobody
  * made. A bar over an arm with no measurement fails, naming why, and a bar
- * comparing an arm with itself is refused: it cannot fail.
+ * comparing an arm with itself is refused: it cannot fail. A report holding an
+ * arm that did not fail and is still not complete ({@link incompleteArm}: a
+ * repetition broke its rule, or fewer than five repetitions) is refused whole.
  *
  * The rendered verdicts are headed by what every alias WAS — its coordinate
- * as given and what it resolved to — and the load the arms ran under.
+ * as given and what it resolved to — every input the caller chose that decided
+ * the numbers, and the load the arms ran under.
  */
 
 import { instrumentLabel, loadLine } from '../../harness/render.js';
 import type { InstrumentSource } from '../../harness/types.js';
 
-import { type ArmName, armName, type ArmsReportFile, findArm, parseArmName } from './arms-report-file.js';
+import {
+  type ArmName,
+  armName,
+  type ArmsInputs,
+  type ArmsReportFile,
+  findArm,
+  incompleteArm,
+  parseArmName,
+} from './arms-report-file.js';
 import type { PerfSummary } from './stats.js';
 
 /** The two statistics a bar reads from each arm. */
@@ -50,9 +61,13 @@ export interface Bar {
   readonly right: BarArm;
 }
 
-/** What a bar reads from an arms report: the builds and load, and each arm's statistics or why it has none. */
-type BarReport = Pick<ArmsReportFile, 'builds' | 'load'> & {
-  readonly arms: readonly (BarArm & { readonly summary: BarSide | null; readonly failure: string | null })[];
+/** What a bar reads from an arms report: the inputs, builds and load, and each arm's statistics or why it has none. */
+type BarReport = Pick<ArmsReportFile, 'builds' | 'inputs' | 'load'> & {
+  readonly arms: readonly (BarArm & {
+    readonly summary: BarSide | null;
+    readonly failure: string | null;
+    readonly repetitions: readonly { readonly violation: string | null }[];
+  })[];
 };
 
 /** One bar's result. */
@@ -126,12 +141,15 @@ export function parseBar(text: string): Bar | string {
  *
  * @param report - `arms-report.json`, or anything carrying its arms
  * @param bars - The parsed bars
- * @returns One result per bar, or the refusal naming an arm the report does not hold
+ * @returns One result per bar, or the refusal naming an arm the report does not hold or an incomplete one
  */
 export function judgeBars(
   report: BarReport,
   bars: readonly Bar[],
 ): { readonly ok: true; readonly results: readonly BarResult[] } | { readonly ok: false; readonly refusal: string } {
+  // A failed arm fails every bar over it, naming its failure, below; any other incomplete arm refuses the report.
+  const incomplete = report.arms.filter((arm) => arm.failure === null).map((arm) => incompleteArm(arm)).find((why) => why !== null);
+  if (incomplete !== undefined) return { ok: false, refusal: incomplete };
   const results: BarResult[] = [];
   for (const bar of bars) {
     const left = findArm(report.arms, bar.left);
@@ -162,6 +180,7 @@ export function renderBars(report: BarReport, results: readonly BarResult[]): st
   return [
     'Builds:',
     ...report.builds.map((build) => `  ${build.alias}: ${instrumentLabel(build.instrument)} from ${sourceLabel(build.source)}`),
+    ...inputLines(report.inputs),
     loadLine(report.load, LOAD_PHRASING),
     ...results.map((result) => `${result.verdict.toUpperCase()}  ${result.bar.text}  (${detailOf(result)})`),
   ].join('\n');
@@ -172,6 +191,21 @@ const LOAD_PHRASING = {
   unmeasured: 'these verdicts carry no contamination check.',
   contaminated: 'treat these verdicts as indicative only.',
 } as const;
+
+/**
+ * @param inputs - What the caller chose for the arms
+ * @returns The inputs, each in the flag spelling that chose it
+ */
+function inputLines(inputs: ArmsInputs): readonly string[] {
+  const lines = [
+    ...Object.entries(inputs.env.set).map(([key, value]) => `  --env ${key}=${value}`),
+    ...inputs.env.unset.map((key) => `  --unset ${key}`),
+    ...inputs.expectedExits.map((expected) => `  --expect-exit ${expected.build}:${expected.sequence}:${expected.step}=${String(expected.exit)}`),
+    ...inputs.prerequisites.map((prerequisite) => `  --prerequisite ${prerequisite}`),
+    ...(inputs.timeoutMs === null ? [] : [`  --timeout-ms ${String(inputs.timeoutMs)}`]),
+  ];
+  return lines.length === 0 ? ['Inputs: none — no --env, --unset, --expect-exit, --prerequisite or --timeout-ms'] : ['Inputs:', ...lines];
+}
 
 /**
  * @param source - An instrument as the operator named it

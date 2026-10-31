@@ -167,7 +167,7 @@ async function runFixture(options: FixtureOptions, label: string): Promise<Fixtu
     return Promise.resolve(
       buildReportEnvelope('fake', request, {
         commands: [{ name: COMMAND, failed: false, value }],
-      }),
+      }, []),
     );
   };
 

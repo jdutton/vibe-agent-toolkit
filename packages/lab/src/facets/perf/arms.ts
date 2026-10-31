@@ -128,7 +128,7 @@ export interface ExpectedExit {
 
 /**
  * A registered CI sequence as one build's timed steps, each carrying its
- * committed exits and population reader.
+ * one committed exit and population reader.
  *
  * @param sequence - A {@link MeasuredSequenceSpec}
  * @param build - The build whose arm runs it
@@ -145,7 +145,7 @@ export function sequenceSteps(
     const set = expected.find(
       (candidate) => candidate.build === build && candidate.sequence === sequence.name && candidate.step === step.name,
     );
-    return set === undefined ? step : { ...step, expectedExits: [set.exit] };
+    return set === undefined ? step : { ...step, expectedExit: set.exit };
   });
 }
 

@@ -146,6 +146,24 @@ describe('clearedEnvironment', () => {
     expect(cleared.removed).toStrictEqual(['VAT_PROJECTION_STORE', 'VAT_RESOURCES_CRAWL']);
   });
 
+  it("clears the developer's npm config from a VAT step in any case, keeping what the arm sets, and keeps it for a tool step", () => {
+    const npm: NodeJS.ProcessEnv = {
+      PATH: '/bin',
+      npm_config_userconfig: '/home/dev/.npmrc',
+      'npm_config_//registry.example/:_authToken': 'secret',
+      NPM_CONFIG_REGISTRY: 'https://registry.example/',
+      npm_config_cache: '/home/dev/.npm',
+    };
+    const arm = { set: { npm_config_cache: '/arm/npm-cache' }, unset: [] };
+
+    const vat = clearedEnvironment(npm, 'vat', arm, 'linux');
+    const env = buildArmEnv(npm, vat.env);
+    expect(vat.removed).toStrictEqual(['NPM_CONFIG_REGISTRY', 'npm_config_//registry.example/:_authToken', 'npm_config_userconfig']);
+    expect(env['npm_config_cache']).toBe('/arm/npm-cache');
+    expect(env['PATH']).toBe('/bin');
+    expect(clearedEnvironment(npm, 'tool', arm, 'linux').removed).toStrictEqual([]);
+  });
+
   it('lets the arm set a cleared name, which is then not recorded as removed', () => {
     const cleared = clearedEnvironment(DEVELOPER, 'vat', { set: { TMPDIR: '/arm/tmp' }, unset: [] }, 'linux');
     expect(buildArmEnv(DEVELOPER, cleared.env)['TMPDIR']).toBe('/arm/tmp');
@@ -162,6 +180,9 @@ describe('clearedEnvironment', () => {
     GIT_CONFIG_PARAMETERS: "'core.autocrlf'='true'",
     GIT_CONFIG_SYSTEM: '/etc/dev-gitconfig',
     GIT_CONFIG_NOSYSTEM: '1',
+    GIT_ATTR_NOSYSTEM: '0',
+    GIT_EXEC_PATH: '/home/dev/git-core',
+    GIT_TEMPLATE_DIR: '/home/dev/git-templates',
     GIT_DIR: '/elsewhere/.git',
     GIT_WORK_TREE: '/elsewhere',
     GIT_INDEX_FILE: '/elsewhere/.git/index',
@@ -176,7 +197,17 @@ describe('clearedEnvironment', () => {
     GIT_AUTHOR_NAME: 'kept',
   };
   /** The developer's own config channel: cleared from a VAT step, kept for a tool step. */
-  const CONFIG = ['GIT_CONFIG', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_VALUE_0'];
+  const CONFIG = [
+    'GIT_ATTR_NOSYSTEM',
+    'GIT_CONFIG',
+    'GIT_CONFIG_COUNT',
+    'GIT_CONFIG_KEY_0',
+    'GIT_CONFIG_NOSYSTEM',
+    'GIT_CONFIG_SYSTEM',
+    'GIT_CONFIG_VALUE_0',
+    'GIT_EXEC_PATH',
+    'GIT_TEMPLATE_DIR',
+  ];
   /** What git exports into a hook ({@link INHERITED_GIT_ENV}): cleared from both kinds. */
   const LOCATING = [
     'GIT_CEILING_DIRECTORIES',

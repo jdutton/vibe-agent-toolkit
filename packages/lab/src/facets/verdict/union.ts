@@ -16,18 +16,26 @@
  * - **One tree.** Both captures are of one subject at one subject version, and
  *   each ran in the prepared clone the arms ran in (`VerdictBody.preparedClone`
  *   against the arms report's `prepared.path`), at its commit, clean.
+ * - **Inputs that belong together.** Each capture was measured with its named
+ *   arm's build, and each side's rows are that arm's timed steps, in order.
+ * - **Complete arms.** Neither arm failed, no repetition broke its rule, and
+ *   each has at least five repetitions (`incompleteArm`): a failed round is
+ *   never read as one that completed.
  * - **Findings, both ways.** `union(B) ⊆ findings(C)`, and what C finds beyond
  *   `union(B)` is exactly the deltas file's `unions` entry for this pair —
  *   an undeclared extra fails, and so does a declared one C did not report.
  * - **Exits, every round.** Paired by round, C's exit is B's first non-zero
- *   step exit (0 when every step passed), and never 2: a run that did not
- *   complete is never what CI would have reported.
+ *   step exit (0 when every step passed) after the entry's declared `exit`
+ *   move, and never 2: a run that did not complete is never what CI would have
+ *   reported. A declared move whose `from` is not B's exit fails too.
  */
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 
-import { movedAxes } from '../../envelope/coordinate.js';
+import { type InstrumentVersion, movedAxes } from '../../envelope/coordinate.js';
 import type { ReportEnvelope } from '../../envelope/envelope.js';
+import { instrumentLabel } from '../../harness/render.js';
+import { incompleteArm, parseArmName } from '../perf/arms-report-file.js';
 
 import { type DeclaredUnionFinding, unionFindingIdentity, type VerdictDeltas } from './deltas.js';
 import { rowLinedFindings } from './extract.js';
@@ -81,13 +89,20 @@ export interface UnionSide {
 
 /** One timed arm's rounds, as an arms report records them. */
 export interface UnionArmEvidence {
-  /** The arm, in `--arm` spelling, for the message. */
+  /** The arm, in `--arm` spelling. */
   readonly name: string;
+  /** What its build resolved to, from the arms report's `builds`. */
+  readonly instrument: InstrumentVersion;
+  readonly failure: string | null;
   readonly repetitions: readonly {
     readonly exitCode: number | null;
-    readonly steps: readonly { readonly name: string; readonly exitCode: number | null }[];
+    readonly violation: string | null;
+    readonly steps: readonly { readonly name: string; readonly timed: boolean; readonly exitCode: number | null }[];
   }[];
 }
+
+/** A unions entry's declared move of C's exit. */
+type ExitMove = NonNullable<VerdictDeltas['unions'][number]['exit']>;
 
 /** Everything bar 3 is judged over. */
 export interface UnionRequest {
@@ -130,7 +145,11 @@ export type UnionJudgement =
 export function judgeUnion(request: UnionRequest): UnionJudgement {
   const tree = oneTreeRefusal(request);
   if (tree !== null) return refused(tree);
-  const exits = exitViolations(request.arms.left, request.arms.right);
+  const belonging = belongingRefusal(request);
+  if (belonging !== null) return refused(belonging);
+  const declared = declaredEntry(request);
+  if (!declared.ok) return declared;
+  const exits = exitViolations(request.arms.left, request.arms.right, declared.exit);
   if (!exits.ok) return exits;
   const from = unionFindings(request.left.envelope.body, request.left.rows);
   if (!from.ok) return from;
@@ -141,8 +160,6 @@ export function judgeUnion(request: UnionRequest): UnionJudgement {
   const missing = from.keys.filter((key) => !present.has(identity(key)));
   const covered = new Set(from.keys.map((key) => identity(key)));
   const extras = into.keys.filter((key) => !covered.has(identity(key)));
-  const declared = declaredExtras(request);
-  if (!declared.ok) return declared;
   const matched = multisetDifference(declared.findings, extras, unionFindingIdentity);
   const passed = missing.length === 0 && matched.onlyLeft.length === 0 && matched.onlyRight.length === 0 && exits.violations.length === 0;
   return { ok: true, passed, missing, undeclared: matched.onlyRight, unused: matched.onlyLeft, exitViolations: exits.violations };
@@ -174,15 +191,44 @@ function oneTreeRefusal(request: UnionRequest): string | null {
 }
 
 /**
+ * @param request - Bar 3's inputs
+ * @returns Why the captures, rows and arms do not belong together or an arm is incomplete, or `null`
+ */
+function belongingRefusal(request: UnionRequest): string | null {
+  const sides = [
+    { label: 'left', side: request.left, arm: request.arms.left },
+    { label: 'right', side: request.right, arm: request.arms.right },
+  ] as const;
+  for (const { arm } of sides) {
+    const parsed = parseArmName(arm.name);
+    const incomplete = parsed === null ? `'${arm.name}' is not an arm name` : incompleteArm({ ...parsed, ...arm });
+    if (incomplete !== null) return incomplete;
+  }
+  for (const { label, side, arm } of sides) {
+    const measured = side.envelope.coordinate.instrument;
+    if (JSON.stringify(measured) !== JSON.stringify(arm.instrument)) {
+      return `the ${label} capture was measured with ${instrumentLabel(measured)}, but ${arm.name} ran ${instrumentLabel(arm.instrument)}`;
+    }
+    const steps = (arm.repetitions[0]?.steps ?? []).filter((step) => step.timed).map((step) => step.name);
+    if (steps.join(',') !== side.rows.join(',')) {
+      return `the ${label} rows are ${side.rows.join(', ')}, but ${arm.name}'s timed steps are ${steps.join(', ')}`;
+    }
+  }
+  return null;
+}
+
+/**
  * Pair B's and C's rounds and check C's exit on every one.
  *
  * @param left - B's arm
  * @param right - C's arm
+ * @param move - The unions entry's declared move of C's exit, or `null`
  * @returns One violation per round that breaks the rule, or the refusal when rounds cannot be paired
  */
 function exitViolations(
   left: UnionArmEvidence,
   right: UnionArmEvidence,
+  move: ExitMove | null,
 ): { readonly ok: true; readonly violations: readonly string[] } | { readonly ok: false; readonly refusal: string } {
   if (left.repetitions.length !== right.repetitions.length || left.repetitions.length === 0) {
     return refused(`the exit rule pairs rounds, but there are ${String(left.repetitions.length)} round(s) of ${left.name} against ${String(right.repetitions.length)} of ${right.name}`);
@@ -193,27 +239,45 @@ function exitViolations(
     const c = right.repetitions[index]?.exitCode ?? null;
     const unexited = b.steps.find((step) => step.exitCode === null);
     if (c === null || unexited !== undefined) return refused(`${round}: a step never exited, so it has no exit to judge`);
-    const expected = b.steps.find((step) => step.exitCode !== 0)?.exitCode ?? 0;
+    const before = b.steps.find((step) => step.exitCode !== 0)?.exitCode ?? 0;
+    if (move !== null && move.from !== before) {
+      violations.push(`${round}: the unions entry moves C's exit from ${String(move.from)} to ${String(move.to)}, but ${left.name}'s first non-zero step exit is ${String(before)}`);
+      continue;
+    }
+    const expected = move === null ? before : move.to;
     if (c === ExitCode.ERROR) violations.push(`${round}: ${right.name} exited 2 — a run that did not complete is never a bar-3 exit`);
-    else if (c !== expected) violations.push(`${round}: ${right.name} exited ${String(c)}, but ${left.name}'s first non-zero step exit is ${String(expected)}`);
+    else if (c !== expected) violations.push(`${round}: ${right.name} exited ${String(c)}, but ${expectedPhrase(left.name, before, move)}`);
   }
   return { ok: true, violations };
 }
 
 /**
- * @param request - Bar 3's inputs
- * @returns The extras the deltas file declares for this subject and pair, or the refusal for a repeated entry
+ * @param left - B's arm name
+ * @param before - B's first non-zero step exit
+ * @param move - The declared move, or `null`
+ * @returns What C's exit was held to, in words
  */
-function declaredExtras(
+function expectedPhrase(left: string, before: number, move: ExitMove | null): string {
+  const first = `${left}'s first non-zero step exit is ${String(before)}`;
+  return move === null ? first : `${first}, moved to ${String(move.to)} by the unions entry`;
+}
+
+/**
+ * @param request - Bar 3's inputs
+ * @returns The extras and exit move the deltas file declares for this subject and pair, or the refusal for a repeated entry
+ */
+function declaredEntry(
   request: UnionRequest,
-): { readonly ok: true; readonly findings: readonly DeclaredUnionFinding[] } | { readonly ok: false; readonly refusal: string } {
+):
+  | { readonly ok: true; readonly findings: readonly DeclaredUnionFinding[]; readonly exit: ExitMove | null }
+  | { readonly ok: false; readonly refusal: string } {
   const alias = request.left.envelope.coordinate.subject.id;
   const same = (a: readonly string[], b: readonly string[]): boolean => JSON.stringify(a) === JSON.stringify(b);
   const entries = request.declared.filter(
     (entry) => entry.subject === alias && same(entry.left, request.left.rows) && same(entry.right, request.right.rows),
   );
   if (entries.length > 1) return refused(`the deltas file declares subject '${alias}' and this pair of sequences ${String(entries.length)} times; declare it once`);
-  return { ok: true, findings: entries[0]?.findingsAdded ?? [] };
+  return { ok: true, findings: entries[0]?.findingsAdded ?? [], exit: entries[0]?.exit ?? null };
 }
 
 /**

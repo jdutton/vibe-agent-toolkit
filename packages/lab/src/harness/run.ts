@@ -229,11 +229,19 @@ function envValue(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): (name: str
  * @param path - A candidate file
  * @param entry - The PATH entry it is under, beneath which its links are walked
  * @param windows - Whether existence alone makes it launchable
- * @returns Whether it is a file the OS would run; absent, a dangling link or (POSIX) not executable is `false`
- * @throws the OS's own refusal of the probe, and a link chain VAT will not hand the kernel
+ * @returns Whether it is a file the OS would run; absent, unsearchable, a dangling link or (POSIX) not executable is `false`
+ * @throws a link chain VAT will not hand the kernel, and any fault but a refusal
  */
 function isLaunchable(path: string, entry: string, windows: boolean): boolean {
-  if (followedStatSync(path, entry)?.isFile() !== true) return false;
+  let stat: ReturnType<typeof followedStatSync>;
+  try {
+    stat = followedStatSync(path, entry);
+  } catch (error: unknown) {
+    // An entry this user may not search: execvp passes it over and tries the next.
+    if (fsFaultOf(error)?.faultClass === 'refused') return false;
+    throw error;
+  }
+  if (stat?.isFile() !== true) return false;
   if (windows) return true;
   try {
     accessSync(path, constants.X_OK);

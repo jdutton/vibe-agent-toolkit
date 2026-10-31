@@ -83,11 +83,23 @@ describe('readEnvelope', () => {
     expect(result.refusal).toContain('dirty');
   });
 
-  it('refuses a value that is not an envelope at all', () => {
+  it('refuses a value that is not an envelope at all — and does not blame an older lab for it', () => {
     const result = readEnvelope({ hello: 'world' });
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('unreachable');
-    expect(result.refusal).toMatch(/^REFUSED:/);
+    expect(result.refusal).toMatch(/^REFUSED: not a report envelope/u);
+    expect(result.refusal).not.toContain('re-capture');
+  });
+
+  it('refuses a report an older lab captured (no removedEnv) by naming the cause and the remedy, then the field', () => {
+    const older = Object.fromEntries(Object.entries(stored()).filter(([key]) => key !== 'removedEnv'));
+    const result = readEnvelope(older);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.refusal).toMatch(
+      /^REFUSED: this perf report was captured by a lab whose report shape differs from this one \(usually an older lab\) — re-capture it\./u,
+    );
+    expect(result.refusal).toContain('removedEnv');
   });
 
   it('refuses an envelope carrying an unknown header field', () => {

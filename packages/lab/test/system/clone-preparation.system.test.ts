@@ -41,12 +41,12 @@ function subject(): string {
 }
 
 /** An untimed tool step running `node -e <script>` in the clone. */
-function nodeStep(name: string, script: string, expectedExits: readonly number[] = [0]): SequenceStep {
+function nodeStep(name: string, script: string): SequenceStep {
   return {
     name,
     command: { kind: 'tool', command: process.execPath, args: ['-e', script] },
     timed: false,
-    expectedExits,
+    expectedExit: 0,
     provenance: 'none',
     populates: false,
   };
@@ -193,7 +193,7 @@ describe('prepareClone', () => {
       name: 'hide',
       command: { kind: 'tool', command: gitExecutable(), args: ['update-index', '--assume-unchanged', 'README.md'] },
       timed: false,
-      expectedExits: [0],
+      expectedExit: 0,
       provenance: 'none',
       populates: false,
     };

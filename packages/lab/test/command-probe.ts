@@ -67,9 +67,9 @@ export const PROBE_FAIL_AT_ENV = 'LAB_PROBE_FAIL_AT';
  * {@link PROBE_FAIL_EXIT}.
  *
  * Exists so a suite can fixture vat's *findings* exit. `1` is not a crash — a
- * spec may declare it a completed run — and the difference between "every repeat
- * exited 1 and the spec accepts 1" and "every repeat exited 3" is precisely what
- * `completedExitCodes` decides. Without a controllable code, no fixture could
+ * spec may commit to it — and the difference between "every repeat exited 1
+ * and the spec committed to 1" and "every repeat exited 3" is precisely what
+ * `expectedExit` decides. Without a controllable code, no fixture could
  * make those two answers differ.
  */
 export const PROBE_EXIT_CODE_ENV = 'LAB_PROBE_EXIT_CODE';
@@ -139,6 +139,13 @@ export const PROBE_POPULATE_ENV = 'LAB_PROBE_POPULATE';
 export const PROBE_POPULATE_STORE_ONLY = 'store-only';
 export const PROBE_POPULATE_EMPTY_SHARD_DIR = 'empty-shard-dir';
 
+/**
+ * A {@link PROBE_POPULATE_ENV} value that writes the store and a shard even when
+ * the arm turned them off. Every other value obeys `VAT_PROJECTION_STORE` and
+ * `VAT_CACHE` as vat does, so only this one can show an off switch being ignored.
+ */
+export const PROBE_POPULATE_IGNORING_SWITCHES = 'ignoring-switches';
+
 /** The cache namespace the probe's fake resources package names. */
 const PROBE_NAMESPACE = 'probe-ns';
 
@@ -169,7 +176,9 @@ const PROBE_SOURCE = [
   "if (process.argv[2] === '--version' && process.argv.length === 3) { process.stdout.write('probe'); process.exit(0); }",
   "const { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } = require('node:fs');",
   "const { tmpdir } = require('node:os');",
-  "const { dirname, join } = require('node:path');",
+  "const { dirname, join, resolve } = require('node:path');",
+  // The lab hands paths in forward slashes; `join` spells them natively. `resolve` makes one spelling of both.
+  'const samePath = (a, b) => a !== undefined && b !== undefined && resolve(a) === resolve(b);',
   'const store = process.env.VAT_PROJECTION_STORE_DIR;',
   'const home = process.env.HOME;',
   'const storeExisted = store === undefined ? null : existsSync(store);',
@@ -183,15 +192,20 @@ const PROBE_SOURCE = [
   'const homeEntries = home === undefined || !existsSync(home) ? null : readdirSync(home).length;',
   // An ARM's tmp only (the store's sibling): counted at start, before anything below writes there.
   "const armTmp = store === undefined ? undefined : join(store, '..', 'tmp');",
-  'const tmpEntries = armTmp !== undefined && process.env.TMPDIR === armTmp && existsSync(armTmp) ? readdirSync(armTmp).length : null;',
+  'const tmpEntries = samePath(process.env.TMPDIR, armTmp) && existsSync(armTmp) ? readdirSync(armTmp).length : null;',
+  "const falseish = (v) => v !== undefined && ['0', 'false', 'no', 'n', 'off'].includes(v.trim().toLowerCase());",
+  `const ignoring = process.env.${PROBE_POPULATE_ENV} === ${JSON.stringify(PROBE_POPULATE_IGNORING_SWITCHES)};`,
+  'const cacheOn = ignoring || !falseish(process.env.VAT_CACHE);',
+  "const selector = process.env.VAT_PROJECTION_STORE;",
+  "const storeOn = ignoring || (cacheOn && (selector === undefined || (selector.trim() !== '' && !falseish(selector))));",
   `if (process.env.${PROBE_POPULATE_ENV} !== undefined) {`,
-  "  if (store !== undefined) { mkdirSync(store, { recursive: true }); writeFileSync(join(store, 'projection.db'), 'probe'); }",
+  "  if (store !== undefined && storeOn) { mkdirSync(store, { recursive: true }); writeFileSync(join(store, 'projection.db'), 'probe'); }",
   `  const parse = join(tmpdir(), '.vat-cache', ${JSON.stringify(PROBE_NAMESPACE)}, 'parse', 'ab');`,
-  `  if (process.env.${PROBE_POPULATE_ENV} !== ${JSON.stringify(PROBE_POPULATE_STORE_ONLY)}) mkdirSync(parse, { recursive: true });`,
-  `  if (process.env.${PROBE_POPULATE_ENV} === '1') writeFileSync(join(parse, 'key.json'), '{}');`,
+  `  if (cacheOn && process.env.${PROBE_POPULATE_ENV} !== ${JSON.stringify(PROBE_POPULATE_STORE_ONLY)}) mkdirSync(parse, { recursive: true });`,
+  `  if (cacheOn && (process.env.${PROBE_POPULATE_ENV} === '1' || ignoring)) writeFileSync(join(parse, 'key.json'), '{}');`,
   '}',
   // Only ever into an ARM's home (the store's sibling), never a real one.
-  "if (store !== undefined && home === join(store, '..', 'home') && existsSync(home)) writeFileSync(join(home, 'left-by-probe'), 'x');",
+  "if (store !== undefined && samePath(home, join(store, '..', 'home')) && existsSync(home)) writeFileSync(join(home, 'left-by-probe'), 'x');",
   "if (tmpEntries !== null) writeFileSync(join(armTmp, 'left-by-probe-' + String(process.pid)), 'x');",
   `const log = join(process.cwd(), ${JSON.stringify(PROBE_LOG)});`,
   'let priorChildren = 0;',
@@ -286,10 +300,10 @@ export function setupProbe(prefix = 'lab-probe-'): Probe {
  * (from the instrument's own module resolution) — under whatever `TMPDIR` the
  * arm hands it.
  *
- * @param cwd - The probe directory
+ * @param base - The directory whose `node_modules` gets it: the probe directory, or an npx project
  */
-function writeFakeResourcesPackage(cwd: string): void {
-  const dir = safePath.join(cwd, 'node_modules', '@vibe-agent-toolkit', 'resources');
+export function writeFakeResourcesPackage(base: string): void {
+  const dir = safePath.join(base, 'node_modules', '@vibe-agent-toolkit', 'resources');
   mkdirSyncReal(dir, { recursive: true });
   writeFileSync(
     safePath.join(dir, 'package.json'),
@@ -376,10 +390,10 @@ export function probeArmsRoot(probe: Probe): string {
 }
 
 /** A command the probe always completes. */
-export const PROBE_PASSES: MeasuredCommandSpec = { name: 'audit', args: ['audit'], provenance: 'none', populates: false };
+export const PROBE_PASSES: MeasuredCommandSpec = { name: 'audit', args: ['audit'], expectedExit: 0, provenance: 'none', populates: false };
 
 /** A command the probe fails on every repeat, by argv. */
-export const PROBE_FAILS: MeasuredCommandSpec = { name: 'broken', args: [PROBE_FAIL_TOKEN], provenance: 'none', populates: false };
+export const PROBE_FAILS: MeasuredCommandSpec = { name: 'broken', args: [PROBE_FAIL_TOKEN], expectedExit: 0, provenance: 'none', populates: false };
 
 /**
  * No repeats at all, cold. Cold on purpose: a cold reset hoisted out of the
@@ -427,7 +441,7 @@ export function probeStep(args: readonly string[], overrides: Partial<SequenceSt
     name: args[0] ?? 'probe',
     command: { kind: 'vat', args },
     timed: true,
-    expectedExits: [0],
+    expectedExit: 0,
     provenance: 'none',
     populates: false,
     ...overrides,

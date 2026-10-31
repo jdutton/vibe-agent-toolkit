@@ -44,7 +44,35 @@ function standInBuild(): ResolvedInstrument {
   const build = mkdirSyncReal(safePath.join(scratch, 'build'));
   const entry = safePath.join(build, 'bin.js');
   writeFileSync(entry, '');
-  const resources = mkdirSyncReal(safePath.join(build, 'node_modules', '@vibe-agent-toolkit', 'resources'), { recursive: true });
+  writeStandInResources(build);
+  return { command: NODE_EXECUTABLE, leadingArgs: [entry], version: PROBE_VERSION };
+}
+
+/** An `npx` build as `resolveInstrument` makes one: bare `npx`, the pinned spec, no root. */
+const NPX_BUILD: ResolvedInstrument = {
+  command: 'npx',
+  leadingArgs: ['--yes', '@vibe-agent-toolkit/cli@0.0.0-probe'],
+  version: PROBE_VERSION,
+};
+
+/**
+ * Lay out what `npx` leaves in an arm's npm cache after the untimed start: one
+ * `_npx/<hash>/` project whose `node_modules` holds the build's resources.
+ *
+ * @param dirs - The arm
+ * @param hash - The `_npx` project directory's name
+ */
+function npxInstall(dirs: ReturnType<typeof armDirectories>, hash: string): void {
+  const project = mkdirSyncReal(safePath.join(dirs.npmCache, '_npx', hash), { recursive: true });
+  writeFileSync(safePath.join(project, 'package.json'), JSON.stringify({ dependencies: { '@vibe-agent-toolkit/cli': '0.0.0-probe' } }));
+  writeStandInResources(project);
+}
+
+/**
+ * @param base - The directory whose `node_modules` gets the stand-in resources package
+ */
+function writeStandInResources(base: string): void {
+  const resources = mkdirSyncReal(safePath.join(base, 'node_modules', '@vibe-agent-toolkit', 'resources'), { recursive: true });
   writeFileSync(
     safePath.join(resources, 'package.json'),
     JSON.stringify({ name: '@vibe-agent-toolkit/resources', type: 'module', exports: { '.': { default: './index.js' } } }),
@@ -61,7 +89,6 @@ function standInBuild(): ResolvedInstrument {
       '',
     ].join('\n'),
   );
-  return { command: NODE_EXECUTABLE, leadingArgs: [entry], version: PROBE_VERSION };
 }
 
 /** @returns A prepared arm under the scratch directory */
@@ -90,5 +117,31 @@ describe('resolveParseCacheDirectory', () => {
 
     expect(resolved.ok).toBe(false);
     expect(resolved.ok ? '' : resolved.reason).toMatch(/not under the arm's tmp/u);
+  });
+
+  it('resolves an npx build from the package npx installed into the arm’s own npm cache', () => {
+    const dirs = arm();
+    npxInstall(dirs, 'a1b2c3');
+
+    expect(resolveParseCacheDirectory(NPX_BUILD, dirs)).toStrictEqual({
+      ok: true,
+      dir: safePath.join(dirs.tmp, '.vat-cache', 'ns', 'parse'),
+    });
+  });
+
+  it('refuses an npx build the arm’s npm cache does not hold yet — never a guess', () => {
+    const resolved = resolveParseCacheDirectory(NPX_BUILD, arm());
+
+    expect(resolved.ok ? '' : resolved.reason).toMatch(/npm cache '.*' holds no npx install/u);
+  });
+
+  it('refuses an npm cache holding two npx installs — it cannot say which is this build', () => {
+    const dirs = arm();
+    npxInstall(dirs, 'one');
+    npxInstall(dirs, 'two');
+
+    const resolved = resolveParseCacheDirectory(NPX_BUILD, dirs);
+
+    expect(resolved.ok ? '' : resolved.reason).toMatch(/holds 2 npx installs/u);
   });
 });

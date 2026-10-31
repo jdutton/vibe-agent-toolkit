@@ -54,13 +54,16 @@
  * `unions` declares, per subject and per (left rows, right rows) pair that
  * `verdict union` judges, every finding the right sequence reports beyond the
  * left one's union — keyed as the union is, by `(code, location, line,
- * severity)`, with the same `locationDigest` escape. Absent, it declares
- * none: an omission fails the union, it never excuses it. `verdict compare`
+ * severity)`, with the same `locationDigest` escape — and, as `exit: { from,
+ * to }`, a move of the right's exit away from the left's first non-zero step
+ * exit (never to 2). Absent, it declares none: an omission fails the union,
+ * it never excuses it, and an entry must declare one or the other. `verdict compare`
  * does not read it, but checks its changelog references like every entry's.
  */
 
 import { readFileSync } from 'node:fs';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
@@ -223,11 +226,20 @@ export const VerdictDeltasSchema = z
             /** The right sequence's rows, as `--right` names them. */
             right: z.array(z.string().min(1)).min(1),
             /** Every finding the right union reports beyond the left one. */
-            findingsAdded: z.array(DeclaredUnionFindingSchema).min(1),
+            findingsAdded: z.array(DeclaredUnionFindingSchema).default([]),
+            /** The right's exit, moved from the left's first non-zero step exit; never to 2. */
+            exit: z
+              .object({ from: z.number().int(), to: z.number().int() })
+              .strict()
+              .refine((move) => move.to !== ExitCode.ERROR, { message: 'a declared exit never moves to 2 — a run that did not complete' })
+              .optional(),
             changelog: ChangelogReferenceSchema,
             reason: z.string().min(10),
           })
-          .strict(),
+          .strict()
+          .refine((entry) => entry.findingsAdded.length > 0 || entry.exit !== undefined, {
+            message: 'a unions entry declares neither findingsAdded nor an exit — it declares nothing',
+          }),
       )
       .default([]),
   })

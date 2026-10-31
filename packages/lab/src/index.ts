@@ -373,8 +373,6 @@ export {
 } from './harness/arm-env.js';
 export { type ArmIdentity, closureDigest, indistinguishableArms } from './harness/closure.js';
 export {
-  completedExitCodesOf,
-  DEFAULT_COMPLETED_EXIT_CODES,
   DEFAULT_MEASURED_COMMANDS,
   MEASURABLE_COMMAND_NAMES,
   MEASURABLE_COMMANDS,
