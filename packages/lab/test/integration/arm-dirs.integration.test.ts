@@ -13,7 +13,15 @@
 import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
-import { createSymlink, mkdirSyncReal, normalizedTmpdir, normalizePath, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import {
+  createSymlink,
+  mkdirSyncReal,
+  normalizedTmpdir,
+  normalizePath,
+  safePath,
+  symlinkCapability,
+  toForwardSlash,
+} from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -365,7 +373,8 @@ async function underDefaultRoot(body: (root: ArmsRootHandle) => Promise<void>): 
  */
 function fakeClone(root: string): string {
   prepareArmDirectories(armDirectories({ root, build: 'cand', arm: 'C', state: 'cold' }));
-  const clone = mkdirSyncReal(safePath.join(root, 'clone'));
+  // mkdirSyncReal answers natively (backslashes on win32); the lab hands out forward-slash paths.
+  const clone = toForwardSlash(mkdirSyncReal(safePath.join(root, 'clone')));
   writeFileSync(safePath.join(clone, 'README.md'), 'cloned');
   // A subject may track a file of the arm marker's name; its clone is still not an arm.
   writeFileSync(safePath.join(clone, '.vat-lab-arm'), 'tracked by the subject');
