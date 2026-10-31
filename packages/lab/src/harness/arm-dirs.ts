@@ -355,22 +355,41 @@ async function keepChild(root: ArmsRoot, keep: boolean, name: string, write: (ke
   try {
     write(moved.kept);
   } catch (error: unknown) {
-    try {
-      await renameFileAtomic(moved.kept, inside);
-      await applyTreePlan(await planTreeChanges([holderRemoval(moved.holder)]));
-    } catch (back: unknown) {
-      throw bothFailures(error, `moving '${moved.kept}' back into the run directory`, back);
-    }
+    await moveBack(error, moved, inside);
     throw error;
   }
   return { path: moved.kept, unmoved: null };
 }
 
 /**
+ * Undo a {@link moveOut} after the report could not be written to the moved
+ * child, so the run directory is whole again for its removal.
+ *
+ * @param error - Why the report could not be written
+ * @param moved - Where the child was moved, and its holder
+ * @param inside - Its path in the run directory
+ * @throws {@link bothFailures} naming the step that failed: the move back, or
+ *   removing the holder it left empty
+ */
+async function moveBack(error: unknown, moved: { readonly kept: string; readonly holder: string }, inside: string): Promise<void> {
+  try {
+    await renameFileAtomic(moved.kept, inside);
+  } catch (back: unknown) {
+    throw bothFailures(error, `moving '${moved.kept}' back into the run directory`, back);
+  }
+  try {
+    await removeHolder(moved.holder);
+  } catch (removal: unknown) {
+    throw bothFailures(error, `removing the empty '${moved.holder}' after moving the clone back`, removal);
+  }
+}
+
+/**
  * Move a child of a default run directory into a fresh `<base>/<name>-XXXXXX/`
  * beside it. `mkdtemp` makes the holder, so nothing can already be at the
  * destination and no check races the rename; a holder left empty by a failed
- * rename is removed.
+ * rename is removed, and a failure to remove it is said in the reason, never
+ * thrown: the report is still written, to the child's place in the run directory.
  *
  * @param root - A default run directory
  * @param name - The child
@@ -390,9 +409,20 @@ async function moveOut(
     await renameFileAtomic(inside, kept);
     return { ok: true, kept, holder };
   } catch (error: unknown) {
-    if (holder !== null) await applyTreePlan(await planTreeChanges([holderRemoval(holder)]));
-    return { ok: false, reason: messageOf(error) };
+    const reason = messageOf(error);
+    if (holder === null) return { ok: false, reason };
+    try {
+      await removeHolder(holder);
+    } catch (removal: unknown) {
+      return { ok: false, reason: `${reason}; and the empty '${holder}' could not be removed: ${messageOf(removal)}` };
+    }
+    return { ok: false, reason };
   }
+}
+
+/** @param holder - A `<base>/<name>-XXXXXX/` the lab just made, removed while it is still empty */
+async function removeHolder(holder: string): Promise<void> {
+  await applyTreePlan(await planTreeChanges([holderRemoval(holder)]));
 }
 
 /**

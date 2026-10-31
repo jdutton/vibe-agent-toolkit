@@ -299,6 +299,8 @@ function aggregate(steps: readonly StepResult[], violation: string | null): Sequ
   return {
     wallMs: steps.filter((step) => step.timed).reduce((sum, step) => sum + step.wallMs, 0),
     exitCode,
+    // A repetition started when every step it reached did.
+    started: steps.length > 0 && steps.every((step) => step.started),
     stdout: steps.map((step) => step.stdout).join(''),
     stderr: steps.map((step) => step.stderr).join(''),
     spawnError: steps.find((step) => step.spawnError !== null)?.spawnError ?? null,

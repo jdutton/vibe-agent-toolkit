@@ -18,7 +18,7 @@ import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
 import { EMPTY_ARM_ENVIRONMENT } from '../src/harness/arm-env.js';
-import { runCommand } from '../src/harness/run.js';
+import { runCommand, runExit } from '../src/harness/run.js';
 import type { ResolvedInstrument, RunOptions, RunResult } from '../src/harness/types.js';
 
 import { cleanupProbes, PROBE_ECHO_ENV, PROBE_VERSION, setupProbe } from './command-probe.js';
@@ -60,6 +60,7 @@ describe('runCommand', () => {
     const result = runScript("process.stdout.write('measured')");
 
     expect(result.exitCode).toBe(0);
+    expect(result.started).toBe(true);
     expect(result.spawnError).toBeNull();
     expect(result.stdout).toBe('measured');
     expect(Number.isFinite(result.wallMs)).toBe(true);
@@ -89,6 +90,8 @@ describe('runCommand', () => {
     });
 
     expect(neverRan.exitCode).toBeNull();
+    expect(neverRan.started).toBe(false);
+    expect(runExit(neverRan)).toBe('not-run');
     expect(neverRan.spawnError).not.toBeNull();
     expect(neverRan.spawnError).toContain('ENOENT');
     // Even a run that never happened reports a real, non-negative duration —
@@ -109,6 +112,8 @@ describe('runCommand', () => {
     );
 
     expect(unresolvable.exitCode).toBeNull();
+    expect(unresolvable.started).toBe(false);
+    expect(runExit(unresolvable)).toBe('not-run');
     expect(unresolvable.spawnError).toContain('could not resolve command');
   });
 
@@ -146,13 +151,15 @@ describe('runCommand', () => {
     expect(JSON.parse(result.stdout)).toStrictEqual({ VAT_BIN: null, LAB_X: 'x' });
   });
 
-  it('reports a timeout kill as a spawn error with no exit code', () => {
+  it('reports a timeout kill as a spawn error with no exit code, from a process that did start', () => {
     const result = runScript('setTimeout(function () {}, 30000);', {
       env: EMPTY_ARM_ENVIRONMENT,
       timeoutMs: 200,
     });
 
     expect(result.exitCode).toBeNull();
+    expect(result.started).toBe(true);
+    expect(runExit(result)).toBe('killed');
     expect(result.spawnError).not.toBeNull();
   });
 });

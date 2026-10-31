@@ -313,17 +313,34 @@ function unspawned(cause: unknown, context: string): SpawnSyncReturns<string> {
  */
 function classifyExit(
   result: SpawnSyncReturns<string>,
-): Pick<RunResult, 'exitCode' | 'spawnError'> {
+): Pick<RunResult, 'exitCode' | 'started' | 'spawnError'> {
   const killedBy = result.signal === null ? '' : ` (killed by signal ${result.signal})`;
+  // spawnSync reports pid 0 when the spawn itself failed, and so does {@link unspawned}.
+  const started = (result.pid ?? 0) > 0;
 
   if (result.error !== undefined) {
-    return { exitCode: null, spawnError: `${result.error.message}${killedBy}` };
+    return { exitCode: null, started, spawnError: `${result.error.message}${killedBy}` };
   }
   if (result.status === null) {
     return {
       exitCode: null,
+      started,
       spawnError: `process produced no exit code${killedBy === '' ? ' (killed by an unrecorded signal)' : killedBy}`,
     };
   }
-  return { exitCode: result.status, spawnError: null };
+  return { exitCode: result.status, started, spawnError: null };
+}
+
+/**
+ * The one reading of a run's exit every reader shares: the code it exited
+ * with; `killed` when it started and produced none (a timeout, a signal, a
+ * full output buffer); `not-run` when its process never started (ENOENT,
+ * E2BIG, an unresolvable command).
+ *
+ * @param result - A run
+ * @returns What it did
+ */
+export function runExit(result: Pick<RunResult, 'exitCode' | 'started'>): number | 'killed' | 'not-run' {
+  if (result.exitCode !== null) return result.exitCode;
+  return result.started ? 'killed' : 'not-run';
 }

@@ -28,11 +28,14 @@ const REQUEST = {
 /**
  * @param name - The command
  * @param removed - What its children went without
- * @param exits - Each repetition's exit, one step each: `null` for a step that started and was killed
+ * @param exits - Each repetition's exit, one step each: `killed` for a step that started and was
+ *   killed, `unstarted` for one whose process never started (a missing binary)
  * @returns A measured command as the header reads it
  */
-function measured(name: string, removed: readonly string[], exits: readonly (number | null)[] = [], npmNetwork: readonly string[] = []) {
-  const results = exits.map((exitCode) => ({ steps: [{ name, exitCode }] })) as never;
+function measured(name: string, removed: readonly string[], exits: readonly (number | 'killed' | 'unstarted')[] = [], npmNetwork: readonly string[] = []) {
+  const results = exits.map((exit) => ({
+    steps: [typeof exit === 'number' ? { name, exitCode: exit, started: true } : { name, exitCode: null, started: exit === 'killed' }],
+  })) as never;
   return { removed, npmNetwork, spec: { name, exit: exactExit(0) }, results };
 }
 
@@ -73,14 +76,23 @@ describe('buildReportEnvelope — exits', () => {
   });
 
   it('reads a step killed in every repetition as killed, never as not run, and names a kill in a disagreement', () => {
-    const lateStarter = { removed: [], npmNetwork: [], spec: { name: 'late', exit: exactExit(0) }, results: [{ steps: [] }, { steps: [{ name: 'late', exitCode: 0 }] }] as never };
+    const lateStarter = { removed: [], npmNetwork: [], spec: { name: 'late', exit: exactExit(0) }, results: [{ steps: [] }, { steps: [{ name: 'late', exitCode: 0, started: true }] }] as never };
 
-    const envelope = buildReportEnvelope('perf', REQUEST, {}, [measured('hung', [], [null, null]), measured('half', [], [0, null]), lateStarter]);
+    const envelope = buildReportEnvelope('perf', REQUEST, {}, [measured('hung', [], ['killed', 'killed']), measured('half', [], [0, 'killed']), lateStarter]);
 
     expect(envelope.exits).toStrictEqual([
       { step: 'hung', commitment: exactExit(0), outcome: 'killed', code: null },
       { step: 'half', commitment: exactExit(0), outcome: 'disagreed', code: null, seen: [0, 'killed'] },
       { step: 'late', commitment: exactExit(0), outcome: 'disagreed', code: null, seen: ['not-run', 0] },
+    ]);
+  });
+
+  it('reads a step whose process never started (ENOENT) as not run, never as killed', () => {
+    const envelope = buildReportEnvelope('perf', REQUEST, {}, [measured('missing', [], ['unstarted', 'unstarted']), measured('mixed', [], ['unstarted', 'killed'])]);
+
+    expect(envelope.exits).toStrictEqual([
+      { step: 'missing', commitment: exactExit(0), outcome: 'not-run', code: null },
+      { step: 'mixed', commitment: exactExit(0), outcome: 'disagreed', code: null, seen: ['not-run', 'killed'] },
     ]);
   });
 

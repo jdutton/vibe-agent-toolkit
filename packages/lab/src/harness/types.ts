@@ -191,6 +191,13 @@ export interface RunResult {
    * check this before letting a sample into a statistic.
    */
   readonly exitCode: number | null;
+  /**
+   * Whether the process started. `false` when the spawn itself failed (ENOENT,
+   * E2BIG, a command that could not be resolved): nothing ran, so `exitCode` is
+   * `null`. A started process with a `null` exit code was killed (a timeout, a
+   * signal, a full output buffer). `runExit` reads the two together.
+   */
+  readonly started: boolean;
   readonly stdout: string;
   readonly stderr: string;
   /** Set when the spawn itself failed (ENOENT, timeout kill, E2BIG). */

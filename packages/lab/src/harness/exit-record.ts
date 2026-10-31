@@ -11,10 +11,11 @@
 import { z } from 'zod';
 
 import type { ExitCommitment } from './commands.js';
+import { runExit } from './run.js';
 import type { SequenceResult } from './sequence.js';
 
-/** What one repetition did with a step: exited a code, started and was killed, or never reached it. */
-type RepetitionExit = number | 'killed' | 'not-run';
+/** What one repetition did with a step: exited a code, started and was killed, or never reached or started it. */
+type RepetitionExit = ReturnType<typeof runExit>;
 
 /** One step's exit, as a report records it. */
 export type RecordedExit = {
@@ -24,7 +25,7 @@ export type RecordedExit = {
 } & (
   /** Every repetition ran the step and exited `code`. */
   | { readonly outcome: 'shared'; readonly code: number }
-  /** No repetition reached the step: none were measured, or each stopped before it. */
+  /** No repetition ran the step: none were measured, each stopped before it, or its process never started (ENOENT). */
   | { readonly outcome: 'not-run'; readonly code: null }
   /** Every repetition started the step and it was killed (a timeout, a signal, a full output buffer): it has no code. */
   | { readonly outcome: 'killed'; readonly code: null }
@@ -77,10 +78,9 @@ export function recordExits(
 /**
  * @param result - One repetition
  * @param name - The step
- * @returns What that repetition did with it: a step it never reached is absent from its steps; one that ran and was killed has no code
+ * @returns What that repetition did with it: a step it never reached is absent from its steps; otherwise {@link runExit} says
  */
 function repetitionExit(result: SequenceResult, name: string): RepetitionExit {
   const ran = result.steps.find((candidate) => candidate.name === name);
-  if (ran === undefined) return 'not-run';
-  return ran.exitCode ?? 'killed';
+  return ran === undefined ? 'not-run' : runExit(ran);
 }

@@ -174,8 +174,9 @@ single-command facet runs are one-step sequences under `<arms root>/<build>-<com
   a list, a repeated step, exit 2 and a code outside 0–255 are refused. Exiting otherwise is a
   failed measurement (`step '<name>' exited N, not exactly C: <stderr>`), never a slow one, and
   each arm's `exits` records the commitment and the outcome: `shared` with the `code` its rounds
-  shared, `not-run` (never reached), `killed` (started and killed every round: a timeout, a signal,
-  a full output buffer), or `disagreed` with what each round `seen` did. (`<facet> run|ab`
+  shared, `not-run` (never reached, or its process never started: a missing binary's `ENOENT`),
+  `killed` (its process started and was killed every round: a timeout, a signal, a full output
+  buffer), or `disagreed` with what each round `seen` did. (`<facet> run|ab`
   differ: a command may exit any code its verb completes with — 0, or 0 or 1 for a gate — alike on
   every repeat; `--expect-exit <command>=<code>` makes it exact. See `docs/run-harness.md`.)
   A committed non-zero exit ends the repetition as CI's `&&` does: completed, nothing after it run.
