@@ -13,11 +13,12 @@
  *    it has findings did all of its work, and refusing to time that made three
  *    of vat's commands unmeasurable on every real project. The command declares
  *    which of its codes mean completed; see `harness/commands.ts`.
- * 2. **Cold means cold on every repeat.** Clearing the cache once and then
- *    running five times measures one cold run and four warm ones, and reports
- *    the median of a mixture that describes nothing. That loop belongs to the
- *    harness now — see `harness/repeat.ts`, which every measurement facet
- *    shares so the property cannot hold in one facet and not another.
+ * 2. **Cold means cold on every repeat, in the command's own arm.** Resetting
+ *    once and then running five times measures one cold run and four warm ones.
+ *    That loop, the arm's private store/`TMPDIR`/home and the cleared
+ *    environment belong to the harness — see `harness/repeat.ts`, which every
+ *    measurement facet shares so the property cannot hold in one facet and not
+ *    another.
  * 3. **Load is read around the whole capture**, and travels in the report. A
  *    number taken on a busy machine is not wrong so much as unattributable, and
  *    the reader has to be able to see that.
@@ -25,6 +26,8 @@
  * What stays here is everything about wall-clock statistics: which repeats are
  * allowed near a median, and what a row says when none are.
  */
+
+import { mapInOrder } from '@vibe-agent-toolkit/utils';
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
 import { judgeLoad, readLoad } from '../../harness/load-guard.js';
@@ -57,23 +60,8 @@ function rowFor(measurement: SpecMeasurement): PerfCommandStats {
   const { spec, args, cache, results, failure } = measurement;
   const empty = { medianMs: 0, minMs: 0, maxMs: 0, iqrMs: 0 };
 
-  if (results.length === 0) {
-    return {
-      name: spec.name,
-      args,
-      cache,
-      runs: 0,
-      ...empty,
-      samplesMs: [],
-      exitCode: null,
-      failed: true,
-      failure: 'no repeats were requested',
-    };
-  }
-
+  // Any failure poisons the row — `armRunFailure` owns that rule and its wording.
   if (failure !== null) {
-    // Any failure poisons the row — see `summarizeRepeatFailures`, which owns
-    // that rule and its wording so both measurement facets state it alike.
     return {
       name: spec.name,
       args,
@@ -112,13 +100,14 @@ function rowFor(measurement: SpecMeasurement): PerfCommandStats {
  * @param options - See {@link CapturePerfOptions}
  * @returns A complete report envelope, ready to store
  */
-export function capturePerf(options: CapturePerfOptions): ReportEnvelope<PerfBody> {
+export async function capturePerf(options: CapturePerfOptions): Promise<ReportEnvelope<PerfBody>> {
   const loadBefore = readLoad();
 
-  const commands = options.commands.map((spec) => rowFor(measureSpec(options, spec)));
+  // In order on purpose: two measured commands must never overlap.
+  const measured = await mapInOrder(options.commands, (spec) => measureSpec(options, spec));
 
   const loadAfter = readLoad();
   const load = judgeLoad(loadBefore.loadAvg1, loadAfter.loadAvg1, loadAfter.cpus);
 
-  return buildReportEnvelope(PERF_FACET, options, { commands, load });
+  return buildReportEnvelope(PERF_FACET, options, { commands: measured.map((measurement) => rowFor(measurement)), load }, measured);
 }

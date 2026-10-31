@@ -45,17 +45,19 @@ import {
   type SpawnSyncOptionsWithStringEncoding,
   type SpawnSyncReturns,
 } from 'node:child_process';
+import { accessSync, constants } from 'node:fs';
+import { posix, win32 } from 'node:path';
 import { performance } from 'node:perf_hooks';
 
+import { followedStatSync, fsFaultOf, safePath } from '@vibe-agent-toolkit/utils';
 import {
   buildWindowsShellLine,
   isPathLike,
   resolveShellCommandToken,
   shouldUseShell,
 } from '@vibe-agent-toolkit/utils/process';
-import which from 'which';
 
-import { buildArmEnv } from './arm-env.js';
+import { buildArmEnv, envNameSpelling } from './arm-env.js';
 import type { ResolvedInstrument, RunOptions, RunResult } from './types.js';
 
 /**
@@ -71,14 +73,17 @@ const MAX_OUTPUT_BYTES = 256 * 1024 * 1024;
 /**
  * Run one vat command once and report what happened.
  *
- * @param instrument - Which vat to run; `leadingArgs` precede `args`
- * @param args - The vat subcommand and its arguments
+ * Any command, not only vat: a sequence's non-VAT step (`pnpm install`) is a
+ * command with no leading arguments.
+ *
+ * @param instrument - What to run; `leadingArgs` precede `args`
+ * @param args - The subcommand and its arguments
  * @param options - Working directory, the arm's environment, and an optional timeout
  * @returns Wall time, both streams, and an exit code that is `null` when the
  *   process never ran or was killed
  */
 export function runCommand(
-  instrument: ResolvedInstrument,
+  instrument: Pick<ResolvedInstrument, 'command' | 'leadingArgs'>,
   args: readonly string[],
   options: RunOptions,
 ): RunResult {
@@ -99,7 +104,7 @@ export function runCommand(
   // The bracket starts BEFORE resolution, so a command that never spawns still
   // reports the real time spent finding that out rather than a fabricated 0.
   const startedAt = performance.now();
-  const result = launch(instrument.command, argv, spawnOptions);
+  const result = launch(instrument.command, argv, spawnOptions, spawnOptions.env ?? {});
   const wallMs = performance.now() - startedAt;
 
   return {
@@ -139,50 +144,128 @@ function buildEnv(env: RunOptions['env']): NodeJS.ProcessEnv {
  *
  * Both halves are utils' decisions, deliberately:
  *
- * - **Resolution** is `isPathLike(command) ? command : which.sync(command)` —
- *   verbatim from `spawnHardened`. An explicit path is spawned as given, so a
- *   nonexistent one surfaces as `spawnSync`'s own `ENOENT` rather than as a
- *   synchronous `which` throw; a bare name (`npx`, the released-instrument
- *   case) is looked up on PATH. `isPathLike`'s docstring names that first
- *   property as the reason it exists.
+ * - **Resolution** is `isPathLike(command) ? command : <the child's PATH>`.
+ *   An explicit path is spawned as given, so a nonexistent one surfaces as
+ *   `spawnSync`'s own `ENOENT`; a bare name (`npx`, `git`, a prerequisite's
+ *   `pnpm`) is looked up by {@link resolveOnPath} on the CHILD's PATH and
+ *   nowhere else — not with `which`, which on Windows searches the lab's own
+ *   working directory first and reads the lab's PATH, not the child's.
  * - **Shell mode** is `shouldUseShell(resolved)` — true only for a resolved
  *   `.cmd`/`.bat`/`.ps1` on Windows, which since the CVE-2024-27980 fix Node
  *   refuses to launch without a shell. On Windows a bare `npx` resolves to
  *   `npx.cmd` and takes that branch; a bare `node` resolves to `node.exe` and
  *   does not. Everything else on every platform gets `shell: false` and a real
- *   argv array — the mode with no metacharacter surface at all.
+ *   argv array — the mode with no metacharacter surface at all. The shell line
+ *   names the RESOLVED file ({@link windowsShellLine}).
  *
  * @param command - The executable, as the instrument named it
  * @param args - Full argument vector (leading args already prepended)
  * @param options - Prepared `spawnSync` options
+ * @param env - The child's environment, whose PATH resolves a bare name
  * @returns The `spawnSync` result, or {@link unspawned} when resolution failed
  */
 function launch(
   command: string,
   args: readonly string[],
   options: SpawnSyncOptionsWithStringEncoding,
+  env: NodeJS.ProcessEnv,
 ): SpawnSyncReturns<string> {
-  let resolved: string;
-  try {
-    resolved = isPathLike(command) ? command : which.sync(command);
-  } catch (error) {
-    // `which.sync` throws when a bare name is not on PATH. That is a spawn
-    // failure like any other, so it rejoins the single classification path
-    // below rather than becoming a second way for a run to fail.
-    return unspawned(error, `could not resolve command '${command}' on PATH`);
+  const resolved = isPathLike(command) ? command : resolveOnPath(command, env, process.platform);
+  if (resolved === undefined) {
+    // A spawn failure like any other: it rejoins the single classification path
+    // rather than becoming a second way for a run to fail.
+    return unspawned(new Error('no absolute entry of the child’s PATH holds it'), `could not resolve command '${command}' on PATH`);
   }
 
   if (!shouldUseShell(resolved)) {
     return spawnSync(resolved, [...args], { ...options, shell: false });
   }
+  return spawnSync(windowsShellLine(resolved, args), { ...options, shell: true });
+}
 
-  // Node's DEP0190 rejects `shell: true` alongside a separate args array, so the
-  // command and its arguments become one cmd.exe line, per-arg quoted by utils'
-  // `windowsShellQuote`. Token selection is utils' too (a bare name stays bare
-  // so cmd.exe re-resolves it through PATHEXT; an explicit path is quoted).
-  const shellLine = buildWindowsShellLine(resolveShellCommandToken(command, resolved), [...args]);
-   
-  return spawnSync(shellLine, { ...options, shell: true });
+/** What Windows tries when `PATHEXT` is unset. */
+const DEFAULT_PATHEXT = '.COM;.EXE;.BAT;.CMD';
+
+/**
+ * Find a bare command name on a PATH, the way the OS would — minus every
+ * directory PATH does not name absolutely. A relative or empty entry is read
+ * against a working directory, and a working directory here is the subject's
+ * clone, so neither is searched.
+ *
+ * @param command - A bare name (`git`, `pnpm`), never a path
+ * @param env - The environment whose PATH (and, on Windows, `PATHEXT`) decides; names case-insensitive on Windows
+ * @param platform - Whose rules: `;`, `PATHEXT` and existence on `win32`; `:` and the execute bit elsewhere
+ * @returns The first file found, or `undefined`
+ */
+export function resolveOnPath(command: string, env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string | undefined {
+  const windows = platform === 'win32';
+  const value = envValue(env, platform);
+  const entries = (value('PATH') ?? '').split(windows ? ';' : ':');
+  const isAbsolute = windows ? win32.isAbsolute : posix.isAbsolute;
+  const extensions = windows ? (value('PATHEXT') ?? DEFAULT_PATHEXT).split(';').filter((ext) => ext !== '') : [];
+  // A name with an extension is tried as given first, as Windows does.
+  const names = windows ? [...(command.includes('.') ? [command] : []), ...extensions.map((ext) => command + ext)] : [command];
+  for (const entry of entries) {
+    if (entry === '' || !isAbsolute(entry)) continue;
+    for (const name of names) {
+      const candidate = safePath.join(entry, name);
+      if (isLaunchable(candidate, entry, windows)) return candidate;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * @param env - An environment
+ * @param platform - Whose name rules
+ * @returns A reader of one variable, matching its name case-insensitively on Windows
+ */
+function envValue(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): (name: string) => string | undefined {
+  const spell = envNameSpelling(platform);
+  return (name) => Object.entries(env).find(([key]) => spell(key) === spell(name))?.[1];
+}
+
+/**
+ * @param path - A candidate file
+ * @param entry - The PATH entry it is under, beneath which its links are walked
+ * @param windows - Whether existence alone makes it launchable
+ * @returns Whether it is a file the OS would run; absent, unsearchable, a dangling link or (POSIX) not executable is `false`
+ * @throws a link chain VAT will not hand the kernel, and any fault but a refusal
+ */
+function isLaunchable(path: string, entry: string, windows: boolean): boolean {
+  let stat: ReturnType<typeof followedStatSync>;
+  try {
+    stat = followedStatSync(path, entry);
+  } catch (error: unknown) {
+    // An entry this user may not search: execvp passes it over and tries the next.
+    if (fsFaultOf(error)?.faultClass === 'refused') return false;
+    throw error;
+  }
+  if (stat?.isFile() !== true) return false;
+  if (windows) return true;
+  try {
+    accessSync(path, constants.X_OK);
+    return true;
+  } catch (error: unknown) {
+    // Not executable by this user: the OS would pass it over too. Anything else is not that.
+    if (fsFaultOf(error)?.faultClass === 'refused') return false;
+    throw error;
+  }
+}
+
+/**
+ * The one `cmd.exe` line for a resolved `.cmd`/`.bat`/`.ps1`. Node's DEP0190
+ * rejects `shell: true` beside a separate args array, so the command and its
+ * arguments are one line, each argument quoted by utils' `windowsShellQuote`.
+ * The command is the RESOLVED file, quoted, never the bare name: `cmd.exe`
+ * looks a bare name up in the child's working directory before PATH.
+ *
+ * @param resolved - The file {@link resolveOnPath} found, or an explicit path
+ * @param args - Full argument vector
+ * @returns The line
+ */
+export function windowsShellLine(resolved: string, args: readonly string[]): string {
+  return buildWindowsShellLine(resolveShellCommandToken(resolved, resolved), [...args]);
 }
 
 /**
@@ -230,17 +313,34 @@ function unspawned(cause: unknown, context: string): SpawnSyncReturns<string> {
  */
 function classifyExit(
   result: SpawnSyncReturns<string>,
-): Pick<RunResult, 'exitCode' | 'spawnError'> {
+): Pick<RunResult, 'exitCode' | 'started' | 'spawnError'> {
   const killedBy = result.signal === null ? '' : ` (killed by signal ${result.signal})`;
+  // spawnSync reports pid 0 when the spawn itself failed, and so does {@link unspawned}.
+  const started = (result.pid ?? 0) > 0;
 
   if (result.error !== undefined) {
-    return { exitCode: null, spawnError: `${result.error.message}${killedBy}` };
+    return { exitCode: null, started, spawnError: `${result.error.message}${killedBy}` };
   }
   if (result.status === null) {
     return {
       exitCode: null,
+      started,
       spawnError: `process produced no exit code${killedBy === '' ? ' (killed by an unrecorded signal)' : killedBy}`,
     };
   }
-  return { exitCode: result.status, spawnError: null };
+  return { exitCode: result.status, started, spawnError: null };
+}
+
+/**
+ * The one reading of a run's exit every reader shares: the code it exited
+ * with; `killed` when it started and produced none (a timeout, a signal, a
+ * full output buffer); `not-run` when its process never started (ENOENT,
+ * E2BIG, an unresolvable command).
+ *
+ * @param result - A run
+ * @returns What it did
+ */
+export function runExit(result: Pick<RunResult, 'exitCode' | 'started'>): number | 'killed' | 'not-run' {
+  if (result.exitCode !== null) return result.exitCode;
+  return result.started ? 'killed' : 'not-run';
 }

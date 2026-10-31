@@ -26,9 +26,24 @@ describe('verdict verb matrix', () => {
     ['resources-check', [['resources', 'check', '/work/tree', '--format', 'json']]],
     ['context-all', [['claude', 'context', '--all', '--format', 'json']]],
     ['context-path', [['claude', 'context', 'docs/guide.md', '--format', 'json']]],
+    // The verbs as CI runs them: no subject path, scoped by the cwd (the
+    // subject root), each asking for the findings its document can publish.
+    ['validate', [['validate', '--verbose']]],
+    ['resources-validate-ci', [['resources', 'validate', '--verbose', '--format', 'json']]],
+    ['resources-check-ci', [['resources', 'check', '--format', 'json']]],
+    ['skills-validate-ci', [['skills', 'validate', '--verbose']]],
   ] as const)('spells %s', (name, argv) => {
     expect(verdictVerb(name).args(SUBJECT, PROBE_VERSION).map((invocation) => invocation.argv)).toEqual(argv);
   });
+
+  it.each(['validate', 'resources-validate-ci', 'resources-check-ci', 'skills-validate-ci'] as const)(
+    'gives the no-path verb %s no subject path — it scopes from the cwd',
+    (name) => {
+      for (const invocation of verdictVerb(name).args(SUBJECT, PROBE_VERSION)) {
+        expect(invocation.argv).not.toContain(SUBJECT.path);
+      }
+    },
+  );
 
   it('runs resources-query once per SQL file, each row named by its file as written', () => {
     expect(verdictVerb('resources-query').args(SUBJECT, PROBE_VERSION)).toEqual([

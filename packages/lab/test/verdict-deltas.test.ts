@@ -41,7 +41,7 @@ const RUN: ReconcileRun = {
  * @returns A deltas file
  */
 function file(entries: VerdictDeltas['deltas'], baseline = BASELINE): VerdictDeltas {
-  return { baseline, deltas: entries };
+  return { baseline, deltas: entries, unions: [] };
 }
 
 const entry = verdictDeltaEntryFactory({ subject: ALIAS, verb: VERB, changelog: CHANGELOG_REF, reason: REASON });

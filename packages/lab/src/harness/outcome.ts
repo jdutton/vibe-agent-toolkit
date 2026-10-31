@@ -3,9 +3,9 @@
  * pass/fail judgement, because a verdict measures what vat DECIDED, including a
  * refusal.
  *
- * ## Why this is not `commands.ts`'s `completedExitCodes`
+ * ## Why this is not `commands.ts`'s `ExitCommitment`
  *
- * `completedExitCodes` (`commands.ts:28-51`) answers a `perf`/`io` question:
+ * `MeasuredCommandSpec.exit` answers a `perf`/`io` question:
  * "did this run take a duration worth trusting?" — narrow on purpose, because a
  * crash's wall-clock time is meaningless and must not enter a median. The
  * `verdict` facet asks a different question: "what did this run of vat REPORT?"
@@ -17,10 +17,12 @@
  * alike — `2` included — as data: {@link RunOutcome.kind} is `'exited'` for any
  * of them. The one case this module refuses to call data is a process that never
  * produced an exit code at all (`kind: 'not-run'`): there is no vat verdict to
- * read from a command that did not start.
+ * read from a command that did not start. It reads the exit through the same
+ * {@link runExit} a report's `exits` do; a verdict has no notion of a kill, so
+ * a killed run is `not-run` here too, and its `spawnError` says which it was.
  */
 
-import { runCommand } from './run.js';
+import { runCommand, runExit } from './run.js';
 import type { ResolvedInstrument, RunOptions } from './types.js';
 
 /** What one run of a vat command produced, for a verdict to be read from. */
@@ -44,7 +46,8 @@ export function runOutcome(
   options: RunOptions,
 ): RunOutcome {
   const result = runCommand(instrument, args, options);
-  if (result.exitCode === null) {
+  const exit = runExit(result);
+  if (typeof exit !== 'number') {
     return {
       kind: 'not-run',
       // classifyExit (run.ts) always sets spawnError alongside a null exitCode;
@@ -54,5 +57,5 @@ export function runOutcome(
       stderr: result.stderr,
     };
   }
-  return { kind: 'exited', exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr };
+  return { kind: 'exited', exitCode: exit, stdout: result.stdout, stderr: result.stderr };
 }

@@ -111,7 +111,9 @@ async function capture(subjectPath: string, fixture: Arm): Promise<Awaited<Retur
     subjects: [{ alias: ALIAS, path: subjectPath, verbs: [VERB], sqlFiles: [], buildVerbs: false, unmeasurableBuildVerbs: {} }],
     subjectsDir: subjectPath,
     env: fixture.env,
+    prepared: {},
     outDir: tempDir('lab-verdict-out-'),
+    armsRoot: tempDir('lab-verdict-arms-'),
     capturedAt: new Date().toISOString(),
   });
 }
@@ -140,7 +142,7 @@ async function compareArms(a: Arm, b: Arm, spec: CompareSpec = {}): Promise<Verd
   if (!baseline.ok || !candidate.ok) throw new Error('capture refused');
   return compareVerdict(baseline.envelopes, candidate.envelopes, {
     control: spec.control ?? false,
-    deltas: { baseline: PROBE_VERSION.version, deltas: spec.entries ?? [] },
+    deltas: { baseline: PROBE_VERSION.version, deltas: spec.entries ?? [], unions: [] },
     changelog: CHANGELOG,
   });
 }

@@ -77,7 +77,9 @@ copy was deleted with it.)
 The `npx` route is the one exception, and a known limitation: `npx` runs the published package's
 `bin` entry, which *is* the wrapper. A subject with its own vat installed can therefore capture an
 `npx:` arm. Compare published versions on a subject that does not depend on vat, or use `dist:`
-against an unpacked tarball.
+against an unpacked tarball. Its parse directory is still the build's own answer: the lab resolves
+`@vibe-agent-toolkit/resources` from the one project npx installed into the arm's npm cache during
+the untimed start.
 
 ## A dirty instrument is measured, but never mistaken for a commit
 
@@ -127,9 +129,14 @@ when the arm itself sets them with `--env`. A nested `vat` call from a subject's
 hooks stays in the arm only because the arm says so (`--env VAT_BIN=<bin.js>` for a `dist:` arm,
 `--env VAT_ROOT_DIR=<shim>` for a build whose wrapper predates `VAT_BIN`).
 
-The `verdict` facet adds two lab-owned settings on top of every arm's own: a private projection
-store under its `--out` (`VAT_PROJECTION_STORE_DIR`) and an unset `CLAUDE_CONFIG_DIR`. And because
-its subjects include VAT's own tree, it refuses an `--out` inside any subject — see
+Every timed arm — the `verdict` facet's included — also gets lab-owned directories on top of its
+own settings: a private projection store, temp directory, empty home (`HOME` and
+`CLAUDE_CONFIG_DIR`) and npm cache under the invocation's **arms root** (`--arms-dir`, else a fresh
+`run-*` directory under `<os tmpdir>/vat-lab-arms-<user>/`), never under `--out` and never inside a
+subject. The default `run-*` directory is removed when the capture ends, passed or failed, unless
+`--keep-arms`; the output says which (`Removed arms under …` / `Kept arms under …`). An `--env` or
+`--unset` naming one of those variables is refused. Because the verdict
+facet's subjects include VAT's own tree, it also refuses an `--out` inside any subject — see
 [The verdict facet](facets.md#the-verdict-facet).
 
 ## Which commands get measured
@@ -243,9 +250,10 @@ Four properties, each of which the hand-rolled version had no way to enforce:
 **Whole arms alternate — A B A B …, never all of A then all of B.** A machine drifts over minutes, and
 a block design charges every bit of that drift to whichever arm ran during it. Alternation turns a
 systematic bias into a per-pair one, which shows up as pairs disagreeing — a signal you can read.
-The second reason is specific to this harness: vat namespaces its dev parse cache per build, so each
-arm's *first* invocation is cold whatever `--cache` says. Alternation makes that recur symmetrically
-instead of hiding inside one arm's aggregate.
+The second reason is specific to this harness: each arm has its own `tmp/`, so its parse cache is
+its own, and a warm arm is primed by one unmeasured run before its first measured repeat — no arm's
+first measured invocation inherits the other's cache. Alternation keeps whatever cold start remains
+(the OS page cache, the build's first start) symmetric instead of hiding inside one arm's aggregate.
 
 **The estimator is `min`, with `p25` reported beside it — never a median, never a mean.** Every sample
 is the true cost plus a non-negative contamination, so the smallest is the closest thing to a clean
@@ -276,37 +284,56 @@ is. Every capture is written through the normal store, under `<out>/ab-<stamp>/p
 per-pair directory is load-bearing, because two pairs of one arm share a coordinate and therefore a
 filename.
 
-## Which exit codes mean the run finished
+## The exit a run commits to
 
-A command declares its own, as `completedExitCodes`; absent means `[0]`. vat's convention is `0`
-success, `1` validation findings, `2` system error — so `validate`, `verify` and `resources-validate`
-accept `[0, 1]`, because a validator exiting 1 ran the whole corpus and merely had something to
-report at the end of it. Without that, those three were unmeasurable on any real project: every real
-project has findings, so every repeat "failed" and every row was poisoned. `audit` accepts `[0, 1]`
-for the same reason; `resources-scan` keeps the `[0]` default — a scan has no finding of its own,
-so its only exit 1 is the run-integrity refusal for a scan of NOTHING, and a duration over no files
-is not a measurement.
+Every step carries ONE `ExitCommitment` (`harness/commands.ts`), of one of two kinds, and a
+repetition that exits outside it is a failed measurement. vat's convention is `0` success, `1`
+validation findings, `2` system error.
 
-Exit `2` is never accepted. That run did not complete, and its duration is the duration of giving
+- **`observed`** — the default for `<facet> run` and `<facet> ab`. A command may exit any code its
+  verb declares as a completed run: `0` alone, or `0` and `1` for a gate (`resources-validate`,
+  `audit`, `validate`, `verify`, `skills-validate` and their `-ci` spellings). So a bare run over a
+  real project with findings measures, as it always has.
+- **`exact`** — one committed code. Every step of `perf arms` is `exact` (`0` unless
+  `--expect-exit <build>:<sequence>:<step>=<code>` says otherwise: a CI step has one committed
+  outcome), and `--expect-exit <command>=<code>` makes a command of `run`/`ab` `exact`.
+
+Whatever the kind, every repetition must exit ALIKE (`summarizeRepeatFailures`): a set where one
+repeat exited `0` and another `1` did two different amounts of work, and a median over it describes
+neither. Every report records each measured step's commitment and its outcome (the envelope's
+`exits`; an arms report's per-arm `exits`): `shared` with the `code` every repetition exited,
+`not-run` when no repetition ran the step (never reached, or its process never started: `ENOENT`,
+`E2BIG`, an unresolvable command), `killed` when its process started in every repetition and was
+killed with no code (a timeout, a signal, `ENOBUFS`), or `disagreed` when they did different
+things, with `seen` listing each distinct one (a code, `killed`, `not-run`). An expectation naming a command the run
+does not measure is refused rather than silently leaving the default in force, and so is a code
+outside `0`–`255`.
+
+Exit `2` is never committed, and no verb declares it completed. That run did not complete, and its duration is the duration of giving
 up — fast enough that timing it reads as an improvement.
 
 This is a `perf`/`io` question ("is this duration worth trusting?"), not the `verdict` facet's.
-`harness/outcome.ts`'s `runOutcome` has no `completedExitCodes` and no accept list: every exit code
+`harness/outcome.ts`'s `runOutcome` has no committed exit and no accept list: every exit code
 a run produces — `2` included — comes back `{ kind: 'exited', exitCode }`, because a verdict
 measures what vat DECIDED, a refusal among those decisions. Only a process that never produced an
 exit code at all comes back `{ kind: 'not-run' }`.
 
-Two rules then apply to a row's repeats, in `summarizeRepeatFailures`, shared so both facets phrase
-them alike: **any failure poisons the whole row**, and **the accepted codes must be uniform across
-the repeats**. The second is what stops a set where one repeat exited 0 and another exited 1 from
-being averaged: both completed, but they did different amounts of work, and a median over the mixture
-describes neither.
+One rule then applies to a row's repeats, in `summarizeRepeatFailures`, shared so every facet
+phrases it alike: **any failure poisons the whole row**.
 
 ## Two properties the harness must preserve
 
-**Each arm's environment: inherited, except the arm-owned keys.** A child's environment is
-`process.env` minus `ARM_OWNED_ENV_KEYS` minus the arm's `unset`, plus its `set`
-([`harness/arm-env.ts`](../src/harness/arm-env.ts)). Every `RunOptions` and `CaptureRequest` carries
+**Each arm's environment: inherited, then cleared, then the arm's own.** A child's environment is
+`process.env` minus `ARM_OWNED_ENV_KEYS`, minus every inherited `VAT_*` name and the names git
+exports into a hook, minus — for a VAT step — the temp, XDG, Claude, git-config, git-template and
+exec-path state in `CLEARED_ENV_NAMES` and every inherited `npm_config_*` (any case) but the
+network allow list (`NPM_NETWORK`: registry, proxies, CA, `strict-ssl`), then the arm
+directories' variables (which include `GIT_CONFIG_NOSYSTEM=1` and `GIT_ATTR_NOSYSTEM=1`), then the
+arm's `unset` and `set` ([`harness/arm-env.ts`](../src/harness/arm-env.ts),
+[`harness/arm-dirs.ts`](../src/harness/arm-dirs.ts)). A tool step (`pnpm install`, a build) loses
+only the `VAT_*` and hook-git names: pnpm needs the real `~/.npmrc`. One input stays outside every
+arm: the machine-level Claude managed-settings policy, read from a fixed system path no variable
+redirects — the same file for every arm on one machine, so consistent across arms, not isolated. Each report records both lists of names the arm's steps went without, and the names of the npm network settings they kept (`npmNetworkEnv`). Every `RunOptions` and `CaptureRequest` carries
 this `ArmEnvironment` as a **required** field — `EMPTY_ARM_ENVIRONMENT` when the arm sets nothing —
 because an optional environment is a seam whose omission compiles, and the omission is the leak.
 
@@ -321,8 +348,9 @@ because an optional environment is a seam whose omission compiles, and the omiss
   A `VAT_BIN` exported in the operator's shell would otherwise reach both arms of an A/B and make
   them one build measured twice. `arm-env.test.ts` derives the wrapper's set from its source, so a
   resolution variable the wrapper gains reds the lab until the lab owns it too.
-- **`unset` removes what an arm must run without** (`CLAUDE_CONFIG_DIR`, a user config override).
-  Unset is not absent: `sameArmEnvironment` counts it, and `ab` prints it as `-KEY` in the arm's
+- **`unset` removes what an arm must run without** (a user-level config override such as
+  `XDG_DATA_HOME`). It cannot name a variable the arm's directories own — `--unset CLAUDE_CONFIG_DIR`
+  is refused, because every arm already points it at its own empty home. Unset is not absent: `sameArmEnvironment` counts it, and `ab` prints it as `-KEY` in the arm's
   `Config` line. A key both set and unset is refused before anything runs.
 - **Flags.** `run` takes `--env K=V` and `--unset K` (repeatable); `ab` takes them per arm as
   `--env-a`/`--env-b` and `--unset-a`/`--unset-b`.

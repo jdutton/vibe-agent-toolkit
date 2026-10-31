@@ -15,7 +15,22 @@
 
 import type { ReportEnvelope } from '../envelope/envelope.js';
 
+import type { ExitCommitment } from './commands.js';
+import { recordExits } from './exit-record.js';
+import { compareByCodeUnit } from './fingerprint.js';
+import type { SequenceResult } from './sequence.js';
 import type { CaptureRequest } from './types.js';
+
+/** What the header records of one measured command — the fields of `SpecMeasurement` it reads. */
+interface MeasuredCommand {
+  /** What its children went without. */
+  readonly removed: readonly string[];
+  /** The npm network setting names its children kept. */
+  readonly npmNetwork: readonly string[];
+  /** The command, with the commitment its exits were judged by. */
+  readonly spec: { readonly name: string; readonly exit: ExitCommitment };
+  readonly results: readonly SequenceResult[];
+}
 
 /**
  * Stamp a facet's body with the coordinate it was measured at.
@@ -29,12 +44,17 @@ import type { CaptureRequest } from './types.js';
  * @param request - What the capture was asked to do; the coordinate comes from
  *   the instrument and subject it actually resolved, never from what was typed
  * @param body - The facet's own measurements
+ * @param measured - Every measured command: the report records what its
+ *   children ran WITHOUT, as they ran (never a recomputation from the
+ *   environment the report is stamped in), and the exit commitment it was
+ *   judged by with the code its repetitions shared
  * @returns A complete report envelope, ready to store
  */
 export function buildReportEnvelope<TBody>(
   facet: string,
   request: CaptureRequest,
   body: TBody,
+  measured: readonly MeasuredCommand[],
 ): ReportEnvelope<TBody> {
   return {
     facet,
@@ -44,6 +64,9 @@ export function buildReportEnvelope<TBody>(
       instrument: request.instrument.version,
     },
     capturedAt: request.capturedAt,
+    removedEnv: [...new Set(measured.flatMap((measurement) => measurement.removed))].sort(compareByCodeUnit),
+    npmNetworkEnv: [...new Set(measured.flatMap((measurement) => measurement.npmNetwork))].sort(compareByCodeUnit),
+    exits: measured.flatMap((measurement) => recordExits([measurement.spec], measurement.results)),
     body,
   };
 }

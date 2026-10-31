@@ -4,8 +4,8 @@
  * **accepted exit code**.
  *
  * A vat validator exits `0` when the project has no findings and `1` when it
- * does, and both mean "the run finished" (`MeasuredCommandSpec.completedExitCodes`).
- * So a baseline that exited `0` and a candidate that exited `1` are two complete
+ * does, and the caller commits each side to its one exit (`MeasuredCommandSpec.exit`).
+ * So a baseline committed to `0` and a candidate committed to `1` are two complete
  * runs — and rendering findings is work the clean side never did. Subtracting
  * their medians produces a perfectly ordinary `faster`/`slower` number that is
  * partly, and invisibly, a finding-count change. That is exactly the silent

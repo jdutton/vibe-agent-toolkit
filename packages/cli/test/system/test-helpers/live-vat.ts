@@ -82,8 +82,23 @@ export async function pidWrittenTo(file: string): Promise<number> {
  */
 export function killStillRunning(supervisor: LiveVat | undefined, child: number | undefined): void {
   const pid = supervisor?.process.pid;
-  if (pid !== undefined && alive(pid)) supervisor?.process.kill('SIGKILL');
-  if (child !== undefined && alive(child)) process.kill(child, 'SIGKILL');
+  if (pid !== undefined) killIfRunning(pid);
+  if (child !== undefined) killIfRunning(child);
+}
+
+/**
+ * SIGKILL `pid` unless it is already gone. The `alive` check alone races: a process that ends
+ * between it and the signal makes `kill` throw ESRCH, which a teardown must read as "gone".
+ *
+ * @param pid - One of this test's own processes
+ */
+function killIfRunning(pid: number): void {
+  if (!alive(pid)) return;
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch (error) {
+    if (!isProcessGoneError(error)) throw error;
+  }
 }
 
 /**

@@ -149,7 +149,8 @@ Three things it does differently from both older facets:
   parse path at all are three further states that produce identical numbers and support opposite
   conclusions. Each renders as its own sentence.
 - **It discards no repeat.** `io` drops repeat 0 as a warm-up because it wants the steady state; here
-  repeat 0 is, in `warm` mode, the *only* repeat that parses anything.
+  every `cold` repeat parses from an emptied cache and is the measurement. In `warm` mode the arm's
+  unmeasured priming run did the parsing, so every measured repeat is a cache hit.
 
 ⚠️ **`documents.count == cache.misses` is not an invariant**, in either direction, and nothing in the
 facet derives one from the other. The cache counts every parser kind while the passes count markdown

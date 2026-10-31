@@ -68,11 +68,11 @@
  *
  * Paths are produced through `safePath` (forward slashes everywhere). The `npx`
  * case returns the **bare** command `npx`, never `npx.cmd` and never a resolved
- * path: the toolkit's spawn wrappers (`safeExecResult`, `spawnHardened`) already
- * resolve bare names through `which.sync` — which finds `npx.cmd` on Windows —
- * and switch on `shell: true` for `.cmd`/`.bat` shims, as Node's DEP0190
- * requires. Hardcoding the extension here would duplicate that decision and
- * break the moment it changes.
+ * path: the lab's launcher (`run.ts`) resolves a bare name from the CHILD's
+ * PATH alone — absolute entries in order, `PATHEXT` on Windows, so it finds
+ * `npx.cmd` there — and runs a `.cmd`/`.bat` shim as one `cmd.exe` line naming
+ * the file it found, as Node's DEP0190 requires. Hardcoding the extension here
+ * would duplicate that decision and break the moment it changes.
  */
 
 import { readFile, realpath, stat } from 'node:fs/promises';

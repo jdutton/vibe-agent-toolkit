@@ -82,6 +82,25 @@ export function describeIssues(error: z.ZodError): string {
 }
 
 /**
+ * The one refusal for a stored lab report (an envelope, a facet body, an arms
+ * report) whose shape this lab does not read.
+ *
+ * Pre-1.0 there is no compat reader: the cause, almost always, is a report an
+ * older lab captured, and the only remedy is to capture it again — so the
+ * refusal says both before it lists what moved.
+ *
+ * @param what - The report, as the reader names it (`'<file>'`, `the baseline 'perf' report`)
+ * @param error - The schema's rejection
+ * @returns `REFUSED: <what> was captured by … — re-capture it. What differs: …`
+ */
+export function recaptureRefusal(what: string, error: z.ZodError): string {
+  return (
+    `REFUSED: ${what} was captured by a lab whose report shape differs from this one (usually an older lab) — ` +
+    `re-capture it. What differs: ${describeIssues(error)}`
+  );
+}
+
+/**
  * The least a facet's schema has to expose to be read here.
  *
  * Structural rather than `z.ZodType<TDump>`: a schema carrying a `.refine()` is

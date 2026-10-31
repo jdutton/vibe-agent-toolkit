@@ -24,6 +24,7 @@ import {
   PopulationBodySchema,
   type PopulationCommandStats,
 } from '../src/facets/population/types.js';
+import { exactExit } from '../src/harness/commands.js';
 import type { CaptureRequest } from '../src/harness/types.js';
 
 import { expectStamp, probeSubject } from './capture-fixtures.js';
@@ -32,6 +33,7 @@ import {
   PROBE_FAIL_TOKEN,
   PROBE_STDOUT_ENV,
   type Probe,
+  probeArmsRoot,
   setupProbe,
 } from './command-probe.js';
 import { commitAll, initRepo, writeFixtureFile } from './git-fixtures.js';
@@ -79,22 +81,25 @@ function document(
  * @param args - Arguments, so a case can make the command fail
  * @returns The single command's row
  */
-function captureRow(
+async function captureRow(
   probe: Probe,
   outputs: readonly string[],
   runs = 2,
   args: readonly string[] = SPEC.args,
-): PopulationCommandStats {
+): Promise<PopulationCommandStats> {
   const request: CaptureRequest = {
     instrument: probe.instrument,
     subject: probeSubject(probe.cwd, 'probe-subject', 'f'.repeat(64)),
-    commands: [{ name: SPEC.name, args }],
+    commands: [{ name: SPEC.name, args, exit: exactExit(0), provenance: 'none', populates: false }],
     runs,
     cache: 'warm',
-    env: { set: { [PROBE_STDOUT_ENV]: JSON.stringify(outputs) }, unset: [] },
+    // The warm arm's priming run is the probe's first invocation; it prints the
+    // first document too, so `outputs` stays one entry per MEASURED repeat.
+    env: { set: { [PROBE_STDOUT_ENV]: JSON.stringify([outputs[0], ...outputs]) }, unset: [] },
     capturedAt: CAPTURED_AT,
+    arms: { root: probeArmsRoot(probe), build: 'probe' },
   };
-  const report = capturePopulation(request);
+  const report = await capturePopulation(request);
 
   expectStamp(report, {
     facet: POPULATION_FACET,
@@ -109,14 +114,14 @@ function captureRow(
 }
 
 describe('capturePopulation', () => {
-  it('reports the enumerated set, sorted, with the lane the run declared', () => {
+  it('reports the enumerated set, sorted, with the lane the run declared', async () => {
     const probe = setupProbe(PROBE_PREFIX);
     const output = document(probe.cwd, [
       { path: 'b.md', checksum: SUM_B },
       { path: 'a.md', checksum: SUM_A },
     ]);
 
-    const row = captureRow(probe, [output]);
+    const row = await captureRow(probe, [output]);
 
     expect(row.attribution).toBe('measured');
     expect(row.lane).toBe('walk');
@@ -125,7 +130,7 @@ describe('capturePopulation', () => {
     expect(row.failed).toBe(false);
   });
 
-  it('marks repeats that enumerated different sets as UNSTABLE', () => {
+  it('marks repeats that enumerated different sets as UNSTABLE', async () => {
     const probe = setupProbe(PROBE_PREFIX);
     const first = document(probe.cwd, [{ path: 'a.md', checksum: SUM_A }]);
     const second = document(probe.cwd, [
@@ -133,34 +138,34 @@ describe('capturePopulation', () => {
       { path: 'b.md', checksum: SUM_B },
     ]);
 
-    const row = captureRow(probe, [first, second]);
+    const row = await captureRow(probe, [first, second]);
 
     expect(row.stable).toBe(false);
   });
 
-  it('reports stable when the repeats agreed, and null when only one ran', () => {
+  it('reports stable when the repeats agreed, and null when only one ran', async () => {
     const probe = setupProbe(PROBE_PREFIX);
     const output = document(probe.cwd, [{ path: 'a.md', checksum: SUM_A }]);
 
-    expect(captureRow(probe, [output]).stable).toBe(true);
+    expect((await captureRow(probe, [output])).stable).toBe(true);
     // `null` is not `true`: a single repeat had nothing to disagree with.
-    expect(captureRow(setupProbe(PROBE_PREFIX), [output], 1).stable).toBeNull();
+    expect((await captureRow(setupProbe(PROBE_PREFIX), [output], 1)).stable).toBeNull();
   });
 
-  it('calls an empty population "nothing-enumerated", not a failure and not measured', () => {
+  it('calls an empty population "nothing-enumerated", not a failure and not measured', async () => {
     const probe = setupProbe(PROBE_PREFIX);
 
-    const row = captureRow(probe, [document(probe.cwd, [])]);
+    const row = await captureRow(probe, [document(probe.cwd, [])]);
 
     expect(row.attribution).toBe('nothing-enumerated');
     expect(row.failed).toBe(false);
     expect(row.count).toBe(0);
   });
 
-  it('fails the row — never empties it — when no population can be read', () => {
+  it('fails the row — never empties it — when no population can be read', async () => {
     const probe = setupProbe(PROBE_PREFIX);
 
-    const row = captureRow(probe, ['not a document at all']);
+    const row = await captureRow(probe, ['not a document at all']);
 
     expect(row.failed).toBe(true);
     expect(row.attribution).toBe('not-measured');
@@ -172,23 +177,24 @@ describe('capturePopulation', () => {
     expect(row.files).toEqual([]);
   });
 
-  it('fails the row when the repeats themselves failed, before reading any output', () => {
+  it('fails the row when the repeats themselves failed, before reading any output', async () => {
     const probe = setupProbe(PROBE_PREFIX);
 
-    const row = captureRow(probe, [document(probe.cwd, [])], 2, [...SPEC.args, PROBE_FAIL_TOKEN]);
+    const row = await captureRow(probe, [document(probe.cwd, [])], 2, [...SPEC.args, PROBE_FAIL_TOKEN]);
 
+    // The warm arm's priming run is the first to fail, so no repeat is measured.
     expect(row.failed).toBe(true);
-    expect(row.failure).toContain('repeats failed');
+    expect(row.failure).toMatch(/^priming failed — priming run: step 'population' exited /u);
   });
 
-  it('reports a null lane when the build did not say which enumerator ran', () => {
+  it('reports a null lane when the build did not say which enumerator ran', async () => {
     const probe = setupProbe(PROBE_PREFIX);
     const output = document(probe.cwd, [{ path: 'a.md', checksum: SUM_A }], null);
 
-    expect(captureRow(probe, [output]).lane).toBeNull();
+    expect((await captureRow(probe, [output])).lane).toBeNull();
   });
 
-  it('takes the git reference at the DOCUMENT root, not at the subject directory', () => {
+  it('takes the git reference at the DOCUMENT root, not at the subject directory', async () => {
     // The probe's own directory is not a git repository. The document points at
     // one that is, and the reference has to follow the document — a capture that
     // listed git at the subject would report `gitTracked: null` here and, with
@@ -205,18 +211,18 @@ describe('capturePopulation', () => {
       { path: 'never-committed.md', checksum: SUM_B },
     ]);
 
-    const row = captureRow(probe, [output]);
+    const row = await captureRow(probe, [output]);
 
     expect(row.root).toBe(repo);
     expect(row.gitTracked).toBe(1);
     expect(row.offGit).toEqual(['never-committed.md']);
   });
 
-  it('reports no git reference — and no off-git findings — outside a repository', () => {
+  it('reports no git reference — and no off-git findings — outside a repository', async () => {
     const probe = setupProbe(PROBE_PREFIX);
     const output = document(probe.cwd, [{ path: 'a.md', checksum: SUM_A }]);
 
-    const row = captureRow(probe, [output]);
+    const row = await captureRow(probe, [output]);
 
     expect(row.gitTracked).toBeNull();
     // Not the whole population wearing the costume of a finding.

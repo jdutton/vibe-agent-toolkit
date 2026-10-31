@@ -38,6 +38,9 @@
 
 import { z } from 'zod';
 
+import { describeIssues, recaptureRefusal } from '../harness/dumps.js';
+import { type RecordedExit, RecordedExitSchema } from '../harness/exit-record.js';
+
 import { type Coordinate, CoordinateSchema } from './coordinate.js';
 
 /** A measurement of one facet at one coordinate. */
@@ -53,6 +56,24 @@ export interface ReportEnvelope<TBody = unknown> {
    * comparing it would report a difference between two identical measurements.
    */
   readonly capturedAt: string;
+  /**
+   * Inherited environment names the measured VAT children ran WITHOUT — the
+   * developer state (`VAT_*`, git config, temp and Claude directories) the arm
+   * cleared. Recorded for provenance and never compared.
+   */
+  readonly removedEnv: readonly string[];
+  /**
+   * Inherited npm network setting names (`registry`, proxies, CA — see
+   * `arm-env.ts`) the measured VAT children KEPT: names only, never values, so
+   * two developers' runs can be told apart. Recorded for provenance and never compared.
+   */
+  readonly npmNetworkEnv: readonly string[];
+  /**
+   * Every measured command's exit commitment and the code its repetitions
+   * shared — empty for a facet that judges no commitment (`verdict` records
+   * each row's own exit in its body). Recorded for provenance and never compared.
+   */
+  readonly exits: readonly RecordedExit[];
   /** The facet's payload. */
   readonly body: TBody;
 }
@@ -70,6 +91,9 @@ export const ReportEnvelopeSchema = z
     facet: z.string().min(1),
     coordinate: CoordinateSchema,
     capturedAt: z.string().min(1),
+    removedEnv: z.array(z.string()),
+    npmNetworkEnv: z.array(z.string()),
+    exits: z.array(RecordedExitSchema),
     body: z.unknown(),
   })
   .strict();
@@ -101,15 +125,26 @@ export type EnvelopeResult<TBody> = EnvelopeAccepted<TBody> | EnvelopeRefusal;
  */
 export function readEnvelope(value: unknown): EnvelopeResult<unknown> {
   const parsed = ReportEnvelopeSchema.safeParse(value);
-  if (!parsed.success) {
-    return {
-      ok: false,
-      refusal: `REFUSED: not a report envelope — ${parsed.error.issues
-        .map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
-        .join('; ')}`,
-    };
-  }
-  return { ok: true, envelope: parsed.data as ReportEnvelope<unknown> };
+  if (parsed.success) return { ok: true, envelope: parsed.data as ReportEnvelope<unknown> };
+  // A header naming a facet and a coordinate is a lab report whose shape moved;
+  // anything else is not a report at all, and blaming an older lab would lie.
+  const facet = labReportFacet(value);
+  return {
+    ok: false,
+    refusal:
+      facet === null
+        ? `REFUSED: not a report envelope — ${describeIssues(parsed.error)}`
+        : recaptureRefusal(`this ${facet} report`, parsed.error),
+  };
+}
+
+/**
+ * @param value - Parsed JSON from a stored report
+ * @returns The facet a lab report's header names, or `null` when `value` is not one
+ */
+function labReportFacet(value: unknown): string | null {
+  if (typeof value !== 'object' || value === null || !('coordinate' in value) || !('facet' in value)) return null;
+  return typeof value.facet === 'string' && value.facet !== '' ? value.facet : null;
 }
 
 /**

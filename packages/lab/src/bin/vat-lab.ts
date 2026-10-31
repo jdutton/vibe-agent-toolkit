@@ -7,8 +7,9 @@
  * vat config at all.
  */
 
+
 import { ExitCode, installLastResortExit } from '@vibe-agent-toolkit/schema';
-import { parseWholeNumberAtLeast, safePath } from '@vibe-agent-toolkit/utils';
+import { isAbsolutePath, isVatError, parseWholeNumberAtLeast, safePath } from '@vibe-agent-toolkit/utils';
 import { isEntrypoint } from '@vibe-agent-toolkit/utils/process';
 import { Command, InvalidArgumentError } from 'commander';
 
@@ -22,6 +23,17 @@ import { renderIoComparison, renderIoReport } from '../facets/io/render.js';
 import { captureParse } from '../facets/parse/capture.js';
 import { compareParse } from '../facets/parse/compare.js';
 import { renderParseComparison, renderParseReport } from '../facets/parse/render.js';
+import {
+  type ArmName,
+  armName,
+  type ArmsInputs,
+  type ArmsReportFile,
+  findArm,
+  parseArmName,
+  readArmsReportFile,
+} from '../facets/perf/arms-report-file.js';
+import { captureArms, type ExpectedExit, expectedExitRefusal, renderArmsReport, sequenceSteps } from '../facets/perf/arms.js';
+import { type Bar, judgeBars, parseBar, renderBars } from '../facets/perf/bars.js';
 import { capturePerf } from '../facets/perf/capture.js';
 import { comparePerf } from '../facets/perf/compare.js';
 import { renderPerfComparison, renderPerfReport } from '../facets/perf/render.js';
@@ -33,9 +45,25 @@ import {
 } from '../facets/population/render.js';
 import { captureVerdict } from '../facets/verdict/capture.js';
 import { compareVerdict, readVerdictDirectory } from '../facets/verdict/compare.js';
-import { CHANGELOG_REFERENCE_ROOT, COMMITTED_VERDICT_DELTAS, loadVerdictDeltas, readChangelogSources } from '../facets/verdict/deltas.js';
+import {
+  CHANGELOG_REFERENCE_ROOT,
+  changelogRefusals,
+  COMMITTED_VERDICT_DELTAS,
+  type DeclaredUnionFinding,
+  loadVerdictDeltas,
+  readChangelogSources,
+} from '../facets/verdict/deltas.js';
 import { renderVerdictComparison, renderVerdictReport } from '../facets/verdict/render.js';
 import { loadVerdictSubjects } from '../facets/verdict/subjects.js';
+import type { VerdictBody } from '../facets/verdict/types.js';
+import {
+  judgeUnion,
+  type UnionArmEvidence,
+  type UnionJudgement,
+  type UnionKey,
+  type UnionRequest,
+} from '../facets/verdict/union.js';
+import type { Validated } from '../facets/verdict/yaml-file.js';
 import {
   abExitCondition,
   CHANGED_VERDICT,
@@ -46,17 +74,33 @@ import {
   runAb,
   UNMEASURABLE_VERDICT,
 } from '../harness/ab.js';
+import {
+  ARM_REFUSED_CODE,
+  armRefusal,
+  buildAlias,
+  type ArmsRootHandle,
+  underArmsRoot,
+  openOutDirectory,
+  writePrivateFile,
+} from '../harness/arm-dirs.js';
 import { type ArmEnvironment, armEnvironmentClash, sameArmEnvironment } from '../harness/arm-env.js';
+import { PREPARED_CLONE_NAME, prepareClone } from '../harness/clone.js';
 import { indistinguishableArms } from '../harness/closure.js';
 import {
   DEFAULT_MEASURED_COMMANDS,
+  exactExit,
+  MAX_EXIT_CODE,
   MEASURABLE_COMMAND_NAMES,
+  MEASURABLE_SEQUENCES,
   measurableCommand,
+  measurableSequence,
   type MeasuredCommandSpec,
+  type MeasuredSequenceSpec,
   POPULATION_MEASURED_COMMANDS,
 } from '../harness/commands.js';
 import { resolveInstrument } from '../harness/instrument.js';
 import { instrumentLabel, instrumentTrustNotes } from '../harness/render.js';
+import type { SequenceStep } from '../harness/sequence.js';
 import { resolveSubject } from '../harness/subject.js';
 import type { CacheMode, InstrumentSource, ResolvedInstrument } from '../harness/types.js';
 import { readReport, writeReport } from '../store.js';
@@ -75,6 +119,104 @@ import { readReport, writeReport } from '../store.js';
 
 /** The `--out` flag's spelling, shared by every facet's `run` and `ab`. */
 const OUT_OPTION = '--out <dir>';
+/** Where reports land when `--out` is not given; resolved like any given value. */
+const DEFAULT_OUT = '.vat-lab';
+
+/**
+ * The one parser every `--out` goes through: resolved ONCE, here, against the
+ * lab's cwd. A relative value handed on would be resolved again by each child
+ * from ITS cwd — the subject — and land the arm inside the measured tree.
+ *
+ * @param value - The raw value
+ * @returns It, absolute
+ */
+export function resolvedOut(value: string): string {
+  return safePath.resolve(value);
+}
+
+/** The `--arms-dir` flag every capturing verb declares, and its help. */
+const ARMS_DIR_OPTION = '--arms-dir <dir>';
+const ARMS_DIR_HELP =
+  "Absolute directory every arm's private store, temp directory and home live under; outside every subject " +
+  '(default: a fresh run directory under <os tmpdir>/vat-lab-arms-<user>/)';
+
+/**
+ * The one parser every `--arms-dir` goes through. Absolute only: unlike
+ * `--out`, which holds reports, this names what the lab will chmod and delete
+ * in, so a value that means one thing in the lab's cwd and another in a
+ * child's is refused rather than resolved.
+ *
+ * @param value - The raw value
+ * @returns It, unchanged
+ * @throws {InvalidArgumentError} when it is not absolute
+ */
+export function absoluteArmsDir(value: string): string {
+  if (!isAbsolutePath(value)) throw new InvalidArgumentError(`--arms-dir must be absolute; got '${value}'.`);
+  return value;
+}
+
+/** @returns The current time, ISO-8601 — `ab`'s clock */
+function isoNow(): string {
+  return new Date().toISOString();
+}
+
+/** `--keep-arms`, declared alike on every verb that opens an arms root. */
+const KEEP_ARMS_OPTION = '--keep-arms';
+const KEEP_ARMS_HELP = 'Keep the default run directory of arms (stores, caches, clone) when the capture ends';
+
+/** The arms-root options every capturing verb declares. */
+interface ArmsRootOptions {
+  /** Absent for the default arms root. */
+  readonly armsDir?: string;
+  readonly keepArms?: boolean;
+}
+
+/**
+ * Run a capture and its publication under the invocation's arms root
+ * ({@link underArmsRoot}): a default run directory is removed unless
+ * `--keep-arms`, and stderr says where the arms were and what became of them.
+ * The body writes and prints its own result, so a cleanup failure never costs
+ * a finished measurement.
+ *
+ * @param options - `--arms-dir` and `--keep-arms`
+ * @param subjects - Every tree the invocation measures
+ * @param body - The capture and its publication, handed the root
+ */
+async function withArmsRoot(
+  options: ArmsRootOptions,
+  subjects: readonly string[],
+  body: (root: ArmsRootHandle) => Promise<void>,
+): Promise<void> {
+  await underArmsRoot(
+    { override: options.armsDir ?? null, subjects },
+    options.keepArms === true,
+    (line) => process.stderr.write(`${line}\n`),
+    body,
+  );
+}
+
+/**
+ * Run an action, turning an arm refusal (`ARM_REFUSED_CODE`) into the CLI's
+ * clean REFUSED; anything else is still thrown.
+ *
+ * @param body - The action
+ */
+async function refusingArmErrors(body: () => Promise<void>): Promise<void> {
+  try {
+    await body();
+  } catch (error: unknown) {
+    if (!isVatError(error, ARM_REFUSED_CODE)) throw error;
+    refuse(`REFUSED: ${error.message}`);
+  }
+}
+/** The arm-environment options every capturing verb declares, and how a refusal names them. */
+const ENV_OPTION = '--env <KEY=VALUE>';
+const UNSET_OPTION = '--unset <KEY>';
+const ENV_OPTIONS_LABEL = '--env and --unset';
+/** `<facet> run|ab --expect-exit`, declared once for both verbs. */
+const COMMAND_EXPECT_EXIT_OPTION = '--expect-exit <command=code>';
+const COMMAND_EXPECT_EXIT_HELP =
+  'Commit a command to exactly this exit (repeatable), e.g. validate=1; by default a command may exit any code its verb completes with (0, or 0 or 1 for a gate), alike on every repeat; never 2';
 
 /**
  * Parse an instrument specifier into a source.
@@ -293,9 +435,14 @@ interface RunOptions {
   readonly runs: number;
   readonly cache: CacheMode;
   readonly out: string;
+  /** Absent for the default arms root. */
+  readonly armsDir?: string;
+  readonly keepArms?: boolean;
   readonly id?: string;
   /** Absent unless `--command` was given at least once. */
   readonly command?: readonly MeasuredCommandSpec[];
+  /** Absent unless `--expect-exit` was given at least once. */
+  readonly expectExit?: readonly CommandExpectedExit[];
   /** Variables set for every child; absent unless `--env` was given. */
   readonly env?: ArmEnvironment['set'];
   /** Variables removed from every child; absent unless `--unset` was given. */
@@ -362,8 +509,12 @@ interface AbOptions {
   readonly runs: number;
   readonly cache: CacheMode;
   readonly out: string;
+  /** Absent for the default arms root. */
+  readonly armsDir?: string;
+  readonly keepArms?: boolean;
   readonly id?: string;
   readonly command?: readonly MeasuredCommandSpec[];
+  readonly expectExit?: readonly CommandExpectedExit[];
   readonly control: boolean;
   readonly noiseFloor?: number;
   /** Variables set for arm A's children only. */
@@ -438,7 +589,7 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
     .option('--runs <n>', 'Repeats per capture', wholeNumberAtLeast('--runs', 1), wiring.defaultRuns)
     .option(
       '--cache <mode>',
-      "'warm' or 'cold' (cold clears vat's caches before every repeat)",
+      "'warm' or 'cold' (cold deletes the arm's own store and temp directory before every repeat; warm primes them once)",
       parseCacheMode,
       wiring.defaultCache,
     )
@@ -447,6 +598,7 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
       `Measure this command instead of the default set (repeatable). One of: ${MEASURABLE_COMMAND_NAMES.join(', ')}`,
       collectMeasuredCommand,
     )
+    .option(COMMAND_EXPECT_EXIT_OPTION, COMMAND_EXPECT_EXIT_HELP, collectCommandExpectedExit)
     .option(
       '--env-a <KEY=VALUE>',
       'Extra environment for arm A only (repeatable). Pass the same instrument to both arms ' +
@@ -468,7 +620,9 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
       'Remove an inherited variable from arm B only (repeatable)',
       collectUnset('--unset-b'),
     )
-    .option(OUT_OPTION, 'Directory to write the reports into', '.vat-lab')
+    .option(OUT_OPTION, 'Directory to write the reports into', resolvedOut, resolvedOut(DEFAULT_OUT))
+    .option(ARMS_DIR_OPTION, ARMS_DIR_HELP, absoluteArmsDir)
+    .option(KEEP_ARMS_OPTION, KEEP_ARMS_HELP, false)
     .option(
       '--id <name>',
       'Subject id recorded in the reports (default: the <subject> argument exactly as given)',
@@ -476,33 +630,42 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
     .description(
       `Interleave two vat builds over the ${wiring.name} facet: A B A B …, min estimator, per-pair verdicts`,
     )
-    .action(async (subjectPath: string, options: AbOptions) => {
-      const arms = await resolveAbArms(options);
-      if (arms === null) return;
+    .action((subjectPath: string, options: AbOptions) =>
+      refusingArmErrors(async () => {
+        const arms = await resolveAbArms(options);
+        if (arms === null) return;
 
-      const startedAt = new Date().toISOString();
-      const result = await runAb({
-        subject: await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath }),
-        armA: arms.a,
-        armB: arms.b,
-        commands: options.command ?? wiring.defaultCommands ?? DEFAULT_MEASURED_COMMANDS,
-        pairs: options.pairs,
-        runs: options.runs,
-        cache: options.cache,
-        control: options.control,
-        noiseFloor: options.noiseFloor ?? null,
-        envA: arms.envA,
-        envB: arms.envB,
-        outDir: abRunDirectory(options.out, startedAt),
-        now: () => new Date().toISOString(),
-        capture: wiring.capture,
-        compare: wiring.compare,
-        estimate: wiring.estimate,
-      });
-
-      process.stdout.write(`${renderAb(result)}\n`);
-      applyAbExitCode(result);
-    });
+        const startedAt = new Date().toISOString();
+        const subject = await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath });
+        const out = openOutDirectory(options.out, [subject.path]);
+        await withArmsRoot(options, [subject.path], async ({ path: armsRoot }) => {
+          const result = await runAb({
+            subject,
+            armA: arms.a,
+            armB: arms.b,
+            commands: committedCommands(
+              options.command ?? wiring.defaultCommands ?? DEFAULT_MEASURED_COMMANDS,
+              options.expectExit ?? [],
+            ),
+            pairs: options.pairs,
+            runs: options.runs,
+            cache: options.cache,
+            control: options.control,
+            noiseFloor: options.noiseFloor ?? null,
+            envA: arms.envA,
+            envB: arms.envB,
+            outDir: abRunDirectory(out, startedAt),
+            armsRoot,
+            now: isoNow,
+            capture: wiring.capture,
+            compare: wiring.compare,
+            estimate: wiring.estimate,
+          });
+          process.stdout.write(`${renderAb(result)}\n`);
+          applyAbExitCode(result);
+        });
+      }),
+    );
 }
 
 /**
@@ -618,7 +781,7 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
     )
     .option(
       '--cache <mode>',
-      "'warm' or 'cold' (cold clears vat's caches before every repeat)",
+      "'warm' or 'cold' (cold deletes the arm's own store and temp directory before every repeat; warm primes them once)",
       parseCacheMode,
       wiring.defaultCache,
     )
@@ -627,42 +790,55 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
       `Measure this command instead of the default set (repeatable). One of: ${MEASURABLE_COMMAND_NAMES.join(', ')}`,
       collectMeasuredCommand,
     )
+    .option(COMMAND_EXPECT_EXIT_OPTION, COMMAND_EXPECT_EXIT_HELP, collectCommandExpectedExit)
     .option(
-      '--env <KEY=VALUE>',
+      ENV_OPTION,
       'Set a variable for every child (repeatable). VAT_BIN, VAT_ROOT_DIR and the other ' +
         'variables that select which vat runs are never inherited — set them here',
       collectEnv('--env'),
     )
     .option(
-      '--unset <KEY>',
+      UNSET_OPTION,
       'Remove an inherited variable from every child (repeatable)',
       collectUnset('--unset'),
     )
-    .option(OUT_OPTION, 'Directory to write the report into', '.vat-lab')
+    .option(OUT_OPTION, 'Directory to write the report into', resolvedOut, resolvedOut(DEFAULT_OUT))
+    .option(ARMS_DIR_OPTION, ARMS_DIR_HELP, absoluteArmsDir)
+    .option(KEEP_ARMS_OPTION, KEEP_ARMS_HELP, false)
     .option(
       '--id <name>',
       'Subject id recorded in the report (default: the <subject> argument exactly as given)',
     )
     .description(wiring.runSummary)
-    .action(async (subjectPath: string, options: RunOptions) => {
-      const env = armEnvironment(options.env, options.unset, '--env and --unset');
-      if (env === null) return;
-      const instrument = await resolveInstrument(options.instrument);
-      const subject = await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath });
-      const report = await wiring.capture({
-        instrument,
-        subject,
-        // No `--command` means the facet's default set, unchanged — the flag
-        // widens what can be asked for and never quietly narrows a bare run.
-        commands: options.command ?? wiring.defaultCommands ?? DEFAULT_MEASURED_COMMANDS,
-        runs: options.runs,
-        cache: options.cache,
-        env,
-        capturedAt: new Date().toISOString(),
-      });
-      const written = await writeReport(options.out, report);
-      process.stdout.write(`${wiring.renderReport(report)}\nWrote ${written}\n`);
-    });
+    .action((subjectPath: string, options: RunOptions) =>
+      refusingArmErrors(async () => {
+        const env = armEnvironment(options.env, options.unset, ENV_OPTIONS_LABEL);
+        if (env === null) return;
+        const instrument = await resolveInstrument(options.instrument);
+        const subject = await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath });
+        const out = openOutDirectory(options.out, [subject.path]);
+        await withArmsRoot(options, [subject.path], async ({ path: root }) => {
+          const report = await wiring.capture({
+            instrument,
+            subject,
+            // No `--command` means the facet's default set, unchanged — the flag
+            // widens what can be asked for and never quietly narrows a bare run.
+            commands: committedCommands(
+              options.command ?? wiring.defaultCommands ?? DEFAULT_MEASURED_COMMANDS,
+              options.expectExit ?? [],
+            ),
+            runs: options.runs,
+            cache: options.cache,
+            env,
+            arms: { root, build: buildAlias(instrument.version) },
+            capturedAt: new Date().toISOString(),
+          });
+          // Written before the arms root ends: a cleanup failure must not cost the measurement.
+          const written = await writeReport(out, report);
+          process.stdout.write(`${wiring.renderReport(report)}\nWrote ${written}\n`);
+        });
+      }),
+    );
 
   group
     .command('compare')
@@ -788,15 +964,442 @@ function refuse(refusal: string): void {
   process.exitCode = ExitCode.ERROR;
 }
 
+/** A plain directory-name segment, as an arm directory's build alias must be. */
+const ALIAS = /^[\w-][\w.-]*$/u;
+
+/** One `perf arms --build`: an alias and where its vat comes from. */
+export interface ArmsBuildOption {
+  readonly alias: string;
+  readonly source: InstrumentSource;
+}
+
+/** One `perf arms --arm`: which build runs which CI sequence, cold or warm. */
+export interface ArmsSelectionOption {
+  readonly build: string;
+  readonly sequence: MeasuredSequenceSpec;
+  readonly state: CacheMode;
+}
+
+/**
+ * A Commander parser for `perf arms --build alias=<instrument>`, accumulating.
+ *
+ * @param value - Raw value Commander parsed
+ * @param previous - Builds collected so far
+ * @returns The accumulated builds
+ * @throws {InvalidArgumentError} when the alias is not a plain segment or the instrument does not parse
+ */
+export function collectArmsBuild(value: string, previous: readonly ArmsBuildOption[] | undefined): ArmsBuildOption[] {
+  const at = value.indexOf('=');
+  const alias = at === -1 ? '' : value.slice(0, at);
+  if (!ALIAS.test(alias)) {
+    throw new InvalidArgumentError(`--build expects alias=<instrument> with a plain directory-name alias; got '${value}'.`);
+  }
+  // Folded: an alias names an arm directory, and 'old' and 'OLD' are one directory on a case-insensitive disk.
+  if ((previous ?? []).some((build) => build.alias.toLowerCase() === alias.toLowerCase())) {
+    throw new InvalidArgumentError(`--build names alias '${alias}' more than once (ignoring case); each build has its own arm directories.`);
+  }
+  return [...(previous ?? []), { alias, source: parseInstrument(value.slice(at + 1)) }];
+}
+
+/**
+ * A Commander parser for `perf arms --arm build:sequence:state`, accumulating.
+ *
+ * @param value - Raw value Commander parsed
+ * @param previous - Arms collected so far
+ * @returns The accumulated arms
+ * @throws {InvalidArgumentError} when the sequence is not registered or the state is not warm/cold
+ */
+export function collectArmsSelection(
+  value: string,
+  previous: readonly ArmsSelectionOption[] | undefined,
+): ArmsSelectionOption[] {
+  const [build = '', name = '', state = '', ...extra] = value.split(':');
+  const sequence = measurableSequence(name);
+  if (build === '' || extra.length > 0 || sequence === undefined) {
+    throw new InvalidArgumentError(
+      `--arm expects <build>:<sequence>:<warm|cold> with a sequence among ${Object.keys(MEASURABLE_SEQUENCES).join(', ')}; got '${value}'.`,
+    );
+  }
+  if (state !== 'warm' && state !== 'cold') {
+    throw new InvalidArgumentError(`--arm expects a state of 'warm' or 'cold'; got '${value}'.`);
+  }
+  return [...(previous ?? []), { build, sequence, state }];
+}
+
+/**
+ * A Commander parser for `perf arms --prerequisite '<command> <args…>'`: one
+ * untimed tool step committed to exit 0, split on whitespace (no shell).
+ *
+ * @param value - Raw value Commander parsed
+ * @param previous - Prerequisites collected so far
+ * @returns The accumulated steps, in the order given
+ * @throws {InvalidArgumentError} when the value names no command
+ */
+export function collectPrerequisite(value: string, previous: readonly SequenceStep[] | undefined): SequenceStep[] {
+  const [command, ...args] = value.trim().split(/\s+/u);
+  if (command === undefined || command === '') {
+    throw new InvalidArgumentError(`--prerequisite expects a command; got '${value}'.`);
+  }
+  const step: SequenceStep = {
+    name: value.trim(),
+    command: { kind: 'tool', command, args },
+    timed: false,
+    exit: exactExit(ExitCode.OK),
+    provenance: 'none',
+    populates: false,
+  };
+  return [...(previous ?? []), step];
+}
+
+/**
+ * The code half of any `--expect-exit`: one whole number that is not vat's
+ * system-error exit.
+ *
+ * @param value - The whole raw value, for the message
+ * @param code - Its code half; empty when the value did not parse
+ * @param shape - The flag's expected spelling, for the message
+ * @returns The committed exit
+ * @throws {InvalidArgumentError} when the code is missing, a list, 2, or above 255
+ */
+function committedExitCode(value: string, code: string, shape: string): number {
+  if (code === '' || code.split(',').includes('')) {
+    throw new InvalidArgumentError(`--expect-exit expects ${shape}; got '${value}'.`);
+  }
+  if (code.includes(',')) {
+    throw new InvalidArgumentError(`--expect-exit '${value}' names a list — a step commits to one exit code.`);
+  }
+  const exit = Number(code);
+  if (exit === ExitCode.ERROR) {
+    throw new InvalidArgumentError(`--expect-exit '${value}' commits to exit 2 — a system error is never an expected exit.`);
+  }
+  if (exit > MAX_EXIT_CODE) {
+    throw new InvalidArgumentError(`--expect-exit '${value}' commits to exit ${code} — an exit code is a whole number from 0 to ${String(MAX_EXIT_CODE)}.`);
+  }
+  return exit;
+}
+
+/** `--expect-exit`'s shape on a single-command facet: `<command>=<code>`. */
+const COMMAND_EXPECTED_EXIT = /^([\w-]+)=([\d,]*)$/u;
+
+/** One caller commitment: this command, in this run, exits this. */
+export interface CommandExpectedExit {
+  readonly command: string;
+  readonly exit: number;
+}
+
+/**
+ * A Commander parser for `<facet> run|ab --expect-exit <command>=<code>`,
+ * accumulating: the ONE exit a command commits to on this subject (`exact`), in
+ * place of its `observed` default — any completed exit its verb declares, the
+ * same on every repetition.
+ *
+ * @param value - Raw value Commander parsed
+ * @param previous - Expectations collected so far
+ * @returns The accumulated expectations
+ * @throws {InvalidArgumentError} when the value is malformed, names an unknown
+ *   command or a list, commits to exit 2, or repeats a command
+ */
+export function collectCommandExpectedExit(
+  value: string,
+  previous: readonly CommandExpectedExit[] | undefined,
+): CommandExpectedExit[] {
+  const match = COMMAND_EXPECTED_EXIT.exec(value);
+  const [, command = '', code = ''] = match ?? [];
+  const exit = committedExitCode(value, code, '<command>=<code>');
+  if (measurableCommand(command) === undefined) {
+    throw new InvalidArgumentError(`--expect-exit expects one of: ${MEASURABLE_COMMAND_NAMES.join(', ')}; got '${command}'.`);
+  }
+  if ((previous ?? []).some((set) => set.command === command)) {
+    throw new InvalidArgumentError(`--expect-exit names ${command} more than once.`);
+  }
+  return [...(previous ?? []), { command, exit }];
+}
+
+/**
+ * The measured commands with every caller commitment applied — the one place an
+ * expectation replaces a spec's registered exit.
+ *
+ * @param specs - The commands this run measures
+ * @param expected - The caller's `--expect-exit` commitments
+ * @returns The specs, an expected one committed `exact`ly, the rest as registered
+ * @throws {VatError} when an expectation names a command the run does not
+ *   measure — it would leave the registered exit silently in force
+ */
+export function committedCommands(
+  specs: readonly MeasuredCommandSpec[],
+  expected: readonly CommandExpectedExit[],
+): MeasuredCommandSpec[] {
+  const stray = expected.find((set) => !specs.some((spec) => spec.name === set.command));
+  if (stray !== undefined) {
+    throw armRefusal(`--expect-exit names ${stray.command}, which this run does not measure`);
+  }
+  return specs.map((spec) => {
+    const set = expected.find((candidate) => candidate.command === spec.name);
+    return set === undefined ? spec : { ...spec, exit: exactExit(set.exit) };
+  });
+}
+
+/** `--expect-exit`'s shape: `<build>:<sequence>:<step>=<code>`; the code part is checked on its own. */
+const EXPECTED_EXIT = /^([\w.-]+):([\w-]+):([\w-]+)=([\d,]+)$/u;
+
+/**
+ * A Commander parser for `perf arms --expect-exit <build>:<sequence>:<step>=<code>`,
+ * accumulating: the ONE exit one step of one arm commits to, in place of 0.
+ *
+ * @param value - Raw value Commander parsed
+ * @param previous - Expectations collected so far
+ * @returns The accumulated expectations
+ * @throws {InvalidArgumentError} when the value is malformed, names a list,
+ *   commits to exit 2, or repeats a (build, sequence, step) already given
+ */
+export function collectExpectedExit(value: string, previous: readonly ExpectedExit[] | undefined): ExpectedExit[] {
+  const match = EXPECTED_EXIT.exec(value);
+  const [, build = '', sequence = '', step = '', code = ''] = match ?? [];
+  const exit = committedExitCode(value, match === null ? '' : code, '<build>:<sequence>:<step>=<code>');
+  const earlier = (previous ?? []).find((set) => set.build === build && set.sequence === sequence && set.step === step);
+  if (earlier !== undefined) {
+    throw new InvalidArgumentError(`--expect-exit names ${build}:${sequence}:${step} more than once (${String(earlier.exit)}, then ${code}).`);
+  }
+  return [...(previous ?? []), { build, sequence, step, exit }];
+}
+
+/** Options Commander collects for `perf arms`. */
+interface PerfArmsOptions {
+  readonly build?: readonly ArmsBuildOption[];
+  readonly arm?: readonly ArmsSelectionOption[];
+  readonly prerequisite?: readonly SequenceStep[];
+  readonly expectExit?: readonly ExpectedExit[];
+  readonly commit: string;
+  readonly rounds: number;
+  readonly out: string;
+  /** Absent for the default arms root. */
+  readonly armsDir?: string;
+  readonly keepArms?: boolean;
+  readonly timeoutMs?: number;
+  readonly env?: ArmEnvironment['set'];
+  readonly unset?: readonly string[];
+}
+
+/**
+ * Prepare the clone, time every arm interleaved by round, and write the report.
+ *
+ * @param subjectPath - The subject repository
+ * @param options - See {@link PerfArmsOptions}
+ */
+async function runPerfArms(subjectPath: string, options: PerfArmsOptions): Promise<void> {
+  const env = armEnvironment(options.env, options.unset, ENV_OPTIONS_LABEL);
+  if (env === null) return;
+  const arms = options.arm ?? [];
+  const expected = options.expectExit ?? [];
+  const [first] = arms;
+  if (options.build === undefined || first === undefined) {
+    return refuse('REFUSED: perf arms needs at least one --build and one --arm.');
+  }
+  // Every --arm and --expect-exit is checked before any build resolves or any clone is prepared.
+  const declared = new Set(options.build.map((build) => build.alias));
+  const undeclared = arms.find((arm) => !declared.has(arm.build));
+  if (undeclared !== undefined) {
+    return refuse(`REFUSED: --arm names build '${undeclared.build}', which no --build declares.`);
+  }
+  const unmatched = expectedExitRefusal(arms, expected);
+  if (unmatched !== null) return refuse(`REFUSED: ${unmatched}.`);
+
+  const builds = await Promise.all(
+    options.build.map(async (build) => ({ ...build, instrument: await resolveInstrument(build.source) })),
+  );
+  const warmupBuild = builds.find((build) => build.alias === first.build);
+  const [warmupStep] = sequenceSteps(first.sequence, first.build, expected);
+  /* c8 ignore next 3 -- every --arm's build was checked above, and every sequence has a step */
+  if (warmupBuild === undefined || warmupStep === undefined) {
+    return refuse(`REFUSED: --arm names build '${first.build}', which no --build declares.`);
+  }
+  const source = safePath.resolve(subjectPath);
+  const out = openOutDirectory(options.out, [source]);
+  await withArmsRoot(options, [source], (root) => captureArmsInto(out, root, { source, options, builds, arms, expected, env, warmup: { instrument: warmupBuild.instrument, step: warmupStep } }));
+}
+
+/** Everything {@link captureArmsInto} needs, checked by {@link runPerfArms}. */
+interface ArmsCaptureInputs {
+  readonly source: string;
+  readonly options: PerfArmsOptions;
+  readonly builds: readonly (ArmsBuildOption & { readonly instrument: ResolvedInstrument })[];
+  readonly arms: readonly ArmsSelectionOption[];
+  readonly expected: readonly ExpectedExit[];
+  readonly env: ArmEnvironment;
+  readonly warmup: { readonly instrument: ResolvedInstrument; readonly step: SequenceStep };
+}
+
+/**
+ * Prepare the clone under the arms root, time every arm, and write the report
+ * owner-only into `out`.
+ *
+ * @param out - The opened `--out` ({@link openOutDirectory})
+ * @param root - The invocation's arms root; the clone outlives it only once the report naming it is written
+ * @param inputs - See {@link ArmsCaptureInputs}
+ */
+async function captureArmsInto(out: string, root: ArmsRootHandle, inputs: ArmsCaptureInputs): Promise<void> {
+  const armsRoot = root.path;
+  const { options, expected } = inputs;
+  const timeout = options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs };
+  const prepared = await prepareClone({
+    source: inputs.source,
+    commit: options.commit,
+    armsRoot,
+    prerequisites: options.prerequisite ?? [],
+    warmup: inputs.warmup,
+    ...timeout,
+  });
+  if (!prepared.ok) return refuse(`REFUSED: ${prepared.refusal}`);
+
+  const report = await captureArms({
+    armsRoot,
+    cwd: prepared.path,
+    builds: inputs.builds,
+    arms: inputs.arms.map((arm) => ({
+      build: arm.build,
+      arm: arm.sequence.name,
+      state: arm.state,
+      steps: sequenceSteps(arm.sequence, arm.build, expected),
+    })),
+    rounds: options.rounds,
+    env: inputs.env,
+    ...timeout,
+  });
+  const recorded: ArmsInputs = {
+    env: { set: { ...inputs.env.set }, unset: [...inputs.env.unset] },
+    expectedExits: expected.map((exit) => ({ ...exit })),
+    prerequisites: (options.prerequisite ?? []).map((step) => step.name),
+    timeoutMs: options.timeoutMs ?? null,
+  };
+  const written = safePath.join(out, 'arms-report.json');
+  await root.keepChild(PREPARED_CLONE_NAME, (kept) => {
+    writePrivateFile(written, `${JSON.stringify({ prepared: { ...prepared, path: kept }, inputs: recorded, ...report }, null, 2)}\n`);
+  });
+  process.stdout.write(`${renderArmsReport(report)}\nWrote ${written}\n`);
+  if (report.arms.some((arm) => arm.failure !== null)) process.exitCode = ExitCode.ERROR;
+}
+
+/**
+ * Build `perf arms`: time whole CI sequences over a prepared clone.
+ *
+ * @returns The configured command
+ */
+function createPerfArmsCommand(): Command {
+  return new Command('arms')
+    .argument('<subject>', 'The subject repository; the arms run in a `git clone --local` of it under the arms root')
+    .option('--build <alias=instrument>', "A build to measure, e.g. 'rc11=dist:/path' (repeatable)", collectArmsBuild)
+    .option(
+      '--arm <build:sequence:state>',
+      `An arm to time (repeatable), e.g. 'rc11:ci-b:cold'. Sequences: ${Object.keys(MEASURABLE_SEQUENCES).join(', ')}`,
+      collectArmsSelection,
+    )
+    .option(
+      '--prerequisite <command>',
+      "A command run once in the clone before round 1, untimed and exit-checked (repeatable, in order; split on whitespace)",
+      collectPrerequisite,
+    )
+    .option(
+      '--expect-exit <build:sequence:step=code>',
+      "The ONE exit one step of one arm commits to, in place of 0, e.g. 'cand:ci-c:validate-ci=1' (repeatable, once per step; never 2)",
+      collectExpectedExit,
+    )
+    .option('--commit <committish>', 'The commit to clone', 'HEAD')
+    .option('--rounds <n>', 'Measured rounds per arm, interleaved; at least 5', wholeNumberAtLeast('--rounds', 5), 5)
+    .requiredOption(OUT_OPTION, 'Directory for the report (owner-only)', resolvedOut)
+    .option(ARMS_DIR_OPTION, `${ARMS_DIR_HELP}; the clone is <arms-dir>/clone`, absoluteArmsDir)
+    .option(KEEP_ARMS_OPTION, KEEP_ARMS_HELP, false)
+    .option('--timeout-ms <n>', 'Kill any one step after this long', wholeNumberAtLeast('--timeout-ms', 1))
+    .option(ENV_OPTION, 'Set a variable for every VAT step of every arm (repeatable)', collectEnv('--env'))
+    .option(UNSET_OPTION, 'Remove an inherited variable from every VAT step (repeatable)', collectUnset('--unset'))
+    .description('Time CI command sequences per (build, arm, cache state), interleaved by round, in a prepared clone')
+    .action((subjectPath: string, options: PerfArmsOptions) => refusingArmErrors(() => runPerfArms(subjectPath, options)));
+}
+
+/**
+ * A Commander parser for `perf bars --bar`, accumulating.
+ *
+ * @param value - Raw value Commander parsed, e.g. `cand:ci-c:cold<=1.15*rc11:ci-a:cold`
+ * @param previous - Bars collected so far
+ * @returns The accumulated bars
+ * @throws {InvalidArgumentError} when the bar does not parse or names no factor
+ */
+export function collectBar(value: string, previous: readonly Bar[] | undefined): Bar[] {
+  const bar = parseBar(value);
+  if (typeof bar === 'string') throw new InvalidArgumentError(`${bar}.`);
+  return [...(previous ?? []), bar];
+}
+
+/**
+ * Judge every bar over a `perf arms` report: exit 0 only when every bar
+ * passes; a failed or INCONCLUSIVE bar exits 1, and a report or bar that
+ * cannot be judged is REFUSED.
+ *
+ * @param reportPath - `<out>/arms-report.json`
+ * @param options - The bars
+ */
+function runPerfBars(reportPath: string, options: { readonly bar: readonly Bar[] }): void {
+  const read = readArmsReportFile(safePath.resolve(reportPath));
+  if (!read.ok) return refuse(read.refusal);
+  const judged = judgeBars(read.report, options.bar);
+  if (!judged.ok) return refuse(`REFUSED: ${judged.refusal}.`);
+  process.stdout.write(`${renderBars(read.report, judged.results)}\n`);
+  if (judged.results.some((result) => result.verdict !== 'pass')) process.exitCode = ExitCode.FINDINGS;
+}
+
+/**
+ * Build `perf bars`: judge pass bars over a `perf arms` report.
+ *
+ * @returns The configured command
+ */
+function createPerfBarsCommand(): Command {
+  return new Command('bars')
+    .argument('<report>', "A perf arms report (<out>/arms-report.json)")
+    .requiredOption(
+      '--bar <bar>',
+      "A bar, e.g. 'cand:ci-c:cold<=1.15*rc11:ci-a:cold' — held on median AND min; the factor is required (repeatable)",
+      collectBar,
+    )
+    .description('Judge pass bars over a perf arms report: pass only when median and min both hold')
+    .action((reportPath: string, options: { readonly bar: readonly Bar[] }) => {
+      runPerfBars(reportPath, options);
+    });
+}
+
 /** Options Commander collects for `verdict run`. */
 interface VerdictRunOptions {
   readonly subjects: string;
   readonly instrument: InstrumentSource;
   readonly out: string;
+  /** Absent for the default arms root. */
+  readonly armsDir?: string;
+  readonly keepArms?: boolean;
   readonly timeoutMs?: number;
   readonly env?: ArmEnvironment['set'];
   readonly unset?: readonly string[];
+  /** Subjects whose path is replaced by a prepared clone (`perf arms`' report's `prepared.path`). */
+  readonly prepared?: Readonly<Record<string, string>>;
 }
+
+/**
+ * A Commander parser for `verdict run --prepared alias=<path>`, accumulating.
+ *
+ * @param value - Raw value Commander parsed
+ * @param previous - Pairs collected so far
+ * @returns The accumulated alias → resolved path map
+ * @throws {InvalidArgumentError} when either side is empty
+ */
+export function collectPreparedSubject(
+  value: string,
+  previous: Readonly<Record<string, string>> | undefined,
+): Record<string, string> {
+  const at = value.indexOf('=');
+  const path = at === -1 ? '' : value.slice(at + 1);
+  if (at <= 0 || path === '') {
+    throw new InvalidArgumentError(`--prepared expects alias=<path>; got '${value}'.`);
+  }
+  return { ...previous, [value.slice(0, at)]: safePath.resolve(path) };
+}
+
 
 /** Options Commander collects for `verdict compare`. */
 interface VerdictCompareCliOptions {
@@ -828,29 +1431,46 @@ function createVerdictCommand(): Command {
       "Which vat to run: 'tree:<path>', 'dist:<path>' or 'npx:<pkg@version>'",
       parseInstrument,
     )
-    .requiredOption(OUT_OPTION, 'Directory to write one report per alias into; outside every subject')
+    .requiredOption(OUT_OPTION, 'Directory to write one report per alias into; outside every subject', resolvedOut)
+    .option(ARMS_DIR_OPTION, `${ARMS_DIR_HELP}; each alias's arm is <arms-dir>/<alias>`, absoluteArmsDir)
+    .option(KEEP_ARMS_OPTION, KEEP_ARMS_HELP, false)
     .option('--timeout-ms <n>', 'Kill any one verb after this long', wholeNumberAtLeast('--timeout-ms', 1))
-    .option('--env <KEY=VALUE>', 'Set a variable for every child of this arm (repeatable)', collectEnv('--env'))
-    .option('--unset <KEY>', 'Remove an inherited variable from every child of this arm (repeatable)', collectUnset('--unset'))
+    .option(ENV_OPTION, 'Set a variable for every child of this arm (repeatable)', collectEnv('--env'))
+    .option(UNSET_OPTION, 'Remove an inherited variable from every child of this arm (repeatable)', collectUnset('--unset'))
+    .option(
+      '--prepared <alias=path>',
+      "Run a subject in its prepared clone (the prepared.path of perf arms' report) instead of its subjects-file path (repeatable)",
+      collectPreparedSubject,
+    )
     .description('Capture one arm: every verb of every subject, one report per alias')
-    .action(async (options: VerdictRunOptions) => {
-      const env = armEnvironment(options.env, options.unset, '--env and --unset');
-      if (env === null) return;
-      const loaded = loadVerdictSubjects(options.subjects);
-      if (!loaded.ok) return refuse(loaded.refusal);
-      const result = await captureVerdict({
-        instrument: await resolveInstrument(options.instrument),
-        subjects: loaded.subjects.subjects,
-        subjectsDir: loaded.baseDir,
-        env,
-        outDir: safePath.resolve(options.out),
-        capturedAt: new Date().toISOString(),
-        ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-      });
-      if (!result.ok) return refuse(result.refusal);
-      for (const envelope of result.envelopes) process.stdout.write(`${renderVerdictReport(envelope)}\n`);
-      process.stdout.write(`Wrote ${result.written.join(', ')}\n`);
-    });
+    .action((options: VerdictRunOptions) =>
+      refusingArmErrors(async () => {
+        const env = armEnvironment(options.env, options.unset, ENV_OPTIONS_LABEL);
+        if (env === null) return;
+        const loaded = loadVerdictSubjects(options.subjects);
+        if (!loaded.ok) return refuse(loaded.refusal);
+        const prepared = options.prepared ?? {};
+        const { subjects } = loaded.subjects;
+        const measured = subjects.map((subject) => prepared[subject.alias] ?? subject.path);
+        const instrument = await resolveInstrument(options.instrument);
+        await withArmsRoot(options, measured, async ({ path: armsRoot }) => {
+          const result = await captureVerdict({
+            instrument,
+            subjects,
+            subjectsDir: loaded.baseDir,
+            env,
+            prepared,
+            outDir: openOutDirectory(options.out, measured),
+            armsRoot,
+            capturedAt: new Date().toISOString(),
+            ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+          });
+          if (!result.ok) return refuse(result.refusal);
+          for (const envelope of result.envelopes) process.stdout.write(`${renderVerdictReport(envelope)}\n`);
+          process.stdout.write(`Wrote ${result.written.join(', ')}\n`);
+        });
+      }),
+    );
 
   group
     .command('compare')
@@ -876,7 +1496,161 @@ function createVerdictCommand(): Command {
       if (comparison.exitCode !== ExitCode.OK) process.exitCode = comparison.exitCode;
     });
 
+  group
+    .command('union')
+    .argument('<leftDir>', 'The capture whose sequence must be covered (`verdict run --out`)')
+    .argument('<rightDir>', 'The capture whose sequence must cover it')
+    .requiredOption('--alias <alias>', 'The subject alias to compare')
+    .requiredOption('--left <rows>', 'The left sequence, as comma-separated row names', splitRowNames)
+    .requiredOption('--right <rows>', 'The right sequence, as comma-separated row names', splitRowNames)
+    .requiredOption('--arms <report>', "The perf arms report (<out>/arms-report.json) of the prepared clone both captures ran in")
+    .requiredOption('--left-arm <build:sequence:state>', "The left sequence's timed arm in that report, e.g. 'rc11:ci-b:cold'", armNameOption)
+    .requiredOption('--right-arm <build:sequence:state>', "The right sequence's timed arm, e.g. 'cand:ci-c:cold'", armNameOption)
+    .option('--deltas <file>', "The committed expected-deltas file, whose 'unions' declare the right's extra findings", COMMITTED_VERDICT_DELTAS)
+    .description(
+      "Bar 3: the left sequence's findings are all the right's, the right's extras are the declared ones, and on every round the right exits as the left first failed",
+    )
+    .action(async (leftDir: string, rightDir: string, options: VerdictUnionOptions) => {
+      const inputs = await unionInputs(leftDir, rightDir, options);
+      if (!inputs.ok) return refuse(inputs.refusal);
+      const judged = judgeUnion(inputs.value);
+      if (!judged.ok) return refuse(`REFUSED: ${judged.refusal}`);
+      process.stdout.write(`${renderUnion(judged)}\n`);
+      if (!judged.passed) process.exitCode = ExitCode.FINDINGS;
+    });
+
   return group;
+}
+
+/** Options Commander collects for `verdict union`. */
+interface VerdictUnionOptions {
+  readonly alias: string;
+  readonly left: readonly string[];
+  readonly right: readonly string[];
+  readonly arms: string;
+  readonly leftArm: ArmName;
+  readonly rightArm: ArmName;
+  readonly deltas: string;
+}
+
+/**
+ * A Commander parser for `verdict union --left-arm/--right-arm`.
+ *
+ * @param value - An arm in `--arm` spelling
+ * @returns The arm
+ * @throws {InvalidArgumentError} when it is not `<build>:<sequence>:<warm|cold>`
+ */
+export function armNameOption(value: string): ArmName {
+  const arm = parseArmName(value);
+  if (arm === null) throw new InvalidArgumentError(`expected <build>:<sequence>:<warm|cold>; got '${value}'.`);
+  return arm;
+}
+
+/**
+ * Read everything bar 3 is judged over, refusing what cannot be read.
+ *
+ * @param leftDir - The left sequence's capture
+ * @param rightDir - The right sequence's capture
+ * @param options - See {@link VerdictUnionOptions}
+ * @returns The request, or the refusal
+ */
+async function unionInputs(leftDir: string, rightDir: string, options: VerdictUnionOptions): Promise<Validated<UnionRequest>> {
+  const left = await verdictEnvelopeFor(leftDir, options.alias);
+  if (!left.ok) return left;
+  const right = await verdictEnvelopeFor(rightDir, options.alias);
+  if (!right.ok) return right;
+  const report = readArmsReportFile(safePath.resolve(options.arms));
+  if (!report.ok) return report;
+  const leftArm = unionArmEvidence(report.report, options.leftArm, '--left-arm');
+  if (!leftArm.ok) return leftArm;
+  const rightArm = unionArmEvidence(report.report, options.rightArm, '--right-arm');
+  if (!rightArm.ok) return rightArm;
+  const deltas = loadVerdictDeltas(options.deltas);
+  if (!deltas.ok) return deltas;
+  const changelog = changelogRefusals(deltas.deltas, readChangelogSources(deltas.deltas, CHANGELOG_REFERENCE_ROOT));
+  if (changelog.length > 0) return { ok: false, refusal: changelog.join('\n') };
+  return {
+    ok: true,
+    value: {
+      left: { envelope: left.value, rows: options.left },
+      right: { envelope: right.value, rows: options.right },
+      arms: {
+        prepared: report.report.prepared,
+        left: leftArm.value,
+        right: rightArm.value,
+      },
+      declared: deltas.deltas.unions,
+    },
+  };
+}
+
+/**
+ * One named arm of an arms report, with what its build resolved to.
+ *
+ * @param report - The arms report
+ * @param wanted - The arm `--left-arm`/`--right-arm` names
+ * @param flag - Which of the two, for the message
+ * @returns The arm's evidence, or why the report does not hold it
+ */
+function unionArmEvidence(report: ArmsReportFile, wanted: ArmName, flag: string): Validated<UnionArmEvidence> {
+  const arm = findArm(report.arms, wanted);
+  if (typeof arm === 'string') return { ok: false, refusal: `REFUSED: ${flag} ${arm}.` };
+  const build = report.builds.find((candidate) => candidate.alias === arm.build);
+  if (build === undefined) return { ok: false, refusal: `REFUSED: ${flag} names build '${arm.build}', which the report's builds do not hold.` };
+  return { ok: true, value: { name: armName(arm), instrument: build.instrument, failure: arm.failure, repetitions: arm.repetitions } };
+}
+
+/**
+ * @param judged - Bar 3's judgement
+ * @returns Its verdict, then every reason it failed
+ */
+function renderUnion(judged: Extract<UnionJudgement, { ok: true }>): string {
+  const key = (finding: UnionKey): string => `  ${finding.severity} ${finding.code} ${finding.location ?? '-'}:${String(finding.line ?? '-')}`;
+  const declared = (finding: DeclaredUnionFinding): string =>
+    `  ${finding.severity} ${finding.code} ${'locationDigest' in finding ? finding.locationDigest : (finding.location ?? '-')}:${String(finding.line ?? '-')}`;
+  return [
+    judged.passed ? 'BAR 3 HOLDS' : 'BAR 3 FAILS',
+    ...section('Left findings the right lacks', judged.missing.map(key)),
+    ...section('Right findings beyond the left that no unions entry declares', judged.undeclared.map(key)),
+    ...section('Declared extras the right did not report', judged.unused.map(declared)),
+    ...section('Rounds whose right exit breaks the exit rule', judged.exitViolations.map((line) => `  ${line}`)),
+  ].join('\n');
+}
+
+/**
+ * @param heading - What the lines are
+ * @param lines - The lines, already indented
+ * @returns The heading and lines, or nothing when there are none
+ */
+function section(heading: string, lines: readonly string[]): readonly string[] {
+  return lines.length === 0 ? [] : [`${heading}:`, ...lines];
+}
+
+/**
+ * @param value - Comma-separated row names
+ * @returns The names, in order
+ * @throws {InvalidArgumentError} when no name is given
+ */
+export function splitRowNames(value: string): string[] {
+  const names = value.split(',').map((name) => name.trim()).filter((name) => name !== '');
+  if (names.length === 0) throw new InvalidArgumentError(`expected comma-separated row names; got '${value}'.`);
+  return names;
+}
+
+/**
+ * One subject's verdict report from a capture directory.
+ *
+ * @param dir - A `verdict run --out` directory
+ * @param alias - The subject alias
+ * @returns Its envelope, or a refusal
+ */
+async function verdictEnvelopeFor(dir: string, alias: string): Promise<Validated<ReportEnvelope<VerdictBody>>> {
+  const read = await readVerdictDirectory(dir);
+  if (!read.ok) return read;
+  const envelope = read.value.find((candidate) => candidate.coordinate.subject.id === alias);
+  return envelope === undefined
+    ? { ok: false, refusal: `REFUSED: '${dir}' holds no verdict report for subject '${alias}'.` }
+    : { ok: true, value: envelope };
 }
 
 /**
@@ -897,7 +1671,7 @@ export function createProgram(): Command {
         compareSummary: 'Diff two perf reports along a single axis',
         defaultRuns: 5,
         defaultCache: 'warm',
-        capture: (request) => Promise.resolve(capturePerf(request)),
+        capture: capturePerf,
         compare: comparePerf,
         renderReport: renderPerfReport,
         renderComparison: renderPerfComparison,
@@ -905,7 +1679,9 @@ export function createProgram(): Command {
         // and it is the right number to hand `ab` for the same reason `ab` then
         // takes a minimum of it — see `harness/estimator.ts`.
         estimate: (report) => rowEstimates(report.body.commands, 'ms', (row) => row.minMs),
-      }),
+      })
+        .addCommand(createPerfArmsCommand())
+        .addCommand(createPerfBarsCommand()),
     )
     .addCommand(
       createFacetCommand({
@@ -1010,7 +1786,7 @@ export function createProgram(): Command {
         // not move with one.
         defaultCache: 'warm',
         defaultCommands: POPULATION_MEASURED_COMMANDS,
-        capture: (request) => Promise.resolve(capturePopulation(request)),
+        capture: capturePopulation,
         compare: comparePopulation,
         renderReport: renderPopulationReport,
         renderComparison: renderPopulationComparison,

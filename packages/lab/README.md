@@ -73,11 +73,15 @@ sides swapped) — never the `[A → B]` form, which is reserved for two named a
 [Facets](docs/facets.md) for the full table of arm clauses.
 
 ```bash
-vat-lab population run ../some-project --instrument tree:. --id some-project --out ./walk
-VAT_RESOURCES_CRAWL=projection \
-  vat-lab population run ../some-project --instrument tree:. --id some-project --out ./projection
+vat-lab population run ../some-project --instrument tree:. --id some-project \
+  --env VAT_RESOURCES_CRAWL=walk --out ./walk
+vat-lab population run ../some-project --instrument tree:. --id some-project \
+  --env VAT_RESOURCES_CRAWL=projection --out ./projection
 vat-lab population compare ./walk/<report>.json ./projection/<report>.json
 ```
+
+The lane is chosen with `--env`, never by exporting it in your shell: every arm starts from an
+environment cleared of INHERITED `VAT_*`, and only what the arm sets explicitly reaches vat.
 
 ⚠️ Separate `--out` directories are required for two arms selected by the **environment**: the
 coordinate models the subject, its version and the vat build, and an env-selected lane is none of
@@ -95,6 +99,159 @@ vat-lab io compare ./before/<report>.json ./after/<report>.json
 
 Reports default to `.vat-lab/`, which this repo gitignores — keep it that way, since lab output
 landing inside the tree being measured changes the next run's numbers.
+
+## Arms — every timed measurement is a sequence in its own directories
+
+A timed arm is a **sequence of steps** run in `<arms root>/<build>-<arm>-<state>/{store,tmp,home,npm-cache}`
+(created at 0700), from a **cleared environment**: no inherited `VAT_*`, temp, XDG, git config,
+git template or exec path, or inherited `npm_config_*` setting reaches a VAT step — but npm's
+network settings, an allow list in any case and in either the `-` or `_` spelling (`registry`, a
+scoped `@scope:registry`, `proxy`, `https-proxy`, `noproxy`/`no-proxy`, `ca`, `cafile`,
+`strict-ssl`), so an `npx:` arm still reaches its registry. Everything else under `npm_config_*` is
+removed: identity and config files (`userconfig`, `_auth`, a `//host/:_authToken`, `cert`, `key`)
+and whatever changes what npm does (`ignore-scripts`, `offline`, `node-options`, `script-shell`, …).
+Every report records the names, never the values, of the network settings kept (`npmNetworkEnv`,
+on the envelope and on each arm), so two developers' runs can be told apart; git reads no system config or attributes
+(`GIT_CONFIG_NOSYSTEM=1`, `GIT_ATTR_NOSYSTEM=1`); `TMPDIR`/`TEMP`/`TMP` point at the arm's `tmp/`,
+and `HOME` and `CLAUDE_CONFIG_DIR` at its empty `home/`. A developer's `VAT_PROJECTION_STORE=off`,
+global git exclude or `~/.claude/CLAUDE.md` therefore never decides a number. **Outside the arm:**
+the machine-level Claude managed-settings policy (the OS-wide managed settings file an
+administrator installs) is read from a fixed system path no variable redirects, so every arm on one
+machine reads the same one — consistent across arms, but not isolated from the machine. `runRepeats` requires the `arm`;
+single-command facet runs are one-step sequences under `<arms root>/<build>-<command>-<cache>`.
+
+- **The arms root lies outside every subject.** `--arms-dir <dir>` (absolute; never a link) when
+  given, else a fresh `run-*` directory under `<os tmpdir>/vat-lab-arms-<user>/`, printed as
+  `Arms under <root>`. A root that is, lies inside or contains a measured tree is refused — the
+  default one before anything is created. Every root the lab uses carries `.vat-lab-root`: an absent
+  `--arms-dir` is created 0700 and marked; an existing EMPTY one is adopted as it is — the lab writes
+  `.vat-lab-root` into it and then its arms and clone beneath it, and never chmods it; an existing,
+  non-empty one without the marker is refused, nothing written into it.
+- **The default run directory ends with the capture.** When the capture ends — passed or failed —
+  the lab removes the whole `run-*` directory (stores, caches, npm's fetch) and prints
+  `Removed arms under <root>`; `--keep-arms` keeps it and prints `Kept arms under <root>`. A named
+  `--arms-dir` is always kept. Exactly one thing outlives a default run directory: the **prepared
+  clone** of a `perf arms` run whose `arms-report.json` was written. Just before writing it, the
+  lab moves the clone out of `<base>/run-<id>/clone` into a fresh `<base>/clone-XXXXXX/` that
+  `mkdtemp` makes beside the run directory (under the same `vat-lab-arms-<user>/` base), so no
+  earlier kept clone is ever in the way; it writes `<base>/clone-XXXXXX/clone` as `prepared.path`,
+  prints `Prepared clone kept at <base>/clone-XXXXXX/clone; remove it when done`, then removes the
+  run directory whole — delete `<base>/clone-XXXXXX/` yourself once `verdict run --prepared` and
+  `verdict union` are done with it. The prerequisites and the arms ran at the pre-move path, so an
+  artifact that recorded an absolute path into the clone may be stale. The report never waits on
+  that move: when it fails (a Windows `EBUSY`, say), the report names `<run>/clone`, the lab prints
+  `Could not move the prepared clone out of <run>: <why>; the run directory is kept whole` and
+  `Kept arms under <run>`, and the whole run directory is yours to remove. A `perf arms` run that
+  writes no report (a bad `--commit`, a failing `--prerequisite`, a clone not at the committed tree,
+  a refused arm, a report that cannot be written) leaves nothing: the clone goes with the run
+  directory, and no `Prepared clone kept` line is printed. Under `--keep-arms` or a named
+  `--arms-dir` the clone stays at `<root>/clone`. Every result is written, and a kept clone named,
+  before the root ends, so a cleanup that fails costs neither; when the capture failed too, both
+  are reported, the capture's first, under the capture's own code.
+- **The lab chmods only what it created.** `--out` is created 0700 when absent and written into
+  as-is when it exists, and every directory the lab makes under it (an ab run's `pair-N/<arm>/`) is 0700; reports are written 0600, never through a link. An `--out` that IS a subject
+  (`--out .` from its root) is refused. `--out` holds reports only, so the default `.vat-lab/`
+  inside a checkout is safe.
+- **The arm owns its directories' variables.** `--env`/`--unset` naming `TMPDIR`, `TEMP`, `TMP`,
+  `HOME`, `CLAUDE_CONFIG_DIR`, `VAT_PROJECTION_STORE_DIR`, `GIT_CONFIG_NOSYSTEM`, `GIT_ATTR_NOSYSTEM` or npm's three
+  `npm_config_*` settings below is refused
+  (`<NAME> is set by the lab itself on every arm`) — an arm cannot choose them.
+- **npm's cache is the arm's own and never reset.** `npm_config_cache` is `<arm>/npm-cache`, with
+  `npm_config_prefer_offline=true` and the update notifier off, and every build is **started once,
+  untimed** (`--version`, cwd the npm cache) before round 1. An `npx:` build therefore fetches its
+  bytes there, once, never in a timed repetition; a build whose start exits non-zero refuses the
+  arm (`the build did not start — '--version' exited N`).
+- **A populating arm asks the build for its parse directory**: from its entry for a `tree:` or
+  `dist:` build, and for an `npx:` build from the copy npx runs: the pinned version installed in
+  the clone's own project (`node_modules`, which npx runs ahead of its cache), else the one install
+  the untimed start left in the arm's npm cache (`<arm>/npm-cache/_npx/<hash>/`). Neither, or two
+  installs, refuses the arm before any measured child — never a guess; the refusal names the cause
+  and says to measure the copy npx did run with a `dist:` instrument. An arm whose own `--env` turns caching off
+  (`VAT_PROJECTION_STORE=off`, `VAT_CACHE=0`) is checked for writing nothing there instead, so a
+  store-on vs store-off A/B measures both arms.
+- Each step of a CI sequence carries ONE **committed expected exit** — 0 unless
+  `--expect-exit <build>:<sequence>:<step>=<code>` (e.g. `cand:ci-c:validate-ci=1`) says otherwise;
+  a list, a repeated step, exit 2 and a code outside 0–255 are refused. Exiting otherwise is a
+  failed measurement (`step '<name>' exited N, not exactly C: <stderr>`), never a slow one, and
+  each arm's `exits` records the commitment and the outcome: `shared` with the `code` its rounds
+  shared, `not-run` (never reached, or its process never started: a missing binary's `ENOENT`),
+  `killed` (its process started and was killed every round: a timeout, a signal, a full output
+  buffer), or `disagreed` with what each round `seen` did. (`<facet> run|ab`
+  differ: a command may exit any code its verb completes with — 0, or 0 or 1 for a gate — alike on
+  every repeat; `--expect-exit <command>=<code>` makes it exact. See `docs/run-harness.md`.)
+  A committed non-zero exit ends the repetition as CI's `&&` does: completed, nothing after it run.
+- **Cold** clears the arm's store and parse cache before each repetition; when step 1 `populates`,
+  it must leave the store non-empty and at least one parse shard (a file, not an empty directory).
+- **Warm** primes the arm once before round 1 with an unmeasured run, which must leave the same
+  store and shard when any step `populates` (a priming failure fails the arm). In each measured
+  round, a step whose command reads provenance (`resources check`, `validate`) must publish
+  `population: store` — absent or `derived` fails the repetition; a step with no provenance reader
+  asserts nothing.
+- The lab never runs `vat cache clear` — it owns the directories it clears.
+- A bare command name (`git`, a prerequisite's `pnpm`) resolves from the **child's** PATH, absolute
+  entries only — never from a working directory, which here is the subject's clone.
+
+`vat-lab perf arms` runs named CI sequences across builds in **interleaved rounds** (default 5),
+after preparing a `git clone --local` of the subject at `--commit` under `<arms root>/clone` (kept
+afterwards where the report's `prepared.path` says — see above): the
+`--prerequisite` commands, then one warm-up in its own scratch arm
+(`<arms root>/prepare-warmup-cold/` — outside the clone, never a measured arm), then a check that
+`git status --porcelain` is empty and the tree equals the committed tree. Every preparation git runs
+under the same cleared environment as the arms, so the developer's global config can neither hide a
+stray file from that check nor expose one. `--rounds` is at least 5; a `--build` alias may appear
+once (case ignored). It writes `<out>/arms-report.json` (0600, in a 0700 `--out`) with the prepared
+clone, every build (`alias`, the coordinate as given, the resolved version), the machine load, and
+per arm min, median and IQR plus the inherited names its VAT and tool steps — and the
+preparation's warm-up and prerequisites — went without.
+
+`vat-lab perf bars <arms-report.json> --bar '<build>:<arm>:<state> <=|< <factor>* <build>:<arm>:<state>'`
+judges bars on the **median AND the min**: both hold → PASS, neither → FAIL, one → INCONCLUSIVE;
+`<=` ties pass, `<` ties fail, where a tie is equality to a relative 1e-9 (so `1.15*` of an exact
+multiple ties rather than losing to float rounding). The factor is required (`1*` for a plain
+comparison), a bar comparing an arm with itself is refused (it cannot fail), an arm with no
+measurement fails its bar, and the command exits 1 unless every bar passes. Before the verdicts it
+prints `Builds:` — each alias's resolved version and the coordinate it came from — and the load the
+arms ran under, so a verdict read later names the bytes it judged.
+
+**Bar 2 is measurable only after S2.** A warm `ci-c` repetition must report `store` for both its
+resources phase and its checks phase (S1 bar 4; absent fails either). The checks phase publishes
+its `population` today, but the resources phase's `data.population` does not exist yet: today's
+`resources validate` report schema
+is `.strict()` without that field — every warm `validate` step fails the warm rule as "absent"
+until S2 adds it. The lab cannot import the CLI's report schemas (they are internal to the CLI,
+and the lab measures several builds), so the extractor's `cand-C-warm` fixture is modelled ahead
+of S2, and its test names that dependency.
+
+```bash
+vat-lab perf arms ../subject --build base=dist:/path/to/base/cli --build cand=dist:/path/to/cand/cli \
+  --arm base:ci-b:cold --arm cand:ci-b:cold --prerequisite "bun install" \
+  --arms-dir /tmp/lab-arms --out ./arms
+```
+
+The verdict facet reads the same prepared tree with `verdict run --prepared <alias>=<prepared.path>`
+(the report records it as `preparedClone`), runs `validate` and the `*-ci` verbs, and
+**bar 3** is
+
+```bash
+vat-lab verdict union <leftDir> <rightDir> --alias <a> --left <rows> --right <rows> \
+  --arms <out>/arms-report.json --left-arm rc11:ci-b:cold --right-arm cand:ci-c:cold [--deltas <file>]
+```
+
+The inputs must belong together, or it is refused: each capture was measured with its named arm's
+build, each side's `--left`/`--right` rows are that arm's timed steps in order, and neither arm
+failed, broke its rule on any repetition, or has fewer than five repetitions. It holds only when
+(1) both captures ran in that report's prepared clone, at its commit, clean; (2) every left
+finding, keyed `(code, location, line, severity)`, is among the right's; (3) the right's extra
+findings are exactly the ones the deltas file's `unions` section declares for that subject (each
+with a `changelog:` citation and a reason); and (4) round by round, the right arm exited as the
+left arm's first non-zero step did (0 when none) after the entry's declared `exit: { from, to }`
+move, if any, and never 2 — a run that did not complete. A declared move whose `from` is not the
+left's exit fails too. It prints `BAR 3 HOLDS` or `BAR 3 FAILS` with the missing, undeclared and
+unused keys and exits 1 when it fails. `perf bars` refuses a bar naming an unfailed arm that is
+still incomplete — no report `perf arms` writes holds one, so it is a hand-edited or foreign file —
+and never reads an arm no bar names; an arm that failed still fails each bar over it, naming why. It heads its verdicts with every input that
+decided the numbers — `--env`, `--unset`, `--expect-exit`, `--prerequisite`, `--timeout-ms` — as
+`arms-report.json` records them.
 
 ## The three axes
 

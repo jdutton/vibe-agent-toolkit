@@ -79,13 +79,12 @@ export interface ResolvedSubject {
 }
 
 /**
- * Whether vat's caches were left in place or cleared before each repeat.
+ * An arm's cache state: `cold` deletes the arm's own store and empties its
+ * `tmp/` before every repeat; `warm` primes it once and deletes nothing.
  *
- * A harness concern rather than a facet one: clearing the cache is done by
- * running `vat cache clear`, which is an instrument invocation like any other.
- * It lives here so that every measurement facet shares one spelling — a `perf`
- * report and an `io` report captured `cold` must mean the same thing by
- * construction, and a facet that owned its own copy could drift.
+ * A harness concern rather than a facet one, so every measurement facet shares
+ * one spelling — a `perf` report and an `io` report captured `cold` must mean
+ * the same thing by construction. See `repeat.ts`.
  */
 export type CacheMode = 'warm' | 'cold';
 
@@ -155,14 +154,29 @@ export interface CaptureRequest {
   readonly cache: CacheMode;
   readonly timeoutMs?: number;
   /**
-   * The arm's environment for every child, the cache clear included.
+   * The caller's own environment for every VAT child, layered over the arm's
+   * cleared one (see `repeat.ts`).
    *
    * Required: see {@link RunOptions.env}. `EMPTY_ARM_ENVIRONMENT` when
    * the arm sets nothing.
    */
   readonly env: ArmEnvironment;
+  /**
+   * Where this capture's arms live: `<arms root>/<build>-<command>-<cache>/`
+   * (see `arm-dirs.ts`), never under `--out`. Required: a capture with no arm directories would run
+   * in the developer's own store, temp directory and home.
+   */
+  readonly arms: CaptureArms;
   /** Wall-clock stamp for the report, supplied so the caller owns the clock. */
   readonly capturedAt: string;
+}
+
+/** The part of an arm a capture names; the command and the cache mode name the rest. */
+export interface CaptureArms {
+  /** The invocation's arms root, from `openArmsRoot` — outside every subject. */
+  readonly root: string;
+  /** The build's alias. */
+  readonly build: string;
 }
 
 /** One invocation of a vat command. */
@@ -177,6 +191,13 @@ export interface RunResult {
    * check this before letting a sample into a statistic.
    */
   readonly exitCode: number | null;
+  /**
+   * Whether the process started. `false` when the spawn itself failed (ENOENT,
+   * E2BIG, a command that could not be resolved): nothing ran, so `exitCode` is
+   * `null`. A started process with a `null` exit code was killed (a timeout, a
+   * signal, a full output buffer). `runExit` reads the two together.
+   */
+  readonly started: boolean;
   readonly stdout: string;
   readonly stderr: string;
   /** Set when the spawn itself failed (ENOENT, timeout kill, E2BIG). */

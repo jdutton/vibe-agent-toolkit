@@ -33,20 +33,23 @@ import type { CaptureRequest } from './types.js';
  * @param prefix - Temp-directory prefix, so a stray directory names its facet
  * @param dirEnv - The variable whose VALUE switches the seam on and names its directory
  * @param rowFrom - How this facet turns repeats plus their dumps into a row
- * @returns One row per command, in request order
+ * @returns One row per command, in request order, and every command's measurement
  */
-export function captureCommandRows<TRow>(
+export async function captureCommandRows<TRow>(
   options: CaptureRequest,
   prefix: string,
   dirEnv: string,
   rowFrom: (measurement: SpecMeasurement, directories: readonly string[]) => Promise<TRow>,
-): Promise<TRow[]> {
+): Promise<{ readonly rows: TRow[]; readonly measured: readonly SpecMeasurement[] }> {
+  const measured: SpecMeasurement[] = [];
   // In order on purpose — see rule 1 in this module's header.
-  return mapInOrder(options.commands, (spec) =>
-    withDumpDirs(options.runs, prefix, (directories) => {
+  const rows = await mapInOrder(options.commands, (spec) =>
+    withDumpDirs(options.runs, prefix, async (directories) => {
       const perRepeat = directories.map((directory) => ({ [dirEnv]: directory }));
-      const measurement = measureSpec(options, spec, (index) => perRepeat[index]);
+      const measurement = await measureSpec(options, spec, (index) => perRepeat[index]);
+      measured.push(measurement);
       return rowFrom(measurement, directories);
     }),
   );
+  return { rows, measured };
 }

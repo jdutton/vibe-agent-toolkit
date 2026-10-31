@@ -2,12 +2,10 @@
  * The command registry is a set of claims about vat's command line, and every
  * one of them is falsifiable against vat's own sources:
  *
- * - **Which exit codes mean the run finished its work.** vat's convention is `0`
- *   success, `1` validation findings, `2` system error. A command that reports
- *   findings by exit code must accept `1` or it is unmeasurable on any project
- *   that has findings — which is every real project, and was the defect. A
- *   command documented as always exiting `0` must NOT accept `1`, because for it
- *   a `1` really is something going wrong.
+ * - **The one exit each command commits to.** Every registered command commits
+ *   to `0`, its exit on a clean subject; a subject with findings is measured by
+ *   the caller committing to `1` for that command, never by a spec accepting
+ *   two codes. No command ever commits to vat's system-error code `2`.
  * - **Which take a subject path.** `vat validate` and `vat verify` reject a
  *   positional path (exit 2) and scope themselves from the config at the working
  *   directory, which the harness sets to the subject. A `{subject}` token in
@@ -20,18 +18,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  completedExitCodesOf,
-  DEFAULT_COMPLETED_EXIT_CODES,
   DEFAULT_MEASURED_COMMANDS,
   MEASURABLE_COMMAND_NAMES,
   MEASURABLE_COMMANDS,
+  MEASURABLE_SEQUENCES,
   measurableCommand,
+  measurableSequence,
   type MeasuredCommandSpec,
 } from '../src/harness/commands.js';
 import { SUBJECT_TOKEN } from '../src/harness/repeat.js';
-
-/** vat's system-error code, which no command may ever declare completed. */
-const SYSTEM_ERROR_EXIT = 2;
 
 /** The `vat claude context --all` sweep, by registry name. */
 const CONTEXT_SWEEP = 'claude-context-all';
@@ -53,7 +48,20 @@ const PATHLESS_NAMES = ['validate', 'verify'];
  * subject positional either. A `{subject}` token in any of these would make
  * every repeat a usage error.
  */
-const CWD_SCOPED_NAMES = [...PATHLESS_NAMES, CONTEXT_SWEEP];
+/**
+ * The commands exactly as CI runs them: cwd-scoped, no flags, committed to exit
+ * 0 on a clean subject — so a findings exit fails the measurement.
+ */
+const CI_ARGV: Readonly<Record<string, readonly string[]>> = {
+  'resources-validate-ci': ['resources', 'validate'],
+  'resources-check-ci': ['resources', 'check'],
+  'skills-validate-ci': ['skills', 'validate'],
+  'validate-ci': ['validate'],
+  'verify-ci': ['verify'],
+};
+const CI_NAMES = Object.keys(CI_ARGV);
+
+const CWD_SCOPED_NAMES = [...PATHLESS_NAMES, CONTEXT_SWEEP, ...CI_NAMES];
 
 /** Every command handed the subject as a positional argument. */
 const SUBJECT_NAMES = [
@@ -64,29 +72,6 @@ const SUBJECT_NAMES = [
   'inventory',
   'skills-validate',
   'skills-list',
-];
-
-/** Every command that reports findings by exit code, and so completes at 1. */
-const FINDINGS_NAMES = [
-  'resources-validate',
-  'validate',
-  'verify',
-  'skills-validate',
-  'audit',
-];
-
-/** Every command documented as exiting 0 whatever it finds. */
-const ALWAYS_ZERO_NAMES = [
-  'resources-scan',
-  'resources-population',
-  // `resources query` reports no findings: it exits 0 when the statement ran
-  // and 2 when it was refused or the crawl failed. A 1 from it is not a verdict
-  // about the tree, so accepting one would let a broken run count as measured.
-  'resources-query',
-  'inventory',
-  'skills-list',
-  CONTEXT_SWEEP,
-  CONTEXT_ONE,
 ];
 
 /** The paired arms that make `vat claude context`'s cost separable. */
@@ -108,34 +93,23 @@ function specNamed(name: string): MeasuredCommandSpec {
   return spec;
 }
 
-describe('completedExitCodesOf', () => {
-  it('defaults a spec that says nothing to 0 alone', () => {
-    const spec: MeasuredCommandSpec = { name: 'quiet', args: ['quiet'] };
-
-    expect(completedExitCodesOf(spec)).toEqual([0]);
-    expect(DEFAULT_COMPLETED_EXIT_CODES).toEqual([0]);
-  });
-
-  it('returns what the spec declared when it declared something', () => {
-    const spec: MeasuredCommandSpec = { name: 'loud', args: ['loud'], completedExitCodes: [0, 1] };
-
-    expect(completedExitCodesOf(spec)).toEqual([0, 1]);
-  });
-});
-
 describe('MEASURABLE_COMMANDS', () => {
-  it.each(FINDINGS_NAMES)('completes at 0 AND 1 for %s — findings are a finished run', (name) => {
-    expect(completedExitCodesOf(specNamed(name))).toEqual([0, 1]);
-  });
+  /** The verbs that report findings by exit: 0 clean, 1 with findings — both a completed run. */
+  const GATES = new Set([
+    'resources-validate',
+    'audit',
+    'validate',
+    'verify',
+    'skills-validate',
+    'resources-validate-ci',
+    'resources-check-ci',
+    'skills-validate-ci',
+    'validate-ci',
+    'verify-ci',
+  ]);
 
-  it.each(ALWAYS_ZERO_NAMES)('completes only at 0 for %s — it never exits 1 on purpose', (name) => {
-    expect(completedExitCodesOf(specNamed(name))).toEqual([0]);
-  });
-
-  it('never lets any command declare vat\'s system-error code completed', () => {
-    for (const name of MEASURABLE_COMMAND_NAMES) {
-      expect(completedExitCodesOf(specNamed(name))).not.toContain(SYSTEM_ERROR_EXIT);
-    }
+  it.each(MEASURABLE_COMMAND_NAMES)('declares the exits %s completes with — observed, never 2', (name) => {
+    expect(specNamed(name).exit).toEqual({ kind: 'observed', completed: GATES.has(name) ? [0, 1] : [0] });
   });
 
   it.each(PATHLESS_NAMES)('spells %s as the bare verb — it rejects a positional path', (name) => {
@@ -166,20 +140,60 @@ describe('MEASURABLE_COMMANDS', () => {
     expect(MEASURABLE_COMMAND_NAMES.filter((name) => !scoped.has(name))).toEqual([]);
   });
 
-  it('classifies every registered command as findings-reporting or always-zero, never both', () => {
-    const classified = new Set([...FINDINGS_NAMES, ...ALWAYS_ZERO_NAMES]);
-    const both = FINDINGS_NAMES.filter((name) => ALWAYS_ZERO_NAMES.includes(name));
-
-    expect(both).toEqual([]);
-    expect(MEASURABLE_COMMAND_NAMES.filter((name) => !classified.has(name))).toEqual([]);
-  });
-
   it('answers to every name it lists, and to nothing else', () => {
     expect(MEASURABLE_COMMAND_NAMES).toEqual(Object.keys(MEASURABLE_COMMANDS));
     expect(measurableCommand('nonesuch')).toBeUndefined();
     // A name from Object.prototype must not resolve to a spec — the lookup is a
     // registry, not a property probe.
     expect(measurableCommand('toString')).toBeUndefined();
+  });
+});
+
+describe('the CI commands and sequences', () => {
+  it.each(CI_NAMES)('spells %s exactly as CI types it', (name) => {
+    expect(specNamed(name).args).toEqual(CI_ARGV[name]);
+  });
+
+  it('reads the population where each CI verb publishes it, and nowhere else', () => {
+    expect(Object.fromEntries(CI_NAMES.map((name) => [name, specNamed(name).provenance]))).toEqual({
+      'resources-validate-ci': 'none',
+      'resources-check-ci': 'resources-check',
+      'skills-validate-ci': 'none',
+      'validate-ci': 'validate',
+      'verify-ci': 'none',
+    });
+  });
+
+  it('composes arms A, B and C from the CI commands, in CI order', () => {
+    const names = (sequence: string): string[] => measurableSequence(sequence)?.steps.map((step) => step.name) ?? [];
+    expect(names('ci-a')).toEqual(['resources-validate-ci', 'skills-validate-ci']);
+    expect(names('ci-b')).toEqual(['resources-validate-ci', 'resources-check-ci', 'skills-validate-ci']);
+    expect(names('ci-c')).toEqual(['validate-ci']);
+    expect(measurableSequence('toString')).toBeUndefined();
+  });
+
+  it('agrees on `populates` for every entry naming the same vat verb', () => {
+    // Whether a verb writes the projection is the verb's property, not its
+    // argv spelling: `resources validate` populates whether or not CI typed it.
+    const verbOf = (args: readonly string[]): string => {
+      const end = args.findIndex((arg) => arg.startsWith('-') || arg.startsWith('{'));
+      return (end === -1 ? args : args.slice(0, end)).join(' ');
+    };
+    const byVerb = new Map<string, Set<boolean>>();
+    for (const spec of Object.values(MEASURABLE_COMMANDS)) {
+      const verb = verbOf(spec.args);
+      byVerb.set(verb, (byVerb.get(verb) ?? new Set()).add(spec.populates));
+    }
+    const disagreeing = [...byVerb].filter(([, values]) => values.size > 1).map(([verb]) => verb);
+    expect(disagreeing).toEqual([]);
+    // Not vacuous: the CI and non-CI spellings of these verbs both exist.
+    expect([...byVerb.keys()]).toEqual(expect.arrayContaining(['resources validate', 'validate', 'skills validate']));
+  });
+
+  it('asserts the cold rule after the first step of every CI sequence', () => {
+    for (const sequence of Object.values(MEASURABLE_SEQUENCES)) {
+      expect(sequence.steps[0]?.populates, sequence.name).toBe(true);
+    }
   });
 });
 
@@ -221,10 +235,4 @@ describe('the vat claude context arms', () => {
     expect(specNamed(CONTEXT_ONE).args).toEqual(['claude', 'context', SUBJECT_TOKEN]);
   });
 
-  it.each(CONTEXT_NAMES)('leaves %s on the default completed exit codes', (name) => {
-    // `vat claude context` is documented "0 - An answer was produced (there is
-    // no threshold and no gate)"; its `1` is invalid usage, which is a run that
-    // measured nothing. Accepting `1` here would time a usage error.
-    expect(completedExitCodesOf(specNamed(name))).toBe(DEFAULT_COMPLETED_EXIT_CODES);
-  });
 });

@@ -180,9 +180,9 @@ export interface AbSpec<TBody, TComparison extends ComparisonLike>
    * choice, a pool width — has to be measured as two un-interleaved captures,
    * giving up the alternation that controls for machine drift.
    *
-   * ⚠️ An arm's env applies to every child of that arm, the cache clear
-   * included. A setting that changes what the cache clear does would therefore
-   * change the two arms' starting states as well as their runs.
+   * ⚠️ An arm's env applies to every child of that arm, a warm arm's priming
+   * run included. A setting that changes what priming leaves in the store would
+   * therefore change the two arms' starting states as well as their runs.
    */
   readonly envA: ArmEnvironment;
   readonly envB: ArmEnvironment;
@@ -204,6 +204,8 @@ export interface AbSpec<TBody, TComparison extends ComparisonLike>
   readonly noiseFloor: number | null;
   /** Directory the per-pair, per-arm reports are written under. */
   readonly outDir: string;
+  /** The invocation's arms root (`openArmsRoot`); the arms never live under {@link outDir}. */
+  readonly armsRoot: string;
   /** The clock, supplied so the caller owns it. */
   readonly now: () => string;
 }
@@ -332,6 +334,9 @@ async function captureArm<TBody, TComparison extends ComparisonLike>(
     runs: spec.runs,
     cache: spec.cache,
     env: arm === 'a' ? spec.envA : spec.envB,
+    // One arm directory per side for the whole A/B: a warm side's store persists
+    // across pairs, a cold one is reset inside every repeat either way.
+    arms: { root: spec.armsRoot, build: arm },
     capturedAt: spec.now(),
   });
   await writeReport(safePath.join(spec.outDir, `pair-${String(pair)}`, arm), report);

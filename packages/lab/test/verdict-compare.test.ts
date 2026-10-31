@@ -35,6 +35,9 @@ function envelope(alias: string, instrument: InstrumentVersion): ReportEnvelope<
       instrument,
     },
     capturedAt: '2026-09-28T00:00:00.000Z',
+    removedEnv: [],
+    npmNetworkEnv: [],
+    exits: [],
     body: {
       arm: { set: {}, unset: [] },
       rows: [
@@ -48,13 +51,14 @@ function envelope(alias: string, instrument: InstrumentVersion): ReportEnvelope<
         },
       ],
       excluded: [],
+      preparedClone: null,
     },
   };
 }
 
 const OPTIONS = {
   control: false,
-  deltas: { baseline: PROBE_VERSION.version, deltas: [] },
+  deltas: { baseline: PROBE_VERSION.version, deltas: [], unions: [] },
   changelog: new Map<string, string>(),
 };
 
@@ -373,7 +377,7 @@ function excluding(instrument: InstrumentVersion, probe: Probe, reason: string |
 function compareExcluded(before: Probe, after: Probe, deltas: VerdictDeltas['deltas'] = []): VerdictComparison {
   const result = compareVerdict([excluding(ARM_A, before)], [excluding(ARM_B, after)], {
     ...OPTIONS,
-    deltas: { baseline: PROBE_VERSION.version, deltas },
+    deltas: { baseline: PROBE_VERSION.version, deltas, unions: [] },
     changelog: new Map([['CHANGELOG.md', '- A change.\n  <!-- verdict-delta:a-change -->\n']]),
   });
   if (!result.ok) throw new Error(result.refusal);

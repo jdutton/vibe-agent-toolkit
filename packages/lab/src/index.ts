@@ -177,6 +177,19 @@ export {
   type ParsePassStats,
 } from './facets/parse/types.js';
 
+export {
+  type ArmRepetition,
+  type ArmReport,
+  type ArmSelection,
+  type ArmsBuild,
+  type ArmsReport,
+  type ArmStepRecord,
+  captureArms,
+  type CaptureArmsRequest,
+  renderArmsReport,
+  sequenceSteps,
+} from './facets/perf/arms.js';
+export { type BarJudgement, type BarRelation, type BarSide, judgeBar } from './facets/perf/bars.js';
 export { capturePerf, type CapturePerfOptions } from './facets/perf/capture.js';
 export {
   comparePerf,
@@ -309,6 +322,7 @@ export {
   VerdictSubjectsSchema,
   type VerdictSubjectsResult,
 } from './facets/verdict/subjects.js';
+export { judgeUnion, type UnionKey, unionFindings } from './facets/verdict/union.js';
 export {
   VERDICT_FACET,
   type VerdictBody,
@@ -351,14 +365,14 @@ export {
   type ArmEnvironment,
   armEnvironmentClash,
   buildArmEnv,
+  CLEARED_ENV_NAMES,
+  clearedEnvironment,
   EMPTY_ARM_ENVIRONMENT,
   mergeArmEnvironments,
   sameArmEnvironment,
 } from './harness/arm-env.js';
 export { type ArmIdentity, closureDigest, indistinguishableArms } from './harness/closure.js';
 export {
-  completedExitCodesOf,
-  DEFAULT_COMPLETED_EXIT_CODES,
   DEFAULT_MEASURED_COMMANDS,
   MEASURABLE_COMMAND_NAMES,
   MEASURABLE_COMMANDS,
@@ -436,17 +450,33 @@ export {
   readLoad,
 } from './harness/load-guard.js';
 export {
-  classifyRunFailure,
+  type ArmRun,
+  armRunFailure,
+  commandStep,
   materializeArgs,
   measureSpec,
   type RepeatEnvFor,
   type RepeatSpec,
+  runInterleaved,
   runRepeats,
-  runRepeatsFor,
   type SpecMeasurement,
   SUBJECT_TOKEN,
   summarizeRepeatFailures,
 } from './harness/repeat.js';
+export {
+  type ArmDescriptor,
+  type ArmDirectories,
+  armDirectories,
+  buildAlias,
+} from './harness/arm-dirs.js';
+export {
+  type SequenceResult,
+  type SequenceStep,
+  type StepCommand,
+  type StepResult,
+} from './harness/sequence.js';
+export { type ClonePreparation, type PreparedClone, prepareClone } from './harness/clone.js';
+export { type ProvenanceReader, provenanceViolation, readProvenance, type StepProvenance } from './harness/provenance.js';
 export {
   type ComparisonFrame,
   comparisonHeading,

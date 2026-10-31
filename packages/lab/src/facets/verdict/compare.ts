@@ -48,7 +48,7 @@ import { type InstrumentVersion, movedAxes, sameInstrument } from '../../envelop
 import type { ReportEnvelope } from '../../envelope/envelope.js';
 import { sameArmEnvironment } from '../../harness/arm-env.js';
 import { indistinguishableArms } from '../../harness/closure.js';
-import { messageOf } from '../../harness/dumps.js';
+import { messageOf, recaptureRefusal } from '../../harness/dumps.js';
 import { compareByCodeUnit } from '../../harness/fingerprint.js';
 import { instrumentLabel } from '../../harness/render.js';
 import { readReport } from '../../store.js';
@@ -76,9 +76,6 @@ import type { Validated } from './yaml-file.js';
 
 /** Longest diff excerpt a document delta carries, in lines. */
 const EXCERPT_MAX_LINES = 80;
-
-/** Exit code vat's own contract reserves for "could not do its job". */
-const VAT_SYSTEM_ERROR_EXIT = 2;
 
 /** What a compare is judged against. */
 export interface VerdictCompareOptions {
@@ -213,7 +210,7 @@ export function compareVerdict(
  * @returns True iff the row is what an exclusion expects
  */
 function refusedAtTwo(row: VerdictRow): boolean {
-  return row.outcome === 'exited' && row.exitCode === VAT_SYSTEM_ERROR_EXIT && refusalCodes(row).length > 0;
+  return row.outcome === 'exited' && row.exitCode === ExitCode.ERROR && refusalCodes(row).length > 0;
 }
 
 /**
@@ -682,7 +679,7 @@ function sameCounts(a: ReadonlyMap<string, number>, b: ReadonlyMap<string, numbe
  */
 function unmeasuredReasons(side: string, row: VerdictRow): string[] {
   if (row.outcome === 'not-run') return [`${side} did not run: ${row.spawnError ?? 'no exit code'}`];
-  if (row.exitCode === VAT_SYSTEM_ERROR_EXIT) return [`${side} exited 2 (the command could not do its job)`];
+  if (row.exitCode === ExitCode.ERROR) return [`${side} exited 2 (the command could not do its job)`];
   if (rowVerdict(row)?.shape === 'unparsed') return [`${side} printed stdout the lab could not parse`];
   return [];
 }
@@ -744,7 +741,7 @@ export async function readVerdictDirectory(dir: string): Promise<Validated<Repor
     }
     const body = VerdictBodySchema.safeParse(read.envelope.body);
     if (!body.success) {
-      refusal = `REFUSED: '${file}' has a malformed verdict body: ${body.error.issues[0]?.message ?? ''}`;
+      refusal = recaptureRefusal(`'${file}'`, body.error);
       return false;
     }
     envelopes.push({ ...read.envelope, body: body.data });

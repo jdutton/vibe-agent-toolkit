@@ -123,15 +123,17 @@
       "env": ["CI"]
     },
     // lab: `committed-verdict-deltas.integration.test.ts` resolves every
-    // `changelog:` reference of the committed deltas file against the changelog.
+    // `changelog:` reference of the committed deltas file against the changelog,
+    // and `vat-lab-cli-dist.integration.test.ts` resolves THIS checkout's built
+    // CLI as a `dist:` arm — the same closure edge as the unit task below.
     "@vibe-agent-toolkit/lab#test:integration": {
-      "dependsOn": ["^build", "build"],
+      "dependsOn": ["^build", "build", "@vibe-agent-toolkit/cli#build"],
       "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/CHANGELOG.md", "$TURBO_ROOT$/.changes/**"],
       "outputs": [],
       "cache": true,
       "env": ["CI"]
     },
-    // lab: `instrument.test.ts` and `vat-lab-cli.test.ts` resolve THIS checkout's
+    // lab: `instrument.test.ts` resolves THIS checkout's
     // built CLI as a `dist:` arm and digest its whole module closure — the `dist/`
     // of the cli and of every `@vibe-agent-toolkit/*` package it depends on. lab
     // declares only `schema` and `utils`, so `^build` orders neither the cli nor
@@ -140,6 +142,13 @@
     // and folds its hash in so a rebuilt closure re-runs the suite. Not a
     // workspace dependency: that would make lab's BUILD wait on the cli too.
     "@vibe-agent-toolkit/lab#test:unit": {
+      "dependsOn": ["^build", "build", "@vibe-agent-toolkit/cli#build"],
+      "outputs": [],
+      "cache": true
+    },
+    // lab: the system tier times THIS checkout's built CLI as its candidate
+    // (`test/system/candidate-subject.ts`, `cli/dist`) — the same closure edge.
+    "@vibe-agent-toolkit/lab#test:system": {
       "dependsOn": ["^build", "build", "@vibe-agent-toolkit/cli#build"],
       "outputs": [],
       "cache": true

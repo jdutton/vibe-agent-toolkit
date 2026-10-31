@@ -15,25 +15,36 @@
  *   `parseCacheMode`'s doc comment for the mechanism).
  */
 
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { normalizedTmpdir, resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { InvalidArgumentError, type Option } from 'commander';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
+  armNameOption,
+  collectArmsBuild,
+  collectArmsSelection,
+  collectBar,
+  collectCommandExpectedExit,
+  collectExpectedExit,
+  committedCommands,
   collectMeasuredCommand,
+  collectPreparedSubject,
+  collectPrerequisite,
   collectUnset,
   createProgram,
   fastestRepeat,
   nonNegativeNumber,
   parseCacheMode,
-  resolveAbArms,
+  splitRowNames,
 } from '../src/bin/vat-lab.js';
+import type { ReportEnvelope } from '../src/envelope/envelope.js';
 import type { PerfBody, PerfCommandStats } from '../src/facets/perf/types.js';
 import { PERF_FACET } from '../src/facets/perf/types.js';
-import { MEASURABLE_COMMAND_NAMES, MEASURABLE_COMMANDS } from '../src/harness/commands.js';
+import type { VerdictBody } from '../src/facets/verdict/types.js';
+import { exactExit, MEASURABLE_COMMAND_NAMES, MEASURABLE_COMMANDS } from '../src/harness/commands.js';
 import { writeReport } from '../src/store.js';
 
 import { makeReport } from './report-fixtures.js';
@@ -176,6 +187,53 @@ describe('collectMeasuredCommand', () => {
   });
 });
 
+describe('collectCommandExpectedExit — a single-command facet commits a command to its one exit', () => {
+  it('parses <command>=<code> for a registered command, accumulating', () => {
+    const first = collectCommandExpectedExit('validate=1', undefined);
+
+    expect(first).toEqual([{ command: 'validate', exit: 1 }]);
+    expect(collectCommandExpectedExit('audit=0', first)).toEqual([
+      { command: 'validate', exit: 1 },
+      { command: 'audit', exit: 0 },
+    ]);
+  });
+
+  it.for([
+    { value: 'validate=0,1', pattern: /one exit code/u },
+    { value: 'validate=2', pattern: /exit 2/u },
+    { value: 'validate=256', pattern: /from 0 to 255/u },
+    { value: 'nonesuch=1', pattern: /got 'nonesuch'/u },
+    { value: 'validate=', pattern: /<command>=<code>/u },
+    { value: 'validate', pattern: /<command>=<code>/u },
+  ])('refuses $value', ({ value, pattern }) => {
+    expect(() => collectCommandExpectedExit(value, undefined)).toThrow(InvalidArgumentError);
+    expect(() => collectCommandExpectedExit(value, undefined)).toThrow(pattern);
+  });
+
+  it('refuses the same command twice — one command, one committed exit', () => {
+    const first = collectCommandExpectedExit('validate=1', undefined);
+
+    expect(() => collectCommandExpectedExit('validate=0', first)).toThrow(/validate more than once/u);
+  });
+});
+
+describe('committedCommands — the one place a caller expectation replaces a spec\'s exit', () => {
+  it('replaces the named command\'s exit and leaves every other spec as registered', () => {
+    const specs = [MEASURABLE_COMMANDS.validate, MEASURABLE_COMMANDS.audit];
+
+    const committed = committedCommands(specs, [{ command: 'validate', exit: 1 }]);
+
+    expect(committed.map((spec) => [spec.name, spec.exit])).toEqual([['validate', exactExit(1)], ['audit', MEASURABLE_COMMANDS.audit.exit]]);
+    expect(committed[1]).toBe(MEASURABLE_COMMANDS.audit);
+  });
+
+  it('refuses an expectation for a command the run does not measure — it would leave 0 silently in force', () => {
+    expect(() => committedCommands([MEASURABLE_COMMANDS.audit], [{ command: 'validate', exit: 1 }])).toThrow(
+      /--expect-exit names validate, which this run does not measure/u,
+    );
+  });
+});
+
 /**
  * One option, as a facet's named subcommand declares it.
  *
@@ -277,7 +335,9 @@ describe('vat-lab <facet> ab — every facet gets the verb, not just the one tha
   it.for(FACETS)('declares ab on %s', (facet) => {
     const group = createProgram().commands.find((candidate) => candidate.name() === facet);
 
-    expect(group?.commands.map((sub) => sub.name())).toEqual(['run', 'compare', 'ab']);
+    // `perf` alone also times whole CI sequences, and judges bars over them.
+    const expected = facet === 'perf' ? ['run', 'compare', 'ab', 'arms', 'bars'] : ['run', 'compare', 'ab'];
+    expect(group?.commands.map((sub) => sub.name())).toEqual(expected);
   });
 
   it.for(FACETS)('gives %s ab both arms, the pair count and a control switch', (facet) => {
@@ -358,77 +418,6 @@ describe('vat-lab <facet> ab — every facet gets the verb, not just the one tha
   });
 });
 
-/** This checkout's own built CLI — the one `dist:` arm every unit test can rely on. */
-const REPO_CLI_DIST = safePath.join(
-  resolveFromImportMeta(import.meta.url, '../../..'),
-  'packages/cli/dist',
-);
-
-/**
- * `ab` options as Commander would hand them to the action: both arms named
- * `dist:` at the same built CLI, nothing else set.
- *
- * @param over - What the case varies
- * @returns The options object
- */
-function sameDistArms(over: Record<string, unknown> = {}): Parameters<typeof resolveAbArms>[0] {
-  return {
-    instrumentA: { kind: 'dist', path: REPO_CLI_DIST },
-    instrumentB: { kind: 'dist', path: REPO_CLI_DIST },
-    pairs: 1,
-    runs: 1,
-    cache: 'warm',
-    out: tempDir,
-    control: false,
-    ...over,
-  };
-}
-
-describe('vat-lab <facet> ab — indistinguishable arms', () => {
-  it('refuses two indistinguishable arms without --control', async () => {
-    // Two `dist:` arms at one path: same version, same closure digest, same
-    // (empty) environment. Run as an A/B, every effect it printed would be the
-    // machine's noise published as a difference between builds.
-    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
-
-    const arms = await resolveAbArms(sameDistArms());
-
-    expect(arms).toBeNull();
-    expect(process.exitCode).toBe(ExitCode.ERROR);
-    expect(stderr.mock.calls.map(([chunk]) => String(chunk)).join('')).toContain(
-      'REFUSED: the two arms are indistinguishable',
-    );
-  });
-
-  it('accepts one build in two configurations', async () => {
-    // The positive control: the same instrument on both arms IS an A/B when the
-    // environments differ — the pool-on/pool-off run one build exists to make.
-    const arms = await resolveAbArms(sameDistArms({ envA: { X: '1' } }));
-
-    expect(arms).not.toBeNull();
-    expect(arms?.envA).toStrictEqual({ set: { X: '1' }, unset: [] });
-    expect(process.exitCode).toBeUndefined();
-  });
-
-  it('accepts one build where only an UNSET differs', async () => {
-    const arms = await resolveAbArms(sameDistArms({ unsetB: ['CLAUDE_CONFIG_DIR'] }));
-
-    expect(arms).not.toBeNull();
-    expect(process.exitCode).toBeUndefined();
-  });
-
-  it('refuses an arm that sets and unsets one variable, before resolving anything', async () => {
-    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
-
-    const arms = await resolveAbArms(
-      sameDistArms({ envA: { X: '1' }, unsetA: ['X'], instrumentA: { kind: 'dist', path: '/nowhere' } }),
-    );
-
-    expect(arms).toBeNull();
-    expect(process.exitCode).toBe(ExitCode.ERROR);
-  });
-});
-
 describe('collectUnset', () => {
   it('accumulates names', () => {
     expect(collectUnset('--unset')('B', collectUnset('--unset')('A', undefined))).toEqual(['A', 'B']);
@@ -452,8 +441,43 @@ describe('vat-lab <facet> run — the arm environment flags', () => {
   });
 });
 
+/** The flag naming the arms root. */
+const ARMS_DIR = '--arms-dir';
+
+describe('vat-lab — every --out is resolved once, by its parser', () => {
+  const sites = [
+    ...FACETS.flatMap((facet) => [
+      [facet, 'run'],
+      [facet, 'ab'],
+    ]),
+    ['perf', 'arms'],
+    ['verdict', 'run'],
+  ] as const;
+
+  it.for(sites)('resolves %s %s --out to an absolute path, its default included', ([facet, subcommand]) => {
+    const option = optionOf(facet, subcommand, '--out');
+    expect(option?.parseArg?.('relative/out', undefined)).toBe(safePath.resolve('relative/out'));
+    const fallback: unknown = option?.defaultValue;
+    if (typeof fallback === 'string') expect(fallback).toBe(safePath.resolve(fallback));
+    else expect(fallback).toBeUndefined();
+  });
+
+  it.for(sites)('declares %s %s --arms-dir, absolute only, with no default (a fresh run root outside every subject)', ([facet, subcommand]) => {
+    const option = optionOf(facet, subcommand, ARMS_DIR);
+    expect(option?.defaultValue).toBeUndefined();
+    const absolute = safePath.join(normalizedTmpdir(), 'lab-arms');
+    expect(option?.parseArg?.(absolute, undefined)).toBe(absolute);
+    expect(() => option?.parseArg?.('relative/arms', undefined)).toThrow(InvalidArgumentError);
+  });
+});
+
 describe('vat-lab <facet> run — the --command flag is wired to that parser', () => {
   for (const facet of ['perf', 'io', 'parse']) {
+    it(`declares --expect-exit on ${facet} run and ab, parsed by collectCommandExpectedExit`, () => {
+      expect(optionOf(facet, 'run', '--expect-exit')?.parseArg).toBe(collectCommandExpectedExit);
+      expect(optionOf(facet, 'ab', '--expect-exit')?.parseArg).toBe(collectCommandExpectedExit);
+    });
+
     it(`declares --command on ${facet} run, parsed by collectMeasuredCommand`, () => {
       const option = commandOption(facet);
 
@@ -524,5 +548,334 @@ describe('vat-lab perf compare — exit codes', () => {
     await createProgram().parseAsync(['node', 'vat-lab', 'perf', 'compare', before, after]);
 
     expect(process.exitCode).toBeUndefined();
+  });
+});
+
+describe('vat-lab perf arms — the option parsers', () => {
+  it('collects --build as alias=instrument, refusing an alias that is not a directory segment', () => {
+    expect(collectArmsBuild('rc11=dist:/x/vat', undefined)).toEqual([
+      { alias: 'rc11', source: { kind: 'dist', path: '/x/vat' } },
+    ]);
+    expect(() => collectArmsBuild('../up=dist:/x', undefined)).toThrow(InvalidArgumentError);
+    expect(() => collectArmsBuild('noequals', undefined)).toThrow(InvalidArgumentError);
+  });
+
+  it('collects --arm as build:sequence:state from the registered CI sequences', () => {
+    const [arm] = collectArmsSelection('rc11:ci-b:warm', undefined);
+
+    expect(arm?.build).toBe('rc11');
+    expect(arm?.state).toBe('warm');
+    expect(arm?.sequence.name).toBe('ci-b');
+    expect(() => collectArmsSelection('rc11:nonesuch:warm', undefined)).toThrow(/ci-a/u);
+    expect(() => collectArmsSelection('rc11:ci-a:tepid', undefined)).toThrow(InvalidArgumentError);
+  });
+
+  it('collects --prerequisite as an untimed tool step committed to exit 0', () => {
+    const [step] = collectPrerequisite('pnpm install --frozen-lockfile', undefined);
+
+    expect(step).toEqual({
+      name: 'pnpm install --frozen-lockfile',
+      command: { kind: 'tool', command: 'pnpm', args: ['install', '--frozen-lockfile'] },
+      timed: false,
+      exit: exactExit(0),
+      provenance: 'none',
+      populates: false,
+    });
+    expect(() => collectPrerequisite('   ', undefined)).toThrow(InvalidArgumentError);
+  });
+
+  it('collects --expect-exit as build:sequence:step=ONE code, refusing a list, exit 2 and anything malformed', () => {
+    expect(collectExpectedExit('cand:ci-c:validate-ci=1', undefined)).toEqual([
+      { build: 'cand', sequence: 'ci-c', step: 'validate-ci', exit: 1 },
+    ]);
+    expect(() => collectExpectedExit('cand:ci-c:validate-ci=0,1', undefined)).toThrow(/one exit code/u);
+    expect(() => collectExpectedExit('cand:ci-c:validate-ci=2', undefined)).toThrow(/exit 2/u);
+    expect(() => collectExpectedExit('cand:ci-c:validate-ci=300', undefined)).toThrow(/from 0 to 255/u);
+    expect(() => collectExpectedExit('cand:ci-c=0', undefined)).toThrow(InvalidArgumentError);
+    expect(() => collectExpectedExit('cand:ci-c:validate-ci=one', undefined)).toThrow(InvalidArgumentError);
+    expect(() => collectExpectedExit('cand:ci-c:validate-ci=', undefined)).toThrow(InvalidArgumentError);
+  });
+
+  it('refuses a second --expect-exit for the same (build, sequence, step), whatever its code — no first-wins', () => {
+    const first = collectExpectedExit('cand:ci-c:validate-ci=1', undefined);
+    expect(() => collectExpectedExit('cand:ci-c:validate-ci=1', first)).toThrow(/cand:ci-c:validate-ci.*more than once/u);
+    expect(() => collectExpectedExit('cand:ci-c:validate-ci=0', first)).toThrow(/more than once/u);
+    expect(collectExpectedExit('rc11:ci-c:validate-ci=1', first)).toHaveLength(2);
+  });
+
+  it('wires every flag onto perf arms', () => {
+    expect(optionOf('perf', 'arms', '--build')?.parseArg).toBe(collectArmsBuild);
+    expect(optionOf('perf', 'arms', '--arm')?.parseArg).toBe(collectArmsSelection);
+    expect(optionOf('perf', 'arms', '--prerequisite')?.parseArg).toBe(collectPrerequisite);
+    expect(optionOf('perf', 'arms', '--expect-exit')?.parseArg).toBe(collectExpectedExit);
+    expect(optionOf('perf', 'arms', '--rounds')?.defaultValue).toBe(5);
+    expect(optionOf('perf', 'arms', '--commit')?.defaultValue).toBe('HEAD');
+  });
+
+  it('refuses fewer than 5 --rounds, the fewest a median and IQR are read over', () => {
+    expect(() => optionOf('perf', 'arms', '--rounds')?.parseArg?.('4', undefined)).toThrow(InvalidArgumentError);
+    expect(optionOf('perf', 'arms', '--rounds')?.parseArg?.('5', undefined)).toBe(5);
+  });
+});
+
+/** An arms report's inputs when the caller chose none. */
+const NO_INPUTS = { env: { set: {}, unset: [] }, expectedExits: [], prerequisites: [], timeoutMs: null };
+
+/**
+ * @param steps - One round's timed steps and their exits
+ * @returns Five such rounds — the judged floor — as an arms report records them
+ */
+function cleanRounds(steps: readonly (readonly [string, number])[]): unknown[] {
+  return Array.from({ length: 5 }, () => ({
+    exitCode: steps.find(([, exit]) => exit !== 0)?.[1] ?? 0,
+    violation: null,
+    steps: steps.map(([name, exitCode]) => ({ name, timed: true, exitCode })),
+  }));
+}
+
+const measured = (build: string, arm: string, medianMs: number, minMs: number) => ({
+  build,
+  arm,
+  state: 'cold',
+  exits: [],
+  summary: { minMs, medianMs, iqrMs: 1, runs: 5 },
+  repetitions: cleanRounds([['s', 0]]),
+  failure: null,
+});
+
+/**
+ * Run the lab CLI over these arguments, its output captured.
+ *
+ * @param args - What follows `vat-lab`
+ * @returns What the command wrote to stdout and stderr
+ */
+async function runLab(args: readonly string[]): Promise<{ readonly stdout: string; readonly stderr: string }> {
+  const stdout = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+  const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+  await createProgram().parseAsync(['node', 'vat-lab', ...args]);
+  const text = (spy: typeof stdout): string => spy.mock.calls.map(([chunk]) => String(chunk)).join('');
+  return { stdout: text(stdout), stderr: text(stderr) };
+}
+
+/**
+ * Write an arms report and judge these bars over it.
+ *
+ * @param bars - The bars, as typed after --bar
+ * @returns What the command wrote to stdout and stderr
+ */
+async function judge(bars: readonly string[]): Promise<{ readonly stdout: string; readonly stderr: string }> {
+  const report = safePath.join(tempDir, 'bars-arms-report.json');
+  await writeFile(
+    report,
+    JSON.stringify({
+      prepared: { ok: true, path: safePath.join(tempDir, 'clone'), commit: 'a'.repeat(40), tree: 'b'.repeat(40), removedEnv: [], removedToolEnv: [] },
+      inputs: NO_INPUTS,
+      cwd: tempDir,
+      rounds: 5,
+      builds: [
+        { alias: 'rc11', source: { kind: 'npx', spec: 'vibe-agent-toolkit@0.2.0-rc.11' }, instrument: { version: '0.2.0-rc.11', commit: null, dirty: null, closure: null } },
+        { alias: 'cand', source: { kind: 'dist', path: '/x/vat' }, instrument: { version: '0.2.0', commit: null, dirty: null, closure: null } },
+      ],
+      load: { before: null, after: null, cpus: 8, available: false, contaminated: false },
+      arms: [measured('rc11', 'ci-a', 100, 90), measured('cand', 'ci-c', 110, 100)],
+    }),
+  );
+  return runLab(['perf', 'bars', report, ...bars.flatMap((bar) => ['--bar', bar])]);
+}
+
+describe('vat-lab perf arms --build', () => {
+  it('refuses a build alias given twice, in any case — two arms would share one arm directory', () => {
+    const first = collectArmsBuild('rc11=dist:/x/vat', undefined);
+    expect(() => collectArmsBuild('rc11=dist:/y/vat', first)).toThrow(/'rc11' more than once/u);
+    expect(() => collectArmsBuild('RC11=dist:/y/vat', first)).toThrow(/'RC11' more than once/u);
+  });
+});
+
+describe('vat-lab perf bars', () => {
+  it('wires a required, repeatable --bar parsed by collectBar', () => {
+    expect(optionOf('perf', 'bars', '--bar')?.parseArg).toBe(collectBar);
+    expect(optionOf('perf', 'bars', '--bar')?.required).toBe(true);
+    expect(() => collectBar('cand:ci-c:cold<=rc11:ci-a:cold', undefined)).toThrow(/factor/u);
+  });
+
+  it('exits 0 when every bar passes', async () => {
+    const { stdout } = await judge(['cand:ci-c:cold<=1.15*rc11:ci-a:cold']);
+
+    expect(process.exitCode).toBeUndefined();
+    expect(stdout).toMatch(/^PASS {2}cand:ci-c:cold<=1\.15\*rc11:ci-a:cold/mu);
+  });
+
+  it('exits non-zero on a failed bar, and on an INCONCLUSIVE one', async () => {
+    await judge(['cand:ci-c:cold<=1*rc11:ci-a:cold']);
+    expect(process.exitCode).toBe(ExitCode.FINDINGS);
+
+    process.exitCode = undefined;
+    // median 110 ≤ 1.1 × 100 holds; min 100 ≤ 1.1 × 90 does not.
+    const { stdout } = await judge(['cand:ci-c:cold<=1.1*rc11:ci-a:cold']);
+    expect(process.exitCode).toBe(ExitCode.FINDINGS);
+    expect(stdout).toMatch(/^INCONCLUSIVE/mu);
+  });
+
+  it('prints what every alias was before the verdicts', async () => {
+    const { stdout } = await judge(['cand:ci-c:cold<=1.15*rc11:ci-a:cold']);
+
+    expect(stdout).toMatch(/^ {2}rc11: vat 0\.2\.0-rc\.11 .* from npx:vibe-agent-toolkit@0\.2\.0-rc\.11$/mu);
+    expect(stdout).toMatch(/^Machine load: NOT MEASURED/mu);
+  });
+
+  it('refuses a bar naming an arm the report does not hold', async () => {
+    const { stderr } = await judge(['cand:ci-b:cold<=1*rc11:ci-a:cold']);
+
+    expect(process.exitCode).toBe(ExitCode.ERROR);
+    expect(stderr).toMatch(/^REFUSED: .*cand:ci-b:cold is not in the report/mu);
+  });
+});
+
+describe('vat-lab verdict union', () => {
+  it('splits a sequence of row names on commas, refusing an empty one', () => {
+    expect(splitRowNames('resources-validate-ci, resources-check-ci,skills-validate-ci')).toEqual([
+      'resources-validate-ci',
+      'resources-check-ci',
+      'skills-validate-ci',
+    ]);
+    expect(() => splitRowNames(' , ')).toThrow(InvalidArgumentError);
+  });
+
+  it('declares --left and --right parsed by splitRowNames, and a required --alias', () => {
+    expect(optionOf('verdict', 'union', '--left')?.parseArg).toBe(splitRowNames);
+    expect(optionOf('verdict', 'union', '--right')?.parseArg).toBe(splitRowNames);
+    expect(optionOf('verdict', 'union', '--alias')?.required).toBe(true);
+  });
+
+  it('judges bar 3 over a perf arms report: --arms and both arms are required, each arm in --arm spelling', () => {
+    expect(optionOf('verdict', 'union', '--arms')?.required).toBe(true);
+    for (const flag of ['--left-arm', '--right-arm']) {
+      expect(optionOf('verdict', 'union', flag)?.required, flag).toBe(true);
+      expect(optionOf('verdict', 'union', flag)?.parseArg, flag).toBe(armNameOption);
+    }
+    expect(armNameOption('cand:ci-b:cold')).toEqual({ build: 'cand', arm: 'ci-b', state: 'cold' });
+    expect(() => armNameOption('cand:ci-b')).toThrow(InvalidArgumentError);
+  });
+});
+
+/** The two builds bar 3 runs: CI's sequence on the baseline, the single run on the candidate. */
+const UNION_BUILDS = {
+  rc11: { version: '0.2.0-rc.11', commit: null, dirty: null, closure: null },
+  cand: { version: '0.2.0', commit: null, dirty: null, closure: null },
+} as const;
+
+/**
+ * A verdict report of the `app` subject holding one row with one finding.
+ *
+ * @param row - The row name
+ * @param preparedClone - Where it ran, or `null` for its subjects-file path
+ * @param commit - The subject's commit
+ * @param build - Which build captured it
+ * @returns The envelope
+ */
+function unionEnvelope(row: string, preparedClone: string | null, commit: string, build: keyof typeof UNION_BUILDS): ReportEnvelope<VerdictBody> {
+  const finding = { code: 'LINK_BROKEN_FILE', severity: 'error', location: 'docs/a.md', line: 3, message: 'm' };
+  return {
+    facet: 'verdict',
+    coordinate: {
+      subject: { id: 'app', source: preparedClone ?? '/work/app' },
+      subjectVersion: { kind: 'git', commit, ref: null, dirty: false, workingFingerprint: null },
+      instrument: UNION_BUILDS[build],
+    },
+    capturedAt: '2026-10-31T00:00:00.000Z',
+    removedEnv: [],
+    npmNetworkEnv: [],
+    exits: [],
+    body: {
+      arm: { set: {}, unset: [] },
+      rows: [
+        {
+          name: row,
+          argv: [row],
+          outcome: 'exited',
+          exitCode: 1,
+          spawnError: null,
+          document: JSON.stringify({ status: 'findings', examined: 1, findings: [finding], summary: {}, data: {} }),
+        },
+      ],
+      excluded: [],
+      preparedClone,
+    },
+  };
+}
+
+/**
+ * Write bar 3's inputs — two captures, an arms report, a deltas file — and run `verdict union` over them.
+ *
+ * @param prepared - Whether both captures ran in the arms' prepared clone
+ * @param rightFailure - The right arm's recorded failure, or `null`
+ * @returns What the command wrote to stdout and stderr
+ */
+async function union(prepared: boolean, rightFailure: string | null = null): Promise<{ readonly stdout: string; readonly stderr: string }> {
+  const root = await mkdtemp(safePath.join(tempDir, 'union-'));
+  const clone = safePath.join(root, 'clone');
+  const commit = 'a'.repeat(40);
+  const left = safePath.join(root, 'left');
+  const right = safePath.join(root, 'right');
+  await writeReport(left, unionEnvelope('resources-validate-ci', prepared ? clone : null, commit, 'rc11'));
+  await writeReport(right, unionEnvelope('validate', prepared ? clone : null, commit, 'cand'));
+  const report = safePath.join(root, 'arms-report.json');
+  await writeFile(
+    report,
+    JSON.stringify({
+      prepared: { ok: true, path: clone, commit, tree: 'b'.repeat(40), removedEnv: [], removedToolEnv: [] },
+      inputs: NO_INPUTS,
+      builds: Object.entries(UNION_BUILDS).map(([alias, instrument]) => ({ alias, source: { kind: 'dist', path: `/builds/${alias}` }, instrument })),
+      load: { before: null, after: null, cpus: 1, available: false, contaminated: false },
+      arms: [
+        { build: 'rc11', arm: 'ci-b', state: 'cold', exits: [], repetitions: cleanRounds([['resources-validate-ci', 1]]), summary: null, failure: null },
+        { build: 'cand', arm: 'ci-c', state: 'cold', exits: [], repetitions: cleanRounds([['validate', 1]]), summary: null, failure: rightFailure },
+      ],
+    }),
+  );
+  const deltas = safePath.join(root, 'deltas.yaml');
+  await writeFile(deltas, 'baseline: 0.2.0\ndeltas: []\n');
+  return runLab([
+    'verdict', 'union', left, right, '--alias', 'app', '--left', 'resources-validate-ci', '--right', 'validate',
+    '--arms', report, '--left-arm', 'rc11:ci-b:cold', '--right-arm', 'cand:ci-c:cold', '--deltas', deltas,
+  ]);
+}
+
+describe('vat-lab verdict union — bar 3 end to end', () => {
+  it('holds over two captures of the prepared clone whose arms exit as CI would', async () => {
+    const { stdout, stderr } = await union(true);
+
+    expect(stderr).toBe('');
+    expect(stdout).toBe('BAR 3 HOLDS\n');
+    expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it('refuses an arms report whose right arm failed — its rounds are never read as complete', async () => {
+    const { stderr } = await union(true, "1 of 5 repeats failed — step 'validate' exited 2");
+
+    expect(stderr).toBe("REFUSED: cand:ci-c:cold failed: 1 of 5 repeats failed — step 'validate' exited 2\n");
+    expect(process.exitCode).toBe(ExitCode.ERROR);
+  });
+
+  it('refuses captures that did not run in the prepared clone', async () => {
+    const { stderr } = await union(false);
+
+    expect(stderr).toMatch(/^REFUSED: subject 'app' ran at its subjects-file path, not in the prepared clone/u);
+    expect(process.exitCode).toBe(ExitCode.ERROR);
+  });
+});
+
+describe('vat-lab verdict run --prepared', () => {
+  it('collects alias=path pairs, resolving the path, and refuses a malformed one', () => {
+    expect(collectPreparedSubject('app=/work/out/clone', undefined)).toEqual({ app: safePath.resolve('/work/out/clone') });
+    expect(() => collectPreparedSubject('=/x', undefined)).toThrow(InvalidArgumentError);
+    expect(() => collectPreparedSubject('app=', undefined)).toThrow(InvalidArgumentError);
+  });
+
+  it('declares --prepared on verdict run', () => {
+    const option = optionOf('verdict', 'run', '--prepared');
+
+    expect(option).toBeDefined();
+    expect(option?.parseArg).toBe(collectPreparedSubject);
   });
 });
