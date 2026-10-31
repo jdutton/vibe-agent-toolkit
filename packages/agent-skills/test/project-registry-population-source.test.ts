@@ -95,6 +95,9 @@ function recordingStore(): ProjectionStore & { touchedRootIds: string[] } {
   };
 }
 
+/** The outcome a hand-built source reports: it derived, with no store. */
+const NO_STORE = { population: 'derived', stored: 'no-store' } as const;
+
 /**
  * A REAL projection-backed source bound to `boundRoot`, over `store`.
  *
@@ -117,8 +120,10 @@ function projectionSource(
           root,
           cache: { store, treeUnchanged: () => true, treeHash: 'test-tree-hash' },
         });
-        return { paths: population.paths, conditions: population.conditions };
+        return { paths: population.paths, conditions: population.conditions, outcome: population.outcome };
       },
+      // The registry's root guard tells the source it was declined; nothing here acts on it.
+      decline: () => undefined,
     },
   };
 }
@@ -147,8 +152,9 @@ describe('createProjectRegistry populationSource', () => {
         root,
         enumerate: async (enumeratedRoot) => {
           offeredRoots.push(enumeratedRoot);
-          return { paths: [kept], conditions: [] };
+          return { paths: [kept], conditions: [], outcome: NO_STORE };
         },
+        decline: () => undefined,
       },
     });
 
@@ -167,7 +173,11 @@ describe('createProjectRegistry populationSource', () => {
     // real projection population arrives in.
     const registry = await createProjectRegistry(root, {
       outputs: [],
-      populationSource: { root, enumerate: async () => ({ paths: [markdown, html, text, vendored], conditions: [] }) },
+      populationSource: {
+        root,
+        enumerate: async () => ({ paths: [markdown, html, text, vendored], conditions: [], outcome: NO_STORE }),
+        decline: () => undefined,
+      },
     });
 
     expect(memberPaths(root, registry)).toEqual(['docs/guide.md']);
@@ -210,8 +220,9 @@ describe('packageSkills populationSource', () => {
           root,
           enumerate: async (enumeratedRoot) => {
             offeredRoots.push(enumeratedRoot);
-            return { paths: [skillPath], conditions: [] };
+            return { paths: [skillPath], conditions: [], outcome: NO_STORE };
           },
+          decline: () => undefined,
         },
       },
     );

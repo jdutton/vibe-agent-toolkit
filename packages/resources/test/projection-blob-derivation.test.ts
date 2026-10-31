@@ -98,13 +98,14 @@ async function populateFixture(
   registry: ContributorRegistry,
   contentParsing?: typeof CONTENT_PARSING_SKIP,
 ): Promise<Projection> {
-  return populate({
+  const { projection } = await populate({
     root: suite.tempDir,
     registry,
     parameters: CLOSURE_DECLARATION,
     onBlobPopulation: DISCARD_BLOB_POPULATION,
     ...(contentParsing === undefined ? {} : { contentParsing }),
   });
+  return projection;
 }
 
 describe('populate blob derivation', () => {

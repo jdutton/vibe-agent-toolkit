@@ -53,8 +53,9 @@ describe('ResourceRegistry.crawl - what a population source is told the verb wri
       root: ROOT,
       enumerate: (root: string, outputs: readonly string[]) => {
         asked.push([root, outputs]);
-        return Promise.resolve({ paths: [], conditions: [] });
+        return Promise.resolve({ paths: [], conditions: [], outcome: { population: 'derived', stored: 'no-store' } as const });
       },
+      decline: () => undefined,
     };
 
     await new ResourceRegistry().crawl({ baseDir: ROOT, unreadable: 'refuse', populationSource, outputs: [OUTPUT] });

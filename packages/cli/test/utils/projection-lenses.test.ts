@@ -28,8 +28,10 @@ import {
   CLAUDE_CONTEXT_LENS,
   PROJECTION_LENSES,
   evaluateLens,
+  lensPopulationOf,
   lensRelationNames,
   lensesNamedBy,
+  type LensEvaluation,
   type LensRows,
   type ProjectionLens,
 } from '../../src/utils/projection-lenses.js';
@@ -155,11 +157,12 @@ describe('the lens registry against DERIVED_TABLES', () => {
 /**
  * A lens over two relations that returns whatever it is given.
  *
- * @param rows - What `evaluate` returns
+ * @param rows - The rows `evaluate` returns
+ * @param population - Where its own population came from, `null` for none
  * @returns The lens
  */
-function lensReturning(rows: LensRows): ProjectionLens {
-  return { name: 'stub', relations: ['edges', 'edgeResolutions'], evaluate: () => rows };
+function lensReturning(rows: LensRows, population: LensEvaluation['population'] = null): ProjectionLens {
+  return { name: 'stub', relations: ['edges', 'edgeResolutions'], evaluate: () => ({ rows, population }) };
 }
 
 describe('evaluateLens', () => {
@@ -172,7 +175,7 @@ describe('evaluateLens', () => {
 
   it('hands back rows that are exactly the declared relations', async () => {
     const rows: LensRows = { edges: [], edgeResolutions: [] };
-    await expect(evaluateLens(lensReturning(rows), input)).resolves.toBe(rows);
+    await expect(evaluateLens(lensReturning(rows, 'store'), input)).resolves.toEqual({ rows, population: 'store' });
   });
 
   it('refuses rows that omit a declared relation', async () => {
@@ -182,5 +185,21 @@ describe('evaluateLens', () => {
   it('refuses rows carrying a relation the lens does not own', async () => {
     const rows: LensRows = { edges: [], edgeResolutions: [], lensContexts: [] };
     await expect(evaluateLens(lensReturning(rows), input)).rejects.toThrow(/undeclared \[lensContexts\]/);
+  });
+});
+
+describe('lensPopulationOf', () => {
+  it('is none when no evaluated lens populated anything', () => {
+    expect(lensPopulationOf([])).toBe('none');
+    expect(lensPopulationOf([null])).toBe('none');
+  });
+
+  it('is store only when every lens that populated was served from the store', () => {
+    expect(lensPopulationOf([null, 'store'])).toBe('store');
+  });
+
+  it('is derived when any lens that populated derived', () => {
+    expect(lensPopulationOf(['store', 'derived'])).toBe('derived');
+    expect(lensPopulationOf(['derived', null])).toBe('derived');
   });
 });

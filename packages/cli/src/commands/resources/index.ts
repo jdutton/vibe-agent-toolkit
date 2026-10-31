@@ -237,6 +237,10 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
               Which lenses that covers -- only those whose relations the
               statement names. An empty list is a statement that asked for
               none, not a lens that stopped running
+  data.lensPopulation:
+              'none', 'derived' or 'store' -- the same tell for a lens that
+              populates its own lane (claude-context). 'none' when no evaluated
+              lens populated anything
   data.rows:  The selected rows, exactly as SQLite holds them -- a boolean as
               0/1, a date and a JSON column as text. Values are NOT decoded,
               because decoding needs a table spec and arbitrary SQL has none
@@ -537,6 +541,10 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
   data.lensesEvaluated:
              Which lenses lensSecs covers -- those whose relations some check
              names. Empty means no check read a derived relation
+  data.lensPopulation:
+             'none', 'derived' or 'store' -- where a populating lens's own rows
+             came from; 'none' when no evaluated lens populated anything. Null
+             as data.population is
 
 Exit Codes:
   0 - No error-severity findings
@@ -637,6 +645,11 @@ Output Fields (the shared report envelope):
               Per configured collection: resourceCount, hasSchema,
               validationMode?, filesWithErrors, and summary over the findings
               in its files; {} when the project configures none
+  data.population:
+              'store' or 'derived' -- whether the membership was served from
+              the projection store or derived this run. null when nothing was
+              populated from or into the store: the walk lane enumerated, or
+              the projection lane enumerated no root
 
   examined: 0 is never a pass. A run that validated no resource (a
   declared --collection that matched no file, a path with no markdown, an enumeration

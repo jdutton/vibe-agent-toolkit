@@ -45,7 +45,7 @@ import { ClosureExtentContributor } from '../src/projection/contributors/closure
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor, EXTENT_SOURCE_ENV, EXTENT_SOURCE_GIT } from '../src/projection/crawl-source.js';
 import { serializeProjection } from '../src/projection/export.js';
-import { CONTENT_PARSING_SKIP, DISCARD_BLOB_POPULATION, populate } from '../src/projection/merge.js';
+import { CONTENT_PARSING_SKIP, DISCARD_BLOB_POPULATION, populate, type PopulationOutcome } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 import type { ContentDemand } from '../src/projection/realizations.js';
 import type { BlobScopedRows, ExtentKey, ExtentScopedRows, ProjectionStore } from '../src/projection/store.js';
@@ -265,6 +265,8 @@ interface RunRequest {
 interface Run {
   /** The projection itself, for row-count controls. */
   readonly projection: Projection;
+  /** Where `populate()` says the projection came from, and what it did with the store. */
+  readonly outcome: PopulationOutcome;
   /** {@link serializeProjection} of it — the oracle every hit is compared on. */
   readonly document: string;
   /**
@@ -284,7 +286,7 @@ interface Run {
  */
 async function run(request: RunRequest): Promise<Run> {
   const contributorRuns: string[] = [];
-  const projection = await populate({
+  const { projection, outcome } = await populate({
     root: suite.tempDir,
     registry: request.registry,
     // Handed on every run, registered or not: `requestedContributors` reads the
@@ -307,7 +309,7 @@ async function run(request: RunRequest): Promise<Run> {
     ...(request.contentParsing === undefined ? {} : { contentParsing: request.contentParsing }),
     ...(request.gitTracker === undefined ? {} : { gitTracker: request.gitTracker }),
   });
-  return { projection, document: serializeProjection(projection), contributorRuns };
+  return { projection, outcome, document: serializeProjection(projection), contributorRuns };
 }
 
 /** Where this suite points the crawl-timing seam. Beneath the fixture, removed with it. */
@@ -420,6 +422,15 @@ describe('populate through a projection store', () => {
       expect(store.writeExtentCalls).toBe(1);
       expect(store.readExtentCalls).toBe(2);
     });
+
+    it('reports a written miss and then a hit, so provenance is the outcome and not a contributor count', async () => {
+      const store = new FakeProjectionStore();
+      const populated = await run({ registry: filesystemAndClosure(), store });
+      const hydrated = await run({ registry: filesystemAndClosure(), store });
+
+      expect(populated.outcome).toEqual({ population: 'derived', stored: 'written' });
+      expect(hydrated.outcome).toEqual({ population: 'store', stored: 'hit' });
+    });
   });
 
   describe('off by default', () => {
@@ -448,6 +459,12 @@ describe('populate through a projection store', () => {
       expect(store.writeExtentCalls).toBe(0);
       expect(store.readBlobFactsCalls).toBe(0);
       expect(store.writeBlobFactsCalls).toBe(0);
+    });
+
+    it('reports a derived population with no store', async () => {
+      const uncached = await run({ registry: filesystemAndClosure() });
+
+      expect(uncached.outcome).toEqual({ population: 'derived', stored: 'no-store' });
     });
   });
 
@@ -593,9 +610,11 @@ describe('populate through a projection store', () => {
       // unedited key, and once the edit was reverted every later run was served
       // them — a wrong answer that outlived the edit that caused it.
       const store = new FakeProjectionStore();
-      await run({ registry: filesystemAndClosure(), store, treeUnchanged: false });
+      const moved = await run({ registry: filesystemAndClosure(), store, treeUnchanged: false });
 
       expect(store.writeExtentCalls).toBe(0);
+      // The silent skip is a named outcome, so a caller cannot read it as a write.
+      expect(moved.outcome).toEqual({ population: 'derived', stored: 'skipped-tree-changed' });
 
       // Nothing was filed, so the same key is a miss rather than a stale hit.
       const next = await run({ registry: filesystemAndClosure(), store });

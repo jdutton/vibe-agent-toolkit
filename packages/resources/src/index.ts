@@ -745,7 +745,10 @@ export {
 // The lane that assembles the three above. Its own lane, not a flag on the fast
 // repo-wide one: that one declares CONTENT_PARSING_SKIP and both classifiers
 // here read blob-keyed tables.
-export { buildClaudeContextPopulation } from './projection/claude-context-population.js';
+export {
+  buildClaudeContextPopulation,
+  type ClaudeContextPopulation,
+} from './projection/claude-context-population.js';
 
 // The §6 query over that lane's projection — "what loads at this path, and why".
 // `claudeAncestry` and `selectRules` are deliberately NOT exported: they are this
@@ -890,6 +893,8 @@ export {
 export {
   buildResourcePopulation,
   buildResourceProjection,
+  combineOutcomes,
+  type ResourceEnumeration,
   type ResourcePopulation,
   type ResourcePopulationSource,
 } from './projection/resource-population.js';
@@ -944,7 +949,9 @@ export {
   type ContentParsing,
   type ContributorTiming,
   type PopulateOptions,
+  type PopulateResult,
   type PopulationCache,
+  type PopulationOutcome,
 } from './projection/merge.js';
 
 // The one line a user sees when the blob stage declined to derive something.

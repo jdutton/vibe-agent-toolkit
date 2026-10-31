@@ -358,6 +358,7 @@ gate:
 durationMs: 82
 data:
   root: /work/project
+  population: derived
   collections: {}
 ```
 
@@ -386,6 +387,7 @@ data:
   populationSecs: 0.221
   lensSecs: 3.75e-7
   lensesEvaluated: []
+  lensPopulation: none
 ```
 
 ### `resources check`
@@ -409,6 +411,7 @@ data:
   populationSecs: 0.0819
   lensSecs: 3.75e-7
   lensesEvaluated: []
+  lensPopulation: none
   checksRun: 3
   checks:
     - name: claude-rule-glob-inert

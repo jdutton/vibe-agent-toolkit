@@ -72,6 +72,13 @@ const CheckDataSchema = z.object({
    */
   lensesEvaluated: z.array(z.string()).nullable(),
   /**
+   * Where the lenses' own populations came from: `none` when no evaluated lens
+   * populated anything (no statement named a claude-context relation), `store`
+   * when every one that did was served from the store, otherwise `derived`.
+   * Null as `population` is — no population happened at all.
+   */
+  lensPopulation: z.enum(['none', 'store', 'derived']).nullable(),
+  /**
    * The prose frame {@link CheckDataSchema.limits} is read under. Present
    * exactly when a lens with stated bounds was evaluated.
    */

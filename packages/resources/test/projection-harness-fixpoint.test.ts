@@ -67,7 +67,7 @@ describe('the harness pass inside the closure fixpoint', () => {
   });
 
   it('settles a declared closure on every member, once the pass has derived its imports', async () => {
-    const projection = await populateChain();
+    const { projection } = await populateChain();
 
     const rootId = projection.roots[0]?.id ?? '';
     const extentId = extentContextId(CLAUDE_IMPORT_KIND, rootId, START);

@@ -40,6 +40,8 @@ const ResourcesQueryDataSchema = z.object({
   lensSecs: z.number().nonnegative(),
   /** Which lenses that covers — the derived relations this statement named. */
   lensesEvaluated: z.array(z.string()),
+  /** Where those lenses' own populations came from: `none` when no evaluated lens populated anything. */
+  lensPopulation: z.enum(['none', 'store', 'derived']),
   /** The prose frame `limits` is read under; present exactly when a bounded lens ran. */
   boundsStatement: z.string().optional(),
   /** What the derived rows do NOT settle; present exactly when a bounded lens ran. */

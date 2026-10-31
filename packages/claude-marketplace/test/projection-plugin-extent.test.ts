@@ -60,7 +60,7 @@ async function project(root: string): Promise<Projection> {
   registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
   registry.register(new PluginExtentContributor());
   registry.register(new MarketplaceExtentContributor());
-  return populate({ root, registry, onBlobPopulation: DISCARD_BLOB_POPULATION });
+  return (await populate({ root, registry, onBlobPopulation: DISCARD_BLOB_POPULATION })).projection;
 }
 
 /** The extent context of one kind whose id carries `discriminator`. */

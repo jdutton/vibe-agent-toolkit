@@ -334,7 +334,7 @@ async function populateCorpus(
     parameters[inventoryExtentContributorId(skill.name)] = declarationFor(skill, gitTracker !== undefined);
   }
 
-  const projection = await populate({
+  const { projection } = await populate({
     root,
     registry,
     parameters,

@@ -497,7 +497,7 @@ data:
 - `examined` is the POPULATION the statement ran over, never the rows it selected: zero rows over a
   populated tree is `ok` (an empty answer is an answer); a population of nothing is refused
 - `data.columns` names the result columns even when no row was selected; `data.rows` holds the rows
-  exactly as SQLite holds them; `data.population` / `populationSecs` are the cache tell
+  exactly as SQLite holds them; `data.population` / `populationSecs` are the cache tell, `data.lensPopulation` the lenses' one
 - A statement the store refuses (not a query, a second statement, an unbound `?`, a name the schema
   lacks) is `USAGE_INVALID` by its code, `PROJECTION_STATEMENT_REFUSED`, never by its message
 

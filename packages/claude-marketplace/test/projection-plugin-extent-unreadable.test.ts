@@ -42,7 +42,7 @@ async function project(root: string): Promise<Projection> {
   const registry = new ContributorRegistry();
   registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
   registry.register(new PluginExtentContributor());
-  return populate({ root, registry, onBlobPopulation: DISCARD_BLOB_POPULATION });
+  return (await populate({ root, registry, onBlobPopulation: DISCARD_BLOB_POPULATION })).projection;
 }
 
 /** The `MANIFEST_UNREADABLE` messages recorded against the planted manifest. */

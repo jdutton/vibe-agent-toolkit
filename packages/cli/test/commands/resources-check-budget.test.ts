@@ -61,6 +61,7 @@ import {
 const POPULATION: ProgressEntry = {
   kind: 'population',
   population: 'store',
+  lensPopulation: 'none',
   populationMs: 1180,
   lensMs: 0,
   // Empty, and the zero above goes with it: this run's checks named no derived
@@ -294,6 +295,7 @@ describe('buildInterruptedCheckInput', () => {
     const { populated } = killed();
 
     expect(populated?.population).toBe('store');
+    expect(populated?.lensPopulation).toBe('none');
     expect(populated?.populationMs).toBe(1180);
     expect(populated?.membersEnumerated).toBe(8123);
   });
@@ -447,6 +449,8 @@ describe('buildInterruptedCheckInput', () => {
 
     expect(payload.examined).toBe(0);
     expect(payload.data.population).toBeNull();
+    // `null`, not `'none'`: no population happened at all, lens or otherwise.
+    expect(payload.data.lensPopulation).toBeNull();
     expect(payload.data.populationSecs).toBeNull();
     expect(payload.data.lensSecs).toBeNull();
     expect(payload.data.lensesEvaluated).toBeNull();
@@ -715,7 +719,14 @@ describe('readCompletedDocument — a child whose exit DISAGREES with its own do
   const clean = (): string => JSON.stringify(buildCheckOutputData({
     root: '/corpus',
     durationMs: 1200,
-    populated: { population: 'store', populationMs: 1180, lensMs: 0, lensesEvaluated: [], membersEnumerated: 8123 },
+    populated: {
+      population: 'store',
+      lensPopulation: 'none',
+      populationMs: 1180,
+      lensMs: 0,
+      lensesEvaluated: [],
+      membersEnumerated: 8123,
+    },
     issues: [],
     costs: [{ name: 'no-markdown', durationMs: 4.25, rows: 0 }],
   }));

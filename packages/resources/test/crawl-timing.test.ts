@@ -276,14 +276,15 @@ describe('crawl timing seam', () => {
           // guard would decline it and this dump would hold no `base` rows at all.
           root: suite.tempDir,
           enumerate: async (root: string) => {
-            await populate({
+            const { outcome } = await populate({
               root,
               registry: registryWithClosure(EXTENT_NAME, SKILL_KIND),
               parameters: { [CLOSURE_DRIVER_ID]: closureDeclaration() },
               onBlobPopulation: DISCARD_BLOB_POPULATION,
             });
-            return { paths: [], conditions: [] };
+            return { paths: [], conditions: [], outcome };
           },
+          decline: () => undefined,
         },
       });
 

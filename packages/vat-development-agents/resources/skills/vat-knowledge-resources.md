@@ -120,7 +120,9 @@ inferred, because a correct store hit and a correct re-derivation produce identi
 `populationSecs` sits beside it and says what that origin was WORTH, so the tell is not a bare label
 you have to take on faith. `vat resources check --help` carries the current reference timings
 (VAT's own repo and a ~10k-file adopter tree, warm and cold) — read them there rather than from a
-number pasted here.
+number pasted here. `lensPopulation` (`none`, `store`, `derived`) is the same tell for the lens
+relations the statement named, and `vat resources validate` publishes `data.population` too — `null`
+there means nothing was populated (the walk lane, or no root enumerated).
 
 ⛔ There is **no `engine` field**. An earlier RC published one (`sqlite | ephemeral`) to say which
 database answered the SQL; it is gone, because the answer is now always the same. The statement

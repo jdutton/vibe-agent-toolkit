@@ -126,12 +126,13 @@ async function populateCorpus(narrowed: boolean): Promise<Projection> {
     closureFrom: ROOT_DOC,
     ...(narrowed ? { refusals: [{ label: NARROWED, patterns: ['**/*.mjs'] }] } : {}),
   };
-  return populate({
+  const { projection } = await populate({
     root: suite.tempDir,
     registry,
     parameters: { [`closure:${EXTENT_NAME}`]: declaration as unknown as JsonValue },
     onBlobPopulation: DISCARD_BLOB_POPULATION,
   });
+  return projection;
 }
 
 /**

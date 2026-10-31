@@ -218,7 +218,11 @@ describe('ResourceRegistry.crawl takes its unreadable policy from the caller', (
         baseDir: tempDir,
         include: ['**/*.md'],
         unreadable: { degrade: () => {} },
-        populationSource: { root: tempDir, enumerate: async () => ({ paths: [], conditions: [] }) },
+        populationSource: {
+          root: tempDir,
+          enumerate: async () => ({ paths: [], conditions: [], outcome: { population: 'derived', stored: 'no-store' } }),
+          decline: () => undefined,
+        },
       }),
     ).rejects.toThrow(/populationSource.*degrade|degrade.*populationSource/);
   });

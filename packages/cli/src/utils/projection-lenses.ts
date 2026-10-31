@@ -13,7 +13,13 @@
  * names one of its relations".
  */
 
-import { DERIVED_TABLES, type DerivedTableName, type PopulationCache, type Projection } from '@vibe-agent-toolkit/resources';
+import {
+  DERIVED_TABLES,
+  type DerivedTableName,
+  type PopulationCache,
+  type PopulationOutcome,
+  type Projection,
+} from '@vibe-agent-toolkit/resources';
 
 import { evaluateClaudeContextLens } from './claude-context-lens.js';
 import { evaluateAuthoredLenses } from './edge-lens-evaluation.js';
@@ -29,6 +35,35 @@ import type { Logger } from './logger.js';
 export type LensRows = {
   readonly [Name in DerivedTableName]?: readonly Record<string, unknown>[];
 };
+
+/**
+ * What one lens evaluation produced: its rows, and where its OWN population came
+ * from — `null` for a lens that populated nothing (it read the run's projection).
+ * Required, so a lens that populates cannot leave its provenance unstated.
+ */
+export interface LensEvaluation {
+  readonly rows: LensRows;
+  readonly population: PopulationOutcome['population'] | null;
+}
+
+/**
+ * Where the lenses' populations came from, as a run publishes it: `'none'` when
+ * no evaluated lens populated anything, `'store'` when every one that did was
+ * served from the store, otherwise `'derived'`.
+ */
+export type LensPopulation = 'none' | PopulationOutcome['population'];
+
+/**
+ * A run's {@link LensPopulation} from each evaluated lens's own population.
+ *
+ * @param populations - Each evaluated lens's `population`, in evaluation order
+ * @returns The run's lens provenance
+ */
+export function lensPopulationOf(populations: readonly LensEvaluation['population'][]): LensPopulation {
+  const populated = populations.filter((population) => population !== null);
+  if (populated.length === 0) return 'none';
+  return populated.every((population) => population === 'store') ? 'store' : 'derived';
+}
 
 /** Everything a lens may read while evaluating. */
 export interface LensEvaluationInput {
@@ -59,16 +94,18 @@ export interface ProjectionLens {
    *
    * @param input - The projection, the root, and the run's oracles
    * @returns Every relation this lens owns — all of them, every time, because
-   *   omitting one leaves its previous contents in place
+   *   omitting one leaves its previous contents in place — and where its own
+   *   population came from
    */
-  readonly evaluate: (input: LensEvaluationInput) => Promise<LensRows> | LensRows;
+  readonly evaluate: (input: LensEvaluationInput) => Promise<LensEvaluation> | LensEvaluation;
 }
 
 /** The authored-link lens: `lens_contexts`, `edges`, `edge_resolutions`. */
 export const AUTHORED_LINK_LENS: ProjectionLens = {
   name: 'authored-link',
   relations: ['lensContexts', 'edges', 'edgeResolutions'],
-  evaluate: ({ projection }) => evaluateAuthoredLenses(projection),
+  // Reads the run's projection, so it populates nothing of its own.
+  evaluate: ({ projection }) => ({ rows: evaluateAuthoredLenses(projection), population: null }),
 };
 
 /** The always-loaded context lens: `claude_context_chains`, `claude_context_loads`. */
@@ -123,14 +160,15 @@ export function lensesNamedBy(statements: readonly string[] | undefined): readon
  *
  * @param lens - The lens
  * @param input - What it may read
- * @returns Its rows
+ * @returns Its rows and its own population's provenance
  * @throws Error When the rows omit a declared relation or carry an undeclared one
  */
 export async function evaluateLens(
   lens: ProjectionLens,
   input: LensEvaluationInput,
-): Promise<LensRows> {
-  const rows = await lens.evaluate(input);
+): Promise<LensEvaluation> {
+  const evaluation = await lens.evaluate(input);
+  const { rows } = evaluation;
   const declared: readonly string[] = lens.relations;
   const missing = declared.filter((name) => !Object.hasOwn(rows, name));
   const undeclared = Object.keys(rows).filter((name) => !declared.includes(name));
@@ -140,7 +178,7 @@ export async function evaluateLens(
       + ` missing [${missing.join(', ')}], undeclared [${undeclared.join(', ')}]`,
     );
   }
-  return rows;
+  return evaluation;
 }
 
 /**

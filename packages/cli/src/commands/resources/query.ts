@@ -24,9 +24,9 @@
  * from the **store**. It has to be reported, because it cannot be inferred: a
  * correct hit and a correct re-derivation produce byte-identical rows, so "did
  * the cache work" is otherwise unfalsifiable — this repository's most repeated
- * failure. The signal is real rather than declarative: a store hit
- * short-circuits `populate()` before the builder exists, so no contributor runs
- * and no timing record is filed. An empty record list IS the hit.
+ * failure. The signal is real rather than declarative: it is the outcome
+ * `populate()` returns, which says whether the store served the run.
+ * `lensPopulation` is the same tell for a lens that populates a lane of its own.
  *
  * `populationSecs` sits beside it and says what that origin was worth — the wall
  * time of the setup both this verb and `vat resources check` pay before either
@@ -124,6 +124,8 @@ export function buildProjectionQueryReport(input: ProjectionQueryPayloadInput): 
       // statement saying it asked for none — not a lens that silently stopped
       // running. See `ProjectionProvenance.lensesEvaluated`.
       lensesEvaluated: [...input.lensesEvaluated],
+      // The cache tell for those lenses' own populations — see the header.
+      lensPopulation: input.lensPopulation,
       // The bounds of the rows, stated ONCE and only when a bounded lens ran —
       // `relation-limits.ts` carries why the SQL route owes them at all.
       ...relationBoundsFor(input.lensesEvaluated),

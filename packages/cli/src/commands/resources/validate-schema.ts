@@ -54,6 +54,11 @@ const ResourcesValidateDataSchema = z.object({
   root: z.string(),
   /** Every configured collection, keyed by id; `{}` when the project configures none. */
   collections: z.record(z.string(), CollectionSchema),
+  population: z.enum(['store', 'derived']).nullable().describe(
+    'Whether the membership was served from the projection store (`store`) or derived this run (`derived`).'
+    + ' `null` when nothing was populated from or into the store: the walk lane enumerated (no projection),'
+    + ' or the projection lane enumerated no root.',
+  ),
   /** Present only under `--verbose`: one row per resource validated. */
   files: z.array(FileRowSchema).optional(),
 }).strict();

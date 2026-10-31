@@ -61,7 +61,12 @@ async function validateWalk(root: string, config: ProjectConfig): Promise<Valida
 function sourceWith(root: string, conditions: readonly RealizationConditionRow[]): ResourcePopulationSource {
   return {
     root,
-    enumerate: async () => ({ paths: [safePath.join(root, DOC)], conditions }),
+    enumerate: async () => ({
+      paths: [safePath.join(root, DOC)],
+      conditions,
+      outcome: { population: 'derived', stored: 'no-store' },
+    }),
+    decline: () => undefined,
   };
 }
 

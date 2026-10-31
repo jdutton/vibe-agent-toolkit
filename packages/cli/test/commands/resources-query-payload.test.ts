@@ -43,6 +43,7 @@ function reportFor(overrides: Partial<ProjectionQueryPayloadInput> = {}): Resour
     membersEnumerated: 7,
     root: '/corpus',
     population: 'derived',
+    lensPopulation: 'none',
     durationMs: 1060,
     populationMs: 190,
     lensMs: 27,
@@ -78,6 +79,12 @@ describe('the query report', () => {
   it('publishes the columns even when the statement selected no row', () => {
     // Rows alone cannot carry the shape of an empty answer.
     expect(dataOf({ rows: [], columns: ['path'] })['columns']).toEqual(['path']);
+  });
+
+  it('reports where the lens population came from, beside the resources population', () => {
+    expect(dataOf({ lensPopulation: 'store' })['lensPopulation']).toBe('store');
+    expect(dataOf({ lensPopulation: 'derived' })['lensPopulation']).toBe('derived');
+    expect(dataOf({ lensPopulation: 'none' })['lensPopulation']).toBe('none');
   });
 
   it('reports where its rows came from, which is the only cache tell there is', () => {

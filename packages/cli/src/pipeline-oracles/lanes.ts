@@ -30,7 +30,7 @@ import type { CrawlOptions, UnreadablePolicy } from '@vibe-agent-toolkit/utils/c
 import { buildSkillsValidateRegistry } from '../commands/skills/validate.js';
 import { loadConfig } from '../utils/config-loader.js';
 import { createLogger } from '../utils/logger.js';
-import { loadResourcesWithConfig } from '../utils/resource-loader.js';
+import { loadResourcesWithConfig, POPULATION_UNOBSERVED } from '../utils/resource-loader.js';
 
 import type { LaneId } from './types.js';
 
@@ -112,7 +112,12 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
       };
     },
     build: async (projectRoot) => {
-      const loaded = await loadResourcesWithConfig(undefined, projectRoot, createLogger());
+      const loaded = await loadResourcesWithConfig(
+        undefined,
+        projectRoot,
+        createLogger(),
+        POPULATION_UNOBSERVED.observePopulation,
+      );
       return loaded.registry;
     },
   },
