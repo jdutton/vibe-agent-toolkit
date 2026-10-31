@@ -6,10 +6,11 @@
  *   cleared environment; a `tool` step (`pnpm install`, a build) runs under the
  *   developer's minus every `VAT_*` name (see `arm-env.ts`).
  * - **The time is the sum of the TIMED steps.** An untimed step is setup.
- * - **Every step has a committed expected exit**, and exit 2 is never one. A
- *   repetition whose any step exits otherwise is a failed measurement, never a
- *   time: a fast broken run (a child that cannot spawn, a refused store) must not
- *   pass a time bar.
+ * - **Every step has an exit commitment** (`ExitCommitment`: one exact code, or
+ *   any completed exit its verb declares, uniform across repetitions), and
+ *   exit 2 is never in one. A repetition whose any step exits otherwise is a
+ *   failed measurement, never a time: a fast broken run (a child that cannot
+ *   spawn, a refused store) must not pass a time bar.
  * - **The steps run as CI's `&&` chain does**: the first non-zero exit ends the
  *   sequence, and that exit is the sequence's own. When it is the step's
  *   committed exit the sequence completed — CI runs nothing after it either —
@@ -28,6 +29,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { type ArmDirectories, armRefusal, entriesOf, resetArmHome, resetColdArm } from './arm-dirs.js';
 import type { ArmEnvironment } from './arm-env.js';
+import { type ExitCommitment, exitCommitmentViolation, MAX_EXIT_CODE } from './commands.js';
 import { type ParseDirectoryResolution } from './parse-cache.js';
 import type { PopulationExpectation } from './population-expectation.js';
 import { type ProvenanceReader, provenanceViolation, readProvenance, type StepProvenance } from './provenance.js';
@@ -51,8 +53,8 @@ export interface SequenceStep {
   readonly command: StepCommand;
   /** Whether the step's wall time counts toward the sequence's time. */
   readonly timed: boolean;
-  /** The ONE committed exit — what this step exits when it did its work. Never 2. */
-  readonly expectedExit: number;
+  /** What this step exits when it did its work. Never 2. */
+  readonly exit: ExitCommitment;
   /** Which document reader the step's stdout goes through. */
   readonly provenance: ProvenanceReader;
   /**
@@ -106,15 +108,21 @@ export interface SequenceContext {
 type SequenceRole = { readonly kind: 'priming' } | { readonly kind: 'measured'; readonly vatEnv: ArmEnvironment };
 
 /**
- * Refuse a step whose committed exits include vat's system-error exit.
+ * Refuse a step whose commitment admits vat's system-error exit, or a code no
+ * process can exit with.
  *
  * @param step - A step
- * @throws {Error} when the step commits to exit 2
+ * @throws {Error} when the step commits to exit 2 or to a code outside 0..255
  */
 export function assertCommittedExits(step: SequenceStep): void {
+  const codes = step.exit.kind === 'exact' ? [step.exit.code] : step.exit.completed;
   // vat's system-error exit: a run that did not complete, and so never a committed exit.
-  if (step.expectedExit === ExitCode.ERROR) {
+  if (codes.includes(ExitCode.ERROR)) {
     throw armRefusal(`step '${step.name}' commits to exit 2 — a system error is never an expected exit`);
+  }
+  const impossible = codes.find((code) => !Number.isInteger(code) || code < 0 || code > MAX_EXIT_CODE);
+  if (impossible !== undefined) {
+    throw armRefusal(`step '${step.name}' commits to exit ${String(impossible)} — an exit code is a whole number from 0 to ${String(MAX_EXIT_CODE)}`);
   }
 }
 
@@ -210,7 +218,7 @@ function stepViolation(
   ran: StepResult,
   index: number,
 ): string | null {
-  const failure = exitFailure(ran, step.expectedExit);
+  const failure = exitFailure(ran, step.exit);
   if (failure !== null) return `step '${step.name}' ${failure}`;
   if (index === 0 && step.populates && context.state === 'cold') {
     const violation = populationViolation(context, `cold rule: after step '${step.name}'`);
@@ -225,15 +233,13 @@ function stepViolation(
  * Whether a step's exit is one it committed to.
  *
  * @param ran - The step's outcome
- * @param expected - Its committed exit
+ * @param commitment - Its exit commitment
  * @returns Why not, or `null`
  */
-function exitFailure(ran: RunResult, expected: number): string | null {
+function exitFailure(ran: RunResult, commitment: ExitCommitment): string | null {
   if (ran.spawnError !== null) return `did not run: ${ran.spawnError}`;
-  if (ran.exitCode !== expected) {
-    return `exited ${String(ran.exitCode)}: ${ran.stderr.trim().slice(0, STDERR_EXCERPT_CHARS)}`;
-  }
-  return null;
+  const violation = ran.exitCode === null ? 'exited with no code' : exitCommitmentViolation(commitment, ran.exitCode);
+  return violation === null ? null : `${violation}: ${ran.stderr.trim().slice(0, STDERR_EXCERPT_CHARS)}`;
 }
 
 /**

@@ -28,6 +28,8 @@
  * | `resources/parse-cache.ts` | `VAT_CACHE` | cache stays on | gates a cache — an unreadable value must not silently change behaviour |
  * | `cli/utils/projection-store.ts` | `VAT_CACHE` | not a veto | same variable, same reading, one implementation |
  * | `cli/utils/projection-store.ts` | `VAT_PROJECTION_STORE` | not a veto | the projection store is ON by default; only an explicit off spelling (or an empty value, which that call site handles before asking) turns it off |
+ * | `lab/harness/population-expectation.ts` | `VAT_CACHE` | not a veto | mirrors the two readings above, so the lab expects a parse shard and a store exactly where vat writes them (pinned against the built cli and resources) |
+ * | `lab/harness/population-expectation.ts` | `VAT_PROJECTION_STORE` | not a veto | mirrors `projectionStoreSelected()`, empty handled before asking, as that call site does (pinned against the built cli) |
  * | `resources/parse-dispatcher.ts` | `VAT_PARSE_POOL` | pool stays on | gates a measured speed-up — only an explicit off spelling disables it; a typo must not silently cost it |
  *
  * Same parser, different safe sides, each chosen at its own call site. That is

@@ -5,6 +5,7 @@
  * union is in the other — bar 3's `union(B) ⊆ findings(C)`.
  */
 
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import type { InstrumentVersion } from '../src/envelope/coordinate.js';
@@ -100,6 +101,7 @@ function capture(
     },
     capturedAt: '2026-10-31T00:00:00.000Z',
     removedEnv: [],
+    exits: [],
     body: { ...body(rows), preparedClone: ranIn },
   };
 }
@@ -161,6 +163,23 @@ function bar3(overrides: Partial<UnionRequest> = {}): ReturnType<typeof judgeUni
     arms: { prepared: PREPARED, left: arm('rc11:ci-b:cold', rounds([0, 1])), right: arm('cand:ci-c:cold', rounds([1])) },
     declared: declared([EXTRA]),
     ...overrides,
+  });
+}
+
+/**
+ * Bar 3 where both captures recorded the clone as `ranIn` and the arms report names it as `prepared`.
+ *
+ * @param ranIn - The captures' spelling
+ * @param prepared - The arms report's spelling
+ * @returns The judgement
+ */
+function inClone(ranIn: string, prepared: string): ReturnType<typeof judgeUnion> {
+  const left = capture([reportRow('resources-validate-ci', [BROKEN]), reportRow('skills-validate-ci', [], 0)], { instrument: RC11, preparedClone: ranIn });
+  const right = capture([reportRow('validate', [BROKEN, SCHEMA])], { preparedClone: ranIn });
+  return bar3({
+    left: { envelope: left, rows: B_ROWS },
+    right: { envelope: right, rows: C_ROWS },
+    arms: { prepared: { ...PREPARED, path: prepared }, left: arm('rc11:ci-b:cold', rounds([0, 1])), right: arm('cand:ci-c:cold', rounds([1])) },
   });
 }
 
@@ -308,6 +327,18 @@ describe('judgeUnion — bar 3, judged in one place', () => {
       ok: false,
       refusal: expect.stringContaining("'/arms/run-2/clone'") as unknown,
     });
+  });
+
+  it('accepts the prepared clone however its path is spelled — a trailing slash, a dot segment', () => {
+    expect(inClone(PREPARED.path, PREPARED.path)).toMatchObject({ ok: true });
+    expect(inClone(`${PREPARED.path}/`, PREPARED.path)).toMatchObject({ ok: true });
+    expect(inClone(PREPARED.path.replace('/clone', '/./clone'), PREPARED.path)).toMatchObject({ ok: true });
+  });
+
+  it.runIf(process.platform === 'win32')('accepts the prepared clone with its drive letter in the other case', () => {
+    const clone = normalizedTmpdir();
+    const other = clone.replace(/^[A-Za-z]/u, (letter) => (letter === letter.toLowerCase() ? letter.toUpperCase() : letter.toLowerCase()));
+    expect(inClone(other, clone)).toMatchObject({ ok: true });
   });
 
   it('refuses a clone whose commit is not the one the arms were prepared at', () => {

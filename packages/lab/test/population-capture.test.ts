@@ -24,6 +24,7 @@ import {
   PopulationBodySchema,
   type PopulationCommandStats,
 } from '../src/facets/population/types.js';
+import { exactExit } from '../src/harness/commands.js';
 import type { CaptureRequest } from '../src/harness/types.js';
 
 import { expectStamp, probeSubject } from './capture-fixtures.js';
@@ -89,7 +90,7 @@ async function captureRow(
   const request: CaptureRequest = {
     instrument: probe.instrument,
     subject: probeSubject(probe.cwd, 'probe-subject', 'f'.repeat(64)),
-    commands: [{ name: SPEC.name, args, expectedExit: 0, provenance: 'none', populates: false }],
+    commands: [{ name: SPEC.name, args, exit: exactExit(0), provenance: 'none', populates: false }],
     runs,
     cache: 'warm',
     // The warm arm's priming run is the probe's first invocation; it prints the

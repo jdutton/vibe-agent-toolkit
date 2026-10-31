@@ -12,6 +12,7 @@
 
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
+import { exactExit } from '../../src/harness/commands.js';
 import { runRepeats } from '../../src/harness/repeat.js';
 import {
   cleanupProbes,
@@ -62,8 +63,8 @@ describe('runRepeats — failures and environments', () => {
 
     expect(run.results.map((sequenceRun) => sequenceRun.exitCode)).toEqual([PROBE_FAIL_EXIT, PROBE_FAIL_EXIT]);
     expect(run.results.map((sequenceRun) => sequenceRun.violation)).toEqual([
-      `step 'boom' exited ${String(PROBE_FAIL_EXIT)}: probe was asked to fail`,
-      `step 'boom' exited ${String(PROBE_FAIL_EXIT)}: probe was asked to fail`,
+      `step 'boom' exited ${String(PROBE_FAIL_EXIT)}, not exactly 0: probe was asked to fail`,
+      `step 'boom' exited ${String(PROBE_FAIL_EXIT)}, not exactly 0: probe was asked to fail`,
     ]);
   });
 
@@ -79,7 +80,7 @@ describe('runRepeats — failures and environments', () => {
 
   it('refuses a step that commits to exit 2', async () => {
     const probe = setupProbe(PREFIX);
-    await expect(runRepeats(probeSpec(probe, { steps: [probeStep(['audit'], { expectedExit: 2 })] }))).rejects.toThrow(/exit 2/);
+    await expect(runRepeats(probeSpec(probe, { steps: [probeStep(['audit'], { exit: exactExit(2) })] }))).rejects.toThrow(/exit 2/);
   });
 
   it('refuses a caller environment that names a variable the arm owns', async () => {
@@ -101,7 +102,7 @@ describe('runRepeats — failures and environments', () => {
     const run = await runRepeats(
       probeSpec(probe, { args: [PROBE_FAIL_TOKEN], runs: 1, cache: 'cold', env: { [PROBE_STDERR_ENV]: loud } }),
     );
-    expect(run.results[0]?.violation).toBe(`step 'boom' exited ${String(PROBE_FAIL_EXIT)}: ${'x'.repeat(200)}`);
+    expect(run.results[0]?.violation).toBe(`step 'boom' exited ${String(PROBE_FAIL_EXIT)}, not exactly 0: ${'x'.repeat(200)}`);
     expect(run.results[0]?.steps[0]?.stderr).toBe(loud);
   });
 });

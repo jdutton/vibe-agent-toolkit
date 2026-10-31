@@ -50,6 +50,17 @@ describe('captureArms — rounds', () => {
     ]);
   });
 
+  it("records every arm step's exact commitment and the code its rounds shared", async () => {
+    const probe = setupProbe(PREFIX);
+
+    const report = await captureArms(armsRequest(probe));
+
+    expect(report.arms.map((arm) => arm.exits)).toEqual([
+      [{ step: 'a', commitment: { kind: 'exact', code: 0 }, observed: 0 }],
+      [{ step: 'c', commitment: { kind: 'exact', code: 0 }, observed: 0 }],
+    ]);
+  });
+
   it('refuses an arm naming a build it was not given', async () => {
     const probe = setupProbe(PREFIX);
 

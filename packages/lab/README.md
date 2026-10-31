@@ -104,8 +104,11 @@ landing inside the tree being measured changes the next run's numbers.
 
 A timed arm is a **sequence of steps** run in `<arms root>/<build>-<arm>-<state>/{store,tmp,home,npm-cache}`
 (created at 0700), from a **cleared environment**: no inherited `VAT_*`, temp, XDG, git config,
-git template or exec path, or npm setting (`npm_config_*` in any case, so no developer `.npmrc` or
-registry token) reaches a VAT step; git reads no system config or attributes
+git template or exec path, or npm identity or config-file setting (in any case: `userconfig`,
+`globalconfig`, `always-auth`, every `_auth*` key and `//host/:_authToken`-style credential, so no
+developer `.npmrc` or registry token) reaches a VAT step — npm's network settings (`registry`,
+`proxy`, `https-proxy`, `noproxy`, `cafile`, `ca`, `strict-ssl`, a scoped `@scope:registry`) are
+kept, so an `npx:` arm still reaches its registry; git reads no system config or attributes
 (`GIT_CONFIG_NOSYSTEM=1`, `GIT_ATTR_NOSYSTEM=1`); `TMPDIR`/`TEMP`/`TMP` point at the arm's `tmp/`,
 and `HOME` and `CLAUDE_CONFIG_DIR` at its empty `home/`. A developer's `VAT_PROJECTION_STORE=off`,
 global git exclude or `~/.claude/CLAUDE.md` therefore never decides a number. **Outside the arm:**
@@ -116,15 +119,21 @@ single-command facet runs are one-step sequences under `<arms root>/<build>-<com
 
 - **The arms root lies outside every subject.** `--arms-dir <dir>` (absolute; never a link) when
   given, else a fresh `run-*` directory under `<os tmpdir>/vat-lab-arms-<user>/`, printed as
-  `Arms under <root>`. A root that is, lies inside or contains a measured tree is refused. The lab
-  marks a root it adopts with `.vat-lab-root`: an absent or empty `--arms-dir` is created (0700) or
-  adopted, and an existing, non-empty one without the marker is refused, never written into.
+  `Arms under <root>`. A root that is, lies inside or contains a measured tree is refused — the
+  default one before anything is created. Every root the lab uses carries `.vat-lab-root`: an absent
+  `--arms-dir` is created 0700 and marked; an existing EMPTY one is adopted as it is — the lab writes
+  `.vat-lab-root` into it and then its arms and clone beneath it, and never chmods it; an existing,
+  non-empty one without the marker is refused, nothing written into it.
 - **The default run directory ends with the capture.** When the capture ends — passed or failed —
-  the lab removes the `run-*` directory (stores, caches, the prepared clone, npm's fetch) and prints
+  the lab removes the `run-*` directory (stores, caches, npm's fetch) and prints
   `Removed arms under <root>`; `--keep-arms` keeps it and prints `Kept arms under <root>`. A named
-  `--arms-dir` is always kept.
+  `--arms-dir` is always kept. `perf arms` keeps its **prepared clone**, which its report names
+  (`prepared.path`): it removes each arm directory, keeps the root holding `clone/`, and prints
+  `Prepared clone kept at <root>/clone; remove it when done`. Every result is written before the root
+  ends, so a cleanup that fails costs no report; when the capture failed too, both are reported,
+  the capture's first.
 - **The lab chmods only what it created.** `--out` is created 0700 when absent and written into
-  as-is when it exists; reports are written 0600, never through a link. An `--out` that IS a subject
+  as-is when it exists, and every directory the lab makes under it (an ab run's `pair-N/<arm>/`) is 0700; reports are written 0600, never through a link. An `--out` that IS a subject
   (`--out .` from its root) is refused. `--out` holds reports only, so the default `.vat-lab/`
   inside a checkout is safe.
 - **The arm owns its directories' variables.** `--env`/`--unset` naming `TMPDIR`, `TEMP`, `TMP`,
@@ -137,15 +146,20 @@ single-command facet runs are one-step sequences under `<arms root>/<build>-<com
   bytes there, once, never in a timed repetition; a build whose start exits non-zero refuses the
   arm (`the build did not start — '--version' exited N`).
 - **A populating arm asks the build for its parse directory**: from its entry for a `tree:` or
-  `dist:` build, and for an `npx:` build from the one install the untimed start left in the arm's
-  npm cache (`<arm>/npm-cache/_npx/<hash>/`). No install, or two, refuses the arm before any
-  measured child — never a guess. An arm whose own `--env` turns caching off
+  `dist:` build, and for an `npx:` build from the copy npx runs: the pinned version installed in
+  the clone's own project (`node_modules`, which npx runs ahead of its cache), else the one install
+  the untimed start left in the arm's npm cache (`<arm>/npm-cache/_npx/<hash>/`). Neither, or two
+  installs, refuses the arm before any measured child — never a guess; the refusal names the cause
+  and says to measure the copy npx did run with a `dist:` instrument. An arm whose own `--env` turns caching off
   (`VAT_PROJECTION_STORE=off`, `VAT_CACHE=0`) is checked for writing nothing there instead, so a
   store-on vs store-off A/B measures both arms.
 - Each step of a CI sequence carries ONE **committed expected exit** — 0 unless
   `--expect-exit <build>:<sequence>:<step>=<code>` (e.g. `cand:ci-c:validate-ci=1`) says otherwise;
-  a list, a repeated step and exit 2 are refused. Exiting otherwise is a failed measurement
-  (`step '<name>' exited N: <stderr>`), never a slow one.
+  a list, a repeated step, exit 2 and a code outside 0–255 are refused. Exiting otherwise is a
+  failed measurement (`step '<name>' exited N, not exactly C: <stderr>`), never a slow one, and
+  each arm's `exits` records the commitment and the code its rounds shared. (`<facet> run|ab`
+  differ: a command may exit any code its verb completes with — 0, or 0 or 1 for a gate — alike on
+  every repeat; `--expect-exit <command>=<code>` makes it exact. See `docs/run-harness.md`.)
   A committed non-zero exit ends the repetition as CI's `&&` does: completed, nothing after it run.
 - **Cold** clears the arm's store and parse cache before each repetition; when step 1 `populates`,
   it must leave the store non-empty and at least one parse shard (a file, not an empty directory).
@@ -213,8 +227,9 @@ with a `changelog:` citation and a reason); and (4) round by round, the right ar
 left arm's first non-zero step did (0 when none) after the entry's declared `exit: { from, to }`
 move, if any, and never 2 — a run that did not complete. A declared move whose `from` is not the
 left's exit fails too. It prints `BAR 3 HOLDS` or `BAR 3 FAILS` with the missing, undeclared and
-unused keys and exits 1 when it fails. `perf bars` refuses the same incomplete arms (an arm that
-failed still fails each bar over it, naming why), and heads its verdicts with every input that
+unused keys and exits 1 when it fails. `perf bars` refuses a bar naming an unfailed arm that is
+still incomplete — no report `perf arms` writes holds one, so it is a hand-edited or foreign file —
+and never reads an arm no bar names; an arm that failed still fails each bar over it, naming why. It heads its verdicts with every input that
 decided the numbers — `--env`, `--unset`, `--expect-exit`, `--prerequisite`, `--timeout-ms` — as
 `arms-report.json` records them.
 

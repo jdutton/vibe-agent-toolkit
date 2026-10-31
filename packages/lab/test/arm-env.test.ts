@@ -146,22 +146,48 @@ describe('clearedEnvironment', () => {
     expect(cleared.removed).toStrictEqual(['VAT_PROJECTION_STORE', 'VAT_RESOURCES_CRAWL']);
   });
 
-  it("clears the developer's npm config from a VAT step in any case, keeping what the arm sets, and keeps it for a tool step", () => {
-    const npm: NodeJS.ProcessEnv = {
-      PATH: '/bin',
-      npm_config_userconfig: '/home/dev/.npmrc',
-      'npm_config_//registry.example/:_authToken': 'secret',
-      NPM_CONFIG_REGISTRY: 'https://registry.example/',
-      npm_config_cache: '/home/dev/.npm',
-    };
+  /** The developer's npm identity and config files: what a VAT step must never carry, in any case npm reads. */
+  const NPM_IDENTITY: NodeJS.ProcessEnv = {
+    npm_config_userconfig: '/home/dev/.npmrc',
+    NPM_CONFIG_GLOBALCONFIG: '/etc/npmrc',
+    'npm_config_//registry.example/:_authToken': 'secret',
+    npm_config__auth: 'dXNlcjpwYXNz',
+    npm_config_always_auth: 'true',
+    'npm_config_always-auth': 'true',
+  };
+
+  /** The developer's npm network settings: what a VAT step keeps, so an npx arm can reach its registry. */
+  const NPM_NETWORK: NodeJS.ProcessEnv = {
+    NPM_CONFIG_REGISTRY: 'https://registry.example/',
+    npm_config_proxy: 'http://proxy.example:3128',
+    'npm_config_https-proxy': 'http://proxy.example:3128',
+    npm_config_https_proxy: 'http://proxy.example:3128',
+    npm_config_noproxy: 'localhost',
+    npm_config_cafile: '/etc/ssl/corp.pem',
+    npm_config_ca: 'PEM',
+    'npm_config_strict-ssl': 'true',
+    'npm_config_@scope:registry': 'https://scope.example/',
+  };
+
+  it("clears the developer's npm identity and config files from a VAT step, in any case, and keeps them for a tool step", () => {
+    const npm: NodeJS.ProcessEnv = { PATH: '/bin', ...NPM_IDENTITY, npm_config_cache: '/home/dev/.npm' };
     const arm = { set: { npm_config_cache: '/arm/npm-cache' }, unset: [] };
 
     const vat = clearedEnvironment(npm, 'vat', arm, 'linux');
     const env = buildArmEnv(npm, vat.env);
-    expect(vat.removed).toStrictEqual(['NPM_CONFIG_REGISTRY', 'npm_config_//registry.example/:_authToken', 'npm_config_userconfig']);
+    expect(new Set(vat.removed)).toStrictEqual(new Set(Object.keys(NPM_IDENTITY)));
     expect(env['npm_config_cache']).toBe('/arm/npm-cache');
     expect(env['PATH']).toBe('/bin');
     expect(clearedEnvironment(npm, 'tool', arm, 'linux').removed).toStrictEqual([]);
+  });
+
+  it("keeps the developer's npm network settings in a VAT step — registry, proxies, CA, scoped registries", () => {
+    const npm: NodeJS.ProcessEnv = { PATH: '/bin', ...NPM_NETWORK };
+
+    const vat = clearedEnvironment(npm, 'vat', { set: {}, unset: [] }, 'linux');
+    const env = buildArmEnv(npm, vat.env);
+    expect(vat.removed).toStrictEqual([]);
+    for (const [name, value] of Object.entries(NPM_NETWORK)) expect(env[name], name).toBe(value);
   });
 
   it('lets the arm set a cleared name, which is then not recorded as removed', () => {

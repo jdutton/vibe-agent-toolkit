@@ -1,7 +1,7 @@
 /**
  * What a measurement facet is pointed at: the commands it can run, the default
  * set to run when the caller does not name their own, and — per command — the
- * one exit it commits to when it did its work.
+ * exits that mean it did its work ({@link ExitCommitment}).
  *
  * This lives in the harness rather than in a facet for the same reason
  * `schemas.ts` does. `perf` and `io` do not merely happen to measure the same
@@ -21,24 +21,77 @@ import { ExitCode } from '@vibe-agent-toolkit/schema';
 
 import type { ProvenanceReader } from './provenance.js';
 
+/**
+ * The exit a step must make for a repetition to count — the ONE type every
+ * facet judges a step's exit by, recorded in every report.
+ *
+ * - `exact` — one committed code. What `perf arms` uses for every step (0
+ *   unless `--expect-exit` says otherwise: a CI step has one committed
+ *   outcome), and what `--expect-exit <command>=<code>` makes a command of
+ *   `run`/`ab`.
+ * - `observed` — a single-command facet's default: any code the command
+ *   declares as a completed run (`0`, or `0` and `1` for a verb that reports
+ *   findings by exit), provided every repetition exits the SAME one
+ *   (`summarizeRepeatFailures`): a set where one repeat exited 0 and another 1
+ *   did two different amounts of work. The code it observed is recorded.
+ *
+ * Exit `2` is never either: the run did not complete, and timing it times how
+ * fast vat gives up.
+ */
+export type ExitCommitment =
+  | { readonly kind: 'exact'; readonly code: number }
+  | { readonly kind: 'observed'; readonly completed: readonly number[] };
+
+/** The largest code a process can exit with: no commitment names one above it. */
+export const MAX_EXIT_CODE = 255;
+
+/** A command that completes only clean: exit 0 whatever it found. */
+const COMPLETES_CLEAN: ExitCommitment = Object.freeze({ kind: 'observed', completed: Object.freeze([ExitCode.OK]) });
+
+/** A gate: exit 0 with nothing to report, 1 with findings — both a run that did all its work. */
+const COMPLETES_WITH_FINDINGS: ExitCommitment = Object.freeze({
+  kind: 'observed',
+  completed: Object.freeze([ExitCode.OK, ExitCode.FINDINGS]),
+});
+
+/**
+ * @param code - The one committed code
+ * @returns The `exact` commitment to it
+ */
+export function exactExit(code: number): ExitCommitment {
+  return { kind: 'exact', code };
+}
+
+/**
+ * Whether one step's exit keeps its repetition a measurement. Uniformity across
+ * repetitions is judged separately (`summarizeRepeatFailures`).
+ *
+ * @param commitment - The step's commitment
+ * @param exit - The code it exited
+ * @returns Why it does not, or `null`
+ */
+export function exitCommitmentViolation(commitment: ExitCommitment, exit: number): string | null {
+  const admitted = commitment.kind === 'exact' ? exit === commitment.code : commitment.completed.includes(exit);
+  // 2 is refused before anything runs (`assertCommittedExits`), so it is never admitted here.
+  return admitted ? null : `exited ${String(exit)}, not ${describeExitCommitment(commitment)}`;
+}
+
+/**
+ * @param commitment - A commitment
+ * @returns How a report and a message spell it: `exactly N`, or `one of N, M`
+ */
+function describeExitCommitment(commitment: ExitCommitment): string {
+  return commitment.kind === 'exact' ? `exactly ${String(commitment.code)}` : `one of ${commitment.completed.join(', ')}`;
+}
+
 /** What one vat command was asked to do. */
 export interface MeasuredCommandSpec {
   /** Stable artifact name, appearing in the report and any diff. */
   readonly name: string;
   /** Arguments after the vat binary, with `{subject}` substituted at capture time. */
   readonly args: readonly string[];
-  /**
-   * The ONE exit this command commits to when it did its work — what any
-   * repetition must exit, or it is a failed measurement, never a time.
-   *
-   * Every registered command commits to `0`, its exit on a clean subject. On a
-   * subject with findings the caller commits to `1` for that command
-   * (`--expect-exit <command>=1`), which replaces the spec's value; nothing
-   * ever accepts two codes, because a set where one repeat exited 0 and another
-   * 1 did two different amounts of work. Exit `2` is never committed: the run
-   * did not complete, and timing it times how fast vat gives up.
-   */
-  readonly expectedExit: number;
+  /** What exit this command must make for a repetition to be a measurement — see {@link ExitCommitment}. */
+  readonly exit: ExitCommitment;
   /**
    * Which document reader this command's stdout goes through for the warm rule
    * (`provenance.ts`): `none` for a verb that publishes no population.
@@ -79,7 +132,7 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   'resources-scan': Object.freeze({
     name: 'resources-scan',
     provenance: 'none',
-    expectedExit: ExitCode.OK,
+    exit: COMPLETES_CLEAN,
     populates: false,
     args: Object.freeze(['resources', 'scan', '{subject}']),
     // Exit 1 is only the refusal for a scan of NOTHING — no measurement — so `[0]`.
@@ -87,7 +140,7 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   'resources-population': Object.freeze({
     name: 'resources-population',
     provenance: 'none',
-    expectedExit: ExitCode.OK,
+    exit: COMPLETES_CLEAN,
     populates: false,
     // The same scan, asked for the whole file list in a format a consumer can
     // read without a YAML parser. Three flags, each load-bearing and none of
@@ -108,7 +161,7 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   'resources-query': Object.freeze({
     name: 'resources-query',
     provenance: 'none',
-    expectedExit: ExitCode.OK,
+    exit: COMPLETES_CLEAN,
     populates: false,
     // The ONLY entry whose own output names which population arm the run took
     // (`population: derived | store`) and what that arm cost
@@ -135,7 +188,7 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   'resources-validate': Object.freeze({
     name: 'resources-validate',
     provenance: 'none',
-    expectedExit: ExitCode.OK,
+    exit: COMPLETES_WITH_FINDINGS,
     // The same verb as `resources-validate-ci`: it writes the projection whatever its argv.
     populates: true,
     args: Object.freeze(['resources', 'validate', '{subject}', '--format', 'json']),
@@ -143,16 +196,15 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   audit: Object.freeze({
     name: 'audit',
     provenance: 'none',
-    expectedExit: ExitCode.OK,
+    exit: COMPLETES_WITH_FINDINGS,
     populates: false,
     args: Object.freeze(['audit', '{subject}']),
-    // Exits 1 over `status: error` like every other gate — committed by the
-    // caller (`--expect-exit audit=1`) on a subject with findings.
+    // Exits 1 over `status: error` like every other gate.
   }),
   inventory: Object.freeze({
     name: 'inventory',
     provenance: 'none',
-    expectedExit: ExitCode.OK,
+    exit: COMPLETES_CLEAN,
     populates: false,
     args: Object.freeze(['inventory', '{subject}']),
     // Structural extraction: reports what it found and exits 0 whatever that is.
@@ -168,7 +220,7 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   validate: Object.freeze({
     name: 'validate',
     provenance: 'none',
-    expectedExit: ExitCode.OK,
+    exit: COMPLETES_WITH_FINDINGS,
     // The same verb as `validate-ci`: its resources phase writes the projection.
     populates: true,
     // No subject argument: `vat validate` REJECTS a positional path (exit 2) and
@@ -179,7 +231,7 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   verify: Object.freeze({
     name: 'verify',
     provenance: 'none',
-    expectedExit: ExitCode.OK,
+    exit: COMPLETES_WITH_FINDINGS,
     populates: false,
     // Also path-rejecting, for the same reason. Reads the built `dist/` tree, so
     // a subject measured with this one has to have been built first.
@@ -188,7 +240,7 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   'claude-context-all': Object.freeze({
     name: 'claude-context-all',
     provenance: 'none',
-    expectedExit: ExitCode.OK,
+    exit: COMPLETES_CLEAN,
     populates: false,
     // No subject argument: `--all` sweeps every path the projection realized and
     // takes no positional, so like `validate` and `verify` its scope comes from
@@ -208,7 +260,7 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   'claude-context': Object.freeze({
     name: 'claude-context',
     provenance: 'none',
-    expectedExit: ExitCode.OK,
+    exit: COMPLETES_CLEAN,
     populates: false,
     // The single-path control arm for the sweep above. One path answered out of
     // the same enumeration the sweep pays for, so the pair separates what the
@@ -221,7 +273,7 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   'skills-validate': Object.freeze({
     name: 'skills-validate',
     provenance: 'none',
-    expectedExit: ExitCode.OK,
+    exit: COMPLETES_WITH_FINDINGS,
     populates: false,
     // The `registry-md-html` lane's cheapest read-only entry point. Everything
     // else that builds that registry — `skills build`, `skills package`,
@@ -234,7 +286,7 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   'skills-list': Object.freeze({
     name: 'skills-list',
     provenance: 'none',
-    expectedExit: ExitCode.OK,
+    exit: COMPLETES_CLEAN,
     populates: false,
     // The cheapest enumerating verb there is: one crawl, no validation, no
     // parse. That is the point of measuring it — it is the closest thing the
@@ -245,15 +297,17 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   }),
   // ─── Commands exactly as CI runs them ────────────────────────────────────
   // cwd is the subject root and there is NO subject path, no `--format`, no
-  // `--verbose`: the argv a CI job types. Each commits to exit 0 — a clean
-  // subject is the committed state, so a findings exit fails the measurement
-  // rather than timing a run that did different work than CI's.
+  // `--verbose`: the argv a CI job types. Each declares its verb's completed
+  // exits; `perf arms` commits every step of a sequence to exit 0 (`exact`)
+  // unless `--expect-exit` says otherwise — a clean subject is the committed
+  // state, so a findings exit fails the measurement rather than timing a run
+  // that did different work than CI's.
   'resources-validate-ci': Object.freeze({
     name: 'resources-validate-ci',
     args: Object.freeze(['resources', 'validate']),
     // Today's builds publish no population on `resources validate`.
     provenance: 'none',
-    expectedExit: ExitCode.OK,
+    exit: COMPLETES_WITH_FINDINGS,
     populates: true,
   }),
   'resources-check-ci': Object.freeze({
@@ -261,14 +315,14 @@ export const MEASURABLE_COMMANDS = Object.freeze({
     args: Object.freeze(['resources', 'check']),
     // `data.population` — the field that proves arm B's baseline is warm.
     provenance: 'resources-check',
-    expectedExit: ExitCode.OK,
+    exit: COMPLETES_WITH_FINDINGS,
     populates: true,
   }),
   'skills-validate-ci': Object.freeze({
     name: 'skills-validate-ci',
     args: Object.freeze(['skills', 'validate']),
     provenance: 'none',
-    expectedExit: ExitCode.OK,
+    exit: COMPLETES_WITH_FINDINGS,
     // Never a first step in a CI sequence; nothing is asserted after it.
     populates: false,
   }),
@@ -278,7 +332,7 @@ export const MEASURABLE_COMMANDS = Object.freeze({
     // The orchestrator document: the resources phase's population, and the
     // checks phase's population and lensPopulation.
     provenance: 'validate',
-    expectedExit: ExitCode.OK,
+    exit: COMPLETES_WITH_FINDINGS,
     populates: true,
   }),
   'verify-ci': Object.freeze({
@@ -286,7 +340,7 @@ export const MEASURABLE_COMMANDS = Object.freeze({
     // Reads a built `dist/`: the subject must have been built first.
     args: Object.freeze(['verify']),
     provenance: 'none',
-    expectedExit: ExitCode.OK,
+    exit: COMPLETES_WITH_FINDINGS,
     populates: false,
   }),
 }) satisfies Readonly<Record<string, MeasuredCommandSpec>>;

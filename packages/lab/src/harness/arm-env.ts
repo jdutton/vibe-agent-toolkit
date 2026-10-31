@@ -129,7 +129,7 @@ export function mergeArmEnvironments(base: ArmEnvironment, over: ArmEnvironment)
  * `arm-dirs.ts`): with the rest removed, git reads no system config or
  * attributes and its global config is the empty arm home. Every other way a
  * shell can hand git a config — {@link GIT_CONFIG_OVERRIDE} — goes with them,
- * and so does every inherited npm setting ({@link NPM_CONFIG}).
+ * and so does every inherited npm identity or config-file setting ({@link NPM_CONFIG}).
  *
  * Kept here, not in utils' `INHERITED_GIT_ENV`: that list is what git exports
  * into a HOOK, pinned equal to the shipped hook scrub; these are the
@@ -156,12 +156,16 @@ export const CLEARED_ENV_NAMES = Object.freeze([
 const GIT_CONFIG_OVERRIDE = /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/u;
 
 /**
- * Every npm setting a shell can carry, in either case npm reads it in
- * (`npm_config_userconfig`, `NPM_CONFIG_REGISTRY`, a `//host/:_authToken`): an
- * npx arm would otherwise fetch through the developer's real `.npmrc` and
- * credentials. The arm's own `npm_config_*` (see `arm-dirs.ts`) are set, not inherited.
+ * The npm settings that carry the developer's identity or config files, in
+ * either case npm reads them in: `userconfig` and `globalconfig` (the real
+ * `.npmrc` files), every `_auth*`-style key and every `//host/:…` credential,
+ * and `always-auth`. An npx arm would otherwise fetch as the developer. The
+ * network settings — `registry`, `proxy`, `https-proxy`, `noproxy`, `cafile`,
+ * `ca`, `strict-ssl`, a scoped `@scope:registry` — are kept, so an arm behind a
+ * proxy or a private registry still reaches it. The arm's own `npm_config_*`
+ * (see `arm-dirs.ts`) are set, not inherited.
  */
-const NPM_CONFIG = /^npm_config_/iu;
+const NPM_CONFIG = /^npm_config_(?:userconfig|globalconfig|always[-_]auth|_.*|\/\/.*)$/iu;
 
 /**
  * What git exports into a hook — which repository, index, object store,

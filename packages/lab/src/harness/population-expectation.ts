@@ -9,7 +9,7 @@
  * `set` is the whole of what the child sees. The reading mirrors vat's
  * `projectionStoreSelected()` (packages/cli/src/utils/projection-store.ts) and
  * `ParseCache`'s `VAT_CACHE` switch through the same `parseEnvBoolean`; the
- * integration tier pins the store half against the built cli both ways.
+ * integration tier pins both halves against the built cli and resources.
  */
 
 import { parseEnvBoolean } from '@vibe-agent-toolkit/utils';

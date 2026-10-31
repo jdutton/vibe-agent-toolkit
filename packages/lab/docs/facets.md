@@ -213,7 +213,11 @@ subject** — VAT itself is one: an `--out` or arms root inside any subject path
 
 **Prepared clone.** `--prepared <alias>=<arms root>/clone` runs that alias in the clone `perf arms`
 prepared instead of at its subjects-file path; the body records it as `preparedClone` (`null` when
-the alias ran at its own path), and `verdict union` refuses a capture that was not run there.
+the alias ran at its own path), and `verdict union` refuses a capture that was not run there. The
+clone outlives `perf arms` — even in a default run directory, whose arm directories it removes — so
+the arms report's `prepared.path` stays valid for `verdict run --prepared` and `verdict union`;
+`perf arms` prints `Prepared clone kept at <path>; remove it when done`, and removing it is the
+operator's.
 
 **Two layers**, per (alias, verb) row:
 

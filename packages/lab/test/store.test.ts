@@ -6,6 +6,7 @@
  * The distinctness tests below are the real content here.
  */
 
+import { statSync } from 'node:fs';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
@@ -161,6 +162,15 @@ describe('writeReport and readReport', () => {
     const nested = safePath.join(tempDir, 'deep', 'nested', 'run');
     const written = await writeReport(nested, report());
     expect(written).toContain('nested');
+  });
+
+  it.skipIf(process.platform === 'win32')('creates every directory it makes owner-only (0700), as --out itself is', async () => {
+    const base = safePath.join(tempDir, 'private');
+    const nested = safePath.join(base, 'pair-1', 'a');
+
+    await writeReport(nested, report());
+
+    expect([base, safePath.join(base, 'pair-1'), nested].map((dir) => statSync(dir).mode & 0o777)).toStrictEqual([0o700, 0o700, 0o700]);
   });
 
   it('refuses to write a report it could not read back', async () => {

@@ -28,9 +28,6 @@ import {
 } from '../src/harness/commands.js';
 import { SUBJECT_TOKEN } from '../src/harness/repeat.js';
 
-/** vat's system-error code, which no command may ever declare completed. */
-const SYSTEM_ERROR_EXIT = 2;
-
 /** The `vat claude context --all` sweep, by registry name. */
 const CONTEXT_SWEEP = 'claude-context-all';
 
@@ -97,9 +94,22 @@ function specNamed(name: string): MeasuredCommandSpec {
 }
 
 describe('MEASURABLE_COMMANDS', () => {
-  it.each(MEASURABLE_COMMAND_NAMES)('commits %s to exactly one exit, 0 — its exit on a clean subject', (name) => {
-    expect(specNamed(name).expectedExit).toBe(0);
-    expect(specNamed(name).expectedExit).not.toBe(SYSTEM_ERROR_EXIT);
+  /** The verbs that report findings by exit: 0 clean, 1 with findings — both a completed run. */
+  const GATES = new Set([
+    'resources-validate',
+    'audit',
+    'validate',
+    'verify',
+    'skills-validate',
+    'resources-validate-ci',
+    'resources-check-ci',
+    'skills-validate-ci',
+    'validate-ci',
+    'verify-ci',
+  ]);
+
+  it.each(MEASURABLE_COMMAND_NAMES)('declares the exits %s completes with — observed, never 2', (name) => {
+    expect(specNamed(name).exit).toEqual({ kind: 'observed', completed: GATES.has(name) ? [0, 1] : [0] });
   });
 
   it.each(PATHLESS_NAMES)('spells %s as the bare verb — it rejects a positional path', (name) => {

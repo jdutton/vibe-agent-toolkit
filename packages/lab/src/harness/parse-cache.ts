@@ -7,9 +7,10 @@
  * the namespace are each build's own decision (an installed build names its
  * namespace by version, a checkout by a digest of where it lives), and they
  * change between builds. So the lab imports the build's own
- * `@vibe-agent-toolkit/resources`, resolved from the build's own entry point,
- * (for an `npx` build, from the one install npx left in the arm's own npm
- * cache during the untimed start), and calls its `parseCacheDirectory()` under the arm's own VAT-step
+ * `@vibe-agent-toolkit/resources`, resolved from the build's own entry point
+ * (for an `npx` build, from the copy npx actually runs: the pinned version
+ * installed in the steps' own project when there is one, else the one install
+ * npx left in the arm's own npm cache during the untimed start), and calls its `parseCacheDirectory()` under the arm's own VAT-step
  * environment (`armStepEnvironment`) — the one its steps run in, so no
  * inherited variable can steer the answer — and accepts the answer only when it
  * lies under the arm's `tmp/`, the one place a cold reset empties. The cache root
@@ -18,10 +19,12 @@
  * written.
  */
 
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { isAbsolutePath, isUnderRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { everywhere, isAbsolutePath, isUnderRoot, pathPresent, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { type ArmDirectories, armStepEnvironment, entriesOf } from './arm-dirs.js';
 import { EMPTY_ARM_ENVIRONMENT } from './arm-env.js';
@@ -48,10 +51,11 @@ export type ParseDirectoryResolution =
  *
  * @param instrument - The build: `node <entry>` (`tree:`/`dist:`), or `npx` once started in the arm
  * @param dirs - The arm, whose VAT-step environment the build is asked under
+ * @param cwd - Where the arm's steps run: npx runs a copy installed in that project first
  * @returns The directory under `dirs.tmp`, or why it could not be resolved — never a guess
  */
-export function resolveParseCacheDirectory(instrument: ResolvedInstrument, dirs: ArmDirectories): ParseDirectoryResolution {
-  const base = moduleBase(instrument, dirs);
+export function resolveParseCacheDirectory(instrument: ResolvedInstrument, dirs: ArmDirectories, cwd: string): ParseDirectoryResolution {
+  const base = moduleBase(instrument, dirs, cwd);
   if (!base.ok) return base;
   let resources: string;
   try {
@@ -86,20 +90,30 @@ export function resolveParseCacheDirectory(instrument: ResolvedInstrument, dirs:
 const NPX_PROJECTS = '_npx';
 
 /**
- * The file the build's module graph resolves from: its entry for `node <entry>`,
- * or the `package.json` of the one project npx installed into the arm's npm cache.
+ * The file the build's module graph resolves from: its entry for `node <entry>`;
+ * for `npx`, the copy npx runs — the pinned version installed in the steps'
+ * project ({@link localNpxCopy}), else the one project npx installed into the
+ * arm's npm cache.
  *
  * @param instrument - The build
  * @param dirs - The arm
+ * @param cwd - Where the arm's steps run
  * @returns That file (as `dir`), or why there is none
  */
-function moduleBase(instrument: ResolvedInstrument, dirs: ArmDirectories): ParseDirectoryResolution {
+function moduleBase(instrument: ResolvedInstrument, dirs: ArmDirectories, cwd: string): ParseDirectoryResolution {
   if (instrument.command === 'npx') {
+    const local = localNpxCopy(instrument.leadingArgs.at(-1) ?? '', cwd);
+    if (local !== null) return { ok: true, dir: local };
     const projects = safePath.join(dirs.npmCache, NPX_PROJECTS);
     const installs = entriesOf(projects).filter((entry) => entry.isDirectory());
     const [only] = installs;
     if (only === undefined) {
-      return { ok: false, reason: `the arm's npm cache '${dirs.npmCache}' holds no npx install — the build was not started there` };
+      return {
+        ok: false,
+        reason:
+          `the arm's npm cache '${dirs.npmCache}' holds no npx install, and '${cwd}' has the pinned version installed in no project — ` +
+          'npx ran a copy the lab cannot see (another version installed locally, or a global one); measure that copy with a dist: instrument',
+      };
     }
     if (installs.length > 1) {
       return { ok: false, reason: `the arm's npm cache '${projects}' holds ${String(installs.length)} npx installs — which one is this build is a guess` };
@@ -107,6 +121,14 @@ function moduleBase(instrument: ResolvedInstrument, dirs: ArmDirectories): Parse
     return { ok: true, dir: safePath.join(projects, only.name, 'package.json') };
   }
   const entry = instrument.command === process.execPath ? instrument.leadingArgs[0] : undefined;
+  return entryBase(entry);
+}
+
+/**
+ * @param entry - A `node <entry>` build's entry, when it is one
+ * @returns The entry, or why the build cannot be resolved from its own module graph
+ */
+function entryBase(entry: string | undefined): ParseDirectoryResolution {
   if (entry === undefined || !isAbsolutePath(entry)) {
     return {
       ok: false,
@@ -116,4 +138,41 @@ function moduleBase(instrument: ResolvedInstrument, dirs: ArmDirectories): Parse
     };
   }
   return { ok: true, dir: entry };
+}
+
+/**
+ * The copy of an npx spec installed in the project `cwd` lies in, which npx
+ * runs ahead of its own cache: npm's local prefix is the nearest directory up
+ * from `cwd` holding a `package.json` or `node_modules`, and the copy counts
+ * only when it is the pinned version (npx installs any other into its cache).
+ *
+ * @param spec - The pinned spec npx was handed (`name@version`)
+ * @param cwd - Where the steps run
+ * @returns The copy's `package.json`, or `null` when npx would not run a local one
+ */
+function localNpxCopy(spec: string, cwd: string): string | null {
+  const at = spec.lastIndexOf('@');
+  if (at <= 0) return null;
+  const prefix = npmLocalPrefix(cwd);
+  const manifest = safePath.join(prefix, 'node_modules', spec.slice(0, at), 'package.json');
+  if (!present(manifest)) return null;
+  const installed: unknown = JSON.parse(readFileSync(manifest, 'utf-8'));
+  const version = typeof installed === 'object' && installed !== null && 'version' in installed ? installed.version : undefined;
+  return version === spec.slice(at + 1) ? manifest : null;
+}
+
+/**
+ * @param cwd - Where npm runs
+ * @returns npm's local prefix: the nearest directory up from `cwd` with a `package.json` or `node_modules`, else `cwd`
+ */
+function npmLocalPrefix(cwd: string): string {
+  for (let dir = safePath.resolve(cwd); ; dir = dirname(dir)) {
+    if (present(safePath.join(dir, 'package.json')) || present(safePath.join(dir, 'node_modules'))) return dir;
+    if (dirname(dir) === dir) return safePath.resolve(cwd);
+  }
+}
+
+/** @returns Whether something readable is at `path` — a refused look throws rather than reading as absent */
+function present(path: string): boolean {
+  return pathPresent(path, { follow: path }, everywhere('source'), 'probe');
 }

@@ -119,11 +119,12 @@ export function materializeArgs(
  * answers a different question — with `perf` backwards, because a failed run
  * returns fast and would read as an improvement.
  *
- * There is no separate uniformity rule: every step commits to ONE exit, so
- * every repeat without a violation ran the same steps to the same exits.
+ * Then UNIFORMITY: every repeat must run the same steps to the same exits. An
+ * `observed` commitment admits 0 or 1 for a gate, and a set where one repeat
+ * exited 0 and another 1 did two different amounts of work.
  *
  * @param results - Every repeat's outcome, raw
- * @returns The failure to record, or `null` when every repeat completed
+ * @returns The failure to record, or `null` when every repeat completed alike
  */
 export function summarizeRepeatFailures(results: readonly SequenceResult[]): string | null {
   const reasons = results
@@ -132,7 +133,19 @@ export function summarizeRepeatFailures(results: readonly SequenceResult[]): str
   if (reasons.length > 0) {
     return `${String(reasons.length)} of ${String(results.length)} repeats failed — ${reasons[0] ?? 'unknown'}`;
   }
+  const exits = [...new Set(results.map((result) => stepExits(result)))];
+  if (exits.length > 1) {
+    return `the repeats did not exit alike (${exits.join(' | ')}) — a set that did different amounts of work is no measurement`;
+  }
   return null;
+}
+
+/**
+ * @param result - One repeat
+ * @returns Its steps' exits, spelled `step=code` in order — equal exactly when two repeats did the same work
+ */
+function stepExits(result: SequenceResult): string {
+  return result.steps.map((step) => `${step.name}=${String(step.exitCode)}`).join(', ');
 }
 
 /**
@@ -166,7 +179,7 @@ export function commandStep(spec: MeasuredCommandSpec, args: readonly string[]):
     name: spec.name,
     command: { kind: 'vat', args },
     timed: true,
-    expectedExit: spec.expectedExit,
+    exit: spec.exit,
     provenance: spec.provenance,
     populates: spec.populates,
   };
@@ -343,7 +356,7 @@ function prepareArm(spec: RepeatSpec): PreparedArm {
     vatEnv: vat.env,
     toolEnv: tool.env,
     timeoutMs: spec.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    parseDirectory: () => (parse ??= resolveParseCacheDirectory(spec.instrument, dirs)),
+    parseDirectory: () => (parse ??= resolveParseCacheDirectory(spec.instrument, dirs, spec.cwd)),
     population: populationExpectation(vat.env, process.platform),
   };
   return {

@@ -13,7 +13,9 @@
  * {@link incompleteArm} is the one test both judges apply before reading an
  * arm's rounds: an arm that failed, a repetition that broke its rule, or fewer
  * than {@link MIN_JUDGED_REPETITIONS} repetitions is not a measurement either
- * judge may read as one.
+ * judge may read as one. `perf arms` marks every incomplete arm failed, so an
+ * unfailed incomplete one is input validation of a file — a hand-edited or
+ * foreign report — and a judge refuses it only where it reads that arm.
  */
 
 import { readFileSync } from 'node:fs';
@@ -22,6 +24,7 @@ import { z } from 'zod';
 
 import { InstrumentVersionSchema } from '../../envelope/coordinate.js';
 import { recaptureRefusal } from '../../harness/dumps.js';
+import { RecordedExitSchema } from '../../harness/exit-record.js';
 import { LoadReadingsSchema } from '../../harness/schemas.js';
 import type { CacheMode } from '../../harness/types.js';
 
@@ -76,6 +79,7 @@ const ArmsReportFileSchema = z
           build: z.string(),
           arm: z.string(),
           state: z.enum(['warm', 'cold']),
+          exits: z.array(RecordedExitSchema),
           repetitions: z.array(RepetitionSchema),
           summary: z.object({ medianMs: z.number(), minMs: z.number() }).strip().nullable(),
           failure: z.string().nullable(),

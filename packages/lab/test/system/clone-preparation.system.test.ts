@@ -14,6 +14,7 @@ import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
 import { prepareClone, type ClonePreparation } from '../../src/harness/clone.js';
+import { exactExit } from '../../src/harness/commands.js';
 import type { SequenceStep } from '../../src/harness/sequence.js';
 import { argsOf, cleanupProbes, probeStep, readProbeLog, setupProbe, type Probe } from '../command-probe.js';
 import { commitAll, git, initRepo, writeFixtureFile } from '../git-fixtures.js';
@@ -46,7 +47,7 @@ function nodeStep(name: string, script: string): SequenceStep {
     name,
     command: { kind: 'tool', command: process.execPath, args: ['-e', script] },
     timed: false,
-    expectedExit: 0,
+    exit: exactExit(0),
     provenance: 'none',
     populates: false,
   };
@@ -193,7 +194,7 @@ describe('prepareClone', () => {
       name: 'hide',
       command: { kind: 'tool', command: gitExecutable(), args: ['update-index', '--assume-unchanged', 'README.md'] },
       timed: false,
-      expectedExit: 0,
+      exit: exactExit(0),
       provenance: 'none',
       populates: false,
     };

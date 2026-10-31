@@ -39,6 +39,7 @@
 import { z } from 'zod';
 
 import { describeIssues, recaptureRefusal } from '../harness/dumps.js';
+import { type RecordedExit, RecordedExitSchema } from '../harness/exit-record.js';
 
 import { type Coordinate, CoordinateSchema } from './coordinate.js';
 
@@ -61,6 +62,12 @@ export interface ReportEnvelope<TBody = unknown> {
    * cleared. Recorded for provenance and never compared.
    */
   readonly removedEnv: readonly string[];
+  /**
+   * Every measured command's exit commitment and the code its repetitions
+   * shared — empty for a facet that judges no commitment (`verdict` records
+   * each row's own exit in its body). Recorded for provenance and never compared.
+   */
+  readonly exits: readonly RecordedExit[];
   /** The facet's payload. */
   readonly body: TBody;
 }
@@ -79,6 +86,7 @@ export const ReportEnvelopeSchema = z
     coordinate: CoordinateSchema,
     capturedAt: z.string().min(1),
     removedEnv: z.array(z.string()),
+    exits: z.array(RecordedExitSchema),
     body: z.unknown(),
   })
   .strict();

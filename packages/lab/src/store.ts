@@ -19,7 +19,7 @@ import {
   readEnvelope,
   type ReportEnvelope,
 } from './envelope/envelope.js';
-import { writePrivateFile } from './harness/arm-dirs.js';
+import { PRIVATE_DIRECTORY_MODE, writePrivateFile } from './harness/arm-dirs.js';
 
 /** How many characters of a commit or fingerprint appear in a filename. */
 const SHORT_ID_LENGTH = 8;
@@ -171,7 +171,7 @@ export function reportFileName(envelope: ReportEnvelope<unknown>): string {
 }
 
 /**
- * Write a report into a directory, creating it if needed.
+ * Write a report into a directory, creating it owner-only if needed.
  *
  * @param directory - Where reports live
  * @param envelope - The report to store
@@ -192,7 +192,8 @@ export async function writeReport(
       `Refusing to write a report this build could not read back — ${readable.refusal}`,
     );
   }
-  await mkdir(directory, { recursive: true });
+  // Every directory made here (an ab run's `pair-N/<arm>`) is owner-only, as the `--out` above it is.
+  await mkdir(directory, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
   const target = safePath.join(directory, reportFileName(envelope));
   // Owner-only and never through a link: a report names the developer's paths.
   writePrivateFile(target, `${JSON.stringify(envelope, null, 2)}\n`);

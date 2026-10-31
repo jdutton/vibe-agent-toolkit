@@ -71,8 +71,9 @@ function npxInstall(dirs: ReturnType<typeof armDirectories>, hash: string): void
 
 /**
  * @param base - The directory whose `node_modules` gets the stand-in resources package
+ * @param namespace - The cache namespace its answer names, so two installs can be told apart
  */
-function writeStandInResources(base: string): void {
+function writeStandInResources(base: string, namespace = 'ns'): void {
   const resources = mkdirSyncReal(safePath.join(base, 'node_modules', '@vibe-agent-toolkit', 'resources'), { recursive: true });
   writeFileSync(
     safePath.join(resources, 'package.json'),
@@ -85,11 +86,28 @@ function writeStandInResources(base: string): void {
       "import { join } from 'node:path';",
       'export function parseCacheDirectory() {',
       `  if (process.env.${FAKE_FIXED_ENV}) return process.env.${FAKE_FIXED_ENV};`,
-      `  return join(process.env.${FAKE_ROOT_ENV} ?? tmpdir(), '.vat-cache', 'ns', 'parse');`,
+      `  return join(process.env.${FAKE_ROOT_ENV} ?? tmpdir(), '.vat-cache', ${JSON.stringify(namespace)}, 'parse');`,
       '}',
       '',
     ].join('\n'),
   );
+}
+
+/**
+ * A subject with the CLI installed locally, as `npm install` leaves it: the
+ * project's `package.json`, and `node_modules` holding the CLI at `version` and
+ * the resources package it resolves, whose answer names the `local` namespace.
+ *
+ * @param version - The installed CLI's version
+ * @returns The subject's root
+ */
+function localInstall(version: string): string {
+  const subject = mkdirSyncReal(safePath.join(scratch, 'subject'));
+  writeFileSync(safePath.join(subject, 'package.json'), JSON.stringify({ devDependencies: { '@vibe-agent-toolkit/cli': version } }));
+  const cli = mkdirSyncReal(safePath.join(subject, 'node_modules', '@vibe-agent-toolkit', 'cli'), { recursive: true });
+  writeFileSync(safePath.join(cli, 'package.json'), JSON.stringify({ name: '@vibe-agent-toolkit/cli', version }));
+  writeStandInResources(subject, 'local');
+  return subject;
 }
 
 /** @returns A prepared arm under the scratch directory */
@@ -104,7 +122,7 @@ describe('resolveParseCacheDirectory', () => {
     vi.stubEnv(FAKE_ROOT_ENV, safePath.join(scratch, 'developer-cache'));
     const dirs = arm();
 
-    expect(resolveParseCacheDirectory(standInBuild(), dirs)).toStrictEqual({
+    expect(resolveParseCacheDirectory(standInBuild(), dirs, scratch)).toStrictEqual({
       ok: true,
       dir: safePath.join(dirs.tmp, '.vat-cache', 'ns', 'parse'),
     });
@@ -114,7 +132,7 @@ describe('resolveParseCacheDirectory', () => {
     const elsewhere = safePath.join(scratch, 'elsewhere', 'parse');
     vi.stubEnv(FAKE_FIXED_ENV, elsewhere);
 
-    const resolved = resolveParseCacheDirectory(standInBuild(), arm());
+    const resolved = resolveParseCacheDirectory(standInBuild(), arm(), scratch);
 
     expect(resolved.ok).toBe(false);
     expect(resolved.ok ? '' : resolved.reason).toMatch(/not under the arm's tmp/u);
@@ -126,23 +144,50 @@ describe('resolveParseCacheDirectory', () => {
     const forward = safePath.join(dirs.tmp, '.vat-cache', 'ns', 'parse');
     vi.stubEnv(FAKE_FIXED_ENV, forward.replaceAll('/', '\\'));
 
-    expect(resolveParseCacheDirectory(standInBuild(), dirs)).toStrictEqual({ ok: true, dir: forward });
+    expect(resolveParseCacheDirectory(standInBuild(), dirs, scratch)).toStrictEqual({ ok: true, dir: forward });
   });
 
   it('resolves an npx build from the package npx installed into the arm’s own npm cache', () => {
     const dirs = arm();
     npxInstall(dirs, 'a1b2c3');
 
-    expect(resolveParseCacheDirectory(NPX_BUILD, dirs)).toStrictEqual({
+    expect(resolveParseCacheDirectory(NPX_BUILD, dirs, scratch)).toStrictEqual({
       ok: true,
       dir: safePath.join(dirs.tmp, '.vat-cache', 'ns', 'parse'),
     });
   });
 
   it('refuses an npx build the arm’s npm cache does not hold yet — never a guess', () => {
-    const resolved = resolveParseCacheDirectory(NPX_BUILD, arm());
+    const resolved = resolveParseCacheDirectory(NPX_BUILD, arm(), scratch);
 
     expect(resolved.ok ? '' : resolved.reason).toMatch(/npm cache '.*' holds no npx install/u);
+    expect(resolved.ok ? '' : resolved.reason).toMatch(/measure that copy with a dist: instrument/u);
+  });
+
+  it('resolves an npx build from the copy installed in the subject, which npx runs ahead of its own cache', () => {
+    const dirs = arm();
+    npxInstall(dirs, 'a1b2c3');
+    const subject = localInstall('0.0.0-probe');
+
+    expect(resolveParseCacheDirectory(NPX_BUILD, dirs, safePath.join(subject, 'src'))).toStrictEqual({
+      ok: true,
+      dir: safePath.join(dirs.tmp, '.vat-cache', 'local', 'parse'),
+    });
+  });
+
+  it('resolves an npx build with a local copy but no npx install — npx left none, because it ran the local one', () => {
+    const dirs = arm();
+    const subject = localInstall('0.0.0-probe');
+
+    expect(resolveParseCacheDirectory(NPX_BUILD, dirs, subject)).toMatchObject({ ok: true, dir: safePath.join(dirs.tmp, '.vat-cache', 'local', 'parse') });
+  });
+
+  it('passes over a local copy of another version — npx installs the pinned one into its cache', () => {
+    const dirs = arm();
+    npxInstall(dirs, 'a1b2c3');
+    const subject = localInstall('0.0.0-other');
+
+    expect(resolveParseCacheDirectory(NPX_BUILD, dirs, subject)).toMatchObject({ ok: true, dir: safePath.join(dirs.tmp, '.vat-cache', 'ns', 'parse') });
   });
 
   it('refuses an npm cache holding two npx installs — it cannot say which is this build', () => {
@@ -150,7 +195,7 @@ describe('resolveParseCacheDirectory', () => {
     npxInstall(dirs, 'one');
     npxInstall(dirs, 'two');
 
-    const resolved = resolveParseCacheDirectory(NPX_BUILD, dirs);
+    const resolved = resolveParseCacheDirectory(NPX_BUILD, dirs, scratch);
 
     expect(resolved.ok ? '' : resolved.reason).toMatch(/holds 2 npx installs/u);
   });

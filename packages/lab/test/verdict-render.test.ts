@@ -156,6 +156,7 @@ describe('renderVerdictReport', () => {
       facet: 'verdict',
       capturedAt: '2026-10-03T00:00:00.000Z',
       removedEnv: [],
+      exits: [],
       coordinate: {
         subject: { id: 'crucible-1', source: '/work/tree' },
         subjectVersion: { kind: 'git', commit: 'a'.repeat(40), ref: 'main', dirty: false, workingFingerprint: null },

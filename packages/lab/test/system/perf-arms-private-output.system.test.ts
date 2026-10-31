@@ -6,6 +6,8 @@
  *   prepares the clone under the arms root.
  *   An `--out` that IS the subject (`--out .` from its root) is refused before
  *   anything runs, and the subject is neither written into nor chmodded.
+ *   In a default run directory it removes every arm directory and keeps the
+ *   prepared clone its report names, saying where.
  * - `vat-lab perf run` removes its default run directory of arms when the
  *   capture ends, and keeps it under `--keep-arms`, saying which.
  *
@@ -117,6 +119,27 @@ describe('vat-lab perf arms — what it writes is owner-only', () => {
     expect(process.exitCode).toBe(2);
     expect(written(stderr)).toMatch(/^REFUSED: --out .* is the subject/mu);
     expect({ entries: readdirSync(subject).sort((a, b) => a.localeCompare(b)), mode: modeOf(subject) }).toStrictEqual(before);
+  });
+});
+
+describe('vat-lab perf arms — the default run directory keeps the prepared clone and loses the arms', () => {
+  it('removes every arm directory, keeps the clone the report names, and says where it is', async () => {
+    const sandbox = sandboxed();
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const subject = cleanSubject();
+    const out = safePath.join(tempDir('lab-arms-clone-kept-out-'), 'out');
+
+    await createProgram().parseAsync([
+      'node', 'vat-lab', 'perf', 'arms', subject, '--build', `cand=${candidate()}`, '--arm', 'cand:ci-c:cold', '--out', out,
+    ]);
+
+    expect(process.exitCode, written(stderr)).toBeUndefined();
+    const parsed = JSON.parse(readFileSync(safePath.join(out, 'arms-report.json'), 'utf-8')) as { readonly prepared: { readonly path: string } };
+    expect(statSync(parsed.prepared.path).isDirectory()).toBe(true);
+    expect(written(stderr)).toContain(`Prepared clone kept at ${parsed.prepared.path}; remove it when done`);
+    const root = safePath.join(parsed.prepared.path, '..');
+    expect(safePath.relative(sandbox, root).startsWith('vat-lab-arms-')).toBe(true);
+    expect(readdirSync(root).sort((a, b) => a.localeCompare(b))).toStrictEqual(['.vat-lab-root', 'clone']);
   });
 });
 

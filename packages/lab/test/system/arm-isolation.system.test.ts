@@ -22,6 +22,7 @@ import { basename } from 'node:path';
 import { normalizedTmpdir, resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
+import { exactExit } from '../../src/harness/commands.js';
 import { runRepeats } from '../../src/harness/repeat.js';
 import type { SequenceStep } from '../../src/harness/sequence.js';
 import type { ResolvedInstrument } from '../../src/harness/types.js';
@@ -64,7 +65,7 @@ function subject(): string {
 
 /** A timed VAT step committed to exit 0. */
 function vatStep(name: string, args: readonly string[], overrides: Partial<SequenceStep> = {}): SequenceStep {
-  return { name, command: { kind: 'vat', args }, timed: true, expectedExit: 0, provenance: 'none', populates: false, ...overrides };
+  return { name, command: { kind: 'vat', args }, timed: true, exit: exactExit(0), provenance: 'none', populates: false, ...overrides };
 }
 
 /**

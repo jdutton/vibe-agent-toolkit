@@ -218,6 +218,8 @@ async function captureSubject(
       coordinate: { subject: resolved.ref, subjectVersion: resolved.version, instrument: request.instrument.version },
       capturedAt: request.capturedAt,
       removedEnv: removed,
+      // Each row records its own exit; a verdict judges no commitment.
+      exits: [],
       body: {
         arm: request.env,
         rows,

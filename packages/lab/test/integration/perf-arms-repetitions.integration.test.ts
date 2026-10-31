@@ -74,7 +74,7 @@ describe('captureArms — what each repetition records', () => {
     const [passing, failing] = report.arms;
     expect(passing?.failure).toBeNull();
     expect(failing?.summary).toBeNull();
-    expect(failing?.failure).toMatch(/^3 of 3 repeats failed — step 'boom' exited 3: /u);
+    expect(failing?.failure).toMatch(/^3 of 3 repeats failed — step 'boom' exited 3, not exactly 0: /u);
     expect(failing?.repetitions.map((repetition) => repetition.steps[0]?.stderr)).toEqual([
       'probe was asked to fail',
       'probe was asked to fail',

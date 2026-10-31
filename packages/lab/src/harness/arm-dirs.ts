@@ -77,6 +77,7 @@ import {
   type Ownership,
   planTreeChanges,
   safePath,
+  type TreeChange,
   VatError,
 } from '@vibe-agent-toolkit/utils';
 
@@ -98,7 +99,7 @@ const ROOT_MARKER = '.vat-lab-root';
 const PRIVATE_FILE_MODE = 0o600;
 
 /** Owner-only: an arm's directories hold a store and caches no one else should read or plant. */
-const PRIVATE_MODE = 0o700;
+export const PRIVATE_DIRECTORY_MODE = 0o700;
 
 /** A directory-name segment: letters, digits, `.`, `_`, `-`, never a leading dot. */
 const SEGMENT = /^[\w-][\w.-]*$/u;
@@ -188,6 +189,18 @@ interface ArmsRootRequest {
   readonly subjects: readonly string[];
 }
 
+/** How an invocation's arms root ends ({@link closeArmsRoot}). */
+interface ArmsRootEnding {
+  /** `--keep-arms`: a default run directory is kept whole. */
+  readonly keep: boolean;
+  /**
+   * The name of the root's child that outlives the capture — `perf arms`' prepared
+   * clone, which its report names — or `null` when nothing does. With one, ending
+   * a default run directory removes its arm directories and keeps the root.
+   */
+  readonly preparedClone: string | null;
+}
+
 /**
  * The one root every arm directory of an invocation lives under — never inside
  * a subject, and marked {@link ROOT_MARKER} as the lab's.
@@ -218,37 +231,120 @@ export function openArmsRoot(request: ArmsRootRequest): ArmsRoot {
     return { path: override, temporary: false };
   }
   const base = safePath.join(normalizedTmpdir(), `vat-lab-arms-${userSegment()}`);
+  // Placed before anything is created, as --arms-dir is: the run directory does
+  // not exist yet, and placement judges the path it will have.
+  requirePlaced(safePath.join(base, 'run-*'), request.subjects);
   requireDirectoryOrAbsent(base, 'the arms base');
   if (kindOf(base) === 'absent') createPrivateDirectory(base);
   requireOwnPrivate(base);
   const run = mkdtempSync(safePath.join(base, 'run-'));
   narrowToOwner(run);
   writeMarker(run, ROOT_MARKER);
-  requirePlaced(run, request.subjects);
   return { path: run, temporary: true };
 }
 
 /**
  * End an invocation's arms root: remove a temporary one through the
  * marker-gated tree-change protocol, unless the caller keeps it; an
- * `--arms-dir` the operator named is always kept.
+ * `--arms-dir` the operator named is always kept. A root holding a prepared
+ * clone loses only its marked arm directories, and the clone stays where the
+ * report says it is.
  *
  * @param root - From {@link openArmsRoot}
- * @param keep - `--keep-arms`
- * @returns What happened, naming the root, for the operator
+ * @param ending - See {@link ArmsRootEnding}
+ * @returns What happened, naming the root and any kept clone, for the operator
  * @throws {VatError} {@link ARM_REFUSED_CODE} when a temporary root no longer carries its marker
  */
-export async function closeArmsRoot(root: ArmsRoot, keep: boolean): Promise<string> {
-  if (!root.temporary || keep) return `Kept arms under ${root.path}`;
-  const ownership: Ownership = {
-    kind: 'vat-made',
-    recognise: () => (isRootMarked(root.path) ? { owned: true } : { owned: false, reason: `'${root.path}' carries no ${ROOT_MARKER}` }),
-  };
+export async function closeArmsRoot(root: ArmsRoot, ending: ArmsRootEnding): Promise<string> {
+  const clone = ending.preparedClone === null ? null : safePath.join(root.path, ending.preparedClone);
+  const cloneLine = clone !== null && kindOf(clone) === 'directory' ? `\nPrepared clone kept at ${clone}; remove it when done` : '';
+  if (!root.temporary || ending.keep) return `Kept arms under ${root.path}${cloneLine}`;
   if (!isRootMarked(root.path)) {
     throw armRefusal(`'${root.path}' carries no ${ROOT_MARKER}: it is no longer provably the lab's, so it is left in place`);
   }
-  await applyTreePlan(await planTreeChanges([{ op: 'remove', dest: root.path, ownership, label: 'arms root' }]));
-  return `Removed arms under ${root.path}`;
+  await applyTreePlan(await planTreeChanges(ending.preparedClone === null ? [rootRemoval(root.path)] : armRemovals(root.path, ending.preparedClone)));
+  return `Removed arms under ${root.path}${cloneLine}`;
+}
+
+/**
+ * Run a capture under the invocation's arms root ({@link openArmsRoot}), said
+ * aloud, and end it ({@link closeArmsRoot}) whether the capture succeeded or
+ * failed. The body publishes its own result — writes its report, prints it —
+ * so nothing a capture measured waits on the cleanup. When the capture threw
+ * and the cleanup throws too, both are reported, the capture's first, under
+ * the capture's own error code.
+ *
+ * @param request - See {@link ArmsRootRequest}
+ * @param ending - See {@link ArmsRootEnding}
+ * @param say - Where the operator reads what became of the root (stderr)
+ * @param body - The capture and its publication, handed the root's path
+ */
+export async function underArmsRoot(
+  request: ArmsRootRequest,
+  ending: ArmsRootEnding,
+  say: (line: string) => void,
+  body: (armsRoot: string) => Promise<void>,
+): Promise<void> {
+  const root = openArmsRoot(request);
+  say(`Arms under ${root.path}`);
+  let failure: { readonly error: unknown } | null = null;
+  try {
+    await body(root.path);
+  } catch (error: unknown) {
+    failure = { error };
+  }
+  try {
+    say(await closeArmsRoot(root, ending));
+  } catch (cleanup: unknown) {
+    throw failure === null ? cleanup : bothFailures(failure.error, cleanup);
+  }
+  if (failure !== null) throw failure.error;
+}
+
+/**
+ * @param original - What the capture threw
+ * @param cleanup - What ending the arms root threw after it
+ * @returns One error naming both, the original first, carrying the original's code when it has one
+ */
+function bothFailures(original: unknown, cleanup: unknown): Error {
+  const message = `${messageOf(original)}\n…and ending the arms root failed too: ${messageOf(cleanup)}`;
+  const options = { cause: original };
+  return original instanceof VatError ? new VatError(original.code, message, options) : new Error(message, options);
+}
+
+/** @returns An error's message, or the thrown value spelled */
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * @param root - A marked arms root
+ * @returns The removal of the whole root
+ */
+function rootRemoval(root: string): TreeChange {
+  const ownership: Ownership = {
+    kind: 'vat-made',
+    recognise: () => (isRootMarked(root) ? { owned: true } : { owned: false, reason: `'${root}' carries no ${ROOT_MARKER}` }),
+  };
+  return { op: 'remove', dest: root, ownership, label: 'arms root' };
+}
+
+/**
+ * @param root - A marked arms root
+ * @param kept - The child that stays
+ * @returns The removal of every marked arm directory under it; anything else is left as it is
+ */
+function armRemovals(root: string, kept: string): TreeChange[] {
+  return entriesOf(root)
+    .filter((entry) => entry.isDirectory() && entry.name !== kept && isMarked(safePath.join(root, entry.name)))
+    .map((entry) => {
+      const arm = safePath.join(root, entry.name);
+      const ownership: Ownership = {
+        kind: 'vat-made',
+        recognise: () => (isMarked(arm) ? { owned: true } : { owned: false, reason: `'${arm}' carries no ${ARM_MARKER}` }),
+      };
+      return { op: 'remove', dest: arm, ownership, label: 'arm directory' };
+    });
 }
 
 /**
@@ -404,7 +500,28 @@ export function armPlacementRefusal(dir: string, subjects: readonly string[]): s
  */
 function isSubjectItself(dir: string, subject: string): boolean {
   // The subject is the operator's own tree: its own path is the edge it is judged from.
-  return canonicalPath(subject, subject) === canonicalPath(dir, subject);
+  return samePath(dir, subject, subject);
+}
+
+/**
+ * Whether two spellings name one directory, as the filesystem judges it: real
+ * paths, forward-slashed, the drive letter in either case on Windows. The one
+ * path-equality question the lab asks — a subject against a directory, the
+ * clone a capture recorded against the one an arms report names.
+ *
+ * @param a - One spelling
+ * @param b - The other
+ * @param within - The tree both are judged from ({@link canonicalPath})
+ * @returns Whether they are the same path
+ */
+export function samePath(a: string, b: string, within: string): boolean {
+  return pathKey(a, within) === pathKey(b, within);
+}
+
+/** @returns The spelling {@link samePath} compares */
+function pathKey(path: string, within: string): string {
+  const real = canonicalPath(path, within);
+  return process.platform === 'win32' ? real.replace(/^[A-Za-z]:/u, (drive) => drive.toLowerCase()) : real;
 }
 
 /**
@@ -654,7 +771,7 @@ function writeMarker(dir: string, marker: string): void {
 function createPrivateDirectory(dir: string): void {
   const parent = safePath.resolve(dir, '..');
   if (kindOf(parent) === 'absent') mkdirSyncReal(parent, { recursive: true });
-  mkdirSyncReal(dir, { mode: PRIVATE_MODE });
+  mkdirSyncReal(dir, { mode: PRIVATE_DIRECTORY_MODE });
   narrowToOwner(dir);
 }
 
@@ -691,7 +808,7 @@ function narrowToOwner(dir: string): void {
     if (!stats.isDirectory() || stats.uid !== process.getuid?.()) {
       throw armRefusal(`'${dir}' is not a directory this user owns; nothing was chmodded`);
     }
-    fchmodSync(fd, PRIVATE_MODE);
+    fchmodSync(fd, PRIVATE_DIRECTORY_MODE);
   } finally {
     closeSync(fd);
   }

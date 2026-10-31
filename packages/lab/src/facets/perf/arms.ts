@@ -10,9 +10,12 @@
  * document reported. Bars over these numbers are `bars.ts`'s.
  */
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+
 import type { InstrumentVersion } from '../../envelope/coordinate.js';
 import type { ArmEnvironment } from '../../harness/arm-env.js';
-import type { MeasuredSequenceSpec } from '../../harness/commands.js';
+import { exactExit, type MeasuredSequenceSpec } from '../../harness/commands.js';
+import { type RecordedExit, recordExits } from '../../harness/exit-record.js';
 import { judgeLoad, readLoad } from '../../harness/load-guard.js';
 import type { StepProvenance } from '../../harness/provenance.js';
 import { armRunFailure, commandStep, type RepeatSpec, runInterleaved } from '../../harness/repeat.js';
@@ -90,6 +93,8 @@ export interface ArmReport {
   readonly removedEnv: readonly string[];
   /** Inherited names the arm's tool steps did not receive. */
   readonly removedToolEnv: readonly string[];
+  /** Every step's exit commitment (always `exact` here) and the code its repetitions shared. */
+  readonly exits: readonly RecordedExit[];
   readonly priming: ArmRepetition | null;
   readonly repetitions: readonly ArmRepetition[];
   /** Min/median/IQR over the repetitions, or `null` when there is no measurement. */
@@ -112,9 +117,9 @@ export interface ArmsReport {
 /**
  * The ONE exit one step of one arm commits to, as the operator set it
  * (`perf arms --expect-exit <build>:<sequence>:<step>=<code>`). A CI step
- * has one committed outcome, so a set of acceptable exits would let a run that
- * did different work pass as the same measurement. A step no expectation names
- * commits to 0.
+ * has one committed outcome, so every arm step is `exact` (`ExitCommitment`):
+ * a set of acceptable exits would let a run that did different work pass as
+ * the same measurement. A step no expectation names commits to 0.
  */
 export interface ExpectedExit {
   readonly build: string;
@@ -127,8 +132,8 @@ export interface ExpectedExit {
 }
 
 /**
- * A registered CI sequence as one build's timed steps, each carrying its
- * one committed exit and population reader.
+ * A registered CI sequence as one build's timed steps, each committed to
+ * exactly one exit (its expectation's, else 0) and carrying its population reader.
  *
  * @param sequence - A {@link MeasuredSequenceSpec}
  * @param build - The build whose arm runs it
@@ -145,7 +150,7 @@ export function sequenceSteps(
     const set = expected.find(
       (candidate) => candidate.build === build && candidate.sequence === sequence.name && candidate.step === step.name,
     );
-    return set === undefined ? step : { ...step, expectedExit: set.exit };
+    return { ...step, exit: exactExit(set?.exit ?? ExitCode.OK) };
   });
 }
 
@@ -217,6 +222,7 @@ export async function captureArms(request: CaptureArmsRequest): Promise<ArmsRepo
         state: arm.state,
         removedEnv: run.removed,
         removedToolEnv: run.removedTool,
+        exits: recordExits(arm.steps, run.results),
         priming: run.priming === null ? null : repetitionOf(run.priming),
         repetitions: run.results.map((result) => repetitionOf(result)),
         summary: refused === null ? summarize(run.results.map((result) => result.wallMs)) : null,

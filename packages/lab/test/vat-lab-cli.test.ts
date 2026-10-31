@@ -44,7 +44,7 @@ import type { ReportEnvelope } from '../src/envelope/envelope.js';
 import type { PerfBody, PerfCommandStats } from '../src/facets/perf/types.js';
 import { PERF_FACET } from '../src/facets/perf/types.js';
 import type { VerdictBody } from '../src/facets/verdict/types.js';
-import { MEASURABLE_COMMAND_NAMES, MEASURABLE_COMMANDS } from '../src/harness/commands.js';
+import { exactExit, MEASURABLE_COMMAND_NAMES, MEASURABLE_COMMANDS } from '../src/harness/commands.js';
 import { writeReport } from '../src/store.js';
 
 import { makeReport } from './report-fixtures.js';
@@ -201,6 +201,7 @@ describe('collectCommandExpectedExit — a single-command facet commits a comman
   it.for([
     { value: 'validate=0,1', pattern: /one exit code/u },
     { value: 'validate=2', pattern: /exit 2/u },
+    { value: 'validate=256', pattern: /from 0 to 255/u },
     { value: 'nonesuch=1', pattern: /got 'nonesuch'/u },
     { value: 'validate=', pattern: /<command>=<code>/u },
     { value: 'validate', pattern: /<command>=<code>/u },
@@ -222,7 +223,7 @@ describe('committedCommands — the one place a caller expectation replaces a sp
 
     const committed = committedCommands(specs, [{ command: 'validate', exit: 1 }]);
 
-    expect(committed.map((spec) => [spec.name, spec.expectedExit])).toEqual([['validate', 1], ['audit', 0]]);
+    expect(committed.map((spec) => [spec.name, spec.exit])).toEqual([['validate', exactExit(1)], ['audit', MEASURABLE_COMMANDS.audit.exit]]);
     expect(committed[1]).toBe(MEASURABLE_COMMANDS.audit);
   });
 
@@ -576,7 +577,7 @@ describe('vat-lab perf arms — the option parsers', () => {
       name: 'pnpm install --frozen-lockfile',
       command: { kind: 'tool', command: 'pnpm', args: ['install', '--frozen-lockfile'] },
       timed: false,
-      expectedExit: 0,
+      exit: exactExit(0),
       provenance: 'none',
       populates: false,
     });
@@ -589,6 +590,7 @@ describe('vat-lab perf arms — the option parsers', () => {
     ]);
     expect(() => collectExpectedExit('cand:ci-c:validate-ci=0,1', undefined)).toThrow(/one exit code/u);
     expect(() => collectExpectedExit('cand:ci-c:validate-ci=2', undefined)).toThrow(/exit 2/u);
+    expect(() => collectExpectedExit('cand:ci-c:validate-ci=300', undefined)).toThrow(/from 0 to 255/u);
     expect(() => collectExpectedExit('cand:ci-c=0', undefined)).toThrow(InvalidArgumentError);
     expect(() => collectExpectedExit('cand:ci-c:validate-ci=one', undefined)).toThrow(InvalidArgumentError);
     expect(() => collectExpectedExit('cand:ci-c:validate-ci=', undefined)).toThrow(InvalidArgumentError);
@@ -635,6 +637,7 @@ const measured = (build: string, arm: string, medianMs: number, minMs: number) =
   build,
   arm,
   state: 'cold',
+  exits: [],
   summary: { minMs, medianMs, iqrMs: 1, runs: 5 },
   repetitions: cleanRounds([['s', 0]]),
   failure: null,
@@ -781,6 +784,7 @@ function unionEnvelope(row: string, preparedClone: string | null, commit: string
     },
     capturedAt: '2026-10-31T00:00:00.000Z',
     removedEnv: [],
+    exits: [],
     body: {
       arm: { set: {}, unset: [] },
       rows: [
@@ -823,8 +827,8 @@ async function union(prepared: boolean, rightFailure: string | null = null): Pro
       builds: Object.entries(UNION_BUILDS).map(([alias, instrument]) => ({ alias, source: { kind: 'dist', path: `/builds/${alias}` }, instrument })),
       load: { before: null, after: null, cpus: 1, available: false, contaminated: false },
       arms: [
-        { build: 'rc11', arm: 'ci-b', state: 'cold', repetitions: cleanRounds([['resources-validate-ci', 1]]), summary: null, failure: null },
-        { build: 'cand', arm: 'ci-c', state: 'cold', repetitions: cleanRounds([['validate', 1]]), summary: null, failure: rightFailure },
+        { build: 'rc11', arm: 'ci-b', state: 'cold', exits: [], repetitions: cleanRounds([['resources-validate-ci', 1]]), summary: null, failure: null },
+        { build: 'cand', arm: 'ci-c', state: 'cold', exits: [], repetitions: cleanRounds([['validate', 1]]), summary: null, failure: rightFailure },
       ],
     }),
   );

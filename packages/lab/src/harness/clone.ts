@@ -68,6 +68,9 @@ export type PreparedClone =
     }
   | { readonly ok: false; readonly refusal: string };
 
+/** The prepared clone's name under the arms root; it outlives the capture, as the report names it. */
+export const PREPARED_CLONE_NAME = 'clone';
+
 /**
  * Clone, prepare and prove a subject at one commit.
  *
@@ -75,7 +78,7 @@ export type PreparedClone =
  * @returns The clone's path, commit and tree, or the refusal
  */
 export async function prepareClone(preparation: ClonePreparation): Promise<PreparedClone> {
-  const path = safePath.join(preparation.armsRoot, 'clone');
+  const path = safePath.join(preparation.armsRoot, PREPARED_CLONE_NAME);
   // An entry, a dangling link included, is "already there"; a refused look throws rather than reading as absent.
   if (pathPresent(path, 'entry', everywhere('destination'), 'confirmed')) return refused(`the clone '${path}' already exists; preparation starts from nothing`);
   const placement = armPlacementRefusal(preparation.armsRoot, [preparation.source]);

@@ -34,6 +34,7 @@ import { ExitCode } from '@vibe-agent-toolkit/schema';
 
 import { type InstrumentVersion, movedAxes } from '../../envelope/coordinate.js';
 import type { ReportEnvelope } from '../../envelope/envelope.js';
+import { samePath } from '../../harness/arm-dirs.js';
 import { instrumentLabel } from '../../harness/render.js';
 import { incompleteArm, parseArmName } from '../perf/arms-report-file.js';
 
@@ -179,7 +180,8 @@ function oneTreeRefusal(request: UnionRequest): string | null {
     if (body.preparedClone === null) {
       return `subject '${alias}' ran at its subjects-file path, not in the prepared clone — capture it with --prepared ${alias}=${prepared.path}`;
     }
-    if (body.preparedClone !== prepared.path) {
+    // Two processes spelled these; compare the directories, never the strings.
+    if (!samePath(body.preparedClone, prepared.path, prepared.path)) {
       return `subject '${alias}' ran in '${body.preparedClone}', but the arms ran in '${prepared.path}'`;
     }
     const version = coordinate.subjectVersion;

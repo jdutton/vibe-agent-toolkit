@@ -141,21 +141,24 @@ export function parseBar(text: string): Bar | string {
  *
  * @param report - `arms-report.json`, or anything carrying its arms
  * @param bars - The parsed bars
- * @returns One result per bar, or the refusal naming an arm the report does not hold or an incomplete one
+ * @returns One result per bar, or the refusal naming an arm the report does not hold, or an unfailed
+ *   incomplete arm a bar names
  */
 export function judgeBars(
   report: BarReport,
   bars: readonly Bar[],
 ): { readonly ok: true; readonly results: readonly BarResult[] } | { readonly ok: false; readonly refusal: string } {
-  // A failed arm fails every bar over it, naming its failure, below; any other incomplete arm refuses the report.
-  const incomplete = report.arms.filter((arm) => arm.failure === null).map((arm) => incompleteArm(arm)).find((why) => why !== null);
-  if (incomplete !== undefined) return { ok: false, refusal: incomplete };
   const results: BarResult[] = [];
   for (const bar of bars) {
     const left = findArm(report.arms, bar.left);
     const right = findArm(report.arms, bar.right);
     if (typeof left === 'string') return { ok: false, refusal: `--bar '${bar.text}': ${left}` };
     if (typeof right === 'string') return { ok: false, refusal: `--bar '${bar.text}': ${right}` };
+    // A failed arm fails the bar, naming its failure, below. An unfailed one that is still
+    // incomplete is no report `perf arms` writes — a hand-edited or foreign file — so the bar
+    // naming it is refused; an arm no bar names is never read.
+    const incomplete = [left, right].filter((arm) => arm.failure === null).map((arm) => incompleteArm(arm)).find((why) => why !== null);
+    if (incomplete !== undefined) return { ok: false, refusal: `--bar '${bar.text}': ${incomplete}` };
     if (left.summary !== null && right.summary !== null) {
       results.push({ bar, ...judgeBar(left.summary, bar.relation, right.summary, bar.factor), reason: null });
     } else {

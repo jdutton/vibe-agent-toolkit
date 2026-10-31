@@ -47,7 +47,7 @@ import {
   PerfBodySchema,
 } from '../src/facets/perf/types.js';
 import type { ArmEnvironment } from '../src/harness/arm-env.js';
-import type { MeasuredCommandSpec } from '../src/harness/commands.js';
+import { exactExit, MEASURABLE_COMMANDS, type MeasuredCommandSpec } from '../src/harness/commands.js';
 import { runRepeats } from '../src/harness/repeat.js';
 import type { ResolvedSubject } from '../src/harness/types.js';
 
@@ -92,7 +92,7 @@ const CAPTURED_AT = '2026-08-09T12:34:56.000Z';
 const FINDINGS: MeasuredCommandSpec = {
   name: 'broken',
   args: [PROBE_FAIL_TOKEN],
-  expectedExit: 1,
+  exit: exactExit(1),
   provenance: 'none',
   populates: false,
 };
@@ -107,7 +107,7 @@ const FINDINGS: MeasuredCommandSpec = {
 const PASSES_WITH_FINDINGS: MeasuredCommandSpec = {
   name: 'audit',
   args: ['audit'],
-  expectedExit: 1,
+  exit: exactExit(1),
   provenance: 'none',
   populates: false,
 };
@@ -120,10 +120,11 @@ const EXITS_ONE = { [PROBE_EXIT_CODE_ENV]: '1' };
  *
  * @param step - The step's name, which is the measured command's name
  * @param exit - The code it exited with
+ * @param committed - The commitment it broke, as a message spells it
  * @returns The suffix
  */
-function failReason(step: string, exit = PROBE_FAIL_EXIT): string {
-  return `step '${step}' exited ${String(exit)}: ${PROBE_DEFAULT_STDERR}`;
+function failReason(step: string, exit = PROBE_FAIL_EXIT, committed = 'exactly 0'): string {
+  return `step '${step}' exited ${String(exit)}, not ${committed}: ${PROBE_DEFAULT_STDERR}`;
 }
 
 /**
@@ -267,7 +268,7 @@ describe('capturePerf — a failed repeat is never timed', () => {
     );
 
     expect(row.failure).toBe(
-      `1 of 1 repeats failed — step '${PROBE_FAILS.name}' exited ${String(PROBE_FAIL_EXIT)}: ${'x'.repeat(200)}`,
+      `1 of 1 repeats failed — step '${PROBE_FAILS.name}' exited ${String(PROBE_FAIL_EXIT)}, not exactly 0: ${'x'.repeat(200)}`,
     );
   });
 });
@@ -327,7 +328,59 @@ describe('capturePerf — a findings exit is a completed run', () => {
 
     expect(row.failed).toBe(true);
     expect(row.exitCode).toBeNull();
-    expect(row.failure).toBe(`2 of 2 repeats failed — ${failReason(FINDINGS.name, 2)}`);
+    expect(row.failure).toBe(`2 of 2 repeats failed — ${failReason(FINDINGS.name, 2, 'exactly 1')}`);
+  });
+});
+
+/**
+ * The registered `audit` — a default command, whose verb declares 0 and 1 as
+ * completed runs — run against the probe with these arguments.
+ *
+ * @param args - What the probe is handed
+ * @returns The spec, its commitment exactly as registered
+ */
+function registeredAudit(args: readonly string[]): MeasuredCommandSpec {
+  return { ...MEASURABLE_COMMANDS.audit, args, populates: false };
+}
+
+describe('capturePerf — a default command is judged by the exits it declares (observed)', () => {
+  it('completes a default command whose every repeat exits 1, and records the 1 it observed', async () => {
+    const probe = setupProbe(PREFIX);
+
+    const report = await capture(probe, { runs: 3, cache: 'cold', commands: [registeredAudit([PROBE_FAIL_TOKEN])], env: EXITS_ONE });
+
+    expect(onlyRow(report).failure).toBeNull();
+    expect(onlyRow(report).exitCode).toBe(1);
+    expect(report.exits).toEqual([{ step: 'audit', commitment: { kind: 'observed', completed: [0, 1] }, observed: 1 }]);
+  });
+
+  it('fails a default command whose repeats alternate 0 and 1 — two amounts of work', async () => {
+    const probe = setupProbe(PREFIX);
+
+    const report = await capture(probe, {
+      runs: 3,
+      cache: 'cold',
+      commands: [registeredAudit(['audit'])],
+      env: { ...EXITS_ONE, [PROBE_FAIL_AT_ENV]: '1' },
+    });
+
+    expect(onlyRow(report).failure).toBe(
+      'the repeats did not exit alike (audit=0 | audit=1) — a set that did different amounts of work is no measurement',
+    );
+    expect(report.exits).toEqual([{ step: 'audit', commitment: { kind: 'observed', completed: [0, 1] }, observed: null }]);
+  });
+
+  it('fails a default command that exits 2, which no verb declares as completed', async () => {
+    const probe = setupProbe(PREFIX);
+
+    const report = await capture(probe, {
+      runs: 2,
+      cache: 'cold',
+      commands: [registeredAudit([PROBE_FAIL_TOKEN])],
+      env: { [PROBE_EXIT_CODE_ENV]: '2' },
+    });
+
+    expect(onlyRow(report).failure).toBe(`2 of 2 repeats failed — step 'audit' exited 2, not one of 0, 1: ${PROBE_DEFAULT_STDERR}`);
   });
 });
 
@@ -359,7 +412,7 @@ describe('capturePerf — repeats that completed differently', () => {
     expect(row.failed).toBe(true);
     expect(row.exitCode).toBeNull();
     expect(row.samplesMs).toEqual([]);
-    expect(row.failure).toBe(`2 of 3 repeats failed — step 'audit' exited 0: `);
+    expect(row.failure).toBe(`2 of 3 repeats failed — step 'audit' exited 0, not exactly 1: `);
   });
 });
 
@@ -397,8 +450,8 @@ describe('capturePerf — no repeats at all', () => {
 describe('capturePerf — rows are independent', () => {
   it('keeps a failing command from poisoning the commands either side of it', async () => {
     const probe = setupProbe(PREFIX);
-    const before: MeasuredCommandSpec = { name: 'before', args: ['audit'], expectedExit: 0, provenance: 'none', populates: false };
-    const after: MeasuredCommandSpec = { name: 'after', args: ['audit', '--json'], expectedExit: 0, provenance: 'none', populates: false };
+    const before: MeasuredCommandSpec = { name: 'before', args: ['audit'], exit: exactExit(0), provenance: 'none', populates: false };
+    const after: MeasuredCommandSpec = { name: 'after', args: ['audit', '--json'], exit: exactExit(0), provenance: 'none', populates: false };
 
     const report = await capture(probe, { runs: 2, commands: [before, PROBE_FAILS, after] });
 

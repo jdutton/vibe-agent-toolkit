@@ -284,19 +284,28 @@ is. Every capture is written through the normal store, under `<out>/ab-<stamp>/p
 per-pair directory is load-bearing, because two pairs of one arm share a coordinate and therefore a
 filename.
 
-## The one exit a run commits to
+## The exit a run commits to
 
-Every step commits to ONE exit, and a repetition that exits anything else is a failed measurement.
-Every registered command commits to `0`, its exit on a clean subject. vat's convention is `0`
-success, `1` validation findings, `2` system error, so on a subject with findings the caller commits
-the command to `1`: `--expect-exit validate=1` on `<facet> run` and `<facet> ab`, and
-`--expect-exit <build>:<sequence>:<step>=1` on `perf arms`. Nothing accepts two codes: a set where
-one repeat exited `0` and another `1` did two different amounts of work, and a median over it
-describes neither. Because each step has one committed exit, every repetition without a violation ran
-the same steps to the same exits, so there is no separate uniformity rule. An expectation naming a
-command the run does not measure is refused rather than silently leaving `0` in force.
+Every step carries ONE `ExitCommitment` (`harness/commands.ts`), of one of two kinds, and a
+repetition that exits outside it is a failed measurement. vat's convention is `0` success, `1`
+validation findings, `2` system error.
 
-Exit `2` is never committed. That run did not complete, and its duration is the duration of giving
+- **`observed`** — the default for `<facet> run` and `<facet> ab`. A command may exit any code its
+  verb declares as a completed run: `0` alone, or `0` and `1` for a gate (`resources-validate`,
+  `audit`, `validate`, `verify`, `skills-validate` and their `-ci` spellings). So a bare run over a
+  real project with findings measures, as it always has.
+- **`exact`** — one committed code. Every step of `perf arms` is `exact` (`0` unless
+  `--expect-exit <build>:<sequence>:<step>=<code>` says otherwise: a CI step has one committed
+  outcome), and `--expect-exit <command>=<code>` makes a command of `run`/`ab` `exact`.
+
+Whatever the kind, every repetition must exit ALIKE (`summarizeRepeatFailures`): a set where one
+repeat exited `0` and another `1` did two different amounts of work, and a median over it describes
+neither. Every report records each measured step's commitment and the code its repetitions shared
+(the envelope's `exits`; an arms report's per-arm `exits`). An expectation naming a command the run
+does not measure is refused rather than silently leaving the default in force, and so is a code
+outside `0`–`255`.
+
+Exit `2` is never committed, and no verb declares it completed. That run did not complete, and its duration is the duration of giving
 up — fast enough that timing it reads as an improvement.
 
 This is a `perf`/`io` question ("is this duration worth trusting?"), not the `verdict` facet's.

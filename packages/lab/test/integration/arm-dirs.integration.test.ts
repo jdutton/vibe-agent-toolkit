@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ARM_REFUSED_CODE,
   armDirectories,
+  armRefusal,
   armDirectoriesAt,
   armPlacementRefusal,
   closeArmsRoot,
@@ -27,7 +28,12 @@ import {
   prepareArmDirectories,
   resetArmHome,
   resetColdArm,
+  samePath,
+  underArmsRoot,
 } from '../../src/harness/arm-dirs.js';
+
+/** The ending of every verb but `perf arms`: the whole default run directory goes. */
+const WHOLE = { keep: false, preparedClone: null } as const;
 
 const POSIX = process.platform !== 'win32';
 
@@ -219,6 +225,15 @@ describe('openArmsRoot', () => {
     }
   });
 
+  it('refuses a default root whose temp directory lies inside a subject — before creating or marking anything', () => {
+    const subject = mkdtempSync(safePath.join(out, 'subject-'));
+    const tmp = mkdirSyncReal(safePath.join(subject, 'tmp'));
+    for (const name of ['TMPDIR', 'TEMP', 'TMP']) vi.stubEnv(name, tmp);
+
+    expect(() => openArmsRoot({ override: null, subjects: [subject] })).toThrow(/lies inside the subject/u);
+    expect(readdirSync(tmp)).toStrictEqual([]);
+  });
+
   it.skipIf(!POSIX)('refuses a default base that is a symlink, creating nothing through it', ({ skip }) => {
     scratchTmpdir();
     const base = dirname(openArmsRoot({ override: null, subjects: [] }).path);
@@ -297,7 +312,7 @@ describe('closeArmsRoot', () => {
     const root = openArmsRoot({ override: null, subjects: [] });
     prepareArmDirectories(armDirectories({ root: root.path, build: 'cand', arm: 'C', state: 'cold' }));
 
-    expect(await closeArmsRoot(root, false)).toBe(`Removed arms under ${root.path}`);
+    expect(await closeArmsRoot(root, WHOLE)).toBe(`Removed arms under ${root.path}`);
     expect(existsSync(root.path)).toBe(false);
   });
 
@@ -305,14 +320,14 @@ describe('closeArmsRoot', () => {
     scratchTmpdir();
     const root = openArmsRoot({ override: null, subjects: [] });
 
-    expect(await closeArmsRoot(root, true)).toBe(`Kept arms under ${root.path}`);
+    expect(await closeArmsRoot(root, { keep: true, preparedClone: null })).toBe(`Kept arms under ${root.path}`);
     expect(existsSync(root.path)).toBe(true);
   });
 
   it('never removes an --arms-dir the operator named', async () => {
     const root = openArmsRoot({ override: safePath.join(out, 'named'), subjects: [] });
 
-    expect(await closeArmsRoot(root, false)).toBe(`Kept arms under ${root.path}`);
+    expect(await closeArmsRoot(root, WHOLE)).toBe(`Kept arms under ${root.path}`);
     expect(existsSync(root.path)).toBe(true);
   });
 
@@ -322,8 +337,107 @@ describe('closeArmsRoot', () => {
     rmSync(safePath.join(root.path, '.vat-lab-root'));
     writeFileSync(safePath.join(root.path, 'keep.txt'), 'x');
 
-    await expect(closeArmsRoot(root, false)).rejects.toThrow(REFUSED);
+    await expect(closeArmsRoot(root, WHOLE)).rejects.toThrow(REFUSED);
     expect(readFileSync(safePath.join(root.path, 'keep.txt'), 'utf-8')).toBe('x');
+  });
+});
+
+describe('closeArmsRoot — a root holding the prepared clone', () => {
+  it('removes every marked arm directory, keeps the clone and the root, and names the clone', async () => {
+    scratchTmpdir();
+    const root = openArmsRoot({ override: null, subjects: [] });
+    const arm = armDirectories({ root: root.path, build: 'cand', arm: 'C', state: 'cold' });
+    prepareArmDirectories(arm);
+    const clone = mkdirSyncReal(safePath.join(root.path, 'clone'));
+    writeFileSync(safePath.join(clone, 'README.md'), 'cloned');
+    // A subject may track a file of the arm marker's name; its clone is still not an arm.
+    writeFileSync(safePath.join(clone, '.vat-lab-arm'), 'tracked by the subject');
+
+    const said = await closeArmsRoot(root, { keep: false, preparedClone: 'clone' });
+
+    expect(said).toBe(`Removed arms under ${root.path}\nPrepared clone kept at ${clone}; remove it when done`);
+    expect(readdirSync(root.path).sort((a, b) => a.localeCompare(b))).toStrictEqual(['.vat-lab-root', 'clone']);
+    expect(readFileSync(safePath.join(clone, 'README.md'), 'utf-8')).toBe('cloned');
+  });
+
+  it('leaves an unmarked child of the root where it is — only a marked arm is provably the lab’s', async () => {
+    scratchTmpdir();
+    const root = openArmsRoot({ override: null, subjects: [] });
+    const victim = foreignTree(safePath.join(root.path, 'foreign'));
+
+    await closeArmsRoot(root, { keep: false, preparedClone: 'clone' });
+
+    expect(readFileSync(victim, 'utf-8')).toBe('not the lab’s');
+  });
+});
+
+/** A body that makes the cleanup fail: the root's marker goes, so the root is no longer provably the lab's. */
+function unmark(path: string): void {
+  rmSync(safePath.join(path, '.vat-lab-root'));
+}
+
+describe('samePath — one directory, however it is spelled', () => {
+  it('is true through a trailing slash, a dot segment and a link, and false for a sibling', ({ skip }) => {
+    const clone = mkdirSyncReal(safePath.join(out, 'clone'));
+    const viaLink = safePath.join(out, 'link');
+    link(skip, clone, viaLink);
+
+    expect(samePath(`${clone}/`, clone, clone)).toBe(true);
+    expect(samePath(safePath.join(out, '.', 'clone'), clone, clone)).toBe(true);
+    expect(samePath(viaLink, clone, clone)).toBe(true);
+    expect(samePath(safePath.join(out, 'other'), clone, clone)).toBe(false);
+  });
+});
+
+describe('underArmsRoot — a cleanup failure never costs the capture', () => {
+
+  it('keeps what a completed body published when the cleanup then fails, and reports the cleanup', async () => {
+    scratchTmpdir();
+    const report = safePath.join(out, 'report.json');
+    const said: string[] = [];
+
+    await expect(
+      underArmsRoot({ override: null, subjects: [] }, WHOLE, (line) => said.push(line), async (path) => {
+        writeFileSync(report, '{}');
+        unmark(path);
+      }),
+    ).rejects.toThrow(/carries no \.vat-lab-root/u);
+    expect(readFileSync(report, 'utf-8')).toBe('{}');
+    expect(said[0]).toMatch(/^Arms under /u);
+  });
+
+  it('reports both when the capture threw and the cleanup failed too — the capture first, under its own code', async () => {
+    scratchTmpdir();
+
+    const thrown = await underArmsRoot({ override: null, subjects: [] }, WHOLE, () => undefined, (path) => {
+      unmark(path);
+      return Promise.reject(new Error('the capture broke'));
+    }).catch((error: unknown) => error);
+
+    expect(thrown).toBeInstanceOf(Error);
+    const message = (thrown as Error).message;
+    expect(message.startsWith('the capture broke\n')).toBe(true);
+    expect(message).toMatch(/ending the arms root failed too: .*carries no \.vat-lab-root/u);
+    expect(thrown).not.toHaveProperty('code');
+  });
+
+  it('keeps an arm refusal a refusal when the cleanup fails after it', async () => {
+    scratchTmpdir();
+
+    const thrown = underArmsRoot({ override: null, subjects: [] }, WHOLE, () => undefined, (path) => {
+      unmark(path);
+      return Promise.reject(armRefusal('the arm refused'));
+    });
+
+    await expect(thrown).rejects.toThrow(REFUSED);
+    await expect(thrown).rejects.toThrow(/^the arm refused\n/u);
+  });
+
+  it('rethrows the capture’s own error when the cleanup succeeds', async () => {
+    scratchTmpdir();
+    const failure = new Error('the capture broke');
+
+    await expect(underArmsRoot({ override: null, subjects: [] }, WHOLE, () => undefined, () => Promise.reject(failure))).rejects.toBe(failure);
   });
 });
 

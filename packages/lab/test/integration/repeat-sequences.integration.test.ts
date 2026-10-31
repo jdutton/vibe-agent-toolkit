@@ -19,6 +19,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
 import { armDirectories } from '../../src/harness/arm-dirs.js';
+import { exactExit } from '../../src/harness/commands.js';
 import { runRepeats } from '../../src/harness/repeat.js';
 import {
   argsOf,
@@ -127,7 +128,7 @@ describe('runRepeats — sequences', () => {
 
   it('ends a COLD sequence as COMPLETED when an early step exits non-zero with its committed exit, running nothing after it, as CI does', async () => {
     const probe = setupProbe(PREFIX);
-    const steps = [probeStep([PROBE_FAIL_TOKEN], { expectedExit: 1 }), probeStep(['after'])];
+    const steps = [probeStep([PROBE_FAIL_TOKEN], { exit: exactExit(1) }), probeStep(['after'])];
 
     const run = await runRepeats(probeSpec(probe, { runs: 1, cache: 'cold', steps, env: { [PROBE_EXIT_CODE_ENV]: '1' } }));
 
@@ -140,7 +141,7 @@ describe('runRepeats — sequences', () => {
 describe('runRepeats — a warm sequence that stops early', () => {
   it('fails a warm arm whose committed early stop skips a step the warm rule reads — its population was never checked', async () => {
     const probe = setupProbe(PREFIX);
-    const steps = [probeStep([PROBE_FAIL_TOKEN], { expectedExit: 1 }), probeStep(['reader'], { provenance: 'resources-check' })];
+    const steps = [probeStep([PROBE_FAIL_TOKEN], { exit: exactExit(1) }), probeStep(['reader'], { provenance: 'resources-check' })];
 
     const run = await runRepeats(probeSpec(probe, { runs: 1, cache: 'warm', steps, env: { [PROBE_EXIT_CODE_ENV]: '1' } }));
 
@@ -152,7 +153,7 @@ describe('runRepeats — a warm sequence that stops early', () => {
   it('still runs the priming check when the priming sequence stops at a committed non-zero exit', async () => {
     const probe = setupProbe(PREFIX);
     // Populating, but it exits (committed) before writing anything: the store stays empty.
-    const steps = [probeStep([PROBE_FAIL_TOKEN], { expectedExit: 1, populates: true })];
+    const steps = [probeStep([PROBE_FAIL_TOKEN], { exit: exactExit(1), populates: true })];
 
     const run = await runRepeats(probeSpec(probe, { runs: 1, cache: 'warm', steps, env: { [PROBE_EXIT_CODE_ENV]: '1' } }));
 

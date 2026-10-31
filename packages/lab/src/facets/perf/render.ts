@@ -41,8 +41,8 @@ function rowLine(row: PerfCommandStats): string {
   if (row.failed) {
     return `  ${row.name}: FAILED — ${row.failure ?? 'unknown'}`;
   }
-  // A completed run that exited non-zero says so. A command may be committed to
-  // its findings exit (see `MeasuredCommandSpec.expectedExit`),
+  // A completed run that exited non-zero says so. A gate completes with its
+  // findings exit too (see `MeasuredCommandSpec.exit`),
   // and two rows with the same median where one exited 0 and one exited 1 are
   // not the same measurement — the second one also rendered its findings.
   const exit = row.exitCode === 0 || row.exitCode === null ? '' : `, exit ${String(row.exitCode)}`;

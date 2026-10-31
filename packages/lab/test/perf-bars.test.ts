@@ -138,23 +138,33 @@ describe('judgeBars', () => {
     });
   });
 
-  it('refuses a report holding an unfailed arm of fewer than 5 repetitions — not a measurement a bar may read', () => {
+  // `perf arms` never writes an unfailed arm short of rounds or with a broken repetition: these
+  // guard a hand-edited or foreign report, validated as an input file.
+  it('refuses a bar naming an unfailed arm of fewer than 5 repetitions (a hand-edited or foreign report)', () => {
     const short = { ...report, arms: [...report.arms, arm('cand', 'ci-a', 1, 1, [clean, clean, clean, clean])] };
 
-    expect(judgeBars(short, [bar('cand:ci-c:cold<=1.15*rc11:ci-a:cold')])).toEqual({
+    expect(judgeBars(short, [bar('cand:ci-a:cold<=1.15*rc11:ci-a:cold')])).toEqual({
       ok: false,
-      refusal: 'cand:ci-a:cold has 4 repetition(s); a judged arm needs at least 5',
+      refusal: "--bar 'cand:ci-a:cold<=1.15*rc11:ci-a:cold': cand:ci-a:cold has 4 repetition(s); a judged arm needs at least 5",
     });
   });
 
-  it('refuses a report whose unfailed arm holds a repetition that broke its rule', () => {
+  it('refuses a bar naming an unfailed arm whose repetition broke its rule (a hand-edited or foreign report)', () => {
     const broken = [...Array.from({ length: 4 }, () => clean), { violation: "step 'x' reports population 'store' though the arm turned the store off" }];
     const violated = { ...report, arms: [...report.arms, arm('cand', 'ci-a', 1, 1, broken)] };
 
-    expect(judgeBars(violated, [bar('cand:ci-c:cold<=1.15*rc11:ci-a:cold')])).toEqual({
+    expect(judgeBars(violated, [bar('rc11:ci-a:cold<=1*cand:ci-a:cold')])).toEqual({
       ok: false,
-      refusal: expect.stringMatching(/^cand:ci-a:cold repetition 5 broke its rule: step 'x'/u) as unknown,
+      refusal: expect.stringMatching(/^--bar 'rc11:ci-a:cold<=1\*cand:ci-a:cold': cand:ci-a:cold repetition 5 broke its rule: step 'x'/u) as unknown,
     });
+  });
+
+  it('judges the named bars of a report whose incomplete arm no bar names', () => {
+    const short = { ...report, arms: [...report.arms, arm('cand', 'ci-a', 1, 1, [clean, clean, clean, clean])] };
+
+    const judged = judgeBars(short, [bar('cand:ci-c:cold<=1.15*rc11:ci-a:cold')]);
+
+    expect(judged.ok ? judged.results.map((result) => result.verdict) : judged.refusal).toEqual(['pass']);
   });
 
   it('refuses a bar naming an arm the report does not hold', () => {

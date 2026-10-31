@@ -9,25 +9,25 @@
 import { describe, expect, it } from 'vitest';
 
 import { expectedExitRefusal, sequenceSteps } from '../src/facets/perf/arms.js';
-import { MEASURABLE_SEQUENCES } from '../src/harness/commands.js';
+import { exactExit, MEASURABLE_SEQUENCES } from '../src/harness/commands.js';
 
 describe('sequenceSteps', () => {
   it('turns a CI sequence into timed steps carrying each command’s reader, each committed to exit 0 by default', () => {
     const steps = sequenceSteps(MEASURABLE_SEQUENCES['ci-b'], 'cand', []);
 
-    expect(steps.map((step) => [step.name, step.command, step.timed, step.expectedExit, step.provenance])).toEqual([
-      ['resources-validate-ci', { kind: 'vat', args: ['resources', 'validate'] }, true, 0, 'none'],
-      ['resources-check-ci', { kind: 'vat', args: ['resources', 'check'] }, true, 0, 'resources-check'],
-      ['skills-validate-ci', { kind: 'vat', args: ['skills', 'validate'] }, true, 0, 'none'],
+    expect(steps.map((step) => [step.name, step.command, step.timed, step.exit, step.provenance])).toEqual([
+      ['resources-validate-ci', { kind: 'vat', args: ['resources', 'validate'] }, true, exactExit(0), 'none'],
+      ['resources-check-ci', { kind: 'vat', args: ['resources', 'check'] }, true, exactExit(0), 'resources-check'],
+      ['skills-validate-ci', { kind: 'vat', args: ['skills', 'validate'] }, true, exactExit(0), 'none'],
     ]);
   });
 
   it('commits a step to the ONE exit set for exactly its (build, sequence, step), and no other arm’s', () => {
     const expected = [{ build: 'cand', sequence: 'ci-b', step: 'resources-check-ci', exit: 1 }];
 
-    expect(sequenceSteps(MEASURABLE_SEQUENCES['ci-b'], 'cand', expected).map((step) => step.expectedExit)).toEqual([0, 1, 0]);
+    expect(sequenceSteps(MEASURABLE_SEQUENCES['ci-b'], 'cand', expected).map((step) => step.exit)).toEqual([exactExit(0), exactExit(1), exactExit(0)]);
     // Another build of the same sequence keeps the default.
-    expect(sequenceSteps(MEASURABLE_SEQUENCES['ci-b'], 'rc11', expected).map((step) => step.expectedExit)).toEqual([0, 0, 0]);
+    expect(sequenceSteps(MEASURABLE_SEQUENCES['ci-b'], 'rc11', expected).map((step) => step.exit)).toEqual([exactExit(0), exactExit(0), exactExit(0)]);
   });
 });
 

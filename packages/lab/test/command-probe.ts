@@ -37,7 +37,7 @@ import { isPathAbsentError, mkdirSyncReal, normalizedTmpdir, safePath } from '@v
 
 import type { InstrumentVersion } from '../src/envelope/coordinate.js';
 import type { ArmEnvironment } from '../src/harness/arm-env.js';
-import type { MeasuredCommandSpec } from '../src/harness/commands.js';
+import { exactExit, type MeasuredCommandSpec } from '../src/harness/commands.js';
 import type { RepeatSpec } from '../src/harness/repeat.js';
 import type { SequenceStep } from '../src/harness/sequence.js';
 import type { CacheMode, CaptureRequest, ResolvedInstrument, ResolvedSubject } from '../src/harness/types.js';
@@ -69,7 +69,7 @@ export const PROBE_FAIL_AT_ENV = 'LAB_PROBE_FAIL_AT';
  * Exists so a suite can fixture vat's *findings* exit. `1` is not a crash — a
  * spec may commit to it — and the difference between "every repeat exited 1
  * and the spec committed to 1" and "every repeat exited 3" is precisely what
- * `expectedExit` decides. Without a controllable code, no fixture could
+ * the step's `exit` commitment decides. Without a controllable code, no fixture could
  * make those two answers differ.
  */
 export const PROBE_EXIT_CODE_ENV = 'LAB_PROBE_EXIT_CODE';
@@ -390,10 +390,10 @@ export function probeArmsRoot(probe: Probe): string {
 }
 
 /** A command the probe always completes. */
-export const PROBE_PASSES: MeasuredCommandSpec = { name: 'audit', args: ['audit'], expectedExit: 0, provenance: 'none', populates: false };
+export const PROBE_PASSES: MeasuredCommandSpec = { name: 'audit', args: ['audit'], exit: exactExit(0), provenance: 'none', populates: false };
 
 /** A command the probe fails on every repeat, by argv. */
-export const PROBE_FAILS: MeasuredCommandSpec = { name: 'broken', args: [PROBE_FAIL_TOKEN], expectedExit: 0, provenance: 'none', populates: false };
+export const PROBE_FAILS: MeasuredCommandSpec = { name: 'broken', args: [PROBE_FAIL_TOKEN], exit: exactExit(0), provenance: 'none', populates: false };
 
 /**
  * No repeats at all, cold. Cold on purpose: a cold reset hoisted out of the
@@ -441,7 +441,7 @@ export function probeStep(args: readonly string[], overrides: Partial<SequenceSt
     name: args[0] ?? 'probe',
     command: { kind: 'vat', args },
     timed: true,
-    expectedExit: 0,
+    exit: exactExit(0),
     provenance: 'none',
     populates: false,
     ...overrides,

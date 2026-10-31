@@ -703,7 +703,7 @@ describe('captureIo — a row that measured nothing says so', () => {
 
     expect(row.failed).toBe(true);
     expect(row.failure).toBe(
-      `2 of 2 repeats failed — step '${PROBE_FAILS.name}' exited ${String(PROBE_FAIL_EXIT)}: ${PROBE_DEFAULT_STDERR}`,
+      `2 of 2 repeats failed — step '${PROBE_FAILS.name}' exited ${String(PROBE_FAIL_EXIT)}, not exactly 0: ${PROBE_DEFAULT_STDERR}`,
     );
     expect(row.runs).toBe(2);
     // Zeroed, not omitted — and `failed` carries the meaning. Counting the calls
