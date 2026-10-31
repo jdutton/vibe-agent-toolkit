@@ -102,6 +102,16 @@ describe('readEnvelope', () => {
     expect(result.refusal).toContain('removedEnv');
   });
 
+  it('refuses a report of the previous exit shape (`observed`, no npmNetworkEnv) with the re-capture remedy, naming both fields', () => {
+    const older = Object.fromEntries(Object.entries(stored()).filter(([key]) => key !== 'npmNetworkEnv'));
+    const result = readEnvelope({ ...older, exits: [{ step: 'audit', commitment: { kind: 'exact', code: 0 }, observed: 0 }] });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.refusal).toMatch(/^REFUSED: this perf report was captured by a lab whose report shape differs from this one .* — re-capture it\./u);
+    expect(result.refusal).toContain('npmNetworkEnv');
+    expect(result.refusal).toContain('exits');
+  });
+
   it('refuses an envelope carrying an unknown header field', () => {
     // Strict on purpose: this package validates what it writes itself, and an
     // unrecognised header field means a producer this reader does not model.

@@ -18,6 +18,7 @@
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { basename, dirname } from 'node:path';
 
 import { everywhere, mkdirSyncReal, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, afterEach, describe, expect, it, type MockInstance, vi } from 'vitest';
@@ -158,9 +159,11 @@ describe('vat-lab perf arms — a default run directory leaves only the clone it
     const parsed = JSON.parse(readFileSync(report, 'utf-8')) as { readonly prepared: { readonly path: string } };
     expect(statSync(parsed.prepared.path).isDirectory()).toBe(true);
     const run = /^Arms under (.+)$/mu.exec(said)?.[1] ?? '';
-    expect(said).toContain(`Removed arms under ${run}\nPrepared clone kept at ${parsed.prepared.path}; remove it when done`);
-    const kept = safePath.relative(safePath.join(run, '..'), parsed.prepared.path);
-    expect(armsBaseEntries(sandbox)).toStrictEqual([kept]);
+    expect(said).toContain(`Prepared clone kept at ${parsed.prepared.path}; remove it when done\nRemoved arms under ${run}\n`);
+    const holder = dirname(parsed.prepared.path);
+    expect(basename(parsed.prepared.path)).toBe('clone');
+    expect(dirname(holder)).toBe(dirname(run));
+    expect(armsBaseEntries(sandbox)).toStrictEqual([basename(holder)]);
   });
 
   it.for([

@@ -210,7 +210,16 @@ describe('clearedEnvironment', () => {
     expect(vat.removed).toStrictEqual([]);
     for (const [name, value] of Object.entries(NPM_NETWORK)) expect(env[name], name).toBe(value);
     expect(vat.npmNetwork).toStrictEqual(Object.keys(NPM_NETWORK).toSorted(compareByCodeUnit));
-    expect(clearedEnvironment(npm, 'tool', { set: {}, unset: [] }, 'linux').npmNetwork).toStrictEqual(vat.npmNetwork);
+    // A tool step keeps every npm setting; the record is of what the VAT steps ran with.
+    expect(clearedEnvironment(npm, 'tool', { set: {}, unset: [] }, 'linux').npmNetwork).toStrictEqual([]);
+  });
+
+  it('records the npm network names the child actually gets: not one the arm unsets, and one the arm sets', () => {
+    const npm: NodeJS.ProcessEnv = { npm_config_registry: 'https://registry.example/', npm_config_proxy: 'http://proxy.example:3128' };
+
+    const vat = clearedEnvironment(npm, 'vat', { set: { npm_config_cafile: '/arm/ca.pem' }, unset: ['npm_config_proxy'] }, 'linux');
+
+    expect(vat.npmNetwork).toStrictEqual(['npm_config_cafile', 'npm_config_registry']);
   });
 
   it('judges npm names whatever their case on Windows too', () => {

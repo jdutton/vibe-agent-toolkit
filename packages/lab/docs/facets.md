@@ -211,13 +211,16 @@ caller's part is recorded in the body (`arm`), because those paths differ betwee
 and would make every pair of arms distinguishable. **Nothing the lab writes lands inside a
 subject** — VAT itself is one: an `--out` or arms root inside any subject path is refused.
 
-**Prepared clone.** `--prepared <alias>=<arms root>/clone` runs that alias in the clone `perf arms`
+**Prepared clone.** `--prepared <alias>=<prepared.path>` runs that alias in the clone `perf arms`
 prepared instead of at its subjects-file path; the body records it as `preparedClone` (`null` when
 the alias ran at its own path), and `verdict union` refuses a capture that was not run there. The
-clone outlives `perf arms` — even in a default run directory, whose arm directories it removes — so
-the arms report's `prepared.path` stays valid for `verdict run --prepared` and `verdict union`;
-`perf arms` prints `Prepared clone kept at <path>; remove it when done`, and removing it is the
-operator's.
+clone outlives `perf arms` once its report is written: out of a default run directory it is moved
+to `<base>/clone-XXXXXX/clone` and the run directory removed whole (if that move fails, the clone
+stays at `<run>/clone` and the run directory is kept); under `--keep-arms` or `--arms-dir` it stays
+at `<arms root>/clone`. Either way the arms report's `prepared.path` names where it is, and `perf
+arms` prints `Prepared clone kept at <path>; remove it when done` — removing it is the operator's.
+The prerequisites ran at the pre-move path, so an artifact that recorded an absolute path into the
+clone may be stale.
 
 **Two layers**, per (alias, verb) row:
 

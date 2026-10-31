@@ -65,7 +65,7 @@ import {
   writeSync,
 } from 'node:fs';
 import { userInfo } from 'node:os';
-import { basename, dirname } from 'node:path';
+import { dirname } from 'node:path';
 
 import {
   applyTreePlan,
@@ -195,28 +195,20 @@ interface ArmsRootRequest {
   readonly subjects: readonly string[];
 }
 
-/** How an invocation's arms root ends ({@link closeArmsRoot}). */
-interface ArmsRootEnding {
-  /** `--keep-arms`: a default run directory is kept whole. */
-  readonly keep: boolean;
-  /**
-   * Where the one child that outlives the capture now is — `perf arms`'
-   * prepared clone, once a report naming it was written
-   * ({@link ArmsRootHandle.keepChild}) — or `null` when nothing outlives it.
-   */
-  readonly kept: string | null;
-}
-
 /** What a capture is handed: its arms root, and the one way a child of it outlives the capture. */
 export interface ArmsRootHandle {
   readonly path: string;
   /**
    * Publish a report naming a child of the root that outlives the capture —
    * `perf arms`' prepared clone. Out of a default run directory, which ends
-   * whole, the child is first moved beside it, to `<base>/<name>-<run
-   * suffix>`; `write` is handed where the child now is. Only once `write`
-   * returns is the child kept: if it throws, the child is moved back and ends
-   * with the root, so nothing outlives a capture whose report was not written.
+   * whole, the child is first moved beside it, into a fresh `<base>/<name>-*`
+   * directory made by `mkdtemp` (`<base>/clone-XXXXXX/clone`), so no earlier
+   * run's kept clone can be in the way; `write` is handed where the child now
+   * is. Only once `write` returns is the child kept: if it throws, the child is
+   * moved back and ends with the root, so nothing outlives a capture whose
+   * report was not written. The report is the primary output and never waits
+   * on the move: when the child cannot be moved out, `write` is handed its
+   * place in the run directory, which is then kept whole, said so.
    *
    * @param name - The child, a plain name
    * @param write - Writes the report naming the child's kept path
@@ -273,27 +265,27 @@ export function openArmsRoot(request: ArmsRootRequest): ArmsRoot {
  * capture is no longer in a temporary root ({@link ArmsRootHandle.keepChild}).
  *
  * @param root - From {@link openArmsRoot}
- * @param ending - See {@link ArmsRootEnding}
- * @returns What happened, naming the root and any kept clone, for the operator
+ * @param keep - Keep a default run directory whole: `--keep-arms`, or a child that could not be moved out
+ * @returns What happened, naming the root, for the operator
  * @throws {VatError} {@link ARM_REFUSED_CODE} when a temporary root no longer carries its marker
  */
-export async function closeArmsRoot(root: ArmsRoot, ending: ArmsRootEnding): Promise<string> {
-  const keptLine = ending.kept === null ? '' : `\nPrepared clone kept at ${ending.kept}; remove it when done`;
-  if (!root.temporary || ending.keep) return `Kept arms under ${root.path}${keptLine}`;
+export async function closeArmsRoot(root: ArmsRoot, keep: boolean): Promise<string> {
+  if (!root.temporary || keep) return `Kept arms under ${root.path}`;
   if (!isRootMarked(root.path)) {
     throw armRefusal(`'${root.path}' carries no ${ROOT_MARKER}: it is no longer provably the lab's, so it is left in place`);
   }
   await applyTreePlan(await planTreeChanges([rootRemoval(root.path)]));
-  return `Removed arms under ${root.path}${keptLine}`;
+  return `Removed arms under ${root.path}`;
 }
 
 /**
  * Run a capture under the invocation's arms root ({@link openArmsRoot}), said
  * aloud, and end it ({@link closeArmsRoot}) whether the capture succeeded or
  * failed. The body publishes its own result — writes its report, prints it —
- * so nothing a capture measured waits on the cleanup. When the capture threw
- * and the cleanup throws too, both are reported, the capture's first, under
- * the capture's own error code.
+ * so nothing a capture measured waits on the cleanup. A kept clone is named
+ * before the root ends, so a cleanup that fails cannot hide it. When the
+ * capture threw and the cleanup throws too, both are reported, the capture's
+ * first, under the capture's own error code.
  *
  * @param request - See {@link ArmsRootRequest}
  * @param keep - `--keep-arms`: a default run directory is kept whole
@@ -308,24 +300,36 @@ export async function underArmsRoot(
 ): Promise<void> {
   const root = openArmsRoot(request);
   say(`Arms under ${root.path}`);
-  let kept: string | null = null;
+  const keeping: { kept: KeptChild | null } = { kept: null };
   let failure: { readonly error: unknown } | null = null;
   try {
     await body({
       path: root.path,
       keepChild: async (name, write) => {
-        kept = await keepChild(root, keep, name, write);
+        keeping.kept = await keepChild(root, keep, name, write);
       },
     });
   } catch (error: unknown) {
     failure = { error };
   }
+  const ended = keeping.kept;
+  if (ended !== null) {
+    if (ended.unmoved !== null) say(`Could not move the prepared clone out of ${root.path}: ${ended.unmoved}; the run directory is kept whole`);
+    say(`Prepared clone kept at ${ended.path}; remove it when done`);
+  }
   try {
-    say(await closeArmsRoot(root, { keep, kept }));
+    say(await closeArmsRoot(root, keep || (ended !== null && ended.unmoved !== null)));
   } catch (cleanup: unknown) {
     throw failure === null ? cleanup : bothFailures(failure.error, 'ending the arms root', cleanup);
   }
   if (failure !== null) throw failure.error;
+}
+
+/** Where a child kept past the capture is, and, when it stayed in a run directory it should have left, why. */
+interface KeptChild {
+  readonly path: string;
+  /** Why the child could not be moved out of a default run directory, or `null` when it was moved or never had to be. */
+  readonly unmoved: string | null;
 }
 
 /**
@@ -336,29 +340,71 @@ export async function underArmsRoot(
  * @param name - The child
  * @param write - Writes the report naming the child's kept path
  * @returns Where the child is kept
- * @throws {VatError} {@link ARM_REFUSED_CODE} when something already holds the kept path
  */
-async function keepChild(root: ArmsRoot, keep: boolean, name: string, write: (kept: string) => void): Promise<string> {
+async function keepChild(root: ArmsRoot, keep: boolean, name: string, write: (kept: string) => void): Promise<KeptChild> {
   const inside = safePath.join(root.path, name);
   if (!root.temporary || keep) {
     write(inside);
-    return inside;
+    return { path: inside, unmoved: null };
   }
-  const kept = safePath.join(dirname(root.path), `${name}-${basename(root.path).slice(RUN_PREFIX.length)}`);
-  if (kindOf(kept) !== 'absent') throw armRefusal(`'${kept}' already exists, so '${inside}' is not moved over it and ends with the run directory`);
-  // One rename, whole tree, retried through Windows contention: nothing is replaced.
-  await renameFileAtomic(inside, kept);
+  const moved = await moveOut(root, name, inside);
+  if (!moved.ok) {
+    write(inside);
+    return { path: inside, unmoved: moved.reason };
+  }
   try {
-    write(kept);
+    write(moved.kept);
   } catch (error: unknown) {
     try {
-      await renameFileAtomic(kept, inside);
+      await renameFileAtomic(moved.kept, inside);
+      await applyTreePlan(await planTreeChanges([holderRemoval(moved.holder)]));
     } catch (back: unknown) {
-      throw bothFailures(error, `moving '${kept}' back into the run directory`, back);
+      throw bothFailures(error, `moving '${moved.kept}' back into the run directory`, back);
     }
     throw error;
   }
-  return kept;
+  return { path: moved.kept, unmoved: null };
+}
+
+/**
+ * Move a child of a default run directory into a fresh `<base>/<name>-XXXXXX/`
+ * beside it. `mkdtemp` makes the holder, so nothing can already be at the
+ * destination and no check races the rename; a holder left empty by a failed
+ * rename is removed.
+ *
+ * @param root - A default run directory
+ * @param name - The child
+ * @param inside - Its path in the run directory
+ * @returns Where it now is and its holder, or why it stayed
+ */
+async function moveOut(
+  root: ArmsRoot,
+  name: string,
+  inside: string,
+): Promise<{ readonly ok: true; readonly kept: string; readonly holder: string } | { readonly ok: false; readonly reason: string }> {
+  let holder: string | null = null;
+  try {
+    holder = mkdtempSync(safePath.join(dirname(root.path), `${name}-`));
+    const kept = safePath.join(holder, name);
+    // One rename, whole tree, retried through Windows contention, into a directory no one else could have filled.
+    await renameFileAtomic(inside, kept);
+    return { ok: true, kept, holder };
+  } catch (error: unknown) {
+    if (holder !== null) await applyTreePlan(await planTreeChanges([holderRemoval(holder)]));
+    return { ok: false, reason: messageOf(error) };
+  }
+}
+
+/**
+ * @param holder - A `<base>/<name>-XXXXXX/` the lab just made
+ * @returns Its removal, owned only while it is still empty
+ */
+function holderRemoval(holder: string): TreeChange {
+  const ownership: Ownership = {
+    kind: 'vat-made',
+    recognise: () => (entriesOf(holder).length === 0 ? { owned: true } : { owned: false, reason: `'${holder}' is no longer empty` }),
+  };
+  return { op: 'remove', dest: holder, ownership, label: 'clone holder' };
 }
 
 /**

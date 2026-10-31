@@ -28,10 +28,10 @@ const REQUEST = {
 /**
  * @param name - The command
  * @param removed - What its children went without
- * @param exits - Each repetition's exit, one step each
+ * @param exits - Each repetition's exit, one step each: `null` for a step that started and was killed
  * @returns A measured command as the header reads it
  */
-function measured(name: string, removed: readonly string[], exits: readonly number[] = [], npmNetwork: readonly string[] = []) {
+function measured(name: string, removed: readonly string[], exits: readonly (number | null)[] = [], npmNetwork: readonly string[] = []) {
   const results = exits.map((exitCode) => ({ steps: [{ name, exitCode }] })) as never;
   return { removed, npmNetwork, spec: { name, exit: exactExit(0) }, results };
 }
@@ -67,8 +67,20 @@ describe('buildReportEnvelope — exits', () => {
 
     expect(envelope.exits).toStrictEqual([
       { step: 'same', commitment: exactExit(0), outcome: 'shared', code: 1 },
-      { step: 'mixed', commitment: exactExit(0), outcome: 'disagreed', code: null },
+      { step: 'mixed', commitment: exactExit(0), outcome: 'disagreed', code: null, seen: [0, 1] },
       { step: 'never', commitment: exactExit(0), outcome: 'not-run', code: null },
+    ]);
+  });
+
+  it('reads a step killed in every repetition as killed, never as not run, and names a kill in a disagreement', () => {
+    const lateStarter = { removed: [], npmNetwork: [], spec: { name: 'late', exit: exactExit(0) }, results: [{ steps: [] }, { steps: [{ name: 'late', exitCode: 0 }] }] as never };
+
+    const envelope = buildReportEnvelope('perf', REQUEST, {}, [measured('hung', [], [null, null]), measured('half', [], [0, null]), lateStarter]);
+
+    expect(envelope.exits).toStrictEqual([
+      { step: 'hung', commitment: exactExit(0), outcome: 'killed', code: null },
+      { step: 'half', commitment: exactExit(0), outcome: 'disagreed', code: null, seen: [0, 'killed'] },
+      { step: 'late', commitment: exactExit(0), outcome: 'disagreed', code: null, seen: ['not-run', 0] },
     ]);
   });
 

@@ -33,8 +33,6 @@ import {
   underArmsRoot,
 } from '../../src/harness/arm-dirs.js';
 
-/** An ending with nothing kept past the capture: the whole default run directory goes. */
-const WHOLE = { keep: false, kept: null } as const;
 
 const POSIX = process.platform !== 'win32';
 
@@ -313,7 +311,7 @@ describe('closeArmsRoot', () => {
     const root = openArmsRoot({ override: null, subjects: [] });
     prepareArmDirectories(armDirectories({ root: root.path, build: 'cand', arm: 'C', state: 'cold' }));
 
-    expect(await closeArmsRoot(root, WHOLE)).toBe(`Removed arms under ${root.path}`);
+    expect(await closeArmsRoot(root, false)).toBe(`Removed arms under ${root.path}`);
     expect(existsSync(root.path)).toBe(false);
   });
 
@@ -321,14 +319,14 @@ describe('closeArmsRoot', () => {
     scratchTmpdir();
     const root = openArmsRoot({ override: null, subjects: [] });
 
-    expect(await closeArmsRoot(root, { keep: true, kept: null })).toBe(`Kept arms under ${root.path}`);
+    expect(await closeArmsRoot(root, true)).toBe(`Kept arms under ${root.path}`);
     expect(existsSync(root.path)).toBe(true);
   });
 
   it('never removes an --arms-dir the operator named', async () => {
     const root = openArmsRoot({ override: safePath.join(out, 'named'), subjects: [] });
 
-    expect(await closeArmsRoot(root, WHOLE)).toBe(`Kept arms under ${root.path}`);
+    expect(await closeArmsRoot(root, false)).toBe(`Kept arms under ${root.path}`);
     expect(existsSync(root.path)).toBe(true);
   });
 
@@ -338,7 +336,7 @@ describe('closeArmsRoot', () => {
     rmSync(safePath.join(root.path, '.vat-lab-root'));
     writeFileSync(safePath.join(root.path, 'keep.txt'), 'x');
 
-    await expect(closeArmsRoot(root, WHOLE)).rejects.toThrow(REFUSED);
+    await expect(closeArmsRoot(root, false)).rejects.toThrow(REFUSED);
     expect(readFileSync(safePath.join(root.path, 'keep.txt'), 'utf-8')).toBe('x');
   });
 });
@@ -379,8 +377,13 @@ function baseEntries(run: string): string[] {
   return readdirSync(dirname(run)).sort((a, b) => a.localeCompare(b));
 }
 
+/** The line that names a kept clone. */
+function cloneLine(kept: string): string {
+  return `Prepared clone kept at ${kept}; remove it when done`;
+}
+
 describe('underArmsRoot — only a child whose report was written outlives a default run directory', () => {
-  it('moves the child beside the run directory, hands write that path, removes the run directory whole, and names the child', async () => {
+  it('moves the child into a fresh clone-* directory beside the run directory, hands write that path, removes the run directory whole, and names the child', async () => {
     scratchTmpdir();
     const handed: string[] = [];
 
@@ -389,11 +392,15 @@ describe('underArmsRoot — only a child whose report was written outlives a def
       await root.keepChild('clone', (kept) => handed.push(kept));
     });
 
-    const kept = safePath.join(dirname(run), `clone-${basename(run).slice('run-'.length)}`);
-    expect(handed).toStrictEqual([kept]);
-    expect(said.at(-1)).toBe(`Removed arms under ${run}\nPrepared clone kept at ${kept}; remove it when done`);
-    expect(baseEntries(run)).toStrictEqual([basename(kept)]);
-    expect(readFileSync(safePath.join(kept, 'README.md'), 'utf-8')).toBe('cloned');
+    const [kept] = handed;
+    const holder = dirname(kept ?? '');
+    expect(handed).toHaveLength(1);
+    expect(basename(kept ?? '')).toBe('clone');
+    expect(dirname(holder)).toBe(dirname(run));
+    expect(basename(holder)).toMatch(/^clone-.{6}$/u);
+    expect(said.slice(-2)).toStrictEqual([cloneLine(kept ?? ''), `Removed arms under ${run}`]);
+    expect(baseEntries(run)).toStrictEqual([basename(holder)]);
+    expect(readFileSync(safePath.join(kept ?? '', 'README.md'), 'utf-8')).toBe('cloned');
   });
 
   it('removes the clone with the run directory when no report names it, and says nothing of a clone', async () => {
@@ -404,10 +411,11 @@ describe('underArmsRoot — only a child whose report was written outlives a def
     });
 
     expect(said.at(-1)).toBe(`Removed arms under ${run}`);
+    expect(said.join('\n')).not.toContain('Prepared clone kept');
     expect(baseEntries(run)).toStrictEqual([]);
   });
 
-  it('moves the child back when the report cannot be written, so it ends with the run directory', async () => {
+  it('moves the child back when the report cannot be written, so it and its clone-* directory end with the run directory', async () => {
     scratchTmpdir();
     const said: string[] = [];
     let run = '';
@@ -425,21 +433,43 @@ describe('underArmsRoot — only a child whose report was written outlives a def
     expect(baseEntries(run)).toStrictEqual([]);
   });
 
-  it('refuses to move the child over something already at the kept path, writes nothing, and leaves that occupant', async () => {
+  it.skipIf(!POSIX || process.getuid?.() === 0)('still writes the report when the child cannot be moved out, naming it in the run directory, which is kept whole and said so', async () => {
     scratchTmpdir();
-    let occupant = '';
+    const handed: string[] = [];
+    let base = '';
+
+    try {
+      const { said, run } = await underDefaultRoot(async (root) => {
+        fakeClone(root.path);
+        base = dirname(root.path);
+        // The base refuses a new entry, so no clone-* directory can be made beside the run directory.
+        chmodSync(base, 0o500);
+        await root.keepChild('clone', (kept) => handed.push(kept));
+      });
+
+      const inside = safePath.join(run, 'clone');
+      expect(handed).toStrictEqual([inside]);
+      expect(said.some((line) => line.startsWith(`Could not move the prepared clone out of ${run}: `))).toBe(true);
+      expect(said.slice(-2)).toStrictEqual([cloneLine(inside), `Kept arms under ${run}`]);
+      expect(readFileSync(safePath.join(inside, 'README.md'), 'utf-8')).toBe('cloned');
+    } finally {
+      if (base !== '') chmodSync(base, 0o700);
+    }
+  });
+
+  it('names the kept clone even when ending the run directory then fails', async () => {
+    scratchTmpdir();
+    const said: string[] = [];
     const handed: string[] = [];
 
-    const thrown = underDefaultRoot(async (root) => {
+    const thrown = underArmsRoot({ override: null, subjects: [] }, false, (line) => said.push(line), async (root) => {
       fakeClone(root.path);
-      occupant = foreignTree(safePath.join(dirname(root.path), `clone-${basename(root.path).slice('run-'.length)}`));
       await root.keepChild('clone', (kept) => handed.push(kept));
+      unmark(root.path);
     });
 
     await expect(thrown).rejects.toThrow(REFUSED);
-    expect(handed).toStrictEqual([]);
-    expect(readFileSync(occupant, 'utf-8')).toBe('not the lab’s');
-    expect(baseEntries(dirname(dirname(occupant)))).toStrictEqual([basename(dirname(dirname(occupant)))]);
+    expect(said).toContain(cloneLine(handed[0] ?? ''));
   });
 
   it('keeps the child where it is under --keep-arms and under an --arms-dir, both kept whole', async () => {
@@ -456,7 +486,7 @@ describe('underArmsRoot — only a child whose report was written outlives a def
         await root.keepChild('clone', (kept) => handed.push(kept));
       });
       expect(handed).toStrictEqual([clone]);
-      expect(said.at(-1)).toBe(`Kept arms under ${run}\nPrepared clone kept at ${clone}; remove it when done`);
+      expect(said.slice(-2)).toStrictEqual([cloneLine(clone), `Kept arms under ${run}`]);
       expect(readFileSync(safePath.join(clone, 'README.md'), 'utf-8')).toBe('cloned');
     }
   });

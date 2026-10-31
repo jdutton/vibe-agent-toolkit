@@ -302,7 +302,9 @@ Whatever the kind, every repetition must exit ALIKE (`summarizeRepeatFailures`):
 repeat exited `0` and another `1` did two different amounts of work, and a median over it describes
 neither. Every report records each measured step's commitment and its outcome (the envelope's
 `exits`; an arms report's per-arm `exits`): `shared` with the `code` every repetition exited,
-`not-run` when no repetition ran the step, or `disagreed` when they exited differently. An expectation naming a command the run
+`not-run` when no repetition reached the step, `killed` when every repetition started it and it
+was killed with no code (a timeout, a signal, `ENOBUFS`), or `disagreed` when they did different
+things, with `seen` listing each distinct one (a code, `killed`, `not-run`). An expectation naming a command the run
 does not measure is refused rather than silently leaving the default in force, and so is a code
 outside `0`–`255`.
 

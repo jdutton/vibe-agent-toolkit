@@ -198,8 +198,10 @@ export interface ClearedEnvironment {
   /** Inherited names removed, sorted; a name the arm sets itself is not listed. */
   readonly removed: readonly string[];
   /**
-   * Inherited npm network setting names kept ({@link NPM_NETWORK}), sorted —
-   * names only, never values — so two developers' runs can be told apart.
+   * The npm network setting names ({@link NPM_NETWORK}) a VAT step's child is
+   * handed, inherited or set by the arm, sorted — names only, never values — so
+   * two developers' runs can be told apart. Empty for a tool step, which keeps
+   * every npm setting.
    */
   readonly npmNetwork: readonly string[];
 }
@@ -230,10 +232,10 @@ export function clearedEnvironment(
   // is still dropped, so the child sees one value — but it was re-pointed, not
   // removed, and the report says only what the child went WITHOUT.
   const removed = cleared.filter((name) => !ownSet.has(spell(name)));
-  const npmNetwork = Object.keys(inherited)
-    .filter((name) => NPM_NETWORK.test(name) && !ownSet.has(spell(name)))
-    .sort(compareByCodeUnit);
-  return { env: mergeArmEnvironments({ set: {}, unset: cleared }, own), removed, npmNetwork };
+  const env = mergeArmEnvironments({ set: {}, unset: cleared }, own);
+  // Read off what the child is handed, so an arm's own unset or set is honoured.
+  const npmNetwork = kind === 'vat' ? Object.keys(buildArmEnv(inherited, env)).filter((name) => NPM_NETWORK.test(name)).sort(compareByCodeUnit) : [];
+  return { env, removed, npmNetwork };
 }
 
 /**

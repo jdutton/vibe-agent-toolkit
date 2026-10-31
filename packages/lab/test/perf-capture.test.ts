@@ -367,7 +367,7 @@ describe('capturePerf — a default command is judged by the exits it declares (
     expect(onlyRow(report).failure).toBe(
       'the repeats did not exit alike (audit=0 | audit=1) — a set that did different amounts of work is no measurement',
     );
-    expect(report.exits).toEqual([{ step: 'audit', commitment: { kind: 'observed', completed: [0, 1] }, outcome: 'disagreed', code: null }]);
+    expect(report.exits).toEqual([{ step: 'audit', commitment: { kind: 'observed', completed: [0, 1] }, outcome: 'disagreed', code: null, seen: [0, 1] }]);
   });
 
   it('fails a default command that exits 2, which no verb declares as completed', async () => {

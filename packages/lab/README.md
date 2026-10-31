@@ -132,15 +132,21 @@ single-command facet runs are one-step sequences under `<arms root>/<build>-<com
   `Removed arms under <root>`; `--keep-arms` keeps it and prints `Kept arms under <root>`. A named
   `--arms-dir` is always kept. Exactly one thing outlives a default run directory: the **prepared
   clone** of a `perf arms` run whose `arms-report.json` was written. Just before writing it, the
-  lab moves the clone out of `<base>/run-<id>/clone` to `<base>/clone-<id>` (beside the run
-  directory, under the same `vat-lab-arms-<user>/` base), writes that path as `prepared.path`,
-  removes the run directory whole, and prints `Prepared clone kept at <base>/clone-<id>; remove it
-  when done` — delete it yourself once `verdict run --prepared` and `verdict union` are done with
-  it. A `perf arms` run that writes no report (a bad `--commit`, a failing `--prerequisite`, a
-  clone not at the committed tree, a refused arm, a report that cannot be written) leaves nothing:
-  the clone goes with the run directory, and no `Prepared clone kept` line is printed. Under
-  `--keep-arms` or a named `--arms-dir` the clone stays at `<root>/clone`. Every result is written
-  before the root ends, so a cleanup that fails costs no report; when the capture failed too, both
+  lab moves the clone out of `<base>/run-<id>/clone` into a fresh `<base>/clone-XXXXXX/` that
+  `mkdtemp` makes beside the run directory (under the same `vat-lab-arms-<user>/` base), so no
+  earlier kept clone is ever in the way; it writes `<base>/clone-XXXXXX/clone` as `prepared.path`,
+  prints `Prepared clone kept at <base>/clone-XXXXXX/clone; remove it when done`, then removes the
+  run directory whole — delete `<base>/clone-XXXXXX/` yourself once `verdict run --prepared` and
+  `verdict union` are done with it. The prerequisites and the arms ran at the pre-move path, so an
+  artifact that recorded an absolute path into the clone may be stale. The report never waits on
+  that move: when it fails (a Windows `EBUSY`, say), the report names `<run>/clone`, the lab prints
+  `Could not move the prepared clone out of <run>: <why>; the run directory is kept whole` and
+  `Kept arms under <run>`, and the whole run directory is yours to remove. A `perf arms` run that
+  writes no report (a bad `--commit`, a failing `--prerequisite`, a clone not at the committed tree,
+  a refused arm, a report that cannot be written) leaves nothing: the clone goes with the run
+  directory, and no `Prepared clone kept` line is printed. Under `--keep-arms` or a named
+  `--arms-dir` the clone stays at `<root>/clone`. Every result is written, and a kept clone named,
+  before the root ends, so a cleanup that fails costs neither; when the capture failed too, both
   are reported, the capture's first, under the capture's own code.
 - **The lab chmods only what it created.** `--out` is created 0700 when absent and written into
   as-is when it exists, and every directory the lab makes under it (an ab run's `pair-N/<arm>/`) is 0700; reports are written 0600, never through a link. An `--out` that IS a subject
@@ -168,7 +174,8 @@ single-command facet runs are one-step sequences under `<arms root>/<build>-<com
   a list, a repeated step, exit 2 and a code outside 0–255 are refused. Exiting otherwise is a
   failed measurement (`step '<name>' exited N, not exactly C: <stderr>`), never a slow one, and
   each arm's `exits` records the commitment and the outcome: `shared` with the `code` its rounds
-  shared, `not-run`, or `disagreed`. (`<facet> run|ab`
+  shared, `not-run` (never reached), `killed` (started and killed every round: a timeout, a signal,
+  a full output buffer), or `disagreed` with what each round `seen` did. (`<facet> run|ab`
   differ: a command may exit any code its verb completes with — 0, or 0 or 1 for a gate — alike on
   every repeat; `--expect-exit <command>=<code>` makes it exact. See `docs/run-harness.md`.)
   A committed non-zero exit ends the repetition as CI's `&&` does: completed, nothing after it run.
