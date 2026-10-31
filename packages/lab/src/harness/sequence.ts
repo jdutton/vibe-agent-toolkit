@@ -11,13 +11,16 @@
  *   time: a fast broken run (a child that cannot spawn, a refused store) must not
  *   pass a time bar.
  * - **The steps run as CI's `&&` chain does**: the first non-zero exit ends the
- *   sequence, and that exit is the sequence's own. A step that never ran is a
- *   violation — the committed sequence did not happen.
+ *   sequence, and that exit is the sequence's own. When it is the step's
+ *   committed exit the sequence completed — CI runs nothing after it either —
+ *   so the steps after it never run, and the report says so by their absence.
  * - **One rule per cache state.** Cold: the store is deleted and `tmp/` emptied
  *   before the sequence (asserted), and a populating first step must leave the
  *   store non-empty and at least one shard in the build's parse directory.
- *   Warm: one priming run leaves both non-empty, and every MEASURED step that
- *   reads a population must report `store` (see `provenance.ts`).
+ *   Warm: one priming run leaves both non-empty — checked however the priming
+ *   sequence ended — and every step that reads a population must report
+ *   `store` (see `provenance.ts`). A warm sequence that stops before such a
+ *   step is a violation: the rule it exists to check was never checked.
  */
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
@@ -132,10 +135,38 @@ export async function runSequence(context: SequenceContext, role: SequenceRole):
     const violation = stepViolation(context, role, step, ran, index);
     if (violation !== null) return aggregate(steps, violation);
     // A committed non-zero exit ends the sequence as CI's `&&` does: completed, with nothing after it run.
-    if (ran.exitCode !== 0) return aggregate(steps, null);
+    if (ran.exitCode !== 0) return finish(context, role, steps, skippedReaderViolation(context, index));
   }
+  return finish(context, role, steps, null);
+}
+
+/**
+ * End a repetition on every path that completed its steps: a priming run's
+ * population is checked whether the sequence ran to its end or stopped at a
+ * committed exit.
+ *
+ * @param context - The arm
+ * @param role - Which run
+ * @param steps - Every step that ran
+ * @param stopped - Why stopping where it did fails the measurement, or `null`
+ * @returns The repetition
+ */
+function finish(context: SequenceContext, role: SequenceRole, steps: readonly StepResult[], stopped: string | null): SequenceResult {
   const primed = role.kind === 'priming' ? populationViolation(context, 'warm rule: after priming') : null;
-  return aggregate(steps, primed);
+  return aggregate(steps, stopped ?? primed);
+}
+
+/**
+ * @param context - The arm
+ * @param index - The step whose committed non-zero exit stopped the sequence
+ * @returns The warm-rule violation naming the first skipped step that reads a population, or `null`
+ */
+function skippedReaderViolation(context: SequenceContext, index: number): string | null {
+  if (context.state !== 'warm') return null;
+  const skipped = context.steps.slice(index + 1).find((step) => step.provenance !== 'none');
+  if (skipped === undefined) return null;
+  const stopper = context.steps[index]?.name ?? String(index);
+  return `warm rule: step '${skipped.name}' never ran — the sequence stopped at step '${stopper}' — so its population was never shown to be the store`;
 }
 
 /**

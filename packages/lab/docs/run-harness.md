@@ -127,9 +127,12 @@ when the arm itself sets them with `--env`. A nested `vat` call from a subject's
 hooks stays in the arm only because the arm says so (`--env VAT_BIN=<bin.js>` for a `dist:` arm,
 `--env VAT_ROOT_DIR=<shim>` for a build whose wrapper predates `VAT_BIN`).
 
-The `verdict` facet adds two lab-owned settings on top of every arm's own: a private projection
-store under its `--out` (`VAT_PROJECTION_STORE_DIR`) and an unset `CLAUDE_CONFIG_DIR`. And because
-its subjects include VAT's own tree, it refuses an `--out` inside any subject — see
+Every timed arm — the `verdict` facet's included — also gets lab-owned directories on top of its
+own settings: a private projection store, temp directory, empty home (`HOME` and
+`CLAUDE_CONFIG_DIR`) and npm cache under the invocation's **arms root** (`--arms-dir`, else a fresh
+`run-*` directory under `<os tmpdir>/vat-lab-arms-<user>/`), never under `--out` and never inside a
+subject. An `--env` or `--unset` naming one of those variables is refused. Because the verdict
+facet's subjects include VAT's own tree, it also refuses an `--out` inside any subject — see
 [The verdict facet](facets.md#the-verdict-facet).
 
 ## Which commands get measured
@@ -243,9 +246,10 @@ Four properties, each of which the hand-rolled version had no way to enforce:
 **Whole arms alternate — A B A B …, never all of A then all of B.** A machine drifts over minutes, and
 a block design charges every bit of that drift to whichever arm ran during it. Alternation turns a
 systematic bias into a per-pair one, which shows up as pairs disagreeing — a signal you can read.
-The second reason is specific to this harness: vat namespaces its dev parse cache per build, so each
-arm's *first* invocation is cold whatever `--cache` says. Alternation makes that recur symmetrically
-instead of hiding inside one arm's aggregate.
+The second reason is specific to this harness: each arm has its own `tmp/`, so its parse cache is
+its own, and a warm arm is primed by one unmeasured run before its first measured repeat — no arm's
+first measured invocation inherits the other's cache. Alternation keeps whatever cold start remains
+(the OS page cache, the build's first start) symmetric instead of hiding inside one arm's aggregate.
 
 **The estimator is `min`, with `p25` reported beside it — never a median, never a mean.** Every sample
 is the true cost plus a non-negative contamination, so the smallest is the closest thing to a clean
@@ -298,15 +302,22 @@ exit code at all comes back `{ kind: 'not-run' }`.
 
 Two rules then apply to a row's repeats, in `summarizeRepeatFailures`, shared so both facets phrase
 them alike: **any failure poisons the whole row**, and **the accepted codes must be uniform across
-the repeats**. The second is what stops a set where one repeat exited 0 and another exited 1 from
-being averaged: both completed, but they did different amounts of work, and a median over the mixture
+the repeats**, compared step by step: a repeat's exit is the list of its steps' exits, so
+`2 repeats exited [1] and [0, 1]` names one that stopped at step one and one that ran step one clean
+and stopped at step two, though both fold to exit 1. The second rule is what stops a set where one
+repeat exited 0 and another exited 1 from being averaged: both completed, but they did different
+amounts of work, and a median over the mixture
 describes neither.
 
 ## Two properties the harness must preserve
 
-**Each arm's environment: inherited, except the arm-owned keys.** A child's environment is
-`process.env` minus `ARM_OWNED_ENV_KEYS` minus the arm's `unset`, plus its `set`
-([`harness/arm-env.ts`](../src/harness/arm-env.ts)). Every `RunOptions` and `CaptureRequest` carries
+**Each arm's environment: inherited, then cleared, then the arm's own.** A child's environment is
+`process.env` minus `ARM_OWNED_ENV_KEYS`, minus every inherited `VAT_*` name and the names git
+exports into a hook, minus — for a VAT step — the temp, XDG, Claude and git-config state in
+`CLEARED_ENV_NAMES`, then the arm directories' variables, then the arm's `unset` and `set`
+([`harness/arm-env.ts`](../src/harness/arm-env.ts), [`harness/arm-dirs.ts`](../src/harness/arm-dirs.ts)).
+A tool step (`pnpm install`, a build) loses only the `VAT_*` and hook-git names: pnpm needs the
+real `~/.npmrc`. Each report records both lists of names the arm's steps went without. Every `RunOptions` and `CaptureRequest` carries
 this `ArmEnvironment` as a **required** field — `EMPTY_ARM_ENVIRONMENT` when the arm sets nothing —
 because an optional environment is a seam whose omission compiles, and the omission is the leak.
 
@@ -321,8 +332,9 @@ because an optional environment is a seam whose omission compiles, and the omiss
   A `VAT_BIN` exported in the operator's shell would otherwise reach both arms of an A/B and make
   them one build measured twice. `arm-env.test.ts` derives the wrapper's set from its source, so a
   resolution variable the wrapper gains reds the lab until the lab owns it too.
-- **`unset` removes what an arm must run without** (`CLAUDE_CONFIG_DIR`, a user config override).
-  Unset is not absent: `sameArmEnvironment` counts it, and `ab` prints it as `-KEY` in the arm's
+- **`unset` removes what an arm must run without** (a user-level config override such as
+  `XDG_DATA_HOME`). It cannot name a variable the arm's directories own — `--unset CLAUDE_CONFIG_DIR`
+  is refused, because every arm already points it at its own empty home. Unset is not absent: `sameArmEnvironment` counts it, and `ab` prints it as `-KEY` in the arm's
   `Config` line. A key both set and unset is refused before anything runs.
 - **Flags.** `run` takes `--env K=V` and `--unset K` (repeatable); `ab` takes them per arm as
   `--env-a`/`--env-b` and `--unset-a`/`--unset-b`.

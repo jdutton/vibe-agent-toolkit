@@ -162,8 +162,8 @@ export interface CaptureRequest {
    */
   readonly env: ArmEnvironment;
   /**
-   * Where this capture's arms live: `<out>/arms/<build>-<command>-<cache>/`
-   * (see `arm-dirs.ts`). Required: a capture with no arm directories would run
+   * Where this capture's arms live: `<arms root>/<build>-<command>-<cache>/`
+   * (see `arm-dirs.ts`), never under `--out`. Required: a capture with no arm directories would run
    * in the developer's own store, temp directory and home.
    */
   readonly arms: CaptureArms;
@@ -173,8 +173,8 @@ export interface CaptureRequest {
 
 /** The part of an arm a capture names; the command and the cache mode name the rest. */
 export interface CaptureArms {
-  /** The lab's `--out` directory. */
-  readonly out: string;
+  /** The invocation's arms root, from `openArmsRoot` — outside every subject. */
+  readonly root: string;
   /** The build's alias. */
   readonly build: string;
 }

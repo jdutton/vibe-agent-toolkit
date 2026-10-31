@@ -38,7 +38,9 @@ describe('the candidate verdict run on a clean subject', () => {
       subjects: [{ alias: FIXTURE_ALIAS, path: root, verbs: CI_VERBS, sqlFiles: [], buildVerbs: false, unmeasurableBuildVerbs: {} }],
       subjectsDir: root,
       env: { set: {}, unset: [] },
+      prepared: {},
       outDir: tempDir('lab-verdict-candidate-out-'),
+      armsRoot: tempDir('lab-verdict-candidate-arms-'),
       capturedAt: new Date().toISOString(),
     });
 

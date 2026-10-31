@@ -48,6 +48,15 @@
  * marker `<!-- verdict-delta:<id> -->` ({@link bulletAnchors}). An id no bullet
  * carries, or two do, is a refusal. A heading is not a target: a section holds
  * hundreds of bullets, and a reference to it would vouch for none of them.
+ *
+ * ## Unions: what one sequence finds beyond another
+ *
+ * `unions` declares, per subject and per (left rows, right rows) pair that
+ * `verdict union` judges, every finding the right sequence reports beyond the
+ * left one's union — keyed as the union is, by `(code, location, line,
+ * severity)`, with the same `locationDigest` escape. Absent, it declares
+ * none: an omission fails the union, it never excuses it. `verdict compare`
+ * does not read it, but checks its changelog references like every entry's.
  */
 
 import { readFileSync } from 'node:fs';
@@ -87,13 +96,48 @@ export interface FindingDigestKey {
 export type DeclaredFinding = FindingKey | FindingDigestKey;
 
 /** Runtime schema for {@link DeclaredFinding}. Each form is strict, so a finding naming both is refused. */
+/** A finding one union reports beyond another, by its union key — its location by path or by digest. */
+export type DeclaredUnionFinding =
+  | { readonly code: string; readonly severity: string; readonly location: string | null; readonly line: number | null }
+  | { readonly code: string; readonly severity: string; readonly locationDigest: string; readonly line: number | null };
+
+/** A changelog reference: the ONE bullet of a file carrying `<!-- verdict-delta:<id> -->`. */
+const ChangelogReferenceSchema = z
+  .string()
+  .regex(
+    // The id after `#` is spelled as BULLET_MARKER spells it.
+    /^(?:\.changes\/[a-z0-9-]+\.md|CHANGELOG\.md)#[a-z0-9][a-z0-9-]*$/,
+    "a changelog reference is '.changes/<fragment>.md#<id>' or 'CHANGELOG.md#<id>', the id of one bullet's verdict-delta marker",
+  );
+
+/** A location digest: the SHA-256 of the location, as `locationDigest()` spells it. */
+const LocationDigestSchema = z.string().regex(/^[0-9a-f]{64}$/, 'a locationDigest is the SHA-256 of the location, 64 lowercase hex characters');
+
+const DeclaredUnionFindingSchema: z.ZodType<DeclaredUnionFinding> = z.union([
+  z.object({ code: z.string(), severity: z.enum(FINDING_SEVERITIES), location: z.string().nullable(), line: z.number().int().nullable() }).strict(),
+  z.object({ code: z.string(), severity: z.enum(FINDING_SEVERITIES), locationDigest: LocationDigestSchema, line: z.number().int().nullable() }).strict(),
+]);
+
+/**
+ * The identity a union finding is matched on, its location compared BY DIGEST
+ * so a declaration by digest and an observation by path key identically.
+ *
+ * @param finding - An observed union key, or a declared one
+ * @returns Its identity, as one string
+ */
+export function unionFindingIdentity(finding: DeclaredUnionFinding): string {
+  const located = 'locationDigest' in finding ? finding.locationDigest : finding.location;
+  const digest = 'locationDigest' in finding || located === null ? located : locationDigest(located);
+  return JSON.stringify([finding.code, finding.severity, digest, finding.line]);
+}
+
 const DeclaredFindingSchema: z.ZodType<DeclaredFinding> = z.union([
   FindingKeySchema,
   z
     .object({
       code: z.string(),
       severity: z.enum(FINDING_SEVERITIES),
-      locationDigest: z.string().regex(/^[0-9a-f]{64}$/, 'a locationDigest is the SHA-256 of the location, 64 lowercase hex characters'),
+      locationDigest: LocationDigestSchema,
       scope: z.string().nullable(),
     })
     .strict(),
@@ -157,13 +201,7 @@ export const VerdictDeltasSchema = z
         .object({
           subject: z.string(),
           verb: z.string(),
-          changelog: z
-            .string()
-            .regex(
-              // The id after `#` is spelled as BULLET_MARKER spells it.
-              /^(?:\.changes\/[a-z0-9-]+\.md|CHANGELOG\.md)#[a-z0-9][a-z0-9-]*$/,
-              "a changelog reference is '.changes/<fragment>.md#<id>' or 'CHANGELOG.md#<id>', the id of one bullet's verdict-delta marker",
-            ),
+          changelog: ChangelogReferenceSchema,
           exit: z.object({ from: z.number().int(), to: z.number().int() }).strict().optional(),
           refusal: z.object({ from: z.array(z.string().min(1)), to: z.array(z.string().min(1)) }).strict().optional(),
           findingsAdded: z.array(DeclaredFindingSchema).default([]),
@@ -175,6 +213,23 @@ export const VerdictDeltasSchema = z
         })
         .strict(),
     ),
+    unions: z
+      .array(
+        z
+          .object({
+            subject: z.string(),
+            /** The left sequence's rows, as `verdict union --left` names them. */
+            left: z.array(z.string().min(1)).min(1),
+            /** The right sequence's rows, as `--right` names them. */
+            right: z.array(z.string().min(1)).min(1),
+            /** Every finding the right union reports beyond the left one. */
+            findingsAdded: z.array(DeclaredUnionFindingSchema).min(1),
+            changelog: ChangelogReferenceSchema,
+            reason: z.string().min(10),
+          })
+          .strict(),
+      )
+      .default([]),
   })
   .strict();
 
@@ -387,12 +442,11 @@ function changeKey(change: DeltaChange): readonly unknown[] {
 export function changelogRefusals(declared: VerdictDeltas, sources: ReadonlyMap<string, string>): string[] {
   const refusals: string[] = [];
   const anchors = new Map<string, ReadonlyMap<string, number>>();
-  for (const [index, entry] of declared.deltas.entries()) {
-    const hash = entry.changelog.indexOf('#');
-    const file = entry.changelog.slice(0, hash);
-    const id = entry.changelog.slice(hash + 1);
+  for (const { at, changelog } of citations(declared)) {
+    const hash = changelog.indexOf('#');
+    const file = changelog.slice(0, hash);
+    const id = changelog.slice(hash + 1);
     const text = sources.get(file);
-    const at = `deltas[${String(index)}] (${entry.subject} / ${entry.verb})`;
     if (text === undefined) {
       refusals.push(`REFUSED: ${at} cites '${file}', which does not exist.`);
       continue;
@@ -401,9 +455,9 @@ export function changelogRefusals(declared: VerdictDeltas, sources: ReadonlyMap<
     anchors.set(file, inFile);
     const bullets = inFile.get(id) ?? 0;
     if (bullets === 0) {
-      refusals.push(`REFUSED: ${at} cites '${entry.changelog}', but '${file}' has no bullet carrying '<!-- verdict-delta:${id} -->'.`);
+      refusals.push(`REFUSED: ${at} cites '${changelog}', but '${file}' has no bullet carrying '<!-- verdict-delta:${id} -->'.`);
     } else if (bullets > 1) {
-      refusals.push(`REFUSED: ${at} cites '${entry.changelog}', but ${String(bullets)} bullets carry that id in '${file}'; a reference names ONE.`);
+      refusals.push(`REFUSED: ${at} cites '${changelog}', but ${String(bullets)} bullets carry that id in '${file}'; a reference names ONE.`);
     }
   }
   return refusals;
@@ -418,8 +472,8 @@ export function changelogRefusals(declared: VerdictDeltas, sources: ReadonlyMap<
  */
 export function readChangelogSources(declared: VerdictDeltas, repoRoot: string): Map<string, string> {
   const sources = new Map<string, string>();
-  for (const entry of declared.deltas) {
-    const file = entry.changelog.slice(0, entry.changelog.indexOf('#'));
+  for (const { changelog } of citations(declared)) {
+    const file = changelog.slice(0, changelog.indexOf('#'));
     if (sources.has(file)) continue;
     try {
       sources.set(file, readFileSync(safePath.join(repoRoot, file), 'utf-8'));
@@ -430,6 +484,19 @@ export function readChangelogSources(declared: VerdictDeltas, repoRoot: string):
     }
   }
   return sources;
+}
+
+/**
+ * Every changelog reference a deltas file makes — its deltas' and its unions' — with where it sits.
+ *
+ * @param declared - The deltas file
+ * @returns Each reference and the entry it belongs to, for a refusal
+ */
+function citations(declared: VerdictDeltas): readonly { readonly at: string; readonly changelog: string }[] {
+  return [
+    ...declared.deltas.map((entry, index) => ({ at: `deltas[${String(index)}] (${entry.subject} / ${entry.verb})`, changelog: entry.changelog })),
+    ...declared.unions.map((entry, index) => ({ at: `unions[${String(index)}] (${entry.subject})`, changelog: entry.changelog })),
+  ];
 }
 
 /** A bullet's marker: `<!-- verdict-delta:<id> -->`, the id as a `changelog` reference spells it after `#`. */

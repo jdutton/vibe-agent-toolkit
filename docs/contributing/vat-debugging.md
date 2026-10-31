@@ -187,9 +187,11 @@ only `VAT_ROOT_DIR`.
 aliases only (`crucible-1`, `crucible-2`, …) — no adopter names. `--subjects` is required on every
 `verdict run`.
 
-**Isolation** — the facet itself sets a private projection store per arm and per subject
-(`VAT_PROJECTION_STORE_DIR`) and unsets `CLAUDE_CONFIG_DIR`; an arm's own `--env`/`--unset` may
-not name either — the facet refuses that as a clash with what it already owns.
+**Isolation** — the facet runs each arm and subject from a cleared environment in lab-owned
+directories under the arms root (`--arms-dir`, else a fresh run directory under the OS temp
+directory): its own projection store (`VAT_PROJECTION_STORE_DIR`), temp directory, and an empty
+home that `HOME` and `CLAUDE_CONFIG_DIR` both point at. An arm's own `--env`/`--unset` may not
+name any of them — the facet refuses that as a clash with what it already owns.
 
 **Sequence**: control first — `baseline` twice, then `verdict compare --control` must exit 0. Any
 field that differs between two runs of the *same* build is a new instability in the normalizer,

@@ -10,12 +10,13 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
 import { prepareClone, type ClonePreparation } from '../../src/harness/clone.js';
 import type { SequenceStep } from '../../src/harness/sequence.js';
 import { argsOf, cleanupProbes, probeStep, readProbeLog, setupProbe, type Probe } from '../command-probe.js';
-import { commitAll, initRepo, writeFixtureFile } from '../git-fixtures.js';
+import { commitAll, git, initRepo, writeFixtureFile } from '../git-fixtures.js';
 
 const scratch: string[] = [];
 
@@ -51,14 +52,14 @@ function nodeStep(name: string, script: string, expectedExits: readonly number[]
   };
 }
 
-/** A preparation request; the out directory is fresh per call. */
+/** A preparation request; the arms root is fresh per call. */
 function preparation(source: string, probe: Probe, overrides: Partial<ClonePreparation> = {}): ClonePreparation {
-  const out = mkdtempSync(safePath.join(normalizedTmpdir(), 'lab-clone-out-'));
-  scratch.push(out);
+  const armsRoot = mkdtempSync(safePath.join(normalizedTmpdir(), 'lab-clone-arms-'));
+  scratch.push(armsRoot);
   return {
     source,
     commit: 'HEAD',
-    out,
+    armsRoot,
     prerequisites: [nodeStep('build', "require('node:fs').writeFileSync('built.txt', 'x')")],
     warmup: { instrument: probe.instrument, step: probeStep(['warmup'], { timed: false }) },
     ...overrides,
@@ -79,18 +80,35 @@ describe('prepareClone', () => {
     if (!prepared.ok) throw new Error(prepared.refusal);
     expect(readFileSync(safePath.join(prepared.path, 'README.md'), 'utf8')).toBe('# committed\n');
     expect(existsSync(safePath.join(prepared.path, 'built.txt'))).toBe(true);
-    expect(prepared.path).toBe(safePath.join(request.out, 'clone'));
+    expect(prepared.path).toBe(safePath.join(request.armsRoot, 'clone'));
     expect(argsOf(readProbeLog(prepared.path))).toEqual([['warmup']]);
     expect(prepared.commit).toMatch(/^[\da-f]{40}$/u);
     expect(prepared.tree).toMatch(/^[\da-f]{40}$/u);
     // The warm-up ran with a store directory of its own (set, not yet created)
-    // under <out>/arms, never the default store.
+    // under the arms root, never the default store.
     expect(readProbeLog(prepared.path)[0]?.storeExisted).toBe(false);
-    expect(existsSync(safePath.join(request.out, 'arms', 'prepare-warmup-cold', 'tmp'))).toBe(true);
+    expect(existsSync(safePath.join(request.armsRoot, 'prepare-warmup-cold', 'tmp'))).toBe(true);
 
-    // Preparation starts from nothing: a second one over the same out refuses.
+    // Preparation starts from nothing: a second one over the same arms root refuses.
     const again = await prepareClone(request);
     expect(again.ok ? '' : again.refusal).toMatch(/already exists/u);
+  });
+
+  it('records what the prerequisites ran without, apart from what the warm-up and git ran without', async () => {
+    // Both kinds lose every inherited VAT_* name; only the warm-up (a VAT step)
+    // also loses the XDG, temp, Claude and git-config state. The report must say
+    // which list is which, not one list for both.
+    vi.stubEnv('VAT_LAB_PREPARE_PLANTED', 'leak');
+    vi.stubEnv('XDG_CONFIG_HOME', safePath.join(normalizedTmpdir(), 'lab-clone-planted-xdg'));
+    const source = subject();
+    const probe = setupProbe('lab-clone-probe-');
+
+    const prepared = await prepareClone(preparation(source, probe));
+
+    if (!prepared.ok) throw new Error(prepared.refusal);
+    expect(prepared.removedToolEnv).toContain('VAT_LAB_PREPARE_PLANTED');
+    expect(prepared.removedToolEnv).not.toContain('XDG_CONFIG_HOME');
+    expect(prepared.removedEnv).toEqual(expect.arrayContaining(['VAT_LAB_PREPARE_PLANTED', 'XDG_CONFIG_HOME']));
   });
 
   it('fails the preparation when a prerequisite exits otherwise than committed', async () => {
@@ -103,7 +121,7 @@ describe('prepareClone', () => {
 
     expect(prepared.ok ? '' : prepared.refusal).toMatch(/step 'install' exited 1/u);
     // The warm-up never ran: the sequence stops at the first unexpected exit.
-    expect(readProbeLog(safePath.join(request.out, 'clone'))).toEqual([]);
+    expect(readProbeLog(safePath.join(request.armsRoot, 'clone'))).toEqual([]);
   });
 
   it('fails the preparation, naming the path, when a step leaves a non-ignored file', async () => {
@@ -155,14 +173,48 @@ describe('prepareClone', () => {
     expect(prepared.removedEnv).not.toContain('HOME');
   });
 
-  it('refuses an --out inside the subject, before cloning anything', async () => {
+  it('proves a clone whose commit TRACKS a file its .gitignore matches — the snapshot starts from the commit, not an empty index', async () => {
+    const source = subject();
+    writeFixtureFile(source, '.gitignore', 'built.txt\nprobe.log\nvendored.txt\n');
+    writeFixtureFile(source, 'vendored.txt', 'tracked though ignored\n');
+    git(['add', '--force', 'vendored.txt'], source);
+    commitAll(source, 'vendor a file the ignore rules match');
+    const probe = setupProbe('lab-clone-probe-');
+
+    const prepared = await prepareClone(preparation(source, probe));
+
+    expect(prepared.ok ? '' : prepared.refusal).toBe('');
+  });
+
+  it('refuses a clone git status calls clean whose snapshot differs — a prerequisite hid a change behind assume-unchanged', async () => {
     const source = subject();
     const probe = setupProbe('lab-clone-probe-');
-    const out = safePath.join(source, 'lab-out');
+    const hide: SequenceStep = {
+      name: 'hide',
+      command: { kind: 'tool', command: gitExecutable(), args: ['update-index', '--assume-unchanged', 'README.md'] },
+      timed: false,
+      expectedExits: [0],
+      provenance: 'none',
+      populates: false,
+    };
 
-    const prepared = await prepareClone({ ...preparation(source, probe), out });
+    const prepared = await prepareClone(
+      preparation(source, probe, {
+        prerequisites: [hide, nodeStep('edit', String.raw`require('node:fs').writeFileSync('README.md', '# changed\n')`)],
+      }),
+    );
+
+    expect(prepared.ok ? '' : prepared.refusal).toMatch(/is not at the committed tree: snapshot [\da-f]{40}, commit tree [\da-f]{40}/u);
+  });
+
+  it('refuses an arms root inside the subject, before cloning anything', async () => {
+    const source = subject();
+    const probe = setupProbe('lab-clone-probe-');
+    const armsRoot = safePath.join(source, 'lab-arms');
+
+    const prepared = await prepareClone({ ...preparation(source, probe), armsRoot });
 
     expect(prepared.ok ? '' : prepared.refusal).toMatch(/inside the subject/u);
-    expect(existsSync(out)).toBe(false);
+    expect(existsSync(armsRoot)).toBe(false);
   });
 });

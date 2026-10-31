@@ -16,8 +16,10 @@
  *
  * ## The warm-up, and why `stable` is nullable
  *
- * The first repeat populates vat's on-disk cache and therefore systematically
- * differs from every repeat after it. It is a warm-up: excluded from the
+ * Repeat 0 is the warm-up. It no longer differs by VAT's own caches — a warm
+ * arm is primed by an unmeasured run before it, and a cold arm's store and
+ * parse cache are reset before every repeat — but it is still the first child
+ * of the capture to touch the subject's files, so it stays excluded from the
  * stability comparison, and reported only when it is also the last repeat
  * (`runs: 1`). Everything else compares repeats `1 … runs-1` and reports the
  * last of them — its dumps AND its arm: `lane` / `extentSource` are read out

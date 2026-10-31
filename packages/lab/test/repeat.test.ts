@@ -23,14 +23,24 @@ function result(overrides: Partial<RunResult> = {}): RunResult {
 }
 
 /**
- * Build a `SequenceResult` for the summary tests.
+ * Build a one-step `SequenceResult` for the summary tests.
  *
- * @param exitCode - Its aggregate exit code
+ * @param exitCode - Its one step's exit, and so its aggregate exit
  * @param violation - Why it fails the measurement, or `null`
- * @returns A complete result with no steps
+ * @returns A complete result
  */
 function sequence(exitCode: number, violation: string | null = null): SequenceResult {
-  return { ...result({ exitCode }), steps: [], violation };
+  return stepsExited([exitCode], violation);
+}
+
+/**
+ * @param exits - Each step's exit, in order
+ * @param violation - Why it fails the measurement, or `null`
+ * @returns A repetition whose aggregate exit is the first non-zero step exit, as the sequence runner folds it
+ */
+function stepsExited(exits: readonly number[], violation: string | null = null): SequenceResult {
+  const steps = exits.map((exitCode, index) => ({ ...result({ exitCode }), name: `s${String(index)}`, timed: true, provenance: null }));
+  return { ...result({ exitCode: exits.find((code) => code !== 0) ?? 0 }), steps, violation };
 }
 
 describe('materializeArgs', () => {
@@ -63,7 +73,15 @@ describe('summarizeRepeatFailures', () => {
 
   it('fails a row whose repeats completed with DIFFERENT codes, naming both', () => {
     expect(summarizeRepeatFailures([sequence(0), sequence(1), sequence(0)])).toBe(
-      '3 repeats exited 0 and 1 — every repeat completed, but not with the same amount of work ' +
+      '3 repeats exited [0] and [1] — every repeat completed, but not with the same amount of work ' +
+        'done, so a statistic over them describes neither run',
+    );
+  });
+
+  it('fails repeats whose SEQUENCE exit agrees but whose per-step exits differ — one stopped early, one ran on', () => {
+    // Both fold to exit 1; the first stopped at step one, the second ran step one clean and stopped at step two.
+    expect(summarizeRepeatFailures([stepsExited([1]), stepsExited([0, 1])])).toBe(
+      '2 repeats exited [1] and [0, 1] — every repeat completed, but not with the same amount of work ' +
         'done, so a statistic over them describes neither run',
     );
   });

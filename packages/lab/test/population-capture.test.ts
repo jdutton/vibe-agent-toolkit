@@ -32,7 +32,7 @@ import {
   PROBE_FAIL_TOKEN,
   PROBE_STDOUT_ENV,
   type Probe,
-  probeOut,
+  probeArmsRoot,
   setupProbe,
 } from './command-probe.js';
 import { commitAll, initRepo, writeFixtureFile } from './git-fixtures.js';
@@ -96,7 +96,7 @@ async function captureRow(
     // first document too, so `outputs` stays one entry per MEASURED repeat.
     env: { set: { [PROBE_STDOUT_ENV]: JSON.stringify([outputs[0], ...outputs]) }, unset: [] },
     capturedAt: CAPTURED_AT,
-    arms: { out: probeOut(probe), build: 'probe' },
+    arms: { root: probeArmsRoot(probe), build: 'probe' },
   };
   const report = await capturePopulation(request);
 

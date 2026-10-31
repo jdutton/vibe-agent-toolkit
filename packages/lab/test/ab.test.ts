@@ -182,6 +182,7 @@ async function runFixture(options: FixtureOptions, label: string): Promise<Fixtu
     control: options.control === true,
     noiseFloor: options.noiseFloor ?? null,
     outDir: safePath.join(tempDir, label),
+    armsRoot: safePath.join(tempDir, `${label}-arms`),
     envA: options.envA ?? EMPTY_ARM_ENVIRONMENT,
     envB: options.envB ?? EMPTY_ARM_ENVIRONMENT,
     now: () => new Date().toISOString(),

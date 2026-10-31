@@ -20,6 +20,11 @@
 #
 # `changelog: <file>#<id>` names the ONE bullet of <file> carrying `<!-- verdict-delta:<id> -->`.
 #
+# `unions` (optional, default none) is bar 3's list for `vat-lab verdict union`: per subject, a
+# `left` and `right` row sequence and the `findingsAdded` the right sequence publishes beyond the
+# left's — each by full identity or `locationDigest`, with a `changelog:` and a `reason`. The
+# union checks it both ways too: an extra no entry declares fails, a declared extra not seen fails.
+#
 # Schema and rules: packages/lab/src/facets/verdict/deltas.ts.
 # How to run a crucible pass: packages/lab/docs/facets.md ("verdict").
 baseline: 0.2.0-rc.11

@@ -358,7 +358,7 @@ describe('capturePerf — repeats that completed differently', () => {
     expect(row.failed).toBe(true);
     expect(row.exitCode).toBeNull();
     expect(row.samplesMs).toEqual([]);
-    expect(row.failure).toContain('exited 0 and 1');
+    expect(row.failure).toContain('exited [0] and [1]');
     expect(row.failure).toContain('not with the same amount of work done');
   });
 });

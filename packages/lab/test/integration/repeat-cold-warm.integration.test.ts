@@ -54,6 +54,8 @@ describe('runRepeats — cold and warm', () => {
 
     // Each repeat writes a store; a reset hoisted out of the loop shows `true` from the second on.
     expect(probe.entries().map((entry) => entry.storeExisted)).toEqual([false, false, false]);
+    // Each repeat leaves a file in tmp (and a parse shard); a reset that kept tmp shows them from the second on.
+    expect(probe.entries().map((entry) => entry.tmpEntries)).toEqual([0, 0, 0]);
     expect(argsOf(probe.entries())).toEqual([['audit'], ['audit'], ['audit']]);
   });
 
@@ -63,6 +65,8 @@ describe('runRepeats — cold and warm', () => {
     await runRepeats(probeSpec(probe, { runs: 2, env: { [PROBE_POPULATE_ENV]: '1' } }));
 
     expect(probe.entries().map((entry) => entry.storeExisted)).toEqual([false, true, true]);
+    // …and its tmp: the priming run's leftovers are still there for every measured repeat (a control on the probe).
+    expect(probe.entries().map((entry) => (entry.tmpEntries ?? 0) > 0)).toEqual([false, true, true]);
   });
 
   it('hands every sequence an EMPTY home, whatever the previous one left there', async () => {
@@ -82,6 +86,6 @@ describe('runRepeats — cold and warm', () => {
 
     expect(run.results).toEqual([]);
     expect(probe.entries()).toEqual([]);
-    expect(pathPresent(probe.out, 'entry', everywhere('destination'), 'confirmed')).toBe(false);
+    expect(pathPresent(probe.armsRoot, 'entry', everywhere('destination'), 'confirmed')).toBe(false);
   });
 });

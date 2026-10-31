@@ -14,9 +14,10 @@
  * ## Why no repeat is discarded
  *
  * `io` treats repeat 0 as a warm-up because it wants the steady state. This
- * facet must not: in `warm` mode repeat 0 is the *only* repeat that parses
- * anything, so discarding it would throw away the entire measurement and report
- * the empty steady state as the answer.
+ * facet must not: in `cold` mode every repeat parses from an emptied cache and
+ * each is the measurement. In `warm` mode the arm's unmeasured priming run is
+ * what parsed, so every measured repeat is a cache hit — the zero-state the
+ * `attribution` names, and the reason the CLI defaults this facet to `cold`.
  *
  * ## Why one repeat is reported whole, rather than an average of all of them
  *

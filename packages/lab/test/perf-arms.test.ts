@@ -22,12 +22,12 @@ describe('sequenceSteps', () => {
     ]);
   });
 
-  it('commits a step to the exits set for exactly its (build, sequence, step), and no other arm’s', () => {
-    const expected = [{ build: 'cand', sequence: 'ci-b', step: 'resources-check-ci', exits: [0, 1] }];
+  it('commits a step to the ONE exit set for exactly its (build, sequence, step), and no other arm’s', () => {
+    const expected = [{ build: 'cand', sequence: 'ci-b', step: 'resources-check-ci', exit: 1 }];
 
     expect(sequenceSteps(MEASURABLE_SEQUENCES['ci-b'], 'cand', expected).map((step) => step.expectedExits)).toEqual([
       [0],
-      [0, 1],
+      [1],
       [0],
     ]);
     // Another build of the same sequence keeps the default.
@@ -43,14 +43,14 @@ describe('expectedExitRefusal', () => {
   const arms = [{ build: 'cand', sequence: MEASURABLE_SEQUENCES['ci-c'] }];
 
   it('accepts an expectation naming an arm’s build, sequence and one of its steps', () => {
-    expect(expectedExitRefusal(arms, [{ build: 'cand', sequence: 'ci-c', step: 'validate-ci', exits: [1] }])).toBeNull();
+    expect(expectedExitRefusal(arms, [{ build: 'cand', sequence: 'ci-c', step: 'validate-ci', exit: 1 }])).toBeNull();
   });
 
   it('refuses an expectation that names no --arm, or a step its sequence does not run', () => {
-    expect(expectedExitRefusal(arms, [{ build: 'rc11', sequence: 'ci-c', step: 'validate-ci', exits: [1] }])).toMatch(
+    expect(expectedExitRefusal(arms, [{ build: 'rc11', sequence: 'ci-c', step: 'validate-ci', exit: 1 }])).toMatch(
       /rc11:ci-c.*no --arm/u,
     );
-    expect(expectedExitRefusal(arms, [{ build: 'cand', sequence: 'ci-c', step: 'skills-validate-ci', exits: [1] }])).toMatch(
+    expect(expectedExitRefusal(arms, [{ build: 'cand', sequence: 'ci-c', step: 'skills-validate-ci', exit: 1 }])).toMatch(
       /'skills-validate-ci'.*validate-ci/u,
     );
   });

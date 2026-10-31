@@ -4,7 +4,9 @@
  * A VAT step starts from the developer's environment cleared of VAT, git and
  * claude state; a tool step from it minus `VAT_*` only. A sequence stops at
  * the first non-zero exit, as CI does — a violation when the exit was not the
- * step's committed one, a completed sequence when it was.
+ * step's committed one, a completed sequence when it was, unless the arm is
+ * warm and a step that never ran is one whose population the warm rule reads.
+ * The warm priming check runs however the priming sequence ended.
  *
  * No vat binary is spawned. The instrument is `node <probe.cjs>` from
  * `command-probe.ts`, a stand-in that logs its argv and environment into its
@@ -67,6 +69,21 @@ describe('runRepeats — sequences', () => {
     expect(run.removed).not.toContain('CLAUDE_CONFIG_DIR'); // pointed, not removed
   });
 
+  it('hands a VAT step a VAT_* name the ARM sets explicitly, over an inherited one — only the inherited VAT_* is cleared', async () => {
+    const probe = setupProbe(PREFIX);
+    vi.stubEnv('VAT_RESOURCES_CRAWL', 'inherited');
+
+    const spec = probeSpec(probe, {
+      runs: 1,
+      cache: 'cold',
+      env: { VAT_RESOURCES_CRAWL: 'walk', [PROBE_ECHO_ENV]: 'VAT_RESOURCES_CRAWL' },
+    });
+    const run = await runRepeats(spec);
+
+    expect(JSON.parse(run.results[0]?.steps[0]?.stdout ?? '{}')).toEqual({ VAT_RESOURCES_CRAWL: 'walk' });
+    expect(run.removed).not.toContain('VAT_RESOURCES_CRAWL'); // set, not removed
+  });
+
   it("runs a non-VAT step in the developer's environment minus VAT_* only", async () => {
     const probe = setupProbe(PREFIX);
     const developerConfig = safePath.join(probe.cwd, 'developer-config');
@@ -108,7 +125,7 @@ describe('runRepeats — sequences', () => {
     expect(argsOf(probe.entries())).toEqual([['untimed'], ['timed'], ['boom']]);
   });
 
-  it('ends a sequence as COMPLETED when an early step exits non-zero with its committed exit, running nothing after it, as CI does', async () => {
+  it('ends a COLD sequence as COMPLETED when an early step exits non-zero with its committed exit, running nothing after it, as CI does', async () => {
     const probe = setupProbe(PREFIX);
     const steps = [probeStep([PROBE_FAIL_TOKEN], { expectedExits: [0, 1] }), probeStep(['after'])];
 
@@ -117,5 +134,29 @@ describe('runRepeats — sequences', () => {
     expect(run.results[0]?.exitCode).toBe(1);
     expect(run.results[0]?.violation).toBeNull();
     expect(argsOf(probe.entries())).toEqual([['boom']]);
+  });
+});
+
+describe('runRepeats — a warm sequence that stops early', () => {
+  it('fails a warm arm whose committed early stop skips a step the warm rule reads — its population was never checked', async () => {
+    const probe = setupProbe(PREFIX);
+    const steps = [probeStep([PROBE_FAIL_TOKEN], { expectedExits: [1] }), probeStep(['reader'], { provenance: 'resources-check' })];
+
+    const run = await runRepeats(probeSpec(probe, { runs: 1, cache: 'warm', steps, env: { [PROBE_EXIT_CODE_ENV]: '1' } }));
+
+    expect(run.priming?.violation).toMatch(/^priming run: warm rule: step 'reader' never ran/u);
+    expect(run.results).toStrictEqual([]);
+    expect(argsOf(probe.entries()).every((args) => args[0] === PROBE_FAIL_TOKEN)).toBe(true);
+  });
+
+  it('still runs the priming check when the priming sequence stops at a committed non-zero exit', async () => {
+    const probe = setupProbe(PREFIX);
+    // Populating, but it exits (committed) before writing anything: the store stays empty.
+    const steps = [probeStep([PROBE_FAIL_TOKEN], { expectedExits: [1], populates: true })];
+
+    const run = await runRepeats(probeSpec(probe, { runs: 1, cache: 'warm', steps, env: { [PROBE_EXIT_CODE_ENV]: '1' } }));
+
+    expect(run.priming?.violation).toMatch(/^priming run: warm rule: after priming the store '.*' is empty/u);
+    expect(run.results).toStrictEqual([]);
   });
 });

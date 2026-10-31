@@ -6,10 +6,10 @@
  * not facet-specific, and a second copy would get one of these wrong:
  *
  * 1. **Every arm runs in its own directories, from a cleared environment.**
- *    A REQUIRED {@link ArmDescriptor} names `<out>/arms/<build>-<arm>-<state>/`,
- *    whose `store/`, `tmp/` and `home/` are the child's
- *    `VAT_PROJECTION_STORE_DIR`, `TMPDIR`/`TEMP`/`TMP` and
- *    `HOME`/`CLAUDE_CONFIG_DIR` (see `arm-dirs.ts`), and every VAT step starts
+ *    A REQUIRED {@link ArmDescriptor} names `<arms root>/<build>-<arm>-<state>/`,
+ *    whose `store/`, `tmp/`, `home/` and `npm-cache/` are the child's
+ *    `VAT_PROJECTION_STORE_DIR`, `TMPDIR`/`TEMP`/`TMP`,
+ *    `HOME`/`CLAUDE_CONFIG_DIR` and `npm_config_cache` (see `arm-dirs.ts`), and every VAT step starts
  *    from the developer's environment minus every `VAT_*` name and the git and
  *    claude state in `CLEARED_ENV_NAMES` (see `arm-env.ts`). A developer's
  *    leftover `VAT_PROJECTION_STORE=off` would otherwise silently change a
@@ -39,6 +39,7 @@ import {
 import { type ArmEnvironment, clearedEnvironment, mergeArmEnvironments } from './arm-env.js';
 import { completedExitCodesOf, type MeasuredCommandSpec } from './commands.js';
 import { type ParseDirectoryResolution, resolveParseCacheDirectory } from './parse-cache.js';
+import { runCommand } from './run.js';
 import {
   assertCommittedExits,
   runSequence,
@@ -117,9 +118,12 @@ export function materializeArgs(
  * quietly answers a different question — with `perf` backwards, because a failed
  * run returns fast and would read as an improvement.
  *
- * **2. The exit codes must be uniform across the set.** A findings command
+ * **2. The per-step exits must be uniform across the set.** A findings command
  * completes at `0` and at `1` alike, and two repeats that did different amounts
  * of work describe two behaviours; a median over the mixture describes neither.
+ * The comparison is over every step's exit, not the sequence's folded one: a
+ * repeat that stopped at step one and a repeat that ran step one clean and
+ * stopped at step two both fold to `1`, and did different work.
  *
  * @param results - Every repeat's outcome, raw
  * @returns The failure to record, or `null` when every repeat completed alike
@@ -132,9 +136,9 @@ export function summarizeRepeatFailures(results: readonly SequenceResult[]): str
     return `${String(reasons.length)} of ${String(results.length)} repeats failed — ${reasons[0] ?? 'unknown'}`;
   }
 
-  const observed = [...new Set(results.map((result) => result.exitCode))];
+  const observed = [...new Set(results.map((result) => `[${result.steps.map((step) => String(step.exitCode)).join(', ')}]`))];
   if (observed.length > 1) {
-    const codes = observed.map((code) => String(code)).join(' and ');
+    const codes = observed.join(' and ');
     return (
       `${String(results.length)} repeats exited ${codes} — every repeat completed, but not ` +
       'with the same amount of work done, so a statistic over them describes neither run'
@@ -184,7 +188,7 @@ export function commandStep(spec: MeasuredCommandSpec, args: readonly string[]):
  * performs before it measures, assembled once so no two facets can disagree
  * about which repeats they admitted.
  *
- * The arm is `<out>/arms/<build>-<command>-<cache>`: each command of a capture
+ * The arm is `<arms root>/<build>-<command>-<cache>`: each command of a capture
  * gets its own store, so one command's warm store never primes another's.
  *
  * @param request - What the capture was asked to do
@@ -203,7 +207,7 @@ export async function measureSpec(
     cwd: request.subject.path,
     steps: [commandStep(spec, args)],
     runs: request.runs,
-    arm: { out: request.arms.out, build: request.arms.build, arm: spec.name, state: request.cache },
+    arm: { root: request.arms.root, build: request.arms.build, arm: spec.name, state: request.cache },
     ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
     env: request.env,
     ...(envFor === undefined ? {} : { envFor }),
@@ -256,6 +260,9 @@ export async function runInterleaved(specs: readonly RepeatSpec[], rounds: numbe
   if (rounds === 0) return arms.map((arm) => ({ removed: arm.removed, removedTool: arm.removedTool, priming: null, results: [] }));
 
   for (const arm of arms) prepareArmDirectories(arm.context.dirs);
+  // Before any build runs: an arm that cannot judge its population is refused whole, not after round 1.
+  for (const [index, arm] of arms.entries()) parseDirectoryRefusal(arm, specs[index]?.arm.arm ?? '');
+  for (const [index, arm] of arms.entries()) startBuild(arm, specs[index]?.arm.arm ?? '');
   // One sequence at a time, never concurrently: a measurement shares the machine with nothing of its own.
   const priming = await mapInOrder(arms, (arm) => (arm.context.state === 'warm' ? primed(arm) : null));
   const results = arms.map((): SequenceResult[] => []);
@@ -272,6 +279,42 @@ export async function runInterleaved(specs: readonly RepeatSpec[], rounds: numbe
     priming: priming[index] ?? null,
     results: results[index] ?? [],
   }));
+}
+
+/**
+ * Refuse an arm whose populating step's rule needs the build's parse directory
+ * when the build cannot say where it is (it does not run as `node <entry>`, or
+ * names a directory outside the arm's `tmp/`).
+ *
+ * @param arm - A prepared arm, its directories made
+ * @param name - The arm's name, for the refusal
+ * @throws {Error} the arm refusal naming why
+ */
+function parseDirectoryRefusal(arm: PreparedArm, name: string): void {
+  if (!arm.context.steps.some((step) => step.populates)) return;
+  const parse = arm.context.parseDirectory();
+  if (!parse.ok) throw armRefusal(`arm '${name}': ${parse.reason}`);
+}
+
+/**
+ * Start the build once, untimed, before round 1 (`--version`, in the arm's
+ * npm cache): an `npx` build fetches its bytes into the arm's npm cache here,
+ * so no timed repetition pays for a first start.
+ *
+ * @param arm - A prepared arm, its directories made
+ * @param name - The arm's name, for the refusal
+ * @throws {Error} the arm refusal, when the build does not start
+ */
+function startBuild(arm: PreparedArm, name: string): void {
+  const { context } = arm;
+  const started = runCommand(context.instrument, ['--version'], {
+    cwd: context.dirs.npmCache,
+    env: context.vatEnv,
+    timeoutMs: context.timeoutMs,
+  });
+  if (started.exitCode !== 0) {
+    throw armRefusal(`arm '${name}': the build did not start — '--version' exited ${String(started.exitCode)}: ${started.stderr.trim()}`);
+  }
 }
 
 /** One arm, prepared to run. */
@@ -308,7 +351,7 @@ function prepareArm(spec: RepeatSpec): PreparedArm {
     vatEnv: vat.env,
     toolEnv: tool.env,
     timeoutMs: spec.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    parseDirectory: () => (parse ??= resolveParseCacheDirectory(spec.instrument, dirs.tmp)),
+    parseDirectory: () => (parse ??= resolveParseCacheDirectory(spec.instrument, dirs)),
   };
   return {
     context,
@@ -337,7 +380,9 @@ async function primed(arm: PreparedArm): Promise<SequenceResult> {
  * @throws {Error} when two arms would share one
  */
 function refuseSharedDirectories(roots: readonly string[]): void {
-  const shared = roots.find((root, index) => roots.indexOf(root) !== index);
+  // Folded: on a case-insensitive disk (macOS, Windows) 'old' and 'OLD' are one directory.
+  const folded = roots.map((root) => root.toLowerCase());
+  const shared = roots.find((_, index) => folded.indexOf(folded[index] ?? '') !== index);
   if (shared !== undefined) {
     throw armRefusal(`two arms would share '${shared}' — each (build, arm, state) runs in its own directories`);
   }

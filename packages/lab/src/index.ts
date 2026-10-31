@@ -322,7 +322,7 @@ export {
   VerdictSubjectsSchema,
   type VerdictSubjectsResult,
 } from './facets/verdict/subjects.js';
-export { type UnionKey, unionCoverage, unionFindings } from './facets/verdict/union.js';
+export { judgeUnion, type UnionKey, unionFindings } from './facets/verdict/union.js';
 export {
   VERDICT_FACET,
   type VerdictBody,

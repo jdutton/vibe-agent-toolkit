@@ -1,8 +1,8 @@
 /**
  * `captureArms` runs several (build, arm, state) arms INTERLEAVED by round and
- * reports, per arm, every repetition's step exits, stderr and provenance, the
- * environment names the arm's VAT steps did not receive, and min/median/IQR —
- * or the failure that means there is no time at all.
+ * reports min/median/IQR per arm — or the failure that means there is no time
+ * at all — and `renderArmsReport` prints each. What one repetition records:
+ * `perf-arms-repetitions.integration.test.ts`.
  *
  * The instrument is the shared probe: it logs each child's argv into its cwd, so
  * the round order is read straight off the log.
@@ -10,61 +10,22 @@
  * Integration-tier: every case spawns real child processes.
  */
 
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 
-import { type ArmSelection, captureArms, type CaptureArmsRequest, renderArmsReport } from '../../src/facets/perf/arms.js';
-import {
-  argsOf,
-  cleanupProbes,
-  PROBE_FAIL_AT_ENV,
-  PROBE_FAIL_TOKEN,
-  PROBE_STDOUT_ENV,
-  probeOut,
-  probeStep,
-  setupProbe,
-  type Probe,
-} from '../command-probe.js';
+import { captureArms, renderArmsReport } from '../../src/facets/perf/arms.js';
+import { argsOf, cleanupProbes, probeStep, setupProbe } from '../command-probe.js';
+
+import { armsRequest, PASSING_AND_FAILING_ARMS } from './perf-arms-request.js';
 
 afterAll(cleanupProbes);
 
 const PREFIX = 'lab-perf-arms-';
 
-/**
- * A request against a probe with two builds of the one probe instrument.
- *
- * @param probe - The stand-in vat
- * @param overrides - What the case varies
- * @returns The request
- */
-function request(probe: Probe, overrides: Partial<CaptureArmsRequest> = {}): CaptureArmsRequest {
-  return {
-    out: probeOut(probe),
-    cwd: probe.cwd,
-    builds: [
-      { alias: 'old', instrument: probe.instrument },
-      { alias: 'new', instrument: probe.instrument },
-    ],
-    arms: [
-      { build: 'old', arm: 'A', state: 'cold', steps: [probeStep(['a'])] },
-      { build: 'new', arm: 'C', state: 'cold', steps: [probeStep(['c'])] },
-    ],
-    rounds: 3,
-    env: { set: {}, unset: [] },
-    ...overrides,
-  };
-}
-
-/** Two cold arms on two builds: one completes, the other's step exits 3 (not committed). */
-const PASSING_AND_FAILING_ARMS: readonly ArmSelection[] = [
-  { build: 'old', arm: 'A', state: 'cold', steps: [probeStep(['a'])] },
-  { build: 'new', arm: 'C', state: 'cold', steps: [probeStep([PROBE_FAIL_TOKEN])] },
-];
-
 describe('captureArms — rounds', () => {
   it('interleaves the arms by round, never as sequential blocks', async () => {
     const probe = setupProbe(PREFIX);
 
-    await captureArms(request(probe));
+    await captureArms(armsRequest(probe));
 
     expect(argsOf(probe.entries())).toEqual([['a'], ['c'], ['a'], ['c'], ['a'], ['c']]);
   });
@@ -72,7 +33,7 @@ describe('captureArms — rounds', () => {
   it('reports min, median and IQR per arm over its measured rounds', async () => {
     const probe = setupProbe(PREFIX);
 
-    const report = await captureArms(request(probe));
+    const report = await captureArms(armsRequest(probe));
 
     expect(report.rounds).toBe(3);
     for (const arm of report.arms) {
@@ -93,92 +54,9 @@ describe('captureArms — rounds', () => {
     const probe = setupProbe(PREFIX);
 
     await expect(
-      captureArms(request(probe, { arms: [{ build: 'nonesuch', arm: 'A', state: 'cold', steps: [probeStep(['a'])] }] })),
+      captureArms(armsRequest(probe, { arms: [{ build: 'nonesuch', arm: 'A', state: 'cold', steps: [probeStep(['a'])] }] })),
     ).rejects.toThrow(/build 'nonesuch'/u);
     expect(probe.entries()).toEqual([]);
-  });
-});
-
-describe('captureArms — what each repetition records', () => {
-  it('records every step’s exit, stderr and provenance, and the removed environment names', async () => {
-    const probe = setupProbe(PREFIX);
-    vi.stubEnv('VAT_LAB_ARMS_PLANTED', 'leak');
-    try {
-      const document = JSON.stringify({
-        status: 'success',
-        examined: 1,
-        findings: [],
-        summary: {},
-        data: { population: 'derived' },
-      });
-      const report = await captureArms(
-        request(probe, {
-          rounds: 1,
-          arms: [
-            {
-              build: 'old',
-              arm: 'B',
-              state: 'cold',
-              steps: [probeStep(['check'], { provenance: 'resources-check' }), probeStep(['skills'])],
-            },
-          ],
-          env: { set: { [PROBE_STDOUT_ENV]: JSON.stringify([document]) }, unset: [] },
-        }),
-      );
-
-      const [arm] = report.arms;
-      expect(arm?.removedEnv).toContain('VAT_LAB_ARMS_PLANTED');
-      // A tool step runs without VAT_* too, and the report says so separately.
-      expect(arm?.removedToolEnv).toContain('VAT_LAB_ARMS_PLANTED');
-      const [repetition] = arm?.repetitions ?? [];
-      expect(repetition?.steps.map((step) => [step.name, step.exitCode, step.timed])).toEqual([
-        ['check', 0, true],
-        ['skills', 0, true],
-      ]);
-      expect(repetition?.steps[0]?.provenance).toEqual({ resources: 'derived', checks: null, lens: null });
-      expect(repetition?.steps[1]?.provenance).toBeNull();
-      expect(repetition?.steps.map((step) => step.stderr)).toEqual(['', '']);
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-
-  it('fails an arm whose step exits otherwise than committed, and only that arm', async () => {
-    const probe = setupProbe(PREFIX);
-
-    const report = await captureArms(
-      request(probe, {
-        arms: PASSING_AND_FAILING_ARMS,
-      }),
-    );
-
-    const [passing, failing] = report.arms;
-    expect(passing?.failure).toBeNull();
-    expect(failing?.summary).toBeNull();
-    expect(failing?.failure).toMatch(/^3 of 3 repeats failed — step 'boom' exited 3: /u);
-    expect(failing?.repetitions.map((repetition) => repetition.steps[0]?.stderr)).toEqual([
-      'probe was asked to fail',
-      'probe was asked to fail',
-      'probe was asked to fail',
-    ]);
-  });
-
-  it('reports a warm arm’s priming run, and fails the arm when priming failed', async () => {
-    const probe = setupProbe(PREFIX);
-
-    const report = await captureArms(
-      request(probe, {
-        rounds: 2,
-        arms: [{ build: 'old', arm: 'A', state: 'warm', steps: [probeStep(['a'])] }],
-        env: { set: { [PROBE_FAIL_AT_ENV]: '0' }, unset: [] },
-      }),
-    );
-
-    const [arm] = report.arms;
-    expect(arm?.priming?.violation).toMatch(/^priming run: step 'a' exited 3/u);
-    expect(arm?.repetitions).toEqual([]);
-    expect(arm?.summary).toBeNull();
-    expect(arm?.failure).toMatch(/^priming failed — priming run: /u);
   });
 });
 
@@ -186,7 +64,7 @@ describe('renderArmsReport', () => {
   it('prints a measured arm’s statistics and a failed arm’s reason, one line each', async () => {
     const probe = setupProbe(PREFIX);
     const report = await captureArms(
-      request(probe, {
+      armsRequest(probe, {
         rounds: 1,
         arms: PASSING_AND_FAILING_ARMS,
       }),

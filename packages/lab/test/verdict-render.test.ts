@@ -168,6 +168,7 @@ describe('renderVerdictReport', () => {
           { name: 'build', argv: ['build'], outcome: 'exited', exitCode: 2, spawnError: null, document: '' },
         ],
         excluded: [{ name: 'build', reason: 'needs an artifact the subject has not built' }],
+        preparedClone: null,
       },
     } as unknown as ReportEnvelope<VerdictBody>;
 

@@ -5,15 +5,17 @@
  * ## What each arm gets, on top of the caller's `--env`/`--unset`
  *
  * A cleared environment — no inherited `VAT_*`, temp, XDG or global git config
- * (`harness/arm-env.ts`) — and the arm's own directories under `<out>/<alias>/`,
- * created at 0700 BEFORE any verb runs (VAT refuses a store whose parent is missing):
+ * (`harness/arm-env.ts`) — and the arm's own directories under
+ * `<arms root>/<alias>/` (`openArmsRoot`: `--arms-dir`, else a fresh run
+ * directory under the OS temp directory; never `--out`), created at 0700 BEFORE
+ * any verb runs (VAT refuses a store whose parent is missing):
  *
- * - `VAT_PROJECTION_STORE_DIR=<out>/<alias>/store` — a private projection store
+ * - `VAT_PROJECTION_STORE_DIR=<arms root>/<alias>/store` — a private projection store
  *   per arm and subject, left for VAT to create. Two arms sharing one store would
  *   let the second read what the first wrote, and a verdict would then measure
  *   the store rather than the build.
- * - `TMPDIR`/`TEMP`/`TMP=<out>/<alias>/tmp` — the parse cache is private too.
- * - `HOME` and `CLAUDE_CONFIG_DIR=<out>/<alias>/home`, empty — the operator's own
+ * - `TMPDIR`/`TEMP`/`TMP=<arms root>/<alias>/tmp` — the parse cache is private too.
+ * - `HOME` and `CLAUDE_CONFIG_DIR=<arms root>/<alias>/home`, empty — the operator's own
  *   Claude config must not decide what `claude context` reports for an adopter's
  *   tree, and an UNSET `CLAUDE_CONFIG_DIR` would fall back to `HOME`.
  *
@@ -22,7 +24,8 @@
  *
  * ## Nothing lands inside a subject
  *
- * `--out` inside any subject path is refused (VAT itself is a subject). The
+ * `--out`, or an alias's arm directory, inside any subject path is refused
+ * (VAT itself is a subject). The
  * build-verb clone lives under the OS temp directory, and is refused too if that
  * lies inside a subject.
  */
@@ -63,8 +66,15 @@ export interface VerdictCaptureRequest {
   readonly subjectsDir: string;
   /** The caller's `--env`/`--unset` — the arm's distinguishing environment. */
   readonly env: ArmEnvironment;
-  /** Where envelopes and per-subject stores are written; outside every subject. */
+  /**
+   * Alias → the prepared clone (`perf arms`' `<arms-dir>/clone`) it runs in
+   * instead of its subjects-file path; the body records it as `preparedClone`.
+   */
+  readonly prepared: Readonly<Record<string, string>>;
+  /** Where the envelopes are written; outside every subject. */
   readonly outDir: string;
+  /** The invocation's arms root (`openArmsRoot`); each alias's arm is `<armsRoot>/<alias>/`. */
+  readonly armsRoot: string;
   readonly capturedAt: string;
   readonly timeoutMs?: number;
 }
@@ -84,7 +94,16 @@ export type VerdictCaptureResult =
  * @param request - See {@link VerdictCaptureRequest}
  * @returns The envelopes and where they were written, or a refusal
  */
-export async function captureVerdict(request: VerdictCaptureRequest): Promise<VerdictCaptureResult> {
+export async function captureVerdict(given: VerdictCaptureRequest): Promise<VerdictCaptureResult> {
+  const unknown = Object.keys(given.prepared).find((alias) => !given.subjects.some((subject) => subject.alias === alias));
+  if (unknown !== undefined) {
+    return { ok: false, refusal: `REFUSED: --prepared names subject '${unknown}', which the subjects file does not list.` };
+  }
+  // Every rail below — placement, the build-verb clone — sees the path the subject really runs at.
+  const request = {
+    ...given,
+    subjects: given.subjects.map((subject) => ({ ...subject, path: given.prepared[subject.alias] ?? subject.path })),
+  };
   const refusal = requestRefusal(request);
   if (refusal !== null) return { ok: false, refusal };
 
@@ -115,39 +134,40 @@ function requestRefusal(request: VerdictCaptureRequest): string | null {
   const owned = armOwnedEnvRefusal(request.env);
   if (owned !== null) return `REFUSED: ${owned}.`;
   const subjects = request.subjects.map((subject) => subject.path);
-  // --out itself, and every alias directory under it: neither may be, lie inside, or contain a measured tree.
-  for (const dir of [request.outDir, ...request.subjects.map((subject) => subjectDirectories(request.outDir, subject.alias).root)]) {
+  // --out, and every alias's arm directory: neither may be, lie inside, or contain a measured tree.
+  for (const dir of [request.outDir, ...request.subjects.map((subject) => subjectDirectories(request.armsRoot, subject.alias).root)]) {
     const placement = armPlacementRefusal(dir, subjects);
-    if (placement !== null) return `REFUSED: ${placement}. Write the reports somewhere outside every subject.`;
+    if (placement !== null) return `REFUSED: ${placement}. Point --out and --arms-dir outside every subject.`;
   }
-  return reusedStoreRefusal(request);
+  return reusedArmRefusal(request);
 }
 
 /**
- * A private store is private to ONE capture. Reusing an `--out` would hand this
- * capture a store an earlier one warmed — the leak the store exists to prevent —
- * so an existing `<out>/<alias>/store` is refused.
+ * An arm is private to ONE capture. Reusing an `--arms-dir` would hand this
+ * capture the store and parse cache an earlier one warmed — the leak the arm
+ * exists to prevent — so an existing `<arms root>/<alias>/` is refused whole,
+ * its `tmp/` as much as its store.
  *
  * @param request - The request
- * @returns A refusal naming the warm store and the remedy, or `null`
+ * @returns A refusal naming the used arm and the remedy, or `null`
  */
-function reusedStoreRefusal(request: VerdictCaptureRequest): string | null {
-  const warm = request.subjects
-    .map((subject) => subjectDirectories(request.outDir, subject.alias).store)
+function reusedArmRefusal(request: VerdictCaptureRequest): string | null {
+  const used = request.subjects
+    .map((subject) => subjectDirectories(request.armsRoot, subject.alias).root)
     .find((dir) => existsSync(dir));
-  return warm === undefined
+  return used === undefined
     ? null
-    : `REFUSED: the projection store '${warm}' already exists — this --out was used by an earlier ` +
-        'capture, and its store would be warm for this one. Capture into a fresh --out.';
+    : `REFUSED: the arm directory '${used}' already exists — this --arms-dir was used by an earlier ` +
+        'capture, and its store and temp directory would be warm for this one. Capture into a fresh --arms-dir.';
 }
 
 /**
- * @param outDir - The capture's `--out`
+ * @param armsRoot - The capture's arms root
  * @param alias - A subject alias
- * @returns That subject's private store, tmp and home under `<out>/<alias>/`
+ * @returns That subject's private store, tmp and home under `<armsRoot>/<alias>/`
  */
-function subjectDirectories(outDir: string, alias: string): ArmDirectories {
-  return armDirectoriesAt(safePath.join(outDir, alias));
+function subjectDirectories(armsRoot: string, alias: string): ArmDirectories {
+  return armDirectoriesAt(safePath.join(armsRoot, alias));
 }
 
 /**
@@ -168,7 +188,7 @@ async function captureSubject(
   const resolved = await resolveSubject({ id: subject.alias, path: subject.path });
   // Made before any verb, owner-only: every verb's TMPDIR and HOME must exist
   // when it starts. `store/` itself is left for VAT to create.
-  const dirs = subjectDirectories(request.outDir, subject.alias);
+  const dirs = subjectDirectories(request.armsRoot, subject.alias);
   prepareArmDirectories(dirs);
   await resetArmHome(dirs);
   const { env, removed } = armStepEnvironment(dirs, request.env);
@@ -198,7 +218,12 @@ async function captureSubject(
       coordinate: { subject: resolved.ref, subjectVersion: resolved.version, instrument: request.instrument.version },
       capturedAt: request.capturedAt,
       removedEnv: removed,
-      body: { arm: request.env, rows, excluded: [...excluded] },
+      body: {
+        arm: request.env,
+        rows,
+        excluded: [...excluded],
+        preparedClone: request.prepared[subject.alias] === undefined ? null : resolved.path,
+      },
     },
   };
 }

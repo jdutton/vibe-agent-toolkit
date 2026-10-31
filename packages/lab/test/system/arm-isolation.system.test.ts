@@ -139,7 +139,7 @@ describe('an arm never sees the developer’s VAT, git or Claude state', () => {
       cwd: root,
       steps: [vatStep('validate', ['resources', 'validate'], { populates: true }), vatStep('scan', SCAN)],
       runs: 1,
-      arm: { out: tempDir('lab-arm-isolation-out-'), build: 'cli', arm: 'isolation', state: 'cold' },
+      arm: { root: tempDir('lab-arm-isolation-arms-'), build: 'cli', arm: 'isolation', state: 'cold' },
       env: { set: {}, unset: [] },
     });
 
@@ -154,19 +154,20 @@ describe('an arm never sees the developer’s VAT, git or Claude state', () => {
   it('resolves ~/ under its own empty home, never the planted one', async () => {
     const root = subject();
     const home = plantDeveloperState();
+    const armsRoot = tempDir('lab-arm-isolation-arms-');
 
     const run = await runRepeats({
       instrument: VAT,
       cwd: root,
       steps: [vatStep('context', CONTEXT)],
       runs: 1,
-      arm: { out: tempDir('lab-arm-isolation-out-'), build: 'cli', arm: 'context', state: 'cold' },
+      arm: { root: armsRoot, build: 'cli', arm: 'context', state: 'cold' },
       env: { set: {}, unset: [] },
     });
 
     const stdout = run.results[0]?.stdout ?? '';
     expect(run.results[0]?.violation ?? null).toBeNull();
-    expect(stdout).toContain('arms/cli-context-cold/home/.claude/CLAUDE.md');
+    expect(stdout).toContain(`${basename(armsRoot)}/cli-context-cold/home/.claude/CLAUDE.md`);
     expect(stdout).not.toContain(basename(home));
   });
 });

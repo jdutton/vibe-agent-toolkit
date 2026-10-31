@@ -2,8 +2,9 @@
  * The per-repetition provenance extractor, cell by cell.
  *
  * For every (build, arm, state) whose sequence rule reads a document field, one
- * synthetic correct run passes and its twin with that field removed FAILS:
- * "absent" is never a pass. The cells whose rule reads no document (every cold
+ * synthetic correct run passes and its twin with that ONE field removed — every
+ * other byte of the document kept — FAILS: "absent" is never a pass, and a
+ * reader that looked anywhere else would find the rest of the document intact. The cells whose rule reads no document (every cold
  * cell, and rc.11's arm A, whose verbs publish no population) are pinned to
  * assert nothing, so a reader added to them later is a visible change here.
  */
@@ -18,8 +19,17 @@ function report(data: unknown): string {
   return JSON.stringify({ status: 'success', examined: 1, findings: [], summary: {}, data });
 }
 
-/** rc.11 `resources check`, served from the store. */
-const RC11_CHECK = report({ root: '.', population: 'store', populationSecs: 0.1, lensSecs: 0, lensesEvaluated: [] });
+/**
+ * @param data - A document's data, or one phase's
+ * @returns The same with its `population` field removed, and nothing else changed
+ */
+function withoutPopulation(data: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(data).filter(([key]) => key !== 'population'));
+}
+
+/** rc.11 `resources check`'s data, served from the store. */
+const RC11_CHECK_DATA = { root: '.', population: 'store', populationSecs: 0.1, lensSecs: 0, lensesEvaluated: [] };
+const RC11_CHECK = report(RC11_CHECK_DATA);
 
 /**
  * The candidate's `validate`, every phase served from the store.
@@ -30,13 +40,12 @@ const RC11_CHECK = report({ root: '.', population: 'store', populationSecs: 0.1,
  * schemas are internal to the CLI (and the lab measures several builds), so
  * this fixture cannot be parsed through the producer's schema.
  */
-const CAND_VALIDATE = report({
-  phases: [
-    { name: 'resources', status: 'success', examined: 1, summary: {}, data: { population: 'store' } },
-    { name: 'checks', status: 'success', examined: 1, summary: {}, data: { population: 'store', lensPopulation: 'none' } },
-    { name: 'skills', status: 'success', examined: 1, summary: {}, data: {} },
-  ],
-});
+const CAND_VALIDATE_PHASES = [
+  { name: 'resources', status: 'success', examined: 1, summary: {}, data: { population: 'store' } },
+  { name: 'checks', status: 'success', examined: 1, summary: {}, data: { population: 'store', lensPopulation: 'none' } },
+  { name: 'skills', status: 'success', examined: 1, summary: {}, data: {} },
+] as const;
+const CAND_VALIDATE = report({ phases: CAND_VALIDATE_PHASES });
 
 /** One cell of the sequence-rule matrix: a step whose document the rule reads. */
 interface Cell {
@@ -53,15 +62,16 @@ const READ_CELLS: readonly Cell[] = [
     state: 'warm',
     reader: 'resources-check',
     correct: RC11_CHECK,
-    missing: report({ root: '.', populationSecs: 0.1 }),
+    missing: report(withoutPopulation(RC11_CHECK_DATA)),
   },
   {
     cell: 'cand-C-warm (validate; resources-phase population pending S2)',
     state: 'warm',
     reader: 'validate',
     correct: CAND_VALIDATE,
+    // Only the resources phase loses it: the checks phase still says 'store'.
     missing: report({
-      phases: [{ name: 'resources', status: 'success', examined: 1, summary: {}, data: {} }],
+      phases: CAND_VALIDATE_PHASES.map((phase) => (phase.name === 'resources' ? { ...phase, data: withoutPopulation(phase.data) } : phase)),
     }),
   },
 ];

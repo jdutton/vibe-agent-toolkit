@@ -10,7 +10,7 @@
 
 import { readFileSync } from 'node:fs';
 
-import { resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
+import { INHERITED_GIT_ENV, resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -167,18 +167,31 @@ describe('clearedEnvironment', () => {
     GIT_INDEX_FILE: '/elsewhere/.git/index',
     GIT_COMMON_DIR: '/elsewhere/.git',
     GIT_OBJECT_DIRECTORY: '/elsewhere/.git/objects',
+    GIT_SHALLOW_FILE: '/elsewhere/.git/shallow',
+    GIT_GRAFT_FILE: '/elsewhere/.git/info/grafts',
+    GIT_CEILING_DIRECTORIES: '/elsewhere',
+    GIT_DISCOVERY_ACROSS_FILESYSTEM: '1',
+    GIT_NOTES_REF: 'refs/notes/elsewhere',
+    GIT_INDEX_VERSION: '4',
     GIT_AUTHOR_NAME: 'kept',
   };
-  const CONFIG = [
-    'GIT_CONFIG',
-    'GIT_CONFIG_COUNT',
-    'GIT_CONFIG_KEY_0',
-    'GIT_CONFIG_NOSYSTEM',
+  /** The developer's own config channel: cleared from a VAT step, kept for a tool step. */
+  const CONFIG = ['GIT_CONFIG', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_VALUE_0'];
+  /** What git exports into a hook ({@link INHERITED_GIT_ENV}): cleared from both kinds. */
+  const LOCATING = [
+    'GIT_CEILING_DIRECTORIES',
+    'GIT_COMMON_DIR',
     'GIT_CONFIG_PARAMETERS',
-    'GIT_CONFIG_SYSTEM',
-    'GIT_CONFIG_VALUE_0',
+    'GIT_DIR',
+    'GIT_DISCOVERY_ACROSS_FILESYSTEM',
+    'GIT_GRAFT_FILE',
+    'GIT_INDEX_FILE',
+    'GIT_INDEX_VERSION',
+    'GIT_NOTES_REF',
+    'GIT_OBJECT_DIRECTORY',
+    'GIT_SHALLOW_FILE',
+    'GIT_WORK_TREE',
   ];
-  const LOCATING = ['GIT_COMMON_DIR', 'GIT_DIR', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_WORK_TREE'];
 
   it('removes every git config override from a VAT step, and every repo-locating git name from both kinds', () => {
     expect(clearedEnvironment(GIT_STATE, 'vat', { set: {}, unset: [] }, 'linux').removed).toStrictEqual(
@@ -192,11 +205,20 @@ describe('clearedEnvironment', () => {
     expect(toolEnv['GIT_AUTHOR_NAME']).toBe('kept');
   });
 
+  it('clears every name git exports into a hook — the one list utils owns — from both kinds', () => {
+    const hook = Object.fromEntries(INHERITED_GIT_ENV.map((name) => [name, 'x']));
+    expect(clearedEnvironment(hook, 'tool', { set: {}, unset: [] }, 'linux').removed).toStrictEqual([...INHERITED_GIT_ENV].toSorted(byName));
+    expect(clearedEnvironment(hook, 'vat', { set: {}, unset: [] }, 'linux').removed).toStrictEqual([...INHERITED_GIT_ENV].toSorted(byName));
+  });
+
   it('matches names case-insensitively on Windows, where Temp and TEMP are one variable', () => {
     const mixed: NodeJS.ProcessEnv = { Path: 'C:/bin', Temp: 'C:/dev-tmp', Vat_Bin: 'C:/dev/vat', Git_Dir: 'C:/x/.git' };
-    expect(clearedEnvironment(mixed, 'vat', { set: { TEMP: 'C:/arm/tmp' }, unset: [] }, 'win32').removed).toStrictEqual(
-      ['Git_Dir', 'Temp', 'Vat_Bin'],
-    );
+    const cleared = clearedEnvironment(mixed, 'vat', { set: { TEMP: 'C:/arm/tmp' }, unset: [] }, 'win32');
+    // Temp is re-pointed (the arm sets TEMP), not removed: the report must not say it went without it…
+    expect(cleared.removed).toStrictEqual(['Git_Dir', 'Vat_Bin']);
+    // …yet the inherited spelling is still dropped, so the child sees ONE value, the arm's.
+    expect(cleared.env.unset).toContain('Temp');
+    expect(cleared.env.set['TEMP']).toBe('C:/arm/tmp');
     // POSIX names are case-sensitive: Temp is not TEMP there.
     expect(clearedEnvironment(mixed, 'vat', { set: {}, unset: [] }, 'linux').removed).toStrictEqual([]);
   });

@@ -47,7 +47,7 @@ export interface VerdictBody {
    * The environment that DISTINGUISHES this arm — the caller's `--env`/`--unset`.
    *
    * The lab also imposes, on every arm alike, a cleared environment and its own
-   * store, `tmp/` and home under `<out>/<alias>/` (see `capture.ts`); those
+   * store, `tmp/` and home under `<arms root>/<alias>/` (see `capture.ts`); those
    * are not recorded here, because those paths differ between any two
    * captures by construction, and recording it would make every pair of arms
    * distinguishable — the indistinguishable-arms refusal could never fire.
@@ -60,6 +60,12 @@ export interface VerdictBody {
    * compare judges the exclusion by.
    */
   readonly excluded: readonly VerdictExclusion[];
+  /**
+   * The prepared clone (`verdict run --prepared`) this subject ran in instead
+   * of its subjects-file path, or `null`. `verdict union` judges bar 3 only
+   * over captures that ran in the clone the arms ran in.
+   */
+  readonly preparedClone: string | null;
 }
 
 /** Runtime schema for {@link VerdictBody}, for reading a stored envelope back. */
@@ -84,6 +90,7 @@ export const VerdictBodySchema: z.ZodType<VerdictBody> = z
         .strict(),
     ),
     excluded: z.array(z.object({ name: z.string().min(1), reason: z.string().min(1) }).strict()),
+    preparedClone: z.string().min(1).nullable(),
   })
   .strict()
   .superRefine((body, ctx) => {

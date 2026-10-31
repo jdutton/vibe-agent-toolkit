@@ -160,8 +160,13 @@ const PROBE_LOG = 'probe.log';
  * The failure decision is taken from the count of children that ran BEFORE this
  * one, so the index a caller supplies to {@link PROBE_FAIL_AT_ENV} is
  * zero-based and does not include the invocation making the decision.
+ *
+ * `--version` alone is the lab's untimed start of a build: the probe answers it
+ * and exits 0 with no side effect and no log line, so a start is never a child
+ * the fail switches or the per-run assertions count.
  */
 const PROBE_SOURCE = [
+  "if (process.argv[2] === '--version' && process.argv.length === 3) { process.stdout.write('probe'); process.exit(0); }",
   "const { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } = require('node:fs');",
   "const { tmpdir } = require('node:os');",
   "const { dirname, join } = require('node:path');",
@@ -176,6 +181,9 @@ const PROBE_SOURCE = [
   "  echoed['mode:' + name + '/..'] = path === undefined ? null : modeOf(dirname(path));",
   '}',
   'const homeEntries = home === undefined || !existsSync(home) ? null : readdirSync(home).length;',
+  // An ARM's tmp only (the store's sibling): counted at start, before anything below writes there.
+  "const armTmp = store === undefined ? undefined : join(store, '..', 'tmp');",
+  'const tmpEntries = armTmp !== undefined && process.env.TMPDIR === armTmp && existsSync(armTmp) ? readdirSync(armTmp).length : null;',
   `if (process.env.${PROBE_POPULATE_ENV} !== undefined) {`,
   "  if (store !== undefined) { mkdirSync(store, { recursive: true }); writeFileSync(join(store, 'projection.db'), 'probe'); }",
   `  const parse = join(tmpdir(), '.vat-cache', ${JSON.stringify(PROBE_NAMESPACE)}, 'parse', 'ab');`,
@@ -184,6 +192,7 @@ const PROBE_SOURCE = [
   '}',
   // Only ever into an ARM's home (the store's sibling), never a real one.
   "if (store !== undefined && home === join(store, '..', 'home') && existsSync(home)) writeFileSync(join(home, 'left-by-probe'), 'x');",
+  "if (tmpEntries !== null) writeFileSync(join(armTmp, 'left-by-probe-' + String(process.pid)), 'x');",
   `const log = join(process.cwd(), ${JSON.stringify(PROBE_LOG)});`,
   'let priorChildren = 0;',
   'try {',
@@ -200,6 +209,7 @@ const PROBE_SOURCE = [
   `  perRepeat: process.env.${PROBE_REPEAT_ENV} ?? null,`,
   '  storeExisted,',
   '  homeEntries,',
+  '  tmpEntries,',
   '});',
   `if (process.env.${PROBE_NO_LOG_ENV} === undefined) {`,
   String.raw`  appendFileSync(log, line + '\n');`,
@@ -229,6 +239,8 @@ export interface ProbeEntry {
   readonly storeExisted: boolean | null;
   /** How many entries `HOME` held when the child started; `null` when unset or missing. */
   readonly homeEntries: number | null;
+  /** How many entries the arm's `TMPDIR` held when the child started (the probe then leaves one); `null` outside an arm. */
+  readonly tmpEntries: number | null;
 }
 
 /** The probe's args, entry by entry — the shape most ordering assertions read. */
@@ -239,8 +251,8 @@ export function argsOf(entries: readonly ProbeEntry[]): string[][] {
 /** A temp working directory plus the instrument that logs into it. */
 export interface Probe {
   readonly cwd: string;
-  /** The lab's `--out` for this probe: a SIBLING of `cwd`, never inside it, as the lab requires. */
-  readonly out: string;
+  /** The arms root for this probe: a SIBLING of `cwd`, never inside it, as the lab requires. */
+  readonly armsRoot: string;
   readonly instrument: ResolvedInstrument;
   /** Every child so far, in the order they ran. */
   readonly entries: () => ProbeEntry[];
@@ -262,7 +274,7 @@ export function setupProbe(prefix = 'lab-probe-'): Probe {
 
   return {
     cwd,
-    out: safePath.join(root, 'out'),
+    armsRoot: safePath.join(root, 'arms'),
     instrument: { command: process.execPath, leadingArgs: [script], version: PROBE_VERSION },
     entries: () => readProbeLog(cwd),
   };
@@ -349,7 +361,7 @@ export function probeSpec(probe: Probe, overrides: ProbeSpecOverrides = {}): Rep
     cwd: probe.cwd,
     steps: [probeStep(args ?? ['audit'])],
     runs: 2,
-    arm: { out: probeOut(probe), build: 'probe', arm: arm ?? 'audit', state: cache ?? 'warm' },
+    arm: { root: probeArmsRoot(probe), build: 'probe', arm: arm ?? 'audit', state: cache ?? 'warm' },
     ...rest,
     env: { set: env ?? {}, unset: [] },
   };
@@ -357,10 +369,10 @@ export function probeSpec(probe: Probe, overrides: ProbeSpecOverrides = {}): Rep
 
 /**
  * @param probe - A probe
- * @returns The `--out` its arms live under
+ * @returns The arms root its arms live under
  */
-export function probeOut(probe: Probe): string {
-  return probe.out;
+export function probeArmsRoot(probe: Probe): string {
+  return probe.armsRoot;
 }
 
 /** A command the probe always completes. */
@@ -382,7 +394,7 @@ export const EVERY_REPEAT_FAILS_COLD = Object.freeze({ runs: 2, commands: [PROBE
  * The capture-request fields a facet's probe capture defaults: the probe build,
  * {@link PROBE_PASSES} three times warm, and the probe's arms.
  *
- * @param probe - Supplies the instrument and the arms' `--out`
+ * @param probe - Supplies the instrument and the arms root
  * @param subject - The resolved subject
  * @param capturedAt - The caller-owned capture time
  * @returns The defaults, for a case's overrides to spread over
@@ -399,7 +411,7 @@ export function probeCaptureDefaults(
     runs: 3,
     cache: 'warm',
     capturedAt,
-    arms: { out: probeOut(probe), build: 'probe' },
+    arms: { root: probeArmsRoot(probe), build: 'probe' },
   };
 }
 

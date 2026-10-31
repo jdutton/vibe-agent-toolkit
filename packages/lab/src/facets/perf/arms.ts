@@ -10,19 +10,30 @@
  * document reported. Bars over these numbers are `bars.ts`'s.
  */
 
+import type { InstrumentVersion } from '../../envelope/coordinate.js';
 import type { ArmEnvironment } from '../../harness/arm-env.js';
 import type { MeasuredSequenceSpec } from '../../harness/commands.js';
+import { judgeLoad, readLoad } from '../../harness/load-guard.js';
 import type { StepProvenance } from '../../harness/provenance.js';
 import { armRunFailure, commandStep, type RepeatSpec, runInterleaved } from '../../harness/repeat.js';
 import type { SequenceResult, SequenceStep } from '../../harness/sequence.js';
-import type { CacheMode, ResolvedInstrument } from '../../harness/types.js';
+import type { CacheMode, InstrumentSource, LoadReadings, ResolvedInstrument } from '../../harness/types.js';
 
 import { type PerfSummary, summarize } from './stats.js';
 
 /** One build under measurement, by the alias its arms name it with. */
 export interface ArmsBuild {
   readonly alias: string;
+  /** The instrument as the operator named it (`--build alias=<source>`). */
+  readonly source: InstrumentSource;
   readonly instrument: ResolvedInstrument;
+}
+
+/** What one alias WAS: its coordinate as given and the version, commit and closure it resolved to. */
+interface ArmsBuildRecord {
+  readonly alias: string;
+  readonly source: InstrumentSource;
+  readonly instrument: InstrumentVersion;
 }
 
 /** One arm to time: a build, a sequence and a cache state. */
@@ -37,8 +48,8 @@ export interface ArmSelection {
 
 /** Everything {@link captureArms} needs. */
 export interface CaptureArmsRequest {
-  /** Arms live under `<out>/arms/`. */
-  readonly out: string;
+  /** The invocation's arms root (`openArmsRoot`); every arm is a directory directly under it. */
+  readonly armsRoot: string;
   /** The tree every step runs in — the prepared clone, never the developer's checkout. */
   readonly cwd: string;
   readonly builds: readonly ArmsBuild[];
@@ -91,13 +102,19 @@ export interface ArmReport {
 export interface ArmsReport {
   readonly cwd: string;
   readonly rounds: number;
+  /** Every build, so a bar read later knows which bytes it judged. */
+  readonly builds: readonly ArmsBuildRecord[];
+  /** The machine load across every round, as `perf run` records it. */
+  readonly load: LoadReadings;
   readonly arms: readonly ArmReport[];
 }
 
 /**
- * The exits one step of one arm commits to, as the operator set them
- * (`perf arms --expect-exit <build>:<sequence>:<step>=<codes>`). A step no
- * expectation names commits to its command's own exits — 0 for every CI step.
+ * The ONE exit one step of one arm commits to, as the operator set it
+ * (`perf arms --expect-exit <build>:<sequence>:<step>=<code>`). A CI step
+ * has one committed outcome, so a set of acceptable exits would let a run that
+ * did different work pass as the same measurement. A step no expectation names
+ * commits to 0.
  */
 export interface ExpectedExit {
   readonly build: string;
@@ -106,7 +123,7 @@ export interface ExpectedExit {
   /** A step's name within that sequence. */
   readonly step: string;
   /** Never 2: `assertCommittedExits` refuses it before anything runs. */
-  readonly exits: readonly number[];
+  readonly exit: number;
 }
 
 /**
@@ -128,7 +145,7 @@ export function sequenceSteps(
     const set = expected.find(
       (candidate) => candidate.build === build && candidate.sequence === sequence.name && candidate.step === step.name,
     );
-    return set === undefined ? step : { ...step, expectedExits: set.exits };
+    return set === undefined ? step : { ...step, expectedExits: [set.exit] };
   });
 }
 
@@ -176,15 +193,19 @@ export async function captureArms(request: CaptureArmsRequest): Promise<ArmsRepo
       cwd: request.cwd,
       steps: arm.steps,
       runs: request.rounds,
-      arm: { out: request.out, build: arm.build, arm: arm.arm, state: arm.state },
+      arm: { root: request.armsRoot, build: arm.build, arm: arm.arm, state: arm.state },
       env: request.env,
       ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
     };
   });
+  const loadBefore = readLoad();
   const runs = await runInterleaved(specs, request.rounds);
+  const loadAfter = readLoad();
   return {
     cwd: request.cwd,
     rounds: request.rounds,
+    builds: request.builds.map((build) => ({ alias: build.alias, source: build.source, instrument: build.instrument.version })),
+    load: judgeLoad(loadBefore.loadAvg1, loadAfter.loadAvg1, loadAfter.cpus),
     arms: request.arms.map((arm, index) => {
       const run = runs[index];
       /* c8 ignore next -- one run per spec; guards noUncheckedIndexedAccess */

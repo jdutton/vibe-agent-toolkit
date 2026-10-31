@@ -43,6 +43,14 @@ describe('judgeBar', () => {
     expect(judgeBar(side(100), '<', side(100), 1).verdict).toBe('fail');
   });
 
+  it('passes a tie at a NON-1 factor under ≤ and fails it under <, whatever the float product rounds to', () => {
+    // 1.15 × 100 is 114.99999999999999 in binary floating point: a bare `<=` fails this tie.
+    expect(judgeBar(side(115), '<=', side(100), 1.15).verdict).toBe('pass');
+    expect(judgeBar(side(115), '<', side(100), 1.15).verdict).toBe('fail');
+    // …and a real difference is still a difference.
+    expect(judgeBar(side(115.001), '<=', side(100), 1.15).verdict).toBe('fail');
+  });
+
   it('scales the right-hand arm by the bar factor on both statistics', () => {
     // 114 ≤ 1.15 × 100 and 103 ≤ 1.15 × 90; neither holds unscaled.
     expect(judgeBar(side(114, 103), '<=', side(100, 90), 1.15).verdict).toBe('pass');
@@ -68,6 +76,10 @@ describe('parseBar', () => {
     expect(parseBar(' cand:ci-c:warm < 1 * cand:ci-b:warm ')).toMatchObject({ relation: '<', factor: 1 });
   });
 
+  it('refuses a bar comparing an arm with itself — it cannot fail, so it says nothing', () => {
+    expect(parseBar('cand:ci-c:cold<=1*cand:ci-c:cold')).toMatch(/compares cand:ci-c:cold with itself/u);
+  });
+
   it('refuses a bar with no factor — a factor is never implied — and anything else malformed', () => {
     expect(parseBar('cand:ci-c:cold<=rc11:ci-a:cold')).toMatch(/factor/u);
     expect(parseBar('cand:ci-c:tepid<=1*rc11:ci-a:cold')).toMatch(/expects/u);
@@ -85,6 +97,11 @@ describe('judgeBars', () => {
     failure: null,
   });
   const report = {
+    builds: [
+      { alias: 'rc11', source: { kind: 'dist', path: '/builds/rc11' }, instrument: { version: '0.2.0-rc.11', commit: null, dirty: null, closure: 'a'.repeat(64) } },
+      { alias: 'cand', source: { kind: 'tree', path: '/work/vat' }, instrument: { version: '0.2.0', commit: 'abcdef0123456789', dirty: false, closure: 'b'.repeat(64) } },
+    ],
+    load: { before: 1, after: 2, cpus: 8, available: true, contaminated: false },
     arms: [
       arm('rc11', 'ci-a', 100, 90),
       arm('cand', 'ci-c', 110, 100),
@@ -109,7 +126,7 @@ describe('judgeBars', () => {
 
     expect(judged.ok ? judged.results[0] : judged.refusal).toMatchObject({
       verdict: 'fail',
-      reason: "rc11 ci-b cold has no measurement: 1 of 5 repeats failed — step 'x' exited 1",
+      reason: "rc11:ci-b:cold has no measurement: 1 of 5 repeats failed — step 'x' exited 1",
     });
   });
 
@@ -123,8 +140,18 @@ describe('judgeBars', () => {
     const judged = judgeBars(report, [bar('cand:ci-b:cold<=1*cand:ci-c:cold')]);
     if (!judged.ok) throw new Error(judged.refusal);
 
-    expect(renderBars(judged.results)).toBe(
+    expect(renderBars(report, judged.results).split('\n').at(-1)).toBe(
       'INCONCLUSIVE  cand:ci-b:cold<=1*cand:ci-c:cold  (median holds, min does not — re-run on a quiet machine)',
     );
+  });
+
+  it('heads the verdicts with what every alias WAS and the machine load the arms ran under', () => {
+    const judged = judgeBars(report, [bar('cand:ci-c:cold<=1.15*rc11:ci-a:cold')]);
+    if (!judged.ok) throw new Error(judged.refusal);
+    const rendered = renderBars(report, judged.results);
+
+    expect(rendered).toMatch(/^ {2}rc11: vat 0\.2\.0-rc\.11 .*closure a{12}\) from dist:\/builds\/rc11$/mu);
+    expect(rendered).toMatch(/^ {2}cand: vat 0\.2\.0 \(abcdef01/mu);
+    expect(rendered).toMatch(/^Machine load: clean/mu);
   });
 });

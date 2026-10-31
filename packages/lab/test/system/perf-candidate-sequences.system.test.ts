@@ -13,7 +13,7 @@ import { captureArms, sequenceSteps } from '../../src/facets/perf/arms.js';
 import { MEASURABLE_SEQUENCES } from '../../src/harness/commands.js';
 import { cleanupVerdictFixtures, tempDir } from '../integration/verdict-fixtures.js';
 
-import { CANDIDATE_VAT, cleanSubject } from './candidate-subject.js';
+import { CANDIDATE_SOURCE, CANDIDATE_VAT, cleanSubject } from './candidate-subject.js';
 
 afterAll(cleanupVerdictFixtures);
 
@@ -23,9 +23,9 @@ describe('the candidate CI sequences on a clean subject', () => {
     const sequences = Object.values(MEASURABLE_SEQUENCES);
 
     const report = await captureArms({
-      out: tempDir('lab-arms-candidate-out-'),
+      armsRoot: tempDir('lab-arms-candidate-arms-'),
       cwd: root,
-      builds: [{ alias: 'candidate', instrument: CANDIDATE_VAT }],
+      builds: [{ alias: 'candidate', source: CANDIDATE_SOURCE, instrument: CANDIDATE_VAT }],
       arms: sequences.map((sequence) => ({
         build: 'candidate',
         arm: sequence.name,

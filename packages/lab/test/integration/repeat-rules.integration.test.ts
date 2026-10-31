@@ -65,15 +65,16 @@ describe('runRepeats — the cold rule after the first step', () => {
     expect(run.results[0]?.violation).toMatch(/^cold rule: after step 'audit' the build's parse directory '.*' holds no shard$/u);
   });
 
-  it('fails the cold rule when the build cannot say where its parse directory is, rather than guessing', async () => {
+  it('refuses the arm before any run when the build cannot say where its parse directory is, rather than guessing', async () => {
     const probe = setupProbe(PREFIX);
     // The probe build's stand-in resources package is gone: its parse directory is unresolvable.
     rmSync(safePath.join(probe.cwd, 'node_modules'), { recursive: true });
     const env = { [PROBE_POPULATE_ENV]: '1' };
-    const run = await runRepeats(probeSpec(probe, { runs: 1, cache: 'cold', steps: [populating], env }));
-    expect(run.results[0]?.violation).toMatch(
-      /^cold rule: after step 'audit': the build at '.*' does not resolve @vibe-agent-toolkit\/resources/u,
+    await expect(runRepeats(probeSpec(probe, { runs: 1, cache: 'cold', steps: [populating], env }))).rejects.toThrow(
+      /^arm '.*': the build at '.*' does not resolve @vibe-agent-toolkit\/resources/u,
     );
+    // Refused whole: not one child ran.
+    expect(probe.entries()).toEqual([]);
   });
 
   it('fails a warm priming run that leaves the caches empty', async () => {
@@ -119,5 +120,14 @@ describe('runInterleaved', () => {
     const probe = setupProbe(PREFIX);
     const x = probeSpec(probe, { args: ['x'], arm: 'x' });
     await expect(runInterleaved([x, x], 1)).rejects.toThrow(/share/);
+  });
+
+  it('refuses two arms whose directories differ only in case — one directory on a case-insensitive disk', async () => {
+    const probe = setupProbe(PREFIX);
+    const lower = probeSpec(probe, { args: ['x'], arm: 'x' });
+    const upper = probeSpec(probe, { args: ['x'], arm: 'X' });
+    await expect(runInterleaved([lower, upper], 1)).rejects.toThrow(/share/);
+    // …and nothing ran: the refusal comes before any arm's first step.
+    expect(probe.entries()).toEqual([]);
   });
 });

@@ -137,9 +137,11 @@ being measured, not a promise the lab can make on its behalf: if repeats *disagr
 nondeterministic, and that is a finding in its own right rather than noise to be averaged away. The
 facet reports a `stable` flag so the comparator knows whether it is entitled to read an exact delta.
 
-One consequence for repeat counts: in `warm` mode the first repeat populates vat's on-disk cache and
-therefore systematically differs from the rest, so it is a warm-up and is discarded. Verifying
-stability then needs two more, which makes three the smallest honest number of repeats.
+One consequence for repeat counts: repeat 0 is a warm-up and is discarded. It no longer differs by
+VAT's own caches — a `warm` arm is primed by an unmeasured run before it, and a `cold` arm's store
+and parse cache are reset before every repeat — but it is still the capture's first touch of the
+subject's files. Verifying stability then needs two more, which makes three the smallest honest
+number of repeats.
 
 ## The verdict facet
 
@@ -199,12 +201,19 @@ temp directory — macOS only, and refused for a git worktree subject, whose clo
 real repository's config. Each verb's argv is a function of the arm's `InstrumentVersion`, so a
 future per-arm divergence is one function, not a second matrix.
 
-**Per-arm environment.** Each arm runs under the caller's `--env`/`--unset` plus two lab-owned
-settings: `VAT_PROJECTION_STORE_DIR=<out>/<alias>/store` (a private projection store, so the second
-arm never reads what the first wrote) and `CLAUDE_CONFIG_DIR` unset. An arm naming either is
-refused. Only the caller's part is recorded in the body (`arm`), because the store path differs
-between any two captures and would make every pair of arms distinguishable. **Nothing the lab
-writes lands inside a subject** — VAT itself is one: an `--out` inside any subject path is refused.
+**Per-arm environment.** Each arm runs under a cleared environment (no inherited `VAT_*`, temp, XDG,
+Claude or global git config) plus the caller's `--env`/`--unset`, and gets lab-owned directories
+under `<arms root>/<alias>/` — the invocation's `--arms-dir`, else a fresh run directory under the OS
+temp directory: `VAT_PROJECTION_STORE_DIR=<arms root>/<alias>/store` (a private projection store, so
+the second arm never reads what the first wrote), `TMPDIR`/`TEMP`/`TMP` at its `tmp/`, and `HOME`
+and `CLAUDE_CONFIG_DIR` at its empty `home/`. An arm naming any of them is refused. Only the
+caller's part is recorded in the body (`arm`), because those paths differ between any two captures
+and would make every pair of arms distinguishable. **Nothing the lab writes lands inside a
+subject** — VAT itself is one: an `--out` or arms root inside any subject path is refused.
+
+**Prepared clone.** `--prepared <alias>=<arms root>/clone` runs that alias in the clone `perf arms`
+prepared instead of at its subjects-file path; the body records it as `preparedClone` (`null` when
+the alias ran at its own path), and `verdict union` refuses a capture that was not run there.
 
 **Two layers**, per (alias, verb) row:
 

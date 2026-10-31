@@ -64,7 +64,7 @@ import {
   PROBE_PASSES,
   PROBE_STDOUT_ENV,
   probeCaptureDefaults,
-  probeOut,
+  probeArmsRoot,
   setupProbe,
 } from './command-probe.js';
 
@@ -625,12 +625,13 @@ describe('captureIo — the counter preload', () => {
       env: { NODE_OPTIONS: preloadOf(counterPath) },
     });
 
-    // Same probe, same three children — but now the counter is loaded into all
-    // of them, which is exactly what the assertion above claims cannot happen by
-    // default. The priming run has no dump directory, so it is identifiable.
+    // Same probe, same children — the build's untimed start, the priming run and
+    // two repeats — but now the counter is loaded into all of them, which is
+    // exactly what the assertion above claims cannot happen by default. The
+    // start and the priming run have no dump directory, so they are identifiable.
     const lines = trace(probe);
-    expect(lines).toHaveLength(3);
-    expect(lines.map((line) => line.dir === null)).toEqual([true, false, false]);
+    expect(lines).toHaveLength(4);
+    expect(lines.map((line) => line.dir === null)).toEqual([true, true, false, false]);
   });
 
   it('quotes the counter path, so a directory containing a space still loads', async () => {
@@ -645,18 +646,17 @@ describe('captureIo — the counter preload', () => {
   it('CONTROL: the same spaced path UNQUOTED breaks the run it was meant to measure', async () => {
     const probe = setupProbe(PREFIX);
 
-    const row = onlyRow(
-      await capture(probe, {
-        runs: 1,
-        counterPath: spacedCounterPath,
-        env: { NODE_OPTIONS: `--require ${spacedCounterPath}` },
-      }),
-    );
+    const captured = capture(probe, {
+      runs: 1,
+      counterPath: spacedCounterPath,
+      env: { NODE_OPTIONS: `--require ${spacedCounterPath}` },
+    });
 
     // `--require /lab io counter x/counter.cjs` parses as two arguments, node
-    // cannot find `/lab`, and the child dies. Proof that the passing test above
-    // is about the quoting and not about the path being harmless.
-    expect(row.failed).toBe(true);
+    // cannot find `/lab`, and the build dies at its untimed start — refused
+    // before any repeat. Proof that the passing test above is about the quoting
+    // and not about the path being harmless.
+    await expect(captured).rejects.toThrow(/the build did not start/u);
   });
 });
 
@@ -689,7 +689,7 @@ describe('captureIo — the counter has to exist', () => {
         cache: 'warm',
         env: EMPTY_ARM_ENVIRONMENT,
         capturedAt: CAPTURED_AT,
-        arms: { out: probeOut(probe), build: 'probe' },
+        arms: { root: probeArmsRoot(probe), build: 'probe' },
       }),
     ).rejects.toThrow(/counter\.cjs/);
   });
@@ -809,7 +809,7 @@ describe('captureIo — the envelope', () => {
       facet: IO_FACET,
       subject,
       capturedAt: CAPTURED_AT,
-      arms: { out: probeOut(probe), build: 'probe' },
+      arms: { root: probeArmsRoot(probe), build: 'probe' },
     });
   });
 

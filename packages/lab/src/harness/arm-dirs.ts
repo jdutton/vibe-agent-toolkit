@@ -1,8 +1,8 @@
 /**
  * One timed arm's private directories, and the resets its sequence rule needs.
  *
- * Every (build, arm, cache state) gets `<out>/arms/<build>-<arm>-<state>/` with
- * three children:
+ * Every (build, arm, cache state) gets `<arms root>/<build>-<arm>-<state>/`
+ * with four children:
  *
  * - `store/` — `VAT_PROJECTION_STORE_DIR`. Left for VAT to create, so "the
  *   first step wrote a store" can be observed.
@@ -12,6 +12,18 @@
  *   Pointed, not stripped: with `CLAUDE_CONFIG_DIR` unset VAT falls back to
  *   `HOME`, and `~/` imports resolve through `homedir()`, so a stripped variable
  *   would hand the arm the developer's real `~/.claude`.
+ * - `npm-cache/` — `npm_config_cache`, where an `npx` build keeps what it
+ *   fetched. Never reset: the build's own bytes, fetched once in its untimed
+ *   start, never in a timed repetition.
+ *
+ * ## The arms root lies outside every subject
+ *
+ * Reports go to `--out`; arm directories never do. {@link openArmsRoot} picks
+ * one root per invocation — `--arms-dir` when given, else a fresh run directory
+ * under `<os tmpdir>/vat-lab-arms-<user>/` — and refuses it when it is, lies
+ * inside, or contains a measured tree. An `--out` inside the subject (the
+ * default `.vat-lab` run from a checkout) therefore holds only reports, which
+ * no measured command reads.
  *
  * ## The lab deletes and chmods only what it provably made
  *
@@ -20,10 +32,10 @@
  *   warm, inside the measured tree. Every root is refused unless absolute.
  * - **Marked at creation.** The lab writes {@link ARM_MARKER} into an arm
  *   directory the moment it creates it, and refuses to reset, chmod or reuse an
- *   existing directory that lacks it: an `--out` that happens to name a real
- *   checkout is refused, never emptied.
- * - **No links.** Each component the lab owns (`<out>/arms`, the arm directory,
- *   its `store/`, `tmp/`, `home/`) is `lstat`ed; a link is refused, so no chmod or
+ *   existing directory that lacks it: an `--arms-dir` that happens to name a
+ *   real checkout is refused, never emptied.
+ * - **No links.** Each component the lab owns (the arms root, the arm directory,
+ *   its `store/`, `tmp/`, `home/`, `npm-cache/`) is `lstat`ed; a link is refused, so no chmod or
  *   delete is ever carried to its target.
  * - **Never in a subject.** {@link armPlacementRefusal} is the one test every
  *   facet applies: an arm directory may neither be, lie inside, nor contain a
@@ -33,7 +45,8 @@
  * store: a cold arm is made cold by deleting its own directories.
  */
 
-import { chmodSync, type Dirent, lstatSync, readdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, type Dirent, lstatSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { userInfo } from 'node:os';
 
 import {
   applyTreePlan,
@@ -42,6 +55,7 @@ import {
   isPathAbsentError,
   isUnderRoot,
   mkdirSyncReal,
+  normalizedTmpdir,
   type Ownership,
   planTreeChanges,
   safePath,
@@ -50,7 +64,7 @@ import {
 
 import type { InstrumentVersion } from '../envelope/coordinate.js';
 
-import { type ArmEnvironment, clearedEnvironment, mergeArmEnvironments } from './arm-env.js';
+import { type ArmEnvironment, clearedEnvironment, envNameSpelling, mergeArmEnvironments } from './arm-env.js';
 import type { CacheMode } from './types.js';
 
 /** The code of every refusal to lay out, reset or place an arm — what a CLI dispatches on. */
@@ -67,8 +81,8 @@ const SEGMENT = /^[\w-][\w.-]*$/u;
 
 /** Which arm a sequence runs in. */
 export interface ArmDescriptor {
-  /** The lab's `--out` directory, absolute; arms live under `<out>/arms/`. */
-  readonly out: string;
+  /** The invocation's arms root, absolute ({@link openArmsRoot}); the arm is a directory directly under it. */
+  readonly root: string;
   /** The build's alias (`rc11`, `cand`), not its path. */
   readonly build: string;
   /** The arm's name (`A`, `B`, `C`, or a measured command's name). */
@@ -82,6 +96,12 @@ export interface ArmDirectories {
   readonly store: string;
   readonly tmp: string;
   readonly home: string;
+  /**
+   * npm's cache (`npm_config_cache`), where an `npx` build keeps what it
+   * fetched. Never reset: it holds the build's own bytes, not VAT's state, and
+   * an emptied one would time a download in every repetition.
+   */
+  readonly npmCache: string;
   /** Every directory above the children that the lab owns, outermost first; each must be a real directory. */
   readonly owned: readonly string[];
 }
@@ -106,25 +126,111 @@ export function armRefusal(message: string): VatError {
  * @returns A plain directory-name segment
  */
 export function buildAlias(version: InstrumentVersion): string {
-  const raw = version.commit === null ? version.version : `${version.version}-${version.commit.slice(0, SHORT_COMMIT_LENGTH)}`;
+  // The closure digest tells two builds of one version (two `dist:` directories) apart.
+  const raw = [version.version, version.commit, version.closure]
+    .flatMap((part, index) => (part === null ? [] : [index === 0 ? part : part.slice(0, SHORT_COMMIT_LENGTH)]))
+    .join('-');
   return raw.replaceAll(/[^\w.-]/gu, '-').replace(/^\.+/u, '');
 }
 
 /**
  * @param descriptor - The arm
  * @returns Its directories; nothing is created
- * @throws {VatError} {@link ARM_REFUSED_CODE} when `out` is not absolute, or the
+ * @throws {VatError} {@link ARM_REFUSED_CODE} when `root` is not absolute, or the
  *   build or arm name is not a plain directory-name segment
  */
 export function armDirectories(descriptor: ArmDescriptor): ArmDirectories {
-  requireAbsolute(descriptor.out, '--out');
+  requireAbsolute(descriptor.root, 'the arms root');
   for (const [field, value] of [['build', descriptor.build], ['arm', descriptor.arm]] as const) {
     if (!SEGMENT.test(value)) {
       throw armRefusal(`arm directories: ${field} '${value}' is not a plain directory-name segment`);
     }
   }
-  const arms = safePath.join(descriptor.out, 'arms');
-  return layout(safePath.join(arms, `${descriptor.build}-${descriptor.arm}-${descriptor.state}`), [arms]);
+  return layout(safePath.join(descriptor.root, `${descriptor.build}-${descriptor.arm}-${descriptor.state}`), [descriptor.root]);
+}
+
+/** What {@link openArmsRoot} needs. */
+interface ArmsRootRequest {
+  /** `--arms-dir`, as given; `null` for the default. */
+  readonly override: string | null;
+  /** Every tree the invocation measures. */
+  readonly subjects: readonly string[];
+}
+
+/**
+ * The one root every arm directory of an invocation lives under — never inside
+ * a subject. `--arms-dir` when given (absolute, created owner-only, never a
+ * link); otherwise a fresh `run-*` directory under
+ * `<os tmpdir>/vat-lab-arms-<user>/`, whose base must be a real directory this
+ * user owns that no one else can write into.
+ *
+ * @param request - See {@link ArmsRootRequest}
+ * @returns The root, absolute; it exists, owner-only
+ * @throws {VatError} {@link ARM_REFUSED_CODE} when the root is relative, a link,
+ *   not a directory, misplaced against a subject, or its default base is not
+ *   provably this user's alone
+ */
+export function openArmsRoot(request: ArmsRootRequest): string {
+  if (request.override !== null) {
+    requireAbsolute(request.override, '--arms-dir');
+    requirePlaced(request.override, request.subjects);
+    requireDirectoryOrAbsent(request.override, '--arms-dir');
+    makePrivate(request.override);
+    return request.override;
+  }
+  const base = safePath.join(normalizedTmpdir(), `vat-lab-arms-${userSegment()}`);
+  requireDirectoryOrAbsent(base, 'the arms base');
+  if (kindOf(base) === 'absent') makePrivate(base);
+  requireOwnPrivate(base);
+  const run = mkdtempSync(safePath.join(base, 'run-'));
+  chmodSync(run, PRIVATE_MODE);
+  requirePlaced(run, request.subjects);
+  return run;
+}
+
+/** @returns This user's directory-name segment: the uid where there is one, else the sanitised user name */
+function userSegment(): string {
+  const uid = process.getuid?.();
+  return uid === undefined ? userInfo().username.replaceAll(/[^\w.-]/gu, '-') : String(uid);
+}
+
+/**
+ * @param dir - The arms root
+ * @param subjects - Every measured tree
+ * @throws {VatError} {@link ARM_REFUSED_CODE} when {@link armPlacementRefusal} refuses it
+ */
+function requirePlaced(dir: string, subjects: readonly string[]): void {
+  const placement = armPlacementRefusal(dir, subjects);
+  if (placement !== null) throw armRefusal(`the arms root: ${placement}`);
+}
+
+/**
+ * @param path - A directory the lab is about to create or use
+ * @param what - What it is, in the refusal
+ * @throws {VatError} {@link ARM_REFUSED_CODE} when it is a link or a non-directory
+ */
+function requireDirectoryOrAbsent(path: string, what: string): void {
+  const kind = kindOf(path);
+  if (kind === 'link' || kind === 'other') {
+    throw armRefusal(`${what} '${path}' is a ${kind === 'link' ? 'symbolic link' : 'non-directory'}; the lab never writes through a component it did not make`);
+  }
+}
+
+/**
+ * The shared temp directory is everyone's: a base someone else made, or can
+ * write into, could hold a planted run. Windows has no POSIX owner or mode
+ * bits, so the check is POSIX-only there.
+ *
+ * @param base - The default arms base
+ * @throws {VatError} {@link ARM_REFUSED_CODE} when it is not this user's, owner-only
+ */
+function requireOwnPrivate(base: string): void {
+  const uid = process.getuid?.();
+  if (uid === undefined) return;
+  const stats = lstatSync(base);
+  if (stats.uid !== uid || (stats.mode & 0o077) !== 0) {
+    throw armRefusal(`the arms base '${base}' is not owner-only and this user's (uid ${String(stats.uid)}, mode ${(stats.mode & 0o777).toString(8)}); remove it or pass --arms-dir`);
+  }
 }
 
 /**
@@ -181,6 +287,7 @@ export function prepareArmDirectories(dirs: ArmDirectories): void {
     requireMarked(dirs);
   }
   makePrivate(dirs.tmp);
+  makePrivate(dirs.npmCache);
 }
 
 /**
@@ -212,7 +319,7 @@ export async function resetColdArm(dirs: ArmDirectories): Promise<string | null>
 }
 
 /**
- * What a VAT step of this arm sets: its store, its temp directory and its home.
+ * What a VAT step of this arm sets: its store, its temp directory, its home and npm's cache.
  *
  * @param dirs - The arm's directories
  * @param platform - Whose home variable to set as well (`USERPROFILE` on Windows)
@@ -227,6 +334,12 @@ export function armDirectoryEnvironment(dirs: ArmDirectories, platform: NodeJS.P
       TMP: dirs.tmp,
       HOME: dirs.home,
       CLAUDE_CONFIG_DIR: dirs.home,
+      // No system config reaches an arm's vat or the commands preparing its clone.
+      GIT_CONFIG_NOSYSTEM: '1',
+      // An npx build fetches into the arm's own cache, once, and never asks the registry again.
+      npm_config_cache: dirs.npmCache,
+      npm_config_prefer_offline: 'true',
+      npm_config_update_notifier: 'false',
       ...(platform === 'win32' ? { USERPROFILE: dirs.home } : {}),
     },
     unset: [],
@@ -272,11 +385,13 @@ export function armRemovedEnv(own: ArmEnvironment): readonly string[] {
  * @param env - A caller's arm environment
  * @returns The refusal naming the first variable {@link armDirectoryEnvironment} owns that it sets or unsets, or `null`
  */
-export function armOwnedEnvRefusal(env: ArmEnvironment): string | null {
-  const owned = armDirectoryEnvKeys().find((key) => Object.hasOwn(env.set, key) || env.unset.includes(key));
+export function armOwnedEnvRefusal(env: ArmEnvironment, platform: NodeJS.Platform = process.platform): string | null {
+  const spell = envNameSpelling(platform);
+  const ownedKeys = new Set(armDirectoryEnvKeys().map(spell));
+  const owned = [...Object.keys(env.set), ...env.unset].find((name) => ownedKeys.has(spell(name)));
   return owned === undefined
     ? null
-    : `${owned} is set by the lab itself on every arm (a private projection store, temp directory and home under --out); an arm cannot choose it`;
+    : `${owned} is set by the lab itself on every arm (a private projection store, temp directory, home and npm cache under its arms root); an arm cannot choose it`;
 }
 
 /**
@@ -343,6 +458,7 @@ function layout(root: string, above: readonly string[]): ArmDirectories {
     store: safePath.join(root, 'store'),
     tmp: safePath.join(root, 'tmp'),
     home: safePath.join(root, 'home'),
+    npmCache: safePath.join(root, 'npm-cache'),
     owned: [...above, root],
   };
 }
@@ -364,7 +480,7 @@ function kindOf(path: string): 'absent' | 'directory' | 'link' | 'other' {
  * @throws {VatError} {@link ARM_REFUSED_CODE} when any component the lab owns is a link or not a directory
  */
 function requireNoLinks(dirs: ArmDirectories): void {
-  for (const path of [...dirs.owned, dirs.store, dirs.tmp, dirs.home]) {
+  for (const path of [...dirs.owned, dirs.store, dirs.tmp, dirs.home, dirs.npmCache]) {
     const kind = kindOf(path);
     if (kind === 'link' || kind === 'other') {
       throw armRefusal(`'${path}' is a ${kind === 'link' ? 'symbolic link' : 'non-directory'}; the lab never writes through a component it did not make`);
@@ -384,7 +500,7 @@ function isMarked(root: string): boolean {
 function requireMarked(dirs: ArmDirectories): void {
   if (!isMarked(dirs.root)) {
     throw armRefusal(
-      `'${dirs.root}' exists but carries no ${ARM_MARKER}: the lab did not make it, so it will neither reset nor chmod it. Choose a fresh --out.`,
+      `'${dirs.root}' exists but carries no ${ARM_MARKER}: the lab did not make it, so it will neither reset nor chmod it. Choose a fresh --arms-dir.`,
     );
   }
 }
@@ -394,7 +510,7 @@ function requireMarked(dirs: ArmDirectories): void {
  *
  * @param dir - The directory
  */
-function makePrivate(dir: string): void {
+export function makePrivate(dir: string): void {
   mkdirSyncReal(dir, { recursive: true, mode: PRIVATE_MODE });
   chmodSync(dir, PRIVATE_MODE);
 }

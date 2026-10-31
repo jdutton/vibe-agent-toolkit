@@ -5,60 +5,24 @@
  * typical run and the min is the best the machine managed; when they disagree
  * the comparison says more about the machine than about VAT, so the verdict is
  * INCONCLUSIVE — re-run on a quiet machine — and an inconclusive bar never
- * counts as a pass. Ties pass under `≤` and fail under `<`.
+ * counts as a pass. Ties pass under `≤` and fail under `<` — a tie being equal
+ * within {@link TIE_TOLERANCE}, since `1.15 × 100` is not 115 in binary floating point.
  *
  * A bar is written `<build>:<sequence>:<state> <=|< <factor>*<build>:<sequence>:<state>`
  * — each side in `perf arms --arm`'s spelling — and the factor is REQUIRED:
  * `1` says "no slower", and a bar that omitted it would read as a claim nobody
- * made. A bar over an arm with no measurement fails, naming why.
- */
-
-import { readFileSync } from 'node:fs';
-
-import { z } from 'zod';
-
-import type { CacheMode } from '../../harness/types.js';
-
-import type { PerfSummary } from './stats.js';
-
-/**
- * What a bar reads from `arms-report.json`. `.strip()` on purpose: a bar
- * judges only each arm's identity, summary and failure; the rest of the
- * report (repetitions, step stderr, removed names) is the arms facet's record,
- * and this reader whitelists rather than re-declaring it.
- */
-const BarReportSchema = z
-  .object({
-  arms: z.array(
-    z.object({
-      build: z.string(),
-      arm: z.string(),
-      state: z.enum(['warm', 'cold']),
-      summary: z.object({ medianMs: z.number(), minMs: z.number() }).strip().nullable(),
-      failure: z.string().nullable(),
-    }).strip(),
-  ),
-  })
-  .strip();
-
-/**
- * Read the arms a bar judges from a `perf arms` report.
+ * made. A bar over an arm with no measurement fails, naming why, and a bar
+ * comparing an arm with itself is refused: it cannot fail.
  *
- * @param path - `<out>/arms-report.json`
- * @returns The arms, or why the file is not an arms report
+ * The rendered verdicts are headed by what every alias WAS — its coordinate
+ * as given and what it resolved to — and the load the arms ran under.
  */
-export function readBarReport(path: string): { readonly ok: true; readonly report: BarReport } | { readonly ok: false; readonly refusal: string } {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(readFileSync(path, 'utf-8'));
-  } catch (cause) {
-    return { ok: false, refusal: `cannot read '${path}': ${cause instanceof Error ? cause.message : String(cause)}` };
-  }
-  const parsed = BarReportSchema.safeParse(raw);
-  return parsed.success
-    ? { ok: true, report: parsed.data }
-    : { ok: false, refusal: `'${path}' is not a perf arms report: ${parsed.error.issues[0]?.message ?? 'invalid'}` };
-}
+
+import { instrumentLabel, loadLine } from '../../harness/render.js';
+import type { InstrumentSource } from '../../harness/types.js';
+
+import { type ArmName, armName, type ArmsReportFile, findArm, parseArmName } from './arms-report-file.js';
+import type { PerfSummary } from './stats.js';
 
 /** The two statistics a bar reads from each arm. */
 export type BarSide = Pick<PerfSummary, 'medianMs' | 'minMs'>;
@@ -74,12 +38,7 @@ export interface BarJudgement {
 }
 
 /** One arm of an arms report, as a bar names it. */
-export interface BarArm {
-  readonly build: string;
-  /** The arm's sequence name. */
-  readonly arm: string;
-  readonly state: CacheMode;
-}
+export type BarArm = ArmName;
 
 /** A parsed bar. */
 export interface Bar {
@@ -91,10 +50,10 @@ export interface Bar {
   readonly right: BarArm;
 }
 
-/** What a bar reads from an arms report: each arm's statistics, or why it has none. */
-interface BarReport {
+/** What a bar reads from an arms report: the builds and load, and each arm's statistics or why it has none. */
+type BarReport = Pick<ArmsReportFile, 'builds' | 'load'> & {
   readonly arms: readonly (BarArm & { readonly summary: BarSide | null; readonly failure: string | null })[];
-}
+};
 
 /** One bar's result. */
 interface BarResult extends BarJudgement {
@@ -117,7 +76,11 @@ export function judgeBar(left: BarSide, relation: BarRelation, right: BarSide, f
   if (!isFactor(factor)) {
     throw new Error(`judgeBar: factor ${String(factor)} is not a positive finite number`);
   }
-  const holds = (a: number, b: number): boolean => (relation === '<=' ? a <= b * factor : a < b * factor);
+  const holds = (a: number, b: number): boolean => {
+    const scaled = b * factor;
+    const tie = Math.abs(a - scaled) <= TIE_TOLERANCE * Math.max(Math.abs(a), Math.abs(scaled));
+    return relation === '<=' ? a < scaled || tie : a < scaled && !tie;
+  };
   const median = holds(left.medianMs, right.medianMs);
   const min = holds(left.minMs, right.minMs);
   let verdict: BarJudgement['verdict'] = 'inconclusive';
@@ -126,21 +89,11 @@ export function judgeBar(left: BarSide, relation: BarRelation, right: BarSide, f
   return { verdict, median, min };
 }
 
-/** One arm, in the `--arm` spelling. */
-const ARM = /^([\w.-]+):([\w-]+):(warm|cold)$/u;
+/** Relative: two statistics this close are one value, whatever the float product of a factor rounds to. */
+const TIE_TOLERANCE = 1e-9;
+
 /** A factor: digits and a decimal point only (`Number` refuses a second point). */
 const FACTOR = /^[\d.]+$/u;
-
-/**
- * @param text - One side of a bar
- * @returns The arm it names, or `null` when it is not `<build>:<sequence>:<warm|cold>`
- */
-function parseBarArm(text: string): BarArm | null {
-  const match = ARM.exec(text.trim());
-  if (match === null) return null;
-  const [, build = '', arm = '', state = ''] = match;
-  return { build, arm, state: state as CacheMode };
-}
 
 /**
  * Parse one bar.
@@ -156,13 +109,15 @@ export function parseBar(text: string): Bar | string {
   const leftText = at === -1 ? '' : text.slice(0, at);
   const rest = at === -1 ? '' : text.slice(at + relation.length);
   const star = rest.indexOf('*');
-  const left = parseBarArm(leftText);
-  const right = parseBarArm(star === -1 ? rest : rest.slice(star + 1));
+  const left = parseArmName(leftText);
+  const right = parseArmName(star === -1 ? rest : rest.slice(star + 1));
   if (left === null || right === null) return malformed;
   if (star === -1) return `--bar '${text}' names no factor — write 1* for "no slower"; a factor is never implied`;
   const factor = rest.slice(0, star).trim();
   const value = Number(factor);
   if (!FACTOR.test(factor) || !isFactor(value)) return `--bar '${text}': factor ${factor} is not a positive finite number`;
+  const name = armName(left);
+  if (name === armName(right)) return `--bar '${text}' compares ${name} with itself — it cannot fail, so it says nothing`;
   return { text: text.trim(), left, relation, factor: value, right };
 }
 
@@ -179,15 +134,15 @@ export function judgeBars(
 ): { readonly ok: true; readonly results: readonly BarResult[] } | { readonly ok: false; readonly refusal: string } {
   const results: BarResult[] = [];
   for (const bar of bars) {
-    const left = armOf(report, bar.left);
-    const right = armOf(report, bar.right);
+    const left = findArm(report.arms, bar.left);
+    const right = findArm(report.arms, bar.right);
     if (typeof left === 'string') return { ok: false, refusal: `--bar '${bar.text}': ${left}` };
     if (typeof right === 'string') return { ok: false, refusal: `--bar '${bar.text}': ${right}` };
     if (left.summary !== null && right.summary !== null) {
       results.push({ bar, ...judgeBar(left.summary, bar.relation, right.summary, bar.factor), reason: null });
     } else {
       const unmeasured = left.summary === null ? left : right;
-      const name = `${unmeasured.build} ${unmeasured.arm} ${unmeasured.state}`;
+      const name = armName(unmeasured);
       const reason = `${name} has no measurement: ${unmeasured.failure ?? 'no repeats'}`;
       results.push({ bar, verdict: 'fail', median: false, min: false, reason });
     }
@@ -196,13 +151,34 @@ export function judgeBars(
 }
 
 /**
- * One line per bar: its verdict, the bar, and which statistic held.
+ * What every alias was and the load the arms ran under, then one line per
+ * bar: its verdict, the bar, and which statistic held.
  *
+ * @param report - The arms report the bars were judged over
  * @param results - What {@link judgeBars} returned
  * @returns The rendered lines
  */
-export function renderBars(results: readonly BarResult[]): string {
-  return results.map((result) => `${result.verdict.toUpperCase()}  ${result.bar.text}  (${detailOf(result)})`).join('\n');
+export function renderBars(report: BarReport, results: readonly BarResult[]): string {
+  return [
+    'Builds:',
+    ...report.builds.map((build) => `  ${build.alias}: ${instrumentLabel(build.instrument)} from ${sourceLabel(build.source)}`),
+    loadLine(report.load, LOAD_PHRASING),
+    ...results.map((result) => `${result.verdict.toUpperCase()}  ${result.bar.text}  (${detailOf(result)})`),
+  ].join('\n');
+}
+
+/** What the load line says about bars. */
+const LOAD_PHRASING = {
+  unmeasured: 'these verdicts carry no contamination check.',
+  contaminated: 'treat these verdicts as indicative only.',
+} as const;
+
+/**
+ * @param source - An instrument as the operator named it
+ * @returns Its `--build` spelling
+ */
+function sourceLabel(source: InstrumentSource): string {
+  return source.kind === 'npx' ? `npx:${source.spec}` : `${source.kind}:${source.path}`;
 }
 
 /**
@@ -216,18 +192,6 @@ function detailOf(result: BarResult): string {
   return result.median
     ? 'median holds, min does not — re-run on a quiet machine'
     : 'min holds, median does not — re-run on a quiet machine';
-}
-
-/**
- * @param report - The arms report
- * @param wanted - The arm a bar names
- * @returns The arm, or why there is none
- */
-function armOf(report: BarReport, wanted: BarArm): BarReport['arms'][number] | string {
-  const found = report.arms.find(
-    (arm) => arm.build === wanted.build && arm.arm === wanted.arm && arm.state === wanted.state,
-  );
-  return found ?? `${wanted.build}:${wanted.arm}:${wanted.state} is not in the report`;
 }
 
 /**
