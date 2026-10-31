@@ -40,6 +40,7 @@ import { cleanupTestTempDir, createTestTempDir } from '../system/test-common.js'
 const POPULATION: ProgressEntry = {
   kind: 'population',
   population: 'derived',
+  lensPopulation: 'derived',
   populationMs: 1234.5,
   lensMs: 12.5,
   lensesEvaluated: ['authored-link'],

@@ -144,7 +144,7 @@ async function projectionVerdicts(): Promise<Record<string, Verdict>> {
   const registry = new ContributorRegistry();
   registry.register(new FilesystemExtentContributor(() => crawlSourceFor(corpus.root(), [])));
 
-  const projection = await populate({
+  const { projection } = await populate({
     root: corpus.root(),
     registry,
     collections: COLLECTIONS,

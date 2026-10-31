@@ -56,6 +56,7 @@ import { requireProjectRoot } from '../../utils/project-root-policy.js';
 import {
   RESOURCES_CRAWL_ENV,
   RESOURCES_CRAWL_PROJECTION,
+  POPULATION_UNOBSERVED,
   withResourcePopulationSource,
 } from '../../utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
@@ -586,7 +587,7 @@ export async function buildSharedValidationContext(
       // it to whatever the source offers, so this stays a markdown-only registry
       // on both lanes.
       const registry = await withResourcePopulationSource(
-        { root: sharedRoot, gitTracker: context.gitTracker },
+        { root: sharedRoot, gitTracker: context.gitTracker, ...POPULATION_UNOBSERVED },
         (populationSource) => {
           logger.debug(
             populationSource

@@ -47,6 +47,7 @@ function report(issues: readonly ValidationIssue[], overrides: Partial<Resources
     collectionStats: undefined,
     verbose: false,
     durationMs: 12,
+    population: 'derived',
     ...overrides,
   });
   RESOURCES_VALIDATE_REPORT_SCHEMA.parse(built);
@@ -54,6 +55,29 @@ function report(issues: readonly ValidationIssue[], overrides: Partial<Resources
 }
 
 const severities = (...list: Array<ValidationIssue['severity']>) => list.map((s) => issue(s));
+
+describe('buildResourcesValidateReport — membership provenance', () => {
+  it.each(['store', 'derived', null] as const)('publishes population: %s as the run observed it', (population) => {
+    expect(report([], { population }).data.population).toBe(population);
+  });
+
+  it('refuses a document with no population, because the field is required', () => {
+    const built = report([]);
+    // The positive control: the same document WITH the field parses.
+    expect(RESOURCES_VALIDATE_REPORT_SCHEMA.safeParse(built).success).toBe(true);
+    const withoutPopulation = Object.fromEntries(Object.entries(built.data).filter(([key]) => key !== 'population'));
+
+    expect(RESOURCES_VALIDATE_REPORT_SCHEMA.safeParse({ ...built, data: withoutPopulation }).success).toBe(false);
+  });
+
+  it('names BOTH null cases in the field\'s description', () => {
+    const data = RESOURCES_VALIDATE_REPORT_SCHEMA.innerType().options[0].shape.data;
+    const described = data.shape.population.description ?? '';
+
+    expect(described).toContain('walk');
+    expect(described).toContain('enumerated no root');
+  });
+});
 
 describe('buildResourcesValidateReport — the envelope vocabulary', () => {
   it('is findings, exit 1, when an error-severity issue fired', () => {

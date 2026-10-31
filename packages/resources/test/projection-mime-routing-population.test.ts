@@ -74,12 +74,13 @@ async function populateWith(
   const registry = new ContributorRegistry();
   registry.register(new FilesystemExtentContributor(() => crawlSourceFor(fixture.root(), [])));
 
-  return populate({
+  const { projection } = await populate({
     root: fixture.root(),
     registry,
     onBlobPopulation: DISCARD_BLOB_POPULATION,
     ...(collections !== undefined && { collections }),
   });
+  return projection;
 }
 
 /**

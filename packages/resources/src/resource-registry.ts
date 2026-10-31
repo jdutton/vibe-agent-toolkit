@@ -1504,6 +1504,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     const base = safePath.resolve(baseDir);
     if (!sameDirectory(source.root, base)) {
       warnPopulationRootMismatch(source.root, base);
+      source.decline(base);
       return undefined;
     }
     const isMember = crawlPathFilter(include, exclude);

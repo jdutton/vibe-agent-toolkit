@@ -691,7 +691,7 @@ const EXPORTS: readonly ExportedTypeShape[] = [
   ...exported('resource-compiler', ['CompileResult', 'ParseResult'], LIBRARY_RESULT),
   ...exported('resources', [
     'BlobPopulationReport', 'BlobPopulationResult', 'ContentFetchResult', 'OkfBundleReport',
-    'ParseResult', 'ProjectionDocument', 'ResolveLocalHrefResult', 'ValidationResult',
+    'ParseResult', 'PopulateResult', 'ProjectionDocument', 'ResolveLocalHrefResult', 'ValidationResult',
   ], LIBRARY_RESULT),
   ...exported('runtime-claude-agent-sdk', ['AgentConversionResult', 'BatchConversionResult'], LIBRARY_RESULT),
   ...exported('runtime-langchain', ['ConversationalResult'], LIBRARY_RESULT),

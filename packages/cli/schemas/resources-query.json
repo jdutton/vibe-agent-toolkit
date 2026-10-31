@@ -148,6 +148,14 @@
                     "type": "string"
                   }
                 },
+                "lensPopulation": {
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "store",
+                    "derived"
+                  ]
+                },
                 "boundsStatement": {
                   "type": "string"
                 },
@@ -188,7 +196,8 @@
                 "population",
                 "populationSecs",
                 "lensSecs",
-                "lensesEvaluated"
+                "lensesEvaluated",
+                "lensPopulation"
               ],
               "additionalProperties": false
             }

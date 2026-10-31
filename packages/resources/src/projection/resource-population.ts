@@ -87,7 +87,7 @@
  * first place; the two moves look alike and are not.
  */
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { CollectionConfig } from '../schemas/project-config.js';
@@ -104,15 +104,15 @@ import {
 } from './contributors/filesystem-extent.js';
 import { crawlSourceFor, type CrawlSource, type CrawlSourceKind } from './crawl-source.js';
 import {
-  type BlobPopulationReport,
   CONTENT_PARSING_SKIP,
-  type ContributorTiming,
   DISCARD_BLOB_POPULATION,
   populate,
   populationOracles,
+  type PopulateResult,
   type PopulationCache,
+  type PopulationOutcome,
+  type TreePopulationOptions,
 } from './merge.js';
-import type { Projection } from './projection.js';
 import type { ContentDemand } from './realizations.js';
 
 /**
@@ -166,6 +166,18 @@ export interface ResourcePopulationSource {
    *   conditions the enumeration recorded — see {@link ResourceEnumeration}
    */
   enumerate(root: string, outputs: readonly string[]): Promise<ResourceEnumeration>;
+  /**
+   * Told that a crawl of `offeredRoot` declined this source and walked instead.
+   *
+   * ⛔ Required, because the decline is otherwise visible only as an
+   * `enumerate` that never happened — indistinguishable from a run that
+   * enumerated no root. A caller publishing where its population came from has
+   * to know the walk answered, or it reports the projection lane for a crawl
+   * the projection never saw.
+   *
+   * @param offeredRoot - The resolved basis the declining crawl was asked about
+   */
+  decline(offeredRoot: string): void;
 }
 
 /**
@@ -186,6 +198,26 @@ export interface ResourceEnumeration {
   readonly paths: readonly string[];
   /** Population-time conditions recorded while enumerating. */
   readonly conditions: readonly RealizationConditionRow[];
+  /**
+   * Whether the store served this enumeration — `populate()`'s own outcome,
+   * carried out of the projection it was built in, for the reason
+   * {@link conditions} is.
+   */
+  readonly outcome: PopulationOutcome;
+}
+
+/**
+ * One run's outcome from its roots' outcomes, in enumeration order.
+ *
+ * The first root that did not hit decides, so `population: 'store'` means every
+ * root was served from the store; a single derived root makes the run derived.
+ *
+ * @param outcomes - Each enumerated root's outcome, in enumeration order
+ * @returns The run's outcome, or `null` when no root was enumerated — nothing
+ *   was populated from or into the store, so there is no provenance to report
+ */
+export function combineOutcomes(outcomes: readonly PopulationOutcome[]): PopulationOutcome | null {
+  return outcomes.find((outcome) => outcome.stored !== 'hit') ?? outcomes[0] ?? null;
 }
 
 /**
@@ -392,7 +424,7 @@ export async function buildResourcePopulation(options: {
   // {@link resourceContributors}.
   const { registry, parameters } = resourceContributors(source, 'deferred', false);
 
-  const projection = await populate({
+  const { projection, outcome } = await populate({
     root,
     registry,
     parameters,
@@ -435,7 +467,15 @@ export async function buildResourcePopulation(options: {
   // consumer's call (the registry surfaces every one as a finding, and severity
   // overrides are the adopter's), and a filter at this seam would be a second,
   // quieter policy nobody configured.
-  return { paths, conditions: projection.realizationConditions, extentSource: source.kind };
+  //
+  // Both lists are SORTED, because a stored extent comes back in SQLite's order,
+  // which carries no `ORDER BY` guarantee: unsorted, a warm run published the
+  // same findings as the cold run in a different order.
+  const conditions = projection.realizationConditions.toSorted(
+    (left, right) => compareCodeUnits(left.code, right.code) || compareCodeUnits(left.path, right.path)
+      || compareCodeUnits(left.extentId, right.extentId) || compareCodeUnits(left.message, right.message),
+  );
+  return { paths: paths.toSorted(compareCodeUnits), conditions, outcome, extentSource: source.kind };
 }
 
 
@@ -480,23 +520,9 @@ export async function buildResourcePopulation(options: {
  *   what it REFUSED to derive. **Required**, and this is the lane where it earns
  *   that: a corpus whose every document was declined as binary populates as
  *   empty and would otherwise report success
- * @param options.onContributorTiming - One record per contributor invocation, or
- *   omitted. 🔑 This is also the **cache tell**: a store hit short-circuits
- *   before the builder exists, so NO contributor runs and no record is filed. An
- *   observer that saw nothing was served from the store; one that saw
- *   `builtin:filesystem@1` re-derived. Nothing else distinguishes them — a
- *   correct hit and a correct re-population produce identical rows, which is
- *   exactly why "did the cache work" needs an observation rather than a diff
- * @returns The populated projection
+ * @returns The populated projection and `populate()`'s outcome for it
  */
-export function buildResourceProjection(options: {
-  root: string;
-  gitTracker?: GitTracker | undefined;
-  cache?: PopulationCache | undefined;
-  collections?: Readonly<Record<string, CollectionConfig>> | undefined;
-  onBlobPopulation: (report: BlobPopulationReport) => void;
-  onContributorTiming?: ((timing: ContributorTiming) => void) | undefined;
-}): Promise<Projection> {
+export function buildResourceProjection(options: TreePopulationOptions): Promise<PopulateResult> {
   const root = safePath.resolve(options.root);
   // Same one-call-early selection as the population lane, for the same reason:
   // `crawlSourceFor` falls back silently, so the instance that ran must stay
@@ -513,9 +539,6 @@ export function buildResourceProjection(options: {
     registry,
     parameters,
     onBlobPopulation: options.onBlobPopulation,
-    ...(options.onContributorTiming === undefined
-      ? {}
-      : { onContributorTiming: options.onContributorTiming }),
     ...populationOracles(options),
   });
 }

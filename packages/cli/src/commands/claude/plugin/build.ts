@@ -31,7 +31,7 @@ import { createLogger } from '../../../utils/logger.js';
 import { copyFileIntoMarketplace, copyTreeIntoMarketplace, writingMarketplace } from '../../../utils/marketplace-io.js';
 import { readPackageJsonOrAbsent } from '../../../utils/package-json.js';
 import { requireInputPath } from '../../../utils/project-root-policy.js';
-import { withResourcePopulationSource } from '../../../utils/resource-loader.js';
+import { POPULATION_UNOBSERVED, withResourcePopulationSource } from '../../../utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig, pluginLocalSkillConfigEntry } from '../../../utils/skill-packaging-config.js';
 import type { PhaseOutcome } from '../../phase-utils.js';
 import { packagingFailedIssue } from '../../skills/build.js';
@@ -357,7 +357,7 @@ async function buildClaudePluginMarketplaces(
   // re-applies its own markdown-only `include` to whatever the source offers, so
   // this is a change of COST, not of what the build sees.
   const sharedRegistry = await withResourcePopulationSource(
-    { root: configDir },
+    { root: configDir, ...POPULATION_UNOBSERVED },
     (populationSource) =>
       createProjectRegistry(configDir, {
         // What this run writes (see `outputs` above). A fault on, in or above it (the project

@@ -129,12 +129,12 @@ beforeAll(async () => {
   registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), 'deferred'));
   registry.register(new AgenticConventionContributor());
 
-  projection = await populate({
+  ({ projection } = await populate({
     root,
     registry,
     contentParsing: CONTENT_PARSING_SKIP,
     onBlobPopulation: DISCARD_BLOB_POPULATION,
-  });
+  }));
 });
 
 afterAll(() => {

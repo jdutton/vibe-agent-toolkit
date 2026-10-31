@@ -126,7 +126,7 @@ const store = openSqliteProjectionStore({ directory: storeDirectory });
 const contributorRuns = [];
 
 try {
-  const projection = await populate({
+  const { projection } = await populate({
     root: corpusRoot,
     registry: registryFor(question),
     // Every declaration is handed over on every run, registered or not:

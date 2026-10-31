@@ -67,7 +67,7 @@ import {
 import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
 import { relativeLocationOrUndefined } from '../../utils/relativize-paths.js';
-import { withResourcePopulationSource } from '../../utils/resource-loader.js';
+import { POPULATION_UNOBSERVED, withResourcePopulationSource } from '../../utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig, publishScope } from '../../utils/skill-packaging-config.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
 import type { PhaseOutcome } from '../phase-utils.js';
@@ -1030,7 +1030,7 @@ async function buildInto(input: SkillBuildRunInput, target: BuildTarget, staged:
   // them is the run's destination, never its input.
   const outputs = [target.dest, staged, ...input.runOutputs];
 
-  const outcomes = await withResourcePopulationSource({ root: cwd }, async (populationSource) => {
+  const outcomes = await withResourcePopulationSource({ root: cwd, ...POPULATION_UNOBSERVED }, async (populationSource) => {
     // In order: shared population source, suite probe and logger; failures listed in spec order.
     await forEachInOrder(specs, async (spec) => {
       const { skill, packagingConfig } = spec;

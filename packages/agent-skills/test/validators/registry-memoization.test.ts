@@ -131,8 +131,13 @@ function countingSource(
       root,
       enumerate: async () => {
         calls += 1;
-        return { paths: names.map((name) => safePath.join(root, name)), conditions: [] };
+        return {
+          paths: names.map((name) => safePath.join(root, name)),
+          conditions: [],
+          outcome: { population: 'derived', stored: 'no-store' },
+        };
       },
+      decline: () => undefined,
     },
     calls: () => calls,
   };

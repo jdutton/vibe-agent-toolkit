@@ -72,22 +72,18 @@ class UnlistableRowStore extends FakeProjectionStore {
 /**
  * One tracker-less filesystem-extent population through `store`.
  *
- * @returns Whether any contributor ran — false is the signature of a store hit
+ * @returns Whether the run derived rather than being served — `populate()`'s own outcome
  */
-async function contributorRanThrough(store: FakeProjectionStore): Promise<boolean> {
+async function derivedThrough(store: FakeProjectionStore): Promise<boolean> {
   const registry = new ContributorRegistry();
   registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
-  let ran = false;
-  await populate({
+  const { outcome } = await populate({
     root: suite.tempDir,
     registry,
     onBlobPopulation: DISCARD_BLOB_POPULATION,
-    onContributorTiming: () => {
-      ran = true;
-    },
     cache: { store, treeUnchanged: () => true, treeHash: TREE_HASH },
   });
-  return ran;
+  return outcome.stored !== 'hit';
 }
 
 describe('a stored EXTENT_DIRECTORY_UNLISTABLE row that no longer holds turns a hit into a miss', () => {
@@ -100,28 +96,28 @@ describe('a stored EXTENT_DIRECTORY_UNLISTABLE row that no longer holds turns a 
 
   it('serves the stored extent when no unlistable row is stored (control)', async () => {
     const store = new UnlistableRowStore();
-    expect(await contributorRanThrough(store)).toBe(true);
+    expect(await derivedThrough(store)).toBe(true);
 
-    expect(await contributorRanThrough(store)).toBe(false);
+    expect(await derivedThrough(store)).toBe(false);
     expect(store.writeExtentCalls).toBe(1);
   });
 
   it('re-enumerates when the row names a directory that is gone', async () => {
     const store = new UnlistableRowStore();
-    await contributorRanThrough(store);
+    await derivedThrough(store);
     store.inject = true;
 
-    expect(await contributorRanThrough(store)).toBe(true);
+    expect(await derivedThrough(store)).toBe(true);
     expect(store.writeExtentCalls).toBe(2);
   });
 
   it('re-enumerates when the row names a directory that now lists', async () => {
     const store = new UnlistableRowStore();
-    await contributorRanThrough(store);
+    await derivedThrough(store);
     await mkdir(safePath.join(suite.tempDir, ROW_DIR), { recursive: true });
     store.inject = true;
 
-    expect(await contributorRanThrough(store)).toBe(true);
+    expect(await derivedThrough(store)).toBe(true);
     expect(store.writeExtentCalls).toBe(2);
   });
 });

@@ -144,11 +144,22 @@ import {
   populate,
   populationOracles,
   readStoredRealizations,
-  type BlobPopulationReport,
   type PopulateOptions,
-  type PopulationCache,
+  type PopulateResult,
+  type TreePopulationOptions,
 } from './merge.js';
-import type { Projection } from './projection.js';
+
+/**
+ * The claude-context population, and where each of its two halves came from.
+ *
+ * `outcome` is the real pass's `populate()` outcome. `importRoots` says whether
+ * the root list that decided which contributors it registered was read from the
+ * store or found by a discovery crawl — a hit on the real pass behind a crawled
+ * root list was not served from the store end to end.
+ */
+export interface ClaudeContextPopulation extends PopulateResult {
+  readonly importRoots: 'store' | 'derived';
+}
 
 /**
  * One crawl of the root, handed to both passes.
@@ -262,7 +273,7 @@ async function discoverImportRoots(
     ...(collections !== undefined && { collections }),
   });
 
-  return claudeImportRootsFrom(discovery.resourceRealizations);
+  return claudeImportRootsFrom(discovery.projection.resourceRealizations);
 }
 
 /**
@@ -289,15 +300,9 @@ async function discoverImportRoots(
  *   the counts names `DISCARD_BLOB_POPULATION` rather than leaving the argument
  *   off, because a tree whose every document was declined as binary would
  *   otherwise populate as empty and report success
- * @returns The populated projection
+ * @returns The populated projection, its outcome, and where its root list came from
  */
-export async function buildClaudeContextPopulation(options: {
-  root: string;
-  gitTracker?: GitTracker | undefined;
-  cache?: PopulationCache | undefined;
-  collections?: Readonly<Record<string, CollectionConfig>> | undefined;
-  onBlobPopulation: (report: BlobPopulationReport) => void;
-}): Promise<Projection> {
+export async function buildClaudeContextPopulation(options: TreePopulationOptions): Promise<ClaudeContextPopulation> {
   const root = safePath.resolve(options.root);
 
   // The run's ONE crawl source, and the thunk the extent contributor reads it
@@ -357,7 +362,8 @@ export async function buildClaudeContextPopulation(options: {
       claudeImportExtentDeclaration(rootRelativePath) as unknown as JsonValue;
   }
 
-  return populate(populateOptions);
+  const populated = await populate(populateOptions);
+  return { ...populated, importRoots: discovered.source === undefined ? 'store' : 'derived' };
 }
 
 /**

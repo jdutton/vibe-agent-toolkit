@@ -67,7 +67,7 @@ describe.skipIf(!symlinkCapability())('declined symlinks reach the projection on
     if (root === undefined) throw new Error('fixture not planted');
     const gitTracker = new GitTracker(root);
     await gitTracker.initialize({ includeUntracked: true });
-    const projection = await build({ root, gitTracker, onBlobPopulation: DISCARD_BLOB_POPULATION });
+    const { projection } = await build({ root, gitTracker, onBlobPopulation: DISCARD_BLOB_POPULATION });
 
     const declined = projection.realizationConditions.filter((row) => isDeclinedSymlinkCode(row.code));
     const paths = declined.map((row) => row.path);

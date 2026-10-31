@@ -199,7 +199,7 @@ describe('demand promotion, over a row the shipped deferral policy produced', ()
     registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
 
     let report: BlobPopulationReport | undefined;
-    const projection = await populate({
+    const { projection } = await populate({
       root: suite.tempDir,
       registry,
       gitTracker: tracker,

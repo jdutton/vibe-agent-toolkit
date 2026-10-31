@@ -150,6 +150,21 @@
                     "additionalProperties": false
                   }
                 },
+                "population": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "store",
+                        "derived"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Whether the membership was served from the projection store (`store`) or derived this run (`derived`). `null` when nothing was populated from or into the store: the walk lane enumerated (no projection), or the projection lane enumerated no root."
+                },
                 "files": {
                   "type": "array",
                   "items": {
@@ -180,7 +195,8 @@
               },
               "required": [
                 "root",
-                "collections"
+                "collections",
+                "population"
               ],
               "additionalProperties": false
             }

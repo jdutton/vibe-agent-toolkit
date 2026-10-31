@@ -77,6 +77,9 @@ const StartedEntrySchema = z.object({
 const PopulationEntrySchema = z.object({
   kind: z.literal('population'),
   population: z.union([z.literal('derived'), z.literal('store')]),
+  // Carried across for the reason `lensMs` is: an interrupted run's document is
+  // rebuilt from these lines alone.
+  lensPopulation: z.enum(['none', 'store', 'derived']),
   populationMs: z.number(),
   // Carried across the process boundary rather than recomputed, for the same
   // reason every other field here is: a killed run's document is rebuilt from

@@ -17,6 +17,7 @@ import {
   claudeContextRelations,
   type ClaudeContextRelations,
   type PopulationCache,
+  type PopulationOutcome,
 } from '@vibe-agent-toolkit/resources';
 
 import { gitTrackerForProjectRoot } from '../commands/audit/distributed-tree.js';
@@ -35,18 +36,23 @@ import { populationWiring } from './population-wiring.js';
  * @param options.logger - Where blob-stage refusals go (stderr, so a parseable
  *   document on stdout stays parseable)
  * @param options.cache - The run's projection store, or undefined to re-derive
- * @returns The rows, ready for `writeDerived`
+ * @returns The rows, ready for `writeDerived`, and the lens population's
+ *   provenance: `'store'` only when the root list AND the real pass were both
+ *   served from the store
  */
 export async function evaluateClaudeContextLens(options: {
   root: string;
   logger: Logger;
   cache: PopulationCache | undefined;
-}): Promise<ClaudeContextRelations> {
+}): Promise<{ rows: ClaudeContextRelations; population: PopulationOutcome['population'] }> {
   const { root, logger, cache } = options;
   const gitTracker = await gitTrackerForProjectRoot(root);
-  const projection = await buildClaudeContextPopulation({
+  const { projection, outcome, importRoots } = await buildClaudeContextPopulation({
     root,
     ...populationWiring(logger, gitTracker, cache, root),
   });
-  return claudeContextRelations(projection);
+  return {
+    rows: claudeContextRelations(projection),
+    population: importRoots === 'store' && outcome.population === 'store' ? 'store' : 'derived',
+  };
 }

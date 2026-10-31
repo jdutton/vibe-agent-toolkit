@@ -61,7 +61,13 @@ import { gitTrackerForProjectRoot } from '../commands/audit/distributed-tree.js'
 
 import type { Logger } from './logger.js';
 import { populationWiring } from './population-wiring.js';
-import { evaluateLens, lensesNamedBy } from './projection-lenses.js';
+import {
+  evaluateLens,
+  lensesNamedBy,
+  lensPopulationOf,
+  type LensEvaluation,
+  type LensPopulation,
+} from './projection-lenses.js';
 import { openCompileProbe, openEphemeralQueryStore, withPopulationCache } from './projection-store.js';
 
 /**
@@ -97,12 +103,18 @@ export interface ProjectionProvenance {
   /**
    * 🔑 The cache tell. Reported rather than inferred, because it CANNOT be
    * inferred: a correct store hit and a correct re-derivation produce identical
-   * rows. A hit short-circuits `populate()` before the builder exists, so no
-   * contributor timing is filed — an empty record list IS the hit.
+   * rows. It is `populate()`'s own outcome, never a count of what ran.
    *
    * It describes the POPULATION, which is the only thing the store now affects.
    */
   readonly population: PopulationOrigin;
+
+  /**
+   * The same tell for the lenses' OWN populations — the claude-context lens
+   * populates a lane of its own. `'none'` when no evaluated lens populated
+   * anything; see {@link lensPopulationOf}.
+   */
+  readonly lensPopulation: LensPopulation;
 
   /**
    * 🔑 What that origin was WORTH. {@link population} says whether the
@@ -413,23 +425,16 @@ export async function withQueriedProjection<T>(
   // fold the caller's statements into a number whose entire purpose is to be
   // read against them. The close is a handle release on an already-open
   // database, not population.
-  let contributorRecords = 0;
   const populationStart = performance.now();
 
   // The file-backed store, when one is selected, and ONLY as a population cache.
   // Its rows are never queried — see the header.
   return withPopulationCache({ root }, async (cache) => {
-    // The cache tell. `populate()` short-circuits a hit before any contributor
-    // is constructed, so this staying at zero is the ONLY observable difference
-    // between a served population and a re-derived one. Declared with the clock
-    // above rather than here so the two cannot drift apart when one moves.
+    // The cache tell is `populate()`'s own outcome — see `ProjectionProvenance.population`.
     const gitTracker = await gitTrackerForProjectRoot(root);
-    const projection = await buildResourceProjection({
+    const { projection, outcome } = await buildResourceProjection({
       root,
       ...populationWiring(logger, gitTracker, cache, root),
-      onContributorTiming: () => {
-        contributorRecords += 1;
-      },
     });
 
     // ONE tree, in a database nothing else can reach, built fresh for this call.
@@ -478,8 +483,11 @@ export async function withQueriedProjection<T>(
       // Sequential, not `Promise.all`: a lens may populate, and two
       // populations racing for one projection store is the concurrency this
       // lane has no reason to invite.
+      const lensPopulations: LensEvaluation['population'][] = [];
       await forEachInOrder(lenses, async (lens) => {
-        await store.writeDerived(await evaluateLens(lens, { projection, root, logger, cache }));
+        const evaluation = await evaluateLens(lens, { projection, root, logger, cache });
+        lensPopulations.push(evaluation.population);
+        await store.writeDerived(evaluation.rows);
       });
       const lensMs = performance.now() - lensStart;
       // The shared setup is done. Everything after this line is the caller's.
@@ -502,7 +510,8 @@ export async function withQueriedProjection<T>(
       return await work(
         ask,
         {
-          population: contributorRecords === 0 ? 'store' : 'derived',
+          population: outcome.population,
+          lensPopulation: lensPopulationOf(lensPopulations),
           populationMs,
           lensMs,
           lensesEvaluated: lenses.map((lens) => lens.name),

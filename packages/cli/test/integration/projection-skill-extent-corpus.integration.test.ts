@@ -833,7 +833,7 @@ async function populateCorpus(
     parameters[skillExtentContributorId(skill.name)] = declarationFor(skill, skill.config);
   }
 
-  const projection = await populate({
+  const { projection } = await populate({
     root,
     registry,
     parameters,
