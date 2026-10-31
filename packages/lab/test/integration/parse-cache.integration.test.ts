@@ -13,6 +13,7 @@
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { sep } from 'node:path';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
@@ -117,6 +118,15 @@ describe('resolveParseCacheDirectory', () => {
 
     expect(resolved.ok).toBe(false);
     expect(resolved.ok ? '' : resolved.reason).toMatch(/not under the arm's tmp/u);
+  });
+
+  // win32 only: there a child prints backslashes; on POSIX a backslash is part of a file name, never a separator.
+  it.skipIf(sep !== '\\')('normalizes a backslash-spelled native answer to the lab’s forward-slash form', () => {
+    const dirs = arm();
+    const forward = safePath.join(dirs.tmp, '.vat-cache', 'ns', 'parse');
+    vi.stubEnv(FAKE_FIXED_ENV, forward.replaceAll('/', '\\'));
+
+    expect(resolveParseCacheDirectory(standInBuild(), dirs)).toStrictEqual({ ok: true, dir: forward });
   });
 
   it('resolves an npx build from the package npx installed into the arm’s own npm cache', () => {
