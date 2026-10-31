@@ -319,8 +319,8 @@ export async function underArmsRoot(
   }
   try {
     say(await closeArmsRoot(root, keep || (ended !== null && ended.unmoved !== null)));
-  } catch (cleanup: unknown) {
-    throw failure === null ? cleanup : bothFailures(failure.error, 'ending the arms root', cleanup);
+  } catch (error_: unknown) {
+    throw failure === null ? error_ : bothFailures(failure.error, 'ending the arms root', error_);
   }
   if (failure !== null) throw failure.error;
 }
@@ -374,13 +374,13 @@ async function keepChild(root: ArmsRoot, keep: boolean, name: string, write: (ke
 async function moveBack(error: unknown, moved: { readonly kept: string; readonly holder: string }, inside: string): Promise<void> {
   try {
     await renameFileAtomic(moved.kept, inside);
-  } catch (back: unknown) {
-    throw bothFailures(error, `moving '${moved.kept}' back into the run directory`, back);
+  } catch (error_: unknown) {
+    throw bothFailures(error, `moving '${moved.kept}' back into the run directory`, error_);
   }
   try {
     await removeHolder(moved.holder);
-  } catch (removal: unknown) {
-    throw bothFailures(error, `removing the empty '${moved.holder}' after moving the clone back`, removal);
+  } catch (error_: unknown) {
+    throw bothFailures(error, `removing the empty '${moved.holder}' after moving the clone back`, error_);
   }
 }
 
@@ -413,8 +413,8 @@ async function moveOut(
     if (holder === null) return { ok: false, reason };
     try {
       await removeHolder(holder);
-    } catch (removal: unknown) {
-      return { ok: false, reason: `${reason}; and the empty '${holder}' could not be removed: ${messageOf(removal)}` };
+    } catch (error_: unknown) {
+      return { ok: false, reason: `${reason}; and the empty '${holder}' could not be removed: ${messageOf(error_)}` };
     }
     return { ok: false, reason };
   }
