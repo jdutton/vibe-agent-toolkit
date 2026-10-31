@@ -29,11 +29,12 @@ import {
   resetArmHome,
   resetColdArm,
   samePath,
+  type ArmsRootHandle,
   underArmsRoot,
 } from '../../src/harness/arm-dirs.js';
 
-/** The ending of every verb but `perf arms`: the whole default run directory goes. */
-const WHOLE = { keep: false, preparedClone: null } as const;
+/** An ending with nothing kept past the capture: the whole default run directory goes. */
+const WHOLE = { keep: false, kept: null } as const;
 
 const POSIX = process.platform !== 'win32';
 
@@ -320,7 +321,7 @@ describe('closeArmsRoot', () => {
     scratchTmpdir();
     const root = openArmsRoot({ override: null, subjects: [] });
 
-    expect(await closeArmsRoot(root, { keep: true, preparedClone: null })).toBe(`Kept arms under ${root.path}`);
+    expect(await closeArmsRoot(root, { keep: true, kept: null })).toBe(`Kept arms under ${root.path}`);
     expect(existsSync(root.path)).toBe(true);
   });
 
@@ -342,32 +343,122 @@ describe('closeArmsRoot', () => {
   });
 });
 
-describe('closeArmsRoot — a root holding the prepared clone', () => {
-  it('removes every marked arm directory, keeps the clone and the root, and names the clone', async () => {
+/**
+ * Run a body under a default run directory, recording what is said.
+ *
+ * @param body - The capture
+ * @returns What was said, and the run directory's path
+ */
+async function underDefaultRoot(body: (root: ArmsRootHandle) => Promise<void>): Promise<{ readonly said: string[]; readonly run: string }> {
+  const said: string[] = [];
+  let run = '';
+  await underArmsRoot({ override: null, subjects: [] }, false, (line) => said.push(line), (root) => {
+    run = root.path;
+    return body(root);
+  });
+  return { said, run };
+}
+
+/**
+ * Lay out a prepared clone under a run directory, holding a file of the arm marker's name.
+ *
+ * @param root - The run directory
+ * @returns The clone
+ */
+function fakeClone(root: string): string {
+  prepareArmDirectories(armDirectories({ root, build: 'cand', arm: 'C', state: 'cold' }));
+  const clone = mkdirSyncReal(safePath.join(root, 'clone'));
+  writeFileSync(safePath.join(clone, 'README.md'), 'cloned');
+  // A subject may track a file of the arm marker's name; its clone is still not an arm.
+  writeFileSync(safePath.join(clone, '.vat-lab-arm'), 'tracked by the subject');
+  return clone;
+}
+
+/** @returns Every entry of the default arms base, sorted */
+function baseEntries(run: string): string[] {
+  return readdirSync(dirname(run)).sort((a, b) => a.localeCompare(b));
+}
+
+describe('underArmsRoot — only a child whose report was written outlives a default run directory', () => {
+  it('moves the child beside the run directory, hands write that path, removes the run directory whole, and names the child', async () => {
     scratchTmpdir();
-    const root = openArmsRoot({ override: null, subjects: [] });
-    const arm = armDirectories({ root: root.path, build: 'cand', arm: 'C', state: 'cold' });
-    prepareArmDirectories(arm);
-    const clone = mkdirSyncReal(safePath.join(root.path, 'clone'));
-    writeFileSync(safePath.join(clone, 'README.md'), 'cloned');
-    // A subject may track a file of the arm marker's name; its clone is still not an arm.
-    writeFileSync(safePath.join(clone, '.vat-lab-arm'), 'tracked by the subject');
+    const handed: string[] = [];
 
-    const said = await closeArmsRoot(root, { keep: false, preparedClone: 'clone' });
+    const { said, run } = await underDefaultRoot(async (root) => {
+      fakeClone(root.path);
+      await root.keepChild('clone', (kept) => handed.push(kept));
+    });
 
-    expect(said).toBe(`Removed arms under ${root.path}\nPrepared clone kept at ${clone}; remove it when done`);
-    expect(readdirSync(root.path).sort((a, b) => a.localeCompare(b))).toStrictEqual(['.vat-lab-root', 'clone']);
-    expect(readFileSync(safePath.join(clone, 'README.md'), 'utf-8')).toBe('cloned');
+    const kept = safePath.join(dirname(run), `clone-${basename(run).slice('run-'.length)}`);
+    expect(handed).toStrictEqual([kept]);
+    expect(said.at(-1)).toBe(`Removed arms under ${run}\nPrepared clone kept at ${kept}; remove it when done`);
+    expect(baseEntries(run)).toStrictEqual([basename(kept)]);
+    expect(readFileSync(safePath.join(kept, 'README.md'), 'utf-8')).toBe('cloned');
   });
 
-  it('leaves an unmarked child of the root where it is — only a marked arm is provably the lab’s', async () => {
+  it('removes the clone with the run directory when no report names it, and says nothing of a clone', async () => {
     scratchTmpdir();
-    const root = openArmsRoot({ override: null, subjects: [] });
-    const victim = foreignTree(safePath.join(root.path, 'foreign'));
 
-    await closeArmsRoot(root, { keep: false, preparedClone: 'clone' });
+    const { said, run } = await underDefaultRoot(async (root) => {
+      fakeClone(root.path);
+    });
 
-    expect(readFileSync(victim, 'utf-8')).toBe('not the lab’s');
+    expect(said.at(-1)).toBe(`Removed arms under ${run}`);
+    expect(baseEntries(run)).toStrictEqual([]);
+  });
+
+  it('moves the child back when the report cannot be written, so it ends with the run directory', async () => {
+    scratchTmpdir();
+    const said: string[] = [];
+    let run = '';
+
+    const thrown = underArmsRoot({ override: null, subjects: [] }, false, (line) => said.push(line), async (root) => {
+      run = root.path;
+      fakeClone(root.path);
+      await root.keepChild('clone', () => {
+        throw new Error('the report write failed');
+      });
+    });
+
+    await expect(thrown).rejects.toThrow('the report write failed');
+    expect(said.at(-1)).toBe(`Removed arms under ${run}`);
+    expect(baseEntries(run)).toStrictEqual([]);
+  });
+
+  it('refuses to move the child over something already at the kept path, writes nothing, and leaves that occupant', async () => {
+    scratchTmpdir();
+    let occupant = '';
+    const handed: string[] = [];
+
+    const thrown = underDefaultRoot(async (root) => {
+      fakeClone(root.path);
+      occupant = foreignTree(safePath.join(dirname(root.path), `clone-${basename(root.path).slice('run-'.length)}`));
+      await root.keepChild('clone', (kept) => handed.push(kept));
+    });
+
+    await expect(thrown).rejects.toThrow(REFUSED);
+    expect(handed).toStrictEqual([]);
+    expect(readFileSync(occupant, 'utf-8')).toBe('not the lab’s');
+    expect(baseEntries(dirname(dirname(occupant)))).toStrictEqual([basename(dirname(dirname(occupant)))]);
+  });
+
+  it('keeps the child where it is under --keep-arms and under an --arms-dir, both kept whole', async () => {
+    scratchTmpdir();
+    const named = safePath.join(out, 'named');
+    for (const [request, keep] of [[{ override: null, subjects: [] }, true], [{ override: named, subjects: [] }, false]] as const) {
+      const said: string[] = [];
+      let run = '';
+      let clone = '';
+      const handed: string[] = [];
+      await underArmsRoot(request, keep, (line) => said.push(line), async (root) => {
+        run = root.path;
+        clone = fakeClone(root.path);
+        await root.keepChild('clone', (kept) => handed.push(kept));
+      });
+      expect(handed).toStrictEqual([clone]);
+      expect(said.at(-1)).toBe(`Kept arms under ${run}\nPrepared clone kept at ${clone}; remove it when done`);
+      expect(readFileSync(safePath.join(clone, 'README.md'), 'utf-8')).toBe('cloned');
+    }
   });
 });
 
@@ -397,7 +488,7 @@ describe('underArmsRoot — a cleanup failure never costs the capture', () => {
     const said: string[] = [];
 
     await expect(
-      underArmsRoot({ override: null, subjects: [] }, WHOLE, (line) => said.push(line), async (path) => {
+      underArmsRoot({ override: null, subjects: [] }, false, (line) => said.push(line), async ({ path }) => {
         writeFileSync(report, '{}');
         unmark(path);
       }),
@@ -409,7 +500,7 @@ describe('underArmsRoot — a cleanup failure never costs the capture', () => {
   it('reports both when the capture threw and the cleanup failed too — the capture first, under its own code', async () => {
     scratchTmpdir();
 
-    const thrown = await underArmsRoot({ override: null, subjects: [] }, WHOLE, () => undefined, (path) => {
+    const thrown = await underArmsRoot({ override: null, subjects: [] }, false, () => undefined, ({ path }) => {
       unmark(path);
       return Promise.reject(new Error('the capture broke'));
     }).catch((error: unknown) => error);
@@ -424,7 +515,7 @@ describe('underArmsRoot — a cleanup failure never costs the capture', () => {
   it('keeps an arm refusal a refusal when the cleanup fails after it', async () => {
     scratchTmpdir();
 
-    const thrown = underArmsRoot({ override: null, subjects: [] }, WHOLE, () => undefined, (path) => {
+    const thrown = underArmsRoot({ override: null, subjects: [] }, false, () => undefined, ({ path }) => {
       unmark(path);
       return Promise.reject(armRefusal('the arm refused'));
     });
@@ -433,11 +524,27 @@ describe('underArmsRoot — a cleanup failure never costs the capture', () => {
     await expect(thrown).rejects.toThrow(/^the arm refused\n/u);
   });
 
+  it.for([
+    { what: 'a system error', original: Object.assign(new Error('ENOENT: no such file'), { code: 'ENOENT' }), code: 'ENOENT' },
+    { what: 'an arm refusal', original: armRefusal('the arm refused'), code: ARM_REFUSED_CODE },
+  ])('keeps $what’s code, the capture as cause and the cleanup as second, when the cleanup fails after it', async ({ original, code }) => {
+    scratchTmpdir();
+
+    const thrown = await underArmsRoot({ override: null, subjects: [] }, false, () => undefined, ({ path }) => {
+      unmark(path);
+      return Promise.reject(original);
+    }).catch((error: unknown) => error);
+
+    expect(thrown).toHaveProperty('code', code);
+    expect(thrown).toHaveProperty('cause', original);
+    expect(thrown).toHaveProperty('second', expect.objectContaining({ code: ARM_REFUSED_CODE }));
+  });
+
   it('rethrows the capture’s own error when the cleanup succeeds', async () => {
     scratchTmpdir();
     const failure = new Error('the capture broke');
 
-    await expect(underArmsRoot({ override: null, subjects: [] }, WHOLE, () => undefined, () => Promise.reject(failure))).rejects.toBe(failure);
+    await expect(underArmsRoot({ override: null, subjects: [] }, false, () => undefined, () => Promise.reject(failure))).rejects.toBe(failure);
   });
 });
 

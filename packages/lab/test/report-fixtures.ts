@@ -54,6 +54,7 @@ export function makeReport(over: Partial<ReportEnvelope<unknown>> = {}): ReportE
     coordinate: COORDINATE,
     capturedAt: '2026-08-09T00:00:00.000Z',
     removedEnv: [],
+    npmNetworkEnv: [],
     exits: [],
     body: { commands: [] },
     ...over,

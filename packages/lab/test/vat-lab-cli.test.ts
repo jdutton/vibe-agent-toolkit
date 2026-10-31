@@ -784,6 +784,7 @@ function unionEnvelope(row: string, preparedClone: string | null, commit: string
     },
     capturedAt: '2026-10-31T00:00:00.000Z',
     removedEnv: [],
+    npmNetworkEnv: [],
     exits: [],
     body: {
       arm: { set: {}, unset: [] },

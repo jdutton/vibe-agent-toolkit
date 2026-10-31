@@ -65,6 +65,7 @@ import {
   writeSync,
 } from 'node:fs';
 import { userInfo } from 'node:os';
+import { basename, dirname } from 'node:path';
 
 import {
   applyTreePlan,
@@ -72,10 +73,12 @@ import {
   isAbsolutePath,
   isPathAbsentError,
   isUnderRoot,
+  isVatError,
   mkdirSyncReal,
   normalizedTmpdir,
   type Ownership,
   planTreeChanges,
+  renameFileAtomic,
   safePath,
   type TreeChange,
   VatError,
@@ -83,7 +86,7 @@ import {
 
 import type { InstrumentVersion } from '../envelope/coordinate.js';
 
-import { type ArmEnvironment, clearedEnvironment, envNameSpelling, mergeArmEnvironments } from './arm-env.js';
+import { type ArmEnvironment, type ClearedEnvironment, clearedEnvironment, envNameSpelling, mergeArmEnvironments } from './arm-env.js';
 import type { CacheMode } from './types.js';
 
 /** The code of every refusal to lay out, reset or place an arm — what a CLI dispatches on. */
@@ -94,6 +97,9 @@ const ARM_MARKER = '.vat-lab-arm';
 
 /** The file the lab writes into every arms root it creates or adopts empty; its absence means "not ours". */
 const ROOT_MARKER = '.vat-lab-root';
+
+/** Every default run directory's name starts with it; what follows is unique to the run. */
+const RUN_PREFIX = 'run-';
 
 /** Owner-only, for a file the lab writes. */
 const PRIVATE_FILE_MODE = 0o600;
@@ -194,11 +200,28 @@ interface ArmsRootEnding {
   /** `--keep-arms`: a default run directory is kept whole. */
   readonly keep: boolean;
   /**
-   * The name of the root's child that outlives the capture — `perf arms`' prepared
-   * clone, which its report names — or `null` when nothing does. With one, ending
-   * a default run directory removes its arm directories and keeps the root.
+   * Where the one child that outlives the capture now is — `perf arms`'
+   * prepared clone, once a report naming it was written
+   * ({@link ArmsRootHandle.keepChild}) — or `null` when nothing outlives it.
    */
-  readonly preparedClone: string | null;
+  readonly kept: string | null;
+}
+
+/** What a capture is handed: its arms root, and the one way a child of it outlives the capture. */
+export interface ArmsRootHandle {
+  readonly path: string;
+  /**
+   * Publish a report naming a child of the root that outlives the capture —
+   * `perf arms`' prepared clone. Out of a default run directory, which ends
+   * whole, the child is first moved beside it, to `<base>/<name>-<run
+   * suffix>`; `write` is handed where the child now is. Only once `write`
+   * returns is the child kept: if it throws, the child is moved back and ends
+   * with the root, so nothing outlives a capture whose report was not written.
+   *
+   * @param name - The child, a plain name
+   * @param write - Writes the report naming the child's kept path
+   */
+  keepChild(name: string, write: (kept: string) => void): Promise<void>;
 }
 
 /**
@@ -237,18 +260,17 @@ export function openArmsRoot(request: ArmsRootRequest): ArmsRoot {
   requireDirectoryOrAbsent(base, 'the arms base');
   if (kindOf(base) === 'absent') createPrivateDirectory(base);
   requireOwnPrivate(base);
-  const run = mkdtempSync(safePath.join(base, 'run-'));
+  const run = mkdtempSync(safePath.join(base, RUN_PREFIX));
   narrowToOwner(run);
   writeMarker(run, ROOT_MARKER);
   return { path: run, temporary: true };
 }
 
 /**
- * End an invocation's arms root: remove a temporary one through the
+ * End an invocation's arms root: remove a temporary one whole through the
  * marker-gated tree-change protocol, unless the caller keeps it; an
- * `--arms-dir` the operator named is always kept. A root holding a prepared
- * clone loses only its marked arm directories, and the clone stays where the
- * report says it is.
+ * `--arms-dir` the operator named is always kept. A child kept past the
+ * capture is no longer in a temporary root ({@link ArmsRootHandle.keepChild}).
  *
  * @param root - From {@link openArmsRoot}
  * @param ending - See {@link ArmsRootEnding}
@@ -256,14 +278,13 @@ export function openArmsRoot(request: ArmsRootRequest): ArmsRoot {
  * @throws {VatError} {@link ARM_REFUSED_CODE} when a temporary root no longer carries its marker
  */
 export async function closeArmsRoot(root: ArmsRoot, ending: ArmsRootEnding): Promise<string> {
-  const clone = ending.preparedClone === null ? null : safePath.join(root.path, ending.preparedClone);
-  const cloneLine = clone !== null && kindOf(clone) === 'directory' ? `\nPrepared clone kept at ${clone}; remove it when done` : '';
-  if (!root.temporary || ending.keep) return `Kept arms under ${root.path}${cloneLine}`;
+  const keptLine = ending.kept === null ? '' : `\nPrepared clone kept at ${ending.kept}; remove it when done`;
+  if (!root.temporary || ending.keep) return `Kept arms under ${root.path}${keptLine}`;
   if (!isRootMarked(root.path)) {
     throw armRefusal(`'${root.path}' carries no ${ROOT_MARKER}: it is no longer provably the lab's, so it is left in place`);
   }
-  await applyTreePlan(await planTreeChanges(ending.preparedClone === null ? [rootRemoval(root.path)] : armRemovals(root.path, ending.preparedClone)));
-  return `Removed arms under ${root.path}${cloneLine}`;
+  await applyTreePlan(await planTreeChanges([rootRemoval(root.path)]));
+  return `Removed arms under ${root.path}${keptLine}`;
 }
 
 /**
@@ -275,41 +296,91 @@ export async function closeArmsRoot(root: ArmsRoot, ending: ArmsRootEnding): Pro
  * the capture's own error code.
  *
  * @param request - See {@link ArmsRootRequest}
- * @param ending - See {@link ArmsRootEnding}
+ * @param keep - `--keep-arms`: a default run directory is kept whole
  * @param say - Where the operator reads what became of the root (stderr)
- * @param body - The capture and its publication, handed the root's path
+ * @param body - The capture and its publication, handed the root
  */
 export async function underArmsRoot(
   request: ArmsRootRequest,
-  ending: ArmsRootEnding,
+  keep: boolean,
   say: (line: string) => void,
-  body: (armsRoot: string) => Promise<void>,
+  body: (root: ArmsRootHandle) => Promise<void>,
 ): Promise<void> {
   const root = openArmsRoot(request);
   say(`Arms under ${root.path}`);
+  let kept: string | null = null;
   let failure: { readonly error: unknown } | null = null;
   try {
-    await body(root.path);
+    await body({
+      path: root.path,
+      keepChild: async (name, write) => {
+        kept = await keepChild(root, keep, name, write);
+      },
+    });
   } catch (error: unknown) {
     failure = { error };
   }
   try {
-    say(await closeArmsRoot(root, ending));
+    say(await closeArmsRoot(root, { keep, kept }));
   } catch (cleanup: unknown) {
-    throw failure === null ? cleanup : bothFailures(failure.error, cleanup);
+    throw failure === null ? cleanup : bothFailures(failure.error, 'ending the arms root', cleanup);
   }
   if (failure !== null) throw failure.error;
 }
 
 /**
- * @param original - What the capture threw
- * @param cleanup - What ending the arms root threw after it
- * @returns One error naming both, the original first, carrying the original's code when it has one
+ * {@link ArmsRootHandle.keepChild}, for one root.
+ *
+ * @param root - From {@link openArmsRoot}
+ * @param keep - `--keep-arms`
+ * @param name - The child
+ * @param write - Writes the report naming the child's kept path
+ * @returns Where the child is kept
+ * @throws {VatError} {@link ARM_REFUSED_CODE} when something already holds the kept path
  */
-function bothFailures(original: unknown, cleanup: unknown): Error {
-  const message = `${messageOf(original)}\n…and ending the arms root failed too: ${messageOf(cleanup)}`;
+async function keepChild(root: ArmsRoot, keep: boolean, name: string, write: (kept: string) => void): Promise<string> {
+  const inside = safePath.join(root.path, name);
+  if (!root.temporary || keep) {
+    write(inside);
+    return inside;
+  }
+  const kept = safePath.join(dirname(root.path), `${name}-${basename(root.path).slice(RUN_PREFIX.length)}`);
+  if (kindOf(kept) !== 'absent') throw armRefusal(`'${kept}' already exists, so '${inside}' is not moved over it and ends with the run directory`);
+  // One rename, whole tree, retried through Windows contention: nothing is replaced.
+  await renameFileAtomic(inside, kept);
+  try {
+    write(kept);
+  } catch (error: unknown) {
+    try {
+      await renameFileAtomic(kept, inside);
+    } catch (back: unknown) {
+      throw bothFailures(error, `moving '${kept}' back into the run directory`, back);
+    }
+    throw error;
+  }
+  return kept;
+}
+
+/**
+ * @param original - What failed first
+ * @param then - What was attempted after it, as a phrase
+ * @param second - What that threw
+ * @returns One error naming both, the original first: the original is its
+ *   `cause` and lends it its `code` (a {@link VatError}'s, or a Node system
+ *   error's such as `ENOENT`), and what came after is its `second`
+ */
+function bothFailures(original: unknown, then: string, second: unknown): Error & { readonly second: unknown } {
+  const message = `${messageOf(original)}\n…and ${then} failed too: ${messageOf(second)}`;
   const options = { cause: original };
-  return original instanceof VatError ? new VatError(original.code, message, options) : new Error(message, options);
+  if (isVatError(original)) return Object.assign(new VatError(original.code, message, options), { second });
+  const code = codeOf(original);
+  return Object.assign(new Error(message, options), code === undefined ? { second } : { code, second });
+}
+
+/** @returns A thrown value's string `code` (a Node system error's `ENOENT`, say), or `undefined` */
+function codeOf(error: unknown): string | undefined {
+  const code = typeof error === 'object' && error !== null ? (error as { readonly code?: unknown }).code : undefined;
+  return typeof code === 'string' ? code : undefined;
 }
 
 /** @returns An error's message, or the thrown value spelled */
@@ -327,24 +398,6 @@ function rootRemoval(root: string): TreeChange {
     recognise: () => (isRootMarked(root) ? { owned: true } : { owned: false, reason: `'${root}' carries no ${ROOT_MARKER}` }),
   };
   return { op: 'remove', dest: root, ownership, label: 'arms root' };
-}
-
-/**
- * @param root - A marked arms root
- * @param kept - The child that stays
- * @returns The removal of every marked arm directory under it; anything else is left as it is
- */
-function armRemovals(root: string, kept: string): TreeChange[] {
-  return entriesOf(root)
-    .filter((entry) => entry.isDirectory() && entry.name !== kept && isMarked(safePath.join(root, entry.name)))
-    .map((entry) => {
-      const arm = safePath.join(root, entry.name);
-      const ownership: Ownership = {
-        kind: 'vat-made',
-        recognise: () => (isMarked(arm) ? { owned: true } : { owned: false, reason: `'${arm}' carries no ${ARM_MARKER}` }),
-      };
-      return { op: 'remove', dest: arm, ownership, label: 'arm directory' };
-    });
 }
 
 /**
@@ -610,12 +663,9 @@ export function armDirectoryEnvironment(dirs: ArmDirectories, platform: NodeJS.P
  *
  * @param dirs - The arm's directories
  * @param own - What the caller sets and removes on top
- * @returns The environment, and the inherited names it removed
+ * @returns The environment, and what it removed and kept of the inherited one
  */
-export function armStepEnvironment(
-  dirs: ArmDirectories,
-  own: ArmEnvironment,
-): { readonly env: ArmEnvironment; readonly removed: readonly string[] } {
+export function armStepEnvironment(dirs: ArmDirectories, own: ArmEnvironment): ClearedEnvironment {
   return clearedEnvironment(
     process.env,
     'vat',

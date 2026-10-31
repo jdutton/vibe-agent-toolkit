@@ -6,8 +6,9 @@
  *   prepares the clone under the arms root.
  *   An `--out` that IS the subject (`--out .` from its root) is refused before
  *   anything runs, and the subject is neither written into nor chmodded.
- *   In a default run directory it removes every arm directory and keeps the
- *   prepared clone its report names, saying where.
+ *   In a default run directory it keeps only the prepared clone its report
+ *   names, beside the run directory, which it removes whole, saying both; a
+ *   refused run writes no report and leaves nothing.
  * - `vat-lab perf run` removes its default run directory of arms when the
  *   capture ends, and keeps it under `--keep-arms`, saying which.
  *
@@ -18,7 +19,7 @@
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { everywhere, mkdirSyncReal, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, afterEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 
 import { createProgram } from '../../src/bin/vat-lab.js';
@@ -122,24 +123,58 @@ describe('vat-lab perf arms — what it writes is owner-only', () => {
   });
 });
 
-describe('vat-lab perf arms — the default run directory keeps the prepared clone and loses the arms', () => {
-  it('removes every arm directory, keeps the clone the report names, and says where it is', async () => {
-    const sandbox = sandboxed();
-    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
-    const subject = cleanSubject();
-    const out = safePath.join(tempDir('lab-arms-clone-kept-out-'), 'out');
+/**
+ * @param sandbox - The run's OS temp directory
+ * @returns Every entry of the lab's default arms base under it, sorted
+ */
+function armsBaseEntries(sandbox: string): string[] {
+  const base = readdirSync(sandbox).find((name) => name.startsWith('vat-lab-arms-'));
+  if (base === undefined) throw new Error(`no vat-lab-arms-* base under '${sandbox}'`);
+  return readdirSync(safePath.join(sandbox, base)).sort((a, b) => a.localeCompare(b));
+}
 
-    await createProgram().parseAsync([
-      'node', 'vat-lab', 'perf', 'arms', subject, '--build', `cand=${candidate()}`, '--arm', 'cand:ci-c:cold', '--out', out,
-    ]);
+/**
+ * Run `perf arms` over a fresh clean subject into a default run directory.
+ *
+ * @param extra - Further flags
+ * @returns The sandbox, the stderr written, and the report path
+ */
+async function defaultArmsRun(extra: readonly string[]): Promise<{ readonly sandbox: string; readonly said: string; readonly report: string }> {
+  const sandbox = sandboxed();
+  const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+  const subject = cleanSubject();
+  const out = safePath.join(tempDir('lab-arms-default-out-'), 'out');
+  await createProgram().parseAsync([
+    'node', 'vat-lab', 'perf', 'arms', subject, '--build', `cand=${candidate()}`, '--arm', 'cand:ci-c:cold', '--out', out, ...extra,
+  ]);
+  return { sandbox, said: written(stderr), report: safePath.join(out, 'arms-report.json') };
+}
 
-    expect(process.exitCode, written(stderr)).toBeUndefined();
-    const parsed = JSON.parse(readFileSync(safePath.join(out, 'arms-report.json'), 'utf-8')) as { readonly prepared: { readonly path: string } };
+describe('vat-lab perf arms — a default run directory leaves only the clone its report names', () => {
+  it('on success: removes the run directory whole, keeps the clone beside it, and says both', async () => {
+    const { sandbox, said, report } = await defaultArmsRun([]);
+
+    expect(process.exitCode, said).toBeUndefined();
+    const parsed = JSON.parse(readFileSync(report, 'utf-8')) as { readonly prepared: { readonly path: string } };
     expect(statSync(parsed.prepared.path).isDirectory()).toBe(true);
-    expect(written(stderr)).toContain(`Prepared clone kept at ${parsed.prepared.path}; remove it when done`);
-    const root = safePath.join(parsed.prepared.path, '..');
-    expect(safePath.relative(sandbox, root).startsWith('vat-lab-arms-')).toBe(true);
-    expect(readdirSync(root).sort((a, b) => a.localeCompare(b))).toStrictEqual(['.vat-lab-root', 'clone']);
+    const run = /^Arms under (.+)$/mu.exec(said)?.[1] ?? '';
+    expect(said).toContain(`Removed arms under ${run}\nPrepared clone kept at ${parsed.prepared.path}; remove it when done`);
+    const kept = safePath.relative(safePath.join(run, '..'), parsed.prepared.path);
+    expect(armsBaseEntries(sandbox)).toStrictEqual([kept]);
+  });
+
+  it.for([
+    { refused: 'a commit the subject does not have', extra: ['--commit', 'no-such-ref'] },
+    { refused: 'a failing prerequisite', extra: ['--prerequisite', 'node -e process.exit(3)'] },
+  ])('refusing $refused: writes no report, removes the run directory whole, and keeps no clone', async ({ extra }) => {
+    const { sandbox, said, report } = await defaultArmsRun(extra);
+
+    expect(process.exitCode).toBe(2);
+    expect(said).toMatch(/^REFUSED: /mu);
+    expect(pathPresent(report, 'entry', everywhere('destination'), 'confirmed')).toBe(false);
+    expect(said).toMatch(/^Removed arms under .+$/mu);
+    expect(said).not.toContain('Prepared clone kept');
+    expect(armsBaseEntries(sandbox)).toStrictEqual([]);
   });
 });
 

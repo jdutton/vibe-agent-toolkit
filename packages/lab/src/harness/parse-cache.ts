@@ -89,6 +89,9 @@ export function resolveParseCacheDirectory(instrument: ResolvedInstrument, dirs:
 /** `npx`'s own project directory under an npm cache: `<cache>/_npx/<hash>/`. */
 const NPX_PROJECTS = '_npx';
 
+/** The manifest file that roots an npm project or package. */
+const PACKAGE_MANIFEST = 'package.json';
+
 /**
  * The file the build's module graph resolves from: its entry for `node <entry>`;
  * for `npx`, the copy npx runs — the pinned version installed in the steps'
@@ -118,7 +121,7 @@ function moduleBase(instrument: ResolvedInstrument, dirs: ArmDirectories, cwd: s
     if (installs.length > 1) {
       return { ok: false, reason: `the arm's npm cache '${projects}' holds ${String(installs.length)} npx installs — which one is this build is a guess` };
     }
-    return { ok: true, dir: safePath.join(projects, only.name, 'package.json') };
+    return { ok: true, dir: safePath.join(projects, only.name, PACKAGE_MANIFEST) };
   }
   const entry = instrument.command === process.execPath ? instrument.leadingArgs[0] : undefined;
   return entryBase(entry);
@@ -154,7 +157,7 @@ function localNpxCopy(spec: string, cwd: string): string | null {
   const at = spec.lastIndexOf('@');
   if (at <= 0) return null;
   const prefix = npmLocalPrefix(cwd);
-  const manifest = safePath.join(prefix, 'node_modules', spec.slice(0, at), 'package.json');
+  const manifest = safePath.join(prefix, 'node_modules', spec.slice(0, at), PACKAGE_MANIFEST);
   if (!present(manifest)) return null;
   const installed: unknown = JSON.parse(readFileSync(manifest, 'utf-8'));
   const version = typeof installed === 'object' && installed !== null && 'version' in installed ? installed.version : undefined;
@@ -167,7 +170,7 @@ function localNpxCopy(spec: string, cwd: string): string | null {
  */
 function npmLocalPrefix(cwd: string): string {
   for (let dir = safePath.resolve(cwd); ; dir = dirname(dir)) {
-    if (present(safePath.join(dir, 'package.json')) || present(safePath.join(dir, 'node_modules'))) return dir;
+    if (present(safePath.join(dir, PACKAGE_MANIFEST)) || present(safePath.join(dir, 'node_modules'))) return dir;
     if (dirname(dir) === dir) return safePath.resolve(cwd);
   }
 }

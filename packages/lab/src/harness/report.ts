@@ -25,6 +25,8 @@ import type { CaptureRequest } from './types.js';
 interface MeasuredCommand {
   /** What its children went without. */
   readonly removed: readonly string[];
+  /** The npm network setting names its children kept. */
+  readonly npmNetwork: readonly string[];
   /** The command, with the commitment its exits were judged by. */
   readonly spec: { readonly name: string; readonly exit: ExitCommitment };
   readonly results: readonly SequenceResult[];
@@ -63,6 +65,7 @@ export function buildReportEnvelope<TBody>(
     },
     capturedAt: request.capturedAt,
     removedEnv: [...new Set(measured.flatMap((measurement) => measurement.removed))].sort(compareByCodeUnit),
+    npmNetworkEnv: [...new Set(measured.flatMap((measurement) => measurement.npmNetwork))].sort(compareByCodeUnit),
     exits: measured.flatMap((measurement) => recordExits([measurement.spec], measurement.results)),
     body,
   };

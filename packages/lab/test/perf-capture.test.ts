@@ -351,7 +351,7 @@ describe('capturePerf — a default command is judged by the exits it declares (
 
     expect(onlyRow(report).failure).toBeNull();
     expect(onlyRow(report).exitCode).toBe(1);
-    expect(report.exits).toEqual([{ step: 'audit', commitment: { kind: 'observed', completed: [0, 1] }, observed: 1 }]);
+    expect(report.exits).toEqual([{ step: 'audit', commitment: { kind: 'observed', completed: [0, 1] }, outcome: 'shared', code: 1 }]);
   });
 
   it('fails a default command whose repeats alternate 0 and 1 — two amounts of work', async () => {
@@ -367,7 +367,7 @@ describe('capturePerf — a default command is judged by the exits it declares (
     expect(onlyRow(report).failure).toBe(
       'the repeats did not exit alike (audit=0 | audit=1) — a set that did different amounts of work is no measurement',
     );
-    expect(report.exits).toEqual([{ step: 'audit', commitment: { kind: 'observed', completed: [0, 1] }, observed: null }]);
+    expect(report.exits).toEqual([{ step: 'audit', commitment: { kind: 'observed', completed: [0, 1] }, outcome: 'disagreed', code: null }]);
   });
 
   it('fails a default command that exits 2, which no verb declares as completed', async () => {
@@ -500,6 +500,19 @@ describe('capturePerf — the envelope', () => {
     expect(report.removedEnv).toEqual(expect.arrayContaining(['VAT_LAB_REPORT_PLANTED', 'XDG_CONFIG_HOME']));
     expect(report.removedEnv).not.toContain('HOME');
     expect(readEnvelope(report).ok).toBe(true);
+  });
+
+  it('records the names, never the values, of the npm network settings its VAT steps kept', async () => {
+    const probe = setupProbe(PREFIX);
+    vi.stubEnv('npm_config_registry', 'https://registry.example/');
+    vi.stubEnv('npm_config_ignore_scripts', 'true');
+
+    const report = await capture(probe, { runs: 1 });
+
+    expect(report.npmNetworkEnv).toContain('npm_config_registry');
+    expect(report.npmNetworkEnv).not.toContain('npm_config_ignore_scripts');
+    expect(report.removedEnv).toContain('npm_config_ignore_scripts');
+    expect(JSON.stringify(report)).not.toContain('https://registry.example/');
   });
 
   it('produces a body that validates against the facet schema, failures included', async () => {

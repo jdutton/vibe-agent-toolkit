@@ -104,11 +104,14 @@ landing inside the tree being measured changes the next run's numbers.
 
 A timed arm is a **sequence of steps** run in `<arms root>/<build>-<arm>-<state>/{store,tmp,home,npm-cache}`
 (created at 0700), from a **cleared environment**: no inherited `VAT_*`, temp, XDG, git config,
-git template or exec path, or npm identity or config-file setting (in any case: `userconfig`,
-`globalconfig`, `always-auth`, every `_auth*` key and `//host/:_authToken`-style credential, so no
-developer `.npmrc` or registry token) reaches a VAT step — npm's network settings (`registry`,
-`proxy`, `https-proxy`, `noproxy`, `cafile`, `ca`, `strict-ssl`, a scoped `@scope:registry`) are
-kept, so an `npx:` arm still reaches its registry; git reads no system config or attributes
+git template or exec path, or inherited `npm_config_*` setting reaches a VAT step — but npm's
+network settings, an allow list in any case and in either the `-` or `_` spelling (`registry`, a
+scoped `@scope:registry`, `proxy`, `https-proxy`, `noproxy`/`no-proxy`, `ca`, `cafile`,
+`strict-ssl`), so an `npx:` arm still reaches its registry. Everything else under `npm_config_*` is
+removed: identity and config files (`userconfig`, `_auth`, a `//host/:_authToken`, `cert`, `key`)
+and whatever changes what npm does (`ignore-scripts`, `offline`, `node-options`, `script-shell`, …).
+Every report records the names, never the values, of the network settings kept (`npmNetworkEnv`,
+on the envelope and on each arm), so two developers' runs can be told apart; git reads no system config or attributes
 (`GIT_CONFIG_NOSYSTEM=1`, `GIT_ATTR_NOSYSTEM=1`); `TMPDIR`/`TEMP`/`TMP` point at the arm's `tmp/`,
 and `HOME` and `CLAUDE_CONFIG_DIR` at its empty `home/`. A developer's `VAT_PROJECTION_STORE=off`,
 global git exclude or `~/.claude/CLAUDE.md` therefore never decides a number. **Outside the arm:**
@@ -125,13 +128,20 @@ single-command facet runs are one-step sequences under `<arms root>/<build>-<com
   `.vat-lab-root` into it and then its arms and clone beneath it, and never chmods it; an existing,
   non-empty one without the marker is refused, nothing written into it.
 - **The default run directory ends with the capture.** When the capture ends — passed or failed —
-  the lab removes the `run-*` directory (stores, caches, npm's fetch) and prints
+  the lab removes the whole `run-*` directory (stores, caches, npm's fetch) and prints
   `Removed arms under <root>`; `--keep-arms` keeps it and prints `Kept arms under <root>`. A named
-  `--arms-dir` is always kept. `perf arms` keeps its **prepared clone**, which its report names
-  (`prepared.path`): it removes each arm directory, keeps the root holding `clone/`, and prints
-  `Prepared clone kept at <root>/clone; remove it when done`. Every result is written before the root
-  ends, so a cleanup that fails costs no report; when the capture failed too, both are reported,
-  the capture's first.
+  `--arms-dir` is always kept. Exactly one thing outlives a default run directory: the **prepared
+  clone** of a `perf arms` run whose `arms-report.json` was written. Just before writing it, the
+  lab moves the clone out of `<base>/run-<id>/clone` to `<base>/clone-<id>` (beside the run
+  directory, under the same `vat-lab-arms-<user>/` base), writes that path as `prepared.path`,
+  removes the run directory whole, and prints `Prepared clone kept at <base>/clone-<id>; remove it
+  when done` — delete it yourself once `verdict run --prepared` and `verdict union` are done with
+  it. A `perf arms` run that writes no report (a bad `--commit`, a failing `--prerequisite`, a
+  clone not at the committed tree, a refused arm, a report that cannot be written) leaves nothing:
+  the clone goes with the run directory, and no `Prepared clone kept` line is printed. Under
+  `--keep-arms` or a named `--arms-dir` the clone stays at `<root>/clone`. Every result is written
+  before the root ends, so a cleanup that fails costs no report; when the capture failed too, both
+  are reported, the capture's first, under the capture's own code.
 - **The lab chmods only what it created.** `--out` is created 0700 when absent and written into
   as-is when it exists, and every directory the lab makes under it (an ab run's `pair-N/<arm>/`) is 0700; reports are written 0600, never through a link. An `--out` that IS a subject
   (`--out .` from its root) is refused. `--out` holds reports only, so the default `.vat-lab/`
@@ -157,7 +167,8 @@ single-command facet runs are one-step sequences under `<arms root>/<build>-<com
   `--expect-exit <build>:<sequence>:<step>=<code>` (e.g. `cand:ci-c:validate-ci=1`) says otherwise;
   a list, a repeated step, exit 2 and a code outside 0–255 are refused. Exiting otherwise is a
   failed measurement (`step '<name>' exited N, not exactly C: <stderr>`), never a slow one, and
-  each arm's `exits` records the commitment and the code its rounds shared. (`<facet> run|ab`
+  each arm's `exits` records the commitment and the outcome: `shared` with the `code` its rounds
+  shared, `not-run`, or `disagreed`. (`<facet> run|ab`
   differ: a command may exit any code its verb completes with — 0, or 0 or 1 for a gate — alike on
   every repeat; `--expect-exit <command>=<code>` makes it exact. See `docs/run-harness.md`.)
   A committed non-zero exit ends the repetition as CI's `&&` does: completed, nothing after it run.
@@ -173,7 +184,8 @@ single-command facet runs are one-step sequences under `<arms root>/<build>-<com
   entries only — never from a working directory, which here is the subject's clone.
 
 `vat-lab perf arms` runs named CI sequences across builds in **interleaved rounds** (default 5),
-after preparing a `git clone --local` of the subject at `--commit` under `<arms root>/clone`: the
+after preparing a `git clone --local` of the subject at `--commit` under `<arms root>/clone` (kept
+afterwards where the report's `prepared.path` says — see above): the
 `--prerequisite` commands, then one warm-up in its own scratch arm
 (`<arms root>/prepare-warmup-cold/` — outside the clone, never a measured arm), then a check that
 `git status --porcelain` is empty and the tree equals the committed tree. Every preparation git runs
@@ -208,7 +220,7 @@ vat-lab perf arms ../subject --build base=dist:/path/to/base/cli --build cand=di
   --arms-dir /tmp/lab-arms --out ./arms
 ```
 
-The verdict facet reads the same prepared tree with `verdict run --prepared <alias>=<arms root>/clone`
+The verdict facet reads the same prepared tree with `verdict run --prepared <alias>=<prepared.path>`
 (the report records it as `preparedClone`), runs `validate` and the `*-ci` verbs, and
 **bar 3** is
 

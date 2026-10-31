@@ -156,6 +156,7 @@ describe('renderVerdictReport', () => {
       facet: 'verdict',
       capturedAt: '2026-10-03T00:00:00.000Z',
       removedEnv: [],
+      npmNetworkEnv: [],
       exits: [],
       coordinate: {
         subject: { id: 'crucible-1', source: '/work/tree' },

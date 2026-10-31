@@ -93,6 +93,8 @@ export interface ArmReport {
   readonly removedEnv: readonly string[];
   /** Inherited names the arm's tool steps did not receive. */
   readonly removedToolEnv: readonly string[];
+  /** Inherited npm network setting names the arm's VAT steps kept — names only, never values. */
+  readonly npmNetworkEnv: readonly string[];
   /** Every step's exit commitment (always `exact` here) and the code its repetitions shared. */
   readonly exits: readonly RecordedExit[];
   readonly priming: ArmRepetition | null;
@@ -222,6 +224,7 @@ export async function captureArms(request: CaptureArmsRequest): Promise<ArmsRepo
         state: arm.state,
         removedEnv: run.removed,
         removedToolEnv: run.removedTool,
+        npmNetworkEnv: run.npmNetwork,
         exits: recordExits(arm.steps, run.results),
         priming: run.priming === null ? null : repetitionOf(run.priming),
         repetitions: run.results.map((result) => repetitionOf(result)),

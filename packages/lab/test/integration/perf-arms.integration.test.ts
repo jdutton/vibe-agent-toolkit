@@ -56,8 +56,8 @@ describe('captureArms — rounds', () => {
     const report = await captureArms(armsRequest(probe));
 
     expect(report.arms.map((arm) => arm.exits)).toEqual([
-      [{ step: 'a', commitment: { kind: 'exact', code: 0 }, observed: 0 }],
-      [{ step: 'c', commitment: { kind: 'exact', code: 0 }, observed: 0 }],
+      [{ step: 'a', commitment: { kind: 'exact', code: 0 }, outcome: 'shared', code: 0 }],
+      [{ step: 'c', commitment: { kind: 'exact', code: 0 }, outcome: 'shared', code: 0 }],
     ]);
   });
 

@@ -129,7 +129,7 @@ export function mergeArmEnvironments(base: ArmEnvironment, over: ArmEnvironment)
  * `arm-dirs.ts`): with the rest removed, git reads no system config or
  * attributes and its global config is the empty arm home. Every other way a
  * shell can hand git a config — {@link GIT_CONFIG_OVERRIDE} — goes with them,
- * and so does every inherited npm identity or config-file setting ({@link NPM_CONFIG}).
+ * and so does every inherited `npm_config_*` but the network ones ({@link NPM_NETWORK}).
  *
  * Kept here, not in utils' `INHERITED_GIT_ENV`: that list is what git exports
  * into a HOOK, pinned equal to the shipped hook scrub; these are the
@@ -155,17 +155,22 @@ export const CLEARED_ENV_NAMES = Object.freeze([
 /** `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>`: the numbered config pairs `GIT_CONFIG_COUNT` enables. */
 const GIT_CONFIG_OVERRIDE = /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/u;
 
+/** Every npm setting a shell can hand a child, in whatever case: npm reads the prefix case-insensitively. */
+const NPM_CONFIG = /^npm_config_/iu;
+
 /**
- * The npm settings that carry the developer's identity or config files, in
- * either case npm reads them in: `userconfig` and `globalconfig` (the real
- * `.npmrc` files), every `_auth*`-style key and every `//host/:…` credential,
- * and `always-auth`. An npx arm would otherwise fetch as the developer. The
- * network settings — `registry`, `proxy`, `https-proxy`, `noproxy`, `cafile`,
- * `ca`, `strict-ssl`, a scoped `@scope:registry` — are kept, so an arm behind a
- * proxy or a private registry still reaches it. The arm's own `npm_config_*`
- * (see `arm-dirs.ts`) are set, not inherited.
+ * The only inherited npm settings a VAT step keeps — the network ones, so an
+ * npx arm behind a proxy, a private registry or a corporate CA still reaches
+ * it: `registry`, a scoped `@scope:registry`, `proxy`, `https-proxy`,
+ * `noproxy`/`no-proxy`, `ca`, `cafile` and `strict-ssl`, in either the `-` or
+ * the `_` spelling and any case. Every other `npm_config_*` is removed: the
+ * developer's identity and config files (`userconfig`, `_auth`, a `//host/:…`
+ * token, `cert`/`key`), and everything that changes what npm does
+ * (`ignore-scripts`, `offline`, `node-options`, `script-shell`, …). An allow
+ * list, so a setting npm adds later is removed until it is named here. The
+ * arm's own `npm_config_*` (see `arm-dirs.ts`) are set, not inherited.
  */
-const NPM_CONFIG = /^npm_config_(?:userconfig|globalconfig|always[-_]auth|_.*|\/\/.*)$/iu;
+const NPM_NETWORK = /^npm_config_(?:registry|@[^:/]+:registry|proxy|https[-_]proxy|no[-_]?proxy|ca|cafile|strict[-_]ssl)$/iu;
 
 /**
  * What git exports into a hook — which repository, index, object store,
@@ -187,11 +192,16 @@ const HOOK_GIT_NAMES: ReadonlySet<string> = new Set<string>(INHERITED_GIT_ENV);
  */
 type StepEnvironmentKind = 'vat' | 'tool';
 
-/** A cleared environment, and the inherited names it removed — recorded in the run report. */
-interface ClearedEnvironment {
+/** A cleared environment, and what it removed and kept of the inherited one — recorded in the run report. */
+export interface ClearedEnvironment {
   readonly env: ArmEnvironment;
   /** Inherited names removed, sorted; a name the arm sets itself is not listed. */
   readonly removed: readonly string[];
+  /**
+   * Inherited npm network setting names kept ({@link NPM_NETWORK}), sorted —
+   * names only, never values — so two developers' runs can be told apart.
+   */
+  readonly npmNetwork: readonly string[];
 }
 
 /**
@@ -220,7 +230,10 @@ export function clearedEnvironment(
   // is still dropped, so the child sees one value — but it was re-pointed, not
   // removed, and the report says only what the child went WITHOUT.
   const removed = cleared.filter((name) => !ownSet.has(spell(name)));
-  return { env: mergeArmEnvironments({ set: {}, unset: cleared }, own), removed };
+  const npmNetwork = Object.keys(inherited)
+    .filter((name) => NPM_NETWORK.test(name) && !ownSet.has(spell(name)))
+    .sort(compareByCodeUnit);
+  return { env: mergeArmEnvironments({ set: {}, unset: cleared }, own), removed, npmNetwork };
 }
 
 /**
@@ -241,7 +254,7 @@ const VAT_CLEARED: ReadonlySet<string> = new Set(CLEARED_ENV_NAMES);
  */
 function isCleared(name: string, kind: StepEnvironmentKind): boolean {
   if (name.startsWith('VAT_') || HOOK_GIT_NAMES.has(name)) return true;
-  return kind === 'vat' && (VAT_CLEARED.has(name) || GIT_CONFIG_OVERRIDE.test(name) || NPM_CONFIG.test(name));
+  return kind === 'vat' && (VAT_CLEARED.has(name) || GIT_CONFIG_OVERRIDE.test(name) || (NPM_CONFIG.test(name) && !NPM_NETWORK.test(name)));
 }
 
 /**

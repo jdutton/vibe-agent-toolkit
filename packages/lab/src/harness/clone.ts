@@ -68,7 +68,7 @@ export type PreparedClone =
     }
   | { readonly ok: false; readonly refusal: string };
 
-/** The prepared clone's name under the arms root; it outlives the capture, as the report names it. */
+/** The prepared clone's name under the arms root; it outlives the capture only once a report names where it is kept (`ArmsRootHandle.keepChild`). */
 export const PREPARED_CLONE_NAME = 'clone';
 
 /**

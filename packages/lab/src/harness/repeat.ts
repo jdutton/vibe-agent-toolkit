@@ -92,6 +92,8 @@ export interface ArmRun {
   readonly removed: readonly string[];
   /** Inherited names the arm's tool steps did not receive (every `VAT_*` and repo-locating git name). */
   readonly removedTool: readonly string[];
+  /** Inherited npm network setting names the arm's VAT steps kept — names only. */
+  readonly npmNetwork: readonly string[];
   /** The warm arm's priming run, or `null` for a cold arm (or no repeats). */
   readonly priming: SequenceResult | null;
   /** One result per measured repeat, in order; empty when priming failed. */
@@ -165,6 +167,8 @@ export interface SpecMeasurement {
   readonly failure: string | null;
   /** The inherited names its VAT children ran without ({@link ArmRun.removed}). */
   readonly removed: readonly string[];
+  /** The inherited npm network setting names its VAT children kept ({@link ArmRun.npmNetwork}). */
+  readonly npmNetwork: readonly string[];
 }
 
 /**
@@ -215,7 +219,7 @@ export async function measureSpec(
     env: request.env,
     ...(envFor === undefined ? {} : { envFor }),
   });
-  return { spec, args, cache: request.cache, results: run.results, failure: armRunFailure(run), removed: run.removed };
+  return { spec, args, cache: request.cache, results: run.results, failure: armRunFailure(run), removed: run.removed, npmNetwork: run.npmNetwork };
 }
 
 /**
@@ -260,7 +264,7 @@ export async function runRepeats(spec: RepeatSpec): Promise<ArmRun> {
 export async function runInterleaved(specs: readonly RepeatSpec[], rounds: number): Promise<ArmRun[]> {
   const arms = specs.map((spec) => prepareArm(spec));
   refuseSharedDirectories(arms.map((arm) => arm.context.dirs.root));
-  if (rounds === 0) return arms.map((arm) => ({ removed: arm.removed, removedTool: arm.removedTool, priming: null, results: [] }));
+  if (rounds === 0) return arms.map((arm) => ({ removed: arm.removed, removedTool: arm.removedTool, npmNetwork: arm.npmNetwork, priming: null, results: [] }));
 
   for (const arm of arms) prepareArmDirectories(arm.context.dirs);
   // Start first: an npx build is on disk, and so askable for its parse directory, only once started.
@@ -280,6 +284,7 @@ export async function runInterleaved(specs: readonly RepeatSpec[], rounds: numbe
   return arms.map((arm, index) => ({
     removed: arm.removed,
     removedTool: arm.removedTool,
+    npmNetwork: arm.npmNetwork,
     priming: priming[index] ?? null,
     results: results[index] ?? [],
   }));
@@ -327,6 +332,7 @@ interface PreparedArm {
   readonly context: SequenceContext;
   readonly removed: readonly string[];
   readonly removedTool: readonly string[];
+  readonly npmNetwork: readonly string[];
   readonly measuredEnv: (round: number) => ArmEnvironment;
 }
 
@@ -363,6 +369,7 @@ function prepareArm(spec: RepeatSpec): PreparedArm {
     context,
     removed: vat.removed,
     removedTool: tool.removed,
+    npmNetwork: vat.npmNetwork,
     measuredEnv: (round) => {
       const own = spec.envFor?.(round);
       return own === undefined ? vat.env : mergeArmEnvironments(vat.env, { set: own, unset: [] });

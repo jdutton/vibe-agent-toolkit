@@ -63,6 +63,12 @@ export interface ReportEnvelope<TBody = unknown> {
    */
   readonly removedEnv: readonly string[];
   /**
+   * Inherited npm network setting names (`registry`, proxies, CA — see
+   * `arm-env.ts`) the measured VAT children KEPT: names only, never values, so
+   * two developers' runs can be told apart. Recorded for provenance and never compared.
+   */
+  readonly npmNetworkEnv: readonly string[];
+  /**
    * Every measured command's exit commitment and the code its repetitions
    * shared — empty for a facet that judges no commitment (`verdict` records
    * each row's own exit in its body). Recorded for provenance and never compared.
@@ -86,6 +92,7 @@ export const ReportEnvelopeSchema = z
     coordinate: CoordinateSchema,
     capturedAt: z.string().min(1),
     removedEnv: z.array(z.string()),
+    npmNetworkEnv: z.array(z.string()),
     exits: z.array(RecordedExitSchema),
     body: z.unknown(),
   })

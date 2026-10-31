@@ -101,6 +101,7 @@ function capture(
     },
     capturedAt: '2026-10-31T00:00:00.000Z',
     removedEnv: [],
+    npmNetworkEnv: [],
     exits: [],
     body: { ...body(rows), preparedClone: ranIn },
   };

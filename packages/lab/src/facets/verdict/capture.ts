@@ -67,7 +67,7 @@ export interface VerdictCaptureRequest {
   /** The caller's `--env`/`--unset` — the arm's distinguishing environment. */
   readonly env: ArmEnvironment;
   /**
-   * Alias → the prepared clone (`perf arms`' `<arms-dir>/clone`) it runs in
+   * Alias → the prepared clone (`perf arms`' report's `prepared.path`) it runs in
    * instead of its subjects-file path; the body records it as `preparedClone`.
    */
   readonly prepared: Readonly<Record<string, string>>;
@@ -191,7 +191,7 @@ async function captureSubject(
   const dirs = subjectDirectories(request.armsRoot, subject.alias);
   prepareArmDirectories(dirs);
   await resetArmHome(dirs);
-  const { env, removed } = armStepEnvironment(dirs, request.env);
+  const { env, removed, npmNetwork } = armStepEnvironment(dirs, request.env);
   const verbSubject: VerbSubject = { path: resolved.path, contextPath: subject.contextPath, queries: queries.value };
   const run = (invocations: readonly VerbInvocation[], cwd: string): VerdictRow[] =>
     invocations.map((invocation) => runRow(request, invocation, { cwd, env, homeDir: dirs.home }));
@@ -218,6 +218,7 @@ async function captureSubject(
       coordinate: { subject: resolved.ref, subjectVersion: resolved.version, instrument: request.instrument.version },
       capturedAt: request.capturedAt,
       removedEnv: removed,
+      npmNetworkEnv: npmNetwork,
       // Each row records its own exit; a verdict judges no commitment.
       exits: [],
       body: {

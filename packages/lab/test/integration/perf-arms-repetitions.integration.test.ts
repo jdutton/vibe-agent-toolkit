@@ -22,6 +22,8 @@ describe('captureArms — what each repetition records', () => {
   it('records every step’s exit, stderr and provenance, and the removed environment names', async () => {
     const probe = setupProbe(PREFIX);
     vi.stubEnv('VAT_LAB_ARMS_PLANTED', 'leak');
+    vi.stubEnv('npm_config_registry', 'https://registry.example/');
+    vi.stubEnv('npm_config_ignore_scripts', 'true');
     try {
       const document = JSON.stringify({
         status: 'success',
@@ -49,6 +51,8 @@ describe('captureArms — what each repetition records', () => {
       expect(arm?.removedEnv).toContain('VAT_LAB_ARMS_PLANTED');
       // A tool step runs without VAT_* too, and the report says so separately.
       expect(arm?.removedToolEnv).toContain('VAT_LAB_ARMS_PLANTED');
+      expect(arm?.npmNetworkEnv).toContain('npm_config_registry');
+      expect(arm?.removedEnv).toContain('npm_config_ignore_scripts');
       const [repetition] = arm?.repetitions ?? [];
       expect(repetition?.steps.map((step) => [step.name, step.exitCode, step.timed])).toEqual([
         ['check', 0, true],

@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { exactExit } from '../src/harness/commands.js';
+import { RecordedExitSchema } from '../src/harness/exit-record.js';
 import { buildReportEnvelope } from '../src/harness/report.js';
 import type { CaptureRequest } from '../src/harness/types.js';
 
@@ -30,9 +31,9 @@ const REQUEST = {
  * @param exits - Each repetition's exit, one step each
  * @returns A measured command as the header reads it
  */
-function measured(name: string, removed: readonly string[], exits: readonly number[] = []) {
+function measured(name: string, removed: readonly string[], exits: readonly number[] = [], npmNetwork: readonly string[] = []) {
   const results = exits.map((exitCode) => ({ steps: [{ name, exitCode }] })) as never;
-  return { removed, spec: { name, exit: exactExit(0) }, results };
+  return { removed, npmNetwork, spec: { name, exit: exactExit(0) }, results };
 }
 
 describe('buildReportEnvelope — removedEnv', () => {
@@ -49,13 +50,31 @@ describe('buildReportEnvelope — removedEnv', () => {
   });
 });
 
+describe('buildReportEnvelope — npmNetworkEnv', () => {
+  it("is the sorted union of the npm network setting names every measured command's children kept", () => {
+    const envelope = buildReportEnvelope('perf', REQUEST, {}, [
+      measured('a', [], [], ['npm_config_registry']),
+      measured('b', [], [], ['npm_config_proxy', 'npm_config_registry']),
+    ]);
+
+    expect(envelope.npmNetworkEnv).toStrictEqual(['npm_config_proxy', 'npm_config_registry']);
+  });
+});
+
 describe('buildReportEnvelope — exits', () => {
-  it("records each command's commitment and the code its repetitions shared, or null when they differed", () => {
-    const envelope = buildReportEnvelope('perf', REQUEST, {}, [measured('same', [], [1, 1]), measured('mixed', [], [0, 1])]);
+  it("records each command's commitment and the code its repetitions shared, and tells a disagreement from a step that never ran", () => {
+    const envelope = buildReportEnvelope('perf', REQUEST, {}, [measured('same', [], [1, 1]), measured('mixed', [], [0, 1]), measured('never', [], [])]);
 
     expect(envelope.exits).toStrictEqual([
-      { step: 'same', commitment: exactExit(0), observed: 1 },
-      { step: 'mixed', commitment: exactExit(0), observed: null },
+      { step: 'same', commitment: exactExit(0), outcome: 'shared', code: 1 },
+      { step: 'mixed', commitment: exactExit(0), outcome: 'disagreed', code: null },
+      { step: 'never', commitment: exactExit(0), outcome: 'not-run', code: null },
     ]);
+  });
+
+  it('refuses a record whose code contradicts its outcome', () => {
+    expect(RecordedExitSchema.safeParse({ step: 's', commitment: exactExit(0), outcome: 'shared', code: null }).success).toBe(false);
+    expect(RecordedExitSchema.safeParse({ step: 's', commitment: exactExit(0), outcome: 'not-run', code: 0 }).success).toBe(false);
+    expect(RecordedExitSchema.safeParse({ step: 's', commitment: exactExit(0), observed: 0 }).success).toBe(false);
   });
 });

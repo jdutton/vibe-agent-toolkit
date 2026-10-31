@@ -300,8 +300,9 @@ validation findings, `2` system error.
 
 Whatever the kind, every repetition must exit ALIKE (`summarizeRepeatFailures`): a set where one
 repeat exited `0` and another `1` did two different amounts of work, and a median over it describes
-neither. Every report records each measured step's commitment and the code its repetitions shared
-(the envelope's `exits`; an arms report's per-arm `exits`). An expectation naming a command the run
+neither. Every report records each measured step's commitment and its outcome (the envelope's
+`exits`; an arms report's per-arm `exits`): `shared` with the `code` every repetition exited,
+`not-run` when no repetition ran the step, or `disagreed` when they exited differently. An expectation naming a command the run
 does not measure is refused rather than silently leaving the default in force, and so is a code
 outside `0`–`255`.
 
@@ -322,13 +323,14 @@ phrases it alike: **any failure poisons the whole row**.
 **Each arm's environment: inherited, then cleared, then the arm's own.** A child's environment is
 `process.env` minus `ARM_OWNED_ENV_KEYS`, minus every inherited `VAT_*` name and the names git
 exports into a hook, minus — for a VAT step — the temp, XDG, Claude, git-config, git-template and
-exec-path state in `CLEARED_ENV_NAMES` and every inherited `npm_config_*` (any case), then the arm
+exec-path state in `CLEARED_ENV_NAMES` and every inherited `npm_config_*` (any case) but the
+network allow list (`NPM_NETWORK`: registry, proxies, CA, `strict-ssl`), then the arm
 directories' variables (which include `GIT_CONFIG_NOSYSTEM=1` and `GIT_ATTR_NOSYSTEM=1`), then the
 arm's `unset` and `set` ([`harness/arm-env.ts`](../src/harness/arm-env.ts),
 [`harness/arm-dirs.ts`](../src/harness/arm-dirs.ts)). A tool step (`pnpm install`, a build) loses
 only the `VAT_*` and hook-git names: pnpm needs the real `~/.npmrc`. One input stays outside every
 arm: the machine-level Claude managed-settings policy, read from a fixed system path no variable
-redirects — the same file for every arm on one machine, so consistent across arms, not isolated. Each report records both lists of names the arm's steps went without. Every `RunOptions` and `CaptureRequest` carries
+redirects — the same file for every arm on one machine, so consistent across arms, not isolated. Each report records both lists of names the arm's steps went without, and the names of the npm network settings they kept (`npmNetworkEnv`). Every `RunOptions` and `CaptureRequest` carries
 this `ArmEnvironment` as a **required** field — `EMPTY_ARM_ENVIRONMENT` when the arm sets nothing —
 because an optional environment is a seam whose omission compiles, and the omission is the leak.
 

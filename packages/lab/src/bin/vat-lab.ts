@@ -78,6 +78,7 @@ import {
   ARM_REFUSED_CODE,
   armRefusal,
   buildAlias,
+  type ArmsRootHandle,
   underArmsRoot,
   openOutDirectory,
   writePrivateFile,
@@ -179,18 +180,16 @@ interface ArmsRootOptions {
  *
  * @param options - `--arms-dir` and `--keep-arms`
  * @param subjects - Every tree the invocation measures
- * @param preparedClone - The root's child that outlives the capture, or `null`
- * @param body - The capture and its publication, handed the root's path
+ * @param body - The capture and its publication, handed the root
  */
 async function withArmsRoot(
   options: ArmsRootOptions,
   subjects: readonly string[],
-  preparedClone: string | null,
-  body: (armsRoot: string) => Promise<void>,
+  body: (root: ArmsRootHandle) => Promise<void>,
 ): Promise<void> {
   await underArmsRoot(
     { override: options.armsDir ?? null, subjects },
-    { keep: options.keepArms === true, preparedClone },
+    options.keepArms === true,
     (line) => process.stderr.write(`${line}\n`),
     body,
   );
@@ -639,7 +638,7 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
         const startedAt = new Date().toISOString();
         const subject = await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath });
         const out = openOutDirectory(options.out, [subject.path]);
-        await withArmsRoot(options, [subject.path], null, async (armsRoot) => {
+        await withArmsRoot(options, [subject.path], async ({ path: armsRoot }) => {
           const result = await runAb({
             subject,
             armA: arms.a,
@@ -818,7 +817,7 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
         const instrument = await resolveInstrument(options.instrument);
         const subject = await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath });
         const out = openOutDirectory(options.out, [subject.path]);
-        await withArmsRoot(options, [subject.path], null, async (root) => {
+        await withArmsRoot(options, [subject.path], async ({ path: root }) => {
           const report = await wiring.capture({
             instrument,
             subject,
@@ -1216,7 +1215,7 @@ async function runPerfArms(subjectPath: string, options: PerfArmsOptions): Promi
   }
   const source = safePath.resolve(subjectPath);
   const out = openOutDirectory(options.out, [source]);
-  await withArmsRoot(options, [source], PREPARED_CLONE_NAME, (armsRoot) => captureArmsInto(out, armsRoot, { source, options, builds, arms, expected, env, warmup: { instrument: warmupBuild.instrument, step: warmupStep } }));
+  await withArmsRoot(options, [source], (root) => captureArmsInto(out, root, { source, options, builds, arms, expected, env, warmup: { instrument: warmupBuild.instrument, step: warmupStep } }));
 }
 
 /** Everything {@link captureArmsInto} needs, checked by {@link runPerfArms}. */
@@ -1235,10 +1234,11 @@ interface ArmsCaptureInputs {
  * owner-only into `out`.
  *
  * @param out - The opened `--out` ({@link openOutDirectory})
- * @param armsRoot - The invocation's arms root
+ * @param root - The invocation's arms root; the clone outlives it only once the report naming it is written
  * @param inputs - See {@link ArmsCaptureInputs}
  */
-async function captureArmsInto(out: string, armsRoot: string, inputs: ArmsCaptureInputs): Promise<void> {
+async function captureArmsInto(out: string, root: ArmsRootHandle, inputs: ArmsCaptureInputs): Promise<void> {
+  const armsRoot = root.path;
   const { options, expected } = inputs;
   const timeout = options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs };
   const prepared = await prepareClone({
@@ -1272,7 +1272,9 @@ async function captureArmsInto(out: string, armsRoot: string, inputs: ArmsCaptur
     timeoutMs: options.timeoutMs ?? null,
   };
   const written = safePath.join(out, 'arms-report.json');
-  writePrivateFile(written, `${JSON.stringify({ prepared, inputs: recorded, ...report }, null, 2)}\n`);
+  await root.keepChild(PREPARED_CLONE_NAME, (kept) => {
+    writePrivateFile(written, `${JSON.stringify({ prepared: { ...prepared, path: kept }, inputs: recorded, ...report }, null, 2)}\n`);
+  });
   process.stdout.write(`${renderArmsReport(report)}\nWrote ${written}\n`);
   if (report.arms.some((arm) => arm.failure !== null)) process.exitCode = ExitCode.ERROR;
 }
@@ -1374,7 +1376,7 @@ interface VerdictRunOptions {
   readonly timeoutMs?: number;
   readonly env?: ArmEnvironment['set'];
   readonly unset?: readonly string[];
-  /** Subjects whose path is replaced by a prepared clone (`perf arms`' `<arms-dir>/clone`). */
+  /** Subjects whose path is replaced by a prepared clone (`perf arms`' report's `prepared.path`). */
   readonly prepared?: Readonly<Record<string, string>>;
 }
 
@@ -1437,7 +1439,7 @@ function createVerdictCommand(): Command {
     .option(UNSET_OPTION, 'Remove an inherited variable from every child of this arm (repeatable)', collectUnset('--unset'))
     .option(
       '--prepared <alias=path>',
-      "Run a subject in its prepared clone (perf arms' <arms-dir>/clone) instead of its subjects-file path (repeatable)",
+      "Run a subject in its prepared clone (the prepared.path of perf arms' report) instead of its subjects-file path (repeatable)",
       collectPreparedSubject,
     )
     .description('Capture one arm: every verb of every subject, one report per alias')
@@ -1451,7 +1453,7 @@ function createVerdictCommand(): Command {
         const { subjects } = loaded.subjects;
         const measured = subjects.map((subject) => prepared[subject.alias] ?? subject.path);
         const instrument = await resolveInstrument(options.instrument);
-        await withArmsRoot(options, measured, null, async (armsRoot) => {
+        await withArmsRoot(options, measured, async ({ path: armsRoot }) => {
           const result = await captureVerdict({
             instrument,
             subjects,

@@ -60,6 +60,7 @@ function report(...commands: PopulationCommandStats[]): ReportEnvelope<Populatio
     coordinate: COORDINATE,
     capturedAt: '2026-08-17T00:00:00.000Z',
     removedEnv: [],
+    npmNetworkEnv: [],
     exits: [],
     body: { commands, load: CLEAN_LOAD },
   };
