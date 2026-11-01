@@ -164,7 +164,6 @@ describe('looksBinary, against real binary shapes (not synthesized NUL strings)'
 
     expect(notTextConditions).toHaveLength(1);
     expect(projection.blobs).toHaveLength(0);
-    expect(notTextConditions).toHaveLength(1);
     // ⛔ NOT the file name. The row is filed in the content-addressed tier every
     // repository holding these bytes is served, so a path in it is another
     // repository's path the moment a second one derives the same key.
@@ -191,8 +190,7 @@ describe('looksBinary, against real binary shapes (not synthesized NUL strings)'
 
     // Accepted as text...
     expect(notTextConditions).toHaveLength(0);
-    expect(notTextConditions).toHaveLength(0);
-    // ...and the positive control, so the two assertions above cannot be
+    // ...and the positive control, so the assertion above cannot be
     // satisfied by a run that simply never enumerated the file.
     expect(projection.blobs).toHaveLength(1);
     // Decoded, not merely admitted: a byte-wise reading of these bytes is
@@ -255,7 +253,6 @@ describe('looksBinary, against real binary shapes (not synthesized NUL strings)'
 
     // Reaches the parser: derived as a real blob, not declined.
     expect(projection.blobs).toHaveLength(1);
-    expect(notTextConditions).toHaveLength(0);
     expect(notTextConditions).toHaveLength(0);
   });
 });

@@ -1,8 +1,10 @@
 /**
  * `no-literal-test-timeout` — a per-test or per-hook timeout written as a number
  * overrides the tier's platform-scaled default with one value for every machine,
- * so a literal that is generous on a fast runner is the failure on a slow one.
- * The VALID cases that matter most are the derived ones: a rule that fired on
+ * so a literal that is generous on a fast runner is the failure on a slow one;
+ * and a multiple of the default scales an hour-sized budget by the slow
+ * platform's factor. The one way to ask for more is `atLeastTierTimeout(tier,
+ * budget)`, and the VALID cases that matter most are its: a rule that fired on
  * them would leave no way to ask for more time at all.
  */
 
@@ -18,16 +20,19 @@ const CASES: RuleCases = {
     // Omitted: the tier's default applies.
     "it('x', () => {});",
     "beforeAll(async () => {});",
-    // Derived from the value the tier's config provides.
-    "it('x', () => {}, inject('tierTestTimeout') * 4);",
-    "beforeAll(() => {}, inject('tierHookTimeout') * 2);",
-    "it('x', { timeout: inject('tierTestTimeout') * 3 }, () => {});",
-    "const SLOW = inject('tierTestTimeout') * 2;\nit('x', () => {}, SLOW);",
+    // The tier's own value, or a budget over it as the floor.
+    "it('x', () => {}, inject('tierTestTimeout'));",
+    "it('x', () => {}, atLeastTierTimeout(inject('tierTestTimeout'), 3_600_000));",
+    "beforeAll(() => {}, atLeastTierTimeout(inject('tierHookTimeout'), 5 * 60 * 1000));",
+    "it('x', { timeout: atLeastTierTimeout(inject('tierTestTimeout'), 120_000) }, () => {});",
+    "const SLOW = atLeastTierTimeout(inject('tierTestTimeout'), 600_000);\nit('x', () => {}, SLOW);",
+    "it('x', () => {}, slow ? atLeastTierTimeout(tier, 600_000) : tier);",
     // A parameter or an import is not a literal this file decides.
     "function suite(t) { it('x', () => {}, t); }",
     "import { T } from './t.js';\nit('x', () => {}, T);",
     // Numbers that are not a timeout: a table, a condition, a call to something else.
     "it.each([1, 2, 3])('n=%i', (n) => {});",
+    "it.each`\n  a | b\n  ${1} | ${2}\n`('$a', ({ a }) => {});",
     "it.for([[1, 2]])('pair', ([a, b]) => {});",
     "it.skipIf(1 > 0)('x', () => {});",
     "setTimeout(() => {}, 5000);",
@@ -65,6 +70,17 @@ const CASES: RuleCases = {
     { code: "const TIMEOUT_MS = 90_000;\nbeforeAll(() => {}, TIMEOUT_MS);", errors: LITERAL },
     { code: "const BASE = 1000;\nconst T = BASE * 60;\nit('x', () => {}, T);", errors: LITERAL },
     { code: "const T = 60_000;\nit('x', { timeout: T }, () => {});", errors: LITERAL },
+    // A multiple of the default scales an hour-sized budget by the platform factor.
+    { code: "it('x', () => {}, inject('tierTestTimeout') * 60);", errors: LITERAL },
+    { code: "const SLOW = inject('tierHookTimeout') * 12;\nbeforeAll(() => {}, SLOW);", errors: LITERAL },
+    // A platform decided at the call site is still one number per platform.
+    { code: "const T = isWin ? 900_000 : 60_000;\nit('x', () => {}, T);", errors: LITERAL },
+    { code: "it('x', () => {}, process.platform === 'win32' ? 900_000 : 60_000);", errors: LITERAL },
+    { code: "it('x', () => {}, Math.max(60_000, budget));", errors: LITERAL },
+    // The helper's FLOOR must be the tier's, never a literal.
+    { code: "it('x', () => {}, atLeastTierTimeout(60_000, 3_600_000));", errors: LITERAL },
+    // A tagged-template table.
+    { code: "it.each`\n  a | b\n  ${1} | ${2}\n`('$a', ({ a }) => {}, 60_000);", errors: LITERAL },
   ],
 };
 

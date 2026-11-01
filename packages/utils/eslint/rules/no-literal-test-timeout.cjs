@@ -10,20 +10,27 @@
  * `60_000` that was 1× the Unix default was 1/15 of the Windows one, and failed
  * there on runner speed alone, with no code change.
  *
- * The allowed shapes: omit it (the tier default applies), or derive it from a
- * value the config provides — here `inject('tierTestTimeout') * k` and
- * `inject('tierHookTimeout') * k` (`vitest.shared.ts`) — so every machine gets
- * the same MULTIPLE of its own allowance.
+ * A multiple of the default (`inject('tierTestTimeout') * 60`) fails the other
+ * way: it scales an hour-sized Unix budget by the Windows factor too — 15 hours —
+ * so a hang burns the CI job's whole allowance and names no test.
  *
- * A literal may hide in arithmetic (`5 * 60 * 1000`), a cast or parentheses, or
- * behind a same-file `const`; all are flagged. A parameter, an import or any
- * call result is accepted.
+ * The allowed shapes: omit it (the tier default applies), pass the tier's own
+ * value (`inject('tierTestTimeout')`, `vitest.shared.ts`), or ask for a budget
+ * over it with `atLeastTierTimeout(inject('tierTestTimeout'), 3_600_000)` from
+ * `@vibe-agent-toolkit/utils/testing` — the default is the floor and the budget
+ * a ceiling over it. A number is accepted ONLY as that helper's budget; its first
+ * argument (the floor) is walked like any other timeout.
+ *
+ * A literal is found anywhere in the timeout expression — arithmetic, either arm
+ * of a conditional, another call's arguments, a cast or parentheses — and behind
+ * a same-file `const`. A parameter, an import, a member read or a call result
+ * with no literal argument is accepted.
  *
  * ⚠️ STILL BLIND (syntax-only rule): a literal behind an IMPORTED constant, a
- * `let`, or an object property. There is deliberately no escape-hatch comment:
- * a hang guard that must stay short is a property of the code under test, and
- * belongs in that code's own timeout (a spawn's `timeout`, an `AbortSignal`),
- * not in the runner's wall clock.
+ * `let`, an object property, or an options object held in a `const`. There is
+ * deliberately no escape-hatch comment: a hang guard that must stay short is a
+ * property of the code under test, and belongs in that code's own timeout (a
+ * spawn's `timeout`, an `AbortSignal`), not in the runner's wall clock.
  *
  * Not in `recommended`: the remedy names a value the adopter's runner config
  * must provide, which this pack cannot supply.
@@ -35,8 +42,8 @@
  * // GOOD — the tier default
  * it('populates the corpus', async () => { ... });
  *
- * // GOOD — a multiple of this machine's allowance
- * beforeAll(async () => { ... }, inject('tierHookTimeout') * 4);
+ * // GOOD — a measured budget, never below this machine's allowance
+ * beforeAll(async () => { ... }, atLeastTierTimeout(inject('tierHookTimeout'), 3_600_000));
  */
 
 'use strict';
@@ -63,7 +70,7 @@ function unwrap(node) {
 /**
  * The root runner name a callee calls as a test function, or null.
  *
- * `it`, `it.concurrent`, `it.skipIf(c)`, `it.each(t)` all qualify; `it.each`
+ * `it`, `it.concurrent`, `it.skipIf(c)`, `it.each(t)`, `it.each\`…\`` all qualify; `it.each`
  * itself (the table call) does not, because its arguments are not a timeout.
  */
 function testFunctionRoot(callee) {
@@ -74,8 +81,8 @@ function testFunctionRoot(callee) {
     && MODIFIER_MEMBERS.has(node.property.name)) {
     return testFunctionRoot(node.object);
   }
-  if (node.type === 'CallExpression') {
-    const factory = unwrap(node.callee);
+  if (node.type === 'CallExpression' || node.type === 'TaggedTemplateExpression') {
+    const factory = unwrap(node.type === 'CallExpression' ? node.callee : node.tag);
     if (factory && factory.type === 'MemberExpression' && !factory.computed
       && factory.property.type === 'Identifier' && FACTORY_MEMBERS.has(factory.property.name)) {
       return testFunctionRoot(factory.object);
@@ -102,33 +109,66 @@ function constInitializer(sourceCode, identifier) {
   return null;
 }
 
-/** True when `node` is a number fully decided in this file. */
-function isNumericConstant(sourceCode, node, seen = new Set()) {
-  const value = unwrap(node);
-  if (!value) return false;
-  if (value.type === 'Literal') return typeof value.value === 'number';
-  if (value.type === 'UnaryExpression') return isNumericConstant(sourceCode, value.argument, seen);
-  if (value.type === 'BinaryExpression') {
-    return isNumericConstant(sourceCode, value.left, seen) && isNumericConstant(sourceCode, value.right, seen);
-  }
-  if (value.type === 'Identifier' && !seen.has(value.name)) {
-    seen.add(value.name);
-    const init = constInitializer(sourceCode, value);
-    return init !== null && isNumericConstant(sourceCode, init, seen);
-  }
-  return false;
+/** The one call whose numeric argument is accepted: its budget, over the tier's floor. */
+const BUDGET_HELPER = 'atLeastTierTimeout';
+
+function isBudgetHelper(callee) {
+  const node = unwrap(callee);
+  if (!node) return false;
+  if (node.type === 'Identifier') return node.name === BUDGET_HELPER;
+  return node.type === 'MemberExpression' && !node.computed && node.property.type === 'Identifier'
+    && node.property.name === BUDGET_HELPER;
 }
 
-/** The literal timeout an argument carries — itself, or its `timeout` property. */
+/**
+ * The first numeric literal a timeout expression decides its value with, or null.
+ *
+ * Walks arithmetic, both arms of a conditional (not its test), call arguments and
+ * same-file `const` initializers. The budget helper contributes only its first
+ * argument: its second is the one place a number is the contract.
+ */
+function findLiteral(sourceCode, node, seen) {
+  const value = unwrap(node);
+  if (!value) return null;
+  switch (value.type) {
+    case 'Literal':
+      return typeof value.value === 'number' ? value : null;
+    case 'UnaryExpression':
+      return findLiteral(sourceCode, value.argument, seen);
+    case 'BinaryExpression':
+    case 'LogicalExpression':
+      return findLiteral(sourceCode, value.left, seen) ?? findLiteral(sourceCode, value.right, seen);
+    case 'ConditionalExpression':
+      return findLiteral(sourceCode, value.consequent, seen) ?? findLiteral(sourceCode, value.alternate, seen);
+    case 'CallExpression': {
+      const walked = isBudgetHelper(value.callee) ? value.arguments.slice(0, 1) : value.arguments;
+      for (const argument of walked) {
+        const found = findLiteral(sourceCode, argument, seen);
+        if (found !== null) return found;
+      }
+      return null;
+    }
+    case 'Identifier': {
+      if (seen.has(value.name)) return null;
+      seen.add(value.name);
+      const init = constInitializer(sourceCode, value);
+      return init === null ? null : findLiteral(sourceCode, init, seen);
+    }
+    default:
+      // A function (the test body), a member read, a template: not a number decided here.
+      return null;
+  }
+}
+
+/** The literal a timeout argument carries — in itself, or in its `timeout` property. */
 function literalTimeoutIn(sourceCode, argument) {
   const node = unwrap(argument);
   if (!node) return null;
-  if (isNumericConstant(sourceCode, node)) return node;
-  if (node.type !== 'ObjectExpression') return null;
+  if (node.type !== 'ObjectExpression') return findLiteral(sourceCode, node, new Set());
   for (const property of node.properties) {
     if (property.type === 'Property' && !property.computed && property.key.type === 'Identifier'
-      && property.key.name === 'timeout' && isNumericConstant(sourceCode, property.value)) {
-      return property.value;
+      && property.key.name === 'timeout') {
+      return findLiteral(sourceCode, property.value, new Set());
     }
   }
   return null;
@@ -139,19 +179,19 @@ module.exports = {
     type: 'problem',
     docs: {
       description:
-        'Disallow a numeric per-test or per-hook timeout — omit it, or derive it from the tier\'s ' +
-        'platform-scaled value, so a slow machine gets the same multiple of its own allowance',
+        'Disallow a numeric per-test or per-hook timeout — omit it, or pass a budget through ' +
+        'atLeastTierTimeout(tier, budget), so the platform-scaled default is the floor and the budget a ceiling',
       category: 'Code and test hygiene',
-      bans: '`it(name, fn, 60_000)`, `beforeAll(fn, 300_000)`, `{ timeout: 30_000 }`',
-      useInstead: 'the tier default, or a multiple of a value the runner config provides',
+      bans: '`it(name, fn, 60_000)`, `beforeAll(fn, tier * 12)`, `{ timeout: isWin ? 900_000 : 60_000 }`',
+      useInstead: 'the tier default, or `atLeastTierTimeout(inject(\'tierTestTimeout\'), budget)`',
       // Not recommended: the remedy names a value the adopter's runner config must provide.
       recommended: false,
     },
     schema: [],
     messages: {
       literalTimeout:
-        'A literal timeout replaces the tier\'s platform-scaled default with one number for every ' +
-        'machine. Omit it, or write a multiple of inject(\'tierTestTimeout\') / inject(\'tierHookTimeout\').',
+        'A number in a timeout replaces or scales the tier\'s platform-scaled default. Omit it, or write ' +
+        'atLeastTierTimeout(inject(\'tierTestTimeout\' | \'tierHookTimeout\'), budget).',
     },
   },
 

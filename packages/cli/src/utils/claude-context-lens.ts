@@ -20,22 +20,22 @@ import {
   type PopulationOutcome,
 } from '@vibe-agent-toolkit/resources';
 
-import { gitTrackerForProjectRoot } from '../commands/audit/distributed-tree.js';
-
-import { populationWiring } from './population-wiring.js';
+import type { Logger } from './logger.js';
+import { populateAndReport } from './population-wiring.js';
 
 /**
  * Populate the Claude-context lane and flatten its chains into the two
  * relations.
  *
- * Reports no refused content: the query lane it runs in reports its own,
- * which is the same stored question.
+ * Reports its own population's refused content: an `@`-import chain can reach
+ * files the query lane's resources population never holds.
  *
  * @param options - The run
  * @param options.root - Absolute corpus root. Rooted HERE and nowhere else: a
  *   chain is a property of a position in the tree, and a population rooted at a
  *   subdirectory computes one against a corpus whose ancestors are missing
  * @param options.cache - The run's projection store, or undefined to re-derive
+ * @param options.logger - Where the lens population's refused content is reported
  * @returns The rows, ready for `writeDerived`, and the lens population's
  *   provenance as the population publishes it (`'store'` only when the root
  *   list AND the real pass were both served from the store)
@@ -43,12 +43,13 @@ import { populationWiring } from './population-wiring.js';
 export async function evaluateClaudeContextLens(options: {
   root: string;
   cache: PopulationCache | undefined;
+  logger: Logger;
 }): Promise<{ rows: ClaudeContextRelations; population: PopulationOutcome['population'] }> {
-  const { root, cache } = options;
-  const gitTracker = await gitTrackerForProjectRoot(root);
-  const { projection, population } = await buildClaudeContextPopulation({
-    root,
-    ...populationWiring(gitTracker, cache, root),
-  });
+  const { root, cache, logger } = options;
+  const { projection, population } = await populateAndReport(
+    { root, cache, logger, population: 'claude-context' },
+    (wiring) => buildClaudeContextPopulation({ root, ...wiring }),
+    (result) => result.projection,
+  );
   return { rows: claudeContextRelations(projection), population };
 }

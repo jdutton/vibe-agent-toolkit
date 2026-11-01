@@ -1005,7 +1005,7 @@ describe('the check payload publishes what each rule cost', () => {
  * `.gitignore`, a shallow or sparse CI checkout, a root that resolved somewhere
  * else, an extent source that enumerated nothing.
  *
- * The precedent is one layer up: `reportBlobRefusals` in `population-wiring.ts`
+ * The precedent is one layer up: `populateAndReport` in `population-wiring.ts`
  * names a tree whose every document was declined as binary rather than letting
  * it populate as empty and report success. That report covers blob refusals
  * only, and never an empty EXTENT.

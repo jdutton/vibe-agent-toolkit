@@ -957,6 +957,8 @@ describe.skipIf(!HOST_GATES.filter.met)(gatedTitle('a clean/smudge filter on one
     const members = await buildResourcePopulation({ ...viaMembership, outputs: [] });
     const served = await buildResourceProjection(viaMembership);
     expect(members.outcome).toEqual({ population: 'derived', stored: 'written' });
+    // The premise: the git enumerator, the one the OID-sharing defect lived on.
+    expect(members.extentSource).toBe('git');
     expect(served.outcome).toEqual({ population: 'store', stored: 'hit' });
     expect(keyOf(served.projection, PATH_B)).toBe(ownKeyB);
 

@@ -13,8 +13,12 @@ export const KNOWN_DEFECTS_PATH = 'docs/contributing/known-defects.md';
 export const STABLE_TAG_BLOCKER_MARKER = '- **Blocks:** the stable tag';
 
 const ENTRY_HEADING = /^### (.+)$/;
-/** Anything that looks like a `Blocks` field, so a misspelt marker throws rather than failing open. */
-const LOOKS_LIKE_A_MARKER = /\*\*blocks\b/i;
+/**
+ * Anything that looks like a `Blocks` field — a list line whose first word,
+ * bold or not, starts with "block" (`Blocks`, `Blocking`, `Blocker`, any case) —
+ * so a misspelt marker throws rather than failing open.
+ */
+const LOOKS_LIKE_A_MARKER = /^\s*[-*+]\s+(?:\*\*)?block/i;
 const INLINE_CODE = /`[^`]*`/g;
 
 export function isPrereleaseVersion(version: string): boolean {

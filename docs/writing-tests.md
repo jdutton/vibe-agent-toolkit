@@ -34,14 +34,21 @@ packages/my-package/
 |------|----------|---------|---------------------|----------------------------|------------------|--------------|
 | **Unit** | `test/*.test.ts` | Test functions/classes in isolation | < 100 ms | 1,000 ms | 15 s (150 s Windows) | Mock external deps |
 | **Integration** | `test/integration/*.integration.test.ts` | Test multiple modules together | < 5 s | 5,000 ms | 60 s (15 min Windows) | Real file system, DBs |
-| **System** | `test/system/*.system.test.ts` | End-to-end workflows | < 30 s | 30,000 ms | 120 s (30 min Windows) | Real external services |
+| **System** | `test/system/*.system.test.ts` | End-to-end workflows | < 30 s | 30,000 ms | 120 s (15 min Windows) | Real external services |
 
 A per-test or per-hook timeout in the integration and system tiers is **omitted** (the tier
-default applies) or written as a **multiple** of the value the tier provides —
-`inject('tierTestTimeout') * 4`, `inject('tierHookTimeout') * 2`, with `inject` from `vitest`.
-Never a millisecond literal: it replaces the platform-scaled default with one number for every
-machine, and a `60_000` that was 1× the Unix default was 1/15 of the Windows one.
-(enforced by: `local/no-literal-test-timeout`)
+default applies) or written as a **budget over the tier's value** —
+`atLeastTierTimeout(inject('tierTestTimeout'), 600_000)`, with `atLeastTierTimeout` from
+`@vibe-agent-toolkit/utils/testing` and `inject` from `vitest`. The result is
+`max(tier default, budget)`: the platform-scaled default is the floor, the measured budget a
+ceiling, so a Unix run keeps the budget exactly and Windows gets `max(900 s, budget)`.
+Never a bare literal — it replaces the default with one number for every machine (a `60_000`
+that was 1× the Unix default was 1/15 of the Windows one) — and never a multiple of the
+default: `inject(...) * 60` turned a 1-hour Unix budget into 15 hours on Windows, so a hang
+burned the CI job's allowance and named no test. The system tier's own defaults are floors the
+same way: `max(120 s, platform)` per test, `max(300 s, platform)` per hook. The CI `validate`
+job carries `timeout-minutes` sized from measured runs, so a hang still ends the job.
+(enforced by: `local/no-literal-test-timeout`, which accepts a number only as the helper's budget)
 
 ### The per-file duration budget
 

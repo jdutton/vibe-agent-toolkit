@@ -58,11 +58,9 @@ import {
 } from '@vibe-agent-toolkit/resources';
 import { forEachInOrder, isVatError, VatError } from '@vibe-agent-toolkit/utils';
 
-import { gitTrackerForProjectRoot } from '../commands/audit/distributed-tree.js';
-
 import type { LensPopulation } from './lens-population.js';
 import type { Logger } from './logger.js';
-import { populationWiring, reportBlobRefusals } from './population-wiring.js';
+import { populateAndReport } from './population-wiring.js';
 import {
   evaluateLens,
   lensesNamedBy,
@@ -252,7 +250,7 @@ export interface PopulationExtent {
    * fails to reach zero on the case that matters: `roots` always holds exactly
    * one row (the invariant thrown for below), so a total over every table
    * is never 0; `blobs` is content-keyed and deduped, so it counts parse REACH
-   * and already has its own report in `reportBlobRefusals`; and `resources` counts
+   * and already has its own report in `populateAndReport`; and `resources` counts
    * identities, which a corpus can legitimately have none of while enumerating
    * plenty. One row per enumerated path is non-zero exactly when something was
    * enumerated.
@@ -429,12 +427,11 @@ export async function withQueriedProjection<T>(
   // Its rows are never queried — see the header.
   return withPopulationCache({ root }, async (cache) => {
     // The cache tell is `populate()`'s own outcome — see `ProjectionProvenance.population`.
-    const gitTracker = await gitTrackerForProjectRoot(root);
-    const { projection, outcome } = await buildResourceProjection({
-      root,
-      ...populationWiring(gitTracker, cache, root),
-    });
-    reportBlobRefusals(logger, projection);
+    const { projection, outcome } = await populateAndReport(
+      { root, cache, logger, population: 'resources' },
+      (wiring) => buildResourceProjection({ root, ...wiring }),
+      (result) => result.projection,
+    );
 
     // ONE tree, in a database nothing else can reach, built fresh for this call.
     const store = await openEphemeralQueryStore();
@@ -484,7 +481,7 @@ export async function withQueriedProjection<T>(
       // lane has no reason to invite.
       const lensPopulations: LensEvaluation['population'][] = [];
       await forEachInOrder(lenses, async (lens) => {
-        const evaluation = await evaluateLens(lens, { projection, root, cache });
+        const evaluation = await evaluateLens(lens, { projection, root, cache, logger });
         lensPopulations.push(evaluation.population);
         await store.writeDerived(evaluation.rows);
       });

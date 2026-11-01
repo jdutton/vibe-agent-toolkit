@@ -1,13 +1,15 @@
 /**
- * What every CLI lane hands a projection population builder the same way — the
- * ignore oracle, the run's store and the declared collections — and the one
- * route by which a query lane reports the population's refused content.
+ * The one entry by which a CLI lane populates a tree from its rows: it hands the
+ * builder the ignore oracle, the run's store and the declared collections the
+ * same way every time, and reports what the population refused. The report is
+ * inside the only exported entry, so a lane cannot build a population it forgets
+ * to report.
  *
  * ## Why this is CLI code and not `resources` code
  *
- * Nothing here decides anything about a projection. {@link reportBlobRefusals}'s
- * whole body is `describeBlobRefusals` — owned by `@vibe-agent-toolkit/resources`
- * — routed to a {@link Logger}, which is a CLI type no other package has; the
+ * Nothing here decides anything about a projection. The report's whole body is
+ * `describeBlobRefusals` — owned by `@vibe-agent-toolkit/resources` — routed to
+ * a {@link Logger}, which is a CLI type no other package has; the
  * spreads exist only because `exactOptionalPropertyTypes` makes "absent" and
  * "present and undefined" different arguments. That is command plumbing, in the
  * same family as `projection-store.ts` next door.
@@ -27,11 +29,13 @@ import {
 } from '@vibe-agent-toolkit/resources';
 import type { GitTracker } from '@vibe-agent-toolkit/utils/git';
 
+import { gitTrackerForProjectRoot } from '../commands/audit/distributed-tree.js';
+
 import { loadConfigCached } from './config-loader.js';
 import type { Logger } from './logger.js';
 
 /**
- * The population arguments {@link populationWiring} supplies.
+ * The population arguments {@link populateAndReport} supplies.
  *
  * Spread into a builder's options object, so the three optional inputs are
  * optional in the `exactOptionalPropertyTypes` sense — omitted entirely when
@@ -44,15 +48,27 @@ export interface PopulationWiring {
 }
 
 /**
- * Report what a population declined to derive or mis-decoded, or nothing for a
- * clean one. ⚠️ To **stderr**: callers write a parseable document to stdout.
+ * Populate one tree through `build`, then report its refused content to
+ * **stderr** (callers write a parseable document to stdout), named by
+ * `population` because one command can build two — the resources lane and the
+ * claude-context lens.
  *
- * @param logger - Where the refusals are reported
- * @param projection - The population's rows, from a derive or a hit alike
+ * @param options - The run: `root`, `cache`, `logger`, and the `population` name
+ * @param build - Builds the population from the wiring this entry supplies
+ * @param refusalRowsOf - The rows the report reads, from a derive or a hit alike
+ * @returns Whatever `build` returned
  */
-export function reportBlobRefusals(logger: Logger, projection: BlobRefusalRows): void {
-  const refusals = describeBlobRefusals(projection);
-  if (refusals !== undefined) logger.warn(refusals);
+export async function populateAndReport<R>(
+  options: { root: string; cache: PopulationCache | undefined; logger: Logger; population: string },
+  build: (wiring: PopulationWiring) => Promise<R>,
+  refusalRowsOf: (result: R) => BlobRefusalRows,
+): Promise<R> {
+  const { root, cache, logger, population } = options;
+  const gitTracker = await gitTrackerForProjectRoot(root);
+  const result = await build(populationWiring(gitTracker, cache, root));
+  const refusals = describeBlobRefusals(refusalRowsOf(result));
+  if (refusals !== undefined) logger.warn(`${population} population: ${refusals}`);
+  return result;
 }
 
 /**
@@ -67,7 +83,7 @@ export function reportBlobRefusals(logger: Logger, projection: BlobRefusalRows):
  *   routing is READ rather than passed. See {@link collectionsOption}
  * @returns The options to spread into the population builder's argument
  */
-export function populationWiring(
+function populationWiring(
   gitTracker: GitTracker | undefined,
   cache: PopulationCache | undefined,
   root: string,

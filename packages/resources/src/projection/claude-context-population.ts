@@ -294,7 +294,7 @@ async function discoverImportRoots(
  * Populate a tree with one `@`-import extent per Claude instruction root, plus
  * the convention and rules-scope classifiers.
  *
- * @param options - The root, the run's oracles, and the blob-stage observer
+ * @param options - The root and the run's oracles
  * @param options.root - Absolute root to populate
  * @param options.gitTracker - The ignore oracle, or omitted. Not cosmetic, and
  *   no longer merely descriptive: this lane passes {@link DECLINE_IGNORED}, so
@@ -387,9 +387,10 @@ type ImportRoots =
  * one.
  *
  * ⚠️ Only the filesystem contributor is asked for, deliberately: it is the one
- * whose rows are the enumeration, and at this point it is the only one the
- * caller has registered — asking for a contributor not yet registered is a
- * guaranteed miss.
+ * whose rows are the enumeration, and the roots read nothing any other
+ * contributor writes. Asking for more could only cost the hit: the `@`-import
+ * contributors are registered AFTER this, one per root it names, and asking for
+ * a contributor not yet registered is a guaranteed miss (`readStoredMembership`).
  *
  * @param populateOptions - The options the real population will run under
  * @param filesystemId - The enumerating contributor's id, from the instance

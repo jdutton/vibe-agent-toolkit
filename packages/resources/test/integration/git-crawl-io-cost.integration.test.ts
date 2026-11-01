@@ -81,6 +81,7 @@ import {
 import {
   runGitOrThrow,
 } from '@vibe-agent-toolkit/utils/git';
+import { atLeastTierTimeout } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 
 /**
@@ -432,7 +433,7 @@ beforeAll(() => {
 
   grownCrawl = netOfImports(measure('enumerate'), importOnly);
   grownExtent = netOfImports(measure('extent'), importOnly);
-}, inject('tierHookTimeout') * 5);
+}, atLeastTierTimeout(inject('tierHookTimeout'), 300_000));
 
 afterAll(() => {
   if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true });

@@ -49,6 +49,7 @@ export type { FaultFsSpec, FaultRule, FaultSpec, FsApi, FsOpFamily, InjectedErrn
 export * from './testing/hostile-tree.js';
 export * from './testing/platform-gates.js';
 export * from './testing/temp-dir.js';
+export * from './testing/tier-timeout.js';
 export * from './testing/tree-snapshot.js';
 
 /** A planted fixture tree and the means to remove it. */

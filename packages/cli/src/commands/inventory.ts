@@ -24,7 +24,7 @@ import { Command } from 'commander';
 import { CommandRefusalError, refusalCodeOf } from '../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../utils/document-writer.js';
 import { createLogger, type Logger } from '../utils/logger.js';
-import { populationWiring, reportBlobRefusals } from '../utils/population-wiring.js';
+import { populateAndReport } from '../utils/population-wiring.js';
 import { readableDirectoryRefusal, readInputFile } from '../utils/project-root-policy.js';
 import { withPopulationCache } from '../utils/projection-store.js';
 
@@ -303,16 +303,11 @@ function populationProviderFor(
 ): SharedPopulationSource | undefined {
 	if (!projectionCrawlSelected()) return undefined;
 	if (projectRoot === null) return undefined;
-	return async (skillMdPaths) => {
-		const gitTracker = await gitTrackerForProjectRoot(projectRoot);
-		const population = await buildInventoryPopulation({
-			root: projectRoot,
-			skillMdPaths,
-			...populationWiring(gitTracker, cache, projectRoot),
-		});
-		reportBlobRefusals(logger, population.refusalRows);
-		return population;
-	};
+	return (skillMdPaths) => populateAndReport(
+		{ root: projectRoot, cache, logger, population: 'inventory' },
+		(wiring) => buildInventoryPopulation({ root: projectRoot, skillMdPaths, ...wiring }),
+		(population) => population.refusalRows,
+	);
 }
 
 /**

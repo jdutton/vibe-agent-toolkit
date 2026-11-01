@@ -289,7 +289,7 @@ export function resourceContributors(sourceFor: (root: string) => CrawlSource): 
  * What every resources lane hands {@link populate} for one root and one
  * enumerator: {@link resourceContributors}' question plus the run's oracles.
  *
- * @param options - The lane's options, for its oracles and blob-stage observer
+ * @param options - The lane's options, for its oracles
  * @param root - The resolved root
  * @param contributors - The registry and parameters, from {@link resourceContributors}
  * @returns The options to read the store and to populate with — one object, so
@@ -359,7 +359,7 @@ function membershipOf(
  * also reads the store twice — the membership read, then `populate()`'s own —
  * accepted rather than a seam into `populate()`.
  *
- * @param options - The root, the run's oracles and the blob-stage observer
+ * @param options - The root and the run's oracles
  * @param options.root - Absolute root to enumerate
  * @param options.outputs - The trees the calling verb writes, `[]` for none: the
  *   one declaration of which side a fault is on (see `crawlSourceFor`). Kept out
@@ -427,7 +427,7 @@ async function membershipThrough(
  * whether a cache happened to exist, or two callers hold differently-shaped
  * views of one tree.
  *
- * @param options - The root, the run's oracles, and the blob-stage observer
+ * @param options - The root and the run's oracles
  * @param options.root - Absolute root to populate
  * @param options.gitTracker - The ignore oracle, or omitted. Not cosmetic: this
  *   lane passes `DECLINE_IGNORED`, so the tracker decides which members there

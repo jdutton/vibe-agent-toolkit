@@ -482,12 +482,16 @@ refusal. The one shipped skip is the claude-context discovery pass,
 
 What the stage declined or mis-decoded is reported as a function of the **population's rows**
 (`blob_conditions`, `resource_realizations.contentState`, `blobs.replacementCharacters`), so a store
-hit reports exactly what the derive that wrote it did. The query lanes report it — `vat resources
-query`, `vat resources check` (and so `vat validate`'s checks child), `vat claude context` and
-`vat inventory` — on stderr; the membership and build verbs stay quiet, since their users cannot act
-on a table they never query. `packages/resources/src/projection/blob-refusals.ts ›
-describeBlobRefusals()`, routed by `packages/cli/src/utils/population-wiring.ts ›
-reportBlobRefusals()`.
+hit reports what the derive that wrote it did — except a failed read (`BLOB_UNREADABLE`,
+`BLOB_CONTENT_CHANGED`), which is never stored, so only the run that observed it reports it. Binary
+content is reported only at a path whose type promises text, so a committed image stays silent; a
+population that derived no blob at all reports every refusal. The query lanes report it — `vat
+resources query`, `vat resources check` (and so `vat validate`'s checks child), `vat claude context`,
+`vat inventory`, and the claude-context lens when a query names its relations — on stderr, one line
+per population, named; the membership and build verbs stay quiet, since their users cannot act on a
+table they never query. `packages/resources/src/projection/blob-refusals.ts ›
+describeBlobRefusals()`, reported by `packages/cli/src/utils/population-wiring.ts ›
+populateAndReport()`, the only CLI entry that hands a builder its wiring.
 
 ### Gitignored status as an annotation
 

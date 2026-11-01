@@ -103,21 +103,24 @@ const unitTestTimeout = process.platform === 'win32' ? 150_000 : 15_000;
 const VITEST_DEFAULT_HOOK_TIMEOUT = 10_000;
 
 /**
- * Per-TEST timeout for the SYSTEM tier: twice the integration tier's, scaled the
- * same way. 120 s on Unix (the value this tier always had) and 30 min on
- * Windows, where the tier runs serially on the slowest runner.
+ * Per-TEST timeout for the SYSTEM tier: 120 s (the value this tier always had),
+ * floored at the integration tier's platform allowance — so 120 s on Unix and
+ * 15 min on Windows. A floor, not a multiple: a multiple scaled by the Windows
+ * factor turns a hang into half an hour that names no test.
  */
-const systemTestTimeout = platformTestTimeout * 2;
+const systemTestTimeout = Math.max(120_000, platformTestTimeout);
 
-/** Per-HOOK timeout for the system tier: 5 min on Unix, scaled like the rest. */
-const systemHookTimeout = platformTestTimeout * 5;
+/** Per-HOOK timeout for the system tier: 5 min, floored the same way (15 min on Windows). */
+const systemHookTimeout = Math.max(300_000, platformTestTimeout);
 
 declare module 'vitest' {
   /**
    * What every tier provides its test files, so a test that needs longer than
-   * the default asks for a MULTIPLE of this machine's allowance —
-   * `inject('tierTestTimeout') * 4` — and never a number that is generous on one
-   * runner and the failure on another (enforced by: `local/no-literal-test-timeout`).
+   * the default passes `atLeastTierTimeout(inject('tierTestTimeout'), budget)`
+   * from `@vibe-agent-toolkit/utils/testing`: this machine's allowance is the
+   * floor and the measured budget a ceiling over it — never a number that is
+   * generous on one runner and the failure on another, never a multiple that
+   * scales an hour by the Windows factor (enforced by: `local/no-literal-test-timeout`).
    */
   export interface ProvidedContext {
     tierTestTimeout: number;

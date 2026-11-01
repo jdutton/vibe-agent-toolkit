@@ -38,16 +38,16 @@
  * module under test owns.
  */
 
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, rmSync, writeFileSync } from 'node:fs';
 
-import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { createSymlink, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { PROJECTION_STORE_DIR_ENV } from '../../src/utils/projection-store.js';
 import { commitTestFixture } from '../test-helpers.js';
 
-import { executeCli, fakeHomeEnv, getBinPath } from './test-common.js';
+import { createIsolatedScratch, executeCli, getBinPath, isolatedScratchEnv } from './test-common.js';
 
 const binPath = getBinPath(import.meta.url);
 
@@ -102,9 +102,15 @@ function corpusWith(name: string, plant: (corpus: string) => void): string {
 /** The start of the line naming what a population declined to derive. */
 const REFUSAL_LINE = 'blob derivation declined';
 
+/** PNG signature bytes: a NUL inside the sniff window, so the blob stage declines them as not text. */
+const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]);
+
 /**
- * A committed corpus with the two broken links and one tracked PNG the blob
- * stage declines as not text.
+ * A committed corpus with the two broken links and two tracked binaries the
+ * blob stage declines as not text: an image, which is the ordinary shape of a
+ * repository and is NOT reported, and the same bytes at a path typed as JSON,
+ * which is. So `1 not text` pins the line both ways — a report of every
+ * declined blob says 2, and a report of none says nothing.
  *
  * @param name - The corpus directory's name under scratch
  * @param config - A `vibe-agent-toolkit.config.yaml` to commit with it, if any
@@ -112,7 +118,8 @@ const REFUSAL_LINE = 'blob derivation declined';
  */
 function binaryCorpus(name: string, config?: string): string {
   return corpusWith(name, (root) => {
-    writeFileSync(safePath.join(root, 'docs', 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]));
+    writeFileSync(safePath.join(root, 'docs', 'logo.png'), PNG_BYTES);
+    writeFileSync(safePath.join(root, 'docs', 'settings.json'), Buffer.concat([PNG_BYTES, Buffer.from('{}')]));
     if (config !== undefined) writeFileSync(safePath.join(root, 'vibe-agent-toolkit.config.yaml'), config, 'utf-8');
   });
 }
@@ -126,8 +133,7 @@ function binaryCorpus(name: string, config?: string): string {
  */
 function storeEnv(storeDir: string, lane: 'projection' | 'walk' = 'projection'): Record<string, string> {
   return {
-    ...fakeHomeEnv(safePath.join(scratch, 'home')),
-    TMPDIR: safePath.join(scratch, 'tmp'),
+    ...isolatedScratchEnv(scratch),
     VAT_RESOURCES_CRAWL: lane,
     VAT_PROJECTION_STORE: 'sqlite',
     [PROJECTION_STORE_DIR_ENV]: storeDir,
@@ -218,9 +224,7 @@ function lockedCorpus(name: string, plant: (corpus: string) => void): string {
 
 describe('vat resources validate twice against one pinned store (system test)', () => {
   beforeAll(() => {
-    scratch = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-validate-population-'));
-    mkdirSyncReal(safePath.join(scratch, 'home', '.claude'), { recursive: true });
-    mkdirSyncReal(safePath.join(scratch, 'tmp'), { recursive: true });
+    scratch = createIsolatedScratch('vat-validate-population-');
   });
 
   afterAll(() => {
@@ -251,8 +255,8 @@ describe('vat resources validate twice against one pinned store (system test)', 
     expect(validated.document.data['population']).toBe('derived');
     expect(validated.stderr).not.toContain(REFUSAL_LINE);
     expect(checked.document.data['population'], checked.stderr).toBe('store');
-    expect(checked.stderr).toContain(`${REFUSAL_LINE} 1 of`);
-    expect(checked.stderr).toContain('1 not text');
+    expect(checked.stderr).toContain(`${REFUSAL_LINE} 1 of 5 blob(s)`);
+    expect(checked.stderr).toContain('(1 not text)');
   });
 
   it('reports a tracked binary once under vat validate, from the checks phase', async () => {
@@ -264,6 +268,14 @@ describe('vat resources validate twice against one pinned store (system test)', 
     const result = await executeCli(binPath, ['validate'], { cwd: corpus, env: storeEnv(`${corpus}-store`) });
 
     expect(result.stderr.split(REFUSAL_LINE).length - 1, result.stderr).toBe(1);
+    // Printed by the checks phase: after its banner, so not by the resources
+    // phase that ran first. The checks phase is the last one this config runs.
+    const checksBanner = result.stderr.indexOf('▶ Surface: checks');
+    expect(checksBanner, result.stderr).toBeGreaterThan(result.stderr.indexOf('▶ Surface: resources'));
+    expect(result.stderr.indexOf(REFUSAL_LINE), result.stderr).toBeGreaterThan(checksBanner);
+    // The run's header is a header, not a verdict: nothing has run when it prints.
+    expect(result.stderr).toContain('🔍 vat validate (surfaces: resources → checks)');
+    expect(result.stderr).not.toContain('✅ vat validate');
   });
 
   it('publishes population: null when the walk lane answered', async () => {

@@ -2,7 +2,7 @@ import { sep } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { mimeTypeForPath, parserKindForMimeType } from '../src/mime-type.js';
+import { isTextMimeType, mimeTypeForPath, parserKindForMimeType } from '../src/mime-type.js';
 
 // Spelled out here rather than imported from the module under test: an imported
 // constant would make every assertion tautological — the test would still pass if
@@ -284,5 +284,30 @@ describe('parserKindForMimeType — a declared type carries parameters and any c
     '   ',
   ])('does not run a document parser for %s', (mime) => {
     expect(parserKindForMimeType(mime)).toBeNull();
+  });
+});
+
+describe('isTextMimeType — whether binary bytes at a path are a surprise', () => {
+  it.each(['docs/a.md', 'pkg/settings.json', 'ci.yaml', 'README', 'icon.svg', 'Cargo.lock', 'run.sh'])(
+    'every type the tables assign promises text: %s',
+    (path) => {
+      expect(isTextMimeType(mimeTypeForPath(path))).toBe(true);
+    },
+  );
+
+  it.each(['assets/logo.png', 'photo.jpg', 'bundle.zip', 'font.woff2', 'model.onnx'])(
+    'a binary format has no table entry, so no type and no promise: %s',
+    (path) => {
+      expect(mimeTypeForPath(path)).toBeNull();
+      expect(isTextMimeType(mimeTypeForPath(path))).toBe(false);
+    },
+  );
+
+  it('reads a declared type by its media type: text/*, +xml, +json, parameters and casing ignored', () => {
+    expect(isTextMimeType('Text/X-Custom; charset=utf-8')).toBe(true);
+    expect(isTextMimeType('application/vnd.example+json')).toBe(true);
+    expect(isTextMimeType('application/atom+xml')).toBe(true);
+    expect(isTextMimeType('image/png')).toBe(false);
+    expect(isTextMimeType('application/octet-stream')).toBe(false);
   });
 });

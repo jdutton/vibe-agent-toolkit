@@ -1103,10 +1103,11 @@ export default [
 
   // ONE timeout contract for the integration and system tiers: a per-test or
   // per-hook timeout is omitted (the tier's platform-scaled default applies) or
-  // is a multiple of the value the tier provides — `inject('tierTestTimeout')`,
-  // `inject('tierHookTimeout')` (vitest.shared.ts). A literal `60_000` was 1× the
-  // Unix default and 1/15 of the Windows one, and timed out there on runner
-  // speed alone. No backlog: every site was migrated the day this was enabled.
+  // is `atLeastTierTimeout(inject('tierTestTimeout' | 'tierHookTimeout'), budget)`
+  // (vitest.shared.ts provides both): the default is the floor, the budget a
+  // ceiling. A literal `60_000` was 1/15 of the Windows default and timed out
+  // there on runner speed alone; a multiple scaled an hour by 15. No backlog:
+  // every site was migrated the day this was enabled.
   {
     files: [
       'packages/*/test/integration/**/*.ts',

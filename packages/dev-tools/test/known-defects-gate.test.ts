@@ -54,8 +54,16 @@ describe('stableTagBlockers', () => {
     '- **Blocks:** the stable tag.',
     '- **Blocks:** the stable tag (until S6)',
     '- **blocks:** the stable tag',
+    '- Blocks: the stable tag',
+    '- **Blocking:** the stable tag',
+    '- **Blocker:** the stable tag',
+    '+ blocks the stable tag',
   ])('throws on the near-miss marker %j rather than failing open', (line) => {
     expect(() => stableTagBlockers(`### An entry\n\n${line}\n`)).toThrow(/marker/);
+  });
+
+  it('reads a list line whose first word merely CONTAINS "block" as prose, not a near-miss', () => {
+    expect(stableTagBlockers('### An entry\n\n- Unblocks nothing; see the stable tag notes.\n- **Severity:** Minor\n')).toEqual([]);
   });
 
   it('ignores the marker quoted as inline code in prose', () => {

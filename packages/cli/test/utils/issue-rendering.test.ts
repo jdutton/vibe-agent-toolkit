@@ -553,16 +553,16 @@ describe('vat skills validate — formatValidationReportLines', () => {
     // `--verbose` still shows which reference paths a skill's bundle leaves out.
     const results = [packagingResult('a', [issue('warning', 'W1')], [{ path: 'x.md', reason: 'gitignored' }])];
 
-    expect(formatValidationReportLines(results, [], true)).toEqual(
+    expect(formatValidationReportLines(results, [], results.length, true)).toEqual(
       expect.arrayContaining(['  Excluded references (1):', '    x.md (gitignored)']),
     );
-    expect(formatValidationReportLines(results, [], false).join('\n')).not.toContain('Excluded references');
+    expect(formatValidationReportLines(results, [], results.length, false).join('\n')).not.toContain('Excluded references');
   });
 
   it('does not print the all-clear banner over active warnings', () => {
     const lines = formatValidationReportLines([
       packagingResult('a', [issue('warning', 'W1'), issue('warning', 'W2')]),
-    ], [], true);
+    ], [], 1, true);
     // The literal defect: "✅ All validations passed" above N warnings.
     expect(lines.some((l) => l.includes('All validations passed'))).toBe(false);
     expect(lines[0]).toContain('2 warnings');
@@ -571,12 +571,12 @@ describe('vat skills validate — formatValidationReportLines', () => {
   it('renders EVERY emitted severity in a mixed batch under verbose, not just the errors', () => {
     const lines = formatValidationReportLines([
       packagingResult('a', [issue('error', 'E1'), issue('warning', 'W1'), issue('info', 'I1')]),
-    ], [], true);
+    ], [], 1, true);
     expect(renderedLabels(lines)).toEqual(['ERROR', 'WARNING', 'INFO']);
   });
 
   it('renders an info-only batch rather than reporting nothing at all', () => {
-    const lines = formatValidationReportLines([packagingResult('a', [issue('info', 'I1')])], [], true);
+    const lines = formatValidationReportLines([packagingResult('a', [issue('info', 'I1')])], [], 1, true);
     expect(renderedLabels(lines)).toEqual(['INFO']);
     expect(lines[0]).toContain('1 info');
   });
@@ -591,6 +591,7 @@ describe('vat skills validate — formatValidationReportLines', () => {
     const lines = formatValidationReportLines(
       [packagingResult('demo', [issue('info', 'FILES_GLOB_MATCHED_NOTHING')])],
       [],
+      1,
       false,
     );
     expect(lines[0]).not.toContain('nothing to act on');
@@ -605,10 +606,19 @@ describe('vat skills validate — formatValidationReportLines', () => {
   // cost a genuinely clean run its unqualified all-clear.
   it('keeps the plain all-clear banner for a genuinely clean batch', () => {
     for (const verbose of [false, true]) {
-      expect(formatValidationReportLines([packagingResult('a', [])], [], verbose)).toEqual([
+      expect(formatValidationReportLines([packagingResult('a', [])], [], 1, verbose)).toEqual([
         '\n✅ All validations passed',
       ]);
     }
+  });
+
+  it("reads the banner's examined off the REPORT, not off the results it renders", () => {
+    // A clean result handed over with a report that examined nothing: a banner
+    // that recounted `results.length` would print the all-clear above a document
+    // that refused the run.
+    const [banner] = formatValidationReportLines([packagingResult('a', [])], [], 0, false);
+    expect(banner).not.toContain('All validations passed');
+    expect(banner).toContain('Not a verdict');
   });
 
   it('collapses each skill to ONE line by default, dominant code first, clean skills omitted', () => {
@@ -627,6 +637,7 @@ describe('vat skills validate — formatValidationReportLines', () => {
         packagingResult('allowed-only', [], [], [allowRecord('LINK_BROKEN')]),
       ],
       [],
+      3,
       false,
     );
     // No per-issue blocks at all: the 1,728 LINK_DROPPED_BY_DEPTH rows are what
@@ -645,6 +656,7 @@ describe('vat skills validate — formatValidationReportLines', () => {
       const lines = formatValidationReportLines(
         [packagingResult('a', [issue('warning', 'W1')])],
         [issue('warning', 'ALLOW_UNUSED', { fix: 'remove the entry' })],
+        1,
         verbose,
       );
       expect(lines).toContain('Run-level (project config, not any one skill):');

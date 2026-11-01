@@ -499,9 +499,13 @@ async function runInstall(source: string | undefined, run: InstallRun): Promise<
   }
 }
 
-/** The human half, on stderr. */
+/** The human half, on stderr; a run that placed no skill gets no check mark. */
 function logInstallOutcome(outcome: InstallOutcome, dryRun: boolean, logger: Logger): void {
   const count = outcome.skills.length;
+  if (count === 0) {
+    logger.info(dryRun ? '\n⚠️ Dry-run: the source holds no skill to install' : '\n⚠️ Nothing installed: the source holds no skill');
+    return;
+  }
   if (outcome.symlink) {
     logger.info(dryRun ? `\n✅ Dry-run complete: ${count} skill(s) would be symlinked` : `\n✅ Dev-installed ${count} skill(s) via symlink`);
     if (!dryRun) logger.info(`   After rebuilding, run /reload-plugins in Claude Code`);
@@ -512,10 +516,8 @@ function logInstallOutcome(outcome: InstallOutcome, dryRun: boolean, logger: Log
     return;
   }
   logger.info(`\n✅ Installed ${count} skill(s)`);
-  if (count > 0) {
-    logger.info(`\n💡 Run 'vat claude plugin list' to verify installation`);
-    logger.info(`   Restart Claude Code or run /reload-plugins to use the new skill`);
-  }
+  logger.info(`\n💡 Run 'vat claude plugin list' to verify installation`);
+  logger.info(`   Restart Claude Code or run /reload-plugins to use the new skill`);
 }
 
 async function installCommand(

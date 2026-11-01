@@ -66,6 +66,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 import { resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
+import { atLeastTierTimeout } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, inject, it } from 'vitest';
 
 /** The population script, beside this file. */
@@ -390,7 +391,7 @@ describe('the additive write, which only two processes can see', () => {
     // And it is the same answer, not merely an answer: a merge that kept the
     // rows but corrupted them would still report a hit.
     expect(again.document).toBe(broad.document);
-  }, inject('tierTestTimeout') * 2);
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 90_000));
 });
 
 describe('a cold store', () => {
@@ -428,5 +429,5 @@ describe('a cold store', () => {
     // agreement above trivially.
     const first = readPopulation(outcomes[0] as ChildOutcome);
     expect(first.counts['zoneProvenance']).toBe(3);
-  }, inject('tierTestTimeout') * 2);
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 90_000));
 });

@@ -37,7 +37,9 @@ import { setupSubdirTestSuite } from './test-helpers.js';
 
 const DOC = 'a.md';
 /** NUL bytes after a PNG signature: declined by the blob stage as not text. */
-const BINARY = 'logo.png';
+// Binary bytes at a path typed as TEXT — the refusal worth a line. A `.png` is
+// declined too but deliberately not reported (see blob-refusals.ts).
+const BINARY = 'data/settings.json';
 const BINARY_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d]);
 const CLASSIFIER_CODE = 'TEST_CLASSIFIER_CONDITION';
 

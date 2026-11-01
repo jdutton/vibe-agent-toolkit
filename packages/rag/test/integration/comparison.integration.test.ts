@@ -4,6 +4,7 @@
  * Compare different embedding providers.
  */
 
+import { atLeastTierTimeout } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, inject, it } from 'vitest';
 
 import { assertUnitMagnitude } from './embedding-test-helpers.js';
@@ -28,7 +29,7 @@ describe('ONNX Provider Comparison', () => {
       expect(embedding).toHaveLength(onnx.dimensions);
       expect(onnx.dimensions).toBe(384);
     },
-    inject('tierTestTimeout') * 2,
+    atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 
   it(
@@ -41,7 +42,7 @@ describe('ONNX Provider Comparison', () => {
 
       expect(embedding1).toEqual(embedding2);
     },
-    inject('tierTestTimeout') * 2,
+    atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 
   it(
@@ -53,7 +54,7 @@ describe('ONNX Provider Comparison', () => {
 
       assertUnitMagnitude(embedding);
     },
-    inject('tierTestTimeout') * 2,
+    atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 });
 

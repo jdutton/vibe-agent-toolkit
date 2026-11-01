@@ -34,7 +34,12 @@ function condition(code: string, key: string): BlobConditionRow {
 }
 
 function realization(path: string, contentState: ContentState): ResourceRealizationRow {
-  return { path, contentState } as ResourceRealizationRow;
+  return { path, contentState, contentKey: null, mime: null } as ResourceRealizationRow;
+}
+
+/** A keyed realization of `contentKey` at `path`, typed `mime` (null: a type the tables do not know). */
+function keyedAt(path: string, contentKey: string, mime: string | null): ResourceRealizationRow {
+  return { path, contentKey, contentState: 'keyed', mime } as ResourceRealizationRow;
 }
 
 function rowsOf(rows: Partial<BlobRefusalRows>): BlobRefusalRows {
@@ -51,6 +56,10 @@ describe('describeBlobRefusals', () => {
   it('names each refused bucket with its count, and how many blobs it looked at', () => {
     const line = describeBlobRefusals(rowsOf({
       blobs: blobs(1380),
+      resourceRealizations: [
+        keyedAt('docs/a.md', 'markdown.png-1', 'text/markdown'),
+        keyedAt('docs/b.md', 'markdown.png-2', 'text/markdown'),
+      ],
       blobConditions: [
         condition(BLOB_NOT_TEXT, 'markdown.png-1'),
         condition(BLOB_NOT_TEXT, 'markdown.png-2'),
@@ -68,6 +77,7 @@ describe('describeBlobRefusals', () => {
 
   it('counts a refused blob once however many paths realize it', () => {
     const line = describeBlobRefusals(rowsOf({
+      resourceRealizations: [keyedAt('a.md', 'markdown.png', 'text/markdown'), keyedAt('b.md', 'markdown.png', 'text/markdown')],
       blobConditions: [condition(BLOB_NOT_TEXT, 'markdown.png'), condition(BLOB_NOT_TEXT, 'markdown.png')],
     }));
 
@@ -98,6 +108,9 @@ describe('describeBlobRefusals', () => {
     }));
 
     expect(line).toContain('could not key 3 realization(s) (2 unreadable, 1 too large to decode)');
+    // Nothing was declined, so the pointer names the table that holds THESE rows.
+    expect(line).toContain('resource_realizations');
+    expect(line).not.toContain('blob_conditions');
   });
 
   it('counts an unkeyed path once however many extents realize it', () => {
@@ -107,6 +120,57 @@ describe('describeBlobRefusals', () => {
 
     expect(line).toContain('could not key 1 realization(s) (1 too large to decode)');
     expect(line).not.toContain('unreadable');
+  });
+
+  it('names both tables when both declined blobs and unkeyed realizations are present', () => {
+    const line = describeBlobRefusals(rowsOf({
+      resourceRealizations: [realization('huge.md', 'oversize')],
+      blobConditions: [condition(BLOB_PARSE_FAILED, 'markdown.b')],
+    }));
+
+    expect(line).toContain('blob_conditions');
+    expect(line).toContain('resource_realizations');
+  });
+
+  it('stays silent about a committed image: binary bytes at a path typed as no text', () => {
+    // The wallpaper case: every image in a repository is a NUL-bearing blob,
+    // and a line naming all of them on every run is read by no one.
+    expect(describeBlobRefusals(rowsOf({
+      resourceRealizations: [keyedAt('assets/logo.png', 'none.logo', null)],
+      blobConditions: [condition(BLOB_NOT_TEXT, 'none.logo')],
+    }))).toBeUndefined();
+  });
+
+  it('reports binary bytes at a path whose type says text, beside an image it stays silent about', () => {
+    const line = describeBlobRefusals(rowsOf({
+      resourceRealizations: [
+        keyedAt('assets/logo.png', 'none.logo', null),
+        keyedAt('docs/guide.md', 'markdown.corrupt', 'text/markdown'),
+      ],
+      blobConditions: [condition(BLOB_NOT_TEXT, 'none.logo'), condition(BLOB_NOT_TEXT, 'markdown.corrupt')],
+    }));
+
+    expect(line).toContain('declined 1 of 12 blob(s) (1 not text)');
+  });
+
+  it('reports binary bytes when ANY path realizing them is typed as text', () => {
+    expect(describeBlobRefusals(rowsOf({
+      resourceRealizations: [
+        keyedAt('assets/logo.png', 'none.same', null),
+        keyedAt('config/settings.json', 'none.same', 'application/json'),
+      ],
+      blobConditions: [condition(BLOB_NOT_TEXT, 'none.same')],
+    }))).toContain('1 not text');
+  });
+
+  it('stays loud over a corpus that is ALL binary, typed or not', () => {
+    // Nothing derived at all: "declined 1 of 1" is the line that says the run
+    // read nothing it could use, and silence would hide exactly that.
+    expect(describeBlobRefusals(rowsOf({
+      blobs: [],
+      resourceRealizations: [keyedAt('assets/logo.png', 'none.logo', null)],
+      blobConditions: [condition(BLOB_NOT_TEXT, 'none.logo')],
+    }))).toContain('declined 1 of 1 blob(s) (1 not text)');
   });
 
   it('stays silent for the ordinary shapes of a tree, which are not refusals', () => {

@@ -22,6 +22,7 @@
 import { DERIVED_TABLES, type Projection } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
+import { createLogger } from '../../src/utils/logger.js';
 import {
   AUTHORED_LINK_LENS,
   CLAUDE_CONTEXT_LENS,
@@ -169,6 +170,7 @@ describe('evaluateLens', () => {
     projection: {} as Projection,
     root: '/corpus',
     cache: undefined,
+    logger: createLogger(),
   };
 
   it('hands back rows that are exactly the declared relations', async () => {

@@ -146,7 +146,7 @@ The table is **generated** from each rule's `meta.docs` by `bun run generate:cla
 
 | Rule | Bans | Use instead | Subpath | Fix | `recommended` |
 |---|---|---|---|---|---|
-| `no-literal-test-timeout` | `it(name, fn, 60_000)`, `beforeAll(fn, 300_000)`, `{ timeout: 30_000 }` | the tier default, or a multiple of a value the runner config provides | — |  | — |
+| `no-literal-test-timeout` | `it(name, fn, 60_000)`, `beforeAll(fn, tier * 12)`, `{ timeout: isWin ? 900_000 : 60_000 }` | the tier default, or `atLeastTierTimeout(inject('tierTestTimeout'), budget)` | — |  | — |
 | `no-test-scoped-functions` | helper functions declared inside `describe`/`it` | module scope | — |  | — |
 | `prefer-startswith-over-regex` | `/^foo/.test(s)`, `` /^\*glob/.test(s) ``, `const RE = /^foo/; RE.test(s)` | `s.startsWith('foo')` | — |  | `error` |
 | `require-justified-skip` | unannotated `it.skip`/`it.todo`, tautological assertions, empty test bodies | a `SKIP(#123): reason` annotation, or a real assertion | — |  | — |

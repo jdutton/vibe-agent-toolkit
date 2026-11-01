@@ -333,16 +333,17 @@ function reportBanner(counts: SeverityCounts, examined: number): string {
  *
  * @param results - One result per skill validated
  * @param runFindings - The run-level findings the document published
+ * @param examined - The published report's `examined`, never recounted
  * @param verbose - Render every finding in full, and the per-skill detail
  */
 export function formatValidationReportLines(
   results: readonly PackagingValidationResult[],
   runFindings: readonly ValidationIssue[],
+  examined: number,
   verbose: boolean,
 ): string[] {
   const counts = countBySeverity([...results.flatMap(skillFindings), ...toFindings(runFindings)]);
-  // `examined` is the skill count, exactly as `buildSkillsValidateReport` counts it.
-  const lines = [reportBanner(counts, results.length)];
+  const lines = [reportBanner(counts, examined)];
 
   for (const result of results) {
     if (!hasFindings(result)) continue;
@@ -361,6 +362,7 @@ export function formatValidationReportLines(
 function reportValidationToStderr(
   results: readonly PackagingValidationResult[],
   runFindings: readonly ValidationIssue[],
+  examined: number,
   logger: ReturnType<typeof createLogger>,
   verbose: boolean,
 ): void {
@@ -374,7 +376,7 @@ function reportValidationToStderr(
     return counts.errors + counts.warnings > 0;
   });
 
-  for (const line of formatValidationReportLines(results, runFindings, verbose)) {
+  for (const line of formatValidationReportLines(results, runFindings, examined, verbose)) {
     logger.info(line);
   }
   renderSkillQualityFooter(logger, hasSkillFindings, emittedCodes);
@@ -724,7 +726,7 @@ export async function runSkillsValidatePhase(
       runIssues,
       durationMs: Date.now() - startTime,
     });
-    reportValidationToStderr(results, runIssues, logger, options.verbose === true);
+    reportValidationToStderr(results, runIssues, report.examined, logger, options.verbose === true);
     if (report.examined === 0) logger.error(nothingDiscoveredLine(config?.skills));
     return { report };
   } catch (error) {

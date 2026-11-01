@@ -24,6 +24,7 @@ import {
 import { evaluateClaudeContextLens } from './claude-context-lens.js';
 import { evaluateAuthoredLenses } from './edge-lens-evaluation.js';
 import type { LensPopulation } from './lens-population.js';
+import type { Logger } from './logger.js';
 
 /**
  * The rows one lens evaluation produced, keyed by `DERIVED_TABLES`' own keys.
@@ -66,6 +67,8 @@ export interface LensEvaluationInput {
   readonly root: string;
   /** The run's projection store, so a lens's own population can hit it. */
   readonly cache: PopulationCache | undefined;
+  /** Where a lens that populates reports its own population's refused content. */
+  readonly logger: Logger;
 }
 
 /** One lens: the relations it owns, and how to produce their rows. */
@@ -103,7 +106,7 @@ export const AUTHORED_LINK_LENS: ProjectionLens = {
 export const CLAUDE_CONTEXT_LENS: ProjectionLens = {
   name: 'claude-context',
   relations: ['claudeContextChains', 'claudeContextLoads'],
-  evaluate: ({ root, cache }) => evaluateClaudeContextLens({ root, cache }),
+  evaluate: ({ root, cache, logger }) => evaluateClaudeContextLens({ root, cache, logger }),
 };
 
 /** Every lens the query lane can evaluate, in evaluation order. */

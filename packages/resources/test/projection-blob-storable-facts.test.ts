@@ -19,6 +19,7 @@ import {
   BLOB_UNREADABLE,
   storableBlobFacts,
 } from '../src/projection/blob-population.js';
+import { describeBlobRefusals } from '../src/projection/blob-refusals.js';
 import { emptyBlobRows } from '../src/projection/store-hydration.js';
 import type { BlobConditionRow } from '../src/schemas/projection-blobs.js';
 
@@ -51,5 +52,21 @@ describe('storableBlobFacts', () => {
     // The key those rows named is now held by nothing, so the next run
     // re-derives it instead of being served a failure that may never recur.
     expect(stored.blobConditions).toStrictEqual([kept]);
+  });
+
+  it('is why a store hit does not repeat a failed read, and the refusal line says so', () => {
+    // The one place the refusal line's "every fact is stored" premise has an
+    // exception, by design: the run that observed the failed read reports it,
+    // and a hit — served only what was filed — does not.
+    const run = {
+      ...emptyBlobRows(),
+      blobConditions: [conditionFor('k1', BLOB_UNREADABLE), conditionFor('k2', BLOB_PARSE_FAILED)],
+    };
+    const realizations = { resourceRealizations: [] };
+
+    expect(describeBlobRefusals({ ...run, ...realizations })).toContain('1 unreadable');
+    const served = describeBlobRefusals({ ...storableBlobFacts(run), ...realizations });
+    expect(served).toContain('1 parse failed');
+    expect(served).not.toContain('unreadable');
   });
 });

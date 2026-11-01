@@ -782,7 +782,7 @@ export function warnUndeclaredOverrides(
  * nothing all produce it — and because population DECLINES ignored members
  * rather than flagging them, the tables carry no trace of the difference.
  *
- * The precedent is `reportBlobRefusals` in `population-wiring.ts`, which names
+ * The precedent is `populateAndReport` in `population-wiring.ts`, which names
  * a tree whose every document was declined as binary rather than letting it
  * populate as empty and report success. That report covers blob refusals only;
  * this guard covers the extent.

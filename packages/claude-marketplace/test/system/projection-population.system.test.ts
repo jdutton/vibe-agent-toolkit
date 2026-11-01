@@ -126,7 +126,7 @@ import {
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { NEVER_CRAWL_GLOBS, crawlDirectory } from '@vibe-agent-toolkit/utils/crawl';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
-import { refuseUnreadableFixture } from '@vibe-agent-toolkit/utils/testing';
+import { atLeastTierTimeout, refuseUnreadableFixture } from '@vibe-agent-toolkit/utils/testing';
 import { beforeAll, describe, expect, inject, it } from 'vitest';
 
 import {
@@ -473,7 +473,7 @@ beforeAll(async () => {
   const startedAt = performance.now();
   rederived = await rederiveBlobs(probe.projection);
   console.log(`[blob stage, re-derived] ${Math.round(performance.now() - startedAt)} ms`, JSON.stringify(rederived.counts));
-}, inject('tierHookTimeout') * 12);
+}, atLeastTierTimeout(inject('tierHookTimeout'), 3_600_000));
 
 describe('whole-corpus population', () => {
   it('converges within the probe ceiling', () => {

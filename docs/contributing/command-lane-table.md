@@ -72,12 +72,14 @@ arm at all. Four more inherit one: `vat build`, `vat validate` and
 `vat verify` through the phases they run in process (and `vat validate` through its `checks`
 child as well), and `vat skill test run` by re-entering `vat claude plugin build`.
 
-No command carries two projections in one process: `vat claude context` populates the claude-context
-lens that `vat resources validate` used to also populate, beside its resource population, for a
-default-on context-budget check now removed entirely. The two populations answer different questions
-(*what files are here* versus *what does the harness load*) and derive differently (the resource
-population skips content keying and the blob stage; the context population needs both), which is why
-they were never merged into one.
+Every resources lane asks ONE question: membership (`vat resources scan`, `vat resources validate`,
+the link-registry routes) and the query verbs (`vat resources query`, `vat resources check`) build
+the same resource population — content keying and the blob stage included — under the same store
+key, so whichever runs first writes the entry the others are served. The claude-context population
+is a different question (*what does the harness load* rather than *what files are here*), built by
+`vat claude context` and, on demand, by the claude-context lens: `vat resources query` or `check`
+over a `claude_context_*` relation carries both populations in one process, and each reports its own
+refused content through `populateAndReport`.
 `docs/architecture/command-population-matrix.md` §2–§5 is the accounting for the projection lane and
 those other routes — their selectors, extents and content stages; this table is deliberately not a
 second copy of it, and records only which enumeration entry point a command's route reaches.

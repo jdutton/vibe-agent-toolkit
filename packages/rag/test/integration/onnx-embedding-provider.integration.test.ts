@@ -5,6 +5,7 @@
  * all-MiniLM-L6-v2 model. First run downloads model files (~23MB, int8-quantized).
  */
 
+import { atLeastTierTimeout } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, inject, it } from 'vitest';
 
 import { OnnxEmbeddingProvider } from '../../src/embedding-providers/onnx-embedding-provider.js';
@@ -32,7 +33,7 @@ describe('OnnxEmbeddingProvider - Integration Tests', () => {
       expect(embedding).toHaveLength(384);
       expect(embedding.every((n) => typeof n === 'number')).toBe(true);
     },
-    inject('tierTestTimeout') * 2,
+    atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 
   it(
@@ -40,7 +41,7 @@ describe('OnnxEmbeddingProvider - Integration Tests', () => {
     async () => {
       await assertBatchEmbedding(provider, 384);
     },
-    inject('tierTestTimeout') * 2,
+    atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 
   it(
@@ -50,7 +51,7 @@ describe('OnnxEmbeddingProvider - Integration Tests', () => {
 
       assertUnitMagnitude(embedding);
     },
-    inject('tierTestTimeout') * 2,
+    atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 
   it(
@@ -61,7 +62,7 @@ describe('OnnxEmbeddingProvider - Integration Tests', () => {
 
       expect(embedding1).not.toEqual(embedding2);
     },
-    inject('tierTestTimeout') * 2,
+    atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 
   it(
@@ -78,7 +79,7 @@ describe('OnnxEmbeddingProvider - Integration Tests', () => {
       expect(similarityCatKitten).toBeGreaterThan(similarityCatSpaceship);
       expect(similarityCatKitten).toBeGreaterThan(0.5);
     },
-    inject('tierTestTimeout') * 2,
+    atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 
   it(
@@ -90,7 +91,7 @@ describe('OnnxEmbeddingProvider - Integration Tests', () => {
 
       expect(embedding1).toEqual(embedding2);
     },
-    inject('tierTestTimeout') * 2,
+    atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 
   it(
@@ -100,7 +101,7 @@ describe('OnnxEmbeddingProvider - Integration Tests', () => {
 
       expect(embeddings).toEqual([]);
     },
-    inject('tierTestTimeout') * 2,
+    atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 
   it(
@@ -114,6 +115,6 @@ describe('OnnxEmbeddingProvider - Integration Tests', () => {
       expect(embedding).toHaveLength(384);
       expect(embedding.every((n) => typeof n === 'number')).toBe(true);
     },
-    inject('tierTestTimeout') * 2,
+    atLeastTierTimeout(inject('tierTestTimeout'), 120_000),
   );
 });

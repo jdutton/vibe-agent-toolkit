@@ -210,14 +210,21 @@ describe('the published build report carries the set-aside names', () => {
   const run = { results: [], failures: [], runIssues: [], skillsWithErrors: [], validationFailures: [], outputCommitted: true, residue: [] };
 
   it('formats the success line with each set-aside tail only when there is one', () => {
-    expect(formatBuiltSuccessLine(3, { inPlace: 0, pluginOnly: 0 })).toBe('\nBuilt 3 skill(s) successfully');
-    expect(formatBuiltSuccessLine(3, { inPlace: 2, pluginOnly: 0 })).toBe('\nBuilt 3 skill(s) successfully (2 in-place skill(s) not bundled)');
-    expect(formatBuiltSuccessLine(3, { inPlace: 0, pluginOnly: 1 })).toBe(
+    expect(formatBuiltSuccessLine(3, 3, { inPlace: 0, pluginOnly: 0 })).toBe('\nBuilt 3 skill(s) successfully');
+    expect(formatBuiltSuccessLine(5, 3, { inPlace: 2, pluginOnly: 0 })).toBe('\nBuilt 3 skill(s) successfully (2 in-place skill(s) not bundled)');
+    expect(formatBuiltSuccessLine(4, 3, { inPlace: 0, pluginOnly: 1 })).toBe(
       '\nBuilt 3 skill(s) successfully (1 plugin-only skill(s) shipped with their plugin)',
     );
-    expect(formatBuiltSuccessLine(3, { inPlace: 2, pluginOnly: 1 })).toBe(
+    expect(formatBuiltSuccessLine(6, 3, { inPlace: 2, pluginOnly: 1 })).toBe(
       '\nBuilt 3 skill(s) successfully (2 in-place skill(s) not bundled, 1 plugin-only skill(s) shipped with their plugin)',
     );
+  });
+
+  it('prints no success line over a report that examined nothing, whatever the built count says', () => {
+    // The count is the run's; the verdict is the REPORT's. A banner keyed on the
+    // built count would print "successfully" above a refused document.
+    expect(formatBuiltSuccessLine(0, 3, { inPlace: 0, pluginOnly: 0 })).toBe('\n⚠️ Not a verdict: nothing was examined');
+    expect(formatBuiltSuccessLine(0, 0, { inPlace: 0, pluginOnly: 0 })).not.toContain('successfully');
   });
 
   it('publishes skillsInPlace and skillsPluginOnly by name, and examines them beside the built ones', () => {

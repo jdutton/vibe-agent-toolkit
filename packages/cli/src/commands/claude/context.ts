@@ -102,9 +102,8 @@ import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.
 import { targetPathWithin } from '../../utils/corpus-target.js';
 import { NOTHING_FINISHED, refusalReport, writeLegacyDocument } from '../../utils/document-writer.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
-import { populationWiring, reportBlobRefusals } from '../../utils/population-wiring.js';
+import { populateAndReport } from '../../utils/population-wiring.js';
 import { withPopulationCache } from '../../utils/projection-store.js';
-import { gitTrackerForProjectRoot } from '../audit/distributed-tree.js';
 
 /** Soft wrap width for the printed limit statements. */
 const WRAP_COLUMNS = 96;
@@ -964,9 +963,11 @@ function groupDigits(value: number): string {
  */
 function populateContext(root: string, logger: Logger): Promise<Projection> {
   return withPopulationCache({ root }, async (cache) => {
-    const gitTracker = await gitTrackerForProjectRoot(root);
-    const { projection } = await buildClaudeContextPopulation({ root, ...populationWiring(gitTracker, cache, root) });
-    reportBlobRefusals(logger, projection);
+    const { projection } = await populateAndReport(
+      { root, cache, logger, population: 'claude-context' },
+      (wiring) => buildClaudeContextPopulation({ root, ...wiring }),
+      (result) => result.projection,
+    );
     return projection;
   });
 }

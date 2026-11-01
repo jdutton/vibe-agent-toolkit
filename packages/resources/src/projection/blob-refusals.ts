@@ -8,8 +8,8 @@
  * The line describes the POPULATION, not the run. A store hit derives nothing,
  * so a line built from the blob stage's run counters printed on a cold run and
  * vanished on the warm one over the same tree — the same binary was refused
- * both times, and only one run said so. Every fact this line states is a row
- * the store round-trips:
+ * both times, and only one run said so. Every fact this line states is a row of
+ * the population's answer:
  *
  * - a declined blob is a `blob_conditions` row coded `BLOB_NOT_TEXT`,
  *   `BLOB_UNREADABLE`, `BLOB_CONTENT_CHANGED` or `BLOB_PARSE_FAILED`;
@@ -17,11 +17,28 @@
  *   `contentState` is `unreadable` or `oversize`;
  * - a mis-decoded blob is a `blobs` row with `replacementCharacters > 0`.
  *
- * So a hit and a derive describe alike, and there is one route: the lane that
- * owns the projection hands it here. Run-only counters that no row carries
+ * Every one of those the store round-trips, with two deliberate exceptions:
+ * `BLOB_UNREADABLE` and `BLOB_CONTENT_CHANGED` record one READ at one path, not
+ * the bytes, so `storableBlobFacts` never files them in the shared,
+ * content-addressed tier. A store hit therefore does not repeat them — the run
+ * that observed the failed read is the one that says so, and the next run that
+ * derives the key reads it again. Everything else describes alike on a hit and
+ * a derive, and there is one route: the lane that owns the projection hands it
+ * here. Run-only counters that no row carries
  * (headings or references dropped for want of a source line) are not reported;
  * an absent row is unqueryable, and a line that only a cold run can print is
  * the defect this shape exists to remove.
+ *
+ * ## Why a binary at an untyped path is NOT a refusal worth a line
+ *
+ * Every committed image is a NUL-bearing blob, so a line counting every
+ * `BLOB_NOT_TEXT` row fired on nearly every repository on every run — and a
+ * line that always fires is read by no one. A not-text blob is reported only
+ * when some realization of it is TYPED as text ({@link isTextMimeType}: `.md`,
+ * `.json`, a collection's declared `mimeType`), because only there is binary
+ * content a surprise. One exception keeps the failure that ships visible: when
+ * the population derived NO blob at all, every refusal is reported, so a corpus
+ * that is entirely binary still says it read nothing it could use.
  *
  * ## Why the denominator is in the line
  *
@@ -40,6 +57,8 @@
  * true of every ordinary UTF-8 file, and a line that fires on all of them is
  * wallpaper within a day.
  */
+
+import { isTextMimeType } from '../mime-type.js';
 
 import {
   BLOB_CONTENT_CHANGED,
@@ -74,6 +93,8 @@ const REFUSAL_CODES: ReadonlyArray<readonly [code: string, label: string]> = [
   [BLOB_CONTENT_CHANGED, 'changed under the run'],
   [BLOB_PARSE_FAILED, 'parse failed'],
 ];
+
+const REFUSAL_CODE_SET: ReadonlySet<string> = new Set(REFUSAL_CODES.map(([code]) => code));
 
 /**
  * The realization states that are refusals, named apart because the remedies
@@ -113,13 +134,24 @@ function tally(buckets: readonly RefusalBucket[]): { total: number; breakdown: s
  * The distinct blobs carrying each refusal code — a blob is counted once
  * however many paths realize it or how many rows restate it.
  *
+ * A `BLOB_NOT_TEXT` blob counts only when it is a surprise — see the module
+ * header, "Why a binary at an untyped path is NOT a refusal worth a line".
+ *
  * @param rows - The population's rows
  * @returns Each code's distinct blob set, in reading order
  */
 function refusedBlobs(rows: BlobRefusalRows): ReadonlyArray<{ label: string; blobs: ReadonlySet<string> }> {
+  const textTyped = new Set(
+    rows.resourceRealizations
+      .filter((row) => row.contentKey !== null && isTextMimeType(row.mime))
+      .map((row) => row.contentKey),
+  );
+  const reportAll = rows.blobs.length === 0;
   return REFUSAL_CODES.map(([code, label]) => ({
     label,
-    blobs: new Set(rows.blobConditions.filter((row) => row.code === code).map((row) => row.blob)),
+    blobs: new Set(rows.blobConditions
+      .filter((row) => row.code === code && (code !== BLOB_NOT_TEXT || reportAll || textTyped.has(row.blob)))
+      .map((row) => row.blob)),
   }));
 }
 
@@ -187,8 +219,10 @@ export function describeBlobRefusals(rows: BlobRefusalRows): string | undefined 
   const refused = refusedBlobs(rows);
   const refusedKeys = new Set(refused.flatMap((bucket) => [...bucket.blobs]));
   // The denominator: every blob the population reached a decision about,
-  // derived or declined, each once.
-  const considered = new Set([...rows.blobs.map((row) => row.contentKey), ...refusedKeys]).size;
+  // derived or declined, each once — a declined image it stays silent about
+  // included, since the population did consider it.
+  const declinedAtAll = rows.blobConditions.filter((row) => REFUSAL_CODE_SET.has(row.code)).map((row) => row.blob);
+  const considered = new Set([...rows.blobs.map((row) => row.contentKey), ...declinedAtAll]).size;
 
   const clauses: string[] = [];
   const declined = tally(refused.map(({ label, blobs }) => ({ label, count: blobs.size })));
@@ -202,11 +236,15 @@ export function describeBlobRefusals(rows: BlobRefusalRows): string | undefined 
 
   if (clauses.length === 0) return undefined;
 
-  // Two different tables answer "which ones", so the pointer names whichever
-  // is actually relevant. A mis-decoded blob has NO condition row — it was
-  // derived, not declined — so `blob_conditions` alone would send a reader to
-  // an empty result set.
-  const pointers = ["Per-blob reasons are in the projection's blob_conditions table."];
+  // Three tables answer "which ones", so the pointer names only the ones that
+  // hold THIS line's rows: an unkeyed realization has no condition row (it was
+  // never read), and a mis-decoded blob has none either (it was derived, not
+  // declined) — `blob_conditions` alone would send a reader to an empty result set.
+  const pointers: string[] = [];
+  if (declined !== undefined) pointers.push("Per-blob reasons are in the projection's blob_conditions table.");
+  if (unkeyed !== undefined) {
+    pointers.push('The unkeyed paths are the `resource_realizations` rows by contentState.');
+  }
   if (misdecoded !== undefined) {
     pointers.push('The mis-decoded blobs are the `blobs` rows with replacementCharacters > 0.');
   }

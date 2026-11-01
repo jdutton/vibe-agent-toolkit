@@ -243,6 +243,7 @@ import {
 } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
+import { atLeastTierTimeout } from '@vibe-agent-toolkit/utils/testing';
 import { beforeAll, describe, expect, inject, it } from 'vitest';
 
 import { discoverSkillsFromConfig } from '../../src/commands/skills/skill-discovery.js';
@@ -1563,7 +1564,7 @@ beforeAll(async () => {
     'createProjectRegistry ms': Number(corpus.preparationMs.registry.toFixed(0)),
     'populate ms': Number(corpus.preparationMs.populate.toFixed(0)),
   })));
-}, inject('tierHookTimeout') * 60);
+}, atLeastTierTimeout(inject('tierHookTimeout'), 3_600_000));
 
 // ============================================================================
 // The experiment
@@ -1622,7 +1623,7 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
       + row.closureOnly.map((entry) => `${entry.path} (${entry.cause})`).join(', ')
       + (row.walkerOnly.length > 0 ? ` | walker-only: ${row.walkerOnly.join(', ')}` : ''),
     )).toEqual([]);
-  }, inject('tierTestTimeout') * 30);
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 1_800_000));
 
   it('records how far the PRODUCTION configuration can distinguish the two', () => {
     // This used to assert that EVERY production bundle was a singleton, and it
@@ -1745,7 +1746,7 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     // escaping path that is a directory carries a different reason there, and
     // pinning that difference at zero would be pinning a corpus accident.
     expect(bundledYetEscaping).toEqual([]);
-  }, inject('tierTestTimeout') * 10);
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 600_000));
 
   it('agrees across a depth sweep on the corpus that CAN distinguish', async () => {
     const corpus = repoRootCorpus();
@@ -1854,7 +1855,7 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     // which is what makes the difference a question of *narrowing* the primitive
     // rather than of teaching it to find things it cannot see.
     expect(divergences.flatMap((row) => row.walkerOnly)).toEqual([]);
-  }, inject('tierTestTimeout') * 30);
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 1_800_000));
 
   it('NEGATIVE CONTROL: stripping the refusal vocabulary brings every cause back', async () => {
     // Without this test the agreement above is unfalsifiable. "Zero divergence"
@@ -1921,7 +1922,7 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     // The superset property held BEFORE the narrowing too, which is what made
     // Stage 3 a narrowing problem rather than a "teach it to see" problem.
     expect(divergences.flatMap((row) => row.walkerOnly)).toEqual([]);
-  }, inject('tierTestTimeout') * 30);
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 1_800_000));
 
   it('names WHICH declared exclude rule matched, and recovers its template', async () => {
     // The fifth provenance fact, and the only one the SHIPPED configs cannot
@@ -1973,7 +1974,7 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     // rule's opaque payload, beside the rule's declared index.
     expect([...new Set(closureRows.map((row) => JSON.stringify(row.matchedPayload)))])
       .toEqual([JSON.stringify({ ruleIndex: 1, template: MATCHING_TEMPLATE })]);
-  }, inject('tierTestTimeout') * 10);
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 600_000));
 
   it('omitting the packager-only walk inputs changes no membership on this corpus', () => {
     // The boundary the module note declares, measured rather than assumed.
@@ -1997,7 +1998,7 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     }
 
     expect(moved).toEqual([]);
-  }, inject('tierTestTimeout') * 10);
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 600_000));
 });
 
 // ============================================================================
@@ -2086,5 +2087,5 @@ describe('head-to-head cost of the two implementations', () => {
     // Printed, never asserted: a wall-clock threshold on a live machine is a test
     // that fails on a loaded laptop and gets "fixed" by raising the number.
     expect(rows).toHaveLength(CORPORA.length * TIMED_DEPTHS.length);
-  }, inject('tierTestTimeout') * 30);
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 1_800_000));
 });
