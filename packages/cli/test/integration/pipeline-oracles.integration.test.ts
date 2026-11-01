@@ -132,9 +132,16 @@ async function captureCorpusFacts(root: string): Promise<ParseFactSnapshot> {
   return captureParseFactSnapshot(absolute, { corpusRoot: root, corpus: NON_GIT_CORPUS });
 }
 
+/**
+ * Each route's snapshots, by lane — module-level so the cross-route describe
+ * below can hold the two routes against each other once both have captured.
+ */
+const gitSnapshots = new Map<string, EnumerationSnapshot>();
+const walkSnapshots = new Map<string, EnumerationSnapshot>();
+
 describe('enumeration snapshot — git route (ordered golden)', () => {
   let root: string;
-  const snapshots = new Map<string, EnumerationSnapshot>();
+  const snapshots = gitSnapshots;
 
   beforeAll(async () => {
     root = makeCorpusRoot('git');
@@ -213,7 +220,7 @@ describe('enumeration snapshot — git route (ordered golden)', () => {
 
 describe('enumeration snapshot — walk route (no git anywhere above the corpus)', () => {
   let root: string;
-  const snapshots = new Map<string, EnumerationSnapshot>();
+  const snapshots = walkSnapshots;
 
   beforeAll(async () => {
     root = makeCorpusRoot('nogit');
@@ -267,6 +274,18 @@ describe('enumeration snapshot — walk route (no git anywhere above the corpus)
     // variable, different population — stated rather than discovered later.
     const paths = snapshots.get('resources')?.enumerated.map((row) => row.path) ?? [];
     expect(paths).toContain(GITIGNORED_FILE);
+  });
+});
+
+describe('enumeration snapshot — the two routes against each other', () => {
+  // `expectOneWinnerPerCollision` compares lanes WITHIN a route, so it cannot
+  // see the walk and git keeping different files — the divergence the
+  // registry's admission order exists to close. Same corpus shape, both routes:
+  // every lane must record the same collision on each.
+  it.each(LANES.map((lane) => lane.id))('%s keeps the same file on the walk as on git', (laneId) => {
+    const onGit = required(gitSnapshots, laneId).collisions;
+    expect(onGit, 'the corpus plants a duplicate id').not.toHaveLength(0);
+    expect(required(walkSnapshots, laneId).collisions).toEqual(onGit);
   });
 });
 

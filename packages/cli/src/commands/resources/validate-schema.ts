@@ -13,6 +13,7 @@
  * envelope's `examined`.
  */
 
+import { POPULATION_ORIGINS } from '@vibe-agent-toolkit/resources';
 import { FindingSchema, reportSchema, SeverityCountsSchema, type Report } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
 
@@ -54,7 +55,7 @@ const ResourcesValidateDataSchema = z.object({
   root: z.string(),
   /** Every configured collection, keyed by id; `{}` when the project configures none. */
   collections: z.record(z.string(), CollectionSchema),
-  population: z.enum(['store', 'derived']).nullable().describe(
+  population: z.enum(POPULATION_ORIGINS).nullable().describe(
     'Whether the membership was served from the projection store (`store`) or derived this run (`derived`).'
     + ' `derived` too under `VAT_PROJECTION_STORE=0`, which skips only the store.'
     + ' `null` only when no projection enumerated the membership: the walk lane ran'

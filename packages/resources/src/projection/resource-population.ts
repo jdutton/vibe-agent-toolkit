@@ -525,15 +525,41 @@ const CONDITION_ORDER = [
   ...RealizationConditionRowSchema.keyof().options.filter((column) => column !== 'code' && column !== 'path'),
 ] as const;
 
+/** One condition's cells, in {@link CONDITION_ORDER}: what {@link compareConditionKeys} reads. */
+type ConditionKey = ReadonlyArray<RealizationConditionRow[keyof RealizationConditionRow]>;
+
 /**
- * One condition's sort key: every column, in {@link CONDITION_ORDER}, so two rows
- * share a key only when they are the same row.
+ * Order two cells of one column: `null` first, numbers numerically, strings in
+ * UTF-16 code-unit order, and the rest — booleans and the JSON payload column —
+ * by their JSON text, which is total over the values one column can hold.
  *
- * @param row - The condition
- * @returns A string that orders it among its siblings
+ * @param left - One cell
+ * @param right - The same column's cell in the other row
+ * @returns Negative, zero or positive, as `Array.prototype.sort` expects
  */
-function conditionSortKey(row: RealizationConditionRow): string {
-  return JSON.stringify(CONDITION_ORDER.map((column) => row[column]));
+function compareCells(left: ConditionKey[number], right: ConditionKey[number]): number {
+  if (left === right) return 0;
+  if (left === null) return -1;
+  if (right === null) return 1;
+  if (typeof left === 'number' && typeof right === 'number') return left - right;
+  if (typeof left === 'string' && typeof right === 'string') return compareCodeUnits(left, right);
+  return compareCodeUnits(JSON.stringify(left), JSON.stringify(right));
+}
+
+/**
+ * Order two conditions column by column, in {@link CONDITION_ORDER}: the first
+ * column that differs decides, so two rows tie only when they are the same row.
+ *
+ * @param left - One condition's key
+ * @param right - The other's
+ * @returns Negative, zero or positive, as `Array.prototype.sort` expects
+ */
+function compareConditionKeys(left: ConditionKey, right: ConditionKey): number {
+  for (const [index, cell] of left.entries()) {
+    const order = compareCells(cell, right[index] ?? null);
+    if (order !== 0) return order;
+  }
+  return 0;
 }
 
 /**
@@ -546,15 +572,15 @@ function conditionSortKey(row: RealizationConditionRow): string {
  * and fall back to whichever order arrived. Paths are not sorted here: the
  * registry orders every list it admits, whoever enumerated it.
  *
- * Each key is computed once, not once per comparison.
+ * Decorated: each row's cells are read into a key once, not once per comparison.
  *
  * @param conditions - The population's conditions
  * @returns A new, sorted array; the input is not reordered
  */
 function canonicalConditions(conditions: readonly RealizationConditionRow[]): RealizationConditionRow[] {
   return conditions
-    .map((row) => ({ row, key: conditionSortKey(row) }))
-    .sort((left, right) => compareCodeUnits(left.key, right.key))
+    .map((row) => ({ row, key: CONDITION_ORDER.map((column) => row[column]) }))
+    .sort((left, right) => compareConditionKeys(left.key, right.key))
     .map(({ row }) => row);
 }
 

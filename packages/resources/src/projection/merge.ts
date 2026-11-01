@@ -353,13 +353,16 @@ export interface PopulateOptions {
    * a closure one, so a contributor that is cheap once but runs in every pass is
    * distinguishable from one that is expensive once.
    *
-   * **Optional, and the seam does not depend on it.** Every record is also filed
-   * with `crawl-timing.ts`, which dumps them when `VAT_CRAWL_TIMING` is set —
-   * see {@link reportContributorTiming}. This option existed for two years' worth
-   * of commits with no observer anywhere in the repository (three grep hits, all
-   * inside this file), which meant both brackets below could have been deleted
-   * with nothing failing. A caller that wants the records in-process still gets
-   * them here; a caller that wants them on disk needs no caller at all.
+   * **A test seam, with no production caller — and optional because the
+   * production route does not need one.** Every record is also filed with
+   * `crawl-timing.ts`, which dumps them when `VAT_CRAWL_TIMING` is set (see
+   * {@link reportContributorTiming}); that dump is what `vat` and the lab read,
+   * so omitting this observer loses nothing a shipped command reports. Its
+   * callers are tests that need the records in-process: the store-sharing child,
+   * which proves a hit by the ABSENCE of contributor work, and the crawl-timing
+   * and store round-trip suites. Before they existed it had no observer anywhere
+   * in the repository, which meant both brackets below could have been deleted
+   * with nothing failing.
    */
   onContributorTiming?: ((timing: ContributorTiming) => void) | undefined;
   /**
@@ -481,6 +484,23 @@ export interface PopulationCache {
 export type PopulationOutcome =
   | { readonly population: 'store'; readonly stored: 'hit' }
   | { readonly population: 'derived'; readonly stored: 'written' | 'skipped-tree-changed' | 'no-store' };
+
+/**
+ * Each `population` value, keyed so the compiler checks the list against
+ * {@link PopulationOutcome} both ways: a value missing from the union, or a
+ * union member missing here, does not compile.
+ */
+const POPULATION_ORIGIN_SET: Readonly<Record<PopulationOutcome['population'], true>> = { store: true, derived: true };
+
+/**
+ * Every `population` a {@link PopulationOutcome} can carry, as a runtime list —
+ * for a schema that must enumerate them. Derived from the union, never typed
+ * beside it.
+ */
+export const POPULATION_ORIGINS = Object.keys(POPULATION_ORIGIN_SET) as [
+  PopulationOutcome['population'],
+  ...Array<PopulationOutcome['population']>,
+];
 
 /**
  * The outcome a `stored` value implies — the only construction of one.

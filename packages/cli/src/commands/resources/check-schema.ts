@@ -7,10 +7,11 @@
  * initialised.
  */
 
-import { LIMIT_DIRECTIONS } from '@vibe-agent-toolkit/resources';
+import { LIMIT_DIRECTIONS, POPULATION_ORIGINS } from '@vibe-agent-toolkit/resources';
 import { FindingSchema, reportSchema, type Report } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
 
+import { LENS_POPULATIONS } from '../../utils/lens-population.js';
 import type { ExaminedDeclaration } from '../../utils/run-integrity.js';
 
 /** What one rule cost, as the document publishes it. */
@@ -57,7 +58,7 @@ const CheckDataSchema = z.object({
    * population completed. There was no projection, so there is no origin, cost
    * or lens set to report, and a `RESOURCE_CHECK_BROKEN` finding says why.
    */
-  population: z.enum(['derived', 'store']).nullable(),
+  population: z.enum(POPULATION_ORIGINS).nullable(),
   /** What the population cost — charged to no check, see `CheckCost`. Null as `population` is. */
   populationSecs: z.number().nonnegative().nullable(),
   /** What evaluating the lenses cost, paid before the first statement ran. Null as `population` is. */
@@ -77,7 +78,7 @@ const CheckDataSchema = z.object({
    * when every one that did was served from the store, otherwise `derived`.
    * Null as `population` is — no population happened at all.
    */
-  lensPopulation: z.enum(['none', 'store', 'derived']).nullable(),
+  lensPopulation: z.enum(LENS_POPULATIONS).nullable(),
   /**
    * The prose frame {@link CheckDataSchema.limits} is read under. Present
    * exactly when a lens with stated bounds was evaluated.

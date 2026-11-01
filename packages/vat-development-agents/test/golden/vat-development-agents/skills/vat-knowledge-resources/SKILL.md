@@ -126,7 +126,9 @@ you have to take on faith. `vat resources check --help` carries the current refe
 (VAT's own repo and a ~10k-file adopter tree, warm and cold) — read them there rather than from a
 number pasted here. `lensPopulation` (`none`, `store`, `derived`) is the same tell for the lens
 relations the statement named, and `vat resources validate` publishes `data.population` too — `null`
-there means nothing was populated (the walk lane, or no root enumerated).
+there means the walk answered: the walk lane was selected (`VAT_RESOURCES_CRAWL=walk`), or the crawl
+declined a projection bound to another root and walked. `VAT_PROJECTION_STORE=0` is not one of them:
+it skips only the store, so the run reports `derived`.
 
 ⛔ There is **no `engine` field**. An earlier RC published one (`sqlite | ephemeral`) to say which
 database answered the SQL; it is gone, because the answer is now always the same. The statement

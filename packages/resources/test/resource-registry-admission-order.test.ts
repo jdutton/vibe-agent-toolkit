@@ -6,15 +6,19 @@
  * the walk listed `dup/` before `dup-hyphen/` while the projection listed them
  * the other way round, and two commands over one tree kept different files.
  * The order is the registry's, so it is pinned here, against every route in.
+ *
+ * Its scope is ONE admission batch — one `addResources` call, so one crawl. A
+ * file an earlier call admitted keeps its id against a later one; the order
+ * never evicts what is already registered.
  */
 import { mkdir, writeFile } from 'node:fs/promises';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import type { ResourcePopulationSource } from '../src/projection/resource-population.js';
-import { ResourceRegistry } from '../src/resource-registry.js';
+import { admissionOrder, ResourceRegistry } from '../src/resource-registry.js';
 
 /** Two spellings of one id: `-` (0x2d) sorts before `/` (0x2f), so this one is first. */
 const HYPHEN_DIR = 'dup-hyphen/note.md';
@@ -59,6 +63,38 @@ describe('ResourceRegistry admission order', () => {
     expect(collisionsOf(reversed, root)).toEqual(expected);
     expect(admittedForward.map((resource) => safePath.relative(root, resource.filePath))).toEqual([HYPHEN_DIR, 'z.md']);
     expect(admittedReversed).toEqual(admittedForward);
+  });
+
+  it('decides within ONE batch: a file an earlier call admitted keeps its id', async () => {
+    const registry = new ResourceRegistry({ baseDir: root });
+
+    await registry.addResources([safePath.join(root, SLASH_DIR)]);
+    await registry.addResources([safePath.join(root, HYPHEN_DIR)]);
+
+    // The code-unit-SECOND path holds the id, because it was registered first.
+    expect(collisionsOf(registry, root)).toEqual([['dup-hyphen-note-md', SLASH_DIR, HYPHEN_DIR]]);
+  });
+
+  it('orders a relative spelling exactly as its absolute form', () => {
+    // From the process cwd, a temp root is reached through `../`, and `.` (0x2e)
+    // sorts before `/` (0x2f): compared as written, the relative SLASH_DIR would
+    // come first. Compared resolved, HYPHEN_DIR does.
+    const relativeSlash = safePath.relative(process.cwd(), safePath.join(root, SLASH_DIR));
+    const absoluteHyphen = safePath.join(root, HYPHEN_DIR);
+    expect(relativeSlash.startsWith('.')).toBe(true);
+
+    expect(admissionOrder([relativeSlash, absoluteHyphen])).toEqual([absoluteHyphen, relativeSlash]);
+  });
+
+  // A backslash is a separator only on Windows; elsewhere it is a filename byte,
+  // so the two spellings below would name different files.
+  it.runIf(process.platform === 'win32')('orders a backslash spelling exactly as its forward-slash form', () => {
+    // Compared as written, the first separator decides: `\` (0x5c) sorts after
+    // `/` (0x2f), so the backslash-spelled code-unit-first path would come last.
+    const backslashHyphen = toForwardSlash(safePath.join(root, HYPHEN_DIR)).replaceAll('/', '\\');
+    const forwardSlash = safePath.join(root, SLASH_DIR);
+
+    expect(admissionOrder([forwardSlash, backslashHyphen])).toEqual([backslashHyphen, forwardSlash]);
   });
 
   it('admits the walk and a population source in one order, so both keep the same file', async () => {

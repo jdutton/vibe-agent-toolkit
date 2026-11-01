@@ -20,8 +20,8 @@ function condition(overrides: Partial<RealizationConditionRow>): RealizationCond
 }
 
 /**
- * Two valid, distinct values for every column, so a pair of rows can be made to
- * differ in exactly one of them — whichever {@link CONDITION_ORDER} puts last.
+ * Two valid, distinct values for every column, LOWER first, so a pair of rows
+ * can be made to differ in exactly one of them.
  */
 const TWO_VALUES: { readonly [Column in keyof RealizationConditionRow]: readonly [RealizationConditionRow[Column], RealizationConditionRow[Column]] } = {
   extentId: ['tree:.', 'tree:docs'],
@@ -39,17 +39,20 @@ const TWO_VALUES: { readonly [Column in keyof RealizationConditionRow]: readonly
   targetFaultClass: [null, 'refused'],
 };
 
-/** The column a comparator reaches only after every other column tied. */
-const LAST_COLUMN = CONDITION_ORDER.at(-1) as keyof RealizationConditionRow;
-
 const UNLISTABLE = condition({ code: 'EXTENT_DIRECTORY_UNLISTABLE', path: 'locked', severity: 'warning' });
 const SYMLINK_B = condition({ path: 'docs/b.md' });
 const SYMLINK_A = condition({ path: 'docs/a.md' });
-// Equal on every column but the LAST in CONDITION_ORDER: only a comparator that
-// reads the whole row tells them apart, so one that stops a column early leaves
-// them in whichever order arrived.
-const TIE_LOW = condition({ [LAST_COLUMN]: TWO_VALUES[LAST_COLUMN][0] });
-const TIE_HIGH = condition({ [LAST_COLUMN]: TWO_VALUES[LAST_COLUMN][1] });
+
+/**
+ * Two rows equal on every column but `column`, lower first.
+ *
+ * @param column - The one column they differ in
+ * @returns The pair, in the order the comparator must put them
+ */
+function differingOnlyIn(column: keyof RealizationConditionRow): [RealizationConditionRow, RealizationConditionRow] {
+  const [low, high] = TWO_VALUES[column];
+  return [condition({ [column]: low }), condition({ [column]: high })];
+}
 
 /** Two references to one unresolved target from different files: the realistic tie on code and path. */
 const UNRESOLVED_FROM = (sourcePath: string): RealizationConditionRow => condition({
@@ -72,11 +75,27 @@ describe('canonicalConditions — the one order a population\'s conditions leave
     expect(canonicalConditions([SYMLINK_B, UNLISTABLE, SYMLINK_A])).toEqual([UNLISTABLE, SYMLINK_A, SYMLINK_B]);
   });
 
-  it('is TOTAL over the row: rows equal on every column but the last still come out in one order', () => {
-    const forward = canonicalConditions([TIE_LOW, TIE_HIGH, UNLISTABLE]);
-    const reversed = canonicalConditions([UNLISTABLE, TIE_HIGH, TIE_LOW]);
-    expect(reversed).toEqual(forward);
-    expect(forward[0]).toEqual(UNLISTABLE);
+  // Every column, not only the last: a comparator that skips ANY column ties two
+  // rows that differ only there, and a stable sort then hands them back in
+  // whichever order arrived — so forward and reversed input disagree.
+  it.each(CONDITION_ORDER)('is TOTAL over the row: two rows differing only in %s come out in one order', (column) => {
+    const [low, high] = differingOnlyIn(column);
+    expect(canonicalConditions([low, high])).toEqual([low, high]);
+    expect(canonicalConditions([high, low])).toEqual([low, high]);
+  });
+
+  it('compares a number column numerically, not as text', () => {
+    // As text `10` sorts before `9`; as a line number it is after.
+    const line9 = condition({ sourceLine: 9 });
+    const line10 = condition({ sourceLine: 10 });
+    expect(canonicalConditions([line10, line9])).toEqual([line9, line10]);
+  });
+
+  it('puts a null cell before any value', () => {
+    const absent = condition({ sourcePath: null });
+    // The lowest string there is, so only the null-first rule can put `absent` ahead.
+    const empty = condition({ sourcePath: '' });
+    expect(canonicalConditions([empty, absent])).toEqual([absent, empty]);
   });
 
   it('orders two references to one unresolved target by the file that holds each', () => {

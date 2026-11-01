@@ -53,12 +53,14 @@ import {
   buildResourceProjection,
   PROJECTION_TABLES,
   splitProjectionByScope,
+  type PopulationOutcome,
   type Projection,
 } from '@vibe-agent-toolkit/resources';
 import { forEachInOrder, isVatError, VatError } from '@vibe-agent-toolkit/utils';
 
 import { gitTrackerForProjectRoot } from '../commands/audit/distributed-tree.js';
 
+import type { LensPopulation } from './lens-population.js';
 import type { Logger } from './logger.js';
 import { populationWiring } from './population-wiring.js';
 import {
@@ -66,7 +68,6 @@ import {
   lensesNamedBy,
   lensPopulationOf,
   type LensEvaluation,
-  type LensPopulation,
 } from './projection-lenses.js';
 import { openCompileProbe, openEphemeralQueryStore, withPopulationCache } from './projection-store.js';
 
@@ -87,9 +88,6 @@ const TABLE_NOT_FOUND = 'no such table:';
 /** What SQLite says when a statement names something the schema does not have. */
 const NAME_NOT_FOUND: readonly string[] = [TABLE_NOT_FOUND, 'no such column:'];
 
-/** Where the POPULATION a statement ran against came from. */
-export type PopulationOrigin = 'derived' | 'store';
-
 /**
  * What a run's rows are, and where they came from.
  *
@@ -107,7 +105,7 @@ export interface ProjectionProvenance {
    *
    * It describes the POPULATION, which is the only thing the store now affects.
    */
-  readonly population: PopulationOrigin;
+  readonly population: PopulationOutcome['population'];
 
   /**
    * The same tell for the lenses' OWN populations — the claude-context lens

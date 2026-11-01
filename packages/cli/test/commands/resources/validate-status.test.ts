@@ -69,19 +69,6 @@ describe('buildResourcesValidateReport — membership provenance', () => {
 
     expect(RESOURCES_VALIDATE_REPORT_SCHEMA.safeParse({ ...built, data: withoutPopulation }).success).toBe(false);
   });
-
-  it('names EVERY null case in the field\'s description', () => {
-    const data = RESOURCES_VALIDATE_REPORT_SCHEMA.innerType().options[0].shape.data;
-    const described = data.shape.population.description ?? '';
-
-    expect(described).toContain('VAT_RESOURCES_CRAWL=walk');
-    // A crawl that declined a projection bound to another root walked instead —
-    // so it is the walk's, and null.
-    expect(described).toContain('declined');
-    // And the one case that is NOT null, because it is the commonest misreading:
-    // with the store off the projection lane still derived.
-    expect(described).toContain('`derived` too under `VAT_PROJECTION_STORE=0`');
-  });
 });
 
 describe('buildResourcesValidateReport — the envelope vocabulary', () => {

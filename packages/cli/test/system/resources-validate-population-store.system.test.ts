@@ -65,6 +65,9 @@ const BROKEN_TWO = 'docs/three.md';
 const LINK_Z = 'docs/linked-z.md';
 const LINK_Y = 'docs/linked-y.md';
 
+/** A link to nothing: its path sorts before {@link LINK_Z}, its code after. */
+const LINK_DANGLING = 'docs/a-dangling.md';
+
 let scratch: string;
 
 interface Finding {
@@ -101,15 +104,16 @@ function corpusWith(name: string, plant: (corpus: string) => void): string {
  *
  * @param corpus - The tree to validate
  * @param storeDir - The store directory, shared by both runs of one case
+ * @param lane - Which lane `VAT_RESOURCES_CRAWL` selects
  * @returns The exit status, the parsed document and stderr
  */
-async function validateOnce(corpus: string, storeDir: string): Promise<Run> {
+async function validateOnce(corpus: string, storeDir: string, lane: 'projection' | 'walk' = 'projection'): Promise<Run> {
   const result = await executeCli(binPath, ['resources', 'validate', '--format', 'json'], {
     cwd: corpus,
     env: {
       ...fakeHomeEnv(safePath.join(scratch, 'home')),
       TMPDIR: safePath.join(scratch, 'tmp'),
-      VAT_RESOURCES_CRAWL: 'projection',
+      VAT_RESOURCES_CRAWL: lane,
       VAT_PROJECTION_STORE: 'sqlite',
       [PROJECTION_STORE_DIR_ENV]: storeDir,
     },
@@ -197,7 +201,17 @@ describe('vat resources validate twice against one pinned store (system test)', 
     ]);
   });
 
-  it.skipIf(SYMLINKS === null)('answers two declined symlinks identically and in one order', async () => {
+  it('publishes population: null when the walk lane answered', async () => {
+    const corpus = corpusWith('walked', () => undefined);
+
+    const walked = await validateOnce(corpus, `${corpus}-store`, 'walk');
+
+    // The run still validated: the null is about provenance, not a failed run.
+    expect(locationsOf(walked, 'LINK_BROKEN_FILE')).toHaveLength(2);
+    expect(walked.document.data['population']).toBeNull();
+  });
+
+  it.skipIf(SYMLINKS === null)('answers two declined symlinks of one code identically, cold and warm', async () => {
     const corpus = corpusWith('symlinks', (root) => {
       if (SYMLINKS === null) return;
       createSymlink(SYMLINKS, 'two.md', safePath.join(root, LINK_Z));
@@ -207,6 +221,25 @@ describe('vat resources validate twice against one pinned store (system test)', 
 
     expect(locationsOf(cold, 'EXTENT_SYMLINK_NOT_REALIZED')).toEqual([LINK_Y, LINK_Z]);
     expect(locationsOf(cold, 'LINK_BROKEN_FILE')).toHaveLength(2);
+  });
+
+  // Two condition CODES with no denied read, so the cold/warm order is pinned on
+  // every host that can create a link — Windows included, where the locked
+  // directory cases below cannot run. The dangling link's path sorts FIRST and
+  // its code sorts SECOND, so an order by path alone, or by arrival, is caught.
+  it.skipIf(SYMLINKS === null)('answers a declined link and a dangling one in code order, cold and warm', async () => {
+    const corpus = corpusWith('two-codes', (root) => {
+      if (SYMLINKS === null) return;
+      createSymlink(SYMLINKS, 'two.md', safePath.join(root, LINK_Z));
+      createSymlink(SYMLINKS, 'absent.md', safePath.join(root, LINK_DANGLING));
+    });
+    const cold = await expectServedIdentically(corpus);
+
+    const codes = new Set(['EXTENT_SYMLINK_NOT_REALIZED', 'EXTENT_SYMLINK_TARGET_UNRESOLVED']);
+    expect(cold.document.findings.filter((finding) => codes.has(finding.code))).toEqual([
+      expect.objectContaining({ code: 'EXTENT_SYMLINK_NOT_REALIZED', location: LINK_Z }),
+      expect.objectContaining({ code: 'EXTENT_SYMLINK_TARGET_UNRESOLVED', location: LINK_DANGLING }),
+    ]);
   });
 
   describe.skipIf(CANNOT_DENY_READS)('a gitignored directory the OS will not list', () => {

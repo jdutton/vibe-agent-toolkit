@@ -23,6 +23,7 @@ import {
 
 import { evaluateClaudeContextLens } from './claude-context-lens.js';
 import { evaluateAuthoredLenses } from './edge-lens-evaluation.js';
+import type { LensPopulation } from './lens-population.js';
 import type { Logger } from './logger.js';
 
 /**
@@ -45,13 +46,6 @@ export interface LensEvaluation {
   readonly rows: LensRows;
   readonly population: PopulationOutcome['population'] | null;
 }
-
-/**
- * Where the lenses' populations came from, as a run publishes it: `'none'` when
- * no evaluated lens populated anything, `'store'` when every one that did was
- * served from the store, otherwise `'derived'`.
- */
-export type LensPopulation = 'none' | PopulationOutcome['population'];
 
 /**
  * A run's {@link LensPopulation} from each evaluated lens's own population.

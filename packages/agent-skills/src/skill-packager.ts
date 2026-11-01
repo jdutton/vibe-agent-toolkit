@@ -20,6 +20,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
 import {
+  admissionOrder,
   DeferredArtifacts,
   DuplicateResourceIdError,
   ResourceRegistry,
@@ -1769,8 +1770,11 @@ async function registerBundledAssets(
   if (bundledAssets.length === 0) {
     return { collidedAssets, collisions };
   }
-  // In order: `addResource` mutates the shared registry, and which asset collides depends on order.
-  await forEachInOrder(bundledAssets, async (assetPath) => {
+  // In the registry's admission order, never link order: `addResource` mutates
+  // the shared registry and the first to claim an id keeps it, so this is the
+  // one order that makes the code-unit-first of two clashing assets win, as it
+  // does in every `addResources` batch.
+  await forEachInOrder(admissionOrder(bundledAssets), async (assetPath) => {
     try {
       // `addResource` parses the file, so it READS it — which makes this the first
       // place a build touches a linked asset, and the place an unreadable one

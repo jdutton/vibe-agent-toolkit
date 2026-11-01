@@ -130,8 +130,8 @@
                 "population": {
                   "type": "string",
                   "enum": [
-                    "derived",
-                    "store"
+                    "store",
+                    "derived"
                   ]
                 },
                 "populationSecs": {

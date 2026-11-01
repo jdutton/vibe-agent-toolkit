@@ -397,7 +397,11 @@ export interface RegistryCrawl {
  * code-unit order (`compareCodeUnits`).
  *
  * First-added-wins on a duplicate id is decided by admission order, so the
- * order belongs to the registry and not to whoever enumerated: a walk lists by
+ * order belongs to the registry and not to whoever enumerated. Its scope is ONE
+ * admission batch — an {@link ResourceRegistry.addResources} call, so a whole
+ * crawl — and never evicts a file an earlier batch registered; a caller that
+ * admits a batch one {@link ResourceRegistry.addResource} at a time (the
+ * packager's bundled assets) orders it through this same function first: a walk lists by
  * directory, git lists by byte, a stored extent comes back in SQLite's order,
  * and each would keep a different file. Code-unit order equals git's UTF-8 byte
  * order except where a character above U+FFFF meets one in U+E000–U+FFFF.
@@ -405,7 +409,7 @@ export interface RegistryCrawl {
  * @param filePaths - The files to admit, in any order and any spelling
  * @returns A new array in admission order; the input is not reordered
  */
-function admissionOrder(filePaths: readonly string[]): string[] {
+export function admissionOrder(filePaths: readonly string[]): string[] {
   return filePaths
     .map((filePath) => ({ filePath, key: safePath.resolve(filePath) }))
     .sort((left, right) => compareCodeUnits(left.key, right.key))
@@ -1297,7 +1301,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    *
    * @param filePaths - The file paths to add, in any order: the registry sorts
    *   them into admission order, so the code-unit-first of two paths with one id
-   *   wins however the caller listed them
+   *   IN THIS CALL wins however the caller listed them. The order is per batch: a
+   *   file an earlier call registered keeps its id, and a later path that sorts
+   *   before it is the one recorded as the collision
    * @returns Array of parsed resource metadata, in admission order
    * @throws Error if any file fails for a reason that is not a read failure or
    *   a duplicate id — raised for the FIRST such file in admission order, not
@@ -1366,15 +1372,20 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
-   * Crawl a directory and add all matching markdown files.
+   * Crawl a directory and add all matching markdown files, as ONE
+   * {@link addResources} batch — so the whole crawl is admitted in one
+   * admission order, however the files were enumerated.
    *
    * @param options - Crawl options (baseDir, the required `unreadable` policy, include, exclude patterns)
-   * @returns Array of all added resources
+   * @returns The admitted resources, in admission order, and where their file
+   *   list came from: `{ lane: 'walk' }` when the directory was walked (no source,
+   *   or a source this crawl declined), otherwise the outcome and enumerator the
+   *   source's enumeration carried
    *
    * @example
    * ```typescript
    * // Crawl docs directory, excluding node_modules
-   * const resources = await registry.crawl({
+   * const { resources, population } = await registry.crawl({
    *   baseDir: './docs',
    *   outputs: [],
    *   unreadable: 'refuse',

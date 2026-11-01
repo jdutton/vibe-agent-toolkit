@@ -89,9 +89,16 @@ console.log(`Added ${resource.id} with ${resource.links.length} links`);
 
 **Throws:** Error if file cannot be read or parsed
 
-##### addResources(filePaths: string[]): Promise<ResourceMetadata[]>
+##### addResources(filePaths: readonly string[]): Promise<ResourceMetadata[]>
 
-Add multiple markdown files in parallel.
+Add multiple markdown files, parsed in parallel and admitted in **admission order**: sorted by
+resolved path in UTF-16 code-unit order, whatever order (or spelling) you passed them in. The
+result comes back in that order, so do not pair it with your input by index.
+
+Admission order decides a duplicate id: of the files in **one call** that produce the same id,
+the one whose resolved path sorts first is kept and the rest are recorded as collisions
+(`getDuplicateIdCollisions()`). A file already in the registry from an earlier call keeps its id
+against a later one.
 
 ```typescript
 const resources = await registry.addResources([
@@ -101,12 +108,15 @@ const resources = await registry.addResources([
 ]);
 ```
 
-##### crawl(options: CrawlOptions): Promise<ResourceMetadata[]>
+##### crawl(options: CrawlOptions): Promise<RegistryCrawl>
 
-Crawl a directory and add all matching markdown files.
+Crawl a directory and add all matching markdown files, as one `addResources` batch. Returns the
+admitted resources and where their file list came from: `population` is `{ lane: 'walk' }` when
+the directory was walked, or `{ lane: 'projection', outcome, extentSource }` when a
+`populationSource` enumerated it.
 
 ```typescript
-const resources = await registry.crawl({
+const { resources, population } = await registry.crawl({
   outputs: [],
   baseDir: './docs',
   unreadable: 'refuse',              // REQUIRED, no default: 'refuse' throws DirectoryListingRefusedError on a directory it cannot list;

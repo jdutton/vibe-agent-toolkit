@@ -32,7 +32,7 @@ import { withPopulationCache } from './projection-store.js';
  * `walk` is the incumbent `crawlDirectory` route; `projection` is the
  * projection lane behind {@link RESOURCES_CRAWL_ENV}.
  */
-export type ResourceCrawlLane = 'walk' | 'projection';
+export type ResourceCrawlLane = CrawlPopulation['lane'];
 
 /**
  * The published `population` an observation implies: `null` for the walk —
@@ -47,14 +47,28 @@ export function publishedPopulation(observation: CrawlPopulation): 'store' | 'de
 }
 
 /**
- * The observer of a caller that publishes no population provenance — named at
- * the call rather than omitted, because the seam is required.
+ * Which enumerator the projection lane used, or `null` when the walk ran and
+ * there was no extent to source.
+ *
+ * Reported for the same reason the lane is, one level down. The lane
+ * distinguishes the walk from the projection; it does NOT distinguish the
+ * projection's two enumerators, and `VAT_EXTENT_SOURCE` is exactly the axis a
+ * flip decision turns on. Without this, both arms of that A/B report
+ * `projection` and two identical populations mean either "the enumerators
+ * agree" or "the switch was ignored" — indistinguishable, and the second is
+ * reachable, because `crawlSourceFor` falls back to the walk without saying so
+ * when the root is not in a repository.
+ *
+ * 🪤 NOT a cache-hit marker: on a hit no enumerator runs and it still names the
+ * one this process selected, because the source is chosen before the store is
+ * asked.
+ *
+ * @param population - The load's population
+ * @returns The enumerator, or `null` for the walk
  */
-export const POPULATION_UNOBSERVED: {
-  readonly observePopulation: (observation: CrawlPopulation) => void;
-} = {
-  observePopulation: () => undefined,
-};
+export function extentSourceOf(population: CrawlPopulation): CrawlSourceKind | null {
+  return population.lane === 'walk' ? null : population.extentSource;
+}
 
 export interface ResourceLoadResult {
   scanPath: string;
@@ -63,34 +77,20 @@ export interface ResourceLoadResult {
   registry: ResourceRegistry;
   gitTracker: GitTracker | undefined;
   /**
-   * Which lane enumerated, as a fact about the run rather than about the
-   * environment that requested it.
+   * Where the population came from: the `CrawlPopulation` the crawl itself
+   * returned, carried here unchanged — the one channel, so a load cannot report
+   * a lane its crawl did not take. `{ lane: 'walk' }` both when the projection
+   * lane is not selected and when the crawl declined the source.
    *
-   * Reported so that a population can be held against another one: two scans of
-   * the same tree that disagree are only interpretable if each says which
-   * enumerator produced it. Reading the env var back instead would prove what
-   * was ASKED for, never what happened — a distinction that has already voided
-   * one whole A/B on this codebase, where both arms silently ran the incumbent.
+   * Reported as a fact about the run rather than about the environment that
+   * requested it: two scans of the same tree that disagree are only
+   * interpretable if each says which enumerator produced it. Reading the env var
+   * back instead would prove what was ASKED for, never what happened — a
+   * distinction that has already voided one whole A/B on this codebase, where
+   * both arms silently ran the incumbent. See {@link publishedPopulation} and
+   * {@link extentSourceOf} for the two views callers publish.
    */
-  lane: ResourceCrawlLane;
-  /**
-   * Which enumerator the projection lane used, or `null` when the walk ran and
-   * there was no extent to source.
-   *
-   * Reported for the same reason {@link ResourceCrawlLane} is, one level down.
-   * `lane` distinguishes the walk from the projection; it does NOT distinguish
-   * the projection's two enumerators, and `VAT_EXTENT_SOURCE` is exactly the
-   * axis a flip decision turns on. Without this, both arms of that A/B report
-   * `projection` and two identical populations mean either "the enumerators
-   * agree" or "the switch was ignored" — indistinguishable, and the second is
-   * reachable, because `crawlSourceFor` falls back to the walk without saying
-   * so when the root is not in a repository.
-   *
-   * 🪤 NOT a cache-hit marker: on a hit no enumerator runs and it still names
-   * the one this process selected, because the source is chosen before the
-   * store is asked.
-   */
-  extentSource: CrawlSourceKind | null;
+  population: CrawlPopulation;
 }
 
 /**
@@ -444,19 +444,13 @@ export function withResourcePopulationSource<T>(
  * @param pathArg - Path argument from CLI (optional)
  * @param projectRoot - Pre-resolved project root from the CLI boundary
  * @param logger - Logger instance
- * @param observePopulation - Called EXACTLY ONCE, after the crawl returns, with
- *   where the population came from: the `CrawlPopulation` the crawl itself
- *   returned, the one channel, so a load cannot report a lane its crawl did not
- *   take. The walk is an explicit signal, sent when the projection lane is not
- *   selected AND when the crawl declined the source.
- *   Required: a caller with no use for it says so with an explicit no-op
- * @returns Resource load result with registry and metadata
+ * @returns Resource load result with registry, metadata and the population the
+ *   crawl returned
  */
 export async function loadResourcesWithConfig(
   pathArg: string | undefined,
   projectRoot: string,
   logger: Logger,
-  observePopulation: (observation: CrawlPopulation) => void,
 ): Promise<ResourceLoadResult> {
   // Config lookup is anchored at the resolved projectRoot.
   const config = loadConfig(projectRoot, 'source');
@@ -519,7 +513,7 @@ export async function loadResourcesWithConfig(
   // The store brackets the crawl and is closed however the crawl ends. Nothing
   // outside this bracket can reach it: the population source is called from
   // inside `registry.crawl` and nowhere else.
-  const observation = await withPopulationCache({ root: projectRoot }, async (cache) => {
+  const population = await withPopulationCache({ root: projectRoot }, async (cache) => {
     // The git enumerator takes a `gitTreeSnapshot` during the crawl below no matter
     // what. Taking it HERE instead is the same snapshot moved a few lines earlier —
     // the open bracket memoizes it, so the enumerator's own call becomes a lookup —
@@ -561,12 +555,9 @@ export async function loadResourcesWithConfig(
       logger.debug(`Enumerating via the incumbent walk (${RESOURCES_CRAWL_ENV} unset)`);
     }
 
-    // The lane and the enumerator are read off what the crawl RETURNED, so a
-    // crawl that declined the source reports the walk it actually took — with
-    // no enumerator — here and to the observer alike.
-    const { population } = await registry.crawl(crawlOptions);
-    observePopulation(population);
-    return population;
+    // Read off what the crawl RETURNED, so a crawl that declined the source
+    // reports the walk it actually took — with no enumerator.
+    return (await registry.crawl(crawlOptions)).population;
   });
 
   return {
@@ -575,7 +566,6 @@ export async function loadResourcesWithConfig(
     config,
     registry,
     gitTracker,
-    lane: observation.lane,
-    extentSource: observation.lane === 'walk' ? null : observation.extentSource,
+    population,
   };
 }

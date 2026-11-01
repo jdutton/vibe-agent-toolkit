@@ -123,6 +123,7 @@ vi.mock('@vibe-agent-toolkit/utils/git', async (importOriginal) => ({
 import type { Logger } from '../../src/utils/logger.js';
 // eslint-disable-next-line import/first -- must come after vi.mock calls
 import {
+  extentSourceOf,
   loadResourcesWithConfig,
   publishedPopulation,
   RESOURCES_CRAWL_ENV,
@@ -130,8 +131,6 @@ import {
   RESOURCES_CRAWL_WALK,
 } from '../../src/utils/resource-loader.js';
 
-/** For the cases about something other than provenance. */
-const IGNORE_POPULATION = (): void => undefined;
 
 const HIT = { population: 'store', stored: 'hit' } as const;
 const WRITTEN = { population: 'derived', stored: 'written' } as const;
@@ -171,31 +170,14 @@ function createTestLogger(): { logger: Logger; debugCalls: string[]; warnCalls: 
 }
 
 /**
- * Load once with no config, recording every observation.
+ * Load once with no config.
  *
- * @returns Every observation the load made
+ * @returns The population the load result carries — the one channel
  */
-async function observedLoad(): Promise<CrawlPopulation[]> {
-  return (await observedLoadResult()).observed;
-}
-
-/**
- * Load once with no config, keeping the result beside every observation.
- *
- * @returns Every observation the load made, and the lane and enumerator it returned
- */
-async function observedLoadResult(): Promise<{
-  observed: CrawlPopulation[];
-  lane: string;
-  extentSource: string | null;
-}> {
+async function loadedPopulation(): Promise<CrawlPopulation> {
   loadConfigMock.mockReturnValue(undefined);
   const { logger } = createTestLogger();
-  const observed: CrawlPopulation[] = [];
-  const { lane, extentSource } = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger, (observation) => {
-    observed.push(observation);
-  });
-  return { observed, lane, extentSource };
+  return (await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger)).population;
 }
 
 describe('loadResourcesWithConfig', () => {
@@ -225,7 +207,7 @@ describe('loadResourcesWithConfig', () => {
     });
     const { logger } = createTestLogger();
 
-    const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger, IGNORE_POPULATION);
+    const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
 
     expect(crawlPatterns()).toEqual({
       baseDir: PROJECT_ROOT,
@@ -247,7 +229,7 @@ describe('loadResourcesWithConfig', () => {
     });
     const { logger } = createTestLogger();
 
-    const result = await loadResourcesWithConfig(SUBTREE_PATH, PROJECT_ROOT, logger, IGNORE_POPULATION);
+    const result = await loadResourcesWithConfig(SUBTREE_PATH, PROJECT_ROOT, logger);
 
     // baseDir stays at projectRoot so the config's root-relative globs evaluate
     // on the basis they were declared against; the path arg becomes an include
@@ -267,7 +249,7 @@ describe('loadResourcesWithConfig', () => {
     loadConfigMock.mockReturnValue({ resources: { exclude: EXCLUDE_PATTERNS } });
     const { logger } = createTestLogger();
 
-    await loadResourcesWithConfig(PROJECT_ROOT, PROJECT_ROOT, logger, IGNORE_POPULATION);
+    await loadResourcesWithConfig(PROJECT_ROOT, PROJECT_ROOT, logger);
 
     expect(crawlPatterns()).toEqual({
       baseDir: PROJECT_ROOT,
@@ -283,7 +265,7 @@ describe('loadResourcesWithConfig', () => {
     loadConfigMock.mockReturnValue({ resources: { exclude: EXCLUDE_PATTERNS } });
     const { logger } = createTestLogger();
 
-    await loadResourcesWithConfig('docs', safePath.resolve('.'), logger, IGNORE_POPULATION);
+    await loadResourcesWithConfig('docs', safePath.resolve('.'), logger);
 
     expect(crawlPatterns()).toEqual({
       baseDir: safePath.resolve('.'),
@@ -301,7 +283,7 @@ describe('loadResourcesWithConfig', () => {
     });
     const { logger, warnCalls } = createTestLogger();
 
-    const result = await loadResourcesWithConfig(EXPLICIT_PATH, PROJECT_ROOT, logger, IGNORE_POPULATION);
+    const result = await loadResourcesWithConfig(EXPLICIT_PATH, PROJECT_ROOT, logger);
 
     expect(crawlPatterns()).toEqual({ baseDir: EXPLICIT_PATH, unreadable: 'refuse', outputs: [] });
     expect(warnCalls.join('\n')).toContain(EXPLICIT_PATH);
@@ -313,7 +295,7 @@ describe('loadResourcesWithConfig', () => {
     const { logger } = createTestLogger();
 
     await expect(
-      loadResourcesWithConfig(MISSING_PATH, PROJECT_ROOT, logger, IGNORE_POPULATION),
+      loadResourcesWithConfig(MISSING_PATH, PROJECT_ROOT, logger),
     ).rejects.toThrow(MISSING_PATH);
     expect(lastCrawlOptions).toBeUndefined();
   });
@@ -329,7 +311,7 @@ describe('loadResourcesWithConfig', () => {
     loadConfigMock.mockReturnValue(config);
     const { logger } = createTestLogger();
 
-    await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger, IGNORE_POPULATION);
+    await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
 
     expect(lastRegistryOptions?.config).toBe(config);
     expect(lastRegistryOptions?.baseDir).toBe(PROJECT_ROOT);
@@ -358,7 +340,7 @@ describe('loadResourcesWithConfig', () => {
     loadConfigMock.mockReturnValue(config);
     const { logger } = createTestLogger();
 
-    await expect(loadResourcesWithConfig(undefined, PROJECT_ROOT, logger, IGNORE_POPULATION)).rejects.toThrow(
+    await expect(loadResourcesWithConfig(undefined, PROJECT_ROOT, logger)).rejects.toThrow(
       /resources\.linkAuth providers\[0\] \(host "github\.example"\): rewrite\[0\]\.when/,
     );
     expect(lastRegistryOptions).toBeUndefined();
@@ -369,7 +351,7 @@ describe('loadResourcesWithConfig', () => {
     loadConfigMock.mockReturnValue(undefined);
     const { logger } = createTestLogger();
 
-    await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger, IGNORE_POPULATION);
+    await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
 
     expect(lastRegistryOptions).not.toHaveProperty('config');
   });
@@ -385,7 +367,7 @@ describe('loadResourcesWithConfig', () => {
     loadConfigMock.mockReturnValue(config);
     const { logger } = createTestLogger();
 
-    await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger, IGNORE_POPULATION);
+    await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
 
     expect(lastRegistryOptions?.config).toBe(config);
   });
@@ -394,7 +376,7 @@ describe('loadResourcesWithConfig', () => {
     loadConfigMock.mockReturnValue(undefined);
     const { logger } = createTestLogger();
 
-    const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger, IGNORE_POPULATION);
+    const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
 
     expect(crawlPatterns()).toEqual({ baseDir: PROJECT_ROOT, unreadable: 'refuse', outputs: [] });
     expect(result.config).toBeUndefined();
@@ -404,9 +386,9 @@ describe('loadResourcesWithConfig', () => {
     loadConfigMock.mockReturnValue(undefined);
     const { logger } = createTestLogger();
 
-    const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger, IGNORE_POPULATION);
+    const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
 
-    expect(result.lane).toBe('projection');
+    expect(result.population.lane).toBe('projection');
     // The lane is a claim about what ran, so it has to agree with whether a
     // population source was actually installed on the crawl.
     expect(lastCrawlOptions?.populationSource).toBeDefined();
@@ -421,9 +403,9 @@ describe('loadResourcesWithConfig', () => {
     process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_WALK;
 
     try {
-      const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger, IGNORE_POPULATION);
+      const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
 
-      expect(result.lane).toBe('walk');
+      expect(result.population.lane).toBe('walk');
       expect(lastCrawlOptions?.populationSource).toBeUndefined();
     } finally {
       delete process.env[RESOURCES_CRAWL_ENV];
@@ -439,9 +421,9 @@ describe('loadResourcesWithConfig', () => {
     process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_PROJECTION;
 
     try {
-      const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger, IGNORE_POPULATION);
+      const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
 
-      expect(result.lane).toBe('projection');
+      expect(result.population.lane).toBe('projection');
     } finally {
       delete process.env[RESOURCES_CRAWL_ENV];
     }
@@ -452,13 +434,13 @@ describe('loadResourcesWithConfig', () => {
     gitTrackerGetStatsMock.mockReturnValue({ cacheSize: 42 });
     const { logger, debugCalls } = createTestLogger();
 
-    await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger, IGNORE_POPULATION);
+    await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
 
     expect(debugCalls).toContain(`Loaded config from ${PROJECT_ROOT}`);
     expect(debugCalls).toContain('GitTracker initialized with 42 tracked files');
   });
 
-  describe('observes the population exactly once per load', () => {
+  describe('carries the population the crawl returned on the load result', () => {
     beforeEach(() => {
       buildResourcePopulationMock.mockReset();
     });
@@ -466,7 +448,7 @@ describe('loadResourcesWithConfig', () => {
     it('says the walk answered when the projection lane is not selected', async () => {
       process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_WALK;
       try {
-        expect(await observedLoad()).toEqual([{ lane: 'walk' }]);
+        expect(await loadedPopulation()).toEqual({ lane: 'walk' });
       } finally {
         delete process.env[RESOURCES_CRAWL_ENV];
       }
@@ -475,17 +457,19 @@ describe('loadResourcesWithConfig', () => {
     it('says the walk answered when the crawl declined the source, with NO enumerator', async () => {
       crawlReturns({ lane: 'walk' });
 
-      expect(await observedLoadResult()).toEqual({ observed: [{ lane: 'walk' }], lane: 'walk', extentSource: null });
+      const population = await loadedPopulation();
+
+      expect(population).toEqual({ lane: 'walk' });
+      expect(extentSourceOf(population)).toBeNull();
     });
 
     it('publishes the outcome and enumerator the crawl RETURNED', async () => {
       crawlReturns({ lane: 'projection', outcome: HIT, extentSource: 'git' });
 
-      expect(await observedLoadResult()).toEqual({
-        observed: [{ lane: 'projection', outcome: HIT, extentSource: 'git' }],
-        lane: 'projection',
-        extentSource: 'git',
-      });
+      const population = await loadedPopulation();
+
+      expect(population).toEqual({ lane: 'projection', outcome: HIT, extentSource: 'git' });
+      expect(extentSourceOf(population)).toBe('git');
     });
 
     it('hands the registry the WHOLE enumeration, outcome and enumerator included', async () => {
@@ -496,7 +480,7 @@ describe('loadResourcesWithConfig', () => {
         handed = await options.populationSource?.enumerate(PROJECT_ROOT, []);
       });
 
-      await observedLoad();
+      await loadedPopulation();
 
       // The one route the outcome takes out: through `enumerate`, to the crawl.
       expect(handed).toEqual(enumeration);

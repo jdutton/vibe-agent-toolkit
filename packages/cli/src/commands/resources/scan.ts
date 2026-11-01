@@ -12,8 +12,8 @@ import { projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
 import { relativizePathEntries } from '../../utils/relativize-paths.js';
 import {
   assertDeclaredCollection,
+  extentSourceOf,
   loadResourcesWithConfig,
-  POPULATION_UNOBSERVED,
   type ResourceCrawlLane,
 } from '../../utils/resource-loader.js';
 
@@ -160,12 +160,7 @@ export async function scanCommand(
     const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
 
     // Load resources with config support
-    const { registry, config, lane, extentSource } = await loadResourcesWithConfig(
-      pathArg,
-      projectRoot,
-      logger,
-      POPULATION_UNOBSERVED.observePopulation,
-    );
+    const { registry, config, population } = await loadResourcesWithConfig(pathArg, projectRoot, logger);
     assertDeclaredCollection(config, options.collection);
 
     // Get all resources (filtered by collection if specified)
@@ -177,8 +172,8 @@ export async function scanCommand(
     const report = buildScanReport({
       resources,
       root: projectRoot,
-      lane,
-      extentSource,
+      lane: population.lane,
+      extentSource: extentSourceOf(population),
       durationMs: Date.now() - startTime,
       collections: collectionCounts(registry.getCollectionStats(), collection),
       verbose: options.verbose ?? false,

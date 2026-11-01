@@ -46,6 +46,9 @@ export {
   // handles it was sniffing `error.message.startsWith('Duplicate resource ID')`
   // — a check that silently stops matching the day the message is reworded.
   DuplicateResourceIdError,
+  // The registry's one admission order, for a caller that admits a batch one
+  // file at a time (the packager's bundled assets) and must not invent its own.
+  admissionOrder,
   generateIdFromPath,
   // What a resource is when `parserKindForPath` answers `none`. Exported for
   // the CLI's parse-fact snapshot, which routes by the same discriminator and
@@ -942,6 +945,7 @@ export {
   CONTENT_PARSING_SKIP,
   ClosureNonConvergenceError,
   DISCARD_BLOB_POPULATION,
+  POPULATION_ORIGINS,
   populate,
   populationOracles,
   readStoredRealizations,

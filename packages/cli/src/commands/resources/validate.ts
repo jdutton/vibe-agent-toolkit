@@ -16,7 +16,6 @@ import {
   matchesCollection,
   type CollectionConfig,
   type CollectionStats,
-  type CrawlPopulation,
   type DeferredSkillFiles,
   type ProjectConfig,
 } from '@vibe-agent-toolkit/resources';
@@ -132,7 +131,7 @@ export interface ResourcesValidateInput {
   /** `--verbose`: publish one `data.files` row per resource validated. */
   readonly verbose: boolean;
   readonly durationMs: number;
-  /** Where the membership came from — {@link publishedPopulation} of the load's one observation. */
+  /** Where the membership came from — {@link publishedPopulation} of the population the load returned. */
   readonly population: ResourcesValidateData['population'];
 }
 
@@ -339,12 +338,7 @@ async function runValidation(
   const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
 
   // Load resources with config support (includes GitTracker initialization)
-  let observation: CrawlPopulation | undefined;
-  const { registry, config, gitTracker } = await loadResourcesWithConfig(pathArg, projectRoot, logger, (observed) => {
-    observation = observed;
-  });
-  // Required by the loader's contract, so its absence is a defect, never a walk.
-  if (observation === undefined) throw new Error('The resource loader returned without observing its population.');
+  const { registry, config, gitTracker, population } = await loadResourcesWithConfig(pathArg, projectRoot, logger);
   assertDeclaredCollection(config, options.collection);
 
   // CLI flag: --no-check-frontmatter-links disables the check for every collection.
@@ -399,7 +393,7 @@ async function runValidation(
     collectionStats: narrowCollectionStats(registry.getCollectionStats(), options.collection),
     verbose: options.verbose === true,
     durationMs: Date.now() - startTime,
-    population: publishedPopulation(observation),
+    population: publishedPopulation(population),
   });
 }
 

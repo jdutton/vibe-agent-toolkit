@@ -1,3 +1,12 @@
+### Breaking
+
+- **`ResourceRegistry.crawl()` returns `{ resources, population }`**, not the resource array: read
+  `.resources` where you used the result directly. `population` says whether the file list was
+  walked (`{ lane: 'walk' }`) or enumerated by a population source.
+- **`ResourceRegistry.addResources()` returns resources in admission order** (UTF-16 code-unit
+  order of the resolved path), not in the order you passed: do not pair the result with your input
+  by index. Look a resource up by `filePath` instead.
+
 ### Added
 
 - **`vat resources validate` reports `data.population`**: `store` when its file list came from the
@@ -9,12 +18,13 @@
 
 ### Changed
 
-- **A duplicate resource id now has one winner on every registry lane**: the registry admits paths
-  in UTF-16 code-unit order of the resolved path before first-added-wins decides, so
-  `vat resources validate`, `vat audit`, `vat inventory` and `vat skills build`/`validate` keep the
-  same file, with or without git, on a store hit or a fresh derive, and in the walk lane. `-` sorts
-  before `/`, so `dup-hyphen/note.md` now beats `dup/hyphen-note.md`, where the readdir walk used to
-  let `dup/hyphen-note.md` win.
+- **A duplicate resource id now has one winner on every registry lane**: within one admission batch
+  (an `addResources` call, so a whole crawl, or a skill's bundled assets) the registry admits paths
+  in UTF-16 code-unit order of the resolved path, so `vat resources validate`, `vat audit`,
+  `vat inventory` and `vat skills build`/`validate` keep the same file, with or without git, on a
+  store hit or a fresh derive, and in the walk lane. `-` sorts before `/`, so `dup-hyphen/note.md`
+  now beats `dup/hyphen-note.md`, where the readdir walk used to let `dup/hyphen-note.md` win. A
+  file an earlier batch registered still keeps its id against a later one.
 - **`vat resources scan` reports `lane: walk` when a crawl declined the projection**, since the walk
   is what enumerated; it used to report `projection` for a population the projection never built.
 - **Listing order is canonical (code-unit order of the resolved path)**: `vat resources scan`'s

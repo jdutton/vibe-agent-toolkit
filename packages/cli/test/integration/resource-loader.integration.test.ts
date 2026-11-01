@@ -10,7 +10,7 @@ import { normalizedTmpdir, normalizePath, safePath } from '@vibe-agent-toolkit/u
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createLogger } from '../../src/utils/logger.js';
-import { loadResourcesWithConfig, POPULATION_UNOBSERVED } from '../../src/utils/resource-loader.js';
+import { loadResourcesWithConfig, publishedPopulation } from '../../src/utils/resource-loader.js';
 
 const CONFIG_FILE = 'vibe-agent-toolkit.config.yaml';
 
@@ -113,7 +113,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
 
       await inProjectDir(projectDir, async () => {
         const docsPath = safePath.join(projectDir, 'docs');
-        const result = await loadResourcesWithConfig(docsPath, projectDir, logger, POPULATION_UNOBSERVED.observePopulation);
+        const result = await loadResourcesWithConfig(docsPath, projectDir, logger);
 
         expect(normalizePath(result.scanPath, result.scanPath)).toBe(normalizePath(docsPath, docsPath));
         expect(normalizePath(result.projectRoot, result.projectRoot)).toBe(normalizePath(projectDir, projectDir));
@@ -128,7 +128,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
     it('should fail loudly when pathArg does not exist', async () => {
       await inProjectDir(projectDir, async () => {
         await expect(
-          loadResourcesWithConfig(safePath.join(projectDir, 'nope'), projectDir, logger, POPULATION_UNOBSERVED.observePopulation)
+          loadResourcesWithConfig(safePath.join(projectDir, 'nope'), projectDir, logger)
         ).rejects.toThrow(/does not exist/);
       });
     });
@@ -136,13 +136,31 @@ describe('loadResourcesWithConfig (integration test)', () => {
     it('should crawl from pathArg with default patterns', async () => {
       await inProjectDir(projectDir, async () => {
         const otherPath = safePath.join(projectDir, 'other');
-        const result = await loadResourcesWithConfig(otherPath, projectDir, logger, POPULATION_UNOBSERVED.observePopulation);
+        const result = await loadResourcesWithConfig(otherPath, projectDir, logger);
 
         expect(normalizePath(result.scanPath, result.scanPath)).toBe(normalizePath(otherPath, otherPath));
 
         // Should find other/notes.md
         expectSingleResource(result.registry.getAllResources(), 'Notes');
       });
+    });
+  });
+
+  describe('with a pathArg outside the project root', () => {
+    it('walks it, and its population says the walk answered: the source declined a foreign base', async () => {
+      // The projection source is bound to the project root; a crawl based
+      // anywhere else is declined by the registry's root guard and walked. This
+      // is the declined route `vat resources validate` publishes as `null`; the
+      // CLI cannot reach it, because it discovers the root FROM the path.
+      const outside = safePath.join(testDir, 'outside');
+      await mkdir(outside, { recursive: true });
+      await writeFile(safePath.join(outside, 'elsewhere.md'), '# Elsewhere\n');
+
+      const result = await loadResourcesWithConfig(outside, projectDir, logger);
+
+      expectSingleResource(result.registry.getAllResources(), 'Elsewhere');
+      expect(result.population).toEqual({ lane: 'walk' });
+      expect(publishedPopulation(result.population)).toBeNull();
     });
   });
 
@@ -155,7 +173,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
       );
 
       await inProjectDir(projectDir, async () => {
-        const result = await loadResourcesWithConfig(undefined, projectDir, logger, POPULATION_UNOBSERVED.observePopulation);
+        const result = await loadResourcesWithConfig(undefined, projectDir, logger);
 
         expectProjectPaths(result, projectDir);
         expect(result.config).toBeDefined();
@@ -178,7 +196,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
       );
 
       await inProjectDir(projectDir, async () => {
-        const result = await loadResourcesWithConfig(undefined, projectDir, logger, POPULATION_UNOBSERVED.observePopulation);
+        const result = await loadResourcesWithConfig(undefined, projectDir, logger);
 
         // Should only find docs/guide.md
         expectSingleResource(result.registry.getAllResources(), 'Guide');
@@ -187,7 +205,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
 
     it('should work without config file', async () => {
       await inProjectDir(projectDir, async () => {
-        const result = await loadResourcesWithConfig(undefined, projectDir, logger, POPULATION_UNOBSERVED.observePopulation);
+        const result = await loadResourcesWithConfig(undefined, projectDir, logger);
 
         expectProjectPaths(result, projectDir);
         expect(result.config).toBeUndefined();
@@ -201,7 +219,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
 
   describe('GitTracker integration', () => {
     it('should create and initialize GitTracker for the provided project root', async () => {
-      const result = await loadResourcesWithConfig(projectDir, projectDir, logger, POPULATION_UNOBSERVED.observePopulation);
+      const result = await loadResourcesWithConfig(projectDir, projectDir, logger);
 
       expect(result.gitTracker).toBeDefined();
       expect(result.gitTracker?.getStats().cacheSize).toBeGreaterThanOrEqual(0);
@@ -215,7 +233,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
       await mkdir(isolatedDir, { recursive: true });
       await writeFile(safePath.join(isolatedDir, 'test.md'), '# Test\n');
 
-      const result = await loadResourcesWithConfig(isolatedDir, isolatedDir, logger, POPULATION_UNOBSERVED.observePopulation);
+      const result = await loadResourcesWithConfig(isolatedDir, isolatedDir, logger);
 
       expect(normalizePath(result.projectRoot, result.projectRoot)).toBe(normalizePath(isolatedDir, isolatedDir));
       expect(result.gitTracker).toBeDefined();
@@ -241,7 +259,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
 `
       );
 
-      const result = await loadResourcesWithConfig(projectDir, projectDir, logger, POPULATION_UNOBSERVED.observePopulation);
+      const result = await loadResourcesWithConfig(projectDir, projectDir, logger);
 
       expect(result.config).toBeDefined();
       expect(result.config?.resources?.collections).toBeDefined();
@@ -255,7 +273,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
 
   describe('return value structure', () => {
     it('should return all expected fields', async () => {
-      const result = await loadResourcesWithConfig(projectDir, projectDir, logger, POPULATION_UNOBSERVED.observePopulation);
+      const result = await loadResourcesWithConfig(projectDir, projectDir, logger);
 
       expect(result).toHaveProperty('scanPath');
       expect(result).toHaveProperty('projectRoot');

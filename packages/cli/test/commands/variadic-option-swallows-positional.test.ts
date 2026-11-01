@@ -32,6 +32,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createResourcesCommand } from '../../src/commands/resources/index.js';
 import { createSkillTestRunCommand } from '../../src/commands/skill/test/run.js';
+import { subcommand } from '../help-text-helpers.js';
 
 /** A statement with two placeholders, so a swallowed path binds instead of erroring. */
 const TWO_PARAM_SQL = 'SELECT ? AS x, ? AS y';
@@ -42,12 +43,6 @@ const LOCATOR_PATH = 'docs/';
 interface Invocation {
   readonly operands: readonly unknown[];
   readonly options: Record<string, unknown>;
-}
-
-function subcommand(root: Command, name: string): Command {
-  const found = root.commands.find((candidate) => candidate.name() === name);
-  if (!found) throw new Error(`command factory no longer exposes a '${name}' subcommand`);
-  return found;
 }
 
 /**
