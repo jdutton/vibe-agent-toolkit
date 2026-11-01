@@ -186,9 +186,8 @@ single-command facet runs are one-step sequences under `<arms root>/<build>-<com
   store and shard when any step `populates` (a priming failure fails the arm). In each measured
   round, a step whose command reads provenance must publish `population: store`. Two readers do:
   `resources check` (`data.population`) and `validate` (the `resources` and `checks` phases'
-  `population`). Absent, `derived` or a published `null` (the walk answered) fails the repetition.
-  Both readers apply one rule: a string is that origin, `null` is present and never the store, and
-  a missing field is absent. `resources validate` publishes `data.population` too, but the lab does
+  `population`). A field that is absent or not a string counts as absent, and absent or `derived`
+  fails the repetition. `resources validate` publishes `data.population` too, but the lab does
   not judge it yet. A baseline build that predates the field cannot yet be told apart from a run
   that dropped it, and judging it needs a per-build declaration, which is pending. A step with no
   provenance reader (`resources validate`, `resources query`, `skills validate`, the facet entry

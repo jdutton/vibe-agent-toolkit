@@ -5,7 +5,7 @@
  * synthetic correct run passes and its twin with that ONE field removed — every
  * other byte of the document kept — FAILS: "absent" is never a pass, and a
  * reader that looked anywhere else would find the rest of the document intact. The cells whose rule reads no document (every cold
- * cell, and rc.11's arm A, whose verbs publish no population) are pinned to
+ * cell, and arm A, whose verbs the lab does not judge) are pinned to
  * assert nothing, so a reader added to them later is a visible change here.
  */
 
@@ -154,32 +154,6 @@ describe('provenanceViolation — cells that read nothing', () => {
       expect(provenanceViolation('step', cell.reader, readProvenance(cell.reader, cell.stdout), cell.state, true)).toBeNull();
     });
   }
-});
-
-describe('provenanceViolation — a published null is the walk, a missing field is absent', () => {
-  /** The candidate's `validate`, its resources phase's `data` replaced by `data`. */
-  const resourcesPhase = (data: Readonly<Record<string, unknown>>) =>
-    readProvenance('validate', report({ phases: CAND_VALIDATE_PHASES.map((phase) => (phase.name === 'resources' ? { ...phase, data } : phase)) }));
-
-  it.each([
-    { reader: 'validate' as const, provenance: () => resourcesPhase({ population: null }) },
-    { reader: 'resources-check' as const, provenance: () => readProvenance('resources-check', report({ ...RC11_CHECK_DATA, population: null })) },
-  ])('$reader: a published null fails as the walk, not as absent', ({ reader, provenance }) => {
-    expect(provenanceViolation('step', reader, provenance(), 'warm', true)).toBe(
-      "warm rule: step 'step' — the walk answered (population null), not the store",
-    );
-  });
-
-  it('validate: a resources phase with no population field fails as absent', () => {
-    expect(provenanceViolation('step', 'validate', resourcesPhase({}), 'warm', true)).toBe(
-      "warm rule: step 'step' published no resources population (absent is never a pass)",
-    );
-  });
-
-  it('passes a published null on a store-off arm: the walk is what it asked for', () => {
-    const walked = readProvenance('resources-check', report({ ...RC11_CHECK_DATA, population: null }));
-    expect(provenanceViolation('step', 'resources-check', walked, 'warm', false)).toBeNull();
-  });
 });
 
 describe('readProvenance', () => {

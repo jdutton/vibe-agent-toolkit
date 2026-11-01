@@ -94,7 +94,8 @@ export interface MeasuredCommandSpec {
   readonly exit: ExitCommitment;
   /**
    * Which document reader this command's stdout goes through for the warm rule
-   * (`provenance.ts`): `none` for a verb that publishes no population.
+   * (`provenance.ts`): `none` where the lab judges no population on this entry,
+   * whether or not the verb publishes one (see `RESOURCES_VALIDATE_READER`).
    */
   readonly provenance: ProvenanceReader;
   /**

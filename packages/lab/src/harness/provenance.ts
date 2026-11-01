@@ -4,11 +4,10 @@
  *
  * A warm arm whose baseline never actually warms (a store that misses on every
  * run) would otherwise compare a cold baseline against a warm candidate and
- * report the difference as a win. So every measured warm repetition's resources
- * step must REPORT `population: 'store'` wherever its build publishes the
- * field — and the candidate's `validate` must report it for its checks phase
- * too (S1 bar 4) — and a field that is absent fails the measurement: absent is
- * never a pass.
+ * report the difference as a win. So every measured warm repetition of a step
+ * with a reader below must REPORT `population: 'store'` — the candidate's
+ * `validate` for its checks phase too (S1 bar 4) — and a field that is absent,
+ * or not a string, fails the measurement: absent is never a pass.
  *
  * Which field carries it depends on the document, and the step names its reader:
  *
@@ -20,10 +19,6 @@
  *   `resources validate`, which publishes `data.population` that the lab does
  *   not judge yet — a baseline build older than the field cannot be told from a
  *   run that dropped it until a per-build declaration exists.
- *
- * Every field is read by one rule ({@link publishedPopulation}): a string is
- * that origin, a published `null` is the walk (present, never the store), and a
- * missing field is absent.
  */
 
 import { parseDocument } from './document-shape.js';
@@ -45,9 +40,6 @@ export interface StepProvenance {
 /** The population that proves a warm run was served from the store. */
 const STORE_POPULATION = 'store';
 
-/** How {@link publishedPopulation} reads a published `null`: the walk answered. */
-const WALK_POPULATION = 'null';
-
 /**
  * Read a step's provenance from its stdout.
  *
@@ -60,13 +52,13 @@ export function readProvenance(reader: ProvenanceReader, stdout: string): StepPr
   const parsed = parseDocument(stdout);
   const payload = parsed.shape === 'unparsed' ? undefined : parsed.payload;
   if (reader === 'resources-check') {
-    return { resources: publishedPopulation(payload, 'population'), checks: null, lens: publishedPopulation(payload, 'lensPopulation') };
+    return { resources: stringField(payload, 'population'), checks: null, lens: stringField(payload, 'lensPopulation') };
   }
   const checks = phaseData(payload, 'checks');
   return {
-    resources: publishedPopulation(phaseData(payload, 'resources'), 'population'),
-    checks: publishedPopulation(checks, 'population'),
-    lens: publishedPopulation(checks, 'lensPopulation'),
+    resources: stringField(phaseData(payload, 'resources'), 'population'),
+    checks: stringField(checks, 'population'),
+    lens: stringField(checks, 'lensPopulation'),
   };
 }
 
@@ -119,9 +111,8 @@ function populationViolation(who: string, absent: string, population: string | n
       ? `warm rule: ${who} reports population '${STORE_POPULATION}' though the arm turned the store off`
       : null;
   }
-  if (population === STORE_POPULATION) return null;
-  return population === WALK_POPULATION
-    ? `warm rule: ${who} — the walk answered (population null), not the store`
+  return population === STORE_POPULATION
+    ? null
     : `warm rule: ${who} reports population '${population}', not '${STORE_POPULATION}' — the arm is not warm`;
 }
 
@@ -138,16 +129,14 @@ function phaseData(payload: unknown, name: string): unknown {
 }
 
 /**
- * The one rule every reader reads a population field by.
- *
  * @param value - Any value
  * @param key - A field name
- * @returns `null` when the field is absent; else the string, or any other published value as JSON (`null` reads `'null'`)
+ * @returns The field when it is a string, else `null`
  */
-function publishedPopulation(value: unknown, key: string): string | null {
-  if (!isRecord(value) || !(key in value)) return null;
+function stringField(value: unknown, key: string): string | null {
+  if (!isRecord(value)) return null;
   const field = value[key];
-  return typeof field === 'string' ? field : (JSON.stringify(field) ?? null);
+  return typeof field === 'string' ? field : null;
 }
 
 /**
