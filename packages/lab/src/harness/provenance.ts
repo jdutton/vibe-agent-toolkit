@@ -17,8 +17,9 @@
  * - `validate` — the orchestrator document: `data.phases[name='resources'].data.population`
  *   and the `checks` phase's `population`, both judged, plus its `lensPopulation`, recorded.
  * - `none` — nothing is read and nothing asserted: `skills validate`, and
- *   `resources validate`, whose `data.population` is judged through `validate`'s
- *   resources phase instead.
+ *   `resources validate`, which publishes `data.population` that the lab does
+ *   not judge yet — a baseline build older than the field cannot be told from a
+ *   run that dropped it until a per-build declaration exists.
  *
  * Every field is read by one rule ({@link publishedPopulation}): a string is
  * that origin, a published `null` is the walk (present, never the store), and a

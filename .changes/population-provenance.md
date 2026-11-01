@@ -36,9 +36,11 @@
   `vat inventory` and `vat skills build`/`validate` keep the same file when each lane lists the same
   spelling of the same files, in any listing order: on a store hit or a fresh derive, and in the
   walk lane. Where the git index and the walk spell one file differently (a case-only rename made
-  without `git mv`, or NFD and NFC names on macOS), the lanes can still keep different winners. `-` sorts before `/`, so `dup-hyphen/note.md`
-  now beats `dup/hyphen-note.md`, where the readdir walk used to let `dup/hyphen-note.md` win. A
-  file an earlier batch registered still keeps its id against a later one.
+  without `git mv`, or NFD and NFC names on macOS), the lanes can still keep different winners.
+
+  `-` sorts before `/`, so `dup-hyphen/note.md` now beats `dup/hyphen-note.md`, where the readdir
+  walk used to let `dup/hyphen-note.md` win. A file an earlier batch registered still keeps its id
+  against a later one.
 - **`vat resources scan` reports `lane: walk` when a crawl declined the projection**, since the walk
   is what enumerated; it used to report `projection` for a population the projection never built.
 - **Listing order is canonical (code-unit order of the resolved path)**: `vat resources scan`'s

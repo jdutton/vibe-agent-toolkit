@@ -34,11 +34,10 @@ const RC11_CHECK = report(RC11_CHECK_DATA);
 /**
  * The candidate's `validate`, every phase served from the store.
  *
- * Modelled AHEAD of S2: the resources phase's `data.population` is a field
- * today's `.strict()` resources-validate report schema cannot emit, so a real
- * candidate run reads as 'absent' here until S2 adds it. The CLI's report
- * schemas are internal to the CLI (and the lab measures several builds), so
- * this fixture cannot be parsed through the producer's schema.
+ * The resources phase's `data.population` is the field the candidate's
+ * resources-validate report publishes. The CLI's report schemas are internal to
+ * the CLI (and the lab measures several builds), so this fixture cannot be
+ * parsed through the producer's schema.
  */
 const CAND_VALIDATE_PHASES = [
   { name: 'resources', status: 'success', examined: 1, summary: {}, data: { population: 'store' } },
@@ -65,7 +64,7 @@ const READ_CELLS: readonly Cell[] = [
     missing: report(withoutPopulation(RC11_CHECK_DATA)),
   },
   {
-    cell: 'cand-C-warm (validate; resources-phase population pending S2)',
+    cell: 'cand-C-warm (validate; resources-phase population)',
     state: 'warm',
     reader: 'validate',
     correct: CAND_VALIDATE,

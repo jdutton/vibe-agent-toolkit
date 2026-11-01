@@ -154,7 +154,7 @@ describe('the CI commands and sequences', () => {
     expect(specNamed(name).args).toEqual(CI_ARGV[name]);
   });
 
-  it('reads the population where each CI verb publishes it, and nowhere else', () => {
+  it('judges the population only on the CI verbs whose reader is wired (resources check, validate)', () => {
     expect(Object.fromEntries(CI_NAMES.map((name) => [name, specNamed(name).provenance]))).toEqual({
       'resources-validate-ci': 'none',
       'resources-check-ci': 'resources-check',
@@ -172,17 +172,17 @@ describe('the CI commands and sequences', () => {
     expect(measurableSequence('toString')).toBeUndefined();
   });
 
-  it.each(['populates', 'provenance'] as const)('agrees on `%s` for every entry naming the same vat verb', (field) => {
-    // Whether a verb writes the projection, and which reader judges its
-    // population, is the verb's property, not its argv spelling.
+  it('agrees on `populates` for every entry naming the same vat verb', () => {
+    // Whether a verb writes the projection is the verb's property, not its
+    // argv spelling: `resources validate` populates whether or not CI typed it.
     const verbOf = (args: readonly string[]): string => {
       const end = args.findIndex((arg) => arg.startsWith('-') || arg.startsWith('{'));
       return (end === -1 ? args : args.slice(0, end)).join(' ');
     };
-    const byVerb = new Map<string, Set<unknown>>();
+    const byVerb = new Map<string, Set<boolean>>();
     for (const spec of Object.values(MEASURABLE_COMMANDS)) {
       const verb = verbOf(spec.args);
-      byVerb.set(verb, (byVerb.get(verb) ?? new Set()).add(spec[field]));
+      byVerb.set(verb, (byVerb.get(verb) ?? new Set()).add(spec.populates));
     }
     const disagreeing = [...byVerb].filter(([, values]) => values.size > 1).map(([verb]) => verb);
     expect(disagreeing).toEqual([]);

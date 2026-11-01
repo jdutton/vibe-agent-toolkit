@@ -188,9 +188,11 @@ single-command facet runs are one-step sequences under `<arms root>/<build>-<com
   `resources check` (`data.population`) and `validate` (the `resources` and `checks` phases'
   `population`). Absent, `derived` or a published `null` (the walk answered) fails the repetition.
   Both readers apply one rule: a string is that origin, `null` is present and never the store, and
-  a missing field is absent. `resources validate` publishes `data.population` too. The lab does not
-  judge it on that verb, because `validate`'s resources phase judges the same fact. A step with no
-  provenance reader (`resources validate`, `resources query`, `skills validate`) asserts nothing.
+  a missing field is absent. `resources validate` publishes `data.population` too, but the lab does
+  not judge it yet. A baseline build that predates the field cannot yet be told apart from a run
+  that dropped it, and judging it needs a per-build declaration, which is pending. A step with no
+  provenance reader (`resources validate`, `resources query`, `skills validate`, the facet entry
+  for `validate`) asserts nothing.
 - The lab never runs `vat cache clear` — it owns the directories it clears.
 - A bare command name (`git`, a prerequisite's `pnpm`) resolves from the **child's** PATH, absolute
   entries only — never from a working directory, which here is the subject's clone.

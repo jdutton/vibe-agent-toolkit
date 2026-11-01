@@ -117,8 +117,9 @@ export interface MeasuredSequenceSpec {
 
 /**
  * The reader for `vat resources validate`, whichever argv spells it. It publishes
- * `data.population`, but the lab judges that fact once, through `vat validate`'s
- * resources phase.
+ * `data.population`, but the lab does not judge it yet: a baseline build older
+ * than the field cannot be told from a run that dropped it until a per-build
+ * declaration exists.
  */
 const RESOURCES_VALIDATE_READER: ProvenanceReader = 'none';
 
@@ -223,8 +224,7 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   }),
   validate: Object.freeze({
     name: 'validate',
-    // The same reader as `validate-ci`: the reader is the verb's, not its argv's.
-    provenance: 'validate',
+    provenance: 'none',
     exit: COMPLETES_WITH_FINDINGS,
     // The same verb as `validate-ci`: its resources phase writes the projection.
     populates: true,
