@@ -15,11 +15,10 @@
  */
 
 import { resolveFromImportMeta } from '@vibe-agent-toolkit/utils';
-import { ESLint } from 'eslint';
 import { describe, expect, it } from 'vitest';
 
 import { NO_UNSAFE_BACKLOG } from '../../../../eslint.config.js';
-import { filesWithoutFinding } from '../eslint-clean-files.js';
+import { filesWithoutFinding, repoEslint } from '../eslint-clean-files.js';
 
 
 const RULES = ['@typescript-eslint/no-unsafe-member-access', '@typescript-eslint/no-unsafe-assignment'] as const;
@@ -27,7 +26,7 @@ const REPO_ROOT = resolveFromImportMeta(import.meta.url, '..', '..', '..', '..')
 
 /** Lint the backlog with the repo config plus the pair forced on for exactly those files. */
 async function cleanWithoutExemption(files: readonly string[]): Promise<string[]> {
-  const eslint = new ESLint({
+  const eslint = repoEslint({
     cwd: REPO_ROOT,
     overrideConfig: [{
       files: [...files],

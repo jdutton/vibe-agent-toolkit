@@ -1,13 +1,24 @@
 /**
- * Shared by the two allowlist-ratchet tests (`eslint-allowlist-ratchets.test.ts`,
- * `integration/no-unsafe-backlog-ratchet.integration.test.ts`): lint a list of
- * files with an exemption lifted and count what the rule reports in each — a
- * listed file that is clean must leave the allowlist, and a list that pins its
- * counts must match them exactly.
+ * Shared by the tests that lint the repository programmatically. {@link repoEslint} is the one
+ * way to construct the linter; the allowlist-ratchet helpers below lint a list of files with an
+ * exemption lifted and count what the rule reports in each — a listed file that is clean must
+ * leave the allowlist, and a list that pins its counts must match them exactly.
  */
 
-import { safePath } from '@vibe-agent-toolkit/utils';
-import type { ESLint, Linter } from 'eslint';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { ESLint, type Linter } from 'eslint';
+
+/**
+ * An ESLint for a test, with its cache file pointed outside the repository.
+ *
+ * With caching off, `lintFiles` DELETES the file at `cacheLocation` — by default
+ * `<cwd>/.eslintcache`, which is `bun run lint`'s cache. A test constructed at the repo root
+ * therefore wiped the developer's lint cache on every gate run, and the next lint ran cold
+ * (100 s instead of 4 s). `new ESLint` is banned in this package's tests outside this file.
+ */
+export function repoEslint(options: ESLint.Options): ESLint {
+  return new ESLint({ ...options, cacheLocation: safePath.join(normalizedTmpdir(), 'vat-test-eslintcache') });
+}
 
 /**
  * How many messages `isFinding` matched in each of `files`, keyed by the

@@ -149,8 +149,9 @@ the coverage job in CI — never in a turbo lane; not on Windows).
    messages. (not enforced)
 
 **The gate has two tiers** (enforced by: `runScope: ci` in `vibe-validate.config.yaml`):
-- **pre-commit tier** — `git commit` (Husky → `vibe-validate pre-commit`) runs build, typecheck,
-  lint, duplication and unit tests only (~66 s warm on macOS); every other step is `runScope: ci`.
+- **pre-commit tier** — `git commit` (Husky → `vibe-validate pre-commit`) runs build, typecheck
+  and lint only (seconds with warm caches); every other step is `runScope: ci`. Run
+  `bun run test:unit` yourself when the change calls for it.
 - **full tier** — `bun run validate` and CI run every step: the above plus knip, repo structure,
   publish readiness, link validation, the `vat` dogfood steps, integration and system tests. It sets
   `CI=1` (vibe-validate's only `runScope` switch) and `--force` (the tree-hash cache records a

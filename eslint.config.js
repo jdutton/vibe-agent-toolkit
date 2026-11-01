@@ -826,6 +826,14 @@ export default [
   // Base recommended configs
   eslint.configs.recommended,
   sonarjs.configs.recommended,
+  // sonarjs's `aws-*` rules inspect AWS CDK constructs, and this repo has none — yet
+  // one of them alone was 9% of lint time. Derived from the plugin so a new aws rule
+  // is off too; remove this block if the repo ever adopts `aws-cdk-lib`.
+  {
+    rules: Object.fromEntries(
+      Object.keys(sonarjs.rules).filter((name) => name.startsWith('aws-')).map((name) => [`sonarjs/${name}`, 'off']),
+    ),
+  },
   security.configs.recommended,
 
   // Main configuration - applies to ALL TypeScript files

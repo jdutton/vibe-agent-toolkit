@@ -15,15 +15,16 @@
  */
 
 import { resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
-import { ESLint } from 'eslint';
 import { describe, expect, it } from 'vitest';
+
+import { repoEslint } from '../eslint-clean-files.js';
 
 const REPO_ROOT = resolveFromImportMeta(import.meta.url, '..', '..', '..', '..');
 
 const STATIC_BAN = 'no-restricted-imports';
 const DYNAMIC_BAN = 'no-restricted-syntax';
 
-const eslint = new ESLint({
+const eslint = repoEslint({
   cwd: REPO_ROOT,
   ruleFilter: ({ ruleId }) => ruleId === STATIC_BAN || ruleId === DYNAMIC_BAN,
   // The two rules read syntax alone: no program is built for a fixture that is not on disk.

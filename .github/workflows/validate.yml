@@ -47,6 +47,20 @@ jobs:
           fi
         env:
           CONTRABAND_TOKENS: ${{ secrets.CONTRABAND_TOKENS }}
+      # Turbo's task cache and ESLint's cache, per OS. A pull request restores the
+      # newest entry its ref can see — its own earlier pushes, else main's — so a push
+      # re-runs only the packages and files it changed. A push to main never restores:
+      # it runs every task cold, so a turbo input declared too narrowly cannot replay a
+      # stale pass onto main, and it seeds the cache the next pull requests start from.
+      - name: Restore build caches
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            .turbo/cache
+            .eslintcache
+          key: vat-build-${{ runner.os }}-${{ github.sha }}
+          restore-keys: vat-build-${{ runner.os }}-
       # NET_AVAILABLE: the four network suites (external-link-validator,
       # external-url-validation, audit-git-url, corpus-scan) skip unless it is
       # set; a hosted runner has the network, so this is the tier that runs them.
@@ -56,6 +70,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NET_AVAILABLE: "1"
+          TURBO_CACHE_DIR: .turbo/cache
+      # Saved on failure too: turbo never caches a failed task, so what a red run
+      # stores is exactly the work the next push need not repeat.
+      - name: Save build caches
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            .turbo/cache
+            .eslintcache
+          key: vat-build-${{ runner.os }}-${{ github.sha }}
       # vibe-validate captures a failed step's stdout and stderr to files and summarises
       # them through an extractor that keeps only lines carrying an error keyword, so a
       # verdict without one (`NEW unused export: …`) never reaches this log. Print the

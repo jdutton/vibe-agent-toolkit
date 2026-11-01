@@ -5,10 +5,12 @@
 #
 # Every step below belongs to one of two tiers:
 #
-#   pre-commit  build · typecheck · lint · duplication · unit tests
+#   pre-commit  build · typecheck · lint
 #               What `.husky/pre-commit` (`vibe-validate pre-commit`) runs on
-#               every commit. ~66 s warm on macOS; keeps the cheap 89 % of the
-#               signal at the desk.
+#               every commit: seconds when turbo's and ESLint's caches are warm.
+#               It catches what breaks the tree for everyone (a red build, a type
+#               error, a lint error); which tests to run when is the committer's
+#               call (`bun run test:unit`), and CI runs every tier.
 #
 #   full        everything, including the steps marked `runScope: ci`.
 #               What CI runs (`validate.yml`, generated from this file) and what
@@ -101,6 +103,8 @@ validation:
 
         - name: 'Code duplication check'
           command: 'bun run duplication-check'
+          description: 'Compares every file with every other, so it has no incremental form. Full tier only.'
+          runScope: ci
 
         - name: 'Skills validation: vat-development-agents'
           command: 'bun run vat skills validate packages/vat-development-agents'
@@ -124,7 +128,8 @@ validation:
 
         - name: 'Unit tests'
           command: 'bun run test:unit'
-          description: 'Unit tests only. Coverage is collected in a dedicated CI job (.github/workflows/coverage.yml) so it does not slow local validation or the Windows CI matrix.'
+          description: 'Unit tests only. Coverage is collected in a dedicated CI job (.github/workflows/coverage.yml) so it does not slow local validation or the Windows CI matrix. Full tier only: run `bun run test:unit` when the change calls for it.'
+          runScope: ci
 
     - name: 'Integration Tests'
       parallel: false

@@ -25,12 +25,12 @@
 import tsparser from '@typescript-eslint/parser';
 import { compareCodeUnits, resolveFromImportMeta } from '@vibe-agent-toolkit/utils';
 import localRules from '@vibe-agent-toolkit/utils/eslint';
-import { ESLint } from 'eslint';
+import type { ESLint } from 'eslint';
 import { describe, expect, it } from 'vitest';
 
 import { LINK_FOLLOWING_FS_CALLS } from '../../../eslint.config.js';
 
-import { filesWithoutFinding, findingCounts } from './eslint-clean-files.js';
+import { filesWithoutFinding, findingCounts, repoEslint } from './eslint-clean-files.js';
 
 const REPO_ROOT = resolveFromImportMeta(import.meta.url, '..', '..', '..');
 
@@ -89,7 +89,7 @@ const RATCHETS: readonly Ratchet[] = [
 
 /** The options object the repo's own config hands the rule, or `{}`. */
 async function configuredOptions(ratchet: Ratchet): Promise<Readonly<Record<string, unknown>>> {
-  const eslint = new ESLint({ cwd: REPO_ROOT });
+  const eslint = repoEslint({ cwd: REPO_ROOT });
   const config = await eslint.calculateConfigForFile(`${REPO_ROOT}/${ratchet.probeFile}`);
   const entry = config.rules?.[ratchet.rule] as [number, Record<string, unknown>?] | undefined;
   return entry?.[1] ?? {};
@@ -102,7 +102,7 @@ async function configuredList(ratchet: Ratchet): Promise<readonly string[]> {
 
 /** A bare-parser ESLint running only `ratchet.rule`, with the repo's own options and ONLY the list lifted. */
 async function liftedLinter(ratchet: Ratchet): Promise<ESLint> {
-  return new ESLint({
+  return repoEslint({
     cwd: REPO_ROOT,
     overrideConfigFile: true,
     overrideConfig: [{

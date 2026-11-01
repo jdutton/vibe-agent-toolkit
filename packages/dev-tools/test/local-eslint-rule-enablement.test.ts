@@ -55,8 +55,9 @@
 
 import { resolveFromImportMeta } from '@vibe-agent-toolkit/utils';
 import localRules from '@vibe-agent-toolkit/utils/eslint';
-import { ESLint } from 'eslint';
 import { describe, expect, it } from 'vitest';
+
+import { repoEslint } from './eslint-clean-files.js';
 
 /** The repo root, where `eslint.config.js` lives. */
 const REPO_ROOT = resolveFromImportMeta(import.meta.url, '..', '..', '..');
@@ -147,7 +148,7 @@ function locallyEnabledOnlyRules(): string[] {
 }
 
 describe('local ESLint rules excluded from `recommended` are enabled in this repo', () => {
-  const eslint = new ESLint({ cwd: REPO_ROOT });
+  const eslint = repoEslint({ cwd: REPO_ROOT });
   const derived = locallyEnabledOnlyRules();
 
   it('names a probe file for every rule `recommended` excludes, and no others', () => {
