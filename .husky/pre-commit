@@ -1,4 +1,4 @@
-# Pre-commit tier of the two-tier gate: build, typecheck, lint. The steps marked `runScope: ci` in vibe-validate.config.yaml are
-# skipped here and run in CI and in `bun run validate` (the full tier), which
+# Pre-commit tier of the two-tier gate: build, typecheck, lint. The steps
+# marked `runScope: ci` in vibe-validate.config.yaml are skipped here and run in CI and in `bun run validate` (the full tier), which
 # sets CI=1 to include them. See the header of vibe-validate.config.yaml.
 npx vibe-validate pre-commit

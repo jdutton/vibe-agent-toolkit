@@ -110,7 +110,8 @@ nothing to register; `tsconfig.json` `references` are generated, never hand-edit
   Custom rules live in `packages/utils/eslint/` — see
   [`docs/custom-eslint-rules.md`](docs/custom-eslint-rules.md). (enforced by: `bun run lint`)
 - **Zero code duplication.** When `duplication-check` fails, refactor — extract to a shared helper;
-  the baseline is never updated to accept a clone. (enforced by: `bun run duplication-check`)
+  the baseline is never updated to accept a clone. (enforced by: `bun run duplication-check`, full
+  tier only)
 - SonarCloud runs automatic analysis: fix every smell it reports at its cause; **never `NOSONAR`**
   ([why](docs/contributing/traps.md#nosonar-does-nothing-under-sonarcloud-automatic-analysis)), never
   argue one away. In its PR comment, New, Accepted and Security Hotspots must all be zero — "Quality
@@ -151,7 +152,7 @@ the coverage job in CI — never in a turbo lane; not on Windows).
 **The gate has two tiers** (enforced by: `runScope: ci` in `vibe-validate.config.yaml`):
 - **pre-commit tier** — `git commit` (Husky → `vibe-validate pre-commit`) runs build, typecheck
   and lint only (seconds with warm caches); every other step is `runScope: ci`. Run
-  `bun run test:unit` yourself when the change calls for it.
+  `bun run test:unit` yourself when the change calls for it. (not enforced)
 - **full tier** — `bun run validate` and CI run every step: the above plus knip, repo structure,
   publish readiness, link validation, the `vat` dogfood steps, integration and system tests. It sets
   `CI=1` (vibe-validate's only `runScope` switch) and `--force` (the tree-hash cache records a

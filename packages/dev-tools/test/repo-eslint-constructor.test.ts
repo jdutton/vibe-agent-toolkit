@@ -14,12 +14,30 @@ import { describe, expect, it } from 'vitest';
 
 const TEST_ROOT = resolveFromImportMeta(import.meta.url, '.');
 const HELPER = 'eslint-clean-files.ts';
+/** This file names every shape it bans. */
+const SELF = 'repo-eslint-constructor.test.ts';
+
+/**
+ * Every way a test can get a linter that owns a cache file: `new ESLint(` with any spacing or
+ * line break, through a namespace (`new eslint.ESLint(`), the legacy class, the
+ * `ESLint.fromOptionsModule` factory, and `loadESLint()` (which returns the class to construct).
+ * An aliased import (`import { ESLint as E }`) is caught by the import shape.
+ */
+const CONSTRUCTS_ESLINT = [
+  /\bnew\s+[\w.]*ESLint\s*\(/,
+  /\bESLint\s*\.\s*fromOptionsModule\b/,
+  /\bloadESLint\s*\(/,
+  /\bESLint\s+as\s+\w+/,
+];
 
 function sourcesConstructingEslint(): string[] {
   return readdirSync(TEST_ROOT, { recursive: true, encoding: 'utf8' })
     .map((entry) => safePath.join('', entry))
-    .filter((file) => file.endsWith('.ts') && file !== HELPER)
-    .filter((file) => /\bnew ESLint\(/.test(readFileSync(safePath.join(TEST_ROOT, file), 'utf8')))
+    .filter((file) => file.endsWith('.ts') && file !== HELPER && file !== SELF)
+    .filter((file) => {
+      const source = readFileSync(safePath.join(TEST_ROOT, file), 'utf8');
+      return CONSTRUCTS_ESLINT.some((shape) => shape.test(source));
+    })
     .sort((a, b) => a.localeCompare(b));
 }
 

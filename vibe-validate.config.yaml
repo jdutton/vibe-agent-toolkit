@@ -49,7 +49,10 @@ hooks:
 
 validation:
   phases:
-    - name: 'Fast Checks & Build'
+    # Everything that WRITES build output runs here, in order: turbo's build, then
+    # typecheck, then the `vat build` dogfood that writes this repo's packaged
+    # artifacts, then their verification.
+    - name: 'Build'
       parallel: false
       steps:
         - name: 'Build packages'
@@ -58,6 +61,21 @@ validation:
         - name: 'TypeScript type checking'
           command: 'bun run typecheck'
 
+        - name: 'VAT dogfood: build skills and claude artifacts'
+          command: 'bun run vat build --cwd packages/vat-development-agents'
+          description: 'Builds vat-development-agents skills and claude plugin artifacts (dogfoods vat build). Full tier only.'
+          runScope: ci
+
+        - name: 'VAT dogfood: verify all artifacts'
+          command: 'bun run vat verify --cwd packages/vat-development-agents'
+          description: 'Verifies vat-development-agents resources, skills, and claude artifacts (dogfoods vat verify). Full tier only.'
+          runScope: ci
+
+    # Read-only checks over what the Build phase wrote, run concurrently. Nothing
+    # here may write a file a sibling reads; a step that must build goes above.
+    - name: 'Checks'
+      parallel: true
+      steps:
         - name: 'ESLint'
           command: 'bun run lint'
 
@@ -116,18 +134,15 @@ validation:
           description: 'Validates the SKILL.md files this package ships. Full tier only.'
           runScope: ci
 
-        - name: 'VAT dogfood: build skills and claude artifacts'
-          command: 'bun run vat build --cwd packages/vat-development-agents'
-          description: 'Builds vat-development-agents skills and claude plugin artifacts (dogfoods vat build). Full tier only.'
-          runScope: ci
-
-        - name: 'VAT dogfood: verify all artifacts'
-          command: 'bun run vat verify --cwd packages/vat-development-agents'
-          description: 'Verifies vat-development-agents resources, skills, and claude artifacts (dogfoods vat verify). Full tier only.'
-          runScope: ci
-
+    # Unit tests get the machine to themselves: vitest already runs a worker per
+    # core, and sharing them with the Checks phase starved a 15 s test into a
+    # timeout (measured at load 67). `--only` keeps turbo from re-entering the
+    # build the Build phase already ran.
+    - name: 'Unit Tests'
+      parallel: false
+      steps:
         - name: 'Unit tests'
-          command: 'bun run test:unit'
+          command: 'bun run test:unit --only'
           description: 'Unit tests only. Coverage is collected in a dedicated CI job (.github/workflows/coverage.yml) so it does not slow local validation or the Windows CI matrix. Full tier only: run `bun run test:unit` when the change calls for it.'
           runScope: ci
 
