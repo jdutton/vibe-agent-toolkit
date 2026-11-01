@@ -66,5 +66,5 @@ describe('the default --out inside the subject holds reports only', () => {
     const out = safePath.join(subject, '.vat-lab');
     expect(readdirSync(out).length).toBeGreaterThan(0);
     expect(existsSync(safePath.join(out, 'arms'))).toBe(false);
-  }, 30_000);
+  });
 });

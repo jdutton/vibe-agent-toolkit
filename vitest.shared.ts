@@ -97,7 +97,48 @@ export const platformTestTimeout = process.platform === 'win32' ? 900_000 : 60_0
  * Windows is UNMEASURED for the unit tier; 10× Unix follows the 6–9× gate ratio
  * this repo has recorded (CLAUDE.md: 4,750 s against 528–771 s) with margin.
  */
-export const unitTestTimeout = process.platform === 'win32' ? 150_000 : 15_000;
+const unitTestTimeout = process.platform === 'win32' ? 150_000 : 15_000;
+
+/** vitest's own per-hook default, which the unit tier keeps on purpose. */
+const VITEST_DEFAULT_HOOK_TIMEOUT = 10_000;
+
+/**
+ * Per-TEST timeout for the SYSTEM tier: twice the integration tier's, scaled the
+ * same way. 120 s on Unix (the value this tier always had) and 30 min on
+ * Windows, where the tier runs serially on the slowest runner.
+ */
+const systemTestTimeout = platformTestTimeout * 2;
+
+/** Per-HOOK timeout for the system tier: 5 min on Unix, scaled like the rest. */
+const systemHookTimeout = platformTestTimeout * 5;
+
+declare module 'vitest' {
+  /**
+   * What every tier provides its test files, so a test that needs longer than
+   * the default asks for a MULTIPLE of this machine's allowance —
+   * `inject('tierTestTimeout') * 4` — and never a number that is generous on one
+   * runner and the failure on another (enforced by: `local/no-literal-test-timeout`).
+   */
+  export interface ProvidedContext {
+    tierTestTimeout: number;
+    tierHookTimeout: number;
+  }
+}
+
+/**
+ * The `provide` block of one tier: its two timeouts, as {@link ProvidedContext}
+ * names them. Every config spreads its own, so `inject` is never undefined.
+ */
+function tierTimeouts(testTimeout: number, hookTimeout: number) {
+  return {
+    testTimeout,
+    hookTimeout,
+    provide: { tierTestTimeout: testTimeout, tierHookTimeout: hookTimeout },
+  };
+}
+
+/** The unit tier's timeouts — see {@link unitTestTimeout}. */
+export const unitTierTimeouts = tierTimeouts(unitTestTimeout, VITEST_DEFAULT_HOOK_TIMEOUT);
 
 export const unitPool = process.platform === 'win32' ? 'forks' : 'threads';
 
@@ -201,10 +242,10 @@ export function createUnitTestConfig(overrides: UnitTestConfigOverrides = {}) {
       '**/*.system.test.ts',
     ],
     server: { deps: { inline: inlineDeps } },
-    testTimeout: unitTestTimeout,
-    // NOTE: no hookTimeout override here on purpose. Unit hooks should fail
-    // fast at vitest's 10s default — a unit hook that needs longer is doing
-    // real I/O and belongs in the integration or system tier instead.
+    // Hooks keep vitest's 10s default on purpose. Unit hooks should fail fast —
+    // a unit hook that needs longer is doing real I/O and belongs in the
+    // integration or system tier instead.
+    ...unitTierTimeouts,
     clearMocks: CLEAR_MOCKS_BEFORE_EACH_TEST,
     pool: unitPool,
     maxWorkers: maxTestWorkers,
@@ -243,12 +284,11 @@ export function createIntegrationTestConfig(overrides: IntegrationTestConfigOver
     include: ['test/**/*.integration.test.ts', 'src/**/*.integration.test.ts'],
     exclude: ['**/node_modules/**', '**/dist/**', ...(overrides.exclude ?? [])],
     server: { deps: { inline: inlineDeps } },
-    testTimeout: platformTestTimeout,
     // Integration hooks legitimately do real I/O (git subprocesses, fixture
     // hydration, temp-tree setup), so vitest's 10s default is too tight —
     // especially on slow Windows CI runners. Share the same platform-aware
-    // ceiling testTimeout already uses.
-    hookTimeout: platformTestTimeout,
+    // ceiling the tests use.
+    ...tierTimeouts(platformTestTimeout, platformTestTimeout),
     passWithNoTests: true,
     clearMocks: CLEAR_MOCKS_BEFORE_EACH_TEST,
     pool: integrationPool,
@@ -296,11 +336,10 @@ export function createSystemTestConfig(overrides: SystemTestConfigOverrides = {}
     setupFiles: [setupFilePath],
     include: ['test/**/*.system.test.ts', 'src/**/*.system.test.ts'],
     exclude: ['**/node_modules/**', '**/dist/**', ...(overrides.exclude ?? [])],
-    testTimeout: 120000, // System tests may take even longer
-    // Hooks run expensive setup (vat build, git init, fixture hydration). Default
-    // 10s is far too short; raise across platforms so slow VMs and fast dev boxes
-    // share the same ceiling.
-    hookTimeout: 300_000,
+    // Hooks run expensive setup (vat build, git init, fixture hydration), so
+    // vitest's 10s default is far too short. Both scale with the platform, as
+    // the integration tier's do: a flat value is the slow runner's failure.
+    ...tierTimeouts(systemTestTimeout, systemHookTimeout),
     server: { deps: { inline: inlineDeps } },
     // Windows rmSync on large fixture trees can take significant time.
     teardownTimeout: 120_000,

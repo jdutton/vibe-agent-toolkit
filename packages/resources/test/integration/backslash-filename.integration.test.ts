@@ -72,12 +72,12 @@ beforeAll(async () => {
   plainRoot = await plantTree('vat-backslash-plain-', TREE);
   // `gitFindRoot` memoizes `null` for directories a prior walk climbed through.
   resetProjectRootCaches();
-}, 60_000);
+});
 
 afterAll(async () => {
   await razeTree(gitRoot);
   await razeTree(plainRoot);
-}, 60_000);
+});
 
 /** A planted root, refused rather than coerced when `beforeAll` never set it. */
 function planted(dir: string | undefined): string {
@@ -155,5 +155,5 @@ describe.skipIf(BACKSLASH_IS_SEPARATOR)('a POSIX filename containing a backslash
     ['a plain directory', false, () => planted(plainRoot)],
   ])('is realized, keyed and rule-scanned under its own name in %s', async (_where, withGit, rootOf) => {
     expectBackslashNamesKept(await populate(rootOf(), withGit));
-  }, 60_000);
+  });
 });

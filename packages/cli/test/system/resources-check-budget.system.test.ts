@@ -353,7 +353,7 @@ describe('vat resources check --budget', () => {
     // ⛔ NOT the watchdog's advice. Raising the bound does not help a run that
     // exhausted its heap, and telling this operator to do it wastes their time.
     expect(finding?.message).not.toMatch(/no progress/);
-  }, 120_000);
+  });
 
   it('refuses a budget that is not a number, as an operator error', () => {
     writeChecks(['quick', TXT_ROWS]);

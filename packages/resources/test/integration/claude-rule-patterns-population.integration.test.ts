@@ -50,14 +50,14 @@ let treeDir: string | undefined;
 
 beforeAll(async () => {
   treeDir = await plantTree('vat-rule-patterns-', TREE);
-}, 60_000);
+});
 
 afterAll(async () => {
   // Generous on purpose: a recursive `rm` over a temp tree has exceeded
   // Vitest's 10s hook default on Windows CI, failing the file for a reason that
   // has nothing to do with what it tests.
   await razeTree(treeDir);
-}, 60_000);
+});
 
 /** The tree's root, refused rather than coerced when `beforeAll` never got there. */
 function root(): string {
@@ -232,5 +232,5 @@ describe('claude_rule_patterns over gitignored territory', () => {
     ]],
   ] as const)('reports each glob over %s', async (_what, tree, built, rows) => {
     expect(await populateIgnoredTree(tree, built)).toEqual(rows);
-  }, 60_000);
+  });
 });

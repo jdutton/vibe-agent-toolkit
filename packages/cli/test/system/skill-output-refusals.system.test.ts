@@ -35,7 +35,6 @@ useScratchTmpdir('vat-scratch-cli-11-');
 
 const SKILL_MD = 'skills/clean/SKILL.md';
 const UNWRITABLE = 0o555;
-const PER_TEST_TIMEOUT_MS = 60_000;
 
 /** Paths a case made unwritable or unreadable, restored after it so the suite can remove its temp dir. */
 const locked: string[] = [];
@@ -83,7 +82,7 @@ describe('an output a skill-packaging lane cannot write ends RUN_INCOMPLETE (sys
     for (const path of locked.splice(0)) chmodSync(path, 0o755);
   });
 
-  it.skipIf(CANNOT_DENY_READS)('vat skills package: an unwritable --output parent', { timeout: PER_TEST_TIMEOUT_MS }, () => {
+  it.skipIf(CANNOT_DENY_READS)('vat skills package: an unwritable --output parent', () => {
     const cwd = skillsProject('package-ro');
     mkdirSyncReal(safePath.join(cwd, 'ro'));
     lock(safePath.join(cwd, 'ro'), UNWRITABLE);
@@ -96,7 +95,7 @@ describe('an output a skill-packaging lane cannot write ends RUN_INCOMPLETE (sys
 
   // The dry run is the real run's packaging pass stopped before its first write, so
   // the project crawl's refusal of an unlistable directory reaches both alike.
-  it.skipIf(CANNOT_DENY_READS)('vat skills package: --dry-run refuses an unlistable project directory as the real run does', { timeout: PER_TEST_TIMEOUT_MS }, () => {
+  it.skipIf(CANNOT_DENY_READS)('vat skills package: --dry-run refuses an unlistable project directory as the real run does', () => {
     const cwd = skillsProject('package-dry-crawl');
     mkdirSyncReal(safePath.join(cwd, 'locked'));
     lock(safePath.join(cwd, 'locked'), 0o000);
@@ -109,7 +108,7 @@ describe('an output a skill-packaging lane cannot write ends RUN_INCOMPLETE (sys
     }
   });
 
-  it('vat skills package: a file in the way of --output is the run, not the skill', { timeout: PER_TEST_TIMEOUT_MS }, () => {
+  it('vat skills package: a file in the way of --output is the run, not the skill', () => {
     const cwd = skillsProject('package-blocked');
     writeFileSync(safePath.join(cwd, 'blocker'), 'x');
 
@@ -120,7 +119,7 @@ describe('an output a skill-packaging lane cannot write ends RUN_INCOMPLETE (sys
     expect(status).toBe(2);
   });
 
-  it('vat skills package: a ZIP it cannot write is never reported as written', { timeout: PER_TEST_TIMEOUT_MS }, () => {
+  it('vat skills package: a ZIP it cannot write is never reported as written', () => {
     const cwd = skillsProject('package-zip');
     mkdirSyncReal(safePath.join(cwd, 'z.zip'));
 
@@ -133,7 +132,7 @@ describe('an output a skill-packaging lane cannot write ends RUN_INCOMPLETE (sys
     expect(existsSync(safePath.join(cwd, 'z'))).toBe(false);
   });
 
-  it.skipIf(CANNOT_DENY_READS)('vat agent build: an unwritable --output parent', { timeout: PER_TEST_TIMEOUT_MS }, () => {
+  it.skipIf(CANNOT_DENY_READS)('vat agent build: an unwritable --output parent', () => {
     const cwd = project('agent-ro', '{}\n', BUILDABLE_AGENT_FILES);
     mkdirSyncReal(safePath.join(cwd, 'ro'));
     lock(safePath.join(cwd, 'ro'), UNWRITABLE);
@@ -144,7 +143,7 @@ describe('an output a skill-packaging lane cannot write ends RUN_INCOMPLETE (sys
     expect(status).toBe(2);
   });
 
-  it.skipIf(CANNOT_DENY_READS)('vat claude plugin build: an unwritable marketplaces directory', { timeout: PER_TEST_TIMEOUT_MS }, () => {
+  it.skipIf(CANNOT_DENY_READS)('vat claude plugin build: an unwritable marketplaces directory', () => {
     const cwd = project('plugin-ro', PLUGIN_BUILD_CONFIG(), PLUGIN_BUILD_FILES);
     const marketplaces = safePath.join(cwd, 'dist', '.claude', 'plugins', 'marketplaces');
     mkdirSyncReal(marketplaces, { recursive: true });
@@ -157,7 +156,7 @@ describe('an output a skill-packaging lane cannot write ends RUN_INCOMPLETE (sys
   });
 
   // The refusal comes AFTER discovery: it carries the skill it found, not `examined: 0`.
-  it.skipIf(CANNOT_DENY_READS)('vat skills build: an unwritable dist/, reporting the skills it examined', { timeout: PER_TEST_TIMEOUT_MS }, () => {
+  it.skipIf(CANNOT_DENY_READS)('vat skills build: an unwritable dist/, reporting the skills it examined', () => {
     const cwd = skillsProject('build-ro');
     mkdirSyncReal(safePath.join(cwd, 'dist'));
     lock(safePath.join(cwd, 'dist'), UNWRITABLE);
@@ -173,7 +172,6 @@ describe('an output a skill-packaging lane cannot write ends RUN_INCOMPLETE (sys
   // preflight looks for it, so these run on every CI runner (none installs claude).
   it.skipIf(CANNOT_DENY_READS)(
     'vat skill test run: an --out whose parent is unwritable',
-    { timeout: PER_TEST_TIMEOUT_MS },
     () => {
       const cwd = project('skill-test-ro', SKILLS_CONFIG, { [SKILL_MD]: CLEAN_SKILL, 'skills/clean/evals/evals.json': CLEAN_EVALS });
       mkdirSyncReal(safePath.join(cwd, 'ro'));
@@ -195,7 +193,7 @@ describe('a lane never deletes or re-modes what the operator owns (system test)'
     for (const path of locked.splice(0)) chmodSync(path, 0o755);
   });
 
-  it('vat skills package refuses an --output that already holds files, and they survive', { timeout: PER_TEST_TIMEOUT_MS }, () => {
+  it('vat skills package refuses an --output that already holds files, and they survive', () => {
     const cwd = skillsProject('package-occupied');
     mkdirSyncReal(safePath.join(cwd, 'keep'));
     writeFileSync(safePath.join(cwd, 'keep', 'important.txt'), 'precious');
@@ -211,7 +209,7 @@ describe('a lane never deletes or re-modes what the operator owns (system test)'
   });
 
   // A preview must say what the real run would: an occupied --output is refused there too.
-  it('vat skills package --dry-run refuses an occupied --output, as the real run does', { timeout: PER_TEST_TIMEOUT_MS }, () => {
+  it('vat skills package --dry-run refuses an occupied --output, as the real run does', () => {
     const cwd = skillsProject('package-occupied-dry');
     mkdirSyncReal(safePath.join(cwd, 'keep'));
     writeFileSync(safePath.join(cwd, 'keep', 'important.txt'), 'precious');
@@ -227,7 +225,6 @@ describe('a lane never deletes or re-modes what the operator owns (system test)'
   // was written over the author's source and the operator's files beside it.
   it.each([['without --force', []], ['with --force', ['--force']]])(
     'vat skills package refuses an --output that holds the skill\'s own source, %s, and writes nothing',
-    { timeout: PER_TEST_TIMEOUT_MS },
     (_label, force) => {
       const cwd = skillsProject(`package-over-source-${force.length}`);
       writeFileSync(safePath.join(cwd, 'skills', 'SKILL.md'), 'PRECIOUS router skill');
@@ -242,7 +239,7 @@ describe('a lane never deletes or re-modes what the operator owns (system test)'
     },
   );
 
-  it('vat skills package --force replaces a previous package', { timeout: PER_TEST_TIMEOUT_MS }, () => {
+  it('vat skills package --force replaces a previous package', () => {
     const cwd = skillsProject('package-force');
     expect(run(cwd, ['skills', 'package', SKILL_MD, '-o', 'out']).status).toBe(0);
     writeFileSync(safePath.join(cwd, 'out', 'stale.md'), '# stale');
@@ -255,7 +252,7 @@ describe('a lane never deletes or re-modes what the operator owns (system test)'
   });
 
   // A file where the harness root must be a directory is the operator's input, not a write the OS refused.
-  it('vat skill test run refuses an --out that is a file, USAGE_INVALID, and leaves it alone', { timeout: PER_TEST_TIMEOUT_MS }, () => {
+  it('vat skill test run refuses an --out that is a file, USAGE_INVALID, and leaves it alone', () => {
     const out = runSkillTestOverOut('skill-test-out-file', (path) => writeFileSync(path, 'precious'));
 
     expect(readFileSync(out, 'utf-8')).toBe('precious');
@@ -263,7 +260,6 @@ describe('a lane never deletes or re-modes what the operator owns (system test)'
 
   it.skipIf(CANNOT_DENY_READS || process.platform === 'win32')(
     'vat skill test run refuses an --out that is not 0700, and leaves its mode alone',
-    { timeout: PER_TEST_TIMEOUT_MS },
     () => {
       const out = runSkillTestOverOut('skill-test-out-mode', (path) => {
         mkdirSyncReal(path);
@@ -276,7 +272,7 @@ describe('a lane never deletes or re-modes what the operator owns (system test)'
 
   // One file the OS will not read, ANYWHERE in the repository: git refuses the whole
   // snapshot. That is the input's refusal, naming the file — not "not a git repository".
-  it.skipIf(CANNOT_DENY_READS)('vat skills build names an unreadable file that refused the git snapshot', { timeout: PER_TEST_TIMEOUT_MS }, () => {
+  it.skipIf(CANNOT_DENY_READS)('vat skills build names an unreadable file that refused the git snapshot', () => {
     const cwd = skillsProject('build-unreadable');
     writeFileSync(safePath.join(cwd, 'private.txt'), 'secret');
     lock(safePath.join(cwd, 'private.txt'), 0o000);

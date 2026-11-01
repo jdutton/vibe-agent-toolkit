@@ -34,14 +34,14 @@ beforeAll(async () => {
   const tree = await buildClaudeContextTree(TREE);
   suiteDir = tree.dir;
   projection = tree.projection;
-}, 60_000);
+});
 
 afterAll(async () => {
   // Generous, and deliberately so: a recursive `rm` over a temp tree has timed
   // out at Vitest's 10s hook default on Windows CI, which fails the whole file
   // for a reason that has nothing to do with what it tests.
   await removeClaudeContextTree(suiteDir);
-}, 60_000);
+});
 
 /** The extent id of one root's import closure, read back off provenance. */
 function extentFor(rootRelativePath: string): string {
@@ -175,5 +175,5 @@ describe('buildClaudeContextPopulation in a repository', () => {
     } finally {
       await removeClaudeContextTree(tree.dir);
     }
-  }, 60_000);
+  });
 });

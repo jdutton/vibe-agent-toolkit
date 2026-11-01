@@ -200,7 +200,7 @@ describe('RAG CLI (Node.js dogfooding)', () => {
     if (existsSync(testDbPath)) {
       await rm(testDbPath, { recursive: true, force: true });
     }
-  }, 60000);
+  });
 
   afterAll(async () => {
     // Clean up test database
@@ -255,7 +255,7 @@ describe('RAG CLI (Node.js dogfooding)', () => {
     // If this number changes, decide whether the chunker change was intended —
     // do not simply update it.
     expect(data.chunksCreated).toBe(12);
-  }, 30000);
+  });
 
   it('should query indexed documentation via CLI', () => {
     // Targets `retrieval.md`, which is the only document about matching a

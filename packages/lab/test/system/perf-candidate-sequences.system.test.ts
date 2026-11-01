@@ -41,5 +41,5 @@ describe('the candidate CI sequences on a clean subject', () => {
     expect(exits).toEqual(
       sequences.flatMap((sequence) => sequence.steps.map((step) => [sequence.name, step.name, 0])),
     );
-  }, 30_000);
+  });
 });

@@ -73,7 +73,7 @@ describe('MCP stdio protocol compliance (system test)', () => {
     } finally {
       await client.close();
     }
-  }, 20_000);
+  });
 
   it('should respond to initialize with correct capabilities', async () => {
     const client = await spawnTestClient();
@@ -88,7 +88,7 @@ describe('MCP stdio protocol compliance (system test)', () => {
     } finally {
       await client.close();
     }
-  }, 20_000);
+  });
 
   it('should list haiku-validator and photo-analyzer tools', async () => {
     const client = await spawnTestClient();
@@ -108,7 +108,7 @@ describe('MCP stdio protocol compliance (system test)', () => {
     } finally {
       await client.close();
     }
-  }, 20_000);
+  });
 
   it('mcp serve --print-config writes only the JSON config to stdout', () => {
     const result = executeCli(binPath, ['mcp', 'serve', CAT_AGENTS_PACKAGE, '--print-config']);

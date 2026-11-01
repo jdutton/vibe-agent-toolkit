@@ -14,7 +14,6 @@ import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 import {
   exitCodeTheContractGives,
   expectScenarioEndsOnItsDerivedCode,
-  MATRIX_SCENARIO_TIMEOUT_MS,
   useExitCodeMatrixShard,
 } from './test-helpers/exit-code-matrix.js';
 
@@ -27,7 +26,6 @@ useScratchTmpdir('vat-scratch-cli-17-');
 describe('exit codes are derived from the published document — shard skills-authoring (system test)', () => {
   it.for(useExitCodeMatrixShard(import.meta.url))(
     '$verb → $status ends on the code its document derives (skills-authoring)',
-    { timeout: MATRIX_SCENARIO_TIMEOUT_MS },
     (scenario, context) => {
       const run = expectScenarioEndsOnItsDerivedCode(scenario, context);
       expect(run.exitCode).toBe(exitCodeTheContractGives(run.document));

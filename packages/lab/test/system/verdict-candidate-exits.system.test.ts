@@ -47,5 +47,5 @@ describe('the candidate verdict run on a clean subject', () => {
     if (!result.ok) throw new Error(`unexpected refusal: ${result.refusal}`);
     const rows = result.envelopes[0]?.body.rows ?? [];
     expect(rows.map((row) => [row.name, row.outcome, row.exitCode])).toEqual(CI_VERBS.map((name) => [name, 'exited', 0]));
-  }, 30_000);
+  });
 });

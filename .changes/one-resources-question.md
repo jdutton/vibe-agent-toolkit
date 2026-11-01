@@ -13,7 +13,8 @@
     `vat resources validate` is 1.58× (3.32 s vs 2.10 s).
   - On a large adopter monorepo it is 1.01× (16.2 s vs 16.0 s). The `vat skills validate` that
     follows it falls from 4.9 s to 2.7 s, because it now hits what validate stored. A cold
-    `vat validate` (19.6 s) is faster than rc.11's separate validate, check and skills runs (28.9 s).
+    `vat validate` (19.6 s) is faster than rc.11's separate validate, check and skills runs
+    (28.9 s).
 
   A warm run is a store hit. With the store off (`VAT_PROJECTION_STORE=off`) or outside a git
   repository there is no warm run, so every membership run pays this cold cost. Peak memory on
@@ -30,8 +31,8 @@
 - **No success banner over a run that examined nothing.** `vat skills validate` on a config with no
   `skills:` block, or include globs matching nothing, printed `✅ All validations passed` directly
   above its refusal and exit 1; `vat skills build` and `vat build` had the same shape. Each now
-  prints `⚠️ Not a verdict: nothing was examined` there instead, and `vat validate`'s opening line no
-  longer starts with `✅` before anything has run.
+  prints `⚠️ Not a verdict: nothing was examined` there instead, and `vat validate`'s opening
+  line no longer starts with `✅` before anything has run.
 
 - **A store hit no longer hides refused content.** The line naming files declined as not text,
   unreadable or too large, or mis-decoded, is now read from the population's stored rows, so

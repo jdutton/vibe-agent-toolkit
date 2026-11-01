@@ -37,8 +37,7 @@ describe.skipIf(!NET_AVAILABLE)('vat audit <git-url> — system test', () => {
       expect(report.data.provenance?.commit).toMatch(/^[a-f0-9]{40}$/);
       expect(result.stderr).toMatch(PROVENANCE_LINE);
       expect(result.status).toBe(ExitCode.FINDINGS);
-    },
-    60_000
+    }
   );
 
   it(
@@ -51,7 +50,6 @@ describe.skipIf(!NET_AVAILABLE)('vat audit <git-url> — system test', () => {
       expect(report.data.root).toBeNull();
       expect(result.stderr).toMatch(PROVENANCE_LINE);
       expect(result.status).toBe(ExitCode.FINDINGS);
-    },
-    60_000
+    }
   );
 });

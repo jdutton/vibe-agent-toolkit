@@ -73,7 +73,7 @@ The table is **generated** from each rule's `meta.docs` by `bun run generate:cla
 **The auto-fix writes the import to the subpath in that column**, not to the barrel — `--fix` on a raw `path.join()` inserts `import { safePath } from '@vibe-agent-toolkit/utils/path'`. A file that already reaches the helper through the barrel keeps its existing import and only has the call rewritten: adding a second binding of the same name is a `SyntaxError`, not a redundant import.
 
 <!-- gen:eslint-rules -->
-40 rules; 6 auto-fix. `configs.recommended` enables 17 of them (15 at `error`, 2 at `warn`); `—` in the last column means the rule ships but must be enabled by name.
+41 rules; 6 auto-fix. `configs.recommended` enables 17 of them (15 at `error`, 2 at `warn`); `—` in the last column means the rule ships but must be enabled by name.
 
 #### Path handling
 
@@ -146,6 +146,7 @@ The table is **generated** from each rule's `meta.docs` by `bun run generate:cla
 
 | Rule | Bans | Use instead | Subpath | Fix | `recommended` |
 |---|---|---|---|---|---|
+| `no-literal-test-timeout` | `it(name, fn, 60_000)`, `beforeAll(fn, 300_000)`, `{ timeout: 30_000 }` | the tier default, or a multiple of a value the runner config provides | — |  | — |
 | `no-test-scoped-functions` | helper functions declared inside `describe`/`it` | module scope | — |  | — |
 | `prefer-startswith-over-regex` | `/^foo/.test(s)`, `` /^\*glob/.test(s) ``, `const RE = /^foo/; RE.test(s)` | `s.startsWith('foo')` | — |  | `error` |
 | `require-justified-skip` | unannotated `it.skip`/`it.todo`, tautological assertions, empty test bodies | a `SKIP(#123): reason` annotation, or a real assertion | — |  | — |
@@ -281,6 +282,8 @@ It is latent by construction, and worse, **it is invisible to any tree that has 
 Every rule marked `—` in the table ships without riding in `recommended`, and each states its reason beside its own `recommended: false` in `eslint/rules/<rule>.cjs`. The reasons fall into a few families:
 
 **Test-style opinions** — `no-test-scoped-functions` (where a helper may be declared) and `require-justified-skip` (the annotation grammar for a disabled test). Neither is a portability or correctness fact, and installing this package for `safePath.join()` should not also import someone else's test conventions. Both are worth turning on deliberately.
+
+**Names a value only your runner config can provide** — `no-literal-test-timeout`. Its remedy is a multiple of the tier timeout your vitest config hands its tests (`provide`/`inject`); this pack cannot supply that value, so the rule cannot ride in `recommended`.
 
 **Unsound, pending a rewrite** — `no-unsafe-root-join`. It keys on whether an identifier's *name* ends in `root` rather than on whether any segment is caller-controlled, which makes it noisy and blind at the same time. Measured against 4,670 files of real adopter source: 108 findings, none autofixable. Verified behaviour:
 

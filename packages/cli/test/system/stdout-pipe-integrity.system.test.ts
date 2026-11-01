@@ -88,5 +88,5 @@ describe('YAML output survives a pipe (system)', () => {
     // so comparing the two is what catches a partial write.
     expect(parsed.examined).toBe(FILE_COUNT);
     expect(parsed.data.files).toHaveLength(FILE_COUNT);
-  }, 120_000);
+  });
 });

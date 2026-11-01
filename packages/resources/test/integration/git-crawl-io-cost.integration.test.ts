@@ -81,7 +81,7 @@ import {
 import {
   runGitOrThrow,
 } from '@vibe-agent-toolkit/utils/git';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 
 /**
  * Every way a file's bytes are read. A read that goes through a handle
@@ -432,7 +432,7 @@ beforeAll(() => {
 
   grownCrawl = netOfImports(measure('enumerate'), importOnly);
   grownExtent = netOfImports(measure('extent'), importOnly);
-}, 300_000);
+}, inject('tierHookTimeout') * 5);
 
 afterAll(() => {
   if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true });

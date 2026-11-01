@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config';
 
-import { inlineDeps, maxTestWorkers, rootSerialReporters, unitExecArgv, unitPool, unitTestTimeout } from './vitest.shared.js';
+import { inlineDeps, maxTestWorkers, rootSerialReporters, unitExecArgv, unitPool, unitTierTimeouts } from './vitest.shared.js';
 
 export default defineConfig({
   test: {
@@ -18,7 +18,7 @@ export default defineConfig({
       '**/*.integration.test.ts', // Integration tests run separately
       '**/*.system.test.ts', // System tests run separately (e2e, longer running)
     ],
-    testTimeout: unitTestTimeout,
+    ...unitTierTimeouts,
     // Shared with every package's own config — see `inlineDeps`.
     server: { deps: { inline: inlineDeps } },
     // See `createUnitTestConfig` in vitest.shared.ts for why this is set —

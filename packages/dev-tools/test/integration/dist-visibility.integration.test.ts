@@ -23,7 +23,7 @@ import { delimiter } from 'node:path';
 import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import { spawnHardened } from '@vibe-agent-toolkit/utils/process';
 import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, inject, it } from 'vitest';
 
 
 const TSC_CLEAN_BUILD = safePath.resolve(import.meta.dirname, '../../src/tsc-clean-build.ts');
@@ -199,7 +199,7 @@ describe('dist visibility during a rebuild', () => {
     const violations = await sampleDuringRebuild(fixture);
 
     expect(violations).toEqual([]);
-  }, 120_000);
+  }, inject('tierTestTimeout') * 2);
 
   it('never exposes a missing or partial barrel while a changed package is rebuilt', async () => {
     await buildOnce(fixture.root);
@@ -211,5 +211,5 @@ describe('dist visibility during a rebuild', () => {
     const violations = await sampleDuringRebuild(fixture);
 
     expect(violations).toEqual([]);
-  }, 120_000);
+  }, inject('tierTestTimeout') * 2);
 });

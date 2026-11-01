@@ -65,7 +65,7 @@ describe('vat corpus scan — system (local sources)', () => {
     const [entry] = report.data.entries;
     expect(entry).toMatchObject({ name: 'plugin', review: 'skipped' });
     expect(entry?.outputPath).toMatch(/^\d{4}-\d{2}-\d{2}-[^/]+\/plugin-audit\.yaml$/);
-  }, 60_000);
+  });
 
   it('reports an entry it could not audit as a finding, and still exits 0', () => {
     const { status, stdout } = scanLocal({ gone: 'never-created' });
@@ -76,7 +76,7 @@ describe('vat corpus scan — system (local sources)', () => {
     if (report.status === 'error') throw new Error('unreachable');
     expect(report.data.entries).toEqual([{ name: 'gone', audit: 'unloadable', review: 'skipped', outputPath: null }]);
     expect(status).toBe(0);
-  }, 60_000);
+  });
 });
 
 (NET ? describe : describe.skip)('vat corpus scan — system (network)', () => {
@@ -106,7 +106,6 @@ describe('vat corpus scan — system (local sources)', () => {
       const summaryPath = safePath.join(outDir, firstRun, 'summary.yaml');
       const summary = yaml.parse(readFileSync(summaryPath, 'utf-8')) as Record<string, unknown>;
       expect(summary.plugins as unknown[]).toHaveLength(1);
-    },
-    60_000
+    }
   );
 });

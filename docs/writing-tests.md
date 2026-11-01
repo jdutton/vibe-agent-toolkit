@@ -34,7 +34,14 @@ packages/my-package/
 |------|----------|---------|---------------------|----------------------------|------------------|--------------|
 | **Unit** | `test/*.test.ts` | Test functions/classes in isolation | < 100 ms | 1,000 ms | 15 s (150 s Windows) | Mock external deps |
 | **Integration** | `test/integration/*.integration.test.ts` | Test multiple modules together | < 5 s | 5,000 ms | 60 s (15 min Windows) | Real file system, DBs |
-| **System** | `test/system/*.system.test.ts` | End-to-end workflows | < 30 s | 30,000 ms | 120 s | Real external services |
+| **System** | `test/system/*.system.test.ts` | End-to-end workflows | < 30 s | 30,000 ms | 120 s (30 min Windows) | Real external services |
+
+A per-test or per-hook timeout in the integration and system tiers is **omitted** (the tier
+default applies) or written as a **multiple** of the value the tier provides —
+`inject('tierTestTimeout') * 4`, `inject('tierHookTimeout') * 2`, with `inject` from `vitest`.
+Never a millisecond literal: it replaces the platform-scaled default with one number for every
+machine, and a `60_000` that was 1× the Unix default was 1/15 of the Windows one.
+(enforced by: `local/no-literal-test-timeout`)
 
 ### The per-file duration budget
 

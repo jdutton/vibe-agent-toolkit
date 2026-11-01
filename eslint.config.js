@@ -1101,6 +1101,24 @@ export default [
     },
   },
 
+  // ONE timeout contract for the integration and system tiers: a per-test or
+  // per-hook timeout is omitted (the tier's platform-scaled default applies) or
+  // is a multiple of the value the tier provides — `inject('tierTestTimeout')`,
+  // `inject('tierHookTimeout')` (vitest.shared.ts). A literal `60_000` was 1× the
+  // Unix default and 1/15 of the Windows one, and timed out there on runner
+  // speed alone. No backlog: every site was migrated the day this was enabled.
+  {
+    files: [
+      'packages/*/test/integration/**/*.ts',
+      'packages/*/test/system/**/*.ts',
+      'packages/*/{src,test}/**/*.integration.test.ts',
+      'packages/*/{src,test}/**/*.system.test.ts',
+    ],
+    rules: {
+      'local/no-literal-test-timeout': 'error',
+    },
+  },
+
   // Test FILES only — Sonar's main scope is every file except `*.test.ts`, so a
   // test body may await in a loop (a scenario that must run step by step) and
   // `test/**` helpers stay held to both rules. See the main block.

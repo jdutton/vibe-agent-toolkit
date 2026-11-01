@@ -61,5 +61,5 @@ describe('bar 3 over a subject with a real finding', () => {
     expect(broken.map((key) => key.line)).toEqual(broken.map(() => 3));
     // …and validate reports every key of union(B), spelled identically.
     expect(right.keys).toEqual(expect.arrayContaining([...left.keys]));
-  }, 30_000);
+  });
 });
