@@ -79,7 +79,9 @@ validation:
 
     # Checks over what the Build phase wrote, run concurrently. No step here may
     # write anything a sibling reads (not enforced): a step that builds goes above,
-    # and a `vat` step goes in the next phase.
+    # and a `vat` step goes in the next phase. When one fails, vibe-validate 0.20
+    # kills the rest and may name a killed sibling as the failure: read every
+    # step's printed output, not `failedStep` (docs/contributing/traps.md).
     - name: 'Checks'
       parallel: true
       steps:
@@ -148,13 +150,15 @@ validation:
 
     # Unit tests get the machine to themselves: vitest already runs a worker per
     # core, and sharing them with the Checks phase starved a 15 s test into a
-    # timeout (measured at load 67). `--only` keeps turbo from re-entering the
-    # build the Build phase already ran.
+    # timeout (measured at load 67). No `--only`: it drops the build dependencies
+    # from each test task's turbo hash, so a package's tests would replay a cached
+    # pass after a package it depends on changed. Re-entering the build the Build
+    # phase ran is a run of cache hits.
     - name: 'Unit Tests'
       parallel: false
       steps:
         - name: 'Unit tests'
-          command: 'bun run test:unit --only'
+          command: 'bun run test:unit'
           description: 'Unit tests only. Coverage is collected in a dedicated CI job (.github/workflows/coverage.yml) so it does not slow local validation or the Windows CI matrix. Full tier only: run `bun run test:unit` when the change calls for it.'
           runScope: ci
 

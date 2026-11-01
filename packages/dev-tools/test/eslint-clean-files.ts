@@ -21,6 +21,26 @@ export function repoEslint(options: Omit<ESLint.Options, 'cache' | 'cacheLocatio
   return new ESLint({ ...options, cacheLocation: safePath.join(normalizedTmpdir(), 'vat-test-eslintcache') });
 }
 
+/** The two rules that carry the repo's import bans: the static half and the dynamic half. */
+export const BAN_RULES = ['no-restricted-imports', 'no-restricted-syntax'] as const;
+
+/**
+ * A function that lints `code` as if it were the file `relative` of `repoRoot`, running only
+ * {@link BAN_RULES}, and returns each finding as `rule: message`. The two rules read syntax alone,
+ * so no program is built and the file need not exist on disk.
+ */
+export function banLinter(repoRoot: string): (relative: string, code: string) => Promise<string[]> {
+  const eslint = repoEslint({
+    cwd: repoRoot,
+    ruleFilter: ({ ruleId }) => (BAN_RULES as readonly string[]).includes(ruleId),
+    overrideConfig: [{ files: ['**/*.ts', '**/*.cts'], languageOptions: { parserOptions: { project: null, projectService: false } } }],
+  });
+  return async (relative, code) => {
+    const [result] = await eslint.lintText(code, { filePath: safePath.join(repoRoot, relative) });
+    return (result?.messages ?? []).map((message) => `${message.ruleId ?? 'fatal'}: ${message.message}`);
+  };
+}
+
 /**
  * How many messages `isFinding` matched in each of `files`, keyed by the
  * repo-relative path (a clean file is present, at 0).

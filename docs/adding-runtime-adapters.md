@@ -525,10 +525,10 @@ cd packages/runtime-{name}
 bun run demo
 
 # Full validation
-vv validate
+bun run validate
 ```
 
-**CRITICAL: `duplication-check` must pass with 0 clones before committing.**
+**CRITICAL: `duplication-check` must pass with 0 clones before pushing** (the full gate and CI run it; the commit hook does not).
 
 ## 7. Common Pitfalls
 

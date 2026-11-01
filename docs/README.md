@@ -119,7 +119,7 @@ bun run lint              # Lint code
 bun run typecheck         # Type checking
 
 # Testing (do NOT use 'bun test' directly)
-bun run validate          # Full validation — the gate (vv validate is the same binary)
+bun run validate          # Full validation — the gate (bare `vv validate` runs only the commit tier)
 bun run test:unit         # Unit tests only
 bun run test:watch        # Watch mode for development
 bun run test:integration  # Integration tests

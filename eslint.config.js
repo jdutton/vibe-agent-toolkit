@@ -707,37 +707,46 @@ const ARCHIVE_LIBRARY_SUBPATH_BAN = [{ group: ['tar/**', 'adm-zip/**'], message:
 // an expression, a `createRequire` result bound to a name other than `require`): nothing here
 // pretends to. The barrier for those is that only `packages/utils` declares the two packages.
 const ARCHIVE_LIBRARY_SPECIFIER = String.raw`/^(adm-zip|tar)(\u002f|$)/`;
-/** A call argument, or an import source, at `path`: a string literal, or a template literal with no expression. */
-const archiveSpecifierAt = (path) => [
-  `[${path}.value=${ARCHIVE_LIBRARY_SPECIFIER}]`,
-  `[${path}.type='TemplateLiteral'][${path}.expressions.length=0][${path}.quasis.0.value.cooked=${ARCHIVE_LIBRARY_SPECIFIER}]`,
+/** A call argument, or an import source, at `path` matching `pattern`: a string literal, or a template literal with no expression. */
+const specifierAt = (path, pattern) => [
+  `[${path}.value=${pattern}]`,
+  `[${path}.type='TemplateLiteral'][${path}.expressions.length=0][${path}.quasis.0.value.cooked=${pattern}]`,
 ];
-const ARCHIVE_LIBRARY_RESTRICTED_SYNTAX = [
-  ...archiveSpecifierAt('source').map((specifier) => `ImportExpression${specifier}`),
-  ...archiveSpecifierAt('arguments.0').map((specifier) => `CallExpression[callee.name='require']${specifier}`),
-  ...archiveSpecifierAt('arguments.0').map((specifier) => `CallExpression[callee.type='CallExpression'][callee.callee.name='createRequire']${specifier}`),
-].map((selector) => ({ selector, message: ARCHIVE_LIBRARY_MESSAGE }));
+/** `import()`, `require()` and `createRequire(...)()` of a specifier matching `pattern`, each reported with `message`. */
+const restrictedSpecifierSyntax = (pattern, message) => [
+  ...specifierAt('source', pattern).map((specifier) => `ImportExpression${specifier}`),
+  ...specifierAt('arguments.0', pattern).map((specifier) => `CallExpression[callee.name='require']${specifier}`),
+  ...specifierAt('arguments.0', pattern).map((specifier) => `CallExpression[callee.type='CallExpression'][callee.callee.name='createRequire']${specifier}`),
+].map((selector) => ({ selector, message }));
+const ARCHIVE_LIBRARY_RESTRICTED_SYNTAX = restrictedSpecifierSyntax(ARCHIVE_LIBRARY_SPECIFIER, ARCHIVE_LIBRARY_MESSAGE);
 
 // A programmatic ESLint with caching off DELETES the file at its cache location
 // on `lintFiles` — by default `<cwd>/.eslintcache`, which is `bun run lint`'s cache
 // when `cwd` is a real tree. Tests construct one only through `repoEslint`, which
-// points the location at a temp path. Type imports stay allowed.
-const ESLINT_INSTANCE_FILES = [
+// points the location at a temp path. Type imports stay allowed, and so do `Linter` and
+// `RuleTester`, statically. A dynamic `import()` or `require` of `eslint` is banned outright: it
+// yields the whole module, `ESLint` included, and a lint rule cannot tell which member is used.
+// `eslint/use-at-your-own-risk` is banned whole: it exports `LegacyESLint` and `FlatESLint`.
+export const ESLINT_INSTANCE_FILES = [
   'packages/dev-tools/test/eslint-clean-files.ts',
   // Lints throwaway `mkdtemp` projects: its `cwd` holds no cache to delete.
   'packages/utils/test/integration/eslint-recommended-config.integration.test.ts',
 ];
 const ESLINT_INSTANCE_MESSAGE = 'Construct an ESLint only through repoEslint (packages/dev-tools/test/eslint-clean-files.ts): with caching off, lintFiles deletes <cwd>/.eslintcache.';
-const ESLINT_INSTANCE_BAN = [{
-  name: 'eslint',
-  importNames: ['ESLint', 'LegacyESLint', 'FlatESLint', 'loadESLint'],
-  allowTypeImports: true,
-  message: ESLINT_INSTANCE_MESSAGE,
-}];
-// The same ban for `await import('eslint')`, which `no-restricted-imports` cannot see.
-const ESLINT_INSTANCE_RESTRICTED_SYNTAX = [
-  { selector: "ImportExpression[source.value='eslint']", message: ESLINT_INSTANCE_MESSAGE },
+const ESLINT_INSTANCE_BAN = [
+  // `default` is the CommonJS module object, so `import E from 'eslint'; new E.ESLint()`.
+  { name: 'eslint', importNames: ['ESLint', 'loadESLint', 'default'], allowTypeImports: true, message: ESLINT_INSTANCE_MESSAGE },
+  { name: 'eslint/use-at-your-own-risk', allowTypeImports: true, message: ESLINT_INSTANCE_MESSAGE },
 ];
+// The same ban for `import()`, `require` and `createRequire`, which `no-restricted-imports` cannot see.
+// TypeScript's `import eslint = require('eslint')` names no member, so `importNames` cannot see it.
+const ESLINT_INSTANCE_SPECIFIER = String.raw`/^eslint(\u002fuse-at-your-own-risk)?$/`;
+const ESLINT_INSTANCE_RESTRICTED_SYNTAX = [
+  ...restrictedSpecifierSyntax(ESLINT_INSTANCE_SPECIFIER, ESLINT_INSTANCE_MESSAGE),
+  { selector: `TSImportEqualsDeclaration[moduleReference.expression.value=${ESLINT_INSTANCE_SPECIFIER}]`, message: ESLINT_INSTANCE_MESSAGE },
+];
+// Every file carries both dynamic halves; only the archive module and ESLINT_INSTANCE_FILES drop one.
+const RESTRICTED_SPECIFIER_SYNTAX = [...ARCHIVE_LIBRARY_RESTRICTED_SYNTAX, ...ESLINT_INSTANCE_RESTRICTED_SYNTAX];
 
 const noRestrictedImportsConfig = ['error', { paths: [...YAML_LIBRARY_BAN, ...ARCHIVE_LIBRARY_BAN, ...ESLINT_INSTANCE_BAN], patterns: ARCHIVE_LIBRARY_SUBPATH_BAN }];
 
@@ -896,9 +905,9 @@ export default [
       ...generalRulesConfig,
 
       'no-restricted-imports': noRestrictedImportsConfig,
-      // The `import()` / `require` half of the archive-library ban, for every TS file. The
-      // `src`-only block below restates it beside the error-contract selectors.
-      'no-restricted-syntax': ['error', ...ARCHIVE_LIBRARY_RESTRICTED_SYNTAX, ...ESLINT_INSTANCE_RESTRICTED_SYNTAX],
+      // The `import()` / `require` half of the archive-library and ESLint-instance bans, for every
+      // TS file. The `src`-only block below restates it beside the error-contract selectors.
+      'no-restricted-syntax': ['error', ...RESTRICTED_SPECIFIER_SYNTAX],
 
       // TypeScript-specific (use @typescript-eslint variant of no-unused-vars)
       'no-unused-vars': 'off',
@@ -989,7 +998,7 @@ export default [
     files: [PRODUCT_SOURCE_TS],
     rules: {
       'local/explicit-zod-strictness': ['error', { allowDefaultStripIn: [] }],
-      'no-restricted-syntax': ['error', ...ERROR_CONTRACT_RESTRICTED_SYNTAX, ...ARCHIVE_LIBRARY_RESTRICTED_SYNTAX, ...ESLINT_INSTANCE_RESTRICTED_SYNTAX],
+      'no-restricted-syntax': ['error', ...ERROR_CONTRACT_RESTRICTED_SYNTAX, ...RESTRICTED_SPECIFIER_SYNTAX],
     },
   },
   // The archive module: the one place `tar` and `adm-zip` may be imported (see
@@ -1007,6 +1016,7 @@ export default [
     files: ESLINT_INSTANCE_FILES,
     rules: {
       'no-restricted-imports': ['error', { paths: [...YAML_LIBRARY_BAN, ...ARCHIVE_LIBRARY_BAN], patterns: ARCHIVE_LIBRARY_SUBPATH_BAN }],
+      'no-restricted-syntax': ['error', ...ARCHIVE_LIBRARY_RESTRICTED_SYNTAX],
     },
   },
   // `existsSync` folds "could not look" into "absent", over product `src/` (the rule
@@ -1025,10 +1035,10 @@ export default [
     },
   },
   // The base class itself is the one legitimate `extends Error` in `src`: the error-contract
-  // selectors are lifted for it, and the archive-library ban every other file carries is not.
+  // selectors are lifted for it, and the specifier bans every other file carries are not.
   {
     files: ['packages/utils/src/errors/vat-error.ts'],
-    rules: { 'no-restricted-syntax': ['error', ...ARCHIVE_LIBRARY_RESTRICTED_SYNTAX] },
+    rules: { 'no-restricted-syntax': ['error', ...RESTRICTED_SPECIFIER_SYNTAX] },
   },
 
   // Plain JS / CJS / MJS files (eslint configs, dev-tools scripts, the rule
@@ -1065,7 +1075,7 @@ export default [
       ...generalRulesConfig,
 
       'no-restricted-imports': noRestrictedImportsConfig,
-      'no-restricted-syntax': ['error', ...ARCHIVE_LIBRARY_RESTRICTED_SYNTAX, ...ESLINT_INSTANCE_RESTRICTED_SYNTAX],
+      'no-restricted-syntax': ['error', ...RESTRICTED_SPECIFIER_SYNTAX],
 
       // JS-only: use the core no-unused-vars (the TS block uses the
       // @typescript-eslint variant instead).

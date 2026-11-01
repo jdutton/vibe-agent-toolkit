@@ -23,6 +23,16 @@ print `❌ Validation failed` and still **exit 0**. `bun run validate` is exempt
 **Remedy:** `bun run validate` (never bare `vv validate` for a verdict); run the failing file alone
 to get its real cost before touching any timeout.
 
+### A red parallel phase names the wrong step
+
+When a step in a `parallel: true` phase fails, vibe-validate 0.20 kills its siblings and reports the
+first rejected step **in config order** — and a killed step counts as rejected. A duplication red
+can be summarised as "Dependency check failed". The phase-level `failFast` field is accepted and
+ignored.
+**Tell:** the named step's output shows it was killed (no error of its own, cut off mid-run).
+**Remedy:** read every step's printed capture (CI's failed-step output prints them all); keep
+long-running or blame-sensitive steps (ESLint) in a serial phase.
+
 ### `--force` busts vibe-validate's cache, not turbo's
 
 Every test step is `turbo run test:*`, and turbo caches independently. `vv validate --force` can

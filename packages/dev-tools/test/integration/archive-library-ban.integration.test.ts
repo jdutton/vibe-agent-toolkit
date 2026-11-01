@@ -14,28 +14,17 @@
  * ban are run, so no type information is needed and a fixture need not exist on disk.
  */
 
-import { resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
+import { resolveFromImportMeta } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { repoEslint } from '../eslint-clean-files.js';
+import { BAN_RULES, banLinter } from '../eslint-clean-files.js';
 
 const REPO_ROOT = resolveFromImportMeta(import.meta.url, '..', '..', '..', '..');
 
-const STATIC_BAN = 'no-restricted-imports';
-const DYNAMIC_BAN = 'no-restricted-syntax';
-
-const eslint = repoEslint({
-  cwd: REPO_ROOT,
-  ruleFilter: ({ ruleId }) => ruleId === STATIC_BAN || ruleId === DYNAMIC_BAN,
-  // The two rules read syntax alone: no program is built for a fixture that is not on disk.
-  overrideConfig: [{ files: ['**/*.ts', '**/*.cts'], languageOptions: { parserOptions: { project: null, projectService: false } } }],
-});
+const [STATIC_BAN, DYNAMIC_BAN] = BAN_RULES;
 
 /** The ban's findings on `code`, linted as if it were the file `relative` of this repo: each as `rule: message`. */
-async function banFindings(relative: string, code: string): Promise<string[]> {
-  const [result] = await eslint.lintText(code, { filePath: safePath.join(REPO_ROOT, relative) });
-  return (result?.messages ?? []).map((message) => `${message.ruleId ?? 'fatal'}: ${message.message}`);
-}
+const banFindings = banLinter(REPO_ROOT);
 
 const STATIC_TAR = "import * as tar from 'tar';\nexport const list = tar.list;\n";
 const STATIC_ZIP = "import AdmZip from 'adm-zip';\nexport const Zip = AdmZip;\n";

@@ -149,8 +149,8 @@ bun run build
 ### Development
 
 ```bash
-# Run full validation (recommended)
-bunx vv validate
+# Run full validation (recommended) — the full tier, as CI runs it
+bun run validate
 
 # Or run test suites individually:
 bun run test:unit          # Unit tests only
@@ -370,7 +370,7 @@ Minimum thresholds enforced:
 
 Uses jscpd with a baseline approach:
 - Existing duplication is baselined
-- New duplication blocks commits
+- New duplication fails the full gate (`bun run validate`, CI)
 - Update baseline: `bun run duplication-update-baseline`
 
 ### TypeScript

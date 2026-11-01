@@ -159,7 +159,7 @@ the coverage job in CI — never in a turbo lane; not on Windows).
   `CI=1` (vibe-validate's only `runScope` switch) and `--force` (the tree-hash cache records a
   skipped step as passed, so it cannot tell the tiers apart).
 - **Local lint is cached; CI lint is cold.** A type-aware rule reads other files, and ESLint's cache
-  keys only the file's own content, so a local lint can replay a clean verdict after a change
+  keys only the file's own metadata (mtime and size), so a local lint can replay a clean verdict after a change
   elsewhere (an `async` signature reds an unchanged caller). CI's fresh checkout has no cache.
   Delete `.eslintcache` to reproduce a CI-only lint red. (not enforced)
 - **A green commit is NOT a green PR.** Run `bun run validate` before pushing; CI runs the full
