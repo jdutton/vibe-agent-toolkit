@@ -64,7 +64,6 @@ function boundSource(
         return Promise.resolve({
           paths: names.map((name) => safePath.join(root, name)),
           conditions: [],
-          outcome: { population: 'derived', stored: 'no-store' },
         });
       },
     },

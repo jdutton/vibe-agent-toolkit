@@ -647,9 +647,10 @@ Output Fields (the shared report envelope):
               in its files; {} when the project configures none
   data.population:
               'store' or 'derived' -- whether the membership was served from
-              the projection store or derived this run. null when nothing was
-              populated from or into the store: the walk lane enumerated, or
-              the projection lane enumerated no root
+              the projection store or derived this run. null when the store
+              did not answer it: the walk lane enumerated, a crawl declined
+              the projection for some root and walked it, or the projection
+              lane enumerated no root
 
   examined: 0 is never a pass. A run that validated no resource (a
   declared --collection that matched no file, a path with no markdown, an enumeration

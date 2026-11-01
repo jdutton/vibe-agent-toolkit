@@ -91,7 +91,7 @@ import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { CollectionConfig } from '../schemas/project-config.js';
-import type { RealizationConditionRow } from '../schemas/projection-resources.js';
+import { RealizationConditionRowSchema, type RealizationConditionRow } from '../schemas/projection-resources.js';
 import type { JsonValue } from '../schemas/projection-shared.js';
 
 import { ContributorRegistry } from './contributor.js';
@@ -198,12 +198,6 @@ export interface ResourceEnumeration {
   readonly paths: readonly string[];
   /** Population-time conditions recorded while enumerating. */
   readonly conditions: readonly RealizationConditionRow[];
-  /**
-   * Whether the store served this enumeration — `populate()`'s own outcome,
-   * carried out of the projection it was built in, for the reason
-   * {@link conditions} is.
-   */
-  readonly outcome: PopulationOutcome;
 }
 
 /**
@@ -232,6 +226,13 @@ export function combineOutcomes(outcomes: readonly PopulationOutcome[]): Populat
 export interface ResourcePopulation extends ResourceEnumeration {
   /** Which enumerator ran — the instance's own kind, not the env's request. */
   readonly extentSource: CrawlSourceKind;
+  /**
+   * Whether the store served this population — `populate()`'s own outcome,
+   * carried out of the projection it was built in. Not on
+   * {@link ResourceEnumeration}: the registry has no use for it, and the
+   * population source that called this is what reports it.
+   */
+  readonly outcome: PopulationOutcome;
 }
 
 /**
@@ -467,15 +468,7 @@ export async function buildResourcePopulation(options: {
   // consumer's call (the registry surfaces every one as a finding, and severity
   // overrides are the adopter's), and a filter at this seam would be a second,
   // quieter policy nobody configured.
-  //
-  // Both lists are SORTED, because a stored extent comes back in SQLite's order,
-  // which carries no `ORDER BY` guarantee: unsorted, a warm run published the
-  // same findings as the cold run in a different order.
-  const conditions = projection.realizationConditions.toSorted(
-    (left, right) => compareCodeUnits(left.code, right.code) || compareCodeUnits(left.path, right.path)
-      || compareCodeUnits(left.extentId, right.extentId) || compareCodeUnits(left.message, right.message),
-  );
-  return { paths: paths.toSorted(compareCodeUnits), conditions, outcome, extentSource: source.kind };
+  return { ...canonicalEnumeration(paths, projection.realizationConditions), outcome, extentSource: source.kind };
 }
 
 
@@ -542,3 +535,49 @@ export function buildResourceProjection(options: TreePopulationOptions): Promise
     ...populationOracles(options),
   });
 }
+
+/**
+ * Every column of a condition row, `code` and `path` first: the order
+ * {@link canonicalEnumeration} compares them in.
+ */
+const CONDITION_ORDER = [
+  'code', 'path',
+  ...RealizationConditionRowSchema.keyof().options.filter((column) => column !== 'code' && column !== 'path'),
+] as const;
+
+/**
+ * One condition's sort key: every column, in {@link CONDITION_ORDER}, so two rows
+ * share a key only when they are the same row.
+ *
+ * @param row - The condition
+ * @returns A string that orders it among its siblings
+ */
+function conditionSortKey(row: RealizationConditionRow): string {
+  return JSON.stringify(CONDITION_ORDER.map((column) => row[column]));
+}
+
+/**
+ * A population's members in the ONE order every lane publishes them in: paths by
+ * code unit, conditions by `(code, path, …every other column)`.
+ *
+ * Sorted, because a stored extent comes back in SQLite's order, which carries no
+ * `ORDER BY` guarantee: unsorted, a warm run published the same findings as the
+ * cold run in a different order. Total over the row, so no two distinct rows tie
+ * and fall back to whichever order arrived.
+ *
+ * @param paths - The admitted members' absolute paths
+ * @param conditions - The population's conditions
+ * @returns New, sorted arrays; the inputs are not reordered
+ */
+function canonicalEnumeration(
+  paths: readonly string[],
+  conditions: readonly RealizationConditionRow[],
+): ResourceEnumeration {
+  return {
+    paths: paths.toSorted(compareCodeUnits),
+    conditions: conditions.toSorted((left, right) => compareCodeUnits(conditionSortKey(left), conditionSortKey(right))),
+  };
+}
+
+/** Test-only seam — see `docs/architecture/README.md` "`__internal`". */
+export const __internal = { canonicalEnumeration } as const;

@@ -53,8 +53,8 @@ stderr.
   every `data.files[].path` is relative to it.
 - `data.collections` — resources per configured collection (`{}` when none).
 
-`data.lane` names which enumerator produced the population — `walk` (the default
-crawl) or `projection` (`VAT_RESOURCES_CRAWL=projection`). Two scans of one tree
+`data.lane` names which enumerator produced the population — `projection` (the
+default) or `walk` (`VAT_RESOURCES_CRAWL=walk`). Two scans of one tree
 that report different populations are only interpretable if each says which lane
 produced it, so the field is derived from the load that ran rather than read back
 from the environment. `data.extentSource` names the projection lane's own

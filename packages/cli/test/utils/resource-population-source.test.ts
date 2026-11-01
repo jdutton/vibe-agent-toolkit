@@ -16,6 +16,7 @@
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
+import type { ResourcePopulationSource } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -28,7 +29,7 @@ import {
 } from '../../src/utils/resource-loader.js';
 
 /** Observers that ignore what they are told — for the cases about something else. */
-const IGNORE = { observeExtentSource: (): void => undefined, observePopulation: (): void => undefined };
+const IGNORE = { observePopulation: (): void => undefined };
 
 /** Observers that record every population observation, so "exactly once" is assertable. */
 function recording(): { observed: PopulationObservation[]; observers: typeof IGNORE } {
@@ -36,12 +37,26 @@ function recording(): { observed: PopulationObservation[]; observers: typeof IGN
   return {
     observed,
     observers: {
-      observeExtentSource: () => undefined,
       observePopulation: (observation) => {
         observed.push(observation);
       },
     },
   };
+}
+
+/**
+ * Write the guide, run `drive` with the source, and record every observation.
+ *
+ * @param drive - What the crawl does with the source it was handed
+ * @returns Every observation the call made
+ */
+async function observeOverGuide(
+  drive: (source: ResourcePopulationSource | undefined) => Promise<void>,
+): Promise<PopulationObservation[]> {
+  writeFileSync(safePath.join(root, GUIDE_REL), '# guide\n', 'utf-8');
+  const { observed, observers } = recording();
+  await withResourcePopulationSource({ root, ...observers }, drive);
+  return observed;
 }
 
 /** The two fixture members, named once so the writes and the expectation agree. */
@@ -110,13 +125,10 @@ describe('withResourcePopulationSource', () => {
     writeFileSync(safePath.join(root, GUIDE_REL), '# guide\n', 'utf-8');
     process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_PROJECTION;
 
-    const seen: string[] = [];
-    await withResourcePopulationSource(
-      { root, observeExtentSource: (kind) => seen.push(kind), observePopulation: () => undefined },
-      async (source) => source?.enumerate(root, []),
-    );
+    const { observed, observers } = recording();
+    await withResourcePopulationSource({ root, ...observers }, async (source) => source?.enumerate(root, []));
 
-    expect(seen).toEqual(['filesystem']);
+    expect(observed).toEqual([expect.objectContaining({ lane: 'projection', extentSource: 'filesystem' })]);
   });
 
   describe('observes the population exactly once per call', () => {
@@ -139,34 +151,43 @@ describe('withResourcePopulationSource', () => {
       expect(observed).toEqual([{ lane: 'walk' }]);
     });
 
+    it('says the walk answered, with no enumerator, when a crawl enumerated one root and declined another', async () => {
+      const observed = await observeOverGuide(async (source) => {
+        await source?.enumerate(root, []);
+        source?.decline(safePath.join(root, 'elsewhere'));
+      });
+
+      expect(observed).toEqual([{ lane: 'walk' }]);
+    });
+
     it('publishes a null outcome when the projection lane enumerated no root', async () => {
       const { observed, observers } = recording();
 
       await withResourcePopulationSource({ root, ...observers }, async () => undefined);
 
-      expect(observed).toEqual([{ lane: 'projection', outcome: null }]);
+      expect(observed).toEqual([{ lane: 'projection', outcome: null, extentSource: null }]);
     });
 
     it('publishes the one root\'s outcome', async () => {
-      writeFileSync(safePath.join(root, GUIDE_REL), '# guide\n', 'utf-8');
-      const { observed, observers } = recording();
-
-      await withResourcePopulationSource({ root, ...observers }, async (source) => source?.enumerate(root, []));
+      const observed = await observeOverGuide(async (source) => {
+        await source?.enumerate(root, []);
+      });
 
       // A temp tree outside any repository has no store, so the run derived.
-      expect(observed).toEqual([{ lane: 'projection', outcome: { population: 'derived', stored: 'no-store' } }]);
+      expect(observed).toEqual([
+        { lane: 'projection', outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem' },
+      ]);
     });
 
     it('combines two enumerations into ONE observation', async () => {
-      writeFileSync(safePath.join(root, GUIDE_REL), '# guide\n', 'utf-8');
-      const { observed, observers } = recording();
-
-      await withResourcePopulationSource({ root, ...observers }, async (source) => {
+      const observed = await observeOverGuide(async (source) => {
         await source?.enumerate(root, []);
         await source?.enumerate(root, []);
       });
 
-      expect(observed).toEqual([{ lane: 'projection', outcome: { population: 'derived', stored: 'no-store' } }]);
+      expect(observed).toEqual([
+        { lane: 'projection', outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem' },
+      ]);
     });
   });
 });

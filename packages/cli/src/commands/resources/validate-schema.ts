@@ -56,7 +56,8 @@ const ResourcesValidateDataSchema = z.object({
   collections: z.record(z.string(), CollectionSchema),
   population: z.enum(['store', 'derived']).nullable().describe(
     'Whether the membership was served from the projection store (`store`) or derived this run (`derived`).'
-    + ' `null` when nothing was populated from or into the store: the walk lane enumerated (no projection),'
+    + ' `null` when the store did not answer the membership: the walk lane enumerated (no projection);'
+    + ' a crawl declined the projection for a root and walked it, even after enumerating another root;'
     + ' or the projection lane enumerated no root.',
   ),
   /** Present only under `--verbose`: one row per resource validated. */

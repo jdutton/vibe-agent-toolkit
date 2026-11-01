@@ -952,6 +952,7 @@ export {
   type PopulateResult,
   type PopulationCache,
   type PopulationOutcome,
+  type TreePopulationOptions,
 } from './projection/merge.js';
 
 // The one line a user sees when the blob stage declined to derive something.

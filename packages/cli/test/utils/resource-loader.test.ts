@@ -115,6 +115,7 @@ import type { Logger } from '../../src/utils/logger.js';
 // eslint-disable-next-line import/first -- must come after vi.mock calls
 import {
   loadResourcesWithConfig,
+  publishedPopulation,
   RESOURCES_CRAWL_ENV,
   RESOURCES_CRAWL_PROJECTION,
   RESOURCES_CRAWL_WALK,
@@ -167,13 +168,26 @@ function createTestLogger(): { logger: Logger; debugCalls: string[]; warnCalls: 
  * @returns Every observation the load made
  */
 async function observedLoad(): Promise<PopulationObservation[]> {
+  return (await observedLoadResult()).observed;
+}
+
+/**
+ * Load once with no config, keeping the result beside every observation.
+ *
+ * @returns Every observation the load made, and the lane and enumerator it returned
+ */
+async function observedLoadResult(): Promise<{
+  observed: PopulationObservation[];
+  lane: string;
+  extentSource: string | null;
+}> {
   loadConfigMock.mockReturnValue(undefined);
   const { logger } = createTestLogger();
   const observed: PopulationObservation[] = [];
-  await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger, (observation) => {
+  const { lane, extentSource } = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger, (observation) => {
     observed.push(observation);
   });
-  return observed;
+  return { observed, lane, extentSource };
 }
 
 describe('loadResourcesWithConfig', () => {
@@ -459,7 +473,7 @@ describe('loadResourcesWithConfig', () => {
     it('publishes a null outcome when the projection lane enumerated no root', async () => {
       crawlDrives(() => undefined);
 
-      expect(await observedLoad()).toEqual([{ lane: 'projection', outcome: null }]);
+      expect(await observedLoad()).toEqual([{ lane: 'projection', outcome: null, extentSource: null }]);
     });
 
     it('publishes the one root\'s outcome', async () => {
@@ -468,19 +482,53 @@ describe('loadResourcesWithConfig', () => {
         await source.enumerate(PROJECT_ROOT, []);
       });
 
-      expect(await observedLoad()).toEqual([{ lane: 'projection', outcome: HIT }]);
+      expect(await observedLoad()).toEqual([{ lane: 'projection', outcome: HIT, extentSource: 'filesystem' }]);
     });
 
     it('combines two roots into ONE observation, the first that did not hit deciding', async () => {
       buildResourcePopulationMock
-        .mockResolvedValueOnce({ paths: [], conditions: [], outcome: HIT, extentSource: 'filesystem' })
+        .mockResolvedValueOnce({ paths: [], conditions: [], outcome: HIT, extentSource: 'git' })
         .mockResolvedValueOnce({ paths: [], conditions: [], outcome: WRITTEN, extentSource: 'filesystem' });
       crawlDrives(async (source) => {
         await source.enumerate(PROJECT_ROOT, []);
         await source.enumerate(PROJECT_ROOT, []);
       });
 
-      expect(await observedLoad()).toEqual([{ lane: 'projection', outcome: WRITTEN }]);
+      // The enumerator is the FIRST root's, in enumeration order — the project root.
+      expect(await observedLoadResult()).toEqual({
+        observed: [{ lane: 'projection', outcome: WRITTEN, extentSource: 'git' }],
+        lane: 'projection',
+        extentSource: 'git',
+      });
     });
+
+    it('reports the walk with NO enumerator when the crawl enumerated one root and declined another', async () => {
+      buildResourcePopulationMock.mockResolvedValue({ paths: [], conditions: [], outcome: HIT, extentSource: 'git' });
+      crawlDrives(async (source) => {
+        await source.enumerate(PROJECT_ROOT, []);
+        source.decline(SUBTREE_PATH);
+      });
+
+      expect(await observedLoadResult()).toEqual({ observed: [{ lane: 'walk' }], lane: 'walk', extentSource: null });
+    });
+  });
+});
+
+describe('publishedPopulation — what validate publishes for one observation', () => {
+  it.each([
+    { name: 'the walk', observation: { lane: 'walk' }, expected: null },
+    {
+      name: 'a projection that enumerated no root',
+      observation: { lane: 'projection', outcome: null, extentSource: null },
+      expected: null,
+    },
+    { name: 'a hit', observation: { lane: 'projection', outcome: HIT, extentSource: 'git' }, expected: 'store' },
+    {
+      name: 'a derivation',
+      observation: { lane: 'projection', outcome: WRITTEN, extentSource: 'git' },
+      expected: 'derived',
+    },
+  ] as const)('publishes $expected for $name', ({ observation, expected }) => {
+    expect(publishedPopulation(observation)).toBe(expected);
   });
 });

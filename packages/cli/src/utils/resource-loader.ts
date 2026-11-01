@@ -41,13 +41,23 @@ export type ResourceCrawlLane = 'walk' | 'projection';
  *
  * The walk is an explicit signal rather than the absence of a call, so a caller
  * that never hears one is a defect and not a walk. `{ lane: 'walk' }` covers the
- * projection lane not being selected AND a crawl that declined the source; a
- * projection-lane `outcome` is every enumerated root's combined, `null` when no
- * root was enumerated (see `combineOutcomes`).
+ * projection lane not being selected AND a crawl that declined the source — even
+ * one that enumerated another root first — and carries no enumerator, because
+ * part of the population was walked. A projection-lane `outcome` is every
+ * enumerated root's combined (see `combineOutcomes`); `extentSource` is the FIRST
+ * enumerated root's enumerator. Both are `null` when no root was enumerated.
+ *
+ * 🪤 `extentSource` is NOT a cache-hit marker: on a hit no enumerator runs and it
+ * still names the one this process selected, because the source is chosen
+ * before the store is asked.
  */
 export type PopulationObservation =
   | { readonly lane: 'walk' }
-  | { readonly lane: 'projection'; readonly outcome: PopulationOutcome | null };
+  | {
+    readonly lane: 'projection';
+    readonly outcome: PopulationOutcome | null;
+    readonly extentSource: CrawlSourceKind | null;
+  };
 
 /**
  * The published `population` an observation implies: `null` for the walk and for
@@ -62,14 +72,12 @@ export function publishedPopulation(observation: PopulationObservation): 'store'
 }
 
 /**
- * The observers of a caller that publishes no population provenance — named at
- * the call rather than omitted, because both seams are required.
+ * The observer of a caller that publishes no population provenance — named at
+ * the call rather than omitted, because the seam is required.
  */
 export const POPULATION_UNOBSERVED: {
-  readonly observeExtentSource: (kind: CrawlSourceKind) => void;
   readonly observePopulation: (observation: PopulationObservation) => void;
 } = {
-  observeExtentSource: () => undefined,
   observePopulation: () => undefined,
 };
 
@@ -77,8 +85,15 @@ export const POPULATION_UNOBSERVED: {
 interface PopulationRecord {
   /** Each enumerated root's outcome, in enumeration order. */
   readonly outcomes: PopulationOutcome[];
+  /** Each enumerated root's enumerator, in enumeration order. */
+  readonly extentSources: CrawlSourceKind[];
   /** Whether any crawl declined the source and walked instead. */
   declined: boolean;
+}
+
+/** A record nothing has been written to yet. */
+function emptyRecord(): PopulationRecord {
+  return { outcomes: [], extentSources: [], declined: false };
 }
 
 /**
@@ -97,7 +112,7 @@ function observationOf(
   record: PopulationRecord,
 ): PopulationObservation {
   if (source === undefined || record.declined) return { lane: 'walk' };
-  return { lane: 'projection', outcome: combineOutcomes(record.outcomes) };
+  return { lane: 'projection', outcome: combineOutcomes(record.outcomes), extentSource: record.extentSources[0] ?? null };
 }
 
 export interface ResourceLoadResult {
@@ -353,13 +368,10 @@ export function resourcesProjectionCrawlSelected(): boolean {
  *
  * @param root - The root this source may answer for, and no other
  * @param gitTracker - The run's ignore oracle
- * @param observeExtentSource - Called with the enumerator that actually ran,
- *   once per enumerated root. The value cannot be recovered afterwards by
- *   re-reading the environment — see {@link ResourceLoadResult.extentSource}.
- *   🪤 On a cache hit NO enumerator runs and this still reports the one this
- *   process selected, because the source is chosen before the store is asked
- * @param record - Where each enumeration's outcome and any decline are kept,
- *   for the caller's one {@link PopulationObservation}
+ * @param record - Where each enumeration's outcome and enumerator, and any
+ *   decline, are kept for the caller's one {@link PopulationObservation}. The
+ *   enumerator cannot be recovered afterwards by re-reading the environment —
+ *   see {@link ResourceLoadResult.extentSource}
  * @param cache - The run's projection store, or `undefined` to enumerate every
  *   time. A SEPARATE selector from {@link RESOURCES_CRAWL_ENV}: which lane
  *   enumerates and whether its answer is cached are independent choices, and a
@@ -369,7 +381,6 @@ export function resourcesProjectionCrawlSelected(): boolean {
 function populationSourceFor(
   root: string,
   gitTracker: GitTracker,
-  observeExtentSource: (kind: CrawlSourceKind) => void,
   record: PopulationRecord,
   cache: PopulationCache | undefined,
 ): ResourcePopulationSource | undefined {
@@ -394,9 +405,9 @@ function populationSourceFor(
         // variable to fall out of step with the one that was checked.
         ...collectionsOption(enumeratedRoot),
       });
-      observeExtentSource(population.extentSource);
+      record.extentSources.push(population.extentSource);
       record.outcomes.push(population.outcome);
-      return { paths: population.paths, conditions: population.conditions, outcome: population.outcome };
+      return { paths: population.paths, conditions: population.conditions };
     },
     decline: () => {
       record.declined = true;
@@ -435,9 +446,6 @@ function populationSourceFor(
  * @param options.gitTracker - An already-initialized tracker to reuse. Omit to
  *   have one built, which costs a `git ls-files` spawn — and only when the lane
  *   is actually selected
- * @param options.observeExtentSource - Called with the enumerator that ran, once
- *   per enumerated root. 🪤 NOT a cache-hit marker: on a hit no enumerator runs
- *   and this still reports the one this process selected
  * @param options.observePopulation - Called EXACTLY ONCE, after `work` returns,
  *   with where the population came from — see {@link PopulationObservation}
  * @param work - Given the source, or `undefined` when the walk stays selected
@@ -447,7 +455,6 @@ export function withResourcePopulationSource<T>(
   options: {
     root: string;
     gitTracker?: GitTracker | undefined;
-    observeExtentSource: (kind: CrawlSourceKind) => void;
     observePopulation: (observation: PopulationObservation) => void;
   },
   work: (populationSource: ResourcePopulationSource | undefined) => Promise<T>,
@@ -473,8 +480,8 @@ export function withResourcePopulationSource<T>(
         await gitTracker.initialize();
       }
 
-      const record: PopulationRecord = { outcomes: [], declined: false };
-      const source = populationSourceFor(options.root, gitTracker, options.observeExtentSource, record, cache);
+      const record = emptyRecord();
+      const source = populationSourceFor(options.root, gitTracker, record, cache);
       const result = await work(source);
       options.observePopulation(observationOf(source, record));
       return result;
@@ -579,11 +586,10 @@ export async function loadResourcesWithConfig(
   // Which lane enumerates. Applied to the options both branches above produced,
   // so the path-argument case and the whole-root case cannot end up on different
   // crawlers — the bug shape this file already carries one fix for.
-  let extentSource: CrawlSourceKind | null = null;
   // The store brackets the crawl and is closed however the crawl ends. Nothing
   // outside this bracket can reach it: the population source is called from
   // inside `registry.crawl` and nowhere else.
-  const lane = await withPopulationCache({ root: projectRoot }, async (cache) => {
+  const observation = await withPopulationCache({ root: projectRoot }, async (cache) => {
     // The git enumerator takes a `gitTreeSnapshot` during the crawl below no matter
     // what. Taking it HERE instead is the same snapshot moved a few lines earlier —
     // the open bracket memoizes it, so the enumerator's own call becomes a lookup —
@@ -613,10 +619,8 @@ export async function loadResourcesWithConfig(
     await gitTracker.initialize();
     logger.debug(`GitTracker initialized with ${gitTracker.getStats().cacheSize} tracked files`);
 
-    const record: PopulationRecord = { outcomes: [], declined: false };
-    const populationSource = populationSourceFor(projectRoot, gitTracker, (kind) => {
-      extentSource = kind;
-    }, record, cache);
+    const record = emptyRecord();
+    const populationSource = populationSourceFor(projectRoot, gitTracker, record, cache);
     if (populationSource) {
       logger.debug(`Enumerating via the projection lane (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_PROJECTION})`);
       crawlOptions = { ...crawlOptions, populationSource };
@@ -629,11 +633,12 @@ export async function loadResourcesWithConfig(
     }
 
     await registry.crawl(crawlOptions);
-    // The lane is read off the ONE observation, so a crawl that declined the
-    // source reports the walk it actually took, here and to the observer alike.
-    const observation = observationOf(populationSource, record);
-    observePopulation(observation);
-    return observation.lane;
+    // The lane and the enumerator are read off the ONE observation, so a crawl
+    // that declined the source reports the walk it actually took — with no
+    // enumerator — here and to the observer alike.
+    const observed = observationOf(populationSource, record);
+    observePopulation(observed);
+    return observed;
   });
 
   return {
@@ -642,7 +647,7 @@ export async function loadResourcesWithConfig(
     config,
     registry,
     gitTracker,
-    lane,
-    extentSource,
+    lane: observation.lane,
+    extentSource: observation.lane === 'walk' ? null : observation.extentSource,
   };
 }

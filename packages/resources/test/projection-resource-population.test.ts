@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 // `safePath`, which has no `dirname` because it never needed one.
 import { dirname } from 'node:path';
 
-import { compareCodeUnits, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, createSymlink, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -118,10 +118,45 @@ async function populationOf(gitTracker?: GitTracker): Promise<string[]> {
     .sort(compareCodeUnits);
 }
 
+/**
+ * A store that hands every extent table back REVERSED — SQLite's row order
+ * carries no `ORDER BY` guarantee, so a hit must not depend on the order rows
+ * were written in.
+ */
+class ReorderingStore extends FakeProjectionStore {
+  override async readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
+    const held = await super.readExtent(key);
+    if (held === undefined) return undefined;
+    return Object.fromEntries(
+      Object.entries(held).map(([table, rows]) => [table, [...(rows as readonly unknown[])].reverse()]),
+    ) as unknown as ExtentScopedRows;
+  }
+}
+
 describe('buildResourcePopulation', () => {
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);
   beforeEach(suite.beforeEach);
+
+  it('publishes one order, derived or served by a store that returns rows reordered', async (context) => {
+    const cap = symlinkCapability() ?? context.skip();
+    await write('b.md', '# B\n');
+    await write(DOC_A, '# A\n');
+    await write('docs/c.md', '# C\n');
+    // Two dangling links: two conditions, so their order is observable too.
+    createSymlink(cap, 'missing-one.md', safePath.join(suite.tempDir, 'dangling-z.md'));
+    createSymlink(cap, 'missing-two.md', safePath.join(suite.tempDir, 'dangling-y.md'));
+    const cache = { store: new ReorderingStore(), treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
+
+    const written = await buildResourcePopulation({ outputs: [], root: suite.tempDir, cache });
+    const hit = await buildResourcePopulation({ outputs: [], root: suite.tempDir, cache });
+
+    expect(hit.outcome.stored).toBe('hit');
+    expect(written.paths).toEqual(written.paths.toSorted(compareCodeUnits));
+    expect(written.conditions.map((row) => row.path)).toEqual(['dangling-y.md', 'dangling-z.md']);
+    expect(hit.paths).toEqual(written.paths);
+    expect(hit.conditions).toEqual(written.conditions);
+  });
 
   it('carries the population\'s outcome out with its paths: derived without a store, then written, then a hit', async () => {
     await write(DOC_A, '# A\n');

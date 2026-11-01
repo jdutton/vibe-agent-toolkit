@@ -469,8 +469,8 @@ export interface PopulationCache {
  * A correct hit and a correct re-derivation produce identical rows, so provenance
  * cannot be inferred from the projection; it is reported by the run that knows.
  * `population` is a function of `stored` (`hit` ⇒ `'store'`, every other value ⇒
- * `'derived'`) and is minted only by {@link populationOutcome}, so the two cannot
- * disagree.
+ * `'derived'`), and the union makes that the TYPE: a pair that disagrees does not
+ * compile.
  *
  * - `hit` — served from the store; no contributor ran.
  * - `written` — derived, and the extent was filed.
@@ -478,10 +478,9 @@ export interface PopulationCache {
  *   tree moved during the run (see {@link PopulationCache.treeUnchanged}).
  * - `no-store` — derived, with no store to read or write.
  */
-export interface PopulationOutcome {
-  readonly population: 'store' | 'derived';
-  readonly stored: 'hit' | 'written' | 'skipped-tree-changed' | 'no-store';
-}
+export type PopulationOutcome =
+  | { readonly population: 'store'; readonly stored: 'hit' }
+  | { readonly population: 'derived'; readonly stored: 'written' | 'skipped-tree-changed' | 'no-store' };
 
 /**
  * The outcome a `stored` value implies — the only construction of one.
@@ -490,7 +489,7 @@ export interface PopulationOutcome {
  * @returns The outcome, with `population` derived from `stored`
  */
 function populationOutcome(stored: PopulationOutcome['stored']): PopulationOutcome {
-  return { population: stored === 'hit' ? 'store' : 'derived', stored };
+  return stored === 'hit' ? { population: 'store', stored } : { population: 'derived', stored };
 }
 
 /**

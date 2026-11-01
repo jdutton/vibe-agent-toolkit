@@ -70,12 +70,15 @@ describe('buildResourcesValidateReport — membership provenance', () => {
     expect(RESOURCES_VALIDATE_REPORT_SCHEMA.safeParse({ ...built, data: withoutPopulation }).success).toBe(false);
   });
 
-  it('names BOTH null cases in the field\'s description', () => {
+  it('names EVERY null case in the field\'s description', () => {
     const data = RESOURCES_VALIDATE_REPORT_SCHEMA.innerType().options[0].shape.data;
     const described = data.shape.population.description ?? '';
 
     expect(described).toContain('walk');
     expect(described).toContain('enumerated no root');
+    // A crawl that declined the projection for a root walked that root, even when
+    // it enumerated another first — so it is the walk's, and null.
+    expect(described).toContain('declined');
   });
 });
 
