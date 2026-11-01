@@ -23,5 +23,5 @@ describe('vat claude context agrees with a reference port of the Claude Code loa
   it('across 100 seeded random trees (seeds 409–508)', async () => {
     const failures = await loaderDifferentialFailures(loaderSweepSeeds(409, 100), FAST_SETTLED_FEATURES, onDiskProjection);
     expect(failures, failures.join('\n')).toEqual([]);
-  }, 60_000);
+  });
 });

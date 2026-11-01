@@ -21,8 +21,8 @@
  * 4. If the closure stratum promoted any `deferred` realization to `keyed` —
  *    demand-driven keying, `ProjectionBuilder.ensureContentKey` —
  *    {@link populateBlobs} runs once more, so the newly keyed paths get the
- *    `blobs` rows their realizations now name. Strictly after the fixpoint, and
- *    reported as a separate measurement: see {@link BlobPopulationReport}.
+ *    `blobs` rows their realizations now name. Strictly after the fixpoint: see
+ *    {@link afterClosurePromotion}.
  *
  * ## A store short-circuits all of it, or none of it
  *
@@ -77,7 +77,7 @@ import type { CollectionConfig } from '../schemas/project-config.js';
 import type { RealizationConditionRow, ResourceRealizationRow } from '../schemas/projection-resources.js';
 import type { JsonValue } from '../schemas/projection-shared.js';
 
-import { populateBlobs, storableBlobFacts, type BlobPopulationResult } from './blob-population.js';
+import { populateBlobs, storableBlobFacts } from './blob-population.js';
 import { RunContentCache } from './content-cache.js';
 import type { ContributorRegistry, ExtentContribution, ExtentContributor } from './contributor.js';
 import {
@@ -171,62 +171,6 @@ export const CONTENT_PARSING_SKIP = 'skip';
 /** What {@link PopulateOptions.contentParsing} accepts. */
 export type ContentParsing = typeof CONTENT_PARSING_DERIVE | typeof CONTENT_PARSING_SKIP;
 
-/**
- * The {@link PopulateOptions.onBlobPopulation} observer that keeps nothing — the
- * explicit spelling of "this run does not want the blob stage's counts".
- *
- * Naming it is the point, exactly as it is for `NO_GIT_TRACKER`. The counts
- * record what the stage REFUSED to derive, and while the option was optional
- * every production run discarded them by accident. A run that discards them on
- * purpose — one that skips the stage outright, or a test asserting something
- * else entirely — now says so at the call site.
- *
- * ⚠️ Not a licence to reach for this on a lane that derives blobs. If the stage
- * runs and its refusals go nowhere, the corpus can be entirely undeliverable and
- * the command still exits 0 saying nothing.
- */
-export const DISCARD_BLOB_POPULATION: (result: BlobPopulationReport) => void = () => {
-  // Intentionally empty — see the docstring. The whole value of this constant is
-  // that it appears at a call site.
-};
-
-/**
- * What the blob-derivation stage did across a whole `populate()` — one run
- * between the strata, and optionally a second after the closure fixpoint.
- *
- * ## Why the second run is a separate object and not added to the first
- *
- * There is no honest arithmetic between two runs of {@link populateBlobs}.
- * `blobsAlreadyPresent` on the second pass counts nearly every blob the first
- * pass derived, so summing it reports a corpus several times its own size;
- * taking the later value instead misreports the first pass as having found
- * nothing already present. The same objection applies to every
- * `realizationsSkipped*` bucket: the second pass walks the same realizations,
- * so adding them double-counts every directory in the corpus.
- *
- * The two runs are therefore two measurements of two different builder states,
- * and they are reported as two measurements. A consumer that genuinely wants a
- * total for one bucket knows which buckets are additive; this type declines to
- * guess on its behalf.
- */
-export interface BlobPopulationReport extends BlobPopulationResult {
-  /**
-   * The post-fixpoint run, present whenever the closure stratum **attempted** at
-   * least one demand promotion — whether or not the read succeeded.
-   *
-   * Absent — not a zeroed result — when nobody asked, because "the stage did not
-   * need to run again" and "it ran again and derived nothing" are different
-   * facts and a zeroed object cannot tell them apart.
-   *
-   * ⚠️ Attempted, not succeeded, and the distinction is the whole point: gating
-   * on the success counter made "every promotion's read threw" produce the same
-   * absent key as "no consumer asked", which is the one pair of outcomes this
-   * key exists to separate. A run where every attempt failed is present here
-   * with `blobsDerived: 0`.
-   */
-  readonly afterClosurePromotion?: BlobPopulationResult | undefined;
-}
-
 /** What a population run needs to know. */
 export interface PopulateOptions {
   /** Absolute corpus root every contributor's paths are relative to. */
@@ -282,9 +226,9 @@ export interface PopulateOptions {
    * among them, and on a caller that reads no blob table that is the whole cost
    * of the lane. Measured on this repository, `vat resources scan` over 2,096
    * tracked files of which 176 are admitted resources: 6,839 ms of 7,615 ms cold
-   * — 90% — deriving rows `buildResourcePopulation` never looks at. The walker
-   * arm of the same command is 1,363 ms. Skipping it puts the projection lane at
-   * ~1.5× the walk instead of 5.6×.
+   * — 90% — when that verb skipped the stage; the walker arm is 1,363 ms. The
+   * resources lanes now run it so membership and query share one stored
+   * population; the claude-context discovery pass is the one caller that skips.
    *
    * ## Why `'skip'` is opt-in and cannot be inferred
    *
@@ -304,44 +248,10 @@ export interface PopulateOptions {
    */
   contentParsing?: ContentParsing | undefined;
   /**
-   * Receives what the blob-derivation stage derived and what it skipped.
-   *
-   * An observation seam rather than a return value, because the counts are not
-   * part of the projection: they describe the *run*, and a projection is rows.
-   * They are nonetheless the only place two facts are observable — how many
-   * headings and references were dropped for want of a source line, neither of
-   * which any row can carry (a row that was skipped is, definitionally, absent).
-   *
-   * Called **once**, after the closure fixpoint, so the record can carry both
-   * runs of the stage — see {@link BlobPopulationReport}.
-   *
-   * ## REQUIRED, and that is the fix rather than a style choice
-   *
-   * It was optional, and the consequence was not hypothetical. Of the two
-   * production callers of `populate()`, one skips the stage entirely and the
-   * other — `buildInventoryPopulation` — ran it and passed no observer, so every
-   * `blobsNotText`, `blobsUnreadable`, `blobsParseFailed` and
-   * `referencesSkippedForMissingLine` this stage computed was discarded at the
-   * end of the run. `looksBinary` documents itself as "a refusal, not a silence"
-   * and `blobsNotText` as "what makes the refusal auditable rather than a quiet
-   * speed-up"; both claims were false in every shipped run. A corpus in which
-   * every document was declined as binary produced an empty `blobs` table, exit
-   * 0, and no output.
-   *
-   * The same reasoning `NO_GIT_TRACKER` is built on applies here and reaches the
-   * same shape: a caller that genuinely wants the counts thrown away says
-   * {@link DISCARD_BLOB_POPULATION} out loud, in a form that greps, rather than
-   * arriving in that state by leaving an argument off. An omission is now a type
-   * error; a discard is a decision with a name.
-   */
-  onBlobPopulation: (result: BlobPopulationReport) => void;
-  /**
    * Receives one record per contributor invocation, as it completes.
    *
-   * The same kind of observation seam as {@link onBlobPopulation}, and it exists
-   * for the same reason that one does: the cost of a run is a fact about the
-   * *run*, and a projection is rows, so there is nowhere in the returned tables
-   * to put it.
+   * It exists because the cost of a run is a fact about the *run*, and a
+   * projection is rows, so there is nowhere in the returned tables to put it.
    *
    * **This is the seam that makes a slow population diagnosable at all.** Without
    * it `populate` is one opaque await, and locating a hot spot means bisecting by
@@ -534,7 +444,6 @@ export interface TreePopulationOptions {
   gitTracker?: GitTracker | undefined;
   cache?: PopulationCache | undefined;
   collections?: Readonly<Record<string, CollectionConfig>> | undefined;
-  onBlobPopulation: (report: BlobPopulationReport) => void;
 }
 
 /** What one contributor invocation cost. */
@@ -709,26 +618,9 @@ export async function populate(options: PopulateOptions): Promise<PopulateResult
   // content key can appear after this is an explicit demand promotion — which
   // `afterClosurePromotion` below picks up, after the fixpoint.
   //
-  // The stage is awaited into a binding *before* the call, never inlined into
-  // the observer's argument list. The hazard that rule was written for was
-  // optional chaining — `options.onBlobPopulation?.(await populateBlobs(builder))`
-  // short-circuits the whole call expression, arguments included, so the inlined
-  // form derived no blobs at all whenever no observer was supplied, which was
-  // every caller that was not a test. Measured, not feared: it is how this stage
-  // first shipped as a no-op.
-  //
-  // `onBlobPopulation` is now REQUIRED, so that exact short-circuit is gone —
-  // but the separation stays, because it is what keeps the stage's execution
-  // independent of what any observer does with the result. A future edit that
-  // reintroduces a `?.` here must not also be able to un-derive the corpus.
-  //
-  // `null` rather than a skipped-flag beside a zeroed result, so that every
-  // consumer of the stage's outcome below is forced to handle the "did not run"
-  // case rather than reading zeros as measurements.
-  const blobPopulation = parseContent ? await runBlobStage(builder) : null;
-  // ATTEMPTS, not successes — see {@link afterClosurePromotion} for why reading
-  // the success counter here made a total promotion failure indistinguishable
-  // from nobody having asked.
+  // Nothing observes the stage's counters: what a user is told about refused
+  // content is read from the rows it writes, which a store hit returns too.
+  if (parseContent) await runBlobStage(builder);
   const attemptsBeforeClosure = builder.contentPromotionAttempts;
 
   // The harness facts, LAZILY: derived only for what a harness reaches. Before
@@ -749,15 +641,7 @@ export async function populate(options: PopulateOptions): Promise<PopulateResult
     options.onContributorTiming,
   );
 
-  if (blobPopulation !== null) {
-    const promoted = await afterClosurePromotion(builder, attemptsBeforeClosure);
-    // Not called at all under `'skip'`, rather than called with a zeroed result:
-    // "the stage did not run" and "it ran and derived nothing" are different
-    // facts, and a zeroed report cannot tell them apart — the same rule
-    // {@link BlobPopulationReport.afterClosurePromotion} states for its own
-    // absence.
-    options.onBlobPopulation({ ...blobPopulation, ...promoted });
-  }
+  if (parseContent) await afterClosurePromotion(builder, attemptsBeforeClosure);
   await harness.run();
   // A reached blob with no facts after the last pass is a producer bug: every
   // strict reader of this projection would throw on it later, far from here.
@@ -942,7 +826,7 @@ function registrationQuestions(options: PopulateOptions): Record<string, JsonVal
  * @param options - The run's registry and parameters
  * @returns One entry per registered contributor
  */
-function requestedContributors(options: PopulateOptions): readonly RequestedContributor[] {
+export function requestedContributors(options: PopulateOptions): readonly RequestedContributor[] {
   return [...options.registry.byStratum('base'), ...options.registry.byStratum('closure')]
     .map((contributor) => ({
       id: contributor.id,
@@ -1008,7 +892,7 @@ async function readCachedProjection(
  * The extent half of a store hit: key, reuse rule, narrowing, staleness gate.
  *
  * Split out of {@link readCachedProjection} because one caller needs exactly
- * this and nothing after it — see {@link readStoredRealizations} — and two
+ * this and nothing after it — see {@link readStoredMembership} — and two
  * copies of the four steps is how one of them would lose the unlistable gate.
  * The blob tier is deliberately NOT here: it belongs to the run that reads blob
  * tables, and a caller asking only *which paths are in this tree* has no use
@@ -1062,10 +946,28 @@ async function readStoredExtent(
 }
 
 /**
+ * A tree's membership as the store holds it: the realization and condition rows
+ * of the requested contributors' contexts, and the outcome that says the store
+ * served them.
+ */
+export interface StoredMembership {
+  readonly resourceRealizations: readonly ResourceRealizationRow[];
+  readonly realizationConditions: readonly RealizationConditionRow[];
+  /** Always the hit: this read mints it, because no `populate()` runs on this path. */
+  readonly outcome: PopulationOutcome;
+}
+
+/**
  * What the store already knows this tree REALIZES, for a subset of the run's
  * contributors — without populating anything.
  *
  * ## Why a lane would ask this instead of populating
+ *
+ * Membership is a VIEW over the one population every resources lane shares:
+ * `buildResourcePopulation` registers the full lane's contributors under the full
+ * lane's key, and reads only realizations and conditions. So the extent alone
+ * answers it, and the blob tier is not read: a stored extent whose blob key was
+ * evicted is a membership hit and a full-lane miss.
  *
  * A lane whose contributor set is not known until something about the tree has
  * been read has to read the tree twice: once to find out what to register, and
@@ -1082,7 +984,7 @@ async function readStoredExtent(
  * so both reads compute {@link storeKeyFor} from one registry and one parameter
  * map and cannot drift apart. A caller registering more contributors afterwards
  * (which is the whole point) changes the key only if one of them declares an
- * {@link ExtentContributor.registrationQuestion} — none does today, and if one
+ * {@link ExtentContributor.registrationQuestion} — no `@`-import contributor does, and if one
  * ever did, this read would simply stop hitting and the caller would fall back
  * to deriving the list. Fail-safe in the direction that costs time rather than
  * correctness.
@@ -1095,14 +997,14 @@ async function readStoredExtent(
  * @param options - The options the caller will populate with, unmodified
  * @param requested - The already-known contributors whose contexts must be
  *   stored, each with the parameter set `options.parameters` gives it
- * @returns The realization rows of exactly those contributors' contexts, or
- *   `undefined` when the store cannot answer — in which case the caller derives
- *   the list the way it always did
+ * @returns The realization and condition rows of exactly those contributors'
+ *   contexts with the hit outcome, or `undefined` when the store cannot answer —
+ *   in which case the caller populates
  */
-export async function readStoredRealizations(
+export async function readStoredMembership(
   options: PopulateOptions,
   requested: readonly RequestedContributor[],
-): Promise<readonly ResourceRealizationRow[] | undefined> {
+): Promise<StoredMembership | undefined> {
   if (options.cache === undefined) return undefined;
 
   // The two values `populate` derives before it asks the store, derived the same
@@ -1111,7 +1013,12 @@ export async function readStoredRealizations(
   // instance, which `populate` builds for itself.
   const routing = createCollectionMimeResolver(options.collections);
   const extent = await readStoredExtent(options, rootIdFor(options.root), routing, requested);
-  return extent?.resourceRealizations;
+  if (extent === undefined) return undefined;
+  return {
+    resourceRealizations: extent.resourceRealizations,
+    realizationConditions: extent.realizationConditions,
+    outcome: populationOutcome('hit'),
+  };
 }
 
 /**
@@ -1226,13 +1133,11 @@ function contentParsingFor(options: PopulateOptions): boolean {
  * see `CRAWL_BLOB_POPULATE_ID`.
  *
  * @param builder - The builder to derive into
- * @returns What the stage derived and what it skipped
  */
-async function runBlobStage(builder: ProjectionBuilder): Promise<BlobPopulationResult> {
+async function runBlobStage(builder: ProjectionBuilder): Promise<void> {
   const startedAt = crawlTimingStart();
-  const result = await populateBlobs(builder);
+  await populateBlobs(builder);
   recordCrawlPass(CRAWL_BLOB_POPULATE_ID, 'base', BASE_STRATUM_PASS, startedAt);
-  return result;
 }
 
 /**
@@ -1276,40 +1181,27 @@ async function runBlobStage(builder: ProjectionBuilder): Promise<BlobPopulationR
  * A future change that moves this call *inside* the loop invalidates both, and
  * would have to invalidate the memo explicitly instead.
  *
- * ## The gate is on ATTEMPTS, not on successes
- *
- * It used to be `builder.contentPromotions === promotionsBefore`, which is a
- * read of the SUCCESS counter — and `ProjectionBuilder.ensureContentKey` leaves
- * that counter untouched when the read throws. So a closure stratum that
- * demanded a thousand paths and could not read one of them produced the identical
- * `{}` this function returns when nobody asked at all, and the deliberate no-op
- * and a total failure were reported as the same thing.
+ * ## The gate is on attempts
  *
  * {@link ProjectionBuilder.contentPromotionAttempts} moves whenever bytes were
- * demanded, whatever the read did, so an absent `afterClosurePromotion` now means
- * exactly "no consumer asked" and nothing else. When every attempt failed the
- * stage still runs and reports `blobsDerived: 0` over rows that are now
- * `unreadable` — one cheap walk, no parses, and a measurement instead of a
- * silence. The per-path cause is on the `REALIZATION_PROMOTION_UNREADABLE` rows
- * the failed attempts recorded.
+ * demanded, whatever the read did. When every attempt failed the stage still
+ * runs: one cheap walk that derives nothing, over rows now `unreadable`, whose
+ * cause is on the `REALIZATION_PROMOTION_UNREADABLE` rows the failed attempts
+ * recorded.
  *
- * Exported for the focused unit test that pins the two-run reporting rule —
- * driving it through {@link populate} would mean walking a real tree to reach a
- * decision that is a comparison of two integers. {@link populate} is its only
- * production caller.
+ * Exported for the focused unit test — driving it through {@link populate}
+ * would mean walking a real tree to reach a decision that is a comparison of
+ * two integers. {@link populate} is its only production caller.
  *
  * @param builder - The builder whose closure stratum has just converged
  * @param attemptsBefore - `contentPromotionAttempts` as it stood before the stratum
- * @returns A one-key object to spread onto the report, empty when nothing was
- *   even attempted — an absent key, never a zeroed result, because `exactOptionalPropertyTypes`
- *   makes those two different values and they mean different things
  */
 export async function afterClosurePromotion(
   builder: ProjectionBuilder,
   attemptsBefore: number,
-): Promise<{ afterClosurePromotion?: BlobPopulationResult }> {
+): Promise<void> {
   if (builder.contentPromotionAttempts === attemptsBefore) {
-    return {};
+    return;
   }
   // Idempotent by construction: `blobsAlreadyPresent` skips every blob the
   // first run derived, so only the newly keyed paths cost a parse.
@@ -1317,9 +1209,8 @@ export async function afterClosurePromotion(
   // Files the SAME row as the pre-closure run — one accounting unit, so `calls`
   // reads as "how many times the stage ran" and its ms/call stays divisible.
   const startedAt = crawlTimingStart();
-  const result = await populateBlobs(builder);
+  await populateBlobs(builder);
   recordCrawlPass(CRAWL_BLOB_POPULATE_ID, 'base', BASE_STRATUM_PASS, startedAt);
-  return { afterClosurePromotion: result };
 }
 
 /** Every harness a population derives facts for. */

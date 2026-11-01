@@ -137,6 +137,23 @@ export function withRunIntegrity<T>(report: Report<T>, examined: ExaminedDeclara
   });
 }
 
+/** What a verb prints in place of its success line over a run that examined nothing. */
+const NOT_A_VERDICT = '⚠️ Not a verdict: nothing was examined';
+
+/**
+ * The success line a verb may print over its run — invariant 6's stderr half,
+ * and the one rule for it: `success` when the run examined something, a
+ * not-a-verdict line otherwise. Every shipped instance of the class printed a
+ * green line directly above the refusal its own document carried.
+ *
+ * @param examined - The run's `examined`, as its report counts it
+ * @param success - The verb's own success line; its leading whitespace is kept
+ * @returns The line to print
+ */
+export function verdictBanner(examined: number, success: string): string {
+  return examined > 0 ? success : `${/^\s*/u.exec(success)?.[0] ?? ''}${NOT_A_VERDICT}`;
+}
+
 /**
  * The human half of a run-integrity refusal: each `RESOURCE_CHECK_BROKEN`
  * finding's message, on stderr. It decides nothing — the document is what

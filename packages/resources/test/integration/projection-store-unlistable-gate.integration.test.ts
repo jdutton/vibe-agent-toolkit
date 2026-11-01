@@ -21,10 +21,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ContributorRegistry } from '../../src/projection/contributor.js';
 import {
   EXTENT_DIRECTORY_UNLISTABLE,
+  DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
 } from '../../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../../src/projection/crawl-source.js';
-import { DISCARD_BLOB_POPULATION, populate } from '../../src/projection/merge.js';
+import { populate } from '../../src/projection/merge.js';
 import type { ExtentKey, ExtentScopedRows } from '../../src/projection/store.js';
 import { CONDITION_WITHOUT_REFERENCE } from '../../src/schemas/projection-resources.js';
 import { FakeProjectionStore } from '../fake-projection-store.js';
@@ -76,11 +77,10 @@ class UnlistableRowStore extends FakeProjectionStore {
  */
 async function derivedThrough(store: FakeProjectionStore): Promise<boolean> {
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
   const { outcome } = await populate({
     root: suite.tempDir,
     registry,
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
     cache: { store, treeUnchanged: () => true, treeHash: TREE_HASH },
   });
   return outcome.stored !== 'hit';

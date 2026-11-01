@@ -61,5 +61,5 @@ describe('NO_UNSAFE_BACKLOG only names files that still carry a no-unsafe findin
       'These files are clean under both no-unsafe rules. Delete their NO_UNSAFE_BACKLOG entries in '
         + 'eslint.config.js — the list may only shrink, and a stale entry hides the next offender.',
     ).toEqual([]);
-  }, 60_000);
+  });
 });

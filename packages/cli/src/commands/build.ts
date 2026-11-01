@@ -25,6 +25,7 @@ import { loadConfig } from '../utils/config-loader.js';
 import { endWithReport } from '../utils/document-writer.js';
 import { formatIssueLines } from '../utils/issue-rendering.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
+import { verdictBanner } from '../utils/run-integrity.js';
 
 import { PLUGIN_BUILD_EXAMINED, PLUGIN_BUILD_REPORT_SCHEMA } from './claude/plugin/build-schema.js';
 import { pluginBuildOutput, runClaudePluginBuildPhase } from './claude/plugin/build.js';
@@ -319,8 +320,14 @@ function stopsTheBuild(result: PhaseResult): boolean {
   return exitCodeForReport(result.report) !== ExitCode.OK;
 }
 
-/** Test seam: which phase report stops the build. */
-export const __internal = { stopsTheBuild };
+/** The closing line, over the SUM of the phases' `examined` — never the phase count. */
+function buildCompleteLine(results: readonly { readonly report: { readonly examined: number } }[]): string {
+  const examined = results.reduce((sum, result) => sum + result.report.examined, 0);
+  return verdictBanner(examined, '\n✅ Build complete');
+}
+
+/** Test seam: which phase report stops the build, and the closing line. */
+export const __internal = { stopsTheBuild, buildCompleteLine };
 
 async function buildTopLevelCommand(
   options: BuildCommandOptions,
@@ -367,7 +374,7 @@ async function buildTopLevelCommand(
       return true;
     });
     if (!completed) return;
-    logger.info(`\n✅ Build complete`);
+    logger.info(buildCompleteLine(results));
   });
   endWithReport('build', report, ORCHESTRATOR_FORMAT);
 }

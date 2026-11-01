@@ -2,7 +2,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { BLOB_NOT_TEXT } from '../src/projection/blob-population.js';
 import { describeBlobRefusals } from '../src/projection/blob-refusals.js';
-import type { BlobPopulationReport } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 
 import {
@@ -63,15 +62,14 @@ async function plant(relativePath: string, bytes: Uint8Array): Promise<void> {
  * Run the shared populate driver over the suite root, with the `BLOB_NOT_TEXT`
  * rows this file is about already selected.
  *
- * @returns The report, the projection, and the refusal rows
+ * @returns The projection and its refusal rows
  */
 async function populateSuiteRoot(): Promise<{
-  report: BlobPopulationReport;
   projection: Projection;
   notTextConditions: readonly { blob: string; code: string; message: string }[];
 }> {
-  const { report, projection } = await populateFixtureRoot(suite.tempDir);
-  return { report, projection, notTextConditions: conditionsWithCode(projection, BLOB_NOT_TEXT) };
+  const { projection } = await populateFixtureRoot(suite.tempDir);
+  return { projection, notTextConditions: conditionsWithCode(projection, BLOB_NOT_TEXT) };
 }
 
 /**
@@ -162,11 +160,10 @@ describe('looksBinary, against real binary shapes (not synthesized NUL strings)'
   it.each(DECLINED_REAL_FORMATS)('declines a $name header', async ({ fileName, bytes }) => {
     await plant(fileName, bytes);
 
-    const { report, notTextConditions } = await populateSuiteRoot();
+    const { projection, notTextConditions } = await populateSuiteRoot();
 
-    expect(report.blobsNotText).toBe(1);
-    expect(report.blobsDerived).toBe(0);
     expect(notTextConditions).toHaveLength(1);
+    expect(projection.blobs).toHaveLength(0);
     // ⛔ NOT the file name. The row is filed in the content-addressed tier every
     // repository holding these bytes is served, so a path in it is another
     // repository's path the moment a second one derives the same key.
@@ -189,14 +186,13 @@ describe('looksBinary, against real binary shapes (not synthesized NUL strings)'
     expect(UTF16_DOC_BYTES.subarray(0, SNIFF_WINDOW).includes(0x00)).toBe(true);
     await plant('powershell-notes.md', UTF16_DOC_BYTES);
 
-    const { report, projection, notTextConditions } = await populateSuiteRoot();
+    const { projection, notTextConditions } = await populateSuiteRoot();
 
     // Accepted as text...
-    expect(report.blobsNotText).toBe(0);
     expect(notTextConditions).toHaveLength(0);
-    // ...and the positive control, so the two assertions above cannot be
+    // ...and the positive control, so the assertion above cannot be
     // satisfied by a run that simply never enumerated the file.
-    expect(report.blobsDerived).toBe(1);
+    expect(projection.blobs).toHaveLength(1);
     // Decoded, not merely admitted: a byte-wise reading of these bytes is
     // NUL-interleaved garbage in which neither the heading nor the link exists.
     expect(projection.blobs[0]?.headingCount).toBe(1);
@@ -212,10 +208,10 @@ describe('looksBinary, against real binary shapes (not synthesized NUL strings)'
     // their NUL at byte 8.
     await writeNulAt('inside.md', SNIFF_WINDOW - 1);
 
-    const { report, notTextConditions } = await populateSuiteRoot();
+    const { projection, notTextConditions } = await populateSuiteRoot();
 
-    expect(report.blobsNotText).toBe(1);
-    expect(report.blobsDerived).toBe(0);
+    expect(notTextConditions).toHaveLength(1);
+    expect(projection.blobs).toHaveLength(0);
     // The window the refusal reports is the window it applied, so a constant
     // changed without changing this file is caught in the message too.
     expect(notTextConditions[0]?.message).toContain(String(SNIFF_WINDOW));
@@ -253,11 +249,10 @@ describe('looksBinary, against real binary shapes (not synthesized NUL strings)'
     // means the boundary moved on purpose, and these tests need to move with it.
     await writeNulAt('outside.md', SNIFF_WINDOW);
 
-    const { report, notTextConditions } = await populateSuiteRoot();
+    const { projection, notTextConditions } = await populateSuiteRoot();
 
     // Reaches the parser: derived as a real blob, not declined.
-    expect(report.blobsDerived).toBe(1);
-    expect(report.blobsNotText).toBe(0);
+    expect(projection.blobs).toHaveLength(1);
     expect(notTextConditions).toHaveLength(0);
   });
 });
@@ -269,22 +264,20 @@ describe('the refusal reaches a reader, over a corpus that is REALLY declined', 
 
   it('turns a declined binary into a line a caller can print', async () => {
     // The end-to-end half of the fix. `looksBinary` calls itself "a refusal, not
-    // a silence" and `blobsNotText` "what makes the refusal auditable rather than
-    // a quiet speed-up" — and both were false in every shipped run, because
-    // `onBlobPopulation` was optional and no production caller passed one. Every
-    // count was computed and dropped at the end of `populate()`.
+    // a silence" — false while no production caller reported anything. The line
+    // is read from the PROJECTION's rows, so a store hit says it too.
     //
     // Real PNG bytes, not a synthesized NUL string: three tidy .md files cannot
     // exhibit a binary refusal at all.
     await plant('image.md', DECLINED_REAL_FORMATS[0]?.bytes ?? new Uint8Array());
 
-    const { report } = await populateSuiteRoot();
+    const { projection, notTextConditions } = await populateSuiteRoot();
 
     // The premise, so the line below is about a refusal rather than about an
     // empty corpus: something really was declined, and nothing was derived.
-    expect(report.blobsNotText).toBe(1);
+    expect(notTextConditions).toHaveLength(1);
 
-    const line = describeBlobRefusals(report);
+    const line = describeBlobRefusals(projection);
     expect(line).toBeDefined();
     expect(line).toContain('1 not text');
     expect(line).toContain('declined 1 of 1 blob(s)');
@@ -292,13 +285,13 @@ describe('the refusal reaches a reader, over a corpus that is REALLY declined', 
 
   it('says nothing over a corpus of ordinary markdown — and really did read it', async () => {
     // The negative control, with its own positive control attached. Without
-    // `blobsDerived` asserted, "no refusal reported" would be satisfied by a run
+    // a `blobs` row asserted, "no refusal reported" would be satisfied by a run
     // that enumerated nothing at all, which is the exact shape of the bug.
     await plant('clean.md', Buffer.from('# Clean\n\nJust prose.\n', 'utf-8'));
 
-    const { report } = await populateSuiteRoot();
+    const { projection } = await populateSuiteRoot();
 
-    expect(report.blobsDerived).toBe(1);
-    expect(describeBlobRefusals(report)).toBeUndefined();
+    expect(projection.blobs).toHaveLength(1);
+    expect(describeBlobRefusals(projection)).toBeUndefined();
   });
 });

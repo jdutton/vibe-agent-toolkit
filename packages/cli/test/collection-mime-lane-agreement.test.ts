@@ -41,7 +41,7 @@ import { crawlAndResolveRegistry } from '@vibe-agent-toolkit/agent-skills';
 import { crawlSkillLinkRegistry } from '@vibe-agent-toolkit/claude-marketplace';
 import {
   ContributorRegistry,
-  DISCARD_BLOB_POPULATION,
+  DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
   ResourceRegistry,
   crawlSourceFor,
@@ -142,13 +142,12 @@ function registryVerdicts(registry: ResourceRegistry): Record<string, Verdict> {
  */
 async function projectionVerdicts(): Promise<Record<string, Verdict>> {
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor(() => crawlSourceFor(corpus.root(), [])));
+  registry.register(new FilesystemExtentContributor(() => crawlSourceFor(corpus.root(), []), DEFAULT_CONTENT_DEMAND));
 
   const { projection } = await populate({
     root: corpus.root(),
     registry,
     collections: COLLECTIONS,
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
   });
 
   const verdicts: Record<string, Verdict> = {};

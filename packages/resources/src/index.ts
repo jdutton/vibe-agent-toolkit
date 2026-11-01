@@ -704,7 +704,9 @@ export {
 // The filesystem extent (zones §2): everything on disk under the root, files
 // AND directories, excluding NEVER_CRAWL_GLOBS but deliberately NOT build
 // output — this is the extent that sees what the git extent cannot.
-export { FilesystemExtentContributor } from './projection/contributors/filesystem-extent.js';
+// Its demand is a required constructor argument; every resources lane passes
+// DEFAULT_CONTENT_DEMAND so they share one store key.
+export { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from './projection/contributors/filesystem-extent.js';
 
 // The agentic-convention classifier and its producer — the first contributor
 // that answers "what IS this file" rather than "does it exist".
@@ -746,9 +748,8 @@ export {
   ruleScopeFor,
 } from './projection/contributors/claude-rules-scope.js';
 
-// The lane that assembles the three above. Its own lane, not a flag on the fast
-// repo-wide one: that one declares CONTENT_PARSING_SKIP and both classifiers
-// here read blob-keyed tables.
+// The lane that assembles the three above, plus one `@`-import extent per root.
+// It asks the resources lanes' question, so it shares their store key.
 export {
   buildClaudeContextPopulation,
   type ClaudeContextPopulation,
@@ -939,36 +940,30 @@ export {
 // truncated extent it had reached.
 //
 // It also owns the post-fixpoint re-run of the blob stage: demand-driven keying
-// means a `deferred` realization can become `keyed` during the closure stratum,
-// and `BlobPopulationReport` reports that second run as its own measurement
-// rather than summing counters that have no honest combination rule.
+// means a `deferred` realization can become `keyed` during the closure stratum.
 export {
   CONTENT_PARSING_DERIVE,
   CONTENT_PARSING_SKIP,
   ClosureNonConvergenceError,
-  DISCARD_BLOB_POPULATION,
   POPULATION_ORIGINS,
   populate,
   populationOracles,
-  readStoredRealizations,
-  type BlobPopulationReport,
+  readStoredMembership,
   type ContentParsing,
   type ContributorTiming,
   type PopulateOptions,
   type PopulateResult,
   type PopulationCache,
   type PopulationOutcome,
+  type StoredMembership,
   type TreePopulationOptions,
 } from './projection/merge.js';
 
-// The one line a user sees when the blob stage declined to derive something.
-// `populate()` computes the refusal counts on every run; until this shipped,
-// every production caller threw them away, so a corpus in which every document
-// was declined as binary produced an empty `blobs` table and exit 0. The counts
-// are the half that `blob_conditions` cannot carry — nobody queries a projection
-// they were never told to look at, and a skipped heading or reference is an
-// absent row.
-export { describeBlobRefusals } from './projection/blob-refusals.js';
+// The one line a user sees when a population holds content it declined to
+// derive or mis-decoded. A function of the projection's stored rows, so a store
+// hit reports exactly what the derive that wrote it would have — nobody queries
+// a projection they were never told to look at.
+export { describeBlobRefusals, type BlobRefusalRows } from './projection/blob-refusals.js';
 
 // The declarative closure primitive (zones §7.3): a closure-defined extent is a
 // GENERIC contributor handed an `ExtentDeclaration`, never new privileged code —

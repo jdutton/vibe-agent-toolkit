@@ -15,7 +15,6 @@
  * |---|---|---|
  * | non-ignored members | `write-tree` snapshot, ~10 ms for 8,496 paths | `readdir` walk |
  * | ignored members | prune list, then walk only that territory | same walk, undifferentiated |
- * | content hint | blob OID, already computed | none — bytes get read and hashed |
  * | directories | derived from paths + collapsed-directory entries | walked directly |
  * | path shape | index mode bits, so the realization never `lstat`s | none — every path is stat'ed |
  *
@@ -255,37 +254,15 @@ export interface EnumeratedPath {
   /** Absolute, forward-slashed. */
   absolutePath: string;
   /**
-   * A byte-identity hint for this path, or `null` when the source has none.
-   *
-   * Present only where it is **sound**: a git blob OID for a regular file, whose
-   * equality implies byte equality. Null for a directory, and for every path the
-   * filesystem walk found — the walk knows nothing about a path until it reads
-   * it, and inventing a hint from `mtime` would be a guess wearing a fact's
-   * clothes.
-   *
-   * The two OIDs that would NOT imply byte equality never reach this field at
-   * all, because the paths carrying them are not members: a symlink (whose OID
-   * is the link target string) is excluded outright, and a submodule (whose OID
-   * is a commit) is expanded into the files beneath it. Excluding them at
-   * enumeration rather than nulling the hint means a later consumer cannot
-   * reintroduce the defect by reading `mode` and deciding for itself.
-   *
-   * ⚠️ **A hint, never a key.** `content-key.ts` states the rule: a git SHA may
-   * be used as a lookup whose miss is free, and must never be the identity a
-   * parse is filed under.
-   */
-  contentHint: string | null;
-  /**
    * What this source already knows the path IS, or `null` when it must be
    * stat'ed.
    *
-   * Unlike {@link EnumeratedPath.contentHint} this is **authoritative**: a
-   * realization built from it never calls `lstat`, so a wrong answer here is a
+   * **Authoritative**: a realization built from it never calls `lstat`, so a wrong answer here is a
    * wrong row rather than a slow one. Supply it only where {@link PathShape}'s
    * bar is met — present, not a symlink, and known to be a file or a directory.
    *
-   * Required rather than optional, and `null` rather than absent, for the reason
-   * `contentHint` is: a new source must *state* that it knows nothing, because
+   * Required rather than optional, and `null` rather than absent: a new source
+   * must *state* that it knows nothing, because
    * the failure mode of forgetting is a population that silently stops being
    * described.
    */
@@ -403,7 +380,7 @@ export class FilesystemCrawlSource implements CrawlSource {
   /**
    * Walk the root.
    *
-   * @returns Every admitted path, with no content hints and no shapes
+   * @returns Every admitted path, with no shapes
    */
   async enumerate(): Promise<readonly EnumeratedPath[]> {
     this.#refusals.clear();
@@ -442,7 +419,6 @@ export class FilesystemCrawlSource implements CrawlSource {
     // attributable. It remains available if it is ever wanted for its own sake.
     return absolutePaths.map((absolutePath) => ({
       absolutePath,
-      contentHint: null,
       shape: null,
     }));
   }
@@ -472,11 +448,6 @@ interface CrawlCandidate {
   /** Absolute, forward-slashed. */
   absolutePath: string;
   /**
-   * As {@link EnumeratedPath.contentHint}, and always `null` for a symlink: its
-   * OID is the TARGET STRING, which does not imply byte equality.
-   */
-  contentHint: string | null;
-  /**
    * As {@link EnumeratedPath.shape}, plus `'symlink'` — the one value that ends
    * membership rather than describing it.
    */
@@ -496,7 +467,7 @@ interface CrawlCandidate {
  * @returns A candidate carrying no claims
  */
 function walkedCandidate(absolutePath: string): CrawlCandidate {
-  return { absolutePath, contentHint: null, shape: null };
+  return { absolutePath, shape: null };
 }
 
 /**
@@ -563,8 +534,8 @@ export class GitCrawlSource implements CrawlSource {
   /**
    * Ask git what it can see, then walk only what it cannot.
    *
-   * @returns Every admitted path, with content hints on the regular files git
-   *   already hashed and shapes on everything git described rather than walked
+   * @returns Every admitted path, with shapes on everything git described
+   *   rather than walked
    * @throws When git does not answer. An empty population would be
    *   indistinguishable from a repository with no files, which is the same
    *   confusion `GitExtentContributor` refuses to ship
@@ -615,25 +586,23 @@ export class GitCrawlSource implements CrawlSource {
       if (found.has(candidate.absolutePath)) return;
       found.set(candidate.absolutePath, {
         absolutePath: candidate.absolutePath,
-        contentHint: candidate.contentHint,
         shape: candidate.shape,
       });
     };
 
     // Snapshot first, because `record` is first-wins and git's entries carry a
-    // content hint and a shape the walked ones cannot.
+    // shape the walked ones cannot.
     const { members, submodules } = this.#snapshotMembers(admits);
     for (const candidate of members) record(candidate);
     for (const candidate of await this.#untrackedTerritory(admits, submodules)) record(candidate);
     // Last, so an ancestor already recorded by the snapshot as a FILE is not
-    // relabelled. `contentHint` is unconditionally null — a directory has no
-    // bytes — and `shape` is unconditionally `'directory'`, which is sound
+    // relabelled. `shape` is unconditionally `'directory'`, which is sound
     // because these paths were DERIVED from the names of paths git or the walk
     // found beneath them: a path exists only if its ancestors do, and neither
     // git nor a `followSymlinks: false` walk reports anything beneath a symlink,
     // so no ancestor reached here can be one.
     for (const absolutePath of ancestorDirectories([...found.keys()], this.#root)) {
-      record({ absolutePath, contentHint: null, shape: 'directory' });
+      record({ absolutePath, shape: 'directory' });
     }
 
     return [...found.values()];
@@ -675,12 +644,8 @@ export class GitCrawlSource implements CrawlSource {
       // that reads git's mode bits, so the observation has to be made here — but
       // the DECISION is `enumerate`'s `record`, once, for both halves. See
       // {@link CrawlCandidate} for why those are deliberately separate.
-      //
-      // `contentHint: null` keeps {@link EnumeratedPath.contentHint}'s invariant
-      // literally true even for a candidate that never becomes one: a symlink's
-      // OID is its TARGET STRING and does not imply byte equality.
       if (entry.isSymlink) {
-        members.push({ absolutePath: entry.absolutePath, contentHint: null, shape: 'symlink' });
+        members.push({ absolutePath: entry.absolutePath, shape: 'symlink' });
         continue;
       }
 
@@ -700,7 +665,7 @@ export class GitCrawlSource implements CrawlSource {
       // stale; it is NOT A DIRECTORY because a tree object records blobs and
       // git lists no directories at all; and it is NOT A SYMLINK because every
       // mode-`120000` entry took the branch above and never reaches here.
-      members.push({ absolutePath: entry.absolutePath, contentHint: entry.oid, shape: 'file' });
+      members.push({ absolutePath: entry.absolutePath, shape: 'file' });
     }
 
     return { members, submodules };
@@ -746,7 +711,6 @@ export class GitCrawlSource implements CrawlSource {
       if (!admits(collapsed.absolutePath)) return;
       candidates.push({
         absolutePath: collapsed.absolutePath,
-        contentHint: null,
         shape: collapsed.shape,
       });
       // A DIFFERENT question from membership — whether to descend — and it is
@@ -779,7 +743,6 @@ export class GitCrawlSource implements CrawlSource {
       if (!admits(collapsed.absolutePath)) continue;
       candidates.push({
         absolutePath: collapsed.absolutePath,
-        contentHint: null,
         shape: collapsed.shape,
       });
     }

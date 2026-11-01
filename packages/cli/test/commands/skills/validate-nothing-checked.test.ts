@@ -30,10 +30,10 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SkillsValidateReport } from '../../../src/commands/skills/validate-schema.js';
-import { buildSkillsValidateReport, nothingDiscoveredLine } from '../../../src/commands/skills/validate.js';
+import { buildSkillsValidateReport, nothingDiscoveredLine, runSkillsValidatePhase } from '../../../src/commands/skills/validate.js';
 import { resetSkillDiscoveryCache } from '../../../src/skill-resolution/packaging-config.js';
 
 import { publishedSkillsValidate } from './skills-validate-document.js';
@@ -133,5 +133,49 @@ describe('the stderr half names what the document cannot', () => {
     expect(report.status).toBe('ok');
     expect(report.examined).toBe(0);
     expect(report.findings).toEqual([]);
+  });
+});
+
+/**
+ * Everything one phase run writes to stderr.
+ *
+ * @param root - The project to validate
+ * @returns The concatenated stderr
+ */
+async function stderrOf(root: string): Promise<string> {
+  const written: string[] = [];
+  const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+    written.push(String(chunk));
+    return true;
+  });
+  try {
+    await runSkillsValidatePhase(root, {});
+  } finally {
+    spy.mockRestore();
+  }
+  return written.join('');
+}
+
+describe('no success banner over a run that examined nothing', () => {
+  beforeEach(() => {
+    resetSkillDiscoveryCache();
+  });
+
+  // It printed "✅ All validations passed" directly above the refusal, then
+  // exited 1: the human channel and the document disagreed.
+  it.each([
+    ['no skills: block', '{}\n'],
+    ['an include glob matching nothing', `skills:\n  include:\n    - "${TYPO_GLOB}"\n`],
+  ])('%s', async (_label, config) => {
+    const stderr = await stderrOf(writeProject(config));
+
+    expect(stderr).not.toMatch(/passed/iu);
+    expect(stderr).toContain('Not a verdict');
+  });
+
+  it('keeps the all-clear for a run that validated its skill', async () => {
+    const stderr = await stderrOf(writeProject(`skills:\n  include:\n    - "${MATCHING_GLOB}"\n`));
+
+    expect(stderr).toMatch(/passed/iu);
   });
 });

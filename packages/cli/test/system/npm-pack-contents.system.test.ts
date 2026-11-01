@@ -111,7 +111,7 @@ function capturePack(packageDir: string, buildHint: string): CapturedPack {
 
 beforeAll(() => {
   cliPack = capturePack(PACKAGE_DIR, 'bunx tsc --build packages/cli/tsconfig.json');
-}, 180_000);
+});
 
 describe('published @vibe-agent-toolkit/cli tarball', () => {
   it('packs the CLI package itself, not the surrounding workspace', () => {

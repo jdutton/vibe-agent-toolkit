@@ -50,7 +50,7 @@
  * `projection-ensure-content-key.test.ts` drives `ensureContentKey` against
  * hand-set demand policies (idempotence measured against the run cache, the
  * unreadable path, multi-extent promotion, in-place rewrite ordering), and
- * `projection-blob-population.test.ts` pins the two-run reporting rule.
+ * `projection-blob-population.test.ts` pins the post-fixpoint run's gate.
  */
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -58,9 +58,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { populateBlobs } from '../src/projection/blob-population.js';
 import { RunContentCache } from '../src/projection/content-cache.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
-import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
+import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
-import { afterClosurePromotion, populate, type BlobPopulationReport } from '../src/projection/merge.js';
+import { afterClosurePromotion, populate } from '../src/projection/merge.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
 
 import { createGitRepo, setupSubdirTestSuite, writeFileIn } from './test-helpers.js';
@@ -121,7 +121,7 @@ async function plantIgnoredTree(): Promise<GitTracker> {
  */
 async function baseStratum(tracker: GitTracker): Promise<ProjectionBuilder> {
   const builder = new ProjectionBuilder({ root: suite.tempDir, gitTracker: tracker, contentCache: new RunContentCache() });
-  const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, [])).contribute(builder.base(), null);
+  const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(builder.base(), null);
   for (const row of contribution.realizations) {
     builder.addRealization(row);
   }
@@ -174,15 +174,13 @@ describe('demand promotion, over a row the shipped deferral policy produced', ()
     expect(builder.contentPromotionAttempts).toBe(attemptsBeforeClosure + 1);
     expect(statesAt(builder, DEFERRED_DOC)).toEqual([{ state: 'keyed', key }]);
 
-    const report = await afterClosurePromotion(builder, attemptsBeforeClosure);
+    const blobsBeforePromotion = builder.build().blobs.length;
+    await afterClosurePromotion(builder, attemptsBeforeClosure);
 
-    // Present, not absent — the opposite outcome to the no-promotion case that
-    // `projection-blob-population.test.ts` pins.
-    expect('afterClosurePromotion' in report).toBe(true);
     // One blob, not two: `DEFERRED_LEAF` is still deferred, so a stage that
-    // simply re-derived everything keyed would report a different number.
-    expect(report.afterClosurePromotion?.blobsDerived).toBe(1);
-    expect(report.afterClosurePromotion?.realizationsContentDeferred).toBe(1);
+    // simply re-derived everything keyed would add a different number of rows.
+    expect(builder.build().blobs).toHaveLength(blobsBeforePromotion + 1);
+    expect(statesAt(builder, DEFERRED_LEAF)).toEqual([{ state: 'deferred', key: null }]);
     expect(builder.build().blobs.map((row) => row.contentKey)).toContain(key);
     // The edge the deferred row was hiding. Without the second stage the
     // realization would name a blob with no rows at all — a dangling key.
@@ -192,28 +190,19 @@ describe('demand promotion, over a row the shipped deferral policy produced', ()
   it('leaves the gitignored path deferred through a whole populate(), and says so', async () => {
     // The state the promotion above starts from, reached through the real driver
     // rather than a hand-run base stratum: nothing shipped promotes, so a full
-    // `populate()` must end with the row still `deferred`, its blob underived,
-    // and the report carrying no second measurement.
+    // `populate()` must end with the row still `deferred` and its blob underived.
     const tracker = await plantIgnoredTree();
     const registry = new ContributorRegistry();
-    registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
+    registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
 
-    let report: BlobPopulationReport | undefined;
-    const { projection } = await populate({
-      root: suite.tempDir,
-      registry,
-      gitTracker: tracker,
-      onBlobPopulation: (result) => {
-        report = result;
-      },
-    });
+    const { projection } = await populate({ root: suite.tempDir, registry, gitTracker: tracker });
 
     const deferred = projection.resourceRealizations.filter((row) => row.path === DEFERRED_DOC);
     expect(deferred.map((row) => [row.contentState, row.contentKey])).toEqual([['deferred', null]]);
-    // Non-zero, so the absent key below is a fact about promotion rather than
-    // about a corpus that had nothing to promote in the first place.
-    expect(report?.realizationsContentDeferred).toBe(2);
-    expect('afterClosurePromotion' in (report ?? {})).toBe(false);
+    // Both ignored paths, so the assertion above is a fact about promotion rather
+    // than about a corpus that had nothing to promote in the first place.
+    expect(projection.resourceRealizations.filter((row) => row.contentState === 'deferred'))
+      .toHaveLength(2);
     // The tracked file WAS keyed and derived, so the policy is discriminating
     // rather than deferring everything.
     expect(projection.resourceRealizations.find((row) => row.path === TRACKED_DOC)?.contentState)

@@ -18,6 +18,7 @@ import {
   EXTENT_SYMLINK_NOT_REALIZED,
   EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT,
   EXTENT_SYMLINK_TARGET_UNRESOLVED,
+  DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
 } from '../../src/projection/contributors/filesystem-extent.js';
 import { FilesystemCrawlSource } from '../../src/projection/crawl-source.js';
@@ -38,7 +39,7 @@ type ConditionRow = Awaited<ReturnType<typeof buildExtentContribution>>['contrib
 async function walkConditionAt(root: string): Promise<(path: string) => ConditionRow | undefined> {
   const { contribution } = await buildExtentContribution(
     root,
-    new FilesystemExtentContributor((at) => new FilesystemCrawlSource(at, [])),
+    new FilesystemExtentContributor((at) => new FilesystemCrawlSource(at, []), DEFAULT_CONTENT_DEMAND),
   );
   return (path) => contribution.conditions.find((condition) => condition.path === path);
 }

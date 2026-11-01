@@ -169,8 +169,8 @@ describe('evaluateLens', () => {
   const input = {
     projection: {} as Projection,
     root: '/corpus',
-    logger: createLogger({}),
     cache: undefined,
+    logger: createLogger(),
   };
 
   it('hands back rows that are exactly the declared relations', async () => {

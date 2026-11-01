@@ -40,7 +40,8 @@ Releases are cut from `main` after merge — never from a branch.
 
 1. `bun run pre-release` must pass. It is the pre-publish check plus release readiness: a
    marketplace publish dry-run, no tag of this version already on the remote, and (stable only)
-   a non-empty, stamped CHANGELOG section with nothing left under `[Unreleased]`.
+   a non-empty, stamped CHANGELOG section with nothing left under `[Unreleased]` and no entry in
+   [`known-defects.md`](known-defects.md) marked `- **Blocks:** the stable tag`.
 2. Only then `git tag v<version>` and `git push origin main v<version>` — the tag push triggers
    `publish.yml`, which re-runs the same check against the pushed tag.
 3. Watch the workflow; rollback and the manual fallback are in

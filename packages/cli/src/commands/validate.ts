@@ -90,8 +90,9 @@ export interface ValidateCommandOptions {
 /**
  * Measured full-run duration on the 90-skill / 1,041-document adopter, cited by
  * the retired-`--only` message: resources 13.9s + skills 19.3s. ⚠️ Measured
- * BEFORE the `checks` phase existed, which adds a population of its own — so it
- * is a historical figure (the message says "measured") and a floor on today's run.
+ * BEFORE the `checks` phase existed and before the resources phase asked the
+ * full population's question (blob stage included) — so it is a historical
+ * figure (the message says "measured"), not today's cost.
  */
 const VALIDATE_FULL_RUN_SECONDS = 35;
 
@@ -266,10 +267,9 @@ export function selectValidateSurfaces(
  * this way, and is not.
  *
  * ⚠️ The `checks` phase is OUTSIDE that sharing: it is a supervised CHILD
- * process, so it takes its own git snapshot and opens — and, on a miss, writes —
- * the projection store while this process holds it open inside the scope below.
- * A system smoke test shows the pair derives on a fresh store and that the next
- * run's checks phase is served from it.
+ * process, so it takes its own git snapshot and opens the projection store
+ * while this process holds it open inside the scope below. It asks the resources
+ * phase's question, so with a store selected it is served that phase's rows.
  *
  * @param projectRoot - The resolved project root, which every surface roots at
  * @param phases - The surfaces to run, in order
@@ -325,7 +325,8 @@ async function validateTopLevelCommand(
       logger,
     );
 
-    logger.info(`✅ vat validate (surfaces: ${phases.map((p) => p.name).join(' → ')})`);
+    // A header, not a verdict: no ✅ before anything has run.
+    logger.info(`🔍 vat validate (surfaces: ${phases.map((p) => p.name).join(' → ')})`);
     await runPhasesUnderOnePopulation(projectRoot, phases, logger, results);
   });
   endWithReport('validate', report, ORCHESTRATOR_FORMAT);

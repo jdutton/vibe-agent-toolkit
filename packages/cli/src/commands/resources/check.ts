@@ -782,10 +782,10 @@ export function warnUndeclaredOverrides(
  * nothing all produce it — and because population DECLINES ignored members
  * rather than flagging them, the tables carry no trace of the difference.
  *
- * The precedent is `population-wiring.ts`, which makes `onBlobPopulation`
- * mandatory because "a tree whose every document was declined as binary
- * otherwise populates as empty and reports success". That guard covers blob
- * refusals only; this one covers the extent.
+ * The precedent is `populateAndReport` in `population-wiring.ts`, which names
+ * a tree whose every document was declined as binary rather than letting it
+ * populate as empty and report success. That report covers blob refusals only;
+ * this guard covers the extent.
  *
  * 🪤 **Only when checks actually RAN.** A run with no rules at all is refused
  * too — it is the same class one level further out — but by

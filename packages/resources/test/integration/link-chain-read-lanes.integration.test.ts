@@ -20,7 +20,7 @@ import { installFaultFs } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it, vi } from 'vitest';
 
 import { discoverOkfBundle } from '../../src/okf/discovery.js';
-import { EXTENT_SYMLINK_NOT_REALIZED, EXTENT_SYMLINK_TARGET_UNREADABLE, FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
+import { EXTENT_SYMLINK_NOT_REALIZED, EXTENT_SYMLINK_TARGET_UNREADABLE, DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
 import { FilesystemCrawlSource } from '../../src/projection/crawl-source.js';
 import { collectRealization, resolveRealPath } from '../../src/projection/realizations.js';
 import { canonicalizeSync, isWithinProject } from '../../src/utils.js';
@@ -69,7 +69,7 @@ describe.skipIf(CAPABILITY === null)('read lanes never resolve a link chain thro
   it('the filesystem extent writes the link\'s fault row and keeps every other row, never asking the kernel', async () => {
     const root = corpus();
 
-    const { contribution } = await buildExtentContribution(root, new FilesystemExtentContributor((at) => new FilesystemCrawlSource(at, [])));
+    const { contribution } = await buildExtentContribution(root, new FilesystemExtentContributor((at) => new FilesystemCrawlSource(at, []), DEFAULT_CONTENT_DEMAND));
 
     expect(contribution.conditions.find((condition) => condition.path === 'smb.md')).toMatchObject({ code: EXTENT_SYMLINK_TARGET_UNREADABLE, targetFaultClass: 'refused' });
     expect(contribution.conditions.find((condition) => condition.path === 'alias.md')?.code).toBe(EXTENT_SYMLINK_NOT_REALIZED);

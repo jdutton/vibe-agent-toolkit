@@ -54,7 +54,7 @@ describe('skills list command (system test)', () => {
       encoding: 'utf-8',
       cwd: process.cwd(),
     });
-  }, 60_000); // Two full-project scans (~15-20s each)
+  });
 
   it('should show help text', () => {
     const result = spawnSync(NODE_EXECUTABLE, [binPath, 'skills', 'list', '--help'], {

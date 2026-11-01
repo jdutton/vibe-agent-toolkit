@@ -121,6 +121,8 @@ const PROBE_FILES: Readonly<Record<string, string>> = {
   // Scoped to product `src/`; the probe installs its handler through the helper, so
   // it is NOT the rule's one `allow` entry.
   'no-raw-signal-listener': 'packages/cli/src/commands/audit/git-url-clone.ts',
+  // Scoped to the integration and system tiers, whose timeouts the platform scales.
+  'no-literal-test-timeout': 'packages/cli/test/system/test-common.ts',
 };
 
 /** `error` as ESLint normalizes it out of `calculateConfigForFile`. */

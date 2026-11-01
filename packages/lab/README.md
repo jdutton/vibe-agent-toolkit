@@ -218,14 +218,10 @@ measurement fails its bar, and the command exits 1 unless every bar passes. Befo
 prints `Builds:` — each alias's resolved version and the coordinate it came from — and the load the
 arms ran under, so a verdict read later names the bytes it judged.
 
-**Bar 2 is measurable only after S2.** A warm `ci-c` repetition must report `store` for both its
-resources phase and its checks phase (S1 bar 4; absent fails either). The checks phase publishes
-its `population` today, but the resources phase's `data.population` does not exist yet: today's
-`resources validate` report schema
-is `.strict()` without that field — every warm `validate` step fails the warm rule as "absent"
-until S2 adds it. The lab cannot import the CLI's report schemas (they are internal to the CLI,
-and the lab measures several builds), so the extractor's `cand-C-warm` fixture is modelled ahead
-of S2, and its test names that dependency.
+**Bar 2:** a warm `ci-c` repetition must report `store` for both its resources phase's and its
+checks phase's `data.population` (absent fails either). The lab cannot import the CLI's report
+schemas (they are internal to the CLI, and the lab measures several builds), so the extractor's
+`cand-C-warm` fixture models that shape by hand.
 
 ```bash
 vat-lab perf arms ../subject --build base=dist:/path/to/base/cli --build cand=dist:/path/to/cand/cli \

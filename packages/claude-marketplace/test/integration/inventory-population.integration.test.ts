@@ -33,7 +33,6 @@ import {
   extractClaudePluginInventory,
   type InventoryPopulation,
 } from '@vibe-agent-toolkit/claude-marketplace';
-import { DISCARD_BLOB_POPULATION } from '@vibe-agent-toolkit/resources';
 import {
   mkdirSyncReal,
   normalizedTmpdir,
@@ -156,7 +155,6 @@ async function populationForFixture(): Promise<InventoryPopulation> {
   return buildInventoryPopulation({
     root,
     skillMdPaths: [skillMd('alpha'), skillMd('beta')],
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
   });
 }
 
@@ -218,7 +216,6 @@ describe('vat inventory: a population that cannot serve the question defers to t
     const partial = await buildInventoryPopulation({
       root,
       skillMdPaths: [skillMd('alpha')],
-      onBlobPopulation: DISCARD_BLOB_POPULATION,
     });
 
     expect(partial.membersOf(skillMd('beta'))).toBeUndefined();
@@ -239,7 +236,6 @@ describe('vat inventory: a population that cannot serve the question defers to t
     const population = await buildInventoryPopulation({
       root,
       skillMdPaths: [safePath.join(bare, 'SKILL.md')],
-      onBlobPopulation: DISCARD_BLOB_POPULATION,
     });
 
     expect(population.membersOf(safePath.join(bare, 'SKILL.md'))).toEqual([]);

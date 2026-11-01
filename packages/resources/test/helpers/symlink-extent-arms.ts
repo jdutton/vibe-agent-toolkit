@@ -24,7 +24,7 @@ import { forEachInOrder } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll } from 'vitest';
 
 import type { ExtentContribution } from '../../src/projection/contributor.js';
-import { FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
+import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
 import {
   FilesystemCrawlSource,
   GitCrawlSource,
@@ -112,7 +112,7 @@ export function setupSymlinkExtentSuite(spec: SymlinkFixtureSpec): SymlinkExtent
     await forEachInOrder(SYMLINK_ARMS, async ([label, sourceFor]) => {
       const { contribution } = await buildExtentContribution(
         root,
-        new FilesystemExtentContributor(sourceFor),
+        new FilesystemExtentContributor(sourceFor, DEFAULT_CONTENT_DEMAND),
       );
       byArm.set(label, contribution);
     });

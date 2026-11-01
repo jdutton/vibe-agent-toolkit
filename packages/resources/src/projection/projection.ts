@@ -126,9 +126,9 @@ export interface Projection {
    * lose by ordering.
    *
    * ⚠️ Empty in a projection whose lane did not register that contributor. It
-   * reads blobs, so a lane running under `CONTENT_PARSING_SKIP` cannot have it —
-   * `buildResourcePopulation` is exactly that lane, and `buildResourceProjection`
-   * beside it is not.
+   * reads blobs, so a lane running under `CONTENT_PARSING_SKIP` cannot have it.
+   * Every resources lane registers it; the claude-context discovery pass is the
+   * one skipping lane.
    */
   readonly claudeRulePatterns: readonly ClaudeRulePatternRow[];
   /** Zone entities — extents and lenses. */

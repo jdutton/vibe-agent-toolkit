@@ -30,7 +30,7 @@ import { buildClaudeContextPopulation } from '../src/projection/claude-context-p
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
-import { CONTENT_PARSING_SKIP, DISCARD_BLOB_POPULATION, populate } from '../src/projection/merge.js';
+import { CONTENT_PARSING_SKIP, populate } from '../src/projection/merge.js';
 import { createCollectionMimeResolver } from '../src/projection/realizations.js';
 import type {
   BlobScopedRows,
@@ -142,7 +142,6 @@ async function storeKeyFor(
     root: fixture.root(),
     registry,
     contentParsing: CONTENT_PARSING_SKIP,
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
     cache: { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH },
     ...(collections !== undefined && { collections }),
   });
@@ -253,7 +252,6 @@ async function ambientKeysAcrossBothPasses(
   await buildClaudeContextPopulation({
     root: twoPass.root(),
     cache: { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH },
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
     ...(collections !== undefined && { collections }),
   });
 
@@ -263,16 +261,11 @@ async function ambientKeysAcrossBothPasses(
 /**
  * ⚠️ **Read this before trusting the two arms below as live guards.**
  *
- * The lane's `discoverImportRoots` docstring used to claim that a discovery pass
- * which did not receive `collections` would key differently from the real pass
- * and the two would evict each other from the store, run after run. That is
- * FALSE, and it was checked the only way worth checking: the `collections`
- * forwarding was deleted from the discovery pass and the whole `resources` suite
- * — 2,469 tests — stayed green. The mechanism is that the discovery pass is
- * never handed a `cache` at all, so it asks the store nothing and has no key to
- * collide with; and a declared type cannot change what it ANSWERS either,
- * because `claudeImportRootsFrom` reads `path` / `basenameLower` / `isDirectory`
- * and never `mime`.
+ * The lane's discovery pass (`discoverImportRoots`) takes no `collections` and
+ * no `cache`: it asks the store nothing and has no key to collide with, and a
+ * declared type cannot change what it ANSWERS either, because
+ * `claudeImportRootsFrom` reads `path` / `basenameLower` / `isDirectory` and
+ * never `mime`.
  *
  * So the `toHaveLength(1)` arms are TRIPWIRES for a hazard that is currently
  * unreachable, not proofs that two live passes agree. They are kept — and said

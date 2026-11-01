@@ -169,11 +169,12 @@ excluding the marketplace, `--user` and single-skill shapes, not an intent that 
 
 `contentDemand` is now a per-registration constructor parameter
 (`packages/resources/src/projection/contributors/filesystem-extent.ts ›
-FilesystemExtentContributor.constructor()`), and the two lanes already state different demands — the
-matrix's content-read table shows `deferred` against `deferGitignored`. That one contributor needed
-two answers is what keeps the question live rather than settling it: nothing declares whether the
-demand belongs to the lane that registers the contributor or to the consumer that reads the result,
-so a third consumer has no rule to follow.
+FilesystemExtentContributor.constructor()`), required, with no default. Every store-reaching lane —
+the resources lanes and `vat inventory` — now states `DEFAULT_CONTENT_DEMAND`; only the
+claude-context discovery pass, which never touches the store, states `deferred`. So one demand is
+the answer in practice, but nothing yet declares whether the demand belongs to the lane that
+registers the contributor or to the consumer that reads the result, so a further consumer that
+wanted less content would have no rule to follow.
 
 ### Should a closure follow the paths a non-parsed file names?
 

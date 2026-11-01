@@ -138,10 +138,20 @@ describe('logInstallOutcome', () => {
     expect(linesOf(logger).join('\n')).toContain('vat claude plugin list');
   });
 
-  it('an install of nothing does not tell the user to go and verify it', () => {
-    const logger = fakeLogger();
-    logInstallOutcome(outcome(0), false, logger as never);
-    expect(linesOf(logger)).toEqual(['\n✅ Installed 0 skill(s)']);
+  it('an install of nothing prints no success line, and does not tell the user to go and verify it', () => {
+    for (const symlink of [false, true]) {
+      const logger = fakeLogger();
+      logInstallOutcome(outcome(0, symlink), false, logger as never);
+      expect(linesOf(logger)).toEqual(['\n⚠️ Nothing installed: the source holds no skill']);
+    }
+  });
+
+  it('a dry run over nothing prints no success line either', () => {
+    for (const symlink of [false, true]) {
+      const logger = fakeLogger();
+      logInstallOutcome(outcome(0, symlink), true, logger as never);
+      expect(linesOf(logger)).toEqual(['\n⚠️ Dry-run: the source holds no skill to install']);
+    }
   });
 
   it('a dry run says "would", for a copy and for a --dev link', () => {

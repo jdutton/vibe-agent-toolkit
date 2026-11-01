@@ -25,9 +25,9 @@ import { promised } from '@vibe-agent-toolkit/utils';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import { ContributorRegistry } from '../src/projection/contributor.js';
-import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
+import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
-import { DISCARD_BLOB_POPULATION, populate } from '../src/projection/merge.js';
+import { populate } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 import type {
   BlobScopedRows,
@@ -227,6 +227,16 @@ export class FakeProjectionStore implements ProjectionStore {
   }
 
   /**
+   * Drop every blob row held for one content key — a count-window eviction of
+   * that key, which a real backend does in `#forgetBlobKeys`.
+   *
+   * @param contentKey - The key to forget
+   */
+  forgetBlobFacts(contentKey: string): void {
+    this.#blobs.delete(contentKey);
+  }
+
+  /**
    * Store one tree's extent under its key.
    *
    * Wholesale replacement, not the additive-per-context merge a real backend
@@ -288,12 +298,11 @@ export async function populateExtentThrough(
   const tracker = new GitTracker(root);
   await tracker.initialize();
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
   const { projection, outcome } = await populate({
     root,
     registry,
     gitTracker: tracker,
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
     cache: { store, treeUnchanged: () => true, treeHash },
   });
   return { projection, derived: outcome.stored !== 'hit' };

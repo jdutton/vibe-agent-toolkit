@@ -21,9 +21,9 @@ import { describe, expect, it } from 'vitest';
 
 import { COLLECTION_MIME_CONFLICT } from '../src/index.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
-import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
+import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
-import { DISCARD_BLOB_POPULATION, populate } from '../src/projection/merge.js';
+import { populate } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 import type { CollectionConfig } from '../src/schemas/project-config.js';
 
@@ -72,12 +72,11 @@ async function populateWith(
   collections: Readonly<Record<string, CollectionConfig>> | undefined,
 ): Promise<Projection> {
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor(() => crawlSourceFor(fixture.root(), [])));
+  registry.register(new FilesystemExtentContributor(() => crawlSourceFor(fixture.root(), []), DEFAULT_CONTENT_DEMAND));
 
   const { projection } = await populate({
     root: fixture.root(),
     registry,
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
     ...(collections !== undefined && { collections }),
   });
   return projection;

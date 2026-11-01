@@ -108,5 +108,5 @@ describe('System Test: Project Link Validation (Dogfooding)', () => {
 
     // Ensure we actually validated some files
     expect(stats.totalResources).toBeGreaterThan(0);
-  }, 60_000); // 60 second timeout — crawls entire monorepo
+  });
 });

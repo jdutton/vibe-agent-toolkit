@@ -54,6 +54,7 @@ import {
 import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
 import { crawlLaneDebugLine, withResourcePopulationSource } from '../../utils/resource-loader.js';
+import { verdictBanner } from '../../utils/run-integrity.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
 import { renderSkillQualityFooter } from '../../utils/skill-quality-footer.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
@@ -301,16 +302,16 @@ function glyphFor(counts: SeverityCounts): string {
  * cause this renderer cannot observe, and would go stale the next time a code
  * is added.
  */
-function reportBanner(counts: SeverityCounts): string {
+function reportBanner(counts: SeverityCounts, examined: number): string {
   if (counts.errors > 0) {
     return `\n❌ Validation failed — ${formatSeverityBreakdown(counts)}:\n`;
   }
   if (counts.warnings + counts.info > 0) {
     // Non-blocking (exit 0), which is exactly why this used to print
     // "All validations passed" over the findings.
-    return `\n${glyphFor(counts)} Validation passed with findings — ${formatSeverityBreakdown(counts)}:\n`;
+    return verdictBanner(examined, `\n${glyphFor(counts)} Validation passed with findings — ${formatSeverityBreakdown(counts)}:\n`);
   }
-  return '\n✅ All validations passed';
+  return verdictBanner(examined, '\n✅ All validations passed');
 }
 
 /**
@@ -332,15 +333,17 @@ function reportBanner(counts: SeverityCounts): string {
  *
  * @param results - One result per skill validated
  * @param runFindings - The run-level findings the document published
+ * @param examined - The published report's `examined`, never recounted
  * @param verbose - Render every finding in full, and the per-skill detail
  */
 export function formatValidationReportLines(
   results: readonly PackagingValidationResult[],
   runFindings: readonly ValidationIssue[],
+  examined: number,
   verbose: boolean,
 ): string[] {
   const counts = countBySeverity([...results.flatMap(skillFindings), ...toFindings(runFindings)]);
-  const lines = [reportBanner(counts)];
+  const lines = [reportBanner(counts, examined)];
 
   for (const result of results) {
     if (!hasFindings(result)) continue;
@@ -359,6 +362,7 @@ export function formatValidationReportLines(
 function reportValidationToStderr(
   results: readonly PackagingValidationResult[],
   runFindings: readonly ValidationIssue[],
+  examined: number,
   logger: ReturnType<typeof createLogger>,
   verbose: boolean,
 ): void {
@@ -372,7 +376,7 @@ function reportValidationToStderr(
     return counts.errors + counts.warnings > 0;
   });
 
-  for (const line of formatValidationReportLines(results, runFindings, verbose)) {
+  for (const line of formatValidationReportLines(results, runFindings, examined, verbose)) {
     logger.info(line);
   }
   renderSkillQualityFooter(logger, hasSkillFindings, emittedCodes);
@@ -722,7 +726,7 @@ export async function runSkillsValidatePhase(
       runIssues,
       durationMs: Date.now() - startTime,
     });
-    reportValidationToStderr(results, runIssues, logger, options.verbose === true);
+    reportValidationToStderr(results, runIssues, report.examined, logger, options.verbose === true);
     if (report.examined === 0) logger.error(nothingDiscoveredLine(config?.skills));
     return { report };
   } catch (error) {

@@ -37,7 +37,7 @@ describe('Audit User Plugins Fixture (system test)', () => {
     // Extract test fixtures from tarball (cross-platform)
     // NOTE: ZIP extraction is slower on Windows, increase timeout
     fixtureDir = await getTestFixturesPath();
-  }, 30000); // 30 second timeout for fixture extraction on Windows
+  });
 
   afterAll(() => {
     cleanupTestTempDir(tempDir);

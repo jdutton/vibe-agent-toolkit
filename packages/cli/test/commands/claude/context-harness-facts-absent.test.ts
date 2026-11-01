@@ -33,12 +33,10 @@ vi.mock('../../../src/utils/projection-store.js', () => ({
   withPopulationCache: (_options: unknown, run: (cache: undefined) => Promise<unknown>) => run(undefined),
 }));
 
+// The population is a stub with no rows, so the entry hands it straight back;
+// what this file pins is the query's refusal, not the population's report.
 vi.mock('../../../src/utils/population-wiring.js', () => ({
-  populationWiring: () => ({}),
-}));
-
-vi.mock('../../../src/commands/audit/distributed-tree.js', () => ({
-  gitTrackerForProjectRoot: () => Promise.resolve(undefined),
+  populateAndReport: (_options: unknown, build: (wiring: object) => Promise<unknown>) => build({}),
 }));
 
 const { claudeContextCommand } = await import('../../../src/commands/claude/context.js');

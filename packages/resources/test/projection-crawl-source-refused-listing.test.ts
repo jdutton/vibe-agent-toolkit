@@ -46,6 +46,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ExtentContribution } from '../src/projection/contributor.js';
 import {
   EXTENT_DIRECTORY_UNLISTABLE,
+  DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
 } from '../src/projection/contributors/filesystem-extent.js';
 import {
@@ -94,7 +95,7 @@ async function contribute(sourceFor: (root: string) => CrawlSource): Promise<Ext
   const tracker = new GitTracker(root);
   await tracker.initialize();
   const base = new ProjectionBuilder({ root, gitTracker: tracker }).base();
-  return new FilesystemExtentContributor(sourceFor).contribute(base, null);
+  return new FilesystemExtentContributor(sourceFor, DEFAULT_CONTENT_DEMAND).contribute(base, null);
 }
 
 /** What an arm threw, or `undefined` when it completed. */

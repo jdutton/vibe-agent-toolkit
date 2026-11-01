@@ -355,8 +355,6 @@ function populationSourceFor(
       buildResourcePopulation({
         root: enumeratedRoot,
         outputs,
-        gitTracker,
-        ...(cache !== undefined && { cache }),
         // `enumeratedRoot` and this source's own `root` are the SAME directory,
         // always: `populationFrom` compares them and declines outright when they
         // differ, so `enumerate` is never called for another tree. Reading the
@@ -364,6 +362,8 @@ function populationSourceFor(
         // against a second root — it is how the declaration and the enumeration
         // are kept demonstrably on one tree at the point of use, with no second
         // variable to fall out of step with the one that was checked.
+        gitTracker,
+        ...(cache !== undefined && { cache }),
         ...collectionsOption(enumeratedRoot),
       }),
   };

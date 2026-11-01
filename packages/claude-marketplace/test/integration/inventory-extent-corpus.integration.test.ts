@@ -59,8 +59,8 @@ import {
 } from '@vibe-agent-toolkit/agent-skills';
 import {
   ContributorRegistry,
-  DISCARD_BLOB_POPULATION,
   crawlSourceFor,
+  DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
   ProjectionBuilder,
   populate,
@@ -76,8 +76,8 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory } from '@vibe-agent-toolkit/utils/crawl';
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
-import { refuseUnreadableFixture } from '@vibe-agent-toolkit/utils/testing';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { atLeastTierTimeout, refuseUnreadableFixture } from '@vibe-agent-toolkit/utils/testing';
+import { beforeAll, describe, expect, inject, it } from 'vitest';
 
 import { crawlSkillLinkRegistry, INVENTORY_REFUSED_GITIGNORED, inventoryExtentContributorId, inventoryExtentDeclaration, InventorySkillExtentContributor } from '../../src/index.js';
 
@@ -326,7 +326,7 @@ async function populateCorpus(
   gitTracker: GitTracker | undefined,
 ): Promise<{ projection: Projection; extentIdByName: Map<string, string> }> {
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
 
   const parameters: Record<string, JsonValue> = {};
   for (const skill of skills) {
@@ -338,7 +338,6 @@ async function populateCorpus(
     root,
     registry,
     parameters,
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
     ...(gitTracker !== undefined && { gitTracker }),
   });
 
@@ -653,7 +652,7 @@ beforeAll(async () => {
     'crawlSkillLinkRegistry ms': Number(corpus.preparationMs.registry.toFixed(0)),
     'populate ms': Number(corpus.preparationMs.populate.toFixed(0)),
   })));
-}, 3_600_000);
+}, atLeastTierTimeout(inject('tierHookTimeout'), 3_600_000));
 
 // ============================================================================
 // The experiment
@@ -692,7 +691,7 @@ describe('inventory extent as a shadow of collectLinkedFiles', () => {
     expect(followed).toBeGreaterThan(0);
 
     expect(renderDivergences(divergences)).toEqual([]);
-  }, 1_800_000);
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 1_800_000));
 
   it('FIXTURE: with a tracker, the gitignore rule closes the only remaining difference', async () => {
     const corpus = corpusAt(FIXTURE_CORPUS, WITH_TRACKER);
@@ -712,7 +711,7 @@ describe('inventory extent as a shadow of collectLinkedFiles', () => {
       expect(walker).not.toContain(ignored);
       expect(closure).not.toContain(ignored);
     }
-  }, 600_000);
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 600_000));
 
   it('FIXTURE NEGATIVE CONTROL: stripping the gitignore rule brings the difference back', async () => {
     // Without this, the agreement above is unfalsifiable: it is exactly what a
@@ -767,7 +766,7 @@ describe('inventory extent as a shadow of collectLinkedFiles', () => {
     // Still a superset in the closure's direction: nothing the walker linked went
     // missing, which is what makes this a NARROWING problem throughout.
     expect(divergences.flatMap((row) => row.walkerOnly)).toEqual([]);
-  }, 600_000);
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 600_000));
 
   it('FIXTURE: records what the NO-TRACKER state can and cannot do, as a measurement', async () => {
     // ⛔ The one place the two arms are NOT equivalent, pinned rather than left to
@@ -797,5 +796,5 @@ describe('inventory extent as a shadow of collectLinkedFiles', () => {
       expect(closure).toContain(ignored);
     }
     expect(divergence?.walkerOnly).toEqual([]);
-  }, 600_000);
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 600_000));
 });

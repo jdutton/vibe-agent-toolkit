@@ -40,6 +40,7 @@ import {
   CLOSURE_REFERENCE_UNRESOLVED,
   DeferredArtifacts,
   crawlSourceFor,
+  DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
   ProjectionBuilder,
   blobReferencesFor,
@@ -348,7 +349,7 @@ async function populatedBase(root: string): Promise<ProjectionBase> {
   const builder = new ProjectionBuilder({ root });
   builder.addRoot({ id: builder.identities.rootId, path: safePath.resolve(root) });
 
-  const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, [])).contribute(builder.base(), null);
+  const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(builder.base(), null);
   for (const row of contribution.resources) {
     builder.addResource(row);
   }

@@ -72,7 +72,7 @@ describe('vat audit — YAML states one root and re-bases every path onto it (sy
     const run = await executeCliAndParseYaml(getBinPath(import.meta.url), ['audit', scanRoot]);
     parsed = run.parsed;
     exitStatus = run.result.status;
-  }, 60_000);
+  });
 
   afterAll(() => {
     cleanupTestTempDir(scanRoot);

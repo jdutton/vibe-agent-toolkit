@@ -17,6 +17,7 @@ import { extentContextId } from '../src/projection/contributors/context-id.js';
 import {
   DECLINE_IGNORED,
   EXTENT_DIRECTORY_UNLISTABLE,
+  DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
   unlistableRowStillHolds,
 } from '../src/projection/contributors/filesystem-extent.js';
@@ -52,7 +53,7 @@ function pathsOf(contribution: ExtentContribution): string[] {
 /** Run the contributor against a fresh base over the fixture root. */
 async function contribute(): Promise<ExtentContribution> {
   const base = new ProjectionBuilder({ root }).base();
-  return new FilesystemExtentContributor((at) => crawlSourceFor(at, [])).contribute(base, null);
+  return new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(base, null);
 }
 
 /**
@@ -83,7 +84,7 @@ async function contributeWithParameters(parameters: JsonValue): Promise<ExtentCo
   const tracker = new GitTracker(root);
   await tracker.initialize();
   const base = new ProjectionBuilder({ root, gitTracker: tracker }).base();
-  return new FilesystemExtentContributor((at) => crawlSourceFor(at, [])).contribute(base, parameters);
+  return new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(base, parameters);
 }
 
 /**
@@ -94,7 +95,7 @@ async function contributeWithParameters(parameters: JsonValue): Promise<ExtentCo
  * would pass against any of the three policies.
  *
  * @param demand - The policy to construct the contributor with, or omitted to
- *   take the default
+ *   take `DEFAULT_CONTENT_DEMAND`
  * @returns The contribution
  */
 async function contributeUnder(demand?: ContentDemand): Promise<ExtentContribution> {
@@ -102,9 +103,7 @@ async function contributeUnder(demand?: ContentDemand): Promise<ExtentContributi
   const tracker = new GitTracker(root);
   await tracker.initialize();
   const base = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache() }).base();
-  const contributor = demand === undefined
-    ? new FilesystemExtentContributor((at) => crawlSourceFor(at, []))
-    : new FilesystemExtentContributor((at) => crawlSourceFor(at, []), demand);
+  const contributor = new FilesystemExtentContributor((at) => crawlSourceFor(at, []), demand ?? DEFAULT_CONTENT_DEMAND);
   return contributor.contribute(base, null);
 }
 
@@ -223,7 +222,7 @@ describe('FilesystemExtentContributor declining the ignored half', () => {
     // the decline has nothing to act on and must not guess from `.gitignore`'s
     // mere presence.
     const base = new ProjectionBuilder({ root }).base();
-    const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, [])).contribute(base, DECLINE_IGNORED);
+    const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(base, DECLINE_IGNORED);
 
     expect(pathsOf(contribution)).toContain(BUILD_OUTPUT);
   });
@@ -244,7 +243,7 @@ describe('FilesystemExtentContributor declining the ignored half', () => {
 
 describe('FilesystemExtentContributor identity', () => {
   it('declares the contributor triple the registry and provenance key on', () => {
-    const contributor = new FilesystemExtentContributor((at) => crawlSourceFor(at, []));
+    const contributor = new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND);
 
     expect(contributor.id).toBe('builtin:filesystem');
     expect(contributor.kind).toBe('filesystem');
@@ -328,7 +327,7 @@ describe('FilesystemExtentContributor rows', () => {
     // `contextId` alone, so a federated projection over two roots keeps these
     // extents apart only if the root is inside the id.
     const builder = new ProjectionBuilder({ root });
-    const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, [])).contribute(builder.base(), null);
+    const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(builder.base(), null);
 
     expect(contribution.contexts[0]?.rootId).toBe(builder.identities.rootId);
     expect(contribution.contexts[0]?.contextId)
@@ -363,28 +362,34 @@ describe('FilesystemExtentContributor digest', () => {
 });
 
 /**
- * **Who decides whether this extent pays to read bytes.**
- *
- * The policy used to be a literal inside `contribute()`, which made it one
- * decision for every lane that registers this contributor — and the lanes do not
- * agree. `vat inventory` runs the blob stage over what this extent keys;
- * `buildResourcePopulation` reads four columns and `contentKey` is not one of
- * them. A single literal cannot be right for both, so the demand is a
- * constructor parameter and each lane states its own.
- *
- * The default is asserted as well as the override. It is what `vat inventory`
- * gets, and a default that silently became `deferred` would empty the blob stage
- * while every membership assertion in this file stayed green.
+ * **Who decides whether this extent pays to read bytes.** The caller: the
+ * demand is a required constructor argument, because it enters the store key.
+ * `DEFAULT_CONTENT_DEMAND` is what every resources lane and `vat inventory`
+ * pass, so it is asserted as well as the `'deferred'` override — a constant that
+ * silently became `deferred` would empty the blob stage while every membership
+ * assertion in this file stayed green.
  */
 describe('FilesystemExtentContributor content demand', () => {
-  it('keys a tracked file by default, which is what the blob stage consumes', async () => {
+  it('refuses a missing or unknown demand at construction', () => {
+    // Test files are not typechecked, so the required parameter alone does not
+    // stop a caller omitting it — and an omitted demand once read as `eager`.
+    const sourceFor = (at: string) => crawlSourceFor(at, []);
+    const construct = (demand: unknown) =>
+      new FilesystemExtentContributor(sourceFor, demand as ContentDemand);
+
+    expect(() => construct(undefined)).toThrow(/content demand/i);
+    expect(() => construct('lazy')).toThrow(/content demand/i);
+    expect(() => construct(DEFAULT_CONTENT_DEMAND)).not.toThrow();
+  });
+
+  it('keys a tracked file under DEFAULT_CONTENT_DEMAND, which is what the blob stage consumes', async () => {
     const contribution = await contributeUnder();
 
     expect(rowFor(contribution, 'README.md')?.contentState).toBe('keyed');
     expect(rowFor(contribution, 'README.md')?.contentKey).not.toBeNull();
   });
 
-  it('defers a gitignored file by default, which is the incumbent saving', async () => {
+  it('defers a gitignored file under DEFAULT_CONTENT_DEMAND', async () => {
     const contribution = await contributeUnder();
 
     expect(rowFor(contribution, BUILD_OUTPUT)?.contentState).toBe('deferred');
@@ -393,7 +398,7 @@ describe('FilesystemExtentContributor content demand', () => {
 
   it('keys nothing at all under "deferred", tracked half included', async () => {
     // The whole point of the parameter: the tracked half is what the default
-    // still reads, so a policy that only changed the ignored half would be
+    // demand still reads, so a policy that only changed the ignored half would be
     // indistinguishable from the default here.
     const contribution = await contributeUnder('deferred');
     const files = contribution.realizations.filter((row) => !row.isDirectory);

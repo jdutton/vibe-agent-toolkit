@@ -52,10 +52,11 @@
 import {
   ContributorRegistry,
   crawlSourceFor,
+  DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
   populate,
   populationOracles,
-  type BlobPopulationReport,
+  type BlobRefusalRows,
   type CollectionConfig,
   type JsonValue,
   type PopulationCache,
@@ -170,6 +171,12 @@ export interface InventoryPopulation {
    * @returns Absolute paths of the skill's linked files, or `undefined`
    */
   membersOf(skillMdPath: string): readonly string[] | undefined;
+  /**
+   * The stored rows that say what this population declined to derive or
+   * mis-decoded, for a caller to hand `describeBlobRefusals` — the same rows on
+   * a store hit as the derive that wrote them.
+   */
+  readonly refusalRows: BlobRefusalRows;
 }
 
 /**
@@ -225,15 +232,8 @@ function relativeToRoot(root: string, absolute: string): string {
  *   rather than a hard-coded walk is load-bearing here: two runs over one tree
  *   under different declarations are two questions, and the store refuses to
  *   answer one with the other
- * @param options.onBlobPopulation - Receives what the blob stage derived and what
- *   it REFUSED to derive. **Required, and passed through unchanged**: this is the
- *   only production lane that runs the stage, and while `populate()`'s observer
- *   was optional this function passed none — so every `blobsNotText`,
- *   `blobsUnreadable` and `referencesSkippedForMissingLine` the stage computed
- *   was discarded here, and a plugin whose every document was declined as binary
- *   inventoried as empty with exit 0. A caller with nothing to do with the counts
- *   names `DISCARD_BLOB_POPULATION`; it does not leave the argument off
- * @returns The indexed population
+ * @returns The indexed population, carrying its refusal rows (see
+ *   {@link InventoryPopulation.refusalRows}) for the caller to report
  */
 export async function buildInventoryPopulation(options: {
   root: string;
@@ -241,13 +241,13 @@ export async function buildInventoryPopulation(options: {
   gitTracker?: GitTracker | undefined;
   cache?: PopulationCache | undefined;
   collections?: Readonly<Record<string, CollectionConfig>> | undefined;
-  onBlobPopulation: (report: BlobPopulationReport) => void;
 }): Promise<InventoryPopulation> {
   const root = safePath.resolve(options.root);
   const hasGitTracker = options.gitTracker !== undefined;
 
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
+  // The resources lanes' demand: this lane runs the blob stage over what it keys.
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
 
   const parameters: Record<string, JsonValue> = {};
   // The skill's own root-relative path is the discriminator. It is unique within
@@ -268,7 +268,6 @@ export async function buildInventoryPopulation(options: {
     root,
     registry,
     parameters,
-    onBlobPopulation: options.onBlobPopulation,
     ...populationOracles(options),
   });
 
@@ -323,6 +322,7 @@ function indexPopulation(
   return {
     root,
     membersOf: (skillMdPath: string) => byAbsoluteSkill.get(safePath.resolve(skillMdPath)),
+    refusalRows: projection,
   };
 }
 

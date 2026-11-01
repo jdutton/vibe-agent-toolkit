@@ -66,7 +66,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 import { resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { atLeastTierTimeout } from '@vibe-agent-toolkit/utils/testing';
+import { afterEach, beforeEach, describe, expect, inject, it } from 'vitest';
 
 /** The population script, beside this file. */
 const CHILD = resolveFromImportMeta(import.meta.url, 'store-sharing-child.mjs');
@@ -300,7 +301,7 @@ describe('the fixture', () => {
     expect(counts['blobConditions']).toBeGreaterThanOrEqual(1);
     // And the roots row the driver places itself.
     expect(counts['roots']).toBe(1);
-  }, 60_000);
+  });
 });
 
 describe('a second process reading a first process\'s extent', () => {
@@ -330,7 +331,7 @@ describe('a second process reading a first process\'s extent', () => {
     // it would produce the same values and a different document, and that is a
     // real defect for anyone diffing this output against a committed golden.
     expect(second.document).toBe(first.document);
-  }, 60_000);
+  });
 
   it('runs no contributor at all, which is the only proof the store answered', async () => {
     // Separated from the comparison above because the two prove different
@@ -348,7 +349,7 @@ describe('a second process reading a first process\'s extent', () => {
     expect(first.contributorRuns).toContain('closure:beta@1');
     expect(second.contributorRuns).toHaveLength(0);
     expect(second.outcome).toEqual(HIT);
-  }, 60_000);
+  });
 });
 
 describe('the additive write, which only two processes can see', () => {
@@ -390,7 +391,7 @@ describe('the additive write, which only two processes can see', () => {
     // And it is the same answer, not merely an answer: a merge that kept the
     // rows but corrupted them would still report a hit.
     expect(again.document).toBe(broad.document);
-  }, 90_000);
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 90_000));
 });
 
 describe('a cold store', () => {
@@ -428,5 +429,5 @@ describe('a cold store', () => {
     // agreement above trivially.
     const first = readPopulation(outcomes[0] as ChildOutcome);
     expect(first.counts['zoneProvenance']).toBe(3);
-  }, 90_000);
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 90_000));
 });

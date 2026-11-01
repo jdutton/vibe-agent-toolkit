@@ -9,7 +9,7 @@ import * as fs from 'node:fs';
 import { dirname as pathDirname, join as pathJoin, resolve as pathResolve } from 'node:path';
 import { fileURLToPath as urlFileURLToPath, pathToFileURL } from 'node:url';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { createTempDir, removeTempDir, tempDirTracker } from '@vibe-agent-toolkit/utils/testing';
 import { expect } from 'vitest';
@@ -388,6 +388,32 @@ export function fakeHomeEnv(fakeHome: string): Record<string, string> {
     // not any shell-level CLAUDE_CONFIG_DIR that may be set in the test runner's env.
     CLAUDE_CONFIG_DIR: pathJoin(fakeHome, '.claude'),
   };
+}
+
+/**
+ * A scratch directory for one suite whose runs must not reach the real home,
+ * Claude config or temp directory: `home/.claude` and `tmp` are created under
+ * it, and {@link isolatedScratchEnv} points the CLI at them.
+ *
+ * @param prefix - The scratch directory's name prefix under the OS temp dir
+ * @returns The scratch directory
+ */
+export function createIsolatedScratch(prefix: string): string {
+  const scratch = fs.mkdtempSync(safePath.join(normalizedTmpdir(), prefix));
+  mkdirSyncReal(safePath.join(scratch, 'home', '.claude'), { recursive: true });
+  mkdirSyncReal(safePath.join(scratch, 'tmp'), { recursive: true });
+  return scratch;
+}
+
+/**
+ * The environment that aims a CLI run at an {@link createIsolatedScratch}
+ * directory: `HOME`, `USERPROFILE`, `CLAUDE_CONFIG_DIR` and `TMPDIR`.
+ *
+ * @param scratch - The scratch directory
+ * @returns The environment entries
+ */
+export function isolatedScratchEnv(scratch: string): Record<string, string> {
+  return { ...fakeHomeEnv(safePath.join(scratch, 'home')), TMPDIR: safePath.join(scratch, 'tmp') };
 }
 
 /**

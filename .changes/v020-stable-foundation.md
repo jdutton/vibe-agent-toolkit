@@ -1295,7 +1295,7 @@
     `ListingSides` are replaced by the required `outputs` — `settleCrawlRefusal(policy, refusal, outputs)`,
     `crawlSourceFor(root, outputs)`, the `FilesystemCrawlSource` / `GitCrawlSource` constructors,
     `buildResourcePopulation({ root, outputs })`, `ResourcePopulationSource.enumerate(root, outputs)`;
-    the `FilesystemExtentContributor` `sourceFor` argument is required; `projectRootSide` and
+    the `FilesystemExtentContributor` `sourceFor` and `contentDemand` arguments are required; `projectRootSide` and
     `detectPackagedAgentInstructionFiles`'s `rootSide` are gone.
   - `@vibe-agent-toolkit/claude-marketplace`: `codedUserStateWrite` → `writeUserState(action, mutate)`;
     `requirePluginSource` → `proveTreeReadable(dir, { links: 'preserve', side })`; `replaceDirectory`,

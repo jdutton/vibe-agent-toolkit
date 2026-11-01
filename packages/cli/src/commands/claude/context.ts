@@ -102,9 +102,8 @@ import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.
 import { targetPathWithin } from '../../utils/corpus-target.js';
 import { NOTHING_FINISHED, refusalReport, writeLegacyDocument } from '../../utils/document-writer.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
-import { populationWiring } from '../../utils/population-wiring.js';
+import { populateAndReport } from '../../utils/population-wiring.js';
 import { withPopulationCache } from '../../utils/projection-store.js';
-import { gitTrackerForProjectRoot } from '../audit/distributed-tree.js';
 
 /** Soft wrap width for the printed limit statements. */
 const WRAP_COLUMNS = 96;
@@ -958,15 +957,17 @@ function groupDigits(value: number): string {
  * Populate the Claude-context lane for one tree.
  *
  * @param root - The absolute corpus root
- * @param logger - Where blob-stage refusals go. **stderr**, never stdout: this
- *   command's stdout is the document a caller parses, and a diagnostic in the
- *   middle of it breaks every consumer
+ * @param logger - Where the population's refused content is reported. **stderr**,
+ *   never stdout: this command's stdout is the document a caller parses
  * @returns The populated projection
  */
 function populateContext(root: string, logger: Logger): Promise<Projection> {
   return withPopulationCache({ root }, async (cache) => {
-    const gitTracker = await gitTrackerForProjectRoot(root);
-    const { projection } = await buildClaudeContextPopulation({ root, ...populationWiring(logger, gitTracker, cache, root) });
+    const { projection } = await populateAndReport(
+      { root, cache, logger, population: 'claude-context' },
+      (wiring) => buildClaudeContextPopulation({ root, ...wiring }),
+      (result) => result.projection,
+    );
     return projection;
   });
 }

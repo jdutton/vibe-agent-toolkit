@@ -27,15 +27,9 @@
  * level, not. `vibe-validate` accepts this cost on every commit it gates; a VAT
  * lane that adopts it inherits the same trade rather than a different one.
  *
- * ## ⚠️ A symlink's OID names its TARGET STRING, not a file's bytes
- *
- * Git stores a symlink as a blob whose content is the link target, under mode
- * `120000`. Two links with the same relative target but different resolutions
- * therefore share an OID while a consumer that follows them reads two different
- * documents. {@link GitSnapshotEntry.isSymlink} is computed here precisely so
- * that a consumer keying work off `oid` can exclude them — see
- * `packages/resources/src/content-key.ts`, whose standing rule is that a git SHA
- * may be a *lookup hint whose miss is free* and must never be the key itself.
+ * No blob OID is carried: one OID can name two different working-tree byte
+ * strings (clean/smudge, `working-tree-encoding`, `eol`), so nothing may stand
+ * an OID in for a read — see `packages/resources/src/content-key.ts`.
  *
  * ## ⚠️ Two consumers want the SAME snapshot — see {@link withGitSnapshotCache}
  *
@@ -71,16 +65,9 @@ const NAMED_UNREADABLE_PATHS = 5;
 export interface GitSnapshotEntry {
   /** Absolute, forward-slashed path, resolved against the repository root. */
   absolutePath: string;
-  /**
-   * Blob OID for this path's **on-disk** bytes.
-   *
-   * Equal OIDs mean equal bytes, which is what makes this usable as a lookup
-   * hint. It is NOT usable as a content key — see the module docstring.
-   */
-  oid: string;
   /** Git's six-digit mode, verbatim: `100644`, `100755`, `120000`, `160000`. */
   mode: string;
-  /** Mode `120000`. Its {@link GitSnapshotEntry.oid} is the target string. */
+  /** Mode `120000`. */
   isSymlink: boolean;
   /**
    * Mode `160000` — a submodule.
@@ -306,7 +293,6 @@ function takeSnapshot(cwd: string, repositoryRoot: string): GitTreeSnapshot | nu
     repositoryRoot,
     entries: snapshot.entries.map((entry) => ({
       absolutePath: safePath.resolve(repositoryRoot, entry.path),
-      oid: entry.oid,
       mode: entry.mode,
       isSymlink: entry.mode === GIT_MODE_SYMLINK,
       isSubmodule: entry.mode === GIT_MODE_GITLINK,

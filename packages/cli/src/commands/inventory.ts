@@ -24,7 +24,7 @@ import { Command } from 'commander';
 import { CommandRefusalError, refusalCodeOf } from '../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../utils/document-writer.js';
 import { createLogger, type Logger } from '../utils/logger.js';
-import { populationWiring } from '../utils/population-wiring.js';
+import { populateAndReport } from '../utils/population-wiring.js';
 import { readableDirectoryRefusal, readInputFile } from '../utils/project-root-policy.js';
 import { withPopulationCache } from '../utils/projection-store.js';
 
@@ -291,7 +291,7 @@ function routeInventoryNow(
  *   SEPARATE selector from the one above: which crawler answers membership and
  *   whether the answer is cached are independent choices, and conflating them
  *   would make the cache unmeasurable against the lane it is supposed to speed up
- * @param logger - Where the blob stage's refusals are reported. stderr, never
+ * @param logger - Where the population's refused content is reported. stderr, never
  *   stdout: this command's stdout is the report a caller parses, and a
  *   diagnostic in the middle of it would break every consumer
  * @returns A population source, or `undefined` to use the walk
@@ -303,16 +303,11 @@ function populationProviderFor(
 ): SharedPopulationSource | undefined {
 	if (!projectionCrawlSelected()) return undefined;
 	if (projectRoot === null) return undefined;
-	return async (skillMdPaths) => {
-		const gitTracker = await gitTrackerForProjectRoot(projectRoot);
-		return buildInventoryPopulation({
-			root: projectRoot,
-			skillMdPaths,
-			// The observer this lane went without — see `populationWiring` for why
-			// the reporting half is written once rather than per lane.
-			...populationWiring(logger, gitTracker, cache, projectRoot),
-		});
-	};
+	return (skillMdPaths) => populateAndReport(
+		{ root: projectRoot, cache, logger, population: 'inventory' },
+		(wiring) => buildInventoryPopulation({ root: projectRoot, skillMdPaths, ...wiring }),
+		(population) => population.refusalRows,
+	);
 }
 
 /**

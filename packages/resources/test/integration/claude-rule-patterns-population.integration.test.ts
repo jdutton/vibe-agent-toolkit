@@ -18,7 +18,7 @@ import { resetProjectRootCaches, safePath, toForwardSlash } from '@vibe-agent-to
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { DISCARD_BLOB_POPULATION, type PopulateResult } from '../../src/projection/merge.js';
+import { type PopulateResult } from '../../src/projection/merge.js';
 import type { Projection } from '../../src/projection/projection.js';
 import { buildResourceProjection } from '../../src/projection/resource-population.js';
 import type { ClaudeRulePatternRow } from '../../src/schemas/projection-claude-rules.js';
@@ -50,14 +50,14 @@ let treeDir: string | undefined;
 
 beforeAll(async () => {
   treeDir = await plantTree('vat-rule-patterns-', TREE);
-}, 60_000);
+});
 
 afterAll(async () => {
   // Generous on purpose: a recursive `rm` over a temp tree has exceeded
   // Vitest's 10s hook default on Windows CI, failing the file for a reason that
   // has nothing to do with what it tests.
   await razeTree(treeDir);
-}, 60_000);
+});
 
 /** The tree's root, refused rather than coerced when `beforeAll` never got there. */
 function root(): string {
@@ -74,7 +74,6 @@ function root(): string {
 async function populateTree(store?: FakeProjectionStore): Promise<PopulateResult> {
   return buildResourceProjection({
     root: root(),
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
     ...(store === undefined ? {} : { cache: { store, treeUnchanged: () => true, treeHash: TREE_HASH } }),
   });
 }
@@ -196,8 +195,7 @@ async function populateIgnoredTree(
     // ignored", and every row below would be the non-repository answer.
     expect(gitTracker.isUsable()).toBe(true);
     const { projection } = await buildResourceProjection({
-      root: dir, gitTracker, onBlobPopulation: DISCARD_BLOB_POPULATION,
-    });
+      root: dir, gitTracker, });
     // The premise: the ignored file is never realized, so no witness can exist.
     expect(projection.resourceRealizations.filter((row) => built.includes(toForwardSlash(row.path)))).toEqual([]);
     expect(projection.resourceRealizations.some((row) => row.path === SCOPED_RULE)).toBe(true);
@@ -234,5 +232,5 @@ describe('claude_rule_patterns over gitignored territory', () => {
     ]],
   ] as const)('reports each glob over %s', async (_what, tree, built, rows) => {
     expect(await populateIgnoredTree(tree, built)).toEqual(rows);
-  }, 60_000);
+  });
 });

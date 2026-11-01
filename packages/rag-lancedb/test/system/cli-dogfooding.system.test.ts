@@ -20,7 +20,7 @@ import { rm } from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { getTestOutputDir, NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import { parse } from 'yaml';
 
 /**
@@ -50,16 +50,21 @@ function parseYamlOutput(result: SpawnSyncReturns<string>): unknown {
  * Execute CLI command and parse YAML output
  * @param binPath - Path to CLI binary
  * @param args - CLI arguments
+ * The spawn is a hang guard, and its budget is the tier's own per-test allowance:
+ * `spawnSync` blocks the event loop, so the runner's timer cannot fire during it
+ * and this is the only clock that can. It used to be a literal per call (10 s,
+ * 30 s) — one number for every machine, which a slow Windows runner exceeds on
+ * embedding cost alone.
+ *
  * @param projectRoot - Project root directory
- * @param timeout - Optional timeout in milliseconds
  * @returns Parsed YAML output
  */
 function executeCliCommand(
   binPath: string,
   args: string[],
   projectRoot: string,
-  timeout?: number
 ): unknown {
+  const timeout = inject('tierTestTimeout');
   // Use 'node' from PATH - safe in test context where PATH is controlled by test environment
   const result = spawnSync(NODE_EXECUTABLE, [binPath, ...args], {
     encoding: 'utf-8',
@@ -73,9 +78,8 @@ function executeCliCommand(
   // Checked before the status assertion so the timeout reports itself as one.
   if (result.error !== undefined) {
     const killedBy = result.signal === null ? '' : ` (killed by ${result.signal})`;
-    const budget = timeout === undefined ? '' : `, budget ${timeout}ms`;
     throw new Error(
-      `node ${args.join(' ')} did not run to completion: ${result.error.message}${killedBy}${budget}`
+      `node ${args.join(' ')} did not run to completion: ${result.error.message}${killedBy}, budget ${timeout}ms`
     );
   }
 
@@ -145,7 +149,6 @@ function queryTopResourceId(cli: CliTarget, query: string): string {
     cli.binPath,
     ['rag', 'query', query, '--db', cli.dbPath, '--limit', '1'],
     cli.projectRoot,
-    30000 // 30 seconds for query with embedding
   );
 
   const { data } = expectCleanReport<{ stats: { totalMatches: number }; chunks: { resourceId: string }[] }>(output);
@@ -200,7 +203,7 @@ describe('RAG CLI (Node.js dogfooding)', () => {
     if (existsSync(testDbPath)) {
       await rm(testDbPath, { recursive: true, force: true });
     }
-  }, 60000);
+  });
 
   afterAll(async () => {
     // Clean up test database
@@ -213,11 +216,10 @@ describe('RAG CLI (Node.js dogfooding)', () => {
     const output = executeCliCommand(
       binPath,
       ['rag', 'index', docsPath, '--db', testDbPath],
-      projectRoot,
-      // A fixed fixture corpus, so this budget is a hang-detector rather than a
-      // performance assertion. Cost is `chunks × ~121 ms`; the pinned
+      // A fixed fixture corpus, so the spawn budget is a hang-detector rather
+      // than a performance assertion. Cost is `chunks × ~121 ms`; the pinned
       // `chunksCreated` below is what actually guards regressions.
-      30000
+      projectRoot,
     );
 
     const { data } = expectCleanReport<{ resourcesIndexed: number; chunksCreated: number }>(output);
@@ -255,7 +257,7 @@ describe('RAG CLI (Node.js dogfooding)', () => {
     // If this number changes, decide whether the chunker change was intended —
     // do not simply update it.
     expect(data.chunksCreated).toBe(12);
-  }, 30000);
+  });
 
   it('should query indexed documentation via CLI', () => {
     // Targets `retrieval.md`, which is the only document about matching a
@@ -269,7 +271,7 @@ describe('RAG CLI (Node.js dogfooding)', () => {
   });
 
   it('should show database statistics via CLI', () => {
-    const output = executeCliCommand(binPath, ['rag', 'stats', '--db', testDbPath], projectRoot, 10000);
+    const output = executeCliCommand(binPath, ['rag', 'stats', '--db', testDbPath], projectRoot);
 
     const { data } = expectCleanReport<{ totalChunks: number; totalResources: number; embeddingModel: string }>(output);
     expect(data.totalChunks).toBeGreaterThan(0);
@@ -285,7 +287,7 @@ describe('RAG CLI (Node.js dogfooding)', () => {
   });
 
   it('should clear database via CLI', () => {
-    const output = executeCliCommand(binPath, ['rag', 'clear', '--db', testDbPath], projectRoot, 10000);
+    const output = executeCliCommand(binPath, ['rag', 'clear', '--db', testDbPath], projectRoot);
 
     expect(expectCleanReport<{ cleared: boolean }>(output).data.cleared).toBe(true);
 

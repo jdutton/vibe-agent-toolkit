@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { checkShippedPluginSkillLinks } from '../../src/commands/build.js';
+import { __internal, checkShippedPluginSkillLinks } from '../../src/commands/build.js';
 import { createTempDirTracker } from '../system/test-common.js';
 
 function skillDirPath(cwd: string, marketplace: string, plugin: string, skill: string): string {
@@ -79,5 +79,18 @@ describe('checkShippedPluginSkillLinks', () => {
 
     expect(issues).toHaveLength(1);
     expect(issues[0]?.code).toBe('PACKAGED_BROKEN_LINK');
+  });
+});
+
+describe('vat build — the line a completed run closes with', () => {
+  const phase = (examined: number) => ({ report: { examined } });
+
+  it('prints the success line when the phases examined something', () => {
+    expect(__internal.buildCompleteLine([phase(0), phase(4)])).toBe('\n✅ Build complete');
+  });
+
+  it('prints no success line over phases that examined nothing, however many ran', () => {
+    // The phase COUNT is two here; a banner keyed on it would print the check mark.
+    expect(__internal.buildCompleteLine([phase(0), phase(0)])).toBe('\n⚠️ Not a verdict: nothing was examined');
   });
 });

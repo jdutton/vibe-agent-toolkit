@@ -54,5 +54,5 @@ describe('inventory pipeline parity', () => {
 			expect(matched, `legacy finding lost: ${JSON.stringify(want)}`).toBeDefined();
 		}
 		// newFindings.length >= legacy.length is allowed and expected.
-	}, 60_000);
+	});
 });

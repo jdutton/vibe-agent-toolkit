@@ -12,8 +12,8 @@ import { writeFileSync } from 'node:fs';
 
 import {
   ContributorRegistry,
-  DISCARD_BLOB_POPULATION,
   crawlSourceFor,
+  DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
   populate,
   type Projection,
@@ -40,9 +40,9 @@ function plantPlugin(root: string, manifest: string): string {
 
 async function project(root: string): Promise<Projection> {
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
   registry.register(new PluginExtentContributor());
-  return (await populate({ root, registry, onBlobPopulation: DISCARD_BLOB_POPULATION })).projection;
+  return (await populate({ root, registry })).projection;
 }
 
 /** The `MANIFEST_UNREADABLE` messages recorded against the planted manifest. */

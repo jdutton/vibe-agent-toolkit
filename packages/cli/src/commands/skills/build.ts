@@ -68,6 +68,7 @@ import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
 import { relativeLocationOrUndefined } from '../../utils/relativize-paths.js';
 import { withResourcePopulationSource } from '../../utils/resource-loader.js';
+import { verdictBanner } from '../../utils/run-integrity.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig, publishScope } from '../../utils/skill-packaging-config.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
 import type { PhaseOutcome } from '../phase-utils.js';
@@ -815,13 +816,17 @@ function pluginOnlySkillRefusal(skill: string | undefined, pluginOnly: readonly 
   );
 }
 
-/** The human success line, naming each set-aside population only when it is non-empty. */
-export function formatBuiltSuccessLine(built: number, setAside: { inPlace: number; pluginOnly: number }): string {
+/** The human success line over the report's `examined`, naming each non-empty set-aside population. */
+export function formatBuiltSuccessLine(
+  examined: number,
+  built: number,
+  setAside: { inPlace: number; pluginOnly: number },
+): string {
   const tails = [
     ...(setAside.inPlace === 0 ? [] : [`${setAside.inPlace} in-place skill(s) not bundled`]),
     ...(setAside.pluginOnly === 0 ? [] : [`${setAside.pluginOnly} plugin-only skill(s) shipped with their plugin`]),
   ];
-  return `\nBuilt ${built} skill(s) successfully` + (tails.length === 0 ? '' : ` (${tails.join(', ')})`);
+  return verdictBanner(examined, `\nBuilt ${built} skill(s) successfully` + (tails.length === 0 ? '' : ` (${tails.join(', ')})`));
 }
 
 /**
@@ -1360,10 +1365,15 @@ export async function runSkillsBuildPhase(
       const { error } = run.promotionFailure;
       return { report: refusalReport(refusalCodeOf(error), error, GATE, work) };
     }
+    const report = buildReport({ ...work, gate: GATE, durationMs: Date.now() - startTime });
     if (run.outputCommitted) {
-      logger.info(formatBuiltSuccessLine(run.results.length, { inPlace: setAside.inPlace.length, pluginOnly: setAside.pluginOnly.length }));
+      logger.info(formatBuiltSuccessLine(
+        report.examined,
+        run.results.length,
+        { inPlace: setAside.inPlace.length, pluginOnly: setAside.pluginOnly.length },
+      ));
     }
-    return { report: buildReport({ ...work, gate: GATE, durationMs: Date.now() - startTime }) };
+    return { report };
   } catch (error) {
     return { report: refusalReport(refusalCodeOf(error), error, GATE, finished) };
   }

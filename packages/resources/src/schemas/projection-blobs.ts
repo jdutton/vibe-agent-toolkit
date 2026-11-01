@@ -224,7 +224,8 @@ export const LEXICAL_FEATURE_COLUMNS = {
  *
  * Both columns are **required**, which is what makes the table's rows uniformly
  * actionable: a candidate whose AST node carries no position is skipped and
- * counted (`referencesSkippedForMissingLine`), never admitted with a null span.
+ * counted (`referencesSkippedForMissingLine`, in `populateBlobs`' public result (`BlobPopulationResult`), a run counter no stored row carries), never
+ * admitted with a null span.
  *
  * ⛔ This used to close with "Line and offsets come from one `position` object,
  * so they are present or absent together and no new skip class exists." That is

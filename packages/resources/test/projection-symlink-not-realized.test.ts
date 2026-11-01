@@ -40,6 +40,7 @@ import {
   EXTENT_SYMLINK_NOT_REALIZED,
   EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT,
   EXTENT_SYMLINK_TARGET_UNRESOLVED,
+  DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
   isDeclinedSymlinkCode,
   linkTargetRealization,
@@ -291,7 +292,7 @@ describe.skipIf(CAPABILITY === null)('a link git records whose checkout is a pla
 
     const { contribution } = await buildExtentContribution(
       root,
-      new FilesystemExtentContributor((at) => new GitCrawlSource(at, [])),
+      new FilesystemExtentContributor((at) => new GitCrawlSource(at, []), DEFAULT_CONTENT_DEMAND),
     );
     const row = contribution.conditions.find((condition) => condition.path === 'flat.md');
 
@@ -327,7 +328,7 @@ describe.skipIf(CAPABILITY === null)('an absolute in-root target spelled through
 
     const { contribution } = await buildExtentContribution(
       root,
-      new FilesystemExtentContributor((at) => new FilesystemCrawlSource(at, [])),
+      new FilesystemExtentContributor((at) => new FilesystemCrawlSource(at, []), DEFAULT_CONTENT_DEMAND),
     );
     const row = contribution.conditions.find((condition) => condition.path === 'absolute.md');
 

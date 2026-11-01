@@ -40,7 +40,7 @@ import { ContributorRegistry } from '../../src/projection/contributor.js';
 import { AgenticConventionContributor } from '../../src/projection/contributors/agentic-convention.js';
 import { FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../../src/projection/crawl-source.js';
-import { CONTENT_PARSING_SKIP, DISCARD_BLOB_POPULATION, populate } from '../../src/projection/merge.js';
+import { CONTENT_PARSING_SKIP, populate } from '../../src/projection/merge.js';
 import type { Projection } from '../../src/projection/projection.js';
 import { ProjectionBuilder } from '../../src/projection/projection.js';
 import { collectRealization } from '../../src/projection/realizations.js';
@@ -133,7 +133,6 @@ beforeAll(async () => {
     root,
     registry,
     contentParsing: CONTENT_PARSING_SKIP,
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
   }));
 });
 

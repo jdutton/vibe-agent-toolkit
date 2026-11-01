@@ -1078,16 +1078,10 @@ function exitCodeMatrixShard(specFileUrl: string): readonly MatrixCase[] {
 const skipReasons = new Map<MatrixCase, string | undefined>();
 
 /**
- * The budget of the `beforeAll` that asks every skip reason: the npm probe
- * alone may take 30 s, and the `claude` one rides on top of it.
- */
-const SKIP_PROBE_TIMEOUT_MS = 90_000;
-
-/**
  * Declare the enclosing suite a matrix shard: its temp dir, and its cases'
- * skip reasons asked ONCE in `beforeAll` — outside every scenario's
- * {@link MATRIX_SCENARIO_TIMEOUT_MS}, so a slow registry the probe waits on
- * cannot eat the time `vat doctor` then needs to ask it again. Returns the
+ * skip reasons asked ONCE in `beforeAll` — outside every scenario's own
+ * timeout, so a slow registry the probe waits on (the npm probe alone may take
+ * 30 s) cannot eat the time `vat doctor` then needs to ask it again. Returns the
  * shard's cases (see {@link exitCodeMatrixShard}) for `it.for`.
  */
 export function useExitCodeMatrixShard(specFileUrl: string): readonly MatrixCase[] {
@@ -1095,7 +1089,7 @@ export function useExitCodeMatrixShard(specFileUrl: string): readonly MatrixCase
   useMatrixTempDir();
   beforeAll(() => {
     for (const scenario of cases) skipReasons.set(scenario, scenario.skipReason?.());
-  }, SKIP_PROBE_TIMEOUT_MS);
+  });
   return cases;
 }
 
@@ -1151,5 +1145,3 @@ export function expectScenarioEndsOnItsDerivedCode(scenario: MatrixCase, context
   return { exitCode: result.status, document };
 }
 
-/** The per-test timeout of a scenario: one spawn of the built CLI, two for a scenario that indexes first. */
-export const MATRIX_SCENARIO_TIMEOUT_MS = 60_000;

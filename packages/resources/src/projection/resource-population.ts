@@ -72,9 +72,10 @@
  * ## Cost
  *
  * Slower than `git ls-files`, structurally, and knowingly — the same trade
- * accepted for `vat inventory` (~5.3× there). The population is obtained by an
- * enumeration plus one `lstat` per surviving path (no byte is read; see
- * `contentDemand: 'deferred'` below), against one `ls-files` spawn.
+ * accepted for `vat inventory` (~5.3× there). A cold run populates the one
+ * resources question — enumeration, keying and the blob stage — so that every
+ * resources lane shares one stored population; a warm run reads the stored
+ * extent alone. See {@link buildResourcePopulation}.
  * `resource-scanning-and-caching.md` §3.1/§3.3 is where that cost gets
  * re-sourced (~140 ms against 1,537 ms warm on an 8,496-path adopter tree, with
  * content keys included).
@@ -88,9 +89,7 @@
  */
 
 import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
-import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
-import type { CollectionConfig } from '../schemas/project-config.js';
 import { RealizationConditionRowSchema, type RealizationConditionRow } from '../schemas/projection-resources.js';
 import type { JsonValue } from '../schemas/projection-shared.js';
 
@@ -104,16 +103,16 @@ import {
 } from './contributors/filesystem-extent.js';
 import { crawlSourceFor, type CrawlSource, type CrawlSourceKind } from './crawl-source.js';
 import {
-  CONTENT_PARSING_SKIP,
-  DISCARD_BLOB_POPULATION,
   populate,
   populationOracles,
+  readStoredMembership,
+  requestedContributors,
+  type PopulateOptions,
   type PopulateResult,
-  type PopulationCache,
   type PopulationOutcome,
   type TreePopulationOptions,
 } from './merge.js';
-import type { ContentDemand } from './realizations.js';
+import type { Projection } from './projection.js';
 
 /**
  * A way to obtain the enumerated file population for a root, together with the
@@ -193,7 +192,7 @@ export interface ResourceEnumeration {
   readonly paths: readonly string[];
   /** Population-time conditions recorded while enumerating, in canonical order (see `canonicalConditions`). */
   readonly conditions: readonly RealizationConditionRow[];
-  /** Whether the store served this population — the outcome `populate()` returned for it, the only producer. */
+  /** Whether the store served this population — from `populate()` or the stored membership read. */
   readonly outcome: PopulationOutcome;
   /**
    * Which enumerator ran — the instance's own kind, not the env's request.
@@ -221,59 +220,39 @@ const CRAWL_LANE_SET: Readonly<Record<CrawlPopulation['lane'], true>> = { walk: 
 /** Every {@link CrawlPopulation} lane, as a runtime list — for a schema enum that must not be a hand-typed copy. */
 export const CRAWL_LANES = Object.keys(CRAWL_LANE_SET) as [CrawlPopulation['lane'], ...Array<CrawlPopulation['lane']>];
 
+/** A registry and the parameter sets it runs under — what {@link populate} is handed. */
+interface ResourceContributors {
+  readonly registry: ContributorRegistry;
+  readonly parameters: Record<string, JsonValue>;
+  /** The enumerating contributor's id, for a caller that asks the store for its rows alone. */
+  readonly filesystemId: string;
+}
+
 /**
  * Register the contributors every resources lane shares, and the parameters
- * they run under.
+ * they run under — the ONE question every resources lane asks the store.
  *
- * Extracted rather than copied because there are now two lanes over one
- * question — {@link buildResourcePopulation}, which wants a file list and no
- * bytes, and {@link buildResourceProjection}, which wants the rows a query runs
- * against — and the two must register the SAME contributors under the SAME
- * parameters or they stop describing one population. A second copy would drift,
- * and the drift would surface as two commands disagreeing about which files
- * exist rather than as a diff anyone reads.
+ * Every lane registers this set under {@link DEFAULT_CONTENT_DEMAND}:
+ * {@link buildResourcePopulation}, which reads only membership,
+ * {@link buildResourceProjection}, which reads the rows a query runs against,
+ * and `buildClaudeContextPopulation`, which adds its `@`-import extents on top.
+ * One registry and one demand mean one store key, so a population either lane
+ * wrote serves the other, and membership is a view over that one population
+ * rather than a cheaper question with a key of its own. Neither the demand nor
+ * the classifier set is a parameter: a lane that could narrow either would ask a
+ * different question and evict the other's extent, run after run.
  *
- * ## The two axes this seam keeps separate
+ * 🪤 The demand reaches the store key only through the filesystem contributor's
+ * {@link ExtentContributor.registrationQuestion}; `DECLINE_IGNORED` reaches it as
+ * a parameter set the reuse rule sees. Both are fixed here.
  *
- * `contentDemand` varies per lane and is the argument; `DECLINE_IGNORED` does
- * not vary and is fixed here. That asymmetry is the whole design:
- *
- * - **Membership is identical** across both lanes. Both admit
- *   `tracked ∪ (untracked ∧ ¬ignored)` — see the header — so both decline the
- *   gitignored half, and a query cannot answer about a file validation would
- *   never have looked at.
- * - **Keying is not.** One lane reads four columns and pays nothing for bytes;
- *   the other needs `contentKey` or there are no blobs to query.
- *
- * 🪤 Those two axes reach the store by different routes, and mixing them up is
- * how a query silently returns nothing: `DECLINE_IGNORED` is a parameter set and
- * the reuse rule sees it, while `contentDemand` is a constructor argument the
- * reuse rule sees only because the contributor declares it as its
- * {@link ExtentContributor.registrationQuestion}. Without that declaration these
- * two lanes are ONE question to the store, and the deriving one is served the
- * other's content-less extent.
- *
- * ⚠️ **The THIRD axis is a parameter rather than a constant, and the asymmetry
- * is forced.** `ClaudeRulesScopeContributor` declares `readsBlobs: true` (a
- * rule's `paths:` list lives in frontmatter), and {@link populate} **throws**
- * when a run asking for `CONTENT_PARSING_SKIP` has a blob reader registered. So
- * registering it unconditionally would not degrade the population lane — it
- * would take `vat resources scan`/`validate` out entirely, by design.
- *
- * @param source - The run's single enumerator, already selected by its caller
- *   so the instance stays nameable
- * @param contentDemand - What this lane needs keyed
- * @param classifyClaudeRules - Register the `.claude/rules` classifier, which
- *   reads blobs. Only a lane that derives them may say true
+ * @param sourceFor - The run's single enumerator, already selected by its
+ *   caller so the instance stays nameable
  * @returns The registry and the parameter sets to hand {@link populate}
  */
-function resourceContributors(
-  source: CrawlSource,
-  contentDemand: ContentDemand,
-  classifyClaudeRules: boolean,
-): { registry: ContributorRegistry; parameters: Record<string, JsonValue> } {
+export function resourceContributors(sourceFor: (root: string) => CrawlSource): ResourceContributors {
   const registry = new ContributorRegistry();
-  const filesystem = new FilesystemExtentContributor(() => source, contentDemand);
+  const filesystem = new FilesystemExtentContributor(sourceFor, DEFAULT_CONTENT_DEMAND);
   registry.register(filesystem);
 
   // AFTER the enumerator, and the order is load-bearing: `byStratum` returns
@@ -281,25 +260,18 @@ function resourceContributors(
   // reading the base the previous ones grew. Registered first, this would
   // classify an empty realization table and report a complete, empty extent —
   // the same silent-success shape `ContributorRegistry.forKind` refuses.
-  //
-  // Safe under `CONTENT_PARSING_SKIP` specifically because it declares
-  // `readsBlobs: false`: the skip is checked against that, and a blob reader
-  // registered here would be a loud error rather than a degraded extent.
   registry.register(new AgenticConventionContributor());
 
   // `closure` stratum, so registration order relative to the base contributors
-  // does not decide when it runs; it is here beside the other classifier because
-  // the two answer the same kind of question about the same rows.
-  //
-  // ⛔ What it buys is the only reason it is here: with the producer registered
-  // in ONE lane, and not the one `vat resources query`/`check` populate through,
-  // a SQL question about dead rule globs returned zero rows over a corpus full
-  // of them — an empty table and a clean corpus are the same answer.
-  if (classifyClaudeRules) registry.register(new ClaudeRulesScopeContributor());
+  // does not decide when it runs. ⛔ On every lane: with the producer missing
+  // from the lane `vat resources query`/`check` populate through, a SQL question
+  // about dead rule globs returned zero rows over a corpus full of them — an
+  // empty table and a clean corpus are the same answer.
+  registry.register(new ClaudeRulesScopeContributor());
 
   return {
     registry,
-    // Both lanes drop every `gitignored` row, so they ask the extent not to
+    // Every lane drops every `gitignored` row, so it asks the extent not to
     // produce them — see `DECLINE_IGNORED`. Measured on an 8,548-file adopter
     // tree, the declined rows were 11,122 of 20,908 and cost 11,122 `lstat` plus
     // ~12,362 `realpathSync.native` calls, every one of them for a row the
@@ -309,172 +281,143 @@ function resourceContributors(
     // a parameter set filed under an id no registered contributor answers to is
     // silently ignored, so the two must not be able to drift.
     parameters: { [filesystem.id]: DECLINE_IGNORED },
+    filesystemId: filesystem.id,
   };
 }
 
 /**
- * Enumerate a root's files from a base-only projection.
+ * What every resources lane hands {@link populate} for one root and one
+ * enumerator: {@link resourceContributors}' question plus the run's oracles.
  *
- * Registers the `filesystem` extent and nothing else: resources membership is
- * the base extent itself, so unlike `buildInventoryPopulation` there is no
- * closure stratum to iterate and no per-subject contributor to register.
+ * @param options - The lane's options, for its oracles
+ * @param root - The resolved root
+ * @param contributors - The registry and parameters, from {@link resourceContributors}
+ * @returns The options to read the store and to populate with — one object, so
+ *   both compute one key
+ */
+function resourcePopulateOptions(options: TreePopulationOptions, root: string, contributors: ResourceContributors): PopulateOptions {
+  const { registry, parameters } = contributors;
+  return { root, registry, parameters, ...populationOracles(options) };
+}
+
+/**
+ * A population's membership: the ONE conversion from realization and condition
+ * rows to a {@link ResourceEnumeration}, on a store hit and on a derive alike.
  *
- * ## Nothing here reads a file's CONTENT, and that is a pinned property
+ * Paths are not sorted here: the registry orders every batch it admits
+ * (`admissionOrder()`), whoever enumerated it. Conditions are, because a stored
+ * extent comes back in SQLite's order — see {@link canonicalConditions}.
  *
- * The loop below consumes four columns — `isDirectory`, `exists`, `gitignored`,
- * `path` — every one of which `lstat` and the ignore oracle already answer.
- * `contentKey` is not among them, so this lane registers the extent under
- * `contentDemand: 'deferred'` and the population is obtained by enumeration and
- * `lstat` alone.
+ * @param root - The resolved root the rows' paths are relative to
+ * @param rows - The population's realization and condition rows
+ * @param rows.resourceRealizations - Its `resource_realizations`
+ * @param rows.realizationConditions - Its `realization_conditions`
+ * @param extentSource - The enumerator the run selected
+ * @param outcome - Whether the store served the rows
+ * @returns The members and what the population said about itself
+ */
+function membershipOf(
+  root: string,
+  rows: Pick<Projection, 'resourceRealizations' | 'realizationConditions'>,
+  extentSource: CrawlSourceKind,
+  outcome: PopulationOutcome,
+): ResourceEnumeration {
+  const paths = rows.resourceRealizations
+    // `filesOnly: true` is the crawl contract every resources caller passes; the
+    // extent enumerates directories too (the `claude-context` lens keys on one).
+    // A row can be a member without being present (`exists: false`: it vanished
+    // between the listing and its `lstat`, or the OS refused it), and admitting
+    // it would turn an enumeration difference into a
+    // `RESOURCE_UNREADABLE` finding the walk never emits. `gitignored` is the
+    // backstop for `DECLINE_IGNORED`: with no tracker the extent declines
+    // nothing, and this is where the admitted set is STATED.
+    .filter((row) => !row.isDirectory && row.exists && !row.gitignored)
+    .map((row) => safePath.resolve(root, row.path));
+  // Carried out whole rather than filtered here: which rows matter is the
+  // consumer's call (the registry surfaces every one as a finding, and severity
+  // overrides are the adopter's).
+  return { paths, conditions: canonicalConditions(rows.realizationConditions), outcome, extentSource };
+}
+
+/**
+ * Enumerate a root's files: the membership view over the one resources
+ * population.
  *
- * It is a property rather than a comment: `zero-content-reads.integration.test.ts`
- * runs this function in a child process under an `fs` preload and asserts that
- * **no** content-read route fires for a path under the crawl root, with
- * `readdir`/`opendir` routed to a separate sink so the gate cannot be satisfied
- * by an enumeration that stopped enumerating.
+ * ## A hit reads the extent alone
  *
- * ## The blob stage is SKIPPED here, and the arithmetic that used to defend it
+ * The store is asked first, under the key every resources lane shares, through
+ * `readStoredMembership`: the extent's realization and condition rows answer
+ * membership, so a hit reads no blob table and populates nothing. That is why a
+ * stored extent whose blob key was evicted is a hit here and a miss for
+ * {@link buildResourceProjection}.
  *
- * This function reads four columns off `resource_realizations` and discards the
- * `Projection`. Not one blob row is consumed. The stage was nonetheless left
- * running on the argument that parsing every blob warms the shared parse cache
- * for the files the registry then admits — which is true, and is dwarfed by what
- * it costs. Measured on VAT's own repository (2,096 tracked files, 176 admitted
- * resources), cold, with the lab's `crawl` facet:
+ * ## A miss is the full population
  *
- * | | walk lane | projection lane | `blob-population:derive` |
- * |---|---|---|---|
- * | cold | 1,363 ms | ~7,615 ms | 6,839 ms |
+ * The same options `populate()` the full lane runs, blob stage included, and the
+ * write that follows serves both lanes next time. So a cold membership run now
+ * reads every non-ignored file: that is the cost of asking one question. A miss
+ * also reads the store twice — the membership read, then `populate()`'s own —
+ * accepted rather than a seam into `populate()`.
  *
- * The warming buys the 176 admitted parses, which the walker arm pays in full at
- * `resource-registry:admit` for 1,299 ms. So the stage spent 6,839 ms to
- * save 1,299 ms; the remainder is ~1,900 blobs parsed for nobody. Skipping it
- * moves those 176 parses back to `add-resource` and puts this lane at roughly
- * 1.5× the walk instead of 5.6×.
- *
- * ⚠️ The skip is safe **only** while nothing here reads a blob table. Registering
- * a closure contributor in this function without dropping the `contentParsing`
- * argument makes `populate()` throw, by design — see
- * {@link PopulateOptions.contentParsing}. It does not silently return a closure
- * extent reduced to its own root.
- *
- * @param options - The root and the run's git oracle
+ * @param options - The root and the run's oracles
  * @param options.root - Absolute root to enumerate
+ * @param options.outputs - The trees the calling verb writes, `[]` for none: the
+ *   one declaration of which side a fault is on (see `crawlSourceFor`). Kept out
+ *   of the store key, which is sound only because a fault on an output throws
+ *   (`refuse`, `listing-refusal.ts`) rather than storing a side-labelled row
  * @param options.gitTracker - The ignore oracle, or omitted. Not cosmetic: with
  *   no tracker no row is `gitignored`, so the ignored half of a git tree would
  *   be admitted rather than declined
  * @param options.cache - A projection store to answer this enumeration from, or
- *   omitted to enumerate every time. 🪤 A hit here returns rows a run with
- *   `contentParsing: CONTENT_PARSING_SKIP` wrote, so its `extentSource` reports the enumerator this
- *   process SELECTED rather than one that ran — a lane whose whole point is that
- *   nothing enumerated cannot also report who enumerated
- * @returns The population and the enumerator that actually produced it
+ *   omitted to populate every time. A hit reports the enumerator this process
+ *   SELECTED: the key already holds the selector, the tracker's presence and the
+ *   root, so the selection is the enumerator that wrote the rows
+ * @returns The population, the enumerator that produced it, and its outcome
  */
-export async function buildResourcePopulation(options: {
-  root: string;
-  /** The trees the calling verb writes, `[]` for none: the one declaration of which side a fault is on (see `crawlSourceFor`). */
-  outputs: readonly string[];
-  gitTracker?: GitTracker | undefined;
-  cache?: PopulationCache | undefined;
-  collections?: Readonly<Record<string, CollectionConfig>> | undefined;
-}): Promise<ResourceEnumeration> {
+export function buildResourcePopulation(
+  options: TreePopulationOptions & { readonly outputs: readonly string[] },
+): Promise<ResourceEnumeration> {
+  return membershipThrough(options, (source) => resourceContributors(() => source));
+}
+
+/**
+ * {@link buildResourcePopulation} over a given contributor set: the seam its
+ * tests use to register a classifier the shipped set does not have.
+ *
+ * @param options - As {@link buildResourcePopulation}
+ * @param contributorsFor - The registry and parameters for the run's enumerator
+ * @returns The population, the enumerator that produced it, and its outcome
+ */
+async function membershipThrough(
+  options: TreePopulationOptions & { readonly outputs: readonly string[] },
+  contributorsFor: (source: CrawlSource) => ResourceContributors,
+): Promise<ResourceEnumeration> {
   const root = safePath.resolve(options.root);
 
   // Selected here, one call earlier than `FilesystemExtentContributor` would
-  // select it, so the INSTANCE that enumerates is nameable afterwards. The
-  // choice is still made by `crawlSourceFor` — the seam is unchanged and this
-  // is not a second selection site — but the contributor discards the source as
-  // soon as it has called it, and a kind nobody kept is a kind nobody can
-  // report.
-  //
-  // Which matters because `crawlSourceFor` falls back SILENTLY: ask for git on
-  // a root that is not in a repository and the walk answers. An A/B that varies
-  // only `VAT_EXTENT_SOURCE` would then run one enumerator twice and produce two
-  // identical populations, which reads as "the two agree" and actually means
-  // "the switch did nothing". Those must not look alike.
+  // select it, so the INSTANCE that enumerates is nameable afterwards. Which
+  // matters because `crawlSourceFor` falls back SILENTLY: ask for git on a root
+  // that is not in a repository and the walk answers, and an A/B varying only
+  // `VAT_EXTENT_SOURCE` would read "the two agree" for "the switch did nothing".
   const source = crawlSourceFor(root, options.outputs);
+  const populateOptions = resourcePopulateOptions(options, root, contributorsFor(source));
 
-  // `'deferred'`, and it is the same argument as `contentParsing: CONTENT_PARSING_SKIP` one layer
-  // down — see the header. This lane reads four realization columns and
-  // `contentKey` is not one of them, so every byte read to compute one was read
-  // for nobody: ~1,684 ms of a 13,714 ms cold run, 152.9 MB, on an 8,548-file
-  // monorepo. The rows still arrive; they arrive `contentState: 'deferred'`,
-  // which is the state that says "enumerated, deliberately not read" rather
-  // than any of the three that say there was nothing to read.
-  //
-  // ⚠️ Stated per LANE, never flipped in the contributor: `vat inventory`
-  // registers the same class and DOES run the blob stage over what it keys, and
-  // {@link buildResourceProjection} is a THIRD lane over this same registry that
-  // keys everything.
-  // `false`: this lane skips the blob stage, and `populate()` refuses a blob
-  // reader under that skip rather than handing it empty tables — see
-  // {@link resourceContributors}.
-  const { registry, parameters } = resourceContributors(source, 'deferred', false);
+  // Every contributor's context is requested, so a hit is exactly the rows a
+  // derive below would have produced.
+  const stored = await readStoredMembership(populateOptions, requestedContributors(populateOptions));
+  if (stored !== undefined) return membershipOf(root, stored, source.kind, stored.outcome);
 
-  const { projection, outcome } = await populate({
-    root,
-    registry,
-    parameters,
-    // See the header: this lane consumes realizations only, and the stage is
-    // ~90% of its cold cost. Stated rather than inferred, and refused if a blob
-    // reader is ever registered above.
-    contentParsing: CONTENT_PARSING_SKIP,
-    // The ONE place discarding the counts is sound, and only because of the line
-    // above: under `CONTENT_PARSING_SKIP` the blob stage never runs, so there is
-    // no refusal to report and `populate()` never calls this. If the skip is ever
-    // dropped, this line becomes a silence and must be replaced with a real
-    // observer at the same time — that is why it is spelled out here rather than
-    // being an argument nobody passed.
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
-    ...populationOracles(options),
-  });
-
-  const paths: string[] = [];
-  for (const row of projection.resourceRealizations) {
-    // `filesOnly: true` is the crawl contract every resources caller passes, and
-    // the extent deliberately enumerates directories too (the `claude-context`
-    // lens keys on one). Dropping them here rather than asking the extent not to
-    // produce them keeps that capability where it belongs.
-    if (row.isDirectory) continue;
-    // A row can be a member without being readable — a dangling symlink is the
-    // motivating case. Admitting it would turn an enumeration difference into a
-    // `RESOURCE_UNREADABLE` finding the incumbent never emits.
-    if (!row.exists) continue;
-    // Retained even though `DECLINE_IGNORED` above means no such row can arrive
-    // from a run with a usable tracker. It is not redundant: with no tracker the
-    // extent declines nothing (correctly — outside a repository there is no
-    // ignore oracle), and this line is where the lane's admitted set is STATED
-    // rather than inferred from a parameter two files away. It is also the
-    // backstop if the skip predicate and `collectRealization`'s `gitignored`
-    // column ever drift, which would otherwise widen this lane in silence.
-    if (row.gitignored) continue;
-    paths.push(safePath.resolve(root, row.path));
-  }
-  // Carried out whole rather than filtered here: which rows matter is the
-  // consumer's call (the registry surfaces every one as a finding, and severity
-  // overrides are the adopter's), and a filter at this seam would be a second,
-  // quieter policy nobody configured.
-  return { paths, conditions: canonicalConditions(projection.realizationConditions), outcome, extentSource: source.kind };
+  const { projection, outcome } = await populate(populateOptions);
+  return membershipOf(root, projection, source.kind, outcome);
 }
-
 
 /**
  * Populate the resources lane's tree and hand back the PROJECTION, content and
- * all.
+ * all — what a query about headings, links or sections reads.
  *
- * The sibling of {@link buildResourcePopulation}, and the reason there are two:
- * that one answers *which files are members* and deliberately reads no byte;
- * this one answers *what is in them*, which is what a query about headings,
- * links or sections needs. They register one registry through
- * {@link resourceContributors}, so the population they describe is the same
- * population — only the keying differs.
- *
- * ## Why this is not `buildResourcePopulation` with a flag
- *
- * A flag would put the ~90% blob cost one boolean away from every caller that
- * only wants a file list, and the default would decide which of two very
- * different commands is fast. Two named lanes make the cost a property of what
- * you asked for.
+ * The same question as {@link buildResourcePopulation} (see
+ * {@link resourceContributors}), so the same key: the two lanes share one stored
+ * population, and only what each reads of it differs.
  *
  * ## 🔑 There is no store gate on the answer
  *
@@ -484,7 +427,7 @@ export async function buildResourcePopulation(options: {
  * whether a cache happened to exist, or two callers hold differently-shaped
  * views of one tree.
  *
- * @param options - The root, the run's oracles, and the blob-stage observer
+ * @param options - The root and the run's oracles
  * @param options.root - Absolute root to populate
  * @param options.gitTracker - The ignore oracle, or omitted. Not cosmetic: this
  *   lane passes `DECLINE_IGNORED`, so the tracker decides which members there
@@ -495,31 +438,16 @@ export async function buildResourcePopulation(options: {
  *   omitted to re-derive every time
  * @param options.collections - The project's `resources.collections`, so a
  *   declared `mimeType` routes the file it matches to a parser
- * @param options.onBlobPopulation - Receives what the blob stage derived and
- *   what it REFUSED to derive. **Required**, and this is the lane where it earns
- *   that: a corpus whose every document was declined as binary populates as
- *   empty and would otherwise report success
- * @returns The populated projection and `populate()`'s outcome for it
+ * @returns The populated projection and `populate()`'s outcome for it. A
+ *   caller that reports refusals passes the projection to `describeBlobRefusals`,
+ *   which reads the stored rows, so a hit reports what the derive did
  */
 export function buildResourceProjection(options: TreePopulationOptions): Promise<PopulateResult> {
   const root = safePath.resolve(options.root);
-  // Same one-call-early selection as the population lane, for the same reason:
-  // `crawlSourceFor` falls back silently, so the instance that ran must stay
-  // nameable rather than re-derivable from the environment. A projection is built
-  // to be read: the root is the tree the verb examines.
+  // A projection is built to be read: the root is the tree the verb examines,
+  // so no output is declared.
   const source = crawlSourceFor(root, []);
-  // The DEFAULT demand, stated rather than defaulted, because it is the half of
-  // this lane that differs from its sibling and a reader comparing the two
-  // should find the difference at the call rather than in an argument list.
-  const { registry, parameters } = resourceContributors(source, DEFAULT_CONTENT_DEMAND, true);
-
-  return populate({
-    root,
-    registry,
-    parameters,
-    onBlobPopulation: options.onBlobPopulation,
-    ...populationOracles(options),
-  });
+  return populate(resourcePopulateOptions(options, root, resourceContributors(() => source)));
 }
 
 /**
@@ -591,4 +519,4 @@ function canonicalConditions(conditions: readonly RealizationConditionRow[]): Re
 }
 
 /** Test-only seam — see `docs/architecture/README.md` "`__internal`". */
-export const __internal = { canonicalConditions, CONDITION_ORDER } as const;
+export const __internal = { canonicalConditions, CONDITION_ORDER, membershipThrough } as const;

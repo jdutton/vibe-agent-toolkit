@@ -65,10 +65,10 @@ export interface LensEvaluationInput {
   readonly projection: Projection;
   /** Absolute corpus root, for a lens that must populate a lane of its own. */
   readonly root: string;
-  /** Where a lens's own blob-stage refusals go — stderr. */
-  readonly logger: Logger;
   /** The run's projection store, so a lens's own population can hit it. */
   readonly cache: PopulationCache | undefined;
+  /** Where a lens that populates reports its own population's refused content. */
+  readonly logger: Logger;
 }
 
 /** One lens: the relations it owns, and how to produce their rows. */
@@ -106,7 +106,7 @@ export const AUTHORED_LINK_LENS: ProjectionLens = {
 export const CLAUDE_CONTEXT_LENS: ProjectionLens = {
   name: 'claude-context',
   relations: ['claudeContextChains', 'claudeContextLoads'],
-  evaluate: ({ root, logger, cache }) => evaluateClaudeContextLens({ root, logger, cache }),
+  evaluate: ({ root, cache, logger }) => evaluateClaudeContextLens({ root, cache, logger }),
 };
 
 /** Every lens the query lane can evaluate, in evaluation order. */

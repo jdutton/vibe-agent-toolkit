@@ -15,7 +15,7 @@ import { createSymlink, safePath, symlinkCapability } from '@vibe-agent-toolkit/
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { CLAUDE_RULE_LINK_UNCHECKED_CHECK } from '../../src/projection/builtin-checks.js';
-import { FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
+import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
 import { FilesystemCrawlSource } from '../../src/projection/crawl-source.js';
 import type { ValidationIssue } from '../../src/schemas/validation-result.js';
 import { plantSymlinkFixture, removeSymlinkFixture } from '../helpers/symlink-fixture.js';
@@ -54,7 +54,7 @@ describe.skipIf(!symlinkCapability())('the linked-rules arms, from a planted tre
     createSymlink(capability, `${away}/a.md`, safePath.join(root, 'hop.md'));
     const { contribution } = await buildExtentContribution(
       root,
-      new FilesystemExtentContributor((at) => new FilesystemCrawlSource(at, [])),
+      new FilesystemExtentContributor((at) => new FilesystemCrawlSource(at, []), DEFAULT_CONTENT_DEMAND),
     );
     issues = CLAUDE_RULE_LINK_UNCHECKED_CHECK.run({
       claudeRulePatterns: [],

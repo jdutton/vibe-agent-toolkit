@@ -117,7 +117,7 @@ describe('connection configuration', () => {
     for (const [index, result] of results.entries()) {
       expect(result.code, `opener ${index}: ${result.stderr}`).toBe(0);
     }
-  }, 30_000);
+  });
 });
 
 describe('concurrent writers', () => {
@@ -157,7 +157,7 @@ describe('concurrent writers', () => {
     } finally {
       await store.close();
     }
-  }, 30_000);
+  });
 
   it('never shows a reader half of a replaced extent', async () => {
     let writing = true;
@@ -197,5 +197,5 @@ describe('concurrent writers', () => {
     // the extent is not evidence of anything.
     expect(samples, `${attempts} attempts`).toBeGreaterThan(0);
     expect(torn).toBe(0);
-  }, 30_000);
+  });
 });

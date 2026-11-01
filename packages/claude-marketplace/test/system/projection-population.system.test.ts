@@ -94,6 +94,10 @@
  * fully live, which is exactly how it caught the `AST_SYNTACTIC_FORMS` staleness
  * described on {@link droppedReferencesByBlob}. It is what {@link
  * MIN_AST_REFERENCE_ROWS} exists to keep honest.
+ *
+ * `populate()` reports no counters — what a run is told is read from its rows —
+ * so the stage's own counter comes from a second run of the public
+ * `populateBlobs` over the converged run's realizations ({@link rederiveBlobs}).
  */
 
 import {
@@ -106,10 +110,13 @@ import {
   ClosureNonConvergenceError,
   ContributorRegistry,
   crawlSourceFor,
+  DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
   GitExtentContributor,
   PackageExtentContributor,
   populate,
+  populateBlobs,
+  ProjectionBuilder,
   relativize,
   type BlobPopulationResult,
   type ExtentContributor,
@@ -119,8 +126,8 @@ import {
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { NEVER_CRAWL_GLOBS, crawlDirectory } from '@vibe-agent-toolkit/utils/crawl';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
-import { refuseUnreadableFixture } from '@vibe-agent-toolkit/utils/testing';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { atLeastTierTimeout, refuseUnreadableFixture } from '@vibe-agent-toolkit/utils/testing';
+import { beforeAll, describe, expect, inject, it } from 'vitest';
 
 import {
   MarketplaceExtentContributor,
@@ -158,6 +165,35 @@ const PROBE_CEILING = 6;
  */
 const MIN_AST_REFERENCE_ROWS = 500;
 
+/** A second run of the blob stage over the converged realizations. */
+interface RederivedBlobs {
+  /** The stage's own counters, which `populate()` does not report. */
+  counts: BlobPopulationResult;
+  /** The blobs it derived, in code-unit order, to prove it saw the same set. */
+  blobKeys: string[];
+}
+
+/**
+ * Run the public blob stage again over exactly the converged run's identities,
+ * contexts and realizations, for its counters.
+ *
+ * @param projection - The converged projection
+ * @returns The stage's counters and the content keys it derived
+ */
+async function rederiveBlobs(projection: Projection): Promise<RederivedBlobs> {
+  const builder = new ProjectionBuilder({ root: ROOT });
+  for (const row of projection.resolutionContexts) builder.addContext(row);
+  for (const row of projection.resources) builder.addResource(row);
+  for (const row of projection.resourceRealizations) builder.addRealization(row);
+  const counts = await populateBlobs(builder);
+  return { counts, blobKeys: contentKeysOf(builder.build()) };
+}
+
+/** A projection's blob content keys, in code-unit order. */
+function contentKeysOf(projection: Projection): string[] {
+  return projection.blobs.map((row) => row.contentKey).sort((a, b) => (a < b ? -1 : Number(a > b)));
+}
+
 /** What the escalating-cap probe learned about the closure stratum. */
 interface ConvergenceProbe {
   /** The projection from the first cap that converged. */
@@ -174,7 +210,7 @@ interface ConvergenceProbe {
 }
 
 let probe: ConvergenceProbe;
-let blobCounts: BlobPopulationResult;
+let rederived: RederivedBlobs;
 let registeredIds: readonly string[];
 
 /**
@@ -224,7 +260,7 @@ function buildRegistry(skillPaths: readonly string[]): {
     ids.push(contributor.id);
   };
 
-  add(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
+  add(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
   add(new GitExtentContributor());
   add(new PackageExtentContributor());
 
@@ -260,14 +296,12 @@ function buildRegistry(skillPaths: readonly string[]): {
  *
  * @param registry - The contributors to run
  * @param parameters - Per-contributor parameter sets
- * @param onBlobPopulation - Receives the blob stage's counters each run
  * @returns The converged projection and the per-pass moving sets
  * @throws When the stratum has not converged by {@link PROBE_CEILING}
  */
 async function probeConvergence(
   registry: ContributorRegistry,
   parameters: Record<string, JsonValue>,
-  onBlobPopulation: (result: BlobPopulationResult) => void,
 ): Promise<ConvergenceProbe> {
   const movingByPass: string[][] = [];
   const gitTracker = new GitTracker(ROOT);
@@ -278,7 +312,7 @@ async function probeConvergence(
   for (let cap = 2; cap <= PROBE_CEILING; cap++) {
     try {
       const { projection } = await populate({
-        root: ROOT, registry, parameters, gitTracker, maxIterations: cap, onBlobPopulation,
+        root: ROOT, registry, parameters, gitTracker, maxIterations: cap,
       });
       return { projection, passes: cap, movingByPass };
     } catch (error) {
@@ -324,10 +358,12 @@ async function probeConvergence(
  * docstring exists to warn about.
  *
  * @param projection - The populated projection
- * @returns Per-blob dropped counts, and the AST rows the difference is taken against
+ * @returns Per-blob dropped counts, the blobs carrying more AST rows than links,
+ *   and the AST rows the difference is taken against
  */
 function droppedReferencesByBlob(projection: Projection): {
   dropped: Map<string, number>;
+  surplus: string[];
   astRowTotal: number;
 } {
   const astRows = new Map<string, number>();
@@ -339,11 +375,14 @@ function droppedReferencesByBlob(projection: Projection): {
   }
 
   const dropped = new Map<string, number>();
+  const surplus: string[] = [];
   for (const blob of projection.blobs) {
-    const missing = blob.linkCount - (astRows.get(blob.contentKey) ?? 0);
+    const rows = astRows.get(blob.contentKey) ?? 0;
+    const missing = blob.linkCount - rows;
     if (missing > 0) dropped.set(blob.contentKey, missing);
+    if (missing < 0) surplus.push(`${blob.contentKey}: ${rows} rows vs ${blob.linkCount} links`);
   }
-  return { dropped, astRowTotal };
+  return { dropped, surplus, astRowTotal };
 }
 
 /**
@@ -378,7 +417,7 @@ function extensionOf(path: string): string {
 }
 
 /** Print the cardinalities this run exists to measure. Printed, never asserted. */
-function reportCardinalities(projection: Projection, counts: BlobPopulationResult): void {
+function reportCardinalities(projection: Projection): void {
   console.log('[risk 4] cardinality of a whole-corpus population of this repository');
   const table = {
     resources: projection.resources.length,
@@ -394,7 +433,6 @@ function reportCardinalities(projection: Projection, counts: BlobPopulationResul
     blob_conditions: projection.blobConditions.length,
   };
   console.table(table);
-  console.log('[blob stage]', JSON.stringify(counts));
   console.log('[extents by kind]', JSON.stringify(tally(
     projection.resolutionContexts.map((row) => row.kind),
   )));
@@ -423,18 +461,19 @@ beforeAll(async () => {
   const { registry, parameters, ids } = buildRegistry(skillPaths);
   registeredIds = ids;
 
-  let latest: BlobPopulationResult | undefined;
-  probe = await probeConvergence(registry, parameters, (result) => { latest = result; });
-  if (latest === undefined) throw new Error('populate() never invoked onBlobPopulation');
-  blobCounts = latest;
+  probe = await probeConvergence(registry, parameters);
 
   console.log(`[setup] ${skillPaths.length} skills, ${ids.length} contributors registered`);
   console.log(`[risk 2] closure stratum converged on pass ${probe.passes}`);
   for (const [index, moving] of probe.movingByPass.entries()) {
     console.log(`  still moving after pass ${index + 2}: ${moving.length} — ${moving.join(', ')}`);
   }
-  reportCardinalities(probe.projection, blobCounts);
-}, 3_600_000);
+  reportCardinalities(probe.projection);
+
+  const startedAt = performance.now();
+  rederived = await rederiveBlobs(probe.projection);
+  console.log(`[blob stage, re-derived] ${Math.round(performance.now() - startedAt)} ms`, JSON.stringify(rederived.counts));
+}, atLeastTierTimeout(inject('tierHookTimeout'), 3_600_000));
 
 describe('whole-corpus population', () => {
   it('converges within the probe ceiling', () => {
@@ -491,7 +530,8 @@ describe('whole-corpus population', () => {
   });
 
   it('leaves no heading without a section row', () => {
-    expect(blobCounts.headingsSkippedForMissingLine).toBe(0);
+    expect(rederived.blobKeys).toEqual(contentKeysOf(probe.projection));
+    expect(rederived.counts.headingsSkippedForMissingLine).toBe(0);
   });
 
   it('agrees between blobs.sectionCount and the blob_sections rows', () => {
@@ -506,7 +546,7 @@ describe('whole-corpus population', () => {
   });
 
   it('agrees between blobs.linkCount and the parser-derived blob_references rows', () => {
-    const { dropped, astRowTotal } = droppedReferencesByBlob(probe.projection);
+    const { dropped, surplus, astRowTotal } = droppedReferencesByBlob(probe.projection);
 
     // ── Arm the assertion before making it. ───────────────────────────────────
     // `expect(total).toBe(referencesSkippedForMissingLine)` is `0 === 0` over an
@@ -516,12 +556,17 @@ describe('whole-corpus population', () => {
     expect(astRowTotal).toBeGreaterThan(MIN_AST_REFERENCE_ROWS);
     expect(probe.projection.blobs.length).toBeGreaterThan(0);
 
+    // No blob may carry more AST-form rows than its parser found links: a surplus
+    // is a row no parser produced.
+    expect(surplus).toEqual([]);
     const total = [...dropped.values()].reduce((sum, count) => sum + count, 0);
     // The rows and the counter are two independent measurements of one quantity:
     // `blobs.linkCount` is what the parser handed the stage, the AST-form rows
     // are what survived `hasReferenceSpan`, and the stage counted the difference
-    // itself. A parser whose links stop reaching rows moves one side only.
-    expect(total).toBe(blobCounts.referencesSkippedForMissingLine);
+    // itself. A parser whose links stop reaching rows moves one side only. The
+    // counter is the re-derivation's, over the same blobs (asserted first).
+    expect(rederived.blobKeys).toEqual(contentKeysOf(probe.projection));
+    expect(total).toBe(rederived.counts.referencesSkippedForMissingLine);
 
     // Printed, never asserted — the header explains why the drop *count* is not
     // an invariant. The extension breakdown is the fact that retired the

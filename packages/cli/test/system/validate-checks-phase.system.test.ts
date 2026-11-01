@@ -114,13 +114,12 @@ describe('vat validate — the checks phase', () => {
   });
 
   /**
-   * A SMOKE test of the two processes sharing one store: the parent opens it for its population
-   * scope and the child opens and writes it on a miss. It observes what the child reports — the
-   * first run's checks phase derived and left a store behind, and the second run's was served from
-   * it (acceptance bar 4's checks half, on a fixture) — but not that the parent's handle was open
-   * at the instant the child wrote, so it does not pin a contention it never arranged.
+   * A SMOKE test of the two processes sharing one store. Every resources lane asks one question, so
+   * on a fresh store the resources phase derives and writes, and the checks child is served what it
+   * wrote — on the COLD run, not only the next one. It does not pin the parent's handle being open
+   * at the instant the child reads, so it pins no contention it never arranged.
    */
-  it('smoke: the checks phase derives into a fresh store under vat validate, and the next run is served from it', () => {
+  it('smoke: under vat validate the checks child is served what the resources phase wrote, cold and warm', () => {
     writeConfig(projectDir, [['quick', TXT_ROWS]]);
     const storeDir = safePath.join(scratch(), 'fresh-store');
     fs.mkdirSync(storeDir, { mode: 0o700 });
@@ -130,7 +129,9 @@ describe('vat validate — the checks phase', () => {
 
     expect(cold.status, cold.stderr).toBe(0);
     expect(checksPhase(cold).status).toBe('ok');
-    expect(checksPhase(cold).data?.['population']).toBe('derived');
+    // The discriminator: this run really derived, in the resources phase.
+    expect(cold.phases.find((entry) => entry.name === 'resources')?.data?.['population']).toBe('derived');
+    expect(checksPhase(cold).data?.['population']).toBe('store');
     expect(storeFilesUnder(storeDir).length).toBeGreaterThan(0);
     expect(cold.stderr).not.toContain(UNCACHED);
 
