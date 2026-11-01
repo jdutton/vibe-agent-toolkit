@@ -309,6 +309,10 @@ describe('skills build command (system test)', () => {
       expect(result.status).toBe(0);
       expect(report.examined).toBe(2);
       expect(suite.dataOf(report)).toMatchObject({ skillsBuilt: 0, skillsInPlace: [SKILL_A_NAME, SKILL_B_NAME], skills: [] });
+      // The success line is judged on the REPORT's `examined` (2), not on the
+      // built count (0): the run examined both skills and set both aside.
+      expect(result.stderr).toContain('Built 0 skill(s) successfully (2 in-place skill(s) not bundled)');
+      expect(result.stderr).not.toContain('Not a verdict');
       // Pinned: `runSkillBuild` over zero specs promotes an EMPTY staging tree, so
       // dist/skills is absent or empty — never a stale bundle from an earlier run.
       const distSkills = safePath.join(tempDir, 'dist', 'skills');

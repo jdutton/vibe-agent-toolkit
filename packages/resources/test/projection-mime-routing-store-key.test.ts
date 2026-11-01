@@ -261,16 +261,11 @@ async function ambientKeysAcrossBothPasses(
 /**
  * ⚠️ **Read this before trusting the two arms below as live guards.**
  *
- * The lane's `discoverImportRoots` docstring used to claim that a discovery pass
- * which did not receive `collections` would key differently from the real pass
- * and the two would evict each other from the store, run after run. That is
- * FALSE, and it was checked the only way worth checking: the `collections`
- * forwarding was deleted from the discovery pass and the whole `resources` suite
- * — 2,469 tests — stayed green. The mechanism is that the discovery pass is
- * never handed a `cache` at all, so it asks the store nothing and has no key to
- * collide with; and a declared type cannot change what it ANSWERS either,
- * because `claudeImportRootsFrom` reads `path` / `basenameLower` / `isDirectory`
- * and never `mime`.
+ * The lane's discovery pass (`discoverImportRoots`) takes no `collections` and
+ * no `cache`: it asks the store nothing and has no key to collide with, and a
+ * declared type cannot change what it ANSWERS either, because
+ * `claudeImportRootsFrom` reads `path` / `basenameLower` / `isDirectory` and
+ * never `mime`.
  *
  * So the `toHaveLength(1)` arms are TRIPWIRES for a hazard that is currently
  * unreachable, not proofs that two live passes agree. They are kept — and said

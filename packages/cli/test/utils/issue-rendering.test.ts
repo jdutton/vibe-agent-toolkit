@@ -621,6 +621,14 @@ describe('vat skills validate — formatValidationReportLines', () => {
     expect(banner).toContain('Not a verdict');
   });
 
+  it('gives a findings-only run that examined nothing the not-a-verdict banner too', () => {
+    // The "passed with findings" branch is a second success claim: a run-level
+    // warning over zero skills examined must not read as a pass.
+    const [banner] = formatValidationReportLines([], [issue('warning', 'ALLOW_UNUSED')], 0, false);
+    expect(banner).toContain('Not a verdict');
+    expect(banner).not.toContain('passed');
+  });
+
   it('collapses each skill to ONE line by default, dominant code first, clean skills omitted', () => {
     // Three skills of three different shapes — noisy, clean, allow-only — so the
     // fixture can tell "one row per finding" apart from "one row per asset", and

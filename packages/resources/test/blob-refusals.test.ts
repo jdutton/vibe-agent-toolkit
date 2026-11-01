@@ -173,6 +173,19 @@ describe('describeBlobRefusals', () => {
     }))).toContain('declined 1 of 1 blob(s) (1 not text)');
   });
 
+  it('stays silent about an image beside a SINGLE derived text blob — one is not "nothing derived"', () => {
+    // The boundary of the all-binary case above: one usable blob means the run
+    // read something, so the untyped image is wallpaper again.
+    expect(describeBlobRefusals(rowsOf({
+      blobs: blobs(1),
+      resourceRealizations: [
+        keyedAt('README.md', 'markdown.derived-0', 'text/markdown'),
+        keyedAt('assets/logo.png', 'none.logo', null),
+      ],
+      blobConditions: [condition(BLOB_NOT_TEXT, 'none.logo')],
+    }))).toBeUndefined();
+  });
+
   it('stays silent for the ordinary shapes of a tree, which are not refusals', () => {
     expect(describeBlobRefusals(rowsOf({
       resourceRealizations: [

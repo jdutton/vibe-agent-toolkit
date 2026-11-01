@@ -122,7 +122,6 @@
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
-import type { CollectionConfig } from '../schemas/project-config.js';
 import type { JsonValue } from '../schemas/projection-shared.js';
 
 import { ContributorRegistry } from './contributor.js';
@@ -234,31 +233,16 @@ async function sharedEnumeration(root: string): Promise<CrawlSource> {
  *   here: with no tracker nothing is ignored, so {@link DECLINE_IGNORED}
  *   declines nothing and this pass discovers roots the real pass will too
  * @param source - The run's single enumeration, from {@link sharedEnumeration}
- * @param collections - The project's collections, forwarded for the same reason
- *   `gitTracker` is: the two passes ask one question of one tree.
  *
- *   ⚠️ **Inert today, and deliberately kept anyway — do not read it as
- *   load-bearing.** An earlier version of this note claimed omitting it would
- *   make the two passes EVICT EACH OTHER from the projection store. That cannot
- *   happen: this pass is never handed a `cache` (the real pass gets one through
- *   `populationOracles`, and there is no `cache` key below), so it neither reads
- *   nor writes the store and has no key to collide with. Nor can a declared type
- *   change what this pass ANSWERS — `claudeImportRootsFrom` consumes `path`,
- *   `basenameLower` and `isDirectory`, never `mime`, and content parsing is
- *   skipped outright.
- *
- *   It stays because the day this pass gains a store, or a consumer that reads
- *   `mime`, the two passes must already agree — and because a divergence would
- *   be SILENT (a store that never hits is indistinguishable from a cold one).
- *   `projection-mime-routing-store-key.test.ts` pins that agreement as a
- *   tripwire rather than as a live property.
+ * Takes no `collections`: this pass is never handed a `cache`, so it has no
+ * store key a declaration could move, and `claudeImportRootsFrom` reads `path`,
+ * `basenameLower` and `isDirectory`, never the `mime` a declaration routes.
  * @returns Root-relative paths of every `CLAUDE.md` / `.claude/rules` file
  */
 async function discoverImportRoots(
   root: string,
   gitTracker: GitTracker | undefined,
   source: CrawlSource,
-  collections: Readonly<Record<string, CollectionConfig>> | undefined,
 ): Promise<string[]> {
   const registry = new ContributorRegistry();
   // `'deferred'` — enumerated, deliberately not read. `claudeImportRootsFrom`
@@ -270,21 +254,17 @@ async function discoverImportRoots(
   const discovery = await populate({
     root,
     registry,
-    // The SAME parameter set the real pass below passes, and that agreement is
-    // load-bearing twice over: a root discovered here that the real pass
-    // declined would register a contributor whose extent is its own root and
-    // nothing else, and a stored extent is keyed on `(contributorId,
-    // parameterSet)` — so two passes asking different questions of one tree also
-    // evict each other from the projection store, run after run.
+    // The SAME parameter set the real pass below passes: a root discovered here
+    // that the real pass declined would register a contributor whose extent is
+    // its own root and nothing else. (`importRoots` reads the REAL pass's stored
+    // membership under this same `(contributorId, parameterSet)` before it ever
+    // runs this pass, so the agreement is also what lets that read hit.)
     parameters: { [filesystem.id]: DECLINE_IGNORED },
     // Sound only because the sole registered contributor declares
     // `readsBlobs: false`; the driver refuses the combination rather than
     // handing a blob reader empty tables.
     contentParsing: CONTENT_PARSING_SKIP,
     ...(gitTracker !== undefined && { gitTracker }),
-    // See the `@param collections` note: omitting these HERE while the real pass
-    // passes them gives the two passes different store keys over one tree.
-    ...(collections !== undefined && { collections }),
   });
 
   return claudeImportRootsFrom(discovery.projection.resourceRealizations);
@@ -410,12 +390,7 @@ async function importRoots(
   const root = populateOptions.root;
   const source = await sharedEnumeration(root);
   return {
-    roots: await discoverImportRoots(
-      root,
-      populateOptions.gitTracker,
-      source,
-      populateOptions.collections,
-    ),
+    roots: await discoverImportRoots(root, populateOptions.gitTracker, source),
     population: 'derived',
     source,
   };

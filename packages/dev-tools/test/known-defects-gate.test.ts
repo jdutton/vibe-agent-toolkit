@@ -62,6 +62,11 @@ describe('stableTagBlockers', () => {
     expect(() => stableTagBlockers(`### An entry\n\n${line}\n`)).toThrow(/marker/);
   });
 
+  it('lists an entry carrying the marker twice ONCE', () => {
+    const marker = '- **Blocks:** the stable tag';
+    expect(stableTagBlockers(`### An entry\n\n${marker}\n- **Severity:** Major\n${marker}\n`)).toEqual(['An entry']);
+  });
+
   it('reads a list line whose first word merely CONTAINS "block" as prose, not a near-miss', () => {
     expect(stableTagBlockers('### An entry\n\n- Unblocks nothing; see the stable tag notes.\n- **Severity:** Minor\n')).toEqual([]);
   });

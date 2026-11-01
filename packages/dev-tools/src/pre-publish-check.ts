@@ -24,15 +24,18 @@
  * 16. No known defect marked as blocking the stable tag (stable versions only)
  *
  * Usage:
- *   tsx packages/dev-tools/src/pre-publish-check.ts [--allow-branch BRANCH] [--skip-git-checks] [--release-readiness] [--tag VERSION]
+ *   tsx packages/dev-tools/src/pre-publish-check.ts --root DIR [--allow-branch BRANCH] [--skip-git-checks] [--release-readiness] [--tag VERSION]
  *   bun run pre-publish [--allow-branch BRANCH] [--skip-git-checks] [--release-readiness] [--tag VERSION]
+ *
+ * `--root` is required, never defaulted to this checkout: every check reads the
+ * tree it names (git included), so a fixture tree can drive the whole script.
  *
  * Exit codes:
  *   0 - Ready to publish
  *   1 - Not ready (with explanation)
  */
 
-// File paths derived from PROJECT_ROOT and packagesDir constants (controlled, not user input)
+// File paths derived from the --root argument and packagesDir (controlled, not user input)
 
 import { readdirSync, existsSync, readFileSync } from 'node:fs';
 
@@ -40,7 +43,7 @@ import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { direntKindFollowingSync, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
 
-import { PROJECT_ROOT, log, safeExecSync } from './common.js';
+import { log, safeExecSync } from './common.js';
 import { isPrereleaseVersion, readKnownDefects, releaseReadinessDefectRefusal } from './known-defects-gate.js';
 import { DEPENDENCY_FIELDS } from './resolve-workspace-deps.js';
 import { publishedPackagesInDependencyOrder } from './workspace-graph.js';
@@ -94,6 +97,8 @@ let allowedBranch = 'main';
 let allowCustomBranch = false;
 let skipGitChecks = false;
 let releaseReadiness = false;
+/** The tree every check reads; required. */
+let rootArg: string | undefined;
 /** The version the pushed tag names, when running inside the publish workflow. */
 let publishingTag: string | undefined;
 
@@ -103,6 +108,10 @@ while (i < args.length) {
   if (args[i] === '--allow-branch' && nextArg) {
     allowedBranch = nextArg;
     allowCustomBranch = true;
+    i += 2;
+    continue;
+  } else if (args[i] === '--root' && nextArg) {
+    rootArg = safePath.resolve(nextArg);
     i += 2;
     continue;
   } else if (args[i] === '--tag' && nextArg) {
@@ -122,6 +131,7 @@ Usage:
   bun run pre-publish [OPTIONS]
 
 Options:
+  --root DIR             The repository root to check (required; the npm scripts pass .)
   --allow-branch BRANCH  Allow publishing from a specific branch (default: main)
   --skip-git-checks      Skip git-related checks (branch, uncommitted changes, untracked files)
                          Use this when running in vibe-validate during development
@@ -149,13 +159,19 @@ Exit codes:
   i++;
 }
 
+if (rootArg === undefined) {
+  console.error('--root DIR is required: the repository root every check reads');
+  process.exit(ExitCode.ERROR);
+}
+const projectRoot: string = rootArg;
+
 console.log(IS_CI ? '🔍 Pre-Publish Validation Check (CI Mode)' : '🔍 Pre-Publish Validation Check');
 console.log('==========================================');
 console.log('');
 
 // Check 1: Git repository exists
 try {
-  const result = runGit(['rev-parse', '--git-dir']);
+  const result = runGit(['rev-parse', '--git-dir'], { cwd: projectRoot });
   if (!result.ok) {
     throw new Error('Not a git repository');
   }
@@ -174,7 +190,7 @@ if (IS_CI || skipGitChecks) {
 } else {
   let currentBranch: string;
   try {
-    const result = runGit(['rev-parse', '--abbrev-ref', 'HEAD']);
+    const result = runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: projectRoot });
     if (!result.ok) {
       throw new Error('Failed to determine current branch');
     }
@@ -204,14 +220,14 @@ if (IS_CI || skipGitChecks) {
 if (IS_CI || skipGitChecks) {
   log('⊘ Uncommitted changes check skipped (CI mode or --skip-git-checks)', 'yellow');
 } else {
-  const result = runGit(['diff-index', '--quiet', 'HEAD', '--']);
+  const result = runGit(['diff-index', '--quiet', 'HEAD', '--'], { cwd: projectRoot });
   const hasUncommittedChanges = !result.ok;
 
   if (hasUncommittedChanges) {
     log('✗ Uncommitted changes detected', 'red');
     console.log('');
 
-    const statusResult = runGit(['status', '--short']);
+    const statusResult = runGit(['status', '--short'], { cwd: projectRoot });
 
     if (statusResult.ok) {
       console.log(statusResult.stdout);
@@ -229,7 +245,7 @@ if (IS_CI || skipGitChecks) {
 if (IS_CI || skipGitChecks) {
   log('⊘ Untracked files check skipped (CI mode or --skip-git-checks)', 'yellow');
 } else {
-  const untrackedResult = runGit(['ls-files', '--others', '--exclude-standard']);
+  const untrackedResult = runGit(['ls-files', '--others', '--exclude-standard'], { cwd: projectRoot });
 
   let untracked = '';
   if (untrackedResult.ok) {
@@ -274,7 +290,7 @@ if (skipGitChecks) {
   console.log('Running validation checks...');
 
   try {
-    safeExecSync('bun', ['run', 'validate'], { stdio: 'inherit', cwd: PROJECT_ROOT });
+    safeExecSync('bun', ['run', 'validate'], { stdio: 'inherit', cwd: projectRoot });
     log('✓ All validation checks passed', 'green');
   } catch (error) {
     console.log('');
@@ -291,14 +307,14 @@ if (skipGitChecks) {
 console.log('');
 console.log('Checking the workspace graph...');
 
-const packagesDir = safePath.join(PROJECT_ROOT, 'packages');
+const packagesDir = safePath.join(projectRoot, 'packages');
 
 // The publish order is DERIVED from package.json (every non-private package,
 // dependencies first), so there is no hand list to fall out of sync. What can
 // still go wrong is the input: a manifest that does not parse, or a dependency
 // cycle that has no publish order. Both throw here, before anything is published.
 try {
-  const publishOrder = publishedPackagesInDependencyOrder(PROJECT_ROOT);
+  const publishOrder = publishedPackagesInDependencyOrder(projectRoot);
   log(`✓ Publish order derives from package.json: ${publishOrder.length} packages`, 'green');
 } catch (error) {
   log('✗ Could not derive the publish order from package.json', 'red');
@@ -552,7 +568,7 @@ try {
 
 try {
   // Read CHANGELOG.md
-  const changelogPath = safePath.join(PROJECT_ROOT, 'CHANGELOG.md');
+  const changelogPath = safePath.join(projectRoot, 'CHANGELOG.md');
   if (!existsSync(changelogPath)) {
     log('✗ CHANGELOG.md not found', 'red');
     console.log('  Create CHANGELOG.md to document releases');
@@ -608,7 +624,7 @@ if (releaseReadiness) {
     try {
       safeExecSync('bun', ['run', 'vat', 'claude', 'marketplace', 'publish', '--dry-run', '--cwd', vatDevAgentsDir], {
         stdio: 'pipe',
-        cwd: PROJECT_ROOT,
+        cwd: projectRoot,
       });
       log('✓ Marketplace publish dry-run passed', 'green');
     } catch (error) {
@@ -634,7 +650,7 @@ if (releaseReadiness) {
   console.log(`Checking remote tag v${currentVersion}...`);
 
   {
-    const tagResult = runGit(['ls-remote', '--tags', 'origin', `refs/tags/v${currentVersion}`]);
+    const tagResult = runGit(['ls-remote', '--tags', 'origin', `refs/tags/v${currentVersion}`], { cwd: projectRoot });
     const tagOnRemote = tagResult.ok && tagResult.stdout.toString().trim().length > 0;
 
     if (publishingTag === undefined) {
@@ -668,7 +684,7 @@ if (releaseReadiness) {
     const refusal = releaseReadinessDefectRefusal({
       version: currentVersion,
       releaseReadiness,
-      register: () => readKnownDefects(PROJECT_ROOT),
+      register: () => readKnownDefects(projectRoot),
     });
     if (refusal !== undefined) {
       log(`✗ ${refusal}`, 'red');
@@ -682,7 +698,7 @@ if (releaseReadiness) {
   if (isPrereleaseVersion(currentVersion)) {
     log(`⊘ CHANGELOG content checks skipped (prerelease version: ${currentVersion})`, 'yellow');
   } else {
-    const changelogPath = safePath.join(PROJECT_ROOT, 'CHANGELOG.md');
+    const changelogPath = safePath.join(projectRoot, 'CHANGELOG.md');
     const changelogContent = readFileSync(changelogPath, 'utf8');
 
     // Check 14: No stale unreleased content
@@ -721,7 +737,7 @@ if (releaseReadiness) {
     {
       const escapedVersion = currentVersion.replaceAll('.', String.raw`\.`);
       // eslint-disable-next-line security/detect-non-literal-regexp -- version from package.json is trusted
-      const sectionPattern = new RegExp(String.raw`^## \[${escapedVersion}\][^\n]*\n([\s\S]*?)(?=^## \[|\z)`, 'm');
+      const sectionPattern = new RegExp(String.raw`^## \[${escapedVersion}\][^\n]*\n([\s\S]*?)(?=^## \[|(?![\s\S]))`, 'm');
       const sectionMatch = sectionPattern.exec(changelogContent);
       const sectionContent = sectionMatch?.[1]?.trim() ?? '';
 
