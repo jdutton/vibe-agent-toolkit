@@ -43,6 +43,11 @@ const SHAPES: ReadonlyArray<readonly [what: string, code: string, rule: string]>
   ['a require', "export const eslint: unknown = require('eslint');\n", DYNAMIC_BAN],
   ['createRequire called in place', "import { createRequire } from 'node:module';\nexport const eslint: unknown = createRequire(import.meta.url)('eslint');\n", DYNAMIC_BAN],
   ['a require made by createRequire', "import { createRequire } from 'node:module';\nconst require = createRequire(import.meta.url);\nexport const eslint: unknown = require('eslint');\n", DYNAMIC_BAN],
+  ['a createRequire result under another name', "import { createRequire } from 'node:module';\nconst requireFn = createRequire(import.meta.url);\nexport const eslint: unknown = requireFn('eslint');\n", DYNAMIC_BAN],
+  ['a renamed createRequire', "import { createRequire as cr } from 'node:module';\nexport const eslint: unknown = cr(import.meta.url)('eslint');\n", DYNAMIC_BAN],
+  ['createRequire off the module object', "import nodeModule from 'node:module';\nexport const eslint: unknown = nodeModule.createRequire(import.meta.url)('eslint');\n", DYNAMIC_BAN],
+  ['require.call', "export const eslint: unknown = require.call(null, 'eslint');\n", DYNAMIC_BAN],
+  ['a createRequire result named req', "import { createRequire } from 'node:module';\nconst req = createRequire(import.meta.url);\nexport const eslint: unknown = req('eslint');\n", DYNAMIC_BAN],
 ];
 
 describe('the ESLint-instance ban', () => {
@@ -57,6 +62,8 @@ describe('the ESLint-instance ban', () => {
   it.each([
     ['product source', 'packages/cli/src/second-linter.ts'],
     ['a dev tool script', 'packages/dev-tools/second-linter.mjs'],
+    ['a .mts test helper', 'packages/cli/test/helpers/second-linter.mts'],
+    ['.mts product source', 'packages/cli/src/second-linter.mts'],
     ['the archive module', 'packages/utils/src/archive/second-linter.ts'],
     ['the VatError base class', 'packages/utils/src/errors/vat-error.ts'],
   ])('fires in %s', async (_where, file) => {
@@ -64,8 +71,11 @@ describe('the ESLint-instance ban', () => {
     expect(await banFindings(file, "export const load = () => import('eslint');\n")).toEqual([expect.stringContaining(`${DYNAMIC_BAN}: `)]);
   });
 
-  it('fires in a CommonJS rule module', async () => {
-    expect(await banFindings('packages/utils/eslint/rules/second-linter.cjs', "const { ESLint } = require('eslint');\nmodule.exports = ESLint;\n")).toEqual([expect.stringContaining(`${DYNAMIC_BAN}: `)]);
+  it.each([
+    ['require', "const { ESLint } = require('eslint');\nmodule.exports = ESLint;\n"],
+    ['module.require', "const { ESLint } = module.require('eslint');\nmodule.exports = ESLint;\n"],
+  ])('fires on %s in a CommonJS rule module', async (_what, code) => {
+    expect(await banFindings('packages/utils/eslint/rules/second-linter.cjs', code)).toEqual([expect.stringContaining(`${DYNAMIC_BAN}: `)]);
   });
 
   it('allows a type import and the members that construct no ESLint', async () => {

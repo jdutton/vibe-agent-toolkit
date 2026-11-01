@@ -103,7 +103,7 @@ const MECHANISM_SIGNATURES: ReadonlyArray<readonly [key: MechanismKey, pattern: 
   ['network', /fetch\(|createServer|\.listen\(/],
   ['workerPool', /ParsePool|createParsePool|new Worker\(|worker_threads/],
   ['projection', /populate\w*\(|projectionStore|openPopulation/],
-  ['eslint', /new ESLint\(|repoEslint\(|new Linter\(|RuleTester/],
+  ['eslint', /new ESLint\(|repoEslint\(|banLinter\(|new Linter\(|RuleTester/],
   ['symlinks', /symlinkSync|symlink\(/],
 ];
 

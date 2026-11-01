@@ -47,10 +47,15 @@ const OTHER_SHAPES: ReadonlyArray<readonly [what: string, code: string, rule: st
   ['a lazy import spelled as a template literal', 'export const load = (): Promise<unknown> => import(`adm-zip`);\n', DYNAMIC_BAN],
   ['a require spelled as a template literal', 'export const tar: unknown = require(`tar/extract`);\n', DYNAMIC_BAN],
   ['a require made by createRequire', "import { createRequire } from 'node:module';\nconst require = createRequire(import.meta.url);\nexport const tar: unknown = require('tar/extract');\n", DYNAMIC_BAN],
+  ['a createRequire result under another name', "import { createRequire } from 'node:module';\nconst requireFn = createRequire(import.meta.url);\nexport const tar: unknown = requireFn('tar');\n", DYNAMIC_BAN],
+  ['module.require', "export const zip: unknown = module.require('adm-zip');\n", DYNAMIC_BAN],
 ];
 
 /** Specifiers that only LOOK like the two libraries: the ban is on the packages, not on the letters. */
 const LOOKALIKES = "import a from 'tarball';\nimport b from './tar.js';\nimport c from '../helpers/adm-zip/x.js';\nexport const all = [a, b, c, import('tar-stream'), require('target')];\n";
+
+/** A format name passed to an ordinary function is not a module load (the archive tests call `list('tar', bytes)`). */
+const FORMAT_ARGUMENT = "declare function list(format: string, bytes: Uint8Array): unknown;\nexport const all = [list('tar', new Uint8Array()), list('adm-zip', new Uint8Array())];\n";
 
 describe('the archive-library ban', () => {
   it.each([
@@ -86,6 +91,10 @@ describe('the archive-library ban', () => {
 
   it('says nothing about a specifier that merely begins or ends like one of the two', async () => {
     expect(await banFindings('packages/cli/src/commands/claude/plugin/second-extractor.ts', LOOKALIKES)).toEqual([]);
+  });
+
+  it('says nothing about a format name passed to an ordinary function', async () => {
+    expect(await banFindings('packages/utils/test/archive-read.test.ts', FORMAT_ARGUMENT)).toEqual([]);
   });
 
   it.each([

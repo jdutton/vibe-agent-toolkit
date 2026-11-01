@@ -531,7 +531,7 @@ class RuntimeContext {
 
 ### Phase 5: Validation
 
-- [ ] Run full test suite (`vv validate`)
+- [ ] Run full test suite (`bun run validate`)
 - [ ] Test conversational demo
 - [ ] Verify no string duplication (ESLint)
 - [ ] Check all imports work correctly

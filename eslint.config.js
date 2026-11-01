@@ -699,33 +699,46 @@ const ARCHIVE_LIBRARY_BAN = [
 // `./tar/x.js` and `tarball` are not caught.
 const ARCHIVE_LIBRARY_SUBPATH_BAN = [{ group: ['tar/**', 'adm-zip/**'], message: ARCHIVE_LIBRARY_MESSAGE }];
 // `no-restricted-imports` reads static imports only; these are the same ban for
-// `await import('tar/x')`, `require('tar')` and `createRequire(import.meta.url)('adm-zip')` — each
-// with its specifier as a string or as a template literal that holds no expression. (TypeScript's
+// `await import('tar/x')` and for every require-shaped call — `require('tar')`, a `createRequire`
+// result under a `req…` name (`req`, `requireFn`), `createRequire(import.meta.url)('adm-zip')`
+// under any spelling of `createRequire`, `module.require('tar')`, `require.call(null, 'tar')` —
+// each with its specifier as a string or as a template literal that holds no expression. (TypeScript's
 // `import tar = require('tar')` is an import declaration to `no-restricted-imports`, which fires on it.)
 //
 // What a lint rule CANNOT see is a specifier computed at run time (`import(name)`, a template with
-// an expression, a `createRequire` result bound to a name other than `require`): nothing here
-// pretends to. The barrier for those is that only `packages/utils` declares the two packages.
+// an expression) or a `createRequire` result bound to a name not starting `req` (`load('tar')`
+// reads as an ordinary call: `list('tar', bytes)` in the archive tests is one). Nothing here
+// pretends to.
 const ARCHIVE_LIBRARY_SPECIFIER = String.raw`/^(adm-zip|tar)(\u002f|$)/`;
 /** A call argument, or an import source, at `path` matching `pattern`: a string literal, or a template literal with no expression. */
 const specifierAt = (path, pattern) => [
   `[${path}.value=${pattern}]`,
   `[${path}.type='TemplateLiteral'][${path}.expressions.length=0][${path}.quasis.0.value.cooked=${pattern}]`,
 ];
-/** `import()`, `require()` and `createRequire(...)()` of a specifier matching `pattern`, each reported with `message`. */
-const restrictedSpecifierSyntax = (pattern, message) => [
-  ...specifierAt('source', pattern).map((specifier) => `ImportExpression${specifier}`),
-  ...specifierAt('arguments.0', pattern).map((specifier) => `CallExpression[callee.name='require']${specifier}`),
-  ...specifierAt('arguments.0', pattern).map((specifier) => `CallExpression[callee.type='CallExpression'][callee.callee.name='createRequire']${specifier}`),
-].map((selector) => ({ selector, message }));
+/** `import()` and every require-shaped call of a specifier matching `pattern`, each reported with `message`. */
+const restrictedSpecifierSyntax = (pattern, message) => {
+  const firstArgument = specifierAt('arguments.0', pattern);
+  return [
+    ...specifierAt('source', pattern).map((specifier) => `ImportExpression${specifier}`),
+    // `require(x)`, `req(x)`, `requireFn(x)`.
+    ...firstArgument.map((specifier) => `CallExpression[callee.name=/^req/i]${specifier}`),
+    // `createRequire(import.meta.url)(x)`, under any spelling of `createRequire`.
+    ...firstArgument.map((specifier) => `CallExpression[callee.type='CallExpression']${specifier}`),
+    // `module.require(x)`.
+    ...firstArgument.map((specifier) => `CallExpression[callee.property.name='require']${specifier}`),
+    // `require.call(thisArg, x)`.
+    ...specifierAt('arguments.1', pattern).map((specifier) => `CallExpression[callee.object.name=/^req/i][callee.property.name='call']${specifier}`),
+  ].map((selector) => ({ selector, message }));
+};
 const ARCHIVE_LIBRARY_RESTRICTED_SYNTAX = restrictedSpecifierSyntax(ARCHIVE_LIBRARY_SPECIFIER, ARCHIVE_LIBRARY_MESSAGE);
 
 // A programmatic ESLint with caching off DELETES the file at its cache location
 // on `lintFiles` — by default `<cwd>/.eslintcache`, which is `bun run lint`'s cache
 // when `cwd` is a real tree. Tests construct one only through `repoEslint`, which
 // points the location at a temp path. Type imports stay allowed, and so do `Linter` and
-// `RuleTester`, statically. A dynamic `import()` or `require` of `eslint` is banned outright: it
-// yields the whole module, `ESLint` included, and a lint rule cannot tell which member is used.
+// `RuleTester`, statically. A dynamic `import()` or require-shaped call of `eslint` is banned
+// outright: it yields the whole module, `ESLint` included, and a lint rule cannot tell which
+// member is used.
 // `eslint/use-at-your-own-risk` is banned whole: it exports `LegacyESLint` and `FlatESLint`.
 export const ESLINT_INSTANCE_FILES = [
   'packages/dev-tools/test/eslint-clean-files.ts',
@@ -738,7 +751,7 @@ const ESLINT_INSTANCE_BAN = [
   { name: 'eslint', importNames: ['ESLint', 'loadESLint', 'default'], allowTypeImports: true, message: ESLINT_INSTANCE_MESSAGE },
   { name: 'eslint/use-at-your-own-risk', allowTypeImports: true, message: ESLINT_INSTANCE_MESSAGE },
 ];
-// The same ban for `import()`, `require` and `createRequire`, which `no-restricted-imports` cannot see.
+// The same ban for `import()` and require-shaped calls, which `no-restricted-imports` cannot see.
 // TypeScript's `import eslint = require('eslint')` names no member, so `importNames` cannot see it.
 const ESLINT_INSTANCE_SPECIFIER = String.raw`/^eslint(\u002fuse-at-your-own-risk)?$/`;
 const ESLINT_INSTANCE_RESTRICTED_SYNTAX = [
@@ -1093,6 +1106,12 @@ export default [
   {
     files: ['packages/*/src/**/*.mts'],
     languageOptions: { parser: tsparser, parserOptions: { ecmaVersion: 2024, sourceType: 'module' } },
+  },
+  // Every `.mts` (no TS block above matches one) carries the import bans, `test/` included.
+  {
+    files: ['**/*.mts'],
+    languageOptions: { parser: tsparser, parserOptions: { ecmaVersion: 2024, sourceType: 'module' } },
+    rules: { 'no-restricted-imports': noRestrictedImportsConfig, 'no-restricted-syntax': ['error', ...RESTRICTED_SPECIFIER_SYNTAX] },
   },
   {
     files: ['packages/*/src/**/*.{mts,js,mjs}'],
