@@ -75,11 +75,11 @@ function snapshot(rows: EnumerationRow[], overrides: Partial<EnumerationSnapshot
 }
 
 describe('renderEnumerationSnapshot', () => {
-  it('preserves arrival order exactly — never sorts', () => {
-    // The whole point. `addResources` is first-added-wins, so a sorted
-    // rendering would hide a reordering that changes which colliding file
-    // survives, which is the single most consequential thing a restructure can
-    // silently do.
+  it('preserves capture order exactly — never sorts', () => {
+    // The whole point. The snapshot shows the enumerator's hand-over order
+    // beside the registry's admission order; a sorted rendering would hide a
+    // registry that stopped ordering its batch, which changes which colliding
+    // file survives.
     const rendered = renderEnumerationSnapshot(snapshot([row('zebra.md'), row('alpha.md'), row('middle.md')]));
     const ordinals = rendered
       .split('\n')

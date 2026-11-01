@@ -115,6 +115,9 @@ export interface MeasuredSequenceSpec {
 }
 
 
+/** The reader for `vat resources validate`, whichever argv a command spells it with. */
+const RESOURCES_VALIDATE_READER: ProvenanceReader = 'resources-validate';
+
 /**
  * Every vat command the lab knows how to measure, by name.
  *
@@ -187,7 +190,8 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   }),
   'resources-validate': Object.freeze({
     name: 'resources-validate',
-    provenance: 'none',
+    // `data.population`, judged when the build publishes it (see provenance.ts).
+    provenance: RESOURCES_VALIDATE_READER,
     exit: COMPLETES_WITH_FINDINGS,
     // The same verb as `resources-validate-ci`: it writes the projection whatever its argv.
     populates: true,
@@ -305,8 +309,9 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   'resources-validate-ci': Object.freeze({
     name: 'resources-validate-ci',
     args: Object.freeze(['resources', 'validate']),
-    // Today's builds publish no population on `resources validate`.
-    provenance: 'none',
+    // `data.population`, judged when the build publishes it; rc.11's document
+    // has no such field, so nothing is asserted there (see provenance.ts).
+    provenance: RESOURCES_VALIDATE_READER,
     exit: COMPLETES_WITH_FINDINGS,
     populates: true,
   }),

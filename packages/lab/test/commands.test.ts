@@ -156,7 +156,7 @@ describe('the CI commands and sequences', () => {
 
   it('reads the population where each CI verb publishes it, and nowhere else', () => {
     expect(Object.fromEntries(CI_NAMES.map((name) => [name, specNamed(name).provenance]))).toEqual({
-      'resources-validate-ci': 'none',
+      'resources-validate-ci': 'resources-validate',
       'resources-check-ci': 'resources-check',
       'skills-validate-ci': 'none',
       'validate-ci': 'validate',

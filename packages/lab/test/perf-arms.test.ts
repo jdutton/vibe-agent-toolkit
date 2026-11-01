@@ -16,7 +16,7 @@ describe('sequenceSteps', () => {
     const steps = sequenceSteps(MEASURABLE_SEQUENCES['ci-b'], 'cand', []);
 
     expect(steps.map((step) => [step.name, step.command, step.timed, step.exit, step.provenance])).toEqual([
-      ['resources-validate-ci', { kind: 'vat', args: ['resources', 'validate'] }, true, exactExit(0), 'none'],
+      ['resources-validate-ci', { kind: 'vat', args: ['resources', 'validate'] }, true, exactExit(0), 'resources-validate'],
       ['resources-check-ci', { kind: 'vat', args: ['resources', 'check'] }, true, exactExit(0), 'resources-check'],
       ['skills-validate-ci', { kind: 'vat', args: ['skills', 'validate'] }, true, exactExit(0), 'none'],
     ]);

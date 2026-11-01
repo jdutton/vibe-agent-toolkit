@@ -146,19 +146,38 @@ import {
   readStoredRealizations,
   type PopulateOptions,
   type PopulateResult,
+  type PopulationOutcome,
   type TreePopulationOptions,
 } from './merge.js';
 
 /**
- * The claude-context population, and where each of its two halves came from.
+ * The claude-context population, and ONE provenance for it.
  *
- * `outcome` is the real pass's `populate()` outcome. `importRoots` says whether
- * the root list that decided which contributors it registered was read from the
- * store or found by a discovery crawl — a hit on the real pass behind a crawled
- * root list was not served from the store end to end.
+ * Two passes decide `population` — the root list that chose which import
+ * contributors to register, and the real pass — and it is `'store'` only when
+ * both were served from the store ({@link claudeContextProvenance}). Neither
+ * half is published on its own, so no caller can read a half-answer.
  */
-export interface ClaudeContextPopulation extends PopulateResult {
-  readonly importRoots: 'store' | 'derived';
+export interface ClaudeContextPopulation {
+  readonly projection: PopulateResult['projection'];
+  readonly population: PopulationOutcome['population'];
+}
+
+/**
+ * The claude-context population's provenance from its two passes.
+ *
+ * A hit on the real pass behind a crawled root list was not served from the
+ * store end to end, so it is `'derived'`.
+ *
+ * @param roots - Where the root list came from
+ * @param outcome - The real pass's `populate()` outcome
+ * @returns `'store'` only when both passes were served from the store
+ */
+export function claudeContextProvenance(
+  roots: PopulationOutcome['population'],
+  outcome: PopulationOutcome,
+): PopulationOutcome['population'] {
+  return roots === 'store' && outcome.population === 'store' ? 'store' : 'derived';
 }
 
 /**
@@ -300,7 +319,7 @@ async function discoverImportRoots(
  *   the counts names `DISCARD_BLOB_POPULATION` rather than leaving the argument
  *   off, because a tree whose every document was declined as binary would
  *   otherwise populate as empty and report success
- * @returns The populated projection, its outcome, and where its root list came from
+ * @returns The populated projection and its one provenance (see {@link claudeContextProvenance})
  */
 export async function buildClaudeContextPopulation(options: TreePopulationOptions): Promise<ClaudeContextPopulation> {
   const root = safePath.resolve(options.root);
@@ -362,8 +381,8 @@ export async function buildClaudeContextPopulation(options: TreePopulationOption
       claudeImportExtentDeclaration(rootRelativePath) as unknown as JsonValue;
   }
 
-  const populated = await populate(populateOptions);
-  return { ...populated, importRoots: discovered.population };
+  const { projection, outcome } = await populate(populateOptions);
+  return { projection, population: claudeContextProvenance(discovered.population, outcome) };
 }
 
 /** {@link importRoots}' answer: the roots, and which of the two routes found them. */

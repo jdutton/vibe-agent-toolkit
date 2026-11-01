@@ -12,6 +12,7 @@
  * `data.extentSource`. A rename here is a rename there.
  */
 
+import { CRAWL_LANES, CRAWL_SOURCE_KINDS } from '@vibe-agent-toolkit/resources';
 import { FindingSchema, reportSchema, type Report } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
 
@@ -41,13 +42,13 @@ const ResourcesScanDataSchema = z.object({
   /** The project root — the ONE base every `files[].path` is relative to. */
   root: z.string(),
   /** Which enumerator produced the population: the walk, or the projection lane. */
-  lane: z.enum(['walk', 'projection']),
+  lane: z.enum(CRAWL_LANES),
   /**
    * Which enumerator the projection lane used, or `null` for the walk. Always
    * present: a key that vanished for the walk would read as a build too old to
    * report one.
    */
-  extentSource: z.enum(['git', 'filesystem']).nullable(),
+  extentSource: z.enum(CRAWL_SOURCE_KINDS).nullable(),
   /** Resources per collection that has any (only the `--collection` one when filtered); `{}` when none. */
   collections: z.record(z.string(), z.object({ resourceCount: z.number().int().nonnegative() }).strict()),
   /** Present only under `--verbose`: every scanned file. */

@@ -10,6 +10,7 @@
  */
 
 import {
+  admissionOrder,
   collectRealization,
   relativize,
   type ResourceRegistry,
@@ -151,11 +152,11 @@ function describeError(error: unknown, corpusRoot: string): string {
  * reported in the snapshot where a golden diff will show it.
  *
  * @param enumerated - Rows from the restated crawl
- * @param admitted - Paths the registry kept, in arrival order
+ * @param admitted - Paths the registry kept, in the order it admitted them
  * @param collisions - Duplicate-id drops
  * @returns Human-readable drift descriptions; empty when the two reconcile
  */
-function reconcile(
+export function reconcile(
   enumerated: readonly EnumerationRow[],
   admitted: readonly string[],
   collisions: readonly CollisionRow[],
@@ -176,14 +177,19 @@ function reconcile(
   }
 
   // Order matters as much as membership: first-added-wins means a reordering
-  // changes which colliding file survives even when the set is identical.
-  const expectedOrder = enumerated
-    .map((row) => row.path)
-    .filter((path) => !droppedPaths.has(path));
+  // changes which colliding file survives even when the set is identical. The
+  // registry orders every batch itself, so the expected order is
+  // `admissionOrder()` over what survived — never the crawl's own order, which
+  // is the enumerator's (NTFS lists case-insensitively). Every path here is
+  // corpus-relative, so resolving them adds one shared prefix and keeps the
+  // registry's key order.
+  const expectedOrder = admissionOrder(
+    enumerated.map((row) => row.path).filter((path) => !droppedPaths.has(path)),
+  );
   if (expectedOrder.length === admitted.length) {
     for (const [index, path] of expectedOrder.entries()) {
       if (admitted[index] !== path) {
-        drift.push(`order-differs-at-${String(index)}: crawl=${path} registry=${String(admitted[index])}`);
+        drift.push(`order-differs-at-${String(index)}: admission=${path} registry=${String(admitted[index])}`);
         break;
       }
     }

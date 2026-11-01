@@ -98,7 +98,7 @@ describe('ResourceRegistry factory methods', () => {
       await fs.writeFile(safePath.join(tempDir, 'doc1.md'), '# Doc 1', 'utf-8');
       await fs.writeFile(safePath.join(tempDir, 'doc2.md'), '# Doc 2', 'utf-8');
 
-      const registry = await ResourceRegistry.fromCrawl({
+      const { registry } = await ResourceRegistry.fromCrawl({
         outputs: [],
         unreadable: 'refuse',
         baseDir: tempDir,
@@ -109,13 +109,22 @@ describe('ResourceRegistry factory methods', () => {
       expect(registry.baseDir).toBe(tempDir);
     });
 
+    it('returns the crawl it built from — resources and population — beside the registry', async () => {
+      await fs.writeFile(safePath.join(tempDir, 'doc1.md'), '# Doc 1', 'utf-8');
+
+      const built = await ResourceRegistry.fromCrawl({ outputs: [], unreadable: 'refuse', baseDir: tempDir, include: ['*.md'] });
+
+      expect(built.population).toEqual({ lane: 'walk' });
+      expect(built.resources.map((resource) => resource.filePath)).toEqual(built.registry.getAllResources().map((resource) => resource.filePath));
+    });
+
     it('should respect exclude patterns', async () => {
       await fs.mkdir(safePath.join(tempDir, 'public'), { recursive: true });
       await fs.mkdir(safePath.join(tempDir, 'private'), { recursive: true });
       await fs.writeFile(safePath.join(tempDir, 'public/doc.md'), '# Public', 'utf-8');
       await fs.writeFile(safePath.join(tempDir, 'private/doc.md'), '# Private', 'utf-8');
 
-      const registry = await ResourceRegistry.fromCrawl({
+      const { registry } = await ResourceRegistry.fromCrawl({
         outputs: [],
         unreadable: 'refuse',
         baseDir: tempDir,
@@ -132,7 +141,7 @@ describe('ResourceRegistry factory methods', () => {
       await fs.mkdir(safePath.join(tempDir, 'docs/api'), { recursive: true });
       await fs.writeFile(safePath.join(tempDir, 'docs/api/guide.md'), '# Guide', 'utf-8');
 
-      const registry = await ResourceRegistry.fromCrawl({
+      const { registry } = await ResourceRegistry.fromCrawl({
         outputs: [],
         unreadable: 'refuse',
         baseDir: tempDir,
@@ -143,7 +152,7 @@ describe('ResourceRegistry factory methods', () => {
     });
 
     it('should handle empty directory', async () => {
-      const registry = await ResourceRegistry.fromCrawl({
+      const { registry } = await ResourceRegistry.fromCrawl({
         outputs: [],
         unreadable: 'refuse',
         baseDir: tempDir,
@@ -158,7 +167,7 @@ describe('ResourceRegistry factory methods', () => {
       await fs.writeFile(safePath.join(tempDir, 'doc1.md'), '# Same Content', 'utf-8');
       await fs.writeFile(safePath.join(tempDir, 'doc2.md'), '# Same Content', 'utf-8');
 
-      const registry = await ResourceRegistry.fromCrawl({
+      const { registry } = await ResourceRegistry.fromCrawl({
         outputs: [],
         unreadable: 'refuse',
         baseDir: tempDir,

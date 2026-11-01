@@ -16,31 +16,24 @@ vi.mock('../../src/commands/audit/distributed-tree.js', () => ({
 // eslint-disable-next-line import/first -- must come after vi.mock calls
 import { evaluateClaudeContextLens } from '../../src/utils/claude-context-lens.js';
 
-const HIT = { population: 'store', stored: 'hit' } as const;
-const WRITTEN = { population: 'derived', stored: 'written' } as const;
-
 const LOGGER = { info: () => undefined, warn: () => undefined, error: () => undefined, debug: () => undefined };
 
-describe('evaluateClaudeContextLens — the lens population is store only when BOTH passes were', () => {
+describe('evaluateClaudeContextLens — publishes the population the claude-context lane combined', () => {
   beforeEach(() => {
     buildClaudeContextPopulationMock.mockReset();
   });
 
-  it.each([
-    { importRoots: 'store', outcome: HIT, expected: 'store' },
-    // The real pass hit, but the root list was derived: part of the answer was derived.
-    { importRoots: 'derived', outcome: HIT, expected: 'derived' },
-    { importRoots: 'store', outcome: WRITTEN, expected: 'derived' },
-    { importRoots: 'derived', outcome: WRITTEN, expected: 'derived' },
-  ] as const)('root list $importRoots, real pass $outcome.stored ⇒ $expected', async ({ importRoots, outcome, expected }) => {
-    buildClaudeContextPopulationMock.mockResolvedValue({ projection: {}, outcome, importRoots });
+  // The rule that combines the root list and the real pass lives in resources
+  // (`claudeContextProvenance`); the lens reads its one field and nothing else.
+  it.each(['store', 'derived'] as const)('%s ⇒ %s', async (population) => {
+    buildClaudeContextPopulationMock.mockResolvedValue({ projection: {}, population });
 
-    const { population } = await evaluateClaudeContextLens({
+    const result = await evaluateClaudeContextLens({
       root: safePath.resolve('/project'),
       logger: LOGGER,
       cache: undefined,
     });
 
-    expect(population).toBe(expected);
+    expect(result.population).toBe(population);
   });
 });

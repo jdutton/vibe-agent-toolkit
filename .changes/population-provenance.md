@@ -6,6 +6,9 @@
 - **`ResourceRegistry.addResources()` returns resources in admission order** (UTF-16 code-unit
   order of the resolved path), not in the order you passed: do not pair the result with your input
   by index. Look a resource up by `filePath` instead.
+- **`ResourceRegistry.fromCrawl()` returns `{ registry, resources, population }`**, not the
+  registry: destructure `registry` where you used the result directly. The other two fields are what
+  `crawl()` returned for the same crawl.
 
 ### Added
 
@@ -15,6 +18,15 @@
   enumerated the files: the walk lane ran (`VAT_RESOURCES_CRAWL=walk`), or the crawl declined the
   projection because it was bound to another root, and walked instead. `vat resources query` and
   `check` add `lensPopulation` (`none`/`store`/`derived`; `null` in check when no population ran).
+- **`vat validate` carries the same field** for its resources phase, at
+  `data.phases[name=resources].data.population`.
+- **`@vibe-agent-toolkit/resources` exports the population vocabulary**: `admissionOrder()` (the one
+  order the registry admits a batch in), `RegistryCrawl` and `CrawlPopulation` (what `crawl()` and
+  `fromCrawl()` return), `ResourceEnumeration`, `PopulationOutcome`, `PopulateResult`,
+  `TreePopulationOptions` and `ClaudeContextPopulation` (a population's `projection` with ONE
+  `population`, `store` only when its root list and its real pass were both served from the store),
+  and the runtime lists `POPULATION_ORIGINS`, `CRAWL_LANES` and `CRAWL_SOURCE_KINDS`, each built
+  from an exhaustive record over its union so a schema enum can use it instead of a hand-typed copy.
 
 ### Changed
 

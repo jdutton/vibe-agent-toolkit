@@ -37,8 +37,8 @@ import { populationWiring } from './population-wiring.js';
  *   document on stdout stays parseable)
  * @param options.cache - The run's projection store, or undefined to re-derive
  * @returns The rows, ready for `writeDerived`, and the lens population's
- *   provenance: `'store'` only when the root list AND the real pass were both
- *   served from the store
+ *   provenance as the population publishes it (`'store'` only when the root
+ *   list AND the real pass were both served from the store)
  */
 export async function evaluateClaudeContextLens(options: {
   root: string;
@@ -47,12 +47,9 @@ export async function evaluateClaudeContextLens(options: {
 }): Promise<{ rows: ClaudeContextRelations; population: PopulationOutcome['population'] }> {
   const { root, logger, cache } = options;
   const gitTracker = await gitTrackerForProjectRoot(root);
-  const { projection, outcome, importRoots } = await buildClaudeContextPopulation({
+  const { projection, population } = await buildClaudeContextPopulation({
     root,
     ...populationWiring(logger, gitTracker, cache, root),
   });
-  return {
-    rows: claudeContextRelations(projection),
-    population: importRoots === 'store' && outcome.population === 'store' ? 'store' : 'derived',
-  };
+  return { rows: claudeContextRelations(projection), population };
 }

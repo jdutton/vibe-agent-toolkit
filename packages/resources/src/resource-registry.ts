@@ -821,7 +821,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   /**
    * Duplicate-id drops, in the order `addResources` made them.
    *
-   * Exposed because arrival order is behaviour, not bookkeeping: the rule is
+   * Exposed because admission order is behaviour, not bookkeeping: the rule is
    * first-added-wins, so which of two colliding files gets validated, bundled
    * and rewritten is decided by admission order (see {@link admissionOrder}),
    * which is the registry's own and not the enumerator's. `validate()` turns these
@@ -943,31 +943,33 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   /**
    * Create a registry by crawling a directory.
    *
-   * Combines registry creation and directory crawling in a single operation.
+   * Combines registry creation and directory crawling in a single operation,
+   * and returns what {@link ResourceRegistry.crawl} returned beside the
+   * registry — one route to a crawl, one shape for its answer, so a caller built
+   * here can say which lane enumerated exactly as a `crawl()` caller can.
    *
    * @param crawlOptions - Crawl options including baseDir
    * @param registryOptions - Additional registry options
-   * @returns New registry with crawled resources
+   * @returns The new registry, and the crawl's resources and population
    *
    * @example
    * ```typescript
-   * const registry = await ResourceRegistry.fromCrawl({
+   * const { registry, population } = await ResourceRegistry.fromCrawl({
    *   baseDir: '/project/docs',
    *   outputs: [],
    *   unreadable: 'refuse', // or { degrade } — see RegistryUnreadablePolicy
    *   include: ['**.md'],
    *   exclude: ['node_modules'],
    * });
-   * console.log(`Crawled ${registry.size()} resources`);
+   * console.log(`Crawled ${registry.size()} resources on the ${population.lane} lane`);
    * ```
    */
   static async fromCrawl(
     crawlOptions: CrawlOptions,
     registryOptions?: Omit<ResourceRegistryOptions, 'baseDir'>,
-  ): Promise<ResourceRegistry> {
+  ): Promise<RegistryCrawl & { readonly registry: ResourceRegistry }> {
     const registry = new ResourceRegistry({ ...registryOptions, baseDir: crawlOptions.baseDir });
-    await registry.crawl(crawlOptions);
-    return registry;
+    return { registry, ...(await registry.crawl(crawlOptions)) };
   }
 
   /**

@@ -123,6 +123,7 @@ vi.mock('@vibe-agent-toolkit/utils/git', async (importOriginal) => ({
 import type { Logger } from '../../src/utils/logger.js';
 // eslint-disable-next-line import/first -- must come after vi.mock calls
 import {
+  crawlLaneDebugLine,
   extentSourceOf,
   loadResourcesWithConfig,
   publishedPopulation,
@@ -485,6 +486,17 @@ describe('loadResourcesWithConfig', () => {
       // The one route the outcome takes out: through `enumerate`, to the crawl.
       expect(handed).toEqual(enumeration);
     });
+  });
+});
+
+describe('crawlLaneDebugLine', () => {
+  it('names the value that selected the walk — the only way no source is offered', () => {
+    expect(crawlLaneDebugLine(undefined)).toBe(`Enumerating via the incumbent walk (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_WALK})`);
+  });
+
+  it('names the projection lane when a source is offered', () => {
+    const source = { root: safePath.resolve('/project'), enumerate: async () => { throw new Error('not called'); } };
+    expect(crawlLaneDebugLine(source)).toBe(`Enumerating via the projection lane (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_PROJECTION})`);
   });
 });
 

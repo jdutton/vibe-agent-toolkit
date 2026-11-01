@@ -865,6 +865,7 @@ export {
   gitExtentSelected,
   GitCrawlSource,
   listingRefusalRemedy,
+  CRAWL_SOURCE_KINDS,
   type CrawlSource,
   type CrawlSourceKind,
   type EnumeratedPath,
@@ -897,6 +898,7 @@ export {
 export {
   buildResourcePopulation,
   buildResourceProjection,
+  CRAWL_LANES,
   type ResourceEnumeration,
   type CrawlPopulation,
   type ResourcePopulationSource,

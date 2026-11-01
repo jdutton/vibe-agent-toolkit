@@ -84,6 +84,17 @@ describe('canonicalConditions — the one order a population\'s conditions leave
     expect(canonicalConditions([high, low])).toEqual([low, high]);
   });
 
+  // `TWO_VALUES` puts null low for these, so only the null rule decides there;
+  // two NON-null values reach the comparison for booleans and objects.
+  it.each([
+    { column: 'targetExists', low: false, high: true },
+    { column: 'matchedPayload', low: { rule: 1 }, high: { rule: 2 } },
+  ] as const)('orders two non-null $column values', ({ column, low, high }) => {
+    const [lowRow, highRow] = [condition({ [column]: low }), condition({ [column]: high })];
+    expect(canonicalConditions([highRow, lowRow])).toEqual([lowRow, highRow]);
+    expect(canonicalConditions([lowRow, highRow])).toEqual([lowRow, highRow]);
+  });
+
   it('compares a number column numerically, not as text', () => {
     // As text `10` sorts before `9`; as a line number it is after.
     const line9 = condition({ sourceLine: 9 });

@@ -594,10 +594,10 @@ export class ParseDispatcher {
    * count the lanes CAN supply for free.
    *
    * ⚠️ **It is a projection, and it can be wrong in one direction that matters.**
-   * The registry hands over paths in crawl order, which is filesystem order, so a
-   * tree whose first documents are unlike its last ones is mis-sampled. The
-   * projection lane is content-key ordered — a hash — so its sample is
-   * effectively random and this does not apply. Being wrong costs at most the
+   * The registry hands over paths in its admission order — sorted by resolved
+   * path, on every lane (`admissionOrder()` in `resource-registry.ts`) — so a
+   * tree whose first documents by path are unlike its last ones is mis-sampled,
+   * whichever lane enumerated it. Being wrong costs at most the
    * pool's fixed cost in one direction and a pool not started in the other;
    * being wrong about kind, which the old document count was by construction,
    * cost a measured 5.5% on an HTML tree.

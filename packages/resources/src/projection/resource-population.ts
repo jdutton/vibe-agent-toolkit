@@ -193,7 +193,7 @@ export interface ResourceEnumeration {
   readonly paths: readonly string[];
   /** Population-time conditions recorded while enumerating, in canonical order (see `canonicalConditions`). */
   readonly conditions: readonly RealizationConditionRow[];
-  /** Whether the store served this population — `populate()`'s own outcome, or the stored read's. */
+  /** Whether the store served this population — the outcome `populate()` returned for it, the only producer. */
   readonly outcome: PopulationOutcome;
   /**
    * Which enumerator ran — the instance's own kind, not the env's request.
@@ -214,6 +214,12 @@ export interface ResourceEnumeration {
 export type CrawlPopulation =
   | { readonly lane: 'walk' }
   | { readonly lane: 'projection'; readonly outcome: PopulationOutcome; readonly extentSource: CrawlSourceKind };
+
+/** Each {@link CrawlPopulation} lane, keyed so the compiler checks the list against the union both ways. */
+const CRAWL_LANE_SET: Readonly<Record<CrawlPopulation['lane'], true>> = { walk: true, projection: true };
+
+/** Every {@link CrawlPopulation} lane, as a runtime list — for a schema enum that must not be a hand-typed copy. */
+export const CRAWL_LANES = Object.keys(CRAWL_LANE_SET) as [CrawlPopulation['lane'], ...Array<CrawlPopulation['lane']>];
 
 /**
  * Register the contributors every resources lane shares, and the parameters

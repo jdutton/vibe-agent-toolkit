@@ -258,9 +258,10 @@ describe('enumeration snapshot — walk route (no git anywhere above the corpus)
   });
 
   it('is order-stable within a host, even though the order is not portable', async () => {
-    // readdir order cannot be asserted across filesystems, but it MUST be
-    // reproducible on one — first-added-wins means an unstable order changes
-    // which colliding file survives from run to run.
+    // readdir order cannot be asserted across filesystems, and it no longer
+    // decides the winner: the registry orders every batch itself. The crawl's
+    // hand-over order is still recorded, so it must at least reproduce on one
+    // host, and the registry's order must not move with it.
     const lane = laneById('resources');
     const first = await captureEnumerationSnapshot(lane, { corpusRoot: root, corpus: NON_GIT_CORPUS });
     const second = await captureEnumerationSnapshot(lane, { corpusRoot: root, corpus: NON_GIT_CORPUS });

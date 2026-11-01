@@ -105,8 +105,7 @@ describe('buildClaudeContextPopulation root discovery', () => {
     // than one the fixture could never distinguish.
     expect(importContexts(first.projection)).toHaveLength(4);
     expect(store.writeExtentCalls).toBe(1);
-    expect(first.importRoots).toBe('derived');
-    expect(first.outcome).toEqual({ population: 'derived', stored: 'written' });
+    expect(first.population).toBe('derived');
   });
 
   it('takes the roots from the store rather than crawling for them', async () => {
@@ -121,9 +120,8 @@ describe('buildClaudeContextPopulation root discovery', () => {
     // root list cannot have come from the filesystem.
     expect(importContexts(second.projection)).toEqual(importContexts(first.projection));
     expect(importContexts(second.projection)).toHaveLength(4);
-    // Both halves of the lens's provenance: the root list AND the real pass.
-    expect(second.importRoots).toBe('store');
-    expect(second.outcome).toEqual({ population: 'store', stored: 'hit' });
+    // One provenance for both halves: the root list AND the real pass.
+    expect(second.population).toBe('store');
   });
 
   it('keeps the pre-read key equal to the population key — the tripwire', async () => {
@@ -159,6 +157,6 @@ describe('buildClaudeContextPopulation root discovery', () => {
     const cold = await populateThrough(new FakeProjectionStore());
 
     expect(importContexts(cold.projection)).toEqual([]);
-    expect(cold.importRoots).toBe('derived');
+    expect(cold.population).toBe('derived');
   });
 });

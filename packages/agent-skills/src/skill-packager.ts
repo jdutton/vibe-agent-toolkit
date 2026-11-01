@@ -1644,7 +1644,7 @@ export async function createProjectRegistry(
   options: ProjectRegistryOptions,
 ): Promise<ResourceRegistry> {
   const config = await loadConfig(projectRoot);
-  const registry = await ResourceRegistry.fromCrawl(
+  const { registry } = await ResourceRegistry.fromCrawl(
     {
       baseDir: projectRoot,
       include: [...LINK_GRAPH_MEMBER_GLOBS],

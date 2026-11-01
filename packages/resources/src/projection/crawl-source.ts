@@ -363,6 +363,12 @@ class DeclinedSymlinks {
 /** Which of the two implementations answered. */
 export type CrawlSourceKind = 'git' | 'filesystem';
 
+/** Each {@link CrawlSourceKind}, keyed so the compiler checks the list against the union both ways. */
+const CRAWL_SOURCE_KIND_SET: Readonly<Record<CrawlSourceKind, true>> = { git: true, filesystem: true };
+
+/** Every {@link CrawlSourceKind}, as a runtime list — for a schema enum that must not be a hand-typed copy. */
+export const CRAWL_SOURCE_KINDS = Object.keys(CRAWL_SOURCE_KIND_SET) as [CrawlSourceKind, ...CrawlSourceKind[]];
+
 /**
  * The walk. Enumerates the working tree directly and knows nothing else.
  *

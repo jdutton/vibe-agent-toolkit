@@ -34,11 +34,15 @@ projection and judgement at once. Two consequences:
 
 ### ⛔ The enumeration snapshot is never sorted
 
-`ResourceRegistry.addResources` is explicitly first-added-wins on
-`DuplicateResourceIdError`. Arrival order therefore decides which of two
-colliding files gets validated, bundled and rewritten. A sorted snapshot would
-hide exactly the defect this instrument exists to catch, so
-`renderEnumerationSnapshot` reproduces capture order verbatim.
+`ResourceRegistry.addResources` is first-added-wins on a duplicate id, and the
+registry orders every batch itself — `admissionOrder()`, the code-unit order of
+the resolved path — so the enumerator's order never decides which of two
+colliding files gets validated, bundled and rewritten. The snapshot keeps
+capture order anyway, to show what the enumerator handed over: `enumerated` is
+the crawl's own order, `admitted` is the registry's, and `restatementDrift`
+reports an `admitted` that is not `admissionOrder()` of what survived. A sorted
+snapshot would hide both, so `renderEnumerationSnapshot` reproduces capture
+order verbatim.
 
 There is one exception, and it is about hosts rather than about ordering being
 unimportant. `crawlDirectory` has two mutually exclusive routes: `git ls-files`

@@ -251,6 +251,22 @@ export const RESOURCES_CRAWL_PROJECTION = 'projection';
 export const RESOURCES_CRAWL_WALK = 'walk';
 
 /**
+ * The debug line naming the lane a crawl was offered, for every verb that
+ * offers one. Each lane says it — a marker only one lane emitted would make the
+ * other identifiable by ABSENCE, which is indistinguishable from a build too
+ * old to have either lane — and there is no source only when the walk was
+ * selected, so the walk's line names {@link RESOURCES_CRAWL_WALK}.
+ *
+ * @param populationSource - The source offered to the crawl, if any
+ * @returns The line to log
+ */
+export function crawlLaneDebugLine(populationSource: ResourcePopulationSource | undefined): string {
+  return populationSource === undefined
+    ? `Enumerating via the incumbent walk (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_WALK})`
+    : `Enumerating via the projection lane (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_PROJECTION})`;
+}
+
+/**
  * Whether this process should source the resources population from a projection.
  *
  * **Defaults to the projection lane.** Both lanes now enumerate
@@ -544,15 +560,9 @@ export async function loadResourcesWithConfig(
     logger.debug(`GitTracker initialized with ${gitTracker.getStats().cacheSize} tracked files`);
 
     const populationSource = populationSourceFor(projectRoot, gitTracker, cache);
+    logger.debug(crawlLaneDebugLine(populationSource));
     if (populationSource) {
-      logger.debug(`Enumerating via the projection lane (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_PROJECTION})`);
       crawlOptions = { ...crawlOptions, populationSource };
-    } else {
-      // Said for the same reason the projection branch says it, and the symmetry
-      // is the point: a marker that only one lane emits makes the other lane
-      // identifiable by ABSENCE, which is indistinguishable from a build too old
-      // to have either lane.
-      logger.debug(`Enumerating via the incumbent walk (${RESOURCES_CRAWL_ENV} unset)`);
     }
 
     // Read off what the crawl RETURNED, so a crawl that declined the source

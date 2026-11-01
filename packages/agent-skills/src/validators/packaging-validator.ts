@@ -498,7 +498,7 @@ export async function crawlAndResolveRegistry(
     const recorded: RegistryUnreadablePolicy = unreadable === 'refuse'
       ? 'refuse'
       : { degrade: (refusal) => { refusals.push(refusal); unreadable.degrade(refusal); } };
-    const registry = await ResourceRegistry.fromCrawl(
+    const { registry } = await ResourceRegistry.fromCrawl(
       {
         baseDir: projectRoot,
         include: ['**/*.md', '**/*.html', '**/*.htm'],

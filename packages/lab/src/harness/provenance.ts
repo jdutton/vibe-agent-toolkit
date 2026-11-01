@@ -16,15 +16,20 @@
  *   candidate alike); `data.lensPopulation` is recorded when published.
  * - `validate` — the orchestrator document: `data.phases[name='resources'].data.population`
  *   and the `checks` phase's `population`, both judged, plus its `lensPopulation`, recorded.
- * - `none` — a verb that publishes no population (rc.11's `resources validate`
- *   and `skills validate`): nothing is read and nothing asserted.
+ * - `resources-validate` — `vat resources validate`'s `data.population`, judged
+ *   when the document carries the field. A build whose document has no such
+ *   field (rc.11) publishes none, so nothing is asserted — decided from the
+ *   field's presence in the parsed document, never from a version. A published
+ *   `null` (the walk answered) is present, and reads as `'null'`.
+ * - `none` — a verb that publishes no population (`skills validate`): nothing
+ *   is read and nothing asserted.
  */
 
 import { parseDocument } from './document-shape.js';
 import type { CacheMode } from './types.js';
 
 /** Which document reader a step's output goes through. */
-export type ProvenanceReader = 'none' | 'resources-check' | 'validate';
+export type ProvenanceReader = 'none' | 'resources-check' | 'resources-validate' | 'validate';
 
 /** One step's provenance; `null` for a field the document did not carry. */
 export interface StepProvenance {
@@ -44,12 +49,21 @@ const STORE_POPULATION = 'store';
  *
  * @param reader - Which document the step produces
  * @param stdout - The step's stdout
- * @returns The fields read, or `null` for a step with no reader
+ * @returns The fields read, or `null` for a step with no reader and for a
+ *   `resources-validate` document that carries no `population` field
  */
 export function readProvenance(reader: ProvenanceReader, stdout: string): StepProvenance | null {
   if (reader === 'none') return null;
   const parsed = parseDocument(stdout);
   const payload = parsed.shape === 'unparsed' ? undefined : parsed.payload;
+  if (reader === 'resources-validate') {
+    // An unparsed document stays judged — absent is never a pass; only a
+    // document that parsed and has no such field is a build that publishes none.
+    if (isRecord(payload) && !('population' in payload)) return null;
+    const population: unknown = isRecord(payload) ? payload['population'] : undefined;
+    const resources = typeof population === 'string' ? population : (JSON.stringify(population) ?? null);
+    return { resources, checks: null, lens: null };
+  }
   if (reader === 'resources-check') {
     return { resources: stringField(payload, 'population'), checks: null, lens: stringField(payload, 'lensPopulation') };
   }
@@ -82,7 +96,8 @@ export function provenanceViolation(
   state: CacheMode,
   storeOn: boolean,
 ): string | null {
-  if (state !== 'warm' || reader === 'none') return null;
+  // `null` provenance is a document that publishes no population (see readProvenance).
+  if (state !== 'warm' || reader === 'none' || provenance === null) return null;
   const judged = [
     { who: `step '${step}'`, absent: 'published no resources population', population: provenance?.resources ?? null },
     ...(reader === 'validate'

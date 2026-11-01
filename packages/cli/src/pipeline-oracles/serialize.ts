@@ -34,8 +34,10 @@ function placement(value: TargetPlacement): string {
  * Render an enumeration snapshot.
  *
  * ⛔ Row order is reproduced exactly as captured and is **never** sorted here.
- * Arrival order decides which of two colliding files survives; sorting the
- * rendering would hide the only evidence of a reordering.
+ * The registry's `admissionOrder()` decides which of two colliding files
+ * survives; the captured order is what shows the enumerator's hand-over and
+ * the registry's admission side by side, and sorting the rendering would hide
+ * both.
  *
  * @param snapshot - Snapshot to render
  * @returns Golden text, LF-terminated
