@@ -68,6 +68,7 @@ import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
 import { relativeLocationOrUndefined } from '../../utils/relativize-paths.js';
 import { withResourcePopulationSource } from '../../utils/resource-loader.js';
+import { verdictBanner } from '../../utils/run-integrity.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig, publishScope } from '../../utils/skill-packaging-config.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
 import type { PhaseOutcome } from '../phase-utils.js';
@@ -1360,10 +1361,14 @@ export async function runSkillsBuildPhase(
       const { error } = run.promotionFailure;
       return { report: refusalReport(refusalCodeOf(error), error, GATE, work) };
     }
+    const report = buildReport({ ...work, gate: GATE, durationMs: Date.now() - startTime });
     if (run.outputCommitted) {
-      logger.info(formatBuiltSuccessLine(run.results.length, { inPlace: setAside.inPlace.length, pluginOnly: setAside.pluginOnly.length }));
+      logger.info(verdictBanner(
+        report.examined,
+        formatBuiltSuccessLine(run.results.length, { inPlace: setAside.inPlace.length, pluginOnly: setAside.pluginOnly.length }),
+      ));
     }
-    return { report: buildReport({ ...work, gate: GATE, durationMs: Date.now() - startTime }) };
+    return { report };
   } catch (error) {
     return { report: refusalReport(refusalCodeOf(error), error, GATE, finished) };
   }

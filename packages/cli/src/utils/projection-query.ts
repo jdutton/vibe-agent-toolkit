@@ -62,7 +62,7 @@ import { gitTrackerForProjectRoot } from '../commands/audit/distributed-tree.js'
 
 import type { LensPopulation } from './lens-population.js';
 import type { Logger } from './logger.js';
-import { populationWiring } from './population-wiring.js';
+import { populationWiring, reportBlobRefusals } from './population-wiring.js';
 import {
   evaluateLens,
   lensesNamedBy,
@@ -252,7 +252,7 @@ export interface PopulationExtent {
    * fails to reach zero on the case that matters: `roots` always holds exactly
    * one row (the invariant thrown for below), so a total over every table
    * is never 0; `blobs` is content-keyed and deduped, so it counts parse REACH
-   * and already has its own guard in `onBlobPopulation`; and `resources` counts
+   * and already has its own report in `reportBlobRefusals`; and `resources` counts
    * identities, which a corpus can legitimately have none of while enumerating
    * plenty. One row per enumerated path is non-zero exactly when something was
    * enumerated.
@@ -362,8 +362,8 @@ export async function assertQueriesCompile(statements: readonly PreflightStateme
  *
  * @param options - The run
  * @param options.root - Absolute corpus root
- * @param options.logger - Where blob-stage refusals are reported (stderr, so a
- *   parseable document on stdout stays parseable)
+ * @param options.logger - Where the population's refused content is reported
+ *   (stderr, so a parseable document on stdout stays parseable)
  * @param options.preflight - Every statement this run intends to ask, compiled
  *   against the empty schema BEFORE the population starts. See
  *   {@link assertQueriesCompile}
@@ -432,8 +432,9 @@ export async function withQueriedProjection<T>(
     const gitTracker = await gitTrackerForProjectRoot(root);
     const { projection, outcome } = await buildResourceProjection({
       root,
-      ...populationWiring(logger, gitTracker, cache, root),
+      ...populationWiring(gitTracker, cache, root),
     });
+    reportBlobRefusals(logger, projection);
 
     // ONE tree, in a database nothing else can reach, built fresh for this call.
     const store = await openEphemeralQueryStore();
@@ -483,7 +484,7 @@ export async function withQueriedProjection<T>(
       // lane has no reason to invite.
       const lensPopulations: LensEvaluation['population'][] = [];
       await forEachInOrder(lenses, async (lens) => {
-        const evaluation = await evaluateLens(lens, { projection, root, logger, cache });
+        const evaluation = await evaluateLens(lens, { projection, root, cache });
         lensPopulations.push(evaluation.population);
         await store.writeDerived(evaluation.rows);
       });

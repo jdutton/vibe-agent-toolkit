@@ -28,12 +28,6 @@ import { assertDirectoryArgument } from './project-root-policy.js';
 import { withPopulationCache } from './projection-store.js';
 
 /**
- * The membership and build verbs' blob-stage observer: their users cannot act on
- * `blob_conditions`, and only a cold run would print it. The query verbs report.
- */
-const MEMBERSHIP_IGNORES_BLOB_REFUSALS = (): void => undefined;
-
-/**
  * Which enumerator produced a load's population.
  *
  * `walk` is the incumbent `crawlDirectory` route; `projection` is the
@@ -368,7 +362,6 @@ function populationSourceFor(
         // against a second root — it is how the declaration and the enumeration
         // are kept demonstrably on one tree at the point of use, with no second
         // variable to fall out of step with the one that was checked.
-        onBlobPopulation: MEMBERSHIP_IGNORES_BLOB_REFUSALS,
         gitTracker,
         ...(cache !== undefined && { cache }),
         ...collectionsOption(enumeratedRoot),

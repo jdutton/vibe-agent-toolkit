@@ -71,7 +71,6 @@ export async function buildClaudeContextTree(
 
   const { projection } = await buildClaudeContextPopulation({
     root: dir,
-    onBlobPopulation: () => undefined,
     ...(gitTracker !== undefined && { gitTracker }),
   });
   return { dir, projection };

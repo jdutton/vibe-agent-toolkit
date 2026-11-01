@@ -126,17 +126,14 @@ import type { CollectionConfig } from '../schemas/project-config.js';
 import type { JsonValue } from '../schemas/projection-shared.js';
 
 import { ContributorRegistry } from './contributor.js';
-import { AgenticConventionContributor } from './contributors/agentic-convention.js';
 import {
   ClaudeImportExtentContributor,
   claudeImportContributorId,
   claudeImportExtentDeclaration,
   claudeImportRootsFrom,
 } from './contributors/claude-import-extent.js';
-import { ClaudeRulesScopeContributor } from './contributors/claude-rules-scope.js';
 import {
   DECLINE_IGNORED,
-  DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
 } from './contributors/filesystem-extent.js';
 import { crawlSourceFor, type CrawlSource } from './crawl-source.js';
@@ -150,6 +147,7 @@ import {
   type PopulationOutcome,
   type TreePopulationOptions,
 } from './merge.js';
+import { resourceContributors } from './resource-population.js';
 
 /**
  * The claude-context population, and ONE provenance for it.
@@ -283,9 +281,6 @@ async function discoverImportRoots(
     // `readsBlobs: false`; the driver refuses the combination rather than
     // handing a blob reader empty tables.
     contentParsing: CONTENT_PARSING_SKIP,
-    // The stage never runs under the line above, so there is nothing to observe:
-    // a no-op, stated here so dropping the skip is a visible edit, not a silence.
-    onBlobPopulation: () => undefined,
     ...(gitTracker !== undefined && { gitTracker }),
     // See the `@param collections` note: omitting these HERE while the real pass
     // passes them gives the two passes different store keys over one tree.
@@ -314,9 +309,6 @@ async function discoverImportRoots(
  *   set is load-bearing: two runs over one tree under different declarations —
  *   a different `referenceDialect`, say — are two different questions, and the
  *   store refuses to answer one with the other
- * @param options.onBlobPopulation - Receives what the blob stage derived and
- *   what it REFUSED to derive. **Required**: a tree whose every document was
- *   declined as binary would otherwise populate as empty and report success
  * @returns The populated projection and its one provenance (see {@link claudeContextProvenance})
  */
 export async function buildClaudeContextPopulation(options: TreePopulationOptions): Promise<ClaudeContextPopulation> {
@@ -331,16 +323,15 @@ export async function buildClaudeContextPopulation(options: TreePopulationOption
   let source: CrawlSource | undefined;
   const sourceOnce = (): CrawlSource => (source ??= crawlSourceFor(root, []));
 
-  const registry = new ContributorRegistry();
-  // The resources lanes' demand, so this lane asks the store their question.
-  const filesystem = new FilesystemExtentContributor(sourceOnce, DEFAULT_CONTENT_DEMAND);
-  registry.register(filesystem);
-  // Gitignored paths are declined here exactly as they are in the discovery
-  // pass — see the header for the ruling, and `claude-context-limits.ts` for the
-  // under-report it is published as. Keyed off the INSTANCE's own id rather than
-  // a second copy of the literal: a parameter set filed under an id no
-  // registered contributor answers to is silently ignored.
-  const parameters: Record<string, JsonValue> = { [filesystem.id]: DECLINE_IGNORED };
+  // The resources lanes' contributor set, built by their one function rather
+  // than copied, so this lane asks the store their question and classifies
+  // what they classify; the `@`-import extents go on top below. Gitignored
+  // paths are declined exactly as in the discovery pass — see the header for
+  // the ruling, and `claude-context-limits.ts` for the under-report it is
+  // published as.
+  const contributors = resourceContributors(sourceOnce);
+  const { registry } = contributors;
+  const parameters: Record<string, JsonValue> = { ...contributors.parameters };
 
   // ⛔ The SAME object `populate` is handed below, built before the import
   // contributors are registered so the two store reads compute one key from one
@@ -350,25 +341,13 @@ export async function buildClaudeContextPopulation(options: TreePopulationOption
     root,
     registry,
     parameters,
-    onBlobPopulation: options.onBlobPopulation,
     ...populationOracles(options),
   };
 
-  const discovered = await importRoots(populateOptions, filesystem.id);
+  const discovered = await importRoots(populateOptions, contributors.filesystemId);
   // The discovery branch's replaying source becomes the run's, so the real pass
   // reuses that crawl instead of taking a second one.
   if (discovered.population === 'derived') source = discovered.source;
-
-  // AFTER the enumerator, and the order is load-bearing: `byStratum` returns
-  // registration order and the driver runs base contributors sequentially, each
-  // reading the base the previous ones grew. Registered first, this would
-  // classify an empty realization table and report a complete, empty extent.
-  registry.register(new AgenticConventionContributor());
-  // `closure` stratum, so registration order relative to the base contributors
-  // does not decide when it runs — but it is registered here, beside the other
-  // classifier, because the two answer the same kind of question about the same
-  // rows and a reader looking for one will look for the other.
-  registry.register(new ClaudeRulesScopeContributor());
 
   for (const rootRelativePath of discovered.roots) {
     registry.register(new ClaudeImportExtentContributor(rootRelativePath));

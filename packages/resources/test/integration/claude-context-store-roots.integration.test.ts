@@ -76,7 +76,6 @@ async function populateThrough(store: FakeProjectionStore): Promise<ClaudeContex
   return buildClaudeContextPopulation({
     root: root ?? '',
     cache,
-    onBlobPopulation: () => undefined,
   });
 }
 

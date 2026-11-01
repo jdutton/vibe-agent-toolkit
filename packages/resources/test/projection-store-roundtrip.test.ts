@@ -290,7 +290,6 @@ async function run(request: RunRequest): Promise<Run> {
     onContributorTiming: (timing) => {
       contributorRuns.push(`${timing.contributorId}@${timing.pass}`);
     },
-    onBlobPopulation: () => undefined,
     ...(request.store === undefined
       ? {}
       : {

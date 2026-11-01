@@ -220,13 +220,22 @@ const CRAWL_LANE_SET: Readonly<Record<CrawlPopulation['lane'], true>> = { walk: 
 /** Every {@link CrawlPopulation} lane, as a runtime list — for a schema enum that must not be a hand-typed copy. */
 export const CRAWL_LANES = Object.keys(CRAWL_LANE_SET) as [CrawlPopulation['lane'], ...Array<CrawlPopulation['lane']>];
 
+/** A registry and the parameter sets it runs under — what {@link populate} is handed. */
+interface ResourceContributors {
+  readonly registry: ContributorRegistry;
+  readonly parameters: Record<string, JsonValue>;
+  /** The enumerating contributor's id, for a caller that asks the store for its rows alone. */
+  readonly filesystemId: string;
+}
+
 /**
  * Register the contributors every resources lane shares, and the parameters
  * they run under — the ONE question every resources lane asks the store.
  *
  * Every lane registers this set under {@link DEFAULT_CONTENT_DEMAND}:
- * {@link buildResourcePopulation}, which reads only membership, and
- * {@link buildResourceProjection}, which reads the rows a query runs against.
+ * {@link buildResourcePopulation}, which reads only membership,
+ * {@link buildResourceProjection}, which reads the rows a query runs against,
+ * and `buildClaudeContextPopulation`, which adds its `@`-import extents on top.
  * One registry and one demand mean one store key, so a population either lane
  * wrote serves the other, and membership is a view over that one population
  * rather than a cheaper question with a key of its own. Neither the demand nor
@@ -237,13 +246,13 @@ export const CRAWL_LANES = Object.keys(CRAWL_LANE_SET) as [CrawlPopulation['lane
  * {@link ExtentContributor.registrationQuestion}; `DECLINE_IGNORED` reaches it as
  * a parameter set the reuse rule sees. Both are fixed here.
  *
- * @param source - The run's single enumerator, already selected by its caller
- *   so the instance stays nameable
+ * @param sourceFor - The run's single enumerator, already selected by its
+ *   caller so the instance stays nameable
  * @returns The registry and the parameter sets to hand {@link populate}
  */
-function resourceContributors(source: CrawlSource): { registry: ContributorRegistry; parameters: Record<string, JsonValue> } {
+export function resourceContributors(sourceFor: (root: string) => CrawlSource): ResourceContributors {
   const registry = new ContributorRegistry();
-  const filesystem = new FilesystemExtentContributor(() => source, DEFAULT_CONTENT_DEMAND);
+  const filesystem = new FilesystemExtentContributor(sourceFor, DEFAULT_CONTENT_DEMAND);
   registry.register(filesystem);
 
   // AFTER the enumerator, and the order is load-bearing: `byStratum` returns
@@ -272,6 +281,7 @@ function resourceContributors(source: CrawlSource): { registry: ContributorRegis
     // a parameter set filed under an id no registered contributor answers to is
     // silently ignored, so the two must not be able to drift.
     parameters: { [filesystem.id]: DECLINE_IGNORED },
+    filesystemId: filesystem.id,
   };
 }
 
@@ -281,13 +291,13 @@ function resourceContributors(source: CrawlSource): { registry: ContributorRegis
  *
  * @param options - The lane's options, for its oracles and blob-stage observer
  * @param root - The resolved root
- * @param source - The run's single enumerator
+ * @param contributors - The registry and parameters, from {@link resourceContributors}
  * @returns The options to read the store and to populate with — one object, so
  *   both compute one key
  */
-function resourcePopulateOptions(options: TreePopulationOptions, root: string, source: CrawlSource): PopulateOptions {
-  const { registry, parameters } = resourceContributors(source);
-  return { root, registry, parameters, onBlobPopulation: options.onBlobPopulation, ...populationOracles(options) };
+function resourcePopulateOptions(options: TreePopulationOptions, root: string, contributors: ResourceContributors): PopulateOptions {
+  const { registry, parameters } = contributors;
+  return { root, registry, parameters, ...populationOracles(options) };
 }
 
 /**
@@ -362,12 +372,25 @@ function membershipOf(
  *   omitted to populate every time. A hit reports the enumerator this process
  *   SELECTED: the key already holds the selector, the tracker's presence and the
  *   root, so the selection is the enumerator that wrote the rows
- * @param options.onBlobPopulation - Receives what the blob stage derived and
- *   what it REFUSED to derive on a miss; never called on a hit
  * @returns The population, the enumerator that produced it, and its outcome
  */
-export async function buildResourcePopulation(
+export function buildResourcePopulation(
   options: TreePopulationOptions & { readonly outputs: readonly string[] },
+): Promise<ResourceEnumeration> {
+  return membershipThrough(options, (source) => resourceContributors(() => source));
+}
+
+/**
+ * {@link buildResourcePopulation} over a given contributor set: the seam its
+ * tests use to register a classifier the shipped set does not have.
+ *
+ * @param options - As {@link buildResourcePopulation}
+ * @param contributorsFor - The registry and parameters for the run's enumerator
+ * @returns The population, the enumerator that produced it, and its outcome
+ */
+async function membershipThrough(
+  options: TreePopulationOptions & { readonly outputs: readonly string[] },
+  contributorsFor: (source: CrawlSource) => ResourceContributors,
 ): Promise<ResourceEnumeration> {
   const root = safePath.resolve(options.root);
 
@@ -377,7 +400,7 @@ export async function buildResourcePopulation(
   // that is not in a repository and the walk answers, and an A/B varying only
   // `VAT_EXTENT_SOURCE` would read "the two agree" for "the switch did nothing".
   const source = crawlSourceFor(root, options.outputs);
-  const populateOptions = resourcePopulateOptions(options, root, source);
+  const populateOptions = resourcePopulateOptions(options, root, contributorsFor(source));
 
   // Every contributor's context is requested, so a hit is exactly the rows a
   // derive below would have produced.
@@ -415,16 +438,16 @@ export async function buildResourcePopulation(
  *   omitted to re-derive every time
  * @param options.collections - The project's `resources.collections`, so a
  *   declared `mimeType` routes the file it matches to a parser
- * @param options.onBlobPopulation - Receives what the blob stage derived and
- *   what it REFUSED to derive. **Required**: a corpus whose every document was
- *   declined as binary populates as empty and would otherwise report success
- * @returns The populated projection and `populate()`'s outcome for it
+ * @returns The populated projection and `populate()`'s outcome for it. A
+ *   caller that reports refusals passes the projection to `describeBlobRefusals`,
+ *   which reads the stored rows, so a hit reports what the derive did
  */
 export function buildResourceProjection(options: TreePopulationOptions): Promise<PopulateResult> {
   const root = safePath.resolve(options.root);
   // A projection is built to be read: the root is the tree the verb examines,
   // so no output is declared.
-  return populate(resourcePopulateOptions(options, root, crawlSourceFor(root, [])));
+  const source = crawlSourceFor(root, []);
+  return populate(resourcePopulateOptions(options, root, resourceContributors(() => source)));
 }
 
 /**
@@ -496,4 +519,4 @@ function canonicalConditions(conditions: readonly RealizationConditionRow[]): Re
 }
 
 /** Test-only seam — see `docs/architecture/README.md` "`__internal`". */
-export const __internal = { canonicalConditions, CONDITION_ORDER } as const;
+export const __internal = { canonicalConditions, CONDITION_ORDER, membershipThrough } as const;

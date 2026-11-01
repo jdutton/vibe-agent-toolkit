@@ -1,28 +1,27 @@
 /**
- * The three arguments every CLI lane hands a projection population builder the
- * same way: the blob-stage observer, the ignore oracle, and the run's store.
+ * What every CLI lane hands a projection population builder the same way — the
+ * ignore oracle, the run's store and the declared collections — and the one
+ * route by which a query lane reports the population's refused content.
  *
  * ## Why this is CLI code and not `resources` code
  *
- * Nothing here decides anything about a projection. The observer's whole body is
- * `describeBlobRefusals` — owned by `@vibe-agent-toolkit/resources` — routed to a
- * {@link Logger}, which is a CLI type no other package has; the two spreads exist
- * only because `exactOptionalPropertyTypes` makes "absent" and "present and
- * undefined" different arguments. That is command plumbing, in the same family as
- * `projection-store.ts` next door, so it stays inside the package the CLI-stays-
- * dumb rule allows it in.
+ * Nothing here decides anything about a projection. {@link reportBlobRefusals}'s
+ * whole body is `describeBlobRefusals` — owned by `@vibe-agent-toolkit/resources`
+ * — routed to a {@link Logger}, which is a CLI type no other package has; the
+ * spreads exist only because `exactOptionalPropertyTypes` makes "absent" and
+ * "present and undefined" different arguments. That is command plumbing, in the
+ * same family as `projection-store.ts` next door.
  *
- * ## The observer is the reason this is shared rather than retyped
+ * ## Why the report reads the projection, not the run
  *
- * Every population builder REQUIRES `onBlobPopulation`, because a tree whose
- * every document was declined as binary otherwise populates as empty and reports
- * success. Two hand-written copies of the reporting half is two places for that
- * report to quietly become a no-op.
+ * A store hit derives nothing. A report built from what this process derived
+ * vanished on the warm run, so `vat resources check` was silent about a binary
+ * `vat resources validate` had just stored a refusal for.
  */
 
 import {
   describeBlobRefusals,
-  type BlobPopulationReport,
+  type BlobRefusalRows,
   type CollectionConfig,
   type PopulationCache,
 } from '@vibe-agent-toolkit/resources';
@@ -39,24 +38,26 @@ import type { Logger } from './logger.js';
  * they are absent, never present-and-undefined.
  */
 export interface PopulationWiring {
-  onBlobPopulation: (report: BlobPopulationReport) => void;
   gitTracker?: GitTracker | undefined;
   cache?: PopulationCache | undefined;
   collections?: Readonly<Record<string, CollectionConfig>> | undefined;
 }
 
 /**
- * Wire one population's blob-stage observer, ignore oracle and store.
+ * Report what a population declined to derive or mis-decoded, or nothing for a
+ * clean one. ⚠️ To **stderr**: callers write a parseable document to stdout.
  *
- * `describeBlobRefusals` returns undefined on a run that refused nothing, so a
- * clean population stays exactly as quiet as it was — which is the only thing
- * that keeps the line worth reading when it does appear.
+ * @param logger - Where the refusals are reported
+ * @param projection - The population's rows, from a derive or a hit alike
+ */
+export function reportBlobRefusals(logger: Logger, projection: BlobRefusalRows): void {
+  const refusals = describeBlobRefusals(projection);
+  if (refusals !== undefined) logger.warn(refusals);
+}
+
+/**
+ * Wire one population's ignore oracle, store and declared collections.
  *
- * ⚠️ The refusals go to `logger.warn`, i.e. **stderr**. Its callers write a
- * parseable document to stdout, and a diagnostic in the middle of it breaks every
- * consumer.
- *
- * @param logger - Where blob-stage refusals are reported
  * @param gitTracker - The ignore oracle, or undefined when there is none. Not
  *   cosmetic: `resource_realizations.gitignored` is filled only when a tracker
  *   was supplied, so its absence decides whether a consumer can TELL which
@@ -67,16 +68,11 @@ export interface PopulationWiring {
  * @returns The options to spread into the population builder's argument
  */
 export function populationWiring(
-  logger: Logger,
   gitTracker: GitTracker | undefined,
   cache: PopulationCache | undefined,
   root: string,
 ): PopulationWiring {
   return {
-    onBlobPopulation: (report) => {
-      const refusals = describeBlobRefusals(report);
-      if (refusals !== undefined) logger.warn(refusals);
-    },
     ...(gitTracker !== undefined && { gitTracker }),
     ...(cache !== undefined && { cache }),
     ...collectionsOption(root),

@@ -81,7 +81,6 @@ async function derivedThrough(store: FakeProjectionStore): Promise<boolean> {
   const { outcome } = await populate({
     root: suite.tempDir,
     registry,
-    onBlobPopulation: () => undefined,
     cache: { store, treeUnchanged: () => true, treeHash: TREE_HASH },
   });
   return outcome.stored !== 'hit';

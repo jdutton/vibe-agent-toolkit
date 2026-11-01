@@ -1,92 +1,90 @@
 /**
- * Turn a {@link BlobPopulationReport} into the one line a user should see when
- * the blob stage declined to derive something — or derived something it cannot
- * vouch for.
+ * Turn a population's stored rows into the one line a user should see when the
+ * population holds content it declined to derive — or derived and cannot vouch
+ * for.
  *
- * ## Why this exists at all
+ * ## Why the input is ROWS, not what this process derived
  *
- * `looksBinary`'s contract is "this is a refusal, not a silence", and
- * `BlobPopulationResult.blobsNotText` claims to be "what makes the refusal
- * auditable rather than a quiet speed-up". Both were false in every shipped run:
- * `PopulateOptions.onBlobPopulation` was optional, no production caller passed
- * one, and every count the stage computed was dropped at the end of `populate()`.
- * A corpus in which every document was declined as binary produced an empty
- * `blobs` table, exit 0, and no output whatsoever.
+ * The line describes the POPULATION, not the run. A store hit derives nothing,
+ * so a line built from the blob stage's run counters printed on a cold run and
+ * vanished on the warm one over the same tree — the same binary was refused
+ * both times, and only one run said so. Every fact this line states is a row
+ * the store round-trips:
  *
- * The condition ROWS survived — `blob_conditions` carries a `BLOB_NOT_TEXT`,
- * `BLOB_UNREADABLE`, `BLOB_CONTENT_CHANGED` or `BLOB_PARSE_FAILED` row per
- * declined blob — so this module deliberately does **not** restate what they
- * hold. It carries the two things they cannot:
+ * - a declined blob is a `blob_conditions` row coded `BLOB_NOT_TEXT`,
+ *   `BLOB_UNREADABLE`, `BLOB_CONTENT_CHANGED` or `BLOB_PARSE_FAILED`;
+ * - an unkeyed realization is a `resource_realizations` row whose
+ *   `contentState` is `unreadable` or `oversize`;
+ * - a mis-decoded blob is a `blobs` row with `replacementCharacters > 0`.
  *
- * 1. **The counts.** A row set is only auditable by someone who queries it, and
- *    nobody queries a projection they were never told to look at.
- * 2. **The two skips no row can carry.** `headingsSkippedForMissingLine` and
- *    `referencesSkippedForMissingLine` describe rows that were never emitted, and
- *    an absent row is definitionally unqueryable.
+ * So a hit and a derive describe alike, and there is one route: the lane that
+ * owns the projection hands it here. Run-only counters that no row carries
+ * (headings or references dropped for want of a source line) are not reported;
+ * an absent row is unqueryable, and a line that only a cold run can print is
+ * the defect this shape exists to remove.
  *
  * ## Why the denominator is in the line
  *
  * "Nothing was refused" and "nothing was enumerated" are the same output
  * otherwise, and the second is the failure mode that actually ships. Naming how
- * many blobs the stage considered makes a line reading `0 of 0` self-refuting.
+ * many blobs the population holds makes a line reading `0 of 0` self-refuting.
  *
  * ## Why a mis-decode is reported HERE, next to the refusals
  *
- * It is not a refusal — the blob was read, parsed and stored — so the obvious
- * move is a second reporter beside this one. That would be a mistake, and not
- * only for tidiness: this module's whole subject is *what the run cannot vouch
- * for*, and there is nothing a run can vouch for less than a document it decoded
- * with the wrong encoding. A refused blob is at least visible as a missing row;
- * a mis-decoded one produces a complete, plausible, queryable row full of
- * mojibake, which a byte-level tokenizer will happily embed and index without
- * erroring anywhere. It is strictly the quieter failure, so it belongs in the
- * line that already exists rather than in a second one nobody wired up.
- *
- * `replacementCharacters > 0` is the trigger, and it fires on **proof** rather
- * than on suspicion: the decoder attempts fatal-mode decoding first, so valid
- * input — including a document whose own text contains U+FFFD — reports zero and
- * says nothing here. `encodingSource: 'assumed'` alone is deliberately NOT a
- * trigger: it is true of every ordinary UTF-8 file in every corpus, and a line
- * that fires on all of them is wallpaper within a day.
+ * It is not a refusal — the blob was read, parsed and stored — but this
+ * module's subject is *what the population cannot vouch for*, and nothing is
+ * less trustworthy than a document decoded with the wrong encoding: a complete,
+ * plausible, queryable row full of mojibake. `replacementCharacters > 0` fires
+ * on **proof** rather than suspicion, since the decoder tries fatal-mode decoding
+ * first. `encodingSource: 'assumed'` alone is deliberately NOT a trigger: it is
+ * true of every ordinary UTF-8 file, and a line that fires on all of them is
+ * wallpaper within a day.
  */
 
-import type { BlobPopulationResult } from './blob-population.js';
-import type { BlobPopulationReport } from './merge.js';
+import {
+  BLOB_CONTENT_CHANGED,
+  BLOB_NOT_TEXT,
+  BLOB_PARSE_FAILED,
+  BLOB_UNREADABLE,
+} from './blob-population.js';
+import type { Projection } from './projection.js';
+
+/** The three tables the line is a function of — every one of them stored. */
+export type BlobRefusalRows = Pick<Projection, 'blobs' | 'blobConditions' | 'resourceRealizations'>;
 
 /** One bucket's contribution to the line, in the order the line reads. */
 interface RefusalBucket {
   /** How the bucket is named to a user. */
   readonly label: string;
-  /** How many blobs it declined. */
+  /** How many distinct blobs or paths it holds. */
   readonly count: number;
 }
 
 /**
- * The blob-level refusals, in the order a reader should meet them.
+ * The refusal codes, in the order a reader should meet them.
  *
- * `blobsNotText` first because it is the expected one — any corpus shipping an
- * image or an archive reports it — and the three that follow are progressively
- * more likely to mean something is wrong.
- *
- * `realizationsSkippedDirectory`, `realizationsSkippedAbsent`,
- * `realizationsSkippedDanglingSymlink` and `realizationsContentDeferred` are
- * deliberately NOT here. The first three are ordinary shapes of a tree rather
- * than refusals, and the fourth is the demand-driven design working — its own
- * docstring calls a non-zero value "the design doing its job". Reporting them
- * would fire this line on every run over any repository, which is how a warning
- * becomes wallpaper.
- *
- * @param result - One run of the stage
- * @returns The non-empty buckets, in reading order
+ * `BLOB_NOT_TEXT` first because it is the expected one — any corpus shipping an
+ * image or an archive has it — and the three that follow are progressively more
+ * likely to mean something is wrong. Any other condition code (`PARSE_ODDITY`
+ * and the rest) describes a blob that WAS derived, so it is not a refusal.
  */
-function refusedBlobs(result: BlobPopulationResult): RefusalBucket[] {
-  return [
-    { label: 'not text', count: result.blobsNotText },
-    { label: 'unreadable', count: result.blobsUnreadable },
-    { label: 'changed under the run', count: result.blobsContentChanged },
-    { label: 'parse failed', count: result.blobsParseFailed },
-  ].filter((bucket) => bucket.count > 0);
-}
+const REFUSAL_CODES: ReadonlyArray<readonly [code: string, label: string]> = [
+  [BLOB_NOT_TEXT, 'not text'],
+  [BLOB_UNREADABLE, 'unreadable'],
+  [BLOB_CONTENT_CHANGED, 'changed under the run'],
+  [BLOB_PARSE_FAILED, 'parse failed'],
+];
+
+/**
+ * The realization states that are refusals, named apart because the remedies
+ * differ: one is a permissions problem, the other a file no JS string can hold.
+ * `none`, `deferred` and `keyed` are the ordinary shapes of a tree and the
+ * demand-driven design working, so they are deliberately absent.
+ */
+const UNKEYED_STATES = [
+  ['unreadable', 'unreadable'],
+  ['oversize', 'too large to decode'],
+] as const;
 
 /**
  * One bucket as the line spells it — `"2 not text"`.
@@ -99,99 +97,70 @@ function countAndLabel(bucket: RefusalBucket): string {
 }
 
 /**
- * Describe one run of the stage, or nothing when it refused nothing and decoded
- * everything cleanly.
+ * The non-empty buckets and their total, or undefined when every bucket is empty.
  *
- * @param result - One run of the stage
- * @returns The clause for that run, or undefined when there is nothing to report about it
+ * @param buckets - Every bucket, in reading order
+ * @returns The total and the breakdown text, or undefined
  */
-function describeRun(result: BlobPopulationResult): string | undefined {
-  const buckets = refusedBlobs(result);
-  const refusedTotal = buckets.reduce((sum, bucket) => sum + bucket.count, 0);
-  // The denominator: every blob the stage reached a decision about, refusals
-  // included. `blobsAlreadyPresent` is in it because on the post-fixpoint run
-  // that is most of the corpus, and a second run reporting "1 of 1" would
-  // understate what it looked at by three orders of magnitude.
-  const considered = result.blobsDerived + result.blobsAlreadyPresent + refusedTotal;
+function tally(buckets: readonly RefusalBucket[]): { total: number; breakdown: string } | undefined {
+  const present = buckets.filter((bucket) => bucket.count > 0);
+  if (present.length === 0) return undefined;
+  const total = present.reduce((sum, bucket) => sum + bucket.count, 0);
+  return { total, breakdown: present.map(countAndLabel).join(', ') };
+}
 
-  const clauses: string[] = [];
-  if (refusedTotal > 0) {
-    const breakdown = buckets.map(countAndLabel).join(', ');
-    clauses.push(`declined ${refusedTotal} of ${considered} blob(s) (${breakdown})`);
-  }
-
-  // Reported even when no blob was declined: these two are skips INSIDE a blob
-  // that was otherwise derived successfully, so they are invisible to every
-  // bucket above and to every condition row.
-  const skipped = [
-    { label: 'heading(s)', count: result.headingsSkippedForMissingLine },
-    { label: 'reference(s)', count: result.referencesSkippedForMissingLine },
-  ].filter((bucket) => bucket.count > 0);
-  if (skipped.length > 0) {
-    const breakdown = skipped.map(countAndLabel).join(' and ');
-    clauses.push(`dropped ${breakdown} for want of a source line`);
-  }
-
-  const unkeyed = describeUnkeyed(result);
-  if (unkeyed !== undefined) clauses.push(unkeyed);
-
-  const misdecoded = describeMisdecoded(result, considered);
-  if (misdecoded !== undefined) clauses.push(misdecoded);
-
-  return clauses.length > 0 ? clauses.join('; ') : undefined;
+/**
+ * The distinct blobs carrying each refusal code — a blob is counted once
+ * however many paths realize it or how many rows restate it.
+ *
+ * @param rows - The population's rows
+ * @returns Each code's distinct blob set, in reading order
+ */
+function refusedBlobs(rows: BlobRefusalRows): ReadonlyArray<{ label: string; blobs: ReadonlySet<string> }> {
+  return REFUSAL_CODES.map(([code, label]) => ({
+    label,
+    blobs: new Set(rows.blobConditions.filter((row) => row.code === code).map((row) => row.blob)),
+  }));
 }
 
 /**
  * The clause naming realizations that are in the corpus and got no content key,
- * or nothing when every one that has bytes was keyed or deliberately deferred.
+ * counted by distinct path, or nothing when every one with bytes was keyed or
+ * deliberately deferred.
  *
- * The two realization-level buckets that ARE refusals: `unreadable` (the
- * filesystem refused the read — "the only bucket here that indicates something
- * went wrong", in its own docstring) and `oversize` (too large to decode, never
- * read). Named apart in the breakdown, because the remedies differ: one is a
- * permissions problem, the other is a file no JS string can hold.
- *
- * @param result - One run of the stage
- * @returns The clause, or undefined when neither bucket is non-zero
+ * @param rows - The population's rows
+ * @returns The clause, or undefined
  */
-function describeUnkeyed(result: BlobPopulationResult): string | undefined {
-  const buckets = [
-    { label: 'unreadable', count: result.realizationsSkippedUnkeyed },
-    { label: 'too large to decode', count: result.realizationsSkippedOversize },
-  ].filter((bucket) => bucket.count > 0);
-  if (buckets.length === 0) return undefined;
-  const total = buckets.reduce((sum, bucket) => sum + bucket.count, 0);
-  return `could not key ${total} realization(s) (${buckets.map(countAndLabel).join(', ')})`;
+function describeUnkeyed(rows: BlobRefusalRows): string | undefined {
+  const unkeyed = tally(UNKEYED_STATES.map(([state, label]) => ({
+    label,
+    count: new Set(rows.resourceRealizations.filter((row) => row.contentState === state).map((row) => row.path)).size,
+  })));
+  return unkeyed === undefined
+    ? undefined
+    : `could not key ${unkeyed.total} realization(s) (${unkeyed.breakdown})`;
 }
 
 /**
- * The clause naming what this run decoded WRONGLY, or nothing when it decoded
- * everything cleanly.
+ * The clause naming what the population holds decoded WRONGLY, or nothing when
+ * every blob decoded cleanly.
  *
- * The denominator is the same `considered` the refusal clause uses, for the same
- * reason: "no blob was mis-decoded" and "no blob was looked at" must not print
- * the same way.
+ * The BOM split is spelled out only when there is a split to spell: all-assumed
+ * is the expected shape (nothing but a BOM ever selects a non-UTF-8 encoding,
+ * so a BOM'd blob decoding badly means corrupt bytes rather than a wrong guess).
  *
- * The BOM split is spelled out only when there is a split to spell — when every
- * mis-decoded blob had its encoding assumed, which is the ordinary case, `(all
- * with no BOM…)` says it once instead of restating the count.
- *
- * @param result - One run of the stage
- * @param considered - Every blob the stage reached a decision about
+ * @param rows - The population's rows
+ * @param considered - Every blob the population reached a decision about
  * @returns The clause, or undefined when nothing decoded to U+FFFD
  */
-function describeMisdecoded(result: BlobPopulationResult, considered: number): string | undefined {
-  const blobs = result.blobsDecodedWithReplacements;
-  if (blobs === 0) return undefined;
+function describeMisdecoded(rows: BlobRefusalRows, considered: number): string | undefined {
+  const misdecoded = rows.blobs.filter((row) => row.replacementCharacters > 0);
+  if (misdecoded.length === 0) return undefined;
 
-  const assumed = result.blobsAssumedEncodingWithReplacements;
-  // Which half of the population is worth naming depends on which one is the
-  // exception. All-assumed is the expected shape (nothing but a BOM ever selects
-  // a non-UTF-8 encoding, so a BOM'd blob decoding badly means genuinely corrupt
-  // bytes rather than a wrong guess), and restating the full count for it would
-  // add a number that carries no information.
+  const assumed = misdecoded.filter((row) => row.encodingSource === 'assumed').length;
+  const characters = misdecoded.reduce((sum, row) => sum + row.replacementCharacters, 0);
   let basis: string;
-  if (assumed === blobs) {
+  if (assumed === misdecoded.length) {
     basis = 'all with no BOM, so the encoding was assumed';
   } else if (assumed === 0) {
     basis = 'all with a BOM, so the encoding was a fact and the bytes are corrupt';
@@ -199,55 +168,47 @@ function describeMisdecoded(result: BlobPopulationResult, considered: number): s
     basis = `${assumed} with no BOM, so the encoding was assumed`;
   }
 
-  return `mis-decoded ${blobs} of ${considered} blob(s) into `
-    + `${result.replacementCharacters} replacement character(s) (${basis})`;
+  return `mis-decoded ${misdecoded.length} of ${considered} blob(s) into `
+    + `${characters} replacement character(s) (${basis})`;
 }
 
 /**
- * The one line to show a user, or undefined when the run refused nothing.
+ * The one line to show a user, or undefined when the population holds no
+ * refusal and no mis-decode.
  *
  * Undefined rather than an empty string, so a caller cannot print a blank line
- * by forgetting to check — and so a clean run stays silent, which is the only
- * thing that keeps the line worth reading on a dirty one.
+ * by forgetting to check — and so a clean population stays silent, which is the
+ * only thing that keeps the line worth reading on a dirty one.
  *
- * The two runs of the stage are described **separately** rather than summed, for
- * the reason {@link BlobPopulationReport} already gives: `blobsAlreadyPresent`
- * counts nearly the whole corpus on the second pass, so there is no honest
- * arithmetic between them and this function declines to invent one.
- *
- * @param report - What the whole population's blob stage did
+ * @param rows - The population's stored rows, from a derive or a store hit alike
  * @returns A single line naming every non-zero refusal and every mis-decode, or undefined
  */
-export function describeBlobRefusals(report: BlobPopulationReport): string | undefined {
-  const first = describeRun(report);
-  const second = report.afterClosurePromotion === undefined
-    ? undefined
-    : describeRun(report.afterClosurePromotion);
+export function describeBlobRefusals(rows: BlobRefusalRows): string | undefined {
+  const refused = refusedBlobs(rows);
+  const refusedKeys = new Set(refused.flatMap((bucket) => [...bucket.blobs]));
+  // The denominator: every blob the population reached a decision about,
+  // derived or declined, each once.
+  const considered = new Set([...rows.blobs.map((row) => row.contentKey), ...refusedKeys]).size;
 
-  if (first === undefined && second === undefined) return undefined;
+  const clauses: string[] = [];
+  const declined = tally(refused.map(({ label, blobs }) => ({ label, count: blobs.size })));
+  if (declined !== undefined) {
+    clauses.push(`declined ${refusedKeys.size} of ${considered} blob(s) (${declined.breakdown})`);
+  }
+  const unkeyed = describeUnkeyed(rows);
+  if (unkeyed !== undefined) clauses.push(unkeyed);
+  const misdecoded = describeMisdecoded(rows, considered);
+  if (misdecoded !== undefined) clauses.push(misdecoded);
 
-  const parts: string[] = [];
-  if (first !== undefined) parts.push(`blob derivation ${first}`);
-  if (second !== undefined) parts.push(`after promotion, ${second}`);
+  if (clauses.length === 0) return undefined;
 
   // Two different tables answer "which ones", so the pointer names whichever
   // is actually relevant. A mis-decoded blob has NO condition row — it was
-  // derived, not declined — so pointing a reader at `blob_conditions` for it
-  // would send them to an empty result set.
+  // derived, not declined — so `blob_conditions` alone would send a reader to
+  // an empty result set.
   const pointers = ["Per-blob reasons are in the projection's blob_conditions table."];
-  if (misdecodedAnywhere(report)) {
+  if (misdecoded !== undefined) {
     pointers.push('The mis-decoded blobs are the `blobs` rows with replacementCharacters > 0.');
   }
-  return `${parts.join('; ')}. ${pointers.join(' ')}`;
-}
-
-/**
- * Did either run of the stage mis-decode anything?
- *
- * @param report - What the whole population's blob stage did
- * @returns True when at least one derived blob decoded to U+FFFD
- */
-function misdecodedAnywhere(report: BlobPopulationReport): boolean {
-  return report.blobsDecodedWithReplacements > 0
-    || (report.afterClosurePromotion?.blobsDecodedWithReplacements ?? 0) > 0;
+  return `blob derivation ${clauses.join('; ')}. ${pointers.join(' ')}`;
 }

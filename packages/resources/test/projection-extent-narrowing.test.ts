@@ -130,7 +130,6 @@ async function populateCorpus(narrowed: boolean): Promise<Projection> {
     root: suite.tempDir,
     registry,
     parameters: { [`closure:${EXTENT_NAME}`]: declaration as unknown as JsonValue },
-    onBlobPopulation: () => undefined,
   });
   return projection;
 }

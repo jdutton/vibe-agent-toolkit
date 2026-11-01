@@ -86,14 +86,11 @@
  * ## What survives, and why it is not vacuous
  *
  * The other half of that test does survive, and it is armed by a different
- * population: `blobs.linkCount` and the parser-derived `blob_references` rows
- * are two independent measurements of one quantity, and their difference must
- * equal the stage's own `referencesSkippedForMissingLine`. That check is armed
- * by every AST link in the corpus (2,432 rows on 2026-08-24, of which 926 are
- * from `.md`/`.html` blobs), not by the drops — a drop count of 0 leaves it
- * fully live, which is exactly how it caught the `AST_SYNTACTIC_FORMS` staleness
- * described on {@link droppedReferencesByBlob}. It is what {@link
- * MIN_AST_REFERENCE_ROWS} exists to keep honest.
+ * population: no blob may carry more parser-derived `blob_references` rows than
+ * its `blobs.linkCount`, the links its parser found. That check is armed by
+ * every AST link in the corpus (2,432 rows on 2026-08-24, of which 926 are from
+ * `.md`/`.html` blobs), not by the drops — a drop count of 0 leaves it fully
+ * live. It is what {@link MIN_AST_REFERENCE_ROWS} exists to keep honest.
  */
 
 import {
@@ -112,7 +109,6 @@ import {
   PackageExtentContributor,
   populate,
   relativize,
-  type BlobPopulationResult,
   type ExtentContributor,
   type JsonValue,
   type Projection,
@@ -149,8 +145,8 @@ const PROBE_CEILING = 6;
  * subject at all. It can only fail one way — by the population *collapsing* —
  * and a collapse is a finding, not a rebase.
  *
- * It exists because `expect(total).toBe(referencesSkippedForMissingLine)` is
- * `0 === 0` over an empty input, and this file has already lost one assertion
+ * It exists because `expect(surplus).toEqual([])` is `[] === []` over an empty
+ * input, and this file has already lost one assertion
  * (the closure-edge test, see header) to exactly that. Measured 2026-08-24:
  * 2,432 AST rows over the whole corpus, of which **926** come from `.md`/`.html`
  * blobs — the subset that survives if parsing is ever narrowed to markdown and
@@ -175,7 +171,6 @@ interface ConvergenceProbe {
 }
 
 let probe: ConvergenceProbe;
-let blobCounts: BlobPopulationResult;
 let registeredIds: readonly string[];
 
 /**
@@ -261,14 +256,12 @@ function buildRegistry(skillPaths: readonly string[]): {
  *
  * @param registry - The contributors to run
  * @param parameters - Per-contributor parameter sets
- * @param onBlobPopulation - Receives the blob stage's counters each run
  * @returns The converged projection and the per-pass moving sets
  * @throws When the stratum has not converged by {@link PROBE_CEILING}
  */
 async function probeConvergence(
   registry: ContributorRegistry,
   parameters: Record<string, JsonValue>,
-  onBlobPopulation: (result: BlobPopulationResult) => void,
 ): Promise<ConvergenceProbe> {
   const movingByPass: string[][] = [];
   const gitTracker = new GitTracker(ROOT);
@@ -279,7 +272,7 @@ async function probeConvergence(
   for (let cap = 2; cap <= PROBE_CEILING; cap++) {
     try {
       const { projection } = await populate({
-        root: ROOT, registry, parameters, gitTracker, maxIterations: cap, onBlobPopulation,
+        root: ROOT, registry, parameters, gitTracker, maxIterations: cap,
       });
       return { projection, passes: cap, movingByPass };
     } catch (error) {
@@ -314,9 +307,8 @@ async function probeConvergence(
  * references, none of which was dropped at all. The number was never the
  * problem: a consumer that re-derives a producer's partition by hand goes stale
  * the next time a parser is added, silently and in the direction of a false
- * alarm. Reading `AST_SYNTACTIC_FORMS` keeps the two measurements independent
- * (the counter is still `candidates - rows`, computed inside the stage) while
- * making them agree by construction rather than by coincidence.
+ * alarm. Reading `AST_SYNTACTIC_FORMS` makes the partition agree with the
+ * producer's by construction rather than by coincidence.
  *
  * `astRowTotal` is returned alongside because it is the population that *arms*
  * the comparison: the difference is meaningful only while there are AST rows to
@@ -325,10 +317,12 @@ async function probeConvergence(
  * docstring exists to warn about.
  *
  * @param projection - The populated projection
- * @returns Per-blob dropped counts, and the AST rows the difference is taken against
+ * @returns Per-blob dropped counts, the blobs carrying more AST rows than links,
+ *   and the AST rows the difference is taken against
  */
 function droppedReferencesByBlob(projection: Projection): {
   dropped: Map<string, number>;
+  surplus: string[];
   astRowTotal: number;
 } {
   const astRows = new Map<string, number>();
@@ -340,11 +334,14 @@ function droppedReferencesByBlob(projection: Projection): {
   }
 
   const dropped = new Map<string, number>();
+  const surplus: string[] = [];
   for (const blob of projection.blobs) {
-    const missing = blob.linkCount - (astRows.get(blob.contentKey) ?? 0);
+    const rows = astRows.get(blob.contentKey) ?? 0;
+    const missing = blob.linkCount - rows;
     if (missing > 0) dropped.set(blob.contentKey, missing);
+    if (missing < 0) surplus.push(`${blob.contentKey}: ${rows} rows vs ${blob.linkCount} links`);
   }
-  return { dropped, astRowTotal };
+  return { dropped, surplus, astRowTotal };
 }
 
 /**
@@ -379,7 +376,7 @@ function extensionOf(path: string): string {
 }
 
 /** Print the cardinalities this run exists to measure. Printed, never asserted. */
-function reportCardinalities(projection: Projection, counts: BlobPopulationResult): void {
+function reportCardinalities(projection: Projection): void {
   console.log('[risk 4] cardinality of a whole-corpus population of this repository');
   const table = {
     resources: projection.resources.length,
@@ -395,7 +392,6 @@ function reportCardinalities(projection: Projection, counts: BlobPopulationResul
     blob_conditions: projection.blobConditions.length,
   };
   console.table(table);
-  console.log('[blob stage]', JSON.stringify(counts));
   console.log('[extents by kind]', JSON.stringify(tally(
     projection.resolutionContexts.map((row) => row.kind),
   )));
@@ -424,17 +420,14 @@ beforeAll(async () => {
   const { registry, parameters, ids } = buildRegistry(skillPaths);
   registeredIds = ids;
 
-  let latest: BlobPopulationResult | undefined;
-  probe = await probeConvergence(registry, parameters, (result) => { latest = result; });
-  if (latest === undefined) throw new Error('populate() never invoked onBlobPopulation');
-  blobCounts = latest;
+  probe = await probeConvergence(registry, parameters);
 
   console.log(`[setup] ${skillPaths.length} skills, ${ids.length} contributors registered`);
   console.log(`[risk 2] closure stratum converged on pass ${probe.passes}`);
   for (const [index, moving] of probe.movingByPass.entries()) {
     console.log(`  still moving after pass ${index + 2}: ${moving.length} — ${moving.join(', ')}`);
   }
-  reportCardinalities(probe.projection, blobCounts);
+  reportCardinalities(probe.projection);
 }, 3_600_000);
 
 describe('whole-corpus population', () => {
@@ -491,11 +484,7 @@ describe('whole-corpus population', () => {
     expect([...contexts].filter((contextId) => !covered.has(contextId))).toEqual([]);
   });
 
-  it('leaves no heading without a section row', () => {
-    expect(blobCounts.headingsSkippedForMissingLine).toBe(0);
-  });
-
-  it('agrees between blobs.sectionCount and the blob_sections rows', () => {
+  it('leaves no heading without a section row: blobs.sectionCount agrees with the rows', () => {
     const sections = new Map<string, number>();
     for (const row of probe.projection.blobSections) {
       sections.set(row.blob, (sections.get(row.blob) ?? 0) + 1);
@@ -507,22 +496,21 @@ describe('whole-corpus population', () => {
   });
 
   it('agrees between blobs.linkCount and the parser-derived blob_references rows', () => {
-    const { dropped, astRowTotal } = droppedReferencesByBlob(probe.projection);
+    const { dropped, surplus, astRowTotal } = droppedReferencesByBlob(probe.projection);
 
     // ── Arm the assertion before making it. ───────────────────────────────────
-    // `expect(total).toBe(referencesSkippedForMissingLine)` is `0 === 0` over an
+    // `expect(surplus).toEqual([])` is `[] === []` over an
     // empty projection, so the subject is asserted first and the property
     // second. See {@link MIN_AST_REFERENCE_ROWS} for why a floor is not the
     // row-count assertion this file refuses to make.
     expect(astRowTotal).toBeGreaterThan(MIN_AST_REFERENCE_ROWS);
     expect(probe.projection.blobs.length).toBeGreaterThan(0);
 
+    // `blobs.linkCount` is what the parser handed the stage and the AST-form rows
+    // are what survived `hasReferenceSpan`, so no blob may carry more rows than
+    // links: a surplus is a row no parser produced.
+    expect(surplus).toEqual([]);
     const total = [...dropped.values()].reduce((sum, count) => sum + count, 0);
-    // The rows and the counter are two independent measurements of one quantity:
-    // `blobs.linkCount` is what the parser handed the stage, the AST-form rows
-    // are what survived `hasReferenceSpan`, and the stage counted the difference
-    // itself. A parser whose links stop reaching rows moves one side only.
-    expect(total).toBe(blobCounts.referencesSkippedForMissingLine);
 
     // Printed, never asserted — the header explains why the drop *count* is not
     // an invariant. The extension breakdown is the fact that retired the

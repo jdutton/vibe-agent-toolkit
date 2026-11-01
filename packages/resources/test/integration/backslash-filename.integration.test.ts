@@ -99,12 +99,12 @@ async function crawled(root: string): Promise<string[]> {
 
 /** The resources lane over `root`, with a real ignore oracle when it is a repository. */
 async function populate(root: string, withGit: boolean): Promise<Projection> {
-  if (!withGit) return (await buildResourceProjection({ root, onBlobPopulation: () => undefined })).projection;
+  if (!withGit) return (await buildResourceProjection({ root })).projection;
   const gitTracker = new GitTracker(root);
   await gitTracker.initialize();
   // Positive control: an unusable tracker would silently turn this into the walk arm.
   expect(gitTracker.isUsable()).toBe(true);
-  return (await buildResourceProjection({ root, gitTracker, onBlobPopulation: () => undefined })).projection;
+  return (await buildResourceProjection({ root, gitTracker })).projection;
 }
 
 /** Assert the backslash names survived the lane, in both realization and rule tables. */

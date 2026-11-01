@@ -1,19 +1,18 @@
 /**
  * A known defect marked as blocking the stable tag must stop `bun run
- * pre-release` on a stable version and only there. The real file is read too,
- * so a marker spelled the way the parser cannot see fails here, not at release.
+ * pre-release` on a stable version and only there. Any `**Blocks` line that is
+ * not the exact marker throws, so the real-file test below fails on a misspelt
+ * marker rather than letting it through.
  */
 
-import { readFileSync } from 'node:fs';
-
-import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { PROJECT_ROOT } from '../src/common.js';
 import {
-  KNOWN_DEFECTS_PATH,
   STABLE_TAG_BLOCKER_MARKER,
   isPrereleaseVersion,
+  readKnownDefects,
+  releaseReadinessDefectRefusal,
   stableTagBlockers,
   stableTagRefusal,
 } from '../src/known-defects-gate.js';
@@ -48,6 +47,20 @@ describe('stableTagBlockers', () => {
   it('refuses a marker that sits before any entry heading', () => {
     expect(() => stableTagBlockers(`# Known defects\n\n${STABLE_TAG_BLOCKER_MARKER}\n`)).toThrow(/heading/);
   });
+
+  it.each([
+    '- **Blocks**: the stable tag',
+    '* **Blocks:** the stable tag',
+    '- **Blocks:** the stable tag.',
+    '- **Blocks:** the stable tag (until S6)',
+    '- **blocks:** the stable tag',
+  ])('throws on the near-miss marker %j rather than failing open', (line) => {
+    expect(() => stableTagBlockers(`### An entry\n\n${line}\n`)).toThrow(/marker/);
+  });
+
+  it('ignores the marker quoted as inline code in prose', () => {
+    expect(stableTagBlockers(`### An entry\n\nMark it \`${STABLE_TAG_BLOCKER_MARKER}\` to block.\n`)).toEqual([]);
+  });
 });
 
 describe('stableTagRefusal', () => {
@@ -64,6 +77,23 @@ describe('stableTagRefusal', () => {
   });
 });
 
+describe('releaseReadinessDefectRefusal', () => {
+  const blocking = (): string => BLOCKING;
+
+  it('refuses a stable release-readiness run over a blocking register', () => {
+    expect(releaseReadinessDefectRefusal({ version: '0.2.0', releaseReadiness: true, register: blocking }))
+      .toMatch(/A one-file edit repopulates the whole tree/);
+  });
+
+  it('lets an rc through, and gates nothing outside release readiness', () => {
+    expect(releaseReadinessDefectRefusal({ version: '0.2.0-rc.12', releaseReadiness: true, register: blocking }))
+      .toBeUndefined();
+    const unread = (): string => { throw new Error('read the register outside release readiness'); };
+    expect(releaseReadinessDefectRefusal({ version: '0.2.0', releaseReadiness: false, register: unread }))
+      .toBeUndefined();
+  });
+});
+
 describe('isPrereleaseVersion', () => {
   it('tells an rc from a stable version', () => {
     expect(isPrereleaseVersion('0.2.0-rc.12')).toBe(true);
@@ -73,7 +103,7 @@ describe('isPrereleaseVersion', () => {
 
 describe('the real known-defects file', () => {
   it('parses, so the gate cannot be silenced by a malformed file', () => {
-    const text = readFileSync(safePath.join(PROJECT_ROOT, KNOWN_DEFECTS_PATH), 'utf8');
+    const text = readKnownDefects(PROJECT_ROOT);
 
     expect(() => stableTagBlockers(text)).not.toThrow();
   });

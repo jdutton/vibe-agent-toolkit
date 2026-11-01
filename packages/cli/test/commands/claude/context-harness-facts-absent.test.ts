@@ -35,6 +35,7 @@ vi.mock('../../../src/utils/projection-store.js', () => ({
 
 vi.mock('../../../src/utils/population-wiring.js', () => ({
   populationWiring: () => ({}),
+  reportBlobRefusals: () => undefined,
 }));
 
 vi.mock('../../../src/commands/audit/distributed-tree.js', () => ({

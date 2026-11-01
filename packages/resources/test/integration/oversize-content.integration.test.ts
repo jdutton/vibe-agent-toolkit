@@ -26,7 +26,7 @@ import { RunContentCache } from '../../src/projection/content-cache.js';
 import { ContributorRegistry } from '../../src/projection/contributor.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../../src/projection/crawl-source.js';
-import { populate, type BlobPopulationReport } from '../../src/projection/merge.js';
+import { populate } from '../../src/projection/merge.js';
 import { ProjectionBuilder, REALIZATION_PROMOTION_UNREADABLE } from '../../src/projection/projection.js';
 import { collectRealization } from '../../src/projection/realizations.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
@@ -124,8 +124,7 @@ describe('populate over a tree holding one undecodable file', () => {
 
     const registry = new ContributorRegistry();
     registry.register(new FilesystemExtentContributor(() => crawlSourceFor(root, []), DEFAULT_CONTENT_DEMAND));
-    const reports: BlobPopulationReport[] = [];
-    const { projection } = await populate({ root, registry, onBlobPopulation: (r) => reports.push(r) });
+    const { projection } = await populate({ root, registry });
 
     const rowAt = (name: string) =>
       projection.resourceRealizations.find((row) => toForwardSlash(row.path) === name);
@@ -136,9 +135,7 @@ describe('populate over a tree holding one undecodable file', () => {
     // The control: the ordinary file beside it is still keyed.
     expect(rowAt(NOTES)?.contentState).toBe('keyed');
 
-    const [report] = reports;
-    expect(report?.realizationsSkippedOversize).toBe(1);
-    expect(report?.realizationsSkippedUnkeyed).toBe(0);
-    expect(report === undefined ? undefined : describeBlobRefusals(report)).toContain('1 too large to decode');
+    expect(projection.resourceRealizations.filter((row) => row.contentState === 'oversize')).toHaveLength(1);
+    expect(describeBlobRefusals(projection)).toContain('could not key 1 realization(s) (1 too large to decode)');
   });
 });

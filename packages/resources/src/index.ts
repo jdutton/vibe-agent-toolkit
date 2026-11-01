@@ -940,9 +940,7 @@ export {
 // truncated extent it had reached.
 //
 // It also owns the post-fixpoint re-run of the blob stage: demand-driven keying
-// means a `deferred` realization can become `keyed` during the closure stratum,
-// and `BlobPopulationReport` reports that second run as its own measurement
-// rather than summing counters that have no honest combination rule.
+// means a `deferred` realization can become `keyed` during the closure stratum.
 export {
   CONTENT_PARSING_DERIVE,
   CONTENT_PARSING_SKIP,
@@ -951,7 +949,6 @@ export {
   populate,
   populationOracles,
   readStoredMembership,
-  type BlobPopulationReport,
   type ContentParsing,
   type ContributorTiming,
   type PopulateOptions,
@@ -962,14 +959,11 @@ export {
   type TreePopulationOptions,
 } from './projection/merge.js';
 
-// The one line a user sees when the blob stage declined to derive something.
-// `populate()` computes the refusal counts on every run; until this shipped,
-// every production caller threw them away, so a corpus in which every document
-// was declined as binary produced an empty `blobs` table and exit 0. The counts
-// are the half that `blob_conditions` cannot carry — nobody queries a projection
-// they were never told to look at, and a skipped heading or reference is an
-// absent row.
-export { describeBlobRefusals } from './projection/blob-refusals.js';
+// The one line a user sees when a population holds content it declined to
+// derive or mis-decoded. A function of the projection's stored rows, so a store
+// hit reports exactly what the derive that wrote it would have — nobody queries
+// a projection they were never told to look at.
+export { describeBlobRefusals, type BlobRefusalRows } from './projection/blob-refusals.js';
 
 // The declarative closure primitive (zones §7.3): a closure-defined extent is a
 // GENERIC contributor handed an `ExtentDeclaration`, never new privileged code —

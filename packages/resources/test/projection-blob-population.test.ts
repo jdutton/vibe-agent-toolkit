@@ -290,24 +290,14 @@ function closureDeclaration(): Record<string, JsonValue> {
   };
 }
 
-/** Run the whole driver over the skill corpus, capturing the stage's counters. */
-async function populateSkillCorpus(): Promise<{ projection: Projection; counts: BlobPopulationResult }> {
-  let counts: BlobPopulationResult | undefined;
+/** Run the whole driver over the skill corpus. */
+async function populateSkillCorpus(): Promise<{ projection: Projection }> {
   const { projection } = await populate({
     root: suite.tempDir,
     registry: registryWithClosure(EXTENT_NAME, SKILL_KIND),
     parameters: { [`closure:${EXTENT_NAME}`]: closureDeclaration() },
-    onBlobPopulation: (result) => {
-      counts = result;
-    },
   });
-  expect(counts).toBeDefined();
-  return { projection, counts: counts ?? unreachableCounts() };
-}
-
-/** Only reachable if the assertion above stopped asserting. */
-function unreachableCounts(): BlobPopulationResult {
-  throw new Error('populate() did not report blob-population counts');
+  return { projection };
 }
 
 /** Paths realized in one extent, in code-unit order. */
@@ -355,14 +345,15 @@ describe('populateBlobs, through populate()', () => {
     // columns they feed are required and positive, and both are handled by
     // skipping rather than defaulting to line 1. These two counters are the only
     // way that skip is observable — a skipped row is, definitionally, absent.
-    const { counts } = await populateSkillCorpus();
+    const counts = await populateBlobs(await baseBuilderFor(), { parseCache: NO_CACHE });
 
     expect(counts.headingsSkippedForMissingLine).toBe(0);
     expect(counts.referencesSkippedForMissingLine).toBe(0);
   });
 
   it('derives one blob per file and attributes every directory it skipped', async () => {
-    const { projection, counts } = await populateSkillCorpus();
+    const { projection } = await populateSkillCorpus();
+    const counts = await populateBlobs(await baseBuilderFor(), { parseCache: NO_CACHE });
 
     expect(counts.blobsDerived).toBe(SKILL_CORPUS.length);
     expect(projection.blobs).toHaveLength(SKILL_CORPUS.length);
@@ -410,7 +401,7 @@ describe('populateBlobs', () => {
     const registry = new ContributorRegistry();
     registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
 
-    const { projection } = await populate({ root: suite.tempDir, registry, onBlobPopulation: () => undefined });
+    const { projection } = await populate({ root: suite.tempDir, registry });
 
     const keyOf = (path: string): string => {
       const key = projection.resourceRealizations.find((row) => row.path === path)?.contentKey;
@@ -696,43 +687,21 @@ describe('afterClosurePromotion', () => {
     await writeCorpus(DEMAND_CORPUS);
   });
 
-  it('reports nothing at all when the closure stratum promoted no realization', async () => {
+  it('derives the blob a promotion keyed, and only that one', async () => {
     const cache = new RunContentCache();
     const builder = await builderWithDeferredPath(DOC_A, DEMAND_CORPUS, cache);
     await populateBlobs(builder, { parseCache: NO_CACHE });
-
-    const report = await afterClosurePromotion(builder, builder.contentPromotionAttempts);
-
-    // An ABSENT key, not a zeroed result: "the stage did not need to run again"
-    // and "it ran again and derived nothing" are different facts.
-    expect(report).toEqual({});
-    expect('afterClosurePromotion' in report).toBe(false);
-  });
-
-  it('reports the post-fixpoint run as its own result rather than merging counters', async () => {
-    const cache = new RunContentCache();
-    const builder = await builderWithDeferredPath(DOC_A, DEMAND_CORPUS, cache);
-    const first = await populateBlobs(builder, { parseCache: NO_CACHE });
+    expect(builder.build().blobs).toHaveLength(1);
     const before = builder.contentPromotionAttempts;
-    await builder.ensureContentKey(DOC_A);
+    const key = await builder.ensureContentKey(DOC_A);
 
-    const report = await afterClosurePromotion(builder, before);
+    await afterClosurePromotion(builder, before);
 
-    expect(report.afterClosurePromotion?.blobsDerived).toBe(1);
-    // The reason there is no honest sum: the second pass counts as "already
-    // present" nearly every blob the first pass derived, so adding the two
-    // reports a corpus larger than the corpus.
-    expect(first.blobsAlreadyPresent).toBe(0);
-    expect(report.afterClosurePromotion?.blobsAlreadyPresent).toBe(1);
     expect(builder.build().blobs).toHaveLength(2);
+    expect(builder.build().blobs.map((row) => row.contentKey)).toContain(key);
   });
 
-  it('reports a promotion whose every read FAILED, rather than the deliberate no-op', async () => {
-    // The defect: the gate read `contentPromotions`, the SUCCESS counter, which
-    // `ensureContentKey` leaves untouched when the read throws. So a closure
-    // stratum that demanded bytes and could not read one of them returned the
-    // identical `{}` as a stratum where nobody asked at all — one corpus of
-    // unreadable files and one deliberate no-op, emitting one signal.
+  it('records a promotion whose every read FAILED on the realization, with no blob', async () => {
     const cache = new RunContentCache();
     const builder = await builderWithDeferredPath(DOC_A, DEMAND_CORPUS, cache);
     await populateBlobs(builder, { parseCache: NO_CACHE });
@@ -747,15 +716,12 @@ describe('afterClosurePromotion', () => {
     expect(builder.contentPromotionAttempts).toBe(before + 1);
     expect(builder.contentPromotions).toBe(0);
 
-    const report = await afterClosurePromotion(builder, before);
+    await afterClosurePromotion(builder, before);
 
-    // PRESENT — the whole point. A `{}` here would be the no-op's answer.
-    expect('afterClosurePromotion' in report).toBe(true);
-    // And honest about what it found: nothing new was derivable, because no key
-    // entered the projection.
-    expect(report.afterClosurePromotion?.blobsDerived).toBe(0);
-    // The row that carries the cause. `blobsUnreadable` cannot: there is no blob
-    // and therefore no content key to hang a `blob_conditions` row on.
+    // Nothing new was derivable, because no key entered the projection.
+    expect(builder.build().blobs).toHaveLength(1);
+    // The row that carries the cause. A `blob_conditions` row cannot: there is
+    // no blob and therefore no content key to hang one on.
     expect(builder.build().realizationConditions.map((row) => row.code))
       .toEqual([REALIZATION_PROMOTION_UNREADABLE]);
   });

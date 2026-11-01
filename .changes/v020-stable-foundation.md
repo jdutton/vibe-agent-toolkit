@@ -1294,7 +1294,7 @@
   - `@vibe-agent-toolkit/utils/crawl` and `@vibe-agent-toolkit/resources`: the crawl's `baseSide` and
     `ListingSides` are replaced by the required `outputs` — `settleCrawlRefusal(policy, refusal, outputs)`,
     `crawlSourceFor(root, outputs)`, the `FilesystemCrawlSource` / `GitCrawlSource` constructors,
-    `buildResourcePopulation({ root, outputs, onBlobPopulation })`, `ResourcePopulationSource.enumerate(root, outputs)`;
+    `buildResourcePopulation({ root, outputs })`, `ResourcePopulationSource.enumerate(root, outputs)`;
     the `FilesystemExtentContributor` `sourceFor` and `contentDemand` arguments are required; `projectRootSide` and
     `detectPackagedAgentInstructionFiles`'s `rootSide` are gone.
   - `@vibe-agent-toolkit/claude-marketplace`: `codedUserStateWrite` → `writeUserState(action, mutate)`;

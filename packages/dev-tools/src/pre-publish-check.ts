@@ -41,7 +41,7 @@ import { direntKindFollowingSync, isPathAbsentError, safePath } from '@vibe-agen
 import { runGit } from '@vibe-agent-toolkit/utils/git';
 
 import { PROJECT_ROOT, log, safeExecSync } from './common.js';
-import { KNOWN_DEFECTS_PATH, isPrereleaseVersion, stableTagRefusal } from './known-defects-gate.js';
+import { isPrereleaseVersion, readKnownDefects, releaseReadinessDefectRefusal } from './known-defects-gate.js';
 import { DEPENDENCY_FIELDS } from './resolve-workspace-deps.js';
 import { publishedPackagesInDependencyOrder } from './workspace-graph.js';
 
@@ -665,7 +665,11 @@ if (releaseReadiness) {
   console.log('');
   console.log('Checking known defects that block the stable tag...');
   {
-    const refusal = stableTagRefusal(currentVersion, readFileSync(safePath.join(PROJECT_ROOT, KNOWN_DEFECTS_PATH), 'utf8'));
+    const refusal = releaseReadinessDefectRefusal({
+      version: currentVersion,
+      releaseReadiness,
+      register: () => readKnownDefects(PROJECT_ROOT),
+    });
     if (refusal !== undefined) {
       log(`✗ ${refusal}`, 'red');
       console.log('  Fix each entry (and delete it), or release a prerelease instead.');

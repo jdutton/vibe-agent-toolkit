@@ -155,7 +155,6 @@ async function populationForFixture(): Promise<InventoryPopulation> {
   return buildInventoryPopulation({
     root,
     skillMdPaths: [skillMd('alpha'), skillMd('beta')],
-    onBlobPopulation: () => undefined,
   });
 }
 
@@ -217,7 +216,6 @@ describe('vat inventory: a population that cannot serve the question defers to t
     const partial = await buildInventoryPopulation({
       root,
       skillMdPaths: [skillMd('alpha')],
-      onBlobPopulation: () => undefined,
     });
 
     expect(partial.membersOf(skillMd('beta'))).toBeUndefined();
@@ -238,7 +236,6 @@ describe('vat inventory: a population that cannot serve the question defers to t
     const population = await buildInventoryPopulation({
       root,
       skillMdPaths: [safePath.join(bare, 'SKILL.md')],
-      onBlobPopulation: () => undefined,
     });
 
     expect(population.membersOf(safePath.join(bare, 'SKILL.md'))).toEqual([]);

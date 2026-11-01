@@ -77,7 +77,6 @@ async function populateWith(
   const { projection } = await populate({
     root: fixture.root(),
     registry,
-    onBlobPopulation: () => undefined,
     ...(collections !== undefined && { collections }),
   });
   return projection;

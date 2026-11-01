@@ -1,6 +1,6 @@
 /**
  * What a store HIT on the resources lane serves, held against what a miss
- * derived: the blob-stage observer, the stored conditions, and the membership
+ * derived: the refusal line read from the rows, the stored conditions, and the membership
  * backstops that only a stored row can exercise.
  */
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -11,19 +11,24 @@ import { compareCodeUnits, safePath, toForwardSlash } from '@vibe-agent-toolkit/
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { CONDITION_WITHOUT_REFERENCE } from '../src/index.js';
+import { describeBlobRefusals } from '../src/projection/blob-refusals.js';
 import { ContributorRegistry, type ExtentContribution, type ExtentContributor } from '../src/projection/contributor.js';
 import { extentContextId } from '../src/projection/contributors/context-id.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
-import { crawlSourceFor } from '../src/projection/crawl-source.js';
+import { crawlSourceFor, type CrawlSource } from '../src/projection/crawl-source.js';
 import {
   populate,
   readStoredMembership,
   requestedContributors,
-  type BlobPopulationReport,
   type PopulationCache,
 } from '../src/projection/merge.js';
 import type { ProjectionBase } from '../src/projection/projection.js';
-import { buildResourcePopulation, buildResourceProjection } from '../src/projection/resource-population.js';
+import {
+  __internal,
+  buildResourcePopulation,
+  buildResourceProjection,
+  resourceContributors,
+} from '../src/projection/resource-population.js';
 import type { ExtentKey, ExtentScopedRows } from '../src/projection/store.js';
 import type { RealizationConditionRow } from '../src/schemas/projection-resources.js';
 
@@ -48,12 +53,6 @@ function freshCache(store = new FakeProjectionStore()): PopulationCache {
   return { store, treeUnchanged: () => true, treeHash: 'fixture-tree' };
 }
 
-/** Records every report the blob stage hands its observer. */
-function recorder(): { reports: BlobPopulationReport[]; onBlobPopulation: (report: BlobPopulationReport) => void } {
-  const reports: BlobPopulationReport[] = [];
-  return { reports, onBlobPopulation: (report) => { reports.push(report); } };
-}
-
 function relative(paths: readonly string[]): string[] {
   return paths.map((absolute) => toForwardSlash(safePath.relative(suite.tempDir, absolute)));
 }
@@ -63,35 +62,21 @@ describe('the resources lane on a store hit', () => {
   afterAll(suite.afterAll);
   beforeEach(suite.beforeEach);
 
-  it('buildResourceProjection reports a binary refusal on a miss and never on a hit', async () => {
+  it('buildResourceProjection describes a binary refusal identically on a miss and a hit', async () => {
     await write(DOC, '# A\n');
     await write(BINARY, BINARY_BYTES);
-    const { reports, onBlobPopulation } = recorder();
-    const options = { root: suite.tempDir, cache: freshCache(), onBlobPopulation };
+    const options = { root: suite.tempDir, cache: freshCache() };
 
     const miss = await buildResourceProjection(options);
     expect(miss.outcome.stored).toBe('written');
-    expect(reports).toHaveLength(1);
-    expect(reports[0]?.blobsNotText).toBeGreaterThan(0);
+    const line = describeBlobRefusals(miss.projection);
+    expect(line).toContain('1 not text');
 
+    // A hit derives nothing, so a report built from the run went silent here.
+    // Built from the stored rows, it cannot tell the two apart.
     const hit = await buildResourceProjection(options);
     expect(hit.outcome.stored).toBe('hit');
-    expect(reports).toHaveLength(1);
-  });
-
-  it('buildResourcePopulation hands the caller\'s own observer the refusal on a miss, nothing on a hit', async () => {
-    await write(DOC, '# A\n');
-    await write(BINARY, BINARY_BYTES);
-    const { reports, onBlobPopulation } = recorder();
-    const options = { root: suite.tempDir, outputs: [], cache: freshCache(), onBlobPopulation };
-
-    await buildResourcePopulation(options);
-    expect(reports).toHaveLength(1);
-    expect(reports[0]?.blobsNotText).toBeGreaterThan(0);
-
-    const hit = await buildResourcePopulation(options);
-    expect(hit.outcome.stored).toBe('hit');
-    expect(reports).toHaveLength(1);
+    expect(describeBlobRefusals(hit.projection)).toBe(line);
   });
 
   it('serves the conditions it derived, with no symlink involved', async () => {
@@ -102,7 +87,7 @@ describe('the resources lane on a store hit', () => {
       prose: { include: ['docs/**'], mimeType: 'text/markdown' },
       data: { include: ['docs/**'], mimeType: 'application/json' },
     };
-    const options = { root: suite.tempDir, outputs: [], cache: freshCache(), collections, onBlobPopulation: (): void => undefined };
+    const options = { root: suite.tempDir, outputs: [], cache: freshCache(), collections };
 
     const written = await buildResourcePopulation(options);
     const hit = await buildResourcePopulation(options);
@@ -117,7 +102,7 @@ describe('the resources lane on a store hit', () => {
     // (`DECLINE_IGNORED` drops the first; the second needs a path to vanish
     // mid-run), so the store hands them back itself.
     await write(DOC, '# A\n');
-    const options = { root: suite.tempDir, outputs: [], cache: freshCache(new UnreachableRowsStore()), onBlobPopulation: (): void => undefined };
+    const options = { root: suite.tempDir, outputs: [], cache: freshCache(new UnreachableRowsStore()) };
 
     const written = await buildResourcePopulation(options);
     const hit = await buildResourcePopulation(options);
@@ -179,7 +164,7 @@ describe('readStoredMembership', () => {
     const registry = new ContributorRegistry();
     registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
     registry.register(new ConditioningClassifier());
-    const options = { root: suite.tempDir, registry, cache: freshCache(), onBlobPopulation: (): void => undefined };
+    const options = { root: suite.tempDir, registry, cache: freshCache() };
 
     const { projection } = await populate(options);
     const stored = await readStoredMembership(options, requestedContributors(options));
@@ -187,5 +172,28 @@ describe('readStoredMembership', () => {
     const codes = (rows: readonly RealizationConditionRow[]): string[] => rows.map((row) => `${row.code}\t${row.path}`).sort(compareCodeUnits);
     expect(codes(projection.realizationConditions)).toContain(`${CLASSIFIER_CODE}\t${DOC}`);
     expect(codes(stored?.realizationConditions ?? [])).toEqual(codes(projection.realizationConditions));
+  });
+});
+
+describe('buildResourcePopulation with a classifier that reports a condition', () => {
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(suite.beforeEach);
+
+  it('serves on a hit every condition the derive found, the classifier\'s included', async () => {
+    await write(DOC, '# A\n');
+    const withClassifier = (source: CrawlSource): ReturnType<typeof resourceContributors> => {
+      const contributors = resourceContributors(() => source);
+      contributors.registry.register(new ConditioningClassifier());
+      return contributors;
+    };
+    const options = { root: suite.tempDir, outputs: [], cache: freshCache() };
+
+    const written = await __internal.membershipThrough(options, withClassifier);
+    const hit = await __internal.membershipThrough(options, withClassifier);
+
+    expect(written.conditions.map((row) => row.code)).toContain(CLASSIFIER_CODE);
+    expect(hit.outcome.stored).toBe('hit');
+    expect(hit.conditions).toEqual(written.conditions);
   });
 });

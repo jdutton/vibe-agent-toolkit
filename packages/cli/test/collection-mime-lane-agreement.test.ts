@@ -148,7 +148,6 @@ async function projectionVerdicts(): Promise<Record<string, Verdict>> {
     root: corpus.root(),
     registry,
     collections: COLLECTIONS,
-    onBlobPopulation: () => undefined,
   });
 
   const verdicts: Record<string, Verdict> = {};

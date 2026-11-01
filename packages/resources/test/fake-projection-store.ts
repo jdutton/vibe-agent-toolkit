@@ -303,7 +303,6 @@ export async function populateExtentThrough(
     root,
     registry,
     gitTracker: tracker,
-    onBlobPopulation: () => undefined,
     cache: { store, treeUnchanged: () => true, treeHash },
   });
   return { projection, derived: outcome.stored !== 'hit' };

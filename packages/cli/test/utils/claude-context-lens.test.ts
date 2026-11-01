@@ -16,8 +16,6 @@ vi.mock('../../src/commands/audit/distributed-tree.js', () => ({
 // eslint-disable-next-line import/first -- must come after vi.mock calls
 import { evaluateClaudeContextLens } from '../../src/utils/claude-context-lens.js';
 
-const LOGGER = { info: () => undefined, warn: () => undefined, error: () => undefined, debug: () => undefined };
-
 describe('evaluateClaudeContextLens — publishes the population the claude-context lane combined', () => {
   beforeEach(() => {
     buildClaudeContextPopulationMock.mockReset();
@@ -30,7 +28,6 @@ describe('evaluateClaudeContextLens — publishes the population the claude-cont
 
     const result = await evaluateClaudeContextLens({
       root: safePath.resolve('/project'),
-      logger: LOGGER,
       cache: undefined,
     });
 

@@ -325,7 +325,8 @@ async function validateTopLevelCommand(
       logger,
     );
 
-    logger.info(`✅ vat validate (surfaces: ${phases.map((p) => p.name).join(' → ')})`);
+    // A header, not a verdict: no ✅ before anything has run.
+    logger.info(`🔍 vat validate (surfaces: ${phases.map((p) => p.name).join(' → ')})`);
     await runPhasesUnderOnePopulation(projectRoot, phases, logger, results);
   });
   endWithReport('validate', report, ORCHESTRATOR_FORMAT);

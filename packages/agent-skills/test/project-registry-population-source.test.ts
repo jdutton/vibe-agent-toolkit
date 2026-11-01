@@ -114,8 +114,7 @@ function projectionSource(
       root: boundRoot,
       enumerate: async (root: string) => {
         offeredRoots.push(root);
-        const population = await buildResourcePopulation({ outputs: [], onBlobPopulation: () => undefined,
-          root,
+        const population = await buildResourcePopulation({ outputs: [], root,
           cache: { store, treeUnchanged: () => true, treeHash: 'test-tree-hash' },
         });
         return population;

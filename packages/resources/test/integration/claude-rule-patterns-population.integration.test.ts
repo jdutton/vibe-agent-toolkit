@@ -74,7 +74,6 @@ function root(): string {
 async function populateTree(store?: FakeProjectionStore): Promise<PopulateResult> {
   return buildResourceProjection({
     root: root(),
-    onBlobPopulation: () => undefined,
     ...(store === undefined ? {} : { cache: { store, treeUnchanged: () => true, treeHash: TREE_HASH } }),
   });
 }
@@ -196,8 +195,7 @@ async function populateIgnoredTree(
     // ignored", and every row below would be the non-repository answer.
     expect(gitTracker.isUsable()).toBe(true);
     const { projection } = await buildResourceProjection({
-      root: dir, gitTracker, onBlobPopulation: () => undefined,
-    });
+      root: dir, gitTracker, });
     // The premise: the ignored file is never realized, so no witness can exist.
     expect(projection.resourceRealizations.filter((row) => built.includes(toForwardSlash(row.path)))).toEqual([]);
     expect(projection.resourceRealizations.some((row) => row.path === SCOPED_RULE)).toBe(true);

@@ -133,7 +133,6 @@ beforeAll(async () => {
     root,
     registry,
     contentParsing: CONTENT_PARSING_SKIP,
-    onBlobPopulation: () => undefined,
   }));
 });
 

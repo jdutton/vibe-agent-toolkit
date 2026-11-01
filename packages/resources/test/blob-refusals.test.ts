@@ -1,194 +1,144 @@
 /**
- * The line a user sees when the blob stage declined to derive something.
+ * The line a user sees when a population holds content it cannot vouch for.
  *
- * These are unit tests over literal report objects rather than over a corpus,
- * deliberately: the property under test is the FORMATTING RULE — which buckets
- * are refusals, which are ordinary shapes of a tree, and what a clean run says —
- * and reaching each of those through a real fixture would mean planting a
- * permissions error, a mid-run edit and a parser crash on one machine. The
+ * Unit tests over literal ROWS rather than over a corpus, deliberately: the
+ * property under test is the FORMATTING RULE — which rows are refusals, which
+ * are ordinary shapes of a tree, and what a clean population says — and the
+ * rows are the whole input, so a store hit and a derive describe alike. The
  * end-to-end proof that a really-declined binary reaches this function lives in
  * `projection-blob-not-text-binary.test.ts`, over real PNG bytes.
  */
 import { describe, expect, it } from 'vitest';
 
-import type { BlobPopulationResult } from '../src/projection/blob-population.js';
-import { describeBlobRefusals } from '../src/projection/blob-refusals.js';
-import type { BlobPopulationReport } from '../src/projection/merge.js';
+import {
+  BLOB_CONTENT_CHANGED,
+  BLOB_NOT_TEXT,
+  BLOB_PARSE_FAILED,
+  BLOB_UNREADABLE,
+} from '../src/projection/blob-population.js';
+import { describeBlobRefusals, type BlobRefusalRows } from '../src/projection/blob-refusals.js';
+import type { BlobConditionRow, BlobRow } from '../src/schemas/projection-blobs.js';
+import type { ContentState, ResourceRealizationRow } from '../src/schemas/projection-resources.js';
 
-/**
- * A run that derived `blobsDerived` blobs and refused nothing.
- *
- * Every bucket named explicitly rather than spread from a partial: a bucket
- * added to `BlobPopulationResult` and forgotten here is a type error, which is
- * the only thing that stops this file silently ignoring a new refusal class.
- *
- * Grouped by what each family MEANS for the line under test, since that is the
- * entire subject of this file: four buckets are refusals, five are ordinary
- * shapes of a tree that must stay silent, two are losses inside a derived blob,
- * and three describe a blob that was derived WRONGLY.
- *
- * @param overrides - The buckets this case is about
- * @returns A complete result
- */
-function runOf(overrides: Partial<BlobPopulationResult> = {}): BlobPopulationResult {
-  return {
-    blobsDerived: 10,
-    blobsAlreadyPresent: 0,
-    // Refusals: each one is reported, each one has a `blob_conditions` row.
-    blobsUnreadable: 0,
-    blobsContentChanged: 0,
-    blobsParseFailed: 0,
-    blobsNotText: 0,
-    // Ordinary shapes of a tree, plus deferral. None of these is reported.
-    realizationsSkippedDirectory: 0,
-    realizationsSkippedAbsent: 0,
-    realizationsSkippedDanglingSymlink: 0,
-    realizationsSkippedUnkeyed: 0,
-    realizationsSkippedOversize: 0,
-    realizationsContentDeferred: 0,
-    // Losses inside a blob that WAS derived — no row exists to carry them.
-    headingsSkippedForMissingLine: 0,
-    referencesSkippedForMissingLine: 0,
-    // A blob derived from text that is not what the file says.
-    blobsDecodedWithReplacements: 0,
-    blobsAssumedEncodingWithReplacements: 0,
-    replacementCharacters: 0,
-    ...overrides,
-  };
+/** A derived blob; only the columns this function reads matter. */
+function blob(contentKey: string, overrides: Partial<BlobRow> = {}): BlobRow {
+  return { contentKey, encodingSource: 'assumed', replacementCharacters: 0, ...overrides } as BlobRow;
 }
 
-/** A whole-population report with no post-fixpoint run. */
-function reportOf(overrides: Partial<BlobPopulationResult> = {}): BlobPopulationReport {
-  return runOf(overrides);
+function blobs(count: number, overrides: Partial<BlobRow> = {}): BlobRow[] {
+  return Array.from({ length: count }, (_, index) => blob(`markdown.derived-${index.toString()}`, overrides));
+}
+
+function condition(code: string, key: string): BlobConditionRow {
+  return { blob: key, code, severity: 'warning', message: code, line: null } as BlobConditionRow;
+}
+
+function realization(path: string, contentState: ContentState): ResourceRealizationRow {
+  return { path, contentState } as ResourceRealizationRow;
+}
+
+function rowsOf(rows: Partial<BlobRefusalRows>): BlobRefusalRows {
+  return { blobs: blobs(10), blobConditions: [], resourceRealizations: [], ...rows };
 }
 
 describe('describeBlobRefusals', () => {
-  it('says nothing at all about a run that refused nothing', () => {
+  it('says nothing at all about a population that holds no refusal', () => {
     // Undefined rather than an empty string: a caller that forgets to check
-    // would otherwise print a blank line on every clean run, and a warning
-    // printed unconditionally is one nobody reads.
-    expect(describeBlobRefusals(reportOf())).toBeUndefined();
+    // would otherwise print a blank line on every clean run.
+    expect(describeBlobRefusals(rowsOf({}))).toBeUndefined();
   });
 
   it('names each refused bucket with its count, and how many blobs it looked at', () => {
-    const line = describeBlobRefusals(reportOf({
-      blobsDerived: 1380,
-      blobsNotText: 2,
-      blobsUnreadable: 1,
+    const line = describeBlobRefusals(rowsOf({
+      blobs: blobs(1380),
+      blobConditions: [
+        condition(BLOB_NOT_TEXT, 'markdown.png-1'),
+        condition(BLOB_NOT_TEXT, 'markdown.png-2'),
+        condition(BLOB_UNREADABLE, 'markdown.locked'),
+      ],
     }));
 
     expect(line).toContain('2 not text');
     expect(line).toContain('1 unreadable');
+    // The denominator: "nothing was refused" and "nothing was enumerated" would
+    // otherwise be the same line.
     expect(line).toContain('declined 3 of 1383 blob(s)');
-    // The denominator is the positive control, in the OUTPUT rather than only in
-    // a test: "nothing was refused" and "nothing was enumerated" are otherwise
-    // the same line, and the second is the failure that actually ships.
     expect(line).toContain('blob_conditions');
   });
 
-  it('reports the two skips no condition row can carry, even with no blob declined', () => {
-    // `headingsSkippedForMissingLine` and `referencesSkippedForMissingLine`
-    // describe rows that were NEVER EMITTED. There is nothing in the projection
-    // to query, so if they do not surface here they do not surface anywhere.
-    const line = describeBlobRefusals(reportOf({
-      headingsSkippedForMissingLine: 3,
-      referencesSkippedForMissingLine: 77,
+  it('counts a refused blob once however many paths realize it', () => {
+    const line = describeBlobRefusals(rowsOf({
+      blobConditions: [condition(BLOB_NOT_TEXT, 'markdown.png'), condition(BLOB_NOT_TEXT, 'markdown.png')],
     }));
 
-    expect(line).toContain('3 heading(s)');
-    expect(line).toContain('77 reference(s)');
-    expect(line).toContain('for want of a source line');
-    // No blob was declined, so the "declined N of M" clause must be absent
-    // rather than reading "declined 0".
-    expect(line).not.toContain('declined');
+    expect(line).toContain('declined 1 of 11 blob(s) (1 not text)');
   });
 
-  it('reports realizations that could not be keyed, which no blob bucket covers', () => {
-    // The one realization-level bucket that is a refusal: `contentState:
-    // 'unreadable'` means the read was attempted and threw. There is no content
-    // key, so there is no `blob_conditions` row either.
-    const line = describeBlobRefusals(reportOf({ realizationsSkippedUnkeyed: 4 }));
+  it('reads every refusal code, and ignores a condition that is not a refusal', () => {
+    const line = describeBlobRefusals(rowsOf({
+      blobConditions: [
+        condition(BLOB_CONTENT_CHANGED, 'markdown.a'),
+        condition(BLOB_PARSE_FAILED, 'markdown.b'),
+        condition('PARSE_ODDITY', 'markdown.derived-0'),
+      ],
+    }));
 
-    expect(line).toContain('could not key 4 realization(s)');
+    expect(line).toContain('declined 2 of 12 blob(s) (1 changed under the run, 1 parse failed)');
+    expect(describeBlobRefusals(rowsOf({ blobConditions: [condition('PARSE_ODDITY', 'markdown.derived-0')] })))
+      .toBeUndefined();
   });
 
-  it('reports a realization too large to decode as its own bucket, never as unreadable', () => {
-    // `oversize` is not the filesystem refusing the bytes — the file read fine
-    // and is simply past what a JS string can hold. Naming it apart is the
-    // whole point of the state; folding it into "unreadable" would send a
-    // reader to check permissions on a file that has none wrong.
-    const line = describeBlobRefusals(reportOf({ realizationsSkippedUnkeyed: 2, realizationsSkippedOversize: 1 }));
+  it('reports realizations that could not be keyed, unreadable and too large apart', () => {
+    const line = describeBlobRefusals(rowsOf({
+      resourceRealizations: [
+        realization('locked.md', 'unreadable'),
+        realization('other.md', 'unreadable'),
+        realization('huge.md', 'oversize'),
+      ],
+    }));
 
     expect(line).toContain('could not key 3 realization(s) (2 unreadable, 1 too large to decode)');
   });
 
-  it('reports an oversize realization alone, with no unreadable count beside it', () => {
-    const line = describeBlobRefusals(reportOf({ realizationsSkippedOversize: 1 }));
+  it('counts an unkeyed path once however many extents realize it', () => {
+    const line = describeBlobRefusals(rowsOf({
+      resourceRealizations: [realization('huge.md', 'oversize'), realization('huge.md', 'oversize')],
+    }));
 
     expect(line).toContain('could not key 1 realization(s) (1 too large to decode)');
     expect(line).not.toContain('unreadable');
   });
 
   it('stays silent for the ordinary shapes of a tree, which are not refusals', () => {
-    // Directories, absent paths, dangling symlinks and DEFERRED content are all
-    // non-zero on any real repository — `realizationsContentDeferred`'s own
-    // docstring calls a non-zero value "the demand-driven keying design doing
-    // its job". Reporting them would fire this line on every run, which is how
-    // a warning becomes wallpaper.
-    expect(describeBlobRefusals(reportOf({
-      realizationsSkippedDirectory: 2096,
-      realizationsSkippedAbsent: 12,
-      realizationsSkippedDanglingSymlink: 1,
-      realizationsContentDeferred: 8548,
-      blobsAlreadyPresent: 4425,
+    expect(describeBlobRefusals(rowsOf({
+      resourceRealizations: [
+        realization('docs', 'none'),
+        realization('deferred.md', 'deferred'),
+        realization('a.md', 'keyed'),
+      ],
     }))).toBeUndefined();
   });
 
-  it('describes the post-fixpoint run separately rather than summing the two', () => {
-    // `BlobPopulationReport` states the rule this enforces: `blobsAlreadyPresent`
-    // counts nearly the whole corpus on the second pass, so there is no honest
-    // arithmetic between the runs.
-    const line = describeBlobRefusals({
-      ...runOf({ blobsDerived: 1380, blobsNotText: 2 }),
-      afterClosurePromotion: runOf({
-        blobsDerived: 0,
-        blobsAlreadyPresent: 1382,
-        blobsUnreadable: 1,
-      }),
-    });
-
-    expect(line).toContain('blob derivation declined 2 of 1382 blob(s)');
-    expect(line).toContain('after promotion, declined 1 of 1383 blob(s)');
-    // Never a single fused figure — 2 and 1 stay 2 and 1.
-    expect(line).not.toContain('declined 3');
-  });
-
   it('names the blobs it mis-decoded, how many characters were lost, and that they were guesses', () => {
-    // The failure this whole column set exists for: the blob WAS derived, so no
-    // condition row and no refusal bucket describes it. Without this clause a
-    // corpus of mojibake reports exactly what a clean corpus reports.
-    const line = describeBlobRefusals(reportOf({
-      blobsDerived: 1380,
-      blobsDecodedWithReplacements: 3,
-      blobsAssumedEncodingWithReplacements: 3,
-      replacementCharacters: 3200,
+    const line = describeBlobRefusals(rowsOf({
+      blobs: [...blobs(1377), ...blobs(3, { replacementCharacters: 1000 }).map((row, index) => ({ ...row, contentKey: `markdown.bad-${index.toString()}` }))],
     }));
 
-    expect(line).toContain('mis-decoded 3 of 1380 blob(s) into 3200 replacement character(s)');
+    expect(line).toContain('mis-decoded 3 of 1380 blob(s) into 3000 replacement character(s)');
     expect(line).toContain('all with no BOM, so the encoding was assumed');
-    // The pointer names `blobs`, not `blob_conditions`: a mis-decoded blob has
-    // no condition row, so the other pointer would send a reader to an empty
-    // result set.
+    // A mis-decoded blob has no condition row, so the pointer names `blobs`.
     expect(line).toContain('replacementCharacters > 0');
   });
 
   it('separates the blobs whose encoding was a FACT from the ones that were guessed', () => {
-    // A BOM'd blob that still decoded badly is a different diagnosis — corrupt
-    // bytes in a known encoding, not the wrong encoding — and the remedy differs.
-    const line = describeBlobRefusals(reportOf({
-      blobsDecodedWithReplacements: 4,
-      blobsAssumedEncodingWithReplacements: 1,
-      replacementCharacters: 12,
+    const line = describeBlobRefusals(rowsOf({
+      blobs: [
+        ...blobs(6),
+        blob('markdown.bom-1', { encodingSource: 'bom', replacementCharacters: 3 }),
+        blob('markdown.bom-2', { encodingSource: 'bom', replacementCharacters: 3 }),
+        blob('markdown.bom-3', { encodingSource: 'bom', replacementCharacters: 3 }),
+        blob('markdown.guess', { replacementCharacters: 3 }),
+      ],
     }));
 
     expect(line).toContain('mis-decoded 4 of 10 blob(s) into 12 replacement character(s)');
@@ -196,38 +146,18 @@ describe('describeBlobRefusals', () => {
   });
 
   it('says the encoding was a fact when every mis-decoded blob carried a BOM', () => {
-    const line = describeBlobRefusals(reportOf({
-      blobsDecodedWithReplacements: 2,
-      blobsAssumedEncodingWithReplacements: 0,
-      replacementCharacters: 9,
+    const line = describeBlobRefusals(rowsOf({
+      blobs: [...blobs(8), blob('markdown.bom', { encodingSource: 'bom', replacementCharacters: 9 })],
     }));
 
     expect(line).toContain('all with a BOM, so the encoding was a fact and the bytes are corrupt');
   });
 
   it('stays silent when every blob decoded cleanly, however many were assumed', () => {
-    // `encodingSource: 'assumed'` is true of every ordinary UTF-8 file, so it is
-    // deliberately NOT a trigger. A line that fires on every corpus is wallpaper,
-    // and then the mojibake case goes unread with it.
-    const line = describeBlobRefusals(reportOf({ blobsDerived: 4425 }));
-    expect(line).toBeUndefined();
-    // Positive control: the same report with one mis-decode DOES speak, so the
-    // silence above is the rule firing correctly rather than the clause being
-    // unreachable.
-    expect(describeBlobRefusals(reportOf({
-      blobsDerived: 4425,
-      blobsDecodedWithReplacements: 1,
-      blobsAssumedEncodingWithReplacements: 1,
-      replacementCharacters: 1,
+    expect(describeBlobRefusals(rowsOf({ blobs: blobs(4425) }))).toBeUndefined();
+    // Positive control: one mis-decode among them DOES speak.
+    expect(describeBlobRefusals(rowsOf({
+      blobs: [...blobs(4424), blob('markdown.bad', { replacementCharacters: 1 })],
     }))).toContain('mis-decoded 1 of 4425 blob(s)');
-  });
-
-  it('stays silent when a post-fixpoint run happened and refused nothing', () => {
-    // A second run is not itself a refusal: promotion succeeding is the design
-    // working, and this line is only about what was declined.
-    expect(describeBlobRefusals({
-      ...runOf(),
-      afterClosurePromotion: runOf({ blobsDerived: 1, blobsAlreadyPresent: 10 }),
-    })).toBeUndefined();
   });
 });

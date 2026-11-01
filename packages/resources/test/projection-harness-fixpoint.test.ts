@@ -51,7 +51,6 @@ function populateChain(maxIterations?: number) {
     root: suite.tempDir,
     registry,
     parameters: { [claudeImportContributorId(START)]: claudeImportExtentDeclaration(START) as unknown as JsonValue },
-    onBlobPopulation: () => undefined,
     ...(maxIterations === undefined ? {} : { maxIterations }),
   });
 }

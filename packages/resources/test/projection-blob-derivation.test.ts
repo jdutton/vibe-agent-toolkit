@@ -102,7 +102,6 @@ async function populateFixture(
     root: suite.tempDir,
     registry,
     parameters: CLOSURE_DECLARATION,
-    onBlobPopulation: () => undefined,
     ...(contentParsing === undefined ? {} : { contentParsing }),
   });
   return projection;
@@ -130,21 +129,6 @@ describe('populate blob derivation', () => {
     // `contentKey` is deliberately included: the realization stratum still keys
     // its bytes, so a skip that quietly stopped keying would be caught here.
     expect(skipped.resourceRealizations).toStrictEqual(derived.resourceRealizations);
-  });
-
-  it('does not call onBlobPopulation when the stage did not run', async () => {
-    const reports: unknown[] = [];
-
-    await populate({
-      root: suite.tempDir,
-      registry: filesystemOnly(),
-      contentParsing: CONTENT_PARSING_SKIP,
-      onBlobPopulation: (report) => reports.push(report),
-    });
-
-    // Never a zeroed report: "did not run" and "ran and derived nothing" are
-    // different facts and a zeroed object cannot tell them apart.
-    expect(reports).toStrictEqual([]);
   });
 
   it('refuses to skip while a closure contributor is registered, naming it', async () => {

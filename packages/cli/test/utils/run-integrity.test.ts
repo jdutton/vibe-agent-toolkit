@@ -8,7 +8,7 @@
 import { buildErrorReport, buildReport, type Finding, type Report } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
-import { RUN_INTEGRITY_CODE, withRunIntegrity } from '../../src/utils/run-integrity.js';
+import { RUN_INTEGRITY_CODE, verdictBanner, withRunIntegrity } from '../../src/utils/run-integrity.js';
 
 const GATE = { strict: false };
 
@@ -89,5 +89,19 @@ describe('withRunIntegrity', () => {
 
     expect(published.findings[0]?.message).toContain('0 files');
     expect(published.findings[0]?.message).toContain(EXAMINED.whenZero);
+  });
+});
+
+describe('verdictBanner', () => {
+  it('lets a run that examined something print its own success line', () => {
+    expect(verdictBanner(1, '\n✅ All validations passed')).toBe('\n✅ All validations passed');
+  });
+
+  it('never prints a success line over a run that examined nothing, keeping its leading whitespace', () => {
+    const banner = verdictBanner(0, '\n✅ All validations passed');
+
+    expect(banner.startsWith('\n')).toBe(true);
+    expect(banner).not.toMatch(/passed|success|complete|✅/iu);
+    expect(banner).toContain('Not a verdict');
   });
 });

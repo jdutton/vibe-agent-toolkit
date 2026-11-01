@@ -99,8 +99,7 @@ async function buildIgnoredFixture(): Promise<GitTracker> {
  */
 async function populateCapturing(tracker: GitTracker): Promise<CapturingStore> {
   const store = new CapturingStore();
-  await buildResourcePopulation({ outputs: [], onBlobPopulation: () => undefined,
-    root: suite.tempDir,
+  await buildResourcePopulation({ outputs: [], root: suite.tempDir,
     gitTracker: tracker,
     cache: { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH },
   });
@@ -109,8 +108,7 @@ async function populateCapturing(tracker: GitTracker): Promise<CapturingStore> {
 
 /** The population as root-relative, forward-slashed paths — the readable unit. */
 async function populationOf(gitTracker?: GitTracker): Promise<string[]> {
-  const { paths } = await buildResourcePopulation({ outputs: [], onBlobPopulation: () => undefined,
-    root: suite.tempDir,
+  const { paths } = await buildResourcePopulation({ outputs: [], root: suite.tempDir,
     ...(gitTracker !== undefined && { gitTracker }),
   });
   // Code-unit order, never `localeCompare`: the expected arrays below are
@@ -148,7 +146,7 @@ describe('buildResourcePopulation', () => {
     const cache = { store: new ReorderingStore(), treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
     const source: ResourcePopulationSource = {
       root: suite.tempDir,
-      enumerate: (root, outputs) => buildResourcePopulation({ outputs, root, cache, onBlobPopulation: () => undefined }),
+      enumerate: (root, outputs) => buildResourcePopulation({ outputs, root, cache }),
     };
     const crawlOnce = (): Promise<RegistryCrawl> =>
       new ResourceRegistry({ baseDir: suite.tempDir }).crawl({
@@ -172,8 +170,8 @@ describe('buildResourcePopulation', () => {
     createSymlink(cap, 'missing-two.md', safePath.join(suite.tempDir, 'dangling-y.md'));
     const cache = { store: new ReorderingStore(), treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
 
-    const written = await buildResourcePopulation({ outputs: [], onBlobPopulation: () => undefined, root: suite.tempDir, cache });
-    const hit = await buildResourcePopulation({ outputs: [], onBlobPopulation: () => undefined, root: suite.tempDir, cache });
+    const written = await buildResourcePopulation({ outputs: [], root: suite.tempDir, cache });
+    const hit = await buildResourcePopulation({ outputs: [], root: suite.tempDir, cache });
 
     expect(hit.outcome.stored).toBe('hit');
     expect(written.conditions.map((row) => row.path)).toEqual(['dangling-y.md', 'dangling-z.md']);
@@ -185,9 +183,9 @@ describe('buildResourcePopulation', () => {
     const store = new FakeProjectionStore();
     const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
 
-    const uncached = await buildResourcePopulation({ outputs: [], onBlobPopulation: () => undefined, root: suite.tempDir });
-    const written = await buildResourcePopulation({ outputs: [], onBlobPopulation: () => undefined, root: suite.tempDir, cache });
-    const hit = await buildResourcePopulation({ outputs: [], onBlobPopulation: () => undefined, root: suite.tempDir, cache });
+    const uncached = await buildResourcePopulation({ outputs: [], root: suite.tempDir });
+    const written = await buildResourcePopulation({ outputs: [], root: suite.tempDir, cache });
+    const hit = await buildResourcePopulation({ outputs: [], root: suite.tempDir, cache });
 
     expect(uncached.outcome).toEqual({ population: 'derived', stored: 'no-store' });
     expect(written.outcome).toEqual({ population: 'derived', stored: 'written' });
@@ -338,7 +336,7 @@ describe('buildResourceProjection', () => {
     await write(DOC_A, '# A\n');
     const store = new FakeProjectionStore();
     const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
-    const options = { root: suite.tempDir, cache, onBlobPopulation: () => undefined };
+    const options = { root: suite.tempDir, cache };
 
     const derived = await buildResourceProjection(options);
     const served = await buildResourceProjection(options);
@@ -356,7 +354,6 @@ describe('buildResourceProjection', () => {
 
     const { projection } = await buildResourceProjection({
       root: suite.tempDir,
-      onBlobPopulation: () => undefined,
     });
 
     expect(projection.blobs.length).toBeGreaterThan(0);
@@ -378,7 +375,6 @@ describe('buildResourceProjection', () => {
 
     const { projection } = await buildResourceProjection({
       root: suite.tempDir,
-      onBlobPopulation: () => undefined,
     });
     const realizedFiles = projection.resourceRealizations
       .filter((row) => !row.isDirectory && row.exists && !row.gitignored)
@@ -398,7 +394,6 @@ describe('buildResourceProjection', () => {
     const { projection } = await buildResourceProjection({
       root: suite.tempDir,
       gitTracker: tracker,
-      onBlobPopulation: () => undefined,
     });
     const realized = projection.resourceRealizations.map((row) => toForwardSlash(row.path));
 
@@ -419,7 +414,6 @@ describe('buildResourceProjection', () => {
 
     const { projection } = await buildResourceProjection({
       root: suite.tempDir,
-      onBlobPopulation: () => undefined,
     });
 
     expect(projection.claudeRulePatterns.map((row) => [row.pattern, row.status])).toEqual([
@@ -454,15 +448,31 @@ describe('one question for every resources lane', () => {
       return store.keysRead.at(-1);
     };
     const root = suite.tempDir;
-    const onBlobPopulation = (): void => undefined;
 
-    const membership = await keyOf((cache) => buildResourcePopulation({ outputs: [], root, cache, onBlobPopulation }));
-    const query = await keyOf((cache) => buildResourceProjection({ root, cache, onBlobPopulation }));
-    const lens = await keyOf((cache) => buildClaudeContextPopulation({ root, cache, onBlobPopulation }));
+    const membership = await keyOf((cache) => buildResourcePopulation({ outputs: [], root, cache }));
+    const query = await keyOf((cache) => buildResourceProjection({ root, cache }));
+    const lens = await keyOf((cache) => buildClaudeContextPopulation({ root, cache }));
 
     expect(membership).toBeDefined();
     expect(query).toBe(membership);
     expect(lens).toBe(membership);
+  });
+
+  it('runs every resources-lane contributor on the claude-context lane too', async () => {
+    // A hand-kept copy of the contributor set drifts silently: the lens would
+    // answer about a population the resources verbs never built.
+    await write(DOC_A, '# A\n');
+    await write('CLAUDE.md', '# Root\n');
+    const root = suite.tempDir;
+    const contributorIds = (projection: { zoneProvenance: readonly { contributorId: string }[] }): Set<string> =>
+      new Set(projection.zoneProvenance.map((row) => row.contributorId));
+
+    const resources = contributorIds((await buildResourceProjection({ root })).projection);
+    const lens = contributorIds((await buildClaudeContextPopulation({ root })).projection);
+
+    // The discriminator: the classifiers as well as the enumerator.
+    expect(resources.size).toBeGreaterThan(1);
+    expect([...resources].filter((id) => !lens.has(id))).toEqual([]);
   });
 
   it('serves membership from the store while the full lane misses on an evicted blob, then writes', async () => {
@@ -472,7 +482,7 @@ describe('one question for every resources lane', () => {
     const gitTracker = await buildIgnoredFixture();
     const store = new FakeProjectionStore();
     const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
-    const options = { root: suite.tempDir, gitTracker, cache, onBlobPopulation: (): void => undefined };
+    const options = { root: suite.tempDir, gitTracker, cache };
     const { projection } = await buildResourceProjection(options);
     const evicted = projection.resourceRealizations.find((row) => row.path === COMMITTED)?.contentKey;
     expect(evicted).toEqual(expect.any(String));

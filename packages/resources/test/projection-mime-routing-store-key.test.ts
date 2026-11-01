@@ -142,7 +142,6 @@ async function storeKeyFor(
     root: fixture.root(),
     registry,
     contentParsing: CONTENT_PARSING_SKIP,
-    onBlobPopulation: () => undefined,
     cache: { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH },
     ...(collections !== undefined && { collections }),
   });
@@ -253,7 +252,6 @@ async function ambientKeysAcrossBothPasses(
   await buildClaudeContextPopulation({
     root: twoPass.root(),
     cache: { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH },
-    onBlobPopulation: () => undefined,
     ...(collections !== undefined && { collections }),
   });
 

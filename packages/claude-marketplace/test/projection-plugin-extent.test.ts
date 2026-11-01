@@ -60,7 +60,7 @@ async function project(root: string): Promise<Projection> {
   registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
   registry.register(new PluginExtentContributor());
   registry.register(new MarketplaceExtentContributor());
-  return (await populate({ root, registry, onBlobPopulation: () => undefined })).projection;
+  return (await populate({ root, registry })).projection;
 }
 
 /** The extent context of one kind whose id carries `discriminator`. */
@@ -245,7 +245,6 @@ describe('the closure fixpoint', () => {
         root: MARKETPLACE_ROOT,
         registry,
         maxIterations: 2,
-        onBlobPopulation: () => undefined,
       }),
     ).resolves.toBeDefined();
   }, 60_000);

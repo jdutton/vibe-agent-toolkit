@@ -838,7 +838,6 @@ async function populateCorpus(
     registry,
     parameters,
     gitTracker,
-    onBlobPopulation: () => undefined,
   });
 
   // From provenance rather than by re-deriving `extentContextId`: the row names

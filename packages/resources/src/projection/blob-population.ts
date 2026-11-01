@@ -348,10 +348,10 @@ export interface BlobPopulationResult {
    * minority. A `warning` on four documents in five is wallpaper within a day,
    * and it trains readers to ignore the table the four genuine refusal codes
    * depend on being read; an `info` row is the same five columns of restated key,
-   * merely quieter. `describeBlobRefusals` deliberately does not print this
-   * counter either, for the reason that module already gives about
-   * `realizationsContentDeferred`: a line that fires on every run over every
-   * repository is not a signal.
+   * merely quieter. `describeBlobRefusals` deliberately does not report it
+   * either, for the reason that module already gives about the `deferred`
+   * content state: a line that fires on every run over every repository is not
+   * a signal.
    */
   readonly blobsWithoutParser: number;
   /**

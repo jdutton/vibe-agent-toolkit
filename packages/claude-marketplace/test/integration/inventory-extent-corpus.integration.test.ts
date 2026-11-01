@@ -338,7 +338,6 @@ async function populateCorpus(
     root,
     registry,
     parameters,
-    onBlobPopulation: () => undefined,
     ...(gitTracker !== undefined && { gitTracker }),
   });
 

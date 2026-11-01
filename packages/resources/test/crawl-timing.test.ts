@@ -125,7 +125,6 @@ async function runPopulation(onTiming?: (timing: ContributorTiming) => void): Pr
     registry: registryWithClosure(EXTENT_NAME, SKILL_KIND),
     parameters: { [CLOSURE_DRIVER_ID]: closureDeclaration() },
     ...(onTiming === undefined ? {} : { onContributorTiming: onTiming }),
-    onBlobPopulation: () => undefined,
   });
 }
 
@@ -280,7 +279,6 @@ describe('crawl timing seam', () => {
               root,
               registry: registryWithClosure(EXTENT_NAME, SKILL_KIND),
               parameters: { [CLOSURE_DRIVER_ID]: closureDeclaration() },
-              onBlobPopulation: () => undefined,
             });
             return { paths: [], conditions: [], outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem' };
           },
@@ -393,7 +391,6 @@ describe('crawl timing seam', () => {
       await populate({
         root: suite.tempDir,
         registry: contributors,
-        onBlobPopulation: () => undefined,
       });
       const snapshot = __readCrawlTimingSnapshot();
 

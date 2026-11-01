@@ -137,7 +137,6 @@ try {
     onContributorTiming: (timing) => {
       contributorRuns.push(`${timing.contributorId}@${timing.pass}`);
     },
-    onBlobPopulation: () => undefined,
     // The corpus is a fixture nobody edits mid-run, and `treeHash` is the
     // test's own label rather than a git tree, so the tree never moves.
     cache: { store, treeHash, treeUnchanged: () => true },

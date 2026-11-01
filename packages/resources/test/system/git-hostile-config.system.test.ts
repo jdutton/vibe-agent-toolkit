@@ -950,7 +950,6 @@ describe.skipIf(!HOST_GATES.filter.met)(gatedTitle('a clean/smudge filter on one
       root: fixture.repo,
       gitTracker,
       cache: { store, treeUnchanged: () => true, treeHash: 'hostile-filter' },
-      onBlobPopulation: (): void => undefined,
     });
 
     // Membership miss writes; the query lane is served what it wrote.

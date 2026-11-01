@@ -99,6 +99,41 @@ function corpusWith(name: string, plant: (corpus: string) => void): string {
   return corpus;
 }
 
+/** The start of the line naming what a population declined to derive. */
+const REFUSAL_LINE = 'blob derivation declined';
+
+/**
+ * A committed corpus with the two broken links and one tracked PNG the blob
+ * stage declines as not text.
+ *
+ * @param name - The corpus directory's name under scratch
+ * @param config - A `vibe-agent-toolkit.config.yaml` to commit with it, if any
+ * @returns The corpus root
+ */
+function binaryCorpus(name: string, config?: string): string {
+  return corpusWith(name, (root) => {
+    writeFileSync(safePath.join(root, 'docs', 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]));
+    if (config !== undefined) writeFileSync(safePath.join(root, 'vibe-agent-toolkit.config.yaml'), config, 'utf-8');
+  });
+}
+
+/**
+ * The isolated environment every run in this file gets, against one pinned store.
+ *
+ * @param storeDir - The store directory
+ * @param lane - Which lane `VAT_RESOURCES_CRAWL` selects
+ * @returns The environment
+ */
+function storeEnv(storeDir: string, lane: 'projection' | 'walk' = 'projection'): Record<string, string> {
+  return {
+    ...fakeHomeEnv(safePath.join(scratch, 'home')),
+    TMPDIR: safePath.join(scratch, 'tmp'),
+    VAT_RESOURCES_CRAWL: lane,
+    VAT_PROJECTION_STORE: 'sqlite',
+    [PROJECTION_STORE_DIR_ENV]: storeDir,
+  };
+}
+
 /**
  * Run `vat resources validate` once against a pinned store.
  *
@@ -116,13 +151,7 @@ async function validateOnce(
 ): Promise<Run> {
   const result = await executeCli(binPath, ['resources', verb, '--format', 'json'], {
     cwd: corpus,
-    env: {
-      ...fakeHomeEnv(safePath.join(scratch, 'home')),
-      TMPDIR: safePath.join(scratch, 'tmp'),
-      VAT_RESOURCES_CRAWL: lane,
-      VAT_PROJECTION_STORE: 'sqlite',
-      [PROJECTION_STORE_DIR_ENV]: storeDir,
-    },
+    env: storeEnv(storeDir, lane),
   });
   return {
     status: result.status,
@@ -207,33 +236,34 @@ describe('vat resources validate twice against one pinned store (system test)', 
     ]);
   });
 
-  it('serves vat resources check from the population vat resources validate wrote', async () => {
-    // One question for every resources lane: membership and the full lane share a key.
-    const corpus = corpusWith('cross-verb', () => undefined);
+  it('serves vat resources check from what validate wrote, and reports the binary validate declined', async () => {
+    // One question for every resources lane: membership and the full lane share
+    // a key, so the check is a store HIT, which derives nothing. A query user
+    // can act on `blob_conditions`; a membership user cannot. The report is a
+    // function of the stored rows, so the check must still name the binary the
+    // validate that wrote the store declined.
+    const corpus = binaryCorpus('binary');
     const storeDir = `${corpus}-store`;
 
     const validated = await validateOnce(corpus, storeDir);
     const checked = await validateOnce(corpus, storeDir, 'projection', 'check');
 
     expect(validated.document.data['population']).toBe('derived');
+    expect(validated.stderr).not.toContain(REFUSAL_LINE);
     expect(checked.document.data['population'], checked.stderr).toBe('store');
+    expect(checked.stderr).toContain(`${REFUSAL_LINE} 1 of`);
+    expect(checked.stderr).toContain('1 not text');
   });
 
-  it('reports a tracked binary on a cold check, and says nothing on a cold validate', async () => {
-    // The blob stage declines the binary. A query user can act on
-    // `blob_conditions`; a membership user cannot, and a report that only a
-    // cold run prints is noise to them.
-    const corpus = corpusWith('binary', (root) => {
-      writeFileSync(safePath.join(root, 'docs', 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]));
-    });
+  it('reports a tracked binary once under vat validate, from the checks phase', async () => {
+    // The resources phase is a membership lane and stays quiet; the checks child
+    // is served the population that phase wrote, and reports from its rows.
+    // `vat validate` runs only the phases a config declares.
+    const corpus = binaryCorpus('binary-validate', 'resources: {}\n');
 
-    const validated = await validateOnce(corpus, `${corpus}-validate-store`);
-    const checked = await validateOnce(corpus, `${corpus}-check-store`, 'projection', 'check');
+    const result = await executeCli(binPath, ['validate'], { cwd: corpus, env: storeEnv(`${corpus}-store`) });
 
-    expect(validated.document.data['population']).toBe('derived');
-    expect(validated.stderr).not.toContain('blob derivation');
-    expect(checked.document.data['population']).toBe('derived');
-    expect(checked.stderr).toContain('blob derivation');
+    expect(result.stderr.split(REFUSAL_LINE).length - 1, result.stderr).toBe(1);
   });
 
   it('publishes population: null when the walk lane answered', async () => {
