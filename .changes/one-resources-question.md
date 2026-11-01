@@ -7,7 +7,10 @@
   `vat validate`'s checks phase is served the population its resources phase wrote.
 - **A cold `vat resources scan`/`validate`, `vat skills validate`/`build`, `vat claude plugin build`
   or `vat rag index` now runs the blob stage**: it reads, hashes and parses every non-ignored file,
-  where it used to read none. Cold cost is <MEASURED>× the previous release on the same tree; a
+  where it used to read none. On a large adopter monorepo a cold `vat resources validate` measured
+  1.01× v0.2.0-rc.11 (16.2 s vs 16.0 s median, 5 interleaved rounds), and the `vat skills validate`
+  that follows it fell from 4.9 s to 2.7 s because it now hits what validate stored; a cold
+  `vat validate` (19.6 s) undercuts rc.11's separate validate, check and skills runs (28.9 s). A
   warm run is a store hit. Peak memory on that cold run grows with the tree's total text, because
   the run's content cache holds every file it keyed.
 - **With the store off (`VAT_PROJECTION_STORE=off`) or outside a git repository**, nothing is shared
