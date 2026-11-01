@@ -382,6 +382,8 @@ export async function buildClaudeContextPopulation(options: TreePopulationOption
   }
 
   const { projection, outcome } = await populate(populateOptions);
+  // Two store reads, so they can disagree: a run filing this extent between them
+  // leaves a crawled root list behind a hit (claude-context-store-roots pins it).
   return { projection, population: claudeContextProvenance(discovered.population, outcome) };
 }
 

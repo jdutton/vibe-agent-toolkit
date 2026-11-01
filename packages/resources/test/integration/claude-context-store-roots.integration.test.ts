@@ -42,6 +42,7 @@ import {
 import { ClaudeRulesScopeContributor } from '../../src/projection/contributors/claude-rules-scope.js';
 import { DISCARD_BLOB_POPULATION, type PopulationCache } from '../../src/projection/merge.js';
 import type { Projection } from '../../src/projection/projection.js';
+import type { ExtentKey, ExtentScopedRows } from '../../src/projection/store.js';
 import { FakeProjectionStore } from '../fake-projection-store.js';
 import { plantTree, razeTree } from '../helpers/temp-corpus.js';
 
@@ -77,6 +78,19 @@ async function populateThrough(store: FakeProjectionStore): Promise<ClaudeContex
     cache,
     onBlobPopulation: DISCARD_BLOB_POPULATION,
   });
+}
+
+/** A store whose next extent read misses once, as a read taken before a concurrent write. */
+class LateStore extends FakeProjectionStore {
+  missNext = false;
+  missed = 0;
+
+  override readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
+    if (!this.missNext) return super.readExtent(key);
+    this.missNext = false;
+    this.missed += 1;
+    return Promise.resolve(undefined);
+  }
 }
 
 /** Every claude-import extent the projection registered. */
@@ -142,6 +156,23 @@ describe('buildClaudeContextPopulation root discovery', () => {
     ].filter((contributor) => contributor.registrationQuestion !== undefined);
 
     expect(declared.map((contributor) => contributor.id)).toEqual([]);
+  });
+
+  it('is derived when the root list was crawled, even though the real pass hit the store', async () => {
+    root = await plantTree('vat-claude-store-roots-', TREE);
+    const store = new LateStore();
+    await populateThrough(store);
+
+    // The two passes read the store separately, so a concurrent run can file
+    // the extent between them: the first read misses as if it came before that write.
+    store.missNext = true;
+    const second = await populateThrough(store);
+
+    expect(store.missed).toBe(1);
+    // The real pass was served, not re-derived: nothing new was filed.
+    expect(store.writeExtentCalls).toBe(1);
+    expect(importContexts(second.projection)).toHaveLength(4);
+    expect(second.population).toBe('derived');
   });
 
   it('crawls again once the store cannot answer for this tree', async () => {

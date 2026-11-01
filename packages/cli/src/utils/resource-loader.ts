@@ -12,6 +12,7 @@ import {
   type CrawlPopulation,
   type CrawlSourceKind,
   type PopulationCache,
+  type PopulationOutcome,
   type ProjectConfig,
   type ResourcePopulationSource,
   type ResourceRegistryOptions,
@@ -42,7 +43,7 @@ export type ResourceCrawlLane = CrawlPopulation['lane'];
  * @param observation - The load's one observation
  * @returns `'store'`, `'derived'` or `null`
  */
-export function publishedPopulation(observation: CrawlPopulation): 'store' | 'derived' | null {
+export function publishedPopulation(observation: CrawlPopulation): PopulationOutcome['population'] | null {
   return observation.lane === 'walk' ? null : observation.outcome.population;
 }
 

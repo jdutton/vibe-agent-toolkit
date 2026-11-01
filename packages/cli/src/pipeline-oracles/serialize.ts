@@ -80,7 +80,7 @@ export function renderEnumerationSnapshot(snapshot: EnumerationSnapshot): string
     lines.push(`${String(index)}\t${path}`);
   }
 
-  lines.push('', '## collisions (first-added-wins drops, in arrival order)');
+  lines.push('', '## collisions (first-added-wins drops, in admission order)');
   for (const collision of snapshot.collisions) {
     lines.push(`${collision.id}\twon=${collision.existingPath}\tdropped=${collision.conflictingPath}`);
   }

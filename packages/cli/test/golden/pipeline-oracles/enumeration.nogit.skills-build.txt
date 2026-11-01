@@ -90,7 +90,7 @@ buildError: -
 36	twins/left/same.md
 37	twins/right/same.md
 
-## collisions (first-added-wins drops, in arrival order)
+## collisions (first-added-wins drops, in admission order)
 dup-hyphen-note-md	won=dup-hyphen/note.md	dropped=dup/hyphen-note.md
 
 ## restatementDrift

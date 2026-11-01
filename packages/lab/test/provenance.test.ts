@@ -34,10 +34,11 @@ const RC11_CHECK = report(RC11_CHECK_DATA);
 /**
  * The candidate's `validate`, every phase served from the store.
  *
- * The resources phase's `data.population` is the field S2 added to the
- * resources-validate report. The CLI's report schemas are internal to the CLI
- * (and the lab measures several builds), so this fixture cannot be parsed
- * through the producer's schema.
+ * Modelled AHEAD of S2: the resources phase's `data.population` is a field
+ * today's `.strict()` resources-validate report schema cannot emit, so a real
+ * candidate run reads as 'absent' here until S2 adds it. The CLI's report
+ * schemas are internal to the CLI (and the lab measures several builds), so
+ * this fixture cannot be parsed through the producer's schema.
  */
 const CAND_VALIDATE_PHASES = [
   { name: 'resources', status: 'success', examined: 1, summary: {}, data: { population: 'store' } },
@@ -64,7 +65,7 @@ const READ_CELLS: readonly Cell[] = [
     missing: report(withoutPopulation(RC11_CHECK_DATA)),
   },
   {
-    cell: 'cand-C-warm (validate; resources-phase population)',
+    cell: 'cand-C-warm (validate; resources-phase population pending S2)',
     state: 'warm',
     reader: 'validate',
     correct: CAND_VALIDATE,
@@ -144,9 +145,8 @@ describe('provenanceViolation — cells that read a document', () => {
 
 describe('provenanceViolation — cells that read nothing', () => {
   const NOTHING: ReadonlyArray<{ readonly cell: string; readonly state: CacheMode; readonly reader: ProvenanceReader; readonly stdout: string }> = [
-    { cell: 'rc11-A-warm (resources validate: no population field)', state: 'warm', reader: 'resources-validate', stdout: report({ filesScanned: 1 }) },
-    { cell: 'rc11-A-warm (skills validate)', state: 'warm', reader: 'none', stdout: '' },
-    { cell: 'rc11-A-cold (resources validate, skills validate)', state: 'cold', reader: 'resources-validate', stdout: '' },
+    { cell: 'rc11-A-warm (resources validate, skills validate)', state: 'warm', reader: 'none', stdout: '' },
+    { cell: 'rc11-A-cold (resources validate, skills validate)', state: 'cold', reader: 'none', stdout: '' },
     { cell: 'rc11-B-cold (resources check)', state: 'cold', reader: 'resources-check', stdout: '' },
     { cell: 'cand-C-cold (validate)', state: 'cold', reader: 'validate', stdout: '' },
   ];
@@ -157,36 +157,29 @@ describe('provenanceViolation — cells that read nothing', () => {
   }
 });
 
-describe('provenanceViolation — resources validate', () => {
-  /** `resources validate`'s data as a build that publishes `population` emits it. */
-  const validateWith = (population: string | null): string => report({ population, filesScanned: 1 });
-  /** rc.11's `resources validate`: the field does not exist on that build. */
-  const RC11_VALIDATE = report({ filesScanned: 1 });
+describe('provenanceViolation — a published null is the walk, a missing field is absent', () => {
+  /** The candidate's `validate`, its resources phase's `data` replaced by `data`. */
+  const resourcesPhase = (data: Readonly<Record<string, unknown>>) =>
+    readProvenance('validate', report({ phases: CAND_VALIDATE_PHASES.map((phase) => (phase.name === 'resources' ? { ...phase, data } : phase)) }));
 
-  it('fails a warm resources validate whose population is derived', () => {
-    const provenance = readProvenance('resources-validate', validateWith('derived'));
-    expect(provenanceViolation('resources-validate-ci', 'resources-validate', provenance, 'warm', true)).toBe(
-      "warm rule: step 'resources-validate-ci' reports population 'derived', not 'store' — the arm is not warm",
+  it.each([
+    { reader: 'validate' as const, provenance: () => resourcesPhase({ population: null }) },
+    { reader: 'resources-check' as const, provenance: () => readProvenance('resources-check', report({ ...RC11_CHECK_DATA, population: null })) },
+  ])('$reader: a published null fails as the walk, not as absent', ({ reader, provenance }) => {
+    expect(provenanceViolation('step', reader, provenance(), 'warm', true)).toBe(
+      "warm rule: step 'step' — the walk answered (population null), not the store",
     );
   });
 
-  it('passes a warm resources validate served from the store', () => {
-    const provenance = readProvenance('resources-validate', validateWith('store'));
-    expect(provenanceViolation('resources-validate-ci', 'resources-validate', provenance, 'warm', true)).toBeNull();
+  it('validate: a resources phase with no population field fails as absent', () => {
+    expect(provenanceViolation('step', 'validate', resourcesPhase({}), 'warm', true)).toBe(
+      "warm rule: step 'step' published no resources population (absent is never a pass)",
+    );
   });
 
-  it('fails a warm resources validate that published population: null (the walk answered)', () => {
-    const provenance = readProvenance('resources-validate', validateWith(null));
-    expect(provenanceViolation('resources-validate-ci', 'resources-validate', provenance, 'warm', true)).toMatch(/'null', not 'store'/u);
-  });
-
-  it('judges nothing on a build whose document has no population field at all', () => {
-    expect(readProvenance('resources-validate', RC11_VALIDATE)).toBeNull();
-    expect(provenanceViolation('resources-validate-ci', 'resources-validate', readProvenance('resources-validate', RC11_VALIDATE), 'warm', true)).toBeNull();
-  });
-
-  it('still fails a warm resources validate whose output is not a document', () => {
-    expect(provenanceViolation('resources-validate-ci', 'resources-validate', readProvenance('resources-validate', 'not yaml: ['), 'warm', true)).toMatch(/absent/u);
+  it('passes a published null on a store-off arm: the walk is what it asked for', () => {
+    const walked = readProvenance('resources-check', report({ ...RC11_CHECK_DATA, population: null }));
+    expect(provenanceViolation('step', 'resources-check', walked, 'warm', false)).toBeNull();
   });
 });
 

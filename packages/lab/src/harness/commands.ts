@@ -115,8 +115,12 @@ export interface MeasuredSequenceSpec {
 }
 
 
-/** The reader for `vat resources validate`, whichever argv a command spells it with. */
-const RESOURCES_VALIDATE_READER: ProvenanceReader = 'resources-validate';
+/**
+ * The reader for `vat resources validate`, whichever argv spells it. It publishes
+ * `data.population`, but the lab judges that fact once, through `vat validate`'s
+ * resources phase.
+ */
+const RESOURCES_VALIDATE_READER: ProvenanceReader = 'none';
 
 /**
  * Every vat command the lab knows how to measure, by name.
@@ -166,12 +170,9 @@ export const MEASURABLE_COMMANDS = Object.freeze({
     provenance: 'none',
     exit: COMPLETES_CLEAN,
     populates: false,
-    // The ONLY entry whose own output names which population arm the run took
-    // (`population: derived | store`) and what that arm cost
-    // (`populationSecs`). Every other entry is silent about it, so an A/B
-    // varying `VAT_PROJECTION_STORE` can only be confirmed from a `crawl`
-    // dump's `projection-store:read` / `projection-store:write` charges — this
-    // one says it in the document itself.
+    // Names which population arm the run took (`population: derived | store`)
+    // and what that arm cost (`populationSecs`) — the one cost a projection
+    // store moves, measured with nothing else in the run.
     //
     // The statement is deliberately trivial. `resources query` is populate +
     // one SQL, so with a counting query essentially all of its wall time IS the
@@ -190,7 +191,6 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   }),
   'resources-validate': Object.freeze({
     name: 'resources-validate',
-    // `data.population`, judged when the build publishes it (see provenance.ts).
     provenance: RESOURCES_VALIDATE_READER,
     exit: COMPLETES_WITH_FINDINGS,
     // The same verb as `resources-validate-ci`: it writes the projection whatever its argv.
@@ -223,7 +223,8 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   }),
   validate: Object.freeze({
     name: 'validate',
-    provenance: 'none',
+    // The same reader as `validate-ci`: the reader is the verb's, not its argv's.
+    provenance: 'validate',
     exit: COMPLETES_WITH_FINDINGS,
     // The same verb as `validate-ci`: its resources phase writes the projection.
     populates: true,
@@ -309,8 +310,6 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   'resources-validate-ci': Object.freeze({
     name: 'resources-validate-ci',
     args: Object.freeze(['resources', 'validate']),
-    // `data.population`, judged when the build publishes it; rc.11's document
-    // has no such field, so nothing is asserted there (see provenance.ts).
     provenance: RESOURCES_VALIDATE_READER,
     exit: COMPLETES_WITH_FINDINGS,
     populates: true,
