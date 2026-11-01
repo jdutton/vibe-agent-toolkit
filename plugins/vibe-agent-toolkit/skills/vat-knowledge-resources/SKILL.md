@@ -75,6 +75,10 @@ vat resources query 'SELECT * FROM blob_conditions'        # what was refused, a
 vat resources query 'SELECT rawRef FROM blob_references WHERE syntacticForm = ?' --param markdown-link
 ```
 
+The answer is the shared report envelope: the rows are `data.rows` (`data.columns` names them, even
+for an empty answer), and `examined` is the population the statement ran over — so zero rows over a
+populated tree is `status: ok`, exit 0. A refused statement is `status: error`, `USAGE_INVALID`, exit 2.
+
 A statement naming a table or column that does not exist gets the real columns of the tables it
 named — VAT ships no schema version, so that listing is how you find what a name became. The
 statement is also **compiled before the projection is populated**, so a typo costs milliseconds
@@ -107,10 +111,11 @@ SELECT path FROM resource_realizations
 query. It is not silently absent: each link is a `realization_conditions` row —
 `EXTENT_SYMLINK_NOT_REALIZED` when the target is in-root, naming it and whether it is realized, or
 `EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT` when the target resolves outside the root (never named), or
-`EXTENT_SYMLINK_TARGET_UNRESOLVED` when it resolves to nothing. Ask for all three codes or links
-are missing from the answer:
+`EXTENT_SYMLINK_TARGET_UNRESOLVED` when it resolves to nothing, or `EXTENT_SYMLINK_TARGET_UNREADABLE`
+when the OS refused or failed the lookup (the class is in `targetFaultClass`). Ask for all four codes
+or links are missing from the answer:
 `SELECT path, message FROM realization_conditions
-  WHERE code IN ('EXTENT_SYMLINK_NOT_REALIZED', 'EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT', 'EXTENT_SYMLINK_TARGET_UNRESOLVED')`
+  WHERE code IN ('EXTENT_SYMLINK_NOT_REALIZED', 'EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT', 'EXTENT_SYMLINK_TARGET_UNRESOLVED', 'EXTENT_SYMLINK_TARGET_UNREADABLE')`
 lists them.
 
 **Read `population` in the output before you trust a timing.** It is `derived` or `store` — whether
@@ -119,7 +124,11 @@ inferred, because a correct store hit and a correct re-derivation produce identi
 `populationSecs` sits beside it and says what that origin was WORTH, so the tell is not a bare label
 you have to take on faith. `vat resources check --help` carries the current reference timings
 (VAT's own repo and a ~10k-file adopter tree, warm and cold) — read them there rather than from a
-number pasted here.
+number pasted here. `lensPopulation` (`none`, `store`, `derived`) is the same tell for the lens
+relations the statement named, and `vat resources validate` publishes `data.population` too — `null`
+there means the walk answered: the walk lane was selected (`VAT_RESOURCES_CRAWL=walk`), or the crawl
+declined a projection bound to another root and walked. `VAT_PROJECTION_STORE=0` is not one of them:
+it skips only the store, so the run reports `derived`.
 
 ⛔ There is **no `engine` field**. An earlier RC published one (`sqlite | ephemeral`) to say which
 database answered the SQL; it is gone, because the answer is now always the same. The statement
@@ -247,6 +256,10 @@ A query answers a question once. `vat resources check` runs the questions a proj
 worth asking **every time**, against the same projection, and fails the run when any error-severity
 check is violated.
 
+**`vat validate` runs these checks too**, as its `checks` phase, whenever `resources:` is
+configured — every check, under the default bound below. So a declared check that errors, or whose
+SQL no longer runs (`RESOURCE_CHECK_BROKEN`), fails `vat validate` as well.
+
 ### VAT's built-in checks run first, with or without a config file
 
 A project that declares nothing still gets the **default set** — today three checks over
@@ -359,6 +372,9 @@ nearly the same thing today: the population is a single un-instrumented unit, so
 budget IS effectively a total-runtime bound. Size it against your population, not against your SQL —
 on a large adopter tree the population is essentially the whole check run while the SQL itself is
 milliseconds; `vat resources check --help` states the reference timings.
+
+`vat validate`'s `checks` phase always runs under the default, and has no way to raise it: a larger
+`--budget` lets the checks pass under `vat resources check`, not under `vat validate`.
 
 A killed or crashed run is still evidence: checks that completed keep their per-rule row counts, and
 the report names the rule that was in flight. It **never exits 0** — not on a watchdog kill, not on
@@ -480,25 +496,29 @@ For tools that **modify** frontmatter (not just validate it), see
 
 ## Validation Output
 
+`vat resources validate` publishes the shared report envelope:
+
 ```yaml
-status: success
-filesScanned: 47
-linksChecked: 212
-durationSecs: 0.23
-validationMode: strict
-collections:
-  systems:
-    resourceCount: 7
-    hasSchema: true
-    validationMode: permissive
-  adrs:
-    resourceCount: 12
-    hasSchema: true
-    validationMode: permissive
+status: ok
+examined: 47
+findings: []
+summary: { errors: 0, warnings: 0, info: 0 }
+gate: { strict: false }
+durationMs: 230
+data:
+  root: /abs/path/to/project
+  collections:
+    systems:
+      resourceCount: 7
+      hasSchema: true
+      validationMode: permissive
+      filesWithErrors: 0
+      summary: { errors: 0, warnings: 0, info: 0 }
 ```
 
-On issues the shape changes: `status` becomes the worst actionable severity (`warning` | `error`),
-with `errorsFound`, `filesWithErrors` and `issueCounts: {errors, warnings, info}` — the field
-list is in `vat resources validate --help`.
-
-Errors appear in stderr with `file:line: message` format for editor navigation.
+On issues `status` is `findings` and every finding is listed flat in `findings`
+(`{code, severity, message, location, line?}`, `location` relative to `data.root`);
+`summary` counts them by severity, and the run exits 1 only for an error-severity one.
+`examined: 0` is refused (`RESOURCE_CHECK_BROKEN`). The field list is in
+`vat resources validate --help`; `--format text` prints one
+`location:line: severity: message [code]` line per finding for editor navigation.
