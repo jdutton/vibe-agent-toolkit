@@ -698,17 +698,19 @@ const ARCHIVE_LIBRARY_BAN = [
 // has no `exports` map, so every file of it is importable. A group with a slash is anchored, so
 // `./tar/x.js` and `tarball` are not caught.
 const ARCHIVE_LIBRARY_SUBPATH_BAN = [{ group: ['tar/**', 'adm-zip/**'], message: ARCHIVE_LIBRARY_MESSAGE }];
-// `no-restricted-imports` reads static imports only; these are the same ban for
-// `await import('tar/x')` and for every require-shaped call — `require('tar')`, a `createRequire`
-// result under a `req…` name (`req`, `requireFn`), `createRequire(import.meta.url)('adm-zip')`
-// under any spelling of `createRequire`, `module.require('tar')`, `require.call(null, 'tar')` —
-// each with its specifier as a string or as a template literal that holds no expression. (TypeScript's
+// `no-restricted-imports` reads static imports only; these are the same ban for the dynamic
+// shapes code is written in: `await import('tar/x')`, `require('tar')`, a `createRequire` result
+// under a `req…` name (`req`, `requireFn`), `createRequire(import.meta.url)('adm-zip')` under any
+// spelling of `createRequire`, `module.require('tar')`, `require.call(null, 'tar')` — each with its
+// specifier as a string or as a template literal that holds no expression. (TypeScript's
 // `import tar = require('tar')` is an import declaration to `no-restricted-imports`, which fires on it.)
 //
-// What a lint rule CANNOT see is a specifier computed at run time (`import(name)`, a template with
-// an expression) or a `createRequire` result bound to a name not starting `req` (`load('tar')`
-// reads as an ordinary call: `list('tar', bytes)` in the archive tests is one). Nothing here
-// pretends to.
+// The selectors ENUMERATE call shapes, so they stop a mistake, not an evasion. Not seen: a
+// specifier computed at run time (`import(name)`, a template with an expression); a loader under a
+// name not starting `req` (`load('tar')` reads as an ordinary call, as `list('tar', bytes)` in the
+// archive tests is one); `require.apply(…)`, `(0, require)(…)`; a relative path into
+// `node_modules`. Vitest's loaders are left to each ban: the archive tests mock `adm-zip` under the
+// archive module (`vi.mock('adm-zip', importOriginal)`), which is how that module is tested.
 const ARCHIVE_LIBRARY_SPECIFIER = String.raw`/^(adm-zip|tar)(\u002f|$)/`;
 /** A call argument, or an import source, at `path` matching `pattern`: a string literal, or a template literal with no expression. */
 const specifierAt = (path, pattern) => [
@@ -736,9 +738,10 @@ const ARCHIVE_LIBRARY_RESTRICTED_SYNTAX = restrictedSpecifierSyntax(ARCHIVE_LIBR
 // on `lintFiles` — by default `<cwd>/.eslintcache`, which is `bun run lint`'s cache
 // when `cwd` is a real tree. Tests construct one only through `repoEslint`, which
 // points the location at a temp path. Type imports stay allowed, and so do `Linter` and
-// `RuleTester`, statically. A dynamic `import()` or require-shaped call of `eslint` is banned
-// outright: it yields the whole module, `ESLint` included, and a lint rule cannot tell which
-// member is used.
+// `RuleTester`, statically. A dynamic load of `eslint` — `import()`, a require-shaped call (the
+// shapes and the limits are listed above `ARCHIVE_LIBRARY_SPECIFIER`), or Vitest's
+// `vi.importActual` / `vi.mock(…, importOriginal)` — is banned whatever member it is used for: it
+// yields the whole module, `ESLint` included, and a lint rule cannot tell which member is used.
 // `eslint/use-at-your-own-risk` is banned whole: it exports `LegacyESLint` and `FlatESLint`.
 export const ESLINT_INSTANCE_FILES = [
   'packages/dev-tools/test/eslint-clean-files.ts',
@@ -756,6 +759,12 @@ const ESLINT_INSTANCE_BAN = [
 const ESLINT_INSTANCE_SPECIFIER = String.raw`/^eslint(\u002fuse-at-your-own-risk)?$/`;
 const ESLINT_INSTANCE_RESTRICTED_SYNTAX = [
   ...restrictedSpecifierSyntax(ESLINT_INSTANCE_SPECIFIER, ESLINT_INSTANCE_MESSAGE),
+  // Vitest's loaders hand back the real module: `vi.importActual('eslint')`, and the
+  // `importOriginal` of `vi.mock('eslint', …)` / `vi.doMock`.
+  ...specifierAt('arguments.0', ESLINT_INSTANCE_SPECIFIER).map((specifier) => ({
+    selector: `CallExpression[callee.object.name='vi'][callee.property.name=/^(mock|doMock|importActual)$/]${specifier}`,
+    message: ESLINT_INSTANCE_MESSAGE,
+  })),
   { selector: `TSImportEqualsDeclaration[moduleReference.expression.value=${ESLINT_INSTANCE_SPECIFIER}]`, message: ESLINT_INSTANCE_MESSAGE },
 ];
 // Every file carries both dynamic halves; only the archive module and ESLINT_INSTANCE_FILES drop one.
@@ -1100,19 +1109,15 @@ export default [
     },
   },
 
-  // Product source in the module flavours the TS blocks above do not match: a `.mts`, `.js` or
-  // `.mjs` under `src/` handles a signal the same way, so the one-installation ban reaches it too.
-  // `.mts` is TypeScript: parsed as such (no type information — the ban needs none).
-  {
-    files: ['packages/*/src/**/*.mts'],
-    languageOptions: { parser: tsparser, parserOptions: { ecmaVersion: 2024, sourceType: 'module' } },
-  },
-  // Every `.mts` (no TS block above matches one) carries the import bans, `test/` included.
+  // Every `.mts` — no TS block above matches one — is parsed as TypeScript (no type information:
+  // nothing here needs it) and carries the import bans, `test/` included.
   {
     files: ['**/*.mts'],
     languageOptions: { parser: tsparser, parserOptions: { ecmaVersion: 2024, sourceType: 'module' } },
     rules: { 'no-restricted-imports': noRestrictedImportsConfig, 'no-restricted-syntax': ['error', ...RESTRICTED_SPECIFIER_SYNTAX] },
   },
+  // Product source in the module flavours the TS blocks above do not match: a `.mts`, `.js` or
+  // `.mjs` under `src/` handles a signal the same way, so the one-installation ban reaches it too.
   {
     files: ['packages/*/src/**/*.{mts,js,mjs}'],
     plugins: { local: localRules },

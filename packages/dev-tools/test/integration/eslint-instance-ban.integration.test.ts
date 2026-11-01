@@ -47,6 +47,8 @@ const SHAPES: ReadonlyArray<readonly [what: string, code: string, rule: string]>
   ['a renamed createRequire', "import { createRequire as cr } from 'node:module';\nexport const eslint: unknown = cr(import.meta.url)('eslint');\n", DYNAMIC_BAN],
   ['createRequire off the module object', "import nodeModule from 'node:module';\nexport const eslint: unknown = nodeModule.createRequire(import.meta.url)('eslint');\n", DYNAMIC_BAN],
   ['require.call', "export const eslint: unknown = require.call(null, 'eslint');\n", DYNAMIC_BAN],
+  ['vi.importActual', "import { vi } from 'vitest';\nexport const eslint = await vi.importActual('eslint');\n", DYNAMIC_BAN],
+  ['vi.mock with importOriginal', "import { vi } from 'vitest';\nvi.mock('eslint', async (importOriginal) => ({ ...(await importOriginal<object>()) }));\n", DYNAMIC_BAN],
   ['a createRequire result named req', "import { createRequire } from 'node:module';\nconst req = createRequire(import.meta.url);\nexport const eslint: unknown = req('eslint');\n", DYNAMIC_BAN],
 ];
 

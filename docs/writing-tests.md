@@ -751,7 +751,7 @@ When writing tests:
 - [ ] Used `vi.useFakeTimers()` instead of real `setTimeout` for time-dependent tests
 
 **Quality:**
-- [ ] Ran `bun run duplication-check` before committing
+- [ ] Ran `bun run duplication-check` before pushing
 - [ ] No code duplication detected
 
 ## Real-World Impact

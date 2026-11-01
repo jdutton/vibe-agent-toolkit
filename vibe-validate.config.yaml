@@ -27,7 +27,10 @@
 # tree therefore reads as a cached pass for the full tier on that same tree.
 # That is why `bun run validate` carries `--force`: the full command never
 # replays a verdict that may have been the half-gate's. The pre-commit hook
-# keeps the cache (a full pass is a superset of what it needs).
+# keeps the cache (a full pass is a superset of what it needs). It replays a
+# cached RED too: after a red `bun run validate`, `git commit` on the same tree
+# fails on the full tier's step, even one the hook does not run. Bypass:
+# `VV_FORCE_EXECUTION=1 git commit` (not enforced).
 #
 # Integration and system tests run in the full tier only: together they were
 # 232 s of a 321 s warm gate (72 %), serialised, and growing linearly with file

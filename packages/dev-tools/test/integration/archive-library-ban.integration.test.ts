@@ -93,6 +93,12 @@ describe('the archive-library ban', () => {
     expect(await banFindings('packages/cli/src/commands/claude/plugin/second-extractor.ts', LOOKALIKES)).toEqual([]);
   });
 
+  // How the archive module is tested: the library mocked underneath it (see the selectors' comment).
+  it('lets a test mock the library under the archive module', async () => {
+    const code = "import { vi } from 'vitest';\nvi.mock('adm-zip', async (importOriginal) => ({ ...(await importOriginal<object>()) }));\n";
+    expect(await banFindings('packages/utils/test/archive-zip-made-by.test.ts', code)).toEqual([]);
+  });
+
   it('says nothing about a format name passed to an ordinary function', async () => {
     expect(await banFindings('packages/utils/test/archive-read.test.ts', FORMAT_ARGUMENT)).toEqual([]);
   });
