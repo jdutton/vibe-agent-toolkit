@@ -72,6 +72,37 @@
 # esbuild@0.28.2, past the 0.28.1 fix. braces (GHSA-vfj7-8cjw-p6xm) DELETED under
 # rule 3 — the advisory was WITHDRAWN upstream on 2026-10-23 and osv-scanner
 # reported the entry as an unused ignore. zod (GHSA-mrhx-c7xc-m3w5) added, below.
+#
+# Reconciled 2026-11-01 (2 new advisories, both fixed only in a new major — no
+# backport: glob GHSA-3g3m-2fjr-6pw4 affects 9.0.0..<14.0.2, minimatch
+# GHSA-g3hv-75wg-m249 affects everything <11.0.1): fixed under rule 1, none listed.
+#   * glob 10.5.0 — declared `^10.3.10` by agent-skills and resource-compiler
+#     themselves; bumped to `^14.0.3` (their only API is named `glob`/`globSync`).
+#   * glob 13.0.6 — rimraf 6.1.3 (latest) declares `^13.0.3`; pinned glob 14.0.3 in
+#     `overrides`. rimraf's `--glob` (every `clean` script) still deletes what it did.
+#   * minimatch 3.1.5 / 9.0.9 / 10.2.6 — no parent's range admits 11 (ESLint 9 and
+#     @eslint/eslintrc `^3`, eslint-plugin-import `^3`, @typescript-eslint and sonarjs
+#     `^10`, even ESLint 10 `^10`); 9.0.9 left with glob 10. Pinned minimatch 11.0.3 in
+#     `overrides`. Every consumer but one calls `new Minimatch()`/named `minimatch()`,
+#     both kept by 11; ESLint's effective config (`calculateConfigForFile`) is
+#     byte-identical under 3.1.5 and 11.0.3 for all 3,743 tracked files. The one
+#     exception: eslint-plugin-import calls minimatch's DEFAULT export, which 11 does
+#     not have, from the glob options of `order` (`pathGroups`), `extensions`,
+#     `no-extraneous-dependencies`, `no-import-module-exports`, `no-internal-modules`,
+#     `no-namespace` and `no-unassigned-import`. None of those options is configured
+#     here. Configuring one makes lint throw `(0 , _minimatch2.default) is not a
+#     function` (verified with `import/order` `pathGroups`): loud. ONE rule is not
+#     loud: `no-restricted-paths` uses the kept `new Minimatch()` but builds its glob
+#     `zones` from absolute paths, which carry backslashes on Windows — 3.x turned
+#     them into `/`, 11 reads them as escapes, so a glob zone silently matches
+#     nothing there. It is not configured either. So: before enabling ANY
+#     minimatch-backed eslint-plugin-import option or rule (the seven above, or
+#     `no-restricted-paths` with a glob zone), drop this pin first.
+#     eslint-plugin-import-x 4.17.1 is NOT the way out: its ESM build does
+#     `import { makeRe } from 'minimatch'`, which 11 removed, so under this pin it
+#     fails to load at all.
+#     RE-CHECK TRIGGER (rule 4): the first eslint-plugin-import release whose range
+#     admits minimatch 11 — then the hazard above is gone and this paragraph goes.
 # ---------------------------------------------------------------------------
 
 # --- zod 3 (GHSA-mrhx-c7xc-m3w5) ---------------------------------------------
