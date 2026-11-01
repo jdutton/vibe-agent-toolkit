@@ -36,10 +36,12 @@ async function writeFixture(root: string): Promise<void> {
     writeFile(safePath.join(root, name), `# ${name}\n`, 'utf-8')));
 }
 
+/** What every stub enumeration reports about itself. */
+const STUB_PROVENANCE = { outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem' } as const;
+
 /**
  * A source bound to `boundRoot` that offers `names` under whatever root it is
- * ASKED for, and records every root it was asked about and every root that
- * declined it.
+ * ASKED for, and records every root it was asked about.
  *
  * The bound root is a parameter rather than derived from anything: every guard
  * test below is exactly a case where the bound root and the offered root differ,
@@ -48,22 +50,18 @@ async function writeFixture(root: string): Promise<void> {
 function boundSource(
   boundRoot: string,
   names: readonly string[] = FIXTURE_NAMES,
-): { source: ResourcePopulationSource; offeredRoots: string[]; declinedBy: string[] } {
+): { source: ResourcePopulationSource; offeredRoots: string[] } {
   const offeredRoots: string[] = [];
-  const declinedBy: string[] = [];
   return {
     offeredRoots,
-    declinedBy,
     source: {
       root: boundRoot,
-      decline: (offeredRoot: string) => {
-        declinedBy.push(offeredRoot);
-      },
       enumerate: (root: string) => {
         offeredRoots.push(root);
         return Promise.resolve({
           paths: names.map((name) => safePath.join(root, name)),
           conditions: [],
+          ...STUB_PROVENANCE,
         });
       },
     },
@@ -115,7 +113,7 @@ describe('ResourceRegistry.crawl with a populationSource', () => {
   it('takes its paths from the source instead of walking the tree', async () => {
     const registry = new ResourceRegistry({ baseDir: tempDir });
 
-    const resources = await registry.crawl({
+    const { resources } = await registry.crawl({
       unreadable: 'refuse',
       outputs: [],
       baseDir: tempDir,
@@ -131,7 +129,7 @@ describe('ResourceRegistry.crawl with a populationSource', () => {
   it('still applies include patterns to what the source offered', async () => {
     const registry = new ResourceRegistry({ baseDir: tempDir });
 
-    const resources = await registry.crawl({
+    const { resources } = await registry.crawl({
       unreadable: 'refuse',
       outputs: [],
       baseDir: tempDir,
@@ -147,7 +145,7 @@ describe('ResourceRegistry.crawl with a populationSource', () => {
   it('still applies exclude patterns to what the source offered', async () => {
     const registry = new ResourceRegistry({ baseDir: tempDir });
 
-    const resources = await registry.crawl({
+    const { resources } = await registry.crawl({
       unreadable: 'refuse',
       outputs: [],
       baseDir: tempDir,
@@ -188,12 +186,13 @@ describe('ResourceRegistry.crawl root-identity guard', () => {
     // declares. Without it a guard that declined unconditionally would satisfy
     // every one of them.
     const registry = new ResourceRegistry({ baseDir: tempDir });
-    const { source, offeredRoots, declinedBy } = boundSource(tempDir, ['a.md']);
+    const { source, offeredRoots } = boundSource(tempDir, ['a.md']);
 
-    const resources = await registry.crawl({ unreadable: 'refuse', outputs: [], baseDir: tempDir, include: ['**/*.md'], populationSource: source });
+    const { resources, population } = await registry.crawl({ unreadable: 'refuse', outputs: [], baseDir: tempDir, include: ['**/*.md'], populationSource: source });
 
     expect(offeredRoots).toEqual([safePath.resolve(tempDir)]);
-    expect(declinedBy).toEqual([]);
+    // The enumeration's own provenance, handed back beside what it admitted.
+    expect(population).toEqual({ lane: 'projection', ...STUB_PROVENANCE });
     expect(memberPaths(tempDir, resources)).toEqual(['a.md']);
     expect(warnings).toEqual([]);
   });
@@ -204,13 +203,13 @@ describe('ResourceRegistry.crawl root-identity guard', () => {
     // The source offers exactly one member, so "the source answered" and "the
     // walk answered" are distinguishable from the result alone: the walk finds
     // both markdown files on disk.
-    const { source, offeredRoots, declinedBy } = boundSource(foreignRoot, ['a.md']);
+    const { source, offeredRoots } = boundSource(foreignRoot, ['a.md']);
 
-    const resources = await registry.crawl({ unreadable: 'refuse', outputs: [], baseDir: tempDir, include: ['**/*.md'], populationSource: source });
+    const { resources, population } = await registry.crawl({ unreadable: 'refuse', outputs: [], baseDir: tempDir, include: ['**/*.md'], populationSource: source });
 
     expect(offeredRoots).toEqual([]);
-    // Told, so a caller publishing provenance knows the walk answered.
-    expect(declinedBy).toEqual([safePath.resolve(tempDir)]);
+    // Said on what the crawl returned, so a caller publishing provenance knows the walk answered.
+    expect(population).toEqual({ lane: 'walk' });
     expect(memberPaths(tempDir, resources)).toEqual(['a.md', 'b.md']);
   });
 

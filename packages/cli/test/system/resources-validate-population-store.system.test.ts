@@ -23,6 +23,13 @@
  *   store hands them back in its own order, and the warm findings came out
  *   reversed. Two links of one code did not reproduce it.
  *
+ * No case plants a `REALIZATION_PATH_COLLISION`, because this verb cannot emit
+ * one: the filesystem extent is the only contributor in its lane that writes
+ * realizations, and it mints each row's identity from the very path the row
+ * names (`idFor(absolutePath)` beside `relativize(absolutePath)`), so one path
+ * always carries one identity. A collision needs two identities flattened onto
+ * one path — a packaged tree, which this verb never builds.
+ *
  * A findings-only run writes nothing to stderr, so stderr is compared whole
  * rather than as one line.
  *

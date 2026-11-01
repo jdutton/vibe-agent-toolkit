@@ -194,7 +194,6 @@ const BARREL_EXPORTS = [
   'codeContextRangesFrom',
   'collectRealization',
   'collectionMimeConflictCondition',
-  'combineOutcomes',
   'compileFrontmatterSchema',
   'computeContentKey',
   'contextChainId',

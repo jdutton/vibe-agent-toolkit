@@ -1,3 +1,4 @@
+import type { CrawlPopulation } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -85,9 +86,17 @@ vi.mock('@vibe-agent-toolkit/resources', async (importOriginal) => ({
     constructor(options: Record<string, unknown>) {
       lastRegistryOptions = options;
     }
-    async crawl(options: Record<string, unknown>): Promise<void> {
+    // Returns what the real crawl returns: the mock's answer when a test gave
+    // one, otherwise a crawl that used whichever lane it was handed.
+    async crawl(options: Record<string, unknown>): Promise<unknown> {
       lastCrawlOptions = options;
-      await registryCrawlMock(options);
+      const returned: unknown = await registryCrawlMock(options);
+      return returned ?? {
+        resources: [],
+        population: options['populationSource'] === undefined
+          ? { lane: 'walk' }
+          : { lane: 'projection', outcome: { population: 'derived', stored: 'written' }, extentSource: 'filesystem' },
+      };
     }
   },
 }));
@@ -119,7 +128,6 @@ import {
   RESOURCES_CRAWL_ENV,
   RESOURCES_CRAWL_PROJECTION,
   RESOURCES_CRAWL_WALK,
-  type PopulationObservation,
 } from '../../src/utils/resource-loader.js';
 
 /** For the cases about something other than provenance. */
@@ -131,18 +139,18 @@ const WRITTEN = { population: 'derived', stored: 'written' } as const;
 /** The source the loader installed on the crawl, refused when it installed none. */
 interface InstalledSource {
   enumerate: (root: string, outputs: readonly string[]) => Promise<unknown>;
-  decline: (offeredRoot: string) => void;
 }
 
 /**
- * Make the faked crawl drive the installed source the way the registry would.
+ * Make the faked crawl return `population` beside no resources, after checking
+ * the loader handed it a source.
  *
- * @param drive - What the crawl does with the source it was handed
+ * @param population - What the crawl says about where its population came from
  */
-function crawlDrives(drive: (source: InstalledSource) => Promise<void> | void): void {
-  registryCrawlMock.mockImplementation(async (options: { populationSource?: InstalledSource }) => {
+function crawlReturns(population: CrawlPopulation): void {
+  registryCrawlMock.mockImplementation((options: { populationSource?: InstalledSource }) => {
     if (options.populationSource === undefined) throw new Error('no population source was installed');
-    await drive(options.populationSource);
+    return Promise.resolve({ resources: [], population });
   });
 }
 
@@ -167,7 +175,7 @@ function createTestLogger(): { logger: Logger; debugCalls: string[]; warnCalls: 
  *
  * @returns Every observation the load made
  */
-async function observedLoad(): Promise<PopulationObservation[]> {
+async function observedLoad(): Promise<CrawlPopulation[]> {
   return (await observedLoadResult()).observed;
 }
 
@@ -177,13 +185,13 @@ async function observedLoad(): Promise<PopulationObservation[]> {
  * @returns Every observation the load made, and the lane and enumerator it returned
  */
 async function observedLoadResult(): Promise<{
-  observed: PopulationObservation[];
+  observed: CrawlPopulation[];
   lane: string;
   extentSource: string | null;
 }> {
   loadConfigMock.mockReturnValue(undefined);
   const { logger } = createTestLogger();
-  const observed: PopulationObservation[] = [];
+  const observed: CrawlPopulation[] = [];
   const { lane, extentSource } = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger, (observation) => {
     observed.push(observation);
   });
@@ -464,52 +472,34 @@ describe('loadResourcesWithConfig', () => {
       }
     });
 
-    it('says the walk answered when the crawl declined the source', async () => {
-      crawlDrives((source) => source.decline(SUBTREE_PATH));
+    it('says the walk answered when the crawl declined the source, with NO enumerator', async () => {
+      crawlReturns({ lane: 'walk' });
 
-      expect(await observedLoad()).toEqual([{ lane: 'walk' }]);
+      expect(await observedLoadResult()).toEqual({ observed: [{ lane: 'walk' }], lane: 'walk', extentSource: null });
     });
 
-    it('publishes a null outcome when the projection lane enumerated no root', async () => {
-      crawlDrives(() => undefined);
+    it('publishes the outcome and enumerator the crawl RETURNED', async () => {
+      crawlReturns({ lane: 'projection', outcome: HIT, extentSource: 'git' });
 
-      expect(await observedLoad()).toEqual([{ lane: 'projection', outcome: null, extentSource: null }]);
-    });
-
-    it('publishes the one root\'s outcome', async () => {
-      buildResourcePopulationMock.mockResolvedValue({ paths: [], conditions: [], outcome: HIT, extentSource: 'filesystem' });
-      crawlDrives(async (source) => {
-        await source.enumerate(PROJECT_ROOT, []);
-      });
-
-      expect(await observedLoad()).toEqual([{ lane: 'projection', outcome: HIT, extentSource: 'filesystem' }]);
-    });
-
-    it('combines two roots into ONE observation, the first that did not hit deciding', async () => {
-      buildResourcePopulationMock
-        .mockResolvedValueOnce({ paths: [], conditions: [], outcome: HIT, extentSource: 'git' })
-        .mockResolvedValueOnce({ paths: [], conditions: [], outcome: WRITTEN, extentSource: 'filesystem' });
-      crawlDrives(async (source) => {
-        await source.enumerate(PROJECT_ROOT, []);
-        await source.enumerate(PROJECT_ROOT, []);
-      });
-
-      // The enumerator is the FIRST root's, in enumeration order — the project root.
       expect(await observedLoadResult()).toEqual({
-        observed: [{ lane: 'projection', outcome: WRITTEN, extentSource: 'git' }],
+        observed: [{ lane: 'projection', outcome: HIT, extentSource: 'git' }],
         lane: 'projection',
         extentSource: 'git',
       });
     });
 
-    it('reports the walk with NO enumerator when the crawl enumerated one root and declined another', async () => {
-      buildResourcePopulationMock.mockResolvedValue({ paths: [], conditions: [], outcome: HIT, extentSource: 'git' });
-      crawlDrives(async (source) => {
-        await source.enumerate(PROJECT_ROOT, []);
-        source.decline(SUBTREE_PATH);
+    it('hands the registry the WHOLE enumeration, outcome and enumerator included', async () => {
+      const enumeration = { paths: [], conditions: [], outcome: HIT, extentSource: 'filesystem' };
+      buildResourcePopulationMock.mockResolvedValue(enumeration);
+      let handed: unknown;
+      registryCrawlMock.mockImplementation(async (options: { populationSource?: InstalledSource }) => {
+        handed = await options.populationSource?.enumerate(PROJECT_ROOT, []);
       });
 
-      expect(await observedLoadResult()).toEqual({ observed: [{ lane: 'walk' }], lane: 'walk', extentSource: null });
+      await observedLoad();
+
+      // The one route the outcome takes out: through `enumerate`, to the crawl.
+      expect(handed).toEqual(enumeration);
     });
   });
 });
@@ -517,11 +507,6 @@ describe('loadResourcesWithConfig', () => {
 describe('publishedPopulation — what validate publishes for one observation', () => {
   it.each([
     { name: 'the walk', observation: { lane: 'walk' }, expected: null },
-    {
-      name: 'a projection that enumerated no root',
-      observation: { lane: 'projection', outcome: null, extentSource: null },
-      expected: null,
-    },
     { name: 'a hit', observation: { lane: 'projection', outcome: HIT, extentSource: 'git' }, expected: 'store' },
     {
       name: 'a derivation',

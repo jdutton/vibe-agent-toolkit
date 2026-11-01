@@ -731,6 +731,7 @@ Reported like every other packaging finding — a located, coded issue on the bu
 - **Default:** `error`
 - **What:** Two files resolve to the same resource id after path normalization (e.g. `My Guide.md` and `my-guide.md` both produce `my-guide-md`).
 - **Why it matters:** Resource ids must be unique — a collision means one file silently shadows the other in lookups, link resolution, and bundling. This surfaces as a reported issue rather than aborting the whole run with an uncaught error.
+- **Which file wins:** the one whose resolved path comes first in UTF-16 code-unit order; the other is dropped and named in the finding. The registry sorts every file list it admits, so every registry lane keeps the same file (`vat resources validate`, `vat audit`, `vat inventory`, `vat skills build`/`validate`), with or without git, on a store hit or a fresh derive. `-` sorts before `/`, so `dup-hyphen/note.md` beats `dup/hyphen-note.md`.
 - **Fix:** Rename one of the files so they produce distinct resource ids.
 
 ### `RESOURCE_UNREADABLE`

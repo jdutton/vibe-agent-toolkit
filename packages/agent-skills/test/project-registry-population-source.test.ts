@@ -118,10 +118,8 @@ function projectionSource(
           root,
           cache: { store, treeUnchanged: () => true, treeHash: 'test-tree-hash' },
         });
-        return { paths: population.paths, conditions: population.conditions };
+        return population;
       },
-      // The registry's root guard tells the source it was declined; nothing here acts on it.
-      decline: () => undefined,
     },
   };
 }
@@ -150,9 +148,8 @@ describe('createProjectRegistry populationSource', () => {
         root,
         enumerate: async (enumeratedRoot) => {
           offeredRoots.push(enumeratedRoot);
-          return { paths: [kept], conditions: [] };
+          return { paths: [kept], conditions: [], outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem' };
         },
-        decline: () => undefined,
       },
     });
 
@@ -173,8 +170,7 @@ describe('createProjectRegistry populationSource', () => {
       outputs: [],
       populationSource: {
         root,
-        enumerate: async () => ({ paths: [markdown, html, text, vendored], conditions: [] }),
-        decline: () => undefined,
+        enumerate: async () => ({ paths: [markdown, html, text, vendored], conditions: [], outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem' }),
       },
     });
 
@@ -218,9 +214,8 @@ describe('packageSkills populationSource', () => {
           root,
           enumerate: async (enumeratedRoot) => {
             offeredRoots.push(enumeratedRoot);
-            return { paths: [skillPath], conditions: [] };
+            return { paths: [skillPath], conditions: [], outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem' };
           },
-          decline: () => undefined,
         },
       },
     );

@@ -56,6 +56,7 @@ export {
   type RegistryUnreadablePolicy,
   type DuplicateIdCollision,
   type UnreadableResource,
+  type RegistryCrawl,
   type ResourceRegistryOptions,
   type RegistryStats,
   type CollectionStats,
@@ -893,9 +894,8 @@ export {
 export {
   buildResourcePopulation,
   buildResourceProjection,
-  combineOutcomes,
   type ResourceEnumeration,
-  type ResourcePopulation,
+  type CrawlPopulation,
   type ResourcePopulationSource,
 } from './projection/resource-population.js';
 

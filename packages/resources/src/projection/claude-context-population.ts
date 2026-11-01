@@ -339,7 +339,7 @@ export async function buildClaudeContextPopulation(options: TreePopulationOption
   const discovered = await importRoots(populateOptions, filesystem.id);
   // The discovery branch's replaying source becomes the run's, so the real pass
   // reuses that crawl instead of taking a second one.
-  if (discovered.source !== undefined) source = discovered.source;
+  if (discovered.population === 'derived') source = discovered.source;
 
   // AFTER the enumerator, and the order is load-bearing: `byStratum` returns
   // registration order and the driver runs base contributors sequentially, each
@@ -363,8 +363,13 @@ export async function buildClaudeContextPopulation(options: TreePopulationOption
   }
 
   const populated = await populate(populateOptions);
-  return { ...populated, importRoots: discovered.source === undefined ? 'store' : 'derived' };
+  return { ...populated, importRoots: discovered.population };
 }
+
+/** {@link importRoots}' answer: the roots, and which of the two routes found them. */
+type ImportRoots =
+  | { readonly population: 'store'; readonly roots: readonly string[] }
+  | { readonly population: 'derived'; readonly roots: readonly string[]; readonly source: CrawlSource };
 
 /**
  * Every `@`-import root under the tree — from the store when it holds this
@@ -389,18 +394,18 @@ export async function buildClaudeContextPopulation(options: TreePopulationOption
  *
  * @param populateOptions - The options the real population will run under
  * @param filesystemId - The enumerating contributor's id, from the instance
- * @returns The roots, and — only when a crawl was taken to find them — the
- *   replaying source that crawl produced, so the caller can hand the very same
- *   enumeration to the real pass rather than taking a second one
+ * @returns The roots and where they came from; a `derived` answer also carries
+ *   the replaying source its crawl produced, so the caller can hand the very
+ *   same enumeration to the real pass rather than taking a second one
  */
 async function importRoots(
   populateOptions: PopulateOptions,
   filesystemId: string,
-): Promise<{ roots: readonly string[]; source?: CrawlSource }> {
+): Promise<ImportRoots> {
   const stored = await readStoredRealizations(populateOptions, [
     { id: filesystemId, parameterSet: DECLINE_IGNORED },
   ]);
-  if (stored !== undefined) return { roots: claudeImportRootsFrom(stored) };
+  if (stored !== undefined) return { population: 'store', roots: claudeImportRootsFrom(stored) };
 
   const root = populateOptions.root;
   const source = await sharedEnumeration(root);
@@ -411,6 +416,7 @@ async function importRoots(
       source,
       populateOptions.collections,
     ),
+    population: 'derived',
     source,
   };
 }

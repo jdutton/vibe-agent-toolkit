@@ -126,7 +126,7 @@ const store = openSqliteProjectionStore({ directory: storeDirectory });
 const contributorRuns = [];
 
 try {
-  const { projection } = await populate({
+  const { projection, outcome } = await populate({
     root: corpusRoot,
     registry: registryFor(question),
     // Every declaration is handed over on every run, registered or not:
@@ -162,6 +162,9 @@ try {
     outputPath,
     JSON.stringify({
       contributorRuns,
+      // `populate()`'s own verdict, beside the observable one: the two must agree,
+      // or a consumer publishing the outcome would publish something untrue.
+      outcome,
       document,
       counts: Object.fromEntries(Object.entries(tables).map(([table, rows]) => [table, rows.length])),
     }),

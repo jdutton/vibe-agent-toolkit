@@ -11,6 +11,7 @@ import { DISCARD_BLOB_POPULATION } from '../src/projection/merge.js';
 import {
   buildResourcePopulation,
   buildResourceProjection,
+  type ResourcePopulationSource,
 } from '../src/projection/resource-population.js';
 import type {
   BlobScopedRows,
@@ -18,6 +19,7 @@ import type {
   ExtentScopedRows,
   ProjectionStore,
 } from '../src/projection/store.js';
+import { ResourceRegistry, type RegistryCrawl } from '../src/resource-registry.js';
 
 import { FakeProjectionStore } from './fake-projection-store.js';
 import { setupSubdirTestSuite } from './test-helpers.js';
@@ -138,12 +140,33 @@ describe('buildResourcePopulation', () => {
   afterAll(suite.afterAll);
   beforeEach(suite.beforeEach);
 
-  it('publishes one order, derived or served by a store that returns rows reordered', async (context) => {
-    const cap = symlinkCapability() ?? context.skip();
+  it('admits one order, derived or served by a store that returns rows reordered', async () => {
     await write('b.md', '# B\n');
     await write(DOC_A, '# A\n');
     await write('docs/c.md', '# C\n');
-    // Two dangling links: two conditions, so their order is observable too.
+    const cache = { store: new ReorderingStore(), treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
+    const source: ResourcePopulationSource = {
+      root: suite.tempDir,
+      enumerate: (root, outputs) => buildResourcePopulation({ outputs, root, cache }),
+    };
+    const crawlOnce = (): Promise<RegistryCrawl> =>
+      new ResourceRegistry({ baseDir: suite.tempDir }).crawl({
+        baseDir: suite.tempDir, outputs: [], unreadable: 'refuse', populationSource: source,
+      });
+
+    const written = await crawlOnce();
+    const hit = await crawlOnce();
+
+    expect(hit.population).toEqual({ lane: 'projection', outcome: { population: 'store', stored: 'hit' }, extentSource: 'filesystem' });
+    const order = (crawl: RegistryCrawl): string[] => crawl.resources.map((resource) => resource.filePath);
+    expect(order(written)).toEqual(order(written).toSorted(compareCodeUnits));
+    expect(order(hit)).toEqual(order(written));
+  });
+
+  it('publishes one condition order, derived or served by a store that returns rows reordered', async (context) => {
+    const cap = symlinkCapability() ?? context.skip();
+    await write(DOC_A, '# A\n');
+    // Two dangling links: two conditions, so their order is observable.
     createSymlink(cap, 'missing-one.md', safePath.join(suite.tempDir, 'dangling-z.md'));
     createSymlink(cap, 'missing-two.md', safePath.join(suite.tempDir, 'dangling-y.md'));
     const cache = { store: new ReorderingStore(), treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
@@ -152,9 +175,7 @@ describe('buildResourcePopulation', () => {
     const hit = await buildResourcePopulation({ outputs: [], root: suite.tempDir, cache });
 
     expect(hit.outcome.stored).toBe('hit');
-    expect(written.paths).toEqual(written.paths.toSorted(compareCodeUnits));
     expect(written.conditions.map((row) => row.path)).toEqual(['dangling-y.md', 'dangling-z.md']);
-    expect(hit.paths).toEqual(written.paths);
     expect(hit.conditions).toEqual(written.conditions);
   });
 

@@ -16,6 +16,7 @@ import {
   matchesCollection,
   type CollectionConfig,
   type CollectionStats,
+  type CrawlPopulation,
   type DeferredSkillFiles,
   type ProjectConfig,
 } from '@vibe-agent-toolkit/resources';
@@ -40,7 +41,6 @@ import {
   assertDeclaredCollection,
   loadResourcesWithConfig,
   publishedPopulation,
-  type PopulationObservation,
 } from '../../utils/resource-loader.js';
 import { warnRunIntegrity } from '../../utils/run-integrity.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
@@ -339,7 +339,7 @@ async function runValidation(
   const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
 
   // Load resources with config support (includes GitTracker initialization)
-  let observation: PopulationObservation | undefined;
+  let observation: CrawlPopulation | undefined;
   const { registry, config, gitTracker } = await loadResourcesWithConfig(pathArg, projectRoot, logger, (observed) => {
     observation = observed;
   });

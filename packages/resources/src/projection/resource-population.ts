@@ -166,23 +166,12 @@ export interface ResourcePopulationSource {
    *   conditions the enumeration recorded — see {@link ResourceEnumeration}
    */
   enumerate(root: string, outputs: readonly string[]): Promise<ResourceEnumeration>;
-  /**
-   * Told that a crawl of `offeredRoot` declined this source and walked instead.
-   *
-   * ⛔ Required, because the decline is otherwise visible only as an
-   * `enumerate` that never happened — indistinguishable from a run that
-   * enumerated no root. A caller publishing where its population came from has
-   * to know the walk answered, or it reports the projection lane for a crawl
-   * the projection never saw.
-   *
-   * @param offeredRoot - The resolved basis the declining crawl was asked about
-   */
-  decline(offeredRoot: string): void;
 }
 
 /**
- * What a population source hands the registry: the members, and what the
- * enumeration could say about itself while finding them.
+ * What a population source hands the registry: the members, what the
+ * enumeration could say about itself while finding them, and where the answer
+ * came from.
  *
  * `conditions` is the projection's `realization_conditions` table for the
  * extents this lane registered — a gitignored directory the enumerator could
@@ -192,48 +181,39 @@ export interface ResourcePopulationSource {
  * is gone. The registry surfaces each row as a finding with the row's own code
  * and severity; a source with nothing to say hands over an empty list, which is
  * what the walk lane always does.
+ *
+ * `outcome` and `extentSource` ride the same way, and are REQUIRED for the
+ * same reason: the registry hands them back from `crawl` beside the resources,
+ * which is the ONE route a caller learns where its population came from. A
+ * source that kept them on the side would leave that route empty and still
+ * compile.
  */
 export interface ResourceEnumeration {
-  /** Absolute paths of every file the population admits. */
+  /** Absolute paths of every file the population admits, in no promised order — the registry orders them. */
   readonly paths: readonly string[];
-  /** Population-time conditions recorded while enumerating. */
+  /** Population-time conditions recorded while enumerating, in canonical order (see `canonicalConditions`). */
   readonly conditions: readonly RealizationConditionRow[];
-}
-
-/**
- * One run's outcome from its roots' outcomes, in enumeration order.
- *
- * The first root that did not hit decides, so `population: 'store'` means every
- * root was served from the store; a single derived root makes the run derived.
- *
- * @param outcomes - Each enumerated root's outcome, in enumeration order
- * @returns The run's outcome, or `null` when no root was enumerated — nothing
- *   was populated from or into the store, so there is no provenance to report
- */
-export function combineOutcomes(outcomes: readonly PopulationOutcome[]): PopulationOutcome | null {
-  return outcomes.find((outcome) => outcome.stored !== 'hit') ?? outcomes[0] ?? null;
-}
-
-/**
- * A population together with the enumerator that produced it.
- *
- * The kind travels WITH the paths rather than being obtainable by asking the
- * environment again, for the reason the `lane` field on a scan exists: reading
- * `VAT_EXTENT_SOURCE` back proves what was requested, and the request and the
- * outcome come apart whenever {@link crawlSourceFor} declines a root that is
- * not in a repository.
- */
-export interface ResourcePopulation extends ResourceEnumeration {
-  /** Which enumerator ran — the instance's own kind, not the env's request. */
-  readonly extentSource: CrawlSourceKind;
-  /**
-   * Whether the store served this population — `populate()`'s own outcome,
-   * carried out of the projection it was built in. Not on
-   * {@link ResourceEnumeration}: the registry has no use for it, and the
-   * population source that called this is what reports it.
-   */
+  /** Whether the store served this population — `populate()`'s own outcome, or the stored read's. */
   readonly outcome: PopulationOutcome;
+  /**
+   * Which enumerator ran — the instance's own kind, not the env's request.
+   * Read back from the environment it would prove what was requested, and the
+   * request and the outcome come apart whenever {@link crawlSourceFor} declines
+   * a root that is not in a repository.
+   */
+  readonly extentSource: CrawlSourceKind;
 }
+
+/**
+ * Where one crawl's population came from, as `ResourceRegistry.crawl` reports it.
+ *
+ * `walk` when no source was offered AND when the offered source was declined:
+ * the walk answered either way, and a caller told otherwise would publish the
+ * projection lane for a crawl the projection never saw.
+ */
+export type CrawlPopulation =
+  | { readonly lane: 'walk' }
+  | { readonly lane: 'projection'; readonly outcome: PopulationOutcome; readonly extentSource: CrawlSourceKind };
 
 /**
  * Register the contributors every resources lane shares, and the parameters
@@ -391,7 +371,7 @@ export async function buildResourcePopulation(options: {
   gitTracker?: GitTracker | undefined;
   cache?: PopulationCache | undefined;
   collections?: Readonly<Record<string, CollectionConfig>> | undefined;
-}): Promise<ResourcePopulation> {
+}): Promise<ResourceEnumeration> {
   const root = safePath.resolve(options.root);
 
   // Selected here, one call earlier than `FilesystemExtentContributor` would
@@ -468,7 +448,7 @@ export async function buildResourcePopulation(options: {
   // consumer's call (the registry surfaces every one as a finding, and severity
   // overrides are the adopter's), and a filter at this seam would be a second,
   // quieter policy nobody configured.
-  return { ...canonicalEnumeration(paths, projection.realizationConditions), outcome, extentSource: source.kind };
+  return { paths, conditions: canonicalConditions(projection.realizationConditions), outcome, extentSource: source.kind };
 }
 
 
@@ -538,7 +518,7 @@ export function buildResourceProjection(options: TreePopulationOptions): Promise
 
 /**
  * Every column of a condition row, `code` and `path` first: the order
- * {@link canonicalEnumeration} compares them in.
+ * {@link canonicalConditions} compares them in.
  */
 const CONDITION_ORDER = [
   'code', 'path',
@@ -557,27 +537,26 @@ function conditionSortKey(row: RealizationConditionRow): string {
 }
 
 /**
- * A population's members in the ONE order every lane publishes them in: paths by
- * code unit, conditions by `(code, path, …every other column)`.
+ * A population's conditions in the ONE order every lane publishes them in:
+ * `(code, path, …every other column)`.
  *
  * Sorted, because a stored extent comes back in SQLite's order, which carries no
  * `ORDER BY` guarantee: unsorted, a warm run published the same findings as the
  * cold run in a different order. Total over the row, so no two distinct rows tie
- * and fall back to whichever order arrived.
+ * and fall back to whichever order arrived. Paths are not sorted here: the
+ * registry orders every list it admits, whoever enumerated it.
  *
- * @param paths - The admitted members' absolute paths
+ * Each key is computed once, not once per comparison.
+ *
  * @param conditions - The population's conditions
- * @returns New, sorted arrays; the inputs are not reordered
+ * @returns A new, sorted array; the input is not reordered
  */
-function canonicalEnumeration(
-  paths: readonly string[],
-  conditions: readonly RealizationConditionRow[],
-): ResourceEnumeration {
-  return {
-    paths: paths.toSorted(compareCodeUnits),
-    conditions: conditions.toSorted((left, right) => compareCodeUnits(conditionSortKey(left), conditionSortKey(right))),
-  };
+function canonicalConditions(conditions: readonly RealizationConditionRow[]): RealizationConditionRow[] {
+  return conditions
+    .map((row) => ({ row, key: conditionSortKey(row) }))
+    .sort((left, right) => compareCodeUnits(left.key, right.key))
+    .map(({ row }) => row);
 }
 
 /** Test-only seam — see `docs/architecture/README.md` "`__internal`". */
-export const __internal = { canonicalEnumeration } as const;
+export const __internal = { canonicalConditions, CONDITION_ORDER } as const;

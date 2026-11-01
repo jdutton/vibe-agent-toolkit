@@ -282,9 +282,8 @@ describe('crawl timing seam', () => {
               parameters: { [CLOSURE_DRIVER_ID]: closureDeclaration() },
               onBlobPopulation: DISCARD_BLOB_POPULATION,
             });
-            return { paths: [], conditions: [] };
+            return { paths: [], conditions: [], outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem' };
           },
-          decline: () => undefined,
         },
       });
 

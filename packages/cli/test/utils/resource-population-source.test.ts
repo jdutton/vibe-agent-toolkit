@@ -16,7 +16,6 @@
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import type { ResourcePopulationSource } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -25,39 +24,7 @@ import {
   RESOURCES_CRAWL_PROJECTION,
   RESOURCES_CRAWL_WALK,
   withResourcePopulationSource,
-  type PopulationObservation,
 } from '../../src/utils/resource-loader.js';
-
-/** Observers that ignore what they are told — for the cases about something else. */
-const IGNORE = { observePopulation: (): void => undefined };
-
-/** Observers that record every population observation, so "exactly once" is assertable. */
-function recording(): { observed: PopulationObservation[]; observers: typeof IGNORE } {
-  const observed: PopulationObservation[] = [];
-  return {
-    observed,
-    observers: {
-      observePopulation: (observation) => {
-        observed.push(observation);
-      },
-    },
-  };
-}
-
-/**
- * Write the guide, run `drive` with the source, and record every observation.
- *
- * @param drive - What the crawl does with the source it was handed
- * @returns Every observation the call made
- */
-async function observeOverGuide(
-  drive: (source: ResourcePopulationSource | undefined) => Promise<void>,
-): Promise<PopulationObservation[]> {
-  writeFileSync(safePath.join(root, GUIDE_REL), '# guide\n', 'utf-8');
-  const { observed, observers } = recording();
-  await withResourcePopulationSource({ root, ...observers }, drive);
-  return observed;
-}
 
 /** The two fixture members, named once so the writes and the expectation agree. */
 const GUIDE_REL = 'docs/guide.md';
@@ -79,7 +46,7 @@ afterEach(() => {
 
 describe('withResourcePopulationSource', () => {
   it('hands back a source when the selector is unset, because the projection lane is the default', async () => {
-    const received = await withResourcePopulationSource({ root, ...IGNORE }, async (source) => source);
+    const received = await withResourcePopulationSource({ root }, async (source) => source);
 
     expect(received).toBeDefined();
   });
@@ -91,7 +58,7 @@ describe('withResourcePopulationSource', () => {
     process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_WALK;
 
     try {
-      const received = await withResourcePopulationSource({ root, ...IGNORE }, async (source) => source);
+      const received = await withResourcePopulationSource({ root }, async (source) => source);
 
       expect(received).toBeUndefined();
     } finally {
@@ -104,7 +71,7 @@ describe('withResourcePopulationSource', () => {
     writeFileSync(safePath.join(root, ASSET_REL), 'asset', 'utf-8');
     process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_PROJECTION;
 
-    const paths = await withResourcePopulationSource({ root, ...IGNORE }, async (source) => {
+    const paths = await withResourcePopulationSource({ root }, async (source) => {
       expect(source).toBeDefined();
       // The root it declares is the root it may be asked about — the registry's
       // guard compares exactly this, so a seam that handed back the wrong one
@@ -121,73 +88,14 @@ describe('withResourcePopulationSource', () => {
     ).toEqual([ASSET_REL, GUIDE_REL]);
   });
 
-  it('reports the enumerator that actually ran', async () => {
+  it('carries the enumeration\'s own outcome and enumerator out with its paths', async () => {
     writeFileSync(safePath.join(root, GUIDE_REL), '# guide\n', 'utf-8');
-    process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_PROJECTION;
 
-    const { observed, observers } = recording();
-    await withResourcePopulationSource({ root, ...observers }, async (source) => source?.enumerate(root, []));
+    const enumeration = await withResourcePopulationSource({ root }, async (source) => source?.enumerate(root, []));
 
-    expect(observed).toEqual([expect.objectContaining({ lane: 'projection', extentSource: 'filesystem' })]);
-  });
-
-  describe('observes the population exactly once per call', () => {
-    it('says the walk answered when the lane is not selected', async () => {
-      process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_WALK;
-      const { observed, observers } = recording();
-
-      await withResourcePopulationSource({ root, ...observers }, async () => undefined);
-
-      expect(observed).toEqual([{ lane: 'walk' }]);
-    });
-
-    it('says the walk answered when a crawl declined the source', async () => {
-      const { observed, observers } = recording();
-
-      await withResourcePopulationSource({ root, ...observers }, async (source) => {
-        source?.decline(safePath.join(root, 'elsewhere'));
-      });
-
-      expect(observed).toEqual([{ lane: 'walk' }]);
-    });
-
-    it('says the walk answered, with no enumerator, when a crawl enumerated one root and declined another', async () => {
-      const observed = await observeOverGuide(async (source) => {
-        await source?.enumerate(root, []);
-        source?.decline(safePath.join(root, 'elsewhere'));
-      });
-
-      expect(observed).toEqual([{ lane: 'walk' }]);
-    });
-
-    it('publishes a null outcome when the projection lane enumerated no root', async () => {
-      const { observed, observers } = recording();
-
-      await withResourcePopulationSource({ root, ...observers }, async () => undefined);
-
-      expect(observed).toEqual([{ lane: 'projection', outcome: null, extentSource: null }]);
-    });
-
-    it('publishes the one root\'s outcome', async () => {
-      const observed = await observeOverGuide(async (source) => {
-        await source?.enumerate(root, []);
-      });
-
-      // A temp tree outside any repository has no store, so the run derived.
-      expect(observed).toEqual([
-        { lane: 'projection', outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem' },
-      ]);
-    });
-
-    it('combines two enumerations into ONE observation', async () => {
-      const observed = await observeOverGuide(async (source) => {
-        await source?.enumerate(root, []);
-        await source?.enumerate(root, []);
-      });
-
-      expect(observed).toEqual([
-        { lane: 'projection', outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem' },
-      ]);
-    });
+    // A temp tree outside any repository has no store, so the run derived, on
+    // the filesystem enumerator — told by the enumeration, not by a side channel.
+    expect(enumeration?.outcome).toEqual({ population: 'derived', stored: 'no-store' });
+    expect(enumeration?.extentSource).toBe('filesystem');
   });
 });
