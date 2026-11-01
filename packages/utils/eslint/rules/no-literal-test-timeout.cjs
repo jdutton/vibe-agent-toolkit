@@ -83,7 +83,7 @@ function testFunctionRoot(callee) {
   }
   if (node.type === 'CallExpression' || node.type === 'TaggedTemplateExpression') {
     const factory = unwrap(node.type === 'CallExpression' ? node.callee : node.tag);
-    if (factory && factory.type === 'MemberExpression' && !factory.computed
+    if (factory?.type === 'MemberExpression' && !factory.computed
       && factory.property.type === 'Identifier' && FACTORY_MEMBERS.has(factory.property.name)) {
       return testFunctionRoot(factory.object);
     }
@@ -98,7 +98,7 @@ function constInitializer(sourceCode, identifier) {
     const variable = scope.set.get(identifier.name);
     if (variable) {
       const definition = variable.defs[0];
-      if (definition && definition.type === 'Variable' && definition.parent.kind === 'const'
+      if (definition?.type === 'Variable' && definition.parent.kind === 'const'
         && definition.node.id.type === 'Identifier') {
         return definition.node.init;
       }
