@@ -293,7 +293,7 @@ function closureDeclaration(): Record<string, JsonValue> {
 /** Run the whole driver over the skill corpus, capturing the stage's counters. */
 async function populateSkillCorpus(): Promise<{ projection: Projection; counts: BlobPopulationResult }> {
   let counts: BlobPopulationResult | undefined;
-  const projection = await populate({
+  const { projection } = await populate({
     root: suite.tempDir,
     registry: registryWithClosure(EXTENT_NAME, SKILL_KIND),
     parameters: { [`closure:${EXTENT_NAME}`]: closureDeclaration() },
@@ -410,7 +410,7 @@ describe('populateBlobs', () => {
     const registry = new ContributorRegistry();
     registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
 
-    const projection = await populate({ root: suite.tempDir, registry, onBlobPopulation: () => undefined });
+    const { projection } = await populate({ root: suite.tempDir, registry, onBlobPopulation: () => undefined });
 
     const keyOf = (path: string): string => {
       const key = projection.resourceRealizations.find((row) => row.path === path)?.contentKey;

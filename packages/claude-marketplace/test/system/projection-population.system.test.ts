@@ -277,7 +277,7 @@ async function probeConvergence(
   // guaranteed throw that measures nothing and costs a whole population.
   for (let cap = 2; cap <= PROBE_CEILING; cap++) {
     try {
-      const projection = await populate({
+      const { projection } = await populate({
         root: ROOT, registry, parameters, gitTracker, maxIterations: cap, onBlobPopulation,
       });
       return { projection, passes: cap, movingByPass };

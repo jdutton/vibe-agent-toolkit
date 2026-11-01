@@ -39,8 +39,8 @@ const CAPABILITY = symlinkCapability();
 
 let root: string;
 
-/** One population of `root` through `store`, reporting whether a contributor ran. */
-async function populateThrough(store: FakeProjectionStore): Promise<{ projection: Projection; contributorRan: boolean }> {
+/** One population of `root` through `store`, reporting whether it derived rather than being served. */
+async function populateThrough(store: FakeProjectionStore): Promise<{ projection: Projection; derived: boolean }> {
   return populateExtentThrough(root, store, TREE_HASH);
 }
 
@@ -68,7 +68,7 @@ describe.skipIf(CAPABILITY === null)('a cached declined-link row is re-resolved 
     const second = await populateThrough(store);
 
     expect(linkCode(first.projection)).toBe(EXTENT_SYMLINK_TARGET_UNRESOLVED);
-    expect(second.contributorRan).toBe(false);
+    expect(second.derived).toBe(false);
     expect(linkCode(second.projection)).toBe(EXTENT_SYMLINK_TARGET_UNRESOLVED);
     expect(store.writeExtentCalls).toBe(1);
   });
@@ -81,7 +81,7 @@ describe.skipIf(CAPABILITY === null)('a cached declined-link row is re-resolved 
     writeFileSync(safePath.join(root, IGNORED_TARGET), '# generated\n');
     const after = await populateThrough(store);
 
-    expect(after.contributorRan).toBe(true);
+    expect(after.derived).toBe(true);
     expect(linkCode(after.projection)).toBe(EXTENT_SYMLINK_NOT_REALIZED);
     expect(store.writeExtentCalls).toBe(2);
   });
@@ -96,7 +96,7 @@ describe.skipIf(CAPABILITY === null)('a cached declined-link row is re-resolved 
     rmSync(safePath.join(root, 'build'), { recursive: true, force: true });
     const after = await populateThrough(store);
 
-    expect(after.contributorRan).toBe(true);
+    expect(after.derived).toBe(true);
     expect(linkCode(after.projection)).toBe(EXTENT_SYMLINK_TARGET_UNRESOLVED);
   });
 });
@@ -151,7 +151,7 @@ describe.skipIf(CAPABILITY === null)('a cached declined-link row whose MESSAGE c
     const second = await populateThrough(store);
 
     expect(hoppedRow(first.projection)?.message).toContain("to 'docsA/a.md', which is realized at its own path");
-    expect(second.contributorRan).toBe(false);
+    expect(second.derived).toBe(false);
     expect(hoppedRow(second.projection)).toEqual(hoppedRow(first.projection));
   });
 
@@ -163,7 +163,7 @@ describe.skipIf(CAPABILITY === null)('a cached declined-link row whose MESSAGE c
     retargetHop(safePath.join(root, 'docsB'));
     const after = await populateThrough(store);
 
-    expect(after.contributorRan).toBe(true);
+    expect(after.derived).toBe(true);
     expect(hoppedRow(after.projection)?.code).toBe(EXTENT_SYMLINK_NOT_REALIZED);
     expect(hoppedRow(after.projection)?.message).toContain("to 'docsB/a.md', which is realized at its own path");
   });
@@ -176,7 +176,7 @@ describe.skipIf(CAPABILITY === null)('a cached declined-link row whose MESSAGE c
     retargetHop(safePath.join(outside, 'elsewhere'));
     const after = await populateThrough(store);
 
-    expect(after.contributorRan).toBe(true);
+    expect(after.derived).toBe(true);
     expect(hoppedRow(after.projection)?.code).toBe(EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT);
     expect(hoppedRow(after.projection)?.message).not.toContain(outside);
   });

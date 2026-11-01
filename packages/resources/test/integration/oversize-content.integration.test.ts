@@ -125,7 +125,7 @@ describe('populate over a tree holding one undecodable file', () => {
     const registry = new ContributorRegistry();
     registry.register(new FilesystemExtentContributor(() => crawlSourceFor(root, [])));
     const reports: BlobPopulationReport[] = [];
-    const projection = await populate({ root, registry, onBlobPopulation: (r) => reports.push(r) });
+    const { projection } = await populate({ root, registry, onBlobPopulation: (r) => reports.push(r) });
 
     const rowAt = (name: string) =>
       projection.resourceRealizations.find((row) => toForwardSlash(row.path) === name);

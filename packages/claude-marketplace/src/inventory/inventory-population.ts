@@ -264,7 +264,7 @@ export async function buildInventoryPopulation(options: {
     ) as unknown as JsonValue;
   }
 
-  const projection = await populate({
+  const { projection } = await populate({
     root,
     registry,
     parameters,

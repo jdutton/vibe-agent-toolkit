@@ -184,9 +184,14 @@ single-command facet runs are one-step sequences under `<arms root>/<build>-<com
   it must leave the store non-empty and at least one parse shard (a file, not an empty directory).
 - **Warm** primes the arm once before round 1 with an unmeasured run, which must leave the same
   store and shard when any step `populates` (a priming failure fails the arm). In each measured
-  round, a step whose command reads provenance (`resources check`, `validate`) must publish
-  `population: store` — absent or `derived` fails the repetition; a step with no provenance reader
-  asserts nothing.
+  round, a step whose command reads provenance must publish `population: store`. Two readers do:
+  `resources check` (`data.population`) and `validate` (the `resources` and `checks` phases'
+  `population`). A field that is absent or not a string counts as absent, and absent or `derived`
+  fails the repetition. `resources validate` publishes `data.population` too, but the lab does
+  not judge it yet. A baseline build that predates the field cannot yet be told apart from a run
+  that dropped it, and judging it needs a per-build declaration, which is pending. A step with no
+  provenance reader (`resources validate`, `resources query`, `skills validate`, the facet entry
+  for `validate`) asserts nothing.
 - The lab never runs `vat cache clear` — it owns the directories it clears.
 - A bare command name (`git`, a prerequisite's `pnpm`) resolves from the **child's** PATH, absolute
   entries only — never from a working directory, which here is the subject's clone.

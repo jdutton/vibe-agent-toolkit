@@ -61,12 +61,13 @@ import {
 const POPULATION: ProgressEntry = {
   kind: 'population',
   population: 'store',
+  // NOT the default, and not the run's own `population` either: a rebuild that
+  // dropped the field or copied its neighbour into it would still read 'none'
+  // or 'store' and pass.
+  lensPopulation: 'derived',
   populationMs: 1180,
-  lensMs: 0,
-  // Empty, and the zero above goes with it: this run's checks named no derived
-  // relation, so no lens was evaluated. An interrupted run's document has to be
-  // able to say that rather than leave the reader guessing.
-  lensesEvaluated: [],
+  lensMs: 340,
+  lensesEvaluated: ['claude-context'],
   membersEnumerated: 8123,
 };
 const FIRST_COST: ProgressEntry = { kind: 'check', name: 'no-markdown', durationMs: 4.25, rows: 3 };
@@ -294,6 +295,8 @@ describe('buildInterruptedCheckInput', () => {
     const { populated } = killed();
 
     expect(populated?.population).toBe('store');
+    expect(populated?.lensPopulation).toBe('derived');
+    expect(populated?.lensesEvaluated).toStrictEqual(['claude-context']);
     expect(populated?.populationMs).toBe(1180);
     expect(populated?.membersEnumerated).toBe(8123);
   });
@@ -447,6 +450,8 @@ describe('buildInterruptedCheckInput', () => {
 
     expect(payload.examined).toBe(0);
     expect(payload.data.population).toBeNull();
+    // `null`, not `'none'`: no population happened at all, lens or otherwise.
+    expect(payload.data.lensPopulation).toBeNull();
     expect(payload.data.populationSecs).toBeNull();
     expect(payload.data.lensSecs).toBeNull();
     expect(payload.data.lensesEvaluated).toBeNull();
@@ -715,7 +720,14 @@ describe('readCompletedDocument — a child whose exit DISAGREES with its own do
   const clean = (): string => JSON.stringify(buildCheckOutputData({
     root: '/corpus',
     durationMs: 1200,
-    populated: { population: 'store', populationMs: 1180, lensMs: 0, lensesEvaluated: [], membersEnumerated: 8123 },
+    populated: {
+      population: 'store',
+      lensPopulation: 'none',
+      populationMs: 1180,
+      lensMs: 0,
+      lensesEvaluated: [],
+      membersEnumerated: 8123,
+    },
     issues: [],
     costs: [{ name: 'no-markdown', durationMs: 4.25, rows: 0 }],
   }));

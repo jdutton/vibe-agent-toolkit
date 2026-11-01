@@ -22,7 +22,7 @@ vi.mock('@vibe-agent-toolkit/resources', async (importOriginal) => {
   const Absent = actual['HarnessFactsAbsentError'] as typeof HarnessFactsAbsentError;
   return {
     ...actual,
-    buildClaudeContextPopulation: vi.fn(() => Promise.resolve({} as Projection)),
+    buildClaudeContextPopulation: vi.fn(() => Promise.resolve({ projection: {} as Projection })),
     whatLoadsAt: vi.fn(() => {
       throw new Absent('claude-code', BLOB, 'acme/CLAUDE.md');
     }),

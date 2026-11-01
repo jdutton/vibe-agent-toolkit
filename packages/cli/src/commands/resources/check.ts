@@ -377,10 +377,10 @@ function couldNotRun(report: CheckReport): CheckReport {
  */
 function populationData(populated: PopulatedRun | null): Pick<
   CheckData,
-  'population' | 'populationSecs' | 'lensSecs' | 'lensesEvaluated' | 'boundsStatement' | 'limits'
+  'population' | 'populationSecs' | 'lensSecs' | 'lensesEvaluated' | 'lensPopulation' | 'boundsStatement' | 'limits'
 > {
   if (populated === null) {
-    return { population: null, populationSecs: null, lensSecs: null, lensesEvaluated: null };
+    return { population: null, populationSecs: null, lensSecs: null, lensesEvaluated: null, lensPopulation: null };
   }
   return {
     population: populated.population,
@@ -397,6 +397,8 @@ function populationData(populated: PopulatedRun | null): Pick<
     // into a plain array so the published document owns no reference into the
     // run's own state.
     lensesEvaluated: [...populated.lensesEvaluated],
+    // Where those lenses' own populations came from — see `CheckDataSchema.lensPopulation`.
+    lensPopulation: populated.lensPopulation,
     // The bounds of the rows those lenses produced, stated ONCE and only when
     // a bounded lens ran. This is the verb an adopter makes GATE, so it is the
     // one that most owes them — `utils/relation-limits.ts` carries why.
@@ -1364,6 +1366,7 @@ export function buildInterruptedCheckInput(options: {
       ? null
       : {
         population: population.population,
+        lensPopulation: population.lensPopulation,
         populationMs: population.populationMs,
         lensMs: population.lensMs,
         lensesEvaluated: population.lensesEvaluated,
@@ -1915,6 +1918,7 @@ function runOutcome(options: {
     onProgress?.({
       kind: 'population',
       population: provenance.population,
+      lensPopulation: provenance.lensPopulation,
       populationMs: provenance.populationMs,
       lensMs: provenance.lensMs,
       lensesEvaluated: [...provenance.lensesEvaluated],

@@ -53,11 +53,7 @@ import {
 } from '../../utils/issue-rendering.js';
 import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
-import {
-  RESOURCES_CRAWL_ENV,
-  RESOURCES_CRAWL_PROJECTION,
-  withResourcePopulationSource,
-} from '../../utils/resource-loader.js';
+import { crawlLaneDebugLine, withResourcePopulationSource } from '../../utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
 import { renderSkillQualityFooter } from '../../utils/skill-quality-footer.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
@@ -465,7 +461,7 @@ export async function buildSkillsValidateRegistry(
   options: SkillsValidateRegistryOptions = {},
 ): Promise<ResourceRegistry> {
   const { config, populationSource } = options;
-  const registry = await ResourceRegistry.fromCrawl(
+  const { registry } = await ResourceRegistry.fromCrawl(
     {
       baseDir: projectRoot,
       include: ['**/*.md'],
@@ -588,11 +584,7 @@ export async function buildSharedValidationContext(
       const registry = await withResourcePopulationSource(
         { root: sharedRoot, gitTracker: context.gitTracker },
         (populationSource) => {
-          logger.debug(
-            populationSource
-              ? `Enumerating via the projection lane (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_PROJECTION})`
-              : `Enumerating via the incumbent walk (${RESOURCES_CRAWL_ENV} unset)`,
-          );
+          logger.debug(crawlLaneDebugLine(populationSource));
           return buildSkillsValidateRegistry(sharedRoot, {
             // The command's OWN config, not a second read of the same file. It
             // governs `sharedRoot` by construction: this command exits early

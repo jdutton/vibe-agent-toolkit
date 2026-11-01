@@ -196,9 +196,11 @@ describe('the incumbent crawl lane under a parse pool', () => {
 
   it('records an unreadable file without losing what was in flight beside it', async () => {
     const lead = await plantLead();
-    const before = await plant('before.md', '# Before\n');
-    const missing = safePath.join(suite.tempDir, 'absent.md');
-    const after = await plant('after.md', '# After\n');
+    // Named so the list below is already in admission order (the registry sorts
+    // by path), which keeps the missing file BETWEEN the two in flight.
+    const before = await plant('b-before.md', '# Before\n');
+    const missing = safePath.join(suite.tempDir, 'c-absent.md');
+    const after = await plant('d-after.md', '# After\n');
 
     const { pool, record } = fakePool(4, { reverseCompletion: true });
     const registry = registryWith(pool);

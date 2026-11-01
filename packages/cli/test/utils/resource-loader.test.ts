@@ -1,3 +1,4 @@
+import type { CrawlPopulation } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -37,6 +38,7 @@ const loadConfigMock = vi.fn();
 const gitTrackerInitializeMock = vi.fn();
 const gitTrackerGetStatsMock = vi.fn();
 const registryCrawlMock = vi.fn();
+const buildResourcePopulationMock = vi.fn();
 /** Absolute paths the fake fs reports as existing directories. */
 const existingDirectories = new Set<string>();
 let lastRegistryOptions: Record<string, unknown> | undefined;
@@ -79,19 +81,30 @@ vi.mock('node:fs', () => {
 
 vi.mock('@vibe-agent-toolkit/resources', async (importOriginal) => ({
   ...(await importOriginal<OriginalModule>()),
+  buildResourcePopulation: (options: unknown): unknown => buildResourcePopulationMock(options),
   ResourceRegistry: class {
     constructor(options: Record<string, unknown>) {
       lastRegistryOptions = options;
     }
-    async crawl(options: Record<string, unknown>): Promise<void> {
+    // Returns what the real crawl returns: the mock's answer when a test gave
+    // one, otherwise a crawl that used whichever lane it was handed.
+    async crawl(options: Record<string, unknown>): Promise<unknown> {
       lastCrawlOptions = options;
-      await registryCrawlMock(options);
+      const returned: unknown = await registryCrawlMock(options);
+      return returned ?? {
+        resources: [],
+        population: options['populationSource'] === undefined
+          ? { lane: 'walk' }
+          : { lane: 'projection', outcome: { population: 'derived', stored: 'written' }, extentSource: 'filesystem' },
+      };
     }
   },
 }));
 
 vi.mock('../../src/utils/config-loader.js', () => ({
   loadConfig: (projectRoot: string): unknown => loadConfigMock(projectRoot),
+  // Read by `collectionsOption` when a faked crawl drives the source's `enumerate`.
+  loadConfigCached: (projectRoot: string): unknown => loadConfigMock(projectRoot),
 }));
 
 vi.mock('@vibe-agent-toolkit/utils/git', async (importOriginal) => ({
@@ -110,11 +123,36 @@ vi.mock('@vibe-agent-toolkit/utils/git', async (importOriginal) => ({
 import type { Logger } from '../../src/utils/logger.js';
 // eslint-disable-next-line import/first -- must come after vi.mock calls
 import {
+  crawlLaneDebugLine,
+  extentSourceOf,
   loadResourcesWithConfig,
+  publishedPopulation,
   RESOURCES_CRAWL_ENV,
   RESOURCES_CRAWL_PROJECTION,
   RESOURCES_CRAWL_WALK,
 } from '../../src/utils/resource-loader.js';
+
+
+const HIT = { population: 'store', stored: 'hit' } as const;
+const WRITTEN = { population: 'derived', stored: 'written' } as const;
+
+/** The source the loader installed on the crawl, refused when it installed none. */
+interface InstalledSource {
+  enumerate: (root: string, outputs: readonly string[]) => Promise<unknown>;
+}
+
+/**
+ * Make the faked crawl return `population` beside no resources, after checking
+ * the loader handed it a source.
+ *
+ * @param population - What the crawl says about where its population came from
+ */
+function crawlReturns(population: CrawlPopulation): void {
+  registryCrawlMock.mockImplementation((options: { populationSource?: InstalledSource }) => {
+    if (options.populationSource === undefined) throw new Error('no population source was installed');
+    return Promise.resolve({ resources: [], population });
+  });
+}
 
 function createTestLogger(): { logger: Logger; debugCalls: string[]; warnCalls: string[] } {
   const debugCalls: string[] = [];
@@ -130,6 +168,17 @@ function createTestLogger(): { logger: Logger; debugCalls: string[]; warnCalls: 
     },
   };
   return { logger, debugCalls, warnCalls };
+}
+
+/**
+ * Load once with no config.
+ *
+ * @returns The population the load result carries — the one channel
+ */
+async function loadedPopulation(): Promise<CrawlPopulation> {
+  loadConfigMock.mockReturnValue(undefined);
+  const { logger } = createTestLogger();
+  return (await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger)).population;
 }
 
 describe('loadResourcesWithConfig', () => {
@@ -340,7 +389,7 @@ describe('loadResourcesWithConfig', () => {
 
     const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
 
-    expect(result.lane).toBe('projection');
+    expect(result.population.lane).toBe('projection');
     // The lane is a claim about what ran, so it has to agree with whether a
     // population source was actually installed on the crawl.
     expect(lastCrawlOptions?.populationSource).toBeDefined();
@@ -357,7 +406,7 @@ describe('loadResourcesWithConfig', () => {
     try {
       const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
 
-      expect(result.lane).toBe('walk');
+      expect(result.population.lane).toBe('walk');
       expect(lastCrawlOptions?.populationSource).toBeUndefined();
     } finally {
       delete process.env[RESOURCES_CRAWL_ENV];
@@ -375,7 +424,7 @@ describe('loadResourcesWithConfig', () => {
     try {
       const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
 
-      expect(result.lane).toBe('projection');
+      expect(result.population.lane).toBe('projection');
     } finally {
       delete process.env[RESOURCES_CRAWL_ENV];
     }
@@ -390,5 +439,77 @@ describe('loadResourcesWithConfig', () => {
 
     expect(debugCalls).toContain(`Loaded config from ${PROJECT_ROOT}`);
     expect(debugCalls).toContain('GitTracker initialized with 42 tracked files');
+  });
+
+  describe('carries the population the crawl returned on the load result', () => {
+    beforeEach(() => {
+      buildResourcePopulationMock.mockReset();
+    });
+
+    it('says the walk answered when the projection lane is not selected', async () => {
+      process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_WALK;
+      try {
+        expect(await loadedPopulation()).toEqual({ lane: 'walk' });
+      } finally {
+        delete process.env[RESOURCES_CRAWL_ENV];
+      }
+    });
+
+    it('says the walk answered when the crawl declined the source, with NO enumerator', async () => {
+      crawlReturns({ lane: 'walk' });
+
+      const population = await loadedPopulation();
+
+      expect(population).toEqual({ lane: 'walk' });
+      expect(extentSourceOf(population)).toBeNull();
+    });
+
+    it('publishes the outcome and enumerator the crawl RETURNED', async () => {
+      crawlReturns({ lane: 'projection', outcome: HIT, extentSource: 'git' });
+
+      const population = await loadedPopulation();
+
+      expect(population).toEqual({ lane: 'projection', outcome: HIT, extentSource: 'git' });
+      expect(extentSourceOf(population)).toBe('git');
+    });
+
+    it('hands the registry the WHOLE enumeration, outcome and enumerator included', async () => {
+      const enumeration = { paths: [], conditions: [], outcome: HIT, extentSource: 'filesystem' };
+      buildResourcePopulationMock.mockResolvedValue(enumeration);
+      let handed: unknown;
+      registryCrawlMock.mockImplementation(async (options: { populationSource?: InstalledSource }) => {
+        handed = await options.populationSource?.enumerate(PROJECT_ROOT, []);
+      });
+
+      await loadedPopulation();
+
+      // The one route the outcome takes out: through `enumerate`, to the crawl.
+      expect(handed).toEqual(enumeration);
+    });
+  });
+});
+
+describe('crawlLaneDebugLine', () => {
+  it('names the value that selected the walk — the only way no source is offered', () => {
+    expect(crawlLaneDebugLine(undefined)).toBe(`Enumerating via the incumbent walk (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_WALK})`);
+  });
+
+  it('names the projection lane when a source is offered', () => {
+    const source = { root: safePath.resolve('/project'), enumerate: async () => { throw new Error('not called'); } };
+    expect(crawlLaneDebugLine(source)).toBe(`Enumerating via the projection lane (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_PROJECTION})`);
+  });
+});
+
+describe('publishedPopulation — what validate publishes for one observation', () => {
+  it.each([
+    { name: 'the walk', observation: { lane: 'walk' }, expected: null },
+    { name: 'a hit', observation: { lane: 'projection', outcome: HIT, extentSource: 'git' }, expected: 'store' },
+    {
+      name: 'a derivation',
+      observation: { lane: 'projection', outcome: WRITTEN, extentSource: 'git' },
+      expected: 'derived',
+    },
+  ] as const)('publishes $expected for $name', ({ observation, expected }) => {
+    expect(publishedPopulation(observation)).toBe(expected);
   });
 });

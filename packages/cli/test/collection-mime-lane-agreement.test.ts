@@ -144,7 +144,7 @@ async function projectionVerdicts(): Promise<Record<string, Verdict>> {
   const registry = new ContributorRegistry();
   registry.register(new FilesystemExtentContributor(() => crawlSourceFor(corpus.root(), [])));
 
-  const projection = await populate({
+  const { projection } = await populate({
     root: corpus.root(),
     registry,
     collections: COLLECTIONS,
@@ -178,7 +178,7 @@ describe('the projection lane and ResourceRegistry agree about a declared mimeTy
     // The class-level contract, and the branch nothing covered: replacing
     // `this.config?.resources?.collections` with `undefined` in
     // `admitResource` left the whole suite green before this existed.
-    const registry = await ResourceRegistry.fromCrawl(
+    const { registry } = await ResourceRegistry.fromCrawl(
       { outputs: [], unreadable: 'refuse', baseDir: corpus.root(), include: ['**/*.md'] },
       { config: CONFIG },
     );
@@ -190,7 +190,7 @@ describe('the projection lane and ResourceRegistry agree about a declared mimeTy
     // The mechanism, pinned as a positive fact rather than left as an inference:
     // the disagreement is caused by the absent config and by nothing else, so
     // every failing lane below has exactly one cause.
-    const registry = await ResourceRegistry.fromCrawl({
+    const { registry } = await ResourceRegistry.fromCrawl({
       outputs: [],
       unreadable: 'refuse',
       baseDir: corpus.root(),

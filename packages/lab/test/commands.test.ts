@@ -154,7 +154,7 @@ describe('the CI commands and sequences', () => {
     expect(specNamed(name).args).toEqual(CI_ARGV[name]);
   });
 
-  it('reads the population where each CI verb publishes it, and nowhere else', () => {
+  it('judges the population only on the CI verbs whose reader is wired (resources check, validate)', () => {
     expect(Object.fromEntries(CI_NAMES.map((name) => [name, specNamed(name).provenance]))).toEqual({
       'resources-validate-ci': 'none',
       'resources-check-ci': 'resources-check',

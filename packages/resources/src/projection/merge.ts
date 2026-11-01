@@ -353,13 +353,16 @@ export interface PopulateOptions {
    * a closure one, so a contributor that is cheap once but runs in every pass is
    * distinguishable from one that is expensive once.
    *
-   * **Optional, and the seam does not depend on it.** Every record is also filed
-   * with `crawl-timing.ts`, which dumps them when `VAT_CRAWL_TIMING` is set —
-   * see {@link reportContributorTiming}. This option existed for two years' worth
-   * of commits with no observer anywhere in the repository (three grep hits, all
-   * inside this file), which meant both brackets below could have been deleted
-   * with nothing failing. A caller that wants the records in-process still gets
-   * them here; a caller that wants them on disk needs no caller at all.
+   * **A test seam, with no production caller — and optional because the
+   * production route does not need one.** Every record is also filed with
+   * `crawl-timing.ts`, which dumps them when `VAT_CRAWL_TIMING` is set (see
+   * {@link reportContributorTiming}); that dump is what `vat` and the lab read,
+   * so omitting this observer loses nothing a shipped command reports. Its
+   * callers are tests that need the records in-process: the store-sharing child,
+   * which proves a hit by the ABSENCE of contributor work, and the crawl-timing
+   * and store round-trip suites. Before they existed it had no observer anywhere
+   * in the repository, which meant both brackets below could have been deleted
+   * with nothing failing.
    */
   onContributorTiming?: ((timing: ContributorTiming) => void) | undefined;
   /**
@@ -462,6 +465,78 @@ export interface PopulationCache {
   treeUnchanged(): boolean;
 }
 
+/**
+ * What a population did with the store — the ONE source of whether its rows were
+ * served or derived.
+ *
+ * A correct hit and a correct re-derivation produce identical rows, so provenance
+ * cannot be inferred from the projection; it is reported by the run that knows.
+ * `population` is a function of `stored` (`hit` ⇒ `'store'`, every other value ⇒
+ * `'derived'`), and the union makes that the TYPE: a pair that disagrees does not
+ * compile.
+ *
+ * - `hit` — served from the store; no contributor ran.
+ * - `written` — derived, and the extent was filed.
+ * - `skipped-tree-changed` — derived, and the extent was NOT filed because the
+ *   tree moved during the run (see {@link PopulationCache.treeUnchanged}).
+ * - `no-store` — derived, with no store to read or write.
+ */
+export type PopulationOutcome =
+  | { readonly population: 'store'; readonly stored: 'hit' }
+  | { readonly population: 'derived'; readonly stored: 'written' | 'skipped-tree-changed' | 'no-store' };
+
+/**
+ * Each `population` value, keyed so the compiler checks the list against
+ * {@link PopulationOutcome} both ways: a value missing from the union, or a
+ * union member missing here, does not compile.
+ */
+const POPULATION_ORIGIN_SET: Readonly<Record<PopulationOutcome['population'], true>> = { store: true, derived: true };
+
+/**
+ * Every `population` a {@link PopulationOutcome} can carry, as a runtime list —
+ * for a schema that must enumerate them. Derived from the union, never typed
+ * beside it.
+ */
+export const POPULATION_ORIGINS = Object.keys(POPULATION_ORIGIN_SET) as [
+  PopulationOutcome['population'],
+  ...Array<PopulationOutcome['population']>,
+];
+
+/**
+ * The outcome a `stored` value implies — the only construction of one.
+ *
+ * @param stored - What the run did with the store
+ * @returns The outcome, with `population` derived from `stored`
+ */
+function populationOutcome(stored: PopulationOutcome['stored']): PopulationOutcome {
+  return stored === 'hit' ? { population: 'store', stored } : { population: 'derived', stored };
+}
+
+/**
+ * What {@link populate} returns: the rows, and where they came from.
+ *
+ * Provenance travels BESIDE the projection rather than on it, because
+ * `Projection`'s keys are its table set and everything that iterates them
+ * (`splitProjectionByScope`, the exporter) would have to learn to skip a field.
+ */
+export interface PopulateResult {
+  readonly projection: Projection;
+  readonly outcome: PopulationOutcome;
+}
+
+/**
+ * What a whole-tree population lane is asked: the resources projection and the
+ * Claude-context population take exactly this, and each documents what every
+ * field means to it.
+ */
+export interface TreePopulationOptions {
+  root: string;
+  gitTracker?: GitTracker | undefined;
+  cache?: PopulationCache | undefined;
+  collections?: Readonly<Record<string, CollectionConfig>> | undefined;
+  onBlobPopulation: (report: BlobPopulationReport) => void;
+}
+
 /** What one contributor invocation cost. */
 export interface ContributorTiming {
   /** The contributor's {@link ExtentContributor.id}. */
@@ -554,12 +629,13 @@ export class ClosureNonConvergenceError extends VatError {
  * result posture `ContributorRegistry.forKind` already refuses.
  *
  * @param options - Root, contributors, per-contributor parameters and the cap
- * @returns The frozen projection every registered contributor agreed on
+ * @returns The frozen projection every registered contributor agreed on, and
+ *   the {@link PopulationOutcome} that says whether the store served it
  * @throws {@link ClosureNonConvergenceError} when the closure stratum is still
  *   moving after `maxIterations` passes
  * @throws Whatever a contributor throws — failures propagate unwrapped
  */
-export async function populate(options: PopulateOptions): Promise<Projection> {
+export async function populate(options: PopulateOptions): Promise<PopulateResult> {
   const { root, registry, parameters, maxIterations = DEFAULT_MAX_ITERATIONS } = options;
 
   // Resolved BEFORE anything else, and deliberately before the cache is asked:
@@ -581,7 +657,7 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
   const rootId = rootIdFor(root);
   const cached = await readCachedProjection(options, rootId, parseContent, routing);
   if (cached !== undefined) {
-    return cached;
+    return { projection: cached, outcome: populationOutcome('hit') };
   }
 
   // Constructed here and nowhere else, so its lifetime is exactly this run's.
@@ -701,8 +777,8 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
   recordMimeConflicts(builder, routing);
 
   const projection = builder.build();
-  await writeCachedProjection(options, rootId, parseContent, projection, routing);
-  return projection;
+  const stored = await writeCachedProjection(options, rootId, parseContent, projection, routing);
+  return { projection, outcome: populationOutcome(stored) };
 }
 
 /**
@@ -1080,6 +1156,7 @@ function unlistableRowsStillHold(conditions: readonly RealizationConditionRow[],
  * @param parseContent - Whether this run read and parsed content
  * @param projection - What the run produced
  * @param routing - The run's parse routing, whose fingerprint is part of the key
+ * @returns What happened to the extent — the miss half of {@link PopulationOutcome.stored}
  */
 async function writeCachedProjection(
   options: PopulateOptions,
@@ -1087,19 +1164,21 @@ async function writeCachedProjection(
   parseContent: boolean,
   projection: Projection,
   routing: CollectionMimeResolver,
-): Promise<void> {
+): Promise<Exclude<PopulationOutcome['stored'], 'hit'>> {
   const cache = options.cache;
-  if (cache === undefined) return;
+  if (cache === undefined) return 'no-store';
 
   const startedAt = crawlTimingStart();
   const { blobs, extent } = splitProjectionByScope(projection);
   // Blob facts are keyed by the bytes actually read, so they are true whatever
   // the tree did meanwhile. The extent is keyed by the tree, so it is not.
   if (parseContent) await cache.store.writeBlobFacts(storableBlobFacts(blobs));
-  if (cache.treeUnchanged()) {
+  const unchanged = cache.treeUnchanged();
+  if (unchanged) {
     await cache.store.writeExtent(storeKeyFor(options, rootId, cache, routing), extent);
   }
   recordCrawlPass(CRAWL_STORE_WRITE_ID, 'base', BASE_STRATUM_PASS, startedAt);
+  return unchanged ? 'written' : 'skipped-tree-changed';
 }
 
 /**

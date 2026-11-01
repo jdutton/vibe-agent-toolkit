@@ -277,27 +277,24 @@ export function extentKeyOf(key: ExtentKey): string {
  * One filesystem-extent population of `root` through `store`, with the tree
  * reported unchanged under a CONSTANT `treeHash` — the shape every store-freshness
  * suite needs, since the hazard it pins is a fact the tree hash does not cover.
- * Reports whether a contributor ran, i.e. whether the store hit was refused.
+ * Reports whether the run derived, i.e. whether the store hit was refused —
+ * read off `populate()`'s outcome.
  */
 export async function populateExtentThrough(
   root: string,
   store: FakeProjectionStore,
   treeHash: string,
-): Promise<{ projection: Projection; contributorRan: boolean }> {
+): Promise<{ projection: Projection; derived: boolean }> {
   const tracker = new GitTracker(root);
   await tracker.initialize();
   const registry = new ContributorRegistry();
   registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
-  let contributorRan = false;
-  const projection = await populate({
+  const { projection, outcome } = await populate({
     root,
     registry,
     gitTracker: tracker,
     onBlobPopulation: DISCARD_BLOB_POPULATION,
-    onContributorTiming: () => {
-      contributorRan = true;
-    },
     cache: { store, treeUnchanged: () => true, treeHash },
   });
-  return { projection, contributorRan };
+  return { projection, derived: outcome.stored !== 'hit' };
 }

@@ -299,6 +299,7 @@ function payloadInput(
 function populatedDefaults(): PopulatedRun {
   return {
     population: 'derived',
+    lensPopulation: 'none',
     // Non-zero, for the same reason `membersEnumerated` is: a case that sets it
     // to something else is visibly asserting about the population's cost rather
     // than inheriting a placeholder.
@@ -831,6 +832,15 @@ describe('the check payload', () => {
     // Two documents that differ ONLY in the denominator. Drop the field and
     // these become equal, which is the ambiguity it exists to remove.
     expect(ran).not.toStrictEqual(none);
+  });
+
+  it('reports where the lens population came from, separately from the resources population', () => {
+    const lens = (lensPopulation: PopulatedRun['lensPopulation']): unknown =>
+      buildCheckOutputData(payloadInput({ population: 'store', lensPopulation })).data.lensPopulation;
+
+    expect(lens('store')).toBe('store');
+    expect(lens('derived')).toBe('derived');
+    expect(lens('none')).toBe('none');
   });
 
   it('reports where the population came from, which is the only cache tell', () => {

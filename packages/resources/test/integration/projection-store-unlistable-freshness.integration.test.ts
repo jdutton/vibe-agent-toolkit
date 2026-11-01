@@ -42,8 +42,8 @@ const TREE_HASH = 'tree-0000000000000000000000000000000000000000';
 let root: string;
 let locked: string;
 
-/** One population of `root` through `store`, reporting whether a contributor ran. */
-async function populateThrough(store: FakeProjectionStore): Promise<{ projection: Projection; contributorRan: boolean }> {
+/** One population of `root` through `store`, reporting whether it derived rather than being served. */
+async function populateThrough(store: FakeProjectionStore): Promise<{ projection: Projection; derived: boolean }> {
   return populateExtentThrough(root, store, TREE_HASH);
 }
 
@@ -74,10 +74,10 @@ describe.skipIf(CANNOT_DENY_READS)('a cached EXTENT_DIRECTORY_UNLISTABLE row is 
     const first = await populateThrough(store);
     const second = await populateThrough(store);
 
-    expect(first.contributorRan).toBe(true);
+    expect(first.derived).toBe(true);
     expect(unlistableRows(first.projection)).toEqual([IGNORED_LOCKED_DIR]);
     // A genuine hit: nothing ran, and the row — still true — is served.
-    expect(second.contributorRan).toBe(false);
+    expect(second.derived).toBe(false);
     expect(unlistableRows(second.projection)).toEqual([IGNORED_LOCKED_DIR]);
     expect(store.writeExtentCalls).toBe(1);
   });
@@ -91,7 +91,7 @@ describe.skipIf(CANNOT_DENY_READS)('a cached EXTENT_DIRECTORY_UNLISTABLE row is 
 
     // Not a hit: the cached population was enumerated around a gap that has
     // since closed, so the row would be stale and the rows beneath it missing.
-    expect(after.contributorRan).toBe(true);
+    expect(after.derived).toBe(true);
     expect(unlistableRows(after.projection)).toEqual([]);
     expect(after.projection.resourceRealizations.map((row) => row.path)).toContain(IGNORED_LOCKED_FILE);
     expect(store.writeExtentCalls).toBe(2);
@@ -105,7 +105,7 @@ describe.skipIf(CANNOT_DENY_READS)('a cached EXTENT_DIRECTORY_UNLISTABLE row is 
     rmSync(locked, { recursive: true, force: true });
     const after = await populateThrough(store);
 
-    expect(after.contributorRan).toBe(true);
+    expect(after.derived).toBe(true);
     expect(unlistableRows(after.projection)).toEqual([]);
   });
 });

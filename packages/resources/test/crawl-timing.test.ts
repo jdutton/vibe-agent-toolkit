@@ -205,7 +205,7 @@ class RegistryBuildingContributor implements ExtentContributor {
    * @returns An empty contribution — the rows are irrelevant; the registry build is the point
    */
   async contribute(): Promise<ExtentContribution> {
-    const registry = await ResourceRegistry.fromCrawl({ outputs: [], unreadable: 'refuse', baseDir: suite.tempDir });
+    const { registry } = await ResourceRegistry.fromCrawl({ outputs: [], unreadable: 'refuse', baseDir: suite.tempDir });
     registry.resolveLinks();
     return {
       contexts: [], resources: [], realizations: [], memberships: [], tags: [], conditions: [],
@@ -282,7 +282,7 @@ describe('crawl timing seam', () => {
               parameters: { [CLOSURE_DRIVER_ID]: closureDeclaration() },
               onBlobPopulation: DISCARD_BLOB_POPULATION,
             });
-            return { paths: [], conditions: [] };
+            return { paths: [], conditions: [], outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem' };
           },
         },
       });
@@ -341,7 +341,7 @@ describe('crawl timing seam', () => {
     // -----------------------------------------------------------------------
 
     it('charges the incumbent for building the registry its walk consumes, not only for the walk', async () => {
-      const registry = await ResourceRegistry.fromCrawl({ outputs: [], unreadable: 'refuse', baseDir: suite.tempDir });
+      const { registry } = await ResourceRegistry.fromCrawl({ outputs: [], unreadable: 'refuse', baseDir: suite.tempDir });
       registry.resolveLinks();
       const snapshot = __readCrawlTimingSnapshot();
 

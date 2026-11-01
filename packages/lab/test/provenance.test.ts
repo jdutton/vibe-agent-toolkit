@@ -5,7 +5,7 @@
  * synthetic correct run passes and its twin with that ONE field removed — every
  * other byte of the document kept — FAILS: "absent" is never a pass, and a
  * reader that looked anywhere else would find the rest of the document intact. The cells whose rule reads no document (every cold
- * cell, and rc.11's arm A, whose verbs publish no population) are pinned to
+ * cell, and arm A, whose verbs the lab does not judge) are pinned to
  * assert nothing, so a reader added to them later is a visible change here.
  */
 
@@ -34,11 +34,10 @@ const RC11_CHECK = report(RC11_CHECK_DATA);
 /**
  * The candidate's `validate`, every phase served from the store.
  *
- * Modelled AHEAD of S2: the resources phase's `data.population` is a field
- * today's `.strict()` resources-validate report schema cannot emit, so a real
- * candidate run reads as 'absent' here until S2 adds it. The CLI's report
- * schemas are internal to the CLI (and the lab measures several builds), so
- * this fixture cannot be parsed through the producer's schema.
+ * The resources phase's `data.population` is the field the candidate's
+ * resources-validate report publishes. The CLI's report schemas are internal to
+ * the CLI (and the lab measures several builds), so this fixture cannot be
+ * parsed through the producer's schema.
  */
 const CAND_VALIDATE_PHASES = [
   { name: 'resources', status: 'success', examined: 1, summary: {}, data: { population: 'store' } },
@@ -65,7 +64,7 @@ const READ_CELLS: readonly Cell[] = [
     missing: report(withoutPopulation(RC11_CHECK_DATA)),
   },
   {
-    cell: 'cand-C-warm (validate; resources-phase population pending S2)',
+    cell: 'cand-C-warm (validate; resources-phase population)',
     state: 'warm',
     reader: 'validate',
     correct: CAND_VALIDATE,

@@ -211,7 +211,7 @@ describe('ResourceRegistry - Integration Tests', () => {
 
   describe('crawl()', () => {
     it('should crawl directory and find all markdown files', async () => {
-      const resources = await registry.crawl({ unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
+      const { resources } = await registry.crawl({ unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
 
       // Should find all .md files in test-fixtures
       expect(resources.length).toBeGreaterThanOrEqual(6);
@@ -223,7 +223,7 @@ describe('ResourceRegistry - Integration Tests', () => {
     });
 
     it('should respect include patterns', async () => {
-      const resources = await registry.crawl({
+      const { resources } = await registry.crawl({
         unreadable: 'refuse',
         outputs: [],
         baseDir: fixturesDir,
@@ -235,7 +235,7 @@ describe('ResourceRegistry - Integration Tests', () => {
     });
 
     it('should respect exclude patterns', async () => {
-      const resources = await registry.crawl({
+      const { resources } = await registry.crawl({
         unreadable: 'refuse',
         outputs: [],
         baseDir: fixturesDir,
@@ -248,14 +248,14 @@ describe('ResourceRegistry - Integration Tests', () => {
     });
 
     it('should find nested files by default', async () => {
-      const resources = await registry.crawl({ unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
+      const { resources } = await registry.crawl({ unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
 
       const ids = resources.map((r) => r.id);
       expect(ids).toContain(NESTED_FILE_ID);
     });
 
     it('should use default include/exclude patterns', async () => {
-      const resources = await registry.crawl({ unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
+      const { resources } = await registry.crawl({ unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
 
       // Should find .md files
       expect(resources.length).toBeGreaterThan(0);
@@ -676,7 +676,7 @@ tags: test
 
     it('should handle empty directories gracefully', async () => {
       // Create a temporary empty directory scenario by using non-matching pattern
-      const resources = await registry.crawl({
+      const { resources } = await registry.crawl({
         unreadable: 'refuse',
         outputs: [],
         baseDir: fixturesDir,

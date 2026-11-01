@@ -36,7 +36,11 @@ import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.
 import { endWithReport, NOTHING_FINISHED, publishedReport, refusalReport } from '../../utils/document-writer.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { classifyInputFault, projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
-import { assertDeclaredCollection, loadResourcesWithConfig } from '../../utils/resource-loader.js';
+import {
+  assertDeclaredCollection,
+  loadResourcesWithConfig,
+  publishedPopulation,
+} from '../../utils/resource-loader.js';
 import { warnRunIntegrity } from '../../utils/run-integrity.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
 import type { PhaseOutcome } from '../phase-utils.js';
@@ -127,6 +131,8 @@ export interface ResourcesValidateInput {
   /** `--verbose`: publish one `data.files` row per resource validated. */
   readonly verbose: boolean;
   readonly durationMs: number;
+  /** Where the membership came from — {@link publishedPopulation} of the population the load returned. */
+  readonly population: ResourcesValidateData['population'];
 }
 
 /** A validated resource, with its path relative to the stated root. */
@@ -188,6 +194,7 @@ export function buildResourcesValidateReport(input: ResourcesValidateInput): Res
     // Stated once, and the only absolute path in the document.
     root: input.root,
     collections: collectionsData(input.collectionStats, resources, byLocation),
+    population: input.population,
   };
   if (input.verbose) {
     data.files = resources.map((resource) => {
@@ -331,7 +338,7 @@ async function runValidation(
   const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
 
   // Load resources with config support (includes GitTracker initialization)
-  const { registry, config, gitTracker } = await loadResourcesWithConfig(pathArg, projectRoot, logger);
+  const { registry, config, gitTracker, population } = await loadResourcesWithConfig(pathArg, projectRoot, logger);
   assertDeclaredCollection(config, options.collection);
 
   // CLI flag: --no-check-frontmatter-links disables the check for every collection.
@@ -386,6 +393,7 @@ async function runValidation(
     collectionStats: narrowCollectionStats(registry.getCollectionStats(), options.collection),
     verbose: options.verbose === true,
     durationMs: Date.now() - startTime,
+    population: publishedPopulation(population),
   });
 }
 

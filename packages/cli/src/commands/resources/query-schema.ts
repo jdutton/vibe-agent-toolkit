@@ -11,9 +11,11 @@
  * population of zero resources is not one, and the writer refuses it.
  */
 
+import { POPULATION_ORIGINS } from '@vibe-agent-toolkit/resources';
 import { FindingSchema, reportSchema, type Report } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
 
+import { LENS_POPULATIONS } from '../../utils/lens-population.js';
 import type { ExaminedDeclaration } from '../../utils/run-integrity.js';
 
 import { StatedLimitSchema } from './check-schema.js';
@@ -33,13 +35,15 @@ const ResourcesQueryDataSchema = z.object({
   /** The selected rows, exactly as SQLite holds the values. */
   rows: z.array(z.record(z.string(), z.unknown())),
   /** Whether the projection was derived this run or read from the store — the cache tell. */
-  population: z.enum(['derived', 'store']),
+  population: z.enum(POPULATION_ORIGINS),
   /** What that population cost. */
   populationSecs: z.number().nonnegative(),
   /** What evaluating the lenses cost, paid before the statement ran. */
   lensSecs: z.number().nonnegative(),
   /** Which lenses that covers — the derived relations this statement named. */
   lensesEvaluated: z.array(z.string()),
+  /** Where those lenses' own populations came from: `none` when no evaluated lens populated anything. */
+  lensPopulation: z.enum(LENS_POPULATIONS),
   /** The prose frame `limits` is read under; present exactly when a bounded lens ran. */
   boundsStatement: z.string().optional(),
   /** What the derived rows do NOT settle; present exactly when a bounded lens ran. */

@@ -40,8 +40,11 @@
 
 import { appendFileSync } from 'node:fs';
 
+import { POPULATION_ORIGINS } from '@vibe-agent-toolkit/resources';
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
+
+import { LENS_POPULATIONS } from '../../utils/lens-population.js';
 
 import type { SupervisedChild } from './check-supervisor.js';
 
@@ -76,7 +79,10 @@ const StartedEntrySchema = z.object({
  */
 const PopulationEntrySchema = z.object({
   kind: z.literal('population'),
-  population: z.union([z.literal('derived'), z.literal('store')]),
+  population: z.enum(POPULATION_ORIGINS),
+  // Carried across for the reason `lensMs` is: an interrupted run's document is
+  // rebuilt from these lines alone.
+  lensPopulation: z.enum(LENS_POPULATIONS),
   populationMs: z.number(),
   // Carried across the process boundary rather than recomputed, for the same
   // reason every other field here is: a killed run's document is rebuilt from

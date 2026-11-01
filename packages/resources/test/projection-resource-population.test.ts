@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 // `safePath`, which has no `dirname` because it never needed one.
 import { dirname } from 'node:path';
 
-import { compareCodeUnits, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, createSymlink, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -11,6 +11,7 @@ import { DISCARD_BLOB_POPULATION } from '../src/projection/merge.js';
 import {
   buildResourcePopulation,
   buildResourceProjection,
+  type ResourcePopulationSource,
 } from '../src/projection/resource-population.js';
 import type {
   BlobScopedRows,
@@ -18,7 +19,9 @@ import type {
   ExtentScopedRows,
   ProjectionStore,
 } from '../src/projection/store.js';
+import { ResourceRegistry, type RegistryCrawl } from '../src/resource-registry.js';
 
+import { FakeProjectionStore } from './fake-projection-store.js';
 import { setupSubdirTestSuite } from './test-helpers.js';
 
 /** The plain markdown member every fixture below starts from. */
@@ -117,10 +120,80 @@ async function populationOf(gitTracker?: GitTracker): Promise<string[]> {
     .sort(compareCodeUnits);
 }
 
+/**
+ * A store that hands every extent table back REVERSED — SQLite's row order
+ * carries no `ORDER BY` guarantee, so a hit must not depend on the order rows
+ * were written in.
+ */
+class ReorderingStore extends FakeProjectionStore {
+  override async readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
+    const held = await super.readExtent(key);
+    if (held === undefined) return undefined;
+    return Object.fromEntries(
+      Object.entries(held).map(([table, rows]) => [table, [...(rows as readonly unknown[])].reverse()]),
+    ) as unknown as ExtentScopedRows;
+  }
+}
+
 describe('buildResourcePopulation', () => {
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);
   beforeEach(suite.beforeEach);
+
+  it('admits one order, derived or served by a store that returns rows reordered', async () => {
+    await write('b.md', '# B\n');
+    await write(DOC_A, '# A\n');
+    await write('docs/c.md', '# C\n');
+    const cache = { store: new ReorderingStore(), treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
+    const source: ResourcePopulationSource = {
+      root: suite.tempDir,
+      enumerate: (root, outputs) => buildResourcePopulation({ outputs, root, cache }),
+    };
+    const crawlOnce = (): Promise<RegistryCrawl> =>
+      new ResourceRegistry({ baseDir: suite.tempDir }).crawl({
+        baseDir: suite.tempDir, outputs: [], unreadable: 'refuse', populationSource: source,
+      });
+
+    const written = await crawlOnce();
+    const hit = await crawlOnce();
+
+    expect(hit.population).toEqual({ lane: 'projection', outcome: { population: 'store', stored: 'hit' }, extentSource: 'filesystem' });
+    const order = (crawl: RegistryCrawl): string[] => crawl.resources.map((resource) => resource.filePath);
+    expect(order(written)).toEqual(order(written).toSorted(compareCodeUnits));
+    expect(order(hit)).toEqual(order(written));
+  });
+
+  it('publishes one condition order, derived or served by a store that returns rows reordered', async (context) => {
+    const cap = symlinkCapability() ?? context.skip();
+    await write(DOC_A, '# A\n');
+    // Two dangling links: two conditions, so their order is observable.
+    createSymlink(cap, 'missing-one.md', safePath.join(suite.tempDir, 'dangling-z.md'));
+    createSymlink(cap, 'missing-two.md', safePath.join(suite.tempDir, 'dangling-y.md'));
+    const cache = { store: new ReorderingStore(), treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
+
+    const written = await buildResourcePopulation({ outputs: [], root: suite.tempDir, cache });
+    const hit = await buildResourcePopulation({ outputs: [], root: suite.tempDir, cache });
+
+    expect(hit.outcome.stored).toBe('hit');
+    expect(written.conditions.map((row) => row.path)).toEqual(['dangling-y.md', 'dangling-z.md']);
+    expect(hit.conditions).toEqual(written.conditions);
+  });
+
+  it('carries the population\'s outcome out with its paths: derived without a store, then written, then a hit', async () => {
+    await write(DOC_A, '# A\n');
+    const store = new FakeProjectionStore();
+    const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
+
+    const uncached = await buildResourcePopulation({ outputs: [], root: suite.tempDir });
+    const written = await buildResourcePopulation({ outputs: [], root: suite.tempDir, cache });
+    const hit = await buildResourcePopulation({ outputs: [], root: suite.tempDir, cache });
+
+    expect(uncached.outcome).toEqual({ population: 'derived', stored: 'no-store' });
+    expect(written.outcome).toEqual({ population: 'derived', stored: 'written' });
+    expect(hit.outcome).toEqual({ population: 'store', stored: 'hit' });
+    // The hit answers the same membership, so the outcome is the only difference.
+    expect(hit.paths).toEqual(written.paths);
+  });
 
   it('enumerates files and declines the directories that contain them', async () => {
     await write(DOC_A, '# A\n');
@@ -264,6 +337,19 @@ describe('buildResourceProjection', () => {
   afterAll(suite.afterAll);
   beforeEach(suite.beforeEach);
 
+  it('returns the populate outcome beside the projection', async () => {
+    await write(DOC_A, '# A\n');
+    const store = new FakeProjectionStore();
+    const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
+    const options = { root: suite.tempDir, cache, onBlobPopulation: DISCARD_BLOB_POPULATION };
+
+    const derived = await buildResourceProjection(options);
+    const served = await buildResourceProjection(options);
+
+    expect(derived.outcome).toEqual({ population: 'derived', stored: 'written' });
+    expect(served.outcome).toEqual({ population: 'store', stored: 'hit' });
+  });
+
   it('derives the blob rows its sibling deliberately never pays for', async () => {
     // The whole reason this lane exists. `buildResourcePopulation` runs under
     // `contentParsing: CONTENT_PARSING_SKIP` and `contentDemand: 'deferred'`, so
@@ -274,7 +360,7 @@ describe('buildResourceProjection', () => {
     await write(DOC_A, '# A\n\nSee [b](./docs/b.md).\n');
     await write('docs/b.md', '# B\n');
 
-    const projection = await buildResourceProjection({
+    const { projection } = await buildResourceProjection({
       root: suite.tempDir,
       onBlobPopulation: DISCARD_BLOB_POPULATION,
     });
@@ -296,7 +382,7 @@ describe('buildResourceProjection', () => {
     await write(DOC_A, '# A\n');
     await write('docs/b.md', '# B\n');
 
-    const projection = await buildResourceProjection({
+    const { projection } = await buildResourceProjection({
       root: suite.tempDir,
       onBlobPopulation: DISCARD_BLOB_POPULATION,
     });
@@ -315,7 +401,7 @@ describe('buildResourceProjection', () => {
     // sees.
     const tracker = await buildIgnoredFixture();
 
-    const projection = await buildResourceProjection({
+    const { projection } = await buildResourceProjection({
       root: suite.tempDir,
       gitTracker: tracker,
       onBlobPopulation: DISCARD_BLOB_POPULATION,
@@ -338,7 +424,7 @@ describe('buildResourceProjection', () => {
     await write('.claude/rules/scoped.md', RULE_WITH_ONE_DEAD_GLOB);
     await write('docs/guide.md', '# Guide\n');
 
-    const projection = await buildResourceProjection({
+    const { projection } = await buildResourceProjection({
       root: suite.tempDir,
       onBlobPopulation: DISCARD_BLOB_POPULATION,
     });
@@ -348,23 +434,5 @@ describe('buildResourceProjection', () => {
       ['gone/**/*.md', 'inert'],
     ]);
     expect(projection.claudeRulePatterns[0]?.witnessPath).toBe('docs/guide.md');
-  });
-
-  it('files a contributor record when it derived, which is the cache tell', async () => {
-    // 🔑 The observable half of "did the store answer". A hit short-circuits
-    // before any contributor runs, so an EMPTY record list is the tell — and
-    // this is its negative control: a lane that filed nothing even while
-    // deriving would make every future hit unfalsifiable, since a correct hit
-    // and a correct re-derivation produce identical rows.
-    await write(DOC_A, '# A\n');
-    const filed: string[] = [];
-
-    await buildResourceProjection({
-      root: suite.tempDir,
-      onBlobPopulation: DISCARD_BLOB_POPULATION,
-      onContributorTiming: (timing) => filed.push(timing.contributorId),
-    });
-
-    expect(filed).toContain('builtin:filesystem');
   });
 });

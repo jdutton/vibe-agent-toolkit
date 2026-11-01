@@ -87,11 +87,11 @@
  * first place; the two moves look alike and are not.
  */
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { CollectionConfig } from '../schemas/project-config.js';
-import type { RealizationConditionRow } from '../schemas/projection-resources.js';
+import { RealizationConditionRowSchema, type RealizationConditionRow } from '../schemas/projection-resources.js';
 import type { JsonValue } from '../schemas/projection-shared.js';
 
 import { ContributorRegistry } from './contributor.js';
@@ -104,15 +104,15 @@ import {
 } from './contributors/filesystem-extent.js';
 import { crawlSourceFor, type CrawlSource, type CrawlSourceKind } from './crawl-source.js';
 import {
-  type BlobPopulationReport,
   CONTENT_PARSING_SKIP,
-  type ContributorTiming,
   DISCARD_BLOB_POPULATION,
   populate,
   populationOracles,
+  type PopulateResult,
   type PopulationCache,
+  type PopulationOutcome,
+  type TreePopulationOptions,
 } from './merge.js';
-import type { Projection } from './projection.js';
 import type { ContentDemand } from './realizations.js';
 
 /**
@@ -169,8 +169,9 @@ export interface ResourcePopulationSource {
 }
 
 /**
- * What a population source hands the registry: the members, and what the
- * enumeration could say about itself while finding them.
+ * What a population source hands the registry: the members, what the
+ * enumeration could say about itself while finding them, and where the answer
+ * came from.
  *
  * `conditions` is the projection's `realization_conditions` table for the
  * extents this lane registered — a gitignored directory the enumerator could
@@ -180,27 +181,45 @@ export interface ResourcePopulationSource {
  * is gone. The registry surfaces each row as a finding with the row's own code
  * and severity; a source with nothing to say hands over an empty list, which is
  * what the walk lane always does.
+ *
+ * `outcome` and `extentSource` ride the same way, and are REQUIRED for the
+ * same reason: the registry hands them back from `crawl` beside the resources,
+ * which is the ONE route a caller learns where its population came from. A
+ * source that kept them on the side would leave that route empty and still
+ * compile.
  */
 export interface ResourceEnumeration {
-  /** Absolute paths of every file the population admits. */
+  /** Absolute paths of every file the population admits, in no promised order — the registry orders them. */
   readonly paths: readonly string[];
-  /** Population-time conditions recorded while enumerating. */
+  /** Population-time conditions recorded while enumerating, in canonical order (see `canonicalConditions`). */
   readonly conditions: readonly RealizationConditionRow[];
+  /** Whether the store served this population — the outcome `populate()` returned for it, the only producer. */
+  readonly outcome: PopulationOutcome;
+  /**
+   * Which enumerator ran — the instance's own kind, not the env's request.
+   * Read back from the environment it would prove what was requested, and the
+   * request and the outcome come apart whenever {@link crawlSourceFor} declines
+   * a root that is not in a repository.
+   */
+  readonly extentSource: CrawlSourceKind;
 }
 
 /**
- * A population together with the enumerator that produced it.
+ * Where one crawl's population came from, as `ResourceRegistry.crawl` reports it.
  *
- * The kind travels WITH the paths rather than being obtainable by asking the
- * environment again, for the reason the `lane` field on a scan exists: reading
- * `VAT_EXTENT_SOURCE` back proves what was requested, and the request and the
- * outcome come apart whenever {@link crawlSourceFor} declines a root that is
- * not in a repository.
+ * `walk` when no source was offered AND when the offered source was declined:
+ * the walk answered either way, and a caller told otherwise would publish the
+ * projection lane for a crawl the projection never saw.
  */
-export interface ResourcePopulation extends ResourceEnumeration {
-  /** Which enumerator ran — the instance's own kind, not the env's request. */
-  readonly extentSource: CrawlSourceKind;
-}
+export type CrawlPopulation =
+  | { readonly lane: 'walk' }
+  | { readonly lane: 'projection'; readonly outcome: PopulationOutcome; readonly extentSource: CrawlSourceKind };
+
+/** Each {@link CrawlPopulation} lane, keyed so the compiler checks the list against the union both ways. */
+const CRAWL_LANE_SET: Readonly<Record<CrawlPopulation['lane'], true>> = { walk: true, projection: true };
+
+/** Every {@link CrawlPopulation} lane, as a runtime list — for a schema enum that must not be a hand-typed copy. */
+export const CRAWL_LANES = Object.keys(CRAWL_LANE_SET) as [CrawlPopulation['lane'], ...Array<CrawlPopulation['lane']>];
 
 /**
  * Register the contributors every resources lane shares, and the parameters
@@ -358,7 +377,7 @@ export async function buildResourcePopulation(options: {
   gitTracker?: GitTracker | undefined;
   cache?: PopulationCache | undefined;
   collections?: Readonly<Record<string, CollectionConfig>> | undefined;
-}): Promise<ResourcePopulation> {
+}): Promise<ResourceEnumeration> {
   const root = safePath.resolve(options.root);
 
   // Selected here, one call earlier than `FilesystemExtentContributor` would
@@ -392,7 +411,7 @@ export async function buildResourcePopulation(options: {
   // {@link resourceContributors}.
   const { registry, parameters } = resourceContributors(source, 'deferred', false);
 
-  const projection = await populate({
+  const { projection, outcome } = await populate({
     root,
     registry,
     parameters,
@@ -435,7 +454,7 @@ export async function buildResourcePopulation(options: {
   // consumer's call (the registry surfaces every one as a finding, and severity
   // overrides are the adopter's), and a filter at this seam would be a second,
   // quieter policy nobody configured.
-  return { paths, conditions: projection.realizationConditions, extentSource: source.kind };
+  return { paths, conditions: canonicalConditions(projection.realizationConditions), outcome, extentSource: source.kind };
 }
 
 
@@ -480,23 +499,9 @@ export async function buildResourcePopulation(options: {
  *   what it REFUSED to derive. **Required**, and this is the lane where it earns
  *   that: a corpus whose every document was declined as binary populates as
  *   empty and would otherwise report success
- * @param options.onContributorTiming - One record per contributor invocation, or
- *   omitted. 🔑 This is also the **cache tell**: a store hit short-circuits
- *   before the builder exists, so NO contributor runs and no record is filed. An
- *   observer that saw nothing was served from the store; one that saw
- *   `builtin:filesystem@1` re-derived. Nothing else distinguishes them — a
- *   correct hit and a correct re-population produce identical rows, which is
- *   exactly why "did the cache work" needs an observation rather than a diff
- * @returns The populated projection
+ * @returns The populated projection and `populate()`'s outcome for it
  */
-export function buildResourceProjection(options: {
-  root: string;
-  gitTracker?: GitTracker | undefined;
-  cache?: PopulationCache | undefined;
-  collections?: Readonly<Record<string, CollectionConfig>> | undefined;
-  onBlobPopulation: (report: BlobPopulationReport) => void;
-  onContributorTiming?: ((timing: ContributorTiming) => void) | undefined;
-}): Promise<Projection> {
+export function buildResourceProjection(options: TreePopulationOptions): Promise<PopulateResult> {
   const root = safePath.resolve(options.root);
   // Same one-call-early selection as the population lane, for the same reason:
   // `crawlSourceFor` falls back silently, so the instance that ran must stay
@@ -513,9 +518,77 @@ export function buildResourceProjection(options: {
     registry,
     parameters,
     onBlobPopulation: options.onBlobPopulation,
-    ...(options.onContributorTiming === undefined
-      ? {}
-      : { onContributorTiming: options.onContributorTiming }),
     ...populationOracles(options),
   });
 }
+
+/**
+ * Every column of a condition row, `code` and `path` first: the order
+ * {@link canonicalConditions} compares them in.
+ */
+const CONDITION_ORDER = [
+  'code', 'path',
+  ...RealizationConditionRowSchema.keyof().options.filter((column) => column !== 'code' && column !== 'path'),
+] as const;
+
+/** One condition's cells, in {@link CONDITION_ORDER}: what {@link compareConditionKeys} reads. */
+type ConditionKey = ReadonlyArray<RealizationConditionRow[keyof RealizationConditionRow]>;
+
+/**
+ * Order two cells of one column: `null` first, numbers numerically, strings in
+ * UTF-16 code-unit order, and the rest — booleans and the JSON payload column —
+ * by their JSON text, which is total over the values one column can hold.
+ *
+ * @param left - One cell
+ * @param right - The same column's cell in the other row
+ * @returns Negative, zero or positive, as `Array.prototype.sort` expects
+ */
+function compareCells(left: ConditionKey[number], right: ConditionKey[number]): number {
+  if (left === right) return 0;
+  if (left === null) return -1;
+  if (right === null) return 1;
+  if (typeof left === 'number' && typeof right === 'number') return left - right;
+  if (typeof left === 'string' && typeof right === 'string') return compareCodeUnits(left, right);
+  return compareCodeUnits(JSON.stringify(left), JSON.stringify(right));
+}
+
+/**
+ * Order two conditions column by column, in {@link CONDITION_ORDER}: the first
+ * column that differs decides, so two rows tie only when they are the same row.
+ *
+ * @param left - One condition's key
+ * @param right - The other's
+ * @returns Negative, zero or positive, as `Array.prototype.sort` expects
+ */
+function compareConditionKeys(left: ConditionKey, right: ConditionKey): number {
+  for (const [index, cell] of left.entries()) {
+    const order = compareCells(cell, right[index] ?? null);
+    if (order !== 0) return order;
+  }
+  return 0;
+}
+
+/**
+ * A population's conditions in the ONE order every lane publishes them in:
+ * `(code, path, …every other column)`.
+ *
+ * Sorted, because a stored extent comes back in SQLite's order, which carries no
+ * `ORDER BY` guarantee: unsorted, a warm run published the same findings as the
+ * cold run in a different order. Total over the row, so no two distinct rows tie
+ * and fall back to whichever order arrived. Paths are not sorted here: the
+ * registry orders every list it admits, whoever enumerated it.
+ *
+ * Decorated: each row's cells are read into a key once, not once per comparison.
+ *
+ * @param conditions - The population's conditions
+ * @returns A new, sorted array; the input is not reordered
+ */
+function canonicalConditions(conditions: readonly RealizationConditionRow[]): RealizationConditionRow[] {
+  return conditions
+    .map((row) => ({ row, key: CONDITION_ORDER.map((column) => row[column]) }))
+    .sort((left, right) => compareConditionKeys(left.key, right.key))
+    .map(({ row }) => row);
+}
+
+/** Test-only seam — see `docs/architecture/README.md` "`__internal`". */
+export const __internal = { canonicalConditions, CONDITION_ORDER } as const;

@@ -20,6 +20,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
 import {
+  admissionOrder,
   DeferredArtifacts,
   DuplicateResourceIdError,
   ResourceRegistry,
@@ -1643,7 +1644,7 @@ export async function createProjectRegistry(
   options: ProjectRegistryOptions,
 ): Promise<ResourceRegistry> {
   const config = await loadConfig(projectRoot);
-  const registry = await ResourceRegistry.fromCrawl(
+  const { registry } = await ResourceRegistry.fromCrawl(
     {
       baseDir: projectRoot,
       include: [...LINK_GRAPH_MEMBER_GLOBS],
@@ -1769,8 +1770,11 @@ async function registerBundledAssets(
   if (bundledAssets.length === 0) {
     return { collidedAssets, collisions };
   }
-  // In order: `addResource` mutates the shared registry, and which asset collides depends on order.
-  await forEachInOrder(bundledAssets, async (assetPath) => {
+  // In the registry's admission order, never link order: `addResource` mutates
+  // the shared registry and the first to claim an id keeps it, so this is the
+  // one order that makes the code-unit-first of two clashing assets win, as it
+  // does in every `addResources` batch.
+  await forEachInOrder(admissionOrder(bundledAssets), async (assetPath) => {
     try {
       // `addResource` parses the file, so it READS it — which makes this the first
       // place a build touches a linked asset, and the place an unreadable one

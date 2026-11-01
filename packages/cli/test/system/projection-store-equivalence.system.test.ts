@@ -138,7 +138,12 @@ const COMMANDS: readonly CommandCase[] = [
     args: ['resources', 'validate', '--format', 'json'],
     // `durationMs` is this run's wall clock. It is the ONLY per-run field in
     // this report, and a cache that made the run faster is the whole point.
-    normalize: ({ durationMs: _durationMs, ...rest }: Record<string, unknown>) => rest,
+    // `data.population` names WHERE the answer came from, so it differs by arm
+    // by design; it is asserted per arm below, not compared.
+    normalize: ({ durationMs: _durationMs, data, ...rest }: Record<string, unknown>) => ({
+      ...rest,
+      data: Object.fromEntries(Object.entries(data as Record<string, unknown>).filter(([key]) => key !== 'population')),
+    }),
     // Measured, and CHANGED from `false` deliberately — see the header for the
     // one-key/three-questions mechanism that used to make its three populations
     // evict each other. All three now ask `filesystem[DECLINE_IGNORED]`, so the
@@ -212,6 +217,16 @@ function storeCharges(arm: ArmResult): string[] {
   return arm.charged.filter((id) => id.startsWith(STORE_CHARGE_PREFIX));
 }
 
+/**
+ * The resources report's `data.population`.
+ *
+ * @param arm - One arm's result
+ * @returns Where that arm's membership came from
+ */
+function populationOf(arm: ArmResult): unknown {
+  return (arm.document['data'] as Record<string, unknown>)['population'];
+}
+
 describe('the projection store and the answers it is supposed not to change', () => {
   beforeAll(() => {
     context.setup();
@@ -261,6 +276,12 @@ describe('the projection store and the answers it is supposed not to change', ()
       if (warmHitsStore) expect(armC.charged).not.toContain(STORE_WRITE);
       else expect(armC.charged).toContain(STORE_WRITE);
       expect(rowsStoredUnder(withStore)).toBeGreaterThan(0);
+
+      if (args[0] === 'resources') {
+        expect(populationOf(armA)).toBe('derived');
+        expect(populationOf(armB)).toBe('derived');
+        expect(populationOf(armC)).toBe('store');
+      }
 
       // ── The equivalence itself ────────────────────────────────────────────
       expect([armB.status, armC.status]).toEqual([armA.status, armA.status]);

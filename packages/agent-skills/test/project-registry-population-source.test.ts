@@ -95,6 +95,7 @@ function recordingStore(): ProjectionStore & { touchedRootIds: string[] } {
   };
 }
 
+
 /**
  * A REAL projection-backed source bound to `boundRoot`, over `store`.
  *
@@ -117,7 +118,7 @@ function projectionSource(
           root,
           cache: { store, treeUnchanged: () => true, treeHash: 'test-tree-hash' },
         });
-        return { paths: population.paths, conditions: population.conditions };
+        return population;
       },
     },
   };
@@ -147,7 +148,7 @@ describe('createProjectRegistry populationSource', () => {
         root,
         enumerate: async (enumeratedRoot) => {
           offeredRoots.push(enumeratedRoot);
-          return { paths: [kept], conditions: [] };
+          return { paths: [kept], conditions: [], outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem' };
         },
       },
     });
@@ -167,7 +168,10 @@ describe('createProjectRegistry populationSource', () => {
     // real projection population arrives in.
     const registry = await createProjectRegistry(root, {
       outputs: [],
-      populationSource: { root, enumerate: async () => ({ paths: [markdown, html, text, vendored], conditions: [] }) },
+      populationSource: {
+        root,
+        enumerate: async () => ({ paths: [markdown, html, text, vendored], conditions: [], outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem' }),
+      },
     });
 
     expect(memberPaths(root, registry)).toEqual(['docs/guide.md']);
@@ -210,7 +214,7 @@ describe('packageSkills populationSource', () => {
           root,
           enumerate: async (enumeratedRoot) => {
             offeredRoots.push(enumeratedRoot);
-            return { paths: [skillPath], conditions: [] };
+            return { paths: [skillPath], conditions: [], outcome: { population: 'derived', stored: 'no-store' }, extentSource: 'filesystem' };
           },
         },
       },

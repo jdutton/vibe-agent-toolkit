@@ -10,7 +10,12 @@ import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/doc
 import { createLogger } from '../../utils/logger.js';
 import { projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
 import { relativizePathEntries } from '../../utils/relativize-paths.js';
-import { assertDeclaredCollection, loadResourcesWithConfig, type ResourceCrawlLane } from '../../utils/resource-loader.js';
+import {
+  assertDeclaredCollection,
+  extentSourceOf,
+  loadResourcesWithConfig,
+  type ResourceCrawlLane,
+} from '../../utils/resource-loader.js';
 
 import type { ResourcesScanData, ResourcesScanReport } from './scan-schema.js';
 
@@ -155,7 +160,7 @@ export async function scanCommand(
     const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
 
     // Load resources with config support
-    const { registry, config, lane, extentSource } = await loadResourcesWithConfig(pathArg, projectRoot, logger);
+    const { registry, config, population } = await loadResourcesWithConfig(pathArg, projectRoot, logger);
     assertDeclaredCollection(config, options.collection);
 
     // Get all resources (filtered by collection if specified)
@@ -167,8 +172,8 @@ export async function scanCommand(
     const report = buildScanReport({
       resources,
       root: projectRoot,
-      lane,
-      extentSource,
+      lane: population.lane,
+      extentSource: extentSourceOf(population),
       durationMs: Date.now() - startTime,
       collections: collectionCounts(registry.getCollectionStats(), collection),
       verbose: options.verbose ?? false,

@@ -106,7 +106,7 @@ export async function populateFixtureRoot(rootDir: string): Promise<{
   const registry = new ContributorRegistry();
   registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
 
-  const projection = await populate({
+  const { projection } = await populate({
     root: rootDir,
     registry,
     onBlobPopulation: (result) => {

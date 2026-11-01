@@ -4,11 +4,10 @@
  *
  * A warm arm whose baseline never actually warms (a store that misses on every
  * run) would otherwise compare a cold baseline against a warm candidate and
- * report the difference as a win. So every measured warm repetition's resources
- * step must REPORT `population: 'store'` wherever its build publishes the
- * field — and the candidate's `validate` must report it for its checks phase
- * too (S1 bar 4) — and a field that is absent fails the measurement: absent is
- * never a pass.
+ * report the difference as a win. So every measured warm repetition of a step
+ * with a reader below must REPORT `population: 'store'` — the candidate's
+ * `validate` for its checks phase too (S1 bar 4) — and a field that is absent,
+ * or not a string, fails the measurement: absent is never a pass.
  *
  * Which field carries it depends on the document, and the step names its reader:
  *
@@ -16,8 +15,10 @@
  *   candidate alike); `data.lensPopulation` is recorded when published.
  * - `validate` — the orchestrator document: `data.phases[name='resources'].data.population`
  *   and the `checks` phase's `population`, both judged, plus its `lensPopulation`, recorded.
- * - `none` — a verb that publishes no population (rc.11's `resources validate`
- *   and `skills validate`): nothing is read and nothing asserted.
+ * - `none` — nothing is read and nothing asserted: `skills validate`, and
+ *   `resources validate`, which publishes `data.population` that the lab does
+ *   not judge yet — a baseline build older than the field cannot be told from a
+ *   run that dropped it until a per-build declaration exists.
  */
 
 import { parseDocument } from './document-shape.js';

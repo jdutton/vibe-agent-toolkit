@@ -109,6 +109,9 @@ const HONEST_SPAN_FRACTION = 0.45;
  */
 const COUNT_BLOBS = 'SELECT COUNT(*) AS n FROM blobs';
 
+/** A statement naming a claude-context relation, so the lens that populates its own lane runs. */
+const COUNT_CONTEXT_LOADS = 'SELECT COUNT(*) AS n FROM claude_context_loads';
+
 /**
  * The UNFILTERED aggregate the regression test rests on.
  *
@@ -468,6 +471,34 @@ describe('vat resources query', () => {
       expect(run.data['populationSecs']).toBeGreaterThan(0);
       expect(run.data['populationSecs']).toBeLessThanOrEqual(durationSecsOf(run.doc));
     }
+  });
+
+  it('flips the LENS tell from derived to store for a relation whose lens populates its own lane', () => {
+    // `lensPopulation` is the same claim one level down: `claude_context_*`
+    // populates the claude-context lane, and only a store hit on THAT lane may
+    // say `store`. Asserted as a flip, in a store of its own, for the reason the
+    // test above gives.
+    //
+    // 🪤 The corpus needs an `@`-import. Without one the claude-context lane
+    // registers exactly the resources lane's contributors, so its population is
+    // a hit on the extent the SAME run wrote a moment earlier and even the cold
+    // run says `store` — truthfully, and with no flip left to observe.
+    const cwd = createCommittedCorpus({
+      prefix: 'vat-resources-query-lens-',
+      directory: OWN_PREFIX,
+      files: { 'CLAUDE.md': '# Rules\n\n@guide.md\n', 'guide.md': '# Guide\n' },
+    });
+    const env = { ...storeEnv(), VAT_PROJECTION_STORE_DIR: safePath.join(storeDir, 'lens-flip') };
+    const first = query(COUNT_CONTEXT_LOADS, { env, cwd });
+    const second = query(COUNT_CONTEXT_LOADS, { env, cwd });
+    cleanupTestTempDir(cwd);
+
+    expect(first.status, first.stderr).toBe(0);
+    expect(second.status, second.stderr).toBe(0);
+    expect(first.data['lensesEvaluated']).toStrictEqual(['claude-context']);
+    expect(first.data['lensPopulation']).toBe('derived');
+    expect(second.data['lensPopulation']).toBe('store');
+    expect(second.data['rows']).toStrictEqual(first.data['rows']);
   });
 
   it('measures the population from BEFORE the store is opened, not from inside it', () => {

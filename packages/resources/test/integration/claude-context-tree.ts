@@ -69,7 +69,7 @@ export async function buildClaudeContextTree(
     await gitTracker.initialize();
   }
 
-  const projection = await buildClaudeContextPopulation({
+  const { projection } = await buildClaudeContextPopulation({
     root: dir,
     onBlobPopulation: () => undefined,
     ...(gitTracker !== undefined && { gitTracker }),

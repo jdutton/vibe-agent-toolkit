@@ -10,7 +10,7 @@ import { normalizedTmpdir, normalizePath, safePath } from '@vibe-agent-toolkit/u
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createLogger } from '../../src/utils/logger.js';
-import { loadResourcesWithConfig } from '../../src/utils/resource-loader.js';
+import { loadResourcesWithConfig, publishedPopulation } from '../../src/utils/resource-loader.js';
 
 const CONFIG_FILE = 'vibe-agent-toolkit.config.yaml';
 
@@ -143,6 +143,24 @@ describe('loadResourcesWithConfig (integration test)', () => {
         // Should find other/notes.md
         expectSingleResource(result.registry.getAllResources(), 'Notes');
       });
+    });
+  });
+
+  describe('with a pathArg outside the project root', () => {
+    it('walks it, and its population says the walk answered: the source declined a foreign base', async () => {
+      // The projection source is bound to the project root; a crawl based
+      // anywhere else is declined by the registry's root guard and walked. This
+      // is the declined route `vat resources validate` publishes as `null`; the
+      // CLI cannot reach it, because it discovers the root FROM the path.
+      const outside = safePath.join(testDir, 'outside');
+      await mkdir(outside, { recursive: true });
+      await writeFile(safePath.join(outside, 'elsewhere.md'), '# Elsewhere\n');
+
+      const result = await loadResourcesWithConfig(outside, projectDir, logger);
+
+      expectSingleResource(result.registry.getAllResources(), 'Elsewhere');
+      expect(result.population).toEqual({ lane: 'walk' });
+      expect(publishedPopulation(result.population)).toBeNull();
     });
   });
 

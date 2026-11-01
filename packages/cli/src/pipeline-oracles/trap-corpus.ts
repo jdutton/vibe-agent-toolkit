@@ -525,9 +525,10 @@ export const TRAP_CORPUS_FILES: CorpusFiles = Object.freeze({
   // Duplicate resource id. `generateIdFromPath` slugifies the whole
   // corpus-relative path, mapping BOTH `/` and `-` to `-`, so these two
   // distinct files both claim `dup-hyphen-note-md`. `addResources` is
-  // first-added-wins, so WHICH one gets validated, bundled and rewritten is
-  // decided by enumeration order — the single most order-sensitive behaviour in
-  // the pipeline, and the reason no snapshot here may ever be sorted.
+  // first-added-wins over the registry's own `admissionOrder()`, so
+  // `dup-hyphen/note.md` wins (`-` sorts before `/`) on every route and host,
+  // whatever order the enumerator handed them over in. The snapshot keeps
+  // capture order only to show that hand-over order.
   //
   // Note this collides via the PATH, not via a frontmatter `id:` field: the
   // frontmatter route only applies when the registry was constructed with an

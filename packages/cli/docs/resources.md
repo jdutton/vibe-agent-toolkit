@@ -53,8 +53,8 @@ stderr.
   every `data.files[].path` is relative to it.
 - `data.collections` — resources per configured collection (`{}` when none).
 
-`data.lane` names which enumerator produced the population — `walk` (the default
-crawl) or `projection` (`VAT_RESOURCES_CRAWL=projection`). Two scans of one tree
+`data.lane` names which enumerator produced the population — `projection` (the
+default) or `walk` (`VAT_RESOURCES_CRAWL=walk`). Two scans of one tree
 that report different populations are only interpretable if each says which lane
 produced it, so the field is derived from the load that ran rather than read back
 from the environment. `data.extentSource` names the projection lane's own
@@ -160,6 +160,11 @@ for the loud-cwd fallback policy and the projectRoot discovery ladder.
   relative to
 - `data.collections` — per configured collection: `resourceCount`, `hasSchema`,
   `validationMode?`, `filesWithErrors`, and `summary` over its files' findings
+- `data.population` — where the file list came from: `store` (the projection
+  store answered), `derived` (the projection was built this run, including with
+  `VAT_PROJECTION_STORE=0`, which skips only the store), or `null` when the walk
+  answered: the walk lane was selected (`VAT_RESOURCES_CRAWL=walk`), or the crawl
+  declined a projection bound to another root and walked
 - `data.files` — under `--verbose` only
 
 **Example (success):**
@@ -248,6 +253,9 @@ behind RFC-3986-compliant leading-`/` resolution.
 - `data.population` (`derived` | `store`), `data.populationSecs`,
   `data.lensSecs`, `data.lensesEvaluated` — where the population came from and
   what it cost; `data.boundsStatement` / `data.limits` when a bounded lens ran
+- `data.lensPopulation` (`none` | `store` | `derived`) — the same tell for the
+  lenses the statement named: `none` when it named no lensed relation, otherwise
+  whether every lens population was a store hit
 
 **Exit Codes:** derived from the published document.
 - `0` - The statement ran over a populated tree — zero rows is an answer, `ok`
@@ -358,6 +366,7 @@ gate:
 durationMs: 82
 data:
   root: /work/project
+  population: derived
   collections: {}
 ```
 
@@ -386,6 +395,7 @@ data:
   populationSecs: 0.221
   lensSecs: 3.75e-7
   lensesEvaluated: []
+  lensPopulation: none
 ```
 
 ### `resources check`
@@ -409,6 +419,7 @@ data:
   populationSecs: 0.0819
   lensSecs: 3.75e-7
   lensesEvaluated: []
+  lensPopulation: none
   checksRun: 3
   checks:
     - name: claude-rule-glob-inert

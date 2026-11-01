@@ -109,14 +109,22 @@ describe('packager rewrites links inside bundled HTML resources', () => {
  * The reachable collision is a PATH-SLUG one: `a-b/c.html` and `a/b-c.html`
  * both flatten to `a-b-c-html`. That is the fixture below, and it is the same
  * shape as the trap corpus's `dup-hyphen/note.md` vs `dup/hyphen-note.md`.
+ *
+ * Run with the SKILL.md linking the two in both orders: the bundled assets are
+ * admitted in the registry's admission order, not in link order, so the
+ * code-unit-first path wins the id however the author ordered the links.
  */
-describe('an HTML file that loses a resource-id collision', () => {
+describe.each([
+  { order: 'winner linked first', winnerFirst: true },
+  { order: 'loser linked first', winnerFirst: false },
+])('an HTML file that loses a resource-id collision ($order)', ({ winnerFirst }) => {
   let projectRoot: string;
   const stderr: string[] = [];
-  /** Arrives first, so it takes the shared id. */
+  /** Code-unit-first (`-` sorts before `/`), so it takes the shared id. */
   const WINNER_REL = 'a-b/c.html';
-  /** Arrives second, loses, and is copied verbatim. */
+  /** Sorts second, loses, and is copied verbatim. */
   const LOSER_REL = 'a/b-c.html';
+  const linked = winnerFirst ? [WINNER_REL, LOSER_REL] : [LOSER_REL, WINNER_REL];
 
   beforeAll(() => {
     projectRoot = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-packager-html-collide-'));
@@ -133,7 +141,7 @@ describe('an HTML file that loses a resource-id collision', () => {
         '---',
         '# Example',
         '',
-        `See [first](./${WINNER_REL}) and [second](./${LOSER_REL}).`,
+        `See [first](./${linked[0] ?? ''}) and [second](./${linked[1] ?? ''}).`,
         '',
       ].join('\n'),
     );
@@ -163,9 +171,12 @@ describe('an HTML file that loses a resource-id collision', () => {
 
     const verbatim = stderr.filter(line => line.includes('verbatim without link rewriting'));
     expect(verbatim, 'expected the verbatim-copy diagnostic to fire').toHaveLength(1);
+    // Each path in its role: the message names both, so a bare `toContain`
+    // would pass with the two swapped.
+    expect(verbatim[0]).toContain(`${LOSER_REL}' verbatim`);
     expect(verbatim[0]).toContain('lost a resource-id collision to');
     // The winner is named by path, so the author has a file to open.
-    expect(verbatim[0]).toContain(WINNER_REL);
+    expect(verbatim[0]).toContain(`${WINNER_REL}', which was registered first`);
     // And the discarded guess — a cause this code could not observe, and which
     // the id scheme makes impossible anyway — is gone.
     expect(verbatim[0]).not.toContain('typically');

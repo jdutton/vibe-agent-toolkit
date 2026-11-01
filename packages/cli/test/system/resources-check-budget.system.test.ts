@@ -114,6 +114,8 @@ const CHILD_HEAP_CAP = { NODE_OPTIONS: '--max-old-space-size=192' };
 
 /** A cheap statement that selects the fixture's markdown files. */
 const MD_ROWS = "SELECT path FROM resource_realizations WHERE ext = '.md'";
+/** A statement naming a claude-context relation that selects nothing, so the lens runs and passes. */
+const CONTEXT_LOADS_NONE = "SELECT 'x' AS path FROM claude_context_loads WHERE 1 = 0";
 /** A cheap statement that selects nothing, so a run over it is a clean pass. */
 const TXT_ROWS = "SELECT path FROM resource_realizations WHERE ext = '.txt'";
 
@@ -367,20 +369,27 @@ describe('vat resources check --budget', () => {
     // The child lane, observed directly. A supervisor that cannot see the
     // child's progress cannot tell a slow run from a hung one, so this is the
     // signal the whole bound is built on.
-    writeChecks(['quick', MD_ROWS]);
+    // The second check names a claude-context relation, so the population line
+    // carries a lens provenance a constant could not fake: not `none`, and the
+    // same value the finished document publishes.
+    writeChecks(['quick', MD_ROWS], ['lensed', CONTEXT_LOADS_NONE]);
     const logPath = safePath.join(projectDir, 'progress.jsonl');
 
     // As the supervisor this test stands in for writes it: naming this process, the child's parent.
     // ⚠️ The child ends itself at end-of-file on stdin (its supervisor gone), and `executeCli`
     // hands it THIS worker's stdin — which vitest holds open as a pipe. Run from a stdin at EOF,
     // this case would end the child with exit 2 before its first line, and red loudly.
-    const { status } = check(SUPERVISED_BY_FLAG, asOurChild(logPath));
+    const { status, doc } = check(SUPERVISED_BY_FLAG, asOurChild(logPath));
 
     expect(status).toBe(1);
-    const kinds = fs.readFileSync(logPath, 'utf-8')
+    const lines = fs.readFileSync(logPath, 'utf-8')
       .split('\n')
       .filter((line) => line.trim() !== '')
-      .map((line) => (JSON.parse(line) as { kind: string }).kind);
+      .map((line) => JSON.parse(line) as { kind: string; lensPopulation?: string });
+    const kinds = lines.map((line) => line.kind);
+    const populationLine = lines.find((line) => line.kind === 'population');
+    expect(populationLine?.lensPopulation).not.toBe('none');
+    expect(populationLine?.lensPopulation).toBe(data(doc)['lensPopulation']);
     // 🔑 `checks-complete` is the LAST line and it is not decoration: after the
     // final cost the child still resolves severities and serialises the
     // document, and it used to emit nothing at all during that phase — so a
@@ -391,7 +400,7 @@ describe('vat resources check --budget', () => {
     // a declared rule — so the pair count is derived from `BUILTIN_CHECK_NAMES`
     // rather than written out. A literal list re-types that number and reds the
     // day a built-in ships.
-    const units = 1 + BUILTIN_CHECK_NAMES.length;
+    const units = 2 + BUILTIN_CHECK_NAMES.length;
     //
     // 🔑 `started` is the FIRST line, written the moment the child has booted,
     // so the watchdog stops charging Node's startup and the CLI's import to the

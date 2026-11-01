@@ -30,7 +30,10 @@ import { rm } from 'node:fs/promises';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { buildClaudeContextPopulation } from '../../src/projection/claude-context-population.js';
+import {
+  buildClaudeContextPopulation,
+  type ClaudeContextPopulation,
+} from '../../src/projection/claude-context-population.js';
 import { AgenticConventionContributor } from '../../src/projection/contributors/agentic-convention.js';
 import {
   CLAUDE_IMPORT_KIND,
@@ -39,6 +42,7 @@ import {
 import { ClaudeRulesScopeContributor } from '../../src/projection/contributors/claude-rules-scope.js';
 import { DISCARD_BLOB_POPULATION, type PopulationCache } from '../../src/projection/merge.js';
 import type { Projection } from '../../src/projection/projection.js';
+import type { ExtentKey, ExtentScopedRows } from '../../src/projection/store.js';
 import { FakeProjectionStore } from '../fake-projection-store.js';
 import { plantTree, razeTree } from '../helpers/temp-corpus.js';
 
@@ -65,15 +69,28 @@ afterEach(async () => {
  * Populate `root` through `store`, under the frozen tree hash.
  *
  * @param store - The store double both runs share
- * @returns The projection the lane produced
+ * @returns The projection the lane produced, and where its roots and rows came from
  */
-async function populateThrough(store: FakeProjectionStore): Promise<Projection> {
+async function populateThrough(store: FakeProjectionStore): Promise<ClaudeContextPopulation> {
   const cache: PopulationCache = { store, treeHash: TREE_HASH, treeUnchanged: () => true };
   return buildClaudeContextPopulation({
     root: root ?? '',
     cache,
     onBlobPopulation: DISCARD_BLOB_POPULATION,
   });
+}
+
+/** A store whose next extent read misses once, as a read taken before a concurrent write. */
+class LateStore extends FakeProjectionStore {
+  missNext = false;
+  missed = 0;
+
+  override readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
+    if (!this.missNext) return super.readExtent(key);
+    this.missNext = false;
+    this.missed += 1;
+    return Promise.resolve(undefined);
+  }
 }
 
 /** Every claude-import extent the projection registered. */
@@ -100,8 +117,9 @@ describe('buildClaudeContextPopulation root discovery', () => {
     // The control for both assertions below: the crawl DOES find four roots on
     // this tree, and an emptied tree is a genuinely different answer rather
     // than one the fixture could never distinguish.
-    expect(importContexts(first)).toHaveLength(4);
+    expect(importContexts(first.projection)).toHaveLength(4);
     expect(store.writeExtentCalls).toBe(1);
+    expect(first.population).toBe('derived');
   });
 
   it('takes the roots from the store rather than crawling for them', async () => {
@@ -114,8 +132,10 @@ describe('buildClaudeContextPopulation root discovery', () => {
 
     // Identical extents over a tree that no longer holds a single file: the
     // root list cannot have come from the filesystem.
-    expect(importContexts(second)).toEqual(importContexts(first));
-    expect(importContexts(second)).toHaveLength(4);
+    expect(importContexts(second.projection)).toEqual(importContexts(first.projection));
+    expect(importContexts(second.projection)).toHaveLength(4);
+    // One provenance for both halves: the root list AND the real pass.
+    expect(second.population).toBe('store');
   });
 
   it('keeps the pre-read key equal to the population key — the tripwire', async () => {
@@ -138,6 +158,23 @@ describe('buildClaudeContextPopulation root discovery', () => {
     expect(declared.map((contributor) => contributor.id)).toEqual([]);
   });
 
+  it('is derived when the root list was crawled, even though the real pass hit the store', async () => {
+    root = await plantTree('vat-claude-store-roots-', TREE);
+    const store = new LateStore();
+    await populateThrough(store);
+
+    // The two passes read the store separately, so a concurrent run can file
+    // the extent between them: the first read misses as if it came before that write.
+    store.missNext = true;
+    const second = await populateThrough(store);
+
+    expect(store.missed).toBe(1);
+    // The real pass was served, not re-derived: nothing new was filed.
+    expect(store.writeExtentCalls).toBe(1);
+    expect(importContexts(second.projection)).toHaveLength(4);
+    expect(second.population).toBe('derived');
+  });
+
   it('crawls again once the store cannot answer for this tree', async () => {
     root = await plantTree('vat-claude-store-roots-', TREE);
     const store = new FakeProjectionStore();
@@ -150,6 +187,7 @@ describe('buildClaudeContextPopulation root discovery', () => {
     // the lane stopped looking at the tree altogether.
     const cold = await populateThrough(new FakeProjectionStore());
 
-    expect(importContexts(cold)).toEqual([]);
+    expect(importContexts(cold.projection)).toEqual([]);
+    expect(cold.population).toBe('derived');
   });
 });

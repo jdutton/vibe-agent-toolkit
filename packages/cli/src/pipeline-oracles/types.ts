@@ -109,7 +109,7 @@ export interface EnumerationRow {
   aliasesEnumeratedPath: boolean;
 }
 
-/** A duplicate-id drop, recorded in arrival order by `addResources`. */
+/** A duplicate-id drop, recorded by `addResources` in the order it made them. */
 export interface CollisionRow {
   id: string;
   /** The file that arrived first and therefore won. Corpus-relative. */
@@ -122,10 +122,11 @@ export interface CollisionRow {
  * What one lane enumerated over one corpus.
  *
  * ⛔ `enumerated` and `admitted` are **order-preserving and must never be
- * sorted**. `ResourceRegistry.addResources` is first-added-wins on
- * `DuplicateResourceIdError`, so arrival order decides which of two colliding
- * files is the one that gets validated and bundled. A sorted snapshot hides
- * precisely the defect this oracle exists to catch.
+ * sorted**. The registry orders every batch itself (`admissionOrder()`), so
+ * the enumerator's order never decides which of two colliding files is kept;
+ * `enumerated` keeps capture order only to show what the enumerator handed
+ * over, and `admitted` keeps the registry's so a registry that stops ordering
+ * shows up as `restatementDrift`. A sorted snapshot hides both.
  */
 export interface EnumerationSnapshot {
   laneId: LaneId;
@@ -136,9 +137,9 @@ export interface EnumerationSnapshot {
   gitAvailable: boolean;
   /** Ordered, pre-deduplication: what the crawl handed to `addResources`. */
   enumerated: EnumerationRow[];
-  /** Ordered, post-deduplication: the registry's arrival order. Corpus-relative. */
+  /** Ordered, post-deduplication: the registry's admission order (`admissionOrder()`). Corpus-relative. */
   admitted: string[];
-  /** Drops the first-added-wins rule made, in arrival order. */
+  /** Drops the first-added-wins rule made, in the order the registry made them. */
   collisions: CollisionRow[];
   /**
    * Set when the lane's production builder **threw** instead of returning a

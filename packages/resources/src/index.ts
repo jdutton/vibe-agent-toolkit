@@ -46,6 +46,9 @@ export {
   // handles it was sniffing `error.message.startsWith('Duplicate resource ID')`
   // — a check that silently stops matching the day the message is reworded.
   DuplicateResourceIdError,
+  // The registry's one admission order, for a caller that admits a batch one
+  // file at a time (the packager's bundled assets) and must not invent its own.
+  admissionOrder,
   generateIdFromPath,
   // What a resource is when `parserKindForPath` answers `none`. Exported for
   // the CLI's parse-fact snapshot, which routes by the same discriminator and
@@ -56,6 +59,7 @@ export {
   type RegistryUnreadablePolicy,
   type DuplicateIdCollision,
   type UnreadableResource,
+  type RegistryCrawl,
   type ResourceRegistryOptions,
   type RegistryStats,
   type CollectionStats,
@@ -745,7 +749,10 @@ export {
 // The lane that assembles the three above. Its own lane, not a flag on the fast
 // repo-wide one: that one declares CONTENT_PARSING_SKIP and both classifiers
 // here read blob-keyed tables.
-export { buildClaudeContextPopulation } from './projection/claude-context-population.js';
+export {
+  buildClaudeContextPopulation,
+  type ClaudeContextPopulation,
+} from './projection/claude-context-population.js';
 
 // The §6 query over that lane's projection — "what loads at this path, and why".
 // `claudeAncestry` and `selectRules` are deliberately NOT exported: they are this
@@ -858,6 +865,7 @@ export {
   gitExtentSelected,
   GitCrawlSource,
   listingRefusalRemedy,
+  CRAWL_SOURCE_KINDS,
   type CrawlSource,
   type CrawlSourceKind,
   type EnumeratedPath,
@@ -890,7 +898,9 @@ export {
 export {
   buildResourcePopulation,
   buildResourceProjection,
-  type ResourcePopulation,
+  CRAWL_LANES,
+  type ResourceEnumeration,
+  type CrawlPopulation,
   type ResourcePopulationSource,
 } from './projection/resource-population.js';
 
@@ -937,6 +947,7 @@ export {
   CONTENT_PARSING_SKIP,
   ClosureNonConvergenceError,
   DISCARD_BLOB_POPULATION,
+  POPULATION_ORIGINS,
   populate,
   populationOracles,
   readStoredRealizations,
@@ -944,7 +955,10 @@ export {
   type ContentParsing,
   type ContributorTiming,
   type PopulateOptions,
+  type PopulateResult,
   type PopulationCache,
+  type PopulationOutcome,
+  type TreePopulationOptions,
 } from './projection/merge.js';
 
 // The one line a user sees when the blob stage declined to derive something.

@@ -120,7 +120,7 @@ describe('populate', () => {
     // Three passes over a contributor emitting two memberships must leave two
     // rows, not six. Without the builder's de-duplication the digest would still
     // settle but the tables would not.
-    const projection = await populate({ root: ROOT, registry: registryWith(growingContributor()), onBlobPopulation: DISCARD_BLOB_POPULATION });
+    const { projection } = await populate({ root: ROOT, registry: registryWith(growingContributor()), onBlobPopulation: DISCARD_BLOB_POPULATION });
     expect(projection.resourceExtents).toHaveLength(2);
     expect(projection.resolutionContexts).toHaveLength(1);
   });
@@ -128,7 +128,7 @@ describe('populate', () => {
   it('writes one provenance row per contributor, carrying the required digest', async () => {
     const registry = registryWith(countingContributor(BASE_ID, BASE));
 
-    const projection = await populate({ root: ROOT, registry, onBlobPopulation: DISCARD_BLOB_POPULATION });
+    const { projection } = await populate({ root: ROOT, registry, onBlobPopulation: DISCARD_BLOB_POPULATION });
     expect(projection.zoneProvenance).toHaveLength(1);
     expect(projection.zoneProvenance[0]?.contributorId).toBe(BASE_ID);
     expect(projection.zoneProvenance[0]?.extentDigest).toMatch(/^[\da-f]{16,}$/u);
@@ -137,7 +137,7 @@ describe('populate', () => {
   it('records the FINAL digest of a closure contributor, never iteration one', async () => {
     // The provenance table replaces on conflict for exactly this reason: a
     // kept-first digest would describe the extent the contributor started from.
-    const projection = await populate({ root: ROOT, registry: registryWith(growingContributor()), onBlobPopulation: DISCARD_BLOB_POPULATION });
+    const { projection } = await populate({ root: ROOT, registry: registryWith(growingContributor()), onBlobPopulation: DISCARD_BLOB_POPULATION });
     expect(projection.zoneProvenance).toHaveLength(1);
     expect(projection.zoneProvenance[0]?.extentDigest).toBe(extentDigest(contribution(SETTLED)));
     expect(projection.zoneProvenance[0]?.extentDigest)
@@ -161,7 +161,7 @@ describe('populate', () => {
       },
     });
 
-    const projection = await populate({
+    const { projection } = await populate({
       root: ROOT,
       registry,
       parameters: { [BASE_ID]: declaration },
@@ -175,7 +175,7 @@ describe('populate', () => {
   it('records null for a contributor given no parameters', async () => {
     const registry = registryWith(countingContributor(BASE_ID, BASE));
 
-    const projection = await populate({ root: ROOT, registry, onBlobPopulation: DISCARD_BLOB_POPULATION });
+    const { projection } = await populate({ root: ROOT, registry, onBlobPopulation: DISCARD_BLOB_POPULATION });
     expect(projection.zoneProvenance[0]?.parameterSet).toBeNull();
   });
 
@@ -283,7 +283,7 @@ describe('populate', () => {
   it('records the corpus root no contribution can carry', async () => {
     const registry = registryWith(countingContributor(BASE_ID, BASE));
 
-    const projection = await populate({ root: ROOT, registry, onBlobPopulation: DISCARD_BLOB_POPULATION });
+    const { projection } = await populate({ root: ROOT, registry, onBlobPopulation: DISCARD_BLOB_POPULATION });
     expect(projection.roots).toHaveLength(1);
     // Matched rather than compared: `safePath.resolve` drives it off the cwd, so
     // a bare POSIX literal gains a drive letter on Windows.

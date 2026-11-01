@@ -18,6 +18,7 @@ import {
   CRAWL_REGISTRY_ADMIT_ID,
   CRAWL_REGISTRY_ENUMERATE_ID,
   classifyFsFault,
+  compareCodeUnits,
   CRAWL_REGISTRY_RESOLVE_LINKS_ID,
   crawlTimingStart,
   forEachInOrder,
@@ -79,7 +80,7 @@ import {
 // Type-only, and that is what keeps it acyclic: the projection's population
 // builder is a CALLER of the registry's world, not a dependency of it, so the
 // import is erased before any module graph exists at runtime.
-import type { ResourcePopulationSource } from './projection/resource-population.js';
+import type { CrawlPopulation, ResourceEnumeration, ResourcePopulationSource } from './projection/resource-population.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
 import type { SHA256 } from './schemas/checksum.js';
 import type { ProjectConfig, ValidationMode } from './schemas/project-config.js';
@@ -379,6 +380,40 @@ export interface CrawlOptions {
    * for the guard and why it declines rather than throwing.
    */
   populationSource?: ResourcePopulationSource;
+}
+
+/**
+ * What one {@link ResourceRegistry.crawl} admitted, and where its population came from.
+ */
+export interface RegistryCrawl {
+  /** The admitted resources, in admission order — see {@link admissionOrder}. */
+  readonly resources: ResourceMetadata[];
+  /** Which lane answered, and for the projection lane the enumeration's own outcome and enumerator. */
+  readonly population: CrawlPopulation;
+}
+
+/**
+ * The ONE order the registry admits files in: by resolved path, in UTF-16
+ * code-unit order (`compareCodeUnits`).
+ *
+ * First-added-wins on a duplicate id is decided by admission order, so the
+ * order belongs to the registry and not to whoever enumerated. Its scope is ONE
+ * admission batch — an {@link ResourceRegistry.addResources} call, so a whole
+ * crawl — and never evicts a file an earlier batch registered; a caller that
+ * admits a batch one {@link ResourceRegistry.addResource} at a time (the
+ * packager's bundled assets) orders it through this same function first: a walk lists by
+ * directory, git lists by byte, a stored extent comes back in SQLite's order,
+ * and each would keep a different file. Code-unit order equals git's UTF-8 byte
+ * order except where a character above U+FFFF meets one in U+E000–U+FFFF.
+ *
+ * @param filePaths - The files to admit, in any order and any spelling
+ * @returns A new array in admission order; the input is not reordered
+ */
+export function admissionOrder(filePaths: readonly string[]): string[] {
+  return filePaths
+    .map((filePath) => ({ filePath, key: safePath.resolve(filePath) }))
+    .sort((left, right) => compareCodeUnits(left.key, right.key))
+    .map(({ filePath }) => filePath);
 }
 
 /**
@@ -786,9 +821,10 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   /**
    * Duplicate-id drops, in the order `addResources` made them.
    *
-   * Exposed because arrival order is behaviour, not bookkeeping: the rule is
+   * Exposed because admission order is behaviour, not bookkeeping: the rule is
    * first-added-wins, so which of two colliding files gets validated, bundled
-   * and rewritten is decided by enumeration order. `validate()` turns these
+   * and rewritten is decided by admission order (see {@link admissionOrder}),
+   * which is the registry's own and not the enumerator's. `validate()` turns these
    * into `DUPLICATE_RESOURCE_ID` issues; a caller that needs to compare
    * populations across a refactor needs the raw drops, because an issue list
    * says a collision happened without saying which file survived it.
@@ -907,31 +943,33 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   /**
    * Create a registry by crawling a directory.
    *
-   * Combines registry creation and directory crawling in a single operation.
+   * Combines registry creation and directory crawling in a single operation,
+   * and returns what {@link ResourceRegistry.crawl} returned beside the
+   * registry — one route to a crawl, one shape for its answer, so a caller built
+   * here can say which lane enumerated exactly as a `crawl()` caller can.
    *
    * @param crawlOptions - Crawl options including baseDir
    * @param registryOptions - Additional registry options
-   * @returns New registry with crawled resources
+   * @returns The new registry, and the crawl's resources and population
    *
    * @example
    * ```typescript
-   * const registry = await ResourceRegistry.fromCrawl({
+   * const { registry, population } = await ResourceRegistry.fromCrawl({
    *   baseDir: '/project/docs',
    *   outputs: [],
    *   unreadable: 'refuse', // or { degrade } — see RegistryUnreadablePolicy
    *   include: ['**.md'],
    *   exclude: ['node_modules'],
    * });
-   * console.log(`Crawled ${registry.size()} resources`);
+   * console.log(`Crawled ${registry.size()} resources on the ${population.lane} lane`);
    * ```
    */
   static async fromCrawl(
     crawlOptions: CrawlOptions,
     registryOptions?: Omit<ResourceRegistryOptions, 'baseDir'>,
-  ): Promise<ResourceRegistry> {
+  ): Promise<RegistryCrawl & { readonly registry: ResourceRegistry }> {
     const registry = new ResourceRegistry({ ...registryOptions, baseDir: crawlOptions.baseDir });
-    await registry.crawl(crawlOptions);
-    return registry;
+    return { registry, ...(await registry.crawl(crawlOptions)) };
   }
 
   /**
@@ -1190,7 +1228,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * be.
    *
    * **THE sequential half.** Every mutation this class performs during a crawl
-   * happens here, and it is called in `filePaths` order, which is what makes the
+   * happens here, and it is called in admission order, which is what makes the
    * output a function of the corpus rather than of the machine. Three separate
    * guarantees rest on that, and only the first one is loud when it breaks:
    *
@@ -1247,7 +1285,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
 
   /**
    * Add multiple resources to the registry: read and parse with a bounded
-   * fan-out, then register in input order.
+   * fan-out, then register in admission order (see {@link admissionOrder}).
    *
    * ## Why this is no longer a sequential loop
    *
@@ -1256,17 +1294,21 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * it is unchanged — what changed is where it is discharged. Reading and
    * parsing happen concurrently in {@link prepareAdmission}, which decides
    * everything and mutates nothing; every mutation happens in
-   * {@link emitPreparedResource}, in `filePaths` order. So duplicate detection
+   * {@link emitPreparedResource}, in admission order. So duplicate detection
    * is still strictly ordered while the parse — 70% of this command's wall clock
    * on a real adopter — is not.
    *
    * ⭐ **At width 1, which is what ships today, this is the old loop exactly**:
    * one file prepared, one file emitted, before the next is touched.
    *
-   * @param filePaths - Array of file paths to add
-   * @returns Array of parsed resource metadata, in `filePaths` order
+   * @param filePaths - The file paths to add, in any order: the registry sorts
+   *   them into admission order, so the code-unit-first of two paths with one id
+   *   IN THIS CALL wins however the caller listed them. The order is per batch: a
+   *   file an earlier call registered keeps its id, and a later path that sorts
+   *   before it is the one recorded as the collision
+   * @returns Array of parsed resource metadata, in admission order
    * @throws Error if any file fails for a reason that is not a read failure or
-   *   a duplicate id — raised for the FIRST such file in `filePaths` order, not
+   *   a duplicate id — raised for the FIRST such file in admission order, not
    *   for whichever preparation happened to finish first
    *
    * @example
@@ -1278,7 +1320,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * ]);
    * ```
    */
-  async addResources(filePaths: string[]): Promise<ResourceMetadata[]> {
+  async addResources(filePaths: readonly string[]): Promise<ResourceMetadata[]> {
+    const ordered = admissionOrder(filePaths);
     // ⛔ Nothing is pre-loaded here, deliberately. A `loadParsersFor(filePaths)`
     // hoist stood on this line to keep a broken INSTALL out of the demotion
     // below, and it cost every fully warm crawl the ~730 ms remark load for
@@ -1292,7 +1335,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     const dispatcher = new ParseDispatcher(this.parseCache(), this.parsePoolPolicy);
     try {
       await driveInOrder(
-        filePaths,
+        ordered,
         dispatcher,
         (filePath) => this.prepareAdmission(filePath, dispatcher),
         (prepared) => {
@@ -1313,7 +1356,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         // collection declarations, both already in memory, so this answers
         // without a `stat` and without a read.
         (from) =>
-          tallyParsable(filePaths, from, (filePath) =>
+          tallyParsable(ordered, from, (filePath) =>
             this.parserKindFor(safePath.resolve(filePath)),
           ),
       );
@@ -1331,15 +1374,20 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
-   * Crawl a directory and add all matching markdown files.
+   * Crawl a directory and add all matching markdown files, as ONE
+   * {@link addResources} batch — so the whole crawl is admitted in one
+   * admission order, however the files were enumerated.
    *
    * @param options - Crawl options (baseDir, the required `unreadable` policy, include, exclude patterns)
-   * @returns Array of all added resources
+   * @returns The admitted resources, in admission order, and where their file
+   *   list came from: `{ lane: 'walk' }` when the directory was walked (no source,
+   *   or a source this crawl declined), otherwise the outcome and enumerator the
+   *   source's enumeration carried
    *
    * @example
    * ```typescript
    * // Crawl docs directory, excluding node_modules
-   * const resources = await registry.crawl({
+   * const { resources, population } = await registry.crawl({
    *   baseDir: './docs',
    *   outputs: [],
    *   unreadable: 'refuse',
@@ -1348,7 +1396,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * });
    * ```
    */
-  async crawl(options: CrawlOptions): Promise<ResourceMetadata[]> {
+  async crawl(options: CrawlOptions): Promise<RegistryCrawl> {
     const {
       baseDir,
       include = [...DEFAULT_RESOURCE_INCLUDE],
@@ -1437,18 +1485,22 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // where something does.
     //
     // `populationFrom` may DECLINE — see its root guard — and a decline falls
-    // back to the walk rather than to an empty list. `??` and not `||`: an empty
-    // ARRAY is a legitimate population (a tree with no admitted members) and must
-    // not re-trigger the walk, while `undefined` is the refusal.
+    // back to the walk rather than to an empty list. `undefined` is the refusal;
+    // an empty `admitted` is a legitimate population (a tree with no admitted
+    // members) and must not re-trigger the walk.
     const enumerationStartedAt = crawlTimingStart();
     const sourced = populationSource
       ? await withOuterBracket(() => this.populationFrom(populationSource, baseDir, include, exclude, outputs))
       : undefined;
-    const files = sourced ?? await crawlDirectory(crawlOptions);
+    const files = sourced?.admitted ?? await crawlDirectory(crawlOptions);
     recordRegistryPass(CRAWL_REGISTRY_ENUMERATE_ID, enumerationStartedAt);
 
-    // Add all found files
-    return await this.addResources(files);
+    // The walk answered whenever no enumeration did, declined or never offered —
+    // said HERE, beside the files, so it cannot be told apart from them.
+    const population: CrawlPopulation = sourced === undefined
+      ? { lane: 'walk' }
+      : { lane: 'projection', outcome: sourced.enumeration.outcome, extentSource: sourced.enumeration.extentSource };
+    return { resources: await this.addResources(files), population };
   }
 
   /**
@@ -1491,8 +1543,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * @param baseDir - The basis the caller's globs are written against
    * @param include - Include globs
    * @param exclude - Exclude globs
-   * @returns Absolute paths of the admitted files, or `undefined` when the source
-   *   is bound to a different root and the caller should walk instead
+   * @returns Absolute paths of the admitted files with the enumeration they came
+   *   from, or `undefined` when the source is bound to a different root and the
+   *   caller should walk instead
    */
   private async populationFrom(
     source: ResourcePopulationSource,
@@ -1500,14 +1553,15 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     include: string[],
     exclude: string[],
     outputs: readonly string[],
-  ): Promise<string[] | undefined> {
+  ): Promise<{ admitted: string[]; enumeration: ResourceEnumeration } | undefined> {
     const base = safePath.resolve(baseDir);
     if (!sameDirectory(source.root, base)) {
       warnPopulationRootMismatch(source.root, base);
       return undefined;
     }
     const isMember = crawlPathFilter(include, exclude);
-    const { paths, conditions } = await source.enumerate(base, outputs);
+    const enumeration = await source.enumerate(base, outputs);
+    const { paths, conditions } = enumeration;
     // Kept whole, not narrowed by `include`/`exclude`: a condition is about the
     // enumeration, and a gap the enumerator met outside this crawl's globs is
     // still a gap in the population the projection will answer queries from.
@@ -1526,7 +1580,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         admitted.push(absolutePath);
       }
     }
-    return admitted;
+    return { admitted, enumeration };
   }
 
   /**

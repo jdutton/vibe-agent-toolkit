@@ -18,7 +18,7 @@ import { resetProjectRootCaches, safePath, toForwardSlash } from '@vibe-agent-to
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { DISCARD_BLOB_POPULATION } from '../../src/projection/merge.js';
+import { DISCARD_BLOB_POPULATION, type PopulateResult } from '../../src/projection/merge.js';
 import type { Projection } from '../../src/projection/projection.js';
 import { buildResourceProjection } from '../../src/projection/resource-population.js';
 import type { ClaudeRulePatternRow } from '../../src/schemas/projection-claude-rules.js';
@@ -69,21 +69,13 @@ function root(): string {
  * Populate the fixture tree through the resources lane.
  *
  * @param store - A store to cache through, or omitted to re-derive
- * @param onContributor - Receives every contributor invocation; an EMPTY record
- *   list is the only observable signature of a store hit
- * @returns The projection the lane produced
+ * @returns The projection the lane produced, and whether the store served it
  */
-async function populateTree(
-  store?: FakeProjectionStore,
-  onContributor?: (id: string) => void,
-): Promise<Projection> {
+async function populateTree(store?: FakeProjectionStore): Promise<PopulateResult> {
   return buildResourceProjection({
     root: root(),
     onBlobPopulation: DISCARD_BLOB_POPULATION,
     ...(store === undefined ? {} : { cache: { store, treeUnchanged: () => true, treeHash: TREE_HASH } }),
-    ...(onContributor === undefined
-      ? {}
-      : { onContributorTiming: (timing) => onContributor(timing.contributorId) }),
   });
 }
 
@@ -114,7 +106,7 @@ function patternsByRulePath(projection: Projection): {
 
 describe('claude_rule_patterns through the resources lane', () => {
   it('produces one row per declared glob, with the tree-wide witness', async () => {
-    const projection = await populateTree();
+    const { projection } = await populateTree();
 
     // The positive control first: a lane that populated nothing satisfies every
     // shape assertion below, and a rules file nobody realized would make the
@@ -129,15 +121,14 @@ describe('claude_rule_patterns through the resources lane', () => {
 
   it('keeps every row across a store round trip, on a hit that ran no contributor', async () => {
     const store = new FakeProjectionStore();
-    const populated = await populateTree(store);
-    const filed: string[] = [];
-    const hydrated = await populateTree(store, (id) => filed.push(id));
+    const { projection: populated } = await populateTree(store);
+    const { projection: hydrated, outcome } = await populateTree(store);
 
     // Asserted FIRST, and it is not decoration: two correct populations of an
     // unchanged tree produce identical rows, so the row comparison below is
-    // green whether the store answered or not. Only the absence of contributor
-    // work proves a hydration happened.
-    expect(filed).toEqual([]);
+    // green whether the store answered or not. Only the outcome proves a
+    // hydration happened.
+    expect(outcome).toEqual({ population: 'store', stored: 'hit' });
     expect(hydrated.claudeRulePatterns).toEqual(populated.claudeRulePatterns);
     // ...and it is not two empty arrays agreeing.
     expect(hydrated.claudeRulePatterns).toHaveLength(2);
@@ -204,7 +195,7 @@ async function populateIgnoredTree(
     // Positive control on the oracle: an unusable tracker answers "nothing is
     // ignored", and every row below would be the non-repository answer.
     expect(gitTracker.isUsable()).toBe(true);
-    const projection = await buildResourceProjection({
+    const { projection } = await buildResourceProjection({
       root: dir, gitTracker, onBlobPopulation: DISCARD_BLOB_POPULATION,
     });
     // The premise: the ignored file is never realized, so no witness can exist.

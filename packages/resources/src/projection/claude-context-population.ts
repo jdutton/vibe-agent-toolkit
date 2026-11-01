@@ -144,11 +144,41 @@ import {
   populate,
   populationOracles,
   readStoredRealizations,
-  type BlobPopulationReport,
   type PopulateOptions,
-  type PopulationCache,
+  type PopulateResult,
+  type PopulationOutcome,
+  type TreePopulationOptions,
 } from './merge.js';
-import type { Projection } from './projection.js';
+
+/**
+ * The claude-context population, and ONE provenance for it.
+ *
+ * Two passes decide `population` — the root list that chose which import
+ * contributors to register, and the real pass — and it is `'store'` only when
+ * both were served from the store ({@link claudeContextProvenance}). Neither
+ * half is published on its own, so no caller can read a half-answer.
+ */
+export interface ClaudeContextPopulation {
+  readonly projection: PopulateResult['projection'];
+  readonly population: PopulationOutcome['population'];
+}
+
+/**
+ * The claude-context population's provenance from its two passes.
+ *
+ * A hit on the real pass behind a crawled root list was not served from the
+ * store end to end, so it is `'derived'`.
+ *
+ * @param roots - Where the root list came from
+ * @param outcome - The real pass's `populate()` outcome
+ * @returns `'store'` only when both passes were served from the store
+ */
+export function claudeContextProvenance(
+  roots: PopulationOutcome['population'],
+  outcome: PopulationOutcome,
+): PopulationOutcome['population'] {
+  return roots === 'store' && outcome.population === 'store' ? 'store' : 'derived';
+}
 
 /**
  * One crawl of the root, handed to both passes.
@@ -262,7 +292,7 @@ async function discoverImportRoots(
     ...(collections !== undefined && { collections }),
   });
 
-  return claudeImportRootsFrom(discovery.resourceRealizations);
+  return claudeImportRootsFrom(discovery.projection.resourceRealizations);
 }
 
 /**
@@ -289,15 +319,9 @@ async function discoverImportRoots(
  *   the counts names `DISCARD_BLOB_POPULATION` rather than leaving the argument
  *   off, because a tree whose every document was declined as binary would
  *   otherwise populate as empty and report success
- * @returns The populated projection
+ * @returns The populated projection and its one provenance (see {@link claudeContextProvenance})
  */
-export async function buildClaudeContextPopulation(options: {
-  root: string;
-  gitTracker?: GitTracker | undefined;
-  cache?: PopulationCache | undefined;
-  collections?: Readonly<Record<string, CollectionConfig>> | undefined;
-  onBlobPopulation: (report: BlobPopulationReport) => void;
-}): Promise<Projection> {
+export async function buildClaudeContextPopulation(options: TreePopulationOptions): Promise<ClaudeContextPopulation> {
   const root = safePath.resolve(options.root);
 
   // The run's ONE crawl source, and the thunk the extent contributor reads it
@@ -334,7 +358,7 @@ export async function buildClaudeContextPopulation(options: {
   const discovered = await importRoots(populateOptions, filesystem.id);
   // The discovery branch's replaying source becomes the run's, so the real pass
   // reuses that crawl instead of taking a second one.
-  if (discovered.source !== undefined) source = discovered.source;
+  if (discovered.population === 'derived') source = discovered.source;
 
   // AFTER the enumerator, and the order is load-bearing: `byStratum` returns
   // registration order and the driver runs base contributors sequentially, each
@@ -357,8 +381,16 @@ export async function buildClaudeContextPopulation(options: {
       claudeImportExtentDeclaration(rootRelativePath) as unknown as JsonValue;
   }
 
-  return populate(populateOptions);
+  const { projection, outcome } = await populate(populateOptions);
+  // Two store reads, so they can disagree: a run filing this extent between them
+  // leaves a crawled root list behind a hit (claude-context-store-roots pins it).
+  return { projection, population: claudeContextProvenance(discovered.population, outcome) };
 }
+
+/** {@link importRoots}' answer: the roots, and which of the two routes found them. */
+type ImportRoots =
+  | { readonly population: 'store'; readonly roots: readonly string[] }
+  | { readonly population: 'derived'; readonly roots: readonly string[]; readonly source: CrawlSource };
 
 /**
  * Every `@`-import root under the tree — from the store when it holds this
@@ -383,18 +415,18 @@ export async function buildClaudeContextPopulation(options: {
  *
  * @param populateOptions - The options the real population will run under
  * @param filesystemId - The enumerating contributor's id, from the instance
- * @returns The roots, and — only when a crawl was taken to find them — the
- *   replaying source that crawl produced, so the caller can hand the very same
- *   enumeration to the real pass rather than taking a second one
+ * @returns The roots and where they came from; a `derived` answer also carries
+ *   the replaying source its crawl produced, so the caller can hand the very
+ *   same enumeration to the real pass rather than taking a second one
  */
 async function importRoots(
   populateOptions: PopulateOptions,
   filesystemId: string,
-): Promise<{ roots: readonly string[]; source?: CrawlSource }> {
+): Promise<ImportRoots> {
   const stored = await readStoredRealizations(populateOptions, [
     { id: filesystemId, parameterSet: DECLINE_IGNORED },
   ]);
-  if (stored !== undefined) return { roots: claudeImportRootsFrom(stored) };
+  if (stored !== undefined) return { population: 'store', roots: claudeImportRootsFrom(stored) };
 
   const root = populateOptions.root;
   const source = await sharedEnumeration(root);
@@ -405,6 +437,7 @@ async function importRoots(
       source,
       populateOptions.collections,
     ),
+    population: 'derived',
     source,
   };
 }

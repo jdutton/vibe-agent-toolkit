@@ -18,3 +18,17 @@ export function renderCommandHelp(command: Command): string {
   command.outputHelp();
   return captured;
 }
+
+/**
+ * One subcommand of a command group, by name.
+ *
+ * @param group - The group, already fully constructed
+ * @param name - The subcommand's name
+ * @returns The subcommand
+ * @throws When the group no longer exposes it, so a rename fails loudly
+ */
+export function subcommand(group: Command, name: string): Command {
+  const found = group.commands.find((candidate) => candidate.name() === name);
+  if (found === undefined) throw new Error(`command factory no longer exposes a '${name}' subcommand`);
+  return found;
+}

@@ -65,6 +65,7 @@ const resourceReport = (verbose: boolean) =>
     collectionStats: undefined,
     verbose,
     durationMs: 21,
+    population: null,
   });
 
 describe('vat resources validate — the default listing and --verbose', () => {

@@ -150,6 +150,21 @@
                     "additionalProperties": false
                   }
                 },
+                "population": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "store",
+                        "derived"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Whether the membership was served from the projection store (`store`) or derived this run (`derived`). `derived` too under `VAT_PROJECTION_STORE=0`, which skips only the store. `null` only when no projection enumerated the membership: the walk lane ran (`VAT_RESOURCES_CRAWL=walk`), or the crawl declined a projection bound to another root and walked."
+                },
                 "files": {
                   "type": "array",
                   "items": {
@@ -180,7 +195,8 @@
               },
               "required": [
                 "root",
-                "collections"
+                "collections",
+                "population"
               ],
               "additionalProperties": false
             }

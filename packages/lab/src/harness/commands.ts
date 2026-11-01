@@ -94,7 +94,8 @@ export interface MeasuredCommandSpec {
   readonly exit: ExitCommitment;
   /**
    * Which document reader this command's stdout goes through for the warm rule
-   * (`provenance.ts`): `none` for a verb that publishes no population.
+   * (`provenance.ts`): `none` where the lab judges no population on this entry,
+   * whether or not the verb publishes one (see `RESOURCES_VALIDATE_READER`).
    */
   readonly provenance: ProvenanceReader;
   /**
@@ -114,6 +115,14 @@ export interface MeasuredSequenceSpec {
   readonly steps: readonly MeasuredCommandSpec[];
 }
 
+
+/**
+ * The reader for `vat resources validate`, whichever argv spells it. It publishes
+ * `data.population`, but the lab does not judge it yet: a baseline build older
+ * than the field cannot be told from a run that dropped it until a per-build
+ * declaration exists.
+ */
+const RESOURCES_VALIDATE_READER: ProvenanceReader = 'none';
 
 /**
  * Every vat command the lab knows how to measure, by name.
@@ -163,12 +172,9 @@ export const MEASURABLE_COMMANDS = Object.freeze({
     provenance: 'none',
     exit: COMPLETES_CLEAN,
     populates: false,
-    // The ONLY entry whose own output names which population arm the run took
-    // (`population: derived | store`) and what that arm cost
-    // (`populationSecs`). Every other entry is silent about it, so an A/B
-    // varying `VAT_PROJECTION_STORE` can only be confirmed from a `crawl`
-    // dump's `projection-store:read` / `projection-store:write` charges — this
-    // one says it in the document itself.
+    // Names which population arm the run took (`population: derived | store`)
+    // and what that arm cost (`populationSecs`) — the one cost a projection
+    // store moves, measured with nothing else in the run.
     //
     // The statement is deliberately trivial. `resources query` is populate +
     // one SQL, so with a counting query essentially all of its wall time IS the
@@ -187,7 +193,7 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   }),
   'resources-validate': Object.freeze({
     name: 'resources-validate',
-    provenance: 'none',
+    provenance: RESOURCES_VALIDATE_READER,
     exit: COMPLETES_WITH_FINDINGS,
     // The same verb as `resources-validate-ci`: it writes the projection whatever its argv.
     populates: true,
@@ -305,8 +311,7 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   'resources-validate-ci': Object.freeze({
     name: 'resources-validate-ci',
     args: Object.freeze(['resources', 'validate']),
-    // Today's builds publish no population on `resources validate`.
-    provenance: 'none',
+    provenance: RESOURCES_VALIDATE_READER,
     exit: COMPLETES_WITH_FINDINGS,
     populates: true,
   }),

@@ -15,11 +15,10 @@
 import { readFileSync } from 'node:fs';
 
 import { openProjectionCompileProbe } from '@vibe-agent-toolkit/projection-sqlite';
-import type { Command } from 'commander';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { createResourcesCommand } from '../../src/commands/resources/index.js';
-import { renderCommandHelp } from '../help-text-helpers.js';
+import { renderCommandHelp, subcommand } from '../help-text-helpers.js';
 
 /** A statement as the help shows it, with the values its placeholders take. */
 interface HelpStatement {
@@ -89,19 +88,6 @@ function queryExamples(help: string): HelpStatement[] {
     const parameters = tokens.flatMap((token, index) => (token === '--param' ? [tokens[index + 1] ?? ''] : []));
     return [{ sql: trimmed.slice(QUERY_EXAMPLE.length + 1, close), parameters }];
   });
-}
-
-/**
- * One subcommand of a command group.
- *
- * @param group - The group
- * @param name - The subcommand's name
- * @returns The subcommand
- */
-function subcommand(group: Command, name: string): Command {
-  const found = group.commands.find((command) => command.name() === name);
-  if (found === undefined) throw new Error(`no subcommand ${name}`);
-  return found;
 }
 
 /** The shipped skill that teaches `query` and `check`. */

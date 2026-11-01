@@ -88,16 +88,14 @@ describe('withResourcePopulationSource', () => {
     ).toEqual([ASSET_REL, GUIDE_REL]);
   });
 
-  it('reports the enumerator that actually ran', async () => {
+  it('carries the enumeration\'s own outcome and enumerator out with its paths', async () => {
     writeFileSync(safePath.join(root, GUIDE_REL), '# guide\n', 'utf-8');
-    process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_PROJECTION;
 
-    const seen: string[] = [];
-    await withResourcePopulationSource(
-      { root, observeExtentSource: (kind) => seen.push(kind) },
-      async (source) => source?.enumerate(root, []),
-    );
+    const enumeration = await withResourcePopulationSource({ root }, async (source) => source?.enumerate(root, []));
 
-    expect(seen).toEqual(['filesystem']);
+    // A temp tree outside any repository has no store, so the run derived, on
+    // the filesystem enumerator — told by the enumeration, not by a side channel.
+    expect(enumeration?.outcome).toEqual({ population: 'derived', stored: 'no-store' });
+    expect(enumeration?.extentSource).toBe('filesystem');
   });
 });
