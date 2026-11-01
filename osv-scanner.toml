@@ -91,10 +91,18 @@
 #     `no-extraneous-dependencies`, `no-import-module-exports`, `no-internal-modules`,
 #     `no-namespace` and `no-unassigned-import`. None of those options is configured
 #     here. Configuring one makes lint throw `(0 , _minimatch2.default) is not a
-#     function` (verified with `import/order` `pathGroups`): loud, not silent — at
-#     that point drop this pin. eslint-plugin-import-x 4.17.1 is NOT the way out: its
-#     ESM build does `import { makeRe } from 'minimatch'`, which 11 removed, so under
-#     this pin it fails to load at all.
+#     function` (verified with `import/order` `pathGroups`): loud. ONE rule is not
+#     loud: `no-restricted-paths` uses the kept `new Minimatch()` but builds its glob
+#     `zones` from absolute paths, which carry backslashes on Windows — 3.x turned
+#     them into `/`, 11 reads them as escapes, so a glob zone silently matches
+#     nothing there. It is not configured either. So: before enabling ANY
+#     minimatch-backed eslint-plugin-import option or rule (the seven above, or
+#     `no-restricted-paths` with a glob zone), drop this pin first.
+#     eslint-plugin-import-x 4.17.1 is NOT the way out: its ESM build does
+#     `import { makeRe } from 'minimatch'`, which 11 removed, so under this pin it
+#     fails to load at all.
+#     RE-CHECK TRIGGER (rule 4): the first eslint-plugin-import release whose range
+#     admits minimatch 11 — then the hazard above is gone and this paragraph goes.
 # ---------------------------------------------------------------------------
 
 # --- zod 3 (GHSA-mrhx-c7xc-m3w5) ---------------------------------------------
