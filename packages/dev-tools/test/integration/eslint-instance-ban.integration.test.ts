@@ -106,6 +106,8 @@ describe('the ESLint-instance ban', () => {
     it('keeps every other restriction of the two rules', async () => {
       expect(await banFindings(file, "import yaml from 'js-yaml';\nexport const load = yaml.load;\n")).toEqual([expect.stringContaining(`${STATIC_BAN}: `)]);
       expect(await banFindings(file, "export const load = (): Promise<unknown> => import('tar');\n")).toEqual([expect.stringContaining(`${DYNAMIC_BAN}: `)]);
+      expect(await banFindings(file, "import * as tar from 'tar';\nexport const list = tar.list;\n")).toEqual([expect.stringContaining(`${STATIC_BAN}: `)]);
+      expect(await banFindings(file, "import { extract } from 'tar/extract';\nexport const x = extract;\n")).toEqual([expect.stringContaining(`${STATIC_BAN}: `)]);
     });
   });
 });

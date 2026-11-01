@@ -18,7 +18,9 @@ import { ESLint, type Linter } from 'eslint';
  * in `eslint.config.js`). The cache options are not accepted: this linter never caches.
  */
 export function repoEslint(options: Omit<ESLint.Options, 'cache' | 'cacheLocation' | 'cacheStrategy'>): ESLint {
-  return new ESLint({ ...options, cacheLocation: safePath.join(normalizedTmpdir(), 'vat-test-eslintcache') });
+  // Both set AFTER the spread: the `Omit` is compile-time only, and an options object held in a
+  // variable can still carry `cache: true`.
+  return new ESLint({ ...options, cache: false, cacheLocation: safePath.join(normalizedTmpdir(), 'vat-test-eslintcache') });
 }
 
 /** The two rules that carry the repo's import bans: the static half and the dynamic half. */

@@ -142,8 +142,9 @@ the coverage job in CI — never in a turbo lane; not on Windows).
    unchanged tree cheap (~40 s warm), not instant.
    (enforced by: `vibe-validate.config.yaml` + `package.json` `scripts.validate`)
 3. **Trust the exit code, not the summary.** `bun run validate` never replays vibe-validate's cache.
-   The pre-commit HOOK does, and a cached hook verdict is a pre-commit-TIER verdict — never a full
-   one. A real full run is minutes; a sub-second "pass" means nothing ran. Never read a verdict
+   The pre-commit HOOK does: it replays whatever verdict is cached for the tree (a full-tier red or
+   green, or its own smaller tier's pass), so a hook pass is never evidence of a full pass. A real
+   full run is minutes; a sub-second "pass" means nothing ran. Never read a verdict
    through a pipe (`validate | tail` reports `tail`'s status): redirect to a file and capture `$?`.
    (not enforced)
 4. Ask before committing: present what changed and that validation passed. Conventional-commit
