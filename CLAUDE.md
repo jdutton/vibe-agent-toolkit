@@ -110,7 +110,8 @@ nothing to register; `tsconfig.json` `references` are generated, never hand-edit
   Custom rules live in `packages/utils/eslint/` — see
   [`docs/custom-eslint-rules.md`](docs/custom-eslint-rules.md). (enforced by: `bun run lint`)
 - **Zero code duplication.** When `duplication-check` fails, refactor — extract to a shared helper;
-  the baseline is never updated to accept a clone. (enforced by: `bun run duplication-check`)
+  the baseline is never updated to accept a clone. (enforced by: `bun run duplication-check`, full
+  tier only)
 - SonarCloud runs automatic analysis: fix every smell it reports at its cause; **never `NOSONAR`**
   ([why](docs/contributing/traps.md#nosonar-does-nothing-under-sonarcloud-automatic-analysis)), never
   argue one away. In its PR comment, New, Accepted and Security Hotspots must all be zero — "Quality
@@ -141,20 +142,29 @@ the coverage job in CI — never in a turbo lane; not on Windows).
    unchanged tree cheap (~40 s warm), not instant.
    (enforced by: `vibe-validate.config.yaml` + `package.json` `scripts.validate`)
 3. **Trust the exit code, not the summary.** `bun run validate` never replays vibe-validate's cache.
-   The pre-commit HOOK does, and a cached hook verdict is a pre-commit-TIER verdict — never a full
-   one. A real full run is minutes; a sub-second "pass" means nothing ran. Never read a verdict
+   The pre-commit HOOK does: it replays whatever verdict is cached for the tree (a full-tier red or
+   green, or its own smaller tier's pass), so a hook pass is never evidence of a full pass. A real
+   full run is minutes; a sub-second "pass" means nothing ran. Never read a verdict
    through a pipe (`validate | tail` reports `tail`'s status): redirect to a file and capture `$?`.
    (not enforced)
 4. Ask before committing: present what changed and that validation passed. Conventional-commit
    messages. (not enforced)
 
 **The gate has two tiers** (enforced by: `runScope: ci` in `vibe-validate.config.yaml`):
-- **pre-commit tier** — `git commit` (Husky → `vibe-validate pre-commit`) runs build, typecheck,
-  lint, duplication and unit tests only (~66 s warm on macOS); every other step is `runScope: ci`.
-- **full tier** — `bun run validate` and CI run every step: the above plus knip, repo structure,
-  publish readiness, link validation, the `vat` dogfood steps, integration and system tests. It sets
+- **pre-commit tier** — `git commit` (Husky → `vibe-validate pre-commit`) runs build, typecheck
+  and lint only (seconds with warm caches); every other step is `runScope: ci`. Run
+  `bun run test:unit` yourself when the change calls for it. The hook replays a cached verdict
+  for the tree, a red full-tier run included: `VV_FORCE_EXECUTION=1 git commit` runs the commit
+  tier afresh. (not enforced)
+- **full tier** — `bun run validate` and CI run every step: the above plus duplication, knip,
+  repo structure, publish readiness, link validation, the `vat` dogfood steps, unit, integration
+  and system tests. It sets
   `CI=1` (vibe-validate's only `runScope` switch) and `--force` (the tree-hash cache records a
   skipped step as passed, so it cannot tell the tiers apart).
+- **Local lint is cached; CI lint is cold.** A type-aware rule reads other files, and ESLint's cache
+  keys only the file's own metadata (mtime and size), so a local lint can replay a clean verdict after a change
+  elsewhere (an `async` signature reds an unchanged caller). CI's fresh checkout has no cache.
+  Delete `.eslintcache` to reproduce a CI-only lint red. (not enforced)
 - **A green commit is NOT a green PR.** Run `bun run validate` before pushing; CI runs the full
   tier on ubuntu and Windows.
 

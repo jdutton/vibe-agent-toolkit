@@ -1,7 +1,7 @@
 /**
  * jscpd-check-new.ts
  *
- * Fails pre-commit only if NEW duplication is introduced.
+ * Fails the full gate (`bun run validate`, CI) only if NEW duplication is introduced.
  * Compares current scan to baseline, ignoring existing technical debt.
  */
 
@@ -33,9 +33,9 @@ const BASELINE_FILE = safePath.join('.github', '.jscpd-baseline.json');
  * Why we check test code duplication (shift-left principle):
  *
  * 1. **Consistency with SonarQube**: SonarQube checks both src and test code.
- *    Pre-commit checks should catch the same issues to prevent CI surprises.
+ *    The full gate catches the same issues to prevent SonarCloud surprises.
  *
- * 2. **Early Detection**: Catching duplication in local pre-commit is faster and
+ * 2. **Early Detection**: Catching duplication in the local full gate is faster and
  *    cheaper than discovering it in CI after push (shift-left testing).
  *
  * 3. **Test Quality**: Duplicated test code is just as problematic as duplicated

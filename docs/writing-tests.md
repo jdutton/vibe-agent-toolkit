@@ -1,6 +1,6 @@
 # Writing Tests Guide
 
-**CRITICAL**: Code duplication in tests will block commits and PR merges. Follow these patterns to avoid duplication from the start.
+**CRITICAL**: Code duplication in tests fails the full gate (`bun run validate`, CI) and blocks PR merges. Follow these patterns to avoid duplication from the start.
 
 ## Quick Reference
 
@@ -8,7 +8,7 @@
 1. Create `test/test-helpers.ts` if it doesn't exist
 2. After writing 2-3 similar tests, extract a `setupXTestSuite()` helper
 3. Use `toForwardSlash()` from `@vibe-agent-toolkit/utils` for cross-platform path comparisons
-4. Run `bun run duplication-check` before committing
+4. Run `bun run duplication-check` before pushing
 
 ## Test File Organization
 
@@ -545,7 +545,7 @@ While writing tests:
 ### Running the Check
 
 ```bash
-# Before every commit
+# Before pushing (the full gate and CI run it; the commit hook does not)
 bun run duplication-check
 
 # If it fails
@@ -751,7 +751,7 @@ When writing tests:
 - [ ] Used `vi.useFakeTimers()` instead of real `setTimeout` for time-dependent tests
 
 **Quality:**
-- [ ] Ran `bun run duplication-check` before committing
+- [ ] Ran `bun run duplication-check` before pushing
 - [ ] No code duplication detected
 
 ## Real-World Impact

@@ -14,27 +14,17 @@
  * ban are run, so no type information is needed and a fixture need not exist on disk.
  */
 
-import { resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
-import { ESLint } from 'eslint';
+import { resolveFromImportMeta } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
+
+import { BAN_RULES, banLinter } from '../eslint-clean-files.js';
 
 const REPO_ROOT = resolveFromImportMeta(import.meta.url, '..', '..', '..', '..');
 
-const STATIC_BAN = 'no-restricted-imports';
-const DYNAMIC_BAN = 'no-restricted-syntax';
-
-const eslint = new ESLint({
-  cwd: REPO_ROOT,
-  ruleFilter: ({ ruleId }) => ruleId === STATIC_BAN || ruleId === DYNAMIC_BAN,
-  // The two rules read syntax alone: no program is built for a fixture that is not on disk.
-  overrideConfig: [{ files: ['**/*.ts', '**/*.cts'], languageOptions: { parserOptions: { project: null, projectService: false } } }],
-});
+const [STATIC_BAN, DYNAMIC_BAN] = BAN_RULES;
 
 /** The ban's findings on `code`, linted as if it were the file `relative` of this repo: each as `rule: message`. */
-async function banFindings(relative: string, code: string): Promise<string[]> {
-  const [result] = await eslint.lintText(code, { filePath: safePath.join(REPO_ROOT, relative) });
-  return (result?.messages ?? []).map((message) => `${message.ruleId ?? 'fatal'}: ${message.message}`);
-}
+const banFindings = banLinter(REPO_ROOT);
 
 const STATIC_TAR = "import * as tar from 'tar';\nexport const list = tar.list;\n";
 const STATIC_ZIP = "import AdmZip from 'adm-zip';\nexport const Zip = AdmZip;\n";
@@ -57,10 +47,15 @@ const OTHER_SHAPES: ReadonlyArray<readonly [what: string, code: string, rule: st
   ['a lazy import spelled as a template literal', 'export const load = (): Promise<unknown> => import(`adm-zip`);\n', DYNAMIC_BAN],
   ['a require spelled as a template literal', 'export const tar: unknown = require(`tar/extract`);\n', DYNAMIC_BAN],
   ['a require made by createRequire', "import { createRequire } from 'node:module';\nconst require = createRequire(import.meta.url);\nexport const tar: unknown = require('tar/extract');\n", DYNAMIC_BAN],
+  ['a createRequire result under another name', "import { createRequire } from 'node:module';\nconst requireFn = createRequire(import.meta.url);\nexport const tar: unknown = requireFn('tar');\n", DYNAMIC_BAN],
+  ['module.require', "export const zip: unknown = module.require('adm-zip');\n", DYNAMIC_BAN],
 ];
 
 /** Specifiers that only LOOK like the two libraries: the ban is on the packages, not on the letters. */
 const LOOKALIKES = "import a from 'tarball';\nimport b from './tar.js';\nimport c from '../helpers/adm-zip/x.js';\nexport const all = [a, b, c, import('tar-stream'), require('target')];\n";
+
+/** A format name passed to an ordinary function is not a module load (the archive tests call `list('tar', bytes)`). */
+const FORMAT_ARGUMENT = "declare function list(format: string, bytes: Uint8Array): unknown;\nexport const all = [list('tar', new Uint8Array()), list('adm-zip', new Uint8Array())];\n";
 
 describe('the archive-library ban', () => {
   it.each([
@@ -96,6 +91,16 @@ describe('the archive-library ban', () => {
 
   it('says nothing about a specifier that merely begins or ends like one of the two', async () => {
     expect(await banFindings('packages/cli/src/commands/claude/plugin/second-extractor.ts', LOOKALIKES)).toEqual([]);
+  });
+
+  // How the archive module is tested: the library mocked underneath it (see the selectors' comment).
+  it('lets a test mock the library under the archive module', async () => {
+    const code = "import { vi } from 'vitest';\nvi.mock('adm-zip', async (importOriginal) => ({ ...(await importOriginal<object>()) }));\n";
+    expect(await banFindings('packages/utils/test/archive-zip-made-by.test.ts', code)).toEqual([]);
+  });
+
+  it('says nothing about a format name passed to an ordinary function', async () => {
+    expect(await banFindings('packages/utils/test/archive-read.test.ts', FORMAT_ARGUMENT)).toEqual([]);
   });
 
   it.each([

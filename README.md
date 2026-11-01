@@ -149,8 +149,8 @@ bun run build
 ### Development
 
 ```bash
-# Run full validation (recommended)
-bunx vv validate
+# Run full validation (recommended) — the full tier, as CI runs it
+bun run validate
 
 # Or run test suites individually:
 bun run test:unit          # Unit tests only
@@ -370,7 +370,7 @@ Minimum thresholds enforced:
 
 Uses jscpd with a baseline approach:
 - Existing duplication is baselined
-- New duplication blocks commits
+- New duplication fails the full gate (`bun run validate`, CI)
 - Update baseline: `bun run duplication-update-baseline`
 
 ### TypeScript
@@ -392,15 +392,9 @@ bun run validate
 bun run pre-commit
 ```
 
-Validation runs:
-1. TypeScript type checking
-2. ESLint (strict)
-3. Code duplication check
-4. Build
-5. Unit tests
-6. Integration tests (optional)
-7. Coverage report
-8. System tests (optional)
+The commit hook runs build, typecheck and ESLint. The full gate — `bun run validate`, and CI on
+Ubuntu and Windows — adds the repository checks, the `vat` dogfood steps, and the unit,
+integration and system tests; `vibe-validate.config.yaml` is the step list.
 
 ## CI/CD
 

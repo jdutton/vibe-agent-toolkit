@@ -62,7 +62,7 @@
     "build:packages": "tsc --build && cd packages/schema && bun run generate:schemas",
     "build:cli": "bun --filter @vibe-agent-toolkit/cli run build",
     "build:clean": "bun run clean && turbo run build --force && turbo run build:skills --force",
-    "test": "echo \"❌ Direct test execution not supported. Use: vv validate (full validation) or bun run test:unit / test:integration / test:system\" && exit 1",
+    "test": "echo \"❌ Direct test execution not supported. Use: bun run validate (full validation) or bun run test:unit / test:integration / test:system\" && exit 1",
     "test:unit": "turbo run test:unit",
     "test:cli": "bun --filter @vibe-agent-toolkit/cli run test:unit",
     "test:watch": "vitest",

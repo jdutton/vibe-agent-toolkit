@@ -30,7 +30,7 @@ bun install
 bun run build
 
 # Run tests (do NOT use 'bun test' - use commands below)
-vv validate            # Full validation (recommended)
+bun run validate       # Full validation (recommended)
 # OR: bun run test:unit  # Unit tests only
 
 # Run linting

@@ -5,11 +5,11 @@ way and the contract to hand each implementer.
 
 ## Why one tree, one gate, one commit
 
-- `git commit` runs the pre-commit tier of the gate (build, typecheck, lint, duplication, unit
-  tests — roughly a minute warm, twice that cold on macOS). A commit per task pays that per task.
+- `git commit` runs the pre-commit tier of the gate (build, typecheck, lint — seconds warm, a
+  couple of minutes cold). A commit per task still pays it per task.
 - The full gate (`bun run validate`) costs minutes to over an hour uncached, and a mid-refactor
-  tree is never all-green for either tier: half-moved code reds duplication, half-migrated callers
-  red typecheck.
+  tree is never all-green: half-migrated callers red typecheck, and in the full tier half-moved
+  code reds duplication.
 - Duplication is judged by the gate over the whole tree, never by the per-file signal an
   implementer runs. A "move/rename" task that leaves the original behind for a later task is a
   clone until that task runs; each such task deletes the original in the same task.

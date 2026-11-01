@@ -490,7 +490,7 @@ describe('Pure Function Tests', () => {
 2. **Extract helpers early** (2-3 rule)
 3. **Test both single and batch conversions**
 4. **Test with real agent examples** from vat-example-cat-agents
-5. **Run `bun run duplication-check`** before committing
+5. **Run `bun run duplication-check`** before pushing (the full gate and CI run it; the commit hook does not)
 
 ### Adapter Design Principles
 
@@ -525,10 +525,10 @@ cd packages/runtime-{name}
 bun run demo
 
 # Full validation
-vv validate
+bun run validate
 ```
 
-**CRITICAL: `duplication-check` must pass with 0 clones before committing.**
+**CRITICAL: `duplication-check` must pass with 0 clones before pushing** (the full gate and CI run it; the commit hook does not).
 
 ## 7. Common Pitfalls
 

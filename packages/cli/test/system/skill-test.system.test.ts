@@ -703,7 +703,7 @@ describe('vat skill test run (system)', () => {
   //   1. Token cost: a real Claude session is spawned on every run.
   //   2. Non-determinism: LLM responses make the test non-deterministic,
   //      which breaks the reliability expectation of `bun run validate` and
-  //      the pre-commit hook that runs it.
+  //      CI, which run it (the pre-commit hook does not).
   //
   // To run e2e locally: VAT_SKILL_TEST_E2E=1 bunx vitest run --config
   // vitest.system.config.ts packages/cli/test/system/skill-test.system.test.ts
