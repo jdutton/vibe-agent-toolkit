@@ -718,7 +718,28 @@ const ARCHIVE_LIBRARY_RESTRICTED_SYNTAX = [
   ...archiveSpecifierAt('arguments.0').map((specifier) => `CallExpression[callee.type='CallExpression'][callee.callee.name='createRequire']${specifier}`),
 ].map((selector) => ({ selector, message: ARCHIVE_LIBRARY_MESSAGE }));
 
-const noRestrictedImportsConfig = ['error', { paths: [...YAML_LIBRARY_BAN, ...ARCHIVE_LIBRARY_BAN], patterns: ARCHIVE_LIBRARY_SUBPATH_BAN }];
+// A programmatic ESLint with caching off DELETES the file at its cache location
+// on `lintFiles` — by default `<cwd>/.eslintcache`, which is `bun run lint`'s cache
+// when `cwd` is a real tree. Tests construct one only through `repoEslint`, which
+// points the location at a temp path. Type imports stay allowed.
+const ESLINT_INSTANCE_FILES = [
+  'packages/dev-tools/test/eslint-clean-files.ts',
+  // Lints throwaway `mkdtemp` projects: its `cwd` holds no cache to delete.
+  'packages/utils/test/integration/eslint-recommended-config.integration.test.ts',
+];
+const ESLINT_INSTANCE_MESSAGE = 'Construct an ESLint only through repoEslint (packages/dev-tools/test/eslint-clean-files.ts): with caching off, lintFiles deletes <cwd>/.eslintcache.';
+const ESLINT_INSTANCE_BAN = [{
+  name: 'eslint',
+  importNames: ['ESLint', 'LegacyESLint', 'FlatESLint', 'loadESLint'],
+  allowTypeImports: true,
+  message: ESLINT_INSTANCE_MESSAGE,
+}];
+// The same ban for `await import('eslint')`, which `no-restricted-imports` cannot see.
+const ESLINT_INSTANCE_RESTRICTED_SYNTAX = [
+  { selector: "ImportExpression[source.value='eslint']", message: ESLINT_INSTANCE_MESSAGE },
+];
+
+const noRestrictedImportsConfig = ['error', { paths: [...YAML_LIBRARY_BAN, ...ARCHIVE_LIBRARY_BAN, ...ESLINT_INSTANCE_BAN], patterns: ARCHIVE_LIBRARY_SUBPATH_BAN }];
 
 // No dispatch on error PROSE, and no bare `Error` subclass: the `src`-only
 // restrictions, named so the archive module's block below can keep them while
@@ -877,7 +898,7 @@ export default [
       'no-restricted-imports': noRestrictedImportsConfig,
       // The `import()` / `require` half of the archive-library ban, for every TS file. The
       // `src`-only block below restates it beside the error-contract selectors.
-      'no-restricted-syntax': ['error', ...ARCHIVE_LIBRARY_RESTRICTED_SYNTAX],
+      'no-restricted-syntax': ['error', ...ARCHIVE_LIBRARY_RESTRICTED_SYNTAX, ...ESLINT_INSTANCE_RESTRICTED_SYNTAX],
 
       // TypeScript-specific (use @typescript-eslint variant of no-unused-vars)
       'no-unused-vars': 'off',
@@ -968,7 +989,7 @@ export default [
     files: [PRODUCT_SOURCE_TS],
     rules: {
       'local/explicit-zod-strictness': ['error', { allowDefaultStripIn: [] }],
-      'no-restricted-syntax': ['error', ...ERROR_CONTRACT_RESTRICTED_SYNTAX, ...ARCHIVE_LIBRARY_RESTRICTED_SYNTAX],
+      'no-restricted-syntax': ['error', ...ERROR_CONTRACT_RESTRICTED_SYNTAX, ...ARCHIVE_LIBRARY_RESTRICTED_SYNTAX, ...ESLINT_INSTANCE_RESTRICTED_SYNTAX],
     },
   },
   // The archive module: the one place `tar` and `adm-zip` may be imported (see
@@ -976,8 +997,16 @@ export default [
   {
     files: [ARCHIVE_MODULE_FILES],
     rules: {
-      'no-restricted-imports': ['error', { paths: YAML_LIBRARY_BAN }],
-      'no-restricted-syntax': ['error', ...ERROR_CONTRACT_RESTRICTED_SYNTAX],
+      'no-restricted-imports': ['error', { paths: [...YAML_LIBRARY_BAN, ...ESLINT_INSTANCE_BAN] }],
+      'no-restricted-syntax': ['error', ...ERROR_CONTRACT_RESTRICTED_SYNTAX, ...ESLINT_INSTANCE_RESTRICTED_SYNTAX],
+    },
+  },
+  // The files that may construct an ESLint (see ESLINT_INSTANCE_BAN). They keep every
+  // other restriction their neighbours carry.
+  {
+    files: ESLINT_INSTANCE_FILES,
+    rules: {
+      'no-restricted-imports': ['error', { paths: [...YAML_LIBRARY_BAN, ...ARCHIVE_LIBRARY_BAN], patterns: ARCHIVE_LIBRARY_SUBPATH_BAN }],
     },
   },
   // `existsSync` folds "could not look" into "absent", over product `src/` (the rule
@@ -1036,7 +1065,7 @@ export default [
       ...generalRulesConfig,
 
       'no-restricted-imports': noRestrictedImportsConfig,
-      'no-restricted-syntax': ['error', ...ARCHIVE_LIBRARY_RESTRICTED_SYNTAX],
+      'no-restricted-syntax': ['error', ...ARCHIVE_LIBRARY_RESTRICTED_SYNTAX, ...ESLINT_INSTANCE_RESTRICTED_SYNTAX],
 
       // JS-only: use the core no-unused-vars (the TS block uses the
       // @typescript-eslint variant instead).

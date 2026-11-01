@@ -51,7 +51,10 @@ validation:
   phases:
     # Everything that WRITES build output runs here, in order: turbo's build, then
     # typecheck, then the `vat build` dogfood that writes this repo's packaged
-    # artifacts, then their verification.
+    # artifacts, then their verification. ESLint runs here too, serially: it is
+    # the long pole cold, and vibe-validate 0.20 names the first step IN CONFIG
+    # ORDER as the failure when a parallel sibling fails and the rest are killed —
+    # in the parallel phase a killed ESLint would be blamed for another step's red.
     - name: 'Build'
       parallel: false
       steps:
@@ -60,6 +63,9 @@ validation:
 
         - name: 'TypeScript type checking'
           command: 'bun run typecheck'
+
+        - name: 'ESLint'
+          command: 'bun run lint'
 
         - name: 'VAT dogfood: build skills and claude artifacts'
           command: 'bun run vat build --cwd packages/vat-development-agents'
@@ -71,13 +77,12 @@ validation:
           description: 'Verifies vat-development-agents resources, skills, and claude artifacts (dogfoods vat verify). Full tier only.'
           runScope: ci
 
-    # Read-only checks over what the Build phase wrote, run concurrently. Nothing
-    # here may write a file a sibling reads; a step that must build goes above.
+    # Checks over what the Build phase wrote, run concurrently. No step here may
+    # write anything a sibling reads (not enforced): a step that builds goes above,
+    # and a `vat` step goes in the next phase.
     - name: 'Checks'
       parallel: true
       steps:
-        - name: 'ESLint'
-          command: 'bun run lint'
 
         - name: 'Dependency check'
           command: 'bun run dependency-check'
@@ -104,6 +109,18 @@ validation:
           description: 'Validates packages are ready for publishing (metadata, files, workspace deps, etc.). Full tier only.'
           runScope: ci
 
+        - name: 'Code duplication check'
+          command: 'bun run duplication-check'
+          description: 'Compares every file with every other, so it has no incremental form. Full tier only.'
+          runScope: ci
+
+    # The `vat` dogfood steps, one at a time: each populates the machine-wide
+    # projection store (SQLite, one writer at a time with a 5 s busy timeout), and
+    # five cold populations at once on a CI runner can time a writer out. Serial,
+    # the first populates and the rest reuse it.
+    - name: 'VAT dogfood'
+      parallel: false
+      steps:
         - name: 'Documentation validation'
           command: 'bun run vat resources validate'
           description: 'Validates markdown link integrity across entire project. Full tier only.'
@@ -117,11 +134,6 @@ validation:
         - name: 'VAT dogfood: audit quality gate'
           command: 'bun run guard:audit-quality'
           description: 'Turns advisory `vat audit` into a hard gate over this repo (see audit-quality-gate.ts). Full tier only.'
-          runScope: ci
-
-        - name: 'Code duplication check'
-          command: 'bun run duplication-check'
-          description: 'Compares every file with every other, so it has no incremental form. Full tier only.'
           runScope: ci
 
         - name: 'Skills validation: vat-development-agents'

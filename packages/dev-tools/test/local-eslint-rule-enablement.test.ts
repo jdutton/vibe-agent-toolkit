@@ -174,3 +174,18 @@ describe('local ESLint rules excluded from `recommended` are enabled in this rep
     ).toBe(ERROR);
   });
 });
+
+describe('sonarjs `aws-*` rules stay off', () => {
+  // eslint.config.js turns them off: they inspect AWS CDK constructs, which this repo has none
+  // of, and one of them was 9% of lint time. A later block that re-applies sonarjs's
+  // `recommended` would turn all of them back on with lint still green.
+  it('resolves every one to off for a product source file', async () => {
+    const config = await repoEslint({ cwd: REPO_ROOT }).calculateConfigForFile(
+      `${REPO_ROOT}/packages/cli/src/bin.ts`,
+    );
+    const aws = Object.entries(config.rules ?? {}).filter(([rule]) => rule.startsWith('sonarjs/aws-'));
+
+    expect(aws.length).toBeGreaterThan(0);
+    expect(aws.filter(([, value]) => (Array.isArray(value) ? value[0] : value) !== 0)).toEqual([]);
+  });
+});

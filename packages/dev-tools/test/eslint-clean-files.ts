@@ -14,9 +14,10 @@ import { ESLint, type Linter } from 'eslint';
  * With caching off, `lintFiles` DELETES the file at `cacheLocation` — by default
  * `<cwd>/.eslintcache`, which is `bun run lint`'s cache. A test constructed at the repo root
  * therefore wiped the developer's lint cache on every gate run, and the next lint ran cold
- * (100 s instead of 4 s). `new ESLint` is banned in this package's tests outside this file.
+ * (100 s instead of 4 s). Constructing one anywhere else is a lint error (`ESLINT_INSTANCE_BAN`
+ * in `eslint.config.js`). The cache options are not accepted: this linter never caches.
  */
-export function repoEslint(options: ESLint.Options): ESLint {
+export function repoEslint(options: Omit<ESLint.Options, 'cache' | 'cacheLocation' | 'cacheStrategy'>): ESLint {
   return new ESLint({ ...options, cacheLocation: safePath.join(normalizedTmpdir(), 'vat-test-eslintcache') });
 }
 

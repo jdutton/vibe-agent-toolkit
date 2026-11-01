@@ -153,10 +153,15 @@ the coverage job in CI — never in a turbo lane; not on Windows).
 - **pre-commit tier** — `git commit` (Husky → `vibe-validate pre-commit`) runs build, typecheck
   and lint only (seconds with warm caches); every other step is `runScope: ci`. Run
   `bun run test:unit` yourself when the change calls for it. (not enforced)
-- **full tier** — `bun run validate` and CI run every step: the above plus knip, repo structure,
-  publish readiness, link validation, the `vat` dogfood steps, integration and system tests. It sets
+- **full tier** — `bun run validate` and CI run every step: the above plus duplication, knip,
+  repo structure, publish readiness, link validation, the `vat` dogfood steps, unit, integration
+  and system tests. It sets
   `CI=1` (vibe-validate's only `runScope` switch) and `--force` (the tree-hash cache records a
   skipped step as passed, so it cannot tell the tiers apart).
+- **Local lint is cached; CI lint is cold.** A type-aware rule reads other files, and ESLint's cache
+  keys only the file's own content, so a local lint can replay a clean verdict after a change
+  elsewhere (an `async` signature reds an unchanged caller). CI's fresh checkout has no cache.
+  Delete `.eslintcache` to reproduce a CI-only lint red. (not enforced)
 - **A green commit is NOT a green PR.** Run `bun run validate` before pushing; CI runs the full
   tier on ubuntu and Windows.
 
