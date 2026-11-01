@@ -68,18 +68,11 @@
  *
  * The rule this module enforces instead: **hash on read, in-process, over the
  * bytes handed to the parser.** {@link readContentWithKey} exists so a caller
- * cannot key one read and parse another. A git SHA may still be used as a
- * *lookup hint* whose miss is free — it must never be the key.
- *
- * A hint's **hit** is only free if the hint is one-to-one against working-tree
- * bytes, and a blob OID is not: it names the *cleaned* content, so one OID can
- * name two different working-tree byte strings in one repository at one instant.
- * What a hit then costs is mostly a key that does not describe this path's
- * bytes — a later fresh read of the path misses — and, only where `filter.*` or
- * `working-tree-encoding` config diverges between the sharing paths, the text
- * served as well. `RunContentCache.#byHint` in `projection/content-cache.ts`
- * holds the measurements, separates those two costs, and names the lane exposed
- * to it.
+ * cannot key one read and parse another. A git blob OID may not stand in for
+ * that read either: it names the *cleaned* content, so one OID can name two
+ * different working-tree byte strings in one repository at one instant (a
+ * per-path clean/smudge filter, `working-tree-encoding` or `eol`), and serving
+ * one path the other's read files it under the wrong key with the wrong text.
  *
  * ## Why the preimage is RAW BYTES and not the decoded string
  *

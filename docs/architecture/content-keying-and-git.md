@@ -62,8 +62,8 @@ repository at one instant, because two paths can share cleaned content while sit
 only one this document endorses: *the OID is the most sound key for content, and it is unsound as a
 byte-identical-on-disk key.* The distinction is the whole subject.
 
-`packages/resources/src/content-key.ts:74-82` already encodes the operative rule that follows: a git
-SHA may be used as a **lookup hint whose miss is free**; it must never *become* the key.
+`packages/resources/src/content-key.ts` encodes the operative rule that follows: a git blob OID may
+never *become* the key, and may not stand in for a read either.
 
 ## 3. The portability inversion
 
@@ -143,9 +143,8 @@ the character `startOffset`/`endOffset`, `estimatedTokenCount`, and a blob secti
 `tokens`.
 
 ⇒ A CRLF/LF pair costs **fidelity of measurement**, never a wrong answer about what the document
-says. The mechanisms that genuinely change the text served are divergent `filter.*` and
-`working-tree-encoding` configuration, and those — not line endings — are what a hint's soundness
-condition must cover (`content-cache.ts:247-251`).
+says. The mechanisms that genuinely change the text are divergent `filter.*` and
+`working-tree-encoding` configuration — which is why no OID may stand in for a read (§6.3).
 
 ## 5. 🪤 `git cat-file --filters` and `--batch` — the trap
 
@@ -217,11 +216,10 @@ sets no `core.autocrlf`, no `core.eol` and no `filter.*`.
 `--filters` implementation with the framing bug passes every local test, every CI run, and every
 assertion anyone thinks to write here, and is wrong only on someone else's Windows checkout.
 
-This is not a hypothetical blindness. The same construction is what made the existing cross-path hint
-route un-testable in this repo: all 313 hint hits measured over this repository's 8,548-file corpus
-were sound, and `content-cache.ts:226-234` names the resulting equality assertion **vacuous** — *"it
-holds for a reason that has nothing to do with the hint being safe, which is exactly how this survived
-being looked at."*
+This is not a hypothetical blindness. The same construction hid the cross-path OID hint (§6.3):
+every hint hit measured over this repository's corpus was sound, for a reason that had nothing to do
+with the hint being safe, and a clean/smudge fixture showed it filing a second path under the first
+path's key with the first path's text.
 
 Anything in this class needs a fixture that plants hostile `.gitattributes` in a throwaway repository.
 `packages/resources/test/system/git-hostile-config.system.test.ts` is that fixture, and it gates each
@@ -275,30 +273,20 @@ parallelize what survives.**
 
 ⇒ If the git lane reads nothing, the OID is not merely an acceptable key — it is the **exact** key for
 the only bytes involved, it needs no hashing at all, and it is portable across machines for free.
-`GitCrawlSource` already carries it: `crawl-source.ts:325` sets `contentHint: entry.oid`, while
-`FilesystemCrawlSource` sets `contentHint: null` (`:201`) because it has nothing to offer.
-`crawl-source.ts:18` states the asymmetry as a design property of the seam — *"blob OID, already
-computed"* against *"none — bytes get read and hashed."*
+The crawl seam no longer carries it (§6.3); a lane that reads nothing would have to take it from
+the snapshot again, as a key and never as a stand-in for a read.
 
-### 6.3 Where a hint may and may not be offered
+### 6.3 No OID stands in for a read
 
-An OID is offered as a hint, never as an identity, and the conditions are enumerated at
-`content-cache.ts:311-323`. The three that matter most:
+Through 0.2.0-rc.11 the git crawl source offered each regular file's blob OID as a cross-path
+**content hint**, and the run's content cache served a second path sharing that OID from the first
+path's read. A blob OID names *cleaned* content, so under a per-path clean/smudge filter or
+`working-tree-encoding` the second path was filed under the first path's key with the first path's
+text — on every resources lane, since they all ask the store one question. The hint was removed
+outright: every path is keyed from its own working-tree bytes, and the snapshot no longer carries an
+OID. Pinned by the clean/smudge cases in `git-hostile-config.system.test.ts`.
 
-- The stored key is still **hashed from the bytes** on a miss. A hint only chooses which
-  already-computed answer to reuse.
-- **No hint for a symlink** (whose OID names the link *target string*, not the bytes a follower reads)
-  and none for a submodule (whose OID is a commit). `EnumeratedPath.contentHint`
-  (`crawl-source.ts:114`) is null for both, at the only place that can see the mode.
-- **A hint hit returns the content too**, so a row keyed from the memo never goes back to disk and
-  cannot bind an old key to new bytes.
-
-Anyone widening where a hint is offered or consumed owns the condition at `content-cache.ts:247-251`:
-paths sharing an OID must also share their `filter.*` and `working-tree-encoding` configuration.
-Normalizing what the OID names is not that condition and cannot be made into it.
-
-Anyone widening it in the other direction — into a mechanism that *eliminates reads* rather than one
-that reuses an answer already computed — owns §10 instead. That was proposed, measured and refuted,
+Anyone reintroducing an OID-keyed shortcut — one that *eliminates reads* — owns §10 as well. That was proposed, measured and refuted,
 and the entire prize it reached for is 45 reads.
 
 ## 7. Git LFS: a documented limitation, not a feature to build
@@ -416,8 +404,8 @@ someone re-derives the idea — and this one is easy to re-derive, because it so
 **1. ~2% of reads are eliminable, and VAT already eliminates them.** One blob is read per *distinct*
 key, so a keyed path's read is skippable only when some other path shares its identity. On this
 repository, 2026-08: **2,096 tracked paths → 2,051 distinct OIDs = 45 eliminable reads (2.1%)**.
-That is exactly the set the `contentHint`/`hintHits` route of §6.3 already collapses, so the memo's
-whole read-side prize had been banked before it was proposed.
+That is exactly the set the cross-path hint of §6.3 collapsed before it was removed as unsound, so
+the memo's whole read-side prize was the same unsound saving.
 
 **2. The proposed eligibility gate excludes 100% of both real trees.** Measured 2026-08 with
 `git check-attr --stdin -z text eol filter`: a large adopter monorepo, **8,405 paths → 0 eligible**;
@@ -528,7 +516,5 @@ sound whether or not anything is ever built on top of it.
 - [Resource Projection](./resource-projection.md) — the output side: what gets built from these bytes
   and the schema it is stored under.
 - `packages/resources/src/content-key.ts` — the module docstring is the authority on why the preimage
-  is raw bytes, why a git SHA may be a hint and never a key, and why decoding lives elsewhere.
-- `packages/resources/src/projection/content-cache.ts` — the `#byHint` docstring holds the
-  measurements behind §4.2 and §6.3, separates the mechanisms that can change text from the ones that
-  cannot, and names which lane is exposed.
+  is raw bytes, why a git OID may neither be the key nor stand in for a read, and why decoding lives
+  elsewhere.

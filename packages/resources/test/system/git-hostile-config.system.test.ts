@@ -1,30 +1,25 @@
 /**
  * **Hostile-but-legal git configuration**, over real repositories built here.
  *
- * `RunContentCache.#byHint` is keyed on `(git blob OID, parserKind)`. Git hashes
- * the **cleaned** content; `computeContentKey` hashes the **raw working-tree
- * bytes**. One OID can therefore name two different byte strings in one tree at
- * one instant, and a hint hit hands the second path the first path's content
- * *and* the first path's key.
+ * Git hashes the **cleaned** content; `computeContentKey` hashes the **raw
+ * working-tree bytes**. One OID can therefore name two different byte strings in
+ * one tree at one instant, so the OID is never used to stand in for a read.
  *
- * `projection/content-cache.ts` records that divergence as a table of
- * measurements in prose. This file is its executable form. Every fixture below
+ * Every fixture below
  * is **verified against `git cat-file blob` before anything downstream is
  * asserted** — a fixture that silently failed to diverge would make every
  * assertion after it vacuous, which is the single most likely way a suite like
  * this lies — and the projection is then run twice over the same tree: once
- * with `VAT_EXTENT_SOURCE=git` (the only enumerator that offers a hint) and once
- * without. A claim that holds in **both** arms is a claim about the reader; a
- * claim that holds in only one is a claim about the hint.
+ * with `VAT_EXTENT_SOURCE=git` and once without. Every claim below must hold in
+ * **both** arms.
  *
- * ## What is pinned here as WRONG, not as correct
+ * ## One OID, two byte strings — each path keyed from its own bytes
  *
- * **A per-path clean/smudge filter makes the hint serve the wrong characters.**
- * Two paths whose working-tree text genuinely differs (`# TOKEN` vs
- * `# REPLACED`) collapse to one blob under the git source, and the projection
- * then describes `dirB/same.md` with a heading it does not have. This is the gap
- * `content-cache.ts` predicts, reproduced end to end. The `eol` case is the same
- * mechanism in a milder form: a 22-byte CRLF file described by a 19-byte blob.
+ * A per-path clean/smudge filter (`# TOKEN` vs `# REPLACED`) and a per-path
+ * `eol` attribute (19 vs 22 bytes) each put two working-tree byte strings behind
+ * one OID. Both paths get their own key and their own facts under either
+ * enumerator, and on the membership-miss and query-miss routes alike. (Until a
+ * cross-path OID memo was deleted, the git arm collapsed them onto one key.)
  *
  * ## What is pinned here as a capability, on a fixture that used to pin its absence
  *
@@ -72,8 +67,7 @@
  * requirement and the findings lost with it, the gated `describe` titles state
  * their requirement so a skipped suite reads its own reason in the report, and a
  * top-level `beforeAll` warns for every unmet gate. Without that, a Windows run
- * reports success having never once demonstrated that the hint serves wrong
- * characters.
+ * reports success having never once demonstrated the clean/smudge case.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -108,7 +102,9 @@ import {
   type CrawlSourceKind,
 } from '../../src/projection/crawl-source.js';
 import { ProjectionBuilder, type Projection } from '../../src/projection/projection.js';
+import { buildResourcePopulation, buildResourceProjection } from '../../src/projection/resource-population.js';
 import type { ResourceRealizationRow } from '../../src/schemas/projection-resources.js';
+import { FakeProjectionStore } from '../fake-projection-store.js';
 
 /**
  * A content-addressed parse cache would serve a previous run's facts from a
@@ -167,8 +163,8 @@ interface HostGate {
  * Skips here are legitimate — none of these divergences is observable on a host
  * that cannot produce them — but a silent skip turns a section that never ran
  * into a section that passed. On Windows sections 3, 4 and 5 all vanish while
- * 1, 2, 6 and 7 stay green, *including* the two "sound hint hit" tests, so the
- * suite would report success having never demonstrated the unsound one. Each
+ * 1, 2 and 6 stay green, so the suite would report success having never
+ * demonstrated the clean/smudge case. Each
  * gate therefore states its own requirement in the `describe` title it guards
  * (so a skipped suite carries its reason in the report) and is warned about by
  * name in the top-level `beforeAll` below.
@@ -187,9 +183,8 @@ const HOST_GATES: Record<'utf16' | 'filter' | 'symlinks' | 'lfs', HostGate> = {
     requirement: 'a POSIX host with `sed` on PATH',
     met: !IS_WINDOWS && sedAvailable(),
     lost:
-      'section 4 — that the hint serves one path the OTHER path\'s characters'
-      + ' (DEFECT). This is the finding the suite exists for; without it nothing'
-      + ' here demonstrates an unsound hint hit at all',
+      'section 4 — that two paths behind one OID with genuinely different TEXT'
+      + ' each keep their own key and facts under the git enumerator',
   },
   symlinks: {
     requirement: 'the ability to create symlinks',
@@ -382,19 +377,13 @@ interface Arm {
 /**
  * Populate a root through the `filesystem` extent and derive its blobs.
  *
- * Assembled by hand rather than through `populate()` for one reason: `populate()`
- * constructs its own {@link RunContentCache} and never surfaces it, and
- * {@link ContentCacheStats.hintHits} is the only number that says whether the
- * cross-path route was taken at all. Every other step is the driver's own
- * sequence, in the driver's own order.
- *
- * The contributor is constructed with its default content demand — the one
- * `buildInventoryPopulation` registers, which is the lane the hint is live in.
- * `buildResourcePopulation` registers `'deferred'` and consumes no hint.
+ * Assembled by hand rather than through `populate()` because `populate()`
+ * constructs its own {@link RunContentCache} and never surfaces its stats.
+ * Under `DEFAULT_CONTENT_DEMAND`, the demand every resources lane and
+ * `buildInventoryPopulation` register.
  *
  * @param root - Repository working tree to populate
- * @param useGitSource - Whether to ask for {@link EXTENT_SOURCE_GIT}, the only
- *   enumerator that offers a content hint
+ * @param useGitSource - Whether to ask for {@link EXTENT_SOURCE_GIT}
  * @returns The projection, the cache's statistics, and the enumerator that ran
  */
 async function runArm(root: string, useGitSource: boolean): Promise<Arm> {
@@ -607,11 +596,7 @@ describe('.gitattributes eol=crlf beside eol=lf', () => {
   it('ran two different enumerators, so the two arms are two measurements', () => {
     expect(arms.walk.extentSource).toBe('filesystem');
     expect(arms.git.extentSource).toBe('git');
-    expect(arms.walk.stats.hintHits).toBe(0);
-    expect(arms.git.stats.hintHits).toBe(1);
   });
-
-  // -- What the reader does, independent of the hint ---------------------------
 
   it('enumerates the same membership under either enumerator', () => {
     expect(membership(arms.walk.projection)).toEqual([GITATTRIBUTES, PATH_A, PATH_B]);
@@ -669,30 +654,10 @@ describe('.gitattributes eol=crlf beside eol=lf', () => {
     expect(semantic(keyB)).toEqual(semantic(keyA));
   });
 
-  // -- FINDING: what the hint does to the same tree ----------------------------
-
-  /**
-   * FINDING, pinned as WRONG. Under the git enumerator the two paths collapse
-   * onto one content key — the one hashed from the **LF** twin — so the
-   * projection describes a 22-byte file with a 19-byte blob whose reference
-   * offsets belong to the other file. No condition row records it and nothing in
-   * the key can be read to detect it. This is `content-cache.ts`'s "well-formed
-   * entry, wrong contents", end to end.
-   */
-  it('collapses both twins onto the LF twin key under the git enumerator (DEFECT)', () => {
-    const keyA = keyOf(arms.git.projection, PATH_A);
-    const keyB = keyOf(arms.git.projection, PATH_B);
-    expect(keyB).toBe(keyA);
-    // The surviving key is the one hashed from dirA's bytes: the tree snapshot is
-    // ordered, so the lexicographically first path reads first and populates the
-    // hint, and the second is served from it.
-    expect(keyA).toBe(computeContentKey(planted.onDiskA, 'markdown'));
-
-    // The projection now claims 19 bytes for a file that is 22 bytes on disk.
-    expect(blobOf(arms.git.projection, keyB)?.bytes).toBe(19);
-    expect(worktreeBytes(fixture, PATH_B)).toHaveLength(22);
-    // And it is silent about it.
-    expect(arms.git.projection.blobConditions).toEqual([]);
+  it('keys each twin from its own bytes under the git enumerator too', () => {
+    expect(keyOf(arms.git.projection, PATH_A)).toBe(computeContentKey(planted.onDiskA, 'markdown'));
+    expect(keyOf(arms.git.projection, PATH_B)).toBe(computeContentKey(planted.onDiskB, 'markdown'));
+    expect(blobOf(arms.git.projection, keyOf(arms.git.projection, PATH_B))?.bytes).toBe(22);
   });
 });
 
@@ -724,16 +689,11 @@ describe('core.autocrlf=true with no attributes', () => {
   });
 
   /**
-   * The setting is repository-wide, so it moves **both** paths the same way. The
-   * blob diverges from the working tree, but the two working-tree byte strings do
-   * not diverge from each other — which is exactly the condition under which a
-   * hint hit is sound. Pinned because "the OID differs from the bytes" is not the
-   * dangerous property on its own; "one OID, two byte strings" is.
+   * Repository-wide, so it moves **both** paths the same way: the blob diverges
+   * from the working tree, the two working-tree byte strings do not diverge from
+   * each other, and both arms key them from the CRLF bytes.
    */
-  it('is a sound hint hit — one OID, one byte string, one blob in both arms', () => {
-    expect(arms.git.stats.hintHits).toBe(1);
-    expect(arms.walk.stats.hintHits).toBe(0);
-
+  it('keys both paths from their working-tree bytes in both arms', () => {
     const key = computeContentKey(planted.onDiskA, 'markdown');
     for (const arm of [arms.walk, arms.git]) {
       expect(keyOf(arm.projection, PATH_A)).toBe(key);
@@ -744,17 +704,13 @@ describe('core.autocrlf=true with no attributes', () => {
     }
   });
 
-  it('saves the read it claims to save, and holds fewer bytes for it', () => {
-    expect(arms.git.stats.misses).toBe(arms.walk.stats.misses - 1);
-    expect(arms.git.stats.bytesHeld).toBeLessThan(arms.walk.stats.bytesHeld);
-    // Both arms still hold one entry per (path, parserKind): a hint hit files the
-    // second path's entry against bytes already counted.
-    expect(arms.git.stats.entries).toBe(arms.walk.stats.entries);
+  it('reads every path in both arms — the OID saves no read', () => {
+    expect(arms.git.stats).toEqual(arms.walk.stats);
   });
 });
 
 // ---------------------------------------------------------------------------
-// 3. `working-tree-encoding=UTF-16` — nothing to do with the hint
+// 3. `working-tree-encoding=UTF-16`
 // ---------------------------------------------------------------------------
 
 // A Windows checkout of a `working-tree-encoding` path additionally interacts
@@ -886,10 +842,7 @@ describe.skipIf(!HOST_GATES.utf16.met)(gatedTitle('working-tree-encoding=UTF-16'
    *
    * The old refusal was loud — `BLOB_NOT_TEXT`, naming the path — and that
    * loudness was the whole consolation for the gap. It is now gone, because
-   * there is nothing to refuse. The cost of losing it is recorded where it
-   * lands: `RunContentCache.#byHint` in `projection/content-cache.ts`, whose
-   * `working-tree-encoding` divergence case used to be caught by this very
-   * refusal and is now served as plausible text instead.
+   * there is nothing to refuse.
    */
   it('reads a UTF-16 document exactly as it reads its UTF-8 twin', () => {
     // The same document, read from UTF-8 bytes: parsed, with facts.
@@ -938,19 +891,10 @@ describe.skipIf(!HOST_GATES.utf16.met)(gatedTitle('working-tree-encoding=UTF-16'
     }
   });
 
-  it('is not a hint problem — the two blobs in this tree have two different OIDs', () => {
-    const index = stagedIndex(fixture);
-    const documentOid = index.get(DOC_PATH)?.oid;
-    const attributesOid = index.get(GITATTRIBUTES)?.oid;
-    expect(documentOid).toMatch(/^[0-9a-f]{40}$/);
-    expect(attributesOid).toMatch(/^[0-9a-f]{40}$/);
-    expect(documentOid).not.toBe(attributesOid);
-    expect(arms.git.stats.hintHits).toBe(0);
-  });
 });
 
 // ---------------------------------------------------------------------------
-// 4. Clean/smudge filters DIFFERING between two directories — the predicted gap
+// 4. Clean/smudge filters DIFFERING between two directories
 // ---------------------------------------------------------------------------
 
 // A clean/smudge filter needs a real POSIX `sed`. The skip is legitimate — a
@@ -985,39 +929,42 @@ describe.skipIf(!HOST_GATES.filter.met)(gatedTitle('a clean/smudge filter on one
     expect(planted.onDiskB.toString('utf-8')).toBe('# REPLACED\n\n[b](./b.md)\n');
   });
 
-  it("reads each path's own text when no hint is offered", () => {
-    const keyA = keyOf(arms.walk.projection, PATH_A);
-    const keyB = keyOf(arms.walk.projection, PATH_B);
-    expect(keyA).not.toBe(keyB);
-    expect(sectionTitlesOf(arms.walk.projection, keyA)).toEqual(['TOKEN']);
-    expect(sectionTitlesOf(arms.walk.projection, keyB)).toEqual(['REPLACED']);
+  it("reads each path's own text under either enumerator", () => {
+    for (const arm of [arms.walk, arms.git]) {
+      const keyA = keyOf(arm.projection, PATH_A);
+      const keyB = keyOf(arm.projection, PATH_B);
+      expect(keyA).not.toBe(keyB);
+      expect(sectionTitlesOf(arm.projection, keyA)).toEqual(['TOKEN']);
+      expect(sectionTitlesOf(arm.projection, keyB)).toEqual(['REPLACED']);
+    }
   });
 
-  /**
-   * FINDING, and the one this suite was written for. `content-cache.ts` predicts
-   * it and it is real: under `VAT_EXTENT_SOURCE=git` the hint collapses the two
-   * paths, and the projection asserts that `dirB/same.md` has a heading called
-   * `TOKEN`. The file on disk says `REPLACED`. Nothing in the projection can be
-   * read to detect it — no condition, no differing key, not even a byte-count
-   * mismatch to notice.
-   */
-  it('serves dirB the OTHER path characters under the git enumerator (DEFECT)', () => {
-    expect(arms.git.stats.hintHits).toBe(1);
+  /** Both store-writing routes, on the git enumerator: dirB's stored key is its own. */
+  it('stores dirB under its own key on the membership-miss and the query-miss routes', async () => {
+    process.env[EXTENT_SOURCE_ENV] = EXTENT_SOURCE_GIT;
+    resetProjectRootCaches();
+    const gitTracker = new GitTracker(fixture.repo);
+    await gitTracker.initialize();
+    const ownKeyB = computeContentKey(planted.onDiskB, 'markdown');
+    const optionsOver = (store: FakeProjectionStore) => ({
+      root: fixture.repo,
+      gitTracker,
+      cache: { store, treeUnchanged: () => true, treeHash: 'hostile-filter' },
+      onBlobPopulation: (): void => undefined,
+    });
 
-    const keyA = keyOf(arms.git.projection, PATH_A);
-    const keyB = keyOf(arms.git.projection, PATH_B);
-    expect(keyB).toBe(keyA);
-    expect(keyB).toBe(computeContentKey(planted.onDiskA, 'markdown'));
+    // Membership miss writes; the query lane is served what it wrote.
+    const viaMembership = optionsOver(new FakeProjectionStore());
+    const members = await buildResourcePopulation({ ...viaMembership, outputs: [] });
+    const served = await buildResourceProjection(viaMembership);
+    expect(members.outcome).toEqual({ population: 'derived', stored: 'written' });
+    expect(served.outcome).toEqual({ population: 'store', stored: 'hit' });
+    expect(keyOf(served.projection, PATH_B)).toBe(ownKeyB);
 
-    // The heading the projection publishes for dirB...
-    expect(sectionTitlesOf(arms.git.projection, keyB)).toEqual(['TOKEN']);
-    // ...is not the heading dirB has.
-    expect(worktreeBytes(fixture, PATH_B).toString('utf-8')).toContain('# REPLACED');
-    // `REPLACED` has vanished from the projection entirely.
-    expect(arms.git.projection.blobSections.map((row) => row.title)).not.toContain('REPLACED');
-    expect(arms.git.projection.blobConditions).toEqual([]);
-    // One fewer blob than the tree actually contains.
-    expect(arms.git.projection.blobs).toHaveLength(arms.walk.projection.blobs.length - 1);
+    // Query miss derives and writes on its own.
+    const derived = await buildResourceProjection(optionsOver(new FakeProjectionStore()));
+    expect(derived.outcome).toEqual({ population: 'derived', stored: 'written' });
+    expect(keyOf(derived.projection, PATH_B)).toBe(ownKeyB);
   });
 });
 
@@ -1216,78 +1163,6 @@ describe('a Git-LFS pointer file', () => {
       expect(worktreeBytes(lfsRepo, POINTER_PATH).toString('utf-8')).toBe(DOC);
     } finally {
       rmSync(lfsRepo.base, { recursive: true, force: true });
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 7. The cross-path hint route itself
-// ---------------------------------------------------------------------------
-
-describe('the cross-path hint counter', () => {
-  let fixture: Fixture;
-  let planted: TwinPaths;
-  let arms: Arms;
-
-  beforeAll(async () => {
-    fixture = newRepo('vat-hostile-hint-');
-    planted = plantTwinPaths(fixture, DOC);
-    arms = await runBothArms(fixture.repo);
-  });
-
-  afterAll(() => {
-    delete process.env[EXTENT_SOURCE_ENV];
-    rmSync(fixture.base, { recursive: true, force: true });
-  });
-
-  it('shares one blob between two paths that genuinely share an OID', () => {
-    // No filters and no attributes here, so the twins are byte-identical on disk
-    // as well as in the index — the honest, sound case the hint exists for.
-    //
-    // CONSTRUCTION CONTROL, not a measurement: `newRepo` sets `core.autocrlf=false`
-    // and `core.eol=lf` and this fixture plants no `.gitattributes`, so the two
-    // paths cannot diverge and these two lines can only fail if `newRepo` itself
-    // regresses. That is worth pinning — every scenario above rests on it — but
-    // nobody should read it as evidence about the hint.
-    expect(planted.onDiskA).toEqual(planted.onDiskB);
-    expect(planted.onDiskA).toEqual(planted.blob);
-  });
-
-  /**
-   * The counter is called `hintHits`. There is no `sharedByHint` field on
-   * {@link ContentCacheStats}; this is the only place the cross-path route is
-   * observable, and it is counted separately from an ordinary `hits` precisely
-   * because its soundness rests on something outside the cache.
-   */
-  it('counts the cross-path serve as hintHits, never as hits, and skips the read', () => {
-    // The `hits` in each arm are the blob stage coming back for the bytes the
-    // extent already read — one per derived blob, one blob here. It is the
-    // `misses` and `bytesHeld` that the hint moves.
-    expect(arms.git.stats).toEqual({
-      hits: 1,
-      misses: 1,
-      hintHits: 1,
-      entries: 2,
-      bytesHeld: planted.onDiskA.length,
-    });
-    // Same tree, no hint offered: two reads, and twice the bytes held for one
-    // blob's worth of content.
-    expect(arms.walk.stats).toEqual({
-      hits: 1,
-      misses: 2,
-      hintHits: 0,
-      entries: 2,
-      bytesHeld: planted.onDiskA.length * 2,
-    });
-  });
-
-  it('serves content that is correct here, and the same key either way', () => {
-    const expected = computeContentKey(planted.onDiskA, 'markdown');
-    for (const arm of [arms.walk, arms.git]) {
-      expect(keyOf(arm.projection, PATH_A)).toBe(expected);
-      expect(keyOf(arm.projection, PATH_B)).toBe(expected);
-      expect(referencesOf(arm.projection, expected)).toEqual(['./b.md']);
-      expect(sectionTitlesOf(arm.projection, expected)).toEqual(['Doc']);
     }
   });
 });

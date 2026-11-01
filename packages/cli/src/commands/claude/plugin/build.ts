@@ -357,7 +357,7 @@ async function buildClaudePluginMarketplaces(
   // re-applies its own markdown-only `include` to whatever the source offers, so
   // this is a change of COST, not of what the build sees.
   const sharedRegistry = await withResourcePopulationSource(
-    { root: configDir, logger },
+    { root: configDir },
     (populationSource) =>
       createProjectRegistry(configDir, {
         // What this run writes (see `outputs` above). A fault on, in or above it (the project

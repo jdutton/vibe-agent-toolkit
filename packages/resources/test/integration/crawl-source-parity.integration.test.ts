@@ -48,7 +48,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { RunContentCache } from '../../src/projection/content-cache.js';
-import { FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
+import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
 import {
   FilesystemCrawlSource,
   GitCrawlSource,
@@ -79,7 +79,7 @@ const PLANTED = 'ignored-dir/planted.md';
 /** A directory neither source lists directly: both must derive it from its contents. */
 const NESTED_DIR = 'docs/nested';
 
-/** Byte-identical to {@link DUPLICATE_B}, so the two share one blob OID. */
+/** Byte-identical to {@link DUPLICATE_B}: two paths, one blob, each keyed from its own read. */
 const DUPLICATE_A = 'dup/a.md';
 /** Byte-identical to {@link DUPLICATE_A}. */
 const DUPLICATE_B = 'dup/b.md';
@@ -127,46 +127,13 @@ function relativePaths(enumerated: readonly EnumeratedPath[]): string[] {
 }
 
 /**
- * The content hint a source attached to one path.
- *
- * @param enumerated - What a source returned
- * @param rootDir - Root the path is expressed against
- * @param relativePath - The path to look up
- * @returns The hint, or `undefined` when the path is not a member at all —
- *   a distinction the callers rely on, since "no hint" and "not enumerated" are
- *   different failures
- */
-function hintForIn(
-  enumerated: readonly EnumeratedPath[],
-  rootDir: string,
-  relativePath: string,
-): string | null | undefined {
-  const absolutePath = safePath.resolve(rootDir, relativePath);
-  return enumerated.find((entry) => entry.absolutePath === absolutePath)?.contentHint;
-}
-
-/**
- * {@link hintForIn} against the main fixture root.
- *
- * @param enumerated - What a source returned
- * @param relativePath - The path to look up
- * @returns The hint, or `undefined` when the path is not a member
- */
-function hintFor(
-  enumerated: readonly EnumeratedPath[],
-  relativePath: string,
-): string | null | undefined {
-  return hintForIn(enumerated, root, relativePath);
-}
-
-/**
  * The shape a source attached to one path in the main fixture.
  *
  * @param enumerated - What a source returned
  * @param relativePath - The path to look up
  * @returns The shape, `null` when the source declined to describe it, or
- *   `undefined` when the path is not a member at all — the same three-way
- *   distinction {@link hintForIn} draws, and for the same reason
+ *   `undefined` when the path is not a member at all — "not described" and
+ *   "not enumerated" are different failures
  */
 function shapeFor(
   enumerated: readonly EnumeratedPath[],
@@ -198,9 +165,9 @@ beforeAll(async () => {
 
   writeIn(root, TRACKED, '# tracked\n');
   writeIn(root, 'docs/nested/deep.md', '# deep\n');
-  writeIn(root, 'café.md', '# non-ascii name\n');
   writeIn(root, DUPLICATE_A, DUPLICATE_BYTES);
   writeIn(root, DUPLICATE_B, DUPLICATE_BYTES);
+  writeIn(root, 'café.md', '# non-ascii name\n');
 
   gitIn(root, ['add', '-A']);
   gitIn(root, [...COMMIT_CONFIG, 'commit', '-m', 'fixture']);
@@ -275,27 +242,6 @@ describe('crawl sources agree on the population', () => {
   });
 });
 
-describe('content hints', () => {
-  it('are supplied for a regular file and withheld from a directory', () => {
-    expect(hintFor(gitted, TRACKED)).toMatch(/^[0-9a-f]{40,64}$/);
-    expect(hintFor(gitted, NESTED_DIR)).toBeNull();
-  });
-
-  it('are identical for byte-identical files, which is the whole saving', () => {
-    // Not merely "both non-null": the hint only avoids a read when two paths
-    // AGREE on it, so equality is the property, and a fixture asserting
-    // well-formedness alone would pass on an implementation that hashed paths.
-    const a = hintFor(gitted, DUPLICATE_A);
-    const b = hintFor(gitted, DUPLICATE_B);
-    expect(a).not.toBeNull();
-    expect(a).toBe(b);
-  });
-
-  it('are never supplied by the walk, which has not read anything yet', () => {
-    expect(walked.every((entry) => entry.contentHint === null)).toBe(true);
-  });
-});
-
 /**
  * **The one field the two sources are MEANT to disagree about.**
  *
@@ -347,20 +293,14 @@ describe('path shapes', () => {
  * extent, and a contributor could still differ in what it makes of the same
  * population. So the same comparison is repeated one layer up, on the rows.
  *
- * `contentKey` is compared alongside `path` deliberately. It is the only column
- * the git route can reach by a different mechanism — the blob-OID hint — so a
- * hint that served the wrong bytes would show up here as two extents that
- * enumerated identically and keyed differently, which no path-only comparison
- * could see.
+ * `contentKey` is compared alongside `path` deliberately: two extents that
+ * enumerated identically and keyed differently are invisible to a path-only
+ * comparison.
  */
 /**
  * Run the extent with one source, through a builder that HAS a content cache.
  *
- * The cache is not incidental. A hint is only ever a lookup into it, so a
- * builder without one makes `contentHint` inert — and a comparison that cannot
- * observe the hint would report agreement no matter what the git source put in
- * that field. Verified by mutation: with the shared no-cache helper, handing
- * every file one identical hint changed nothing here.
+ * The cache is what a real run carries, so the comparison runs through it.
  *
  * @param source - Which implementation to hand the contributor
  * @returns Every realization row the extent produced
@@ -374,7 +314,7 @@ async function realizationsFrom(
 
   const contributor = new FilesystemExtentContributor((r) =>
     source === 'git' ? new GitCrawlSource(r, []) : new FilesystemCrawlSource(r, []),
-  );
+  DEFAULT_CONTENT_DEMAND);
   return (await contributor.contribute(builder.base(), null)).realizations;
 }
 
@@ -397,7 +337,7 @@ describe('the filesystem extent is unchanged by which source enumerated it', () 
 
     expect(viaGit).toEqual(viaWalk);
     // Not vacuous: the extent must actually have keyed something, or two empty
-    // key columns would compare equal while proving nothing about the hint.
+    // key columns would compare equal while proving nothing about the keys.
     expect(viaWalk.filter((row) => !row.endsWith('(none)')).length).toBeGreaterThan(0);
   });
 
@@ -432,8 +372,7 @@ describe('the filesystem extent is unchanged by which source enumerated it', () 
 /**
  * The two entry shapes whose OID does NOT name readable file bytes.
  *
- * Both are population questions before they are hint questions, and getting
- * either wrong is silent: a symlink would arrive as a file whose "content" is a
+ * Both are population questions, and getting either wrong is silent: a symlink would arrive as a file whose "content" is a
  * path string, and a submodule as a file that cannot be read at all. They live
  * in their own fixture because a committed symlink needs privilege on Windows,
  * and because an embedded repository makes `git add` noisy enough that mixing it
@@ -501,12 +440,6 @@ describe.skipIf(!symlinkCapability())('entries whose OID is not file bytes', () 
 
   it('descend into the submodule the snapshot named but did not describe', () => {
     expect(modePaths(gittedModes)).toContain('embedded/inner.md');
-    expect(hintForIn(gittedModes, linkRoot, 'embedded')).toBeNull();
   });
 
-  it('never hand a hint to a file inside the submodule, which git did not hash', () => {
-    // Its bytes belong to the inner repository, so the outer snapshot holds no
-    // OID for them — a hint here could only have been invented.
-    expect(hintForIn(gittedModes, linkRoot, 'embedded/inner.md')).toBeNull();
-  });
 });

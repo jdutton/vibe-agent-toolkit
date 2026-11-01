@@ -1030,7 +1030,7 @@ async function buildInto(input: SkillBuildRunInput, target: BuildTarget, staged:
   // them is the run's destination, never its input.
   const outputs = [target.dest, staged, ...input.runOutputs];
 
-  const outcomes = await withResourcePopulationSource({ root: cwd, logger }, async (populationSource) => {
+  const outcomes = await withResourcePopulationSource({ root: cwd }, async (populationSource) => {
     // In order: shared population source, suite probe and logger; failures listed in spec order.
     await forEachInOrder(specs, async (spec) => {
       const { skill, packagingConfig } = spec;

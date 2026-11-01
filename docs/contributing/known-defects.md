@@ -5,6 +5,10 @@ the built CLI or traced in code, and says which. **Delete an entry in the commit
 Do not mark it fixed, strike it through or move it to a "done" list: git holds the history. Add an
 entry when a review or a session finds a defect that will not be fixed in the change that found it.
 
+An entry that must be fixed before the next stable version carries the bullet
+`- **Blocks:** the stable tag` under its heading; `bun run pre-release` refuses a stable version
+while any entry carries it (`packages/dev-tools/src/known-defects-gate.ts`).
+
 Each entry gives the mechanism, a minimal reproduction, where it lives, the likely fix, an effort
 (**S** under about an hour, one package, the fix is clear; **M** more than that; **L** needs a
 design or the root cause is unknown) and whether fixing it changes what a user sees. Severity is
@@ -598,8 +602,9 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 
 ## Git and crawl
 
-### A one-file edit repopulates the whole tree — blocks the stable tag
+### A one-file edit repopulates the whole tree
 
+- **Blocks:** the stable tag
 - **Severity:** Important · **Effort:** L · **User-visible:** yes (time, not answers)
 - **Mechanism:** every resources lane asks the store one question, keyed by the tree hash and the
   git index. Any edit misses that key, and the miss re-populates the whole tree: every non-ignored
@@ -612,8 +617,43 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   [`resource-population.ts`](../../packages/resources/src/projection/resource-population.ts);
   `populate` in [`merge.ts`](../../packages/resources/src/projection/merge.ts)
 - **Fix:** incremental repopulation — reuse stored blob facts for held content keys (which also
-  skips their blob-tier rewrite) and content keys for stat-unchanged paths. Its own change; the
-  stable tag waits for it. The release checklist is the gate: no tool reads this file.
+  skips their blob-tier rewrite) and content keys for stat-unchanged paths. Its own change.
+
+### A cold membership or build run holds every non-ignored file's bytes in memory
+
+- **Blocks:** the stable tag
+- **Severity:** Important · **Effort:** M · **User-visible:** yes (memory, not answers)
+- **Mechanism:** `RunContentCache` holds every entry for the whole run and evicts nothing; what
+  bounded it was not keying bytes nobody reads. Membership now asks the query lane's question, so a
+  cold `vat resources scan`/`validate`, `vat skills validate`/`build`, `vat claude plugin build` or
+  `vat rag index` keys, and therefore holds, the decoded bytes of every non-ignored file in the
+  tree. Peak memory grows with the corpus, not with what the verb reads.
+- **Reproduce:** on a large committed tree, run `vat resources validate` with an empty store and
+  watch peak RSS; it scales with the tree's total text size.
+- **Where:** the "Memory" paragraph of
+  [`content-cache.ts`](../../packages/resources/src/projection/content-cache.ts);
+  `resourceContributors` in
+  [`resource-population.ts`](../../packages/resources/src/projection/resource-population.ts)
+- **Fix:** release an entry's bytes once its blob facts are derived (the key stays), or derive
+  blob facts streaming per file. Measure with the lab before and after.
+
+### `vat inventory` and the resources verbs evict each other's stored population
+
+- **Severity:** Important · **Effort:** S · **User-visible:** yes (time, not answers)
+- **Mechanism:** `buildInventoryPopulation` registers the filesystem extent at the project root
+  under `DEFAULT_CONTENT_DEMAND`, so its store key is the resources lanes' key. Its parameter set
+  differs (no `DECLINE_IGNORED`), so the reuse rule refuses the other's stored context; and the
+  filesystem extent's context id (`extentContextId('filesystem', rootId)`) ignores parameters, and
+  the sqlite store's `writeExtent` replaces by context id. Each run therefore overwrites the
+  other's context.
+- **Reproduce:** with the store on, on a committed tree, run `vat inventory .`, then
+  `vat resources validate`, then `vat inventory .` again: every run reports a derived population.
+- **Where:** `extentContextId` call in
+  [`filesystem-extent.ts`](../../packages/resources/src/projection/contributors/filesystem-extent.ts);
+  `buildInventoryPopulation` in
+  [`inventory-population.ts`](../../packages/claude-marketplace/src/inventory/inventory-population.ts)
+- **Fix:** PR 1 slice S6 (inventory on the resources population). Either the two lanes ask one
+  question, or the context id carries the parameter set so the two contexts coexist.
 
 ### A tracked file deleted but not yet staged is enumerated, then reported unreadable
 

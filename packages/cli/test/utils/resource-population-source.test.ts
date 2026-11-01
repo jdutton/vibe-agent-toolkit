@@ -19,16 +19,12 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { createLogger } from '../../src/utils/logger.js';
 import {
   RESOURCES_CRAWL_ENV,
   RESOURCES_CRAWL_PROJECTION,
   RESOURCES_CRAWL_WALK,
   withResourcePopulationSource,
 } from '../../src/utils/resource-loader.js';
-
-/** The seam's required logger; nothing here asserts on what it prints. */
-const logger = createLogger();
 
 /** The two fixture members, named once so the writes and the expectation agree. */
 const GUIDE_REL = 'docs/guide.md';
@@ -50,7 +46,7 @@ afterEach(() => {
 
 describe('withResourcePopulationSource', () => {
   it('hands back a source when the selector is unset, because the projection lane is the default', async () => {
-    const received = await withResourcePopulationSource({ root, logger }, async (source) => source);
+    const received = await withResourcePopulationSource({ root }, async (source) => source);
 
     expect(received).toBeDefined();
   });
@@ -62,7 +58,7 @@ describe('withResourcePopulationSource', () => {
     process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_WALK;
 
     try {
-      const received = await withResourcePopulationSource({ root, logger }, async (source) => source);
+      const received = await withResourcePopulationSource({ root }, async (source) => source);
 
       expect(received).toBeUndefined();
     } finally {
@@ -75,7 +71,7 @@ describe('withResourcePopulationSource', () => {
     writeFileSync(safePath.join(root, ASSET_REL), 'asset', 'utf-8');
     process.env[RESOURCES_CRAWL_ENV] = RESOURCES_CRAWL_PROJECTION;
 
-    const paths = await withResourcePopulationSource({ root, logger }, async (source) => {
+    const paths = await withResourcePopulationSource({ root }, async (source) => {
       expect(source).toBeDefined();
       // The root it declares is the root it may be asked about — the registry's
       // guard compares exactly this, so a seam that handed back the wrong one
@@ -95,7 +91,7 @@ describe('withResourcePopulationSource', () => {
   it('carries the enumeration\'s own outcome and enumerator out with its paths', async () => {
     writeFileSync(safePath.join(root, GUIDE_REL), '# guide\n', 'utf-8');
 
-    const enumeration = await withResourcePopulationSource({ root, logger }, async (source) => source?.enumerate(root, []));
+    const enumeration = await withResourcePopulationSource({ root }, async (source) => source?.enumerate(root, []));
 
     // A temp tree outside any repository has no store, so the run derived, on
     // the filesystem enumerator — told by the enumeration, not by a side channel.

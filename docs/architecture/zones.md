@@ -130,10 +130,11 @@ wrong number — again the "check that cannot fail" shape.
 
 ⇒ The lens runs the real lane. On a 12,602-file adopter the resources-lane population alone is
 ~5.7 s; making every `SELECT 1` pay a second one would be indefensible, and paying it only for a
-statement that says `claude_context_loads` is simply the cost of the answer. ⚠️ It shares the run's
-projection STORE, so the second population is a store hit whenever this lane has been populated for
-the same tree before — a different question filed under its own key, not a competitor for the
-resources lane's entry.
+statement that says `claude_context_loads` is simply the cost of the answer. ⚠️ It files under the
+resources lanes' own store key — same demand, same registrations — so its root list is served by any
+resources verb's stored population, and its `@`-import contexts are stored beside the resources
+lane's under that key. The second population is a store hit whenever this lens has been populated
+for the same tree before.
 
 `claudeContextRelations` is the one function that produces these rows — nothing on VAT's own side
 folds them into a verdict, so a statement written against them is the only reading of the row set

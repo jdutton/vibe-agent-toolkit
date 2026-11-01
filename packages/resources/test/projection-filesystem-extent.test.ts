@@ -362,28 +362,34 @@ describe('FilesystemExtentContributor digest', () => {
 });
 
 /**
- * **Who decides whether this extent pays to read bytes.**
- *
- * The policy used to be a literal inside `contribute()`, which made it one
- * decision for every lane that registers this contributor — and the lanes do not
- * agree. `vat inventory` runs the blob stage over what this extent keys;
- * `buildResourcePopulation` reads four columns and `contentKey` is not one of
- * them. A single literal cannot be right for both, so the demand is a
- * constructor parameter and each lane states its own.
- *
- * The default is asserted as well as the override. It is what `vat inventory`
- * gets, and a default that silently became `deferred` would empty the blob stage
- * while every membership assertion in this file stayed green.
+ * **Who decides whether this extent pays to read bytes.** The caller: the
+ * demand is a required constructor argument, because it enters the store key.
+ * `DEFAULT_CONTENT_DEMAND` is what every resources lane and `vat inventory`
+ * pass, so it is asserted as well as the `'deferred'` override — a constant that
+ * silently became `deferred` would empty the blob stage while every membership
+ * assertion in this file stayed green.
  */
 describe('FilesystemExtentContributor content demand', () => {
-  it('keys a tracked file by default, which is what the blob stage consumes', async () => {
+  it('refuses a missing or unknown demand at construction', () => {
+    // Test files are not typechecked, so the required parameter alone does not
+    // stop a caller omitting it — and an omitted demand once read as `eager`.
+    const sourceFor = (at: string) => crawlSourceFor(at, []);
+    const construct = (demand: unknown) =>
+      new FilesystemExtentContributor(sourceFor, demand as ContentDemand);
+
+    expect(() => construct(undefined)).toThrow(/content demand/i);
+    expect(() => construct('lazy')).toThrow(/content demand/i);
+    expect(() => construct(DEFAULT_CONTENT_DEMAND)).not.toThrow();
+  });
+
+  it('keys a tracked file under DEFAULT_CONTENT_DEMAND, which is what the blob stage consumes', async () => {
     const contribution = await contributeUnder();
 
     expect(rowFor(contribution, 'README.md')?.contentState).toBe('keyed');
     expect(rowFor(contribution, 'README.md')?.contentKey).not.toBeNull();
   });
 
-  it('defers a gitignored file by default, which is the incumbent saving', async () => {
+  it('defers a gitignored file under DEFAULT_CONTENT_DEMAND', async () => {
     const contribution = await contributeUnder();
 
     expect(rowFor(contribution, BUILD_OUTPUT)?.contentState).toBe('deferred');
@@ -392,7 +398,7 @@ describe('FilesystemExtentContributor content demand', () => {
 
   it('keys nothing at all under "deferred", tracked half included', async () => {
     // The whole point of the parameter: the tracked half is what the default
-    // still reads, so a policy that only changed the ignored half would be
+    // demand still reads, so a policy that only changed the ignored half would be
     // indistinguishable from the default here.
     const contribution = await contributeUnder('deferred');
     const files = contribution.realizations.filter((row) => !row.isDirectory);

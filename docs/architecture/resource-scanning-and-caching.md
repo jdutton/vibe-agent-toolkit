@@ -285,8 +285,9 @@ to be discovered.
 ### 3.4 ✅ The resources lane on the projection — shipped opt-in, and what it measured
 
 `ResourceRegistry.crawl()` takes an optional `populationSource`. Supplied, the file list comes from
-a base-only projection (`buildResourcePopulation` → `FilesystemExtentContributor`) instead of from
-`crawlDirectory`; omitted, nothing changes. The CLI selects the lane at its boundary with
+the resources population (`buildResourcePopulation`, a membership view over the same stored
+population `vat resources query` reads) instead of from `crawlDirectory`; omitted, nothing
+changes. The CLI selects the lane at its boundary with
 `VAT_RESOURCES_CRAWL=projection`, which covers `vat resources scan`/`validate`, `vat rag index` and
 the pipeline oracles in one place — they all load through `loadResourcesWithConfig`.
 
@@ -510,14 +511,10 @@ are two documents as far as the cache is concerned, which is correct: their byte
 
 #### What this cost, stated because it is a real regression
 
-The old refusal was **loud**: `BLOB_NOT_TEXT`, naming the path. That loudness was also, accidentally,
-a floor under `RunContentCache`'s `#byHint` lane. A blob OID is many-to-one against working-tree
-bytes, and `working-tree-encoding` divergence between two paths sharing an OID is one of the two
-mechanisms that can change the text served. Before, a path handed the wrong encoding's characters
-could not produce plausible facts, because it could not produce facts at all. Now it can. Nothing new
-became unsound — the many-to-one OID was always the cause, and no decoder fixed that — but the one
-mechanism whose divergence used to announce itself no longer does. The analysis lives in
-`projection/content-cache.ts` beside the measurements.
+The old refusal was **loud**: `BLOB_NOT_TEXT`, naming the path. A silently decoded file no longer
+announces itself. That loudness was once also an accidental floor under a cross-path blob-OID hint,
+which could hand one path another's `working-tree-encoding` text; the hint has since been removed
+([Content Keying and Git §6.3](./content-keying-and-git.md)), so every path decodes its own bytes.
 
 #### Not every `'utf-8'` read is a content read — the line, stated once
 
@@ -736,17 +733,15 @@ side (tree-shape caching vs. the blob-keyed tables).
   `getGitTreeHash()` as the underlying primitive. **Half-built** — read this bullet's ⚠️ correction
   below before extending it, then note precisely where the line now falls:
 
-  ✅ The *within-run* half exists. `GitCrawlSource` carries each path's on-disk blob OID as
-  `EnumeratedPath.contentHint`, and `RunContentCache.read()` uses it as a `(hint, parserKind)` lookup
-  so a second path holding identical bytes costs no read at all — reported as `hintHits`, separately
-  from `hits`, because it is the one saving whose soundness rests on something outside that class.
-  All three conditions the correction imposes are enforced structurally: the stored key is still
-  hashed from bytes, a hint hit returns the content so no row goes back to disk, and mode-`120000`
-  entries never reach the field because they are not members at all (§3.3).
+  ⛔ The *within-run* half was built and removed. A cross-path `(blob OID, parserKind)` hint let a
+  second path holding the same OID skip its read, but an OID names *cleaned* content, so under a
+  per-path clean/smudge filter or `working-tree-encoding` it filed the second path under the first
+  path's key with the first path's text ([Content Keying and Git §6.3](./content-keying-and-git.md)).
+  Every path is now read and keyed from its own bytes, and the snapshot carries no OID.
 
   🔷 The *cross-run* half — a persisted `(blobSha, parserKind) → contentKey` memo, and the
-  snapshot-to-snapshot manifest diff — remains unbuilt. That is where the warm-cache prize in the
-  table below actually lives: within one run a hint only pays where a corpus holds duplicate bytes.
+  snapshot-to-snapshot manifest diff — remains unbuilt, and inherits the same unsoundness: any
+  design here must first show the OID-to-bytes mapping is one-to-one for the paths it serves.
 
   Measured 2026-08-16 on an adopter working tree (8,496 tracked paths, macOS, warm), which sizes the
   prize against the `filesystem` extent this would accelerate (`builtin:filesystem`, 1,537 ms warm /
@@ -773,11 +768,12 @@ side (tree-shape caching vs. the blob-keyed tables).
   symlink as a blob holding the link **target string**, so two symlinks with the same relative
   target but different resolutions share an OID while VAT follows them and the parser reads
   through; and a key derived at enumeration and used to file a parse performed later binds the old
-  key to new bytes. Its rule: **a git SHA may be used as a *lookup hint* whose miss is free — it
-  must never be the key.**
+  key to new bytes. Its rule now: **a git OID must never be the key, and may not stand in for a
+  read** — one OID can name two working-tree byte strings.
 
-  The `(blobSha, parserKind) → contentKey` memo proposed above *is* that permitted hint, so the two
-  documents do agree — but only under three conditions the table above does not state:
+  So the `(blobSha, parserKind) → contentKey` memo proposed above is not permitted as stated. Even
+  where the OID-to-bytes mapping were shown one-to-one, three further conditions the table above
+  does not state would apply:
 
   - **The saving is warm-only.** A cold memo misses on every path and hashes on read anyway.
     "Replaces enumeration *and* the SHA-256 read" is a warm-cache claim written as an unconditional

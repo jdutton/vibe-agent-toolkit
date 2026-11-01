@@ -23,9 +23,15 @@ import { GitTracker, gitTreeSnapshot } from '@vibe-agent-toolkit/utils/git';
 import { CommandRefusalError } from './command-refusal.js';
 import { loadConfig } from './config-loader.js';
 import type { Logger } from './logger.js';
-import { populationWiring } from './population-wiring.js';
+import { collectionsOption } from './population-wiring.js';
 import { assertDirectoryArgument } from './project-root-policy.js';
 import { withPopulationCache } from './projection-store.js';
+
+/**
+ * The membership and build verbs' blob-stage observer: their users cannot act on
+ * `blob_conditions`, and only a cold run would print it. The query verbs report.
+ */
+const MEMBERSHIP_IGNORES_BLOB_REFUSALS = (): void => undefined;
 
 /**
  * Which enumerator produced a load's population.
@@ -338,15 +344,12 @@ export function resourcesProjectionCrawlSelected(): boolean {
  *   time. A SEPARATE selector from {@link RESOURCES_CRAWL_ENV}: which lane
  *   enumerates and whether its answer is cached are independent choices, and a
  *   cache folded into the lane switch could never be measured against it
- * @param logger - Where a miss's blob-stage refusals are reported: a miss
- *   populates the whole resources question, blob stage included
  * @returns A population source, or `undefined` to use the walk
  */
 function populationSourceFor(
   root: string,
   gitTracker: GitTracker,
   cache: PopulationCache | undefined,
-  logger: Logger,
 ): ResourcePopulationSource | undefined {
   if (!resourcesProjectionCrawlSelected()) {
     return undefined;
@@ -365,7 +368,10 @@ function populationSourceFor(
         // against a second root — it is how the declaration and the enumeration
         // are kept demonstrably on one tree at the point of use, with no second
         // variable to fall out of step with the one that was checked.
-        ...populationWiring(logger, gitTracker, cache, enumeratedRoot),
+        onBlobPopulation: MEMBERSHIP_IGNORES_BLOB_REFUSALS,
+        gitTracker,
+        ...(cache !== undefined && { cache }),
+        ...collectionsOption(enumeratedRoot),
       }),
   };
 }
@@ -401,7 +407,6 @@ function populationSourceFor(
  * @param options.gitTracker - An already-initialized tracker to reuse. Omit to
  *   have one built, which costs a `git ls-files` spawn — and only when the lane
  *   is actually selected
- * @param options.logger - Where a store miss's blob-stage refusals are reported
  * @param work - Given the source, or `undefined` when the walk stays selected
  * @returns Whatever `work` returned
  */
@@ -409,7 +414,6 @@ export function withResourcePopulationSource<T>(
   options: {
     root: string;
     gitTracker?: GitTracker | undefined;
-    logger: Logger;
   },
   work: (populationSource: ResourcePopulationSource | undefined) => Promise<T>,
 ): Promise<T> {
@@ -431,7 +435,7 @@ export function withResourcePopulationSource<T>(
         await gitTracker.initialize();
       }
 
-      return work(populationSourceFor(options.root, gitTracker, cache, options.logger));
+      return work(populationSourceFor(options.root, gitTracker, cache));
     });
   } catch (error) {
     return Promise.reject(error as Error);
@@ -563,7 +567,7 @@ export async function loadResourcesWithConfig(
     await gitTracker.initialize();
     logger.debug(`GitTracker initialized with ${gitTracker.getStats().cacheSize} tracked files`);
 
-    const populationSource = populationSourceFor(projectRoot, gitTracker, cache, logger);
+    const populationSource = populationSourceFor(projectRoot, gitTracker, cache);
     logger.debug(crawlLaneDebugLine(populationSource));
     if (populationSource) {
       crawlOptions = { ...crawlOptions, populationSource };

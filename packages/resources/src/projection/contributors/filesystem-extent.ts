@@ -52,13 +52,18 @@
  * ⚠️ **The demand is a constructor parameter, and every caller states it.** It
  * enters the store key (see {@link FilesystemExtentContributor.registrationQuestion}),
  * so two registrations under different demands are two questions to the store.
- * Every resources lane — membership, query, the claude-context real pass — and
- * `buildInventoryPopulation` pass {@link DEFAULT_CONTENT_DEMAND} and so share one
- * key; membership is a view over that one keyed population. Only the
- * claude-context discovery pass asks for `'deferred'`, and it never touches the
- * store. Keying is not free for a membership-only run (measured on an 8,548-file
- * monorepo: ~1,684 ms of a 13,714 ms cold run, 152.9 MB), and that cold cost is
- * the price of one question; a warm run pays none of it.
+ * Every resources lane — membership, query, the claude-context real pass — passes
+ * {@link DEFAULT_CONTENT_DEMAND} and so shares one key; membership is a view over
+ * that one keyed population. Only the claude-context discovery pass asks for
+ * `'deferred'`, and it never touches the store. Keying is not free for a
+ * membership-only run (measured on an 8,548-file monorepo: ~1,684 ms of a
+ * 13,714 ms cold run, 152.9 MB); a warm run pays none of it.
+ *
+ * 🚨 `buildInventoryPopulation` passes the same demand at the project root, so it
+ * shares that key too — but under a different parameter set, while this extent's
+ * context id ignores parameters. Each run's write replaces the other's context,
+ * so alternating `vat inventory .` and `vat resources validate` is cold every
+ * time. An open defect (`docs/contributing/known-defects.md`), not a feature.
  *
  * ## ⚠️ This extent's COST is not settled here — see the git lane before optimising
  *
@@ -149,7 +154,7 @@ import type {
 } from '../contributor.js';
 import { gitExtentSelected, type CrawlSource, type CrawlSourceKind } from '../crawl-source.js';
 import type { ProjectionBase } from '../projection.js';
-import { collectRealization, type ContentDemand } from '../realizations.js';
+import { CONTENT_DEMANDS, collectRealization, type ContentDemand } from '../realizations.js';
 
 import { extentContextId } from './context-id.js';
 
@@ -332,6 +337,12 @@ export class FilesystemExtentContributor implements ExtentContributor {
     sourceFor: (root: string) => CrawlSource,
     contentDemand: ContentDemand,
   ) {
+    // Untyped callers (tests, generated drivers) can omit it; refuse rather than key under a guess.
+    if (!(CONTENT_DEMANDS as readonly unknown[]).includes(contentDemand)) {
+      throw new TypeError(
+        `FilesystemExtentContributor needs a content demand (${CONTENT_DEMANDS.join(' | ')}), got ${String(contentDemand)}`,
+      );
+    }
     this.#sourceFor = sourceFor;
     this.#contentDemand = contentDemand;
     this.registrationQuestion = { contentDemand };
@@ -371,7 +382,7 @@ export class FilesystemExtentContributor implements ExtentContributor {
     const realizations: ResourceRealizationRow[] = [];
     const declined = declinedPathFilter(base.gitTracker, parameters);
 
-    await forEachInOrder(enumerated, async ({ absolutePath, contentHint, shape }) => {
+    await forEachInOrder(enumerated, async ({ absolutePath, shape }) => {
       // BEFORE `idFor` and before `collectRealization`, which is the whole
       // saving and the reason this is not a filter over the finished rows:
       // `idFor` costs a `realpathSync.native` for any path git's index cannot
@@ -400,7 +411,6 @@ export class FilesystemExtentContributor implements ExtentContributor {
         // carry this extent's whole argument, and which lanes additionally need
         // the bytes is a fact about the lanes. See the class docstring.
         contentDemand: this.#contentDemand,
-        ...(contentHint !== null && { contentHint }),
         // The enumerator's own answer to "what is this path", when it had one.
         // Passing it is what stops `collectRealization` opening with an `lstat`,
         // so the git source's constant-cost enumeration is no longer undone one

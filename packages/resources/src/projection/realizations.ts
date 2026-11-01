@@ -69,7 +69,10 @@ export function relativize(absolutePath: string, root: string): string {
  *   happens.
  * - `deferGitignored` — key unless the row's own `gitignored` column is true.
  */
-export type ContentDemand = 'eager' | 'deferred' | 'deferGitignored';
+export const CONTENT_DEMANDS = ['eager', 'deferred', 'deferGitignored'] as const;
+
+/** One of {@link CONTENT_DEMANDS}. */
+export type ContentDemand = (typeof CONTENT_DEMANDS)[number];
 
 /**
  * What an enumerator already established about a path, so no `lstat` is needed.
@@ -121,22 +124,10 @@ export interface RealizationContext {
    */
   contentDemand?: ContentDemand | undefined;
   /**
-   * A byte identity the enumerator already computed for THIS path — the git
-   * source's blob OID, when it has a sound one.
-   *
-   * Only ever a lookup into the run's cache, so that a second path holding
-   * identical bytes costs no read; never the key a parse is filed under. Absent
-   * for every path a walk found, and absent for symlinks and submodules even
-   * under git — see `EnumeratedPath.contentHint`, which is where the mode is
-   * visible and therefore where the exclusion belongs.
-   */
-  contentHint?: string | undefined;
-  /**
    * The enumerator's own answer to "what is this path", when it had one.
    *
-   * Authoritative, unlike {@link RealizationContext.contentHint}, which is only
-   * ever a cache lookup whose miss is free: supplying this **replaces** the
-   * `lstat`, it does not accelerate it. So a source may set it only from
+   * Authoritative: supplying this **replaces** the `lstat`, it does not
+   * accelerate it. So a source may set it only from
    * something it genuinely observed — see {@link PathShape} for the exact bar —
    * and absence means "ask the filesystem", which is what every caller that has
    * not opted in continues to do.
@@ -474,7 +465,6 @@ async function keyOrState(
       // kind back off that prefix.
       parserKindForMimeType(mime) ?? NO_PARSER_KIND,
       context.contentCache,
-      context.contentHint,
     );
     return { contentKey: keyed.key, contentState: 'keyed' };
   } catch (error) {

@@ -192,7 +192,7 @@ export interface ResourceEnumeration {
   readonly paths: readonly string[];
   /** Population-time conditions recorded while enumerating, in canonical order (see `canonicalConditions`). */
   readonly conditions: readonly RealizationConditionRow[];
-  /** Whether the store served this population — the outcome `populate()` returned for it, the only producer. */
+  /** Whether the store served this population — from `populate()` or the stored membership read. */
   readonly outcome: PopulationOutcome;
   /**
    * Which enumerator ran — the instance's own kind, not the env's request.
@@ -315,8 +315,9 @@ function membershipOf(
   const paths = rows.resourceRealizations
     // `filesOnly: true` is the crawl contract every resources caller passes; the
     // extent enumerates directories too (the `claude-context` lens keys on one).
-    // A row can be a member without being readable — a dangling symlink — and
-    // admitting it would turn an enumeration difference into a
+    // A row can be a member without being present (`exists: false`: it vanished
+    // between the listing and its `lstat`, or the OS refused it), and admitting
+    // it would turn an enumeration difference into a
     // `RESOURCE_UNREADABLE` finding the walk never emits. `gitignored` is the
     // backstop for `DECLINE_IGNORED`: with no tracker the extent declines
     // nothing, and this is where the admitted set is STATED.
@@ -344,7 +345,9 @@ function membershipOf(
  *
  * The same options `populate()` the full lane runs, blob stage included, and the
  * write that follows serves both lanes next time. So a cold membership run now
- * reads every non-ignored file: that is the cost of asking one question.
+ * reads every non-ignored file: that is the cost of asking one question. A miss
+ * also reads the store twice — the membership read, then `populate()`'s own —
+ * accepted rather than a seam into `populate()`.
  *
  * @param options - The root, the run's oracles and the blob-stage observer
  * @param options.root - Absolute root to enumerate

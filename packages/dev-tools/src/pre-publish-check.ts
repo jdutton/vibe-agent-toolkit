@@ -21,6 +21,7 @@
  *     version and exists on the remote
  * 14. No stale unreleased content (stable versions only)
  * 15. CHANGELOG section non-empty (stable versions only)
+ * 16. No known defect marked as blocking the stable tag (stable versions only)
  *
  * Usage:
  *   tsx packages/dev-tools/src/pre-publish-check.ts [--allow-branch BRANCH] [--skip-git-checks] [--release-readiness] [--tag VERSION]
@@ -40,6 +41,7 @@ import { direntKindFollowingSync, isPathAbsentError, safePath } from '@vibe-agen
 import { runGit } from '@vibe-agent-toolkit/utils/git';
 
 import { PROJECT_ROOT, log, safeExecSync } from './common.js';
+import { KNOWN_DEFECTS_PATH, isPrereleaseVersion, stableTagRefusal } from './known-defects-gate.js';
 import { DEPENDENCY_FIELDS } from './resolve-workspace-deps.js';
 import { publishedPackagesInDependencyOrder } from './workspace-graph.js';
 
@@ -558,8 +560,7 @@ try {
   }
 
   // Skip CHANGELOG check for prerelease versions (RC, alpha, beta, etc.)
-  const isPrerelease = /-(rc|alpha|beta|dev|canary)\./i.test(currentVersion);
-  if (isPrerelease) {
+  if (isPrereleaseVersion(currentVersion)) {
     log(`⊘ CHANGELOG check skipped (prerelease version: ${currentVersion})`, 'yellow');
   } else {
     const changelogContent = readFileSync(changelogPath, 'utf8');
@@ -660,9 +661,21 @@ if (releaseReadiness) {
     }
   }
 
+  // Check 16: a known defect marked as blocking the stable tag
+  console.log('');
+  console.log('Checking known defects that block the stable tag...');
+  {
+    const refusal = stableTagRefusal(currentVersion, readFileSync(safePath.join(PROJECT_ROOT, KNOWN_DEFECTS_PATH), 'utf8'));
+    if (refusal !== undefined) {
+      log(`✗ ${refusal}`, 'red');
+      console.log('  Fix each entry (and delete it), or release a prerelease instead.');
+      process.exit(ExitCode.FINDINGS);
+    }
+    log('✓ No known defect blocks this version', 'green');
+  }
+
   // Check 14 & 15: CHANGELOG content checks (stable versions only)
-  const isPrerelease = /-(rc|alpha|beta|dev|canary)\./i.test(currentVersion);
-  if (isPrerelease) {
+  if (isPrereleaseVersion(currentVersion)) {
     log(`⊘ CHANGELOG content checks skipped (prerelease version: ${currentVersion})`, 'yellow');
   } else {
     const changelogPath = safePath.join(PROJECT_ROOT, 'CHANGELOG.md');

@@ -263,9 +263,9 @@ export interface PopulateOptions {
    * among them, and on a caller that reads no blob table that is the whole cost
    * of the lane. Measured on this repository, `vat resources scan` over 2,096
    * tracked files of which 176 are admitted resources: 6,839 ms of 7,615 ms cold
-   * — 90% — deriving rows `buildResourcePopulation` never looks at. The walker
-   * arm of the same command is 1,363 ms. Skipping it puts the projection lane at
-   * ~1.5× the walk instead of 5.6×.
+   * — 90% — when that verb skipped the stage; the walker arm is 1,363 ms. The
+   * resources lanes now run it so membership and query share one stored
+   * population; the claude-context discovery pass is the one caller that skips.
    *
    * ## Why `'skip'` is opt-in and cannot be inferred
    *
@@ -1081,7 +1081,7 @@ export interface StoredMembership {
  * so both reads compute {@link storeKeyFor} from one registry and one parameter
  * map and cannot drift apart. A caller registering more contributors afterwards
  * (which is the whole point) changes the key only if one of them declares an
- * {@link ExtentContributor.registrationQuestion} — none does today, and if one
+ * {@link ExtentContributor.registrationQuestion} — no `@`-import contributor does, and if one
  * ever did, this read would simply stop hitting and the caller would fall back
  * to deriving the list. Fail-safe in the direction that costs time rather than
  * correctness.

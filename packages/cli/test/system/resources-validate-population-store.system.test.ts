@@ -219,6 +219,23 @@ describe('vat resources validate twice against one pinned store (system test)', 
     expect(checked.document.data['population'], checked.stderr).toBe('store');
   });
 
+  it('reports a tracked binary on a cold check, and says nothing on a cold validate', async () => {
+    // The blob stage declines the binary. A query user can act on
+    // `blob_conditions`; a membership user cannot, and a report that only a
+    // cold run prints is noise to them.
+    const corpus = corpusWith('binary', (root) => {
+      writeFileSync(safePath.join(root, 'docs', 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]));
+    });
+
+    const validated = await validateOnce(corpus, `${corpus}-validate-store`);
+    const checked = await validateOnce(corpus, `${corpus}-check-store`, 'projection', 'check');
+
+    expect(validated.document.data['population']).toBe('derived');
+    expect(validated.stderr).not.toContain('blob derivation');
+    expect(checked.document.data['population']).toBe('derived');
+    expect(checked.stderr).toContain('blob derivation');
+  });
+
   it('publishes population: null when the walk lane answered', async () => {
     const corpus = corpusWith('walked', () => undefined);
 

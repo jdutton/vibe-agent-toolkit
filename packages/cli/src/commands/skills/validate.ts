@@ -582,7 +582,7 @@ export async function buildSharedValidationContext(
       // it to whatever the source offers, so this stays a markdown-only registry
       // on both lanes.
       const registry = await withResourcePopulationSource(
-        { root: sharedRoot, gitTracker: context.gitTracker, logger },
+        { root: sharedRoot, gitTracker: context.gitTracker },
         (populationSource) => {
           logger.debug(crawlLaneDebugLine(populationSource));
           return buildSkillsValidateRegistry(sharedRoot, {
