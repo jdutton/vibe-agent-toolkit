@@ -105,10 +105,16 @@ function corpusWith(name: string, plant: (corpus: string) => void): string {
  * @param corpus - The tree to validate
  * @param storeDir - The store directory, shared by both runs of one case
  * @param lane - Which lane `VAT_RESOURCES_CRAWL` selects
+ * @param verb - The resources verb to run; `validate` unless a case crosses verbs
  * @returns The exit status, the parsed document and stderr
  */
-async function validateOnce(corpus: string, storeDir: string, lane: 'projection' | 'walk' = 'projection'): Promise<Run> {
-  const result = await executeCli(binPath, ['resources', 'validate', '--format', 'json'], {
+async function validateOnce(
+  corpus: string,
+  storeDir: string,
+  lane: 'projection' | 'walk' = 'projection',
+  verb: 'validate' | 'check' = 'validate',
+): Promise<Run> {
+  const result = await executeCli(binPath, ['resources', verb, '--format', 'json'], {
     cwd: corpus,
     env: {
       ...fakeHomeEnv(safePath.join(scratch, 'home')),
@@ -199,6 +205,18 @@ describe('vat resources validate twice against one pinned store (system test)', 
       expect.stringContaining(BROKEN_ONE),
       expect.stringContaining(BROKEN_TWO),
     ]);
+  });
+
+  it('serves vat resources check from the population vat resources validate wrote', async () => {
+    // One question for every resources lane: membership and the full lane share a key.
+    const corpus = corpusWith('cross-verb', () => undefined);
+    const storeDir = `${corpus}-store`;
+
+    const validated = await validateOnce(corpus, storeDir);
+    const checked = await validateOnce(corpus, storeDir, 'projection', 'check');
+
+    expect(validated.document.data['population']).toBe('derived');
+    expect(checked.document.data['population'], checked.stderr).toBe('store');
   });
 
   it('publishes population: null when the walk lane answered', async () => {

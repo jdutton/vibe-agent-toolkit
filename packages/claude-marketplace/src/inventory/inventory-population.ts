@@ -52,6 +52,7 @@
 import {
   ContributorRegistry,
   crawlSourceFor,
+  DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
   populate,
   populationOracles,
@@ -231,8 +232,7 @@ function relativeToRoot(root: string, absolute: string): string {
  *   was optional this function passed none — so every `blobsNotText`,
  *   `blobsUnreadable` and `referencesSkippedForMissingLine` the stage computed
  *   was discarded here, and a plugin whose every document was declined as binary
- *   inventoried as empty with exit 0. A caller with nothing to do with the counts
- *   names `DISCARD_BLOB_POPULATION`; it does not leave the argument off
+ *   inventoried as empty with exit 0
  * @returns The indexed population
  */
 export async function buildInventoryPopulation(options: {
@@ -247,7 +247,8 @@ export async function buildInventoryPopulation(options: {
   const hasGitTracker = options.gitTracker !== undefined;
 
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
+  // The resources lanes' demand: this lane runs the blob stage over what it keys.
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
 
   const parameters: Record<string, JsonValue> = {};
   // The skill's own root-relative path is the discriminator. It is unique within

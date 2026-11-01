@@ -17,6 +17,7 @@ import { extentContextId } from '../src/projection/contributors/context-id.js';
 import {
   DECLINE_IGNORED,
   EXTENT_DIRECTORY_UNLISTABLE,
+  DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
   unlistableRowStillHolds,
 } from '../src/projection/contributors/filesystem-extent.js';
@@ -52,7 +53,7 @@ function pathsOf(contribution: ExtentContribution): string[] {
 /** Run the contributor against a fresh base over the fixture root. */
 async function contribute(): Promise<ExtentContribution> {
   const base = new ProjectionBuilder({ root }).base();
-  return new FilesystemExtentContributor((at) => crawlSourceFor(at, [])).contribute(base, null);
+  return new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(base, null);
 }
 
 /**
@@ -83,7 +84,7 @@ async function contributeWithParameters(parameters: JsonValue): Promise<ExtentCo
   const tracker = new GitTracker(root);
   await tracker.initialize();
   const base = new ProjectionBuilder({ root, gitTracker: tracker }).base();
-  return new FilesystemExtentContributor((at) => crawlSourceFor(at, [])).contribute(base, parameters);
+  return new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(base, parameters);
 }
 
 /**
@@ -94,7 +95,7 @@ async function contributeWithParameters(parameters: JsonValue): Promise<ExtentCo
  * would pass against any of the three policies.
  *
  * @param demand - The policy to construct the contributor with, or omitted to
- *   take the default
+ *   take `DEFAULT_CONTENT_DEMAND`
  * @returns The contribution
  */
 async function contributeUnder(demand?: ContentDemand): Promise<ExtentContribution> {
@@ -102,9 +103,7 @@ async function contributeUnder(demand?: ContentDemand): Promise<ExtentContributi
   const tracker = new GitTracker(root);
   await tracker.initialize();
   const base = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache() }).base();
-  const contributor = demand === undefined
-    ? new FilesystemExtentContributor((at) => crawlSourceFor(at, []))
-    : new FilesystemExtentContributor((at) => crawlSourceFor(at, []), demand);
+  const contributor = new FilesystemExtentContributor((at) => crawlSourceFor(at, []), demand ?? DEFAULT_CONTENT_DEMAND);
   return contributor.contribute(base, null);
 }
 
@@ -223,7 +222,7 @@ describe('FilesystemExtentContributor declining the ignored half', () => {
     // the decline has nothing to act on and must not guess from `.gitignore`'s
     // mere presence.
     const base = new ProjectionBuilder({ root }).base();
-    const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, [])).contribute(base, DECLINE_IGNORED);
+    const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(base, DECLINE_IGNORED);
 
     expect(pathsOf(contribution)).toContain(BUILD_OUTPUT);
   });
@@ -244,7 +243,7 @@ describe('FilesystemExtentContributor declining the ignored half', () => {
 
 describe('FilesystemExtentContributor identity', () => {
   it('declares the contributor triple the registry and provenance key on', () => {
-    const contributor = new FilesystemExtentContributor((at) => crawlSourceFor(at, []));
+    const contributor = new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND);
 
     expect(contributor.id).toBe('builtin:filesystem');
     expect(contributor.kind).toBe('filesystem');
@@ -328,7 +327,7 @@ describe('FilesystemExtentContributor rows', () => {
     // `contextId` alone, so a federated projection over two roots keeps these
     // extents apart only if the root is inside the id.
     const builder = new ProjectionBuilder({ root });
-    const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, [])).contribute(builder.base(), null);
+    const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(builder.base(), null);
 
     expect(contribution.contexts[0]?.rootId).toBe(builder.identities.rootId);
     expect(contribution.contexts[0]?.contextId)

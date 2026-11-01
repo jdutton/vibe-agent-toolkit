@@ -18,7 +18,7 @@ import { resetProjectRootCaches, safePath, toForwardSlash } from '@vibe-agent-to
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { DISCARD_BLOB_POPULATION, type PopulateResult } from '../../src/projection/merge.js';
+import { type PopulateResult } from '../../src/projection/merge.js';
 import type { Projection } from '../../src/projection/projection.js';
 import { buildResourceProjection } from '../../src/projection/resource-population.js';
 import type { ClaudeRulePatternRow } from '../../src/schemas/projection-claude-rules.js';
@@ -74,7 +74,7 @@ function root(): string {
 async function populateTree(store?: FakeProjectionStore): Promise<PopulateResult> {
   return buildResourceProjection({
     root: root(),
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
+    onBlobPopulation: () => undefined,
     ...(store === undefined ? {} : { cache: { store, treeUnchanged: () => true, treeHash: TREE_HASH } }),
   });
 }
@@ -196,7 +196,7 @@ async function populateIgnoredTree(
     // ignored", and every row below would be the non-repository answer.
     expect(gitTracker.isUsable()).toBe(true);
     const { projection } = await buildResourceProjection({
-      root: dir, gitTracker, onBlobPopulation: DISCARD_BLOB_POPULATION,
+      root: dir, gitTracker, onBlobPopulation: () => undefined,
     });
     // The premise: the ignored file is never realized, so no witness can exist.
     expect(projection.resourceRealizations.filter((row) => built.includes(toForwardSlash(row.path)))).toEqual([]);

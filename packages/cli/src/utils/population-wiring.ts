@@ -14,10 +14,8 @@
  *
  * ## The observer is the reason this is shared rather than retyped
  *
- * `buildInventoryPopulation` and `buildClaudeContextPopulation` both REQUIRE
- * `onBlobPopulation` — a caller with nothing to do with the counts must name
- * `DISCARD_BLOB_POPULATION` rather than leave it off — because a tree whose every
- * document was declined as binary otherwise populates as empty and reports
+ * Every population builder REQUIRES `onBlobPopulation`, because a tree whose
+ * every document was declined as binary otherwise populates as empty and reports
  * success. Two hand-written copies of the reporting half is two places for that
  * report to quietly become a no-op.
  */
@@ -54,7 +52,7 @@ export interface PopulationWiring {
  * clean population stays exactly as quiet as it was — which is the only thing
  * that keeps the line worth reading when it does appear.
  *
- * ⚠️ The refusals go to `logger.warn`, i.e. **stderr**. Both callers write a
+ * ⚠️ The refusals go to `logger.warn`, i.e. **stderr**. Its callers write a
  * parseable document to stdout, and a diagnostic in the middle of it breaks every
  * consumer.
  *

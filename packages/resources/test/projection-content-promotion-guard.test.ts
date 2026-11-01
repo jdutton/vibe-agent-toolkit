@@ -58,7 +58,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { populateBlobs } from '../src/projection/blob-population.js';
 import { RunContentCache } from '../src/projection/content-cache.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
-import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
+import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { afterClosurePromotion, populate, type BlobPopulationReport } from '../src/projection/merge.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
@@ -121,7 +121,7 @@ async function plantIgnoredTree(): Promise<GitTracker> {
  */
 async function baseStratum(tracker: GitTracker): Promise<ProjectionBuilder> {
   const builder = new ProjectionBuilder({ root: suite.tempDir, gitTracker: tracker, contentCache: new RunContentCache() });
-  const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, [])).contribute(builder.base(), null);
+  const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(builder.base(), null);
   for (const row of contribution.realizations) {
     builder.addRealization(row);
   }
@@ -196,7 +196,7 @@ describe('demand promotion, over a row the shipped deferral policy produced', ()
     // and the report carrying no second measurement.
     const tracker = await plantIgnoredTree();
     const registry = new ContributorRegistry();
-    registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
+    registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
 
     let report: BlobPopulationReport | undefined;
     const { projection } = await populate({

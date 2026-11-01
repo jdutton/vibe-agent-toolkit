@@ -42,10 +42,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { ClosureExtentContributor } from '../src/projection/contributors/closure-extent.js';
-import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
+import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor, EXTENT_SOURCE_ENV, EXTENT_SOURCE_GIT } from '../src/projection/crawl-source.js';
 import { serializeProjection } from '../src/projection/export.js';
-import { CONTENT_PARSING_SKIP, DISCARD_BLOB_POPULATION, populate, type PopulationOutcome } from '../src/projection/merge.js';
+import { CONTENT_PARSING_SKIP, populate, type PopulationOutcome } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 import type { ContentDemand } from '../src/projection/realizations.js';
 import type { BlobScopedRows, ExtentKey, ExtentScopedRows, ProjectionStore } from '../src/projection/store.js';
@@ -215,18 +215,12 @@ class HarnesslessProjectionStore implements ProjectionStore {
  * The filesystem extent alone — a population that reads no blob table.
  *
  * @param contentDemand - What this registration asks be keyed, or omitted to
- *   leave the historical default in place. Constructed by the no-argument form
- *   when omitted rather than by passing the default literal, so the arm that
- *   states nothing stays the arm that shipped
+ *   register under `DEFAULT_CONTENT_DEMAND`, the demand every resources lane uses
  * @returns A registry holding one contributor
  */
 function filesystemOnly(contentDemand?: ContentDemand): ContributorRegistry {
   const registry = new ContributorRegistry();
-  registry.register(
-    contentDemand === undefined
-      ? new FilesystemExtentContributor((at) => crawlSourceFor(at, []))
-      : new FilesystemExtentContributor((at) => crawlSourceFor(at, []), contentDemand),
-  );
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), contentDemand ?? DEFAULT_CONTENT_DEMAND));
   return registry;
 }
 
@@ -296,7 +290,7 @@ async function run(request: RunRequest): Promise<Run> {
     onContributorTiming: (timing) => {
       contributorRuns.push(`${timing.contributorId}@${timing.pass}`);
     },
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
+    onBlobPopulation: () => undefined,
     ...(request.store === undefined
       ? {}
       : {

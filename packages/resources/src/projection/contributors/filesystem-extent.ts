@@ -49,17 +49,16 @@
  * leave a blob-reading lane with almost no content at all — a capability loss
  * dressed up as a saving.
  *
- * ⚠️ **But "which half of the tree" was never the whole question, and a literal
- * here answered it once for every lane.** This contributor serves more than one:
- * `buildInventoryPopulation` runs the blob stage over what this extent keys, so
- * its bytes are load-bearing; `buildResourcePopulation` consumes exactly four
- * columns — `isDirectory`, `exists`, `gitignored`, `path` — discards the
- * `Projection`, and skips the blob stage outright. Measured on an 8,548-file
- * monorepo, keying for that second lane was **~1,684 ms of a 13,714 ms cold run,
- * reading 152.9 MB**, and every byte of it was thrown away. No single literal is
- * right for both, so the demand is a **constructor parameter** and each lane
- * states its own — the policy stays inspectable and serializable (see
- * {@link ContentDemand}), it is simply no longer decided here.
+ * ⚠️ **The demand is a constructor parameter, and every caller states it.** It
+ * enters the store key (see {@link FilesystemExtentContributor.registrationQuestion}),
+ * so two registrations under different demands are two questions to the store.
+ * Every resources lane — membership, query, the claude-context real pass — and
+ * `buildInventoryPopulation` pass {@link DEFAULT_CONTENT_DEMAND} and so share one
+ * key; membership is a view over that one keyed population. Only the
+ * claude-context discovery pass asks for `'deferred'`, and it never touches the
+ * store. Keying is not free for a membership-only run (measured on an 8,548-file
+ * monorepo: ~1,684 ms of a 13,714 ms cold run, 152.9 MB), and that cold cost is
+ * the price of one question; a warm run pays none of it.
  *
  * ## ⚠️ This extent's COST is not settled here — see the git lane before optimising
  *
@@ -164,13 +163,12 @@ const FILESYSTEM_KIND = 'filesystem';
 const FILESYSTEM_ORIGIN = 'filesystem';
 
 /**
- * The demand a caller that states none gets — the historical literal, unmoved.
+ * The demand every resources lane and `vat inventory` register the filesystem
+ * extent under, so they ask the store one question.
  *
- * Named rather than defaulted inline so that "the lane that did not opt in is
- * unchanged" is one readable fact instead of a literal in a parameter list.
- * `buildInventoryPopulation` is that lane: it runs the blob stage over what this
- * extent keys, and a default that quietly became `'deferred'` would empty that
- * stage while every membership assertion about it stayed green.
+ * Named, and passed explicitly at every call: the constructor has no default,
+ * because a default is how two lanes once asked different questions without
+ * either call site saying so.
  */
 export const DEFAULT_CONTENT_DEMAND: ContentDemand = 'deferGitignored';
 
@@ -325,12 +323,14 @@ export class FilesystemExtentContributor implements ExtentContributor {
    *   pin one implementation against the other on a single root
    * @param contentDemand - Whether this registration wants the bytes keyed, and
    *   which half of the tree. A **lane's** decision, not this class's — see the
-   *   class docstring — defaulting to {@link DEFAULT_CONTENT_DEMAND} so a caller
-   *   that has not thought about it is left exactly where it was
+   *   class docstring. Required, because it enters the store key through
+   *   {@link registrationQuestion}: a defaulted demand let two lanes ask different
+   *   questions of one tree without either call site saying so. Every resources
+   *   lane passes {@link DEFAULT_CONTENT_DEMAND}
    */
   constructor(
     sourceFor: (root: string) => CrawlSource,
-    contentDemand: ContentDemand = DEFAULT_CONTENT_DEMAND,
+    contentDemand: ContentDemand,
   ) {
     this.#sourceFor = sourceFor;
     this.#contentDemand = contentDemand;

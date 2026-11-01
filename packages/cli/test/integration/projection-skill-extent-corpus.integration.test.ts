@@ -231,8 +231,8 @@ import {
   CLOSURE_REFERENCE_UNRESOLVED,
   CLOSURE_ROOT_ABSENT,
   ContributorRegistry,
-  DISCARD_BLOB_POPULATION,
   crawlSourceFor,
+  DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
   ProjectionBuilder,
   populate,
@@ -825,7 +825,7 @@ async function populateCorpus(
   gitTracker: GitTracker,
 ): Promise<{ projection: Projection; extentIdByName: Map<string, string> }> {
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
 
   const parameters: Record<string, JsonValue> = {};
   for (const skill of skills) {
@@ -838,7 +838,7 @@ async function populateCorpus(
     registry,
     parameters,
     gitTracker,
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
+    onBlobPopulation: () => undefined,
   });
 
   // From provenance rather than by re-deriving `extentContextId`: the row names

@@ -13,9 +13,9 @@
 
 import {
   ContributorRegistry,
-  DISCARD_BLOB_POPULATION,
   extentContextId,
   crawlSourceFor,
+  DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
   populate,
   ResolutionContextRowSchema,
@@ -57,10 +57,10 @@ let marketplaceProjection: Projection;
 /** Populate a fixture root with the filesystem base plus both new extents. */
 async function project(root: string): Promise<Projection> {
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
   registry.register(new PluginExtentContributor());
   registry.register(new MarketplaceExtentContributor());
-  return (await populate({ root, registry, onBlobPopulation: DISCARD_BLOB_POPULATION })).projection;
+  return (await populate({ root, registry, onBlobPopulation: () => undefined })).projection;
 }
 
 /** The extent context of one kind whose id carries `discriminator`. */
@@ -237,7 +237,7 @@ describe('the closure fixpoint', () => {
     // re-emitted condition, an order that depends on the growing base — moves
     // its digest and fails here.
     const registry = new ContributorRegistry();
-    registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
+    registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
     registry.register(new PluginExtentContributor());
     registry.register(new MarketplaceExtentContributor());
     await expect(
@@ -245,7 +245,7 @@ describe('the closure fixpoint', () => {
         root: MARKETPLACE_ROOT,
         registry,
         maxIterations: 2,
-        onBlobPopulation: DISCARD_BLOB_POPULATION,
+        onBlobPopulation: () => undefined,
       }),
     ).resolves.toBeDefined();
   }, 60_000);
@@ -263,7 +263,7 @@ describe('the closure fixpoint', () => {
 describe('ContributorRegistry.forKind (§7.5, from the consumer side)', () => {
   it('throws for "marketplace" until this contributor is registered', () => {
     const registry = new ContributorRegistry();
-    registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
+    registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
     expect(() => registry.forKind(MARKETPLACE_KIND)).toThrow(/No extent contributor is registered/);
     registry.register(new MarketplaceExtentContributor());
     expect(registry.forKind(MARKETPLACE_KIND)).toHaveLength(1);

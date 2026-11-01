@@ -1,12 +1,10 @@
 /**
  * The population lane behind Claude context analysis — its own lane, deliberately.
  *
- * `buildResourcePopulation` is the fast repo-wide enumerator and declares
- * `contentParsing: CONTENT_PARSING_SKIP`, which the driver checks against
- * `readsBlobs`. Both classifying contributors registered here read blob-keyed
- * tables, so they could not live in that lane even if it were desirable — and it
- * is not: that lane answers *what files are here*, this one answers *what does
- * the harness load*.
+ * `buildResourcePopulation` answers *what files are here*; this lane answers
+ * *what does the harness load*, which needs one `@`-import extent per root on top
+ * of the resources lanes' contributors. It registers those contributors under the
+ * same demand and parameters, so it files under the resources lanes' store key.
  *
  * ## Root discovery runs BEFORE the population, and that is structural
  *
@@ -21,7 +19,7 @@
  * `resource_realizations` under a tree-hash key IS the enumeration, and the
  * three columns the classification reads (`path`, `basenameLower`,
  * `isDirectory`) do not depend on content demand, on the blob tier, or on which
- * other contributors ran. So {@link readStoredRealizations} answers the root
+ * other contributors ran. So {@link readStoredMembership} answers the root
  * list outright whenever the store holds this tree's filesystem extent — under
  * the same key, the same reuse rule and the same unlistable-directory staleness
  * gate `populate` itself applies — and nothing is crawled, keyed or populated
@@ -136,14 +134,17 @@ import {
   claudeImportRootsFrom,
 } from './contributors/claude-import-extent.js';
 import { ClaudeRulesScopeContributor } from './contributors/claude-rules-scope.js';
-import { DECLINE_IGNORED, FilesystemExtentContributor } from './contributors/filesystem-extent.js';
+import {
+  DECLINE_IGNORED,
+  DEFAULT_CONTENT_DEMAND,
+  FilesystemExtentContributor,
+} from './contributors/filesystem-extent.js';
 import { crawlSourceFor, type CrawlSource } from './crawl-source.js';
 import {
   CONTENT_PARSING_SKIP,
-  DISCARD_BLOB_POPULATION,
   populate,
   populationOracles,
-  readStoredRealizations,
+  readStoredMembership,
   type PopulateOptions,
   type PopulateResult,
   type PopulationOutcome,
@@ -282,10 +283,9 @@ async function discoverImportRoots(
     // `readsBlobs: false`; the driver refuses the combination rather than
     // handing a blob reader empty tables.
     contentParsing: CONTENT_PARSING_SKIP,
-    // The stage never runs under the line above, so there is nothing to observe.
-    // Named rather than omitted, so dropping the skip becomes a visible edit
-    // here instead of a silence.
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
+    // The stage never runs under the line above, so there is nothing to observe:
+    // a no-op, stated here so dropping the skip is a visible edit, not a silence.
+    onBlobPopulation: () => undefined,
     ...(gitTracker !== undefined && { gitTracker }),
     // See the `@param collections` note: omitting these HERE while the real pass
     // passes them gives the two passes different store keys over one tree.
@@ -315,10 +315,8 @@ async function discoverImportRoots(
  *   a different `referenceDialect`, say — are two different questions, and the
  *   store refuses to answer one with the other
  * @param options.onBlobPopulation - Receives what the blob stage derived and
- *   what it REFUSED to derive. **Required**: a caller with nothing to do with
- *   the counts names `DISCARD_BLOB_POPULATION` rather than leaving the argument
- *   off, because a tree whose every document was declined as binary would
- *   otherwise populate as empty and report success
+ *   what it REFUSED to derive. **Required**: a tree whose every document was
+ *   declined as binary would otherwise populate as empty and report success
  * @returns The populated projection and its one provenance (see {@link claudeContextProvenance})
  */
 export async function buildClaudeContextPopulation(options: TreePopulationOptions): Promise<ClaudeContextPopulation> {
@@ -334,7 +332,8 @@ export async function buildClaudeContextPopulation(options: TreePopulationOption
   const sourceOnce = (): CrawlSource => (source ??= crawlSourceFor(root, []));
 
   const registry = new ContributorRegistry();
-  const filesystem = new FilesystemExtentContributor(sourceOnce);
+  // The resources lanes' demand, so this lane asks the store their question.
+  const filesystem = new FilesystemExtentContributor(sourceOnce, DEFAULT_CONTENT_DEMAND);
   registry.register(filesystem);
   // Gitignored paths are declined here exactly as they are in the discovery
   // pass — see the header for the ruling, and `claude-context-limits.ts` for the
@@ -345,7 +344,7 @@ export async function buildClaudeContextPopulation(options: TreePopulationOption
 
   // ⛔ The SAME object `populate` is handed below, built before the import
   // contributors are registered so the two store reads compute one key from one
-  // registry. See {@link readStoredRealizations} on why a later registration
+  // registry. See {@link readStoredMembership} on why a later registration
   // cannot make that key wrong, only make this read miss.
   const populateOptions = {
     root,
@@ -404,14 +403,14 @@ type ImportRoots =
  * produced. They do not depend on content demand, on the blob tier, or on which
  * other contributors ran. So the stored rows are not an approximation of the
  * discovery pass's answer; they are the same answer, and
- * `readStoredRealizations` applies the same key, the same reuse rule and the
+ * `readStoredMembership` applies the same key, the same reuse rule and the
  * same unlistable-directory staleness gate `populate` applies before serving
  * one.
  *
  * ⚠️ Only the filesystem contributor is asked for, deliberately: it is the one
- * whose rows are the enumeration, and requiring the classifiers' provenance too
- * would turn a `vat resources scan`'s stored extent — which is enough to answer
- * this — into a miss.
+ * whose rows are the enumeration, and at this point it is the only one the
+ * caller has registered — asking for a contributor not yet registered is a
+ * guaranteed miss.
  *
  * @param populateOptions - The options the real population will run under
  * @param filesystemId - The enumerating contributor's id, from the instance
@@ -423,10 +422,10 @@ async function importRoots(
   populateOptions: PopulateOptions,
   filesystemId: string,
 ): Promise<ImportRoots> {
-  const stored = await readStoredRealizations(populateOptions, [
+  const stored = await readStoredMembership(populateOptions, [
     { id: filesystemId, parameterSet: DECLINE_IGNORED },
   ]);
-  if (stored !== undefined) return { population: 'store', roots: claudeImportRootsFrom(stored) };
+  if (stored !== undefined) return { population: 'store', roots: claudeImportRootsFrom(stored.resourceRealizations) };
 
   const root = populateOptions.root;
   const source = await sharedEnumeration(root);

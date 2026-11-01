@@ -598,6 +598,23 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 
 ## Git and crawl
 
+### A one-file edit repopulates the whole tree — blocks the stable tag
+
+- **Severity:** Important · **Effort:** L · **User-visible:** yes (time, not answers)
+- **Mechanism:** every resources lane asks the store one question, keyed by the tree hash and the
+  git index. Any edit misses that key, and the miss re-populates the whole tree: every non-ignored
+  file read and hashed, the blob stage, the harness pass and a full blob-tier rewrite. Before, a
+  membership-only command (`vat resources scan`, `vat resources validate`) keyed nothing, so the
+  pre-commit edit loop is slower than it was.
+- **Reproduce:** on a committed tree with the store on, run `vat resources validate`, edit one
+  `.md`, run it again: the second run reports `population: derived` and costs a cold run.
+- **Where:** `buildResourcePopulation` in
+  [`resource-population.ts`](../../packages/resources/src/projection/resource-population.ts);
+  `populate` in [`merge.ts`](../../packages/resources/src/projection/merge.ts)
+- **Fix:** incremental repopulation — reuse stored blob facts for held content keys (which also
+  skips their blob-tier rewrite) and content keys for stat-unchanged paths. Its own change; the
+  stable tag waits for it. The release checklist is the gate: no tool reads this file.
+
 ### A tracked file deleted but not yet staged is enumerated, then reported unreadable
 
 - **Severity:** Important · **Effort:** S · **User-visible:** traced, not shown — the mechanism is

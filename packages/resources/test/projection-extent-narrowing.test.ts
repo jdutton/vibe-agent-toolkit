@@ -67,9 +67,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { ClosureExtentContributor } from '../src/projection/contributors/closure-extent.js';
-import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
+import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
-import { DISCARD_BLOB_POPULATION, populate } from '../src/projection/merge.js';
+import { populate } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 import { ExtentDeclarationSchema } from '../src/schemas/project-config.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
@@ -118,7 +118,7 @@ beforeEach(async () => {
  */
 async function populateCorpus(narrowed: boolean): Promise<Projection> {
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
   registry.register(new ClosureExtentContributor(EXTENT_NAME, SKILL_KIND));
 
   const declaration = {
@@ -130,7 +130,7 @@ async function populateCorpus(narrowed: boolean): Promise<Projection> {
     root: suite.tempDir,
     registry,
     parameters: { [`closure:${EXTENT_NAME}`]: declaration as unknown as JsonValue },
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
+    onBlobPopulation: () => undefined,
   });
   return projection;
 }

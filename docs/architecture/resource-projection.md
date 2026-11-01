@@ -529,9 +529,9 @@ which a bare commit key cannot express.
 - ✅ **Shipped: `claude_rule_patterns`, the thirteenth materialised table.**
   `ClaudeRulesScopeContributor` emits one row per `paths:` glob of one `.claude/rules` file — see
   §3's row and [zones.md §4](zones.md#the-claude_rule_patterns-table--four-statuses-one-witness)
-  for the key, the four statuses and why a witness rather than a match count. It is reachable from
-  `vat resources query` and `vat resources check` only: the `scan`/`validate` lane populates under
-  `CONTENT_PARSING_SKIP`, where registering a blob reader throws.
+  for the key, the four statuses and why a witness rather than a match count. Every resources lane
+  registers its producer, so it is populated whichever verb wrote the store; `vat resources query`
+  and `vat resources check` are the verbs that read it.
 - ✅ **Shipped: `harness_blob_facts` and `harness_blob_imports`, the fourteenth and fifteenth
   materialised tables** — a coding harness's own `@`-import extractor, injected-text measure and
   `paths:` reader, as content-keyed facts partitioned by `harness`

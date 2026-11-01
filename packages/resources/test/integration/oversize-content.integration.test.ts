@@ -24,7 +24,7 @@ import { readContentWithKey } from '../../src/content-key.js';
 import { describeBlobRefusals } from '../../src/projection/blob-refusals.js';
 import { RunContentCache } from '../../src/projection/content-cache.js';
 import { ContributorRegistry } from '../../src/projection/contributor.js';
-import { FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
+import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../../src/projection/crawl-source.js';
 import { populate, type BlobPopulationReport } from '../../src/projection/merge.js';
 import { ProjectionBuilder, REALIZATION_PROMOTION_UNREADABLE } from '../../src/projection/projection.js';
@@ -123,7 +123,7 @@ describe('populate over a tree holding one undecodable file', () => {
     await sparse(HUGE, MAX_DECODABLE_BYTES + 1);
 
     const registry = new ContributorRegistry();
-    registry.register(new FilesystemExtentContributor(() => crawlSourceFor(root, [])));
+    registry.register(new FilesystemExtentContributor(() => crawlSourceFor(root, []), DEFAULT_CONTENT_DEMAND));
     const reports: BlobPopulationReport[] = [];
     const { projection } = await populate({ root, registry, onBlobPopulation: (r) => reports.push(r) });
 

@@ -124,8 +124,9 @@ with `'deferred'` content, reading no bytes — purely to name the `@`-import co
 population then registers. It does **not** crawl twice: `sharedEnumeration()` performs one crawl and
 both passes replay it, which is sound only because both ask the extent the same question — same
 source, same `DECLINE_IGNORED` parameter set — differing solely in `contentDemand`, which decides
-what a row SAYS rather than which paths exist. Documented at the head of
-`claude-context-population.ts`.
+what a row SAYS rather than which paths exist. The real pass shares the resources lanes' store key,
+so a stored resources population answers the root list and the discovery pass is skipped.
+Documented at the head of `claude-context-population.ts`.
 
 `vat inventory` carries both lanes because `routeInventory()` dispatches four subject shapes and
 only one of them takes the projection. A marketplace root and `--user` fan out through

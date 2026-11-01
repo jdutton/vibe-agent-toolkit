@@ -15,7 +15,7 @@ import {
 import { RunContentCache } from '../src/projection/content-cache.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { extentContextId } from '../src/projection/contributors/context-id.js';
-import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
+import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { rootIdFor } from '../src/projection/identity.js';
 import { afterClosurePromotion, populate } from '../src/projection/merge.js';
@@ -408,7 +408,7 @@ describe('populateBlobs', () => {
       { path: 'src/b.ts', content: '/** @param gadgets - never imported */\nexport const b = 1;\n' },
     ], ['src']);
     const registry = new ContributorRegistry();
-    registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
+    registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
 
     const { projection } = await populate({ root: suite.tempDir, registry, onBlobPopulation: () => undefined });
 

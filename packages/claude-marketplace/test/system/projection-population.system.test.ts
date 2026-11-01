@@ -106,6 +106,7 @@ import {
   ClosureNonConvergenceError,
   ContributorRegistry,
   crawlSourceFor,
+  DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
   GitExtentContributor,
   PackageExtentContributor,
@@ -224,7 +225,7 @@ function buildRegistry(skillPaths: readonly string[]): {
     ids.push(contributor.id);
   };
 
-  add(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
+  add(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
   add(new GitExtentContributor());
   add(new PackageExtentContributor());
 

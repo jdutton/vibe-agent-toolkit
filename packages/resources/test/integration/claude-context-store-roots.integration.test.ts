@@ -40,7 +40,7 @@ import {
   ClaudeImportExtentContributor,
 } from '../../src/projection/contributors/claude-import-extent.js';
 import { ClaudeRulesScopeContributor } from '../../src/projection/contributors/claude-rules-scope.js';
-import { DISCARD_BLOB_POPULATION, type PopulationCache } from '../../src/projection/merge.js';
+import { type PopulationCache } from '../../src/projection/merge.js';
 import type { Projection } from '../../src/projection/projection.js';
 import type { ExtentKey, ExtentScopedRows } from '../../src/projection/store.js';
 import { FakeProjectionStore } from '../fake-projection-store.js';
@@ -76,7 +76,7 @@ async function populateThrough(store: FakeProjectionStore): Promise<ClaudeContex
   return buildClaudeContextPopulation({
     root: root ?? '',
     cache,
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
+    onBlobPopulation: () => undefined,
   });
 }
 
@@ -139,7 +139,7 @@ describe('buildClaudeContextPopulation root discovery', () => {
   });
 
   it('keeps the pre-read key equal to the population key — the tripwire', async () => {
-    // `readStoredRealizations` is handed the SAME options object `populate`
+    // `readStoredMembership` is handed the SAME options object `populate`
     // gets, before the classifiers and one import contributor per root have
     // been registered. The two keys can only diverge if one of those later
     // registrations declares a `registrationQuestion`, which `storeKeyFor`

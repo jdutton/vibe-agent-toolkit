@@ -18,7 +18,7 @@ const suite = setupSubdirTestSuite('resource-extent-source-');
 async function extentSourceOver(tree: { repository: boolean }): Promise<CrawlSourceKind> {
   await writeFile(safePath.join(suite.tempDir, 'a.md'), '# A\n', 'utf-8');
   if (tree.repository) runGitOrThrow(['init', '--quiet'], { cwd: suite.tempDir });
-  const { extentSource } = await buildResourcePopulation({ outputs: [], root: suite.tempDir });
+  const { extentSource } = await buildResourcePopulation({ outputs: [], onBlobPopulation: () => undefined, root: suite.tempDir });
   return extentSource;
 }
 

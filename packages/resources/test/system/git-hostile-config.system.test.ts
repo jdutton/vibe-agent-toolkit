@@ -98,7 +98,7 @@ import { computeContentKey, readContentWithKey } from '../../src/content-key.js'
 import { ParseCache } from '../../src/parse-cache.js';
 import { populateBlobs } from '../../src/projection/blob-population.js';
 import { RunContentCache, type ContentCacheStats } from '../../src/projection/content-cache.js';
-import { FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
+import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
 import { GitExtentContributor } from '../../src/projection/contributors/git-extent.js';
 import {
   crawlSourceFor,
@@ -415,7 +415,7 @@ async function runArm(root: string, useGitSource: boolean): Promise<Arm> {
   await tracker.initialize({ includeUntracked: true });
   const cache = new RunContentCache();
   const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: cache });
-  const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, [])).contribute(builder.base(), null);
+  const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(builder.base(), null);
   for (const row of contribution.contexts) builder.addContext(row);
   for (const row of contribution.resources) builder.addResource(row);
   for (const row of contribution.realizations) builder.addRealization(row);

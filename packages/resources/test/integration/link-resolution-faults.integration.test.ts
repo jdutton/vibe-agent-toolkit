@@ -28,6 +28,7 @@ import {
   EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT,
   EXTENT_SYMLINK_TARGET_UNREADABLE,
   EXTENT_SYMLINK_TARGET_UNRESOLVED,
+  DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
 } from '../../src/projection/contributors/filesystem-extent.js';
 import { FilesystemCrawlSource } from '../../src/projection/crawl-source.js';
@@ -238,7 +239,7 @@ describe.skipIf(CAPABILITY === null)('the filesystem extent, resolving a link it
     createSymlink(CAPABILITY, 'docs/plain.md', safePath.join(root, 'alias.md'));
     createSymlink(CAPABILITY, 'docs/plain.md', safePath.join(root, 'other.md'));
     if (refuse !== undefined) refuseRealpath(root, refuse.matches, refuse.errno, { once: refuse.once ?? false });
-    return { root, run: () => buildExtentContribution(root, new FilesystemExtentContributor((at) => new FilesystemCrawlSource(at, []))) };
+    return { root, run: () => buildExtentContribution(root, new FilesystemExtentContributor((at) => new FilesystemCrawlSource(at, []), DEFAULT_CONTENT_DEMAND)) };
   }
 
   // A link that resolves to nothing is the dangling-link code with no fault class; one the OS
@@ -333,7 +334,7 @@ describe.skipIf(CAPABILITY === null)('the filesystem extent, resolving a link it
     createSymlink(CAPABILITY, 'docs/plain.md', safePath.join(root, 'other.md'));
     const refused = refuseRealpath(parent, (path) => path === away, errno);
 
-    const { contribution } = await buildExtentContribution(root, new FilesystemExtentContributor((at) => new FilesystemCrawlSource(at, [])));
+    const { contribution } = await buildExtentContribution(root, new FilesystemExtentContributor((at) => new FilesystemCrawlSource(at, []), DEFAULT_CONTENT_DEMAND));
 
     expect(contribution.conditions.find((condition) => condition.path === 'abs.md')?.code).toBe(EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT);
     expect(contribution.conditions.find((condition) => condition.path === 'other.md')?.code).toBe(EXTENT_SYMLINK_NOT_REALIZED);

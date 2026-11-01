@@ -172,25 +172,6 @@ export const CONTENT_PARSING_SKIP = 'skip';
 export type ContentParsing = typeof CONTENT_PARSING_DERIVE | typeof CONTENT_PARSING_SKIP;
 
 /**
- * The {@link PopulateOptions.onBlobPopulation} observer that keeps nothing — the
- * explicit spelling of "this run does not want the blob stage's counts".
- *
- * Naming it is the point, exactly as it is for `NO_GIT_TRACKER`. The counts
- * record what the stage REFUSED to derive, and while the option was optional
- * every production run discarded them by accident. A run that discards them on
- * purpose — one that skips the stage outright, or a test asserting something
- * else entirely — now says so at the call site.
- *
- * ⚠️ Not a licence to reach for this on a lane that derives blobs. If the stage
- * runs and its refusals go nowhere, the corpus can be entirely undeliverable and
- * the command still exits 0 saying nothing.
- */
-export const DISCARD_BLOB_POPULATION: (result: BlobPopulationReport) => void = () => {
-  // Intentionally empty — see the docstring. The whole value of this constant is
-  // that it appears at a call site.
-};
-
-/**
  * What the blob-derivation stage did across a whole `populate()` — one run
  * between the strata, and optionally a second after the closure fixpoint.
  *
@@ -328,11 +309,11 @@ export interface PopulateOptions {
    * every document was declined as binary produced an empty `blobs` table, exit
    * 0, and no output.
    *
-   * The same reasoning `NO_GIT_TRACKER` is built on applies here and reaches the
-   * same shape: a caller that genuinely wants the counts thrown away says
-   * {@link DISCARD_BLOB_POPULATION} out loud, in a form that greps, rather than
-   * arriving in that state by leaving an argument off. An omission is now a type
-   * error; a discard is a decision with a name.
+   * An omission is now a type error. A caller that genuinely wants the counts
+   * thrown away passes its own no-op at the call site, beside the reason — there
+   * is no shared discard constant, because every lane that derives blobs now has
+   * a real observer and the one that skips the stage (claude-context discovery)
+   * says why at its own call.
    */
   onBlobPopulation: (result: BlobPopulationReport) => void;
   /**
@@ -942,7 +923,7 @@ function registrationQuestions(options: PopulateOptions): Record<string, JsonVal
  * @param options - The run's registry and parameters
  * @returns One entry per registered contributor
  */
-function requestedContributors(options: PopulateOptions): readonly RequestedContributor[] {
+export function requestedContributors(options: PopulateOptions): readonly RequestedContributor[] {
   return [...options.registry.byStratum('base'), ...options.registry.byStratum('closure')]
     .map((contributor) => ({
       id: contributor.id,
@@ -1008,7 +989,7 @@ async function readCachedProjection(
  * The extent half of a store hit: key, reuse rule, narrowing, staleness gate.
  *
  * Split out of {@link readCachedProjection} because one caller needs exactly
- * this and nothing after it — see {@link readStoredRealizations} — and two
+ * this and nothing after it — see {@link readStoredMembership} — and two
  * copies of the four steps is how one of them would lose the unlistable gate.
  * The blob tier is deliberately NOT here: it belongs to the run that reads blob
  * tables, and a caller asking only *which paths are in this tree* has no use
@@ -1062,10 +1043,28 @@ async function readStoredExtent(
 }
 
 /**
+ * A tree's membership as the store holds it: the realization and condition rows
+ * of the requested contributors' contexts, and the outcome that says the store
+ * served them.
+ */
+export interface StoredMembership {
+  readonly resourceRealizations: readonly ResourceRealizationRow[];
+  readonly realizationConditions: readonly RealizationConditionRow[];
+  /** Always the hit: this read mints it, because no `populate()` runs on this path. */
+  readonly outcome: PopulationOutcome;
+}
+
+/**
  * What the store already knows this tree REALIZES, for a subset of the run's
  * contributors — without populating anything.
  *
  * ## Why a lane would ask this instead of populating
+ *
+ * Membership is a VIEW over the one population every resources lane shares:
+ * `buildResourcePopulation` registers the full lane's contributors under the full
+ * lane's key, and reads only realizations and conditions. So the extent alone
+ * answers it, and the blob tier is not read: a stored extent whose blob key was
+ * evicted is a membership hit and a full-lane miss.
  *
  * A lane whose contributor set is not known until something about the tree has
  * been read has to read the tree twice: once to find out what to register, and
@@ -1095,14 +1094,14 @@ async function readStoredExtent(
  * @param options - The options the caller will populate with, unmodified
  * @param requested - The already-known contributors whose contexts must be
  *   stored, each with the parameter set `options.parameters` gives it
- * @returns The realization rows of exactly those contributors' contexts, or
- *   `undefined` when the store cannot answer — in which case the caller derives
- *   the list the way it always did
+ * @returns The realization and condition rows of exactly those contributors'
+ *   contexts with the hit outcome, or `undefined` when the store cannot answer —
+ *   in which case the caller populates
  */
-export async function readStoredRealizations(
+export async function readStoredMembership(
   options: PopulateOptions,
   requested: readonly RequestedContributor[],
-): Promise<readonly ResourceRealizationRow[] | undefined> {
+): Promise<StoredMembership | undefined> {
   if (options.cache === undefined) return undefined;
 
   // The two values `populate` derives before it asks the store, derived the same
@@ -1111,7 +1110,12 @@ export async function readStoredRealizations(
   // instance, which `populate` builds for itself.
   const routing = createCollectionMimeResolver(options.collections);
   const extent = await readStoredExtent(options, rootIdFor(options.root), routing, requested);
-  return extent?.resourceRealizations;
+  if (extent === undefined) return undefined;
+  return {
+    resourceRealizations: extent.resourceRealizations,
+    realizationConditions: extent.realizationConditions,
+    outcome: populationOutcome('hit'),
+  };
 }
 
 /**

@@ -38,9 +38,9 @@ import { openSqliteProjectionStore } from '@vibe-agent-toolkit/projection-sqlite
 import {
   ClosureExtentContributor,
   ContributorRegistry,
-  DISCARD_BLOB_POPULATION,
   exportProjection,
   crawlSourceFor,
+  DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
   populate,
   serializeProjection,
@@ -104,7 +104,7 @@ function registryFor(question) {
     throw new Error(`unknown question "${question}"; expected one of ${Object.keys(QUESTIONS).join(', ')}.`);
   }
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, 'source')));
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, 'source'), DEFAULT_CONTENT_DEMAND));
   for (const name of closures) registry.register(new ClosureExtentContributor(name, SKILL_KIND));
   return registry;
 }
@@ -137,7 +137,7 @@ try {
     onContributorTiming: (timing) => {
       contributorRuns.push(`${timing.contributorId}@${timing.pass}`);
     },
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
+    onBlobPopulation: () => undefined,
     // The corpus is a fixture nobody edits mid-run, and `treeHash` is the
     // test's own label rather than a git tree, so the tree never moves.
     cache: { store, treeHash, treeUnchanged: () => true },

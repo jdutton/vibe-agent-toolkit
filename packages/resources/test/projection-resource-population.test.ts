@@ -7,7 +7,8 @@ import { compareCodeUnits, createSymlink, safePath, symlinkCapability, toForward
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { DISCARD_BLOB_POPULATION } from '../src/projection/merge.js';
+import { buildClaudeContextPopulation } from '../src/projection/claude-context-population.js';
+import { type PopulationCache } from '../src/projection/merge.js';
 import {
   buildResourcePopulation,
   buildResourceProjection,
@@ -21,7 +22,7 @@ import type {
 } from '../src/projection/store.js';
 import { ResourceRegistry, type RegistryCrawl } from '../src/resource-registry.js';
 
-import { FakeProjectionStore } from './fake-projection-store.js';
+import { extentKeyOf, FakeProjectionStore } from './fake-projection-store.js';
 import { setupSubdirTestSuite } from './test-helpers.js';
 
 /** The plain markdown member every fixture below starts from. */
@@ -98,7 +99,7 @@ async function buildIgnoredFixture(): Promise<GitTracker> {
  */
 async function populateCapturing(tracker: GitTracker): Promise<CapturingStore> {
   const store = new CapturingStore();
-  await buildResourcePopulation({ outputs: [],
+  await buildResourcePopulation({ outputs: [], onBlobPopulation: () => undefined,
     root: suite.tempDir,
     gitTracker: tracker,
     cache: { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH },
@@ -108,7 +109,7 @@ async function populateCapturing(tracker: GitTracker): Promise<CapturingStore> {
 
 /** The population as root-relative, forward-slashed paths — the readable unit. */
 async function populationOf(gitTracker?: GitTracker): Promise<string[]> {
-  const { paths } = await buildResourcePopulation({ outputs: [],
+  const { paths } = await buildResourcePopulation({ outputs: [], onBlobPopulation: () => undefined,
     root: suite.tempDir,
     ...(gitTracker !== undefined && { gitTracker }),
   });
@@ -147,7 +148,7 @@ describe('buildResourcePopulation', () => {
     const cache = { store: new ReorderingStore(), treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
     const source: ResourcePopulationSource = {
       root: suite.tempDir,
-      enumerate: (root, outputs) => buildResourcePopulation({ outputs, root, cache }),
+      enumerate: (root, outputs) => buildResourcePopulation({ outputs, root, cache, onBlobPopulation: () => undefined }),
     };
     const crawlOnce = (): Promise<RegistryCrawl> =>
       new ResourceRegistry({ baseDir: suite.tempDir }).crawl({
@@ -171,8 +172,8 @@ describe('buildResourcePopulation', () => {
     createSymlink(cap, 'missing-two.md', safePath.join(suite.tempDir, 'dangling-y.md'));
     const cache = { store: new ReorderingStore(), treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
 
-    const written = await buildResourcePopulation({ outputs: [], root: suite.tempDir, cache });
-    const hit = await buildResourcePopulation({ outputs: [], root: suite.tempDir, cache });
+    const written = await buildResourcePopulation({ outputs: [], onBlobPopulation: () => undefined, root: suite.tempDir, cache });
+    const hit = await buildResourcePopulation({ outputs: [], onBlobPopulation: () => undefined, root: suite.tempDir, cache });
 
     expect(hit.outcome.stored).toBe('hit');
     expect(written.conditions.map((row) => row.path)).toEqual(['dangling-y.md', 'dangling-z.md']);
@@ -184,9 +185,9 @@ describe('buildResourcePopulation', () => {
     const store = new FakeProjectionStore();
     const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
 
-    const uncached = await buildResourcePopulation({ outputs: [], root: suite.tempDir });
-    const written = await buildResourcePopulation({ outputs: [], root: suite.tempDir, cache });
-    const hit = await buildResourcePopulation({ outputs: [], root: suite.tempDir, cache });
+    const uncached = await buildResourcePopulation({ outputs: [], onBlobPopulation: () => undefined, root: suite.tempDir });
+    const written = await buildResourcePopulation({ outputs: [], onBlobPopulation: () => undefined, root: suite.tempDir, cache });
+    const hit = await buildResourcePopulation({ outputs: [], onBlobPopulation: () => undefined, root: suite.tempDir, cache });
 
     expect(uncached.outcome).toEqual({ population: 'derived', stored: 'no-store' });
     expect(written.outcome).toEqual({ population: 'derived', stored: 'written' });
@@ -205,13 +206,9 @@ describe('buildResourcePopulation', () => {
     expect(await populationOf()).toEqual([DOC_A, 'docs/b.md']);
   });
 
-  it('still enumerates a rules file WITHOUT registering a blob reader', async () => {
-    // ⛔ The guard on the lane decision next door. This lane runs under
-    // `contentParsing: CONTENT_PARSING_SKIP`, and `populate()` THROWS when a
-    // registered contributor declares `readsBlobs` — so registering the rules
-    // classifier in `resourceContributors` rather than in the projection lane
-    // alone would take `vat resources validate` out with it. A file list is
-    // still a file list here.
+  it('enumerates a rules file as a member like any other', async () => {
+    // The rules classifier is registered on this lane too (one question for
+    // every lane); it classifies, it never narrows membership.
     await write('.claude/rules/scoped.md', RULE_WITH_ONE_DEAD_GLOB);
     await write(DOC_A, '# A\n');
 
@@ -276,13 +273,13 @@ class CapturingStore implements ProjectionStore {
   }
 
   async writeBlobFacts(_rows: BlobScopedRows): Promise<void> {
-    // Unreachable under `CONTENT_PARSING_SKIP`; nothing to record.
+    // The blob tier is not what these tests observe; nothing to record.
   }
 
   async readBlobFacts(_contentKeys: readonly string[]): Promise<BlobScopedRows> {
-    // Loud rather than a fiction: this lane declares it reads no blob table, so
-    // a call here is that declaration being false and must not return [].
-    throw new Error('the resource population lane must never read blob facts');
+    // Loud rather than a fiction: `readExtent` never answers, so no path reaches
+    // the coverage check, and a call here would mean one did.
+    throw new Error('a store that never answers an extent read must never be asked for blob facts');
   }
 
   async close(): Promise<void> {
@@ -341,7 +338,7 @@ describe('buildResourceProjection', () => {
     await write(DOC_A, '# A\n');
     const store = new FakeProjectionStore();
     const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
-    const options = { root: suite.tempDir, cache, onBlobPopulation: DISCARD_BLOB_POPULATION };
+    const options = { root: suite.tempDir, cache, onBlobPopulation: () => undefined };
 
     const derived = await buildResourceProjection(options);
     const served = await buildResourceProjection(options);
@@ -350,19 +347,16 @@ describe('buildResourceProjection', () => {
     expect(served.outcome).toEqual({ population: 'store', stored: 'hit' });
   });
 
-  it('derives the blob rows its sibling deliberately never pays for', async () => {
-    // The whole reason this lane exists. `buildResourcePopulation` runs under
-    // `contentParsing: CONTENT_PARSING_SKIP` and `contentDemand: 'deferred'`, so
-    // a query about headings, links or sections against ITS projection would
-    // return nothing and report success. These counts are what make the query
-    // surface answerable at all — and they are asserted as counts rather than as
-    // "not undefined", because four empty tables is exactly the failure shape.
+  it('derives the blob rows a query reads', async () => {
+    // These counts are what make the query surface answerable at all — asserted
+    // as counts rather than as "not undefined", because four empty tables is
+    // exactly the failure shape.
     await write(DOC_A, '# A\n\nSee [b](./docs/b.md).\n');
     await write('docs/b.md', '# B\n');
 
     const { projection } = await buildResourceProjection({
       root: suite.tempDir,
-      onBlobPopulation: DISCARD_BLOB_POPULATION,
+      onBlobPopulation: () => undefined,
     });
 
     expect(projection.blobs.length).toBeGreaterThan(0);
@@ -384,7 +378,7 @@ describe('buildResourceProjection', () => {
 
     const { projection } = await buildResourceProjection({
       root: suite.tempDir,
-      onBlobPopulation: DISCARD_BLOB_POPULATION,
+      onBlobPopulation: () => undefined,
     });
     const realizedFiles = projection.resourceRealizations
       .filter((row) => !row.isDirectory && row.exists && !row.gitignored)
@@ -404,7 +398,7 @@ describe('buildResourceProjection', () => {
     const { projection } = await buildResourceProjection({
       root: suite.tempDir,
       gitTracker: tracker,
-      onBlobPopulation: DISCARD_BLOB_POPULATION,
+      onBlobPopulation: () => undefined,
     });
     const realized = projection.resourceRealizations.map((row) => toForwardSlash(row.path));
 
@@ -415,18 +409,17 @@ describe('buildResourceProjection', () => {
     expect(realized).toContain(UNCOMMITTED);
   });
 
-  it('answers a rule-pattern question the population lane cannot ask at all', async () => {
-    // The lane decision. `ClaudeRulesScopeContributor` was registered only in
-    // the claude-context lane, so `vat resources query` and `vat resources
-    // check` — which populate through THIS function — saw an empty
-    // `claude_rule_patterns` table and reported it as a corpus with no dead
-    // globs. An empty table and a clean corpus are the same SQL answer.
+  it('answers a rule-pattern question', async () => {
+    // `ClaudeRulesScopeContributor` was once registered only in the
+    // claude-context lane, so `vat resources query` and `vat resources check` —
+    // which populate through THIS function — saw an empty `claude_rule_patterns`
+    // table and reported it as a corpus with no dead globs.
     await write('.claude/rules/scoped.md', RULE_WITH_ONE_DEAD_GLOB);
     await write('docs/guide.md', '# Guide\n');
 
     const { projection } = await buildResourceProjection({
       root: suite.tempDir,
-      onBlobPopulation: DISCARD_BLOB_POPULATION,
+      onBlobPopulation: () => undefined,
     });
 
     expect(projection.claudeRulePatterns.map((row) => [row.pattern, row.status])).toEqual([
@@ -434,5 +427,63 @@ describe('buildResourceProjection', () => {
       ['gone/**/*.md', 'inert'],
     ]);
     expect(projection.claudeRulePatterns[0]?.witnessPath).toBe('docs/guide.md');
+  });
+});
+
+/** A store double that also records the key of every extent read, in order. */
+class KeyRecordingStore extends FakeProjectionStore {
+  readonly keysRead: string[] = [];
+
+  override readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
+    this.keysRead.push(extentKeyOf(key));
+    return super.readExtent(key);
+  }
+}
+
+describe('one question for every resources lane', () => {
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(suite.beforeEach);
+
+  it('files the membership, query and lens lanes under one store key', async () => {
+    await write(DOC_A, '# A\n');
+    await write('CLAUDE.md', '# Root\n');
+    const keyOf = async (run: (cache: PopulationCache) => Promise<unknown>): Promise<string | undefined> => {
+      const store = new KeyRecordingStore();
+      await run({ store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH });
+      return store.keysRead.at(-1);
+    };
+    const root = suite.tempDir;
+    const onBlobPopulation = (): void => undefined;
+
+    const membership = await keyOf((cache) => buildResourcePopulation({ outputs: [], root, cache, onBlobPopulation }));
+    const query = await keyOf((cache) => buildResourceProjection({ root, cache, onBlobPopulation }));
+    const lens = await keyOf((cache) => buildClaudeContextPopulation({ root, cache, onBlobPopulation }));
+
+    expect(membership).toBeDefined();
+    expect(query).toBe(membership);
+    expect(lens).toBe(membership);
+  });
+
+  it('serves membership from the store while the full lane misses on an evicted blob, then writes', async () => {
+    // A count-window eviction of a tracked NON-data file's blob key: the extent
+    // is still stored, so membership — which reads no blob table — hits, and the
+    // full lane's coverage gate fails, re-derives and re-writes.
+    const gitTracker = await buildIgnoredFixture();
+    const store = new FakeProjectionStore();
+    const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
+    const options = { root: suite.tempDir, gitTracker, cache, onBlobPopulation: (): void => undefined };
+    const { projection } = await buildResourceProjection(options);
+    const evicted = projection.resourceRealizations.find((row) => row.path === COMMITTED)?.contentKey;
+    expect(evicted).toEqual(expect.any(String));
+    store.forgetBlobFacts(evicted ?? '');
+
+    const membership = await buildResourcePopulation({ ...options, outputs: [] });
+    const full = await buildResourceProjection(options);
+    const healed = await buildResourceProjection(options);
+
+    expect(membership.outcome).toEqual({ population: 'store', stored: 'hit' });
+    expect(full.outcome).toEqual({ population: 'derived', stored: 'written' });
+    expect(healed.outcome).toEqual({ population: 'store', stored: 'hit' });
   });
 });

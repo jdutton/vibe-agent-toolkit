@@ -30,7 +30,7 @@ import { buildClaudeContextPopulation } from '../src/projection/claude-context-p
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
-import { CONTENT_PARSING_SKIP, DISCARD_BLOB_POPULATION, populate } from '../src/projection/merge.js';
+import { CONTENT_PARSING_SKIP, populate } from '../src/projection/merge.js';
 import { createCollectionMimeResolver } from '../src/projection/realizations.js';
 import type {
   BlobScopedRows,
@@ -142,7 +142,7 @@ async function storeKeyFor(
     root: fixture.root(),
     registry,
     contentParsing: CONTENT_PARSING_SKIP,
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
+    onBlobPopulation: () => undefined,
     cache: { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH },
     ...(collections !== undefined && { collections }),
   });
@@ -253,7 +253,7 @@ async function ambientKeysAcrossBothPasses(
   await buildClaudeContextPopulation({
     root: twoPass.root(),
     cache: { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH },
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
+    onBlobPopulation: () => undefined,
     ...(collections !== undefined && { collections }),
   });
 

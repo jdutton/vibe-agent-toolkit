@@ -94,7 +94,7 @@ beforeAll(() => {
 afterAll(context.cleanup);
 
 describe('vat validate and the population its surfaces share', () => {
-  it('the two in-process surfaces derive and write once between them; the checks child adds one of each', async () => {
+  it('the resources phase derives and writes once, and the skills phase and the checks child are served it', async () => {
     const storeDir = context.createTempDir();
     const timing = context.createTempDir();
 
@@ -120,18 +120,13 @@ describe('vat validate and the population its surfaces share', () => {
     // the default moved.
     expect(storeFilesUnder(storeDir)).toHaveLength(1);
 
-    // The claim itself. The two in-process lanes (resources, skills) consulted
-    // the store; only one of them had to derive anything, and the extent the
-    // first wrote answered the second.
-    //
-    // ⚠️ Plus ONE of each from the `checks` phase: a supervised CHILD (it
-    // inherits `VAT_CRAWL_TIMING`) that asks the full-lane question, which is a
-    // different store key from the membership question the two surfaces share —
-    // so on a cold store it derives and writes its own. When every resources
-    // lane asks one question, the child reads what the resources phase wrote and
-    // these become 1 write and 1 derivation again.
-    expect(calls[STORE_WRITE]).toBe(2);
-    expect(calls[STORE_READ]).toBe(3);
-    expect(calls[FILESYSTEM_EXTENT]).toBe(2);
+    // The claim itself. Every resources lane asks one question, so the extent
+    // the resources phase wrote answers the skills phase AND the `checks` child
+    // (a supervised child; it inherits `VAT_CRAWL_TIMING`): one derivation, one
+    // write. Four reads: the cold membership read, the `populate()` it falls
+    // through to, then one hit each for skills and the child.
+    expect(calls[STORE_WRITE]).toBe(1);
+    expect(calls[STORE_READ]).toBe(4);
+    expect(calls[FILESYSTEM_EXTENT]).toBe(1);
   });
 });
