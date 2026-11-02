@@ -87,10 +87,14 @@
 - **`vat skills build`, `vat claude plugin build`, `vat skills package`, `vat agent build` and
   `vat agent install` print a `TREE_CLEANUP_INCOMPLETE` warning on stderr** when they succeed but the OS
   would not remove the previous output they replaced. It was only in the document.
+- **`vat build`'s `claude` phase prints only the errors of its shipped-links check without
+  `--verbose`**, as every other lane does; it printed every warning and info finding. `-v` prints them.
 - **`vat resources check` prints a `TREE_CLEANUP_INCOMPLETE` warning without `--verbose`**, as every other
   verb does; it was collapsed into the "not shown" hint.
 - **Every verb prints each `TREE_CLEANUP_INCOMPLETE` warning its document carries on stderr, once**, at
-  every verbosity, after its other findings. `vat claude marketplace publish`, `vat skill test run`,
+  every verbosity, when it publishes the document: after the findings it printed first, and before
+  any it prints afterwards (`vat audit` prints its findings after the document, so a clone it could
+  not remove is said above them). `vat claude marketplace publish`, `vat skill test run`,
   `vat skills list` and `vat corpus scan` published it in the document and printed nothing; `vat build`
   printed a refused `claude` phase's leftover twice. Under a generic `--format text` document, which
   already lists it, stderr does not repeat it.

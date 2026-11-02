@@ -183,6 +183,13 @@ function isPlainPattern(id) {
 }
 
 /**
+ * Parents whose child statement can be deleted outright. Any other parent (`if`, `else`, a loop, a
+ * label) takes the declaration as its unbraced body, and deleting it hands that body to the next
+ * statement.
+ */
+const STATEMENT_LISTS = new Set(['Program', 'BlockStatement', 'StaticBlock', 'SwitchCase', 'TSModuleBlock']);
+
+/**
  * The statement to remove for a `require()` / `import()` / `await import()` binding of a removable
  * module whose every binding is dead, or null to keep it.
  *
@@ -200,6 +207,7 @@ function deadLoadingDeclaration(sourceCode, declarator) {
   const module = loadedModuleOf(declarator.init);
   const statement = declarator.parent;
   const removable = REMOVABLE_MODULES.has(module)
+    && STATEMENT_LISTS.has(statement.parent?.type)
     && statement.declarations.length === 1
     && statement.parent?.type !== 'ExportNamedDeclaration'
     && (declarator.id.type === 'Identifier' || isPlainPattern(declarator.id));

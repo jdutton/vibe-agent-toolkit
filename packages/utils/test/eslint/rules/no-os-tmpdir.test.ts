@@ -107,6 +107,20 @@ describe('os.tmpdir() is rewritten to a free call, however the namespace was bou
     expect(lint(output, cfg)).toStrictEqual([]);
   });
 
+  // A `var` can be the unbraced body of a control statement; removing it would make the NEXT
+  // statement that body (`if (x) main();`), a silent change in what the program does.
+  it.each([
+    ['if', 'if (process.env.DEBUG) var os = require("node:os");'],
+    ['else', 'if (process.env.DEBUG) {} else var os = require("node:os");'],
+    ['while', 'while (retry()) var os = require("node:os");'],
+    ['for', 'for (;retry();) var os = require("node:os");'],
+    ['a label', 'tag: var os = require("node:os");'],
+  ])('a dead require() that is the unbraced body of %s is kept', (_label, declaration) => {
+    const source = `import { normalizedTmpdir } from '${SAFE_FS_MODULE}';\n${declaration}\nmain();\nexport const a = normalizedTmpdir();`;
+
+    expect(fix(source, cfg).output).toContain(declaration);
+  });
+
   it.each([
     ['an unrelated object literal', "const os = { tmpdir: () => '/t' };\nexport function f() { return os.tmpdir(); }"],
     ['the same method on another receiver', "const env = { tmpdir: () => '/t' };\nexport function f() { return env.tmpdir(); }"],

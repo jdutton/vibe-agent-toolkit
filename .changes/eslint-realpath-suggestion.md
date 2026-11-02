@@ -35,7 +35,8 @@
   (`import { type join, resolve } from 'node:path'`); a declaration's only named specifier, dead,
   beside a live default or namespace binding (`tmpdir` in `import os, { tmpdir } from 'node:os'` while
   `os` is still used); and a `require()` / `import()` / `import x = require()` binding that is
-  exported, declared beside a second declarator (`const os = require('node:os'), n = 1`), assigned
+  exported, the unbraced body of an `if`/`else`/loop/label (`if (x) var os = require('node:os')`:
+  removing it would make the next statement that body), declared beside a second declarator (`const os = require('node:os'), n = 1`), assigned
   again after its declaration, or destructured with a default value, a rest element, a computed key
   or a nested pattern.
 - **Every fix and suggestion of the call rules and `no-raw-node-path`/`no-manual-path-normalize`
