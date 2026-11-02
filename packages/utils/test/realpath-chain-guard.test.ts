@@ -85,7 +85,7 @@ describe('the link-following primitives ask the kernel only about a chain read a
     const path = safePath.join(root, start);
 
     expect(() => realpathNativeSync(path, root)).toThrow(expect.objectContaining(refused));
-    expect(() => normalizePath(path, root)).toThrow(expect.objectContaining(refused));
+    expect(() => normalizePath(path, { within: root })).toThrow(expect.objectContaining(refused));
     expect(() => canonicalPath(path, root)).toThrow(expect.objectContaining(refused));
     expect(() => followedStatSync(path, root)).toThrow(expect.objectContaining(refused));
     expect(() => followedKindSync(path, root)).toThrow(expect.objectContaining(refused));

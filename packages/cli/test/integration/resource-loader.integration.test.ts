@@ -46,8 +46,8 @@ function expectSingleResource(resources: Array<{ headings: Array<{ text: string 
  * Helper to assert result paths match expected values
  */
 function expectProjectPaths(result: { scanPath: string; projectRoot: string }, expectedPath: string): void {
-  expect(normalizePath(result.scanPath, result.scanPath)).toBe(normalizePath(expectedPath, expectedPath));
-  expect(normalizePath(result.projectRoot, result.projectRoot)).toBe(normalizePath(expectedPath, expectedPath));
+  expect(normalizePath(result.scanPath, { within: result.scanPath })).toBe(normalizePath(expectedPath, { within: expectedPath }));
+  expect(normalizePath(result.projectRoot, { within: result.projectRoot })).toBe(normalizePath(expectedPath, { within: expectedPath }));
 }
 
 /**
@@ -115,8 +115,8 @@ describe('loadResourcesWithConfig (integration test)', () => {
         const docsPath = safePath.join(projectDir, 'docs');
         const result = await loadResourcesWithConfig(docsPath, projectDir, logger);
 
-        expect(normalizePath(result.scanPath, result.scanPath)).toBe(normalizePath(docsPath, docsPath));
-        expect(normalizePath(result.projectRoot, result.projectRoot)).toBe(normalizePath(projectDir, projectDir));
+        expect(normalizePath(result.scanPath, { within: result.scanPath })).toBe(normalizePath(docsPath, { within: docsPath }));
+        expect(normalizePath(result.projectRoot, { within: result.projectRoot })).toBe(normalizePath(projectDir, { within: projectDir }));
         expect(result.config).toBeDefined();
 
         // Scoped to docs/ (so README.md and other/notes.md are out) AND the
@@ -138,7 +138,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
         const otherPath = safePath.join(projectDir, 'other');
         const result = await loadResourcesWithConfig(otherPath, projectDir, logger);
 
-        expect(normalizePath(result.scanPath, result.scanPath)).toBe(normalizePath(otherPath, otherPath));
+        expect(normalizePath(result.scanPath, { within: result.scanPath })).toBe(normalizePath(otherPath, { within: otherPath }));
 
         // Should find other/notes.md
         expectSingleResource(result.registry.getAllResources(), 'Notes');
@@ -235,7 +235,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
 
       const result = await loadResourcesWithConfig(isolatedDir, isolatedDir, logger);
 
-      expect(normalizePath(result.projectRoot, result.projectRoot)).toBe(normalizePath(isolatedDir, isolatedDir));
+      expect(normalizePath(result.projectRoot, { within: result.projectRoot })).toBe(normalizePath(isolatedDir, { within: isolatedDir }));
       expect(result.gitTracker).toBeDefined();
     });
   });

@@ -235,9 +235,9 @@ with a regression test.
 - **`validateSkill()` now requires `validation: ValidationConfig`** (`{}` when no config applies)
   and applies its `severity` and `allow` to every issue it emits.
 
-- **`copyDirectory` refuses a symlink whose target is outside the source tree
+- **A skill or agent tree copy refuses a symlink whose target is outside the source tree
   (`CopyLinkEscapesSourceError`) and a link that leads back into it (`DirectoryWalkRevisitedError`)**;
-  it used to copy `/etc` into `dist/` through `scripts/etc -> /etc`, and recurse `scripts/loop -> .`
+  `copyDirectory` (now removed) used to copy `/etc` into `dist/` through `scripts/etc -> /etc`, and recurse `scripts/loop -> .`
   until the path length ran out. `vat agent build` and `vat agent install` reach it. The skill
   content hash, the bundled-resource detector and the post-build checks refuse the loop the same way.
 
@@ -548,8 +548,7 @@ with a regression test.
   throws, so a permission refusal or a bug cannot be absorbed into the same `return null` as a
   missing file. In `configs.recommended` at `warn` (no autofix; expect a long first list on an
   existing tree). Pair it with the new `isPathAbsentError(e)` (`ENOENT`/`ENOTDIR` only) from
-  `@vibe-agent-toolkit/utils` — `isFilesystemAccessError` groups `EACCES` with `ENOENT` and is the
-  wrong narrowing for "is it there?".
+  `@vibe-agent-toolkit/utils`, which answers "is it there?" without absorbing an `EACCES`.
 
 - **New concept guide: [Knowledge interop formats](docs/concepts/knowledge-interop-formats.md)** —
   what the Open Knowledge Format and Agentic Resource Discovery each are, how they differ, and
@@ -557,7 +556,7 @@ with a regression test.
 
 - **(library) New exports.** `@vibe-agent-toolkit/utils`: `decodeTextContent()` on the new
   `./text` subpath, `runGit()` / `runGitOrThrow()` on `./git`, `isEntrypoint()` on `./process`,
-  and `isFilesystemAccessError()`, `removeScratchDir()` and the path-spelling surface
+  and `removeScratchDir()` and the path-spelling surface
   (`DirectorySpellingIndex`, `spellingWalkRoot`, `fillPathSpellings`, `pathSpellingFrom`,
   `PathSpelling`, `ComponentMatch` — whose `because.kind` distinguishes `no_such_entry` from
   `directory_unreadable`) on the barrel. `resources`: `vatCacheNamespace()`,

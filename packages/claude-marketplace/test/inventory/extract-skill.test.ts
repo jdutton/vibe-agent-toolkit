@@ -37,7 +37,7 @@ const REFERENCE_BODY = '# reference\n';
 const FIXTURE_DIR = safePath.resolve(__dirname, '../fixtures/inventory-skill');
 const SKILL_MD = safePath.resolve(FIXTURE_DIR, SKILL_FILENAME);
 
-/** The SKILL.md of the divergence fixture: one committed link, one late link, one ignored link. */
+/** The SKILL.md of the divergence fixture: one tracked link, one late link, one ignored link. */
 const DIVERGENT_SKILL_MD = [
 	'---',
 	'name: divergent-skill',
@@ -59,16 +59,19 @@ function writeRepoFile(root: string, relative: string, contents: string): void {
 }
 
 /**
- * `git init` + `add` + `commit` the fixture repository.
+ * `git init` + `add` the fixture repository — tracked in the index, never committed.
  *
  * Not ceremony: `crawlSkillLinkRegistry` reaches its file set through
  * `git ls-files`, and `.gitignore` needs a repository to mean anything at all
- * ([[tmpdir-fixture-has-no-gitignore]]). The commit is what makes the tracker's
- * snapshot a real one rather than a listing of loose files.
+ * ([[tmpdir-fixture-has-no-gitignore]]). The staged index is what makes the
+ * tracker's snapshot a real one rather than a listing of loose files:
+ * `ls-files --cached` reads the index, and nothing here reads `HEAD`. A commit
+ * would add the slowest spawn of the three, plus the detached
+ * `git maintenance run --auto` it starts, to a hook bound by the unit tier's
+ * unscaled 10 s hook timeout on Windows.
  */
-function commitRepo(root: string): void {
-	const identity = ['-c', 'user.email=t@example.com', '-c', 'user.name=t'];
-	const steps = [['init', '-q'], ['add', '-A'], [...identity, 'commit', '-qm', 'fixture']];
+function stageRepo(root: string): void {
+	const steps = [['init', '-q'], ['add', '-A']];
 	for (const args of steps) {
 		runGitOrThrow(args, { cwd: root });
 	}
@@ -246,7 +249,7 @@ describe('extractClaudeSkillInventory tracker-state divergence', () => {
 		writeRepoFile(repoRoot, SKILL_FILENAME, DIVERGENT_SKILL_MD);
 		writeRepoFile(repoRoot, REFERENCE_FILENAME, REFERENCE_BODY);
 		writeRepoFile(repoRoot, IGNORED_NOTE_FILENAME, '# ignored\n');
-		commitRepo(repoRoot);
+		stageRepo(repoRoot);
 
 		// The snapshot is taken HERE — before `late-note.md` exists. Everything the
 		// tracker will ever say about this repository is fixed at this line.
@@ -382,7 +385,7 @@ describe('crawlSkillLinkRegistry crawl-timing', () => {
 		writeRepoFile(timedRoot, SKILL_FILENAME, DIVERGENT_SKILL_MD);
 		writeRepoFile(timedRoot, REFERENCE_FILENAME, REFERENCE_BODY);
 		writeRepoFile(timedRoot, LATE_NOTE_FILENAME, '# late\n');
-		commitRepo(timedRoot);
+		stageRepo(timedRoot);
 	});
 
 	afterAll(suite.afterAll);

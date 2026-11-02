@@ -101,7 +101,7 @@ export async function extractClaudeMarketplaceInventory(
 	const root: MarketplaceRoot = {
 		path: absolute,
 		// The marketplace directory the operator named: its own `within`.
-		realPath: toForwardSlash(normalizePath(absolute, absolute)),
+		realPath: toForwardSlash(normalizePath(absolute, { within: absolute })),
 		manifestFilePath,
 		parseErrors,
 	};
@@ -239,7 +239,7 @@ function containedSourceDir(
 	}
 	if (!isDirectory) return shapeRefusal('is not a directory');
 	try {
-		safePath.joinUnderRoot(root.realPath, safePath.relative(root.realPath, toForwardSlash(normalizePath(resolved, root.path))));
+		safePath.joinUnderRoot(root.realPath, safePath.relative(root.realPath, toForwardSlash(normalizePath(resolved, { within: root.path }))));
 	} catch (error) {
 		if (!isRootEscape(error)) throw error;
 		return shapeRefusal(OUTSIDE_ROOT);

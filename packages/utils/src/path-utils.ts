@@ -64,8 +64,12 @@ function realpathOrSelf(target: string, within: string): string {
  * - This causes path comparison failures and existsSync() issues
  * - realpathSync.native() resolves these to their actual filesystem paths
  *
+ * `within` is an options object, never a second positional string: the earlier signature was
+ * `normalizePath(...paths)` (`path.resolve` semantics), so a positional second string would
+ * still compile and silently stop meaning "resolve the second against the first".
+ *
  * @param target - The path, absolute or relative to cwd
- * @param within - The tree it is crawled in — the operator's own input, whose own
+ * @param options.within - The tree it is crawled in — the operator's own input, whose own
  *   ancestors are never probed — or `target` itself when it IS the operator's own path
  * @returns Real (normalized) path with **OS-native separators** (backslashes on Windows),
  * or the resolved spelling of a path that is not there. Use `toForwardSlash()` if you need
@@ -74,12 +78,12 @@ function realpathOrSelf(target: string, within: string): string {
  *
  * @example
  * ```typescript
- * const longPath = normalizePath('C:\\PROGRA~1\\nodejs', 'C:\\PROGRA~1\\nodejs');
+ * const longPath = normalizePath('C:\\PROGRA~1\\nodejs', { within: 'C:\\PROGRA~1\\nodejs' });
  * // Result: 'C:\\Program Files\\nodejs'
- * const real = normalizePath(safePath.join(projectRoot, 'docs/a.md'), projectRoot);
+ * const real = normalizePath(safePath.join(projectRoot, 'docs/a.md'), { within: projectRoot });
  * ```
  */
-export function normalizePath(target: string, within: string): string {
+export function normalizePath(target: string, { within }: { readonly within: string }): string {
   return realpathOrSelf(path.resolve(target), within);
 }
 

@@ -208,7 +208,7 @@ describe('armPlacementRefusal', () => {
 /** Point the OS temp directory at this case's scratch directory. */
 function scratchTmpdir(): string {
   for (const name of ['TMPDIR', 'TEMP', 'TMP']) vi.stubEnv(name, out);
-  return normalizePath(out, out);
+  return normalizePath(out, { within: out });
 }
 
 describe('openArmsRoot', () => {
@@ -224,7 +224,7 @@ describe('openArmsRoot', () => {
     const base = dirname(first);
     expect(dirname(second)).toBe(base);
     expect(basename(base)).toMatch(/^vat-lab-arms-[\w.-]+$/u);
-    expect(normalizePath(dirname(base), out)).toBe(tmp);
+    expect(normalizePath(dirname(base), { within: out })).toBe(tmp);
     expect(readdirSync(first)).toStrictEqual(['.vat-lab-root']);
     if (POSIX) {
       expect(mode(base)).toBe(0o700);

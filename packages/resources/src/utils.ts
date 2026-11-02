@@ -345,7 +345,7 @@ export function sameDirectory(left: string, right: string): boolean {
  *   disk (`normalizePath`'s own last resort)
  */
 function onDiskSpelling(resolvedPath: string): string {
-  return toForwardSlash(normalizePath(resolvedPath, resolvedPath));
+  return toForwardSlash(normalizePath(resolvedPath, { within: resolvedPath }));
 }
 
 /**

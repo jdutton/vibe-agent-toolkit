@@ -125,7 +125,7 @@ function resolvePackage(name: string, fromDir: string, dependent: string): strin
   for (;;) {
     const candidate = safePath.join(dir, 'node_modules', name);
     // An installed package of the operator's own checkout: its own link (a workspace link) is the edge.
-    if (isDirectory(candidate)) return safePath.resolve(normalizePath(candidate, candidate));
+    if (isDirectory(candidate)) return safePath.resolve(normalizePath(candidate, { within: candidate }));
     const parent = safePath.resolve(dir, '..');
     if (parent === dir) break;
     dir = parent;
@@ -163,7 +163,7 @@ function packageDigest(packageRoot: string, name: string): string {
  *   resolve, or a closure member has no `dist/`
  */
 export function closureDigest(cliPackageRoot: string): string {
-  const root = safePath.resolve(normalizePath(safePath.resolve(cliPackageRoot), safePath.resolve(cliPackageRoot)));
+  const root = safePath.resolve(normalizePath(safePath.resolve(cliPackageRoot), { within: safePath.resolve(cliPackageRoot) }));
   const lines = new Map<string, string>();
   const visited = new Set<string>();
   const pending: { readonly dir: string }[] = [{ dir: root }];

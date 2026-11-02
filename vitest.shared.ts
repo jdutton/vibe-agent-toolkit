@@ -99,8 +99,13 @@ export const platformTestTimeout = process.platform === 'win32' ? 900_000 : 60_0
  */
 const unitTestTimeout = process.platform === 'win32' ? 150_000 : 15_000;
 
-/** vitest's own per-hook default, which the unit tier keeps on purpose. */
-const VITEST_DEFAULT_HOOK_TIMEOUT = 10_000;
+/**
+ * Per-HOOK timeout for the UNIT tier: vitest's own 10 s default on Unix, and the
+ * same 10× Windows factor as {@link unitTestTimeout}. A flat 10 s gave a hook a
+ * fifteenth of its test's Windows allowance, so a hook building a small git
+ * fixture timed out on windows-latest while every test it fed had 150 s.
+ */
+const unitHookTimeout = process.platform === 'win32' ? 100_000 : 10_000;
 
 /**
  * Per-TEST timeout for the SYSTEM tier: 120 s (the value this tier always had),
@@ -140,8 +145,8 @@ function tierTimeouts(testTimeout: number, hookTimeout: number) {
   };
 }
 
-/** The unit tier's timeouts — see {@link unitTestTimeout}. */
-export const unitTierTimeouts = tierTimeouts(unitTestTimeout, VITEST_DEFAULT_HOOK_TIMEOUT);
+/** The unit tier's timeouts — see {@link unitTestTimeout} and {@link unitHookTimeout}. */
+export const unitTierTimeouts = tierTimeouts(unitTestTimeout, unitHookTimeout);
 
 export const unitPool = process.platform === 'win32' ? 'forks' : 'threads';
 

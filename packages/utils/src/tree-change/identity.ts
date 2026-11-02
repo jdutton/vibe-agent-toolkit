@@ -43,7 +43,7 @@ function guarded<T>(entry: string, side: FsSide, work: () => T): T {
 /** The fold of `real` (an absolute path): its real parent, a `/`, its base name, NFC then lower-cased. */
 function foldedRealPath(entry: string, side: FsSide, real: string): Identity {
   return guarded(entry, side, () => ({
-    foldedRealPath: toNfc(`${toForwardSlash(normalizePath(path.dirname(real), path.dirname(real)))}/${path.basename(real)}`).toLowerCase(),
+    foldedRealPath: toNfc(`${toForwardSlash(normalizePath(path.dirname(real), { within: path.dirname(real) }))}/${path.basename(real)}`).toLowerCase(),
   }));
 }
 
@@ -80,7 +80,7 @@ export function entryIdentities(entry: string, side: FsSide): readonly Identity[
   // the operator's own path, its own link the edge the kernel answers.
   const target = examine(entry, side, true);
   if (target !== undefined) {
-    identities.push(identityOf(target, () => foldedRealPath(entry, side, guarded(entry, side, () => normalizePath(entry, entry)))));
+    identities.push(identityOf(target, () => foldedRealPath(entry, side, guarded(entry, side, () => normalizePath(entry, { within: entry })))));
   }
   return identities;
 }

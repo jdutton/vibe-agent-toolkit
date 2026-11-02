@@ -154,9 +154,7 @@ this is a separate helper rather than something `safePath.resolve()` does.
 
 These return **OS-native** separators, because they resolve real filesystem identity via `realpathSync.native()` (which is what resolves Windows 8.3 short names). Wrap with `toForwardSlash()` if you need forward slashes.
 
-⚠️ **`normalizePath()` has an input-dependent split personality.** It lives on `./fs` (rather than `./path`) for the right reason — it calls `realpathSync.native()` — but which of two different things it does depends on its argument: given a single *relative* path it is pure string work, equivalent to `path.normalize`, touching no filesystem; given anything else it resolves to absolute and performs a filesystem `realpath`, so it follows symlinks, resolves 8.3 short names, and — when the path does not exist — silently falls back to the merely-resolved path. Two semantics under one name: check which case you are in before relying on either.
-
-- `normalizePath()` - resolve 8.3 short names and return the real path (see the warning above)
+- `normalizePath(target, { within })` - resolve `target` (a relative one against cwd), then return its real path — symlinks followed, 8.3 short names expanded — or the resolved path when nothing is there. `within` is the tree being crawled: links beneath it are read hop by hop, and one to a network or device path is refused. Pass `target` itself when it IS the operator's own path.
 - `normalizedTmpdir()` - `os.tmpdir()` with short names resolved
 - `mkdirSyncReal()` - create a directory and return its real path
 - `resolveFromImportMeta()` - resolve paths relative to an `import.meta.url`

@@ -70,7 +70,7 @@ export class FollowedWalk {
 
   #realpath(dir: string): string {
     try {
-      return normalizePath(dir, this.#within);
+      return normalizePath(dir, { within: this.#within });
     } catch (error: unknown) {
       throw classifyFsFault(error, { side: this.#side, origin: 'content', action: `resolve ${dir}`, path: dir });
     }

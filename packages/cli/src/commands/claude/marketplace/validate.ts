@@ -132,7 +132,7 @@ class WalkBoundary {
    */
   private resolvesInside(abs: string): boolean {
     try {
-      return !relativeEscapesRoot(safePath.relative(this.realRoot, toForwardSlash(normalizePath(abs, this.marketplacePath))));
+      return !relativeEscapesRoot(safePath.relative(this.realRoot, toForwardSlash(normalizePath(abs, { within: this.marketplacePath }))));
     } catch (error) {
       if (!isLinkChainRefusedError(error)) throw error;
       return false;
@@ -308,7 +308,7 @@ function containedPluginDir(
   let real: string;
   try {
     if (!isDirectory(lexical, marketplacePath)) return undefined;
-    real = toForwardSlash(normalizePath(lexical, marketplacePath));
+    real = toForwardSlash(normalizePath(lexical, { within: marketplacePath }));
   } catch (error) {
     // A source whose link chain names a network or device path leaves the root by definition: it
     // names nothing this command may enter, and the builder refuses the run by name from its absence.
@@ -363,7 +363,7 @@ async function validateDeclaredPlugins(
   // name it, and the same key is what `undeclaredPluginDirs` compares against.
   const validatedByDir = new Map<string, ContainedPlugin>();
   // The marketplace root is the operator's own argument: its own `within`.
-  const realRoot = toForwardSlash(normalizePath(marketplacePath, marketplacePath));
+  const realRoot = toForwardSlash(normalizePath(marketplacePath, { within: marketplacePath }));
   const boundary = new WalkBoundary(marketplacePath, realRoot);
 
   // In order: `validatedByDir` dedupes a directory two entries name, which a
@@ -493,7 +493,7 @@ function undeclaredCandidateIdentity(pluginsDir: string, entry: Dirent, within: 
   const dir = safePath.join(pluginsDir, entry.name);
   try {
     if (direntKindFollowingSync(pluginsDir, entry, within) !== 'directory') return undefined;
-    return toForwardSlash(normalizePath(dir, within));
+    return toForwardSlash(normalizePath(dir, { within: within }));
   } catch (error) {
     if (!isLinkChainRefusedError(error)) throw error;
     return dir;
