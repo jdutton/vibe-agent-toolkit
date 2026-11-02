@@ -184,19 +184,40 @@ function isPlainPattern(id) {
 
 /**
  * Parents whose child statement can be deleted outright. Any other parent (`if`, `else`, a loop, a
- * label) takes the declaration as its unbraced body, and deleting it hands that body to the next
- * statement.
+ * label, a `for` head) takes the statement as its unbraced body or a part of itself, and deleting it
+ * hands that place to the next statement. An `export` wrapper is not listed either: an exported
+ * binding is referenced from outside.
  */
 const STATEMENT_LISTS = new Set(['Program', 'BlockStatement', 'StaticBlock', 'SwitchCase', 'TSModuleBlock']);
+
+/** A token that, opening the next statement, would continue the one before a removed statement. */
+const CONTINUES_PREVIOUS = /^[(+/[`-]/u;
+
+/**
+ * The one way this module deletes a whole statement. A removed statement takes its `;` with it, so
+ * when the next token would continue the statement before it (`const a = f()` then `[1].map(g)` is
+ * `f()[1].map(g)`), the statement is replaced by a lone `;` instead.
+ *
+ * @param {object} sourceCode - ESLint `SourceCode`.
+ * @param {object} fixer - ESLint fixer.
+ * @param {object} statement - The statement to delete.
+ * @returns {object} The fix.
+ */
+function removeStatement(sourceCode, fixer, statement) {
+  const next = sourceCode.getTokenAfter(statement);
+  return next !== null && CONTINUES_PREVIOUS.test(next.value)
+    ? fixer.replaceText(statement, ';')
+    : fixer.remove(statement);
+}
 
 /**
  * The statement to remove for a `require()` / `import()` / `await import()` binding of a removable
  * module whose every binding is dead, or null to keep it.
  *
  * Only a WHOLE declaration of exactly one declarator: `const os = require('node:os'), n = 1` keeps
- * both, never comma surgery. Not an exported one (`export const os = …` is referenced from
- * outside), and not a binding written again after its declaration (`os = …` is a reference the
- * removal would strand). Only a namespace binding (`const os = …`) or a plain destructure of one
+ * both, never comma surgery. Only one directly in a statement list ({@link STATEMENT_LISTS}), and
+ * not a binding written again after its declaration (`os = …` is a reference the removal would
+ * strand). Only a namespace binding (`const os = …`) or a plain destructure of one
  * (`const { tmpdir } = …`), so no default value's side effect goes with it.
  *
  * @param {object} sourceCode - ESLint `SourceCode`.
@@ -209,19 +230,21 @@ function deadLoadingDeclaration(sourceCode, declarator) {
   const removable = REMOVABLE_MODULES.has(module)
     && STATEMENT_LISTS.has(statement.parent?.type)
     && statement.declarations.length === 1
-    && statement.parent?.type !== 'ExportNamedDeclaration'
     && (declarator.id.type === 'Identifier' || isPlainPattern(declarator.id));
   const dead = removable && sourceCode.getDeclaredVariables(declarator)
     .every((variable) => variable.references.every((reference) => reference.init === true));
   return dead ? { statement, module } : null;
 }
 
-/** `import os = require('node:os')`, value and unexported, whose binding nothing references — or null. */
+/**
+ * `import os = require('node:os')`, a value import directly in a statement list (so not
+ * `export import os = …`, which parses as an `ExportNamedDeclaration` around it), whose binding
+ * nothing references — or null.
+ */
 function deadImportEquals(sourceCode, node) {
   const ref = node.moduleReference;
   const module = ref.type === 'TSExternalModuleReference' ? ref.expression.value : null;
-  // `export import os = require(…)` parses as an `ExportNamedDeclaration` wrapping this node.
-  const dead = REMOVABLE_MODULES.has(module) && node.parent?.type !== 'ExportNamedDeclaration'
+  const dead = REMOVABLE_MODULES.has(module) && STATEMENT_LISTS.has(node.parent?.type)
     && node.importKind !== 'type'
     && sourceCode.getDeclaredVariables(node).every((variable) => variable.references.length === 0);
   return dead ? { statement: node, module } : null;
@@ -236,7 +259,7 @@ function reportDeadStatement(context, sourceCode, bindingNode, dead) {
       local: sourceCode.getDeclaredVariables(bindingNode).map((variable) => variable.name).join("', '"),
       module: dead.module,
     },
-    fix: (fixer) => fixer.remove(dead.statement),
+    fix: (fixer) => removeStatement(sourceCode, fixer, dead.statement),
   });
 }
 
@@ -388,7 +411,7 @@ function reportDeadImportDeclaration(context, sourceCode, node, rewrittenNames) 
     // behaviour rather than two. Extending the range through a trailing
     // whitespace-only remainder would tidy both, and should be done to both at
     // once, once an adopter has measured whether their formatter cares.
-    fix: (fixer) => fixer.remove(node),
+    fix: (fixer) => removeStatement(sourceCode, fixer, node),
   });
 }
 

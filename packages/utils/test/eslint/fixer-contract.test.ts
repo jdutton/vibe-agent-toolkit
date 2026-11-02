@@ -139,6 +139,24 @@ function tsRuleConfig(name: string): Linter.Config[] {
   return ruleConfig(name).map((block) => ({ ...block, languageOptions: { parser: tsParser, sourceType: 'module' } }));
 }
 
+describe('removing a dead binding never joins its neighbours into one statement', () => {
+  // A removed statement takes its `;` with it, so a next line opening with `(`, `[` or a template
+  // would continue the line BEFORE it: `const a = require("a")` + `[1, 2]…` is `require("a")[1, 2]`.
+  it.each([
+    ['a require() before `[`', 'const a = require("a")\nconst { tmpdir } = require("node:os")\n;[1, 2].forEach(go)\nexport const t = tmpdir()', '[1, 2].forEach(go)'],
+    ['a require() before `(`', 'const a = require("a")\nconst { tmpdir } = require("node:os")\n;(async () => go())()\nexport const t = tmpdir()', '(async () => go())()'],
+    ['an import before `[`', "const a = 1\nimport { tmpdir } from 'node:os';\n[1, 2].forEach(go)\nexport const t = tmpdir()", '[1, 2].forEach(go)'],
+    ['an import before a template', "const a = go\nimport { tmpdir } from 'node:os';\n`x`.trim()\nexport const t = tmpdir()", '`x`.trim()'],
+  ])('%s', (_label, code, next) => {
+    const { output } = new Linter().verifyAndFix(code, tsRuleConfig(RULE.tmpdir), { filename: LINTED_FILE });
+
+    expect(output).not.toContain('node:os');
+    const at = output.indexOf(next);
+    expect(at).toBeGreaterThan(0);
+    expect(output.slice(0, at).trimEnd().endsWith(';')).toBe(true);
+  });
+});
+
 describe('a namespace binding the fix orphaned is removed', () => {
   it.each([
     ['await import()', RULE.tmpdir, "const os = await import('node:os');", 'export const t = os.tmpdir();'],
@@ -167,6 +185,9 @@ describe('a namespace binding the fix orphaned is removed', () => {
     ['a reassigned binding', "let os = require('node:os');\nos = require('os');\nexport const t = os.tmpdir();", "let os = require('node:os');"],
     ['a pattern with a rest element', "const { tmpdir, ...rest } = require('node:os');\nexport const t = tmpdir();", "const { tmpdir, ...rest } = require('node:os');"],
     ['an exported import = require()', "export import os = require('node:os');\nexport const t = os.tmpdir();", "export import os = require('node:os');"],
+    // As an unbraced body, deleting the statement would make the NEXT statement that body.
+    ['the unbraced if-body is an import = require()', "if (process.env.D) import os = require('node:os');\nmain();\nexport const t = os.tmpdir();", "import os = require('node:os');"],
+    ['the unbraced label body is an import = require()', "tag: import os = require('node:os');\nmain();\nexport const t = os.tmpdir();", "import os = require('node:os');"],
   ])('keeps it when %s', (_label, code, survivor) => {
     const { output } = new Linter().verifyAndFix(code, tsRuleConfig(RULE.tmpdir), { filename: LINTED_FILE });
     expect(output).toContain('normalizedTmpdir()');

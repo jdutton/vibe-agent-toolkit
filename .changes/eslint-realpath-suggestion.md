@@ -30,13 +30,17 @@
   `import x = require()` binding of the module (`const os = require('node:os')`, or a destructure
   `const { tmpdir } = require('node:os')`) for `no-os-tmpdir`, `no-fs-mkdirSync`,
   `no-fs-realpathSync`, `no-child-process-execSync` and `no-manual-path-normalize`: the whole
-  statement goes, once nothing references any binding it declares. These shapes are never removed
+  statement goes, once nothing references any binding it declares. A removed statement whose next
+  line opens with `(`, `[`, a template, `+`, `-` or `/` becomes a lone `;`, so that line does not
+  continue the statement before it. These shapes are never removed
   and stay for you to delete: a declaration with any type-only binding
   (`import { type join, resolve } from 'node:path'`); a declaration's only named specifier, dead,
   beside a live default or namespace binding (`tmpdir` in `import os, { tmpdir } from 'node:os'` while
   `os` is still used); and a `require()` / `import()` / `import x = require()` binding that is
-  exported, the unbraced body of an `if`/`else`/loop/label (`if (x) var os = require('node:os')`:
-  removing it would make the next statement that body), declared beside a second declarator (`const os = require('node:os'), n = 1`), assigned
+  exported, not directly in a block or the file's top level (the unbraced body of an
+  `if`/`else`/loop/label, `if (x) var os = require('node:os')`, whose removal would make the next
+  statement that body, or a `for (var os = require('node:os'); …)` head), declared beside a second
+  declarator (`const os = require('node:os'), n = 1`), assigned
   again after its declaration, or destructured with a default value, a rest element, a computed key
   or a nested pattern.
 - **Every fix and suggestion of the call rules and `no-raw-node-path`/`no-manual-path-normalize`
