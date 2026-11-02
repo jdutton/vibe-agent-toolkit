@@ -64,7 +64,7 @@ function logOutcome(report: AgentValidateReport, logger: Logger): void {
     logger.info('Agent validation successful');
   }
   // `vat agent validate` has no `--verbose`: it has always listed every finding.
-  reportFindings(report.findings, { verbose: true, report: 'run', write: logger.error });
+  reportFindings(report.findings, { verbose: true, write: logger.error });
 }
 
 export async function validateCommand(

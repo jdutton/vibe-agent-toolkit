@@ -119,16 +119,13 @@ export function unsafeCallRuleCases(
   const unsafeImport = `import { ${unsafeFn} } from '${unsafeModule}';`;
   const safeImport = `import { ${safeFn} } from '${safeModule}';`;
   const unsafeCode = `${unsafeImport}\nconst r = ${unsafeFn}(x);`;
-  // The new import takes the removed one's LINE. It used to be welded onto
-  // whatever followed, because the fixer inserted after `body[0]` with a
-  // trailing newline regardless of what `body[0]` was — visible here only as a
-  // moved `\n`, and visible in a file whose first statement is not an import as
-  // `const os = {…};import { normalizedTmpdir } from '…';` on one line.
-  const output = `\n${safeImport}\nconst r = ${safeFn}(x${extra});`;
-  // A SUGGESTION never removes the unsafe import: it is applied alone, from an
-  // editor, and the binding may still back a call no suggestion was taken for.
-  // The dead-import leg removes it on a later pass once nothing references it.
-  const suggestedOutput = `${unsafeImport}\n${safeImport}\nconst r = ${safeFn}(x${extra});`;
+  // NO call's fix removes the unsafe import — autofix or suggestion. A suppressed
+  // report's fix runs before the disable filter discards it, so a removal carried
+  // by any one report can strand a suppressed call; the dead-import leg removes
+  // the binding on the NEXT pass, once scope says nothing references it. So one
+  // pass leaves both imports, the new one on its own line after the old.
+  const output = `${unsafeImport}\n${safeImport}\nconst r = ${safeFn}(x${extra});`;
+  const suggestedOutput = output;
   const errors = [{ messageId: 'noUnsafeOperation' }];
   const options = [{ exemptFiles: [exemptPath] }];
   /** What ONE report's rewrite produces: an autofix `output`, or the suggestion's text. */
@@ -167,6 +164,12 @@ export function unsafeCallRuleCases(
         filename: LINTED_FILE,
         options,
       },
+      // The same NAME from another module, or a local function, is not the unsafe call:
+      // matched by name, `import { mkdirSync } from 'memfs'` was rewritten to the real-fs
+      // helper. The callee must resolve through scope to an import of the unsafe module.
+      { code: `import { ${unsafeFn} } from 'memfs';\n${unsafeFn}(x);`, filename: LINTED_FILE, options },
+      { code: `function ${unsafeFn}(p: string) { return p; }\n${unsafeFn}(x);`, filename: LINTED_FILE, options },
+      { code: `${unsafeImport}\nexport function f(${unsafeFn}: (p: string) => void) { ${unsafeFn}(x); }`, filename: LINTED_FILE, options },
     ],
     invalid: [
       { code: unsafeCode, filename: LINTED_FILE, options, ...rewritten(output, suggestedOutput) },
@@ -184,7 +187,7 @@ export function unsafeCallRuleCases(
         filename: LINTED_FILE,
         options,
         ...rewritten(
-          `import { ${safeFn} } from '${BARREL}';\n\nconst r = ${safeFn}(x${extra});`,
+          `import { ${safeFn} } from '${BARREL}';\n${unsafeImport}\nconst r = ${safeFn}(x${extra});`,
           `import { ${safeFn} } from '${BARREL}';\n${unsafeImport}\nconst r = ${safeFn}(x${extra});`,
         ),
       },
@@ -208,8 +211,8 @@ export function unsafeCallRuleCases(
 
 /**
  * The `{ autofixAsStatement }` mode's own cases: a discarded result is autofixed,
- * and the unsafe import is removed only when no call it backs was left as a
- * suggestion — removing it beside a value-position call strands that call.
+ * a value-position call only suggested, and the import stays either way — no
+ * call's fix removes it (see `unsafeCallRuleCases`).
  */
 function statementOnlyAutofixCases(
   unsafeFn: string,
@@ -219,16 +222,17 @@ function statementOnlyAutofixCases(
   options: object[],
 ): object[] {
   return [
-    // Result discarded: the swap cannot change behaviour, so it is an autofix.
+    // Result discarded, so the different return value is never read: an autofix. Not a
+    // behaviour-identical swap — `mkdirSyncReal` takes a string path, so a `URL` or `Buffer`
+    // argument stops compiling, and it then resolves the real path.
     {
       code: `${unsafeImport}\n${unsafeFn}(x);`,
       filename: LINTED_FILE,
       options,
-      output: `\n${safeImport}\n${safeFn}(x);`,
+      output: `${unsafeImport}\n${safeImport}\n${safeFn}(x);`,
       errors: [{ messageId: 'noUnsafeOperation' }],
     },
-    // One of each: the statement is autofixed, the value call only suggested,
-    // and the import stays because the value call still needs it.
+    // One of each: the statement is autofixed, the value call only suggested.
     {
       code: `${unsafeImport}\n${unsafeFn}(a);\nconst r = ${unsafeFn}(b);`,
       filename: LINTED_FILE,

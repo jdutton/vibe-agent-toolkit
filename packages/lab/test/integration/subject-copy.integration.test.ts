@@ -16,7 +16,7 @@ import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/u
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { armDirectories } from '../../src/harness/arm-dirs.js';
-import { runRepeats } from '../../src/harness/repeat.js';
+import { runInterleaved, runRepeats } from '../../src/harness/repeat.js';
 import { planSubjectCopy, writtenDirectories } from '../../src/harness/subject-copy.js';
 import { cleanupProbes, PROBE_WRITES_ENV, probeSpec, probeStep, setupProbe } from '../command-probe.js';
 
@@ -81,6 +81,20 @@ describe.skipIf(process.platform === 'win32')('a step that writes its subject', 
 
     await expect(runRepeats(spec)).rejects.toThrow(/names the subject in its arguments/u);
   });
+
+  it('removes a copy it already made when a later arm\'s copy throws', async () => {
+    const copied = setupProbe(PREFIX);
+    const refused = setupProbe(PREFIX);
+    writeFileSync(safePath.join(refused.cwd, '.git'), 'gitdir: /elsewhere\n');
+    const writing = { runs: 1, cache: 'cold', steps: [probeStep(['build'], { writes: ['dist'] })] } as const;
+    const first = probeSpec(copied, { ...writing, arm: 'first' });
+    const second = probeSpec(refused, { ...writing, arm: 'second' });
+
+    await expect(runInterleaved([first, second], 1)).rejects.toThrow(/git worktree/u);
+    // Positive control: the first arm's copy is where the run would have put it, and is gone.
+    expect(armDirectories(first.arm).subject).not.toBe(armDirectories(second.arm).subject);
+    expect(existsSync(armDirectories(first.arm).subject)).toBe(false);
+  });
 });
 
 describe('writtenDirectories', () => {
@@ -106,6 +120,18 @@ describe('planSubjectCopy', () => {
     const probe = setupProbe(PREFIX);
     writeFileSync(safePath.join(probe.cwd, '.git'), 'gitdir: /elsewhere\n');
     expect(planSubjectCopy(probe.cwd, safePath.join(probe.armsRoot, 'copy'), 'darwin')).toMatchObject({ ok: false, refusal: expect.stringContaining('git worktree') });
+  });
+
+  it('refuses a subject nested below its repository\'s top level, whose copy would carry no .git', () => {
+    const probe = setupProbe(PREFIX);
+    const repository = safePath.join(probe.cwd, '..');
+    mkdirSyncReal(safePath.join(repository, '.git'));
+    expect(planSubjectCopy(probe.cwd, safePath.join(probe.armsRoot, 'copy'), 'darwin')).toMatchObject({
+      ok: false,
+      refusal: expect.stringContaining('not its top level'),
+    });
+    // The top level itself is copied.
+    expect(planSubjectCopy(repository, safePath.join(probe.armsRoot, 'copy'), 'darwin')).toMatchObject({ ok: true });
   });
 
   it('clones copy-on-write on macOS and copies for real elsewhere', () => {

@@ -110,17 +110,16 @@ export function formatIssueLines(issue: ValidationIssue | Finding, indent = ''):
  *
  * @param findings - The findings, in any order
  * @param options.verbose - Render warning and info findings too
- * @param options.report - The verb whose stdout document the hint points at
  * @param options.write - Where each line goes — the caller's stderr logger
  */
 export function reportFindings(
   findings: readonly (ValidationIssue | Finding)[],
-  options: { readonly verbose: boolean; readonly report: string; readonly write: (line: string) => void },
+  options: { readonly verbose: boolean; readonly write: (line: string) => void },
 ): void {
   for (const finding of issuesToRenderAtVerbosity(findings, options.verbose)) {
     for (const line of formatIssueLines(finding, '  ')) options.write(line);
   }
-  const hint = formatCollapsedFindingsHint(countCollapsedFindings(findings, options.verbose), options.report);
+  const hint = formatCollapsedFindingsHint(countCollapsedFindings(findings, options.verbose));
   if (hint !== undefined) options.write(hint);
 }
 
@@ -332,21 +331,18 @@ export function countCollapsedFindings(
  * second phrasing of the same idea, because two wordings for one concept is how
  * the severity collapse came to be spelled five different ways.
  *
- * `report` names the verb whose YAML the reader should open ("audit", "build").
- * That clause is only honest for a command that publishes full `issues:` arrays;
- * do not pass a report name for a verb that publishes counts alone.
+ * It points at "the report on stdout" and names no format: the same verb
+ * publishes YAML, JSON or text. Only a verb whose document lists every finding
+ * may print it.
  *
  * Returns `undefined` when nothing was collapsed, so callers print nothing rather
  * than a "0 findings not shown" line.
  */
-export function formatCollapsedFindingsHint(
-  collapsed: number,
-  report: string,
-): string | undefined {
+export function formatCollapsedFindingsHint(collapsed: number): string | undefined {
   if (collapsed <= 0) return undefined;
   return (
     `\n${collapsed} warning/info finding(s) not shown — re-run with --verbose, `
-    + `or read this ${report}'s YAML report on stdout, which lists every finding.`
+    + 'or read the report on stdout, which lists every finding.'
   );
 }
 

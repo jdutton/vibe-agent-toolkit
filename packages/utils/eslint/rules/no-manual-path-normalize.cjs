@@ -174,6 +174,8 @@ module.exports = {
           pathImportNodes,
           safeBoundInSource,
           safeReplacementCalled,
+          // Rewrites `split(path.sep)`, never a named import.
+          new Set(),
         );
       },
 

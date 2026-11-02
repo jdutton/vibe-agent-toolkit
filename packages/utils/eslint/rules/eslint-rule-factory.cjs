@@ -28,9 +28,9 @@
  *     no autofix — a suggestion rewrites a one-argument call and appends
  *     `appendArgument`, a placeholder that must fail the typecheck rather than guess a
  *     value that compiles.
- *   A suggestion never removes the unsafe import: it is applied alone, and the binding
- *   may still back a call no suggestion was taken for. The dead-import leg removes it
- *   once nothing references it.
+ *   No call's fix — autofix or suggestion — ever removes the unsafe import: the binding
+ *   may still back a call whose report was suppressed, or one no suggestion was taken
+ *   for. The dead-import leg removes it, on the next pass, once nothing references it.
  * @param {Object} config.docs - The rule's `meta.docs` manifest entry: `category`,
  *   `bans`, `useInstead`, optional `subpath`, and `recommended` /
  *   `recommendedSeverity` (what `index.cjs` builds `configs.recommended` from).
@@ -150,39 +150,57 @@ function readRewrite(rewrite, unsafeFn) {
     : { autofix: 'statement', suggestion: rewrite.suggestion };
 }
 
+/**
+ * The variable `identifier` resolves to, walking out through enclosing scopes.
+ *
+ * @returns {object|null} The scope-manager variable, or null when nothing binds it.
+ */
+function resolvedVariable(sourceCode, identifier) {
+  for (let scope = sourceCode.getScope(identifier); scope; scope = scope.upper) {
+    const variable = scope.set.get(identifier.name);
+    if (variable) {
+      return variable;
+    }
+  }
+  return null;
+}
+
+/**
+ * Does `identifier` resolve to the unsafe module's own `unsafeFn` — `import { tmpdir }
+ * from 'node:os'` (aliased or not), or `const { tmpdir } = require('node:os')` /
+ * `await import('node:os')`?
+ *
+ * By name alone, `import { mkdirSync } from 'memfs'` and a local `function tmpdir()`
+ * were rewritten to the real-fs helper — a false positive that produces WORKING code.
+ * An unbound `tmpdir()` is no longer this rule's either: no fix removes the import any
+ * more, so an unbound call is not a strand this rule left.
+ */
+function bindsUnsafeFn(sourceCode, identifier, moduleVariants, unsafeFn) {
+  const variable = resolvedVariable(sourceCode, identifier);
+  return (variable?.defs ?? []).some((def) => {
+    if (def.type === 'ImportBinding') {
+      return def.node.type === 'ImportSpecifier'
+        && def.node.imported.name === unsafeFn
+        && moduleVariants.includes(def.parent.source.value);
+    }
+    if (def.type !== 'Variable' || def.node.id.type !== 'ObjectPattern') {
+      return false;
+    }
+    const source = namespaceModuleOf(def.node.init);
+    return source !== null
+      && moduleVariants.includes(source)
+      && def.node.id.properties.some(
+        (property) => property.type === 'Property'
+          && property.key.type === 'Identifier'
+          && property.key.name === unsafeFn
+          && property.value === def.name,
+      );
+  });
+}
+
 /** Is `node` a call whose result is discarded — the whole of an expression statement? */
 function isStatementCall(node) {
   return node.parent?.type === 'ExpressionStatement' && node.parent.expression === node;
-}
-
-/**
- * Helper function to filter unsafe import specifiers
- * Extracted to reduce nesting depth for code quality
- */
-function filterUnsafeSpecifiers(importNode, unsafeFn) {
-  return importNode.specifiers.filter((s) => s.imported && s.imported.name === unsafeFn);
-}
-
-/**
- * Helper function to remove unsafe import specifiers
- * Extracted to reduce nesting depth for code quality
- */
-function removeUnsafeImportSpecifiers(fixer, sourceCode, unsafeSpecs) {
-  const fixes = [];
-  for (const spec of unsafeSpecs) {
-    const comma = sourceCode.getTokenAfter(spec);
-    if (comma?.value === ',') {
-      fixes.push(fixer.removeRange([spec.range[0], comma.range[1]]));
-    } else {
-      const commaBefore = sourceCode.getTokenBefore(spec);
-      if (commaBefore?.value === ',') {
-        fixes.push(fixer.removeRange([commaBefore.range[0], spec.range[1]]));
-      } else {
-        fixes.push(fixer.remove(spec));
-      }
-    }
-  }
-  return fixes;
 }
 
 module.exports = function createNoUnsafeRule(config) {
@@ -205,11 +223,6 @@ module.exports = function createNoUnsafeRule(config) {
   /** Does this rule autofix THIS call, rather than only suggest a rewrite? */
   const autofixes = (callNode) =>
     mode.autofix === 'always' || (mode.autofix === 'statement' && isStatementCall(callNode));
-  /** Is this reference to the unsafe specifier the callee of a call this rule autofixes? */
-  const isAutofixedCallee = ({ identifier }) =>
-    identifier.parent?.type === 'CallExpression'
-    && identifier.parent.callee === identifier
-    && autofixes(identifier.parent);
 
   const exemptMatcherFor = createConfigurableExemptPathMatcher(exemptFiles);
 
@@ -246,13 +259,6 @@ module.exports = function createNoUnsafeRule(config) {
 
     create(context) {
       const sourceCode = context.getSourceCode();
-      /**
-       * Every reference to the unsafe specifier is the callee of a call this
-       * rule autofixes. Only then may an autofix remove the import: one
-       * reference left as a suggestion (or used as a value) would be stranded.
-       */
-      const everyReferenceAutofixed = (spec) =>
-        sourceCode.getDeclaredVariables(spec).every((variable) => variable.references.every(isAutofixedCallee));
       // Resolved per invocation, not at factory-construction time: the option is
       // the consuming repo's, and one repo can configure the same rule
       // differently across config blocks.
@@ -269,7 +275,6 @@ module.exports = function createNoUnsafeRule(config) {
         };
       }
 
-      let hasUnsafeImport = false;
       // Seeded from SCOPE, not from "did I see an import from safeModule?".
       // A file already importing `safeFn` from the barrel needs the call
       // rewritten but must NOT gain a second binding of the same name — that is
@@ -291,9 +296,6 @@ module.exports = function createNoUnsafeRule(config) {
       // A SET, because a namespace can be bound by a static import, a
       // `require()`, or a dynamic `import()` — see `namespaceModuleOf`.
       const unsafeNamespaceNames = new Set();
-      // Latches the REMOVAL only — never the insert. See `fix()` for why the
-      // two shared edits must be treated differently.
-      let unsafeImportRemoved = false;
 
       return {
         Program(node) {
@@ -307,6 +309,7 @@ module.exports = function createNoUnsafeRule(config) {
             unsafeImportNodes,
             safeBoundInSource,
             safeReplacementCalled,
+            new Set([unsafeFn]),
           );
         },
 
@@ -314,7 +317,6 @@ module.exports = function createNoUnsafeRule(config) {
           if (moduleVariants.includes(node.source.value)) {
             unsafeImportNode = node;
             unsafeImportNodes.push(node);
-            hasUnsafeImport = hasUnsafeImport || importsName(node, unsafeFn);
             const local = namespaceLocalName(node);
             if (local) {
               unsafeNamespaceNames.add(local);
@@ -371,8 +373,8 @@ module.exports = function createNoUnsafeRule(config) {
 
           let isUnsafeCall = false;
 
-          // Check for direct function call: unsafeFn()
-          if (node.callee.name === unsafeFn) {
+          // Direct call: the callee must resolve to the unsafe module's own export.
+          if (node.callee.type === 'Identifier' && bindsUnsafeFn(sourceCode, node.callee, moduleVariants, unsafeFn)) {
             isUnsafeCall = true;
           }
 
@@ -409,18 +411,18 @@ module.exports = function createNoUnsafeRule(config) {
           // arguments belong to the unsafe function and mean nothing to the safe one.
           const report = { node, messageId: 'noUnsafeOperation', data: { safeModule: targetModule } };
           if (autofixes(node)) {
-            context.report({ ...report, fix: (fixer) => rewriteCall(fixer, false) });
+            context.report({ ...report, fix: (fixer) => rewriteCall(fixer) });
           } else {
             const [only, ...rest] = node.arguments;
             const rewritable = mode.appendArgument === undefined
               || (only !== undefined && rest.length === 0 && only.type !== 'SpreadElement');
             context.report({
               ...report,
-              suggest: rewritable ? [{ messageId: 'useSafeCall', fix: (fixer) => rewriteCall(fixer, true) }] : [],
+              suggest: rewritable ? [{ messageId: 'useSafeCall', fix: (fixer) => rewriteCall(fixer) }] : [],
             });
           }
 
-          function rewriteCall(fixer, asSuggestion) {
+          function rewriteCall(fixer) {
             const fixes = [];
 
             // Replace the WHOLE callee, member expression or not.
@@ -479,39 +481,15 @@ module.exports = function createNoUnsafeRule(config) {
               }
             }
 
-            // Remove the unsafe import — LATCHED, unlike the insert above.
-            //
-            // The asymmetry is the whole design. An insert is safe to repeat
-            // (identical text, identical anchor, ESLint drops the duplicate)
-            // and repeating it is what keeps each report's fix correct on its
-            // own. A REMOVAL is not: if every report removes the specifier,
-            // one of those removals lands even when the report that would
-            // have rewritten the matching call was suppressed — and the
-            // suppressed call is left calling an identifier the import no
-            // longer provides. Measured: `tmpdir` undefined, permanently.
-            //
-            // Latched, the discarded first report simply takes the removal
-            // with it, and the worst case is an unused import that
-            // `no-unused-vars` will point at. A lint finding, not a crash.
-            //
-            // Never from a SUGGESTION (applied alone, from an editor), and never
-            // while a reference the import backs is not autofixed — see
-            // `everyReferenceAutofixed`. The dead-import leg takes it later.
-            const unsafeSpecs = unsafeImportNode ? filterUnsafeSpecifiers(unsafeImportNode, unsafeFn) : [];
-            if (
-              hasUnsafeImport && unsafeImportNode && !unsafeImportRemoved && !asSuggestion
-              && unsafeSpecs.every(everyReferenceAutofixed)
-            ) {
-              if (unsafeImportNode.specifiers.length === 1 && unsafeSpecs.length === 1) {
-                // Remove entire import
-                fixes.push(fixer.remove(unsafeImportNode));
-              } else if (unsafeSpecs.length > 0) {
-                // Remove just the unsafe specifier
-                fixes.push(...removeUnsafeImportSpecifiers(fixer, sourceCode, unsafeSpecs));
-              }
-              unsafeImportRemoved = true;
-            }
-
+            // The unsafe import is NEVER removed here. ESLint runs `fix()` for a
+            // suppressed report before the `eslint-disable` filter discards it, so
+            // any removal carried by one report can land while a suppressed call
+            // still needs the binding — latched to the first report, the removal
+            // rode on an unsuppressed call BEFORE a suppressed one, and the output
+            // linted clean and threw `ReferenceError`. Removal is the dead-import
+            // leg's alone (`reportDeadUnsafeImports`, at `Program:exit`): it asks
+            // scope on the next pass, after the rewrites, whether anything still
+            // references the binding.
             return fixes;
           }
         },

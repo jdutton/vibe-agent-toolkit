@@ -1634,7 +1634,7 @@ export async function runResourcesCheckPhase(
   });
   const report = 'forward' in ending ? ending.forward.report : ending.payload;
   // The human half, on this process's stderr: the child's own stdout is the document it forwarded.
-  reportFindings(report.findings, { verbose: options.verbose, report: 'run', write: createLogger().error });
+  reportFindings(report.findings, { verbose: options.verbose, write: createLogger().error });
   return { report };
 }
 
@@ -1738,7 +1738,7 @@ export async function checkCommand(
     // supervised child prints nothing here: its supervisor reports the document it forwards.
     if (child === undefined) {
       const report = 'forward' in ending ? ending.forward.report : ending.payload;
-      reportFindings(report.findings, { verbose: options.verbose === true, report: 'run', write: logger.error });
+      reportFindings(report.findings, { verbose: options.verbose === true, write: logger.error });
     }
     if ('forward' in ending) {
       // Verbatim (unless `withLeftover` had to add a finding to it) — the supervisor already checked it is

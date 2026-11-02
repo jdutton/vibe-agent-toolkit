@@ -281,21 +281,27 @@ durationMs: 234
 data: { ... }
 ```
 
-### Dual Output for Errors
+### Dual Output for Findings
 
-Legacy commands that find errors produce both formats below. A report verb renders the same
-compiler-style lines under `--format text`, on stdout, from its published findings
-(`location:line:column: severity: message [code]`) — see [The report contract](#the-report-contract).
+A verb that finds something publishes it twice: in full in the stdout document, and for a reader on
+stderr. Both spell a finding with the one formatter, `formatFindingLine` in
+`packages/cli/src/utils/issue-rendering.ts`; a flat-findings lane prints them through
+`reportFindings`, which puts every error first and adds warnings and info only under `--verbose`.
+Under `--format text` stdout already is these lines, so stderr carries none — see
+[The report contract](#the-report-contract).
 
-#### Test Format (stderr)
+#### Finding lines (stderr)
 
 ```
-docs/README.md:15:25: error: Link target not found: ./missing.md
-docs/guide.md:42:10: error: Broken anchor: #non-existent-section
-fragment.component.html:1:1: info: Malformed HTML: missing-doctype
+  docs/README.md:15:25: error: Link target not found: ./missing.md [LINK_BROKEN_FILE]
+    Fix: Point the link at an existing file.
+  SKILL.md (frontmatter.name): warning: Name is not kebab-case [SKILL_NAME_NOT_KEBAB_CASE]
+
+1 warning/info finding(s) not shown — re-run with --verbose, or read the report on stdout, which lists every finding.
 ```
 
-**Format:** `file:line:column: severity: message`
+**Format:** `location:line:column (field): severity: message [CODE]`, each part of the anchor present
+only when the finding carries it; a fix on the next line, two spaces deeper.
 
 Only `error` findings fail the run, so the severity is what tells a reader
 which lines they have to act on.

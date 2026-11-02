@@ -139,8 +139,9 @@ Output:
   findings (every surface's, flat), and data.phases — one entry per surface
   with its own status, examined, summary, error (when it did not finish) and
   the surface's own data. Schema: packages/cli/schemas/orchestrator.json.
-  Progress and findings → stderr (streamed live), one line per finding,
-  location:line: severity: message [code] — every error, errors first; the
+  Progress and findings → stderr (streamed live), each finding as
+  "location:line: severity: message [code]", its fix (when it has one) on
+  the next line, indented, as "Fix: ..." — every error, errors first; the
   warning and info findings only with --verbose
 
 Exit Codes:

@@ -93,17 +93,14 @@ function hasTypeOnlyBinding(node) {
 /**
  * Is every binding this declaration introduces now unreferenced?
  *
- * Whole declarations only. A partially-dead declaration (`import path, { sep }`
- * with `sep` still live) needs comma surgery, which is where removal bugs live,
- * and it is not the shape the adopter measured — so it is left alone and stays a
- * visible `no-unused-vars` finding rather than a risky edit.
+ * Whole declarations here; a dead SPECIFIER beside a live one is
+ * {@link deadRewrittenSpecifiers}'s, and only for a name the calling rule
+ * rewrites.
  *
  * Re-exports need no special guard: `export { path }` and `export default path`
  * both register as references under espree AND `@typescript-eslint/parser`
- * (measured, both parsers), so such a declaration is never dead here. Round 2
- * added an explicit `isReExported` check for the SPECIFIER-removal path, where
- * the reference count is not consulted at all; this path reads the count, so a
- * second check would be a guard that can never fire.
+ * (measured, both parsers), so such a declaration is never dead here — and the
+ * same holds for a specifier, whose count {@link deadRewrittenSpecifiers} reads.
  */
 function isDeadRemovableImport(sourceCode, node) {
   if (!REMOVABLE_MODULES.has(node.source.value)) {
@@ -127,7 +124,59 @@ function isDeadRemovableImport(sourceCode, node) {
 }
 
 /**
- * Report — and remove — every import declaration this pass emptied out.
+ * The named specifiers of a PARTLY live declaration that are now unreferenced
+ * and that name a function the calling rule rewrites (`join` in
+ * `import { join, dirname } from 'node:path'`).
+ *
+ * The rule's call fixes never remove a specifier — a suppressed report runs its
+ * `fix()` too, so a removal riding on any one of them strands a suppressed call
+ * — and without this the dead `join` beside a live `dirname` would survive every
+ * pass as `no-unused-vars`. Narrowed to the rule's own names, so a specifier dead
+ * for somebody else's reason is not this leg's to take. A default or namespace
+ * binding beside a sole named specifier is left alone: removing the braces' only
+ * member is the comma surgery where removal bugs live, for one rare shape.
+ *
+ * @param {object} sourceCode - ESLint `SourceCode` for the file being linted.
+ * @param {object} node - An `ImportDeclaration` of a removable module.
+ * @param {ReadonlySet<string>} rewrittenNames - The imported names the calling rule rewrites.
+ * @returns {object[]} The dead specifiers, in source order.
+ */
+function deadRewrittenSpecifiers(sourceCode, node, rewrittenNames) {
+  if (!REMOVABLE_MODULES.has(node.source.value) || hasTypeOnlyBinding(node)) {
+    return [];
+  }
+  const named = node.specifiers.filter((spec) => spec.type === 'ImportSpecifier');
+  if (named.length === 1 && named.length < node.specifiers.length) {
+    return [];
+  }
+  return named.filter(
+    (spec) =>
+      rewrittenNames.has(spec.imported.name)
+      && sourceCode.getDeclaredVariables(spec).every((variable) => variable.references.length === 0),
+  );
+}
+
+/**
+ * The fix removing one named specifier and the comma that joined it to a neighbour.
+ *
+ * @param {object} fixer - ESLint fixer.
+ * @param {object} sourceCode - ESLint `SourceCode`.
+ * @param {object} spec - An `ImportSpecifier` with at least one named neighbour.
+ * @returns {object} The fix.
+ */
+function removeSpecifierFix(fixer, sourceCode, spec) {
+  // Through the next token's start, so `{ join, dirname }` becomes `{ dirname }`, not `{  dirname }`.
+  const after = sourceCode.getTokenAfter(spec);
+  if (after?.value === ',') {
+    return fixer.removeRange([spec.range[0], sourceCode.getTokenAfter(after).range[0]]);
+  }
+  const before = sourceCode.getTokenBefore(spec);
+  return fixer.removeRange([before.range[0], spec.range[1]]);
+}
+
+/**
+ * Report — and remove — every import declaration this pass emptied out, and
+ * every specifier of {@link deadRewrittenSpecifiers}.
  *
  * Runs at `Program:exit`, over the SOURCE as it stands this pass. That ordering
  * is the safety property, not an implementation detail: while a live reference
@@ -206,6 +255,9 @@ function isDeadRemovableImport(sourceCode, node) {
  * @param {boolean} replacementCalled - Does the SOURCE call this rule's own safe
  *   replacement? Both are required, and both are the caller's to compute from
  *   source — see the gate discussion above for why neither may be defaulted.
+ * @param {ReadonlySet<string>} rewrittenNames - The imported names the calling
+ *   rule's fixes rewrite (empty for a rule that rewrites no named import). Required:
+ *   an omitted set would silently strand every dead specifier.
  */
 function reportDeadUnsafeImports(
   context,
@@ -213,12 +265,24 @@ function reportDeadUnsafeImports(
   importNodes,
   safeBoundInSource,
   replacementCalled,
+  rewrittenNames,
 ) {
+  if (!(rewrittenNames instanceof Set)) {
+    throw new TypeError('reportDeadUnsafeImports: rewrittenNames must be a Set');
+  }
   if (!safeBoundInSource || !replacementCalled) {
     return;
   }
   for (const node of importNodes) {
     if (!isDeadRemovableImport(sourceCode, node)) {
+      for (const spec of deadRewrittenSpecifiers(sourceCode, node, rewrittenNames)) {
+        context.report({
+          node: spec,
+          messageId: DEAD_UNSAFE_IMPORT,
+          data: { local: spec.local.name, module: node.source.value },
+          fix: (fixer) => removeSpecifierFix(fixer, sourceCode, spec),
+        });
+      }
       continue;
     }
     context.report({

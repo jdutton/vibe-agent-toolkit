@@ -52,7 +52,10 @@ describe('resources validate — the refusal message reaches stderr', () => {
     expect(document.examined).toBe(0);
     expect(refusal?.code).toBe('RESOURCE_CHECK_BROKEN');
     // The human half: the same remedy text, on stderr, once, without `--verbose`.
+    // As the finding line every other finding prints as: once, never a bare `Warning:` beside it.
+    expect(captured.stderr.split(`error: ${refusal?.message ?? '<no refusal>'} [RESOURCE_CHECK_BROKEN]`)).toHaveLength(2);
     expect(captured.stderr.split(refusal?.message ?? '<no refusal>')).toHaveLength(2);
+    expect(captured.stderr).not.toContain('Warning:');
     expect(captured.stderr).toContain('`vat resources scan`');
   });
 

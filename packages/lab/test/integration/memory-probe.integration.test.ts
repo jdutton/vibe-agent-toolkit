@@ -4,10 +4,9 @@
  * because the emitted file is the artifact that ships.
  *
  * Each size assertion is a DIFFERENCE against a no-allocation baseline launched
- * the same way, never an absolute bound: on Linux a child's peak includes what
- * its parent held at `fork()`, so "more than 300 MiB" passes for a child of any
- * large parent — a vitest worker is one — whether or not the probe saw the
- * allocation. Both runs go through the built spawner, as a capture's do.
+ * the same way, never an absolute bound: a bare node's own footprint differs by
+ * platform and version. That the parent's memory is NOT in the figure — the one
+ * thing `maxRSS` got wrong on Linux — is pinned on its own below.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -15,7 +14,6 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'n
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
-import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -24,9 +22,6 @@ import { type RssDump, RssDumpSchema } from '../../src/facets/memory/types.js';
 
 /** The emitted probe. */
 const PROBE_DIST = toForwardSlash(fileURLToPath(new URL('../../dist/facets/memory/rss-probe.cjs', import.meta.url)));
-
-/** The emitted spawner, every measured repeat's parent. */
-const SPAWNER_DIST = toForwardSlash(fileURLToPath(new URL('../../dist/facets/memory/rss-spawner.js', import.meta.url)));
 
 /** The CLI package's name: a main script it owns is vat. */
 const CLI_PACKAGE = '@vibe-agent-toolkit/cli';
@@ -68,23 +63,36 @@ function mainScript(name: string | null, relativePath: string, source: string): 
 }
 
 /**
+ * The environment that switches the probe on into `dir` — or leaves it inert.
+ *
+ * @param dir - The dump directory, or `undefined` for none
+ * @returns The child's environment
+ */
+function probeEnv(dir: string | undefined): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, NODE_OPTIONS: `--require "${PROBE_DIST}"` };
+  delete env[LOG_DIR_ENV];
+  if (dir !== undefined) env[LOG_DIR_ENV] = dir;
+  return env;
+}
+
+/** Every dump in `dir`, parsed. */
+function dumpsIn(dir: string): RssDump[] {
+  return readdirSync(dir).map((name) => RssDumpSchema.parse(JSON.parse(readFileSync(safePath.join(dir, name), 'utf-8'))));
+}
+
+/**
  * Run a main script in a child with the probe preloaded.
  *
  * @param script - The child's main script, or `['-e', source]`
- * @param logDir - The dump directory, or `undefined` to leave the probe inert
- * @param viaSpawner - Launch the child through the built spawner, as a capture does
+ * @param logDir - `''` for a fresh dump directory, or `undefined` to leave the probe inert
  * @returns The dump files' parsed contents
  */
-function runWithProbe(script: string | readonly string[], logDir: string | undefined, viaSpawner = false): RssDump[] {
+function runWithProbe(script: string | readonly string[], logDir: '' | undefined): RssDump[] {
   const dir = scratchDir('lab-rss-probe-');
-  const env: NodeJS.ProcessEnv = { ...process.env, NODE_OPTIONS: `--require "${PROBE_DIST}"` };
-  delete env[LOG_DIR_ENV];
-  if (logDir !== undefined) env[LOG_DIR_ENV] = logDir === '' ? dir : logDir;
   const child = typeof script === 'string' ? [script] : [...script];
-  const argv = viaSpawner ? [SPAWNER_DIST, 'direct', NODE_EXECUTABLE, ...child] : child;
-  const result = spawnSync(NODE_EXECUTABLE, argv, { env, encoding: 'utf-8' });
+  const result = spawnSync(NODE_EXECUTABLE, child, { env: probeEnv(logDir === undefined ? undefined : dir), encoding: 'utf-8' });
   expect(result.status, result.stderr).toBe(0);
-  return readdirSync(dir).map((name) => RssDumpSchema.parse(JSON.parse(readFileSync(safePath.join(dir, name), 'utf-8'))));
+  return dumpsIn(dir);
 }
 
 /**
@@ -98,55 +106,76 @@ function allocate(mib: number): string {
 }
 
 /**
- * The vat-role peak of a CLI-owned main script, launched through the spawner.
+ * The one peak a CLI-owned main script writes.
  *
  * @param source - What the script runs
- * @returns Its peak, and the spawner's
+ * @returns Its peak
  */
-function peaksViaSpawner(source: string): { vatKb: number; spawnerKb: number } {
-  const dumps = runWithProbe(mainScript(CLI_PACKAGE, 'dist/bin.js', source), '', true);
-  const of = (role: 'vat' | 'spawner'): number => {
-    const found = dumps.filter((dump) => dump.role === role);
-    expect(found, `${role} dumps`).toHaveLength(1);
-    return found[0]?.maxRssKb ?? 0;
-  };
-  return { vatKb: of('vat'), spawnerKb: of('spawner') };
+function vatPeakKb(source: string): number {
+  const dumps = runWithProbe(mainScript(CLI_PACKAGE, 'dist/bin.js', source), '');
+  expect(dumps, 'vat dumps').toHaveLength(1);
+  return dumps[0]?.maxRssKb ?? 0;
 }
 
-/** The roles a run's dumps carry. */
-function rolesOf(dumps: readonly RssDump[]): string[] {
-  return dumps.map((dump) => dump.role);
+/**
+ * The peak of a vat stand-in started the way `npx` and a shell start vat: by a
+ * node parent holding `parentMib` MiB, through `sh -c 'exec node …'`.
+ *
+ * @param parentMib - What the parent holds, resident, before it launches
+ * @returns The stand-in's peak
+ */
+function peakUnderParentKb(parentMib: number): number {
+  const vat = mainScript(CLI_PACKAGE, 'dist/bin.js', allocate(20));
+  const dir = scratchDir('lab-rss-parent-');
+  const parent =
+    `${allocate(parentMib)}` +
+    "const r = require('node:child_process').spawnSync('sh', ['-c', 'exec \"$0\" \"$1\"', process.execPath, process.argv[1]], " +
+    "{ stdio: 'inherit', env: JSON.parse(process.env.CHILD_ENV) });" +
+    'process.exitCode = r.status ?? 1;';
+  // The parent itself runs without the probe: only the child gets it, through CHILD_ENV.
+  const result = spawnSync(NODE_EXECUTABLE, ['-e', parent, vat], {
+    env: { ...process.env, CHILD_ENV: JSON.stringify(probeEnv(dir)) },
+    encoding: 'utf-8',
+  });
+  expect(result.status, result.stderr).toBe(0);
+  const dumps = dumpsIn(dir);
+  expect(dumps, 'vat dumps').toHaveLength(1);
+  return dumps[0]?.maxRssKb ?? 0;
 }
 
 describe('the RSS probe', () => {
   it('writes one schema-valid vat dump whose peak rises by what the process allocated', () => {
-    const baseline = peaksViaSpawner('');
-    const allocated = peaksViaSpawner(allocate(200));
+    const baseline = vatPeakKb('');
+    const allocated = vatPeakKb(allocate(200));
 
-    expect(allocated.vatKb - baseline.vatKb).toBeGreaterThan(180 * MIB_KB);
+    expect(allocated - baseline).toBeGreaterThan(180 * MIB_KB);
   });
 
   it('counts a worker thread\'s memory in its process, and writes no second dump for the worker', () => {
     // The main thread allocates nothing; only the worker does. A probe that
     // missed workers reports a bare node's peak; one that let the worker dump
-    // too writes two vat files (`peaksViaSpawner` asserts exactly one).
+    // too writes two vat files (`vatPeakKb` asserts exactly one).
     const worker = (source: string): string =>
       "const { Worker } = require('node:worker_threads');" +
       `new Worker(${JSON.stringify(source + ' setTimeout(() => {}, 50);')}, { eval: true });`;
-    const baseline = peaksViaSpawner(worker(''));
-    const allocated = peaksViaSpawner(worker(allocate(300)));
+    const baseline = vatPeakKb(worker(''));
+    const allocated = vatPeakKb(worker(allocate(300)));
 
-    expect(allocated.vatKb - baseline.vatKb).toBeGreaterThan(270 * MIB_KB);
+    expect(allocated - baseline).toBeGreaterThan(270 * MIB_KB);
   });
 
-  it('gives the spawner\'s child the spawner\'s floor, not the parent\'s resident set', () => {
-    // This vitest worker is the spawner's parent. Holding 400 MiB here must not
-    // reach the spawner's child: that is the whole reason the spawner exists.
-    const held = Buffer.alloc(400 * MIB_KB * 1024, 1);
-    const { vatKb } = peaksViaSpawner('');
+  /**
+   * The Linux defect this figure exists to avoid: `maxRSS` survives `exec`, and a forked child
+   * starts with its parent's resident set, so a vat launched by a 300 MiB parent read as 300 MiB
+   * or more. `VmHWM` belongs to the exec'd image alone. Needs `sh`, so not on Windows, which
+   * creates a process rather than forking one; on macOS it is the measured reason the lab needs
+   * no bare-node launcher there either.
+   */
+  it.skipIf(process.platform === 'win32')('is independent of what the parent held (Linux and macOS: sh -c exec)', () => {
+    const small = peakUnderParentKb(0);
+    const large = peakUnderParentKb(300);
 
-    expect(held.length).toBeGreaterThan(0);
-    expect(vatKb).toBeLessThan(400 * MIB_KB);
+    expect(Math.abs(large - small)).toBeLessThan(50 * MIB_KB);
   });
 
   it('counts a published build\'s bins as vat, with nothing asked of the build', () => {
@@ -155,8 +184,8 @@ describe('the RSS probe', () => {
     const launcher = mainScript('vibe-agent-toolkit', 'bin/vat', allocate(1));
     const wrapper = mainScript(CLI_PACKAGE, 'dist/bin/vat.js', allocate(1));
 
-    expect(rolesOf(runWithProbe(launcher, ''))).toEqual(['vat']);
-    expect(rolesOf(runWithProbe(wrapper, ''))).toEqual(['vat']);
+    expect(runWithProbe(launcher, '')).toHaveLength(1);
+    expect(runWithProbe(wrapper, '')).toHaveLength(1);
   });
 
   it('counts vat reached through a link, as npm\'s .bin/vat is', ({ skip }) => {
@@ -164,7 +193,7 @@ describe('the RSS probe', () => {
     const link = safePath.join(scratchDir('lab-rss-bin-'), 'vat');
     createSymlink(symlinkCapability() ?? skip(), real, link, 'file');
 
-    expect(rolesOf(runWithProbe(link, ''))).toEqual(['vat']);
+    expect(runWithProbe(link, '')).toHaveLength(1);
   });
 
   it('writes nothing for an npm-like main script, a script no package owns, or node -e', () => {
@@ -180,7 +209,7 @@ describe('the RSS probe', () => {
       "require('node:child_process').spawnSync(process.execPath, ['-e', '0'], { stdio: 'inherit' });",
     );
 
-    expect(rolesOf(runWithProbe(vat, ''))).toEqual(['vat']);
+    expect(runWithProbe(vat, '')).toHaveLength(1);
   });
 
   it('is inert without its variable', () => {
@@ -198,42 +227,6 @@ describe('the RSS probe', () => {
 
     expect(required.length).toBeGreaterThan(0);
     expect(required.filter((name) => name?.startsWith('node:') !== true)).toEqual([]);
-  });
-});
-
-describe('the RSS spawner', () => {
-  it('imports only the exit-code and process contracts, never the utils barrel — its footprint is the floor', () => {
-    const source = readFileSync(SPAWNER_DIST, 'utf-8');
-    const required = [...source.matchAll(/^import .* from ["']([^"']+)["'];$/gm)]
-      .map((match) => match[1])
-      .filter((name) => name?.startsWith('node:') !== true);
-
-    expect(new Set(required)).toEqual(new Set(['@vibe-agent-toolkit/schema', '@vibe-agent-toolkit/utils/process']));
-  });
-
-  it('passes the child\'s exit status through unchanged', () => {
-    const result = spawnSync(NODE_EXECUTABLE, [SPAWNER_DIST, 'direct', NODE_EXECUTABLE, '-e', 'process.exitCode = 7'], {
-      encoding: 'utf-8',
-    });
-
-    expect(result.status, result.stderr).toBe(7);
-  });
-
-  it.skipIf(process.platform === 'win32')('dies of the signal that killed the child', () => {
-    const result = spawnSync(
-      NODE_EXECUTABLE,
-      [SPAWNER_DIST, 'direct', NODE_EXECUTABLE, '-e', "process.kill(process.pid, 'SIGTERM')"],
-      { encoding: 'utf-8' },
-    );
-
-    expect(result.signal, result.stderr).toBe('SIGTERM');
-  });
-
-  it('refuses a usage it does not understand with the contract\'s ERROR code', () => {
-    const result = spawnSync(NODE_EXECUTABLE, [SPAWNER_DIST, 'sideways', 'x'], { encoding: 'utf-8' });
-
-    expect(result.status).toBe(ExitCode.ERROR);
-    expect(result.stderr).toMatch(/usage: rss-spawner/);
   });
 });
 

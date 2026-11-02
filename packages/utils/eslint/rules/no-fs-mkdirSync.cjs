@@ -6,9 +6,11 @@
  * Why: After mkdirSync(), the path might not match what the filesystem uses on Windows.
  * mkdirSyncReal() returns the real (normalized) path to handle 8.3 short name issues.
  *
- * Auto-fix only where the result is discarded: mkdirSyncReal() takes the same arguments but
- * returns the directory's real path, where mkdirSync() returns the first directory it created
- * (or undefined). A call whose result is used gets a suggestion instead.
+ * Auto-fix only where the result is discarded: mkdirSyncReal() returns the directory's real
+ * path, where mkdirSync() returns the first directory it created (or undefined). A call whose
+ * result is used gets a suggestion instead. Even a discarded call is not a byte-for-byte swap:
+ * mkdirSyncReal() takes a string path only, so a `URL` or `Buffer` argument fails the typecheck
+ * after the fix.
  */
 
 const factory = require('./eslint-rule-factory.cjs');

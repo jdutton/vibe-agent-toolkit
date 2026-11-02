@@ -80,6 +80,7 @@ import {
   crawlDirectory,
   crawlPathFilter,
   type DirectoryRefusal,
+  NEVER_CONTENT_GLOBS,
   NEVER_CRAWL_GLOBS,
   settleCrawlRefusal,
   type UnreadablePolicy,
@@ -548,6 +549,14 @@ export class GitCrawlSource implements CrawlSource {
     const isMember = crawlPathFilter(['**/*'], [...NEVER_CRAWL_GLOBS]);
     const admits = (absolutePath: string): boolean =>
       isMember(relativeToRoot(absolutePath, this.#root));
+    // Git's OWN territory — tracked, or untracked and not ignored — drops only
+    // what can never be content. A `coverage/` or `.turbo/` git holds is one the
+    // author committed (`references/coverage/workers-comp.md`); the tool-output
+    // names in NEVER_CRAWL_GLOBS exist to prune IGNORED territory, which `admits`
+    // still does.
+    const isContent = crawlPathFilter(['**/*'], [...NEVER_CONTENT_GLOBS]);
+    const admitsContent = (absolutePath: string): boolean =>
+      isContent(relativeToRoot(absolutePath, this.#root));
 
     const found = new Map<string, EnumeratedPath>();
     /**
@@ -592,9 +601,9 @@ export class GitCrawlSource implements CrawlSource {
 
     // Snapshot first, because `record` is first-wins and git's entries carry a
     // shape the walked ones cannot.
-    const { members, submodules } = this.#snapshotMembers(admits);
+    const { members, submodules } = this.#snapshotMembers(admitsContent);
     for (const candidate of members) record(candidate);
-    for (const candidate of await this.#untrackedTerritory(admits, submodules)) record(candidate);
+    for (const candidate of await this.#untrackedTerritory(admits, admitsContent, submodules)) record(candidate);
     // Last, so an ancestor already recorded by the snapshot as a FILE is not
     // relabelled. `shape` is unconditionally `'directory'`, which is sound
     // because these paths were DERIVED from the names of paths git or the walk
@@ -675,13 +684,15 @@ export class GitCrawlSource implements CrawlSource {
    * Everything git deliberately does not hold: the ignored half, plus the
    * directories that exist without containing anything.
    *
-   * @param admits - The shipped include/exclude decision
+   * @param admits - The shipped include/exclude decision, for ignored territory
+   * @param admitsContent - The decision for git's own territory: only what can never be content is dropped
    * @param submodules - Directories the snapshot named but did not describe
    * @returns Candidates, files and directories alike, each carrying the prune
    *   list's `lstat` observation so `enumerate` can apply the one membership rule
    */
   async #untrackedTerritory(
     admits: (absolutePath: string) => boolean,
+    admitsContent: (absolutePath: string) => boolean,
     submodules: readonly string[],
   ): Promise<CrawlCandidate[]> {
     const candidates: CrawlCandidate[] = [];
@@ -740,7 +751,7 @@ export class GitCrawlSource implements CrawlSource {
     // symlink is precisely the path it drops. Re-offering one bare is how an
     // untracked link became a member while the committed ones were excluded.
     for (const collapsed of this.#prune({ ignored: false })) {
-      if (!admits(collapsed.absolutePath)) continue;
+      if (!admitsContent(collapsed.absolutePath)) continue;
       candidates.push({
         absolutePath: collapsed.absolutePath,
         shape: collapsed.shape,

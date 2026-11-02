@@ -67,6 +67,7 @@ import { Command } from 'commander';
 import { CommandRefusalError, refusalCodeOf } from '../../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, leftoverIssue, NOTHING_FINISHED, type FinishedWork } from '../../../utils/document-writer.js';
 import { extractSkillZip, inStaging, installLinks, installUnit, occupiedRefusal, skillCopyChange } from '../../../utils/install-plan.js';
+import { formatFindingLine } from '../../../utils/issue-rendering.js';
 import { createLogger } from '../../../utils/logger.js';
 import { requireInputPath } from '../../../utils/project-root-policy.js';
 
@@ -867,7 +868,7 @@ function notOwnedRefusal(error: unknown): unknown {
 
 /** A leftover of a complete install, as a warning naming it. */
 function leftover(run: InstallRun, issue: ValidationIssue): void {
-  run.logger.warn(`   ${issue.message}`);
+  run.logger.warn(`   ${formatFindingLine(issue)}`);
   run.issues.push(issue);
 }
 

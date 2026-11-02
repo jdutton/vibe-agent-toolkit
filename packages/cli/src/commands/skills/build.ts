@@ -1166,7 +1166,7 @@ function judgeOutcomes(
   // already uses. Per skill it would repeat 86 times on the adopter run that
   // motivated it; omitted entirely (which is how this shipped) the collapsed
   // block is a heading with nothing under it and no way to learn there is more.
-  const collapsedHint = formatCollapsedFindingsHint(collapsedFindings, 'build');
+  const collapsedHint = formatCollapsedFindingsHint(collapsedFindings);
   if (collapsedHint !== undefined) logger.info(collapsedHint);
   return { results, skillsWithErrors, failures };
 }

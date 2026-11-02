@@ -139,12 +139,14 @@ function pathFunctionRuleCases(fn: WrappedPathFunction): RuleCases {
         code: `import { ${fn} } from 'node:path'; const p = ${fn}(a, b);`,
         filename: LINTED_FILE,
         options,
-        output: `\n${SAFE_IMPORT} const p = safePath.${fn}(a, b);`,
+        // No call's fix removes the specifier; the dead-import leg does, a pass later.
+        output: `import { ${fn} } from 'node:path';\n${SAFE_IMPORT} const p = safePath.${fn}(a, b);`,
         errors,
       },
       // THREE call sites, ONE pass. RuleTester applies exactly one round of
       // fixes, so `output` here is the whole property: every call rewritten and
-      // the import surgery done, with nothing discarded for overlapping.
+      // the import inserted, with nothing discarded for overlapping (the
+      // `node:path` specifier goes on the next pass, through the dead-import leg).
       //
       // Every fixture above has a single call site, and a single-call-site
       // fixture CANNOT reproduce the defect this guards — the fix that edits
@@ -162,7 +164,7 @@ function pathFunctionRuleCases(fn: WrappedPathFunction): RuleCases {
         filename: LINTED_FILE,
         options,
         output: [
-          '',
+          `import { ${fn} } from 'node:path';`,
           SAFE_IMPORT,
           `const a1 = safePath.${fn}(a, b);`,
           `const a2 = safePath.${fn}(c, d);`,
@@ -340,15 +342,14 @@ const FUNCTIONS_OPTION_CASES: RuleCases = {
       ].join('\n'),
       errors: [{ messageId: 'noUnsafePathFn' }, { messageId: 'noUnsafePathFn' }, { messageId: 'noUnsafePathFn' }],
     },
-    // Two NAMED specifiers on one declaration: the first report takes its own
-    // specifier and the shared import insert; the second report's fix — its
-    // callee rewrite AND its specifier removal, merged into one range — nests
-    // inside the first's and is dropped for this pass. RuleTester shows one
-    // pass; 'two named specifiers converge' below runs it to the fixpoint.
+    // Two NAMED specifiers on one declaration: both calls rewritten in ONE pass —
+    // no fix removes a specifier, so no two fixes' ranges overlap — and the
+    // declaration left for the dead-import leg. 'two named specifiers converge'
+    // below runs it to the fixpoint.
     {
       code: "import { join, resolve } from 'node:path';\nconst a = join(x, y);\nconst b = resolve(x);",
       filename: LINTED_FILE,
-      output: `import {  resolve } from 'node:path';\n${SAFE_IMPORT}\nconst a = safePath.join(x, y);\nconst b = resolve(x);`,
+      output: `import { join, resolve } from 'node:path';\n${SAFE_IMPORT}\nconst a = safePath.join(x, y);\nconst b = safePath.resolve(x);`,
       errors: [{ messageId: 'noUnsafePathFn' }, { messageId: 'noUnsafePathFn' }],
     },
     // The narrowed table still fires on what it names.
@@ -431,12 +432,15 @@ describe('a suppressed first report does not strand the file', () => {
   const cfg = ruleConfig(NAME);
   const defined = { [NAME]: loadLocalRule(`${NAME}.cjs`) };
 
-  it.each(WRAPPED_PATH_FUNCTIONS)('%s converges to compiling source with the first call site disabled', (fn) => {
+  // `middle`: an unsuppressed call BEFORE the suppressed one, which a removal riding on any
+  // one report's fix reaches first.
+  const positions = ['first', 'middle'] as const;
+  it.each(positions.flatMap((at) => WRAPPED_PATH_FUNCTIONS.map((fn) => [at, fn] as const)))('%s: %s converges to compiling source with that call site disabled', (at, fn) => {
+    const suppressed = [`// eslint-disable-next-line local/${NAME}`, `export const a = ${fn}('1', '2');`];
+    const b = `export const b = ${fn}('3', '4');`;
     const source = [
       namedImport(fn, NODE_PATH),
-      `// eslint-disable-next-line local/${NAME}`,
-      `export const a = ${fn}('1', '2');`,
-      `export const b = ${fn}('3', '4');`,
+      ...(at === 'first' ? [...suppressed, b] : [b, ...suppressed]),
       `export const c = ${fn}('5', '6');`,
     ].join('\n');
 
@@ -517,7 +521,7 @@ describe('a sibling function binding safePath does not arm the repair leg', () =
     expect(output).not.toContain('safePath.join(');
   });
 
-  it("still finishes what an editor's single-fix left half-migrated", () => {
+  it("strands nothing when an editor applies one report's fix alone", () => {
     const source = [
       namedImport('join', NODE_PATH),
       "export const a = join('1', '2');",
@@ -525,20 +529,17 @@ describe('a sibling function binding safePath does not arm the repair leg', () =
     ].join('\n');
     const cfg = ruleConfig(NAME, { functions: ['join'] });
 
-    // An editor's "fix this problem" applies ONE report's fix. The first
-    // report's is the self-sufficient one — it rewrites its own callee, inserts
-    // the `safePath` import AND removes the `node:path` specifier — which strands
-    // every other call site as a bare, unbound `join(...)`.
+    // An editor's "fix this problem" applies ONE report's fix: its own callee and
+    // the `safePath` import. It no longer removes the `node:path` specifier, so
+    // every other call site is still bound — there is no strand to repair.
     const firstFix = lint(source, cfg)[0]?.fix;
     if (!firstFix) {
-      throw new Error('the first report carries no fix; this fixture no longer builds a strand');
+      throw new Error('the first report carries no fix');
     }
     const stranded = source.slice(0, firstFix.range[0]) + firstFix.text + source.slice(firstFix.range[1]);
-    // The strand, and the evidence that comes with it, spelled out rather than
-    // assumed: no `node:path` left, a bare `join`, and a migrated sibling call.
-    expect(stranded).not.toContain("from 'node:path'");
-    expect(stranded).toContain("export const b = join('3', '4');");
+    expect(stranded).toContain(namedImport('join', NODE_PATH));
     expect(stranded).toContain("export const a = safePath.join('1', '2');");
+    expect(unboundIn(stranded, { [NAME]: loadLocalRule(`${NAME}.cjs`) })).toStrictEqual([]);
 
     const { output } = fix(stranded, cfg);
     expect(output).toContain("export const b = safePath.join('3', '4');");

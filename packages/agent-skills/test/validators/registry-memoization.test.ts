@@ -1,10 +1,17 @@
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import type { ResourcePopulationSource, ResourceRegistry } from '@vibe-agent-toolkit/resources';
-import { FS_FAULT_CODE, mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { type ResourcePopulationSource, ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import {
+  createSymlink,
+  FS_FAULT_CODE,
+  mkdirSyncReal,
+  normalizedTmpdir,
+  safePath,
+  symlinkCapability,
+} from '@vibe-agent-toolkit/utils';
 import { gitExecutable, withReaddirSyncRefused } from '@vibe-agent-toolkit/utils/testing';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
   crawlAndResolveRegistry,
@@ -56,6 +63,29 @@ describe('crawlAndResolveRegistry — memoized per project root', () => {
     const viaDotSegment = await crawlAndResolveRegistry(`${rootA}/./`, { outputs: [], unreadable: 'refuse' });
 
     expect(viaDotSegment).toBe(first);
+  });
+
+  /**
+   * Why the key is LEXICAL, not the real path. A registry answers `getResource` for the spelling
+   * it was crawled under, so serving the real root's registry to a caller holding a symlinked
+   * spelling would miss every lookup — an empty link graph, and a skill reported clean because
+   * nothing was walked. Two spellings cost two crawls; that is the price of a correct answer.
+   */
+  it('crawls a symlinked spelling of the root under that spelling, never serving the real one', async ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const link = safePath.join(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-registry-memo-link-')), 'root');
+    createSymlink(cap, rootA, link, 'dir');
+    try {
+      const first = await crawlAndResolveRegistry(rootA, { outputs: [], unreadable: 'refuse' });
+      const viaLink = await crawlAndResolveRegistry(link, { outputs: [], unreadable: 'refuse' });
+
+      // The control: the real root's registry cannot answer for the link's spelling.
+      expect(first.getResource(safePath.join(link, 'a.md'))).toBeUndefined();
+      expect(viaLink).not.toBe(first);
+      expect(viaLink.getResource(safePath.join(link, 'a.md'))).toBeDefined();
+    } finally {
+      rmSync(safePath.resolve(link, '..'), { recursive: true, force: true });
+    }
   });
 
   it('does not share a registry across different roots', async () => {
@@ -331,6 +361,45 @@ describe('crawlAndResolveRegistry — a rejected crawl is retried, never served'
     expect(calls()).toBe(2);
   });
 
+  it('serves a caller WAITING on a crawl that rejects by crawling again under its own policy', async () => {
+    resetPackagingRegistryCache();
+    const { root, locked } = rootWithLockedDirectory();
+    const crawls = vi.spyOn(ResourceRegistry, 'fromCrawl');
+    try {
+      const degraded: unknown[] = [];
+      await withReaddirSyncRefused(locked, 'EACCES', async () => {
+        // Both started before either settles: the second joins the first's in-flight crawl.
+        const first = crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' });
+        const second = crawlAndResolveRegistry(root, { outputs: [], unreadable: { degrade: (refusal) => degraded.push(refusal) } });
+        await expect(first).rejects.toMatchObject({ code: FS_FAULT_CODE });
+        await expect(second).resolves.toBeDefined();
+      });
+      expect(degraded.length).toBeGreaterThan(0); // the retry ran under the waiter's OWN policy
+      expect(crawls).toHaveBeenCalledTimes(2);
+    } finally {
+      crawls.mockRestore();
+    }
+  });
+
+  it('costs N waiters on a rejected crawl ONE re-crawl, not N', async () => {
+    resetPackagingRegistryCache();
+    const { root, locked } = rootWithLockedDirectory();
+    const crawls = vi.spyOn(ResourceRegistry, 'fromCrawl');
+    try {
+      await withReaddirSyncRefused(locked, 'EACCES', async () => {
+        const degrade = { degrade: () => undefined };
+        const first = crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' });
+        const waiters = [1, 2, 3].map(() => crawlAndResolveRegistry(root, { outputs: [], unreadable: degrade }));
+        await expect(first).rejects.toMatchObject({ code: FS_FAULT_CODE });
+        const served = await Promise.all(waiters);
+        expect(new Set(served).size).toBe(1);
+      });
+      expect(crawls).toHaveBeenCalledTimes(2);
+    } finally {
+      crawls.mockRestore();
+    }
+  });
+
   it('shares ONE in-flight crawl between two overlapping callers', async () => {
     const root = rootWithMarkdown({ 'a.md': '# A\n' });
     const { source, calls } = countingSource(root, ['a.md']);
@@ -342,6 +411,17 @@ describe('crawlAndResolveRegistry — a rejected crawl is retried, never served'
     expect(calls()).toBe(1);
   });
 });
+
+/**
+ * A root with a subdirectory to refuse: a refused SUBDIRECTORY degrades under `{ degrade }`,
+ * where a refused root (the crawl base itself) refuses under any policy.
+ */
+function rootWithLockedDirectory(): { root: string; locked: string } {
+  const root = rootWithMarkdown({ 'a.md': '# A\n' });
+  const locked = mkdirSyncReal(safePath.join(root, 'locked'));
+  writeFileSync(safePath.join(locked, 'b.md'), '# B\n');
+  return { root, locked };
+}
 
 /** A root with a built skill under `out/` and the staging residue an interrupted build leaves beside it. */
 function rootWithStagedOutput(): { root: string; output: string } {

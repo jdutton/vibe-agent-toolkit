@@ -16,10 +16,18 @@
  *   repository's git directory, so git run in the copy would read and write the
  *   REAL repository's index for the worktree. Point the subject at a full
  *   checkout.
+ * - **A subject nested below its repository's top level.** The copy is of the
+ *   subject alone, so it carries no `.git`: vat in the copy would see an
+ *   untracked tree, where vat in the subject sees a tracked one — a different
+ *   command. Point the subject at the repository's top level, or at a tree no
+ *   repository encloses. (Every arm's git also runs under
+ *   `GIT_CEILING_DIRECTORIES` at the copy's parent, so a copy can never climb
+ *   into a repository the arms root happens to sit inside.)
  * - **A written path that leaves the subject** — absolute, or climbing with `..`.
  */
 
-import { hasParentTraversalSegment, isAbsolutePath } from '@vibe-agent-toolkit/utils';
+import { hasParentTraversalSegment, isAbsolutePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { gitFindRoot } from '@vibe-agent-toolkit/utils/git';
 
 import { armRefusal } from './arm-dirs.js';
 import { type ClonePlan, executeClonePlan, readCloneSource, planTreeClone } from './tree-clone.js';
@@ -64,6 +72,16 @@ export function planSubjectCopy(subject: string, destination: string, platform: 
       refusal:
         `REFUSED: subject '${subject}' is a git worktree (its .git is a file), so git run in a copy of it ` +
         "would read and write the REAL repository's index. Point the subject at a full checkout.",
+    };
+  }
+  const top = gitFindRoot(subject);
+  if (top !== null && toForwardSlash(top) !== toForwardSlash(subject)) {
+    return {
+      ok: false,
+      refusal:
+        `REFUSED: subject '${subject}' is inside the git repository at '${top}', not its top level, so a copy of ` +
+        'it would carry no .git and vat in the copy would see an untracked tree. Point the subject at the ' +
+        "repository's top level, or at a tree no repository encloses.",
     };
   }
   return { ok: true, steps: planTreeClone(listed.source, destination, platform === 'darwin' ? 'clone' : 'copy') };

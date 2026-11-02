@@ -750,6 +750,9 @@ export function armDirectoryEnvironment(dirs: ArmDirectories, platform: NodeJS.P
       // No system config or attributes reach an arm's vat or the commands preparing its clone.
       GIT_CONFIG_NOSYSTEM: '1',
       GIT_ATTR_NOSYSTEM: '1',
+      // Git in the subject copy never climbs past it into a repository the arms root sits inside.
+      // No effect on an arm that runs in the real subject, which is never below the arms root.
+      GIT_CEILING_DIRECTORIES: safePath.join(dirs.subject, '..'),
       // An npx build fetches into the arm's own cache, once, and never asks the registry again.
       npm_config_cache: dirs.npmCache,
       npm_config_prefer_offline: 'true',

@@ -6,7 +6,7 @@
  * resources lane wrote no human report at all, so its error row existed only
  * in the stdout YAML — on an adopter, inside a 68k-line document. These pin the
  * promise for both verbs that run the resources lane, and pin that stdout stays
- * a parseable document beside it.
+ * a parseable document beside it — the same document, whatever stderr says.
  */
 
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
@@ -33,6 +33,27 @@ function namesBrokenLink(stderr: string): boolean {
   });
 }
 
+/** Whether stderr carries `check`'s finding on `path` as one finding line of `severity`. */
+function namesCheck(stderr: string, path: string, severity: string, check: string): boolean {
+  return stderr.split('\n').some((line) => {
+    const trimmed = line.trim();
+    return trimmed.startsWith(path) && trimmed.includes(`: ${severity}: `) && trimmed.endsWith(`[CUSTOM:${check}]`);
+  });
+}
+
+/** The document with its timings blanked: the only fields two runs of one tree may differ in. */
+function untimed(stdout: string): string {
+  return stdout
+    .split('\n')
+    .map((line) => {
+      const colon = line.indexOf(': ');
+      const key = line.slice(0, colon).trim();
+      const timed = colon > 0 && /^\w+$/u.test(key) && (key.endsWith('Ms') || key.endsWith('Secs'));
+      return timed ? `${line.slice(0, colon)}: 0` : line;
+    })
+    .join('\n');
+}
+
 let corpus: string;
 
 beforeAll(() => {
@@ -42,7 +63,9 @@ beforeAll(() => {
   writeTestFile(
     join(corpus, 'vibe-agent-toolkit.config.yaml'),
     'resources:\n  include:\n    - "docs/**/*.md"\n  checks:\n    no-b:\n      description: b.md must not exist\n'
-      + "      sql: SELECT path FROM resource_realizations WHERE path = 'docs/b.md'\n",
+      + "      sql: SELECT path FROM resource_realizations WHERE path = 'docs/b.md'\n"
+      + '    warn-a:\n      description: a.md is flagged\n      severity: warning\n'
+      + "      sql: SELECT path FROM resource_realizations WHERE path = 'docs/a.md'\n",
   );
   writeTestFile(join(corpus, 'docs', 'a.md'), '# A\n\nSee [missing](./nope.md).\n');
   writeTestFile(join(corpus, 'docs', 'b.md'), '# B\n\nFine.\n');
@@ -82,12 +105,50 @@ describe('resources findings on stderr', () => {
     const result = await run(['resources', 'check']);
 
     expect(result.status, result.stderr).toBe(1);
-    const named = result.stderr.split('\n').some((line) => {
-      const trimmed = line.trim();
-      return trimmed.startsWith('docs/b.md') && trimmed.includes(': error: ') && trimmed.endsWith('[CUSTOM:no-b]');
-    });
-    expect(named, result.stderr).toBe(true);
+    expect(namesCheck(result.stderr, 'docs/b.md', 'error', 'no-b'), result.stderr).toBe(true);
     const report = CHECK_REPORT_SCHEMA.parse(yaml.parse(result.stdout));
     expect(report.findings.map((finding) => finding.code)).toContain('CUSTOM:no-b');
+  });
+
+  it('vat validate names the violated check on stderr too — the checks surface reports inside the orchestrator', async () => {
+    const result = await run(['validate']);
+
+    expect(namesCheck(result.stderr, 'docs/b.md', 'error', 'no-b'), result.stderr).toBe(true);
+  });
+});
+
+describe('a warning finding on stderr', () => {
+  it('is collapsed by default, and the hint counts it and points at the report', async () => {
+    const result = await run(['resources', 'check']);
+
+    expect(namesCheck(result.stderr, 'docs/a.md', 'warning', 'warn-a'), result.stderr).toBe(false);
+    expect(result.stderr).toContain('1 warning/info finding(s) not shown — re-run with --verbose, or read the report on stdout');
+    const report = CHECK_REPORT_SCHEMA.parse(yaml.parse(result.stdout));
+    expect(report.findings.map((finding) => finding.code)).toContain('CUSTOM:warn-a');
+  });
+
+  it('is printed under -v, and then no hint is', async () => {
+    const result = await run(['resources', 'check', '-v']);
+
+    expect(namesCheck(result.stderr, 'docs/a.md', 'warning', 'warn-a'), result.stderr).toBe(true);
+    expect(result.stderr).not.toContain('not shown');
+  });
+});
+
+describe('stdout is the document, whatever stderr reports', () => {
+  it('is the same document with -v (every finding on stderr) as without (errors only)', async () => {
+    const quiet = await run(['resources', 'check']);
+    const verbose = await run(['resources', 'check', '-v']);
+
+    expect(verbose.stderr).not.toBe(quiet.stderr);
+    expect(untimed(verbose.stdout)).toBe(untimed(quiet.stdout));
+  });
+
+  it('--format text puts each finding on stdout and no finding line on stderr', async () => {
+    const result = await run(['resources', 'validate', '--format', 'text']);
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(namesBrokenLink(result.stdout), result.stdout).toBe(true);
+    expect(result.stderr).not.toContain('[LINK_BROKEN_FILE]');
   });
 });

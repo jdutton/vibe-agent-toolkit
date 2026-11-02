@@ -29,7 +29,9 @@
  *    copy removed when the arm ends — see `subject-copy.ts`.
  */
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { forEachInOrder, mapInOrder } from '@vibe-agent-toolkit/utils';
+import { handleTerminatingSignals } from '@vibe-agent-toolkit/utils/process';
 
 import {
   type ArmDescriptor,
@@ -88,12 +90,6 @@ export interface RepeatSpec {
    * setup's I/O into a repeat's measurement.
    */
   readonly envFor?: RepeatEnvFor;
-  /**
-   * The launcher MEASURED repeats are started through (`RunOptions.via`),
-   * or `undefined` to launch them directly. Priming runs are never measured, so
-   * they always launch directly.
-   */
-  readonly measuredVia?: string;
 }
 
 /** Per-repeat variables for the measured run; see {@link RepeatSpec.envFor}. */
@@ -215,14 +211,12 @@ export function commandStep(spec: MeasuredCommandSpec, args: readonly string[]):
  * @param request - What the capture was asked to do
  * @param spec - The command to measure
  * @param envFor - Per-repeat environment for the MEASURED run only
- * @param measuredVia - The launcher measured repeats start through; see {@link RepeatSpec.measuredVia}
  * @returns The repeats and the verdict on them; see {@link SpecMeasurement}
  */
 export async function measureSpec(
   request: CaptureRequest,
   spec: MeasuredCommandSpec,
   envFor?: RepeatEnvFor,
-  measuredVia?: string,
 ): Promise<SpecMeasurement> {
   const args = materializeArgs(spec.args, request.subject.path);
   const run = await runRepeats({
@@ -234,7 +228,6 @@ export async function measureSpec(
     ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
     env: request.env,
     ...(envFor === undefined ? {} : { envFor }),
-    ...(measuredVia === undefined ? {} : { measuredVia }),
   });
   return { spec, args, cache: request.cache, results: run.results, failure: armRunFailure(run), removed: run.removed, npmNetwork: run.npmNetwork };
 }
@@ -284,11 +277,16 @@ export async function runInterleaved(specs: readonly RepeatSpec[], rounds: numbe
   if (rounds === 0) return arms.map((arm) => ({ removed: arm.removed, removedTool: arm.removedTool, npmNetwork: arm.npmNetwork, priming: null, results: [] }));
 
   for (const arm of arms) prepareArmDirectories(arm.context.dirs);
+  const removeCopies = (): Promise<void> =>
+    forEachInOrder(arms, (arm) => (arm.copy === null ? undefined : removeArmSubject(arm.context.dirs)));
+  // A Ctrl-C or kill mid-capture removes the copies too: each is a whole subject left on disk.
+  const signals = handleTerminatingSignals({ cleanup: removeCopies, fallbackExitCode: ExitCode.ERROR });
   try {
     await forEachInOrder(arms, (arm) => makeSubjectCopy(arm));
     return await runPreparedArms(arms, specs, rounds);
   } finally {
-    await forEachInOrder(arms, (arm) => (arm.copy === null ? undefined : removeArmSubject(arm.context.dirs)));
+    // A signal that already arrived runs the removal itself, before the process ends.
+    if (signals.release()) await removeCopies();
   }
 }
 
@@ -314,7 +312,7 @@ async function runPreparedArms(arms: readonly PreparedArm[], specs: readonly Rep
     forEachInOrder(arms, async (arm, index) => {
       if ((priming[index]?.violation ?? null) !== null) return;
       await clearWrittenOutputs(arm);
-      results[index]?.push(await runSequence(arm.context, { kind: 'measured', vatEnv: arm.measuredEnv(round), via: arm.measuredVia }));
+      results[index]?.push(await runSequence(arm.context, { kind: 'measured', vatEnv: arm.measuredEnv(round) }));
     }),
   );
   return arms.map((arm, index) => ({
@@ -397,7 +395,6 @@ interface PreparedArm {
   readonly removedTool: readonly string[];
   readonly npmNetwork: readonly string[];
   readonly measuredEnv: (round: number) => ArmEnvironment;
-  readonly measuredVia: string | undefined;
 }
 
 /**
@@ -440,7 +437,6 @@ function prepareArm(spec: RepeatSpec): PreparedArm {
     removed: vat.removed,
     removedTool: tool.removed,
     npmNetwork: vat.npmNetwork,
-    measuredVia: spec.measuredVia,
     measuredEnv: (round) => {
       const own = spec.envFor?.(round);
       return own === undefined ? vat.env : mergeArmEnvironments(vat.env, { set: own, unset: [] });

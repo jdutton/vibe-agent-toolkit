@@ -42,7 +42,7 @@ import {
   loadResourcesWithConfig,
   publishedPopulation,
 } from '../../utils/resource-loader.js';
-import { warnRunIntegrity } from '../../utils/run-integrity.js';
+import { findingsAddedByRunIntegrity } from '../../utils/run-integrity.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
 import type { PhaseOutcome } from '../phase-utils.js';
 import { discoverSkillsFromConfig } from '../skills/skill-discovery.js';
@@ -446,7 +446,7 @@ function inCollectionScope(
  * orchestrator, `runPhase` applies the same pass to this phase's report, by the
  * declaration this verb gives its own writer. A
  * refusal is the envelope's error branch, its message already on stderr, and a
- * site-specific run-integrity finding is warned here, where both lanes see it.
+ * site-specific run-integrity finding is reported here with every other finding.
  */
 export async function runResourcesValidatePhase(
   pathArg: string | undefined,
@@ -460,9 +460,8 @@ export async function runResourcesValidatePhase(
     // The human half, on stderr — the document on stdout is unchanged by it. Not
     // under `--format text`, whose stdout already IS these lines.
     if (options.format !== 'text') {
-      reportFindings(report.findings, { verbose: options.verbose === true, report: 'run', write: logger.error });
+      reportFindings(report.findings, { verbose: options.verbose === true, write: logger.error });
     }
-    warnRunIntegrity(report);
     return { report };
   } catch (error) {
     return { report: refusalReport(refusalCodeOf(error), error, GATE, NOTHING_FINISHED) };
@@ -475,8 +474,13 @@ export async function validateCommand(
 ): Promise<void> {
   const { report } = await runResourcesValidatePhase(pathArg, options);
   const published = publishedReport(VERB, report);
-  // The writer's own zero-examined refusal, warned in the lane that publishes it.
-  if (published !== report) warnRunIntegrity(published);
+  // The writer's own zero-examined refusal, reported in the lane that publishes it — on stderr
+  // unless `--format text`, whose stdout already carries it as the same line.
+  if ((options.format ?? 'yaml') !== 'text') {
+    reportFindings(findingsAddedByRunIntegrity(report, published), {
+      verbose: options.verbose === true, write: createLogger().error,
+    });
+  }
   endWithReport('resources validate', published, options.format ?? 'yaml');
 }
 

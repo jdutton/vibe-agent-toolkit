@@ -130,20 +130,15 @@ describe('vat audit — formatAuditFindingsLines', () => {
     const text = formatAuditFindingsLines(mixedFixture(), ROOT, false).join('\n');
     expect(text).toContain('4 warning/info');
     expect(text).toContain('--verbose');
-    expect(text).toContain('YAML');
+    expect(text).toContain('the report on stdout');
   });
 
-  it("scopes the collapsed-findings pointer to THIS report, not to 'the YAML report' in general", () => {
-    // The pointer used to promise that "the YAML report on stdout … always
-    // lists every finding". True of `vat audit` and `vat skills validate`; FALSE
-    // of the whole `vat build` family, whose stdout YAML publishes issueCounts
-    // only (an adopter run reported 67 warnings with zero `issues:` arrays and
-    // zero `code:` fields, in default AND --verbose mode). Scope the claim to
-    // the report the operator is actually holding so it cannot be read as a
-    // property of VAT's YAML output generally.
+  it('points at the report on stdout without naming a format it may not be in', () => {
+    // The pointer once said "this audit's YAML report" — false under `--format json`.
+    // Every verb that prints it now publishes every finding in its document.
     const text = formatAuditFindingsLines(mixedFixture(), ROOT, false).join('\n');
-    expect(text).toContain("this audit's YAML report on stdout");
-    expect(text).not.toContain('the YAML report on stdout, which always lists every finding');
+    expect(text).toContain('read the report on stdout, which lists every finding');
+    expect(text).not.toContain('YAML');
   });
 
   it('never heads a block with an EMPTY subject, even when the finding IS the scan root', () => {

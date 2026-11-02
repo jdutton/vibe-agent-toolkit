@@ -20,10 +20,9 @@ const KB_PER_GIB = KB_PER_MIB * 1024;
 
 /** What every number here is. */
 const LEGEND =
-  'Peak RSS per repeat = the largest vat process\'s process.resourceUsage().maxRSS — worker ' +
-  'threads INCLUDED (they share the process), child processes reported separately and never summed. ' +
-  'Every repeat is launched by a bare-node spawner, whose own peak (the floor) is shown: on Linux a ' +
-  'child\'s peak includes what its parent held at fork(), so a figure means vat\'s own memory only above it.';
+  'Peak RSS per repeat = the largest vat process\'s peak resident set (VmHWM on Linux, ' +
+  'process.resourceUsage().maxRSS elsewhere) — worker threads INCLUDED (they share the process), ' +
+  'the parent\'s memory EXCLUDED; each vat process is its own figure, counted, and never summed.';
 
 /** How this facet's numbers are qualified on a busy machine. */
 const PHRASING = {
@@ -52,11 +51,10 @@ function rowLines(row: MemoryCommandStats): readonly string[] {
   if (row.failed) return [`  ${row.name}: FAILED — ${row.failure ?? 'unknown'}`];
   const exit = row.exitCode === 0 || row.exitCode === null ? '' : `, exit ${String(row.exitCode)}`;
   const processes = [...new Set(row.processesPerRepeat)].map((count) => tally(count)).join('/');
-  const floor = row.spawnerKb.length === 0 ? '' : `, floor ${formatKb(Math.max(...row.spawnerKb))}`;
   return [
     `  ${row.name}: ${formatKb(row.medianKb)} median peak RSS ` +
       `(±${formatKb(row.iqrKb)} IQR, ${formatKb(row.minKb)}–${formatKb(row.maxKb)}, ` +
-      `${tally(row.runs)} runs, ${row.cache}, ${processes} vat processes${floor}${exit})`,
+      `${tally(row.runs)} runs, ${row.cache}, ${processes} vat processes${exit})`,
   ];
 }
 

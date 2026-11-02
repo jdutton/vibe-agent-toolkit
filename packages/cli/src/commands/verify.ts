@@ -99,7 +99,7 @@ export function createVerifyTopLevelCommand(): Command {
 
   addRetiredOnlyOption(command)
     .description('Verify built artifacts (resources + skills + marketplace + consistency); marketplace/consistency read dist/ — run after vat build')
-    .option('-v, --verbose', 'Show all inspected resources, including those without issues')
+    .option('-v, --verbose', 'Forwarded to every delegated phase: its warning and info findings on stderr too, and its per-asset rows in the document')
     .option('--debug', 'Enable debug logging')
     .action(verifyTopLevelCommand)
     .addHelpText(
@@ -160,8 +160,9 @@ Output:
     'marketplace:<name>': a plugin.json, a skills/ directory or a SKILL.md the
     OS will not read is refused as RESOURCE_CHECK_BROKEN at error (exit 1),
     naming it — a file this run could not read is not a verdict on what ships.
-  Progress and findings → stderr (streamed live), one line per finding,
-  location:line: severity: message [code], errors first. A delegated phase
+  Progress and findings → stderr (streamed live), each finding as
+  "location:line: severity: message [code]", its fix (when it has one) on
+  the next line, indented, as "Fix: ...", errors first. A delegated phase
   prints every error, and its warning and info findings only with --verbose;
   the in-process phases print every finding
 
@@ -582,7 +583,7 @@ function reportInProcessPhase(
   logger: ReturnType<typeof createLogger>
 ): void {
   logger.error(`\n▶ Phase: ${phase}`);
-  reportFindings(findings, { verbose: true, report: 'run', write: logger.error });
+  reportFindings(findings, { verbose: true, write: logger.error });
 }
 
 /**

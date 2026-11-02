@@ -10,6 +10,7 @@ import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
+import { formatFindingLine } from '../../utils/issue-rendering.js';
 import { createLogger } from '../../utils/logger.js';
 import { assertReadableDirectoryArgument, projectRootOrNull } from '../../utils/project-root-policy.js';
 import { requireWritableDatabase } from '../../utils/rag-database.js';
@@ -153,7 +154,7 @@ export async function indexCommand(
     for (const issue of unreadable) {
       // On stderr as well, the way the provider reports its own per-resource
       // failures, so a caller reading only the exit code still sees the name.
-      logger.warn(`[vat-rag] ${issue.message}`);
+      logger.warn(formatFindingLine(issue));
     }
 
     requireWritableDatabase(dbPath, options.db !== undefined && options.db !== '');

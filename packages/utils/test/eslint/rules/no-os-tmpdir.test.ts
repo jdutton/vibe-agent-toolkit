@@ -26,8 +26,10 @@ describe(NAME, () => {
   it('points the fix at the configured seam', () => {
     expectRulePasses(NAME, safeModuleCases(
       UNSAFE,
-      `\nimport { normalizedTmpdir } from '${SEAM}';\nconst r = normalizedTmpdir();`,
+      // One pass keeps `tmpdir`'s import; the dead-import leg drops it on the next.
+      `import { tmpdir } from 'node:os';\nimport { normalizedTmpdir } from '${SEAM}';\nconst r = normalizedTmpdir();`,
       [{ messageId: 'noUnsafeOperation' }],
+      `import { normalizedTmpdir } from '${SEAM}';\nconst r = normalizedTmpdir();`,
     ));
   });
 
@@ -65,6 +67,26 @@ describe(NAME, () => {
  * forms belong in the same set — and the false positives must stay rejected,
  * which is what the negative rows pin.
  */
+/**
+ * A bare `tmpdir()` is reported only when it resolves through scope to `node:os`'s own
+ * export — however it was bound — and never by name alone (see the `memfs` and
+ * local-function valid cases in `factory-cases.ts`).
+ */
+describe('a bare tmpdir() is reported however node:os bound it', () => {
+  const cfg = ruleConfig(NAME);
+  it.each([
+    ['an aliased import', "import { tmpdir as t } from 'node:os';\nexport const a = t();"],
+    ['a destructured require()', "const { tmpdir } = require('node:os');\nexport const a = tmpdir();"],
+    ['a destructured await import()', "export async function f() {\n  const { tmpdir } = await import('os');\n  return tmpdir();\n}"],
+  ])('%s', (_label, source) => {
+    expect(lint(source, cfg)).toHaveLength(1);
+  });
+
+  it('a destructured require() of another module is not', () => {
+    expect(lint("const { tmpdir } = require('memfs');\nexport const a = tmpdir();", cfg)).toStrictEqual([]);
+  });
+});
+
 describe('os.tmpdir() is rewritten to a free call, however the namespace was bound', () => {
   const cfg = ruleConfig(NAME);
   const DYNAMIC = "export async function f() {\n  const os = await import('node:os');\n  return os.tmpdir();\n}";

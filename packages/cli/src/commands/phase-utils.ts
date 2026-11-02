@@ -52,8 +52,9 @@ import { z, type ZodTypeAny } from 'zod';
 import type { DocumentFormat } from '../report-schemas.js';
 import { CommandRefusalError, refusalCodeOf } from '../utils/command-refusal.js';
 import { NOTHING_FINISHED, refusalReport, type FinishedWork } from '../utils/document-writer.js';
+import { reportFindings } from '../utils/issue-rendering.js';
 import { createLogger } from '../utils/logger.js';
-import { type ExaminedDeclaration, warnRunIntegrity, withRunIntegrity } from '../utils/run-integrity.js';
+import { type ExaminedDeclaration, findingsAddedByRunIntegrity, withRunIntegrity } from '../utils/run-integrity.js';
 
 import type { OrchestratorData, OrchestratorPhaseEntry } from './orchestrator-schema.js';
 
@@ -351,7 +352,8 @@ export async function runPhase(phase: Phase): Promise<PhaseResult> {
     phase.schema.parse(report);
     const judged = phaseVerdict(phase, report);
     // The refusal was added here, so no phase has said it: the document and stderr must agree.
-    if (judged !== report) warnRunIntegrity(judged);
+    // A refusal is an error, which every verbosity prints.
+    reportFindings(findingsAddedByRunIntegrity(report, judged), { verbose: false, write: createLogger().error });
     return { name: phase.name, report: judged };
   } catch (error) {
     return { name: phase.name, report: refusalReport(refusalCodeOf(error), error, ORCHESTRATOR_GATE, NOTHING_FINISHED) };

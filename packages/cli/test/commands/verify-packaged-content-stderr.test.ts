@@ -52,7 +52,9 @@ describe('verify packaged-content — the refusal reaches stderr', () => {
     expect(phase.report.status).toBe('findings');
     expect(phase.report.examined).toBe(0);
     expect(phase.report.findings.map((finding) => finding.code)).toEqual(['RESOURCE_CHECK_BROKEN']);
-    expect(stderr).toContain('Warning: Nothing was examined: 0 built skill bundles');
+    expect(stderr).toContain('error: Nothing was examined: 0 built skill bundles');
+    expect(stderr).toContain('[RESOURCE_CHECK_BROKEN]');
+    expect(stderr).not.toContain('Warning:');
     expect(stderr).toContain('packaged-content phase');
     expect(stderr).toContain('vat build');
   });

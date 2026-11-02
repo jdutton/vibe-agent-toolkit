@@ -38,7 +38,6 @@ function row(medianKb: number, over: Partial<MemoryCommandStats> = {}): MemoryCo
     iqrKb: 1024,
     samplesKb: [medianKb - 1024, medianKb, medianKb + 1024],
     processesPerRepeat: [1, 1, 1],
-    spawnerKb: [40 * 1024, 40 * 1024, 40 * 1024],
     exitCode: 0,
     failed: false,
     failure: null,
@@ -99,13 +98,17 @@ describe('compareMemory', () => {
     expect(onlyVerdict(compared(row(GIB_KB), row(1.05 * GIB_KB))).kind).toBe('unchanged');
   });
 
-  it('calls a 12 MiB move on a small peak unchanged — it is under the 16 MiB floor', () => {
-    // 12 MiB on 40 MiB is 30%, well past the relative gate: only the floor stops it.
-    expect(onlyVerdict(compared(row(40 * 1024), row(52 * 1024))).kind).toBe('unchanged');
+  it('calls a 6 MiB move on a small peak unchanged — it is under the 8 MiB floor', () => {
+    // 6 MiB on 40 MiB is 15%, past the relative gate and the arms' 4 MiB spread: only the floor stops it.
+    expect(onlyVerdict(compared(row(40 * 1024), row(46 * 1024))).kind).toBe('unchanged');
+  });
+
+  it('calls a 10 MiB move on a small peak CHANGED — over the floor, the 10% gate and the spread', () => {
+    expect(onlyVerdict(compared(row(40 * 1024), row(50 * 1024))).kind).toBe('changed');
   });
 
   it('calls a move inside the arms\' combined spread unchanged, though it clears both gates', () => {
-    // 200 MiB on 1 GiB clears 10% and 16 MiB; each arm's repeats spanned 300 MiB.
+    // 200 MiB on 1 GiB clears 10% and 8 MiB; each arm's repeats spanned 300 MiB.
     const wide = { minKb: GIB_KB - 150 * 1024, maxKb: GIB_KB + 150 * 1024 };
     const after = 1.2 * GIB_KB;
     const verdict = onlyVerdict(compared(row(GIB_KB, wide), row(after, { minKb: after - 150 * 1024, maxKb: after + 150 * 1024 })));
@@ -147,9 +150,9 @@ describe('the memory renderers', () => {
     const text = renderMemoryReport(reportWith(row(GIB_KB, { processesPerRepeat: [2, 2, 2] })));
 
     expect(text).toContain('build: 1.00 GiB median peak RSS');
-    expect(text).toContain('2 vat processes, floor 40.0 MiB');
+    expect(text).toContain('2 vat processes)');
     expect(text).toContain('worker threads INCLUDED');
-    expect(text).toContain('bare-node spawner');
+    expect(text).toContain('the parent\'s memory EXCLUDED');
   });
 
   it('says FAILED, never a zero peak, for a failed row', () => {

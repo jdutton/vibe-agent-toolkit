@@ -280,7 +280,7 @@ describe('formatIssueLines', () => {
 /** Run {@link reportFindings} over `findings`, capturing every line it writes. */
 function reported(findings: readonly ValidationIssue[], verbose: boolean): string[] {
   const written: string[] = [];
-  reportFindings(findings, { verbose, report: 'demo', write: (line) => written.push(line) });
+  reportFindings(findings, { verbose, write: (line) => written.push(line) });
   return written;
 }
 
@@ -296,7 +296,7 @@ describe('reportFindings', () => {
     expect(reported(mixed, false)).toEqual([
       '  a.md:2: error: E1 happened [E1]',
       '  error: E2 happened [E2]',
-      formatCollapsedFindingsHint(2, 'demo'),
+      formatCollapsedFindingsHint(2),
     ]);
   });
 
@@ -781,14 +781,15 @@ describe('countCollapsedFindings / formatCollapsedFindingsHint', () => {
   });
 
   it('names both ways to read what it did not print', () => {
-    expect(formatCollapsedFindingsHint(4, 'build')).toBe(
+    // No format named: the same verb's stdout is YAML, JSON or text.
+    expect(formatCollapsedFindingsHint(4)).toBe(
       '\n4 warning/info finding(s) not shown — re-run with --verbose, '
-      + "or read this build's YAML report on stdout, which lists every finding.",
+      + 'or read the report on stdout, which lists every finding.',
     );
   });
 
   it('says nothing when nothing was collapsed', () => {
-    expect(formatCollapsedFindingsHint(0, 'build')).toBeUndefined();
+    expect(formatCollapsedFindingsHint(0)).toBeUndefined();
   });
 });
 

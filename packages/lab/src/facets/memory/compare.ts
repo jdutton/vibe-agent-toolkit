@@ -32,12 +32,12 @@ import { MEMORY_FACET, MemoryBodySchema, type MemoryCommandStats } from './types
 const MIN_RELATIVE = 0.1;
 
 /**
- * Kilobytes a peak must move by to count as real: 16 MiB.
- *
- * Below this, the difference is the allocator and V8's heap-growth steps, not
- * anything vat did.
+ * Kilobytes a peak must move by to count as real: 8 MiB — four times the largest
+ * median move an A-vs-A null run made (see `docs/facets.md`, "The memory
+ * threshold"). Below it, the difference is the allocator and V8's heap-growth
+ * steps, not anything vat did.
  */
-const MIN_ABSOLUTE_KB = 16 * 1024;
+const MIN_ABSOLUTE_KB = 8 * 1024;
 
 /** How many vat processes each side's repeats ran — one count per side, since a row's repeats agree. */
 export interface ProcessCounts {
@@ -95,7 +95,7 @@ function spreadKb(row: MemoryCommandStats): number {
 /**
  * Diff one command present on both sides.
  *
- * CHANGED needs a move larger than the 16 MiB floor, the 10% gate AND the two
+ * CHANGED needs a move larger than the 8 MiB floor, the 10% gate AND the two
  * arms' combined spread: a delta the repeats themselves wandered across is not
  * a move. A different count of vat processes is CHANGED whatever the peaks did —
  * the peak is the largest of a different set of processes.

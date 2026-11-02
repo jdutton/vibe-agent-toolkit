@@ -194,7 +194,7 @@ describe('runPhase', () => {
     let skills: PhaseResult;
     try {
       skills = await runPhase({ name: 'skills', schema: ANY_DATA, examined: SKILLS_VALIDATE_EXAMINED, run: () => Promise.resolve({ report: done('skills', 0).report }) });
-      expect(stderr.mock.calls.map(([line]) => String(line)).join('')).toContain('Warning: Nothing was examined: 0 skills.');
+      expect(stderr.mock.calls.map(([line]) => String(line)).join('')).toMatch(/error: Nothing was examined: 0 skills\..*\[RESOURCE_CHECK_BROKEN\]/u);
     } finally {
       stderr.mockRestore();
     }

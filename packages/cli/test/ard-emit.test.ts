@@ -645,6 +645,8 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
 
     expect(exitCalls).toEqual([[1]]);
     expect(stderr).toMatch(/--strict: the manifest advertises nothing/);
+    // As the one finding line every finding prints as.
+    expect(stderr).toMatch(/^ *error: --strict: the manifest advertises nothing.* \[[A-Z_]+\]$/mu);
   });
 
   // The other half of the same gate, and a DIFFERENT run shape: entries were

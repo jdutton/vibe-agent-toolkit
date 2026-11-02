@@ -174,6 +174,23 @@ export const NEVER_CRAWL_GLOBS = [
 ] as const;
 
 /**
+ * The part of {@link NEVER_CRAWL_GLOBS} that can NEVER be authored content, at
+ * any depth: dependencies, git internals, worktree copies of the repository, and
+ * a build's staging residue.
+ *
+ * The rest of that list — `coverage/`, `.test-output/`, `.turbo/` — names a
+ * directory by the tool that USUALLY writes it, and an author can name a
+ * directory the same: `references/coverage/workers-comp.md` is markdown someone
+ * wrote. A lane that crawls for authored content (`ResourceRegistry.crawl`'s
+ * default) excludes only this list plus {@link BUILD_OUTPUT_GLOBS}; on the git
+ * route an ignored tool-output directory is gone already, and a tracked one is
+ * content the author committed.
+ */
+export const NEVER_CONTENT_GLOBS = NEVER_CRAWL_GLOBS.filter(
+  (glob) => !['**/coverage/**', '**/.test-output/**', '**/.turbo/**'].includes(glob),
+);
+
+/**
  * Build output — excluded by DEFAULT, but deliberately NOT part of
  * {@link NEVER_CRAWL_GLOBS}.
  *

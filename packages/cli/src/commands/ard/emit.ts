@@ -29,6 +29,7 @@ import { everywhere, pathPresent, safePath, VatError, withFsFault } from '@vibe-
 import { refusalCodeOf } from '../../utils/command-refusal.js';
 import { loadConfig } from '../../utils/config-loader.js';
 import { endWithRefusal, NOTHING_FINISHED, writeDocument } from '../../utils/document-writer.js';
+import { reportFindings } from '../../utils/issue-rendering.js';
 import { readPackageJsonOrAbsent } from '../../utils/package-json.js';
 import { discoverSkillsFromConfig } from '../skills/skill-discovery.js';
 
@@ -377,7 +378,7 @@ function ardRefusalCode(error: unknown): RefusalCode {
 function publishArdReport(report: ArdEmitReport, format: 'text' | 'json'): never {
   const written = writeDocument('ard emit', report, format);
   if (format === 'text') {
-    for (const finding of written.findings) process.stderr.write(`${finding.message}\n`);
+    reportFindings(written.findings, { verbose: true, write: (line) => process.stderr.write(`${line}\n`) });
   }
   process.exit(exitCodeForReport(written));
 }

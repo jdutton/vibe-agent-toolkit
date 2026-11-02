@@ -66,24 +66,6 @@ const WRAPPED_FUNCTIONS = Object.freeze(['join', 'resolve', 'relative']);
 const exemptMatcherFor = createConfigurableExemptPathMatcher();
 
 /**
- * Remove a named import specifier, handling comma cleanup.
- */
-function removeSpecifier(fixer, sourceCode, importNode, spec) {
-  if (importNode.specifiers.length === 1) {
-    return [fixer.remove(importNode)];
-  }
-  const comma = sourceCode.getTokenAfter(spec);
-  if (comma?.value === ',') {
-    return [fixer.removeRange([spec.range[0], comma.range[1]])];
-  }
-  const commaBefore = sourceCode.getTokenBefore(spec);
-  if (commaBefore?.value === ',') {
-    return [fixer.removeRange([commaBefore.range[0], spec.range[1]])];
-  }
-  return [fixer.remove(spec)];
-}
-
-/**
  * Track path module specifiers from an import declaration.
  *
  * Two specifier shapes are deliberately NOT tracked, because tracking them is
@@ -115,24 +97,6 @@ function trackPathImport(node, state) {
       state.defaultImportName = spec.local.name;
     }
   }
-}
-
-/**
- * Is `name` re-exported by a bare `export { name }` in this file?
- *
- * Removing the import specifier then leaves the export naming nothing, and the
- * result does not PARSE — `Export 'join' is not defined`. An autofix whose
- * output cannot be parsed is the worst outcome available, so the specifier
- * stays and the call sites are still rewritten. Whatever is left is a lint
- * finding a human can read, not a broken file.
- */
-function isReExported(sourceCode, name) {
-  return sourceCode.ast.body.some(
-    (node) =>
-      node.type === 'ExportNamedDeclaration' &&
-      !node.source &&
-      node.specifiers.some((spec) => spec.local?.name === name),
-  );
 }
 
 /**
@@ -215,11 +179,11 @@ function safeReplacementCallee(node, byFn) {
  * So this is only a CANDIDATE. `Program:exit` admits it once the file has been
  * seen to contain a `safePath.<fn>(...)` call — the same positive evidence the
  * dead-import leg reads, and the only in-file signal that THIS function is
- * mid-migration HERE. Every genuine strand carries it: `removeSpecifier` only
- * ever ships inside the same report's fix as the callee rewrite that consumed
- * the specifier, and ESLint merges a report's fixes into one all-or-nothing
- * range — so a file cannot lose the `node:path` specifier without gaining a
- * `safePath.<fn>(` call.
+ * mid-migration HERE. No fix of this pack's removes the `node:path` specifier
+ * beside a live call any more (the dead-import leg takes it only once nothing
+ * references it), so a strand reaching this leg was left by an older release of
+ * this rule, whose specifier removal shipped in the same all-or-nothing merged
+ * fix as a callee rewrite — and so always beside a `safePath.<fn>(` call.
  *
  * What this gives up: a file a HUMAN half-migrated by hand — import deleted,
  * not one call rewritten — is no longer finished by `--fix`. That file is a
@@ -371,16 +335,12 @@ function buildFix(fixer, node, classification, sourceCode, state) {
     state.hasSafePathImport = true;
   }
 
-  if (
-    classification.isNamed &&
-    fnState.namedImportNode &&
-    !fnState.namedImportRemoved &&
-    !isReExported(sourceCode, classification.fn)
-  ) {
-    fixes.push(...removeSpecifier(fixer, sourceCode, fnState.namedImportNode, fnState.namedImportSpec));
-    fnState.namedImportRemoved = true;
-  }
-
+  // The `node:path` specifier is NEVER removed here. ESLint runs `fix()` for a
+  // suppressed report before the disable filter discards it, so a removal riding
+  // on any one report lands even when a suppressed call still reads `join(...)` —
+  // an unsuppressed call BEFORE it was enough, and the output linted clean and
+  // threw `ReferenceError`. The dead-import leg removes the specifier on the next
+  // pass, once scope says nothing (a call, a re-export) references it.
   return fixes;
 }
 
@@ -390,9 +350,6 @@ function createFunctionState(fn) {
     fn,
     namedImportSpec: null,
     namedImportNode: null,
-    // Guards a SHARED edit against being emitted by more than one report — see
-    // `buildFix` for what ESLint does with the overlap.
-    namedImportRemoved: false,
     // Set from the SOURCE as traversal walks it, and read only at
     // `Program:exit` — so it is a fact about the text being linted, not about
     // what a `fix()` intends to write. See `dead-import.cjs`, and the repair
@@ -527,6 +484,7 @@ module.exports = {
           state.pathImportNodes,
           state.safePathBoundInSource,
           anyReplacementCalled,
+          new Set(state.byFn.keys()),
         );
       },
 

@@ -509,9 +509,10 @@ A run that HANGS is killed and reported, not waited on:
 ${SUPERVISION_SIGNAL_CONTRACT}
 
 Output:
-  The document goes to stdout. stderr carries one line per finding for a
-  reader, location:line: severity: message [code]: every error, errors
-  first, and the warning and info ones only with --verbose.
+  The document goes to stdout. stderr carries each finding for a reader as
+  "  location:line: severity: message [code]", indented two spaces, and its
+  fix, when it has one, on the next line as "    Fix: ...": every error,
+  errors first, and the warning and info ones only with --verbose.
 
 Output Fields (the shared report envelope; schema: packages/cli/schemas/resources-check.json):
   status:    ok | findings | error -- a literal statement about \`findings\`.

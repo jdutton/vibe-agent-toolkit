@@ -408,8 +408,8 @@ interface MemoizedRegistry {
  *
  * A REJECTED crawl is never served: its fault was classified against the outputs and `unreadable`
  * ruling of the caller that started it, and either may differ for the next one. The slot is
- * emptied when it rejects, and a caller that was waiting on it crawls afresh under its own
- * policy.
+ * emptied when it rejects; the first caller that was waiting on it crawls afresh under its own
+ * policy, and the other waiters join that crawl rather than starting their own.
  */
 type MemoEntry = Promise<MemoizedRegistry>;
 
@@ -434,6 +434,32 @@ function replayRefusals(
       : unreadable;
     settleCrawlRefusal(policy, refusal, outputs);
   }
+}
+
+/**
+ * Join the crawl a slot holds, or start one — `joined` says which.
+ *
+ * A rejected crawl is never served (see {@link MemoEntry}), but its waiters do not each
+ * re-crawl: after a rejection the slot is read AGAIN, so the first waiter's re-crawl is the one
+ * every other waiter joins — N waiters cost one re-crawl, not N. That holds only because the
+ * re-read and `start` (which fills the slot synchronously) run in ONE tick: an `await` between
+ * them lets every waiter find the slot empty. `rejected` stops a slot that still holds the
+ * rejected promise (its eviction not yet run) from being joined twice.
+ */
+function joinOrStartCrawl(
+  cache: Map<string, MemoEntry>,
+  key: string,
+  rejected: MemoEntry | undefined,
+  start: () => MemoEntry,
+): Promise<{ memo: MemoizedRegistry; joined: boolean }> {
+  const cached = cache.get(key);
+  if (cached === undefined || cached === rejected) {
+    return start().then((memo) => ({ memo, joined: false }));
+  }
+  return cached.then(
+    (memo) => ({ memo, joined: true }),
+    () => joinOrStartCrawl(cache, key, cached, start),
+  );
 }
 
 /**
@@ -495,28 +521,27 @@ export async function crawlAndResolveRegistry(
 ): Promise<ResourceRegistry> {
   const { populationSource, unreadable, outputs } = options;
   const cache = registryCacheFor(populationSource);
+  // LEXICAL on purpose, never the real path: a registry answers `getResource` for the spelling it
+  // was crawled under, so a symlinked spelling served the real root's registry would miss every
+  // lookup and walk an empty graph. Two spellings of one root cost two crawls.
   const key = toForwardSlash(safePath.resolve(projectRoot));
-  const cached = cache.get(key);
-  if (cached !== undefined) {
-    // A rejected crawl is never served (see MemoEntry): this caller re-crawls under its own policy.
-    const settled = await cached.catch(() => undefined);
-    if (settled !== undefined) {
-      replayRefusals(settled.refusals, unreadable, projectRoot, outputs);
-      return settled.registry;
-    }
-  }
   // The PROMISE is cached, not the resolved value, so callers that overlap a crawl
-  // share it rather than starting their own — unless it rejects, when each one
-  // waiting re-crawls under its own policy.
-  const crawl = crawlRegistry(projectRoot, options);
-  cache.set(key, crawl);
-  // Empty the slot only if it still holds THIS crawl: a retry may already have replaced it.
-  crawl.catch(() => {
-    if (cache.get(key) === crawl) {
-      cache.delete(key);
-    }
-  });
-  return (await crawl).registry;
+  // share it rather than starting their own — unless it rejects (see joinOrStartCrawl).
+  const start = (): MemoEntry => {
+    const crawl = crawlRegistry(projectRoot, options);
+    cache.set(key, crawl);
+    // Empty the slot only if it still holds THIS crawl: a retry may already have replaced it.
+    crawl.catch(() => {
+      if (cache.get(key) === crawl) {
+        cache.delete(key);
+      }
+    });
+    return crawl;
+  };
+  const { memo, joined } = await joinOrStartCrawl(cache, key, undefined, start);
+  // A joined crawl's refusals were classified under its starter's policy: replay them under ours.
+  if (joined) replayRefusals(memo.refusals, unreadable, projectRoot, outputs);
+  return memo.registry;
 }
 
 /** The one crawl {@link crawlAndResolveRegistry} memoizes. */
@@ -566,9 +591,11 @@ async function crawlRegistry(projectRoot: string, options: CrawlRegistryOptions)
  * phases — gets the sharing without threading a registry through.
  *
  * Safe to hold for a process lifetime: every VAT entry point is a short-lived
- * CLI invocation. Note the crawl excludes build output (`BUILD_OUTPUT_GLOBS` via
- * the crawler's defaults) and every build's staging residue (`.<name>.vat-staged-*`,
- * in `NEVER_CRAWL_GLOBS`), so packaging a skill mid-run cannot invalidate it. A
+ * CLI invocation. It is UNBOUNDED, though — `vat audit --user` holds one registry
+ * per distinct root it audits, every one until exit. A bound or eviction is an
+ * open follow-up, not done here. Note the crawl excludes build output (`BUILD_OUTPUT_GLOBS` in
+ * the registry's default) and every build's staging residue (`.<name>.vat-staged-*`,
+ * in `NEVER_CONTENT_GLOBS`), so packaging a skill mid-run cannot invalidate it. A
  * declared output inside the root and outside `dist/` IS crawled — `outputs` never
  * shapes the population (see {@link MemoEntry}) — so a library caller writing
  * there owns that choice; what no caller may be served is another's half-written

@@ -44,7 +44,7 @@ describe('an install run', () => {
   it('a leftover is logged as a warning and joins the run\'s findings', () => {
     const run = runOf();
     leftover(run, WARNING as never);
-    expect(run.logger.warn).toHaveBeenCalledWith('   left behind');
+    expect(run.logger.warn).toHaveBeenCalledWith('   warning: left behind [TREE_CLEANUP_INCOMPLETE]');
     expect(run.issues).toEqual([WARNING]);
   });
 

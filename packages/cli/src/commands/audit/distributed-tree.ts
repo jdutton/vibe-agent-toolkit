@@ -266,7 +266,7 @@ const REPO_SOURCE: SkillTreeProvenance = 'repo-source';
  *   before the kernel follows them; `filePath` itself when it is the operator's own path
  */
 function canonicalPath(filePath: string, within: string): string {
-  return toForwardSlash(normalizePath(safePath.resolve(filePath), { within: within }));
+  return toForwardSlash(normalizePath(safePath.resolve(filePath), { within }));
 }
 
 /**

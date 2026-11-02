@@ -154,16 +154,22 @@ describe('a rule that only suggests a call still removes the import the suggesti
   });
 });
 
-describe('a suppressed first report strands no other rule either', () => {
-  it.each(SUPPRESSION_CASES)('%s', (name, importLine, call, shape) => {
+/**
+ * Where the suppressed call sits. `middle` is the case a removal keyed on "the FIRST report"
+ * cannot reach: an unsuppressed call before it carries the removal, and the suppressed call
+ * after it is left calling an identifier nothing imports — a `ReferenceError` at run time from
+ * output that lints clean.
+ */
+const SUPPRESSED_AT = ['first', 'middle'] as const;
+
+describe('a suppressed report strands no other rule either', () => {
+  it.each(SUPPRESSED_AT.flatMap((at) =>
+    SUPPRESSION_CASES.map(([name, importLine, call, shape]) => [at, name, importLine, call, shape] as const),
+  ))('%s: %s', (at, name, importLine, call, shape) => {
     const site = (binding: string): string => (shape === 'statement' ? `${call};` : `export const ${binding} = ${call};`);
-    const source = [
-      importLine,
-      `// eslint-disable-next-line local/${name}`,
-      site('a'),
-      site('b'),
-      site('c'),
-    ]
+    const suppression = `// eslint-disable-next-line local/${name}`;
+    const sites = at === 'first' ? [suppression, site('a'), site('b'), site('c')] : [site('b'), suppression, site('a'), site('c')];
+    const source = [importLine, ...sites]
       .filter(Boolean)
       .join('\n');
     const cfg = ruleConfig(name);
@@ -231,6 +237,31 @@ describe('--fix removes the import binding it just orphaned', () => {
     expect(unusedIn(output)).toStrictEqual([]);
     expect(output).not.toMatch(/from 'node:(path|os)'/);
     // …and the fixpoint still holds: nothing left to report.
+    expect(lint(output, cfg)).toStrictEqual([]);
+  });
+
+  /**
+   * A dead NAMED specifier beside a live one. No call's fix removes a specifier (a
+   * suppressed report would strand its call), so the dead-import leg must take the
+   * specifier alone, or `import { join, dirname }` — a shape every path-heavy file
+   * has — keeps a dead `join` for `no-unused-vars` forever.
+   */
+  const SPECIFIER_DEAD_AFTER_FIX: Array<[string, string, string]> = [
+    [RULE.rawPath, "import { join, dirname } from 'node:path';\nexport const p = join('a', 'b');\nexport const d = dirname(p);", "import { dirname } from 'node:path';"],
+    [RULE.rawPath, "import { dirname, join } from 'node:path';\nexport const p = join('a', 'b');\nexport const d = dirname(p);", "import { dirname } from 'node:path';"],
+    [RULE.tmpdir, "import { homedir, tmpdir } from 'node:os';\nexport const t = tmpdir();\nexport const h = homedir();", "import { homedir } from 'node:os';"],
+    [RULE.mkdir, "import { mkdirSync, writeFileSync } from 'node:fs';\nmkdirSync('d');\nwriteFileSync('d/f', 'x');", "import { writeFileSync } from 'node:fs';"],
+  ];
+
+  it.each(SPECIFIER_DEAD_AFTER_FIX)('%s removes only the specifier it orphaned: %s', (name, source, survivor) => {
+    const cfg = ruleConfig(name);
+    expect(lint(source, cfg).length).toBeGreaterThan(0);
+
+    const { output } = fix(source, cfg);
+
+    expect(unusedIn(output)).toStrictEqual([]);
+    expect(unboundIn(output)).toStrictEqual([]);
+    expect(output).toContain(survivor);
     expect(lint(output, cfg)).toStrictEqual([]);
   });
 

@@ -2,11 +2,20 @@
  * The `memory` facet's probe: the code that runs *inside* the measured process.
  *
  * The lab injects this with `NODE_OPTIONS=--require <rss-probe.cjs>`. It patches
- * nothing. On exit it reads `process.resourceUsage().maxRSS` — the process's
- * peak resident set, in KILOBYTES on every platform (libuv normalizes macOS's
- * bytes and reads Windows' `PeakWorkingSetSize`) — and writes one JSON dump.
- * That is the whole of its portability argument: no `/usr/bin/time -l`, which is
- * macOS-only, and no `/proc` reading, which is Linux-only.
+ * nothing. On exit it reads the process's peak resident set, in KILOBYTES, and
+ * writes one JSON dump:
+ *
+ * - **Linux: `VmHWM` from `/proc/self/status`** — the high-water mark of THIS
+ *   process image's address space. Not `maxRSS`: Linux keeps `ru_maxrss` on the
+ *   process across `exec`, and a forked child starts with a copy of its parent's
+ *   resident set, so a vat started by a 300 MB parent through `sh -c exec` (how
+ *   `npx` and a shell launch it) reported at least 300 MB. `exec` gives the new
+ *   image a new address space, and `VmHWM` starts there.
+ * - **macOS and Windows: `process.resourceUsage().maxRSS`** (libuv normalizes
+ *   macOS's bytes and reads Windows' `PeakWorkingSetSize`). Neither carries a
+ *   parent's set into a child: measured on macOS, a vat stand-in under a node
+ *   parent holding 0, 300 and 600 MB peaked at 75.4, 75.4 and 75.3 MB. Windows
+ *   creates a process rather than forking one; that case is argued, not measured.
  *
  * ## What the number covers
  *
@@ -19,20 +28,16 @@
  *   `spawnSync`. vat's launcher starts a second node process to do the work; a
  *   reading of the launcher alone would miss everything. Each of vat's own
  *   processes writes its own dump, and the capture reads them all.
- * - **The PARENT's resident set: included, on Linux,** up to the moment of
- *   `fork()` — the kernel carries the forked copy's high-water mark into the
- *   child's peak. That is why every measured repeat is launched by
- *   `rss-spawner.ts`, a small fresh node whose own peak is the floor, and why the
- *   spawner dumps too: the floor travels in the report.
- * - **Only vat's own processes, and the spawner.** A process is vat's when its
+ * - **The PARENT's resident set: excluded, on every platform** — by the choice
+ *   of figure above, so a repeat launched straight from the lab is measured from
+ *   its own start. `test/integration/memory-probe.integration.test.ts` pins it.
+ * - **Only vat's own processes.** A process is vat's when its
  *   main script (`process.argv[1]`, links resolved — npm's `.bin/vat` is one)
  *   belongs to one of {@link VAT_PACKAGE_NAMES}: the nearest `package.json`
  *   above it names the launcher or the CLI. Decided by the probe from the
  *   install alone, so it holds for every vat ever published — a build needs no
  *   cooperation to be measured — and it excludes what vat is not: `npm` under
- *   `npx`, a `node -e`, a tool vat spawns. The spawner is the lab's own, so it
- *   says what it is instead: it sets {@link SPAWNER_PID_ENV} to its pid, and
- *   only the process whose pid that is (not a child that inherited it) counts.
+ *   `npx`, a `node -e`, a tool vat spawns.
  * - **Read at exit.** A high-water mark is monotonic, so exit is the peak. A
  *   process killed by a signal, or one V8 aborts out of heap, never runs its
  *   `exit` listeners and leaves no dump — the capture reports that repeat as
@@ -62,8 +67,8 @@ const LOG_DIR_ENV = 'VAT_LAB_RSS_LOG';
 /** The packages whose scripts are vat: the umbrella launcher, and the CLI it delegates to. */
 const VAT_PACKAGE_NAMES: ReadonlySet<string> = new Set(['vibe-agent-toolkit', '@vibe-agent-toolkit/cli']);
 
-/** The spawner sets this to its own pid — `rss-spawner.ts`. */
-const SPAWNER_PID_ENV = 'VAT_LAB_SPAWNER_PID';
+/** Where Linux states this process image's resident high-water mark. */
+const PROC_STATUS = '/proc/self/status';
 
 /**
  * Say on stderr why the probe could not decide, and decide "not vat".
@@ -125,10 +130,19 @@ function isVatMainScript(main: string | undefined): boolean {
   return ownedByVat(real);
 }
 
-/** Which process this is, as far as the capture cares, read at exit; `null` writes no dump. */
-function processRole(): 'vat' | 'spawner' | null {
-  if (process.env[SPAWNER_PID_ENV] === String(process.pid)) return 'spawner';
-  return isVatMainScript(process.argv[1]) ? 'vat' : null;
+/**
+ * This process image's peak resident set, in kilobytes — see the module header for why Linux
+ * reads `VmHWM` and every other platform `maxRSS`.
+ *
+ * @returns The peak
+ * @throws When Linux's status file carries no `VmHWM` line: a figure that silently fell back to
+ *   `maxRSS` would carry the parent's set, the error this exists to avoid
+ */
+function peakRssKb(): number {
+  if (process.platform !== 'linux') return process.resourceUsage().maxRSS;
+  const line = /^VmHWM:\s+(\d+)\s+kB$/mu.exec(fs.readFileSync(PROC_STATUS, 'utf-8'));
+  if (line?.[1] === undefined) throw new Error(`${PROC_STATUS} carries no VmHWM line`);
+  return Number(line[1]);
 }
 
 /**
@@ -145,10 +159,10 @@ function processRole(): 'vat' | 'spawner' | null {
  *
  * @param logDir - Directory to write into
  */
-function writeDump(logDir: string, role: 'vat' | 'spawner'): void {
+function writeDump(logDir: string): void {
   try {
     fs.mkdirSync(logDir, { recursive: true });
-    const dump = JSON.stringify({ pid: process.pid, role, maxRssKb: process.resourceUsage().maxRSS });
+    const dump = JSON.stringify({ pid: process.pid, maxRssKb: peakRssKb() });
     const file = path.join(logDir, `rss-${String(process.pid)}-${crypto.randomUUID()}.json`);
     fs.writeFileSync(file, dump, { flag: 'wx' });
   } catch (error) {
@@ -160,12 +174,11 @@ function writeDump(logDir: string, role: 'vat' | 'spawner'): void {
 const configuredLogDir = process.env[LOG_DIR_ENV];
 if (workerThreads.isMainThread && typeof configuredLogDir === 'string' && configuredLogDir !== '') {
   process.once('exit', () => {
-    const role = processRole();
-    if (role !== null) writeDump(configuredLogDir, role);
+    if (isVatMainScript(process.argv[1])) writeDump(configuredLogDir);
   });
 }
 
 export = {
   /** Testing surface. The contract with the reader is the JSON file, and only that. */
-  __internals: { LOG_DIR_ENV, SPAWNER_PID_ENV, VAT_PACKAGE_NAMES },
+  __internals: { LOG_DIR_ENV, VAT_PACKAGE_NAMES },
 };

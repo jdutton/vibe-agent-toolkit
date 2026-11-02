@@ -47,6 +47,9 @@ describe('claude marketplace validate — the writer\'s refusal reaches stderr',
     expect(captured.exited).toBe(1);
     expect(document.examined).toBe(0);
     expect(refusal).toBeDefined();
+    // As the finding line every other finding prints as: once, never a bare `Warning:` beside it.
+    expect(captured.stderr.split(`error: ${refusal?.message ?? '<no refusal>'} [RESOURCE_CHECK_BROKEN]`)).toHaveLength(2);
     expect(captured.stderr.split(refusal?.message ?? '<no refusal>')).toHaveLength(2);
+    expect(captured.stderr).not.toContain('Warning:');
   });
 });

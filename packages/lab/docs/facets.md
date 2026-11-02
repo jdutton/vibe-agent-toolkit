@@ -19,27 +19,44 @@ reported alongside is.
 
 `memory` is one of these, and its number needs its scope stated, because "peak RSS" names three
 different figures. A preload (`rss-probe.cts`, on `NODE_OPTIONS` like `io`'s counter) writes a
-node process's `process.resourceUsage().maxRSS` at exit — kilobytes on every platform, so no
-`/usr/bin/time -l` (macOS-only) or `/proc` (Linux-only). That figure **includes worker threads**
-(they share the process: a 400 MB allocation in a worker raises it by ~400 MB). It is one figure
-per process, and only vat's own processes write one: a process is vat's when its main script
-(`process.argv[1]`, links resolved) belongs to the `vibe-agent-toolkit` launcher or the
+node process's peak resident set at exit, in kilobytes: `VmHWM` from `/proc/self/status` on Linux,
+`process.resourceUsage().maxRSS` on macOS and Windows. That figure **includes worker threads**
+(they share the process: a 400 MB allocation in a worker raises it by ~400 MB) and **excludes the
+parent**. Linux's `maxRSS` does not: it survives `exec`, and a forked child starts with a copy of
+its parent's resident set, so a vat launched by a 300 MB parent through `sh -c exec` — how `npx`
+and a shell launch it — read as 300 MB or more. `VmHWM` belongs to the exec'd image alone. macOS's
+`maxRSS` carries nothing over: measured, a vat stand-in under a node parent holding 0, 300 and
+600 MB peaked at 75.4, 75.4 and 75.3 MB. So a repeat is launched straight from the lab, with no
+intermediate launcher; `test/integration/memory-probe.integration.test.ts` pins the independence
+on Linux and macOS.
+
+It is one figure per process, and only vat's own processes write one: a process is vat's when its
+main script (`process.argv[1]`, links resolved) belongs to the `vibe-agent-toolkit` launcher or the
 `@vibe-agent-toolkit/cli` package — the nearest `package.json` above it says which. The probe
 decides that from the install alone, so every vat ever published is measurable, and `npm` under
 `npx`, a `node -e` or a tool vat spawns writes nothing and never stands in for vat's peak.
 A repeat's sample is the LARGEST vat process's peak, never a sum: high-water marks from different
-moments were never resident together. How many vat processes reported travels beside it, and a
+moments were never resident together. How many vat processes reported is counted beside it, and a
 change in that count is a CHANGED verdict on its own.
 
-The sample is not measured from zero. On Linux a child's peak includes its parent's resident set at
-`fork()`, so a vat launched straight from the lab would carry the lab's footprint. Every measured
-repeat is therefore launched through `rss-spawner.ts`, a freshly started small node, and the
-spawner writes its own peak too: that is the **floor** every sample sits on, reported beside each
-repeat rather than assumed. Compare samples only against samples from the same spawner. A repeat
-that leaves no vat peak, or not exactly one spawner peak — killed, out of heap, or a pre-marker
-build — fails the row; it is never read as a small number. So does a row whose repeats disagree on
-how many vat processes reported. CHANGED needs the median delta to exceed the larger of 16 MiB
-and the combined min-max spread of both arms.
+A repeat that leaves no vat peak — killed, out of heap, or no process with a vat main script —
+fails the row; it is never read as a small number. So does a row whose repeats disagree on how many
+vat processes reported. CHANGED needs the median delta to clear three bars at once: 10% of the
+smaller median (`perf`'s relative gate), 8 MiB, and the two arms' combined min–max spread.
+
+**The memory threshold.** The 8 MiB floor is four times the largest median move an A-vs-A null run
+made. Measured 2026-11-02 on an Apple-silicon Mac (10 CPUs, load average 20–30 from other work —
+contaminated), one `dist:` build of vat 0.2.0-rc.12 against this repository, 5 warm repeats a side:
+
+| Command | A median | B median | Δ median | A spread | B spread |
+|---|---|---|---|---|---|
+| `resources-validate` | 198.4 MiB | 198.7 MiB | +0.3 MiB | 0.7 MiB | 0.7 MiB |
+| `audit` | 195.5 MiB | 197.5 MiB | +2.0 MiB (1.0%) | 3.2 MiB | 5.0 MiB |
+| `skills-validate` | 138.5 MiB | 138.4 MiB | −0.1 MiB | 0.5 MiB | 0.9 MiB |
+
+Every pair compared `unchanged`. The 10% relative gate is ten times the largest relative move
+(1.0%), so above ~80 MiB it, not the floor, is the bar. Re-measure on a quiet machine and on
+Linux before tightening either.
 
 **Extent facets** — `population`. The output is a *set*, and a set needs neither spread nor
 tolerance: the comparator is exact set difference, and one member's difference is real. The

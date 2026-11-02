@@ -225,12 +225,4 @@ export interface RunOptions {
   readonly env: ArmEnvironment;
   /** Milliseconds before the child is killed. */
   readonly timeoutMs?: number;
-  /**
-   * A node script that launches the command instead of the lab — the `memory`
-   * facet's spawner (`facets/memory/rss-spawner.ts`), so the measured process
-   * descends from a fresh bare node rather than from the lab. It receives the
-   * command already resolved and its shell mode decided, as `<direct|shell>
-   * <file> [args…]`. `undefined` for every other run.
-   */
-  readonly via?: string;
 }

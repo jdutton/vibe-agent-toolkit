@@ -41,6 +41,7 @@ import { resolveSkillPackagingConfig } from '../../../skill-resolution/packaging
 import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../../utils/command-refusal.js';
 import { leftoverIssueOf } from '../../../utils/document-writer.js';
 import { requireSkillZipLayout } from '../../../utils/install-plan.js';
+import { formatFindingLine } from '../../../utils/issue-rendering.js';
 import { requireInputPath } from '../../../utils/project-root-policy.js';
 import { downloadNpmPackage } from '../plugin/helpers.js';
 
@@ -1295,7 +1296,7 @@ export function warnUnportableReferences(
 		+ '(uploading anyway; run `vat audit <dir>` for the full report):',
 	);
 	for (const issue of issues) {
-		logger.warn(`     ${issue.location ?? ''}: ${issue.message}`);
+		logger.warn(`     ${formatFindingLine(issue)}`);
 	}
 }
 

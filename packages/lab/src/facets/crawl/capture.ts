@@ -243,7 +243,7 @@ export async function captureCrawl(
   options: CaptureCrawlOptions,
 ): Promise<ReportEnvelope<CrawlBody>> {
   const loadBefore = readLoad();
-  const { rows: commands, measured } = await captureCommandRows(options, DUMP_DIR_PREFIX, (directory) => ({ [CRAWL_TIMING_DIR_ENV]: directory }), null, rowFromDumps);
+  const { rows: commands, measured } = await captureCommandRows(options, DUMP_DIR_PREFIX, (directory) => ({ [CRAWL_TIMING_DIR_ENV]: directory }), rowFromDumps);
   const loadAfter = readLoad();
 
   return buildReportEnvelope(CRAWL_FACET, options, {

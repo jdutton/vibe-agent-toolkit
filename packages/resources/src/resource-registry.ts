@@ -42,7 +42,7 @@ import {
   crawlDirectory,
   type CrawlOptions as UtilsCrawlOptions,
   crawlPathFilter,
-  NEVER_CRAWL_GLOBS,
+  NEVER_CONTENT_GLOBS,
   type UnreadablePolicy,
 } from '@vibe-agent-toolkit/utils/crawl';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
@@ -1402,7 +1402,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     const {
       baseDir,
       include = [...DEFAULT_RESOURCE_INCLUDE],
-      exclude = [...NEVER_CRAWL_GLOBS, ...BUILD_OUTPUT_GLOBS],
+      // Only what can never be authored content — not `coverage/` or `.turbo/`, which an author may name a directory.
+      exclude = [...NEVER_CONTENT_GLOBS, ...BUILD_OUTPUT_GLOBS],
       followSymlinks = false,
       unreadable,
       populationSource,

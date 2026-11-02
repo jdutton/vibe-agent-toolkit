@@ -104,7 +104,7 @@ export function runCommand(
   // The bracket starts BEFORE resolution, so a command that never spawns still
   // reports the real time spent finding that out rather than a fabricated 0.
   const startedAt = performance.now();
-  const result = launch(instrument.command, argv, spawnOptions, spawnOptions.env ?? {}, options.via);
+  const result = launch(instrument.command, argv, spawnOptions, spawnOptions.env ?? {});
   const wallMs = performance.now() - startedAt;
 
   return {
@@ -169,7 +169,6 @@ function launch(
   args: readonly string[],
   options: SpawnSyncOptionsWithStringEncoding,
   env: NodeJS.ProcessEnv,
-  via: string | undefined,
 ): SpawnSyncReturns<string> {
   const resolved = isPathLike(command) ? command : resolveOnPath(command, env, process.platform);
   if (resolved === undefined) {
@@ -178,13 +177,7 @@ function launch(
     return unspawned(new Error('no absolute entry of the child’s PATH holds it'), `could not resolve command '${command}' on PATH`);
   }
 
-  const direct = !shouldUseShell(resolved);
-  if (via !== undefined) {
-    // The same resolution and shell decision, handed to the launcher to carry out.
-    const handed = direct ? ['direct', resolved, ...args] : ['shell', windowsShellLine(resolved, args)];
-    return spawnSync(process.execPath, [via, ...handed], { ...options, shell: false });
-  }
-  if (direct) {
+  if (!shouldUseShell(resolved)) {
     return spawnSync(resolved, [...args], { ...options, shell: false });
   }
   return spawnSync(windowsShellLine(resolved, args), { ...options, shell: true });

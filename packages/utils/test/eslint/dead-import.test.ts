@@ -22,6 +22,7 @@ describe('reportDeadUnsafeImports only ever removes a listed module', () => {
       importNodes: unknown[],
       safeBoundInSource: boolean,
       replacementCalled: boolean,
+      rewrittenNames: ReadonlySet<string>,
     ) => void;
   }>('dead-import.cjs');
 
@@ -45,6 +46,7 @@ describe('reportDeadUnsafeImports only ever removes a listed module', () => {
             sourceCode.ast.body.filter((node) => node.type === 'ImportDeclaration'),
             true,
             true,
+            new Set(),
           );
         },
       };

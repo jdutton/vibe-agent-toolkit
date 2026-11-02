@@ -42,7 +42,7 @@ import { resolveIssueSeverity } from '../../../utils/issue-severity.js';
 import { createLogger, type Logger } from '../../../utils/logger.js';
 import { assertReadableDirectoryArgument } from '../../../utils/project-root-policy.js';
 import { relativizePath } from '../../../utils/relativize-paths.js';
-import { runIntegrityFinding, warnRunIntegrity } from '../../../utils/run-integrity.js';
+import { findingsAddedByRunIntegrity, runIntegrityFinding } from '../../../utils/run-integrity.js';
 import type { PhaseOutcome } from '../../phase-utils.js';
 
 import type { MarketplaceValidateData, MarketplaceValidateReport } from './validate-schema.js';
@@ -896,7 +896,7 @@ function unreadManifests(
 
 /** The human half, on stderr: every error in full, and the rest under `--verbose`. */
 function logFindings(report: Report<unknown>, verbose: boolean, logger: Logger): void {
-  reportFindings(report.findings, { verbose, report: 'run', write: logger.error });
+  reportFindings(report.findings, { verbose, write: logger.error });
   const { errors, warnings, info } = report.summary;
   logger.info(`${errors} error(s), ${warnings} warning(s), ${info} info`);
 }
@@ -969,8 +969,10 @@ async function marketplaceValidateCommand(
     report = refusedReport(error);
   }
   const published = publishedReport('claude marketplace validate', report);
-  // The writer's own zero-examined refusal, warned in the lane that publishes it.
-  if (published !== report) warnRunIntegrity(published);
+  // The writer's own zero-examined refusal, reported in the lane that publishes it.
+  reportFindings(findingsAddedByRunIntegrity(report, published), {
+    verbose: options.verbose === true, write: createLogger().error,
+  });
   // This command offers no `--format`: its document is YAML.
   endWithReport('claude marketplace validate', published, 'yaml');
 }

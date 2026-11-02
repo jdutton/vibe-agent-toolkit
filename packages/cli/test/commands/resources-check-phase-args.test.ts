@@ -8,7 +8,7 @@
  * `--format json` (the phase reads the child's document as JSON), `--debug` iff the orchestrator
  * was given it, `--supervised-by phase:<this pid>:<log>` (the recursion guard; `phase` because the
  * child owes no notice its orchestrator already printed) — and never `--check` (a phase runs every check) or
- * `--verbose` (not a flag of the child's).
+ * `--verbose` (the phase reports the child's findings on stderr itself, at the orchestrator's verbosity).
  *
  * ⚠️ That the child then checks exactly that root is observed through the real binary only for
  * `vat resources check` (the nested-project case in `validate-checks-phase-faults.system.test.ts`):
@@ -21,6 +21,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type * as SupervisorModule from '../../src/commands/resources/check-supervisor.js';
+import { captureProcessExit } from '../test-doubles.js';
 
 const recorded: Array<readonly string[]> = [];
 
@@ -57,9 +58,12 @@ forwarded.report = buildCheckOutputData({
 /** The root a `vat validate` run resolved — never touched: the child is not spawned. */
 const ROOT = safePath.join('/resolved', 'project-root');
 
-/** The one argv the phase handed the supervisor. */
+/** The one argv the phase handed the supervisor — its stderr captured, so the run writes nothing to the real one. */
 async function phaseArgs(debug: boolean): Promise<readonly string[]> {
-  await runResourcesCheckPhase({ root: ROOT, debug, verbose: false });
+  const { exited } = await captureProcessExit(async () => {
+    await runResourcesCheckPhase({ root: ROOT, debug, verbose: false });
+  });
+  expect(exited).toBeUndefined();
   expect(recorded).toHaveLength(1);
   return recorded[0] ?? [];
 }

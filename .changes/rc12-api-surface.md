@@ -5,6 +5,9 @@
   itself for the operator's own path). No old spelling compiles. Migrate each by its arity:
   - `normalizePath(rel, base)` — the old two-path form resolved its FIRST argument against its SECOND →
     `normalizePath(safePath.resolve(base, rel), { within: base })`.
+  - `normalizePath(a, b)` with an ABSOLUTE first argument — the old form returned `a` and ignored `b`, so
+    the call was almost always written root-first: you probably meant
+    `normalizePath(safePath.resolve(a, b), { within: a })`.
   - `normalizePath(a, b, c, …)` — three or more resolved left to right → `normalizePath(safePath.resolve(a, b, c, …), { within: a })`,
     or plain `safePath.resolve(a, b, c, …)` where the caller never needed the real path.
   - `normalizePath(rel)` with a relative path → `path.normalize(rel)`. The old one-path form returned a
@@ -40,7 +43,8 @@
 - **`@vibe-agent-toolkit/utils/template` and `renderTemplate` are deleted** (library-only). Use Handlebars directly.
 - **`@vibe-agent-toolkit/agent-skills`** (library-only):
   - `findDistributedSkillLocationBySource(config, configDir, skillDir)` is removed: build
-    `indexPluginLocalSkills(config, configDir)` once and call `.locationOf(skillMdPath)`.
+    `indexPluginLocalSkills(config, configDir)` once and call `.locationOf(skillMdPath)` — the path of
+    the skill's `SKILL.md`, not the skill directory the removed function took.
   - `detectHostedIncompatibleShape(pluginPath, locationRoot)` requires `locationRoot`, the base every finding's
     `location` is relative to.
   - `packagedFileEntries(…, hasConventionalSuite)` and `resolveTestInputDirs(…, hasConventionalSuite)` require
