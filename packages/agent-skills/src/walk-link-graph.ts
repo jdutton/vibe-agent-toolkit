@@ -197,9 +197,11 @@ export interface WalkLinkGraphOptions {
   /**
    * The directory this run wrote the skill to, when the walk re-reads its own
    * output: no ignore rule is asked about a target under it — a gitignored
-   * `out/` holds the bundle, not a leak. Absent for a walk of source.
+   * `out/` holds the bundle, not a leak. `undefined` for a walk of source —
+   * REQUIRED, so a walk of built output cannot forget it and read its own
+   * bundle as gitignored leaks.
    */
-  ownOutputDir?: string | undefined;
+  ownOutputDir: string | undefined;
   /**
    * Optional pre-populated {@link GitTracker} for O(1) gitignore checks.
    *

@@ -57,7 +57,7 @@ const DISAGREE = 'PAIRS DISAGREE';
 
 /** The fake facet's body: one value per command, and nothing else. */
 interface FakeBody {
-  readonly commands: readonly { readonly name: string; readonly failed: boolean; readonly value: number }[];
+  readonly commands: readonly { readonly name: string; readonly failed: boolean; readonly value: number; readonly lost: string | null }[];
 }
 
 /** Never opened — the fake facet's capture spawns nothing. */
@@ -115,6 +115,8 @@ interface FixtureOptions {
   readonly envB?: ArmEnvironment;
   /** The facet's estimator; absent means `min`. */
   readonly estimator?: EstimatorKind;
+  /** Why arm B's capture is lost (a run out of heap), per pair; absent means none is. */
+  readonly bLost?: readonly (string | null)[];
 }
 
 /** A run's outcome plus the capture order it produced. */
@@ -166,10 +168,11 @@ async function runFixture(options: FixtureOptions, label: string): Promise<Fixtu
     const name = armIndex === 0 ? 'A' : 'B';
     const values = armIndex === 0 ? options.aValues : options.bValues;
     const value = values[Math.floor(order.length / 2)] ?? 0;
+    const lost = armIndex === 1 ? (options.bLost?.[Math.floor(order.length / 2)] ?? null) : null;
     order.push(name);
     return Promise.resolve(
       buildReportEnvelope('fake', request, {
-        commands: [{ name: COMMAND, failed: false, value }],
+        commands: [{ name: COMMAND, failed: lost !== null, value, lost }],
       }, []),
     );
   };
@@ -193,7 +196,7 @@ async function runFixture(options: FixtureOptions, label: string): Promise<Fixtu
     compare: () => comparisonFor(options.script[compared++]),
     estimator: options.estimator ?? 'min',
     estimate: (report): readonly FacetEstimate[] =>
-      report.body.commands.map((row) => ({ name: row.name, value: row.value, unit: 'ms' })),
+      report.body.commands.map((row) => ({ name: row.name, value: row.value, unit: 'ms', lost: row.lost })),
   };
 
   return { result: await runAb(spec), order, envs };
@@ -362,6 +365,30 @@ describe('runAb — the estimator', () => {
     );
 
     expect(only(result).a?.samples).toEqual([30, 10]);
+  });
+});
+
+describe('runAb — an arm whose run was lost', () => {
+  it('reports that the arm ran out of heap, never a statistic over its surviving pairs', async () => {
+    const { result } = await runFixture(
+      {
+        pairs: 3,
+        aValues: [100, 100, 100],
+        bValues: [200, 0, 210],
+        bLost: [null, 'ran out of heap', null],
+        script: ['changed', 'changed', 'changed'],
+        estimator: 'median',
+      },
+      'lost',
+    );
+
+    const row = only(result);
+    expect(row.lost).toEqual({ a: null, b: 'ran out of heap in 1 of 3 pairs' });
+    // The survivors' median would be a number, and an understated one: no headline effect at all.
+    expect(row.effect).toBeNull();
+    const text = renderAb(result);
+    expect(text).toContain('B: ran out of heap in 1 of 3 pairs');
+    expect(text).toContain('effect: NONE — arm B ran out of heap in 1 of 3 pairs');
   });
 });
 

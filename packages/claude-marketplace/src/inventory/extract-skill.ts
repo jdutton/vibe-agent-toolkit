@@ -457,6 +457,8 @@ function collectLinkedFiles(
 		projectRoot,
 		skillRootPath: absolute,
 		excludeNavigationFiles: true,
+		// An inventory walks the installed skill as SOURCE: nothing under it is this run's output.
+		ownOutputDir: undefined,
 	};
 	if (gitTracker !== undefined) {
 		walkOptions.gitTracker = gitTracker;

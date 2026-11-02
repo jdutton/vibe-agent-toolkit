@@ -131,6 +131,7 @@ function walkOnDiskLink(opts: {
   return walkLinkGraph(SKILL_ID, registry, {
     maxDepth: 5,
     excludeRules: [],
+    ownOutputDir: undefined,
     projectRoot: opts.tmpDir,
     skillRootPath: skillPath,
     ...opts.overrides,
@@ -225,6 +226,7 @@ function walkDeclaredAgentInstruction(sources: string[]): ReturnType<typeof walk
   return walkLinkGraph(SKILL_ID, registry, {
     maxDepth: 5,
     excludeRules: [],
+    ownOutputDir: undefined,
     projectRoot: tmpDir,
     skillRootPath: skillPath,
     deferredArtifacts: makeDeferredArtifactsFromRelPaths({
@@ -420,6 +422,7 @@ function walkThroughHtml(overrides?: Partial<WalkLinkGraphOptions>): {
   const result = walkLinkGraph(SKILL_ID, registry, {
     maxDepth: 5,
     excludeRules: [],
+    ownOutputDir: undefined,
     projectRoot: root,
     skillRootPath: skillPath,
     ...overrides,
@@ -440,6 +443,7 @@ function defaultOptions(overrides?: Partial<WalkLinkGraphOptions>): WalkLinkGrap
   return {
     maxDepth: 5,
     excludeRules: [],
+    ownOutputDir: undefined,
     projectRoot: PROJECT_ROOT,
     skillRootPath: SKILL_PATH,
     ...overrides,

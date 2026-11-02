@@ -913,18 +913,25 @@ function rowEstimates<TRow extends { readonly name: string; readonly failed: boo
   rows: readonly TRow[],
   unit: string,
   valueOf: (row: TRow) => number,
+  lostOf: (row: TRow) => string | null,
 ): readonly FacetEstimate[] {
-  return rows
-    .filter((row) => !row.failed)
-    .map((row) => ({ name: row.name, value: valueOf(row), unit }));
+  return rows.flatMap((row): FacetEstimate[] => {
+    const lost = lostOf(row);
+    // A LOST row is kept, valueless: `ab` reports the arm lost it rather than a statistic of the rest.
+    if (lost !== null) return [{ name: row.name, value: 0, unit, lost }];
+    return row.failed ? [] : [{ name: row.name, value: valueOf(row), unit, lost: null }];
+  });
 }
+
+/** For a facet none of whose rows is ever lost — only `memory`'s out-of-heap row is. */
+const NEVER_LOST = (): null => null;
 
 /**
  * The fastest repeat a row measured — the reduction `FacetEstimate` requires.
  *
  * `FacetFunctions.estimate` demands "a per-capture reduction that is already
- * robust to a slow repeat", because `ab` then takes a minimum across captures
- * and **a min over medians is not a min**: a median carries whichever repeat
+ * robust to a slow repeat", because `ab` then takes the facet's estimator across
+ * captures — the min, for every facet this serves — and **a min over medians is not a min**: a median carries whichever repeat
  * happened to land in the middle, so a single slow repeat inside an arm survives
  * into the number `ab` compares and reads as a real effect.
  *
@@ -1684,7 +1691,7 @@ export function createProgram(): Command {
         // and it is the right number to hand `ab` for the same reason `ab` then
         // takes a minimum of it — see `harness/estimator.ts`.
         estimator: 'min',
-        estimate: (report) => rowEstimates(report.body.commands, 'ms', (row) => row.minMs),
+        estimate: (report) => rowEstimates(report.body.commands, 'ms', (row) => row.minMs, NEVER_LOST),
       })
         .addCommand(createPerfArmsCommand())
         .addCommand(createPerfBarsCommand()),
@@ -1709,7 +1716,7 @@ export function createProgram(): Command {
         // p25 differ is an arm whose counts were NOT deterministic, and the A/B
         // shows it without needing its own stability rule.
         estimator: 'min',
-        estimate: (report) => rowEstimates(report.body.commands, 'calls', (row) => row.userCalls),
+        estimate: (report) => rowEstimates(report.body.commands, 'calls', (row) => row.userCalls, NEVER_LOST),
       }),
     )
     .addCommand(
@@ -1751,7 +1758,7 @@ export function createProgram(): Command {
         // the compare output, where the passes are qualified by kind.
         estimator: 'min',
         estimate: (report) =>
-          rowEstimates(report.body.commands, 'ms parse (all kinds)', fastestRepeat),
+          rowEstimates(report.body.commands, 'ms parse (all kinds)', fastestRepeat, NEVER_LOST),
       }),
     )
     .addCommand(
@@ -1777,7 +1784,7 @@ export function createProgram(): Command {
         // rule twice is how they drifted apart the first time.
         estimator: 'min',
         estimate: (report) =>
-          rowEstimates(report.body.commands, 'ms crawl (all strata)', fastestRepeat),
+          rowEstimates(report.body.commands, 'ms crawl (all strata)', fastestRepeat, NEVER_LOST),
       }),
     )
     .addCommand(
@@ -1807,7 +1814,7 @@ export function createProgram(): Command {
         // populations of equal size and different membership read as unchanged
         // through `ab` and as CHANGED through `compare`. Use `compare`.
         estimator: 'min',
-        estimate: (report) => rowEstimates(report.body.commands, 'files', (row) => row.count),
+        estimate: (report) => rowEstimates(report.body.commands, 'files', (row) => row.count, NEVER_LOST),
       }),
     )
     .addCommand(
@@ -1827,7 +1834,7 @@ export function createProgram(): Command {
         // A peak moves both ways with when a collection lands, so the median repeat, and its median
         // across captures: a min would pick the luckiest collection (see `EstimatorKind`).
         estimator: 'median',
-        estimate: (report) => rowEstimates(report.body.commands, 'KiB peak RSS', (row) => row.medianKb),
+        estimate: (report) => rowEstimates(report.body.commands, 'KiB peak RSS', (row) => row.medianKb, (row) => (row.outOfHeap ? 'ran out of heap' : null)),
       }),
     )
     .addCommand(createVerdictCommand());

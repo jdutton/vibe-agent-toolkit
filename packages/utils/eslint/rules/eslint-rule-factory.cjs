@@ -66,9 +66,9 @@ const {
   acceptsImport,
   EXEMPT_AND_SAFE_MODULE_SCHEMA,
   insertAboveWithComments,
-  isNameAlreadyBound,
   isShadowedAt,
   resolveSafeModule,
+  safeBindingOf,
   takesNamedSpecifier,
 } = require('./safe-import.cjs');
 
@@ -132,6 +132,24 @@ function callOf(node) {
     && !parent.computed && parent.property.name === 'native';
   const call = parent?.parent;
   return nativeMember && call?.type === 'CallExpression' && call.callee === parent ? { call, native: true } : null;
+}
+
+/**
+ * The last token of `arg` as written, its wrapping parentheses included: `(x)` in `f((x))` ends at
+ * the inner `)`. An argument appended after the node alone would land INSIDE those parens —
+ * `f((x, y))`, one sequence expression instead of two arguments.
+ */
+function lastTokenOfArgument(sourceCode, call, arg) {
+  const callOpen = sourceCode.getTokenAfter(call.callee, (token) => token.value === '(');
+  let before = sourceCode.getTokenBefore(arg);
+  let last = sourceCode.getLastToken(arg);
+  let after = sourceCode.getTokenAfter(arg);
+  while (before.value === '(' && before.range[0] > callOpen.range[0] && after?.value === ')') {
+    last = after;
+    before = sourceCode.getTokenBefore(before);
+    after = sourceCode.getTokenAfter(after);
+  }
+  return last;
 }
 
 /** One visitor object from several: a selector two of them handle runs both handlers, in order. */
@@ -221,13 +239,16 @@ module.exports = function createNoUnsafeRule(config) {
       // Seeded from SCOPE, not from "did I see an import from safeModule?".
       // A file already importing `safeFn` from the barrel needs the call
       // rewritten but must NOT gain a second binding of the same name — that is
-      // a SyntaxError, not a redundant import. See `safe-import.cjs`.
-      let hasSafeImport = isNameAlreadyBound(sourceCode, safeFn);
+      // a SyntaxError, not a redundant import. A top-level `safeFn` that is NOT
+      // the safe function (another module's, a type-only import, a local) takes
+      // no rewrite at all. See `safeBindingOf` in `safe-import.cjs`.
+      const safeBinding = safeBindingOf(sourceCode, safeFn, targetModule);
+      let hasSafeImport = safeBinding === 'safe';
       // The SAME question, answered once and never mutated. `hasSafeImport`
       // flips the moment a fix inserts the import, and the dead-import leg must
       // not be armed by a flag a suppressed report can spend — ESLint runs
       // `fix()` before the `eslint-disable` filter discards the problem.
-      const safeBoundInSource = hasSafeImport;
+      const safeBoundInSource = safeBinding === 'safe';
       // The dead-import leg's OTHER gate: does this file actually call `safeFn`,
       // the free function this fixer writes? "The safe symbol is in scope" alone
       // let an unrelated coincidence arm the leg — see `dead-import.cjs`. Read
@@ -305,8 +326,11 @@ module.exports = function createNoUnsafeRule(config) {
         // that would compile — and appends to a one-argument call only: further
         // arguments belong to the unsafe function and mean nothing to the safe one.
         const report = { node, messageId: 'noUnsafeOperation', data: { safeModule: targetModule } };
-        // An inner binding named `safeFn` would catch the rewritten call: no rewrite at all.
-        if (isShadowedAt(sourceCode, node, safeFn)) {
+        // An inner binding named `safeFn`, or a top-level one that is not the safe function,
+        // would catch the rewritten call: no rewrite at all. Nor for a constructed first
+        // argument (`new URL(…)`): every safe replacement takes a string path, so the
+        // rewrite would not compile.
+        if (safeBinding === 'foreign' || isShadowedAt(sourceCode, node, safeFn) || node.arguments[0]?.type === 'NewExpression') {
           context.report({ ...report, suggest: [] });
         } else if (!native && autofixes(node)) {
           context.report({ ...report, fix: (fixer) => rewriteCall(fixer) });
@@ -337,7 +361,7 @@ module.exports = function createNoUnsafeRule(config) {
           // identifier, so `no-undef` cannot see it either. `tsc` can.
           fixes.push(fixer.replaceText(node.callee, safeFn));
           if (mode.appendArgument !== undefined) {
-            fixes.push(fixer.insertTextAfter(node.arguments[0], `, ${mode.appendArgument}`));
+            fixes.push(fixer.insertTextAfter(lastTokenOfArgument(sourceCode, node, node.arguments[0]), `, ${mode.appendArgument}`));
           }
 
           // Add import if needed — on EVERY report, deliberately.

@@ -24,6 +24,7 @@ import {
 import { validatePlugin } from '@vibe-agent-toolkit/claude-marketplace';
 import {
   buildReport,
+  exitCodeForReport,
   summarizeIssues,
   toFindings,
   type Report,
@@ -36,7 +37,7 @@ import { Command } from 'commander';
 
 import { refusalCodeOf } from '../../../utils/command-refusal.js';
 import { loadConfig } from '../../../utils/config-loader.js';
-import { endWithReport, NOTHING_FINISHED, publishedReport, refusalReport } from '../../../utils/document-writer.js';
+import { NOTHING_FINISHED, refusalReport, writeDocument } from '../../../utils/document-writer.js';
 import { reportFindings } from '../../../utils/issue-rendering.js';
 import { resolveIssueSeverity } from '../../../utils/issue-severity.js';
 import { createLogger } from '../../../utils/logger.js';
@@ -962,14 +963,15 @@ async function marketplaceValidateCommand(
     // Only the argument check throws here: the phase returns its own refusals.
     report = refusedReport(error);
   }
+  // This command offers no `--format`: its document is YAML. Written first, so a run-integrity
+  // refusal the writer adds is said on stderr before the count line that includes it.
+  const written = writeDocument('claude marketplace validate', report, 'yaml');
   // The PUBLISHED counts — never "0 error(s)" beside exit 1 — and none for a refusal, which counted nothing.
-  const published = publishedReport('claude marketplace validate', report);
-  if (published.status !== 'error') {
-    const { errors, warnings, info } = published.summary;
+  if (written.status !== 'error') {
+    const { errors, warnings, info } = written.summary;
     createLogger().info(`${errors} error(s), ${warnings} warning(s), ${info} info`);
   }
-  // This command offers no `--format`: its document is YAML.
-  endWithReport('claude marketplace validate', report, 'yaml');
+  process.exit(exitCodeForReport(written));
 }
 
 export function createMarketplaceValidateCommand(): Command {

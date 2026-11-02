@@ -56,6 +56,12 @@ let exhaustPath: string;
  */
 let workerExhaustPath: string;
 
+/**
+ * A preload whose worker thread outgrows its heap limit and is CAUGHT — as vat's parse pool catches
+ * it and reports the document as a finding — so the process prints the worker's message and exits 0.
+ */
+let caughtWorkerExhaustPath: string;
+
 beforeAll(() => {
   const dir = mkdtempSync(safePath.join(normalizedTmpdir(), PREFIX));
   scratch.push(dir);
@@ -69,6 +75,11 @@ beforeAll(() => {
   writeFileSync(
     exhaustPath,
     "if (process.argv.length > 1 && !process.argv.includes('--version')) { const kept = []; for (;;) kept.push(new Array(1e5).fill(1)); }\n",
+  );
+  caughtWorkerExhaustPath = safePath.join(dir, 'caught-worker-exhaust.cjs');
+  writeFileSync(
+    caughtWorkerExhaustPath,
+    "const wt = require('node:worker_threads');\nif (wt.isMainThread && process.argv.length > 1 && !process.argv.includes('--version')) { new wt.Worker('const kept = []; for (;;) kept.push(new Array(1e5).fill(1));', { eval: true, resourceLimits: { maxOldGenerationSizeMb: 8 } }).on('error', (error) => { process.stderr.write('error: ' + error.message + ' [BLOB_PARSE_FAILED]\\n'); }); process.exit = () => undefined; }\n",
   );
   workerExhaustPath = safePath.join(dir, 'worker-exhaust.cjs');
   writeFileSync(
@@ -161,6 +172,15 @@ describe('captureMemory', () => {
 
     expect(row.failed).toBe(true);
     expect(row.outOfHeap).toBe(true);
+  });
+
+  it('marks a row out of heap when a worker ran out and the process CAUGHT it and exited 0', async () => {
+    const env = { set: { NODE_OPTIONS: `--require "${caughtWorkerExhaustPath}"` }, unset: [] };
+    const row = onlyRow(await capture(setupProbe(PREFIX), 0, { env, runs: 1, cache: 'cold' }));
+
+    // A peak from a run that lost a worker is not a measurement of the command: never compared as one.
+    expect(row.outOfHeap).toBe(true);
+    expect(row.failed).toBe(true);
   });
 
   it("records the arm's NODE_OPTIONS in the host, without the facet's own probe", async () => {

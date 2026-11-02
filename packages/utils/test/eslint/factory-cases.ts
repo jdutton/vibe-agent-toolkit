@@ -221,7 +221,7 @@ export function unsafeCallRuleCases(
         ),
       },
       ...nativeAndValueReferenceCases({ unsafeFn, unsafeModule, safeFn, extra, unsafeImport, namespaceImport, safeImport, options }),
-      ...importShapeCases({ unsafeFn, safeFn, safeModule, extra, unsafeImport, safeImport, options }, rewritten),
+      ...importShapeCases({ unsafeFn, unsafeModule, safeFn, safeModule, extra, unsafeImport, safeImport, options }, rewritten),
       ...(typeof rewrite === 'object' && 'autofixAsStatement' in rewrite
         ? statementOnlyAutofixCases(unsafeFn, safeFn, unsafeImport, safeImport, options)
         : []),
@@ -234,6 +234,15 @@ export function unsafeCallRuleCases(
             filename: LINTED_FILE,
             options,
             errors: [{ messageId: 'noUnsafeOperation', suggestions: [] }],
+          }, {
+            // A parenthesized argument: the appended one goes after its closing paren, never inside it.
+            code: `import { ${unsafeFn} } from '${unsafeModule}';\nconst r = ${unsafeFn}((x));`,
+            filename: LINTED_FILE,
+            options,
+            errors: [{
+              messageId: 'noUnsafeOperation',
+              suggestions: [{ messageId: 'useSafeCall', output: `import { ${unsafeFn} } from '${unsafeModule}';\n${safeImport}\nconst r = ${safeFn}((x)${extra});` }],
+            }],
           }]
         : []),
     ],
@@ -253,6 +262,14 @@ function statementOnlyAutofixCases(
   options: object[],
 ): object[] {
   return [
+    // A `URL` (or any constructed) argument: the safe call takes a string path, so the rewrite
+    // would not compile — reported with no rewrite at all.
+    {
+      code: `${unsafeImport}\n${unsafeFn}(new URL('file:///tmp/x'));`,
+      filename: LINTED_FILE,
+      options,
+      errors: [{ messageId: 'noUnsafeOperation', suggestions: [] }],
+    },
     // Result discarded, so the different return value is never read: an autofix. Not a
     // behaviour-identical swap — `mkdirSyncReal` takes a string path, so a `URL` or `Buffer`
     // argument stops compiling, and it then resolves the real path.
@@ -324,6 +341,7 @@ function nativeAndValueReferenceCases(
 
 interface ImportShapeSpec {
   unsafeFn: string;
+  unsafeModule: string;
   safeFn: string;
   safeModule: string;
   extra: string;
@@ -340,7 +358,7 @@ interface ImportShapeSpec {
  * the rewritten call would reach the shadowing binding.
  */
 function importShapeCases(
-  { unsafeFn, safeFn, safeModule, extra, unsafeImport, safeImport, options }: ImportShapeSpec,
+  { unsafeFn, unsafeModule, safeFn, safeModule, extra, unsafeImport, safeImport, options }: ImportShapeSpec,
   rewritten: (fixedCode: string, suggestedCode: string) => { output?: string; errors: object[] },
 ): object[] {
   const ownDeclaration = (existing: string) => {
@@ -359,5 +377,23 @@ function importShapeCases(
     ownDeclaration(`import '${safeModule}';`),
     shadowed(`${unsafeImport}\nexport function f(${safeFn}: number) { return ${unsafeFn}(x); }`),
     shadowed(`import { ${safeFn} } from '${BARREL}';\n${unsafeImport}\nexport function f() { const ${safeFn} = 1; return [${unsafeFn}(x), ${safeFn}]; }`),
+    // The NAME bound is not the safe FUNCTION bound. A same-named import from another module
+    // would catch the rewritten call (a different function), and a type-only import of it backs
+    // no value: either way no rewrite, and no import added beside a binding that would collide.
+    shadowed(`import { ${safeFn} } from './local-other';\n${unsafeImport}\nexport const r = ${unsafeFn}(x);`),
+    shadowed(`import type { ${safeFn} } from '${safeModule}';\n${unsafeImport}\nexport const r = ${unsafeFn}(x);`),
+    shadowed(`import { type ${safeFn} } from '${safeModule}';\n${unsafeImport}\nexport const r = ${unsafeFn}(x);`),
+    shadowed(`const ${safeFn} = (p: string) => p;\n${unsafeImport}\nexport const r = ${unsafeFn}(x);`),
+    // A file opening with a hashbang: the import lands BELOW it, never above — a hashbang that is
+    // not the first line does not parse.
+    (() => {
+      const fixed = `#!/usr/bin/env node\n${safeImport}\nconst m = require('${unsafeModule}');\nexport const r = ${safeFn}(x${extra});`;
+      return {
+        code: `#!/usr/bin/env node\nconst m = require('${unsafeModule}');\nexport const r = m.${unsafeFn}(x);`,
+        filename: LINTED_FILE,
+        options,
+        ...rewritten(fixed, fixed),
+      };
+    })(),
   ];
 }

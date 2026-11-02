@@ -9,8 +9,8 @@
  * Auto-fix only where the result is discarded: mkdirSyncReal() returns the directory's real
  * path, where mkdirSync() returns the first directory it created (or undefined). A call whose
  * result is used gets a suggestion instead. Even a discarded call is not a byte-for-byte swap:
- * mkdirSyncReal() takes a string path only, so a `URL` or `Buffer` argument fails the typecheck
- * after the fix, and it resolves the real path after creating, so it can throw
+ * mkdirSyncReal() takes a string path only — a `new URL(…)` argument is reported with no rewrite,
+ * and a `URL` or `Buffer` held in a variable fails the typecheck after the fix — and it resolves the real path after creating, so it can throw
  * (LinkChainRefusedError, or the OS's realpath refusal) where mkdirSync() did not.
  */
 

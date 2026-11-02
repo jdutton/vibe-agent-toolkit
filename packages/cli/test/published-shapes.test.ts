@@ -69,7 +69,7 @@ function commandSources(): string[] {
  * counts as `writeExternalDocument`: it is the org lane's one route to it, and each
  * external verb names itself there — the writer call inside it takes a variable.
  */
-const WRITER_CALL = /\b(endWithReport|writeDocument|endWithRefusal|readForwardedDocument|writeExternalDocument|executeOrgCommand|writeArtifact|writeArtifactFile|writeLegacyDocument)\(\s*(?:'([^']+)'|([A-Z][A-Z0-9_]*)\b)/g;
+const WRITER_CALL = /\b(endWithReport|writeDocument|endWithRefusal|endWithLeftoverRefusal|readForwardedDocument|writeExternalDocument|executeOrgCommand|writeArtifact|writeArtifactFile|writeLegacyDocument)\(\s*(?:'([^']+)'|([A-Z][A-Z0-9_]*)\b)/g;
 
 /** A file-local `const NAME = '…'`. */
 const STRING_CONSTANT = /\bconst ([A-Z][A-Z0-9_]*) = '([^']+)'/g;

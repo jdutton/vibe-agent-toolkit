@@ -16,18 +16,15 @@
  * the README from drifting apart again: a rule that hardcodes its own copy of
  * the string is how the first divergence happened.
  *
- * ## Why `isNameAlreadyBound` exists
+ * ## Why `safeBindingOf` exists
  *
  * A fixer that adds `import { safePath } from '<target>'` to a file that already
  * imports `safePath` from somewhere else does not produce a redundant import —
  * it produces `SyntaxError: Identifier 'safePath' has already been declared`.
- *
- * That was latent while the target WAS the barrel (the fixer's own "do I already
- * import from the target?" check happened to cover the only module anyone
- * imported from). Pointing the fixer at `./path` makes it live for exactly the
- * population being migrated: every file that already reaches the helpers through
- * the barrel. So the check has to be "is this NAME bound?", not "did I see an
- * import from MY module?".
+ * And "the name is bound" is not "the safe function is bound": a same-named
+ * import from another module, or a type-only one, would catch the rewritten
+ * call. So the question has three answers — absent, ours, foreign — and only the
+ * first two take a rewrite.
  *
  * Scope analysis rather than import scanning, because a top-level
  * `const safePath = ...` collides just as fatally as an import does.
@@ -64,16 +61,60 @@ function topLevelScope(sourceCode) {
   return fileScope ?? globalScope;
 }
 
+/** Is `source` a module this package publishes the safe helpers from: the target seam, or this package's barrel or a subpath? */
+function isSafeSource(source, targetModule) {
+  return source === targetModule || source === PACKAGE_NAME || source.startsWith(`${PACKAGE_NAME}/`);
+}
+
+/** Is `def` a VALUE `import { name } from '<safe source>'` — not aliased onto `name`, not type-only? */
+function isSafeValueImport(def, name, targetModule) {
+  const spec = def.node;
+  const declaration = def.parent;
+  return def.type === 'ImportBinding'
+    && spec.type === 'ImportSpecifier'
+    && spec.imported.name === name
+    && spec.importKind !== 'type'
+    && declaration?.importKind !== 'type'
+    && isSafeSource(declaration.source.value, targetModule);
+}
+
+/** Is `def` a top-level `const { name } = require('<safe source>')` — the CommonJS spelling of the same import? */
+function isSafeRequire(def, name, targetModule) {
+  const declarator = def.node;
+  const init = declarator?.init;
+  const required = init?.type === 'CallExpression' && init.callee.type === 'Identifier' && init.callee.name === 'require'
+    && init.arguments.length === 1 && init.arguments[0].type === 'Literal' && typeof init.arguments[0].value === 'string';
+  return def.type === 'Variable' && required && isSafeSource(init.arguments[0].value, targetModule)
+    && declarator.id.type === 'ObjectPattern'
+    && declarator.id.properties.some((property) => property.type === 'Property' && !property.computed
+      && property.key.type === 'Identifier' && property.key.name === name
+      && property.value.type === 'Identifier' && property.value.name === name);
+}
+
 /**
- * Is `name` already bound at the top level of the linted file? A binding inside a
- * nested function is not a redeclaration: see `isShadowedAt` for that case.
+ * What the file's top-level `name` is, for a fixer that rewrites a call to `name(…)`:
+ *
+ * - `'absent'` — nothing binds it: rewrite, and add the import.
+ * - `'safe'` — a VALUE import (or `require` destructure) of the safe function itself, from the
+ *   target seam or this package: rewrite, add nothing.
+ * - `'foreign'` — anything else: a same-named import from another module, a type-only import, a
+ *   local declaration. The rewritten call would reach THAT binding, or no value at all, and adding
+ *   an import beside it redeclares the name — so no rewrite: the finding stays, fixed by hand.
+ *
+ * "The name is bound" is not "the safe function is bound": a fixer that read it so rewired
+ * `tmpdir()` to a local module's `normalizedTmpdir`, and wrote a call to a type-only import.
  *
  * @param {object} sourceCode - ESLint `SourceCode` for the file being linted.
- * @param {string} name - The identifier the fixer wants to import.
- * @returns {boolean} True when adding an import of `name` would redeclare it.
+ * @param {string} name - The replacement's identifier.
+ * @param {string} targetModule - The module the fixer imports `name` from.
+ * @returns {'absent' | 'safe' | 'foreign'}
  */
-function isNameAlreadyBound(sourceCode, name) {
-  return topLevelScope(sourceCode).variables.some((variable) => variable.name === name);
+function safeBindingOf(sourceCode, name, targetModule) {
+  const variable = topLevelScope(sourceCode).variables.find((candidate) => candidate.name === name);
+  if (variable === undefined) return 'absent';
+  const safe = variable.defs.length > 0
+    && variable.defs.every((def) => isSafeValueImport(def, name, targetModule) || isSafeRequire(def, name, targetModule));
+  return safe ? 'safe' : 'foreign';
 }
 
 /**
@@ -136,8 +177,10 @@ function acceptsImport(sourceCode) {
  * @param {string} text - Text to insert, including its own trailing newline.
  */
 function insertAboveWithComments(fixer, sourceCode, node, text) {
-  const comments = sourceCode.getCommentsBefore(node);
-  const start = (comments[0] ?? node).range[0];
+  // A hashbang is never a comment to insert above: it must stay the file's first line, or the
+  // file does not parse. ESLint exposes it as a `Shebang` comment.
+  const firstComment = sourceCode.getCommentsBefore(node).find((comment) => comment.type !== 'Shebang');
+  const start = (firstComment ?? node).range[0];
   return fixer.insertTextBeforeRange([start, start], text);
 }
 
@@ -210,9 +253,9 @@ module.exports = {
   SAFE_PATH_MODULE,
   SAFE_PROCESS_MODULE,
   insertAboveWithComments,
-  isNameAlreadyBound,
   isShadowedAt,
   resolveSafeModule,
+  safeBindingOf,
   takesNamedSpecifier,
   withSafeModuleOption,
 };

@@ -291,7 +291,11 @@ stderr. Both spell a finding with the one formatter, `formatFindingLine` in
 with no `--verbose` passes `verbose: true` and always prints every finding: `vat agent validate`,
 `vat ard emit`, `vat rag index`, `vat okf validate`, `vat audit settings`, `vat claude plugin
 uninstall`, `vat skills build --skill`'s refusal, `vat audit <git-url>`'s clone leftover, the install
-verbs' leftovers, a refusal's leftovers, and `vat verify`'s built-in phases. A run-integrity refusal
+verbs' leftovers, a refusal's leftovers, and `vat verify`'s built-in phases. A leftover
+(`TREE_CLEANUP_INCOMPLETE`) prints at every verbosity, on every lane: a finished change's through
+`leftoverFindingsOfWarnings`, a refusal's beside its message, and one that IS the refusal
+(`endWithLeftoverRefusal`) once, as the refusal's message — never also as a finding line. A refusal
+prints its message first, then the finished work's findings. A run-integrity refusal
 the document writer adds, the writer prints itself, once. Verbs whose stderr does not yet say their
 findings this way are listed in `FINDINGS_NOT_ON_STDERR`
 (`packages/cli/test/system/test-helpers/exit-code-matrix.ts`), which the exit-code matrix asserts

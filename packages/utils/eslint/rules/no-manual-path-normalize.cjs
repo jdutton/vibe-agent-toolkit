@@ -39,8 +39,9 @@ const {
   SAFE_MODULE_ONLY_SCHEMA,
   SAFE_PATH_MODULE,
   insertAboveWithComments,
-  isNameAlreadyBound,
   resolveSafeModule,
+  safeBindingOf,
+  takesNamedSpecifier,
 } = require('./safe-import.cjs');
 
 const NATIVE_FN = 'toForwardSlash';
@@ -130,12 +131,17 @@ module.exports = {
   create(context) {
     const sourceCode = context.getSourceCode();
     const targetModule = resolveSafeModule(context, SAFE_PATH_MODULE);
-    // Seeded from SCOPE: a file that already binds the name must have the call
-    // rewritten WITHOUT gaining a second binding of the same name — that is a
-    // SyntaxError. See `safe-import.cjs`.
+    // Seeded from SCOPE: a file that already binds the safe function must have the
+    // call rewritten WITHOUT gaining a second binding of the same name — that is a
+    // SyntaxError — and a file whose top-level name is something ELSE (another
+    // module's, a type-only import) takes no rewrite at all. See `safeBindingOf`.
+    const binding = {
+      [NATIVE_FN]: safeBindingOf(sourceCode, NATIVE_FN, targetModule),
+      [ANY_PLATFORM_FN]: safeBindingOf(sourceCode, ANY_PLATFORM_FN, targetModule),
+    };
     const bound = {
-      [NATIVE_FN]: isNameAlreadyBound(sourceCode, NATIVE_FN),
-      [ANY_PLATFORM_FN]: isNameAlreadyBound(sourceCode, ANY_PLATFORM_FN),
+      [NATIVE_FN]: binding[NATIVE_FN] === 'safe',
+      [ANY_PLATFORM_FN]: binding[ANY_PLATFORM_FN] === 'safe',
     };
     // Never mutated — the dead-import leg must not be armed by a flag that a
     // suppressed report's `fix()` can spend. See `dead-import.cjs`.
@@ -184,13 +190,9 @@ module.exports = {
         if (PATH_MODULES.has(node.source.value)) {
           pathImportNodes.push(node);
         }
-        if (node.source.value !== targetModule) return;
-        utilsImportNode = node;
-        for (const spec of node.specifiers) {
-          if (spec.type === 'ImportSpecifier' && spec.imported.name in bound) {
-            bound[spec.imported.name] = true;
-          }
-        }
+        // Only a VALUE import with named specifiers takes another one (see `takesNamedSpecifier`);
+        // what it already binds, `safeBindingOf` has answered from scope.
+        if (node.source.value === targetModule && takesNamedSpecifier(node)) utilsImportNode = node;
       },
 
       CallExpression(node) {
@@ -204,6 +206,7 @@ module.exports = {
           messageId: MESSAGE_FOR[match.fn],
           data: { safeModule: targetModule },
           fix(fixer) {
+            if (binding[match.fn] === 'foreign') return null;
             if (!bound[match.fn] && !acceptsImport(sourceCode)) return null;
             const receiver = sourceCode.getText(match.receiver);
             return [fixer.replaceText(node, `${match.fn}(${receiver})`), ...importFix(fixer, match.fn)];

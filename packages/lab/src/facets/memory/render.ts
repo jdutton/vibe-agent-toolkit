@@ -27,7 +27,7 @@ const LEGEND =
 /** How this facet's numbers are qualified on a busy machine. */
 const PHRASING = {
   unmeasured: 'no load reading was taken around the capture.',
-  contaminated: 'the machine was busy; under memory pressure the OS may page vat out, which lowers a peak.',
+  contaminated: 'the CPU load was high. Only CPU load is checked — memory pressure is not measured, and under it the OS may page vat out, which would lower a peak unseen.',
 } as const;
 
 /**
@@ -101,7 +101,7 @@ export function renderMemoryComparison(comparison: MemoryComparisonResult): stri
   return renderFacetComparison(
     comparison,
     LEGEND,
-    '⚠  At least one side was captured on a busy machine; under memory pressure a peak can read low.',
+    '⚠  At least one side was captured under high CPU load. Only CPU load is checked: memory pressure, which can make a peak read low, is not measured.',
     diffLines,
   );
 }

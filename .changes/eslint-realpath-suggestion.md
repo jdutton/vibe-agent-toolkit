@@ -48,3 +48,15 @@
   'range')`). The replacement now gets its own declaration. A call where an inner binding shadows the
   replacement's name (a parameter `normalizedTmpdir`) is reported with no fix: the rewritten call
   would reach that binding.
+- **The call rules and `no-raw-node-path`/`no-manual-path-normalize` rewrite a call only when the
+  replacement is unbound, or bound by a value import of it from `@vibe-agent-toolkit/utils` (or a
+  subpath) or the configured `safeModule`.** A same-named import from another module
+  (`import { normalizedTmpdir } from './local'`), a type-only import of it, or a local declaration of
+  that name had the call rewired onto that binding; it is now reported with no fix.
+- **An import a fix adds lands below a file's hashbang (`#!/usr/bin/env node`)**, not above it, which
+  left the file unparsable.
+- **`no-fs-mkdirSync` and `no-fs-realpathSync` do not rewrite a call whose first argument is a
+  `new …` expression** (`mkdirSync(new URL(…))`): the replacement takes a string path. It is reported
+  with no fix.
+- **`no-fs-realpathSync`'s suggestion appends `{ within }` after a parenthesised argument's closing
+  parenthesis**: `realpathSync((x))` became `normalizePath((x, { within: … }))`.

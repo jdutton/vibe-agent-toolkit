@@ -29,11 +29,11 @@ import { type Dirent, promises as fs, lstatSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 import { parseCacheDirectory } from '@vibe-agent-toolkit/resources';
-import { buildReport, toFindings, type Gate } from '@vibe-agent-toolkit/schema';
+import { buildReport, type Gate } from '@vibe-agent-toolkit/schema';
 import { applyTreePlanOrLeftover, classifyFsFault, isFsFaultError, direntKind, everywhere, type EntryKind, type FsFaultContext, isPathAbsentError, planTreeChanges, requireConfirmedAbsent, safePath } from '@vibe-agent-toolkit/utils';
 
 import { refusalCodeOf } from '../../utils/command-refusal.js';
-import { endWithRefusal, endWithReport, type FinishedWork, leftoverIssueOf, NOTHING_FINISHED } from '../../utils/document-writer.js';
+import { endWithLeftoverRefusal, endWithRefusal, endWithReport, type FinishedWork, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { createLogger } from '../../utils/logger.js';
 
 import type { CacheClearData } from './clear-schema.js';
@@ -42,6 +42,7 @@ import type { CacheClearData } from './clear-schema.js';
 const VAT_CACHE_DIR_NAME = '.vat-cache';
 
 /** `vat cache clear` has no `--strict`, and its only finding is a leftover warning: the gate is fixed. */
+const VERB = 'cache clear';
 const CACHE_CLEAR_GATE: Gate = { strict: false };
 
 /** One location is considered on every run: the shared cache root. */
@@ -208,14 +209,14 @@ export async function cacheClearCommand(options: CacheClearOptions = {}): Promis
     return refuse(error, NOTHING_FINISHED);
   }
   const { data, leftover } = outcome;
-  if (leftover !== undefined) return refuse(leftover, { examined: CACHE_LOCATIONS_CONSIDERED, findings: toFindings([leftoverIssueOf(leftover)]), data });
+  if (leftover !== undefined) return endWithLeftoverRefusal(VERB, leftover, 'yaml', CACHE_CLEAR_GATE, { examined: CACHE_LOCATIONS_CONSIDERED, findings: [], data });
   logger.debug(`Cleared ${String(data.entriesRemoved)} cache entries from ${data.cacheDir}`);
-  endWithReport('cache clear', buildReport({ examined: CACHE_LOCATIONS_CONSIDERED, findings: [], data, gate: CACHE_CLEAR_GATE }), 'yaml');
+  endWithReport(VERB, buildReport({ examined: CACHE_LOCATIONS_CONSIDERED, findings: [], data, gate: CACHE_CLEAR_GATE }), 'yaml');
 }
 
 /** End on the envelope's error branch: `error` refused, `finished` the work done before it. */
 function refuse(error: unknown, finished: FinishedWork): never {
-  return endWithRefusal('cache clear', refusalCodeOf(error), error, 'yaml', CACHE_CLEAR_GATE, finished);
+  return endWithRefusal(VERB, refusalCodeOf(error), error, 'yaml', CACHE_CLEAR_GATE, finished);
 }
 
 /**

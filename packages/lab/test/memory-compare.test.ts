@@ -147,8 +147,9 @@ describe('compareMemory', () => {
   });
 
   it.each([
-    ['platform', { ...HOST, platform: 'win32' }],
-    ['architecture', { ...HOST, arch: 'ia32' }],
+    // HOST is this machine, so the "other" value must differ from whatever runs the suite.
+    ['platform', { ...HOST, platform: HOST.platform === 'win32' ? 'linux' : 'win32' }],
+    ['architecture', { ...HOST, arch: HOST.arch === 'ia32' ? 'x64' : 'ia32' }],
     ['Node version', { ...HOST, node: 'v20.0.0' }],
     ['NODE_OPTIONS', { ...HOST, nodeOptions: '--max-old-space-size=8192' }],
     ['V8 heap limit', { ...HOST, heapSizeLimit: HOST.heapSizeLimit * 2 }],

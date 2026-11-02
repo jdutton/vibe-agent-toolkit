@@ -850,6 +850,8 @@ async function preparePackage(
     skillRootPath: safePath.resolve(skillPath),
     excludeNavigationFiles,
     deferredArtifacts,
+    // The packager walks SOURCE: no output of its own is under the walk yet.
+    ownOutputDir: undefined,
   };
   if (options.gitTracker !== undefined) {
     packagerWalkOptions.gitTracker = options.gitTracker;

@@ -57,9 +57,13 @@ children, and the V8 heap limit a child of the arm gets — a `--max-old-space-s
 machine's memory, moves a peak) are refused, naming both. The host's total memory is recorded too.
 
 A repeat that leaves no vat peak — killed, out of heap, or no process with a vat main script —
-fails the row; it is never read as a small number. A row whose process ran out of heap (its stderr
-names `JavaScript heap out of memory` or `ERR_WORKER_OUT_OF_MEMORY`, a warm arm's unmeasured priming
-run included) is marked `outOfHeap`, and against a measured other
+fails the row; it is never read as a small number. A row any of whose runs ran out of heap (its stderr
+names `JavaScript heap out of memory`, `ERR_WORKER_OUT_OF_MEMORY` or `Worker terminated due to
+reaching memory limit`, a warm arm's unmeasured priming run included) is failed and marked
+`outOfHeap` WHATEVER the run exited with: vat catches a parse worker's heap death, reports the
+document as `BLOB_PARSE_FAILED` and exits 0 (or 1), and the peak of that run is of less work, not a
+measurement. Stderr is the only thing read, so a death the process swallowed without printing is
+invisible. Against a measured other
 side it compares CHANGED with no ratio — the worst regression never reads as no delta. So does a row whose repeats disagree on how many
 vat processes reported. CHANGED needs the median delta to clear three bars at once: 10% of the
 smaller median (`perf`'s relative gate), 8 MiB, and the two arms' combined min–max spread.

@@ -59,6 +59,7 @@ import {
   formatSeverityBreakdown,
   issuesToRenderAtVerbosity,
   reportFindings,
+  reportFindingsKeepingLeftovers,
   summarizeFindings,
   sumSeverityCounts,
 } from '../../src/utils/issue-rendering.js';
@@ -1253,5 +1254,18 @@ describe('vat claude plugin build — summarizePackagedSkillIssues verbosity', (
     );
     expect(lines).toEqual(['         csvsum: 1 post-build issue (1 warning)']);
     expect(withErrors).toEqual([]);
+  });
+});
+
+describe('reportFindingsKeepingLeftovers', () => {
+  it('says a leftover at every verbosity, and collapses the other warnings as reportFindings does', () => {
+    const lines: string[] = [];
+    reportFindingsKeepingLeftovers([
+      { code: 'SOME_WARNING', severity: 'warning', message: 'a collapsible warning' },
+      { code: 'TREE_CLEANUP_INCOMPLETE', severity: 'warning', message: 'progress log left at /tmp/x', link: '/tmp/x' },
+    ], { verbose: false, write: (line) => lines.push(line) });
+
+    expect(lines.join('\n')).toContain('warning: progress log left at /tmp/x [TREE_CLEANUP_INCOMPLETE]');
+    expect(lines.join('\n')).not.toContain('a collapsible warning');
   });
 });

@@ -23,6 +23,7 @@ import {
   type SeverityCounts,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
+import { TREE_CLEANUP_INCOMPLETE_CODE } from '@vibe-agent-toolkit/utils';
 
 import { formatIssueAnchor } from './issue-anchor.js';
 
@@ -112,6 +113,19 @@ export function reportFindings(
   }
   const hint = formatCollapsedFindingsHint(countCollapsedFindings(findings, options.verbose));
   if (hint !== undefined) options.write(hint);
+}
+
+/**
+ * {@link reportFindings}, except a `TREE_CLEANUP_INCOMPLETE` leftover is said at every verbosity,
+ * after the other findings.
+ */
+export function reportFindingsKeepingLeftovers(
+  findings: readonly (ValidationIssue | Finding)[],
+  options: { readonly verbose: boolean; readonly write: (line: string) => void },
+): void {
+  const isLeftover = (finding: ValidationIssue | Finding): boolean => finding.code === TREE_CLEANUP_INCOMPLETE_CODE;
+  reportFindings(findings.filter((finding) => !isLeftover(finding)), options);
+  reportFindings(findings.filter(isLeftover), { verbose: true, write: options.write });
 }
 
 /**

@@ -10,11 +10,14 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import yaml from 'yaml';
 
 import { PUBLISHED_SHAPES } from '../../src/report-schemas.js';
+import { CommandRefusalError } from '../../src/utils/command-refusal.js';
 import { setDebugDiagnostics } from '../../src/utils/debug-diagnostics.js';
 import {
+  endWithLeftoverRefusal,
   endWithRefusal,
   endWithReport,
   endWithForwardedDocument,
+  leftoverFindingsOfWarnings,
   readForwardedDocument,
   NOTHING_FINISHED,
   publishedReport,
@@ -182,10 +185,47 @@ describe('endWithRefusal', () => {
     expect(stderrText()).toContain(`  bundles/knowledge/a.md:1: error: concept has no type [${FINDING.code}]\n`);
   });
 
+  it('says the refusal first, then the finished work\'s findings', () => {
+    endWithRefusal(VERB, 'INPUT_UNREADABLE', 'one root unreadable', 'yaml', { strict: false }, { examined: 1, findings: [FINDING], data: DATA });
+
+    const text = stderrText();
+    expect(text.indexOf('one root unreadable')).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf('one root unreadable')).toBeLessThan(text.indexOf(`[${FINDING.code}]`));
+  });
+
   it('leaves them to stdout under the generic --format text rendering', () => {
     endWithRefusal(VERB, 'INPUT_UNREADABLE', 'one root unreadable', 'text', { strict: false }, { examined: 1, findings: [FINDING], data: DATA });
 
     expect(stderrText()).not.toContain(FINDING.code);
+  });
+});
+
+describe('endWithLeftoverRefusal', () => {
+  const LEFTOVER = 'could not delete /tmp/parked-entry';
+
+  it('says the leftover once — as the refusal — and still publishes it as a warning after the finished findings', () => {
+    endWithLeftoverRefusal(VERB, new CommandRefusalError('RUN_INCOMPLETE', LEFTOVER), 'yaml', { strict: false }, { examined: 1, findings: [FINDING], data: DATA });
+
+    const text = stderrText();
+    expect(text.split(LEFTOVER)).toHaveLength(2);
+    expect(text.indexOf(LEFTOVER)).toBeLessThan(text.indexOf(`[${FINDING.code}]`));
+    const document = yaml.parse(written()) as ErrorReport<unknown>;
+    expect(document.status).toBe('error');
+    expect(document.error).toEqual({ code: 'RUN_INCOMPLETE', message: LEFTOVER });
+    expect(document.findings.map((finding) => [finding.code, finding.severity, finding.message])).toEqual([
+      [FINDING.code, 'error', FINDING.message],
+      ['TREE_CLEANUP_INCOMPLETE', 'warning', LEFTOVER],
+    ]);
+    expect(exit.mock.calls).toEqual([[ExitCode.ERROR]]);
+  });
+});
+
+describe('leftoverFindingsOfWarnings', () => {
+  it('names what a finished change left behind as warnings, and says each on stderr', () => {
+    const findings = leftoverFindingsOfWarnings([{ code: 'TREE_CLEANUP_INCOMPLETE', path: '/tmp/parked-build', message: 'could not remove the previous build' }]);
+
+    expect(findings).toEqual([expect.objectContaining({ code: 'TREE_CLEANUP_INCOMPLETE', severity: 'warning', message: 'could not remove the previous build', link: '/tmp/parked-build' })]);
+    expect(stderrText()).toContain('warning: could not remove the previous build [TREE_CLEANUP_INCOMPLETE]');
   });
 });
 

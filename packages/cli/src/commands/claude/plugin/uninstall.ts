@@ -18,7 +18,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { CommandRefusalError, refusalCodeOf } from '../../../utils/command-refusal.js';
-import { endWithRefusal, endWithReport, leftoverIssueOf, NOTHING_FINISHED, type FinishedWork } from '../../../utils/document-writer.js';
+import { endWithLeftoverRefusal, endWithRefusal, endWithReport, NOTHING_FINISHED, type FinishedWork } from '../../../utils/document-writer.js';
 import { reportFindings } from '../../../utils/issue-rendering.js';
 import { createLogger } from '../../../utils/logger.js';
 import { readInputFile } from '../../../utils/project-root-policy.js';
@@ -112,12 +112,13 @@ Example:
 }
 
 /** `vat claude plugin uninstall` has no `--strict`: a warning never fails it. */
+const VERB = 'claude plugin uninstall';
 const GATE = { strict: false } as const;
 
 /** End on the envelope's error branch: `error` refused, `finished` the work done before it. */
 function refuse(error: unknown, finished: FinishedWork): never {
   // A literal verb: the published-shapes registry scan reads it here.
-  return endWithRefusal('claude plugin uninstall', refusalCodeOf(error), error, 'yaml', GATE, finished);
+  return endWithRefusal(VERB, refusalCodeOf(error), error, 'yaml', GATE, finished);
 }
 
 /** One uninstall request per run — a key, or `--all`. */
@@ -208,7 +209,7 @@ async function pluginUninstallCommand(
     const finished = finishedWork(outcomes, dryRun);
     // Every key is uninstalled, registry rewritten; what the OS would not then delete is the refusal, naming it.
     if (leftover !== undefined) {
-      refuse(leftover, { ...finished, findings: [...finished.findings, ...toFindings([leftoverIssueOf(leftover)])] });
+      endWithLeftoverRefusal(VERB, leftover, 'yaml', GATE, finished);
     }
     reportFindings(finished.findings, { verbose: true, write: logger.warn });
   } catch (error) {
@@ -216,7 +217,7 @@ async function pluginUninstallCommand(
     refuse(error, NOTHING_FINISHED);
   }
 
-  endWithReport('claude plugin uninstall', buildPluginUninstallReport(outcomes, dryRun, Date.now() - startTime), 'yaml');
+  endWithReport(VERB, buildPluginUninstallReport(outcomes, dryRun, Date.now() - startTime), 'yaml');
 }
 
 /** The `name` of the npm package in `dir`, refusing when there is none to read. */

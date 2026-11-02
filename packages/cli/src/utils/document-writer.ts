@@ -28,7 +28,7 @@ import {
   type Report,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { isFsFaultError, suppressedFaultsOf, TREE_CLEANUP_INCOMPLETE_CODE } from '@vibe-agent-toolkit/utils';
+import { isFsFaultError, suppressedFaultsOf, TREE_CLEANUP_INCOMPLETE_CODE, type TreeChangeWarning } from '@vibe-agent-toolkit/utils';
 import { parse as parseYaml } from 'yaml';
 
 import {
@@ -209,8 +209,18 @@ export function endWithRefusal(
   finished: FinishedWork,
 ): never {
   const onStderr = findingsGoToStderr(verb, format);
-  if (onStderr) reportFindings(finished.findings, { verbose: true, write: writeStderrLine });
-  const report = refusalReport(code, error, gate, finished, onStderr);
+  const report = composeRefusal({ code, error, gate, finished, onStderr, printFinished: onStderr, alsoPublished: [] });
+  process.exit(exitCodeForReport(writeDocument(verb, report, format)));
+}
+
+/**
+ * {@link endWithRefusal} for a refusal that IS a leftover (`applyTreePlanOrLeftover`'s
+ * `leftover`): said once on stderr by the message; the document carries it as the
+ * TREE_CLEANUP_INCOMPLETE warning. The one place that warning is composed.
+ */
+export function endWithLeftoverRefusal(verb: ReportVerb, leftover: unknown, format: DocumentFormat, gate: Gate, finished: FinishedWork): never {
+  const onStderr = findingsGoToStderr(verb, format);
+  const report = composeRefusal({ code: refusalCodeOf(leftover), error: leftover, gate, finished, onStderr, printFinished: onStderr, alsoPublished: [leftoverIssueOf(leftover)] });
   process.exit(exitCodeForReport(writeDocument(verb, report, format)));
 }
 
@@ -243,14 +253,34 @@ function announceRefusal(code: RefusalCode, error: unknown): string {
  * @returns The error report, not yet published
  */
 export function refusalReport(code: RefusalCode, error: unknown, gate: Gate, finished: FinishedWork, findingsOnStderr: boolean): Report<unknown> {
+  return composeRefusal({ code, error, gate, finished, onStderr: findingsOnStderr, printFinished: false, alsoPublished: [] });
+}
+
+/** What {@link composeRefusal} composes a refusal from. */
+interface RefusalParts {
+  readonly code: RefusalCode;
+  readonly error: unknown;
+  readonly gate: Gate;
+  readonly finished: FinishedWork;
+  /** Whether leftovers go to stderr ({@link findingsGoToStderr}). */
+  readonly onStderr: boolean;
+  /** Whether the finished work's findings go to stderr too (the publishing lane). */
+  readonly printFinished: boolean;
+  /** Findings the document carries that stderr already has in the refusal's message. */
+  readonly alsoPublished: readonly Finding[];
+}
+
+/** Every refusal's one composition: message, finished findings, then leftovers. */
+function composeRefusal(parts: RefusalParts): Report<unknown> {
+  const { code, error, gate, finished, onStderr } = parts;
   const message = announceRefusal(code, error);
   const leftovers = leftoverIssuesOf(error);
-  if (findingsOnStderr) reportFindings(leftovers, { verbose: true, write: writeStderrLine });
+  if (onStderr) reportFindings([...(parts.printFinished ? finished.findings : []), ...leftovers], { verbose: true, write: writeStderrLine });
   return buildErrorReport({
     error: { code, message },
     gate,
     examined: finished.examined,
-    findings: [...finished.findings, ...leftovers],
+    findings: [...finished.findings, ...parts.alsoPublished, ...leftovers],
     data: finished.data,
   });
 }
@@ -267,6 +297,16 @@ function leftoverIssuesOf(error: unknown): Array<ValidationIssue & Finding> {
  */
 export function leftoverFindingsOf(error: unknown): Array<ValidationIssue & Finding> {
   const leftovers = leftoverIssuesOf(error);
+  reportFindings(leftovers, { verbose: true, write: writeStderrLine });
+  return leftovers;
+}
+
+/**
+ * A finished tree change's leftovers (`applyTreePlan`'s `warnings`, a packager's `residue`) as
+ * warnings, said on stderr: the run succeeded, so nothing else tells the operator.
+ */
+export function leftoverFindingsOfWarnings(warnings: readonly TreeChangeWarning[]): Array<ValidationIssue & Finding> {
+  const leftovers = warnings.map(({ message, path }) => leftoverIssue(message, path));
   reportFindings(leftovers, { verbose: true, write: writeStderrLine });
   return leftovers;
 }

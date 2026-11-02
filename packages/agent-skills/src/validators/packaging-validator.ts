@@ -623,7 +623,10 @@ async function crawlRegistry(projectRoot: string, options: CrawlRegistryOptions)
  * per distinct root it audits, every one until exit. A bound or eviction is an
  * open follow-up, not done here. Note the crawl excludes build output (`BUILD_OUTPUT_GLOBS` in
  * the registry's default) and every build's staging residue (`.<name>.vat-staged-*`,
- * in `NEVER_CONTENT_GLOBS`), so packaging a skill mid-run cannot invalidate it.
+ * in `NEVER_CONTENT_GLOBS`), so the build output and staging a mid-run package writes are not
+ * part of the population to begin with — nothing the memo should hold goes missing. Any OTHER
+ * write inside the root after the first crawl is simply not seen (see
+ * {@link crawlAndResolveRegistry}): the memo is not invalidated by it, it is stale about it.
  * `outputs` never shapes the population (see {@link MemoEntry}); the packager's
  * post-build check sees its own bundle by layering it over the memo
  * ({@link withOwnBundle}), never by re-crawling the root, and no caller is served

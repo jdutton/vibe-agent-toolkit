@@ -50,6 +50,17 @@ const CASES: RuleCases = {
     ...splitSeam.invalid,
     ...replaceAllSeam.invalid,
     ...regexSeam.invalid,
+    // A top-level `toForwardSlash` that is not the safe function — another module's, or a
+    // type-only import — would catch the rewrite: reported, never fixed.
+    { code: "import { toForwardSlash } from './local-other';\nconst n = p.split(path.sep).join('/');", filename: LINTED_FILE, output: null, errors: NATIVE_ERR },
+    { code: "import type { toForwardSlash } from '@vibe-agent-toolkit/utils/path';\nconst n = p.split(path.sep).join('/');", filename: LINTED_FILE, output: null, errors: NATIVE_ERR },
+    // A hashbang stays the first line: the import lands below it.
+    {
+      code: "#!/usr/bin/env node\nconst n = p.split(path.sep).join('/');",
+      filename: LINTED_FILE,
+      output: "#!/usr/bin/env node\nimport { toForwardSlash } from '@vibe-agent-toolkit/utils/path';\nconst n = toForwardSlash(p);",
+      errors: NATIVE_ERR,
+    },
     // `replaceAll` with a global regex is the same conversion.
     {
       code: String.raw`const n = p.replaceAll(/\\/g, '/');`,

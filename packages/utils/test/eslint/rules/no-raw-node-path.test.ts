@@ -30,6 +30,7 @@ import {
   PATH_UTILS_SPEC,
   RULE,
   SAFE_IMPORT,
+  SAFE_PATH_MODULE,
   SEAM,
   WRAPPED_PATH_FUNCTIONS,
   type WrappedPathFunction,
@@ -298,13 +299,26 @@ function pathFunctionRuleCases(fn: WrappedPathFunction): RuleCases {
         output: `import { safePath } from '${BARREL}';\nimport path from 'node:path';\nconst p = safePath.${fn}(a, b);`,
         errors,
       },
-      // Same conflict from a plain top-level declaration, which no
-      // import-scanning check would have seen.
-      {
-        code: `const safePath = makeIt();\nimport path from 'node:path';\nconst p = path.${fn}(a, b);`,
+      // A top-level `safePath` that is NOT this package's — a local declaration, another module's
+      // import, a type-only import — would catch the rewritten call (or back no value), and an
+      // added import would redeclare it: reported, never rewritten.
+      ...[
+        'const safePath = makeIt();',
+        "import { safePath } from './local-other';",
+        `import type { safePath } from '${SAFE_PATH_MODULE}';`,
+      ].map((binding) => ({
+        code: `${binding}\nimport path from 'node:path';\nconst p = path.${fn}(a, b);`,
         filename: LINTED_FILE,
         options,
-        output: `const safePath = makeIt();\nimport path from 'node:path';\nconst p = safePath.${fn}(a, b);`,
+        output: null,
+        errors,
+      })),
+      // A hashbang stays the first line: the import lands below it.
+      {
+        code: `#!/usr/bin/env node\nconst p = safePath.${fn}(a, b);`,
+        filename: LINTED_FILE,
+        options,
+        output: `#!/usr/bin/env node\n${SAFE_IMPORT}\nconst p = safePath.${fn}(a, b);`,
         errors,
       },
     ],

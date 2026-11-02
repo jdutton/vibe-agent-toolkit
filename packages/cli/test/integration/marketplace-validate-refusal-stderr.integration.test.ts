@@ -52,6 +52,8 @@ describe('claude marketplace validate — the writer\'s refusal reaches stderr',
     // The count line is the published document's, never the pre-refusal "0 error(s)" beside exit 1.
     expect(captured.stderr).not.toContain('0 error(s)');
     expect(captured.stderr).toContain(`${document.summary.errors} error(s)`);
+    // The refusal first, then the count it produced — the count summarizes what was said above it.
+    expect(captured.stderr.indexOf(refusal?.message ?? '<no refusal>')).toBeLessThan(captured.stderr.indexOf(`${document.summary.errors} error(s)`));
   });
 
   it('prints no count line for a REFUSED run: stderr never contradicts the exit code', async () => {

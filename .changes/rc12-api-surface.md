@@ -16,6 +16,10 @@
       relative path and touched no filesystem; `normalizePath` now always returns an absolute,
       filesystem-resolved one.
     - `normalizePath(abs)` with an absolute path → `normalizePath(abs, { within: abs })`.
+- **`walkLinkGraph`'s options take a required `ownOutputDir`** (`@vibe-agent-toolkit/agent-skills`,
+  library-only, new in this release): the directory the run wrote the skill to when the walk re-reads its
+  own output — a target under it is never reported as a gitignored leak — or `undefined` for a walk of
+  source. Add `ownOutputDir: undefined` to an existing call over source.
 - **`new FsLookupCache(within)` and `crawlDirectorySync({ outputs, … })` take required arguments**
   (`@vibe-agent-toolkit/utils`, library-only): the cache names the tree its paths are crawled in, and
   `crawlDirectorySync` requires `outputs` exactly as `crawlDirectory` does (`[]` for a read-only caller).

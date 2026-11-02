@@ -38,8 +38,9 @@ const {
   EXEMPT_AND_SAFE_MODULE_SCHEMA,
   SAFE_PATH_MODULE,
   insertAboveWithComments,
-  isNameAlreadyBound,
   resolveSafeModule,
+  safeBindingOf,
+  takesNamedSpecifier,
 } = require('./safe-import.cjs');
 
 const PATH_MODULES = new Set(['node:path', 'path']);
@@ -104,12 +105,9 @@ function trackPathImport(node, state) {
  * Track safe module import from an import declaration.
  */
 function trackSafeImport(node, state) {
-  state.safeImportNode = node;
-  for (const spec of node.specifiers) {
-    if (spec.type === 'ImportSpecifier' && spec.imported.name === SAFE_OBJECT) {
-      state.hasSafePathImport = true;
-    }
-  }
+  // Only a VALUE import with named specifiers takes another; whether it already binds
+  // `safePath`, `safeBindingOf` answered from scope.
+  if (takesNamedSpecifier(node)) state.safeImportNode = node;
 }
 
 /**
@@ -312,6 +310,8 @@ function buildFix(fixer, node, classification, sourceCode, state) {
   const fnState = state.byFn.get(classification.fn);
   // A CommonJS file cannot take the `safePath` import every leg below may need.
   if (!state.safePathBoundInSource && !acceptsImport(sourceCode)) return null;
+  // A top-level `safePath` that is not this package's would catch the rewritten call.
+  if (state.safePathBinding === 'foreign') return null;
 
   // REPAIR: an orphaned `safePath.join(...)` is already the call we want, and
   // the only thing missing is the import that a discarded report was carrying.
@@ -421,22 +421,28 @@ module.exports = {
 
     const sourceCode = context.getSourceCode();
     const functions = context.options[0]?.functions ?? WRAPPED_FUNCTIONS;
+    const safeModule = resolveSafeModule(context, SAFE_PATH_MODULE);
+    // Seeded from SCOPE: `safePath` this package's (rewrite, import nothing), absent (rewrite and
+    // import), or another binding (no rewrite). See `safeBindingOf` in `safe-import.cjs`.
+    const safePathBinding = safeBindingOf(sourceCode, SAFE_OBJECT, safeModule);
     const state = {
       // Resolved per invocation — the option belongs to the consuming repo,
       // which may point different rules at different re-export entries.
-      safeModule: resolveSafeModule(context, SAFE_PATH_MODULE),
+      safeModule,
       byFn: new Map(functions.map((fn) => [fn, createFunctionState(fn)])),
       defaultImportName: null,
       // Seeded from SCOPE, not from "did I see an import from SAFE_MODULE?".
       // A file already importing `safePath` from the barrel needs the call
       // rewritten but must NOT gain a second binding of the same name.
-      hasSafePathImport: isNameAlreadyBound(sourceCode, SAFE_OBJECT),
+      hasSafePathImport: safePathBinding === 'safe',
       // The SAME question, answered once and never mutated. `hasSafePathImport`
       // flips to true the moment a fix inserts the import, and gating the
       // repair leg on a flag that the first report can flip would arm it for
       // the rest of THIS pass — re-admitting the ambient-global false positive
       // in any file that also has a `path.join()` to fix.
-      safePathBoundInSource: isNameAlreadyBound(sourceCode, SAFE_OBJECT),
+      safePathBoundInSource: safePathBinding === 'safe',
+      // What the top-level `safePath` is: absent, this package's, or a FOREIGN binding no rewrite may reach.
+      safePathBinding,
       safeImportNode: null,
       // EVERY path-module declaration, not just the ones carrying a wrapped
       // function. A file's dead binding is `import path from 'node:path'`,

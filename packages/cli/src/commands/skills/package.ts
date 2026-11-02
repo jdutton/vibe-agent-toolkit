@@ -23,7 +23,7 @@ import { findProjectRoot, followedStatSync, issueLocation, isVatError, requireFo
 import { Command } from 'commander';
 
 import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../utils/command-refusal.js';
-import { endWithRefusal, endWithReport, leftoverFindingsOf, leftoverIssue, NOTHING_FINISHED } from '../../utils/document-writer.js';
+import { endWithRefusal, endWithReport, leftoverFindingsOf, leftoverFindingsOfWarnings, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { collectPostBuildIssues, formatIssueLines, formatIssueSetHeading } from '../../utils/issue-rendering.js';
 import { createLogger } from '../../utils/logger.js';
 import { readInputFile, requireProjectRoot } from '../../utils/project-root-policy.js';
@@ -482,7 +482,7 @@ async function packageAndReport(
       return buildSkillsPackageReport({ validation, data: await previewPackage(skillPath, options, packageOptions, logger), runFindings: [] });
     }
     const result = await packageSkill(skillPath, packageOptions);
-    const leftovers = result.residue.map(({ message, path }) => leftoverIssue(message, path));
+    const leftovers = leftoverFindingsOfWarnings(result.residue);
     logger.info(`✅ Packaged skill: ${result.skill.name}`);
     logger.info(`   Output: ${result.outputPath}`);
     if (result.artifacts?.['zip']) {

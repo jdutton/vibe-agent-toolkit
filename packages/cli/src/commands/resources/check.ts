@@ -61,7 +61,7 @@ import {
   type ForwardedDocument,
 } from '../../utils/document-writer.js';
 import { formatDurationSecs } from '../../utils/duration.js';
-import { reportFindings } from '../../utils/issue-rendering.js';
+import { reportFindingsKeepingLeftovers } from '../../utils/issue-rendering.js';
 import { resolveIssueSeverity, type SeverityOverrides } from '../../utils/issue-severity.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { EVERY_NOTICE, type NoticeAudience, withNoticeAudience } from '../../utils/operator-notices.js';
@@ -1635,7 +1635,7 @@ export async function runResourcesCheckPhase(
   });
   const report = 'forward' in ending ? ending.forward.report : ending.payload;
   // The human half, on this process's stderr: the child's own stdout is the document it forwarded.
-  reportFindings(report.findings, { verbose: options.verbose, write: createLogger().error });
+  reportFindingsKeepingLeftovers(report.findings, { verbose: options.verbose, write: createLogger().error });
   return { report };
 }
 
@@ -1741,7 +1741,7 @@ export async function checkCommand(
     // supervised child prints no finding, here or in its writer: its supervisor reports them all.
     if (child === undefined) {
       const report = 'forward' in ending ? ending.forward.report : ending.payload;
-      reportFindings(report.findings, { verbose: options.verbose === true, write: logger.error });
+      reportFindingsKeepingLeftovers(report.findings, { verbose: options.verbose === true, write: logger.error });
     }
     if ('forward' in ending) {
       // Verbatim (unless `withLeftover` had to add a finding to it) — the supervisor already checked it is

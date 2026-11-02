@@ -54,14 +54,29 @@ const DUMP_DIR_PREFIX = 'vat-lab-memory-';
 
 /**
  * What a run out of heap leaves on stderr: V8's abort (`FATAL ERROR: … JavaScript heap out of
- * memory`), or the error code Node gives a worker thread that reached its heap limit. Stderr is all
- * the lab has of a child, so the code is read there.
+ * memory`), the error code Node gives a worker thread that reached its heap limit, or that error's
+ * own message — what a process that CAUGHT the worker's death prints (vat's parse pool turns it into
+ * a `BLOB_PARSE_FAILED` finding and exits 0, or 1). Stderr is all the lab has of a child, so the
+ * signature is read there.
  */
-const HEAP_EXHAUSTED: readonly string[] = ['JavaScript heap out of memory', 'ERR_WORKER_OUT_OF_MEMORY'];
+const HEAP_EXHAUSTED: readonly string[] = [
+  'JavaScript heap out of memory',
+  'ERR_WORKER_OUT_OF_MEMORY',
+  'Worker terminated due to reaching memory limit',
+];
 
-/** Did this run fail out of heap? */
+/**
+ * Did this run run out of heap — whatever it exited with? A worker's death can be caught and the
+ * process still exit 0, so the exit code is no part of the question: a run that lost a thread to
+ * its heap limit measured a different, smaller piece of work.
+ */
 function ranOutOfHeap(result: SequenceResult): boolean {
-  return result.exitCode !== 0 && HEAP_EXHAUSTED.some((signature) => result.stderr.includes(signature));
+  return HEAP_EXHAUSTED.some((signature) => result.stderr.includes(signature));
+}
+
+/** Every run of `measurement`, a warm arm's unmeasured priming run included. */
+function everyRun(measurement: SpecMeasurement): readonly SequenceResult[] {
+  return [...measurement.results, ...(measurement.priming === null ? [] : [measurement.priming])];
 }
 
 /** How this facet's dumps are read and refused. */
@@ -112,7 +127,7 @@ function failedRow(measurement: SpecMeasurement, failure: string): MemoryCommand
     failure,
     // Read once, here, so a comparator dispatches on a field rather than on stderr. A warm arm's
     // priming run too: one out of heap leaves no measured repeat to read it from.
-    outOfHeap: [...measurement.results, ...(measurement.priming === null ? [] : [measurement.priming])].some(ranOutOfHeap),
+    outOfHeap: everyRun(measurement).some(ranOutOfHeap),
   };
 }
 
@@ -184,6 +199,11 @@ async function rowFromDumps(
 ): Promise<MemoryCommandStats> {
   if (directories.length === 0) return failedRow(measurement, 'no repeats were requested');
   if (measurement.failure !== null) return failedRow(measurement, measurement.failure);
+  // Asked of EVERY run, a clean exit included: a process that caught its worker's heap death and
+  // went on exited 0, and its peak is of a run that did not do the work. Never a measurement.
+  if (everyRun(measurement).some(ranOutOfHeap)) {
+    return failedRow(measurement, 'a run ran out of heap (a worker thread at its limit, or the process) and exited anyway: its peak is not a measurement of the command');
+  }
 
   const reads = await Promise.all(directories.map((directory) => readDumpFiles(directory, RSS_DUMP_KIND)));
   const dumpsPerRepeat: (readonly RssDump[])[] = [];

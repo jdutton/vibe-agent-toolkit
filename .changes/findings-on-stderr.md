@@ -72,3 +72,15 @@
   before the database refused the batch, and its chunking warnings, are reported the same way.
 - **`vat verify` prints the `packaged-content` banner before that phase's zero-bundle refusal**, which
   printed under the previous phase's banner.
+- **A refusal prints its message first, then the findings of the work that finished**, which printed
+  before it. `vat cache clear`, `vat rag clear`, `vat agent uninstall` and `vat claude plugin uninstall`,
+  refusing because the OS would not delete what they had moved aside, now say what was left once — as
+  the refusal — where they said it twice; the document still carries it as a `TREE_CLEANUP_INCOMPLETE`
+  warning.
+- **`vat skills build`, `vat claude plugin build`, `vat skills package`, `vat agent build` and
+  `vat agent install` print a `TREE_CLEANUP_INCOMPLETE` warning on stderr** when they succeed but the OS
+  would not remove the previous output they replaced. It was only in the document.
+- **`vat resources check` prints a `TREE_CLEANUP_INCOMPLETE` warning without `--verbose`**, as every other
+  verb does; it was collapsed into the "not shown" hint.
+- **`vat claude marketplace validate` prints its `N error(s)` line after the run-integrity refusal**,
+  which printed below it.

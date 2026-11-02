@@ -53,7 +53,7 @@ import { Command } from 'commander';
 
 import { errorMessageOf, refusalCodeOf, withFsFaultRemedy } from '../../utils/command-refusal.js';
 import { loadConfig } from '../../utils/config-loader.js';
-import { endWithReport, leftoverFindingsOf, leftoverIssue, NOTHING_FINISHED, refusalReport, type FinishedWork } from '../../utils/document-writer.js';
+import { endWithReport, leftoverFindingsOf, leftoverFindingsOfWarnings, NOTHING_FINISHED, refusalReport, type FinishedWork } from '../../utils/document-writer.js';
 import {
   collectPostBuildIssues,
   countCollapsedFindings,
@@ -986,7 +986,7 @@ export async function runSkillBuild(input: SkillBuildRunInput): Promise<SkillBui
   }
   // The plan resolves only once its fill has run, so a run is there.
   if (holder.built === undefined) throw new Error('vat skills build: the plan resolved without running its build');
-  return { ...holder.built.run, outputCommitted: true, residue: warnings.map(({ message, path }) => leftoverIssue(message, path)) };
+  return { ...holder.built.run, outputCommitted: true, residue: leftoverFindingsOfWarnings(warnings) };
 }
 
 /** The build itself, into `staged`: every skill validated, the ones that qualified packaged, the outcome judged. */
