@@ -17,7 +17,7 @@ import {
   runGitOrThrow,
 } from '@vibe-agent-toolkit/utils/git';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
   classifySeverityCountsLane,
@@ -305,34 +305,31 @@ function repoWithStagingStates(): string {
   return root;
 }
 
-/**
- * The population, with separators normalised so Windows compares equal.
- *
- * @returns Every path the gate would read
- */
-function population(): readonly string[] {
-  return contrabandPopulation(repoWithStagingStates()).map((p) => toForwardSlash(p));
-}
-
 describe('contrabandPopulation — what the confidentiality gate is allowed to miss', () => {
+  // One fixture repo for the block: every case reads the same population, and a
+  // repo per case (five git spawns, a commit among them) timed out under gate load.
+  let population: readonly string[] = [];
+  beforeAll(() => {
+    population = contrabandPopulation(repoWithStagingStates()).map((p) => toForwardSlash(p));
+  });
+
   it('includes a brand-new untracked file, because that is what the commit will publish', () => {
-    expect(population()).toContain(NEW_FILE);
+    expect(population).toContain(NEW_FILE);
   });
 
   it('still includes tracked files', () => {
-    expect(population()).toContain(TRACKED_FILE);
+    expect(population).toContain(TRACKED_FILE);
   });
 
   it('excludes ignored files, which no commit will publish', () => {
     // Not pedantry: the token list itself may be a gitignored file in the repo
     // root, so a population that swept ignored files would report the list of
     // secrets as a leak of them.
-    expect(population()).not.toContain(IGNORED_FILE);
+    expect(population).not.toContain(IGNORED_FILE);
   });
 
   it('lists each path once, however many git listings named it', () => {
-    const paths = population();
-    expect(new Set(paths).size).toBe(paths.length);
+    expect(new Set(population).size).toBe(population.length);
   });
 });
 
