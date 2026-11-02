@@ -335,7 +335,6 @@ export const LINK_FOLLOWING_FS_CALLS = {
   // Test-support fixtures: each probes a path the test itself built or the test host's own tools.
   'packages/utils/src/testing/archive-fixtures.ts': 1,
   'packages/utils/src/testing/executables.ts': 1,
-  'packages/utils/src/testing/fault-fs.ts': 2,
   'packages/utils/src/testing/platform-gates.ts': 1,
 };
 
