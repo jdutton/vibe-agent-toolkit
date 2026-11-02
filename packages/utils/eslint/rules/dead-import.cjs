@@ -190,24 +190,42 @@ function isPlainPattern(id) {
  */
 const STATEMENT_LISTS = new Set(['Program', 'BlockStatement', 'StaticBlock', 'SwitchCase', 'TSModuleBlock']);
 
-/** A token that, opening the next statement, would continue the one before a removed statement. */
-const CONTINUES_PREVIOUS = /^[(+/[`-]/u;
+/** The statement list a {@link STATEMENT_LISTS} parent holds. */
+function siblingsOf(statement) {
+  return statement.parent.type === 'SwitchCase' ? statement.parent.consequent : statement.parent.body;
+}
 
 /**
- * The one way this module deletes a whole statement. A removed statement takes its `;` with it, so
- * when the next token would continue the statement before it (`const a = f()` then `[1].map(g)` is
- * `f()[1].map(g)`), the statement is replaced by a lone `;` instead.
+ * Whether deleting `statement` outright could change what its neighbours mean, so a lone `;` must
+ * stand in for it. Decided from the AST, not from a list of risky tokens:
+ * - the statement before it has no `;` of its own and something follows, so the follower could
+ *   continue it (`const a = f()` then `[1].map(g)` is `f()[1].map(g)`; `<any>c` under TypeScript); or
+ * - a string statement follows and only directives precede, so the string would become a directive.
+ */
+function mustLeaveEmptyStatement(sourceCode, statement) {
+  const siblings = siblingsOf(statement);
+  const index = siblings.indexOf(statement);
+  const previous = siblings[index - 1];
+  const next = siblings[index + 1];
+  if (next === undefined) return false;
+  const continuesPrevious = previous !== undefined && sourceCode.getLastToken(previous).value !== ';';
+  const becomesDirective = next.type === 'ExpressionStatement' && next.expression.type === 'Literal'
+    && typeof next.expression.value === 'string'
+    && siblings.slice(0, index).every((sibling) => typeof sibling.directive === 'string');
+  return continuesPrevious || becomesDirective;
+}
+
+/**
+ * The one way this module deletes a whole statement: outright, or as a lone `;` where
+ * {@link mustLeaveEmptyStatement} says deleting it would change its neighbours' meaning.
  *
  * @param {object} sourceCode - ESLint `SourceCode`.
  * @param {object} fixer - ESLint fixer.
- * @param {object} statement - The statement to delete.
+ * @param {object} statement - The statement to delete, directly in a {@link STATEMENT_LISTS} parent.
  * @returns {object} The fix.
  */
 function removeStatement(sourceCode, fixer, statement) {
-  const next = sourceCode.getTokenAfter(statement);
-  return next !== null && CONTINUES_PREVIOUS.test(next.value)
-    ? fixer.replaceText(statement, ';')
-    : fixer.remove(statement);
+  return mustLeaveEmptyStatement(sourceCode, statement) ? fixer.replaceText(statement, ';') : fixer.remove(statement);
 }
 
 /**
@@ -404,7 +422,7 @@ function reportDeadImportDeclaration(context, sourceCode, node, rewrittenNames) 
         .join("', '"),
       module: node.source.value,
     },
-    // `fixer.remove(node)` takes the declaration and leaves its newline, so a
+    // An outright removal takes the declaration and leaves its newline, so a
     // blank line remains where the import was. That is exactly what the
     // specifier-removal leg in `no-raw-node-path.cjs` has always
     // done — its fixtures pin the leading `\n` — and matching it keeps one

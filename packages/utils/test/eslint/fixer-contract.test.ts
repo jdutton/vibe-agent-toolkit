@@ -139,14 +139,17 @@ function tsRuleConfig(name: string): Linter.Config[] {
   return ruleConfig(name).map((block) => ({ ...block, languageOptions: { parser: tsParser, sourceType: 'module' } }));
 }
 
-describe('removing a dead binding never joins its neighbours into one statement', () => {
-  // A removed statement takes its `;` with it, so a next line opening with `(`, `[` or a template
-  // would continue the line BEFORE it: `const a = require("a")` + `[1, 2]…` is `require("a")[1, 2]`.
+describe('removing a dead binding never changes what the statements around it mean', () => {
+  // A removed statement takes its `;` with it. If the statement BEFORE it has no `;` of its own,
+  // whatever follows continues it: `const a = require("a")` then `[1, 2]…` is `require("a")[1, 2]`,
+  // and under TypeScript `const a = b` then `<any>c` is `b < any > c`.
+  const SAFE = `import { normalizedTmpdir } from '${SAFE_FS_MODULE}';`;
   it.each([
     ['a require() before `[`', 'const a = require("a")\nconst { tmpdir } = require("node:os")\n;[1, 2].forEach(go)\nexport const t = tmpdir()', '[1, 2].forEach(go)'],
     ['a require() before `(`', 'const a = require("a")\nconst { tmpdir } = require("node:os")\n;(async () => go())()\nexport const t = tmpdir()', '(async () => go())()'],
-    ['an import before `[`', "const a = 1\nimport { tmpdir } from 'node:os';\n[1, 2].forEach(go)\nexport const t = tmpdir()", '[1, 2].forEach(go)'],
-    ['an import before a template', "const a = go\nimport { tmpdir } from 'node:os';\n`x`.trim()\nexport const t = tmpdir()", '`x`.trim()'],
+    ['a require() before a TS angle-bracket cast', 'const a = b\nconst os = require("node:os");\n<any>c\nexport const t = os.tmpdir()', '<any>c'],
+    ['an import before `[`', `${SAFE}\nconst a = 1\nimport { tmpdir } from 'node:os';\n[1, 2].forEach(go)\nexport const t = tmpdir()`, '[1, 2].forEach(go)'],
+    ['an import before a template', `${SAFE}\nconst a = go\nimport { tmpdir } from 'node:os';\n\`x\`.trim()\nexport const t = tmpdir()`, '`x`.trim()'],
   ])('%s', (_label, code, next) => {
     const { output } = new Linter().verifyAndFix(code, tsRuleConfig(RULE.tmpdir), { filename: LINTED_FILE });
 
@@ -154,6 +157,23 @@ describe('removing a dead binding never joins its neighbours into one statement'
     const at = output.indexOf(next);
     expect(at).toBeGreaterThan(0);
     expect(output.slice(0, at).trimEnd().endsWith(';')).toBe(true);
+  });
+
+  it('a string after the removed first statement of a body does not become its directive', () => {
+    const code = 'export function f(a = 1) {\n  const os = require("node:os");\n  "use strict";\n  return os.tmpdir() + a;\n}';
+    const { output, messages } = fix(code, ruleConfig(RULE.tmpdir));
+
+    expect(messages.filter((message) => message.fatal === true)).toStrictEqual([]);
+    expect(output).not.toContain('node:os');
+    expect(output).toMatch(/\{\s*;\s*"use strict";/u);
+  });
+
+  it('adds no `;` where the statement before already ends in one', () => {
+    const code = `${SAFE}\nimport { x } from 'y';\nimport { tmpdir } from 'node:os';\n[1].map(x)\nexport const t = tmpdir();`;
+    const { output } = new Linter().verifyAndFix(code, tsRuleConfig(RULE.tmpdir), { filename: LINTED_FILE });
+
+    expect(output).not.toContain('node:os');
+    expect(output).not.toMatch(/;\s*;/u);
   });
 });
 
