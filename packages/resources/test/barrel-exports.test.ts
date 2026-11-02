@@ -249,6 +249,7 @@ const BARREL_EXPORTS = [
   'parseCacheDirectory',
   'parseConfigAllowingUnknownKeys',
   'parseConfigFile',
+  'parseFailedMessage',
   'parseFileCached',
   'parseHtml',
   'parseKeyed',

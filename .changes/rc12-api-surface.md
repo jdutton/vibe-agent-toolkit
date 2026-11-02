@@ -10,6 +10,9 @@
       `normalizePath(safePath.resolve(base, rel), { within: base })`.
     - `normalizePath(a, b)` with an ABSOLUTE first argument — the old form resolved `a` against `b`, which
       an absolute `a` ignores, and returned the real path of `a` → `normalizePath(a, { within: a })`.
+      Check each such call: 0.1.42's own documented example, `normalizePath(__dirname, '../../dist/bin.js')`,
+      returned `__dirname`, not the `bin.js` it meant, so this faithful port keeps a call that never worked.
+      If the call meant the joined path, write `normalizePath(safePath.resolve(a, b), { within: a })`.
     - `normalizePath(a, b, c, …)` — three or more resolved left to right → `normalizePath(safePath.resolve(a, b, c, …), { within: a })`,
       or plain `safePath.resolve(a, b, c, …)` where the caller never needed the real path.
     - `normalizePath(rel)` with a relative path → `path.normalize(rel)`. The old one-path form returned a

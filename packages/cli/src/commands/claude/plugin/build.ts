@@ -19,7 +19,7 @@ import { Command } from 'commander';
 import { readPluginLocalSkillName } from '../../../commands/skills/skill-discovery.js';
 import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../../utils/command-refusal.js';
 import { loadConfig } from '../../../utils/config-loader.js';
-import { endWithReport, leftoverFindingsOf, leftoverFindingsOfWarnings, NOTHING_FINISHED, refusalReport, type FinishedWork } from '../../../utils/document-writer.js';
+import { endWithReport, leftoverIssuesOf, leftoverIssuesOfWarnings, NOTHING_FINISHED, refusalReport, type FinishedWork } from '../../../utils/document-writer.js';
 import {
   collectPostBuildIssues,
   formatIssueLines,
@@ -570,7 +570,7 @@ export async function runClaudePluginBuildPhase(options: PluginBuildCommandOptio
     return { report: buildReport({ ...work, gate: GATE, durationMs: Date.now() - startTime }) };
   } catch (error) {
     const finished = configDir === undefined || built.length === 0 ? NOTHING_FINISHED : builtWork(configDir, built);
-    return { report: refusalReport(refusalCodeOf(error), error, GATE, withPackagingStop(finished, error, configDir), true) };
+    return { report: refusalReport(refusalCodeOf(error), error, GATE, withPackagingStop(finished, error, configDir)) };
   }
 }
 
@@ -682,10 +682,10 @@ async function buildMarketplace(input: BuildMarketplaceInput): Promise<Marketpla
   }]);
   let residue: ValidationIssue[];
   try {
-    residue = leftoverFindingsOfWarnings((await applyTreePlan(plan)).warnings);
+    residue = leftoverIssuesOfWarnings((await applyTreePlan(plan)).warnings);
   } catch (error: unknown) {
     if (error !== notEarned) throw error;
-    residue = leftoverFindingsOf(error);
+    residue = leftoverIssuesOf(error);
   }
   const { built, staged } = holder;
   // The plan resolves, or ends gated, only once its fill has run.

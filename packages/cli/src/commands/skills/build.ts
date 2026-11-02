@@ -53,7 +53,7 @@ import { Command } from 'commander';
 
 import { errorMessageOf, refusalCodeOf, withFsFaultRemedy } from '../../utils/command-refusal.js';
 import { loadConfig } from '../../utils/config-loader.js';
-import { endWithReport, leftoverFindingsOf, leftoverFindingsOfWarnings, NOTHING_FINISHED, refusalReport, type FinishedWork } from '../../utils/document-writer.js';
+import { endWithReport, leftoverIssuesOf, leftoverIssuesOfWarnings, NOTHING_FINISHED, refusalReport, type FinishedWork } from '../../utils/document-writer.js';
 import {
   collectPostBuildIssues,
   countCollapsedFindings,
@@ -982,11 +982,11 @@ export async function runSkillBuild(input: SkillBuildRunInput): Promise<SkillBui
     input.logger.error(hadPrevious
       ? `\n   Nothing was replaced — the previous ${target.label} is intact`
       : `\n   Nothing was written — ${target.label} does not exist`);
-    return { ...run, outputCommitted: false, residue: leftoverFindingsOf(error) };
+    return { ...run, outputCommitted: false, residue: leftoverIssuesOf(error) };
   }
   // The plan resolves only once its fill has run, so a run is there.
   if (holder.built === undefined) throw new Error('vat skills build: the plan resolved without running its build');
-  return { ...holder.built.run, outputCommitted: true, residue: leftoverFindingsOfWarnings(warnings) };
+  return { ...holder.built.run, outputCommitted: true, residue: leftoverIssuesOfWarnings(warnings) };
 }
 
 /** The build itself, into `staged`: every skill validated, the ones that qualified packaged, the outcome judged. */
@@ -1364,7 +1364,7 @@ export async function runSkillsBuildPhase(
     // `data.promotionError` naming what is on disk and how to recover it.
     if (run.promotionFailure !== undefined) {
       const { error } = run.promotionFailure;
-      return { report: refusalReport(refusalCodeOf(error), error, GATE, work, true) };
+      return { report: refusalReport(refusalCodeOf(error), error, GATE, work) };
     }
     const report = buildReport({ ...work, gate: GATE, durationMs: Date.now() - startTime });
     if (run.outputCommitted) {
@@ -1376,7 +1376,7 @@ export async function runSkillsBuildPhase(
     }
     return { report };
   } catch (error) {
-    return { report: refusalReport(refusalCodeOf(error), error, GATE, finished, true) };
+    return { report: refusalReport(refusalCodeOf(error), error, GATE, finished) };
   }
 }
 

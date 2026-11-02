@@ -354,7 +354,7 @@ export async function runPhase(phase: Phase): Promise<PhaseResult> {
     announceRunIntegrity(report, judged);
     return { name: phase.name, report: judged };
   } catch (error) {
-    return { name: phase.name, report: refusalReport(refusalCodeOf(error), error, ORCHESTRATOR_GATE, NOTHING_FINISHED, true) };
+    return { name: phase.name, report: refusalReport(refusalCodeOf(error), error, ORCHESTRATOR_GATE, NOTHING_FINISHED) };
   }
 }
 
@@ -453,7 +453,7 @@ export async function orchestrate(body: (results: PhaseResult[]) => Promise<void
     await body(results);
   } catch (error) {
     const finished: FinishedWork = results.length === 0 ? NOTHING_FINISHED : finishedPhases(results);
-    return refusalReport(refusalCodeOf(error), error, ORCHESTRATOR_GATE, finished, true);
+    return refusalReport(refusalCodeOf(error), error, ORCHESTRATOR_GATE, finished);
   }
   const report = orchestratorReport(results, ORCHESTRATOR_GATE, Date.now() - startTime);
   if (report.status === 'error') process.stderr.write(`${report.error.message}\n`);

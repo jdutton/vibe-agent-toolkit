@@ -44,6 +44,9 @@
   about its own configuration; and **`IndexBatchRefusedError` / `partialIndexResultOf(error)`**: a batch
   the store refuses partway (`RAG_DATABASE_UNREADABLE`) is thrown under that code carrying the
   `IndexResult` it had recorded so far (library-only).
+- **`@vibe-agent-toolkit/utils`: `WORKER_OUT_OF_MEMORY_CODE`** (`ERR_WORKER_OUT_OF_MEMORY`, the code Node
+  gives a worker thread that reached its heap limit), and **`@vibe-agent-toolkit/resources`:
+  `parseFailedMessage(parserKind, error)`**, the message of a `BLOB_PARSE_FAILED` row (library-only).
 
 ### Changed
 
@@ -82,5 +85,14 @@
   would not remove the previous output they replaced. It was only in the document.
 - **`vat resources check` prints a `TREE_CLEANUP_INCOMPLETE` warning without `--verbose`**, as every other
   verb does; it was collapsed into the "not shown" hint.
+- **Every verb prints each `TREE_CLEANUP_INCOMPLETE` warning its document carries on stderr, once**, at
+  every verbosity, after its other findings. `vat claude marketplace publish`, `vat skill test run`,
+  `vat skills list` and `vat corpus scan` published it in the document and printed nothing; `vat build`
+  printed a refused `claude` phase's leftover twice. Under a generic `--format text` document, which
+  already lists it, stderr does not repeat it.
+- **The `<name> population:` warning names what each failed parse threw**: `3 parse failed
+  [ERR_WORKER_OUT_OF_MEMORY, Unexpected token (3:1)]`, each distinct error code (or, for an error
+  with none, its message) once, where it said only `3 parse failed`. A parse worker that ran out of
+  heap is not a fault in the document, and only the code says which it was.
 - **`vat claude marketplace validate` prints its `N error(s)` line after the run-integrity refusal**,
   which printed below it.

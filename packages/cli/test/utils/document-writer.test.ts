@@ -6,6 +6,7 @@
  */
 
 import { buildReport, ExitCode, type ErrorReport, type Finding, type Report } from '@vibe-agent-toolkit/schema';
+import { recordSuppressedFault } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import yaml from 'yaml';
 
@@ -17,7 +18,8 @@ import {
   endWithRefusal,
   endWithReport,
   endWithForwardedDocument,
-  leftoverFindingsOfWarnings,
+  leftoverIssue,
+  leftoverIssuesOfWarnings,
   readForwardedDocument,
   NOTHING_FINISHED,
   publishedReport,
@@ -28,6 +30,7 @@ import {
   writeLegacyDocument,
   type FinishedWork,
 } from '../../src/utils/document-writer.js';
+import { reportFindings } from '../../src/utils/issue-rendering.js';
 import type * as OutputModule from '../../src/utils/output.js';
 
 // `writeStdoutSync` writes fd 1 directly, past the stdout spy; route it through the spy.
@@ -220,12 +223,63 @@ describe('endWithLeftoverRefusal', () => {
   });
 });
 
-describe('leftoverFindingsOfWarnings', () => {
-  it('names what a finished change left behind as warnings, and says each on stderr', () => {
-    const findings = leftoverFindingsOfWarnings([{ code: 'TREE_CLEANUP_INCOMPLETE', path: '/tmp/parked-build', message: 'could not remove the previous build' }]);
+describe('a leftover is said by the writer that publishes it', () => {
+  const LEFT = 'could not remove the previous build';
+  const LEFT_LINE = `warning: ${LEFT} [TREE_CLEANUP_INCOMPLETE]`;
+  const occurrences = (text: string, needle: string): number => text.split(needle).length - 1;
 
-    expect(findings).toEqual([expect.objectContaining({ code: 'TREE_CLEANUP_INCOMPLETE', severity: 'warning', message: 'could not remove the previous build', link: '/tmp/parked-build' })]);
-    expect(stderrText()).toContain('warning: could not remove the previous build [TREE_CLEANUP_INCOMPLETE]');
+  it('builds a finished change\'s leftovers as warnings, and says nothing while building them', () => {
+    const findings = leftoverIssuesOfWarnings([{ code: 'TREE_CLEANUP_INCOMPLETE', path: '/tmp/parked-build', message: LEFT }]);
+
+    expect(findings).toEqual([expect.objectContaining({ code: 'TREE_CLEANUP_INCOMPLETE', severity: 'warning', message: LEFT, link: '/tmp/parked-build' })]);
+    expect(stderrText()).toBe('');
+  });
+
+  it('says every leftover a success document carries on stderr, exactly once, with its fix', () => {
+    writeDocument(VERB, reportWith(1, [FINDING, leftoverIssue(LEFT, '/tmp/parked-build')]), 'yaml');
+
+    const text = stderrText();
+    expect(occurrences(text, LEFT_LINE)).toBe(1);
+    expect(text).toContain('Fix: Remove what the message names');
+    // Only the leftover: the verb's other findings are the verb's to say.
+    expect(text).not.toContain(FINDING.code);
+  });
+
+  it('says it under json too, and not when stdout is the generic text rendering that already lists it', () => {
+    writeDocument(VERB, reportWith(1, [leftoverIssue(LEFT, undefined)]), 'json');
+    expect(occurrences(stderrText(), LEFT_LINE)).toBe(1);
+
+    vi.mocked(process.stderr.write).mockClear();
+    writeDocument(VERB, reportWith(1, [leftoverIssue(LEFT, undefined)]), 'text');
+    expect(stderrText()).not.toContain(LEFT_LINE);
+    expect(written()).toContain(LEFT_LINE);
+  });
+
+  it('a refusal says its message, then the finished findings, then each leftover once — finished or suppressed', () => {
+    const error = new CommandRefusalError('INPUT_UNREADABLE', 'the run was refused');
+    recordSuppressedFault(error, new Error('could not remove the staged tree'));
+    endWithRefusal(VERB, 'INPUT_UNREADABLE', error, 'yaml', { strict: false }, { examined: 1, findings: [FINDING, leftoverIssue(LEFT, undefined)], data: DATA });
+
+    const text = stderrText();
+    expect(occurrences(text, LEFT_LINE)).toBe(1);
+    expect(occurrences(text, 'could not remove the staged tree [TREE_CLEANUP_INCOMPLETE]')).toBe(1);
+    expect(text.indexOf('the run was refused')).toBeLessThan(text.indexOf(`[${FINDING.code}]`));
+    expect(text.indexOf(`[${FINDING.code}]`)).toBeLessThan(text.indexOf(LEFT_LINE));
+  });
+
+  it('a forwarded document\'s leftovers are said by the process that publishes it', () => {
+    const report = publishedReport(VERB, reportWith(1, [leftoverIssue(LEFT, undefined)]));
+    endWithForwardedDocument(readForwardedDocument(VERB, JSON.stringify(report), 'json'));
+
+    expect(occurrences(stderrText(), LEFT_LINE)).toBe(1);
+  });
+
+  it('the shared reporter never says a leftover, so no verb can say one twice', () => {
+    const lines: string[] = [];
+    reportFindings([FINDING, leftoverIssue(LEFT, undefined)], { verbose: true, write: (line) => lines.push(line) });
+
+    expect(lines.join('\n')).toContain(FINDING.code);
+    expect(lines.join('\n')).not.toContain('TREE_CLEANUP_INCOMPLETE');
   });
 });
 

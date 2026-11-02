@@ -11,7 +11,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname } from 'node:path';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { npxInstallArm, withMemoryInstrument } from '../../src/facets/memory/npx-entry.js';
@@ -89,10 +89,11 @@ describe('withMemoryInstrument', () => {
     const used = await withMemoryInstrument(NPX, dirs, install, async (instrument) => instrument);
 
     expect(install).toHaveBeenCalledWith(SPEC, expect.any(String));
-    expect(vi.mocked(install).mock.calls[0]?.[1].startsWith(`${dirs.root}/`)).toBe(true);
+    // Both sides through `toForwardSlash`: the install dir is a native path, `\`-separated on Windows.
+    expect(toForwardSlash(vi.mocked(install).mock.calls[0]?.[1] ?? '').startsWith(`${toForwardSlash(dirs.root)}/`)).toBe(true);
     expect(used.command).toBe(process.execPath);
     expect(used.leadingArgs).toHaveLength(1);
-    expect(used.leadingArgs[0]).toMatch(/\/node_modules\/@vibe-agent-toolkit\/cli\/dist\/bin\.js$/);
+    expect(toForwardSlash(used.leadingArgs[0] ?? '')).toMatch(/\/node_modules\/@vibe-agent-toolkit\/cli\/dist\/bin\.js$/);
     expect(used.version).toEqual({ ...NPX.version, closure: expect.stringMatching(/^[0-9a-f]{64}$/u) });
     expect(existsSync(dirs.home)).toBe(true); // npm's HOME is the arm's, and exists
   });
@@ -112,7 +113,7 @@ describe('withMemoryInstrument', () => {
     const files = { ...cliAt(VERSION), ...cliAt(VERSION, 'node_modules/vibe-agent-toolkit/') };
     const used = await withMemoryInstrument(NPX, installArm(), installing(files), async (instrument) => instrument);
 
-    expect(used.leadingArgs[0]).toContain('/node_modules/vibe-agent-toolkit/node_modules/');
+    expect(toForwardSlash(used.leadingArgs[0] ?? '')).toContain('/node_modules/vibe-agent-toolkit/node_modules/');
   });
 
   it('refuses an install that holds no cli entry, naming the spec', async () => {

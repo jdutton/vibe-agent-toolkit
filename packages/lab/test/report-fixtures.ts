@@ -8,6 +8,8 @@
  * `workingFingerprint` arrived after both suites were written).
  */
 
+import { availableParallelism } from 'node:os';
+
 import type { Coordinate } from '../src/envelope/coordinate.js';
 import type { ReportEnvelope, ReportHost } from '../src/envelope/envelope.js';
 import type { LoadReadings } from '../src/harness/types.js';
@@ -50,6 +52,7 @@ export const HOST: ReportHost = {
   nodeOptions: '',
   heapSizeLimit: 4_345_298_944,
   totalMem: 17_179_869_184,
+  availableParallelism: availableParallelism(),
 };
 
 /**

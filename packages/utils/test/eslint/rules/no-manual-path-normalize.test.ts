@@ -9,8 +9,8 @@
 
 import { describe, it } from 'vitest';
 
-import { safeModuleCases } from '../factory-cases.js';
-import { LINTED_FILE, RULE, SEAM } from '../fixtures.js';
+import { rewriteTargetCases, safeModuleCases } from '../factory-cases.js';
+import { LINTED_FILE, RULE, SAFE_PATH_MODULE, SEAM } from '../fixtures.js';
 import { expectRulePasses, RULE_TESTER_CASES, type RuleCases } from '../rule-tester.js';
 
 const NATIVE_ERR = [{ messageId: 'useToForwardSlash' }];
@@ -50,10 +50,23 @@ const CASES: RuleCases = {
     ...splitSeam.invalid,
     ...replaceAllSeam.invalid,
     ...regexSeam.invalid,
-    // A top-level `toForwardSlash` that is not the safe function — another module's, or a
-    // type-only import — would catch the rewrite: reported, never fixed.
-    { code: "import { toForwardSlash } from './local-other';\nconst n = p.split(path.sep).join('/');", filename: LINTED_FILE, output: null, errors: NATIVE_ERR },
-    { code: "import type { toForwardSlash } from '@vibe-agent-toolkit/utils/path';\nconst n = p.split(path.sep).join('/');", filename: LINTED_FILE, output: null, errors: NATIVE_ERR },
+    // The ONE "may this call be rewritten to the converter?" table every fixer in the pack
+    // shares — a shadowing parameter or local, or a top-level binding that is not the
+    // converter — for each converter: reported, never fixed.
+    ...rewriteTargetCases({
+      preamble: '', unsafeCall: "a.split(path.sep).join('/')", safeName: 'toForwardSlash', safeModule: SAFE_PATH_MODULE, errors: NATIVE_ERR,
+    }),
+    ...rewriteTargetCases({
+      preamble: '', unsafeCall: String.raw`a.split('\\').join('/')`, safeName: 'toForwardSlashAnyPlatform', safeModule: SAFE_PATH_MODULE, errors: ANY_ERR,
+    }),
+    ...rewriteTargetCases({
+      preamble: '', unsafeCall: String.raw`a.replaceAll('\\', '/')`, safeName: 'toForwardSlashAnyPlatform', safeModule: SAFE_PATH_MODULE, errors: ANY_ERR,
+    }),
+    // An optional-chained receiver: `toForwardSlashAnyPlatform(a)` would drop the `?.`, and
+    // throw or convert where the original yielded `undefined`. Reported, never fixed.
+    { code: String.raw`export const n = (a?: string) => a?.replaceAll('\\', '/');`, filename: LINTED_FILE, errors: ANY_ERR },
+    { code: String.raw`export const n = (a?: string) => a?.split('\\').join('/');`, filename: LINTED_FILE, errors: ANY_ERR },
+    { code: String.raw`export const n = (a: { p?: string }) => a.p?.replace(/\\/g, '/');`, filename: LINTED_FILE, errors: ANY_ERR },
     // A hashbang stays the first line: the import lands below it.
     {
       code: "#!/usr/bin/env node\nconst n = p.split(path.sep).join('/');",

@@ -100,6 +100,9 @@ export function formatIssueLines(issue: ValidationIssue | Finding, indent = ''):
  * A lane that groups its findings keeps its own headings and renders each
  * finding through {@link formatIssueLines}.
  *
+ * 🔑 **Never a leftover** (`TREE_CLEANUP_INCOMPLETE`): the document writer says each one
+ * ({@link reportLeftovers}); said here too, it would print twice.
+ *
  * @param findings - The findings, in any order
  * @param options.verbose - Render warning and info findings too
  * @param options.write - Where each line goes — the caller's stderr logger
@@ -108,24 +111,30 @@ export function reportFindings(
   findings: readonly (ValidationIssue | Finding)[],
   options: { readonly verbose: boolean; readonly write: (line: string) => void },
 ): void {
-  for (const finding of issuesToRenderAtVerbosity(findings, options.verbose)) {
+  const said = findings.filter((finding) => !isLeftover(finding));
+  for (const finding of issuesToRenderAtVerbosity(said, options.verbose)) {
     for (const line of formatIssueLines(finding, '  ')) options.write(line);
   }
-  const hint = formatCollapsedFindingsHint(countCollapsedFindings(findings, options.verbose));
+  const hint = formatCollapsedFindingsHint(countCollapsedFindings(said, options.verbose));
   if (hint !== undefined) options.write(hint);
 }
 
+/** Is `finding` a leftover: something a run made and could not remove? */
+export function isLeftover(finding: ValidationIssue | Finding): boolean {
+  return finding.code === TREE_CLEANUP_INCOMPLETE_CODE;
+}
+
 /**
- * {@link reportFindings}, except a `TREE_CLEANUP_INCOMPLETE` leftover is said at every verbosity,
- * after the other findings.
+ * Every leftover in `findings`, each through {@link formatIssueLines} — the writer's half of
+ * {@link reportFindings}, at every verbosity. Only the document writer calls it.
+ *
+ * @param findings - A published document's findings
+ * @param write - Where each line goes
  */
-export function reportFindingsKeepingLeftovers(
-  findings: readonly (ValidationIssue | Finding)[],
-  options: { readonly verbose: boolean; readonly write: (line: string) => void },
-): void {
-  const isLeftover = (finding: ValidationIssue | Finding): boolean => finding.code === TREE_CLEANUP_INCOMPLETE_CODE;
-  reportFindings(findings.filter((finding) => !isLeftover(finding)), options);
-  reportFindings(findings.filter(isLeftover), { verbose: true, write: options.write });
+export function reportLeftovers(findings: readonly (ValidationIssue | Finding)[], write: (line: string) => void): void {
+  for (const finding of findings.filter((candidate) => isLeftover(candidate))) {
+    for (const line of formatIssueLines(finding, '  ')) write(line);
+  }
 }
 
 /**

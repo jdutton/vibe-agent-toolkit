@@ -123,6 +123,7 @@ import { blobReferencesFor } from './blob-references.js';
 import { blobSectionsFor, flattenHeadings } from './blob-sections.js';
 import { readKeyedContent } from './content-cache.js';
 import { errorLabel } from './error-label.js';
+import { parseFailedMessage } from './parse-failure.js';
 import type { ProjectionBase, ProjectionBuilder } from './projection.js';
 import type { BlobScopedRows } from './store.js';
 
@@ -1079,7 +1080,7 @@ async function parseTarget(
     return refused('blobsParseFailed', condition(
       target.contentKey,
       BLOB_PARSE_FAILED,
-      `The ${keyed.parserKind} parser threw on these bytes (${errorLabel(error)})`,
+      parseFailedMessage(keyed.parserKind, error),
     ));
   }
 }

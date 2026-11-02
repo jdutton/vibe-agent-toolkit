@@ -26,6 +26,10 @@
   `no-os-tmpdir`, `no-fs-mkdirSync`). The import, or just the dead specifier beside a live one
   (`join` in `import { join, dirname } from 'node:path'`), is now removed on the next `--fix` pass,
   once nothing references it. A single `--fix` pass, and an editor's single fix, leave both imports.
+  Two shapes are never removed and stay for you to delete: a declaration with any type-only binding
+  (`import { type join, resolve } from 'node:path'`), and a declaration's only named specifier, dead,
+  beside a live default or namespace binding (`tmpdir` in `import os, { tmpdir } from 'node:os'` while
+  `os` is still used).
 - **`no-os-tmpdir`, `no-fs-mkdirSync`, `no-fs-realpathSync` and `no-child-process-execSync` report a
   call only when it resolves through scope to the `node:*` module's own function**, by the same scan
   `no-existssync` and `no-link-following-fs` use: a named import (aliased or not), a member of a
@@ -49,10 +53,19 @@
   replacement's name (a parameter `normalizedTmpdir`) is reported with no fix: the rewritten call
   would reach that binding.
 - **The call rules and `no-raw-node-path`/`no-manual-path-normalize` rewrite a call only when the
-  replacement is unbound, or bound by a value import of it from `@vibe-agent-toolkit/utils` (or a
-  subpath) or the configured `safeModule`.** A same-named import from another module
-  (`import { normalizedTmpdir } from './local'`), a type-only import of it, or a local declaration of
-  that name had the call rewired onto that binding; it is now reported with no fix.
+  rewritten call reaches the replacement**: its name is unbound at the top level or bound by a value
+  import of it from `@vibe-agent-toolkit/utils` (or a subpath) or the configured `safeModule`, AND no
+  parameter or local of that name shadows it at the call site. A same-named import from another module
+  (`import { normalizedTmpdir } from './local'`), a type-only import of it, a local declaration of that
+  name, or a parameter (`function f(safePath) { return path.join('a', safePath); }`) had the call
+  rewired onto that binding; it is now reported with no fix.
+- **`no-raw-node-path` reports a call only when its callee resolves through scope to the `node:path`
+  import**, not when it is merely spelled like it. A parameter or local named `path` or `join`
+  (`function f(path) { return path.join('a'); }`) was reported and rewritten to `safePath`; it is now
+  left alone.
+- **`no-manual-path-normalize` does not autofix an optional-chained receiver**
+  (`a?.replaceAll('\\', '/')`): `toForwardSlashAnyPlatform(a)` dropped the `?.`. It is reported with no
+  fix.
 - **An import a fix adds lands below a file's hashbang (`#!/usr/bin/env node`)**, not above it, which
   left the file unparsable.
 - **`no-fs-mkdirSync` and `no-fs-realpathSync` do not rewrite a call whose first argument is a

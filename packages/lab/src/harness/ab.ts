@@ -65,6 +65,17 @@ export const UNMEASURABLE_VERDICT = 'unmeasurable';
 /** Stands in for a pair whose comparison refused, so it can never read as agreement. */
 const NO_VERDICT = 'NO VERDICT (pair refused)';
 
+/** Why a pair is lost when an arm's capture published no estimate for the command. */
+const NO_ESTIMATE = 'published no estimate';
+
+/**
+ * Did any pair's comparison accept this command? When none did, the two arms' numbers were never
+ * judged comparable, and their difference is not an effect.
+ */
+function anyComparable(verdicts: readonly string[]): boolean {
+  return verdicts.some((verdict) => verdict !== NO_VERDICT);
+}
+
 /**
  * The least a comparison must expose for the CLI and `ab` to report it.
  *
@@ -121,10 +132,11 @@ export interface FacetEstimate {
   /** What the number is, for rendering only — `ms`, `calls`. */
   readonly unit: string;
   /**
-   * Why this capture ran and still has no number to give — `memory`'s run out of heap, a
-   * regression with no peak — or `null` for an estimate that IS its `value`. A lost capture is
-   * not filtered away like a failed one: an arm holding one reports THAT, never a statistic of
-   * its surviving pairs, which would understate the very regression that lost it.
+   * Why this capture has no usable measurement — its row failed (the failure, or the facet's own
+   * name for it: `memory`'s `ran out of heap`) — or `null` for an estimate that IS its `value`. A
+   * lost capture is never filtered away: an arm holding one reports THAT, never a statistic of its
+   * surviving pairs, which would understate the very regression that lost it. A pair whose capture
+   * published no estimate for the command at all is lost the same way (`published no estimate`).
    */
   readonly lost: string | null;
 }
@@ -264,7 +276,7 @@ export interface AbCommandResult {
   readonly b: AbArmSummary | null;
   /** Per arm, how many of its captures were lost and why (`ran out of heap in 1 of 3 pairs`), or `null`. */
   readonly lost: { readonly a: string | null; readonly b: string | null };
-  /** `b.value - a.value`, or `null` when either arm produced no reading or lost a capture. */
+  /** `b.value - a.value`, or `null` when either arm produced no reading or lost a capture, or no pair was comparable. */
   readonly effect: number | null;
   readonly noise: AbNoiseVerdict;
 }
@@ -453,7 +465,13 @@ function armEstimates(outcomes: readonly PairOutcome[], name: string, arm: 'a' |
  * @returns The line, naming each distinct reason
  */
 function armLost(outcomes: readonly PairOutcome[], name: string, arm: 'a' | 'b'): string | null {
-  const reasons = armEstimates(outcomes, name, arm).flatMap((item) => (item.lost === null ? [] : [item.lost]));
+  // A pair with no estimate at all for the command is lost too: the arm would otherwise hold fewer
+  // pairs than it ran, and its statistic would be of the captures that happened to publish one.
+  const reasons = outcomes.flatMap((outcome) => {
+    const item = (arm === 'a' ? outcome.a : outcome.b).get(name);
+    if (item === undefined) return [NO_ESTIMATE];
+    return item.lost === null ? [] : [item.lost];
+  });
   if (reasons.length === 0) return null;
   return `${[...new Set(reasons)].join('; ')} in ${String(reasons.length)} of ${String(outcomes.length)} pairs`;
 }
@@ -513,8 +531,11 @@ function foldCommands<TBody, TComparison extends ComparisonLike>(
     const a = armSummary(outcomes, name, 'a', spec.estimator);
     const b = armSummary(outcomes, name, 'b', spec.estimator);
     const lost = { a: armLost(outcomes, name, 'a'), b: armLost(outcomes, name, 'b') };
-    // No effect from an arm that lost a capture: its survivors' statistic understates what lost it.
-    const effect = a === null || b === null || lost.a !== null || lost.b !== null ? null : b.value - a.value;
+    // No effect from an arm that lost a capture — its survivors' statistic understates what lost it —
+    // nor when no pair was comparable: two numbers no comparison accepted are not an effect.
+    const effect = a === null || b === null || lost.a !== null || lost.b !== null || !anyComparable(verdicts)
+      ? null
+      : b.value - a.value;
     return {
       name,
       verdicts,
@@ -742,6 +763,7 @@ function armLine(label: string, summary: AbArmSummary | null, lost: string | nul
 function effectLine(command: AbCommandResult, noiseFloor: number | null): string {
   if (command.lost.a !== null) return `    effect: NONE — arm A ${command.lost.a}.`;
   if (command.lost.b !== null) return `    effect: NONE — arm B ${command.lost.b}.`;
+  if (!anyComparable(command.verdicts)) return '    effect: NONE — no pair was comparable; see the refusals above.';
   if (command.effect === null) return '    effect: NONE — an arm produced no reading.';
   const unit = command.b?.unit ?? command.a?.unit ?? '';
   const head = `    effect (B - A): ${num(command.effect)}${unit}`;

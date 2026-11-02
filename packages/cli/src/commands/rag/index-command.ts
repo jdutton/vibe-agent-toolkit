@@ -190,10 +190,8 @@ export async function indexCommand(
     await ragProvider.close();
 
     const recorded = providerIssues(indexResult, locations);
-    // On stderr too, so a caller reading only the exit code still sees each name. Verbose for the
-    // provider's own: this verb has no `--verbose`, and a clamped chunk budget explains a truncated search.
-    reportFindings(unreadable, { verbose: false, write: logger.warn });
-    reportFindings(recorded, { verbose: true, write: logger.warn });
+    // Every one, on stderr: this verb has no `--verbose`.
+    reportFindings([...unreadable, ...recorded], { verbose: true, write: logger.warn });
     report = buildIndexReport({
       examined: allResources.length + unreadable.length,
       result: indexResult,

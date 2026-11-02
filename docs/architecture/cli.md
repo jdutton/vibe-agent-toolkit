@@ -290,16 +290,22 @@ stderr. Both spell a finding with the one formatter, `formatFindingLine` in
 (`vat resources validate`, `vat resources check -v`, the orchestrators' delegated phases). A lane
 with no `--verbose` passes `verbose: true` and always prints every finding: `vat agent validate`,
 `vat ard emit`, `vat rag index`, `vat okf validate`, `vat audit settings`, `vat claude plugin
-uninstall`, `vat skills build --skill`'s refusal, `vat audit <git-url>`'s clone leftover, the install
-verbs' leftovers, a refusal's leftovers, and `vat verify`'s built-in phases. A leftover
-(`TREE_CLEANUP_INCOMPLETE`) prints at every verbosity, on every lane: a finished change's through
-`leftoverFindingsOfWarnings`, a refusal's beside its message, and one that IS the refusal
-(`endWithLeftoverRefusal`) once, as the refusal's message — never also as a finding line. A refusal
-prints its message first, then the finished work's findings. A run-integrity refusal
-the document writer adds, the writer prints itself, once. Verbs whose stderr does not yet say their
-findings this way are listed in `FINDINGS_NOT_ON_STDERR`
-(`packages/cli/test/system/test-helpers/exit-code-matrix.ts`), which the exit-code matrix asserts
-both ways.
+uninstall`, `vat skills build --skill`'s refusal, and `vat verify`'s built-in phases.
+
+A leftover (`TREE_CLEANUP_INCOMPLETE`: something a run made and could not remove) is said by the
+one path that publishes it, never by a verb: `writeDocument` (and `endWithForwardedDocument`, and
+`writeLegacyDocument` for a refusal) prints every leftover the document carries, once, at every
+verbosity, on every verb — `FINDINGS_NOT_ON_STDERR` verbs included. `reportFindings` skips them, so a
+verb that prints its findings cannot print a leftover twice, and verbs only build them
+(`leftoverIssue`, `leftoverIssueOf`, `leftoverIssuesOf`, `leftoverIssuesOfWarnings`). The lanes
+`findingsGoToStderr` excludes are excluded for leftovers too: the generic `--format text` document,
+which already lists them, and a supervised child, whose supervisor publishes and says them. A
+leftover that IS the refusal (`endWithLeftoverRefusal`) is said once, as the refusal's message —
+never also as a finding line. A refusal prints its message first, then the finished work's findings,
+then its leftovers. A run-integrity refusal the document writer adds, the writer prints itself, once.
+Verbs whose stderr does not yet say their other findings this way are listed in
+`FINDINGS_NOT_ON_STDERR` (`packages/cli/test/system/test-helpers/exit-code-matrix.ts`), which the
+exit-code matrix asserts both ways.
 A verb whose `--format text` document is the generic rendering, one line per finding
 (`vat resources validate`), carries none on stderr under that format, because stdout already is
 these lines. A verb with its own text rendering (`vat ard emit`, whose text document is one summary

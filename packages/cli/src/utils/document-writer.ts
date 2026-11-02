@@ -44,7 +44,7 @@ import {
 
 import { errorMessageOf, refusalCodeOf, withFsFaultRemedy } from './command-refusal.js';
 import { debugDiagnosticsEnabled } from './debug-diagnostics.js';
-import { formatFindingLine, reportFindings } from './issue-rendering.js';
+import { formatFindingLine, isLeftover, reportFindings, reportLeftovers } from './issue-rendering.js';
 import { renderYamlDocument, writeStdoutSync } from './output.js';
 import { findingsAddedByRunIntegrity, withRunIntegrity } from './run-integrity.js';
 
@@ -147,9 +147,24 @@ export function findingsGoToStderr(verb: ReportVerb, format: DocumentFormat): bo
  * @throws When the verb is unregistered or its schema rejects the document (a defect)
  */
 export function writeDocument<T>(verb: ReportVerb, report: Report<T>, format: DocumentFormat): Report<T> {
+  return publishDocument(verb, report, format, []);
+}
+
+/**
+ * {@link writeDocument}, given the leftovers stderr already carries as a refusal's message.
+ *
+ * 🔑 **The one path that publishes a leftover says it**, once, at every verbosity, on the lanes
+ * {@link findingsGoToStderr} allows. {@link reportFindings} skips them, so none is said twice.
+ *
+ * @param saidAsMessage - Leftovers the refusal's message already said ({@link endWithLeftoverRefusal})
+ */
+function publishDocument<T>(verb: ReportVerb, report: Report<T>, format: DocumentFormat, saidAsMessage: readonly Finding[]): Report<T> {
   const entry = reportShapeFor(verb);
   const written = publishedReport(verb, report);
-  if (findingsGoToStderr(verb, format)) announceRunIntegrity(report, written);
+  if (findingsGoToStderr(verb, format)) {
+    announceRunIntegrity(report, written);
+    reportLeftovers(written.findings.filter((finding) => !saidAsMessage.some((said) => sameLeftover(said, finding))), writeStderrLine);
+  }
   if (format === 'text') {
     const text = entry.renderText === undefined
       ? renderReportText(written, entry.examined.unit)
@@ -159,6 +174,11 @@ export function writeDocument<T>(verb: ReportVerb, report: Report<T>, format: Do
     writeStructured(written, format);
   }
   return written;
+}
+
+/** The same leftover: one message naming one entry. */
+function sameLeftover(a: Finding, b: Finding): boolean {
+  return isLeftover(a) && isLeftover(b) && a.message === b.message && a.link === b.link;
 }
 
 /**
@@ -208,8 +228,7 @@ export function endWithRefusal(
   gate: Gate,
   finished: FinishedWork,
 ): never {
-  const onStderr = findingsGoToStderr(verb, format);
-  const report = composeRefusal({ code, error, gate, finished, onStderr, printFinished: onStderr, alsoPublished: [] });
+  const report = composeRefusal({ code, error, gate, finished, printFinished: findingsGoToStderr(verb, format), alsoPublished: [] });
   process.exit(exitCodeForReport(writeDocument(verb, report, format)));
 }
 
@@ -219,9 +238,9 @@ export function endWithRefusal(
  * TREE_CLEANUP_INCOMPLETE warning. The one place that warning is composed.
  */
 export function endWithLeftoverRefusal(verb: ReportVerb, leftover: unknown, format: DocumentFormat, gate: Gate, finished: FinishedWork): never {
-  const onStderr = findingsGoToStderr(verb, format);
-  const report = composeRefusal({ code: refusalCodeOf(leftover), error: leftover, gate, finished, onStderr, printFinished: onStderr, alsoPublished: [leftoverIssueOf(leftover)] });
-  process.exit(exitCodeForReport(writeDocument(verb, report, format)));
+  const said = [leftoverIssueOf(leftover)];
+  const report = composeRefusal({ code: refusalCodeOf(leftover), error: leftover, gate, finished, printFinished: findingsGoToStderr(verb, format), alsoPublished: said });
+  process.exit(exitCodeForReport(publishDocument(verb, report, format, said)));
 }
 
 /**
@@ -249,11 +268,10 @@ function announceRefusal(code: RefusalCode, error: unknown): string {
  * @param error - The thrown value, or the message
  * @param gate - The gate the run was judged by
  * @param finished - The work that finished, or {@link NOTHING_FINISHED}
- * @param findingsOnStderr - Whether its leftovers go to stderr too ({@link findingsGoToStderr})
- * @returns The error report, not yet published
+ * @returns The error report, not yet published — its leftovers are said by the writer that publishes it
  */
-export function refusalReport(code: RefusalCode, error: unknown, gate: Gate, finished: FinishedWork, findingsOnStderr: boolean): Report<unknown> {
-  return composeRefusal({ code, error, gate, finished, onStderr: findingsOnStderr, printFinished: false, alsoPublished: [] });
+export function refusalReport(code: RefusalCode, error: unknown, gate: Gate, finished: FinishedWork): Report<unknown> {
+  return composeRefusal({ code, error, gate, finished, printFinished: false, alsoPublished: [] });
 }
 
 /** What {@link composeRefusal} composes a refusal from. */
@@ -262,20 +280,18 @@ interface RefusalParts {
   readonly error: unknown;
   readonly gate: Gate;
   readonly finished: FinishedWork;
-  /** Whether leftovers go to stderr ({@link findingsGoToStderr}). */
-  readonly onStderr: boolean;
-  /** Whether the finished work's findings go to stderr too (the publishing lane). */
+  /** Whether the finished work's findings go to stderr (the publishing lane, per {@link findingsGoToStderr}). */
   readonly printFinished: boolean;
   /** Findings the document carries that stderr already has in the refusal's message. */
   readonly alsoPublished: readonly Finding[];
 }
 
-/** Every refusal's one composition: message, finished findings, then leftovers. */
+/** Every refusal's one composition: message, then finished findings; leftovers by {@link publishDocument}. */
 function composeRefusal(parts: RefusalParts): Report<unknown> {
-  const { code, error, gate, finished, onStderr } = parts;
+  const { code, error, gate, finished } = parts;
   const message = announceRefusal(code, error);
   const leftovers = leftoverIssuesOf(error);
-  if (onStderr) reportFindings([...(parts.printFinished ? finished.findings : []), ...leftovers], { verbose: true, write: writeStderrLine });
+  if (parts.printFinished) reportFindings(finished.findings, { verbose: true, write: writeStderrLine });
   return buildErrorReport({
     error: { code, message },
     gate,
@@ -285,30 +301,21 @@ function composeRefusal(parts: RefusalParts): Report<unknown> {
   });
 }
 
-/** {@link leftoverFindingsOf} without the printing. */
-function leftoverIssuesOf(error: unknown): Array<ValidationIssue & Finding> {
-  return suppressedFaultsOf(error).map((fault) => leftoverIssueOf(fault));
-}
-
 /**
  * What the failure path could not clean up — a temporary directory, a staged tree —
  * recorded beside the thrown error (`suppressedFaultsOf`), as warnings naming each.
  * Recorded beside, never on its cause chain: a leftover is never the run's refusal.
  */
-export function leftoverFindingsOf(error: unknown): Array<ValidationIssue & Finding> {
-  const leftovers = leftoverIssuesOf(error);
-  reportFindings(leftovers, { verbose: true, write: writeStderrLine });
-  return leftovers;
+export function leftoverIssuesOf(error: unknown): Array<ValidationIssue & Finding> {
+  return suppressedFaultsOf(error).map((fault) => leftoverIssueOf(fault));
 }
 
 /**
  * A finished tree change's leftovers (`applyTreePlan`'s `warnings`, a packager's `residue`) as
- * warnings, said on stderr: the run succeeded, so nothing else tells the operator.
+ * warnings, said by {@link publishDocument}.
  */
-export function leftoverFindingsOfWarnings(warnings: readonly TreeChangeWarning[]): Array<ValidationIssue & Finding> {
-  const leftovers = warnings.map(({ message, path }) => leftoverIssue(message, path));
-  reportFindings(leftovers, { verbose: true, write: writeStderrLine });
-  return leftovers;
+export function leftoverIssuesOfWarnings(warnings: readonly TreeChangeWarning[]): Array<ValidationIssue & Finding> {
+  return warnings.map(({ message, path }) => leftoverIssue(message, path));
 }
 
 /**
@@ -372,6 +379,7 @@ export function readForwardedDocument(verb: ReportVerb, text: string, format: Ex
  * @param document - What {@link readForwardedDocument} accepted
  */
 export function endWithForwardedDocument(document: ForwardedDocument): never {
+  if (!supervisorSaysFindings) reportLeftovers(document.report.findings, writeStderrLine);
   writeStdoutSync(document.text);
   process.exit(exitCodeForReport(document.report));
 }
@@ -421,12 +429,18 @@ export function endWithExternalRefusal(verb: ExternalVerb, error: unknown, forma
  */
 export function writeLegacyDocument(_verb: LegacyVerb, document: unknown, format: DocumentFormat, text: string | undefined): void {
   // The verb's TYPE is the guarantee — only a legacy verb compiles here.
+  if (!supervisorSaysFindings && isReportShaped(document)) reportLeftovers(document.findings, writeStderrLine);
   if (format === 'text' && text !== undefined) {
     // Synchronously, as `claude context` always wrote it: its text can run long and the verb exits straight after.
     writeStdoutSync(text);
     return;
   }
   writeStructured(document, format);
+}
+
+/** Does a legacy document carry a report's `findings` list? */
+function isReportShaped(document: unknown): document is { readonly findings: readonly Finding[] } {
+  return typeof document === 'object' && document !== null && Array.isArray((document as { findings?: unknown }).findings);
 }
 
 /** Validate a payload against its artifact entry's schema, when it declares one. */

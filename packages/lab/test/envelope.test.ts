@@ -11,7 +11,7 @@
  * `envelope/envelope.ts`'s header.
  */
 
-import { totalmem } from 'node:os';
+import { availableParallelism, totalmem } from 'node:os';
 
 import { describe, expect, it } from 'vitest';
 
@@ -172,6 +172,7 @@ describe('currentHost', () => {
       nodeOptions: '--max-old-space-size=123',
       heapSizeLimit: expect.any(Number),
       totalMem: totalmem(),
+      availableParallelism: availableParallelism(),
     });
     expect(currentHost({ set: {}, unset: ['NODE_OPTIONS'] }).nodeOptions).toBe('');
   });

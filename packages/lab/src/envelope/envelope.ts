@@ -37,7 +37,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { totalmem } from 'node:os';
+import { availableParallelism, totalmem } from 'node:os';
 
 import { z } from 'zod';
 
@@ -62,6 +62,12 @@ export interface ReportHost {
   readonly heapSizeLimit: number;
   /** The machine's memory in bytes (`os.totalmem()`). Recorded, never compared: the heap limit is what it decides. */
   readonly totalMem: number;
+  /**
+   * `os.availableParallelism()`. Compared: vat sizes its parse pool from it (`min(4, n - 1)`
+   * threads), and each thread holds its own heap, so two hosts alike in every field above can
+   * still run a different number of parse workers.
+   */
+  readonly availableParallelism: number;
 }
 
 /**
@@ -93,6 +99,7 @@ export function currentHost(env: ArmEnvironment): ReportHost {
     nodeOptions,
     heapSizeLimit: childHeapSizeLimit(armEnv),
     totalMem: totalmem(),
+    availableParallelism: availableParallelism(),
   };
 }
 
@@ -162,6 +169,7 @@ export const ReportEnvelopeSchema = z
         nodeOptions: z.string(),
         heapSizeLimit: z.number().int().positive(),
         totalMem: z.number().int().positive(),
+        availableParallelism: z.number().int().positive(),
       })
       .strict(),
     body: z.unknown(),
@@ -253,6 +261,7 @@ const HOST_FIELDS: readonly (readonly [keyof ReportHost, string])[] = [
   ['node', 'Node version'],
   ['nodeOptions', 'NODE_OPTIONS'],
   ['heapSizeLimit', 'V8 heap limit'],
+  ['availableParallelism', 'available parallelism'],
 ];
 
 /**

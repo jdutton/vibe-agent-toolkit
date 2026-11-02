@@ -38,6 +38,7 @@ const {
   EXEMPT_AND_SAFE_MODULE_SCHEMA,
   SAFE_PATH_MODULE,
   insertAboveWithComments,
+  mayRewriteCallTo,
   resolveSafeModule,
   safeBindingOf,
   takesNamedSpecifier,
@@ -45,6 +46,8 @@ const {
 
 const PATH_MODULES = new Set(['node:path', 'path']);
 const SAFE_OBJECT = 'safePath';
+/** Specifiers that bind the whole module: `import path from …`, `import * as path from …`. */
+const MODULE_SPECIFIERS = new Set(['ImportDefaultSpecifier', 'ImportNamespaceSpecifier']);
 
 /**
  * The `node:path` functions `safePath` wraps, and therefore the only values
@@ -68,20 +71,9 @@ const WRAPPED_FUNCTIONS = Object.freeze(['join', 'resolve', 'relative']);
 const exemptMatcherFor = createConfigurableExemptPathMatcher();
 
 /**
- * Track path module specifiers from an import declaration.
- *
- * Two specifier shapes are deliberately NOT tracked, because tracking them is
- * what let the fixer delete them:
- *
- * - **Type-only** (`import { type join, … }` / `import type { join }`). The
- *   binding exists only for the type checker; there is no call to rewrite, and
- *   removing the specifier silently breaks every `typeof join` that referenced
- *   it. `no-undef` cannot see the damage — it is a TYPE reference.
- * - **Aliased** (`import { join as pathJoin }`). The rule never reported
- *   `pathJoin(...)` in the first place — `classifyCall` matches on the callee's
- *   name — so tracking the specifier bought nothing and cost the whole import:
- *   an unrelated unbound `join(` elsewhere in the file made the fixer remove
- *   the alias, breaking every working `pathJoin` call site.
+ * Record the declaration a function's named import lives in: where a new
+ * `safePath` import is anchored. Which CALLS are this rule's is not decided here
+ * but by {@link pathImportSpecifierOf}, through scope.
  */
 function trackPathImport(node, state) {
   if (node.importKind === 'type') {
@@ -91,14 +83,39 @@ function trackPathImport(node, state) {
     if (spec.type === 'ImportSpecifier' && spec.importKind !== 'type' && spec.local.name === spec.imported.name) {
       const fnState = state.byFn.get(spec.imported.name);
       if (fnState) {
-        fnState.namedImportSpec = spec;
         fnState.namedImportNode = node;
       }
     }
-    if (spec.type === 'ImportDefaultSpecifier' || spec.type === 'ImportNamespaceSpecifier') {
-      state.defaultImportName = spec.local.name;
+  }
+}
+
+/**
+ * The VALUE `node:path` import specifier `identifier` resolves to THROUGH SCOPE, or null.
+ *
+ * Resolved, never matched by name: a parameter or local named `path` or `join` shadows the
+ * import, and a rule that matched the callee's spelling rewrote `function f(path) { path.join() }`
+ * onto `safePath`. A type-only specifier backs no value, so it is not a call site either — and
+ * tracking one let the fixer delete it, breaking every `typeof join` where `no-undef` cannot see.
+ *
+ * @param {object} sourceCode - ESLint `SourceCode`.
+ * @param {object} identifier - The callee identifier, or the object of a member callee.
+ * @returns {object | null} The `ImportSpecifier` / `ImportDefaultSpecifier` / `ImportNamespaceSpecifier`.
+ */
+function pathImportSpecifierOf(sourceCode, identifier) {
+  for (let scope = sourceCode.getScope(identifier); scope; scope = scope.upper) {
+    const variable = scope.set.get(identifier.name);
+    if (variable !== undefined) {
+      const def = variable.defs[0];
+      // `import x = require()` is an ImportBinding too, with no `ImportDeclaration` parent: not tracked.
+      const isValuePathImport = def?.type === 'ImportBinding'
+        && def.parent?.type === 'ImportDeclaration'
+        && PATH_MODULES.has(def.parent.source.value)
+        && def.parent.importKind !== 'type'
+        && def.node.importKind !== 'type';
+      return isValuePathImport ? def.node : null;
     }
   }
+  return null;
 }
 
 /**
@@ -190,7 +207,8 @@ function safeReplacementCallee(node, byFn) {
  * pack's doing. Silently redirecting a live call to another function is.
  */
 function classifyBareCall(node, fnState, state, sourceCode) {
-  if (fnState.namedImportSpec) {
+  const spec = pathImportSpecifierOf(sourceCode, node.callee);
+  if (spec?.type === 'ImportSpecifier' && spec.imported.name === fnState.fn) {
     return { fn: fnState.fn, isNamed: true };
   }
   if (state.safePathBoundInSource && !isIdentifierBound(sourceCode, node.callee, fnState.fn)) {
@@ -225,8 +243,8 @@ function classifyCall(node, state, sourceCode) {
     return null;
   }
 
-  // Namespace call: path.join(...)
-  if (callee.object.name === state.defaultImportName) {
+  // Namespace call: path.join(...), `path` resolved through scope to the default or namespace import.
+  if (MODULE_SPECIFIERS.has(pathImportSpecifierOf(sourceCode, callee.object)?.type)) {
     return { fn, isNamed: false };
   }
 
@@ -310,8 +328,9 @@ function buildFix(fixer, node, classification, sourceCode, state) {
   const fnState = state.byFn.get(classification.fn);
   // A CommonJS file cannot take the `safePath` import every leg below may need.
   if (!state.safePathBoundInSource && !acceptsImport(sourceCode)) return null;
-  // A top-level `safePath` that is not this package's would catch the rewritten call.
-  if (state.safePathBinding === 'foreign') return null;
+  // A `safePath` the rewritten call would reach instead of this package's — a shadowing parameter
+  // or local, or a top-level binding that is not ours: no rewrite (`mayRewriteCallTo`).
+  if (!mayRewriteCallTo(sourceCode, node, SAFE_OBJECT, state.safeModule)) return null;
 
   // REPAIR: an orphaned `safePath.join(...)` is already the call we want, and
   // the only thing missing is the import that a discarded report was carrying.
@@ -351,7 +370,6 @@ function buildFix(fixer, node, classification, sourceCode, state) {
 function createFunctionState(fn) {
   return {
     fn,
-    namedImportSpec: null,
     namedImportNode: null,
     // Set from the SOURCE as traversal walks it, and read only at
     // `Program:exit` — so it is a fact about the text being linted, not about
@@ -423,14 +441,13 @@ module.exports = {
     const functions = context.options[0]?.functions ?? WRAPPED_FUNCTIONS;
     const safeModule = resolveSafeModule(context, SAFE_PATH_MODULE);
     // Seeded from SCOPE: `safePath` this package's (rewrite, import nothing), absent (rewrite and
-    // import), or another binding (no rewrite). See `safeBindingOf` in `safe-import.cjs`.
+    // import), or another binding (no rewrite, by `mayRewriteCallTo`). See `safe-import.cjs`.
     const safePathBinding = safeBindingOf(sourceCode, SAFE_OBJECT, safeModule);
     const state = {
       // Resolved per invocation — the option belongs to the consuming repo,
       // which may point different rules at different re-export entries.
       safeModule,
       byFn: new Map(functions.map((fn) => [fn, createFunctionState(fn)])),
-      defaultImportName: null,
       // Seeded from SCOPE, not from "did I see an import from SAFE_MODULE?".
       // A file already importing `safePath` from the barrel needs the call
       // rewritten but must NOT gain a second binding of the same name.
@@ -441,12 +458,10 @@ module.exports = {
       // the rest of THIS pass — re-admitting the ambient-global false positive
       // in any file that also has a `path.join()` to fix.
       safePathBoundInSource: safePathBinding === 'safe',
-      // What the top-level `safePath` is: absent, this package's, or a FOREIGN binding no rewrite may reach.
-      safePathBinding,
       safeImportNode: null,
       // EVERY path-module declaration, not just the ones carrying a wrapped
       // function. A file's dead binding is `import path from 'node:path'`,
-      // which `trackPathImport` only ever recorded as a NAME. See `dead-import.cjs`.
+      // which `trackPathImport` does not record. See `dead-import.cjs`.
       pathImportNodes: [],
     };
 
@@ -472,8 +487,8 @@ module.exports = {
       'Program:exit'() {
         // Holding these back cannot change any FIX, only when it is computed.
         // A repair candidate is classified only when `safePath` is bound in the
-        // source, so `hasSafePathImport` starts true and `namedImportSpec` is
-        // null: the report carries no import insert and no specifier removal,
+        // source, so `hasSafePathImport` starts true and the call resolves to no
+        // import: the report carries no import insert and no specifier removal,
         // and therefore nothing shared that an earlier report could have spent
         // first. (`importOnly` is the mirror case — it requires `safePath`
         // UNBOUND — so the two can never arise in the same file.)

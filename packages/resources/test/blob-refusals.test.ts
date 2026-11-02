@@ -8,6 +8,7 @@
  * end-to-end proof that a really-declined binary reaches this function lives in
  * `projection-blob-not-text-binary.test.ts`, over real PNG bytes.
  */
+import { WORKER_OUT_OF_MEMORY_CODE } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -17,6 +18,7 @@ import {
   BLOB_UNREADABLE,
 } from '../src/projection/blob-population.js';
 import { describeBlobRefusals, type BlobRefusalRows } from '../src/projection/blob-refusals.js';
+import { parseFailedMessage, parseFailureLabelOf } from '../src/projection/parse-failure.js';
 import type { BlobConditionRow, BlobRow } from '../src/schemas/projection-blobs.js';
 import type { ContentState, ResourceRealizationRow } from '../src/schemas/projection-resources.js';
 
@@ -96,6 +98,24 @@ describe('describeBlobRefusals', () => {
     expect(line).toContain('declined 2 of 12 blob(s) (1 changed under the run, 1 parse failed)');
     expect(describeBlobRefusals(rowsOf({ blobConditions: [condition('PARSE_ODDITY', 'markdown.derived-0')] })))
       .toBeUndefined();
+  });
+
+  it('names what each failed parse threw — a worker that ran out of heap is not a corpus fault', () => {
+    const threw = (code: string): Error => Object.assign(new Error('worker died'), { code });
+    const failed = (key: string, error: unknown): BlobConditionRow =>
+      ({ ...condition(BLOB_PARSE_FAILED, key), message: parseFailedMessage('markdown', error) });
+    const line = describeBlobRefusals(rowsOf({
+      blobConditions: [
+        failed('markdown.a', threw(WORKER_OUT_OF_MEMORY_CODE)),
+        failed('markdown.b', threw(WORKER_OUT_OF_MEMORY_CODE)),
+        failed('markdown.c', new Error('Unexpected token (3:1)')),
+      ],
+    }));
+
+    // Each distinct failure once, in code-unit order — the code a reader (or `vat-lab memory`) can grep.
+    expect(line).toContain('(3 parse failed [ERR_WORKER_OUT_OF_MEMORY, Unexpected token (3:1)])');
+    expect(parseFailureLabelOf(parseFailedMessage('markdown', threw(WORKER_OUT_OF_MEMORY_CODE)))).toBe(WORKER_OUT_OF_MEMORY_CODE);
+    expect(parseFailureLabelOf('BLOB_PARSE_FAILED')).toBeUndefined();
   });
 
   it('reports realizations that could not be keyed, unreadable and too large apart', () => {

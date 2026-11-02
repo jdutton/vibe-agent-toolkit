@@ -16,7 +16,7 @@
  * unmeasured run before it.
  */
 
-import { resolveFromImportMeta } from '@vibe-agent-toolkit/utils';
+import { resolveFromImportMeta, WORKER_OUT_OF_MEMORY_CODE } from '@vibe-agent-toolkit/utils';
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
 import { buildArmEnv } from '../../harness/arm-env.js';
@@ -54,16 +54,13 @@ const DUMP_DIR_PREFIX = 'vat-lab-memory-';
 
 /**
  * What a run out of heap leaves on stderr: V8's abort (`FATAL ERROR: … JavaScript heap out of
- * memory`), the error code Node gives a worker thread that reached its heap limit, or that error's
- * own message — what a process that CAUGHT the worker's death prints (vat's parse pool turns it into
- * a `BLOB_PARSE_FAILED` finding and exits 0, or 1). Stderr is all the lab has of a child, so the
- * signature is read there.
+ * memory`), or the code Node gives a worker thread that reached its heap limit. Node prints that
+ * code with an uncaught worker error, and vat — whose parse pool CATCHES the death, records the
+ * document as `BLOB_PARSE_FAILED` and exits 0 (or 1) — names it in its population warning
+ * (`1 parse failed [ERR_WORKER_OUT_OF_MEMORY]`): one constant, shared with that printer's tests.
+ * Stderr is all the lab has of a child, so the signature is read there.
  */
-const HEAP_EXHAUSTED: readonly string[] = [
-  'JavaScript heap out of memory',
-  'ERR_WORKER_OUT_OF_MEMORY',
-  'Worker terminated due to reaching memory limit',
-];
+const HEAP_EXHAUSTED: readonly string[] = ['JavaScript heap out of memory', WORKER_OUT_OF_MEMORY_CODE];
 
 /**
  * Did this run run out of heap — whatever it exited with? A worker's death can be caught and the

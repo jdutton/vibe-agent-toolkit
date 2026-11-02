@@ -27,6 +27,7 @@
 // block dispatches on, never `message`.
 export * from './errors/vat-error.js';
 export { RAG_DATABASE_UNREADABLE_CODE, RAG_INDEX_EMPTY_CODE } from './errors/rag-index-empty.js';
+export { WORKER_OUT_OF_MEMORY_CODE } from './errors/worker-heap.js';
 // The code and the one-entry predicate alone: the archive readers are on `./archive` (they load
 // `tar` and `adm-zip`), and a refusal map, or a lane that skips one member, needs only these.
 export { ARCHIVE_ENTRY_UNREADABLE_CODE, ARCHIVE_REFUSED_CODE, isArchiveEntryReadRefusal, placeOf as archiveEntryPlace } from './archive/entries.js';

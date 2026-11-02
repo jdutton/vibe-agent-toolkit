@@ -135,6 +135,31 @@ function isShadowedAt(sourceCode, node, name) {
 }
 
 /**
+ * May the call at `node` be rewritten to call `name` — the ONE answer every fixer in this pack
+ * asks before it writes a call to a safe replacement (`normalizedTmpdir(…)`, `safePath.join(…)`,
+ * `toForwardSlash(…)`)?
+ *
+ * No when the rewritten call would reach anything but the safe function:
+ *
+ * - the top-level `name` is FOREIGN (`safeBindingOf`): another module's import, a type-only
+ *   import, a local declaration — the call would reach it, or no value at all;
+ * - an inner scope SHADOWS `name` at `node`: a parameter or local of that name catches the
+ *   rewritten call before the top-level import does.
+ *
+ * Each rule asking a weaker form of this question — top-level only, or name only — rewired a call
+ * onto a parameter. One predicate, so no fixer can answer it more weakly than another.
+ *
+ * @param {object} sourceCode - ESLint `SourceCode` for the file being linted.
+ * @param {object} node - The call site the fix rewrites.
+ * @param {string} name - The identifier the rewritten call names.
+ * @param {string} targetModule - The module the fixer imports `name` from.
+ * @returns {boolean} True when the rewritten call reaches the safe function, or will once imported.
+ */
+function mayRewriteCallTo(sourceCode, node, name, targetModule) {
+  return safeBindingOf(sourceCode, name, targetModule) !== 'foreign' && !isShadowedAt(sourceCode, node, name);
+}
+
+/**
  * Can `name` be added to this existing import of the safe module? Only a VALUE
  * import with named specifiers takes one: appended to a type-only import the value
  * is type-only, to a namespace import the result does not parse, and a side-effect
@@ -253,7 +278,7 @@ module.exports = {
   SAFE_PATH_MODULE,
   SAFE_PROCESS_MODULE,
   insertAboveWithComments,
-  isShadowedAt,
+  mayRewriteCallTo,
   resolveSafeModule,
   safeBindingOf,
   takesNamedSpecifier,

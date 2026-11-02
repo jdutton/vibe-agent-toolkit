@@ -448,7 +448,7 @@ export async function claudeContextCommand(
     process.exit(ExitCode.OK);
   } catch (error) {
     // Coded at the cause, read here — never relabelled by where it was thrown.
-    const report = refusalReport(refusalCodeOf(error), error, CLAUDE_CONTEXT_GATE, NOTHING_FINISHED, true);
+    const report = refusalReport(refusalCodeOf(error), error, CLAUDE_CONTEXT_GATE, NOTHING_FINISHED);
     writeLegacyDocument('claude context', report, format, undefined);
     process.exit(exitCodeForReport(report));
   }

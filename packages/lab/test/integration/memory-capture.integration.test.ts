@@ -15,7 +15,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { BLOB_PARSE_FAILED, describeBlobRefusals, parseFailedMessage } from '@vibe-agent-toolkit/resources';
+import { normalizedTmpdir, safePath, toForwardSlash, WORKER_OUT_OF_MEMORY_CODE } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { ReportEnvelope } from '../../src/envelope/envelope.js';
@@ -40,6 +41,22 @@ const ALLOC_ENV = 'LAB_MEMORY_ALLOC_MIB';
 const MIB_KB = 1024;
 
 const scratch: string[] = [];
+
+/**
+ * What vat prints when its parse pool caught a worker's heap death — built by vat's own formatter
+ * from the row vat's own writer records, never a hand-written string, so a printer that stops
+ * naming the code reddens the caught-worker case below.
+ */
+function vatWorkerHeapWarning(): string {
+  const died = Object.assign(new Error('Worker terminated due to reaching memory limit'), { code: WORKER_OUT_OF_MEMORY_CODE });
+  const line = describeBlobRefusals({
+    blobs: [],
+    resourceRealizations: [],
+    blobConditions: [{ blob: 'markdown.0', code: BLOB_PARSE_FAILED, severity: 'warning', message: parseFailedMessage('markdown', died), line: null }],
+  });
+  if (line === undefined) throw new Error('describeBlobRefusals reported nothing for a failed parse');
+  return `resources population: ${line}`;
+}
 
 /** A preload that allocates and fills `LAB_MEMORY_ALLOC_MIB` MiB and keeps it. */
 let allocPath: string;
@@ -79,7 +96,9 @@ beforeAll(() => {
   caughtWorkerExhaustPath = safePath.join(dir, 'caught-worker-exhaust.cjs');
   writeFileSync(
     caughtWorkerExhaustPath,
-    "const wt = require('node:worker_threads');\nif (wt.isMainThread && process.argv.length > 1 && !process.argv.includes('--version')) { new wt.Worker('const kept = []; for (;;) kept.push(new Array(1e5).fill(1));', { eval: true, resourceLimits: { maxOldGenerationSizeMb: 8 } }).on('error', (error) => { process.stderr.write('error: ' + error.message + ' [BLOB_PARSE_FAILED]\\n'); }); process.exit = () => undefined; }\n",
+    "const wt = require('node:worker_threads');\nif (wt.isMainThread && process.argv.length > 1 && !process.argv.includes('--version')) { new wt.Worker('const kept = []; for (;;) kept.push(new Array(1e5).fill(1));', { eval: true, resourceLimits: { maxOldGenerationSizeMb: 8 } }).on('error', () => { process.stderr.write("
+      + JSON.stringify(`${vatWorkerHeapWarning()}\n`)
+      + '); }); process.exit = () => undefined; }\n',
   );
   workerExhaustPath = safePath.join(dir, 'worker-exhaust.cjs');
   writeFileSync(

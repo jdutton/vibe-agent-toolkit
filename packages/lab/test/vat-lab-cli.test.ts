@@ -35,9 +35,11 @@ import {
   collectPrerequisite,
   collectUnset,
   createProgram,
+  FAILURE_IS_THE_REASON,
   fastestRepeat,
   nonNegativeNumber,
   parseCacheMode,
+  rowEstimates,
   splitRowNames,
 } from '../src/bin/vat-lab.js';
 import type { ReportEnvelope } from '../src/envelope/envelope.js';
@@ -328,6 +330,24 @@ describe('fastestRepeat — the reduction `parse` and `crawl` hand to ab', () =>
 
   it('falls back to the row total only when no repeat published a sample', () => {
     expect(fastestRepeat({ totalMs: 42, totalMsSamples: [] })).toBe(42);
+  });
+});
+
+describe('rowEstimates — what a capture hands ab', () => {
+  const row = (name: string, failure: string | null): { name: string; failed: boolean; failure: string | null; value: number } =>
+    ({ name, failed: failure !== null, failure, value: 7 });
+
+  it('keeps a failed row as LOST, naming its failure — never drops it so the arm silently has fewer pairs', () => {
+    expect(rowEstimates([row('ok', null), row('bad', 'no RSS dumps')], 'ms', (r) => r.value, FAILURE_IS_THE_REASON)).toEqual([
+      { name: 'ok', value: 7, unit: 'ms', lost: null },
+      { name: 'bad', value: 0, unit: 'ms', lost: 'no RSS dumps' },
+    ]);
+  });
+
+  it("lets a facet name a failed row's reason its own way", () => {
+    expect(rowEstimates([row('oom', 'exit 134')], 'KiB', (r) => r.value, () => 'ran out of heap')).toEqual([
+      { name: 'oom', value: 0, unit: 'KiB', lost: 'ran out of heap' },
+    ]);
   });
 });
 

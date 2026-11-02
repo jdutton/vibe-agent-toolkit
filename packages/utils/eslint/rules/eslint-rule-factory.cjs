@@ -66,7 +66,7 @@ const {
   acceptsImport,
   EXEMPT_AND_SAFE_MODULE_SCHEMA,
   insertAboveWithComments,
-  isShadowedAt,
+  mayRewriteCallTo,
   resolveSafeModule,
   safeBindingOf,
   takesNamedSpecifier,
@@ -326,11 +326,11 @@ module.exports = function createNoUnsafeRule(config) {
         // that would compile — and appends to a one-argument call only: further
         // arguments belong to the unsafe function and mean nothing to the safe one.
         const report = { node, messageId: 'noUnsafeOperation', data: { safeModule: targetModule } };
-        // An inner binding named `safeFn`, or a top-level one that is not the safe function,
-        // would catch the rewritten call: no rewrite at all. Nor for a constructed first
+        // No rewrite at all where `mayRewriteCallTo` says the rewritten call would reach a
+        // binding other than the safe function. Nor for a constructed first
         // argument (`new URL(…)`): every safe replacement takes a string path, so the
         // rewrite would not compile.
-        if (safeBinding === 'foreign' || isShadowedAt(sourceCode, node, safeFn) || node.arguments[0]?.type === 'NewExpression') {
+        if (!mayRewriteCallTo(sourceCode, node, safeFn, targetModule) || node.arguments[0]?.type === 'NewExpression') {
           context.report({ ...report, suggest: [] });
         } else if (!native && autofixes(node)) {
           context.report({ ...report, fix: (fixer) => rewriteCall(fixer) });

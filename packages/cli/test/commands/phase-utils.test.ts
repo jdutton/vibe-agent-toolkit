@@ -65,7 +65,7 @@ function done(name: string, examined: number, findings: Finding[] = [], data: un
 function refused(name: string): PhaseResult {
   const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
   try {
-    return { name, report: refusalReport('CONFIG_INVALID', new Error(`${name} config is broken`), ORCHESTRATOR_GATE, NOTHING_FINISHED, true) };
+    return { name, report: refusalReport('CONFIG_INVALID', new Error(`${name} config is broken`), ORCHESTRATOR_GATE, NOTHING_FINISHED) };
   } finally {
     stderr.mockRestore();
   }

@@ -898,33 +898,41 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
 /**
  * Turn a facet's command rows into the estimates `ab` aggregates.
  *
- * Shared by all three wirings because the *rule* is shared and is the part worth
- * getting right: a failed row publishes no estimate at all. Letting one through
- * would feed `ab` the zero a failed row carries, and a zero is the best number
- * this tool can print — one failure would read as the fastest arm ever measured.
- * Three hand-written copies would be three chances to forget that filter.
+ * Shared by every wiring because the *rule* is shared and is the part worth
+ * getting right: a failed row has no usable measurement, so it is LOST — kept,
+ * valueless, with its reason — never a value and never dropped. A value would feed
+ * `ab` the zero a failed row carries, the best number this tool can print; a
+ * dropped row would leave the arm a statistic of the pairs that happened to
+ * succeed, which understates the regression that failed the others.
  *
- * @param rows - The facet's command rows, which all share `name` and `failed`
+ * @param rows - The facet's command rows, which all share `name`, `failed` and `failure`
  * @param unit - What the extracted value is, for rendering only
  * @param valueOf - Which of the row's numbers to publish
- * @returns One estimate per row that produced a usable measurement
+ * @param lostReasonOf - How a failed row's loss is named ({@link FAILURE_IS_THE_REASON} unless the facet has a better name)
+ * @returns One estimate per row: a value, or the reason there is none
  */
-function rowEstimates<TRow extends { readonly name: string; readonly failed: boolean }>(
+export function rowEstimates<TRow extends FailableRow>(
   rows: readonly TRow[],
   unit: string,
   valueOf: (row: TRow) => number,
-  lostOf: (row: TRow) => string | null,
+  lostReasonOf: (row: TRow) => string,
 ): readonly FacetEstimate[] {
-  return rows.flatMap((row): FacetEstimate[] => {
-    const lost = lostOf(row);
-    // A LOST row is kept, valueless: `ab` reports the arm lost it rather than a statistic of the rest.
-    if (lost !== null) return [{ name: row.name, value: 0, unit, lost }];
-    return row.failed ? [] : [{ name: row.name, value: valueOf(row), unit, lost: null }];
-  });
+  return rows.map((row): FacetEstimate =>
+    row.failed
+      ? { name: row.name, value: 0, unit, lost: lostReasonOf(row) }
+      : { name: row.name, value: valueOf(row), unit, lost: null },
+  );
 }
 
-/** For a facet none of whose rows is ever lost — only `memory`'s out-of-heap row is. */
-const NEVER_LOST = (): null => null;
+/** What every facet's command row carries for {@link rowEstimates}. */
+interface FailableRow {
+  readonly name: string;
+  readonly failed: boolean;
+  readonly failure: string | null;
+}
+
+/** A failed row's loss, named by its own `failure`. */
+export const FAILURE_IS_THE_REASON = (row: FailableRow): string => row.failure ?? 'failed, with no reason recorded';
 
 /**
  * The fastest repeat a row measured — the reduction `FacetEstimate` requires.
@@ -1691,7 +1699,7 @@ export function createProgram(): Command {
         // and it is the right number to hand `ab` for the same reason `ab` then
         // takes a minimum of it — see `harness/estimator.ts`.
         estimator: 'min',
-        estimate: (report) => rowEstimates(report.body.commands, 'ms', (row) => row.minMs, NEVER_LOST),
+        estimate: (report) => rowEstimates(report.body.commands, 'ms', (row) => row.minMs, FAILURE_IS_THE_REASON),
       })
         .addCommand(createPerfArmsCommand())
         .addCommand(createPerfBarsCommand()),
@@ -1716,7 +1724,7 @@ export function createProgram(): Command {
         // p25 differ is an arm whose counts were NOT deterministic, and the A/B
         // shows it without needing its own stability rule.
         estimator: 'min',
-        estimate: (report) => rowEstimates(report.body.commands, 'calls', (row) => row.userCalls, NEVER_LOST),
+        estimate: (report) => rowEstimates(report.body.commands, 'calls', (row) => row.userCalls, FAILURE_IS_THE_REASON),
       }),
     )
     .addCommand(
@@ -1758,7 +1766,7 @@ export function createProgram(): Command {
         // the compare output, where the passes are qualified by kind.
         estimator: 'min',
         estimate: (report) =>
-          rowEstimates(report.body.commands, 'ms parse (all kinds)', fastestRepeat, NEVER_LOST),
+          rowEstimates(report.body.commands, 'ms parse (all kinds)', fastestRepeat, FAILURE_IS_THE_REASON),
       }),
     )
     .addCommand(
@@ -1784,7 +1792,7 @@ export function createProgram(): Command {
         // rule twice is how they drifted apart the first time.
         estimator: 'min',
         estimate: (report) =>
-          rowEstimates(report.body.commands, 'ms crawl (all strata)', fastestRepeat, NEVER_LOST),
+          rowEstimates(report.body.commands, 'ms crawl (all strata)', fastestRepeat, FAILURE_IS_THE_REASON),
       }),
     )
     .addCommand(
@@ -1814,7 +1822,7 @@ export function createProgram(): Command {
         // populations of equal size and different membership read as unchanged
         // through `ab` and as CHANGED through `compare`. Use `compare`.
         estimator: 'min',
-        estimate: (report) => rowEstimates(report.body.commands, 'files', (row) => row.count, NEVER_LOST),
+        estimate: (report) => rowEstimates(report.body.commands, 'files', (row) => row.count, FAILURE_IS_THE_REASON),
       }),
     )
     .addCommand(
@@ -1834,7 +1842,7 @@ export function createProgram(): Command {
         // A peak moves both ways with when a collection lands, so the median repeat, and its median
         // across captures: a min would pick the luckiest collection (see `EstimatorKind`).
         estimator: 'median',
-        estimate: (report) => rowEstimates(report.body.commands, 'KiB peak RSS', (row) => row.medianKb, (row) => (row.outOfHeap ? 'ran out of heap' : null)),
+        estimate: (report) => rowEstimates(report.body.commands, 'KiB peak RSS', (row) => row.medianKb, (row) => (row.outOfHeap ? 'ran out of heap' : FAILURE_IS_THE_REASON(row))),
       }),
     )
     .addCommand(createVerdictCommand());

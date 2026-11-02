@@ -117,6 +117,8 @@ interface FixtureOptions {
   readonly estimator?: EstimatorKind;
   /** Why arm B's capture is lost (a run out of heap), per pair; absent means none is. */
   readonly bLost?: readonly (string | null)[];
+  /** Per pair, whether arm B's capture published no row for the command at all; absent means it always did. */
+  readonly bAbsent?: readonly boolean[];
 }
 
 /** A run's outcome plus the capture order it produced. */
@@ -169,10 +171,11 @@ async function runFixture(options: FixtureOptions, label: string): Promise<Fixtu
     const values = armIndex === 0 ? options.aValues : options.bValues;
     const value = values[Math.floor(order.length / 2)] ?? 0;
     const lost = armIndex === 1 ? (options.bLost?.[Math.floor(order.length / 2)] ?? null) : null;
+    const absent = armIndex === 1 && options.bAbsent?.[Math.floor(order.length / 2)] === true;
     order.push(name);
     return Promise.resolve(
       buildReportEnvelope('fake', request, {
-        commands: [{ name: COMMAND, failed: lost !== null, value, lost }],
+        commands: absent ? [] : [{ name: COMMAND, failed: lost !== null, value, lost }],
       }, []),
     );
   };
@@ -389,6 +392,43 @@ describe('runAb — an arm whose run was lost', () => {
     const text = renderAb(result);
     expect(text).toContain('B: ran out of heap in 1 of 3 pairs');
     expect(text).toContain('effect: NONE — arm B ran out of heap in 1 of 3 pairs');
+  });
+
+  it('calls a pair whose arm published no estimate at all LOST, naming why, and reports no effect', async () => {
+    const { result } = await runFixture(
+      {
+        pairs: 3,
+        aValues: [100, 100, 100],
+        bValues: [200, 0, 210],
+        bAbsent: [false, true, false],
+        script: ['changed', 'changed', 'changed'],
+      },
+      'absent',
+    );
+
+    const row = only(result);
+    expect(row.lost).toEqual({ a: null, b: 'published no estimate in 1 of 3 pairs' });
+    expect(row.effect).toBeNull();
+    expect(renderAb(result)).toContain('effect: NONE — arm B published no estimate in 1 of 3 pairs');
+  });
+});
+
+describe('runAb — no pair comparable', () => {
+  it('prints no effect when every pair was refused, though both arms published numbers', async () => {
+    const { result } = await runFixture(
+      {
+        pairs: 2,
+        aValues: [10, 10],
+        bValues: [50, 50],
+        script: [{ refusal: 'REFUSED: two axes moved' }, { refusal: 'REFUSED: two axes moved' }],
+      },
+      'none-comparable',
+    );
+
+    expect(only(result).effect).toBeNull();
+    const text = renderAb(result);
+    expect(text).toContain('effect: NONE — no pair was comparable');
+    expect(text).not.toContain('effect (B - A)');
   });
 });
 

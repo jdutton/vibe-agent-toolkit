@@ -53,7 +53,7 @@ describe('refusalReport — a leftover beside the failure', () => {
     expect(suppressedFaultsOf(error)).toHaveLength(1);
 
     const code = refusalCodeOf(error);
-    const report = refusalReport(code, error, { strict: false }, NOTHING_FINISHED, true);
+    const report = refusalReport(code, error, { strict: false }, NOTHING_FINISHED);
 
     expect(code).toBe('USAGE_INVALID');
     expect(report).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID', message: 'no manifest at ./agent' } });
@@ -69,7 +69,7 @@ describe('refusalReport — a leftover beside the failure', () => {
     const { error, dir } = await failWithLeftover(new Error('registry write failed'));
     const wrapped = new VatError(TREE_ROLLBACK_INCOMPLETE_CODE, 'registry write failed; and the change could not be undone', { cause: error });
 
-    const report = refusalReport(refusalCodeOf(wrapped), wrapped, { strict: false }, NOTHING_FINISHED, true);
+    const report = refusalReport(refusalCodeOf(wrapped), wrapped, { strict: false }, NOTHING_FINISHED);
 
     expect(report).toMatchObject({ error: { code: 'RUN_INCOMPLETE' } });
     expect(report.findings).toEqual([expect.objectContaining({ code: 'TREE_CLEANUP_INCOMPLETE', link: dir })]);
@@ -78,30 +78,24 @@ describe('refusalReport — a leftover beside the failure', () => {
 
   it('publishes no extra finding for a failure with nothing left behind', () => {
     vi.spyOn(process.stderr, 'write').mockReturnValue(true);
-    const report = refusalReport('USAGE_INVALID', new VatError('AGENT_MANIFEST_NOT_FOUND', 'x'), { strict: false }, NOTHING_FINISHED, true);
+    const report = refusalReport('USAGE_INVALID', new VatError('AGENT_MANIFEST_NOT_FOUND', 'x'), { strict: false }, NOTHING_FINISHED);
     expect(report.findings).toEqual([]);
   });
 });
 
 /** A refusal with one leftover recorded beside it; what stderr received. */
-function refuseWithLeftover(findingsOnStderr: boolean): string {
+function refuseWithLeftover(): string {
   const written: string[] = [];
   vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => { written.push(String(chunk)); return true; });
   const error = new VatError('AGENT_MANIFEST_NOT_FOUND', 'no manifest');
   recordSuppressedFault(error, new Error('could not remove the staged tree'));
-  refusalReport('USAGE_INVALID', error, { strict: false }, NOTHING_FINISHED, findingsOnStderr);
+  refusalReport('USAGE_INVALID', error, { strict: false }, NOTHING_FINISHED);
   return written.join('');
 }
 
 describe('refusalReport — where the leftover is said', () => {
-  it('prints it on stderr as the shared reporter does, with its fix', () => {
-    expect(refuseWithLeftover(true)).toMatch(
-      /^ {2}warning: could not remove the staged tree \[TREE_CLEANUP_INCOMPLETE\]\n {4}Fix: Remove what the message names/m,
-    );
-  });
-
-  it('does not print it when stdout already lists the findings (--format text)', () => {
-    expect(refuseWithLeftover(false)).not.toContain('TREE_CLEANUP_INCOMPLETE');
+  it('says only its message: the leftover is said by the writer that publishes the document', () => {
+    expect(refuseWithLeftover()).toBe('no manifest\n');
   });
 
   it('decides stdout lists them only for the generic text rendering', () => {

@@ -730,7 +730,7 @@ export async function runSkillsValidatePhase(
     if (report.examined === 0) logger.error(nothingDiscoveredLine(config?.skills));
     return { report };
   } catch (error) {
-    return { report: refusalReport(refusalCodeOf(error), error, GATE, NOTHING_FINISHED, true) };
+    return { report: refusalReport(refusalCodeOf(error), error, GATE, NOTHING_FINISHED) };
   }
 }
 

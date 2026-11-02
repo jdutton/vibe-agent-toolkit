@@ -75,6 +75,7 @@ describe('buildReportEnvelope — host', () => {
       nodeOptions: '--max-old-space-size=64',
       heapSizeLimit: expect.any(Number),
       totalMem: expect.any(Number),
+      availableParallelism: expect.any(Number),
     });
   });
 });

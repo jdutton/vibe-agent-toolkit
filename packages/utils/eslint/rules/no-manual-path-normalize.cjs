@@ -39,6 +39,7 @@ const {
   SAFE_MODULE_ONLY_SCHEMA,
   SAFE_PATH_MODULE,
   insertAboveWithComments,
+  mayRewriteCallTo,
   resolveSafeModule,
   safeBindingOf,
   takesNamedSpecifier,
@@ -133,15 +134,10 @@ module.exports = {
     const targetModule = resolveSafeModule(context, SAFE_PATH_MODULE);
     // Seeded from SCOPE: a file that already binds the safe function must have the
     // call rewritten WITHOUT gaining a second binding of the same name — that is a
-    // SyntaxError — and a file whose top-level name is something ELSE (another
-    // module's, a type-only import) takes no rewrite at all. See `safeBindingOf`.
-    const binding = {
-      [NATIVE_FN]: safeBindingOf(sourceCode, NATIVE_FN, targetModule),
-      [ANY_PLATFORM_FN]: safeBindingOf(sourceCode, ANY_PLATFORM_FN, targetModule),
-    };
+    // SyntaxError. Whether a call may be rewritten at all is `mayRewriteCallTo`'s.
     const bound = {
-      [NATIVE_FN]: binding[NATIVE_FN] === 'safe',
-      [ANY_PLATFORM_FN]: binding[ANY_PLATFORM_FN] === 'safe',
+      [NATIVE_FN]: safeBindingOf(sourceCode, NATIVE_FN, targetModule) === 'safe',
+      [ANY_PLATFORM_FN]: safeBindingOf(sourceCode, ANY_PLATFORM_FN, targetModule) === 'safe',
     };
     // Never mutated — the dead-import leg must not be armed by a flag that a
     // suppressed report's `fix()` can spend. See `dead-import.cjs`.
@@ -201,12 +197,17 @@ module.exports = {
         }
         const match = matchSplitJoin(node) ?? matchReplace(node);
         if (!match) return;
+        const report = { node, messageId: MESSAGE_FOR[match.fn], data: { safeModule: targetModule } };
+        // No fix where the converter call would reach another binding (`mayRewriteCallTo`), nor
+        // for an optional chain (`a?.replaceAll(…)`): `converter(a)` drops the `?.`, so it
+        // converts or throws where the original yielded `undefined`.
+        if (node.parent?.type === 'ChainExpression' || !mayRewriteCallTo(sourceCode, node, match.fn, targetModule)) {
+          context.report(report);
+          return;
+        }
         context.report({
-          node,
-          messageId: MESSAGE_FOR[match.fn],
-          data: { safeModule: targetModule },
+          ...report,
           fix(fixer) {
-            if (binding[match.fn] === 'foreign') return null;
             if (!bound[match.fn] && !acceptsImport(sourceCode)) return null;
             const receiver = sourceCode.getText(match.receiver);
             return [fixer.replaceText(node, `${match.fn}(${receiver})`), ...importFix(fixer, match.fn)];

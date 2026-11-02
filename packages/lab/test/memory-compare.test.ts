@@ -150,9 +150,11 @@ describe('compareMemory', () => {
     // HOST is this machine, so the "other" value must differ from whatever runs the suite.
     ['platform', { ...HOST, platform: HOST.platform === 'win32' ? 'linux' : 'win32' }],
     ['architecture', { ...HOST, arch: HOST.arch === 'ia32' ? 'x64' : 'ia32' }],
-    ['Node version', { ...HOST, node: 'v20.0.0' }],
-    ['NODE_OPTIONS', { ...HOST, nodeOptions: '--max-old-space-size=8192' }],
+    ['Node version', { ...HOST, node: HOST.node === 'v20.0.0' ? 'v22.0.0' : 'v20.0.0' }],
+    ['NODE_OPTIONS', { ...HOST, nodeOptions: HOST.nodeOptions === '' ? '--max-old-space-size=8192' : '' }],
     ['V8 heap limit', { ...HOST, heapSizeLimit: HOST.heapSizeLimit * 2 }],
+    // The parse pool's size is derived from it, and each thread holds its own heap.
+    ['available parallelism', { ...HOST, availableParallelism: HOST.availableParallelism + 1 }],
   ])('refuses two reports measured on a different %s, naming both', (what, host) => {
     const result = compareMemory(reportWith(row(GIB_KB)), reportWith(row(GIB_KB), makeReport({ host })));
 

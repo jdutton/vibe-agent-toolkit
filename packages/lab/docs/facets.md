@@ -53,19 +53,24 @@ change in that count is a CHANGED verdict on its own, across instrument kinds to
 `dist/bin.js` straight, so one count means one thing. A peak is the platform's allocator and the
 Node build's V8 as much as vat's, so two reports whose envelopes record a different `host`
 (`process.platform`, `process.arch`, `process.version`, the `NODE_OPTIONS` the arm hands its
-children, and the V8 heap limit a child of the arm gets — a `--max-old-space-size`, or a different
-machine's memory, moves a peak) are refused, naming both. The host's total memory is recorded too.
+children, the V8 heap limit a child of the arm gets — a `--max-old-space-size`, or a different
+machine's memory, moves a peak — and `os.availableParallelism()`, from which vat sizes its parse
+pool, each thread with its own heap) are refused, naming both. The host's total memory is recorded too.
 
 A repeat that leaves no vat peak — killed, out of heap, or no process with a vat main script —
 fails the row; it is never read as a small number. A row any of whose runs ran out of heap (its stderr
-names `JavaScript heap out of memory`, `ERR_WORKER_OUT_OF_MEMORY` or `Worker terminated due to
-reaching memory limit`, a warm arm's unmeasured priming run included) is failed and marked
-`outOfHeap` WHATEVER the run exited with: vat catches a parse worker's heap death, reports the
-document as `BLOB_PARSE_FAILED` and exits 0 (or 1), and the peak of that run is of less work, not a
-measurement. Stderr is the only thing read, so a death the process swallowed without printing is
+names `JavaScript heap out of memory` or `ERR_WORKER_OUT_OF_MEMORY`, a warm arm's unmeasured priming
+run included) is failed and marked `outOfHeap` WHATEVER the run exited with: vat catches a parse
+worker's heap death, records the document as `BLOB_PARSE_FAILED`, names the code in its population
+warning (`1 parse failed [ERR_WORKER_OUT_OF_MEMORY]`) and exits 0 (or 1), and the peak of that run
+is of less work, not a measurement. The code is one constant, `WORKER_OUT_OF_MEMORY_CODE` in
+`@vibe-agent-toolkit/utils`, read here and used by the tests of vat's printer. Stderr is the only thing read, so a death the process swallowed without printing is
 invisible. Against a measured other
-side it compares CHANGED with no ratio — the worst regression never reads as no delta. So does a row whose repeats disagree on how many
-vat processes reported. CHANGED needs the median delta to clear three bars at once: 10% of the
+side it compares CHANGED with no ratio — the worst regression never reads as no delta. A row whose
+repeats disagree on how many vat processes reported (`1/2/1`) is different: it is failed, naming the
+counts, and compares UNMEASURABLE, not CHANGED — a repeat that lost a process's peak is a defect of
+the capture, not evidence the command moved, and its largest-process peaks are not samples of one
+thing. (A count that differs BETWEEN two rows, each agreeing with itself, is CHANGED, above.) CHANGED needs the median delta to clear three bars at once: 10% of the
 smaller median (`perf`'s relative gate), 8 MiB, and the two arms' combined min–max spread.
 
 **The memory threshold.** The 8 MiB floor is four times the largest median move an A-vs-A null run

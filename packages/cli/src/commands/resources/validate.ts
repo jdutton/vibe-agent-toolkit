@@ -466,7 +466,7 @@ export async function runResourcesValidatePhase(
     reportOnStderr(report.findings, options);
     return { report };
   } catch (error) {
-    return { report: refusalReport(refusalCodeOf(error), error, GATE, NOTHING_FINISHED, saysOnStderr(options)) };
+    return { report: refusalReport(refusalCodeOf(error), error, GATE, NOTHING_FINISHED) };
   }
 }
 

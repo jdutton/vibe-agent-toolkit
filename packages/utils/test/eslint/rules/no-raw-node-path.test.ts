@@ -17,7 +17,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { safeModuleCases, unanchoredExemptCases } from '../factory-cases.js';
+import { rewriteTargetCases, safeModuleCases, unanchoredExemptCases } from '../factory-cases.js';
 import {
   BARREL,
   LINTED_FILE,
@@ -53,6 +53,9 @@ function pathFunctionRuleCases(fn: WrappedPathFunction): RuleCases {
     valid: [
       // The safe call is never flagged.
       { code: `${SAFE_IMPORT} const p = safePath.${fn}(a, b);`, filename: LINTED_FILE, options },
+      // `import x = require()` is not an `ImportDeclaration` and the rule tracks only those: the
+      // binding resolves through scope to a definition with no `source`, and must not crash the run.
+      { code: `import path = require('node:path'); const p = path.${fn}(a, b);`, filename: LINTED_FILE, options },
       // …including when it was reached through the barrel.
       {
         code: `import { safePath } from '${BARREL}'; const p = safePath.${fn}(a, b);`,
@@ -123,6 +126,18 @@ function pathFunctionRuleCases(fn: WrappedPathFunction): RuleCases {
           `export type T = typeof ${fn};`,
           `export const p = ${fn}(a, b);`,
         ].join('\n'),
+        filename: LINTED_FILE,
+        options,
+      },
+      // A parameter named like the import SHADOWS it: the callee resolves through scope to the
+      // parameter, not to `node:path`, so it is not this rule's call at all.
+      {
+        code: `${PATH_NAMESPACE_IMPORT}\nexport function f(path: { ${fn}(a: string): string }) { return path.${fn}('a'); }`,
+        filename: LINTED_FILE,
+        options,
+      },
+      {
+        code: `${namedImport(fn, NODE_PATH)}\nexport function f(${fn}: (a: string) => string) { return ${fn}('a'); }`,
         filename: LINTED_FILE,
         options,
       },
@@ -313,6 +328,21 @@ function pathFunctionRuleCases(fn: WrappedPathFunction): RuleCases {
         output: null,
         errors,
       })),
+      // The ONE "may this call be rewritten to `safePath`?" table every fixer in the pack shares:
+      // through a namespace binding and through a named import.
+      ...rewriteTargetCases({
+        preamble: PATH_NAMESPACE_IMPORT, unsafeCall: `path.${fn}(a, b)`, safeName: 'safePath', safeModule: SAFE_PATH_MODULE, options, errors,
+      }),
+      ...rewriteTargetCases({
+        preamble: namedImport(fn, NODE_PATH), unsafeCall: `${fn}(a, b)`, safeName: 'safePath', safeModule: SAFE_PATH_MODULE, options, errors,
+      }),
+      // A parameter named `safePath` handed to the call: rewritten, the call would read it.
+      {
+        code: `${PATH_NAMESPACE_IMPORT}\nexport function f(safePath: any) { return path.${fn}('a', safePath); }`,
+        filename: LINTED_FILE,
+        options,
+        errors,
+      },
       // A hashbang stays the first line: the import lands below it.
       {
         code: `#!/usr/bin/env node\nconst p = safePath.${fn}(a, b);`,

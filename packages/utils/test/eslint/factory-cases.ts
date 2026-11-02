@@ -365,25 +365,18 @@ function importShapeCases(
     const fixed = `${existing}\n${unsafeImport}\n${safeImport}\nconst r = ${safeFn}(x${extra});`;
     return { code: `${existing}\n${unsafeImport}\nconst r = ${unsafeFn}(x);`, filename: LINTED_FILE, options, ...rewritten(fixed, fixed) };
   };
-  const shadowed = (code: string) => ({
-    code,
-    filename: LINTED_FILE,
-    options,
-    errors: [{ messageId: 'noUnsafeOperation', suggestions: [] }],
-  });
   return [
     ownDeclaration(`import type { Opaque } from '${safeModule}';`),
     ownDeclaration(`import * as u from '${safeModule}';`),
     ownDeclaration(`import '${safeModule}';`),
-    shadowed(`${unsafeImport}\nexport function f(${safeFn}: number) { return ${unsafeFn}(x); }`),
-    shadowed(`import { ${safeFn} } from '${BARREL}';\n${unsafeImport}\nexport function f() { const ${safeFn} = 1; return [${unsafeFn}(x), ${safeFn}]; }`),
-    // The NAME bound is not the safe FUNCTION bound. A same-named import from another module
-    // would catch the rewritten call (a different function), and a type-only import of it backs
-    // no value: either way no rewrite, and no import added beside a binding that would collide.
-    shadowed(`import { ${safeFn} } from './local-other';\n${unsafeImport}\nexport const r = ${unsafeFn}(x);`),
-    shadowed(`import type { ${safeFn} } from '${safeModule}';\n${unsafeImport}\nexport const r = ${unsafeFn}(x);`),
-    shadowed(`import { type ${safeFn} } from '${safeModule}';\n${unsafeImport}\nexport const r = ${unsafeFn}(x);`),
-    shadowed(`const ${safeFn} = (p: string) => p;\n${unsafeImport}\nexport const r = ${unsafeFn}(x);`),
+    ...rewriteTargetCases({
+      preamble: unsafeImport,
+      unsafeCall: `${unsafeFn}(x)`,
+      safeName: safeFn,
+      safeModule,
+      options,
+      errors: [{ messageId: 'noUnsafeOperation', suggestions: [] }],
+    }),
     // A file opening with a hashbang: the import lands BELOW it, never above — a hashbang that is
     // not the first line does not parse.
     (() => {
@@ -395,5 +388,49 @@ function importShapeCases(
         ...rewritten(fixed, fixed),
       };
     })(),
+  ];
+}
+
+/** What {@link rewriteTargetCases} needs to build one rule's "may this call be rewritten?" table. */
+export interface RewriteTargetSpec {
+  /** The import lines the unsafe call needs; empty for none. */
+  preamble: string;
+  /** The unsafe call, as an expression with no trailing `;`. It may read `x`, `a` and `b`. */
+  unsafeCall: string;
+  /** The identifier the rule's fix writes: `safePath`, `normalizedTmpdir`, `toForwardSlash`. */
+  safeName: string;
+  /** The module the fix would import `safeName` from. */
+  safeModule: string;
+  options?: object[];
+  /** The report each case still carries, with no fix and no suggestion. */
+  errors: object[];
+}
+
+/**
+ * ONE table for every fixer in the pack that rewrites a call to `safeName`. Each case is a call
+ * the rule still REPORTS and must not rewrite, because the rewritten call would reach a binding
+ * other than the safe function:
+ *
+ * - an inner binding shadowing `safeName` at the call site: a parameter, or a local beside a
+ *   top-level import of the safe function;
+ * - a top-level `safeName` that is not the safe function: another module's import, a type-only
+ *   import (either spelling), a local declaration.
+ *
+ * Shared, so a rule with its own fixer cannot answer the question more weakly than the factory:
+ * `mayRewriteCallTo` in `safe-import.cjs` is the one answer.
+ */
+export function rewriteTargetCases(
+  { preamble, unsafeCall, safeName, safeModule, options = [], errors }: RewriteTargetSpec,
+): object[] {
+  const lead = preamble === '' ? '' : `${preamble}\n`;
+  const params = 'x: string, a: string, b: string';
+  const reported = (code: string) => ({ code, filename: LINTED_FILE, options, errors });
+  return [
+    reported(`${lead}export function f(${safeName}: number, ${params}) { return [${unsafeCall}, ${safeName}]; }`),
+    reported(`import { ${safeName} } from '${BARREL}';\n${lead}export function f(${params}) { const ${safeName} = 1; return [${unsafeCall}, ${safeName}]; }`),
+    reported(`import { ${safeName} } from './local-other';\n${lead}export const r = (${params}) => ${unsafeCall};`),
+    reported(`import type { ${safeName} } from '${safeModule}';\n${lead}export const r = (${params}) => ${unsafeCall};`),
+    reported(`import { type ${safeName} } from '${safeModule}';\n${lead}export const r = (${params}) => ${unsafeCall};`),
+    reported(`const ${safeName} = (p: string) => p;\n${lead}export const r = (${params}) => ${unsafeCall};`),
   ];
 }

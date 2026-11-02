@@ -59,7 +59,7 @@ import {
   formatSeverityBreakdown,
   issuesToRenderAtVerbosity,
   reportFindings,
-  reportFindingsKeepingLeftovers,
+  reportLeftovers,
   summarizeFindings,
   sumSeverityCounts,
 } from '../../src/utils/issue-rendering.js';
@@ -1257,13 +1257,23 @@ describe('vat claude plugin build — summarizePackagedSkillIssues verbosity', (
   });
 });
 
-describe('reportFindingsKeepingLeftovers', () => {
-  it('says a leftover at every verbosity, and collapses the other warnings as reportFindings does', () => {
+describe('leftovers: the writer says them, reportFindings never does', () => {
+  const findings = [
+    { code: 'SOME_WARNING', severity: 'warning', message: 'a collapsible warning' },
+    { code: 'TREE_CLEANUP_INCOMPLETE', severity: 'warning', message: 'progress log left at /tmp/x', link: '/tmp/x' },
+  ] as const;
+
+  it('reportFindings skips a leftover, and does not count it in the collapsed hint', () => {
     const lines: string[] = [];
-    reportFindingsKeepingLeftovers([
-      { code: 'SOME_WARNING', severity: 'warning', message: 'a collapsible warning' },
-      { code: 'TREE_CLEANUP_INCOMPLETE', severity: 'warning', message: 'progress log left at /tmp/x', link: '/tmp/x' },
-    ], { verbose: false, write: (line) => lines.push(line) });
+    reportFindings(findings, { verbose: false, write: (line) => lines.push(line) });
+
+    expect(lines.join('\n')).not.toContain('TREE_CLEANUP_INCOMPLETE');
+    expect(lines.join('\n')).toContain('1 warning');
+  });
+
+  it('reportLeftovers says only the leftovers, whatever the verbosity', () => {
+    const lines: string[] = [];
+    reportLeftovers(findings, (line) => lines.push(line));
 
     expect(lines.join('\n')).toContain('warning: progress log left at /tmp/x [TREE_CLEANUP_INCOMPLETE]');
     expect(lines.join('\n')).not.toContain('a collapsible warning');

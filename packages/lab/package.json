@@ -39,6 +39,9 @@
     "yaml": "^2.9.0",
     "zod": "^3.25.0"
   },
+  "devDependencies": {
+    "@vibe-agent-toolkit/resources": "workspace:*"
+  },
   "license": "MIT",
   "bin": {
     "vat-lab": "./dist/bin/vat-lab.js"

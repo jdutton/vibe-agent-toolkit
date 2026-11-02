@@ -110,7 +110,6 @@ import {
   formatIssueLines,
   formatSeverityBreakdown,
   issuesToRenderAtVerbosity,
-  reportFindings,
 } from '../utils/issue-rendering.js';
 import { resolveIssueSeverity } from '../utils/issue-severity.js';
 import { createLogger } from '../utils/logger.js';
@@ -1471,8 +1470,6 @@ function publishAudit(built: BuiltAudit, added: readonly Finding[]): ReturnType<
     renderVerboseEvidence(results, scanRoot, logger);
   }
   handleAuditResults({ results, written, data: report.data, root: scanRoot, verbose }, logger);
-  // The run's own findings (a clone it left behind), which no file's verdict above carries.
-  reportFindings(added, { verbose: true, write: logger.warn });
   logger.debug(`Audit complete in ${Date.now() - built.startTime}ms`);
   return written;
 }

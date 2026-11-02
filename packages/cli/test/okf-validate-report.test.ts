@@ -238,7 +238,7 @@ describe('summarizeOkfBundles', () => {
       expect(refusal?.finished.findings.map((f) => f.code)).toEqual(['OKF_FRONTMATTER_MISSING']);
       // The error branch that carries it is one the published schema accepts, and ends on 2.
       if (refusal === undefined) throw new Error('no refusal');
-      const published = refusalReport('INPUT_UNREADABLE', refusal.message, { strict: false }, refusal.finished, true);
+      const published = refusalReport('INPUT_UNREADABLE', refusal.message, { strict: false }, refusal.finished);
       expect(OKF_VALIDATE_REPORT_SCHEMA.safeParse(published).success).toBe(true);
       expect(exitCodeForReport(published)).toBe(2);
     });
