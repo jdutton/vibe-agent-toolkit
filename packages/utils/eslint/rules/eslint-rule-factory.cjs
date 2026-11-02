@@ -105,6 +105,32 @@ function isStatementCall(node) {
   return node.parent?.type === 'ExpressionStatement' && node.parent.expression === node;
 }
 
+/** Is `node` inside a type position (`typeof realpathSync`), where it names a type, not the function? */
+function inTypeQuery(node) {
+  for (let n = node.parent; n; n = n.parent) {
+    if (n.type === 'TSTypeQuery') {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * How a use of the unsafe function reaches it: the CALL it is the callee of — itself, or through
+ * its `.native` variant (`realpathSync.native(x)`) — or null for a value reference (assigned,
+ * passed, re-exported), which has no call to rewrite.
+ */
+function callOf(node) {
+  const parent = node.parent;
+  if (parent?.type === 'CallExpression' && parent.callee === node) {
+    return { call: parent, native: false };
+  }
+  const nativeMember = parent?.type === 'MemberExpression' && parent.object === node
+    && !parent.computed && parent.property.name === 'native';
+  const call = parent?.parent;
+  return nativeMember && call?.type === 'CallExpression' && call.callee === parent ? { call, native: true } : null;
+}
+
 /** One visitor object from several: a selector two of them handle runs both handlers, in order. */
 function mergeVisitors(...visitorSets) {
   const merged = {};
@@ -157,14 +183,15 @@ module.exports = function createNoUnsafeRule(config) {
         ...(mode.autofix === 'statement' && { fix: 'statement' }),
         ...(mode.autofix === 'never' && { fix: 'suggest' }),
       },
-      ...(mode.autofix !== 'always' && { hasSuggestions: true }),
+      // Every mode suggests: a `.native` call is never autofixed (see `callOf`).
+      hasSuggestions: true,
       // Always fixable: even a rule that autofixes no call removes, through the
       // dead-import leg, the unsafe import its accepted suggestions left behind.
       fixable: 'code',
       schema: [EXEMPT_AND_SAFE_MODULE_SCHEMA],
       messages: {
         noUnsafeOperation: message,
-        ...(mode.suggestion !== undefined && { useSafeCall: mode.suggestion }),
+        useSafeCall: mode.suggestion ?? `Replace with ${safeFn}()`,
         [DEAD_UNSAFE_IMPORT]: DEAD_UNSAFE_IMPORT_MESSAGE,
         [UNANCHORED_EXEMPT_FILE]: UNANCHORED_EXEMPT_MESSAGE,
       },
@@ -211,16 +238,18 @@ module.exports = function createNoUnsafeRule(config) {
       // `require()` / `import()` — resolved through scope by the ONE scan every rule banning a
       // module's function shares (`fs-binding-scan.cjs`). Reported at `Program:exit`, after every
       // import is seen, because a report computes its fix at once and the fix reads
-      // `safeImportNode`. A namespace read that is not called is not this rule's: it has no call to
-      // rewrite. KNOWN RESIDUAL: the dead-import leg removes only an `ImportDeclaration`, so a
+      // `safeImportNode`. A `.native` call is only suggested, and a value reference reported with
+      // no rewrite. KNOWN RESIDUAL: the dead-import leg removes only an `ImportDeclaration`, so a
       // rewritten `const os = require('node:os')` is left as an unused binding.
-      const unsafeCalls = new Set();
+      /** @type {Map<object, { native: boolean } | null>} each use's node → its call, null for a value reference */
+      const unsafeUses = new Map();
       const scan = fsBindingVisitors(context, {
         modules: new Set(moduleVariants),
         banned: new Set([unsafeFn]),
-        report: (node) => {
-          if (node.parent?.type === 'CallExpression' && node.parent.callee === node) {
-            unsafeCalls.add(node.parent);
+        report: (node, name) => {
+          if (name !== '*' && !inTypeQuery(node)) {
+            const reached = callOf(node);
+            unsafeUses.set(reached?.call ?? node, reached && { native: reached.native });
           }
         },
       });
@@ -231,8 +260,12 @@ module.exports = function createNoUnsafeRule(config) {
         },
 
         'Program:exit'() {
-          for (const call of [...unsafeCalls].sort((a, b) => a.range[0] - b.range[0])) {
-            reportUnsafeCall(call);
+          for (const [node, reached] of [...unsafeUses].sort(([a], [b]) => a.range[0] - b.range[0])) {
+            if (reached === null) {
+              context.report({ node, messageId: 'noUnsafeOperation', data: { safeModule: targetModule }, suggest: [] });
+            } else {
+              reportUnsafeCall(node, reached.native);
+            }
           }
           reportDeadUnsafeImports(
             context,
@@ -262,14 +295,14 @@ module.exports = function createNoUnsafeRule(config) {
         },
       });
 
-      function reportUnsafeCall(node) {
+      function reportUnsafeCall(node, native) {
         // A call this rule does not autofix is offered as a SUGGESTION. One whose
         // replacement needs an argument the rule cannot know (`within`) carries a
         // placeholder that fails the typecheck at that spot — never a guessed value
         // that would compile — and appends to a one-argument call only: further
         // arguments belong to the unsafe function and mean nothing to the safe one.
         const report = { node, messageId: 'noUnsafeOperation', data: { safeModule: targetModule } };
-        if (autofixes(node)) {
+        if (!native && autofixes(node)) {
           context.report({ ...report, fix: (fixer) => rewriteCall(fixer) });
         } else {
           const [only, ...rest] = node.arguments;

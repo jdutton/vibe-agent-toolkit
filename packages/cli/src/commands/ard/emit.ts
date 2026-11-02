@@ -368,9 +368,9 @@ function ardRefusalCode(error: unknown): RefusalCode {
 
 /**
  * Publish a report in the operator's format and end on the code the WRITTEN
- * document derives. In text mode the findings — including any the writer adds —
- * go to stderr and the one summary line to stdout; in json the report carries
- * them in full, so stderr would be the same facts twice.
+ * document derives. In text mode the report's findings go to stderr and the one
+ * summary line to stdout; in json the report carries them in full. Either way a
+ * refusal the writer adds is the writer's to say.
  *
  * @param report - The document
  * @param format - `json`, or the human rendering
@@ -378,7 +378,7 @@ function ardRefusalCode(error: unknown): RefusalCode {
 function publishArdReport(report: ArdEmitReport, format: 'text' | 'json'): never {
   const written = writeDocument('ard emit', report, format);
   if (format === 'text') {
-    reportFindings(written.findings, { verbose: true, write: (line) => process.stderr.write(`${line}\n`) });
+    reportFindings(report.findings, { verbose: true, write: (line) => process.stderr.write(`${line}\n`) });
   }
   process.exit(exitCodeForReport(written));
 }

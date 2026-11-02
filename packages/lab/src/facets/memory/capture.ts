@@ -29,7 +29,7 @@ import { buildReportEnvelope } from '../../harness/report.js';
 import type { CaptureRequest } from '../../harness/types.js';
 import { summarize } from '../perf/stats.js';
 
-import { npmInstaller, withMemoryInstrument } from './npx-entry.js';
+import { npmInstaller, npxInstallArm, withMemoryInstrument } from './npx-entry.js';
 import {
   MEMORY_FACET,
   type MemoryBody,
@@ -219,7 +219,9 @@ export async function captureMemory(options: CaptureMemoryOptions): Promise<Repo
   const nodeOptions = nodeOptionsWith(probePath, buildArmEnv(process.env, options.env)['NODE_OPTIONS']);
 
   const loadBefore = readLoad();
-  const { rows: commands, measured } = await withMemoryInstrument(options.instrument, npmInstaller(options.env, options.timeoutMs), (instrument) =>
+  const installArm = npxInstallArm(options.arms, options.cache);
+  const install = npmInstaller(installArm, options.env, options.timeoutMs);
+  const { rows: commands, measured } = await withMemoryInstrument(options.instrument, installArm, install, (instrument) =>
     captureCommandRows(
       { ...options, instrument },
       DUMP_DIR_PREFIX,

@@ -35,6 +35,7 @@ function spyOnTheKernel(): string[] {
     asked.push(toForwardSlash(String(path)));
   };
   const realStatSync = fs.statSync;
+  // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
   const realRealpathSyncNative = fs.realpathSync.native;
   const realStat = fsPromises.stat;
   const realRealpath = fsPromises.realpath;
@@ -42,6 +43,7 @@ function spyOnTheKernel(): string[] {
     record(args[0]);
     return realStatSync(...args);
   }) as typeof fs.statSync);
+  // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
   vi.spyOn(fs.realpathSync, 'native').mockImplementation(((path: fs.PathLike) => (record(path), realRealpathSyncNative(path))) as typeof fs.realpathSync.native);
   vi.spyOn(fs.realpath, 'native').mockImplementation(((path: fs.PathLike, callback: (error: NodeJS.ErrnoException | null, real?: string) => void) => {
     record(path);

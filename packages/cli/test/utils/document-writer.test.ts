@@ -17,6 +17,7 @@ import {
   endWithForwardedDocument,
   readForwardedDocument,
   NOTHING_FINISHED,
+  publishedReport,
   writeArtifact,
   writeArtifactFile,
   writeDocument,
@@ -112,6 +113,32 @@ describe('endWithReport', () => {
     expect(document.status).toBe('findings');
     expect(document.findings.map((finding) => finding.code)).toEqual(['RESOURCE_CHECK_BROKEN']);
     expect(exit.mock.calls).toEqual([[ExitCode.FINDINGS]]);
+  });
+
+  it('says the refusal it adds on stderr exactly once, through the shared finding line', () => {
+    endWithReport(VERB, reportWith(0, []), 'yaml');
+
+    expect(stderrText().match(/Nothing was examined/g)).toHaveLength(1);
+    expect(stderrText()).toMatch(/error: Nothing was examined: 0 bundle documents\. .*\[RESOURCE_CHECK_BROKEN\]/);
+  });
+
+  it('leaves the refusal to stdout under --format text when the default rendering carries every finding', () => {
+    endWithReport(VERB, reportWith(0, []), 'text');
+
+    expect(written()).toContain('Nothing was examined');
+    expect(stderrText()).not.toContain('Nothing was examined');
+  });
+
+  it('says it on stderr under --format text when the verb\'s own rendering carries no finding', () => {
+    endWithReport('ard emit', buildReport({ examined: 0, findings: [], data: { outputPath: null, entryCount: 0, skippedCount: 0, shadowedCount: 0 }, gate: { strict: false } }), 'text');
+
+    expect(stderrText().match(/Nothing was examined/g)).toHaveLength(1);
+  });
+
+  it('says nothing for a report that already carries a refusal — the writer added none', () => {
+    endWithReport(VERB, publishedReport(VERB, reportWith(0, [])), 'json');
+
+    expect(stderrText()).toBe('');
   });
 
   it('exits 0 on a clean report that examined something', () => {

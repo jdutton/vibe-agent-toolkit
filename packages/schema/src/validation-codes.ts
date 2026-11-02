@@ -1299,6 +1299,7 @@ export type NonOverridableCode =
   | 'DOCTOR_CHECK_WARNED'
   // `vat rag index`
   | 'RAG_DOCUMENT_INDEX_FAILED'
+  | 'RAG_CHUNKING_CONFIG_ADJUSTED'
   // `vat corpus scan`
   | 'CORPUS_ENTRY_INCOMPLETE'
   // `vat claude plugin uninstall`

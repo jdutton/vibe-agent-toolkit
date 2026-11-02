@@ -61,6 +61,7 @@ function report(...commands: PopulationCommandStats[]): ReportEnvelope<Populatio
     capturedAt: '2026-08-17T00:00:00.000Z',
     removedEnv: [],
     npmNetworkEnv: [],
+    host: { platform: process.platform, node: process.version },
     exits: [],
     body: { commands, load: CLEAN_LOAD },
   };

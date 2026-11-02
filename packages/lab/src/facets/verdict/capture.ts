@@ -34,7 +34,7 @@ import { existsSync, readFileSync } from 'node:fs';
 
 import { everyInOrder, safePath, withTempDir } from '@vibe-agent-toolkit/utils';
 
-import type { ReportEnvelope } from '../../envelope/envelope.js';
+import { currentHost, type ReportEnvelope } from '../../envelope/envelope.js';
 import {
   type ArmDirectories,
   armDirectoriesAt,
@@ -222,6 +222,7 @@ async function captureSubject(
       npmNetworkEnv: npmNetwork,
       // Each row records its own exit; a verdict judges no commitment.
       exits: [],
+      host: currentHost(),
       body: {
         arm: request.env,
         rows,

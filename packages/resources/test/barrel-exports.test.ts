@@ -79,6 +79,7 @@ const BARREL_EXPORTS = [
   'ContentStateSchema',
   'ContributorRegistry',
   'DEFAULT_CONTENT_DEMAND',
+  'DEFAULT_RESOURCE_EXCLUDE',
   'DEFAULT_RESOURCE_INCLUDE',
   'DERIVED_TABLES',
   'DeferredArtifacts',

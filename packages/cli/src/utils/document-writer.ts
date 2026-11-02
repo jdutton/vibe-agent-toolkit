@@ -44,9 +44,9 @@ import {
 
 import { errorMessageOf, refusalCodeOf, withFsFaultRemedy } from './command-refusal.js';
 import { debugDiagnosticsEnabled } from './debug-diagnostics.js';
-import { formatFindingLine } from './issue-rendering.js';
+import { formatFindingLine, reportFindings } from './issue-rendering.js';
 import { renderYamlDocument, writeStdoutSync } from './output.js';
-import { withRunIntegrity } from './run-integrity.js';
+import { findingsAddedByRunIntegrity, withRunIntegrity } from './run-integrity.js';
 
 /**
  * The generic `--format text` rendering: one line per finding, then the status
@@ -79,9 +79,8 @@ function writeStructured(document: unknown, format: DocumentFormat): void {
  * The document a report verb publishes, without writing it: the run-integrity
  * refusal its registered denominator declares, then its published schema.
  *
- * For a lane that needs the published document before writing it — a command
- * that warns on stderr with the refusal the writer adds. {@link writeDocument}
- * goes through it too. (A phase of `vat build` / `validate` / `verify` hands
+ * Pure — it says nothing on stderr: for a lane that needs the published counts
+ * before writing. {@link writeDocument} goes through it too, and says the refusal. (A phase of `vat build` / `validate` / `verify` hands
  * back its report BEFORE this pass: the orchestrator judges zero examined on
  * the whole run.)
  *
@@ -98,6 +97,22 @@ export function publishedReport<T>(verb: ReportVerb, report: Report<T>): Report<
 }
 
 /**
+ * Say on stderr, once, the run-integrity refusal `withRunIntegrity` added to
+ * `report` to make `judged` — nothing when it stood down. The ONE place that
+ * refusal reaches a human: {@link writeDocument} calls it for every report
+ * verb, and `runPhase` for an orchestrated phase its own verb's writer never
+ * sees. A verb never prints it itself; the refusal is not in the findings it
+ * built, so its own reporting cannot double it.
+ *
+ * @param report - The report as the verb built it
+ * @param judged - The same report after the run-integrity pass
+ */
+export function announceRunIntegrity(report: Report<unknown>, judged: Report<unknown>): void {
+  // A refusal is an error, which every verbosity prints.
+  reportFindings(findingsAddedByRunIntegrity(report, judged), { verbose: false, write: (line) => process.stderr.write(`${line}\n`) });
+}
+
+/**
  * Publish a report verb's document.
  *
  * @param verb - The registered verb, as typed after `vat`
@@ -109,6 +124,8 @@ export function publishedReport<T>(verb: ReportVerb, report: Report<T>): Report<
 export function writeDocument<T>(verb: ReportVerb, report: Report<T>, format: DocumentFormat): Report<T> {
   const entry = reportShapeFor(verb);
   const written = publishedReport(verb, report);
+  // Unless stdout is the generic text rendering, which already lists every finding.
+  if (format !== 'text' || entry.renderText !== undefined) announceRunIntegrity(report, written);
   if (format === 'text') {
     const text = entry.renderText === undefined
       ? renderReportText(written, entry.examined.unit)

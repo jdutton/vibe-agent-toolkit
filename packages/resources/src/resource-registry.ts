@@ -241,6 +241,16 @@ export class DuplicateResourceIdError extends VatError {
 export const DEFAULT_RESOURCE_INCLUDE: readonly string[] = ['**/*.md', '**/*.html', '**/*.htm'];
 
 /**
+ * What a resource crawl excludes when the caller supplies no `exclude` of its own:
+ * only what can never be authored content (`NEVER_CONTENT_GLOBS` — dependencies, git
+ * internals, worktree copies, a build's staging residue) and build output. Not
+ * `coverage/` or `.turbo/`, which an author may name a directory. A caller's
+ * `exclude` REPLACES it; spread this to keep it. Exported for the same reason as
+ * {@link DEFAULT_RESOURCE_INCLUDE}: one home, never a restated copy.
+ */
+export const DEFAULT_RESOURCE_EXCLUDE: readonly string[] = Object.freeze([...NEVER_CONTENT_GLOBS, ...BUILD_OUTPUT_GLOBS]);
+
+/**
  * The (bound, offered) root pairs already announced, so a run that crawls the
  * same mismatched pair per skill says it once instead of once per skill.
  *
@@ -348,7 +358,7 @@ export interface CrawlOptions {
   unreadable: RegistryUnreadablePolicy;
   /** Include patterns (default: {@link DEFAULT_RESOURCE_INCLUDE}) */
   include?: string[];
-  /** Exclude patterns (default: node_modules, .git, dist) */
+  /** Exclude patterns, replacing the default (default: {@link DEFAULT_RESOURCE_EXCLUDE}) */
   exclude?: string[];
   /** Follow symbolic links (default: false) */
   followSymlinks?: boolean;
@@ -1402,8 +1412,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     const {
       baseDir,
       include = [...DEFAULT_RESOURCE_INCLUDE],
-      // Only what can never be authored content — not `coverage/` or `.turbo/`, which an author may name a directory.
-      exclude = [...NEVER_CONTENT_GLOBS, ...BUILD_OUTPUT_GLOBS],
+      exclude = [...DEFAULT_RESOURCE_EXCLUDE],
       followSymlinks = false,
       unreadable,
       populationSource,

@@ -2567,25 +2567,18 @@ function renderVerboseEvidence(
 }
 
 /**
- * The stderr half of the run-level refusal, so the human channel says what the
- * document says. The writer derives it (the registry's denominator for `audit`
- * is files); this only RENDERS the finding the WRITTEN report carries. Both
- * stderr lanes call it first, because "Audit successful: 0 file(s) passed"
- * over a refused run is the exact disagreement the refusal exists to end
- * (invariant 6 of `run-integrity.ts`).
+ * The verdict line over a run the writer refused (it derives and prints the
+ * refusal itself), so "Audit successful: 0 file(s) passed" never sits beside it
+ * (invariant 6 of `run-integrity.ts`). Both stderr lanes call it first.
  *
- * @returns Whether a refusal was rendered, so the caller skips its verdict line
+ * @returns Whether the run was refused, so the caller skips its verdict line
  */
 function logRunIntegrity(
   written: AuditReport,
   logger: ReturnType<typeof createLogger>,
 ): boolean {
-  const refusals = written.findings.filter((finding) => finding.code === RUN_INTEGRITY_CODE);
-  if (refusals.length === 0) return false;
+  if (!written.findings.some((finding) => finding.code === RUN_INTEGRITY_CODE)) return false;
   logger.error(`Audit is not a verdict: it audited ${written.examined} files`);
-  for (const refusal of refusals) {
-    for (const line of formatIssueLines(refusal, '  ')) logger.error(line);
-  }
   return true;
 }
 

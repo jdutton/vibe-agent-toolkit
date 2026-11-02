@@ -42,7 +42,7 @@ import { resolveIssueSeverity } from '../../../utils/issue-severity.js';
 import { createLogger } from '../../../utils/logger.js';
 import { assertReadableDirectoryArgument } from '../../../utils/project-root-policy.js';
 import { relativizePath } from '../../../utils/relativize-paths.js';
-import { findingsAddedByRunIntegrity, runIntegrityFinding } from '../../../utils/run-integrity.js';
+import { runIntegrityFinding } from '../../../utils/run-integrity.js';
 import type { PhaseOutcome } from '../../phase-utils.js';
 
 import type { MarketplaceValidateData, MarketplaceValidateReport } from './validate-schema.js';
@@ -962,14 +962,14 @@ async function marketplaceValidateCommand(
     // Only the argument check throws here: the phase returns its own refusals.
     report = refusedReport(error);
   }
+  // The PUBLISHED counts — never "0 error(s)" beside exit 1 — and none for a refusal, which counted nothing.
   const published = publishedReport('claude marketplace validate', report);
-  // The writer's own zero-examined refusal, then the PUBLISHED counts: never "0 error(s)" beside exit 1.
-  const logger = createLogger();
-  reportFindings(findingsAddedByRunIntegrity(report, published), { verbose: options.verbose === true, write: logger.error });
-  const { errors, warnings, info } = published.summary;
-  logger.info(`${errors} error(s), ${warnings} warning(s), ${info} info`);
+  if (published.status !== 'error') {
+    const { errors, warnings, info } = published.summary;
+    createLogger().info(`${errors} error(s), ${warnings} warning(s), ${info} info`);
+  }
   // This command offers no `--format`: its document is YAML.
-  endWithReport('claude marketplace validate', published, 'yaml');
+  endWithReport('claude marketplace validate', report, 'yaml');
 }
 
 export function createMarketplaceValidateCommand(): Command {

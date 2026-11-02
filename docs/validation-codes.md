@@ -1519,6 +1519,7 @@ message carries the reason. The counters in `data` still report everything that 
 | Code | Severity | What | Fix |
 |---|---|---|---|
 | `RAG_DOCUMENT_INDEX_FAILED` | error | A document the crawl enumerated is not in the index: the crawl could not read it (the OS refused it), or the provider could not chunk or embed it. Its content is not searchable. A chunk table that cannot be read — files the OS refuses, a table another tool or build wrote, or damaged files — is not this finding: the run is refused `INPUT_UNREADABLE`, the message naming which | Fix what the message names — the file's permissions, or the content the chunker or embedder rejected — then re-run `vat rag index`; unchanged documents are skipped |
+| `RAG_CHUNKING_CONFIG_ADJUSTED` | warning | The RAG provider adjusted its chunk budget to fit the embedding model — a `targetChunkSize` over the model's token limit was clamped — or doubts it: a padding factor that can still produce chunks the model truncates. Text past the limit is not embedded, so it is not searchable | Lower `targetChunkSize` or `paddingFactor` in the RAG provider's configuration |
 
 ### `vat corpus scan` findings (never overridable)
 

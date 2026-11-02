@@ -286,7 +286,11 @@ data: { ... }
 A verb that finds something publishes it twice: in full in the stdout document, and for a reader on
 stderr. Both spell a finding with the one formatter, `formatFindingLine` in
 `packages/cli/src/utils/issue-rendering.ts`; a flat-findings lane prints them through
-`reportFindings`, which puts every error first and adds warnings and info only under `--verbose`.
+`reportFindings`, which puts every error first and adds warnings and info only under `--verbose`
+(`vat resources validate`, `vat resources check -v`, the orchestrators' delegated phases). A lane
+with no `--verbose` passes `verbose: true` and always prints every finding: `vat agent validate`,
+`vat ard emit`, `vat rag index`, and `vat verify`'s built-in phases. A run-integrity refusal the
+document writer adds, the writer prints itself, once.
 A verb whose `--format text` document prints one line per finding (`vat resources validate`)
 carries none on stderr under that format, because stdout already is these lines. `vat ard emit` is the exception: its text document is one summary line, so under
 `--format text` the findings go to stderr, and under `--format json` they are only in the

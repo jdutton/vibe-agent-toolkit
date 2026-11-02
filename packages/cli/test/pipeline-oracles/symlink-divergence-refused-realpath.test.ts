@@ -19,6 +19,7 @@ import { createTempDirTracker } from '../system/test-common.js';
 
 // The oracle resolves through the link-chain resolver, which reaches the kernel through the
 // DEFAULT `node:fs` object (`fs.realpathSync.native`), so the refusal is a spy on that property.
+// eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
 const realNative = fs.realpathSync.native;
 
 const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-symlink-refused-');
@@ -52,6 +53,7 @@ describe('a path the divergence oracle cannot resolve', () => {
     const root = corpusWithOneFile();
     const file = safePath.join(root, 'docs', 'a.md');
     // As Node raises it: the syscall and the path it acted on — what makes an unlisted errno a filesystem fault.
+    // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
     vi.spyOn(fs.realpathSync, 'native').mockImplementation(
       refusingOnly(file, Object.assign(errno(code), { syscall: 'realpath', path: file }), realNative),
     );
@@ -68,6 +70,7 @@ describe('a path the divergence oracle cannot resolve', () => {
     const real = realNative;
     // `a.md` dangles; `b.md` resolves to where `a.md` is spelt. Only if `a.md` keeps its own name do the two meet.
     // A native ENOENT is confirmed by the JS walk (the one native fallback rule), so `a.md` is really gone by then.
+    // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
     vi.spyOn(fs.realpathSync, 'native').mockImplementation(((path: string) => {
       const spelt = String(path);
       if (spelt.endsWith('a.md')) {

@@ -124,16 +124,26 @@ describe('compareMemory', () => {
     expect(verdict.processes).toEqual({ before: 1, after: 2 });
   });
 
-  it('does not call a different process count CHANGED across instrument kinds, and says why', () => {
-    // An npx arm launches through a published package's own `bin`; a tree arm runs `dist/bin.js`.
+  it('calls a different process count CHANGED across instrument kinds too, with no caveat', () => {
+    // An npx arm runs the installed cli's `dist/bin.js` straight, as a tree arm does: the counts mean one thing.
     const npx = makeReportAt({ instrument: { version: '0.1.43', commit: null, dirty: null, closure: null } });
     const result = compareMemory(reportWith(row(GIB_KB)), reportWith(row(GIB_KB, { processesPerRepeat: [2, 2, 2] }), npx));
     if (!result.ok) throw new Error(result.refusal);
     const [diff] = result.commands;
 
-    expect(diff?.verdict.kind).toBe('unchanged');
-    expect(diff?.caveat).toContain('instrument kinds differ (tree vs npx)');
-    expect(renderMemoryComparison(result)).toContain('instrument kinds differ (tree vs npx)');
+    expect(diff?.verdict.kind).toBe('changed');
+    expect(diff?.caveat).toBeNull();
+  });
+
+  it.each([
+    ['platform', { platform: 'win32', node: process.version }],
+    ['Node version', { platform: process.platform, node: 'v20.0.0' }],
+  ])('refuses two reports measured on a different %s, naming both', (what, host) => {
+    const result = compareMemory(reportWith(row(GIB_KB)), reportWith(row(GIB_KB), makeReport({ host })));
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.refusal).toContain(`different ${what}`);
   });
 
   it('yields no delta when a side failed, and names the side', () => {

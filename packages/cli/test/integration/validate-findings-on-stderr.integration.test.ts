@@ -34,12 +34,12 @@ function namesBrokenLink(stderr: string): boolean {
   }).length === 1;
 }
 
-/** Whether stderr carries `check`'s finding on `path` as one finding line of `severity`. */
+/** Whether stderr carries `check`'s finding on `path` as EXACTLY one finding line of `severity`. */
 function namesCheck(stderr: string, path: string, severity: string, check: string): boolean {
-  return stderr.split('\n').some((line) => {
+  return stderr.split('\n').filter((line) => {
     const trimmed = line.trim();
     return trimmed.startsWith(path) && trimmed.includes(`: ${severity}: `) && trimmed.endsWith(`[CUSTOM:${check}]`);
-  });
+  }).length === 1;
 }
 
 /** The document with its timings blanked: the only fields two runs of one tree may differ in. */

@@ -271,6 +271,26 @@ behind RFC-3986-compliant leading-`/` resolution.
 vat resources query 'SELECT path FROM resource_realizations LIMIT 5' --format json | jq '.data.rows[].path'
 ```
 
+### vat resources check [path]
+
+**Purpose:** Run VAT's built-in checks and every SQL assertion declared under
+`resources.checks` against this tree's resource projection.
+
+**Options:**
+- `[path]` - Project root to check (defaults to the current directory)
+- `--check <name>` - Run only this check, by its built-in name or its key in `resources.checks`
+- `-v, --verbose` - Print warning and info findings on stderr too; errors are always printed there
+- `--budget <seconds>` - Kill the run if it goes this long without completing a unit of work
+  (default 300; `0` removes the bound)
+- `--format <format>` - `yaml` (default) or `json`
+- `--debug` - Enable debug logging
+
+**Output:** the shared report envelope on stdout (schema: `packages/cli/schemas/resources-check.json`);
+each finding also as a `location:line: severity: message [code]` line on stderr.
+
+**Exit Codes:** `0` no error-severity check violated, `1` one was (or nothing was checked:
+`RESOURCE_CHECK_BROKEN`), `2` the run could not do its job.
+
 ## Configuration
 
 Place `vibe-agent-toolkit.config.yaml` at project root:

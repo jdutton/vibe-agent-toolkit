@@ -34,6 +34,7 @@ function spyOnTheKernel(): { asked: string[]; restore: () => void } {
   };
   const realStatSync = fs.statSync;
   const spies = [
+    // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
     vi.spyOn(fs.realpathSync, 'native').mockImplementation(((path: fs.PathLike) => (record(path), path)) as typeof fs.realpathSync.native),
     vi.spyOn(fs.realpath, 'native').mockImplementation(((path: fs.PathLike, callback: (error: null, real: string) => void) => {
       record(path);

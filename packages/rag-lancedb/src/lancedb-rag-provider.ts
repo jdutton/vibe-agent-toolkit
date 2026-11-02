@@ -226,8 +226,11 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
   private table: Table | null = null;
   private readonly tokenCounter = new ApproximateTokenCounter();
 
-  /** Resolved once from the embedding provider's real limit; warnings logged once. */
+  /** Resolved once from the embedding provider's real limit. */
   private resolvedChunkingConfig: ChunkingConfig | null = null;
+
+  /** What resolving it warned about — returned in each batch's `IndexResult.warnings`, never printed. */
+  private chunkingWarnings: readonly string[] = [];
 
   /** Opened lazily and reused: the documents table is written once per resource. */
   private documentsTable: Table | null = null;
@@ -247,8 +250,8 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    * The chunking budget for this provider's embedder.
    *
    * Derived from `embeddingProvider.maxInputTokens` rather than assumed, and
-   * memoized so its warnings are printed once per provider instead of once per
-   * indexed resource.
+   * memoized. Its warnings are kept for the batch result: a library writes
+   * nothing to the console, and the caller reports them through its own channel.
    *
    * @returns Resolved chunking configuration
    */
@@ -261,10 +264,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
         paddingFactor: this.config.paddingFactor,
       });
 
-      for (const warning of warnings) {
-        console.warn(`[vat-rag] ${warning}`);
-      }
-
+      this.chunkingWarnings = warnings;
       this.resolvedChunkingConfig = config;
     }
 
@@ -660,6 +660,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     });
 
     result.durationMs = Date.now() - startTime;
+    if (this.chunkingWarnings.length > 0) result.warnings = [...this.chunkingWarnings];
     return result;
   }
 

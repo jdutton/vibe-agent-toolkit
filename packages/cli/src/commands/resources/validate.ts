@@ -33,7 +33,7 @@ import * as yaml from 'yaml';
 
 import type { DocumentFormat } from '../../report-schemas.js';
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
-import { endWithReport, NOTHING_FINISHED, publishedReport, refusalReport } from '../../utils/document-writer.js';
+import { endWithReport, NOTHING_FINISHED, refusalReport } from '../../utils/document-writer.js';
 import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { classifyInputFault, projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
@@ -42,15 +42,11 @@ import {
   loadResourcesWithConfig,
   publishedPopulation,
 } from '../../utils/resource-loader.js';
-import { findingsAddedByRunIntegrity } from '../../utils/run-integrity.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
 import type { PhaseOutcome } from '../phase-utils.js';
 import { discoverSkillsFromConfig } from '../skills/skill-discovery.js';
 
 import type { ResourcesValidateData, ResourcesValidateReport } from './validate-schema.js';
-
-/** The verb, as registered. */
-const VERB = 'resources validate';
 
 /** `vat resources validate` offers no `--strict`: warnings never fail it. */
 const GATE = { strict: false } as const;
@@ -475,10 +471,7 @@ export async function validateCommand(
   options: ValidateOptions
 ): Promise<void> {
   const { report } = await runResourcesValidatePhase(pathArg, options);
-  const published = publishedReport(VERB, report);
-  // The writer's own zero-examined refusal, reported in the lane that publishes it.
-  reportOnStderr(findingsAddedByRunIntegrity(report, published), options);
-  endWithReport('resources validate', published, options.format ?? 'yaml');
+  endWithReport('resources validate', report, options.format ?? 'yaml');
 }
 
 /**

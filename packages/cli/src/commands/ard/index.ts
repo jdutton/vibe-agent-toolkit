@@ -65,8 +65,9 @@ Derivation:
   A marketplace, an OKF bundle and an MCP server are emitted ONLY when the
   author supplies \`ard.entries."<kind>:<name>".type\`; the specification names
   no media type for any of them, and VAT does not guess. Skipped surfaces are
-  reported on stderr — including a \`skills.config\` key that discovery does not
-  find, which is never advertised.
+  findings — including a \`skills.config\` key that discovery does not find,
+  which is never advertised — on stderr under \`--format text\` (the default),
+  and in the report under \`--format json\`.
 
   \`ard.entries\` is keyed by "<kind>:<name>" — skills, marketplaces and OKF
   bundles are independent key spaces, so a bare name that matches two of them
@@ -84,7 +85,7 @@ Requirements:
 
 Exit Codes:
   0 - Manifest written over at least one configured surface. Skipped surfaces
-      are reported on stderr at this exit code. Gate on \`--format json\` (the
+      are findings at this exit code (stderr under text). Gate on \`--format json\` (the
       report envelope: \`examined\`, \`findings\`, \`summary\`, \`gate\`,
       \`data.entryCount\`, \`data.skippedCount\`; schema:
       packages/cli/schemas/ard-emit.json), or make skips fail with \`--strict\`

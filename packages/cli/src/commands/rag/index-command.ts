@@ -80,6 +80,17 @@ export function unreadableIndexIssues(
   ));
 }
 
+/**
+ * The provider's warnings about its own configuration (a chunk budget clamped
+ * to the model's limit), as findings: the provider prints nothing itself.
+ *
+ * @param warnings - `IndexResult['warnings']`, absent when there were none
+ * @returns One `RAG_CHUNKING_CONFIG_ADJUSTED` warning per message
+ */
+function providerConfigIssues(warnings: IndexResult['warnings']): ValidationIssue[] {
+  return (warnings ?? []).map((message) => ({ code: 'RAG_CHUNKING_CONFIG_ADJUSTED', severity: 'warning', message }));
+}
+
 /** What {@link buildIndexReport} needs from a finished run. */
 interface IndexReportInput {
   /** Resources submitted: every file the crawl enumerated, read or not. */
@@ -126,6 +137,8 @@ export async function indexCommand(
   const startTime = Date.now();
 
   let report: RagIndexReport;
+  // Held outside the `try`: a run the database then refuses still names every file it could not read.
+  let unreadable: ValidationIssue[] = [];
   try {
     // The path is the root to crawl: one that names nothing, or that the OS
     // will not list, refuses before any database is opened.
@@ -149,8 +162,10 @@ export async function indexCommand(
     const allResources = registry.getAllResources();
     // The declared population is the admitted one PLUS what the crawl could not
     // read; the second half is reported below, not dropped — see `unreadableIndexIssues`.
-    const unreadable = unreadableIndexIssues(registry.getUnreadableResources(), crawlRoot);
+    unreadable = unreadableIndexIssues(registry.getUnreadableResources(), crawlRoot);
     logger.debug(`Found ${allResources.length} resources to index (${unreadable.length} enumerated but unreadable)`);
+    // On stderr too, so a caller reading only the exit code still sees each name.
+    reportFindings(unreadable, { verbose: false, write: logger.warn });
 
     requireWritableDatabase(dbPath, options.db !== undefined && options.db !== '');
 
@@ -167,9 +182,11 @@ export async function indexCommand(
       resource.id,
       toForwardSlash(safePath.relative(crawlRoot, resource.filePath)),
     ]));
-    const issues = [...unreadable, ...providerIndexIssues(indexResult.errors, locations)];
-    // On stderr too, so a caller reading only the exit code still sees each name.
-    reportFindings(issues, { verbose: false, write: logger.warn });
+    const failed = providerIndexIssues(indexResult.errors, locations);
+    const adjusted = providerConfigIssues(indexResult.warnings);
+    // Verbose: this verb has no `--verbose`, and a clamped chunk budget is what explains a truncated search.
+    reportFindings([...failed, ...adjusted], { verbose: true, write: logger.warn });
+    const issues = [...unreadable, ...failed, ...adjusted];
     report = buildIndexReport({
       examined: allResources.length + unreadable.length,
       result: indexResult,
@@ -177,7 +194,7 @@ export async function indexCommand(
       durationMs: Date.now() - startTime,
     });
   } catch (error) {
-    return endWithRefusal('rag index', refusalCodeOf(error), error, 'yaml', RAG_GATE, NOTHING_FINISHED);
+    return endWithRefusal('rag index', refusalCodeOf(error), error, 'yaml', RAG_GATE, { ...NOTHING_FINISHED, findings: toFindings(unreadable) });
   }
   endWithReport('rag index', report, 'yaml');
 }

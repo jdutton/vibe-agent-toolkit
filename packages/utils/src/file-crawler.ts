@@ -139,13 +139,13 @@ const PICOMATCH_OPTIONS = { dot: true } as const;
  * ignored tool-output directory is gone already, and a tracked one is content
  * the author committed.
  */
-export const NEVER_CONTENT_GLOBS: readonly string[] = Object.freeze([
+export const NEVER_CONTENT_GLOBS = Object.freeze([
   '**/node_modules/**',      // Dependencies (40K+ files), never user content
   '**/.git/**',              // Git objects, never user content
   '**/.worktrees/**',        // Git worktrees are full repo copies — never traverse
   '**/.claude/worktrees/**', // Claude Code worktrees, same reason
   ...TREE_CHANGE_RESIDUE_GLOBS, // A build's staged/parked output beside its destination — a transient copy
-]);
+] as const);
 
 /**
  * Directories named by the tool that USUALLY writes them. No lane wants the tool's
@@ -191,7 +191,7 @@ const TOOL_OUTPUT_NAME_GLOBS = [
  * turborepo setup — which is the same position `coverage/` and `.test-output/`
  * are in.
  */
-export const NEVER_CRAWL_GLOBS: readonly string[] = Object.freeze([...NEVER_CONTENT_GLOBS, ...TOOL_OUTPUT_NAME_GLOBS]);
+export const NEVER_CRAWL_GLOBS = Object.freeze([...NEVER_CONTENT_GLOBS, ...TOOL_OUTPUT_NAME_GLOBS] as const);
 
 /**
  * Build output — excluded by DEFAULT, but deliberately NOT part of
@@ -204,7 +204,7 @@ export const NEVER_CRAWL_GLOBS: readonly string[] = Object.freeze([...NEVER_CONT
  * as source or build output, so it must walk `dist/`; a crawl for authored markdown
  * must not. Two different questions, so two lists — a lane spreads whichever ones apply.
  */
-export const BUILD_OUTPUT_GLOBS: readonly string[] = Object.freeze(['**/dist/**']);
+export const BUILD_OUTPUT_GLOBS = Object.freeze(['**/dist/**'] as const);
 
 const DEFAULT_EXCLUDE: string[] = [...NEVER_CRAWL_GLOBS, ...BUILD_OUTPUT_GLOBS];
 

@@ -1466,10 +1466,16 @@ function withRunAllowUnused(framework: FrameworkResult, ledger: AllowUsageLedger
  * | source | n/a | 2 | 1 | 1 | 13 |
  * | built | INSIDE the project (`<root>/dist/skills/<name>/`) | **1** | **0** | **0** | **10** |
  * | built | outside any project root (control) | 2 | 1 | 1 | 14 |
+ * | built | inside the project, outside `dist/` (`<root>/out/<name>/`) | 2 | 1 | 1 | — |
  *
- * The middle row is the defect; the third row PROVES the cause — the only
+ * The second row is the defect; the third row PROVES the cause — the only
  * difference between them is whether the output falls under the crawl's
- * `**\/dist\/**` exclusion (`BUILD_OUTPUT_GLOBS`). `packageSkill`'s default output
+ * `**\/dist\/**` exclusion (`BUILD_OUTPUT_GLOBS`). The fourth row is what a fresh
+ * crawl of the root admits, and the memoized crawl never holds it — the bundle is
+ * written after it, at an excluded staging name — so the validator layers that
+ * bundle over the memo (`withOwnBundle` in `validators/packaging-validator.ts`),
+ * reading only the bundle; pinned by
+ * `test/integration/post-build-own-output.integration.test.ts`. `packageSkill`'s default output
  * IS the middle row, so this is the normal case, not an edge case. The result's
  * own `files.dependencies` still reads `["reference.md"]`: the packager copied it,
  * and the validator invoked here — immediately afterwards — cannot see it.

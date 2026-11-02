@@ -26,7 +26,9 @@ import { errnoOf } from './test-helpers.js';
 /** Make `realpathSync.native` throw `code` for ONE path; everything else passes through. */
 function refuseNativeRealpathOf(target: string, code: string): () => void {
   const refused = toForwardSlash(target);
+  // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
   const original = fs.realpathSync.native;
+  // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
   const spy = vi.spyOn(fs.realpathSync, 'native').mockImplementation(((asked: fs.PathLike, options?: unknown) => {
     if (toForwardSlash(String(asked)) === refused) {
       throw Object.assign(new Error(`${code}: injected, realpath '${String(asked)}'`), { code });
@@ -59,6 +61,7 @@ describe('path-utils realpath helpers: absence is the only failure answered lexi
     });
 
     it('answers the tree root itself (the operator\'s own path) with its native realpath', () => {
+      // eslint-disable-next-line local/no-fs-realpathSync -- the oracle: Node's own realpath, which the helper under test must equal
       expect(normalizePath(root, { within: root })).toBe(fs.realpathSync.native(root));
     });
 
@@ -75,6 +78,7 @@ describe('path-utils realpath helpers: absence is the only failure answered lexi
     it('answers a present path with its realpath', () => {
       const present = safePath.join(root, 'present.md');
       fs.writeFileSync(present, '');
+      // eslint-disable-next-line local/no-fs-realpathSync -- the oracle: Node's own realpath, which the helper under test must equal
       expect(normalizePath(present, { within: root })).toBe(fs.realpathSync.native(present));
     });
 
@@ -105,6 +109,7 @@ describe('path-utils realpath helpers: absence is the only failure answered lexi
 
   describe('normalizedTmpdir', () => {
     it('returns the realpath of the OS tmpdir (positive control)', () => {
+      // eslint-disable-next-line local/no-fs-realpathSync -- the oracle: Node's own realpath, which the helper under test must equal
       expect(normalizedTmpdir()).toBe(fs.realpathSync.native(normalizedTmpdir()));
     });
 
@@ -112,6 +117,7 @@ describe('path-utils realpath helpers: absence is the only failure answered lexi
       // The spy must see the exact string `tmpdir()` hands over, so it is keyed
       // on what the real helper answers — the spy passes that first call through.
       const real = normalizedTmpdir();
+      // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
       const spy = vi.spyOn(fs.realpathSync, 'native').mockImplementation((() => {
         throw Object.assign(new Error(`EACCES: injected, realpath '${real}'`), { code: 'EACCES' });
       }) as typeof fs.realpathSync.native);
@@ -123,6 +129,7 @@ describe('path-utils realpath helpers: absence is the only failure answered lexi
   describe('mkdirSyncReal', () => {
     it('creates the directory and returns its realpath (positive control)', () => {
       const dir = safePath.join(root, 'made');
+      // eslint-disable-next-line local/no-fs-realpathSync -- the oracle: Node's own realpath, which the helper under test must equal
       expect(mkdirSyncReal(dir)).toBe(fs.realpathSync.native(dir));
     });
 

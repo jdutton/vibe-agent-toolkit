@@ -13,7 +13,7 @@
  * its body — and the harness stamps everything else.
  */
 
-import type { ReportEnvelope } from '../envelope/envelope.js';
+import { currentHost, type ReportEnvelope } from '../envelope/envelope.js';
 
 import type { ExitCommitment } from './commands.js';
 import { recordExits } from './exit-record.js';
@@ -67,6 +67,7 @@ export function buildReportEnvelope<TBody>(
     removedEnv: [...new Set(measured.flatMap((measurement) => measurement.removed))].sort(compareByCodeUnit),
     npmNetworkEnv: [...new Set(measured.flatMap((measurement) => measurement.npmNetwork))].sort(compareByCodeUnit),
     exits: measured.flatMap((measurement) => recordExits([measurement.spec], measurement.results)),
+    host: currentHost(),
     body,
   };
 }

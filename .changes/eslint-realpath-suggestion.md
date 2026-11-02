@@ -28,3 +28,9 @@
   a local `function tmpdir()` and a parameter shadowing a namespace (`function f(os) { os.tmpdir() }`)
   were rewritten to the real-fs helpers; they are now left alone, and so is an unbound call with no
   import at all.
+- **`no-os-tmpdir`, `no-fs-mkdirSync`, `no-fs-realpathSync` and `no-child-process-execSync` report two
+  more shapes, neither autofixed.** A call through the `.native` variant (`fs.realpathSync.native(x)`)
+  gets the same editor suggestion as a direct call; a value reference — the function assigned, passed
+  (`paths.map(realpathSync)`), captured or re-exported — is reported with no fix, since there is no call
+  to rewrite. A `typeof realpathSync` type position is not reported. Expect new findings where a test
+  double or a wrapper names the function it intercepts.

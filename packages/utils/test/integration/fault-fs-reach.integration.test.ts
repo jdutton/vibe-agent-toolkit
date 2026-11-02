@@ -167,6 +167,7 @@ describe('installFaultFs reaches every way VAT and its dependencies call fs', ()
   it('realpathSync.native, through a named import', () => {
     const root = scratch.create();
     session = installFaultFs({ within: root, faults: [{ family: 'meta', op: 'realpath', path: under(root), errno: 'EACCES' }] });
+    // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
     expect(() => namedRealpathSync.native(root)).toThrow(expect.objectContaining({ code: 'EACCES', path: root }));
     expect(session.fired.map((c) => [c.op, c.api])).toEqual([['realpath', 'sync']]);
   });
@@ -182,15 +183,19 @@ describe('installFaultFs reaches every way VAT and its dependencies call fs', ()
   });
 
   it('restore() puts realpathSync.native and realpath.native back', () => {
+    // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
     const syncNative = nodeFs.realpathSync.native;
     const callbackNative = nodeFs.realpath.native;
     const root = scratch.create();
     session = installFaultFs({ within: root, faults: [{ family: 'meta', op: 'realpath', path: under(root), errno: 'EACCES' }] });
+    // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
     expect(nodeFs.realpathSync.native).not.toBe(syncNative);
     session.restore();
     session = undefined;
+    // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
     expect(nodeFs.realpathSync.native).toBe(syncNative);
     expect(nodeFs.realpath.native).toBe(callbackNative);
+    // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
     expect(namedRealpathSync.native(root)).toBe(syncNative(root));
   });
 

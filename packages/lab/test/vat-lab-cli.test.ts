@@ -777,16 +777,15 @@ const UNION_BUILDS = {
 function unionEnvelope(row: string, preparedClone: string | null, commit: string, build: keyof typeof UNION_BUILDS): ReportEnvelope<VerdictBody> {
   const finding = { code: 'LINK_BROKEN_FILE', severity: 'error', location: 'docs/a.md', line: 3, message: 'm' };
   return {
-    facet: 'verdict',
-    coordinate: {
-      subject: { id: 'app', source: preparedClone ?? '/work/app' },
-      subjectVersion: { kind: 'git', commit, ref: null, dirty: false, workingFingerprint: null },
-      instrument: UNION_BUILDS[build],
-    },
-    capturedAt: '2026-10-31T00:00:00.000Z',
-    removedEnv: [],
-    npmNetworkEnv: [],
-    exits: [],
+    ...makeReport({
+      facet: 'verdict',
+      coordinate: {
+        subject: { id: 'app', source: preparedClone ?? '/work/app' },
+        subjectVersion: { kind: 'git', commit, ref: null, dirty: false, workingFingerprint: null },
+        instrument: UNION_BUILDS[build],
+      },
+      capturedAt: '2026-10-31T00:00:00.000Z',
+    }),
     body: {
       arm: { set: {}, unset: [] },
       rows: [

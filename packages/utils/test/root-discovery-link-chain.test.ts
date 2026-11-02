@@ -52,6 +52,7 @@ function spyOnTheKernel(): { asked: () => string[]; restore: () => void } {
     viaDefault.push(toForwardSlash(String(path)));
   };
   const realStatSync = fs.statSync;
+  // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
   const realNative = fs.realpathSync.native;
   const spies = [
     vi.spyOn(fs, 'statSync').mockImplementation(((path: fs.PathLike, ...rest: unknown[]) => {
@@ -59,6 +60,7 @@ function spyOnTheKernel(): { asked: () => string[]; restore: () => void } {
       return (realStatSync as (path: fs.PathLike, ...rest: unknown[]) => unknown)(path, ...rest);
     }) as typeof fs.statSync),
     vi.spyOn(fs, 'existsSync').mockImplementation((path: fs.PathLike) => (record(path), false)),
+    // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
     vi.spyOn(fs.realpathSync, 'native').mockImplementation(((path: fs.PathLike) => (record(path), realNative(path))) as typeof fs.realpathSync.native),
   ];
   return { asked: () => [...viaDefault, ...named.asked], restore: () => { for (const spy of spies) spy.mockRestore() } };

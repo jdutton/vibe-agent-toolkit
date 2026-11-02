@@ -29,8 +29,9 @@ and a shell launch it — read as 300 MB or more. `VmHWM` belongs to the exec'd 
 600 MB peaked at 75.4, 75.4 and 75.3 MB. So a repeat is launched straight from the lab, with no
 intermediate launcher — an `npx:` build included: `npx` runs the package's `bin`, the cli's
 cwd-resolving wrapper, which spawns vat as a second process, so the facet installs the pinned spec
-into a directory of its own and runs that install's `@vibe-agent-toolkit/cli/dist/bin.js` with
-`node`, as a `dist:` build runs (`npx-entry.ts`). `test/integration/memory-probe.integration.test.ts`
+(`--ignore-scripts`, in an arm of its own under the arms root, with that arm's npm cache) and runs
+that install's `@vibe-agent-toolkit/cli/dist/bin.js` with `node`, as a `dist:` build runs
+(`npx-entry.ts`); an install whose cli is not the coordinate's version is refused. `test/integration/memory-probe.integration.test.ts`
 pins the independence, and it can only go red on Linux: macOS's `maxRSS` carries nothing over, and
 the test needs `sh`, so it is skipped on Windows, where a process is created rather than forked —
 argued there, not measured. A command that writes its subject (`build`) runs in a copy of it, which
@@ -44,8 +45,10 @@ decides that from the install alone, so every vat ever published is measurable, 
 `npx`, a `node -e` or a tool vat spawns writes nothing and never stands in for vat's peak.
 A repeat's sample is the LARGEST vat process's peak, never a sum: high-water marks from different
 moments were never resident together. How many vat processes reported is counted beside it, and a
-change in that count is a CHANGED verdict on its own — between two builds of one instrument kind
-(`tree:`, `dist:`, `npx:`); across kinds the count is not compared, and the comparison says so.
+change in that count is a CHANGED verdict on its own, across instrument kinds too: every kind runs
+`dist/bin.js` straight, so one count means one thing. A peak is the platform's allocator and the
+Node build's V8 as much as vat's, so two reports whose envelopes record a different `host`
+(`process.platform`, `process.version`) are refused, naming both.
 
 A repeat that leaves no vat peak — killed, out of heap, or no process with a vat main script —
 fails the row; it is never read as a small number. So does a row whose repeats disagree on how many
@@ -143,7 +146,7 @@ distribution differences for numbers.
 
 A facet owns:
 
-- **A stable `facet` name** — `perf`, `io`, `parse`, `crawl`, `population`, `verdict`. It goes in the envelope header and
+- **A stable `facet` name** — `perf`, `io`, `parse`, `crawl`, `population`, `verdict`, `memory`. It goes in the envelope header and
   two reports with different names are refused against each other.
 - **A body schema** — strict, and validated by the facet after it has confirmed the header names it.
   The envelope reader deliberately does not validate bodies; it does not know their shapes.

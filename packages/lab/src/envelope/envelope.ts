@@ -43,6 +43,17 @@ import { type RecordedExit, RecordedExitSchema } from '../harness/exit-record.js
 
 import { type Coordinate, CoordinateSchema } from './coordinate.js';
 
+/** Where a report's children ran: see {@link ReportEnvelope.host}. */
+export interface ReportHost {
+  readonly platform: string;
+  readonly node: string;
+}
+
+/** The host this process is, as a report records it. */
+export function currentHost(): ReportHost {
+  return { platform: process.platform, node: process.version };
+}
+
 /** A measurement of one facet at one coordinate. */
 export interface ReportEnvelope<TBody = unknown> {
   /** Which facet produced this — `io`, `perf`, `skill-lint`, and so on. */
@@ -74,6 +85,12 @@ export interface ReportEnvelope<TBody = unknown> {
    * each row's own exit in its body). Recorded for provenance and never compared.
    */
   readonly exits: readonly RecordedExit[];
+  /**
+   * The platform (`process.platform`) and Node build (`process.version`) the measured
+   * children ran on. A facet whose numbers are the runtime's as much as vat's — `memory`'s
+   * peak RSS — refuses a pair that differs here ({@link refuseDifferentHosts}).
+   */
+  readonly host: ReportHost;
   /** The facet's payload. */
   readonly body: TBody;
 }
@@ -94,6 +111,7 @@ export const ReportEnvelopeSchema = z
     removedEnv: z.array(z.string()),
     npmNetworkEnv: z.array(z.string()),
     exits: z.array(RecordedExitSchema),
+    host: z.object({ platform: z.string().min(1), node: z.string().min(1) }).strict(),
     body: z.unknown(),
   })
   .strict();
@@ -173,5 +191,20 @@ export function refuseDifferentFacets(
   if (a.facet !== b.facet) {
     return `REFUSED: these reports measure different facets ('${a.facet}' and '${b.facet}'). There is no delta between two different measurements.`;
   }
+  return null;
+}
+
+/**
+ * Were these two reports measured on one platform and one Node build?
+ *
+ * @param a - The baseline report
+ * @param b - The report being compared against it
+ * @returns `null` when they were, or a refusal naming both sides
+ */
+export function refuseDifferentHosts(a: ReportEnvelope<unknown>, b: ReportEnvelope<unknown>): string | null {
+  const differ = (what: string, x: string, y: string): string =>
+    `REFUSED: these reports were measured on a different ${what} ('${x}' and '${y}'), and the ${a.facet} numbers are the runtime's as much as vat's. Re-capture both on one host.`;
+  if (a.host.platform !== b.host.platform) return differ('platform', a.host.platform, b.host.platform);
+  if (a.host.node !== b.host.node) return differ('Node version', a.host.node, b.host.node);
   return null;
 }

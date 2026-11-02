@@ -694,11 +694,13 @@ function activate(logDir: string): void {
   // eslint-disable-next-line security/detect-child-process -- the counter WRAPS child_process to count spawns; it never spawns anything itself
   const childProcess = require('node:child_process') as typeof ChildProcessModule;
 
-  const captured: CapturedFs = {
-    writeFileSync: fs.writeFileSync,
-    mkdirSync: fs.mkdirSync,
-    existsSync: fs.existsSync,
-  };
+  // Read off the module as `wrapFunction` reads what it wraps. These are RAW fs calls the dump
+  // makes on purpose: the counter cannot load the utils helpers into the process it measures.
+  const captured = {
+    writeFileSync: Reflect.get(fs, 'writeFileSync'),
+    mkdirSync: Reflect.get(fs, 'mkdirSync'),
+    existsSync: Reflect.get(fs, 'existsSync'),
+  } as CapturedFs;
 
   const state = createState(logDir, __filename);
 

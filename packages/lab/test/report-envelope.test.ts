@@ -64,6 +64,12 @@ describe('buildReportEnvelope — npmNetworkEnv', () => {
   });
 });
 
+describe('buildReportEnvelope — host', () => {
+  it('records the platform and the Node version the measured children ran on', () => {
+    expect(buildReportEnvelope('perf', REQUEST, {}, []).host).toStrictEqual({ platform: process.platform, node: process.version });
+  });
+});
+
 describe('buildReportEnvelope — exits', () => {
   it("records each command's commitment and the code its repetitions shared, and tells a disagreement from a step that never ran", () => {
     const envelope = buildReportEnvelope('perf', REQUEST, {}, [measured('same', [], [1, 1]), measured('mixed', [], [0, 1]), measured('never', [], [])]);

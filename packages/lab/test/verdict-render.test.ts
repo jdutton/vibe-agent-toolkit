@@ -157,6 +157,7 @@ describe('renderVerdictReport', () => {
       capturedAt: '2026-10-03T00:00:00.000Z',
       removedEnv: [],
       npmNetworkEnv: [],
+      host: { platform: process.platform, node: process.version },
       exits: [],
       coordinate: {
         subject: { id: 'crucible-1', source: '/work/tree' },

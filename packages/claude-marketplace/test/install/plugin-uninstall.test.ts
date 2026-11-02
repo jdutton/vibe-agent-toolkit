@@ -613,11 +613,14 @@ describe('uninstallPlugin never removes a directory another registered plugin is
 /** Run `body` while the OS's real path answers in backslashes — Windows' native spelling. */
 async function withRealPathsIn<T>(backslashes: boolean, body: () => Promise<T>): Promise<T> {
   if (!backslashes) return body();
+  // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
   const original = nodeFs.realpathSync.native;
+  // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
   nodeFs.realpathSync.native = ((...args: Parameters<typeof original>) => String(original(...args)).replaceAll('/', '\\')) as typeof original;
   try {
     return await body();
   } finally {
+    // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
     nodeFs.realpathSync.native = original;
   }
 }

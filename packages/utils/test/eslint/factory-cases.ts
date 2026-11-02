@@ -178,6 +178,8 @@ export function unsafeCallRuleCases(
         filename: LINTED_FILE,
         options,
       },
+      // A type position names the function's type, never the function.
+      { code: `${unsafeImport}\nexport type T = typeof ${unsafeFn};`, filename: LINTED_FILE, options },
     ],
     invalid: [
       { code: unsafeCode, filename: LINTED_FILE, options, ...rewritten(output, suggestedOutput) },
@@ -218,6 +220,7 @@ export function unsafeCallRuleCases(
           `${namespaceImport}\n${safeImport}\nconst { ${unsafeFn} } = m;\nconst r = ${safeFn}(x${extra});`,
         ),
       },
+      ...nativeAndValueReferenceCases({ unsafeFn, unsafeModule, safeFn, extra, unsafeImport, namespaceImport, safeImport, options }),
       ...(typeof rewrite === 'object' && 'autofixAsStatement' in rewrite
         ? statementOnlyAutofixCases(unsafeFn, safeFn, unsafeImport, safeImport, options)
         : []),
@@ -276,5 +279,44 @@ function statementOnlyAutofixCases(
         },
       ],
     },
+  ];
+}
+
+interface ReferenceCaseSpec {
+  unsafeFn: string;
+  unsafeModule: string;
+  safeFn: string;
+  extra: string;
+  unsafeImport: string;
+  namespaceImport: string;
+  safeImport: string;
+  options: object[];
+}
+
+/**
+ * The unsafe function reached without calling it directly. `.native` (`realpathSync.native(x)`)
+ * is a call of the same function: a SUGGESTION rewrites the whole callee, never an autofix,
+ * since the variant may differ from the safe call. A value reference — assigned, passed,
+ * re-exported — has no call to rewrite, so it is reported with no suggestion at all.
+ */
+function nativeAndValueReferenceCases(
+  { unsafeFn, unsafeModule, safeFn, extra, unsafeImport, namespaceImport, safeImport, options }: ReferenceCaseSpec,
+): object[] {
+  const noRewrite = [{ messageId: 'noUnsafeOperation', suggestions: [] }];
+  const suggested = (code: string, suggestion: string) => ({
+    code,
+    filename: LINTED_FILE,
+    options,
+    errors: [{ messageId: 'noUnsafeOperation', suggestions: [{ messageId: 'useSafeCall', output: suggestion }] }],
+  });
+  const reported = (code: string) => ({ code, filename: LINTED_FILE, options, errors: noRewrite });
+  return [
+    suggested(`${unsafeImport}\nconst r = ${unsafeFn}.native(x);`, `${unsafeImport}\n${safeImport}\nconst r = ${safeFn}(x${extra});`),
+    suggested(`${namespaceImport}\nconst r = m.${unsafeFn}.native(x);`, `${namespaceImport}\n${safeImport}\nconst r = ${safeFn}(x${extra});`),
+    reported(`${unsafeImport}\nexport const f = ${unsafeFn};`),
+    reported(`${namespaceImport}\nexport const f = m.${unsafeFn};`),
+    reported(`${unsafeImport}\nexport const r = [x].map(${unsafeFn});`),
+    reported(`${unsafeImport}\nexport const f = ${unsafeFn}.native;`),
+    reported(`export { ${unsafeFn} } from '${unsafeModule}';`),
   ];
 }

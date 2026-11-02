@@ -51,7 +51,14 @@ import {
   safePath,
   withFsFaultSync,
 } from '@vibe-agent-toolkit/utils';
-import { type DirectoryRefusal, settleCrawlRefusal, type UnreadablePolicy } from '@vibe-agent-toolkit/utils/crawl';
+import {
+  BUILD_OUTPUT_GLOBS,
+  crawlDirectory,
+  crawlPathFilter,
+  type DirectoryRefusal,
+  settleCrawlRefusal,
+  type UnreadablePolicy,
+} from '@vibe-agent-toolkit/utils/crawl';
 import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
@@ -527,9 +534,10 @@ function joinOrStartCrawl(
  *
  * The crawl is memoized on `projectRoot` (and the population source) alone, never on `outputs`:
  * every caller of one root in a process is served the FIRST crawl's registry. Anything written
- * inside the root after that crawl — a declared output outside `dist/`, which the default exclude
- * does not drop — is absent from what later callers are served. Write outputs outside the root,
- * or under `dist/`, or call {@link resetPackagingRegistryCache} after writing.
+ * inside the root after that crawl is absent from what later callers are served — except to the
+ * packager's post-build check of its own bundle, which layers the bundle over the memo
+ * (`withOwnBundle`, reading only the bundle). Any other caller that must see a write calls
+ * {@link resetPackagingRegistryCache} after it.
  */
 export async function crawlAndResolveRegistry(
   projectRoot: string,
@@ -560,6 +568,9 @@ export async function crawlAndResolveRegistry(
   return memo.registry;
 }
 
+/** What {@link crawlAndResolveRegistry} crawls — markdown and HTML — and what the built lane reads of its own bundle. */
+const REGISTRY_INCLUDE = ['**/*.md', '**/*.html', '**/*.htm'];
+
 /** The one crawl {@link crawlAndResolveRegistry} memoizes. */
 async function crawlRegistry(projectRoot: string, options: CrawlRegistryOptions): Promise<MemoizedRegistry> {
   const { populationSource, unreadable, outputs } = options;
@@ -574,7 +585,7 @@ async function crawlRegistry(projectRoot: string, options: CrawlRegistryOptions)
   const { registry } = await ResourceRegistry.fromCrawl(
     {
       baseDir: projectRoot,
-      include: ['**/*.md', '**/*.html', '**/*.htm'],
+      include: REGISTRY_INCLUDE,
       unreadable: recorded,
       outputs,
       // Enumeration only. `ResourceRegistry.crawl` re-applies the include set
@@ -611,11 +622,11 @@ async function crawlRegistry(projectRoot: string, options: CrawlRegistryOptions)
  * per distinct root it audits, every one until exit. A bound or eviction is an
  * open follow-up, not done here. Note the crawl excludes build output (`BUILD_OUTPUT_GLOBS` in
  * the registry's default) and every build's staging residue (`.<name>.vat-staged-*`,
- * in `NEVER_CONTENT_GLOBS`), so packaging a skill mid-run cannot invalidate it. A
- * declared output inside the root and outside `dist/` IS crawled — `outputs` never
- * shapes the population (see {@link MemoEntry}) — so a library caller writing
- * there owns that choice; what no caller may be served is another's half-written
- * staging copy.
+ * in `NEVER_CONTENT_GLOBS`), so packaging a skill mid-run cannot invalidate it.
+ * `outputs` never shapes the population (see {@link MemoEntry}); the packager's
+ * post-build check sees its own bundle by layering it over the memo
+ * ({@link withOwnBundle}), never by re-crawling the root, and no caller is served
+ * another's half-written staging copy.
  *
  * 🚨 That exclusion is ALSO the cause of a live defect, and this paragraph is the
  * reason the defect must not be fixed by widening the crawl. The packager's
@@ -728,23 +739,77 @@ export function resetPackagingRegistryCache(): void {
  * @param skillPath - Path to SKILL.md
  * @param projectRoot - The root the fallback crawl covers
  * @param shared - The batching caller's context, if any
- * @param outputs - What the calling verb writes: the crawl's one declaration of which side a fault is on
+ * @param context - `built` for output this run wrote, which the crawl never holds — see {@link withOwnBundle}
  * @returns A registry whose links are resolved and that covers `skillPath`
  */
-function registryForSkill(
+async function registryForSkill(
   skillPath: string,
   projectRoot: string,
   shared: SkillValidationSharedContext | undefined,
-  outputs: readonly string[],
+  context: 'source' | 'built',
 ): Promise<ResourceRegistry> {
+  const outputs = crawlOutputs(context, skillPath, shared);
   if (shared?.registry !== undefined && registryCoversSkill(shared.registry, skillPath)) {
-    return Promise.resolve(shared.registry);
+    return shared.registry;
   }
-  return crawlAndResolveRegistry(projectRoot, {
+  const unreadable = shared === undefined ? 'refuse' : shared.unreadable;
+  const registry = await crawlAndResolveRegistry(projectRoot, {
     outputs,
-    unreadable: shared === undefined ? 'refuse' : shared.unreadable,
+    unreadable,
     ...(shared?.populationSource !== undefined && { populationSource: shared.populationSource }),
   });
+  return context === 'built' && registry.getResource(safePath.resolve(skillPath)) === undefined
+    ? withOwnBundle(registry, dirname(skillPath), unreadable, outputs)
+    : registry;
+}
+
+/** Whether a root-relative path lies OUTSIDE build output (`dist/`), which a crawl of the root never admits. */
+const outsideBuildOutput = crawlPathFilter(['**/*'], BUILD_OUTPUT_GLOBS);
+
+/**
+ * The memoized project registry with a bundle it does not hold layered over it:
+ * the project's resources, plus the bundle's own files read now — the files a
+ * fresh crawl of the root would have admitted from it, as it did before the
+ * crawl was memoized: none under `dist/` (the defect `runPostBuildValidation`
+ * documents, unchanged here) and none an ignore rule hides.
+ *
+ * The memo — keyed on the root, crawled once — never holds the bundle: it is
+ * written after the crawl, at a staging name (`.<name>.vat-staged-*`) the crawl
+ * excludes as residue. Without this the walk started from nothing and every
+ * link-derived check passed silently. Only the bundle is read; the root is not
+ * crawled again. The project's resources are COPIED, links and all, before links
+ * are resolved, so the memo never learns of the bundle.
+ *
+ * @param registry - The memoized registry of the project root
+ * @param bundleDir - The directory holding the built SKILL.md
+ * @param unreadable - The caller's ruling, for a bundle directory that cannot be listed
+ * @param outputs - What the run writes: the bundle's side of any fault
+ * @returns A registry that holds the bundle, links resolved
+ */
+async function withOwnBundle(
+  registry: ResourceRegistry,
+  bundleDir: string,
+  unreadable: RegistryUnreadablePolicy,
+  outputs: readonly string[],
+): Promise<ResourceRegistry> {
+  const root = registry.baseDir ?? bundleDir;
+  if (!outsideBuildOutput(toForwardSlash(safePath.relative(root, safePath.join(bundleDir, 'SKILL.md'))))) return registry;
+  const bundle = await crawlDirectory({
+    baseDir: bundleDir,
+    include: REGISTRY_INCLUDE,
+    exclude: [],
+    // As the root's crawl reads it: untracked files count, ignored ones do not.
+    includeUntracked: true,
+    unreadable: unreadable === 'refuse'
+      ? { refuse: { root: bundleDir, remedy: listingRefusalRemedy(bundleDir), side: 'destination' } }
+      : unreadable,
+    outputs,
+  });
+  const copies = registry.getAllResources().map((resource) => ({ ...resource, links: resource.links.map((link) => ({ ...link })) }));
+  const layered = ResourceRegistry.fromResources(root, copies, registry.config === undefined ? undefined : { config: registry.config });
+  await layered.addResources(bundle);
+  layered.resolveLinks();
+  return layered;
 }
 
 /**
@@ -1025,7 +1090,7 @@ export async function validateSkillForPackaging(
   // reuse when the shared registry covers this skill's projectRoot; otherwise
   // fall back to a fresh crawl to avoid leaking resources across roots.
   // A `built` skill sits in output this run wrote inside the project: the project root is then a destination.
-  const registry = await registryForSkill(skillPath, projectRoot, shared, crawlOutputs(context, skillPath, shared));
+  const registry = await registryForSkill(skillPath, projectRoot, shared, context);
 
   const skillResource = registry.getResource(safePath.resolve(skillPath));
   // Only the entries the PACKAGER will actually copy defer a link: an entry pointing

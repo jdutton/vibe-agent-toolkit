@@ -56,6 +56,7 @@ export function makeReport(over: Partial<ReportEnvelope<unknown>> = {}): ReportE
     removedEnv: [],
     npmNetworkEnv: [],
     exits: [],
+    host: { platform: process.platform, node: process.version },
     body: { commands: [] },
     ...over,
   };
