@@ -22,7 +22,7 @@ import type {
   SubjectVersion,
 } from '../envelope/coordinate.js';
 
-import type { CountDelta, MsDelta } from './delta.js';
+import type { CountDelta, MagnitudeDelta } from './delta.js';
 import type { LoadReadings } from './types.js';
 
 /** How many characters of a hash identify it in a header. */
@@ -101,7 +101,7 @@ export function share(value: number, total: number): string {
  * @param value - The pair and its difference
  * @returns `921.6ms -> 812.0ms (-109.6ms)`
  */
-export function msPair(value: MsDelta): string {
+export function msPair(value: MagnitudeDelta): string {
   return `${ms(value.before)} -> ${ms(value.after)} (${signedMs(value.delta)})`;
 }
 
@@ -112,7 +112,7 @@ export function msPair(value: MsDelta): string {
  * @param value - The pair and its difference
  * @returns `total 921.6ms -> 812.0ms (-109.6ms)`
  */
-export function msMovement(label: string, value: MsDelta): string {
+export function msMovement(label: string, value: MagnitudeDelta): string {
   return `${label} ${msPair(value)}`;
 }
 

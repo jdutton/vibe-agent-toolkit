@@ -9,7 +9,7 @@
  */
 
 import type { Coordinate } from '../src/envelope/coordinate.js';
-import type { ReportEnvelope } from '../src/envelope/envelope.js';
+import type { ReportEnvelope, ReportHost } from '../src/envelope/envelope.js';
 import type { LoadReadings } from '../src/harness/types.js';
 
 /**
@@ -42,6 +42,9 @@ export const COORDINATE: Coordinate = {
   instrument: { version: '0.1.42', commit: '1'.repeat(40), dirty: false, closure: null },
 };
 
+/** This machine, with no inherited NODE_OPTIONS. */
+export const HOST: ReportHost = { platform: process.platform, arch: process.arch, node: process.version, nodeOptions: '' };
+
 /**
  * Build a well-formed report, overriding only what a test varies.
  *
@@ -56,7 +59,7 @@ export function makeReport(over: Partial<ReportEnvelope<unknown>> = {}): ReportE
     removedEnv: [],
     npmNetworkEnv: [],
     exits: [],
-    host: { platform: process.platform, node: process.version },
+    host: HOST,
     body: { commands: [] },
     ...over,
   };

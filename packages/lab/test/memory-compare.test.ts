@@ -14,7 +14,7 @@ import { compareMemory, type MemoryComparisonResult } from '../src/facets/memory
 import { renderMemoryComparison, renderMemoryReport } from '../src/facets/memory/render.js';
 import { MEMORY_FACET, type MemoryBody, type MemoryCommandStats } from '../src/facets/memory/types.js';
 
-import { CLEAN_LOAD, makeReport, makeReportAt } from './report-fixtures.js';
+import { CLEAN_LOAD, HOST, makeReport, makeReportAt } from './report-fixtures.js';
 
 /** Kilobytes in a gibibyte. */
 const GIB_KB = 1024 * 1024;
@@ -41,8 +41,19 @@ function row(medianKb: number, over: Partial<MemoryCommandStats> = {}): MemoryCo
     exitCode: 0,
     failed: false,
     failure: null,
+    outOfHeap: false,
     ...over,
   };
+}
+
+/**
+ * A row that measured nothing.
+ *
+ * @param over - What a case varies
+ * @returns The failed row
+ */
+function failedRow(over: Partial<MemoryCommandStats> = {}): MemoryCommandStats {
+  return row(0, { failed: true, failure: 'killed', minKb: 0, maxKb: 0, iqrKb: 0, samplesKb: [], exitCode: null, ...over });
 }
 
 /**
@@ -136,8 +147,10 @@ describe('compareMemory', () => {
   });
 
   it.each([
-    ['platform', { platform: 'win32', node: process.version }],
-    ['Node version', { platform: process.platform, node: 'v20.0.0' }],
+    ['platform', { ...HOST, platform: 'win32' }],
+    ['architecture', { ...HOST, arch: 'ia32' }],
+    ['Node version', { ...HOST, node: 'v20.0.0' }],
+    ['NODE_OPTIONS', { ...HOST, nodeOptions: '--max-old-space-size=8192' }],
   ])('refuses two reports measured on a different %s, naming both', (what, host) => {
     const result = compareMemory(reportWith(row(GIB_KB)), reportWith(row(GIB_KB), makeReport({ host })));
 
@@ -147,10 +160,28 @@ describe('compareMemory', () => {
   });
 
   it('yields no delta when a side failed, and names the side', () => {
-    const failed = row(0, { failed: true, failure: 'no RSS dumps', minKb: 0, maxKb: 0, iqrKb: 0, samplesKb: [], exitCode: null });
+    const failed = failedRow({ failure: 'no RSS dumps' });
     const verdict = onlyVerdict(compared(row(GIB_KB), failed));
 
     expect(verdict).toEqual({ kind: 'unmeasurable', reason: expect.stringContaining('compared side row failed: no RSS dumps') });
+  });
+
+  it('calls a candidate that ran out of heap CHANGED against a measured baseline, naming the side', () => {
+    const verdict = onlyVerdict(compared(row(GIB_KB), failedRow({ outOfHeap: true })));
+
+    expect(verdict).toEqual({ kind: 'changed', outOfHeap: 'after', measuredKb: GIB_KB });
+  });
+
+  it('calls a baseline that ran out of heap CHANGED against a measured candidate', () => {
+    expect(onlyVerdict(compared(failedRow({ outOfHeap: true }), row(GIB_KB)))).toMatchObject({ kind: 'changed', outOfHeap: 'before' });
+  });
+
+  it.each([
+    ['a plain failure', failedRow(), row(GIB_KB)],
+    ['both sides out of heap', failedRow({ outOfHeap: true }), failedRow({ outOfHeap: true })],
+    ['an out-of-heap side under another cache mode', row(GIB_KB), failedRow({ outOfHeap: true, cache: 'cold' })],
+  ])('yields no delta for %s', (_case, before, after) => {
+    expect(onlyVerdict(compared(before, after)).kind).toBe('unmeasurable');
   });
 
   it('yields no delta when the accepted exits differ', () => {
@@ -178,7 +209,7 @@ describe('the memory renderers', () => {
   });
 
   it('says FAILED, never a zero peak, for a failed row', () => {
-    const text = renderMemoryReport(reportWith(row(0, { failed: true, failure: 'killed', minKb: 0, maxKb: 0, exitCode: null })));
+    const text = renderMemoryReport(reportWith(failedRow()));
 
     expect(text).toContain('build: FAILED — killed');
     expect(text).not.toContain('0.0 MiB');
@@ -188,6 +219,12 @@ describe('the memory renderers', () => {
     const text = renderMemoryComparison(compared(row(GIB_KB), row(5.4 * GIB_KB)));
 
     expect(text).toContain('build: CHANGED — median peak RSS 1.00 GiB -> 5.40 GiB (×5.40), 1 vat processes');
+  });
+
+  it('says which side ran out of heap, and the other side\'s peak, never a ratio', () => {
+    const text = renderMemoryComparison(compared(row(GIB_KB), failedRow({ outOfHeap: true })));
+
+    expect(text).toContain('build: CHANGED — the compared side ran out of heap and left no peak; the baseline peaked at 1.00 GiB median');
   });
 
   it('prints a moved process count on the comparison', () => {

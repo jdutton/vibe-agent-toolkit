@@ -14,6 +14,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  currentHost,
   readEnvelope,
   refuseDifferentFacets,
   type ReportEnvelope,
@@ -156,4 +157,13 @@ describe('refuseDifferentFacets', () => {
   // agrees with itself perfectly. `harness/facet-compare.ts`'s `readBody`
   // validates each side against this build's strict schema instead, and every
   // facet's comparator suite exercises exactly that matched-pair case.
+});
+
+describe('currentHost', () => {
+  it('records the architecture and the NODE_OPTIONS the arm hands every measured child', () => {
+    const host = currentHost({ set: { NODE_OPTIONS: ' --max-old-space-size=123 ' }, unset: [] });
+
+    expect(host).toEqual({ platform: process.platform, arch: process.arch, node: process.version, nodeOptions: '--max-old-space-size=123' });
+    expect(currentHost({ set: {}, unset: ['NODE_OPTIONS'] }).nodeOptions).toBe('');
+  });
 });

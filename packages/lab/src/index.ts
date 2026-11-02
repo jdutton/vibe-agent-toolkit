@@ -410,7 +410,6 @@ export {
   labelledMovements,
   type MagnitudeDelta,
   magnitudeDelta,
-  type MsDelta,
   msDelta,
   type RowMovement,
   type RowMovementKind,

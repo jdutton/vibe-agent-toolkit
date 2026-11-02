@@ -67,7 +67,7 @@ export function buildReportEnvelope<TBody>(
     removedEnv: [...new Set(measured.flatMap((measurement) => measurement.removed))].sort(compareByCodeUnit),
     npmNetworkEnv: [...new Set(measured.flatMap((measurement) => measurement.npmNetwork))].sort(compareByCodeUnit),
     exits: measured.flatMap((measurement) => recordExits([measurement.spec], measurement.results)),
-    host: currentHost(),
+    host: currentHost(request.env),
     body,
   };
 }

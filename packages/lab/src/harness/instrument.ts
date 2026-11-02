@@ -529,8 +529,9 @@ function resolveNpx(spec: string): ResolvedInstrument {
     command: 'npx',
     leadingArgs: ['--yes', trimmed],
     // A published tarball carries no provenance: no commit, and therefore
-    // nothing that could have been dirty. No closure either: its bytes are not
-    // on disk until npx unpacks them at run time, and the pinned version pins them.
+    // nothing that could have been dirty. No closure either: its bytes are not on
+    // disk until npx unpacks them, and the pin fixes vat's packages but not their
+    // third-party ranges. `memory` installs it itself and stamps that install's.
     version: { version, commit: null, dirty: null, closure: null },
   };
 }

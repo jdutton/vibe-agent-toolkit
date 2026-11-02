@@ -25,12 +25,22 @@
  *    a timing, because timing a crash measures how fast vat fails.
  * 4. **A measured subject never receives anything.** An arm whose steps WRITE
  *    the tree they run in (`SequenceStep.writes`) runs in its own copy of the
- *    subject, with the written directories deleted before every run and the
- *    copy removed when the arm ends — see `subject-copy.ts`.
+ *    subject, with the written directories deleted before every run, a run that
+ *    changed anything else in it failed, and the copy removed when the arm ends
+ *    — see `subject-copy.ts`.
  */
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { forEachInOrder, mapInOrder } from '@vibe-agent-toolkit/utils';
+import {
+  everywhere,
+  forEachInOrder,
+  isAbsolutePath,
+  isInsideByIdentity,
+  mapInOrder,
+  pathPresent,
+  safePath,
+  sameEntry,
+} from '@vibe-agent-toolkit/utils';
 import { handleTerminatingSignals } from '@vibe-agent-toolkit/utils/process';
 
 import {
@@ -46,6 +56,7 @@ import {
 } from './arm-dirs.js';
 import { type ArmEnvironment, clearedEnvironment, mergeArmEnvironments } from './arm-env.js';
 import type { MeasuredCommandSpec } from './commands.js';
+import { fingerprintFiles } from './fingerprint.js';
 import { type ParseDirectoryResolution, resolveParseCacheDirectory } from './parse-cache.js';
 import { populationExpectation } from './population-expectation.js';
 import { runCommand } from './run.js';
@@ -282,8 +293,8 @@ export async function runInterleaved(specs: readonly RepeatSpec[], rounds: numbe
   // A Ctrl-C or kill mid-capture removes the copies too: each is a whole subject left on disk.
   const signals = handleTerminatingSignals({ cleanup: removeCopies, fallbackExitCode: ExitCode.ERROR });
   try {
-    await forEachInOrder(arms, (arm) => makeSubjectCopy(arm));
-    return await runPreparedArms(arms, specs, rounds);
+    const copies = await mapInOrder(arms, (arm) => makeSubjectCopy(arm));
+    return await runPreparedArms(arms, specs, rounds, copies);
   } finally {
     // A signal that already arrived runs the removal itself, before the process ends.
     if (signals.release()) await removeCopies();
@@ -297,9 +308,15 @@ export async function runInterleaved(specs: readonly RepeatSpec[], rounds: numbe
  * @param arms - The prepared arms
  * @param specs - Their specs, in the same order
  * @param rounds - Measured repetitions per arm
+ * @param copies - Each arm's {@link copyFingerprint} as copied, in `arms` order
  * @returns One run per arm, in `specs` order
  */
-async function runPreparedArms(arms: readonly PreparedArm[], specs: readonly RepeatSpec[], rounds: number): Promise<ArmRun[]> {
+async function runPreparedArms(
+  arms: readonly PreparedArm[],
+  specs: readonly RepeatSpec[],
+  rounds: number,
+  copies: readonly (string | null)[],
+): Promise<ArmRun[]> {
   // Start first: an npx build is on disk, and so askable for its parse directory, only once started.
   for (const [index, arm] of arms.entries()) startBuild(arm, specs[index]?.arm.arm ?? '');
   // Before any measured child: an arm that cannot judge its population is refused whole, not after round 1.
@@ -312,7 +329,8 @@ async function runPreparedArms(arms: readonly PreparedArm[], specs: readonly Rep
     forEachInOrder(arms, async (arm, index) => {
       if ((priming[index]?.violation ?? null) !== null) return;
       await clearWrittenOutputs(arm);
-      results[index]?.push(await runSequence(arm.context, { kind: 'measured', vatEnv: arm.measuredEnv(round) }));
+      const run = await runSequence(arm.context, { kind: 'measured', vatEnv: arm.measuredEnv(round) });
+      results[index]?.push(strayWrite(arm, copies[index] ?? null, run));
     }),
   );
   return arms.map((arm, index) => ({
@@ -329,12 +347,42 @@ async function runPreparedArms(arms: readonly PreparedArm[], specs: readonly Rep
  * a previous capture left in a named arms directory goes first.
  *
  * @param arm - A prepared arm, its directories made
+ * @returns The copy's {@link copyFingerprint}, or `null` when the arm runs in the subject
  * @throws {VatError} `ARM_REFUSED` when the copy cannot be made
  */
-async function makeSubjectCopy(arm: PreparedArm): Promise<void> {
-  if (arm.copy === null) return;
+async function makeSubjectCopy(arm: PreparedArm): Promise<string | null> {
+  if (arm.copy === null) return null;
   await removeArmSubject(arm.context.dirs);
   copySubject(arm.copy.from, arm.context.dirs.subject);
+  return copyFingerprint(arm.context.dirs.subject, arm.copy.writes);
+}
+
+/**
+ * The copy, outside what its steps declare they write: git's population when it is a
+ * checkout (so git's own bookkeeping under `.git/` is not a write), every file otherwise.
+ *
+ * @param copy - The arm's copy of the subject
+ * @param writes - The directories its steps declare
+ * @returns The fingerprint
+ */
+function copyFingerprint(copy: string, writes: readonly string[]): string {
+  const dotGit = safePath.join(copy, '.git');
+  const fromGit = pathPresent(dotGit, { follow: dotGit }, everywhere('source'), 'probe');
+  return fingerprintFiles(copy, { fromGit, exclude: writes.map((dir) => `${dir}/**`) }).fingerprint;
+}
+
+/**
+ * Fail a run that changed its copy outside the declared writes: `writes` is the step's claim, checked here.
+ *
+ * @param arm - A prepared arm
+ * @param copied - The copy's fingerprint as made, or `null`
+ * @param run - The run
+ * @returns The run, failed when it wrote anything else
+ */
+function strayWrite(arm: PreparedArm, copied: string | null, run: SequenceResult): SequenceResult {
+  if (copied === null || arm.copy === null || run.violation !== null) return run;
+  if (copyFingerprint(arm.context.dirs.subject, arm.copy.writes) === copied) return run;
+  return { ...run, violation: `the run changed its subject copy outside what its steps declare they write (${arm.copy.writes.join(', ')})` };
 }
 
 /**
@@ -464,13 +512,24 @@ async function primed(arm: PreparedArm): Promise<SequenceResult> {
  * @throws {VatError} `ARM_REFUSED` naming the step
  */
 function refuseSubjectArguments(spec: RepeatSpec): void {
-  const named = spec.steps.find((step) => step.command.args.some((arg) => arg.includes(spec.cwd)));
+  const named = spec.steps.find((step) => step.command.args.some((arg) => namesSubject(arg, spec.cwd)));
   if (named !== undefined) {
     throw armRefusal(
       `arm '${spec.arm.arm}': step '${named.name}' names the subject in its arguments, but the arm writes the subject ` +
         'and so runs in a copy of it — a writing command takes the subject from its working directory only',
     );
   }
+}
+
+/**
+ * @param arg - A step argument, or a `--flag=value` one's value
+ * @param subject - The real subject
+ * @returns Whether it is an absolute path to the subject or inside it, by identity: a link or another spelling counts
+ */
+function namesSubject(arg: string, subject: string): boolean {
+  const path = arg.startsWith('-') ? arg.slice(arg.indexOf('=') + 1) : arg;
+  if (!isAbsolutePath(path)) return false;
+  return sameEntry(path, subject) === 'same' || isInsideByIdentity(path, subject) === 'inside';
 }
 
 /**

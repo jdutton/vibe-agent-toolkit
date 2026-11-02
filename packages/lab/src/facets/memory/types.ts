@@ -64,6 +64,8 @@ export interface MemoryCommandStats {
   readonly failed: boolean;
   /** Why it failed, when it did. */
   readonly failure: string | null;
+  /** True when it failed because a repeat's process ran out of V8 heap: a regression with no peak to subtract. */
+  readonly outOfHeap: boolean;
 }
 
 /** The `memory` facet's report body. */
@@ -90,6 +92,7 @@ export const MemoryBodySchema = z
           samplesKb: z.array(z.number().nonnegative()),
           processesPerRepeat: z.array(z.number().int().nonnegative()),
           exitCode: z.number().int().nullable(),
+          outOfHeap: z.boolean(),
         })
         .strict(),
     ),

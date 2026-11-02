@@ -51,6 +51,9 @@ const PROBE_FILE = './rss-probe.cjs';
 /** Prefix for a repeat's dump directory, so a stray one names its owner. */
 const DUMP_DIR_PREFIX = 'vat-lab-memory-';
 
+/** What V8 prints as it aborts a process out of heap (`FATAL ERROR: … JavaScript heap out of memory`). */
+const HEAP_EXHAUSTED = 'JavaScript heap out of memory';
+
 /** How this facet's dumps are read and refused. */
 const RSS_DUMP_KIND: DumpKind<RssDump> = {
   noun: 'RSS dump',
@@ -97,6 +100,8 @@ function failedRow(measurement: SpecMeasurement, failure: string): MemoryCommand
     exitCode: null,
     failed: true,
     failure,
+    // Read once, here, so a comparator dispatches on a field rather than on stderr.
+    outOfHeap: measurement.results.some((result) => result.exitCode !== 0 && result.stderr.includes(HEAP_EXHAUSTED)),
   };
 }
 
@@ -197,6 +202,7 @@ async function rowFromDumps(
     exitCode: measurement.results[0]?.exitCode ?? null,
     failed: false,
     failure: null,
+    outOfHeap: false,
   };
 }
 
@@ -218,21 +224,23 @@ export async function captureMemory(options: CaptureMemoryOptions): Promise<Repo
   // NODE_OPTIONS (a raised `--max-old-space-size`, say) survives under the probe.
   const nodeOptions = nodeOptionsWith(probePath, buildArmEnv(process.env, options.env)['NODE_OPTIONS']);
 
-  const loadBefore = readLoad();
   const installArm = npxInstallArm(options.arms, options.cache);
   const install = npmInstaller(installArm, options.env, options.timeoutMs);
-  const { rows: commands, measured } = await withMemoryInstrument(options.instrument, installArm, install, (instrument) =>
-    captureCommandRows(
-      { ...options, instrument },
+  // The instrument that ran: an `npx:` build's carries its install's closure. Load is read after the install.
+  const { instrument, loadBefore, rows, measured } = await withMemoryInstrument(options.instrument, installArm, install, async (ran) => ({
+    instrument: ran,
+    loadBefore: readLoad(),
+    ...(await captureCommandRows(
+      { ...options, instrument: ran },
       DUMP_DIR_PREFIX,
       (directory) => ({ [RSS_LOG_DIR_ENV]: directory, NODE_OPTIONS: nodeOptions }),
       rowFromDumps,
-    ),
-  );
+    )),
+  }));
   const loadAfter = readLoad();
 
-  return buildReportEnvelope(MEMORY_FACET, options, {
-    commands,
+  return buildReportEnvelope(MEMORY_FACET, { ...options, instrument }, {
+    commands: rows,
     load: judgeLoad(loadBefore.loadAvg1, loadAfter.loadAvg1, loadAfter.cpus),
   }, measured);
 }

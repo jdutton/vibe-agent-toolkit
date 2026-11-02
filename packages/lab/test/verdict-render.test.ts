@@ -14,6 +14,7 @@ import { renderVerdictComparison, renderVerdictReport } from '../src/facets/verd
 import type { VerdictBody } from '../src/facets/verdict/types.js';
 
 import { PROBE_VERSION } from './command-probe.js';
+import { HOST } from './report-fixtures.js';
 
 const UNMEASURED: ObservedDelta = {
   subject: 'crucible-1',
@@ -157,7 +158,7 @@ describe('renderVerdictReport', () => {
       capturedAt: '2026-10-03T00:00:00.000Z',
       removedEnv: [],
       npmNetworkEnv: [],
-      host: { platform: process.platform, node: process.version },
+      host: HOST,
       exits: [],
       coordinate: {
         subject: { id: 'crucible-1', source: '/work/tree' },

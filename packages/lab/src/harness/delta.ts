@@ -40,9 +40,6 @@ export interface MagnitudeDelta {
   readonly significant: boolean;
 }
 
-/** A {@link MagnitudeDelta} whose unit is milliseconds. */
-export type MsDelta = MagnitudeDelta;
-
 /** How big a duration move has to be before it counts. */
 export interface DeltaThresholds {
   /** Smallest fraction of the smaller side that counts as a real move. */
@@ -96,7 +93,7 @@ export function countDelta(before: number, after: number): CountDelta {
  * @param thresholds - How big a move has to be; both fields default
  * @returns The delta, the ratio, and the verdict
  */
-export function msDelta(before: number, after: number, thresholds: DeltaThresholds): MsDelta {
+export function msDelta(before: number, after: number, thresholds: DeltaThresholds): MagnitudeDelta {
   return magnitudeDelta(
     before,
     after,
@@ -150,7 +147,7 @@ export type RowMovementKind = 'added' | 'removed' | 'changed';
 export interface RowMovement {
   readonly label: string;
   readonly kind: RowMovementKind;
-  readonly elapsedMs: MsDelta;
+  readonly elapsedMs: MagnitudeDelta;
   readonly calls: CountDelta;
 }
 

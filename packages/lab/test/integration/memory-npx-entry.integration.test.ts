@@ -6,8 +6,9 @@
  * the version the coordinate names.
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { dirname } from 'node:path';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
@@ -92,7 +93,19 @@ describe('withMemoryInstrument', () => {
     expect(used.command).toBe(process.execPath);
     expect(used.leadingArgs).toHaveLength(1);
     expect(used.leadingArgs[0]).toMatch(/\/node_modules\/@vibe-agent-toolkit\/cli\/dist\/bin\.js$/);
-    expect(used.version).toBe(NPX.version);
+    expect(used.version).toEqual({ ...NPX.version, closure: expect.stringMatching(/^[0-9a-f]{64}$/u) });
+    expect(existsSync(dirs.home)).toBe(true); // npm's HOME is the arm's, and exists
+  });
+
+  it("stamps the install's whole node_modules as the closure, third-party dependencies included", async () => {
+    const closure = async (dependency: string): Promise<string | null> => {
+      const files = { ...cliAt(VERSION), 'node_modules/left-pad/index.js': dependency };
+      return (await withMemoryInstrument(NPX, installArm(), installing(files), async (instrument) => instrument)).version.closure;
+    };
+
+    const first = await closure('module.exports = 1;');
+    expect(await closure('module.exports = 1;')).toBe(first);
+    expect(await closure('module.exports = 2;')).not.toBe(first);
   });
 
   it('prefers the cli nested under the named package over a hoisted one', async () => {
@@ -154,5 +167,7 @@ describe('npmInstaller', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.args).toContain('--ignore-scripts');
     expect(calls[0]?.env.set['npm_config_cache']).toBe(dirs.npmCache);
+    // The arm's HOME holds no .npmrc: the operator's registry, scopes and auth come from theirs.
+    expect(calls[0]?.env.set['npm_config_userconfig']).toBe(safePath.join(homedir(), '.npmrc'));
   });
 });

@@ -12,13 +12,13 @@
 
 import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { armDirectories } from '../../src/harness/arm-dirs.js';
 import { runInterleaved, runRepeats } from '../../src/harness/repeat.js';
 import { planSubjectCopy, writtenDirectories } from '../../src/harness/subject-copy.js';
-import { cleanupProbes, PROBE_WRITES_ENV, probeSpec, probeStep, setupProbe } from '../command-probe.js';
+import { cleanupProbes, PROBE_NO_LOG_ENV, PROBE_WRITES_ENV, probeSpec, probeStep, setupProbe } from '../command-probe.js';
 
 afterAll(cleanupProbes);
 
@@ -41,7 +41,8 @@ describe.skipIf(process.platform === 'win32')('a step that writes its subject', 
       runs: 2,
       cache: 'cold',
       steps: [probeStep(['build'], { writes: ['dist'] })],
-      env: { [PROBE_WRITES_ENV]: 'dist' },
+      // No probe.log: it lands in the cwd, which is a write outside `dist/`.
+      env: { [PROBE_WRITES_ENV]: 'dist', [PROBE_NO_LOG_ENV]: '1' },
     });
     const run = await runRepeats(spec);
 
@@ -73,6 +74,28 @@ describe.skipIf(process.platform === 'win32')('a step that writes its subject', 
     await runRepeats(spec);
 
     expect(readdirSync(safePath.join(probe.cwd, 'dist'))).toHaveLength(1);
+  });
+
+  it('fails a repeat that changed its copy outside the directories its steps declare they write', async () => {
+    const probe = setupProbe(PREFIX);
+    const spec = probeSpec(probe, {
+      runs: 1,
+      cache: 'cold',
+      steps: [probeStep(['build'], { writes: ['dist'] })],
+      env: { [PROBE_WRITES_ENV]: 'stray', [PROBE_NO_LOG_ENV]: '1' },
+    });
+    const run = await runRepeats(spec);
+
+    expect(run.results[0]?.violation).toMatch(/outside what its steps declare they write \(dist\)/u);
+  });
+
+  it('refuses a writing arm whose step names the real subject through a link to it', async ({ skip }) => {
+    const probe = setupProbe(PREFIX);
+    const link = safePath.join(probe.armsRoot, '..', 'link');
+    createSymlink(symlinkCapability() ?? skip(), probe.cwd, link, 'dir');
+    const spec = probeSpec(probe, { runs: 1, cache: 'cold', steps: [probeStep(['build', `--out=${safePath.join(link, 'out')}`], { writes: ['dist'] })] });
+
+    await expect(runRepeats(spec)).rejects.toThrow(/names the subject in its arguments/u);
   });
 
   it('refuses a writing arm whose step names the real subject in its arguments', async () => {

@@ -7,7 +7,8 @@
  * reasons, in the same order, as `perf` — and otherwise the MEDIAN peaks are
  * subtracted and judged by {@link magnitudeDelta}, with a floor no smaller than
  * the two arms' combined spread, and a change in how many vat processes ran is a
- * change in its own right. Two reports from different hosts are refused.
+ * change in its own right; one side out of heap against a measured other is
+ * CHANGED with no peak. Two reports from different hosts are refused.
  */
 
 import type { DecideComparisonOptions } from '../../envelope/coordinate.js';
@@ -48,6 +49,8 @@ interface ProcessCounts {
 /** What happened to one command present on both sides. */
 export type MemoryCommandVerdict =
   | { readonly kind: 'changed' | 'unchanged'; readonly peak: MagnitudeDelta; readonly processes: ProcessCounts }
+  /** One side ran out of heap; `measuredKb` is the other side's median peak. */
+  | { readonly kind: 'changed'; readonly outOfHeap: 'before' | 'after'; readonly measuredKb: number }
   | { readonly kind: 'unmeasurable'; readonly reason: string };
 
 /** A completed comparison. */
@@ -83,6 +86,20 @@ function unmeasurableReason(before: MemoryCommandStats, after: MemoryCommandStat
 }
 
 /**
+ * The verdict when exactly one side ran out of heap and the other measured, under one cache mode.
+ *
+ * @param before - The baseline row
+ * @param after - The compared row
+ * @returns The verdict, or `null`
+ */
+function outOfHeapVerdict(before: MemoryCommandStats, after: MemoryCommandStats): MemoryCommandVerdict | null {
+  if (before.cache !== after.cache) return null;
+  if (after.outOfHeap && !before.failed) return { kind: 'changed', outOfHeap: 'after', measuredKb: before.medianKb };
+  if (before.outOfHeap && !after.failed) return { kind: 'changed', outOfHeap: 'before', measuredKb: after.medianKb };
+  return null;
+}
+
+/**
  * One arm's repeat spread: the range its peaks covered.
  *
  * @param row - A measured row
@@ -105,6 +122,8 @@ function spreadKb(row: MemoryCommandStats): number {
  * @returns The verdict
  */
 function verdictFor(before: MemoryCommandStats, after: MemoryCommandStats): MemoryCommandVerdict {
+  const exhausted = outOfHeapVerdict(before, after);
+  if (exhausted !== null) return exhausted;
   const reason = unmeasurableReason(before, after);
   if (reason !== null) return { kind: 'unmeasurable', reason };
   const floorKb = Math.max(MIN_ABSOLUTE_KB, spreadKb(before) + spreadKb(after));

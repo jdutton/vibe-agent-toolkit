@@ -222,7 +222,7 @@ async function captureSubject(
       npmNetworkEnv: npmNetwork,
       // Each row records its own exit; a verdict judges no commitment.
       exits: [],
-      host: currentHost(),
+      host: currentHost(request.env),
       body: {
         arm: request.env,
         rows,

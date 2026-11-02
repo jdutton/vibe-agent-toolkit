@@ -77,6 +77,10 @@ export function renderMemoryReport(report: ReportEnvelope<MemoryBody>): string {
 function diffLines(diff: MemoryComparisonResult['commands'][number]): readonly string[] {
   const verdict = diff.verdict;
   const totals = (): string => {
+    if ('outOfHeap' in verdict) {
+      const [ran, other] = verdict.outOfHeap === 'after' ? ['compared side', 'baseline'] : ['baseline', 'compared side'];
+      return `the ${ran} ran out of heap and left no peak; the ${other} peaked at ${formatKb(verdict.measuredKb)} median`;
+    }
     if (!('peak' in verdict)) return '';
     const { before, after, ratio } = verdict.peak;
     const factor = ratio === null ? '' : ` (×${ratio.toFixed(2)})`;

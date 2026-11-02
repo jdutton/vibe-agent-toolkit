@@ -8,10 +8,14 @@
  * arms root, and runs `node <that install's @vibe-agent-toolkit/cli/dist/bin.js>`:
  * one vat process per repeat, whatever the subject has installed. npm resolves the
  * cli as a DEPENDENCY of the spec, so the cli's own `package.json` must name the
- * version the coordinate does, or the install is refused.
+ * version the coordinate does, or the install is refused. `--no-package-lock` leaves
+ * third-party ranges to float, so the install's whole `node_modules` is digested
+ * into the coordinate's `closure`: two installs of one version that resolved
+ * differently are two instruments.
  */
 
 import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 
 import { everywhere, mkdirSyncReal, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
 
@@ -21,9 +25,11 @@ import {
   armRefusal,
   armStepEnvironment,
   prepareArmDirectories,
+  resetArmHome,
   resetColdArm,
 } from '../../harness/arm-dirs.js';
-import type { ArmEnvironment } from '../../harness/arm-env.js';
+import { type ArmEnvironment, mergeArmEnvironments } from '../../harness/arm-env.js';
+import { fingerprintFiles } from '../../harness/fingerprint.js';
 import { runCommand } from '../../harness/run.js';
 import type { CacheMode, CaptureArms, ResolvedInstrument } from '../../harness/types.js';
 
@@ -48,22 +54,30 @@ export function npxInstallArm(arms: CaptureArms, cache: CacheMode): ArmDirectori
   return armDirectories({ root: arms.root, build: arms.build, arm: INSTALL_ARM, state: cache });
 }
 
+/** @returns The operator's npm userconfig: an inherited `npm_config_userconfig`, in any case, or `~/.npmrc` */
+function operatorNpmUserconfig(): string {
+  const named = Object.entries(process.env).find(([name]) => name.toLowerCase() === 'npm_config_userconfig')?.[1];
+  return named ?? safePath.join(homedir(), '.npmrc');
+}
+
 /**
  * Install a pinned spec with npm, in the install arm's environment — its npm cache,
  * temp directory and home — with lifecycle scripts off: the lab measures vat, never
- * runs a package's install hooks.
+ * runs a package's install hooks. The arm's home holds no `.npmrc`, so npm reads the
+ * operator's (registry, scoped registries, auth) as its userconfig; an install never writes it.
  *
  * @param dirs - The install arm
- * @param env - The capture's arm environment, so npm reaches the same registry
+ * @param env - The capture's arm environment
  * @param timeoutMs - The capture's timeout, if any
  * @returns The installer
  */
 export function npmInstaller(dirs: ArmDirectories, env: ArmEnvironment, timeoutMs: number | undefined): NpxInstaller {
   return (spec, prefix) => {
+    const npmEnv = mergeArmEnvironments(env, { set: { npm_config_userconfig: operatorNpmUserconfig() }, unset: [] });
     const result = runCommand(
       { command: 'npm', leadingArgs: [] },
       ['install', '--no-save', '--no-package-lock', '--no-audit', '--no-fund', '--ignore-scripts', '--prefix', prefix, spec],
-      { cwd: prefix, env: armStepEnvironment(dirs, env).env, ...(timeoutMs === undefined ? {} : { timeoutMs }) },
+      { cwd: prefix, env: armStepEnvironment(dirs, npmEnv).env, ...(timeoutMs === undefined ? {} : { timeoutMs }) },
     );
     if (result.exitCode !== 0) {
       throw new Error(`npm install ${spec} failed (${String(result.spawnError ?? result.exitCode)}): ${result.stderr.trim()}`);
@@ -82,7 +96,7 @@ function cliVersionAt(entry: string): unknown {
 
 /**
  * Run `body` with the instrument a memory repeat launches: a `tree:` or `dist:`
- * build as given, an `npx:` build as `node <installed cli entry>`.
+ * build as given, an `npx:` build as `node <installed cli entry>`, its closure the install's.
  *
  * The install is made in `dirs.tmp`, emptied first, so an interrupted capture leaves
  * it under the arms root — never in the system temp directory — for the next to clear.
@@ -105,6 +119,7 @@ export async function withMemoryInstrument<T>(
   prepareArmDirectories(dirs);
   const unclean = await resetColdArm(dirs);
   if (unclean !== null) throw armRefusal(`npx install arm: ${unclean}`);
+  await resetArmHome(dirs);
   const prefix = mkdirSyncReal(safePath.join(dirs.tmp, 'install'));
   await install(spec, prefix);
   const name = spec.slice(0, spec.lastIndexOf('@'));
@@ -120,5 +135,6 @@ export async function withMemoryInstrument<T>(
         'the report would name one build and measure another',
     );
   }
-  return body({ ...instrument, command: process.execPath, leadingArgs: [entry] });
+  const closure = fingerprintFiles(safePath.join(prefix, 'node_modules'), { fromGit: false, exclude: [] }).fingerprint;
+  return body({ ...instrument, command: process.execPath, leadingArgs: [entry], version: { ...instrument.version, closure } });
 }

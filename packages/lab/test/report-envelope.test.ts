@@ -65,8 +65,15 @@ describe('buildReportEnvelope — npmNetworkEnv', () => {
 });
 
 describe('buildReportEnvelope — host', () => {
-  it('records the platform and the Node version the measured children ran on', () => {
-    expect(buildReportEnvelope('perf', REQUEST, {}, []).host).toStrictEqual({ platform: process.platform, node: process.version });
+  it("records the platform, architecture, Node version and the arm's NODE_OPTIONS", () => {
+    const request = { ...REQUEST, env: { set: { NODE_OPTIONS: '--max-old-space-size=64' }, unset: [] } };
+
+    expect(buildReportEnvelope('perf', request, {}, []).host).toStrictEqual({
+      platform: process.platform,
+      arch: process.arch,
+      node: process.version,
+      nodeOptions: '--max-old-space-size=64',
+    });
   });
 });
 

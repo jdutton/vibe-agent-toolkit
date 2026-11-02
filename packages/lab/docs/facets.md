@@ -29,13 +29,17 @@ and a shell launch it — read as 300 MB or more. `VmHWM` belongs to the exec'd 
 600 MB peaked at 75.4, 75.4 and 75.3 MB. So a repeat is launched straight from the lab, with no
 intermediate launcher — an `npx:` build included: `npx` runs the package's `bin`, the cli's
 cwd-resolving wrapper, which spawns vat as a second process, so the facet installs the pinned spec
-(`--ignore-scripts`, in an arm of its own under the arms root, with that arm's npm cache) and runs
+(`--ignore-scripts`, in an arm of its own under the arms root, with that arm's npm cache and the
+operator's `~/.npmrc` as npm's userconfig) and runs
 that install's `@vibe-agent-toolkit/cli/dist/bin.js` with `node`, as a `dist:` build runs
-(`npx-entry.ts`); an install whose cli is not the coordinate's version is refused. `test/integration/memory-probe.integration.test.ts`
+(`npx-entry.ts`); an install whose cli is not the coordinate's version is refused. The install floats
+third-party ranges (no lockfile), so its whole `node_modules` is digested into the coordinate's
+`closure`, and two installs that resolved differently are two instruments. `test/integration/memory-probe.integration.test.ts`
 pins the independence, and it can only go red on Linux: macOS's `maxRSS` carries nothing over, and
 the test needs `sh`, so it is skipped on Windows, where a process is created rather than forked —
 argued there, not measured. A command that writes its subject (`build`) runs in a copy of it, which
-the lab cannot make on Windows, so that spec is refused there.
+the lab cannot make on Windows, so that spec is refused there; a repeat that changed the copy outside
+its declared `writes` (`dist/`) fails.
 
 It is one figure per process, and only vat's own processes write one: a process is vat's when its
 main script (`process.argv[1]`, its own links read) belongs to the `vibe-agent-toolkit` launcher or the
@@ -48,15 +52,19 @@ moments were never resident together. How many vat processes reported is counted
 change in that count is a CHANGED verdict on its own, across instrument kinds too: every kind runs
 `dist/bin.js` straight, so one count means one thing. A peak is the platform's allocator and the
 Node build's V8 as much as vat's, so two reports whose envelopes record a different `host`
-(`process.platform`, `process.version`) are refused, naming both.
+(`process.platform`, `process.arch`, `process.version`, and the `NODE_OPTIONS` the arm hands its
+children — a `--max-old-space-size` moves a peak) are refused, naming both.
 
 A repeat that leaves no vat peak — killed, out of heap, or no process with a vat main script —
-fails the row; it is never read as a small number. So does a row whose repeats disagree on how many
+fails the row; it is never read as a small number. A row whose process V8 aborted out of heap (its
+stderr names `JavaScript heap out of memory`) is marked `outOfHeap`, and against a measured other
+side it compares CHANGED with no ratio — the worst regression never reads as no delta. So does a row whose repeats disagree on how many
 vat processes reported. CHANGED needs the median delta to clear three bars at once: 10% of the
 smaller median (`perf`'s relative gate), 8 MiB, and the two arms' combined min–max spread.
 
 **The memory threshold.** The 8 MiB floor is four times the largest median move an A-vs-A null run
-made. Measured 2026-11-02 on an Apple-silicon Mac (10 CPUs, load average 20–30 from other work —
+made at 5 repeats a side; a default capture takes 3, so its own spread, not this table, is what the
+spread bar sees. Measured 2026-11-02 on an Apple-silicon Mac (10 CPUs, load average 20–30 from other work —
 contaminated), one `dist:` build of vat 0.2.0-rc.12 against this repository, 5 warm repeats a side:
 
 | Command | A median | B median | Δ median | A spread | B spread |
@@ -65,8 +73,9 @@ contaminated), one `dist:` build of vat 0.2.0-rc.12 against this repository, 5 w
 | `audit` | 195.5 MiB | 197.5 MiB | +2.0 MiB (1.0%) | 3.2 MiB | 5.0 MiB |
 | `skills-validate` | 138.5 MiB | 138.4 MiB | −0.1 MiB | 0.5 MiB | 0.9 MiB |
 
-Every pair compared `unchanged`. The 10% relative gate is ten times the largest relative move
-(1.0%), so above ~80 MiB it, not the floor, is the bar. Re-measure on a quiet machine and on
+Every pair compared `unchanged`. The 10% relative gate is `perf`'s, borrowed rather than derived
+from this run (ten times its largest relative move, 1.0%), and above ~80 MiB — every command here —
+it, not the floor, is the bar that binds. Re-measure on a quiet machine and on
 Linux before tightening either.
 
 **Extent facets** — `population`. The output is a *set*, and a set needs neither spread nor

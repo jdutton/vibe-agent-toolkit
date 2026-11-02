@@ -47,6 +47,9 @@ let allocPath: string;
 /** A preload that loads and writes nothing — a probe that never reached the process. */
 let silentPath: string;
 
+/** A preload that grows the V8 heap until V8 aborts the process. */
+let exhaustPath: string;
+
 beforeAll(() => {
   const dir = mkdtempSync(safePath.join(normalizedTmpdir(), PREFIX));
   scratch.push(dir);
@@ -54,6 +57,9 @@ beforeAll(() => {
   writeFileSync(allocPath, `globalThis.kept = Buffer.alloc(Number(process.env.${ALLOC_ENV} ?? 0) * 1024 * 1024, 1);\n`);
   silentPath = safePath.join(dir, 'silent.cjs');
   writeFileSync(silentPath, '\n');
+  exhaustPath = safePath.join(dir, 'exhaust.cjs');
+  // Only in a measured run (the probe's directory is set): the build's untimed start must succeed.
+  writeFileSync(exhaustPath, 'if (process.env.VAT_LAB_RSS_LOG) { const kept = []; for (;;) kept.push(new Array(1e5).fill(1)); }\n');
 });
 
 afterAll(() => {
@@ -122,6 +128,21 @@ describe('captureMemory', () => {
     expect(row.failed).toBe(true);
     expect(row.medianKb).toBe(0);
     expect(row.exitCode).toBeNull();
+    expect(row.outOfHeap).toBe(false);
+  });
+
+  it('marks a row whose vat ran out of heap as out of heap, not merely failed', async () => {
+    const env = { set: { NODE_OPTIONS: `--max-old-space-size=16 --require "${exhaustPath}"` }, unset: [] };
+    const row = onlyRow(await capture(setupProbe(PREFIX), 0, { env, runs: 1 }));
+
+    expect(row.failed).toBe(true);
+    expect(row.outOfHeap).toBe(true);
+  });
+
+  it("records the arm's NODE_OPTIONS in the host, without the facet's own probe", async () => {
+    const report = await capture(setupProbe(PREFIX), 0, { runs: 1 });
+
+    expect(report.host.nodeOptions).toBe(`--require "${allocPath}"`);
   });
 
   it('throws naming the build command rather than measuring uninstrumented', async () => {
