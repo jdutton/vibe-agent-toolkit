@@ -10,7 +10,8 @@
  * path, where mkdirSync() returns the first directory it created (or undefined). A call whose
  * result is used gets a suggestion instead. Even a discarded call is not a byte-for-byte swap:
  * mkdirSyncReal() takes a string path only, so a `URL` or `Buffer` argument fails the typecheck
- * after the fix.
+ * after the fix, and it resolves the real path after creating, so it can throw
+ * (LinkChainRefusedError, or the OS's realpath refusal) where mkdirSync() did not.
  */
 
 const factory = require('./eslint-rule-factory.cjs');

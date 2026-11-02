@@ -34,6 +34,7 @@ const {
   reportUnanchoredExemptEntries,
 } = require('./exempt-path-matcher.cjs');
 const {
+  acceptsImport,
   EXEMPT_AND_SAFE_MODULE_SCHEMA,
   SAFE_PATH_MODULE,
   insertAboveWithComments,
@@ -309,6 +310,8 @@ function importSafePath(fixer, sourceCode, state, anchorImportNode) {
 
 function buildFix(fixer, node, classification, sourceCode, state) {
   const fnState = state.byFn.get(classification.fn);
+  // A CommonJS file cannot take the `safePath` import every leg below may need.
+  if (!state.safePathBoundInSource && !acceptsImport(sourceCode)) return null;
 
   // REPAIR: an orphaned `safePath.join(...)` is already the call we want, and
   // the only thing missing is the import that a discarded report was carrying.

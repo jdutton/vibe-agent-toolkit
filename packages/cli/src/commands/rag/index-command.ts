@@ -2,7 +2,7 @@
  * RAG index command - index markdown resources into vector database
  */
 
-import type { IndexResult } from '@vibe-agent-toolkit/rag';
+import { type IndexResult, partialIndexResultOf } from '@vibe-agent-toolkit/rag';
 import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
 import type { UnreadableResource } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
@@ -91,6 +91,21 @@ function providerConfigIssues(warnings: IndexResult['warnings']): ValidationIssu
   return (warnings ?? []).map((message) => ({ code: 'RAG_CHUNKING_CONFIG_ADJUSTED', severity: 'warning', message }));
 }
 
+/**
+ * What the provider recorded — per-resource failures and its own warnings — as
+ * findings, each also printed: on a finished run and on a refused one alike.
+ */
+function reportProviderIssues(
+  result: Pick<IndexResult, 'errors' | 'warnings'>,
+  locations: ReadonlyMap<string, string>,
+  warn: (line: string) => void,
+): ValidationIssue[] {
+  const issues = [...providerIndexIssues(result.errors, locations), ...providerConfigIssues(result.warnings)];
+  // Verbose: this verb has no `--verbose`, and a clamped chunk budget is what explains a truncated search.
+  reportFindings(issues, { verbose: true, write: warn });
+  return issues;
+}
+
 /** What {@link buildIndexReport} needs from a finished run. */
 interface IndexReportInput {
   /** Resources submitted: every file the crawl enumerated, read or not. */
@@ -137,8 +152,10 @@ export async function indexCommand(
   const startTime = Date.now();
 
   let report: RagIndexReport;
-  // Held outside the `try`: a run the database then refuses still names every file it could not read.
+  // Held outside the `try`: a run the database then refuses still names every file it could not read,
+  // and every document the provider failed before the refusal.
   let unreadable: ValidationIssue[] = [];
+  let locations: ReadonlyMap<string, string> = new Map();
   try {
     // The path is the root to crawl: one that names nothing, or that the OS
     // will not list, refuses before any database is opened.
@@ -175,26 +192,23 @@ export async function indexCommand(
       readonly: false,
     });
 
-    const indexResult = await ragProvider.indexResources(allResources);
-    await ragProvider.close();
-
-    const locations = new Map(allResources.map((resource) => [
+    locations = new Map(allResources.map((resource) => [
       resource.id,
       toForwardSlash(safePath.relative(crawlRoot, resource.filePath)),
     ]));
-    const failed = providerIndexIssues(indexResult.errors, locations);
-    const adjusted = providerConfigIssues(indexResult.warnings);
-    // Verbose: this verb has no `--verbose`, and a clamped chunk budget is what explains a truncated search.
-    reportFindings([...failed, ...adjusted], { verbose: true, write: logger.warn });
-    const issues = [...unreadable, ...failed, ...adjusted];
+    const indexResult = await ragProvider.indexResources(allResources);
+    await ragProvider.close();
+
     report = buildIndexReport({
       examined: allResources.length + unreadable.length,
       result: indexResult,
-      issues,
+      issues: [...unreadable, ...reportProviderIssues(indexResult, locations, logger.warn)],
       durationMs: Date.now() - startTime,
     });
   } catch (error) {
-    return endWithRefusal('rag index', refusalCodeOf(error), error, 'yaml', RAG_GATE, { ...NOTHING_FINISHED, findings: toFindings(unreadable) });
+    const partial = partialIndexResultOf(error);
+    const recorded = partial ? reportProviderIssues(partial, locations, logger.warn) : [];
+    return endWithRefusal('rag index', refusalCodeOf(error), error, 'yaml', RAG_GATE, { ...NOTHING_FINISHED, findings: toFindings([...unreadable, ...recorded]) });
   }
   endWithReport('rag index', report, 'yaml');
 }

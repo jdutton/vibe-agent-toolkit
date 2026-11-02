@@ -1,11 +1,12 @@
 ### Breaking
 
 - **`NEVER_CRAWL_GLOBS` (`@vibe-agent-toolkit/utils/crawl`) has different elements, in a different
-  order.** It is still a frozen literal tuple, but it now holds the two staging-residue globs, and its
-  first six elements are `NEVER_CONTENT_GLOBS` (`node_modules/`, `.git/`, the two worktree globs, the
-  residue) followed by `coverage/`, `.test-output/` and `.turbo/`. Code that indexes the tuple by
-  position, or names its type, sees new element types. `BUILD_OUTPUT_GLOBS` is unchanged, and is now
-  frozen.
+  order, and is now frozen.** It holds the two staging-residue globs, and its first six elements are
+  `NEVER_CONTENT_GLOBS` (`node_modules/`, `.git/`, the two worktree globs, the residue) followed by
+  `coverage/`, `.test-output/` and `.turbo/`. Code that indexes the tuple by position, or names its
+  type, sees new element types. It and `BUILD_OUTPUT_GLOBS` (unchanged elements) were plain arrays in
+  0.1.42 and rc.12 and are now `Object.freeze`d: JavaScript that pushes to or assigns into either now
+  throws `TypeError` (strict mode). Copy first: `[...NEVER_CRAWL_GLOBS, 'extra/**']`.
 - **`ResourceRegistry.crawl` excludes more by default** — see Fixed below; the default is exported as
   `DEFAULT_RESOURCE_EXCLUDE` from `@vibe-agent-toolkit/resources`.
 
@@ -26,7 +27,10 @@
 - **The post-build check of a skill packaged inside the project, outside `dist/`, sees its own bundle
   again.** With the project crawl memoized, the check ran against a registry that did not hold the
   bundle (written after the crawl, at an excluded staging name), walked nothing, and passed whatever
-  the bundled files said. It now reads that bundle — and only it — over the memoized crawl.
+  the bundled files said. It now reads that bundle — and only it — over the memoized crawl, ignored
+  or not: a bundle under a gitignored directory (`out/`) is checked too, and its own files are not
+  reported as `LINK_TO_GITIGNORED_FILE`. A skill outside any project (no config, no git) is
+  crawled afresh each time rather than memoized under its own directory.
 - **`ResourceRegistry.crawl`'s default exclude is now `NEVER_CONTENT_GLOBS` + `BUILD_OUTPUT_GLOBS`.**
   0.1.42's default was `node_modules/`, `.git/` and `dist/`; it now also drops `.worktrees/`,
   `.claude/worktrees/` and a build's staging residue (`.<name>.vat-staged-*`), so a crawl from a

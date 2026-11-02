@@ -392,12 +392,13 @@ export interface CrawlRegistryOptions {
  * and serving it to a `'refuse'` caller as-is would be the exact silent
  * shorter-list the refuse ruling exists to prevent; serving it to a second
  * `{ degrade }` caller would leave that caller's handler never told. So the
- * refusals ride beside the registry and are settled again under EACH caller's
- * policy on every hit: a `'refuse'` caller throws the same
+ * refusals ride beside the registry and are settled again under each caller's
+ * policy on every hit of a SETTLED crawl: a `'refuse'` caller throws the same
  * {@link DirectoryListingRefusedError} the crawl would have thrown for it, and
  * a `{ degrade }` caller's handler is called for each. A registry built under
  * `'refuse'` carries none by construction (the crawl threw instead), so any
- * later policy is served it unchanged.
+ * later policy is served it unchanged. A REJECTED crawl is not settled per
+ * caller: its waiters share one retry and its outcome (see {@link joinOrStartCrawl}).
  */
 interface MemoizedRegistry {
   readonly registry: ResourceRegistry;
@@ -738,6 +739,8 @@ export function resetPackagingRegistryCache(): void {
  *
  * @param skillPath - Path to SKILL.md
  * @param projectRoot - The root the fallback crawl covers
+ * @param inProject - False when `projectRoot` is only the skill's own directory: that crawl is not
+ *   memoized, since a packaged skill's directory is a staging name no later caller asks for again
  * @param shared - The batching caller's context, if any
  * @param context - `built` for output this run wrote, which the crawl never holds — see {@link withOwnBundle}
  * @returns A registry whose links are resolved and that covers `skillPath`
@@ -745,6 +748,7 @@ export function resetPackagingRegistryCache(): void {
 async function registryForSkill(
   skillPath: string,
   projectRoot: string,
+  inProject: boolean,
   shared: SkillValidationSharedContext | undefined,
   context: 'source' | 'built',
 ): Promise<ResourceRegistry> {
@@ -753,11 +757,14 @@ async function registryForSkill(
     return shared.registry;
   }
   const unreadable = shared === undefined ? 'refuse' : shared.unreadable;
-  const registry = await crawlAndResolveRegistry(projectRoot, {
+  const crawlOptions: CrawlRegistryOptions = {
     outputs,
     unreadable,
     ...(shared?.populationSource !== undefined && { populationSource: shared.populationSource }),
-  });
+  };
+  const registry = inProject
+    ? await crawlAndResolveRegistry(projectRoot, crawlOptions)
+    : (await crawlRegistry(projectRoot, crawlOptions)).registry;
   return context === 'built' && registry.getResource(safePath.resolve(skillPath)) === undefined
     ? withOwnBundle(registry, dirname(skillPath), unreadable, outputs)
     : registry;
@@ -768,10 +775,10 @@ const outsideBuildOutput = crawlPathFilter(['**/*'], BUILD_OUTPUT_GLOBS);
 
 /**
  * The memoized project registry with a bundle it does not hold layered over it:
- * the project's resources, plus the bundle's own files read now — the files a
- * fresh crawl of the root would have admitted from it, as it did before the
- * crawl was memoized: none under `dist/` (the defect `runPostBuildValidation`
- * documents, unchanged here) and none an ignore rule hides.
+ * the project's resources, plus the bundle's own files read now: none under
+ * `dist/` (the defect `runPostBuildValidation` documents, unchanged here), and
+ * every other one, ignored or not — it is this run's own output, so no ignore
+ * rule decides what the check sees.
  *
  * The memo — keyed on the root, crawled once — never holds the bundle: it is
  * written after the crawl, at a staging name (`.<name>.vat-staged-*`) the crawl
@@ -798,8 +805,7 @@ async function withOwnBundle(
     baseDir: bundleDir,
     include: REGISTRY_INCLUDE,
     exclude: [],
-    // As the root's crawl reads it: untracked files count, ignored ones do not.
-    includeUntracked: true,
+    respectGitignore: false,
     unreadable: unreadable === 'refuse'
       ? { refuse: { root: bundleDir, remedy: listingRefusalRemedy(bundleDir), side: 'destination' } }
       : unreadable,
@@ -1036,7 +1042,8 @@ export async function validateSkillForPackaging(
   // "outside the project", where `files:` sources resolve from, what the
   // registry crawls. Library fallback to skill dir keeps callers null-safe; CLI
   // command boundary owns any user-facing warning.
-  const projectRoot = findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
+  const foundRoot = findProjectRoot(dirname(skillPath));
+  const projectRoot = foundRoot ?? dirname(skillPath);
   // ANCHOR base — deliberately a separate variable from projectRoot above.
   // Every emitted location is relative to this ONE root, computed once before
   // the first producer runs so no collector can pick a different base. A
@@ -1090,7 +1097,7 @@ export async function validateSkillForPackaging(
   // reuse when the shared registry covers this skill's projectRoot; otherwise
   // fall back to a fresh crawl to avoid leaking resources across roots.
   // A `built` skill sits in output this run wrote inside the project: the project root is then a destination.
-  const registry = await registryForSkill(skillPath, projectRoot, shared, context);
+  const registry = await registryForSkill(skillPath, projectRoot, foundRoot !== null, shared, context);
 
   const skillResource = registry.getResource(safePath.resolve(skillPath));
   // Only the entries the PACKAGER will actually copy defer a link: an entry pointing
@@ -1167,6 +1174,8 @@ export async function validateSkillForPackaging(
     skillRootPath: safePath.resolve(skillPath),
     excludeNavigationFiles,
     deferredArtifacts: deferred,
+    // A built skill is this run's output: an ignore rule over it (a gitignored `out/`) hides nothing.
+    ownOutputDir: context === 'built' ? dirname(skillPath) : undefined,
   };
   if (shared?.gitTracker !== undefined) {
     walkOptions.gitTracker = shared.gitTracker;

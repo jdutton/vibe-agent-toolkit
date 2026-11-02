@@ -20,6 +20,9 @@ export type {
   TokenCounter,
 } from './interfaces/index.js';
 
+// A batch the store refused partway, carrying what it had done
+export { IndexBatchRefusedError, partialIndexResultOf } from './index-refusal.js';
+
 // Query guard (a supplied filter that produced no condition)
 export { assertFiltersProducedConditions } from './query-support.js';
 

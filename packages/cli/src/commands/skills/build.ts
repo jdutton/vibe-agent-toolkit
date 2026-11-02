@@ -63,6 +63,7 @@ import {
   formatPackagedFileCount,
   formatRunIssueLines,
   issuesToRenderAtVerbosity,
+  reportFindings,
 } from '../../utils/issue-rendering.js';
 import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
@@ -1287,8 +1288,8 @@ async function prepareBuild(
   const refusal = inPlaceSkillRefusal(options.skill, inPlace) ?? pluginOnlySkillRefusal(options.skill, pluginOnly);
   const target = [...inPlace, ...pluginOnly][0];
   if (refusal !== undefined && target !== undefined) {
-    logger.error(refusal.message);
     const issue = notBuildableIssue(refusal.message, reportLocation(cwd, target.skill.sourcePath));
+    reportFindings([issue], { verbose: true, write: logger.error });
     return { kind: 'done', report: earlyReport({ ...planned, setAsideIssues: [issue] }, startTime) };
   }
 
@@ -1363,7 +1364,7 @@ export async function runSkillsBuildPhase(
     // `data.promotionError` naming what is on disk and how to recover it.
     if (run.promotionFailure !== undefined) {
       const { error } = run.promotionFailure;
-      return { report: refusalReport(refusalCodeOf(error), error, GATE, work) };
+      return { report: refusalReport(refusalCodeOf(error), error, GATE, work, true) };
     }
     const report = buildReport({ ...work, gate: GATE, durationMs: Date.now() - startTime });
     if (run.outputCommitted) {
@@ -1375,7 +1376,7 @@ export async function runSkillsBuildPhase(
     }
     return { report };
   } catch (error) {
-    return { report: refusalReport(refusalCodeOf(error), error, GATE, finished) };
+    return { report: refusalReport(refusalCodeOf(error), error, GATE, finished, true) };
   }
 }
 

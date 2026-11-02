@@ -17,7 +17,7 @@ const {
 
 const runOf = (options: Record<string, unknown> = {}) => newInstallRun(options, fakeLogger() as never);
 const SKILL = { name: 'alpha', installPath: '/home/u/.claude/skills/alpha', sourcePath: null };
-const WARNING = { code: 'TREE_CLEANUP_INCOMPLETE', severity: 'warning', message: 'left behind', link: '/x' } as const;
+const WARNING = { code: 'TREE_CLEANUP_INCOMPLETE', severity: 'warning', message: 'left behind', link: '/x', fix: 'Remove it.' } as const;
 
 describe('an install run', () => {
   it('starts with nothing done, a dry run only when asked', () => {
@@ -44,7 +44,7 @@ describe('an install run', () => {
   it('a leftover is logged as a warning and joins the run\'s findings', () => {
     const run = runOf();
     leftover(run, WARNING as never);
-    expect(run.logger.warn).toHaveBeenCalledWith('   warning: left behind [TREE_CLEANUP_INCOMPLETE]');
+    expect(vi.mocked(run.logger.warn).mock.calls).toEqual([['  warning: left behind [TREE_CLEANUP_INCOMPLETE]'], ['    Fix: Remove it.']]);
     expect(run.issues).toEqual([WARNING]);
   });
 

@@ -570,7 +570,7 @@ export async function runClaudePluginBuildPhase(options: PluginBuildCommandOptio
     return { report: buildReport({ ...work, gate: GATE, durationMs: Date.now() - startTime }) };
   } catch (error) {
     const finished = configDir === undefined || built.length === 0 ? NOTHING_FINISHED : builtWork(configDir, built);
-    return { report: refusalReport(refusalCodeOf(error), error, GATE, withPackagingStop(finished, error, configDir)) };
+    return { report: refusalReport(refusalCodeOf(error), error, GATE, withPackagingStop(finished, error, configDir), true) };
   }
 }
 

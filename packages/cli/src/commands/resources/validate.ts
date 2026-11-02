@@ -33,7 +33,7 @@ import * as yaml from 'yaml';
 
 import type { DocumentFormat } from '../../report-schemas.js';
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
-import { endWithReport, NOTHING_FINISHED, refusalReport } from '../../utils/document-writer.js';
+import { endWithReport, findingsGoToStderr, NOTHING_FINISHED, refusalReport } from '../../utils/document-writer.js';
 import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { classifyInputFault, projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
@@ -434,9 +434,13 @@ function inCollectionScope(
   });
 }
 
-/** The human half, on stderr — except under `--format text`, whose stdout already IS these lines. */
+/** Whether the human half goes on stderr — not under `--format text`, whose stdout already IS these lines. */
+function saysOnStderr(options: ValidateOptions): boolean {
+  return findingsGoToStderr('resources validate', options.format ?? 'yaml');
+}
+
 function reportOnStderr(findings: readonly Finding[], options: ValidateOptions): void {
-  if ((options.format ?? 'yaml') === 'text') return;
+  if (!saysOnStderr(options)) return;
   reportFindings(findings, { verbose: options.verbose === true, write: createLogger().error });
 }
 
@@ -462,7 +466,7 @@ export async function runResourcesValidatePhase(
     reportOnStderr(report.findings, options);
     return { report };
   } catch (error) {
-    return { report: refusalReport(refusalCodeOf(error), error, GATE, NOTHING_FINISHED) };
+    return { report: refusalReport(refusalCodeOf(error), error, GATE, NOTHING_FINISHED, saysOnStderr(options)) };
   }
 }
 

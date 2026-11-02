@@ -22,6 +22,8 @@ import { findConfigFile, issueLocation, mapConcurrentFailingInOrder, safePath } 
 
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED, type FinishedWork } from '../../utils/document-writer.js';
+import { reportFindings } from '../../utils/issue-rendering.js';
+import { createLogger } from '../../utils/logger.js';
 import { relativeLocationOrUndefined } from '../../utils/relativize-paths.js';
 
 import type { OkfValidateData, OkfValidateReport } from './validate-schema.js';
@@ -248,6 +250,7 @@ export async function okfValidateCommand(
       finished = refusal.finished;
       throw new CommandRefusalError('INPUT_UNREADABLE', refusal.message);
     }
+    reportFindings(report.findings, { verbose: true, write: createLogger().warn });
     // The code derives from the report the writer PUBLISHED: an adopter who
     // promotes or lowers a bundle's severity gates on exactly what a reader sees.
     endWithReport('okf validate', report, format);

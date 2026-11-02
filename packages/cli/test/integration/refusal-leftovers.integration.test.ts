@@ -6,12 +6,12 @@
  * chain, so it can never become the run's classification.
  */
 
-import { disposeTempDir, normalizedTmpdir, suppressedFaultsOf, TREE_ROLLBACK_INCOMPLETE_CODE, VatError, withTempDir } from '@vibe-agent-toolkit/utils';
+import { disposeTempDir, normalizedTmpdir, recordSuppressedFault, suppressedFaultsOf, TREE_ROLLBACK_INCOMPLETE_CODE, VatError, withTempDir } from '@vibe-agent-toolkit/utils';
 import { createTempDir, installFaultFs, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { refusalCodeOf } from '../../src/utils/command-refusal.js';
-import { NOTHING_FINISHED, refusalReport } from '../../src/utils/document-writer.js';
+import { findingsGoToStderr, NOTHING_FINISHED, refusalReport } from '../../src/utils/document-writer.js';
 
 // ⛔ These tests fault and run a temp-dir disposal: the temp directory is a scratch tree first, so
 // nothing they (or a red-proof mutation of the code under test) remove can be the user's.
@@ -53,7 +53,7 @@ describe('refusalReport — a leftover beside the failure', () => {
     expect(suppressedFaultsOf(error)).toHaveLength(1);
 
     const code = refusalCodeOf(error);
-    const report = refusalReport(code, error, { strict: false }, NOTHING_FINISHED);
+    const report = refusalReport(code, error, { strict: false }, NOTHING_FINISHED, true);
 
     expect(code).toBe('USAGE_INVALID');
     expect(report).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID', message: 'no manifest at ./agent' } });
@@ -69,7 +69,7 @@ describe('refusalReport — a leftover beside the failure', () => {
     const { error, dir } = await failWithLeftover(new Error('registry write failed'));
     const wrapped = new VatError(TREE_ROLLBACK_INCOMPLETE_CODE, 'registry write failed; and the change could not be undone', { cause: error });
 
-    const report = refusalReport(refusalCodeOf(wrapped), wrapped, { strict: false }, NOTHING_FINISHED);
+    const report = refusalReport(refusalCodeOf(wrapped), wrapped, { strict: false }, NOTHING_FINISHED, true);
 
     expect(report).toMatchObject({ error: { code: 'RUN_INCOMPLETE' } });
     expect(report.findings).toEqual([expect.objectContaining({ code: 'TREE_CLEANUP_INCOMPLETE', link: dir })]);
@@ -78,7 +78,36 @@ describe('refusalReport — a leftover beside the failure', () => {
 
   it('publishes no extra finding for a failure with nothing left behind', () => {
     vi.spyOn(process.stderr, 'write').mockReturnValue(true);
-    const report = refusalReport('USAGE_INVALID', new VatError('AGENT_MANIFEST_NOT_FOUND', 'x'), { strict: false }, NOTHING_FINISHED);
+    const report = refusalReport('USAGE_INVALID', new VatError('AGENT_MANIFEST_NOT_FOUND', 'x'), { strict: false }, NOTHING_FINISHED, true);
     expect(report.findings).toEqual([]);
+  });
+});
+
+/** A refusal with one leftover recorded beside it; what stderr received. */
+function refuseWithLeftover(findingsOnStderr: boolean): string {
+  const written: string[] = [];
+  vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => { written.push(String(chunk)); return true; });
+  const error = new VatError('AGENT_MANIFEST_NOT_FOUND', 'no manifest');
+  recordSuppressedFault(error, new Error('could not remove the staged tree'));
+  refusalReport('USAGE_INVALID', error, { strict: false }, NOTHING_FINISHED, findingsOnStderr);
+  return written.join('');
+}
+
+describe('refusalReport — where the leftover is said', () => {
+  it('prints it on stderr as the shared reporter does, with its fix', () => {
+    expect(refuseWithLeftover(true)).toMatch(
+      /^ {2}warning: could not remove the staged tree \[TREE_CLEANUP_INCOMPLETE\]\n {4}Fix: Remove what the message names/m,
+    );
+  });
+
+  it('does not print it when stdout already lists the findings (--format text)', () => {
+    expect(refuseWithLeftover(false)).not.toContain('TREE_CLEANUP_INCOMPLETE');
+  });
+
+  it('decides stdout lists them only for the generic text rendering', () => {
+    expect(findingsGoToStderr('resources validate', 'text')).toBe(false);
+    expect(findingsGoToStderr('resources validate', 'yaml')).toBe(true);
+    // `skill review`'s text rendering is empty: its findings stay on stderr.
+    expect(findingsGoToStderr('skill review', 'text')).toBe(true);
   });
 });

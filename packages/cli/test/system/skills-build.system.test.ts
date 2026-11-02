@@ -292,6 +292,7 @@ describe('skills build command (system test)', () => {
       expect(report.findings[0]).toMatchObject({ severity: 'error', location: 'resources/skills/skill-b.md' });
       expect(report.findings[0]?.message).toContain(`skills.config.${SKILL_B_NAME}.publish`);
       expect(result.stderr).toContain(`skills.config.${SKILL_B_NAME}.publish`);
+      expect(result.stderr).toMatch(/^ {2}\S+: error: .+ \[SKILL_BUILD_TARGET_NOT_BUILDABLE\]\n {4}Fix: Drop --skill/m);
       expect(existsSync(safePath.join(tempDir, 'dist', 'skills'))).toBe(false);
     });
 

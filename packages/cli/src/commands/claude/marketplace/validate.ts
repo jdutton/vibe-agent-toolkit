@@ -937,7 +937,7 @@ export async function runMarketplaceValidatePhase(
 
 /** The error branch for a run that could not do its job — classified by code, never by message. */
 function refusedReport(error: unknown): Report<unknown> {
-  return refusalReport(refusalCodeOf(error), error, GATE, NOTHING_FINISHED);
+  return refusalReport(refusalCodeOf(error), error, GATE, NOTHING_FINISHED, true);
 }
 
 /**

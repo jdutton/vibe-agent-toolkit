@@ -107,7 +107,7 @@ describe('the published message of a classified fault', () => {
 
   const gate = { strict: false };
   const messageOf = (error: unknown): string | undefined => {
-    const report = refusalReport(refusalCodeOf(error), error, gate, NOTHING_FINISHED);
+    const report = refusalReport(refusalCodeOf(error), error, gate, NOTHING_FINISHED, true);
     return report.status === 'error' ? report.error.message : undefined;
   };
 

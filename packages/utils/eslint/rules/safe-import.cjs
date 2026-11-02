@@ -69,6 +69,18 @@ function isNameAlreadyBound(sourceCode, name) {
 }
 
 /**
+ * Can the linted file take an `import` declaration? A CommonJS script cannot:
+ * one inserted there leaves the file unparsable, so a fix that needs an import
+ * it cannot add is withheld — the finding stays, rewritten by hand.
+ *
+ * @param {object} sourceCode - ESLint `SourceCode` for the file being linted.
+ * @returns {boolean} True for an ES module.
+ */
+function acceptsImport(sourceCode) {
+  return sourceCode.ast.sourceType === 'module';
+}
+
+/**
  * Insert `text` above `node`, ABOVE its leading comments.
  *
  * `fixer.insertTextBefore(node)` uses the node's own start offset, which is
@@ -151,6 +163,7 @@ function resolveSafeModule(context, fallbackModule) {
 }
 
 module.exports = {
+  acceptsImport,
   EXEMPT_AND_SAFE_MODULE_SCHEMA,
   PACKAGE_NAME,
   SAFE_FS_MODULE,

@@ -292,6 +292,19 @@ describe('validateSkillForPackaging — routes its private crawl through the sha
     expect(result.metadata.fileCount).toBe(2);
     expect(result.metadata.maxLinkDepth).toBe(0);
   });
+
+  // No config and no git above the skill: the crawl falls back to the skill's own directory — a
+  // staging directory, for a packaged skill — and memoizing it would keep one dead key per skill.
+  it('does not memoize the crawl of a skill that sits in no project', async () => {
+    const { root, skillPath } = chainRoot();
+    const { source, calls } = countingSource(root, ['SKILL.md', 'a.md', 'b.md']);
+    const shared = { unreadable: 'refuse', outputs: [], populationSource: source } as const;
+
+    await validateSkillForPackaging(skillPath, undefined, 'source', shared);
+    await validateSkillForPackaging(skillPath, undefined, 'source', shared);
+
+    expect(calls()).toBe(2);
+  });
 });
 
 /**

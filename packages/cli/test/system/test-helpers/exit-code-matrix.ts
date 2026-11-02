@@ -1118,6 +1118,28 @@ export function exitCodeTheContractGives(document: ExitDeterminingDocument & Rec
 }
 
 /**
+ * Verbs whose findings stderr does not yet say through the shared reporter
+ * (bare counts, their own glyph lines, or silence). Asserted both ways: a verb
+ * that starts saying them must leave this list.
+ */
+const FINDINGS_NOT_ON_STDERR: ReadonlySet<string> = new Set([
+  'agent installed', 'agent list', 'ard emit', 'claude plugin install', 'corpus scan',
+  'doctor', 'inventory', 'skill review', 'skills install', 'skills list',
+]);
+
+/**
+ * Every verb says its findings on stderr through the shared reporter: each
+ * error by its `[CODE]`, and a warning or info at least by code or by the
+ * collapsed hint — never a bare count, never silence.
+ */
+function expectFindingsSaidOnStderr(verb: string, document: Record<string, unknown>, stderr: string): void {
+  const findings = (document['findings'] ?? []) as ReadonlyArray<{ code: string; severity: string }>;
+  const errorsSaid = findings.filter((finding) => finding.severity === 'error').every(({ code }) => stderr.includes(`[${code}]`));
+  const said = errorsSaid && (findings.some(({ code }) => stderr.includes(`[${code}]`)) || stderr.includes('finding(s) not shown'));
+  expect(said, `${verb}: findings on stderr?\n${stderr}`).toBe(!FINDINGS_NOT_ON_STDERR.has(verb));
+}
+
+/**
  * Run one scenario under its own fake HOME and expect: the status the scenario
  * names, the refusal code an `error` names, the gate in the document, and the
  * exit code that document derives. A scenario this platform cannot run is
@@ -1142,6 +1164,7 @@ export function expectScenarioEndsOnItsDerivedCode(scenario: MatrixCase, context
   // The gate is IN the document — the exit code derives from nothing else.
   expect(document.gate, `${result.stdout}\n${result.stderr}`).toStrictEqual({ strict: expect.any(Boolean) });
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCodeForReport(document));
+  if (scenario.status === 'findings') expectFindingsSaidOnStderr(scenario.verb, document, result.stderr);
   return { exitCode: result.status, document };
 }
 

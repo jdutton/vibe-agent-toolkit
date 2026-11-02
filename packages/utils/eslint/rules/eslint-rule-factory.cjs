@@ -63,6 +63,7 @@ const {
 } = require('./exempt-path-matcher.cjs');
 const { fsBindingVisitors } = require('./fs-binding-scan.cjs');
 const {
+  acceptsImport,
   EXEMPT_AND_SAFE_MODULE_SCHEMA,
   insertAboveWithComments,
   isNameAlreadyBound,
@@ -315,6 +316,8 @@ module.exports = function createNoUnsafeRule(config) {
         }
 
         function rewriteCall(fixer) {
+          // A CommonJS file cannot take the import this rewrite needs: no rewrite at all.
+          if (!hasSafeImport && !acceptsImport(sourceCode)) return null;
           const fixes = [];
 
           // Replace the WHOLE callee, member expression or not.

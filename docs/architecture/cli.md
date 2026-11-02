@@ -289,8 +289,13 @@ stderr. Both spell a finding with the one formatter, `formatFindingLine` in
 `reportFindings`, which puts every error first and adds warnings and info only under `--verbose`
 (`vat resources validate`, `vat resources check -v`, the orchestrators' delegated phases). A lane
 with no `--verbose` passes `verbose: true` and always prints every finding: `vat agent validate`,
-`vat ard emit`, `vat rag index`, and `vat verify`'s built-in phases. A run-integrity refusal the
-document writer adds, the writer prints itself, once.
+`vat ard emit`, `vat rag index`, `vat okf validate`, `vat audit settings`, `vat claude plugin
+uninstall`, `vat skills build --skill`'s refusal, `vat audit <git-url>`'s clone leftover, the install
+verbs' leftovers, a refusal's leftovers, and `vat verify`'s built-in phases. A run-integrity refusal
+the document writer adds, the writer prints itself, once. Verbs whose stderr does not yet say their
+findings this way are listed in `FINDINGS_NOT_ON_STDERR`
+(`packages/cli/test/system/test-helpers/exit-code-matrix.ts`), which the exit-code matrix asserts
+both ways.
 A verb whose `--format text` document prints one line per finding (`vat resources validate`)
 carries none on stderr under that format, because stdout already is these lines. `vat ard emit` is the exception: its text document is one summary line, so under
 `--format text` the findings go to stderr, and under `--format json` they are only in the
@@ -307,7 +312,9 @@ report. See [The report contract](#the-report-contract).
 ```
 
 **Format:** `location:line:column (field): severity: message [CODE]`, each part of the anchor present
-only when the finding carries it; a fix on the next line, two spaces deeper.
+only when the finding carries it; a fix on the next line, two spaces deeper. A flat list
+(`reportFindings`) indents each finding two spaces; a grouped report indents it beneath its heading,
+and the fix stays two spaces deeper than its finding.
 
 Only `error` findings fail the run, so the severity is what tells a reader
 which lines they have to act on.

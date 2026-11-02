@@ -13,11 +13,15 @@
  *
  * The defect is one only the walk can see: a non-portable command in the bundled
  * reference (`NON_PORTABLE_COMMAND`), which the scans of `bundledFiles` report.
+ * Run twice: plainly, and in a git repository that ignores `out/` — the bundle is
+ * the build's own output, so no ignore rule may hide it from the check.
  */
 
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { SkillPackageChecksFailedError } from '../../src/packaging-errors.js';
@@ -49,7 +53,10 @@ async function packagedOrRefused(skillPath: string, outputPath: string): Promise
   }
 }
 
-describe('post-build validation of output inside the root, outside dist/', () => {
+describe.each([
+  ['a plain directory', false],
+  ['a git repository that ignores out/', true],
+])('post-build validation of output inside the root, outside dist/, in %s', (_label, gitIgnoresOut) => {
   let root: string;
   const results = new Map<string, PackageSkillResult>();
 
@@ -57,6 +64,10 @@ describe('post-build validation of output inside the root, outside dist/', () =>
     resetPackagingRegistryCache();
     root = safePath.resolve(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-post-build-own-output-')));
     writeFileSync(safePath.join(root, 'vibe-agent-toolkit.config.yaml'), '{}\n', 'utf-8');
+    if (gitIgnoresOut) {
+      spawnSync(gitExecutable(), ['init', '-q', root], { stdio: 'ignore' });
+      writeFileSync(safePath.join(root, '.gitignore'), 'out/\n', 'utf-8');
+    }
     const paths = SKILLS.map((name) => writeSkill(root, name));
     // In order, one process, one memo: the second skill is written after the first's check crawled the root.
     for (const [index, name] of SKILLS.entries()) {
@@ -73,6 +84,7 @@ describe('post-build validation of output inside the root, outside dist/', () =>
     const validation = results.get(name)?.postBuildValidation;
 
     expect(validation?.metadata.fileCount).toBe(2);
+    expect(validation?.allErrors.map((issue) => issue.code)).not.toContain('LINK_TO_GITIGNORED_FILE');
     expect(validation?.allErrors.filter((issue) => issue.code === 'NON_PORTABLE_COMMAND').map((issue) => issue.location)).toEqual([
       expect.stringMatching(/reference\.md$/),
     ]);

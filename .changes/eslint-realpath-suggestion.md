@@ -12,7 +12,14 @@
 - **`@vibe-agent-toolkit/no-fs-mkdirSync` autofixes only a call whose result is discarded.**
   `mkdirSyncReal()` returns the directory's real path, where `mkdirSync()` returns the first
   directory it created or `undefined`, so `const r = mkdirSync(…)` now gets an editor suggestion
-  instead. Re-check any such call an earlier `--fix` rewrote.
+  instead. Re-check any such call an earlier `--fix` rewrote. A rewritten call can also throw where
+  `mkdirSync` did not: `mkdirSyncReal` resolves the real path after creating the directory, so a link
+  chain it refuses raises `LinkChainRefusedError`, and the OS's own `realpath` refusal surfaces.
+- **No call rule rewrites a CommonJS file any more.** In a script-mode file (`sourceType: 'commonjs'`
+  or `'script'`) the fix inserted an `import` declaration and left the file unparsable
+  (`no-fs-mkdirSync`, `no-os-tmpdir`, `no-manual-path-normalize`, `no-raw-node-path`), and the
+  suggestion of `no-fs-realpathSync` and `no-child-process-execSync` did the same. The finding stays;
+  `--fix` and the suggestion leave the file alone unless the replacement is already bound.
 - **No fix or suggestion from the pack's call rules removes a `node:*` import any more.** An
   `eslint-disable-next-line` on a call AFTER a fixed one used to have its import deleted by the fixed
   call's fix: `--fix` output linted clean and threw `ReferenceError` at run time (`no-raw-node-path`,

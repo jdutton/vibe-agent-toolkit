@@ -35,6 +35,7 @@ const {
   reportDeadUnsafeImports,
 } = require('./dead-import.cjs');
 const {
+  acceptsImport,
   SAFE_MODULE_ONLY_SCHEMA,
   SAFE_PATH_MODULE,
   insertAboveWithComments,
@@ -203,6 +204,7 @@ module.exports = {
           messageId: MESSAGE_FOR[match.fn],
           data: { safeModule: targetModule },
           fix(fixer) {
+            if (!bound[match.fn] && !acceptsImport(sourceCode)) return null;
             const receiver = sourceCode.getText(match.receiver);
             return [fixer.replaceText(node, `${match.fn}(${receiver})`), ...importFix(fixer, match.fn)];
           },

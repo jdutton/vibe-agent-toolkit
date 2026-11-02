@@ -19,6 +19,7 @@ import { Command } from 'commander';
 
 import { CommandRefusalError, refusalCodeOf } from '../../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, leftoverIssueOf, NOTHING_FINISHED, type FinishedWork } from '../../../utils/document-writer.js';
+import { reportFindings } from '../../../utils/issue-rendering.js';
 import { createLogger } from '../../../utils/logger.js';
 import { readInputFile } from '../../../utils/project-root-policy.js';
 
@@ -202,12 +203,12 @@ async function pluginUninstallCommand(
     const { results, changes, leftover } = await uninstallPlugins({ pluginKeys, paths, authority: request.authority, dryRun });
     if (dryRun) for (const line of changes) logger.info(`   [dry-run] ${line}`);
     for (const [index, result] of results.entries()) {
-      for (const said of [result.warning, result.notVats]) if (said !== undefined) logger.info(`   ⚠️  ${said}`);
       outcomes.push({ key: pluginKeys[index] as string, removed: result.removed, warning: result.warning, notVats: result.notVats, keptForSibling: result.keptForSibling });
     }
+    const finished = finishedWork(outcomes, dryRun);
+    reportFindings(finished.findings, { verbose: true, write: logger.warn });
     // Every key is uninstalled, registry rewritten; what the OS would not then delete is the refusal, naming it.
     if (leftover !== undefined) {
-      const finished = finishedWork(outcomes, dryRun);
       refuse(leftover, { ...finished, findings: [...finished.findings, ...toFindings([leftoverIssueOf(leftover)])] });
     }
   } catch (error) {

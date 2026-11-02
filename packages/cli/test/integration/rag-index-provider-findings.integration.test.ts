@@ -35,19 +35,32 @@ vi.mock('../../src/utils/resource-loader.js', async (importOriginal) => {
   };
 });
 
-vi.mock('@vibe-agent-toolkit/rag-lancedb', () => ({
-  LanceDBRAGProvider: {
-    create: async () => ({
-      indexResources: async (resources: ResourceMetadata[]) => ({
-        resourcesIndexed: 0, resourcesSkipped: 0, resourcesUpdated: 0, resourcesEmpty: 0,
-        chunksCreated: 0, chunksDeleted: 0, durationMs: 0,
-        errors: resources.map((resource) => ({ resourceId: resource.id, error: 'embedder refused' })),
-        warnings: ['targetChunkSize 1024 exceeds the 256-token limit of \'stub\' and has been clamped to 256.'],
+/** Whether the store refuses the batch after the provider has recorded its failures. */
+const store = vi.hoisted(() => ({ refusesMidBatch: false }));
+
+vi.mock('@vibe-agent-toolkit/rag-lancedb', async () => {
+  const { IndexBatchRefusedError } = await import('@vibe-agent-toolkit/rag');
+  const { RAG_DATABASE_UNREADABLE_CODE, VatError } = await import('@vibe-agent-toolkit/utils');
+  return {
+    LanceDBRAGProvider: {
+      create: async () => ({
+        indexResources: async (resources: ResourceMetadata[]) => {
+          const result = {
+            resourcesIndexed: 0, resourcesSkipped: 0, resourcesUpdated: 0, resourcesEmpty: 0,
+            chunksCreated: 0, chunksDeleted: 0, durationMs: 0,
+            errors: resources.map((resource) => ({ resourceId: resource.id, error: 'embedder refused' })),
+            warnings: ['targetChunkSize 1024 exceeds the 256-token limit of \'stub\' and has been clamped to 256.'],
+          };
+          if (store.refusesMidBatch) {
+            throw new IndexBatchRefusedError(new VatError(RAG_DATABASE_UNREADABLE_CODE, 'store unreadable'), result);
+          }
+          return result;
+        },
+        close: async () => undefined,
       }),
-      close: async () => undefined,
-    }),
-  },
-}));
+    },
+  };
+});
 
 describe('vat rag index — a provider failure on stderr', () => {
   let tempDir = '';
@@ -59,6 +72,7 @@ describe('vat rag index — a provider failure on stderr', () => {
   });
   afterEach(async () => {
     crawl.unreadable = [];
+    store.refusesMidBatch = false;
     vi.restoreAllMocks();
     await rm(tempDir, { recursive: true, force: true });
   });
@@ -92,6 +106,20 @@ describe('vat rag index — a provider failure on stderr', () => {
     expect(document.status).toBe('error');
     expect(document.findings.map((finding) => finding.location)).toEqual(['docs/locked.md']);
     expect(stderr).toMatch(/^ {2}docs\/locked\.md: error: .*EACCES \[RAG_DOCUMENT_INDEX_FAILED\]$/m);
+  });
+
+  it('names a document the provider failed before the store refused the batch, in the document and on stderr', async () => {
+    store.refusesMidBatch = true;
+
+    const { stdout, stderr, exited } = await captureCommand(() => indexCommand(tempDir, { db: safePath.join(tempDir, 'db') }));
+    const document = YAML.parse(stdout) as Report<unknown>;
+
+    expect(exited, stderr).toBe(2);
+    expect(document.findings.map((finding) => [finding.code, finding.location ?? null])).toEqual([
+      ['RAG_DOCUMENT_INDEX_FAILED', 'docs/a.md'],
+      ['RAG_CHUNKING_CONFIG_ADJUSTED', null],
+    ]);
+    expect(stderr).toMatch(/^ {2}docs\/a\.md: error: .*embedder refused \[RAG_DOCUMENT_INDEX_FAILED\]$/m);
   });
 
   it('says the writer\'s zero-examined refusal on stderr, exactly once', async () => {

@@ -109,7 +109,23 @@ export function publishedReport<T>(verb: ReportVerb, report: Report<T>): Report<
  */
 export function announceRunIntegrity(report: Report<unknown>, judged: Report<unknown>): void {
   // A refusal is an error, which every verbosity prints.
-  reportFindings(findingsAddedByRunIntegrity(report, judged), { verbose: false, write: (line) => process.stderr.write(`${line}\n`) });
+  reportFindings(findingsAddedByRunIntegrity(report, judged), { verbose: false, write: writeStderrLine });
+}
+
+/** One line on stderr — the `write` every writer-side {@link reportFindings} takes. */
+function writeStderrLine(line: string): void {
+  process.stderr.write(`${line}\n`);
+}
+
+/**
+ * Whether a document's findings belong on stderr too: not when stdout is the
+ * generic `--format text` rendering, which already lists every one.
+ *
+ * @param verb - The registered verb
+ * @param format - How its document is rendered
+ */
+export function findingsGoToStderr(verb: ReportVerb, format: DocumentFormat): boolean {
+  return format !== 'text' || reportShapeFor(verb).renderText !== undefined;
 }
 
 /**
@@ -124,8 +140,7 @@ export function announceRunIntegrity(report: Report<unknown>, judged: Report<unk
 export function writeDocument<T>(verb: ReportVerb, report: Report<T>, format: DocumentFormat): Report<T> {
   const entry = reportShapeFor(verb);
   const written = publishedReport(verb, report);
-  // Unless stdout is the generic text rendering, which already lists every finding.
-  if (format !== 'text' || entry.renderText !== undefined) announceRunIntegrity(report, written);
+  if (findingsGoToStderr(verb, format)) announceRunIntegrity(report, written);
   if (format === 'text') {
     const text = entry.renderText === undefined
       ? renderReportText(written, entry.examined.unit)
@@ -183,7 +198,8 @@ export function endWithRefusal(
   gate: Gate,
   finished: FinishedWork,
 ): never {
-  process.exit(exitCodeForReport(writeDocument(verb, refusalReport(code, error, gate, finished), format)));
+  const report = refusalReport(code, error, gate, finished, findingsGoToStderr(verb, format));
+  process.exit(exitCodeForReport(writeDocument(verb, report, format)));
 }
 
 /**
@@ -211,17 +227,25 @@ function announceRefusal(code: RefusalCode, error: unknown): string {
  * @param error - The thrown value, or the message
  * @param gate - The gate the run was judged by
  * @param finished - The work that finished, or {@link NOTHING_FINISHED}
+ * @param findingsOnStderr - Whether its leftovers go to stderr too ({@link findingsGoToStderr})
  * @returns The error report, not yet published
  */
-export function refusalReport(code: RefusalCode, error: unknown, gate: Gate, finished: FinishedWork): Report<unknown> {
+export function refusalReport(code: RefusalCode, error: unknown, gate: Gate, finished: FinishedWork, findingsOnStderr: boolean): Report<unknown> {
   const message = announceRefusal(code, error);
+  const leftovers = leftoverIssuesOf(error);
+  if (findingsOnStderr) reportFindings(leftovers, { verbose: true, write: writeStderrLine });
   return buildErrorReport({
     error: { code, message },
     gate,
     examined: finished.examined,
-    findings: [...finished.findings, ...leftoverFindingsOf(error)],
+    findings: [...finished.findings, ...leftovers],
     data: finished.data,
   });
+}
+
+/** {@link leftoverFindingsOf} without the printing. */
+function leftoverIssuesOf(error: unknown): Array<ValidationIssue & Finding> {
+  return suppressedFaultsOf(error).map((fault) => leftoverIssueOf(fault));
 }
 
 /**
@@ -230,11 +254,9 @@ export function refusalReport(code: RefusalCode, error: unknown, gate: Gate, fin
  * Recorded beside, never on its cause chain: a leftover is never the run's refusal.
  */
 export function leftoverFindingsOf(error: unknown): Array<ValidationIssue & Finding> {
-  return suppressedFaultsOf(error).map((fault) => {
-    const issue = leftoverIssueOf(fault);
-    process.stderr.write(`${formatFindingLine(issue)}\n`);
-    return issue;
-  });
+  const leftovers = leftoverIssuesOf(error);
+  reportFindings(leftovers, { verbose: true, write: writeStderrLine });
+  return leftovers;
 }
 
 /**
