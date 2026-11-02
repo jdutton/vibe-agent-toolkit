@@ -303,7 +303,6 @@ packages/dev-tools/test/test-helpers.ts MockPackageOptions dead
 packages/dev-tools/test/test-helpers.ts TestTempDirOptions dead
 packages/discovery/src/filters/pattern-filter.ts PatternFilterOptions dead
 packages/lab/src/facets/population/types.ts populationEntryShape dead
-packages/lab/src/harness/facet-compare.ts bothSides dead
 packages/lab/src/harness/facet-compare.ts CountDelta dead
 packages/lab/src/harness/facet-compare.ts MsDelta dead
 packages/lab/src/harness/facet-compare.ts RowMovementKind dead
