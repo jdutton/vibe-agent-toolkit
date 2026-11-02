@@ -4,7 +4,7 @@
  * because the switch is process-wide and never turned back off.
  */
 
-import { buildReport, type Finding } from '@vibe-agent-toolkit/schema';
+import { buildErrorReport, buildReport, type Finding } from '@vibe-agent-toolkit/schema';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 import {
@@ -40,7 +40,17 @@ describe('a supervised child\'s writer', () => {
     writeDocument('okf validate', buildReport({ examined: 0, findings: [], data: { bundles: [] }, gate: { strict: false } }), 'json');
     endWithRefusal('okf validate', 'INPUT_UNREADABLE', 'refused', 'yaml', { strict: false }, { ...NOTHING_FINISHED, findings: [FINDING, leftoverIssue('left behind', '/tmp/left')] });
 
+    // Not even the refusal's message: the supervisor forwarding the document says it, once.
     const said = stderr.mock.calls.map((call) => String(call[0])).join('');
-    expect(said).toBe('refused\n');
+    expect(said).toBe('');
+  });
+
+  it('says no error report a verb built itself either', () => {
+    leaveFindingsToSupervisor();
+    writeDocument('okf validate', buildErrorReport({
+      error: { code: 'RUN_INCOMPLETE', message: 'stopped' }, gate: { strict: false }, examined: 0, findings: [], data: { bundles: [] },
+    }), 'json');
+
+    expect(stderr.mock.calls.map((call) => String(call[0])).join('')).toBe('');
   });
 });

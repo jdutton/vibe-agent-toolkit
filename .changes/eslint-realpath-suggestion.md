@@ -26,10 +26,38 @@
   `no-os-tmpdir`, `no-fs-mkdirSync`). The import, or just the dead specifier beside a live one
   (`join` in `import { join, dirname } from 'node:path'`), is now removed on the next `--fix` pass,
   once nothing references it. A single `--fix` pass, and an editor's single fix, leave both imports.
-  Two shapes are never removed and stay for you to delete: a declaration with any type-only binding
-  (`import { type join, resolve } from 'node:path'`), and a declaration's only named specifier, dead,
+  The same next-pass removal takes a dead `require()`, `import()` / `await import()` or
+  `import x = require()` binding of the module (`const os = require('node:os')`, or a destructure
+  `const { tmpdir } = require('node:os')`) for `no-os-tmpdir`, `no-fs-mkdirSync`,
+  `no-fs-realpathSync`, `no-child-process-execSync` and `no-manual-path-normalize`: the whole
+  statement goes, once nothing references any binding it declares. These shapes are never removed
+  and stay for you to delete: a declaration with any type-only binding
+  (`import { type join, resolve } from 'node:path'`); a declaration's only named specifier, dead,
   beside a live default or namespace binding (`tmpdir` in `import os, { tmpdir } from 'node:os'` while
-  `os` is still used).
+  `os` is still used); and a `require()` / `import()` / `import x = require()` binding that is
+  exported, declared beside a second declarator (`const os = require('node:os'), n = 1`), assigned
+  again after its declaration, or destructured with a default value, a rest element, a computed key
+  or a nested pattern.
+- **Every fix and suggestion of the call rules and `no-raw-node-path`/`no-manual-path-normalize`
+  carries the replacement's import itself**, so each is correct applied alone (an editor's "fix this
+  problem"). `no-raw-node-path` used to add the import on the first report only: when an
+  `eslint-disable` suppressed that first call, the other calls' fixes, applied alone, rewrote to an
+  unbound `safePath`. A file with several call sites now takes two passes of ESLint's fix loop instead
+  of one (the first rewrites one call and adds the import, the second the rest); one `eslint --fix`
+  run still finishes it.
+- **An aliased import of the replacement (`import { normalizedTmpdir as nt } from
+  '@vibe-agent-toolkit/utils/fs'`) no longer makes the call rules write an unbound call.**
+  `no-os-tmpdir`, `no-fs-mkdirSync`, `no-fs-realpathSync` and `no-child-process-execSync` counted the
+  alias as importing the replacement and rewrote `tmpdir()` to `normalizedTmpdir()` with no import.
+  The fix now appends the replacement to that import: `import { normalizedTmpdir as nt,
+  normalizedTmpdir }`.
+- **`no-manual-path-normalize` resolves `path.sep` through scope.** It matched any `<x>.sep` spelled
+  `path.sep`, so `import { posix as path } from 'node:path'` (whose `sep` is always `/`) or a
+  parameter named `path` had `s.split(path.sep).join('/')` rewritten to `toForwardSlash(s)`, which
+  converts backslashes on Windows where the original did not. It now reports only a `sep` read off a
+  whole-module binding of `node:path` (`import path`, `import * as path`, `require()`, `import()`,
+  `import path = require()`). A receiver that is a comma expression (`(a, b).replaceAll('\\', '/')`)
+  is reported with no fix: the rewrite passed it as two arguments.
 - **`no-os-tmpdir`, `no-fs-mkdirSync`, `no-fs-realpathSync` and `no-child-process-execSync` report a
   call only when it resolves through scope to the `node:*` module's own function**, by the same scan
   `no-existssync` and `no-link-following-fs` use: a named import (aliased or not), a member of a

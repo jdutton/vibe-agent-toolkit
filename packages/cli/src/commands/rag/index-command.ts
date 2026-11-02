@@ -146,9 +146,10 @@ export async function indexCommand(
 
   let report: RagIndexReport;
   // Held outside the `try`: a run the database then refuses still names every file it could not read,
-  // and every document the provider failed before the refusal.
+  // every document the provider failed before the refusal, and every finding of a finished index.
   let unreadable: ValidationIssue[] = [];
   let locations: ReadonlyMap<string, string> = new Map();
+  let indexed: IndexResult | undefined;
   try {
     // The path is the root to crawl: one that names nothing, or that the OS
     // will not list, refuses before any database is opened.
@@ -187,6 +188,7 @@ export async function indexCommand(
       toForwardSlash(safePath.relative(crawlRoot, resource.filePath)),
     ]));
     const indexResult = await ragProvider.indexResources(allResources);
+    indexed = indexResult;
     await ragProvider.close();
 
     const recorded = providerIssues(indexResult, locations);
@@ -199,7 +201,7 @@ export async function indexCommand(
       durationMs: Date.now() - startTime,
     });
   } catch (error) {
-    const partial = partialIndexResultOf(error);
+    const partial = partialIndexResultOf(error) ?? indexed;
     // The writer says them on stderr, with the refusal.
     const recorded = partial ? providerIssues(partial, locations) : [];
     return endWithRefusal('rag index', refusalCodeOf(error), error, 'yaml', RAG_GATE, { ...NOTHING_FINISHED, findings: toFindings([...unreadable, ...recorded]) });

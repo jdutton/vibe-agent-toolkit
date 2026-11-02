@@ -5,7 +5,7 @@
  * code the written document derives.
  */
 
-import { buildReport, ExitCode, type ErrorReport, type Finding, type Report } from '@vibe-agent-toolkit/schema';
+import { buildErrorReport, buildReport, ExitCode, type ErrorReport, type Finding, type Report } from '@vibe-agent-toolkit/schema';
 import { recordSuppressedFault } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import yaml from 'yaml';
@@ -14,6 +14,7 @@ import { PUBLISHED_SHAPES } from '../../src/report-schemas.js';
 import { CommandRefusalError } from '../../src/utils/command-refusal.js';
 import { setDebugDiagnostics } from '../../src/utils/debug-diagnostics.js';
 import {
+  announceErrorOf,
   endWithLeftoverRefusal,
   endWithRefusal,
   endWithReport,
@@ -203,6 +204,57 @@ describe('endWithRefusal', () => {
   });
 });
 
+/**
+ * A refusal always says why on stderr — whichever entry point published it, exactly once. An error
+ * report a verb builds itself (`buildErrorReport`) and publishes through `endWithReport` used to
+ * print nothing at all: only `endWithRefusal`'s composer said a message.
+ */
+describe('an error report says its message on stderr exactly once', () => {
+  const MESSAGE = 'the population did not complete';
+  const errorReport = (): Report<unknown> => buildErrorReport({
+    error: { code: 'RUN_INCOMPLETE', message: MESSAGE },
+    gate: { strict: false },
+    examined: 0,
+    findings: [],
+    data: DATA,
+  });
+  const occurrences = (text: string): number => text.split(MESSAGE).length - 1;
+
+  it.each(['yaml', 'json', 'text'] as const)('endWithReport, --format %s', (format) => {
+    endWithReport(VERB, errorReport(), format);
+
+    expect(occurrences(stderrText())).toBe(1);
+    expect(exit.mock.calls).toEqual([[ExitCode.ERROR]]);
+  });
+
+  it('endWithRefusal says it once, not again in the writer', () => {
+    endWithRefusal(VERB, 'RUN_INCOMPLETE', MESSAGE, 'json', { strict: false }, NOTHING_FINISHED);
+
+    expect(occurrences(stderrText())).toBe(1);
+  });
+
+  it('a forwarded error document is said by the process that publishes it, before its leftovers', () => {
+    const LEFT = 'could not remove the log';
+    const report = publishedReport(VERB, buildErrorReport({
+      error: { code: 'RUN_INCOMPLETE', message: MESSAGE }, gate: { strict: false }, examined: 0, findings: [leftoverIssue(LEFT, undefined)], data: DATA,
+    }));
+    endWithForwardedDocument(readForwardedDocument(VERB, JSON.stringify(report), 'json'));
+
+    const text = stderrText();
+    expect(occurrences(text)).toBe(1);
+    expect(text.indexOf(MESSAGE)).toBeLessThan(text.indexOf(LEFT));
+  });
+
+  it('announceErrorOf says one report once, however often it is asked', () => {
+    const report = errorReport();
+    announceErrorOf(report);
+    announceErrorOf(report);
+    writeDocument(VERB, report, 'json');
+
+    expect(occurrences(stderrText())).toBe(1);
+  });
+});
+
 describe('endWithLeftoverRefusal', () => {
   const LEFTOVER = 'could not delete /tmp/parked-entry';
 
@@ -320,6 +372,16 @@ describe('the other writer entry points', () => {
 
     expect(JSON.parse(written())).toEqual({ has_more: false, data: [] });
     expect(exit.mock.calls).toEqual([[ExitCode.ERROR]]);
+  });
+
+  it('writeExternalDocument says each leftover its payload carries, once, and no other warning', () => {
+    const left = leftoverIssue('the download directory could not be removed', '/tmp/vat-org-skills-x');
+    const other = { code: 'SOMETHING_ELSE', severity: 'warning', message: 'not a leftover' };
+    writeExternalDocument('claude org skills install', { skills: [], warnings: [left, other] }, 'yaml', { kind: 'ok' });
+
+    const said = stderrText();
+    expect(said.split('the download directory could not be removed').length - 1).toBe(1);
+    expect(said).not.toContain('not a leftover');
   });
 
   it('writeLegacyDocument serializes the legacy document as asked', () => {

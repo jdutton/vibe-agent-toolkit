@@ -52,6 +52,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
 import { loadConfigCached } from '../../utils/config-loader.js';
 import {
+  announceErrorOf,
   endWithForwardedDocument,
   endWithRefusal,
   endWithReport,
@@ -1741,6 +1742,8 @@ export async function checkCommand(
     // supervised child prints no finding, here or in its writer: its supervisor reports them all.
     if (child === undefined) {
       const report = 'forward' in ending ? ending.forward.report : ending.payload;
+      // An error document's message first, as every refusal says it; the writer then skips it.
+      announceErrorOf(report);
       reportFindings(report.findings, { verbose: options.verbose === true, write: logger.error });
     }
     if ('forward' in ending) {

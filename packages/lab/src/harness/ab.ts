@@ -68,12 +68,17 @@ const NO_VERDICT = 'NO VERDICT (pair refused)';
 /** Why a pair is lost when an arm's capture published no estimate for the command. */
 const NO_ESTIMATE = 'published no estimate';
 
+/** The verdict kind that means the comparison judged the command and found no difference. */
+const UNCHANGED_VERDICT = 'unchanged';
+
 /**
- * Did any pair's comparison accept this command? When none did, the two arms' numbers were never
- * judged comparable, and their difference is not an effect.
+ * Did any pair's comparison JUDGE this command — call it changed or unchanged? Every facet speaks
+ * these two kinds; any other (`unmeasurable`, `added`, `removed`, `below-resolution`, a refused
+ * pair) judged nothing. When no pair judged it, the two arms' numbers were never weighed against
+ * each other, and their difference is not an effect.
  */
-function anyComparable(verdicts: readonly string[]): boolean {
-  return verdicts.some((verdict) => verdict !== NO_VERDICT);
+function anyJudged(verdicts: readonly string[]): boolean {
+  return verdicts.some((verdict) => verdict === CHANGED_VERDICT || verdict === UNCHANGED_VERDICT);
 }
 
 /**
@@ -532,8 +537,8 @@ function foldCommands<TBody, TComparison extends ComparisonLike>(
     const b = armSummary(outcomes, name, 'b', spec.estimator);
     const lost = { a: armLost(outcomes, name, 'a'), b: armLost(outcomes, name, 'b') };
     // No effect from an arm that lost a capture — its survivors' statistic understates what lost it —
-    // nor when no pair was comparable: two numbers no comparison accepted are not an effect.
-    const effect = a === null || b === null || lost.a !== null || lost.b !== null || !anyComparable(verdicts)
+    // nor when no pair judged the command: two numbers no comparison weighed are not an effect.
+    const effect = a === null || b === null || lost.a !== null || lost.b !== null || !anyJudged(verdicts)
       ? null
       : b.value - a.value;
     return {
@@ -763,7 +768,10 @@ function armLine(label: string, summary: AbArmSummary | null, lost: string | nul
 function effectLine(command: AbCommandResult, noiseFloor: number | null): string {
   if (command.lost.a !== null) return `    effect: NONE — arm A ${command.lost.a}.`;
   if (command.lost.b !== null) return `    effect: NONE — arm B ${command.lost.b}.`;
-  if (!anyComparable(command.verdicts)) return '    effect: NONE — no pair was comparable; see the refusals above.';
+  if (command.verdicts.every((verdict) => verdict === NO_VERDICT)) return '    effect: NONE — no pair was comparable; see the refusals above.';
+  if (!anyJudged(command.verdicts)) {
+    return `    effect: NONE — no pair judged it changed or unchanged (every pair said: ${[...new Set(command.verdicts)].join(', ')}).`;
+  }
   if (command.effect === null) return '    effect: NONE — an arm produced no reading.';
   const unit = command.b?.unit ?? command.a?.unit ?? '';
   const head = `    effect (B - A): ${num(command.effect)}${unit}`;

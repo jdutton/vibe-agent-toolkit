@@ -106,7 +106,7 @@ export function project(name: string, config: string, files: Readonly<Record<str
 export const CLEAN_SKILL = '---\nname: clean\ndescription: Reviews widgets for quality. Use when a reviewer wants a '
   + 'checklist walkthrough of a widget in depth.\n---\n\n# clean\n\nPurpose statement goes here.\n\nDoes one thing well.\n';
 /** A SKILL.md with an error-severity finding: a description past the 1024-character limit. */
-const BROKEN_SKILL = `---\nname: broken\ndescription: Reviews widgets. ${'Use when a reviewer wants a walkthrough. '.repeat(30)}\n---\n\n# broken\n\nBody.\n`;
+export const BROKEN_SKILL = `---\nname: broken\ndescription: Reviews widgets. ${'Use when a reviewer wants a walkthrough. '.repeat(30)}\n---\n\n# broken\n\nBody.\n`;
 
 const OKF_CONFIG = 'okf:\n  bundles:\n    knowledge:\n      root: ./bundles/knowledge\n';
 /**
@@ -1119,15 +1119,37 @@ export function exitCodeTheContractGives(document: ExitDeterminingDocument & Rec
   return 0;
 }
 
+/** One verb's exemption from the shared-reporter rule, and how far the matrix proves it. */
+interface FindingsStderrExemption {
+  /** What its stderr does with its findings instead. */
+  readonly how: string;
+  /**
+   * The ONE output mode the exemption is stated for: the mode the verb's `findings` scenario runs in
+   * (`default` — no `--format`/`--yaml` flag). Nothing is claimed about any other mode; where
+   * another mode does say them (`skill review` without `--yaml`), a test outside the matrix holds it.
+   */
+  readonly mode: 'default' | '--format json' | '--yaml';
+  /**
+   * Where its `findings` scenario runs, so where the both-ways assertion bites. Checked against the
+   * scenario's `skipReason` both ways: an exemption proven only where a listing can be denied says so.
+   */
+  readonly provenOn: 'every platform' | 'platforms that can deny a directory listing';
+}
+
 /**
  * Verbs whose findings stderr does not yet say through the shared reporter
- * (bare counts, their own glyph lines, or silence). Asserted both ways: a verb
- * that starts saying them must leave this list.
+ * (bare counts, their own glyph lines, or silence). Asserted both ways by every
+ * findings scenario: a verb that starts saying them must leave this table.
  */
-const FINDINGS_NOT_ON_STDERR: ReadonlySet<string> = new Set([
-  'agent installed', 'agent list', 'corpus scan',
-  'doctor', 'inventory', 'skill review', 'skills install', 'skills list',
-]);
+export const FINDINGS_NOT_ON_STDERR: Readonly<Record<string, FindingsStderrExemption>> = {
+  'agent installed': { how: 'an empty-listing line, never the finding', mode: 'default', provenOn: 'platforms that can deny a directory listing' },
+  'agent list': { how: 'an empty-listing line, never the finding', mode: 'default', provenOn: 'platforms that can deny a directory listing' },
+  'corpus scan': { how: 'its own per-entry progress lines', mode: 'default', provenOn: 'every platform' },
+  doctor: { how: 'its own check glyph lines', mode: 'default', provenOn: 'every platform' },
+  inventory: { how: 'silence', mode: '--format json', provenOn: 'platforms that can deny a directory listing' },  'skill review': { how: 'silence: the human report, which says them, is not printed under --yaml', mode: '--yaml', provenOn: 'every platform' },
+  'skills install': { how: 'one summary line pointing at the document', mode: 'default', provenOn: 'every platform' },
+  'skills list': { how: 'its own warning: could not list line', mode: 'default', provenOn: 'platforms that can deny a directory listing' },
+};
 
 /**
  * Every verb says its findings on stderr through the shared reporter — under any status, a refusal's
@@ -1136,11 +1158,16 @@ const FINDINGS_NOT_ON_STDERR: ReadonlySet<string> = new Set([
  * format, or silence. A document with no finding has nothing to say.
  */
 function expectFindingsSaidOnStderr(verb: string, document: Record<string, unknown>, stderr: string): void {
+  if (document['status'] === 'error') {
+    // A refusal says why on stderr, once, from every entry point — whatever findings it carries.
+    const message = (document['error'] as { message: string }).message;
+    expect(stderr.split(message).length - 1, `${verb}: the refusal's message said once on stderr?\n${stderr}`).toBe(1);
+  }
   const findings = (document['findings'] ?? []) as readonly Finding[];
   if (findings.length === 0) return;
   const errorsSaid = findings.filter((finding) => finding.severity === 'error').every((finding) => saysFindingLine(stderr, finding));
   const said = errorsSaid && (findings.some((finding) => saysFindingLine(stderr, finding)) || stderr.includes('finding(s) not shown'));
-  expect(said, `${verb}: findings on stderr?\n${stderr}`).toBe(!FINDINGS_NOT_ON_STDERR.has(verb));
+  expect(said, `${verb}: findings on stderr?\n${stderr}`).toBe(FINDINGS_NOT_ON_STDERR[verb] === undefined);
 }
 
 /**

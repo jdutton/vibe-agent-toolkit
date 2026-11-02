@@ -430,6 +430,29 @@ describe('runAb — no pair comparable', () => {
     expect(text).toContain('effect: NONE — no pair was comparable');
     expect(text).not.toContain('effect (B - A)');
   });
+
+  // Every facet: a pair counts toward an effect only when its comparison judged the command changed
+  // or unchanged. `unmeasurable`, `added`, `removed`, `below-resolution`… judged nothing.
+  it.each(['unmeasurable', 'added', 'below-resolution'])('prints no effect when every pair said %s, naming why', async (kind) => {
+    const { result } = await runFixture(
+      { pairs: 2, aValues: [10, 10], bValues: [50, 50], script: [kind, kind] },
+      `none-judged-${kind}`,
+    );
+
+    expect(only(result).effect).toBeNull();
+    const text = renderAb(result);
+    expect(text).toContain(`effect: NONE — no pair judged it changed or unchanged (every pair said: ${kind})`);
+    expect(text).not.toContain('effect (B - A)');
+  });
+
+  it('takes the effect when one pair judged it, though another pair did not', async () => {
+    const { result } = await runFixture(
+      { pairs: 2, aValues: [10, 10], bValues: [50, 50], script: ['unmeasurable', 'unchanged'] },
+      'one-judged',
+    );
+
+    expect(only(result).effect).toBe(40);
+  });
 });
 
 describe('runAb — pairs that disagree', () => {

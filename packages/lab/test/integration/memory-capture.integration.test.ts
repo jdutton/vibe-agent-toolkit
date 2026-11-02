@@ -15,8 +15,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { BLOB_PARSE_FAILED, describeBlobRefusals, parseFailedMessage } from '@vibe-agent-toolkit/resources';
-import { normalizedTmpdir, safePath, toForwardSlash, WORKER_OUT_OF_MEMORY_CODE } from '@vibe-agent-toolkit/utils';
+import { BLOB_PARSE_FAILED, describeBlobRefusals } from '@vibe-agent-toolkit/resources';
+import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { ReportEnvelope } from '../../src/envelope/envelope.js';
@@ -43,20 +43,35 @@ const MIB_KB = 1024;
 const scratch: string[] = [];
 
 /**
- * What vat prints when its parse pool caught a worker's heap death — built by vat's own formatter
- * from the row vat's own writer records, never a hand-written string, so a printer that stops
- * naming the code reddens the caught-worker case below.
+ * vat's population warning for one document whose parse threw — `failure` as a `BLOB_PARSE_FAILED`
+ * row says it (`code X`, or `message …`) — printed by vat's own `describeBlobRefusals`.
  */
-function vatWorkerHeapWarning(): string {
-  const died = Object.assign(new Error('Worker terminated due to reaching memory limit'), { code: WORKER_OUT_OF_MEMORY_CODE });
+function vatParseFailedWarning(failure: string): string {
+  const message = `The markdown parser threw on these bytes (${failure})`;
   const line = describeBlobRefusals({
     blobs: [],
     resourceRealizations: [],
-    blobConditions: [{ blob: 'markdown.0', code: BLOB_PARSE_FAILED, severity: 'warning', message: parseFailedMessage('markdown', died), line: null }],
+    blobConditions: [{ blob: 'markdown.0', code: BLOB_PARSE_FAILED, severity: 'warning', message, line: null }],
   });
   if (line === undefined) throw new Error('describeBlobRefusals reported nothing for a failed parse');
   return `resources population: ${line}`;
 }
+
+/** A preload that prints `text` on stderr in every run of the measured command, and changes nothing else. */
+function stderrPreload(dir: string, name: string, text: string): string {
+  const path = safePath.join(dir, name);
+  writeFileSync(path, `if (process.argv.length > 1 && !process.argv.includes('--version')) process.stderr.write(${JSON.stringify(text)});\n`);
+  return path;
+}
+
+/** A preload whose vat caught a parse that threw a syntax error, and exited 0. */
+let parseFailedPath: string;
+
+/** A preload whose vat caught a parse that threw a message, with no code, naming the heap limit. */
+let quotedHeapMessagePath: string;
+
+/** A preload that prints Node's own message for a worker at its heap limit, with no code. */
+let memoryLimitMessagePath: string;
 
 /** A preload that allocates and fills `LAB_MEMORY_ALLOC_MIB` MiB and keeps it. */
 let allocPath: string;
@@ -75,7 +90,7 @@ let workerExhaustPath: string;
 
 /**
  * A preload whose worker thread outgrows its heap limit and is CAUGHT — as vat's parse pool catches
- * it and reports the document as a finding — so the process prints the worker's message and exits 0.
+ * it and reports the document as a finding — so the process prints vat's parse-failed warning and exits 0.
  */
 let caughtWorkerExhaustPath: string;
 
@@ -97,9 +112,12 @@ beforeAll(() => {
   writeFileSync(
     caughtWorkerExhaustPath,
     "const wt = require('node:worker_threads');\nif (wt.isMainThread && process.argv.length > 1 && !process.argv.includes('--version')) { new wt.Worker('const kept = []; for (;;) kept.push(new Array(1e5).fill(1));', { eval: true, resourceLimits: { maxOldGenerationSizeMb: 8 } }).on('error', () => { process.stderr.write("
-      + JSON.stringify(`${vatWorkerHeapWarning()}\n`)
+      + JSON.stringify(`${vatParseFailedWarning('code ERR_WORKER_OUT_OF_MEMORY')}\n`)
       + '); }); process.exit = () => undefined; }\n',
   );
+  parseFailedPath = stderrPreload(dir, 'parse-failed.cjs', `${vatParseFailedWarning('message Unexpected token (3:1)')}\n`);
+  quotedHeapMessagePath = stderrPreload(dir, 'quoted-heap.cjs', `${vatParseFailedWarning('message Worker terminated due to reaching memory limit')}\n`);
+  memoryLimitMessagePath = stderrPreload(dir, 'memory-limit.cjs', 'Error: Worker terminated due to reaching memory limit: JS heap out of memory\n');
   workerExhaustPath = safePath.join(dir, 'worker-exhaust.cjs');
   writeFileSync(
     workerExhaustPath,
@@ -185,21 +203,30 @@ describe('captureMemory', () => {
     expect(row.outOfHeap).toBe(true);
   });
 
-  it('marks a row whose worker thread ran out of heap (ERR_WORKER_OUT_OF_MEMORY) as out of heap', async () => {
-    const env = { set: { NODE_OPTIONS: `--require "${workerExhaustPath}"` }, unset: [] };
+  // The preload paths are written in a hook, so each case names its path by a getter.
+  it.each([
+    ['a worker thread ran out of heap, uncaught', () => workerExhaustPath],
+    ["Node's own worker message says `reaching memory limit`", () => memoryLimitMessagePath],
+  ] as const)('marks a row out of heap when %s', async (_why, preload) => {
+    const env = { set: { NODE_OPTIONS: `--require "${preload()}"` }, unset: [] };
     const row = onlyRow(await capture(setupProbe(PREFIX), 0, { env, runs: 1, cache: 'cold' }));
 
     expect(row.failed).toBe(true);
     expect(row.outOfHeap).toBe(true);
   });
 
-  it('marks a row out of heap when a worker ran out and the process CAUGHT it and exited 0', async () => {
-    const env = { set: { NODE_OPTIONS: `--require "${caughtWorkerExhaustPath}"` }, unset: [] };
+  it.each([
+    ['its pool caught a worker at its heap limit, and the process exited 0', () => caughtWorkerExhaustPath],
+    ['a parse threw a syntax error', () => parseFailedPath],
+    ['the parse failure it quotes names the heap limit', () => quotedHeapMessagePath],
+  ] as const)('marks a row unmeasurable, NOT out of heap, when vat says a parse failed because %s', async (_why, preload) => {
+    const env = { set: { NODE_OPTIONS: `--require "${preload()}"` }, unset: [] };
     const row = onlyRow(await capture(setupProbe(PREFIX), 0, { env, runs: 1, cache: 'cold' }));
 
-    // A peak from a run that lost a worker is not a measurement of the command: never compared as one.
-    expect(row.outOfHeap).toBe(true);
+    // A run that skipped a document measured less work: unusable, whatever it said the parse threw.
     expect(row.failed).toBe(true);
+    expect(row.outOfHeap).toBe(false);
+    expect(row.failure).toContain('parse failed');
   });
 
   it("records the arm's NODE_OPTIONS in the host, without the facet's own probe", async () => {

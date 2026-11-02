@@ -34,15 +34,12 @@ const {
   DEAD_UNSAFE_IMPORT_MESSAGE,
   reportDeadUnsafeImports,
 } = require('./dead-import.cjs');
+const { loadedModuleOf, moduleBindingVisitors } = require('./fs-binding-scan.cjs');
 const {
-  acceptsImport,
+  createSafeImporter,
   SAFE_MODULE_ONLY_SCHEMA,
   SAFE_PATH_MODULE,
-  insertAboveWithComments,
-  mayRewriteCallTo,
   resolveSafeModule,
-  safeBindingOf,
-  takesNamedSpecifier,
 } = require('./safe-import.cjs');
 
 const NATIVE_FN = 'toForwardSlash';
@@ -70,8 +67,38 @@ function isGlobalBackslashRegex(node) {
   return node.type === 'Literal' && node.regex?.pattern === String.raw`\\` && node.regex.flags.includes('g');
 }
 
-function isPathSep(node) {
-  return node.type === 'MemberExpression' && node.object.name === 'path' && node.property.name === 'sep';
+/**
+ * Does `def` bind the WHOLE `node:path` module — `import path from`, `import * as path from`,
+ * `const path = require(…)` / `await import(…)`, or `import path = require(…)`?
+ */
+function bindsPathModule(def) {
+  if (def.type === 'ImportBinding' && def.parent?.type === 'ImportDeclaration') {
+    return PATH_MODULES.has(def.parent.source.value) && def.parent.importKind !== 'type'
+      && (def.node.type === 'ImportDefaultSpecifier' || def.node.type === 'ImportNamespaceSpecifier');
+  }
+  if (def.type === 'ImportBinding' && def.node.type === 'TSImportEqualsDeclaration') {
+    const ref = def.node.moduleReference;
+    return ref.type === 'TSExternalModuleReference' && PATH_MODULES.has(ref.expression.value);
+  }
+  return def.type === 'Variable' && def.node.id.type === 'Identifier' && PATH_MODULES.has(loadedModuleOf(def.node.init));
+}
+
+/**
+ * `<ns>.sep` where `<ns>` resolves THROUGH SCOPE to the whole `node:path` module. Matched by
+ * spelling, `import { posix as path }` — whose `sep` is always `/` — or a parameter named `path`
+ * was rewritten to `toForwardSlash`, which converts backslashes on Windows where the original
+ * did not.
+ */
+function isPathSep(sourceCode, node) {
+  if (node.type !== 'MemberExpression' || node.computed || node.object.type !== 'Identifier'
+    || node.property.name !== 'sep') {
+    return false;
+  }
+  for (let scope = sourceCode.getScope(node); scope; scope = scope.upper) {
+    const variable = scope.set.get(node.object.name);
+    if (variable !== undefined) return variable.defs.length === 1 && bindsPathModule(variable.defs[0]);
+  }
+  return false;
 }
 
 /**
@@ -81,12 +108,12 @@ function isPathSep(node) {
  * is a different operation that neither converter matches, so it is not
  * reported.
  */
-function matchSplitJoin(node) {
+function matchSplitJoin(sourceCode, node) {
   if (!isMethodCall(node, 'join', 1) || !isStringLiteral(node.arguments[0], '/')) return undefined;
   const split = node.callee.object;
   if (!isMethodCall(split, 'split', 1)) return undefined;
   const [separator] = split.arguments;
-  if (isPathSep(separator)) return { receiver: split.callee.object, fn: NATIVE_FN };
+  if (isPathSep(sourceCode, separator)) return { receiver: split.callee.object, fn: NATIVE_FN };
   if (isStringLiteral(separator, BACKSLASH)) return { receiver: split.callee.object, fn: ANY_PLATFORM_FN };
   return undefined;
 }
@@ -132,50 +159,33 @@ module.exports = {
   create(context) {
     const sourceCode = context.getSourceCode();
     const targetModule = resolveSafeModule(context, SAFE_PATH_MODULE);
-    // Seeded from SCOPE: a file that already binds the safe function must have the
-    // call rewritten WITHOUT gaining a second binding of the same name — that is a
-    // SyntaxError. Whether a call may be rewritten at all is `mayRewriteCallTo`'s.
-    const bound = {
-      [NATIVE_FN]: safeBindingOf(sourceCode, NATIVE_FN, targetModule) === 'safe',
-      [ANY_PLATFORM_FN]: safeBindingOf(sourceCode, ANY_PLATFORM_FN, targetModule) === 'safe',
+    // Bound, may-rewrite and the import each fix carries, per converter: the pack's ONE fixer
+    // contract (`createSafeImporter` in `safe-import.cjs`), answered from scope and never mutated.
+    const importers = {
+      [NATIVE_FN]: createSafeImporter(sourceCode, NATIVE_FN, targetModule),
+      [ANY_PLATFORM_FN]: createSafeImporter(sourceCode, ANY_PLATFORM_FN, targetModule),
     };
-    // Never mutated — the dead-import leg must not be armed by a flag that a
-    // suppressed report's `fix()` can spend. See `dead-import.cjs`.
-    const safeBoundInSource = bound[NATIVE_FN];
     // The dead-import leg's OTHER gate: a `toForwardSlash(…)` call is the text
     // this fixer writes for `path.sep`, and the only evidence available that it
     // wrote it here. Read from the source, never from a `fix()`.
     let safeReplacementCalled = false;
-    let utilsImportNode = null;
     // `path.sep` is the last `path.*` reference in plenty of files, and
-    // `toForwardSlash(raw)` consumes it — leaving a dead `node:path` binding.
+    // `toForwardSlash(raw)` consumes it — leaving a dead `node:path` binding, whichever
+    // whole-module shape bound it (`isPathSep`): an import, `require()`, `import()` or
+    // `import path = require()`.
     const pathImportNodes = [];
-
-    /**
-     * Add `fn` to the import, when nothing binds it yet.
-     *
-     * NOT latched: two reports insert identical text at the identical anchor, so
-     * ESLint applies one and drops the other as overlapping. Latching is not
-     * free — ESLint runs `fix()` for a SUPPRESSED problem before the
-     * `eslint-disable` filter discards it, so a latch could be spent by a report
-     * that is then thrown away.
-     */
-    function importFix(fixer, fn) {
-      if (bound[fn]) return [];
-      if (utilsImportNode) {
-        return [fixer.insertTextAfter(utilsImportNode.specifiers.at(-1), `, ${fn}`)];
-      }
-      const newImport = `import { ${fn} } from '${targetModule}';\n`;
-      return [insertAboveWithComments(fixer, sourceCode, sourceCode.ast.body[0], newImport)];
-    }
+    const bindings = moduleBindingVisitors(PATH_MODULES, (node) => pathImportNodes.push(node));
 
     return {
+      VariableDeclarator: bindings.VariableDeclarator,
+      TSImportEqualsDeclaration: bindings.TSImportEqualsDeclaration,
+
       'Program:exit'() {
         reportDeadUnsafeImports(
           context,
           sourceCode,
           pathImportNodes,
-          safeBoundInSource,
+          importers[NATIVE_FN].boundInSource,
           safeReplacementCalled,
           // Rewrites `split(path.sep)`, never a named import.
           new Set(),
@@ -183,34 +193,35 @@ module.exports = {
       },
 
       ImportDeclaration(node) {
-        if (PATH_MODULES.has(node.source.value)) {
-          pathImportNodes.push(node);
-        }
-        // Only a VALUE import with named specifiers takes another one (see `takesNamedSpecifier`);
-        // what it already binds, `safeBindingOf` has answered from scope.
-        if (node.source.value === targetModule && takesNamedSpecifier(node)) utilsImportNode = node;
+        bindings.ImportDeclaration(node);
+        importers[NATIVE_FN].noteImport(node);
+        importers[ANY_PLATFORM_FN].noteImport(node);
       },
 
       CallExpression(node) {
         if (node.callee.type === 'Identifier' && node.callee.name === NATIVE_FN) {
           safeReplacementCalled = true;
         }
-        const match = matchSplitJoin(node) ?? matchReplace(node);
+        const match = matchSplitJoin(sourceCode, node) ?? matchReplace(node);
         if (!match) return;
+        const importer = importers[match.fn];
         const report = { node, messageId: MESSAGE_FOR[match.fn], data: { safeModule: targetModule } };
-        // No fix where the converter call would reach another binding (`mayRewriteCallTo`), nor
-        // for an optional chain (`a?.replaceAll(…)`): `converter(a)` drops the `?.`, so it
-        // converts or throws where the original yielded `undefined`.
-        if (node.parent?.type === 'ChainExpression' || !mayRewriteCallTo(sourceCode, node, match.fn, targetModule)) {
+        // No fix where the converter call would reach another binding, nor for an optional chain
+        // (`a?.replaceAll(…)`): `converter(a)` drops the `?.`, so it converts or throws where the
+        // original yielded `undefined`. Nor for a comma-expression receiver (`(a, b).replaceAll(…)`):
+        // as the converter's argument list it becomes TWO arguments, `converter(a, b)`.
+        const unfixable = node.parent?.type === 'ChainExpression' || match.receiver.type === 'SequenceExpression';
+        if (unfixable || !importer.mayRewrite(node)) {
           context.report(report);
           return;
         }
         context.report({
           ...report,
           fix(fixer) {
-            if (!bound[match.fn] && !acceptsImport(sourceCode)) return null;
+            if (!importer.canFix()) return null;
             const receiver = sourceCode.getText(match.receiver);
-            return [fixer.replaceText(node, `${match.fn}(${receiver})`), ...importFix(fixer, match.fn)];
+            // A new import lands above the file's first statement (`null` anchor).
+            return [fixer.replaceText(node, `${match.fn}(${receiver})`), ...importer.importFixes(fixer, null)];
           },
         });
       },

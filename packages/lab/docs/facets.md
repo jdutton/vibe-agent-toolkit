@@ -39,7 +39,9 @@ pins the independence, and it can only go red on Linux: macOS's `maxRSS` carries
 the test needs `sh`, so it is skipped on Windows, where a process is created rather than forked —
 argued there, not measured. A command that writes its subject (`build`) runs in a copy of it, which
 the lab cannot make on Windows, so that spec is refused there; a repeat that changed the copy outside
-its declared `writes` (`dist/`) fails.
+its declared `writes` (`dist/`) fails. In a git checkout that check sees only git's population —
+tracked files and untracked ones no ignore rule matches — so a write to a gitignored path (or under
+`.git/`) outside `writes` is not caught; outside a checkout every file is checked.
 
 It is one figure per process, and only vat's own processes write one: a process is vat's when its
 main script (`process.argv[1]`, its own links read) belongs to the `vibe-agent-toolkit` launcher or the
@@ -58,15 +60,17 @@ machine's memory, moves a peak — and `os.availableParallelism()`, from which v
 pool, each thread with its own heap) are refused, naming both. The host's total memory is recorded too.
 
 A repeat that leaves no vat peak — killed, out of heap, or no process with a vat main script —
-fails the row; it is never read as a small number. A row any of whose runs ran out of heap (its stderr
-names `JavaScript heap out of memory` or `ERR_WORKER_OUT_OF_MEMORY`, a warm arm's unmeasured priming
-run included) is failed and marked `outOfHeap` WHATEVER the run exited with: vat catches a parse
-worker's heap death, records the document as `BLOB_PARSE_FAILED`, names the code in its population
-warning (`1 parse failed [ERR_WORKER_OUT_OF_MEMORY]`) and exits 0 (or 1), and the peak of that run
-is of less work, not a measurement. The code is one constant, `WORKER_OUT_OF_MEMORY_CODE` in
-`@vibe-agent-toolkit/utils`, read here and used by the tests of vat's printer. Stderr is the only thing read, so a death the process swallowed without printing is
-invisible. Against a measured other
-side it compares CHANGED with no ratio — the worst regression never reads as no delta. A row whose
+fails the row; it is never read as a small number. A row any of whose runs vat says a parse failed in
+(its population warning, `… (N parse failed …)`, matched by the lab's own pattern for every build —
+the lab imports nothing of vat's to read it) is failed and NOT marked `outOfHeap`, whatever the run
+exited with and whatever the warning says the parse threw — a worker vat's pool caught at its heap
+limit (`[ERR_WORKER_OUT_OF_MEMORY]`) included: documents went unparsed, so the run did less work, and
+it compares UNMEASURABLE, never CHANGED. A row any of whose runs ran out of heap process-fatally (a
+stderr line outside that warning names `JavaScript heap out of memory` or `reaching memory limit` —
+Node's worker message, which says "JS heap" — a warm arm's unmeasured priming run included) is failed
+and marked `outOfHeap` WHATEVER the run exited with. Stderr is the only thing read, so a death the
+process swallowed without printing is invisible. Against a measured other
+side an `outOfHeap` row compares CHANGED with no ratio — the worst regression never reads as no delta. A row whose
 repeats disagree on how many vat processes reported (`1/2/1`) is different: it is failed, naming the
 counts, and compares UNMEASURABLE, not CHANGED — a repeat that lost a process's peak is a defect of
 the capture, not evidence the command moved, and its largest-process peaks are not samples of one

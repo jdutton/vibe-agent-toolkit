@@ -71,7 +71,6 @@ const BARREL_EXPORTS = [
   'TextTooLargeError',
   'TreeRollbackIncompleteError',
   'VatError',
-  'WORKER_OUT_OF_MEMORY_CODE',
   'ZodTypeNames',
   'applyTreePlan',
   'applyTreePlanOrLeftover',

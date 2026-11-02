@@ -10,6 +10,14 @@
 - **`ResourceRegistry.crawl` excludes more by default** — see Fixed below; the default is exported as
   `DEFAULT_RESOURCE_EXCLUDE` from `@vibe-agent-toolkit/resources`.
 
+### Added
+
+- **`NEVER_CONTENT_GLOBS`** (`@vibe-agent-toolkit/utils/crawl`): the globs no crawl ever treats as
+  content — `node_modules/`, `.git/`, `.worktrees/`, `.claude/worktrees/` and a build's staging
+  residue (`.<name>.vat-staged-*`). Spread it into your own `exclude` to keep them excluded.
+- **`DEFAULT_RESOURCE_EXCLUDE`** (`@vibe-agent-toolkit/resources`): `ResourceRegistry.crawl`'s default
+  exclude, `NEVER_CONTENT_GLOBS` followed by `BUILD_OUTPUT_GLOBS`.
+
 ### Fixed
 
 - **`vat build` could run out of memory on a project with many plugin-local skills** (0.2.0-rc.12):

@@ -33,11 +33,13 @@ import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { ParseCache } from '../src/parse-cache.js';
-import { createParsePool, defaultParsePoolSize, type ParsePool } from '../src/parse-pool.js';
-import { populateBlobs, type BlobPopulationResult } from '../src/projection/blob-population.js';
+import { __setParseWorkerEntryForTest, createParsePool, defaultParsePoolSize, type ParsePool } from '../src/parse-pool.js';
+import { BLOB_PARSE_FAILED, populateBlobs, type BlobPopulationResult } from '../src/projection/blob-population.js';
+import { describeBlobRefusals } from '../src/projection/blob-refusals.js';
+import { parseFailureOf } from '../src/projection/parse-failure.js';
 import type { Projection } from '../src/projection/projection.js';
 
-import { baseBuilderForRoot } from './blob-fixture-population.js';
+import { baseBuilderForRoot, conditionsWithCode } from './blob-fixture-population.js';
 import { fakePool } from './parse-pool-fixture.js';
 import { setupSubdirTestSuite, workerThreadCount } from './test-helpers.js';
 
@@ -442,5 +444,47 @@ describe('parse-pool activation', () => {
 
     // Ten short documents against a ~2,000 ms two-worker break-even: not one.
     expect(created).toBe(0);
+  });
+});
+
+/**
+ * A REAL pool whose thread dies of a coded error — the way a worker at its heap limit dies with
+ * `ERR_WORKER_OUT_OF_MEMORY` — and the route from that rejection to the user: a `blob_conditions`
+ * row carrying the code, and the population warning naming it. Nothing a document contains kills a
+ * thread, so the thread is pointed at an entry that throws, exactly as `parse-pool.test.ts` does.
+ */
+describe('a real parse-pool rejection', () => {
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(suite.beforeEach);
+  beforeEach(writeLoopCorpus);
+
+  const CODE = 'ERR_TEST_PARSE_WORKER_DIED';
+
+  it('reaches blob_conditions with its code and is named by the population warning', async () => {
+    const entryDir = safePath.join(suite.suiteDir, 'dying-worker');
+    await mkdir(entryDir, { recursive: true });
+    const entry = safePath.join(entryDir, 'dying-worker.mjs');
+    await writeFile(
+      entry,
+      `import { parentPort } from 'node:worker_threads';\nparentPort.on('message', () => { throw Object.assign(new Error('died'), { code: '${CODE}' }); });\n`,
+      'utf-8',
+    );
+    __setParseWorkerEntryForTest(entry);
+    try {
+      const builder = await baseBuilderForRoot(suite.tempDir);
+      await populateBlobs(builder, {
+        parseCache: NO_CACHE,
+        parsePool: { enabled: true, missThreshold: 1, size: 1, createPool: (): ParsePool => createParsePool({ size: 1 }) },
+      });
+      const projection = builder.build();
+
+      const failed = conditionsWithCode(projection, BLOB_PARSE_FAILED);
+      expect(failed.length).toBeGreaterThan(0);
+      for (const row of failed) expect(parseFailureOf(row.message)).toEqual({ kind: 'code', text: CODE });
+      expect(describeBlobRefusals(projection)).toContain(`parse failed [${CODE}]`);
+    } finally {
+      __setParseWorkerEntryForTest(null);
+    }
   });
 });

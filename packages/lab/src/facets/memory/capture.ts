@@ -16,7 +16,7 @@
  * unmeasured run before it.
  */
 
-import { resolveFromImportMeta, WORKER_OUT_OF_MEMORY_CODE } from '@vibe-agent-toolkit/utils';
+import { resolveFromImportMeta } from '@vibe-agent-toolkit/utils';
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
 import { buildArmEnv } from '../../harness/arm-env.js';
@@ -53,22 +53,36 @@ const PROBE_FILE = './rss-probe.cjs';
 const DUMP_DIR_PREFIX = 'vat-lab-memory-';
 
 /**
- * What a run out of heap leaves on stderr: V8's abort (`FATAL ERROR: … JavaScript heap out of
- * memory`), or the code Node gives a worker thread that reached its heap limit. Node prints that
- * code with an uncaught worker error, and vat — whose parse pool CATCHES the death, records the
- * document as `BLOB_PARSE_FAILED` and exits 0 (or 1) — names it in its population warning
- * (`1 parse failed [ERR_WORKER_OUT_OF_MEMORY]`): one constant, shared with that printer's tests.
- * Stderr is all the lab has of a child, so the signature is read there.
+ * What a process-fatal run out of heap leaves on stderr: V8's abort (`FATAL ERROR: … JavaScript
+ * heap out of memory`) and Node's message for a worker thread that reached its heap limit
+ * (`Worker terminated due to reaching memory limit: JS heap out of memory` — "JS heap", so the V8
+ * spelling never matches it). Stderr is all the lab has of a child, so the signature is read there.
  */
-const HEAP_EXHAUSTED: readonly string[] = ['JavaScript heap out of memory', WORKER_OUT_OF_MEMORY_CODE];
+const HEAP_EXHAUSTED: readonly string[] = ['JavaScript heap out of memory', 'reaching memory limit'];
 
 /**
- * Did this run run out of heap — whatever it exited with? A worker's death can be caught and the
- * process still exit 0, so the exit code is no part of the question: a run that lost a thread to
- * its heap limit measured a different, smaller piece of work.
+ * Vat's population warning saying a parse failed (`… (3 parse failed [...])`). The lab's own
+ * pattern over vat's stderr, for every build: the lab imports nothing of vat's to read it.
+ */
+const POPULATION_PARSE_FAILED = /\b\d+ parse failed\b/;
+
+/**
+ * Did this run run out of heap — whatever it exited with? Read off every stderr line but vat's
+ * parse-failed warning, which may quote a message holding a heap signature: a parse vat caught
+ * is {@link parseFailed}, never out of heap.
  */
 function ranOutOfHeap(result: SequenceResult): boolean {
-  return HEAP_EXHAUSTED.some((signature) => result.stderr.includes(signature));
+  return result.stderr.split('\n')
+    .some((line) => !POPULATION_PARSE_FAILED.test(line) && HEAP_EXHAUSTED.some((signature) => line.includes(signature)));
+}
+
+/**
+ * Did vat say a parse failed — for any reason, a worker vat caught at its heap limit included?
+ * Documents went unparsed, so the run did less work than the command asks for, whatever it exited
+ * with, and its peak is no measurement.
+ */
+function parseFailed(result: SequenceResult): boolean {
+  return POPULATION_PARSE_FAILED.test(result.stderr);
 }
 
 /** Every run of `measurement`, a warm arm's unmeasured priming run included. */
@@ -196,10 +210,13 @@ async function rowFromDumps(
 ): Promise<MemoryCommandStats> {
   if (directories.length === 0) return failedRow(measurement, 'no repeats were requested');
   if (measurement.failure !== null) return failedRow(measurement, measurement.failure);
-  // Asked of EVERY run, a clean exit included: a process that caught its worker's heap death and
-  // went on exited 0, and its peak is of a run that did not do the work. Never a measurement.
+  // Asked of EVERY run, a clean exit included: a process that lost a worker to its heap and went on
+  // exited 0, and its peak is of a run that did not do the work. Never a measurement.
   if (everyRun(measurement).some(ranOutOfHeap)) {
     return failedRow(measurement, 'a run ran out of heap (a worker thread at its limit, or the process) and exited anyway: its peak is not a measurement of the command');
+  }
+  if (everyRun(measurement).some(parseFailed)) {
+    return failedRow(measurement, "a run's population warning says a parse failed: the run did less work than the command, so its peak is not a measurement");
   }
 
   const reads = await Promise.all(directories.map((directory) => readDumpFiles(directory, RSS_DUMP_KIND)));

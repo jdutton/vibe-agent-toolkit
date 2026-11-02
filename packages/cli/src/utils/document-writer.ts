@@ -125,6 +125,28 @@ export function leaveFindingsToSupervisor(): void {
   supervisorSaysFindings = true;
 }
 
+/** Error reports whose message stderr already carries: said once by {@link announceErrorOf}, or composed by {@link composeRefusal}. */
+const errorSaid = new WeakSet<object>();
+
+/** Is `document` a report on the envelope's error branch: `status: error` with an `error.message`? */
+function isErrorDocument(document: unknown): document is { readonly status: 'error'; readonly error: { readonly message: string } } {
+  if (typeof document !== 'object' || document === null) return false;
+  const { status, error } = document as { status?: unknown; error?: unknown };
+  return status === 'error' && typeof error === 'object' && error !== null
+    && typeof (error as { message?: unknown }).message === 'string';
+}
+
+/**
+ * Say an error report's message on stderr, once per report, at every `--format` — the ONE owner of
+ * "a refusal says why", for every writer and for `runPhase`. A report {@link composeRefusal} built
+ * already said it; a supervised child leaves it to the supervisor ({@link leaveFindingsToSupervisor}).
+ */
+export function announceErrorOf(document: unknown): void {
+  if (!isErrorDocument(document) || errorSaid.has(document) || supervisorSaysFindings) return;
+  errorSaid.add(document);
+  writeStderrLine(document.error.message);
+}
+
 /**
  * Whether a document's findings belong on stderr too — the ONE rule, for the writer and every
  * verb: not in a supervised child ({@link leaveFindingsToSupervisor}), and not when stdout is the
@@ -161,6 +183,7 @@ export function writeDocument<T>(verb: ReportVerb, report: Report<T>, format: Do
 function publishDocument<T>(verb: ReportVerb, report: Report<T>, format: DocumentFormat, saidAsMessage: readonly Finding[]): Report<T> {
   const entry = reportShapeFor(verb);
   const written = publishedReport(verb, report);
+  announceErrorOf(report);
   if (findingsGoToStderr(verb, format)) {
     announceRunIntegrity(report, written);
     reportLeftovers(written.findings.filter((finding) => !saidAsMessage.some((said) => sameLeftover(said, finding))), writeStderrLine);
@@ -253,7 +276,8 @@ export function endWithLeftoverRefusal(verb: ReportVerb, leftover: unknown, form
 function announceRefusal(code: RefusalCode, error: unknown): string {
   const raw = errorMessageOf(error);
   const message = raw === '' ? CODE_REGISTRY[code].description : withFsFaultRemedy(raw, error);
-  process.stderr.write(`${message}\n`);
+  // A supervised child leaves the message to the supervisor that forwards its document.
+  if (!supervisorSaysFindings) process.stderr.write(`${message}\n`);
   if (code === 'INTERNAL_ERROR' || debugDiagnosticsEnabled()) process.stderr.write(`${errorDiagnostics(error)}\n`);
   return message;
 }
@@ -292,13 +316,16 @@ function composeRefusal(parts: RefusalParts): Report<unknown> {
   const message = announceRefusal(code, error);
   const leftovers = leftoverIssuesOf(error);
   if (parts.printFinished) reportFindings(finished.findings, { verbose: true, write: writeStderrLine });
-  return buildErrorReport({
+  const report = buildErrorReport({
     error: { code, message },
     gate,
     examined: finished.examined,
     findings: [...finished.findings, ...parts.alsoPublished, ...leftovers],
     data: finished.data,
   });
+  // Said above, ahead of the finished findings — never again by the writer that publishes it.
+  if (!supervisorSaysFindings) errorSaid.add(report);
+  return report;
 }
 
 /**
@@ -379,14 +406,27 @@ export function readForwardedDocument(verb: ReportVerb, text: string, format: Ex
  * @param document - What {@link readForwardedDocument} accepted
  */
 export function endWithForwardedDocument(document: ForwardedDocument): never {
+  announceErrorOf(document.report);
   if (!supervisorSaysFindings) reportLeftovers(document.report.findings, writeStderrLine);
   writeStdoutSync(document.text);
   process.exit(exitCodeForReport(document.report));
 }
 
 /**
+ * An external payload's top-level `warnings` list — where an org verb puts the
+ * leftovers it built ({@link leftoverIssueOf}) — or nothing.
+ */
+function externalWarningsOf(payload: unknown): Finding[] {
+  if (typeof payload !== 'object' || payload === null) return [];
+  const warnings: unknown = (payload as { warnings?: unknown }).warnings;
+  if (!Array.isArray(warnings)) return [];
+  return warnings.filter((entry): entry is Finding => typeof entry === 'object' && entry !== null && typeof (entry as Finding).code === 'string');
+}
+
+/**
  * Publish an externally owned payload verbatim and end on the code its
- * registered adapter maps `outcome` to.
+ * registered adapter maps `outcome` to. Every leftover in the payload's
+ * top-level `warnings` is said on stderr first, once.
  *
  * @param verb - A verb of an `external` entry
  * @param payload - The payload as its owner shaped it
@@ -394,6 +434,7 @@ export function endWithForwardedDocument(document: ForwardedDocument): never {
  * @param outcome - What the external write did
  */
 export function writeExternalDocument(verb: ExternalVerb, payload: unknown, format: DocumentFormat, outcome: ExternalOutcome): never {
+  if (!supervisorSaysFindings) reportLeftovers(externalWarningsOf(payload), writeStderrLine);
   writeStructured(payload, format);
   process.exit(exitCodeForExternal(verb, outcome));
 }
@@ -429,6 +470,7 @@ export function endWithExternalRefusal(verb: ExternalVerb, error: unknown, forma
  */
 export function writeLegacyDocument(_verb: LegacyVerb, document: unknown, format: DocumentFormat, text: string | undefined): void {
   // The verb's TYPE is the guarantee — only a legacy verb compiles here.
+  announceErrorOf(document);
   if (!supervisorSaysFindings && isReportShaped(document)) reportLeftovers(document.findings, writeStderrLine);
   if (format === 'text' && text !== undefined) {
     // Synchronously, as `claude context` always wrote it: its text can run long and the verb exits straight after.

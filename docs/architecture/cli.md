@@ -293,19 +293,25 @@ with no `--verbose` passes `verbose: true` and always prints every finding: `vat
 uninstall`, `vat skills build --skill`'s refusal, and `vat verify`'s built-in phases.
 
 A leftover (`TREE_CLEANUP_INCOMPLETE`: something a run made and could not remove) is said by the
-one path that publishes it, never by a verb: `writeDocument` (and `endWithForwardedDocument`, and
-`writeLegacyDocument` for a refusal) prints every leftover the document carries, once, at every
-verbosity, on every verb — `FINDINGS_NOT_ON_STDERR` verbs included. `reportFindings` skips them, so a
+one path that publishes it, never by a verb: `writeDocument`, `endWithForwardedDocument`,
+`writeLegacyDocument` (for any legacy document that carries a `findings` list) and
+`writeExternalDocument` (for the leftovers in an org payload's top-level `warnings`) each print every
+leftover the document carries, once, at every verbosity, on every verb — `FINDINGS_NOT_ON_STDERR`
+verbs included. `reportFindings` skips them, so a
 verb that prints its findings cannot print a leftover twice, and verbs only build them
 (`leftoverIssue`, `leftoverIssueOf`, `leftoverIssuesOf`, `leftoverIssuesOfWarnings`). The lanes
 `findingsGoToStderr` excludes are excluded for leftovers too: the generic `--format text` document,
 which already lists them, and a supervised child, whose supervisor publishes and says them. A
 leftover that IS the refusal (`endWithLeftoverRefusal`) is said once, as the refusal's message —
 never also as a finding line. A refusal prints its message first, then the finished work's findings,
-then its leftovers. A run-integrity refusal the document writer adds, the writer prints itself, once.
+then its leftovers. Its message is said exactly once, whichever writer publishes the error report
+(`announceErrorOf`) — a report a verb built itself included — except by a supervised child, whose
+supervisor says it when it forwards the document. A run-integrity refusal the document writer adds, the writer prints itself, once.
 Verbs whose stderr does not yet say their other findings this way are listed in
 `FINDINGS_NOT_ON_STDERR` (`packages/cli/test/system/test-helpers/exit-code-matrix.ts`), which the
-exit-code matrix asserts both ways.
+exit-code matrix asserts both ways. Each entry states the one output mode it speaks for and where its
+`findings` scenario runs (some only where a directory listing can be denied); `vat skill review` is
+exempt under `--yaml` only — its default mode says every finding as the shared line.
 A verb whose `--format text` document is the generic rendering, one line per finding
 (`vat resources validate`), carries none on stderr under that format, because stdout already is
 these lines. A verb with its own text rendering (`vat ard emit`, whose text document is one summary

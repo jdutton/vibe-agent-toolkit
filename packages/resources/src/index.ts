@@ -965,7 +965,6 @@ export {
 // hit reports exactly what the derive that wrote it would have — nobody queries
 // a projection they were never told to look at.
 export { describeBlobRefusals, type BlobRefusalRows } from './projection/blob-refusals.js';
-export { parseFailedMessage } from './projection/parse-failure.js';
 
 // The declarative closure primitive (zones §7.3): a closure-defined extent is a
 // GENERIC contributor handed an `ExtentDeclaration`, never new privileged code —

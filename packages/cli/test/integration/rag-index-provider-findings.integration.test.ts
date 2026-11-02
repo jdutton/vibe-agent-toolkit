@@ -36,7 +36,7 @@ vi.mock('../../src/utils/resource-loader.js', async (importOriginal) => {
 });
 
 /** Whether the store refuses the batch after the provider has recorded its failures. */
-const store = vi.hoisted(() => ({ refusesMidBatch: false }));
+const store = vi.hoisted(() => ({ refusesMidBatch: false, closeRefuses: false }));
 
 vi.mock('@vibe-agent-toolkit/rag-lancedb', async () => {
   const { IndexBatchRefusedError } = await import('@vibe-agent-toolkit/rag');
@@ -56,11 +56,22 @@ vi.mock('@vibe-agent-toolkit/rag-lancedb', async () => {
           }
           return result;
         },
-        close: async () => undefined,
+        close: async () => {
+          if (store.closeRefuses) throw new Error('close refused: handle already released');
+        },
       }),
     },
   };
 });
+
+/** Run `vat rag index` on `root` against `db`, expecting it refused: exit 2, a `status: error` document. */
+async function refusedIndex(root: string, db: string): Promise<{ document: Report<unknown>; stderr: string }> {
+  const { stdout, stderr, exited } = await captureCommand(() => indexCommand(root, { db }));
+  const document = YAML.parse(stdout) as Report<unknown>;
+  expect(exited, stderr).toBe(2);
+  expect(document.status).toBe('error');
+  return { document, stderr };
+}
 
 describe('vat rag index — a provider failure on stderr', () => {
   let tempDir = '';
@@ -73,6 +84,7 @@ describe('vat rag index — a provider failure on stderr', () => {
   afterEach(async () => {
     crawl.unreadable = [];
     store.refusesMidBatch = false;
+    store.closeRefuses = false;
     vi.restoreAllMocks();
     await rm(tempDir, { recursive: true, force: true });
   });
@@ -99,22 +111,20 @@ describe('vat rag index — a provider failure on stderr', () => {
     const notADirectory = safePath.join(tempDir, 'db-file');
     writeFileSync(notADirectory, 'x');
 
-    const { stdout, stderr, exited } = await captureCommand(() => indexCommand(tempDir, { db: notADirectory }));
-    const document = YAML.parse(stdout) as Report<unknown>;
+    const { document, stderr } = await refusedIndex(tempDir, notADirectory);
 
-    expect(exited, stderr).toBe(2);
-    expect(document.status).toBe('error');
     expect(document.findings.map((finding) => finding.location)).toEqual(['docs/locked.md']);
     expect(stderr).toMatch(/^ {2}docs\/locked\.md: error: .*EACCES \[RAG_DOCUMENT_INDEX_FAILED\]$/m);
   });
 
-  it('names a document the provider failed before the store refused the batch, in the document and on stderr', async () => {
-    store.refusesMidBatch = true;
+  it.each([
+    ['before the store refused the batch', 'refusesMidBatch'],
+    ['in a finished index whose database then would not close', 'closeRefuses'],
+  ] as const)('names a document the provider failed %s, in the document and on stderr', async (_when, refusal) => {
+    store[refusal] = true;
 
-    const { stdout, stderr, exited } = await captureCommand(() => indexCommand(tempDir, { db: safePath.join(tempDir, 'db') }));
-    const document = YAML.parse(stdout) as Report<unknown>;
+    const { document, stderr } = await refusedIndex(tempDir, safePath.join(tempDir, 'db'));
 
-    expect(exited, stderr).toBe(2);
     expect(document.findings.map((finding) => [finding.code, finding.location ?? null])).toEqual([
       ['RAG_DOCUMENT_INDEX_FAILED', 'docs/a.md'],
       ['RAG_CHUNKING_CONFIG_ADJUSTED', null],

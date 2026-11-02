@@ -134,8 +134,10 @@ for the loud-cwd fallback policy and the projectRoot discovery ladder.
   resource (a file the collection matched and could not read) stays in it. A name
   `resources.collections` does not declare is refused (`USAGE_INVALID`, exit 2)
 - `--format <format>` - `yaml` (default), `json` (the same document), or `text`
-  (one `location:line: severity: message [code]` line per finding, then a status
-  line, on stdout — under `yaml` and `json` the same lines go to stderr instead).
+  (one `location:line: severity: message [code]` line per finding, every severity,
+  then a status line, on stdout). Under `yaml` and `json` the finding lines go to
+  stderr instead — the errors only, with warnings and info collapsed into one
+  count line, unless `-v` prints those too.
   Any other value is a usage error (exit 2) naming the three
   accepted values; so is a `--validation-mode` other than `strict` or `permissive`
 - `--no-check-frontmatter-links` - Skip frontmatter URI-reference link validation across all collections (default: enabled)

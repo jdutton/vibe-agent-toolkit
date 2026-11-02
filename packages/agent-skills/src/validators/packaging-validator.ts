@@ -756,21 +756,36 @@ async function registryForSkill(
   context: 'source' | 'built',
 ): Promise<ResourceRegistry> {
   const outputs = crawlOutputs(context, skillPath, shared);
-  if (shared?.registry !== undefined && registryCoversSkill(shared.registry, skillPath)) {
-    return shared.registry;
-  }
   const unreadable = shared === undefined ? 'refuse' : shared.unreadable;
-  const crawlOptions: CrawlRegistryOptions = {
-    outputs,
-    unreadable,
-    ...(shared?.populationSource !== undefined && { populationSource: shared.populationSource }),
-  };
-  const registry = inProject
-    ? await crawlAndResolveRegistry(projectRoot, crawlOptions)
-    : (await crawlRegistry(projectRoot, crawlOptions)).registry;
+  const registry = await baseRegistryForSkill(skillPath, projectRoot, inProject, shared, { outputs, unreadable });
+  // The caller's registry "covers" the skill by directory alone — one crawled before a build wrote
+  // the bundle covers it and holds none of it — so it takes the same layering as the crawl.
   return context === 'built' && registry.getResource(safePath.resolve(skillPath)) === undefined
     ? withOwnBundle(registry, dirname(skillPath), unreadable, outputs)
     : registry;
+}
+
+/**
+ * The registry {@link registryForSkill} layers a built bundle over: the caller's when it covers the
+ * skill, else a crawl — memoized and resolved in a project, plain for a lone skill directory.
+ */
+async function baseRegistryForSkill(
+  skillPath: string,
+  projectRoot: string,
+  inProject: boolean,
+  shared: SkillValidationSharedContext | undefined,
+  ruling: Pick<CrawlRegistryOptions, 'outputs' | 'unreadable'>,
+): Promise<ResourceRegistry> {
+  if (shared?.registry !== undefined && registryCoversSkill(shared.registry, skillPath)) {
+    return shared.registry;
+  }
+  const crawlOptions: CrawlRegistryOptions = {
+    ...ruling,
+    ...(shared?.populationSource !== undefined && { populationSource: shared.populationSource }),
+  };
+  return inProject
+    ? crawlAndResolveRegistry(projectRoot, crawlOptions)
+    : (await crawlRegistry(projectRoot, crawlOptions)).registry;
 }
 
 /** Whether a root-relative path lies OUTSIDE build output (`dist/`), which a crawl of the root never admits. */

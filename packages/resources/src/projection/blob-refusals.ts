@@ -58,7 +58,6 @@
  * wallpaper within a day.
  */
 
-import { compareCodeUnits } from '@vibe-agent-toolkit/utils';
 
 import { isTextMimeType } from '../mime-type.js';
 
@@ -68,7 +67,7 @@ import {
   BLOB_PARSE_FAILED,
   BLOB_UNREADABLE,
 } from './blob-population.js';
-import { parseFailureLabelOf } from './parse-failure.js';
+import { formatParseFailures, parseFailureOf } from './parse-failure.js';
 import type { Projection } from './projection.js';
 
 /** The three tables the line is a function of — every one of them stored. */
@@ -161,17 +160,18 @@ function refusedBlobs(rows: BlobRefusalRows): ReadonlyArray<{ label: string; blo
 }
 
 /**
- * The parse-failed label naming what each parse threw, each distinct label once
- * in code-unit order — `parse failed [ERR_WORKER_OUT_OF_MEMORY]`. A worker that
- * ran out of heap is not a corpus fault, and only the code says which it was.
+ * The parse-failed label naming what each parse threw ({@link formatParseFailures}): every
+ * distinct code first, then the first few messages quoted and a count of the rest, on one line —
+ * `parse failed [ERR_WORKER_OUT_OF_MEMORY]`. A worker that ran out of heap is not a corpus
+ * fault, and only the code says which it was.
  *
  * @param label - The bucket's bare label
  * @param rows - Its `BLOB_PARSE_FAILED` rows
  * @returns The label, with the failures when any row names one
  */
 function withFailureLabels(label: string, rows: ReadonlyArray<{ message: string }>): string {
-  const failures = [...new Set(rows.flatMap((row) => parseFailureLabelOf(row.message) ?? []))].sort(compareCodeUnits);
-  return failures.length === 0 ? label : `${label} [${failures.join(', ')}]`;
+  const failures = formatParseFailures(rows.flatMap((row) => parseFailureOf(row.message) ?? []));
+  return failures === '' ? label : `${label} [${failures}]`;
 }
 
 /**

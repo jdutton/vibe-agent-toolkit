@@ -35,7 +35,7 @@ const SAFE_MODULE_RULE_TRIGGERS: Record<string, string> = {
   'no-path-sep-in-strings': `${PATH_IMPORT}const s = 'a' + path.sep + 'b';`,
   // Reports path calls in ARGUMENT position, not receiver position.
   'no-path-operations-in-comparisons': `${PATH_IMPORT}const y = base.startsWith(path.relative(a, b));`,
-  'no-manual-path-normalize': "const n = p.split(path.sep).join('/');",
+  'no-manual-path-normalize': `${PATH_IMPORT}const n = p.split(path.sep).join('/');`,
   'no-hardcoded-path-split': "const parts = p.split('/');",
   'no-path-startswith': "const x = filePath.startsWith('/a');",
   'no-os-tmpdir': "import { tmpdir } from 'node:os';\nconst t = tmpdir();",

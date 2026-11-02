@@ -1037,7 +1037,7 @@ async function readTarget(
  * arrives by `import()` from inside `parseKeyed`, so a module that cannot be
  * loaded — a half-extracted tarball, a quarantined or `chmod 000` file — lands in
  * this very catch, and unguarded was reported as
- * `The markdown parser threw on these bytes (EACCES)`, once per
+ * `The markdown parser threw on these bytes (code EACCES)`, once per
  * document, blaming every innocent file in the corpus while the exit code stayed
  * 0.
  *

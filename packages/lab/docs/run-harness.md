@@ -278,8 +278,11 @@ consensus no pair reported.
 (named by its failure, or `memory`'s `ran out of heap`) and a capture that published no estimate for
 the command (`published no estimate`) are both lost: the arm prints `<reason> in N of M pairs` and
 the effect is `NONE`, never a statistic of the pairs that happened to succeed, which would understate
-whatever failed the others. Nor is there an effect when every pair's comparison refused: two numbers
-no comparison accepted print `effect: NONE — no pair was comparable`.
+whatever failed the others. Nor is there an effect unless at least one pair's comparison judged the
+command `changed` or `unchanged`, in every facet: when every pair refused, the line is
+`effect: NONE — no pair was comparable`; when the pairs only said something else (`unmeasurable`,
+`added`, `removed`, `below-resolution`), it is `effect: NONE — no pair judged it changed or
+unchanged (every pair said: …)`.
 
 **`--control` runs the same instrument as both arms**, which measures the machine rather than a
 difference between builds, and whatever effect it reports *is* the noise floor. Feed the largest of

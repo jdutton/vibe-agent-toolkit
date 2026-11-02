@@ -10,7 +10,7 @@
  * refuses it alone, unless zero is an answer for that phase.
  */
 
-import { buildReport, exitCodeForReport, ExitCode, FindingSchema, reportSchema, type Finding, type Report } from '@vibe-agent-toolkit/schema';
+import { buildErrorReport, buildReport, exitCodeForReport, ExitCode, FindingSchema, reportSchema, type Finding, type Report } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
@@ -259,6 +259,36 @@ describe('runPhase', () => {
     } finally {
       stderr.mockRestore();
     }
+  });
+});
+
+/**
+ * A phase that stopped says why on stderr, once — a phase's verb's writer never sees its report,
+ * so `runPhase` is where an error report the phase built itself (`buildErrorReport`, as
+ * `resources check` does for a population that never completed) is said. A refusal the phase
+ * composed with `refusalReport` was said already, and is not said again.
+ */
+describe('a stopped phase says why', () => {
+  const said = async (run: Phase['run']): Promise<string> => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await runPhase({ name: 'checks', schema: ANY_DATA, examined: COUNTED, run });
+      return stderr.mock.calls.map(([line]) => String(line)).join('');
+    } finally {
+      stderr.mockRestore();
+    }
+  };
+
+  it('says a phase-built error report\'s message once', async () => {
+    const text = await said(() => Promise.resolve({
+      report: buildErrorReport({ error: { code: 'RUN_INCOMPLETE', message: 'population stopped' }, gate: ORCHESTRATOR_GATE, examined: 0, findings: [], data: null }),
+    }));
+    expect(text.split('population stopped')).toHaveLength(2);
+  });
+
+  it('says a composed refusal once, not twice', async () => {
+    const text = await said(() => Promise.resolve({ report: refusalReport('INPUT_UNREADABLE', 'cannot read', ORCHESTRATOR_GATE, NOTHING_FINISHED) }));
+    expect(text.split('cannot read')).toHaveLength(2);
   });
 });
 

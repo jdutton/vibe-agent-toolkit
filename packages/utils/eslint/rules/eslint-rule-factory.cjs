@@ -61,23 +61,12 @@ const {
   createConfigurableExemptPathMatcher,
   reportUnanchoredExemptEntries,
 } = require('./exempt-path-matcher.cjs');
-const { fsBindingVisitors } = require('./fs-binding-scan.cjs');
+const { fsBindingVisitors, moduleBindingVisitors } = require('./fs-binding-scan.cjs');
 const {
-  acceptsImport,
+  createSafeImporter,
   EXEMPT_AND_SAFE_MODULE_SCHEMA,
-  insertAboveWithComments,
-  mayRewriteCallTo,
   resolveSafeModule,
-  safeBindingOf,
-  takesNamedSpecifier,
 } = require('./safe-import.cjs');
-
-/** Does this declaration bring in `name` as a named specifier? */
-function importsName(importNode, name) {
-  return importNode.specifiers.some(
-    (spec) => spec.type === 'ImportSpecifier' && spec.imported.name === name,
-  );
-}
 
 /**
  * Read the `rewrite` declaration — see the factory's JSDoc for the three shapes.
@@ -236,35 +225,25 @@ module.exports = function createNoUnsafeRule(config) {
         };
       }
 
-      // Seeded from SCOPE, not from "did I see an import from safeModule?".
-      // A file already importing `safeFn` from the barrel needs the call
-      // rewritten but must NOT gain a second binding of the same name — that is
-      // a SyntaxError, not a redundant import. A top-level `safeFn` that is NOT
-      // the safe function (another module's, a type-only import, a local) takes
-      // no rewrite at all. See `safeBindingOf` in `safe-import.cjs`.
-      const safeBinding = safeBindingOf(sourceCode, safeFn, targetModule);
-      let hasSafeImport = safeBinding === 'safe';
-      // The SAME question, answered once and never mutated. `hasSafeImport`
-      // flips the moment a fix inserts the import, and the dead-import leg must
-      // not be armed by a flag a suppressed report can spend — ESLint runs
-      // `fix()` before the `eslint-disable` filter discards the problem.
-      const safeBoundInSource = safeBinding === 'safe';
+      // Bound, may-rewrite and the import each fix carries: the pack's ONE fixer contract
+      // (`createSafeImporter` in `safe-import.cjs`), answered from scope and never mutated.
+      const importer = createSafeImporter(sourceCode, safeFn, targetModule);
       // The dead-import leg's OTHER gate: does this file actually call `safeFn`,
       // the free function this fixer writes? "The safe symbol is in scope" alone
       // let an unrelated coincidence arm the leg — see `dead-import.cjs`. Read
       // from the source during traversal, never from a `fix()`.
       let safeReplacementCalled = false;
       let unsafeImportNode = null;
-      const unsafeImportNodes = [];
-      let safeImportNode = null;
+      // Every declaration binding the unsafe module — an import, `require()`, `import()` or
+      // `import x = require()` — for the dead-import leg (`moduleBindingVisitors`).
+      const unsafeBindingNodes = [];
       // Every CALL of the unsafe module's own function, however it is reached — a named import
       // (aliased too), a namespace member `os.tmpdir()`, a destructure of a namespace or of a
       // `require()` / `import()` — resolved through scope by the ONE scan every rule banning a
       // module's function shares (`fs-binding-scan.cjs`). Reported at `Program:exit`, after every
-      // import is seen, because a report computes its fix at once and the fix reads
-      // `safeImportNode`. A `.native` call is only suggested, and a value reference reported with
-      // no rewrite. KNOWN RESIDUAL: the dead-import leg removes only an `ImportDeclaration`, so a
-      // rewritten `const os = require('node:os')` is left as an unused binding.
+      // import is seen, because a report computes its fix at once and the fix reads the
+      // importer's noted import. A `.native` call is only suggested, and a value reference
+      // reported with no rewrite.
       /** @type {Map<object, { native: boolean } | null>} each use's node → its call, null for a value reference */
       const unsafeUses = new Map();
       const scan = fsBindingVisitors(context, {
@@ -278,7 +257,9 @@ module.exports = function createNoUnsafeRule(config) {
         },
       });
 
-      return mergeVisitors(scan, {
+      const bindings = moduleBindingVisitors(new Set(moduleVariants), (node) => unsafeBindingNodes.push(node));
+
+      return mergeVisitors(scan, bindings, {
         Program(node) {
           reportUnanchoredExemptEntries(context, node);
         },
@@ -294,8 +275,8 @@ module.exports = function createNoUnsafeRule(config) {
           reportDeadUnsafeImports(
             context,
             sourceCode,
-            unsafeImportNodes,
-            safeBoundInSource,
+            unsafeBindingNodes,
+            importer.boundInSource,
             safeReplacementCalled,
             new Set([unsafeFn]),
           );
@@ -304,12 +285,8 @@ module.exports = function createNoUnsafeRule(config) {
         ImportDeclaration(node) {
           if (moduleVariants.includes(node.source.value)) {
             unsafeImportNode = node;
-            unsafeImportNodes.push(node);
           }
-          if (node.source.value === targetModule) {
-            if (takesNamedSpecifier(node)) safeImportNode = node;
-            hasSafeImport = hasSafeImport || importsName(node, safeFn);
-          }
+          importer.noteImport(node);
         },
 
         CallExpression(node) {
@@ -326,11 +303,11 @@ module.exports = function createNoUnsafeRule(config) {
         // that would compile — and appends to a one-argument call only: further
         // arguments belong to the unsafe function and mean nothing to the safe one.
         const report = { node, messageId: 'noUnsafeOperation', data: { safeModule: targetModule } };
-        // No rewrite at all where `mayRewriteCallTo` says the rewritten call would reach a
+        // No rewrite at all where the importer says the rewritten call would reach a
         // binding other than the safe function. Nor for a constructed first
         // argument (`new URL(…)`): every safe replacement takes a string path, so the
         // rewrite would not compile.
-        if (!mayRewriteCallTo(sourceCode, node, safeFn, targetModule) || node.arguments[0]?.type === 'NewExpression') {
+        if (!importer.mayRewrite(node) || node.arguments[0]?.type === 'NewExpression') {
           context.report({ ...report, suggest: [] });
         } else if (!native && autofixes(node)) {
           context.report({ ...report, fix: (fixer) => rewriteCall(fixer) });
@@ -346,7 +323,7 @@ module.exports = function createNoUnsafeRule(config) {
 
         function rewriteCall(fixer) {
           // A CommonJS file cannot take the import this rewrite needs: no rewrite at all.
-          if (!hasSafeImport && !acceptsImport(sourceCode)) return null;
+          if (!importer.canFix()) return null;
           const fixes = [];
 
           // Replace the WHOLE callee, member expression or not.
@@ -364,45 +341,9 @@ module.exports = function createNoUnsafeRule(config) {
             fixes.push(fixer.insertTextAfter(lastTokenOfArgument(sourceCode, node, node.arguments[0]), `, ${mode.appendArgument}`));
           }
 
-          // Add import if needed — on EVERY report, deliberately.
-          //
-          // The sister factory emits this once per file, because there a
-          // report that edits both the import and its own call site spans
-          // everything between them, N reports leave N nested ranges, and
-          // ESLint keeps one: the defect measured at 146 broken files.
-          //
-          // That guard does not belong here, and briefly having it was a
-          // mistake worth recording. These rules do NOT key detection on
-          // the import — `node.callee.name === unsafeFn` is true whether or
-          // not the specifier survives — and `hasSafeImport` is reseeded
-          // from scope each pass, so pass 2 always finished the job anyway.
-          // An adversarial run confirmed the guard changed no output at 4,
-          // 40 or 75 call sites. What it DID change was the failure mode:
-          // ESLint runs `fix()` for a suppressed problem before the
-          // `eslint-disable` filter discards it, so one disable comment on
-          // the first call site spent the once-per-file edit and stranded
-          // the file with calls the import no longer backs.
-          //
-          // Every report carrying its own import edit costs a pass and buys
-          // a fix that is correct on its own — including when applied alone
-          // from an editor's "fix this problem".
-          if (!hasSafeImport) {
-            if (safeImportNode) {
-              const lastSpecifier = safeImportNode.specifiers.at(-1);
-              fixes.push(fixer.insertTextAfter(lastSpecifier, `, ${safeFn}`));
-            } else {
-              // Land next to the imports, never after arbitrary code —
-              // `insertTextAfter(body[0])` on a file whose first statement
-              // is a `const` welds the declaration onto the end of it.
-              const targetNode = unsafeImportNode || sourceCode.ast.body[0];
-              const declaration = `import { ${safeFn} } from '${targetModule}';`;
-              fixes.push(
-                targetNode.type === 'ImportDeclaration'
-                  ? fixer.insertTextAfter(targetNode, `\n${declaration}`)
-                  : insertAboveWithComments(fixer, sourceCode, targetNode, `${declaration}\n`),
-              );
-            }
-          }
+          // The import this fix needs, carried by THIS fix on every report — see
+          // `createSafeImporter` for why no report may count on another's.
+          fixes.push(...importer.importFixes(fixer, unsafeImportNode));
 
           // The unsafe import is NEVER removed here. ESLint runs `fix()` for a
           // suppressed report before the `eslint-disable` filter discards it, so

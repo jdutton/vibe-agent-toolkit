@@ -44,9 +44,6 @@
   about its own configuration; and **`IndexBatchRefusedError` / `partialIndexResultOf(error)`**: a batch
   the store refuses partway (`RAG_DATABASE_UNREADABLE`) is thrown under that code carrying the
   `IndexResult` it had recorded so far (library-only).
-- **`@vibe-agent-toolkit/utils`: `WORKER_OUT_OF_MEMORY_CODE`** (`ERR_WORKER_OUT_OF_MEMORY`, the code Node
-  gives a worker thread that reached its heap limit), and **`@vibe-agent-toolkit/resources`:
-  `parseFailedMessage(parserKind, error)`**, the message of a `BLOB_PARSE_FAILED` row (library-only).
 
 ### Changed
 
@@ -72,7 +69,8 @@
   marketplace phase no longer prints that line.
 - **`vat rag index` names every file it could not read even when the database then refuses the run**:
   each is a `RAG_DOCUMENT_INDEX_FAILED` finding in the refusal document and a line on stderr. Documents the provider failed
-  before the database refused the batch, and its chunking warnings, are reported the same way.
+  before the database refused the batch, and its chunking warnings, are reported the same way — and
+  so is every finding of a finished index when closing the database then fails.
 - **`vat verify` prints the `packaged-content` banner before that phase's zero-bundle refusal**, which
   printed under the previous phase's banner.
 - **A refusal prints its message first, then the findings of the work that finished**, which printed
@@ -80,6 +78,12 @@
   refusing because the OS would not delete what they had moved aside, now say what was left once — as
   the refusal — where they said it twice; the document still carries it as a `TREE_CLEANUP_INCOMPLETE`
   warning.
+- **Every `status: error` document says its `error.message` on stderr exactly once**, whichever
+  path publishes it — an error document a verb built itself included.
+  A supervised child prints no refusal message; the supervisor forwarding its document says it.
+- **`vat claude org skills install --from-npm` prints its `TREE_CLEANUP_INCOMPLETE` warning on
+  stderr** when the OS would not remove the downloaded package's temp directory. It was only in the
+  document's `warnings`.
 - **`vat skills build`, `vat claude plugin build`, `vat skills package`, `vat agent build` and
   `vat agent install` print a `TREE_CLEANUP_INCOMPLETE` warning on stderr** when they succeed but the OS
   would not remove the previous output they replaced. It was only in the document.
@@ -91,8 +95,9 @@
   printed a refused `claude` phase's leftover twice. Under a generic `--format text` document, which
   already lists it, stderr does not repeat it.
 - **The `<name> population:` warning names what each failed parse threw**: `3 parse failed
-  [ERR_WORKER_OUT_OF_MEMORY, Unexpected token (3:1)]`, each distinct error code (or, for an error
-  with none, its message) once, where it said only `3 parse failed`. A parse worker that ran out of
+  [ERR_WORKER_OUT_OF_MEMORY, "Unexpected token (3:1)"]`, where it said only `3 parse failed`: every
+  distinct error code first, then, for errors with none, the first three distinct messages quoted
+  on one line and `+N more` for the rest. A parse worker that ran out of
   heap is not a fault in the document, and only the code says which it was.
 - **`vat claude marketplace validate` prints its `N error(s)` line after the run-integrity refusal**,
   which printed below it.

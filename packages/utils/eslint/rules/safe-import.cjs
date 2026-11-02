@@ -210,6 +210,72 @@ function insertAboveWithComments(fixer, sourceCode, node, text) {
 }
 
 /**
+ * THE fixer contract — the one implementation every call-rewriting rule in the pack uses to
+ * answer "is the replacement bound, may I rewrite this call, and which import does this fix
+ * carry?". Each rule used to answer those itself, and the copies drifted:
+ *
+ * - one read "bound" off the IMPORTED name (`import { normalizedTmpdir as nt }` counted as
+ *   binding `normalizedTmpdir`), so the rewritten call named a binding nothing declared. Bound
+ *   is the LOCAL name, through scope (`safeBindingOf`), and nothing else.
+ * - one flipped a "have I added the import?" flag inside `fix()`. ESLint runs `fix()` for a
+ *   report an `eslint-disable` directive later discards, so the suppressed report spent the flag
+ *   and every fix after it — applied alone from an editor, or in a later pass — rewrote its call
+ *   with no import. Nothing here is mutable: every fix carries the import while the SOURCE does
+ *   not bind the replacement, so each one is correct applied on its own.
+ *
+ * The cost of the second: a fix carrying both the import and its call spans the text between
+ * them, so N such fixes overlap and ESLint applies one per pass. The next pass sees the import
+ * bound and every remaining fix is local — two passes, not one, and never a broken one.
+ *
+ * @param {object} sourceCode - ESLint `SourceCode` for the file being linted.
+ * @param {string} name - The replacement's identifier the rewritten call names.
+ * @param {string} targetModule - The module the fixer imports `name` from.
+ */
+function createSafeImporter(sourceCode, name, targetModule) {
+  const boundInSource = safeBindingOf(sourceCode, name, targetModule) === 'safe';
+  /** The last VALUE import of `targetModule` with named specifiers: `, name` is appended there. */
+  let namedImportNode = null;
+  return {
+    /** Does the SOURCE bind `name` to the safe function? Answered once; no fix can change it. */
+    boundInSource,
+    /** Visit every `ImportDeclaration`: remembers the one a new specifier may be appended to. */
+    noteImport(node) {
+      if (node.source.value === targetModule && takesNamedSpecifier(node)) namedImportNode = node;
+    },
+    /** May the call at `node` be rewritten to call `name`? See `mayRewriteCallTo`. */
+    mayRewrite(node) {
+      return mayRewriteCallTo(sourceCode, node, name, targetModule);
+    },
+    /** Can a fix needing `name` be written at all? A CommonJS file cannot take the import. */
+    canFix() {
+      return boundInSource || acceptsImport(sourceCode);
+    },
+    /**
+     * The import edit THIS fix carries: none when the source binds `name`, else `, name` appended
+     * to an existing named import of the target, else a new declaration after `anchor` (an
+     * `ImportDeclaration`) or above the file's first statement.
+     *
+     * @param {object} fixer - ESLint fixer.
+     * @param {object | null} anchor - An import to land a new declaration after, or null.
+     * @returns {object[]} Zero or one fix.
+     */
+    importFixes(fixer, anchor) {
+      if (boundInSource) return [];
+      if (namedImportNode) return [fixer.insertTextAfter(namedImportNode.specifiers.at(-1), `, ${name}`)];
+      const declaration = `import { ${name} } from '${targetModule}';`;
+      const target = anchor ?? sourceCode.ast.body[0];
+      // Land next to the imports, never after arbitrary code — `insertTextAfter(body[0])` on a
+      // file whose first statement is a `const` welds the declaration onto the end of it.
+      return [
+        target.type === 'ImportDeclaration'
+          ? fixer.insertTextAfter(target, `\n${declaration}`)
+          : insertAboveWithComments(fixer, sourceCode, target, `${declaration}\n`),
+      ];
+    },
+  };
+}
+
+/**
  * The `safeModule` rule option: point the fixer at YOUR re-export seam.
  *
  * The narrow-subpath defaults above are right for a consumer importing this
@@ -270,17 +336,13 @@ function resolveSafeModule(context, fallbackModule) {
 }
 
 module.exports = {
-  acceptsImport,
+  createSafeImporter,
   EXEMPT_AND_SAFE_MODULE_SCHEMA,
   PACKAGE_NAME,
   SAFE_FS_MODULE,
   SAFE_MODULE_ONLY_SCHEMA,
   SAFE_PATH_MODULE,
   SAFE_PROCESS_MODULE,
-  insertAboveWithComments,
-  mayRewriteCallTo,
   resolveSafeModule,
-  safeBindingOf,
-  takesNamedSpecifier,
   withSafeModuleOption,
 };

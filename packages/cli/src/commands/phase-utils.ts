@@ -51,7 +51,7 @@ import { z, type ZodTypeAny } from 'zod';
 
 import type { DocumentFormat } from '../report-schemas.js';
 import { CommandRefusalError, refusalCodeOf } from '../utils/command-refusal.js';
-import { announceRunIntegrity, NOTHING_FINISHED, refusalReport, type FinishedWork } from '../utils/document-writer.js';
+import { announceErrorOf, announceRunIntegrity, NOTHING_FINISHED, refusalReport, type FinishedWork } from '../utils/document-writer.js';
 import { createLogger } from '../utils/logger.js';
 import { type ExaminedDeclaration, withRunIntegrity } from '../utils/run-integrity.js';
 
@@ -350,6 +350,9 @@ export async function runPhase(phase: Phase): Promise<PhaseResult> {
     const { report } = await phase.run();
     phase.schema.parse(report);
     const judged = phaseVerdict(phase, report);
+    // A phase that stopped says why — once: its verb's writer never sees this report, and a
+    // refusal the phase composed itself was said already.
+    announceErrorOf(report);
     // Added here, so no phase has said it: the document and stderr must agree.
     announceRunIntegrity(report, judged);
     return { name: phase.name, report: judged };
@@ -455,9 +458,8 @@ export async function orchestrate(body: (results: PhaseResult[]) => Promise<void
     const finished: FinishedWork = results.length === 0 ? NOTHING_FINISHED : finishedPhases(results);
     return refusalReport(refusalCodeOf(error), error, ORCHESTRATOR_GATE, finished);
   }
-  const report = orchestratorReport(results, ORCHESTRATOR_GATE, Date.now() - startTime);
-  if (report.status === 'error') process.stderr.write(`${report.error.message}\n`);
-  return report;
+  // A RUN_INCOMPLETE fold is said by the writer that publishes it (`announceErrorOf`).
+  return orchestratorReport(results, ORCHESTRATOR_GATE, Date.now() - startTime);
 }
 
 /** No orchestrator offers `--format`: the document is YAML. */

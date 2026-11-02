@@ -27,7 +27,8 @@
  *    the tree they run in (`SequenceStep.writes`) runs in its own copy of the
  *    subject, with the written directories deleted before every run, a run that
  *    changed anything else in it failed, and the copy removed when the arm ends
- *    — see `subject-copy.ts`.
+ *    — see `subject-copy.ts`. The limit: in a checkout, a write to a gitignored
+ *    path or under `.git/` outside the declared writes is not seen.
  */
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
@@ -371,6 +372,9 @@ async function makeSubjectCopy(arm: PreparedArm): Promise<string | null> {
 /**
  * The copy, outside what its steps declare they write: git's population when it is a
  * checkout (so git's own bookkeeping under `.git/` is not a write), every file otherwise.
+ *
+ * ⚠️ git's population is its tracked files and untracked ones no ignore rule matches, so a write to
+ * a GITIGNORED path (or under `.git/`) changes no fingerprint and {@link strayWrite} cannot see it.
  *
  * @param copy - The arm's copy of the subject
  * @param writes - The directories its steps declare

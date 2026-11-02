@@ -126,14 +126,14 @@ describe('autofix leaves no dangling reference', () => {
 });
 
 /**
- * A SUPPRESSED report still consumes a once-per-file import edit, across every
- * import-inserting rule that is not `no-raw-node-path` (which has its own leg
- * in its suite).
+ * A SUPPRESSED report still runs its `fix()`, so a once-per-file import edit latched
+ * by any report would be spent by one the `eslint-disable` filter then discards —
+ * across every import-inserting rule that is not `no-raw-node-path` (which has its
+ * own leg in its suite).
  *
- * These rules do not key detection on the import, so they recover across passes
- * on their own — but only because no `fix()` latches a once-per-file flag. This
- * suite is what stops one being re-introduced: a latch here has no repair leg
- * behind it, and the file would simply stay broken.
+ * No `fix()` latches one (`createSafeImporter`), so these rules recover across passes
+ * on their own. This suite is what stops a latch being re-introduced: it would have no
+ * repair leg behind it, and the file would simply stay broken.
  */
 const SUPPRESSION_CASES: Array<[string, string, string, CallShape?]> = [
   [RULE.tmpdir, namedImport('tmpdir', 'node:os'), 'tmpdir()'],

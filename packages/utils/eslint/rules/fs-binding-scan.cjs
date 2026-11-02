@@ -162,8 +162,7 @@ function fsBindingVisitors(context, { modules, banned, report }) {
     },
     // `import fs = require('node:fs')`.
     TSImportEqualsDeclaration(node) {
-      const ref = node.moduleReference;
-      if (ref.type === 'TSExternalModuleReference' && modules.has(spelledName(ref.expression, true))) {
+      if (modules.has(importEqualsModuleOf(node))) {
         scanNamespace(sourceCode.getDeclaredVariables(node)[0]);
       }
     },
@@ -199,6 +198,35 @@ function fsBindingVisitors(context, { modules, banned, report }) {
       if (modules.has(node.source.value)) {
         report(node, '*');
       }
+    },
+  };
+}
+
+/** The module an `import x = require('m')` loads, or null. */
+function importEqualsModuleOf(node) {
+  const ref = node.moduleReference;
+  return ref.type === 'TSExternalModuleReference' ? spelledName(ref.expression, true) : null;
+}
+
+/**
+ * The visitors that hand `found` every DECLARATION binding a `modules` module, in source order:
+ * an `ImportDeclaration`, a `VariableDeclarator` whose initialiser loads it (`require()`,
+ * `import()`, `await import()`), and `import x = require()`. What the dead-import leg may remove
+ * of them is `dead-import.cjs`'s decision, not this scan's.
+ *
+ * @param {ReadonlySet<string>} modules - The specifiers that load the module.
+ * @param {(node: object) => void} found - Called once per declaration.
+ */
+function moduleBindingVisitors(modules, found) {
+  return {
+    ImportDeclaration(node) {
+      if (modules.has(node.source.value)) found(node);
+    },
+    TSImportEqualsDeclaration(node) {
+      if (modules.has(importEqualsModuleOf(node))) found(node);
+    },
+    VariableDeclarator(node) {
+      if (modules.has(loadedModuleOf(node.init))) found(node);
     },
   };
 }
@@ -276,4 +304,4 @@ function productSourceFsBan({ docs, messageId, message, modules, banned, untyped
   };
 }
 
-module.exports = { fsBindingVisitors, isProductSource, productSourceFsBan };
+module.exports = { fsBindingVisitors, isProductSource, loadedModuleOf, moduleBindingVisitors, productSourceFsBan };

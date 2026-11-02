@@ -445,7 +445,7 @@ function reportOnStderr(findings: readonly Finding[], options: ValidateOptions):
 }
 
 /**
- * Validate resources and hand back the report, printing it nowhere.
+ * Validate resources, say the findings on stderr (see `reportOnStderr`), and hand back the report.
  *
  * The phase entry point for `vat validate` and `vat verify`, and the command's
  * own. The report is the one BEFORE the writer's run-integrity pass: inside an
