@@ -30,7 +30,9 @@ vat-lab <facet> compare <baseline> <candidate>
 Facets today are **`io`** (filesystem-call counts), **`perf`** (wall time), **`parse`** (where the
 time inside vat's document parse goes, pass by pass), **`crawl`** (where the time spent *finding*
 those documents goes, per contributor, stratum and fixpoint pass), **`population`** (*which*
-files a command enumerated) and **`verdict`** (what a build *decides* — exit codes, findings and
+files a command enumerated), **`memory`** (peak RSS per repeat — the largest node process's
+`process.resourceUsage().maxRSS`, worker threads included, child processes reported separately and
+never summed; portable to Linux, macOS and Windows) and **`verdict`** (what a build *decides* — exit codes, findings and
 normalized documents — across a subject set, checked both ways against committed deltas).
 `verdict` is shaped differently: `run` takes a required `--subjects <file>` instead of a
 `<subject>`, and `compare` takes two capture directories plus `--deltas` and `--control` — see

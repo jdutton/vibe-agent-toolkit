@@ -234,6 +234,19 @@ export const MEASURABLE_COMMANDS = Object.freeze({
     // set to the subject.
     args: Object.freeze(['validate']),
   }),
+  build: Object.freeze({
+    name: 'build',
+    provenance: 'none',
+    // Clean only: `vat build` exits 1 on an error finding and STOPS there — later
+    // phases never run — so a 1 is a build that did not do all its work, not a
+    // gate reporting findings.
+    exit: COMPLETES_CLEAN,
+    populates: false,
+    // Path-rejecting too (exit 2): it builds what the subject's config declares.
+    // ⚠️ It WRITES the subject's `dist/`. Repeats overwrite one another's output,
+    // which is the same work each time, but point it only at a scratch copy.
+    args: Object.freeze(['build']),
+  }),
   verify: Object.freeze({
     name: 'verify',
     provenance: 'none',

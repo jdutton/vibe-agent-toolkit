@@ -152,7 +152,7 @@ It is also the only way a second facet can have defaults at all without importin
 the [facet contract](facets.md) forbids.
 
 The default is a default, not a definition. `MEASURABLE_COMMANDS` in the same file is the named
-registry — the three defaults plus `inventory`, `validate`, `verify`, `resources-population`,
+registry — the three defaults plus `inventory`, `validate`, `build`, `verify`, `resources-population`,
 `claude-context-all`, `claude-context`, `skills-validate` and `skills-list` — and
 `vat-lab <facet> run --command <name>` selects from
 it. Adding an entry to the registry changes what a caller *can* ask for and nothing about what a
@@ -187,9 +187,11 @@ one side printed and the other did not — a `resources-population` row from a b
 print `lane` against a current one — and the `[A → B]` arrow appears only when both sides named
 an arm and the two differ (the four clauses are tabled in [Facets](facets.md)).
 
-`validate` and `verify` take no `{subject}` argument: both **reject** a positional path and take
-their scope from the config at the working directory, which the harness has already set to the
-subject. `verify` reads the built `dist/` tree, so a subject measured with it must have been built.
+`validate`, `build` and `verify` take no `{subject}` argument: each **rejects** a positional path and
+takes its scope from the config at the working directory, which the harness has already set to the
+subject. `build` WRITES the subject's `dist/` and is committed to exit 0 only — a `vat build` that
+exits 1 stopped at an error finding and skipped its later phases — so point it at a scratch copy.
+`verify` reads the built `dist/` tree, so a subject measured with it must have been built.
 `claude-context-all` is subject-less for the same reason — `--all` sweeps every path the projection
 realized and takes no positional.
 

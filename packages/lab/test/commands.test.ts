@@ -37,8 +37,8 @@ const CONTEXT_ONE = 'claude-context';
 /** What a bare run measures, in this order. */
 const DEFAULT_NAMES = ['resources-scan', 'resources-validate', 'audit'];
 
-/** The two commands spelled as a bare verb, because both reject a positional path. */
-const PATHLESS_NAMES = ['validate', 'verify'];
+/** The commands spelled as a bare verb, because each rejects a positional path. */
+const PATHLESS_NAMES = ['validate', 'build', 'verify'];
 
 /**
  * Every command that takes its scope from the working directory.

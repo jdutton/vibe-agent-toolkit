@@ -17,6 +17,16 @@ by a committed, reviewed declaration, in both directions. See [The verdict facet
 numbers need spread. A single sample is not a measurement; a median over repeats with the spread
 reported alongside is.
 
+`memory` is one of these, and its number needs its scope stated, because "peak RSS" names three
+different figures. A preload (`rss-probe.cts`, on `NODE_OPTIONS` like `io`'s counter) writes each
+node process's `process.resourceUsage().maxRSS` at exit — kilobytes on every platform, so no
+`/usr/bin/time -l` (macOS-only) or `/proc` (Linux-only). That figure **includes worker threads**
+(they share the process: a 400 MB allocation in a worker raises it by ~400 MB) and **excludes child
+processes**, which write their own. A repeat's sample is the LARGEST process's peak, never a sum:
+high-water marks from different moments were never resident together. How many processes reported
+travels beside it. A repeat that leaves no peak — killed, or out of heap — fails the row; it is
+never read as a small number.
+
 **Extent facets** — `population`. The output is a *set*, and a set needs neither spread nor
 tolerance: the comparator is exact set difference, and one member's difference is real. The
 distinction from a measurement facet is not cosmetic. Every other facet answers *how expensive was

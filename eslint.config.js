@@ -277,9 +277,9 @@ const NO_EXISTSSYNC_RATCHET = { allowFiles: [
   'packages/dev-tools/src/validate-repo-structure.ts',
   'packages/dev-tools/src/validate-version.ts',
   'packages/dev-tools/src/workspace-graph.ts',
-  'packages/lab/src/facets/io/capture.ts',
   'packages/lab/src/facets/io/counter.cts',
   'packages/lab/src/facets/verdict/capture.ts',
+  'packages/lab/src/harness/preload.ts',
   'packages/utils/src/asset-reference.ts',
   'packages/utils/src/testing/platform-gates.ts',
 ] };
@@ -321,11 +321,12 @@ export const LINK_FOLLOWING_FS_CALLS = {
   'packages/dev-tools/src/workspace-graph.ts': 1,
   // The quality lab (private): its instrument, harness and captures act on the operator's own
   // checkouts and installs and on the lab's own capture directories, never on a crawled entry.
-  'packages/lab/src/facets/io/capture.ts': 1,
   'packages/lab/src/facets/io/counter.cts': 1,
   'packages/lab/src/facets/verdict/capture.ts': 1,
   'packages/lab/src/harness/closure.ts': 1,
   'packages/lab/src/harness/instrument.ts': 2,
+  // The preload a facet injects: a lab-built file at the lab's own dist path, or a caller's override.
+  'packages/lab/src/harness/preload.ts': 1,
   'packages/lab/src/harness/subject.ts': 1,
   // Names the file Node's resolver computed inside an installed package, for an error message only.
   'packages/utils/src/asset-reference.ts': 1,

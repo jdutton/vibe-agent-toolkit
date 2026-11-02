@@ -20,6 +20,9 @@ import { renderCrawlComparison, renderCrawlReport } from '../facets/crawl/render
 import { captureIo } from '../facets/io/capture.js';
 import { compareIo } from '../facets/io/compare.js';
 import { renderIoComparison, renderIoReport } from '../facets/io/render.js';
+import { captureMemory } from '../facets/memory/capture.js';
+import { compareMemory } from '../facets/memory/compare.js';
+import { renderMemoryComparison, renderMemoryReport } from '../facets/memory/render.js';
 import { captureParse } from '../facets/parse/capture.js';
 import { compareParse } from '../facets/parse/compare.js';
 import { renderParseComparison, renderParseReport } from '../facets/parse/render.js';
@@ -1798,6 +1801,25 @@ export function createProgram(): Command {
         // populations of equal size and different membership read as unchanged
         // through `ab` and as CHANGED through `compare`. Use `compare`.
         estimate: (report) => rowEstimates(report.body.commands, 'files', (row) => row.count),
+      }),
+    )
+    .addCommand(
+      createFacetCommand({
+        name: 'memory',
+        summary: 'Measure the peak resident memory (RSS) of vat commands, worker threads included',
+        runSummary: 'Capture a peak-RSS report for one project against one vat build',
+        compareSummary: 'Diff two peak-RSS reports along a single axis',
+        // Three, not perf's five: a peak barely moves between repeats, and a
+        // memory-heavy command is usually a slow one.
+        defaultRuns: 3,
+        defaultCache: 'warm',
+        capture: captureMemory,
+        compare: compareMemory,
+        renderReport: renderMemoryReport,
+        renderComparison: renderMemoryComparison,
+        // The smallest repeat's peak, for the reason perf publishes `minMs`:
+        // `ab` takes a minimum across captures, and a min over medians is not one.
+        estimate: (report) => rowEstimates(report.body.commands, 'KiB peak RSS', (row) => row.minKb),
       }),
     )
     .addCommand(createVerdictCommand());

@@ -38,6 +38,8 @@ export {
   type DeltaThresholds,
   type LabelledRow,
   labelledMovements,
+  type MagnitudeDelta,
+  magnitudeDelta,
   type MsDelta,
   msDelta,
   type RowMovement,

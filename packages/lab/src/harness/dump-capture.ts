@@ -31,21 +31,24 @@ import type { CaptureRequest } from './types.js';
  *
  * @param options - The capture request
  * @param prefix - Temp-directory prefix, so a stray directory names its facet
- * @param dirEnv - The variable whose VALUE switches the seam on and names its directory
+ * @param repeatEnv - What one repeat's measured run is given, from its dump
+ *   directory: the variable whose VALUE switches the seam on and names that
+ *   directory, plus anything else only the measured run may see (a preload on
+ *   `NODE_OPTIONS`)
  * @param rowFrom - How this facet turns repeats plus their dumps into a row
  * @returns One row per command, in request order, and every command's measurement
  */
 export async function captureCommandRows<TRow>(
   options: CaptureRequest,
   prefix: string,
-  dirEnv: string,
+  repeatEnv: (directory: string) => Readonly<Record<string, string>>,
   rowFrom: (measurement: SpecMeasurement, directories: readonly string[]) => Promise<TRow>,
 ): Promise<{ readonly rows: TRow[]; readonly measured: readonly SpecMeasurement[] }> {
   const measured: SpecMeasurement[] = [];
   // In order on purpose — see rule 1 in this module's header.
   const rows = await mapInOrder(options.commands, (spec) =>
     withDumpDirs(options.runs, prefix, async (directories) => {
-      const perRepeat = directories.map((directory) => ({ [dirEnv]: directory }));
+      const perRepeat = directories.map((directory) => repeatEnv(directory));
       const measurement = await measureSpec(options, spec, (index) => perRepeat[index]);
       measured.push(measurement);
       return rowFrom(measurement, directories);

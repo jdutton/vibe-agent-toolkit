@@ -133,6 +133,24 @@ export {
   type IoSite,
 } from './facets/io/types.js';
 
+export { captureMemory, type CaptureMemoryOptions } from './facets/memory/capture.js';
+export {
+  compareMemory,
+  type CompareMemoryOptions,
+  type MemoryCommandVerdict,
+  type MemoryComparison,
+  type MemoryComparisonResult,
+} from './facets/memory/compare.js';
+export { formatKb, renderMemoryComparison, renderMemoryReport } from './facets/memory/render.js';
+export {
+  MEMORY_FACET,
+  type MemoryBody,
+  MemoryBodySchema,
+  type MemoryCommandStats,
+  type RssDump,
+  RssDumpSchema,
+} from './facets/memory/types.js';
+
 export { captureParse, type CaptureParseOptions } from './facets/parse/capture.js';
 export {
   compareParse,
@@ -388,6 +406,8 @@ export {
   type DeltaThresholds,
   type LabelledRow,
   labelledMovements,
+  type MagnitudeDelta,
+  magnitudeDelta,
   type MsDelta,
   msDelta,
   type RowMovement,

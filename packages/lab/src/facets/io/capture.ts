@@ -46,25 +46,24 @@
  * 2. **`NODE_OPTIONS` assigned instead of appended.** `runRepeats` applies the
  *    arm's environment OVER `process.env`, so an assignment silently drops
  *    whatever the surrounding shell or CI had set — changing the process being
- *    measured while reporting it as the same one. See {@link nodeOptionsWith}.
+ *    measured while reporting it as the same one. See `nodeOptionsWith` in `harness/preload.ts`.
  * 3. **The preload on `env` instead of `envFor`.** `env` reaches every child,
  *    including a `warm` arm's unmeasured priming run. Instrumenting priming
  *    folds setup's own I/O into the measurement.
  * 4. **Running uninstrumented when the counter cannot be found.** That reports
  *    zero I/O, which is the worst output this module can produce: a plausible,
  *    schema-valid report with nothing in it saying it is a lie. See
- *    {@link resolveCounterPath} — it throws.
+ *    `resolvePreloadPath` in `harness/preload.ts` — it throws.
  */
 
-import { existsSync } from 'node:fs';
-
-import { mapInOrder, resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
+import { mapInOrder, resolveFromImportMeta } from '@vibe-agent-toolkit/utils';
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
 import { buildArmEnv } from '../../harness/arm-env.js';
 import { withDumpDirs } from '../../harness/dumps.js';
 import { readLaneFromOutput } from '../../harness/lane.js';
 import { judgeLoad, readLoad } from '../../harness/load-guard.js';
+import { nodeOptionsWith, resolvePreloadPath } from '../../harness/preload.js';
 import { measureSpec, type SpecMeasurement } from '../../harness/repeat.js';
 import { buildReportEnvelope } from '../../harness/report.js';
 import type { CacheMode, CaptureRequest } from '../../harness/types.js';
@@ -85,9 +84,6 @@ const COUNTER_LOG_DIR_ENV = 'VAT_LAB_IO_LOG';
 
 /** The emitted counter, beside this module once both are built. */
 const COUNTER_FILE = './counter.cjs';
-
-/** What to run when the counter has not been built. Named in the error, not implied. */
-const BUILD_COMMAND = 'bunx tsc --build packages/lab/tsconfig.json';
 
 /** Prefix for a repeat's dump directory, so a stray one names its owner. */
 const DUMP_DIR_PREFIX = 'vat-lab-io-';
@@ -119,58 +115,6 @@ export interface CaptureIoOptions extends CaptureRequest {
    * string production uses, into the same child, through the same env contract.
    */
   readonly counterPath?: string;
-}
-
-/**
- * Locate the counter, or refuse to measure.
- *
- * Never falls back to running vat uninstrumented. A capture with no counter
- * produces a report of zero calls, and zero is a number a reader has no way to
- * distinguish from a real measurement — unlike a thrown error, which costs one
- * run and names its own remedy.
- *
- * @param override - See {@link CaptureIoOptions.counterPath}
- * @returns Absolute path to the counter, forward-slashed
- * @throws {Error} when nothing is at that path
- */
-function resolveCounterPath(override: string | undefined): string {
-  const counter = safePath.resolve(
-    override ?? resolveFromImportMeta(import.meta.url, COUNTER_FILE),
-  );
-  if (existsSync(counter)) return counter;
-
-  throw new Error(
-    `captureIo: no I/O counter at ${counter}. Build it with \`${BUILD_COMMAND}\`, or pass ` +
-      'counterPath. The capture will not run vat uninstrumented instead: that reports zero ' +
-      'filesystem calls, and nothing in such a report says it is a lie.',
-  );
-}
-
-/**
- * Build the `NODE_OPTIONS` for a measured run: whatever was already there, plus
- * the preload.
- *
- * **Appended, never assigned.** `runRepeats` applies this over `process.env`, so
- * an assignment drops an inherited `--max-old-space-size` or `--no-warnings` and
- * measures a differently-configured process while reporting it as the same one.
- *
- * **Quoted, and forward-slashed.** Both halves are required and neither is
- * obvious. Unquoted, `--require /Some Path/counter.cjs` parses as two arguments
- * and node dies looking for `/Some`. Quoted, Node's `NODE_OPTIONS` parser treats
- * a backslash inside the quotes as an escape — measured on Node 24.13.1,
- * `--require "/tmp/labq\back/x.cjs"` resolves to `/tmp/labqback/x.cjs` — so a
- * native Windows path would be silently mangled into one that does not exist.
- * `safePath.resolve` already yields forward slashes, which Node accepts on
- * Windows, and this is the reason it must.
- *
- * @param counterPath - Absolute, forward-slashed path to the counter
- * @param base - `NODE_OPTIONS` as the child would otherwise have seen it
- * @returns The value to set for the measured run
- */
-function nodeOptionsWith(counterPath: string, base: string | undefined): string {
-  const preload = `--require "${counterPath}"`;
-  const existing = (base ?? '').trim();
-  return existing === '' ? preload : `${existing} ${preload}`;
 }
 
 /**
@@ -307,10 +251,15 @@ async function rowFromDumps(
  *
  * @param options - See {@link CaptureIoOptions}
  * @returns A complete report envelope, ready to store
- * @throws {Error} when the counter cannot be found — see {@link resolveCounterPath}
+ * @throws {Error} when the counter cannot be found — see `resolvePreloadPath` in `harness/preload.ts`
  */
 export async function captureIo(options: CaptureIoOptions): Promise<ReportEnvelope<IoBody>> {
-  const counterPath = resolveCounterPath(options.counterPath);
+  const counterPath = resolvePreloadPath(
+    'captureIo',
+    'I/O counter',
+    options.counterPath ?? resolveFromImportMeta(import.meta.url, COUNTER_FILE),
+    'zero filesystem calls',
+  );
   const roots: SiteRoots = {
     // Empty for an `npx` instrument, and handled: a published package is
     // unpacked under an arbitrary cache path and every file in it sits under
