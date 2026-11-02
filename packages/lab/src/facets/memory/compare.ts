@@ -7,10 +7,10 @@
  * reasons, in the same order, as `perf` — and otherwise the MEDIAN peaks are
  * subtracted and judged by {@link magnitudeDelta}, with a floor no smaller than
  * the two arms' combined spread, and a change in how many vat processes ran is a
- * change in its own right.
+ * change in its own right — between arms of one instrument kind only.
  */
 
-import type { DecideComparisonOptions } from '../../envelope/coordinate.js';
+import type { DecideComparisonOptions, InstrumentVersion } from '../../envelope/coordinate.js';
 import type { ReportEnvelope } from '../../envelope/envelope.js';
 import {
   bothSides,
@@ -93,24 +93,37 @@ function spreadKb(row: MemoryCommandStats): number {
 }
 
 /**
+ * How an arm launched vat: `tree` has a commit, `dist` a closure, `npx` neither.
+ *
+ * @param instrument - The arm's instrument coordinate
+ * @returns Its kind
+ */
+function instrumentKind(instrument: InstrumentVersion): 'tree' | 'dist' | 'npx' {
+  if (instrument.commit !== null) return 'tree';
+  return instrument.closure === null ? 'npx' : 'dist';
+}
+
+/**
  * Diff one command present on both sides.
  *
  * CHANGED needs a move larger than the 8 MiB floor, the 10% gate AND the two
  * arms' combined spread: a delta the repeats themselves wandered across is not
  * a move. A different count of vat processes is CHANGED whatever the peaks did —
- * the peak is the largest of a different set of processes.
+ * the peak is the largest of a different set of processes — but only between
+ * arms of one launch kind: `kinds` is `null` then, and otherwise names the two.
  *
  * @param before - The baseline row
  * @param after - The compared row
+ * @param kinds - The two arms' instrument kinds when they differ, else `null`
  * @returns The verdict
  */
-function verdictFor(before: MemoryCommandStats, after: MemoryCommandStats): MemoryCommandVerdict {
+function verdictFor(before: MemoryCommandStats, after: MemoryCommandStats, kinds: string | null): MemoryCommandVerdict {
   const reason = unmeasurableReason(before, after);
   if (reason !== null) return { kind: 'unmeasurable', reason };
   const floorKb = Math.max(MIN_ABSOLUTE_KB, spreadKb(before) + spreadKb(after));
   const peak = magnitudeDelta(before.medianKb, after.medianKb, MIN_RELATIVE, floorKb);
   const processes = { before: before.processesPerRepeat[0] ?? 0, after: after.processesPerRepeat[0] ?? 0 };
-  const changed = peak.significant || processes.before !== processes.after;
+  const changed = peak.significant || (kinds === null && processes.before !== processes.after);
   return { kind: changed ? 'changed' : 'unchanged', peak, processes };
 }
 
@@ -127,11 +140,18 @@ export function compareMemory(
   after: ReportEnvelope<unknown>,
   options: CompareMemoryOptions = {},
 ): MemoryComparison {
+  const was = instrumentKind(before.coordinate.instrument);
+  const now = instrumentKind(after.coordinate.instrument);
+  const kinds = was === now ? null : `${was} vs ${now}`;
   return compareCommandRows<MemoryCommandStats, MemoryCommandVerdict>(
     before,
     after,
     MEMORY_CONTRACT,
     options,
-    verdictFor,
+    (b, a) => verdictFor(b, a, kinds),
+    (verdict) =>
+      kinds !== null && 'processes' in verdict && verdict.processes.before !== verdict.processes.after
+        ? `instrument kinds differ (${kinds}), and each launches vat through its own processes, so the count is not compared`
+        : null,
   );
 }

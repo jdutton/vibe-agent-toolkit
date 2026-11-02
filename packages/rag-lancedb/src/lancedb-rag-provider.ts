@@ -639,14 +639,10 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
         // the same read, so the batch is refused once, as stats and query refuse it.
         if (isVatError(error, RAG_DATABASE_UNREADABLE_CODE)) throw error;
 
-        const message = describeError(error);
-        // Also surfaced on stderr: a caller that ignores `result.errors` would
-        // otherwise meet this failure much later as an unexplained
-        // "No data indexed yet" from query().
-        console.warn(`[vat-rag] Failed to index resource '${resource.id}': ${message}`);
+        // Reported in `result.errors` only: rendering it is the caller's job (`vat rag index` does).
         result.errors?.push({
           resourceId: resource.id,
-          error: message,
+          error: describeError(error),
         });
       }
 

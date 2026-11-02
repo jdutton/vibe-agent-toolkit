@@ -20,6 +20,7 @@ import fs from 'node:fs';
 import { dirname } from 'node:path';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
@@ -44,7 +45,7 @@ const READABLE = 0o755;
 function writerUnder(root: string): (rel: string, body: string) => string {
   return (rel, body) => {
     const abs = safePath.join(root, rel);
-    fs.mkdirSync(dirname(abs), { recursive: true });
+    mkdirSyncReal(dirname(abs), { recursive: true });
     fs.writeFileSync(abs, body);
     return abs;
   };
@@ -69,7 +70,7 @@ beforeAll(() => {
   tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-audit-unreadable-'));
   skillDir = safePath.join(tempDir, SKILL_DIR);
   unreadableDir = safePath.join(skillDir, UNREADABLE_SUBDIR);
-  fs.mkdirSync(unreadableDir, { recursive: true });
+  mkdirSyncReal(unreadableDir, { recursive: true });
   fs.writeFileSync(
     safePath.join(skillDir, 'SKILL.md'),
     '---\nname: demo\ndescription: A demo skill used to exercise the unreadable-path guard.\n---\n\n# Demo\n',
@@ -204,8 +205,8 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit with an unreadable file', () => {
     scanRoot = safePath.join(fileTempDir, 'skills');
     const goodDir = safePath.join(scanRoot, 'good');
     const badDir = safePath.join(scanRoot, 'bad');
-    fs.mkdirSync(goodDir, { recursive: true });
-    fs.mkdirSync(badDir, { recursive: true });
+    mkdirSyncReal(goodDir, { recursive: true });
+    mkdirSyncReal(badDir, { recursive: true });
     fs.writeFileSync(
       safePath.join(goodDir, 'SKILL.md'),
       '---\nname: good\ndescription: A readable skill that must survive an unreadable sibling.\n---\n\n# Good\n',
@@ -357,7 +358,7 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit under a config whose skills.includ
     // presence is what tells "validated under the config" from "downgraded".
     const write = (name: string): string => {
       const dir = safePath.join(projectDir, 'skills', name);
-      fs.mkdirSync(dir, { recursive: true });
+      mkdirSyncReal(dir, { recursive: true });
       const target = safePath.join(dir, 'SKILL.md');
       fs.writeFileSync(target, `---\nname: ${name}\ndescription: Short.\n---\n\n# ${name}\n\nBody.\n`);
       return target;

@@ -146,7 +146,8 @@ for the loud-cwd fallback policy and the projectRoot discovery ladder.
   resource at all (`examined: 0`), which carries one non-overridable
   `RESOURCE_CHECK_BROKEN` finding rather than passing: a declared `--collection` that
   matched nothing or a path with no markdown is not a verdict about anything.
-  The reason and the remedy are also printed on stderr as a warning
+  It is also printed on stderr as its finding line, `error: Nothing was examined: … [RESOURCE_CHECK_BROKEN]`
+  (under `--format text` that line is in the stdout document instead)
 - `2` - The run could not finish (`status: error`, `error.code` says which):
   `[path]` or `--frontmatter-schema` names nothing (`USAGE_INVALID`), an input
   the OS will not read (`INPUT_UNREADABLE`), an unusable config (`CONFIG_INVALID`)

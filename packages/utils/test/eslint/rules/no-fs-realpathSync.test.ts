@@ -9,7 +9,7 @@ describe(RULE.realpath, () => {
     expectRulePasses(RULE.realpath, unsafeCallRuleCases({
       unsafeFn: 'realpathSync', unsafeModule: NODE_FS, safeFn: 'normalizePath',
       safeModule: SAFE_FS_MODULE, exemptPath: PATH_UTILS_IMPL,
-      rewrite: { appendArgument: '{ within: undefined }' },
+      rewrite: { appendArgument: '{ within: TREE_CRAWLED_IN }' },
     }));
   });
 });

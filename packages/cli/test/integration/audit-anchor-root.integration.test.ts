@@ -19,6 +19,7 @@
 import fs from 'node:fs';
 
 import { isAbsoluteAnyPlatform, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { buildAuditReport } from '../../src/commands/audit.js';
@@ -34,7 +35,7 @@ import { runAudit, silentLogger } from '../test-helpers.js';
 const PROJECTS = ['proj-alpha', 'proj-beta'] as const;
 
 function writeFileAt(filePath: string, content: string): void {
-  fs.mkdirSync(safePath.resolve(filePath, '..'), { recursive: true });
+  mkdirSyncReal(safePath.resolve(filePath, '..'), { recursive: true });
   fs.writeFileSync(filePath, content, 'utf-8');
 }
 

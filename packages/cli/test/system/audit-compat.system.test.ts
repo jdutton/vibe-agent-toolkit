@@ -6,9 +6,10 @@
  * plugin directories.
  */
 
-import * as fs from 'node:fs';
+
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { AUDIT_REPORT_SCHEMA } from '../../src/commands/audit-schema.js';
@@ -36,7 +37,7 @@ function createMinimalPlugin(
 ): string {
   const pluginDir = safePath.join(parentDir, pluginName);
   const metaDir = safePath.join(pluginDir, '.claude-plugin');
-  fs.mkdirSync(metaDir, { recursive: true });
+  mkdirSyncReal(metaDir, { recursive: true });
 
   writeTestFile(
     safePath.join(metaDir, 'plugin.json'),
@@ -64,7 +65,7 @@ This is a test skill.
     for (const [relativePath, content] of Object.entries(extraFiles)) {
       const fullPath = safePath.join(pluginDir, relativePath);
       const fileDir = safePath.join(fullPath, '..');
-      fs.mkdirSync(fileDir, { recursive: true });
+      mkdirSyncReal(fileDir, { recursive: true });
       writeTestFile(fullPath, content);
     }
   }
@@ -124,7 +125,7 @@ describe('Audit --compat flag (system test)', () => {
 
   it('--compat produces compatibility analysis for a claude plugin', () => {
     const testDir = safePath.join(tempDir, 'single-plugin');
-    fs.mkdirSync(testDir, { recursive: true });
+    mkdirSyncReal(testDir, { recursive: true });
 
     createMinimalPlugin(testDir, 'my-test-plugin');
 
@@ -141,7 +142,7 @@ describe('Audit --compat flag (system test)', () => {
 
   it('--compat with multiple plugins produces analysis for each', () => {
     const testDir = safePath.join(tempDir, 'multi-plugin');
-    fs.mkdirSync(testDir, { recursive: true });
+    mkdirSyncReal(testDir, { recursive: true });
 
     createMinimalPlugin(testDir, 'plugin-alpha');
     createMinimalPlugin(testDir, 'plugin-beta');
@@ -160,11 +161,11 @@ describe('Audit --compat flag (system test)', () => {
 
   it('--compat without a plugin (skill only) produces no compatibility data', () => {
     const testDir = safePath.join(tempDir, 'skill-only');
-    fs.mkdirSync(testDir, { recursive: true });
+    mkdirSyncReal(testDir, { recursive: true });
 
     // Create a standalone SKILL.md (not a plugin directory)
     const skillDir = safePath.join(testDir, 'my-skill');
-    fs.mkdirSync(skillDir, { recursive: true });
+    mkdirSyncReal(skillDir, { recursive: true });
     writeTestFile(
       safePath.join(skillDir, 'SKILL.md'),
       `---
@@ -187,7 +188,7 @@ This skill has no plugin.json so no compat analysis applies.
 
   it('--compat works with --no-recursive flag', () => {
     const testDir = safePath.join(tempDir, 'no-recurse-compat');
-    fs.mkdirSync(testDir, { recursive: true });
+    mkdirSyncReal(testDir, { recursive: true });
 
     createMinimalPlugin(testDir, 'top-level-plugin');
 
@@ -200,7 +201,7 @@ This skill has no plugin.json so no compat analysis applies.
     // Create a fake HOME with a .claude/plugins directory containing a plugin
     const fakeHome = safePath.join(tempDir, 'fake-home-compat');
     const pluginsDir = safePath.join(fakeHome, '.claude', 'plugins');
-    fs.mkdirSync(pluginsDir, { recursive: true });
+    mkdirSyncReal(pluginsDir, { recursive: true });
 
     createMinimalPlugin(pluginsDir, 'user-compat-plugin');
 

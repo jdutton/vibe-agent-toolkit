@@ -9,7 +9,7 @@
  * `harness/preload.ts` the `io` counter uses — and the rule for reducing a
  * repeat's dumps to one number (the largest vat process's peak; see `types.ts`).
  * A repeat is launched straight from the lab: the probe's figure excludes what
- * a parent held (see `rss-probe.cts`).
+ * a parent held (see `rss-probe.cts`). An `npx:` build is too: see `npx-entry.ts`.
  *
  * Every repeat counts, as in `perf`: there is no warm-up to discard, because a
  * peak is not a cache-sensitive count, and a `warm` arm is already primed by an
@@ -29,6 +29,7 @@ import { buildReportEnvelope } from '../../harness/report.js';
 import type { CaptureRequest } from '../../harness/types.js';
 import { summarize } from '../perf/stats.js';
 
+import { npmInstaller, withMemoryInstrument } from './npx-entry.js';
 import {
   MEMORY_FACET,
   type MemoryBody,
@@ -218,11 +219,13 @@ export async function captureMemory(options: CaptureMemoryOptions): Promise<Repo
   const nodeOptions = nodeOptionsWith(probePath, buildArmEnv(process.env, options.env)['NODE_OPTIONS']);
 
   const loadBefore = readLoad();
-  const { rows: commands, measured } = await captureCommandRows(
-    options,
-    DUMP_DIR_PREFIX,
-    (directory) => ({ [RSS_LOG_DIR_ENV]: directory, NODE_OPTIONS: nodeOptions }),
-    rowFromDumps,
+  const { rows: commands, measured } = await withMemoryInstrument(options.instrument, npmInstaller(options.env, options.timeoutMs), (instrument) =>
+    captureCommandRows(
+      { ...options, instrument },
+      DUMP_DIR_PREFIX,
+      (directory) => ({ [RSS_LOG_DIR_ENV]: directory, NODE_OPTIONS: nodeOptions }),
+      rowFromDumps,
+    ),
   );
   const loadAfter = readLoad();
 

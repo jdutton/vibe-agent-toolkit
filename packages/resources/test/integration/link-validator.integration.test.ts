@@ -14,7 +14,7 @@ import { writeFile } from 'node:fs/promises';
 
 
 import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { issueLocation, mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { issueLocation, mkdirSyncReal, normalizedTmpdir, normalizePath, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 
 import { fragmentIndex, validateLink, type FragmentIndex } from '../../src/link-validator.js';
@@ -250,7 +250,7 @@ describe('validateLink', () => {
       const fs = await import('node:fs');
       const tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'encoded-path-'));
       const filesDir = safePath.join(tempDir, 'files');
-      fs.mkdirSync(filesDir, { recursive: true });
+      mkdirSyncReal(filesDir, { recursive: true });
       const targetFile = safePath.join(filesDir, 'My Document Name.pdf');
       const sourceFile = safePath.join(tempDir, 'index.md');
 
@@ -783,9 +783,9 @@ describe('validateLink', () => {
       const fs = await import('node:fs');
       projectRoot = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'leading-slash-'));
       // realpath to avoid macOS /private symlink mismatch with isWithinProject
-      projectRoot = fs.realpathSync(projectRoot);
+      projectRoot = normalizePath(projectRoot, { within: projectRoot });
       const docsSub = safePath.join(projectRoot, 'docs', 'sub');
-      fs.mkdirSync(docsSub, { recursive: true });
+      mkdirSyncReal(docsSub, { recursive: true });
       const targetFile = safePath.join(projectRoot, 'docs', 'foo.md');
       sourceFile = safePath.join(docsSub, 'page.md');
       fs.writeFileSync(targetFile, '# Foo\n\n## Section A\n');
@@ -901,9 +901,9 @@ describe('validateLink', () => {
     beforeAll(async () => {
       const fs = await import('node:fs');
       htmlProjectRoot = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'html-dir-'));
-      htmlProjectRoot = fs.realpathSync(htmlProjectRoot);
+      htmlProjectRoot = normalizePath(htmlProjectRoot, { within: htmlProjectRoot });
       const dirTarget = safePath.join(htmlProjectRoot, 'dir');
-      fs.mkdirSync(dirTarget, { recursive: true });
+      mkdirSyncReal(dirTarget, { recursive: true });
       htmlSourceFile = safePath.join(htmlProjectRoot, 'page.html');
       fs.writeFileSync(htmlSourceFile, '<a href="dir/">Dir link</a>');
     });

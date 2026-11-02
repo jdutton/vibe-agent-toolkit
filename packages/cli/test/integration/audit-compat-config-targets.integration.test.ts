@@ -14,9 +14,11 @@
 
 import fs from 'node:fs';
 
+
 import type { SkillPackagingConfig, ValidationResult } from '@vibe-agent-toolkit/agent-skills';
 import type { CompatibilityResult } from '@vibe-agent-toolkit/claude-marketplace';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { runCompatAnalysis, type VATProjectContext } from '../../src/commands/audit.js';
@@ -42,14 +44,14 @@ function buildShellPluginFixture(parentDir: string, pluginName: string): {
 } {
   const pluginDir = safePath.join(parentDir, pluginName);
   const claudeDir = safePath.join(pluginDir, '.claude-plugin');
-  fs.mkdirSync(claudeDir, { recursive: true });
+  mkdirSyncReal(claudeDir, { recursive: true });
   fs.writeFileSync(
     safePath.join(claudeDir, 'plugin.json'),
     JSON.stringify({ name: pluginName, version: '1.0.0' }), // no `targets` → config wins
   );
 
   const skillDir = safePath.join(pluginDir, 'skills', pluginName);
-  fs.mkdirSync(skillDir, { recursive: true });
+  mkdirSyncReal(skillDir, { recursive: true });
   const skillPath = safePath.join(skillDir, 'SKILL.md');
   fs.writeFileSync(
     skillPath,
@@ -148,7 +150,7 @@ describe('vat audit --compat honors config-layer targets (integration)', () => {
     const { pluginDir, skillPath } = buildShellPluginFixture(tempDir, 'plugin-multi');
     // Add a second skill under the same plugin with a different target.
     const secondSkillDir = safePath.join(pluginDir, 'skills', 'extra');
-    fs.mkdirSync(secondSkillDir, { recursive: true });
+    mkdirSyncReal(secondSkillDir, { recursive: true });
     const secondSkillPath = safePath.join(secondSkillDir, 'SKILL.md');
     fs.writeFileSync(
       secondSkillPath,
@@ -188,7 +190,7 @@ No shell here.
     const { pluginDir } = buildShellPluginFixture(tempDir, 'plugin-isolated');
     // Register a skill path that is NOT inside pluginDir.
     const otherSkill = safePath.join(tempDir, 'unrelated', 'SKILL.md');
-    fs.mkdirSync(safePath.join(otherSkill, '..'), { recursive: true });
+    mkdirSyncReal(safePath.join(otherSkill, '..'), { recursive: true });
     fs.writeFileSync(otherSkill, '---\nname: unrelated\ndescription: Outside the plugin.\n---\n');
 
     const { codes } = await runAndGetVerdicts(pluginDir, [

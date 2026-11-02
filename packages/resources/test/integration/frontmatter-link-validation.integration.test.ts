@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ResourceRegistry } from '../../src/resource-registry.js';
@@ -39,7 +40,7 @@ function buildProject(tempDir: string, spec: ProjectSpec): ProjectResult {
     fs.writeFileSync(safePath.join(tempDir, '.gitignore'), spec.gitignore);
   }
 
-  fs.mkdirSync(safePath.join(tempDir, 'schemas'), { recursive: true });
+  mkdirSyncReal(safePath.join(tempDir, 'schemas'), { recursive: true });
   fs.writeFileSync(
     safePath.join(tempDir, 'schemas', 'prd.schema.json'),
     JSON.stringify(spec.schema, null, 2),
@@ -49,7 +50,7 @@ function buildProject(tempDir: string, spec: ProjectSpec): ProjectResult {
 
   for (const [relPath, content] of Object.entries(spec.files)) {
     const abs = safePath.join(tempDir, relPath);
-    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    mkdirSyncReal(path.dirname(abs), { recursive: true });
     fs.writeFileSync(abs, content);
     if (relPath.endsWith('.md')) {
       markdownFiles.push(abs);

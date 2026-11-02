@@ -15,6 +15,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -48,7 +49,7 @@ describe('External URL validation CLI flags (system test)', () => {
 
     // Create minimal test structure
     const docsDir = safePath.join(tempDir, 'docs');
-    fs.mkdirSync(docsDir, { recursive: true });
+    mkdirSyncReal(docsDir, { recursive: true });
 
     // File with no external links (ensures validation passes)
     fs.writeFileSync(

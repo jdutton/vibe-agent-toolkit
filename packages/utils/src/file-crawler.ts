@@ -131,6 +131,35 @@ export interface CrawlOptions {
 const PICOMATCH_OPTIONS = { dot: true } as const;
 
 /**
+ * The globs that can NEVER be authored content, at any depth: dependencies, git
+ * internals, worktree copies of the repository, and a build's staging residue.
+ *
+ * A lane that crawls for authored content (`ResourceRegistry.crawl`'s default)
+ * excludes only this list plus {@link BUILD_OUTPUT_GLOBS}; on the git route an
+ * ignored tool-output directory is gone already, and a tracked one is content
+ * the author committed.
+ */
+export const NEVER_CONTENT_GLOBS: readonly string[] = Object.freeze([
+  '**/node_modules/**',      // Dependencies (40K+ files), never user content
+  '**/.git/**',              // Git objects, never user content
+  '**/.worktrees/**',        // Git worktrees are full repo copies — never traverse
+  '**/.claude/worktrees/**', // Claude Code worktrees, same reason
+  ...TREE_CHANGE_RESIDUE_GLOBS, // A build's staged/parked output beside its destination — a transient copy
+]);
+
+/**
+ * Directories named by the tool that USUALLY writes them. No lane wants the tool's
+ * output, but an author can name a directory the same —
+ * `references/coverage/workers-comp.md` is markdown someone wrote — so they are in
+ * {@link NEVER_CRAWL_GLOBS} and not in {@link NEVER_CONTENT_GLOBS}.
+ */
+const TOOL_OUTPUT_NAME_GLOBS = [
+  '**/coverage/**',          // Test coverage reports
+  '**/.test-output/**',      // Test artifacts
+  '**/.turbo/**',            // turborepo task logs + cache — see NEVER_CRAWL_GLOBS
+] as const;
+
+/**
  * Directories no VAT crawl should ever walk into. THE canonical list — any lane
  * that needs its own additions should spread this rather than restate it.
  *
@@ -148,7 +177,7 @@ const PICOMATCH_OPTIONS = { dot: true } as const;
  * at it*. Something does walk `dist/`; nothing walks `.turbo`, which holds
  * `turbo-<task>.log` telemetry plus, when `cacheDir` points inside it,
  * hash-keyed cache entries that are COPIES of package build output. That is the
- * `.worktrees` failure two lines up, not the `dist` one: a crawl that descends
+ * `.worktrees` failure, not the `dist` one: a crawl that descends
  * into it reports the same file twice under two paths. Filing it as build
  * output would have it exactly backwards, since a lane spreading only this list
  * is by definition a lane that wants to see built output — and so is precisely
@@ -162,46 +191,20 @@ const PICOMATCH_OPTIONS = { dot: true } as const;
  * turborepo setup — which is the same position `coverage/` and `.test-output/`
  * are in.
  */
-export const NEVER_CRAWL_GLOBS = [
-  '**/node_modules/**',      // Dependencies (40K+ files), never user content
-  '**/.git/**',              // Git objects, never user content
-  '**/coverage/**',          // Test coverage reports
-  '**/.test-output/**',      // Test artifacts
-  '**/.worktrees/**',        // Git worktrees are full repo copies — never traverse
-  '**/.claude/worktrees/**', // Claude Code worktrees, same reason
-  '**/.turbo/**',            // turborepo task logs + cache — see below
-  ...TREE_CHANGE_RESIDUE_GLOBS, // A build's staged/parked output beside its destination — a transient copy
-] as const;
-
-/**
- * The part of {@link NEVER_CRAWL_GLOBS} that can NEVER be authored content, at
- * any depth: dependencies, git internals, worktree copies of the repository, and
- * a build's staging residue.
- *
- * The rest of that list — `coverage/`, `.test-output/`, `.turbo/` — names a
- * directory by the tool that USUALLY writes it, and an author can name a
- * directory the same: `references/coverage/workers-comp.md` is markdown someone
- * wrote. A lane that crawls for authored content (`ResourceRegistry.crawl`'s
- * default) excludes only this list plus {@link BUILD_OUTPUT_GLOBS}; on the git
- * route an ignored tool-output directory is gone already, and a tracked one is
- * content the author committed.
- */
-export const NEVER_CONTENT_GLOBS = NEVER_CRAWL_GLOBS.filter(
-  (glob) => !['**/coverage/**', '**/.test-output/**', '**/.turbo/**'].includes(glob),
-);
+export const NEVER_CRAWL_GLOBS: readonly string[] = Object.freeze([...NEVER_CONTENT_GLOBS, ...TOOL_OUTPUT_NAME_GLOBS]);
 
 /**
  * Build output — excluded by DEFAULT, but deliberately NOT part of
  * {@link NEVER_CRAWL_GLOBS}.
  *
- * The distinction is real, and collapsing it is a bug: everything in
- * `NEVER_CRAWL_GLOBS` is "never user content, no lane wants it", while `dist/` is
- * content VAT itself produced and some lanes exist precisely to look at. Skill
- * discovery CLASSIFIES what it finds as source or build output, so it must walk
- * `dist/`; a crawl for authored markdown must not. Two different questions, so
- * two lists — a lane spreads whichever ones apply.
+ * The distinction is real, and collapsing it is a bug: no lane wants what
+ * `NEVER_CRAWL_GLOBS` names (though an author may reuse a tool-output name — see
+ * {@link NEVER_CONTENT_GLOBS}), while `dist/` is content VAT itself produced and
+ * some lanes exist precisely to look at. Skill discovery CLASSIFIES what it finds
+ * as source or build output, so it must walk `dist/`; a crawl for authored markdown
+ * must not. Two different questions, so two lists — a lane spreads whichever ones apply.
  */
-export const BUILD_OUTPUT_GLOBS = ['**/dist/**'] as const;
+export const BUILD_OUTPUT_GLOBS: readonly string[] = Object.freeze(['**/dist/**']);
 
 const DEFAULT_EXCLUDE: string[] = [...NEVER_CRAWL_GLOBS, ...BUILD_OUTPUT_GLOBS];
 

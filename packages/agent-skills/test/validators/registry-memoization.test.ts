@@ -404,6 +404,23 @@ describe('crawlAndResolveRegistry — a rejected crawl is retried, never served'
     }
   });
 
+  it('costs N waiters ONE re-crawl when the re-crawl rejects too, and each waiter is told', async () => {
+    resetPackagingRegistryCache();
+    const { root, locked } = rootWithLockedDirectory();
+    const crawls = vi.spyOn(ResourceRegistry, 'fromCrawl');
+    try {
+      await withReaddirSyncRefused(locked, 'EACCES', async () => {
+        const first = crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' });
+        const waiters = [1, 2, 3].map(() => crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' }));
+        await expect(first).rejects.toMatchObject({ code: FS_FAULT_CODE });
+        for (const waiter of waiters) await expect(waiter).rejects.toMatchObject({ code: FS_FAULT_CODE });
+      });
+      expect(crawls).toHaveBeenCalledTimes(2);
+    } finally {
+      crawls.mockRestore();
+    }
+  });
+
   it('shares ONE in-flight crawl between two overlapping callers', async () => {
     const root = rootWithMarkdown({ 'a.md': '# A\n' });
     const { source, calls } = countingSource(root, ['a.md']);

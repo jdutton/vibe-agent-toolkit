@@ -1,12 +1,13 @@
 /**
- * Shared scanner: every read of a named `node:fs` function, however it is reached.
+ * Shared scanner: every read of a named function of a node module (`node:fs`, and through
+ * `eslint-rule-factory.cjs` `node:os` and `node:child_process` too), however it is reached.
  *
- * `no-existssync` and `no-link-following-fs` both ban functions of the fs module,
- * and both must see the same shapes — a named import (aliased too) that is called
+ * `no-existssync`, `no-link-following-fs` and every rule the factory builds ban functions of
+ * a module, and all must see the same shapes — a named import (aliased too) that is called
  * or handed on as a value, a namespace, default, `require()` or `await import()`
  * binding read as `fs.name` (or `fs.promises.name`), the same read straight off the
  * loading expression (`require('node:fs').name`), a destructure of it out of any
- * of those, and a re-export. One copy, so the two rules cannot drift apart on what
+ * of those, and a re-export. One copy, so the rules cannot drift apart on what
  * counts as a use.
  *
  * It follows bindings through scope, not values through data flow: an fs namespace

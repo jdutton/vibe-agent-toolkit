@@ -1,4 +1,5 @@
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { describe, expect, it } from 'vitest';
 
 import { validateMarketplace } from '../../src/validators/marketplace-validator.js';
@@ -64,7 +65,7 @@ describe('validateMarketplace', () => {
     const manifest = safePath.join(marketplacePath, '.claude-plugin', 'marketplace.json');
     const fs = await import('node:fs');
     fs.rmSync(manifest);
-    fs.mkdirSync(manifest);
+    mkdirSyncReal(manifest);
 
     const result = await validateMarketplace(marketplacePath);
 

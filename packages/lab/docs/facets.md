@@ -19,7 +19,7 @@ reported alongside is.
 
 `memory` is one of these, and its number needs its scope stated, because "peak RSS" names three
 different figures. A preload (`rss-probe.cts`, on `NODE_OPTIONS` like `io`'s counter) writes a
-node process's peak resident set at exit, in kilobytes: `VmHWM` from `/proc/self/status` on Linux,
+node process's peak resident set at exit (ahead of vat's own exit listeners), in kilobytes: `VmHWM` from `/proc/self/status` on Linux,
 `process.resourceUsage().maxRSS` on macOS and Windows. That figure **includes worker threads**
 (they share the process: a 400 MB allocation in a worker raises it by ~400 MB) and **excludes the
 parent**. Linux's `maxRSS` does not: it survives `exec`, and a forked child starts with a copy of
@@ -27,17 +27,25 @@ its parent's resident set, so a vat launched by a 300 MB parent through `sh -c e
 and a shell launch it — read as 300 MB or more. `VmHWM` belongs to the exec'd image alone. macOS's
 `maxRSS` carries nothing over: measured, a vat stand-in under a node parent holding 0, 300 and
 600 MB peaked at 75.4, 75.4 and 75.3 MB. So a repeat is launched straight from the lab, with no
-intermediate launcher; `test/integration/memory-probe.integration.test.ts` pins the independence
-on Linux and macOS.
+intermediate launcher — an `npx:` build included: `npx` runs the package's `bin`, the cli's
+cwd-resolving wrapper, which spawns vat as a second process, so the facet installs the pinned spec
+into a directory of its own and runs that install's `@vibe-agent-toolkit/cli/dist/bin.js` with
+`node`, as a `dist:` build runs (`npx-entry.ts`). `test/integration/memory-probe.integration.test.ts`
+pins the independence, and it can only go red on Linux: macOS's `maxRSS` carries nothing over, and
+the test needs `sh`, so it is skipped on Windows, where a process is created rather than forked —
+argued there, not measured. A command that writes its subject (`build`) runs in a copy of it, which
+the lab cannot make on Windows, so that spec is refused there.
 
 It is one figure per process, and only vat's own processes write one: a process is vat's when its
-main script (`process.argv[1]`, links resolved) belongs to the `vibe-agent-toolkit` launcher or the
-`@vibe-agent-toolkit/cli` package — the nearest `package.json` above it says which. The probe
+main script (`process.argv[1]`, its own links read) belongs to the `vibe-agent-toolkit` launcher or the
+`@vibe-agent-toolkit/cli` package — the nearest `package.json` above it says which, and a `private`
+one never does (the monorepo's root is named `vibe-agent-toolkit` too). The probe
 decides that from the install alone, so every vat ever published is measurable, and `npm` under
 `npx`, a `node -e` or a tool vat spawns writes nothing and never stands in for vat's peak.
 A repeat's sample is the LARGEST vat process's peak, never a sum: high-water marks from different
 moments were never resident together. How many vat processes reported is counted beside it, and a
-change in that count is a CHANGED verdict on its own.
+change in that count is a CHANGED verdict on its own — between two builds of one instrument kind
+(`tree:`, `dist:`, `npx:`); across kinds the count is not compared, and the comparison says so.
 
 A repeat that leaves no vat peak — killed, out of heap, or no process with a vat main script —
 fails the row; it is never read as a small number. So does a row whose repeats disagree on how many

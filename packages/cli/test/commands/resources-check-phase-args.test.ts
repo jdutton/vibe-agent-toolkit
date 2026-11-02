@@ -97,3 +97,43 @@ describe('runResourcesCheckPhase — the child\'s argv', () => {
     expect(args).not.toContain('--budget');
   });
 });
+
+const WARNED = {
+  code: 'CUSTOM:warn-a', severity: 'warning' as const, message: 'a.md is flagged', location: 'docs/a.md',
+};
+
+/** What the phase printed on stderr for a forwarded report carrying one warning, at `verbose`. */
+async function stderrAt(verbose: boolean): Promise<string> {
+  const previous = forwarded.report;
+  forwarded.report = buildCheckOutputData({
+    root: '/corpus',
+    durationMs: 200,
+    populated: { population: 'store', populationMs: 100, lensMs: 0, lensesEvaluated: [], membersEnumerated: 1 },
+    issues: [WARNED],
+    costs: [],
+  });
+  try {
+    const { stderr } = await captureProcessExit(async () => {
+      await runResourcesCheckPhase({ root: ROOT, debug: false, verbose });
+    });
+    return stderr;
+  } finally {
+    forwarded.report = previous;
+  }
+}
+
+describe('runResourcesCheckPhase — the child\'s findings on this process\'s stderr', () => {
+  it('prints a warning finding line under verbose: true, and no collapsed hint', async () => {
+    const stderr = await stderrAt(true);
+
+    expect(stderr).toContain('docs/a.md: warning: a.md is flagged [CUSTOM:warn-a]');
+    expect(stderr).not.toContain('not shown');
+  });
+
+  it('collapses it into the hint under verbose: false', async () => {
+    const stderr = await stderrAt(false);
+
+    expect(stderr).not.toContain('[CUSTOM:warn-a]');
+    expect(stderr).toContain('1 warning/info finding(s) not shown');
+  });
+});

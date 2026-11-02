@@ -438,6 +438,12 @@ function inCollectionScope(
   });
 }
 
+/** The human half, on stderr — except under `--format text`, whose stdout already IS these lines. */
+function reportOnStderr(findings: readonly Finding[], options: ValidateOptions): void {
+  if ((options.format ?? 'yaml') === 'text') return;
+  reportFindings(findings, { verbose: options.verbose === true, write: createLogger().error });
+}
+
 /**
  * Validate resources and hand back the report, printing it nowhere.
  *
@@ -457,11 +463,7 @@ export async function runResourcesValidatePhase(
 
   try {
     const report = await runValidation(pathArg, options, logger, startTime);
-    // The human half, on stderr — the document on stdout is unchanged by it. Not
-    // under `--format text`, whose stdout already IS these lines.
-    if (options.format !== 'text') {
-      reportFindings(report.findings, { verbose: options.verbose === true, write: logger.error });
-    }
+    reportOnStderr(report.findings, options);
     return { report };
   } catch (error) {
     return { report: refusalReport(refusalCodeOf(error), error, GATE, NOTHING_FINISHED) };
@@ -474,13 +476,8 @@ export async function validateCommand(
 ): Promise<void> {
   const { report } = await runResourcesValidatePhase(pathArg, options);
   const published = publishedReport(VERB, report);
-  // The writer's own zero-examined refusal, reported in the lane that publishes it — on stderr
-  // unless `--format text`, whose stdout already carries it as the same line.
-  if ((options.format ?? 'yaml') !== 'text') {
-    reportFindings(findingsAddedByRunIntegrity(report, published), {
-      verbose: options.verbose === true, write: createLogger().error,
-    });
-  }
+  // The writer's own zero-examined refusal, reported in the lane that publishes it.
+  reportOnStderr(findingsAddedByRunIntegrity(report, published), options);
   endWithReport('resources validate', published, options.format ?? 'yaml');
 }
 

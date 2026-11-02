@@ -91,6 +91,7 @@ describe('path-utils realpath helpers: absence is the only failure answered lexi
       const present = safePath.join(root, 'musl.md');
       fs.writeFileSync(present, '');
       restore = refuseNativeRealpathOf(present, 'ENOENT');
+      // eslint-disable-next-line local/no-fs-realpathSync -- the oracle: this asserts equivalence with Node's own realpath, so it must not route through normalizePath
       expect(normalizePath(present, { within: root })).toBe(fs.realpathSync(present));
     });
 

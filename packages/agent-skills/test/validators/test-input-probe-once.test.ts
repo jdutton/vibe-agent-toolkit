@@ -34,8 +34,10 @@
 
 import * as fs from 'node:fs';
 
+
 import type * as Utils from '@vibe-agent-toolkit/utils';
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_EVALS_SUBPATH } from '../../src/skill-test/eval-suite-isolation.js';
@@ -127,7 +129,7 @@ describe('a run-scoped conventional-suite probe', () => {
     const names = ['batched-a', 'batched-b'];
     const skillDirs = names.map((name) => safePath.join(tempDir, name));
     for (const [index, skillDir] of skillDirs.entries()) {
-      fs.mkdirSync(skillDir, { recursive: true });
+      mkdirSyncReal(skillDir, { recursive: true });
       fs.writeFileSync(
         safePath.join(skillDir, 'SKILL.md'),
         createSkillContent({

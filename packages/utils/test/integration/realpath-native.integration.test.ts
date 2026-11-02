@@ -1,3 +1,4 @@
+/* eslint-disable local/no-fs-realpathSync -- the oracle: this asserts equivalence with Node's own realpath, so it must not route through normalizePath */
 import * as nodeFs from 'node:fs';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 

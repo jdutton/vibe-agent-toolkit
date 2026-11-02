@@ -32,13 +32,16 @@
  *   of figure above, so a repeat launched straight from the lab is measured from
  *   its own start. `test/integration/memory-probe.integration.test.ts` pins it.
  * - **Only vat's own processes.** A process is vat's when its
- *   main script (`process.argv[1]`, links resolved — npm's `.bin/vat` is one)
+ *   main script (`process.argv[1]`, its own links read — npm's `.bin/vat` is one)
  *   belongs to one of {@link VAT_PACKAGE_NAMES}: the nearest `package.json`
- *   above it names the launcher or the CLI. Decided by the probe from the
+ *   above it names the launcher or the CLI and is not `private` (the
+ *   monorepo's root shares the launcher's name). Decided by the probe from the
  *   install alone, so it holds for every vat ever published — a build needs no
  *   cooperation to be measured — and it excludes what vat is not: `npm` under
  *   `npx`, a `node -e`, a tool vat spawns.
- * - **Read at exit.** A high-water mark is monotonic, so exit is the peak. A
+ * - **Read at exit, FIRST.** A high-water mark is monotonic, but the preload's
+ *   `exit` listener is registered before vat's own, so it runs before them:
+ *   what vat's synchronous exit handlers allocate is not in the figure. A
  *   process killed by a signal, or one V8 aborts out of heap, never runs its
  *   `exit` listeners and leaves no dump — the capture reports that repeat as
  *   unmeasured rather than as a small number.
@@ -66,6 +69,9 @@ const LOG_DIR_ENV = 'VAT_LAB_RSS_LOG';
 
 /** The packages whose scripts are vat: the umbrella launcher, and the CLI it delegates to. */
 const VAT_PACKAGE_NAMES: ReadonlySet<string> = new Set(['vibe-agent-toolkit', '@vibe-agent-toolkit/cli']);
+
+/** Links read from a main script before the probe gives up deciding — a cycle, not an install. */
+const MAX_LINK_HOPS = 40;
 
 /** Where Linux states this process image's resident high-water mark. */
 const PROC_STATUS = '/proc/self/status';
@@ -99,8 +105,9 @@ function ownedByVat(file: string): boolean {
     if (fs.lstatSync(manifest, { throwIfNoEntry: false }) !== undefined) {
       try {
         const parsed: unknown = JSON.parse(fs.readFileSync(manifest, 'utf-8'));
-        const name = typeof parsed === 'object' && parsed !== null ? (parsed as { name?: unknown }).name : undefined;
-        return typeof name === 'string' && VAT_PACKAGE_NAMES.has(name);
+        const owner = typeof parsed === 'object' && parsed !== null ? (parsed as { name?: unknown; private?: unknown }) : {};
+        // Published packages only: the monorepo's private root is named `vibe-agent-toolkit` too.
+        return typeof owner.name === 'string' && VAT_PACKAGE_NAMES.has(owner.name) && owner.private !== true;
       } catch (error) {
         return undecided(manifest, error);
       }
@@ -118,16 +125,21 @@ function ownedByVat(file: string): boolean {
  */
 function isVatMainScript(main: string | undefined): boolean {
   if (main === undefined || main === '') return false;
-  let real: string;
+  let file = path.resolve(main);
   try {
     // The installed `.bin/vat` is a link into the package, and its own directory
-    // owns nothing — so the link is followed. The path is this process's own
-    // main script, which the operator launched, never a crawled entry.
-    real = fs.realpathSync(main);
+    // owns nothing — so the script's own link is read, by its text, hop by hop.
+    // A link among its ancestors needs no reading: the walk up to the nearest
+    // `package.json` passes through it.
+    let hops = 0;
+    while (fs.lstatSync(file).isSymbolicLink()) {
+      if (++hops > MAX_LINK_HOPS) throw new Error(`more than ${String(MAX_LINK_HOPS)} links`);
+      file = path.resolve(path.dirname(file), fs.readlinkSync(file));
+    }
   } catch (error) {
     return undecided(main, error);
   }
-  return ownedByVat(real);
+  return ownedByVat(file);
 }
 
 /**
@@ -157,11 +169,10 @@ function peakRssKb(): number {
  * failure is said on stderr: a missing dump nobody mentioned would read as a
  * process that never ran.
  *
- * @param logDir - Directory to write into
+ * @param logDir - Directory to write into — the capture's own, made before the process started
  */
 function writeDump(logDir: string): void {
   try {
-    fs.mkdirSync(logDir, { recursive: true });
     const dump = JSON.stringify({ pid: process.pid, maxRssKb: peakRssKb() });
     const file = path.join(logDir, `rss-${String(process.pid)}-${crypto.randomUUID()}.json`);
     fs.writeFileSync(file, dump, { flag: 'wx' });

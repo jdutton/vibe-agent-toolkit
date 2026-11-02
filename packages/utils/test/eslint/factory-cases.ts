@@ -117,6 +117,7 @@ export function unsafeCallRuleCases(
   /** Whether a call in VALUE position (`const r = …`) is autofixed rather than only suggested. */
   const valueCallAutofixed = rewrite === 'fix';
   const unsafeImport = `import { ${unsafeFn} } from '${unsafeModule}';`;
+  const namespaceImport = `import * as m from '${unsafeModule}';`;
   const safeImport = `import { ${safeFn} } from '${safeModule}';`;
   const unsafeCode = `${unsafeImport}\nconst r = ${unsafeFn}(x);`;
   // NO call's fix removes the unsafe import — autofix or suggestion. A suppressed
@@ -170,6 +171,13 @@ export function unsafeCallRuleCases(
       { code: `import { ${unsafeFn} } from 'memfs';\n${unsafeFn}(x);`, filename: LINTED_FILE, options },
       { code: `function ${unsafeFn}(p: string) { return p; }\n${unsafeFn}(x);`, filename: LINTED_FILE, options },
       { code: `${unsafeImport}\nexport function f(${unsafeFn}: (p: string) => void) { ${unsafeFn}(x); }`, filename: LINTED_FILE, options },
+      // A parameter that SHADOWS the namespace's name is not the namespace: resolved through
+      // scope, not by name, so it is neither reported nor rewritten.
+      {
+        code: `${namespaceImport}\nexport function f(m: { ${unsafeFn}(p: string): string }) { return m.${unsafeFn}(x); }`,
+        filename: LINTED_FILE,
+        options,
+      },
     ],
     invalid: [
       { code: unsafeCode, filename: LINTED_FILE, options, ...rewritten(output, suggestedOutput) },
@@ -189,6 +197,25 @@ export function unsafeCallRuleCases(
         ...rewritten(
           `import { ${safeFn} } from '${BARREL}';\n${unsafeImport}\nconst r = ${safeFn}(x${extra});`,
           `import { ${safeFn} } from '${BARREL}';\n${unsafeImport}\nconst r = ${safeFn}(x${extra});`,
+        ),
+      },
+      // Reached through a NAMESPACE binding — a member call, and a destructure of the
+      // namespace — the shapes `fs-binding-scan.cjs` resolves for every rule that bans a
+      // function of a module. Each is the module's own function, and the whole callee is
+      // replaced by the free safe function.
+      {
+        code: `${namespaceImport}\nconst r = m.${unsafeFn}(x);`,
+        filename: LINTED_FILE,
+        options,
+        ...rewritten(`${namespaceImport}\n${safeImport}\nconst r = ${safeFn}(x${extra});`, `${namespaceImport}\n${safeImport}\nconst r = ${safeFn}(x${extra});`),
+      },
+      {
+        code: `${namespaceImport}\nconst { ${unsafeFn} } = m;\nconst r = ${unsafeFn}(x);`,
+        filename: LINTED_FILE,
+        options,
+        ...rewritten(
+          `${namespaceImport}\n${safeImport}\nconst { ${unsafeFn} } = m;\nconst r = ${safeFn}(x${extra});`,
+          `${namespaceImport}\n${safeImport}\nconst { ${unsafeFn} } = m;\nconst r = ${safeFn}(x${extra});`,
         ),
       },
       ...(typeof rewrite === 'object' && 'autofixAsStatement' in rewrite

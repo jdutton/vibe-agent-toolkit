@@ -7,6 +7,7 @@ import {
   BUILD_OUTPUT_GLOBS,
   crawlDirectorySync,
   crawlPathFilter,
+  NEVER_CONTENT_GLOBS,
   NEVER_CRAWL_GLOBS,
 } from '../src/file-crawler.js';
 import { mkdirSyncReal, safePath, toForwardSlash } from '../src/path-utils.js';
@@ -47,6 +48,30 @@ describe('the canonical crawl-exclusion lists', () => {
   // moves it to the other list has to argue with this line.
   it('does not classify .turbo as build output', () => {
     expect([...BUILD_OUTPUT_GLOBS]).not.toContain(TURBO_GLOB);
+  });
+});
+
+describe('NEVER_CONTENT_GLOBS — the never-authored part of NEVER_CRAWL_GLOBS', () => {
+  it('is exactly dependencies, git internals, worktree copies and staging residue', () => {
+    expect([...NEVER_CONTENT_GLOBS]).toEqual([
+      '**/node_modules/**',
+      '**/.git/**',
+      '**/.worktrees/**',
+      '**/.claude/worktrees/**',
+      '**/.*.vat-staged-*',
+      '**/.*.vat-staged-*/**',
+    ]);
+  });
+
+  it('is NEVER_CRAWL_GLOBS less only the tool-output names an author may also use', () => {
+    expect(NEVER_CRAWL_GLOBS.filter((glob) => !NEVER_CONTENT_GLOBS.includes(glob)).toSorted((a, b) => a.localeCompare(b)))
+      .toEqual(['**/.test-output/**', '**/.turbo/**', '**/coverage/**']);
+  });
+
+  it('cannot be mutated by a consumer, and neither can the lists it is composed beside', () => {
+    expect(Object.isFrozen(NEVER_CONTENT_GLOBS)).toBe(true);
+    expect(Object.isFrozen(NEVER_CRAWL_GLOBS)).toBe(true);
+    expect(Object.isFrozen(BUILD_OUTPUT_GLOBS)).toBe(true);
   });
 });
 

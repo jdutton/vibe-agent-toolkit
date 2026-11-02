@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
 
 import type { MarketplaceValidateReport } from '@vibe-agent-toolkit/schema';
-import { createSymlink, mkdirSyncReal, relativeEscapesRoot, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { createSymlink, mkdirSyncReal, normalizePath, relativeEscapesRoot, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { runMarketplaceValidatePhase } from '../src/commands/claude/marketplace/validate.js';
@@ -98,7 +98,7 @@ describe.skipIf(SYMLINK_CAP === null)('a link naming a network path is refused b
 
   it('vat claude marketplace validate: a declared plugin source linked to a share is never resolved', async () => {
     const root = createTempDir();
-    fs.mkdirSync(safePath.join(root, '.claude-plugin'), { recursive: true });
+    mkdirSyncReal(safePath.join(root, '.claude-plugin'), { recursive: true });
     fs.writeFileSync(
       safePath.join(root, '.claude-plugin', 'marketplace.json'),
       JSON.stringify({ name: 'mp', owner: { name: 'owner' }, plugins: [{ name: 's', source: './plugins/s' }] }),
@@ -117,7 +117,8 @@ describe.skipIf(SYMLINK_CAP === null)('a link naming a network path is refused b
   });
 
   it('the symlink-divergence oracle records a corpus link to a share as unresolved, through the resolver', () => {
-    const root = toForwardSlash(fs.realpathSync(createTempDir()));
+    const made = createTempDir();
+    const root = toForwardSlash(normalizePath(made, { within: made }));
     const link = safePath.join(root, 'smb.md');
     createSymlink(SYMLINK_CAP ?? expect.unreachable(), UNC, link, 'file');
     const asked = spyOnTheKernel();

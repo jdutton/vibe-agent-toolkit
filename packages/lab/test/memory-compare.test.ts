@@ -124,6 +124,18 @@ describe('compareMemory', () => {
     expect(verdict.processes).toEqual({ before: 1, after: 2 });
   });
 
+  it('does not call a different process count CHANGED across instrument kinds, and says why', () => {
+    // An npx arm launches through a published package's own `bin`; a tree arm runs `dist/bin.js`.
+    const npx = makeReportAt({ instrument: { version: '0.1.43', commit: null, dirty: null, closure: null } });
+    const result = compareMemory(reportWith(row(GIB_KB)), reportWith(row(GIB_KB, { processesPerRepeat: [2, 2, 2] }), npx));
+    if (!result.ok) throw new Error(result.refusal);
+    const [diff] = result.commands;
+
+    expect(diff?.verdict.kind).toBe('unchanged');
+    expect(diff?.caveat).toContain('instrument kinds differ (tree vs npx)');
+    expect(renderMemoryComparison(result)).toContain('instrument kinds differ (tree vs npx)');
+  });
+
   it('yields no delta when a side failed, and names the side', () => {
     const failed = row(0, { failed: true, failure: 'no RSS dumps', minKb: 0, maxKb: 0, iqrKb: 0, samplesKb: [], exitCode: null });
     const verdict = onlyVerdict(compared(row(GIB_KB), failed));

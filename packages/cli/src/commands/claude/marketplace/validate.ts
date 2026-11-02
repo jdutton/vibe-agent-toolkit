@@ -39,7 +39,7 @@ import { loadConfig } from '../../../utils/config-loader.js';
 import { endWithReport, NOTHING_FINISHED, publishedReport, refusalReport } from '../../../utils/document-writer.js';
 import { reportFindings } from '../../../utils/issue-rendering.js';
 import { resolveIssueSeverity } from '../../../utils/issue-severity.js';
-import { createLogger, type Logger } from '../../../utils/logger.js';
+import { createLogger } from '../../../utils/logger.js';
 import { assertReadableDirectoryArgument } from '../../../utils/project-root-policy.js';
 import { relativizePath } from '../../../utils/relativize-paths.js';
 import { findingsAddedByRunIntegrity, runIntegrityFinding } from '../../../utils/run-integrity.js';
@@ -894,13 +894,6 @@ function unreadManifests(
   return [...new Set(manifests)];
 }
 
-/** The human half, on stderr: every error in full, and the rest under `--verbose`. */
-function logFindings(report: Report<unknown>, verbose: boolean, logger: Logger): void {
-  reportFindings(report.findings, { verbose, write: logger.error });
-  const { errors, warnings, info } = report.summary;
-  logger.info(`${errors} error(s), ${warnings} warning(s), ${info} info`);
-}
-
 /**
  * Validate a marketplace and hand back its report, printing nothing on stdout.
  *
@@ -934,7 +927,8 @@ export async function runMarketplaceValidatePhase(
       issues,
       durationMs: Date.now() - startTime,
     });
-    logFindings(report, options.verbose === true, logger);
+    // The human half, on stderr: every error in full, and the rest under `--verbose`.
+    reportFindings(report.findings, { verbose: options.verbose === true, write: logger.error });
     return { report };
   } catch (error) {
     return { report: refusedReport(error) };
@@ -969,10 +963,11 @@ async function marketplaceValidateCommand(
     report = refusedReport(error);
   }
   const published = publishedReport('claude marketplace validate', report);
-  // The writer's own zero-examined refusal, reported in the lane that publishes it.
-  reportFindings(findingsAddedByRunIntegrity(report, published), {
-    verbose: options.verbose === true, write: createLogger().error,
-  });
+  // The writer's own zero-examined refusal, then the PUBLISHED counts: never "0 error(s)" beside exit 1.
+  const logger = createLogger();
+  reportFindings(findingsAddedByRunIntegrity(report, published), { verbose: options.verbose === true, write: logger.error });
+  const { errors, warnings, info } = published.summary;
+  logger.info(`${errors} error(s), ${warnings} warning(s), ${info} info`);
   // This command offers no `--format`: its document is YAML.
   endWithReport('claude marketplace validate', published, 'yaml');
 }

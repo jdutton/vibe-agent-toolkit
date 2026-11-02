@@ -44,7 +44,7 @@ describe(NAME, () => {
 /**
  * A dangling MEMBER, which a `no-undef` fixpoint check is blind to.
  *
- * `no-os-tmpdir` is the one rule with `checkMemberExpression`, and its fixer
+ * `no-os-tmpdir` was the first rule to report a member call, and its fixer
  * rewrote only the property — turning `os.tmpdir()` into
  * `os.normalizedTmpdir()`, a method that does not exist on the `node:os`
  * namespace. The replacement is a free function from this package, and the

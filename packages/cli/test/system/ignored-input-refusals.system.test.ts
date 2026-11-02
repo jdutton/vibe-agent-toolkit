@@ -107,7 +107,7 @@ describe('input a verb used to ignore is refused (system test)', () => {
     });
 
     it('naming a directory is INPUT_UNREADABLE', () => {
-      fs.mkdirSync(safePath.join(pluginDir, 'settings-dir'), { recursive: true });
+      mkdirSyncReal(safePath.join(pluginDir, 'settings-dir'), { recursive: true });
       expectAuditRefusal(['--compat', '--settings', 'settings-dir'], 'INPUT_UNREADABLE', 'settings-dir');
     });
 

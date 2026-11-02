@@ -9,6 +9,7 @@ import * as fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -41,7 +42,7 @@ function expectSuccessfulAudit(result: Awaited<ReturnType<typeof executeCli>>): 
 function createLinkedSkill(baseDir: string): string {
   const skillDir = safePath.join(baseDir, 'test-skill');
   const resourcesDir = safePath.join(skillDir, 'resources');
-  fs.mkdirSync(resourcesDir, { recursive: true });
+  mkdirSyncReal(resourcesDir, { recursive: true });
 
   // SKILL.md with links to resources
   fs.writeFileSync(safePath.join(skillDir, 'SKILL.md'), `---
@@ -144,7 +145,7 @@ describe.skipIf(process.platform === 'win32')('Audit Dogfooding (system test)', 
 
     it('should detect broken links via CLI', async () => {
       const brokenDir = safePath.join(tempDir, 'broken-skill');
-      fs.mkdirSync(brokenDir, { recursive: true });
+      mkdirSyncReal(brokenDir, { recursive: true });
 
       fs.writeFileSync(safePath.join(brokenDir, 'SKILL.md'), `---
 name: broken-links-skill

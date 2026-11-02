@@ -51,6 +51,7 @@ import { Command } from 'commander';
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, leftoverIssue, NOTHING_FINISHED, type FinishedWork } from '../../utils/document-writer.js';
 import { extractSkillZip, inStaging, installUnit, occupiedRefusal, skillCopyChange } from '../../utils/install-plan.js';
+import { formatFindingLine } from '../../utils/issue-rendering.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { requireInputPath } from '../../utils/project-root-policy.js';
 
@@ -424,7 +425,7 @@ export async function installCommand(
       skills: [],
     };
     const outcome = await withResolvedSource(source, run, (resolved) => installFromDir(resolved, base, options, progress, run));
-    for (const leftover of run.leftovers) logger.warn(`   ${leftover.message}`);
+    for (const leftover of run.leftovers) logger.warn(`   ${formatFindingLine(leftover)}`);
     report = buildReport({ ...outcome, findings: [...outcome.findings, ...toFindings(run.leftovers)], gate: GATE });
   } catch (error) {
     // Validation that finished is published even when nothing was installed; a refusal installed nothing.

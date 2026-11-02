@@ -46,16 +46,17 @@ function scratchDir(prefix: string): string {
 }
 
 /**
- * Write `source` as a main script at `relativePath` inside a package named `name`.
+ * Write `source` as a main script at `relativePath` inside a package.
  *
- * @param name - The owning `package.json`'s name, or null for a script no package owns
+ * @param owner - The owning `package.json`: its name, the whole manifest, or null for a script no package owns
  * @param relativePath - Where the script sits inside the package
  * @param source - The script
  * @returns The script's path
  */
-function mainScript(name: string | null, relativePath: string, source: string): string {
+function mainScript(owner: string | Readonly<Record<string, unknown>> | null, relativePath: string, source: string): string {
   const root = scratchDir('lab-rss-package-');
-  if (name !== null) writeFileSync(safePath.join(root, 'package.json'), JSON.stringify({ name }));
+  const manifest = typeof owner === 'string' ? { name: owner } : owner;
+  if (manifest !== null) writeFileSync(safePath.join(root, 'package.json'), JSON.stringify(manifest));
   const script = safePath.join(root, relativePath);
   mkdirSyncReal(safePath.join(script, '..'), { recursive: true });
   writeFileSync(script, source);
@@ -200,6 +201,12 @@ describe('the RSS probe', () => {
     expect(runWithProbe(mainScript('npm', 'bin/npm-cli.js', allocate(1)), '')).toEqual([]);
     expect(runWithProbe(mainScript(null, 'loose.js', allocate(1)), '')).toEqual([]);
     expect(runWithProbe(['-e', allocate(1)], '')).toEqual([]);
+  });
+
+  it('writes nothing for a script under a private manifest named like vat — the monorepo root is one', () => {
+    const rootScript = mainScript({ name: 'vibe-agent-toolkit', private: true }, 'scripts/tool.js', allocate(1));
+
+    expect(runWithProbe(rootScript, '')).toEqual([]);
   });
 
   it('writes nothing for a node child vat spawns, though it inherits the probe', () => {

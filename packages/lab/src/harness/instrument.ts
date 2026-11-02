@@ -61,8 +61,8 @@
  *
  * `kind: 'npx'` is the one route still exposed to this: `npx` runs the published
  * package's `bin`, which *is* the wrapper, so a published instrument remains
- * subject to cwd re-resolution. Known limitation, recorded rather than papered
- * over.
+ * subject to cwd re-resolution in every facet but `memory`, which installs the
+ * spec and runs its `dist/bin.js` (see `facets/memory/npx-entry.ts`).
  *
  * ## Windows
  *

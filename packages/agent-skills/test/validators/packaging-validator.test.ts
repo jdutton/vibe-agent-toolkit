@@ -4,8 +4,10 @@
 
 import * as fs from 'node:fs';
 
+
 import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
@@ -1021,7 +1023,7 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 	] as const)('LINK_OUTSIDE_SKILL_DIR under %s', async (_label, severity, expectedSeverities, expectedErrors) => {
 		const tempDir = getTempDir();
 		const skillDir = safePath.join(tempDir, 'skill');
-		fs.mkdirSync(skillDir, { recursive: true });
+		mkdirSyncReal(skillDir, { recursive: true });
 		fs.writeFileSync(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), '{}\n');
 		fs.writeFileSync(safePath.join(tempDir, 'shared.md'), '# Shared\n');
 		const { skillPath } = createTransitiveSkillStructure(skillDir, {}, createSkillContent(
@@ -1043,7 +1045,7 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 	it('navigational directory link produces no error and needs no allow entry', async () => {
 		const tempDir = getTempDir();
 		const conceptsDir = safePath.join(tempDir, 'docs/sub');
-		fs.mkdirSync(conceptsDir, { recursive: true });
+		mkdirSyncReal(conceptsDir, { recursive: true });
 		fs.writeFileSync(safePath.join(conceptsDir, 'README.md'), '# Sub');
 
 		const skillContent = createSkillContent(
@@ -1228,7 +1230,7 @@ describe('validateSkillForPackaging - Files config validation', () => {
 		const tempDir = getTempDir();
 		// Create a real directory at the source path
 		const srcDir = safePath.join(tempDir, FILES_DIR_SOURCE);
-		fs.mkdirSync(srcDir, { recursive: true });
+		mkdirSyncReal(srcDir, { recursive: true });
 
 		const skillPath = createMinimalSkill(tempDir);
 
@@ -1335,7 +1337,7 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 	it('navigational directory link does not produce LINK_TARGETS_DIRECTORY error', async () => {
 		const tempDir = getTempDir();
 		const conceptsDir = safePath.join(tempDir, 'concepts');
-		fs.mkdirSync(conceptsDir, { recursive: true });
+		mkdirSyncReal(conceptsDir, { recursive: true });
 		fs.writeFileSync(safePath.join(conceptsDir, 'README.md'), '# Concepts');
 
 		const skillContent = createSkillContent(

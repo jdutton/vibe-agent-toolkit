@@ -51,5 +51,8 @@ describe('claude marketplace validate — the writer\'s refusal reaches stderr',
     expect(captured.stderr.split(`error: ${refusal?.message ?? '<no refusal>'} [RESOURCE_CHECK_BROKEN]`)).toHaveLength(2);
     expect(captured.stderr.split(refusal?.message ?? '<no refusal>')).toHaveLength(2);
     expect(captured.stderr).not.toContain('Warning:');
+    // The count line is the published document's, never the pre-refusal "0 error(s)" beside exit 1.
+    expect(captured.stderr).not.toContain('0 error(s)');
+    expect(captured.stderr).toContain(`${document.summary.errors} error(s)`);
   });
 });

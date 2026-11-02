@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { relativeEscapesRoot, safePath } from '../../src/path-core.js';
@@ -202,7 +203,7 @@ describe('installFaultFs reaches every way VAT and its dependencies call fs', ()
   it('settled() resolves only once the fs work started under the session has stopped', async () => {
     const root = scratch.create();
     const dirs = ['a', 'b', 'c', 'd'].map((dir) => safePath.join(root, 'tree', dir));
-    for (const dir of dirs) nodeFs.mkdirSync(safePath.join(dir, 'x', 'y'), { recursive: true });
+    for (const dir of dirs) mkdirSyncReal(safePath.join(dir, 'x', 'y'), { recursive: true });
     const failing = dirs[0];
     session = installFaultFs({ within: root, faults: [{ family: 'list', op: 'readdir', path: (p) => p === failing, errno: 'ENOTDIR' }] });
     await expect(Promise.all(dirs.map((dir) => listDown(dir, ['x', 'y'])))).rejects.toMatchObject({ code: 'ENOTDIR' });

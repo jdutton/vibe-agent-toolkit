@@ -43,7 +43,7 @@ export function setupInstallTestSuite(testPrefix: string, testFileUrl: string): 
       suite.tempDir = createTestTempDir(testPrefix);
       suite.projectDir = safePath.join(suite.tempDir, 'project');
       suite.skillsDir = safePath.join(suite.projectDir, '.claude', 'skills');
-      fs.mkdirSync(suite.skillsDir, { recursive: true });
+      mkdirSyncReal(suite.skillsDir, { recursive: true });
     },
     afterEach: () => {
       if (suite.tempDir) {

@@ -15,6 +15,7 @@
 import * as fs from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
@@ -131,7 +132,7 @@ describe('vat inventory (system test)', () => {
 		it('exits 0 with the parse error in data.inventory.parseErrors[]', () => {
 			// Invalid JSON in plugin.json: the inventory records it; judging it is `vat audit`'s job.
 			const brokenPluginDir = safePath.join(tempDir, 'broken-plugin');
-			fs.mkdirSync(safePath.join(brokenPluginDir, '.claude-plugin'), { recursive: true });
+			mkdirSyncReal(safePath.join(brokenPluginDir, '.claude-plugin'), { recursive: true });
 			fs.writeFileSync(safePath.join(brokenPluginDir, '.claude-plugin', 'plugin.json'), '{ invalid json !!!', 'utf-8');
 
 			const { status, report } = inventory([brokenPluginDir]);
@@ -193,7 +194,7 @@ describe('vat inventory (system test)', () => {
 		it('--user: an unreadable ~/.claude/plugins is refused, not read as an empty install', () => {
 			const home = safePath.join(tempDir, 'home-locked');
 			const plugins = safePath.join(home, '.claude', 'plugins');
-			fs.mkdirSync(safePath.join(plugins, 'marketplaces'), { recursive: true });
+			mkdirSyncReal(safePath.join(plugins, 'marketplaces'), { recursive: true });
 
 			const { status, report } = withLocked(plugins, ['--user'], { ...process.env, ...fakeHomeEnv(home) });
 

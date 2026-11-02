@@ -21,6 +21,7 @@ import * as fs from 'node:fs';
 import { delimiter } from 'node:path';
 
 import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { spawnHardened } from '@vibe-agent-toolkit/utils/process';
 import { atLeastTierTimeout, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, inject, it } from 'vitest';
@@ -40,7 +41,7 @@ interface Fixture {
 
 function writeFixture(root: string): Fixture {
   const srcDir = safePath.join(root, 'src');
-  fs.mkdirSync(srcDir, { recursive: true });
+  mkdirSyncReal(srcDir, { recursive: true });
 
   fs.writeFileSync(
     safePath.join(root, 'tsconfig.json'),

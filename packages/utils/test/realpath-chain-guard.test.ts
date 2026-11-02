@@ -9,6 +9,7 @@
  */
 import fs from 'node:fs';
 
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { LINK_CHAIN_REFUSED_CODE } from '../src/errors/errno-table.js';
@@ -53,7 +54,7 @@ function spyOnTheKernel(): { asked: string[]; restore: () => void } {
 /** Under `root`: `smb -> \\attacker\share`, `a -> b -> smb`, `ok -> docs`; then the kernel spied on. */
 function planted(root: string, skip: () => never): ReturnType<typeof spyOnTheKernel> {
   const cap = symlinkCapability() ?? skip();
-  fs.mkdirSync(safePath.join(root, 'docs'));
+  mkdirSyncReal(safePath.join(root, 'docs'));
   createSymlink(cap, UNC, safePath.join(root, 'smb'), 'dir');
   createSymlink(cap, 'smb', safePath.join(root, 'b'), 'dir');
   createSymlink(cap, 'b', safePath.join(root, 'a'), 'dir');
@@ -70,7 +71,8 @@ describe('the link-following primitives ask the kernel only about a chain read a
   afterAll(suite.afterAll);
   beforeEach(() => {
     suite.beforeEach();
-    root = toForwardSlash(fs.realpathSync(suite.getTempDir()));
+    const made = suite.getTempDir();
+    root = toForwardSlash(normalizePath(made, { within: made }));
   });
   afterEach(() => {
     kernel?.restore();

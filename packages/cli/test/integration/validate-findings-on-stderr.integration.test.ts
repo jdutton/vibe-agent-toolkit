@@ -24,13 +24,14 @@ const context = createSuiteContext('vat-validate-findings-stderr-', import.meta.
 
 /**
  * Whether stderr carries the one finding this corpus produces — `docs/a.md`
- * line 3 links a file that does not exist — as one `location:line: error: … [CODE]` line.
+ * line 3 links a file that does not exist — as EXACTLY one `location:line: error: … [CODE]` line:
+ * a lane that printed it twice would read as two broken links.
  */
 function namesBrokenLink(stderr: string): boolean {
-  return stderr.split('\n').some((line) => {
+  return stderr.split('\n').filter((line) => {
     const trimmed = line.trim();
     return trimmed.startsWith('docs/a.md:3') && trimmed.includes(': error: ') && trimmed.endsWith('[LINK_BROKEN_FILE]');
-  });
+  }).length === 1;
 }
 
 /** Whether stderr carries `check`'s finding on `path` as one finding line of `severity`. */
@@ -125,6 +126,12 @@ describe('a warning finding on stderr', () => {
     expect(result.stderr).toContain('1 warning/info finding(s) not shown — re-run with --verbose, or read the report on stdout');
     const report = CHECK_REPORT_SCHEMA.parse(yaml.parse(result.stdout));
     expect(report.findings.map((finding) => finding.code)).toContain('CUSTOM:warn-a');
+  });
+
+  it('is printed by vat validate -v, through its checks phase', async () => {
+    const result = await run(['validate', '-v']);
+
+    expect(namesCheck(result.stderr, 'docs/a.md', 'warning', 'warn-a'), result.stderr).toBe(true);
   });
 
   it('is printed under -v, and then no hint is', async () => {

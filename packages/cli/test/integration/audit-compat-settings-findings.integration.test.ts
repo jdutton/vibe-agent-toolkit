@@ -10,8 +10,10 @@
 
 import fs from 'node:fs';
 
+
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 
@@ -78,7 +80,7 @@ describe('vat audit --compat --settings: a settings conflict is a finding', () =
   // finding says so: the document must, or its `status: ok` is a verdict over fewer files than it claims.
   it('publishes a path the analyzer could not read as COMPAT_NOT_CHECKED at that path, once', () => {
     const broken = writeSettingsPlugin(tempDir, 'broken-hooks-plugin', {});
-    fs.mkdirSync(safePath.join(broken, 'hooks'), { recursive: true });
+    mkdirSyncReal(safePath.join(broken, 'hooks'), { recursive: true });
     fs.writeFileSync(safePath.join(broken, HOOKS), '{ this is not JSON');
 
     const envelope = parseYaml(runAuditCli(broken, ['--compat']).stdout) as Envelope & { data: { files: Array<{ type: string; compatibility?: { unchecked?: Array<{ path: string }> } }> } };

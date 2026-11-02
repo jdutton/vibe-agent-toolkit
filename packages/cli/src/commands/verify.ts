@@ -823,8 +823,13 @@ export function reportPackagedContentPhase(
   const { findings, data, examined } = phase.report;
   if (findings.length > 0) {
     reportInProcessPhase(PACKAGED_CONTENT, findings, logger);
-  } else if (data !== null && data.bundlesExpected === 0 && examined === 0) {
-    logger.info(`\n▶ Phase: ${PACKAGED_CONTENT} — nothing to inspect: all ${data.bundlesInPlace} discovered skill(s) are in place (publish: false)`);
+  } else if (examined > 0) {
+    return;
+  } else if ('zeroIsAnAnswer' in packagedContentExamined(phase.report)) {
+    logger.info(`\n▶ Phase: ${PACKAGED_CONTENT} — nothing to inspect: all ${data?.bundlesInPlace ?? 0} discovered skill(s) are in place (publish: false)`);
+  } else {
+    // Its own banner: `runPhase` prints the zero-bundle refusal next.
+    reportInProcessPhase(PACKAGED_CONTENT, [], logger);
   }
 }
 

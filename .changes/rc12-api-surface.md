@@ -2,18 +2,20 @@
 
 - **`normalizePath(target, { within })` replaces `normalizePath(...paths)`** (`@vibe-agent-toolkit/utils`,
   library-only). A relative `target` resolves against cwd; `within` is the tree being crawled (pass `target`
-  itself for the operator's own path). No old spelling compiles. Migrate each by its arity:
-  - `normalizePath(rel, base)` — the old two-path form resolved its FIRST argument against its SECOND →
-    `normalizePath(safePath.resolve(base, rel), { within: base })`.
-  - `normalizePath(a, b)` with an ABSOLUTE first argument — the old form returned `a` and ignored `b`, so
-    the call was almost always written root-first: you probably meant
-    `normalizePath(safePath.resolve(a, b), { within: a })`.
-  - `normalizePath(a, b, c, …)` — three or more resolved left to right → `normalizePath(safePath.resolve(a, b, c, …), { within: a })`,
-    or plain `safePath.resolve(a, b, c, …)` where the caller never needed the real path.
-  - `normalizePath(rel)` with a relative path → `path.normalize(rel)`. The old one-path form returned a
-    relative path and touched no filesystem; `normalizePath` now always returns an absolute,
-    filesystem-resolved one.
-  - `normalizePath(abs)` with an absolute path → `normalizePath(abs, { within: abs })`.
+  itself for the operator's own path). No old spelling compiles.
+  - **From 0.2.0-rc.12**, which shipped `normalizePath(target, within: string)`:
+    `normalizePath(t, w)` → `normalizePath(t, { within: w })`.
+  - **From 0.1.x**, `normalizePath(...paths)`, migrate each call by its arity:
+    - `normalizePath(rel, base)` — the old two-path form resolved its FIRST argument against its SECOND →
+      `normalizePath(safePath.resolve(base, rel), { within: base })`.
+    - `normalizePath(a, b)` with an ABSOLUTE first argument — the old form resolved `a` against `b`, which
+      an absolute `a` ignores, and returned the real path of `a` → `normalizePath(a, { within: a })`.
+    - `normalizePath(a, b, c, …)` — three or more resolved left to right → `normalizePath(safePath.resolve(a, b, c, …), { within: a })`,
+      or plain `safePath.resolve(a, b, c, …)` where the caller never needed the real path.
+    - `normalizePath(rel)` with a relative path → `path.normalize(rel)`. The old one-path form returned a
+      relative path and touched no filesystem; `normalizePath` now always returns an absolute,
+      filesystem-resolved one.
+    - `normalizePath(abs)` with an absolute path → `normalizePath(abs, { within: abs })`.
 - **`new FsLookupCache(within)` and `crawlDirectorySync({ outputs, … })` take required arguments**
   (`@vibe-agent-toolkit/utils`, library-only): the cache names the tree its paths are crawled in, and
   `crawlDirectorySync` requires `outputs` exactly as `crawlDirectory` does (`[]` for a read-only caller).

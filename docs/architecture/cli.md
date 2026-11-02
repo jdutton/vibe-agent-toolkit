@@ -287,8 +287,10 @@ A verb that finds something publishes it twice: in full in the stdout document, 
 stderr. Both spell a finding with the one formatter, `formatFindingLine` in
 `packages/cli/src/utils/issue-rendering.ts`; a flat-findings lane prints them through
 `reportFindings`, which puts every error first and adds warnings and info only under `--verbose`.
-Under `--format text` stdout already is these lines, so stderr carries none — see
-[The report contract](#the-report-contract).
+A verb whose `--format text` document prints one line per finding (`vat resources validate`)
+carries none on stderr under that format, because stdout already is these lines. `vat ard emit` is the exception: its text document is one summary line, so under
+`--format text` the findings go to stderr, and under `--format json` they are only in the
+report. See [The report contract](#the-report-contract).
 
 #### Finding lines (stderr)
 

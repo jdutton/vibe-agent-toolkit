@@ -30,8 +30,10 @@
 
 import fs from 'node:fs';
 
+
 import { countBySeverity, type SeverityCounts } from '@vibe-agent-toolkit/schema';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { AUDIT_REPORT_SCHEMA } from '../../src/commands/audit-schema.js';
@@ -40,7 +42,7 @@ import { anchorContractViolations, anchorsBelowRoot } from '../anchor-contract-h
 import { gitAddAll, initTestGitRepo, silentLogger } from '../test-helpers.js';
 
 function writeFileAt(filePath: string, content: string): void {
-  fs.mkdirSync(safePath.resolve(filePath, '..'), { recursive: true });
+  mkdirSyncReal(safePath.resolve(filePath, '..'), { recursive: true });
   fs.writeFileSync(filePath, content, 'utf-8');
 }
 

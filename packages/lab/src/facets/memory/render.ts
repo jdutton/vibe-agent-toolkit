@@ -84,7 +84,7 @@ function diffLines(diff: MemoryComparisonResult['commands'][number]): readonly s
     const processes = was === now ? `${tally(now)} vat processes` : `vat processes ${tally(was)} -> ${tally(now)}`;
     return `median peak RSS ${formatKb(before)} -> ${formatKb(after)}${factor}, ${processes}`;
   };
-  return verdictBlock(diff.name, verdict, totals, () => []);
+  return verdictBlock(diff.name, verdict, totals, () => (diff.caveat === null ? [] : [`      note: ${diff.caveat}.`]));
 }
 
 /**

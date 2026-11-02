@@ -10,7 +10,7 @@ import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
-import { formatFindingLine } from '../../utils/issue-rendering.js';
+import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger } from '../../utils/logger.js';
 import { assertReadableDirectoryArgument, projectRootOrNull } from '../../utils/project-root-policy.js';
 import { requireWritableDatabase } from '../../utils/rag-database.js';
@@ -151,11 +151,6 @@ export async function indexCommand(
     // read; the second half is reported below, not dropped — see `unreadableIndexIssues`.
     const unreadable = unreadableIndexIssues(registry.getUnreadableResources(), crawlRoot);
     logger.debug(`Found ${allResources.length} resources to index (${unreadable.length} enumerated but unreadable)`);
-    for (const issue of unreadable) {
-      // On stderr as well, the way the provider reports its own per-resource
-      // failures, so a caller reading only the exit code still sees the name.
-      logger.warn(formatFindingLine(issue));
-    }
 
     requireWritableDatabase(dbPath, options.db !== undefined && options.db !== '');
 
@@ -172,10 +167,13 @@ export async function indexCommand(
       resource.id,
       toForwardSlash(safePath.relative(crawlRoot, resource.filePath)),
     ]));
+    const issues = [...unreadable, ...providerIndexIssues(indexResult.errors, locations)];
+    // On stderr too, so a caller reading only the exit code still sees each name.
+    reportFindings(issues, { verbose: false, write: logger.warn });
     report = buildIndexReport({
       examined: allResources.length + unreadable.length,
       result: indexResult,
-      issues: [...unreadable, ...providerIndexIssues(indexResult.errors, locations)],
+      issues,
       durationMs: Date.now() - startTime,
     });
   } catch (error) {

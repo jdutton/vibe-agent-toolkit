@@ -7,8 +7,8 @@
  * normalizePath() uses realpathSync.native() with fallbacks for better cross-platform compatibility.
  *
  * No auto-fix: normalizePath() takes `{ within }` — the tree the path is crawled in — which the
- * rule cannot know. A suggestion rewrites the call with `{ within: undefined }`, which fails the
- * typecheck at that spot until the author names the tree.
+ * rule cannot know. A suggestion rewrites the call with `{ within: TREE_CRAWLED_IN }`, an unbound
+ * name that fails the typecheck under any compiler options until the author names the tree.
  */
 
 const factory = require('./eslint-rule-factory.cjs');
@@ -20,9 +20,9 @@ module.exports = factory({
   safeFn: 'normalizePath',
   safeModule: SAFE_FS_MODULE,
   rewrite: {
-    appendArgument: '{ within: undefined }',
+    appendArgument: '{ within: TREE_CRAWLED_IN }',
     suggestion:
-      'Replace with normalizePath(target, { within: undefined }), then set `within` to the tree the path is crawled in. ' +
+      'Replace with normalizePath(target, { within: TREE_CRAWLED_IN }), then set `within` to the tree the path is crawled in. ' +
       'Unlike realpathSync(), it no longer throws when the path is absent: it returns the resolved spelling',
   },
   message:

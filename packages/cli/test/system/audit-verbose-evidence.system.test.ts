@@ -8,9 +8,9 @@
  *    file rows never carry evidence — their findings are the envelope's.
  */
 
-import * as fs from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -33,7 +33,7 @@ az login
 
 function createTestSkill(parentDir: string, skillName: string): string {
   const skillDir = safePath.join(parentDir, skillName);
-  fs.mkdirSync(skillDir, { recursive: true });
+  mkdirSyncReal(skillDir, { recursive: true });
   const skillPath = safePath.join(skillDir, 'SKILL.md');
   writeTestFile(skillPath, SKILL_CONTENT);
   return skillPath;

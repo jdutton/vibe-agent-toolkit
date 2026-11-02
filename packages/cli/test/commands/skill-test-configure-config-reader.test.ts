@@ -26,6 +26,7 @@
 import * as fs from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { installFaultFs, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
@@ -52,7 +53,7 @@ const SKILLS_BLOCK = 'skills:\n  include:\n    - "skills/**/SKILL.md"\n';
 
 /** Declare `name` under `dir`, where {@link SKILLS_BLOCK}'s include discovers it — configure refuses an undeclared skill. */
 function writeSkill(dir: string, name: string): void {
-  fs.mkdirSync(safePath.join(dir, 'skills', name), { recursive: true });
+  mkdirSyncReal(safePath.join(dir, 'skills', name), { recursive: true });
   fs.writeFileSync(
     safePath.join(dir, 'skills', name, 'SKILL.md'),
     `---\nname: ${name}\ndescription: A skill whose test block a test configures.\n---\n\n# ${name}\n`,
@@ -178,7 +179,7 @@ describe('updateSkillTestConfig (the third config reader)', () => {
     // CANNOT_DENY_READS skip. The config is this verb's destination (it edits
     // it in place), so a read the OS refuses is the run not finishing.
     const configPath = safePath.join(tempDir, CONFIG_FILENAME);
-    fs.mkdirSync(configPath);
+    mkdirSyncReal(configPath);
 
     const failure = await refusalFrom(configPath, 'destination');
     expect(failure).toMatchObject({ code: 'FS_FAULT', side: 'destination', origin: 'config', faultClass: 'wrong-type' });
@@ -213,7 +214,7 @@ describe('updateSkillTestConfig (the third config reader)', () => {
 
   it('refuses it INPUT_UNREADABLE under --print, which writes nothing: the config is then only read', async () => {
     const configPath = safePath.join(tempDir, CONFIG_FILENAME);
-    fs.mkdirSync(configPath);
+    mkdirSyncReal(configPath);
 
     const failure = await refusalFrom(configPath, 'source');
     expect(failure).toMatchObject({ code: 'FS_FAULT', side: 'source', origin: 'config', faultClass: 'wrong-type' });

@@ -322,8 +322,6 @@ export const LINK_FOLLOWING_FS_CALLS = {
   // The quality lab (private): its instrument, harness and captures act on the operator's own
   // checkouts and installs and on the lab's own capture directories, never on a crawled entry.
   'packages/lab/src/facets/io/counter.cts': 1,
-  // The process's OWN main script, resolved through npm's `.bin` link to find the owning package.
-  'packages/lab/src/facets/memory/rss-probe.cts': 1,
   'packages/lab/src/facets/verdict/capture.ts': 1,
   'packages/lab/src/harness/closure.ts': 1,
   'packages/lab/src/harness/instrument.ts': 2,

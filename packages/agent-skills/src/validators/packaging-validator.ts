@@ -409,7 +409,8 @@ interface MemoizedRegistry {
  * A REJECTED crawl is never served: its fault was classified against the outputs and `unreadable`
  * ruling of the caller that started it, and either may differ for the next one. The slot is
  * emptied when it rejects; the first caller that was waiting on it crawls afresh under its own
- * policy, and the other waiters join that crawl rather than starting their own.
+ * policy, and the other waiters join that crawl rather than starting their own — and take its
+ * rejection if it rejects too (see {@link joinOrStartCrawl}).
  */
 type MemoEntry = Promise<MemoizedRegistry>;
 
@@ -445,6 +446,10 @@ function replayRefusals(
  * re-read and `start` (which fills the slot synchronously) run in ONE tick: an `await` between
  * them lets every waiter find the slot empty. `rejected` stops a slot that still holds the
  * rejected promise (its eviction not yet run) from being joined twice.
+ *
+ * A waiter retries ONCE: when the re-crawl it joined rejects too, it rejects with that error,
+ * classified under the policy of the waiter that started the re-crawl. Retrying again would cost
+ * N waiters N whole-project crawls of a tree that has now failed twice.
  */
 function joinOrStartCrawl(
   cache: Map<string, MemoEntry>,
@@ -458,7 +463,10 @@ function joinOrStartCrawl(
   }
   return cached.then(
     (memo) => ({ memo, joined: true }),
-    () => joinOrStartCrawl(cache, key, cached, start),
+    (error: unknown) => {
+      if (rejected !== undefined) throw error;
+      return joinOrStartCrawl(cache, key, cached, start);
+    },
   );
 }
 
@@ -514,6 +522,14 @@ function joinOrStartCrawl(
  * abort a scan from four frames down. A config that will not parse also gives
  * the projection lane no declarations, so the two lanes still AGREE — which is
  * the property this function exists to hold.
+ *
+ * ## Memoized on the root, so a write inside it is not seen
+ *
+ * The crawl is memoized on `projectRoot` (and the population source) alone, never on `outputs`:
+ * every caller of one root in a process is served the FIRST crawl's registry. Anything written
+ * inside the root after that crawl — a declared output outside `dist/`, which the default exclude
+ * does not drop — is absent from what later callers are served. Write outputs outside the root,
+ * or under `dist/`, or call {@link resetPackagingRegistryCache} after writing.
  */
 export async function crawlAndResolveRegistry(
   projectRoot: string,
@@ -563,10 +579,10 @@ async function crawlRegistry(projectRoot: string, options: CrawlRegistryOptions)
       outputs,
       // Enumeration only. `ResourceRegistry.crawl` re-applies the include set
       // above — and the crawl's default exclude — to whatever the source
-      // offers, through the same compiled matcher the walk itself uses, so a
-      // source that enumerates a whole tree still yields exactly this crawl's
-      // markdown and HTML. Handing this builder a projection is a cost change,
-      // not a scope change.
+      // offers, through the same compiled matcher the walk itself uses. That
+      // narrows, never widens: what the source never enumerated stays out. So a
+      // projection can change the scope — on a git-less tree the walk admits
+      // `coverage/x.md`, which the `filesystem` source prunes (`NEVER_CRAWL_GLOBS`).
       ...(populationSource !== undefined && { populationSource }),
     },
     config === undefined ? undefined : { config },

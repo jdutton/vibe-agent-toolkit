@@ -2,8 +2,8 @@
 
 - **`@vibe-agent-toolkit/no-fs-realpathSync` no longer autofixes.** Its fix wrote a one-argument
   `normalizePath(x)`, which does not compile now that `normalizePath` takes `{ within }`. `--fix`
-  leaves the call alone; the editor suggestion writes `normalizePath(x, { within: undefined })`,
-  which fails the typecheck until you name the tree the path is crawled in.
+  leaves the call alone; the editor suggestion writes `normalizePath(x, { within: TREE_CRAWLED_IN })`,
+  an unbound name that fails the typecheck until you name the tree the path is crawled in.
 - **`@vibe-agent-toolkit/no-child-process-execSync` no longer autofixes.** Its fix turned
   `execSync('ls -la')` into `safeExecSync('ls -la')`, which compiles but runs a binary named
   `ls -la`: `safeExecSync` takes a binary and an argument array, not a shell string. Re-check any
@@ -20,7 +20,11 @@
   (`join` in `import { join, dirname } from 'node:path'`), is now removed on the next `--fix` pass,
   once nothing references it. A single `--fix` pass, and an editor's single fix, leave both imports.
 - **`no-os-tmpdir`, `no-fs-mkdirSync`, `no-fs-realpathSync` and `no-child-process-execSync` report a
-  bare call only when it resolves to the `node:*` module's own export** (a named import, aliased or
-  not, or a destructured `require()` / `import()`). Matched by name, `import { mkdirSync } from
-  'memfs'` and a local `function tmpdir()` were rewritten to the real-fs helpers; they are now left
-  alone, and so is an unbound call with no import at all.
+  call only when it resolves through scope to the `node:*` module's own function**, by the same scan
+  `no-existssync` and `no-link-following-fs` use: a named import (aliased or not), a member of a
+  namespace, default, `require()` or `import()` binding (`fs.mkdirSync()`, `cp.execSync()`), or a
+  destructure of any of those (`const { mkdirSync } = fs`). The last three rules now report the member
+  and destructured-namespace calls they missed. Matched by name, `import { mkdirSync } from 'memfs'`,
+  a local `function tmpdir()` and a parameter shadowing a namespace (`function f(os) { os.tmpdir() }`)
+  were rewritten to the real-fs helpers; they are now left alone, and so is an unbound call with no
+  import at all.

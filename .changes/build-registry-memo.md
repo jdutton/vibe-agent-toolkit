@@ -8,11 +8,12 @@
 - **No crawl reads a build's staging residue.** The `.<name>.vat-staged-*` entries a build stages its
   output in are now in `NEVER_CRAWL_GLOBS`. A library build whose output sits inside the project but
   outside `dist/` no longer has one skill's staged copy validated as the next skill's project content.
-- **`ResourceRegistry.crawl`'s default exclude is now `NEVER_CONTENT_GLOBS` + `BUILD_OUTPUT_GLOBS`**:
-  `node_modules/`, `.git/`, worktree copies, staging residue and `dist/`. It no longer drops a
-  directory merely named `coverage/`, `.test-output/` or `.turbo/` — authored markdown such as
-  `references/coverage/workers-comp.md` is a member again, on the walk, the git route and the
-  projection, so its links are followed and its targets bundled. On the projection, a git-held
-  (tracked, or untracked and not ignored) path under such a name is a member; ignored territory is
-  still pruned by the full `NEVER_CRAWL_GLOBS`, and so is the `filesystem` extent source, which has no
-  ignore oracle. `NEVER_CONTENT_GLOBS` is exported from `@vibe-agent-toolkit/utils/crawl`.
+- **`ResourceRegistry.crawl`'s default exclude is now `NEVER_CONTENT_GLOBS` + `BUILD_OUTPUT_GLOBS`.**
+  0.1.42's default was `node_modules/`, `.git/` and `dist/`; it now also drops `.worktrees/`,
+  `.claude/worktrees/` and a build's staging residue (`.<name>.vat-staged-*`), so a crawl from a
+  repository root no longer lists every worktree's copy of the project. A directory merely named
+  `coverage/`, `.test-output/` or `.turbo/` is still a member, as it was in 0.1.42. The projection's
+  git extent changed to match: a git-held path (tracked, or untracked and not ignored) under such a
+  name is now a member, where the rc releases pruned it; ignored territory is still pruned by the full
+  `NEVER_CRAWL_GLOBS`, and so is the `filesystem` extent source, which has no ignore oracle.
+  `NEVER_CONTENT_GLOBS` is exported from `@vibe-agent-toolkit/utils/crawl`.

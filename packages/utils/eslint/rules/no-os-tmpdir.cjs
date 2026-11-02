@@ -21,7 +21,6 @@ module.exports = factory({
   message: 'Use normalizedTmpdir() from {{safeModule}} instead of os.tmpdir() for Windows compatibility (prevents 8.3 short name issues like RUNNER~1)',
   // No baked-in exemption: the file that implements normalizedTmpdir() is
   // repo-specific. Consumers declare it as { exemptFiles: [...] }.
-  checkMemberExpression: true, // Catch os.tmpdir() pattern
   docs: {
     category: 'Filesystem and process',
     bans: '`os.tmpdir()` (8.3 short names on Windows)',

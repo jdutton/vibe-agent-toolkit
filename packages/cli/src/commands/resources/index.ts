@@ -667,12 +667,14 @@ Output Fields (the shared report envelope):
   declared --collection that matched no file, a path with no markdown, an enumeration
   emptied by exclude or a sparse checkout) carries RESOURCE_CHECK_BROKEN at
   error and exits 1 — the document is not a verdict, and the code is not
-  overridable. The same message is written to stderr.
+  overridable. The same finding line goes to stderr, or under --format text
+  is a line of the stdout document instead.
 
 Verbosity:
   -v, --verbose
     Adds data.files: one {path, status, summary} row per resource validated,
-    the clean ones included. Every envelope field is identical in both modes.
+    the clean ones included, and prints warning and info findings on stderr
+    beside the errors. Every envelope field is identical in both modes.
 
 Validation Checks:
   - Internal file links (relative paths)

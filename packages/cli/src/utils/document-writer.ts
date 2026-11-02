@@ -214,8 +214,9 @@ export function refusalReport(code: RefusalCode, error: unknown, gate: Gate, fin
  */
 export function leftoverFindingsOf(error: unknown): Array<ValidationIssue & Finding> {
   return suppressedFaultsOf(error).map((fault) => {
-    process.stderr.write(`warning: ${errorMessageOf(fault)}\n`);
-    return leftoverIssueOf(fault);
+    const issue = leftoverIssueOf(fault);
+    process.stderr.write(`${formatFindingLine(issue)}\n`);
+    return issue;
   });
 }
 

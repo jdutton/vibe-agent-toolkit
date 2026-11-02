@@ -17,7 +17,6 @@
  *   passes no `exemptFiles` option. Ship this empty: an exemption names one file
  *   in one repo, so a baked-in default is a hole in every OTHER repo. Consumers
  *   declare their own via the rule option (see `exempt-path-matcher.cjs`).
- * @param {boolean} [config.checkMemberExpression] - Check for obj.method() calls (default: false)
  * @param {'fix' | { appendArgument: string, suggestion: string } | { autofixAsStatement: true, suggestion: string }} config.rewrite - REQUIRED.
  *   - `'fix'` when the safe function takes the unsafe call's arguments unchanged and
  *     returns the same thing: an autofix swaps the callee.
@@ -62,6 +61,7 @@ const {
   createConfigurableExemptPathMatcher,
   reportUnanchoredExemptEntries,
 } = require('./exempt-path-matcher.cjs');
+const { fsBindingVisitors } = require('./fs-binding-scan.cjs');
 const {
   EXEMPT_AND_SAFE_MODULE_SCHEMA,
   insertAboveWithComments,
@@ -74,56 +74,6 @@ function importsName(importNode, name) {
   return importNode.specifiers.some(
     (spec) => spec.type === 'ImportSpecifier' && spec.imported.name === name,
   );
-}
-
-/**
- * The local name of `import os from 'node:os'` / `import * as os from 'node:os'`.
- *
- * Without it the member-expression check has no receiver to compare against,
- * and matching on the property name alone turns every `env.tmpdir()` into an
- * `os.tmpdir()` finding.
- */
-function namespaceLocalName(importNode) {
-  const spec = importNode.specifiers.find(
-    (candidate) =>
-      candidate.type === 'ImportDefaultSpecifier' || candidate.type === 'ImportNamespaceSpecifier',
-  );
-  return spec ? spec.local.name : null;
-}
-
-/**
- * The module specifier of `require('x')`, `import('x')` or `await import('x')`.
- *
- * A static `import * as os` is not the only way to end up holding the `node:os`
- * namespace, and the fix does not care which way it happened — the whole callee
- * is replaced by a free function, so `os.tmpdir()` becomes `normalizedTmpdir()`
- * whatever bound `os`.
- *
- * This is NOT a return to rc.1, which matched any receiver at all and so
- * "detected" these shapes only as a side effect of the defect that also produced
- * `os.normalizedTmpdir()`. The receiver check stays; this widens what counts as
- * evidence that the receiver IS the module's namespace, and nothing else.
- *
- * @param {object} [init] - The initialiser of a variable declarator.
- * @returns {string|null} The literal module name, or null.
- */
-function namespaceModuleOf(init) {
-  const expr = init?.type === 'AwaitExpression' ? init.argument : init;
-  if (!expr) {
-    return null;
-  }
-  const isDynamicImport = expr.type === 'ImportExpression';
-  const isRequire =
-    expr.type === 'CallExpression' &&
-    expr.callee.type === 'Identifier' &&
-    expr.callee.name === 'require';
-  if (!isDynamicImport && !isRequire) {
-    return null;
-  }
-  // `ImportExpression.source` / the sole `require` argument. A computed
-  // specifier names no module we can check, so it binds nothing we may rewrite.
-  const source = isDynamicImport ? expr.source : expr.arguments[0];
-  return source?.type === 'Literal' && typeof source.value === 'string' ? source.value : null;
 }
 
 /**
@@ -150,57 +100,21 @@ function readRewrite(rewrite, unsafeFn) {
     : { autofix: 'statement', suggestion: rewrite.suggestion };
 }
 
-/**
- * The variable `identifier` resolves to, walking out through enclosing scopes.
- *
- * @returns {object|null} The scope-manager variable, or null when nothing binds it.
- */
-function resolvedVariable(sourceCode, identifier) {
-  for (let scope = sourceCode.getScope(identifier); scope; scope = scope.upper) {
-    const variable = scope.set.get(identifier.name);
-    if (variable) {
-      return variable;
-    }
-  }
-  return null;
-}
-
-/**
- * Does `identifier` resolve to the unsafe module's own `unsafeFn` — `import { tmpdir }
- * from 'node:os'` (aliased or not), or `const { tmpdir } = require('node:os')` /
- * `await import('node:os')`?
- *
- * By name alone, `import { mkdirSync } from 'memfs'` and a local `function tmpdir()`
- * were rewritten to the real-fs helper — a false positive that produces WORKING code.
- * An unbound `tmpdir()` is no longer this rule's either: no fix removes the import any
- * more, so an unbound call is not a strand this rule left.
- */
-function bindsUnsafeFn(sourceCode, identifier, moduleVariants, unsafeFn) {
-  const variable = resolvedVariable(sourceCode, identifier);
-  return (variable?.defs ?? []).some((def) => {
-    if (def.type === 'ImportBinding') {
-      return def.node.type === 'ImportSpecifier'
-        && def.node.imported.name === unsafeFn
-        && moduleVariants.includes(def.parent.source.value);
-    }
-    if (def.type !== 'Variable' || def.node.id.type !== 'ObjectPattern') {
-      return false;
-    }
-    const source = namespaceModuleOf(def.node.init);
-    return source !== null
-      && moduleVariants.includes(source)
-      && def.node.id.properties.some(
-        (property) => property.type === 'Property'
-          && property.key.type === 'Identifier'
-          && property.key.name === unsafeFn
-          && property.value === def.name,
-      );
-  });
-}
-
 /** Is `node` a call whose result is discarded — the whole of an expression statement? */
 function isStatementCall(node) {
   return node.parent?.type === 'ExpressionStatement' && node.parent.expression === node;
+}
+
+/** One visitor object from several: a selector two of them handle runs both handlers, in order. */
+function mergeVisitors(...visitorSets) {
+  const merged = {};
+  for (const visitors of visitorSets) {
+    for (const [selector, handler] of Object.entries(visitors)) {
+      const prior = merged[selector];
+      merged[selector] = prior ? (node) => { prior(node); handler(node); } : handler;
+    }
+  }
+  return merged;
 }
 
 module.exports = function createNoUnsafeRule(config) {
@@ -212,7 +126,6 @@ module.exports = function createNoUnsafeRule(config) {
     message,
     docs,
     exemptFiles = [],
-    checkMemberExpression = false,
     rewrite,
   } = config;
 
@@ -293,16 +206,34 @@ module.exports = function createNoUnsafeRule(config) {
       let unsafeImportNode = null;
       const unsafeImportNodes = [];
       let safeImportNode = null;
-      // A SET, because a namespace can be bound by a static import, a
-      // `require()`, or a dynamic `import()` — see `namespaceModuleOf`.
-      const unsafeNamespaceNames = new Set();
+      // Every CALL of the unsafe module's own function, however it is reached — a named import
+      // (aliased too), a namespace member `os.tmpdir()`, a destructure of a namespace or of a
+      // `require()` / `import()` — resolved through scope by the ONE scan every rule banning a
+      // module's function shares (`fs-binding-scan.cjs`). Reported at `Program:exit`, after every
+      // import is seen, because a report computes its fix at once and the fix reads
+      // `safeImportNode`. A namespace read that is not called is not this rule's: it has no call to
+      // rewrite. KNOWN RESIDUAL: the dead-import leg removes only an `ImportDeclaration`, so a
+      // rewritten `const os = require('node:os')` is left as an unused binding.
+      const unsafeCalls = new Set();
+      const scan = fsBindingVisitors(context, {
+        modules: new Set(moduleVariants),
+        banned: new Set([unsafeFn]),
+        report: (node) => {
+          if (node.parent?.type === 'CallExpression' && node.parent.callee === node) {
+            unsafeCalls.add(node.parent);
+          }
+        },
+      });
 
-      return {
+      return mergeVisitors(scan, {
         Program(node) {
           reportUnanchoredExemptEntries(context, node);
         },
 
         'Program:exit'() {
+          for (const call of [...unsafeCalls].sort((a, b) => a.range[0] - b.range[0])) {
+            reportUnsafeCall(call);
+          }
           reportDeadUnsafeImports(
             context,
             sourceCode,
@@ -317,10 +248,6 @@ module.exports = function createNoUnsafeRule(config) {
           if (moduleVariants.includes(node.source.value)) {
             unsafeImportNode = node;
             unsafeImportNodes.push(node);
-            const local = namespaceLocalName(node);
-            if (local) {
-              unsafeNamespaceNames.add(local);
-            }
           }
           if (node.source.value === targetModule) {
             safeImportNode = node;
@@ -328,172 +255,103 @@ module.exports = function createNoUnsafeRule(config) {
           }
         },
 
-        // `const os = require('node:os')` / `const os = await import('node:os')`.
-        //
-        // Recorded by NAME, matching how the static-import receiver has always
-        // been tracked, so a declaration must precede its use — which is the
-        // normal shape and the only one either form appears in. Resolving the
-        // receiver through scope instead would also reject a shadowing rebind,
-        // but it would change detection parity on a population an adopter has
-        // already measured across 4,963 files, so it is not worth trading here.
-        //
-        // KNOWN RESIDUAL, measured: `dead-import.cjs` only removes an
-        // `ImportDeclaration`, so after the rewrite `const os = require('node:os')`
-        // and `const os = await import('node:os')` are both left behind as
-        // `'os' is assigned a value but never used` (the dynamic form also draws
-        // `sonarjs/no-dead-store`). Removing a VariableDeclaration is a wider edit
-        // than removing an import (multiple declarators, destructuring, an `await`
-        // inside control flow), so it is deliberately not done here. A static
-        // `import * as os` — the shape that actually appears at scale — is cleaned
-        // up. An adopter confirmed the residual 2-for-2 and measured **zero** files
-        // using either dynamic shape across 4,963 tracked sources, so the
-        // population this would serve is currently empty.
-        //
-        // If it is ever extended that far, note what makes the dynamic case
-        // different in kind: the leftover `await import('node:os')` STILL RUNS.
-        // The module is loaded and the promise awaited, and only the binding is
-        // dead — so deleting the statement removes an execution, not just a name.
-        // For these builtins that is unobservable, which is precisely why the
-        // module list is closed; the same edit against an arbitrary module would
-        // not be safe, and no `sideEffects` metadata could tell you so.
-        VariableDeclarator(node) {
-          if (node.id.type !== 'Identifier') {
-            return;
-          }
-          const source = namespaceModuleOf(node.init);
-          if (source !== null && moduleVariants.includes(source)) {
-            unsafeNamespaceNames.add(node.id.name);
-          }
-        },
-
         CallExpression(node) {
           if (node.callee.type === 'Identifier' && node.callee.name === safeFn) {
             safeReplacementCalled = true;
           }
-
-          let isUnsafeCall = false;
-
-          // Direct call: the callee must resolve to the unsafe module's own export.
-          if (node.callee.type === 'Identifier' && bindsUnsafeFn(sourceCode, node.callee, moduleVariants, unsafeFn)) {
-            isUnsafeCall = true;
-          }
-
-          // Check for member expression: os.tmpdir()
-          //
-          // The RECEIVER must be the unsafe module's own namespace binding.
-          // Matching on the property name alone made `env.tmpdir()` — any
-          // object at all with a same-named method — an `os.tmpdir()` finding.
-          // That was survivable while the fixer rewrote only the property
-          // (`env.normalizedTmpdir()` fails to compile, so the false positive
-          // announced itself); once the whole callee is replaced it becomes
-          // `normalizedTmpdir()`, which compiles, type-checks, passes
-          // `no-undef`, and silently calls a different function with the
-          // receiver discarded. A false positive that produces WORKING code is
-          // strictly the more dangerous kind.
-          if (
-            checkMemberExpression &&
-            node.callee.type === 'MemberExpression' &&
-            node.callee.object.type === 'Identifier' &&
-            unsafeNamespaceNames.has(node.callee.object.name) &&
-            node.callee.property.name === unsafeFn
-          ) {
-            isUnsafeCall = true;
-          }
-
-          if (!isUnsafeCall) {
-            return;
-          }
-
-          // A call this rule does not autofix is offered as a SUGGESTION. One whose
-          // replacement needs an argument the rule cannot know (`within`) carries a
-          // placeholder that fails the typecheck at that spot — never a guessed value
-          // that would compile — and appends to a one-argument call only: further
-          // arguments belong to the unsafe function and mean nothing to the safe one.
-          const report = { node, messageId: 'noUnsafeOperation', data: { safeModule: targetModule } };
-          if (autofixes(node)) {
-            context.report({ ...report, fix: (fixer) => rewriteCall(fixer) });
-          } else {
-            const [only, ...rest] = node.arguments;
-            const rewritable = mode.appendArgument === undefined
-              || (only !== undefined && rest.length === 0 && only.type !== 'SpreadElement');
-            context.report({
-              ...report,
-              suggest: rewritable ? [{ messageId: 'useSafeCall', fix: (fixer) => rewriteCall(fixer) }] : [],
-            });
-          }
-
-          function rewriteCall(fixer) {
-            const fixes = [];
-
-            // Replace the WHOLE callee, member expression or not.
-            //
-            // Rewriting only the property turned `os.tmpdir()` into
-            // `os.normalizedTmpdir()` — a method that does not exist on the
-            // `node:os` namespace. The replacement is a free function from
-            // OUR package, and the fixer imported it correctly; it just left
-            // the call reaching for it through the wrong object. Silent, like
-            // the overlap bug below: lint went green (the rule no longer sees
-            // `tmpdir`), and it is a dangling MEMBER rather than a dangling
-            // identifier, so `no-undef` cannot see it either. `tsc` can.
-            fixes.push(fixer.replaceText(node.callee, safeFn));
-            if (mode.appendArgument !== undefined) {
-              fixes.push(fixer.insertTextAfter(node.arguments[0], `, ${mode.appendArgument}`));
-            }
-
-            // Add import if needed — on EVERY report, deliberately.
-            //
-            // The sister factory emits this once per file, because there a
-            // report that edits both the import and its own call site spans
-            // everything between them, N reports leave N nested ranges, and
-            // ESLint keeps one: the defect measured at 146 broken files.
-            //
-            // That guard does not belong here, and briefly having it was a
-            // mistake worth recording. These rules do NOT key detection on
-            // the import — `node.callee.name === unsafeFn` is true whether or
-            // not the specifier survives — and `hasSafeImport` is reseeded
-            // from scope each pass, so pass 2 always finished the job anyway.
-            // An adversarial run confirmed the guard changed no output at 4,
-            // 40 or 75 call sites. What it DID change was the failure mode:
-            // ESLint runs `fix()` for a suppressed problem before the
-            // `eslint-disable` filter discards it, so one disable comment on
-            // the first call site spent the once-per-file edit and stranded
-            // the file with calls the import no longer backs.
-            //
-            // Every report carrying its own import edit costs a pass and buys
-            // a fix that is correct on its own — including when applied alone
-            // from an editor's "fix this problem".
-            if (!hasSafeImport) {
-              if (safeImportNode) {
-                // Add to existing safe module import
-                const lastSpecifier = safeImportNode.specifiers.at(-1);
-                fixes.push(fixer.insertTextAfter(lastSpecifier, `, ${safeFn}`));
-              } else {
-                // Land next to the imports, never after arbitrary code —
-                // `insertTextAfter(body[0])` on a file whose first statement
-                // is a `const` welds the declaration onto the end of it.
-                const targetNode = unsafeImportNode || sourceCode.ast.body[0];
-                const declaration = `import { ${safeFn} } from '${targetModule}';`;
-                fixes.push(
-                  targetNode.type === 'ImportDeclaration'
-                    ? fixer.insertTextAfter(targetNode, `\n${declaration}`)
-                    : insertAboveWithComments(fixer, sourceCode, targetNode, `${declaration}\n`),
-                );
-              }
-            }
-
-            // The unsafe import is NEVER removed here. ESLint runs `fix()` for a
-            // suppressed report before the `eslint-disable` filter discards it, so
-            // any removal carried by one report can land while a suppressed call
-            // still needs the binding — latched to the first report, the removal
-            // rode on an unsuppressed call BEFORE a suppressed one, and the output
-            // linted clean and threw `ReferenceError`. Removal is the dead-import
-            // leg's alone (`reportDeadUnsafeImports`, at `Program:exit`): it asks
-            // scope on the next pass, after the rewrites, whether anything still
-            // references the binding.
-            return fixes;
-          }
         },
-      };
+      });
+
+      function reportUnsafeCall(node) {
+        // A call this rule does not autofix is offered as a SUGGESTION. One whose
+        // replacement needs an argument the rule cannot know (`within`) carries a
+        // placeholder that fails the typecheck at that spot — never a guessed value
+        // that would compile — and appends to a one-argument call only: further
+        // arguments belong to the unsafe function and mean nothing to the safe one.
+        const report = { node, messageId: 'noUnsafeOperation', data: { safeModule: targetModule } };
+        if (autofixes(node)) {
+          context.report({ ...report, fix: (fixer) => rewriteCall(fixer) });
+        } else {
+          const [only, ...rest] = node.arguments;
+          const rewritable = mode.appendArgument === undefined
+            || (only !== undefined && rest.length === 0 && only.type !== 'SpreadElement');
+          context.report({
+            ...report,
+            suggest: rewritable ? [{ messageId: 'useSafeCall', fix: (fixer) => rewriteCall(fixer) }] : [],
+          });
+        }
+
+        function rewriteCall(fixer) {
+          const fixes = [];
+
+          // Replace the WHOLE callee, member expression or not.
+          //
+          // Rewriting only the property turned `os.tmpdir()` into
+          // `os.normalizedTmpdir()` — a method that does not exist on the
+          // `node:os` namespace. The replacement is a free function from
+          // OUR package, and the fixer imported it correctly; it just left
+          // the call reaching for it through the wrong object. Silent, like
+          // the overlap bug below: lint went green (the rule no longer sees
+          // `tmpdir`), and it is a dangling MEMBER rather than a dangling
+          // identifier, so `no-undef` cannot see it either. `tsc` can.
+          fixes.push(fixer.replaceText(node.callee, safeFn));
+          if (mode.appendArgument !== undefined) {
+            fixes.push(fixer.insertTextAfter(node.arguments[0], `, ${mode.appendArgument}`));
+          }
+
+          // Add import if needed — on EVERY report, deliberately.
+          //
+          // The sister factory emits this once per file, because there a
+          // report that edits both the import and its own call site spans
+          // everything between them, N reports leave N nested ranges, and
+          // ESLint keeps one: the defect measured at 146 broken files.
+          //
+          // That guard does not belong here, and briefly having it was a
+          // mistake worth recording. These rules do NOT key detection on
+          // the import — `node.callee.name === unsafeFn` is true whether or
+          // not the specifier survives — and `hasSafeImport` is reseeded
+          // from scope each pass, so pass 2 always finished the job anyway.
+          // An adversarial run confirmed the guard changed no output at 4,
+          // 40 or 75 call sites. What it DID change was the failure mode:
+          // ESLint runs `fix()` for a suppressed problem before the
+          // `eslint-disable` filter discards it, so one disable comment on
+          // the first call site spent the once-per-file edit and stranded
+          // the file with calls the import no longer backs.
+          //
+          // Every report carrying its own import edit costs a pass and buys
+          // a fix that is correct on its own — including when applied alone
+          // from an editor's "fix this problem".
+          if (!hasSafeImport) {
+            if (safeImportNode) {
+              // Add to existing safe module import
+              const lastSpecifier = safeImportNode.specifiers.at(-1);
+              fixes.push(fixer.insertTextAfter(lastSpecifier, `, ${safeFn}`));
+            } else {
+              // Land next to the imports, never after arbitrary code —
+              // `insertTextAfter(body[0])` on a file whose first statement
+              // is a `const` welds the declaration onto the end of it.
+              const targetNode = unsafeImportNode || sourceCode.ast.body[0];
+              const declaration = `import { ${safeFn} } from '${targetModule}';`;
+              fixes.push(
+                targetNode.type === 'ImportDeclaration'
+                  ? fixer.insertTextAfter(targetNode, `\n${declaration}`)
+                  : insertAboveWithComments(fixer, sourceCode, targetNode, `${declaration}\n`),
+              );
+            }
+          }
+
+          // The unsafe import is NEVER removed here. ESLint runs `fix()` for a
+          // suppressed report before the `eslint-disable` filter discards it, so
+          // any removal carried by one report can land while a suppressed call
+          // still needs the binding — latched to the first report, the removal
+          // rode on an unsuppressed call BEFORE a suppressed one, and the output
+          // linted clean and threw `ReferenceError`. Removal is the dead-import
+          // leg's alone (`reportDeadUnsafeImports`, at `Program:exit`): it asks
+          // scope on the next pass, after the rewrites, whether anything still
+          // references the binding.
+          return fixes;
+        }
+      }
     },
   };
 };
