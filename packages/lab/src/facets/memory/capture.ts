@@ -26,6 +26,7 @@ import { judgeLoad, readLoad } from '../../harness/load-guard.js';
 import { nodeOptionsWith, resolvePreloadPath } from '../../harness/preload.js';
 import type { SpecMeasurement } from '../../harness/repeat.js';
 import { buildReportEnvelope } from '../../harness/report.js';
+import type { SequenceResult } from '../../harness/sequence.js';
 import type { CaptureRequest } from '../../harness/types.js';
 import { summarize } from '../perf/stats.js';
 
@@ -51,8 +52,17 @@ const PROBE_FILE = './rss-probe.cjs';
 /** Prefix for a repeat's dump directory, so a stray one names its owner. */
 const DUMP_DIR_PREFIX = 'vat-lab-memory-';
 
-/** What V8 prints as it aborts a process out of heap (`FATAL ERROR: … JavaScript heap out of memory`). */
-const HEAP_EXHAUSTED = 'JavaScript heap out of memory';
+/**
+ * What a run out of heap leaves on stderr: V8's abort (`FATAL ERROR: … JavaScript heap out of
+ * memory`), or the error code Node gives a worker thread that reached its heap limit. Stderr is all
+ * the lab has of a child, so the code is read there.
+ */
+const HEAP_EXHAUSTED: readonly string[] = ['JavaScript heap out of memory', 'ERR_WORKER_OUT_OF_MEMORY'];
+
+/** Did this run fail out of heap? */
+function ranOutOfHeap(result: SequenceResult): boolean {
+  return result.exitCode !== 0 && HEAP_EXHAUSTED.some((signature) => result.stderr.includes(signature));
+}
 
 /** How this facet's dumps are read and refused. */
 const RSS_DUMP_KIND: DumpKind<RssDump> = {
@@ -100,8 +110,9 @@ function failedRow(measurement: SpecMeasurement, failure: string): MemoryCommand
     exitCode: null,
     failed: true,
     failure,
-    // Read once, here, so a comparator dispatches on a field rather than on stderr.
-    outOfHeap: measurement.results.some((result) => result.exitCode !== 0 && result.stderr.includes(HEAP_EXHAUSTED)),
+    // Read once, here, so a comparator dispatches on a field rather than on stderr. A warm arm's
+    // priming run too: one out of heap leaves no measured repeat to read it from.
+    outOfHeap: [...measurement.results, ...(measurement.priming === null ? [] : [measurement.priming])].some(ranOutOfHeap),
   };
 }
 

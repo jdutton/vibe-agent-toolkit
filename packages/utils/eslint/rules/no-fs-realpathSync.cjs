@@ -4,7 +4,8 @@
  * Prevents usage of fs.realpathSync() in favor of normalizePath() from `@vibe-agent-toolkit/utils/fs`
  *
  * Why: realpathSync() doesn't consistently resolve Windows 8.3 short paths across Node versions.
- * normalizePath() uses realpathSync.native() with fallbacks for better cross-platform compatibility.
+ * normalizePath() resolves short names and links, reads every link beneath `within` by its text first
+ * (refusing one into a network or device path), and returns the resolved spelling of an absent path.
  *
  * No auto-fix: normalizePath() takes `{ within }` — the tree the path is crawled in — which the
  * rule cannot know. A suggestion rewrites the call with `{ within: TREE_CRAWLED_IN }`, an unbound

@@ -65,20 +65,30 @@ function commandSources(): string[] {
 }
 
 /**
- * A writer call with a literal first argument. `executeOrgCommand` counts as
- * `writeExternalDocument`: it is the org lane's one route to it, and each
+ * A writer call whose first argument is a literal or an UPPER_CASE constant. `executeOrgCommand`
+ * counts as `writeExternalDocument`: it is the org lane's one route to it, and each
  * external verb names itself there — the writer call inside it takes a variable.
  */
-const WRITER_CALL = /\b(endWithReport|writeDocument|endWithRefusal|readForwardedDocument|writeExternalDocument|executeOrgCommand|writeArtifact|writeArtifactFile|writeLegacyDocument)\(\s*'([^']+)'/g;
+const WRITER_CALL = /\b(endWithReport|writeDocument|endWithRefusal|readForwardedDocument|writeExternalDocument|executeOrgCommand|writeArtifact|writeArtifactFile|writeLegacyDocument)\(\s*(?:'([^']+)'|([A-Z][A-Z0-9_]*)\b)/g;
 
-/** Every literal-first-argument writer call in `commands/`, as `[function, name]`. */
+/** A file-local `const NAME = '…'`. */
+const STRING_CONSTANT = /\bconst ([A-Z][A-Z0-9_]*) = '([^']+)'/g;
+
+/**
+ * Every such writer call in `commands/`, as `[function, name]`. A constant resolves to its
+ * file-local `const NAME = '…'`; one that does not resolve stays its bare name, which no registry
+ * holds, so it fails rather than drops out of the scan.
+ */
 function writerCalls(): Array<readonly [string, string]> {
-  return commandSources().flatMap((source) =>
-    [...source.matchAll(WRITER_CALL)].map((match) => {
+  return commandSources().flatMap((source) => {
+    const constants = new Map([...source.matchAll(STRING_CONSTANT)].map((found) => [found[1], found[2]]));
+    return [...source.matchAll(WRITER_CALL)].map((match) => {
       const fn = match[1] === 'executeOrgCommand' ? 'writeExternalDocument' : match[1] ?? '';
-      return [fn, match[2] ?? ''] as const;
-    }),
-  );
+      const constant = match[3];
+      const name = constant === undefined ? match[2] : constants.get(constant);
+      return [fn, name ?? constant ?? ''] as const;
+    });
+  });
 }
 
 /** The registry key a writer call must resolve to, per writer function. */

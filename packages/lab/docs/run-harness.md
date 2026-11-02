@@ -263,9 +263,11 @@ its own, and a warm arm is primed by one unmeasured run before its first measure
 first measured invocation inherits the other's cache. Alternation keeps whatever cold start remains
 (the OS page cache, the build's first start) symmetric instead of hiding inside one arm's aggregate.
 
-**The estimator is `min`, with `p25` reported beside it — never a median, never a mean.** Every sample
-is the true cost plus a non-negative contamination, so the smallest is the closest thing to a clean
-observation. Across a handful of samples, one cold repeat is enough to move a median and not the min.
+**The estimator is the facet's own, `min` or `median`, with `p25` reported beside it — never a
+mean.** A time is the true cost plus a non-negative contamination, so the smallest is the closest
+thing to a clean observation, and one cold repeat is enough to move a median and not the min: every
+facet but `memory` takes the min. A peak RSS moves both ways with when a collection lands, so its min
+is the luckiest collection; `memory ab` takes the median, of each capture's median repeat.
 
 **Every pair's verdict is reported, and so is whether they agreed.** A single pair settles nothing —
 two pairs in a prior session actively contradicted each other. Disagreement prints as

@@ -91,19 +91,12 @@ function providerConfigIssues(warnings: IndexResult['warnings']): ValidationIssu
   return (warnings ?? []).map((message) => ({ code: 'RAG_CHUNKING_CONFIG_ADJUSTED', severity: 'warning', message }));
 }
 
-/**
- * What the provider recorded — per-resource failures and its own warnings — as
- * findings, each also printed: on a finished run and on a refused one alike.
- */
-function reportProviderIssues(
+/** What the provider recorded — per-resource failures and its own warnings — as findings. */
+function providerIssues(
   result: Pick<IndexResult, 'errors' | 'warnings'>,
   locations: ReadonlyMap<string, string>,
-  warn: (line: string) => void,
 ): ValidationIssue[] {
-  const issues = [...providerIndexIssues(result.errors, locations), ...providerConfigIssues(result.warnings)];
-  // Verbose: this verb has no `--verbose`, and a clamped chunk budget is what explains a truncated search.
-  reportFindings(issues, { verbose: true, write: warn });
-  return issues;
+  return [...providerIndexIssues(result.errors, locations), ...providerConfigIssues(result.warnings)];
 }
 
 /** What {@link buildIndexReport} needs from a finished run. */
@@ -181,9 +174,6 @@ export async function indexCommand(
     // read; the second half is reported below, not dropped — see `unreadableIndexIssues`.
     unreadable = unreadableIndexIssues(registry.getUnreadableResources(), crawlRoot);
     logger.debug(`Found ${allResources.length} resources to index (${unreadable.length} enumerated but unreadable)`);
-    // On stderr too, so a caller reading only the exit code still sees each name.
-    reportFindings(unreadable, { verbose: false, write: logger.warn });
-
     requireWritableDatabase(dbPath, options.db !== undefined && options.db !== '');
 
     // Create RAG provider in admin mode (readonly: false)
@@ -199,15 +189,21 @@ export async function indexCommand(
     const indexResult = await ragProvider.indexResources(allResources);
     await ragProvider.close();
 
+    const recorded = providerIssues(indexResult, locations);
+    // On stderr too, so a caller reading only the exit code still sees each name. Verbose for the
+    // provider's own: this verb has no `--verbose`, and a clamped chunk budget explains a truncated search.
+    reportFindings(unreadable, { verbose: false, write: logger.warn });
+    reportFindings(recorded, { verbose: true, write: logger.warn });
     report = buildIndexReport({
       examined: allResources.length + unreadable.length,
       result: indexResult,
-      issues: [...unreadable, ...reportProviderIssues(indexResult, locations, logger.warn)],
+      issues: [...unreadable, ...recorded],
       durationMs: Date.now() - startTime,
     });
   } catch (error) {
     const partial = partialIndexResultOf(error);
-    const recorded = partial ? reportProviderIssues(partial, locations, logger.warn) : [];
+    // The writer says them on stderr, with the refusal.
+    const recorded = partial ? providerIssues(partial, locations) : [];
     return endWithRefusal('rag index', refusalCodeOf(error), error, 'yaml', RAG_GATE, { ...NOTHING_FINISHED, findings: toFindings([...unreadable, ...recorded]) });
   }
   endWithReport('rag index', report, 'yaml');

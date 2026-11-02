@@ -28,7 +28,7 @@ import { everywhere, pathPresent, safePath, VatError, withFsFault } from '@vibe-
 
 import { refusalCodeOf } from '../../utils/command-refusal.js';
 import { loadConfig } from '../../utils/config-loader.js';
-import { endWithRefusal, NOTHING_FINISHED, writeDocument } from '../../utils/document-writer.js';
+import { endWithRefusal, findingsGoToStderr, NOTHING_FINISHED, writeDocument } from '../../utils/document-writer.js';
 import { reportFindings } from '../../utils/issue-rendering.js';
 import { readPackageJsonOrAbsent } from '../../utils/package-json.js';
 import { discoverSkillsFromConfig } from '../skills/skill-discovery.js';
@@ -368,16 +368,15 @@ function ardRefusalCode(error: unknown): RefusalCode {
 
 /**
  * Publish a report in the operator's format and end on the code the WRITTEN
- * document derives. In text mode the report's findings go to stderr and the one
- * summary line to stdout; in json the report carries them in full. Either way a
- * refusal the writer adds is the writer's to say.
+ * document derives. Its findings go to stderr under every format (the text
+ * document is one summary line); a refusal the writer adds is the writer's to say.
  *
  * @param report - The document
  * @param format - `json`, or the human rendering
  */
 function publishArdReport(report: ArdEmitReport, format: 'text' | 'json'): never {
   const written = writeDocument('ard emit', report, format);
-  if (format === 'text') {
+  if (findingsGoToStderr('ard emit', format)) {
     reportFindings(report.findings, { verbose: true, write: (line) => process.stderr.write(`${line}\n`) });
   }
   process.exit(exitCodeForReport(written));

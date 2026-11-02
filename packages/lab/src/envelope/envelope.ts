@@ -36,6 +36,9 @@
  * does. Not to reintroduce a number nobody is obliged to move.
  */
 
+import { spawnSync } from 'node:child_process';
+import { totalmem } from 'node:os';
+
 import { z } from 'zod';
 
 import { type ArmEnvironment, buildArmEnv } from '../harness/arm-env.js';
@@ -51,6 +54,29 @@ export interface ReportHost {
   readonly node: string;
   /** The `NODE_OPTIONS` the arm hands every measured child, before a facet's own preload; `''` for none. */
   readonly nodeOptions: string;
+  /**
+   * V8's heap limit in bytes, as a measured child's Node sees it under {@link nodeOptions}. Its
+   * default is derived from the machine's memory, so two hosts alike in every field above can
+   * still run out of heap at different peaks.
+   */
+  readonly heapSizeLimit: number;
+  /** The machine's memory in bytes (`os.totalmem()`). Recorded, never compared: the heap limit is what it decides. */
+  readonly totalMem: number;
+}
+
+/**
+ * The heap limit a measured child gets: read from a child of this Node under the arm's environment,
+ * since `--max-old-space-size` in `NODE_OPTIONS` (or its absence) decides it.
+ *
+ * @throws {Error} when the child reports no limit — a host field the comparison cannot trust
+ */
+function childHeapSizeLimit(env: NodeJS.ProcessEnv): number {
+  const read = spawnSync(process.execPath, ['-e', "process.stdout.write(String(require('node:v8').getHeapStatistics().heap_size_limit))"], { env, encoding: 'utf8' });
+  const limit = Number(read.stdout);
+  if (read.status !== 0 || !Number.isSafeInteger(limit) || limit <= 0) {
+    throw new Error(`currentHost: could not read V8's heap limit from a child under NODE_OPTIONS '${env['NODE_OPTIONS'] ?? ''}' (exit ${String(read.status)}): ${read.stderr}`);
+  }
+  return limit;
 }
 
 /**
@@ -58,8 +84,16 @@ export interface ReportHost {
  * @returns The host this process is, as a report records it
  */
 export function currentHost(env: ArmEnvironment): ReportHost {
-  const nodeOptions = (buildArmEnv(process.env, env)['NODE_OPTIONS'] ?? '').trim();
-  return { platform: process.platform, arch: process.arch, node: process.version, nodeOptions };
+  const armEnv = buildArmEnv(process.env, env);
+  const nodeOptions = (armEnv['NODE_OPTIONS'] ?? '').trim();
+  return {
+    platform: process.platform,
+    arch: process.arch,
+    node: process.version,
+    nodeOptions,
+    heapSizeLimit: childHeapSizeLimit(armEnv),
+    totalMem: totalmem(),
+  };
 }
 
 /** A measurement of one facet at one coordinate. */
@@ -121,7 +155,14 @@ export const ReportEnvelopeSchema = z
     npmNetworkEnv: z.array(z.string()),
     exits: z.array(RecordedExitSchema),
     host: z
-      .object({ platform: z.string().min(1), arch: z.string().min(1), node: z.string().min(1), nodeOptions: z.string() })
+      .object({
+        platform: z.string().min(1),
+        arch: z.string().min(1),
+        node: z.string().min(1),
+        nodeOptions: z.string(),
+        heapSizeLimit: z.number().int().positive(),
+        totalMem: z.number().int().positive(),
+      })
       .strict(),
     body: z.unknown(),
   })
@@ -211,6 +252,7 @@ const HOST_FIELDS: readonly (readonly [keyof ReportHost, string])[] = [
   ['arch', 'architecture'],
   ['node', 'Node version'],
   ['nodeOptions', 'NODE_OPTIONS'],
+  ['heapSizeLimit', 'V8 heap limit'],
 ];
 
 /**

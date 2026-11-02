@@ -22,9 +22,14 @@
   `Warning: Nothing was examined: …`, which read as a warning for a run that fails, and a refusal a
   lane had already reported could print twice. Affects `vat validate`, `vat verify`, `vat build`,
   `vat resources validate` and `vat claude marketplace validate`; the document writer now prints it
-  for every report verb, so `vat rag index`, `vat skills validate`, `vat skills build` and the others
-  that said nothing on stderr now say it. Under `--format text` stdout already carries the line, so
-  stderr does not repeat it.
+  for every report verb, so `vat rag index`, `vat skills build` and the others that said nothing on
+  stderr now say it. `vat skills validate` printed only the globs that matched nothing; it now prints
+  this refusal too, whose remedy points at that globs line. Under `--format text` stdout already
+  carries the line, so stderr does not repeat it.
+- **`vat audit settings` no longer prints its count lines** (`N warning(s): see findings …`,
+  `N settings path(s) could not be checked.`, `Legacy managed-settings.json path detected …`): each
+  finding prints on stderr instead. A log filter matching those lines must match the finding's
+  `[CODE]`.
 - **`@vibe-agent-toolkit/rag-lancedb` no longer prints its chunking-config warnings** (`[vat-rag] …`
   on the console). They are in `IndexResult.warnings`; `vat rag index` reports each as a
   `RAG_CHUNKING_CONFIG_ADJUSTED` warning finding, which does not change the exit code.
@@ -47,8 +52,9 @@
   `--verbose`. The stdout document is unchanged; read stderr and redirect stdout to a file.
   Under `vat resources validate --format text` stdout already is these lines, so stderr carries none.
 - **`vat okf validate` and `vat audit settings` print each finding on stderr**, in place of nothing
-  (`okf validate`) or a count line (`audit settings`: `N warning(s): see findings …`,
-  `N settings path(s) could not be checked.`, `Legacy managed-settings.json path detected …`).
+  (`okf validate`) or a count line (`audit settings`, under Breaking). A refused `vat okf validate`
+  prints the findings of every bundle it did read, as any refusal now prints the work that finished.
+- **`vat ard emit` prints its findings on stderr under `--format json` too**, not only under text.
   `vat claude plugin uninstall` now prints `PLUGIN_KEPT_SIBLING_UNEXAMINED`, which it never printed,
   and `vat audit <git-url>` prints a clone it could not remove.
 - **A refusal's leftovers are not printed twice under `vat resources validate --format text`**:
@@ -59,10 +65,10 @@
   the same verb publishes JSON under `--format json`.
 - **`vat claude marketplace validate`'s `N error(s), N warning(s), N info` line counts the published
   document**, so a run refused for examining nothing prints `1 error(s)`, not `0 error(s)` beside exit 1,
-  and a run that could not do its job (exit 2) prints no count line at all.
+  and a run that could not do its job (exit 2) prints no count line at all. Inside `vat verify` the
+  marketplace phase no longer prints that line.
 - **`vat rag index` names every file it could not read even when the database then refuses the run**:
-  each is a `RAG_DOCUMENT_INDEX_FAILED` finding in the refusal document and a line on stderr.
-  Inside `vat verify` the marketplace phase no longer prints that line. Documents the provider failed
+  each is a `RAG_DOCUMENT_INDEX_FAILED` finding in the refusal document and a line on stderr. Documents the provider failed
   before the database refused the batch, and its chunking warnings, are reported the same way.
 - **`vat verify` prints the `packaged-content` banner before that phase's zero-bundle refusal**, which
   printed under the previous phase's banner.

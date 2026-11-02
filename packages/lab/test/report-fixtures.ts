@@ -43,7 +43,14 @@ export const COORDINATE: Coordinate = {
 };
 
 /** This machine, with no inherited NODE_OPTIONS. */
-export const HOST: ReportHost = { platform: process.platform, arch: process.arch, node: process.version, nodeOptions: '' };
+export const HOST: ReportHost = {
+  platform: process.platform,
+  arch: process.arch,
+  node: process.version,
+  nodeOptions: '',
+  heapSizeLimit: 4_345_298_944,
+  totalMem: 17_179_869_184,
+};
 
 /**
  * Build a well-formed report, overriding only what a test varies.

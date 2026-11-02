@@ -52,12 +52,14 @@ moments were never resident together. How many vat processes reported is counted
 change in that count is a CHANGED verdict on its own, across instrument kinds too: every kind runs
 `dist/bin.js` straight, so one count means one thing. A peak is the platform's allocator and the
 Node build's V8 as much as vat's, so two reports whose envelopes record a different `host`
-(`process.platform`, `process.arch`, `process.version`, and the `NODE_OPTIONS` the arm hands its
-children — a `--max-old-space-size` moves a peak) are refused, naming both.
+(`process.platform`, `process.arch`, `process.version`, the `NODE_OPTIONS` the arm hands its
+children, and the V8 heap limit a child of the arm gets — a `--max-old-space-size`, or a different
+machine's memory, moves a peak) are refused, naming both. The host's total memory is recorded too.
 
 A repeat that leaves no vat peak — killed, out of heap, or no process with a vat main script —
-fails the row; it is never read as a small number. A row whose process V8 aborted out of heap (its
-stderr names `JavaScript heap out of memory`) is marked `outOfHeap`, and against a measured other
+fails the row; it is never read as a small number. A row whose process ran out of heap (its stderr
+names `JavaScript heap out of memory` or `ERR_WORKER_OUT_OF_MEMORY`, a warm arm's unmeasured priming
+run included) is marked `outOfHeap`, and against a measured other
 side it compares CHANGED with no ratio — the worst regression never reads as no delta. So does a row whose repeats disagree on how many
 vat processes reported. CHANGED needs the median delta to clear three bars at once: 10% of the
 smaller median (`perf`'s relative gate), 8 MiB, and the two arms' combined min–max spread.

@@ -41,10 +41,10 @@ describe('an install run', () => {
     expect(outcomeOf(run)?.symlink).toBe(true);
   });
 
-  it('a leftover is logged as a warning and joins the run\'s findings', () => {
+  it('a leftover joins the run\'s findings, printed with them once, not here', () => {
     const run = runOf();
     leftover(run, WARNING as never);
-    expect(vi.mocked(run.logger.warn).mock.calls).toEqual([['  warning: left behind [TREE_CLEANUP_INCOMPLETE]'], ['    Fix: Remove it.']]);
+    expect(run.logger.warn).not.toHaveBeenCalled();
     expect(run.issues).toEqual([WARNING]);
   });
 

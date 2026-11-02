@@ -2571,8 +2571,8 @@ function renderVerboseEvidence(
 
 /**
  * The verdict line over a run the writer refused (it derives and prints the
- * refusal itself), so "Audit successful: 0 file(s) passed" never sits beside it
- * (invariant 6 of `run-integrity.ts`). Both stderr lanes call it first.
+ * refusal itself, ABOVE this line), so "Audit successful: 0 file(s) passed" never
+ * sits beside it (invariant 6 of `run-integrity.ts`). Both stderr lanes call it first.
  *
  * @returns Whether the run was refused, so the caller skips its verdict line
  */
@@ -2581,7 +2581,7 @@ function logRunIntegrity(
   logger: ReturnType<typeof createLogger>,
 ): boolean {
   if (!written.findings.some((finding) => finding.code === RUN_INTEGRITY_CODE)) return false;
-  logger.error(`Audit is not a verdict: it audited ${written.examined} files`);
+  logger.error(`⚠️ Not a verdict: the refusal above is this audit's result (${written.examined} files audited)`);
   return true;
 }
 

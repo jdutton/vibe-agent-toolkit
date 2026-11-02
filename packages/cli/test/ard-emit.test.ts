@@ -513,6 +513,15 @@ describe('runArdEmit — a bare override block that loses is NAMED, not dropped'
     expect(stderr).toContain(`ard.entries."skill:${PUBLISHED_SKILL}"`);
     expect(exitCalls).toEqual([[0]]);
   });
+
+  it('says so on stderr under --format json too, as the report carries it', async () => {
+    const root = projectWithSkill(workDir, 'shadowed-stderr-json', CONFIG_YAML_ARD_SHADOWED_KEYS);
+    const { stdout, stderr } = await captureEmit(root, { format: 'json' });
+
+    const findings = (JSON.parse(stdout) as { findings: Array<{ code: string }> }).findings;
+    expect(findings.length).toBeGreaterThan(0);
+    for (const { code } of findings) expect(stderr).toContain(`[${code}]`);
+  });
 });
 
 describe('runArdEmit — a dot segment never reaches a published address', () => {

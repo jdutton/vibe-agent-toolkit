@@ -296,10 +296,12 @@ the document writer adds, the writer prints itself, once. Verbs whose stderr doe
 findings this way are listed in `FINDINGS_NOT_ON_STDERR`
 (`packages/cli/test/system/test-helpers/exit-code-matrix.ts`), which the exit-code matrix asserts
 both ways.
-A verb whose `--format text` document prints one line per finding (`vat resources validate`)
-carries none on stderr under that format, because stdout already is these lines. `vat ard emit` is the exception: its text document is one summary line, so under
-`--format text` the findings go to stderr, and under `--format json` they are only in the
-report. See [The report contract](#the-report-contract).
+A verb whose `--format text` document is the generic rendering, one line per finding
+(`vat resources validate`), carries none on stderr under that format, because stdout already is
+these lines. A verb with its own text rendering (`vat ard emit`, whose text document is one summary
+line) prints its findings on stderr under every format. `findingsGoToStderr` in
+`packages/cli/src/utils/document-writer.ts` is that one rule. See
+[The report contract](#the-report-contract).
 
 #### Finding lines (stderr)
 

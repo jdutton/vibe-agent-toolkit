@@ -30,6 +30,7 @@ import { fileURLToPath } from 'node:url';
 import {
   exitCodeForReport,
   type ExitDeterminingDocument,
+  type Finding,
   type RefusalCode,
   type ReportStatus,
 } from '@vibe-agent-toolkit/schema';
@@ -43,6 +44,7 @@ import { PUBLISHED_SHAPES } from '../../../src/report-schemas.js';
 import { cleanupTestTempDir, createTestTempDir, fakeHomeEnv, getBinPath, writeFileTree } from '../test-common.js';
 
 import { executeCli } from './cli-runner.js';
+import { saysFindingLine } from './finding-line.js';
 
 /** The built CLI every matrix file spawns — resolved from the system-test directory, where the spec files live. */
 export const MATRIX_BIN_PATH = getBinPath(new URL('../exit-code-matrix.system.test.ts', import.meta.url).href);
@@ -1123,19 +1125,21 @@ export function exitCodeTheContractGives(document: ExitDeterminingDocument & Rec
  * that starts saying them must leave this list.
  */
 const FINDINGS_NOT_ON_STDERR: ReadonlySet<string> = new Set([
-  'agent installed', 'agent list', 'ard emit', 'claude plugin install', 'corpus scan',
+  'agent installed', 'agent list', 'corpus scan',
   'doctor', 'inventory', 'skill review', 'skills install', 'skills list',
 ]);
 
 /**
- * Every verb says its findings on stderr through the shared reporter: each
- * error by its `[CODE]`, and a warning or info at least by code or by the
- * collapsed hint — never a bare count, never silence.
+ * Every verb says its findings on stderr through the shared reporter — under any status, a refusal's
+ * finished work included: each error as the reporter's own line ({@link saysFindingLine}), and a
+ * warning or info at least as one, or by the collapsed hint — never a bare count, a home-made
+ * format, or silence. A document with no finding has nothing to say.
  */
 function expectFindingsSaidOnStderr(verb: string, document: Record<string, unknown>, stderr: string): void {
-  const findings = (document['findings'] ?? []) as ReadonlyArray<{ code: string; severity: string }>;
-  const errorsSaid = findings.filter((finding) => finding.severity === 'error').every(({ code }) => stderr.includes(`[${code}]`));
-  const said = errorsSaid && (findings.some(({ code }) => stderr.includes(`[${code}]`)) || stderr.includes('finding(s) not shown'));
+  const findings = (document['findings'] ?? []) as readonly Finding[];
+  if (findings.length === 0) return;
+  const errorsSaid = findings.filter((finding) => finding.severity === 'error').every((finding) => saysFindingLine(stderr, finding));
+  const said = errorsSaid && (findings.some((finding) => saysFindingLine(stderr, finding)) || stderr.includes('finding(s) not shown'));
   expect(said, `${verb}: findings on stderr?\n${stderr}`).toBe(!FINDINGS_NOT_ON_STDERR.has(verb));
 }
 
@@ -1164,7 +1168,7 @@ export function expectScenarioEndsOnItsDerivedCode(scenario: MatrixCase, context
   // The gate is IN the document — the exit code derives from nothing else.
   expect(document.gate, `${result.stdout}\n${result.stderr}`).toStrictEqual({ strict: expect.any(Boolean) });
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCodeForReport(document));
-  if (scenario.status === 'findings') expectFindingsSaidOnStderr(scenario.verb, document, result.stderr);
+  expectFindingsSaidOnStderr(scenario.verb, document, result.stderr);
   return { exitCode: result.status, document };
 }
 

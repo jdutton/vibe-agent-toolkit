@@ -72,4 +72,11 @@ describe('an import-inserting rule in a CommonJS file', () => {
     expect(fixed.output).toBe(code);
     expect(fixed.messages.map((m) => [m.ruleId, m.suggestions ?? []])).toEqual([[`local/${name}`, []]]);
   });
+
+  it('rewrites the call when the replacement is already bound in the file', () => {
+    const code = "const { normalizedTmpdir } = require('@vibe-agent-toolkit/utils/fs');\nconst os = require('os');\nmodule.exports = os.tmpdir();\n";
+    const fixed = new Linter().verifyAndFix(code, script(RULE.tmpdir), { filename: 'file.ts' });
+
+    expect(fixed.output).toContain('module.exports = normalizedTmpdir();');
+  });
 });

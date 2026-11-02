@@ -368,7 +368,7 @@ That test exists because the answer used to be no. ESLint merges the fixes one `
 
 `eslint-disable` interacts with this in a way worth knowing about, because it is not obvious and it took an adversarial run to find. ESLint invokes a rule's `fix()` **before** the disable filter discards the problem, so a suppressed report still consumes any once-per-file edit its rule was holding. Where that edit is an import *insert*, the rules either re-emit it from every report or carry a repair leg that recognises the orphaned call and supplies the missing import on the next pass — so a disabled call site costs an extra pass, not a broken file. No report's fix ever *removes* an import: a removal carried by any one report would land while a suppressed call still reads the binding, and the output would lint clean and throw `ReferenceError`. Removal belongs to the dead-import leg alone, on the next pass, once scope shows nothing references the binding. `exemptFiles` remains the supported way to opt a whole file out.
 
-Two more things a fixer here will not do: delete a `type`-only, aliased, or re-exported specifier (removing a re-exported one produced output that did not parse), and insert an import *between* a leading `eslint-disable-next-line` and the statement it protects, which would silently revoke the suppression.
+Two more things a fixer here will not do: delete a `type`-only or re-exported specifier (removing a re-exported one produced output that did not parse), and insert an import *between* a leading `eslint-disable-next-line` and the statement it protects, which would silently revoke the suppression.
 
 #### The binding left behind
 

@@ -1476,7 +1476,7 @@ function withRunAllowUnused(framework: FrameworkResult, ledger: AllowUsageLedger
  * bundle over the memo (`withOwnBundle` in `validators/packaging-validator.ts`),
  * reading only the bundle; pinned by
  * `test/integration/post-build-own-output.integration.test.ts`. `packageSkill`'s default output
- * IS the middle row, so this is the normal case, not an edge case. The result's
+ * IS the second row, so this is the normal case, not an edge case. The result's
  * own `files.dependencies` still reads `["reference.md"]`: the packager copied it,
  * and the validator invoked here — immediately afterwards — cannot see it.
  *
@@ -1486,7 +1486,7 @@ function withRunAllowUnused(framework: FrameworkResult, ledger: AllowUsageLedger
  * `${CLAUDE_PLUGIN_ROOT}` invocation inside a bundled reference is caught at
  * source and CANNOT be caught in the built artifact.
  *
- * 🔑 Measured vs inferred. The three rows are MEASURED (that probe).
+ * 🔑 Measured vs inferred. The first three rows are MEASURED (that probe).
  * That the finding is still LIVE is inferred from this function's own body: it
  * passes only the built `SKILL.md` path, with no registry and no population
  * source rooted at the output tree, so `validateSkillForPackaging` resolves
@@ -1495,7 +1495,7 @@ function withRunAllowUnused(framework: FrameworkResult, ledger: AllowUsageLedger
  * walk starts from nothing. The probe is no longer only a probe: it is pinned as
  * a committed regression test at
  * `packages/cli/test/integration/built-lane-link-graph.integration.test.ts`
- * (fixture `BUNDLING_SKILL_FILES`), asserting the middle row as today's
+ * (fixture `BUNDLING_SKILL_FILES`), asserting the second row as today's
  * behaviour. When this is fixed, those assertions flip in the fixing change.
  *
  * ⛔ Do NOT fix it by widening the crawl. That same `**\/dist\/**` exclusion is

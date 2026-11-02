@@ -67,7 +67,9 @@ const {
   EXEMPT_AND_SAFE_MODULE_SCHEMA,
   insertAboveWithComments,
   isNameAlreadyBound,
+  isShadowedAt,
   resolveSafeModule,
+  takesNamedSpecifier,
 } = require('./safe-import.cjs');
 
 /** Does this declaration bring in `name` as a named specifier? */
@@ -284,7 +286,7 @@ module.exports = function createNoUnsafeRule(config) {
             unsafeImportNodes.push(node);
           }
           if (node.source.value === targetModule) {
-            safeImportNode = node;
+            if (takesNamedSpecifier(node)) safeImportNode = node;
             hasSafeImport = hasSafeImport || importsName(node, safeFn);
           }
         },
@@ -303,7 +305,10 @@ module.exports = function createNoUnsafeRule(config) {
         // that would compile — and appends to a one-argument call only: further
         // arguments belong to the unsafe function and mean nothing to the safe one.
         const report = { node, messageId: 'noUnsafeOperation', data: { safeModule: targetModule } };
-        if (!native && autofixes(node)) {
+        // An inner binding named `safeFn` would catch the rewritten call: no rewrite at all.
+        if (isShadowedAt(sourceCode, node, safeFn)) {
+          context.report({ ...report, suggest: [] });
+        } else if (!native && autofixes(node)) {
           context.report({ ...report, fix: (fixer) => rewriteCall(fixer) });
         } else {
           const [only, ...rest] = node.arguments;
@@ -359,7 +364,6 @@ module.exports = function createNoUnsafeRule(config) {
           // from an editor's "fix this problem".
           if (!hasSafeImport) {
             if (safeImportNode) {
-              // Add to existing safe module import
               const lastSpecifier = safeImportNode.specifiers.at(-1);
               fixes.push(fixer.insertTextAfter(lastSpecifier, `, ${safeFn}`));
             } else {

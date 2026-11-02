@@ -544,6 +544,7 @@ async function installCommand(
     endWithRefusal('claude plugin install', refusalCodeOf(refusal), refusal, 'yaml', GATE, installFinished(outcomeOf(run), dryRun));
   }
 
+  reportFindings(outcome.issues, { verbose: true, write: logger.warn });
   logInstallOutcome(outcome, dryRun, logger);
   endWithReport('claude plugin install', buildPluginInstallReport(outcome, dryRun, Date.now() - startTime), 'yaml');
 }
@@ -868,7 +869,6 @@ function notOwnedRefusal(error: unknown): unknown {
 
 /** A leftover of a complete install, as a warning naming it. */
 function leftover(run: InstallRun, issue: ValidationIssue): void {
-  reportFindings([issue], { verbose: true, write: run.logger.warn });
   run.issues.push(issue);
 }
 

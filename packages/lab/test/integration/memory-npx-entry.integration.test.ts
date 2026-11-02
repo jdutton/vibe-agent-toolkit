@@ -151,6 +151,8 @@ describe('withMemoryInstrument', () => {
 describe('npmInstaller', () => {
   it('installs with lifecycle scripts off, in the install arm, into its npm cache', async () => {
     vi.resetModules();
+    // An inherited userconfig, in any case, would win over ~/.npmrc.
+    for (const name of Object.keys(process.env).filter((key) => key.toLowerCase() === 'npm_config_userconfig')) vi.stubEnv(name, undefined);
     const calls: { args: readonly string[]; env: ArmEnvironment }[] = [];
     vi.doMock('../../src/harness/run.js', () => ({
       runCommand: (_command: unknown, args: readonly string[], options: { env: ArmEnvironment }) => {
@@ -163,6 +165,7 @@ describe('npmInstaller', () => {
 
     await npmInstaller(dirs, { set: {}, unset: [] }, undefined)(SPEC, safePath.join(dirs.tmp, 'install'));
     vi.doUnmock('../../src/harness/run.js');
+    vi.unstubAllEnvs();
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.args).toContain('--ignore-scripts');

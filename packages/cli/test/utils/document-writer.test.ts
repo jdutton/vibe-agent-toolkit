@@ -174,6 +174,19 @@ describe('endWithRefusal', () => {
     expect(document.data).toEqual(DATA);
     expect(exit.mock.calls).toEqual([[ExitCode.ERROR]]);
   });
+
+  it('says the finished work\'s findings on stderr once, through the shared reporter', () => {
+    endWithRefusal(VERB, 'INPUT_UNREADABLE', 'one root unreadable', 'yaml', { strict: false }, { examined: 1, findings: [FINDING], data: DATA });
+
+    expect(stderrText().split(`[${FINDING.code}]`)).toHaveLength(2);
+    expect(stderrText()).toContain(`  bundles/knowledge/a.md:1: error: concept has no type [${FINDING.code}]\n`);
+  });
+
+  it('leaves them to stdout under the generic --format text rendering', () => {
+    endWithRefusal(VERB, 'INPUT_UNREADABLE', 'one root unreadable', 'text', { strict: false }, { examined: 1, findings: [FINDING], data: DATA });
+
+    expect(stderrText()).not.toContain(FINDING.code);
+  });
 });
 
 describe('a refusal\'s diagnostics follow --debug', () => {

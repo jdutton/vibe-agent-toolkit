@@ -39,6 +39,7 @@ import {
 } from '../src/harness/ab.js';
 import { type ArmEnvironment, EMPTY_ARM_ENVIRONMENT } from '../src/harness/arm-env.js';
 import { MEASURABLE_COMMANDS } from '../src/harness/commands.js';
+import type { EstimatorKind } from '../src/harness/estimator.js';
 import { buildReportEnvelope } from '../src/harness/report.js';
 import type { CaptureRequest, ResolvedInstrument, ResolvedSubject } from '../src/harness/types.js';
 
@@ -112,6 +113,8 @@ interface FixtureOptions {
   readonly envA?: ArmEnvironment;
   /** Arm B's environment; absent means it sets nothing. */
   readonly envB?: ArmEnvironment;
+  /** The facet's estimator; absent means `min`. */
+  readonly estimator?: EstimatorKind;
 }
 
 /** A run's outcome plus the capture order it produced. */
@@ -188,6 +191,7 @@ async function runFixture(options: FixtureOptions, label: string): Promise<Fixtu
     now: () => new Date().toISOString(),
     capture,
     compare: () => comparisonFor(options.script[compared++]),
+    estimator: options.estimator ?? 'min',
     estimate: (report): readonly FacetEstimate[] =>
       report.body.commands.map((row) => ({ name: row.name, value: row.value, unit: 'ms' })),
   };
@@ -330,6 +334,25 @@ describe('runAb — the estimator', () => {
     expect(row.a?.min).not.toBe(200);
     // The effect is min-to-min: 90 - 100, not 90 - 200.
     expect(row.effect).toBe(-10);
+  });
+
+  it('takes the median instead when the facet declares it, and says so', async () => {
+    const { result } = await runFixture(
+      {
+        pairs: 3,
+        aValues: [200, 100, 500],
+        bValues: [90, 90, 90],
+        script: ['changed', 'changed', 'changed'],
+        estimator: 'median',
+      },
+      'estimator-median',
+    );
+
+    const row = only(result);
+    expect(row.a?.value).toBe(200);
+    // Median-to-median: 90 - 200, not 90 - 100.
+    expect(row.effect).toBe(-110);
+    expect(renderAb(result)).toContain('Estimator: MEDIAN across pairs');
   });
 
   it('keeps every per-pair value, so a reader can check the two statistics', async () => {

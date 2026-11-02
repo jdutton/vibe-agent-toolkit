@@ -41,3 +41,10 @@
   (`paths.map(realpathSync)`), captured or re-exported — is reported with no fix, since there is no call
   to rewrite. A `typeof realpathSync` type position is not reported. Expect new findings where a test
   double or a wrapper names the function it intercepts.
+- **The same four rules add the replacement's import correctly beside any import of the safe module.**
+  An existing `import type { … }`, `import * as u` or side-effect `import '…'` of
+  `@vibe-agent-toolkit/utils/fs` had the replacement appended to it: the value landed in a type-only
+  import, the output did not parse, or ESLint crashed (`Cannot read properties of undefined (reading
+  'range')`). The replacement now gets its own declaration. A call where an inner binding shadows the
+  replacement's name (a parameter `normalizedTmpdir`) is reported with no fix: the rewritten call
+  would reach that binding.

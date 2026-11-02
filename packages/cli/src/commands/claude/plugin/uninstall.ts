@@ -206,11 +206,11 @@ async function pluginUninstallCommand(
       outcomes.push({ key: pluginKeys[index] as string, removed: result.removed, warning: result.warning, notVats: result.notVats, keptForSibling: result.keptForSibling });
     }
     const finished = finishedWork(outcomes, dryRun);
-    reportFindings(finished.findings, { verbose: true, write: logger.warn });
     // Every key is uninstalled, registry rewritten; what the OS would not then delete is the refusal, naming it.
     if (leftover !== undefined) {
       refuse(leftover, { ...finished, findings: [...finished.findings, ...toFindings([leftoverIssueOf(leftover)])] });
     }
+    reportFindings(finished.findings, { verbose: true, write: logger.warn });
   } catch (error) {
     // Refused before the registry was rewritten: every key was put back, nothing finished.
     refuse(error, NOTHING_FINISHED);

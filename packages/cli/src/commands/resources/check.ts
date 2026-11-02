@@ -55,6 +55,7 @@ import {
   endWithForwardedDocument,
   endWithRefusal,
   endWithReport,
+  leaveFindingsToSupervisor,
   leftoverIssueOf,
   NOTHING_FINISHED,
   type ForwardedDocument,
@@ -1727,6 +1728,8 @@ export async function checkCommand(
     const root = standaloneRoot(pathArg);
     if (child === undefined) {
       warnWhenNoOwnChecks(loadConfigCached(root, 'source')?.resources?.checks, logger);
+    } else {
+      leaveFindingsToSupervisor();
     }
     // The presence of `--supervised-by` says "you ARE the child". `--budget 0` says
     // the operator declined the bound; both run the work here, and the second
@@ -1735,7 +1738,7 @@ export async function checkCommand(
       ? { payload: await withNoticeAudience(noticeAudienceOf(child), () => runChecksHere(pathArg, options, child, logger, startTime)) }
       : await superviseStandalone(root, options, format, budgetSecs);
     // The human half, on stderr, by the process the operator ran — as every verb does. A
-    // supervised child prints nothing here: its supervisor reports the document it forwards.
+    // supervised child prints no finding, here or in its writer: its supervisor reports them all.
     if (child === undefined) {
       const report = 'forward' in ending ? ending.forward.report : ending.payload;
       reportFindings(report.findings, { verbose: options.verbose === true, write: logger.error });

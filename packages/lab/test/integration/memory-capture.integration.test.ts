@@ -50,6 +50,12 @@ let silentPath: string;
 /** A preload that grows the V8 heap until V8 aborts the process. */
 let exhaustPath: string;
 
+/**
+ * A preload whose worker thread outgrows its heap limit, uncaught, so the process dies of it — the
+ * probe's own `process.exit` is held off, or it would end the process first.
+ */
+let workerExhaustPath: string;
+
 beforeAll(() => {
   const dir = mkdtempSync(safePath.join(normalizedTmpdir(), PREFIX));
   scratch.push(dir);
@@ -58,8 +64,17 @@ beforeAll(() => {
   silentPath = safePath.join(dir, 'silent.cjs');
   writeFileSync(silentPath, '\n');
   exhaustPath = safePath.join(dir, 'exhaust.cjs');
-  // Only in a measured run (the probe's directory is set): the build's untimed start must succeed.
-  writeFileSync(exhaustPath, 'if (process.env.VAT_LAB_RSS_LOG) { const kept = []; for (;;) kept.push(new Array(1e5).fill(1)); }\n');
+  // In every run of the measured command, a warm arm's unmeasured priming run included — never in the
+  // build's untimed `--version` start, nor in the `node -e` child the host's heap limit is read from.
+  writeFileSync(
+    exhaustPath,
+    "if (process.argv.length > 1 && !process.argv.includes('--version')) { const kept = []; for (;;) kept.push(new Array(1e5).fill(1)); }\n",
+  );
+  workerExhaustPath = safePath.join(dir, 'worker-exhaust.cjs');
+  writeFileSync(
+    workerExhaustPath,
+    "if (process.argv.length > 1 && !process.argv.includes('--version')) { new (require('node:worker_threads').Worker)('const kept = []; for (;;) kept.push(new Array(1e5).fill(1));', { eval: true, resourceLimits: { maxOldGenerationSizeMb: 8 } }); process.exit = () => undefined; }\n",
+  );
 });
 
 afterAll(() => {
@@ -131,9 +146,18 @@ describe('captureMemory', () => {
     expect(row.outOfHeap).toBe(false);
   });
 
-  it('marks a row whose vat ran out of heap as out of heap, not merely failed', async () => {
+  // Warm: the unmeasured priming run is what runs out, and leaves no measured repeat at all.
+  it.each(['warm', 'cold'] as const)('marks a %s row whose vat ran out of heap as out of heap, not merely failed', async (cache) => {
     const env = { set: { NODE_OPTIONS: `--max-old-space-size=16 --require "${exhaustPath}"` }, unset: [] };
-    const row = onlyRow(await capture(setupProbe(PREFIX), 0, { env, runs: 1 }));
+    const row = onlyRow(await capture(setupProbe(PREFIX), 0, { env, runs: 1, cache }));
+
+    expect(row.failed).toBe(true);
+    expect(row.outOfHeap).toBe(true);
+  });
+
+  it('marks a row whose worker thread ran out of heap (ERR_WORKER_OUT_OF_MEMORY) as out of heap', async () => {
+    const env = { set: { NODE_OPTIONS: `--require "${workerExhaustPath}"` }, unset: [] };
+    const row = onlyRow(await capture(setupProbe(PREFIX), 0, { env, runs: 1, cache: 'cold' }));
 
     expect(row.failed).toBe(true);
     expect(row.outOfHeap).toBe(true);

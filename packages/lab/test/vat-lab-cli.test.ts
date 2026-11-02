@@ -358,6 +358,16 @@ describe('vat-lab <facet> ab — every facet gets the verb, not just the one tha
     expect(optionOf(facet, 'ab', '--cache')?.defaultValue).toBe(expected);
   });
 
+  it.for([
+    { facet: 'perf', expected: 'min estimator' },
+    { facet: 'memory', expected: 'median estimator' },
+  ] as const)('names $facet ab’s own estimator, $expected', ({ facet, expected }) => {
+    const ab = createProgram()
+      .commands.find((group) => group.name() === facet)
+      ?.commands.find((candidate) => candidate.name() === 'ab');
+    expect(ab?.description()).toContain(expected);
+  });
+
   it('refuses --control alongside --instrument-b instead of ignoring one of them', async () => {
     // Both flags are meaningful and they contradict each other. Silently
     // dropping --instrument-b would run a control the caller thought was an A/B.

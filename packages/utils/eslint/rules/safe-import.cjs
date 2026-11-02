@@ -45,27 +45,66 @@ const SAFE_FS_MODULE = `${PACKAGE_NAME}/fs`;
 const SAFE_PROCESS_MODULE = `${PACKAGE_NAME}/process`;
 
 /**
- * Is `name` already bound at the top level of the linted file?
+ * The file's top-level scope: where an added `import` lands, and where a CommonJS
+ * file's own top-level `const` lives.
  *
- * Checks the module scope (or the global scope for `sourceType: 'script'`), which
- * is where an added `import` declaration would land. A binding of the same name
- * inside a nested function is deliberately NOT a conflict — an import at the top
- * of the file is still legal, it is merely shadowed there.
+ * `getScope(Program)` hands back the GLOBAL scope, and both of those are its
+ * child: the module scope of an ES module, or the function scope ESLint wraps
+ * around a `sourceType: 'commonjs'` file. Reading the global scope alone answers
+ * "not bound" for exactly the files the check exists to protect.
+ *
+ * @param {object} sourceCode - ESLint `SourceCode` for the file being linted.
+ * @returns {object} The top-level eslint-scope `Scope`.
+ */
+function topLevelScope(sourceCode) {
+  const globalScope = sourceCode.getScope(sourceCode.ast);
+  const fileScope = globalScope.childScopes.find(
+    (child) => child.type === 'module' || (child.type === 'function' && child.block === sourceCode.ast),
+  );
+  return fileScope ?? globalScope;
+}
+
+/**
+ * Is `name` already bound at the top level of the linted file? A binding inside a
+ * nested function is not a redeclaration: see `isShadowedAt` for that case.
  *
  * @param {object} sourceCode - ESLint `SourceCode` for the file being linted.
  * @param {string} name - The identifier the fixer wants to import.
  * @returns {boolean} True when adding an import of `name` would redeclare it.
  */
 function isNameAlreadyBound(sourceCode, name) {
-  const globalScope = sourceCode.getScope(sourceCode.ast);
-  // `getScope(Program)` hands back the GLOBAL scope, not the module scope —
-  // and every `import` binding lives in the module scope, which is its child.
-  // Reading `globalScope.variables` alone finds nothing and the check silently
-  // answers "not bound" for every ES module, i.e. exactly the files it exists
-  // to protect. (RuleTester caught this: the fix emitted a duplicate binding.)
-  const moduleScope = globalScope.childScopes.find((child) => child.type === 'module');
-  const scope = moduleScope ?? globalScope;
-  return scope.variables.some((variable) => variable.name === name);
+  return topLevelScope(sourceCode).variables.some((variable) => variable.name === name);
+}
+
+/**
+ * Is `name` bound in a scope between `node` and the file's top level? A call rewritten
+ * to `name` there reaches that inner binding, not the top-level one the fixer imports.
+ *
+ * @param {object} sourceCode - ESLint `SourceCode` for the file being linted.
+ * @param {object} node - The call site.
+ * @param {string} name - The replacement's identifier.
+ * @returns {boolean} True when an inner scope shadows `name` at `node`.
+ */
+function isShadowedAt(sourceCode, node, name) {
+  const top = topLevelScope(sourceCode);
+  for (let scope = sourceCode.getScope(node); scope && scope !== top; scope = scope.upper) {
+    if (scope.variables.some((variable) => variable.name === name)) return true;
+  }
+  return false;
+}
+
+/**
+ * Can `name` be added to this existing import of the safe module? Only a VALUE
+ * import with named specifiers takes one: appended to a type-only import the value
+ * is type-only, to a namespace import the result does not parse, and a side-effect
+ * import has no specifier to append after.
+ *
+ * @param {object} importNode - An `ImportDeclaration`.
+ * @returns {boolean} True when `, name` may follow its last specifier.
+ */
+function takesNamedSpecifier(importNode) {
+  return importNode.importKind !== 'type'
+    && importNode.specifiers.some((spec) => spec.type === 'ImportSpecifier');
 }
 
 /**
@@ -172,6 +211,8 @@ module.exports = {
   SAFE_PROCESS_MODULE,
   insertAboveWithComments,
   isNameAlreadyBound,
+  isShadowedAt,
   resolveSafeModule,
+  takesNamedSpecifier,
   withSafeModuleOption,
 };

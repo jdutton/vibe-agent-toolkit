@@ -73,6 +73,8 @@ describe('buildReportEnvelope — host', () => {
       arch: process.arch,
       node: process.version,
       nodeOptions: '--max-old-space-size=64',
+      heapSizeLimit: expect.any(Number),
+      totalMem: expect.any(Number),
     });
   });
 });

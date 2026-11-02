@@ -221,6 +221,7 @@ export function unsafeCallRuleCases(
         ),
       },
       ...nativeAndValueReferenceCases({ unsafeFn, unsafeModule, safeFn, extra, unsafeImport, namespaceImport, safeImport, options }),
+      ...importShapeCases({ unsafeFn, safeFn, safeModule, extra, unsafeImport, safeImport, options }, rewritten),
       ...(typeof rewrite === 'object' && 'autofixAsStatement' in rewrite
         ? statementOnlyAutofixCases(unsafeFn, safeFn, unsafeImport, safeImport, options)
         : []),
@@ -318,5 +319,45 @@ function nativeAndValueReferenceCases(
     reported(`${unsafeImport}\nexport const r = [x].map(${unsafeFn});`),
     reported(`${unsafeImport}\nexport const f = ${unsafeFn}.native;`),
     reported(`export { ${unsafeFn} } from '${unsafeModule}';`),
+  ];
+}
+
+interface ImportShapeSpec {
+  unsafeFn: string;
+  safeFn: string;
+  safeModule: string;
+  extra: string;
+  unsafeImport: string;
+  safeImport: string;
+  options: object[];
+}
+
+/**
+ * The replacement joins an existing import of the safe module only when it is a VALUE import with
+ * named specifiers. A type-only, namespace or side-effect import takes a declaration of its own:
+ * appended to, the value would be type-only, the result would not parse, or there is no specifier
+ * to append after. A call where the replacement's name is SHADOWED is reported with no rewrite:
+ * the rewritten call would reach the shadowing binding.
+ */
+function importShapeCases(
+  { unsafeFn, safeFn, safeModule, extra, unsafeImport, safeImport, options }: ImportShapeSpec,
+  rewritten: (fixedCode: string, suggestedCode: string) => { output?: string; errors: object[] },
+): object[] {
+  const ownDeclaration = (existing: string) => {
+    const fixed = `${existing}\n${unsafeImport}\n${safeImport}\nconst r = ${safeFn}(x${extra});`;
+    return { code: `${existing}\n${unsafeImport}\nconst r = ${unsafeFn}(x);`, filename: LINTED_FILE, options, ...rewritten(fixed, fixed) };
+  };
+  const shadowed = (code: string) => ({
+    code,
+    filename: LINTED_FILE,
+    options,
+    errors: [{ messageId: 'noUnsafeOperation', suggestions: [] }],
+  });
+  return [
+    ownDeclaration(`import type { Opaque } from '${safeModule}';`),
+    ownDeclaration(`import * as u from '${safeModule}';`),
+    ownDeclaration(`import '${safeModule}';`),
+    shadowed(`${unsafeImport}\nexport function f(${safeFn}: number) { return ${unsafeFn}(x); }`),
+    shadowed(`import { ${safeFn} } from '${BARREL}';\n${unsafeImport}\nexport function f() { const ${safeFn} = 1; return [${unsafeFn}(x), ${safeFn}]; }`),
   ];
 }

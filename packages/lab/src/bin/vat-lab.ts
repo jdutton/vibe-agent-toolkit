@@ -631,7 +631,7 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
       'Subject id recorded in the reports (default: the <subject> argument exactly as given)',
     )
     .description(
-      `Interleave two vat builds over the ${wiring.name} facet: A B A B …, min estimator, per-pair verdicts`,
+      `Interleave two vat builds over the ${wiring.name} facet: A B A B …, ${wiring.estimator} estimator, per-pair verdicts`,
     )
     .action((subjectPath: string, options: AbOptions) =>
       refusingArmErrors(async () => {
@@ -663,6 +663,7 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
             capture: wiring.capture,
             compare: wiring.compare,
             estimate: wiring.estimate,
+            estimator: wiring.estimator,
           });
           process.stdout.write(`${renderAb(result)}\n`);
           applyAbExitCode(result);
@@ -1682,6 +1683,7 @@ export function createProgram(): Command {
         // `minMs`, not `medianMs`. The row already carries the fastest repeat,
         // and it is the right number to hand `ab` for the same reason `ab` then
         // takes a minimum of it — see `harness/estimator.ts`.
+        estimator: 'min',
         estimate: (report) => rowEstimates(report.body.commands, 'ms', (row) => row.minMs),
       })
         .addCommand(createPerfArmsCommand())
@@ -1706,6 +1708,7 @@ export function createProgram(): Command {
         // normally every pair's value. That is a feature: an arm whose min and
         // p25 differ is an arm whose counts were NOT deterministic, and the A/B
         // shows it without needing its own stability rule.
+        estimator: 'min',
         estimate: (report) => rowEstimates(report.body.commands, 'calls', (row) => row.userCalls),
       }),
     )
@@ -1746,6 +1749,7 @@ export function createProgram(): Command {
         // change at all. The sum is the only single number that moves whenever
         // any parse work does. A reader who needs to know WHICH kind moved reads
         // the compare output, where the passes are qualified by kind.
+        estimator: 'min',
         estimate: (report) =>
           rowEstimates(report.body.commands, 'ms parse (all kinds)', fastestRepeat),
       }),
@@ -1771,6 +1775,7 @@ export function createProgram(): Command {
         // `parse` wiring uses, which is the point: these two facets report a
         // median row and must reduce it identically for `ab`, and stating the
         // rule twice is how they drifted apart the first time.
+        estimator: 'min',
         estimate: (report) =>
           rowEstimates(report.body.commands, 'ms crawl (all strata)', fastestRepeat),
       }),
@@ -1801,6 +1806,7 @@ export function createProgram(): Command {
         // requires an estimate, and it is honest about what it can see: two
         // populations of equal size and different membership read as unchanged
         // through `ab` and as CHANGED through `compare`. Use `compare`.
+        estimator: 'min',
         estimate: (report) => rowEstimates(report.body.commands, 'files', (row) => row.count),
       }),
     )
@@ -1818,9 +1824,10 @@ export function createProgram(): Command {
         compare: compareMemory,
         renderReport: renderMemoryReport,
         renderComparison: renderMemoryComparison,
-        // The smallest repeat's peak, for the reason perf publishes `minMs`:
-        // `ab` takes a minimum across captures, and a min over medians is not one.
-        estimate: (report) => rowEstimates(report.body.commands, 'KiB peak RSS', (row) => row.minKb),
+        // A peak moves both ways with when a collection lands, so the median repeat, and its median
+        // across captures: a min would pick the luckiest collection (see `EstimatorKind`).
+        estimator: 'median',
+        estimate: (report) => rowEstimates(report.body.commands, 'KiB peak RSS', (row) => row.medianKb),
       }),
     )
     .addCommand(createVerdictCommand());

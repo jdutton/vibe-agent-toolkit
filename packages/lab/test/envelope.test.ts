@@ -11,6 +11,8 @@
  * `envelope/envelope.ts`'s header.
  */
 
+import { totalmem } from 'node:os';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -163,7 +165,21 @@ describe('currentHost', () => {
   it('records the architecture and the NODE_OPTIONS the arm hands every measured child', () => {
     const host = currentHost({ set: { NODE_OPTIONS: ' --max-old-space-size=123 ' }, unset: [] });
 
-    expect(host).toEqual({ platform: process.platform, arch: process.arch, node: process.version, nodeOptions: '--max-old-space-size=123' });
+    expect(host).toEqual({
+      platform: process.platform,
+      arch: process.arch,
+      node: process.version,
+      nodeOptions: '--max-old-space-size=123',
+      heapSizeLimit: expect.any(Number),
+      totalMem: totalmem(),
+    });
     expect(currentHost({ set: {}, unset: ['NODE_OPTIONS'] }).nodeOptions).toBe('');
+  });
+
+  it("records the heap limit a measured child's Node gets under the arm's NODE_OPTIONS", () => {
+    const small = currentHost({ set: { NODE_OPTIONS: '--max-old-space-size=123' }, unset: [] }).heapSizeLimit;
+    const large = currentHost({ set: { NODE_OPTIONS: '--max-old-space-size=1234' }, unset: [] }).heapSizeLimit;
+
+    expect(large - small).toBeGreaterThanOrEqual((1234 - 123) * 1024 * 1024);
   });
 });

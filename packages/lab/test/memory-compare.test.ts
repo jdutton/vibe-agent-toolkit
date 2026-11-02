@@ -151,6 +151,7 @@ describe('compareMemory', () => {
     ['architecture', { ...HOST, arch: 'ia32' }],
     ['Node version', { ...HOST, node: 'v20.0.0' }],
     ['NODE_OPTIONS', { ...HOST, nodeOptions: '--max-old-space-size=8192' }],
+    ['V8 heap limit', { ...HOST, heapSizeLimit: HOST.heapSizeLimit * 2 }],
   ])('refuses two reports measured on a different %s, naming both', (what, host) => {
     const result = compareMemory(reportWith(row(GIB_KB)), reportWith(row(GIB_KB), makeReport({ host })));
 

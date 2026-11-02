@@ -117,15 +117,24 @@ function writeStderrLine(line: string): void {
   process.stderr.write(`${line}\n`);
 }
 
+/** Set in a supervised child, whose supervisor reports the findings of the document it forwards. */
+let supervisorSaysFindings = false;
+
+/** Leave this process's findings to the supervisor forwarding its document: printed here too, each would print twice. */
+export function leaveFindingsToSupervisor(): void {
+  supervisorSaysFindings = true;
+}
+
 /**
- * Whether a document's findings belong on stderr too: not when stdout is the
+ * Whether a document's findings belong on stderr too — the ONE rule, for the writer and every
+ * verb: not in a supervised child ({@link leaveFindingsToSupervisor}), and not when stdout is the
  * generic `--format text` rendering, which already lists every one.
  *
  * @param verb - The registered verb
  * @param format - How its document is rendered
  */
 export function findingsGoToStderr(verb: ReportVerb, format: DocumentFormat): boolean {
-  return format !== 'text' || reportShapeFor(verb).renderText !== undefined;
+  return !supervisorSaysFindings && (format !== 'text' || reportShapeFor(verb).renderText !== undefined);
 }
 
 /**
@@ -177,7 +186,8 @@ export const NOTHING_FINISHED: FinishedWork = Object.freeze({ examined: 0, findi
  * Publish the envelope's error branch — the run could not do its job — with
  * whatever finished, and end on `ERROR`.
  *
- * The message also goes to stderr, where a human reads it; `INTERNAL_ERROR`
+ * The finished work's findings go to stderr here, so no verb prints them before
+ * refusing. The message also goes to stderr, where a human reads it; `INTERNAL_ERROR`
  * adds the stack, since that one is VAT's defect to report, and under
  * `--debug` every refusal does — the flag exists to name the throw site.
  *
@@ -198,7 +208,9 @@ export function endWithRefusal(
   gate: Gate,
   finished: FinishedWork,
 ): never {
-  const report = refusalReport(code, error, gate, finished, findingsGoToStderr(verb, format));
+  const onStderr = findingsGoToStderr(verb, format);
+  if (onStderr) reportFindings(finished.findings, { verbose: true, write: writeStderrLine });
+  const report = refusalReport(code, error, gate, finished, onStderr);
   process.exit(exitCodeForReport(writeDocument(verb, report, format)));
 }
 

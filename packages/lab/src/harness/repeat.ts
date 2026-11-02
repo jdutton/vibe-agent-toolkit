@@ -183,6 +183,8 @@ export interface SpecMeasurement {
   readonly cache: CacheMode;
   /** Every measured repeat's outcome, raw and unfiltered. */
   readonly results: readonly SequenceResult[];
+  /** A warm arm's unmeasured priming run ({@link ArmRun.priming}): what a failed one left, when it left no repeat. */
+  readonly priming: SequenceResult | null;
   /** Why these repeats yield no usable measurement, or `null`. */
   readonly failure: string | null;
   /** The inherited names its VAT children ran without ({@link ArmRun.removed}). */
@@ -240,7 +242,16 @@ export async function measureSpec(
     env: request.env,
     ...(envFor === undefined ? {} : { envFor }),
   });
-  return { spec, args, cache: request.cache, results: run.results, failure: armRunFailure(run), removed: run.removed, npmNetwork: run.npmNetwork };
+  return {
+    spec,
+    args,
+    cache: request.cache,
+    results: run.results,
+    priming: run.priming,
+    failure: armRunFailure(run),
+    removed: run.removed,
+    npmNetwork: run.npmNetwork,
+  };
 }
 
 /**

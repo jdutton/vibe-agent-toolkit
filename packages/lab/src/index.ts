@@ -434,7 +434,7 @@ export {
   openComparison,
   unmeasurableReasonFor,
 } from './harness/facet-compare.js';
-export { type Estimate, estimate, quantile } from './harness/estimator.js';
+export { type Estimate, estimate, type EstimatorKind, quantile } from './harness/estimator.js';
 export {
   describeIssues,
   type DumpFilesAccepted,
