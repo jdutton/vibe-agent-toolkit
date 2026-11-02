@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import type { ResourcePopulationSource } from '@vibe-agent-toolkit/resources';
-import { FS_FAULT_CODE, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import type { ResourcePopulationSource, ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import { FS_FAULT_CODE, mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { withReaddirSyncRefused } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -266,9 +266,9 @@ describe('validateSkillForPackaging — routes its private crawl through the sha
 /**
  * A fault at the crawl's base is classified on the side the CALLER declares: a packaging run
  * writes its output into the project it crawls, so a project that vanishes under it is a
- * destination fault (`RUN_INCOMPLETE`), while `vat skills validate` only reads it. The memo is
- * keyed on the side too: a rejected crawl is memoized, and handing one side's fault to the
- * other's caller would re-code it.
+ * destination fault (`RUN_INCOMPLETE`), while `vat skills validate` only reads it. A rejected
+ * crawl is memoized, so it is served only to a caller declaring the same outputs: handing one
+ * side's fault to the other's caller would re-code it.
  */
 describe('crawlAndResolveRegistry — the side of the crawl base, from what the caller writes', () => {
   it('classifies a vanished base as the destination\'s only when it holds a declared output, and never serves one declaration\'s crawl to the other', async () => {
@@ -279,6 +279,46 @@ describe('crawlAndResolveRegistry — the side of the crawl base, from what the 
       .rejects.toMatchObject({ code: FS_FAULT_CODE, side: 'source', faultClass: 'absent' });
     await expect(withReaddirSyncRefused(root, 'ENOENT', () => crawlAndResolveRegistry(root, { unreadable: 'refuse', outputs: [safePath.join(root, 'dist')] })))
       .rejects.toMatchObject({ code: FS_FAULT_CODE, side: 'destination', faultClass: 'absent' });
+  });
+});
+
+/**
+ * `outputs` decides which SIDE a fault is on, never which files the crawl finds — so it is not
+ * part of what the memo shares. The packager's post-build lane calls this once per skill, each
+ * declaring its own output directory; keyed on `outputs`, every skill paid a fresh whole-project
+ * crawl and the process-lifetime memo kept every one of them (one registry per skill, which ran
+ * a large adopter's plugin build out of heap).
+ */
+describe('crawlAndResolveRegistry — what the caller writes does not split the memo', () => {
+  it('serves one registry to N callers that each declare a different output', async () => {
+    resetPackagingRegistryCache();
+    const root = rootWithMarkdown({ 'a.md': '# A\n' });
+
+    const registries = new Set<unknown>();
+    for (const skill of ['one', 'two', 'three', 'four']) {
+      registries.add(await crawlAndResolveRegistry(root, { unreadable: 'refuse', outputs: [safePath.join(root, 'out', skill)] }));
+    }
+
+    expect(registries.size).toBe(1);
+  });
+
+  it('finds the same population whatever the caller declares, an output inside the root included', async () => {
+    const root = rootWithMarkdown({ 'a.md': '# A\n' });
+    // An output directory inside the root and outside every default exclude: whether the crawl
+    // walks it is decided by include/exclude alone, never by its being declared an output.
+    const output = safePath.join(root, 'out');
+    mkdirSyncReal(output);
+    writeFileSync(safePath.join(output, 'built.md'), '# Built\n');
+    const pathsOf = (registry: ResourceRegistry): string[] =>
+      registry.getAllResources().map((resource) => resource.filePath).toSorted((a, b) => a.localeCompare(b));
+
+    resetPackagingRegistryCache();
+    const undeclared = pathsOf(await crawlAndResolveRegistry(root, { unreadable: 'refuse', outputs: [] }));
+    resetPackagingRegistryCache();
+    const declared = pathsOf(await crawlAndResolveRegistry(root, { unreadable: 'refuse', outputs: [output] }));
+
+    expect(declared).toEqual(undeclared);
+    expect(declared).toContain(safePath.join(output, 'built.md'));
   });
 });
 

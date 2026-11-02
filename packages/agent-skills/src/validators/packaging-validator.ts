@@ -369,8 +369,9 @@ export interface CrawlRegistryOptions {
    * What the calling verb writes — its outputs and their staging — or `[]` for a verb that
    * only reads the project: the crawl's one declaration of which side a fault is on (on, in
    * or holding an output: the destination's; anything else the project's content). Required:
-   * only the caller knows. Part of the memo key: two callers that disagree must not share one
-   * crawl.
+   * only the caller knows. NOT part of the memo key: it decides which side a fault is on, never
+   * which files the crawl finds, so a crawl that settled serves every caller — see
+   * {@link MemoEntry} for the one case (a rejected crawl) where it still matters.
    */
   outputs: readonly string[];
 }
@@ -394,6 +395,25 @@ export interface CrawlRegistryOptions {
 interface MemoizedRegistry {
   readonly registry: ResourceRegistry;
   readonly refusals: readonly DirectoryRefusal[];
+}
+
+/**
+ * One memo slot: the crawl of a root, and the `outputs` it classified its faults against.
+ *
+ * Keyed on the root alone. `outputs` shapes no population — the crawl's include/exclude and
+ * gitignore decide membership, and `outputs` is read only to put a fault on the destination's
+ * side — so a SETTLED crawl serves every caller of its root, whatever each one writes. The
+ * packager's post-build lane declares a different output per skill; keyed on `outputs`, every
+ * skill paid a fresh whole-project crawl and the memo held one registry per skill.
+ *
+ * A REJECTED crawl is the exception: its fault was classified against the outputs of the caller
+ * that started it, so it is served only to a caller declaring the same ones. Any other re-crawls
+ * and gets its own classification.
+ */
+interface MemoEntry {
+  /** The resolved `outputs` the crawl was started with, as one comparable string. */
+  readonly outputsKey: string;
+  readonly crawl: Promise<MemoizedRegistry>;
 }
 
 /**
@@ -478,47 +498,55 @@ export async function crawlAndResolveRegistry(
 ): Promise<ResourceRegistry> {
   const { populationSource, unreadable, outputs } = options;
   const cache = registryCacheFor(populationSource);
-  // The outputs are in the key: the crawl that settles a memo entry classifies a fault on its
-  // caller's outputs as the destination's, and a rejected crawl is memoized too.
-  const key = `${JSON.stringify(outputs.map((output) => toForwardSlash(safePath.resolve(output))))}:${toForwardSlash(safePath.resolve(projectRoot))}`;
+  const key = toForwardSlash(safePath.resolve(projectRoot));
+  const outputsKey = JSON.stringify(outputs.map((output) => toForwardSlash(safePath.resolve(output))));
   const cached = cache.get(key);
   if (cached !== undefined) {
-    const { registry, refusals } = await cached;
-    replayRefusals(refusals, unreadable, projectRoot, outputs);
-    return registry;
+    // A rejected crawl is served only to the outputs it classified its fault against (see MemoEntry).
+    const settled = cached.outputsKey === outputsKey
+      ? await cached.crawl
+      : await cached.crawl.catch(() => undefined);
+    if (settled !== undefined) {
+      replayRefusals(settled.refusals, unreadable, projectRoot, outputs);
+      return settled.registry;
+    }
   }
   // The PROMISE is cached, not the resolved value, so two overlapping requests
   // for one root can never start two crawls.
-  const pending = (async (): Promise<MemoizedRegistry> => {
-    const config = await loadConfig(projectRoot).catch(() => undefined);
-    // Every refusal the crawl hands over is kept for the memo's later callers —
-    // see {@link MemoizedRegistry}. Under `'refuse'` the crawl throws instead and
-    // this stays empty.
-    const refusals: DirectoryRefusal[] = [];
-    const recorded: RegistryUnreadablePolicy = unreadable === 'refuse'
-      ? 'refuse'
-      : { degrade: (refusal) => { refusals.push(refusal); unreadable.degrade(refusal); } };
-    const { registry } = await ResourceRegistry.fromCrawl(
-      {
-        baseDir: projectRoot,
-        include: ['**/*.md', '**/*.html', '**/*.htm'],
-        unreadable: recorded,
-        outputs,
-        // Enumeration only. `ResourceRegistry.crawl` re-applies the include set
-        // above — and the crawl's default exclude — to whatever the source
-        // offers, through the same compiled matcher the walk itself uses, so a
-        // source that enumerates a whole tree still yields exactly this crawl's
-        // markdown and HTML. Handing this builder a projection is a cost change,
-        // not a scope change.
-        ...(populationSource !== undefined && { populationSource }),
-      },
-      config === undefined ? undefined : { config },
-    );
-    registry.resolveLinks();
-    return { registry, refusals };
-  })();
-  cache.set(key, pending);
-  return (await pending).registry;
+  const crawl = crawlRegistry(projectRoot, options);
+  cache.set(key, { outputsKey, crawl });
+  return (await crawl).registry;
+}
+
+/** The one crawl {@link crawlAndResolveRegistry} memoizes. */
+async function crawlRegistry(projectRoot: string, options: CrawlRegistryOptions): Promise<MemoizedRegistry> {
+  const { populationSource, unreadable, outputs } = options;
+  const config = await loadConfig(projectRoot).catch(() => undefined);
+  // Every refusal the crawl hands over is kept for the memo's later callers —
+  // see {@link MemoizedRegistry}. Under `'refuse'` the crawl throws instead and
+  // this stays empty.
+  const refusals: DirectoryRefusal[] = [];
+  const recorded: RegistryUnreadablePolicy = unreadable === 'refuse'
+    ? 'refuse'
+    : { degrade: (refusal) => { refusals.push(refusal); unreadable.degrade(refusal); } };
+  const { registry } = await ResourceRegistry.fromCrawl(
+    {
+      baseDir: projectRoot,
+      include: ['**/*.md', '**/*.html', '**/*.htm'],
+      unreadable: recorded,
+      outputs,
+      // Enumeration only. `ResourceRegistry.crawl` re-applies the include set
+      // above — and the crawl's default exclude — to whatever the source
+      // offers, through the same compiled matcher the walk itself uses, so a
+      // source that enumerates a whole tree still yields exactly this crawl's
+      // markdown and HTML. Handing this builder a projection is a cost change,
+      // not a scope change.
+      ...(populationSource !== undefined && { populationSource }),
+    },
+    config === undefined ? undefined : { config },
+  );
+  registry.resolveLinks();
+  return { registry, refusals };
 }
 
 /**
@@ -553,7 +581,7 @@ export async function crawlAndResolveRegistry(
  * one lane can see its own output retracts that argument for every lane sharing
  * this memo — it is not a one-lane fix, and it lands here, not there.
  */
-const walkRegistryCache = new Map<string, Promise<MemoizedRegistry>>();
+const walkRegistryCache = new Map<string, MemoEntry>();
 
 /**
  * The same memo for the SOURCE-BACKED lanes, keyed first by the population
@@ -595,7 +623,7 @@ const walkRegistryCache = new Map<string, Promise<MemoizedRegistry>>();
  */
 let sourcedRegistryCache = new WeakMap<
   ResourcePopulationSource,
-  Map<string, Promise<MemoizedRegistry>>
+  Map<string, MemoEntry>
 >();
 
 /**
@@ -609,7 +637,7 @@ let sourcedRegistryCache = new WeakMap<
  */
 function registryCacheFor(
   populationSource: ResourcePopulationSource | undefined,
-): Map<string, Promise<MemoizedRegistry>> {
+): Map<string, MemoEntry> {
   if (populationSource === undefined) {
     return walkRegistryCache;
   }
@@ -617,7 +645,7 @@ function registryCacheFor(
   if (existing !== undefined) {
     return existing;
   }
-  const created = new Map<string, Promise<MemoizedRegistry>>();
+  const created = new Map<string, MemoEntry>();
   sourcedRegistryCache.set(populationSource, created);
   return created;
 }
