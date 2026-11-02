@@ -167,8 +167,10 @@ describe('removing a dead binding never changes what the statements around it me
 
     expect(messages.filter((message) => message.fatal === true)).toStrictEqual([]);
     expect(output).not.toContain('node:os');
-    expect(output).toMatch(/;\s*;?\s*"use strict";/u);
-    expect(output).not.toMatch(/(?:\{|"use foo";)\s*"use strict"/u);
+    const compact = output.replaceAll(/\s/gu, '');
+    expect(compact).toContain(';"usestrict";');
+    expect(compact).not.toContain('{"usestrict"');
+    expect(compact).not.toContain('"usefoo";"usestrict"');
   });
 
   it('adds no `;` where the statement before already ends in one', () => {
