@@ -28,7 +28,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   namedImport,
-  NODE_CHILD_PROCESS,
   NODE_FS,
   NODE_PATH,
   PATH_NAMESPACE_IMPORT,
@@ -50,8 +49,8 @@ const MULTI_SITE_REWRITES: Array<[string, string, string]> = [
   ...WRAPPED_PATH_FUNCTIONS.map((fn): [string, string, string] => [RULE.rawPath, namedImport(fn, NODE_PATH), `${fn}(a, b)`]),
   [RULE.tmpdir, namedImport('tmpdir', 'node:os'), 'tmpdir()'],
   [RULE.mkdir, namedImport('mkdirSync', NODE_FS), 'mkdirSync(a)'],
-  [RULE.realpath, namedImport('realpathSync', NODE_FS), 'realpathSync(a)'],
-  [RULE.execSync, namedImport('execSync', NODE_CHILD_PROCESS), 'execSync(a)'],
+  // `no-fs-realpathSync` and `no-child-process-execSync` are absent on purpose: neither has an
+  // autofix (the replacement needs an argument the rule cannot derive), only a suggestion.
   // No import to remove — the import INSERT alone spans the file.
   [RULE.normalize, '', String.raw`a.split('\\').join('/')`],
 ];
@@ -116,8 +115,6 @@ describe('autofix leaves no dangling reference', () => {
 const SUPPRESSION_CASES: Array<[string, string, string]> = [
   [RULE.tmpdir, namedImport('tmpdir', 'node:os'), 'tmpdir()'],
   [RULE.mkdir, namedImport('mkdirSync', NODE_FS), "mkdirSync('/d')"],
-  [RULE.realpath, namedImport('realpathSync', NODE_FS), "realpathSync('/p')"],
-  [RULE.execSync, namedImport('execSync', NODE_CHILD_PROCESS), "execSync('ls')"],
   [RULE.normalize, '', String.raw`'x'.split('\\').join('/')`],
 ];
 

@@ -96,21 +96,35 @@ export interface UnsafeCallRuleSpec {
   /** The NARROW subpath that owns `safeFn` — never the barrel. */
   safeModule: string;
   exemptPath: string;
+  /**
+   * `'fix'`: an autofix swaps the callee and keeps the arguments.
+   * `{ appendArgument }`: the safe call needs an argument the rule cannot know
+   * (`normalizePath`'s `{ within }`), so the rewrite is a SUGGESTION that appends
+   * this placeholder — never an autofix, which would emit a call that does not
+   * compile or, worse, one that compiles with a guessed value.
+   */
+  rewrite: 'fix' | { readonly appendArgument: string };
 }
 
 export function unsafeCallRuleCases(
-  { unsafeFn, unsafeModule, safeFn, safeModule, exemptPath }: UnsafeCallRuleSpec,
+  { unsafeFn, unsafeModule, safeFn, safeModule, exemptPath, rewrite }: UnsafeCallRuleSpec,
 ): RuleCases {
+  const extra = rewrite === 'fix' ? '' : `, ${rewrite.appendArgument}`;
   const unsafeCode = `import { ${unsafeFn} } from '${unsafeModule}';\nconst r = ${unsafeFn}(x);`;
   // The new import takes the removed one's LINE. It used to be welded onto
   // whatever followed, because the fixer inserted after `body[0]` with a
   // trailing newline regardless of what `body[0]` was — visible here only as a
   // moved `\n`, and visible in a file whose first statement is not an import as
   // `const os = {…};import { normalizedTmpdir } from '…';` on one line.
-  const output = `\nimport { ${safeFn} } from '${safeModule}';\nconst r = ${safeFn}(x);`;
+  const output = `\nimport { ${safeFn} } from '${safeModule}';\nconst r = ${safeFn}(x${extra});`;
   const errors = [{ messageId: 'noUnsafeOperation' }];
   const options = [{ exemptFiles: [exemptPath] }];
-  const decoy = (filename: string) => ({ code: unsafeCode, filename, options, output, errors });
+  /** What ONE report's rewrite produces: an autofix `output`, or the same text as its only suggestion. */
+  const rewritten = (rewrittenCode: string): { output?: string; errors: object[] } =>
+    rewrite === 'fix'
+      ? { output: rewrittenCode, errors }
+      : { errors: [{ messageId: 'noUnsafeOperation', suggestions: [{ messageId: 'useSafeCall', output: rewrittenCode }] }] };
+  const decoy = (filename: string) => ({ code: unsafeCode, filename, options, ...rewritten(output) });
   const exemptBasename = exemptPath.slice(exemptPath.lastIndexOf('/') + 1);
 
   return {
@@ -143,23 +157,33 @@ export function unsafeCallRuleCases(
       },
     ],
     invalid: [
-      { code: unsafeCode, filename: LINTED_FILE, options, output, errors },
+      { code: unsafeCode, filename: LINTED_FILE, options, ...rewritten(output) },
       // DECOY basenames — the shape that shipped raw tmpdir()/realpathSync()
       // past a fork of this rule pack in a consumer repo.
       decoy(`tools/hooks/${exemptBasename}`),
       decoy(`packages/other/src/${exemptBasename}`),
       // UNCONFIGURED — with no `exemptFiles` option nothing is exempt, including
       // the path this factory used to hardcode.
-      { code: unsafeCode, filename: exemptPath, output, errors },
+      { code: unsafeCode, filename: exemptPath, ...rewritten(output) },
       // ALREADY BOUND through the BARREL — rewrite the call, add no import. A
       // second binding of `safeFn` is a SyntaxError, not a redundant import.
       {
         code: `import { ${safeFn} } from '${BARREL}';\nimport { ${unsafeFn} } from '${unsafeModule}';\nconst r = ${unsafeFn}(x);`,
         filename: LINTED_FILE,
         options,
-        output: `import { ${safeFn} } from '${BARREL}';\n\nconst r = ${safeFn}(x);`,
-        errors,
+        ...rewritten(`import { ${safeFn} } from '${BARREL}';\n\nconst r = ${safeFn}(x${extra});`),
       },
+      // A suggestion appends ONE argument to a ONE-argument call. With more,
+      // the rest are the unsafe function's own (`realpathSync(p, 'utf8')`) and
+      // mean nothing to the safe one, so the call is reported with no rewrite.
+      ...(rewrite === 'fix'
+        ? []
+        : [{
+            code: `import { ${unsafeFn} } from '${unsafeModule}';\nconst r = ${unsafeFn}(x, y);`,
+            filename: LINTED_FILE,
+            options,
+            errors: [{ messageId: 'noUnsafeOperation', suggestions: [] }],
+          }]),
     ],
   };
 }

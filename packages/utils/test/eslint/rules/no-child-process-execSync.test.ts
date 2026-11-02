@@ -9,6 +9,7 @@ describe(RULE.execSync, () => {
     expectRulePasses(RULE.execSync, unsafeCallRuleCases({
       unsafeFn: 'execSync', unsafeModule: NODE_CHILD_PROCESS, safeFn: 'safeExecSync',
       safeModule: SAFE_PROCESS_MODULE, exemptPath: SAFE_EXEC_IMPL,
+      rewrite: { appendArgument: 'ARGV_FROM_SHELL_STRING' },
     }));
   });
 });

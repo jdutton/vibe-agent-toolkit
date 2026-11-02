@@ -17,6 +17,7 @@ module.exports = factory({
   unsafeModule: 'node:fs',
   safeFn: 'mkdirSyncReal',
   safeModule: SAFE_FS_MODULE,
+  rewrite: 'fix',
   message: 'Use mkdirSyncReal() from {{safeModule}} instead of fs.mkdirSync() for Windows path normalization',
   // No baked-in exemption: the file that implements mkdirSyncReal() is
   // repo-specific. Consumers declare it as { exemptFiles: [...] }.

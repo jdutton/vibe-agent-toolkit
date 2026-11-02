@@ -18,6 +18,12 @@
  *   in one repo, so a baked-in default is a hole in every OTHER repo. Consumers
  *   declare their own via the rule option (see `exempt-path-matcher.cjs`).
  * @param {boolean} [config.checkMemberExpression] - Check for obj.method() calls (default: false)
+ * @param {'fix' | { appendArgument: string, suggestion: string }} config.rewrite - REQUIRED.
+ *   `'fix'` when the safe function takes the unsafe call's arguments unchanged: an
+ *   autofix swaps the callee. Otherwise the safe function needs an argument the rule
+ *   cannot know, so there is no autofix — a suggestion (described by `suggestion`)
+ *   rewrites a one-argument call and appends `appendArgument`, a placeholder that
+ *   must fail the typecheck rather than guess a value that compiles.
  * @param {Object} config.docs - The rule's `meta.docs` manifest entry: `category`,
  *   `bans`, `useInstead`, optional `subpath`, and `recommended` /
  *   `recommendedSeverity` (what `index.cjs` builds `configs.recommended` from).
@@ -153,7 +159,16 @@ module.exports = function createNoUnsafeRule(config) {
     docs,
     exemptFiles = [],
     checkMemberExpression = false,
+    rewrite,
   } = config;
+
+  // Required, never defaulted: a rule whose replacement takes an argument the
+  // unsafe call does not carry must say so, or the default autofix emits a call
+  // that does not compile.
+  const suggestOnly = rewrite !== 'fix';
+  if (suggestOnly && typeof rewrite?.appendArgument !== 'string') {
+    throw new TypeError(`${unsafeFn} rule: \`rewrite\` must be 'fix' or { appendArgument, suggestion }`);
+  }
 
   const exemptMatcherFor = createConfigurableExemptPathMatcher(exemptFiles);
 
@@ -172,10 +187,11 @@ module.exports = function createNoUnsafeRule(config) {
         description: `Enforce use of ${safeFn}() instead of ${unsafeFn}()`,
         ...docs,
       },
-      fixable: 'code',
+      ...(suggestOnly ? { hasSuggestions: true } : { fixable: 'code' }),
       schema: [EXEMPT_AND_SAFE_MODULE_SCHEMA],
       messages: {
         noUnsafeOperation: message,
+        ...(suggestOnly && { useSafeCall: rewrite.suggestion }),
         [DEAD_UNSAFE_IMPORT]: DEAD_UNSAFE_IMPORT_MESSAGE,
         [UNANCHORED_EXEMPT_FILE]: UNANCHORED_EXEMPT_MESSAGE,
       },
@@ -332,95 +348,110 @@ module.exports = function createNoUnsafeRule(config) {
             return;
           }
 
-          context.report({
-            node,
-            messageId: 'noUnsafeOperation',
-            data: { safeModule: targetModule },
-            fix(fixer) {
-              const fixes = [];
+          // A replacement that needs an argument the rule cannot know (`within`)
+          // is offered as a SUGGESTION carrying a placeholder that fails the
+          // typecheck at that spot — never an autofix, and never a guessed value
+          // that would compile. It appends to a one-argument call only: further
+          // arguments belong to the unsafe function and mean nothing to the safe one.
+          const report = { node, messageId: 'noUnsafeOperation', data: { safeModule: targetModule } };
+          if (suggestOnly) {
+            const [only, ...rest] = node.arguments;
+            const rewritable = only !== undefined && rest.length === 0 && only.type !== 'SpreadElement';
+            context.report({
+              ...report,
+              suggest: rewritable ? [{ messageId: 'useSafeCall', fix: rewriteCall }] : [],
+            });
+          } else {
+            context.report({ ...report, fix: rewriteCall });
+          }
 
-              // Replace the WHOLE callee, member expression or not.
-              //
-              // Rewriting only the property turned `os.tmpdir()` into
-              // `os.normalizedTmpdir()` — a method that does not exist on the
-              // `node:os` namespace. The replacement is a free function from
-              // OUR package, and the fixer imported it correctly; it just left
-              // the call reaching for it through the wrong object. Silent, like
-              // the overlap bug below: lint went green (the rule no longer sees
-              // `tmpdir`), and it is a dangling MEMBER rather than a dangling
-              // identifier, so `no-undef` cannot see it either. `tsc` can.
-              fixes.push(fixer.replaceText(node.callee, safeFn));
+          function rewriteCall(fixer) {
+            const fixes = [];
 
-              // Add import if needed — on EVERY report, deliberately.
-              //
-              // The sister factory emits this once per file, because there a
-              // report that edits both the import and its own call site spans
-              // everything between them, N reports leave N nested ranges, and
-              // ESLint keeps one: the defect measured at 146 broken files.
-              //
-              // That guard does not belong here, and briefly having it was a
-              // mistake worth recording. These rules do NOT key detection on
-              // the import — `node.callee.name === unsafeFn` is true whether or
-              // not the specifier survives — and `hasSafeImport` is reseeded
-              // from scope each pass, so pass 2 always finished the job anyway.
-              // An adversarial run confirmed the guard changed no output at 4,
-              // 40 or 75 call sites. What it DID change was the failure mode:
-              // ESLint runs `fix()` for a suppressed problem before the
-              // `eslint-disable` filter discards it, so one disable comment on
-              // the first call site spent the once-per-file edit and stranded
-              // the file with calls the import no longer backs.
-              //
-              // Every report carrying its own import edit costs a pass and buys
-              // a fix that is correct on its own — including when applied alone
-              // from an editor's "fix this problem".
-              if (!hasSafeImport) {
-                if (safeImportNode) {
-                  // Add to existing safe module import
-                  const lastSpecifier = safeImportNode.specifiers.at(-1);
-                  fixes.push(fixer.insertTextAfter(lastSpecifier, `, ${safeFn}`));
-                } else {
-                  // Land next to the imports, never after arbitrary code —
-                  // `insertTextAfter(body[0])` on a file whose first statement
-                  // is a `const` welds the declaration onto the end of it.
-                  const targetNode = unsafeImportNode || sourceCode.ast.body[0];
-                  const declaration = `import { ${safeFn} } from '${targetModule}';`;
-                  fixes.push(
-                    targetNode.type === 'ImportDeclaration'
-                      ? fixer.insertTextAfter(targetNode, `\n${declaration}`)
-                      : insertAboveWithComments(fixer, sourceCode, targetNode, `${declaration}\n`),
-                  );
-                }
+            // Replace the WHOLE callee, member expression or not.
+            //
+            // Rewriting only the property turned `os.tmpdir()` into
+            // `os.normalizedTmpdir()` — a method that does not exist on the
+            // `node:os` namespace. The replacement is a free function from
+            // OUR package, and the fixer imported it correctly; it just left
+            // the call reaching for it through the wrong object. Silent, like
+            // the overlap bug below: lint went green (the rule no longer sees
+            // `tmpdir`), and it is a dangling MEMBER rather than a dangling
+            // identifier, so `no-undef` cannot see it either. `tsc` can.
+            fixes.push(fixer.replaceText(node.callee, safeFn));
+            if (suggestOnly) {
+              fixes.push(fixer.insertTextAfter(node.arguments[0], `, ${rewrite.appendArgument}`));
+            }
+
+            // Add import if needed — on EVERY report, deliberately.
+            //
+            // The sister factory emits this once per file, because there a
+            // report that edits both the import and its own call site spans
+            // everything between them, N reports leave N nested ranges, and
+            // ESLint keeps one: the defect measured at 146 broken files.
+            //
+            // That guard does not belong here, and briefly having it was a
+            // mistake worth recording. These rules do NOT key detection on
+            // the import — `node.callee.name === unsafeFn` is true whether or
+            // not the specifier survives — and `hasSafeImport` is reseeded
+            // from scope each pass, so pass 2 always finished the job anyway.
+            // An adversarial run confirmed the guard changed no output at 4,
+            // 40 or 75 call sites. What it DID change was the failure mode:
+            // ESLint runs `fix()` for a suppressed problem before the
+            // `eslint-disable` filter discards it, so one disable comment on
+            // the first call site spent the once-per-file edit and stranded
+            // the file with calls the import no longer backs.
+            //
+            // Every report carrying its own import edit costs a pass and buys
+            // a fix that is correct on its own — including when applied alone
+            // from an editor's "fix this problem".
+            if (!hasSafeImport) {
+              if (safeImportNode) {
+                // Add to existing safe module import
+                const lastSpecifier = safeImportNode.specifiers.at(-1);
+                fixes.push(fixer.insertTextAfter(lastSpecifier, `, ${safeFn}`));
+              } else {
+                // Land next to the imports, never after arbitrary code —
+                // `insertTextAfter(body[0])` on a file whose first statement
+                // is a `const` welds the declaration onto the end of it.
+                const targetNode = unsafeImportNode || sourceCode.ast.body[0];
+                const declaration = `import { ${safeFn} } from '${targetModule}';`;
+                fixes.push(
+                  targetNode.type === 'ImportDeclaration'
+                    ? fixer.insertTextAfter(targetNode, `\n${declaration}`)
+                    : insertAboveWithComments(fixer, sourceCode, targetNode, `${declaration}\n`),
+                );
               }
+            }
 
-              // Remove the unsafe import — LATCHED, unlike the insert above.
-              //
-              // The asymmetry is the whole design. An insert is safe to repeat
-              // (identical text, identical anchor, ESLint drops the duplicate)
-              // and repeating it is what keeps each report's fix correct on its
-              // own. A REMOVAL is not: if every report removes the specifier,
-              // one of those removals lands even when the report that would
-              // have rewritten the matching call was suppressed — and the
-              // suppressed call is left calling an identifier the import no
-              // longer provides. Measured: `tmpdir` undefined, permanently.
-              //
-              // Latched, the discarded first report simply takes the removal
-              // with it, and the worst case is an unused import that
-              // `no-unused-vars` will point at. A lint finding, not a crash.
-              if (hasUnsafeImport && unsafeImportNode && !unsafeImportRemoved) {
-                const unsafeSpecs = filterUnsafeSpecifiers(unsafeImportNode, unsafeFn);
-                if (unsafeImportNode.specifiers.length === 1 && unsafeSpecs.length === 1) {
-                  // Remove entire import
-                  fixes.push(fixer.remove(unsafeImportNode));
-                } else if (unsafeSpecs.length > 0) {
-                  // Remove just the unsafe specifier
-                  fixes.push(...removeUnsafeImportSpecifiers(fixer, sourceCode, unsafeSpecs));
-                }
-                unsafeImportRemoved = true;
+            // Remove the unsafe import — LATCHED, unlike the insert above.
+            //
+            // The asymmetry is the whole design. An insert is safe to repeat
+            // (identical text, identical anchor, ESLint drops the duplicate)
+            // and repeating it is what keeps each report's fix correct on its
+            // own. A REMOVAL is not: if every report removes the specifier,
+            // one of those removals lands even when the report that would
+            // have rewritten the matching call was suppressed — and the
+            // suppressed call is left calling an identifier the import no
+            // longer provides. Measured: `tmpdir` undefined, permanently.
+            //
+            // Latched, the discarded first report simply takes the removal
+            // with it, and the worst case is an unused import that
+            // `no-unused-vars` will point at. A lint finding, not a crash.
+            if (hasUnsafeImport && unsafeImportNode && !unsafeImportRemoved) {
+              const unsafeSpecs = filterUnsafeSpecifiers(unsafeImportNode, unsafeFn);
+              if (unsafeImportNode.specifiers.length === 1 && unsafeSpecs.length === 1) {
+                // Remove entire import
+                fixes.push(fixer.remove(unsafeImportNode));
+              } else if (unsafeSpecs.length > 0) {
+                // Remove just the unsafe specifier
+                fixes.push(...removeUnsafeImportSpecifiers(fixer, sourceCode, unsafeSpecs));
               }
+              unsafeImportRemoved = true;
+            }
 
-              return fixes;
-            },
-          });
+            return fixes;
+          }
         },
       };
     },

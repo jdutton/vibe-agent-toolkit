@@ -19,7 +19,7 @@ describe(NAME, () => {
   it(RULE_TESTER_CASES, () => {
     expectRulePasses(NAME, unsafeCallRuleCases({
       unsafeFn: 'tmpdir', unsafeModule: 'node:os', safeFn: 'normalizedTmpdir',
-      safeModule: SAFE_FS_MODULE, exemptPath: PATH_UTILS_IMPL,
+      safeModule: SAFE_FS_MODULE, exemptPath: PATH_UTILS_IMPL, rewrite: 'fix',
     }));
   });
 
