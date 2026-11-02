@@ -67,10 +67,7 @@ export function formatIssueSetHeading(
 /**
  * One finding as ONE compiler-style line: `location:line:column: severity: message [code]`.
  *
- * The GCC/ESLint-compact shape every editor and CI log scraper already parses,
- * and the only spelling of a finding VAT prints — the `--format text` document
- * and every stderr report share it, so a line grepped out of one reads the
- * same in the other.
+ * The GCC/ESLint-compact shape, shared by the `--format text` document and every stderr report.
  */
 export function formatFindingLine(issue: ValidationIssue | Finding): string {
   const anchor = formatIssueAnchor(issue);
@@ -85,9 +82,6 @@ export function formatFindingLine(issue: ValidationIssue | Finding): string {
  * Takes a library `ValidationIssue` or a published `Finding` — the renderer
  * reads only the fields the two share, so a lane holding a report's findings
  * renders them as they are rather than casting them back to issues.
- *
- * Returns an array rather than writing, so a caller can pick its own stream and
- * a unit test can assert over every line without capturing output.
  */
 export function formatIssueLines(issue: ValidationIssue | Finding, indent = ''): string[] {
   const lines = [`${indent}${formatFindingLine(issue)}`];
@@ -102,11 +96,8 @@ export function formatIssueLines(issue: ValidationIssue | Finding, indent = ''):
  * ({@link issuesToRenderAtVerbosity} — errors always and first), each through
  * {@link formatIssueLines}, then the hint naming what was collapsed.
  *
- * The one reporter for a lane whose findings are a flat list — `vat resources
- * validate`, the `checks` surface, `vat claude marketplace validate`, `vat agent
- * validate`, `vat verify`'s consistency phase. A lane that groups its findings
- * (per skill, per plugin) keeps its own headings and renders each finding
- * through the same {@link formatIssueLines}, so no lane spells a finding its own way.
+ * A lane that groups its findings keeps its own headings and renders each
+ * finding through {@link formatIssueLines}.
  *
  * @param findings - The findings, in any order
  * @param options.verbose - Render warning and info findings too

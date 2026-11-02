@@ -40,7 +40,7 @@ const MIN_RELATIVE = 0.1;
 const MIN_ABSOLUTE_KB = 8 * 1024;
 
 /** How many vat processes each side's repeats ran — one count per side, since a row's repeats agree. */
-export interface ProcessCounts {
+interface ProcessCounts {
   readonly before: number;
   readonly after: number;
 }

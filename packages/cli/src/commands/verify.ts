@@ -569,13 +569,8 @@ function loadConfigTolerant(cwd: string): { config: ProjectConfig | undefined; e
 const FILES_CONFIG_DESTS = 'files-config-dests';
 
 /**
- * Log one in-process phase's findings to stderr under its banner — a companion
- * to the report, never a substitute for it: the lines are the phase's published
- * findings, rendered by the SHARED {@link reportFindings}, so what stderr says
- * and what the exit code is computed from are one list.
- *
- * Every severity, at every verbosity: these phases' findings are few, and they
- * always printed all of them.
+ * Log one in-process phase's published findings to stderr under its banner,
+ * through {@link reportFindings}, at every severity and verbosity.
  */
 function reportInProcessPhase(
   phase: InProcessPhaseName,

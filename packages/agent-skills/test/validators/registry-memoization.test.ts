@@ -305,12 +305,17 @@ describe('crawlAndResolveRegistry — the side of the crawl base, from what the 
     resetPackagingRegistryCache();
     const root = rootWithMarkdown({ 'a.md': '# A\n' });
 
-    await expect(withReaddirSyncRefused(root, 'ENOENT', () => crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' })))
+    await expect(crawlWithBaseVanished(root, []))
       .rejects.toMatchObject({ code: FS_FAULT_CODE, side: 'source', faultClass: 'absent' });
-    await expect(withReaddirSyncRefused(root, 'ENOENT', () => crawlAndResolveRegistry(root, { unreadable: 'refuse', outputs: [safePath.join(root, 'dist')] })))
+    await expect(crawlWithBaseVanished(root, [safePath.join(root, 'dist')]))
       .rejects.toMatchObject({ code: FS_FAULT_CODE, side: 'destination', faultClass: 'absent' });
   });
 });
+
+/** Crawl `root` with its own directory refused as vanished (`ENOENT`), declaring `outputs`. */
+function crawlWithBaseVanished(root: string, outputs: string[]): Promise<ResourceRegistry> {
+  return withReaddirSyncRefused(root, 'ENOENT', () => crawlAndResolveRegistry(root, { outputs, unreadable: 'refuse' }));
+}
 
 /** A population source whose first enumeration rejects, and every later one yields `names`. */
 function failingOnceSource(root: string, names: readonly string[]): { source: ResourcePopulationSource; calls: () => number } {
@@ -343,8 +348,7 @@ describe('crawlAndResolveRegistry — a rejected crawl is retried, never served'
     resetPackagingRegistryCache();
     const root = rootWithMarkdown({ 'a.md': '# A\n' });
 
-    await expect(withReaddirSyncRefused(root, 'ENOENT', () => crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' })))
-      .rejects.toMatchObject({ code: FS_FAULT_CODE });
+    await expect(crawlWithBaseVanished(root, [])).rejects.toMatchObject({ code: FS_FAULT_CODE });
     const retried = await crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' });
 
     expect(holds(retried, root, 'a.md')).toBe(true);
@@ -438,6 +442,20 @@ function rootWithStagedOutput(): { root: string; output: string } {
 /** The staging residue's own path, relative to the root. */
 const RESIDUE_SKILL = 'out/.skill.vat-staged-0a1b2c3d/SKILL.md';
 
+/** Crawl twice (the second a memo hit declaring `output`) and assert the hit holds no residue. */
+async function expectMemoHitWithoutResidue(
+  root: string,
+  output: string,
+  extra: { populationSource?: ResourcePopulationSource } = {},
+): Promise<void> {
+  const first = await crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse', ...extra });
+  const hit = await crawlAndResolveRegistry(root, { outputs: [output], unreadable: 'refuse', ...extra });
+
+  expect(hit).toBe(first);
+  expect(holds(hit, root, 'a.md')).toBe(true);
+  expect(holds(hit, root, RESIDUE_SKILL)).toBe(false);
+}
+
 /**
  * The memoized crawl never holds a build's staging residue (`.<name>.vat-staged-*`): it is the
  * tree-change primitive's transient copy, and a later skill served a registry holding it would
@@ -448,38 +466,20 @@ describe('crawlAndResolveRegistry — the build\'s staging residue is never in t
   it('on the walk', async () => {
     resetPackagingRegistryCache();
     const { root, output } = rootWithStagedOutput();
-
-    const first = await crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' });
-    const hit = await crawlAndResolveRegistry(root, { outputs: [output], unreadable: 'refuse' });
-
-    expect(hit).toBe(first);
-    expect(holds(hit, root, 'a.md')).toBe(true);
-    expect(holds(hit, root, RESIDUE_SKILL)).toBe(false);
+    await expectMemoHitWithoutResidue(root, output);
   });
 
   it('on the git route', async () => {
     resetPackagingRegistryCache();
     const { root, output } = rootWithStagedOutput();
     spawnSync(gitExecutable(), ['init', '-q', root], { stdio: 'ignore' });
-
-    const first = await crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' });
-    const hit = await crawlAndResolveRegistry(root, { outputs: [output], unreadable: 'refuse' });
-
-    expect(hit).toBe(first);
-    expect(holds(hit, root, 'a.md')).toBe(true);
-    expect(holds(hit, root, RESIDUE_SKILL)).toBe(false);
+    await expectMemoHitWithoutResidue(root, output);
   });
 
   it('on a population source that enumerates the residue', async () => {
     const { root, output } = rootWithStagedOutput();
     const { source } = countingSource(root, ['a.md', 'out/skill/SKILL.md', RESIDUE_SKILL]);
-
-    const first = await crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse', populationSource: source });
-    const hit = await crawlAndResolveRegistry(root, { outputs: [output], unreadable: 'refuse', populationSource: source });
-
-    expect(hit).toBe(first);
-    expect(holds(hit, root, 'a.md')).toBe(true);
-    expect(holds(hit, root, RESIDUE_SKILL)).toBe(false);
+    await expectMemoHitWithoutResidue(root, output, { populationSource: source });
   });
 });
 

@@ -156,16 +156,8 @@ export function verdictBanner(examined: number, success: string): string {
 }
 
 /**
- * The findings {@link withRunIntegrity} added to `report` to make `judged` —
- * none when it stood down. The human half of a writer-added refusal: a lane
- * hands these to `reportFindings`, so the refusal reaches stderr as the one
- * finding line every finding prints as, and only once — the report's own
- * findings, a site-specific refusal among them, were reported by the lane
- * that found them.
- *
- * @param report - The report as the verb built it
- * @param judged - The same report after the run-integrity pass
- * @returns The findings the pass appended
+ * The findings {@link withRunIntegrity} appended to `report` to make `judged`
+ * (none when it stood down), for a lane to hand to `reportFindings` exactly once.
  */
 export function findingsAddedByRunIntegrity(report: Report<unknown>, judged: Report<unknown>): readonly Finding[] {
   return judged.findings.slice(report.findings.length);
