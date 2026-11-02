@@ -159,13 +159,16 @@ describe('removing a dead binding never changes what the statements around it me
     expect(output.slice(0, at).trimEnd().endsWith(';')).toBe(true);
   });
 
-  it('a string after the removed first statement of a body does not become its directive', () => {
-    const code = 'export function f(a = 1) {\n  const os = require("node:os");\n  "use strict";\n  return os.tmpdir() + a;\n}';
+  it.each([
+    ['first in the body', 'export function f(a = 1) {\n  const os = require("node:os");\n  "use strict";\n  return os.tmpdir() + a;\n}'],
+    ['after a directive', 'export function f(a = 1) {\n  "use foo";\n  const os = require("node:os");\n  "use strict";\n  return os.tmpdir() + a;\n}'],
+  ])('a string after a removed statement %s does not become a directive', (_label, code) => {
     const { output, messages } = fix(code, ruleConfig(RULE.tmpdir));
 
     expect(messages.filter((message) => message.fatal === true)).toStrictEqual([]);
     expect(output).not.toContain('node:os');
-    expect(output).toMatch(/\{\s*;\s*"use strict";/u);
+    expect(output).toMatch(/;\s*;?\s*"use strict";/u);
+    expect(output).not.toMatch(/(?:\{|"use foo";)\s*"use strict"/u);
   });
 
   it('adds no `;` where the statement before already ends in one', () => {
