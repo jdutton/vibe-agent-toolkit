@@ -65,8 +65,9 @@ function realpathOrSelf(target: string, within: string): string {
  * - realpathSync.native() resolves these to their actual filesystem paths
  *
  * `within` is an options object, never a second positional string: the earlier signature was
- * `normalizePath(...paths)` (`path.resolve` semantics), so a positional second string would
- * still compile and silently stop meaning "resolve the second against the first".
+ * `normalizePath(...paths)`, whose two-path call was `(rel, base)` — it resolved the FIRST
+ * against the SECOND — so a positional second string would still compile and silently stop
+ * meaning "resolve `rel` against `base`", resolving it against cwd instead.
  *
  * @param target - The path, absolute or relative to cwd
  * @param options.within - The tree it is crawled in — the operator's own input, whose own

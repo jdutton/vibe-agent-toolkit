@@ -283,6 +283,7 @@ Examples:
     .description('Run VAT\'s built-in checks and the project\'s declared SQL assertions over its resource projection')
     .option('--debug', DEBUG_HELP)
     .option('--check <name>', 'Run only this check, by its built-in name or its key in resources.checks')
+    .option('-v, --verbose', 'Print warning and info findings on stderr too, not only the errors')
     .option(
       '--budget <seconds>',
       'Kill the run if it goes this long without completing a unit of work'
@@ -507,6 +508,11 @@ A run that HANGS is killed and reported, not waited on:
 
 ${SUPERVISION_SIGNAL_CONTRACT}
 
+Output:
+  The document goes to stdout. stderr carries one line per finding for a
+  reader, location:line: severity: message [code]: every error, errors
+  first, and the warning and info ones only with --verbose.
+
 Output Fields (the shared report envelope; schema: packages/cli/schemas/resources-check.json):
   status:    ok | findings | error -- a literal statement about \`findings\`.
              An interrupted run is \`findings\` (its RESOURCE_CHECK_BROKEN is
@@ -569,7 +575,7 @@ Examples:
     .command('validate [path]')
     .description('Validate markdown resources (link integrity, anchors)')
     .option('--debug', DEBUG_HELP)
-    .option('-v, --verbose', 'Show all scanned resources, including those without issues')
+    .option('-v, --verbose', 'Print warning and info findings on stderr too, and publish a data.files row per resource')
     .option('--frontmatter-schema <path>', 'Validate frontmatter against JSON Schema file (.json or .yaml)')
     .addOption(
       new Option('--validation-mode <mode>', 'Validation mode for schemas: strict (default) or permissive')
@@ -629,6 +635,9 @@ Output Formats:
   --format text
     One line per finding on stdout, location:line: severity: message [code],
     then a status line with the counts and the number of resources examined.
+
+  Under yaml and json, stderr carries the same lines for a reader: every error
+  finding, errors first, and the warning and info ones only with --verbose.
 
 Output Fields (the shared report envelope):
   status:     ok | findings | error -- ok when nothing was found, findings when

@@ -1,8 +1,8 @@
 /**
  * `normalizePath` takes `within` as an options object so that a call written against the old
  * `normalizePath(...paths)` signature fails to compile instead of silently changing meaning: the
- * old `normalizePath(base, rel)` resolved `rel` against `base`, and a positional `within` would
- * accept the same call and resolve `base` alone.
+ * old two-path call was `normalizePath(rel, base)` and resolved `rel` against `base`, and a
+ * positional `within` would accept the same call and resolve `rel` against cwd instead.
  *
  * A `@ts-expect-error` in a test file asserts nothing here — `tsc` never reads `test/` — so the
  * compiler is run on a probe module against the real source, and its diagnostics are the oracle.
@@ -43,7 +43,7 @@ function diagnosticsOf(body: readonly string[]): Map<number, number[]> {
 describe('normalizePath signature', () => {
   it('rejects every spelling of the old variadic signature and accepts { within }', () => {
     const diagnostics = diagnosticsOf([
-      "normalizePath('/base', '/base');", // line 2: the old (base, rel) — must NOT compile
+      "normalizePath('docs', '/base');", // line 2: the old (rel, base) — must NOT compile
       "normalizePath('/base');", // line 3: the old one-path form — `within` is required
       "normalizePath('/base', 'docs', 'a.md');", // line 4: the old variadic form
       "export const ok: string = normalizePath('/base/docs', { within: '/base' });", // line 5

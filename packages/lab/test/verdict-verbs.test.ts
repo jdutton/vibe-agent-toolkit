@@ -4,8 +4,9 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { type CloneDir, type CloneSource, planApfsClone } from '../src/facets/verdict/clone.js';
+import { planApfsClone } from '../src/facets/verdict/clone.js';
 import { planBuildVerbs, verdictVerb, type VerbSubject } from '../src/facets/verdict/verbs.js';
+import type { CloneDir, CloneSource } from '../src/harness/tree-clone.js';
 
 import { PROBE_VERSION } from './command-probe.js';
 

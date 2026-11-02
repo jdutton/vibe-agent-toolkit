@@ -85,6 +85,19 @@ const CLEAR_MOCKS_BEFORE_EACH_TEST = true;
 export const platformTestTimeout = process.platform === 'win32' ? 900_000 : 60_000;
 
 /**
+ * How much longer a unit-tier test or hook may run on Windows — one factor, so the
+ * two timeouts cannot drift apart. Windows is UNMEASURED for the unit tier; 10×
+ * Unix follows the 6–9× gate ratio this repo has recorded (CLAUDE.md: 4,750 s
+ * against 528–771 s) with margin.
+ */
+const WINDOWS_UNIT_FACTOR = 10;
+
+/** @returns {@link WINDOWS_UNIT_FACTOR} on Windows, 1 elsewhere. */
+function unitPlatformFactor(): number {
+  return process.platform === 'win32' ? WINDOWS_UNIT_FACTOR : 1;
+}
+
+/**
  * Per-TEST timeout for the UNIT tier.
  *
  * Measured, not guessed: across one uncached run of all 697 unit files the
@@ -94,18 +107,17 @@ export const platformTestTimeout = process.platform === 'win32' ? 900_000 : 60_0
  * the integration tier's value applied by default, and it let a unit test hang
  * for a minute before anything said so.
  *
- * Windows is UNMEASURED for the unit tier; 10× Unix follows the 6–9× gate ratio
- * this repo has recorded (CLAUDE.md: 4,750 s against 528–771 s) with margin.
+ * Windows gets {@link WINDOWS_UNIT_FACTOR}.
  */
-const unitTestTimeout = process.platform === 'win32' ? 150_000 : 15_000;
+const unitTestTimeout = 15_000 * unitPlatformFactor();
 
 /**
  * Per-HOOK timeout for the UNIT tier: vitest's own 10 s default on Unix, and the
- * same 10× Windows factor as {@link unitTestTimeout}. A flat 10 s gave a hook a
+ * same {@link WINDOWS_UNIT_FACTOR} as {@link unitTestTimeout}. A flat 10 s gave a hook a
  * fifteenth of its test's Windows allowance, so a hook building a small git
  * fixture timed out on windows-latest while every test it fed had 150 s.
  */
-const unitHookTimeout = process.platform === 'win32' ? 100_000 : 10_000;
+const unitHookTimeout = 10_000 * unitPlatformFactor();
 
 /**
  * Per-TEST timeout for the SYSTEM tier: 120 s (the value this tier always had),

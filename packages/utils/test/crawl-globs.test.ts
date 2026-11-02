@@ -50,6 +50,20 @@ describe('the canonical crawl-exclusion lists', () => {
   });
 });
 
+describe('a build\'s staging residue is never crawled', () => {
+  const isMember = crawlPathFilter(['**/*'], [...NEVER_CRAWL_GLOBS]);
+
+  it('excludes a staged tree, everything under it, and a staged file', () => {
+    expect(isMember('out/.skill.vat-staged-0a1b2c3d')).toBe(false);
+    expect(isMember('out/.skill.vat-staged-0a1b2c3d/SKILL.md')).toBe(false);
+    expect(isMember('.SKILL.md.vat-staged-0a1b2c3d.previous')).toBe(false);
+  });
+
+  it('admits a name that merely mentions the infix without the leading dot', () => {
+    expect(isMember('notes/skill.vat-staged-0a1b2c3d/SKILL.md')).toBe(true);
+  });
+});
+
 describe('crawlPathFilter — the one matcher both crawl lanes and the projection share', () => {
   it('excludes a directory named by a directory-shaped glob, via the trailing-slash retry', () => {
     const isMember = crawlPathFilter(['**/*'], ['docs/legacy/**']);

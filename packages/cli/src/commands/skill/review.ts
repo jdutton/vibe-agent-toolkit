@@ -33,7 +33,7 @@ import { Command } from 'commander';
 import { resolveProjectDeclaredEvalSuites, resolveSkillPackagingConfig } from '../../skill-resolution/packaging-config.js';
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
-import { formatIssueAnchor } from '../../utils/issue-anchor.js';
+import { formatIssueLines } from '../../utils/issue-rendering.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { projectRootOrNull, requireInputPath } from '../../utils/project-root-policy.js';
 import { renderSkillQualityFooter } from '../../utils/skill-quality-footer.js';
@@ -176,15 +176,7 @@ function renderHumanReport(
 
 /** Render a single validation issue in the human report. */
 function renderIssue(issue: ValidationIssue, logger: Logger): void {
-  const severityTag = issue.severity.toUpperCase();
-  logger.info(`    - [${severityTag}] [${issue.code}] ${issue.message}`);
-  const anchor = formatIssueAnchor(issue);
-  if (anchor !== undefined) {
-    logger.info(`        Location: ${anchor}`);
-  }
-  if (issue.fix !== undefined && issue.fix !== '') {
-    logger.info(`        Fix: ${issue.fix}`);
-  }
+  for (const line of formatIssueLines(issue, '    ')) logger.info(line);
 }
 
 /**

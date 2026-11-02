@@ -38,7 +38,7 @@ import { Command } from 'commander';
 import { marksOperandRefusalByHand } from '../command-tree.js';
 import { loadConfig } from '../utils/config-loader.js';
 import { endWithReport } from '../utils/document-writer.js';
-import { formatIssueLines } from '../utils/issue-rendering.js';
+import { reportFindings } from '../utils/issue-rendering.js';
 import { resolveIssueSeverity } from '../utils/issue-severity.js';
 import type { createLogger } from '../utils/logger.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
@@ -47,10 +47,7 @@ import { isSkillPublished, mergeSkillPackagingConfig, pluginLocalSkillConfigEntr
 
 import { MARKETPLACE_VALIDATE_EXAMINED, MARKETPLACE_VALIDATE_REPORT_SCHEMA } from './claude/marketplace/validate-schema.js';
 import { runMarketplaceValidatePhase } from './claude/marketplace/validate.js';
-import {
-  runConsistencyChecks,
-  type ConsistencyIssue,
-} from './consistency-check.js';
+import { runConsistencyChecks } from './consistency-check.js';
 import { PACKAGED_CONTENT_EXAMINED, PACKAGED_CONTENT_REPORT_SCHEMA, type PackagedContentData } from './orchestrator-schema.js';
 import {
   addRetiredOnlyOption,
@@ -163,7 +160,10 @@ Output:
     'marketplace:<name>': a plugin.json, a skills/ directory or a SKILL.md the
     OS will not read is refused as RESOURCE_CHECK_BROKEN at error (exit 1),
     naming it — a file this run could not read is not a verdict on what ships.
-  Progress and validation errors → stderr (streamed live)
+  Progress and findings → stderr (streamed live), one line per finding,
+  location:line: severity: message [code], errors first. A delegated phase
+  prints every error, and its warning and info findings only with --verbose;
+  the in-process phases print every finding
 
   By default each delegated phase reports a per-asset summary plus the assets
   that have findings. '--verbose' is forwarded to every delegated phase, which
@@ -568,63 +568,21 @@ function loadConfigTolerant(cwd: string): { config: ProjectConfig | undefined; e
 const FILES_CONFIG_DESTS = 'files-config-dests';
 
 /**
- * Log files-config-dests errors to stderr.
- */
-function reportFilesDestErrors(
-  results: readonly MissingDests[],
-  logger: ReturnType<typeof createLogger>
-): void {
-  logger.error(`\n▶ Phase: ${FILES_CONFIG_DESTS}`);
-  for (const { skillName, outputDir, missing } of results) {
-    logger.error(`  Skill '${skillName}': missing dest file(s) in ${outputDir}/:`);
-    for (const dest of missing) {
-      logger.error(`    - ${dest}`);
-    }
-  }
-}
-
-/**
- * Log packaged-content findings to stderr — a companion to the report, never a
- * substitute for it.
+ * Log one in-process phase's findings to stderr under its banner — a companion
+ * to the report, never a substitute for it: the lines are the phase's published
+ * findings, rendered by the SHARED {@link reportFindings}, so what stderr says
+ * and what the exit code is computed from are one list.
  *
- * Rendered through the SHARED {@link formatIssueLines}, which `vat skills build`
- * and `vat skills validate` already use: a second renderer for the same shape is
- * how one command's findings end up spelled differently from every other's.
+ * Every severity, at every verbosity: these phases' findings are few, and they
+ * always printed all of them.
  */
-function reportPackagedContentIssues(
+function reportInProcessPhase(
+  phase: InProcessPhaseName,
   findings: readonly Finding[],
   logger: ReturnType<typeof createLogger>
 ): void {
-  logger.error(`\n▶ Phase: ${PACKAGED_CONTENT}`);
-  for (const finding of findings) {
-    for (const line of formatIssueLines(finding, '  ')) logger.error(line);
-  }
-}
-
-/**
- * Log consistency check issues to stderr.
- */
-function reportConsistencyIssues(
-  issues: ConsistencyIssue[],
-  logger: ReturnType<typeof createLogger>
-): void {
-  logger.error('\n▶ Phase: consistency');
-
-  const errors = issues.filter((i) => i.severity === 'error');
-  const warnings = issues.filter((i) => i.severity === 'warning');
-  const infos = issues.filter((i) => i.severity === 'info');
-
-  for (const issue of errors) {
-    logger.error(`  ERROR [${issue.code}]: ${issue.message}`);
-    logger.error(`    Fix: ${issue.fix}`);
-  }
-  for (const issue of warnings) {
-    logger.error(`  WARN [${issue.code}]: ${issue.message}`);
-    logger.error(`    Fix: ${issue.fix}`);
-  }
-  for (const issue of infos) {
-    logger.info(`  INFO [${issue.code}]: ${issue.message}`);
-  }
+  logger.error(`\n▶ Phase: ${phase}`);
+  reportFindings(findings, { verbose: true, report: 'run', write: logger.error });
 }
 
 /**
@@ -868,7 +826,7 @@ export function reportPackagedContentPhase(
 ): void {
   const { findings, data, examined } = phase.report;
   if (findings.length > 0) {
-    reportPackagedContentIssues(findings, logger);
+    reportInProcessPhase(PACKAGED_CONTENT, findings, logger);
   } else if (data !== null && data.bundlesExpected === 0 && examined === 0) {
     logger.info(`\n▶ Phase: ${PACKAGED_CONTENT} — nothing to inspect: all ${data.bundlesInPlace} discovered skill(s) are in place (publish: false)`);
   }
@@ -906,10 +864,11 @@ export function runFilesConfigDestsPhase(
 ): PhaseResult {
   const built = collectBuiltSkillOutputs(projectRoot, discovered, pluginLocal, pluginLocalNames).built;
   const { checked, missing } = checkFilesConfigDestsOf(built, projectRoot);
-  if (missing.length > 0) reportFilesDestErrors(missing, logger);
+  const findings = filesDestFindings(projectRoot, missing);
+  if (findings.length > 0) reportInProcessPhase(FILES_CONFIG_DESTS, findings, logger);
   return {
     name: FILES_CONFIG_DESTS,
-    report: buildReport({ examined: checked, findings: filesDestFindings(projectRoot, missing), data: null, gate: ORCHESTRATOR_GATE }),
+    report: buildReport({ examined: checked, findings, data: null, gate: ORCHESTRATOR_GATE }),
   };
 }
 
@@ -930,7 +889,7 @@ function runConsistencyPhase(
   pluginLocal: PluginLocalSkillIndex,
 ): PhaseResult {
   const { issues } = runConsistencyChecks([...discoveredSkills], config, projectRoot, pluginLocal);
-  if (issues.length > 0) reportConsistencyIssues(issues, logger);
+  if (issues.length > 0) reportInProcessPhase('consistency', issues, logger);
   return {
     name: 'consistency',
     report: buildReport({ examined: discoveredSkills.length, findings: issues, data: null, gate: ORCHESTRATOR_GATE }),

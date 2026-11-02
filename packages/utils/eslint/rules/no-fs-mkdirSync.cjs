@@ -6,7 +6,9 @@
  * Why: After mkdirSync(), the path might not match what the filesystem uses on Windows.
  * mkdirSyncReal() returns the real (normalized) path to handle 8.3 short name issues.
  *
- * Auto-fix: Replaces fs.mkdirSync() with mkdirSyncReal() and adds required import.
+ * Auto-fix only where the result is discarded: mkdirSyncReal() takes the same arguments but
+ * returns the directory's real path, where mkdirSync() returns the first directory it created
+ * (or undefined). A call whose result is used gets a suggestion instead.
  */
 
 const factory = require('./eslint-rule-factory.cjs');
@@ -17,7 +19,11 @@ module.exports = factory({
   unsafeModule: 'node:fs',
   safeFn: 'mkdirSyncReal',
   safeModule: SAFE_FS_MODULE,
-  rewrite: 'fix',
+  rewrite: {
+    autofixAsStatement: true,
+    suggestion:
+      'Replace with mkdirSyncReal(), which returns the real path of the directory itself — not the first directory created, and never undefined',
+  },
   message: 'Use mkdirSyncReal() from {{safeModule}} instead of fs.mkdirSync() for Windows path normalization',
   // No baked-in exemption: the file that implements mkdirSyncReal() is
   // repo-specific. Consumers declare it as { exemptFiles: [...] }.

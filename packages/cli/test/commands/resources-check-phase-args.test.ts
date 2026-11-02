@@ -59,7 +59,7 @@ const ROOT = safePath.join('/resolved', 'project-root');
 
 /** The one argv the phase handed the supervisor. */
 async function phaseArgs(debug: boolean): Promise<readonly string[]> {
-  await runResourcesCheckPhase({ root: ROOT, debug });
+  await runResourcesCheckPhase({ root: ROOT, debug, verbose: false });
   expect(recorded).toHaveLength(1);
   return recorded[0] ?? [];
 }

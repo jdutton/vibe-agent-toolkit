@@ -37,11 +37,12 @@ import { Command } from 'commander';
 import { refusalCodeOf } from '../../../utils/command-refusal.js';
 import { loadConfig } from '../../../utils/config-loader.js';
 import { endWithReport, NOTHING_FINISHED, publishedReport, refusalReport } from '../../../utils/document-writer.js';
+import { reportFindings } from '../../../utils/issue-rendering.js';
 import { resolveIssueSeverity } from '../../../utils/issue-severity.js';
 import { createLogger, type Logger } from '../../../utils/logger.js';
 import { assertReadableDirectoryArgument } from '../../../utils/project-root-policy.js';
 import { relativizePath } from '../../../utils/relativize-paths.js';
-import { RUN_INTEGRITY_CODE, runIntegrityFinding, warnRunIntegrity } from '../../../utils/run-integrity.js';
+import { runIntegrityFinding, warnRunIntegrity } from '../../../utils/run-integrity.js';
 import type { PhaseOutcome } from '../../phase-utils.js';
 
 import type { MarketplaceValidateData, MarketplaceValidateReport } from './validate-schema.js';
@@ -895,11 +896,7 @@ function unreadManifests(
 
 /** The human half, on stderr: every error in full, and the rest under `--verbose`. */
 function logFindings(report: Report<unknown>, verbose: boolean, logger: Logger): void {
-  for (const finding of report.findings) {
-    if (!verbose && finding.severity !== 'error' && finding.code !== RUN_INTEGRITY_CODE) continue;
-    const anchor = finding.location === undefined ? '' : `${finding.location}: `;
-    logger.error(`  ${anchor}${finding.severity}: ${finding.message} [${finding.code}]`);
-  }
+  reportFindings(report.findings, { verbose, report: 'run', write: logger.error });
   const { errors, warnings, info } = report.summary;
   logger.info(`${errors} error(s), ${warnings} warning(s), ${info} info`);
 }

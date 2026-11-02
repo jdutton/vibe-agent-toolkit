@@ -20,6 +20,7 @@ import { countBySeverity, resultStatus, type ValidationIssue } from '@vibe-agent
 import { describe, expect, it } from 'vitest';
 
 import { formatAuditFindingsLines } from '../../src/commands/audit.js';
+import { renderedLabels } from '../helpers/rendered-labels.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -54,11 +55,6 @@ function skillResult(name: string, issues: ValidationIssue[]): ValidationResult 
     ...derivedFields(issues),
     metadata: { name },
   };
-}
-
-/** Every severity label the report rendered, in order — the shape of the set. */
-function renderedLabels(lines: string[]): string[] {
-  return lines.flatMap((line) => /^\s*\[(ERROR|WARNING|INFO|IGNORED)]/.exec(line)?.slice(1, 2) ?? []);
 }
 
 /**

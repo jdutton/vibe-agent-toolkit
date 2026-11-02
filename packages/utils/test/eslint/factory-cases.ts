@@ -102,29 +102,41 @@ export interface UnsafeCallRuleSpec {
    * (`normalizePath`'s `{ within }`), so the rewrite is a SUGGESTION that appends
    * this placeholder — never an autofix, which would emit a call that does not
    * compile or, worse, one that compiles with a guessed value.
+   * `{ autofixAsStatement }`: the safe call takes the same arguments but RETURNS
+   * something else (`mkdirSyncReal`'s real path vs `mkdirSync`'s first-created
+   * directory), so only a call whose result is discarded is autofixed; any other
+   * is a suggestion.
    */
-  rewrite: 'fix' | { readonly appendArgument: string };
+  rewrite: 'fix' | { readonly appendArgument: string } | { readonly autofixAsStatement: true };
 }
 
 export function unsafeCallRuleCases(
   { unsafeFn, unsafeModule, safeFn, safeModule, exemptPath, rewrite }: UnsafeCallRuleSpec,
 ): RuleCases {
-  const extra = rewrite === 'fix' ? '' : `, ${rewrite.appendArgument}`;
-  const unsafeCode = `import { ${unsafeFn} } from '${unsafeModule}';\nconst r = ${unsafeFn}(x);`;
+  const extra = typeof rewrite === 'object' && 'appendArgument' in rewrite ? `, ${rewrite.appendArgument}` : '';
+  /** Whether a call in VALUE position (`const r = …`) is autofixed rather than only suggested. */
+  const valueCallAutofixed = rewrite === 'fix';
+  const unsafeImport = `import { ${unsafeFn} } from '${unsafeModule}';`;
+  const safeImport = `import { ${safeFn} } from '${safeModule}';`;
+  const unsafeCode = `${unsafeImport}\nconst r = ${unsafeFn}(x);`;
   // The new import takes the removed one's LINE. It used to be welded onto
   // whatever followed, because the fixer inserted after `body[0]` with a
   // trailing newline regardless of what `body[0]` was — visible here only as a
   // moved `\n`, and visible in a file whose first statement is not an import as
   // `const os = {…};import { normalizedTmpdir } from '…';` on one line.
-  const output = `\nimport { ${safeFn} } from '${safeModule}';\nconst r = ${safeFn}(x${extra});`;
+  const output = `\n${safeImport}\nconst r = ${safeFn}(x${extra});`;
+  // A SUGGESTION never removes the unsafe import: it is applied alone, from an
+  // editor, and the binding may still back a call no suggestion was taken for.
+  // The dead-import leg removes it on a later pass once nothing references it.
+  const suggestedOutput = `${unsafeImport}\n${safeImport}\nconst r = ${safeFn}(x${extra});`;
   const errors = [{ messageId: 'noUnsafeOperation' }];
   const options = [{ exemptFiles: [exemptPath] }];
-  /** What ONE report's rewrite produces: an autofix `output`, or the same text as its only suggestion. */
-  const rewritten = (rewrittenCode: string): { output?: string; errors: object[] } =>
-    rewrite === 'fix'
-      ? { output: rewrittenCode, errors }
-      : { errors: [{ messageId: 'noUnsafeOperation', suggestions: [{ messageId: 'useSafeCall', output: rewrittenCode }] }] };
-  const decoy = (filename: string) => ({ code: unsafeCode, filename, options, ...rewritten(output) });
+  /** What ONE report's rewrite produces: an autofix `output`, or the suggestion's text. */
+  const rewritten = (fixedCode: string, suggestedCode: string): { output?: string; errors: object[] } =>
+    valueCallAutofixed
+      ? { output: fixedCode, errors }
+      : { errors: [{ messageId: 'noUnsafeOperation', suggestions: [{ messageId: 'useSafeCall', output: suggestedCode }] }] };
+  const decoy = (filename: string) => ({ code: unsafeCode, filename, options, ...rewritten(output, suggestedOutput) });
   const exemptBasename = exemptPath.slice(exemptPath.lastIndexOf('/') + 1);
 
   return {
@@ -157,33 +169,81 @@ export function unsafeCallRuleCases(
       },
     ],
     invalid: [
-      { code: unsafeCode, filename: LINTED_FILE, options, ...rewritten(output) },
+      { code: unsafeCode, filename: LINTED_FILE, options, ...rewritten(output, suggestedOutput) },
       // DECOY basenames — the shape that shipped raw tmpdir()/realpathSync()
       // past a fork of this rule pack in a consumer repo.
       decoy(`tools/hooks/${exemptBasename}`),
       decoy(`packages/other/src/${exemptBasename}`),
       // UNCONFIGURED — with no `exemptFiles` option nothing is exempt, including
       // the path this factory used to hardcode.
-      { code: unsafeCode, filename: exemptPath, ...rewritten(output) },
+      { code: unsafeCode, filename: exemptPath, ...rewritten(output, suggestedOutput) },
       // ALREADY BOUND through the BARREL — rewrite the call, add no import. A
       // second binding of `safeFn` is a SyntaxError, not a redundant import.
       {
         code: `import { ${safeFn} } from '${BARREL}';\nimport { ${unsafeFn} } from '${unsafeModule}';\nconst r = ${unsafeFn}(x);`,
         filename: LINTED_FILE,
         options,
-        ...rewritten(`import { ${safeFn} } from '${BARREL}';\n\nconst r = ${safeFn}(x${extra});`),
+        ...rewritten(
+          `import { ${safeFn} } from '${BARREL}';\n\nconst r = ${safeFn}(x${extra});`,
+          `import { ${safeFn} } from '${BARREL}';\n${unsafeImport}\nconst r = ${safeFn}(x${extra});`,
+        ),
       },
+      ...(typeof rewrite === 'object' && 'autofixAsStatement' in rewrite
+        ? statementOnlyAutofixCases(unsafeFn, safeFn, unsafeImport, safeImport, options)
+        : []),
       // A suggestion appends ONE argument to a ONE-argument call. With more,
       // the rest are the unsafe function's own (`realpathSync(p, 'utf8')`) and
       // mean nothing to the safe one, so the call is reported with no rewrite.
-      ...(rewrite === 'fix'
-        ? []
-        : [{
+      ...(typeof rewrite === 'object' && 'appendArgument' in rewrite
+        ? [{
             code: `import { ${unsafeFn} } from '${unsafeModule}';\nconst r = ${unsafeFn}(x, y);`,
             filename: LINTED_FILE,
             options,
             errors: [{ messageId: 'noUnsafeOperation', suggestions: [] }],
-          }]),
+          }]
+        : []),
     ],
   };
+}
+
+/**
+ * The `{ autofixAsStatement }` mode's own cases: a discarded result is autofixed,
+ * and the unsafe import is removed only when no call it backs was left as a
+ * suggestion — removing it beside a value-position call strands that call.
+ */
+function statementOnlyAutofixCases(
+  unsafeFn: string,
+  safeFn: string,
+  unsafeImport: string,
+  safeImport: string,
+  options: object[],
+): object[] {
+  return [
+    // Result discarded: the swap cannot change behaviour, so it is an autofix.
+    {
+      code: `${unsafeImport}\n${unsafeFn}(x);`,
+      filename: LINTED_FILE,
+      options,
+      output: `\n${safeImport}\n${safeFn}(x);`,
+      errors: [{ messageId: 'noUnsafeOperation' }],
+    },
+    // One of each: the statement is autofixed, the value call only suggested,
+    // and the import stays because the value call still needs it.
+    {
+      code: `${unsafeImport}\n${unsafeFn}(a);\nconst r = ${unsafeFn}(b);`,
+      filename: LINTED_FILE,
+      options,
+      output: `${unsafeImport}\n${safeImport}\n${safeFn}(a);\nconst r = ${unsafeFn}(b);`,
+      errors: [
+        { messageId: 'noUnsafeOperation', suggestions: [] },
+        {
+          messageId: 'noUnsafeOperation',
+          suggestions: [{
+            messageId: 'useSafeCall',
+            output: `${unsafeImport}\n${safeImport}\n${unsafeFn}(a);\nconst r = ${safeFn}(b);`,
+          }],
+        },
+      ],
+    },
+  ];
 }

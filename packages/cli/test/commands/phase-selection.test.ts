@@ -561,10 +561,10 @@ describe('selectValidateSurfaces', () => {
     if (hasResources) expect(names[names.indexOf('resources') + 1]).toBe('checks');
   });
 
-  it.each([false, true])('roots the checks phase at the resolved root and forwards debug=%s', async (debug) => {
-    await invokeAll(selectValidateSurfaces(CONFIG_RESOURCES_ONLY, { ...VALIDATE_RUN, debug }));
+  it.each([false, true])('roots the checks phase at the resolved root and forwards debug and verbose=%s', async (flag) => {
+    await invokeAll(selectValidateSurfaces(CONFIG_RESOURCES_ONLY, { ...VALIDATE_RUN, debug: flag, verbose: !flag }));
 
-    expect(runResourcesCheckPhase).toHaveBeenCalledExactlyOnceWith({ root: VALIDATE_ROOT, debug });
+    expect(runResourcesCheckPhase).toHaveBeenCalledExactlyOnceWith({ root: VALIDATE_ROOT, debug: flag, verbose: !flag });
   });
 
   it('is a warned no-op when nothing at all is configured', () => {

@@ -6,14 +6,17 @@
  * it was slower, which it also was for other reasons, and nothing measured the
  * memory itself.
  *
- * **One sample per repeat, and it is the LARGEST process's peak.** Each node
- * process in the repeat writes its own `process.resourceUsage().maxRSS` (see
- * `rss-probe.cts`): that figure includes the process's worker threads and
- * excludes its children. The repeat's sample is the largest of them, never their
- * sum — high-water marks taken at different moments do not add up to anything
- * that was ever resident at once. How many processes reported travels beside it,
- * so a launcher that started doing its work in-process (one process instead of
- * two) is visible rather than silently folded in.
+ * **One sample per repeat, and it is the LARGEST vat process's peak.** Each of
+ * vat's own node processes in the repeat writes its own
+ * `process.resourceUsage().maxRSS` (see `rss-probe.cts`): that figure includes
+ * the process's worker threads, excludes its children, and — on Linux —
+ * includes whatever its parent held at `fork()`. The repeat's sample is the
+ * largest of them, never their sum — high-water marks taken at different
+ * moments do not add up to anything that was ever resident at once. How many
+ * processes reported travels beside it, so a launcher that started doing its
+ * work in-process (one process instead of two) is visible rather than silently
+ * folded in, and so does the spawner's own peak: the floor every sample
+ * inherits.
  */
 
 import { z } from 'zod';
@@ -48,6 +51,12 @@ export interface MemoryCommandStats {
    * runs, and is a better first explanation for a moved peak than anything else.
    */
   readonly processesPerRepeat: readonly number[];
+  /**
+   * The spawner's own peak in each repeat, in capture order: a bare node that
+   * launched the repeat, and so the most any sample can have inherited from its
+   * parent (see `rss-spawner.ts`). A sample is vat's own memory only above it.
+   */
+  readonly spawnerKb: readonly number[];
   /**
    * The one accepted code every repeat exited with, and `null` when the row
    * failed — the same contract as `PerfCommandStats.exitCode`, for the same
@@ -88,6 +97,7 @@ export const MemoryBodySchema = z
           iqrKb: z.number().nonnegative(),
           samplesKb: z.array(z.number().nonnegative()),
           processesPerRepeat: z.array(z.number().int().nonnegative()),
+          spawnerKb: z.array(z.number().nonnegative()),
           exitCode: z.number().int().nullable(),
         })
         .strict(),
@@ -103,6 +113,8 @@ export const MemoryBodySchema = z
 export const RssDumpSchema = z
   .object({
     pid: z.number().int(),
+    /** vat's own process, or the spawner that launched the repeat. */
+    role: z.enum(['vat', 'spawner']),
     maxRssKb: z.number().nonnegative(),
   })
   .strict();

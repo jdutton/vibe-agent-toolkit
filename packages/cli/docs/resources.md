@@ -126,16 +126,17 @@ for the loud-cwd fallback policy and the projectRoot discovery ladder.
 **Options:**
 - `[path]` - Base directory to crawl (defaults to current directory)
 - `--debug` - Enable debug logging
-- `-v, --verbose` - Show all scanned resources, including those without issues:
-  adds `data.files`, one `{path, status, summary}` row per resource validated.
-  Every envelope field is identical in both modes.
+- `-v, --verbose` - Print warning and info findings on stderr too (errors are
+  always printed there), and add `data.files`, one `{path, status, summary}` row
+  per resource validated. Every other envelope field is identical in both modes.
 - `--collection <id>` - Scope the whole report — findings, `examined` and so the
   exit code — to one collection's files. A finding at a path that never became a
   resource (a file the collection matched and could not read) stays in it. A name
   `resources.collections` does not declare is refused (`USAGE_INVALID`, exit 2)
 - `--format <format>` - `yaml` (default), `json` (the same document), or `text`
   (one `location:line: severity: message [code]` line per finding, then a status
-  line, on stdout). Any other value is a usage error (exit 2) naming the three
+  line, on stdout — under `yaml` and `json` the same lines go to stderr instead).
+  Any other value is a usage error (exit 2) naming the three
   accepted values; so is a `--validation-mode` other than `strict` or `permissive`
 - `--no-check-frontmatter-links` - Skip frontmatter URI-reference link validation across all collections (default: enabled)
 

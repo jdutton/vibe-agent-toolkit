@@ -34,6 +34,7 @@ import * as yaml from 'yaml';
 import type { DocumentFormat } from '../../report-schemas.js';
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithReport, NOTHING_FINISHED, publishedReport, refusalReport } from '../../utils/document-writer.js';
+import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { classifyInputFault, projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
 import {
@@ -456,6 +457,11 @@ export async function runResourcesValidatePhase(
 
   try {
     const report = await runValidation(pathArg, options, logger, startTime);
+    // The human half, on stderr — the document on stdout is unchanged by it. Not
+    // under `--format text`, whose stdout already IS these lines.
+    if (options.format !== 'text') {
+      reportFindings(report.findings, { verbose: options.verbose === true, report: 'run', write: logger.error });
+    }
     warnRunIntegrity(report);
     return { report };
   } catch (error) {

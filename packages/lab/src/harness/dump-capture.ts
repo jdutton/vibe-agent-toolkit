@@ -35,6 +35,9 @@ import type { CaptureRequest } from './types.js';
  *   directory: the variable whose VALUE switches the seam on and names that
  *   directory, plus anything else only the measured run may see (a preload on
  *   `NODE_OPTIONS`)
+ * @param measuredVia - The launcher each measured repeat starts through
+ *   (`RunOptions.via`), or `null` to launch it directly — required, so a facet
+ *   says which it means
  * @param rowFrom - How this facet turns repeats plus their dumps into a row
  * @returns One row per command, in request order, and every command's measurement
  */
@@ -42,6 +45,7 @@ export async function captureCommandRows<TRow>(
   options: CaptureRequest,
   prefix: string,
   repeatEnv: (directory: string) => Readonly<Record<string, string>>,
+  measuredVia: string | null,
   rowFrom: (measurement: SpecMeasurement, directories: readonly string[]) => Promise<TRow>,
 ): Promise<{ readonly rows: TRow[]; readonly measured: readonly SpecMeasurement[] }> {
   const measured: SpecMeasurement[] = [];
@@ -49,7 +53,7 @@ export async function captureCommandRows<TRow>(
   const rows = await mapInOrder(options.commands, (spec) =>
     withDumpDirs(options.runs, prefix, async (directories) => {
       const perRepeat = directories.map((directory) => repeatEnv(directory));
-      const measurement = await measureSpec(options, spec, (index) => perRepeat[index]);
+      const measurement = await measureSpec(options, spec, (index) => perRepeat[index], measuredVia ?? undefined);
       measured.push(measurement);
       return rowFrom(measurement, directories);
     }),

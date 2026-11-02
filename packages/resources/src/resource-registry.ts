@@ -38,9 +38,11 @@ import {
   withOuterBracket,
 } from '@vibe-agent-toolkit/utils';
 import {
+  BUILD_OUTPUT_GLOBS,
   crawlDirectory,
   type CrawlOptions as UtilsCrawlOptions,
   crawlPathFilter,
+  NEVER_CRAWL_GLOBS,
   type UnreadablePolicy,
 } from '@vibe-agent-toolkit/utils/crawl';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
@@ -1400,7 +1402,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     const {
       baseDir,
       include = [...DEFAULT_RESOURCE_INCLUDE],
-      exclude = ['**/node_modules/**', '**/.git/**', '**/dist/**'],
+      exclude = [...NEVER_CRAWL_GLOBS, ...BUILD_OUTPUT_GLOBS],
       followSymlinks = false,
       unreadable,
       populationSource,

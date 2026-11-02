@@ -95,6 +95,7 @@ const FINDINGS: MeasuredCommandSpec = {
   exit: exactExit(1),
   provenance: 'none',
   populates: false,
+  writes: [],
 };
 
 /**
@@ -110,6 +111,7 @@ const PASSES_WITH_FINDINGS: MeasuredCommandSpec = {
   exit: exactExit(1),
   provenance: 'none',
   populates: false,
+  writes: [],
 };
 
 /** Makes the probe's non-zero exit vat's findings code rather than a crash code. */
@@ -340,7 +342,7 @@ describe('capturePerf — a findings exit is a completed run', () => {
  * @returns The spec, its commitment exactly as registered
  */
 function registeredAudit(args: readonly string[]): MeasuredCommandSpec {
-  return { ...MEASURABLE_COMMANDS.audit, args, populates: false };
+  return { ...MEASURABLE_COMMANDS.audit, args, populates: false, writes: [] };
 }
 
 describe('capturePerf — a default command is judged by the exits it declares (observed)', () => {
@@ -450,8 +452,8 @@ describe('capturePerf — no repeats at all', () => {
 describe('capturePerf — rows are independent', () => {
   it('keeps a failing command from poisoning the commands either side of it', async () => {
     const probe = setupProbe(PREFIX);
-    const before: MeasuredCommandSpec = { name: 'before', args: ['audit'], exit: exactExit(0), provenance: 'none', populates: false };
-    const after: MeasuredCommandSpec = { name: 'after', args: ['audit', '--json'], exit: exactExit(0), provenance: 'none', populates: false };
+    const before: MeasuredCommandSpec = { name: 'before', args: ['audit'], exit: exactExit(0), provenance: 'none', populates: false, writes: [] };
+    const after: MeasuredCommandSpec = { name: 'after', args: ['audit', '--json'], exit: exactExit(0), provenance: 'none', populates: false, writes: [] };
 
     const report = await capture(probe, { runs: 2, commands: [before, PROBE_FAILS, after] });
 

@@ -68,7 +68,7 @@ function writeRepoFile(root: string, relative: string, contents: string): void {
  * `ls-files --cached` reads the index, and nothing here reads `HEAD`. A commit
  * would add the slowest spawn of the three, plus the detached
  * `git maintenance run --auto` it starts, to a hook bound by the unit tier's
- * unscaled 10 s hook timeout on Windows.
+ * hook timeout.
  */
 function stageRepo(root: string): void {
 	const steps = [['init', '-q'], ['add', '-A']];

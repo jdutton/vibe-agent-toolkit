@@ -9,3 +9,9 @@
   `ls -la`: `safeExecSync` takes a binary and an argument array, not a shell string. Re-check any
   call an earlier `--fix` rewrote. The editor suggestion appends `ARGV_FROM_SHELL_STRING`, which
   fails the typecheck until you split the command.
+- **`@vibe-agent-toolkit/no-fs-mkdirSync` autofixes only a call whose result is discarded.**
+  `mkdirSyncReal()` returns the directory's real path, where `mkdirSync()` returns the first
+  directory it created or `undefined`, so `const r = mkdirSync(…)` now gets an editor suggestion
+  instead. Re-check any such call an earlier `--fix` rewrote.
+- **An editor suggestion from these rules no longer removes the `node:*` import**, so taking one
+  suggestion cannot strand another call; `--fix` removes the import once nothing uses it.

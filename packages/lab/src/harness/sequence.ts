@@ -62,6 +62,8 @@ export interface SequenceStep {
    * and a priming run, are checked for what the arm's environment says it writes.
    */
   readonly populates: boolean;
+  /** The subject-relative directories this step writes; see `MeasuredCommandSpec.writes`. */
+  readonly writes: readonly string[];
 }
 
 /** One step's outcome. */
@@ -105,7 +107,9 @@ export interface SequenceContext {
 }
 
 /** Which run of an arm this is: the priming run, or a measured one. */
-type SequenceRole = { readonly kind: 'priming' } | { readonly kind: 'measured'; readonly vatEnv: ArmEnvironment };
+type SequenceRole =
+  | { readonly kind: 'priming' }
+  | { readonly kind: 'measured'; readonly vatEnv: ArmEnvironment; readonly via: string | undefined };
 
 /**
  * Refuse a step whose commitment admits vat's system-error exit, or a code no
@@ -192,6 +196,7 @@ function runStep(context: SequenceContext, role: SequenceRole, step: SequenceSte
     step.command.kind === 'vat'
       ? runCommand(context.instrument, step.command.args, {
           ...options,
+          ...(role.kind === 'measured' && role.via !== undefined && { via: role.via }),
           env: role.kind === 'measured' ? role.vatEnv : context.vatEnv,
         })
       : runCommand({ command: step.command.command, leadingArgs: [] }, step.command.args, {

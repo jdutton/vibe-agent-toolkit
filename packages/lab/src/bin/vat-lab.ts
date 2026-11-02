@@ -1050,6 +1050,7 @@ export function collectPrerequisite(value: string, previous: readonly SequenceSt
     exit: exactExit(ExitCode.OK),
     provenance: 'none',
     populates: false,
+    writes: [],
   };
   return [...(previous ?? []), step];
 }

@@ -96,9 +96,16 @@ const config: KnipConfig = {
     // The io facet's counter is a THIRD entry point, and an invisible one: it is
     // loaded into the measured process via `NODE_OPTIONS=--require`, so nothing
     // in this repo ever imports it. Without it listed here knip reads a
-    // load-bearing file as dead and deletes it on the next cleanup.
+    // load-bearing file as dead and deletes it on the next cleanup. The memory
+    // facet's probe is preloaded the same way, and its spawner is run by path.
     'packages/lab': {
-      entry: ['src/index.ts', 'src/bin/vat-lab.ts', 'src/facets/io/counter.cts'],
+      entry: [
+        'src/index.ts',
+        'src/bin/vat-lab.ts',
+        'src/facets/io/counter.cts',
+        'src/facets/memory/rss-probe.cts',
+        'src/facets/memory/rss-spawner.ts',
+      ],
     },
 
     // CLI: Commander.js wires commands from bin.ts, not index.ts

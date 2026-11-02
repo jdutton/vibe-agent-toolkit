@@ -15,6 +15,7 @@ import { promised } from './in-order.js';
 import { edgeStatSync, followedStatSync, realpathNativeSync } from './link-following.js';
 import { crawlSideOf, requireUnreadablePolicy, settleCrawlRefusal, type UnreadablePolicy } from './listing-refusal.js';
 import { toForwardSlash, safePath } from './path-utils.js';
+import { TREE_CHANGE_RESIDUE_GLOBS } from './tree-change/staging-names.js';
 
 export { rootListingRefusal, type DirectoryRefusal } from './fs-utils.js';
 // The refusal vocabulary lives in `listing-refusal.ts` so `git-utils.ts` can
@@ -169,6 +170,7 @@ export const NEVER_CRAWL_GLOBS = [
   '**/.worktrees/**',        // Git worktrees are full repo copies — never traverse
   '**/.claude/worktrees/**', // Claude Code worktrees, same reason
   '**/.turbo/**',            // turborepo task logs + cache — see below
+  ...TREE_CHANGE_RESIDUE_GLOBS, // A build's staged/parked output beside its destination — a transient copy
 ] as const;
 
 /**

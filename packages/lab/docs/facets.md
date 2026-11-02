@@ -18,14 +18,28 @@ numbers need spread. A single sample is not a measurement; a median over repeats
 reported alongside is.
 
 `memory` is one of these, and its number needs its scope stated, because "peak RSS" names three
-different figures. A preload (`rss-probe.cts`, on `NODE_OPTIONS` like `io`'s counter) writes each
+different figures. A preload (`rss-probe.cts`, on `NODE_OPTIONS` like `io`'s counter) writes a
 node process's `process.resourceUsage().maxRSS` at exit — kilobytes on every platform, so no
 `/usr/bin/time -l` (macOS-only) or `/proc` (Linux-only). That figure **includes worker threads**
-(they share the process: a 400 MB allocation in a worker raises it by ~400 MB) and **excludes child
-processes**, which write their own. A repeat's sample is the LARGEST process's peak, never a sum:
-high-water marks from different moments were never resident together. How many processes reported
-travels beside it. A repeat that leaves no peak — killed, or out of heap — fails the row; it is
-never read as a small number.
+(they share the process: a 400 MB allocation in a worker raises it by ~400 MB). It is one figure
+per process, and only vat's own processes write one: a process is vat's when its main script
+(`process.argv[1]`, links resolved) belongs to the `vibe-agent-toolkit` launcher or the
+`@vibe-agent-toolkit/cli` package — the nearest `package.json` above it says which. The probe
+decides that from the install alone, so every vat ever published is measurable, and `npm` under
+`npx`, a `node -e` or a tool vat spawns writes nothing and never stands in for vat's peak.
+A repeat's sample is the LARGEST vat process's peak, never a sum: high-water marks from different
+moments were never resident together. How many vat processes reported travels beside it, and a
+change in that count is a CHANGED verdict on its own.
+
+The sample is not measured from zero. On Linux a child's peak includes its parent's resident set at
+`fork()`, so a vat launched straight from the lab would carry the lab's footprint. Every measured
+repeat is therefore launched through `rss-spawner.ts`, a freshly started small node, and the
+spawner writes its own peak too: that is the **floor** every sample sits on, reported beside each
+repeat rather than assumed. Compare samples only against samples from the same spawner. A repeat
+that leaves no vat peak, or not exactly one spawner peak — killed, out of heap, or a pre-marker
+build — fails the row; it is never read as a small number. So does a row whose repeats disagree on
+how many vat processes reported. CHANGED needs the median delta to exceed the larger of 16 MiB
+and the combined min-max spread of both arms.
 
 **Extent facets** — `population`. The output is a *set*, and a set needs neither spread nor
 tolerance: the comparator is exact set difference, and one member's difference is real. The

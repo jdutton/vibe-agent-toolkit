@@ -580,6 +580,7 @@ describe('vat-lab perf arms — the option parsers', () => {
       exit: exactExit(0),
       provenance: 'none',
       populates: false,
+      writes: [],
     });
     expect(() => collectPrerequisite('   ', undefined)).toThrow(InvalidArgumentError);
   });

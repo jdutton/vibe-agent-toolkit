@@ -146,6 +146,17 @@ export const PROBE_POPULATE_EMPTY_SHARD_DIR = 'empty-shard-dir';
  */
 export const PROBE_POPULATE_IGNORING_SWITCHES = 'ignoring-switches';
 
+/**
+ * Set to a cwd-relative directory for the probe to WRITE, as `vat build` writes
+ * `dist/`: its stdout JSON (shared with {@link PROBE_ECHO_ENV}) gains
+ * `existed:<dir>`, whether the directory was there AT START, and the probe then
+ * leaves one file in it.
+ *
+ * Exists so a suite can tell a repeat that started clean from one that found the
+ * last repeat's output, and see whether the write landed in the real subject.
+ */
+export const PROBE_WRITES_ENV = 'LAB_PROBE_WRITES';
+
 /** The cache namespace the probe's fake resources package names. */
 const PROBE_NAMESPACE = 'probe-ns';
 
@@ -189,6 +200,8 @@ const PROBE_SOURCE = [
   "  echoed['mode:' + name] = modeOf(path);",
   "  echoed['mode:' + name + '/..'] = path === undefined ? null : modeOf(dirname(path));",
   '}',
+  `const writes = process.env.${PROBE_WRITES_ENV};`,
+  "if (writes !== undefined) { const dir = join(process.cwd(), writes); echoed['existed:' + writes] = existsSync(dir); mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, 'out-' + String(process.pid)), 'x'); }",
   'const homeEntries = home === undefined || !existsSync(home) ? null : readdirSync(home).length;',
   // An ARM's tmp only (the store's sibling): counted at start, before anything below writes there.
   "const armTmp = store === undefined ? undefined : join(store, '..', 'tmp');",
@@ -230,7 +243,7 @@ const PROBE_SOURCE = [
   '}',
   `const echoSpec = process.env.${PROBE_ECHO_ENV};`,
   "for (const name of (echoSpec ?? '').split(',').filter((n) => n !== '')) echoed[name] = process.env[name] ?? null;",
-  `if (echoSpec !== undefined || process.env.${PROBE_STAT_ENV} !== undefined) process.stdout.write(JSON.stringify(echoed));`,
+  `if (echoSpec !== undefined || writes !== undefined || process.env.${PROBE_STAT_ENV} !== undefined) process.stdout.write(JSON.stringify(echoed));`,
   `const outSpec = process.env.${PROBE_STDOUT_ENV};`,
   'if (outSpec !== undefined) {',
   '  const outputs = JSON.parse(outSpec);',
@@ -282,7 +295,12 @@ export function setupProbe(prefix = 'lab-probe-'): Probe {
   const root = mkdtempSync(safePath.join(normalizedTmpdir(), prefix));
   createdProbeDirs.push(root);
   const cwd = mkdirSyncReal(safePath.join(root, 'subject'));
-  const script = safePath.join(cwd, 'probe.cjs');
+  // Inside a stand-in CLI package, so the memory probe counts the stand-in as vat, as it does
+  // any script `@vibe-agent-toolkit/cli` owns. Below `cwd`, so the stand-in still resolves the
+  // fake resources package from `cwd`'s `node_modules`.
+  const cliPackage = mkdirSyncReal(safePath.join(cwd, 'vat-cli'));
+  writeFileSync(safePath.join(cliPackage, 'package.json'), JSON.stringify({ name: '@vibe-agent-toolkit/cli' }));
+  const script = safePath.join(cliPackage, 'probe.cjs');
   writeFileSync(script, PROBE_SOURCE, 'utf-8');
   writeFakeResourcesPackage(cwd);
 
@@ -390,10 +408,10 @@ export function probeArmsRoot(probe: Probe): string {
 }
 
 /** A command the probe always completes. */
-export const PROBE_PASSES: MeasuredCommandSpec = { name: 'audit', args: ['audit'], exit: exactExit(0), provenance: 'none', populates: false };
+export const PROBE_PASSES: MeasuredCommandSpec = { name: 'audit', args: ['audit'], exit: exactExit(0), provenance: 'none', populates: false, writes: [] };
 
 /** A command the probe fails on every repeat, by argv. */
-export const PROBE_FAILS: MeasuredCommandSpec = { name: 'broken', args: [PROBE_FAIL_TOKEN], exit: exactExit(0), provenance: 'none', populates: false };
+export const PROBE_FAILS: MeasuredCommandSpec = { name: 'broken', args: [PROBE_FAIL_TOKEN], exit: exactExit(0), provenance: 'none', populates: false, writes: [] };
 
 /**
  * No repeats at all, cold. Cold on purpose: a cold reset hoisted out of the
@@ -444,6 +462,7 @@ export function probeStep(args: readonly string[], overrides: Partial<SequenceSt
     exit: exactExit(0),
     provenance: 'none',
     populates: false,
+    writes: [],
     ...overrides,
   };
 }

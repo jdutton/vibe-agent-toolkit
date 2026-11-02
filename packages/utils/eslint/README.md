@@ -94,11 +94,11 @@ The table is **generated** from each rule's `meta.docs` by `bun run generate:cla
 | `no-adhoc-errno` | an errno name (`ENOENT`, `EACCES`, …) as a string in a classifying position, and a catch that reads `e.code` then builds a refusal with `cause: e` | `fsFaultOf(e)` / `classifyFsFault(e, …)`, or a single-errno predicate such as `isPathAbsentError(e)` | — |  | — |
 | `no-bare-executable-spawn` | Disallow spawning 'git' or 'node' by bare name — resolve the executable once (process.execPath; NODE_EXECUTABLE / gitExecutable() in tests) and spawn the absolute path | — | — |  | `error` |
 | `no-bare-symlink-in-tests` | unguarded `fs.symlinkSync()` / `fs.promises.symlink()` | in tests: `createSymlink(cap, …)` / `createSymlinkAsync(cap, …)`; in shipped code: a win32 junction, or a `catch` naming the privilege | `/testing` |  | — |
-| `no-child-process-execSync` | `child_process.execSync()` | `safeExecSync(binary, args)` | `/process` |  | `error` |
+| `no-child-process-execSync` | `child_process.execSync()` | `safeExecSync(binary, args)` | `/process` | suggestion | `error` |
 | `no-destructive-fs` | recursive `rm`/`rmSync`, `rmdir`, `rename`, `cp` and `copyFile` from `node:fs` / `node:fs/promises` (and their `Sync` forms), called or passed as values | `planTreeChanges()` / `applyTreePlan()`, `renameFileAtomic()`, `replaceFile()`, `copyTree()`, `withTempDir()` / `disposeTempDir()` | — |  | — |
 | `no-existssync` | `existsSync()` from `node:fs` — called, handed on, destructured or re-exported — under `packages/*/src/` | `pathPresent(path, mode, sideOf, absence)` (absent only on an absence; every other errno a classified `FS_FAULT`) | — |  | — |
-| `no-fs-mkdirSync` | `fs.mkdirSync()` | `mkdirSyncReal()` | `/fs` | ✓ | `error` |
-| `no-fs-realpathSync` | `fs.realpathSync()` | `normalizePath(target, { within })` | `/fs` |  | `error` |
+| `no-fs-mkdirSync` | `fs.mkdirSync()` | `mkdirSyncReal()` | `/fs` | ✓ result unused, else suggestion | `error` |
+| `no-fs-realpathSync` | `fs.realpathSync()` | `normalizePath(target, { within })` | `/fs` | suggestion | `error` |
 | `no-link-following-fs` | `stat`/`statSync`/`existsSync`/`realpath`/`realpathSync`, and `symlink`/`symlinkSync` called with no type, from `node:fs` or `node:fs/promises` under `packages/*/src/` | `followedStatSync`/`followedKindSync`/`realpathNativeSync(path, within)` or `pathPresent(path, { follow: within }, …)` | — |  | — |
 | `no-os-tmpdir` | `os.tmpdir()` (8.3 short names on Windows) | `normalizedTmpdir()` | `/fs` | ✓ | `error` |
 | `no-raw-signal-listener` | `process.on(<signal>, …)`, `process.off(<signal>, …)`, `once(process, <signal>)` and `process.on(<non-literal>, …)` | `handleTerminatingSignals()` | `/process` |  | — |

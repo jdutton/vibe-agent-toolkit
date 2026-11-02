@@ -44,15 +44,9 @@ import {
 
 import { errorMessageOf, refusalCodeOf, withFsFaultRemedy } from './command-refusal.js';
 import { debugDiagnosticsEnabled } from './debug-diagnostics.js';
+import { formatFindingLine } from './issue-rendering.js';
 import { renderYamlDocument, writeStdoutSync } from './output.js';
 import { withRunIntegrity } from './run-integrity.js';
-
-/** One finding as a compiler-style line: `location:line:column: severity: message [code]`. */
-function findingLine(finding: Finding): string {
-  const anchor = [finding.location, finding.line, finding.column].filter((part) => part !== undefined).join(':');
-  const line = `${finding.severity}: ${finding.message} [${finding.code}]`;
-  return anchor === '' ? line : `${anchor}: ${line}`;
-}
 
 /**
  * The generic `--format text` rendering: one line per finding, then the status
@@ -60,7 +54,7 @@ function findingLine(finding: Finding): string {
  */
 function renderReportText(report: Report<unknown>, unit: string): string {
   const { errors, warnings, info } = report.summary;
-  const lines = report.findings.map(findingLine);
+  const lines = report.findings.map(formatFindingLine);
   if (report.status === 'error') lines.push(`error: ${report.error.message} [${report.error.code}]`);
   lines.push(`status: ${report.status} — ${errors} errors, ${warnings} warnings, ${info} info (examined ${report.examined} ${unit})`);
   return `${lines.join('\n')}\n`;

@@ -17,6 +17,7 @@ import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
  * - `docs/guide.md` — file only
  * - `docs/guide.md:24` — file + line, the `file:line` convention every editor
  *   and `grep -n` consumer already knows how to jump to
+ * - `docs/guide.md:24:7` — file + line + column, when a `Finding` carries one
  * - `SKILL.md (frontmatter.description)` — file + document-internal field
  * - `(frontmatter.description)` — field with no known file (should not happen
  *   for skills-lane issues, but the renderer must not silently drop it)
@@ -24,7 +25,9 @@ import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
  * Returns `undefined` when the issue carries no anchor at all, so callers can
  * skip the line entirely rather than print an empty label.
  */
-export function formatIssueAnchor(issue: Pick<ValidationIssue, 'location' | 'line' | 'field'>): string | undefined {
+export function formatIssueAnchor(
+  issue: Pick<ValidationIssue, 'location' | 'line' | 'field'> & { readonly column?: number | undefined },
+): string | undefined {
   const hasLocation = issue.location !== undefined && issue.location !== '';
   const hasField = issue.field !== undefined && issue.field !== '';
   if (!hasLocation && !hasField) {
@@ -34,6 +37,8 @@ export function formatIssueAnchor(issue: Pick<ValidationIssue, 'location' | 'lin
   let anchor = hasLocation ? (issue.location as string) : '';
   if (issue.line !== undefined) {
     anchor = `${anchor}:${String(issue.line)}`;
+    // A published `Finding` may carry the column within that line.
+    if (issue.column !== undefined) anchor = `${anchor}:${String(issue.column)}`;
   }
   if (hasField) {
     anchor = anchor === '' ? `(${issue.field as string})` : `${anchor} (${issue.field as string})`;

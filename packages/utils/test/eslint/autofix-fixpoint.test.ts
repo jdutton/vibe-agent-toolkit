@@ -36,6 +36,7 @@ import {
   SAFE_FS_MODULE,
   SAFE_IMPORT,
   SAFE_PATH_MODULE,
+  SAFE_PROCESS_MODULE,
   WRAPPED_PATH_FUNCTIONS,
 } from './fixtures.js';
 import { fix, lint, localRulesConfig, ruleConfig, unboundIn, unusedIn } from './linter-harness.js';
@@ -44,19 +45,40 @@ import { loadLocalRule, loadLocalRuleModule } from './rule-tester.js';
 const PLUGIN_ENTRY = '../index.cjs';
 const REWRITE_SITES = 4;
 
-/** `[rule, importLine, callExpression]` — a source is synthesized per row. */
-const MULTI_SITE_REWRITES: Array<[string, string, string]> = [
+/**
+ * `[rule, importLine, callExpression, shape?]` — a source is synthesized per row.
+ * `'statement'` places each call as a bare statement, for a rule that autofixes
+ * only a call whose result is discarded.
+ */
+type CallShape = 'value' | 'statement';
+const MULTI_SITE_REWRITES: Array<[string, string, string, CallShape?]> = [
   ...WRAPPED_PATH_FUNCTIONS.map((fn): [string, string, string] => [RULE.rawPath, namedImport(fn, NODE_PATH), `${fn}(a, b)`]),
   [RULE.tmpdir, namedImport('tmpdir', 'node:os'), 'tmpdir()'],
-  [RULE.mkdir, namedImport('mkdirSync', NODE_FS), 'mkdirSync(a)'],
-  // `no-fs-realpathSync` and `no-child-process-execSync` are absent on purpose: neither has an
-  // autofix (the replacement needs an argument the rule cannot derive), only a suggestion.
+  [RULE.mkdir, namedImport('mkdirSync', NODE_FS), 'mkdirSync(a)', 'statement'],
+  // `no-fs-realpathSync` and `no-child-process-execSync` are absent on purpose: neither
+  // autofixes a call (the replacement needs an argument the rule cannot derive), only
+  // suggests one. Their only autofix is the dead-import leg — see SUGGESTED_THEN_DEAD.
   // No import to remove — the import INSERT alone spans the file.
   [RULE.normalize, '', String.raw`a.split('\\').join('/')`],
 ];
 
-function multiSiteSource(importLine: string, call: string): string {
-  const calls = Array.from({ length: REWRITE_SITES }, (_, i) => `const r${i} = ${call};`);
+/**
+ * `[rule, source]` for a rule that autofixes no call: the source is what accepting its
+ * suggestion leaves — the safe call, and the unsafe import a suggestion never removes.
+ */
+const SUGGESTED_THEN_DEAD: Array<[string, string]> = [
+  [
+    RULE.realpath,
+    `${namedImport('realpathSync', NODE_FS)}\nimport { normalizePath } from '${SAFE_FS_MODULE}';\nexport const p = normalizePath('a', { within: 'a' });`,
+  ],
+  [
+    RULE.execSync,
+    `${namedImport('execSync', 'node:child_process')}\nimport { safeExecSync } from '${SAFE_PROCESS_MODULE}';\nexport const o = safeExecSync('ls', ['-la']);`,
+  ],
+];
+
+function multiSiteSource(importLine: string, call: string, shape: CallShape = 'value'): string {
+  const calls = Array.from({ length: REWRITE_SITES }, (_, i) => (shape === 'statement' ? `${call};` : `const r${i} = ${call};`));
   return [importLine, "const a = 'a';", "const b = 'b';", ...calls].filter(Boolean).join('\n');
 }
 
@@ -78,13 +100,14 @@ describe('autofix leaves no dangling reference', () => {
     const fixable = Object.entries(plugin.rules)
       .filter(([, rule]) => rule.meta?.fixable != null)
       .map(([name]) => name);
-    expect([...new Set(MULTI_SITE_REWRITES.map(([name]) => name))].sort(byName)).toStrictEqual(
+    const covered = [...MULTI_SITE_REWRITES, ...SUGGESTED_THEN_DEAD].map(([name]) => name);
+    expect([...new Set(covered)].sort(byName)).toStrictEqual(
       [...fixable].sort(byName),
     );
   });
 
-  it.each(MULTI_SITE_REWRITES)('%s (%s)', (name, importLine, call) => {
-    const source = multiSiteSource(importLine, call);
+  it.each(MULTI_SITE_REWRITES)('%s (%s)', (name, importLine, call, shape) => {
+    const source = multiSiteSource(importLine, call, shape);
     const config = ruleConfig(name);
 
     // Negative control: a source that stopped provoking the rule would make
@@ -112,20 +135,34 @@ describe('autofix leaves no dangling reference', () => {
  * suite is what stops one being re-introduced: a latch here has no repair leg
  * behind it, and the file would simply stay broken.
  */
-const SUPPRESSION_CASES: Array<[string, string, string]> = [
+const SUPPRESSION_CASES: Array<[string, string, string, CallShape?]> = [
   [RULE.tmpdir, namedImport('tmpdir', 'node:os'), 'tmpdir()'],
-  [RULE.mkdir, namedImport('mkdirSync', NODE_FS), "mkdirSync('/d')"],
+  [RULE.mkdir, namedImport('mkdirSync', NODE_FS), "mkdirSync('/d')", 'statement'],
   [RULE.normalize, '', String.raw`'x'.split('\\').join('/')`],
 ];
 
+describe('a rule that only suggests a call still removes the import the suggestion left', () => {
+  it.each(SUGGESTED_THEN_DEAD)('%s', (name, source) => {
+    const cfg = ruleConfig(name);
+    // Negative control: the dead import is reported before the fix.
+    expect(lint(source, cfg)).toHaveLength(1);
+
+    const { output, fixed } = fix(source, cfg);
+    expect(fixed).toBe(true);
+    expect(unusedIn(output)).toStrictEqual([]);
+    expect(lint(output, cfg)).toStrictEqual([]);
+  });
+});
+
 describe('a suppressed first report strands no other rule either', () => {
-  it.each(SUPPRESSION_CASES)('%s', (name, importLine, call) => {
+  it.each(SUPPRESSION_CASES)('%s', (name, importLine, call, shape) => {
+    const site = (binding: string): string => (shape === 'statement' ? `${call};` : `export const ${binding} = ${call};`);
     const source = [
       importLine,
       `// eslint-disable-next-line local/${name}`,
-      `export const a = ${call};`,
-      `export const b = ${call};`,
-      `export const c = ${call};`,
+      site('a'),
+      site('b'),
+      site('c'),
     ]
       .filter(Boolean)
       .join('\n');
@@ -139,7 +176,7 @@ describe('a suppressed first report strands no other rule either', () => {
     const { output } = fix(source, cfg);
     expect(unboundIn(output, defined)).toStrictEqual([]);
     // The suppressed call is untouched, so whatever it needs must survive.
-    expect(output).toContain(`export const a = ${call};`);
+    expect(output).toContain(`local/${name}\n${site('a')}`);
   });
 });
 

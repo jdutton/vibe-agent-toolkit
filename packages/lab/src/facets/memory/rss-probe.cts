@@ -14,11 +14,25 @@
  *   process, and workers share it. Measured: a 400 MB buffer allocated in a
  *   worker raises the main thread's `maxRSS` by ~400 MB. So a parse pool's
  *   per-worker heaps are in the number, as they must be.
- * - **Child processes: NOT included,** and that is why this is a preload rather
- *   than a reading taken by the lab around `spawnSync`. vat's launcher starts a
- *   second node process to do the work; a reading of the launcher alone would
- *   miss everything. Every node process that inherits `NODE_OPTIONS` writes its
- *   own dump, and the capture reads them all.
+ * - **Child processes: NOT included in a process's own figure,** and that is
+ *   why this is a preload rather than a reading taken by the lab around
+ *   `spawnSync`. vat's launcher starts a second node process to do the work; a
+ *   reading of the launcher alone would miss everything. Each of vat's own
+ *   processes writes its own dump, and the capture reads them all.
+ * - **The PARENT's resident set: included, on Linux,** up to the moment of
+ *   `fork()` — the kernel carries the forked copy's high-water mark into the
+ *   child's peak. That is why every measured repeat is launched by
+ *   `rss-spawner.ts`, a small fresh node whose own peak is the floor, and why the
+ *   spawner dumps too: the floor travels in the report.
+ * - **Only vat's own processes, and the spawner.** A process is vat's when its
+ *   main script (`process.argv[1]`, links resolved — npm's `.bin/vat` is one)
+ *   belongs to one of {@link VAT_PACKAGE_NAMES}: the nearest `package.json`
+ *   above it names the launcher or the CLI. Decided by the probe from the
+ *   install alone, so it holds for every vat ever published — a build needs no
+ *   cooperation to be measured — and it excludes what vat is not: `npm` under
+ *   `npx`, a `node -e`, a tool vat spawns. The spawner is the lab's own, so it
+ *   says what it is instead: it sets {@link SPAWNER_PID_ENV} to its pid, and
+ *   only the process whose pid that is (not a child that inherited it) counts.
  * - **Read at exit.** A high-water mark is monotonic, so exit is the peak. A
  *   process killed by a signal, or one V8 aborts out of heap, never runs its
  *   `exit` listeners and leaves no dump — the capture reports that repeat as
@@ -45,6 +59,78 @@ import workerThreads = require('node:worker_threads');
 /** Activation variable: the directory to write the dump into. */
 const LOG_DIR_ENV = 'VAT_LAB_RSS_LOG';
 
+/** The packages whose scripts are vat: the umbrella launcher, and the CLI it delegates to. */
+const VAT_PACKAGE_NAMES: ReadonlySet<string> = new Set(['vibe-agent-toolkit', '@vibe-agent-toolkit/cli']);
+
+/** The spawner sets this to its own pid — `rss-spawner.ts`. */
+const SPAWNER_PID_ENV = 'VAT_LAB_SPAWNER_PID';
+
+/**
+ * Say on stderr why the probe could not decide, and decide "not vat".
+ *
+ * A probe that could not tell must not guess vat — that would count an
+ * unrelated process — and must not be silent: a repeat that then fails for
+ * want of a vat peak needs its cause on record.
+ *
+ * @param what - What the probe was reading
+ * @param error - Why it failed
+ */
+function undecided(what: string, error: unknown): false {
+  const reason = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`[vat-lab rss probe] cannot read ${what}: ${reason}\n`);
+  return false;
+}
+
+/**
+ * Whether the nearest `package.json` above `file` names one of vat's packages.
+ *
+ * @param file - A real (link-resolved) absolute path
+ */
+function ownedByVat(file: string): boolean {
+  let dir = path.dirname(file);
+  for (;;) {
+    const manifest = path.join(dir, 'package.json');
+    // `lstat`, which follows nothing; an absent manifest moves the walk up.
+    if (fs.lstatSync(manifest, { throwIfNoEntry: false }) !== undefined) {
+      try {
+        const parsed: unknown = JSON.parse(fs.readFileSync(manifest, 'utf-8'));
+        const name = typeof parsed === 'object' && parsed !== null ? (parsed as { name?: unknown }).name : undefined;
+        return typeof name === 'string' && VAT_PACKAGE_NAMES.has(name);
+      } catch (error) {
+        return undecided(manifest, error);
+      }
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return false;
+    dir = parent;
+  }
+}
+
+/**
+ * Whether this process's main script is one of vat's.
+ *
+ * @param main - The main script as the process was started with it
+ */
+function isVatMainScript(main: string | undefined): boolean {
+  if (main === undefined || main === '') return false;
+  let real: string;
+  try {
+    // The installed `.bin/vat` is a link into the package, and its own directory
+    // owns nothing — so the link is followed. The path is this process's own
+    // main script, which the operator launched, never a crawled entry.
+    real = fs.realpathSync(main);
+  } catch (error) {
+    return undecided(main, error);
+  }
+  return ownedByVat(real);
+}
+
+/** Which process this is, as far as the capture cares, read at exit; `null` writes no dump. */
+function processRole(): 'vat' | 'spawner' | null {
+  if (process.env[SPAWNER_PID_ENV] === String(process.pid)) return 'spawner';
+  return isVatMainScript(process.argv[1]) ? 'vat' : null;
+}
+
 /**
  * Write this process's peak, under a name no other process in the directory holds.
  *
@@ -59,10 +145,10 @@ const LOG_DIR_ENV = 'VAT_LAB_RSS_LOG';
  *
  * @param logDir - Directory to write into
  */
-function writeDump(logDir: string): void {
+function writeDump(logDir: string, role: 'vat' | 'spawner'): void {
   try {
     fs.mkdirSync(logDir, { recursive: true });
-    const dump = JSON.stringify({ pid: process.pid, maxRssKb: process.resourceUsage().maxRSS });
+    const dump = JSON.stringify({ pid: process.pid, role, maxRssKb: process.resourceUsage().maxRSS });
     const file = path.join(logDir, `rss-${String(process.pid)}-${crypto.randomUUID()}.json`);
     fs.writeFileSync(file, dump, { flag: 'wx' });
   } catch (error) {
@@ -74,11 +160,12 @@ function writeDump(logDir: string): void {
 const configuredLogDir = process.env[LOG_DIR_ENV];
 if (workerThreads.isMainThread && typeof configuredLogDir === 'string' && configuredLogDir !== '') {
   process.once('exit', () => {
-    writeDump(configuredLogDir);
+    const role = processRole();
+    if (role !== null) writeDump(configuredLogDir, role);
   });
 }
 
 export = {
   /** Testing surface. The contract with the reader is the JSON file, and only that. */
-  __internals: { LOG_DIR_ENV },
+  __internals: { LOG_DIR_ENV, SPAWNER_PID_ENV, VAT_PACKAGE_NAMES },
 };

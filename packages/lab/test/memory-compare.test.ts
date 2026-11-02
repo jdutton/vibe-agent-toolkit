@@ -38,6 +38,7 @@ function row(medianKb: number, over: Partial<MemoryCommandStats> = {}): MemoryCo
     iqrKb: 1024,
     samplesKb: [medianKb - 1024, medianKb, medianKb + 1024],
     processesPerRepeat: [1, 1, 1],
+    spawnerKb: [40 * 1024, 40 * 1024, 40 * 1024],
     exitCode: 0,
     failed: false,
     failure: null,
@@ -103,6 +104,23 @@ describe('compareMemory', () => {
     expect(onlyVerdict(compared(row(40 * 1024), row(52 * 1024))).kind).toBe('unchanged');
   });
 
+  it('calls a move inside the arms\' combined spread unchanged, though it clears both gates', () => {
+    // 200 MiB on 1 GiB clears 10% and 16 MiB; each arm's repeats spanned 300 MiB.
+    const wide = { minKb: GIB_KB - 150 * 1024, maxKb: GIB_KB + 150 * 1024 };
+    const after = 1.2 * GIB_KB;
+    const verdict = onlyVerdict(compared(row(GIB_KB, wide), row(after, { minKb: after - 150 * 1024, maxKb: after + 150 * 1024 })));
+
+    expect(verdict.kind).toBe('unchanged');
+  });
+
+  it('calls a different count of vat processes CHANGED, even at the same peak', () => {
+    const verdict = onlyVerdict(compared(row(GIB_KB), row(GIB_KB, { processesPerRepeat: [2, 2, 2] })));
+
+    expect(verdict.kind).toBe('changed');
+    if (verdict.kind !== 'changed') return;
+    expect(verdict.processes).toEqual({ before: 1, after: 2 });
+  });
+
   it('yields no delta when a side failed, and names the side', () => {
     const failed = row(0, { failed: true, failure: 'no RSS dumps', minKb: 0, maxKb: 0, iqrKb: 0, samplesKb: [], exitCode: null });
     const verdict = onlyVerdict(compared(row(GIB_KB), failed));
@@ -129,8 +147,9 @@ describe('the memory renderers', () => {
     const text = renderMemoryReport(reportWith(row(GIB_KB, { processesPerRepeat: [2, 2, 2] })));
 
     expect(text).toContain('build: 1.00 GiB median peak RSS');
-    expect(text).toContain('2 node processes');
+    expect(text).toContain('2 vat processes, floor 40.0 MiB');
     expect(text).toContain('worker threads INCLUDED');
+    expect(text).toContain('bare-node spawner');
   });
 
   it('says FAILED, never a zero peak, for a failed row', () => {
@@ -143,6 +162,12 @@ describe('the memory renderers', () => {
   it('prints both peaks and the factor on a changed comparison', () => {
     const text = renderMemoryComparison(compared(row(GIB_KB), row(5.4 * GIB_KB)));
 
-    expect(text).toContain('build: CHANGED — median peak RSS 1.00 GiB -> 5.40 GiB (×5.40)');
+    expect(text).toContain('build: CHANGED — median peak RSS 1.00 GiB -> 5.40 GiB (×5.40), 1 vat processes');
+  });
+
+  it('prints a moved process count on the comparison', () => {
+    const text = renderMemoryComparison(compared(row(GIB_KB), row(GIB_KB, { processesPerRepeat: [2, 2, 2] })));
+
+    expect(text).toContain('vat processes 1 -> 2');
   });
 });

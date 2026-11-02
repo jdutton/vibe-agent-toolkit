@@ -622,7 +622,7 @@ describe('skills build — framework exit codes (system test)', () => {
     ]);
     // The severity is rendered as itself, so a reader can tell WHICH finding
     // failed the build rather than inferring it from the exit code.
-    expect(cmdResult.stderr + cmdResult.stdout).toContain('[ERROR] [LINK_MISSING_TARGET]');
+    expect(cmdResult.stderr + cmdResult.stdout).toMatch(/error: .*\[LINK_MISSING_TARGET\]/);
   });
 
   describe('LINK_OUTSIDE_SKILL_DIR — a link out of the skill directory', () => {
@@ -650,7 +650,7 @@ describe('skills build — framework exit codes (system test)', () => {
       const { result: cmdResult } = await suite.runBuildCommand(projectDir);
 
       expect(cmdResult.status).toBe(1);
-      expect(cmdResult.stderr + cmdResult.stdout).toContain('[ERROR] [LINK_OUTSIDE_SKILL_DIR]');
+      expect(cmdResult.stderr + cmdResult.stdout).toMatch(/error: .*\[LINK_OUTSIDE_SKILL_DIR\]/);
       expect(existsSync(safePath.join(projectDir, 'dist', 'skills', SHARED_DOC_SKILL, 'SKILL.md'))).toBe(false);
     });
   });

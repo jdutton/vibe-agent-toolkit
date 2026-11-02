@@ -8,7 +8,7 @@ describe(RULE.mkdir, () => {
   it(RULE_TESTER_CASES, () => {
     expectRulePasses(RULE.mkdir, unsafeCallRuleCases({
       unsafeFn: 'mkdirSync', unsafeModule: NODE_FS, safeFn: 'mkdirSyncReal',
-      safeModule: SAFE_FS_MODULE, exemptPath: PATH_UTILS_IMPL, rewrite: 'fix',
+      safeModule: SAFE_FS_MODULE, exemptPath: PATH_UTILS_IMPL, rewrite: { autofixAsStatement: true },
     }));
   });
 });

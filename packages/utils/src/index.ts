@@ -10,7 +10,7 @@
  * cannot tree-shake a dependency (a CJS package, or one reached through
  * `new URL(..., import.meta.url)`) inlines it into every consumer that touched
  * a path helper. The domains that carry weight each have their own entry:
- * `./crawl`, `./git`, `./process`, `./skill-test`, `./template`, `./yaml`.
+ * `./crawl`, `./git`, `./process`, `./skill-test`, `./yaml`.
  * `./skill-test` is there for a *transitive* reason rather than a direct one —
  * it declares no dependency itself, but spawning a headless agent goes through
  * `./process`, which reaches `which` and (because `safeExecSync` refuses `git`

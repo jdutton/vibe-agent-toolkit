@@ -4,10 +4,12 @@
  *
  * The stand-in allocates nothing itself, so a second preload — supplied as the
  * arm's own `NODE_OPTIONS` — makes it hold a chosen amount. That one fixture
- * proves two things at once: the peak follows the allocation (two captures, two
- * sizes, a gap the size of the difference), and the arm's `NODE_OPTIONS` was
- * APPENDED to rather than replaced, because a replaced one would leave both
- * captures at a bare node's size.
+ * proves two things at once: the peak follows the allocation (a capture against
+ * a no-allocation baseline from the same spawner, a gap the size of the
+ * allocation), and the arm's `NODE_OPTIONS` was APPENDED to rather than
+ * replaced, because a replaced one would leave both captures at a bare node's
+ * size. Never an absolute bound: on Linux a child's peak includes its parent's
+ * resident set at `fork()`, so only a difference says what the child held.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -30,6 +32,9 @@ const CAPTURED_AT = '2026-11-02T12:00:00.000Z';
 
 /** The emitted probe — the artifact that ships. */
 const PROBE_DIST = toForwardSlash(fileURLToPath(new URL('../../dist/facets/memory/rss-probe.cjs', import.meta.url)));
+
+/** The emitted spawner. */
+const SPAWNER_DIST = toForwardSlash(fileURLToPath(new URL('../../dist/facets/memory/rss-spawner.js', import.meta.url)));
 
 /** How many MiB the allocating preload holds. */
 const ALLOC_ENV = 'LAB_MEMORY_ALLOC_MIB';
@@ -71,6 +76,7 @@ function capture(probe: Probe, mib: number, overrides: Partial<CaptureMemoryOpti
   return captureMemory({
     ...probeCaptureDefaults(probe, probeSubject(probe.cwd, 'memory-probe-subject', 'b'.repeat(16)), CAPTURED_AT),
     probePath: PROBE_DIST,
+    spawnerPath: SPAWNER_DIST,
     env: { set: { NODE_OPTIONS: `--require "${allocPath}"`, [ALLOC_ENV]: String(mib) }, unset: [] },
     ...overrides,
   });
@@ -89,20 +95,22 @@ function onlyRow(report: ReportEnvelope<MemoryBody>): MemoryCommandStats {
 }
 
 describe('captureMemory', () => {
-  it('reports a peak that follows what the measured process held', async () => {
-    const small = await capture(setupProbe(PREFIX), 32);
+  it('reports a peak that follows what the measured process held, above the same spawner\'s baseline', async () => {
+    const baseline = await capture(setupProbe(PREFIX), 0);
     const large = await capture(setupProbe(PREFIX), 320);
-    const smallRow = onlyRow(small);
+    const baselineRow = onlyRow(baseline);
     const largeRow = onlyRow(large);
 
-    expect(small.facet).toBe(MEMORY_FACET);
-    expectBodyMatchesSchema(MemoryBodySchema, small.body);
-    expect(smallRow.failed).toBe(false);
-    expect(smallRow.samplesKb).toHaveLength(3);
-    expect(smallRow.processesPerRepeat).toEqual([1, 1, 1]);
-    expect(largeRow.minKb).toBeGreaterThan(320 * MIB_KB);
-    // The gap is the allocation difference, give or take what node itself moved.
-    expect(largeRow.medianKb - smallRow.medianKb).toBeGreaterThan(250 * MIB_KB);
+    expect(baseline.facet).toBe(MEMORY_FACET);
+    expectBodyMatchesSchema(MemoryBodySchema, baseline.body);
+    expect(baselineRow.failed, baselineRow.failure ?? '').toBe(false);
+    expect(baselineRow.samplesKb).toHaveLength(3);
+    expect(baselineRow.processesPerRepeat).toEqual([1, 1, 1]);
+    expect(baselineRow.spawnerKb).toHaveLength(3);
+    // The gap is the allocation, give or take what node itself moved — and the
+    // SMALLEST allocating repeat clears the LARGEST baseline one.
+    expect(largeRow.medianKb - baselineRow.medianKb).toBeGreaterThan(290 * MIB_KB);
+    expect(largeRow.minKb - baselineRow.maxKb).toBeGreaterThan(250 * MIB_KB);
   });
 
   it('marks the row failed, with the probe named, when no repeat left a peak', async () => {

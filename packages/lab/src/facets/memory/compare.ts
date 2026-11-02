@@ -5,7 +5,9 @@
  * body, at most one axis moved). Then, per command: a failed side, a different
  * cache mode or a different accepted exit is no delta at all — the same three
  * reasons, in the same order, as `perf` — and otherwise the MEDIAN peaks are
- * subtracted and judged by {@link magnitudeDelta}.
+ * subtracted and judged by {@link magnitudeDelta}, with a floor no smaller than
+ * the two arms' combined spread, and a change in how many vat processes ran is a
+ * change in its own right.
  */
 
 import type { DecideComparisonOptions } from '../../envelope/coordinate.js';
@@ -24,11 +26,8 @@ import {
 import { MEMORY_FACET, MemoryBodySchema, type MemoryCommandStats } from './types.js';
 
 /**
- * Fraction of the smaller median a peak must move by to count as real.
- *
- * Peak RSS is far steadier than wall time — repeats of one `vat build` agree to
- * within a few percent — so the relative gate matches `perf`'s 10% rather than
- * needing to be wider.
+ * Fraction of the smaller median a peak must move by to count as real — `perf`'s
+ * 10%. The measured spread decides the rest: see {@link spreadKb}.
  */
 const MIN_RELATIVE = 0.1;
 
@@ -40,9 +39,15 @@ const MIN_RELATIVE = 0.1;
  */
 const MIN_ABSOLUTE_KB = 16 * 1024;
 
+/** How many vat processes each side's repeats ran — one count per side, since a row's repeats agree. */
+export interface ProcessCounts {
+  readonly before: number;
+  readonly after: number;
+}
+
 /** What happened to one command present on both sides. */
 export type MemoryCommandVerdict =
-  | { readonly kind: 'changed' | 'unchanged'; readonly peak: MagnitudeDelta }
+  | { readonly kind: 'changed' | 'unchanged'; readonly peak: MagnitudeDelta; readonly processes: ProcessCounts }
   | { readonly kind: 'unmeasurable'; readonly reason: string };
 
 /** A completed comparison. */
@@ -78,7 +83,22 @@ function unmeasurableReason(before: MemoryCommandStats, after: MemoryCommandStat
 }
 
 /**
+ * One arm's repeat spread: the range its peaks covered.
+ *
+ * @param row - A measured row
+ * @returns `maxKb - minKb`
+ */
+function spreadKb(row: MemoryCommandStats): number {
+  return row.maxKb - row.minKb;
+}
+
+/**
  * Diff one command present on both sides.
+ *
+ * CHANGED needs a move larger than the 16 MiB floor, the 10% gate AND the two
+ * arms' combined spread: a delta the repeats themselves wandered across is not
+ * a move. A different count of vat processes is CHANGED whatever the peaks did —
+ * the peak is the largest of a different set of processes.
  *
  * @param before - The baseline row
  * @param after - The compared row
@@ -87,8 +107,11 @@ function unmeasurableReason(before: MemoryCommandStats, after: MemoryCommandStat
 function verdictFor(before: MemoryCommandStats, after: MemoryCommandStats): MemoryCommandVerdict {
   const reason = unmeasurableReason(before, after);
   if (reason !== null) return { kind: 'unmeasurable', reason };
-  const peak = magnitudeDelta(before.medianKb, after.medianKb, MIN_RELATIVE, MIN_ABSOLUTE_KB);
-  return { kind: peak.significant ? 'changed' : 'unchanged', peak };
+  const floorKb = Math.max(MIN_ABSOLUTE_KB, spreadKb(before) + spreadKb(after));
+  const peak = magnitudeDelta(before.medianKb, after.medianKb, MIN_RELATIVE, floorKb);
+  const processes = { before: before.processesPerRepeat[0] ?? 0, after: after.processesPerRepeat[0] ?? 0 };
+  const changed = peak.significant || processes.before !== processes.after;
+  return { kind: changed ? 'changed' : 'unchanged', peak, processes };
 }
 
 /**

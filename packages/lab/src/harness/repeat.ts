@@ -23,6 +23,10 @@
  *    hands back every repetition, failures included; what a failure costs is
  *    the facet's call — the `perf` facet refuses to let a failed run contribute
  *    a timing, because timing a crash measures how fast vat fails.
+ * 4. **A measured subject never receives anything.** An arm whose steps WRITE
+ *    the tree they run in (`SequenceStep.writes`) runs in its own copy of the
+ *    subject, with the written directories deleted before every run and the
+ *    copy removed when the arm ends — see `subject-copy.ts`.
  */
 
 import { forEachInOrder, mapInOrder } from '@vibe-agent-toolkit/utils';
@@ -34,7 +38,9 @@ import {
   armPlacementRefusal,
   armRefusal,
   armStepEnvironment,
+  clearArmSubjectOutputs,
   prepareArmDirectories,
+  removeArmSubject,
 } from './arm-dirs.js';
 import { type ArmEnvironment, clearedEnvironment, mergeArmEnvironments } from './arm-env.js';
 import type { MeasuredCommandSpec } from './commands.js';
@@ -48,6 +54,7 @@ import {
   type SequenceResult,
   type SequenceStep,
 } from './sequence.js';
+import { copySubject, writtenDirectories } from './subject-copy.js';
 import type { CacheMode, CaptureRequest, ResolvedInstrument } from './types.js';
 
 /** The token replaced with the subject's path in a command's arguments. */
@@ -81,6 +88,12 @@ export interface RepeatSpec {
    * setup's I/O into a repeat's measurement.
    */
   readonly envFor?: RepeatEnvFor;
+  /**
+   * The launcher MEASURED repeats are started through (`RunOptions.via`),
+   * or `undefined` to launch them directly. Priming runs are never measured, so
+   * they always launch directly.
+   */
+  readonly measuredVia?: string;
 }
 
 /** Per-repeat variables for the measured run; see {@link RepeatSpec.envFor}. */
@@ -186,6 +199,7 @@ export function commandStep(spec: MeasuredCommandSpec, args: readonly string[]):
     exit: spec.exit,
     provenance: spec.provenance,
     populates: spec.populates,
+    writes: spec.writes,
   };
 }
 
@@ -201,12 +215,14 @@ export function commandStep(spec: MeasuredCommandSpec, args: readonly string[]):
  * @param request - What the capture was asked to do
  * @param spec - The command to measure
  * @param envFor - Per-repeat environment for the MEASURED run only
+ * @param measuredVia - The launcher measured repeats start through; see {@link RepeatSpec.measuredVia}
  * @returns The repeats and the verdict on them; see {@link SpecMeasurement}
  */
 export async function measureSpec(
   request: CaptureRequest,
   spec: MeasuredCommandSpec,
   envFor?: RepeatEnvFor,
+  measuredVia?: string,
 ): Promise<SpecMeasurement> {
   const args = materializeArgs(spec.args, request.subject.path);
   const run = await runRepeats({
@@ -218,6 +234,7 @@ export async function measureSpec(
     ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
     env: request.env,
     ...(envFor === undefined ? {} : { envFor }),
+    ...(measuredVia === undefined ? {} : { measuredVia }),
   });
   return { spec, args, cache: request.cache, results: run.results, failure: armRunFailure(run), removed: run.removed, npmNetwork: run.npmNetwork };
 }
@@ -267,6 +284,24 @@ export async function runInterleaved(specs: readonly RepeatSpec[], rounds: numbe
   if (rounds === 0) return arms.map((arm) => ({ removed: arm.removed, removedTool: arm.removedTool, npmNetwork: arm.npmNetwork, priming: null, results: [] }));
 
   for (const arm of arms) prepareArmDirectories(arm.context.dirs);
+  try {
+    await forEachInOrder(arms, (arm) => makeSubjectCopy(arm));
+    return await runPreparedArms(arms, specs, rounds);
+  } finally {
+    await forEachInOrder(arms, (arm) => (arm.copy === null ? undefined : removeArmSubject(arm.context.dirs)));
+  }
+}
+
+/**
+ * The rounds of {@link runInterleaved}, over arms whose directories (and subject
+ * copies) exist.
+ *
+ * @param arms - The prepared arms
+ * @param specs - Their specs, in the same order
+ * @param rounds - Measured repetitions per arm
+ * @returns One run per arm, in `specs` order
+ */
+async function runPreparedArms(arms: readonly PreparedArm[], specs: readonly RepeatSpec[], rounds: number): Promise<ArmRun[]> {
   // Start first: an npx build is on disk, and so askable for its parse directory, only once started.
   for (const [index, arm] of arms.entries()) startBuild(arm, specs[index]?.arm.arm ?? '');
   // Before any measured child: an arm that cannot judge its population is refused whole, not after round 1.
@@ -278,7 +313,8 @@ export async function runInterleaved(specs: readonly RepeatSpec[], rounds: numbe
   await forEachInOrder(roundNumbers, (round) =>
     forEachInOrder(arms, async (arm, index) => {
       if ((priming[index]?.violation ?? null) !== null) return;
-      results[index]?.push(await runSequence(arm.context, { kind: 'measured', vatEnv: arm.measuredEnv(round) }));
+      await clearWrittenOutputs(arm);
+      results[index]?.push(await runSequence(arm.context, { kind: 'measured', vatEnv: arm.measuredEnv(round), via: arm.measuredVia }));
     }),
   );
   return arms.map((arm, index) => ({
@@ -288,6 +324,28 @@ export async function runInterleaved(specs: readonly RepeatSpec[], rounds: numbe
     priming: priming[index] ?? null,
     results: results[index] ?? [],
   }));
+}
+
+/**
+ * Make the arm's copy of the subject, when its steps write the subject: any copy
+ * a previous capture left in a named arms directory goes first.
+ *
+ * @param arm - A prepared arm, its directories made
+ * @throws {VatError} `ARM_REFUSED` when the copy cannot be made
+ */
+async function makeSubjectCopy(arm: PreparedArm): Promise<void> {
+  if (arm.copy === null) return;
+  await removeArmSubject(arm.context.dirs);
+  copySubject(arm.copy.from, arm.context.dirs.subject);
+}
+
+/**
+ * Delete what the arm's steps write inside its subject copy, before a run.
+ *
+ * @param arm - A prepared arm
+ */
+async function clearWrittenOutputs(arm: PreparedArm): Promise<void> {
+  if (arm.copy !== null) await clearArmSubjectOutputs(arm.context.dirs, arm.copy.writes);
 }
 
 /**
@@ -330,10 +388,16 @@ function startBuild(arm: PreparedArm, name: string): void {
 /** One arm, prepared to run. */
 interface PreparedArm {
   readonly context: SequenceContext;
+  /**
+   * The real subject the arm's copy is made from and what its steps write in
+   * it, or `null` when no step writes the subject and the arm runs in it.
+   */
+  readonly copy: { readonly from: string; readonly writes: readonly string[] } | null;
   readonly removed: readonly string[];
   readonly removedTool: readonly string[];
   readonly npmNetwork: readonly string[];
   readonly measuredEnv: (round: number) => ArmEnvironment;
+  readonly measuredVia: string | undefined;
 }
 
 /**
@@ -350,26 +414,33 @@ function prepareArm(spec: RepeatSpec): PreparedArm {
   const dirs = armDirectories(spec.arm);
   const placement = armPlacementRefusal(dirs.root, [spec.cwd]);
   if (placement !== null) throw armRefusal(`arm '${spec.arm.arm}': ${placement}`);
+  const writes = writtenDirectories(spec.steps);
+  const copy = writes.length === 0 ? null : { from: spec.cwd, writes };
+  if (copy !== null) refuseSubjectArguments(spec);
+  // A writing arm runs in its copy: the cwd every step and every resolution sees.
+  const cwd = copy === null ? spec.cwd : dirs.subject;
   const vat = armStepEnvironment(dirs, spec.env);
   const tool = clearedEnvironment(process.env, 'tool', { set: {}, unset: [] }, process.platform);
   let parse: ParseDirectoryResolution | undefined;
   const context: SequenceContext = {
     instrument: spec.instrument,
-    cwd: spec.cwd,
+    cwd,
     steps: spec.steps,
     dirs,
     state: spec.arm.state,
     vatEnv: vat.env,
     toolEnv: tool.env,
     timeoutMs: spec.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    parseDirectory: () => (parse ??= resolveParseCacheDirectory(spec.instrument, dirs, spec.cwd)),
+    parseDirectory: () => (parse ??= resolveParseCacheDirectory(spec.instrument, dirs, cwd)),
     population: populationExpectation(vat.env, process.platform),
   };
   return {
     context,
+    copy,
     removed: vat.removed,
     removedTool: tool.removed,
     npmNetwork: vat.npmNetwork,
+    measuredVia: spec.measuredVia,
     measuredEnv: (round) => {
       const own = spec.envFor?.(round);
       return own === undefined ? vat.env : mergeArmEnvironments(vat.env, { set: own, unset: [] });
@@ -384,8 +455,26 @@ function prepareArm(spec: RepeatSpec): PreparedArm {
  * @returns The priming run
  */
 async function primed(arm: PreparedArm): Promise<SequenceResult> {
+  await clearWrittenOutputs(arm);
   const run = await runSequence(arm.context, { kind: 'priming' });
   return run.violation === null ? run : { ...run, violation: `priming run: ${run.violation}` };
+}
+
+/**
+ * Refuse a writing arm whose steps name the real subject in their arguments: the
+ * arm runs in its copy, and a step pointed back at the subject would write it.
+ *
+ * @param spec - An arm whose steps write the subject
+ * @throws {VatError} `ARM_REFUSED` naming the step
+ */
+function refuseSubjectArguments(spec: RepeatSpec): void {
+  const named = spec.steps.find((step) => step.command.args.some((arg) => arg.includes(spec.cwd)));
+  if (named !== undefined) {
+    throw armRefusal(
+      `arm '${spec.arm.arm}': step '${named.name}' names the subject in its arguments, but the arm writes the subject ` +
+        'and so runs in a copy of it — a writing command takes the subject from its working directory only',
+    );
+  }
 }
 
 /**

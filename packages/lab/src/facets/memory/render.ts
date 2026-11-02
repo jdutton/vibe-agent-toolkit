@@ -20,13 +20,15 @@ const KB_PER_GIB = KB_PER_MIB * 1024;
 
 /** What every number here is. */
 const LEGEND =
-  'Peak RSS per repeat = the largest node process\'s process.resourceUsage().maxRSS — worker ' +
-  'threads INCLUDED (they share the process), child processes reported separately and never summed.';
+  'Peak RSS per repeat = the largest vat process\'s process.resourceUsage().maxRSS — worker ' +
+  'threads INCLUDED (they share the process), child processes reported separately and never summed. ' +
+  'Every repeat is launched by a bare-node spawner, whose own peak (the floor) is shown: on Linux a ' +
+  'child\'s peak includes what its parent held at fork(), so a figure means vat\'s own memory only above it.';
 
 /** How this facet's numbers are qualified on a busy machine. */
 const PHRASING = {
-  unmeasured: 'peak RSS does not depend on it.',
-  contaminated: 'peak RSS barely moves with load; the numbers stand.',
+  unmeasured: 'no load reading was taken around the capture.',
+  contaminated: 'the machine was busy; under memory pressure the OS may page vat out, which lowers a peak.',
 } as const;
 
 /**
@@ -50,10 +52,11 @@ function rowLines(row: MemoryCommandStats): readonly string[] {
   if (row.failed) return [`  ${row.name}: FAILED — ${row.failure ?? 'unknown'}`];
   const exit = row.exitCode === 0 || row.exitCode === null ? '' : `, exit ${String(row.exitCode)}`;
   const processes = [...new Set(row.processesPerRepeat)].map((count) => tally(count)).join('/');
+  const floor = row.spawnerKb.length === 0 ? '' : `, floor ${formatKb(Math.max(...row.spawnerKb))}`;
   return [
     `  ${row.name}: ${formatKb(row.medianKb)} median peak RSS ` +
       `(±${formatKb(row.iqrKb)} IQR, ${formatKb(row.minKb)}–${formatKb(row.maxKb)}, ` +
-      `${tally(row.runs)} runs, ${row.cache}, ${processes} node processes${exit})`,
+      `${tally(row.runs)} runs, ${row.cache}, ${processes} vat processes${floor}${exit})`,
   ];
 }
 
@@ -79,7 +82,9 @@ function diffLines(diff: MemoryComparisonResult['commands'][number]): readonly s
     if (!('peak' in verdict)) return '';
     const { before, after, ratio } = verdict.peak;
     const factor = ratio === null ? '' : ` (×${ratio.toFixed(2)})`;
-    return `median peak RSS ${formatKb(before)} -> ${formatKb(after)}${factor}`;
+    const { before: was, after: now } = verdict.processes;
+    const processes = was === now ? `${tally(now)} vat processes` : `vat processes ${tally(was)} -> ${tally(now)}`;
+    return `median peak RSS ${formatKb(before)} -> ${formatKb(after)}${factor}, ${processes}`;
   };
   return verdictBlock(diff.name, verdict, totals, () => []);
 }
@@ -94,7 +99,7 @@ export function renderMemoryComparison(comparison: MemoryComparisonResult): stri
   return renderFacetComparison(
     comparison,
     LEGEND,
-    '⚠  At least one side was captured on a busy machine; peak RSS barely moves with load.',
+    '⚠  At least one side was captured on a busy machine; under memory pressure a peak can read low.',
     diffLines,
   );
 }

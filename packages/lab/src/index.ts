@@ -319,16 +319,18 @@ export {
   type NormalizeContext,
   type PathSubstitution,
 } from './facets/verdict/normalize.js';
+export { planApfsClone } from './facets/verdict/clone.js';
 export {
   type CloneDir,
   type CloneSource,
   type ClonePlan,
   type CloneStep,
+  type CopyMode,
   executeClonePlan,
   type GitKind,
-  planApfsClone,
+  planTreeClone,
   readCloneSource,
-} from './facets/verdict/clone.js';
+} from './harness/tree-clone.js';
 export { multisetDifference } from './facets/verdict/multiset.js';
 export { renderVerdictComparison, renderVerdictReport } from './facets/verdict/render.js';
 export {

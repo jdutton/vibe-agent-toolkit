@@ -190,7 +190,13 @@ an arm and the two differ (the four clauses are tabled in [Facets](facets.md)).
 `validate`, `build` and `verify` take no `{subject}` argument: each **rejects** a positional path and
 takes its scope from the config at the working directory, which the harness has already set to the
 subject. `build` WRITES the subject's `dist/` and is committed to exit 0 only — a `vat build` that
-exits 1 stopped at an error finding and skipped its later phases — so point it at a scratch copy.
+exits 1 stopped at an error finding and skipped its later phases. A spec names what it writes
+(`writes: ['dist']`, required on every spec), and an arm with any written directory never runs in
+the real subject: it runs in `<arm>/subject`, one copy per capture (APFS copy-on-write on macOS, a
+real `cp -R` on Linux, minus the regenerable caches), with each written directory deleted inside it
+before every repeat (warm priming included) so no repeat times an incremental build, and the copy
+removed when the arm ends. It refuses Windows, a git-worktree subject (git in the copy would write
+the real repository's worktree index), and a writing step whose arguments name the real subject.
 `verify` reads the built `dist/` tree, so a subject measured with it must have been built.
 `claude-context-all` is subject-less for the same reason — `--all` sweeps every path the projection
 realized and takes no positional.

@@ -21,7 +21,9 @@ module.exports = factory({
   safeModule: SAFE_FS_MODULE,
   rewrite: {
     appendArgument: '{ within: undefined }',
-    suggestion: 'Replace with normalizePath(target, { within: undefined }), then set `within` to the tree the path is crawled in',
+    suggestion:
+      'Replace with normalizePath(target, { within: undefined }), then set `within` to the tree the path is crawled in. ' +
+      'Unlike realpathSync(), it no longer throws when the path is absent: it returns the resolved spelling',
   },
   message:
     'Use normalizePath(target, { within }) from {{safeModule}} instead of fs.realpathSync() for consistent Windows 8.3 path resolution; ' +

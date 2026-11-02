@@ -18,12 +18,19 @@
  *   in one repo, so a baked-in default is a hole in every OTHER repo. Consumers
  *   declare their own via the rule option (see `exempt-path-matcher.cjs`).
  * @param {boolean} [config.checkMemberExpression] - Check for obj.method() calls (default: false)
- * @param {'fix' | { appendArgument: string, suggestion: string }} config.rewrite - REQUIRED.
- *   `'fix'` when the safe function takes the unsafe call's arguments unchanged: an
- *   autofix swaps the callee. Otherwise the safe function needs an argument the rule
- *   cannot know, so there is no autofix — a suggestion (described by `suggestion`)
- *   rewrites a one-argument call and appends `appendArgument`, a placeholder that
- *   must fail the typecheck rather than guess a value that compiles.
+ * @param {'fix' | { appendArgument: string, suggestion: string } | { autofixAsStatement: true, suggestion: string }} config.rewrite - REQUIRED.
+ *   - `'fix'` when the safe function takes the unsafe call's arguments unchanged and
+ *     returns the same thing: an autofix swaps the callee.
+ *   - `{ autofixAsStatement, suggestion }` when it takes the same arguments but RETURNS
+ *     something else: only a call whose result is discarded (an expression statement)
+ *     is autofixed; any other is offered as a suggestion described by `suggestion`.
+ *   - `{ appendArgument, suggestion }` when it needs an argument the rule cannot know:
+ *     no autofix — a suggestion rewrites a one-argument call and appends
+ *     `appendArgument`, a placeholder that must fail the typecheck rather than guess a
+ *     value that compiles.
+ *   A suggestion never removes the unsafe import: it is applied alone, and the binding
+ *   may still back a call no suggestion was taken for. The dead-import leg removes it
+ *   once nothing references it.
  * @param {Object} config.docs - The rule's `meta.docs` manifest entry: `category`,
  *   `bans`, `useInstead`, optional `subpath`, and `recommended` /
  *   `recommendedSeverity` (what `index.cjs` builds `configs.recommended` from).
@@ -120,6 +127,35 @@ function namespaceModuleOf(init) {
 }
 
 /**
+ * Read the `rewrite` declaration — see the factory's JSDoc for the three shapes.
+ * Anything else throws: a rule the factory cannot read must not build, since the
+ * fallback would be an autofix that emits the wrong call.
+ *
+ * @returns {{ autofix: 'always' | 'statement' | 'never', suggestion?: string, appendArgument?: string }}
+ */
+function readRewrite(rewrite, unsafeFn) {
+  if (rewrite === 'fix') {
+    return { autofix: 'always' };
+  }
+  const isObject = rewrite !== null && typeof rewrite === 'object';
+  const appends = isObject && typeof rewrite.appendArgument === 'string';
+  const asStatement = isObject && rewrite.autofixAsStatement === true;
+  if (!isObject || typeof rewrite.suggestion !== 'string' || appends === asStatement) {
+    throw new TypeError(
+      `${unsafeFn} rule: \`rewrite\` must be 'fix', { appendArgument, suggestion } or { autofixAsStatement: true, suggestion }`,
+    );
+  }
+  return appends
+    ? { autofix: 'never', suggestion: rewrite.suggestion, appendArgument: rewrite.appendArgument }
+    : { autofix: 'statement', suggestion: rewrite.suggestion };
+}
+
+/** Is `node` a call whose result is discarded — the whole of an expression statement? */
+function isStatementCall(node) {
+  return node.parent?.type === 'ExpressionStatement' && node.parent.expression === node;
+}
+
+/**
  * Helper function to filter unsafe import specifiers
  * Extracted to reduce nesting depth for code quality
  */
@@ -163,12 +199,17 @@ module.exports = function createNoUnsafeRule(config) {
   } = config;
 
   // Required, never defaulted: a rule whose replacement takes an argument the
-  // unsafe call does not carry must say so, or the default autofix emits a call
-  // that does not compile.
-  const suggestOnly = rewrite !== 'fix';
-  if (suggestOnly && typeof rewrite?.appendArgument !== 'string') {
-    throw new TypeError(`${unsafeFn} rule: \`rewrite\` must be 'fix' or { appendArgument, suggestion }`);
-  }
+  // unsafe call does not carry, or returns something else, must say so, or the
+  // default autofix emits a call that does not compile or silently changes a value.
+  const mode = readRewrite(rewrite, unsafeFn);
+  /** Does this rule autofix THIS call, rather than only suggest a rewrite? */
+  const autofixes = (callNode) =>
+    mode.autofix === 'always' || (mode.autofix === 'statement' && isStatementCall(callNode));
+  /** Is this reference to the unsafe specifier the callee of a call this rule autofixes? */
+  const isAutofixedCallee = ({ identifier }) =>
+    identifier.parent?.type === 'CallExpression'
+    && identifier.parent.callee === identifier
+    && autofixes(identifier.parent);
 
   const exemptMatcherFor = createConfigurableExemptPathMatcher(exemptFiles);
 
@@ -186,12 +227,18 @@ module.exports = function createNoUnsafeRule(config) {
       docs: {
         description: `Enforce use of ${safeFn}() instead of ${unsafeFn}()`,
         ...docs,
+        // How far the autofix reaches, for the README's Fix column.
+        ...(mode.autofix === 'statement' && { fix: 'statement' }),
+        ...(mode.autofix === 'never' && { fix: 'suggest' }),
       },
-      ...(suggestOnly ? { hasSuggestions: true } : { fixable: 'code' }),
+      ...(mode.autofix !== 'always' && { hasSuggestions: true }),
+      // Always fixable: even a rule that autofixes no call removes, through the
+      // dead-import leg, the unsafe import its accepted suggestions left behind.
+      fixable: 'code',
       schema: [EXEMPT_AND_SAFE_MODULE_SCHEMA],
       messages: {
         noUnsafeOperation: message,
-        ...(suggestOnly && { useSafeCall: rewrite.suggestion }),
+        ...(mode.suggestion !== undefined && { useSafeCall: mode.suggestion }),
         [DEAD_UNSAFE_IMPORT]: DEAD_UNSAFE_IMPORT_MESSAGE,
         [UNANCHORED_EXEMPT_FILE]: UNANCHORED_EXEMPT_MESSAGE,
       },
@@ -199,6 +246,13 @@ module.exports = function createNoUnsafeRule(config) {
 
     create(context) {
       const sourceCode = context.getSourceCode();
+      /**
+       * Every reference to the unsafe specifier is the callee of a call this
+       * rule autofixes. Only then may an autofix remove the import: one
+       * reference left as a suggestion (or used as a value) would be stranded.
+       */
+      const everyReferenceAutofixed = (spec) =>
+        sourceCode.getDeclaredVariables(spec).every((variable) => variable.references.every(isAutofixedCallee));
       // Resolved per invocation, not at factory-construction time: the option is
       // the consuming repo's, and one repo can configure the same rule
       // differently across config blocks.
@@ -348,24 +402,25 @@ module.exports = function createNoUnsafeRule(config) {
             return;
           }
 
-          // A replacement that needs an argument the rule cannot know (`within`)
-          // is offered as a SUGGESTION carrying a placeholder that fails the
-          // typecheck at that spot — never an autofix, and never a guessed value
-          // that would compile. It appends to a one-argument call only: further
+          // A call this rule does not autofix is offered as a SUGGESTION. One whose
+          // replacement needs an argument the rule cannot know (`within`) carries a
+          // placeholder that fails the typecheck at that spot — never a guessed value
+          // that would compile — and appends to a one-argument call only: further
           // arguments belong to the unsafe function and mean nothing to the safe one.
           const report = { node, messageId: 'noUnsafeOperation', data: { safeModule: targetModule } };
-          if (suggestOnly) {
+          if (autofixes(node)) {
+            context.report({ ...report, fix: (fixer) => rewriteCall(fixer, false) });
+          } else {
             const [only, ...rest] = node.arguments;
-            const rewritable = only !== undefined && rest.length === 0 && only.type !== 'SpreadElement';
+            const rewritable = mode.appendArgument === undefined
+              || (only !== undefined && rest.length === 0 && only.type !== 'SpreadElement');
             context.report({
               ...report,
-              suggest: rewritable ? [{ messageId: 'useSafeCall', fix: rewriteCall }] : [],
+              suggest: rewritable ? [{ messageId: 'useSafeCall', fix: (fixer) => rewriteCall(fixer, true) }] : [],
             });
-          } else {
-            context.report({ ...report, fix: rewriteCall });
           }
 
-          function rewriteCall(fixer) {
+          function rewriteCall(fixer, asSuggestion) {
             const fixes = [];
 
             // Replace the WHOLE callee, member expression or not.
@@ -379,8 +434,8 @@ module.exports = function createNoUnsafeRule(config) {
             // `tmpdir`), and it is a dangling MEMBER rather than a dangling
             // identifier, so `no-undef` cannot see it either. `tsc` can.
             fixes.push(fixer.replaceText(node.callee, safeFn));
-            if (suggestOnly) {
-              fixes.push(fixer.insertTextAfter(node.arguments[0], `, ${rewrite.appendArgument}`));
+            if (mode.appendArgument !== undefined) {
+              fixes.push(fixer.insertTextAfter(node.arguments[0], `, ${mode.appendArgument}`));
             }
 
             // Add import if needed — on EVERY report, deliberately.
@@ -438,8 +493,15 @@ module.exports = function createNoUnsafeRule(config) {
             // Latched, the discarded first report simply takes the removal
             // with it, and the worst case is an unused import that
             // `no-unused-vars` will point at. A lint finding, not a crash.
-            if (hasUnsafeImport && unsafeImportNode && !unsafeImportRemoved) {
-              const unsafeSpecs = filterUnsafeSpecifiers(unsafeImportNode, unsafeFn);
+            //
+            // Never from a SUGGESTION (applied alone, from an editor), and never
+            // while a reference the import backs is not autofixed — see
+            // `everyReferenceAutofixed`. The dead-import leg takes it later.
+            const unsafeSpecs = unsafeImportNode ? filterUnsafeSpecifiers(unsafeImportNode, unsafeFn) : [];
+            if (
+              hasUnsafeImport && unsafeImportNode && !unsafeImportRemoved && !asSuggestion
+              && unsafeSpecs.every(everyReferenceAutofixed)
+            ) {
               if (unsafeImportNode.specifiers.length === 1 && unsafeSpecs.length === 1) {
                 // Remove entire import
                 fixes.push(fixer.remove(unsafeImportNode));

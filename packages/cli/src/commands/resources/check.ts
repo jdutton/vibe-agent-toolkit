@@ -60,6 +60,7 @@ import {
   type ForwardedDocument,
 } from '../../utils/document-writer.js';
 import { formatDurationSecs } from '../../utils/duration.js';
+import { reportFindings } from '../../utils/issue-rendering.js';
 import { resolveIssueSeverity, type SeverityOverrides } from '../../utils/issue-severity.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { EVERY_NOTICE, type NoticeAudience, withNoticeAudience } from '../../utils/operator-notices.js';
@@ -109,6 +110,8 @@ export type ProgressSink = (entry: ProgressEntry) => void;
 
 interface CheckOptions {
   debug?: boolean;
+  /** Report warning and info findings on stderr too, not only the errors. */
+  verbose?: boolean;
   /** Run only this check, by its config key. */
   check?: string;
   /** `yaml` (default) or `json`. Same document either way. */
@@ -1617,15 +1620,22 @@ function withLeftover(ending: SupervisedEnding, leftover: unknown): SupervisedEn
  * @param options.root - The project root the orchestrator resolved. REQUIRED, so no caller can
  *   fall back to the working directory and check a different project from the one it validated
  * @param options.debug - Whether the orchestrator was run with `--debug`, forwarded to the child
+ * @param options.verbose - Whether the orchestrator was run with `--verbose`: the warning and info
+ *   rows are reported on stderr too, not only the errors
  * @returns The phase's report
  */
-export async function runResourcesCheckPhase(options: { root: string; debug: boolean }): Promise<PhaseOutcome> {
+export async function runResourcesCheckPhase(
+  options: { root: string; debug: boolean; verbose: boolean },
+): Promise<PhaseOutcome> {
   const ending = await superviseCheckRun({
     root: options.root,
     request: { check: undefined, format: 'json', debug: options.debug, invocation: 'phase' },
     budgetSecs: DEFAULT_BUDGET_SECONDS,
   });
-  return { report: 'forward' in ending ? ending.forward.report : ending.payload };
+  const report = 'forward' in ending ? ending.forward.report : ending.payload;
+  // The human half, on this process's stderr: the child's own stdout is the document it forwarded.
+  reportFindings(report.findings, { verbose: options.verbose, report: 'run', write: createLogger().error });
+  return { report };
 }
 
 /**
@@ -1724,6 +1734,12 @@ export async function checkCommand(
     const ending: SupervisedEnding = runsInThisProcess({ supervisedBy: options.supervisedBy, budgetSecs })
       ? { payload: await withNoticeAudience(noticeAudienceOf(child), () => runChecksHere(pathArg, options, child, logger, startTime)) }
       : await superviseStandalone(root, options, format, budgetSecs);
+    // The human half, on stderr, by the process the operator ran — as every verb does. A
+    // supervised child prints nothing here: its supervisor reports the document it forwards.
+    if (child === undefined) {
+      const report = 'forward' in ending ? ending.forward.report : ending.payload;
+      reportFindings(report.findings, { verbose: options.verbose === true, report: 'run', write: logger.error });
+    }
     if ('forward' in ending) {
       // Verbatim (unless `withLeftover` had to add a finding to it) — the supervisor already checked it is
       // this verb's document — and on the code that document derives. The child already built what the operator's `--format` asked for, and

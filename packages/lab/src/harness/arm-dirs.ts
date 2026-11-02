@@ -133,6 +133,12 @@ export interface ArmDirectories {
    * an emptied one would time a download in every repetition.
    */
   readonly npmCache: string;
+  /**
+   * The arm's copy of the subject, for a sequence whose steps WRITE the subject
+   * (`SequenceStep.writes`): made once per capture, and removed when it ends.
+   * Absent for every other arm.
+   */
+  readonly subject: string;
   /** Every directory above the children that the lab owns, outermost first; each must be a real directory. */
   readonly owned: readonly string[];
 }
@@ -688,6 +694,29 @@ export async function resetArmHome(dirs: ArmDirectories): Promise<void> {
 }
 
 /**
+ * Delete the arm's copy of the subject — through the same marked-arm gate as
+ * every other arm removal.
+ *
+ * @param dirs - The arm's directories, prepared by {@link prepareArmDirectories}
+ * @throws {VatError} {@link ARM_REFUSED_CODE} when the arm is not provably the lab's
+ */
+export async function removeArmSubject(dirs: ArmDirectories): Promise<void> {
+  await removeArmTrees(dirs, [dirs.subject], 'arm subject copy');
+}
+
+/**
+ * Delete what a step writes inside the arm's copy of the subject, before a
+ * repeat, so every repeat does the whole of the work.
+ *
+ * @param dirs - The arm's directories, prepared by {@link prepareArmDirectories}
+ * @param relatives - Subject-relative trees to delete
+ * @throws {VatError} {@link ARM_REFUSED_CODE} when the arm is not provably the lab's
+ */
+export async function clearArmSubjectOutputs(dirs: ArmDirectories, relatives: readonly string[]): Promise<void> {
+  await removeArmTrees(dirs, relatives.map((relative) => safePath.join(dirs.subject, relative)), 'arm subject output');
+}
+
+/**
  * Make a cold arm cold: delete its store, empty its `tmp/`, and assert both.
  *
  * @param dirs - The arm's directories, prepared by {@link prepareArmDirectories}
@@ -828,6 +857,7 @@ function layout(root: string, above: readonly string[]): ArmDirectories {
     tmp: safePath.join(root, 'tmp'),
     home: safePath.join(root, 'home'),
     npmCache: safePath.join(root, 'npm-cache'),
+    subject: safePath.join(root, 'subject'),
     owned: [...above, root],
   };
 }
@@ -849,7 +879,7 @@ function kindOf(path: string): 'absent' | 'directory' | 'link' | 'other' {
  * @throws {VatError} {@link ARM_REFUSED_CODE} when any component the lab owns is a link or not a directory
  */
 function requireNoLinks(dirs: ArmDirectories): void {
-  for (const path of [...dirs.owned, dirs.store, dirs.tmp, dirs.home, dirs.npmCache]) {
+  for (const path of [...dirs.owned, dirs.store, dirs.tmp, dirs.home, dirs.npmCache, dirs.subject]) {
     const kind = kindOf(path);
     if (kind === 'link' || kind === 'other') {
       throw armRefusal(`'${path}' is a ${kind === 'link' ? 'symbolic link' : 'non-directory'}; the lab never writes through a component it did not make`);

@@ -370,8 +370,8 @@ export interface CrawlRegistryOptions {
    * only reads the project: the crawl's one declaration of which side a fault is on (on, in
    * or holding an output: the destination's; anything else the project's content). Required:
    * only the caller knows. NOT part of the memo key: it decides which side a fault is on, never
-   * which files the crawl finds, so a crawl that settled serves every caller — see
-   * {@link MemoEntry} for the one case (a rejected crawl) where it still matters.
+   * which files the crawl finds, so a crawl that settled serves every caller — and a rejected
+   * one serves none, see {@link MemoEntry}.
    */
   outputs: readonly string[];
 }
@@ -398,7 +398,7 @@ interface MemoizedRegistry {
 }
 
 /**
- * One memo slot: the crawl of a root, and the `outputs` it classified its faults against.
+ * One memo slot: the crawl of a root, as the PROMISE, so overlapping callers share it.
  *
  * Keyed on the root alone. `outputs` shapes no population — the crawl's include/exclude and
  * gitignore decide membership, and `outputs` is read only to put a fault on the destination's
@@ -406,15 +406,12 @@ interface MemoizedRegistry {
  * packager's post-build lane declares a different output per skill; keyed on `outputs`, every
  * skill paid a fresh whole-project crawl and the memo held one registry per skill.
  *
- * A REJECTED crawl is the exception: its fault was classified against the outputs of the caller
- * that started it, so it is served only to a caller declaring the same ones. Any other re-crawls
- * and gets its own classification.
+ * A REJECTED crawl is never served: its fault was classified against the outputs and `unreadable`
+ * ruling of the caller that started it, and either may differ for the next one. The slot is
+ * emptied when it rejects, and a caller that was waiting on it crawls afresh under its own
+ * policy.
  */
-interface MemoEntry {
-  /** The resolved `outputs` the crawl was started with, as one comparable string. */
-  readonly outputsKey: string;
-  readonly crawl: Promise<MemoizedRegistry>;
-}
+type MemoEntry = Promise<MemoizedRegistry>;
 
 /**
  * Settle the memoized refusals under THIS caller's policy — see {@link MemoizedRegistry}.
@@ -499,22 +496,26 @@ export async function crawlAndResolveRegistry(
   const { populationSource, unreadable, outputs } = options;
   const cache = registryCacheFor(populationSource);
   const key = toForwardSlash(safePath.resolve(projectRoot));
-  const outputsKey = JSON.stringify(outputs.map((output) => toForwardSlash(safePath.resolve(output))));
   const cached = cache.get(key);
   if (cached !== undefined) {
-    // A rejected crawl is served only to the outputs it classified its fault against (see MemoEntry).
-    const settled = cached.outputsKey === outputsKey
-      ? await cached.crawl
-      : await cached.crawl.catch(() => undefined);
+    // A rejected crawl is never served (see MemoEntry): this caller re-crawls under its own policy.
+    const settled = await cached.catch(() => undefined);
     if (settled !== undefined) {
       replayRefusals(settled.refusals, unreadable, projectRoot, outputs);
       return settled.registry;
     }
   }
-  // The PROMISE is cached, not the resolved value, so two overlapping requests
-  // for one root can never start two crawls.
+  // The PROMISE is cached, not the resolved value, so callers that overlap a crawl
+  // share it rather than starting their own — unless it rejects, when each one
+  // waiting re-crawls under its own policy.
   const crawl = crawlRegistry(projectRoot, options);
-  cache.set(key, { outputsKey, crawl });
+  cache.set(key, crawl);
+  // Empty the slot only if it still holds THIS crawl: a retry may already have replaced it.
+  crawl.catch(() => {
+    if (cache.get(key) === crawl) {
+      cache.delete(key);
+    }
+  });
   return (await crawl).registry;
 }
 
@@ -566,7 +567,12 @@ async function crawlRegistry(projectRoot: string, options: CrawlRegistryOptions)
  *
  * Safe to hold for a process lifetime: every VAT entry point is a short-lived
  * CLI invocation. Note the crawl excludes build output (`BUILD_OUTPUT_GLOBS` via
- * the crawler's defaults), so packaging a skill mid-run cannot invalidate it.
+ * the crawler's defaults) and every build's staging residue (`.<name>.vat-staged-*`,
+ * in `NEVER_CRAWL_GLOBS`), so packaging a skill mid-run cannot invalidate it. A
+ * declared output inside the root and outside `dist/` IS crawled — `outputs` never
+ * shapes the population (see {@link MemoEntry}) — so a library caller writing
+ * there owns that choice; what no caller may be served is another's half-written
+ * staging copy.
  *
  * 🚨 That exclusion is ALSO the cause of a live defect, and this paragraph is the
  * reason the defect must not be fixed by widening the crawl. The packager's
