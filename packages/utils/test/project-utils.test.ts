@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { gitFindRoot } from '../src/git-utils.js';
@@ -57,7 +58,7 @@ describe('findConfigFile', () => {
     const cfg = safePath.join(tempDir, CONFIG_FILENAME);
     fs.writeFileSync(cfg, CONFIG_CONTENT, 'utf-8');
     const child = safePath.join(tempDir, 'a', 'b');
-    fs.mkdirSync(child, { recursive: true });
+    mkdirSyncReal(child, { recursive: true });
     expect(findConfigFile(child)).toBe(cfg);
   });
 
@@ -85,7 +86,7 @@ describe('findConfigFile', () => {
     fs.writeFileSync(outer, '# outer\n', 'utf-8');
 
     const innerDir = safePath.join(tempDir, 'pkg');
-    fs.mkdirSync(innerDir, { recursive: true });
+    mkdirSyncReal(innerDir, { recursive: true });
     const inner = safePath.join(innerDir, CONFIG_FILENAME);
     fs.writeFileSync(inner, '# inner\n', 'utf-8');
 
@@ -107,9 +108,9 @@ describe('gitFindRoot (sanity — canonical git-root walker)', () => {
 
   it('returns the directory containing .git/ when walking up from a child', () => {
     const repo = safePath.join(tempDir, 'repo');
-    fs.mkdirSync(safePath.join(repo, '.git'), { recursive: true });
+    mkdirSyncReal(safePath.join(repo, '.git'), { recursive: true });
     const child = safePath.join(repo, 'a', 'b');
-    fs.mkdirSync(child, { recursive: true });
+    mkdirSyncReal(child, { recursive: true });
     expect(gitFindRoot(child)).toBe(repo);
   });
 
@@ -139,7 +140,7 @@ describe('findNodeWorkspaceRoot', () => {
   it('returns the directory containing package.json with "workspaces" key', () => {
     const root = safePath.join(tempDir, 'mono');
     const pkgDir = safePath.join(root, 'packages', 'my-pkg', 'src');
-    fs.mkdirSync(pkgDir, { recursive: true });
+    mkdirSyncReal(pkgDir, { recursive: true });
 
     fs.writeFileSync(
       safePath.join(root, PACKAGE_JSON),
@@ -157,7 +158,7 @@ describe('findNodeWorkspaceRoot', () => {
   it('skips invalid JSON package.json and keeps walking', () => {
     const root = safePath.join(tempDir, 'mono');
     const middle = safePath.join(root, 'middle');
-    fs.mkdirSync(middle, { recursive: true });
+    mkdirSyncReal(middle, { recursive: true });
 
     // Invalid JSON in middle — should be skipped.
     fs.writeFileSync(safePath.join(middle, PACKAGE_JSON), '{ invalid json }');
@@ -178,7 +179,7 @@ describe('findNodeWorkspaceRoot', () => {
     // not a workspace root — and the root the walk then found was the WRONG one.
     const root = safePath.join(tempDir, 'mono');
     const middle = safePath.join(root, 'middle');
-    fs.mkdirSync(safePath.join(middle, PACKAGE_JSON), { recursive: true });
+    mkdirSyncReal(safePath.join(middle, PACKAGE_JSON), { recursive: true });
     fs.writeFileSync(
       safePath.join(root, PACKAGE_JSON),
       WORKSPACE_ROOT_MANIFEST,
@@ -193,7 +194,7 @@ describe('findNodeWorkspaceRoot', () => {
     // "workspaces" key. We can't fully guarantee that across machines, so we
     // only assert the function returns either null or a string above tempDir.
     const dir = safePath.join(tempDir, 'no-workspace');
-    fs.mkdirSync(dir, { recursive: true });
+    mkdirSyncReal(dir, { recursive: true });
     const result = findNodeWorkspaceRoot(dir);
     if (result === null) {
       expect(result).toBeNull();
@@ -220,7 +221,7 @@ describe('findProjectRoot (config → git → null ladder)', () => {
   it('config-anchored: returns directory of vibe-agent-toolkit.config.yaml', () => {
     const proj = safePath.join(tempDir, 'proj');
     const inner = safePath.join(proj, 'a', 'b');
-    fs.mkdirSync(inner, { recursive: true });
+    mkdirSyncReal(inner, { recursive: true });
     fs.writeFileSync(safePath.join(proj, CONFIG_FILENAME), CONFIG_CONTENT, 'utf-8');
 
     expect(findProjectRoot(inner)).toBe(proj);
@@ -228,9 +229,9 @@ describe('findProjectRoot (config → git → null ladder)', () => {
 
   it('git-anchored: returns .git/ directory when no config exists', () => {
     const repo = safePath.join(tempDir, 'repo');
-    fs.mkdirSync(safePath.join(repo, '.git'), { recursive: true });
+    mkdirSyncReal(safePath.join(repo, '.git'), { recursive: true });
     const inner = safePath.join(repo, 'src');
-    fs.mkdirSync(inner, { recursive: true });
+    mkdirSyncReal(inner, { recursive: true });
 
     expect(findProjectRoot(inner)).toBe(repo);
   });
@@ -238,14 +239,14 @@ describe('findProjectRoot (config → git → null ladder)', () => {
   it('both present, config deeper than git: config wins', () => {
     // .git/ at outer, config at inner — config wins (declaration of intent).
     const outer = safePath.join(tempDir, 'outer');
-    fs.mkdirSync(safePath.join(outer, '.git'), { recursive: true });
+    mkdirSyncReal(safePath.join(outer, '.git'), { recursive: true });
 
     const inner = safePath.join(outer, 'project');
-    fs.mkdirSync(inner, { recursive: true });
+    mkdirSyncReal(inner, { recursive: true });
     fs.writeFileSync(safePath.join(inner, CONFIG_FILENAME), CONFIG_CONTENT, 'utf-8');
 
     const startDir = safePath.join(inner, 'sub', 'dir');
-    fs.mkdirSync(startDir, { recursive: true });
+    mkdirSyncReal(startDir, { recursive: true });
 
     expect(findProjectRoot(startDir)).toBe(inner);
   });
@@ -254,14 +255,14 @@ describe('findProjectRoot (config → git → null ladder)', () => {
     // Per spec §6: the config walk is independent and always wins over git
     // when a config exists anywhere above startDir.
     const outerConfig = safePath.join(tempDir, 'cfg');
-    fs.mkdirSync(outerConfig, { recursive: true });
+    mkdirSyncReal(outerConfig, { recursive: true });
     fs.writeFileSync(safePath.join(outerConfig, CONFIG_FILENAME), CONFIG_CONTENT, 'utf-8');
 
     const innerGit = safePath.join(outerConfig, 'nested');
-    fs.mkdirSync(safePath.join(innerGit, '.git'), { recursive: true });
+    mkdirSyncReal(safePath.join(innerGit, '.git'), { recursive: true });
 
     const startDir = safePath.join(innerGit, 'src');
-    fs.mkdirSync(startDir, { recursive: true });
+    mkdirSyncReal(startDir, { recursive: true });
 
     expect(findProjectRoot(startDir)).toBe(outerConfig);
   });
@@ -271,7 +272,7 @@ describe('findProjectRoot (config → git → null ladder)', () => {
     // assert the function does not return startDir itself, since the tempDir
     // may live inside a real repo. The contract is "no fallback to startDir".
     const isolated = safePath.join(tempDir, 'isolated', 'deep');
-    fs.mkdirSync(isolated, { recursive: true });
+    mkdirSyncReal(isolated, { recursive: true });
 
     const result = findProjectRoot(isolated);
     // Result is either null OR an ancestor of tempDir (e.g., this repo's
@@ -306,13 +307,13 @@ describe('findProjectRoot Layer 1 cache (spec §8 / §13.5)', () => {
     //   a/b/skill1
     //   a/c/skill2
     const proj = safePath.join(tempDir, 'proj');
-    fs.mkdirSync(proj, { recursive: true });
+    mkdirSyncReal(proj, { recursive: true });
     fs.writeFileSync(safePath.join(proj, CONFIG_FILENAME), CONFIG_CONTENT, 'utf-8');
 
     const skill1 = safePath.join(proj, 'a', 'b', 'skill1');
     const skill2 = safePath.join(proj, 'a', 'c', 'skill2');
-    fs.mkdirSync(skill1, { recursive: true });
-    fs.mkdirSync(skill2, { recursive: true });
+    mkdirSyncReal(skill1, { recursive: true });
+    mkdirSyncReal(skill2, { recursive: true });
 
     // First call: walks up to proj, populates cache for visited ancestors.
     expect(findProjectRoot(skill1)).toBe(proj);
@@ -332,7 +333,7 @@ describe('findProjectRoot Layer 1 cache (spec §8 / §13.5)', () => {
     // cache entry for tempDir's descendants; a second call from an intermediate
     // dir returns the same answer even after mutating the filesystem.
     const deep = safePath.join(tempDir, 'deep', 'leaf');
-    fs.mkdirSync(deep, { recursive: true });
+    mkdirSyncReal(deep, { recursive: true });
 
     const firstResult = findProjectRoot(deep);
 
@@ -351,10 +352,10 @@ describe('findProjectRoot Layer 1 cache (spec §8 / §13.5)', () => {
 
   it('resetProjectRootCaches() clears the cache between invocations', () => {
     const proj = safePath.join(tempDir, 'resetproj');
-    fs.mkdirSync(proj, { recursive: true });
+    mkdirSyncReal(proj, { recursive: true });
     fs.writeFileSync(safePath.join(proj, CONFIG_FILENAME), CONFIG_CONTENT, 'utf-8');
     const skill = safePath.join(proj, 'a', 'b');
-    fs.mkdirSync(skill, { recursive: true });
+    mkdirSyncReal(skill, { recursive: true });
 
     // Populate cache.
     expect(findProjectRoot(skill)).toBe(proj);

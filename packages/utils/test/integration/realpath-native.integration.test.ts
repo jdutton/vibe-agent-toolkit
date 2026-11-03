@@ -1,3 +1,4 @@
+/* eslint-disable local/no-fs-realpathSync -- the oracle: this asserts equivalence with Node's own realpath, so it must not route through normalizePath */
 import * as nodeFs from 'node:fs';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
@@ -67,7 +68,7 @@ describe('realpathNativeSync / realpathNative', () => {
   it('normalizes through the JS realpath when the volume cannot answer a native one', () => {
     const js = nodeFs.realpathSync(file);
     failNative('EISDIR');
-    expect(normalizePath(file, dir)).toBe(js);
+    expect(normalizePath(file, { within: dir })).toBe(js);
   });
 
   it.each(['EACCES', 'UNKNOWN'])('throws the native %s as it was — the caller classifies it', async (code) => {
@@ -83,7 +84,7 @@ describe('realpathNativeSync / realpathNative', () => {
     failNative('ENOENT');
     expect(realpathNativeSync(file, dir)).toBe(js);
     expect(await realpathNative(file, dir)).toBe(js);
-    expect(toForwardSlash(normalizePath(file, dir))).toBe(js);
+    expect(toForwardSlash(normalizePath(file, { within: dir }))).toBe(js);
   });
 
   it('throws ENOENT for a path the JS walk also finds absent', async () => {

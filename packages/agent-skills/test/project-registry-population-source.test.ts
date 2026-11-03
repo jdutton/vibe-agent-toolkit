@@ -224,6 +224,33 @@ describe('packageSkills populationSource', () => {
   });
 });
 
+describe('a built skill validated against a shared registry that predates the build', () => {
+  beforeEach(() => {
+    resetProjectRootCaches();
+    resetPackagingRegistryCache();
+  });
+
+  // The shared registry "covers" the bundle by directory alone — it was crawled before the build
+  // wrote it — so the bundle must be layered over it exactly as over the memoized crawl.
+  it('layers the bundle over the shared registry too, so its links are followed', async () => {
+    const root = getTempDir();
+    write(root, 'vibe-agent-toolkit.config.yaml', '{}\n');
+    write(root, 'docs/readme.md', '# Readme\n');
+    const registry = await createProjectRegistry(root, { unreadable: 'refuse', outputs: [] });
+    const builtSkillPath = write(root, 'out/demo/SKILL.md', `${SKILL_MD}\nSee [the reference](./reference.md).\n`);
+    write(root, 'out/demo/reference.md', '# Reference\n');
+
+    const result = await validateSkillForPackaging(builtSkillPath, undefined, 'built', {
+      registry,
+      unreadable: 'refuse',
+      outputs: [safePath.join(root, 'out', 'demo')],
+    });
+
+    // SKILL.md and the reference it links: both read, from the bundle the shared registry lacks.
+    expect(result.metadata.fileCount).toBe(2);
+  });
+});
+
 describe('the packaging validator\'s own project root, against a source bound to another', () => {
   // Both caches are process-global and both are keyed on a directory, so a test
   // reusing a sibling temp tree would otherwise read the previous test's answer.

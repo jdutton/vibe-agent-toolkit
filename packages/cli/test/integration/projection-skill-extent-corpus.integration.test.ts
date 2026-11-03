@@ -1046,6 +1046,7 @@ function walkOptionsFor(
     excludeRules: config.excludeReferencesFromBundle?.rules ?? [],
     projectRoot: corpus.root,
     skillRootPath: skill.absolutePath,
+    ownOutputDir: undefined,
     excludeNavigationFiles: config.excludeNavigationFiles ?? DEFAULT_EXCLUDE_NAVIGATION,
     gitTracker: corpus.gitTracker,
   };

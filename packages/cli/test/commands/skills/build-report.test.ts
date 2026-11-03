@@ -82,7 +82,7 @@ describe('runSkillBuild - findings point at the tree the swap lands on', () => {
     const { logger, lines } = recordingLogger();
     await build(cwd, [['demo', CLEAN_BODY, WRONG_PERSON_DESCRIPTION]], { logger, verbose: true });
 
-    expect(lines.join('\n')).toContain(`Location: ${DEMO_SKILL_LOCATION}`);
+    expect(lines.join('\n')).toContain(`  ${DEMO_SKILL_LOCATION} (`);
     expect(lines.join('\n')).not.toContain(STAGING_INFIX);
   });
 });

@@ -17,6 +17,7 @@ import {
   BLOB_UNREADABLE,
 } from '../src/projection/blob-population.js';
 import { describeBlobRefusals, type BlobRefusalRows } from '../src/projection/blob-refusals.js';
+import { parseFailedMessage, parseFailureOf } from '../src/projection/parse-failure.js';
 import type { BlobConditionRow, BlobRow } from '../src/schemas/projection-blobs.js';
 import type { ContentState, ResourceRealizationRow } from '../src/schemas/projection-resources.js';
 
@@ -41,6 +42,9 @@ function realization(path: string, contentState: ContentState): ResourceRealizat
 function keyedAt(path: string, contentKey: string, mime: string | null): ResourceRealizationRow {
   return { path, contentKey, contentState: 'keyed', mime } as ResourceRealizationRow;
 }
+
+/** The `code` Node gives a worker thread that reached its heap limit. */
+const WORKER_OUT_OF_MEMORY_CODE = 'ERR_WORKER_OUT_OF_MEMORY';
 
 function rowsOf(rows: Partial<BlobRefusalRows>): BlobRefusalRows {
   return { blobs: blobs(10), blobConditions: [], resourceRealizations: [], ...rows };
@@ -96,6 +100,54 @@ describe('describeBlobRefusals', () => {
     expect(line).toContain('declined 2 of 12 blob(s) (1 changed under the run, 1 parse failed)');
     expect(describeBlobRefusals(rowsOf({ blobConditions: [condition('PARSE_ODDITY', 'markdown.derived-0')] })))
       .toBeUndefined();
+  });
+
+  it('names what each failed parse threw — a worker that ran out of heap is not a corpus fault', () => {
+    const threw = (code: string): Error => Object.assign(new Error('worker died'), { code });
+    const failed = (key: string, error: unknown): BlobConditionRow =>
+      ({ ...condition(BLOB_PARSE_FAILED, key), message: parseFailedMessage('markdown', error) });
+    const line = describeBlobRefusals(rowsOf({
+      blobConditions: [
+        failed('markdown.a', threw(WORKER_OUT_OF_MEMORY_CODE)),
+        failed('markdown.b', threw(WORKER_OUT_OF_MEMORY_CODE)),
+        failed('markdown.c', new Error('Unexpected token (3:1)')),
+      ],
+    }));
+
+    // Each distinct failure once, codes first — the code a reader can grep — then each message
+    // quoted, so a message can never read as a code.
+    expect(line).toContain('(3 parse failed [ERR_WORKER_OUT_OF_MEMORY, "Unexpected token (3:1)"])');
+    expect(parseFailureOf(parseFailedMessage('markdown', threw(WORKER_OUT_OF_MEMORY_CODE)))).toEqual({ kind: 'code', text: WORKER_OUT_OF_MEMORY_CODE });
+    expect(parseFailureOf('BLOB_PARSE_FAILED')).toBeUndefined();
+  });
+
+  it('reads back a message that looks like a code, holds the marker, or spans lines — unambiguously', () => {
+    const tricky = [
+      'ERR_LOOKS_LIKE_A_CODE',
+      'The markdown parser threw on these bytes (code X) and then (more)',
+      'line one\n\tline   two',
+    ];
+    for (const message of tricky) {
+      const read = parseFailureOf(parseFailedMessage('markdown', new Error(message)));
+      expect(read, message).toEqual({ kind: 'message', text: message.replaceAll(/\s+/g, ' ').trim() });
+    }
+    const line = describeBlobRefusals(rowsOf({
+      blobConditions: [{ ...condition(BLOB_PARSE_FAILED, 'markdown.a'), message: parseFailedMessage('markdown', new Error('ERR_LOOKS_LIKE_A_CODE')) }],
+    }));
+    // A message is never printed as a code: it is quoted.
+    expect(line).toContain('1 parse failed ["ERR_LOOKS_LIKE_A_CODE"]');
+  });
+
+  it('caps the failures on one line — every code kept, the messages cut to the first few and a count', () => {
+    const threw = (code: string): Error => Object.assign(new Error('x'), { code });
+    const failed = (key: string, error: unknown): BlobConditionRow =>
+      ({ ...condition(BLOB_PARSE_FAILED, key), message: parseFailedMessage('markdown', error) });
+    const messages = ['m1', 'm2', 'm3', 'm4', 'm5\nwith a second line'].map((text, index) => failed(`markdown.m${index.toString()}`, new Error(text)));
+    const codes = ['ERR_Z', 'ERR_A', 'ERR_M', 'ERR_B'].map((code, index) => failed(`markdown.c${index.toString()}`, threw(code)));
+    const line = describeBlobRefusals(rowsOf({ blobConditions: [...messages, ...codes] })) ?? '';
+
+    expect(line).toContain('9 parse failed [ERR_A, ERR_B, ERR_M, ERR_Z, "m1", "m2", "m3", +2 more]');
+    expect(line).not.toContain('\n');
   });
 
   it('reports realizations that could not be keyed, unreadable and too large apart', () => {

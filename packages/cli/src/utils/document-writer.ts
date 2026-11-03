@@ -28,7 +28,7 @@ import {
   type Report,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { isFsFaultError, suppressedFaultsOf, TREE_CLEANUP_INCOMPLETE_CODE } from '@vibe-agent-toolkit/utils';
+import { isFsFaultError, suppressedFaultsOf, TREE_CLEANUP_INCOMPLETE_CODE, type TreeChangeWarning } from '@vibe-agent-toolkit/utils';
 import { parse as parseYaml } from 'yaml';
 
 import {
@@ -44,15 +44,9 @@ import {
 
 import { errorMessageOf, refusalCodeOf, withFsFaultRemedy } from './command-refusal.js';
 import { debugDiagnosticsEnabled } from './debug-diagnostics.js';
+import { formatFindingLine, isLeftover, reportFindings, reportLeftovers } from './issue-rendering.js';
 import { renderYamlDocument, writeStdoutSync } from './output.js';
-import { withRunIntegrity } from './run-integrity.js';
-
-/** One finding as a compiler-style line: `location:line:column: severity: message [code]`. */
-function findingLine(finding: Finding): string {
-  const anchor = [finding.location, finding.line, finding.column].filter((part) => part !== undefined).join(':');
-  const line = `${finding.severity}: ${finding.message} [${finding.code}]`;
-  return anchor === '' ? line : `${anchor}: ${line}`;
-}
+import { findingsAddedByRunIntegrity, withRunIntegrity } from './run-integrity.js';
 
 /**
  * The generic `--format text` rendering: one line per finding, then the status
@@ -60,7 +54,7 @@ function findingLine(finding: Finding): string {
  */
 function renderReportText(report: Report<unknown>, unit: string): string {
   const { errors, warnings, info } = report.summary;
-  const lines = report.findings.map(findingLine);
+  const lines = report.findings.map(formatFindingLine);
   if (report.status === 'error') lines.push(`error: ${report.error.message} [${report.error.code}]`);
   lines.push(`status: ${report.status} — ${errors} errors, ${warnings} warnings, ${info} info (examined ${report.examined} ${unit})`);
   return `${lines.join('\n')}\n`;
@@ -85,9 +79,8 @@ function writeStructured(document: unknown, format: DocumentFormat): void {
  * The document a report verb publishes, without writing it: the run-integrity
  * refusal its registered denominator declares, then its published schema.
  *
- * For a lane that needs the published document before writing it — a command
- * that warns on stderr with the refusal the writer adds. {@link writeDocument}
- * goes through it too. (A phase of `vat build` / `validate` / `verify` hands
+ * Pure — it says nothing on stderr: for a lane that needs the published counts
+ * before writing. {@link writeDocument} goes through it too, and says the refusal. (A phase of `vat build` / `validate` / `verify` hands
  * back its report BEFORE this pass: the orchestrator judges zero examined on
  * the whole run.)
  *
@@ -104,6 +97,69 @@ export function publishedReport<T>(verb: ReportVerb, report: Report<T>): Report<
 }
 
 /**
+ * Say on stderr, once, the run-integrity refusal `withRunIntegrity` added to
+ * `report` to make `judged` — nothing when it stood down. The ONE place that
+ * refusal reaches a human: {@link writeDocument} calls it for every report
+ * verb, and `runPhase` for an orchestrated phase its own verb's writer never
+ * sees. A verb never prints it itself; the refusal is not in the findings it
+ * built, so its own reporting cannot double it.
+ *
+ * @param report - The report as the verb built it
+ * @param judged - The same report after the run-integrity pass
+ */
+export function announceRunIntegrity(report: Report<unknown>, judged: Report<unknown>): void {
+  // A refusal is an error, which every verbosity prints.
+  reportFindings(findingsAddedByRunIntegrity(report, judged), { verbose: false, write: writeStderrLine });
+}
+
+/** One line on stderr — the `write` every writer-side {@link reportFindings} takes. */
+function writeStderrLine(line: string): void {
+  process.stderr.write(`${line}\n`);
+}
+
+/** Set in a supervised child, whose supervisor reports the findings of the document it forwards. */
+let supervisorSaysFindings = false;
+
+/** Leave this process's findings to the supervisor forwarding its document: printed here too, each would print twice. */
+export function leaveFindingsToSupervisor(): void {
+  supervisorSaysFindings = true;
+}
+
+/** Error reports whose message stderr already carries: said once by {@link announceErrorOf}, or composed by {@link composeRefusal}. */
+const errorSaid = new WeakSet<object>();
+
+/** Is `document` a report on the envelope's error branch: `status: error` with an `error.message`? */
+function isErrorDocument(document: unknown): document is { readonly status: 'error'; readonly error: { readonly message: string } } {
+  if (typeof document !== 'object' || document === null) return false;
+  const { status, error } = document as { status?: unknown; error?: unknown };
+  return status === 'error' && typeof error === 'object' && error !== null
+    && typeof (error as { message?: unknown }).message === 'string';
+}
+
+/**
+ * Say an error report's message on stderr, once per report, at every `--format` — the ONE owner of
+ * "a refusal says why", for every writer and for `runPhase`. A report {@link composeRefusal} built
+ * already said it; a supervised child leaves it to the supervisor ({@link leaveFindingsToSupervisor}).
+ */
+export function announceErrorOf(document: unknown): void {
+  if (!isErrorDocument(document) || errorSaid.has(document) || supervisorSaysFindings) return;
+  errorSaid.add(document);
+  writeStderrLine(document.error.message);
+}
+
+/**
+ * Whether a document's findings belong on stderr too — the ONE rule, for the writer and every
+ * verb: not in a supervised child ({@link leaveFindingsToSupervisor}), and not when stdout is the
+ * generic `--format text` rendering, which already lists every one.
+ *
+ * @param verb - The registered verb
+ * @param format - How its document is rendered
+ */
+export function findingsGoToStderr(verb: ReportVerb, format: DocumentFormat): boolean {
+  return !supervisorSaysFindings && (format !== 'text' || reportShapeFor(verb).renderText !== undefined);
+}
+
+/**
  * Publish a report verb's document.
  *
  * @param verb - The registered verb, as typed after `vat`
@@ -113,8 +169,25 @@ export function publishedReport<T>(verb: ReportVerb, report: Report<T>): Report<
  * @throws When the verb is unregistered or its schema rejects the document (a defect)
  */
 export function writeDocument<T>(verb: ReportVerb, report: Report<T>, format: DocumentFormat): Report<T> {
+  return publishDocument(verb, report, format, []);
+}
+
+/**
+ * {@link writeDocument}, given the leftovers stderr already carries as a refusal's message.
+ *
+ * 🔑 **The one path that publishes a leftover says it**, once, at every verbosity, on the lanes
+ * {@link findingsGoToStderr} allows. {@link reportFindings} skips them, so none is said twice.
+ *
+ * @param saidAsMessage - Leftovers the refusal's message already said ({@link endWithLeftoverRefusal})
+ */
+function publishDocument<T>(verb: ReportVerb, report: Report<T>, format: DocumentFormat, saidAsMessage: readonly Finding[]): Report<T> {
   const entry = reportShapeFor(verb);
   const written = publishedReport(verb, report);
+  announceErrorOf(report);
+  if (findingsGoToStderr(verb, format)) {
+    announceRunIntegrity(report, written);
+    reportLeftovers(written.findings.filter((finding) => !saidAsMessage.some((said) => sameLeftover(said, finding))), writeStderrLine);
+  }
   if (format === 'text') {
     const text = entry.renderText === undefined
       ? renderReportText(written, entry.examined.unit)
@@ -124,6 +197,11 @@ export function writeDocument<T>(verb: ReportVerb, report: Report<T>, format: Do
     writeStructured(written, format);
   }
   return written;
+}
+
+/** The same leftover: one message naming one entry. */
+function sameLeftover(a: Finding, b: Finding): boolean {
+  return isLeftover(a) && isLeftover(b) && a.message === b.message && a.link === b.link;
 }
 
 /**
@@ -151,7 +229,8 @@ export const NOTHING_FINISHED: FinishedWork = Object.freeze({ examined: 0, findi
  * Publish the envelope's error branch — the run could not do its job — with
  * whatever finished, and end on `ERROR`.
  *
- * The message also goes to stderr, where a human reads it; `INTERNAL_ERROR`
+ * The finished work's findings go to stderr here, so no verb prints them before
+ * refusing. The message also goes to stderr, where a human reads it; `INTERNAL_ERROR`
  * adds the stack, since that one is VAT's defect to report, and under
  * `--debug` every refusal does — the flag exists to name the throw site.
  *
@@ -172,7 +251,19 @@ export function endWithRefusal(
   gate: Gate,
   finished: FinishedWork,
 ): never {
-  process.exit(exitCodeForReport(writeDocument(verb, refusalReport(code, error, gate, finished), format)));
+  const report = composeRefusal({ code, error, gate, finished, printFinished: findingsGoToStderr(verb, format), alsoPublished: [] });
+  process.exit(exitCodeForReport(writeDocument(verb, report, format)));
+}
+
+/**
+ * {@link endWithRefusal} for a refusal that IS a leftover (`applyTreePlanOrLeftover`'s
+ * `leftover`): said once on stderr by the message; the document carries it as the
+ * TREE_CLEANUP_INCOMPLETE warning. The one place that warning is composed.
+ */
+export function endWithLeftoverRefusal(verb: ReportVerb, leftover: unknown, format: DocumentFormat, gate: Gate, finished: FinishedWork): never {
+  const said = [leftoverIssueOf(leftover)];
+  const report = composeRefusal({ code: refusalCodeOf(leftover), error: leftover, gate, finished, printFinished: findingsGoToStderr(verb, format), alsoPublished: said });
+  process.exit(exitCodeForReport(publishDocument(verb, report, format, said)));
 }
 
 /**
@@ -185,7 +276,8 @@ export function endWithRefusal(
 function announceRefusal(code: RefusalCode, error: unknown): string {
   const raw = errorMessageOf(error);
   const message = raw === '' ? CODE_REGISTRY[code].description : withFsFaultRemedy(raw, error);
-  process.stderr.write(`${message}\n`);
+  // A supervised child leaves the message to the supervisor that forwards its document.
+  if (!supervisorSaysFindings) process.stderr.write(`${message}\n`);
   if (code === 'INTERNAL_ERROR' || debugDiagnosticsEnabled()) process.stderr.write(`${errorDiagnostics(error)}\n`);
   return message;
 }
@@ -200,17 +292,40 @@ function announceRefusal(code: RefusalCode, error: unknown): string {
  * @param error - The thrown value, or the message
  * @param gate - The gate the run was judged by
  * @param finished - The work that finished, or {@link NOTHING_FINISHED}
- * @returns The error report, not yet published
+ * @returns The error report, not yet published — its leftovers are said by the writer that publishes it
  */
 export function refusalReport(code: RefusalCode, error: unknown, gate: Gate, finished: FinishedWork): Report<unknown> {
+  return composeRefusal({ code, error, gate, finished, printFinished: false, alsoPublished: [] });
+}
+
+/** What {@link composeRefusal} composes a refusal from. */
+interface RefusalParts {
+  readonly code: RefusalCode;
+  readonly error: unknown;
+  readonly gate: Gate;
+  readonly finished: FinishedWork;
+  /** Whether the finished work's findings go to stderr (the publishing lane, per {@link findingsGoToStderr}). */
+  readonly printFinished: boolean;
+  /** Findings the document carries that stderr already has in the refusal's message. */
+  readonly alsoPublished: readonly Finding[];
+}
+
+/** Every refusal's one composition: message, then finished findings; leftovers by {@link publishDocument}. */
+function composeRefusal(parts: RefusalParts): Report<unknown> {
+  const { code, error, gate, finished } = parts;
   const message = announceRefusal(code, error);
-  return buildErrorReport({
+  const leftovers = leftoverIssuesOf(error);
+  if (parts.printFinished) reportFindings(finished.findings, { verbose: true, write: writeStderrLine });
+  const report = buildErrorReport({
     error: { code, message },
     gate,
     examined: finished.examined,
-    findings: [...finished.findings, ...leftoverFindingsOf(error)],
+    findings: [...finished.findings, ...parts.alsoPublished, ...leftovers],
     data: finished.data,
   });
+  // Said above, ahead of the finished findings — never again by the writer that publishes it.
+  if (!supervisorSaysFindings) errorSaid.add(report);
+  return report;
 }
 
 /**
@@ -218,11 +333,16 @@ export function refusalReport(code: RefusalCode, error: unknown, gate: Gate, fin
  * recorded beside the thrown error (`suppressedFaultsOf`), as warnings naming each.
  * Recorded beside, never on its cause chain: a leftover is never the run's refusal.
  */
-export function leftoverFindingsOf(error: unknown): Array<ValidationIssue & Finding> {
-  return suppressedFaultsOf(error).map((fault) => {
-    process.stderr.write(`warning: ${errorMessageOf(fault)}\n`);
-    return leftoverIssueOf(fault);
-  });
+export function leftoverIssuesOf(error: unknown): Array<ValidationIssue & Finding> {
+  return suppressedFaultsOf(error).map((fault) => leftoverIssueOf(fault));
+}
+
+/**
+ * A finished tree change's leftovers (`applyTreePlan`'s `warnings`, a packager's `residue`) as
+ * warnings, said by {@link publishDocument}.
+ */
+export function leftoverIssuesOfWarnings(warnings: readonly TreeChangeWarning[]): Array<ValidationIssue & Finding> {
+  return warnings.map(({ message, path }) => leftoverIssue(message, path));
 }
 
 /**
@@ -286,13 +406,27 @@ export function readForwardedDocument(verb: ReportVerb, text: string, format: Ex
  * @param document - What {@link readForwardedDocument} accepted
  */
 export function endWithForwardedDocument(document: ForwardedDocument): never {
+  announceErrorOf(document.report);
+  if (!supervisorSaysFindings) reportLeftovers(document.report.findings, writeStderrLine);
   writeStdoutSync(document.text);
   process.exit(exitCodeForReport(document.report));
 }
 
 /**
+ * An external payload's top-level `warnings` list — where an org verb puts the
+ * leftovers it built ({@link leftoverIssueOf}) — or nothing.
+ */
+function externalWarningsOf(payload: unknown): Finding[] {
+  if (typeof payload !== 'object' || payload === null) return [];
+  const warnings: unknown = (payload as { warnings?: unknown }).warnings;
+  if (!Array.isArray(warnings)) return [];
+  return warnings.filter((entry): entry is Finding => typeof entry === 'object' && entry !== null && typeof (entry as Finding).code === 'string');
+}
+
+/**
  * Publish an externally owned payload verbatim and end on the code its
- * registered adapter maps `outcome` to.
+ * registered adapter maps `outcome` to. Every leftover in the payload's
+ * top-level `warnings` is said on stderr first, once.
  *
  * @param verb - A verb of an `external` entry
  * @param payload - The payload as its owner shaped it
@@ -300,6 +434,7 @@ export function endWithForwardedDocument(document: ForwardedDocument): never {
  * @param outcome - What the external write did
  */
 export function writeExternalDocument(verb: ExternalVerb, payload: unknown, format: DocumentFormat, outcome: ExternalOutcome): never {
+  if (!supervisorSaysFindings) reportLeftovers(externalWarningsOf(payload), writeStderrLine);
   writeStructured(payload, format);
   process.exit(exitCodeForExternal(verb, outcome));
 }
@@ -335,12 +470,19 @@ export function endWithExternalRefusal(verb: ExternalVerb, error: unknown, forma
  */
 export function writeLegacyDocument(_verb: LegacyVerb, document: unknown, format: DocumentFormat, text: string | undefined): void {
   // The verb's TYPE is the guarantee — only a legacy verb compiles here.
+  announceErrorOf(document);
+  if (!supervisorSaysFindings && isReportShaped(document)) reportLeftovers(document.findings, writeStderrLine);
   if (format === 'text' && text !== undefined) {
     // Synchronously, as `claude context` always wrote it: its text can run long and the verb exits straight after.
     writeStdoutSync(text);
     return;
   }
   writeStructured(document, format);
+}
+
+/** Does a legacy document carry a report's `findings` list? */
+function isReportShaped(document: unknown): document is { readonly findings: readonly Finding[] } {
+  return typeof document === 'object' && document !== null && Array.isArray((document as { findings?: unknown }).findings);
 }
 
 /** Validate a payload against its artifact entry's schema, when it declares one. */

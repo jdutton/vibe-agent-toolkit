@@ -247,7 +247,7 @@ export async function captureParse(
   options: CaptureParseOptions,
 ): Promise<ReportEnvelope<ParseBody>> {
   const loadBefore = readLoad();
-  const { rows: commands, measured } = await captureCommandRows(options, DUMP_DIR_PREFIX, PARSE_TIMING_DIR_ENV, rowFromDumps);
+  const { rows: commands, measured } = await captureCommandRows(options, DUMP_DIR_PREFIX, (directory) => ({ [PARSE_TIMING_DIR_ENV]: directory }), rowFromDumps);
   const loadAfter = readLoad();
 
   return buildReportEnvelope(PARSE_FACET, options, {

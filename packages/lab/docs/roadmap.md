@@ -159,6 +159,9 @@ markdown parser directly without consulting the cache, so documents can exceed m
 rate is therefore rendered as `hits/(hits+misses)` and labelled as covering all parser kinds — never
 as a per-document rate.
 
+**The `memory` facet. Done.** Peak RSS per command, from a preload, because the lab could not see
+`vat build` on one adopter go from ~1.0 GB to ~5.4 GB and out of heap. See [Facets](facets.md).
+
 **Stage 4 — the `sweep` facet and the corpus registry.** Absorbs `vat corpus scan` and the 236-entry
 seed. Subjects tracked on moving refs; every observation stamped with the resolved commit.
 

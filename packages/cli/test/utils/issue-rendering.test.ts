@@ -58,10 +58,12 @@ import {
   formatPackagedFileCount,
   formatSeverityBreakdown,
   issuesToRenderAtVerbosity,
-  severityLabel,
+  reportFindings,
+  reportLeftovers,
   summarizeFindings,
   sumSeverityCounts,
 } from '../../src/utils/issue-rendering.js';
+import { renderedLabels } from '../helpers/rendered-labels.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -205,23 +207,10 @@ function packageResult2(postBuildIssues: ValidationIssue[]): PackageSkillResult 
 /** The subject skill's name — synthetic, as every fixture name in this repo is. */
 const SKILL = 'csv-summarizer';
 
-/** Every `[SEVERITY]`-prefixed label present in a rendered set, in order. */
-function renderedLabels(lines: string[]): string[] {
-  return lines.flatMap((line) => /^\s*\[([A-Z]+)]/.exec(line)?.slice(1, 2) ?? []);
-}
 
 // ---------------------------------------------------------------------------
 // The shared renderer
 // ---------------------------------------------------------------------------
-
-describe('severityLabel', () => {
-  it('renders every severity as itself, info included', () => {
-    // The whole vocabulary, not the two the old ternary could express.
-    expect(
-      (['error', 'warning', 'info', 'ignore'] as const).map((s) => severityLabel(s)),
-    ).toEqual(['ERROR', 'WARNING', 'INFO', 'IGNORED']);
-  });
-});
 
 describe('formatSeverityBreakdown', () => {
   it('names only the non-zero buckets', () => {
@@ -258,30 +247,71 @@ describe('formatIssueSetHeading', () => {
 });
 
 describe('formatIssueLines', () => {
-  it('prefixes each issue with its OWN severity', () => {
+  it('labels each issue with its OWN severity', () => {
     const issues = [issue('error', 'A'), issue('warning', 'B'), issue('info', 'C')];
     expect(issues.map((i) => formatIssueLines(i)[0])).toEqual([
-      '[ERROR] [A] A happened',
-      '[WARNING] [B] B happened',
-      '[INFO] [C] C happened',
+      'error: A happened [A]',
+      'warning: B happened [B]',
+      'info: C happened [C]',
     ]);
   });
 
-  it('renders anchor and fix under the indent', () => {
+  it('leads with the compiler-style anchor and puts the fix beneath it', () => {
     expect(
       formatIssueLines(
         issue('info', 'C', { location: 'skills/SKILL.md', line: 9, fix: 'do the thing' }),
         '  ',
       ),
     ).toEqual([
-      '  [INFO] [C] C happened',
-      '    Location: skills/SKILL.md:9',
+      '  skills/SKILL.md:9: info: C happened [C]',
       '    Fix: do the thing',
     ]);
   });
 
-  it('omits the anchor line entirely when the issue has no anchor', () => {
-    expect(formatIssueLines(issue('warning', 'B'))).toEqual(['[WARNING] [B] B happened']);
+  it('carries a column and a field in the anchor', () => {
+    const located = { ...issue('error', 'A', { location: 'a.md', line: 3, field: 'name' }), column: 7 };
+    expect(formatIssueLines(located)).toEqual(['a.md:3:7 (name): error: A happened [A]']);
+  });
+
+  it('is one bare line when the issue has no anchor and no fix', () => {
+    expect(formatIssueLines(issue('warning', 'B'))).toEqual(['warning: B happened [B]']);
+  });
+});
+
+/** Run {@link reportFindings} over `findings`, capturing every line it writes. */
+function reported(findings: readonly ValidationIssue[], verbose: boolean): string[] {
+  const written: string[] = [];
+  reportFindings(findings, { verbose, write: (line) => written.push(line) });
+  return written;
+}
+
+describe('reportFindings', () => {
+  const mixed = [
+    issue('warning', 'W', { location: 'w.md' }),
+    issue('info', 'I'),
+    issue('error', 'E1', { location: 'a.md', line: 2 }),
+    issue('error', 'E2'),
+  ];
+
+  it('prints only the errors, first, then says how many it collapsed', () => {
+    expect(reported(mixed, false)).toEqual([
+      '  a.md:2: error: E1 happened [E1]',
+      '  error: E2 happened [E2]',
+      formatCollapsedFindingsHint(2),
+    ]);
+  });
+
+  it('prints every severity under --verbose, errors first, with no hint', () => {
+    expect(reported(mixed, true)).toEqual([
+      '  a.md:2: error: E1 happened [E1]',
+      '  error: E2 happened [E2]',
+      '  w.md: warning: W happened [W]',
+      '  info: I happened [I]',
+    ]);
+  });
+
+  it('prints nothing for a clean set', () => {
+    expect(reported([], false)).toEqual([]);
   });
 });
 
@@ -340,12 +370,12 @@ describe('issuesToRenderAtVerbosity', () => {
     ]);
   });
 
-  it('renders every non-ignored severity when verbose', () => {
+  it('renders every non-ignored severity when verbose, errors first', () => {
     expect(issuesToRenderAtVerbosity(mixed, true).map((i) => i.code)).toEqual([
       'FILENAME_COLLISION',
+      'PACKAGED_TEST_INPUT',
       'LINK_DROPPED_BY_DEPTH',
       'CAPABILITY_LOCAL_SHELL',
-      'PACKAGED_TEST_INPUT',
     ]);
   });
 
@@ -752,14 +782,15 @@ describe('countCollapsedFindings / formatCollapsedFindingsHint', () => {
   });
 
   it('names both ways to read what it did not print', () => {
-    expect(formatCollapsedFindingsHint(4, 'build')).toBe(
+    // No format named: the same verb's stdout is YAML, JSON or text.
+    expect(formatCollapsedFindingsHint(4)).toBe(
       '\n4 warning/info finding(s) not shown — re-run with --verbose, '
-      + "or read this build's YAML report on stdout, which lists every finding.",
+      + 'or read the report on stdout, which lists every finding.',
     );
   });
 
   it('says nothing when nothing was collapsed', () => {
-    expect(formatCollapsedFindingsHint(0, 'build')).toBeUndefined();
+    expect(formatCollapsedFindingsHint(0)).toBeUndefined();
   });
 });
 
@@ -1042,7 +1073,7 @@ describe('vat claude plugin build — summarizePackagedSkillIssues', () => {
         result: packageResult([issue('info', 'I1')], [issue('error', 'E1')]),
       },
     ], true);
-    expect(renderedLabels(lines)).toEqual(['WARNING', 'INFO', 'ERROR']);
+    expect(renderedLabels(lines)).toEqual(['WARNING', 'ERROR', 'INFO']);
     expect(countBySeverity(issues)).toEqual({ errors: 1, warnings: 1, info: 1 });
   });
 
@@ -1084,7 +1115,7 @@ describe('vat skills validate — formatValidationReportLines at default verbosi
     // Exactly one full block, and it is the error's — not one per finding.
     expect(renderedLabels(lines)).toEqual(['ERROR']);
     expect(rendered).toContain(
-      '[ERROR] [SKILL_MISSING_DESCRIPTION] SKILL_MISSING_DESCRIPTION happened',
+      'error: SKILL_MISSING_DESCRIPTION happened [SKILL_MISSING_DESCRIPTION]',
     );
     expect(rendered).toContain(ERROR_FIX_LINE);
 
@@ -1134,7 +1165,7 @@ describe('vat skills build — formatPostBuildIssueReport verbosity', () => {
     expect(lines[0]).toBe(`   ${SKILL}: 6 post-build issues ${FULL_BREAKDOWN}:`);
     expect(renderedLabels(lines)).toEqual(['ERROR']);
     const rendered = lines.join('\n');
-    expect(rendered).toContain('[ERROR] [SKILL_MISSING_DESCRIPTION] SKILL_MISSING_DESCRIPTION happened');
+    expect(rendered).toContain('error: SKILL_MISSING_DESCRIPTION happened [SKILL_MISSING_DESCRIPTION]');
     expect(rendered).toContain(ERROR_FIX_LINE);
     expect(rendered).not.toContain(DROPPED_BODY);
     expect(rendered).not.toContain(NON_PORTABLE_BODY);
@@ -1223,5 +1254,28 @@ describe('vat claude plugin build — summarizePackagedSkillIssues verbosity', (
     );
     expect(lines).toEqual(['         csvsum: 1 post-build issue (1 warning)']);
     expect(withErrors).toEqual([]);
+  });
+});
+
+describe('leftovers: the writer says them, reportFindings never does', () => {
+  const findings = [
+    { code: 'SOME_WARNING', severity: 'warning', message: 'a collapsible warning' },
+    { code: 'TREE_CLEANUP_INCOMPLETE', severity: 'warning', message: 'progress log left at /tmp/x', link: '/tmp/x' },
+  ] as const;
+
+  it('reportFindings skips a leftover, and does not count it in the collapsed hint', () => {
+    const lines: string[] = [];
+    reportFindings(findings, { verbose: false, write: (line) => lines.push(line) });
+
+    expect(lines.join('\n')).not.toContain('TREE_CLEANUP_INCOMPLETE');
+    expect(lines.join('\n')).toContain('1 warning');
+  });
+
+  it('reportLeftovers says only the leftovers, whatever the verbosity', () => {
+    const lines: string[] = [];
+    reportLeftovers(findings, (line) => lines.push(line));
+
+    expect(lines.join('\n')).toContain('warning: progress log left at /tmp/x [TREE_CLEANUP_INCOMPLETE]');
+    expect(lines.join('\n')).not.toContain('a collapsible warning');
   });
 });

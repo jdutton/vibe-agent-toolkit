@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 
-
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 
@@ -23,7 +23,7 @@ describe('agent validate command (integration)', () => {
 
   beforeAll(() => {
     tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-agent-validate-'));
-    fs.mkdirSync(safePath.join(tempDir, '.git'));
+    mkdirSyncReal(safePath.join(tempDir, '.git'));
   });
 
   afterAll(() => {
@@ -32,7 +32,7 @@ describe('agent validate command (integration)', () => {
 
   it('should validate correct agent manifest', () => {
     const agentDir = safePath.join(tempDir, 'valid-agent');
-    fs.mkdirSync(agentDir);
+    mkdirSyncReal(agentDir);
     fs.writeFileSync(
       safePath.join(agentDir, 'agent.yaml'),
       `metadata:
@@ -62,7 +62,7 @@ spec:
 
   it('publishes each schema violation of a manifest it read as a finding at the manifest, exit 1', () => {
     const agentDir = safePath.join(tempDir, 'invalid-agent');
-    fs.mkdirSync(agentDir, { recursive: true });
+    mkdirSyncReal(agentDir, { recursive: true });
     fs.writeFileSync(
       safePath.join(agentDir, 'agent.yaml'),
       `metadata:
@@ -87,7 +87,7 @@ spec:
 
   it('refuses a manifest that is not YAML as INPUT_UNREADABLE, exit 2', () => {
     const agentDir = safePath.join(tempDir, 'not-yaml-agent');
-    fs.mkdirSync(agentDir, { recursive: true });
+    mkdirSyncReal(agentDir, { recursive: true });
     fs.writeFileSync(safePath.join(agentDir, 'agent.yaml'), 'invalid: yaml: [[[{');
 
     const result = runAgentValidate(agentDir);

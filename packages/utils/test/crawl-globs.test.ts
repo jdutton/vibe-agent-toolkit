@@ -7,6 +7,7 @@ import {
   BUILD_OUTPUT_GLOBS,
   crawlDirectorySync,
   crawlPathFilter,
+  NEVER_CONTENT_GLOBS,
   NEVER_CRAWL_GLOBS,
 } from '../src/file-crawler.js';
 import { mkdirSyncReal, safePath, toForwardSlash } from '../src/path-utils.js';
@@ -47,6 +48,44 @@ describe('the canonical crawl-exclusion lists', () => {
   // moves it to the other list has to argue with this line.
   it('does not classify .turbo as build output', () => {
     expect([...BUILD_OUTPUT_GLOBS]).not.toContain(TURBO_GLOB);
+  });
+});
+
+describe('NEVER_CONTENT_GLOBS — the never-authored part of NEVER_CRAWL_GLOBS', () => {
+  it('is exactly dependencies, git internals, worktree copies and staging residue', () => {
+    expect([...NEVER_CONTENT_GLOBS]).toEqual([
+      '**/node_modules/**',
+      '**/.git/**',
+      '**/.worktrees/**',
+      '**/.claude/worktrees/**',
+      '**/.*.vat-staged-*',
+      '**/.*.vat-staged-*/**',
+    ]);
+  });
+
+  it('is NEVER_CRAWL_GLOBS less only the tool-output names an author may also use', () => {
+    expect(NEVER_CRAWL_GLOBS.filter((glob) => !NEVER_CONTENT_GLOBS.includes(glob)).toSorted((a, b) => a.localeCompare(b)))
+      .toEqual(['**/.test-output/**', '**/.turbo/**', '**/coverage/**']);
+  });
+
+  it('cannot be mutated by a consumer, and neither can the lists it is composed beside', () => {
+    expect(Object.isFrozen(NEVER_CONTENT_GLOBS)).toBe(true);
+    expect(Object.isFrozen(NEVER_CRAWL_GLOBS)).toBe(true);
+    expect(Object.isFrozen(BUILD_OUTPUT_GLOBS)).toBe(true);
+  });
+});
+
+describe('a build\'s staging residue is never crawled', () => {
+  const isMember = crawlPathFilter(['**/*'], [...NEVER_CRAWL_GLOBS]);
+
+  it('excludes a staged tree, everything under it, and a staged file', () => {
+    expect(isMember('out/.skill.vat-staged-0a1b2c3d')).toBe(false);
+    expect(isMember('out/.skill.vat-staged-0a1b2c3d/SKILL.md')).toBe(false);
+    expect(isMember('.SKILL.md.vat-staged-0a1b2c3d.previous')).toBe(false);
+  });
+
+  it('admits a name that merely mentions the infix without the leading dot', () => {
+    expect(isMember('notes/skill.vat-staged-0a1b2c3d/SKILL.md')).toBe(true);
   });
 });
 

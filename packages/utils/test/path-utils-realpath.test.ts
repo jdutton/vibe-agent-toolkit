@@ -26,7 +26,9 @@ import { errnoOf } from './test-helpers.js';
 /** Make `realpathSync.native` throw `code` for ONE path; everything else passes through. */
 function refuseNativeRealpathOf(target: string, code: string): () => void {
   const refused = toForwardSlash(target);
+  // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
   const original = fs.realpathSync.native;
+  // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
   const spy = vi.spyOn(fs.realpathSync, 'native').mockImplementation(((asked: fs.PathLike, options?: unknown) => {
     if (toForwardSlash(String(asked)) === refused) {
       throw Object.assign(new Error(`${code}: injected, realpath '${String(asked)}'`), { code });
@@ -54,35 +56,37 @@ describe('path-utils realpath helpers: absence is the only failure answered lexi
 
   describe('normalizePath', () => {
     it('resolves parent directory references and drops a trailing slash', () => {
-      expect(toForwardSlash(normalizePath(`${root}/docs/../README.md`, root))).toBe(safePath.join(root, 'README.md'));
-      expect(normalizePath(`${root}/docs/`, root)).not.toMatch(/[/\\]$/);
+      expect(toForwardSlash(normalizePath(`${root}/docs/../README.md`, { within: root }))).toBe(safePath.join(root, 'README.md'));
+      expect(normalizePath(`${root}/docs/`, { within: root })).not.toMatch(/[/\\]$/);
     });
 
     it('answers the tree root itself (the operator\'s own path) with its native realpath', () => {
-      expect(normalizePath(root, root)).toBe(fs.realpathSync.native(root));
+      // eslint-disable-next-line local/no-fs-realpathSync -- the oracle: Node's own realpath, which the helper under test must equal
+      expect(normalizePath(root, { within: root })).toBe(fs.realpathSync.native(root));
     });
 
     it('resolves a relative target against cwd, never against `within` (the old baseDir form is gone)', () => {
       const relative = './no-such-normalize-target.md';
-      expect(toForwardSlash(normalizePath(relative, root))).toBe(safePath.resolve(relative));
+      expect(toForwardSlash(normalizePath(relative, { within: root }))).toBe(safePath.resolve(relative));
     });
 
     it('answers an absent path with its lexical resolution (positive control)', () => {
       const missing = safePath.join(root, 'no', 'such', 'file.md');
-      expect(toForwardSlash(normalizePath(missing, root))).toBe(safePath.resolve(missing));
+      expect(toForwardSlash(normalizePath(missing, { within: root }))).toBe(safePath.resolve(missing));
     });
 
     it('answers a present path with its realpath', () => {
       const present = safePath.join(root, 'present.md');
       fs.writeFileSync(present, '');
-      expect(normalizePath(present, root)).toBe(fs.realpathSync.native(present));
+      // eslint-disable-next-line local/no-fs-realpathSync -- the oracle: Node's own realpath, which the helper under test must equal
+      expect(normalizePath(present, { within: root })).toBe(fs.realpathSync.native(present));
     });
 
     it.each(['EACCES', 'EPERM', 'ELOOP', 'ENAMETOOLONG'])('throws when the OS refuses the path with %s', (code) => {
       const present = safePath.join(root, 'refused.md');
       fs.writeFileSync(present, '');
       restore = refuseNativeRealpathOf(present, code);
-      expect(errnoOf(() => normalizePath(present, root))).toBe(code);
+      expect(errnoOf(() => normalizePath(present, { within: root }))).toBe(code);
     });
 
     it('falls through to the JS realpath when the native call reports a present path absent', () => {
@@ -91,19 +95,21 @@ describe('path-utils realpath helpers: absence is the only failure answered lexi
       const present = safePath.join(root, 'musl.md');
       fs.writeFileSync(present, '');
       restore = refuseNativeRealpathOf(present, 'ENOENT');
-      expect(normalizePath(present, root)).toBe(fs.realpathSync(present));
+      // eslint-disable-next-line local/no-fs-realpathSync -- the oracle: this asserts equivalence with Node's own realpath, so it must not route through normalizePath
+      expect(normalizePath(present, { within: root })).toBe(fs.realpathSync(present));
     });
 
     it('throws ELOOP on a real symlink cycle rather than pretending the cycle is a path', ({ skip }) => {
       const cap = symlinkCapability() ?? skip();
       const loop = safePath.join(root, 'loop');
       createSymlink(cap, 'loop', loop);
-      expect(errnoOf(() => normalizePath(loop, root))).toBe('ELOOP');
+      expect(errnoOf(() => normalizePath(loop, { within: root }))).toBe('ELOOP');
     });
   });
 
   describe('normalizedTmpdir', () => {
     it('returns the realpath of the OS tmpdir (positive control)', () => {
+      // eslint-disable-next-line local/no-fs-realpathSync -- the oracle: Node's own realpath, which the helper under test must equal
       expect(normalizedTmpdir()).toBe(fs.realpathSync.native(normalizedTmpdir()));
     });
 
@@ -111,6 +117,7 @@ describe('path-utils realpath helpers: absence is the only failure answered lexi
       // The spy must see the exact string `tmpdir()` hands over, so it is keyed
       // on what the real helper answers — the spy passes that first call through.
       const real = normalizedTmpdir();
+      // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
       const spy = vi.spyOn(fs.realpathSync, 'native').mockImplementation((() => {
         throw Object.assign(new Error(`EACCES: injected, realpath '${real}'`), { code: 'EACCES' });
       }) as typeof fs.realpathSync.native);
@@ -122,6 +129,7 @@ describe('path-utils realpath helpers: absence is the only failure answered lexi
   describe('mkdirSyncReal', () => {
     it('creates the directory and returns its realpath (positive control)', () => {
       const dir = safePath.join(root, 'made');
+      // eslint-disable-next-line local/no-fs-realpathSync -- the oracle: Node's own realpath, which the helper under test must equal
       expect(mkdirSyncReal(dir)).toBe(fs.realpathSync.native(dir));
     });
 

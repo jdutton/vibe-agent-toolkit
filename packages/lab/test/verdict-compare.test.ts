@@ -15,6 +15,7 @@ import { UNCODED_REFUSAL } from '../src/facets/verdict/extract.js';
 import { type VerdictBody, VerdictBodySchema, type VerdictRow } from '../src/facets/verdict/types.js';
 
 import { PROBE_VERSION } from './command-probe.js';
+import { makeReport } from './report-fixtures.js';
 import { verdictDeltaEntryFactory } from './verdict-deltas-fixtures.js';
 
 const ARM_A: InstrumentVersion = { ...PROBE_VERSION, closure: 'a'.repeat(64) };
@@ -28,16 +29,15 @@ const ARM_C: InstrumentVersion = { ...PROBE_VERSION, closure: 'c'.repeat(64) };
  */
 function envelope(alias: string, instrument: InstrumentVersion): ReportEnvelope<VerdictBody> {
   return {
-    facet: 'verdict',
-    coordinate: {
-      subject: { id: alias, source: `/trees/${alias}` },
-      subjectVersion: { kind: 'snapshot', fingerprint: `fp-${alias}`, fileCount: 1 },
-      instrument,
-    },
-    capturedAt: '2026-09-28T00:00:00.000Z',
-    removedEnv: [],
-    npmNetworkEnv: [],
-    exits: [],
+    ...makeReport({
+      facet: 'verdict',
+      coordinate: {
+        subject: { id: alias, source: `/trees/${alias}` },
+        subjectVersion: { kind: 'snapshot', fingerprint: `fp-${alias}`, fileCount: 1 },
+        instrument,
+      },
+      capturedAt: '2026-09-28T00:00:00.000Z',
+    }),
     body: {
       arm: { set: {}, unset: [] },
       rows: [

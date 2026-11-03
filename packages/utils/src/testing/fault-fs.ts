@@ -269,9 +269,9 @@ function failAfterClosing(style: FsApi, close: Fn, args: readonly unknown[], err
   }
 }
 
-function patch(session: Session, target: object, key: string, make: (original: Fn) => Fn): void {
+function patch(session: Session, target: object, key: string, make: (original: Fn) => Fn): Fn | undefined {
   const original = (target as Record<string, unknown>)[key];
-  if (typeof original !== 'function') return;
+  if (typeof original !== 'function') return undefined;
   const wrapped = make(original as Fn);
   // Carry `realpath.native`, util.promisify.custom and the like over to the wrapper.
   for (const own of Reflect.ownKeys(original)) {
@@ -280,6 +280,18 @@ function patch(session: Session, target: object, key: string, make: (original: F
   }
   session.patches.push({ target, key, original });
   (target as Record<string, unknown>)[key] = wrapped;
+  return wrapped;
+}
+
+/**
+ * Wrap `target[key]` as `op`, and then its `.native` variant (`realpathSync.native`), which
+ * {@link patch} carried over to the wrapper UNWRAPPED: `normalizePath` asks the native one
+ * first, so without this every product realpath fault was out of the harness's reach. The
+ * variant's patch lands on the wrapper, which `restore()` drops; the originals never change.
+ */
+function patchOp(session: Session, target: object, key: string, op: string, spec: OpSpec, style: FsApi): void {
+  const wrapped = patch(session, target, key, (original) => makeWrapper(op, spec, style, original));
+  if (wrapped !== undefined) patch(session, wrapped, 'native', (original) => makeWrapper(op, spec, style, original));
 }
 
 function rewriteStats(session: Session, op: string, path: string, value: { ino: number | bigint; dev: number | bigint }): unknown {
@@ -396,20 +408,6 @@ function patchFileHandle(session: Session, handle: object): void {
 }
 
 /**
- * Wrap `realpathSync.native` and `realpath.native` as the op `realpath`. They hang off the
- * functions as properties, so {@link patch} copies them onto the wrappers UNWRAPPED, and
- * `normalizePath` asks the native one first: without this every product realpath fault was
- * out of the harness's reach. The patch lands on the wrapper, which `restore()` drops along
- * with its property; the originals never change.
- */
-function patchNativeRealpath(session: Session): void {
-  const spec = OPS['realpath'];
-  if (spec === undefined) return;
-  patch(session, fs.realpathSync, 'native', (original) => makeWrapper('realpath', spec, 'sync', original));
-  patch(session, fs.realpath, 'native', (original) => makeWrapper('realpath', spec, 'callback', original));
-}
-
-/**
  * Trace and fault fs calls on paths under `within` until `restore()` is called.
  *
  * One session at a time: a second install while one is active throws, because two
@@ -452,11 +450,10 @@ export function installFaultFs(options: {
   };
   active = session;
   for (const [op, spec] of Object.entries(OPS)) {
-    patch(session, fs, `${op}Sync`, (original) => makeWrapper(op, spec, 'sync', original));
-    patch(session, fs, op, (original) => makeWrapper(op, spec, 'callback', original));
-    patch(session, fs.promises, op, (original) => makeWrapper(op, spec, 'promise', original));
+    patchOp(session, fs, `${op}Sync`, op, spec, 'sync');
+    patchOp(session, fs, op, op, spec, 'callback');
+    patchOp(session, fs.promises, op, op, spec, 'promise');
   }
-  patchNativeRealpath(session);
   syncBuiltinESMExports();
   return session;
 }

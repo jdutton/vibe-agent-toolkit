@@ -5,11 +5,12 @@
  * Verifies mixed resource types, error detection, and successful validation.
  */
 
-import * as fs from 'node:fs';
+
 import { pathToFileURL } from 'node:url';
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
@@ -28,7 +29,7 @@ import {
 
 /** Write `content` at `path`, creating its directory. */
 function writeNested(path: string, content: string): void {
-  fs.mkdirSync(safePath.resolve(path, '..'), { recursive: true });
+  mkdirSyncReal(safePath.resolve(path, '..'), { recursive: true });
   writeTestFile(path, content);
 }
 
@@ -63,11 +64,11 @@ describe('Audit Workflows (system test)', () => {
 
   it('should handle mixed resource directory (marketplace + plugins + skills)', async () => {
     const mixedDir = safePath.join(tempDir, 'mixed');
-    fs.mkdirSync(mixedDir, { recursive: true });
+    mkdirSyncReal(mixedDir, { recursive: true });
 
     // Create a marketplace structure
     const marketplaceDir = safePath.join(mixedDir, 'my-marketplace');
-    fs.mkdirSync(marketplaceDir, { recursive: true });
+    mkdirSyncReal(marketplaceDir, { recursive: true });
     writeTestFile(
       safePath.join(marketplaceDir, '.claude-plugin'),
       JSON.stringify({
@@ -91,7 +92,7 @@ Test content.
 
     // Create a standalone plugin
     const pluginDir = safePath.join(mixedDir, 'my-plugin');
-    fs.mkdirSync(pluginDir, { recursive: true });
+    mkdirSyncReal(pluginDir, { recursive: true });
     writeTestFile(
       safePath.join(pluginDir, '.claude-plugin'),
       JSON.stringify({
@@ -141,12 +142,12 @@ Test content.
 
   it('should detect and report multiple validation errors', async () => {
     const errorDir = safePath.join(tempDir, 'errors');
-    fs.mkdirSync(errorDir, { recursive: true });
+    mkdirSyncReal(errorDir, { recursive: true });
 
     // Create an invalid skill (invalid name format — uppercase not allowed)
     // Note: must create subdirectory since scanDirectory only finds SKILL.md in directories
     const errorDir1 = safePath.join(errorDir, 'skill1');
-    fs.mkdirSync(errorDir1, { recursive: true });
+    mkdirSyncReal(errorDir1, { recursive: true });
     writeTestFile(
       safePath.join(errorDir1, 'SKILL.md'),
       `---
@@ -162,7 +163,7 @@ Test content.
 
     // Create another invalid skill (name too long — exceeds 64 chars)
     const errorDir2 = safePath.join(errorDir, 'skill2');
-    fs.mkdirSync(errorDir2, { recursive: true });
+    mkdirSyncReal(errorDir2, { recursive: true });
     writeTestFile(
       safePath.join(errorDir2, 'SKILL.md'),
       `---
@@ -193,11 +194,11 @@ Test content.
 
   it('should exit with 0 for fully valid resources', async () => {
     const validDir = safePath.join(tempDir, 'valid');
-    fs.mkdirSync(validDir, { recursive: true });
+    mkdirSyncReal(validDir, { recursive: true });
 
     // Create valid skills (each in subdirectory since scanDirectory looks for SKILL.md)
     const validDir1 = safePath.join(validDir, 'skill1');
-    fs.mkdirSync(validDir1, { recursive: true });
+    mkdirSyncReal(validDir1, { recursive: true });
     writeTestFile(
       safePath.join(validDir1, 'SKILL.md'),
       `---
@@ -212,7 +213,7 @@ Test content.
     );
 
     const validDir2 = safePath.join(validDir, 'skill2');
-    fs.mkdirSync(validDir2, { recursive: true });
+    mkdirSyncReal(validDir2, { recursive: true });
     writeTestFile(
       safePath.join(validDir2, 'SKILL.md'),
       `---
@@ -247,7 +248,7 @@ Test content.
   it('should scan recursively by default without --recursive flag', async () => {
     const nestedDir = safePath.join(tempDir, 'nested-default');
     const nestedSkillDir = safePath.join(nestedDir, 'deeply', 'nested', 'skill-dir');
-    fs.mkdirSync(nestedSkillDir, { recursive: true });
+    mkdirSyncReal(nestedSkillDir, { recursive: true });
 
     writeTestFile(
       safePath.join(nestedSkillDir, 'SKILL.md'),
@@ -280,7 +281,7 @@ This skill is deeply nested to verify recursive scanning is the default.
   it('should NOT scan subdirectories with --no-recursive flag', async () => {
     const noRecurseDir = safePath.join(tempDir, 'no-recurse');
     const subDir = safePath.join(noRecurseDir, 'subdir');
-    fs.mkdirSync(subDir, { recursive: true });
+    mkdirSyncReal(subDir, { recursive: true });
 
     // Create SKILL.md only in the subdirectory (not the top level)
     writeTestFile(
@@ -319,8 +320,8 @@ This skill should not be found when using --no-recursive.
     const excludeDir = safePath.join(tempDir, 'exclude-test');
     const distDir = safePath.join(excludeDir, 'dist');
     const srcDir = safePath.join(excludeDir, 'src');
-    fs.mkdirSync(distDir, { recursive: true });
-    fs.mkdirSync(srcDir, { recursive: true });
+    mkdirSyncReal(distDir, { recursive: true });
+    mkdirSyncReal(srcDir, { recursive: true });
 
     // Create a skill in dist/ (should be excluded)
     writeTestFile(
@@ -401,7 +402,7 @@ This skill is in src/ and should be included.
     const localDir = safePath.join(tempDir, 'url-source');
     writeNested(safePath.join(localDir, 'skills', 'clean', 'SKILL.md'), CLEAN_SKILL);
     const bare = safePath.join(tempDir, 'url-origin.git');
-    fs.mkdirSync(bare, { recursive: true });
+    mkdirSyncReal(bare, { recursive: true });
     runGitOrThrow(['init', '-q', '--bare', '--initial-branch=main'], { cwd: bare });
     initGitRepoWithRemote(localDir, bare);
     commitAllAndPushMain(localDir);

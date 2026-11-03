@@ -266,7 +266,7 @@ const REPO_SOURCE: SkillTreeProvenance = 'repo-source';
  *   before the kernel follows them; `filePath` itself when it is the operator's own path
  */
 function canonicalPath(filePath: string, within: string): string {
-  return toForwardSlash(normalizePath(safePath.resolve(filePath), within));
+  return toForwardSlash(normalizePath(safePath.resolve(filePath), { within }));
 }
 
 /**
@@ -376,7 +376,7 @@ export async function crawlOwnsSubtree(skillMdPath: string, within: string): Pro
  * a relativizer shared by ~20 producers, and only its CALLER knows whether "the
  * anchor root itself" is a subject its findings can have; for the producers that
  * anchor a file against a containing directory, subject-equals-anchor cannot
- * happen at all. The sibling `Location: (validation.allow.<CODE>)` findings look
+ * happen at all. The sibling `(validation.allow.<CODE>): …` findings look
  * like this defect and are NOT it: those are `ALLOW_UNUSED`/`ALLOW_EXPIRED` meta
  * issues that carry no `location` whatsoever (only a `field` pointing into the
  * project config), which `formatIssueAnchor` renders as `(field)` on purpose.

@@ -2,11 +2,11 @@
  * Uninstall agent from Agent Skills directory
  */
 
-import { buildReport, toFindings, type Gate } from '@vibe-agent-toolkit/schema';
+import { buildReport, type Gate } from '@vibe-agent-toolkit/schema';
 import { applyTreePlanOrLeftover, planTreeChanges } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
-import { endWithRefusal, endWithReport, type FinishedWork, leftoverIssueOf, NOTHING_FINISHED } from '../../utils/document-writer.js';
+import { endWithLeftoverRefusal, endWithRefusal, endWithReport, type FinishedWork, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { validateAndGetScopeLocation } from '../../utils/scope-locations.js';
 
@@ -20,6 +20,7 @@ export interface UninstallOptions {
 }
 
 /** `vat agent uninstall` has no `--strict`, and its only finding is a leftover warning: the gate is fixed. */
+const VERB = 'agent uninstall';
 const GATE: Gate = { strict: false };
 
 /** What an uninstall finished: the removal, and — when the OS would not then delete the install it moved aside — that failure. */
@@ -49,14 +50,14 @@ export async function uninstallAgent(
     return refuse(error, NOTHING_FINISHED);
   }
   const { data, leftover } = uninstalled;
-  if (leftover !== undefined) return refuse(leftover, { examined: 1, findings: toFindings([leftoverIssueOf(leftover)]), data });
+  if (leftover !== undefined) return endWithLeftoverRefusal(VERB, leftover, 'yaml', GATE, { examined: 1, findings: [], data });
   logger.debug(`Uninstall completed in ${Date.now() - startTime}ms`);
-  endWithReport('agent uninstall', buildReport({ examined: 1, findings: [], data, gate: GATE, durationMs: Date.now() - startTime }), 'yaml');
+  endWithReport(VERB, buildReport({ examined: 1, findings: [], data, gate: GATE, durationMs: Date.now() - startTime }), 'yaml');
 }
 
 /** End on the envelope's error branch: `error` refused, `finished` the work done before it. */
 function refuse(error: unknown, finished: FinishedWork): never {
-  return endWithRefusal('agent uninstall', refusalCodeOf(error), error, 'yaml', GATE, finished);
+  return endWithRefusal(VERB, refusalCodeOf(error), error, 'yaml', GATE, finished);
 }
 
 /** The removal itself; every throw carries the refusal code of its cause. */

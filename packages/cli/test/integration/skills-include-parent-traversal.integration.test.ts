@@ -1,8 +1,10 @@
 import fs from 'node:fs';
 
+
 import type { SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { withReaddirSyncRefused } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -27,7 +29,7 @@ const SKILLS_GLOB = 'skills/**/SKILL.md';
 
 /** Write `<dir>/SKILL.md` with the frontmatter name discovery reads. */
 function writeSkill(dir: string, name: string, description: string): void {
-  fs.mkdirSync(dir, { recursive: true });
+  mkdirSyncReal(dir, { recursive: true });
   fs.writeFileSync(
     safePath.join(dir, 'SKILL.md'),
     `---\nname: ${name}\ndescription: ${description}\n---\n# ${name}\n`,

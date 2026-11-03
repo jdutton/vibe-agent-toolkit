@@ -23,7 +23,7 @@ import type { DiscoveredSkill } from './skills/command-helpers.js';
 // Types
 // ---------------------------------------------------------------------------
 
-export interface ConsistencyIssue {
+interface ConsistencyIssue {
   severity: Severity;
   code: string;
   message: string;

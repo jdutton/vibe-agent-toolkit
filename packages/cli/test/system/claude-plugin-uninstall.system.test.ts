@@ -151,10 +151,11 @@ describe('claude plugin uninstall command (system test)', () => {
     // The plugin directory is on disk, in a marketplace carrying VAT's marker, but no registry names it.
     const halfDir = halfRemovedPlugin(fakeHome, true);
 
-    const { status, report } = await runUninstall(binPath, fakeHome, [HALF_KEY]);
+    const { status, report, output } = await runUninstall(binPath, fakeHome, [HALF_KEY]);
 
     // A warning: the cleanup ran, and the operator is told no registry had recorded the plugin.
     expect(status).toBe(0);
+    expect(output).toMatch(/^ {2}\S+: warning: .+ \[PLUGIN_UNINSTALL_INCOMPLETE\]\n {4}Fix: Check Claude Code/m);
     expect(report.status).toBe('findings');
     expect(report.findings).toMatchObject([{ code: 'PLUGIN_UNINSTALL_INCOMPLETE', severity: 'warning', location: HALF_KEY }]);
     expect(report.data?.plugins).toStrictEqual([{ key: HALF_KEY, removed: true }]);

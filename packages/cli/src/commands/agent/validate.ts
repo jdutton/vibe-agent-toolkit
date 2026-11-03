@@ -15,6 +15,7 @@ import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 import { resolveAgentPath } from '../../utils/agent-discovery.js';
 import { refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
+import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
 import { relativeLocationOrRefuse } from '../../utils/relativize-paths.js';
@@ -62,9 +63,8 @@ function logOutcome(report: AgentValidateReport, logger: Logger): void {
   } else {
     logger.info('Agent validation successful');
   }
-  for (const finding of report.findings) {
-    logger.error(`  - [${finding.severity}] ${finding.message} [${finding.code}]`);
-  }
+  // `vat agent validate` has no `--verbose`: it has always listed every finding.
+  reportFindings(report.findings, { verbose: true, write: logger.error });
 }
 
 export async function validateCommand(

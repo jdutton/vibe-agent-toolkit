@@ -9,6 +9,7 @@
  */
 import fs from 'node:fs';
 
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { LINK_CHAIN_REFUSED_CODE } from '../src/errors/errno-table.js';
@@ -33,6 +34,7 @@ function spyOnTheKernel(): { asked: string[]; restore: () => void } {
   };
   const realStatSync = fs.statSync;
   const spies = [
+    // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
     vi.spyOn(fs.realpathSync, 'native').mockImplementation(((path: fs.PathLike) => (record(path), path)) as typeof fs.realpathSync.native),
     vi.spyOn(fs.realpath, 'native').mockImplementation(((path: fs.PathLike, callback: (error: null, real: string) => void) => {
       record(path);
@@ -53,7 +55,7 @@ function spyOnTheKernel(): { asked: string[]; restore: () => void } {
 /** Under `root`: `smb -> \\attacker\share`, `a -> b -> smb`, `ok -> docs`; then the kernel spied on. */
 function planted(root: string, skip: () => never): ReturnType<typeof spyOnTheKernel> {
   const cap = symlinkCapability() ?? skip();
-  fs.mkdirSync(safePath.join(root, 'docs'));
+  mkdirSyncReal(safePath.join(root, 'docs'));
   createSymlink(cap, UNC, safePath.join(root, 'smb'), 'dir');
   createSymlink(cap, 'smb', safePath.join(root, 'b'), 'dir');
   createSymlink(cap, 'b', safePath.join(root, 'a'), 'dir');
@@ -70,7 +72,8 @@ describe('the link-following primitives ask the kernel only about a chain read a
   afterAll(suite.afterAll);
   beforeEach(() => {
     suite.beforeEach();
-    root = toForwardSlash(fs.realpathSync(suite.getTempDir()));
+    const made = suite.getTempDir();
+    root = toForwardSlash(normalizePath(made, { within: made }));
   });
   afterEach(() => {
     kernel?.restore();
@@ -85,7 +88,7 @@ describe('the link-following primitives ask the kernel only about a chain read a
     const path = safePath.join(root, start);
 
     expect(() => realpathNativeSync(path, root)).toThrow(expect.objectContaining(refused));
-    expect(() => normalizePath(path, root)).toThrow(expect.objectContaining(refused));
+    expect(() => normalizePath(path, { within: root })).toThrow(expect.objectContaining(refused));
     expect(() => canonicalPath(path, root)).toThrow(expect.objectContaining(refused));
     expect(() => followedStatSync(path, root)).toThrow(expect.objectContaining(refused));
     expect(() => followedKindSync(path, root)).toThrow(expect.objectContaining(refused));

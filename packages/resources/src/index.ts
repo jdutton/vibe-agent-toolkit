@@ -40,6 +40,7 @@ import { importParserModule } from './parse-cache.js';
 // Export main ResourceRegistry class and ID generation utility
 export {
   ResourceRegistry,
+  DEFAULT_RESOURCE_EXCLUDE,
   DEFAULT_RESOURCE_INCLUDE,
   // Exported so a caller can catch it BY TYPE. `addResource` (singular) signals
   // a first-added-wins collision only by throwing, and the one consumer that

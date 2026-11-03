@@ -46,7 +46,7 @@ describe('the default --out inside the subject holds reports only', () => {
   it.for(CASES)('%s completes from the subject root, its arms under <os tmpdir>/vat-lab-arms-<user>', ([, args]) => {
     const subject = cleanSubject();
     const made = tempDir('lab-default-out-scratch-');
-    const scratch = normalizePath(made, made);
+    const scratch = normalizePath(made, { within: made });
     const home = safePath.join(scratch, 'home');
     mkdirSyncReal(home);
 

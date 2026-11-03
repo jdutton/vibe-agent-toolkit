@@ -67,6 +67,7 @@ import { Command } from 'commander';
 import { CommandRefusalError, refusalCodeOf } from '../../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, leftoverIssue, NOTHING_FINISHED, type FinishedWork } from '../../../utils/document-writer.js';
 import { extractSkillZip, inStaging, installLinks, installUnit, occupiedRefusal, skillCopyChange } from '../../../utils/install-plan.js';
+import { reportFindings } from '../../../utils/issue-rendering.js';
 import { createLogger } from '../../../utils/logger.js';
 import { requireInputPath } from '../../../utils/project-root-policy.js';
 
@@ -543,6 +544,7 @@ async function installCommand(
     endWithRefusal('claude plugin install', refusalCodeOf(refusal), refusal, 'yaml', GATE, installFinished(outcomeOf(run), dryRun));
   }
 
+  reportFindings(outcome.issues, { verbose: true, write: logger.warn });
   logInstallOutcome(outcome, dryRun, logger);
   endWithReport('claude plugin install', buildPluginInstallReport(outcome, dryRun, Date.now() - startTime), 'yaml');
 }
@@ -867,7 +869,6 @@ function notOwnedRefusal(error: unknown): unknown {
 
 /** A leftover of a complete install, as a warning naming it. */
 function leftover(run: InstallRun, issue: ValidationIssue): void {
-  run.logger.warn(`   ${issue.message}`);
   run.issues.push(issue);
 }
 

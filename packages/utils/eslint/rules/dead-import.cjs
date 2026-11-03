@@ -49,6 +49,8 @@
  * spelling a file happened to use.
  */
 
+const { loadedModuleOf } = require('./fs-binding-scan.cjs');
+
 const REMOVABLE_MODULES = new Set([
   'node:path',
   'path',
@@ -93,17 +95,14 @@ function hasTypeOnlyBinding(node) {
 /**
  * Is every binding this declaration introduces now unreferenced?
  *
- * Whole declarations only. A partially-dead declaration (`import path, { sep }`
- * with `sep` still live) needs comma surgery, which is where removal bugs live,
- * and it is not the shape the adopter measured — so it is left alone and stays a
- * visible `no-unused-vars` finding rather than a risky edit.
+ * Whole declarations here; a dead SPECIFIER beside a live one is
+ * {@link deadRewrittenSpecifiers}'s, and only for a name the calling rule
+ * rewrites.
  *
  * Re-exports need no special guard: `export { path }` and `export default path`
  * both register as references under espree AND `@typescript-eslint/parser`
- * (measured, both parsers), so such a declaration is never dead here. Round 2
- * added an explicit `isReExported` check for the SPECIFIER-removal path, where
- * the reference count is not consulted at all; this path reads the count, so a
- * second check would be a guard that can never fire.
+ * (measured, both parsers), so such a declaration is never dead here — and the
+ * same holds for a specifier, whose count {@link deadRewrittenSpecifiers} reads.
  */
 function isDeadRemovableImport(sourceCode, node) {
   if (!REMOVABLE_MODULES.has(node.source.value)) {
@@ -127,7 +126,166 @@ function isDeadRemovableImport(sourceCode, node) {
 }
 
 /**
- * Report — and remove — every import declaration this pass emptied out.
+ * The named specifiers of a PARTLY live declaration that are now unreferenced
+ * and that name a function the calling rule rewrites (`join` in
+ * `import { join, dirname } from 'node:path'`).
+ *
+ * The rule's call fixes never remove a specifier — a suppressed report runs its
+ * `fix()` too, so a removal riding on any one of them strands a suppressed call
+ * — and without this the dead `join` beside a live `dirname` would survive every
+ * pass as `no-unused-vars`. Narrowed to the rule's own names, so a specifier dead
+ * for somebody else's reason is not this leg's to take. A default or namespace
+ * binding beside a sole named specifier is left alone: removing the braces' only
+ * member is the comma surgery where removal bugs live, for one rare shape.
+ *
+ * @param {object} sourceCode - ESLint `SourceCode` for the file being linted.
+ * @param {object} node - An `ImportDeclaration` of a removable module.
+ * @param {ReadonlySet<string>} rewrittenNames - The imported names the calling rule rewrites.
+ * @returns {object[]} The dead specifiers, in source order.
+ */
+function deadRewrittenSpecifiers(sourceCode, node, rewrittenNames) {
+  if (!REMOVABLE_MODULES.has(node.source.value) || hasTypeOnlyBinding(node)) {
+    return [];
+  }
+  const named = node.specifiers.filter((spec) => spec.type === 'ImportSpecifier');
+  if (named.length === 1 && named.length < node.specifiers.length) {
+    return [];
+  }
+  return named.filter(
+    (spec) =>
+      rewrittenNames.has(spec.imported.name)
+      && sourceCode.getDeclaredVariables(spec).every((variable) => variable.references.length === 0),
+  );
+}
+
+/**
+ * The fix removing one named specifier and the comma that joined it to a neighbour.
+ *
+ * @param {object} fixer - ESLint fixer.
+ * @param {object} sourceCode - ESLint `SourceCode`.
+ * @param {object} spec - An `ImportSpecifier` with at least one named neighbour.
+ * @returns {object} The fix.
+ */
+function removeSpecifierFix(fixer, sourceCode, spec) {
+  // Through the next token's start, so `{ join, dirname }` becomes `{ dirname }`, not `{  dirname }`.
+  const after = sourceCode.getTokenAfter(spec);
+  if (after?.value === ',') {
+    return fixer.removeRange([spec.range[0], sourceCode.getTokenAfter(after).range[0]]);
+  }
+  const before = sourceCode.getTokenBefore(spec);
+  return fixer.removeRange([before.range[0], spec.range[1]]);
+}
+
+/** `const { a, b } = …` with nothing but plain `name` / `key: name` properties — no default, rest or computed key. */
+function isPlainPattern(id) {
+  return id.type === 'ObjectPattern' && id.properties.every((property) => property.type === 'Property'
+    && !property.computed && property.value.type === 'Identifier');
+}
+
+/**
+ * Parents whose child statement can be deleted outright. Any other parent (`if`, `else`, a loop, a
+ * label, a `for` head) takes the statement as its unbraced body or a part of itself, and deleting it
+ * hands that place to the next statement. An `export` wrapper is not listed either: an exported
+ * binding is referenced from outside.
+ */
+const STATEMENT_LISTS = new Set(['Program', 'BlockStatement', 'StaticBlock', 'SwitchCase', 'TSModuleBlock']);
+
+/** The statement list a {@link STATEMENT_LISTS} parent holds. */
+function siblingsOf(statement) {
+  return statement.parent.type === 'SwitchCase' ? statement.parent.consequent : statement.parent.body;
+}
+
+/**
+ * Whether deleting `statement` outright could change what its neighbours mean, so a lone `;` must
+ * stand in for it. Decided from the AST, not from a list of risky tokens:
+ * - the statement before it has no `;` of its own and something follows, so the follower could
+ *   continue it (`const a = f()` then `[1].map(g)` is `f()[1].map(g)`; `<any>c` under TypeScript); or
+ * - a string statement follows and only directives precede, so the string would become a directive.
+ */
+function mustLeaveEmptyStatement(sourceCode, statement) {
+  const siblings = siblingsOf(statement);
+  const index = siblings.indexOf(statement);
+  const previous = siblings[index - 1];
+  const next = siblings[index + 1];
+  if (next === undefined) return false;
+  const continuesPrevious = previous !== undefined && sourceCode.getLastToken(previous).value !== ';';
+  const becomesDirective = next.type === 'ExpressionStatement' && next.expression.type === 'Literal'
+    && typeof next.expression.value === 'string'
+    && siblings.slice(0, index).every((sibling) => typeof sibling.directive === 'string');
+  return continuesPrevious || becomesDirective;
+}
+
+/**
+ * The one way this module deletes a whole statement: outright, or as a lone `;` where
+ * {@link mustLeaveEmptyStatement} says deleting it would change its neighbours' meaning.
+ *
+ * @param {object} sourceCode - ESLint `SourceCode`.
+ * @param {object} fixer - ESLint fixer.
+ * @param {object} statement - The statement to delete, directly in a {@link STATEMENT_LISTS} parent.
+ * @returns {object} The fix.
+ */
+function removeStatement(sourceCode, fixer, statement) {
+  return mustLeaveEmptyStatement(sourceCode, statement) ? fixer.replaceText(statement, ';') : fixer.remove(statement);
+}
+
+/**
+ * The statement to remove for a `require()` / `import()` / `await import()` binding of a removable
+ * module whose every binding is dead, or null to keep it.
+ *
+ * Only a WHOLE declaration of exactly one declarator: `const os = require('node:os'), n = 1` keeps
+ * both, never comma surgery. Only one directly in a statement list ({@link STATEMENT_LISTS}), and
+ * not a binding written again after its declaration (`os = …` is a reference the removal would
+ * strand). Only a namespace binding (`const os = …`) or a plain destructure of one
+ * (`const { tmpdir } = …`), so no default value's side effect goes with it.
+ *
+ * @param {object} sourceCode - ESLint `SourceCode`.
+ * @param {object} declarator - A `VariableDeclarator` the binding scan found.
+ * @returns {{ statement: object, module: string } | null}
+ */
+function deadLoadingDeclaration(sourceCode, declarator) {
+  const module = loadedModuleOf(declarator.init);
+  const statement = declarator.parent;
+  const removable = REMOVABLE_MODULES.has(module)
+    && STATEMENT_LISTS.has(statement.parent?.type)
+    && statement.declarations.length === 1
+    && (declarator.id.type === 'Identifier' || isPlainPattern(declarator.id));
+  const dead = removable && sourceCode.getDeclaredVariables(declarator)
+    .every((variable) => variable.references.every((reference) => reference.init === true));
+  return dead ? { statement, module } : null;
+}
+
+/**
+ * `import os = require('node:os')`, a value import directly in a statement list (so not
+ * `export import os = …`, which parses as an `ExportNamedDeclaration` around it), whose binding
+ * nothing references — or null.
+ */
+function deadImportEquals(sourceCode, node) {
+  const ref = node.moduleReference;
+  const module = ref.type === 'TSExternalModuleReference' ? ref.expression.value : null;
+  const dead = REMOVABLE_MODULES.has(module) && STATEMENT_LISTS.has(node.parent?.type)
+    && node.importKind !== 'type'
+    && sourceCode.getDeclaredVariables(node).every((variable) => variable.references.length === 0);
+  return dead ? { statement: node, module } : null;
+}
+
+/** Report and remove one dead non-`import` binding statement. */
+function reportDeadStatement(context, sourceCode, bindingNode, dead) {
+  context.report({
+    node: dead.statement,
+    messageId: DEAD_UNSAFE_IMPORT,
+    data: {
+      local: sourceCode.getDeclaredVariables(bindingNode).map((variable) => variable.name).join("', '"),
+      module: dead.module,
+    },
+    fix: (fixer) => removeStatement(sourceCode, fixer, dead.statement),
+  });
+}
+
+/**
+ * Report — and remove — every import declaration this pass emptied out, and
+ * every specifier of {@link deadRewrittenSpecifiers}. Also a `require()` /
+ * `import()` / `import x = require()` binding of the module, when the whole
+ * statement is dead ({@link deadLoadingDeclaration}, {@link deadImportEquals}).
  *
  * Runs at `Program:exit`, over the SOURCE as it stands this pass. That ordering
  * is the safety property, not an implementation detail: while a live reference
@@ -201,11 +359,16 @@ function isDeadRemovableImport(sourceCode, node) {
  *
  * @param {object} context - ESLint rule context.
  * @param {object} sourceCode - ESLint `SourceCode` for the file being linted.
- * @param {object[]} importNodes - Unsafe-module `ImportDeclaration`s seen this pass.
+ * @param {object[]} importNodes - Declarations binding the unsafe module seen this pass:
+ *   `ImportDeclaration`s, and — from a rule that rewrites those shapes — the `VariableDeclarator`s
+ *   and `TSImportEqualsDeclaration`s `moduleBindingVisitors` finds.
  * @param {boolean} safeBoundInSource - Was the safe symbol already bound in the SOURCE?
  * @param {boolean} replacementCalled - Does the SOURCE call this rule's own safe
  *   replacement? Both are required, and both are the caller's to compute from
  *   source — see the gate discussion above for why neither may be defaulted.
+ * @param {ReadonlySet<string>} rewrittenNames - The imported names the calling
+ *   rule's fixes rewrite (empty for a rule that rewrites no named import). Required:
+ *   an omitted set would silently strand every dead specifier.
  */
 function reportDeadUnsafeImports(
   context,
@@ -213,34 +376,61 @@ function reportDeadUnsafeImports(
   importNodes,
   safeBoundInSource,
   replacementCalled,
+  rewrittenNames,
 ) {
+  if (!(rewrittenNames instanceof Set)) {
+    throw new TypeError('reportDeadUnsafeImports: rewrittenNames must be a Set');
+  }
   if (!safeBoundInSource || !replacementCalled) {
     return;
   }
   for (const node of importNodes) {
-    if (!isDeadRemovableImport(sourceCode, node)) {
+    if (node.type === 'ImportDeclaration') {
+      reportDeadImportDeclaration(context, sourceCode, node, rewrittenNames);
       continue;
     }
-    context.report({
-      node,
-      messageId: DEAD_UNSAFE_IMPORT,
-      data: {
-        local: sourceCode
-          .getDeclaredVariables(node)
-          .map((variable) => variable.name)
-          .join("', '"),
-        module: node.source.value,
-      },
-      // `fixer.remove(node)` takes the declaration and leaves its newline, so a
-      // blank line remains where the import was. That is exactly what the
-      // specifier-removal leg in `no-raw-node-path.cjs` has always
-      // done — its fixtures pin the leading `\n` — and matching it keeps one
-      // behaviour rather than two. Extending the range through a trailing
-      // whitespace-only remainder would tidy both, and should be done to both at
-      // once, once an adopter has measured whether their formatter cares.
-      fix: (fixer) => fixer.remove(node),
-    });
+    const dead = node.type === 'VariableDeclarator'
+      ? deadLoadingDeclaration(sourceCode, node)
+      : deadImportEquals(sourceCode, node);
+    if (dead) reportDeadStatement(context, sourceCode, node, dead);
   }
+}
+
+/**
+ * {@link reportDeadUnsafeImports} for one `ImportDeclaration`: the whole declaration when every
+ * binding is dead and it is removable, else each dead specifier the rule rewrites.
+ */
+function reportDeadImportDeclaration(context, sourceCode, node, rewrittenNames) {
+  if (!isDeadRemovableImport(sourceCode, node)) {
+    for (const spec of deadRewrittenSpecifiers(sourceCode, node, rewrittenNames)) {
+      context.report({
+        node: spec,
+        messageId: DEAD_UNSAFE_IMPORT,
+        data: { local: spec.local.name, module: node.source.value },
+        fix: (fixer) => removeSpecifierFix(fixer, sourceCode, spec),
+      });
+    }
+    return;
+  }
+  context.report({
+    node,
+    messageId: DEAD_UNSAFE_IMPORT,
+    data: {
+      local: sourceCode
+        .getDeclaredVariables(node)
+        .map((variable) => variable.name)
+        .join("', '"),
+      module: node.source.value,
+    },
+    // An outright removal takes the declaration and leaves its newline, so a
+    // blank line remains where the import was. That is exactly what the
+    // specifier-removal leg in `no-raw-node-path.cjs` has always
+    // done — its fixtures pin the leading `\n` — and matching it keeps one
+    // behaviour rather than two. Extending the range through a trailing
+    // whitespace-only remainder would tidy both, and should be done to both at
+    // once, once an adopter has measured whether their formatter cares.
+    fix: (fixer) => removeStatement(sourceCode, fixer, node),
+  });
 }
 
 module.exports = {

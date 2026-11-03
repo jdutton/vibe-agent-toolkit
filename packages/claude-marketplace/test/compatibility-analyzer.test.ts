@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { describe, expect, it } from 'vitest';
 
 import { analyzeCompatibility } from '../src/compatibility-analyzer.js';
@@ -109,7 +110,7 @@ describe('analyzeCompatibility', () => {
       const tmpBase = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'compat-plugin-wins-'));
       const pluginDir = safePath.join(tmpBase, 'plugin');
       const claudeDir = safePath.join(pluginDir, '.claude-plugin');
-      fs.mkdirSync(claudeDir, { recursive: true });
+      mkdirSyncReal(claudeDir, { recursive: true });
       fs.writeFileSync(
         safePath.join(claudeDir, 'plugin.json'),
         JSON.stringify({ name: 'plugin-wins', version: '1.0.0', targets: [TARGET_CLAUDE_CODE] }),

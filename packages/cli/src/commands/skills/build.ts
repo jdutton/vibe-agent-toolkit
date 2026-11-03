@@ -53,7 +53,7 @@ import { Command } from 'commander';
 
 import { errorMessageOf, refusalCodeOf, withFsFaultRemedy } from '../../utils/command-refusal.js';
 import { loadConfig } from '../../utils/config-loader.js';
-import { endWithReport, leftoverFindingsOf, leftoverIssue, NOTHING_FINISHED, refusalReport, type FinishedWork } from '../../utils/document-writer.js';
+import { endWithReport, leftoverIssuesOf, leftoverIssuesOfWarnings, NOTHING_FINISHED, refusalReport, type FinishedWork } from '../../utils/document-writer.js';
 import {
   collectPostBuildIssues,
   countCollapsedFindings,
@@ -63,6 +63,7 @@ import {
   formatPackagedFileCount,
   formatRunIssueLines,
   issuesToRenderAtVerbosity,
+  reportFindings,
 } from '../../utils/issue-rendering.js';
 import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
@@ -981,11 +982,11 @@ export async function runSkillBuild(input: SkillBuildRunInput): Promise<SkillBui
     input.logger.error(hadPrevious
       ? `\n   Nothing was replaced — the previous ${target.label} is intact`
       : `\n   Nothing was written — ${target.label} does not exist`);
-    return { ...run, outputCommitted: false, residue: leftoverFindingsOf(error) };
+    return { ...run, outputCommitted: false, residue: leftoverIssuesOf(error) };
   }
   // The plan resolves only once its fill has run, so a run is there.
   if (holder.built === undefined) throw new Error('vat skills build: the plan resolved without running its build');
-  return { ...holder.built.run, outputCommitted: true, residue: warnings.map(({ message, path }) => leftoverIssue(message, path)) };
+  return { ...holder.built.run, outputCommitted: true, residue: leftoverIssuesOfWarnings(warnings) };
 }
 
 /** The build itself, into `staged`: every skill validated, the ones that qualified packaged, the outcome judged. */
@@ -1166,7 +1167,7 @@ function judgeOutcomes(
   // already uses. Per skill it would repeat 86 times on the adopter run that
   // motivated it; omitted entirely (which is how this shipped) the collapsed
   // block is a heading with nothing under it and no way to learn there is more.
-  const collapsedHint = formatCollapsedFindingsHint(collapsedFindings, 'build');
+  const collapsedHint = formatCollapsedFindingsHint(collapsedFindings);
   if (collapsedHint !== undefined) logger.info(collapsedHint);
   return { results, skillsWithErrors, failures };
 }
@@ -1287,8 +1288,8 @@ async function prepareBuild(
   const refusal = inPlaceSkillRefusal(options.skill, inPlace) ?? pluginOnlySkillRefusal(options.skill, pluginOnly);
   const target = [...inPlace, ...pluginOnly][0];
   if (refusal !== undefined && target !== undefined) {
-    logger.error(refusal.message);
     const issue = notBuildableIssue(refusal.message, reportLocation(cwd, target.skill.sourcePath));
+    reportFindings([issue], { verbose: true, write: logger.error });
     return { kind: 'done', report: earlyReport({ ...planned, setAsideIssues: [issue] }, startTime) };
   }
 

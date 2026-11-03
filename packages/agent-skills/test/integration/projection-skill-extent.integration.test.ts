@@ -371,6 +371,7 @@ async function walkerBundle(root: string, config: SkillPackagingConfig): Promise
     excludeRules: config.excludeReferencesFromBundle?.rules ?? [],
     projectRoot: root,
     skillRootPath: skillAbsolute,
+    ownOutputDir: undefined,
     excludeNavigationFiles: config.excludeNavigationFiles ?? true,
     // Built exactly as `skill-packager.ts:599` builds it — per skill, against
     // the skill's own directory. Without it the walker's `files:` escape hatch

@@ -40,7 +40,7 @@
 
 import {
   crawlDirectory,
-  NEVER_CRAWL_GLOBS,
+  NEVER_CONTENT_GLOBS,
 } from '@vibe-agent-toolkit/utils/crawl';
 
 import type {
@@ -136,15 +136,17 @@ export class GitExtentContributor implements ExtentContributor {
       role: null,
     }];
 
-    // NEVER_CRAWL_GLOBS only, deliberately: the default exclude also drops
+    // NEVER_CONTENT_GLOBS only, deliberately: the default exclude also drops
     // `dist/`, and a tracked file under `dist/` IS in git's extent whatever any
-    // authored-content lane thinks of it.
+    // authored-content lane thinks of it — as is a tracked `coverage/` or
+    // `.turbo/`, which an author may have named a directory. An ignored one
+    // never reaches here (`respectGitignore`).
     const absolutePaths = await crawlDirectory({
       outputs: [],
       baseDir: base.root,
       respectGitignore: true,
       includeUntracked: true,
-      exclude: [...NEVER_CRAWL_GLOBS],
+      exclude: [...NEVER_CONTENT_GLOBS],
       // 🚨 Reached on the git route too, not only when the walk answers: with
       // `includeUntracked` git walks the working tree, and a directory it could
       // not open is handed here off its stderr — the only place git says so.

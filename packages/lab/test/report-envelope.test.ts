@@ -64,6 +64,22 @@ describe('buildReportEnvelope — npmNetworkEnv', () => {
   });
 });
 
+describe('buildReportEnvelope — host', () => {
+  it("records the platform, architecture, Node version and the arm's NODE_OPTIONS", () => {
+    const request = { ...REQUEST, env: { set: { NODE_OPTIONS: '--max-old-space-size=64' }, unset: [] } };
+
+    expect(buildReportEnvelope('perf', request, {}, []).host).toStrictEqual({
+      platform: process.platform,
+      arch: process.arch,
+      node: process.version,
+      nodeOptions: '--max-old-space-size=64',
+      heapSizeLimit: expect.any(Number),
+      totalMem: expect.any(Number),
+      availableParallelism: expect.any(Number),
+    });
+  });
+});
+
 describe('buildReportEnvelope — exits', () => {
   it("records each command's commitment and the code its repetitions shared, and tells a disagreement from a step that never ran", () => {
     const envelope = buildReportEnvelope('perf', REQUEST, {}, [measured('same', [], [1, 1]), measured('mixed', [], [0, 1]), measured('never', [], [])]);

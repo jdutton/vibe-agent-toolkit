@@ -123,6 +123,7 @@ import { blobReferencesFor } from './blob-references.js';
 import { blobSectionsFor, flattenHeadings } from './blob-sections.js';
 import { readKeyedContent } from './content-cache.js';
 import { errorLabel } from './error-label.js';
+import { parseFailedMessage } from './parse-failure.js';
 import type { ProjectionBase, ProjectionBuilder } from './projection.js';
 import type { BlobScopedRows } from './store.js';
 
@@ -1036,7 +1037,7 @@ async function readTarget(
  * arrives by `import()` from inside `parseKeyed`, so a module that cannot be
  * loaded — a half-extracted tarball, a quarantined or `chmod 000` file — lands in
  * this very catch, and unguarded was reported as
- * `The markdown parser threw on these bytes (EACCES)`, once per
+ * `The markdown parser threw on these bytes (code EACCES)`, once per
  * document, blaming every innocent file in the corpus while the exit code stayed
  * 0.
  *
@@ -1079,7 +1080,7 @@ async function parseTarget(
     return refused('blobsParseFailed', condition(
       target.contentKey,
       BLOB_PARSE_FAILED,
-      `The ${keyed.parserKind} parser threw on these bytes (${errorLabel(error)})`,
+      parseFailedMessage(keyed.parserKind, error),
     ));
   }
 }

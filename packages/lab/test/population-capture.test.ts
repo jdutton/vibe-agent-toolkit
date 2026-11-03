@@ -90,7 +90,7 @@ async function captureRow(
   const request: CaptureRequest = {
     instrument: probe.instrument,
     subject: probeSubject(probe.cwd, 'probe-subject', 'f'.repeat(64)),
-    commands: [{ name: SPEC.name, args, exit: exactExit(0), provenance: 'none', populates: false }],
+    commands: [{ name: SPEC.name, args, exit: exactExit(0), provenance: 'none', populates: false, writes: [] }],
     runs,
     cache: 'warm',
     // The warm arm's priming run is the probe's first invocation; it prints the

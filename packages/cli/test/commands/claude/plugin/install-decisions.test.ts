@@ -17,7 +17,7 @@ const {
 
 const runOf = (options: Record<string, unknown> = {}) => newInstallRun(options, fakeLogger() as never);
 const SKILL = { name: 'alpha', installPath: '/home/u/.claude/skills/alpha', sourcePath: null };
-const WARNING = { code: 'TREE_CLEANUP_INCOMPLETE', severity: 'warning', message: 'left behind', link: '/x' } as const;
+const WARNING = { code: 'TREE_CLEANUP_INCOMPLETE', severity: 'warning', message: 'left behind', link: '/x', fix: 'Remove it.' } as const;
 
 describe('an install run', () => {
   it('starts with nothing done, a dry run only when asked', () => {
@@ -41,10 +41,10 @@ describe('an install run', () => {
     expect(outcomeOf(run)?.symlink).toBe(true);
   });
 
-  it('a leftover is logged as a warning and joins the run\'s findings', () => {
+  it('a leftover joins the run\'s findings, printed with them once, not here', () => {
     const run = runOf();
     leftover(run, WARNING as never);
-    expect(run.logger.warn).toHaveBeenCalledWith('   left behind');
+    expect(run.logger.warn).not.toHaveBeenCalled();
     expect(run.issues).toEqual([WARNING]);
   });
 

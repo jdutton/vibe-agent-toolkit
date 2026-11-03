@@ -84,6 +84,8 @@ Output:
   - chunksCreated / chunksDeleted: chunks added, and removed from updated files
   Each file NOT in the index (unreadable, or failed to chunk or embed) is a
   RAG_DOCUMENT_INDEX_FAILED finding at its path; its content is not searchable.
+  A chunk budget clamped to the embedding model's limit is a
+  RAG_CHUNKING_CONFIG_ADJUSTED warning (exit unaffected). Findings also go to stderr.
 
 Exit Codes:
   0 - Every submitted file indexed (or skipped as unchanged)

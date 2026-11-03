@@ -10,7 +10,7 @@ import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
-import { readCloneSource } from '../../src/facets/verdict/clone.js';
+import { readCloneSource } from '../../src/harness/tree-clone.js';
 
 describe('readCloneSource', () => {
   it('descends only into directories that hold a skipped entry, never into one, nor into node_modules', () => {

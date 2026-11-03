@@ -730,5 +730,7 @@ describe('vat skills install — one transaction for the batch', () => {
       severity: 'warning',
       link: safePath.join(scratchTmp, left[0] ?? ''),
     }));
+    // Printed as the one finding line every verb uses, not as a bare message.
+    expect(outcome.stderr).toMatch(/^ {2}warning: The install is complete, but its staging directory .+ \[TREE_CLEANUP_INCOMPLETE\]\n {4}Fix: Remove what the message names/m);
   });
 });

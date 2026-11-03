@@ -33,7 +33,8 @@ import * as yaml from 'yaml';
 
 import type { DocumentFormat } from '../../report-schemas.js';
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
-import { endWithReport, NOTHING_FINISHED, publishedReport, refusalReport } from '../../utils/document-writer.js';
+import { endWithReport, findingsGoToStderr, NOTHING_FINISHED, refusalReport } from '../../utils/document-writer.js';
+import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { classifyInputFault, projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
 import {
@@ -41,15 +42,11 @@ import {
   loadResourcesWithConfig,
   publishedPopulation,
 } from '../../utils/resource-loader.js';
-import { warnRunIntegrity } from '../../utils/run-integrity.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
 import type { PhaseOutcome } from '../phase-utils.js';
 import { discoverSkillsFromConfig } from '../skills/skill-discovery.js';
 
 import type { ResourcesValidateData, ResourcesValidateReport } from './validate-schema.js';
-
-/** The verb, as registered. */
-const VERB = 'resources validate';
 
 /** `vat resources validate` offers no `--strict`: warnings never fail it. */
 const GATE = { strict: false } as const;
@@ -437,15 +434,25 @@ function inCollectionScope(
   });
 }
 
+/** Whether the human half goes on stderr — not under `--format text`, whose stdout already IS these lines. */
+function saysOnStderr(options: ValidateOptions): boolean {
+  return findingsGoToStderr('resources validate', options.format ?? 'yaml');
+}
+
+function reportOnStderr(findings: readonly Finding[], options: ValidateOptions): void {
+  if (!saysOnStderr(options)) return;
+  reportFindings(findings, { verbose: options.verbose === true, write: createLogger().error });
+}
+
 /**
- * Validate resources and hand back the report, printing it nowhere.
+ * Validate resources, say the findings on stderr (see `reportOnStderr`), and hand back the report.
  *
  * The phase entry point for `vat validate` and `vat verify`, and the command's
  * own. The report is the one BEFORE the writer's run-integrity pass: inside an
  * orchestrator, `runPhase` applies the same pass to this phase's report, by the
  * declaration this verb gives its own writer. A
  * refusal is the envelope's error branch, its message already on stderr, and a
- * site-specific run-integrity finding is warned here, where both lanes see it.
+ * site-specific run-integrity finding is reported here with every other finding.
  */
 export async function runResourcesValidatePhase(
   pathArg: string | undefined,
@@ -456,7 +463,7 @@ export async function runResourcesValidatePhase(
 
   try {
     const report = await runValidation(pathArg, options, logger, startTime);
-    warnRunIntegrity(report);
+    reportOnStderr(report.findings, options);
     return { report };
   } catch (error) {
     return { report: refusalReport(refusalCodeOf(error), error, GATE, NOTHING_FINISHED) };
@@ -468,10 +475,7 @@ export async function validateCommand(
   options: ValidateOptions
 ): Promise<void> {
   const { report } = await runResourcesValidatePhase(pathArg, options);
-  const published = publishedReport(VERB, report);
-  // The writer's own zero-examined refusal, warned in the lane that publishes it.
-  if (published !== report) warnRunIntegrity(published);
-  endWithReport('resources validate', published, options.format ?? 'yaml');
+  endWithReport('resources validate', report, options.format ?? 'yaml');
 }
 
 /**

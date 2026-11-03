@@ -152,7 +152,7 @@ It is also the only way a second facet can have defaults at all without importin
 the [facet contract](facets.md) forbids.
 
 The default is a default, not a definition. `MEASURABLE_COMMANDS` in the same file is the named
-registry — the three defaults plus `inventory`, `validate`, `verify`, `resources-population`,
+registry — the three defaults plus `inventory`, `validate`, `build`, `verify`, `resources-population`,
 `claude-context-all`, `claude-context`, `skills-validate` and `skills-list` — and
 `vat-lab <facet> run --command <name>` selects from
 it. Adding an entry to the registry changes what a caller *can* ask for and nothing about what a
@@ -187,9 +187,17 @@ one side printed and the other did not — a `resources-population` row from a b
 print `lane` against a current one — and the `[A → B]` arrow appears only when both sides named
 an arm and the two differ (the four clauses are tabled in [Facets](facets.md)).
 
-`validate` and `verify` take no `{subject}` argument: both **reject** a positional path and take
-their scope from the config at the working directory, which the harness has already set to the
-subject. `verify` reads the built `dist/` tree, so a subject measured with it must have been built.
+`validate`, `build` and `verify` take no `{subject}` argument: each **rejects** a positional path and
+takes its scope from the config at the working directory, which the harness has already set to the
+subject. `build` WRITES the subject's `dist/` and is committed to exit 0 only — a `vat build` that
+exits 1 stopped at an error finding and skipped its later phases. A spec names what it writes
+(`writes: ['dist']`, required on every spec), and an arm with any written directory never runs in
+the real subject: it runs in `<arm>/subject`, one copy per capture (APFS copy-on-write on macOS, a
+real `cp -R` on Linux, minus the regenerable caches), with each written directory deleted inside it
+before every repeat (warm priming included) so no repeat times an incremental build, and the copy
+removed when the arm ends. It refuses Windows, a git-worktree subject (git in the copy would write
+the real repository's worktree index), and a writing step whose arguments name the real subject.
+`verify` reads the built `dist/` tree, so a subject measured with it must have been built.
 `claude-context-all` is subject-less for the same reason — `--all` sweeps every path the projection
 realized and takes no positional.
 
@@ -255,14 +263,26 @@ its own, and a warm arm is primed by one unmeasured run before its first measure
 first measured invocation inherits the other's cache. Alternation keeps whatever cold start remains
 (the OS page cache, the build's first start) symmetric instead of hiding inside one arm's aggregate.
 
-**The estimator is `min`, with `p25` reported beside it — never a median, never a mean.** Every sample
-is the true cost plus a non-negative contamination, so the smallest is the closest thing to a clean
-observation. Across a handful of samples, one cold repeat is enough to move a median and not the min.
+**The estimator is the facet's own, `min` or `median`, with `p25` reported beside it — never a
+mean.** A time is the true cost plus a non-negative contamination, so the smallest is the closest
+thing to a clean observation, and one cold repeat is enough to move a median and not the min: every
+facet but `memory` takes the min. A peak RSS moves both ways with when a collection lands, so its min
+is the luckiest collection; `memory ab` takes the median, of each capture's median repeat.
 
 **Every pair's verdict is reported, and so is whether they agreed.** A single pair settles nothing —
 two pairs in a prior session actively contradicted each other. Disagreement prints as
 `⚠ PAIRS DISAGREE` and exits `ExitCode.ERROR` (unmeasurable); it is never averaged into a
 consensus no pair reported.
+
+**A capture with no usable measurement is LOST, and a lost capture voids the effect.** A failed row
+(named by its failure, or `memory`'s `ran out of heap`) and a capture that published no estimate for
+the command (`published no estimate`) are both lost: the arm prints `<reason> in N of M pairs` and
+the effect is `NONE`, never a statistic of the pairs that happened to succeed, which would understate
+whatever failed the others. Nor is there an effect unless at least one pair's comparison judged the
+command `changed` or `unchanged`, in every facet: when every pair refused, the line is
+`effect: NONE — no pair was comparable`; when the pairs only said something else (`unmeasurable`,
+`added`, `removed`, `below-resolution`), it is `effect: NONE — no pair judged it changed or
+unchanged (every pair said: …)`.
 
 **`--control` runs the same instrument as both arms**, which measures the machine rather than a
 difference between builds, and whatever effect it reports *is* the noise floor. Feed the largest of

@@ -461,6 +461,7 @@ function walkOptionsFor(corpus: Corpus, skill: CorpusSkill): WalkLinkGraphOption
     projectRoot: corpus.spec.root,
     skillRootPath: skill.absolutePath,
     excludeNavigationFiles: true,
+    ownOutputDir: undefined,
   };
   if (corpus.gitTracker !== undefined) {
     options.gitTracker = corpus.gitTracker;

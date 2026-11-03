@@ -68,7 +68,7 @@ function canonicalFromAncestor(target: string, within: string): { canonical: str
   for (;;) {
     if (entryExists(candidate)) {
       return {
-        canonical: safePath.join(toForwardSlash(normalizePath(candidate, within)), ...missing),
+        canonical: safePath.join(toForwardSlash(normalizePath(candidate, { within: within })), ...missing),
         exists: missing.length === 0,
       };
     }

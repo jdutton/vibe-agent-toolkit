@@ -56,8 +56,9 @@ const CEILINGS: Readonly<Record<string, number>> = {
   // import-specifier classifier that is not a containment check at all.
   'local/no-dotdot-containment': 3,
   // +1 each: `clean-build.ts` is the build script of `utils` itself and
-  // cannot import the wrappers from a `dist/` it has not produced.
-  'local/no-fs-mkdirSync': 5,
+  // cannot import the wrappers from a `dist/` it has not produced; the lab's io
+  // `counter.cts` captures the raw function to wrap it.
+  'local/no-fs-mkdirSync': 6,
   // One in `claude-context-rules.ts` (`globSegments`, its only split) splits
   // `paths:` globs, whose separator is the gitignore dialect's `/` on every
   // host — and a `\` there is an ESCAPE, so normalising it would change the

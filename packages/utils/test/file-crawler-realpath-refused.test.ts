@@ -37,7 +37,9 @@ const REMEDY = 'Fix the permissions on that directory, or add it to the plugin `
 /** Make `realpathSync.native` refuse ONE directory with `code`; every other path passes through. */
 function refuseRealpathOf(directory: string, code: string, before: () => void = () => {}): () => void {
   const refused = toForwardSlash(directory);
+  // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
   const original = fs.realpathSync.native;
+  // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
   const spy = vi.spyOn(fs.realpathSync, 'native').mockImplementation(((target: fs.PathLike, options?: unknown) => {
     if (toForwardSlash(String(target)) === refused) {
       before();

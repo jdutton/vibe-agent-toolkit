@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 
 import { countBySeverity } from '@vibe-agent-toolkit/schema';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { AuditCommandOptions } from '../../src/commands/audit.js';
@@ -58,7 +59,7 @@ async function runAudit(targetPath: string, options: AuditCommandOptions = {}) {
 function writePluginManifest(parentDir: string, dirName: string, manifest: object): string {
   const pluginDir = safePath.join(parentDir, dirName);
   const claudePluginDir = safePath.join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
-  fs.mkdirSync(claudePluginDir, { recursive: true });
+  mkdirSyncReal(claudePluginDir, { recursive: true });
   fs.writeFileSync(
     safePath.join(claudePluginDir, PLUGIN_JSON_FILENAME),
     JSON.stringify(manifest)
@@ -91,7 +92,7 @@ function writeInventoryFindingsPlugin(parentDir: string, dirName: string): strin
     validPluginManifest({ skills: ['skills/declared-but-absent'] }),
   );
   const onDisk = safePath.join(pluginDir, 'skills', 'present-but-undeclared');
-  fs.mkdirSync(onDisk, { recursive: true });
+  mkdirSyncReal(onDisk, { recursive: true });
   fs.writeFileSync(
     safePath.join(onDisk, 'SKILL.md'),
     '---\nname: present-but-undeclared\ndescription: A bundled test skill, long enough to clear any minimum-description thresholds the validator may enforce.\n---\n\n# present-but-undeclared\n\nBody.\n',
@@ -103,7 +104,7 @@ function writeInventoryFindingsPlugin(parentDir: string, dirName: string): strin
 function writeMarketplace(parentDir: string, dirName: string): string {
   const marketplaceDir = safePath.join(parentDir, dirName);
   const claudePluginDir = safePath.join(marketplaceDir, CLAUDE_PLUGIN_DIRNAME);
-  fs.mkdirSync(claudePluginDir, { recursive: true });
+  mkdirSyncReal(claudePluginDir, { recursive: true });
   fs.writeFileSync(
     safePath.join(claudePluginDir, MARKETPLACE_JSON_FILENAME),
     JSON.stringify({
@@ -187,8 +188,8 @@ describe('audit command (integration)', () => {
       });
       const skillAlpha = safePath.join(pluginDir, 'skills', 'alpha');
       const skillBeta = safePath.join(pluginDir, 'skills', 'beta');
-      fs.mkdirSync(skillAlpha, { recursive: true });
-      fs.mkdirSync(skillBeta, { recursive: true });
+      mkdirSyncReal(skillAlpha, { recursive: true });
+      mkdirSyncReal(skillBeta, { recursive: true });
       const skillBody = (name: string) =>
         `---\nname: ${name}\ndescription: A bundled test skill, long enough to clear any minimum-description thresholds the validator may enforce.\n---\n\n# ${name}\n\nBody.\n`;
       fs.writeFileSync(safePath.join(skillAlpha, 'SKILL.md'), skillBody('alpha'));
@@ -319,7 +320,7 @@ describe('audit command (integration)', () => {
   describe('Agent Skill validation', () => {
     it('should validate a single SKILL.md file', async () => {
       const skillFile = safePath.join(tempDir, 'test-skill', 'SKILL.md');
-      fs.mkdirSync(dirname(skillFile), { recursive: true });
+      mkdirSyncReal(dirname(skillFile), { recursive: true });
       fs.writeFileSync(
         skillFile,
         `---
@@ -341,7 +342,7 @@ This is a test skill.
 
     it('should validate VAT agent SKILL.md', async () => {
       const agentDir = safePath.join(tempDir, 'vat-agent');
-      fs.mkdirSync(agentDir, { recursive: true });
+      mkdirSyncReal(agentDir, { recursive: true });
 
       // Create agent.yaml
       fs.writeFileSync(
@@ -402,7 +403,7 @@ This is a test agent.
       // Create plugin
       const pluginDir = safePath.join(projectDir, 'plugins', 'my-plugin');
       const pluginClaudeDir = safePath.join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
-      fs.mkdirSync(pluginClaudeDir, { recursive: true });
+      mkdirSyncReal(pluginClaudeDir, { recursive: true });
       fs.writeFileSync(
         safePath.join(pluginClaudeDir, PLUGIN_JSON_FILENAME),
         JSON.stringify({
@@ -415,7 +416,7 @@ This is a test agent.
       // Create marketplace
       const marketplaceDir = safePath.join(projectDir, 'marketplaces', MY_MARKETPLACE_NAME);
       const marketplaceClaudeDir = safePath.join(marketplaceDir, CLAUDE_PLUGIN_DIRNAME);
-      fs.mkdirSync(marketplaceClaudeDir, { recursive: true });
+      mkdirSyncReal(marketplaceClaudeDir, { recursive: true });
       fs.writeFileSync(
         safePath.join(marketplaceClaudeDir, MARKETPLACE_JSON_FILENAME),
         JSON.stringify({
@@ -427,7 +428,7 @@ This is a test agent.
 
       // Create registry
       const registriesDir = safePath.join(projectDir, 'registries');
-      fs.mkdirSync(registriesDir, { recursive: true });
+      mkdirSyncReal(registriesDir, { recursive: true });
       fs.writeFileSync(
         safePath.join(registriesDir, INSTALLED_PLUGINS_FILENAME),
         JSON.stringify({
@@ -438,7 +439,7 @@ This is a test agent.
 
       // Create SKILL.md
       const skillDir = safePath.join(projectDir, 'skills', 'my-skill');
-      fs.mkdirSync(skillDir, { recursive: true });
+      mkdirSyncReal(skillDir, { recursive: true });
       fs.writeFileSync(
         safePath.join(skillDir, 'SKILL.md'),
         `---
@@ -466,7 +467,7 @@ description: My skill
       const mockUserPluginsDir = safePath.join(tempDir, 'mock-user-plugins');
       const marketplaceDir = safePath.join(mockUserPluginsDir, 'marketplaces', 'test-marketplace', 'test-plugin');
       const skillsDir = safePath.join(marketplaceDir, 'skills', 'test-skill');
-      fs.mkdirSync(skillsDir, { recursive: true });
+      mkdirSyncReal(skillsDir, { recursive: true });
 
       // Create a SKILL.md with an error (name has spaces)
       fs.writeFileSync(

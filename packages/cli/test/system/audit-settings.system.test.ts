@@ -11,7 +11,8 @@
 
 import * as fs from 'node:fs';
 
-import { isAbsoluteAnyPlatform, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { isAbsoluteAnyPlatform, normalizePath, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
 
@@ -53,11 +54,11 @@ describe('vat audit settings — one stated root (system test)', () => {
   beforeAll(() => {
     tempDir = createTestTempDir('vat-audit-settings-root-');
     // Real paths on both sides: the CLI's cwd is the resolved one (macOS /var → /private/var).
-    const base = fs.realpathSync(tempDir);
+    const base = normalizePath(tempDir, { within: tempDir });
     projectDir = safePath.join(base, 'project');
     fakeHome = safePath.join(base, 'home');
-    fs.mkdirSync(safePath.join(projectDir, '.claude'), { recursive: true });
-    fs.mkdirSync(safePath.join(fakeHome, '.claude'), { recursive: true });
+    mkdirSyncReal(safePath.join(projectDir, '.claude'), { recursive: true });
+    mkdirSyncReal(safePath.join(fakeHome, '.claude'), { recursive: true });
     // A user rule the project duplicates: one SETTINGS_RULE_SHADOWED finding, anchored at a file OUTSIDE the root.
     writeTestFile(safePath.join(fakeHome, '.claude', 'settings.json'), JSON.stringify({ permissions: { allow: ['WebSearch(*)'] } }));
     writeTestFile(safePath.join(projectDir, '.claude', 'settings.json'), JSON.stringify({ permissions: { allow: ['WebSearch'], deny: ['Bash'] } }));
@@ -98,13 +99,13 @@ describe('vat audit settings — one stated root (system test)', () => {
 
   // The default mode and --show-paths name the same user file: the one CLAUDE_CONFIG_DIR says.
   it('reads the user layer from CLAUDE_CONFIG_DIR, the file --show-paths names', async () => {
-    const base = fs.realpathSync(tempDir);
+    const base = normalizePath(tempDir, { within: tempDir });
     const configDir = safePath.join(base, 'relocated-config');
     const bareHome = safePath.join(base, 'bare-home');
     const bareProject = safePath.join(base, 'bare-project');
-    fs.mkdirSync(bareHome, { recursive: true });
-    fs.mkdirSync(bareProject, { recursive: true });
-    fs.mkdirSync(configDir, { recursive: true });
+    mkdirSyncReal(bareHome, { recursive: true });
+    mkdirSyncReal(bareProject, { recursive: true });
+    mkdirSyncReal(configDir, { recursive: true });
     writeTestFile(safePath.join(configDir, 'settings.json'), JSON.stringify({ permissions: { allow: ['WebSearch'] } }));
 
     const effective = await runSettings(bareProject, bareHome, [], configDir);

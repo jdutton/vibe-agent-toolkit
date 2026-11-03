@@ -8,8 +8,10 @@
  * `workingFingerprint` arrived after both suites were written).
  */
 
+import { availableParallelism } from 'node:os';
+
 import type { Coordinate } from '../src/envelope/coordinate.js';
-import type { ReportEnvelope } from '../src/envelope/envelope.js';
+import type { ReportEnvelope, ReportHost } from '../src/envelope/envelope.js';
 import type { LoadReadings } from '../src/harness/types.js';
 
 /**
@@ -42,6 +44,17 @@ export const COORDINATE: Coordinate = {
   instrument: { version: '0.1.42', commit: '1'.repeat(40), dirty: false, closure: null },
 };
 
+/** This machine, with no inherited NODE_OPTIONS. */
+export const HOST: ReportHost = {
+  platform: process.platform,
+  arch: process.arch,
+  node: process.version,
+  nodeOptions: '',
+  heapSizeLimit: 4_345_298_944,
+  totalMem: 17_179_869_184,
+  availableParallelism: availableParallelism(),
+};
+
 /**
  * Build a well-formed report, overriding only what a test varies.
  *
@@ -56,6 +69,7 @@ export function makeReport(over: Partial<ReportEnvelope<unknown>> = {}): ReportE
     removedEnv: [],
     npmNetworkEnv: [],
     exits: [],
+    host: HOST,
     body: { commands: [] },
     ...over,
   };

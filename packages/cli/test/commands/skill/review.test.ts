@@ -12,6 +12,7 @@
 import * as fs from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
@@ -41,7 +42,7 @@ describe('resolveSkillPath', () => {
 
   it('accepts a directory containing SKILL.md and returns the SKILL.md path', () => {
     const skillDir = safePath.join(tempDir, 'my-skill');
-    fs.mkdirSync(skillDir);
+    mkdirSyncReal(skillDir);
     const skillMd = safePath.join(skillDir, 'SKILL.md');
     fs.writeFileSync(skillMd, '# skill');
 
@@ -56,7 +57,7 @@ describe('resolveSkillPath', () => {
 
   it('throws when directory has no SKILL.md', () => {
     const emptyDir = safePath.join(tempDir, 'empty-dir');
-    fs.mkdirSync(emptyDir);
+    mkdirSyncReal(emptyDir);
 
     expect(() => resolveSkillPath(emptyDir)).toThrow(/No SKILL.md found in directory/);
   });

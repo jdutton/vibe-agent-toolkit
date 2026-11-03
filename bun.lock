@@ -185,6 +185,9 @@
         "yaml": "^2.9.0",
         "zod": "^3.25.0",
       },
+      "devDependencies": {
+        "@vibe-agent-toolkit/resources": "workspace:*",
+      },
     },
     "packages/projection-sqlite": {
       "name": "@vibe-agent-toolkit/projection-sqlite",

@@ -11,6 +11,13 @@ import { safePath } from '../path-core.js';
 /** Every staged, parked or discarded entry is named `.<base>.vat-staged-<random>[suffix]` beside the destination. */
 const STAGED_INFIX = '.vat-staged-';
 
+/**
+ * The same names as globs, for a crawl: the residue itself (a staged file, or a staged tree's
+ * directory) and everything under a staged tree. A staged tree is a transient copy of a build's
+ * output, so no lane wants it — it sits in `NEVER_CRAWL_GLOBS`.
+ */
+export const TREE_CHANGE_RESIDUE_GLOBS = [`**/.*${STAGED_INFIX}*`, `**/.*${STAGED_INFIX}*/**`] as const;
+
 /** What a previous entry is renamed to while its replacement goes in: `<staged>.previous`. */
 export const PARKED_SUFFIX = '.previous';
 

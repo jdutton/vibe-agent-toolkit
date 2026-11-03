@@ -21,7 +21,9 @@ import { buildReport, withDurationMs, type Finding } from '@vibe-agent-toolkit/s
 import { findConfigFile, issueLocation, mapConcurrentFailingInOrder, safePath } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
-import { endWithRefusal, endWithReport, NOTHING_FINISHED, type FinishedWork } from '../../utils/document-writer.js';
+import { endWithRefusal, endWithReport, findingsGoToStderr, NOTHING_FINISHED, type FinishedWork } from '../../utils/document-writer.js';
+import { reportFindings } from '../../utils/issue-rendering.js';
+import { createLogger } from '../../utils/logger.js';
 import { relativeLocationOrUndefined } from '../../utils/relativize-paths.js';
 
 import type { OkfValidateData, OkfValidateReport } from './validate-schema.js';
@@ -230,6 +232,8 @@ export async function okfValidateReport(
   return summarizeOkfBundles(checked, projectRoot);
 }
 
+const VERB = 'okf validate';
+
 /** Action handler for `vat okf validate [bundle]`. */
 export async function okfValidateCommand(
   bundleArg: string | undefined,
@@ -248,11 +252,12 @@ export async function okfValidateCommand(
       finished = refusal.finished;
       throw new CommandRefusalError('INPUT_UNREADABLE', refusal.message);
     }
+    if (findingsGoToStderr(VERB, format)) reportFindings(report.findings, { verbose: true, write: createLogger().warn });
     // The code derives from the report the writer PUBLISHED: an adopter who
     // promotes or lowers a bundle's severity gates on exactly what a reader sees.
-    endWithReport('okf validate', report, format);
+    endWithReport(VERB, report, format);
   } catch (error) {
     // `vat okf validate` offers no `--strict`: warnings never fail it.
-    endWithRefusal('okf validate', refusalCodeOf(error), error, format, { strict: false }, finished);
+    endWithRefusal(VERB, refusalCodeOf(error), error, format, { strict: false }, finished);
   }
 }

@@ -39,6 +39,7 @@ import {
 } from '../src/harness/ab.js';
 import { type ArmEnvironment, EMPTY_ARM_ENVIRONMENT } from '../src/harness/arm-env.js';
 import { MEASURABLE_COMMANDS } from '../src/harness/commands.js';
+import type { EstimatorKind } from '../src/harness/estimator.js';
 import { buildReportEnvelope } from '../src/harness/report.js';
 import type { CaptureRequest, ResolvedInstrument, ResolvedSubject } from '../src/harness/types.js';
 
@@ -56,7 +57,7 @@ const DISAGREE = 'PAIRS DISAGREE';
 
 /** The fake facet's body: one value per command, and nothing else. */
 interface FakeBody {
-  readonly commands: readonly { readonly name: string; readonly failed: boolean; readonly value: number }[];
+  readonly commands: readonly { readonly name: string; readonly failed: boolean; readonly value: number; readonly lost: string | null }[];
 }
 
 /** Never opened — the fake facet's capture spawns nothing. */
@@ -112,6 +113,12 @@ interface FixtureOptions {
   readonly envA?: ArmEnvironment;
   /** Arm B's environment; absent means it sets nothing. */
   readonly envB?: ArmEnvironment;
+  /** The facet's estimator; absent means `min`. */
+  readonly estimator?: EstimatorKind;
+  /** Why arm B's capture is lost (a run out of heap), per pair; absent means none is. */
+  readonly bLost?: readonly (string | null)[];
+  /** Per pair, whether arm B's capture published no row for the command at all; absent means it always did. */
+  readonly bAbsent?: readonly boolean[];
 }
 
 /** A run's outcome plus the capture order it produced. */
@@ -163,10 +170,12 @@ async function runFixture(options: FixtureOptions, label: string): Promise<Fixtu
     const name = armIndex === 0 ? 'A' : 'B';
     const values = armIndex === 0 ? options.aValues : options.bValues;
     const value = values[Math.floor(order.length / 2)] ?? 0;
+    const lost = armIndex === 1 ? (options.bLost?.[Math.floor(order.length / 2)] ?? null) : null;
+    const absent = armIndex === 1 && options.bAbsent?.[Math.floor(order.length / 2)] === true;
     order.push(name);
     return Promise.resolve(
       buildReportEnvelope('fake', request, {
-        commands: [{ name: COMMAND, failed: false, value }],
+        commands: absent ? [] : [{ name: COMMAND, failed: lost !== null, value, lost }],
       }, []),
     );
   };
@@ -188,8 +197,9 @@ async function runFixture(options: FixtureOptions, label: string): Promise<Fixtu
     now: () => new Date().toISOString(),
     capture,
     compare: () => comparisonFor(options.script[compared++]),
+    estimator: options.estimator ?? 'min',
     estimate: (report): readonly FacetEstimate[] =>
-      report.body.commands.map((row) => ({ name: row.name, value: row.value, unit: 'ms' })),
+      report.body.commands.map((row) => ({ name: row.name, value: row.value, unit: 'ms', lost: row.lost })),
   };
 
   return { result: await runAb(spec), order, envs };
@@ -332,6 +342,25 @@ describe('runAb — the estimator', () => {
     expect(row.effect).toBe(-10);
   });
 
+  it('takes the median instead when the facet declares it, and says so', async () => {
+    const { result } = await runFixture(
+      {
+        pairs: 3,
+        aValues: [200, 100, 500],
+        bValues: [90, 90, 90],
+        script: ['changed', 'changed', 'changed'],
+        estimator: 'median',
+      },
+      'estimator-median',
+    );
+
+    const row = only(result);
+    expect(row.a?.value).toBe(200);
+    // Median-to-median: 90 - 200, not 90 - 100.
+    expect(row.effect).toBe(-110);
+    expect(renderAb(result)).toContain('Estimator: MEDIAN across pairs');
+  });
+
   it('keeps every per-pair value, so a reader can check the two statistics', async () => {
     const { result } = await runFixture(
       { pairs: 2, aValues: [30, 10], bValues: [10, 10], script: ['unchanged', 'unchanged'] },
@@ -339,6 +368,90 @@ describe('runAb — the estimator', () => {
     );
 
     expect(only(result).a?.samples).toEqual([30, 10]);
+  });
+});
+
+describe('runAb — an arm whose run was lost', () => {
+  it('reports that the arm ran out of heap, never a statistic over its surviving pairs', async () => {
+    const { result } = await runFixture(
+      {
+        pairs: 3,
+        aValues: [100, 100, 100],
+        bValues: [200, 0, 210],
+        bLost: [null, 'ran out of heap', null],
+        script: ['changed', 'changed', 'changed'],
+        estimator: 'median',
+      },
+      'lost',
+    );
+
+    const row = only(result);
+    expect(row.lost).toEqual({ a: null, b: 'ran out of heap in 1 of 3 pairs' });
+    // The survivors' median would be a number, and an understated one: no headline effect at all.
+    expect(row.effect).toBeNull();
+    const text = renderAb(result);
+    expect(text).toContain('B: ran out of heap in 1 of 3 pairs');
+    expect(text).toContain('effect: NONE — arm B ran out of heap in 1 of 3 pairs');
+  });
+
+  it('calls a pair whose arm published no estimate at all LOST, naming why, and reports no effect', async () => {
+    const { result } = await runFixture(
+      {
+        pairs: 3,
+        aValues: [100, 100, 100],
+        bValues: [200, 0, 210],
+        bAbsent: [false, true, false],
+        script: ['changed', 'changed', 'changed'],
+      },
+      'absent',
+    );
+
+    const row = only(result);
+    expect(row.lost).toEqual({ a: null, b: 'published no estimate in 1 of 3 pairs' });
+    expect(row.effect).toBeNull();
+    expect(renderAb(result)).toContain('effect: NONE — arm B published no estimate in 1 of 3 pairs');
+  });
+});
+
+describe('runAb — no pair comparable', () => {
+  it('prints no effect when every pair was refused, though both arms published numbers', async () => {
+    const { result } = await runFixture(
+      {
+        pairs: 2,
+        aValues: [10, 10],
+        bValues: [50, 50],
+        script: [{ refusal: 'REFUSED: two axes moved' }, { refusal: 'REFUSED: two axes moved' }],
+      },
+      'none-comparable',
+    );
+
+    expect(only(result).effect).toBeNull();
+    const text = renderAb(result);
+    expect(text).toContain('effect: NONE — no pair was comparable');
+    expect(text).not.toContain('effect (B - A)');
+  });
+
+  // Every facet: a pair counts toward an effect only when its comparison judged the command changed
+  // or unchanged. `unmeasurable`, `added`, `removed`, `below-resolution`… judged nothing.
+  it.each(['unmeasurable', 'added', 'below-resolution'])('prints no effect when every pair said %s, naming why', async (kind) => {
+    const { result } = await runFixture(
+      { pairs: 2, aValues: [10, 10], bValues: [50, 50], script: [kind, kind] },
+      `none-judged-${kind}`,
+    );
+
+    expect(only(result).effect).toBeNull();
+    const text = renderAb(result);
+    expect(text).toContain(`effect: NONE — no pair judged it changed or unchanged (every pair said: ${kind})`);
+    expect(text).not.toContain('effect (B - A)');
+  });
+
+  it('takes the effect when one pair judged it, though another pair did not', async () => {
+    const { result } = await runFixture(
+      { pairs: 2, aValues: [10, 10], bValues: [50, 50], script: ['unmeasurable', 'unchanged'] },
+      'one-judged',
+    );
+
+    expect(only(result).effect).toBe(40);
   });
 });
 

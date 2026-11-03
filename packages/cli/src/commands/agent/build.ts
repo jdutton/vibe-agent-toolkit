@@ -8,7 +8,7 @@ import { issueLocation, relativeEscapesRoot, safePath } from '@vibe-agent-toolki
 
 import { resolveAgentPath } from '../../utils/agent-discovery.js';
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
-import { endWithRefusal, endWithReport, leftoverIssue, NOTHING_FINISHED, type FinishedWork } from '../../utils/document-writer.js';
+import { endWithRefusal, endWithReport, leftoverIssuesOfWarnings, NOTHING_FINISHED, type FinishedWork } from '../../utils/document-writer.js';
 import { createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
 import { packagingFailedIssue } from '../skills/build.js';
@@ -74,7 +74,7 @@ export async function buildCommand(
     report = buildReport({
       examined: AGENTS_BUILT,
       // A previous build the swap parked and the OS would not let VAT remove: the build is done, the leftover named.
-      findings: toFindings(result.residue.map(({ message, path }) => leftoverIssue(message, path))),
+      findings: toFindings(leftoverIssuesOfWarnings(result.residue)),
       data: { agent: result.agent.name, target, output: result.outputPath, files: result.files },
       gate: GATE,
       durationMs,

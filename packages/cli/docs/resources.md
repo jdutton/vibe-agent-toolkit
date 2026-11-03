@@ -126,16 +126,19 @@ for the loud-cwd fallback policy and the projectRoot discovery ladder.
 **Options:**
 - `[path]` - Base directory to crawl (defaults to current directory)
 - `--debug` - Enable debug logging
-- `-v, --verbose` - Show all scanned resources, including those without issues:
-  adds `data.files`, one `{path, status, summary}` row per resource validated.
-  Every envelope field is identical in both modes.
+- `-v, --verbose` - Print warning and info findings on stderr too (errors are
+  always printed there), and add `data.files`, one `{path, status, summary}` row
+  per resource validated. Every other envelope field is identical in both modes.
 - `--collection <id>` - Scope the whole report — findings, `examined` and so the
   exit code — to one collection's files. A finding at a path that never became a
   resource (a file the collection matched and could not read) stays in it. A name
   `resources.collections` does not declare is refused (`USAGE_INVALID`, exit 2)
 - `--format <format>` - `yaml` (default), `json` (the same document), or `text`
-  (one `location:line: severity: message [code]` line per finding, then a status
-  line, on stdout). Any other value is a usage error (exit 2) naming the three
+  (one `location:line: severity: message [code]` line per finding, every severity,
+  then a status line, on stdout). Under `yaml` and `json` the finding lines go to
+  stderr instead — the errors only, with warnings and info collapsed into one
+  count line, unless `-v` prints those too.
+  Any other value is a usage error (exit 2) naming the three
   accepted values; so is a `--validation-mode` other than `strict` or `permissive`
 - `--no-check-frontmatter-links` - Skip frontmatter URI-reference link validation across all collections (default: enabled)
 
@@ -145,7 +148,8 @@ for the loud-cwd fallback policy and the projectRoot discovery ladder.
   resource at all (`examined: 0`), which carries one non-overridable
   `RESOURCE_CHECK_BROKEN` finding rather than passing: a declared `--collection` that
   matched nothing or a path with no markdown is not a verdict about anything.
-  The reason and the remedy are also printed on stderr as a warning
+  It is also printed on stderr as its finding line, `error: Nothing was examined: … [RESOURCE_CHECK_BROKEN]`
+  (under `--format text` that line is in the stdout document instead)
 - `2` - The run could not finish (`status: error`, `error.code` says which):
   `[path]` or `--frontmatter-schema` names nothing (`USAGE_INVALID`), an input
   the OS will not read (`INPUT_UNREADABLE`), an unusable config (`CONFIG_INVALID`)
@@ -268,6 +272,26 @@ behind RFC-3986-compliant leading-`/` resolution.
 ```bash
 vat resources query 'SELECT path FROM resource_realizations LIMIT 5' --format json | jq '.data.rows[].path'
 ```
+
+### vat resources check [path]
+
+**Purpose:** Run VAT's built-in checks and every SQL assertion declared under
+`resources.checks` against this tree's resource projection.
+
+**Options:**
+- `[path]` - Project root to check (defaults to the current directory)
+- `--check <name>` - Run only this check, by its built-in name or its key in `resources.checks`
+- `-v, --verbose` - Print warning and info findings on stderr too; errors are always printed there
+- `--budget <seconds>` - Kill the run if it goes this long without completing a unit of work
+  (default 300; `0` removes the bound)
+- `--format <format>` - `yaml` (default) or `json`
+- `--debug` - Enable debug logging
+
+**Output:** the shared report envelope on stdout (schema: `packages/cli/schemas/resources-check.json`);
+each finding also as a `location:line: severity: message [code]` line on stderr.
+
+**Exit Codes:** `0` no error-severity check violated, `1` one was (or nothing was checked:
+`RESOURCE_CHECK_BROKEN`), `2` the run could not do its job.
 
 ## Configuration
 

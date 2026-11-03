@@ -6,12 +6,12 @@
  * chain, so it can never become the run's classification.
  */
 
-import { disposeTempDir, normalizedTmpdir, suppressedFaultsOf, TREE_ROLLBACK_INCOMPLETE_CODE, VatError, withTempDir } from '@vibe-agent-toolkit/utils';
+import { disposeTempDir, normalizedTmpdir, recordSuppressedFault, suppressedFaultsOf, TREE_ROLLBACK_INCOMPLETE_CODE, VatError, withTempDir } from '@vibe-agent-toolkit/utils';
 import { createTempDir, installFaultFs, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { refusalCodeOf } from '../../src/utils/command-refusal.js';
-import { NOTHING_FINISHED, refusalReport } from '../../src/utils/document-writer.js';
+import { findingsGoToStderr, NOTHING_FINISHED, refusalReport } from '../../src/utils/document-writer.js';
 
 // ⛔ These tests fault and run a temp-dir disposal: the temp directory is a scratch tree first, so
 // nothing they (or a red-proof mutation of the code under test) remove can be the user's.
@@ -80,5 +80,28 @@ describe('refusalReport — a leftover beside the failure', () => {
     vi.spyOn(process.stderr, 'write').mockReturnValue(true);
     const report = refusalReport('USAGE_INVALID', new VatError('AGENT_MANIFEST_NOT_FOUND', 'x'), { strict: false }, NOTHING_FINISHED);
     expect(report.findings).toEqual([]);
+  });
+});
+
+/** A refusal with one leftover recorded beside it; what stderr received. */
+function refuseWithLeftover(): string {
+  const written: string[] = [];
+  vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => { written.push(String(chunk)); return true; });
+  const error = new VatError('AGENT_MANIFEST_NOT_FOUND', 'no manifest');
+  recordSuppressedFault(error, new Error('could not remove the staged tree'));
+  refusalReport('USAGE_INVALID', error, { strict: false }, NOTHING_FINISHED);
+  return written.join('');
+}
+
+describe('refusalReport — where the leftover is said', () => {
+  it('says only its message: the leftover is said by the writer that publishes the document', () => {
+    expect(refuseWithLeftover()).toBe('no manifest\n');
+  });
+
+  it('decides stdout lists them only for the generic text rendering', () => {
+    expect(findingsGoToStderr('resources validate', 'text')).toBe(false);
+    expect(findingsGoToStderr('resources validate', 'yaml')).toBe(true);
+    // `skill review`'s text rendering is empty: its findings stay on stderr.
+    expect(findingsGoToStderr('skill review', 'text')).toBe(true);
   });
 });

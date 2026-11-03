@@ -50,6 +50,7 @@ function nodeStep(name: string, script: string): SequenceStep {
     exit: exactExit(0),
     provenance: 'none',
     populates: false,
+    writes: [],
   };
 }
 
@@ -197,6 +198,7 @@ describe('prepareClone', () => {
       exit: exactExit(0),
       provenance: 'none',
       populates: false,
+      writes: [],
     };
 
     const prepared = await prepareClone(

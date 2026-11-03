@@ -73,6 +73,7 @@ describe('armDirectoryEnvironment', () => {
         CLAUDE_CONFIG_DIR: dirs.home,
         GIT_CONFIG_NOSYSTEM: '1',
         GIT_ATTR_NOSYSTEM: '1',
+        GIT_CEILING_DIRECTORIES: safePath.join(dirs.subject, '..'),
         npm_config_cache: dirs.npmCache,
         npm_config_prefer_offline: 'true',
         npm_config_update_notifier: 'false',

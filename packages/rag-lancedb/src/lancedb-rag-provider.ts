@@ -24,6 +24,7 @@ import {
   DefaultRAGMetadataSchema,
   enrichChunks,
   generateContentHash,
+  IndexBatchRefusedError,
   OnnxEmbeddingProvider,
   RAGQuerySchema,
 } from '@vibe-agent-toolkit/rag';
@@ -226,8 +227,11 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
   private table: Table | null = null;
   private readonly tokenCounter = new ApproximateTokenCounter();
 
-  /** Resolved once from the embedding provider's real limit; warnings logged once. */
+  /** Resolved once from the embedding provider's real limit. */
   private resolvedChunkingConfig: ChunkingConfig | null = null;
+
+  /** What resolving it warned about — returned in each batch's `IndexResult.warnings`, never printed. */
+  private chunkingWarnings: readonly string[] = [];
 
   /** Opened lazily and reused: the documents table is written once per resource. */
   private documentsTable: Table | null = null;
@@ -247,8 +251,8 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    * The chunking budget for this provider's embedder.
    *
    * Derived from `embeddingProvider.maxInputTokens` rather than assumed, and
-   * memoized so its warnings are printed once per provider instead of once per
-   * indexed resource.
+   * memoized. Its warnings are kept for the batch result, never printed: the
+   * caller reports them. (Only `close()` writes to the console, having no result.)
    *
    * @returns Resolved chunking configuration
    */
@@ -261,10 +265,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
         paddingFactor: this.config.paddingFactor,
       });
 
-      for (const warning of warnings) {
-        console.warn(`[vat-rag] ${warning}`);
-      }
-
+      this.chunkingWarnings = warnings;
       this.resolvedChunkingConfig = config;
     }
 
@@ -560,7 +561,8 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    * @throws {VatError} `RAG_DATABASE_UNREADABLE` when the chunk table cannot be
    *   read or is not one this build writes — files the OS refuses, a foreign
    *   schema or vector size, or damage, the message says which — the store's
-   *   failure, so the whole batch, for the same reason
+   *   failure, so the whole batch, for the same reason; mid-batch, as an
+   *   `IndexBatchRefusedError` carrying what the batch recorded before it
    */
   async indexResources(
     resources: ResourceMetadata[],
@@ -636,17 +638,15 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
         // not the guessed blocklist of Node loader codes that was deleted.
         if (isParserUnavailable(error)) throw error;
         // A damaged STORE, not a damaged resource: every later resource would fail
-        // the same read, so the batch is refused once, as stats and query refuse it.
-        if (isVatError(error, RAG_DATABASE_UNREADABLE_CODE)) throw error;
+        // the same read, so the batch is refused once, carrying what it recorded so far.
+        if (isVatError(error, RAG_DATABASE_UNREADABLE_CODE)) {
+          throw new IndexBatchRefusedError(error, this.finishBatch(result, startTime));
+        }
 
-        const message = describeError(error);
-        // Also surfaced on stderr: a caller that ignores `result.errors` would
-        // otherwise meet this failure much later as an unexplained
-        // "No data indexed yet" from query().
-        console.warn(`[vat-rag] Failed to index resource '${resource.id}': ${message}`);
+        // Reported in `result.errors` only: rendering it is the caller's job (`vat rag index` does).
         result.errors?.push({
           resourceId: resource.id,
-          error: message,
+          error: describeError(error),
         });
       }
 
@@ -663,7 +663,13 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       );
     });
 
+    return this.finishBatch(result, startTime);
+  }
+
+  /** Stamp a batch's duration and its chunking warnings, on return and on refusal alike. */
+  private finishBatch(result: IndexResult, startTime: number): IndexResult {
     result.durationMs = Date.now() - startTime;
+    if (this.chunkingWarnings.length > 0) result.warnings = [...this.chunkingWarnings];
     return result;
   }
 

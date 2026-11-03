@@ -513,6 +513,15 @@ describe('runArdEmit — a bare override block that loses is NAMED, not dropped'
     expect(stderr).toContain(`ard.entries."skill:${PUBLISHED_SKILL}"`);
     expect(exitCalls).toEqual([[0]]);
   });
+
+  it('says so on stderr under --format json too, as the report carries it', async () => {
+    const root = projectWithSkill(workDir, 'shadowed-stderr-json', CONFIG_YAML_ARD_SHADOWED_KEYS);
+    const { stdout, stderr } = await captureEmit(root, { format: 'json' });
+
+    const findings = (JSON.parse(stdout) as { findings: Array<{ code: string }> }).findings;
+    expect(findings.length).toBeGreaterThan(0);
+    for (const { code } of findings) expect(stderr).toContain(`[${code}]`);
+  });
 });
 
 describe('runArdEmit — a dot segment never reaches a published address', () => {
@@ -645,6 +654,8 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
 
     expect(exitCalls).toEqual([[1]]);
     expect(stderr).toMatch(/--strict: the manifest advertises nothing/);
+    // As the one finding line every finding prints as.
+    expect(stderr).toMatch(/^ *error: --strict: the manifest advertises nothing.* \[[A-Z_]+\]$/mu);
   });
 
   // The other half of the same gate, and a DIFFERENT run shape: entries were

@@ -9,6 +9,7 @@ import fs, { mkdtempSync, readdirSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -61,7 +62,7 @@ beforeAll(() => {
 
   // Populate a SKILL.md
   const skillDir = safePath.join(workTree, 'plugins', 'foo');
-  fs.mkdirSync(skillDir, { recursive: true });
+  mkdirSyncReal(skillDir, { recursive: true });
   fs.writeFileSync(
     safePath.join(skillDir, 'SKILL.md'),
     `---

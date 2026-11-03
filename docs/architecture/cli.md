@@ -281,21 +281,58 @@ durationMs: 234
 data: { ... }
 ```
 
-### Dual Output for Errors
+### Dual Output for Findings
 
-Legacy commands that find errors produce both formats below. A report verb renders the same
-compiler-style lines under `--format text`, on stdout, from its published findings
-(`location:line:column: severity: message [code]`) — see [The report contract](#the-report-contract).
+A verb that finds something publishes it twice: in full in the stdout document, and for a reader on
+stderr. Both spell a finding with the one formatter, `formatFindingLine` in
+`packages/cli/src/utils/issue-rendering.ts`; a flat-findings lane prints them through
+`reportFindings`, which puts every error first and adds warnings and info only under `--verbose`
+(`vat resources validate`, `vat resources check -v`, the orchestrators' delegated phases). A lane
+with no `--verbose` passes `verbose: true` and always prints every finding: `vat agent validate`,
+`vat ard emit`, `vat rag index`, `vat okf validate`, `vat audit settings`, `vat claude plugin
+uninstall`, `vat skills build --skill`'s refusal, and `vat verify`'s built-in phases.
 
-#### Test Format (stderr)
+A leftover (`TREE_CLEANUP_INCOMPLETE`: something a run made and could not remove) is said by the
+one path that publishes it, never by a verb: `writeDocument`, `endWithForwardedDocument`,
+`writeLegacyDocument` (for any legacy document that carries a `findings` list) and
+`writeExternalDocument` (for the leftovers in an org payload's top-level `warnings`) each print every
+leftover the document carries, once, at every verbosity, on every verb — `FINDINGS_NOT_ON_STDERR`
+verbs included. `reportFindings` skips them, so a
+verb that prints its findings cannot print a leftover twice, and verbs only build them
+(`leftoverIssue`, `leftoverIssueOf`, `leftoverIssuesOf`, `leftoverIssuesOfWarnings`). The lanes
+`findingsGoToStderr` excludes are excluded for leftovers too: the generic `--format text` document,
+which already lists them, and a supervised child, whose supervisor publishes and says them. A
+leftover that IS the refusal (`endWithLeftoverRefusal`) is said once, as the refusal's message —
+never also as a finding line. A refusal prints its message first, then the finished work's findings,
+then its leftovers. Its message is said exactly once, whichever writer publishes the error report
+(`announceErrorOf`) — a report a verb built itself included — except by a supervised child, whose
+supervisor says it when it forwards the document. A run-integrity refusal the document writer adds, the writer prints itself, once.
+Verbs whose stderr does not yet say their other findings this way are listed in
+`FINDINGS_NOT_ON_STDERR` (`packages/cli/test/system/test-helpers/exit-code-matrix.ts`), which the
+exit-code matrix asserts both ways. Each entry states the one output mode it speaks for and where its
+`findings` scenario runs (some only where a directory listing can be denied); `vat skill review` is
+exempt under `--yaml` only — its default mode says every finding as the shared line.
+A verb whose `--format text` document is the generic rendering, one line per finding
+(`vat resources validate`), carries none on stderr under that format, because stdout already is
+these lines. A verb with its own text rendering (`vat ard emit`, whose text document is one summary
+line) prints its findings on stderr under every format. `findingsGoToStderr` in
+`packages/cli/src/utils/document-writer.ts` is that one rule. See
+[The report contract](#the-report-contract).
+
+#### Finding lines (stderr)
 
 ```
-docs/README.md:15:25: error: Link target not found: ./missing.md
-docs/guide.md:42:10: error: Broken anchor: #non-existent-section
-fragment.component.html:1:1: info: Malformed HTML: missing-doctype
+  docs/README.md:15:25: error: Link target not found: ./missing.md [LINK_BROKEN_FILE]
+    Fix: Point the link at an existing file.
+  SKILL.md (frontmatter.name): warning: Name is not kebab-case [SKILL_NAME_NOT_KEBAB_CASE]
+
+1 warning/info finding(s) not shown — re-run with --verbose, or read the report on stdout, which lists every finding.
 ```
 
-**Format:** `file:line:column: severity: message`
+**Format:** `location:line:column (field): severity: message [CODE]`, each part of the anchor present
+only when the finding carries it; a fix on the next line, two spaces deeper. A flat list
+(`reportFindings`) indents each finding two spaces; a grouped report indents it beneath its heading,
+and the fix stays two spaces deeper than its finding.
 
 Only `error` findings fail the run, so the severity is what tells a reader
 which lines they have to act on.

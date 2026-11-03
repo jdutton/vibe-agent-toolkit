@@ -75,7 +75,7 @@ describe('validatePlugin', () => {
 		const pluginPath = createTestPlugin(getTempDir(), { name: 'unreadable-manifest' });
 		const manifest = safePath.join(pluginPath, CLAUDE_PLUGIN_DIR, 'plugin.json');
 		fs.rmSync(manifest);
-		fs.mkdirSync(manifest);
+		mkdirSyncReal(manifest);
 
 		const result = await validatePlugin(pluginPath);
 

@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { parse as parseYaml } from 'yaml';
 
 import { runAuditCli } from '../test-helpers.js';
@@ -42,15 +43,15 @@ export function bashSkill(name: string): string {
 /** A plugin under `tempDir` with `skills/<name>/SKILL.md` for each entry (and an empty `skills/` otherwise). */
 export function writeSettingsPlugin(tempDir: string, name: string, skills: Record<string, string>): string {
   const pluginDir = safePath.join(tempDir, name);
-  fs.mkdirSync(safePath.join(pluginDir, '.claude-plugin'), { recursive: true });
-  fs.mkdirSync(safePath.join(pluginDir, 'skills'), { recursive: true });
+  mkdirSyncReal(safePath.join(pluginDir, '.claude-plugin'), { recursive: true });
+  mkdirSyncReal(safePath.join(pluginDir, 'skills'), { recursive: true });
   fs.writeFileSync(
     safePath.join(pluginDir, '.claude-plugin', 'plugin.json'),
     JSON.stringify({ name, description: 'A plugin with a skill the settings check must account for.', version: '0.0.1' }),
   );
   for (const [skill, content] of Object.entries(skills)) {
     const dir = safePath.join(pluginDir, 'skills', skill);
-    fs.mkdirSync(dir, { recursive: true });
+    mkdirSyncReal(dir, { recursive: true });
     fs.writeFileSync(safePath.join(dir, 'SKILL.md'), content);
   }
   return pluginDir;

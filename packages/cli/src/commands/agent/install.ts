@@ -11,7 +11,7 @@ import { applyTreePlan, classifyFsFault, everywhere, isPathAbsentError, pathPres
 
 import { resolveAgentPath } from '../../utils/agent-discovery.js';
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
-import { endWithRefusal, endWithReport, leftoverIssue, NOTHING_FINISHED } from '../../utils/document-writer.js';
+import { endWithRefusal, endWithReport, leftoverIssuesOfWarnings, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { occupiedRefusal, skillOwnership } from '../../utils/install-plan.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { validateAndGetScopeLocation } from '../../utils/scope-locations.js';
@@ -33,7 +33,7 @@ const GATE: Gate = { strict: false };
 /** What an install finished: the install, and what it left beside it that VAT could not remove. */
 interface Installed {
   readonly data: AgentInstallData;
-  readonly leftovers: ReadonlyArray<ReturnType<typeof leftoverIssue>>;
+  readonly leftovers: ReadonlyArray<ReturnType<typeof leftoverIssuesOfWarnings>[number]>;
 }
 
 /**
@@ -113,7 +113,7 @@ async function install(agentName: string, options: InstallOptions, logger: Logge
   }
   return {
     data: { agent: agentName, installPath, symlink: dev },
-    leftovers: warnings.map(({ message, path }) => leftoverIssue(message, path)),
+    leftovers: leftoverIssuesOfWarnings(warnings),
   };
 }
 

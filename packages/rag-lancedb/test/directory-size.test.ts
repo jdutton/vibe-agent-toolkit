@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import { dirname } from 'node:path';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { setupSyncTempDirSuite , withReaddirSyncRefused } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -30,7 +31,7 @@ beforeEach(() => {
 function layDown(files: Record<string, number>): void {
   for (const [relative, bytes] of Object.entries(files)) {
     const absolute = safePath.join(root, relative);
-    fs.mkdirSync(dirname(absolute), { recursive: true });
+    mkdirSyncReal(dirname(absolute), { recursive: true });
     fs.writeFileSync(absolute, Buffer.alloc(bytes, 0x41));
   }
 }

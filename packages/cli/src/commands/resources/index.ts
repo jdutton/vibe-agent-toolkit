@@ -283,6 +283,7 @@ Examples:
     .description('Run VAT\'s built-in checks and the project\'s declared SQL assertions over its resource projection')
     .option('--debug', DEBUG_HELP)
     .option('--check <name>', 'Run only this check, by its built-in name or its key in resources.checks')
+    .option('-v, --verbose', 'Print warning and info findings on stderr too, not only the errors')
     .option(
       '--budget <seconds>',
       'Kill the run if it goes this long without completing a unit of work'
@@ -507,6 +508,12 @@ A run that HANGS is killed and reported, not waited on:
 
 ${SUPERVISION_SIGNAL_CONTRACT}
 
+Output:
+  The document goes to stdout. stderr carries each finding for a reader as
+  "  location:line: severity: message [code]", indented two spaces, and its
+  fix, when it has one, on the next line as "    Fix: ...": every error,
+  errors first, and the warning and info ones only with --verbose.
+
 Output Fields (the shared report envelope; schema: packages/cli/schemas/resources-check.json):
   status:    ok | findings | error -- a literal statement about \`findings\`.
              An interrupted run is \`findings\` (its RESOURCE_CHECK_BROKEN is
@@ -569,7 +576,7 @@ Examples:
     .command('validate [path]')
     .description('Validate markdown resources (link integrity, anchors)')
     .option('--debug', DEBUG_HELP)
-    .option('-v, --verbose', 'Show all scanned resources, including those without issues')
+    .option('-v, --verbose', 'Print warning and info findings on stderr too, and publish a data.files row per resource')
     .option('--frontmatter-schema <path>', 'Validate frontmatter against JSON Schema file (.json or .yaml)')
     .addOption(
       new Option('--validation-mode <mode>', 'Validation mode for schemas: strict (default) or permissive')
@@ -630,6 +637,9 @@ Output Formats:
     One line per finding on stdout, location:line: severity: message [code],
     then a status line with the counts and the number of resources examined.
 
+  Under yaml and json, stderr carries the same lines for a reader: every error
+  finding, errors first, and the warning and info ones only with --verbose.
+
 Output Fields (the shared report envelope):
   status:     ok | findings | error -- ok when nothing was found, findings when
               anything was (at any severity), error when the run could not
@@ -657,12 +667,14 @@ Output Fields (the shared report envelope):
   declared --collection that matched no file, a path with no markdown, an enumeration
   emptied by exclude or a sparse checkout) carries RESOURCE_CHECK_BROKEN at
   error and exits 1 — the document is not a verdict, and the code is not
-  overridable. The same message is written to stderr.
+  overridable. The same finding line goes to stderr, or under --format text
+  is a line of the stdout document instead.
 
 Verbosity:
   -v, --verbose
     Adds data.files: one {path, status, summary} row per resource validated,
-    the clean ones included. Every envelope field is identical in both modes.
+    the clean ones included, and prints warning and info findings on stderr
+    beside the errors. Every envelope field is identical in both modes.
 
 Validation Checks:
   - Internal file links (relative paths)

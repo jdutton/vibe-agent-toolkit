@@ -1,9 +1,17 @@
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import type { ResourcePopulationSource } from '@vibe-agent-toolkit/resources';
-import { FS_FAULT_CODE, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { withReaddirSyncRefused } from '@vibe-agent-toolkit/utils/testing';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { type ResourcePopulationSource, ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import {
+  createSymlink,
+  FS_FAULT_CODE,
+  mkdirSyncReal,
+  normalizedTmpdir,
+  safePath,
+  symlinkCapability,
+} from '@vibe-agent-toolkit/utils';
+import { gitExecutable, withReaddirSyncRefused } from '@vibe-agent-toolkit/utils/testing';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
   crawlAndResolveRegistry,
@@ -55,6 +63,29 @@ describe('crawlAndResolveRegistry — memoized per project root', () => {
     const viaDotSegment = await crawlAndResolveRegistry(`${rootA}/./`, { outputs: [], unreadable: 'refuse' });
 
     expect(viaDotSegment).toBe(first);
+  });
+
+  /**
+   * Why the key is LEXICAL, not the real path. A registry answers `getResource` for the spelling
+   * it was crawled under, so serving the real root's registry to a caller holding a symlinked
+   * spelling would miss every lookup — an empty link graph, and a skill reported clean because
+   * nothing was walked. Two spellings cost two crawls; that is the price of a correct answer.
+   */
+  it('crawls a symlinked spelling of the root under that spelling, never serving the real one', async ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const link = safePath.join(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-registry-memo-link-')), 'root');
+    createSymlink(cap, rootA, link, 'dir');
+    try {
+      const first = await crawlAndResolveRegistry(rootA, { outputs: [], unreadable: 'refuse' });
+      const viaLink = await crawlAndResolveRegistry(link, { outputs: [], unreadable: 'refuse' });
+
+      // The control: the real root's registry cannot answer for the link's spelling.
+      expect(first.getResource(safePath.join(link, 'a.md'))).toBeUndefined();
+      expect(viaLink).not.toBe(first);
+      expect(viaLink.getResource(safePath.join(link, 'a.md'))).toBeDefined();
+    } finally {
+      rmSync(safePath.resolve(link, '..'), { recursive: true, force: true });
+    }
   });
 
   it('does not share a registry across different roots', async () => {
@@ -261,24 +292,264 @@ describe('validateSkillForPackaging — routes its private crawl through the sha
     expect(result.metadata.fileCount).toBe(2);
     expect(result.metadata.maxLinkDepth).toBe(0);
   });
+
+  // No config and no git above the skill: the crawl falls back to the skill's own directory — a
+  // staging directory, for a packaged skill — and memoizing it would keep one dead key per skill.
+  it('does not memoize the crawl of a skill that sits in no project', async () => {
+    const { root, skillPath } = chainRoot();
+    const { source, calls } = countingSource(root, ['SKILL.md', 'a.md', 'b.md']);
+    const shared = { unreadable: 'refuse', outputs: [], populationSource: source } as const;
+
+    await validateSkillForPackaging(skillPath, undefined, 'source', shared);
+    await validateSkillForPackaging(skillPath, undefined, 'source', shared);
+
+    expect(calls()).toBe(2);
+  });
 });
 
 /**
  * A fault at the crawl's base is classified on the side the CALLER declares: a packaging run
  * writes its output into the project it crawls, so a project that vanishes under it is a
- * destination fault (`RUN_INCOMPLETE`), while `vat skills validate` only reads it. The memo is
- * keyed on the side too: a rejected crawl is memoized, and handing one side's fault to the
- * other's caller would re-code it.
+ * destination fault (`RUN_INCOMPLETE`), while `vat skills validate` only reads it. A rejected
+ * crawl is never memoized, so each caller's fault is classified against its own outputs.
  */
 describe('crawlAndResolveRegistry — the side of the crawl base, from what the caller writes', () => {
   it('classifies a vanished base as the destination\'s only when it holds a declared output, and never serves one declaration\'s crawl to the other', async () => {
     resetPackagingRegistryCache();
     const root = rootWithMarkdown({ 'a.md': '# A\n' });
 
-    await expect(withReaddirSyncRefused(root, 'ENOENT', () => crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' })))
+    await expect(crawlWithBaseVanished(root, []))
       .rejects.toMatchObject({ code: FS_FAULT_CODE, side: 'source', faultClass: 'absent' });
-    await expect(withReaddirSyncRefused(root, 'ENOENT', () => crawlAndResolveRegistry(root, { unreadable: 'refuse', outputs: [safePath.join(root, 'dist')] })))
+    await expect(crawlWithBaseVanished(root, [safePath.join(root, 'dist')]))
       .rejects.toMatchObject({ code: FS_FAULT_CODE, side: 'destination', faultClass: 'absent' });
+  });
+});
+
+/** Crawl `root` with its own directory refused as vanished (`ENOENT`), declaring `outputs`. */
+function crawlWithBaseVanished(root: string, outputs: string[]): Promise<ResourceRegistry> {
+  return withReaddirSyncRefused(root, 'ENOENT', () => crawlAndResolveRegistry(root, { outputs, unreadable: 'refuse' }));
+}
+
+/** A population source whose first enumeration rejects, and every later one yields `names`. */
+function failingOnceSource(root: string, names: readonly string[]): { source: ResourcePopulationSource; calls: () => number } {
+  const inner = countingSource(root, names);
+  return {
+    source: {
+      root,
+      enumerate: async (...args) => {
+        const result = await inner.source.enumerate(...args);
+        if (inner.calls() === 1) throw new Error('the first enumeration fails');
+        return result;
+      },
+    },
+    calls: inner.calls,
+  };
+}
+
+/** Whether `registry` holds the file at `relative` under `root`. */
+function holds(registry: ResourceRegistry, root: string, relative: string): boolean {
+  return registry.getResource(safePath.resolve(root, relative)) !== undefined;
+}
+
+/**
+ * A crawl that rejected is never served from the memo: the next caller crawls again, under its
+ * OWN `unreadable` ruling and its own outputs, because the rejection was decided under the
+ * ruling of the caller that started it.
+ */
+describe('crawlAndResolveRegistry — a rejected crawl is retried, never served', () => {
+  it('re-crawls for the next caller after the walk rejected', async () => {
+    resetPackagingRegistryCache();
+    const root = rootWithMarkdown({ 'a.md': '# A\n' });
+
+    await expect(crawlWithBaseVanished(root, [])).rejects.toMatchObject({ code: FS_FAULT_CODE });
+    const retried = await crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' });
+
+    expect(holds(retried, root, 'a.md')).toBe(true);
+  });
+
+  it('re-crawls for the next caller after a population source rejected', async () => {
+    const root = rootWithMarkdown({ 'a.md': '# A\n' });
+    const { source, calls } = failingOnceSource(root, ['a.md']);
+
+    await expect(crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse', populationSource: source })).rejects.toThrow('the first enumeration fails');
+    const retried = await crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse', populationSource: source });
+
+    expect(holds(retried, root, 'a.md')).toBe(true);
+    expect(calls()).toBe(2);
+  });
+
+  it('serves a caller WAITING on a crawl that rejects by crawling again under its own policy', async () => {
+    resetPackagingRegistryCache();
+    const { root, locked } = rootWithLockedDirectory();
+    const crawls = vi.spyOn(ResourceRegistry, 'fromCrawl');
+    try {
+      const degraded: unknown[] = [];
+      await withReaddirSyncRefused(locked, 'EACCES', async () => {
+        // Both started before either settles: the second joins the first's in-flight crawl.
+        const first = crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' });
+        const second = crawlAndResolveRegistry(root, { outputs: [], unreadable: { degrade: (refusal) => degraded.push(refusal) } });
+        await expect(first).rejects.toMatchObject({ code: FS_FAULT_CODE });
+        await expect(second).resolves.toBeDefined();
+      });
+      expect(degraded.length).toBeGreaterThan(0); // the retry ran under the waiter's OWN policy
+      expect(crawls).toHaveBeenCalledTimes(2);
+    } finally {
+      crawls.mockRestore();
+    }
+  });
+
+  it('costs N waiters on a rejected crawl ONE re-crawl, not N', async () => {
+    resetPackagingRegistryCache();
+    const { root, locked } = rootWithLockedDirectory();
+    const crawls = vi.spyOn(ResourceRegistry, 'fromCrawl');
+    try {
+      await withReaddirSyncRefused(locked, 'EACCES', async () => {
+        const degrade = { degrade: () => undefined };
+        const first = crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' });
+        const waiters = [1, 2, 3].map(() => crawlAndResolveRegistry(root, { outputs: [], unreadable: degrade }));
+        await expect(first).rejects.toMatchObject({ code: FS_FAULT_CODE });
+        const served = await Promise.all(waiters);
+        expect(new Set(served).size).toBe(1);
+      });
+      expect(crawls).toHaveBeenCalledTimes(2);
+    } finally {
+      crawls.mockRestore();
+    }
+  });
+
+  it('costs N waiters ONE re-crawl when the re-crawl rejects too, and each waiter is told', async () => {
+    resetPackagingRegistryCache();
+    const { root, locked } = rootWithLockedDirectory();
+    const crawls = vi.spyOn(ResourceRegistry, 'fromCrawl');
+    try {
+      await withReaddirSyncRefused(locked, 'EACCES', async () => {
+        const first = crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' });
+        const waiters = [1, 2, 3].map(() => crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' }));
+        await expect(first).rejects.toMatchObject({ code: FS_FAULT_CODE });
+        for (const waiter of waiters) await expect(waiter).rejects.toMatchObject({ code: FS_FAULT_CODE });
+      });
+      expect(crawls).toHaveBeenCalledTimes(2);
+    } finally {
+      crawls.mockRestore();
+    }
+  });
+
+  it('shares ONE in-flight crawl between two overlapping callers', async () => {
+    const root = rootWithMarkdown({ 'a.md': '# A\n' });
+    const { source, calls } = countingSource(root, ['a.md']);
+    const options = { outputs: [], unreadable: 'refuse', populationSource: source } as const;
+
+    const [first, second] = await Promise.all([crawlAndResolveRegistry(root, options), crawlAndResolveRegistry(root, options)]);
+
+    expect(second).toBe(first);
+    expect(calls()).toBe(1);
+  });
+});
+
+/**
+ * A root with a subdirectory to refuse: a refused SUBDIRECTORY degrades under `{ degrade }`,
+ * where a refused root (the crawl base itself) refuses under any policy.
+ */
+function rootWithLockedDirectory(): { root: string; locked: string } {
+  const root = rootWithMarkdown({ 'a.md': '# A\n' });
+  const locked = mkdirSyncReal(safePath.join(root, 'locked'));
+  writeFileSync(safePath.join(locked, 'b.md'), '# B\n');
+  return { root, locked };
+}
+
+/** A root with a built skill under `out/` and the staging residue an interrupted build leaves beside it. */
+function rootWithStagedOutput(): { root: string; output: string } {
+  const root = rootWithMarkdown({ 'a.md': '# A\n' });
+  const output = safePath.join(root, 'out', 'skill');
+  const residue = safePath.join(root, 'out', '.skill.vat-staged-0a1b2c3d');
+  for (const dir of [output, residue]) {
+    mkdirSyncReal(dir, { recursive: true });
+    writeFileSync(safePath.join(dir, 'SKILL.md'), '# Built\n');
+  }
+  return { root, output };
+}
+
+/** The staging residue's own path, relative to the root. */
+const RESIDUE_SKILL = 'out/.skill.vat-staged-0a1b2c3d/SKILL.md';
+
+/** Crawl twice (the second a memo hit declaring `output`) and assert the hit holds no residue. */
+async function expectMemoHitWithoutResidue(
+  root: string,
+  output: string,
+  extra: { populationSource?: ResourcePopulationSource } = {},
+): Promise<void> {
+  const first = await crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse', ...extra });
+  const hit = await crawlAndResolveRegistry(root, { outputs: [output], unreadable: 'refuse', ...extra });
+
+  expect(hit).toBe(first);
+  expect(holds(hit, root, 'a.md')).toBe(true);
+  expect(holds(hit, root, RESIDUE_SKILL)).toBe(false);
+}
+
+/**
+ * The memoized crawl never holds a build's staging residue (`.<name>.vat-staged-*`): it is the
+ * tree-change primitive's transient copy, and a later skill served a registry holding it would
+ * resolve links into a directory that is renamed away. Asserted on a memo HIT — the second
+ * caller is served without a reset — on every route the crawl can take.
+ */
+describe('crawlAndResolveRegistry — the build\'s staging residue is never in the memoized crawl', () => {
+  it('on the walk', async () => {
+    resetPackagingRegistryCache();
+    const { root, output } = rootWithStagedOutput();
+    await expectMemoHitWithoutResidue(root, output);
+  });
+
+  it('on the git route', async () => {
+    resetPackagingRegistryCache();
+    const { root, output } = rootWithStagedOutput();
+    spawnSync(gitExecutable(), ['init', '-q', root], { stdio: 'ignore' });
+    await expectMemoHitWithoutResidue(root, output);
+  });
+
+  it('on a population source that enumerates the residue', async () => {
+    const { root, output } = rootWithStagedOutput();
+    const { source } = countingSource(root, ['a.md', 'out/skill/SKILL.md', RESIDUE_SKILL]);
+    await expectMemoHitWithoutResidue(root, output, { populationSource: source });
+  });
+});
+
+/**
+ * `outputs` decides which SIDE a fault is on, never which files the crawl finds — so it is not
+ * part of what the memo shares. The packager's post-build lane calls this once per skill, each
+ * declaring its own output directory; keyed on `outputs`, every skill paid a fresh whole-project
+ * crawl and the process-lifetime memo kept every one of them (one registry per skill, which ran
+ * a large adopter's plugin build out of heap).
+ */
+describe('crawlAndResolveRegistry — what the caller writes does not split the memo', () => {
+  it('serves one registry to N callers that each declare a different output', async () => {
+    resetPackagingRegistryCache();
+    const root = rootWithMarkdown({ 'a.md': '# A\n' });
+
+    const registries = new Set<unknown>();
+    for (const skill of ['one', 'two', 'three', 'four']) {
+      registries.add(await crawlAndResolveRegistry(root, { unreadable: 'refuse', outputs: [safePath.join(root, 'out', skill)] }));
+    }
+
+    expect(registries.size).toBe(1);
+  });
+
+  it('finds the same population whatever the caller declares, an output inside the root included', async () => {
+    const root = rootWithMarkdown({ 'a.md': '# A\n' });
+    // An output directory inside the root and outside every default exclude: whether the crawl
+    // walks it is decided by include/exclude alone, never by its being declared an output.
+    const output = safePath.join(root, 'out');
+    mkdirSyncReal(output);
+    writeFileSync(safePath.join(output, 'built.md'), '# Built\n');
+    const pathsOf = (registry: ResourceRegistry): string[] =>
+      registry.getAllResources().map((resource) => resource.filePath).toSorted((a, b) => a.localeCompare(b));
+
+    resetPackagingRegistryCache();
+    const undeclared = pathsOf(await crawlAndResolveRegistry(root, { unreadable: 'refuse', outputs: [] }));
+    resetPackagingRegistryCache();
+    const declared = pathsOf(await crawlAndResolveRegistry(root, { unreadable: 'refuse', outputs: [output] }));
+
+    expect(declared).toEqual(undeclared);
+    expect(declared).toContain(safePath.join(output, 'built.md'));
   });
 });
 

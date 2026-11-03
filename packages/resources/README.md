@@ -121,16 +121,18 @@ const { resources, population } = await registry.crawl({
   baseDir: './docs',
   unreadable: 'refuse',              // REQUIRED, no default: 'refuse' throws DirectoryListingRefusedError on a directory it cannot list;
                                      // { degrade: (refusal) => … } keeps going and hands you the gap to report
-  include: ['**/*.md'],              // Glob patterns (default: ['**/*.md'])
-  exclude: ['**/node_modules/**'],   // Exclude patterns (default: node_modules, .git, dist)
+  include: ['**/*.md'],              // Glob patterns (default: DEFAULT_RESOURCE_INCLUDE — md and html)
+  exclude: ['**/node_modules/**'],   // Exclude patterns, REPLACING the default (DEFAULT_RESOURCE_EXCLUDE)
   followSymlinks: false              // Follow symbolic links (default: false)
 });
 ```
 
 **Options:**
 - `baseDir` (required) - Base directory to crawl
-- `include` - Include glob patterns (default: `['**/*.md']`)
-- `exclude` - Exclude glob patterns (default: `['**/node_modules/**', '**/.git/**', '**/dist/**']`)
+- `include` - Include glob patterns (default: `DEFAULT_RESOURCE_INCLUDE` — `**/*.md`, `**/*.html`, `**/*.htm`)
+- `exclude` - Exclude glob patterns (default: `DEFAULT_RESOURCE_EXCLUDE` — `node_modules/`, `.git/`,
+  `.worktrees/`, `.claude/worktrees/`, a build's staging residue `.<name>.vat-staged-*`, and `dist/`).
+  A value you pass replaces the default; spread `DEFAULT_RESOURCE_EXCLUDE` to keep it
 - `followSymlinks` - Follow symbolic links (default: `false`)
 
 ##### validate(): Promise<ValidationResult>

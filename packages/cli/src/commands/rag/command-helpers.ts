@@ -14,7 +14,7 @@ import { createLogger, type Logger } from '../../utils/logger.js';
 import { projectRootOrNull } from '../../utils/project-root-policy.js';
 import { requireExistingDatabase } from '../../utils/rag-database.js';
 
-/** No `vat rag` leaf has a `--strict`, and none reports a warning: the gate is fixed. */
+/** No `vat rag` leaf has a `--strict`: a warning (`vat rag index`'s clamped chunk budget) never fails a run. */
 export const RAG_GATE: Gate = { strict: false };
 
 /**

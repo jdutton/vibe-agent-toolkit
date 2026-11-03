@@ -106,6 +106,7 @@ import { endWithRefusal, leftoverIssueOf, NOTHING_FINISHED, writeDocument } from
 import {
   countCollapsedFindings,
   formatCollapsedFindingsHint,
+  formatFindingLine,
   formatIssueLines,
   formatSeverityBreakdown,
   issuesToRenderAtVerbosity,
@@ -2499,7 +2500,7 @@ function renderIssueEvidence(
   if (!predicate) return;
   const matched = evidenceSources.filter(predicate);
   if (matched.length === 0) return;
-  logger.info(`  [${issue.code}] ${issue.message}`);
+  logger.info(`  ${formatFindingLine(issue)}`);
   for (const ev of matched) {
     logger.info(formatEvidenceLine(ev));
   }
@@ -2566,25 +2567,18 @@ function renderVerboseEvidence(
 }
 
 /**
- * The stderr half of the run-level refusal, so the human channel says what the
- * document says. The writer derives it (the registry's denominator for `audit`
- * is files); this only RENDERS the finding the WRITTEN report carries. Both
- * stderr lanes call it first, because "Audit successful: 0 file(s) passed"
- * over a refused run is the exact disagreement the refusal exists to end
- * (invariant 6 of `run-integrity.ts`).
+ * The verdict line over a run the writer refused (it derives and prints the
+ * refusal itself, ABOVE this line), so "Audit successful: 0 file(s) passed" never
+ * sits beside it (invariant 6 of `run-integrity.ts`). Both stderr lanes call it first.
  *
- * @returns Whether a refusal was rendered, so the caller skips its verdict line
+ * @returns Whether the run was refused, so the caller skips its verdict line
  */
 function logRunIntegrity(
   written: AuditReport,
   logger: ReturnType<typeof createLogger>,
 ): boolean {
-  const refusals = written.findings.filter((finding) => finding.code === RUN_INTEGRITY_CODE);
-  if (refusals.length === 0) return false;
-  logger.error(`Audit is not a verdict: it audited ${written.examined} files`);
-  for (const refusal of refusals) {
-    for (const line of formatIssueLines(refusal, '  ')) logger.error(line);
-  }
+  if (!written.findings.some((finding) => finding.code === RUN_INTEGRITY_CODE)) return false;
+  logger.error(`⚠️ Not a verdict: the refusal above is this audit's result (${written.examined} files audited)`);
   return true;
 }
 
@@ -2712,14 +2706,12 @@ function renderAuditFooter(
  * the failure direction `issue-rendering.ts` exists to prevent. The trailing
  * line names the collapsed total and both ways to see it, for the same reason.
  *
- * That trailing line points at THIS audit's YAML report, deliberately — do not
- * broaden it back into a claim about "the YAML report" in general. It is only
- * true of the verbs that emit full `issues:` arrays, and which verbs those are
- * has changed: `vat skills build` now publishes them too, so the sentence is
- * shared rather than re-spelled (see `formatCollapsedFindingsHint`, which takes
- * the report name for exactly this reason). Any verb that publishes counts alone
- * must still not use it — there, it would send a CI consumer to a document that
- * cannot answer the question.
+ * That trailing line points at "the report on stdout" and names no format, since
+ * the same verb publishes YAML or JSON. It is only true of a verb whose document
+ * lists every finding, so the sentence is shared rather than re-spelled (see
+ * `formatCollapsedFindingsHint`). A verb that publishes counts alone must not
+ * use it: there, it would send a CI consumer to a document that cannot answer
+ * the question.
  *
  * Pure: takes results, returns lines. It reads `issues` and never rewrites it,
  * because `buildAuditAtPath` builds the YAML document from the very same array.
@@ -2754,7 +2746,7 @@ export function formatAuditFindingsLines(
     }
   }
 
-  const hint = formatCollapsedFindingsHint(collapsed, 'audit');
+  const hint = formatCollapsedFindingsHint(collapsed);
   if (hint !== undefined) lines.push(hint);
 
   return lines;

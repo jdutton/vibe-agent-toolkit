@@ -35,9 +35,11 @@ import {
   collectPrerequisite,
   collectUnset,
   createProgram,
+  FAILURE_IS_THE_REASON,
   fastestRepeat,
   nonNegativeNumber,
   parseCacheMode,
+  rowEstimates,
   splitRowNames,
 } from '../src/bin/vat-lab.js';
 import type { ReportEnvelope } from '../src/envelope/envelope.js';
@@ -331,6 +333,24 @@ describe('fastestRepeat — the reduction `parse` and `crawl` hand to ab', () =>
   });
 });
 
+describe('rowEstimates — what a capture hands ab', () => {
+  const row = (name: string, failure: string | null): { name: string; failed: boolean; failure: string | null; value: number } =>
+    ({ name, failed: failure !== null, failure, value: 7 });
+
+  it('keeps a failed row as LOST, naming its failure — never drops it so the arm silently has fewer pairs', () => {
+    expect(rowEstimates([row('ok', null), row('bad', 'no RSS dumps')], 'ms', (r) => r.value, FAILURE_IS_THE_REASON)).toEqual([
+      { name: 'ok', value: 7, unit: 'ms', lost: null },
+      { name: 'bad', value: 0, unit: 'ms', lost: 'no RSS dumps' },
+    ]);
+  });
+
+  it("lets a facet name a failed row's reason its own way", () => {
+    expect(rowEstimates([row('oom', 'exit 134')], 'KiB', (r) => r.value, () => 'ran out of heap')).toEqual([
+      { name: 'oom', value: 0, unit: 'KiB', lost: 'ran out of heap' },
+    ]);
+  });
+});
+
 describe('vat-lab <facet> ab — every facet gets the verb, not just the one that needed it first', () => {
   it.for(FACETS)('declares ab on %s', (facet) => {
     const group = createProgram().commands.find((candidate) => candidate.name() === facet);
@@ -356,6 +376,16 @@ describe('vat-lab <facet> ab — every facet gets the verb, not just the one tha
     { facet: 'parse', expected: 'cold' },
   ] as const)('defaults $facet ab to the facet’s own cache mode, $expected', ({ facet, expected }) => {
     expect(optionOf(facet, 'ab', '--cache')?.defaultValue).toBe(expected);
+  });
+
+  it.for([
+    { facet: 'perf', expected: 'min estimator' },
+    { facet: 'memory', expected: 'median estimator' },
+  ] as const)('names $facet ab’s own estimator, $expected', ({ facet, expected }) => {
+    const ab = createProgram()
+      .commands.find((group) => group.name() === facet)
+      ?.commands.find((candidate) => candidate.name() === 'ab');
+    expect(ab?.description()).toContain(expected);
   });
 
   it('refuses --control alongside --instrument-b instead of ignoring one of them', async () => {
@@ -580,6 +610,7 @@ describe('vat-lab perf arms — the option parsers', () => {
       exit: exactExit(0),
       provenance: 'none',
       populates: false,
+      writes: [],
     });
     expect(() => collectPrerequisite('   ', undefined)).toThrow(InvalidArgumentError);
   });
@@ -776,16 +807,15 @@ const UNION_BUILDS = {
 function unionEnvelope(row: string, preparedClone: string | null, commit: string, build: keyof typeof UNION_BUILDS): ReportEnvelope<VerdictBody> {
   const finding = { code: 'LINK_BROKEN_FILE', severity: 'error', location: 'docs/a.md', line: 3, message: 'm' };
   return {
-    facet: 'verdict',
-    coordinate: {
-      subject: { id: 'app', source: preparedClone ?? '/work/app' },
-      subjectVersion: { kind: 'git', commit, ref: null, dirty: false, workingFingerprint: null },
-      instrument: UNION_BUILDS[build],
-    },
-    capturedAt: '2026-10-31T00:00:00.000Z',
-    removedEnv: [],
-    npmNetworkEnv: [],
-    exits: [],
+    ...makeReport({
+      facet: 'verdict',
+      coordinate: {
+        subject: { id: 'app', source: preparedClone ?? '/work/app' },
+        subjectVersion: { kind: 'git', commit, ref: null, dirty: false, workingFingerprint: null },
+        instrument: UNION_BUILDS[build],
+      },
+      capturedAt: '2026-10-31T00:00:00.000Z',
+    }),
     body: {
       arm: { set: {}, unset: [] },
       rows: [

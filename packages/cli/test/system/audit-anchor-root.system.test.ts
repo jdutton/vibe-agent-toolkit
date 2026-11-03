@@ -13,9 +13,10 @@
  * introduce a second coordinate system.
  */
 
-import * as fs from 'node:fs';
+
 
 import { isAbsoluteAnyPlatform, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { AUDIT_REPORT_SCHEMA } from '../../src/commands/audit-schema.js';
@@ -36,8 +37,8 @@ function seedProject(scanRoot: string, project: string): void {
   const projectDir = safePath.join(scanRoot, project);
   const pluginDir = safePath.join(projectDir, 'plugins', 'plugin-x');
   const skillDir = safePath.join(pluginDir, 'skills', 'example');
-  fs.mkdirSync(safePath.join(pluginDir, '.claude-plugin'), { recursive: true });
-  fs.mkdirSync(skillDir, { recursive: true });
+  mkdirSyncReal(safePath.join(pluginDir, '.claude-plugin'), { recursive: true });
+  mkdirSyncReal(skillDir, { recursive: true });
 
   writeTestFile(safePath.join(projectDir, 'vibe-agent-toolkit.config.yaml'), '{}\n');
   // No `version` field, so the manifest itself carries findings.

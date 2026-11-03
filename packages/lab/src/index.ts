@@ -133,6 +133,24 @@ export {
   type IoSite,
 } from './facets/io/types.js';
 
+export { captureMemory, type CaptureMemoryOptions } from './facets/memory/capture.js';
+export {
+  compareMemory,
+  type CompareMemoryOptions,
+  type MemoryCommandVerdict,
+  type MemoryComparison,
+  type MemoryComparisonResult,
+} from './facets/memory/compare.js';
+export { formatKb, renderMemoryComparison, renderMemoryReport } from './facets/memory/render.js';
+export {
+  MEMORY_FACET,
+  type MemoryBody,
+  MemoryBodySchema,
+  type MemoryCommandStats,
+  type RssDump,
+  RssDumpSchema,
+} from './facets/memory/types.js';
+
 export { captureParse, type CaptureParseOptions } from './facets/parse/capture.js';
 export {
   compareParse,
@@ -301,16 +319,18 @@ export {
   type NormalizeContext,
   type PathSubstitution,
 } from './facets/verdict/normalize.js';
+export { planApfsClone } from './facets/verdict/clone.js';
 export {
   type CloneDir,
   type CloneSource,
   type ClonePlan,
   type CloneStep,
+  type CopyMode,
   executeClonePlan,
   type GitKind,
-  planApfsClone,
+  planTreeClone,
   readCloneSource,
-} from './facets/verdict/clone.js';
+} from './harness/tree-clone.js';
 export { multisetDifference } from './facets/verdict/multiset.js';
 export { renderVerdictComparison, renderVerdictReport } from './facets/verdict/render.js';
 export {
@@ -388,7 +408,8 @@ export {
   type DeltaThresholds,
   type LabelledRow,
   labelledMovements,
-  type MsDelta,
+  type MagnitudeDelta,
+  magnitudeDelta,
   msDelta,
   type RowMovement,
   type RowMovementKind,
@@ -413,7 +434,7 @@ export {
   openComparison,
   unmeasurableReasonFor,
 } from './harness/facet-compare.js';
-export { type Estimate, estimate, quantile } from './harness/estimator.js';
+export { type Estimate, estimate, type EstimatorKind, quantile } from './harness/estimator.js';
 export {
   describeIssues,
   type DumpFilesAccepted,

@@ -54,7 +54,7 @@ describe('vat-lab <facet> run — the report is written before the arms root end
   it('keeps the finished report when removing the default run directory then fails, and says why', async () => {
     const made = mkdtempSync(safePath.join(normalizedTmpdir(), 'lab-run-cleanup-'));
     scratch = made;
-    const root = normalizePath(made, made);
+    const root = normalizePath(made, { within: made });
     const home = mkdirSyncReal(safePath.join(root, 'home'));
     for (const name of ['TMPDIR', 'TEMP', 'TMP']) vi.stubEnv(name, root);
     vi.stubEnv('HOME', home);

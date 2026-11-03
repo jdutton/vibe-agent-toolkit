@@ -41,10 +41,10 @@
  * (and a native module) to a unit test that has no use for either.
  */
 
-import type { EmbeddingProvider, ResourceMetadata } from '@vibe-agent-toolkit/rag';
+import { type EmbeddingProvider, partialIndexResultOf, type ResourceMetadata } from '@vibe-agent-toolkit/rag';
 import type * as ResourcesModule from '@vibe-agent-toolkit/resources';
 import { ParserUnavailableError } from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isVatError, RAG_DATABASE_UNREADABLE_CODE, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { LanceDBRAGProvider } from '../src/lancedb-rag-provider.js';
@@ -62,7 +62,7 @@ import {
  * `vi.hoisted` because the mock factory below is hoisted above every import and
  * would otherwise close over an uninitialised binding.
  */
-const failures = vi.hoisted(() => ({ load: undefined as Error | undefined }));
+const failures = vi.hoisted(() => ({ load: undefined as Error | undefined, queue: [] as Error[] }));
 
 // Only the parse seam is replaced, and only when armed. The real parser, the
 // real `parseFileCached` and the real `isParserUnavailable` stay live via
@@ -71,8 +71,10 @@ const failures = vi.hoisted(() => ({ load: undefined as Error | undefined }));
 // predicate under test is the shipped one.
 vi.mock('@vibe-agent-toolkit/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof ResourcesModule>();
-  const parseFileCached = async (filePath: string, kind: ResourcesModule.ParserKind) =>
-    failures.load ? Promise.reject(failures.load) : actual.parseFileCached(filePath, kind);
+  const parseFileCached = async (filePath: string, kind: ResourcesModule.ParserKind) => {
+    const next = failures.queue.shift() ?? failures.load;
+    return next ? Promise.reject(next) : actual.parseFileCached(filePath, kind);
+  };
   return { ...actual, parseFileCached };
 });
 
@@ -101,6 +103,7 @@ const suite = setupLanceDBTestSuite();
 
 beforeEach(async () => {
   failures.load = undefined;
+  failures.queue = [];
   await suite.beforeEach();
   suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath, embeddingProvider: STUB_EMBEDDINGS });
 });
@@ -207,5 +210,23 @@ describe('an ordinary read failure during resource indexing', () => {
     expect(result.errors).toHaveLength(1);
     expect(result.resourcesIndexed).toBe(1);
     expect(result.chunksCreated).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * A store refused partway through a batch: what the batch had already recorded
+ * travels on the refusal, so the caller still reports the document that failed
+ * before it.
+ */
+describe('a store refusal partway through a batch', () => {
+  it('carries the earlier resource failures on the refusal', async () => {
+    failures.queue = [new Error('embedder refused'), new VatError(RAG_DATABASE_UNREADABLE_CODE, 'store unreadable')];
+
+    const rejection: unknown = await provider().indexResources(missingResources()).catch((error: unknown) => error);
+
+    expect(isVatError(rejection, RAG_DATABASE_UNREADABLE_CODE)).toBe(true);
+    expect(partialIndexResultOf(rejection)?.errors).toEqual([
+      { resourceId: 'gone-1', error: expect.stringContaining('embedder refused') as unknown },
+    ]);
   });
 });

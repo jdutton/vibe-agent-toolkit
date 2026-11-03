@@ -628,10 +628,11 @@ describe('captureIo — the counter preload', () => {
     // Same probe, same children — the build's untimed start, the priming run and
     // two repeats — but now the counter is loaded into all of them, which is
     // exactly what the assertion above claims cannot happen by default. The
-    // start and the priming run have no dump directory, so they are identifiable.
+    // start and the priming run have no dump directory, so they are identifiable;
+    // so is the last, the child `currentHost` reads V8's heap limit from.
     const lines = trace(probe);
-    expect(lines).toHaveLength(4);
-    expect(lines.map((line) => line.dir === null)).toEqual([true, true, false, false]);
+    expect(lines).toHaveLength(5);
+    expect(lines.map((line) => line.dir === null)).toEqual([true, true, false, false, true]);
   });
 
   it('quotes the counter path, so a directory containing a space still loads', async () => {

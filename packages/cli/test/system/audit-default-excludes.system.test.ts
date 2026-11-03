@@ -11,9 +11,10 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import * as fs from 'node:fs';
+
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -31,7 +32,7 @@ import {
 // validation output if scanned.
 function buildProject(parentDir: string, rootName: string): string {
   const rootDir = safePath.join(parentDir, rootName);
-  fs.mkdirSync(rootDir, { recursive: true });
+  mkdirSyncReal(rootDir, { recursive: true });
 
   // Initialize a git repo so gitignore-aware scanning works
   spawnSync(gitExecutable(), ['init'], { cwd: rootDir, stdio: 'pipe' });
@@ -61,7 +62,7 @@ echo hello
     '.claude/worktrees/wt-abc/skills/hello',
   ]) {
     const skillDir = safePath.join(rootDir, relSkillDir);
-    fs.mkdirSync(skillDir, { recursive: true });
+    mkdirSyncReal(skillDir, { recursive: true });
     writeTestFile(safePath.join(skillDir, 'SKILL.md'), skillBody);
   }
 
@@ -130,7 +131,7 @@ describe('Audit default artifact excludes (system test)', () => {
     const rootDir = buildProject(tempDir, 'exclude-additive');
     // Add one extra skill in an unusual location.
     const customDir = safePath.join(rootDir, 'vendor/skill-copy');
-    fs.mkdirSync(customDir, { recursive: true });
+    mkdirSyncReal(customDir, { recursive: true });
     writeTestFile(
       safePath.join(customDir, 'SKILL.md'),
       `---

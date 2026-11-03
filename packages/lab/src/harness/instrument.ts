@@ -61,8 +61,8 @@
  *
  * `kind: 'npx'` is the one route still exposed to this: `npx` runs the published
  * package's `bin`, which *is* the wrapper, so a published instrument remains
- * subject to cwd re-resolution. Known limitation, recorded rather than papered
- * over.
+ * subject to cwd re-resolution in every facet but `memory`, which installs the
+ * spec and runs its `dist/bin.js` (see `facets/memory/npx-entry.ts`).
  *
  * ## Windows
  *
@@ -529,8 +529,9 @@ function resolveNpx(spec: string): ResolvedInstrument {
     command: 'npx',
     leadingArgs: ['--yes', trimmed],
     // A published tarball carries no provenance: no commit, and therefore
-    // nothing that could have been dirty. No closure either: its bytes are not
-    // on disk until npx unpacks them at run time, and the pinned version pins them.
+    // nothing that could have been dirty. No closure either: its bytes are not on
+    // disk until npx unpacks them, and the pin fixes vat's packages but not their
+    // third-party ranges. `memory` installs it itself and stamps that install's.
     version: { version, commit: null, dirty: null, closure: null },
   };
 }

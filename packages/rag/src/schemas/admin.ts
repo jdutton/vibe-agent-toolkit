@@ -53,6 +53,7 @@ export const IndexResultSchema = z.object({
     resourceId: z.string().describe('Resource ID that failed'),
     error: z.string().describe('Error message'),
   }).strict()).optional().describe('Resources that could not be indexed, with the reason for each'),
+  warnings: z.array(z.string()).optional().describe('What the provider adjusted or doubts about its own configuration (a chunk budget clamped to the model limit); a provider prints nothing itself'),
 }).strict();
 
 /**

@@ -21,7 +21,6 @@ import {
 } from '@vibe-agent-toolkit/claude-marketplace';
 import {
   buildReport,
-  countBySeverity,
   createRegistryIssue,
   toFindings,
   type Finding,
@@ -33,6 +32,7 @@ import { Command } from 'commander';
 
 import { CommandRefusalError, refusalCodeOf } from '../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../utils/document-writer.js';
+import { reportFindings } from '../utils/issue-rendering.js';
 import { createLogger } from '../utils/logger.js';
 import { classifyInputFault } from '../utils/project-root-policy.js';
 import { relativizePath } from '../utils/relativize-paths.js';
@@ -137,7 +137,7 @@ function locatedAt(issue: ValidationIssue, file: string, root: string): Validati
     : { ...issue, location: spelled };
 }
 
-async function runShowPaths(root: string, logger: Logger): Promise<AuditSettingsReport> {
+async function runShowPaths(root: string): Promise<AuditSettingsReport> {
   const result = await resolveSettingsPaths(root);
 
   const issues: ValidationIssue[] = [];
@@ -161,10 +161,6 @@ async function runShowPaths(root: string, logger: Logger): Promise<AuditSettings
       ));
     }
   }
-
-  const { errors, warnings } = countBySeverity(issues);
-  if (errors > 0) logger.error('Legacy managed-settings.json path detected — IT admin must migrate.');
-  if (warnings > 0) logger.warn(`${warnings} settings path(s) could not be checked.`);
 
   return buildReport<AuditSettingsData>({
     // A path whose existence was determined was examined — absent is an answer; undetermined is not.
@@ -414,10 +410,6 @@ async function runShowEffective(root: string, logger: Logger): Promise<AuditSett
   } else {
     logger.info(`Loaded ${layers.length} settings layer(s)`);
   }
-  const { warnings } = countBySeverity(findings);
-  if (warnings > 0) {
-    logger.warn(`${warnings} warning(s): see findings and data.conflicts in the output.`);
-  }
 
   return buildReport<AuditSettingsData>({
     examined: layers.length,
@@ -435,7 +427,7 @@ async function runShowEffective(root: string, logger: Logger): Promise<AuditSett
 
 /** Run the mode the options name. */
 function runMode(options: AuditSettingsOptions, root: string, logger: Logger): Promise<AuditSettingsReport> {
-  if (options.showPaths) return runShowPaths(root, logger);
+  if (options.showPaths) return runShowPaths(root);
   if (options.file !== undefined) return runValidateFile(options.file, options.type, root, logger);
   return runShowEffective(root, logger);
 }
@@ -447,7 +439,9 @@ export async function runAuditSettings(
 
   try {
     // The report's one stated root: every path in it is relative to where it ran.
-    endWithReport('audit settings', await runMode(options, toForwardSlash(process.cwd()), logger), 'yaml');
+    const report = await runMode(options, toForwardSlash(process.cwd()), logger);
+    reportFindings(report.findings, { verbose: true, write: logger.warn });
+    endWithReport('audit settings', report, 'yaml');
   } catch (error) {
     endWithRefusal('audit settings', refusalCodeOf(error), error, 'yaml', SETTINGS_GATE, NOTHING_FINISHED);
   }

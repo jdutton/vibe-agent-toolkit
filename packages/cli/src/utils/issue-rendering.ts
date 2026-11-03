@@ -1,6 +1,6 @@
 /**
- * Rendering for SETS of `ValidationIssue`s — the severity label, the set's
- * heading, and the per-issue block.
+ * Rendering for SETS of `ValidationIssue`s — the one finding line, the set's
+ * heading, the verbosity policy, and the flat-list reporter.
  *
  * `issue-anchor.ts` answers "where is this issue?"; this module answers "what
  * severity is it, and what is in this set?". Both exist because the answer has
@@ -23,26 +23,9 @@ import {
   type SeverityCounts,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
+import { TREE_CLEANUP_INCOMPLETE_CODE } from '@vibe-agent-toolkit/utils';
 
 import { formatIssueAnchor } from './issue-anchor.js';
-
-/**
- * Uppercase label for a resolved severity.
- *
- * A total map, not an `=== 'error' ? … : …` ternary: the ternary is what
- * rendered every non-error severity — `info` included — as `WARNING`.
- */
-const SEVERITY_LABELS: Record<ValidationIssue['severity'], string> = {
-  error: 'ERROR',
-  warning: 'WARNING',
-  info: 'INFO',
-  ignore: 'IGNORED',
-};
-
-/** Render an issue's own severity as itself. */
-export function severityLabel(severity: ValidationIssue['severity']): string {
-  return SEVERITY_LABELS[severity];
-}
 
 /**
  * The severity distribution in prose: `1 error, 2 warnings, 3 info`.
@@ -83,27 +66,75 @@ export function formatIssueSetHeading(
 }
 
 /**
- * Render one issue as its own lines, each prefixed with `indent`.
+ * One finding as ONE compiler-style line: `location:line:column: severity: message [code]`.
+ *
+ * The GCC/ESLint-compact shape, shared by the `--format text` document and every stderr report.
+ */
+export function formatFindingLine(issue: ValidationIssue | Finding): string {
+  const anchor = formatIssueAnchor(issue);
+  const line = `${issue.severity}: ${String(issue.message)} [${String(issue.code)}]`;
+  return anchor === undefined ? line : `${anchor}: ${line}`;
+}
+
+/**
+ * Render one issue as its own lines, each prefixed with `indent`: the
+ * {@link formatFindingLine} line, and its fix beneath it when it has one.
  *
  * Takes a library `ValidationIssue` or a published `Finding` — the renderer
  * reads only the fields the two share, so a lane holding a report's findings
  * renders them as they are rather than casting them back to issues.
- *
- * Returns an array rather than writing, so a caller can pick its own stream and
- * a unit test can assert over every line without capturing output.
  */
 export function formatIssueLines(issue: ValidationIssue | Finding, indent = ''): string[] {
-  const lines = [
-    `${indent}[${severityLabel(issue.severity)}] [${String(issue.code)}] ${String(issue.message)}`,
-  ];
-  const anchor = formatIssueAnchor(issue);
-  if (anchor !== undefined) {
-    lines.push(`${indent}  Location: ${anchor}`);
-  }
+  const lines = [`${indent}${formatFindingLine(issue)}`];
   if (issue.fix) {
     lines.push(`${indent}  Fix: ${String(issue.fix)}`);
   }
   return lines;
+}
+
+/**
+ * The human report of a flat set of findings: the ones this verbosity renders
+ * ({@link issuesToRenderAtVerbosity} — errors always and first), each through
+ * {@link formatIssueLines}, then the hint naming what was collapsed.
+ *
+ * A lane that groups its findings keeps its own headings and renders each
+ * finding through {@link formatIssueLines}.
+ *
+ * 🔑 **Never a leftover** (`TREE_CLEANUP_INCOMPLETE`): the document writer says each one
+ * ({@link reportLeftovers}); said here too, it would print twice.
+ *
+ * @param findings - The findings, in any order
+ * @param options.verbose - Render warning and info findings too
+ * @param options.write - Where each line goes — the caller's stderr logger
+ */
+export function reportFindings(
+  findings: readonly (ValidationIssue | Finding)[],
+  options: { readonly verbose: boolean; readonly write: (line: string) => void },
+): void {
+  const said = findings.filter((finding) => !isLeftover(finding));
+  for (const finding of issuesToRenderAtVerbosity(said, options.verbose)) {
+    for (const line of formatIssueLines(finding, '  ')) options.write(line);
+  }
+  const hint = formatCollapsedFindingsHint(countCollapsedFindings(said, options.verbose));
+  if (hint !== undefined) options.write(hint);
+}
+
+/** Is `finding` a leftover: something a run made and could not remove? */
+export function isLeftover(finding: ValidationIssue | Finding): boolean {
+  return finding.code === TREE_CLEANUP_INCOMPLETE_CODE;
+}
+
+/**
+ * Every leftover in `findings`, each through {@link formatIssueLines} — the writer's half of
+ * {@link reportFindings}, at every verbosity. Only the document writer calls it.
+ *
+ * @param findings - A published document's findings
+ * @param write - Where each line goes
+ */
+export function reportLeftovers(findings: readonly (ValidationIssue | Finding)[], write: (line: string) => void): void {
+  for (const finding of findings.filter((candidate) => isLeftover(candidate))) {
+    for (const line of formatIssueLines(finding, '  ')) write(line);
+  }
 }
 
 /**
@@ -269,14 +300,23 @@ export function summarizeFindings(issues: readonly ValidationIssue[]): FindingCo
  * `vat skills build`'s `issueCounts` carry every finding at every verbosity;
  * anything else would silently break consumers that parse them.
  */
-export function issuesToRenderAtVerbosity(
-  issues: readonly ValidationIssue[],
+export function issuesToRenderAtVerbosity<T extends Pick<ValidationIssue, 'severity'>>(
+  issues: readonly T[],
   verbose: boolean,
-): readonly ValidationIssue[] {
-  return issues.filter(
-    (issue) => issue.severity !== 'ignore' && (verbose || issue.severity === 'error'),
-  );
+): readonly T[] {
+  return issues
+    .filter((issue) => issue.severity !== 'ignore' && (verbose || issue.severity === 'error'))
+    // Errors first, stably: what failed the run is never below a screen of warnings.
+    .sort((a, b) => SEVERITY_RENDER_ORDER[a.severity] - SEVERITY_RENDER_ORDER[b.severity]);
 }
+
+/** The order {@link issuesToRenderAtVerbosity} renders severities in — what failed the run first. */
+const SEVERITY_RENDER_ORDER: Record<ValidationIssue['severity'], number> = {
+  error: 0,
+  warning: 1,
+  info: 2,
+  ignore: 3,
+};
 
 /**
  * How many findings `--verbose` would render that this verbosity does not.
@@ -287,7 +327,7 @@ export function issuesToRenderAtVerbosity(
  * as "hidden by verbosity" — they were hidden by the adopter's own config.
  */
 export function countCollapsedFindings(
-  issues: readonly ValidationIssue[],
+  issues: readonly Pick<ValidationIssue, 'severity'>[],
   verbose: boolean,
 ): number {
   return (
@@ -305,21 +345,18 @@ export function countCollapsedFindings(
  * second phrasing of the same idea, because two wordings for one concept is how
  * the severity collapse came to be spelled five different ways.
  *
- * `report` names the verb whose YAML the reader should open ("audit", "build").
- * That clause is only honest for a command that publishes full `issues:` arrays;
- * do not pass a report name for a verb that publishes counts alone.
+ * It points at "the report on stdout" and names no format: the same verb
+ * publishes YAML, JSON or text. Only a verb whose document lists every finding
+ * may print it.
  *
  * Returns `undefined` when nothing was collapsed, so callers print nothing rather
  * than a "0 findings not shown" line.
  */
-export function formatCollapsedFindingsHint(
-  collapsed: number,
-  report: string,
-): string | undefined {
+export function formatCollapsedFindingsHint(collapsed: number): string | undefined {
   if (collapsed <= 0) return undefined;
   return (
     `\n${collapsed} warning/info finding(s) not shown — re-run with --verbose, `
-    + `or read this ${report}'s YAML report on stdout, which lists every finding.`
+    + 'or read the report on stdout, which lists every finding.'
   );
 }
 

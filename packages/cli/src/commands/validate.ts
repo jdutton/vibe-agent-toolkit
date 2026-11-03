@@ -139,7 +139,10 @@ Output:
   findings (every surface's, flat), and data.phases — one entry per surface
   with its own status, examined, summary, error (when it did not finish) and
   the surface's own data. Schema: packages/cli/schemas/orchestrator.json.
-  Progress and validation errors → stderr (streamed live)
+  Progress and findings → stderr (streamed live), each finding as
+  "location:line: severity: message [code]", its fix (when it has one) on
+  the next line, indented, as "Fix: ..." — every error, errors first; the
+  warning and info findings only with --verbose
 
 Exit Codes:
   0 - Every surface finished and no finding is an error (warning and info
@@ -207,7 +210,7 @@ Example:
  * @param config - The project's config, or undefined when there is none
  * @param run - The run's inputs, all required
  * @param run.root - The project root this run resolved; the `checks` phase's child checks exactly it
- * @param run.verbose - Forwarded to the resources and skills phases
+ * @param run.verbose - Forwarded to the resources, checks and skills phases
  * @param run.debug - Forwarded to the `checks` phase's child
  */
 export function selectValidateSurfaces(
@@ -236,7 +239,7 @@ export function selectValidateSurfaces(
       name: 'checks',
       schema: CHECK_REPORT_SCHEMA,
       examined: RESOURCES_CHECK_EXAMINED,
-      run: () => runResourcesCheckPhase({ root, debug }),
+      run: () => runResourcesCheckPhase({ root, debug, verbose }),
     });
   }
 

@@ -25,11 +25,9 @@
  * disappears into the aggregate; under alternation it recurs symmetrically and
  * the `min` estimator ignores it on both sides equally.
  *
- * **2. The estimator is `min`, with `p25` beside it — never a median, never a
- * mean.** See {@link Estimate}: every sample is the true cost plus a
- * non-negative contamination, so the smallest is the closest thing to a clean
- * observation, while one cold repeat is enough to move a median across a handful
- * of samples.
+ * **2. The facet declares its estimator, `min` or `median`, never a mean.** See
+ * {@link EstimatorKind}: `min` for a cost noise only adds to, `median` for one it
+ * moves both ways.
  *
  * **3. A single pair settles nothing.** Two pairs in a prior session actively
  * disagreed with each other. So every pair's verdict is reported individually
@@ -55,7 +53,7 @@ import { writeReport } from '../store.js';
 
 import type { ArmEnvironment } from './arm-env.js';
 import type { MeasuredCommandSpec } from './commands.js';
-import { type Estimate, estimate } from './estimator.js';
+import { type Estimate, estimate, type EstimatorKind } from './estimator.js';
 import { coordinateLines, instrumentLabel, instrumentTrustNotes } from './render.js';
 import type { CacheMode, CaptureRequest, ResolvedInstrument, ResolvedSubject } from './types.js';
 
@@ -66,6 +64,22 @@ export const UNMEASURABLE_VERDICT = 'unmeasurable';
 
 /** Stands in for a pair whose comparison refused, so it can never read as agreement. */
 const NO_VERDICT = 'NO VERDICT (pair refused)';
+
+/** Why a pair is lost when an arm's capture published no estimate for the command. */
+const NO_ESTIMATE = 'published no estimate';
+
+/** The verdict kind that means the comparison judged the command and found no difference. */
+const UNCHANGED_VERDICT = 'unchanged';
+
+/**
+ * Did any pair's comparison JUDGE this command — call it changed or unchanged? Every facet speaks
+ * these two kinds; any other (`unmeasurable`, `added`, `removed`, `below-resolution`, a refused
+ * pair) judged nothing. When no pair judged it, the two arms' numbers were never weighed against
+ * each other, and their difference is not an effect.
+ */
+function anyJudged(verdicts: readonly string[]): boolean {
+  return verdicts.some((verdict) => verdict === CHANGED_VERDICT || verdict === UNCHANGED_VERDICT);
+}
 
 /**
  * The least a comparison must expose for the CLI and `ab` to report it.
@@ -122,6 +136,14 @@ export interface FacetEstimate {
   readonly value: number;
   /** What the number is, for rendering only — `ms`, `calls`. */
   readonly unit: string;
+  /**
+   * Why this capture has no usable measurement — its row failed (the failure, or the facet's own
+   * name for it: `memory`'s `ran out of heap`) — or `null` for an estimate that IS its `value`. A
+   * lost capture is never filtered away: an arm holding one reports THAT, never a statistic of its
+   * surviving pairs, which would understate the very regression that lost it. A pair whose capture
+   * published no estimate for the command at all is lost the same way (`published no estimate`).
+   */
+  readonly lost: string | null;
 }
 
 /**
@@ -148,14 +170,17 @@ export interface FacetFunctions<TBody, TComparison extends ComparisonLike> {
    * `ab` reporting verdict stability with no magnitude behind it — a verdict
    * with no number is exactly the unfalsifiable result this whole verb exists to
    * replace. The facet chooses the number and names its unit; nothing above this
-   * interface ever interprets either, which is what keeps `ab` facet-agnostic
-   * while still having something to take a minimum of.
+   * interface ever interprets either, which is what keeps `ab` facet-agnostic.
    *
-   * It must be a per-capture reduction that is already robust to a slow repeat —
-   * `perf` publishes a command's fastest repeat, not its median — because `ab`
-   * then takes a minimum *of these*, and a min over medians is not a min.
+   * It must be the per-capture reduction {@link FacetFunctions.estimator} names —
+   * `perf` publishes a command's fastest repeat; `memory` publishes its median
+   * repeat's peak, so its `ab` headline is the median, across pairs, of the
+   * per-capture median peaks (a median of medians) — because `ab` then takes that
+   * same statistic *of these*, and a min over medians is not a min.
    */
   readonly estimate: (report: ReportEnvelope<TBody>) => readonly FacetEstimate[];
+  /** What `ab` takes of {@link FacetFunctions.estimate} across pairs; see {@link EstimatorKind}. */
+  readonly estimator: EstimatorKind;
 }
 
 /** Everything an interleaved A/B needs, with the facet's parts injected. */
@@ -214,6 +239,9 @@ export interface AbSpec<TBody, TComparison extends ComparisonLike>
 export interface AbArmSummary extends Estimate {
   /** The facet's unit for these values. */
   readonly unit: string;
+  readonly estimator: EstimatorKind;
+  /** The {@link estimator}'s statistic, which the effect is taken between. */
+  readonly value: number;
 }
 
 /** How an effect stands against the machine's own spread. */
@@ -251,7 +279,9 @@ export interface AbCommandResult {
   readonly caveats: readonly string[];
   readonly a: AbArmSummary | null;
   readonly b: AbArmSummary | null;
-  /** `b.min - a.min`, or `null` when either arm produced no reading. */
+  /** Per arm, how many of its captures were lost and why (`ran out of heap in 1 of 3 pairs`), or `null`. */
+  readonly lost: { readonly a: string | null; readonly b: string | null };
+  /** `b.value - a.value`, or `null` when either arm produced no reading or lost a capture, or no pair was comparable. */
   readonly effect: number | null;
   readonly noise: AbNoiseVerdict;
 }
@@ -259,6 +289,7 @@ export interface AbCommandResult {
 /** A completed interleaved A/B. */
 export interface AbResult {
   readonly control: boolean;
+  readonly estimator: EstimatorKind;
   readonly pairs: number;
   readonly runs: number;
   readonly cache: CacheMode;
@@ -408,18 +439,46 @@ function commandNames(outcomes: readonly PairOutcome[]): readonly string[] {
  * @param outcomes - Every pair's outcome
  * @param name - The command
  * @param arm - Which arm to read
- * @returns The min, the p25 and every sample — or `null` when the arm never read
+ * @param estimator - The facet's estimator
+ * @returns The statistics and every sample — or `null` when the arm never read
  */
 function armSummary(
   outcomes: readonly PairOutcome[],
   name: string,
   arm: 'a' | 'b',
+  estimator: EstimatorKind,
 ): AbArmSummary | null {
-  const found = outcomes
+  const found = armEstimates(outcomes, name, arm).filter((item) => item.lost === null);
+  if (found.length === 0) return null;
+  const statistics = estimate(found.map((item) => item.value));
+  return { ...statistics, unit: found[0]?.unit ?? '', estimator, value: statistics[estimator] };
+}
+
+/** One arm's estimates for one command, across the pairs that published one. */
+function armEstimates(outcomes: readonly PairOutcome[], name: string, arm: 'a' | 'b'): readonly FacetEstimate[] {
+  return outcomes
     .map((outcome) => (arm === 'a' ? outcome.a : outcome.b).get(name))
     .filter((item): item is FacetEstimate => item !== undefined);
-  if (found.length === 0) return null;
-  return { ...estimate(found.map((item) => item.value)), unit: found[0]?.unit ?? '' };
+}
+
+/**
+ * How one arm lost captures for one command — `ran out of heap in 1 of 3 pairs` — or `null`.
+ *
+ * @param outcomes - Every pair's outcome
+ * @param name - The command
+ * @param arm - Which arm to read
+ * @returns The line, naming each distinct reason
+ */
+function armLost(outcomes: readonly PairOutcome[], name: string, arm: 'a' | 'b'): string | null {
+  // A pair with no estimate at all for the command is lost too: the arm would otherwise hold fewer
+  // pairs than it ran, and its statistic would be of the captures that happened to publish one.
+  const reasons = outcomes.flatMap((outcome) => {
+    const item = (arm === 'a' ? outcome.a : outcome.b).get(name);
+    if (item === undefined) return [NO_ESTIMATE];
+    return item.lost === null ? [] : [item.lost];
+  });
+  if (reasons.length === 0) return null;
+  return `${[...new Set(reasons)].join('; ')} in ${String(reasons.length)} of ${String(outcomes.length)} pairs`;
 }
 
 /**
@@ -441,7 +500,10 @@ function judgeNoise<TBody, TComparison extends ComparisonLike>(
 /**
  * Fold every pair into one row per command.
  *
- * ⚠️ REVIEW FINDING — `effect = b.min - a.min` AGGREGATES PAIRED DATA
+ * `effect = b.value - a.value`: the difference of the facet's estimator across pairs — the min
+ * for most facets, the median for `memory` (see {@link EstimatorKind}).
+ *
+ * ⚠️ REVIEW FINDING — that difference AGGREGATES PAIRED DATA
  * UNPAIRED. Alternating arms exists to make drift cancel *within* a pair
  * (property #1 in this module's header); taking a min over all A and a min over
  * all B then throws that pairing away. Every per-pair value is already in
@@ -456,7 +518,7 @@ function judgeNoise<TBody, TComparison extends ComparisonLike>(
  * measured) gave per-pair deltas +383, -506, -598, -35, -101, +222 —
  * s = 388ms, a ~816ms-wide band around zero.
  *
- * So `--noise-floor` is the floor for THIS statistic (min-difference) only, and
+ * So `--noise-floor` is the floor for THIS statistic (the difference of the estimator — min or median) only, and
  * is ~4x finer than the per-pair spread. Quoting it against a paired claim
  * overstates the resolution. Adding a paired estimator is a reporting change —
  * a product decision, not a fix to make in passing.
@@ -471,9 +533,14 @@ function foldCommands<TBody, TComparison extends ComparisonLike>(
 ): readonly AbCommandResult[] {
   return commandNames(outcomes).map((name): AbCommandResult => {
     const verdicts = outcomes.map((outcome) => outcome.verdicts.get(name) ?? NO_VERDICT);
-    const a = armSummary(outcomes, name, 'a');
-    const b = armSummary(outcomes, name, 'b');
-    const effect = a === null || b === null ? null : b.min - a.min;
+    const a = armSummary(outcomes, name, 'a', spec.estimator);
+    const b = armSummary(outcomes, name, 'b', spec.estimator);
+    const lost = { a: armLost(outcomes, name, 'a'), b: armLost(outcomes, name, 'b') };
+    // No effect from an arm that lost a capture — its survivors' statistic understates what lost it —
+    // nor when no pair judged the command: two numbers no comparison weighed are not an effect.
+    const effect = a === null || b === null || lost.a !== null || lost.b !== null || !anyJudged(verdicts)
+      ? null
+      : b.value - a.value;
     return {
       name,
       verdicts,
@@ -487,6 +554,7 @@ function foldCommands<TBody, TComparison extends ComparisonLike>(
       ],
       a,
       b,
+      lost,
       effect,
       noise: judgeNoise(spec, effect),
     };
@@ -509,6 +577,7 @@ export async function runAb<TBody, TComparison extends ComparisonLike>(
 
   return {
     control: spec.control,
+    estimator: spec.estimator,
     pairs: spec.pairs,
     runs: spec.runs,
     cache: spec.cache,
@@ -654,6 +723,11 @@ function verdictLines(command: AbCommandResult): readonly string[] {
   ];
 }
 
+const ESTIMATOR_LINES: Readonly<Record<EstimatorKind, string>> = {
+  min: 'Estimator: MIN across pairs, with p25 beside it. Never a median — one cold repeat poisons it.',
+  median: 'Estimator: MEDIAN across pairs, with the min and p25 beside it — this facet’s noise moves both ways.',
+};
+
 /**
  * How one arm's aggregate reads.
  *
@@ -661,10 +735,12 @@ function verdictLines(command: AbCommandResult): readonly string[] {
  * @param summary - The arm's aggregate, or `null` when it never read
  * @returns A single line
  */
-function armLine(label: string, summary: AbArmSummary | null): string {
+function armLine(label: string, summary: AbArmSummary | null, lost: string | null): string {
+  if (lost !== null) return `    ${label}: ${lost} — a regression with no number; no statistic of its other pairs is reported.`;
   if (summary === null) return `    ${label}: NO READING — this arm published no estimate.`;
+  const median = summary.estimator === 'median' ? `median ${num(summary.median)}${summary.unit} ` : '';
   return (
-    `    ${label}: min ${num(summary.min)}${summary.unit} p25 ${num(summary.p25)}${summary.unit} ` +
+    `    ${label}: ${median}min ${num(summary.min)}${summary.unit} p25 ${num(summary.p25)}${summary.unit} ` +
     `(per-pair: ${summary.samples.map((value) => num(value)).join(', ')})`
   );
 }
@@ -690,6 +766,12 @@ function armLine(label: string, summary: AbArmSummary | null): string {
  * @returns A single line
  */
 function effectLine(command: AbCommandResult, noiseFloor: number | null): string {
+  if (command.lost.a !== null) return `    effect: NONE — arm A ${command.lost.a}.`;
+  if (command.lost.b !== null) return `    effect: NONE — arm B ${command.lost.b}.`;
+  if (command.verdicts.every((verdict) => verdict === NO_VERDICT)) return '    effect: NONE — no pair was comparable; see the refusals above.';
+  if (!anyJudged(command.verdicts)) {
+    return `    effect: NONE — no pair judged it changed or unchanged (every pair said: ${[...new Set(command.verdicts)].join(', ')}).`;
+  }
   if (command.effect === null) return '    effect: NONE — an arm produced no reading.';
   const unit = command.b?.unit ?? command.a?.unit ?? '';
   const head = `    effect (B - A): ${num(command.effect)}${unit}`;
@@ -731,8 +813,8 @@ export function renderAb(result: AbResult): string {
     `  ${command.name}`,
     ...verdictLines(command),
     ...command.caveats.map((caveat) => `    note: ${caveat}.`),
-    armLine('A', command.a),
-    armLine('B', command.b),
+    armLine('A', command.a, command.lost.a),
+    armLine('B', command.b, command.lost.b),
     effectLine(command, result.noiseFloor),
   ]);
 
@@ -743,7 +825,7 @@ export function renderAb(result: AbResult): string {
     `Instrument B: ${instrumentLabel(result.instrumentB)}`,
     ...instrumentTrustNotes(result.instrumentA, result.instrumentB),
     ...configLines(result),
-    'Estimator: MIN across pairs, with p25 beside it. Never a median — one cold repeat poisons it.',
+    ESTIMATOR_LINES[result.estimator],
     noiseFloorLine(result),
     ...result.refusals.map((refusal) => `⚠ ${refusal}`),
     '',

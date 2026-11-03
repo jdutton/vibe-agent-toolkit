@@ -23,7 +23,7 @@ import { Command } from 'commander';
 import { marksOperandRefusalByHand } from '../command-tree.js';
 import { loadConfig } from '../utils/config-loader.js';
 import { endWithReport } from '../utils/document-writer.js';
-import { formatIssueLines } from '../utils/issue-rendering.js';
+import { reportFindings } from '../utils/issue-rendering.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
 import { verdictBanner } from '../utils/run-integrity.js';
 
@@ -366,9 +366,7 @@ async function buildTopLevelCommand(
       if (phase.name === 'claude') {
         const shipped = await runPhase(shippedLinksPhase(cwd));
         results.push(shipped);
-        for (const finding of shipped.report.findings) {
-          for (const line of formatIssueLines(finding, '  ')) logger.error(line);
-        }
+        reportFindings(shipped.report.findings, { verbose: options.verbose === true, write: logger.error });
         if (stopsTheBuild(shipped)) return false;
       }
       return true;

@@ -17,6 +17,82 @@ by a committed, reviewed declaration, in both directions. See [The verdict facet
 numbers need spread. A single sample is not a measurement; a median over repeats with the spread
 reported alongside is.
 
+`memory` is one of these, and its number needs its scope stated, because "peak RSS" names three
+different figures. A preload (`rss-probe.cts`, on `NODE_OPTIONS` like `io`'s counter) writes a
+node process's peak resident set at exit (ahead of vat's own exit listeners), in kilobytes: `VmHWM` from `/proc/self/status` on Linux,
+`process.resourceUsage().maxRSS` on macOS and Windows. That figure **includes worker threads**
+(they share the process: a 400 MB allocation in a worker raises it by ~400 MB) and **excludes the
+parent**. Linux's `maxRSS` does not: it survives `exec`, and a forked child starts with a copy of
+its parent's resident set, so a vat launched by a 300 MB parent through `sh -c exec` — how `npx`
+and a shell launch it — read as 300 MB or more. `VmHWM` belongs to the exec'd image alone. macOS's
+`maxRSS` carries nothing over: measured, a vat stand-in under a node parent holding 0, 300 and
+600 MB peaked at 75.4, 75.4 and 75.3 MB. So a repeat is launched straight from the lab, with no
+intermediate launcher — an `npx:` build included: `npx` runs the package's `bin`, the cli's
+cwd-resolving wrapper, which spawns vat as a second process, so the facet installs the pinned spec
+(`--ignore-scripts`, in an arm of its own under the arms root, with that arm's npm cache and the
+operator's `~/.npmrc` as npm's userconfig) and runs
+that install's `@vibe-agent-toolkit/cli/dist/bin.js` with `node`, as a `dist:` build runs
+(`npx-entry.ts`); an install whose cli is not the coordinate's version is refused. The install floats
+third-party ranges (no lockfile), so its whole `node_modules` is digested into the coordinate's
+`closure`, and two installs that resolved differently are two instruments. `test/integration/memory-probe.integration.test.ts`
+pins the independence, and it can only go red on Linux: macOS's `maxRSS` carries nothing over, and
+the test needs `sh`, so it is skipped on Windows, where a process is created rather than forked —
+argued there, not measured. A command that writes its subject (`build`) runs in a copy of it, which
+the lab cannot make on Windows, so that spec is refused there; a repeat that changed the copy outside
+its declared `writes` (`dist/`) fails. In a git checkout that check sees only git's population —
+tracked files and untracked ones no ignore rule matches — so a write to a gitignored path (or under
+`.git/`) outside `writes` is not caught; outside a checkout every file is checked.
+
+It is one figure per process, and only vat's own processes write one: a process is vat's when its
+main script (`process.argv[1]`, its own links read) belongs to the `vibe-agent-toolkit` launcher or the
+`@vibe-agent-toolkit/cli` package — the nearest `package.json` above it says which, and a `private`
+one never does (the monorepo's root is named `vibe-agent-toolkit` too). The probe
+decides that from the install alone, so every vat ever published is measurable, and `npm` under
+`npx`, a `node -e` or a tool vat spawns writes nothing and never stands in for vat's peak.
+A repeat's sample is the LARGEST vat process's peak, never a sum: high-water marks from different
+moments were never resident together. How many vat processes reported is counted beside it, and a
+change in that count is a CHANGED verdict on its own, across instrument kinds too: every kind runs
+`dist/bin.js` straight, so one count means one thing. A peak is the platform's allocator and the
+Node build's V8 as much as vat's, so two reports whose envelopes record a different `host`
+(`process.platform`, `process.arch`, `process.version`, the `NODE_OPTIONS` the arm hands its
+children, the V8 heap limit a child of the arm gets — a `--max-old-space-size`, or a different
+machine's memory, moves a peak — and `os.availableParallelism()`, from which vat sizes its parse
+pool, each thread with its own heap) are refused, naming both. The host's total memory is recorded too.
+
+A repeat that leaves no vat peak — killed, out of heap, or no process with a vat main script —
+fails the row; it is never read as a small number. A row any of whose runs vat says a parse failed in
+(its population warning, `… (N parse failed …)`, matched by the lab's own pattern for every build —
+the lab imports nothing of vat's to read it) is failed and NOT marked `outOfHeap`, whatever the run
+exited with and whatever the warning says the parse threw — a worker vat's pool caught at its heap
+limit (`[ERR_WORKER_OUT_OF_MEMORY]`) included: documents went unparsed, so the run did less work, and
+it compares UNMEASURABLE, never CHANGED. A row any of whose runs ran out of heap process-fatally (a
+stderr line outside that warning names `JavaScript heap out of memory` or `reaching memory limit` —
+Node's worker message, which says "JS heap" — a warm arm's unmeasured priming run included) is failed
+and marked `outOfHeap` WHATEVER the run exited with. Stderr is the only thing read, so a death the
+process swallowed without printing is invisible. Against a measured other
+side an `outOfHeap` row compares CHANGED with no ratio — the worst regression never reads as no delta. A row whose
+repeats disagree on how many vat processes reported (`1/2/1`) is different: it is failed, naming the
+counts, and compares UNMEASURABLE, not CHANGED — a repeat that lost a process's peak is a defect of
+the capture, not evidence the command moved, and its largest-process peaks are not samples of one
+thing. (A count that differs BETWEEN two rows, each agreeing with itself, is CHANGED, above.) CHANGED needs the median delta to clear three bars at once: 10% of the
+smaller median (`perf`'s relative gate), 8 MiB, and the two arms' combined min–max spread.
+
+**The memory threshold.** The 8 MiB floor is four times the largest median move an A-vs-A null run
+made at 5 repeats a side; a default capture takes 3, so its own spread, not this table, is what the
+spread bar sees. Measured 2026-11-02 on an Apple-silicon Mac (10 CPUs, load average 20–30 from other work —
+contaminated), one `dist:` build of vat 0.2.0-rc.12 against this repository, 5 warm repeats a side:
+
+| Command | A median | B median | Δ median | A spread | B spread |
+|---|---|---|---|---|---|
+| `resources-validate` | 198.4 MiB | 198.7 MiB | +0.3 MiB | 0.7 MiB | 0.7 MiB |
+| `audit` | 195.5 MiB | 197.5 MiB | +2.0 MiB (1.0%) | 3.2 MiB | 5.0 MiB |
+| `skills-validate` | 138.5 MiB | 138.4 MiB | −0.1 MiB | 0.5 MiB | 0.9 MiB |
+
+Every pair compared `unchanged`. The 10% relative gate is `perf`'s, borrowed rather than derived
+from this run (ten times its largest relative move, 1.0%), and above ~80 MiB — every command here —
+it, not the floor, is the bar that binds. Re-measure on a quiet machine and on
+Linux before tightening either.
+
 **Extent facets** — `population`. The output is a *set*, and a set needs neither spread nor
 tolerance: the comparator is exact set difference, and one member's difference is real. The
 distinction from a measurement facet is not cosmetic. Every other facet answers *how expensive was
@@ -94,7 +170,7 @@ distribution differences for numbers.
 
 A facet owns:
 
-- **A stable `facet` name** — `perf`, `io`, `parse`, `crawl`, `population`, `verdict`. It goes in the envelope header and
+- **A stable `facet` name** — `perf`, `io`, `parse`, `crawl`, `population`, `verdict`, `memory`. It goes in the envelope header and
   two reports with different names are refused against each other.
 - **A body schema** — strict, and validated by the facet after it has confirmed the header names it.
   The envelope reader deliberately does not validate bodies; it does not know their shapes.

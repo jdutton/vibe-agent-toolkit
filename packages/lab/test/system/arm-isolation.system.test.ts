@@ -65,7 +65,7 @@ function subject(): string {
 
 /** A timed VAT step committed to exit 0. */
 function vatStep(name: string, args: readonly string[], overrides: Partial<SequenceStep> = {}): SequenceStep {
-  return { name, command: { kind: 'vat', args }, timed: true, exit: exactExit(0), provenance: 'none', populates: false, ...overrides };
+  return { name, command: { kind: 'vat', args }, timed: true, exit: exactExit(0), provenance: 'none', populates: false, writes: [], ...overrides };
 }
 
 /**
@@ -141,7 +141,7 @@ describe('an arm never sees the developer’s VAT, git or Claude state', () => {
     const run = await runRepeats({
       instrument: VAT,
       cwd: root,
-      steps: [vatStep('validate', ['resources', 'validate'], { populates: true }), vatStep('scan', SCAN)],
+      steps: [vatStep('validate', ['resources', 'validate'], { populates: true, writes: [] }), vatStep('scan', SCAN)],
       runs: 1,
       arm: { root: tempDir('lab-arm-isolation-arms-'), build: 'cli', arm: 'isolation', state: 'cold' },
       env: { set: {}, unset: [] },

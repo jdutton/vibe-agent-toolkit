@@ -19,7 +19,8 @@
  * than one spec file may spend (the per-file duration budget). So:
  *
  * - **this file** asserts everything that is true of the WHOLE table, and runs
- *   nothing but the one external-verb spawn;
+ *   nothing but the one external-verb spawn and the two `skill review` spawns
+ *   that hold its text mode to the shared finding line;
  * - `exit-code-matrix-shard-<name>.system.test.ts` run the envelope scenarios,
  *   each the slice `MATRIX_SHARDS` assigns to the shard it is named after;
  * - `exit-code-matrix-path-{missing,unlistable,untraversable}.system.test.ts`
@@ -51,7 +52,7 @@ import { readdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { ExitCode, REPORT_STATUSES } from '@vibe-agent-toolkit/schema';
+import { ExitCode, REPORT_STATUSES, type Finding } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
@@ -60,18 +61,22 @@ import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 
 import { fakeHomeEnv } from './test-common.js';
 import {
+  BROKEN_SKILL,
   byName,
   documentOf,
   ENVELOPE_SCENARIOS,
+  FINDINGS_NOT_ON_STDERR,
   MATRIX_BIN_PATH,
   MATRIX_SHARD_FILE,
   MATRIX_SHARDS,
   matrixTempDir,
+  project,
   REGISTERED_ENVELOPE_VERBS,
   UNREACHABLE_STATUSES,
   useMatrixTempDir,
 } from './test-helpers/exit-code-matrix.js';
 import { MATRIX_PATH_FILE, MATRIX_PATH_OUTCOMES } from './test-helpers/exit-code-path-verbs.js';
+import { saysFindingLine } from './test-helpers/finding-line.js';
 import { executeCli } from './test-helpers/index.js';
 
 // ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
@@ -127,6 +132,16 @@ const SKIPPABLE_SCENARIOS: Readonly<Record<string, 'platform' | 'network' | 'nev
   'skill test run → ok': 'never-on-ci',
   'skills list → findings': 'platform',
 };
+
+/** Each mode flag, with how many args spell its mode: `--yaml` alone, `--format <value>`. */
+const MODE_FLAG_ARITY = new Map([['--format', 2], ['--yaml', 1]]);
+
+/** The mode a scenario's args run in, spelled as a findings-on-stderr exemption names it. */
+function modeOf(args: readonly string[]): string {
+  const at = args.findIndex((arg) => MODE_FLAG_ARITY.has(arg));
+  if (at === -1) return 'default';
+  return args.slice(at, at + (MODE_FLAG_ARITY.get(args[at] ?? '') ?? 1)).join(' ');
+}
 
 describe('exit codes are derived from the published document (system test)', () => {
   useMatrixTempDir();
@@ -185,6 +200,42 @@ describe('exit codes are derived from the published document (system test)', () 
   // an outcome from every verb with every other file still green.
   it('has EXACTLY one spec file per declared path outcome', () => {
     expect(namedOnDisk(MATRIX_PATH_FILE).sort(byName)).toStrictEqual([...MATRIX_PATH_OUTCOMES].sort(byName));
+  });
+
+  /**
+   * `FINDINGS_NOT_ON_STDERR` is asserted both ways by a verb's `findings` scenario — so an entry is
+   * only as real as that scenario: it must exist, its mode is the mode the entry speaks for, and where
+   * it skips is where the entry is unproven, said in the entry.
+   */
+  describe('the findings-on-stderr exemptions are real', () => {
+
+    it('names only matrix verbs, each with a findings scenario in the mode it speaks for, run where it says', () => {
+      for (const [verb, exemption] of Object.entries(FINDINGS_NOT_ON_STDERR)) {
+        const scenarios = (ENVELOPE_SCENARIOS[verb] ?? []).filter((scenario) => scenario.status === 'findings');
+        expect(scenarios.length, `${verb}: a findings scenario`).toBe(1);
+        const [scenario] = scenarios;
+        if (scenario === undefined) continue;
+        const home = safePath.join(matrixTempDir(), 'homes', `exemption-${verb.replaceAll(' ', '-')}`);
+        mkdirSyncReal(home, { recursive: true });
+        const { args } = scenario.run(home);
+        expect(modeOf(args), `${verb}: the mode its exemption speaks for`).toBe(exemption.mode);
+        expect(exemption.provenOn, `${verb}: where its findings scenario runs`)
+          .toBe(scenario.skipReason === undefined ? 'every platform' : 'platforms that can deny a directory listing');
+      }
+    });
+
+    it('vat skill review without --yaml says each finding as the shared line — only --yaml is exempt', () => {
+      const cwd = project('review-text-findings', '{}\n', { 'SKILL.md': BROKEN_SKILL });
+      const home = safePath.join(matrixTempDir(), 'homes', 'review-text-findings');
+      mkdirSyncReal(home, { recursive: true });
+      const env = { ...process.env, ...fakeHomeEnv(home) };
+      const machine = executeCli(MATRIX_BIN_PATH, ['skill', 'review', 'SKILL.md', '--yaml'], { cwd, env });
+      const findings = documentOf(machine.stdout)['findings'] as readonly Finding[];
+      expect(findings.length, machine.stdout).toBeGreaterThan(0);
+
+      const human = executeCli(MATRIX_BIN_PATH, ['skill', 'review', 'SKILL.md'], { cwd, env });
+      for (const finding of findings) expect(saysFindingLine(human.stderr, finding), `${finding.code}\n${human.stderr}`).toBe(true);
+    });
   });
 
   /**

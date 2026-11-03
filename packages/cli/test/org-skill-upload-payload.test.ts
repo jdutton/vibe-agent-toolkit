@@ -805,6 +805,8 @@ describe('what installFromLocal actually reads out of a REAL archive', () => {
     const log = logger.lines.join('\n');
     expect(log).toContain(PORTABILITY_WARNING);
     expect(log).toContain('CLAUDE_PLUGIN_ROOT');
+    // As the one finding line every finding prints as.
+    expect(log.split('\n').some((line) => /^ +SKILL\.md:[\d:]+: warning: /u.test(line) && /\[[A-Z_]+\]$/u.test(line))).toBe(true);
     // Warned, never blocked — the archive still went.
     expect(log).toContain('uploading anyway');
   });

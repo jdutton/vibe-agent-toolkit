@@ -17,7 +17,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { safeModuleCases, unanchoredExemptCases } from '../factory-cases.js';
+import { rewriteTargetCases, safeModuleCases, unanchoredExemptCases } from '../factory-cases.js';
 import {
   BARREL,
   LINTED_FILE,
@@ -30,6 +30,7 @@ import {
   PATH_UTILS_SPEC,
   RULE,
   SAFE_IMPORT,
+  SAFE_PATH_MODULE,
   SEAM,
   WRAPPED_PATH_FUNCTIONS,
   type WrappedPathFunction,
@@ -52,6 +53,9 @@ function pathFunctionRuleCases(fn: WrappedPathFunction): RuleCases {
     valid: [
       // The safe call is never flagged.
       { code: `${SAFE_IMPORT} const p = safePath.${fn}(a, b);`, filename: LINTED_FILE, options },
+      // `import x = require()` is not an `ImportDeclaration` and the rule tracks only those: the
+      // binding resolves through scope to a definition with no `source`, and must not crash the run.
+      { code: `import path = require('node:path'); const p = path.${fn}(a, b);`, filename: LINTED_FILE, options },
       // …including when it was reached through the barrel.
       {
         code: `import { safePath } from '${BARREL}'; const p = safePath.${fn}(a, b);`,
@@ -125,6 +129,18 @@ function pathFunctionRuleCases(fn: WrappedPathFunction): RuleCases {
         filename: LINTED_FILE,
         options,
       },
+      // A parameter named like the import SHADOWS it: the callee resolves through scope to the
+      // parameter, not to `node:path`, so it is not this rule's call at all.
+      {
+        code: `${PATH_NAMESPACE_IMPORT}\nexport function f(path: { ${fn}(a: string): string }) { return path.${fn}('a'); }`,
+        filename: LINTED_FILE,
+        options,
+      },
+      {
+        code: `${namedImport(fn, NODE_PATH)}\nexport function f(${fn}: (a: string) => string) { return ${fn}('a'); }`,
+        filename: LINTED_FILE,
+        options,
+      },
       // Files the CONSUMING config declared exempt, by their repo-relative paths.
       { code: unsafeMemberCode, filename: PATH_CORE_IMPL, options },
       { code: unsafeMemberCode, filename: `/Users/dev/vat/${PATH_UTILS_IMPL}`, options },
@@ -139,19 +155,15 @@ function pathFunctionRuleCases(fn: WrappedPathFunction): RuleCases {
         code: `import { ${fn} } from 'node:path'; const p = ${fn}(a, b);`,
         filename: LINTED_FILE,
         options,
-        output: `\n${SAFE_IMPORT} const p = safePath.${fn}(a, b);`,
+        // No call's fix removes the specifier; the dead-import leg does, a pass later.
+        output: `import { ${fn} } from 'node:path';\n${SAFE_IMPORT} const p = safePath.${fn}(a, b);`,
         errors,
       },
-      // THREE call sites, ONE pass. RuleTester applies exactly one round of
-      // fixes, so `output` here is the whole property: every call rewritten and
-      // the import surgery done, with nothing discarded for overlapping.
-      //
-      // Every fixture above has a single call site, and a single-call-site
-      // fixture CANNOT reproduce the defect this guards — the fix that edits
-      // both the import and its own call spans the gap between them, so the
-      // second and third reports' ranges nested inside the first and ESLint
-      // dropped them. The specifier went away, the calls did not, and the next
-      // pass had nothing left to key on. See `buildFix` in the rule.
+      // THREE call sites, ONE pass. Every report's fix carries the `safePath` import, so each is
+      // correct applied alone (`createSafeImporter`); the cost is that the fixes overlap and
+      // RuleTester's one round applies the first. Every other call is still bound to `node:path`
+      // — no strand — and the next pass, with `safePath` bound, rewrites the rest locally. The
+      // autofix-fixpoint suite runs it to convergence.
       {
         code: [
           `import { ${fn} } from 'node:path';`,
@@ -162,16 +174,15 @@ function pathFunctionRuleCases(fn: WrappedPathFunction): RuleCases {
         filename: LINTED_FILE,
         options,
         output: [
-          '',
+          `import { ${fn} } from 'node:path';`,
           SAFE_IMPORT,
           `const a1 = safePath.${fn}(a, b);`,
-          `const a2 = safePath.${fn}(c, d);`,
-          `const a3 = safePath.${fn}(e, f);`,
+          `const a2 = ${fn}(c, d);`,
+          `const a3 = ${fn}(e, f);`,
         ].join('\n'),
         errors: [errors[0], errors[0], errors[0]],
       },
-      // Same shape through the namespace import, which removes no specifier —
-      // the import INSERT alone is enough to span the file and starve the rest.
+      // Same shape through the namespace import.
       {
         code: [
           PATH_NAMESPACE_IMPORT,
@@ -184,7 +195,7 @@ function pathFunctionRuleCases(fn: WrappedPathFunction): RuleCases {
           PATH_NAMESPACE_IMPORT,
           SAFE_IMPORT,
           `const a1 = safePath.${fn}(a, b);`,
-          `const a2 = safePath.${fn}(c, d);`,
+          `const a2 = path.${fn}(c, d);`,
         ].join('\n'),
         errors: [errors[0], errors[0]],
       },
@@ -258,14 +269,12 @@ function pathFunctionRuleCases(fn: WrappedPathFunction): RuleCases {
       // ORPHANED `safePath.join(...)` — the OTHER half of the repair, and the
       // reason the file above can ever recover.
       //
-      // ESLint runs `fix()` before the `eslint-disable` filter, so a suppressed
-      // report on the first call site consumes the once-per-file import edit
-      // and then discards it. Every other call becomes `safePath.join`, nothing
-      // imports `safePath`, and no report is left to carry the import on any
-      // later pass. An adversarial run produced exactly that as a STABLE
-      // fixpoint — `--fix` twice more changed nothing — against a docstring
-      // that claimed the state was transient. This leg is what makes the claim
-      // true.
+      // An older release carried the import on the first report only, and ESLint
+      // runs `fix()` before the `eslint-disable` filter, so a suppressed first
+      // report spent it: every other call became `safePath.join`, nothing
+      // imported `safePath`, and no report was left to carry the import on any
+      // later pass — a STABLE broken fixpoint. Today every fix carries the
+      // import; this leg finishes a file that release left behind.
       {
         code: `const p = safePath.${fn}(a, b);`,
         filename: LINTED_FILE,
@@ -296,13 +305,41 @@ function pathFunctionRuleCases(fn: WrappedPathFunction): RuleCases {
         output: `import { safePath } from '${BARREL}';\nimport path from 'node:path';\nconst p = safePath.${fn}(a, b);`,
         errors,
       },
-      // Same conflict from a plain top-level declaration, which no
-      // import-scanning check would have seen.
-      {
-        code: `const safePath = makeIt();\nimport path from 'node:path';\nconst p = path.${fn}(a, b);`,
+      // A top-level `safePath` that is NOT this package's — a local declaration, another module's
+      // import, a type-only import — would catch the rewritten call (or back no value), and an
+      // added import would redeclare it: reported, never rewritten.
+      ...[
+        'const safePath = makeIt();',
+        "import { safePath } from './local-other';",
+        `import type { safePath } from '${SAFE_PATH_MODULE}';`,
+      ].map((binding) => ({
+        code: `${binding}\nimport path from 'node:path';\nconst p = path.${fn}(a, b);`,
         filename: LINTED_FILE,
         options,
-        output: `const safePath = makeIt();\nimport path from 'node:path';\nconst p = safePath.${fn}(a, b);`,
+        output: null,
+        errors,
+      })),
+      // The ONE "may this call be rewritten to `safePath`?" table every fixer in the pack shares:
+      // through a namespace binding and through a named import.
+      ...rewriteTargetCases({
+        preamble: PATH_NAMESPACE_IMPORT, unsafeCall: `path.${fn}(a, b)`, safeName: 'safePath', safeModule: SAFE_PATH_MODULE, options, errors,
+      }),
+      ...rewriteTargetCases({
+        preamble: namedImport(fn, NODE_PATH), unsafeCall: `${fn}(a, b)`, safeName: 'safePath', safeModule: SAFE_PATH_MODULE, options, errors,
+      }),
+      // A parameter named `safePath` handed to the call: rewritten, the call would read it.
+      {
+        code: `${PATH_NAMESPACE_IMPORT}\nexport function f(safePath: any) { return path.${fn}('a', safePath); }`,
+        filename: LINTED_FILE,
+        options,
+        errors,
+      },
+      // A hashbang stays the first line: the import lands below it.
+      {
+        code: `#!/usr/bin/env node\nconst p = safePath.${fn}(a, b);`,
+        filename: LINTED_FILE,
+        options,
+        output: `#!/usr/bin/env node\n${SAFE_IMPORT}\nconst p = safePath.${fn}(a, b);`,
         errors,
       },
     ],
@@ -322,7 +359,8 @@ const FUNCTIONS_OPTION_CASES: RuleCases = {
     { code: `${PATH_NAMESPACE_IMPORT}\nconst d = path.dirname(p);`, filename: LINTED_FILE },
   ],
   invalid: [
-    // All three through one namespace import, one pass, one inserted import.
+    // All three through one namespace import: one pass rewrites the first (every fix carries the
+    // import, so they overlap) and the next finishes; one inserted import either way.
     {
       code: [
         PATH_NAMESPACE_IMPORT,
@@ -335,20 +373,18 @@ const FUNCTIONS_OPTION_CASES: RuleCases = {
         PATH_NAMESPACE_IMPORT,
         SAFE_IMPORT,
         'const a = safePath.join(x, y);',
-        'const b = safePath.resolve(x);',
-        'const c = safePath.relative(x, y);',
+        'const b = path.resolve(x);',
+        'const c = path.relative(x, y);',
       ].join('\n'),
       errors: [{ messageId: 'noUnsafePathFn' }, { messageId: 'noUnsafePathFn' }, { messageId: 'noUnsafePathFn' }],
     },
-    // Two NAMED specifiers on one declaration: the first report takes its own
-    // specifier and the shared import insert; the second report's fix — its
-    // callee rewrite AND its specifier removal, merged into one range — nests
-    // inside the first's and is dropped for this pass. RuleTester shows one
-    // pass; 'two named specifiers converge' below runs it to the fixpoint.
+    // Two NAMED specifiers on one declaration: one pass rewrites the first call (both fixes
+    // carry the import, so they overlap) and leaves the declaration for the dead-import leg.
+    // 'two named specifiers converge' below runs it to the fixpoint.
     {
       code: "import { join, resolve } from 'node:path';\nconst a = join(x, y);\nconst b = resolve(x);",
       filename: LINTED_FILE,
-      output: `import {  resolve } from 'node:path';\n${SAFE_IMPORT}\nconst a = safePath.join(x, y);\nconst b = resolve(x);`,
+      output: `import { join, resolve } from 'node:path';\n${SAFE_IMPORT}\nconst a = safePath.join(x, y);\nconst b = resolve(x);`,
       errors: [{ messageId: 'noUnsafePathFn' }, { messageId: 'noUnsafePathFn' }],
     },
     // The narrowed table still fires on what it names.
@@ -414,13 +450,14 @@ describe(NAME, () => {
 });
 
 /**
- * A SUPPRESSED report still consumes the once-per-file import edit.
+ * A SUPPRESSED report still runs its `fix()`.
  *
  * ESLint runs a rule's `fix()` before the `eslint-disable` filter discards the
- * problem, so `buildFix`'s "emit the shared edits once" guard is spent by a
- * report that is then thrown away. Every other call site is rewritten to
- * `safePath.join(...)`, nothing imports `safePath`, and — until the repair leg
- * existed — no report survived to carry the import on any later pass.
+ * problem, so an "emit the shared edits once" guard was spent by a report that
+ * is then thrown away. Every other call site was rewritten to
+ * `safePath.join(...)`, nothing imported `safePath`, and — until the repair leg
+ * existed — no report survived to carry the import on any later pass. Every fix
+ * now carries the import itself (`createSafeImporter`).
  *
  * An adversarial run measured that as a STABLE fixpoint: `--fix` twice more
  * changed nothing, lint reported zero problems, and the file did not compile.
@@ -431,12 +468,15 @@ describe('a suppressed first report does not strand the file', () => {
   const cfg = ruleConfig(NAME);
   const defined = { [NAME]: loadLocalRule(`${NAME}.cjs`) };
 
-  it.each(WRAPPED_PATH_FUNCTIONS)('%s converges to compiling source with the first call site disabled', (fn) => {
+  // `middle`: an unsuppressed call BEFORE the suppressed one, which a removal riding on any
+  // one report's fix reaches first.
+  const positions = ['first', 'middle'] as const;
+  it.each(positions.flatMap((at) => WRAPPED_PATH_FUNCTIONS.map((fn) => [at, fn] as const)))('%s: %s converges to compiling source with that call site disabled', (at, fn) => {
+    const suppressed = [`// eslint-disable-next-line local/${NAME}`, `export const a = ${fn}('1', '2');`];
+    const b = `export const b = ${fn}('3', '4');`;
     const source = [
       namedImport(fn, NODE_PATH),
-      `// eslint-disable-next-line local/${NAME}`,
-      `export const a = ${fn}('1', '2');`,
-      `export const b = ${fn}('3', '4');`,
+      ...(at === 'first' ? [...suppressed, b] : [b, ...suppressed]),
       `export const c = ${fn}('5', '6');`,
     ].join('\n');
 
@@ -517,7 +557,7 @@ describe('a sibling function binding safePath does not arm the repair leg', () =
     expect(output).not.toContain('safePath.join(');
   });
 
-  it("still finishes what an editor's single-fix left half-migrated", () => {
+  it("strands nothing when an editor applies one report's fix alone", () => {
     const source = [
       namedImport('join', NODE_PATH),
       "export const a = join('1', '2');",
@@ -525,20 +565,17 @@ describe('a sibling function binding safePath does not arm the repair leg', () =
     ].join('\n');
     const cfg = ruleConfig(NAME, { functions: ['join'] });
 
-    // An editor's "fix this problem" applies ONE report's fix. The first
-    // report's is the self-sufficient one — it rewrites its own callee, inserts
-    // the `safePath` import AND removes the `node:path` specifier — which strands
-    // every other call site as a bare, unbound `join(...)`.
+    // An editor's "fix this problem" applies ONE report's fix: its own callee and
+    // the `safePath` import. It no longer removes the `node:path` specifier, so
+    // every other call site is still bound — there is no strand to repair.
     const firstFix = lint(source, cfg)[0]?.fix;
     if (!firstFix) {
-      throw new Error('the first report carries no fix; this fixture no longer builds a strand');
+      throw new Error('the first report carries no fix');
     }
     const stranded = source.slice(0, firstFix.range[0]) + firstFix.text + source.slice(firstFix.range[1]);
-    // The strand, and the evidence that comes with it, spelled out rather than
-    // assumed: no `node:path` left, a bare `join`, and a migrated sibling call.
-    expect(stranded).not.toContain("from 'node:path'");
-    expect(stranded).toContain("export const b = join('3', '4');");
+    expect(stranded).toContain(namedImport('join', NODE_PATH));
     expect(stranded).toContain("export const a = safePath.join('1', '2');");
+    expect(unboundIn(stranded, { [NAME]: loadLocalRule(`${NAME}.cjs`) })).toStrictEqual([]);
 
     const { output } = fix(stranded, cfg);
     expect(output).toContain("export const b = safePath.join('3', '4');");

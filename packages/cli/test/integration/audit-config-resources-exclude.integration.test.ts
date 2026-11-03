@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -42,7 +43,7 @@ function gitAddAll(dir: string): void {
  * This causes LINK_INTEGRITY_BROKEN for the missing `scripts/cli.mjs`.
  */
 function writeSkillWithBrokenLink(skillPath: string, skillName: string): void {
-  fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+  mkdirSyncReal(path.dirname(skillPath), { recursive: true });
   fs.writeFileSync(
     skillPath,
     `---

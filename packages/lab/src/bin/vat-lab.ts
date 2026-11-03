@@ -20,6 +20,9 @@ import { renderCrawlComparison, renderCrawlReport } from '../facets/crawl/render
 import { captureIo } from '../facets/io/capture.js';
 import { compareIo } from '../facets/io/compare.js';
 import { renderIoComparison, renderIoReport } from '../facets/io/render.js';
+import { captureMemory } from '../facets/memory/capture.js';
+import { compareMemory } from '../facets/memory/compare.js';
+import { renderMemoryComparison, renderMemoryReport } from '../facets/memory/render.js';
 import { captureParse } from '../facets/parse/capture.js';
 import { compareParse } from '../facets/parse/compare.js';
 import { renderParseComparison, renderParseReport } from '../facets/parse/render.js';
@@ -628,7 +631,7 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
       'Subject id recorded in the reports (default: the <subject> argument exactly as given)',
     )
     .description(
-      `Interleave two vat builds over the ${wiring.name} facet: A B A B …, min estimator, per-pair verdicts`,
+      `Interleave two vat builds over the ${wiring.name} facet: A B A B …, ${wiring.estimator} estimator, per-pair verdicts`,
     )
     .action((subjectPath: string, options: AbOptions) =>
       refusingArmErrors(async () => {
@@ -660,6 +663,7 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
             capture: wiring.capture,
             compare: wiring.compare,
             estimate: wiring.estimate,
+            estimator: wiring.estimator,
           });
           process.stdout.write(`${renderAb(result)}\n`);
           applyAbExitCode(result);
@@ -894,33 +898,48 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
 /**
  * Turn a facet's command rows into the estimates `ab` aggregates.
  *
- * Shared by all three wirings because the *rule* is shared and is the part worth
- * getting right: a failed row publishes no estimate at all. Letting one through
- * would feed `ab` the zero a failed row carries, and a zero is the best number
- * this tool can print — one failure would read as the fastest arm ever measured.
- * Three hand-written copies would be three chances to forget that filter.
+ * Shared by every wiring because the *rule* is shared and is the part worth
+ * getting right: a failed row has no usable measurement, so it is LOST — kept,
+ * valueless, with its reason — never a value and never dropped. A value would feed
+ * `ab` the zero a failed row carries, the best number this tool can print; a
+ * dropped row would leave the arm a statistic of the pairs that happened to
+ * succeed, which understates the regression that failed the others.
  *
- * @param rows - The facet's command rows, which all share `name` and `failed`
+ * @param rows - The facet's command rows, which all share `name`, `failed` and `failure`
  * @param unit - What the extracted value is, for rendering only
  * @param valueOf - Which of the row's numbers to publish
- * @returns One estimate per row that produced a usable measurement
+ * @param lostReasonOf - How a failed row's loss is named ({@link FAILURE_IS_THE_REASON} unless the facet has a better name)
+ * @returns One estimate per row: a value, or the reason there is none
  */
-function rowEstimates<TRow extends { readonly name: string; readonly failed: boolean }>(
+export function rowEstimates<TRow extends FailableRow>(
   rows: readonly TRow[],
   unit: string,
   valueOf: (row: TRow) => number,
+  lostReasonOf: (row: TRow) => string,
 ): readonly FacetEstimate[] {
-  return rows
-    .filter((row) => !row.failed)
-    .map((row) => ({ name: row.name, value: valueOf(row), unit }));
+  return rows.map((row): FacetEstimate =>
+    row.failed
+      ? { name: row.name, value: 0, unit, lost: lostReasonOf(row) }
+      : { name: row.name, value: valueOf(row), unit, lost: null },
+  );
 }
+
+/** What every facet's command row carries for {@link rowEstimates}. */
+interface FailableRow {
+  readonly name: string;
+  readonly failed: boolean;
+  readonly failure: string | null;
+}
+
+/** A failed row's loss, named by its own `failure`. */
+export const FAILURE_IS_THE_REASON = (row: FailableRow): string => row.failure ?? 'failed, with no reason recorded';
 
 /**
  * The fastest repeat a row measured — the reduction `FacetEstimate` requires.
  *
  * `FacetFunctions.estimate` demands "a per-capture reduction that is already
- * robust to a slow repeat", because `ab` then takes a minimum across captures
- * and **a min over medians is not a min**: a median carries whichever repeat
+ * robust to a slow repeat", because `ab` then takes the facet's estimator across
+ * captures — the min, for every facet this serves — and **a min over medians is not a min**: a median carries whichever repeat
  * happened to land in the middle, so a single slow repeat inside an arm survives
  * into the number `ab` compares and reads as a real effect.
  *
@@ -1047,6 +1066,7 @@ export function collectPrerequisite(value: string, previous: readonly SequenceSt
     exit: exactExit(ExitCode.OK),
     provenance: 'none',
     populates: false,
+    writes: [],
   };
   return [...(previous ?? []), step];
 }
@@ -1678,7 +1698,8 @@ export function createProgram(): Command {
         // `minMs`, not `medianMs`. The row already carries the fastest repeat,
         // and it is the right number to hand `ab` for the same reason `ab` then
         // takes a minimum of it — see `harness/estimator.ts`.
-        estimate: (report) => rowEstimates(report.body.commands, 'ms', (row) => row.minMs),
+        estimator: 'min',
+        estimate: (report) => rowEstimates(report.body.commands, 'ms', (row) => row.minMs, FAILURE_IS_THE_REASON),
       })
         .addCommand(createPerfArmsCommand())
         .addCommand(createPerfBarsCommand()),
@@ -1702,7 +1723,8 @@ export function createProgram(): Command {
         // normally every pair's value. That is a feature: an arm whose min and
         // p25 differ is an arm whose counts were NOT deterministic, and the A/B
         // shows it without needing its own stability rule.
-        estimate: (report) => rowEstimates(report.body.commands, 'calls', (row) => row.userCalls),
+        estimator: 'min',
+        estimate: (report) => rowEstimates(report.body.commands, 'calls', (row) => row.userCalls, FAILURE_IS_THE_REASON),
       }),
     )
     .addCommand(
@@ -1742,8 +1764,9 @@ export function createProgram(): Command {
         // change at all. The sum is the only single number that moves whenever
         // any parse work does. A reader who needs to know WHICH kind moved reads
         // the compare output, where the passes are qualified by kind.
+        estimator: 'min',
         estimate: (report) =>
-          rowEstimates(report.body.commands, 'ms parse (all kinds)', fastestRepeat),
+          rowEstimates(report.body.commands, 'ms parse (all kinds)', fastestRepeat, FAILURE_IS_THE_REASON),
       }),
     )
     .addCommand(
@@ -1767,8 +1790,9 @@ export function createProgram(): Command {
         // `parse` wiring uses, which is the point: these two facets report a
         // median row and must reduce it identically for `ab`, and stating the
         // rule twice is how they drifted apart the first time.
+        estimator: 'min',
         estimate: (report) =>
-          rowEstimates(report.body.commands, 'ms crawl (all strata)', fastestRepeat),
+          rowEstimates(report.body.commands, 'ms crawl (all strata)', fastestRepeat, FAILURE_IS_THE_REASON),
       }),
     )
     .addCommand(
@@ -1797,7 +1821,28 @@ export function createProgram(): Command {
         // requires an estimate, and it is honest about what it can see: two
         // populations of equal size and different membership read as unchanged
         // through `ab` and as CHANGED through `compare`. Use `compare`.
-        estimate: (report) => rowEstimates(report.body.commands, 'files', (row) => row.count),
+        estimator: 'min',
+        estimate: (report) => rowEstimates(report.body.commands, 'files', (row) => row.count, FAILURE_IS_THE_REASON),
+      }),
+    )
+    .addCommand(
+      createFacetCommand({
+        name: 'memory',
+        summary: 'Measure the peak resident memory (RSS) of vat commands, worker threads included',
+        runSummary: 'Capture a peak-RSS report for one project against one vat build',
+        compareSummary: 'Diff two peak-RSS reports along a single axis',
+        // Three, not perf's five: a peak barely moves between repeats, and a
+        // memory-heavy command is usually a slow one.
+        defaultRuns: 3,
+        defaultCache: 'warm',
+        capture: captureMemory,
+        compare: compareMemory,
+        renderReport: renderMemoryReport,
+        renderComparison: renderMemoryComparison,
+        // A peak moves both ways with when a collection lands, so the median repeat, and its median
+        // across captures: a min would pick the luckiest collection (see `EstimatorKind`).
+        estimator: 'median',
+        estimate: (report) => rowEstimates(report.body.commands, 'KiB peak RSS', (row) => row.medianKb, (row) => (row.outOfHeap ? 'ran out of heap' : FAILURE_IS_THE_REASON(row))),
       }),
     )
     .addCommand(createVerdictCommand());

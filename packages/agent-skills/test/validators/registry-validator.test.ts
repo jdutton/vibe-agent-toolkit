@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -110,7 +111,7 @@ describe('validateInstalledPluginsRegistry', () => {
 
 	it('reports a registry path the OS will not read as unreadable, not as invalid JSON', async () => {
 		const registryPath = safePath.join(getTempDir(), 'unreadable.json');
-		fs.mkdirSync(registryPath);
+		mkdirSyncReal(registryPath);
 
 		const result = await validateInstalledPluginsRegistry(registryPath);
 

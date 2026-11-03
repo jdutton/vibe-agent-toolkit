@@ -25,8 +25,10 @@
 
 import fs from 'node:fs';
 
+
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { createSymlink, normalizedTmpdir, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -114,12 +116,12 @@ describe('vat audit --compat --settings over a plugin whose skills are symlinks'
   it.skipIf(cap === null)('checks a symlinked skill directory and a symlinked SKILL.md, agreeing with the validator lane', () => {
     if (cap === null) return;
     const shared = safePath.join(tempDir, 'shared');
-    fs.mkdirSync(safePath.join(shared, LINKED_DIR), { recursive: true });
+    mkdirSyncReal(safePath.join(shared, LINKED_DIR), { recursive: true });
     fs.writeFileSync(safePath.join(shared, LINKED_DIR, 'SKILL.md'), bashSkill(LINKED_DIR));
     fs.writeFileSync(safePath.join(shared, 'linked-file.md'), bashSkill(LINKED_FILE));
     const pluginDir = writeSettingsPlugin(tempDir, 'sym-plugin', {});
     createSymlink(cap, safePath.join(shared, LINKED_DIR), safePath.join(pluginDir, 'skills', LINKED_DIR), 'dir');
-    fs.mkdirSync(safePath.join(pluginDir, 'skills', LINKED_FILE), { recursive: true });
+    mkdirSyncReal(safePath.join(pluginDir, 'skills', LINKED_FILE), { recursive: true });
     createSymlink(cap, safePath.join(shared, 'linked-file.md'), safePath.join(pluginDir, 'skills', LINKED_FILE, 'SKILL.md'), 'file');
 
     const { exit, plugin, report } = auditWithSettings(pluginDir, settingsFile);

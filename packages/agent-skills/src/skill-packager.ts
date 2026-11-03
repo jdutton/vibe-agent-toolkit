@@ -850,6 +850,8 @@ async function preparePackage(
     skillRootPath: safePath.resolve(skillPath),
     excludeNavigationFiles,
     deferredArtifacts,
+    // The packager walks SOURCE: no output of its own is under the walk yet.
+    ownOutputDir: undefined,
   };
   if (options.gitTracker !== undefined) {
     packagerWalkOptions.gitTracker = options.gitTracker;
@@ -1466,11 +1468,17 @@ function withRunAllowUnused(framework: FrameworkResult, ledger: AllowUsageLedger
  * | source | n/a | 2 | 1 | 1 | 13 |
  * | built | INSIDE the project (`<root>/dist/skills/<name>/`) | **1** | **0** | **0** | **10** |
  * | built | outside any project root (control) | 2 | 1 | 1 | 14 |
+ * | built | inside the project, outside `dist/` (`<root>/out/<name>/`) | 2 | 1 | 1 | — |
  *
- * The middle row is the defect; the third row PROVES the cause — the only
+ * The second row is the defect; the third row PROVES the cause — the only
  * difference between them is whether the output falls under the crawl's
- * `**\/dist\/**` exclusion (`BUILD_OUTPUT_GLOBS`). `packageSkill`'s default output
- * IS the middle row, so this is the normal case, not an edge case. The result's
+ * `**\/dist\/**` exclusion (`BUILD_OUTPUT_GLOBS`). The fourth row is what a fresh
+ * crawl of the root admits, and the memoized crawl never holds it — the bundle is
+ * written after it, at an excluded staging name — so the validator layers that
+ * bundle over the memo (`withOwnBundle` in `validators/packaging-validator.ts`),
+ * reading only the bundle; pinned by
+ * `test/integration/post-build-own-output.integration.test.ts`. `packageSkill`'s default output
+ * IS the second row, so this is the normal case, not an edge case. The result's
  * own `files.dependencies` still reads `["reference.md"]`: the packager copied it,
  * and the validator invoked here — immediately afterwards — cannot see it.
  *
@@ -1480,7 +1488,7 @@ function withRunAllowUnused(framework: FrameworkResult, ledger: AllowUsageLedger
  * `${CLAUDE_PLUGIN_ROOT}` invocation inside a bundled reference is caught at
  * source and CANNOT be caught in the built artifact.
  *
- * 🔑 Measured vs inferred. The three rows are MEASURED (that probe).
+ * 🔑 Measured vs inferred. The first three rows are MEASURED (that probe).
  * That the finding is still LIVE is inferred from this function's own body: it
  * passes only the built `SKILL.md` path, with no registry and no population
  * source rooted at the output tree, so `validateSkillForPackaging` resolves
@@ -1489,7 +1497,7 @@ function withRunAllowUnused(framework: FrameworkResult, ledger: AllowUsageLedger
  * walk starts from nothing. The probe is no longer only a probe: it is pinned as
  * a committed regression test at
  * `packages/cli/test/integration/built-lane-link-graph.integration.test.ts`
- * (fixture `BUNDLING_SKILL_FILES`), asserting the middle row as today's
+ * (fixture `BUNDLING_SKILL_FILES`), asserting the second row as today's
  * behaviour. When this is fixed, those assertions flip in the fixing change.
  *
  * ⛔ Do NOT fix it by widening the crawl. That same `**\/dist\/**` exclusion is

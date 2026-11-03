@@ -576,6 +576,10 @@ export const TRAP_CORPUS_FILES: CorpusFiles = Object.freeze({
   // Malformed HTML: well-formedness diagnostics are a parse fact for the HTML
   // parser and undefined for the markdown one.
   'broken/malformed.html': '<html><body><p>unclosed<div></body>\n',
+
+  // A worktree copy of the project: never content. Every lane's crawl excludes it, so a lane
+  // restatement that still carries the pre-worktree registry default drifts here.
+  '.claude/worktrees/copy/README.md': '# A worktree copy\n\nThe same project, checked out again.\n',
 });
 
 /**

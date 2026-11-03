@@ -52,9 +52,20 @@ describe('verify packaged-content — the refusal reaches stderr', () => {
     expect(phase.report.status).toBe('findings');
     expect(phase.report.examined).toBe(0);
     expect(phase.report.findings.map((finding) => finding.code)).toEqual(['RESOURCE_CHECK_BROKEN']);
-    expect(stderr).toContain('Warning: Nothing was examined: 0 built skill bundles');
+    expect(stderr).toContain('error: Nothing was examined: 0 built skill bundles');
+    expect(stderr).toContain('[RESOURCE_CHECK_BROKEN]');
+    expect(stderr).not.toContain('Warning:');
     expect(stderr).toContain('packaged-content phase');
     expect(stderr).toContain('vat build');
+  });
+
+  it('prints the phase banner before a zero-bundle refusal, so it is not under the previous phase', () => {
+    const { logger, lines } = recordingLogger();
+    const crawl = { bundlesInspected: 0, bundlesExpected: 0, bundlesMissing: [], issues: [], bundlesInPlace: 0 };
+
+    reportPackagedContentPhase(buildPackagedContentPhase(crawl), logger);
+
+    expect(lines).toEqual(['\n▶ Phase: packaged-content']);
   });
 
   it('says why a run whose every discovered skill is in place inspected nothing', () => {

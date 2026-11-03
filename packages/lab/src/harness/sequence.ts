@@ -62,6 +62,8 @@ export interface SequenceStep {
    * and a priming run, are checked for what the arm's environment says it writes.
    */
   readonly populates: boolean;
+  /** The subject-relative directories this step writes; see `MeasuredCommandSpec.writes`. */
+  readonly writes: readonly string[];
 }
 
 /** One step's outcome. */
@@ -105,7 +107,9 @@ export interface SequenceContext {
 }
 
 /** Which run of an arm this is: the priming run, or a measured one. */
-type SequenceRole = { readonly kind: 'priming' } | { readonly kind: 'measured'; readonly vatEnv: ArmEnvironment };
+type SequenceRole =
+  | { readonly kind: 'priming' }
+  | { readonly kind: 'measured'; readonly vatEnv: ArmEnvironment };
 
 /**
  * Refuse a step whose commitment admits vat's system-error exit, or a code no

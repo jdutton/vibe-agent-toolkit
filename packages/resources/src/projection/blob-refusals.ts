@@ -58,6 +58,7 @@
  * wallpaper within a day.
  */
 
+
 import { isTextMimeType } from '../mime-type.js';
 
 import {
@@ -66,6 +67,7 @@ import {
   BLOB_PARSE_FAILED,
   BLOB_UNREADABLE,
 } from './blob-population.js';
+import { formatParseFailures, parseFailureOf } from './parse-failure.js';
 import type { Projection } from './projection.js';
 
 /** The three tables the line is a function of — every one of them stored. */
@@ -147,12 +149,29 @@ function refusedBlobs(rows: BlobRefusalRows): ReadonlyArray<{ label: string; blo
       .map((row) => row.contentKey),
   );
   const reportAll = rows.blobs.length === 0;
-  return REFUSAL_CODES.map(([code, label]) => ({
-    label,
-    blobs: new Set(rows.blobConditions
-      .filter((row) => row.code === code && (code !== BLOB_NOT_TEXT || reportAll || textTyped.has(row.blob)))
-      .map((row) => row.blob)),
-  }));
+  return REFUSAL_CODES.map(([code, label]) => {
+    const matching = rows.blobConditions
+      .filter((row) => row.code === code && (code !== BLOB_NOT_TEXT || reportAll || textTyped.has(row.blob)));
+    return {
+      label: code === BLOB_PARSE_FAILED ? withFailureLabels(label, matching) : label,
+      blobs: new Set(matching.map((row) => row.blob)),
+    };
+  });
+}
+
+/**
+ * The parse-failed label naming what each parse threw ({@link formatParseFailures}): every
+ * distinct code first, then the first few messages quoted and a count of the rest, on one line —
+ * `parse failed [ERR_WORKER_OUT_OF_MEMORY]`. A worker that ran out of heap is not a corpus
+ * fault, and only the code says which it was.
+ *
+ * @param label - The bucket's bare label
+ * @param rows - Its `BLOB_PARSE_FAILED` rows
+ * @returns The label, with the failures when any row names one
+ */
+function withFailureLabels(label: string, rows: ReadonlyArray<{ message: string }>): string {
+  const failures = formatParseFailures(rows.flatMap((row) => parseFailureOf(row.message) ?? []));
+  return failures === '' ? label : `${label} [${failures}]`;
 }
 
 /**

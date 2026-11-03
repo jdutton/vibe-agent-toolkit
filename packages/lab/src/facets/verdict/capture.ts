@@ -34,7 +34,7 @@ import { existsSync, readFileSync } from 'node:fs';
 
 import { everyInOrder, safePath, withTempDir } from '@vibe-agent-toolkit/utils';
 
-import type { ReportEnvelope } from '../../envelope/envelope.js';
+import { currentHost, type ReportEnvelope } from '../../envelope/envelope.js';
 import {
   type ArmDirectories,
   armDirectoriesAt,
@@ -48,10 +48,11 @@ import type { ArmEnvironment } from '../../harness/arm-env.js';
 import { messageOf } from '../../harness/dumps.js';
 import { runOutcome } from '../../harness/outcome.js';
 import { resolveSubject } from '../../harness/subject.js';
+import { executeClonePlan, readCloneSource } from '../../harness/tree-clone.js';
 import type { ResolvedInstrument } from '../../harness/types.js';
 import { writeReport } from '../../store.js';
 
-import { executeClonePlan, planApfsClone, readCloneSource } from './clone.js';
+import { planApfsClone } from './clone.js';
 import { type NormalizeContext, normalizeCommandOutput } from './normalize.js';
 import type { VerdictSubject } from './subjects.js';
 import { VERDICT_FACET, type VerdictBody, type VerdictRow } from './types.js';
@@ -221,6 +222,7 @@ async function captureSubject(
       npmNetworkEnv: npmNetwork,
       // Each row records its own exit; a verdict judges no commitment.
       exits: [],
+      host: currentHost(request.env),
       body: {
         arm: request.env,
         rows,

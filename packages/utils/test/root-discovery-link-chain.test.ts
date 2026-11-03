@@ -15,11 +15,12 @@
 import fs from 'node:fs';
 import type * as NodeFs from 'node:fs';
 
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { LINK_CHAIN_REFUSED_CODE } from '../src/errors/errno-table.js';
 import { gitFindRoot } from '../src/git-utils.js';
-import { safePath, toForwardSlash } from '../src/path-utils.js';
+import { normalizePath, safePath, toForwardSlash } from '../src/path-utils.js';
 import { findConfigFile, findNodeWorkspaceRoot, findProjectRoot, resetProjectRootCaches } from '../src/project-utils.js';
 import { createSymlink, symlinkCapability } from '../src/test-helpers.js';
 import { setupSyncTempDirSuite } from '../src/testing/temp-dir.js';
@@ -51,6 +52,7 @@ function spyOnTheKernel(): { asked: () => string[]; restore: () => void } {
     viaDefault.push(toForwardSlash(String(path)));
   };
   const realStatSync = fs.statSync;
+  // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
   const realNative = fs.realpathSync.native;
   const spies = [
     vi.spyOn(fs, 'statSync').mockImplementation(((path: fs.PathLike, ...rest: unknown[]) => {
@@ -58,6 +60,7 @@ function spyOnTheKernel(): { asked: () => string[]; restore: () => void } {
       return (realStatSync as (path: fs.PathLike, ...rest: unknown[]) => unknown)(path, ...rest);
     }) as typeof fs.statSync),
     vi.spyOn(fs, 'existsSync').mockImplementation((path: fs.PathLike) => (record(path), false)),
+    // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
     vi.spyOn(fs.realpathSync, 'native').mockImplementation(((path: fs.PathLike) => (record(path), realNative(path))) as typeof fs.realpathSync.native),
   ];
   return { asked: () => [...viaDefault, ...named.asked], restore: () => { for (const spy of spies) spy.mockRestore() } };
@@ -83,8 +86,9 @@ describe('root discovery never hands the kernel a planted link to a network path
   beforeEach(() => {
     suite.beforeEach();
     resetProjectRootCaches();
-    scanned = safePath.join(toForwardSlash(fs.realpathSync(suite.getTempDir())), 'scanned', 'sub');
-    fs.mkdirSync(scanned, { recursive: true });
+    const made = suite.getTempDir();
+    scanned = safePath.join(toForwardSlash(normalizePath(made, { within: made })), 'scanned', 'sub');
+    mkdirSyncReal(scanned, { recursive: true });
   });
   afterEach(() => {
     kernel?.restore();

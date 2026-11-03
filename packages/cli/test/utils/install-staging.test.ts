@@ -87,14 +87,15 @@ describe('stagedIn (vat claude plugin install)', () => {
     expect(run.issues).toEqual([]);
   });
 
-  it('a staging directory left behind is a warning on the run, logged, and the install stands', async () => {
+  it('a staging directory left behind is a warning on the run, and the install stands', async () => {
     disposingWith(new Error('EACCES: permission denied'));
     const run = runOf();
 
     await stagedIn(run, 'vat-install-zip-', async () => undefined);
 
     expect(run.issues).toEqual([expect.objectContaining({ code: 'TREE_CLEANUP_INCOMPLETE', link: STAGED })]);
-    expect(run.logger.warn).toHaveBeenCalledWith(expect.stringContaining(STAGED));
+    // Printed once, with the run's other findings, when the run ends.
+    expect(run.logger.warn).not.toHaveBeenCalled();
   });
 });
 

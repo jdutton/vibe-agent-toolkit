@@ -15,6 +15,9 @@
  * and the invoked process's everywhere else.
  */
 
+import { spawnSync } from 'node:child_process';
+
+import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
 import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
@@ -68,5 +71,31 @@ describe('the checks child is silent; the invoked process prints each notice onc
     expect(count(run.stderr, UNKEYABLE)).toBe(1);
     expect(printedBy(run.stderr, UNKNOWN_KEY), run.stderr).toBe('invoked');
     expect(printedBy(run.stderr, UNKEYABLE), run.stderr).toBe(storeNoticeBy);
+  });
+});
+
+/** A git root whose every file is gitignored: the population is empty, so the writer refuses the run. */
+function emptyPopulationRoot(): string {
+  const root = safePath.join(scratch(), 'all-ignored');
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(safePath.join(root, '.gitignore'), '*\n', 'utf-8');
+  writeConfig(root, [['quick', TXT_ROWS]]);
+  spawnSync(gitExecutable(), ['init', '--quiet'], { cwd: root });
+  return root;
+}
+
+/**
+ * A finding prints ONCE across the parent/child boundary. The writer's run-integrity refusal is
+ * the one finding a supervised child's own writer adds, so it is the one a parent reporting the
+ * forwarded document would print a second time.
+ */
+describe('a finding prints once across the parent/child boundary', () => {
+  it.each(SURFACES.filter(([, args]) => !args.includes('--budget')))('%s', (_surface, args) => {
+    const run = vat(emptyPopulationRoot(), args);
+
+    expect(run.findings.map((finding) => finding.code), run.stderr).toContain('RESOURCE_CHECK_BROKEN');
+    const refusals = run.stderr.split('\n').filter((line) => line.endsWith('[RESOURCE_CHECK_BROKEN]'));
+    expect(refusals.length, run.stderr).toBeGreaterThan(0);
+    expect(refusals, run.stderr).toEqual([...new Set(refusals)]);
   });
 });

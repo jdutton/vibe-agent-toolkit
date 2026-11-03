@@ -15,6 +15,8 @@ import { locationDigest } from '../src/facets/verdict/extract.js';
 import type { VerdictBody, VerdictRow } from '../src/facets/verdict/types.js';
 import { judgeUnion, type UnionArmEvidence, type UnionRequest, unionFindings } from '../src/facets/verdict/union.js';
 
+import { HOST } from './report-fixtures.js';
+
 /** A `Report<T>` row whose document carries these findings. */
 function reportRow(name: string, findings: readonly Record<string, unknown>[], exitCode = 1): VerdictRow {
   return {
@@ -102,6 +104,7 @@ function capture(
     capturedAt: '2026-10-31T00:00:00.000Z',
     removedEnv: [],
     npmNetworkEnv: [],
+    host: HOST,
     exits: [],
     body: { ...body(rows), preparedClone: ranIn },
   };

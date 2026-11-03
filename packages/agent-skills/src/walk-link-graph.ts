@@ -195,6 +195,14 @@ export interface WalkLinkGraphOptions {
    */
   deferredArtifacts?: DeferredArtifacts;
   /**
+   * The directory this run wrote the skill to, when the walk re-reads its own
+   * output: no ignore rule is asked about a target under it — a gitignored
+   * `out/` holds the bundle, not a leak. `undefined` for a walk of source —
+   * REQUIRED, so a walk of built output cannot forget it and read its own
+   * bundle as gitignored leaks.
+   */
+  ownOutputDir: string | undefined;
+  /**
    * Optional pre-populated {@link GitTracker} for O(1) gitignore checks.
    *
    * When provided, link-target gitignore checks use the tracker's active set,
@@ -733,7 +741,8 @@ function classifyGitignored(
   state: WalkState,
 ): ExclusionVerdict | undefined {
   if (!facts.exists) return undefined;
-  if (!readGitignored(targetPath, options, state)) return undefined;
+  const ownOutput = options.ownOutputDir !== undefined && !relativeEscapesRoot(safePath.relative(options.ownOutputDir, targetPath));
+  if (ownOutput || !readGitignored(targetPath, options, state)) return undefined;
   return classifyGitignoredTarget(targetPath, options.deferredArtifacts);
 }
 

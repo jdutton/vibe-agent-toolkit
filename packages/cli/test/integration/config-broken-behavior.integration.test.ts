@@ -44,6 +44,7 @@
 import fs from 'node:fs';
 
 import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { resolveSkillPackagingConfig } from '../../src/skill-resolution/packaging-config.js';
@@ -70,8 +71,8 @@ const MISATTRIBUTED = 'the projection membership lane failed';
  */
 function writePluginFixture(root: string): string {
   const pluginDir = safePath.join(root, 'plugin');
-  fs.mkdirSync(safePath.join(pluginDir, '.claude-plugin'), { recursive: true });
-  fs.mkdirSync(safePath.join(pluginDir, 'skills', 'demo'), { recursive: true });
+  mkdirSyncReal(safePath.join(pluginDir, '.claude-plugin'), { recursive: true });
+  mkdirSyncReal(safePath.join(pluginDir, 'skills', 'demo'), { recursive: true });
   fs.writeFileSync(
     safePath.join(pluginDir, '.claude-plugin', 'plugin.json'),
     JSON.stringify({ name: 'demo-plugin', description: 'A demo plugin.', version: '0.0.1' }),
@@ -109,7 +110,7 @@ describe('broken governing config behavior (integration)', () => {
     fs.writeFileSync(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), 'resources: 42\n');
 
     skillPath = safePath.join(tempDir, 'resources', 'skills', 'SKILL.md');
-    fs.mkdirSync(safePath.join(tempDir, 'resources', 'skills'), { recursive: true });
+    mkdirSyncReal(safePath.join(tempDir, 'resources', 'skills'), { recursive: true });
     fs.writeFileSync(
       skillPath,
       `---

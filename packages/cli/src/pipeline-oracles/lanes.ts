@@ -24,7 +24,7 @@
 
 import { crawlAndResolveRegistry, createProjectRegistry } from '@vibe-agent-toolkit/agent-skills';
 import { crawlSkillLinkRegistry } from '@vibe-agent-toolkit/claude-marketplace';
-import { DEFAULT_RESOURCE_INCLUDE, type ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import { DEFAULT_RESOURCE_EXCLUDE, DEFAULT_RESOURCE_INCLUDE, type ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import type { CrawlOptions, UnreadablePolicy } from '@vibe-agent-toolkit/utils/crawl';
 
 import { buildSkillsValidateRegistry } from '../commands/skills/validate.js';
@@ -39,17 +39,6 @@ const MARKDOWN_ONLY: readonly string[] = ['**/*.md'];
 
 /** Markdown + HTML, the set the two config-agnostic wide lanes use. */
 const MARKDOWN_AND_HTML: readonly string[] = ['**/*.md', '**/*.html', '**/*.htm'];
-
-/**
- * `ResourceRegistry.crawl`'s own exclude default, restated.
- *
- * Note it is NOT `crawlDirectory`'s default (`NEVER_CRAWL_GLOBS` +
- * `BUILD_OUTPUT_GLOBS`): the registry passes its own narrower list, which omits
- * the worktree globs. That difference is real and is one of the things a
- * snapshot exists to hold still, so it is restated here rather than imported
- * from the wider constant.
- */
-const REGISTRY_DEFAULT_EXCLUDE: readonly string[] = ['**/node_modules/**', '**/.git/**', '**/dist/**'];
 
 /** One enumerating lane: how it crawls, and who really does it. */
 export interface LaneDefinition {
@@ -106,7 +95,8 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
         outputs: [],
         include: config?.resources?.include ?? [...DEFAULT_RESOURCE_INCLUDE],
         // ResourceRegistry.crawl's own default when config supplies none.
-        exclude: config?.resources?.exclude ?? [...REGISTRY_DEFAULT_EXCLUDE],
+        // The registry's own default, imported: a hand copy here once kept the pre-worktree list.
+        exclude: config?.resources?.exclude ?? [...DEFAULT_RESOURCE_EXCLUDE],
         absolute: true,
         filesOnly: true,
       };
@@ -123,7 +113,7 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
       baseDir: projectRoot,
       outputs: [],
       include: [...MARKDOWN_AND_HTML],
-      exclude: [...REGISTRY_DEFAULT_EXCLUDE],
+      exclude: [...DEFAULT_RESOURCE_EXCLUDE],
       absolute: true,
       filesOnly: true,
     }),
@@ -137,7 +127,7 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
       baseDir: projectRoot,
       outputs: [],
       include: [...MARKDOWN_ONLY],
-      exclude: [...REGISTRY_DEFAULT_EXCLUDE],
+      exclude: [...DEFAULT_RESOURCE_EXCLUDE],
       absolute: true,
       filesOnly: true,
     }),
@@ -163,7 +153,7 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
       baseDir: projectRoot,
       outputs: [],
       include: [...MARKDOWN_ONLY],
-      exclude: [...REGISTRY_DEFAULT_EXCLUDE],
+      exclude: [...DEFAULT_RESOURCE_EXCLUDE],
       absolute: true,
       filesOnly: true,
     }),

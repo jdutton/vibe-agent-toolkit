@@ -52,7 +52,7 @@ These return OS-native separators (backslashes on Windows) because they use `rea
 
 | Function | Purpose |
 |---|---|
-| `normalizePath()` | Resolve 8.3 short names, return real path |
+| `normalizePath(target, { within })` | Resolve 8.3 short names and links beneath `within`, return the real absolute path |
 | `normalizedTmpdir()` | Temp dir with short names resolved |
 | `mkdirSyncReal()` | Create dir and return real path |
 

@@ -56,6 +56,7 @@ import {
   buildReport,
   CODE_REGISTRY,
   toFindings,
+  type Finding,
   type IssueCode,
   type RefusalCode,
   type Report,
@@ -155,17 +156,9 @@ export function verdictBanner(examined: number, success: string): string {
 }
 
 /**
- * The human half of a run-integrity refusal: each `RESOURCE_CHECK_BROKEN`
- * finding's message, on stderr. It decides nothing — the document is what
- * gates — but a refusal only in the document never reached the operator
- * reading the terminal.
- *
- * A command lane calls it with the writer's published report when the writer
- * ADDED the refusal (`publishedReport(verb, report) !== report`); a phase warns
- * its own site-specific refusal where every lane sees it.
+ * The findings {@link withRunIntegrity} appended to `report` to make `judged`
+ * (none when it stood down), for a lane to hand to `reportFindings` exactly once.
  */
-export function warnRunIntegrity(report: Report<unknown>): void {
-  for (const finding of report.findings) {
-    if (finding.code === RUN_INTEGRITY_CODE) process.stderr.write(`Warning: ${finding.message}\n`);
-  }
+export function findingsAddedByRunIntegrity(report: Report<unknown>, judged: Report<unknown>): readonly Finding[] {
+  return judged.findings.slice(report.findings.length);
 }

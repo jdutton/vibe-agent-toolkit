@@ -1281,7 +1281,7 @@
     not YAML.
   - `SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE`, `checkPackageOutput`, `PackageOutputCheck` and
     `PackageSkillOptions.sourceGeneratedInOutput` are gone: an occupied output is `TREE_DEST_NOT_OWNED`.
-  - `@vibe-agent-toolkit/utils`: `isFilesystemAccessError` → `fsFaultOf(e) !== undefined`;
+  - `@vibe-agent-toolkit/utils`:
     `openEachFileForReading` → `proveTreeReadable(root, { links, filter?, side })`; `copyTree` and a
     `copy` fill (`TreeFill`) take a required `side`; `new FollowedWalk(side)` takes the side its tree
     is on, and a directory it cannot resolve is an `FsFaultError` there; `requireConfirmedAbsent` takes

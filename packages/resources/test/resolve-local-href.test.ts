@@ -256,7 +256,7 @@ describe('resolveLocalHref leading-/ behavior', () => {
       //   <parent>/proj/docs/sub/page.md  (source)
       //   <parent>/proj/badlink       (symlink → external escape.md)
       parentDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-leading-slash-'));
-      parentDir = normalizePath(parentDir, parentDir);
+      parentDir = normalizePath(parentDir, { within: parentDir });
       projectRoot = safePath.join(parentDir, 'proj');
       mkdirSyncReal(safePath.join(projectRoot, 'docs', 'sub'), { recursive: true });
       sourceFile = safePath.join(projectRoot, 'docs', 'sub', 'page.md');
@@ -330,7 +330,7 @@ describe('symlinked project root (real-filesystem)', () => {
     //   <base>/outside/data.md                 escape target, a sibling of the root
     //   <base>/real-root/outlink → ../outside  directory link that leaves the root
     const madeBase = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-symlink-root-'));
-    baseDir = normalizePath(madeBase, madeBase);
+    baseDir = normalizePath(madeBase, { within: madeBase });
     realRoot = safePath.join(baseDir, 'real-root');
     linkRoot = safePath.join(baseDir, 'link-root');
     outsideDir = safePath.join(baseDir, 'outside');

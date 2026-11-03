@@ -24,6 +24,7 @@ import {
 import { validatePlugin } from '@vibe-agent-toolkit/claude-marketplace';
 import {
   buildReport,
+  exitCodeForReport,
   summarizeIssues,
   toFindings,
   type Report,
@@ -36,12 +37,13 @@ import { Command } from 'commander';
 
 import { refusalCodeOf } from '../../../utils/command-refusal.js';
 import { loadConfig } from '../../../utils/config-loader.js';
-import { endWithReport, NOTHING_FINISHED, publishedReport, refusalReport } from '../../../utils/document-writer.js';
+import { NOTHING_FINISHED, refusalReport, writeDocument } from '../../../utils/document-writer.js';
+import { reportFindings } from '../../../utils/issue-rendering.js';
 import { resolveIssueSeverity } from '../../../utils/issue-severity.js';
-import { createLogger, type Logger } from '../../../utils/logger.js';
+import { createLogger } from '../../../utils/logger.js';
 import { assertReadableDirectoryArgument } from '../../../utils/project-root-policy.js';
 import { relativizePath } from '../../../utils/relativize-paths.js';
-import { RUN_INTEGRITY_CODE, runIntegrityFinding, warnRunIntegrity } from '../../../utils/run-integrity.js';
+import { runIntegrityFinding } from '../../../utils/run-integrity.js';
 import type { PhaseOutcome } from '../../phase-utils.js';
 
 import type { MarketplaceValidateData, MarketplaceValidateReport } from './validate-schema.js';
@@ -132,7 +134,7 @@ class WalkBoundary {
    */
   private resolvesInside(abs: string): boolean {
     try {
-      return !relativeEscapesRoot(safePath.relative(this.realRoot, toForwardSlash(normalizePath(abs, this.marketplacePath))));
+      return !relativeEscapesRoot(safePath.relative(this.realRoot, toForwardSlash(normalizePath(abs, { within: this.marketplacePath }))));
     } catch (error) {
       if (!isLinkChainRefusedError(error)) throw error;
       return false;
@@ -308,7 +310,7 @@ function containedPluginDir(
   let real: string;
   try {
     if (!isDirectory(lexical, marketplacePath)) return undefined;
-    real = toForwardSlash(normalizePath(lexical, marketplacePath));
+    real = toForwardSlash(normalizePath(lexical, { within: marketplacePath }));
   } catch (error) {
     // A source whose link chain names a network or device path leaves the root by definition: it
     // names nothing this command may enter, and the builder refuses the run by name from its absence.
@@ -363,7 +365,7 @@ async function validateDeclaredPlugins(
   // name it, and the same key is what `undeclaredPluginDirs` compares against.
   const validatedByDir = new Map<string, ContainedPlugin>();
   // The marketplace root is the operator's own argument: its own `within`.
-  const realRoot = toForwardSlash(normalizePath(marketplacePath, marketplacePath));
+  const realRoot = toForwardSlash(normalizePath(marketplacePath, { within: marketplacePath }));
   const boundary = new WalkBoundary(marketplacePath, realRoot);
 
   // In order: `validatedByDir` dedupes a directory two entries name, which a
@@ -493,7 +495,7 @@ function undeclaredCandidateIdentity(pluginsDir: string, entry: Dirent, within: 
   const dir = safePath.join(pluginsDir, entry.name);
   try {
     if (direntKindFollowingSync(pluginsDir, entry, within) !== 'directory') return undefined;
-    return toForwardSlash(normalizePath(dir, within));
+    return toForwardSlash(normalizePath(dir, { within: within }));
   } catch (error) {
     if (!isLinkChainRefusedError(error)) throw error;
     return dir;
@@ -893,17 +895,6 @@ function unreadManifests(
   return [...new Set(manifests)];
 }
 
-/** The human half, on stderr: every error in full, and the rest under `--verbose`. */
-function logFindings(report: Report<unknown>, verbose: boolean, logger: Logger): void {
-  for (const finding of report.findings) {
-    if (!verbose && finding.severity !== 'error' && finding.code !== RUN_INTEGRITY_CODE) continue;
-    const anchor = finding.location === undefined ? '' : `${finding.location}: `;
-    logger.error(`  ${anchor}${finding.severity}: ${finding.message} [${finding.code}]`);
-  }
-  const { errors, warnings, info } = report.summary;
-  logger.info(`${errors} error(s), ${warnings} warning(s), ${info} info`);
-}
-
 /**
  * Validate a marketplace and hand back its report, printing nothing on stdout.
  *
@@ -937,7 +928,8 @@ export async function runMarketplaceValidatePhase(
       issues,
       durationMs: Date.now() - startTime,
     });
-    logFindings(report, options.verbose === true, logger);
+    // The human half, on stderr: every error in full, and the rest under `--verbose`.
+    reportFindings(report.findings, { verbose: options.verbose === true, write: logger.error });
     return { report };
   } catch (error) {
     return { report: refusedReport(error) };
@@ -971,11 +963,15 @@ async function marketplaceValidateCommand(
     // Only the argument check throws here: the phase returns its own refusals.
     report = refusedReport(error);
   }
-  const published = publishedReport('claude marketplace validate', report);
-  // The writer's own zero-examined refusal, warned in the lane that publishes it.
-  if (published !== report) warnRunIntegrity(published);
-  // This command offers no `--format`: its document is YAML.
-  endWithReport('claude marketplace validate', published, 'yaml');
+  // This command offers no `--format`: its document is YAML. Written first, so a run-integrity
+  // refusal the writer adds is said on stderr before the count line that includes it.
+  const written = writeDocument('claude marketplace validate', report, 'yaml');
+  // The PUBLISHED counts — never "0 error(s)" beside exit 1 — and none for a refusal, which counted nothing.
+  if (written.status !== 'error') {
+    const { errors, warnings, info } = written.summary;
+    createLogger().info(`${errors} error(s), ${warnings} warning(s), ${info} info`);
+  }
+  process.exit(exitCodeForReport(written));
 }
 
 export function createMarketplaceValidateCommand(): Command {

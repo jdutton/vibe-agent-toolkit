@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { relativeEscapesRoot, safePath } from '../../src/path-core.js';
@@ -166,6 +167,7 @@ describe('installFaultFs reaches every way VAT and its dependencies call fs', ()
   it('realpathSync.native, through a named import', () => {
     const root = scratch.create();
     session = installFaultFs({ within: root, faults: [{ family: 'meta', op: 'realpath', path: under(root), errno: 'EACCES' }] });
+    // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
     expect(() => namedRealpathSync.native(root)).toThrow(expect.objectContaining({ code: 'EACCES', path: root }));
     expect(session.fired.map((c) => [c.op, c.api])).toEqual([['realpath', 'sync']]);
   });
@@ -181,15 +183,19 @@ describe('installFaultFs reaches every way VAT and its dependencies call fs', ()
   });
 
   it('restore() puts realpathSync.native and realpath.native back', () => {
+    // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
     const syncNative = nodeFs.realpathSync.native;
     const callbackNative = nodeFs.realpath.native;
     const root = scratch.create();
     session = installFaultFs({ within: root, faults: [{ family: 'meta', op: 'realpath', path: under(root), errno: 'EACCES' }] });
+    // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
     expect(nodeFs.realpathSync.native).not.toBe(syncNative);
     session.restore();
     session = undefined;
+    // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
     expect(nodeFs.realpathSync.native).toBe(syncNative);
     expect(nodeFs.realpath.native).toBe(callbackNative);
+    // eslint-disable-next-line local/no-fs-realpathSync -- a test double must name the function it intercepts; it never resolves a path through it
     expect(namedRealpathSync.native(root)).toBe(syncNative(root));
   });
 
@@ -202,7 +208,7 @@ describe('installFaultFs reaches every way VAT and its dependencies call fs', ()
   it('settled() resolves only once the fs work started under the session has stopped', async () => {
     const root = scratch.create();
     const dirs = ['a', 'b', 'c', 'd'].map((dir) => safePath.join(root, 'tree', dir));
-    for (const dir of dirs) nodeFs.mkdirSync(safePath.join(dir, 'x', 'y'), { recursive: true });
+    for (const dir of dirs) mkdirSyncReal(safePath.join(dir, 'x', 'y'), { recursive: true });
     const failing = dirs[0];
     session = installFaultFs({ within: root, faults: [{ family: 'list', op: 'readdir', path: (p) => p === failing, errno: 'ENOTDIR' }] });
     await expect(Promise.all(dirs.map((dir) => listDown(dir, ['x', 'y'])))).rejects.toMatchObject({ code: 'ENOTDIR' });

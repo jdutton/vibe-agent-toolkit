@@ -3,6 +3,9 @@
  * `process.exit` captured ({@link captureCommand}).
  */
 
+import type { Report } from '@vibe-agent-toolkit/schema';
+import * as YAML from 'yaml';
+
 import { captureProcessExit, type CapturedExit } from '../test-doubles.js';
 
 /**
@@ -39,4 +42,22 @@ export async function captureCommand(fn: () => void | Promise<void>, onFirstExit
   } finally {
     restore();
   }
+}
+
+/**
+ * Run a command lane that should end refused by the writer's run-integrity check: what it
+ * captured, the YAML document it published, the RESOURCE_CHECK_BROKEN finding in it, and how
+ * many times stderr carries that finding's line.
+ */
+export async function captureWriterRefusal(fn: () => Promise<void>): Promise<{
+  captured: CapturedCommand;
+  document: Report<unknown>;
+  refusal: Report<unknown>['findings'][number] | undefined;
+  refusalLines: number;
+}> {
+  const captured = await captureCommand(fn);
+  const document = YAML.parse(captured.stdout) as Report<unknown>;
+  const refusal = document.findings.find((finding) => finding.code === 'RESOURCE_CHECK_BROKEN');
+  const refusalLines = captured.stderr.split(`error: ${refusal?.message ?? '<no refusal>'} [RESOURCE_CHECK_BROKEN]`).length - 1;
+  return { captured, document, refusal, refusalLines };
 }

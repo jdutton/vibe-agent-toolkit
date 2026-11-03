@@ -25,8 +25,11 @@ export interface CountDelta {
   readonly delta: number;
 }
 
-/** A before/after pair of durations, with the verdict on whether the move is real. */
-export interface MsDelta {
+/**
+ * A before/after pair of magnitudes — durations, kilobytes — with the verdict on
+ * whether the move is real. The unit is the caller's; nothing here converts it.
+ */
+export interface MagnitudeDelta {
   readonly before: number;
   readonly after: number;
   /** `after - before`, unrounded. */
@@ -90,11 +93,35 @@ export function countDelta(before: number, after: number): CountDelta {
  * @param thresholds - How big a move has to be; both fields default
  * @returns The delta, the ratio, and the verdict
  */
-export function msDelta(before: number, after: number, thresholds: DeltaThresholds): MsDelta {
+export function msDelta(before: number, after: number, thresholds: DeltaThresholds): MagnitudeDelta {
+  return magnitudeDelta(
+    before,
+    after,
+    thresholds.minRelative ?? DEFAULT_MIN_RELATIVE,
+    thresholds.minAbsoluteMs ?? DEFAULT_MIN_ABSOLUTE_MS,
+  );
+}
+
+/**
+ * Take one magnitude difference, in any unit, and say whether it is real — the
+ * rule {@link msDelta} applies to durations, with both gates given explicitly
+ * because no default floor is right for every unit.
+ *
+ * @param before - The baseline value
+ * @param after - The compared value
+ * @param minRelative - Smallest fraction of the smaller side that counts as a real move
+ * @param absolute - Smallest move, in the values' own unit, that counts
+ * @returns The delta, the ratio, and the verdict
+ */
+export function magnitudeDelta(
+  before: number,
+  after: number,
+  minRelative: number,
+  absolute: number,
+): MagnitudeDelta {
   const delta = after - before;
   const magnitude = Math.abs(delta);
-  const relative = (thresholds.minRelative ?? DEFAULT_MIN_RELATIVE) * Math.min(before, after);
-  const absolute = thresholds.minAbsoluteMs ?? DEFAULT_MIN_ABSOLUTE_MS;
+  const relative = minRelative * Math.min(before, after);
   return {
     before,
     after,
@@ -120,7 +147,7 @@ export type RowMovementKind = 'added' | 'removed' | 'changed';
 export interface RowMovement {
   readonly label: string;
   readonly kind: RowMovementKind;
-  readonly elapsedMs: MsDelta;
+  readonly elapsedMs: MagnitudeDelta;
   readonly calls: CountDelta;
 }
 

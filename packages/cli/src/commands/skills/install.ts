@@ -424,7 +424,6 @@ export async function installCommand(
       skills: [],
     };
     const outcome = await withResolvedSource(source, run, (resolved) => installFromDir(resolved, base, options, progress, run));
-    for (const leftover of run.leftovers) logger.warn(`   ${leftover.message}`);
     report = buildReport({ ...outcome, findings: [...outcome.findings, ...toFindings(run.leftovers)], gate: GATE });
   } catch (error) {
     // Validation that finished is published even when nothing was installed; a refusal installed nothing.

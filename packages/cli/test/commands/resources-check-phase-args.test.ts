@@ -8,7 +8,7 @@
  * `--format json` (the phase reads the child's document as JSON), `--debug` iff the orchestrator
  * was given it, `--supervised-by phase:<this pid>:<log>` (the recursion guard; `phase` because the
  * child owes no notice its orchestrator already printed) — and never `--check` (a phase runs every check) or
- * `--verbose` (not a flag of the child's).
+ * `--verbose` (the phase reports the child's findings on stderr itself, at the orchestrator's verbosity).
  *
  * ⚠️ That the child then checks exactly that root is observed through the real binary only for
  * `vat resources check` (the nested-project case in `validate-checks-phase-faults.system.test.ts`):
@@ -21,6 +21,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type * as SupervisorModule from '../../src/commands/resources/check-supervisor.js';
+import { captureProcessExit } from '../test-doubles.js';
 
 const recorded: Array<readonly string[]> = [];
 
@@ -57,9 +58,12 @@ forwarded.report = buildCheckOutputData({
 /** The root a `vat validate` run resolved — never touched: the child is not spawned. */
 const ROOT = safePath.join('/resolved', 'project-root');
 
-/** The one argv the phase handed the supervisor. */
+/** The one argv the phase handed the supervisor — its stderr captured, so the run writes nothing to the real one. */
 async function phaseArgs(debug: boolean): Promise<readonly string[]> {
-  await runResourcesCheckPhase({ root: ROOT, debug });
+  const { exited } = await captureProcessExit(async () => {
+    await runResourcesCheckPhase({ root: ROOT, debug, verbose: false });
+  });
+  expect(exited).toBeUndefined();
   expect(recorded).toHaveLength(1);
   return recorded[0] ?? [];
 }
@@ -91,5 +95,45 @@ describe('runResourcesCheckPhase — the child\'s argv', () => {
     expect(args).not.toContain('--verbose');
     expect(args).not.toContain('-v');
     expect(args).not.toContain('--budget');
+  });
+});
+
+const WARNED = {
+  code: 'CUSTOM:warn-a', severity: 'warning' as const, message: 'a.md is flagged', location: 'docs/a.md',
+};
+
+/** What the phase printed on stderr for a forwarded report carrying one warning, at `verbose`. */
+async function stderrAt(verbose: boolean): Promise<string> {
+  const previous = forwarded.report;
+  forwarded.report = buildCheckOutputData({
+    root: '/corpus',
+    durationMs: 200,
+    populated: { population: 'store', populationMs: 100, lensMs: 0, lensesEvaluated: [], membersEnumerated: 1 },
+    issues: [WARNED],
+    costs: [],
+  });
+  try {
+    const { stderr } = await captureProcessExit(async () => {
+      await runResourcesCheckPhase({ root: ROOT, debug: false, verbose });
+    });
+    return stderr;
+  } finally {
+    forwarded.report = previous;
+  }
+}
+
+describe('runResourcesCheckPhase — the child\'s findings on this process\'s stderr', () => {
+  it('prints a warning finding line under verbose: true, and no collapsed hint', async () => {
+    const stderr = await stderrAt(true);
+
+    expect(stderr).toContain('docs/a.md: warning: a.md is flagged [CUSTOM:warn-a]');
+    expect(stderr).not.toContain('not shown');
+  });
+
+  it('collapses it into the hint under verbose: false', async () => {
+    const stderr = await stderrAt(false);
+
+    expect(stderr).not.toContain('[CUSTOM:warn-a]');
+    expect(stderr).toContain('1 warning/info finding(s) not shown');
   });
 });

@@ -696,6 +696,7 @@ function activate(logDir: string): void {
 
   const captured: CapturedFs = {
     writeFileSync: fs.writeFileSync,
+    // eslint-disable-next-line local/no-fs-mkdirSync -- the counter captures the raw function to wrap it; it cannot load utils into the process it measures
     mkdirSync: fs.mkdirSync,
     existsSync: fs.existsSync,
   };
