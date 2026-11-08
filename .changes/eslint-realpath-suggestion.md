@@ -17,8 +17,8 @@
     re-exported, `.call`/`.bind`, or a truthiness check (`if (fs.realpathSync.native)`) — with no fix.
     A type position (`typeof realpathSync` in a type) is not reported, and neither is a bare runtime
     `typeof` operand (`typeof fs.realpathSync.native`);
-  - a dead `require()`, `import()` or `import x = require()` binding of the module, which `--fix`
-    removes (see Changed).
+  - in a file the rule migrated, a dead `require()`, `import()` or `import x = require()` binding
+    of the module, which `--fix` removes (see Changed).
 
   Expect new findings where a test double or a wrapper names the function it intercepts. Migrate the
   call, or keep it with an `eslint-disable-next-line` that says why: for example, a bundled entrypoint
