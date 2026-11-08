@@ -92,8 +92,8 @@ function setupConsistencyTestSuite() {
     writeTestFile(safePath.join(tempDir, 'package.json'), JSON.stringify(pkg));
   };
 
-  const runVerify = async (tempDir: string) => {
-    return executeCli(binPath, ['--cwd', tempDir, 'verify']);
+  const runVerify = async (tempDir: string, ...flags: string[]) => {
+    return executeCli(binPath, ['--cwd', tempDir, 'verify', ...flags]);
   };
 
   /** Common setup: two skills (skill-a, skill-b) with package.json and marketplace config */
@@ -179,10 +179,28 @@ describe('vat verify consistency checks (system test)', () => {
     suite.writePackageJson(tempDir, ['skill-a']);
     suite.writeMarketplaceConfig(tempDir, 'skills:\n            - "skill-a"', '  config:\n    dev-skill:\n      publish: false\n');
 
-    const result = await suite.runVerify(tempDir);
+    const result = await suite.runVerify(tempDir, '--verbose');
     expect(consistencyStatus(result.stdout)).toBe('clean');
     expect(result.stderr).toContain('SKILL_UNPUBLISHED');
     expect(result.stderr).toContain('dev-skill');
+  });
+
+  it('keeps consistency info and warning findings off stderr without --verbose, and says how many', async () => {
+    const tempDir = suite.createTempDir();
+    suite.createSkillSource(tempDir, 'skill-a');
+    suite.createSkillSource(tempDir, 'dev-skill');
+    suite.writePackageJson(tempDir, ['skill-a', 'dev-skill']);
+    suite.writeSkillsOnlyConfig(tempDir, '  config:\n    dev-skill:\n      publish: false\n');
+
+    const result = await suite.runVerify(tempDir);
+    expect(consistencyStatus(result.stdout)).toBe('warnings');
+    expect(result.stderr).toContain('▶ Phase: consistency');
+    expect(result.stderr).not.toContain('SKILL_UNPUBLISHED');
+    expect(result.stderr).not.toContain('UNPUBLISHED_SKILL_IN_PACKAGE_JSON');
+    expect(result.stderr).toContain('2 warning/info finding(s) not shown — re-run with --verbose');
+    // The document still lists every finding.
+    expect(result.stdout).toContain('SKILL_UNPUBLISHED');
+    expect(result.stdout).toContain('UNPUBLISHED_SKILL_IN_PACKAGE_JSON');
   });
 
   it('should warn when unpublished skill is listed in package.json', async () => {
@@ -191,7 +209,7 @@ describe('vat verify consistency checks (system test)', () => {
     suite.writePackageJson(tempDir, ['skill-a']);
     suite.writeSkillsOnlyConfig(tempDir, '  config:\n    skill-a:\n      publish: false\n');
 
-    const result = await suite.runVerify(tempDir);
+    const result = await suite.runVerify(tempDir, '--verbose');
     expect(consistencyStatus(result.stdout)).toBe('warnings');
     expect(result.stderr).toContain('UNPUBLISHED_SKILL_IN_PACKAGE_JSON');
     // The archived YAML is the artifact of record. It used to say

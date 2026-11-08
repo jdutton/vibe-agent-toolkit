@@ -61,9 +61,21 @@ function topLevelScope(sourceCode) {
   return fileScope ?? globalScope;
 }
 
+/**
+ * Is `source` this package — its barrel or a subpath — rather than a consumer's own seam? Only
+ * this package's helpers have the call shapes the rules describe: a seam's wrapper may take the
+ * same argument another way (`normalizePath(target, within)`).
+ *
+ * @param {string} source - A module specifier.
+ * @returns {boolean} True for `@vibe-agent-toolkit/utils` or one of its subpaths.
+ */
+function isPackageModule(source) {
+  return source === PACKAGE_NAME || source.startsWith(`${PACKAGE_NAME}/`);
+}
+
 /** Is `source` a module this package publishes the safe helpers from: the target seam, or this package's barrel or a subpath? */
 function isSafeSource(source, targetModule) {
-  return source === targetModule || source === PACKAGE_NAME || source.startsWith(`${PACKAGE_NAME}/`);
+  return source === targetModule || isPackageModule(source);
 }
 
 /** Is `def` a VALUE `import { name } from '<safe source>'` — not aliased onto `name`, not type-only? */
@@ -338,6 +350,7 @@ function resolveSafeModule(context, fallbackModule) {
 module.exports = {
   createSafeImporter,
   EXEMPT_AND_SAFE_MODULE_SCHEMA,
+  isPackageModule,
   PACKAGE_NAME,
   SAFE_FS_MODULE,
   SAFE_MODULE_ONLY_SCHEMA,

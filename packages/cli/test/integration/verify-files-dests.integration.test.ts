@@ -55,7 +55,7 @@ async function pluginLocalIn(cwd: string): Promise<[PluginLocalSkillIndex, Plugi
 
 /** The `files-config-dests` phase's report over `cwd`: how many bundles it checked, and its findings. */
 async function filesDestsIn(cwd: string): Promise<{ examined: number; findings: Finding[] }> {
-  const { report } = runFilesConfigDestsPhase(cwd, await discoveredIn(cwd), ...(await pluginLocalIn(cwd)), silentLogger);
+  const { report } = runFilesConfigDestsPhase(cwd, await discoveredIn(cwd), ...(await pluginLocalIn(cwd)), silentLogger, false);
   return { examined: report.examined, findings: report.findings };
 }
 

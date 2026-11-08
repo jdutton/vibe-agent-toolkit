@@ -92,7 +92,7 @@ async function crawlIn(root: string): Promise<PackagedContentCrawl> {
 
 async function phaseIn(root: string): Promise<{ phase: PackagedContentPhaseResult; stderr: string }> {
   const { logger, lines } = recordingLogger();
-  const phase = runPackagedContentPhase(root, await discoveredIn(root), ...(await pluginLocalIn(root)), logger);
+  const phase = runPackagedContentPhase(root, await discoveredIn(root), ...(await pluginLocalIn(root)), logger, false);
   return { phase, stderr: lines.join('\n') };
 }
 

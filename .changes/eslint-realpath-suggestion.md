@@ -1,14 +1,42 @@
+### Breaking
+
+- **`no-os-tmpdir`, `no-fs-mkdirSync`, `no-fs-realpathSync` and `no-child-process-execSync` report
+  shapes they missed, so a project that linted clean can fail lint on upgrade.** All four report:
+  - a call through an aliased import (`import { tmpdir as t } from 'node:os'; t()`) or a renamed
+    destructure (`const { mkdirSync: mk } = fs; mk()`);
+  - a member call through an `import x = require()` binding, a member read straight off the load
+    (`require('node:fs').mkdirSync(p)`, `(await import('node:os')).tmpdir()`) and a computed key
+    (`fs['realpathSync'](x)`);
+  - (`no-fs-mkdirSync`, `no-fs-realpathSync`, `no-child-process-execSync`) a member call through a
+    namespace, default, `require()` or `import()` binding of the `node:*` module (`fs.mkdirSync()`,
+    `cp.execSync()` after `const cp = await import('node:child_process')`), which `no-os-tmpdir`
+    already reported;
+  - (`no-fs-realpathSync`) a call through the `.native` variant (`fs.realpathSync.native(x)`), which
+    gets the same editor suggestion as a direct call;
+  - any other read of the function — assigned, passed (`paths.map(realpathSync)`), captured,
+    re-exported, `.call`/`.bind`, or a truthiness check (`if (fs.realpathSync.native)`) — with no fix.
+    A type position (`typeof realpathSync` in a type) is not reported, and neither is a bare runtime
+    `typeof` operand (`typeof fs.realpathSync.native`);
+  - in a file the rule migrated, a dead `require()`, `import()` or `import x = require()` binding
+    of the module, which `--fix` removes (see Changed).
+
+  Expect new findings where a test double or a wrapper names the function it intercepts. Migrate the
+  call, or keep it with an `eslint-disable-next-line` that says why: for example, a bundled entrypoint
+  that must not import the replacement's package.
+
 ### Changed
 
 - **`@vibe-agent-toolkit/no-fs-realpathSync` no longer autofixes.** Its fix wrote a one-argument
   `normalizePath(x)`, which does not compile now that `normalizePath` takes `{ within }`. `--fix`
-  leaves the call alone; the editor suggestion writes `normalizePath(x, { within: TREE_CRAWLED_IN })`,
-  an unbound name that fails the typecheck until you name the tree the path is crawled in.
+  leaves the call alone; on a one-argument call the editor suggestion writes
+  `normalizePath(x, { within: TREE_CRAWLED_IN })`, which fails the typecheck until you name the tree
+  (none when `safeModule` is your own module, whose signature the rule cannot know).
 - **`@vibe-agent-toolkit/no-child-process-execSync` no longer autofixes.** Its fix turned
   `execSync('ls -la')` into `safeExecSync('ls -la')`, which compiles but runs a binary named
   `ls -la`: `safeExecSync` takes a binary and an argument array, not a shell string. Re-check any
-  call an earlier `--fix` rewrote. The editor suggestion appends `ARGV_FROM_SHELL_STRING`, which
-  fails the typecheck until you split the command.
+  call an earlier `--fix` rewrote. On a one-argument call the editor suggestion appends
+  `ARGV_FROM_SHELL_STRING`, which fails the typecheck until you split the command (none when
+  `safeModule` is your own module).
 - **`@vibe-agent-toolkit/no-fs-mkdirSync` autofixes only a call whose result is discarded.**
   `mkdirSyncReal()` returns the directory's real path, where `mkdirSync()` returns the first
   directory it created or `undefined`, so `const r = mkdirSync(…)` now gets an editor suggestion
@@ -69,17 +97,10 @@
   call only when it resolves through scope to the `node:*` module's own function**, by the same scan
   `no-existssync` and `no-link-following-fs` use: a named import (aliased or not), a member of a
   namespace, default, `require()` or `import()` binding (`fs.mkdirSync()`, `cp.execSync()`), or a
-  destructure of any of those (`const { mkdirSync } = fs`). The last three rules now report the member
-  and destructured-namespace calls they missed. Matched by name, `import { mkdirSync } from 'memfs'`,
+  destructure of any of those (`const { mkdirSync } = fs`). Matched by name, `import { mkdirSync } from 'memfs'`,
   a local `function tmpdir()` and a parameter shadowing a namespace (`function f(os) { os.tmpdir() }`)
   were rewritten to the real-fs helpers; they are now left alone, and so is an unbound call with no
-  import at all.
-- **`no-os-tmpdir`, `no-fs-mkdirSync`, `no-fs-realpathSync` and `no-child-process-execSync` report two
-  more shapes, neither autofixed.** A call through the `.native` variant (`fs.realpathSync.native(x)`)
-  gets the same editor suggestion as a direct call; a value reference — the function assigned, passed
-  (`paths.map(realpathSync)`), captured or re-exported — is reported with no fix, since there is no call
-  to rewrite. A `typeof realpathSync` type position is not reported. Expect new findings where a test
-  double or a wrapper names the function it intercepts.
+  import at all. The shapes this resolution newly reports are under Breaking.
 - **The same four rules add the replacement's import correctly beside any import of the safe module.**
   An existing `import type { … }`, `import * as u` or side-effect `import '…'` of
   `@vibe-agent-toolkit/utils/fs` had the replacement appended to it: the value landed in a type-only

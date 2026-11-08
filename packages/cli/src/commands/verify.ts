@@ -99,7 +99,7 @@ export function createVerifyTopLevelCommand(): Command {
 
   addRetiredOnlyOption(command)
     .description('Verify built artifacts (resources + skills + marketplace + consistency); marketplace/consistency read dist/ — run after vat build')
-    .option('-v, --verbose', 'Forwarded to every delegated phase: its warning and info findings on stderr too, and its per-asset rows in the document')
+    .option('-v, --verbose', 'Every phase\'s warning and info findings on stderr too, and each delegated phase\'s per-asset rows in the document')
     .option('--debug', 'Enable debug logging')
     .action(verifyTopLevelCommand)
     .addHelpText(
@@ -164,7 +164,8 @@ Output:
   "location:line: severity: message [code]", its fix (when it has one) on
   the next line, indented, as "Fix: ...", errors first. A delegated phase
   prints every error, and its warning and info findings only with --verbose;
-  the in-process phases print every finding
+  the in-process phases (files-config-dests, packaged-content, consistency)
+  do the same, under their banner, naming how many findings were not shown.
 
   By default each delegated phase reports a per-asset summary plus the assets
   that have findings. '--verbose' is forwarded to every delegated phase, which
@@ -570,15 +571,18 @@ const FILES_CONFIG_DESTS = 'files-config-dests';
 
 /**
  * Log one in-process phase's published findings to stderr under its banner,
- * through {@link reportFindings}, at every severity and verbosity.
+ * through {@link reportFindings} at the command's verbosity — errors always,
+ * warning and info findings with `--verbose`, else the "not shown" hint — the
+ * contract every delegated phase already honours.
  */
 function reportInProcessPhase(
   phase: InProcessPhaseName,
   findings: readonly Finding[],
-  logger: ReturnType<typeof createLogger>
+  logger: ReturnType<typeof createLogger>,
+  verbose: boolean,
 ): void {
   logger.error(`\n▶ Phase: ${phase}`);
-  reportFindings(findings, { verbose: true, write: logger.error });
+  reportFindings(findings, { verbose, write: logger.error });
 }
 
 /**
@@ -810,26 +814,28 @@ export function runPackagedContentPhase(
   pluginLocal: PluginLocalSkillIndex,
   pluginLocalNames: PluginLocalSkillNames,
   logger: ReturnType<typeof createLogger>,
+  verbose: boolean,
 ): PackagedContentPhaseResult {
   const phase = buildPackagedContentPhase(checkPackagedAgentInstructionFiles(projectRoot, discoveredSkills, pluginLocal, pluginLocalNames));
-  reportPackagedContentPhase(phase, logger);
+  reportPackagedContentPhase(phase, logger, verbose);
   return phase;
 }
 
 export function reportPackagedContentPhase(
   phase: PackagedContentPhaseResult,
   logger: ReturnType<typeof createLogger>,
+  verbose: boolean,
 ): void {
   const { findings, data, examined } = phase.report;
   if (findings.length > 0) {
-    reportInProcessPhase(PACKAGED_CONTENT, findings, logger);
+    reportInProcessPhase(PACKAGED_CONTENT, findings, logger, verbose);
   } else if (examined > 0) {
     return;
   } else if ('zeroIsAnAnswer' in packagedContentExamined(phase.report)) {
     logger.info(`\n▶ Phase: ${PACKAGED_CONTENT} — nothing to inspect: all ${data?.bundlesInPlace ?? 0} discovered skill(s) are in place (publish: false)`);
   } else {
     // Its own banner: `runPhase` prints the zero-bundle refusal next.
-    reportInProcessPhase(PACKAGED_CONTENT, [], logger);
+    reportInProcessPhase(PACKAGED_CONTENT, [], logger, verbose);
   }
 }
 
@@ -862,11 +868,12 @@ export function runFilesConfigDestsPhase(
   pluginLocal: PluginLocalSkillIndex,
   pluginLocalNames: PluginLocalSkillNames,
   logger: ReturnType<typeof createLogger>,
+  verbose: boolean,
 ): PhaseResult {
   const built = collectBuiltSkillOutputs(projectRoot, discovered, pluginLocal, pluginLocalNames).built;
   const { checked, missing } = checkFilesConfigDestsOf(built, projectRoot);
   const findings = filesDestFindings(projectRoot, missing);
-  if (findings.length > 0) reportInProcessPhase(FILES_CONFIG_DESTS, findings, logger);
+  if (findings.length > 0) reportInProcessPhase(FILES_CONFIG_DESTS, findings, logger, verbose);
   return {
     name: FILES_CONFIG_DESTS,
     report: buildReport({ examined: checked, findings, data: null, gate: ORCHESTRATOR_GATE }),
@@ -888,9 +895,10 @@ function runConsistencyPhase(
   projectRoot: string,
   discoveredSkills: readonly DiscoveredSkill[],
   pluginLocal: PluginLocalSkillIndex,
+  verbose: boolean,
 ): PhaseResult {
   const { issues } = runConsistencyChecks([...discoveredSkills], config, projectRoot, pluginLocal);
-  if (issues.length > 0) reportInProcessPhase('consistency', issues, logger);
+  if (issues.length > 0) reportInProcessPhase('consistency', issues, logger, verbose);
   return {
     name: 'consistency',
     report: buildReport({ examined: discoveredSkills.length, findings: issues, data: null, gate: ORCHESTRATOR_GATE }),
@@ -935,9 +943,11 @@ async function runInProcessPhases(run: {
   skills: NonNullable<ProjectConfig['skills']>;
   projectRoot: string;
   logger: ReturnType<typeof createLogger>;
+  /** `--verbose`: whether each phase's warning and info findings reach stderr. */
+  verbose: boolean;
   results: PhaseResult[];
 }): Promise<void> {
-  const { phases, config, projectRoot, logger, results } = run;
+  const { phases, config, projectRoot, logger, verbose, results } = run;
   // ONE discovery for the whole in-process half of the run: every phase below
   // asks "which skills does this project have", and each used to answer it
   // differently. `'refuse'`: a verify over a population it could not see is the
@@ -951,15 +961,15 @@ async function runInProcessPhases(run: {
 
   if (phases.includes(FILES_CONFIG_DESTS)) {
     results.push(await inProcess(IN_PROCESS_PHASES[FILES_CONFIG_DESTS], () =>
-      runFilesConfigDestsPhase(projectRoot, discoveredSkills, pluginLocal, pluginLocalNames, logger)));
+      runFilesConfigDestsPhase(projectRoot, discoveredSkills, pluginLocal, pluginLocalNames, logger, verbose)));
   }
   if (phases.includes(PACKAGED_CONTENT)) {
     results.push(await inProcess(IN_PROCESS_PHASES[PACKAGED_CONTENT], () =>
-      runPackagedContentPhase(projectRoot, discoveredSkills, pluginLocal, pluginLocalNames, logger)));
+      runPackagedContentPhase(projectRoot, discoveredSkills, pluginLocal, pluginLocalNames, logger, verbose)));
   }
   if (phases.includes('consistency')) {
     results.push(await inProcess(IN_PROCESS_PHASES.consistency, () =>
-      runConsistencyPhase(logger, config, projectRoot, discoveredSkills, pluginLocal)));
+      runConsistencyPhase(logger, config, projectRoot, discoveredSkills, pluginLocal, verbose)));
   }
 }
 
@@ -1001,7 +1011,7 @@ async function verifyTopLevelCommand(
     });
 
     if (inProcessPhases.length > 0 && config?.skills) {
-      await runInProcessPhases({ phases: inProcessPhases, config, skills: config.skills, projectRoot, logger, results });
+      await runInProcessPhases({ phases: inProcessPhases, config, skills: config.skills, projectRoot, logger, verbose: options.verbose === true, results });
     }
   });
   endWithReport('verify', report, ORCHESTRATOR_FORMAT);

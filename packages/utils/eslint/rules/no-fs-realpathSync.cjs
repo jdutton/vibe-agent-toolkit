@@ -10,6 +10,8 @@
  * No auto-fix: normalizePath() takes `{ within }` — the tree the path is crawled in — which the
  * rule cannot know. A suggestion rewrites the call with `{ within: TREE_CRAWLED_IN }`, an unbound
  * name that fails the typecheck under any compiler options until the author names the tree.
+ * With `safeModule` naming a consumer's own wrapper, whose `within` may be spelled differently,
+ * the message names no call shape and no suggestion is offered.
  */
 
 const factory = require('./eslint-rule-factory.cjs');
@@ -25,6 +27,9 @@ module.exports = factory({
     suggestion:
       'Replace with normalizePath(target, { within: TREE_CRAWLED_IN }), then set `within` to the tree the path is crawled in. ' +
       'Unlike realpathSync(), it no longer throws when the path is absent: it returns the resolved spelling',
+    seamMessage:
+      'Use normalizePath from {{safeModule}} instead of fs.realpathSync() for consistent Windows 8.3 path resolution; ' +
+      'its own signature governs what to pass it',
   },
   message:
     'Use normalizePath(target, { within }) from {{safeModule}} instead of fs.realpathSync() for consistent Windows 8.3 path resolution; ' +

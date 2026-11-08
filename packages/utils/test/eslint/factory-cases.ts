@@ -180,6 +180,14 @@ export function unsafeCallRuleCases(
       },
       // A type position names the function's type, never the function.
       { code: `${unsafeImport}\nexport type T = typeof ${unsafeFn};`, filename: LINTED_FILE, options },
+      // A runtime `typeof` operand reads the function's type tag: it neither calls nor passes it.
+      { code: `${unsafeImport}\nexport const t = typeof ${unsafeFn};`, filename: LINTED_FILE, options },
+      { code: `${namespaceImport}\nexport const t = typeof m.${unsafeFn};`, filename: LINTED_FILE, options },
+      { code: `${namespaceImport}\nexpect(typeof m.${unsafeFn}.native).toBe('function');`, filename: LINTED_FILE, options },
+      // An optional chain wraps the operand in a ChainExpression: still only its type tag.
+      { code: `${namespaceImport}\nexport const t = typeof m?.${unsafeFn};`, filename: LINTED_FILE, options },
+      { code: `${unsafeImport}\nexport const t = typeof ${unsafeFn}?.native;`, filename: LINTED_FILE, options },
+      { code: `${namespaceImport}\nexport const t = typeof m?.${unsafeFn}?.native;`, filename: LINTED_FILE, options },
     ],
     invalid: [
       { code: unsafeCode, filename: LINTED_FILE, options, ...rewritten(output, suggestedOutput) },
@@ -218,6 +226,17 @@ export function unsafeCallRuleCases(
         ...rewritten(
           `${namespaceImport}\n${safeImport}\nconst { ${unsafeFn} } = m;\nconst r = ${safeFn}(x${extra});`,
           `${namespaceImport}\n${safeImport}\nconst { ${unsafeFn} } = m;\nconst r = ${safeFn}(x${extra});`,
+        ),
+      },
+      // `typeof` sees through an optional chain to its operand, never past a call inside it:
+      // the call is reported and rewritten like any other.
+      {
+        code: `${namespaceImport}\nexport const t = typeof m?.${unsafeFn}(x);`,
+        filename: LINTED_FILE,
+        options,
+        ...rewritten(
+          `${namespaceImport}\n${safeImport}\nexport const t = typeof ${safeFn}(x${extra});`,
+          `${namespaceImport}\n${safeImport}\nexport const t = typeof ${safeFn}(x${extra});`,
         ),
       },
       ...nativeAndValueReferenceCases({ unsafeFn, unsafeModule, safeFn, extra, unsafeImport, namespaceImport, safeImport, options }),
@@ -336,7 +355,56 @@ function nativeAndValueReferenceCases(
     reported(`${unsafeImport}\nexport const r = [x].map(${unsafeFn});`),
     reported(`${unsafeImport}\nexport const f = ${unsafeFn}.native;`),
     reported(`export { ${unsafeFn} } from '${unsafeModule}';`),
+    // `typeof` exempts only its own operand: a reference nested deeper in it is still passed.
+    reported(`${unsafeImport}\nexport const t = typeof [x].map(${unsafeFn});`),
   ];
+}
+
+/**
+ * A rule whose replacement needs an argument it cannot know (`{ appendArgument }`) describes
+ * VAT's own call shape. Pointed at a consumer's seam (`safeModule`), whose wrapper may take that
+ * argument differently, it reports `noUnsafeOperationAtSeam` — `message`, which names no call
+ * shape — and offers no suggestion. Pointed at VAT's own barrel, it is unchanged.
+ */
+export function seamSignatureCases(
+  { unsafeFn, unsafeModule, safeFn, appendArgument, seamMessage }: {
+    unsafeFn: string; unsafeModule: string; safeFn: string; appendArgument: string; seamMessage: string;
+  },
+): RuleCases {
+  const unsafeImport = `import { ${unsafeFn} } from '${unsafeModule}';`;
+  const code = `${unsafeImport}\nconst r = ${unsafeFn}(x);`;
+  return {
+    valid: [],
+    invalid: [
+      // The rendered text, pinned whole: it names the seam and no call shape.
+      { code, filename: LINTED_FILE, options: [{ safeModule: SEAM }], errors: [{ message: seamMessage, suggestions: [] }] },
+      // A value reference at a seam carries the same message.
+      {
+        code: `${unsafeImport}\nexport const f = ${unsafeFn};`,
+        filename: LINTED_FILE,
+        options: [{ safeModule: SEAM }],
+        errors: [{ messageId: 'noUnsafeOperationAtSeam', suggestions: [] }],
+      },
+      {
+        code: `import * as m from '${unsafeModule}';\nconst r = m.${unsafeFn}.native(x);`,
+        filename: LINTED_FILE,
+        options: [{ safeModule: SEAM }],
+        errors: [{ messageId: 'noUnsafeOperationAtSeam', suggestions: [] }],
+      },
+      {
+        code,
+        filename: LINTED_FILE,
+        options: [{ safeModule: BARREL }],
+        errors: [{
+          messageId: 'noUnsafeOperation',
+          suggestions: [{
+            messageId: 'useSafeCall',
+            output: `${unsafeImport}\nimport { ${safeFn} } from '${BARREL}';\nconst r = ${safeFn}(x, ${appendArgument});`,
+          }],
+        }],
+      },
+    ],
+  };
 }
 
 interface ImportShapeSpec {
