@@ -16,7 +16,9 @@
   - any other read of the function — assigned, passed (`paths.map(realpathSync)`), captured,
     re-exported, `.call`/`.bind`, or a truthiness check (`if (fs.realpathSync.native)`) — with no fix.
     A type position (`typeof realpathSync` in a type) is not reported, and neither is a bare runtime
-    `typeof` operand (`typeof fs.realpathSync.native`).
+    `typeof` operand (`typeof fs.realpathSync.native`);
+  - a dead `require()`, `import()` or `import x = require()` binding of the module, which `--fix`
+    removes (see Changed).
 
   Expect new findings where a test double or a wrapper names the function it intercepts. Migrate the
   call, or keep it with an `eslint-disable-next-line` that says why: for example, a bundled entrypoint
@@ -26,16 +28,15 @@
 
 - **`@vibe-agent-toolkit/no-fs-realpathSync` no longer autofixes.** Its fix wrote a one-argument
   `normalizePath(x)`, which does not compile now that `normalizePath` takes `{ within }`. `--fix`
-  leaves the call alone; the editor suggestion writes `normalizePath(x, { within: TREE_CRAWLED_IN })`,
-  an unbound name that fails the typecheck until you name the tree the path is crawled in.
-  With `safeModule` set to your own module (outside `@vibe-agent-toolkit/utils`), whose signature
-  the rule cannot know, there is no suggestion either, and the message names no arguments.
+  leaves the call alone; on a one-argument call the editor suggestion writes
+  `normalizePath(x, { within: TREE_CRAWLED_IN })`, which fails the typecheck until you name the tree
+  (none when `safeModule` is your own module, whose signature the rule cannot know).
 - **`@vibe-agent-toolkit/no-child-process-execSync` no longer autofixes.** Its fix turned
   `execSync('ls -la')` into `safeExecSync('ls -la')`, which compiles but runs a binary named
   `ls -la`: `safeExecSync` takes a binary and an argument array, not a shell string. Re-check any
-  call an earlier `--fix` rewrote. The editor suggestion appends `ARGV_FROM_SHELL_STRING`, which
-  fails the typecheck until you split the command. With `safeModule` set to your own module, there
-  is no suggestion either, and the message names no arguments.
+  call an earlier `--fix` rewrote. On a one-argument call the editor suggestion appends
+  `ARGV_FROM_SHELL_STRING`, which fails the typecheck until you split the command (none when
+  `safeModule` is your own module).
 - **`@vibe-agent-toolkit/no-fs-mkdirSync` autofixes only a call whose result is discarded.**
   `mkdirSyncReal()` returns the directory's real path, where `mkdirSync()` returns the first
   directory it created or `undefined`, so `const r = mkdirSync(…)` now gets an editor suggestion

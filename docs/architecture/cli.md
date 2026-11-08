@@ -287,10 +287,10 @@ A verb that finds something publishes it twice: in full in the stdout document, 
 stderr. Both spell a finding with the one formatter, `formatFindingLine` in
 `packages/cli/src/utils/issue-rendering.ts`; a flat-findings lane prints them through
 `reportFindings`, which puts every error first and adds warnings and info only under `--verbose`
-(`vat resources validate`, `vat resources check -v`, the orchestrators' delegated phases). A lane
-with no `--verbose` passes `verbose: true` and always prints every finding: `vat agent validate`,
-`vat ard emit`, `vat rag index`, `vat okf validate`, `vat audit settings`, `vat claude plugin
-uninstall`, `vat skills build --skill`'s refusal, and `vat verify`'s built-in phases.
+(`vat resources validate`, `vat resources check -v`, the orchestrators' delegated phases, and
+`vat verify`'s built-in phases). A lane with no `--verbose` passes `verbose: true` and always prints
+every finding: `vat agent validate`, `vat ard emit`, `vat rag index`, `vat okf validate`,
+`vat audit settings`, `vat claude plugin uninstall` and `vat skills build --skill`'s refusal.
 
 A leftover (`TREE_CLEANUP_INCOMPLETE`: something a run made and could not remove) is said by the
 one path that publishes it, never by a verb: `writeDocument`, `endWithForwardedDocument`,
