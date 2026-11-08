@@ -11,4 +11,5 @@
   suggestion appended `{ within: TREE_CRAWLED_IN }` / `ARGV_FROM_SHELL_STRING`, which is wrong for a
   wrapper that takes the argument another way (`normalizePath(target, within)`). The message now
   names the function and your module without an argument spelling, and no suggestion is offered.
-  With the default `safeModule`, or any `@vibe-agent-toolkit/utils` path, nothing changes.
+  A module that only re-exports VAT's function loses the suggestion it used to get. With the default
+  `safeModule`, or any `@vibe-agent-toolkit/utils` path, nothing changes.

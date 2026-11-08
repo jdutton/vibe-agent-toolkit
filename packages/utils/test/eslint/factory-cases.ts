@@ -184,6 +184,10 @@ export function unsafeCallRuleCases(
       { code: `${unsafeImport}\nexport const t = typeof ${unsafeFn};`, filename: LINTED_FILE, options },
       { code: `${namespaceImport}\nexport const t = typeof m.${unsafeFn};`, filename: LINTED_FILE, options },
       { code: `${namespaceImport}\nexpect(typeof m.${unsafeFn}.native).toBe('function');`, filename: LINTED_FILE, options },
+      // An optional chain wraps the operand in a ChainExpression: still only its type tag.
+      { code: `${namespaceImport}\nexport const t = typeof m?.${unsafeFn};`, filename: LINTED_FILE, options },
+      { code: `${unsafeImport}\nexport const t = typeof ${unsafeFn}?.native;`, filename: LINTED_FILE, options },
+      { code: `${namespaceImport}\nexport const t = typeof m?.${unsafeFn}?.native;`, filename: LINTED_FILE, options },
     ],
     invalid: [
       { code: unsafeCode, filename: LINTED_FILE, options, ...rewritten(output, suggestedOutput) },
@@ -222,6 +226,17 @@ export function unsafeCallRuleCases(
         ...rewritten(
           `${namespaceImport}\n${safeImport}\nconst { ${unsafeFn} } = m;\nconst r = ${safeFn}(x${extra});`,
           `${namespaceImport}\n${safeImport}\nconst { ${unsafeFn} } = m;\nconst r = ${safeFn}(x${extra});`,
+        ),
+      },
+      // `typeof` sees through an optional chain to its operand, never past a call inside it:
+      // the call is reported and rewritten like any other.
+      {
+        code: `${namespaceImport}\nexport const t = typeof m?.${unsafeFn}(x);`,
+        filename: LINTED_FILE,
+        options,
+        ...rewritten(
+          `${namespaceImport}\n${safeImport}\nexport const t = typeof ${safeFn}(x${extra});`,
+          `${namespaceImport}\n${safeImport}\nexport const t = typeof ${safeFn}(x${extra});`,
         ),
       },
       ...nativeAndValueReferenceCases({ unsafeFn, unsafeModule, safeFn, extra, unsafeImport, namespaceImport, safeImport, options }),

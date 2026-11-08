@@ -1,16 +1,21 @@
 ### Breaking
 
 - **`no-os-tmpdir`, `no-fs-mkdirSync`, `no-fs-realpathSync` and `no-child-process-execSync` report
-  shapes they missed, so a project that linted clean can fail lint on upgrade:**
-  - (`no-fs-mkdirSync`, `no-fs-realpathSync`, `no-child-process-execSync`) a call through a
-    namespace, default, `require()` or `import()` binding of the `node:*` module (`fs.mkdirSync()`,
-    `cp.execSync()` after `const cp = await import('node:child_process')`) or a destructure of one
-    (`const { mkdirSync } = fs`);
+  shapes they missed, so a project that linted clean can fail lint on upgrade.** They matched a call
+  by the function's name; they now follow the binding through scope, so all four report:
+  - a call through an aliased import (`import { tmpdir as t } from 'node:os'; t()`) or a renamed
+    destructure (`const { mkdirSync: mk } = fs; mk()`);
+  - a member call through a namespace, default, `require()`, `import()` or `import x = require()`
+    binding of the `node:*` module (`fs.mkdirSync()`, `cp.execSync()` after
+    `const cp = await import('node:child_process')`; `no-os-tmpdir` already reported
+    `os.tmpdir()` on a plain binding), a member read straight off the load
+    (`require('node:fs').mkdirSync(p)`, `(await import('node:os')).tmpdir()`) and a computed key
+    (`fs['realpathSync'](x)`);
   - (`no-fs-realpathSync`) a call through the `.native` variant (`fs.realpathSync.native(x)`), which
     gets the same editor suggestion as a direct call;
-  - (all four) a value reference — the function assigned, passed (`paths.map(realpathSync)`),
-    captured or re-exported — reported with no fix, since there is no call to rewrite. A type
-    position (`typeof realpathSync` in a type) is not reported.
+  - a value reference — the function assigned, passed (`paths.map(realpathSync)`), captured or
+    re-exported — reported with no fix, since there is no call to rewrite. Neither a type position
+    (`typeof realpathSync` in a type) nor a runtime `typeof` operand is reported.
 
   Expect new findings where a test double or a wrapper names the function it intercepts. Migrate the
   call, or keep it with an `eslint-disable-next-line` that says why: for example, a bundled entrypoint
@@ -90,7 +95,7 @@
   destructure of any of those (`const { mkdirSync } = fs`). Matched by name, `import { mkdirSync } from 'memfs'`,
   a local `function tmpdir()` and a parameter shadowing a namespace (`function f(os) { os.tmpdir() }`)
   were rewritten to the real-fs helpers; they are now left alone, and so is an unbound call with no
-  import at all. The calls this resolution newly reports are under Breaking.
+  import at all. The shapes this resolution newly reports are under Breaking.
 - **The same four rules add the replacement's import correctly beside any import of the safe module.**
   An existing `import type { … }`, `import * as u` or side-effect `import '…'` of
   `@vibe-agent-toolkit/utils/fs` had the replacement appended to it: the value landed in a type-only

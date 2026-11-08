@@ -102,13 +102,20 @@ function isStatementCall(node) {
   return node.parent?.type === 'ExpressionStatement' && node.parent.expression === node;
 }
 
-/** Is `node` the operand of a runtime `typeof` — itself, or through its `.native` member? */
+/**
+ * Is `node` the operand of a runtime `typeof` — itself, or through its `.native` member, with
+ * or without an optional chain (`typeof fs?.realpathSync`, `typeof realpathSync?.native`)? The
+ * chain is seen through only when it wraps exactly that member: a call inside it is a call.
+ */
 function isTypeofOperand(node) {
   const parent = node.parent;
-  const operand = parent?.type === 'MemberExpression' && parent.object === node
+  const member = parent?.type === 'MemberExpression' && parent.object === node
     && !parent.computed && parent.property.name === 'native'
     ? parent
     : node;
+  const operand = member.parent?.type === 'ChainExpression' && member.parent.expression === member
+    ? member.parent
+    : member;
   return operand.parent?.type === 'UnaryExpression' && operand.parent.operator === 'typeof'
     && operand.parent.argument === operand;
 }

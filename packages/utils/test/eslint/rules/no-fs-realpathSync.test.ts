@@ -20,7 +20,7 @@ describe(RULE.realpath, () => {
       unsafeFn: 'realpathSync', unsafeModule: NODE_FS, safeFn: 'normalizePath', appendArgument: TREE_CRAWLED_IN,
       seamMessage:
         `Use normalizePath from ${SEAM} instead of fs.realpathSync() for consistent Windows 8.3 path resolution; ` +
-        'pass it the tree the path is crawled in, or the path itself when it is the operator\'s own',
+        'its own signature governs what to pass it',
     }));
   });
 });

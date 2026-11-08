@@ -20,7 +20,7 @@ describe(RULE.execSync, () => {
       unsafeFn: 'execSync', unsafeModule: NODE_CHILD_PROCESS, safeFn: 'safeExecSync', appendArgument: ARGV_FROM_SHELL_STRING,
       seamMessage:
         `Use safeExecSync from ${SEAM} instead of child_process.execSync() to prevent command injection (security + cross-platform); ` +
-        'pass it the binary and its arguments separately, not a shell string',
+        'its own signature governs what to pass it',
     }));
   });
 });

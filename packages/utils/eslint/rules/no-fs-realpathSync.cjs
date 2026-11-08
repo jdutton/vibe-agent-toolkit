@@ -29,7 +29,7 @@ module.exports = factory({
       'Unlike realpathSync(), it no longer throws when the path is absent: it returns the resolved spelling',
     seamMessage:
       'Use normalizePath from {{safeModule}} instead of fs.realpathSync() for consistent Windows 8.3 path resolution; ' +
-      'pass it the tree the path is crawled in, or the path itself when it is the operator\'s own',
+      'its own signature governs what to pass it',
   },
   message:
     'Use normalizePath(target, { within }) from {{safeModule}} instead of fs.realpathSync() for consistent Windows 8.3 path resolution; ' +

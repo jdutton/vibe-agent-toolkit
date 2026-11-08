@@ -29,7 +29,7 @@ module.exports = factory({
       'Replace with safeExecSync(command, ARGV_FROM_SHELL_STRING), then split the shell string: the binary as the first argument, its arguments as the array',
     seamMessage:
       'Use safeExecSync from {{safeModule}} instead of child_process.execSync() to prevent command injection (security + cross-platform); ' +
-      'pass it the binary and its arguments separately, not a shell string',
+      'its own signature governs what to pass it',
   },
   message:
     'Use safeExecSync(binary, args) from {{safeModule}} instead of child_process.execSync() to prevent command injection (security + cross-platform); ' +
