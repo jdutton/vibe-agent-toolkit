@@ -17,7 +17,7 @@
  *   passes no `exemptFiles` option. Ship this empty: an exemption names one file
  *   in one repo, so a baked-in default is a hole in every OTHER repo. Consumers
  *   declare their own via the rule option (see `exempt-path-matcher.cjs`).
- * @param {'fix' | { appendArgument: string, suggestion: string } | { autofixAsStatement: true, suggestion: string }} config.rewrite - REQUIRED.
+ * @param {'fix' | { appendArgument: string, suggestion: string, seamMessage: string } | { autofixAsStatement: true, suggestion: string }} config.rewrite - REQUIRED.
  *   - `'fix'` when the safe function takes the unsafe call's arguments unchanged and
  *     returns the same thing: an autofix swaps the callee.
  *   - `{ autofixAsStatement, suggestion }` when it takes the same arguments but RETURNS
@@ -26,7 +26,9 @@
  *   - `{ appendArgument, suggestion }` when it needs an argument the rule cannot know:
  *     no autofix — a suggestion rewrites a one-argument call and appends
  *     `appendArgument`, a placeholder that must fail the typecheck rather than guess a
- *     value that compiles.
+ *     value that compiles. `seamMessage` is the report when the `safeModule` option names a
+ *     module other than this package (a consumer's wrapper): that wrapper may take the argument
+ *     another way, so the report names no call shape and NO suggestion is offered.
  *   No call's fix — autofix or suggestion — ever removes the unsafe import: the binding
  *   may still back a call whose report was suppressed, or one no suggestion was taken
  *   for. The dead-import leg removes it, on the next pass, once nothing references it.
@@ -65,6 +67,7 @@ const { fsBindingVisitors, moduleBindingVisitors } = require('./fs-binding-scan.
 const {
   createSafeImporter,
   EXEMPT_AND_SAFE_MODULE_SCHEMA,
+  isPackageModule,
   resolveSafeModule,
 } = require('./safe-import.cjs');
 
@@ -73,7 +76,7 @@ const {
  * Anything else throws: a rule the factory cannot read must not build, since the
  * fallback would be an autofix that emits the wrong call.
  *
- * @returns {{ autofix: 'always' | 'statement' | 'never', suggestion?: string, appendArgument?: string }}
+ * @returns {{ autofix: 'always' | 'statement' | 'never', suggestion?: string, appendArgument?: string, seamMessage?: string }}
  */
 function readRewrite(rewrite, unsafeFn) {
   if (rewrite === 'fix') {
@@ -82,13 +85,15 @@ function readRewrite(rewrite, unsafeFn) {
   const isObject = rewrite !== null && typeof rewrite === 'object';
   const appends = isObject && typeof rewrite.appendArgument === 'string';
   const asStatement = isObject && rewrite.autofixAsStatement === true;
-  if (!isObject || typeof rewrite.suggestion !== 'string' || appends === asStatement) {
+  const malformed = !isObject || typeof rewrite.suggestion !== 'string' || appends === asStatement
+    || (appends && typeof rewrite.seamMessage !== 'string');
+  if (malformed) {
     throw new TypeError(
-      `${unsafeFn} rule: \`rewrite\` must be 'fix', { appendArgument, suggestion } or { autofixAsStatement: true, suggestion }`,
+      `${unsafeFn} rule: \`rewrite\` must be 'fix', { appendArgument, suggestion, seamMessage } or { autofixAsStatement: true, suggestion }`,
     );
   }
   return appends
-    ? { autofix: 'never', suggestion: rewrite.suggestion, appendArgument: rewrite.appendArgument }
+    ? { autofix: 'never', suggestion: rewrite.suggestion, appendArgument: rewrite.appendArgument, seamMessage: rewrite.seamMessage }
     : { autofix: 'statement', suggestion: rewrite.suggestion };
 }
 
@@ -97,8 +102,27 @@ function isStatementCall(node) {
   return node.parent?.type === 'ExpressionStatement' && node.parent.expression === node;
 }
 
-/** Is `node` inside a type position (`typeof realpathSync`), where it names a type, not the function? */
-function inTypeQuery(node) {
+/** Is `node` the operand of a runtime `typeof` — itself, or through its `.native` member? */
+function isTypeofOperand(node) {
+  const parent = node.parent;
+  const operand = parent?.type === 'MemberExpression' && parent.object === node
+    && !parent.computed && parent.property.name === 'native'
+    ? parent
+    : node;
+  return operand.parent?.type === 'UnaryExpression' && operand.parent.operator === 'typeof'
+    && operand.parent.argument === operand;
+}
+
+/**
+ * Does `node` only NAME the function, never call or pass it? A type position
+ * (`type T = typeof realpathSync`) names its type; a runtime `typeof` operand
+ * (`typeof fs.realpathSync.native`) reads its type tag. Neither has a call to rewrite
+ * or hands the function anywhere, so neither is reported.
+ */
+function namesWithoutUsing(node) {
+  if (isTypeofOperand(node)) {
+    return true;
+  }
   for (let n = node.parent; n; n = n.parent) {
     if (n.type === 'TSTypeQuery') {
       return true;
@@ -201,6 +225,7 @@ module.exports = function createNoUnsafeRule(config) {
       schema: [EXEMPT_AND_SAFE_MODULE_SCHEMA],
       messages: {
         noUnsafeOperation: message,
+        ...(mode.seamMessage !== undefined && { noUnsafeOperationAtSeam: mode.seamMessage }),
         useSafeCall: mode.suggestion ?? `Replace with ${safeFn}()`,
         [DEAD_UNSAFE_IMPORT]: DEAD_UNSAFE_IMPORT_MESSAGE,
         [UNANCHORED_EXEMPT_FILE]: UNANCHORED_EXEMPT_MESSAGE,
@@ -213,6 +238,11 @@ module.exports = function createNoUnsafeRule(config) {
       // the consuming repo's, and one repo can configure the same rule
       // differently across config blocks.
       const targetModule = resolveSafeModule(context, safeModule);
+      // The ONE decision for a consumer's seam: a rule whose rewrite appends an argument
+      // describes this package's call shape, which the seam's wrapper need not share — so at a
+      // seam it reports `seamMessage`, naming no call shape, and offers no rewrite at all.
+      const atSeam = mode.seamMessage !== undefined && !isPackageModule(targetModule);
+      const unsafeReport = { messageId: atSeam ? 'noUnsafeOperationAtSeam' : 'noUnsafeOperation', data: { safeModule: targetModule } };
 
       // Only the declared implementation file(s) may call the unsafe function.
       if (exemptMatcherFor(context)(context.getFilename())) {
@@ -250,7 +280,7 @@ module.exports = function createNoUnsafeRule(config) {
         modules: new Set(moduleVariants),
         banned: new Set([unsafeFn]),
         report: (node, name) => {
-          if (name !== '*' && !inTypeQuery(node)) {
+          if (name !== '*' && !namesWithoutUsing(node)) {
             const reached = callOf(node);
             unsafeUses.set(reached?.call ?? node, reached && { native: reached.native });
           }
@@ -267,7 +297,7 @@ module.exports = function createNoUnsafeRule(config) {
         'Program:exit'() {
           for (const [node, reached] of [...unsafeUses].sort(([a], [b]) => a.range[0] - b.range[0])) {
             if (reached === null) {
-              context.report({ node, messageId: 'noUnsafeOperation', data: { safeModule: targetModule }, suggest: [] });
+              context.report({ ...unsafeReport, node, suggest: [] });
             } else {
               reportUnsafeCall(node, reached.native);
             }
@@ -302,12 +332,12 @@ module.exports = function createNoUnsafeRule(config) {
         // placeholder that fails the typecheck at that spot — never a guessed value
         // that would compile — and appends to a one-argument call only: further
         // arguments belong to the unsafe function and mean nothing to the safe one.
-        const report = { node, messageId: 'noUnsafeOperation', data: { safeModule: targetModule } };
-        // No rewrite at all where the importer says the rewritten call would reach a
-        // binding other than the safe function. Nor for a constructed first
-        // argument (`new URL(…)`): every safe replacement takes a string path, so the
-        // rewrite would not compile.
-        if (!importer.mayRewrite(node) || node.arguments[0]?.type === 'NewExpression') {
+        const report = { ...unsafeReport, node };
+        // No rewrite at all at a consumer's seam (`atSeam`), or where the importer says the
+        // rewritten call would reach a binding other than the safe function. Nor for a
+        // constructed first argument (`new URL(…)`): every safe replacement takes a string
+        // path, so the rewrite would not compile.
+        if (atSeam || !importer.mayRewrite(node) || node.arguments[0]?.type === 'NewExpression') {
           context.report({ ...report, suggest: [] });
         } else if (!native && autofixes(node)) {
           context.report({ ...report, fix: (fixer) => rewriteCall(fixer) });

@@ -10,7 +10,9 @@
  * array. Swapping the callee compiles and changes what the string means (`'ls -la'` becomes
  * a binary named `ls -la`), and splitting a shell string is not something a fixer can do
  * safely. A suggestion rewrites the callee and appends `ARGV_FROM_SHELL_STRING`, an unbound
- * name that fails the typecheck until the author splits the command.
+ * name that fails the typecheck until the author splits the command. With `safeModule` naming a
+ * consumer's own wrapper, whose signature the rule cannot know, the message names no call shape
+ * and no suggestion is offered.
  */
 
 const factory = require('./eslint-rule-factory.cjs');
@@ -25,6 +27,9 @@ module.exports = factory({
     appendArgument: 'ARGV_FROM_SHELL_STRING',
     suggestion:
       'Replace with safeExecSync(command, ARGV_FROM_SHELL_STRING), then split the shell string: the binary as the first argument, its arguments as the array',
+    seamMessage:
+      'Use safeExecSync from {{safeModule}} instead of child_process.execSync() to prevent command injection (security + cross-platform); ' +
+      'pass it the binary and its arguments separately, not a shell string',
   },
   message:
     'Use safeExecSync(binary, args) from {{safeModule}} instead of child_process.execSync() to prevent command injection (security + cross-platform); ' +

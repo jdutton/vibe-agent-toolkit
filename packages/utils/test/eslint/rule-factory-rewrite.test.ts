@@ -33,7 +33,8 @@ describe('eslint-rule-factory rewrite declaration', () => {
     ["the string 'suggest'", 'suggest'],
     ['an empty object', {}],
     ['appendArgument with no suggestion', { appendArgument: 'X' }],
-    ['a non-string suggestion', { appendArgument: 'X', suggestion: 3 }],
+    ['a non-string suggestion', { appendArgument: 'X', suggestion: 3, seamMessage: 'm' }],
+    ['appendArgument with no seamMessage', { appendArgument: 'X', suggestion: 's' }],
     ['autofixAsStatement with no suggestion', { autofixAsStatement: true }],
     ['both appendArgument and autofixAsStatement', { appendArgument: 'X', autofixAsStatement: true, suggestion: 's' }],
   ])('refuses %s', (_label, rewrite) => {
@@ -42,7 +43,7 @@ describe('eslint-rule-factory rewrite declaration', () => {
 
   it.each([
     ["'fix'", 'fix'],
-    ['appendArgument + suggestion', { appendArgument: 'X', suggestion: 's' }],
+    ['appendArgument + suggestion + seamMessage', { appendArgument: 'X', suggestion: 's', seamMessage: 'm' }],
     ['autofixAsStatement + suggestion', { autofixAsStatement: true, suggestion: 's' }],
   ])('builds %s', (_label, rewrite) => {
     expect(build(rewrite)).not.toThrow();

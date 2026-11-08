@@ -42,7 +42,7 @@ describe('verify packaged-content — the refusal reaches stderr', () => {
     try {
       phase = await runPhase({
         ...IN_PROCESS_PHASES['packaged-content'],
-        run: () => Promise.resolve({ report: runPackagedContentPhase('/no-such-project-pc', [], fakePluginLocalIndex([]), new Map(), logger).report }),
+        run: () => Promise.resolve({ report: runPackagedContentPhase('/no-such-project-pc', [], fakePluginLocalIndex([]), new Map(), logger, false).report }),
       });
       stderr = written.mock.calls.map(([line]) => String(line)).join('');
     } finally {
@@ -63,7 +63,7 @@ describe('verify packaged-content — the refusal reaches stderr', () => {
     const { logger, lines } = recordingLogger();
     const crawl = { bundlesInspected: 0, bundlesExpected: 0, bundlesMissing: [], issues: [], bundlesInPlace: 0 };
 
-    reportPackagedContentPhase(buildPackagedContentPhase(crawl), logger);
+    reportPackagedContentPhase(buildPackagedContentPhase(crawl), logger, false);
 
     expect(lines).toEqual(['\n▶ Phase: packaged-content']);
   });
@@ -73,14 +73,51 @@ describe('verify packaged-content — the refusal reaches stderr', () => {
     const crawl = { bundlesInspected: 0, bundlesExpected: 0, bundlesMissing: [], issues: [] };
 
     const phase = buildPackagedContentPhase({ ...crawl, bundlesInPlace: 2 });
-    reportPackagedContentPhase(phase, logger);
+    reportPackagedContentPhase(phase, logger, false);
 
     expect(phase.report.status).toBe('ok');
     expect(lines.join('\n')).toContain('nothing to inspect: all 2 discovered skill(s) are in place');
 
     // Control: a stale in-place bundle that WAS inspected cleanly logs no such line.
     const inspected = recordingLogger();
-    reportPackagedContentPhase(buildPackagedContentPhase({ ...crawl, bundlesInspected: 1, bundlesInPlace: 2 }), inspected.logger);
+    reportPackagedContentPhase(buildPackagedContentPhase({ ...crawl, bundlesInspected: 1, bundlesInPlace: 2 }), inspected.logger, false);
     expect(inspected.lines).toEqual([]);
+  });
+});
+
+describe('verify in-process phases — verbosity', () => {
+  const crawlWith = (severity: 'error' | 'warning' | 'info') => ({
+    bundlesInspected: 1,
+    bundlesExpected: 1,
+    bundlesMissing: [],
+    bundlesInPlace: 0,
+    issues: [{ severity, code: 'LINK_INTEGRITY_BROKEN' as const, message: `a ${severity} finding`, location: 'dist/skills/demo/SKILL.md' }],
+  });
+
+  it.each(['warning', 'info'] as const)('keeps a %s finding off stderr without --verbose, and says it collapsed one', (severity) => {
+    const { logger, lines } = recordingLogger();
+
+    reportPackagedContentPhase(buildPackagedContentPhase(crawlWith(severity)), logger, false);
+
+    const stderr = lines.join('\n');
+    expect(stderr).toContain('▶ Phase: packaged-content');
+    expect(stderr).not.toContain(`a ${severity} finding`);
+    expect(stderr).toMatch(/1 .*--verbose/);
+  });
+
+  it.each(['warning', 'info'] as const)('prints a %s finding with --verbose', (severity) => {
+    const { logger, lines } = recordingLogger();
+
+    reportPackagedContentPhase(buildPackagedContentPhase(crawlWith(severity)), logger, true);
+
+    expect(lines.join('\n')).toContain(`${severity}: a ${severity} finding [LINK_INTEGRITY_BROKEN]`);
+  });
+
+  it('prints an error finding without --verbose', () => {
+    const { logger, lines } = recordingLogger();
+
+    reportPackagedContentPhase(buildPackagedContentPhase(crawlWith('error')), logger, false);
+
+    expect(lines.join('\n')).toContain('error: a error finding [LINK_INTEGRITY_BROKEN]');
   });
 });

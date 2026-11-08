@@ -478,7 +478,7 @@ describe('runFilesConfigDestsPhase', () => {
 
       // `[]` is what the command itself passes here: with no `skills:` block
       // there is nothing to discover, so this is the real input, not a stub.
-      const { report } = runFilesConfigDestsPhase(dir, [], fakePluginLocalIndex([]), new Map(), silentLogger);
+      const { report } = runFilesConfigDestsPhase(dir, [], fakePluginLocalIndex([]), new Map(), silentLogger, false);
       expect([report.examined, report.findings]).toEqual([0, []]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
