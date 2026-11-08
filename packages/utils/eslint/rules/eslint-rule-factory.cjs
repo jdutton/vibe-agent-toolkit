@@ -23,7 +23,7 @@
  *   - `{ autofixAsStatement, suggestion }` when it takes the same arguments but RETURNS
  *     something else: only a call whose result is discarded (an expression statement)
  *     is autofixed; any other is offered as a suggestion described by `suggestion`.
- *   - `{ appendArgument, suggestion }` when it needs an argument the rule cannot know:
+ *   - `{ appendArgument, suggestion, seamMessage }` when it needs an argument the rule cannot know:
  *     no autofix — a suggestion rewrites a one-argument call and appends
  *     `appendArgument`, a placeholder that must fail the typecheck rather than guess a
  *     value that compiles. `seamMessage` is the report when the `safeModule` option names a
