@@ -155,23 +155,20 @@ The verdict facet (`packages/lab`, `vat-lab verdict run|compare`) is the crucibl
 vat builds — never more — over the same subject set and diffs what each one DECIDES (exit code,
 the multiset of findings, the full document), reconciled against a committed deltas file.
 
-**Baseline arm** — the previous published RC, installed into a private prefix so it never
-touches the operator's own global/local install:
+**Baseline arm** — the previous published RC, named by its exact version:
 
 ```bash
-npm install --prefix "$HOME/.cache/vat-lab/instruments/<ver>" --no-save --ignore-scripts \
-  @vibe-agent-toolkit/cli@<ver>
+--instrument npx:vibe-agent-toolkit@<ver>
 ```
 
-Then a shim directory whose `packages/cli/dist` symlinks to that install, used as:
-
-```bash
---instrument dist:"$HOME/.cache/vat-lab/instruments/<ver>/node_modules/@vibe-agent-toolkit/cli/dist" \
---env VAT_ROOT_DIR="$HOME/.cache/vat-lab/shims/<ver>"
-```
-
-Never `npx:<pkg@version>` for the baseline: its wrapper re-resolves vat from the *subject's* cwd,
-so run against VAT's own tree it dispatches to the candidate, not the pinned version.
+The lab never runs it through npx: it installs the pin once under the arms root (scripts off, its
+own npm cache, never the operator's global or local install) and runs that install's
+`@vibe-agent-toolkit/cli/dist/bin.js` with node — the CLI itself, not the wrapper that re-resolves
+vat from the *subject's* cwd — so run against VAT's own tree it measures the pinned version, not
+the candidate. The spec must be a registry name and an exact version; ranges, dist-tags, paths and
+URLs are refused. The closure is digested from that install, and third-party ranges float, so two
+installs of one pin can carry different closures
+([run harness](../../packages/lab/docs/run-harness.md)).
 
 **Candidate arm** — the worktree under test:
 

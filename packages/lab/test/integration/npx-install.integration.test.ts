@@ -3,10 +3,11 @@
  * facet, as `node <cli>/dist/bin.js` from an install of the pinned spec — never
  * through npx and the package's cwd-resolving wrapper, which runs the SUBJECT'S
  * own vat when it has one. The install lands in an arm of its own under the arms
- * root; its cli must be the pinned version, and must REPORT it when run.
+ * root; its cli's manifest must name the pinned version, its entry must lie inside
+ * the install, and it must start.
  *
  * The installer is a stand-in that lays fixture packages on disk — no network.
- * The real `npm install` (`npmInstaller`) is covered only for its arguments and
+ * The real `npm install` (`npmInstall`) is covered only for its arguments and
  * environment, below; a real registry install is not exercised here.
  *
  * Integration-tier: runs the installed entry with node.
@@ -17,13 +18,18 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname } from 'node:path';
 
-import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { createSymlinkAsync, normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { ArmDirectories } from '../../src/harness/arm-dirs.js';
 import type { ArmEnvironment } from '../../src/harness/arm-env.js';
 import { resolveInstrument } from '../../src/harness/instrument.js';
-import { type NpxInstaller, npxInstallArm, npxInstallSite } from '../../src/harness/npx-install.js';
+import {
+  NPX_INSTALL_TIMEOUT_MS,
+  type NpxInstaller,
+  npxInstallArm,
+  npxInstallSite,
+} from '../../src/harness/npx-install.js';
 import { runCommand } from '../../src/harness/run.js';
 
 const VERSION = '0.1.43';
@@ -83,9 +89,9 @@ function entry(reported: string, label = 'cli entry'): string {
 }
 
 /** The cli's entry point and the manifest beside it, at `version`. */
-function cliAt(version: string, under = '', reported = version): Record<string, string> {
+function cliAt(version: string, under = ''): Record<string, string> {
   return {
-    [`${under}${CLI_BIN}`]: entry(reported),
+    [`${under}${CLI_BIN}`]: entry(version),
     [`${under}${CLI_DIR}/package.json`]: manifest('@vibe-agent-toolkit/cli', version),
   };
 }
@@ -175,15 +181,28 @@ describe("resolveInstrument({ kind: 'npx' })", () => {
     await expect(resolveNpx(installing(cliAt('0.1.42')))).rejects.toThrow(/0\.1\.42.*0\.1\.43|0\.1\.43.*0\.1\.42/u);
   });
 
-  it('refuses an entry that REPORTS another version than the pin, though its manifest names the pin', async () => {
-    // Any delegation the entry might do — to a local install, a global one — shows here.
-    await expect(resolveNpx(installing(cliAt(VERSION, '', '0.1.42')))).rejects.toThrow(/--version reported '0\.1\.42'.*not 0\.1\.43/u);
-  });
-
-  it('refuses an entry that does not run', async () => {
+  it('refuses an entry that does not start', async () => {
     const files = { ...cliAt(VERSION), [CLI_BIN]: 'process.exit(3);\n' };
 
-    await expect(resolveNpx(installing(files))).rejects.toThrow(/--version reported '' \(exit 3\)/u);
+    await expect(resolveNpx(installing(files))).rejects.toThrow(/--version exited 3: the install does not start/u);
+  });
+
+  it('refuses a cli entry whose real path lies outside the install, though its manifest names the pin', async ({ skip }) => {
+    const capability = symlinkCapability() ?? skip();
+    // npm links a directory spec into node_modules; a link out of the install must never be run as the pin.
+    const outside = mkdtempSync(safePath.join(scratch, 'outside-'));
+    await lay(outside, cliAt(VERSION));
+    const install = vi.fn(async (_spec: string, prefix: string) => {
+      await mkdir(safePath.join(prefix, 'node_modules/vibe-agent-toolkit'), { recursive: true });
+      await createSymlinkAsync(
+        capability,
+        safePath.join(outside, 'node_modules'),
+        safePath.join(prefix, 'node_modules/vibe-agent-toolkit/node_modules'),
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+    });
+
+    await expect(resolveNpx(install)).rejects.toThrow(/lies outside the install/u);
   });
 
   it('measures the published layout: the umbrella package, its cli dependency, and the cli entry run straight', async () => {
@@ -208,22 +227,31 @@ describe("resolveInstrument({ kind: 'npx' })", () => {
   });
 });
 
-describe('npmInstaller', () => {
-  it('installs with lifecycle scripts off, in the install arm, into its npm cache', async () => {
+describe('npxInstallArm', () => {
+  it('gives two specs that sanitize alike two install arms', () => {
+    const root = armsRoot();
+
+    expect(npxInstallArm(root, '@a/b-c@1.0.0').root).not.toBe(npxInstallArm(root, '@a-b/c@1.0.0').root);
+    expect(npxInstallArm(root, SPEC).root).toBe(npxInstallArm(root, SPEC).root);
+  });
+});
+
+describe('npmInstall', () => {
+  it('installs with lifecycle scripts off, in the install arm, into its npm cache, on its own timeout', async () => {
     vi.resetModules();
     // An inherited userconfig, in any case, would win over ~/.npmrc.
     for (const name of Object.keys(process.env).filter((key) => key.toLowerCase() === 'npm_config_userconfig')) vi.stubEnv(name, undefined);
-    const calls: { args: readonly string[]; env: ArmEnvironment }[] = [];
+    const calls: { args: readonly string[]; env: ArmEnvironment; timeoutMs: number | undefined }[] = [];
     vi.doMock('../../src/harness/run.js', () => ({
-      runCommand: (_command: unknown, args: readonly string[], options: { env: ArmEnvironment }) => {
-        calls.push({ args, env: options.env });
+      runCommand: (_command: unknown, args: readonly string[], options: { env: ArmEnvironment; timeoutMs?: number }) => {
+        calls.push({ args, env: options.env, timeoutMs: options.timeoutMs });
         return { exitCode: 0, stdout: '', stderr: '', wallMs: 0, spawnError: undefined };
       },
     }));
-    const { npmInstaller } = await import('../../src/harness/npx-install.js');
+    const { npmInstall } = await import('../../src/harness/npx-install.js');
     const dirs = npxInstallArm(armsRoot(), SPEC);
 
-    await npmInstaller(undefined)(SPEC, safePath.join(dirs.tmp, 'install'), dirs);
+    await npmInstall(SPEC, safePath.join(dirs.tmp, 'install'), dirs);
     vi.doUnmock('../../src/harness/run.js');
     vi.unstubAllEnvs();
 
@@ -232,5 +260,7 @@ describe('npmInstaller', () => {
     expect(calls[0]?.env.set['npm_config_cache']).toBe(dirs.npmCache);
     // The arm's HOME holds no .npmrc: the operator's registry, scopes and auth come from theirs.
     expect(calls[0]?.env.set['npm_config_userconfig']).toBe(safePath.join(homedir(), '.npmrc'));
+    // Never a step's --timeout-ms: a cold install outlasts a measured step.
+    expect(calls[0]?.timeoutMs).toBe(NPX_INSTALL_TIMEOUT_MS);
   });
 });

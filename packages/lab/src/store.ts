@@ -52,7 +52,7 @@ function slug(value: string): string {
  * @param value - Raw value
  * @returns A readable, collision-free rendering
  */
-function distinctSlug(value: string): string {
+export function distinctSlug(value: string): string {
   const digest = createHash('sha256').update(value, 'utf8').digest('hex').slice(0, SHORT_ID_LENGTH);
   return `${slug(value)}-${digest}`;
 }

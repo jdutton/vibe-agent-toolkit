@@ -499,6 +499,35 @@ describe('resolveInstrument — kind: npx', () => {
     await expectRejectionNaming({ kind: 'npx', spec }, `"${spec}"`);
   });
 
+  /**
+   * Pinned-looking, but not a registry name: npm would install a directory, a
+   * tarball, a git ref or an alias under a label that claims a published version —
+   * and the name half was joined into the entry path, where `..` walked out of the install.
+   */
+  const NOT_A_REGISTRY_NAME = [
+    '../../../../home/me/proj@0.2.0',
+    './proj@0.2.0',
+    '/abs/proj@0.2.0',
+    'https://host/x.tgz?@0.2.0',
+    'file:../proj@0.2.0',
+    'npm:vibe-agent-toolkit@0.2.0',
+    'alias@npm:vibe-agent-toolkit@0.2.0',
+    'github:owner/repo@0.2.0',
+    'git+ssh://git@host/repo.git@0.2.0',
+    '@scope/a/b@0.2.0',
+    '@scope/..@0.2.0',
+    '..@0.2.0',
+    '.hidden@0.2.0',
+    '_private@0.2.0',
+    'Vibe-Agent-Toolkit@0.2.0',
+    String.raw`a\b@0.2.0`,
+    `${'a'.repeat(215)}@0.2.0`,
+  ] as const;
+
+  it.for(NOT_A_REGISTRY_NAME)('refuses %s, which names no registry package, before installing', async (spec) => {
+    await expectRejectionNaming({ kind: 'npx', spec }, `"${spec}" does not name a registry package`);
+  });
+
   it('refuses an empty spec', async () => {
     await expectRejectionNaming({ kind: 'npx', spec: '   ' }, 'the spec is empty');
   });

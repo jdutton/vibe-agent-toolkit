@@ -129,7 +129,10 @@ single-command facet runs are one-step sequences under `<arms root>/<build>-<com
   default one before anything is created. Every root the lab uses carries `.vat-lab-root`: an absent
   `--arms-dir` is created 0700 and marked; an existing EMPTY one is adopted as it is — the lab writes
   `.vat-lab-root` into it and then its arms and clone beneath it, and never chmods it; an existing,
-  non-empty one without the marker is refused, nothing written into it.
+  non-empty one without the marker is refused, nothing written into it. **One invocation per
+  `--arms-dir` at a time:** nothing locks it, and every arm under it — the `npx:` install arm
+  included — is emptied when its run starts, so two concurrent invocations sharing one `--arms-dir`
+  delete each other's stores and installs. The default run directory is fresh per invocation.
 - **The default run directory ends with the capture.** When the capture ends — passed or failed —
   the lab removes the whole `run-*` directory (stores, caches, npm's fetch) and prints
   `Removed arms under <root>`; `--keep-arms` keeps it and prints `Kept arms under <root>`. A named
@@ -167,8 +170,12 @@ single-command facet runs are one-step sequences under `<arms root>/<build>-<com
   wrapper, which runs the SUBJECT'S own vat when the subject has one installed — under the pinned
   name. So the pinned spec is installed once per invocation (`--ignore-scripts`, in an arm of its own
   under the arms root, `harness/npx-install.ts`) and runs as `node <install>/…/@vibe-agent-toolkit/cli/dist/bin.js`,
-  as a `dist:` build does. The install is refused unless its cli's `package.json` names the pinned
-  version AND that entry, run with `--version`, reports it.
+  as a `dist:` build does — `bin.js` is the CLI itself and delegates to no other copy, which is the
+  protection. The spec must be a registry name pinned to an exact version (no path, URL, tarball,
+  git ref or alias). The install is refused unless its cli's `package.json` names the pin and the
+  entry's real path lies inside the install, and the entry must start (`--version` exits 0). npm
+  gets its own fixed install timeout, never `--timeout-ms`. Identity is per install: third-party
+  ranges float, so a fresh install of the same pin can digest to another closure.
 - **A populating arm asks the build for its parse directory**, from its entry — never a guess.
   An arm whose own `--env` turns caching off
   (`VAT_PROJECTION_STORE=off`, `VAT_CACHE=0`) is checked for writing nothing there instead, so a
@@ -307,7 +314,7 @@ This README is the front door. The detail lives next door:
 - **[Roadmap](docs/roadmap.md)** — the staged plan. Deliberately not built all at once.
 - **[Facets](docs/facets.md)** — the report-body contract, and how to add one.
 - **[Run harness](docs/run-harness.md)** — how the lab obtains a vat to run: a working tree, a built
-  `dist/`, or a released version via `npx`.
+  `dist/`, or a released version (`npx:`, installed under the arms root and run as its `dist/bin.js`).
 
 ## Refusals
 

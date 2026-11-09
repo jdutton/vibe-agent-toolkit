@@ -5,24 +5,30 @@
  * which re-resolves which vat to run from its cwd (the subject) and, when the
  * subject has vat installed, runs the SUBJECT'S copy: a report stamped with the
  * pinned version measured another one. A `tree:` or `dist:` build runs
- * `dist/bin.js` straight; so does an `npx:` build. The pinned spec is installed
- * once, into an arm of its own under the invocation's arms root, and the build
- * runs as `node <that install's @vibe-agent-toolkit/cli/dist/bin.js>`: one vat
- * process per repeat, whatever the subject has installed.
+ * `dist/bin.js` straight; so does an `npx:` build. The pinned spec — a registry
+ * name and an exact version, nothing else (`instrument.ts`) — is installed once,
+ * into an arm of its own under the invocation's arms root, and the build runs as
+ * `node <that install's @vibe-agent-toolkit/cli/dist/bin.js>`: one vat process per
+ * repeat, whatever the subject has installed. Running `dist/bin.js` directly is the
+ * protection; `bin.js` is the CLI itself and delegates to no other copy.
  *
- * Two checks stand between the install and the stamp. npm resolves the cli as a
+ * What stands between the install and the stamp: npm resolves the cli as a
  * DEPENDENCY of the spec, so the cli's own `package.json` must name the pinned
- * version; and the entry itself is run once with `--version` and must REPORT it —
- * so no delegation path, this one or a later one, can run another copy under the
- * pinned name. `--no-package-lock` leaves third-party ranges to float, so the
- * install's whole `node_modules` is digested into the coordinate's `closure`: two
- * installs of one version that resolved differently are two instruments.
+ * version, and the entry's real path must lie inside the install. The entry is
+ * then run once with `--version` — a check that the install STARTS (its modules
+ * resolve), not of which version it is: `--version` reads that same manifest.
+ * `--no-package-lock` leaves third-party ranges to float, so the install's whole
+ * `node_modules` is digested into the coordinate's `closure`, and identity is per
+ * install: a later install of the same pin can resolve moved third-party
+ * dependencies, and is then another instrument.
  */
 
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
-import { everywhere, mkdirSyncReal, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
+import { everywhere, isUnderRoot, mkdirSyncReal, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
+
+import { distinctSlug } from '../store.js';
 
 import {
   type ArmDirectories,
@@ -37,6 +43,12 @@ import { EMPTY_ARM_ENVIRONMENT } from './arm-env.js';
 import { fingerprintFiles } from './fingerprint.js';
 import { runCommand } from './run.js';
 import type { ResolvedInstrument } from './types.js';
+
+/** A registry package name and the exact version it pins — checked by `instrument.ts`. */
+export interface NpmPin {
+  readonly name: string;
+  readonly version: string;
+}
 
 /** Installs a pinned npm spec under a prefix directory, in the install arm's environment. */
 export type NpxInstaller = (spec: string, prefix: string, dirs: ArmDirectories) => Promise<void> | void;
@@ -71,8 +83,14 @@ const CLI_ENTRY = `${CLI_DIR}/dist/bin.js`;
 /** The install arm's name; its build segment is the spec. */
 const INSTALL_ARM = 'npx-install';
 
-/** How long the entry may take to print its version. */
-const VERSION_TIMEOUT_MS = 60_000;
+/** How long the entry may take to start. */
+const START_TIMEOUT_MS = 60_000;
+
+/**
+ * How long one `npm install` of a pinned spec may take — every verb, whatever its
+ * `--timeout-ms`: that bounds a measured step, and a cold install outlasts one.
+ */
+export const NPX_INSTALL_TIMEOUT_MS = 15 * 60_000;
 
 /** @returns The operator's npm userconfig: an inherited `npm_config_userconfig`, in any case, or `~/.npmrc` */
 function operatorNpmUserconfig(): string {
@@ -87,32 +105,33 @@ function operatorNpmUserconfig(): string {
  * operator's (registry, scoped registries, auth) as its userconfig; an install never writes it.
  * No arm's own `--env` reaches it: one install serves every arm that names the spec, and
  * the inherited network settings (`arm-env.ts`) are what npm needs to reach a registry.
+ * Bounded by {@link NPX_INSTALL_TIMEOUT_MS}.
  *
- * @param timeoutMs - The invocation's timeout, if any
- * @returns The installer
+ * @param spec - The pinned spec
+ * @param prefix - The directory to install under
+ * @param dirs - The install arm
+ * @throws {Error} when npm fails or times out
  */
-export function npmInstaller(timeoutMs: number | undefined): NpxInstaller {
-  return (spec, prefix, dirs) => {
-    const npmEnv = { set: { npm_config_userconfig: operatorNpmUserconfig() }, unset: [] };
-    const result = runCommand(
-      { command: 'npm', leadingArgs: [] },
-      ['install', '--no-save', '--no-package-lock', '--no-audit', '--no-fund', '--ignore-scripts', '--prefix', prefix, spec],
-      { cwd: prefix, env: armStepEnvironment(dirs, npmEnv).env, ...(timeoutMs === undefined ? {} : { timeoutMs }) },
-    );
-    if (result.exitCode !== 0) {
-      throw new Error(`npm install ${spec} failed (${String(result.spawnError ?? result.exitCode)}): ${result.stderr.trim()}`);
-    }
-  };
-}
+export const npmInstall: NpxInstaller = (spec, prefix, dirs) => {
+  const npmEnv = { set: { npm_config_userconfig: operatorNpmUserconfig() }, unset: [] };
+  const result = runCommand(
+    { command: 'npm', leadingArgs: [] },
+    ['install', '--no-save', '--no-package-lock', '--no-audit', '--no-fund', '--ignore-scripts', '--prefix', prefix, spec],
+    { cwd: prefix, env: armStepEnvironment(dirs, npmEnv).env, timeoutMs: NPX_INSTALL_TIMEOUT_MS },
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(`npm install ${spec} failed (${String(result.spawnError ?? result.exitCode)}): ${result.stderr.trim()}`);
+  }
+};
 
 /**
  * @param armsRoot - The invocation's arms root
  * @param spec - The pinned spec
- * @returns The arm the spec is installed in; nothing is created
+ * @returns The arm the spec is installed in — named by the spec's slug and a digest of
+ *   the raw spec, so two specs that slug alike never share one; nothing is created
  */
 export function npxInstallArm(armsRoot: string, spec: string): ArmDirectories {
-  const build = spec.replaceAll(/[^\w.-]/gu, '-').replace(/^\.+/u, '');
-  return armDirectories({ root: armsRoot, build, arm: INSTALL_ARM, state: 'cold' });
+  return armDirectories({ root: armsRoot, build: distinctSlug(spec), arm: INSTALL_ARM, state: 'cold' });
 }
 
 /**
@@ -125,26 +144,25 @@ function cliVersionAt(entry: string): unknown {
 }
 
 /**
- * Run the entry with `--version` and require the version it reports to be the pin.
+ * Run the entry once with `--version` and require it to exit 0: the install starts —
+ * its modules resolve. Not a version check: `--version` reads the manifest
+ * {@link cliVersionAt} already read.
  *
  * @param entry - The cli entry about to be stamped
  * @param spec - The pinned spec, for the error message
- * @param version - The pinned version
  * @param dirs - The install arm, whose step environment it runs under
- * @throws {Error} when it does not run, or reports another version
+ * @throws {Error} when it does not start
  */
-function requireReportedVersion(entry: string, spec: string, version: string, dirs: ArmDirectories): void {
+function requireEntryStarts(entry: string, spec: string, dirs: ArmDirectories): void {
   const ran = runCommand({ command: process.execPath, leadingArgs: [entry] }, ['--version'], {
     cwd: dirs.tmp,
     env: armStepEnvironment(dirs, EMPTY_ARM_ENVIRONMENT).env,
-    timeoutMs: VERSION_TIMEOUT_MS,
+    timeoutMs: START_TIMEOUT_MS,
   });
-  // The first token of the first line: `0.2.0-rc.11`, then `  binary: <path>` on the next.
-  const reported = ran.stdout.trim().split(/\s/u)[0] ?? '';
-  if (ran.exitCode !== 0 || reported !== version) {
+  if (ran.exitCode !== 0) {
     throw new Error(
-      `the install of ${spec}: ${entry} --version reported '${reported}' (exit ${String(ran.spawnError ?? ran.exitCode)}), ` +
-        `not ${version}: the report would name one build and measure another`,
+      `the install of ${spec}: ${entry} --version exited ${String(ran.spawnError ?? ran.exitCode)}: ` +
+        `the install does not start. ${ran.stderr.trim()}`,
     );
   }
 }
@@ -156,29 +174,50 @@ function requireReportedVersion(entry: string, spec: string, version: string, di
  * The install is made in the arm's `tmp/`, emptied first, so an interrupted run leaves
  * it under the arms root — never in the system temp directory — for the next to clear.
  *
- * @param spec - The pinned spec
- * @param version - The version it pins
+ * @param pin - The registry name and the version it pins
  * @param site - The arms root and installer
  * @returns The resolved instrument
- * @throws {Error} when the install holds no cli entry, or one of another version, or one that reports another
+ * @throws {Error} when the install holds no cli entry, one outside the install, one of another
+ *   version, or one that does not start
  */
-export function installNpxInstrument(spec: string, version: string, site: NpxInstallSite): Promise<ResolvedInstrument> {
+export function installNpxInstrument(pin: NpmPin, site: NpxInstallSite): Promise<ResolvedInstrument> {
+  const spec = `${pin.name}@${pin.version}`;
   const known = site.installs.get(spec);
   if (known !== undefined) return known;
-  const installing = installOnce(spec, version, site);
+  const installing = installOnce(pin, spec, site);
   site.installs.set(spec, installing);
   return installing;
 }
 
 /**
+ * @param prefix - The install's directory
+ * @param name - The registry name installed there
+ * @param spec - The pinned spec, for the error message
+ * @returns The install's cli entry, proven to lie inside it
+ * @throws {Error} when there is none, or its real path lies outside the install
+ */
+function locateCliEntry(prefix: string, name: string, spec: string): string {
+  // npm nests the cli under the named package when it cannot hoist it.
+  const entry = [safePath.join(prefix, 'node_modules', name, CLI_ENTRY), safePath.join(prefix, CLI_ENTRY)].find((path) =>
+    pathPresent(path, { follow: path }, everywhere('source'), 'probe'),
+  );
+  if (entry === undefined) throw new Error(`the install of ${spec} holds no ${CLI_ENTRY} to measure`);
+  // Through every link: an entry npm linked from elsewhere is not the published bytes.
+  if (isUnderRoot(prefix, entry) !== 'inside') {
+    throw new Error(`the install of ${spec}: ${entry} lies outside the install at ${prefix}; it is not the published package`);
+  }
+  return entry;
+}
+
+/**
  * {@link installNpxInstrument}, for a spec the site has not installed.
  *
- * @param spec - The pinned spec
- * @param version - The version it pins
+ * @param pin - The registry name and the version it pins
+ * @param spec - Their spec
  * @param site - The arms root and installer
  * @returns The resolved instrument
  */
-async function installOnce(spec: string, version: string, site: NpxInstallSite): Promise<ResolvedInstrument> {
+async function installOnce(pin: NpmPin, spec: string, site: NpxInstallSite): Promise<ResolvedInstrument> {
   const dirs = npxInstallArm(site.armsRoot, spec);
   prepareArmDirectories(dirs);
   const unclean = await resetColdArm(dirs);
@@ -186,25 +225,20 @@ async function installOnce(spec: string, version: string, site: NpxInstallSite):
   await resetArmHome(dirs);
   const prefix = mkdirSyncReal(safePath.join(dirs.tmp, 'install'));
   await site.install(spec, prefix, dirs);
-  const name = spec.slice(0, spec.lastIndexOf('@'));
-  // npm nests the cli under the named package when it cannot hoist it.
-  const entry = [safePath.join(prefix, 'node_modules', name, CLI_ENTRY), safePath.join(prefix, CLI_ENTRY)].find((path) =>
-    pathPresent(path, { follow: path }, everywhere('source'), 'probe'),
-  );
-  if (entry === undefined) throw new Error(`the install of ${spec} holds no ${CLI_ENTRY} to measure`);
+  const entry = locateCliEntry(prefix, pin.name, spec);
   const installed = cliVersionAt(entry);
-  if (installed !== version) {
+  if (installed !== pin.version) {
     throw new Error(
-      `the install of ${spec} resolved @vibe-agent-toolkit/cli ${String(installed)}, not ${version}: ` +
+      `the install of ${spec} resolved @vibe-agent-toolkit/cli ${String(installed)}, not ${pin.version}: ` +
         'the report would name one build and measure another',
     );
   }
-  requireReportedVersion(entry, spec, version, dirs);
+  requireEntryStarts(entry, spec, dirs);
   const closure = fingerprintFiles(safePath.join(prefix, 'node_modules'), { fromGit: false, exclude: [] }).fingerprint;
   return {
     command: process.execPath,
     leadingArgs: [entry],
     // No root: every file of the install sits under `node_modules`, which the io facet's site normalizer keys on.
-    version: { version, commit: null, dirty: null, closure },
+    version: { version: pin.version, commit: null, dirty: null, closure },
   };
 }

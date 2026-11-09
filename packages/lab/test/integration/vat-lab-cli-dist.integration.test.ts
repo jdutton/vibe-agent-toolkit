@@ -7,13 +7,14 @@
  * Integration-tier: spawns the built CLI.
  */
 
+import { existsSync } from 'node:fs';
 import { mkdtemp, readdir } from 'node:fs/promises';
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { normalizedTmpdir, resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { createProgram, resolveAbArms } from '../../src/bin/vat-lab.js';
+import { abArmFlags, createProgram, resolveAbArms } from '../../src/bin/vat-lab.js';
 import { npxInstallSite } from '../../src/harness/npx-install.js';
 
 let tempDir: string;
@@ -60,14 +61,23 @@ function sameDistArms(over: Record<string, unknown> = {}): Parameters<typeof res
   };
 }
 
+/**
+ * @param over - What the case varies over {@link sameDistArms}
+ * @returns The arms `ab` resolves from those flags, or `null` when it refused
+ */
+async function abArms(over: Record<string, unknown> = {}): ReturnType<typeof resolveAbArms> {
+  const flags = abArmFlags(sameDistArms(over));
+  return flags === null ? null : resolveAbArms(flags, NO_NPX);
+}
+
 describe('vat-lab <facet> ab — indistinguishable arms', () => {
-  it('refuses two indistinguishable arms without --control', async () => {
-    // Two `dist:` arms at one path: same version, same closure digest, same
-    // (empty) environment. Run as an A/B, every effect it printed would be the
-    // machine's noise published as a difference between builds.
+  it('refuses two spellings of one build without --control, once resolved', async () => {
+    // The dist directory and its bin.js: two names, one build — same version, same
+    // closure digest, same (empty) environment. Run as an A/B, every effect it printed
+    // would be the machine's noise published as a difference between builds.
     const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
 
-    const arms = await resolveAbArms(sameDistArms(), NO_NPX);
+    const arms = await abArms({ instrumentB: { kind: 'dist', path: safePath.join(REPO_CLI_DIST, 'bin.js') } });
 
     expect(arms).toBeNull();
     expect(process.exitCode).toBe(ExitCode.ERROR);
@@ -79,7 +89,7 @@ describe('vat-lab <facet> ab — indistinguishable arms', () => {
   it('accepts one build in two configurations', async () => {
     // The positive control: the same instrument on both arms IS an A/B when the
     // environments differ — the pool-on/pool-off run one build exists to make.
-    const arms = await resolveAbArms(sameDistArms({ envA: { X: '1' } }), NO_NPX);
+    const arms = await abArms({ envA: { X: '1' } });
 
     expect(arms).not.toBeNull();
     expect(arms?.envA).toStrictEqual({ set: { X: '1' }, unset: [] });
@@ -87,7 +97,7 @@ describe('vat-lab <facet> ab — indistinguishable arms', () => {
   });
 
   it('accepts one build where only an UNSET differs', async () => {
-    const arms = await resolveAbArms(sameDistArms({ unsetB: ['XDG_DATA_HOME'] }), NO_NPX);
+    const arms = await abArms({ unsetB: ['XDG_DATA_HOME'] });
 
     expect(arms).not.toBeNull();
     expect(process.exitCode).toBeUndefined();
@@ -96,13 +106,35 @@ describe('vat-lab <facet> ab — indistinguishable arms', () => {
   it('refuses an arm that sets and unsets one variable, before resolving anything', async () => {
     vi.spyOn(process.stderr, 'write').mockReturnValue(true);
 
-    const arms = await resolveAbArms(
-      sameDistArms({ envA: { X: '1' }, unsetA: ['X'], instrumentA: { kind: 'dist', path: '/nowhere' } }),
-      NO_NPX,
-    );
+    const flags = abArmFlags(sameDistArms({ envA: { X: '1' }, unsetA: ['X'], instrumentA: { kind: 'dist', path: '/nowhere' } }));
 
-    expect(arms).toBeNull();
+    expect(flags).toBeNull();
     expect(process.exitCode).toBe(ExitCode.ERROR);
+  });
+});
+
+describe('vat-lab <facet> ab — flag refusals come before any setup', () => {
+  it.for([
+    ['an arm that sets and unsets one variable', ['--instrument-b', 'npx:vibe-agent-toolkit@0.1.43', '--env-a', 'X=1', '--unset-a', 'X'], /--env-a and --unset-a/u],
+    ['two identical arms', ['--instrument-b', 'npx:vibe-agent-toolkit@0.1.42'], /indistinguishable/u],
+    ['--control with --instrument-b', ['--instrument-b', 'npx:vibe-agent-toolkit@0.1.43', '--control'], /--control runs one instrument/u],
+    ['no --instrument-b and no --control', [], /an A\/B needs two arms/u],
+  ] as const)('refuses %s before resolving the subject, opening --out, creating --arms-dir or installing', async ([, flags, refusal]) => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const missing = safePath.join(tempDir, 'ab-flags-never');
+    const out = safePath.join(tempDir, 'ab-flags-out');
+    const armsDir = safePath.join(tempDir, 'ab-flags-arms');
+
+    await createProgram().parseAsync([
+      'node', 'vat-lab', 'perf', 'ab', missing,
+      '--instrument-a', 'npx:vibe-agent-toolkit@0.1.42', ...flags,
+      '--out', out, '--arms-dir', armsDir,
+    ]);
+
+    expect(process.exitCode).toBe(ExitCode.ERROR);
+    expect(stderr.mock.calls.map(([chunk]) => String(chunk)).join('')).toMatch(refusal);
+    expect(existsSync(out)).toBe(false);
+    expect(existsSync(armsDir)).toBe(false);
   });
 });
 

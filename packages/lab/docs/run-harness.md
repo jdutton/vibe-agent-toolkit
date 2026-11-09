@@ -32,10 +32,14 @@ A `dist/` has no checkout to ask, so its coordinate records `commit: null` — a
 the header prints as `closure <first 12 hex>`. Prefer a working tree when you have one: the digest
 names the bytes, but only a commit names the source they were built from.
 
-**A released version.** `npx @vibe-agent-toolkit/cli@0.1.41` — the case that makes "did we get better
-since the last release?" a one-liner. The commit is unknown here and the coordinate records `null`
-rather than guessing; so is the closure, because the tarball's bytes are not on disk until npx
-unpacks them at run time. The pinned version pins them.
+**A released version.** `npx:vibe-agent-toolkit@0.1.41` — the case that makes "did we get better
+since the last release?" a one-liner. The spec must be a registry package name pinned to an exact
+version; a range, a dist-tag, a path, a URL, a tarball, a git ref or an `npm:` alias is refused. The
+pin is installed under the arms root and run as that install's `dist/bin.js` (below). The commit is
+unknown here and the coordinate records `null` rather than guessing; the closure is a digest of the
+install's whole `node_modules`. Identity is per install: third-party ranges float, so a later install
+of the same pin can pick up moved dependencies — a different closure, and a different stored
+identity, for the same version.
 
 ### The closure digest — arm identity by the bytes it runs
 
@@ -78,8 +82,11 @@ The `npx` route is no exception: `npx` runs the published package's `bin` entry,
 wrapper, and a subject with its own vat installed captured an `npx:` arm — a report stamped with the
 pin measured the subject's version. So an `npx:` build is never run through npx: the pinned spec is
 installed under the arms root and resolved to its cli's `dist/bin.js`
-([`harness/npx-install.ts`](../src/harness/npx-install.ts)), refused unless that entry, run with
-`--version`, reports the pin.
+([`harness/npx-install.ts`](../src/harness/npx-install.ts)). Running `bin.js` directly is the
+protection: it is the CLI itself and delegates to no other copy. The install is refused unless its
+cli's `package.json` names the pin and the entry's real path lies inside the install; the entry is
+then run once with `--version` to prove the install starts — not to check its version, which
+`--version` reads from that same `package.json`.
 
 ## A dirty instrument is measured, but never mistaken for a commit
 
