@@ -11,7 +11,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { TurboTask } from '../src/built-output-edges.js';
+import type { ResolvedDefinition, TurboTask, TurboTaskGraph } from '../src/built-output-edges.js';
 import { PROJECT_ROOT } from '../src/common.js';
 import {
   checkBuiltOutputEdges,
@@ -66,12 +66,26 @@ const BETA_BUILD = `${SCOPE}/beta#build`;
 const BETA_SYSTEM = `${SCOPE}/beta#test:system`;
 const BETA_UNIT = `${SCOPE}/beta#test:unit`;
 const SYSTEM_TEST = 'packages/beta/test/system/runs-alpha.system.test.ts';
-const RUNS_ALPHA = "spawn(NODE, [safePath.resolve(here, '../../../alpha/dist/bin.js')]);";
+const RUNS_ALPHA = "spawn(NODE, [safePath.resolve(import.meta.dirname, '../../../alpha/dist/bin.js')]);";
+/** The repository root, as source text, from a file two directories inside a package (`packages/beta/test/system/`). */
+const REPO = "import.meta.dirname, '../../../..'";
 
 /** One node of turbo's dry-run graph. */
-function task(id: string, dependencies: string[] = [], outputs: string[] = [], command = 'run'): [string, TurboTask] {
+function task(
+  id: string,
+  dependencies: string[] = [],
+  outputs: string[] = [],
+  command = 'run',
+  excludedOutputs: string[] = [],
+  definition: ResolvedDefinition = { outputs, cache: true, dependsOn: [], inputs: [], env: [] },
+): [string, TurboTask] {
   const [pkg = '', name = ''] = id.split('#');
-  return [id, { package: pkg, task: name, command, dependencies, outputs }];
+  return [id, { package: pkg, task: name, command, dependencies, outputs, excludedOutputs, definition }];
+}
+
+/** A task graph with no `<pkg>#<task>` entries in turbo.json. */
+function graphOf(tasks: Map<string, TurboTask>): TurboTaskGraph {
+  return { tasks, overrides: [] };
 }
 
 /** turbo's graph with beta's tiers ordering only beta's own build — not alpha's. */
@@ -193,8 +207,8 @@ describe('derived-artifact rules on fixture trees', () => {
       findings.map((f) => [f.path, f.message.split(' ')[0] ?? '']);
     /** The one finding a system test reading `source` draws against the unordered graph. */
     const soleSystemTestFinding = (source: string): string => {
-      const findings = checkBuiltOutputEdges(root, unordered(), workspaceWith({ [SYSTEM_TEST]: source }));
-      expect(findings.map((f) => f.path)).toEqual([SYSTEM_TEST]);
+      const findings = checkBuiltOutputEdges(root, graphOf(unordered()), workspaceWith({ [SYSTEM_TEST]: source }));
+      expect(findings.map((f) => f.path.replace(/:\d+$/, ''))).toEqual([SYSTEM_TEST]);
       return findings[0]?.message ?? '';
     };
 
@@ -207,27 +221,34 @@ describe('derived-artifact rules on fixture trees', () => {
       const direct = unordered().set(...task(BETA_SYSTEM, [BETA_BUILD, ALPHA_BUILD]));
       const transitive = unordered().set(...task(BETA_BUILD, [ALPHA_BUILD], ['dist/**']));
 
-      expect(checkBuiltOutputEdges(root, direct, files)).toEqual([]);
-      expect(checkBuiltOutputEdges(root, transitive, files)).toEqual([]);
+      expect(checkBuiltOutputEdges(root, graphOf(direct), files)).toEqual([]);
+      expect(checkBuiltOutputEdges(root, graphOf(transitive), files)).toEqual([]);
     });
 
-    it('demands the task whose outputs cover the path most specifically, and fails a path no task produces', () => {
-      const files = workspaceWith({
-        [SYSTEM_TEST]: "safePath.join(root, 'packages', 'alpha', 'dist', 'skills');",
-        'packages/beta/test/reads-alpha-docs.test.ts': "safePath.join(root, 'packages', 'alpha', 'docs');\nsafePath.join(here, '..', 'alpha', 'distant');",
-      });
+    it('accepts any task whose outputs cover the path, and for a directory read whole, every output under it', () => {
+      const files = workspaceWith({ [SYSTEM_TEST]: `safePath.join(${REPO}, 'packages', 'alpha', 'dist');` });
       const orderedBuild = unordered().set(...task(BETA_SYSTEM, [ALPHA_BUILD]));
+      // `build` no longer produces `dist/skills`, so reading `dist/` whole needs `build:skills` too.
+      const skillsExcluded = new Map(orderedBuild).set(...task(ALPHA_BUILD, [], ['dist/**', '*.tsbuildinfo'], 'run', ['dist/skills/**']));
+
+      expect(checkBuiltOutputEdges(root, graphOf(orderedBuild), files)).toEqual([]);
+      const demanded = checkBuiltOutputEdges(root, graphOf(skillsExcluded), files);
+      expect(demanded.map((f) => f.message.slice(0, f.message.indexOf(',')))).toEqual([
+        `${BETA_SYSTEM} reads ${SCOPE}/alpha's dist/skills`,
+      ]);
+      expect(demanded[0]?.message).toContain(`which ${ALPHA_SKILLS} produces`);
+    });
+
+    it('fails a path no task of its package declares an output covering', () => {
       const noOutputs = unordered().set(...task(ALPHA_BUILD)).set(...task(ALPHA_SKILLS));
 
-      const demanded = checkBuiltOutputEdges(root, orderedBuild, files);
-      expect(demanded.map((f) => f.path)).toEqual([SYSTEM_TEST]);
-      expect(demanded[0]?.message).toContain(`which ${ALPHA_SKILLS} produces`);
-      expect(checkBuiltOutputEdges(root, noOutputs, files)[0]?.message).toContain(`no turbo task of ${SCOPE}/alpha declares an output covering it`);
+      const findings = checkBuiltOutputEdges(root, graphOf(noOutputs), workspaceWith({ [SYSTEM_TEST]: RUNS_ALPHA }));
+      expect(findings[0]?.message).toContain(`no turbo task of ${SCOPE}/alpha declares an output covering it`);
     });
 
-    it('attributes a helper\'s reach to every tier of every test that imports it, in any package', () => {
+    it("attributes a helper's reach to every tier of every test that imports it, in any package", () => {
       const files = workspaceWith({
-        'packages/beta/test/helpers/alpha-bin.ts': "export const BIN = safePath.resolve(here, '../../../alpha/dist/bin.js');",
+        'packages/beta/test/helpers/alpha-bin.ts': `export const BIN = safePath.resolve(${REPO}, 'packages/alpha/dist/bin.js');`,
         [SYSTEM_TEST]: "import { BIN } from '../helpers/alpha-bin.js';",
         'packages/beta/test/uses.test.ts': "import './helpers/alpha-bin.js';",
         'packages/gamma/test/cross.test.ts': "import { BIN } from '../../beta/test/helpers/alpha-bin.js';",
@@ -235,44 +256,70 @@ describe('derived-artifact rules on fixture trees', () => {
       });
       const graph = unordered().set(...task(`${SCOPE}/gamma#test:unit`));
 
-      expect(firstWords(checkBuiltOutputEdges(root, graph, files))).toEqual([
-        ['packages/beta/test/helpers/alpha-bin.ts', BETA_SYSTEM],
-        ['packages/beta/test/helpers/alpha-bin.ts', BETA_UNIT],
-        ['packages/beta/test/helpers/alpha-bin.ts', `${SCOPE}/gamma#test:unit`],
+      expect(firstWords(checkBuiltOutputEdges(root, graphOf(graph), files))).toEqual([
+        ['packages/beta/test/helpers/alpha-bin.ts:1', BETA_SYSTEM],
+        ['packages/beta/test/helpers/alpha-bin.ts:1', BETA_UNIT],
+        ['packages/beta/test/helpers/alpha-bin.ts:1', `${SCOPE}/gamma#test:unit`],
       ]);
+    });
+
+    it('fails a helper reach that no test loads, so no tier task is known to read it', () => {
+      const files = workspaceWith({ 'packages/beta/test/helpers/orphan.ts': `export const BIN = safePath.resolve(${REPO}, 'packages/alpha/dist/bin.js');` });
+
+      const findings = checkBuiltOutputEdges(root, graphOf(unordered()), files);
+      expect(findings.map((f) => f.path)).toEqual(['packages/beta/test/helpers/orphan.ts:1']);
+      expect(findings[0]?.message).toContain('no test file loads packages/beta/test/helpers/orphan.ts');
     });
 
     it('fails a test in a tier its package has no task for, rather than passing it', () => {
       const files = workspaceWith({ 'packages/beta/test/integration/x.integration.test.ts': 'expect(1).toBe(1);' });
 
-      expect(checkBuiltOutputEdges(root, unordered(), files)[0]?.message).toContain(`no ${SCOPE}/beta#test:integration task`);
+      expect(checkBuiltOutputEdges(root, graphOf(unordered()), files)[0]?.message).toContain(`no ${SCOPE}/beta#test:integration task`);
     });
 
     it('fails a dist path whose package segment is not static', () => {
-      const message = soleSystemTestFinding("const PACKAGES = safePath.join(ROOT, '..');\nsafePath.join(PACKAGES, bundle.pkg, 'dist', 'skills');");
+      const message = soleSystemTestFinding(`safePath.join(${REPO}, 'packages', bundle.pkg, 'dist', 'skills');`);
 
-      expect(message).toContain("`safePath.join(PACKAGES, bundle.pkg, 'dist', 'skills')`");
+      expect(message).toContain("`safePath.join(import.meta.dirname, '../../../..', 'packages', bundle.pkg, 'dist', 'skills')`");
       expect(message).toContain('not static');
     });
 
-    it('attributes a script to the turbo task that runs it, and fails one no task runs', () => {
+    it('attributes a script to every turbo task that runs it — by name or bun shorthand — and fails a sibling read no task runs', () => {
       const scripts = {
         ...GOOD_SCRIPTS,
-        build: 'bun run build:code',
-        'build:code': 'node ../alpha/dist/bin/vat.js build',
+        build: 'bun build:code',
+        // The second command reads what this same task produces: ordered by itself.
+        'build:code': 'node ../alpha/dist/bin/vat.js build && node dist/post.js',
         'build:skills': 'node ../alpha/dist/bin/vat.js skills build',
         vat: 'node ../alpha/dist/bin/vat.js',
+        'clean:own': 'rimraf dist',
       };
       const files = workspaceWith({ 'packages/beta/test/plain.test.ts': 'expect(1).toBe(1);' }, scripts);
       const graph = unordered()
         .set(...task(BETA_BUILD, [], ['dist/**'], scripts.build))
         .set(...task(`${SCOPE}/beta#build:skills`, [BETA_BUILD], [], scripts['build:skills']));
 
-      expect(firstWords(checkBuiltOutputEdges(root, graph, files))).toEqual([
+      expect(firstWords(checkBuiltOutputEdges(root, graphOf(graph), files))).toEqual([
         ['packages/beta/package.json (script "build:code")', BETA_BUILD],
         ['packages/beta/package.json (script "build:skills")', `${SCOPE}/beta#build:skills`],
         ['packages/beta/package.json (script "vat")', 'reads'],
       ]);
+    });
+
+    it('fails a package test-tier entry that drops part of the generic definition it replaces', () => {
+      const files = workspaceWith({ 'packages/beta/test/plain.test.ts': 'expect(1).toBe(1);' });
+      const generic = { outputs: [], cache: true, dependsOn: ['^build', 'build'], inputs: [], env: ['CI'] };
+      const tasks = unordered()
+        .set(...task(`${SCOPE}/gamma#test:integration`, [], [], 'run', [], generic))
+        .set(...task(`${SCOPE}/beta#test:integration`, [], [], 'run', [], { ...generic, env: [], cache: false, dependsOn: ['^build', 'build', ALPHA_BUILD] }));
+      const override = `${SCOPE}/beta#test:integration`;
+
+      expect(checkBuiltOutputEdges(root, { tasks, overrides: [override] }, files).map((f) => [f.path, f.message.split(':')[0]])).toEqual([
+        [`turbo.json ("${override}")`, 'drops the generic "test'],
+        [`turbo.json ("${override}")`, 'sets cache false, the generic "test'],
+      ]);
+      const copied = new Map(tasks).set(...task(override, [], [], 'run', [], { ...generic, dependsOn: ['^build', 'build', ALPHA_BUILD] }));
+      expect(checkBuiltOutputEdges(root, { tasks: copied, overrides: [override] }, files)).toEqual([]);
     });
   });
 });

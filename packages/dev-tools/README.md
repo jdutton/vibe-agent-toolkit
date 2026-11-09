@@ -11,11 +11,11 @@ Every top-level script under `src/`, by basename (generated from the directory; 
 `bun run generate:claude-md`, never edit between the markers):
 
 <!-- gen:dev-tools-scripts -->
-`audit-quality-gate`, `built-output-edges`, `built-output-scan`, `bump-version`,
-`changelog-fragments`, `check-test-heap-budget`, `clean-build`, `comment-density-ceilings`,
-`comment-density`, `common`, `contraband-scan`, `copy-yaml-assets`, `derived-artifact-rules`,
-`determine-publish-tags`, `duplication-check`, `eslint-rules-table`, `extract-changelog`,
-`fix-workspace-deps`, `generate-claude-md`, `generate-python-stdlib`,
+`audit-quality-gate`, `built-output-edges`, `built-output-paths`, `built-output-scan`,
+`bump-version`, `changelog-fragments`, `check-test-heap-budget`, `clean-build`,
+`comment-density-ceilings`, `comment-density`, `common`, `contraband-scan`, `copy-yaml-assets`,
+`derived-artifact-rules`, `determine-publish-tags`, `duplication-check`, `eslint-rules-table`,
+`extract-changelog`, `fix-workspace-deps`, `generate-claude-md`, `generate-python-stdlib`,
 `generate-resources-json-schemas`, `generate-tsconfig-refs`, `generate-workflow`,
 `import-marketplace`, `index`, `jscpd-check-new`, `jscpd-update-baseline`, `known-defects-gate`,
 `link-all`, `link-workspace-packages`, `markdown-it-parser`, `parser-bakeoff`, `pin-barrel-exports`,

@@ -32,9 +32,9 @@
 import { existsSync, statSync } from 'node:fs';
 
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { createTempDir, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { cleanupTestTempDir, createTestTempDir } from '../../../cli/test/system/test-common.js';
 import { runSkillTestHarness, type RunHarnessOptions } from '../../src/skill-test/run-harness.js';
 import {
   harnessOptsFor,
@@ -66,11 +66,11 @@ const EVALS_JSON = 'evals.json';
 let tempDir: string;
 
 beforeEach(() => {
-  tempDir = createTestTempDir('vat-eval-suite-location-');
+  tempDir = createTempDir('vat-eval-suite-location-');
 });
 
 afterEach(() => {
-  cleanupTestTempDir(tempDir);
+  removeTempDir(tempDir);
 });
 
 /** The subject skill's own tree. Written the same way in both layouts. */

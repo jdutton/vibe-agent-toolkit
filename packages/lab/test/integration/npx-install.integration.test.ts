@@ -19,6 +19,7 @@ import { homedir } from 'node:os';
 import { dirname } from 'node:path';
 
 import { createSymlinkAsync, isVatError, normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { underTemp } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { ARM_REFUSED_CODE, type ArmDirectories, armDirectories } from '../../src/harness/arm-dirs.js';
@@ -300,7 +301,7 @@ describe("resolveInstrument({ kind: 'npx' })", () => {
     });
 
     expect(used.command).toBe(process.execPath);
-    expect(toForwardSlash(used.leadingArgs[0] ?? '')).toBe(toForwardSlash(safePath.join(npxInstallArm(root, SPEC).tmp, 'install', CLI_BIN)));
+    expect(toForwardSlash(used.leadingArgs[0] ?? '')).toBe(toForwardSlash(safePath.join(underTemp(npxInstallArm(root, SPEC).tmp, root), 'install', CLI_BIN)));
     expect(ran.exitCode).toBe(0);
     expect(ran.stdout).toBe('cli entry');
   });

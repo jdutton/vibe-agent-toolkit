@@ -101,6 +101,61 @@ output. Their failure messages carry the regeneration command; the procedure is 
 first** (`bun run build`), then run the one file from its package directory with the env var set.
 Regenerating from a stale `dist/` writes a stale golden that passes.
 
+### Reading a package's built output
+
+A test or package script that reads a workspace package's `dist/` needs turbo to run the task that
+PRODUCES that path before the reader's task. That ordering also puts the producer's hash into the
+reader's hash, so a rebuild re-runs the reader. Without it, a cold run reads a missing `dist/` and
+a warm run reads a stale one. `validate-structure` (`checkBuiltOutputEdges`) derives every such
+read and checks it against turbo's own `--dry=json` graph.
+
+**What it scans.** The rule reads these files:
+
+- every source file under a package's `test/`, except `fixtures/` and `golden/`;
+- every `src/**/*.test.*`;
+- the `src/` test helpers (`testing/`, `*test-helpers*`);
+- every `package.json` script, word by word.
+
+In those files, every expression handed to a path sink is one of three kinds when it has a `dist`
+segment. A path sink is a `join`/`resolve` call, `new URL`, a module load, a process launch or an
+fs read. The three kinds:
+
+- **Resolved.** Its anchor traces to a repo location: the file's directory, a relative or
+  workspace-package specifier, or `node_modules/<workspace pkg>`. Relative text with no anchor
+  resolves from the package directory, which is the working directory of a test and of a script.
+  Reads of the reader's own package count too.
+- **Temp.** Its anchor traces to `tmpdir()`, `mkdtemp*`, or a temp-dir helper of
+  `@vibe-agent-toolkit/utils/testing`. When the path comes from something the scan does not
+  follow (a product function's result), wrap it in `underTemp(path, tempRoot)`. That call
+  asserts at run time that `path` is inside the temp dir.
+- **Unresolved.** Anything else is a finding at `file:line`, never a skip. For example: an
+  untraceable parameter, a `let` given an unknown value, or a package segment that matches only
+  when case is ignored. A file that does not parse is also a finding.
+
+**Who reads.** A reach in a test file belongs to the tier task of every test that loads that file,
+directly or through relative imports, in any package. A reach in a file no test loads is a finding.
+A reach in a script belongs to every turbo task whose command runs that script, by `bun run <s>` or
+bun's `bun <s>` shorthand. A sibling read in a script that no task runs is a finding. A script that
+runs a bin by name (`vat …`) is out of scope: a bin resolves only through a declared dependency,
+which `^build` already orders.
+
+**Who produces.** Any task of the reached package whose declared `outputs`, less its
+`excludedOutputs`, cover the path. One such task ordered first is enough. A read that may reach
+past its static part has a further requirement: one with a non-static tail, or a directory read
+whole. For each task whose outputs lie under that part, one task covering them must also be
+ordered. Declared outputs are what the rule trusts. A task that does not produce a path its glob
+claims must exclude it: cat-agents' `build` declares `!dist/skills/**`, because `build:skills`
+writes those files.
+
+**Wiring the edge.** Use a `workspace:*` devDependency when the reader may depend on the producer's
+package, the producer is that package's `build`, and the dependency makes no cycle. `^build` then
+orders every task of the reader. Otherwise, add the producer to the `dependsOn` of a
+`<pkg>#<task>` entry in `turbo.json`. Two cases need that entry: a cycle, which the cli and its
+dependents would make, and a producer other than `build`. Such an entry REPLACES the generic
+task's definition instead of merging with it. A `<pkg>#test:<tier>` entry must therefore repeat
+the generic tier's `env`, `outputs`, `inputs`, `cache` and `dependsOn`, and the rule fails one
+that drops any of them. (enforced by: `validate-structure`, `checkBuiltOutputEdges`)
+
 ### Test Classification Rules
 
 Misclassified tests are the #1 cause of flaky CI and slow unit test suites. If your test does any of the following, it is **NOT a unit test**:

@@ -18,10 +18,12 @@
  * because they assert the OUTCOME rather than the mechanism — an outcome the
  * packager must keep whatever the rewriter is built from next.
  */
+import { writeFileSync } from 'node:fs';
+
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { createTempDir, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { cleanupTestTempDir, createTestTempDir, writeTestFile } from '../../../cli/test/system/test-common.js';
 import { packageInPlace } from '../test-helpers.js';
 
 const SKILL_MD = `---
@@ -48,9 +50,9 @@ async function packageFixture(tempDir: string): Promise<string> {
   const skillDir = safePath.join(tempDir, 'skills', 'probe');
   mkdirSyncReal(safePath.join(skillDir, 'refs'), { recursive: true });
   mkdirSyncReal(safePath.join(skillDir, 'evals'), { recursive: true });
-  writeTestFile(safePath.join(skillDir, 'SKILL.md'), SKILL_MD);
-  writeTestFile(safePath.join(skillDir, 'refs', 'guide.md'), '# guide\n');
-  writeTestFile(safePath.join(skillDir, 'evals', 'diagram.png'), 'not-really-a-png');
+  writeFileSync(safePath.join(skillDir, 'SKILL.md'), SKILL_MD);
+  writeFileSync(safePath.join(skillDir, 'refs', 'guide.md'), '# guide\n');
+  writeFileSync(safePath.join(skillDir, 'evals', 'diagram.png'), 'not-really-a-png');
 
   const outputPath = safePath.join(tempDir, 'dist', 'probe');
   // In place: the probe reads what the packager wrote, whether or not the package passed its checks.
@@ -68,7 +70,7 @@ describe('link identity probe (integration)', () => {
   let tempDir: string;
 
   afterEach(() => {
-    cleanupTestTempDir(tempDir);
+    removeTempDir(tempDir);
   });
 
   /**
@@ -87,7 +89,7 @@ describe('link identity probe (integration)', () => {
    * one. The masking is retained for the residual regex fallback.
    */
   it('leaves a fenced code example verbatim even when its href matches a real link', async () => {
-    tempDir = createTestTempDir('vat-packager-link-identity-');
+    tempDir = createTempDir('vat-packager-link-identity-');
     const body = await packageFixture(tempDir);
 
     // The real link SHOULD be repointed at the flattened location.
@@ -112,7 +114,7 @@ describe('link identity probe (integration)', () => {
    * one runs the real packager end to end.
    */
   it('repoints the outer href when an image sits inside a link', async () => {
-    tempDir = createTestTempDir('vat-packager-link-identity-nested-');
+    tempDir = createTempDir('vat-packager-link-identity-nested-');
     const body = await packageFixture(tempDir);
 
     // The OUTER destination is repointed at the flattened location, and the
@@ -129,7 +131,7 @@ describe('link identity probe (integration)', () => {
   });
 
   it('does not orphan the bang when an image target does not ship', async () => {
-    tempDir = createTestTempDir('vat-packager-link-identity-img-');
+    tempDir = createTempDir('vat-packager-link-identity-img-');
     const body = await packageFixture(tempDir);
 
     // Whatever the rendering, it must not leave a dangling `!` in front of prose.

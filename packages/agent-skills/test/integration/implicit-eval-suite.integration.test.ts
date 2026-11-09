@@ -17,10 +17,12 @@
  * existing, which is exactly what makes it safe — so they live here rather than in
  * the pure `test-input.test.ts`.
  */
+import { writeFileSync } from 'node:fs';
+
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { createTempDir, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { cleanupTestTempDir, createTestTempDir, writeTestFile } from '../../../cli/test/system/test-common.js';
 import { conventionalSuiteProbe, resolveTestInputDirs } from '../../src/test-input.js';
 
 let tempDir: string;
@@ -32,30 +34,30 @@ function makeSkillDir(
 ): string {
   const skillDir = safePath.join(tempDir, 'skills', name);
   mkdirSyncReal(skillDir, { recursive: true });
-  writeTestFile(safePath.join(skillDir, 'SKILL.md'), `---\nname: ${name}\ndescription: d\n---\n\n# ${name}\n`);
+  writeFileSync(safePath.join(skillDir, 'SKILL.md'), `---\nname: ${name}\ndescription: d\n---\n\n# ${name}\n`);
 
   if (opts.suite === true) {
     mkdirSyncReal(safePath.join(skillDir, 'evals'), { recursive: true });
-    writeTestFile(safePath.join(skillDir, 'evals', 'evals.json'), '{"skill_name":"demo","evals":[]}');
+    writeFileSync(safePath.join(skillDir, 'evals', 'evals.json'), '{"skill_name":"demo","evals":[]}');
   }
   if (opts.rootEvalsNoSuite === true) {
     mkdirSyncReal(safePath.join(skillDir, 'evals'), { recursive: true });
-    writeTestFile(safePath.join(skillDir, 'evals', 'methodology.md'), '# how we evaluate\n');
+    writeFileSync(safePath.join(skillDir, 'evals', 'methodology.md'), '# how we evaluate\n');
   }
   if (opts.nestedEvals === true) {
     mkdirSyncReal(safePath.join(skillDir, 'docs', 'evals'), { recursive: true });
-    writeTestFile(safePath.join(skillDir, 'docs', 'evals', 'approach.md'), '# approach\n');
+    writeFileSync(safePath.join(skillDir, 'docs', 'evals', 'approach.md'), '# approach\n');
   }
   return skillDir;
 }
 
 describe('implicit eval-suite convention (integration)', () => {
   afterEach(() => {
-    cleanupTestTempDir(tempDir);
+    removeTempDir(tempDir);
   });
 
   it('treats the conventional suite as declared test input with no test: block', () => {
-    tempDir = createTestTempDir('vat-implicit-suite-');
+    tempDir = createTempDir('vat-implicit-suite-');
     const skillDir = makeSkillDir({ suite: true });
 
     // The leak this closes: without a `test:` block this returned [], so nothing
@@ -64,7 +66,7 @@ describe('implicit eval-suite convention (integration)', () => {
   });
 
   it('never infers from a directory NAME — a root evals/ with no suite file is ordinary content', () => {
-    tempDir = createTestTempDir('vat-implicit-suite-nosuite-');
+    tempDir = createTempDir('vat-implicit-suite-nosuite-');
     const skillDir = makeSkillDir({ rootEvalsNoSuite: true });
 
     // Keying on the name would silently drop this author's docs from their bundle.
@@ -72,7 +74,7 @@ describe('implicit eval-suite convention (integration)', () => {
   });
 
   it('names exactly <skill-root>/evals — a nested docs/evals/ is untouched', () => {
-    tempDir = createTestTempDir('vat-implicit-suite-nested-');
+    tempDir = createTempDir('vat-implicit-suite-nested-');
     const skillDir = makeSkillDir({ suite: true, nestedEvals: true });
 
     // Only the root suite dir is test input; the nested one is never mentioned.
@@ -80,7 +82,7 @@ describe('implicit eval-suite convention (integration)', () => {
   });
 
   it('is pure auto-detect: no test: block and no suite is a clean no-op, not an error', () => {
-    tempDir = createTestTempDir('vat-implicit-suite-none-');
+    tempDir = createTempDir('vat-implicit-suite-none-');
     const skillDir = makeSkillDir({});
 
     // The convention must never make evals REQUIRED. The overwhelming majority of
@@ -91,7 +93,7 @@ describe('implicit eval-suite convention (integration)', () => {
   });
 
   it('lets an explicit test: block win over the convention', () => {
-    tempDir = createTestTempDir('vat-implicit-suite-explicit-');
+    tempDir = createTempDir('vat-implicit-suite-explicit-');
     const skillDir = makeSkillDir({ suite: true });
 
     // An explicit declaration is still the instruction, suite file present or not.
@@ -106,7 +108,7 @@ const SUITE_JSON = '{"skill_name":"demo","evals":[]}';
 /** Give an existing skill dir the conventional suite, after the fact. */
 function addConventionalSuite(skillDir: string): void {
   mkdirSyncReal(safePath.join(skillDir, 'evals'), { recursive: true });
-  writeTestFile(safePath.join(skillDir, 'evals', 'evals.json'), SUITE_JSON);
+  writeFileSync(safePath.join(skillDir, 'evals', 'evals.json'), SUITE_JSON);
 }
 
 /**
@@ -131,11 +133,11 @@ function addConventionalSuite(skillDir: string): void {
  */
 describe('conventional-suite probing (integration)', () => {
   afterEach(() => {
-    cleanupTestTempDir(tempDir);
+    removeTempDir(tempDir);
   });
 
   it('asks the filesystem about one skill dir at most ONCE per call', () => {
-    tempDir = createTestTempDir('vat-implicit-suite-dedupe-');
+    tempDir = createTempDir('vat-implicit-suite-dedupe-');
     const skillDir = makeSkillDir({});
 
     const projectSkills = [
@@ -159,7 +161,7 @@ describe('conventional-suite probing (integration)', () => {
   });
 
   it('still answers per DIRECTORY — a different skill dir gets its own probe', () => {
-    tempDir = createTestTempDir('vat-implicit-suite-perdir-');
+    tempDir = createTempDir('vat-implicit-suite-perdir-');
     const bare = makeSkillDir({}, 'bare');
     const withSuite = makeSkillDir({ suite: true }, 'with-suite');
 
@@ -173,7 +175,7 @@ describe('conventional-suite probing (integration)', () => {
   });
 
   it('re-probes for a LATER RUN — the answer dies with the probe', () => {
-    tempDir = createTestTempDir('vat-implicit-suite-scope-');
+    tempDir = createTempDir('vat-implicit-suite-scope-');
     const skillDir = makeSkillDir({});
 
     expect(resolveTestInputDirs({}, skillDir, [], conventionalSuiteProbe())).toEqual([]);
@@ -185,7 +187,7 @@ describe('conventional-suite probing (integration)', () => {
   });
 
   it('holds its answer for the WHOLE run — that is the scope, and its known cost', () => {
-    tempDir = createTestTempDir('vat-implicit-suite-runscope-');
+    tempDir = createTempDir('vat-implicit-suite-runscope-');
     const skillDir = makeSkillDir({});
 
     // ONE probe, as a lane looping over its discovered skills creates it.

@@ -1,8 +1,9 @@
 /**
- * The test-tree scan reads syntax, not spelling: a path counts where a call
- * builds and uses it, however it is spelled, and nowhere else. The real-tree
- * case pins reaches the repository is known to have, so a spelling the scan
- * stops recognising is a red here rather than a silently smaller population.
+ * The test-tree scan reads syntax, not spelling: every expression a path sink
+ * receives that has a `dist` segment is RESOLVED (a reach, or no package's
+ * output), TEMP, or UNRESOLVED (a finding) — never skipped. Each fixture names
+ * one form; the real tree is pinned by the integration tier
+ * (`built-output-scan.integration.test.ts`).
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -10,10 +11,8 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { workingTreePackageFiles } from '../src/built-output-edges.js';
-import { scanTestTree } from '../src/built-output-scan.js';
-import { PROJECT_ROOT } from '../src/common.js';
-import { readWorkspaceGraph, type WorkspaceGraph, type WorkspacePackage } from '../src/workspace-graph.js';
+import { judgeScriptWord, scanTestTree } from '../src/built-output-scan.js';
+import type { WorkspaceGraph, WorkspacePackage } from '../src/workspace-graph.js';
 
 import { cleanupTestTempDir, createTestTempDir } from './test-helpers.js';
 
@@ -42,6 +41,8 @@ function writeFiles(root: string, files: Record<string, string>): string[] {
 
 // `alpha` and `beta` are not packages of this repository.
 const SITE = 'packages/beta/test/x.test.ts';
+/** Every fixture below starts from the test file's own directory, `packages/beta/test`. */
+const PRELUDE = "const here = import.meta.dirname;\nconst ROOT = safePath.join(here, '..', '..', '..');\n";
 
 describe('scanTestTree on fixture sources', () => {
   let root: string;
@@ -53,40 +54,67 @@ describe('scanTestTree on fixture sources', () => {
   });
 
   const scan = (text: string, extra: Record<string, string> = {}): ReturnType<typeof scanTestTree> =>
-    scanTestTree(root, graphOf('alpha', 'beta'), writeFiles(root, { [SITE]: text, ...extra }));
+    scanTestTree(root, graphOf('alpha', 'beta'), writeFiles(root, { [SITE]: PRELUDE + text, ...extra }));
+  /** The reaches, without the site fields every fixture shares. */
+  const reachesOf = (text: string): Array<{ dir: string; subpath: string; open: boolean }> =>
+    scan(text).reaches.map(({ dir, subpath, open }) => ({ dir, subpath, open }));
 
   it.each([
-    ['a ../ literal in resolve', "spawn(NODE, [safePath.resolve(here, '../../../alpha/dist/bin.js')]);", 'dist/bin.js'],
-    ['an aliased resolver', "const BIN = pathResolve(here, '../../../alpha/dist/bin.js');", 'dist/bin.js'],
-    ['repo-rooted segments',"safePath.join(root, 'packages', 'alpha', 'dist');", 'dist'],
-    ['a multi-hop segment before the package', "safePath.join(here, '../../..', 'alpha', 'dist', 'x.js');", 'dist/x.js'],
-    ['a joined package segment', "safePath.join(root, 'packages/alpha', 'dist');", 'dist'],
-    ['a template literal', 'execFileSync(`${root}/packages/alpha/dist/x.js`);', 'dist/x.js'],
-    ['a same-file const', "const DIR = 'packages/alpha/dist';\nconst BIN = safePath.join(root, DIR, 'bin.js');", 'dist/bin.js'],
-    ['a const of a const', "const UP = '../../..';\nconst BIN = `${UP}/alpha/dist/a.js`;\nspawnSync(NODE, [BIN]);", 'dist/a.js'],
-    ['new URL', "const URL_ = new URL('../../../alpha/dist/x.js', import.meta.url).href;", 'dist/x.js'],
-    ['vi.mock', "vi.mock('../../alpha/dist/y.js', () => ({}));", 'dist/y.js'],
-    ['a dynamic import', "await import('../../../alpha/dist/z.js');", 'dist/z.js'],
-    ['an unknown tail', "safePath.join(root, 'packages', 'alpha', 'dist', name, 'x');", 'dist'],
-  ])('counts %s', (_label, text, subpath) => {
-    expect(scan(text).reaches).toEqual([{ site: SITE, dir: 'alpha', subpath }]);
+    ['a ../ literal in resolve', "spawn(NODE, [safePath.resolve(here, '../../alpha/dist/bin.js')]);", 'alpha', 'dist/bin.js', false],
+    ['repo-rooted segments', "safePath.join(ROOT, 'packages', 'alpha', 'dist');", 'alpha', 'dist', true],
+    ['a joined package segment', "safePath.join(ROOT, 'packages/alpha', 'dist');", 'alpha', 'dist', true],
+    ['a template literal', 'execFileSync(`${ROOT}/packages/alpha/dist/x.js`);', 'alpha', 'dist/x.js', false],
+    ['a const of a const', "const UP = '../..';\nconst BIN = `${here}/${UP}/alpha/dist/a.js`;\nspawnSync(NODE, [BIN]);", 'alpha', 'dist/a.js', false],
+    ['a let, past its placeholder', "let DIR = '';\nDIR = 'packages/alpha/dist/skills';\nsafePath.join(ROOT, DIR);", 'alpha', 'dist/skills', true],
+    ['new URL', "new URL('../../alpha/dist/x.js', import.meta.url);", 'alpha', 'dist/x.js', false],
+    ['vi.mock', "vi.mock('../../alpha/dist/y.js', () => ({}));", 'alpha', 'dist/y.js', false],
+    ['a dynamic import of a relative literal', "await import('../../alpha/dist/z.js');", 'alpha', 'dist/z.js', false],
+    ['a workspace package specifier', "await import('@scope/alpha/dist/z.js');", 'alpha', 'dist/z.js', false],
+    ['an install link', "safePath.join(ROOT, 'node_modules/@scope/alpha/dist');", 'alpha', 'dist', true],
+    ['an unknown tail', "safePath.join(ROOT, 'packages', 'alpha', 'dist', name, 'x');", 'alpha', 'dist', true],
+    ['its own package, from its directory', "safePath.resolve(here, '../dist/bin.js');", 'beta', 'dist/bin.js', false],
+    ['its own package, from the working directory', "readFileSync('dist/index.js');", 'beta', 'dist/index.js', false],
+    ['a helper called with a literal', "function bin(pkg: string) { return safePath.join(ROOT, 'packages', pkg, 'dist'); }\nbin('alpha');", 'alpha', 'dist', true],
+    ['a describe.each table', "describe.each([{ pkg: 'alpha' }])('$pkg', (b) => { safePath.join(ROOT, 'packages', b.pkg, 'dist', 'skills'); });", 'alpha', 'dist/skills', true],
+    ['an object spread', "const BASE = { pkg: 'alpha' };\nconst O = { ...BASE };\nsafePath.join(ROOT, 'packages', O.pkg, 'dist', 'x.js');", 'alpha', 'dist/x.js', false],
+  ])('resolves %s', (_label, text, dir, subpath, open) => {
+    expect(reachesOf(text)).toEqual([{ dir, subpath, open }]);
   });
 
   it.each([
-    ['a comment', "// safePath.join(root, 'packages/alpha/dist')\n/* spawn('../../alpha/dist/x') */"],
+    ['a comment', "// safePath.join(ROOT, 'packages/alpha/dist')\n/* spawn('../../alpha/dist/x') */"],
     ['plain test data', "expect(filter('packages/alpha/dist/index.js')).toBe(false);"],
     ['a path no call uses', "const NEEDLE = '../../alpha/dist/x.js';\nexpect(urls).toContain(NEEDLE);"],
-    ['a let, whose value may change', "let DIR = 'packages/alpha/dist';\nconst BIN = safePath.join(root, DIR, 'bin.js');"],
-    ['a var, whose value may change', "var DIR = 'packages/alpha/dist';\nconst BIN = safePath.join(root, DIR, 'bin.js');"],
-    ['a temp tree',"safePath.join(tempDir, 'dist', 'bin');"],
-    ['a package-relative dist', "pathResolve(testDir, '../../dist/bin.js');"],
-    ['a directory that is not a package', "safePath.join(root, 'packages', 'nope', 'dist');"],
-  ])('ignores %s', (_label, text) => {
-    expect(scan(text)).toMatchObject({ reaches: [], unresolved: [] });
+    ['a directory that is not a package', "safePath.join(ROOT, 'packages', 'nope', 'dist');"],
+    ['an absolute path', "readFileSync('/opt/packages/alpha/dist/x.js');"],
+    ['os.tmpdir()', "safePath.join(os.tmpdir(), 'packages', 'alpha', 'dist');"],
+    ['mkdtempSync', "const dir = mkdtempSync('x-');\nsafePath.join(dir, 'packages', 'alpha', 'dist');"],
+    ['a temp-dir helper', "const dir = createTempDir('x-');\nsafePath.join(dir, 'dist', 'bin');"],
+    ['a path declared under a temp dir', "const dir = createTempDir('x-');\nsafePath.join(underTemp(tree.root, dir), 'pkg', 'dist');"],
+    ['a let reset only to temp dirs', "let dir = createTempDir('x-');\ndir = createTempDir('y-');\nsafePath.join(dir, 'dist');"],
+  ])('finds no reach and nothing unresolved in %s', (_label, text) => {
+    expect(scan(text)).toMatchObject({ reaches: [], findings: [] });
+  });
+
+  it.each([
+    ['an untraceable parameter', "export function f(dir: string) { return safePath.join(dir, 'dist'); }"],
+    ['a non-static package segment', "safePath.join(ROOT, 'packages', bundle.pkg, 'dist', 'skills');"],
+    ['a let given an unknown value', "let dir = createTempDir('x-');\ndir = elsewhere();\nsafePath.join(dir, 'dist');"],
+    ['a let built up by a compound assignment', "let dir = createTempDir('x-');\ndir += '-x';\nsafePath.join(dir, 'dist');"],
+    ['a package directory that matches only ignoring case', "safePath.join(ROOT, 'packages', 'Alpha', 'dist');"],
+  ])('reports %s at its file and line, and counts no reach', (_label, text) => {
+    const result = scan(text);
+
+    expect(result.reaches).toEqual([]);
+    expect(result.findings.map((finding) => finding.site)).toEqual([`${SITE}:${(PRELUDE + text).split('\n').length.toString()}`]);
+  });
+
+  it('reports a file that does not parse, rather than skipping it', () => {
+    expect(scan('const = ;').findings.map((finding) => finding.message.slice(0, 29))).toContain('does not parse, so the rule c');
   });
 
   it('ignores fixture and golden trees and non-source files', () => {
-    const reached = "safePath.join(root, 'packages', 'alpha', 'dist');";
+    const reached = "safePath.join(import.meta.dirname, '../../../../alpha/dist');";
     const result = scan('expect(1).toBe(1);', {
       'packages/beta/test/fixtures/p/a.test.ts': reached,
       'packages/beta/test/golden/b.ts': reached,
@@ -94,13 +122,6 @@ describe('scanTestTree on fixture sources', () => {
     });
 
     expect(result.reaches).toEqual([]);
-  });
-
-  it('reports a dist path whose package segment is not static', () => {
-    const result = scan("const PACKAGES = safePath.join(ROOT, '..');\nsafePath.join(PACKAGES, bundle.pkg, 'dist', 'skills');");
-
-    expect(result.reaches).toEqual([]);
-    expect(result.unresolved).toEqual([{ site: SITE, expression: "safePath.join(PACKAGES, bundle.pkg, 'dist', 'skills')" }]);
   });
 
   it('records relative imports between test-tree files, across packages, and the test entries', () => {
@@ -112,24 +133,19 @@ describe('scanTestTree on fixture sources', () => {
   });
 });
 
-describe('scanTestTree on the real tree', () => {
-  const result = scanTestTree(PROJECT_ROOT, readWorkspaceGraph(PROJECT_ROOT), workingTreePackageFiles(PROJECT_ROOT));
+describe('judgeScriptWord', () => {
+  const graph = graphOf('alpha', 'beta');
 
-  it('finds the reaches this repository is known to have', () => {
-    expect(result.reaches).toEqual(
-      expect.arrayContaining([
-        { site: 'packages/rag-lancedb/test/system/cli-dogfooding.system.test.ts', dir: 'cli', subpath: 'dist/bin.js' },
-        { site: 'packages/resources/test/system/external-url-validation.system.test.ts', dir: 'cli', subpath: 'dist/bin/vat.js' },
-        { site: 'packages/resources/test/integration/git-crawl-io-cost.integration.test.ts', dir: 'lab', subpath: 'dist/facets/io/counter.cjs' },
-        { site: 'packages/vat-development-agents/test/system/packaged-output-drift.system.test.ts', dir: 'vat-development-agents', subpath: 'dist/skills' },
-        { site: 'packages/vat-development-agents/test/system/packaged-output-drift.system.test.ts', dir: 'vat-example-cat-agents', subpath: 'dist/skills' },
-        { site: 'packages/cli/test/system/test-common.ts', dir: 'utils', subpath: 'dist/testing/fault-fs-preload.js' },
-      ]),
-    );
+  it.each([
+    ['a sibling binary', '../alpha/dist/bin/vat.js', { reach: { dir: 'alpha', subpath: 'dist/bin/vat.js', open: false } }],
+    ['its own output', 'dist/src/run.js', { reach: { dir: 'beta', subpath: 'dist/src/run.js', open: false } }],
+    ['a word with no dist segment', 'build', undefined],
+    ['an absolute path', '/opt/alpha/dist/x.js', undefined],
+  ])('judges %s relative to the package directory', (_label, word, verdict) => {
+    expect(judgeScriptWord(word, 'beta', graph)).toEqual(verdict);
   });
 
-  it('reads no reach in plain test data, and no dist path it cannot resolve', () => {
-    expect(result.reaches.filter((reach) => reach.site === 'packages/discovery/test/pattern-filter.test.ts')).toEqual([]);
-    expect(result.unresolved).toEqual([]);
+  it('cannot judge a word the shell expands', () => {
+    expect(judgeScriptWord('$DIR/dist/x.js', 'beta', graph)).toHaveProperty('unresolved');
   });
 });

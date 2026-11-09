@@ -37,7 +37,6 @@ export {
 export {
   createInstalledSkillDir,
   executeSkillsCommandAndExpectYaml,
-  setupDevTestProject,
   setupInstallTestSuite,
 } from './skills-setup.js';
 

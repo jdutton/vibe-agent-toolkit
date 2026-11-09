@@ -290,14 +290,12 @@ packages/cli/test/system/test-helpers/index.ts createInstalledSkillDir dead
 packages/cli/test/system/test-helpers/index.ts createTempProject dead
 packages/cli/test/system/test-helpers/index.ts executeCliAndParseYaml dead
 packages/cli/test/system/test-helpers/index.ts executeResourcesValidateWithSchema dead
-packages/cli/test/system/test-helpers/index.ts setupDevTestProject dead
 packages/cli/test/system/test-helpers/index.ts setupIndexedRagTest dead
 packages/cli/test/system/test-helpers/index.ts TestProjectOptions dead
 packages/cli/test/system/test-helpers/project-setup.ts createTempProject dead
 packages/cli/test/system/test-helpers/project-setup.ts TestProjectOptions dead
 packages/cli/test/system/test-helpers/rag-setup.ts setupIndexedRagTest dead
 packages/cli/test/system/test-helpers/skills-setup.ts createInstalledSkillDir dead
-packages/cli/test/system/test-helpers/skills-setup.ts setupDevTestProject dead
 packages/dev-tools/test/test-helpers.ts assertValidSemver dead
 packages/dev-tools/test/test-helpers.ts MockPackageOptions dead
 packages/dev-tools/test/test-helpers.ts TestTempDirOptions dead

@@ -90,14 +90,12 @@ const itUnlessUpdating = it.skipIf(UPDATING);
 
 /** One packaged bundle tree under this gate. */
 interface GoldenBundle {
-  /** Directory name under `packages/`, and the golden subdirectory name. */
-  readonly pkg: string;
   /**
-   * The package's built `dist/skills`, spelled out per entry: a literal package
-   * segment is what lets `validate-structure` see which build this test reads
-   * and demand turbo order it (`checkBuiltOutputEdges`).
+   * Directory name under `packages/`, and the golden subdirectory name. A
+   * literal: it is what lets `validate-structure` see whose build this test
+   * reads and demand turbo order it (`checkBuiltOutputEdges`).
    */
-  readonly builtDir: string;
+  readonly pkg: string;
   /** Why this package is in the gate — read this before deleting an entry. */
   readonly covers: string;
 }
@@ -105,12 +103,10 @@ interface GoldenBundle {
 const BUNDLES: readonly GoldenBundle[] = [
   {
     pkg: 'vat-development-agents',
-    builtDir: safePath.join(PACKAGES_DIR, 'vat-development-agents', 'dist', 'skills'),
     covers: '13 single-file skills (the dogfood plugin)',
   },
   {
     pkg: 'vat-example-cat-agents',
-    builtDir: safePath.join(PACKAGES_DIR, 'vat-example-cat-agents', 'dist', 'skills'),
     covers: "the repo's only MULTI-FILE bundle — the only packaged non-SKILL.md files the rewriter touches",
   },
 ];
@@ -127,6 +123,11 @@ const UPDATE_HINT =
   '    bun run build\n' +
   '    cd packages/vat-development-agents && UPDATE_DRIFT_GOLDEN=1 bunx vitest run --config vitest.system.config.ts test/system/packaged-output-drift.system.test.ts\n' +
   'If it is NOT intended, a packager/rewriter change altered shipped bundle content.';
+
+/** The bundle's built `dist/skills` — what the build packaged. */
+function builtSkillsDirFor(bundle: GoldenBundle): string {
+  return safePath.join(PACKAGES_DIR, bundle.pkg, 'dist', 'skills');
+}
 
 function goldenSkillsDirFor(bundle: GoldenBundle): string {
   return safePath.join(GOLDEN_ROOT, bundle.pkg, 'skills');
@@ -229,7 +230,7 @@ function regenerateGolden(builtDir: string, goldenDir: string): void {
 }
 
 describe.each(BUNDLES)('packaged output drift: $pkg (system)', (bundle) => {
-  const { builtDir } = bundle;
+  const builtDir = builtSkillsDirFor(bundle);
   const goldenDir = goldenSkillsDirFor(bundle);
 
   beforeAll(() => {

@@ -31,9 +31,12 @@
       "outputs": ["dist/**", "*.tsbuildinfo", "agents/**", "generated/**"],
       "cache": true
     },
+    // cat-agents' `build` does not package its skills — `build:skills` below does — so
+    // `dist/skills/**` is excluded here: a task that reads them must order `build:skills`,
+    // and `checkBuiltOutputEdges` judges producers by these declared outputs.
     "@vibe-agent-toolkit/vat-example-cat-agents#build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", "*.tsbuildinfo", "generated/**"],
+      "outputs": ["dist/**", "!dist/skills/**", "*.tsbuildinfo", "generated/**"],
       "cache": true
     },
     "build:skills": {
@@ -147,11 +150,12 @@
     // integration and system config (and each package's `test:system` script) to
     // check its worker cap, so an edit to one must re-run it rather than replay its
     // cached pass. Scoped here, not in `globalDependencies`, which would make that
-    // edit cold for every task. `derived-artifact-rules.test.ts` scans every
-    // package's test tree for reads of built output, so those trees are inputs too.
+    // edit cold for every task. The scan of every package's test tree for reads of
+    // built output runs in the integration tier and in validate-structure, not here,
+    // so no package's test tree is an input of this task.
     "@vibe-agent-toolkit/dev-tools#test:unit": {
       "dependsOn": ["^build", "build"],
-      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/*/vitest.integration.config.ts", "$TURBO_ROOT$/packages/*/vitest.system.config.ts", "$TURBO_ROOT$/packages/*/package.json", "$TURBO_ROOT$/packages/*/test/**"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/*/vitest.integration.config.ts", "$TURBO_ROOT$/packages/*/vitest.system.config.ts", "$TURBO_ROOT$/packages/*/package.json"],
       "outputs": [],
       "cache": true
     },
@@ -179,9 +183,11 @@
     // no cycle; each entry below would be one (the cli depends on resources and
     // rag-lancedb; lab depends on resources), so the edge is explicit instead.
     // `checkBuiltOutputEdges` (validate-structure) derives every such read from the
-    // test files and fails when turbo's own graph does not order its producer.
+    // test files and package scripts, and fails when turbo's own graph orders no task
+    // whose declared outputs cover it.
     // A `<pkg>#<task>` entry REPLACES the generic task's settings, it does not merge
-    // with them: each copies the generic `dependsOn`, `outputs`, `cache` and `env`.
+    // with them: each copies the generic `dependsOn`, `outputs`, `inputs`, `cache` and
+    // `env` — `checkBuiltOutputEdges` fails a `<pkg>#test:<tier>` entry that drops one.
     //
     // rag-lancedb: `cli-dogfooding.system.test.ts` runs `packages/cli/dist/bin.js`.
     "@vibe-agent-toolkit/rag-lancedb#test:system": {
@@ -245,10 +251,10 @@
     //     what makes a change to cat-agents' packaged output re-run the gate. Without it a
     //     rewriter change to cat-agents' bundle replays a cached green from a run that never
     //     saw it — a cached verdict on work it could not have measured.
-    // The gate's FIRST tree is this package's own `dist/skills`, which `build:skills`
-    // declares as its output — so the gate waits on that task too, not just on `build`.
+    // The gate's FIRST tree is this package's own `dist/skills`, which its `build`
+    // (`vat build`) produces and declares under `dist/**`, so `build` orders it.
     "@vibe-agent-toolkit/vat-development-agents#test:system": {
-      "dependsOn": ["^build", "build", "build:skills", "@vibe-agent-toolkit/vat-example-cat-agents#build:skills"],
+      "dependsOn": ["^build", "build", "@vibe-agent-toolkit/vat-example-cat-agents#build:skills"],
       "outputs": [],
       "cache": true
     },
