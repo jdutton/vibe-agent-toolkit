@@ -283,7 +283,7 @@ When publishing to a **separate repository** (via `publish.remote`), the default
 
 1. Create a PAT with `contents: write` permission on the marketplace repo
 2. Store it as a repository secret (e.g., `MARKETPLACE_GITHUB_PUSH_TOKEN`)
-3. Expose it as `GH_TOKEN` in your workflow — `vat claude marketplace publish` uses `GH_TOKEN` (or `GITHUB_TOKEN`) to authenticate to the remote, and only to an `https://github.com/` remote. The token never appears in a URL or on a process command line, and any `GIT_CONFIG_*` entries you already export are kept
+3. Expose it as `GH_TOKEN` in your workflow — `vat claude marketplace publish` uses `GH_TOKEN` (or `GITHUB_TOKEN`) to authenticate to the remote, and only to an `https://github.com/` remote. It needs git 2.31 or newer to do so, and refuses on an older git. The token never appears in a URL or on a process command line. Any `GIT_CONFIG_*` entries you already export are kept, but your own `http.https://github.com/.extraheader` values are not sent during the publish: the token's header replaces them.
 
 ```yaml
 # .github/workflows/marketplace-publish.yml

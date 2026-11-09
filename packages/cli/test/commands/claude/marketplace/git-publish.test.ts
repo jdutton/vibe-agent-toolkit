@@ -1,6 +1,6 @@
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createCommitMessage,
@@ -47,7 +47,7 @@ function gitReturns(results: Record<string, Partial<ReturnType<typeof runGit>>>)
 const logger = createLogger({});
 const DELIVERY = { branch: 'claude-marketplace', remote: 'origin', force: false, dryRun: false, noPush: false, logger };
 /** A remote with nothing to authenticate with. */
-const at = (url: string): { url: string; authEnv: Record<string, string> } => ({ url, authEnv: {} });
+const at = (url: string): { url: string; authEnv: () => Record<string, string> } => ({ url, authEnv: () => ({}) });
 
 const HEADLINE_V1 = 'publish v1.0.0';
 
@@ -112,6 +112,17 @@ describe('git-publish', () => {
       expect(refusalCodeOf(thrownBy(() => deliverCommit('/staging', '/project', DELIVERY, at('https://example.invalid/r.git'))))).toBe('EXTERNAL_API_FAILED');
     });
 
+    it('redacts credentials in the --no-push "push later" hint', () => {
+      gitBy({});
+      const said: string[] = [];
+      const capture = { ...logger, info: (message: string): void => { said.push(message); } };
+      const remote = 'https://x-access-token:ghp_HINT_SECRET@github.com/o/r.git';
+      deliverCommit('/staging', '/project', { ...DELIVERY, remote, noPush: true, logger: capture }, at(remote));
+      const hint = said.find((line) => line.includes('To push later'));
+      expect(hint).toContain('github.com/o/r.git refs/heads/claude-marketplace');
+      expect(hint).not.toContain('ghp_HINT_SECRET');
+    });
+
     it('tells a --no-push caller to push the fully qualified branch ref', () => {
       gitBy({});
       const said: string[] = [];
@@ -127,13 +138,37 @@ describe('git-publish', () => {
   });
 
   // Only the remote-aware route may reach the network, so no network call can leave its auth behind.
+  // The guard is an allow list: a deny list on args[0] let `-c k=v push`, `clone`, `pull` and
+  // `remote update` through.
   describe('network guard', () => {
     afterEach(() => { vi.mocked(runGit).mockReset(); });
 
-    it.each(['ls-remote', 'fetch', 'push'])('refuses `git %s` through the non-network helper, running nothing', (subcommand) => {
+    it.each([
+      [['ls-remote', '--', 'https://example.invalid/r.git']],
+      [['fetch', '--', 'https://example.invalid/r.git']],
+      [['push', '--', 'https://example.invalid/r.git']],
+      [['-c', 'k=v', 'push']],
+      [['--git-dir=/elsewhere', 'init']],
+      [['clone', 'https://example.invalid/r.git']],
+      [['pull']],
+      [['remote', 'update']],
+      [['submodule', 'update']],
+      [['archive', '--remote=https://example.invalid/r.git', 'HEAD']],
+      [[]],
+    ])('refuses `git %j` through the local-only helper, running nothing', (args: string[]) => {
       gitBy({});
-      expect(() => git([subcommand, '--', 'https://example.invalid/r.git'], { cwd: '/staging' })).toThrow(/gitAtRemote/);
+      expect(() => git(args, { cwd: '/staging' })).toThrow(/not a local git command/);
       expect(vi.mocked(runGit)).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [['init']], [['config', 'user.name', 'n']], [['checkout', '-b', 'b']], [['add', '-A']], [['ls-files', '-z']],
+      [['diff', '--cached', '--quiet']], [['commit', '-F', '-']], [['log', '--oneline', '-1']],
+      [['rev-parse', '--verify', 'FETCH_HEAD']], [['reset', '--soft', 'HEAD']], [['remote', 'get-url', 'origin']], [['version']],
+    ])('runs the local command `git %j`', (args: string[]) => {
+      gitBy({});
+      git(args, { cwd: '/staging' });
+      expect(vi.mocked(runGit)).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -159,7 +194,7 @@ describe('git-publish', () => {
     it('builds on the tip of a branch the remote has: a shallow fetch, then a soft reset to the sha the remote reported', async () => {
       gitBy({});
       await publish();
-      expect(calls('ls-remote')).toEqual([['ls-remote', '--exit-code', '--heads', '--', REMOTE, 'refs/heads/b']]);
+      expect(calls('ls-remote')).toEqual([['ls-remote', '--exit-code', '--', REMOTE, 'refs/heads/b', 'refs/heads/b/HEAD']]);
       expect(calls('fetch')).toEqual([['fetch', '--depth=1', '--', REMOTE, 'refs/heads/b']]);
       expect(calls('reset')).toEqual([['reset', '--soft', TIP]]);
     });
@@ -209,12 +244,28 @@ describe('git-publish', () => {
       expect(calls('fetch')).toEqual([['fetch', '--', REMOTE, 'refs/heads/b']]);
     });
 
-    it('asks the remote nothing under --force, whose push replaces the branch', async () => {
+    it('only probes the remote under --force, whose push replaces the branch: no fetch, no reset', async () => {
       gitBy({});
       await publish({ force: true });
-      expect(calls('ls-remote')).toEqual([]);
+      expect(calls('ls-remote')).toHaveLength(1);
       expect(calls('fetch')).toEqual([]);
       expect(calls('reset')).toEqual([]);
+    });
+
+    // git push matches its destination by abbreviation rules: each of these is updated in place of
+    // refs/heads/b (overwritten under --force), or makes the push ambiguous beside it.
+    describe.each([false, true])('a ref git push would take for the branch (--force: %s)', (force) => {
+      it.each(['refs/refs/heads/b', 'refs/tags/refs/heads/b', 'refs/heads/refs/heads/b', 'refs/remotes/refs/heads/b', 'refs/remotes/refs/heads/b/HEAD'])(
+        'refuses %s as CONFIG_INVALID, naming it, and commits nothing',
+        async (alias) => {
+          gitBy({}, { ...CLEAN_STDOUT, 'ls-remote': `${TIP}\trefs/heads/b\n${'c'.repeat(40)}\t${alias}` });
+          const error = await publish({ force }).then(() => undefined, (rejected: unknown) => rejected);
+          expect(refusalCodeOf(error)).toBe('CONFIG_INVALID');
+          expect((error as Error).message).toContain(alias);
+          expect(calls('fetch')).toEqual([]);
+          expect(calls('commit')).toEqual([]);
+        },
+      );
     });
 
     // `publish.remote` is config text that lands in git's argv: it must never be read as an
@@ -326,6 +377,80 @@ describe('git-publish', () => {
             expect(calls('ls-remote')).toEqual([]);
           },
         );
+
+        it('treats an empty GH_TOKEN as unset and authenticates with GITHUB_TOKEN', async () => {
+          vi.stubEnv('GH_TOKEN', '');
+          vi.stubEnv('GITHUB_TOKEN', SECRET);
+          vi.stubEnv('GIT_CONFIG_COUNT', '');
+          gitBy({});
+          await publish({ remote: GITHUB_REMOTE });
+          expect(JSON.stringify(envOf('ls-remote'))).toContain(HEADER);
+        });
+
+        // git before 2.31 ignores GIT_CONFIG_COUNT outright: the header would never be sent, and the
+        // publish would fail as an unexplained authentication error.
+        describe('git version', () => {
+          const withGit = (version: string): void => { gitBy({}, { ...CLEAN_STDOUT, version }); };
+          beforeEach(() => {
+            vi.stubEnv('GH_TOKEN', SECRET);
+            vi.stubEnv('GIT_CONFIG_COUNT', '');
+          });
+
+          it.each(['git version 2.30.2', 'git version 2.25.1', 'git version 1.9.5', 'git version 2.30.1.windows.1'])(
+            'refuses %j as BACKEND_UNAVAILABLE, naming git 2.31, before asking the remote anything',
+            async (version) => {
+              withGit(version);
+              const error = await rejectionOf(publish({ remote: GITHUB_REMOTE }));
+              expect(refusalCodeOf(error)).toBe('BACKEND_UNAVAILABLE');
+              expect((error as Error).message).toContain('git 2.31 or newer');
+              expect((error as Error).message).toContain(version);
+              expect(calls('ls-remote')).toEqual([]);
+            },
+          );
+
+          // An unparseable answer is let through: the check names a requirement, and refusing a git
+          // whose version string VAT cannot read would block a working setup on a guess.
+          it.each(['git version 2.31.0', 'git version 2.39.2', 'git version 2.50.1 (Apple Git-155)', 'git version 2.45.1.windows.1', 'git version 3.0', 'not a version', ''])(
+            'asks the remote with %j',
+            async (version) => {
+              withGit(version);
+              await publish({ remote: GITHUB_REMOTE });
+              expect(calls('ls-remote')).toHaveLength(1);
+              expect(calls('version')).toHaveLength(1);
+            },
+          );
+
+          it('asks git its version only once across ls-remote, fetch and push', async () => {
+            gitBy({ diff: 1 }, { ...CLEAN_STDOUT, version: 'git version 2.39.2' });
+            await publish({ remote: GITHUB_REMOTE });
+            expect(calls('push')).toHaveLength(1);
+            expect(calls('version')).toHaveLength(1);
+          });
+
+          it('never asks the version when no token applies', async () => {
+            vi.stubEnv('GH_TOKEN', undefined);
+            vi.stubEnv('GITHUB_TOKEN', undefined);
+            withGit('git version 2.25.1');
+            await publish({ remote: GITHUB_REMOTE });
+            expect(calls('ls-remote')).toHaveLength(1);
+            expect(calls('version')).toEqual([]);
+          });
+        });
+
+        // --dry-run contacts no remote, so neither the auth environment nor the version is read.
+        it('builds no auth environment under --dry-run: a bad GIT_CONFIG_COUNT is not refused and git is not asked its version', async () => {
+          vi.stubEnv('GH_TOKEN', SECRET);
+          vi.stubEnv('GIT_CONFIG_COUNT', 'two');
+          gitBy({ diff: 1 }, { ...CLEAN_STDOUT, version: 'git version 2.25.1' });
+          const publishDir = tracker.createTempDir();
+          fs.writeFileSync(safePath.join(publishDir, 'marketplace.json'), '{}');
+          await publishToGitBranch({
+            publishDir, branch: 'b', remote: GITHUB_REMOTE, remoteFromConfig: true, commitMessage: 'm',
+            force: false, dryRun: true, noPush: false, logger,
+          });
+          expect(calls('commit')).toHaveLength(1);
+          expect(calls('version')).toEqual([]);
+        });
 
         it('sends no auth header to a remote that is not https://github.com/', async () => {
           vi.stubEnv('GH_TOKEN', SECRET);

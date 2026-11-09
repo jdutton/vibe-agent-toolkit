@@ -68,8 +68,9 @@ export function createCommitMessage(
  * `RUN_INCOMPLETE` — a publish step stopped) names what the failure means, so
  * the steps that talk to the remote (ls-remote, fetch, push) say `EXTERNAL_API_FAILED`.
  *
- * `ls-remote`, `fetch` and `push` are refused here as a programming error: they go through
- * {@link gitAtRemote}, the one route that carries the remote's authentication.
+ * Only the local commands in {@link LOCAL_COMMANDS} run here; anything else — `ls-remote`, `fetch`,
+ * `push`, `clone`, a leading `-c k=v` — is refused as a programming error. A command that talks to
+ * a remote goes through {@link gitAtRemote}, the one route that carries the remote's authentication.
  *
  * 🔴 Running through `runGit` is a data-loss guard, not a style choice. Every
  * call here targets the private staging repo under the temp directory — a
@@ -80,15 +81,22 @@ export function createCommitMessage(
  * default, so no call site here has to remember.
  */
 export function git(args: string[], options: GitStepOptions): GitStepResult {
-  const subcommand = args[0];
-  if (subcommand !== undefined && REMOTE_SUBCOMMANDS.has(subcommand)) {
-    throw new Error(`git ${subcommand} talks to a remote: run it through gitAtRemote, not git()`);
+  if (!LOCAL_COMMANDS.some((command) => command.every((word, index) => args[index] === word))) {
+    throw new Error(`git ${JSON.stringify(args.slice(0, 2))} is not a local git command this module runs: a remote goes through gitAtRemote, and git() runs only ${LOCAL_COMMANDS.map((command) => command.join(' ')).join(', ')}`);
   }
   return gitStep(args, options, NO_REMOTE_ENV);
 }
 
-/** The subcommands this module runs that reach a remote — only {@link gitAtRemote} may run them. */
-const REMOTE_SUBCOMMANDS: ReadonlySet<string> = new Set(['ls-remote', 'fetch', 'push']);
+/**
+ * The leading words of every git command {@link git} may run: the local commands this module's
+ * call sites use, and nothing that reaches a remote. An allow list, because a deny list on args[0]
+ * let `-c k=v push`, `clone`, `pull` and `remote update` through. No entry starts with `-`, so a
+ * leading global option (`-c`, `--git-dir`) is refused with the rest.
+ */
+const LOCAL_COMMANDS: readonly (readonly string[])[] = [
+  ['init'], ['config'], ['checkout'], ['add'], ['ls-files'], ['diff'], ['commit'], ['log'], ['rev-parse'], ['reset'],
+  ['remote', 'get-url'], ['version'],
+];
 
 /**
  * Run a git command that talks to `remote`: `<before> -- <url> <after>`, with the remote's auth
@@ -96,7 +104,7 @@ const REMOTE_SUBCOMMANDS: ReadonlySet<string> = new Set(['ls-remote', 'fetch', '
  * the remote cannot leave its authentication behind, and the URL always follows `--`.
  */
 function gitAtRemote(remote: PublishRemote, before: string[], after: string[], options: GitStepOptions): GitStepResult {
-  return gitStep([...before, '--', remote.url, ...after], options, remote.authEnv);
+  return gitStep([...before, '--', remote.url, ...after], options, remote.authEnv());
 }
 
 interface GitStepOptions { cwd: string; allowFailure?: boolean; timeout?: number; input?: string; trim?: boolean; refusal?: RefusalCode }
@@ -172,19 +180,56 @@ function refuseOptionShaped(value: string, subject: string): void {
 /** The remote a publish talks to: its URL, and the environment that authenticates to it. */
 interface PublishRemote {
   readonly url: string;
-  /** `GIT_CONFIG_*` variables applied after `runGit`'s scrub — `{}` when there is nothing to authenticate with, never absent. */
-  readonly authEnv: Readonly<Record<string, string>>;
+  /**
+   * `GIT_CONFIG_*` variables applied after `runGit`'s scrub — `{}` when there is nothing to
+   * authenticate with. Asked only by {@link gitAtRemote}, as a network call is about to run, so a
+   * publish that contacts no remote (`--dry-run`) never builds it or refuses over it.
+   */
+  readonly authEnv: () => Readonly<Record<string, string>>;
 }
 
 const GITHUB_HTTPS = 'https://github.com/';
 
 /**
  * Resolve `publish.remote` — a remote name (e.g. "origin") or a URL, used as-is — to the remote
- * the publish talks to.
+ * the publish talks to. Its auth environment is built on first use, once.
  */
 function resolveRemote(remote: string, remoteFromConfig: boolean, cwd: string): PublishRemote {
   const url = resolveRemoteUrl(remote, remoteFromConfig, cwd);
-  return { url, authEnv: githubTokenEnv(url) };
+  let authEnv: Readonly<Record<string, string>> | undefined;
+  return { url, authEnv: () => (authEnv ??= remoteAuthEnv(url, cwd)) };
+}
+
+/**
+ * {@link githubTokenEnv} for `url`, refused on a git that would ignore it: git reads
+ * `GIT_CONFIG_COUNT` only from 2.31, and an older one would send no auth header at all.
+ */
+function remoteAuthEnv(url: string, cwd: string): Readonly<Record<string, string>> {
+  const env = githubTokenEnv(url, GITHUB_HTTPS);
+  if (Object.keys(env).length > 0) {
+    refuseGitWithoutEnvConfig(git(['version'], { cwd }).stdout);
+  }
+  return env;
+}
+
+/** The first git that reads configuration from `GIT_CONFIG_COUNT` / `_KEY_n` / `_VALUE_n`. */
+const ENV_CONFIG_GIT = { major: 2, minor: 31 } as const;
+
+/**
+ * Refuse a `git version` answer older than {@link ENV_CONFIG_GIT}. An answer that does not parse
+ * (`git version X.Y…` has been git's format throughout) is let through: this names a requirement,
+ * and refusing a git VAT cannot read would block a likely-working setup on a guess.
+ */
+function refuseGitWithoutEnvConfig(versionText: string): void {
+  const match = /^git version (\d+)\.(\d+)/.exec(versionText);
+  if (match === null) return;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  if (major > ENV_CONFIG_GIT.major || (major === ENV_CONFIG_GIT.major && minor >= ENV_CONFIG_GIT.minor)) return;
+  throw new CommandRefusalError(
+    'BACKEND_UNAVAILABLE',
+    `Publishing with GH_TOKEN/GITHUB_TOKEN needs git 2.31 or newer, which reads the auth header from the environment; this is ${versionText}. Upgrade git.`,
+  );
 }
 
 /**
@@ -204,18 +249,22 @@ function resolveRemote(remote: string, remoteFromConfig: boolean, cwd: string): 
  * extra headers to the empty list"; http.c `http_options()`: `else if (!*value)
  * string_list_clear(&extra_http_headers, 0)`), and env entries are read after every config file,
  * so the reset and then the token header leave ours the only one. That reset also drops any other
- * extraheader the operator set for github.com. One that git's urlmatch ranks MORE specific than
- * `https://github.com/` (a per-repository key) outranks both of ours, and git skips ours for it —
- * still one header, the operator's.
+ * extraheader the operator set for github.com. An extraheader the operator set under a key git's
+ * urlmatch ranks MORE specific than `https://github.com/` (a per-repository key) outranks both of
+ * ours, and git skips ours for it: the publish then sends the operator's header and NOT the token,
+ * so it is unauthenticated as far as VAT's token goes.
+ *
+ * An empty `GH_TOKEN` counts as unset, so `GITHUB_TOKEN` still applies. `prefix` is the URL prefix
+ * the header is keyed to — `https://github.com/` in production; a test points it at a local server.
  */
-export function githubTokenEnv(url: string): Record<string, string> {
-  const token = process.env['GH_TOKEN'] ?? process.env['GITHUB_TOKEN'];
-  if (!token || !url.startsWith(GITHUB_HTTPS)) {
+export function githubTokenEnv(url: string, prefix: string): Record<string, string> {
+  const token = nonEmpty(process.env['GH_TOKEN']) ?? nonEmpty(process.env['GITHUB_TOKEN']);
+  if (token === undefined || !url.startsWith(prefix)) {
     return {};
   }
   const reset = inheritedConfigCount();
   const header = reset + 1;
-  const key = `http.${GITHUB_HTTPS}.extraheader`;
+  const key = `http.${prefix}.extraheader`;
   const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
   return {
     GIT_CONFIG_COUNT: String(header + 1),
@@ -224,6 +273,11 @@ export function githubTokenEnv(url: string): Record<string, string> {
     [`GIT_CONFIG_KEY_${header}`]: key,
     [`GIT_CONFIG_VALUE_${header}`]: `AUTHORIZATION: basic ${basic}`,
   };
+}
+
+/** `value`, or `undefined` when it is unset or empty. */
+function nonEmpty(value: string | undefined): string | undefined {
+  return value === '' ? undefined : value;
 }
 
 /**
@@ -297,9 +351,9 @@ export function deliverCommit(
 
   if (noPush) {
     // The staging repo is this fetch's remote: a local path, with nothing to authenticate.
-    gitAtRemote({ url: tmpRepo, authEnv: NO_REMOTE_ENV }, ['fetch'], [force ? `+${refspec}` : refspec], { cwd });
+    gitAtRemote({ url: tmpRepo, authEnv: () => NO_REMOTE_ENV }, ['fetch'], [force ? `+${refspec}` : refspec], { cwd });
     logger.info(`   Created local branch "${branch}" (not pushed)`);
-    logger.info(`   To push later: git push ${remote} ${refspec}`);
+    logger.info(`   To push later: git push ${redactUrlCredentials(remote)} ${refspec}`);
     return;
   }
 
@@ -376,10 +430,16 @@ const LS_REMOTE_NO_MATCH = 2;
  * a fetch source is matched by git's abbreviation rules too, so with `refs/heads/b` gone by the
  * time the fetch runs, `refs/heads/refs/heads/b` would answer for it. A fetched tip that is not the
  * probed sha refuses rather than building on it.
+ *
+ * Under `--force` the remote is still asked — the push replaces the branch, so nothing is built
+ * on, but a ref the push would hit in its place is refused all the same ({@link remoteTipOf}).
  */
-function buildOnRemoteTip(tmpRepo: string, remote: PublishRemote, options: Pick<PublishGitOptions, 'branch' | 'noPush' | 'logger'>): void {
+function buildOnRemoteTip(tmpRepo: string, remote: PublishRemote, options: Pick<PublishGitOptions, 'branch' | 'force' | 'noPush' | 'logger'>): void {
   const ref = `refs/heads/${options.branch}`;
   const tip = remoteTipOf(tmpRepo, remote, ref);
+  if (options.force) {
+    return;
+  }
   if (tip === undefined) {
     options.logger.info(`   Branch ${options.branch} does not exist on the remote; the first commit has no parent`);
     return;
@@ -402,22 +462,44 @@ function buildOnRemoteTip(tmpRepo: string, remote: PublishRemote, options: Pick<
  * `git ls-remote <url> <pattern>` matches the pattern against the TAIL of each ref, so a remote
  * with no `main` but a `x/refs/heads/main` exits 0 for `refs/heads/main`. Existence is therefore
  * read from the listing — a line naming `ref` exactly — and not from the exit status.
+ *
+ * 🔴 A remote holding a ref that `git push` would match for the destination `ref` refuses: git
+ * matches a push destination by its abbreviation rules, so `refs/heads/b` names
+ * `refs/heads/refs/heads/b` when there is no `refs/heads/b` (a plain push is rejected against it,
+ * a `--force` push overwrites it), and both together make every push ambiguous. No refspec spells
+ * "exactly this ref" to git push.
  */
 function remoteTipOf(tmpRepo: string, remote: PublishRemote, ref: string): string | undefined {
-  const probe = gitAtRemote(remote, ['ls-remote', '--exit-code', '--heads'], [ref], { cwd: tmpRepo, allowFailure: true });
+  const probe = gitAtRemote(remote, ['ls-remote', '--exit-code'], [ref, `${ref}/HEAD`], { cwd: tmpRepo, allowFailure: true });
   if (probe.status === LS_REMOTE_NO_MATCH) {
     return undefined;
   }
   if (probe.status !== 0) {
     throw new CommandRefusalError('EXTERNAL_API_FAILED', `git ls-remote could not read ${redactUrlCredentials(remote.url)} ${probeFailure(probe)}`);
   }
+  const listed = new Map<string, string>();
   for (const line of probe.stdout.split('\n')) {
     const [sha, name] = line.split('\t');
-    if (name === ref && sha !== undefined && isObjectId(sha)) {
-      return sha;
+    if (name !== undefined && sha !== undefined && isObjectId(sha)) {
+      listed.set(name, sha);
     }
   }
-  return undefined;
+  const clashes = pushDestinationAliases(ref).filter((name) => listed.has(name));
+  if (clashes.length > 0) {
+    throw new CommandRefusalError(
+      'CONFIG_INVALID',
+      `${redactUrlCredentials(remote.url)} holds ${clashes.join(', ')}, which git push would update in place of ${ref}. Delete or rename it on the remote, or publish to another branch.`,
+    );
+  }
+  return listed.get(ref);
+}
+
+/**
+ * The refs other than `ref` that `git push` matches for the destination `ref`: git's rev-parse
+ * rules (`ref_rev_parse_rules`, applied by `refname_match`) each prefix it.
+ */
+function pushDestinationAliases(ref: string): string[] {
+  return [`refs/${ref}`, `refs/tags/${ref}`, `refs/heads/${ref}`, `refs/remotes/${ref}`, `refs/remotes/${ref}/HEAD`];
 }
 
 /** A full SHA-1 or SHA-256 object id, as `ls-remote` prints one. */
@@ -427,15 +509,15 @@ function isObjectId(text: string): boolean {
 
 /** {@link publishToGitBranch}'s work in the temp repo: stage the tree, commit it, deliver it. */
 async function commitAndDeliver(tmpRepo: string, cwd: string, remote: PublishRemote, options: PublishGitOptions): Promise<void> {
-  const { publishDir, branch, commitMessage, force, dryRun, logger } = options;
+  const { publishDir, branch, commitMessage, dryRun, logger } = options;
   git(['init'], { cwd: tmpRepo });
   git(['config', 'user.email', 'vat-publish@localhost'], { cwd: tmpRepo });
   git(['config', 'user.name', 'vat marketplace publish'], { cwd: tmpRepo });
   git(['checkout', '-b', branch], { cwd: tmpRepo });
 
-  // Build on the branch's tip. Skipped for a dry run (the parent does not matter) and under
-  // --force (the push replaces the branch).
-  if (!dryRun && !force) {
+  // Build on the branch's tip — under --force (the push replaces the branch) only the probe runs.
+  // Skipped for a dry run, which contacts no remote.
+  if (!dryRun) {
     buildOnRemoteTip(tmpRepo, remote, options);
   }
 

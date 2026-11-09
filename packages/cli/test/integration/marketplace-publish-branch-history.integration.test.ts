@@ -81,6 +81,23 @@ describe('marketplace publish builds on the remote branch', () => {
     expect(runGitOrThrow(['rev-parse', decoy], { cwd: bareRemote })).toBe(seed);
   });
 
+  // git matches a push destination by its abbreviation rules too: with no `claude-marketplace` on
+  // the remote, `refs/heads/claude-marketplace` names `refs/heads/refs/heads/claude-marketplace`, so
+  // a plain push is rejected against it and a --force push overwrites it. v0.1.42 built on its
+  // history. No refspec makes git push to exactly the branch, so the publish refuses.
+  it.each([false, true])('refuses as CONFIG_INVALID, touching nothing, when the remote holds refs/heads/refs/heads/<branch> (--force: %s)', async (force) => {
+    const { bareRemote, publishDir } = setUp();
+    const decoy = `refs/heads/refs/heads/${BRANCH}`;
+    const seed = seedCommit(bareRemote, 'decoy');
+    runGitOrThrow(['update-ref', decoy, seed], { cwd: bareRemote });
+
+    const error = await publish(publishDir, bareRemote, '1.0.0', force).then(() => undefined, (rejected: unknown) => rejected);
+    expect(refusalCodeOf(error)).toBe('CONFIG_INVALID');
+    expect((error as Error).message).toContain(decoy);
+    expect(runGitOrThrow(['rev-parse', decoy], { cwd: bareRemote })).toBe(seed);
+    expect(runGitOrThrow(['for-each-ref', '--format=%(refname)'], { cwd: bareRemote })).toBe(decoy);
+  });
+
   // An unqualified push destination is expanded by git's prefix rules: with only a TAG of the
   // branch's name on the remote, `<branch>:<branch>` targets that tag (rejected, or overwritten under
   // --force), and once a branch of the name exists too, every push is refused as ambiguous.

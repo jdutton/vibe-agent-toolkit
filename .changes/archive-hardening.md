@@ -206,10 +206,10 @@
   runner, and the push was then rejected (`fetch first` / `non-fast-forward`). The publish now asks
   the remote whether the branch exists (`git ls-remote`). If it does, the publish fetches only the
   tip and builds on it; if it doesn't, the first commit has no parent. A remote that cannot be asked,
-  or a tip that cannot be fetched, is refused with `EXTERNAL_API_FAILED`. `--force` skips the check,
-  and `--no-push` still fetches the full history. No action needed.
+  or a tip that cannot be fetched, is refused with `EXTERNAL_API_FAILED`. `--force` builds on
+  nothing, and `--no-push` still fetches the full history. No action needed.
 - **A failed `vat claude marketplace publish` git step quoted git's stderr with the remote URL's
-  credentials in it**; they are now stripped. A
-  `git ls-remote` killed by its timeout says it timed out instead of `exit 1`. No action needed.
+  credentials in it**; they are now stripped. A `git ls-remote` killed by its timeout says it timed
+  out instead of `exit 1`. No action needed.
 - **A refused symbolic link was named by its target, and a refused rename by the entry being moved.**
   The message now names the link, and both ends of the rename; no action needed.
