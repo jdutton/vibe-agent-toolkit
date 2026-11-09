@@ -25,6 +25,7 @@ import { type DirectoryRefusal, transientRefusalClause } from './fs-utils.js';
 import { canonicalPath } from './path-containment.js';
 import { relativeEscapesRoot } from './path-core.js';
 import { safePath, toForwardSlash } from './path-utils.js';
+import { visibleText } from './shown-text.js';
 
 /**
  * What a caller that STOPS on a refusal tells the person reading the error.
@@ -144,7 +145,7 @@ const REFUSAL_GAP_CLAUSE =
  */
 export function refusedListingMessage(refusal: DirectoryRefusal, context: RefuseListingContext): string {
   const relative = toForwardSlash(safePath.relative(context.root, refusal.directory));
-  const where = relative === '' ? 'the scan root itself' : `the directory '${relative}'`;
+  const where = relative === '' ? 'the scan root itself' : `the directory '${visibleText(relative)}'`;
   const remedy = refusal.transient
     ? `${transientRefusalClause(refusal.code)}, so nothing is wrong with the tree — re-run before investigating anything.`
     : context.remedy;

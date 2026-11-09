@@ -57,7 +57,11 @@
  * can mistake either for success.
  */
 
+import { constants } from 'node:buffer';
+
 import { executeGitCommand } from '@vibe-validate/git';
+
+import { decodeTextContent } from './text-content.js';
 
 /**
  * 64 MiB. Chosen against `git ls-files -s -z`, the widest-output command here:
@@ -65,6 +69,22 @@ import { executeGitCommand } from '@vibe-validate/git';
  * 1 MiB default covers about 10,000 — a ceiling ordinary monorepos reach.
  */
 const DEFAULT_MAX_BUFFER = 64 * 1024 * 1024;
+
+/** The digits the hex transport writes, and nothing else (two per byte: see {@link isHexText}). */
+const HEX_DIGITS = /^[\da-f]*$/;
+
+/** Whether `text` is what the hex transport writes: pairs of lowercase hex digits. */
+function isHexText(text: string): boolean {
+  return text.length % 2 === 0 && HEX_DIGITS.test(text);
+}
+
+/**
+ * The most bytes {@link runGitBytes} can carry: its transport spells each byte as two hex
+ * characters, and the spawn THROWS (rather than reporting) when it builds a string longer than
+ * the engine allows. A larger `maxBuffer` is clamped to this, so an overrun is reported as one. Less
+ * 1 MiB of headroom: the spawn may hold a read chunk past `maxBuffer` before it stops the child.
+ */
+const HEX_MAX_BUFFER = Math.floor(constants.MAX_STRING_LENGTH / 2) - 1024 * 1024;
 
 /** Wall-clock ceiling on one invocation, so a hung remote cannot wedge a build. */
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -111,8 +131,10 @@ export interface GitRunOptions {
    * and 0x20 sorts below every printable character, so a path beginning with a
    * space is listed *first* — where the trim reaches it. The caller then holds a
    * path that does not exist, and every lookup against it reads as "not there"
-   * rather than as an error. Also pass `false` when the output is file content
-   * (`git show HEAD:file`), whose trailing newline is data.
+   * rather than as an error. What the object store holds — object contents, the
+   * paths a commit's trees name — is read with {@link runGitBytes} instead, which
+   * never trims. (An index listing, `ls-files -z`, still comes through here: a
+   * known defect.)
    *
    * `ls-files -s -z` does not need it: the mode occupies position 0.
    *
@@ -171,6 +193,69 @@ export interface GitRunResult {
  * ```
  */
 export function runGit(args: readonly string[], options: GitRunOptions = {}): GitRunResult {
+  return execute(args, options, 'utf8');
+}
+
+/**
+ * What one git command did, its stdout kept as the bytes git wrote — see {@link runGitBytes}.
+ * Everything else is {@link GitRunResult}'s.
+ */
+export interface GitBytesRunResult extends Omit<GitRunResult, 'stdout'> {
+  /** stdout, byte for byte: never decoded, never trimmed. */
+  stdout: Buffer;
+}
+
+/**
+ * {@link runGit}, with stdout handed back as the BYTES git wrote — the one way VAT reads what the
+ * object store holds: the paths a tree names (`ls-tree -z`), object contents (`cat-file`), and the
+ * readers of committed history that print either (`diff-tree`, `rev-list --objects`, `show`).
+ *
+ * Scope, stated rather than implied: this covers the OBJECT STORE. A working-tree index listing
+ * (`ls-files`) is still read as text through {@link runGit}; that lane is recorded in
+ * `docs/contributing/known-defects.md`.
+ *
+ * ## Why a string cannot carry them
+ *
+ * git stores a path and a blob as bytes, and a commit may hold bytes that are not UTF-8. A UTF-8
+ * decode replaces each invalid sequence with U+FFFD, so two committed paths can come back as one
+ * string, a path comes back spelled otherwise than the checkout writes it, and a stream framed by
+ * byte counts (`cat-file --batch`) changes length under the decode — a blob can then plant the
+ * next object's header. Decoding is the caller's judgment, made on the bytes, never the
+ * transport's. `local/no-text-git-object-read` reports an object-store argv literal anywhere but
+ * inline as this function's first argument; what a caller does with the bytes afterwards is its
+ * own judgment.
+ *
+ * Mechanically: the spawn runs with `encoding: 'hex'`, a binary-to-text codec, so its strings
+ * carry the bytes exactly and are turned back into them here. The spawn encodes `input` by the
+ * same codec, so `input` — text, written to git as UTF-8 as {@link runGit} writes it — is handed
+ * over as its UTF-8 bytes in hex. stderr is git's own message, decoded as text through the one
+ * decoding seam (`decodeTextContent`, held by `local/no-raw-text-decode`) and trimmed as
+ * {@link runGit}'s is. Hex doubles the string the spawn builds, so
+ * `maxBuffer` is clamped to half the engine's string limit less 1 MiB of headroom (about 255 MiB on
+ * 64-bit V8): past it the
+ * spawn would throw, and this function, like {@link runGit}, never throws.
+ *
+ * @param args - Arguments after the `git` executable
+ * @param options - {@link GitRunOptions}, less `trim`: bytes are never trimmed
+ * @returns The outcome, stdout as bytes
+ */
+export function runGitBytes(args: readonly string[], options: Omit<GitRunOptions, 'trim'> = {}): GitBytesRunResult {
+  const { input, maxBuffer = DEFAULT_MAX_BUFFER, ...rest } = options;
+  const hexInput = input === undefined ? {} : { input: Buffer.from(input, 'utf8').toString('hex') };
+  const capped = { maxBuffer: Math.min(maxBuffer, HEX_MAX_BUFFER), trim: false };
+  const result = execute(args, { ...rest, ...hexInput, ...capped }, 'hex');
+  // A spawn-level failure with no word from git arrives as the failure's own message, not as hex:
+  // told apart by its shape, never by matching the executor's wording.
+  const spawnMessage = !isHexText(result.stderr);
+  return {
+    ...result,
+    stdout: Buffer.from(result.stdout, 'hex'),
+    stderr: spawnMessage ? result.stderr : decodeTextContent(Buffer.from(result.stderr, 'hex')).text.trim(),
+  };
+}
+
+/** The one spawn behind {@link runGit} and {@link runGitBytes}: they differ only in how stdout is decoded. */
+function execute(args: readonly string[], options: GitRunOptions, encoding: 'utf8' | 'hex'): GitRunResult {
   if (args.length === 0) {
     // Handled here rather than by `executeGitCommand`, which THROWS on an empty
     // argv. This function's whole contract is that it never throws.
@@ -193,6 +278,7 @@ export function runGit(args: readonly string[], options: GitRunOptions = {}): Gi
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     ...(options.env === undefined ? {} : { env: options.env }),
     ...(options.input === undefined ? {} : { stdin: options.input }),
+    encoding,
     scrubGitEnv: options.ambient !== true,
     suppressStderr: options.suppressStderr ?? false,
     trimOutput: options.trim ?? true,

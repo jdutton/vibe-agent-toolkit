@@ -10,6 +10,7 @@ import { classifyFsFault, type FsSide } from '../errors/fs-fault.js';
 import { VatError } from '../errors/vat-error.js';
 import { toForwardSlash } from '../path-core.js';
 import { normalizePath } from '../path-utils.js';
+import { visibleText } from '../shown-text.js';
 
 /** The `VatError` code of a {@link DirectoryWalkRevisitedError}. */
 export const DIRECTORY_WALK_REVISITED_CODE = 'DIRECTORY_WALK_REVISITED';
@@ -19,7 +20,7 @@ export class DirectoryWalkRevisitedError extends VatError {
   constructor(dir: string, enteredAs: string) {
     super(
       DIRECTORY_WALK_REVISITED_CODE,
-      `Refusing to enter ${dir}: it is the directory already walked as ${enteredAs} — a symlink leads the walk back into itself.`,
+      `Refusing to enter ${visibleText(dir)}: it is the directory already walked as ${visibleText(enteredAs)} — a symlink leads the walk back into itself.`,
     );
   }
 }
@@ -85,7 +86,7 @@ export class CopyLinkEscapesSourceError extends VatError {
   constructor(link: string, src: string) {
     super(
       COPY_LINK_ESCAPES_SOURCE_CODE,
-      `Refusing to copy ${link}: it is a symlink to a path outside ${src}. ` +
+      `Refusing to copy ${visibleText(link)}: it is a symlink to a path outside ${visibleText(src)}. ` +
         'A copy follows links, so this would ship content the source tree does not own — ' +
         'replace the link with the files, or point it inside the tree.',
     );

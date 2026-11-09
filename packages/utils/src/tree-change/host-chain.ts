@@ -11,6 +11,7 @@ import { lstatSync, readlinkSync } from 'node:fs';
 import { isPathAbsentError, LINK_CHAIN_REFUSED_CODE } from '../errors/errno-table.js';
 import { isVatError, VatError } from '../errors/vat-error.js';
 import { safePath, toForwardSlash } from '../path-core.js';
+import { shownName, visibleText } from '../shown-text.js';
 
 import { type ChainProbe, type ChainRefusal, type ChainRule, type LinkChain, MAX_LINK_HOPS, type PlaceKind, walkLinkChain } from './link-chain.js';
 
@@ -50,19 +51,23 @@ export function walkHostChain(path: string, rule: ChainRule): LinkChain {
   return walkLinkChain(toForwardSlash(safePath.resolve(path)), rule, HOST_PROBE);
 }
 
-/** How each refusal reads, after "the symbolic link <link> ". */
+/**
+ * How each refusal reads, after "the symbolic link <link> "; the link's text shown, never raw —
+ * set off by the message, so unquoted ({@link visibleText}), except where the refusal is about the
+ * text's own last character: a trailing dot or space shows only between quotes ({@link shownName}).
+ */
 function refusalClause(refusal: ChainRefusal): string {
   switch (refusal.why) {
     case 'network':
-      return `leads to ${refusal.text}, a network or device path, which VAT never asks the OS to follow (a Windows host would offer the operator's credentials to it)`;
+      return `leads to ${visibleText(refusal.text)}, a network or device path, which VAT never asks the OS to follow (a Windows host would offer the operator's credentials to it)`;
     case 'hop-limit':
       return `starts a chain of more than ${MAX_LINK_HOPS.toString()} symbolic links that is not a cycle, so where it ends was never read`;
     case 'unportable':
-      return `has a text no kernel resolves as written (${JSON.stringify(refusal.text)}: a NUL, or a name ending in a dot or a space)`;
+      return `has a text no kernel resolves as written (${shownName(refusal.text)}: a NUL, or a name ending in a dot or a space)`;
     case 'absolute':
     case 'drive-relative':
     case 'climbs-out':
-      return `leads outside the tree it is in (${refusal.text})`;
+      return `leads outside the tree it is in (${visibleText(refusal.text)})`;
   }
 }
 
@@ -78,7 +83,7 @@ export class LinkChainRefusedError extends VatError {
   /** Why, with the link whose text decided it. */
   readonly refusal: ChainRefusal;
   constructor(path: string, refusal: ChainRefusal) {
-    super(LINK_CHAIN_REFUSED_CODE, `Refusing to resolve ${path}: the symbolic link ${refusal.link} ${refusalClause(refusal)} — replace the link with the files it names.`);
+    super(LINK_CHAIN_REFUSED_CODE, `Refusing to resolve ${visibleText(path)}: the symbolic link ${visibleText(refusal.link)} ${refusalClause(refusal)} — replace the link with the files it names.`);
     this.path = path;
     this.refusal = refusal;
   }

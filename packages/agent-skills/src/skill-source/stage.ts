@@ -9,6 +9,7 @@ import {
   mkdirSyncReal,
   readRegularFile,
   safePath,
+  shownName,
   toForwardSlash,
   VatError,
   withFsFault,
@@ -110,7 +111,7 @@ async function copyTreeNoSymlinks(src: string, dest: string, boundary: FsBoundar
     if (st.isSymbolicLink()) {
       // The operator's input refused on purpose — coded, so it is never published as a VAT defect.
       throw new SkillSourceUnreadableError(
-        `Refusing to stage symlink '${srcPath}': staging never traverses symlinked components (§7). `
+        `Refusing to stage symlink ${shownName(srcPath)}: staging never traverses symlinked components (§7). `
           + 'Replace the link with the file or directory it points at.',
       );
     }

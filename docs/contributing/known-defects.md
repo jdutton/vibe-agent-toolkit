@@ -602,6 +602,59 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 
 ## Git and crawl
 
+### An index listing (`ls-files -z`) is read as UTF-8 text, so a path that is not UTF-8 is re-spelled
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** yes (a wrong path, no refusal)
+- **Mechanism:** what the OBJECT STORE holds is read as bytes (`runGitBytes`, held there by
+  `local/no-text-git-object-read`), but every `ls-files -z` caller reads through `runGit`, which
+  decodes UTF-8 and replaces each invalid byte with U+FFFD. On a file system that stores name bytes
+  verbatim (Linux), a file named `\xff.md` is listed as `�.md`: a lookup misses it, and two such
+  names collapse into one. APFS refuses such names. NTFS accepts a name holding an unpaired
+  surrogate; what Git for Windows lists for it is NOT verified — read from its source, its
+  UTF-16-to-UTF-8 conversion writes U+FFFD (valid UTF-8, a re-spelling no byte read can see), but
+  if it writes the surrogate's own three bytes instead, a byte read does catch it.
+- **Traced in code**, not reproduced against the built CLI; the Windows case not reproduced at all.
+- **Where:** every product and dev-tools reader of the listing — `git grep -n "'ls-files'" -- 'packages/*/src/**'`
+  (in `utils`, `cli`, `lab` and `dev-tools`)
+- **Fix:** read the listing with `runGitBytes`, decide each path with `decodeUtf8Exactly` and refuse
+  (or report) the ones it cannot name; then add `ls-files` to the rule's subcommands. That fixes
+  Linux; reproduce the Windows case first — if git writes U+FFFD there, only comparing the listing
+  against `readdir` can find the name it re-spelled.
+
+### A git skill source's committed paths are judged for UTF-8 only, not for what the host can hold
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** yes (a different verdict per host)
+- **Mechanism:** a git skill source (`url:`, `vat audit <git url>`) refuses a committed path that is
+  not UTF-8 on every host, but nothing else about a path. Two paths that differ only by case or by
+  Unicode normalization (`SKILL.md` and `skill.md`, an NFC and an NFD `é.md`) are both checked out on
+  Linux, while NTFS and APFS keep one of them silently, so the same commit is audited with different
+  content per host. A path Windows cannot hold (`con.md`, `a:b`, `x.`) is checked out on Linux and
+  refused by Git for Windows at checkout (`Failed to check out the cloned commit`).
+- **Traced in code**, not reproduced against the built CLI.
+- **Where:** `committedPathText` in
+  [`git-clone.ts`](../../packages/agent-skills/src/skill-source/git-clone.ts)
+- **Fix:** judge every committed path on every host, as link texts already are: refuse a commit
+  whose paths collide once case-folded and NFC-normalized, and a path no Windows host can hold.
+
+### Nothing finds a refusal that shows a name it did not write without escaping it
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** not today on a git source
+- **Mechanism:** `shownName` / `visibleText` are the one way a message shows a path, a link's text or
+  a child process's words, but each message site has to call them. The sites a repository's names
+  reach today do: a git source's refusals, the tree-change link walk, the followed-walk refusals,
+  staging, a refused directory listing, and every `FsFaultError` (escaped once in its
+  constructor). Every other `VatError`
+  message that interpolates a path — a local skill source, a config path, an archive entry —
+  prints it as it is, and the next one written can forget. The link walk shows names unquoted
+  (set off by the message), so a name whose characters ARE a literal `\u202e` reads like one that
+  holds the override; the git source's own refusals quote them and are unambiguous.
+- **Traced in code**, not reproduced against the built CLI.
+- **Where:** every `new VatError(` / `super(` whose message interpolates a path —
+  `git grep -nE "super\(|new VatError\(" -- 'packages/*/src/**'`
+- **Fix:** escape once where a message is printed (the CLI's error writer, keeping the newlines a
+  message lays out), or a lint rule that reports a refusal template interpolating a value not
+  wrapped in `shownName` / `visibleText`.
+
 ### A one-file edit repopulates the whole tree
 
 - **Blocks:** the stable tag

@@ -18,6 +18,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { isUnresolvableLinkError } from '../src/errors/errno-table.js';
 import { FS_FAULT_CODE } from '../src/errors/fs-fault.js';
 import { safePath, toForwardSlash, toForwardSlashAnyPlatform } from '../src/path-core.js';
+import { visibleText } from '../src/shown-text.js';
 import { HOST_PATH_FLAVOR, type PathFlavor } from '../src/tree-change/link-chain.js';
 
 /** One entry of the fake tree, by its real path. */
@@ -212,6 +213,24 @@ describe('refuseEscapingLinks, a tree that will be relocated', () => {
     expect(refusal?.message).toContain(why);
   });
 
+  // Every way a relocated tree's link is refused shows the link's name and text by their escapes.
+  const esc = String.fromCodePoint(0x1b);
+  const rlo = String.fromCodePoint(0x20_2e);
+  it.each([
+    ['an absolute target', { [`skill/a${rlo}`]: '-> ' + safePath.join(ROOT, 'outside', 'k' + esc) }, 'k' + esc],
+    ['a climb out', { [`skill/c${rlo}`]: `-> ../../outside/k${esc}` }, `../../outside/k${esc}`],
+    ['a target through another link', { [`skill/al${rlo}`]: '-> docs', 'skill/via': `-> al${rlo}/x${esc}.md`, 'skill/docs/x.md': 'file' }, `al${rlo}`],
+    ['a target that is not there', { 'skill/gone': `-> miss${esc}.md` }, `miss${esc}.md`],
+  ])('shows %s by escapes, never raw', (_what, links, shown) => {
+    plant({ ...SKILL, ...links });
+
+    const message = refusalOf(relocated)?.message ?? '';
+
+    expect(message).toContain(visibleText(shown));
+    expect(message).not.toContain(esc);
+    expect(message).not.toContain(rlo);
+  });
+
   // A text naming a link it ends AT walks inside; only the kernel, following it, finds the cycle.
   it('refuses a link the kernel cannot resolve though its text walks inside — a cycle', () => {
     plant({ ...SKILL, 'skill/ping': '-> pong', 'skill/pong': '-> ping' });
@@ -266,6 +285,18 @@ describe('kernelRefusal', () => {
     refusedStat.set(link, 'EACCES');
 
     expect(() => kernelRefusal({ ...relocated, side: 'environment' }, unit, link, '../SKILL.md')).toThrow(expect.objectContaining({ code: FS_FAULT_CODE, side: 'environment' }));
+  });
+
+  it('shows the text of a link to nothing by its escapes, never raw', () => {
+    plant({ ...SKILL, 'skill/docs/up.md': '-> ../SKILL.md' });
+    refusedStat.set(link, 'ENOENT');
+    const esc = String.fromCodePoint(0x1b);
+
+    const text = `..${esc}/SKILL.md`;
+    const refusal = kernelRefusal(relocated, unit, link, text) ?? '';
+
+    expect(refusal).toContain(`(${visibleText(text)} does not resolve`);
+    expect(refusal).not.toContain(esc);
   });
 
   it('throws an error that is no filesystem errno raw', () => {
@@ -323,6 +354,27 @@ describe('refuseEscapingLinks, a tree read in place', () => {
 
     expect(refusalOf(inPlace)?.message).toContain(String.raw`b is a symbolic link whose target leads through an absolute path (\\attacker\share)`);
     expect(kernelFollowed).toEqual([]);
+  });
+
+  // A hostile tree's names reach the operator's terminal: the link's path and its text are shown by
+  // their escapes, never as the control or bidi characters they hold.
+  it('shows a refused link\'s path and text by escapes, never raw', () => {
+    const esc = String.fromCodePoint(0x1b);
+    const rlo = String.fromCodePoint(0x20_2e);
+    plant({ ...SKILL, [`skill/s${rlo}mb`]: `-> //attacker/share/${esc}[2J` });
+
+    const message = refusalOf(inPlace)?.message ?? '';
+    const bs = '\\';
+    expect(message).toContain(`s${bs}u202emb is a symbolic link whose target leads through an absolute path (//attacker/share/${bs}u001b[2J)`);
+    expect(message).not.toContain(esc);
+    expect(message).not.toContain(rlo);
+  });
+
+  // The refusal is about the text's last character, so the text is quoted: a trailing space shows.
+  it('refuses a link whose text ends in a space, quoting the text', () => {
+    plant({ ...SKILL, 'skill/sp': '-> SKILL.md ' });
+
+    expect(refusalOf(inPlace)?.message).toContain('sp is a symbolic link whose target names a component no Windows host can spell ("SKILL.md ")');
   });
 
   // A POSIX kernel follows `up` before the `..` after it; a Windows kernel collapses `up/..` by string first.

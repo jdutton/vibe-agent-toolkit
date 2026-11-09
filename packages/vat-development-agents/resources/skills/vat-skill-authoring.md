@@ -217,7 +217,7 @@ Import from the narrow subpath rather than the `.` barrel. The package sets `"si
 | `@vibe-agent-toolkit/utils/path` | `safePath.join/resolve/relative`, `toForwardSlash`, `toAbsolutePath`, `getRelativePath`, `isAbsolutePath`, `isAbsoluteAnyPlatform`, `hasParentTraversalSegment` |
 | `@vibe-agent-toolkit/utils/fs` | `normalizePath`, `normalizedTmpdir`, `mkdirSyncReal`, `resolveFromImportMeta`, `dynamicImportPath` |
 | `@vibe-agent-toolkit/utils/process` | `safeExecSync`, `safeExecResult`, `spawnHardened`, `shouldUseShell`, `windowsShellQuote`, `buildWindowsShellLine`, `makeStdioBlocking` |
-| `@vibe-agent-toolkit/utils/git` | `runGit`, `runGitOrThrow`, `gitFindRoot`, `gitLsFiles`, `isGitIgnored`, `loadGitignoreRules`, `GitTracker` |
+| `@vibe-agent-toolkit/utils/git` | `runGit`, `runGitOrThrow`, `runGitBytes`, `gitFindRoot`, `gitLsFiles`, `isGitIgnored`, `loadGitignoreRules`, `GitTracker` |
 
 The concrete failures these prevent:
 
@@ -226,7 +226,7 @@ The concrete failures these prevent:
 - **Spawning an npm-installed CLI.** On Windows those are `.cmd`/`.bat` shims that cannot be spawned directly; a naive `spawn` fails with `EINVAL` or `ENOENT`. Use `spawnHardened()` for async streaming work and `safeExecSync()`/`safeExecResult()` for synchronous calls — they pick the shell correctly and quote for it. `shouldUseShell()`, `windowsShellQuote()`, and `buildWindowsShellLine()` are there if you must hand-roll the invocation.
 - **`await import()` of an absolute path.** Windows rejects a bare absolute path as a module specifier (`ERR_UNSUPPORTED_ESM_URL_SCHEME`) because it is not a `file://` URL. Use `dynamicImportPath()`, and `resolveFromImportMeta()` for paths relative to an `import.meta.url`.
 - **Output truncated by `process.exit()`.** A published bin can exit before stdout flushes, printing nothing on the run that mattered. `makeStdioBlocking()` closes that.
-- **Build guards and gates that need git.** `gitFindRoot()`, `gitLsFiles()`, `isGitIgnored()`, `loadGitignoreRules()`, and `GitTracker` (cached, for repeated checks) cover repository introspection without shelling out by hand. To run git yourself, use `runGit()`/`runGitOrThrow()` from the same subpath: `safeExecSync()` refuses the `git` binary outright, so the scrubbed environment is what you get by construction rather than by remembering to ask for it.
+- **Build guards and gates that need git.** `gitFindRoot()`, `gitLsFiles()`, `isGitIgnored()`, `loadGitignoreRules()`, and `GitTracker` (cached, for repeated checks) cover repository introspection without shelling out by hand. To run git yourself, use `runGit()`/`runGitOrThrow()` from the same subpath: `safeExecSync()` refuses the `git` binary outright, so the scrubbed environment is what you get by construction rather than by remembering to ask for it. Read what a commit holds (`ls-tree`, `cat-file`, `show`) with `runGitBytes()`: paths and blobs are bytes, and a UTF-8 decode re-spells any that are not UTF-8.
 
 If your project writes this kind of tooling regularly, ban raw `path.join`/`resolve`/`relative` with a lint rule and point it at `safePath` — the separator bug is invisible on the author's machine and only ever appears in someone else's CI.
 

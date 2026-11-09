@@ -17,6 +17,7 @@ import { VatError } from '../errors/vat-error.js';
 import { requireFollowedStatSync } from '../link-following.js';
 import { canonicalPath, isUnderRoot } from '../path-containment.js';
 import { safePath, toForwardSlash } from '../path-core.js';
+import { shownName, visibleText } from '../shown-text.js';
 
 import { COPY_LINK_ESCAPES_SOURCE_CODE } from './followed-walk.js';
 import { hostPlaceKind, walkHostChain } from './host-chain.js';
@@ -90,38 +91,41 @@ export function treeChain(root: string, path: string, flavor: PathFlavor): LinkC
 function linkRefusal(check: LinkContainmentCheck, link: string, what: string): VatError {
   return new VatError(
     COPY_LINK_ESCAPES_SOURCE_CODE,
-    `Refusing ${check.tree}: ${safePath.relative(canonicalPath(check.root, check.root), link)} is a symbolic link ${what}. ` +
+    `Refusing ${check.tree}: ${visibleText(safePath.relative(canonicalPath(check.root, check.root), link))} is a symbolic link ${what}. ` +
       `${check.consequence} — replace the link with the files, or point it inside with a relative target.`,
   );
 }
 
-/** How a refused chain reads, after "is a symbolic link "; `text` is the link's own. */
-function describedChainRefusal(check: LinkContainmentCheck, text: string, refusal: ChainRefusal): string {
+/** How a refused chain reads, after "is a symbolic link "; `link` is the link's own text. Every text shown, never raw. */
+function describedChainRefusal(check: LinkContainmentCheck, link: string, refusal: ChainRefusal): string {
+  const text = visibleText(link);
   switch (refusal.why) {
     case 'network':
     case 'absolute':
     case 'drive-relative':
-      return `whose target leads through an absolute path (${refusal.text}), which names a place outside ${check.within}`;
+      return `whose target leads through an absolute path (${visibleText(refusal.text)}), which names a place outside ${check.within}`;
     case 'climbs-out':
       return `to a path outside ${check.within} (${text})`;
     case 'hop-limit':
       return `whose target starts a chain of more than ${MAX_LINK_HOPS.toString()} symbolic links that is not a cycle, so where it ends cannot be shown`;
     case 'unportable':
-      return `whose target names a component no Windows host can spell (${refusal.text}): a NUL, or a name ending in a dot or a space that Windows strips`;
+      // Quoted: the refusal is about the text's last character, and a trailing space shows only between quotes.
+      return `whose target names a component no Windows host can spell (${shownName(refusal.text)}): a NUL, or a name ending in a dot or a space that Windows strips`;
   }
 }
 
-/** How each refusal of a link's text reads, after "is a symbolic link ". */
-function describedRefusal(check: LinkContainmentCheck, text: string, refusal: LinkTextRefusal): string {
+/** How each refusal of a link's text reads, after "is a symbolic link ". Every text shown, never raw. */
+function describedRefusal(check: LinkContainmentCheck, link: string, refusal: LinkTextRefusal): string {
+  const text = visibleText(link);
   switch (refusal.why) {
     case 'absolute':
       return `with an absolute target (${text}), which would still point there once ${check.within} is copied`;
     case 'climbs-out':
       return `to a path outside ${check.within} (${text})`;
     case 'through-link':
-      return `whose target passes through another symbolic link (${refusal.at}), so where ${text} leads depends on where ${check.within} is copied`;
+      return `whose target passes through another symbolic link (${visibleText(refusal.at)}), so where ${text} leads depends on where ${check.within} is copied`;
     case 'dangling':
-      return `to nothing (${refusal.at} does not exist), so where it would lead once ${check.within} is copied cannot be shown`;
+      return `to nothing (${visibleText(refusal.at)} does not exist), so where it would lead once ${check.within} is copied cannot be shown`;
   }
 }
 
@@ -156,10 +160,10 @@ export function kernelRefusal(check: LinkContainmentCheck, root: string, link: s
     if (fault === undefined) throw error;
     // The action names the link: a refusal on its chain names the place refused, which may be its target.
     assertUnresolvableLink(error, { side: check.side, origin: 'content', action: `resolve the symbolic link ${link}`, path: link });
-    return `to nothing (${text} does not resolve: ${fault.errno}), so where it would lead once ${check.within} is copied cannot be shown`;
+    return `to nothing (${visibleText(text)} does not resolve: ${fault.errno}), so where it would lead once ${check.within} is copied cannot be shown`;
   }
   // It resolves, so its canonical path is its real one.
-  return treeContainment(root, link) === 'inside' ? undefined : `to a path outside ${check.within} (${text} resolves outside it)`;
+  return treeContainment(root, link) === 'inside' ? undefined : `to a path outside ${check.within} (${visibleText(text)} resolves outside it)`;
 }
 
 /** Why one link may not be kept, or the directory it leads to for the walk to enter (`enter`), or neither. */
