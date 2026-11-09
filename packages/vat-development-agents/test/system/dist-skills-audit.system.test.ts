@@ -22,7 +22,7 @@ const distSkillsDir = safePath.join(packageRoot, 'dist/skills');
 // The cli is a workspace dependency, so `^build` has built its binary.
 const cliBin = safePath.join(packageRoot, '../cli/dist/bin.js');
 
-/** Run `vat audit --verbose <dir>`; exit 1 (findings) is a result, not a failure. */
+/** Run `vat audit --verbose <dir>`, returning its exit code instead of throwing on a non-zero one. */
 async function audit(dir: string): Promise<{ status: number; stdout: string; stderr: string }> {
   try {
     const { stdout, stderr } = await promisify(execFile)(NODE_EXECUTABLE, [cliBin, 'audit', '--verbose', dir], {
@@ -43,7 +43,8 @@ describe('vat audit of the built skills (system test)', () => {
 
     const result = await audit(distSkillsDir);
 
-    expect([0, 1], result.stderr).toContain(result.status);
+    // Exit 1 is an error-severity finding in a skill this package ships, which is a failure here.
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     const parsed = (yaml.parseAllDocuments(result.stdout)[0]?.toJSON() ?? {}) as Record<string, unknown>;
     expect(parsed['examined']).toBeGreaterThan(1);
   });

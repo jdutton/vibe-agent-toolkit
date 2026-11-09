@@ -16,7 +16,9 @@
  *
  * ⚠️ The headroom is EMPIRICAL. `measureBudget()` times `vat resources check --budget 0`, so it
  * bounds the CHILD's population, not the `resources` phase's — which `vat validate` runs first and
- * nothing here measures. That the multiple holds is observed on the CI runners, not derived.
+ * nothing here measures. That the multiple holds is observed on the CI runners, not derived —
+ * and on Windows it was observed with the system tier on ONE worker; at two, a sibling fork can
+ * load the machine between the measurement and the run it sizes. Re-observe it there if it reds.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
