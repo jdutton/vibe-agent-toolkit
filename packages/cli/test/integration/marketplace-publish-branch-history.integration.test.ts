@@ -30,17 +30,24 @@ function setUp(): { root: string; bareRemote: string; publishDir: string } {
   return { root, ...bareRemoteAndPublishDir(root) };
 }
 
-function publish(publishDir: string, remote: string, version: string): Promise<unknown> {
+function publish(publishDir: string, remote: string, version: string, force = false): Promise<unknown> {
   fs.writeFileSync(safePath.join(publishDir, 'marketplace.json'), JSON.stringify({ name: 'm', version }));
   return publishToGitBranch({
     publishDir, branch: BRANCH, remote, remoteFromConfig: true, commitMessage: `publish v${version}`,
-    force: false, dryRun: false, noPush: false, logger: silentLogger,
+    force, dryRun: false, noPush: false, logger: silentLogger,
   });
 }
 
-/** The branch's commits on the remote, newest first, as `<subject>` lines. */
+/** The branch's commits on the remote, newest first, as `<subject>` lines — by full ref, so a same-named tag cannot answer. */
 function history(bareRemote: string): string[] {
-  return String(runGitOrThrow(['log', '--format=%s', BRANCH], { cwd: bareRemote })).trim().split('\n');
+  return String(runGitOrThrow(['log', '--format=%s', `refs/heads/${BRANCH}`], { cwd: bareRemote })).trim().split('\n');
+}
+
+/** A parentless commit with an empty tree in `bareRemote`, subject `subject`. */
+function seedCommit(bareRemote: string, subject: string): string {
+  const identity = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@localhost', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@localhost' };
+  const emptyTree = runGitOrThrow(['mktree'], { cwd: bareRemote, input: '' });
+  return runGitOrThrow(['commit-tree', emptyTree, '-m', subject], { cwd: bareRemote, env: identity });
 }
 
 describe('marketplace publish builds on the remote branch', () => {
@@ -54,10 +61,64 @@ describe('marketplace publish builds on the remote branch', () => {
     await publish(publishDir, bareRemote, '1.0.0');
     expect(history(bareRemote)).toEqual(['publish v1.0.0']);
 
+    // A `refs/remotes/` alias is a WEAK push-destination match, which the existing branch
+    // outranks: the publishes go ahead and never touch it.
+    const weak = `refs/remotes/refs/heads/${BRANCH}`;
+    const seed = seedCommit(bareRemote, 'weak');
+    runGitOrThrow(['update-ref', weak, seed], { cwd: bareRemote });
+
     await publish(publishDir, bareRemote, '1.0.1');
     await publish(publishDir, bareRemote, '1.0.2');
     // Each publish's parent is the previous tip: the plain (non-force) push fast-forwarded.
     expect(history(bareRemote)).toEqual(['publish v1.0.2', 'publish v1.0.1', 'publish v1.0.0']);
+    expect(runGitOrThrow(['rev-parse', weak], { cwd: bareRemote })).toBe(seed);
+  });
+
+  // `git ls-remote <url> refs/heads/<branch>` matches the pattern against the TAIL of each ref, so
+  // a remote with no `claude-marketplace` but a `x/refs/heads/claude-marketplace` answers exit 0.
+  it('starts an orphan when the remote holds only a branch whose name ENDS in refs/heads/<branch>', async () => {
+    const { bareRemote, publishDir } = setUp();
+    const decoy = `refs/heads/x/refs/heads/${BRANCH}`;
+    const seed = seedCommit(bareRemote, 'decoy');
+    runGitOrThrow(['update-ref', decoy, seed], { cwd: bareRemote });
+
+    await publish(publishDir, bareRemote, '1.0.0');
+    expect(history(bareRemote)).toEqual(['publish v1.0.0']);
+    // The decoy is untouched and is not the new branch's parent.
+    expect(runGitOrThrow(['rev-parse', decoy], { cwd: bareRemote })).toBe(seed);
+  });
+
+  // git matches a push destination by its abbreviation rules too: with no `claude-marketplace` on
+  // the remote, `refs/heads/claude-marketplace` names `refs/heads/refs/heads/claude-marketplace`, so
+  // a plain push is rejected against it and a --force push overwrites it. v0.1.42 built on its
+  // history. No refspec makes git push to exactly the branch, so the publish refuses.
+  it.each([false, true])('refuses as INPUT_UNREADABLE, touching nothing, when the remote holds refs/heads/refs/heads/<branch> (--force: %s)', async (force) => {
+    const { bareRemote, publishDir } = setUp();
+    const decoy = `refs/heads/refs/heads/${BRANCH}`;
+    const seed = seedCommit(bareRemote, 'decoy');
+    runGitOrThrow(['update-ref', decoy, seed], { cwd: bareRemote });
+
+    const error = await publish(publishDir, bareRemote, '1.0.0', force).then(() => undefined, (rejected: unknown) => rejected);
+    expect(refusalCodeOf(error)).toBe('INPUT_UNREADABLE');
+    expect((error as Error).message).toContain(decoy);
+    expect(runGitOrThrow(['rev-parse', decoy], { cwd: bareRemote })).toBe(seed);
+    expect(runGitOrThrow(['for-each-ref', '--format=%(refname)'], { cwd: bareRemote })).toBe(decoy);
+  });
+
+  // An unqualified push destination is expanded by git's prefix rules: with only a TAG of the
+  // branch's name on the remote, `<branch>:<branch>` targets that tag (rejected, or overwritten under
+  // --force), and once a branch of the name exists too, every push is refused as ambiguous.
+  it('creates refs/heads/<branch> beside a same-named tag, and never touches the tag, with or without --force', async () => {
+    const { bareRemote, publishDir } = setUp();
+    const tag = `refs/tags/${BRANCH}`;
+    const tagged = seedCommit(bareRemote, 'tagged');
+    runGitOrThrow(['update-ref', tag, tagged], { cwd: bareRemote });
+
+    await publish(publishDir, bareRemote, '1.0.0');
+    expect(history(bareRemote)).toEqual(['publish v1.0.0']);
+    await publish(publishDir, bareRemote, '1.0.1', true);
+    expect(history(bareRemote)).toEqual(['publish v1.0.1']);
+    expect(runGitOrThrow(['rev-parse', tag], { cwd: bareRemote })).toBe(tagged);
   });
 
   it('refuses as EXTERNAL_API_FAILED when the remote cannot be asked, and pushes nothing', async () => {
