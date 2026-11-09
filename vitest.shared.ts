@@ -11,7 +11,8 @@
  * Both unit and integration pools are capped at `maxWorkers: 2` on ALL platforms (one
  * exception: `cli`'s integration tier, see `cliIntegrationTestWorkers`) — integration
  * test files load native ML models (onnxruntime, transformers) + LanceDB's Arrow engine,
- * each ~1-3GB resident in NATIVE memory (not the JS heap, so provider.close() can't reclaim it — only worker exit does). Leaving this unbounded on Unix once spawned
+ * each ~1-3GB resident in NATIVE memory (not the JS heap, so provider.close() can't reclaim
+ * it — only worker exit does). Leaving this unbounded on Unix once spawned
  * ~availableParallelism (~10) such workers at once, swapping the machine and OOM-killing
  * workers (surfaces as ERR_IPC_CHANNEL_CLOSED, not a test failure) — see commit 9f7ad9c9.
  *
@@ -166,7 +167,8 @@ export const unitTierTimeouts = tierTimeouts(unitTestTimeout, unitHookTimeout);
 export const unitPool = process.platform === 'win32' ? 'forks' : 'threads';
 
 /**
- * Worker cap, shared by every tier.
+ * Worker cap, shared by every tier — the one exception is a package that raises
+ * its integration tier's cap ({@link cliIntegrationTestWorkers}).
  *
  * One number now covers both pools. Under vitest 3 this was two knobs
  * (`maxForks` for the Windows fork pool, `maxThreads` for the Unix thread pool)
@@ -326,9 +328,11 @@ export const cliIntegrationTestWorkers = 4;
  * `top-level-build` shard, `projection-skill-extent-corpus`, `cli-basics`,
  * `rag clear`): 93-389 MB per fork; not yet sampled on Windows. 1536 MB is the
  * 1024 MB V8 heap cap ({@link integrationExecArgv}) plus 512 MB for everything
- * outside it, so four in-budget forks come to at most 6 GB of a 16 GB runner,
- * beside the native-memory chain's one package at a time (2 forks). A detector,
- * not a limit: a file past it fails, named, after it ran.
+ * outside it, so four in-budget forks come to at most 6 GB of a 16 GB runner.
+ * Beside them, under turbo's `--concurrency=4`, run up to three other packages'
+ * 2 forks each — at most one of them from the native-memory chain (2 x 1-3 GB):
+ * 10 forks on 4 vCPU at worst, where the cap of 2 everywhere allowed 8. A
+ * detector, not a limit: a file past it fails, named, after it ran.
  */
 export const forkRssBudgetMb = 1536;
 
