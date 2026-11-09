@@ -106,13 +106,16 @@ Exit Codes:
       render, a configured changelog/readme/license file that does not exist,
       an unknown git remote), INPUT_UNREADABLE (no build output, or build
       output with no readable marketplace.json — run vat build; a changelog
-      with no release notes for this version),
-      EXTERNAL_API_FAILED (the push was rejected), RUN_INCOMPLETE (a git step
-      failed)
+      with no release notes for this version; a remote ref git push would
+      take for the branch; a GIT_CONFIG_COUNT that is not plain decimal),
+      BACKEND_UNAVAILABLE (publishing with GH_TOKEN/GITHUB_TOKEN needs git
+      2.31+), EXTERNAL_API_FAILED (the remote could not be read or fetched,
+      or the push was rejected), RUN_INCOMPLETE (a git step failed; the
+      branch moved during the publish — run it again)
 
 Example:
   $ vat build && vat claude marketplace publish --no-push  # Create local branch
-  $ git push origin claude-marketplace                     # Push when ready
+  $ git push origin refs/heads/claude-marketplace:refs/heads/claude-marketplace  # Push when ready
 `);
 
   return command;

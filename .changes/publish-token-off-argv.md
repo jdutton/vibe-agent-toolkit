@@ -21,3 +21,4 @@
   history of a remote `refs/heads/refs/heads/<branch>`, or a remote tag of the branch's name. It now
   publishes exactly `refs/heads/<branch>`, and refuses with `INPUT_UNREADABLE` while the remote holds
   a ref git would take for it (such as `refs/heads/refs/heads/<branch>`): delete or rename that ref.
+  A branch that moves during the publish is refused with `RUN_INCOMPLETE`: run it again.

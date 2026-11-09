@@ -366,11 +366,15 @@ const LS_REMOTE_NO_MATCH = 2;
  * inferred from a failed fetch (that once built an orphan the push rejected). Only the tip is
  * fetched, except under `--no-push`, which copies the history into the caller's repo. The commit
  * builds on the probed sha: a fetch source is matched by abbreviation too, so a moved remote
- * refuses. `--force` builds on nothing, but still refuses a ref the push would take ({@link remoteTipOf}).
+ * refuses. `--force` builds on nothing, but still refuses a ref the push would take ({@link remoteTipOf});
+ * `--force --no-push` pushes nothing either, so it asks the remote nothing.
  */
 function buildOnRemoteTip(tmpRepo: string, remote: PublishRemote, options: Pick<PublishGitOptions, 'branch' | 'force' | 'noPush' | 'logger'>): void {
+  if (options.force && options.noPush) {
+    return;
+  }
   const ref = `refs/heads/${options.branch}`;
-  const tip = remoteTipOf(tmpRepo, remote, ref);
+  const tip = remoteTipOf(tmpRepo, remote, ref, !options.noPush);
   if (options.force) {
     return;
   }
@@ -393,10 +397,11 @@ function buildOnRemoteTip(tmpRepo: string, remote: PublishRemote, options: Pick<
 /**
  * The sha `remote` holds at exactly `ref`, or `undefined` when it holds no such branch. Read from
  * the listing, not the exit status: `ls-remote` matches its pattern against each ref's TAIL.
- * 🔴 Refuses while the remote holds a ref `git push` would take for `ref` ({@link pushDestinationAliases}):
- * no refspec spells "exactly this ref" to git push.
+ * 🔴 When `pushing`, refuses while the remote holds a ref `git push` would take for `ref`
+ * ({@link pushDestinationAliases}): no refspec spells "exactly this ref" to git push. One created after
+ * this probe is rejected as non-fast-forward without `--force`; with it, that push is what was asked.
  */
-function remoteTipOf(tmpRepo: string, remote: PublishRemote, ref: string): string | undefined {
+function remoteTipOf(tmpRepo: string, remote: PublishRemote, ref: string, pushing: boolean): string | undefined {
   const probe = gitAtRemote(remote, ['ls-remote', '--exit-code'], [ref, `${ref}/HEAD`], { cwd: tmpRepo, allowFailure: true });
   if (probe.status === LS_REMOTE_NO_MATCH) {
     return undefined;
@@ -411,7 +416,7 @@ function remoteTipOf(tmpRepo: string, remote: PublishRemote, ref: string): strin
       listed.set(name, sha);
     }
   }
-  const clashes = pushDestinationAliases(ref, listed.has(ref)).filter((name) => listed.has(name));
+  const clashes = pushing ? pushDestinationAliases(ref, listed.has(ref)).filter((name) => listed.has(name)) : [];
   if (clashes.length > 0) {
     throw new CommandRefusalError(
       'INPUT_UNREADABLE',
@@ -443,8 +448,7 @@ async function commitAndDeliver(tmpRepo: string, cwd: string, remote: PublishRem
   git(['config', 'user.name', 'vat marketplace publish'], { cwd: tmpRepo });
   git(['checkout', '-b', branch], { cwd: tmpRepo });
 
-  // Build on the branch's tip — under --force (the push replaces the branch) only the probe runs.
-  // Skipped for a dry run, which contacts no remote.
+  // Build on the branch's tip; skipped for a dry run, which contacts no remote.
   if (!dryRun) {
     buildOnRemoteTip(tmpRepo, remote, options);
   }

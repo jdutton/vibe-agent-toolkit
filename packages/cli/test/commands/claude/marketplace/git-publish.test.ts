@@ -292,6 +292,32 @@ describe('git-publish', () => {
       });
     });
 
+    // --no-push pushes nothing, so a ref the push would take for the branch is no reason to refuse.
+    it.each([
+      ...STRONG.map((alias) => [alias, true] as const),
+      ...[...STRONG, ...WEAK].map((alias) => [alias, false] as const),
+    ])('publishes under --no-push beside %s (refs/heads/b listed: %s), building on the exact branch only', async (alias, exact) => {
+      gitBy({}, { ...CLEAN_STDOUT, 'ls-remote': `${exact ? EXACT_LINE : ''}${OTHER}\t${alias}` });
+      expect(await publish({ noPush: true }).then(() => undefined, (rejected: unknown) => rejected)).toBeUndefined();
+      expect(calls('fetch')).toEqual(exact ? [['fetch', '--', REMOTE, 'refs/heads/b']] : []);
+    });
+
+    // --force --no-push builds on nothing and pushes nothing: it works offline, as it did before the probe.
+    it('contacts no remote under --force --no-push: no ls-remote, no version, no auth environment', async () => {
+      vi.stubEnv('GH_TOKEN', 'ghp_OFFLINE');
+      vi.stubEnv('GIT_CONFIG_COUNT', 'two');
+      gitBy({ diff: 1 }, { ...CLEAN_STDOUT, version: 'git version 2.25.1' });
+      try {
+        await publish({ force: true, noPush: true, remote: 'https://github.com/o/r.git' });
+      } finally {
+        vi.unstubAllEnvs();
+      }
+      expect(calls('ls-remote')).toEqual([]);
+      expect(calls('version')).toEqual([]);
+      expect(calls('commit')).toHaveLength(1);
+      expect(calls('fetch').map((args) => args[2])).toEqual([expect.stringContaining('vat-marketplace-publish-')]);
+    });
+
     // `publish.remote` is config text that lands in git's argv: it must never be read as an
     // option, and git's stderr — which echoes the remote URL, token and all — is redacted.
     describe('remote hardening', () => {
