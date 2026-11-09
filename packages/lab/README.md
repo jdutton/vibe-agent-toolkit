@@ -137,9 +137,13 @@ single-command facet runs are one-step sequences under `<arms root>/<build>-<com
   `--arms-dir` at a time:** nothing locks it, and every arm under it — the `npx:` install arm
   included — is emptied when its run starts, so two concurrent invocations sharing one `--arms-dir`
   delete each other's stores and installs. The default run directory is fresh per invocation.
-  **Not isolated by the root:** Node resolves a module up the directory tree, so an optional peer
-  the cli loads on demand (`@vibe-agent-toolkit/rag`, say) that an `npx:` install lacks can load
-  from a `node_modules` ABOVE the arms root — code outside the install's closure digest.
+  **Module resolution stays in an `npx:` install:** Node resolves a module up the directory tree,
+  so an optional peer the cli loads on demand (`@vibe-agent-toolkit/rag`, say) that the install
+  lacks would load from a `node_modules` ABOVE the arms root (`/tmp/node_modules` is world-writable
+  on Linux). For every optional peer the installed cli's manifest declares and the install lacks,
+  the lab writes a stub package in the install's own `node_modules`; Node stops there and fails the
+  load as `ERR_MODULE_NOT_FOUND` — the cli's "backend not installed". A `tree:` or `dist:` build
+  resolves from where it lies, as it would for its operator.
 - **The default run directory ends with the capture.** When the capture ends — passed or failed —
   the lab removes the whole `run-*` directory (stores, caches, npm's fetch) and prints
   `Removed arms under <root>`; `--keep-arms` keeps it and prints `Kept arms under <root>`. A named
@@ -183,11 +187,14 @@ single-command facet runs are one-step sequences under `<arms root>/<build>-<com
   per install, before any repeat: the entry is looked for only where the named package's own cli
   lives, its `package.json` must name `@vibe-agent-toolkit/cli` at the pin, its real path must lie
   inside the install, and it must start (`--version` exits 0 — `bin.js` and its static imports
-  load). npm gets its own fixed install timeout, never `--timeout-ms`. Identity is per install:
-  third-party ranges float, so a fresh install of the same pin can digest to another closure.
-  A nested `vat` call from the subject's own scripts in an `npx:` arm resolves through the
-  subject's install, not the pin: the install's path is made at run time, so no `--env VAT_BIN`
-  can name it.
+  load). npm gets its own fixed install timeout, never `--timeout-ms`. Its closure is the one
+  definition every kind stamps — the cli and its `@vibe-agent-toolkit/*` packages — so an `npx:`
+  build matches a `dist:` build of the same bytes, the umbrella and the cli pins of one version
+  match, and a floated third-party dependency moves nothing: third-party code is not identity for
+  any kind. A nested `vat` call from the subject's own scripts in an `npx:` arm resolves through
+  the subject's install, not the pin — the lab sets no `VAT_BIN` for it; to pin nested calls too,
+  use a `dist:` arm over a private install plus a shim
+  ([recipe](../../docs/contributing/vat-debugging.md#crucible-runs)).
 - **A populating arm asks the build for its parse directory**, from its entry — never a guess.
   An arm whose own `--env` turns caching off
   (`VAT_PROJECTION_STORE=off`, `VAT_CACHE=0`) is checked for writing nothing there instead, so a

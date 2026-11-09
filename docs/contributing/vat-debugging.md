@@ -166,12 +166,33 @@ own npm cache, never the operator's global or local install) and runs that insta
 `@vibe-agent-toolkit/cli/dist/bin.js` with node — the CLI itself, not the wrapper that re-resolves
 vat from the *subject's* cwd — so every command the lab runs is the pinned version. The spec must
 be `vibe-agent-toolkit` or `@vibe-agent-toolkit/cli` at an exact version; any other package,
-ranges, dist-tags, paths and URLs are refused. The closure is digested from that install, and
-third-party ranges float, so two installs of one pin can carry different closures
-([run harness](../../packages/lab/docs/run-harness.md)). **Not the pinned version:** a nested `vat`
-call made by the subject's own scripts or hooks resolves through the subject's own install (on
-VAT's own tree, its checkout). The install's path is made at run time, so there is no `VAT_BIN` to
-hand this arm; nested calls in it measure whatever the subject has installed.
+ranges, dist-tags, paths and URLs are refused. Its closure is the same digest a `dist:` build of
+those bytes stamps — the cli and its `@vibe-agent-toolkit/*` packages, never third-party code
+([run harness](../../packages/lab/docs/run-harness.md)). **Not the pinned version:** the lab sets
+no `VAT_BIN` or `VAT_ROOT_DIR` for this arm, and its install lives at a lab-internal path emptied
+each run, so a nested `vat` call made by the subject's own scripts or hooks resolves through the
+subject's own install (on VAT's own tree, its checkout).
+
+When the baseline must pin nested calls too, use a `dist:` arm over a private install plus a
+shim instead. Install the RC into a private prefix, so it never touches the operator's own
+global/local install:
+
+```bash
+npm install --prefix "$HOME/.cache/vat-lab/instruments/<ver>" --no-save --ignore-scripts \
+  @vibe-agent-toolkit/cli@<ver>
+```
+
+Then make a shim directory whose `packages/cli/dist` symlinks to that install's
+`node_modules/@vibe-agent-toolkit/cli/dist`, and name both:
+
+```bash
+--instrument dist:"$HOME/.cache/vat-lab/instruments/<ver>/node_modules/@vibe-agent-toolkit/cli/dist" \
+--env VAT_BIN="$HOME/.cache/vat-lab/instruments/<ver>/node_modules/@vibe-agent-toolkit/cli/dist/bin.js" \
+--env VAT_ROOT_DIR="$HOME/.cache/vat-lab/shims/<ver>"
+```
+
+Both overrides, as for the candidate below: an adopter's already-installed wrapper predates
+`VAT_BIN` and honours only `VAT_ROOT_DIR`.
 
 **Candidate arm** — the worktree under test:
 

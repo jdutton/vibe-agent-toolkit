@@ -117,7 +117,9 @@ export interface InstrumentVersion {
    * SHA-256 over the arm's whole module closure — the cli package and every
    * `@vibe-agent-toolkit/*` package it resolves, transitively, each as its
    * `package.json` plus every file under its `dist/` (see
-   * `harness/closure.ts`) — or, for an `npx:` arm, its install's whole `node_modules`.
+   * `harness/closure.ts`). One definition for every kind — an `npx:` arm's starts
+   * at its installed cli — and third-party code is part of none: a floated
+   * dependency does not make another instrument.
    *
    * **The field that identifies the BYTES.** A `dist:` arm has no commit, so
    * before this two `dist:` arms of one version were the same instrument to

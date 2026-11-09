@@ -167,10 +167,19 @@ const NPM_CONFIG = /^npm_config_/iu;
  * the developer's identity and config files (`userconfig`, `_auth`, a `//host/:…`
  * token, `cert`/`key`), and everything that changes what npm does
  * (`ignore-scripts`, `offline`, `node-options`, `script-shell`, …). An allow
- * list, so a setting npm adds later is removed until it is named here. The
- * arm's own `npm_config_*` (see `arm-dirs.ts`) are set, not inherited — and
- * so is the `npm_config_userconfig` an `npx:` build's install sets to the
- * operator's npm userconfig (`npx-install.ts`), so their registry and auth reach it.
+ * list, so a setting npm adds later is removed from the ENVIRONMENT until it is
+ * named here. The arm's own `npm_config_*` (see `arm-dirs.ts`) are set, not
+ * inherited.
+ *
+ * One exception, by design: an `npx:` build's install sets `npm_config_userconfig`
+ * to the operator's npm userconfig (`npx-install.ts`), so their registry, scoped
+ * registries and auth reach it — and with them EVERY other setting that file
+ * holds, today's or one npm adds later; this list does not filter a file. Lifecycle
+ * scripts still stay off, because the install passes `--ignore-scripts` on the
+ * command line, which wins over any config file. What the install resolves can
+ * vary with that file (a registry, `before`, `omit`, …): a different VAT package
+ * byte moves the closure, but third-party code is not part of the instrument's
+ * identity (`closure.ts`), so a difference there is not seen.
  */
 const NPM_NETWORK = /^npm_config_(?:registry|@[^:/]+:registry|proxy|https[-_]proxy|no[-_]?proxy|ca|cafile|strict[-_]ssl)$/iu;
 

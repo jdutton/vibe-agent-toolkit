@@ -16,7 +16,9 @@
  * runs). Only `dependencies`: `@vibe-agent-toolkit/rag` and `rag-lancedb` are
  * OPTIONAL peers of the cli, absent from a plain install, and a closure that
  * required them would refuse every real one. Third-party dependencies are out
- * of scope: the lab measures vat, and a lockfile pins those.
+ * of scope for every kind — `tree:`, `dist:` and `npx:` alike (an `npx:` arm's
+ * walk starts at its installed cli): the lab measures vat, and a floated
+ * third-party dependency is not another instrument.
  *
  * Nothing else in a package directory is read. A package that ships a sibling
  * tree beside `dist/` — `vendor/`, `schemas/`, or any other `files:` entry —

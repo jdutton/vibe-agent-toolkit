@@ -23,19 +23,34 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { ArmDirectories } from '../../src/harness/arm-dirs.js';
 import type { ArmEnvironment } from '../../src/harness/arm-env.js';
-import { resolveInstrument } from '../../src/harness/instrument.js';
+import { prepareInstrument, resolveInstrument } from '../../src/harness/instrument.js';
 import {
   NPX_INSTALL_TIMEOUT_MS,
+  type NpxInstallSite,
   type NpxInstaller,
   npxInstallArm,
   npxInstallSite,
 } from '../../src/harness/npx-install.js';
 import { runCommand } from '../../src/harness/run.js';
+import type { InstrumentSource } from '../../src/harness/types.js';
+
+/**
+ * Both phases a verb runs, back to back.
+ *
+ * @param source - The build as named
+ * @param site - Where an `npx:` build installs
+ * @returns The resolved build
+ */
+async function resolveSource(source: InstrumentSource, site: NpxInstallSite): ReturnType<typeof resolveInstrument> {
+  return resolveInstrument(await prepareInstrument(source), site);
+}
 
 const VERSION = '0.1.43';
 const SPEC = `vibe-agent-toolkit@${VERSION}`;
 const CLI_DIR = 'node_modules/@vibe-agent-toolkit/cli';
 const CLI_BIN = `${CLI_DIR}/dist/bin.js`;
+/** A VAT package the cli depends on, hoisted beside it. */
+const UTILS = '@vibe-agent-toolkit/utils';
 
 let scratch: string;
 
@@ -102,7 +117,95 @@ function cliAt(version: string, under = ''): Record<string, string> {
  * @returns What `resolveInstrument` makes of the pinned spec
  */
 function resolveNpx(install: NpxInstaller, root = armsRoot()): ReturnType<typeof resolveInstrument> {
-  return resolveInstrument({ kind: 'npx', spec: SPEC }, npxInstallSite(root, install));
+  return resolveSource({ kind: 'npx', spec: SPEC }, npxInstallSite(root, install));
+}
+
+/**
+ * @param over - Files laid over a cli that depends on a hoisted VAT sibling and a third-party package
+ * @returns Those files
+ */
+function closureInstall(over: Readonly<Record<string, string>> = {}): Record<string, string> {
+  return {
+    ...cliAt(VERSION),
+    [`${CLI_DIR}/package.json`]: manifest('@vibe-agent-toolkit/cli', VERSION, {
+      dependencies: { [UTILS]: VERSION, 'left-pad': '^1.0.0' },
+    }),
+    [`node_modules/${UTILS}/package.json`]: manifest(UTILS, VERSION),
+    [`node_modules/${UTILS}/dist/index.js`]: 'export const utils = 1;\n',
+    'node_modules/left-pad/package.json': manifest('left-pad', '1.0.0'),
+    'node_modules/left-pad/index.js': 'module.exports = 1;\n',
+    ...over,
+  };
+}
+
+/**
+ * @param files - The install
+ * @param spec - The spec it is installed as
+ * @returns The closure the npx: build stamps
+ */
+async function npxClosure(files: Readonly<Record<string, string>>, spec = SPEC): Promise<string> {
+  return (await resolveSource({ kind: 'npx', spec }, npxInstallSite(armsRoot(), installing(files)))).version.closure;
+}
+
+/** An optional peer the cli declares and the lab does not install. */
+const RAG = '@vibe-agent-toolkit/rag';
+
+/** The installed entry's code: on `peer`, what `./peer.js` loaded, or the error's code and message. */
+const PEER_ENTRY = [
+  "if (process.argv[2] === 'peer') {",
+  "  await import('./peer.js').then((peer) => process.stdout.write(peer.loaded), (error) => process.stdout.write(String(error.code) + ': ' + String(error.message)));",
+  '} else {',
+  `  process.stdout.write(${JSON.stringify(VERSION + '\n')});`,
+  '}',
+  '',
+].join('\n');
+
+/**
+ * A cli that declares {@link RAG} an optional peer, and on `peer` imports a named binding
+ * from it the way the cli's rag lane does (a lazily imported module with a static import),
+ * printing what it loaded or the error code.
+ *
+ * @returns The cli's files
+ */
+function cliWithOptionalPeer(): Record<string, string> {
+  return {
+    ...cliAt(VERSION),
+    [`${CLI_DIR}/package.json`]: manifest('@vibe-agent-toolkit/cli', VERSION, {
+      type: 'module',
+      peerDependencies: { [RAG]: VERSION },
+      peerDependenciesMeta: { [RAG]: { optional: true } },
+    }),
+    [CLI_BIN]: PEER_ENTRY,
+    [`${CLI_DIR}/dist/peer.js`]: `import { which } from '${RAG}';\nexport const loaded = which;\n`,
+  };
+}
+
+/**
+ * @param which - What its `which` export says
+ * @returns The files of a {@link RAG} package in the `node_modules` of the directory laid into
+ */
+function ragPackage(which: string): Record<string, string> {
+  return {
+    [`node_modules/${RAG}/package.json`]: manifest(RAG, VERSION, { type: 'module', exports: './index.js' }),
+    [`node_modules/${RAG}/index.js`]: `export const which = ${JSON.stringify(which)};\n`,
+  };
+}
+
+/**
+ * @param files - The install
+ * @returns What the installed entry printed for `peer`, run from a cwd outside the arms root
+ */
+async function peerFrom(files: Readonly<Record<string, string>>): Promise<string> {
+  // A package planted in a node_modules ABOVE the arms root, where Node's walk reaches
+  // when the install lacks the peer: `/tmp/node_modules` on Linux is world-writable.
+  const ancestor = mkdtempSync(safePath.join(scratch, 'ancestor-'));
+  await lay(ancestor, ragPackage('planted above the install'));
+  const root = mkdtempSync(safePath.join(ancestor, 'arms-'));
+  const used = await resolveNpx(installing(files), root);
+  return runCommand({ command: used.command, leadingArgs: used.leadingArgs }, ['peer'], {
+    cwd: scratch,
+    env: { set: {}, unset: [] },
+  }).stdout;
 }
 
 describe("resolveInstrument({ kind: 'npx' })", () => {
@@ -151,29 +254,61 @@ describe("resolveInstrument({ kind: 'npx' })", () => {
     const site = npxInstallSite(armsRoot(), install);
     const source = { kind: 'npx', spec: SPEC } as const;
 
-    const [first, second] = await Promise.all([resolveInstrument(source, site), resolveInstrument(source, site)]);
+    const [first, second] = await Promise.all([resolveSource(source, site), resolveSource(source, site)]);
 
     expect(install).toHaveBeenCalledTimes(1);
     expect(second).toBe(first);
     expect(existsSync(first.leadingArgs[0] ?? '')).toBe(true);
   });
 
-  it("stamps the install's whole node_modules as the closure, third-party dependencies included", async () => {
-    const closure = async (dependency: string): Promise<string> =>
-      (await resolveNpx(installing({ ...cliAt(VERSION), 'node_modules/left-pad/index.js': dependency }))).version.closure;
+  describe('closure: the one definition every kind stamps', () => {
+    it('stamps the umbrella and the cli installs of one version as one closure', async () => {
+      const umbrella = closureInstall({
+        'node_modules/vibe-agent-toolkit/package.json': manifest('vibe-agent-toolkit', VERSION, {
+          dependencies: { '@vibe-agent-toolkit/cli': VERSION },
+        }),
+        'node_modules/vibe-agent-toolkit/bin/vat': 'process.stdout.write("umbrella wrapper");\n',
+      });
 
-    const first = await closure('module.exports = 1;');
-    expect(await closure('module.exports = 1;')).toBe(first);
-    expect(await closure('module.exports = 2;')).not.toBe(first);
+      expect(await npxClosure(umbrella)).toBe(await npxClosure(closureInstall(), `@vibe-agent-toolkit/cli@${VERSION}`));
+    });
+
+    it('stamps the closure a dist: build of the same installed cli stamps', async () => {
+      const used = await resolveNpx(installing(closureInstall()));
+      const cliDist = dirname(used.leadingArgs[0] ?? '');
+      const never = npxInstallSite(armsRoot(), () => {
+        throw new Error('a dist: build installs nothing');
+      });
+
+      expect((await resolveSource({ kind: 'dist', path: cliDist }, never)).version.closure).toBe(used.version.closure);
+    });
+
+    it('leaves third-party code out: a floated dependency does not move the instrument', async () => {
+      expect(await npxClosure(closureInstall({ 'node_modules/left-pad/index.js': 'module.exports = 2;\n' }))).toBe(
+        await npxClosure(closureInstall()),
+      );
+    });
+
+    it('moves when a @vibe-agent-toolkit/* package of the closure changes', async () => {
+      expect(await npxClosure(closureInstall({ [`node_modules/${UTILS}/dist/index.js`]: 'export const utils = 2;\n' }))).not.toBe(
+        await npxClosure(closureInstall()),
+      );
+    });
   });
 
-  it("ignores npm's own .package-lock.json: it records how npm installed, not what was installed", async () => {
-    const closure = async (lock: string): Promise<string> =>
-      (await resolveNpx(installing({ ...cliAt(VERSION), 'node_modules/.package-lock.json': lock }))).version.closure;
+  describe('optional peers: module resolution stays inside the install', () => {
+    it('resolves an absent optional peer to the lab\'s stub, never a package planted above the install', async () => {
+      const printed = await peerFrom(cliWithOptionalPeer());
 
-    expect(await closure('{"lockfileVersion":3,"resolved":"https://one.example/"}')).toBe(
-      await closure('{"lockfileVersion":4,"resolved":"https://two.example/"}'),
-    );
+      expect(printed).not.toContain('planted above the install');
+      // A named import, as the cli's rag lane makes: the stub must fail it as "not installed"
+      // (the code the cli's `isModuleMissing` reads), not as a missing export.
+      expect(printed).toMatch(/^ERR_MODULE_NOT_FOUND: .*vat-lab-does-not-install-optional-peers/u);
+    });
+
+    it('leaves an optional peer the install holds as it was installed', async () => {
+      expect(await peerFrom({ ...cliWithOptionalPeer(), ...ragPackage('installed') })).toBe('installed');
+    });
   });
 
   it('refuses an installed cli whose manifest names another package, though its version is the pin', async () => {
@@ -188,7 +323,7 @@ describe("resolveInstrument({ kind: 'npx' })", () => {
     const spec = `@vibe-agent-toolkit/cli@${VERSION}`;
     const files = { ...cliAt(VERSION), ...cliAt(VERSION, `${CLI_DIR}/`), [`${CLI_DIR}/${CLI_BIN}`]: entry(VERSION, 'a bundled copy') };
 
-    const used = await resolveInstrument({ kind: 'npx', spec }, npxInstallSite(armsRoot(), installing(files)));
+    const used = await resolveSource({ kind: 'npx', spec }, npxInstallSite(armsRoot(), installing(files)));
     const ran = runCommand({ command: used.command, leadingArgs: used.leadingArgs }, [], { cwd: scratch, env: { set: {}, unset: [] } });
 
     expect(ran.stdout).toBe('cli entry');

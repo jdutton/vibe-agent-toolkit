@@ -37,9 +37,20 @@ import {
 import { removeScratchDir , CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { resolveInstrument } from '../src/harness/instrument.js';
-import { npxInstallSite } from '../src/harness/npx-install.js';
+import { prepareInstrument, resolveInstrument } from '../src/harness/instrument.js';
+import { type NpxInstallSite, npxInstallSite } from '../src/harness/npx-install.js';
 import type { InstrumentSource } from '../src/harness/types.js';
+
+/**
+ * Both phases a verb runs, back to back: prepared before any setup, then finished.
+ *
+ * @param source - The build as named
+ * @param site - Where an `npx:` build installs
+ * @returns The resolved build
+ */
+async function resolveSource(source: InstrumentSource, site: NpxInstallSite): ReturnType<typeof resolveInstrument> {
+  return resolveInstrument(await prepareInstrument(source), site);
+}
 
 /** This checkout — packages/lab/test → packages/lab → packages → root. */
 const REPO_ROOT = resolveFromImportMeta(import.meta.url, '../../..');
@@ -166,7 +177,7 @@ async function expectRejectionNaming(
   source: InstrumentSource,
   ...fragments: string[]
 ): Promise<void> {
-  const outcome: unknown = await resolveInstrument(source, NO_INSTALL).then(
+  const outcome: unknown = await resolveSource(source, NO_INSTALL).then(
     () => null,
     (error: unknown) => error,
   );
@@ -195,7 +206,7 @@ async function expectEntryPoint(
 ): Promise<void> {
   expect(existsSync(alternative), 'fixture cannot distinguish the two answers').toBe(true);
 
-  const resolved = await resolveInstrument(source, NO_INSTALL);
+  const resolved = await resolveSource(source, NO_INSTALL);
 
   expect(resolved.leadingArgs).toHaveLength(1);
   expect(toForwardSlash(resolved.leadingArgs[0] ?? '')).toBe(toForwardSlash(expected));
@@ -203,7 +214,7 @@ async function expectEntryPoint(
 
 describe('resolveInstrument — kind: tree', () => {
   it('resolves this checkout to its built bin, its version, and its HEAD commit', async () => {
-    const resolved = await resolveInstrument({ kind: 'tree', path: REPO_ROOT }, NO_INSTALL);
+    const resolved = await resolveSource({ kind: 'tree', path: REPO_ROOT }, NO_INSTALL);
 
     expect(resolved.command).toBe(process.execPath);
     expect(resolved.leadingArgs).toHaveLength(1);
@@ -222,8 +233,8 @@ describe('resolveInstrument — kind: tree', () => {
     // root and the dist directory — and must land on one package root. A route
     // that digested from the wrong directory would stamp a different (or no)
     // closure for the very same bytes.
-    const tree = await resolveInstrument({ kind: 'tree', path: REPO_ROOT }, NO_INSTALL);
-    const dist = await resolveInstrument({
+    const tree = await resolveSource({ kind: 'tree', path: REPO_ROOT }, NO_INSTALL);
+    const dist = await resolveSource({
       kind: 'dist',
       path: safePath.join(REPO_ROOT, CLI_DIST_DIR),
     }, NO_INSTALL);
@@ -233,11 +244,11 @@ describe('resolveInstrument — kind: tree', () => {
   });
 
   it('distinguishes two builds carrying the same version by their commit', async () => {
-    const first = await resolveInstrument({
+    const first = await resolveSource({
       kind: 'tree',
       path: await makeTree('same-version-a', { version: '0.1.42', binBody: '// build A\n' }),
     }, NO_INSTALL);
-    const second = await resolveInstrument({
+    const second = await resolveSource({
       kind: 'tree',
       path: await makeTree('same-version-b', { version: '0.1.42', binBody: '// build B\n' }),
     }, NO_INSTALL);
@@ -280,11 +291,11 @@ describe('resolveInstrument — kind: tree', () => {
   it('reports the instrument checkout as clean, then as dirty once it is edited', async () => {
     const root = await makeTree('dirty-instrument');
 
-    expect((await resolveInstrument({ kind: 'tree', path: root }, NO_INSTALL)).version.dirty).toBe(false);
+    expect((await resolveSource({ kind: 'tree', path: root }, NO_INSTALL)).version.dirty).toBe(false);
 
     await writeFile(safePath.join(root, CLI_BIN), '// edited, never committed\n');
 
-    const dirty = await resolveInstrument({ kind: 'tree', path: root }, NO_INSTALL);
+    const dirty = await resolveSource({ kind: 'tree', path: root }, NO_INSTALL);
     expect(dirty.version.dirty).toBe(true);
     // The commit is still stamped — a dirty build is measured, not refused. The
     // label is what keeps the stamp honest.
@@ -299,7 +310,7 @@ describe('resolveInstrument — kind: tree', () => {
     const root = await makeTree('untracked-instrument');
     await writeFile(safePath.join(root, 'scratch-note.txt'), 'not committed\n');
 
-    expect((await resolveInstrument({ kind: 'tree', path: root }, NO_INSTALL)).version.dirty).toBe(true);
+    expect((await resolveSource({ kind: 'tree', path: root }, NO_INSTALL)).version.dirty).toBe(true);
   });
 
   it('throws naming the path when the tree does not exist', async () => {
@@ -343,7 +354,7 @@ describe('resolveInstrument — kind: tree', () => {
 
 describe('resolveInstrument — kind: dist', () => {
   it('resolves a dist directory with a null commit', async () => {
-    const resolved = await resolveInstrument({
+    const resolved = await resolveSource({
       kind: 'dist',
       path: safePath.join(REPO_ROOT, CLI_DIST_DIR),
     }, NO_INSTALL);
@@ -357,7 +368,7 @@ describe('resolveInstrument — kind: dist', () => {
   });
 
   it('resolves a bin file named directly, and reads the nearest package.json', async () => {
-    const resolved = await resolveInstrument({
+    const resolved = await resolveSource({
       kind: 'dist',
       path: safePath.join(REPO_ROOT, CLI_BIN),
     }, NO_INSTALL);
@@ -368,7 +379,7 @@ describe('resolveInstrument — kind: dist', () => {
 
   it('reads no commit even from a dist sitting inside a git checkout', async () => {
     const root = await makeTree('dist-inside-git');
-    const resolved = await resolveInstrument({
+    const resolved = await resolveSource({
       kind: 'dist',
       path: safePath.join(root, CLI_DIST_DIR),
     }, NO_INSTALL);
@@ -436,7 +447,7 @@ describe('resolveInstrument — kind: dist', () => {
       await chmod(locked, 0o000);
       try {
         await expect(
-          resolveInstrument({ kind: 'dist', path: safePath.join(locked, 'bin.js') }, NO_INSTALL),
+          resolveSource({ kind: 'dist', path: safePath.join(locked, 'bin.js') }, NO_INSTALL),
         ).rejects.toMatchObject({ code: 'EACCES' });
       } finally {
         await chmod(locked, 0o700);
@@ -460,8 +471,22 @@ describe('resolveInstrument — kind: npx', () => {
     ['@vibe-agent-toolkit/cli@0.1.41', '0.1.41'],
     ['vibe-agent-toolkit@1.2.3', '1.2.3'],
     ['@vibe-agent-toolkit/cli@0.1.42-rc.5', '0.1.42-rc.5'],
-    ['@vibe-agent-toolkit/cli@1.0.0+build.7', '1.0.0+build.7'],
   ];
+
+  /**
+   * npm strips build metadata from a version, so the installed cli's manifest can
+   * never carry it: an install would always end refused. Refused before setup instead.
+   */
+  it.for(['@vibe-agent-toolkit/cli@1.0.0+build.7', 'vibe-agent-toolkit@0.1.42-rc.5+sha.1'] as const)(
+    'refuses %s, whose build metadata npm strips, before installing',
+    async (spec) => {
+      await expectRejectionNaming({ kind: 'npx', spec }, `"${spec}"`, 'build metadata');
+    },
+  );
+
+  it.for(PINNED)('prepares %s to its pin and installs nothing: the install waits for the arms root', async ([spec, version]) => {
+    expect(await prepareInstrument({ kind: 'npx', spec })).toEqual({ kind: 'npx', pin: { name: spec.slice(0, spec.lastIndexOf('@')), version } });
+  });
 
   it.for(PINNED)('installs %s and requires its cli to be the pinned version', async ([spec, version]) => {
     // The install lays down a cli of ANOTHER version: the refusal names the version the spec pinned.
@@ -474,7 +499,7 @@ describe('resolveInstrument — kind: npx', () => {
       await writeFile(safePath.join(cli, 'package.json'), JSON.stringify({ name: '@vibe-agent-toolkit/cli', version: '9.9.9-other' }));
     });
 
-    await expect(resolveInstrument({ kind: 'npx', spec }, site)).rejects.toThrow(`9.9.9-other, not ${version}`);
+    await expect(resolveSource({ kind: 'npx', spec }, site)).rejects.toThrow(`9.9.9-other, not ${version}`);
     expect(installed).toEqual([spec]);
   });
 
@@ -555,7 +580,7 @@ describe('resolveInstrument — the instrument root', () => {
   it('roots a tree at the checkout, not at its built bin', async () => {
     const root = await makeTree('rooted-tree');
 
-    const resolved = await resolveInstrument({ kind: 'tree', path: root }, NO_INSTALL);
+    const resolved = await resolveSource({ kind: 'tree', path: root }, NO_INSTALL);
 
     expect(resolved.root).toBe(safePath.resolve(root));
   });
@@ -566,7 +591,7 @@ describe('resolveInstrument — the instrument root', () => {
     // Named two directories BELOW the package root, and by a file rather than a
     // directory. Rooting at the caller's path would make every site outside
     // `dist/bin` look foreign and leave it absolute.
-    const resolved = await resolveInstrument({
+    const resolved = await resolveSource({
       kind: 'dist',
       path: safePath.join(root, CLI_BIN),
     }, NO_INSTALL);

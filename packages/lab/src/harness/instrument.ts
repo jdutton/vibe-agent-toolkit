@@ -77,7 +77,7 @@
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
-import { everyInOrder, isPathAbsentError, promised, safePath } from '@vibe-agent-toolkit/utils';
+import { everyInOrder, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
 import { z } from 'zod';
 
@@ -141,11 +141,14 @@ const COMMIT_LENGTHS = new Set([40, 64]);
 /** `1.2.3` — the mandatory part of a pinned npm version. */
 const CORE_VERSION_SHAPE = /^\d+\.\d+\.\d+$/;
 
-/** Everything after the first `-` or `+`: prerelease and/or build metadata. */
-const VERSION_SUFFIX_SHAPE = /^[0-9A-Za-z.+-]+$/;
+/** Everything after the first `-`: a prerelease. */
+const VERSION_SUFFIX_SHAPE = /^[0-9A-Za-z.-]+$/;
 
-/** Where prerelease/build metadata starts, if it does. */
-const VERSION_SUFFIX_START = /[-+]/;
+/** Where a prerelease starts, if it does. */
+const VERSION_SUFFIX_START = '-';
+
+/** Where build metadata starts: npm strips it, so no installed manifest carries it. */
+const BUILD_METADATA_START = '+';
 
 /**
  * Is this string a *concrete* version, as opposed to a range or a dist-tag?
@@ -153,14 +156,14 @@ const VERSION_SUFFIX_START = /[-+]/;
  * Split-then-match rather than one regex on purpose: composing the two parts
  * into a single pattern needs a quantifier inside a quantifier, which is a
  * backtracking hazard over caller-supplied text. Each half here is anchored and
- * flat.
+ * flat. Build metadata is refused before this is asked ({@link pinOf}).
  *
  * @param value - The text after the spec's version separator
- * @returns `true` for `1.2.3`, `1.2.3-rc.5`, `1.0.0+build.7`; `false` for
- *   `latest`, `^0.1.0`, `0.1`
+ * @returns `true` for `1.2.3`, `1.2.3-rc.5`; `false` for `latest`, `^0.1.0`,
+ *   `0.1`, `1.0.0+build.7`
  */
 function isPinnedVersion(value: string): boolean {
-  const boundary = value.search(VERSION_SUFFIX_START);
+  const boundary = value.indexOf(VERSION_SUFFIX_START);
   if (boundary === -1) return CORE_VERSION_SHAPE.test(value);
   return (
     CORE_VERSION_SHAPE.test(value.slice(0, boundary)) &&
@@ -516,6 +519,13 @@ export function pinOf(spec: string): NpmPin {
   const at = trimmed.lastIndexOf('@');
   // `-1` is a bare name; `0` is the scope sigil of `@scope/pkg`. Neither pins.
   const version = at <= 0 ? '' : trimmed.slice(at + 1);
+  const metadata = version.indexOf(BUILD_METADATA_START);
+  if (metadata !== -1) {
+    throw new Error(
+      `the npx: spec "${trimmed}" carries build metadata (${version.slice(metadata)}), which npm strips: ` +
+        `the installed cli could never carry the version it names. Pin "${version.slice(0, metadata)}".`,
+    );
+  }
   if (!isPinnedVersion(version)) {
     throw new Error(
       `the npx: spec "${trimmed}" is not pinned to a concrete ` +
@@ -537,26 +547,47 @@ export function pinOf(spec: string): NpmPin {
 }
 
 /**
- * Resolve a named vat into something runnable plus the axis-C coordinate every
- * report it produces will carry.
+ * A named vat resolved as far as it can be before any setup: a `tree:` or `dist:`
+ * build completely, an `npx:` build to its checked pin — its install needs the
+ * invocation's arms root, which does not exist yet. Made by {@link prepareInstrument};
+ * finished by {@link resolveInstrument}.
+ */
+export type PreparedInstrument =
+  | { readonly kind: 'built'; readonly instrument: ResolvedInstrument }
+  | { readonly kind: 'npx'; readonly pin: NpmPin };
+
+/**
+ * Resolve everything a named vat can be resolved to without setting anything up,
+ * so every verb refuses a bad build before it creates `--out` or an arms root.
  *
  * @param source - How the caller named the vat
- * @param npx - Where an `npx:` build is installed (under the invocation's arms root)
- * @returns An executable, its leading arguments, and the instrument version
+ * @returns The prepared instrument
  * @throws {Error} naming the offending path or spec whenever the named vat
  *   cannot be found or cannot supply its coordinate. Resolution failures are
  *   errors, never fallbacks — see the module header.
  */
-export function resolveInstrument(source: InstrumentSource, npx: NpxInstallSite): Promise<ResolvedInstrument> {
+export async function prepareInstrument(source: InstrumentSource): Promise<PreparedInstrument> {
   switch (source.kind) {
     case 'tree':
-      return resolveTree(source.path);
+      return { kind: 'built', instrument: await resolveTree(source.path) };
     case 'dist':
-      return resolveDist(source.path);
+      return { kind: 'built', instrument: await resolveDist(source.path) };
     case 'npx':
-      // A published tarball carries no provenance: no commit, and therefore nothing that could
-      // have been dirty; its closure is the install's. `pinOf` refuses a spec synchronously;
-      // its throw must still arrive as a rejection.
-      return promised(() => installNpxInstrument(pinOf(source.spec), npx));
+      return { kind: 'npx', pin: pinOf(source.spec) };
   }
+}
+
+/**
+ * Finish a prepared vat into something runnable plus the axis-C coordinate every
+ * report it produces will carry: install an `npx:` pin under the arms root.
+ *
+ * @param prepared - From {@link prepareInstrument}
+ * @param npx - Where an `npx:` build is installed (under the invocation's arms root)
+ * @returns An executable, its leading arguments, and the instrument version
+ * @throws {Error} when an `npx:` install is refused — see `npx-install.ts`
+ */
+export function resolveInstrument(prepared: PreparedInstrument, npx: NpxInstallSite): Promise<ResolvedInstrument> {
+  // A published tarball carries no provenance: no commit, and therefore nothing that could
+  // have been dirty; its closure is the installed cli's.
+  return prepared.kind === 'built' ? Promise.resolve(prepared.instrument) : installNpxInstrument(prepared.pin, npx);
 }

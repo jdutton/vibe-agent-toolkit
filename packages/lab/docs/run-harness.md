@@ -37,17 +37,19 @@ since the last release?" a one-liner. The spec must be `vibe-agent-toolkit` or
 `@vibe-agent-toolkit/cli` pinned to an exact version, refused before any setup otherwise: any other
 package, a range, a dist-tag, a path, a URL, a tarball, a git ref or an `npm:` alias. The
 pin is installed under the arms root and run as that install's `dist/bin.js` (below). The commit is
-unknown here and the coordinate records `null` rather than guessing; the closure is a digest of the
-install's whole `node_modules`, less npm's own install record (`.package-lock.json`). Identity is per install: third-party ranges float, so a later install
-of the same pin can pick up moved dependencies — a different closure, and a different stored
-identity, for the same version.
+unknown here and the coordinate records `null` rather than guessing; the closure is the one digest
+every kind stamps (below), taken from the installed cli — so an `npx:` build and a `dist:` build of
+the same bytes are one instrument, as are the umbrella and cli pins of one version. Third-party
+ranges float in the install, and a floated dependency does not move the closure.
 
 ### The closure digest — arm identity by the bytes it runs
 
 `InstrumentVersion.closure` is a SHA-256 over the arm's whole module closure: the cli package and
 every `@vibe-agent-toolkit/*` package it depends on, transitively — each as its `package.json` plus
 every file under its `dist/`, `*.tsbuildinfo` excluded ([`harness/closure.ts`](../src/harness/closure.ts)).
-`tree:` and `dist:` compute it; `npx:` digests its install's whole `node_modules` (third-party ranges float).
+One definition for every kind: `tree:` starts it at `packages/cli`, `dist:` at the package that owns
+the named `dist/`, `npx:` at the installed `@vibe-agent-toolkit/cli`. Third-party code is not part of
+identity for any kind.
 
 - **Why.** The version cannot see the case that matters most: a dependency's `dist/` rebuilt while
   every `package.json` stays put. Before the digest, two `dist:` arms of one version were the same
@@ -55,7 +57,8 @@ every file under its `dist/`, `*.tsbuildinfo` excluded ([`harness/closure.ts`](.
 - **What resolves.** Each dependency is found the way Node finds it — `<dir>/node_modules/<name>`
   from the depending package upward, nearest first, through any symlink — so one walk serves a bun
   workspace and an npm prefix. Only `dependencies`: the cli's `rag` and `rag-lancedb` are optional
-  peers, absent from a plain install. Third-party packages are out of scope; a lockfile pins those.
+  peers, absent from a plain install. Third-party packages are out of scope: the lab measures vat;
+  a lockfile pins them in a checkout, and nothing pins them in an `npx:` install.
 - **Errors, never fallbacks.** A declared `@vibe-agent-toolkit/*` dependency that does not resolve,
   or a closure member with no `dist/`, throws naming it — a digest of less than what runs would
   match another arm missing the same thing.
@@ -141,9 +144,11 @@ other arm-owned variables are stripped from every child, never inherited, and re
 when the arm itself sets them with `--env`. A nested `vat` call from a subject's own npm scripts or
 hooks stays in the arm only because the arm says so (`--env VAT_BIN=<bin.js>` for a `tree:` or
 `dist:` arm, `--env VAT_ROOT_DIR=<shim>` for a build whose wrapper predates `VAT_BIN`). An `npx:`
-arm cannot say so: its install's path is made at run time, so no `--env` can name it, and a nested
-`vat` call in it resolves through the subject's own install — not the pinned version. Only the
-commands the lab runs itself measure the pin.
+arm sets neither, and its install lives at a lab-internal path emptied each run, so a nested `vat`
+call in it resolves through the subject's own install — not the pinned version. Only the commands
+the lab runs itself measure the pin; for a pinned baseline whose nested calls are pinned too, use a
+`dist:` arm over a private install of the release plus a shim
+([recipe](../../../docs/contributing/vat-debugging.md#crucible-runs)).
 
 Every timed arm — the `verdict` facet's included — also gets lab-owned directories on top of its
 own settings: a private projection store, temp directory, empty home (`HOME` and

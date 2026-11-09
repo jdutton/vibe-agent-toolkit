@@ -18,15 +18,21 @@
  * real package's name) at the pinned version; and the entry's real path must lie
  * inside the install. The entry is then run once with `--version` — a check that
  * `bin.js` and its static imports load, not of which version it is: `--version`
- * reads that same manifest. `--no-package-lock` leaves third-party ranges to float,
- * so the install's whole `node_modules` (less npm's own install record) is digested
- * into the coordinate's `closure`, and identity is per install: a later install of
- * the same pin can resolve moved third-party dependencies, and is then another
- * instrument. Not in the closure: an optional peer (`@vibe-agent-toolkit/rag`, say)
- * that Node finds in a `node_modules` ABOVE the arms root.
+ * reads that same manifest. The coordinate's `closure` is `closureDigest` from the
+ * installed cli — the one definition every kind stamps (`closure.ts`): the cli and
+ * its `@vibe-agent-toolkit/*` dependencies. Third-party code is not identity, here
+ * as for `tree:` and `dist:`: `--no-package-lock` leaves its ranges to float, and a
+ * floated dependency does not make another instrument.
+ *
+ * Containment is of module resolution, not only of the entry: an optional peer the
+ * installed cli declares (`@vibe-agent-toolkit/rag`, say) is not installed, and
+ * Node's walk for it would climb past the arms root — to `/tmp/node_modules`, which
+ * is world-writable on Linux, or `C:\node_modules`. So each such peer the install
+ * lacks gets a stub package inside the install's own `node_modules`, which Node
+ * stops at and fails to load as `ERR_MODULE_NOT_FOUND` — the cli's "not installed".
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
 import { everywhere, isUnderRoot, mkdirSyncReal, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
@@ -43,7 +49,7 @@ import {
   resetColdArm,
 } from './arm-dirs.js';
 import { EMPTY_ARM_ENVIRONMENT } from './arm-env.js';
-import { fingerprintFiles } from './fingerprint.js';
+import { closureDigest } from './closure.js';
 import { runCommand } from './run.js';
 import type { ResolvedInstrument } from './types.js';
 
@@ -94,11 +100,27 @@ export function npxInstallSite(armsRoot: string, install: NpxInstaller): NpxInst
 const CLI_ENTRY = `node_modules/${CLI_PACKAGE}/dist/bin.js`;
 
 /**
- * npm's record of how it laid the install out — registry URLs and fields that vary
- * with npm's version — written even under `--no-package-lock`. It names no byte vat
- * runs, so it stays out of the closure.
+ * The file a stub peer's `exports` names, and never holds: Node resolves the package,
+ * stops its walk there, and fails the load as `ERR_MODULE_NOT_FOUND` naming this file.
+ * A missing target rather than a throwing module body: a named import is checked at
+ * link time, before a body runs, and would fail as a `SyntaxError` the cli does not
+ * read as "not installed".
  */
-const NPM_INSTALL_RECORD = '.package-lock.json';
+const STUB_PEER_TARGET = './vat-lab-does-not-install-optional-peers.js';
+
+/** One segment of an npm package name: never `.`, `..` or empty, so it cannot climb out of `node_modules`. */
+const PACKAGE_NAME_SEGMENT = /^[a-z0-9~-][a-z0-9._~-]*$/u;
+
+/**
+ * @param name - A name an installed manifest declares
+ * @returns `true` for `name` or `@scope/name`, each segment {@link PACKAGE_NAME_SEGMENT}
+ */
+function isPackageName(name: string): boolean {
+  if (!name.startsWith('@')) return PACKAGE_NAME_SEGMENT.test(name);
+  // A segment holds no `/`, so a second one fails the bare name's test.
+  const slash = name.indexOf('/');
+  return slash !== -1 && PACKAGE_NAME_SEGMENT.test(name.slice(1, slash)) && PACKAGE_NAME_SEGMENT.test(name.slice(slash + 1));
+}
 
 /** The install arm's name; its build segment is the spec. */
 const INSTALL_ARM = 'npx-install';
@@ -162,19 +184,71 @@ export function npxInstallArm(armsRoot: string, spec: string): ArmDirectories {
  * aliased package's own name in its manifest, so a name other than the cli's is other
  * code installed under the cli's directory.
  *
- * @param entry - The cli entry an install holds
+ * @param cliRoot - The package directory of the cli entry an install holds
  * @param pin - The VAT package and the version it pins
  * @param spec - The pinned spec, for the error message
+ * @returns The manifest, as read
  * @throws {Error} when its package's `package.json` names another package or version
  */
-function requirePinnedCli(entry: string, pin: NpmPin, spec: string): void {
-  const manifest = safePath.join(entry, '..', '..', 'package.json');
-  const { name, version } = JSON.parse(readFileSync(manifest, 'utf8')) as { name?: unknown; version?: unknown };
+function requirePinnedCli(cliRoot: string, pin: NpmPin, spec: string): InstalledCliManifest {
+  const manifest = JSON.parse(readFileSync(safePath.join(cliRoot, 'package.json'), 'utf8')) as InstalledCliManifest;
+  const { name, version } = manifest;
   const misnamed = name === CLI_PACKAGE ? null : `${CLI_PACKAGE} resolved to "${String(name)}", another package under its name`;
   const misversioned = version === pin.version ? null : `it resolved ${CLI_PACKAGE} ${String(version)}, not ${pin.version}`;
   const wrong = misnamed ?? misversioned;
   if (wrong !== null) {
     throw new Error(`the install of ${spec}: ${wrong}: the report would name one build and measure another`);
+  }
+  return manifest;
+}
+
+/** The fields of the installed cli's `package.json` an install reads — someone else's file, so unknown. */
+interface InstalledCliManifest {
+  readonly name?: unknown;
+  readonly version?: unknown;
+  readonly peerDependencies?: unknown;
+  readonly peerDependenciesMeta?: unknown;
+}
+
+/**
+ * @param manifest - The installed cli's manifest
+ * @returns The peers it declares optional: named under `peerDependencies`, `optional: true` in `peerDependenciesMeta`
+ */
+function optionalPeers(manifest: InstalledCliManifest): string[] {
+  const { peerDependencies: peers, peerDependenciesMeta: meta } = manifest;
+  if (typeof peers !== 'object' || peers === null || typeof meta !== 'object' || meta === null) return [];
+  const flags = meta as Readonly<Record<string, unknown>>;
+  return Object.keys(peers).filter((name) => {
+    const flag = flags[name];
+    return typeof flag === 'object' && flag !== null && (flag as { optional?: unknown }).optional === true;
+  });
+}
+
+/**
+ * Stub every optional peer the installed cli declares and the install lacks, in the
+ * install's own `node_modules`, so Node's walk for it ends inside the install
+ * (module header). A peer is present when any `node_modules` from the cli's directory
+ * up to the install's holds an entry of its name — what Node would find first.
+ *
+ * @param prefix - The install's directory
+ * @param cliRoot - The installed cli's package directory, inside it
+ * @param manifest - The installed cli's manifest
+ */
+function stubAbsentOptionalPeers(prefix: string, cliRoot: string, manifest: InstalledCliManifest): void {
+  const homes: string[] = [];
+  for (let dir = cliRoot; ; dir = safePath.resolve(dir, '..')) {
+    homes.push(safePath.join(dir, 'node_modules'));
+    if (dir === safePath.resolve(prefix) || dir === safePath.resolve(dir, '..')) break;
+  }
+  for (const peer of optionalPeers(manifest)) {
+    // A name, never a path: the stub is written where the name says.
+    if (!isPackageName(peer)) throw new Error(`the installed ${CLI_PACKAGE} declares an optional peer "${peer}" that is not a package name`);
+    const present = homes.some((home) => pathPresent(safePath.join(home, peer), 'entry', everywhere('destination'), 'confirmed'));
+    if (present) continue;
+    const stub = safePath.join(prefix, 'node_modules', peer);
+    mkdirSyncReal(stub, { recursive: true });
+    const description = `Placed by vat-lab: the lab does not install optional peers, so ${peer} is not installed.`;
+    writeFileSync(safePath.join(stub, 'package.json'), `${JSON.stringify({ name: peer, description, exports: STUB_PEER_TARGET })}\n`);
   }
 }
 
@@ -204,7 +278,7 @@ function requireEntryStarts(entry: string, spec: string, dirs: ArmDirectories): 
 
 /**
  * Install a pinned spec under the arms root and resolve it as `node <installed cli entry>`,
- * its closure the install's.
+ * its closure the installed cli's ({@link closureDigest}).
  *
  * The install is made in the arm's `tmp/`, emptied first, so an interrupted run leaves
  * it under the arms root — never in the system temp directory — for the next to clear.
@@ -273,13 +347,14 @@ async function installOnce(pin: NpmPin, spec: string, site: NpxInstallSite): Pro
   const prefix = mkdirSyncReal(safePath.join(dirs.tmp, 'install'));
   await site.install(spec, prefix, dirs);
   const entry = locateCliEntry(prefix, pin.name, spec);
-  requirePinnedCli(entry, pin, spec);
+  const cliRoot = safePath.join(entry, '..', '..');
+  const manifest = requirePinnedCli(cliRoot, pin, spec);
+  stubAbsentOptionalPeers(prefix, cliRoot, manifest);
   requireEntryStarts(entry, spec, dirs);
-  const closure = fingerprintFiles(safePath.join(prefix, 'node_modules'), { fromGit: false, exclude: [NPM_INSTALL_RECORD] }).fingerprint;
   return {
     command: process.execPath,
     leadingArgs: [entry],
     // No root: every file of the install sits under `node_modules`, which the io facet's site normalizer keys on.
-    version: { version: pin.version, commit: null, dirty: null, closure },
+    version: { version: pin.version, commit: null, dirty: null, closure: closureDigest(cliRoot) },
   };
 }

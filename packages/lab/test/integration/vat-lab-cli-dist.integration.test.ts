@@ -8,7 +8,7 @@
  */
 
 import { existsSync } from 'node:fs';
-import { mkdtemp, readdir } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, writeFile } from 'node:fs/promises';
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { normalizedTmpdir, resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
@@ -66,7 +66,7 @@ function sameDistArms(over: Record<string, unknown> = {}): Parameters<typeof abA
  * @returns The arms `ab` resolves from those flags, or `null` when it refused
  */
 async function abArms(over: Record<string, unknown> = {}): ReturnType<typeof resolveAbArms> {
-  const flags = abArmFlags(sameDistArms(over));
+  const flags = await abArmFlags(sameDistArms(over));
   return flags === null ? null : resolveAbArms(flags, NO_NPX);
 }
 
@@ -106,7 +106,7 @@ describe('vat-lab <facet> ab — indistinguishable arms', () => {
   it('refuses an arm that sets and unsets one variable, before resolving anything', async () => {
     vi.spyOn(process.stderr, 'write').mockReturnValue(true);
 
-    const flags = abArmFlags(sameDistArms({ envA: { X: '1' }, unsetA: ['X'], instrumentA: { kind: 'dist', path: '/nowhere' } }));
+    const flags = await abArmFlags(sameDistArms({ envA: { X: '1' }, unsetA: ['X'], instrumentA: { kind: 'dist', path: '/nowhere' } }));
 
     expect(flags).toBeNull();
     expect(process.exitCode).toBe(ExitCode.ERROR);
@@ -158,6 +158,41 @@ describe('vat-lab <facet> ab — flag refusals come before any setup', () => {
     expect(stderr.mock.calls.map(([chunk]) => String(chunk)).join('')).toMatch(refusal);
     expect(existsSync(out)).toBe(false);
     expect(existsSync(armsDir)).toBe(false);
+  });
+});
+
+/** @returns A subject of its own, which holds neither --out nor --arms-dir */
+function subject(): Promise<string> {
+  return mkdtemp(safePath.join(tempDir, 'resolve-first-subject-'));
+}
+
+/** @returns A subjects file for `verdict run`, beside the one subject it names */
+async function subjectsFile(): Promise<string> {
+  const dir = await mkdtemp(safePath.join(tempDir, 'verdict-subjects-'));
+  await mkdir(safePath.join(dir, 'subject'));
+  const file = safePath.join(dir, 'subjects.yaml');
+  await writeFile(file, 'subjects:\n  - alias: one\n    path: subject\n    verbs: [audit]\n');
+  return file;
+}
+
+describe('vat-lab — a tree:/dist: build is resolved before any setup, on every verb', () => {
+  it.for([
+    ['perf run', async (bad: string) => ['perf', 'run', await subject(), '--instrument', bad]],
+    ['perf ab', async (bad: string) => ['perf', 'ab', await subject(), '--instrument-a', bad, '--instrument-b', 'npx:vibe-agent-toolkit@0.1.43']],
+    ['perf arms', async (bad: string) => ['perf', 'arms', await subject(), '--build', `x=${bad}`, '--arm', 'x:ci-c:cold']],
+    ['verdict run', async (bad: string) => ['verdict', 'run', '--subjects', await subjectsFile(), '--instrument', bad]],
+  ] as const)('%s refuses a dist: path naming nothing before creating --out or --arms-dir', async ([verb, argv]) => {
+    const slug = verb.replace(' ', '-');
+    const bad = safePath.join(tempDir, `no-such-dist-${slug}`);
+    const out = safePath.join(tempDir, `resolve-first-out-${slug}`);
+    const armsDir = safePath.join(tempDir, `resolve-first-arms-${slug}`);
+    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+
+    const ran = createProgram().parseAsync(['node', 'vat-lab', ...(await argv(`dist:${bad}`)), '--out', out, '--arms-dir', armsDir]);
+
+    await expect(ran).rejects.toThrow(`no vat entry point at ${bad}`);
+    expect(existsSync(out), '--out was created before the build resolved').toBe(false);
+    expect(existsSync(armsDir), '--arms-dir was created before the build resolved').toBe(false);
   });
 });
 
