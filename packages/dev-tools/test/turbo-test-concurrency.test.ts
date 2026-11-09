@@ -1,8 +1,10 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
+import { maxTestWorkers } from '../../../vitest.shared.js';
 import { PROJECT_ROOT } from '../src/common.js';
 
 /**
@@ -67,6 +69,24 @@ describe('turbo test-suite concurrency (cross-package native-memory guard)', () 
     expect(turbo.tasks['@vibe-agent-toolkit/resource-compiler#test:integration']?.dependsOn).toContain(
       '@vibe-agent-toolkit/rag-lancedb#test:integration',
     );
+  });
+
+  // The per-package worker cap is what bounds a native-memory package's peak; a package may raise
+  // its own only when its forks hold none (`cliIntegrationTestWorkers` in vitest.shared.ts).
+  it('lets only a package outside the native-memory chain raise its integration worker cap', async () => {
+    const nativeMemory = new Set(['rag', 'rag-lancedb', 'resource-compiler']);
+    const raised: string[] = [];
+    for (const dir of readdirSync(safePath.join(PROJECT_ROOT, 'packages'))) {
+      const configPath = safePath.join(PROJECT_ROOT, 'packages', dir, 'vitest.integration.config.ts');
+      if (!existsSync(configPath)) continue;
+      const config = (await import(pathToFileURL(configPath).href)) as { default: { test?: { maxWorkers?: unknown } } };
+      const workers = config.default.test?.maxWorkers;
+      expect(typeof workers, `${dir}: maxWorkers must be a number`).toBe('number');
+      if (nativeMemory.has(dir)) expect(workers, `${dir} holds native memory`).toBe(maxTestWorkers);
+      if (Number(workers) > maxTestWorkers) raised.push(dir);
+    }
+    // Both ways: the scan saw the one package that raises its cap, so it is not blind.
+    expect(raised).toEqual(['cli']);
   });
 
   it('leaves test:unit parallel (light, no native models — no cap needed)', () => {

@@ -291,8 +291,30 @@ export function createUnitTestConfig(overrides: UnitTestConfigOverrides = {}) {
   };
 }
 
+/**
+ * Integration-tier worker count for a package whose forks hold NO native memory
+ * and whose suite is the tier's long pole: today, only `cli`.
+ *
+ * {@link maxTestWorkers} is 2 because a fork in `rag`, `rag-lancedb` or
+ * `resource-compiler` holds 1-3 GB of native memory; `cli` loads none of it (its
+ * one RAG integration suite mocks `@vibe-agent-toolkit/rag-lancedb`), and each of
+ * its forks is bounded by {@link integrationExecArgv}. It is ~80% of the tier's
+ * test time (the serial `coverage.yml` run: 568 s of 707 s; its 576 fault-matrix
+ * files most of it), so at 2 workers the whole `test:integration` step waits on
+ * `cli` alone while half of a 4-vCPU CI runner sits idle — 2.2x the serial
+ * whole-tier run's wall clock on ubuntu, and the same shape on Windows, where it
+ * is the critical path of every merge.
+ *
+ * 4 is the vCPU count of the GitHub-hosted ubuntu-latest and windows-latest
+ * runners the gate runs on — not `availableParallelism()`, which on a
+ * developer machine would fork a dozen at once beside the rest of the tier.
+ */
+export const cliIntegrationTestWorkers = 4;
+
 export interface IntegrationTestConfigOverrides {
   exclude?: string[];
+  /** Raise only for a package with no native-memory fork — see {@link cliIntegrationTestWorkers}. */
+  maxWorkers?: number;
 }
 
 /** Builds the `test` block for a package's own vitest.integration.config.ts. */
@@ -312,7 +334,7 @@ export function createIntegrationTestConfig(overrides: IntegrationTestConfigOver
     passWithNoTests: true,
     clearMocks: CLEAR_MOCKS_BEFORE_EACH_TEST,
     pool: integrationPool,
-    maxWorkers: maxTestWorkers,
+    maxWorkers: overrides.maxWorkers ?? maxTestWorkers,
     execArgv: integrationExecArgv,
     reporters: ['default'],
   };
