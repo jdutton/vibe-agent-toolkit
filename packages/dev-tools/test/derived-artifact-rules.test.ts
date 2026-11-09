@@ -13,12 +13,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { PROJECT_ROOT } from '../src/common.js';
 import {
+  checkBuiltOutputEdges,
   checkChangelogFragments,
   checkClaudeMdByteBudget,
   checkLockfileWorkspaceResolutions,
   checkNoStrayGeneratedMarkers,
   checkPackageScripts,
-  checkTurboAdopterEdges,
   checkValidateWorkflowGenerated,
   CLAUDE_MD_BYTE_BUDGET,
   STANDARD_COMPILE,
@@ -56,6 +56,27 @@ function writeWorkspace(
 }
 
 const GOOD_SCRIPTS = { build: STANDARD_COMPILE, typecheck: STANDARD_SCRIPTS.typecheck, clean: STANDARD_SCRIPTS.clean };
+
+// `alpha` and `beta` are not packages of this repository, so the reach-shaped
+// literals in the checkBuiltOutputEdges cases are invisible to the same scan
+// run over this file.
+const ALPHA_BUILD = `${SCOPE}/alpha#build`;
+const BETA_BUILD = `${SCOPE}/beta#build`;
+const BETA_SYSTEM = `${SCOPE}/beta#test:system`;
+const SYSTEM_TEST = 'packages/beta/test/system/runs-alpha.system.test.ts';
+
+/** turbo's graph with beta's system tier ordering only its own build — not alpha's. */
+function unordered(): Map<string, string[]> {
+  return new Map([[ALPHA_BUILD, []], [BETA_BUILD, []], [BETA_SYSTEM, [BETA_BUILD]], [`${SCOPE}/beta#test:unit`, [BETA_BUILD]]]);
+}
+
+/** Workspace of alpha and beta; `tests` maps a path under `packages/beta/` to its text. Returns the repo-relative paths. */
+function writeAlphaBetaWorkspace(root: string, tests: Record<string, string>, betaScripts: Record<string, string> = GOOD_SCRIPTS): string[] {
+  writeWorkspace(root, { dir: 'alpha', scripts: GOOD_SCRIPTS });
+  const files = Object.entries(tests).map(([rel, text]) => [`packages/beta/${rel}`, text] as const);
+  writeWorkspace(root, { dir: 'beta', scripts: betaScripts }, Object.fromEntries(files));
+  return files.map(([rel]) => rel);
+}
 
 describe('derived-artifact rules on fixture trees', () => {
   let root: string;
@@ -150,26 +171,82 @@ describe('derived-artifact rules on fixture trees', () => {
     });
   });
 
-  describe('checkTurboAdopterEdges', () => {
-    const adopter = { dir: 'adopter', scripts: { ...GOOD_SCRIPTS, 'build:skills': 'node ../cli/dist/bin/vat.js skills build' } };
+  describe('checkBuiltOutputEdges', () => {
+    const workspaceWith = (tests: Record<string, string>, betaScripts?: Record<string, string>): string[] =>
+      writeAlphaBetaWorkspace(root, tests, betaScripts);
 
-    it('flags a package that runs the CLI binary with no turbo edge on cli#build', () => {
-      writeWorkspace(root, adopter, { 'turbo.json': '{ "tasks": { "build:skills": { "dependsOn": ["build"] } } }' });
+    it.each([
+      ['a ../ path', "const BIN = safePath.resolve(here, '../../../alpha/dist/bin.js');"],
+      ['a repo-rooted path', "const BIN = safePath.join(root, 'packages/alpha/dist/bin.js');"],
+      ['the segment form', "const BIN = safePath.join(here, '..', '..', '..', 'alpha', 'dist', 'bin.js');"],
+      ['a dist directory with nothing after it', 'const DIST = `../../../alpha/dist`;'],
+    ])('flags %s to a sibling dist that turbo does not order', (_label, text) => {
+      const files = workspaceWith({ 'test/system/runs-alpha.system.test.ts': text });
 
-      expect(checkTurboAdopterEdges(root).map((f) => f.path)).toEqual(['turbo.json']);
+      const findings = checkBuiltOutputEdges(root, unordered(), files);
+
+      expect(findings.map((f) => f.path)).toEqual([SYSTEM_TEST]);
+      expect(findings[0]?.message).toContain(`does not order ${ALPHA_BUILD} before it`);
+      expect(findings[0]?.message).toContain(BETA_SYSTEM);
     });
 
-    it('accepts a direct edge, and a transitive one through the package\'s own #build', () => {
-      writeWorkspace(root, adopter, {
-        'turbo.json': '{ "tasks": { "@vibe-agent-toolkit/adopter#build:skills": { "dependsOn": ["@vibe-agent-toolkit/cli#build", "build"] } } }',
-      });
-      expect(checkTurboAdopterEdges(root)).toEqual([]);
+    it('accepts a reach turbo orders, directly or through another task', () => {
+      const files = workspaceWith({ 'test/system/runs-alpha.system.test.ts': "spawn('../../../alpha/dist/bin.js');" });
+      const direct = unordered().set(BETA_SYSTEM, [BETA_BUILD, ALPHA_BUILD]);
+      const transitive = unordered().set(BETA_BUILD, [ALPHA_BUILD]);
 
-      writeFileSync(
-        safePath.join(root, 'turbo.json'),
-        '{ "tasks": { "build:skills": { "dependsOn": ["build"] }, "@vibe-agent-toolkit/adopter#build": { "dependsOn": ["@vibe-agent-toolkit/cli#build", "^build"] } } }',
-      );
-      expect(checkTurboAdopterEdges(root)).toEqual([]);
+      expect(checkBuiltOutputEdges(root, direct, files)).toEqual([]);
+      expect(checkBuiltOutputEdges(root, transitive, files)).toEqual([]);
+    });
+
+    it('reads the tier off the file: a helper in test/system/ is the system tier, a plain test is unit', () => {
+      const files = workspaceWith({
+        'test/system/subject.ts': "export const BIN = '../../../alpha/dist/bin.js';",
+        'test/plain.test.ts': "const BIN = '../../alpha/dist/bin.js';",
+      });
+
+      const findings = checkBuiltOutputEdges(root, unordered(), files);
+
+      expect(findings.map((f) => [f.path, f.message.split(' ')[0]])).toEqual([
+        ['packages/beta/test/system/subject.ts', BETA_SYSTEM],
+        ['packages/beta/test/plain.test.ts', `${SCOPE}/beta#test:unit`],
+      ]);
+    });
+
+    it('fails a reach from a tier turbo has no task for, rather than passing it', () => {
+      const files = workspaceWith({ 'test/integration/runs.integration.test.ts': "run('../../../alpha/dist/bin.js');" });
+
+      expect(checkBuiltOutputEdges(root, unordered(), files)[0]?.message).toContain(`no ${SCOPE}/beta#test:integration task`);
+    });
+
+    it('ignores a fake path, a non-package directory, a fixture tree and a non-source file', () => {
+      const files = workspaceWith({
+        'test/system/runs-alpha.system.test.ts': "spawn('../../../alpha/dist/bin.js');",
+        'test/fake.test.ts': "normalize('/repo/packages/alpha/dist/x.js'); run('node ../alpha/dist/x.js'); glob('../nowhere/dist/x.js');",
+        'test/fixtures/project/x.test.ts': "run('../../../../alpha/dist/bin.js');",
+        'test/system/notes.md': "'../../../alpha/dist/bin.js'",
+      });
+
+      const findings = checkBuiltOutputEdges(root, unordered(), files);
+
+      expect(findings.map((f) => f.path)).toEqual([SYSTEM_TEST]);
+    });
+
+    it('flags a script that runs a sibling binary, as the turbo task that runs it', () => {
+      const scripts = { ...GOOD_SCRIPTS, 'build:skills': 'node ../alpha/dist/bin/vat.js skills build', 'build:code': 'node ../alpha/dist/bin/vat.js build' };
+      const files = workspaceWith({ 'test/system/runs-alpha.system.test.ts': "spawn('../../../alpha/dist/bin.js');" }, scripts);
+      const graph = unordered().set(BETA_SYSTEM, [BETA_BUILD, ALPHA_BUILD]).set(`${SCOPE}/beta#build:skills`, [BETA_BUILD]);
+
+      const findings = checkBuiltOutputEdges(root, graph, files);
+
+      expect(findings.map((f) => f.message.split(' ')[0])).toEqual([`${SCOPE}/beta#build:skills`, BETA_BUILD]);
+      expect(findings[0]?.path).toBe('packages/beta/package.json (script "build:skills")');
+    });
+
+    it('is red when it finds no test reach at all: a blind scan is not a clean tree', () => {
+      const files = workspaceWith({ 'test/plain.test.ts': 'expect(1).toBe(1);' });
+
+      expect(checkBuiltOutputEdges(root, unordered(), files).map((f) => f.path)).toEqual(['packages']);
     });
   });
 });
@@ -179,7 +256,6 @@ describe('derived-artifact rules on the real tree', () => {
     ['package scripts', checkPackageScripts],
     ['lockfile workspace resolutions', checkLockfileWorkspaceResolutions],
     ['validate.yml is generated', checkValidateWorkflowGenerated],
-    ['turbo adopter edges', checkTurboAdopterEdges],
     ['changelog fragments', checkChangelogFragments],
   ])('%s: no findings', (_label, rule) => {
     expect(rule(PROJECT_ROOT)).toEqual([]);

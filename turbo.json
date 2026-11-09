@@ -169,6 +169,35 @@
       "outputs": [],
       "cache": true
     },
+    // --- Suites that execute a sibling package's BUILT output ---
+    // A test that spawns or imports another package's `dist/` needs that package's
+    // `build` ordered first — and its hash folded in, so a rebuild re-runs the suite.
+    // A `workspace:*` devDependency does that through `^build` when it makes no
+    // cycle; each entry below would be one (the cli depends on resources and
+    // rag-lancedb; lab depends on resources), so the edge is explicit instead.
+    // `checkBuiltOutputEdges` (validate-structure) derives every such reach from the
+    // test files and fails when turbo's own graph does not order it.
+    //
+    // rag-lancedb: `cli-dogfooding.system.test.ts` runs `packages/cli/dist/bin.js`.
+    "@vibe-agent-toolkit/rag-lancedb#test:system": {
+      "dependsOn": ["^build", "build", "@vibe-agent-toolkit/cli#build"],
+      "outputs": [],
+      "cache": true
+    },
+    // resources: `external-url-validation.system.test.ts` runs the cli's `dist/bin/vat.js`.
+    "@vibe-agent-toolkit/resources#test:system": {
+      "dependsOn": ["^build", "build", "@vibe-agent-toolkit/cli#build"],
+      "outputs": [],
+      "cache": true
+    },
+    // resources: `git-crawl-io-cost.integration.test.ts` preloads the lab's built I/O
+    // counter (`lab/dist/facets/io/counter.cjs`).
+    "@vibe-agent-toolkit/resources#test:integration": {
+      "dependsOn": ["^build", "build", "@vibe-agent-toolkit/lab#build"],
+      "outputs": [],
+      "cache": true,
+      "env": ["CI"]
+    },
     // --- Native-memory serialisation ---
     // The root `test:integration` / `test:system` scripts ran turbo with
     // `--concurrency=1` because integration forks in THREE packages hold 1–3 GB of

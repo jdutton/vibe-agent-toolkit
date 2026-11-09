@@ -29,6 +29,11 @@ config ([`docs/writing-tests.md`](../../docs/writing-tests.md#the-per-file-durat
 - Goldens (`packaged-output-drift`, `pipeline-oracles`) compare BUILT output: `bun run build`
   first, then `UPDATE_DRIFT_GOLDEN=1` on the one file from its package directory, and read the
   diff — it must be exactly your edit.
+- A test that spawns or imports ANOTHER package's built `dist/` (`../../../cli/dist/bin.js`,
+  `packages/cli/dist/…`) needs turbo to order that package's `build` before its tier: a
+  `workspace:*` devDependency when that makes no cycle, else a `<pkg>#test:<tier>` entry in
+  `turbo.json` whose `dependsOn` names `<other>#build`. (enforced by: `validate-structure`,
+  `checkBuiltOutputEdges` — it reads turbo's own `--dry=json` graph)
 - A test under this rule runs real processes: use `NODE_EXECUTABLE` / `gitExecutable()` from
   `@vibe-agent-toolkit/utils/testing` rather than spawning `node` or `git` by name.
   (enforced by: `local/no-bare-executable-spawn`, repo-wide, no allowlist)
