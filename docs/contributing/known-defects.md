@@ -609,14 +609,44 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   `local/no-text-git-object-read`), but every `ls-files -z` caller reads through `runGit`, which
   decodes UTF-8 and replaces each invalid byte with U+FFFD. On a file system that stores name bytes
   verbatim (Linux), a file named `\xff.md` is listed as `�.md`: a lookup misses it, and two such
-  names collapse into one. macOS and Windows refuse to create such a name, so they never see it.
+  names collapse into one. NTFS accepts a name holding an unpaired surrogate, which Git for Windows
+  writes as bytes that are not UTF-8, so Windows is re-spelled the same way; APFS refuses such names.
 - **Traced in code**, not reproduced against the built CLI.
-- **Where:** the `ls-files` readers in [`git-utils.ts`](../../packages/utils/src/git-utils.ts),
-  [`git-publish.ts`](../../packages/cli/src/commands/claude/marketplace/git-publish.ts),
-  [`capture.ts`](../../packages/cli/src/qa-snapshot/capture.ts) and
-  [`git-state.ts`](../../packages/lab/src/harness/git-state.ts)
+- **Where:** every product and dev-tools reader of the listing — `git grep -n "'ls-files'" -- 'packages/*/src'`
+  (in `utils`, `cli`, `lab` and `dev-tools`)
 - **Fix:** read the listing with `runGitBytes`, decide each path with `decodeUtf8Exactly` and refuse
   (or report) the ones it cannot name; then add `ls-files` to the rule's subcommands.
+
+### A link-walk refusal prints a hostile link's path and text raw
+
+- **Severity:** Important · **Effort:** M · **User-visible:** yes (message text)
+- **Mechanism:** the git skill source escapes every name and text the repository supplies in its own
+  messages (`shown` in `git-clone.ts`), but the link-containment walk that runs after checkout, and
+  every install lane that shares it, puts a link's path and text into its refusal raw — or, for
+  `unportable`, through `JSON.stringify`, which leaves C1 controls and bidirectional marks as they are.
+  A committed link named with an escape sequence that passes the text check but escapes through
+  another link reaches the operator's terminal as that sequence.
+- **Traced in code**, not reproduced against the built CLI.
+- **Where:** `linkRefusal`, `describedChainRefusal`, `describedRefusal` and `kernelRefusal` in
+  [`link-containment.ts`](../../packages/utils/src/tree-change/link-containment.ts); `refusalClause`
+  in [`host-chain.ts`](../../packages/utils/src/tree-change/host-chain.ts)
+- **Fix:** move `shown` into `utils` as the one way to show an untrusted name, use it at every site
+  above, and delete the `JSON.stringify` spelling.
+
+### A git skill source's committed paths are judged for UTF-8 only, not for what the host can hold
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** yes (a different verdict per host)
+- **Mechanism:** a git skill source (`url:`, `vat audit <git url>`) refuses a committed path that is
+  not UTF-8 on every host, but nothing else about a path. Two paths that differ only by case or by
+  Unicode normalization (`SKILL.md` and `skill.md`, an NFC and an NFD `é.md`) are both checked out on
+  Linux, while NTFS and APFS keep one of them silently, so the same commit is audited with different
+  content per host. A path Windows cannot hold (`con.md`, `a:b`, `x.`) is checked out on Linux and
+  refused by Git for Windows at checkout (`Failed to check out the cloned commit`).
+- **Traced in code**, not reproduced against the built CLI.
+- **Where:** `committedPathText` in
+  [`git-clone.ts`](../../packages/agent-skills/src/skill-source/git-clone.ts)
+- **Fix:** judge every committed path on every host, as link texts already are: refuse a commit
+  whose paths collide once case-folded and NFC-normalized, and a path no Windows host can hold.
 
 ### A one-file edit repopulates the whole tree
 

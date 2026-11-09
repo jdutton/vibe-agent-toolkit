@@ -26,6 +26,10 @@ const CASES: RuleCases = {
     { code: "runGit(['remote', 'show', 'origin']);", filename: SRC },
     // A global option's VALUE is not the subcommand.
     { code: "runGit(['-C', 'show', 'status']);", filename: SRC },
+    { code: "runGit(['--git-dir', 'ls-tree', 'status']);", filename: SRC },
+    // A list of words that never reaches a call is not an argv.
+    { code: "const MODES = ['show', 'hide']; const ok = MODES.includes(mode);", filename: SRC },
+    { code: "const options = { modes: ['show', 'hide'] };", filename: SRC },
   ],
   invalid: [
     { code: "runGit(['ls-tree', '-r', '-z', commit], { cwd, trim: false });", filename: SRC, errors: [{ messageId: 'textRead', data: { subcommand: 'ls-tree' } }] },
@@ -38,8 +42,18 @@ const CASES: RuleCases = {
     { code: "runGit(['-c', 'core.quotepath=false', 'ls-tree', commit]);", filename: SRC, errors: [{ messageId: 'textRead', data: { subcommand: 'ls-tree' } }] },
     // Parked in a variable, then handed to anything: the literal is the read.
     { code: "const args = ['ls-tree', commit]; runGitBytes(args);", filename: SRC, errors: [{ messageId: 'textRead' }] },
+    // A global option's value that is not a literal is still skipped.
+    { code: "runGit(['-C', dir, 'cat-file', '--batch']);", filename: SRC, errors: [{ messageId: 'textRead', data: { subcommand: 'cat-file' } }] },
+    { code: "runGit(['-c', `core.x=${v}`, 'ls-tree', c]);", filename: SRC, errors: [{ messageId: 'textRead', data: { subcommand: 'ls-tree' } }] },
+    { code: "runGit(['--git-dir', gitDir, 'cat-file', 'blob', o]);", filename: SRC, errors: [{ messageId: 'textRead', data: { subcommand: 'cat-file' } }] },
+    // Global options spread in front of the subcommand.
+    { code: "runGit([...configArgs, 'ls-tree', c]);", filename: SRC, errors: [{ messageId: 'textRead', data: { subcommand: 'ls-tree' } }] },
+    // A template literal with no expressions is a literal.
+    { code: 'runGit([`show`, c]);', filename: SRC, errors: [{ messageId: 'textRead', data: { subcommand: 'show' } }] },
+    // Spread into the argv a call is handed.
+    { code: "runGit([...['cat-file', '--batch']]);", filename: SRC, errors: [{ messageId: 'textRead' }] },
     // Not the argv position of the bytes runner.
-    { code: "runGitBytes(['--version'], { extra: ['cat-file'] });", filename: SRC, errors: [{ messageId: 'textRead' }] },
+    { code: "runGitBytes(['--version'], ['cat-file']);", filename: SRC, errors: [{ messageId: 'textRead' }] },
     // A wrapper is not the bytes runner, whatever its name says: it may decode.
     { code: "readCloneBytes(['cat-file', '--batch'], cloneDir);", filename: SRC, errors: [{ messageId: 'textRead' }] },
     { code: "readBytesOf(['ls-tree', commit]);", filename: SRC, errors: [{ messageId: 'textRead' }] },

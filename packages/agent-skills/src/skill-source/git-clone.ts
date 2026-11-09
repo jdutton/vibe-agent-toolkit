@@ -84,7 +84,7 @@ function objectStoreRead(cloneDir: string, input?: string): Parameters<typeof ru
  */
 function objectStoreBytes(result: GitBytesRunResult, subcommand: string, what: string): Buffer {
   refuseTimedOut([subcommand], result);
-  if (!result.ok) throw new GitCloneFailedError(`Failed to ${what}: ${result.stderr}`);
+  if (!result.ok) throw new GitCloneFailedError(`Failed to ${what}: ${gitSaid(result.stderr)}`);
   return result.stdout;
 }
 
@@ -152,7 +152,8 @@ export function cloneGitSource(parsed: ParsedGitUrl, targetTempdir: string): Git
   const placement = subpathPlacement(targetTempdir, targetDir);
   if (placement === 'outside') throw subpathEscapes(subpath);
   if (placement === 'absent') {
-    const topLevel = readdirSync(targetTempdir).join(', ');
+    // The names are the repository's own, checked out: shown, never printed raw.
+    const topLevel = readdirSync(targetTempdir).map((name) => shown(name)).join(', ');
     throw new VatError(
       GIT_SUBPATH_INVALID_CODE,
       `Subpath not found in cloned repo: ${subpath ?? '(none)'}. Repo root contains: ${topLevel}.`,
@@ -218,43 +219,65 @@ const TREE_ENTRY = /^(\d{6}) (?:blob|tree|commit) ([\da-f]{40}|[\da-f]{64})$/;
 const BACKSLASH = '\\';
 
 /**
- * Whether a character must not reach a message as itself: a C0 or C1 control or DEL (a terminal
- * acts on them), or a bidirectional or invisible formatting mark (it makes one name read as another).
+ * The categories of character that must not reach a message as themselves, named by Unicode rather
+ * than by a hand-kept list: a control (`Cc` — a terminal acts on C0, C1 and DEL), a format character
+ * (`Cf` — bidirectional marks, zero-width and invisible characters, the tag characters that carry
+ * hidden text to a model reading the message), a line or paragraph separator, a private-use
+ * character. {@link UNSHOWABLE_RANGES} adds the invisibles outside them.
  */
-function unshowable(code: number): boolean {
-  return (
-    code < 0x20 ||
-    (code >= 0x7f && code <= 0x9f) ||
-    code === 0x61c ||
-    (code >= 0x200b && code <= 0x200f) ||
-    (code >= 0x2028 && code <= 0x202e) ||
-    (code >= 0x2066 && code <= 0x2069) ||
-    code === 0xfeff
-  );
+const UNSHOWABLE_CATEGORY = /^[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Co}]$/u;
+
+/** The invisibles {@link UNSHOWABLE_CATEGORY} does not name, as inclusive code-point ranges. */
+const UNSHOWABLE_RANGES: ReadonlyArray<readonly [number, number]> = [
+  [0x3_4f, 0x3_4f], // combining grapheme joiner
+  [0x11_5f, 0x11_60], // Hangul choseong and jungseong fillers
+  [0x31_64, 0x31_64], // Hangul filler
+  [0xff_a0, 0xff_a0], // halfwidth Hangul filler
+  [0xfe_00, 0xfe_0f], // variation selectors
+  [0xe_01_00, 0xe_01_ef], // variation selectors supplement
+];
+
+/** Whether a character must not reach a message as itself — see {@link UNSHOWABLE_CATEGORY}. */
+function unshowable(character: string, code: number): boolean {
+  return UNSHOWABLE_CATEGORY.test(character) || UNSHOWABLE_RANGES.some(([low, high]) => code >= low && code <= high);
 }
 
-/** One character of {@link shown}: itself, or its escape. */
-function shownCharacter(character: string): string {
+/** One character of {@link escaped}: itself, or its escape (`\uHHHH`, or `\u{HHHHH}` past the BMP). */
+function escapedCharacter(character: string): string {
   if (character === '"' || character === BACKSLASH) return BACKSLASH + character;
   const code = character.codePointAt(0) ?? 0;
-  return unshowable(code) ? `${BACKSLASH}u${code.toString(16).padStart(4, '0')}` : character;
+  if (!unshowable(character, code)) return character;
+  return code > 0xff_ff ? `${BACKSLASH}u{${code.toString(16)}}` : `${BACKSLASH}u${code.toString(16).padStart(4, '0')}`;
+}
+
+/** Text with every character a message must not show as itself escaped ({@link escapedCharacter}). */
+function escaped(text: string): string {
+  return [...text].map((character) => escapedCharacter(character)).join('');
 }
 
 /**
- * What the repository wrote — a path, a link text, a record git printed — as a message shows it:
- * quoted, every unshowable character as `\uHHHH`, `"` and `\` escaped, and bytes that are not UTF-8
- * as `\xHH` each. One spelling for everything the repository supplies, so a hostile name can
- * neither act on the operator's terminal nor pass for another.
+ * What the repository wrote — a path, a link text, a record git printed, a name it checked out — as
+ * this lane's messages show it: quoted, every character {@link unshowable} names as its escape, `"`
+ * and `\` escaped, and bytes that are not UTF-8 as `\xHH` each. So a hostile name can neither act on
+ * the operator's terminal nor hide text in the message.
  */
 function shown(value: string | Buffer): string {
-  if (typeof value === 'string') return `"${[...value].map((character) => shownCharacter(character)).join('')}"`;
+  if (typeof value === 'string') return `"${escaped(value)}"`;
   const text = decodeUtf8Exactly(value);
   return text === undefined ? `"${[...value].map((byte) => shownByte(byte)).join('')}"` : shown(text);
 }
 
-/** One byte of {@link shown}'s spelling of bytes that are not UTF-8: ASCII as {@link shownCharacter}, the rest `\xHH`. */
+/**
+ * What git said on stderr, as a message shows it: line by line, each line {@link escaped}. git
+ * quotes some names it prints and not others, and a remote's own words reach clone's stderr.
+ */
+function gitSaid(stderr: string): string {
+  return stderr.trim().split('\n').map((line) => escaped(line)).join('\n');
+}
+
+/** One byte of {@link shown}'s spelling of bytes that are not UTF-8: ASCII as {@link escapedCharacter}, the rest `\xHH`. */
 function shownByte(byte: number): string {
-  return byte < 0x80 ? shownCharacter(String.fromCodePoint(byte)) : `${BACKSLASH}x${byte.toString(16).padStart(2, '0')}`;
+  return byte < 0x80 ? escapedCharacter(String.fromCodePoint(byte)) : `${BACKSLASH}x${byte.toString(16).padStart(2, '0')}`;
 }
 
 /**
@@ -263,7 +286,7 @@ function shownByte(byte: number): string {
  * map distinct committed paths onto one string, POSIX writes the bytes verbatim, and Git for
  * Windows converts the path from UTF-8 to UTF-16 to create the file — so the name judged is not the
  * name written. (Paths that are distinct UTF-8 but one file on a case- or normalization-folding
- * file system are not judged here.)
+ * file system, and paths no Windows host can hold, are not judged here: a known defect.)
  *
  * @throws GitCloneFailedError naming the path's bytes
  */
@@ -381,7 +404,7 @@ function refuseCommittedLinkTexts(cloneDir: string, commit: string, subpath: str
 /** Write the commit's tree to disk — index and working tree — once its links' texts are judged. */
 function checkOut(cloneDir: string, commit: string): void {
   const result = runGit(['read-tree', '--reset', '-u', commit], {}, cloneDir);
-  if ((result.status ?? 1) !== 0) throw new GitCloneFailedError(`Failed to check out the cloned commit: ${(result.stderr ?? '').trim()}`);
+  if ((result.status ?? 1) !== 0) throw new GitCloneFailedError(`Failed to check out the cloned commit: ${gitSaid(result.stderr)}`);
 }
 
 /**
@@ -417,7 +440,7 @@ function cloneShallow(parsed: ParsedGitUrl, tempdir: string): string {
   const result = runGit(args, env);
   const status = result.status ?? 1;
   if (status !== 0) {
-    throw cloneFailure(parsed, (result.stderr ?? '').trim());
+    throw cloneFailure(parsed, gitSaid(result.stderr));
   }
   return parsed.ref ?? 'HEAD';
 }
@@ -447,7 +470,7 @@ function revParseHead(tempdir: string): string {
   const result = runGit(['rev-parse', 'HEAD'], {}, tempdir);
   const status = result.status ?? 1;
   if (status !== 0) {
-    throw new GitCloneFailedError(`Failed to resolve HEAD commit in cloned repo: ${(result.stderr ?? '').trim()}`);
+    throw new GitCloneFailedError(`Failed to resolve HEAD commit in cloned repo: ${gitSaid(result.stderr)}`);
   }
   // Full 40-char SHA: the commit is the git cache key, so truncation risks cross-repo collisions.
   return (result.stdout ?? '').trim();

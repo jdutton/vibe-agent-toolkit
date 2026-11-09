@@ -171,6 +171,24 @@ describe('cloneGitSource reads committed paths as the bytes git holds', () => {
     for (const raw of [esc, rlo]) expect(clone()).toThrow(expect.objectContaining({ message: expect.not.stringContaining(raw) }));
   });
 
+  it.for([
+    // Escapes spelled after the backslash, which is prefixed below: a transform may cook `\u` in `String.raw`.
+    ['a C1 CSI', 0x9b, 'u009b'],
+    ['a soft hyphen', 0xad, 'u00ad'],
+    ['a combining grapheme joiner', 0x3_4f, 'u034f'],
+    ['a word joiner', 0x20_60, 'u2060'],
+    ['a line separator', 0x20_28, 'u2028'],
+    ['a variation selector', 0xfe_0f, 'ufe0f'],
+    ['a tag character', 0xe_00_41, 'u{e0041}'],
+  ] as const)('shows %s in a path by its escape', ([, code, spelled]) => {
+    const character = String.fromCodePoint(code);
+    const escape = `\\${spelled}`;
+    installGit({ links: [link(`plugins/a${character}b`, OID_A, UNC)] });
+    const run = clone();
+    expect(run).toThrow(expect.objectContaining({ message: expect.stringContaining(`"plugins/a${escape}b" is a symbolic link`) }));
+    expect(run).toThrow(expect.objectContaining({ message: expect.not.stringContaining(character) }));
+  });
+
   it('judges a link whose path is valid non-ASCII UTF-8 by that path', () => {
     installGit({ links: [link('plugins/foo/é', OID_A, UNC)] });
     expectRefusedBeforeCheckout(clone(), { code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('"plugins/foo/é" is a symbolic link whose target leads through a network path') });

@@ -73,9 +73,10 @@ const DEFAULT_MAX_BUFFER = 64 * 1024 * 1024;
 /**
  * The most bytes {@link runGitBytes} can carry: its transport spells each byte as two hex
  * characters, and the spawn THROWS (rather than reporting) when it builds a string longer than
- * the engine allows. A larger `maxBuffer` is clamped to this, so an overrun is reported as one.
+ * the engine allows. A larger `maxBuffer` is clamped to this, so an overrun is reported as one. Less
+ * 1 MiB of headroom: the spawn may hold a read chunk past `maxBuffer` before it stops the child.
  */
-const HEX_MAX_BUFFER = Math.floor(constants.MAX_STRING_LENGTH / 2);
+const HEX_MAX_BUFFER = Math.floor(constants.MAX_STRING_LENGTH / 2) - 1024 * 1024;
 
 /** Wall-clock ceiling on one invocation, so a hung remote cannot wedge a build. */
 const DEFAULT_TIMEOUT_MS = 60_000;

@@ -204,6 +204,21 @@ describe('cloneGitSource refuses a committed link by its text before checkout, o
     expect(names).toEqual(expect.arrayContaining(['SKILL.md', 'é.md']));
   });
 
+  // The names the repository checked out reach the absent-subpath message escaped: a bidi override
+  // and a C1 CSI (both names every host can hold) would otherwise act on the operator's terminal.
+  it('lists the checked-out names of an absent subpath escaped, never raw', () => {
+    const { clone } = cloneIndexEntries([{ mode: '100644', quotedPath: String.raw`\342\200\256x\302\233y/SKILL.md`, bytes: Buffer.from('# skill\n') }]);
+    // One clone, every assertion on its refusal: a second clone into the same tempdir fails otherwise.
+    let thrown: unknown;
+    try {
+      clone();
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toEqual(expect.objectContaining({ code: GIT_SUBPATH_INVALID_CODE, message: expect.stringMatching(/Repo root contains: .*"\\u202ex\\u009by"/) }));
+    for (const code of [0x20_2e, 0x9b]) expect((thrown as Error).message).not.toContain(String.fromCodePoint(code));
+  });
+
   it('checks out a commit whose links\' texts stay inside (positive control)', () => {
     const { clone } = cloneShapedInto(noShape, 'plugins/foo', { 'plugins/foo/alias.md': 'SKILL.md' });
     expect(clone().targetDir).toMatch(/plugins\/foo$/);
