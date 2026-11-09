@@ -8,7 +8,8 @@
  */
 
 import type { ChangedFileRow } from '@vibe-agent-toolkit/resources';
-import { gitChangedFiles } from '@vibe-agent-toolkit/utils/git';
+import type { RefusalCode } from '@vibe-agent-toolkit/schema';
+import { gitChangedFiles, type GitChangedFilesRefusalKind } from '@vibe-agent-toolkit/utils/git';
 
 import type { LensEvaluation, LensRefusal } from './projection-lenses.js';
 
@@ -17,11 +18,20 @@ export const NO_BASE_REFUSAL = 'changed_files compares this tree with a base com
   + ' Pass --base <ref> (a branch, tag or commit, e.g. --base origin/main) to vat resources query,'
   + ' vat resources check or vat validate.';
 
+/** Only the `--base` passed is the invocation's fault; git and the repository are the environment's. */
+const REFUSAL_BY_KIND: Readonly<Record<GitChangedFilesRefusalKind, RefusalCode>> = {
+  base: 'USAGE_INVALID',
+  'git-failed': 'BACKEND_UNAVAILABLE',
+  repository: 'INPUT_UNREADABLE',
+};
+
 /** Evaluate the lens: its rows, or why there are none. */
 export function evaluateChangedFilesLens(root: string, base: string | undefined): LensEvaluation | LensRefusal {
-  if (base === undefined) return { refused: NO_BASE_REFUSAL };
+  if (base === undefined) return { refused: NO_BASE_REFUSAL, refusal: 'USAGE_INVALID' };
   const result = gitChangedFiles({ root, base });
-  if (!result.ok) return { refused: `changed_files cannot be evaluated: ${result.reason}` };
+  if (!result.ok) {
+    return { refused: `changed_files cannot be evaluated: ${result.reason}`, refusal: REFUSAL_BY_KIND[result.kind] };
+  }
   const changedFiles: ChangedFileRow[] = result.files.map(({ path, status, oldPath, similarity }) => ({
     path, status, oldPath, similarity,
   }));

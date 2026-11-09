@@ -17,16 +17,21 @@ describe('evaluateChangedFilesLens', () => {
   });
 
   it('refuses with the fix when the run was given no base, and asks git nothing', () => {
-    expect(evaluateChangedFilesLens('/corpus', undefined)).toStrictEqual({ refused: NO_BASE_REFUSAL });
+    expect(evaluateChangedFilesLens('/corpus', undefined)).toStrictEqual({ refused: NO_BASE_REFUSAL, refusal: 'USAGE_INVALID' });
     expect(NO_BASE_REFUSAL).toContain('--base <ref>');
     expect(gitChangedFiles).not.toHaveBeenCalled();
   });
 
-  it('refuses with git\'s reason when the base cannot be read', () => {
-    gitChangedFiles.mockReturnValue({ ok: false, reason: 'The base "nope" does not name a commit.' });
+  it.each([
+    ['base', 'USAGE_INVALID'],
+    ['git-failed', 'BACKEND_UNAVAILABLE'],
+    ['repository', 'INPUT_UNREADABLE'],
+  ])('refuses with git\'s reason, and a %s fault as %s', (kind, refusal) => {
+    gitChangedFiles.mockReturnValue({ ok: false, kind, reason: 'The reason.' });
 
     expect(evaluateChangedFilesLens('/corpus', 'nope')).toStrictEqual({
-      refused: 'changed_files cannot be evaluated: The base "nope" does not name a commit.',
+      refused: 'changed_files cannot be evaluated: The reason.',
+      refusal,
     });
   });
 

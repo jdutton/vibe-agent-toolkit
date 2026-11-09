@@ -20,6 +20,7 @@ import {
   type PopulationOutcome,
   type Projection,
 } from '@vibe-agent-toolkit/resources';
+import type { RefusalCode } from '@vibe-agent-toolkit/schema';
 
 import { evaluateChangedFilesLens } from './changed-files-lens.js';
 import { evaluateClaudeContextLens } from './claude-context-lens.js';
@@ -54,6 +55,8 @@ export interface LensEvaluation {
  */
 export interface LensRefusal {
   readonly refused: string;
+  /** Whose fault, as the refusal a statement reading the relation is published under. */
+  readonly refusal: RefusalCode;
 }
 
 /** What evaluating one lens produced: its rows, or why it has none. */

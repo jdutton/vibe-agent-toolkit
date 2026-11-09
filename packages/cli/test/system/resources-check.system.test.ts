@@ -17,10 +17,8 @@
  * populated for the cases above it to mean anything.
  */
 
-import { spawnSync } from 'node:child_process';
-
 import { BUILTIN_CHECK_NAMES } from '@vibe-agent-toolkit/resources';
-import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
+import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
 
@@ -494,7 +492,7 @@ describe('vat resources check over an emptied corpus', () => {
     fs.writeFileSync(safePath.join(emptyDir, '.gitignore'), '*\n', 'utf-8');
     // A git repository, because the ignore oracle is `gitTrackerForProjectRoot`
     // and without one `.gitignore` is just a file.
-    spawnSync(gitExecutable(), ['init', '--quiet'], { cwd: emptyDir });
+    runGitOrThrow(['init', '--quiet'], { cwd: emptyDir });
     writeChecksIn(
       emptyDir,
       checkBlock(NO_MD_KEY, NO_MARKDOWN, MD_ROWS) + checkBlock('no-txt', NO_TXT, TXT_ROWS),

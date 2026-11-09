@@ -58,6 +58,7 @@ import {
 } from '@vibe-agent-toolkit/resources';
 import { forEachInOrder, isVatError, VatError } from '@vibe-agent-toolkit/utils';
 
+import { CommandRefusalError } from './command-refusal.js';
 import type { LensPopulation } from './lens-population.js';
 import type { Logger } from './logger.js';
 import { populateAndReport } from './population-wiring.js';
@@ -67,6 +68,7 @@ import {
   lensRelationNames,
   lensPopulationOf,
   type LensEvaluation,
+  type LensRefusal,
 } from './projection-lenses.js';
 import { openCompileProbe, openEphemeralQueryStore, withPopulationCache } from './projection-store.js';
 
@@ -285,13 +287,20 @@ type ColumnsOfStatement = (sql: string, ...parameters: readonly string[]) => rea
  * anything uncoded is a defect. Rewording into a bare `Error` used to drop it,
  * so every refused statement read as VAT's own failure.
  *
+ * 🔑 A relation a lens REFUSED carries that lens's refusal code instead: a repository git cannot
+ * read is the environment's fault, not the statement's.
+ *
  * @param sql - The statement that was submitted
  * @param error - What running or compiling it threw
- * @param refusals - Why each refused lens's relations are absent, by SQL name
+ * @param refusals - Each refused lens's refusal, by the SQL name of a relation it owns
  * @returns The error to throw in its place
  */
-function describedFailure(sql: string, error: unknown, refusals?: ReadonlyMap<string, string>): Error {
-  const message = describeQueryFailure(sql, error instanceof Error ? error.message : String(error), refusals);
+export function describedFailure(sql: string, error: unknown, refusals: ReadonlyMap<string, LensRefusal> = new Map()): Error {
+  const engine = error instanceof Error ? error.message : String(error);
+  const message = describeQueryFailure(sql, engine, refusals);
+  const relation = unevaluatedRelationIn(engine);
+  const refused = relation === undefined ? undefined : refusals.get(relation);
+  if (refused !== undefined) return new CommandRefusalError(refused.refusal, message, { cause: error });
   return isVatError(error) ? new VatError(error.code, message, { cause: error }) : new Error(message, { cause: error });
 }
 
@@ -486,11 +495,11 @@ export async function withQueriedProjection<T>(
       const lensPopulations: LensEvaluation['population'][] = [];
       const evaluated: string[] = [];
       // 🚨 A REFUSED lens writes nothing; its reason rides on SQLite's refusal.
-      const refusals = new Map<string, string>();
+      const refusals = new Map<string, LensRefusal>();
       await forEachInOrder(lenses, async (lens) => {
         const evaluation = await evaluateLens(lens, { projection, root, base: options.base, cache, logger });
         if ('refused' in evaluation) {
-          for (const relation of lensRelationNames(lens)) refusals.set(relation, evaluation.refused);
+          for (const relation of lensRelationNames(lens)) refusals.set(relation, evaluation);
           return;
         }
         evaluated.push(lens.name);
@@ -599,7 +608,7 @@ function unevaluatedRelationIn(message: string): string | undefined {
 export function describeQueryFailure(
   sql: string,
   message: string,
-  refusals: ReadonlyMap<string, string> = new Map(),
+  refusals: ReadonlyMap<string, LensRefusal> = new Map(),
 ): string {
   if (!NAME_NOT_FOUND.some((prefix) => message.includes(prefix))) return message;
 
@@ -617,7 +626,7 @@ export function describeQueryFailure(
     const refused = refusals.get(unevaluated);
     if (refused !== undefined) {
       return `${message}\n\nThis statement reads ${unevaluated}, a derived relation that could not be`
-        + ` evaluated for this run: ${refused}`;
+        + ` evaluated for this run: ${refused.refused}`;
     }
     return `${message}\n\n`
       + `This statement reads ${unevaluated}, a derived relation that was not evaluated for this run:`

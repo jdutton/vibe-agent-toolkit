@@ -268,12 +268,16 @@ HEAD`) — GitHub's "files changed", so a branch behind its base never lists wha
 since. Paths are kept under the project root, relative to it. A rename or copy across the root's
 boundary is seen from inside: renamed or copied in is `added`, renamed out is `deleted`. git pairs
 only paths the index knows into a rename, so a move not yet `git add`ed reads as deleted plus
-added. An untracked nested repository is not listed (its files are its own). Without `--base`,
-with a ref that names no commit, with no merge base (a shallow clone: fetch more history), outside
-a git working tree, or from a root whose case differs from the case git tracks it under, a
-statement reading it is refused with the fix (`USAGE_INVALID`, exit 2) — never answered with an
-empty relation. A path that is not UTF-8 refuses it too. `--base` is read only when a statement
-names `changed_files`; otherwise it is accepted and unused.
+added; a file removed from the index but kept on disk (`git rm --cached`) is one `modified` row.
+An untracked nested repository is not listed (its files are its own); a submodule is listed only
+when its commit moved, as one row naming its directory. A statement reading it is refused with the
+fix — never answered with an empty relation — and the refusal says whose fault it is:
+`USAGE_INVALID` without `--base` or with a ref that names no commit; `BACKEND_UNAVAILABLE` when git
+did not run (not on PATH, timed out); `INPUT_UNREADABLE` when the tree cannot answer — outside a
+git working tree, no commits yet, no merge base (a shallow clone: fetch more history), a root whose
+case differs from the one git lists it under, a path that is not UTF-8, or a diff git cut rename
+detection short on. All exit 2. `--base` is read only when a statement names `changed_files`;
+otherwise it is accepted and unused.
 
 **Output:** the shared report envelope on stdout — YAML, or JSON with
 `--format json` (schema: `packages/cli/schemas/resources-query.json`):
@@ -292,8 +296,9 @@ names `changed_files`; otherwise it is accepted and unused.
 - `0` - The statement ran over a populated tree — zero rows is an answer, `ok`
 - `1` - The population was empty (`RESOURCE_CHECK_BROKEN`)
 - `2` - The statement was refused (`USAGE_INVALID`: not a query, a second
-  statement, an unbound `?`, a name the projection lacks), `[path]` names no
-  directory, or the crawl failed
+  statement, an unbound `?`, a name the projection lacks), a derived relation it reads could not
+  be evaluated (under that relation's own refusal code, above), `[path]` names no directory, or
+  the crawl failed
 
 **Example:**
 ```bash
@@ -323,12 +328,16 @@ each finding also as a `location:line: severity: message [code]` line on stderr.
   `RESOURCE_CHECK_EXAMINED_NOTHING` about it — carries `check: <name>`. A finding about the whole
   run (an empty corpus, no check ran, an interrupted run) carries none.
 - A declared check's violation carries `evidence`: the row's columns other than the reserved ones,
-  in the order SQLite returned them, values as SQLite returned them (a BLOB, or an integer too
-  large for JSON, as the text the message shows). A `path` that could not become the `location`
-  (absolute, NULL, not text) stays in `evidence`.
+  in the order SQLite returned them, values as SQLite returned them (a BLOB as the text the message
+  shows). A `path` that could not become the `location` (absolute, NULL, not text) stays in
+  `evidence`.
 - A check whose rows could not be read carries `reason` on its `RESOURCE_CHECK_BROKEN` finding:
   `{column, value, row, allowed}` — the reserved column, its value as `evidence` renders it, the
-  first bad row (1-based), and what the column may hold. A statement that failed carries none.
+  first bad row (1-based), and what the column may hold. One whose `examined` statement returned no
+  count carries `{statement: "examined", rows, columns?, value?, allowed}` (below). A statement that
+  failed carries none.
+- ⚠️ The published JSON Schema cannot state two rules VAT enforces when it builds the document:
+  `evidence` only on a finding that names its `check`, and `reason` only on `RESOURCE_CHECK_BROKEN`.
 - `data.checks[]` — one entry per check that ran: `name`, `durationSecs`, `rows`, and `broken`,
   `builtin`, `examined`, `allowEmpty` and `examinedNothing: true` when they apply (below).
 
@@ -361,7 +370,8 @@ prefix: `error: <message> [<code>] (line 3, column 5)`.
 **What a check examined.** Zero rows is a check's pass, so zero violations over a thousand files and
 zero violations over nothing read the same — and the run's `examined` counts the whole population,
 which one check whose `WHERE` matches nothing hides behind. A check states its own denominator with
-`examined`, a second statement whose ROW COUNT is what the check ranged over:
+`examined`, a second statement returning ONE count of what the check ranged over — exactly one row
+with one column holding a non-negative integer, as `SELECT COUNT(*)` returns:
 
 ```yaml
 resources:
@@ -369,9 +379,14 @@ resources:
     skills-have-owners:
       description: Every skill names an owner
       sql: SELECT path FROM resource_realizations WHERE path LIKE 'skills/%' AND path NOT IN (…)
-      examined: SELECT path FROM resource_realizations WHERE path LIKE 'skills/%'
+      examined: SELECT COUNT(*) FROM resource_realizations WHERE path LIKE 'skills/%'
       # allowEmpty: true   # only if zero skills is a legitimate answer
 ```
+
+- Any other result — no row, several rows or columns, NULL, text, a negative or a fraction — fails
+  the check as `RESOURCE_CHECK_BROKEN` with `reason: {statement: "examined", rows, columns?,
+  value?, allowed}`: how many rows came back, how many columns when one did, and the value when
+  exactly one cell did. Its entry carries `broken: true` with `rows` and no `examined`.
 
 - Its count is published on the check's `data.checks` entry as `examined`. The key is present
   exactly when the check declares `examined` and that statement completed — absent on a check that
@@ -387,6 +402,10 @@ resources:
   timed into the check's `durationSecs`, and is bounded by `--budget` like any statement. If it
   fails, the check is `RESOURCE_CHECK_BROKEN`, its entry carries `broken: true` with `rows` and no
   `examined`, and none of its rows are reported.
+- A run killed by `--budget` (or dying) after a check completed broken still publishes that check's
+  `RESOURCE_CHECK_BROKEN` as a completed run does — message, `check` and `reason`. One killed
+  during its examined statement is `broken` with `rows`, but its `durationSecs` covers only the
+  violations statement (the unfinished one cannot be charged) and its message says the run stopped.
 - A check that did not run at all is absent from `data.checks` (or `broken` without `rows`), so
   "examined 0" and "not run" never look alike.
 - ⚠️ `examined` is optional, so a check that declares none can pass over an empty population and

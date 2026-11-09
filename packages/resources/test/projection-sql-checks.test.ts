@@ -24,7 +24,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   checkStatements,
+  describeUninterpretableExamined,
   describeUninterpretableRows,
+  examinedCount,
   issuesFromCheckRows,
   uninterpretableRowsReason,
   type CheckRowConversion,
@@ -265,12 +267,6 @@ describe('issuesFromCheckRows — the reserved finding_line and finding_column c
     expect(issue).toMatchObject({ location: 'a.md', line: 3, column: 5 });
   });
 
-  it('accepts an in-range bigint, as a store reading int64 returns one', () => {
-    const [issue] = issuesOf(NAME, CHECK, [{ path: 'a.md', finding_line: 3n, finding_column: 5n }]);
-
-    expect(issue).toMatchObject({ line: 3, column: 5 });
-  });
-
   it('omits both when NULL or absent', () => {
     const issues = issuesOf(NAME, CHECK, [{ path: 'a.md', finding_line: null, finding_column: null }, { path: 'b.md' }]);
 
@@ -293,8 +289,6 @@ describe('issuesFromCheckRows — the reserved finding_line and finding_column c
     ['finding_line', 1.5],
     ['finding_line', '3'],
     ['finding_line', Number.MAX_SAFE_INTEGER + 1],
-    ['finding_line', BigInt(Number.MAX_SAFE_INTEGER) + 1n],
-    ['finding_line', 0n],
     ['finding_line', new Uint8Array([3])],
     ['finding_column', 0],
     ['finding_column', '5'],
@@ -391,10 +385,10 @@ describe('issuesFromCheckRows — the structured check name and evidence', () =>
     expect(Object.keys(issue?.evidence ?? {})).toStrictEqual(['owner', 'count', 'label']);
   });
 
-  it('renders a BLOB as the message renders it, and a bigint as its decimal text', () => {
-    const [issue] = issuesOf(NAME, CHECK, [{ digest: new Uint8Array([1, 255]), big: 2n ** 64n }]);
+  it('renders a BLOB as the message renders it', () => {
+    const [issue] = issuesOf(NAME, CHECK, [{ digest: new Uint8Array([1, 255]) }]);
 
-    expect(issue?.evidence).toStrictEqual({ digest: '{"0":1,"1":255}', big: '18446744073709551616' });
+    expect(issue?.evidence).toStrictEqual({ digest: '{"0":1,"1":255}' });
     expect(issue?.message).toContain(`digest=${String(issue?.evidence?.['digest'])}`);
   });
 
@@ -439,6 +433,38 @@ describe('describeUninterpretableRows', () => {
   it('names a column with no line as the problem', () => {
     expect(describeUninterpretableRows(NAME, refusalOf([{ path: 'a.md' }, { path: 'b.md', finding_column: 5 }])))
       .toBe(`The check "${NAME}" ran and selected 2 rows, but row 2's finding_column = 5 is not NULL without a finding_line, so none of its rows were reported.`);
+  });
+});
+
+describe('examinedCount — an examined statement is one count', () => {
+  it.each([
+    ['COUNT(*)', [{ 'COUNT(*)': 12 }], 12],
+    ['a zero', [{ n: 0 }], 0],
+  ])('reads %s as the count', (_what, rows, count) => {
+    expect(examinedCount(rows)).toStrictEqual({ ok: true, count });
+  });
+
+  it.each([
+    ['no row', [], { rows: 0 }],
+    ['two rows', [{ n: 1 }, { n: 2 }], { rows: 2, columns: 1 }],
+    ['two columns', [{ n: 1, m: 2 }], { rows: 1, columns: 2 }],
+    ['text', [{ n: '3' }], { rows: 1, columns: 1, value: '3' }],
+    ['a negative', [{ n: -1 }], { rows: 1, columns: 1, value: -1 }],
+    ['a fraction', [{ n: 0.5 }], { rows: 1, columns: 1, value: 0.5 }],
+    ['an unsafe integer', [{ n: Number.MAX_SAFE_INTEGER + 1 }], { rows: 1, columns: 1, value: Number.MAX_SAFE_INTEGER + 1 }],
+    ['NULL', [{ n: null }], { rows: 1, columns: 1, value: null }],
+    ['a BLOB', [{ n: new Uint8Array([1]) }], { rows: 1, columns: 1, value: '{"0":1}' }],
+  ])('refuses %s, saying what came back', (_what, rows, shape) => {
+    const read = examinedCount(rows);
+
+    expect(read).toStrictEqual({ ok: false, reason: { statement: 'examined', ...shape, allowed: expect.stringContaining('COUNT(*)') } });
+    expect(read.ok ? '' : describeUninterpretableExamined('n', read.reason)).toMatch(/^The check "n" ran its violations statement, but its examined statement returned .*COUNT\(\*\)/);
+  });
+
+  it('names the one value it refused, quoted when it is text', () => {
+    const read = examinedCount([{ n: '3' }]);
+
+    expect(read.ok ? '' : describeUninterpretableExamined('n', read.reason)).toContain('returned the value "3", not exactly one row');
   });
 });
 

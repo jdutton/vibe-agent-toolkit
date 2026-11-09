@@ -23,15 +23,20 @@ import type { AskProjection } from '../../src/utils/projection-query.js';
 
 const NAME = 'skills-have-owners';
 const VIOLATIONS_SQL = 'SELECT path FROM skills WHERE owner IS NULL';
-const EXAMINED_SQL = 'SELECT path FROM skills';
+const EXAMINED_SQL = 'SELECT COUNT(*) FROM skills';
 const EXAMINED_NOTHING = 'RESOURCE_CHECK_EXAMINED_NOTHING';
 const BROKEN = 'RESOURCE_CHECK_BROKEN';
 
 /** Rows the fake answers per statement; a statement it does not know is a defect in the case. */
-type Answers = Readonly<Record<string, number | Error>>;
+type Answers = Readonly<Record<string, number | Error | readonly Record<string, unknown>[]>>;
+
+/** What a scalar `examined` statement returns: one row, one column, the count. */
+function count(value: number): Record<string, unknown>[] {
+  return [{ 'COUNT(*)': value }];
+}
 
 /**
- * An `ask` that answers each statement with its declared number of rows, or throws its error.
+ * An `ask` that answers each statement with its declared rows (a number of path rows), or throws its error.
  *
  * @param answers - What each statement returns
  * @param asked - Where each statement asked is recorded, in order
@@ -43,7 +48,10 @@ function askFrom(answers: Answers, asked: string[] = []): AskProjection {
     const answer = answers[sql];
     if (answer === undefined) throw new Error(`This fake declares no answer for: ${sql}`);
     if (answer instanceof Error) throw answer;
-    return Array.from({ length: answer }, (_unused, index) => ({ path: `skills/${index}.md` }));
+    const rows: readonly Record<string, unknown>[] = typeof answer === 'number'
+      ? Array.from({ length: answer }, (_unused, index) => ({ path: `skills/${index}.md` }))
+      : answer;
+    return rows;
   };
 }
 
@@ -97,7 +105,7 @@ function runOne(
 
 describe('a check that declares what it examined', () => {
   it('runs the examined statement after the violations statement, and publishes its row count', () => {
-    const { asked, published, issues } = runOne({ examined: EXAMINED_SQL }, { [VIOLATIONS_SQL]: 2, [EXAMINED_SQL]: 17 });
+    const { asked, published, issues } = runOne({ examined: EXAMINED_SQL }, { [VIOLATIONS_SQL]: 2, [EXAMINED_SQL]: count(17) });
 
     expect(asked).toStrictEqual([VIOLATIONS_SQL, EXAMINED_SQL]);
     expect(published).toMatchObject({ name: NAME, rows: 2, examined: 17 });
@@ -109,13 +117,13 @@ describe('a check that declares what it examined', () => {
   it('charges BOTH statements to the check, and nothing else', () => {
     // Two spans of 5 on the fake clock: a cost of 5 would mean the examined statement went
     // unpriced; anything above 10 would mean the conversion was charged.
-    const { costs } = runOne({ examined: EXAMINED_SQL }, { [VIOLATIONS_SQL]: 2, [EXAMINED_SQL]: 17 });
+    const { costs } = runOne({ examined: EXAMINED_SQL }, { [VIOLATIONS_SQL]: 2, [EXAMINED_SQL]: count(17) });
 
     expect(costs[0]?.durationMs).toBe(10);
   });
 
   it('announces the examined statement BEFORE it runs, between the violations statement and the conversion', () => {
-    const { progress } = runOne({ examined: EXAMINED_SQL }, { [VIOLATIONS_SQL]: 2, [EXAMINED_SQL]: 17 });
+    const { progress } = runOne({ examined: EXAMINED_SQL }, { [VIOLATIONS_SQL]: 2, [EXAMINED_SQL]: count(17) });
 
     expect(progress.map((entry) => entry.kind)).toStrictEqual(['start', 'examining', 'converting', 'check', 'checks-complete']);
     expect(progress[1]).toStrictEqual({ kind: 'examining', name: NAME, durationMs: 5, rows: 2 });
@@ -123,7 +131,7 @@ describe('a check that declares what it examined', () => {
   });
 
   it('refuses an examined count of zero, and still reports the check\'s own violations', () => {
-    const { published, issues, report } = runOne({ examined: EXAMINED_SQL }, { [VIOLATIONS_SQL]: 1, [EXAMINED_SQL]: 0 });
+    const { published, issues, report } = runOne({ examined: EXAMINED_SQL }, { [VIOLATIONS_SQL]: 1, [EXAMINED_SQL]: count(0) });
 
     expect(published).toMatchObject({ rows: 1, examined: 0 });
     expect(published).not.toHaveProperty('allowEmpty');
@@ -138,14 +146,14 @@ describe('a check that declares what it examined', () => {
   });
 
   it('takes its severity, fix and reference from the code registry', () => {
-    const { issues } = runOne({ examined: EXAMINED_SQL }, { [VIOLATIONS_SQL]: 0, [EXAMINED_SQL]: 0 });
+    const { issues } = runOne({ examined: EXAMINED_SQL }, { [VIOLATIONS_SQL]: 0, [EXAMINED_SQL]: count(0) });
     const entry = CODE_REGISTRY[EXAMINED_NOTHING];
 
     expect(issues[0]).toMatchObject({ severity: entry.defaultSeverity, fix: entry.fix, reference: entry.reference, check: NAME });
   });
 
   it('accepts zero when the check declares allowEmpty, and publishes that it did', () => {
-    const { published, issues, report } = runOne({ examined: EXAMINED_SQL, allowEmpty: true }, { [VIOLATIONS_SQL]: 0, [EXAMINED_SQL]: 0 });
+    const { published, issues, report } = runOne({ examined: EXAMINED_SQL, allowEmpty: true }, { [VIOLATIONS_SQL]: 0, [EXAMINED_SQL]: count(0) });
 
     expect(published).toMatchObject({ rows: 0, examined: 0, allowEmpty: true });
     expect(issues).toStrictEqual([]);
@@ -153,7 +161,7 @@ describe('a check that declares what it examined', () => {
   });
 
   it('publishes allowEmpty beside a non-zero count too, so the declaration is always visible', () => {
-    const { published } = runOne({ examined: EXAMINED_SQL, allowEmpty: true }, { [VIOLATIONS_SQL]: 0, [EXAMINED_SQL]: 4 });
+    const { published } = runOne({ examined: EXAMINED_SQL, allowEmpty: true }, { [VIOLATIONS_SQL]: 0, [EXAMINED_SQL]: count(4) });
 
     expect(published).toMatchObject({ examined: 4, allowEmpty: true });
   });
@@ -171,8 +179,25 @@ describe('a check that declares what it examined', () => {
     expect(issues[0]?.message).toContain('no such table: skills');
   });
 
+  // Every shape `examinedCount` refuses is pinned in the resources package; these prove the loop
+  // publishes that refusal, with and without a value.
+  it.each([
+    ['no row', [], { rows: 0 }],
+    ['NULL', [{ n: null }], { rows: 1, columns: 1, value: null }],
+  ])('refuses an examined statement returning %s as broken, saying what came back', (_what, rows, shape) => {
+    const { published, issues, report } = runOne({ examined: EXAMINED_SQL }, { [VIOLATIONS_SQL]: 3, [EXAMINED_SQL]: rows });
+
+    expect(published).toMatchObject({ rows: 3, broken: true });
+    expect(published).not.toHaveProperty('examined');
+    expect(issues.map((issue) => [issue.code, issue.check])).toStrictEqual([[BROKEN, NAME]]);
+    expect(issues[0]?.reason).toStrictEqual({ statement: 'examined', ...shape, allowed: expect.stringContaining('one row') });
+    expect(issues[0]?.message).toContain(String((issues[0]?.reason as { allowed?: string } | undefined)?.allowed));
+    const parsed = CHECK_REPORT_SCHEMA.safeParse(report);
+    expect(parsed.success ? [] : parsed.error.issues).toStrictEqual([]);
+  });
+
   it('never runs the examined statement when the violations statement failed', () => {
-    const { asked, published } = runOne({ examined: EXAMINED_SQL }, { [VIOLATIONS_SQL]: new Error('boom'), [EXAMINED_SQL]: 1 });
+    const { asked, published } = runOne({ examined: EXAMINED_SQL }, { [VIOLATIONS_SQL]: new Error('boom'), [EXAMINED_SQL]: count(1) });
 
     expect(asked).toStrictEqual([VIOLATIONS_SQL]);
     expect(published).not.toHaveProperty('rows');
@@ -188,9 +213,9 @@ describe('a check that declares what it examined', () => {
   });
 
   it.each([
-    ['nonzero', { examined: EXAMINED_SQL }, { [VIOLATIONS_SQL]: 1, [EXAMINED_SQL]: 5 }],
-    ['zero', { examined: EXAMINED_SQL }, { [VIOLATIONS_SQL]: 1, [EXAMINED_SQL]: 0 }],
-    ['zero allowed', { examined: EXAMINED_SQL, allowEmpty: true as const }, { [VIOLATIONS_SQL]: 0, [EXAMINED_SQL]: 0 }],
+    ['nonzero', { examined: EXAMINED_SQL }, { [VIOLATIONS_SQL]: 1, [EXAMINED_SQL]: count(5) }],
+    ['zero', { examined: EXAMINED_SQL }, { [VIOLATIONS_SQL]: 1, [EXAMINED_SQL]: count(0) }],
+    ['zero allowed', { examined: EXAMINED_SQL, allowEmpty: true as const }, { [VIOLATIONS_SQL]: 0, [EXAMINED_SQL]: count(0) }],
   ])('builds a document its own published schema accepts (%s)', (_label, check, answers) => {
     const parsed = CHECK_REPORT_SCHEMA.safeParse(runOne(check, answers).report);
     expect(parsed.success ? [] : parsed.error.issues).toStrictEqual([]);

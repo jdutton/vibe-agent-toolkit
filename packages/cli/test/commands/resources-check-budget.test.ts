@@ -1377,3 +1377,43 @@ describe('a run stopped while a check\'s examined statement was running', () => 
     expect(seen.map((entry) => entry.kind)).toStrictEqual(['start', 'examining']);
   });
 });
+
+/**
+ * 🔑 Killed-run parity. A check that COMPLETED broken before the kill filed its cost; its finding
+ * died with the child. The rebuild must publish that finding exactly as a completed run does —
+ * code, `check`, message and `reason` — or the same check reads differently by how the run ended.
+ */
+describe('a killed run rebuilds a check that completed broken exactly as a completed run publishes it', () => {
+  const BROKEN_CHECKS = {
+    graded: { description: 'graded', sql: 'SELECT graded' },
+    shapeless: { description: 'shapeless', sql: 'SELECT shapeless', examined: 'SELECT nothing' },
+    throws: { description: 'throws', sql: 'SELECT throws' },
+    hangs: { description: 'hangs', sql: 'SELECT hangs' },
+  };
+  const ask = (sql: string): Record<string, unknown>[] => {
+    if (sql === 'SELECT graded') return [{ path: 'a.md', finding_severity: 'high' }];
+    if (sql === 'SELECT throws') throw new Error('no such column: nope');
+    if (sql === 'SELECT nothing') return [];
+    return [{ path: 'b.md' }];
+  };
+  const run = (onProgress?: (entry: ProgressEntry) => void): ReturnType<typeof runProjectChecks> => runProjectChecks({
+    builtins: [], checks: BROKEN_CHECKS, only: undefined, ask, validation: undefined, membersEnumerated: 2, now: () => 0, onProgress,
+  });
+
+  it.each(['graded', 'shapeless', 'throws'])('re-derives %s\'s RESOURCE_CHECK_BROKEN, check and reason', (name) => {
+    const completed = run().issues.filter((issue) => issue.check === name);
+    const seen: ProgressEntry[] = [];
+    const stall = new Error('killed while the last check hangs');
+    expect(() => run((entry) => {
+      seen.push(entry);
+      if (entry.kind === 'start' && entry.name === 'hangs') throw stall;
+    })).toThrow(stall);
+    // Through the log reader, which drops a line its schema does not declare.
+    const logged = parseProgressLog(`${seen.map((entry) => JSON.stringify(entry)).join('\n')}\n`);
+
+    const rebuilt = killed([POPULATION, ...logged]).issues.filter((issue) => issue.check === name);
+
+    expect(completed.map((issue) => issue.code)).toStrictEqual(['RESOURCE_CHECK_BROKEN']);
+    expect(rebuilt).toStrictEqual(completed);
+  });
+});

@@ -221,10 +221,14 @@ compares the working tree (staged or not) plus untracked, non-ignored files with
 of `<ref>` and `HEAD` — GitHub's "files changed", so a branch behind `main` never lists what `main`
 moved since. `status` is `added`, `modified`, `deleted`, `renamed`, `copied` or `type-changed`, and
 `oldPath` / `similarity` are set for a rename or copy. A rename across the project root's boundary
-is seen from inside it (in = `added`, out = `deleted`). Without `--base`, with a ref that names no
-commit, or with no merge base (a shallow CI clone: fetch more history), a statement reading it is
-**refused** naming the fix — for a check, `RESOURCE_CHECK_BROKEN` on that check only. `--base` is
-read only when a statement names `changed_files`. Scope a check to what a change touched:
+is seen from inside it (in = `added`, out = `deleted`); a submodule whose commit moved is one row
+naming its directory. A statement reading it is **refused** naming the fix, with a code naming the
+fault: `USAGE_INVALID` only for a missing `--base` or a ref that names no commit;
+`BACKEND_UNAVAILABLE` when git could not run; `INPUT_UNREADABLE` when the repository cannot answer
+(no commits yet, no merge base — a shallow CI clone: fetch more history — or rename detection
+skipped). For a check it is `RESOURCE_CHECK_BROKEN` on that check only, its message naming the
+cause. `--base` is read only when a statement names `changed_files`. Scope a check to what a change
+touched:
 
 ```sql
 SELECT c.path FROM changed_files c
@@ -377,14 +381,14 @@ not complete cannot be downgraded to a warning, because the green would mean not
 
 Zero rows is a check's pass, so zero violations over a thousand files and zero over nothing look
 identical, and the run's `examined` (the whole population) cannot see one check whose `WHERE`
-matches nothing. Give a check its own denominator with `examined:` — a second statement whose ROW
-COUNT is what the check ranged over:
+matches nothing. Give a check its own denominator with `examined:` — a second statement returning
+ONE COUNT of what the check ranged over:
 
 ```yaml
 skills-have-owners:
   description: Every skill names an owner
   sql: SELECT path FROM resource_realizations WHERE path LIKE 'skills/%' AND …
-  examined: SELECT path FROM resource_realizations WHERE path LIKE 'skills/%'
+  examined: SELECT COUNT(*) FROM resource_realizations WHERE path LIKE 'skills/%'
   # allowEmpty: true   # only when zero skills is a legitimate answer
 ```
 
@@ -398,6 +402,9 @@ skills-have-owners:
 - The examined statement obeys every rule `sql` does, is charged to the check's `durationSecs` and
   bounded by `--budget`; if it fails, the check is `RESOURCE_CHECK_BROKEN` and none of its rows are
   reported. Same behaviour in `vat validate`'s `checks` phase.
+- Anything but exactly one row of one column holding a non-negative integer is
+  `RESOURCE_CHECK_BROKEN` too; the finding's `reason` is
+  `{ statement: 'examined', rows, columns?, value?, allowed }`.
 - ⚠️ `examined` is OPTIONAL, so a check that declares none **can pass over an empty population** —
   nothing refuses it. Declare it on every check; a consumer that needs the guarantee can require
   an `examined` key on each `data.checks` entry.

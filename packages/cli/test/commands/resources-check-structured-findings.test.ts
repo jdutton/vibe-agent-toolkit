@@ -152,7 +152,7 @@ describe('a refusal about one check names that check', () => {
   });
 
   it('names it on an examined count of zero, beside its own violations', () => {
-    const report = publish({ empty: { description: 'd', sql: 'V', examined: 'E' } }, askRows({ V: [{ n: 1 }], E: [] }));
+    const report = publish({ empty: { description: 'd', sql: 'V', examined: 'E' } }, askRows({ V: [{ n: 1 }], E: [{ n: 0 }] }));
 
     expect(findingsOf(report).map((finding) => [finding['code'], finding['check']])).toStrictEqual([
       [EXAMINED_NOTHING, 'empty'],
@@ -178,12 +178,12 @@ describe('a finding about the whole run names no check', () => {
 
 describe('examinedNothing on a check entry agrees with the refusal, in both directions', () => {
   it.each([
-    ['counted zero', { sql: 'V', examined: 'E' }, { V: [], E: [] }, true],
+    ['counted zero', { sql: 'V', examined: 'E' }, { V: [], E: [{ n: 0 }] }, true],
     ['counted some', { sql: 'V', examined: 'E' }, { V: [], E: [{ n: 1 }] }, false],
-    ['zero, allowed', { sql: 'V', examined: 'E', allowEmpty: true as const }, { V: [], E: [] }, false],
+    ['zero, allowed', { sql: 'V', examined: 'E', allowEmpty: true as const }, { V: [], E: [{ n: 0 }] }, false],
     ['declares none', { sql: 'V' }, { V: [] }, false],
     ['examined threw', { sql: 'V', examined: 'E' }, { V: [], E: new Error('x') }, false],
-    ['zero, rows unreadable', { sql: 'V', examined: 'E' }, { V: [{ finding_line: 0 }], E: [] }, false],
+    ['zero, rows unreadable', { sql: 'V', examined: 'E' }, { V: [{ finding_line: 0 }], E: [{ n: 0 }] }, false],
   ])('%s', (_label, declared, answers, expected) => {
     const report = publish({ c: { description: 'd', ...declared } }, askRows(answers));
 

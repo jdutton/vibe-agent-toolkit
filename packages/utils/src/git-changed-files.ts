@@ -6,14 +6,17 @@
  *
  * ## What is compared, exactly
  *
- * - `git diff -M --name-status -z --no-relative <merge-base> --` — that commit against the WORKING
- *   TREE, staged or not. `-M` turns a delete-plus-add of similar content into one rename.
+ * - `git diff -M -l0 --ignore-submodules=dirty --name-status -z --no-relative <merge-base> --` — that
+ *   commit against the WORKING TREE, staged or not. `-M` turns a delete-plus-add of similar content
+ *   into one rename; `-l0` lifts git's rename limit, and a diff git still says it cut short is
+ *   refused. A submodule is listed only when its COMMIT moved, as one row naming its directory.
  * - `git ls-files -z --others --exclude-standard --full-name` — untracked, non-ignored files,
  *   each reported as added. ⚠️ git cannot pair one of these with a deletion as a rename: rename
  *   detection sees only paths the index knows, so `mv a b` without `git add` reads as `a` deleted
  *   and `b` added. That is git's answer, reported as git gives it. An untracked NESTED repository
  *   is listed as its directory (`dir/`) and dropped: its contents are its own files, not this tree's.
  * - A path git lists twice with one kind (an unmerged path) is one row: `(path, status)` is a key.
+ *   A path both deleted and untracked (`git rm --cached`, kept on disk) is one `modified` row.
  *
  * ## Paths are bytes until they are judged
  *
@@ -31,10 +34,10 @@
  * what it is from INSIDE the root: renamed in from outside is `added`, renamed out is `deleted`,
  * copied in is `added`, and copied out is no change (the source stands as it was).
  *
- * 🚨 Under `core.ignorecase` the prefix git reports can be spelled differently from the paths the
- * index holds (a case-only rename on disk), and a byte comparison would then keep nothing. So the
- * prefix is checked against what git itself tracks under the root, matched as git matches it, and
- * a mismatch refuses naming both spellings — never an empty answer.
+ * 🚨 Under `core.ignorecase` the prefix git reports can be spelled differently from the paths git
+ * lists (a case-only rename on disk, a root reached in another case), and a byte comparison would
+ * then keep nothing. So the prefix is checked against every path git lists under the root, tracked
+ * or untracked, matched as git matches it, and a mismatch refuses naming both spellings.
  */
 
 import { compareCodeUnits } from './compare-code-units.js';
@@ -64,15 +67,27 @@ interface GitNameStatusRecord {
   readonly similarity: number | null;
 }
 
+/**
+ * Whose fault a refusal is: `base` — the ref passed; `git-failed` — git did not run or did not
+ * finish (not on PATH, timed out); `repository` — the tree cannot answer (not a working tree, no
+ * commits, no merge base, a damaged repository, a root in another case, a path that is not UTF-8).
+ */
+export type GitChangedFilesRefusalKind = 'base' | 'git-failed' | 'repository';
+
+/** A condition the caller can fix, whose fault it is, and the fix. */
+interface Refusal {
+  readonly ok: false;
+  readonly kind: GitChangedFilesRefusalKind;
+  readonly reason: string;
+}
+
 /** The changes, or why there is no answer. */
-type GitChangedFilesOutcome =
-  | { readonly ok: true; readonly files: readonly GitChangedFile[] }
-  | { readonly ok: false; readonly reason: string };
+type GitChangedFilesOutcome = { readonly ok: true; readonly files: readonly GitChangedFile[] } | Refusal;
 
 /** {@link gitChangedFiles}'s answer: the changes and the commit they were measured from. */
 export type GitChangedFilesResult =
   | { readonly ok: true; readonly baseCommit: string; readonly files: readonly GitChangedFile[] }
-  | { readonly ok: false; readonly reason: string };
+  | Refusal;
 
 /** The one-letter statuses that carry a single path. `U` (unmerged) is a working-tree file that differs. */
 const SINGLE_PATH_STATUS: ReadonlyMap<string, GitChangeKind> = new Map([
@@ -215,6 +230,7 @@ export function changedFilesUnderPrefix(
       const bytes = path === undefined ? seen.path : (seen.oldPath ?? seen.path);
       return {
         ok: false,
+        kind: 'repository',
         reason: `The path ${shownName(bytes)} is not UTF-8, so VAT cannot name it; rename it in the repository.`,
       };
     }
@@ -223,19 +239,68 @@ export function changedFilesUnderPrefix(
     seenKeys.add(key);
     files.push({ path, status: seen.status, oldPath, similarity: seen.similarity });
   }
-  files.sort((left, right) => compareCodeUnits(left.path, right.path) || compareCodeUnits(left.status, right.status));
-  return { ok: true, files };
+  return { ok: true, files: unstagedDeletionsAsModified(files) };
 }
 
-/** A condition the caller can fix, and the fix. */
-interface Refusal {
-  readonly ok: false;
-  readonly reason: string;
+/**
+ * One `modified` row for a path that is both `deleted` and `added`: `git rm --cached` leaves the
+ * file on disk, so the diff reads it deleted and the untracked listing reads it added.
+ *
+ * @returns The rows, sorted by path then status
+ */
+function unstagedDeletionsAsModified(files: readonly GitChangedFile[]): GitChangedFile[] {
+  const deleted = new Set(files.filter((file) => file.status === 'deleted').map((file) => file.path));
+  const both = new Set(files.filter((file) => file.status === 'added' && deleted.has(file.path)).map((file) => file.path));
+  return files
+    .filter((file) => !both.has(file.path) || file.status === 'added')
+    .map((file): GitChangedFile => (both.has(file.path) ? { ...file, status: 'modified' } : file))
+    .sort((left, right) => compareCodeUnits(left.path, right.path) || compareCodeUnits(left.status, right.status));
+}
+
+/** What git says when it gave up pairing renames, whatever `-l` asked for. */
+const RENAME_DETECTION_SKIPPED = /rename detection was skipped|diff\.renameLimit/;
+
+/**
+ * Whether git's stderr says it cut rename detection short. A cut-short diff reports a rename as a
+ * deletion plus an addition: a different answer, and nothing in the listing says so.
+ *
+ * @param stderr - What `git diff` wrote to stderr
+ * @returns A refusal when detection was skipped, else undefined
+ */
+export function renameDetectionRefusal(stderr: string): Refusal | undefined {
+  if (!RENAME_DETECTION_SKIPPED.test(stderr)) return undefined;
+  return {
+    ok: false,
+    kind: 'repository',
+    reason: 'git skipped rename detection for this diff, so its renames would read as deletions and'
+      + ` additions. Compare against a nearer base.${gitSaid(stderr)}`,
+  };
 }
 
 /** git's own words, for a refusal: what it said, or that it said nothing. */
 function gitSaid(stderr: string): string {
   return stderr === '' ? '' : ` git said: ${stderr}`;
+}
+
+/** One git invocation's outcome, as much of it as a refusal reads. */
+interface Ran {
+  readonly ok: boolean;
+  readonly stderr: string;
+  readonly error?: Error;
+}
+
+/**
+ * The refusal for a git that did not run or did not finish — never the caller's ref or tree.
+ *
+ * @returns The refusal, or undefined when git ran to an exit status
+ */
+function gitDidNotRun(result: Ran): Refusal | undefined {
+  if (result.error === undefined) return undefined;
+  return {
+    ok: false,
+    kind: 'git-failed',
+    reason: `git did not run to completion here (${result.error.message}). Put git on PATH, or re-run if it timed out.`,
+  };
 }
 
 /**
@@ -246,17 +311,34 @@ function gitSaid(stderr: string): string {
 function resolveBase(root: string, base: string): { ok: true; commit: string } | Refusal {
   // A leading `-` would be read as an option, never as a ref.
   if (base === '' || base.startsWith('-')) {
-    return { ok: false, reason: `The base ${shownName(base)} is not a ref; pass a branch, tag or commit.` };
+    return { ok: false, kind: 'base', reason: `The base ${shownName(base)} is not a ref; pass a branch, tag or commit.` };
   }
   const result = runGit(['rev-parse', '--verify', '--quiet', `${base}^{commit}`], { cwd: root });
   if (!result.ok || result.stdout === '') {
-    return {
+    return gitDidNotRun(result) ?? {
       ok: false,
+      kind: 'base',
       reason: `The base ${shownName(base)} does not name a commit in this repository.`
         + ' Check the spelling, or fetch it first (a shallow CI clone often lacks it: git fetch origin <branch>).',
     };
   }
   return { ok: true, commit: result.stdout };
+}
+
+/**
+ * Refuse a repository whose HEAD is unborn: with no commit there is no merge base to name.
+ *
+ * @returns A refusal, or undefined when HEAD names a commit
+ */
+function unbornHeadRefusal(root: string): Refusal | undefined {
+  const result = runGit(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], { cwd: root });
+  if (result.ok && result.stdout !== '') return undefined;
+  return gitDidNotRun(result) ?? {
+    ok: false,
+    kind: 'repository',
+    reason: 'This repository has no commits yet (HEAD is unborn), so there is no merge base to compare'
+      + ' with. Commit first.',
+  };
 }
 
 /**
@@ -267,8 +349,9 @@ function resolveBase(root: string, base: string): { ok: true; commit: string } |
 function mergeBase(root: string, base: string, commit: string): { ok: true; commit: string } | Refusal {
   const result = runGit(['merge-base', commit, 'HEAD'], { cwd: root });
   if (!result.ok || result.stdout === '') {
-    return {
+    return gitDidNotRun(result) ?? {
       ok: false,
+      kind: 'repository',
       reason: `The base ${shownName(base)} shares no history with HEAD here, so there is no merge base to compare with.`
         + ' A shallow clone lacks it: fetch more history (git fetch --unshallow, or --deepen=<n>), or pass a commit'
         + ` HEAD descends from.${gitSaid(result.stderr)}`,
@@ -280,12 +363,14 @@ function mergeBase(root: string, base: string, commit: string): { ok: true; comm
 /**
  * Run one listing, or say why it could not be read.
  *
- * @returns Its stdout bytes, or a refusal
+ * @returns Its stdout bytes and stderr, or a refusal
  */
-function listing(root: string, args: readonly string[]): { ok: true; bytes: Buffer } | Refusal {
+function listing(root: string, args: readonly string[]): { ok: true; bytes: Buffer; stderr: string } | Refusal {
   const result = runGitBytes(args, { cwd: root });
-  if (!result.ok) return { ok: false, reason: `git ${args[0] ?? ''} failed.${gitSaid(result.stderr)}` };
-  return { ok: true, bytes: result.stdout };
+  if (!result.ok) {
+    return gitDidNotRun(result) ?? { ok: false, kind: 'repository', reason: `git ${args[0] ?? ''} failed.${gitSaid(result.stderr)}` };
+  }
+  return { ok: true, bytes: result.stdout, stderr: result.stderr };
 }
 
 /**
@@ -296,8 +381,9 @@ function listing(root: string, args: readonly string[]): { ok: true; bytes: Buff
 function rootPrefix(root: string): { ok: true; prefix: Uint8Array } | Refusal {
   const result = runGitBytes(['rev-parse', '--show-prefix'], { cwd: root });
   if (!result.ok) {
-    return {
+    return gitDidNotRun(result) ?? {
       ok: false,
+      kind: 'repository',
       reason: `${shownName(root)} is not inside a git working tree, so there is no base to compare it with.${gitSaid(result.stderr)}`,
     };
   }
@@ -306,25 +392,29 @@ function rootPrefix(root: string): { ok: true; prefix: Uint8Array } | Refusal {
 }
 
 /**
- * Under `core.ignorecase`, whether every path git tracks under the root — matched case-insensitively,
- * as git matches there — carries the prefix's exact bytes. See the module header.
+ * Under `core.ignorecase`, whether every path git lists under the root — tracked or untracked,
+ * matched case-insensitively as git matches there — carries the prefix's exact bytes. See the
+ * module header.
  *
  * @returns A refusal naming both spellings, or undefined when they agree (or case is significant)
  */
-function prefixSpellingRefusal(root: string, prefix: Uint8Array): Refusal | undefined {
+export function prefixSpellingRefusal(root: string, prefix: Uint8Array): Refusal | undefined {
   const typed = decodeUtf8Exactly(prefix);
   // Not UTF-8: no pathspec can name it, and every path under it refuses as not UTF-8 anyway.
   if (typed === undefined || typed === '') return undefined;
   if (runGit(['config', '--bool', 'core.ignorecase'], { cwd: root }).stdout !== 'true') return undefined;
-  const tracked = listing(root, ['ls-files', '-z', '--full-name', '--', `:(top,icase,literal)${typed}`]);
-  if (!tracked.ok) return tracked;
-  const other = nulFields(tracked.bytes).find((path) => !isUnder(path, prefix));
+  const listed = listing(root, [
+    'ls-files', '-z', '--full-name', '--cached', '--others', '--exclude-standard', '--', `:(top,icase,literal)${typed}`,
+  ]);
+  if (!listed.ok) return listed;
+  const other = nulFields(listed.bytes).find((path) => !isUnder(path, prefix));
   if (other === undefined) return undefined;
   return {
     ok: false,
-    reason: `git reports this root as ${shownName(prefix)} but tracks files under it as`
+    kind: 'repository',
+    reason: `git reports this root as ${shownName(prefix)} but lists files under it as`
       + ` ${shownName(other.subarray(0, prefix.length))}, so their changes cannot be matched to it.`
-      + ' Point VAT at the directory in the spelling git tracks, or fix the case on disk to match it.',
+      + ' Point VAT at the directory in the spelling git lists, or fix the case on disk to match it.',
   };
 }
 
@@ -333,9 +423,9 @@ function prefixSpellingRefusal(root: string, prefix: Uint8Array): Refusal | unde
  * the merge base of `base` and HEAD, plus untracked files git does not ignore (as added). See the
  * module header for exactly what is compared and how a path crossing the root's boundary is reported.
  *
- * Never throws for a condition the caller can fix — no repository, a ref that names no commit, no
- * merge base, a root spelled in another case, a path that is not UTF-8 — and reports it instead,
- * with the fix.
+ * Never throws for a condition the caller can fix — no repository, no commits, a ref that names no
+ * commit, no merge base, a root spelled in another case, a path that is not UTF-8, a diff git cut
+ * short — and reports it instead, with whose fault it is and the fix.
  *
  * @param options - The question
  * @param options.root - Absolute directory inside a git working tree
@@ -347,14 +437,20 @@ export function gitChangedFiles(options: { root: string; base: string }): GitCha
   const { root, base } = options;
   const prefix = rootPrefix(root);
   if (!prefix.ok) return prefix;
+  const unborn = unbornHeadRefusal(root);
+  if (unborn !== undefined) return unborn;
   const spelling = prefixSpellingRefusal(root, prefix.prefix);
   if (spelling !== undefined) return spelling;
   const resolved = resolveBase(root, base);
   if (!resolved.ok) return resolved;
   const merged = mergeBase(root, base, resolved.commit);
   if (!merged.ok) return merged;
-  const diff = listing(root, ['diff', '-M', '--name-status', '-z', '--no-relative', merged.commit, '--']);
+  const diff = listing(root, [
+    'diff', '-M', '-l0', '--ignore-submodules=dirty', '--name-status', '-z', '--no-relative', merged.commit, '--',
+  ]);
   if (!diff.ok) return diff;
+  const cutShort = renameDetectionRefusal(diff.stderr);
+  if (cutShort !== undefined) return cutShort;
   const others = listing(root, ['ls-files', '-z', '--others', '--exclude-standard', '--full-name']);
   if (!others.ok) return others;
   const outcome = changedFilesUnderPrefix(parseNameStatusZ(diff.bytes), nulFields(others.bytes), prefix.prefix);

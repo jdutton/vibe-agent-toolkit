@@ -129,7 +129,8 @@ type ReservedCheckColumn = (typeof CHECK_FINDING_COLUMNS)[number];
 
 /**
  * One evidence value as a finding publishes it: what SQLite returned when JSON
- * can carry it, else the text the message renders it as (a BLOB, a `bigint`).
+ * can carry it, else the text the message renders it as (a BLOB). An integer
+ * beyond JSON's safe range never arrives: the store throws before reading a row.
  */
 export type CheckEvidenceValue = string | number | boolean | null;
 
@@ -149,8 +150,8 @@ export interface CheckIssue extends ValidationIssue {
    * location stays), in the order SQLite returned them. A declared check's violation only.
    */
   evidence?: Record<string, CheckEvidenceValue>;
-  /** Why a check's rows could not be read. Only on that refusal. */
-  reason?: UninterpretableRowsReason;
+  /** Why a check's rows, or its `examined` count, could not be read. Only on that refusal. */
+  reason?: CheckRefusalReason;
 }
 
 /**
@@ -202,6 +203,71 @@ export interface UninterpretableRowsReason {
   /** 1-based. */
   readonly row: number;
   readonly allowed: string;
+}
+
+/**
+ * An `examined` statement whose result is not one count: how many rows came back, how many
+ * columns (when a row did), and the one value (when exactly one cell did).
+ */
+export interface ExaminedShapeReason {
+  readonly statement: 'examined';
+  readonly rows: number;
+  // `| undefined`: the progress log hands this back through Zod, whose optionals admit it.
+  readonly columns?: number | undefined;
+  readonly value?: CheckEvidenceValue | undefined;
+  readonly allowed: string;
+}
+
+/** Why a check's own output could not be read, as its finding's `reason` states it. */
+export type CheckRefusalReason = UninterpretableRowsReason | ExaminedShapeReason;
+
+/** What an `examined` statement must return. */
+const EXAMINED_ALLOWED = 'exactly one row with one column holding a non-negative integer, as SELECT COUNT(*) returns';
+
+/**
+ * Read an `examined` statement's result as the count it must be: one row, one column, a
+ * non-negative safe integer. Any other shape is refused, never counted.
+ *
+ * @param rows - Exactly what the statement returned
+ * @returns The count, or what came back instead
+ */
+export function examinedCount(
+  rows: readonly Record<string, unknown>[],
+): { readonly ok: true; readonly count: number } | { readonly ok: false; readonly reason: ExaminedShapeReason } {
+  const [first] = rows;
+  const cells = first === undefined ? [] : Object.values(first);
+  const [value] = cells;
+  if (rows.length === 1 && cells.length === 1 && typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {
+    return { ok: true, count: value };
+  }
+  return {
+    ok: false,
+    reason: {
+      statement: 'examined',
+      rows: rows.length,
+      ...(first === undefined ? {} : { columns: cells.length }),
+      ...(rows.length === 1 && cells.length === 1 ? { value: evidenceValue(value) } : {}),
+      allowed: EXAMINED_ALLOWED,
+    },
+  };
+}
+
+/**
+ * The sentence for a check whose `examined` statement returned something other than one count.
+ *
+ * @param name - The check's key in `resources.checks`
+ * @param reason - What {@link examinedCount} refused
+ * @returns The message, naming what came back and what is allowed
+ */
+export function describeUninterpretableExamined(name: string, reason: ExaminedShapeReason): string {
+  let got = 'no row';
+  if (reason.value !== undefined) {
+    got = `the value ${typeof reason.value === 'string' ? JSON.stringify(reason.value) : renderValue(reason.value)}`;
+  } else if (reason.rows > 0) {
+    got = `${String(reason.rows)} row(s) of ${String(reason.columns)} column(s)`;
+  }
+  return `The check "${name}" ran its violations statement, but its examined statement returned ${got}, not`
+    + ` ${reason.allowed}, so nothing says what it ranged over and none of its rows were reported.`;
 }
 
 /** One row's reading of a reserved column: a value, nothing said, or a refusal. */
@@ -393,18 +459,12 @@ function readSeverity(value: unknown): Read<Severity> {
 /**
  * The `finding_line` or `finding_column` column: a positive safe integer.
  *
- * A `bigint` is accepted in range, because a store that reads 64-bit integers
- * as `bigint` returns one for an ordinary `INTEGER` column.
- *
  * @param value - The column's value
  * @returns The position, nothing, or a refusal
  */
 function readPosition(value: unknown): Read<number> {
   if (value === undefined || value === null) return { ok: true, value: undefined };
   if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return { ok: true, value };
-  if (typeof value === 'bigint' && value > 0n && value <= BigInt(Number.MAX_SAFE_INTEGER)) {
-    return { ok: true, value: Number(value) };
-  }
   return { ok: false };
 }
 
@@ -476,9 +536,7 @@ function renderRow(row: Record<string, unknown>): string {
 function renderValue(value: unknown): string {
   if (value === null) return 'null';
   if (typeof value === 'string') return value;
-  if (typeof value === 'number' || typeof value === 'bigint' || typeof value === 'boolean') {
-    return String(value);
-  }
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   // Anything else is a `Uint8Array` from a BLOB column, which is the only other
   // shape `node:sqlite` returns. `String()` on it would give the reader
   // `[object Uint8Array]`, so it goes through JSON — and the `??` covers the one

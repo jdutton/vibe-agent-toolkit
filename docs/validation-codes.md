@@ -1383,7 +1383,7 @@ the moved-aside entry. There is no partial remove: an entry is on its path, whol
   - **A run stopped while a check's rows were being converted.** The statement had finished; turning its rows into findings runs in this process, and a budget kill or death there records that check as `broken` with its `rows`, beside the run's own interrupted-run finding.
 - **Why it matters:** A `vat resources check` violation carries `CUSTOM:<name>`, which an adopter may downgrade or ignore. If "the check is broken" shared that code, `severity: { 'CUSTOM:foo': ignore }` would also silence "foo could not run", and a renamed projection column would end a gate at exit 0.
 - **Fix:** Fix the check or the population the message names. This code cannot be downgraded or waived, by design.
-- **A third `vat resources check` cause:** a check's declared `examined` statement failed. The violations statement ran, but nothing says what it ranged over, so none of its rows are reported and its cost record carries `broken: true` with `rows` and no `examined`.
+- **A third `vat resources check` cause:** a check's declared `examined` statement failed, or returned anything but one row of one column holding a non-negative integer (the finding then carries `reason: {statement: "examined", rows, columns?, value?, allowed}`). The violations statement ran, but nothing says what it ranged over, so none of its rows are reported and its cost record carries `broken: true` with `rows` and no `examined`.
 
 ### `RESOURCE_CHECK_EXAMINED_NOTHING`
 

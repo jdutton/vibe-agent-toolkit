@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { changedFilesUnderPrefix, parseNameStatusZ } from '../src/git-changed-files.js';
+import { changedFilesUnderPrefix, parseNameStatusZ, renameDetectionRefusal } from '../src/git-changed-files.js';
 
 /** A NUL-separated record stream, as `-z` writes it. */
 function z(...fields: readonly (string | Uint8Array)[]): Buffer {
@@ -148,7 +148,33 @@ describe('changedFilesUnderPrefix', () => {
     });
   });
 
+  it('reads a path deleted from the index but kept on disk (git rm --cached) as ONE modified row', () => {
+    expect(under(z('D', 'site/kept.md'), ['site/kept.md'])).toStrictEqual({
+      ok: true,
+      files: [{ path: 'kept.md', status: 'modified', oldPath: null, similarity: null }],
+    });
+  });
+
   it('ignores a path that is not UTF-8 when it lies outside the root', () => {
     expect(under(z('A', Uint8Array.from([0x6f, 0xff])))).toStrictEqual({ ok: true, files: [] });
+  });
+});
+
+describe('renameDetectionRefusal', () => {
+  it.each([
+    ['exhaustive', 'warning: exhaustive rename detection was skipped due to too many files.'],
+    ['inexact', 'warning: inexact rename detection was skipped due to too many files.'],
+    ['the renameLimit advice', 'warning: you may want to set your diff.renameLimit variable to at least 9000 and retry the command.'],
+  ])('refuses when git says %s rename detection was cut short', (_what, stderr) => {
+    expect(renameDetectionRefusal(stderr)).toMatchObject({
+      ok: false,
+      kind: 'repository',
+      reason: expect.stringContaining('rename detection'),
+    });
+  });
+
+  it('accepts a diff git said nothing about, or something unrelated', () => {
+    expect(renameDetectionRefusal('')).toBeUndefined();
+    expect(renameDetectionRefusal('warning: CRLF will be replaced by LF in a.md.')).toBeUndefined();
   });
 });

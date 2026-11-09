@@ -8,9 +8,7 @@
  * compared with `main`'s tip instead of the merge base would list `docs/main-only.md` too.
  */
 
-import { spawnSync } from 'node:child_process';
-
-import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
+import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
@@ -31,14 +29,13 @@ const NO_BASE_FIX = 'Pass --base <ref>';
 let base: string;
 let branchDir: string;
 let cleanDir: string;
-let env: NodeJS.ProcessEnv;
+let env: Record<string, string>;
 
-/** Run git in `cwd` with the fixture's identity and the stubbed home, failing loudly. */
+/** Run git in `cwd` with the fixture's identity and the stubbed home, inherited `GIT_*` scrubbed, failing loudly. */
 function git(cwd: string, args: readonly string[]): void {
-  const result = spawnSync(gitExecutable(), [
+  runGitOrThrow([
     '-c', 'user.name=VAT Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', ...args,
-  ], { cwd, env: { ...process.env, ...env }, encoding: 'utf-8' });
-  if (result.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+  ], { cwd, env });
 }
 
 /** Write `content` at `relative` under `dir`. */
@@ -48,12 +45,18 @@ function put(dir: string, relative: string, content: string): void {
   fs.writeFileSync(target, content, 'utf-8');
 }
 
-/** A repository with `docs/a.md` and `docs/b.md` committed on `main`. */
-function committedRepo(name: string): string {
+/** A repository on an unborn `main` holding an uncommitted `docs/a.md`. */
+function unbornRepo(name: string): string {
   const dir = safePath.join(base, name);
   fs.mkdirSync(dir, { recursive: true });
   git(dir, ['init', '-q', '-b', 'main']);
   put(dir, 'docs/a.md', '# Alpha\n');
+  return dir;
+}
+
+/** A repository with `docs/a.md` and `docs/b.md` committed on `main`. */
+function committedRepo(name: string): string {
+  const dir = unbornRepo(name);
   put(dir, 'docs/b.md', '# Bravo\n');
   git(dir, ['add', '-A']);
   git(dir, ['commit', '-q', '-m', 'base']);
@@ -71,6 +74,11 @@ const CHANGED_DOCS_CHECK = `    changed-docs:\n      description: changed doc\n 
 /** `vat resources query <sql> [--base <ref>] --format json` in `cwd`. */
 function query(cwd: string, sql: string, baseArgs: readonly string[]): Run {
   return vat(cwd, ['resources', 'query', sql, ...baseArgs, '--format', 'json'], env);
+}
+
+/** The run's `RESOURCE_CHECK_BROKEN` findings. */
+function brokenFindings(run: Run): Array<Record<string, unknown>> {
+  return (run.findings as unknown as Array<Record<string, unknown>>).filter((finding) => finding['code'] === BROKEN);
 }
 
 /** The findings of a run with `code`, as `[location, check]`. */
@@ -120,11 +128,20 @@ describe('changed_files and --base, end to end', () => {
       expect(run.error?.message).toContain(NO_BASE_FIX);
     });
 
-    it('refuses a ref that names no commit, carrying git\'s reason', () => {
+    it('refuses a ref that names no commit as USAGE_INVALID, carrying git\'s reason', () => {
       const run = query(branchDir, 'SELECT path FROM changed_files', ['--base', 'no-such-branch']);
 
       expect(run.status).toBe(2);
+      expect(run.error?.code).toBe('USAGE_INVALID');
       expect(run.error?.message).toContain('"no-such-branch" does not name a commit');
+    });
+
+    it('refuses a repository with no commits as INPUT_UNREADABLE, not a usage error', () => {
+      const run = query(unbornRepo('unborn'), 'SELECT path FROM changed_files', ['--base', 'main']);
+
+      expect(run.status).toBe(2);
+      expect(run.error?.code).toBe('INPUT_UNREADABLE');
+      expect(run.error?.message).toContain('no commits yet');
     });
 
     it('answers an honestly empty diff with a table of zero rows, not a missing relation', () => {
@@ -153,11 +170,23 @@ describe('changed_files and --base, end to end', () => {
       const run = vat(branchDir, ['resources', 'check', '--format', 'json'], env);
 
       expect(run.status).toBe(1);
-      const broken = (run.findings as unknown as Array<Record<string, unknown>>).filter((finding) => finding['code'] === BROKEN);
+      const broken = brokenFindings(run);
       expect(broken.map((finding) => finding['check'])).toStrictEqual(['changed-docs']);
       expect(String(broken[0]?.['message'])).toContain(NO_BASE_FIX);
       // A refused lens produced no relation, so it is not reported as evaluated.
       expect(run.data['lensesEvaluated']).not.toContain('changed-files');
+    });
+
+    it('names the repository cause in the broken finding when the lens cannot be evaluated', () => {
+      const unborn = unbornRepo('unborn-check');
+      writeChecks(unborn, CHANGED_DOCS_CHECK);
+
+      const run = vat(unborn, ['resources', 'check', '--base', 'main', '--format', 'json'], env);
+
+      expect(run.status).toBe(1);
+      expect(brokenFindings(run).map((finding) => [finding['check'], finding['message']])).toStrictEqual([
+        ['changed-docs', expect.stringContaining('no commits yet')],
+      ]);
     });
 
     it('evaluates the lens for a check that names changed_files only in its examined statement', () => {
@@ -165,7 +194,7 @@ describe('changed_files and --base, end to end', () => {
         branchDir,
         '    examined-changes:\n      description: nothing violates\n'
         + "      sql: \"SELECT path FROM resource_realizations WHERE path = 'none'\"\n"
-        + `      examined: "${CHANGED_DOCS_SQL}"\n`,
+        + `      examined: "SELECT COUNT(*) FROM changed_files c WHERE c.path LIKE 'docs/%'"\n`,
       );
 
       const run = vat(branchDir, ['resources', 'check', '--base', 'main', '--format', 'json'], env);

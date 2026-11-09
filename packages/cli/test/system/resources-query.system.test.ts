@@ -45,10 +45,8 @@
  * the failure the field exists to catch.
  */
 
-import { spawnSync } from 'node:child_process';
-
 import { direntKindFollowingSync } from '@vibe-agent-toolkit/utils';
-import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
+import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
 
@@ -275,7 +273,7 @@ function createCommittedCorpus(options: {
     fs.writeFileSync(safePath.join(root, options.directory, name), content, 'utf-8');
   }
   const git = (args: string[]): void => {
-    spawnSync(gitExecutable(), args, { cwd: root });
+    runGitOrThrow(args, { cwd: root });
   };
   git(['init', '--quiet']);
   git(['add', '-A']);

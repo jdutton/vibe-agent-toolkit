@@ -114,35 +114,69 @@
                     }
                   },
                   "reason": {
-                    "type": "object",
-                    "properties": {
-                      "column": {
-                        "type": "string",
-                        "enum": [
-                          "finding_severity",
-                          "finding_line",
-                          "finding_column"
-                        ]
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "column": {
+                            "type": "string",
+                            "enum": [
+                              "finding_severity",
+                              "finding_line",
+                              "finding_column"
+                            ]
+                          },
+                          "value": {
+                            "$ref": "#/definitions/resources-check/anyOf/0/properties/findings/items/properties/evidence/additionalProperties"
+                          },
+                          "row": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0
+                          },
+                          "allowed": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "column",
+                          "value",
+                          "row",
+                          "allowed"
+                        ],
+                        "additionalProperties": false
                       },
-                      "value": {
-                        "$ref": "#/definitions/resources-check/anyOf/0/properties/findings/items/properties/evidence/additionalProperties"
-                      },
-                      "row": {
-                        "type": "integer",
-                        "exclusiveMinimum": 0
-                      },
-                      "allowed": {
-                        "type": "string",
-                        "minLength": 1
+                      {
+                        "type": "object",
+                        "properties": {
+                          "statement": {
+                            "type": "string",
+                            "const": "examined"
+                          },
+                          "rows": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "columns": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "value": {
+                            "$ref": "#/definitions/resources-check/anyOf/0/properties/findings/items/properties/evidence/additionalProperties"
+                          },
+                          "allowed": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "statement",
+                          "rows",
+                          "allowed"
+                        ],
+                        "additionalProperties": false
                       }
-                    },
-                    "required": [
-                      "column",
-                      "value",
-                      "row",
-                      "allowed"
-                    ],
-                    "additionalProperties": false
+                    ]
                   }
                 },
                 "required": [

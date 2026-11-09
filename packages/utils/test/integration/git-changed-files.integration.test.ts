@@ -11,7 +11,7 @@ import { renameSync, rmSync, writeFileSync } from 'node:fs';
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { gitChangedFiles } from '../../src/git-changed-files.js';
+import { gitChangedFiles, prefixSpellingRefusal } from '../../src/git-changed-files.js';
 import { runGit, runGitOrThrow } from '../../src/git-run.js';
 import { mkdirSyncReal, safePath } from '../../src/path-utils.js';
 import { tmpdirFoldsCase } from '../../src/testing/platform-gates.js';
@@ -199,6 +199,81 @@ describe('gitChangedFiles', () => {
     expect(result.ok ? result.files.map((file) => file.path) : result.reason).toEqual(
       result.ok ? ['edit.md'] : expect.stringMatching(/"SITE\/".*"site\/"/s),
     );
+  });
+
+  // Skipped where the filesystem is case-sensitive: there `DRAFTS` and `drafts` are two directories.
+  it.skipIf(!tmpdirFoldsCase())('answers, or refuses, from a never-committed root reached in another case', () => {
+    put(repo, 'drafts/new.md', 'untracked only\n');
+
+    const result = gitChangedFiles({ root: safePath.join(repo, 'DRAFTS'), base: 'HEAD' });
+
+    expect(result.ok ? result.files.map((file) => file.path) : result.reason).toEqual(
+      result.ok ? ['new.md'] : expect.stringMatching(/"DRAFTS\/".*"drafts\/"/s),
+    );
+  });
+
+  // macOS git reports the on-disk spelling, so the guard is driven directly with the typed one.
+  it.skipIf(!tmpdirFoldsCase())('refuses a prefix spelled otherwise than the UNTRACKED files under it', () => {
+    put(repo, 'drafts/new.md', 'untracked only\n');
+
+    expect(prefixSpellingRefusal(repo, Buffer.from('DRAFTS/', 'utf8'))).toMatchObject({
+      ok: false,
+      kind: 'repository',
+      reason: expect.stringMatching(/"DRAFTS\/".*"drafts\/"/s),
+    });
+  });
+
+  it('reads a file removed from the index but kept on disk (git rm --cached) as one modified row', () => {
+    runGitOrThrow(['rm', '-q', '--cached', 'site/keep.md'], { cwd: repo });
+
+    expect(keysOf(gitChangedFiles({ root: repo, base: 'HEAD' }))).toStrictEqual(['site/keep.md:modified']);
+  });
+
+  it('refuses a repository with no commits yet, saying so', () => {
+    const fresh = safePath.join(suite.getTempDir(), 'unborn');
+    mkdirSyncReal(fresh);
+    runGitOrThrow(['init', '-q', '-b', 'main'], { cwd: fresh });
+    put(fresh, 'a.md', 'a\n');
+
+    const result = gitChangedFiles({ root: fresh, base: 'main' });
+
+    expect(result).toMatchObject({ ok: false, kind: 'repository', reason: expect.stringMatching(/no commits yet/) });
+  });
+
+  it('lists a submodule whose commit moved as its directory, and ignores one that is only dirty', () => {
+    const library = safePath.join(suite.getTempDir(), 'library');
+    mkdirSyncReal(library);
+    runGitOrThrow(['init', '-q', '-b', 'main'], { cwd: library });
+    put(library, 'lib.md', 'lib\n');
+    commitAll(library, 'library');
+    runGitOrThrow(['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', library, 'site/lib'], { cwd: repo });
+    commitAll(repo, 'add submodule');
+    const sub = safePath.join(repo, 'site/lib');
+    put(sub, 'lib.md', 'dirty, not committed\n');
+
+    expect(keysOf(gitChangedFiles({ root: repo, base: 'HEAD' }))).toStrictEqual([]);
+
+    commitAll(sub, 'the submodule moves');
+
+    expect(keysOf(gitChangedFiles({ root: repo, base: 'HEAD' }))).toStrictEqual(['site/lib:modified']);
+  });
+
+  it.each([
+    ['a ref that names no commit', 'no-such-branch', 'base'],
+    ['an option-shaped ref', '--output=x', 'base'],
+  ])('classes %s as the base\'s fault', (_what, ref, kind) => {
+    expect(gitChangedFiles({ root: repo, base: ref })).toMatchObject({ ok: false, kind });
+  });
+
+  it('classes no merge base and no working tree as the repository\'s fault, never the base\'s', () => {
+    const bare = safePath.join(suite.getTempDir(), 'not-a-repo-either');
+    mkdirSyncReal(bare);
+    runGitOrThrow(['switch', '-q', '--orphan', 'unrelated'], { cwd: repo });
+    put(repo, 'other.md', 'unrelated\n');
+    commitAll(repo, 'unrelated root');
+
+    expect(gitChangedFiles({ root: bare, base: 'HEAD' })).toMatchObject({ ok: false, kind: 'repository' });
+    expect(gitChangedFiles({ root: repo, base: 'main' })).toMatchObject({ ok: false, kind: 'repository' });
   });
 
   // Skipped where the filesystem is case-sensitive: a case-only rename on disk is a different directory there.

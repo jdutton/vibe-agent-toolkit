@@ -53,8 +53,10 @@ const DERIVED_RELATIONS_HELP = `Derived relations (evaluated only when a stateme
   plus untracked files git does not ignore, is compared with the MERGE BASE
   of --base <ref> and HEAD, so what <ref> moved since is never listed. A
   statement reading it without --base, or with a ref that names no commit
-  or shares no history with HEAD, is REFUSED -- never answered with an
-  empty relation. --base is read only when a statement names it:
+  (USAGE_INVALID), with no git (BACKEND_UNAVAILABLE), or over a tree that
+  cannot answer -- no history shared with HEAD, no commits, not a working
+  tree (INPUT_UNREADABLE) -- is REFUSED, never answered with an empty
+  relation. --base is read only when a statement names it:
 
     SELECT c.path FROM changed_files c
      WHERE c.path LIKE 'docs/specs/%' AND c.status != 'deleted'`;
@@ -275,7 +277,9 @@ Exit Codes:
   1 - The population was empty (RESOURCE_CHECK_BROKEN)
   2 - The statement was refused -- not a query, a second statement, a
       placeholder with no --param behind it, a name the projection lacks
-      (USAGE_INVALID) -- or [path] names no directory, or the crawl failed
+      (USAGE_INVALID) -- a derived relation it reads could not be evaluated
+      (that relation's own code), or [path] names no directory, or the
+      crawl failed
   The code is derived from the document's status and summary, never chosen
   beside it.
 
@@ -411,9 +415,11 @@ Declaring a check:
   Findings are ordinary validation issues with the code CUSTOM:<name>, so
   resources.validation.severity can downgrade or ignore one you inherited.
 
-  Optional per check: examined: <SQL> -- a second statement whose ROW COUNT
-  is what the check ranged over. Zero violations over nothing reads exactly
-  like zero over everything, so a check that declares examined publishes
+  Optional per check: examined: <SQL> -- a second statement returning ONE
+  count (one row, one column, a non-negative integer: SELECT COUNT(*) ...),
+  what the check ranged over; any other shape is RESOURCE_CHECK_BROKEN.
+  Zero violations over nothing reads exactly like zero over everything, so
+  a check that declares examined publishes
   examined: N on its data.checks entry, and N = 0 FAILS the run as
   RESOURCE_CHECK_EXAMINED_NOTHING (error, not overridable; the check's own
   violations are still reported). allowEmpty: true declares zero legitimate:
@@ -572,7 +578,9 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
              the row's non-reserved columns as SQLite returned them (a BLOB
              as the message renders it; a path that is not the location
              stays). Rows it could not read carry reason: {column, value,
-             row, allowed}. A whole-run finding has no check
+             row, allowed}; an examined statement that returned no count,
+             {statement, rows, columns?, value?, allowed}. A whole-run
+             finding has no check
   summary:   {errors, warnings, info} over findings; exit 1 iff errors > 0
   durationMs: wall time of the whole run
   data.checksRun:

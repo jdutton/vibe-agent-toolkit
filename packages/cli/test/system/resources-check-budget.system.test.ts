@@ -396,11 +396,9 @@ describe('vat resources check --budget', () => {
     // budget that expired there SIGKILLed a run which already had its answer.
     // This line gives serialisation a fresh window, for one `appendFileSync`.
     //
-    // 🪤 One `start`/`check` pair per UNIT, and a unit is a built-in as much as
-    // a declared rule — so the pair count is derived from `BUILTIN_CHECK_NAMES`
-    // rather than written out. A literal list re-types that number and reds the
-    // day a built-in ships.
-    const units = 2 + BUILTIN_CHECK_NAMES.length;
+    // 🪤 One `start`/`check` pair per UNIT, built-ins first, so their count is derived from
+    // `BUILTIN_CHECK_NAMES` rather than written out. A declared check's rows are converted in
+    // this process, announced by a `converting` line between the two.
     //
     // 🔑 `started` is the FIRST line, written the moment the child has booted,
     // so the watchdog stops charging Node's startup and the CLI's import to the
@@ -409,7 +407,8 @@ describe('vat resources check --budget', () => {
     expect(kinds).toStrictEqual([
       'started',
       'population',
-      ...Array.from({ length: units }, () => ['start', 'check']).flat(),
+      ...BUILTIN_CHECK_NAMES.flatMap(() => ['start', 'check']),
+      ...['quick', 'lensed'].flatMap(() => ['start', 'converting', 'check']),
       'checks-complete',
     ]);
   });

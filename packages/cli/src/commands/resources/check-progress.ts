@@ -46,6 +46,7 @@ import { z } from 'zod';
 
 import { LENS_POPULATIONS } from '../../utils/lens-population.js';
 
+import { CHECK_REFUSAL_REASON_SCHEMA } from './check-schema.js';
 import type { SupervisedChild } from './check-supervisor.js';
 
 /**
@@ -133,6 +134,8 @@ const CheckEntrySchema = z.object({
   // 🪤 Must be declared: the strict schema DROPS an unknown line, and the check vanishes.
   examined: z.number().optional(),
   allowEmpty: z.literal(true).optional(),
+  // 🔑 A broken check's RESOURCE_CHECK_BROKEN as published, so a killed run rebuilds it word for word.
+  refusal: z.object({ message: z.string(), reason: CHECK_REFUSAL_REASON_SCHEMA.optional() }).strict().optional(),
 }).strict();
 
 /** 🚨 `examined` is about to run; without this line a kill here reads as the violations statement hanging. */

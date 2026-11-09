@@ -159,11 +159,11 @@ describe('runResourcesCheckPhase — the child\'s findings on this process\'s st
 
 /**
  * The phase's verdict on a run whose one check declared `examined` and whose examined statement
- * selected `answer` rows — through the same `runPhase` `vat validate` uses, with the verb's own
+ * counted `answer` — through the same `runPhase` `vat validate` uses, with the verb's own
  * schema and run-level declaration.
  *
  * @param check - The check's `examined` half
- * @param answer - How many rows the examined statement selects
+ * @param answer - The count the examined statement returns
  * @returns The phase's judged report
  */
 async function phaseVerdictFor(check: { examined: string; allowEmpty?: true }, answer: number): Promise<Report<unknown>> {
@@ -171,7 +171,7 @@ async function phaseVerdictFor(check: { examined: string; allowEmpty?: true }, a
     builtins: [],
     checks: { owned: { description: 'owned', sql: 'SELECT path FROM a', ...check } },
     only: undefined,
-    ask: (sql) => (sql === check.examined ? Array.from({ length: answer }, () => ({ path: 'a.md' })) : []),
+    ask: (sql) => (sql === check.examined ? [{ n: answer }] : []),
     validation: undefined,
     membersEnumerated: 3,
   });
@@ -209,7 +209,7 @@ async function phaseVerdictFor(check: { examined: string; allowEmpty?: true }, a
  */
 describe('runResourcesCheckPhase — a check that examined nothing', () => {
   it('keeps the refusal and the examined count through the phase', async () => {
-    const verdict = await phaseVerdictFor({ examined: 'SELECT path FROM b' }, 0);
+    const verdict = await phaseVerdictFor({ examined: 'SELECT COUNT(*) FROM b' }, 0);
 
     expect(verdict.status === 'error' ? verdict.error : undefined).toBeUndefined();
     expect(verdict.status).toBe('findings');
@@ -221,7 +221,7 @@ describe('runResourcesCheckPhase — a check that examined nothing', () => {
   });
 
   it('passes the phase when the check declared that zero is legitimate, and says so', async () => {
-    const verdict = await phaseVerdictFor({ examined: 'SELECT path FROM b', allowEmpty: true }, 0);
+    const verdict = await phaseVerdictFor({ examined: 'SELECT COUNT(*) FROM b', allowEmpty: true }, 0);
 
     expect(verdict.status).toBe('ok');
     expect((verdict.data as { checks: unknown[] }).checks).toStrictEqual([

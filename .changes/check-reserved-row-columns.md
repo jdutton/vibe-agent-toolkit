@@ -20,13 +20,17 @@
   `vat resources check` and in `vat validate`'s `checks` phase alike. A finding about the whole run
   carries none.
 - **A declared check's violation carries `evidence`**: the row's columns other than the reserved
-  ones, values as SQLite returned them (a BLOB, or an integer beyond JSON's range, as the text the
-  message shows). A `path` that could not become the finding's `location` (absolute, NULL, not
+  ones, values as SQLite returned them (a BLOB as the text the message shows). A `path` that could not become the finding's `location` (absolute, NULL, not
   text) stays in `evidence`; a column aliased `__proto__` is kept. The message is unchanged.
 - **A check whose rows could not be read carries `reason`** on its `RESOURCE_CHECK_BROKEN` finding:
   `{column, value, row, allowed}` — the reserved column, the value as `evidence` renders it, the
   1-based row (the FIRST bad one), and what the column may hold (`one of error | warning | info`,
-  `a positive integer`, `NULL without a finding_line`). The message states the same `allowed`.
+  `a positive integer`, `NULL without a finding_line`). The message states the same `allowed`. A
+  check whose `examined` statement returned no count carries the other shape,
+  `{statement: 'examined', rows, columns?, value?, allowed}`.
+- **A killed run's report keeps every check that had already completed broken**: its entry and its
+  `RESOURCE_CHECK_BROKEN` finding (message, `check`, `reason`) are the ones the completed run
+  publishes.
 - **`column` is a field of `ValidationIssue`** (and `createRegistryIssue`'s extras); the published
   finding inherits it.
 

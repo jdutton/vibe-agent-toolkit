@@ -1324,7 +1324,8 @@ describe('runProjectChecks — progress emitted for an outside observer', () => 
     expect(entries).toStrictEqual([
       { kind: 'start', name: 'broken' },
       { kind: 'asked', sql: 'SELECT contentHash FROM blobs' },
-      { kind: 'check', name: 'broken', durationMs: 1, broken: true },
+      // 🔑 With its refusal as published, so a run killed later rebuilds it word for word.
+      { kind: 'check', name: 'broken', durationMs: 1, broken: true, refusal: { message: expect.stringContaining('"broken" could not run') } },
       // Filed even when every rule broke: "no statement is running any more" is
       // true however the statements ended, and the phase after it still costs.
       { kind: 'checks-complete' },

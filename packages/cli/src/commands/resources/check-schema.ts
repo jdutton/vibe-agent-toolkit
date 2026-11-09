@@ -33,8 +33,28 @@ const PublishedCheckCostSchema = z.object({
   examinedNothing: z.literal(true).optional(),
 }).strict();
 
-/** One evidence value; a BLOB or an out-of-range integer arrives as its rendered text. */
+/** One evidence value; a BLOB arrives as its rendered text. */
 const EvidenceValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+
+/**
+ * Why a check's own output could not be read: a row's reserved column, or an `examined` statement
+ * that did not return one count (`rows`, `columns` when a row came back, `value` when one cell did).
+ */
+export const CHECK_REFUSAL_REASON_SCHEMA = z.union([
+  z.object({
+    column: z.enum(CHECK_FINDING_COLUMNS).exclude(['path']),
+    value: EvidenceValueSchema,
+    row: z.number().int().positive(),
+    allowed: z.string().min(1),
+  }).strict(),
+  z.object({
+    statement: z.literal('examined'),
+    rows: z.number().int().nonnegative(),
+    columns: z.number().int().nonnegative().optional(),
+    value: EvidenceValueSchema.optional(),
+    allowed: z.string().min(1),
+  }).strict(),
+]);
 
 /**
  * A finding of `vat resources check`'s document, also used by the `vat validate` envelope.
@@ -46,13 +66,8 @@ const EvidenceValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null
 export const CHECK_FINDING_SCHEMA = FindingSchema.extend({
   check: z.string().min(1).optional(),
   evidence: z.record(z.string(), EvidenceValueSchema).optional(),
-  /** Only on `RESOURCE_CHECK_BROKEN` for rows the check could not read: what was refused, and what is allowed. */
-  reason: z.object({
-    column: z.enum(CHECK_FINDING_COLUMNS).exclude(['path']),
-    value: EvidenceValueSchema,
-    row: z.number().int().positive(),
-    allowed: z.string().min(1),
-  }).strict().optional(),
+  /** Only on `RESOURCE_CHECK_BROKEN` for output the check could not read: what was refused, and what is allowed. */
+  reason: CHECK_REFUSAL_REASON_SCHEMA.optional(),
 }).strict().refine((finding) => finding.evidence === undefined || finding.check !== undefined, {
   message: 'evidence is a check\'s row, so a finding carrying it must name the check',
   path: ['evidence'],

@@ -8,7 +8,8 @@
  * shown. These are pure: no file system, no clock, no exit.
  */
 
-import { PROJECTION_TABLES, allDerivedSpecs } from '@vibe-agent-toolkit/resources';
+import { PROJECTION_STATEMENT_REFUSED_CODE, PROJECTION_TABLES, allDerivedSpecs } from '@vibe-agent-toolkit/resources';
+import { VatError } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -19,7 +20,8 @@ import {
   buildProjectionQueryReport,
   type ProjectionQueryPayloadInput,
 } from '../../src/commands/resources/query.js';
-import { describeQueryFailure } from '../../src/utils/projection-query.js';
+import { refusalCodeOf } from '../../src/utils/command-refusal.js';
+import { describedFailure, describeQueryFailure } from '../../src/utils/projection-query.js';
 
 /** A stand-in for whatever a statement selected. Two rows, so a count of 1 cannot pass. */
 const ROWS: readonly Record<string, unknown>[] = [
@@ -227,12 +229,25 @@ describe('the failure message', () => {
     // 🚨 The statement WAS declared: the lens ran and could not answer (no
     // `--base`, say). The reason is the fix, and "declare it" would send the
     // reader after a problem they do not have.
-    const refusals = new Map([['changed_files', 'Pass --base <ref>.']]);
+    const refusals = new Map([['changed_files', { refused: 'Pass --base <ref>.', refusal: 'USAGE_INVALID' as const }]]);
     const message = describeQueryFailure('SELECT path FROM changed_files', 'no such table: changed_files', refusals);
 
     expect(message).toContain('no such table: changed_files');
     expect(message).toContain('could not be evaluated for this run: Pass --base <ref>.');
     expect(message).not.toContain('Declare this statement');
+  });
+
+  it('refuses with the LENS\'s refusal code, never the statement\'s USAGE_INVALID', () => {
+    // A repository git cannot read is the environment's fault: the statement is fine.
+    const refusals = new Map([['changed_files', { refused: 'not a git working tree.', refusal: 'INPUT_UNREADABLE' as const }]]);
+    const engine = new VatError(PROJECTION_STATEMENT_REFUSED_CODE, 'no such table: changed_files');
+
+    const error = describedFailure('SELECT path FROM changed_files', engine, refusals);
+
+    expect(refusalCodeOf(error)).toBe('INPUT_UNREADABLE');
+    expect(error.message).toContain('not a git working tree.');
+    expect(refusalCodeOf(describedFailure('SELECT * FROM nope', new VatError(PROJECTION_STATEMENT_REFUSED_CODE, 'no such table: nope'), refusals)))
+      .toBe('USAGE_INVALID');
   });
 
   it('does not call a missing PROJECTION table unevaluated', () => {

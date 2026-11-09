@@ -37,12 +37,15 @@ import {
   bindBuiltinChecks,
   BUILTIN_CHECK_NAMES,
   checkStatements,
+  describeUninterpretableExamined,
   describeUninterpretableRows,
+  examinedCount,
   issuesFromCheckRows,
   uninterpretableRowsReason,
   type BoundBuiltinCheck,
   type CheckIssue,
   type CheckRowConversion,
+  type ExaminedShapeReason,
   type NearMiss,
   type ResourceCheck,
 } from '@vibe-agent-toolkit/resources';
@@ -534,6 +537,18 @@ function brokenExaminedFinding(name: string, error: unknown): CheckIssue {
   ));
 }
 
+/** A check whose `examined` statement returned something other than one count: `RESOURCE_CHECK_BROKEN`. */
+function uninterpretableExaminedFinding(name: string, reason: ExaminedShapeReason): CheckIssue {
+  return { ...ofCheck(name, runIntegrityFinding(describeUninterpretableExamined(name, reason))), reason };
+}
+
+/** The refusal a check's `examined` statement earns — it threw, or returned no count — if any. */
+function examinedRefusal(name: string, examined: Timed<ExaminedCount> | undefined): CheckIssue | undefined {
+  if (examined === undefined) return undefined;
+  if (!examined.ok) return brokenExaminedFinding(name, examined.error);
+  return examined.value.ok ? undefined : uninterpretableExaminedFinding(name, examined.value.reason);
+}
+
 /** The code for a check that declared what it examined and counted zero. */
 const EXAMINED_NOTHING_CODE = 'RESOURCE_CHECK_EXAMINED_NOTHING' satisfies RefusalCode;
 
@@ -586,6 +601,9 @@ interface CheckSelection {
   readonly report: () => CheckRowConversion;
 }
 
+/** What an `examined` statement's result read as: one count, or why not. */
+type ExaminedCount = ReturnType<typeof examinedCount>;
+
 /**
  * One runnable check — a name and the selection that IS its cost.
  *
@@ -599,8 +617,8 @@ interface CheckUnit {
   readonly builtin?: true;
   /** Select the violations. Timed by {@link timed}, and so is {@link examine}. */
   readonly select: () => CheckSelection;
-  /** Count its declared `examined` statement's rows. Absent when it declares none. */
-  readonly examine?: () => number;
+  /** Run its declared `examined` statement and read its one count. Absent when it declares none. */
+  readonly examine?: () => ExaminedCount;
   /** Set when an examined count of 0 is declared legitimate. Only alongside {@link examine}. */
   readonly allowEmpty?: true;
 }
@@ -621,8 +639,8 @@ function sqlCheckUnit(name: string, check: ResourceCheck, ask: AskProjection): C
       const rows = ask(check.sql);
       return { rows: rows.length, converts: true, report: () => issuesFromCheckRows(name, check, rows) };
     },
-    // 🪤 Only the count leaves: examined rows are never findings or evidence.
-    ...(examined === undefined ? {} : { examine: () => ask(examined).length }),
+    // 🪤 Only the count leaves: the statement's result is never a finding or evidence.
+    ...(examined === undefined ? {} : { examine: () => examinedCount(ask(examined)) }),
     ...(check.allowEmpty === undefined ? {} : { allowEmpty: check.allowEmpty }),
   };
 }
@@ -680,6 +698,9 @@ function checkUnits(
   ];
 }
 
+/** A completed check's progress line. */
+type CheckLine = Extract<ProgressEntry, { kind: 'check' }>;
+
 /** What a `converting` line carries: the cost record so far, without its kind. */
 type ConvertingLine = Omit<Extract<ProgressEntry, { kind: 'converting' }>, 'kind'>;
 
@@ -711,11 +732,11 @@ interface UnitResult {
 /** Run a unit's `examined` statement, timed. 🔑 Announced first, so a hang there names it. */
 function examineUnit(
   name: string,
-  examine: () => number,
+  examine: () => ExaminedCount,
   now: () => number,
   violations: { durationMs: number; rows: number; allowEmpty?: true },
   onProgress: ProgressSink | undefined,
-): Timed<number> {
+): Timed<ExaminedCount> {
   onProgress?.({ kind: 'examining', name, ...violations });
   return timed(now, examine);
 }
@@ -747,13 +768,14 @@ function runUnit(unit: CheckUnit, now: () => number, sinks: UnitSinks): UnitResu
     ? undefined
     : examineUnit(name, examine, now, { durationMs: outcome.durationMs, rows, ...allowEmpty }, sinks.onProgress);
   const durationMs = outcome.durationMs + (examined?.durationMs ?? 0);
-  if (examined?.ok === false) {
+  const unexamined = examinedRefusal(name, examined);
+  if (unexamined !== undefined) {
     // `rows` is real; `examined` is absent, never a refusable 0.
     const cost = { name, durationMs, rows, broken: true as const, ...origin };
-    return { cost, refusal: brokenExaminedFinding(name, examined.error), issues: [] };
+    return { cost, refusal: unexamined, issues: [] };
   }
 
-  const counted = examined === undefined ? {} : { examined: examined.value };
+  const counted = examined?.ok === true && examined.value.ok ? { examined: examined.value.count } : {};
   const converted = convertSelection(outcome.value, { name, durationMs, rows, ...counted, ...allowEmpty }, sinks);
   if (!converted.ok) {
     const cost = { name, durationMs, rows, broken: true as const, ...counted, ...origin };
@@ -765,6 +787,19 @@ function runUnit(unit: CheckUnit, now: () => number, sinks: UnitSinks): UnitResu
     ...(examinedNothing(cost) ? { refusal: examinedNothingFinding(name) } : {}),
     issues: converted.issues,
   };
+}
+
+/** A broken check's refusal as its `check` line carries it; examined-nothing is re-derived from the cost. */
+function loggedRefusal(refusal: CheckIssue | undefined): { refusal?: NonNullable<CheckLine['refusal']> } {
+  if (refusal?.code !== RUN_INTEGRITY_CODE) return {};
+  return { refusal: { message: refusal.message, ...(refusal.reason === undefined ? {} : { reason: refusal.reason }) } };
+}
+
+/** The finding a logged broken check stands for — the one {@link loggedRefusal} wrote. */
+function refusalFromLine(line: CheckLine): CheckIssue | undefined {
+  if (line.refusal === undefined) return undefined;
+  const { message, reason } = line.refusal;
+  return { ...ofCheck(line.name, runIntegrityFinding(message)), ...(reason === undefined ? {} : { reason }) };
 }
 
 /**
@@ -804,7 +839,7 @@ function runUnits(
     onProgress?.({ kind: 'start', name: unit.name });
     const { cost, refusal, issues: found } = runUnit(unit, now, { onProgress, warn });
     costs.push(cost);
-    onProgress?.({ kind: 'check', ...cost });
+    onProgress?.({ kind: 'check', ...cost, ...loggedRefusal(refusal) });
     if (refusal !== undefined) issues.push(refusal);
     // 🪤 Appended one at a time, NEVER `issues.push(...findings)`. A spread
     // becomes an ARGUMENT LIST, which throws `RangeError: Maximum call stack
@@ -1554,7 +1589,8 @@ export function buildInterruptedCheckInput(options: {
   // conditional spreads keep `rows`/`broken` ABSENT rather than `undefined` —
   // which is what makes `rows: 0` on a statement that never returned
   // impossible, exactly as it is on the completed path.
-  const completed: CheckCost[] = entries.filter((entry) => entry.kind === 'check').map((entry) => ({
+  const lines = entries.filter((entry): entry is CheckLine => entry.kind === 'check');
+  const completed: CheckCost[] = lines.map((entry) => ({
     name: entry.name,
     durationMs: entry.durationMs,
     ...(entry.rows === undefined ? {} : { rows: entry.rows }),
@@ -1566,8 +1602,12 @@ export function buildInterruptedCheckInput(options: {
   const inFlight = unitInFlight(entries);
   const stopped = stoppedMidCheck(entries, inFlight);
   const costs = stopped === undefined ? completed : [...completed, stopped.cost];
-  // 🔑 Re-derived: the child's findings died with it, and a bare `examined: 0` would read as legitimate.
-  const refusedEmpty = completed.filter((cost) => examinedNothing(cost)).map((cost) => examinedNothingFinding(cost.name));
+  // 🔑 Re-derived per check, as a completed run publishes them: the child's findings died with it.
+  const refused = lines.flatMap((line, index) => {
+    const cost = completed[index];
+    const finding = refusalFromLine(line) ?? (cost !== undefined && examinedNothing(cost) ? examinedNothingFinding(line.name) : undefined);
+    return finding === undefined ? [] : [finding];
+  });
 
   return {
     root,
@@ -1585,7 +1625,7 @@ export function buildInterruptedCheckInput(options: {
     issues: [
       interruptedRunFinding(inFlight, ending, completed.length),
       ...(stopped === undefined ? [] : [stopped.finding]),
-      ...refusedEmpty,
+      ...refused,
     ],
     costs,
   };

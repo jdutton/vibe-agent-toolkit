@@ -34,6 +34,7 @@ export {
 export {
   gitChangedFiles,
   type GitChangedFile,
+  type GitChangedFilesRefusalKind,
   type GitChangedFilesResult,
   type GitChangeKind,
 } from './git-changed-files.js';
