@@ -8,8 +8,9 @@
  * image and the ordinary shape of a repository, which is NOT reported, and at a
  * path typed as text, which is. So `(1 not text)` pins the line both ways.
  *
- * Isolation: `HOME`, `USERPROFILE`, `CLAUDE_CONFIG_DIR` and `TMPDIR` all point
- * into scratch, and no projection store is selected, so every run derives.
+ * Isolation: `HOME`, `USERPROFILE`, `CLAUDE_CONFIG_DIR` and the temp directory (`TMPDIR`,
+ * `TEMP`, `TMP`) all point into scratch, and no projection store is selected, so every run
+ * derives.
  */
 
 import { rmSync, writeFileSync } from 'node:fs';

@@ -449,10 +449,12 @@ export function createSystemTestConfig(overrides: SystemTestConfigOverrides = {}
     // (377-481 MB) — not the 1-3 GB of the integration tier's native-memory
     // chain, which is why the system tier is not chained. Worst case under
     // `--concurrency=4`: 8 forks, each with one such child at a time, ~8 GB of a
-    // 16 GB runner. Not sampled per process on Windows; there every fork is
-    // checked against `forkRssBudgetMb` by the detector above (after its file
-    // ran), which cannot see the `vat` children. That a system file loads no bigger model, and spawns no more
-    // than one model-loading `vat` at a time, is an assumption (not enforced).
+    // 16 GB runner. Windows memory is NOT measured: no per-process sample, and
+    // the detector above is no stand-in for one — it sees no `vat` child, and
+    // there it reads the peak working set, which Windows trims (reads low) under
+    // the very pressure in question; what fails there is commit charge. That a
+    // system file loads no bigger model, and spawns no more than one
+    // model-loading `vat` at a time, is an assumption (not enforced).
     maxWorkers: maxTestWorkers,
     // Same V8 old-space cap as `integrationExecArgv` — see its comment.
     // Heaviest measured system-test file: cli/inventory-parity.system.test.ts, ~196MB.
