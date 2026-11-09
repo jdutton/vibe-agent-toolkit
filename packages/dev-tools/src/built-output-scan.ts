@@ -3,38 +3,48 @@
  * their syntax tree — the half of `built-output-edges.ts` that needs no turbo.
  *
  * Scanned: every source file under a package's `test/`, every `src/**\/*.test.*`,
- * and the test helpers under `src/` (`testing/`, `*test-helpers*`). In them, a
- * path is any expression handed to a path sink: a `…join…`/`…resolve…` call,
- * `new URL`, a module load (`import`, `import()`, `require`, `createRequire(…)(…)`,
- * `vi.mock`/`doMock`/`importActual`/`importMock`), a process launch
- * (`spawn*`/`exec*`/`fork`) or an fs read. Each one that has a `dist` segment is
- * exactly one of (evaluation: `built-output-paths.ts`):
+ * the test helpers under `src/` (`testing/`, `*test-helpers*`), and the vitest
+ * setup and global-setup files at the repo root or a package root. NOT scanned
+ * (out of scope, so a read there is not checked): product `src/` code a test
+ * calls, and the TypeScript files a package script runs. In the scanned files, a
+ * path is any expression handed to a path sink: a `join`/`resolve` call bound to
+ * `node:path` or `safePath`, `new URL`, a module load (`import`, `import()`,
+ * `require`, `createRequire(…)(…)`, `vi.mock`/`doMock`/`importActual`/`importMock`),
+ * a specifier resolution (`require.resolve`, `import.meta.resolve`), a process
+ * launch (`spawn*`/`exec*`/`fork`, also through `promisify`) or an fs read.
  *
- * - RESOLVED: its anchor is a repo location — the file's own directory
+ * Each alternative a sink receives that has a `dist` segment — compared
+ * case-insensitively — is exactly one of (evaluation: `built-output-paths.ts`):
+ *
+ * - RESOLVED: every piece of it is known, and it lands in `packages/<dir>/dist/…`
+ *   or in a workspace package linked as `node_modules/<name>/dist/…`, every
+ *   segment matching exactly. It starts at the file's own directory
  *   (`__dirname`, `import.meta.dirname`, `new URL(…, import.meta.url)`, a relative
- *   module specifier), a workspace package specifier (`@scope/pkg/dist/…`), or a
- *   value that traces to one. Static relative text with no anchor resolves from
- *   the working directory — for a test, its package's directory. When it lands
- *   in `packages/<dir>/dist`, or in a workspace package linked under
- *   `node_modules`, it is a {@link FileReach}; anywhere else it reads no
- *   package's output.
- * - TEMP: its anchor traces to `tmpdir()`, `mkdtemp*` or a temp-dir helper of
- *   `@vibe-agent-toolkit/utils/testing` — `underTemp(path, root)` among them,
- *   which asserts at run time that `path` is inside the temp dir `root`. Not a
- *   reach.
- * - UNRESOLVED: anything else — an untraceable parameter or function result, a
- *   `let` given an unknown value, a non-relative import, or a package directory
- *   that differs only in case. A {@link ScanFinding}
- *   carrying file:line, never a skip.
+ *   specifier), at a workspace package specifier (`@scope/pkg/dist/…`), or at a
+ *   value that traces to one; static relative text with no anchor resolves from
+ *   the test's package directory. A {@link FileReach}.
+ * - TEMP: it starts at `tmpdir()`, `mkdtemp*` or a temp-dir helper of the utils
+ *   package — `underTemp(path, root)` among them — and no `..` climbs out of
+ *   that temp dir. Not a reach. Nor is a path that starts with an absolute
+ *   literal (`/project/dist`): a fixed location outside any checkout.
+ * - UNRESOLVED: every other one — a piece not known statically anywhere in it
+ *   (an untraceable parameter, a call site that cannot be enumerated, a value a
+ *   cycle guard cut short, a dependency's specifier), a fully known path that
+ *   lands on no package's `dist/` or names one only when case is ignored, a temp
+ *   path a `..` climbs out of, and a relative path whose working directory is
+ *   not the package's: handed to a launch with a `cwd` option or to a shell
+ *   (`exec*`, `shell: true`), or built in a root-level setup file. A
+ *   {@link ScanFinding} carrying file:line, never a skip.
  *
- * A file that does not parse is a finding, not a skip. Comments, and strings
- * that reach no sink (plain test data), never count.
+ * An alternative with no `dist` segment is none of them. A file that does not
+ * parse is a finding; a scanned file the parser did not read throws. Comments,
+ * and strings that reach no sink (plain test data), never count.
  */
 
 import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
 import ts from 'typescript';
 
-import { calleeName, literalPieces, locate, Module, nameOnlyProgram, PathEvaluator, type Pieces, type Values } from './built-output-paths.js';
+import { calleeName, literalPieces, locate, Module, nameOnlyProgram, PathEvaluator, type Piece, type Pieces, type Values } from './built-output-paths.js';
 import type { WorkspaceGraph } from './workspace-graph.js';
 
 /** A path into a workspace package's built output, as one file writes it. */
@@ -70,6 +80,8 @@ export interface TestTreeScan {
   readonly imports: ReadonlyMap<string, readonly string[]>;
   /** The files vitest runs: `*.test.*`. */
   readonly entries: readonly string[];
+  /** The vitest setup files: each runs before every test of its package, or, at the repo root, of every package. */
+  readonly setups: readonly string[];
 }
 
 const SOURCE = /\.[cm]?[jt]sx?$/;
@@ -77,9 +89,22 @@ const TEST_ENTRY = /\.test\.[cm]?[jt]sx?$/;
 const NOT_TEST_CODE = /\/(?:fixtures|golden)\//;
 const PACKAGE_FILE = /^packages\/[^/]+\/(test|src)\/(.+)$/;
 const SRC_HELPER = /(?:^|\/)(?:testing\/|[^/]*test-helpers)/;
+/** A vitest setup or global-setup file's name. */
+const SETUP_NAME = /^(?:vitest\.[^/]*setup|[^/]*global-?setup)\.[cm]?[jt]s$/i;
+/** A file directly in a package's root directory. */
+const PACKAGE_ROOT_FILE = /^packages\/[^/]+\/[^/]+$/;
+
+/** Whether a repo-relative file is a vitest setup or global-setup file at the repo root or a package root. */
+function isSetupFile(rel: string): boolean {
+  const name = rel.slice(rel.lastIndexOf('/') + 1);
+  return SETUP_NAME.test(name) && (name === rel || PACKAGE_ROOT_FILE.test(rel));
+}
+/** The directory under `packages/` a file sits in. */
+const PACKAGE_DIR = /^packages\/([^/]+)\//;
 
 /** Whether a repo-relative file is test code the rule reads. */
 function isScanned(rel: string): boolean {
+  if (isSetupFile(rel)) return true;
   const match = PACKAGE_FILE.exec(rel);
   if (match === null || !SOURCE.test(rel) || NOT_TEST_CODE.test(rel)) return false;
   const [, tree, rest = ''] = match;
@@ -92,6 +117,10 @@ const PATH_USE = new Set(
     name.endsWith('Sync') || name === 'fork' ? [name] : [name, `${name}Sync`],
   ),
 );
+/** The launches, which may resolve a path from a `cwd` option or hand it to a shell. */
+const LAUNCH = new Set(['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']);
+/** Launches that always run their command through a shell. */
+const SHELL = new Set(['exec', 'execSync']);
 /** Callees that load a module from their first argument. */
 const MODULE_LOAD = new Set(['require', 'mock', 'doMock', 'importActual', 'importMock']);
 
@@ -118,23 +147,74 @@ interface SinkUse {
   readonly at: ts.Node;
 }
 
+/** How a launch resolves the paths it is handed: through a shell, from a `cwd` option. */
+interface LaunchContext {
+  readonly shell: boolean;
+  readonly cwd: boolean;
+}
+
+/** Whether a launch may set `shell` or `cwd`, through any argument after the command that may be its options. */
+function launchContext(call: ts.CallExpression, name: string, module: Module, evaluator: PathEvaluator): LaunchContext {
+  if (!LAUNCH.has(name)) return { shell: false, cwd: false };
+  const options = call.arguments.slice(1).filter((arg) => !ts.isArrayLiteralExpression(arg) && !ts.isStringLiteralLike(arg) && !ts.isFunctionLike(arg));
+  return {
+    shell: SHELL.has(name) || options.some((option) => evaluator.maySet(module, option, 'shell')),
+    cwd: options.some((option) => evaluator.maySet(module, option, 'cwd')),
+  };
+}
+
+/** The whitespace-separated words of a command a shell parses: each is judged as a path of its own. */
+function shellWords(pieces: Pieces): Pieces[] {
+  const words: Pieces[] = [];
+  let current: Piece[] = [];
+  for (const piece of pieces) {
+    if (typeof piece !== 'string') {
+      current.push(piece);
+      continue;
+    }
+    const [first = '', ...rest] = piece.split(/\s+/);
+    current.push(first);
+    for (const part of rest) {
+      words.push(current);
+      current = [...literalPieces(part)];
+    }
+  }
+  words.push(current);
+  return words.filter((word) => word.some((piece) => piece !== ''));
+}
+
+/** A path anchored nowhere, resolved from a working directory the scan cannot know: unknown where it starts. */
+function unrooted(pieces: Pieces): Pieces {
+  return locate(pieces).anchor === undefined ? [null, '/', ...pieces] : pieces;
+}
+
+/** What a launch's argument names: split into shell words, and rooted nowhere when a shell or a `cwd` option resolves it. */
+function launched(values: Values, { shell, cwd }: LaunchContext): Values {
+  const words = shell ? values.flatMap(shellWords) : values;
+  return shell || cwd ? words.map(unrooted) : words;
+}
+
 /** The paths a node hands to a sink; `specifier` is its {@link literalSpecifier}. */
 function sinkUses(node: ts.Node, specifier: string | undefined, module: Module, evaluator: PathEvaluator): SinkUse[] {
   if (specifier !== undefined) {
-    const pieces = evaluator.specifierPieces(module, specifier);
-    return pieces === undefined ? [] : [{ values: [pieces], at: node }];
+    return [{ values: [evaluator.specifierPieces(module, specifier) ?? [null, '/', specifier]], at: node }];
   }
   if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'URL') {
     return [{ values: evaluator.values(module, node), at: node }];
   }
   if (!ts.isCallExpression(node)) return [];
-  const path = evaluator.pathCall(module, node);
-  if (path !== undefined) return [{ values: path, at: node }];
-  const load = isModuleLoad(node);
-  if (!load && !PATH_USE.has(evaluator.callName(module, node))) return [];
-  return (load ? node.arguments.slice(0, 1) : node.arguments)
+  const resolution = evaluator.specifierResolution(module, node) ?? evaluator.pathCall(module, node);
+  if (resolution !== undefined) return [{ values: resolution, at: node }];
+  if (isModuleLoad(node)) {
+    const [arg] = node.arguments;
+    return arg === undefined ? [] : [{ values: evaluator.specifierValues(module, arg), at: arg }];
+  }
+  const name = evaluator.callName(module, node);
+  if (!PATH_USE.has(name)) return [];
+  const context = launchContext(node, name, module, evaluator);
+  return node.arguments
     .flatMap((arg) => (ts.isArrayLiteralExpression(arg) ? [...arg.elements] : [arg]))
-    .map((arg) => ({ values: evaluator.values(module, arg), at: arg }));
+    .map((arg) => ({ values: launched(evaluator.values(module, arg), context), at: arg }));
 }
 
 /** The workspace's package directories, and each package's directory by name. */
@@ -146,59 +226,79 @@ interface Workspace {
 type Reach = { kind: 'reach'; dir: string; subpath: string; open: boolean };
 type Verdict = Reach | { kind: 'unresolved'; why: string } | { kind: 'none' };
 
-/** A reach into `dir`: `dist` and the static segments after it, up to the first unknown one. */
-function reachFrom(dir: string, segments: ReadonlyArray<string | null>, index: number): Reach {
-  const rest = segments.slice(index);
-  const end = rest.indexOf(null);
-  const known = (end === -1 ? rest : rest.slice(0, end)) as string[];
-  const last = known.at(-1) ?? '';
-  return { kind: 'reach', dir, subpath: known.join('/'), open: end !== -1 || !/\.[^.]+$/.test(last) };
+const NONE: Verdict = { kind: 'none' };
+/** A `dist` segment, compared case-insensitively: `Dist` is still a reach to judge, never a pass. */
+const DIST = /^dist$/i;
+
+function unresolved(why: string): Verdict {
+  return { kind: 'unresolved', why };
 }
 
-/** The workspace package a repo path reaches through an install link: `…/node_modules/<name>/dist`. */
-function linkedPackage(segments: ReadonlyArray<string | null>, dist: number, workspace: Workspace): string | undefined {
-  const at = segments.lastIndexOf('node_modules', dist);
-  return at === -1 ? undefined : workspace.names.get(segments.slice(at + 1, dist).join('/'));
+/** A reach into `dir`: `dist` and every segment after it. Open when the last one has no extension (a directory read whole). */
+function reachFrom(dir: string, segments: readonly string[], dist: number): Reach {
+  const rest = segments.slice(dist);
+  return { kind: 'reach', dir, subpath: rest.join('/'), open: !/\.[^.]+$/.test(rest.at(-1) ?? '') };
 }
 
-/** A repo-anchored path: a reach when it lands in `packages/<dir>/dist`, or in a workspace package linked under `node_modules`. */
-function classifyRepoPath(segments: ReadonlyArray<string | null>, dist: number, workspace: Workspace): Verdict {
-  const { dirs } = workspace;
-  const unknownAt = segments.slice(0, dist).indexOf(null);
-  if (unknownAt !== -1) {
-    // An unknown segment that could be the package directory, or that a later `..` climbs out of.
-    // Segment values of authored text, not a containment check on a real path.
-    const between = segments.slice(unknownAt, dist);
-    const climbs = between.includes('..');
-    return unknownAt <= 1 || climbs ? { kind: 'unresolved', why: 'its package segment is not static' } : { kind: 'none' };
-  }
-  const linked = linkedPackage(segments, dist, workspace);
-  if (linked !== undefined) return reachFrom(linked, segments, dist);
-  if (segments[0] !== 'packages' || dist !== 2) return { kind: 'none' };
+/** The reach a fully known repo path makes when every segment matches exactly: `packages/<dir>/dist/…` or `…/node_modules/<name>/dist/…`. */
+function exactReach(segments: readonly string[], dist: number, { dirs, names }: Workspace): Reach | undefined {
+  if (segments[dist] !== 'dist') return undefined;
   const dir = segments[1] ?? '';
-  if (dirs.has(dir)) return reachFrom(dir, segments, dist);
-  const lower = dir.toLowerCase();
-  return [...dirs].some((known) => known.toLowerCase() === lower)
-    ? { kind: 'unresolved', why: `\`${dir}\` names a package directory only when case is ignored` }
-    : { kind: 'none' };
+  if (dist === 2 && segments[0] === 'packages' && dirs.has(dir)) return reachFrom(dir, segments, dist);
+  const link = segments.lastIndexOf('node_modules', dist);
+  const linked = link === -1 ? undefined : names.get(segments.slice(link + 1, dist).join('/'));
+  return linked === undefined ? undefined : reachFrom(linked, segments, dist);
+}
+
+/** A fully known repo path with a `dist` segment: a reach when it lands on a package's `dist/` exactly; unresolved otherwise. */
+function landing(segments: readonly string[], workspace: Workspace): Verdict {
+  const dist = segments.findIndex((segment) => DIST.test(segment));
+  const exact = exactReach(segments, dist, workspace);
+  if (exact !== undefined) return exact;
+  const folded: Workspace = {
+    dirs: new Set([...workspace.dirs].map((dir) => dir.toLowerCase())),
+    names: new Map([...workspace.names].map(([name, dir]) => [name.toLowerCase(), dir] as const)),
+  };
+  return exactReach(segments.map((segment) => segment.toLowerCase()), dist, folded) === undefined
+    ? unresolved("it lands on no workspace package's `dist/`")
+    : unresolved("it names a package's `dist/` only when case is ignored");
+}
+
+/** Whether a `..` climbs above where a path starts: past every segment before it, an unknown one counting as one. */
+function climbsOut(segments: ReadonlyArray<string | null>): boolean {
+  let depth = 0;
+  for (const segment of segments) {
+    depth += segment === '..' ? -1 : 1;
+    if (depth < 0) return true;
+  }
+  return false;
 }
 
 /**
- * Which kind of path one alternative is, when it has a `dist` segment. A path
- * that starts with static relative text resolves against the working directory,
- * which for a test is its package's directory (`owner`).
+ * Which kind of path one alternative is (see the module header). A path that
+ * starts with static relative text resolves against the working directory: a
+ * test's package directory (`owner`), unknown for a file in no package.
  */
-function classify(pieces: Pieces, workspace: Workspace, owner: string): Verdict {
+function classify(pieces: Pieces, workspace: Workspace, owner: string | undefined): Verdict {
   const { anchor, segments } = locate(pieces);
-  if (!segments.includes('dist') || anchor?.anchor === 'temp' || anchor?.anchor === 'absolute') return { kind: 'none' };
-  if (anchor === undefined) {
-    if (segments[0] === null) {
-      return { kind: 'unresolved', why: 'it starts from no location the rule can trace (a parameter or function result it cannot follow, a `let` given one, or a non-relative import)' };
-    }
-    return classify([{ anchor: 'repo' }, 'packages', '/', owner, '/', ...pieces], workspace, owner);
+  if (!segments.some((segment) => segment !== null && DIST.test(segment)) || anchor?.anchor === 'absolute') return NONE;
+  if (anchor?.anchor === 'temp') return climbsOut(segments) ? unresolved('a `..` in it climbs out of its temp dir') : NONE;
+  if (segments.includes(null)) {
+    return unresolved(
+      'part of it is not known statically (a parameter or function result the rule cannot follow, a call site it cannot enumerate, a `let` given an unknown value, a cycle, a dependency\'s specifier, or a working directory it cannot know)',
+    );
   }
-  if (anchor.anchor === 'package') return segments[0] === 'dist' ? reachFrom(anchor.dir, segments, 0) : { kind: 'none' };
-  return classifyRepoPath(segments, segments.indexOf('dist'), workspace);
+  if (anchor === undefined && owner === undefined) return unresolved('it is relative to a working directory the rule cannot know');
+  // Relative text resolves from the owner's directory, a package specifier from that package's.
+  const base = anchor?.anchor === 'package' ? anchor.dir : owner;
+  const rooted = anchor?.anchor === 'repo' ? pieces : [{ anchor: 'repo' } as const, 'packages', '/', base ?? '', '/', ...withoutAnchor(pieces)];
+  return landing(locate(rooted).segments as readonly string[], workspace);
+}
+
+/** The pieces after the last anchor. */
+function withoutAnchor(pieces: Pieces): Pieces {
+  const last = pieces.findLastIndex((piece) => piece !== null && typeof piece === 'object');
+  return pieces.slice(last + 1);
 }
 
 /** Longest stretch of an expression a finding quotes. */
@@ -206,7 +306,7 @@ const EXPRESSION_SHOWN = 160;
 
 /** Everything one scanned module contributes. */
 function scanModule(module: Module, evaluator: PathEvaluator, workspace: Workspace) {
-  const owner = /^packages\/([^/]+)\//.exec(module.rel)?.[1] ?? '';
+  const owner = PACKAGE_DIR.exec(module.rel)?.[1];
   const reaches: FileReach[] = [];
   const findings: ScanFinding[] = [];
   const loads: string[] = [];
@@ -238,15 +338,29 @@ function dedupe<T>(items: readonly T[]): T[] {
   return [...new Map(items.map((item) => [JSON.stringify(item), item] as const)).values()];
 }
 
-/** The scanned files parsed in one program, and a finding for each that does not parse. */
+/** A path as a key: absolute, forward slashes, the drive letter upper-cased (TypeScript and Node disagree on its case). */
+function pathKey(path: string): string {
+  return safePath.resolve(path).replace(/^[a-z]:/, (drive) => drive.toUpperCase());
+}
+
+/**
+ * The scanned files parsed in one program, and a finding for each that does not parse.
+ *
+ * @throws When the parser read back fewer files than it was given: a file the
+ *   rule never read would otherwise pass unchecked
+ */
 function parseScanned(repoRoot: string, files: readonly string[]): { modules: Map<string, Module>; findings: ScanFinding[] } {
-  const byPath = new Map(files.map((rel) => [safePath.join(repoRoot, rel), rel] as const));
-  const program = nameOnlyProgram([...byPath.keys()]);
+  const byPath = new Map(files.map((rel) => [pathKey(safePath.join(repoRoot, rel)), rel] as const));
+  const program = nameOnlyProgram(files.map((rel) => safePath.join(repoRoot, rel)));
   const checker = program.getTypeChecker();
   const modules = new Map<string, Module>();
   for (const file of program.getSourceFiles()) {
-    const rel = byPath.get(safePath.resolve(file.fileName));
+    const rel = byPath.get(pathKey(file.fileName));
     if (rel !== undefined) modules.set(rel, new Module(file, rel, checker));
+  }
+  const dropped = files.filter((rel) => !modules.has(rel));
+  if (dropped.length > 0) {
+    throw new Error(`the parser read back ${modules.size.toString()} of ${files.length.toString()} scanned files; not read: ${dropped.slice(0, 5).join(', ')}`);
   }
   const relOf = new Map([...modules.values()].map((module) => [module.file, module.rel] as const));
   const findings = program.getSyntacticDiagnostics().map((diagnostic) => {
@@ -271,14 +385,15 @@ const SHELL_EXPANDED = /[$`]/;
 
 /**
  * Judge one whitespace-separated word of a package script the way the scan
- * judges a path: relative to the package's directory (the script's working
- * directory). `undefined` when it builds no `dist/` path.
+ * judges a path: relative to the script's working directory. `undefined` when
+ * it builds no `dist/` path.
  *
  * @param word - The word, quotes stripped
- * @param owner - Directory under `packages/` of the package the script belongs to
+ * @param owner - Directory under `packages/` of the package the script runs in;
+ *   `undefined` once a `cd` has moved it
  * @param graph - The workspace
  */
-export function judgeScriptWord(word: string, owner: string, graph: WorkspaceGraph): ScriptWordVerdict {
+export function judgeScriptWord(word: string, owner: string | undefined, graph: WorkspaceGraph): ScriptWordVerdict {
   const verdict = classify(SHELL_EXPANDED.test(word) ? [null, word] : literalPieces(word), workspaceOf(graph), owner);
   if (verdict.kind === 'reach') return { reach: { dir: verdict.dir, subpath: verdict.subpath, open: verdict.open } };
   return verdict.kind === 'unresolved' ? { unresolved: verdict.why } : undefined;
@@ -304,5 +419,11 @@ export function scanTestTree(repoRoot: string, graph: WorkspaceGraph, files: rea
     findings.push(...result.findings);
     imports.set(module.rel, result.loads.filter((loaded) => modules.has(loaded)));
   }
-  return { reaches: dedupe(reaches), findings: dedupe(findings), imports, entries: scanned.filter((rel) => TEST_ENTRY.test(rel)) };
+  return {
+    reaches: dedupe(reaches),
+    findings: dedupe(findings),
+    imports,
+    entries: scanned.filter((rel) => TEST_ENTRY.test(rel)),
+    setups: scanned.filter((rel) => isSetupFile(rel)),
+  };
 }

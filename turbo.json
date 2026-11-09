@@ -159,6 +159,27 @@
       "outputs": [],
       "cache": true
     },
+    // dev-tools: `built-output-scan.integration.test.ts` is the real-tree control of
+    // `checkBuiltOutputEdges`: it scans every package's test tree, `src/` test
+    // helpers, scripts and the vitest setup files, so an edit to any of them — or
+    // to the turbo config the rule reads beside them — must re-run it rather than
+    // replay a cached pass. The entry keeps the generic tier's env, outputs, cache
+    // and dependsOn, and its inputs as a superset: the parity check enforces it.
+    "@vibe-agent-toolkit/dev-tools#test:integration": {
+      "dependsOn": ["^build", "build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/*/test/**",
+        "$TURBO_ROOT$/packages/*/src/**",
+        "$TURBO_ROOT$/packages/*/package.json",
+        "$TURBO_ROOT$/packages/*/turbo.json",
+        "$TURBO_ROOT$/turbo.json",
+        "$TURBO_ROOT$/vitest.*setup.*"
+      ],
+      "outputs": [],
+      "cache": true,
+      "env": ["CI"]
+    },
     "@vibe-agent-toolkit/lab#test:unit": {
       "dependsOn": ["^build", "build", "@vibe-agent-toolkit/cli#build"],
       "outputs": [],

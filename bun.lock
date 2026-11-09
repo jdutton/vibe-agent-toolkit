@@ -140,6 +140,7 @@
         "commander": "^12.1.0",
         "markdown-it": "^14.3.3",
         "markdown-it-front-matter": "^0.2.4",
+        "picomatch": "^4.0.3",
         "semver": "^7.8.5",
         "typescript": "^5.9.3",
         "which": "^5.0.0",

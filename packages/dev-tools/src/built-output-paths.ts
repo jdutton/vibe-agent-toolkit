@@ -11,6 +11,13 @@
  * its returns, and a parameter to the arguments at every call site, in any
  * scanned module. A `let` is any value the module gives it, and unknown when
  * one is a compound assignment (`+=`).
+ *
+ * A library call counts by what it is bound to, never by its spelling: `join`,
+ * `resolve`, `dirname`, `relative` only when imported from `node:path` (or
+ * `path`) or as `safePath` members from `@vibe-agent-toolkit/utils`; a temp
+ * source only from `node:os`, `node:fs`, `node:fs/promises` or the utils
+ * package. `[a, b].join('/')`, or a local function named `tmpdir`, is neither.
+ * A value cut short by a cycle guard, or past the alternatives cap, is unknown.
  */
 
 import { readFileSync } from 'node:fs';
@@ -42,28 +49,79 @@ const MAX_REEXPORT_HOPS = 16;
 /** Past this many alternatives a value is treated as unknown. */
 const MAX_ALTERNATIVES = 256;
 
-/** Callees whose arguments are joined into ONE path, by the name they are imported as (`resolve as pathResolve` is `resolve`). */
-const PATH_JOIN = new Set(['join', 'resolve']);
-/** Calls that hand their first argument through as the same path. */
-const PASS_THROUGH = new Set(['toForwardSlash', 'fileURLToPath', 'pathToFileURL', 'String', 'normalize', 'realpathSync', 'realpath', 'mkdirSyncReal', 'normalizePath']);
-/** Calls whose result is a fresh temporary directory, or a handle on one (`@vibe-agent-toolkit/utils/testing`). */
-const TEMP_SOURCES = new Set([
-  'tmpdir',
-  'normalizedTmpdir',
-  'mkdtemp',
-  'mkdtempSync',
-  'createTempDir',
-  'createTempDirAsync',
-  'tempDirTracker',
-  'scratchTmpdirEnv',
-  'registerScratchTmpdir',
-  'setupAsyncTempDirSuite',
-  'setupSyncTempDirSuite',
-  // A path vouched for, and checked at runtime, as inside a temp dir the test owns.
-  'underTemp',
-]);
+/**
+ * What a callee is bound to, as `<library>#<export path>`: `node:path#join`,
+ * `utils#safePath.join`, `global#process.cwd`. See {@link libraryOf}.
+ */
+type Binding = `${string}#${string}`;
 
-/** The name a call is made through: `safePath.join` → `join`, `pathResolve` → `pathResolve`. */
+/** Calls that join their arguments into ONE path → whether an absolute argument restarts it (`resolve`). */
+const PATH_JOIN: ReadonlyMap<Binding, boolean> = new Map([
+  ['node:path#join', false],
+  ['node:path#posix.join', false],
+  ['utils#safePath.join', false],
+  ['node:path#resolve', true],
+  ['node:path#posix.resolve', true],
+  ['utils#safePath.resolve', true],
+]);
+const DIRNAME: ReadonlySet<Binding> = new Set(['node:path#dirname', 'node:path#posix.dirname']);
+/** A path relative to another: no location the scan can place. */
+const RELATIVE: ReadonlySet<Binding> = new Set(['node:path#relative', 'node:path#posix.relative', 'utils#safePath.relative']);
+const RESOLVE_FROM_IMPORT_META: Binding = 'utils#resolveFromImportMeta';
+const PROCESS_CWD: Binding = 'global#process.cwd';
+const REQUIRE: Binding = 'global#require';
+const CREATE_REQUIRE: Binding = 'node:module#createRequire';
+/** Calls that hand their first argument through as the same path. */
+const PASS_THROUGH: ReadonlySet<Binding> = new Set([
+  'global#String',
+  'node:path#normalize',
+  'node:path#posix.normalize',
+  'node:url#fileURLToPath',
+  'node:url#pathToFileURL',
+  'node:fs#realpathSync',
+  'node:fs#realpathSync.native',
+  'node:fs#realpath',
+  'node:fs#promises.realpath',
+  'node:fs/promises#realpath',
+  'utils#toForwardSlash',
+  'utils#normalizePath',
+  'utils#mkdirSyncReal',
+]);
+/** Calls whose result is a fresh temporary directory, or a handle on one. */
+const TEMP_SOURCES: ReadonlySet<Binding> = new Set([
+  'node:os#tmpdir',
+  'node:fs#mkdtemp',
+  'node:fs#mkdtempSync',
+  'node:fs#promises.mkdtemp',
+  'node:fs/promises#mkdtemp',
+  'utils#normalizedTmpdir',
+  'utils#createTempDir',
+  'utils#createTempDirAsync',
+  'utils#tempDirTracker',
+  'utils#scratchTmpdirEnv',
+  'utils#registerScratchTmpdir',
+  'utils#setupAsyncTempDirSuite',
+  'utils#setupSyncTempDirSuite',
+  // A path vouched for, and checked at runtime, as inside a temp dir the test owns.
+  'utils#underTemp',
+]);
+const UTILS = '@vibe-agent-toolkit/utils';
+/** The utils package's own sources, which its tests import by relative specifier. */
+const UTILS_SOURCE = 'packages/utils/src/';
+/** Node built-ins a bound callee may come from, without the `node:` prefix. */
+const NODE_LIBRARIES: ReadonlySet<string> = new Set(['os', 'fs', 'fs/promises', 'url', 'util', 'module', 'child_process']);
+/** A binding that is a whole module (`import * as path`, `import path from`): its member is an export. */
+const WHOLE_MODULE = /#(?:\*|default)$/;
+
+/** The library a bare module specifier names: `node:<lib>`, `utils` for any utils subpath, or the specifier itself. */
+function libraryOf(specifier: string): string {
+  const bare = specifier.replace(/^node:/, '');
+  if (/^path(?:\/(?:posix|win32))?$/.test(bare)) return 'node:path';
+  if (NODE_LIBRARIES.has(bare)) return `node:${bare}`;
+  return specifier === UTILS || specifier.startsWith(`${UTILS}/`) ? 'utils' : specifier;
+}
+
+/** The name a call is made through, by spelling: `safePath.join` → `join`, `pathResolve` → `pathResolve`. */
 export function calleeName(call: ts.CallExpression): string | undefined {
   const callee = call.expression;
   if (ts.isIdentifier(callee)) return callee.text;
@@ -82,9 +140,14 @@ function isPlaceholder(node: ts.Expression): boolean {
   return node.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(node) && node.text === 'undefined');
 }
 
-/** A literal's pieces: absolute text starts at {@link ABSOLUTE}. */
+/** A literal's pieces: absolute text starts at {@link ABSOLUTE} — which counts only as a value's FIRST piece (see {@link appended}). */
 export function literalPieces(literal: string): Pieces {
   return ABSOLUTE_TEXT.test(literal) ? [ABSOLUTE, literal] : [literal];
+}
+
+/** A value appended to another (`a + b`, a later `join` argument): an absolute literal in it is a separator, not a restart. */
+function appended(values: Values): Values {
+  return values.map((pieces) => pieces.filter((piece) => piece !== ABSOLUTE));
 }
 
 /** Every combination of `a` then `b`. */
@@ -93,7 +156,7 @@ function concat(a: Values, b: Values): Values {
   return a.flatMap((left) => b.map((right) => [...left, ...right]));
 }
 
-/** Either value: alternatives naming the same location count once. No alternatives at all is a cycle cut short (see `guarded`). */
+/** Either value: alternatives naming the same location count once. */
 function union(values: readonly Values[]): Values {
   const distinct = new Map<string, Pieces>();
   for (const pieces of values.flat()) distinct.set(JSON.stringify(canonical(pieces)), pieces);
@@ -109,7 +172,7 @@ function canonical(pieces: Pieces): Pieces {
 /** A name bound by an import: which module and which of its exports. */
 interface ImportBinding {
   readonly specifier: string;
-  /** The export's name, or `*` for a namespace import. */
+  /** The export's name, `*` for a namespace import, `default` for a default import. */
   readonly name: string;
 }
 
@@ -135,6 +198,10 @@ export class Module {
   readonly exported = new Map<string, string>();
   /** Exported name → where it is re-exported from. */
   readonly reexports = new Map<string, ImportBinding>();
+  /** The specifiers of `export * from '…'`. */
+  readonly starReexports: string[] = [];
+  /** `export default <expression>` or `export default function …`. */
+  readonly defaultExport: ts.Node | undefined;
   readonly dir: string;
 
   constructor(
@@ -142,11 +209,16 @@ export class Module {
     readonly rel: string,
     readonly checker: ts.TypeChecker,
   ) {
-    this.dir = rel.slice(0, rel.lastIndexOf('/'));
+    // A root-level file (a vitest setup file) sits in the repo root itself.
+    this.dir = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+    let defaultExport: ts.Node | undefined;
     for (const statement of file.statements) {
       if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) this.readImport(statement.importClause, statement.moduleSpecifier.text);
       else if (ts.isExportDeclaration(statement)) this.readExport(statement);
+      else if (ts.isExportAssignment(statement) && statement.isExportEquals !== true) defaultExport = statement.expression;
+      else if (ts.isFunctionDeclaration(statement) && statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword) === true) defaultExport = statement;
     }
+    this.defaultExport = defaultExport;
   }
 
   private readImport(clause: ts.ImportClause | undefined, specifier: string): void {
@@ -162,9 +234,14 @@ export class Module {
   }
 
   private readExport(statement: ts.ExportDeclaration): void {
-    if (statement.exportClause === undefined || !ts.isNamedExports(statement.exportClause)) return;
     const from = statement.moduleSpecifier !== undefined && ts.isStringLiteral(statement.moduleSpecifier) ? statement.moduleSpecifier.text : undefined;
-    for (const element of statement.exportClause.elements) {
+    const clause = statement.exportClause;
+    if (clause === undefined || ts.isNamespaceExport(clause)) {
+      if (from !== undefined && clause === undefined) this.starReexports.push(from);
+      else if (from !== undefined && clause !== undefined) this.reexports.set(clause.name.text, { specifier: from, name: '*' });
+      return;
+    }
+    for (const element of clause.elements) {
       const local = (element.propertyName ?? element.name).text;
       if (from === undefined) this.exported.set(element.name.text, local);
       else this.reexports.set(element.name.text, { specifier: from, name: local });
@@ -181,6 +258,14 @@ export class Module {
       }
     }
     return undefined;
+  }
+
+  /** The declaration an export names: a top-level function or variable, or the default export's value. */
+  exportedDeclaration(name: string): ts.Node | undefined {
+    if (name !== 'default') return this.topLevel(this.exported.get(name) ?? name);
+    const local = this.exported.get('default');
+    const value = this.defaultExport ?? (local === undefined ? undefined : this.topLevel(local));
+    return value !== undefined && ts.isIdentifier(value) ? this.topLevel(value.text) : value;
   }
 
   /** `<file>:<line>` of a node. */
@@ -274,13 +359,41 @@ function appendTo<K, V>(index: Map<K, V[]>, key: K, item: V): void {
   else list.push(item);
 }
 
+/** The import binding a declaration is: a named, default or namespace import. */
+function importBindingOf(module: Module, decl: ts.Declaration): ImportBinding | undefined {
+  if (!ts.isImportSpecifier(decl) && !ts.isImportClause(decl) && !ts.isNamespaceImport(decl)) return undefined;
+  return decl.name === undefined ? undefined : module.imports.get(decl.name.text);
+}
+
+/** A function handed over as an object member (`cwd: packageDir`, `{ packageDir }`): the literal and the member's name. */
+function handedTo(reference: ts.Identifier): { literal: ts.ObjectLiteralExpression; name: string } | undefined {
+  const holder = reference.parent;
+  const named = ts.isShorthandPropertyAssignment(holder) || (ts.isPropertyAssignment(holder) && holder.initializer === reference) ? holder.name : undefined;
+  return named !== undefined && ts.isIdentifier(named) && ts.isObjectLiteralExpression(holder.parent) ? { literal: holder.parent, name: named.text } : undefined;
+}
+
+/** The value a declaration holds: a variable's initializer, or an exported expression. */
+function declaredValue(decl: ts.Node): ts.Expression | undefined {
+  if (ts.isVariableDeclaration(decl)) return decl.initializer;
+  return ts.isExpression(decl) ? decl : undefined;
+}
+
+/** Where an import leads: a declaration in a known module (`decl` undefined for the whole module), or a bare specifier's export. */
+type Followed = { readonly module: Module; readonly decl: ts.Node | undefined } | ImportBinding;
+
 /** Reads modules lazily and evaluates expressions in them. */
 export class PathEvaluator {
   private readonly modules = new Map<string, Module | undefined>();
   private readonly active = new Set<ts.Node>();
   private readonly memo = new Map<ts.Node, Values>();
   private readonly literalMemo = new Map<ts.Node, Array<FoundLiteral | Opaque>>();
-  private readonly memberCallMemo = new Map<ts.ObjectLiteralExpression, Map<string, CallSite[]>>();
+  /** The expressions whose object literals are being traced: re-entering one is a cycle. */
+  private readonly tracing = new Set<ts.Node>();
+  /** Each function's returns, by the arguments it was called with. */
+  private readonly callMemo = new Map<FunctionNode, Map<string, Values>>();
+  private readonly nodeIds = new Map<ts.Node, number>();
+  /** Per literal and member name, the calls on it; `undefined` while they are being enumerated. */
+  private readonly memberCallMemo = new Map<ts.ObjectLiteralExpression, Map<string, CallSite[] | undefined>>();
   /** Each module's identifiers by text: one walk per module, not one per reference lookup. */
   private readonly identifierIndex = new Map<Module, Map<string, ts.Identifier[]>>();
   /** The arguments of the calls being evaluated, by parameter: a call's returns are read with its own arguments. */
@@ -289,6 +402,7 @@ export class PathEvaluator {
   private propertyCallIndex: Map<string, CallSite[]> | undefined;
   /** Whether a cycle was cut short under the evaluation in progress: its value is partial, so it is not kept. */
   private cut = false;
+  private callsEvaluated = 0;
 
   /**
    * @param repoRoot - Absolute repository root
@@ -309,6 +423,11 @@ export class PathEvaluator {
     if (found !== undefined) return found;
     if (!this.modules.has(rel)) this.modules.set(rel, this.known.has(rel) ? this.parseAlone(rel) : undefined);
     return this.modules.get(rel);
+  }
+
+  /** How many function calls were evaluated rather than read back from the memo: a measure of the work, not of time. */
+  get evaluatedCalls(): number {
+    return this.callsEvaluated;
   }
 
   private parseAlone(rel: string): Module | undefined {
@@ -359,9 +478,10 @@ export class PathEvaluator {
    * `resolveFromImportMeta(url, ...segments)` — or `undefined` for any other call.
    */
   pathCall(module: Module, call: ts.CallExpression): Values | undefined {
-    const name = this.callName(module, call);
-    if (PATH_JOIN.has(name)) return this.joined(module, call.arguments, name === 'resolve');
-    if (name !== 'resolveFromImportMeta') return undefined;
+    const binding = this.qualifiedName(module, call.expression);
+    const restarts = binding === undefined ? undefined : PATH_JOIN.get(binding);
+    if (restarts !== undefined) return this.joined(module, call.arguments, restarts);
+    if (binding !== RESOLVE_FROM_IMPORT_META) return undefined;
     const [url, ...segments] = call.arguments;
     if (url === undefined) return HOLE;
     const fileDir = concat(this.values(module, url), [['/', '..']]);
@@ -373,13 +493,13 @@ export class PathEvaluator {
     return args.reduce<Values>((sum, arg, index) => {
       const values = this.values(module, arg);
       if (index === 0) return values;
-      return concat(concat(sum, [['/']]), restarts ? values : values.map((pieces) => pieces.filter((piece) => piece !== ABSOLUTE)));
+      return concat(concat(sum, [['/']]), restarts ? values : appended(values));
     }, [[]]);
   }
 
   private binary(module: Module, node: ts.BinaryExpression): Values {
     const operator = node.operatorToken.kind;
-    if (operator === ts.SyntaxKind.PlusToken) return concat(this.values(module, node.left), this.values(module, node.right));
+    if (operator === ts.SyntaxKind.PlusToken) return concat(this.values(module, node.left), appended(this.values(module, node.right)));
     if (operator === ts.SyntaxKind.QuestionQuestionToken || operator === ts.SyntaxKind.BarBarToken) {
       return union([this.values(module, node.left), this.values(module, node.right)]);
     }
@@ -459,20 +579,133 @@ export class PathEvaluator {
     return [];
   }
 
-  /** The name a call is made through, seen through an import alias (`dirname as pathDirname` → `dirname`). */
+  /** The name a callee is spelled with, seen through an import alias (`readFileSync as read` → `readFileSync`). */
+  private spelledName(module: Module, callee: ts.Expression): string {
+    if (ts.isPropertyAccessExpression(callee)) return callee.name.text;
+    if (!ts.isIdentifier(callee)) return '';
+    const binding = module.imports.get(callee.text);
+    return binding === undefined || binding.name === '*' || binding.name === 'default' ? callee.text : binding.name;
+  }
+
+  /** The name a call is made through, for matching a sink by spelling: `promisify(execFile)(…)` is a call of `execFile`. */
   callName(module: Module, call: ts.CallExpression): string {
-    const binding = ts.isIdentifier(call.expression) ? module.imports.get(call.expression.text) : undefined;
-    return binding === undefined || binding.name === '*' || binding.name === 'default' ? (calleeName(call) ?? '') : binding.name;
+    const callee = call.expression;
+    const [wrapped] = ts.isCallExpression(callee) ? callee.arguments : [];
+    if (ts.isCallExpression(callee) && wrapped !== undefined && this.spelledName(module, callee.expression) === 'promisify') return this.spelledName(module, wrapped);
+    return this.spelledName(module, callee);
+  }
+
+  /** What a callee is bound to (see {@link Binding}): through its import, or a global no module declares; `undefined` for a local name. */
+  qualifiedName(module: Module, callee: ts.Expression): Binding | undefined {
+    if (ts.isPropertyAccessExpression(callee)) {
+      const base = this.qualifiedName(module, callee.expression);
+      if (base === undefined) return undefined;
+      return WHOLE_MODULE.test(base) ? `${base.slice(0, base.lastIndexOf('#'))}#${callee.name.text}` : `${base}.${callee.name.text}`;
+    }
+    if (!ts.isIdentifier(callee)) return undefined;
+    const decl = this.declarationOf(module, callee);
+    if (decl === undefined) return `global#${callee.text}`;
+    const binding = importBindingOf(module, decl);
+    return binding === undefined ? undefined : this.bindingOrigin(module, binding);
+  }
+
+  /** What an import is bound to, or `undefined` when it leads to code the scan reads as code (a scanned helper). */
+  private bindingOrigin(module: Module, binding: ImportBinding): Binding | undefined {
+    // The utils package's own tests import its sources by relative specifier.
+    if (this.resolveModule(module.rel, binding.specifier)?.startsWith(UTILS_SOURCE) === true) return `utils#${binding.name}`;
+    const found = this.follow(module, binding);
+    if (found === undefined) return undefined;
+    if ('module' in found) return found.module.rel.startsWith(UTILS_SOURCE) ? `utils#${binding.name}` : undefined;
+    return `${libraryOf(found.specifier)}#${found.name}`;
+  }
+
+  /**
+   * Where an import leads through `export … from` re-exports among the known
+   * files; `undefined` past the hop limit or outside the known files. A name an
+   * `export *` supplies comes from a relative module that has it, or else from
+   * the one bare specifier that may.
+   */
+  private follow(from: Module, binding: ImportBinding, hops = 0): Followed | undefined {
+    if (!binding.specifier.startsWith('.')) return binding;
+    const target = hops < MAX_REEXPORT_HOPS ? this.resolveModule(from.rel, binding.specifier) : undefined;
+    const module = target === undefined ? undefined : this.moduleOf(target);
+    if (module === undefined) return undefined;
+    if (binding.name === '*') return { module, decl: undefined };
+    const reexport = module.reexports.get(binding.name);
+    if (reexport !== undefined) return this.follow(module, reexport, hops + 1);
+    const decl = module.exportedDeclaration(binding.name);
+    if (decl !== undefined) return { module, decl };
+    const stars = module.starReexports.map((specifier) => ({ specifier, name: binding.name }));
+    const local = stars.filter(({ specifier }) => specifier.startsWith('.')).map((star) => this.follow(module, star, hops + 1));
+    const bare = stars.filter(({ specifier }) => !specifier.startsWith('.'));
+    return local.find((found) => found !== undefined) ?? (bare.length === 1 ? bare[0] : undefined);
+  }
+
+  /**
+   * `require.resolve(spec)`, `<createRequire(…)>.resolve(spec)` or
+   * `import.meta.resolve(spec)`: the specifier, resolved as a module specifier;
+   * `undefined` for any other call.
+   */
+  specifierResolution(module: Module, call: ts.CallExpression): Values | undefined {
+    const callee = call.expression;
+    if (!ts.isPropertyAccessExpression(callee) || callee.name.text !== 'resolve' || !this.isResolver(module, callee.expression)) return undefined;
+    const [specifier] = call.arguments;
+    return specifier === undefined ? HOLE : this.specifierValues(module, specifier);
+  }
+
+  /** `import.meta`, `require`, or a name holding `createRequire(…)`. */
+  private isResolver(module: Module, node: ts.Expression): boolean {
+    if (ts.isMetaProperty(node) || this.qualifiedName(module, node) === REQUIRE) return true;
+    const decl = ts.isIdentifier(node) ? this.declarationOf(module, node) : undefined;
+    const made = decl !== undefined && ts.isVariableDeclaration(decl) ? decl.initializer : undefined;
+    return made !== undefined && ts.isCallExpression(made) && this.qualifiedName(module, made.expression) === CREATE_REQUIRE;
+  }
+
+  /**
+   * A module specifier's alternatives. One whose static start is relative or a
+   * workspace package name names a file-relative module or that package's file;
+   * a dependency's is unknown where it lands. One already anchored
+   * (`pathToFileURL(…).href`) is a path.
+   */
+  specifierValues(module: Module, node: ts.Expression): Values {
+    return this.values(module, node).map((pieces): Pieces => {
+      if (locate(pieces).anchor !== undefined) return pieces;
+      const end = pieces.findIndex((piece) => typeof piece !== 'string');
+      const lead = (end === -1 ? pieces : pieces.slice(0, end)) as readonly string[];
+      const head = lead.length === 0 ? undefined : this.specifierPieces(module, lead.join(''));
+      return head === undefined ? [null, '/', ...pieces] : [...head, ...pieces.slice(lead.length)];
+    });
+  }
+
+  /**
+   * Whether an options argument may set `name` to anything but `false`: through
+   * the object literals it traces to, and yes when any part is unseen. An array
+   * (a launch's argument list) sets nothing.
+   */
+  maySet(module: Module, node: ts.Expression, name: string): boolean {
+    if (this.elementsOf(module, node) !== undefined) return false;
+    return this.objectLiterals(module, node).some(
+      (found) => isOpaque(found) || this.members(found, name).some((member) => isOpaque(member) || memberExpression(member.member)?.kind !== ts.SyntaxKind.FalseKeyword),
+    );
+  }
+
+  /** A bound library call's value, or `undefined` for a binding the scan does not model. */
+  private libraryCall(module: Module, binding: Binding, first: ts.Expression | undefined): Values | undefined {
+    if (TEMP_SOURCES.has(binding)) return TEMP;
+    // The working directory: a relative path, which the scan reads from the test's package.
+    if (binding === PROCESS_CWD) return [['.']];
+    if (RELATIVE.has(binding)) return HOLE;
+    if (first === undefined) return undefined;
+    if (PASS_THROUGH.has(binding)) return this.values(module, first);
+    return DIRNAME.has(binding) ? concat(this.values(module, first), [['/', '..']]) : undefined;
   }
 
   private call(module: Module, call: ts.CallExpression): Values {
-    const name = this.callName(module, call);
-    const [first] = call.arguments;
-    if (TEMP_SOURCES.has(name)) return TEMP;
-    // The working directory: a relative path, which the scan reads from the test's package.
-    if (name === 'cwd' && ts.isPropertyAccessExpression(call.expression) && call.expression.expression.getText(module.file) === 'process') return [['.']];
-    if (PASS_THROUGH.has(name) && first !== undefined) return this.values(module, first);
-    if (name === 'dirname' && first !== undefined) return concat(this.values(module, first), [['/', '..']]);
+    const binding = this.qualifiedName(module, call.expression);
+    const library = binding === undefined ? undefined : this.libraryCall(module, binding, call.arguments[0]);
+    if (library !== undefined) return library;
+    const specifier = this.specifierResolution(module, call);
+    if (specifier !== undefined) return specifier;
     const path = this.pathCall(module, call);
     if (path !== undefined) return path;
     const functions = this.functionsOf(module, call.expression);
@@ -482,11 +715,9 @@ export class PathEvaluator {
   }
 
   /**
-   * Run `evaluate` once per node at a time. Re-entering a node adds no
-   * alternatives (`r.root` handed back to the function that made `r` adds
-   * nothing new), so a cycle is no alternatives, and a value reached
-   * through one is partial and not kept. A value with no alternatives at all
-   * is unknown to the scan.
+   * Run `evaluate` once per node at a time. Re-entering a node is a cycle: it
+   * is cut short as unknown, and a value reached through one is partial and
+   * not kept.
    */
   private guarded(node: ts.Node, evaluate: () => Values): Values {
     // A value read under a call's arguments belongs to that call; only an unbound one is kept.
@@ -495,7 +726,7 @@ export class PathEvaluator {
     if (known !== undefined) return known;
     if (this.active.has(node)) {
       this.cut = true;
-      return [];
+      return HOLE;
     }
     const outerCut = this.cut;
     this.cut = false;
@@ -518,16 +749,21 @@ export class PathEvaluator {
     return this.guarded(decl, () => this.declared(module, decl));
   }
 
-  /** Where a name is declared, seen through a shorthand property. */
+  /**
+   * Where a name is declared in its own module, seen through a shorthand
+   * property. A declaration in another file of the program is a script global
+   * (a `process.env.X = …` in a setup file declares `process` there), so the
+   * name is a global this module never declares.
+   */
   private declarationOf(module: Module, id: ts.Identifier): ts.Declaration | undefined {
     const symbol = ts.isShorthandPropertyAssignment(id.parent) ? module.checker.getShorthandAssignmentValueSymbol(id.parent) : module.checker.getSymbolAtLocation(id);
-    return symbol?.declarations?.[0];
+    const decl = symbol?.declarations?.[0];
+    return decl?.getSourceFile() === module.file ? decl : undefined;
   }
 
   private declared(module: Module, decl: ts.Declaration): Values {
     if (ts.isImportSpecifier(decl) || ts.isImportClause(decl) || ts.isNamespaceImport(decl)) {
-      const local = decl.name?.text ?? '';
-      const binding = module.imports.get(local);
+      const binding = importBindingOf(module, decl);
       return binding === undefined ? HOLE : this.imported(module, binding);
     }
     if (ts.isVariableDeclaration(decl)) return this.variable(module, decl);
@@ -537,10 +773,19 @@ export class PathEvaluator {
   }
 
   private variable(module: Module, decl: ts.VariableDeclaration): Values {
-    const isConst = decl.parent.getFirstToken(module.file)?.kind === ts.SyntaxKind.ConstKeyword;
-    if (isConst) return decl.initializer === undefined ? HOLE : this.values(module, decl.initializer);
-    // A `let` holds whichever value it was last given: any of them.
-    return this.anyGiven(module, [...(decl.initializer === undefined ? [] : [decl.initializer]), ...this.assignmentsOf(module, decl, undefined)]);
+    const given = this.givenValues(module, decl);
+    return given.length === 0 ? HOLE : union(given.map((value) => this.values(module, value)));
+  }
+
+  /**
+   * The values a variable may hold: a `const` its initializer; a `let`
+   * whichever it was last given — its initializer or any assignment, a
+   * placeholder aside (see {@link anyGiven}).
+   */
+  private givenValues(module: Module, decl: ts.VariableDeclaration): ts.Expression[] {
+    const initial = decl.initializer === undefined ? [] : [decl.initializer];
+    if (decl.parent.getFirstToken(module.file)?.kind === ts.SyntaxKind.ConstKeyword) return initial;
+    return [...initial, ...this.assignmentsOf(module, decl, undefined)].filter((value) => !isPlaceholder(value));
   }
 
   /**
@@ -591,16 +836,13 @@ export class PathEvaluator {
     return isTemp(this.values(module, holder.initializer)) ? TEMP : HOLE;
   }
 
-  /** An imported binding's value, followed into a relative module's top-level declaration. */
+  /** An imported binding's value, followed to its declaration among the known files. */
   private imported(module: Module, binding: ImportBinding): Values {
-    const target = this.resolveModule(module.rel, binding.specifier);
-    const from = target === undefined ? undefined : this.moduleOf(target);
-    if (from === undefined || binding.name === '*' || binding.name === 'default') return HOLE;
-    const reexport = from.reexports.get(binding.name);
-    if (reexport !== undefined) return this.imported(from, reexport);
-    const decl = from.topLevel(from.exported.get(binding.name) ?? binding.name);
-    if (decl === undefined || ts.isFunctionDeclaration(decl)) return HOLE;
-    return this.guarded(decl, () => this.variable(from, decl));
+    const found = this.follow(module, binding);
+    if (found === undefined || !('module' in found) || found.decl === undefined) return HOLE;
+    const { module: from, decl } = found;
+    if (ts.isVariableDeclaration(decl)) return this.guarded(decl, () => this.variable(from, decl));
+    return ts.isExpression(decl) ? this.values(from, decl) : HOLE;
   }
 
   /** The object literals an expression traces to, and what it may hold that the scan cannot see inside. */
@@ -609,13 +851,20 @@ export class PathEvaluator {
     const memoize = this.bound.size === 0;
     const known = memoize ? this.literalMemo.get(node) : undefined;
     if (known !== undefined) return known;
+    // Re-entering an expression is a cycle: cut short, as something the scan cannot see inside.
+    if (this.tracing.has(node)) {
+      this.cut = true;
+      return [{ opaque: node, module, bound: this.bound }];
+    }
     const outerCut = this.cut;
     this.cut = false;
+    this.tracing.add(node);
     try {
       const found = this.traceLiterals(module, node);
       if (memoize && !this.cut) this.literalMemo.set(node, found);
       return found;
     } finally {
+      this.tracing.delete(node);
       this.cut ||= outerCut;
     }
   }
@@ -652,17 +901,20 @@ export class PathEvaluator {
   private declaredLiterals(module: Module, node: ts.Identifier, opaque: Opaque[]): Array<FoundLiteral | Opaque> {
     const decl = this.declarationOf(module, node);
     if (decl === undefined) return opaque;
-    // Re-entering a declaration adds no literal (see `guarded`).
+    // Re-entering a declaration is a cycle (see `guarded`).
     if (this.active.has(decl)) {
       this.cut = true;
-      return [];
+      return opaque;
     }
     this.active.add(decl);
     try {
-      if (ts.isVariableDeclaration(decl) && decl.initializer !== undefined) return this.objectLiterals(module, decl.initializer);
+      if (ts.isVariableDeclaration(decl)) {
+        const given = this.givenValues(module, decl);
+        return given.length === 0 ? opaque : given.flatMap((value) => this.objectLiterals(module, value));
+      }
       if (ts.isParameter(decl)) return this.parameterLiterals(module, decl) ?? opaque;
       if (ts.isBindingElement(decl)) return this.destructuredLiterals(module, decl) ?? opaque;
-      if (ts.isImportSpecifier(decl)) return this.importedLiterals(module, decl) ?? opaque;
+      if (ts.isImportSpecifier(decl) || ts.isImportClause(decl)) return this.importedLiterals(module, decl) ?? opaque;
       return opaque;
     } finally {
       this.active.delete(decl);
@@ -710,24 +962,14 @@ export class PathEvaluator {
     }
   }
 
-  /** An imported binding's literals, from a relative module's top-level `const`; `undefined` for anything else. */
-  private importedLiterals(module: Module, decl: ts.ImportSpecifier): Array<FoundLiteral | Opaque> | undefined {
-    let binding = module.imports.get(decl.name.text);
-    if (binding === undefined) return undefined;
-    let from = module;
-    for (let hops = 0; hops < MAX_REEXPORT_HOPS; hops += 1) {
-      const target = this.resolveModule(from.rel, binding.specifier);
-      const next = target === undefined ? undefined : this.moduleOf(target);
-      if (next === undefined) return undefined;
-      from = next;
-      const reexport = from.reexports.get(binding.name);
-      if (reexport === undefined) break;
-      binding = reexport;
-    }
-    if (from === module) return undefined;
-    const declared = from.topLevel(from.exported.get(binding.name) ?? binding.name);
-    if (declared === undefined || !ts.isVariableDeclaration(declared) || declared.initializer === undefined) return undefined;
-    return this.withBound(new Map(), () => this.objectLiterals(from, declared.initializer as ts.Expression));
+  /** An imported binding's literals, from the value its declaration holds; `undefined` for anything else. */
+  private importedLiterals(module: Module, decl: ts.ImportSpecifier | ts.ImportClause): Array<FoundLiteral | Opaque> | undefined {
+    const binding = importBindingOf(module, decl);
+    const found = binding === undefined ? undefined : this.follow(module, binding);
+    if (found === undefined || !('module' in found) || found.decl === undefined) return undefined;
+    const { module: from } = found;
+    const value = declaredValue(found.decl);
+    return value === undefined ? undefined : this.withBound(new Map(), () => this.objectLiterals(from, value));
   }
 
   /** The object literals one member holds. */
@@ -766,17 +1008,25 @@ export class PathEvaluator {
 
   /** The functions a callee names, in this module or one imported by a relative specifier. */
   private functionsOf(module: Module, callee: ts.Expression): Array<FoundFunction | Opaque> {
-    if (ts.isPropertyAccessExpression(callee)) return this.memberFunctions(module, callee.expression, callee.name.text);
+    if (ts.isPropertyAccessExpression(callee)) return this.propertyFunctions(module, callee);
     if (!ts.isIdentifier(callee)) return [];
     const decl = this.declarationOf(module, callee);
     if (decl === undefined) return [];
     if (ts.isBindingElement(decl)) return this.destructuredFunctions(module, decl);
-    if (ts.isImportSpecifier(decl)) {
-      const binding = module.imports.get(decl.name.text);
+    if (ts.isImportSpecifier(decl) || ts.isImportClause(decl)) {
+      const binding = importBindingOf(module, decl);
       return binding === undefined ? [] : this.importedFunction(module, binding);
     }
     const fn = declaredFunction(decl);
     return isFunctionNode(fn) && this.scanned.has(module.rel) ? [{ module, fn, bound: this.bound }] : [];
+  }
+
+  /** The functions `holder.f` names: a namespace import's export `f`, or an object's member. */
+  private propertyFunctions(module: Module, callee: ts.PropertyAccessExpression): Array<FoundFunction | Opaque> {
+    const holder = ts.isIdentifier(callee.expression) ? this.declarationOf(module, callee.expression) : undefined;
+    const binding = holder !== undefined && ts.isNamespaceImport(holder) ? importBindingOf(module, holder) : undefined;
+    if (binding !== undefined) return this.importedFunction(module, { specifier: binding.specifier, name: callee.name.text });
+    return this.memberFunctions(module, callee.expression, callee.name.text);
   }
 
   /** `const { f } = value`, then `f()`: the functions `value.f` names. */
@@ -804,12 +1054,9 @@ export class PathEvaluator {
   }
 
   private importedFunction(module: Module, binding: ImportBinding): FoundFunction[] {
-    const target = this.resolveModule(module.rel, binding.specifier);
-    const from = target === undefined ? undefined : this.moduleOf(target);
-    if (from === undefined) return [];
-    const reexport = from.reexports.get(binding.name);
-    if (reexport !== undefined) return this.importedFunction(from, reexport);
-    const decl = from.topLevel(from.exported.get(binding.name) ?? binding.name);
+    const found = this.follow(module, binding);
+    if (found === undefined || !('module' in found)) return [];
+    const { module: from, decl } = found;
     const fn = decl !== undefined && ts.isVariableDeclaration(decl) ? decl.initializer : decl;
     // Product code's functions are not followed: a path the test never wrote is not the test's reach.
     return isFunctionNode(fn) && this.scanned.has(from.rel) ? [{ module: from, fn, bound: new Map() }] : [];
@@ -828,9 +1075,36 @@ export class PathEvaluator {
     return found;
   }
 
-  /** What one call returns: the function's returns, its parameters bound to this call's arguments. */
+  /**
+   * What one call returns: the function's returns, its parameters bound to this
+   * call's arguments — evaluated once per function and argument values, so a
+   * helper chain that calls the next helper twice costs its depth, not 2^depth.
+   */
   private returnsAt(caller: Module, call: ts.CallExpression, found: FoundFunction): Values {
-    return this.withBound(this.boundFor(caller, call, found), () => this.returns(found.module, found.fn));
+    const bound = this.boundFor(caller, call, found);
+    const key = JSON.stringify([...bound].map(([param, values]) => [this.idOf(param), values]));
+    const byArguments = this.callMemo.get(found.fn) ?? new Map<string, Values>();
+    this.callMemo.set(found.fn, byArguments);
+    const known = byArguments.get(key);
+    if (known !== undefined) return known;
+    this.callsEvaluated += 1;
+    const outerCut = this.cut;
+    this.cut = false;
+    try {
+      const values = this.withBound(bound, () => this.returns(found.module, found.fn));
+      if (!this.cut) byArguments.set(key, values);
+      return values;
+    } finally {
+      this.cut ||= outerCut;
+    }
+  }
+
+  /** A stable number for a node, for a memo key. */
+  private idOf(node: ts.Node): number {
+    const known = this.nodeIds.get(node);
+    if (known !== undefined) return known;
+    this.nodeIds.set(node, this.nodeIds.size);
+    return this.nodeIds.size - 1;
   }
 
   /** The bindings a call runs its function under: where the function was found, plus this call's arguments. */
@@ -894,37 +1168,49 @@ export class PathEvaluator {
     for (const { module: at, node } of references) {
       // `typeof f` in a type is no use of the value.
       if (ts.isTypeQueryNode(node.parent)) continue;
-      const handed = this.handedSites(node);
-      if (handed !== undefined) sites.push(...handed);
+      // A function handed over as an object member (`cwd: packageDir`) is called as `<object>.cwd(…)`.
+      const handed = handedTo(node);
+      const calls = handed === undefined ? undefined : this.memberCalls(handed.literal, handed.name);
+      if (handed !== undefined && calls === undefined) return undefined;
+      if (calls !== undefined) sites.push(...calls);
       else if (ts.isCallExpression(node.parent) && node.parent.expression === node) sites.push({ module: at, call: node.parent });
       else return undefined;
     }
     return sites;
   }
 
-  /** A function handed over as an object member (`cwd: packageDir`, `{ packageDir }`) is called as `<object>.cwd(…)`. */
-  private handedSites(reference: ts.Identifier): CallSite[] | undefined {
-    const holder = reference.parent;
-    const named = ts.isShorthandPropertyAssignment(holder) || (ts.isPropertyAssignment(holder) && holder.initializer === reference) ? holder.name : undefined;
-    return named !== undefined && ts.isIdentifier(named) && ts.isObjectLiteralExpression(holder.parent) ? this.memberCalls(holder.parent, named.text) : undefined;
-  }
-
   /**
-   * Every `<object>.<name>(…)` whose object traces to this literal. A call on
-   * an object the scan cannot see into is not counted: matching by name
-   * alone would hand `fs.existsSync`'s every argument to a mock's `existsSync`.
+   * Every `<object>.<name>(…)` whose object traces to this literal; `undefined`
+   * when asked again while they are still being enumerated (a cycle, cut short).
+   * A call on an object the scan cannot see into is not counted: matching by
+   * name alone would hand `fs.existsSync`'s every argument to a mock's
+   * `existsSync`.
    */
-  private memberCalls(literal: ts.ObjectLiteralExpression, name: string): CallSite[] {
-    const byName = this.memberCallMemo.get(literal) ?? new Map<string, CallSite[]>();
+  private memberCalls(literal: ts.ObjectLiteralExpression, name: string): CallSite[] | undefined {
+    const byName = this.memberCallMemo.get(literal) ?? new Map<string, CallSite[] | undefined>();
     this.memberCallMemo.set(literal, byName);
-    const known = byName.get(name);
-    if (known !== undefined) return known;
-    const sites = (this.propertyCalls().get(name) ?? []).filter(({ module, call }) => {
-      const receiver = (call.expression as ts.PropertyAccessExpression).expression;
-      return this.withBound(new Map(), () => this.objectLiterals(module, receiver)).some((found) => !isOpaque(found) && found.literal === literal);
-    });
+    if (byName.has(name)) {
+      const known = byName.get(name);
+      if (known === undefined) this.cut = true;
+      return known;
+    }
+    byName.set(name, undefined);
+    const sites = (this.propertyCalls().get(name) ?? []).filter(({ module, call }) => this.mayCallOn(module, call, literal));
     byName.set(name, sites);
     return sites;
+  }
+
+  /** Whether `<receiver>.<name>(…)` may be a call on `literal`: its receiver traces to it, or tracing it was cut short. */
+  private mayCallOn(module: Module, call: ts.CallExpression, literal: ts.ObjectLiteralExpression): boolean {
+    const receiver = (call.expression as ts.PropertyAccessExpression).expression;
+    const outerCut = this.cut;
+    this.cut = false;
+    try {
+      const traced = this.withBound(new Map(), () => this.objectLiterals(module, receiver));
+      return this.cut || traced.some((found) => !isOpaque(found) && found.literal === literal);
+    } finally {
+      this.cut ||= outerCut;
+    }
   }
 
   /**

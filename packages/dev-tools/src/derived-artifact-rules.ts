@@ -33,7 +33,7 @@ import {
   findBuiltOutputEdgeProblems,
   readTurboTaskGraph,
   type TurboTaskGraph,
-  workingTreePackageFiles,
+  workingTreeScanFiles,
 } from './built-output-edges.js';
 import { validateFragments } from './changelog-fragments.js';
 import { checkCommentDensity, nonDeletedGitListing } from './comment-density.js';
@@ -318,7 +318,7 @@ export function checkNoTrackedIgnoredFiles(repoRoot: string): ValidationError[] 
 export function checkBuiltOutputEdges(
   repoRoot: string,
   taskGraph: TurboTaskGraph = readTurboTaskGraph(repoRoot),
-  files: readonly string[] = workingTreePackageFiles(repoRoot),
+  files: readonly string[] = workingTreeScanFiles(repoRoot),
 ): ValidationError[] {
   return findBuiltOutputEdgeProblems(repoRoot, readWorkspaceGraph(repoRoot), taskGraph, files).map(({ site, message }) =>
     stale(site, message),

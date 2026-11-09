@@ -18,20 +18,26 @@
  *   A script that runs a bin by name (`vat …`) is out of scope: a bin resolves
  *   only through a declared dependency, which `^build` already orders.
  * - **Who reads** — a reach in a test file belongs to the tier task of every
- *   test file that loads it, directly or through other helpers; a reach in a
- *   script belongs to every turbo task whose command runs that script.
+ *   test file that loads it, directly or through other helpers, and a reach in
+ *   a vitest setup file to every test it runs before; a reach in a script
+ *   belongs to every turbo task whose command runs that script. A script word
+ *   after a `cd` resolves from a directory the rule cannot know.
  * - **Who produces** — every task of the reached package whose declared
- *   `outputs` (less its `excludedOutputs`) cover the path. Any one of them,
- *   ordered first, is enough. A read that may reach past its static part (a
- *   non-static tail, a directory read whole) also needs, for each task whose
- *   outputs lie under that part, one ordered task covering them.
+ *   `outputs` cover the path and whose `excludedOutputs` (turbo's `!` globs) do
+ *   not, each glob matched whole: `dist/**\/*.d.ts` does not cover `dist/bin.js`.
+ *   Any one of them, ordered first, is enough. A directory read whole needs a
+ *   `<dir>/**` output at or above it, and, for each output tree below it, one
+ *   ordered task covering that tree.
  * - **The ordering** — turbo's own task graph (`turbo run … --dry=json`):
  *   `^build`, package overrides and transitive edges mean what turbo says. A
  *   task reading what it produces itself is ordered.
  *
  * And because a `<pkg>#<task>` entry REPLACES the generic task rather than
- * merging with it, every `<pkg>#test:<tier>` entry must carry the generic
- * tier's `env`, `outputs`, `inputs` and `dependsOn`, and its `cache`.
+ * merging with it, every `<pkg>#test:<tier>` entry of the root `turbo.json`, and
+ * every tier a package's own `turbo.json` redefines, must match the root's
+ * generic `test:<tier>`: the same `env`, `outputs` and `cache`, and at least its
+ * `dependsOn` and `inputs` (an omitted or empty `inputs` is `$TURBO_DEFAULT$`).
+ * An override adds inputs only to hash what its suite reads outside its package.
  *
  * Anything that cannot be decided — a path the scan cannot resolve, a reach no
  * test loads, a sibling reach no task runs, a path no task produces, a test in
@@ -41,6 +47,7 @@
 import { readFileSync } from 'node:fs';
 
 import { compareCodeUnits, safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+import picomatch from 'picomatch';
 import ts from 'typescript';
 
 import { judgeScriptWord, scanTestTree, type FileReach, type TestTreeScan } from './built-output-scan.js';
@@ -48,11 +55,12 @@ import { nonDeletedGitListing } from './comment-density.js';
 import { safeExecResult } from './common.js';
 import type { WorkspaceGraph } from './workspace-graph.js';
 
-/** What turbo resolved a task's definition to, as far as this module compares it. */
-export interface ResolvedDefinition {
+/** A task definition as `turbo.json` declares it, its defaults filled in. */
+export interface TaskDefinition {
   readonly outputs: readonly string[];
   readonly cache: boolean;
   readonly dependsOn: readonly string[];
+  /** `["$TURBO_DEFAULT$"]` where none, or an empty list, is declared. */
   readonly inputs: readonly string[];
   readonly env: readonly string[];
 }
@@ -63,17 +71,31 @@ export interface TurboTask {
   readonly task: string;
   readonly command: string;
   readonly dependencies: readonly string[];
+  /** The output globs, less turbo's `!` exclusions. */
   readonly outputs: readonly string[];
+  /** The `!` output globs, without the `!`. */
   readonly excludedOutputs: readonly string[];
-  readonly definition: ResolvedDefinition;
 }
 
-/** turbo's task graph, and the `<pkg>#<task>` entries `turbo.json` declares. */
+/** A test tier's definition as one package entry gives it. */
+export interface TierOverride {
+  /** Where the entry is: `turbo.json ("<pkg>#<tier>")` or `packages/<dir>/turbo.json ("<tier>")`. */
+  readonly site: string;
+  readonly task: string;
+  readonly definition: TaskDefinition;
+}
+
+/** The root `turbo.json`'s generic test tiers, and every package entry that redefines one. */
+export interface TierDefinitions {
+  readonly generic: ReadonlyMap<string, TaskDefinition>;
+  readonly overrides: readonly TierOverride[];
+}
+
+/** turbo's task graph, and the test-tier definitions its package entries must keep. */
 export interface TurboTaskGraph {
   /** Task id → the task. */
   readonly tasks: ReadonlyMap<string, TurboTask>;
-  /** Every `<pkg>#<task>` key of `turbo.json`. */
-  readonly overrides: readonly string[];
+  readonly tiers: TierDefinitions;
 }
 
 /** A reader of built output, attributed to the turbo task that runs it. */
@@ -109,9 +131,13 @@ const RUN_SCRIPT = /\b(?:(?:bun|npm|pnpm|yarn)\s+run|bun)\s+([\w:.-]+)/g;
 /** What separates a script's words: whitespace, quotes, and the shell's operators. */
 const SCRIPT_WORD_BREAK = /[\s'"`;&|()<>=]+/;
 
-/** The files under `packages/` in the working tree: tracked plus untracked-not-ignored. */
-export function workingTreePackageFiles(repoRoot: string): string[] {
-  return nonDeletedGitListing(repoRoot, ['packages'], ['--cached', '--others', '--exclude-standard']);
+/**
+ * The files the rule reads, in the working tree (tracked plus
+ * untracked-not-ignored): everything under `packages/`, and the vitest setup
+ * files at the root.
+ */
+export function workingTreeScanFiles(repoRoot: string): string[] {
+  return nonDeletedGitListing(repoRoot, ['packages', 'vitest.*setup.*', '*global-setup.*', '*globalSetup.*'], ['--cached', '--others', '--exclude-standard']);
 }
 
 /** The vitest tier — and so the turbo task name — that runs a test file. */
@@ -138,10 +164,16 @@ function ownerOf(rel: string, nameOf: ReadonlyMap<string, string>): string | und
   return nameOf.get(/^packages\/([^/]+)\//.exec(rel)?.[1] ?? '');
 }
 
+/** The setup files that run before `entry`: the root's, and its own package's. */
+function setupsOf(entry: string, setups: readonly string[]): string[] {
+  const dir = /^packages\/[^/]+\//.exec(entry)?.[0] ?? '';
+  return setups.filter((setup) => !setup.startsWith('packages/') || setup.startsWith(dir));
+}
+
 /**
- * Each reach of the scan, once per tier task of every test that loads its file.
- * A test whose tier task its package does not have, and a reach no test loads,
- * are findings.
+ * Each reach of the scan, once per tier task of every test that loads its file
+ * or runs after it as a setup file. A test whose tier task its package does not
+ * have, and a reach no test loads, are findings.
  */
 function attributeTestReaches(scan: TestTreeScan, graph: WorkspaceGraph, tasks: TurboTaskGraph['tasks']): { reaches: AttributedReach[]; problems: EdgeProblem[] } {
   const nameOf = new Map(graph.packages.map((pkg) => [pkg.dir, pkg.name] as const));
@@ -156,7 +188,8 @@ function attributeTestReaches(scan: TestTreeScan, graph: WorkspaceGraph, tasks: 
       problems.push({ site: entry, message: `is a ${testTierOf(entry)} test, but turbo has no ${task} task: no script runs it.` });
       continue;
     }
-    for (const file of closureOf(entry, scan.imports)) {
+    const loads = [entry, ...setupsOf(entry, scan.setups)].flatMap((root) => [...closureOf(root, scan.imports)]);
+    for (const file of new Set(loads)) {
       loaded.add(file);
       for (const reach of bySite.get(file) ?? []) {
         reaches.push({ site: reach.at, task, pkg: nameOf.get(reach.dir) ?? reach.dir, subpath: reach.subpath, open: reach.open });
@@ -199,8 +232,11 @@ interface ScriptSite {
 function judgeScript({ pkg, text, site, runners }: ScriptSite, graph: WorkspaceGraph, nameOf: ReadonlyMap<string, string>): { reaches: AttributedReach[]; problems: EdgeProblem[] } {
   const reaches: AttributedReach[] = [];
   const problems: EdgeProblem[] = [];
+  // A script runs in its package's directory until a `cd` moves it somewhere the rule cannot follow.
+  let cwd: string | undefined = pkg.dir;
   for (const word of text.split(SCRIPT_WORD_BREAK).filter((part) => part !== '')) {
-    const verdict = judgeScriptWord(word, pkg.dir, graph);
+    if (word === 'cd' || word === 'pushd') cwd = undefined;
+    const verdict = judgeScriptWord(word, cwd, graph);
     if (verdict === undefined) continue;
     if ('unresolved' in verdict) {
       problems.push({ site, message: `\`${word}\` builds a dist/ path, but ${verdict.unresolved}, so no rule can tell whose build it reads.` });
@@ -232,22 +268,38 @@ function attributeScriptReaches(graph: WorkspaceGraph, tasks: TurboTaskGraph['ta
   return { reaches, problems };
 }
 
-/** The leading segments of a glob that hold no glob syntax: `dist/skills/**` → `dist/skills`. */
-function staticPrefix(glob: string): string {
-  const segments = toForwardSlashAnyPlatform(glob.replace(/^!?\.\//, '').replace(/^!/, '')).split('/');
-  const end = segments.findIndex((segment) => /[*?[\]{}!]/.test(segment));
-  return segments.slice(0, end === -1 ? segments.length : end).join('/');
-}
-
-/** Whether `path` is `prefix` or inside it. A glob with no static prefix (`*.tsbuildinfo`) names no directory and holds nothing. */
-function within(path: string, prefix: string): boolean {
+/** Whether `path` is `dir` or inside it; every path is inside the package root (`''`). */
+function within(path: string, dir: string): boolean {
   const normal = toForwardSlashAnyPlatform(path);
-  return prefix !== '' && (normal === prefix || normal.startsWith(`${prefix}/`));
+  return dir === '' || normal === dir || normal.startsWith(`${dir}/`);
 }
 
-/** Whether a task's outputs, less its excluded outputs, cover `path`. */
-function covers(task: TurboTask, path: string): boolean {
-  return task.outputs.some((glob) => within(path, staticPrefix(glob))) && !task.excludedOutputs.some((glob) => within(path, staticPrefix(glob)));
+/**
+ * Whether one output glob matches a file, the glob read whole. An output
+ * written with a leading `!` is an exclusion turbo lists apart (`excludedOutputs`):
+ * in `outputs` it would name a file called `!…`, so it matches nothing here.
+ */
+function matchesFile(glob: string, path: string): boolean {
+  return !glob.startsWith('!') && picomatch(glob, { dot: true })(toForwardSlashAnyPlatform(path));
+}
+
+/** The directory an output glob holds whole (`<dir>/**`), or `undefined` for any narrower glob (`dist/**\/*.d.ts`). */
+function treeOf(glob: string): string | undefined {
+  if (glob.startsWith('!')) return undefined;
+  const { base, glob: rest } = picomatch.scan(glob);
+  return rest === '**' || rest === '**/*' ? base : undefined;
+}
+
+/** Whether one output glob holds everything under `dir`. */
+function holdsTree(glob: string, dir: string): boolean {
+  const tree = treeOf(glob);
+  return tree !== undefined && within(dir, tree);
+}
+
+/** Whether a task produces `path` — a file, or a directory read whole — and does not exclude it. */
+function covers(task: TurboTask, { path, tree }: NeededPath): boolean {
+  const holds = tree ? holdsTree : matchesFile;
+  return task.outputs.some((glob) => holds(glob, path)) && !task.excludedOutputs.some((glob) => holds(glob, path));
 }
 
 /** Whether turbo runs `target` before `from`: `target` is in `from`'s dependency closure, or is `from` itself. */
@@ -264,14 +316,20 @@ function orders(tasks: TurboTaskGraph['tasks'], from: string, target: string): b
   return false;
 }
 
+/** A path a reach needs produced: a file, or a directory it reads whole. */
+interface NeededPath {
+  readonly path: string;
+  readonly tree: boolean;
+}
+
 /**
- * The paths a reach needs produced: its static part, and — when it may reach
- * further — every output directory of the package that lies under it.
+ * The paths a reach needs produced: the file it reads, or — when it reads a
+ * directory whole — that directory and every output tree of the package below it.
  */
-function neededPaths(tasks: readonly TurboTask[], { subpath, open }: AttributedReach): string[] {
-  if (!open) return [subpath];
-  const under = tasks.flatMap((task) => task.outputs.map(staticPrefix)).filter((prefix) => prefix !== subpath && within(prefix, subpath));
-  return [subpath, ...new Set(under)];
+function neededPaths(tasks: readonly TurboTask[], { subpath, open }: AttributedReach): NeededPath[] {
+  if (!open) return [{ path: subpath, tree: false }];
+  const trees = tasks.flatMap((task) => task.outputs.map(treeOf)).filter((tree): tree is string => tree !== undefined && tree !== subpath && tree !== '' && within(tree, subpath));
+  return [subpath, ...new Set(trees)].map((path) => ({ path, tree: true }));
 }
 
 /** One problem per path a reach needs that no task turbo runs first produces. */
@@ -280,8 +338,9 @@ function unorderedReaches(reaches: readonly AttributedReach[], tasks: TurboTaskG
   for (const reach of reaches) {
     const { site, task, pkg } = reach;
     const own = [...tasks.entries()].filter(([, candidate]) => candidate.package === pkg);
-    for (const path of neededPaths(own.map(([, candidate]) => candidate), reach)) {
-      const producers = own.filter(([, candidate]) => covers(candidate, path)).map(([id]) => id);
+    for (const needed of neededPaths(own.map(([, candidate]) => candidate), reach)) {
+      const { path } = needed;
+      const producers = own.filter(([, candidate]) => covers(candidate, needed)).map(([id]) => id);
       if (producers.length === 0) {
         problems.push({ site, message: `${task} reads ${pkg}'s ${path}, but no turbo task of ${pkg} declares an output covering it.` });
       } else if (!producers.some((id) => orders(tasks, task, id))) {
@@ -304,26 +363,32 @@ function missing(expected: readonly string[], actual: readonly string[]): string
 }
 
 /**
- * Every `<pkg>#test:<tier>` entry that drops part of the generic tier's
- * definition: a package entry REPLACES the generic one, so what it does not
- * repeat is lost.
+ * Every package entry that differs from the generic test tier it redefines:
+ * `env`, `outputs` and `cache` must equal the generic's, and `dependsOn` and
+ * `inputs` must keep all of it. Checked both ways — an entry that adds an env
+ * var or an output splits or widens what the tier caches, not only one that
+ * drops one.
  */
-function overrideDrift(graph: TurboTaskGraph): EdgeProblem[] {
-  const overridden = new Set(graph.overrides);
+function overrideDrift({ generic, overrides }: TierDefinitions): EdgeProblem[] {
   const problems: EdgeProblem[] = [];
-  for (const id of graph.overrides) {
-    const override = graph.tasks.get(id);
-    if (override === undefined || !TIERS.has(override.task)) continue;
-    const generic = [...graph.tasks.entries()].find(([other, task]) => task.task === override.task && !overridden.has(other))?.[1];
-    if (generic === undefined) continue;
-    const site = `turbo.json ("${id}")`;
-    const { definition: want } = generic;
-    const { definition: got } = override;
-    for (const key of ['env', 'outputs', 'inputs', 'dependsOn'] as const) {
-      const lost = missing(want[key], got[key]);
-      if (lost.length > 0) problems.push({ site, message: `drops the generic "${override.task}" ${key} ${JSON.stringify(lost)}: a package entry replaces the generic one, so repeat them.` });
+  for (const { site, task, definition: got } of overrides) {
+    const want = generic.get(task);
+    if (want === undefined) {
+      problems.push({ site, message: `redefines "${task}", but the root turbo.json has no generic "${task}" to compare it with.` });
+      continue;
     }
-    if (want.cache !== got.cache) problems.push({ site, message: `sets cache ${String(got.cache)}, the generic "${override.task}" ${String(want.cache)}: a package entry replaces the generic one, so repeat it.` });
+    for (const key of ['env', 'outputs'] as const) {
+      const lost = missing(want[key], got[key]);
+      const added = missing(got[key], want[key]);
+      if (lost.length > 0 || added.length > 0) {
+        problems.push({ site, message: `sets ${key} ${JSON.stringify(got[key])}, the generic "${task}" ${JSON.stringify(want[key])}: a package entry replaces the generic one, so keep them equal.` });
+      }
+    }
+    for (const key of ['inputs', 'dependsOn'] as const) {
+      const lost = missing(want[key], got[key]);
+      if (lost.length > 0) problems.push({ site, message: `drops the generic "${task}" ${key} ${JSON.stringify(lost)}: a package entry replaces the generic one, so repeat them.` });
+    }
+    if (want.cache !== got.cache) problems.push({ site, message: `sets cache ${String(got.cache)}, the generic "${task}" ${String(want.cache)}: a package entry replaces the generic one, so repeat it.` });
   }
   return problems;
 }
@@ -342,7 +407,7 @@ export function findBuiltOutputEdgeProblems(repoRoot: string, graph: WorkspaceGr
     ...tests.problems,
     ...scripts.problems,
     ...unorderedReaches([...scripts.reaches, ...tests.reaches], taskGraph.tasks),
-    ...overrideDrift(taskGraph),
+    ...overrideDrift(taskGraph.tiers),
   ];
   const unique = new Map(problems.map((problem) => [`${problem.site}\0${problem.message}`, problem] as const));
   return [...unique.values()].sort((a, b) => compareCodeUnits(a.site, b.site) || compareCodeUnits(a.message, b.message));
@@ -358,17 +423,10 @@ interface DryRunTask {
   /** `null` for a task declared with `outputs: []`. */
   readonly outputs: readonly string[] | null;
   readonly excludedOutputs: readonly string[] | null;
-  readonly resolvedTaskDefinition: ResolvedDefinition;
 }
 
 const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === 'string');
 const isStringArrayOrNull = (value: unknown): boolean => value === null || isStringArray(value);
-
-function isResolvedDefinition(value: unknown): value is ResolvedDefinition {
-  if (typeof value !== 'object' || value === null) return false;
-  const definition = value as Record<string, unknown>;
-  return typeof definition['cache'] === 'boolean' && ['outputs', 'dependsOn', 'inputs', 'env'].every((key) => isStringArray(definition[key]));
-}
 
 function isDryRunTask(value: unknown): value is DryRunTask {
   if (typeof value !== 'object' || value === null) return false;
@@ -377,8 +435,7 @@ function isDryRunTask(value: unknown): value is DryRunTask {
     ['taskId', 'task', 'package', 'command'].every((key) => typeof task[key] === 'string') &&
     isStringArray(task['dependencies']) &&
     isStringArrayOrNull(task['outputs']) &&
-    isStringArrayOrNull(task['excludedOutputs']) &&
-    isResolvedDefinition(task['resolvedTaskDefinition'])
+    isStringArrayOrNull(task['excludedOutputs'])
   );
 }
 
@@ -403,34 +460,87 @@ export function parseTurboDryRun(stdout: string): TurboTaskGraph['tasks'] {
     throw new Error(`turbo --dry=json printed no JSON: ${JSON.stringify(stdout.slice(0, 200))}`);
   }
   if (!isTurboDryRun(parsed)) {
-    throw new Error('turbo --dry=json printed no task graph (no `tasks`, or a task missing its id, command, dependencies, outputs or resolved definition)');
+    throw new Error('turbo --dry=json printed no task graph (no `tasks`, or a task missing its id, command, dependencies or outputs)');
   }
   const real = parsed.tasks.filter((task) => task.command !== NONEXISTENT);
   return new Map(
-    real.map(({ taskId, task, package: pkg, command, dependencies, outputs, excludedOutputs, resolvedTaskDefinition }) => [
+    real.map(({ taskId, task, package: pkg, command, dependencies, outputs, excludedOutputs }) => [
       taskId,
-      { task, package: pkg, command, dependencies, outputs: outputs ?? [], excludedOutputs: excludedOutputs ?? [], definition: resolvedTaskDefinition },
+      { task, package: pkg, command, dependencies, outputs: outputs ?? [], excludedOutputs: excludedOutputs ?? [] },
     ] as const),
   );
 }
 
+/** The default `inputs`: every file of the package that git does not ignore. */
+const TURBO_DEFAULT = '$TURBO_DEFAULT$';
+
+/** A declared task definition with turbo's defaults filled in; an omitted or empty `inputs` is `$TURBO_DEFAULT$`. */
+function definitionOf(declared: Readonly<Record<string, unknown>>): TaskDefinition {
+  const list = (key: string): readonly string[] => {
+    const value = declared[key];
+    return isStringArray(value) ? value : [];
+  };
+  const inputs = list('inputs');
+  return { outputs: list('outputs'), cache: declared['cache'] !== false, dependsOn: list('dependsOn'), inputs: inputs.length === 0 ? [TURBO_DEFAULT] : inputs, env: list('env') };
+}
+
+/** One `turbo.json` text's tasks, as declared. */
+type DeclaredTasks = ReadonlyMap<string, Readonly<Record<string, unknown>>>;
+
 /**
- * The task names and the `<pkg>#<task>` entries of a `turbo.json` text (JSONC).
+ * The tasks of a `turbo.json` text (JSONC), by key, and the task names they define.
  *
  * @throws When it does not parse, or has no `tasks` object
  */
-export function parseTurboConfig(text: string): { names: string[]; overrides: string[] } {
-  const parsed = ts.parseConfigFileTextToJson('turbo.json', text);
+export function parseTurboConfig(text: string, file = 'turbo.json'): { names: string[]; tasks: DeclaredTasks } {
+  const parsed = ts.parseConfigFileTextToJson(file, text);
   const config: unknown = parsed.config;
   const { error } = parsed;
   const tasks = (config as { tasks?: unknown } | undefined)?.tasks;
   if (error !== undefined || typeof tasks !== 'object' || tasks === null) {
     const detail = error === undefined ? '' : ': ' + ts.flattenDiagnosticMessageText(error.messageText, ' ');
-    throw new Error(`turbo.json has no \`tasks\` object${detail}`);
+    throw new Error(`${file} has no \`tasks\` object${detail}`);
   }
-  const keys = Object.keys(tasks);
-  const names = [...new Set(keys.map((key) => key.slice(key.indexOf('#') + 1)))].sort(compareCodeUnits);
-  return { names, overrides: keys.filter((key) => key.includes('#')) };
+  const declared = new Map(Object.entries(tasks as Record<string, unknown>).map(([key, value]) => [key, (typeof value === 'object' && value !== null ? value : {}) as Record<string, unknown>] as const));
+  const names = [...new Set([...declared.keys()].map((key) => key.slice(key.indexOf('#') + 1)))].sort(compareCodeUnits);
+  return { names, tasks: declared };
+}
+
+/** A package's own `turbo.json`, which extends the root's: each key it sets on a task replaces the root's. */
+export interface PackageTurboConfig {
+  readonly dir: string;
+  readonly name: string;
+  readonly tasks: DeclaredTasks;
+}
+
+/** The root's generic test tiers, and each `<pkg>#<tier>` entry of the root and tier of a package's `turbo.json`. */
+export function tierDefinitions(root: DeclaredTasks, packages: readonly PackageTurboConfig[]): TierDefinitions {
+  const generic = new Map([...TIERS].flatMap((tier) => {
+    const declared = root.get(tier);
+    return declared === undefined ? [] : [[tier, definitionOf(declared)] as const];
+  }));
+  const rootEntries = [...root].flatMap(([key, declared]): TierOverride[] => {
+    const task = key.slice(key.indexOf('#') + 1);
+    return key.includes('#') && TIERS.has(task) ? [{ site: `turbo.json ("${key}")`, task, definition: definitionOf(declared) }] : [];
+  });
+  const packageEntries = packages.flatMap(({ dir, name, tasks }) =>
+    [...tasks].flatMap(([task, declared]): TierOverride[] => {
+      if (!TIERS.has(task)) return [];
+      const base = root.get(`${name}#${task}`) ?? root.get(task) ?? {};
+      return [{ site: `packages/${dir}/turbo.json ("${task}")`, task, definition: definitionOf({ ...base, ...declared }) }];
+    }),
+  );
+  return { generic, overrides: [...rootEntries, ...packageEntries] };
+}
+
+/** Every package's own `turbo.json`, with the package's name. */
+function packageTurboConfigs(repoRoot: string): PackageTurboConfig[] {
+  return nonDeletedGitListing(repoRoot, ['packages/*/turbo.json']).map((rel) => {
+    const dir = /^packages\/([^/]+)\//.exec(rel)?.[1] ?? '';
+    const manifest = JSON.parse(readFileSync(safePath.join(repoRoot, 'packages', dir, 'package.json'), 'utf8')) as { name?: unknown };
+    if (typeof manifest.name !== 'string') throw new Error(`packages/${dir}/package.json has no name, so its turbo.json cannot be read`);
+    return { dir, name: manifest.name, tasks: parseTurboConfig(readFileSync(safePath.join(repoRoot, rel), 'utf8'), rel).tasks };
+  });
 }
 
 /** Longest tail of a tool's stderr worth carrying into a finding. */
@@ -446,7 +556,8 @@ const TURBO_TIMEOUT_MS = 60_000;
  *   out, or prints no graph — carrying the tail of its stderr
  */
 export function readTurboTaskGraph(repoRoot: string): TurboTaskGraph {
-  const { names, overrides } = parseTurboConfig(readFileSync(safePath.join(repoRoot, 'turbo.json'), 'utf8'));
+  const { names, tasks: declared } = parseTurboConfig(readFileSync(safePath.join(repoRoot, 'turbo.json'), 'utf8'));
+  const tiers = tierDefinitions(declared, packageTurboConfigs(repoRoot));
   // The repo's own turbo, through its node launcher: `turbo` on PATH exists only
   // under `bun run`, and may be another version.
   const launcher = safePath.join(repoRoot, 'node_modules', 'turbo', 'bin', 'turbo');
@@ -464,5 +575,5 @@ export function readTurboTaskGraph(repoRoot: string): TurboTaskGraph {
     const detail = stderr === '' ? '' : `:\n${stderr}`;
     throw new Error(`turbo run --dry=json failed (${why})${detail}`);
   }
-  return { tasks: parseTurboDryRun(String(result.stdout)), overrides };
+  return { tasks: parseTurboDryRun(String(result.stdout)), tiers };
 }

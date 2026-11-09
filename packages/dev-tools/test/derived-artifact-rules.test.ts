@@ -11,7 +11,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { ResolvedDefinition, TurboTask, TurboTaskGraph } from '../src/built-output-edges.js';
+import type { TaskDefinition, TierDefinitions, TurboTask, TurboTaskGraph } from '../src/built-output-edges.js';
 import { PROJECT_ROOT } from '../src/common.js';
 import {
   checkBuiltOutputEdges,
@@ -66,6 +66,8 @@ const BETA_BUILD = `${SCOPE}/beta#build`;
 const BETA_SYSTEM = `${SCOPE}/beta#test:system`;
 const BETA_UNIT = `${SCOPE}/beta#test:unit`;
 const SYSTEM_TEST = 'packages/beta/test/system/runs-alpha.system.test.ts';
+/** The import every fixture source starts with: a path call counts only through it. */
+const IMPORTS = "import { safePath } from '@vibe-agent-toolkit/utils'; import { spawn } from 'node:child_process';\n";
 const RUNS_ALPHA = "spawn(NODE, [safePath.resolve(import.meta.dirname, '../../../alpha/dist/bin.js')]);";
 /** The repository root, as source text, from a file two directories inside a package (`packages/beta/test/system/`). */
 const REPO = "import.meta.dirname, '../../../..'";
@@ -77,15 +79,17 @@ function task(
   outputs: string[] = [],
   command = 'run',
   excludedOutputs: string[] = [],
-  definition: ResolvedDefinition = { outputs, cache: true, dependsOn: [], inputs: [], env: [] },
 ): [string, TurboTask] {
   const [pkg = '', name = ''] = id.split('#');
-  return [id, { package: pkg, task: name, command, dependencies, outputs, excludedOutputs, definition }];
+  return [id, { package: pkg, task: name, command, dependencies, outputs, excludedOutputs }];
 }
 
-/** A task graph with no `<pkg>#<task>` entries in turbo.json. */
+/** No generic test tier, and no package entry redefining one. */
+const NO_TIERS: TierDefinitions = { generic: new Map(), overrides: [] };
+
+/** A task graph whose turbo.json redefines no test tier. */
 function graphOf(tasks: Map<string, TurboTask>): TurboTaskGraph {
-  return { tasks, overrides: [] };
+  return { tasks, tiers: NO_TIERS };
 }
 
 /** turbo's graph with beta's tiers ordering only beta's own build — not alpha's. */
@@ -99,11 +103,11 @@ function unordered(): Map<string, TurboTask> {
   ]);
 }
 
-/** Workspace of alpha, beta and gamma; `files` maps a repo-relative path to its text. Returns the paths. */
+/** Workspace of alpha, beta and gamma; `files` maps a repo-relative path to its text, each given {@link IMPORTS}. Returns the paths. */
 function writeAlphaBetaWorkspace(root: string, files: Record<string, string>, betaScripts: Record<string, string> = GOOD_SCRIPTS): string[] {
   writeWorkspace(root, { dir: 'alpha', scripts: GOOD_SCRIPTS });
   writeWorkspace(root, { dir: 'gamma', scripts: GOOD_SCRIPTS });
-  writeWorkspace(root, { dir: 'beta', scripts: betaScripts }, files);
+  writeWorkspace(root, { dir: 'beta', scripts: betaScripts }, Object.fromEntries(Object.entries(files).map(([rel, text]) => [rel, IMPORTS + text])));
   return Object.keys(files);
 }
 
@@ -246,6 +250,16 @@ describe('derived-artifact rules on fixture trees', () => {
       expect(findings[0]?.message).toContain(`no turbo task of ${SCOPE}/alpha declares an output covering it`);
     });
 
+    it.each([
+      ['a glob narrower than the file', ['dist/**/*.d.ts']],
+      ['an inclusion written with a `!`, which turbo lists apart', ['!dist/**']],
+    ])('matches an output glob whole, so %s covers nothing', (_label, outputs) => {
+      const narrow = unordered().set(...task(BETA_SYSTEM, [ALPHA_BUILD])).set(...task(ALPHA_BUILD, [], outputs));
+
+      const findings = checkBuiltOutputEdges(root, graphOf(narrow), workspaceWith({ [SYSTEM_TEST]: RUNS_ALPHA }));
+      expect(findings.map((f) => f.message)).toEqual([`${BETA_SYSTEM} reads ${SCOPE}/alpha's dist/bin.js, but no turbo task of ${SCOPE}/alpha declares an output covering it.`]);
+    });
+
     it("attributes a helper's reach to every tier of every test that imports it, in any package", () => {
       const files = workspaceWith({
         'packages/beta/test/helpers/alpha-bin.ts': `export const BIN = safePath.resolve(${REPO}, 'packages/alpha/dist/bin.js');`,
@@ -257,9 +271,9 @@ describe('derived-artifact rules on fixture trees', () => {
       const graph = unordered().set(...task(`${SCOPE}/gamma#test:unit`));
 
       expect(firstWords(checkBuiltOutputEdges(root, graphOf(graph), files))).toEqual([
-        ['packages/beta/test/helpers/alpha-bin.ts:1', BETA_SYSTEM],
-        ['packages/beta/test/helpers/alpha-bin.ts:1', BETA_UNIT],
-        ['packages/beta/test/helpers/alpha-bin.ts:1', `${SCOPE}/gamma#test:unit`],
+        ['packages/beta/test/helpers/alpha-bin.ts:2', BETA_SYSTEM],
+        ['packages/beta/test/helpers/alpha-bin.ts:2', BETA_UNIT],
+        ['packages/beta/test/helpers/alpha-bin.ts:2', `${SCOPE}/gamma#test:unit`],
       ]);
     });
 
@@ -267,7 +281,7 @@ describe('derived-artifact rules on fixture trees', () => {
       const files = workspaceWith({ 'packages/beta/test/helpers/orphan.ts': `export const BIN = safePath.resolve(${REPO}, 'packages/alpha/dist/bin.js');` });
 
       const findings = checkBuiltOutputEdges(root, graphOf(unordered()), files);
-      expect(findings.map((f) => f.path)).toEqual(['packages/beta/test/helpers/orphan.ts:1']);
+      expect(findings.map((f) => f.path)).toEqual(['packages/beta/test/helpers/orphan.ts:2']);
       expect(findings[0]?.message).toContain('no test file loads packages/beta/test/helpers/orphan.ts');
     });
 
@@ -281,7 +295,7 @@ describe('derived-artifact rules on fixture trees', () => {
       const message = soleSystemTestFinding(`safePath.join(${REPO}, 'packages', bundle.pkg, 'dist', 'skills');`);
 
       expect(message).toContain("`safePath.join(import.meta.dirname, '../../../..', 'packages', bundle.pkg, 'dist', 'skills')`");
-      expect(message).toContain('not static');
+      expect(message).toContain('not known statically');
     });
 
     it('attributes a script to every turbo task that runs it — by name or bun shorthand — and fails a sibling read no task runs', () => {
@@ -306,20 +320,34 @@ describe('derived-artifact rules on fixture trees', () => {
       ]);
     });
 
-    it('fails a package test-tier entry that drops part of the generic definition it replaces', () => {
-      const files = workspaceWith({ 'packages/beta/test/plain.test.ts': 'expect(1).toBe(1);' });
-      const generic = { outputs: [], cache: true, dependsOn: ['^build', 'build'], inputs: [], env: ['CI'] };
-      const tasks = unordered()
-        .set(...task(`${SCOPE}/gamma#test:integration`, [], [], 'run', [], generic))
-        .set(...task(`${SCOPE}/beta#test:integration`, [], [], 'run', [], { ...generic, env: [], cache: false, dependsOn: ['^build', 'build', ALPHA_BUILD] }));
-      const override = `${SCOPE}/beta#test:integration`;
+    describe('a package test-tier entry, against the generic it replaces', () => {
+      const GENERIC: TaskDefinition = { outputs: [], cache: true, dependsOn: ['^build', 'build'], inputs: ['$TURBO_DEFAULT$'], env: ['CI'] };
+      const SITE = `turbo.json ("${SCOPE}/beta#test:integration")`;
+      /** The findings, by site and the words before the first colon, for one entry's definition. */
+      const parity = (definition: TaskDefinition, generic: TaskDefinition | undefined): string[][] => {
+        const tiers: TierDefinitions = { generic: new Map(generic === undefined ? [] : [['test:integration', generic]]), overrides: [{ site: SITE, task: 'test:integration', definition }] };
+        const files = workspaceWith({ 'packages/beta/test/plain.test.ts': 'expect(1).toBe(1);' });
+        return checkBuiltOutputEdges(root, { tasks: unordered(), tiers }, files).map((f) => [f.path, f.message.split(':')[0] ?? '']);
+      };
 
-      expect(checkBuiltOutputEdges(root, { tasks, overrides: [override] }, files).map((f) => [f.path, f.message.split(':')[0]])).toEqual([
-        [`turbo.json ("${override}")`, 'drops the generic "test'],
-        [`turbo.json ("${override}")`, 'sets cache false, the generic "test'],
-      ]);
-      const copied = new Map(tasks).set(...task(override, [], [], 'run', [], { ...generic, dependsOn: ['^build', 'build', ALPHA_BUILD] }));
-      expect(checkBuiltOutputEdges(root, { tasks: copied, overrides: [override] }, files)).toEqual([]);
+      it('accepts an entry that keeps the generic and adds dependencies and inputs', () => {
+        expect(parity({ ...GENERIC, dependsOn: [...GENERIC.dependsOn, ALPHA_BUILD], inputs: [...GENERIC.inputs, '$TURBO_ROOT$/turbo.json'] }, GENERIC)).toEqual([]);
+      });
+
+      it.each([
+        ['drops a dependency', { ...GENERIC, dependsOn: ['^build'] }, 'drops the generic "test'],
+        ['drops $TURBO_DEFAULT$ from its inputs', { ...GENERIC, inputs: ['src/**'] }, 'drops the generic "test'],
+        ['drops an env var', { ...GENERIC, env: [] }, 'sets env [], the generic "test'],
+        ['adds an env var', { ...GENERIC, env: ['CI', 'EXTRA'] }, 'sets env ["CI","EXTRA"], the generic "test'],
+        ['adds an output', { ...GENERIC, outputs: ['coverage/**'] }, 'sets outputs ["coverage/**"], the generic "test'],
+        ['turns caching off', { ...GENERIC, cache: false }, 'sets cache false, the generic "test'],
+      ])('fails one that %s', (_label, definition, words) => {
+        expect(parity(definition, GENERIC)).toEqual([[SITE, words]]);
+      });
+
+      it('fails one whose tier the root turbo.json defines no generic for', () => {
+        expect(parity(GENERIC, undefined)).toEqual([[SITE, 'redefines "test']]);
+      });
     });
   });
 });

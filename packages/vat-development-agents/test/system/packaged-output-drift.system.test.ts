@@ -77,7 +77,8 @@ import * as fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { compareCodeUnits, mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { createTempDir, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /** Package root — two levels up from `test/system/`. */
 const PACKAGE_ROOT = toForwardSlash(fileURLToPath(new URL('../../', import.meta.url)));
@@ -206,7 +207,7 @@ function renderPathList(heading: string, marker: string, paths: readonly string[
   return `  ${heading}\n${lines.join('\n')}`;
 }
 
-/** Mirror the built tree into the golden tree; refuse to delete anything. */
+/** Mirror the built tree (its snapshot) into the golden tree; refuse to delete anything. */
 function regenerateGolden(builtDir: string, goldenDir: string): void {
   const built = filesUnder(builtDir);
   for (const rel of built) {
@@ -232,9 +233,23 @@ function regenerateGolden(builtDir: string, goldenDir: string): void {
 describe.each(BUNDLES)('packaged output drift: $pkg (system)', (bundle) => {
   const builtDir = builtSkillsDirFor(bundle);
   const goldenDir = goldenSkillsDirFor(bundle);
+  /**
+   * The built tree, copied whole into a temp dir before any file of it is read.
+   * The copy is this suite's one read of `dist/skills`, a path every piece of
+   * which is known; each per-file read is of the snapshot, so a file name from a
+   * directory listing never joins a `dist/` path (`checkBuiltOutputEdges`).
+   */
+  let snapshot = '';
 
   beforeAll(() => {
-    if (UPDATING && fs.existsSync(builtDir)) regenerateGolden(builtDir, goldenDir);
+    if (!fs.existsSync(builtDir)) return;
+    snapshot = createTempDir('vat-packaged-drift-');
+    fs.cpSync(builtDir, snapshot, { recursive: true });
+    if (UPDATING) regenerateGolden(snapshot, goldenDir);
+  });
+
+  afterAll(() => {
+    if (snapshot !== '') removeTempDir(snapshot);
   });
 
   it('has a BUILT bundle tree to compare — an absent build fails, it does not skip', () => {
@@ -245,7 +260,7 @@ describe.each(BUNDLES)('packaged output drift: $pkg (system)', (bundle) => {
         'a bundle that fails to build, gets renamed, or is dropped would otherwise report green.\n' +
         BUILD_HINT,
     ).toBe(true);
-    expect(filesUnder(builtDir).length, `the build produced no files under ${builtDir}.\n${BUILD_HINT}`).toBeGreaterThan(
+    expect(filesUnder(snapshot).length, `the build produced no files under ${builtDir}.\n${BUILD_HINT}`).toBeGreaterThan(
       0,
     );
   });
@@ -264,7 +279,7 @@ describe.each(BUNDLES)('packaged output drift: $pkg (system)', (bundle) => {
   });
 
   itUnlessUpdating('ships exactly the files the golden records', () => {
-    const built = filesUnder(builtDir);
+    const built = filesUnder(snapshot);
     const golden = filesUnder(goldenDir);
 
     const missing = golden.filter((rel) => !built.includes(rel));
@@ -286,10 +301,10 @@ describe.each(BUNDLES)('packaged output drift: $pkg (system)', (bundle) => {
     const golden = filesUnder(goldenDir);
     const drifted: string[] = [];
 
-    for (const rel of filesUnder(builtDir)) {
+    for (const rel of filesUnder(snapshot)) {
       if (!golden.includes(rel)) continue; // reported by the file-SET assertion above
       const goldenBytes = fs.readFileSync(safePath.join(goldenDir, rel));
-      const builtBytes = fs.readFileSync(safePath.join(builtDir, rel));
+      const builtBytes = fs.readFileSync(safePath.join(snapshot, rel));
       if (goldenBytes.equals(builtBytes)) continue;
       drifted.push(`  ${rel}:\n${describeDifference(goldenBytes.toString('utf-8'), builtBytes.toString('utf-8'))}`);
     }

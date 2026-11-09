@@ -20,7 +20,7 @@ describe('underTemp', () => {
     for (const dir of made.splice(0)) removeTempDir(dir);
   });
 
-  it('returns a path inside the temp root unchanged, whether or not it exists yet', () => {
+  it('returns a canonical path inside the temp root unchanged, whether or not it exists yet', () => {
     const root = mint();
     const path = safePath.join(root, 'install', 'node_modules', 'pkg', 'dist', 'bin.js');
     expect(underTemp(path, root)).toBe(path);
@@ -29,6 +29,11 @@ describe('underTemp', () => {
   it('refuses a path that climbs out of the temp root', () => {
     const root = mint();
     expect(() => underTemp(safePath.join(root, '..', 'elsewhere'), root)).toThrow(/is not inside the temp dir/);
+  });
+
+  it('returns the canonical path for one with a `..` segment, so what is built from it is the place it vouched for', () => {
+    const root = mint();
+    expect(underTemp(`${root}/a/../dist`, root)).toBe(safePath.join(root, 'dist'));
   });
 
   it('refuses a root that is not inside the host tmpdir', () => {
