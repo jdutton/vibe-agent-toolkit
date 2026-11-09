@@ -32,6 +32,7 @@ describe('visibleText', () => {
     ['a no-break space', 0xa0, 'u00a0'],
     ['an en space', 0x20_02, 'u2002'],
     ['a Khmer inherent vowel', 0x17_b4, 'u17b4'],
+    ['a Mongolian free variation selector', 0x18_0b, 'u180b'],
     ['a braille pattern blank', 0x28_00, 'u2800'],
     ['a musical null notehead', 0x1_d1_59, 'u{1d159}'],
     ['a lone high surrogate', 0xd8_00, 'ud800'],
@@ -45,6 +46,17 @@ describe('visibleText', () => {
 
   it('shows at most 8192 characters of a flood, and counts the rest', () => {
     expect(visibleText(`${'c'.repeat(9000)}${String.fromCodePoint(0x1b)}`)).toBe(`${'c'.repeat(8192)}…[809 more characters]`);
+  });
+
+  // Not a hand-kept list: every character Unicode marks default-ignorable, enumerated here, is escaped.
+  it('escapes every default-ignorable code point', () => {
+    const ignorable = /^\p{Default_Ignorable_Code_Point}$/u;
+    const shownRaw: string[] = [];
+    for (let code = 0; code <= 0x10_ff_ff; code += 1) {
+      const character = String.fromCodePoint(code);
+      if (ignorable.test(character) && visibleText(character) === character) shownRaw.push(code.toString(16));
+    }
+    expect(shownRaw).toEqual([]);
   });
 
   it('leaves printable text, quotes and backslashes as they are', () => {

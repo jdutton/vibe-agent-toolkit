@@ -239,7 +239,7 @@ describe('cloneGitSource reads committed paths as the bytes git holds', () => {
     const emoji = String.fromCodePoint(0x1_f6_00);
     installGit({ links: [], failing: { subcommand: 'read-tree', stderr: `${emoji}${'y'.repeat(4095)}` } });
     const run = clone();
-    expect(run).toThrow(expect.objectContaining({ message: expect.stringMatching(/:\n\[2 earlier characters omitted\]\n {2}git: y{4095}$/) }));
+    expect(run).toThrow(expect.objectContaining({ message: expect.stringMatching(/:\n\[1 earlier characters omitted\]\n {2}git: y{4095}$/) }));
   });
 
   it('shows an unassigned code point in a path by its escape', () => {

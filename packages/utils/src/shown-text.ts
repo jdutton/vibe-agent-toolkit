@@ -30,21 +30,16 @@ const BACKSLASH = '\\';
  * same as a real one), a line or paragraph separator, a space separator other than the space itself
  * (`Zs` — a no-break or an en space reads as a space, so two names would show the same), a
  * private-use character, an unassigned code point or noncharacter (`Cn` — what a later Unicode may
- * make invisible). {@link UNSHOWABLE_RANGES} adds the invisibles outside them.
+ * make invisible), and every character Unicode itself marks default-ignorable
+ * (`Default_Ignorable_Code_Point` — the joiners, fillers, variation selectors and inherent vowels
+ * that render as nothing). {@link UNSHOWABLE_RANGES} adds the blanks Unicode does not mark.
  */
-const UNSHOWABLE_CATEGORY = /^[\p{Cc}\p{Cf}\p{Cs}\p{Zs}\p{Zl}\p{Zp}\p{Co}\p{Cn}]$/u;
+const UNSHOWABLE_CATEGORY = /^[\p{Cc}\p{Cf}\p{Cs}\p{Zs}\p{Zl}\p{Zp}\p{Co}\p{Cn}\p{Default_Ignorable_Code_Point}]$/u;
 
-/** The invisibles {@link UNSHOWABLE_CATEGORY} does not name, as inclusive code-point ranges. */
+/** The blanks {@link UNSHOWABLE_CATEGORY} does not name — drawn as nothing, marked as nothing — as inclusive ranges. */
 const UNSHOWABLE_RANGES: ReadonlyArray<readonly [number, number]> = [
-  [0x3_4f, 0x3_4f], // combining grapheme joiner
-  [0x11_5f, 0x11_60], // Hangul choseong and jungseong fillers
-  [0x17_b4, 0x17_b5], // Khmer inherent vowels
   [0x28_00, 0x28_00], // braille pattern blank
-  [0x31_64, 0x31_64], // Hangul filler
-  [0xff_a0, 0xff_a0], // halfwidth Hangul filler
-  [0xfe_00, 0xfe_0f], // variation selectors
   [0x1_d1_59, 0x1_d1_59], // musical symbol null notehead
-  [0xe_01_00, 0xe_01_ef], // variation selectors supplement
 ];
 
 /** Whether a character must not reach a message as itself — see {@link UNSHOWABLE_CATEGORY}. */

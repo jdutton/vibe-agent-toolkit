@@ -610,14 +610,16 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   decodes UTF-8 and replaces each invalid byte with U+FFFD. On a file system that stores name bytes
   verbatim (Linux), a file named `\xff.md` is listed as `�.md`: a lookup misses it, and two such
   names collapse into one. APFS refuses such names. NTFS accepts a name holding an unpaired
-  surrogate, but Git for Windows converts it to UTF-8 itself, writing U+FFFD in its place — valid
-  UTF-8, so the re-spelling happens inside git and no reading of its output can see it.
-- **Traced in code**, not reproduced against the built CLI.
+  surrogate; what Git for Windows lists for it is NOT verified — read from its source, its
+  UTF-16-to-UTF-8 conversion writes U+FFFD (valid UTF-8, a re-spelling no byte read can see), but
+  if it writes the surrogate's own three bytes instead, a byte read does catch it.
+- **Traced in code**, not reproduced against the built CLI; the Windows case not reproduced at all.
 - **Where:** every product and dev-tools reader of the listing — `git grep -n "'ls-files'" -- 'packages/*/src/**'`
   (in `utils`, `cli`, `lab` and `dev-tools`)
 - **Fix:** read the listing with `runGitBytes`, decide each path with `decodeUtf8Exactly` and refuse
   (or report) the ones it cannot name; then add `ls-files` to the rule's subcommands. That fixes
-  Linux; on Windows only comparing the listing against `readdir` can find the name git re-spelled.
+  Linux; reproduce the Windows case first — if git writes U+FFFD there, only comparing the listing
+  against `readdir` can find the name it re-spelled.
 
 ### A git skill source's committed paths are judged for UTF-8 only, not for what the host can hold
 

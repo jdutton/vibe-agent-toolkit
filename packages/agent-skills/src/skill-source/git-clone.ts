@@ -2,6 +2,7 @@ import { readdirSync } from 'node:fs';
 import { posix } from 'node:path';
 
 import {
+  compareCodeUnits,
   COPY_LINK_ESCAPES_SOURCE_CODE,
   decodeUtf8Exactly,
   HOST_PATH_FLAVOR,
@@ -156,7 +157,9 @@ export function cloneGitSource(parsed: ParsedGitUrl, targetTempdir: string): Git
   if (placement === 'absent') {
     // The names are the repository's own, checked out: shown, never printed raw, and only the
     // first {@link LISTED_NAMES_LIMIT} of them, so a root of a million entries is not the message.
-    const names = readdirSync(targetTempdir);
+    // Sorted by code unit, so every host lists the same names (ext4 lists in hash order, NTFS and
+    // APFS sorted, and a locale's order is the host's).
+    const names = readdirSync(targetTempdir).toSorted(compareCodeUnits);
     const left = names.length - LISTED_NAMES_LIMIT;
     const topLevel = names.slice(0, LISTED_NAMES_LIMIT).map((name) => shownName(name)).join(', ') + (left > 0 ? ` and ${left.toString()} more` : '');
     throw new VatError(
@@ -234,9 +237,22 @@ const GIT_LINE = '\n  git: ';
  * its own line behind {@link GIT_LINE}, each `visibleText` — unquoted, so `"` and `\` stay as git
  * wrote them. The marker, not the line break, sets git's words off: a line break in them may not
  * be git's own (git prints a committed path raw in `invalid path '…'`, and a remote's words reach
- * clone's stderr), so a line a repository wrote is still shown as git's.
- * Only its last {@link GIT_SAID_LIMIT} characters, so a flood cannot become the message.
+ * clone's stderr), so a line break a repository wrote still starts a line marked as git's. (A
+ * terminal that wraps a long line shows its tail unmarked; the marker answers line breaks only.)
+ * Only its last {@link GIT_SAID_LIMIT} UTF-16 units, so a flood cannot become the message; how
+ * much was left out is counted in characters.
  */
+/** How many characters (code points) `text` holds before UTF-16 offset `end`, which falls on a character's start. */
+function charactersBefore(text: string, end: number): number {
+  let count = 0;
+  let offset = 0;
+  while (offset < end) {
+    offset += (text.codePointAt(offset) ?? 0) > 0xff_ff ? 2 : 1;
+    count += 1;
+  }
+  return count;
+}
+
 function gitSaid(stderr: string): string {
   const trimmed = stderr.trim();
   if (trimmed === '') return ' git said nothing.';
@@ -245,7 +261,7 @@ function gitSaid(stderr: string): string {
   // At a second half, `codePointAt` answers that half alone.
   const unit = trimmed.codePointAt(cut) ?? 0;
   const start = cut > 0 && unit >= 0xdc_00 && unit <= 0xdf_ff ? cut + 1 : cut;
-  const omitted = start > 0 ? `\n[${start.toString()} earlier characters omitted]` : '';
+  const omitted = start > 0 ? `\n[${charactersBefore(trimmed, start).toString()} earlier characters omitted]` : '';
   const lines = trimmed.slice(start).split(/\r?\n/);
   return omitted + lines.map((line) => GIT_LINE + visibleText(line)).join('');
 }

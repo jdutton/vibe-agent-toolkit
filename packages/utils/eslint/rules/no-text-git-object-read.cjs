@@ -16,8 +16,10 @@
  *
  * What it catches: an ARRAY LITERAL that reaches a call or `new` — as an
  * argument (through `as`, `satisfies`, `!` or a branch of `?:`), or through a
- * variable it initializes — that does not name another program as its first
- * argument (`spawnSync('npm', […])`; `git`, `/usr/bin/git` and `git.exe` are git), whose subcommand (its first element that is
+ * variable it initializes — unless that call is a spawner naming another
+ * program as its first argument (`spawnSync('npm', […])`; `git`,
+ * `/usr/bin/git` and `git.exe` are git; any other call's leading string is a
+ * label, and the array is still reported) — whose subcommand (its first element that is
  * not a global option, nor the value of `-c`, `-C`, `--git-dir`, `--work-tree`,
  * `--namespace` or `--config-env`, past any leading spread) is one of the above,
  * unless it is the first argument of a call to `runGitBytes` itself. So an argv
@@ -95,10 +97,19 @@ function outermost(node) {
 }
 
 /**
- * Whether a call runs another program than git: its first argument is a string literal naming one
- * (`spawnSync('npm', ['show', pkg])`). A call naming no program is assumed to run git.
+ * The calls that take the program they run as their first argument. Only these can name another
+ * program: a wrapper's leading string (`readObjects('link texts', [...])`) is a label, not one. A
+ * spawner missing here errs toward reporting, never toward letting an argv through.
+ */
+const SPAWNERS = new Set(['spawn', 'spawnSync', 'execFile', 'execFileSync', 'execa', 'execaSync', 'spawnHardened', 'safeExecSync', 'safeExecResult']);
+
+/**
+ * Whether a call runs another program than git: a spawner ({@link SPAWNERS}) whose first argument
+ * is a string literal naming one (`spawnSync('npm', ['show', pkg])`). Any other call is assumed to
+ * run git.
  */
 function runsOtherProgram(call) {
+  if (!SPAWNERS.has(calleeName(call))) return false;
   const program = staticString(call.arguments[0]);
   return program !== undefined && !GIT_PROGRAM.test(program);
 }

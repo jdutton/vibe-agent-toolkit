@@ -69,6 +69,8 @@ const CASES: RuleCases = {
     { code: "spawnSync('git', ['cat-file', '--batch']);", filename: SRC, errors: [{ messageId: 'textRead' }] },
     { code: "spawnSync('/usr/bin/git', ['cat-file', '--batch']);", filename: SRC, errors: [{ messageId: 'textRead' }] },
     { code: "execFileSync('git.exe', ['ls-tree', '-z', c]);", filename: SRC, errors: [{ messageId: 'textRead' }] },
+    // A wrapper's leading string is a label, not a program: only a spawner names one.
+    { code: "readObjects('link texts', ['cat-file', '--batch']);", filename: SRC, errors: [{ messageId: 'textRead' }] },
     { code: "spawnSync(`C:\\\\Program Files\\\\Git\\\\cmd\\\\GIT.EXE`, ['show', c]);", filename: SRC, errors: [{ messageId: 'textRead' }] },
     // Not the argv position of the bytes runner.
     { code: "runGitBytes(['--version'], ['cat-file']);", filename: SRC, errors: [{ messageId: 'textRead' }] },
