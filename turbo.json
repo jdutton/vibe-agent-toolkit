@@ -142,12 +142,13 @@
     // and folds its hash in so a rebuilt closure re-runs the suite. Not a
     // workspace dependency: that would make lab's BUILD wait on the cli too.
     // dev-tools: `turbo-test-concurrency.test.ts` imports EVERY package's
-    // integration and system config to check its worker cap, so an edit to one must re-run
-    // it rather than replay its cached pass. Scoped here, not in
-    // `globalDependencies`, which would make that edit cold for every task.
+    // integration and system config (and each package's `test:system` script) to
+    // check its worker cap, so an edit to one must re-run it rather than replay its
+    // cached pass. Scoped here, not in `globalDependencies`, which would make that
+    // edit cold for every task.
     "@vibe-agent-toolkit/dev-tools#test:unit": {
       "dependsOn": ["^build", "build"],
-      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/*/vitest.integration.config.ts", "$TURBO_ROOT$/packages/*/vitest.system.config.ts"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/*/vitest.integration.config.ts", "$TURBO_ROOT$/packages/*/vitest.system.config.ts", "$TURBO_ROOT$/packages/*/package.json"],
       "outputs": [],
       "cache": true
     },
@@ -180,8 +181,10 @@
     // packages so no two of them overlap, and the root scripts run the rest at
     // `--concurrency=4`. A task hash folds in its `dependsOn` hashes, so a change
     // to rag's tests re-runs rag-lancedb's — a small, deliberate price for an
-    // edge turbo can see. When a package starts loading a native model in its
-    // integration or system tier, add it to this chain.
+    // edge turbo can see. When a package's integration tier starts holding native
+    // memory on that scale, add it to this chain. The system tier is not chained:
+    // its model holders were measured at under 0.5 GB per process (see
+    // `createSystemTestConfig` in vitest.shared.ts) — re-measure if that changes.
     "@vibe-agent-toolkit/rag-lancedb#test:integration": {
       "dependsOn": ["^build", "build", "@vibe-agent-toolkit/rag#test:integration"],
       "outputs": [],

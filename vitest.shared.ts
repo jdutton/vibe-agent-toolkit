@@ -423,18 +423,26 @@ export function createSystemTestConfig(overrides: SystemTestConfigOverrides = {}
     // deprecated 'basic' reporter. Skipping the per-test streaming summary
     // reduces main<->worker RPC pressure.
     reporters: [['default', { summary: false }]],
-    // Tests emitting verbose console output pile RPC pressure onto the same
-    // channel the onTaskUpdate heartbeat uses; write worker stdout directly instead.
+    // Tests emitting verbose console output pile RPC traffic onto the channel
+    // every task update rides; write worker stdout directly instead.
     disableConsoleIntercept: true,
     clearMocks: CLEAR_MOCKS_BEFORE_EACH_TEST,
     pool: 'forks' as const,
-    // The shared cap on EVERY platform. Windows used to run 1 worker, a
-    // precaution kept from #92: under vitest 3 a worker whose event loop a
-    // `spawnSync` blocked missed birpc's 60 s RPC deadline ("Timeout calling
-    // onTaskUpdate"). Vitest 4 gives the worker's runtime RPC no deadline
-    // (`createRuntimeRpc`, `timeout: -1`), and turbo was already running up to
-    // four packages' system forks side by side there, so the serial cap only
-    // slowed `cli`, the tier's long pole.
+    // The shared cap on EVERY platform. Windows ran serially (`singleFork`,
+    // then `maxForks: 1` from #92) because under vitest 3 a worker whose event
+    // loop a `spawnSync` blocked missed birpc's 60 s call deadline ("Timeout
+    // calling onTaskUpdate"). Vitest 4 creates the runtime RPC with no call
+    // deadline (`createRuntimeRpc`, `timeout: -1`; only worker start and stop
+    // are timed), and turbo already ran up to four packages' system forks side
+    // by side there, so the serial cap only slowed `cli`, the tier's long pole.
+    //
+    // Memory, measured (macOS, peak RSS sampled per process): the system tier's
+    // model holders are `rag-lancedb`'s forks (LanceDB + ONNX in-process,
+    // 412-476 MB) and the `vat rag` children they and `cli`'s rag files spawn
+    // (377-481 MB) — not the 1-3 GB of the integration tier's native-memory
+    // chain, which is why the system tier is not chained. Worst case under
+    // `--concurrency=4`: 8 forks, each with at most one such child, ~8 GB of a
+    // 16 GB runner. Not yet sampled on Windows.
     maxWorkers: maxTestWorkers,
     // Same V8 old-space cap as `integrationExecArgv` — see its comment.
     // Heaviest measured system-test file: cli/inventory-parity.system.test.ts, ~196MB.

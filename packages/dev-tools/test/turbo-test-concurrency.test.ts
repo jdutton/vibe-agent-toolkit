@@ -14,7 +14,7 @@ import { PROJECT_ROOT } from '../src/common.js';
  * vitest.shared.ts, but `turbo run test:<suite>` runs MANY packages' suites
  * concurrently (turbo's default concurrency is 10). The per-package cap does
  * NOT compose across turbo's parallel packages, so ~10 packages × 2 forks
- * spawn at once — and the integration/system forks of the three packages that
+ * spawn at once — and the integration forks of the three packages that
  * load a native model (onnxruntime/transformers in `rag`, LanceDB Arrow in
  * `rag-lancedb`, the TS language service in `resource-compiler`) each hold
  * 1-3GB of NATIVE memory that `--max-old-space-size` cannot bound. That
@@ -43,6 +43,7 @@ function readTurboJson(): { tasks: Record<string, { dependsOn?: string[] }> } {
 
 interface PackageTestBlock {
   maxWorkers: number;
+  fileParallelism?: boolean;
   setupFiles: string[];
   provide: { forkRssBudgetMb?: number };
 }
@@ -126,10 +127,13 @@ describe('turbo test-suite concurrency (cross-package native-memory guard)', () 
     expect(cli.test.maxWorkers).toBe(cliIntegrationTestWorkers);
   });
 
-  // The system tier spawns the real `vat` (model-loading verbs included), whose memory no
-  // in-fork check can see, so no package may raise it — and no platform may lower it either:
-  // Windows ran it serially long after the RPC deadline that justified that was gone.
-  // Asserted on whichever OS runs the unit tier, so a platform branch reds there.
+  // The system tier runs at the shared cap in every package and on every platform: Windows ran it
+  // serially long after the RPC deadline that justified that was gone. Its memory was measured
+  // for that cap (`vitest.shared.ts`, `createSystemTestConfig`); a package raising it would need
+  // the same, and much of it sits in spawned `vat` children the in-fork RSS check cannot see.
+  // Equality, not "at most": the value is read on whichever OS runs the unit tier, so a
+  // platform branch reds there — lowering a package for everyone is a deliberate edit here.
+  // `maxWorkers` is not the only way to serialise, so the other two are pinned as well.
   it('runs every package\'s system tier at the shared worker cap, on this platform too', async () => {
     const scanned: string[] = [];
     for (const dir of readdirSync(safePath.join(PROJECT_ROOT, 'packages'))) {
@@ -137,6 +141,11 @@ describe('turbo test-suite concurrency (cross-package native-memory guard)', () 
       if (!existsSync(configPath)) continue;
       const { test } = await loadPackageTestConfig(configPath);
       expect(test.maxWorkers, `${dir} system tier`).toBe(maxTestWorkers);
+      expect(test.fileParallelism, `${dir} system tier`).not.toBe(false);
+      const pkg = JSON.parse(readFileSync(safePath.join(PROJECT_ROOT, 'packages', dir, 'package.json'), 'utf-8')) as {
+        scripts: Record<string, string>;
+      };
+      expect(pkg.scripts['test:system'], `${dir} test:system script`).toBe('vitest run --config vitest.system.config.ts');
       scanned.push(dir);
     }
     // Not blind: the scan reached cli, the tier's long pole.
