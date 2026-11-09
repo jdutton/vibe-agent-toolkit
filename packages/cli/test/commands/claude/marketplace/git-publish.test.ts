@@ -296,10 +296,17 @@ describe('git-publish', () => {
     it.each([
       ...STRONG.map((alias) => [alias, true] as const),
       ...[...STRONG, ...WEAK].map((alias) => [alias, false] as const),
-    ])('publishes under --no-push beside %s (refs/heads/b listed: %s), building on the exact branch only', async (alias, exact) => {
+    ])('publishes under --no-push beside %s (refs/heads/b listed: %s), building on the exact branch only and warning of it', async (alias, exact) => {
       gitBy({}, { ...CLEAN_STDOUT, 'ls-remote': `${exact ? EXACT_LINE : ''}${OTHER}\t${alias}` });
-      expect(await publish({ noPush: true }).then(() => undefined, (rejected: unknown) => rejected)).toBeUndefined();
-      expect(calls('fetch')).toEqual(exact ? [['fetch', '--', REMOTE, 'refs/heads/b']] : []);
+      const said = vi.spyOn(logger, 'info');
+      try {
+        expect(await publish({ noPush: true }).then(() => undefined, (rejected: unknown) => rejected)).toBeUndefined();
+        expect(calls('fetch')).toEqual(exact ? [['fetch', '--', REMOTE, 'refs/heads/b']] : []);
+        expect(calls('reset')).toEqual(exact ? [['reset', '--soft', TIP]] : []);
+        expect(said.mock.calls.some(([message]) => message.includes('Warning:') && message.includes(alias))).toBe(true);
+      } finally {
+        said.mockRestore();
+      }
     });
 
     // --force --no-push builds on nothing and pushes nothing: it works offline, as it did before the probe.

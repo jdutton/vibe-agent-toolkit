@@ -336,8 +336,8 @@ after one marketplace was published still lists it.
 - `2` - Publish could not run: `USAGE_INVALID`, `CONFIG_INVALID`,
   `INPUT_UNREADABLE` (no build output, or build output with no readable
   `marketplace.json` — run `vat build`; no release notes; a remote ref
-  `git push` would take for the branch; a `GIT_CONFIG_COUNT` that is not plain
-  decimal), `BACKEND_UNAVAILABLE` (publishing with `GH_TOKEN`/`GITHUB_TOKEN`
+  `git push` would take for the branch, when pushing; with a GitHub token, a
+  `GIT_CONFIG_COUNT` that is not plain decimal), `BACKEND_UNAVAILABLE` (publishing with `GH_TOKEN`/`GITHUB_TOKEN`
   needs git 2.31+), `EXTERNAL_API_FAILED` (remote could not be read or fetched,
   or push rejected), `RUN_INCOMPLETE` (a git step failed; the branch moved
   during the publish — run it again)

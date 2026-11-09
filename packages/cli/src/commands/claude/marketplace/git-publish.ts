@@ -374,7 +374,12 @@ function buildOnRemoteTip(tmpRepo: string, remote: PublishRemote, options: Pick<
     return;
   }
   const ref = `refs/heads/${options.branch}`;
-  const tip = remoteTipOf(tmpRepo, remote, ref, !options.noPush);
+  const onClash = options.noPush
+    ? (clash: string): void => options.logger.info(`   Warning: ${clash} Delete or rename it on the remote before pushing.`)
+    : (clash: string): never => {
+      throw new CommandRefusalError('INPUT_UNREADABLE', `${clash} Delete or rename it on the remote, or publish to another branch.`);
+    };
+  const tip = remoteTipOf(tmpRepo, remote, ref, onClash);
   if (options.force) {
     return;
   }
@@ -397,11 +402,11 @@ function buildOnRemoteTip(tmpRepo: string, remote: PublishRemote, options: Pick<
 /**
  * The sha `remote` holds at exactly `ref`, or `undefined` when it holds no such branch. Read from
  * the listing, not the exit status: `ls-remote` matches its pattern against each ref's TAIL.
- * 🔴 When `pushing`, refuses while the remote holds a ref `git push` would take for `ref`
+ * 🔴 Hands `onClash` any ref the remote holds that `git push` would take for `ref`
  * ({@link pushDestinationAliases}): no refspec spells "exactly this ref" to git push. One created after
- * this probe is rejected as non-fast-forward without `--force`; with it, that push is what was asked.
+ * this probe makes a push non-fast-forward or ambiguous without `--force`; with it, that push is what was asked.
  */
-function remoteTipOf(tmpRepo: string, remote: PublishRemote, ref: string, pushing: boolean): string | undefined {
+function remoteTipOf(tmpRepo: string, remote: PublishRemote, ref: string, onClash: (clash: string) => void): string | undefined {
   const probe = gitAtRemote(remote, ['ls-remote', '--exit-code'], [ref, `${ref}/HEAD`], { cwd: tmpRepo, allowFailure: true });
   if (probe.status === LS_REMOTE_NO_MATCH) {
     return undefined;
@@ -416,12 +421,9 @@ function remoteTipOf(tmpRepo: string, remote: PublishRemote, ref: string, pushin
       listed.set(name, sha);
     }
   }
-  const clashes = pushing ? pushDestinationAliases(ref, listed.has(ref)).filter((name) => listed.has(name)) : [];
+  const clashes = pushDestinationAliases(ref, listed.has(ref)).filter((name) => listed.has(name));
   if (clashes.length > 0) {
-    throw new CommandRefusalError(
-      'INPUT_UNREADABLE',
-      `${redactUrlCredentials(remote.url)} holds ${clashes.join(', ')}, which git push also matches for ${ref}: the push would update it instead of the branch, or be refused as ambiguous. Delete or rename it on the remote, or publish to another branch.`,
-    );
+    onClash(`${redactUrlCredentials(remote.url)} holds ${clashes.join(', ')}, which git push also matches for ${ref}: the push would update it instead of the branch, or be refused as ambiguous.`);
   }
   return listed.get(ref);
 }
