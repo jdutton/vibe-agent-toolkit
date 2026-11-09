@@ -14,23 +14,27 @@
 - **A check's rows can set their own severity, line and column**: `finding_severity` (`error` |
   `warning` | `info`, NULL = the declared one), `finding_line`, and `finding_column` (needs
   `finding_line`). An override on `CUSTOM:<name>` still wins. A column that differs from a reserved
-  name only in case is a stderr warning.
+  name only in case is a stderr warning, and is listed as spelled on that check's `data.checks`
+  entry as `nearMisses` (absent when there is none).
 - **Every finding one check produced names it: `check: <name>`** — its violations (built-in or
   declared) and the `RESOURCE_CHECK_BROKEN` / `RESOURCE_CHECK_EXAMINED_NOTHING` refusals about it, in
   `vat resources check` and in `vat validate`'s `checks` phase alike. A finding about the whole run
   carries none.
 - **A declared check's violation carries `evidence`**: the row's columns other than the reserved
-  ones, values as SQLite returned them (a BLOB as the text the message shows). A `path` that could not become the finding's `location` (absolute, NULL, not
+  ones, values as SQLite returned them (a BLOB, or a non-finite number such as `Infinity`, as the
+  text the message shows — so the JSON and YAML documents agree). A `path` that could not become the finding's `location` (absolute, NULL, not
   text) stays in `evidence`; a column aliased `__proto__` is kept. The message is unchanged.
 - **A check whose rows could not be read carries `reason`** on its `RESOURCE_CHECK_BROKEN` finding:
   `{column, value, row, allowed}` — the reserved column, the value as `evidence` renders it, the
   1-based row (the FIRST bad one), and what the column may hold (`one of error | warning | info`,
   `a positive integer`, `NULL without a finding_line`). The message states the same `allowed`. A
   check whose `examined` statement returned no count carries the other shape,
-  `{statement: 'examined', rows, columns?, value?, allowed}`.
+  `{statement: 'examined', rows, columns?, value?, allowed}`. A check whose statement could not run
+  because a derived relation it reads refused carries `{refusal: <code>}`, the code
+  `vat resources query` exits with for it.
 - **A killed run's report keeps every check that had already completed broken**: its entry and its
   `RESOURCE_CHECK_BROKEN` finding (message, `check`, `reason`) are the ones the completed run
-  publishes.
+  publishes, in the order a completed run publishes them — before the in-flight check's.
 - **`column` is a field of `ValidationIssue`** (and `createRegistryIssue`'s extras); the published
   finding inherits it.
 

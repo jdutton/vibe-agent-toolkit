@@ -118,6 +118,32 @@
                       {
                         "type": "object",
                         "properties": {
+                          "refusal": {
+                            "type": "string",
+                            "enum": [
+                              "USAGE_INVALID",
+                              "CONFIG_INVALID",
+                              "INPUT_UNREADABLE",
+                              "BACKEND_UNAVAILABLE",
+                              "EXTERNAL_API_FAILED",
+                              "NOT_IMPLEMENTED",
+                              "RUN_INCOMPLETE",
+                              "INTERNAL_ERROR",
+                              "RESOURCE_CHECK_BROKEN",
+                              "RESOURCE_CHECK_EXAMINED_NOTHING",
+                              "ARD_NOT_CONFIGURED",
+                              "ARD_DERIVATION_FAILED"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "refusal"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
                           "column": {
                             "type": "string",
                             "enum": [
@@ -326,6 +352,13 @@
                         "type": "boolean",
                         "const": true
                       },
+                      "nearMisses": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "minItems": 1
+                      },
                       "examinedNothing": {
                         "type": "boolean",
                         "const": true
@@ -428,21 +461,7 @@
               "type": "object",
               "properties": {
                 "code": {
-                  "type": "string",
-                  "enum": [
-                    "USAGE_INVALID",
-                    "CONFIG_INVALID",
-                    "INPUT_UNREADABLE",
-                    "BACKEND_UNAVAILABLE",
-                    "EXTERNAL_API_FAILED",
-                    "NOT_IMPLEMENTED",
-                    "RUN_INCOMPLETE",
-                    "INTERNAL_ERROR",
-                    "RESOURCE_CHECK_BROKEN",
-                    "RESOURCE_CHECK_EXAMINED_NOTHING",
-                    "ARD_NOT_CONFIGURED",
-                    "ARD_DERIVATION_FAILED"
-                  ]
+                  "$ref": "#/definitions/resources-check/anyOf/0/properties/findings/items/properties/reason/anyOf/0/properties/refusal"
                 },
                 "message": {
                   "type": "string",

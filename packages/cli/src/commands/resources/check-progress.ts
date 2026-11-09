@@ -134,6 +134,7 @@ const CheckEntrySchema = z.object({
   // 🪤 Must be declared: the strict schema DROPS an unknown line, and the check vanishes.
   examined: z.number().optional(),
   allowEmpty: z.literal(true).optional(),
+  nearMisses: z.array(z.string()).min(1).optional(),
   // 🔑 A broken check's RESOURCE_CHECK_BROKEN as published, so a killed run rebuilds it word for word.
   refusal: z.object({ message: z.string(), reason: CHECK_REFUSAL_REASON_SCHEMA.optional() }).strict().optional(),
 }).strict();

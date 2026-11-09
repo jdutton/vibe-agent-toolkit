@@ -223,16 +223,19 @@ never answered from the empty table — an empty table and a healthy tree are th
 root: pass `--base <ref>` to `vat resources query`, `vat resources check` or `vat validate`. It
 compares the working tree (staged or not) plus untracked, non-ignored files with the **merge base**
 of `<ref>` and `HEAD` — GitHub's "files changed", so a branch behind `main` never lists what `main`
-moved since. `status` is `added`, `modified`, `deleted`, `renamed`, `copied` or `type-changed`, and
-`oldPath` / `similarity` are set for a rename or copy. A rename across the project root's boundary
-is seen from inside it (in = `added`, out = `deleted`); a submodule whose commit moved is one row
-naming its directory. A statement reading it is **refused** naming the fix, with a code naming the
-fault: `USAGE_INVALID` only for a missing `--base` or a ref that names no commit;
-`BACKEND_UNAVAILABLE` when git could not run; `INPUT_UNREADABLE` when the repository cannot answer
-(no commits yet, no merge base — a shallow CI clone: fetch more history — or rename detection
-skipped). For a check it is `RESOURCE_CHECK_BROKEN` on that check only, its message naming the
-cause. `--base` is read only when a statement names `changed_files`. Scope a check to what a change
-touched:
+moved since. `status` is `added`, `modified`, `deleted`, `renamed` or `type-changed`; `oldPath` /
+`similarity` are set for a rename — a move is `renamed` whether or not you `git add`-ed it, a copy
+is `added`, and `git rm --cached` on an unchanged file is no row. A rename across the project root's
+boundary is seen from inside it (in = `added`, out = `deleted`); a nested repository or submodule is
+one row naming its directory. A statement reading it is **refused** naming the fix, with a code
+naming the fault: `USAGE_INVALID` only for a missing `--base` or a ref that names no commit;
+`BACKEND_UNAVAILABLE` when git could not run or finish; `INPUT_UNREADABLE` when the repository
+cannot answer (no commits yet; no merge base — a shallow CI clone: fetch more history; more than one
+merge base — pass one of them; a working tree git cannot snapshot; the root spelled in another case
+on a case-insensitive filesystem). The exit code does not tell these apart — the code does:
+`vat resources query` publishes it as `error.code`; for a check it is `RESOURCE_CHECK_BROKEN` on
+that check only, carrying `reason: { refusal: <code> }`. `--base` is read only when a statement
+names `changed_files`. Scope a check to what a change touched:
 
 ```sql
 SELECT c.path FROM changed_files c
@@ -352,7 +355,7 @@ evidence — rendered into the message and published as the finding's `evidence`
 
 | Column | Becomes | NULL or absent |
 |---|---|---|
-| `path` | the finding's `location` (a project-relative path; anything else is dropped) | no location |
+| `path` | the finding's `location` (a project-relative path; anything else stays in `evidence`) | no location |
 | `finding_severity` | that row's severity: `error`, `warning` or `info` | the check's declared severity |
 | `finding_line` | the finding's 1-based `line` | no line |
 | `finding_column` | the finding's 1-based `column` — requires `finding_line` | no column |
@@ -361,7 +364,8 @@ A value a reserved column cannot mean — `finding_severity` `'high'`, `'Error'`
 `finding_line` of `0` or `'3'`, a `finding_column` with no `finding_line` — fails the whole check as
 `RESOURCE_CHECK_BROKEN`, naming the row and the value; its cost record carries `broken: true`
 **with** `rows` (the statement ran, its rows could not be read). A column that matches a reserved
-name only case-insensitively (`Finding_Line`) earns one stderr warning per check and stays evidence.
+name only case-insensitively (`Finding_Line`) earns one stderr warning per check, stays evidence,
+and is listed on that check's `data.checks` entry as `nearMisses: ['Finding_Line']`.
 
 No projection table has a `finding_*` column, so `SELECT *` or a join never sets one — a table's own
 `severity`, `line` or `column` is plain evidence. Place a finding on purpose:
@@ -370,8 +374,8 @@ No projection table has a `finding_*` column, so `SELECT *` or a join never sets
 **Reading the document.** Every finding one check produced — its violations and any
 `RESOURCE_CHECK_BROKEN` / `RESOURCE_CHECK_EXAMINED_NOTHING` about it — carries `check: <name>`; a
 finding about the whole run carries none. A declared check's violation also carries `evidence`
-(the row minus the reserved columns, values as SQLite returned them; a BLOB as the message shows
-it). `vat validate`'s `checks` phase publishes the same findings unchanged.
+(the row minus the reserved columns, values as SQLite returned them; a BLOB or a non-finite number
+such as `Infinity` as the message shows it). `vat validate`'s `checks` phase publishes the same findings unchanged.
 
 An adopter's `resources.validation.severity` override on `CUSTOM:<name>` still wins over a row's
 own severity.
@@ -401,12 +405,13 @@ skills-have-owners:
 - `examined: 0` fails the run as `RESOURCE_CHECK_EXAMINED_NOTHING` (error, **not overridable**),
   naming the check; its violations are still reported. The entry then carries
   `examinedNothing: true` — present exactly when that finding is.
-- `allowEmpty: true` makes zero legitimate and is published beside `examined: 0`. Without
+- `allowEmpty: true` makes zero legitimate and is published on every entry of that check. Without
   `examined` it is refused at config load.
 - The examined statement obeys every rule `sql` does, is charged to the check's `durationSecs` and
   bounded by `--budget`; if it fails, the check is `RESOURCE_CHECK_BROKEN` and none of its rows are
   reported. Same behaviour in `vat validate`'s `checks` phase.
-- Anything but exactly one row of one column holding a non-negative integer is
+- Anything but exactly one row with one column holding a non-negative integer, as `SELECT COUNT(*)`
+  returns, is
   `RESOURCE_CHECK_BROKEN` too; the finding's `reason` is
   `{ statement: 'examined', rows, columns?, value?, allowed }`.
 - ⚠️ `examined` is OPTIONAL, so a check that declares none **can pass over an empty population** —

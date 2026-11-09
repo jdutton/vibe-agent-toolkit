@@ -22,8 +22,8 @@ import {
   buildCheckOutputData,
   buildInterruptedCheckInput,
   runProjectChecks,
-  type CheckPayloadInput,
 } from '../../src/commands/resources/check.js';
+import { CommandRefusalError } from '../../src/utils/command-refusal.js';
 import type { AskProjection } from '../../src/utils/projection-query.js';
 
 const EXAMINED_NOTHING = 'RESOURCE_CHECK_EXAMINED_NOTHING';
@@ -85,6 +85,31 @@ function findingsOf(report: CheckReport): Record<string, unknown>[] {
 function expectValid(report: CheckReport): void {
   const parsed = CHECK_REPORT_SCHEMA.safeParse(report);
   expect(parsed.success ? [] : parsed.error.issues).toStrictEqual([]);
+}
+
+/** The document a run killed by its budget publishes, rebuilt from the progress log `entries`. */
+function interruptedReport(entries: readonly ProgressEntry[]): CheckReport {
+  return buildCheckOutputData(buildInterruptedCheckInput({
+    entries,
+    root: '/corpus',
+    ending: { kind: 'budget', budgetSecs: 2, invocation: 'standalone' },
+    durationMs: 9,
+  }));
+}
+
+/** Run `checks` over `answers`, then rebuild the document from their logged entries alone. */
+function rebuiltFromLog(checks: Readonly<Record<string, ResourceCheck>>, answers: Parameters<typeof askRows>[0]): CheckReport {
+  const progress: ProgressEntry[] = [];
+  runProjectChecks({
+    builtins: [],
+    checks,
+    only: undefined,
+    ask: askRows(answers),
+    validation: undefined,
+    membersEnumerated: POPULATED.membersEnumerated,
+    onProgress: (entry) => progress.push(entry),
+  });
+  return interruptedReport([{ kind: 'population', ...POPULATED }, ...progress.filter((entry) => entry.kind === 'check')]);
 }
 
 /**
@@ -200,13 +225,7 @@ describe('examinedNothing on a check entry agrees with the refusal, in both dire
       { kind: 'check', name: 'some', durationMs: 1, rows: 0, examined: 4 },
       { kind: 'start', name: 'runaway' },
     ];
-    const input: CheckPayloadInput = buildInterruptedCheckInput({
-      entries,
-      root: '/corpus',
-      ending: { kind: 'budget', budgetSecs: 2, invocation: 'standalone' },
-      durationMs: 9,
-    });
-    const report = buildCheckOutputData(input);
+    const report = interruptedReport(entries);
 
     expect(examinedNothingPairs(report)).toStrictEqual({ pairs: [['zero', true, true], ['some', false, false]], orphans: [] });
     expectValid(report);
@@ -233,12 +252,7 @@ describe('a killed run rebuilds the check entry a completed run publishes', () =
     });
     const completed = buildCheckOutputData({ root: '/corpus', durationMs: 3, ...ran, populated: POPULATED });
     const killedAfter = progress.findIndex((entry) => entry.kind === stage);
-    const rebuilt = buildCheckOutputData(buildInterruptedCheckInput({
-      entries: [{ kind: 'population', ...POPULATED }, ...progress.slice(0, killedAfter + 1)],
-      root: '/corpus',
-      ending: { kind: 'budget', budgetSecs: 2, invocation: 'standalone' },
-      durationMs: 9,
-    }));
+    const rebuilt = interruptedReport([{ kind: 'population', ...POPULATED }, ...progress.slice(0, killedAfter + 1)]);
 
     // A kill mid-statement cannot know that statement's time; everything else must agree.
     const withoutTime = (report: CheckReport): unknown[] => (report.data?.checks ?? []).map(({ durationSecs: _t, ...entry }) => entry);
@@ -268,6 +282,79 @@ describe('a check whose rows could not be read carries the reason as structure',
   });
 });
 
+/** What `vat resources query` refuses a statement over a relation its run could not evaluate with. */
+const LENS_REFUSED = new CommandRefusalError('INPUT_UNREADABLE', 'changed_files cannot be evaluated: no commits yet');
+
+describe('a check over a relation its run could not evaluate keeps the relation\'s refusal code', () => {
+  it.each([
+    ['its violations statement', { sql: 'V' }, { V: LENS_REFUSED }],
+    ['its examined statement', { sql: 'V', examined: 'E' }, { V: [], E: LENS_REFUSED }],
+  ])('on %s', (_label, declared, answers) => {
+    const report = publish({ scoped: { description: 'd', ...declared } }, askRows(answers));
+
+    expect(findingsOf(report).map((finding) => [finding['code'], finding['reason']])).toStrictEqual([
+      [BROKEN, { refusal: 'INPUT_UNREADABLE' }],
+    ]);
+    expectValid(report);
+  });
+
+  it('and a killed run rebuilds it from the progress log', () => {
+    const rebuilt = rebuiltFromLog({ scoped: { description: 'd', sql: 'V' } }, { V: LENS_REFUSED });
+
+    expect(findingsOf(rebuilt).find((finding) => finding['check'] === 'scoped')?.['reason']).toStrictEqual({ refusal: 'INPUT_UNREADABLE' });
+    expectValid(rebuilt);
+  });
+});
+
+describe('a near miss of a reserved column is published on its check\'s entry', () => {
+  it('lists the column as the statement spelled it, beside the stderr warning', () => {
+    const warnings: string[] = [];
+    const ran = runProjectChecks({
+      builtins: [],
+      checks: { near: { description: 'd', sql: 'V' }, clean: { description: 'd', sql: 'C' } },
+      only: undefined,
+      ask: askRows({ V: [{ path: 'a.md', Finding_Line: 3 }], C: [] }),
+      validation: undefined,
+      membersEnumerated: POPULATED.membersEnumerated,
+      warn: (message) => warnings.push(message),
+    });
+    const report = buildCheckOutputData({ root: '/corpus', durationMs: 3, ...ran, populated: POPULATED });
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('"Finding_Line"');
+    // Absent, never `[]`, on a check without one.
+    expect((report.data?.checks ?? []).map((entry) => [entry.name, entry.nearMisses])).toStrictEqual([
+      ['near', ['Finding_Line']],
+      ['clean', undefined],
+    ]);
+    expect(Object.hasOwn(report.data?.checks[1] ?? {}, 'nearMisses')).toBe(false);
+    expectValid(report);
+  });
+
+  it('survives a killed run', () => {
+    const rebuilt = rebuiltFromLog({ near: { description: 'd', sql: 'V' } }, { V: [{ path: 'a.md', Finding_Line: 3 }] });
+
+    expect(rebuilt.data?.checks[0]?.nearMisses).toStrictEqual(['Finding_Line']);
+  });
+});
+
+describe('an interrupted run orders its findings as a completed run would', () => {
+  it('puts an earlier check\'s refusal before the in-flight check\'s', () => {
+    const entries: ProgressEntry[] = [
+      { kind: 'population', ...POPULATED },
+      { kind: 'start', name: 'first' },
+      { kind: 'check', name: 'first', durationMs: 1, broken: true, refusal: { message: 'The check "first" could not run' } },
+      { kind: 'start', name: 'second' },
+      { kind: 'converting', name: 'second', durationMs: 2, rows: 1 },
+    ];
+    const report = interruptedReport(entries);
+
+    expect(findingsOf(report).map((finding) => finding['check'])).toStrictEqual([undefined, 'first', 'second']);
+    // One row is "1 row".
+    expect(String(findingsOf(report)[2]?.['message'])).toContain('selected 1 row,');
+  });
+});
+
 describe('an interrupted run\'s findings', () => {
   it('names the check stopped mid-conversion, and no check on the interruption itself', () => {
     const entries: ProgressEntry[] = [
@@ -275,12 +362,7 @@ describe('an interrupted run\'s findings', () => {
       { kind: 'start', name: 'big' },
       { kind: 'converting', name: 'big', durationMs: 2, rows: 9 },
     ];
-    const report = buildCheckOutputData(buildInterruptedCheckInput({
-      entries,
-      root: '/corpus',
-      ending: { kind: 'budget', budgetSecs: 2, invocation: 'standalone' },
-      durationMs: 9,
-    }));
+    const report = interruptedReport(entries);
 
     expect(findingsOf(report).map((finding) => finding['check'])).toStrictEqual([undefined, 'big']);
     expectValid(report);

@@ -89,9 +89,9 @@
  */
 
 import { customCheckCode, SEVERITIES, SeveritySchema } from '@vibe-agent-toolkit/schema';
-import type { Severity, ValidationIssue } from '@vibe-agent-toolkit/schema';
+import type { RefusalCode, Severity, ValidationIssue } from '@vibe-agent-toolkit/schema';
 
-import type { ResourceCheck } from '../schemas/project-config.js';
+import { EXAMINED_ALLOWED, type ResourceCheck } from '../schemas/project-config.js';
 
 import { findingLocation } from './finding-location.js';
 
@@ -129,10 +129,12 @@ type ReservedCheckColumn = (typeof CHECK_FINDING_COLUMNS)[number];
 
 /**
  * One evidence value as a finding publishes it: what SQLite returned when JSON
- * can carry it, else the text the message renders it as (a BLOB). An integer
- * beyond JSON's safe range never arrives: the store throws before reading a row.
+ * can carry it, else the text the message renders it as (a BLOB, or a
+ * non-finite number — JSON writes `Infinity` as `null` and YAML as `.inf`).
+ * An integer beyond JSON's safe range never arrives: the store throws before
+ * reading a row.
  */
-export type CheckEvidenceValue = string | number | boolean | null;
+type CheckEvidenceValue = string | number | boolean | null;
 
 /**
  * A finding produced by one check: a {@link ValidationIssue} that names the
@@ -196,7 +198,7 @@ export type CheckRowConversion =
   };
 
 /** A check's uninterpretable rows as a finding states them: which column, which value, which row. */
-export interface UninterpretableRowsReason {
+interface UninterpretableRowsReason {
   readonly column: StrictCheckColumn;
   /** The value as evidence renders it. */
   readonly value: CheckEvidenceValue;
@@ -218,11 +220,17 @@ export interface ExaminedShapeReason {
   readonly allowed: string;
 }
 
-/** Why a check's own output could not be read, as its finding's `reason` states it. */
-export type CheckRefusalReason = UninterpretableRowsReason | ExaminedShapeReason;
+/**
+ * A statement that read a derived relation its run could not evaluate (`changed_files` without
+ * `--base`, say): the refusal code the relation earned — the code `vat resources query` exits
+ * with for the same statement — so the fault stays machine-readable on the check lane.
+ */
+interface RelationRefusedReason {
+  readonly refusal: RefusalCode;
+}
 
-/** What an `examined` statement must return. */
-const EXAMINED_ALLOWED = 'exactly one row with one column holding a non-negative integer, as SELECT COUNT(*) returns';
+/** Why a check's own output could not be read, or its statement could not run, as its finding's `reason` states it. */
+type CheckRefusalReason = UninterpretableRowsReason | ExaminedShapeReason | RelationRefusedReason;
 
 /**
  * Read an `examined` statement's result as the count it must be: one row, one column, a
@@ -262,7 +270,7 @@ export function examinedCount(
 export function describeUninterpretableExamined(name: string, reason: ExaminedShapeReason): string {
   let got = 'no row';
   if (reason.value !== undefined) {
-    got = `the value ${typeof reason.value === 'string' ? JSON.stringify(reason.value) : renderValue(reason.value)}`;
+    got = `the value ${shownValue(reason.value)}`;
   } else if (reason.rows > 0) {
     got = `${String(reason.rows)} row(s) of ${String(reason.columns)} column(s)`;
   }
@@ -361,7 +369,7 @@ export function checkStatements(check: ResourceCheck): string[] {
  *   "high" is not one of error | warning | info, so none of its rows were reported.`
  */
 export function describeUninterpretableRows(name: string, refusal: Extract<CheckRowConversion, { ok: false }>): string {
-  const value = typeof refusal.value === 'string' ? JSON.stringify(refusal.value) : renderValue(refusal.value);
+  const value = shownValue(evidenceValue(refusal.value));
   const noun = refusal.rowsSelected === 1 ? 'row' : 'rows';
   return `The check "${name}" ran and selected ${String(refusal.rowsSelected)} ${noun}, but row`
     + ` ${String(refusal.row)}'s ${refusal.field} = ${value} is not ${refusal.allowed}, so none of its rows were reported.`;
@@ -411,8 +419,24 @@ function isReserved(column: string): column is ReservedCheckColumn {
  * @returns The value, or its text
  */
 function evidenceValue(value: unknown): CheckEvidenceValue {
+  if (typeof value === 'number' && !Number.isFinite(value)) return renderValue(value);
   if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
   return renderValue(value);
+}
+
+/** The text a non-finite number is carried as — {@link renderValue}'s, so message and evidence agree. */
+const NON_FINITE_TEXT: ReadonlySet<string> = new Set([Infinity, -Infinity, Number.NaN].map((value) => renderValue(value)));
+
+/**
+ * One evidence value as a refusal's sentence names it: quoted when it is text, so `"3"` and `3`
+ * read differently — except a non-finite number's text, which names a number and reads bare,
+ * exactly as the row's own rendering writes it.
+ *
+ * @param value - The value as {@link evidenceValue} carries it
+ * @returns Its text in a sentence
+ */
+function shownValue(value: CheckEvidenceValue): string {
+  return typeof value === 'string' && !NON_FINITE_TEXT.has(value) ? JSON.stringify(value) : renderValue(value);
 }
 
 /** A row's strict reserved columns, read — or the first one that cannot be. */

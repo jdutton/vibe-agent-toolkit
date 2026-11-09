@@ -16,10 +16,9 @@
             "modified",
             "deleted",
             "renamed",
-            "copied",
             "type-changed"
           ],
-          "description": "What happened to it since the base. A rename or copy crossing the root's boundary is reported as seen from inside the root: renamed or copied in is \"added\", renamed out is \"deleted\", copied out is no row. An untracked file is \"added\"; git pairs only paths the index knows into a rename, so an un-added move reads as deleted + added"
+          "description": "What happened to it since the base. A move is \"renamed\" whether or not it was `git add`ed; a copy is \"added\". A rename crossing the root's boundary is reported as seen from inside the root: renamed in is \"added\", renamed out is \"deleted\". A file removed from the index but unchanged on disk is no row"
         },
         "oldPath": {
           "anyOf": [
@@ -31,7 +30,7 @@
               "type": "null"
             }
           ],
-          "description": "Where a \"renamed\" or \"copied\" file came from, relative to the project root; NULL for every other status"
+          "description": "Where a \"renamed\" file came from, relative to the project root; NULL for every other status"
         },
         "similarity": {
           "anyOf": [
@@ -44,7 +43,7 @@
               "type": "null"
             }
           ],
-          "description": "git's similarity score (0-100) for a \"renamed\" or \"copied\" file; NULL for every other status"
+          "description": "git's similarity score (0-100) for a \"renamed\" file; NULL for every other status"
         }
       },
       "required": [

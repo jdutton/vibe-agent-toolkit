@@ -174,10 +174,12 @@ export interface CheckCost {
    * a project declares a check of the same name, to tell the two entries apart.
    */
   readonly builtin?: true;
-  /** Rows the declared `examined` statement selected; absent (never 0) unless it completed. */
+  /** The count the declared `examined` statement returned; absent (never 0) unless it completed. */
   readonly examined?: number;
   /** Set when the check declares that an `examined` count of 0 is legitimate. */
   readonly allowEmpty?: true;
+  /** Selected columns that miss a reserved name only by case, as spelled; absent when none. */
+  readonly nearMisses?: string[];
 }
 
 /** What one run of the checks produced. */
@@ -365,6 +367,7 @@ export function buildCheckOutputData(input: CheckPayloadInput): CheckReport {
         ...(cost.builtin === undefined ? {} : { builtin: cost.builtin }),
         ...(cost.examined === undefined ? {} : { examined: cost.examined }),
         ...(cost.allowEmpty === undefined ? {} : { allowEmpty: cost.allowEmpty }),
+        ...(cost.nearMisses === undefined ? {} : { nearMisses: cost.nearMisses }),
         // The predicate that emits the refusal, so entry and finding cannot disagree.
         ...(examinedNothing(cost) ? { examinedNothing: true as const } : {}),
       })),
@@ -512,10 +515,19 @@ function timed<T>(now: () => number, run: () => T): Timed<T> {
  * @returns The run-integrity finding
  */
 function brokenCheckFinding(name: string, error: unknown): CheckIssue {
-  return ofCheck(name, runIntegrityFinding(
+  return withRelationRefusal(ofCheck(name, runIntegrityFinding(
     `The check "${name}" could not run, so it is asserting nothing: `
     + (error instanceof Error ? error.message : String(error)),
-  ));
+  )), error);
+}
+
+/**
+ * A broken finding whose statement read a derived relation the run could not evaluate, carrying
+ * that relation's refusal code as `reason.refusal` — what `vat resources query` exits with for the
+ * same statement — so the fault is machine-readable here too, and not only in the message.
+ */
+function withRelationRefusal(issue: CheckIssue, error: unknown): CheckIssue {
+  return error instanceof CommandRefusalError ? { ...issue, reason: { refusal: error.refusal } } : issue;
 }
 
 /** A finding about one check, naming it. A finding about the whole RUN carries no `check`. */
@@ -530,11 +542,11 @@ function uninterpretableRowsFinding(name: string, refusal: Extract<CheckRowConve
 
 /** A check whose `examined` statement would not run: `RESOURCE_CHECK_BROKEN`, worded apart. */
 function brokenExaminedFinding(name: string, error: unknown): CheckIssue {
-  return ofCheck(name, runIntegrityFinding(
+  return withRelationRefusal(ofCheck(name, runIntegrityFinding(
     `The check "${name}" ran its violations statement, but its examined statement could not run, so`
     + ' nothing says what it ranged over and none of its rows were reported: '
     + (error instanceof Error ? error.message : String(error)),
-  ));
+  )), error);
 }
 
 /** A check whose `examined` statement returned something other than one count: `RESOURCE_CHECK_BROKEN`. */
@@ -560,7 +572,7 @@ const EXAMINED_NOTHING_CODE = 'RESOURCE_CHECK_EXAMINED_NOTHING' satisfies Refusa
 function examinedNothingFinding(name: string): CheckIssue {
   return ofCheck(name, createRegistryIssue(
     EXAMINED_NOTHING_CODE,
-    `The check "${name}" declares what it examined, and its examined statement selected 0 rows, so`
+    `The check "${name}" declares what it examined, and its examined statement counted 0, so`
       + ' its pass asserts nothing. Fix the `examined` statement or the population it reads; if zero is'
       + ' a legitimate answer for this check, declare `allowEmpty: true` on it.',
   ));
@@ -781,7 +793,9 @@ function runUnit(unit: CheckUnit, now: () => number, sinks: UnitSinks): UnitResu
     const cost = { name, durationMs, rows, broken: true as const, ...counted, ...origin };
     return { cost, refusal: uninterpretableRowsFinding(name, converted), issues: [] };
   }
-  const cost = { name, durationMs, rows, ...counted, ...origin };
+  // The same value the stderr warning is worded from, so the document and stderr cannot disagree.
+  const nearMisses = converted.nearMisses.length === 0 ? {} : { nearMisses: converted.nearMisses.map(({ column }) => column) };
+  const cost = { name, durationMs, rows, ...counted, ...origin, ...nearMisses };
   return {
     cost,
     ...(examinedNothing(cost) ? { refusal: examinedNothingFinding(name) } : {}),
@@ -1541,7 +1555,8 @@ function stoppedMidCheck(
       ...(line.allowEmpty === undefined ? {} : { allowEmpty: line.allowEmpty }),
     },
     finding: ofCheck(line.name, runIntegrityFinding(
-      `The check "${line.name}" ran and selected ${String(line.rows)} rows, but the run stopped while ${stopped}`,
+      `The check "${line.name}" ran and selected ${String(line.rows)} ${line.rows === 1 ? 'row' : 'rows'}, but the run`
+        + ` stopped while ${stopped}`,
     )),
   };
 }
@@ -1598,6 +1613,7 @@ export function buildInterruptedCheckInput(options: {
     ...(entry.builtin === undefined ? {} : { builtin: entry.builtin }),
     ...(entry.examined === undefined ? {} : { examined: entry.examined }),
     ...(entry.allowEmpty === undefined ? {} : { allowEmpty: entry.allowEmpty }),
+    ...(entry.nearMisses === undefined ? {} : { nearMisses: entry.nearMisses }),
   }));
   const inFlight = unitInFlight(entries);
   const stopped = stoppedMidCheck(entries, inFlight);
@@ -1622,10 +1638,11 @@ export function buildInterruptedCheckInput(options: {
         lensesEvaluated: population.lensesEvaluated,
         membersEnumerated: population.membersEnumerated,
       },
+    // Earlier checks' refusals before the in-flight check's, as a completed run files them.
     issues: [
       interruptedRunFinding(inFlight, ending, completed.length),
-      ...(stopped === undefined ? [] : [stopped.finding]),
       ...refused,
+      ...(stopped === undefined ? [] : [stopped.finding]),
     ],
     costs,
   };

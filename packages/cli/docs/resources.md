@@ -260,24 +260,29 @@ behind RFC-3986-compliant leading-`/` resolution.
 |---|---|---|
 | `edges`, `edge_resolutions`, `lens_contexts` | the resolved link graph | — |
 | `claude_context_chains`, `claude_context_loads` | what Claude Code loads at each working location | — |
-| `changed_files` | `path`, `status` (`added` \| `modified` \| `deleted` \| `renamed` \| `copied` \| `type-changed`), `oldPath`, `similarity` | `--base <ref>` |
+| `changed_files` | `path`, `status` (`added` \| `modified` \| `deleted` \| `renamed` \| `type-changed`), `oldPath`, `similarity` | `--base <ref>` |
 
 `changed_files` lists what THIS CHANGE touched: the working tree (staged or not) plus untracked,
-non-ignored files, compared with the merge base of `--base` and `HEAD` (`git merge-base <ref>
-HEAD`) — GitHub's "files changed", so a branch behind its base never lists what the base moved
-since. Paths are kept under the project root, relative to it. A rename or copy across the root's
-boundary is seen from inside: renamed or copied in is `added`, renamed out is `deleted`. git pairs
-only paths the index knows into a rename, so a move not yet `git add`ed reads as deleted plus
-added; a file removed from the index but kept on disk (`git rm --cached`) is one `modified` row.
-An untracked nested repository is not listed (its files are its own); a submodule is listed only
-when its commit moved, as one row naming its directory. A statement reading it is refused with the
-fix — never answered with an empty relation — and the refusal says whose fault it is:
-`USAGE_INVALID` without `--base` or with a ref that names no commit; `BACKEND_UNAVAILABLE` when git
-did not run (not on PATH, timed out); `INPUT_UNREADABLE` when the tree cannot answer — outside a
-git working tree, no commits yet, no merge base (a shallow clone: fetch more history), a root whose
-case differs from the one git lists it under, a path that is not UTF-8, or a diff git cut rename
-detection short on. All exit 2. `--base` is read only when a statement names `changed_files`;
-otherwise it is accepted and unused.
+non-ignored files, snapshotted as one git tree (the snapshot the projection itself takes) and
+diffed once against the merge base of `--base` and `HEAD` (`git merge-base --all <ref> HEAD`) —
+GitHub's "files changed", so a branch behind its base never lists what the base moved since. Paths
+are kept under the project root, relative to it. Because both sides of every move are in the
+snapshot, a move is `renamed` whether or not it was `git add`ed; a copy is `added`; a file removed
+from the index but unchanged on disk (`git rm --cached`) is no row. A rename across the root's
+boundary is seen from inside: renamed in is `added`, renamed out is `deleted`. A submodule, or a
+nested repository with a commit, is one row naming its directory, listed when the commit it records
+moved; its files are its own. A statement reading it is refused with the fix — never answered with
+an empty relation — and the refusal code says whose fault it is: `USAGE_INVALID` without `--base`
+or with a ref that names no commit; `BACKEND_UNAVAILABLE` when git did not finish (not on PATH, out
+of time, more output than VAT reads — compare against a nearer base); `INPUT_UNREADABLE` when the
+tree cannot answer — outside a git working tree, no commits yet, no merge base (a shallow clone:
+fetch more history), several merge bases (a criss-cross history: pass one of them), a tree git
+cannot snapshot, a path under the root that git spells in another case on either side of the diff,
+or a path that is not UTF-8. The exit code does not tell these apart — the code does: `vat
+resources query` exits 2 with it as `error.code`; `vat resources check` and `vat validate` report
+`RESOURCE_CHECK_BROKEN` (exit 1) on the checks that read it, with it as the finding's
+`reason.refusal`. `--base` is read only when a statement names `changed_files`; otherwise it is
+accepted and unused.
 
 **Output:** the shared report envelope on stdout — YAML, or JSON with
 `--format json` (schema: `packages/cli/schemas/resources-query.json`):
@@ -328,18 +333,22 @@ each finding also as a `location:line: severity: message [code]` line on stderr.
   `RESOURCE_CHECK_EXAMINED_NOTHING` about it — carries `check: <name>`. A finding about the whole
   run (an empty corpus, no check ran, an interrupted run) carries none.
 - A declared check's violation carries `evidence`: the row's columns other than the reserved ones,
-  in the order SQLite returned them, values as SQLite returned them (a BLOB as the text the message
-  shows). A `path` that could not become the `location` (absolute, NULL, not text) stays in
-  `evidence`.
+  in the order SQLite returned them, values as SQLite returned them (a BLOB, or a non-finite number
+  such as `Infinity`, as the text the message shows — so JSON and YAML agree). A `path` that could
+  not become the `location` (absolute, NULL, not text) stays in `evidence`.
 - A check whose rows could not be read carries `reason` on its `RESOURCE_CHECK_BROKEN` finding:
   `{column, value, row, allowed}` — the reserved column, its value as `evidence` renders it, the
   first bad row (1-based), and what the column may hold. One whose `examined` statement returned no
   count carries `{statement: "examined", rows, columns?, value?, allowed}` (below). A statement that
-  failed carries none.
-- ⚠️ The published JSON Schema cannot state two rules VAT enforces when it builds the document:
+  failed carries none — unless it read a derived relation that refused (`changed_files` without
+  `--base`, say): then `{refusal: <code>}`, the code `vat resources query` exits with for it.
+- ⚠️ The JSON Schema generator cannot express two rules, so the published schema omits them:
   `evidence` only on a finding that names its `check`, and `reason` only on `RESOURCE_CHECK_BROKEN`.
+  Both hold by construction — only the check's own finding builders set those keys — and the
+  document is not re-parsed against the schema at run time.
 - `data.checks[]` — one entry per check that ran: `name`, `durationSecs`, `rows`, and `broken`,
-  `builtin`, `examined`, `allowEmpty` and `examinedNothing: true` when they apply (below).
+  `builtin`, `examined`, `allowEmpty`, `examinedNothing: true` and `nearMisses` when they apply
+  (below).
 
 **Exit Codes:** `0` no error-severity check violated, `1` one was (or nothing was checked:
 `RESOURCE_CHECK_BROKEN`), `2` the run could not do its job.
@@ -358,7 +367,9 @@ the message and in the finding's `evidence`:
 Any other value in a reserved column fails the check as `RESOURCE_CHECK_BROKEN` — "ran and selected
 N rows, but row R's finding_severity = "high" is not one of error | warning | info" — and its entry in
 `data.checks` carries `broken: true` with `rows`. A column that matches a reserved name only
-case-insensitively (`Finding_Line`) gets one stderr warning per check and stays evidence.
+case-insensitively (`Finding_Line`) gets one stderr warning per check, stays evidence, and is listed
+as the statement spelled it in that check's `data.checks` entry as `nearMisses: ["Finding_Line"]`
+(absent when there is none).
 
 No projection relation has a column named `finding_severity`, `finding_line` or `finding_column`,
 so `SELECT *` or a join never sets one: a table's own `severity`, `line` or `column` is evidence.
@@ -395,8 +406,8 @@ resources:
   naming the check in its `check`; the check's own violations are still reported beside it. The
   check's entry then carries `examinedNothing: true` — present exactly when that finding is, so
   `jq '.data.checks[] | select(.examinedNothing)'` lists the same checks the findings name.
-- `allowEmpty: true` declares that zero is legitimate: no finding, and the entry publishes
-  `examined: 0` beside `allowEmpty: true`, so the exemption is visible in every report.
+- `allowEmpty: true` declares that zero is legitimate: no finding, and every entry of that check
+  publishes `allowEmpty: true` whatever it counted, so the exemption is visible in every report.
   `allowEmpty` without `examined` is refused when the config loads.
 - The examined statement follows every rule `sql` does, names derived relations the same way, is
   timed into the check's `durationSecs`, and is bounded by `--budget` like any statement. If it

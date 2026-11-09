@@ -201,7 +201,7 @@ These return **OS-native** separators, because they resolve real filesystem iden
 
 - `gitFindRoot()` - find the repository root from a starting directory
 - `gitLsFiles()` - enumerate tracked files
-- `gitChangedFiles()` - the files under a root that this change touched: the working tree plus untracked, non-ignored files compared with the merge base of a base ref and HEAD, each with its change kind and rename source; paths read as bytes, a non-UTF-8 path refused
+- `gitChangedFiles()` - the files under a root that this change touched: one `git diff-tree` from the merge base of a base ref and HEAD to the working-tree snapshot (`gitTreeSnapshot`, untracked non-ignored files included), each with its change kind and rename source; paths read as bytes, a non-UTF-8 path refused; more than one merge base, or (case-insensitive git) a changed path spelling the root in another case, refused
 - `isGitIgnored()` - check whether a path is gitignored (outside a repository it answers from the filesystem, spawning nothing)
 - `loadGitignoreRules()` - load a repository's ignore rules
 - `GitTracker` - cached tracked-file lookups for repeated checks

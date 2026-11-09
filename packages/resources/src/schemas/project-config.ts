@@ -180,6 +180,13 @@ export type CollectionConfig = z.infer<typeof CollectionConfigSchema>;
  *
  * See `projection/sql-checks.ts` for how rows become findings.
  */
+/**
+ * What a check's `examined` statement must return — the ONE statement of that contract. The
+ * config description, the `allowEmpty` refusal, the runtime refusal's `reason.allowed` and the
+ * CLI's help all quote it, so a change to the contract is a change to this line.
+ */
+export const EXAMINED_ALLOWED = 'exactly one row with one column holding a non-negative integer, as SELECT COUNT(*) returns';
+
 export const ResourceCheckSchema = z.object({
   description: z.string().min(1)
     .describe('What this check asserts, in the author\'s own words. REQUIRED: it becomes the finding\'s message, and a check whose intent is only inferable from its SQL is one nobody can review or act on.'),
@@ -189,7 +196,7 @@ export const ResourceCheckSchema = z.object({
     .optional()
     .describe('How a violation is reported. Defaults to `error` — the safe direction, since a check whose author did not think about severity is still an assertion they wanted enforced. An adopter can override it per code through resources.validation.severity, including to `ignore`.'),
   examined: z.string().min(1).optional()
-    .describe('A second read-only SQL statement over the same projection that returns ONE count — exactly one row with one column holding a non-negative integer — of what this check ranged over, e.g. `SELECT COUNT(*) FROM resource_realizations WHERE path LIKE \'skills/%\'` for a check about skills. Any other result (no row, several rows or columns, a value that is not a non-negative integer) is RESOURCE_CHECK_BROKEN with a `reason` naming what came back. The violations statement cannot reveal its own denominator: zero violations over a thousand files and zero violations over nothing are the same answer. Declared, the count is published on the check\'s `checks[]` entry as `examined`, and a count of 0 is refused as RESOURCE_CHECK_EXAMINED_NOTHING (error, not overridable) unless `allowEmpty: true`. Held to every rule `sql` is (it must begin with SELECT, WITH or VALUES; one statement), timed and charged to this check, and a failure to run it is RESOURCE_CHECK_BROKEN.'),
+    .describe(`A second read-only SQL statement over the same projection that returns ONE count — ${EXAMINED_ALLOWED} — of what this check ranged over, e.g. \`SELECT COUNT(*) FROM resource_realizations WHERE path LIKE 'skills/%'\` for a check about skills. Any other result is RESOURCE_CHECK_BROKEN with a \`reason\` naming what came back. The violations statement cannot reveal its own denominator: zero violations over a thousand files and zero violations over nothing are the same answer. Declared, the count is published on the check's \`checks[]\` entry as \`examined\`, and a count of 0 is refused as RESOURCE_CHECK_EXAMINED_NOTHING (error, not overridable) unless \`allowEmpty: true\`. Held to every rule \`sql\` is (it must begin with SELECT, WITH or VALUES; one statement), timed and charged to this check, and a failure to run it is RESOURCE_CHECK_BROKEN.`),
   allowEmpty: z.literal(true).optional()
     .describe('Declare that an `examined` count of 0 is a legitimate answer for this check — a rule about a directory that may not exist yet. The run then passes over zero and publishes `examined: 0` beside `allowEmpty: true`, so the exemption is visible in every report. Only valid with `examined`: without one there is no count for it to excuse, and the config is refused.'),
 }).strict().superRefine((check, context) => {
@@ -201,7 +208,8 @@ export const ResourceCheckSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ['allowEmpty'],
       message: '`allowEmpty` only excuses an `examined` count of 0, and this check declares no `examined` statement.'
-        + ' Either declare `examined` (a SELECT whose row count is what the check ranges over) or remove `allowEmpty`.',
+        + ` Either declare \`examined\` (a statement returning ${EXAMINED_ALLOWED}: the count of what the check`
+        + ' ranges over) or remove `allowEmpty`.',
     });
   }
 }).describe('A SQL assertion over the resource projection');

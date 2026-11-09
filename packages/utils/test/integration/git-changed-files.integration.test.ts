@@ -1,6 +1,7 @@
 /**
- * `gitChangedFiles` against a real repository: the merge base of the ref and HEAD against the
- * working tree, plus untracked files, restricted to a root that is a SUBDIRECTORY of the repository.
+ * `gitChangedFiles` against a real repository: the merge base of the ref and HEAD against one
+ * snapshot of the working tree (untracked files included), restricted to a root that is a
+ * SUBDIRECTORY of the repository.
  *
  * HOME, XDG_CONFIG_HOME and CLAUDE_CONFIG_DIR point into the scratch directory, so the operator's
  * global git config (a `diff.renames = copies`, a `diff.relative`, a hooks path) cannot change
@@ -11,7 +12,7 @@ import { renameSync, rmSync, writeFileSync } from 'node:fs';
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { gitChangedFiles, prefixSpellingRefusal } from '../../src/git-changed-files.js';
+import { gitChangedFiles } from '../../src/git-changed-files.js';
 import { runGit, runGitOrThrow } from '../../src/git-run.js';
 import { mkdirSyncReal, safePath } from '../../src/path-utils.js';
 import { tmpdirFoldsCase } from '../../src/testing/platform-gates.js';
@@ -90,10 +91,12 @@ describe('gitChangedFiles', () => {
     put(repo, 'site/untracked.md', 'untracked\n');
     put(repo, 'site/.gitignore', 'ignored.md\n');
     put(repo, 'site/ignored.md', 'ignored\n');
-    // A nested repository's contents are its own files, not this tree's.
-    mkdirSyncReal(safePath.join(repo, 'site/nested'));
-    runGitOrThrow(['init', '-q'], { cwd: safePath.join(repo, 'site/nested') });
-    put(repo, 'site/nested/inner.md', 'inner\n');
+    // A nested repository's contents are its own files, not this tree's: it is one gitlink row.
+    const nested = safePath.join(repo, 'site/nested');
+    mkdirSyncReal(nested);
+    runGitOrThrow(['init', '-q', '-b', 'main'], { cwd: nested });
+    put(nested, 'inner.md', 'inner\n');
+    commitAll(nested, 'nested');
 
     const result = gitChangedFiles({ root: safePath.join(repo, 'site'), base: 'HEAD' });
 
@@ -107,9 +110,9 @@ describe('gitChangedFiles', () => {
         { path: 'late.md', status: 'modified', oldPath: null, similarity: null },
         // Renamed OUT of the root: a deletion, seen from inside it.
         { path: 'leaving.md', status: 'deleted', oldPath: null, similarity: null },
-        // Moved without `git add`: git pairs only paths the index knows, so deleted + added.
-        { path: 'moved-to.md', status: 'added', oldPath: null, similarity: null },
-        { path: 'moved.md', status: 'deleted', oldPath: null, similarity: null },
+        // Moved without `git add`: the snapshot holds both sides, so git pairs them.
+        { path: 'moved-to.md', status: 'renamed', oldPath: 'moved.md', similarity: 100 },
+        { path: 'nested', status: 'added', oldPath: null, similarity: null },
         { path: 'new.md', status: 'renamed', oldPath: 'old.md', similarity: 100 },
         { path: 'staged.md', status: 'added', oldPath: null, similarity: null },
         { path: 'untracked.md', status: 'added', oldPath: null, similarity: null },
@@ -212,21 +215,69 @@ describe('gitChangedFiles', () => {
     );
   });
 
-  // macOS git reports the on-disk spelling, so the guard is driven directly with the typed one.
-  it.skipIf(!tmpdirFoldsCase())('refuses a prefix spelled otherwise than the UNTRACKED files under it', () => {
-    put(repo, 'drafts/new.md', 'untracked only\n');
+  // Skipped where the filesystem is case-sensitive: there `Docs` and `docs` are two directories.
+  it.skipIf(!tmpdirFoldsCase())('refuses when the BASE spells the root in another case, naming both spellings', () => {
+    put(repo, 'Docs/a.md', `Docs/a.md\n${BODY}`);
+    put(repo, 'Docs/b.md', `Docs/b.md\n${BODY}`);
+    commitAll(repo, 'docs, capitalised');
+    const capitalised = runGitOrThrow(['rev-parse', 'HEAD'], { cwd: repo });
+    runGitOrThrow(['mv', 'Docs', 'tmp-case'], { cwd: repo });
+    runGitOrThrow(['mv', 'tmp-case', 'docs'], { cwd: repo });
+    rmSync(safePath.join(repo, 'docs/b.md'));
+    commitAll(repo, 'docs, lower case, one file fewer');
 
-    expect(prefixSpellingRefusal(repo, Buffer.from('DRAFTS/', 'utf8'))).toMatchObject({
-      ok: false,
-      kind: 'repository',
-      reason: expect.stringMatching(/"DRAFTS\/".*"drafts\/"/s),
-    });
+    const result = gitChangedFiles({ root: safePath.join(repo, 'docs'), base: capitalised });
+
+    expect(result).toMatchObject({ ok: false, kind: 'repository' });
+    expect(result.ok ? '' : result.reason).toMatch(/"docs\/".*"Docs\/"/s);
   });
 
-  it('reads a file removed from the index but kept on disk (git rm --cached) as one modified row', () => {
+  it('reports no row for a file removed from the index but unchanged on disk (git rm --cached)', () => {
     runGitOrThrow(['rm', '-q', '--cached', 'site/keep.md'], { cwd: repo });
 
-    expect(keysOf(gitChangedFiles({ root: repo, base: 'HEAD' }))).toStrictEqual(['site/keep.md:modified']);
+    expect(keysOf(gitChangedFiles({ root: repo, base: 'HEAD' }))).toStrictEqual([]);
+  });
+
+  it('reads a staged move whose source was recreated by its own content: the source per content, the target added', () => {
+    runGitOrThrow(['mv', 'site/keep.md', 'site/kept.md'], { cwd: repo });
+    put(repo, 'site/keep.md', 'a different file at the old name\n');
+
+    expect(keysOf(gitChangedFiles({ root: repo, base: 'HEAD' }))).toStrictEqual([
+      'site/keep.md:modified',
+      'site/kept.md:added',
+    ]);
+  });
+
+  it('refuses a base with more than one merge base with HEAD, naming the fix', () => {
+    runGitOrThrow(['switch', '-q', '-c', 'left'], { cwd: repo });
+    put(repo, 'left.md', 'left\n');
+    commitAll(repo, 'left');
+    runGitOrThrow(['switch', '-q', '-c', 'right', 'main'], { cwd: repo });
+    put(repo, 'right.md', 'right\n');
+    commitAll(repo, 'right');
+    const right = runGitOrThrow(['rev-parse', 'HEAD'], { cwd: repo });
+    // Criss-cross: each side merges the other's tip as it stood before either merge.
+    runGitOrThrow([...COMMIT_CONFIG, 'merge', '-q', '--no-edit', 'left'], { cwd: repo });
+    runGitOrThrow(['switch', '-q', 'left'], { cwd: repo });
+    runGitOrThrow([...COMMIT_CONFIG, 'merge', '-q', '--no-edit', right], { cwd: repo });
+
+    const result = gitChangedFiles({ root: repo, base: 'right' });
+
+    expect(result).toMatchObject({ ok: false, kind: 'repository' });
+    expect(result.ok ? '' : result.reason).toMatch(/"right" has 2 merge bases with HEAD.*Pass one of them/s);
+  });
+
+  it('refuses a tree git cannot snapshot, saying why', () => {
+    // `git add --all` refuses a nested repository with no commit checked out.
+    mkdirSyncReal(safePath.join(repo, 'site/empty-nested'));
+    runGitOrThrow(['init', '-q'], { cwd: safePath.join(repo, 'site/empty-nested') });
+    put(repo, 'site/empty-nested/x.md', 'x\n');
+
+    expect(gitChangedFiles({ root: repo, base: 'HEAD' })).toMatchObject({
+      ok: false,
+      kind: 'repository',
+      reason: expect.stringMatching(/could not snapshot.*git add --all --dry-run/s),
+    });
   });
 
   it('refuses a repository with no commits yet, saying so', () => {

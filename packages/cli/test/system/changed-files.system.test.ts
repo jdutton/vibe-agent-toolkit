@@ -8,7 +8,10 @@
  * compared with `main`'s tip instead of the merge base would list `docs/main-only.md` too.
  */
 
+import { delimiter } from 'node:path';
+
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
@@ -173,6 +176,7 @@ describe('changed_files and --base, end to end', () => {
       const broken = brokenFindings(run);
       expect(broken.map((finding) => finding['check'])).toStrictEqual(['changed-docs']);
       expect(String(broken[0]?.['message'])).toContain(NO_BASE_FIX);
+      expect(broken[0]?.['reason']).toStrictEqual({ refusal: 'USAGE_INVALID' });
       // A refused lens produced no relation, so it is not reported as evaluated.
       expect(run.data['lensesEvaluated']).not.toContain('changed-files');
     });
@@ -184,8 +188,31 @@ describe('changed_files and --base, end to end', () => {
       const run = vat(unborn, ['resources', 'check', '--base', 'main', '--format', 'json'], env);
 
       expect(run.status).toBe(1);
-      expect(brokenFindings(run).map((finding) => [finding['check'], finding['message']])).toStrictEqual([
-        ['changed-docs', expect.stringContaining('no commits yet')],
+      expect(brokenFindings(run).map((finding) => [finding['check'], finding['message'], finding['reason']])).toStrictEqual([
+        ['changed-docs', expect.stringContaining('no commits yet'), { refusal: 'INPUT_UNREADABLE' }],
+      ]);
+    });
+
+    // A `git` ahead of the real one on PATH whose `merge-base` writes more than VAT reads: git did
+    // not run to completion, which only the code — not the exit status — tells apart.
+    it.skipIf(process.platform === 'win32')('carries BACKEND_UNAVAILABLE when git could not finish', () => {
+      writeChecks(branchDir, CHANGED_DOCS_CHECK);
+      const shim = safePath.join(base, 'overrunning-git');
+      fs.mkdirSync(shim, { recursive: true });
+      fs.writeFileSync(
+        safePath.join(shim, 'git'),
+        `#!/bin/sh\ncase " $* " in *" merge-base "*) head -c 70000000 /dev/zero; exit 0;; esac\nexec "${gitExecutable()}" "$@"\n`,
+        { encoding: 'utf-8', mode: 0o755 },
+      );
+
+      const run = vat(branchDir, ['resources', 'check', '--base', 'main', '--format', 'json'], {
+        ...env,
+        PATH: `${shim}${delimiter}${process.env['PATH'] ?? ''}`,
+      });
+
+      expect(run.status).toBe(1);
+      expect(brokenFindings(run).map((finding) => [finding['check'], finding['message'], finding['reason']])).toStrictEqual([
+        ['changed-docs', expect.stringContaining('nearer base'), { refusal: 'BACKEND_UNAVAILABLE' }],
       ]);
     });
 

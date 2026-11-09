@@ -142,6 +142,9 @@ describe('a check that declares what it examined', () => {
     ]);
     expect(issues[0]?.message).toContain(`"${NAME}"`);
     expect(issues[0]?.message).toContain('allowEmpty: true');
+    // 🔑 The statement returns ONE count, so it "counted 0" — it never "selected 0 rows".
+    expect(issues[0]?.message).toContain('its examined statement counted 0');
+    expect(issues[0]?.message).not.toMatch(/selected 0/);
     expect(exitCodeForReport(report)).toBe(ExitCode.FINDINGS);
   });
 

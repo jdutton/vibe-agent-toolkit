@@ -139,8 +139,10 @@ Description:
 
   --base <ref> reaches the checks phase only: a check reading changed_files
   compares the tree with the merge base of <ref> and HEAD, and without it
-  that check fails as RESOURCE_CHECK_BROKEN (exit 1) naming the fix. No
-  other check reads it.
+  that check fails as RESOURCE_CHECK_BROKEN (exit 1) naming the fix. The
+  exit code does not tell the faults apart; the finding's reason.refusal
+  does (USAGE_INVALID, BACKEND_UNAVAILABLE, INPUT_UNREADABLE). No other
+  check reads it.
 
 Output:
   ONE report envelope (YAML) → stdout: status (ok | findings | error),

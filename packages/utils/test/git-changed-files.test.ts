@@ -1,12 +1,19 @@
 /**
- * The pure half of `gitChangedFiles`: reading `git diff --name-status -z` as bytes, and keeping
- * only what lies under the project root, relative to it. The git wiring is one integration test
+ * The pure half of `gitChangedFiles`: reading `git diff-tree --name-status -z` as bytes, keeping
+ * only what lies under the project root, relative to it, refusing a root git spells in another
+ * case, and wording a git that did not finish. The git wiring is one integration test
  * (`test/integration/git-changed-files.integration.test.ts`).
  */
 
 import { describe, expect, it } from 'vitest';
 
-import { changedFilesUnderPrefix, parseNameStatusZ, renameDetectionRefusal } from '../src/git-changed-files.js';
+import {
+  caseSpellingRefusal,
+  changedFilesUnderPrefix,
+  gitDidNotRun,
+  mergeBaseOf,
+  parseNameStatusZ,
+} from '../src/git-changed-files.js';
 
 /** A NUL-separated record stream, as `-z` writes it. */
 function z(...fields: readonly (string | Uint8Array)[]): Buffer {
@@ -22,14 +29,13 @@ function text(bytes: Uint8Array | null): string | null {
 }
 
 describe('parseNameStatusZ', () => {
-  it('reads every status letter, with the rename and copy source and score', () => {
+  it('reads every status letter, with the rename source and score', () => {
     const records = parseNameStatusZ(z(
       'A', 'new.md',
       'M', 'docs/edited.md',
       'D', 'gone.md',
       'T', 'link.md',
       'R087', 'old name.md', 'new name.md',
-      'C100', 'src.md', 'copy.md',
     ));
 
     expect(records.map((record) => ({ ...record, path: text(record.path), oldPath: text(record.oldPath) }))).toStrictEqual([
@@ -38,12 +44,7 @@ describe('parseNameStatusZ', () => {
       { status: 'deleted', path: 'gone.md', oldPath: null, similarity: null },
       { status: 'type-changed', path: 'link.md', oldPath: null, similarity: null },
       { status: 'renamed', path: 'new name.md', oldPath: 'old name.md', similarity: 87 },
-      { status: 'copied', path: 'copy.md', oldPath: 'src.md', similarity: 100 },
     ]);
-  });
-
-  it('reads an unmerged path as modified: the working tree holds a different file than the base', () => {
-    expect(parseNameStatusZ(z('U', 'conflicted.md')).map((record) => record.status)).toStrictEqual(['modified']);
   });
 
   it('keeps a path byte for byte, a leading space and bytes that are not UTF-8 included', () => {
@@ -64,18 +65,17 @@ describe('parseNameStatusZ', () => {
     ['a record missing its path', z('M')],
     ['a listing that does not end in NUL', Buffer.from('M\0a.md', 'utf8')],
     ['a rename with no score', z('R', 'a.md', 'b.md')],
+    // Copies are never asked for (no -C), and a tree-to-tree diff has no unmerged path.
+    ['a copy', z('C100', 'src.md', 'copy.md')],
+    ['an unmerged path', z('U', 'conflicted.md')],
   ])('refuses %s rather than guessing', (_what, listing) => {
-    expect(() => parseNameStatusZ(listing)).toThrow(/name-status/);
+    expect(() => parseNameStatusZ(listing)).toThrow(/git diff-tree --name-status -z/);
   });
 });
 
-/** The rows for a listing and an untracked list, under the root `site/`. */
-function under(listing: Buffer, untracked: readonly string[] = []): ReturnType<typeof changedFilesUnderPrefix> {
-  return changedFilesUnderPrefix(
-    parseNameStatusZ(listing),
-    untracked.map((path) => Buffer.from(path, 'utf8')),
-    Buffer.from('site/', 'utf8'),
-  );
+/** The rows for a listing under the root `site/`. */
+function under(listing: Buffer): ReturnType<typeof changedFilesUnderPrefix> {
+  return changedFilesUnderPrefix(parseNameStatusZ(listing), Buffer.from('site/', 'utf8'));
 }
 
 describe('changedFilesUnderPrefix', () => {
@@ -83,13 +83,6 @@ describe('changedFilesUnderPrefix', () => {
     expect(under(z('M', 'site/a.md', 'M', 'other/b.md', 'M', 'sitemap.md'))).toStrictEqual({
       ok: true,
       files: [{ path: 'a.md', status: 'modified', oldPath: null, similarity: null }],
-    });
-  });
-
-  it('adds every untracked path as added', () => {
-    expect(under(z(), ['site/draft.md'])).toStrictEqual({
-      ok: true,
-      files: [{ path: 'draft.md', status: 'added', oldPath: null, similarity: null }],
     });
   });
 
@@ -110,15 +103,8 @@ describe('changedFilesUnderPrefix', () => {
     });
   });
 
-  it('reads a copy from outside the root as an addition, and drops a copy that leaves it', () => {
-    expect(under(z('C100', 'elsewhere/src.md', 'site/copy.md', 'C100', 'site/src.md', 'elsewhere/copy.md'))).toStrictEqual({
-      ok: true,
-      files: [{ path: 'copy.md', status: 'added', oldPath: null, similarity: null }],
-    });
-  });
-
   it('keeps everything at the repository root when the prefix is empty, sorted by path', () => {
-    expect(changedFilesUnderPrefix(parseNameStatusZ(z('M', 'z.md', 'D', 'a/b.md')), [], Buffer.alloc(0))).toStrictEqual({
+    expect(changedFilesUnderPrefix(parseNameStatusZ(z('M', 'z.md', 'D', 'a/b.md')), Buffer.alloc(0))).toStrictEqual({
       ok: true,
       files: [
         { path: 'a/b.md', status: 'deleted', oldPath: null, similarity: null },
@@ -134,47 +120,69 @@ describe('changedFilesUnderPrefix', () => {
     expect(result.ok ? '' : result.reason).toContain(String.raw`\xff`);
   });
 
-  it('drops an untracked nested repository, which git lists as its directory', () => {
-    expect(under(z(), ['site/nested/', 'site/draft.md'])).toStrictEqual({
-      ok: true,
-      files: [{ path: 'draft.md', status: 'added', oldPath: null, similarity: null }],
-    });
-  });
-
-  it('reports a path git lists twice with one kind once, so (path, status) stays a key', () => {
-    expect(under(z('U', 'site/conflicted.md', 'M', 'site/conflicted.md'))).toStrictEqual({
-      ok: true,
-      files: [{ path: 'conflicted.md', status: 'modified', oldPath: null, similarity: null }],
-    });
-  });
-
-  it('reads a path deleted from the index but kept on disk (git rm --cached) as ONE modified row', () => {
-    expect(under(z('D', 'site/kept.md'), ['site/kept.md'])).toStrictEqual({
-      ok: true,
-      files: [{ path: 'kept.md', status: 'modified', oldPath: null, similarity: null }],
-    });
-  });
-
   it('ignores a path that is not UTF-8 when it lies outside the root', () => {
     expect(under(z('A', Uint8Array.from([0x6f, 0xff])))).toStrictEqual({ ok: true, files: [] });
   });
 });
 
-describe('renameDetectionRefusal', () => {
+describe('caseSpellingRefusal', () => {
+  const prefix = Buffer.from('docs/', 'utf8');
+
   it.each([
-    ['exhaustive', 'warning: exhaustive rename detection was skipped due to too many files.'],
-    ['inexact', 'warning: inexact rename detection was skipped due to too many files.'],
-    ['the renameLimit advice', 'warning: you may want to set your diff.renameLimit variable to at least 9000 and retry the command.'],
-  ])('refuses when git says %s rename detection was cut short', (_what, stderr) => {
-    expect(renameDetectionRefusal(stderr)).toMatchObject({
-      ok: false,
-      kind: 'repository',
-      reason: expect.stringContaining('rename detection'),
-    });
+    ['the old side of a rename', z('R100', 'Docs/a.md', 'docs/a.md'), 'Docs/'],
+    ['a deletion', z('D', 'Docs/b.md'), 'Docs/'],
+    ['the new side of a rename', z('R100', 'docs/a.md', 'DOCS/a.md'), 'DOCS/'],
+  ])('refuses a path spelled in another case on %s, naming both spellings', (_what, listing, other) => {
+    const refusal = caseSpellingRefusal(parseNameStatusZ(listing), prefix);
+
+    expect(refusal).toMatchObject({ ok: false, kind: 'repository' });
+    expect(refusal?.reason).toContain('"docs/"');
+    expect(refusal?.reason).toContain(`"${other}"`);
   });
 
-  it('accepts a diff git said nothing about, or something unrelated', () => {
-    expect(renameDetectionRefusal('')).toBeUndefined();
-    expect(renameDetectionRefusal('warning: CRLF will be replaced by LF in a.md.')).toBeUndefined();
+  it('accepts paths that carry the prefix exactly, or lie elsewhere', () => {
+    expect(caseSpellingRefusal(parseNameStatusZ(z('M', 'docs/a.md', 'M', 'other/x.md', 'M', 'docsx/y.md')), prefix))
+      .toBeUndefined();
+  });
+
+  it('has nothing to check at the repository root', () => {
+    expect(caseSpellingRefusal(parseNameStatusZ(z('M', 'Docs/a.md')), Buffer.alloc(0))).toBeUndefined();
+  });
+});
+
+describe('mergeBaseOf', () => {
+  it('answers the one merge base', () => {
+    expect(mergeBaseOf('main', 'aaa\n')).toStrictEqual({ ok: true, commit: 'aaa' });
+  });
+
+  it('refuses more than one, naming each and the fix', () => {
+    expect(mergeBaseOf('main', 'aaa\nbbb\n')).toMatchObject({
+      ok: false,
+      kind: 'repository',
+      reason: expect.stringMatching(/"main" has 2 merge bases with HEAD \(aaa, bbb\).*Pass one of them/s),
+    });
+  });
+});
+
+/** A spawn failure carrying `code`, as Node reports one. */
+function failed(code: string): { ok: false; stderr: string; error: Error } {
+  return { ok: false, stderr: '', error: Object.assign(new Error(`spawnSync git ${code}`), { code }) };
+}
+
+describe('gitDidNotRun', () => {
+  it.each([
+    ['git is not on PATH', 'ENOENT', /Put git on PATH/],
+    ['git ran out of time', 'ETIMEDOUT', /did not finish within.*nearer base/s],
+    ['the output overran the buffer', 'ENOBUFS', /more output than VAT reads.*nearer base/s],
+  ])('names the real remedy when %s', (_what, code, remedy) => {
+    const refusal = gitDidNotRun('diff-tree', failed(code));
+
+    expect(refusal).toMatchObject({ ok: false, kind: 'git-failed', reason: expect.stringMatching(remedy) });
+    expect(refusal?.reason).toContain('git diff-tree');
+    expect(refusal?.reason).not.toMatch(/re-run/);
+  });
+
+  it('is silent for a git that ran to an exit status', () => {
+    expect(gitDidNotRun('diff-tree', { ok: false, stderr: 'fatal: bad object' })).toBeUndefined();
   });
 });

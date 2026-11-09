@@ -2,6 +2,7 @@
  * Resources command group
  */
 
+import { EXAMINED_ALLOWED } from '@vibe-agent-toolkit/resources';
 import { Command, Option } from 'commander';
 
 import { baseOption } from '../../utils/base-option.js';
@@ -48,15 +49,18 @@ const DERIVED_RELATIONS_HELP = `Derived relations (evaluated only when a stateme
   passing. (A WHERE on 'charged' would also filter those rows away.)
 
   changed_files -- what this change touched under the root: path, status
-  (added | modified | deleted | renamed | copied | type-changed), oldPath
-  and similarity (for a rename or copy). The working tree, staged or not,
-  plus untracked files git does not ignore, is compared with the MERGE BASE
-  of --base <ref> and HEAD, so what <ref> moved since is never listed. A
-  statement reading it without --base, or with a ref that names no commit
-  (USAGE_INVALID), with no git (BACKEND_UNAVAILABLE), or over a tree that
-  cannot answer -- no history shared with HEAD, no commits, not a working
-  tree (INPUT_UNREADABLE) -- is REFUSED, never answered with an empty
-  relation. --base is read only when a statement names it:
+  (added | modified | deleted | renamed | type-changed), oldPath and
+  similarity (for a rename). The working tree, staged or not, plus untracked
+  files git does not ignore, is snapshotted as one tree and diffed against
+  the MERGE BASE of --base <ref> and HEAD, so what <ref> moved since is never
+  listed and a move is a rename whether or not it was git-added. A statement
+  reading it without --base, or with a ref that names no commit
+  (USAGE_INVALID), with a git that did not finish (BACKEND_UNAVAILABLE), or
+  over a tree that cannot answer -- no single merge base, no commits, not a
+  working tree (INPUT_UNREADABLE) -- is REFUSED, never answered with an
+  empty relation. query exits 2 with that code as error.code; a check is
+  RESOURCE_CHECK_BROKEN with it as reason.refusal. --base is read only when
+  a statement names it:
 
     SELECT c.path FROM changed_files c
      WHERE c.path LIKE 'docs/specs/%' AND c.status != 'deleted'`;
@@ -416,14 +420,15 @@ Declaring a check:
   resources.validation.severity can downgrade or ignore one you inherited.
 
   Optional per check: examined: <SQL> -- a second statement returning ONE
-  count (one row, one column, a non-negative integer: SELECT COUNT(*) ...),
-  what the check ranged over; any other shape is RESOURCE_CHECK_BROKEN.
+  count of what the check ranged over: ${EXAMINED_ALLOWED}.
+  Any other result is RESOURCE_CHECK_BROKEN.
   Zero violations over nothing reads exactly like zero over everything, so
   a check that declares examined publishes
   examined: N on its data.checks entry, and N = 0 FAILS the run as
   RESOURCE_CHECK_EXAMINED_NOTHING (error, not overridable; the check's own
   violations are still reported). allowEmpty: true declares zero legitimate:
-  no finding, and the entry shows examined: 0 and allowEmpty: true.
+  no finding, and every data.checks entry of that check carries
+  allowEmpty: true, whatever it counted.
   allowEmpty without examined is refused at config load. An examined
   statement that fails is RESOURCE_CHECK_BROKEN. examined is OPTIONAL: a
   check without it can pass over an empty population. Declare it; a
@@ -579,8 +584,9 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
              as the message renders it; a path that is not the location
              stays). Rows it could not read carry reason: {column, value,
              row, allowed}; an examined statement that returned no count,
-             {statement, rows, columns?, value?, allowed}. A whole-run
-             finding has no check
+             {statement, rows, columns?, value?, allowed}; a statement over
+             a derived relation that refused, {refusal: <that code>}. A
+             whole-run finding has no check
   summary:   {errors, warnings, info} over findings; exit 1 iff errors > 0
   durationMs: wall time of the whole run
   data.checksRun:
@@ -593,7 +599,9 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
              a rule you declared), and examined (+ allowEmpty) on a check that
              declares examined, once that statement completed -- absent, never
              0, otherwise -- and examinedNothing: true exactly when that check
-             earned RESOURCE_CHECK_EXAMINED_NOTHING. rows is what the check SELECTED, and it is
+             earned RESOURCE_CHECK_EXAMINED_NOTHING, and nearMisses: the
+             columns that miss a reserved name only by case (the stderr
+             warning's, absent when none). rows is what the check SELECTED, and it is
              a memory signal: rows are fully materialised. It is not a finding
              count -- a severity override of 'ignore' drops findings the check
              still selected, so sum(rows) and summary legitimately disagree

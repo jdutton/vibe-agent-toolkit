@@ -31,7 +31,7 @@ import {
   uninterpretableRowsReason,
   type CheckRowConversion,
 } from '../src/projection/sql-checks.js';
-import { ResourceCheckSchema, type ResourceCheck } from '../src/schemas/project-config.js';
+import { EXAMINED_ALLOWED, ResourceCheckSchema, type ResourceCheck } from '../src/schemas/project-config.js';
 
 /** The one check name these tests use, and the code it must produce. */
 const NAME = 'orphan-skills';
@@ -505,6 +505,12 @@ describe('ResourceCheckSchema — examined and allowEmpty', () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatch(/^allowEmpty: /);
     expect(messages[0]).toContain('declare `examined`');
+    // 🔑 The contract is stated once: the refusal quotes it, never a paraphrase of it.
+    expect(messages[0]).toContain(EXAMINED_ALLOWED);
+  });
+
+  it('describes the examined statement by the same contract it is held to', () => {
+    expect(ResourceCheckSchema.innerType().shape.examined.description).toContain(EXAMINED_ALLOWED);
   });
 
   it('accepts only `true` for allowEmpty — `false` is the absence of the key', () => {
@@ -513,5 +519,38 @@ describe('ResourceCheckSchema — examined and allowEmpty', () => {
 
   it('refuses an empty examined statement', () => {
     expect(refusalsOf({ description: 'd', sql: 'SELECT 1', examined: '' })).not.toStrictEqual([]);
+  });
+});
+
+/**
+ * 🔑 A non-finite number has ONE rendering — its text — in the message, the evidence and a
+ * refusal's `reason.value` alike. As a number JSON writes it `null` and YAML `.inf`, so the two
+ * serializations of one document would disagree, and neither would agree with the message.
+ */
+describe('a non-finite number reads as its text everywhere', () => {
+  const NON_FINITE = [['Infinity', Infinity], ['-Infinity', -Infinity], ['NaN', Number.NaN]] as const;
+
+  it.each(NON_FINITE)('evidence and message agree on %s', (text, value) => {
+    const conversion = issuesFromCheckRows(NAME, CHECK, [{ path: SKILL_PATH, n: value }]);
+    const [issue] = conversion.ok ? conversion.issues : [];
+
+    expect(issue?.evidence).toStrictEqual({ n: text });
+    expect(issue?.message).toContain(`n=${text}`);
+    // JSON has no Infinity: a bare number would serialize as null and disagree with YAML.
+    expect(JSON.stringify(issue?.evidence)).toBe(`{"n":"${text}"}`);
+  });
+
+  it.each(NON_FINITE)('a refused reserved column carries %s as text', (text, value) => {
+    const refusal = refusalOf([{ path: SKILL_PATH, finding_line: value }]);
+
+    expect(uninterpretableRowsReason(refusal).value).toBe(text);
+    expect(describeUninterpretableRows(NAME, refusal)).toContain(`finding_line = ${text} is not`);
+  });
+
+  it.each(NON_FINITE)('a refused examined count carries %s as text', (text, value) => {
+    const read = examinedCount([{ n: value }]);
+
+    expect(read.ok ? undefined : read.reason.value).toBe(text);
+    expect(read.ok ? '' : describeUninterpretableExamined('n', read.reason)).toContain(`returned the value ${text}, not`);
   });
 });

@@ -174,7 +174,6 @@ export {
 // The derived relation of what changed since a run's `--base`, exported as a row
 // shape for the reason the two above are.
 export {
-  CHANGED_FILE_STATUSES,
   ChangedFileRowSchema,
   type ChangedFileRow,
 } from './schemas/projection-changed-files.js';
@@ -622,6 +621,7 @@ export {
 } from './config-issues.js';
 
 export {
+  EXAMINED_ALLOWED,
   ExternalPluginSourceSchema,
   ProjectConfigSchema,
   SkillExecutableEntrySchema,
@@ -898,13 +898,10 @@ export {
   uninterpretableRowsReason,
 } from './projection/sql-checks.js';
 export type {
-  CheckEvidenceValue,
   CheckIssue,
-  CheckRefusalReason,
   CheckRowConversion,
   ExaminedShapeReason,
   NearMiss,
-  UninterpretableRowsReason,
 } from './projection/sql-checks.js';
 
 // VAT's OWN default assertions over the same projection — TypeScript predicates,

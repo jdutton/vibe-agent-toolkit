@@ -8,7 +8,7 @@
  */
 
 import { CHECK_FINDING_COLUMNS, LIMIT_DIRECTIONS, POPULATION_ORIGINS } from '@vibe-agent-toolkit/resources';
-import { FindingSchema, reportSchema, type Report } from '@vibe-agent-toolkit/schema';
+import { FindingSchema, RefusalCodeSchema, reportSchema, type Report } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
 
 import { LENS_POPULATIONS } from '../../utils/lens-population.js';
@@ -25,10 +25,12 @@ const PublishedCheckCostSchema = z.object({
   broken: z.literal(true).optional(),
   /** Present and `true` only for a rule VAT supplied — see `CheckCost.builtin` in `check.ts`. */
   builtin: z.literal(true).optional(),
-  /** Rows the declared `examined` statement selected. ABSENT, never 0, unless it completed. */
+  /** The one count the declared `examined` statement returned (`EXAMINED_ALLOWED`). ABSENT, never 0, unless it completed. */
   examined: z.number().int().nonnegative().optional(),
   /** The check declares an `examined` count of 0 legitimate. */
   allowEmpty: z.literal(true).optional(),
+  /** Selected columns matching a reserved name only in another case, as spelled — the stderr warning's. */
+  nearMisses: z.array(z.string()).min(1).optional(),
   /** Exactly when this check produced a `RESOURCE_CHECK_EXAMINED_NOTHING` finding. */
   examinedNothing: z.literal(true).optional(),
 }).strict();
@@ -39,8 +41,10 @@ const EvidenceValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null
 /**
  * Why a check's own output could not be read: a row's reserved column, or an `examined` statement
  * that did not return one count (`rows`, `columns` when a row came back, `value` when one cell did).
+ * Or why a statement could not run at all: a derived relation it reads refused, with its code.
  */
 export const CHECK_REFUSAL_REASON_SCHEMA = z.union([
+  z.object({ refusal: RefusalCodeSchema }).strict(),
   z.object({
     column: z.enum(CHECK_FINDING_COLUMNS).exclude(['path']),
     value: EvidenceValueSchema,
@@ -66,7 +70,7 @@ export const CHECK_REFUSAL_REASON_SCHEMA = z.union([
 export const CHECK_FINDING_SCHEMA = FindingSchema.extend({
   check: z.string().min(1).optional(),
   evidence: z.record(z.string(), EvidenceValueSchema).optional(),
-  /** Only on `RESOURCE_CHECK_BROKEN` for output the check could not read: what was refused, and what is allowed. */
+  /** Only on `RESOURCE_CHECK_BROKEN`: output it could not read (what, and what is allowed), or a relation's refusal code. */
   reason: CHECK_REFUSAL_REASON_SCHEMA.optional(),
 }).strict().refine((finding) => finding.evidence === undefined || finding.check !== undefined, {
   message: 'evidence is a check\'s row, so a finding carrying it must name the check',
