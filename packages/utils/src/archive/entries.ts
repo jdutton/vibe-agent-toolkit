@@ -172,10 +172,13 @@ function windowsSegmentReason(segment: string): string | undefined {
 
 /**
  * The folds of the names a filesystem resolves to `.git` — `.git` itself and its 8.3 short name
- * `GIT~1` — through the one fold ({@link foldedSegment}), so every case, Unicode spelling, ignored
- * code point and trailing dot or space a volume reads as `.git` is caught. Extracted, such an entry
- * would make the folder it lands in a git repository: a planted `config` (`core.fsmonitor`) or a
- * `gitdir:` file that root discovery and git then act on.
+ * `GIT~1` — through the one fold ({@link foldedSegment}), so the case, Unicode spellings, ignored
+ * code points and trailing dots or spaces of those two names are caught (other NTFS short names
+ * alias only a `.git` that already exists, and every extraction lands in a fresh directory).
+ * Extracted, such an entry would make the folder it lands in a git repository: a planted `config`
+ * (`core.fsmonitor`) or a `gitdir:` file that root discovery and git then act on. This judges the
+ * name only: a bare-repository layout (`HEAD`, `objects/`, `refs/`, `config`) under another name
+ * is not refused here.
  */
 const GIT_DIRECTORY_FOLDS: ReadonlySet<string> = new Set(['.git', 'git~1'].map((name) => foldedSegment(name)));
 
@@ -200,7 +203,7 @@ function unsafeNameReason(name: string): string | undefined {
   const outside = outsideReason(name);
   if (outside !== undefined) return `${outside}, ${NO_PLACE}`;
   for (const segment of placeOf(name)) {
-    if (GIT_DIRECTORY_FOLDS.has(foldedSegment(segment))) return 'names a `.git`, so extracted it would make the folder it lands in a git repository that git and VAT then act on';
+    if (GIT_DIRECTORY_FOLDS.has(foldedSegment(segment))) return 'names a `.git`, which VAT never installs, extracts or sends';
     const reason = windowsSegmentReason(segment);
     if (reason !== undefined) return `${reason}, ${NO_PLACE}`;
   }
@@ -251,11 +254,11 @@ function claimPlaces(entry: ArchiveEntry, claims: Map<string, Claim>): EntryRefu
     if (held === undefined) {
       claims.set(key, { spelled, kind, entry: entry.name });
     } else if (held.spelled !== spelled) {
-      // A `:` and a trailing dot or space were refused with the name, so only the case and Unicode folds (an ignored code point among them) are left.
+      // A `:` and a trailing dot or space were refused with the name, so only the case and Unicode folds and an ignored code point are left.
       return {
         reason: 'name-clash',
         entry: entry.name,
-        why: `its entries \`${held.entry}\` and \`${entry.name}\` are one name where a volume folds letter case or Unicode form (\`${held.spelled}\` and \`${spelled}\`), so one would overwrite the other`,
+        why: `its entries \`${held.entry}\` and \`${entry.name}\` are one name where a volume folds letter case or Unicode form or ignores a code point (\`${held.spelled}\` and \`${spelled}\`), so one would overwrite the other`,
       };
     } else if (held.kind === 'file' || kind === 'file') {
       const why = held.kind === kind
@@ -280,8 +283,8 @@ function claimPlaces(entry: ArchiveEntry, claims: Map<string, Claim>): EntryRefu
  * - a name with a segment some filesystem resolves to `.git` — any case or Unicode spelling, the
  *   8.3 short name `GIT~1` — at any depth: extracted, it would make the folder it lands in a git
  *   repository;
- * - two entries that are one name — exactly, or once folded as a case-insensitive or
- *   normalising volume folds them ({@link foldedSegment}) — or a file with another entry under it.
+ * - two entries that are one name — exactly, or once folded as a case-insensitive,
+ *   normalising or code-point-ignoring (HFS+) volume folds them ({@link foldedSegment}) — or a file with another entry under it.
  *
  * @param entries - Every entry of the archive, in archive order
  * @returns The refusal of the first offending entry, in archive order

@@ -153,7 +153,7 @@ describe('a `.git` refusal says what it is about', () => {
     } catch (error) {
       thrown = error;
     }
-    expect((thrown as Error).message).toBe('/in/pkg.tgz is not an archive VAT accepts, nothing was changed: its entry `skill/.git/config` names a `.git`, so extracted it would make the folder it lands in a git repository that git and VAT then act on');
+    expect((thrown as Error).message).toBe('/in/pkg.tgz is not an archive VAT accepts, nothing was changed: its entry `skill/.git/config` names a `.git`, which VAT never installs, extracts or sends');
   });
 });
 
