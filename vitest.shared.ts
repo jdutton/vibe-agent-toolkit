@@ -203,9 +203,8 @@ export const maxTestWorkers = 2;
  * at **166MB** (`dev-tools/test/local-eslint-rule-enablement.test.ts`), with the
  * since-split monolithic ESLint rule suite at 152MB and
  * `cli/test/commands/resources-check-payload.test.ts` at 151MB behind it. 512MB
- * is ~3.1x that, which covers the fork-reuse variance the heap guard's own
- * budget comment describes (a fork is reused across files, so a file's reading
- * depends on what ran before it in the same fork). Re-measure with the same
+ * is ~3.1x that, which covers the run-to-run variance the heap guard's own
+ * budget comment describes. Re-measure with the same
  * command if a suite approaches the cap; the number, not the file names, is
  * what this constant rests on.
  *
@@ -312,8 +311,10 @@ export function createUnitTestConfig(overrides: UnitTestConfigOverrides = {}) {
  * RSS passes {@link forkRssBudgetMb}. RSS, not "no native addon": `vat rag clear`
  * loads LanceDB's binding (~110 MB) to remove a directory, which is harmless —
  * the 1-3 GB is the engine or a model at WORK. The check sees the fork's own
- * process only; no `cli` integration test spawns a model-loading `vat` (those
- * runs are in the system tier, which keeps its own cap).
+ * process only. That no `cli` integration test spawns a model-loading `vat`
+ * (those runs are in the system tier, which keeps its own cap) is an assumption
+ * nothing enforces (not enforced); with 4 workers, up to 4 such children could
+ * run at once where 2 could before.
  *
  * 4 is the vCPU count of the GitHub-hosted ubuntu-latest and windows-latest
  * runners the gate runs on — not `availableParallelism()`, which on a

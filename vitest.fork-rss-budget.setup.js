@@ -10,12 +10,14 @@
  * A DETECTOR, not a limit: it reads the peak after the file ran, so it names a
  * file that grew, and cannot stop a fork the machine kills first. Its scope is
  * the fork's own process (worker threads included) — a `vat` child a test spawns
- * is outside it, exactly as it was outside the cap of 2.
+ * is outside it (the cap now allows more such children at once than 2 did).
  *
  * `process.resourceUsage().maxRSS` is in KiB on every platform (libuv normalises
  * macOS's bytes; on Windows it is the peak working set). On Linux it also carries
- * the vitest parent's resident set at fork time, so there it can read high, never
- * low. With isolation on (vitest's default, which no tier overrides) every test
+ * the vitest parent's resident set at fork time, so there it can read high. On
+ * Windows the peak working set can read LOW under memory pressure, when Windows
+ * trims working sets — it names a file that grew by gigabytes, not a near miss.
+ * With isolation on (vitest's default, which no tier overrides) every test
  * file gets a fresh fork, so the figure is that one file's.
  */
 import { afterAll, inject } from 'vitest';
