@@ -130,7 +130,7 @@ describe('runGitBytes', () => {
     expect(result.stdout).toEqual(Buffer.from([0x20, 0x20, 0xc3, 0xa9, 0x20, 0x6f, 0x6b, 0x0a]));
   });
 
-  it('decodes git\'s own stderr as the text git wrote, not as its latin1 transport', () => {
+  it('decodes git\'s own stderr as the text git wrote, not as its hex transport', () => {
     const result = runGitBytes(['definitely-not-a-subcommand-é']);
     expect(result.ok).toBe(false);
     expect(result.stderr).toContain('definitely-not-a-subcommand-é');

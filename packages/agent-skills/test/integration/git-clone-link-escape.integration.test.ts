@@ -131,7 +131,7 @@ describe('cloneGitSource refuses a committed link by its text before checkout, o
   it('refuses a committed UNC link before any filesystem call resolves its target', () => {
     const { clone, tempdir } = cloneShapedInto(noShape, 'plugins/foo', { 'plugins/foo/smb': UNC });
     const { thrown, asked } = callsNaming(tempdir, clone, 'attacker');
-    expect(thrown).toEqual(expect.objectContaining({ code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('plugins/foo/smb is a symbolic link whose target leads through a network path') }));
+    expect(thrown).toEqual(expect.objectContaining({ code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('"plugins/foo/smb" is a symbolic link whose target leads through a network path') }));
     expect(asked).toEqual([]);
     expect(readdirSync(tempdir)).toEqual(['.git']);
   });
@@ -152,7 +152,7 @@ describe('cloneGitSource refuses a committed link by its text before checkout, o
     ['a link whose text climbs out by string', 'plugins/foo/up', String.raw`..\..\..\attacker`],
   ] as const)('refuses %s before checkout', ([, path, text]) => {
     const { clone, tempdir } = cloneShapedInto(noShape, 'plugins/foo', { [path]: text });
-    expect(clone).toThrow(expect.objectContaining({ code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining(`${path} is a symbolic link`) }));
+    expect(clone).toThrow(expect.objectContaining({ code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining(`"${path}" is a symbolic link`) }));
     expect(readdirSync(tempdir)).toEqual(['.git']);
   });
 
@@ -167,7 +167,7 @@ describe('cloneGitSource refuses a committed link by its text before checkout, o
   // the reading of the next link nor pass as a relative text.
   it('refuses a committed link whose blob is 0xFF bytes, before checkout', () => {
     const { clone, tempdir } = cloneByteLinks({ 'plugins/foo/ff': Buffer.alloc(4, 0xff) });
-    expect(clone).toThrow(expect.objectContaining({ code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('plugins/foo/ff is a symbolic link whose text is not portable') }));
+    expect(clone).toThrow(expect.objectContaining({ code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('"plugins/foo/ff" is a symbolic link whose text is not portable') }));
     expect(readdirSync(tempdir)).toEqual(['.git']);
   });
 
@@ -189,7 +189,7 @@ describe('cloneGitSource refuses a committed link by its text before checkout, o
       { mode: '100644', quotedPath: 'plugins/foo/SKILL.md', bytes: Buffer.from('# skill\n') },
       { mode, quotedPath, bytes: Buffer.from('SKILL.md') },
     ]);
-    expect(clone).toThrow(expect.objectContaining({ code: GIT_CLONE_FAILED_CODE, message: expect.stringContaining(`holds a path that is not UTF-8 (${shown})`) }));
+    expect(clone).toThrow(expect.objectContaining({ code: GIT_CLONE_FAILED_CODE, message: expect.stringContaining(`holds a path that is not UTF-8 ("${shown}")`) }));
     expect(readdirSync(tempdir)).toEqual(['.git']);
   });
 
@@ -225,7 +225,7 @@ describe.skipIf(process.platform === 'win32')('cloneGitSource refuses links out 
     const clone = cloneShaped((work) => createSymlink(cap, outside, safePath.join(work, 'plugins/foo/evil')), 'plugins/foo');
     expect(clone).toThrow(expect.objectContaining({
       code: COPY_LINK_ESCAPES_SOURCE_CODE,
-      message: expect.stringContaining('plugins/foo/evil is a symbolic link whose target leads through an absolute path'),
+      message: expect.stringContaining('"plugins/foo/evil" is a symbolic link whose target leads through an absolute path'),
     }));
   });
 

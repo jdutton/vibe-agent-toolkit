@@ -3,6 +3,7 @@ import { posix } from 'node:path';
 
 import {
   COPY_LINK_ESCAPES_SOURCE_CODE,
+  decodeUtf8Exactly,
   HOST_PATH_FLAVOR,
   isTimedOutError,
   isWithinUnder,
@@ -19,6 +20,7 @@ import {
   nonInteractiveGitOverrides,
   runGit as runGitSafely,
   runGitBytes,
+  type GitBytesRunResult,
   type GitRunResult,
   type ParsedGitUrl,
 } from '@vibe-agent-toolkit/utils/git';
@@ -64,24 +66,24 @@ function runGit(args: string[], envOverlay: Record<string, string>, cwd?: string
 }
 
 /**
- * Read what the clone's object store holds — committed paths, link blobs — as the BYTES git
- * wrote (`runGitBytes`), never through a UTF-8 decode: each judgment decodes them itself.
- *
- * @param args - The read, run inside the clone
- * @param cloneDir - The clone
- * @param what - What is read, for the refusal ("list the cloned commit's tree")
- * @param input - stdin, for `cat-file --batch`
- * @throws GitCloneFailedError when git fails or times out
+ * The options every read of the clone's object store runs with: inside the clone, scrubbed, capped.
+ * The reads themselves call `runGitBytes` with their argv inline — `local/no-text-git-object-read`
+ * holds every object-store argv to it — so what the store holds arrives as the BYTES git wrote,
+ * never through a UTF-8 decode, and each judgment decodes them itself.
  */
-function readCloneBytes(args: string[], cloneDir: string, what: string, input?: string): Buffer {
-  const result = runGitBytes(args, {
-    cwd: cloneDir,
-    ...(input === undefined ? {} : { input }),
-    env: {},
-    timeout: GIT_TIMEOUT_MS,
-    maxBuffer: GIT_MAX_BUFFER,
-  });
-  refuseTimedOut(args, result);
+function objectStoreRead(cloneDir: string, input?: string): Parameters<typeof runGitBytes>[1] {
+  return { cwd: cloneDir, ...(input === undefined ? {} : { input }), env: {}, timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER };
+}
+
+/**
+ * The bytes an object-store read returned, or the clone's refusal.
+ *
+ * @param subcommand - The read's subcommand, for a timeout's refusal
+ * @param what - What is read, for the refusal ("list the cloned commit's tree")
+ * @throws GitCloneFailedError when git failed or timed out
+ */
+function objectStoreBytes(result: GitBytesRunResult, subcommand: string, what: string): Buffer {
+  refuseTimedOut([subcommand], result);
   if (!result.ok) throw new GitCloneFailedError(`Failed to ${what}: ${result.stderr}`);
   return result.stdout;
 }
@@ -99,12 +101,16 @@ function refuseTimedOut(args: readonly string[], result: { readonly error?: Erro
 
 /**
  * The code a clone that did not happen is thrown with: the remote would not hand the
- * repository over (unreachable, refused, a ref it does not have, a timeout). The source
- * the caller named could not be read — never a defect in VAT.
+ * repository over (unreachable, refused, a ref it does not have, a timeout), or the commit
+ * holds a path VAT cannot name (not UTF-8), so no checkout is written. The source the
+ * caller named could not be read — never a defect in VAT.
  */
 export const GIT_CLONE_FAILED_CODE = 'GIT_CLONE_FAILED';
 
-/** A git source that could not be cloned. Reason `preflight`: the operator fixes the URL, the ref or the network. */
+/**
+ * A git source that could not be cloned. Reason `preflight`: the operator fixes the URL, the ref
+ * or the network — or, for a path that is not UTF-8, renames it in the repository.
+ */
 export class GitCloneFailedError extends VatError {
   readonly reason = 'preflight' as const;
   constructor(message: string, options?: ErrorOptions) {
@@ -186,7 +192,8 @@ interface CommittedLink {
  *   `<mode> SP <type> SP <object> TAB <path> NUL`, or a path is not UTF-8
  */
 function committedLinks(cloneDir: string, commit: string): CommittedLink[] {
-  const listing = readCloneBytes(['ls-tree', '-r', '-z', '--full-tree', commit], cloneDir, "list the cloned commit's tree");
+  const what = "list the cloned commit's tree";
+  const listing = objectStoreBytes(runGitBytes(['ls-tree', '-r', '-z', '--full-tree', commit], objectStoreRead(cloneDir)), 'ls-tree', what);
   const links: CommittedLink[] = [];
   let at = 0;
   while (at < listing.length) {
@@ -195,7 +202,7 @@ function committedLinks(cloneDir: string, commit: string): CommittedLink[] {
     const tab = record.indexOf(0x09);
     const entry = TREE_ENTRY.exec(record.subarray(0, Math.max(tab, 0)).toString('latin1'));
     if (end < 0 || tab < 0 || entry === null) {
-      throw new GitCloneFailedError(`Failed to list the cloned commit's tree: git wrote a record that is not \`<mode> <type> <object>\\t<path>\\0\` (${escapedBytes(record)}).`);
+      throw new GitCloneFailedError(`Failed to ${what}: git wrote a record that is not \`<mode> <type> <object>\\t<path>\\0\` (${shown(record)}).`);
     }
     const path = committedPathText(record.subarray(tab + 1));
     if (entry[1] === '120000' && entry[2] !== undefined) links.push({ path, blob: entry[2] });
@@ -207,39 +214,64 @@ function committedLinks(cloneDir: string, commit: string): CommittedLink[] {
 /** The fields of an `ls-tree` record before its TAB: a mode, an object type, the object (SHA-1 or SHA-256). */
 const TREE_ENTRY = /^(\d{6}) (?:blob|tree|commit) ([\da-f]{40}|[\da-f]{64})$/;
 
-/** Bytes as UTF-8 text, or `undefined` when they are not UTF-8 — never a lossy decode. */
-function utf8Text(bytes: Buffer): string | undefined {
-  try {
-    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
-  } catch (error) {
-    if (error instanceof TypeError) return undefined;
-    throw error;
-  }
+/** The backslash, which opens every escape {@link shown} writes. */
+const BACKSLASH = '\\';
+
+/**
+ * Whether a character must not reach a message as itself: a C0 or C1 control or DEL (a terminal
+ * acts on them), or a bidirectional or invisible formatting mark (it makes one name read as another).
+ */
+function unshowable(code: number): boolean {
+  return (
+    code < 0x20 ||
+    (code >= 0x7f && code <= 0x9f) ||
+    code === 0x61c ||
+    (code >= 0x200b && code <= 0x200f) ||
+    (code >= 0x2028 && code <= 0x202e) ||
+    (code >= 0x2066 && code <= 0x2069) ||
+    code === 0xfeff
+  );
 }
 
-/** The prefix of an escaped byte (`\xff`). */
-const BYTE_ESCAPE = String.raw`\x`;
+/** One character of {@link shown}: itself, or its escape. */
+function shownCharacter(character: string): string {
+  if (character === '"' || character === BACKSLASH) return BACKSLASH + character;
+  const code = character.codePointAt(0) ?? 0;
+  return unshowable(code) ? `${BACKSLASH}u${code.toString(16).padStart(4, '0')}` : character;
+}
 
-/** Bytes shown losslessly to a human: printable ASCII as itself, every other byte (and `\`) as `\xHH`. */
-function escapedBytes(bytes: Buffer): string {
-  let shown = '';
-  for (const byte of bytes) shown += byte >= 0x20 && byte < 0x7f && byte !== 0x5c ? String.fromCodePoint(byte) : BYTE_ESCAPE + byte.toString(16).padStart(2, '0');
-  return shown;
+/**
+ * What the repository wrote — a path, a link text, a record git printed — as a message shows it:
+ * quoted, every unshowable character as `\uHHHH`, `"` and `\` escaped, and bytes that are not UTF-8
+ * as `\xHH` each. One spelling for everything the repository supplies, so a hostile name can
+ * neither act on the operator's terminal nor pass for another.
+ */
+function shown(value: string | Buffer): string {
+  if (typeof value === 'string') return `"${[...value].map((character) => shownCharacter(character)).join('')}"`;
+  const text = decodeUtf8Exactly(value);
+  return text === undefined ? `"${[...value].map((byte) => shownByte(byte)).join('')}"` : shown(text);
+}
+
+/** One byte of {@link shown}'s spelling of bytes that are not UTF-8: ASCII as {@link shownCharacter}, the rest `\xHH`. */
+function shownByte(byte: number): string {
+  return byte < 0x80 ? shownCharacter(String.fromCodePoint(byte)) : `${BACKSLASH}x${byte.toString(16).padStart(2, '0')}`;
 }
 
 /**
  * A committed path as text, or the clone's refusal. A path that is not UTF-8 has no faithful
  * spelling in VAT: every judgment and every later read names files by string, a lossy decode can
- * map two committed paths onto one, POSIX writes the bytes verbatim, and Git for Windows converts
- * the path from UTF-8 to UTF-16 to create the file — so the name judged is not the name written.
+ * map distinct committed paths onto one string, POSIX writes the bytes verbatim, and Git for
+ * Windows converts the path from UTF-8 to UTF-16 to create the file — so the name judged is not the
+ * name written. (Paths that are distinct UTF-8 but one file on a case- or normalization-folding
+ * file system are not judged here.)
  *
  * @throws GitCloneFailedError naming the path's bytes
  */
 function committedPathText(bytes: Buffer): string {
-  const text = utf8Text(bytes);
+  const text = decodeUtf8Exactly(bytes);
   if (text !== undefined) return text;
   throw new GitCloneFailedError(
-    `Refusing the cloned repository: it holds a path that is not UTF-8 (${escapedBytes(bytes)}), so VAT cannot name ` +
+    `Refusing the cloned repository: it holds a path that is not UTF-8 (${shown(bytes)}), so VAT cannot name ` +
       'the file the checkout would write. Rename it in the repository to a UTF-8 name.',
   );
 }
@@ -250,7 +282,8 @@ function committedPathText(bytes: Buffer): string {
  */
 function linkTexts(cloneDir: string, links: readonly CommittedLink[]): Buffer[] {
   const input = links.map((link) => `${link.blob}\n`).join('');
-  return framedTexts(readCloneBytes(['cat-file', '--batch'], cloneDir, "read the cloned repository's link texts", input), links);
+  const batch = runGitBytes(['cat-file', '--batch'], objectStoreRead(cloneDir, input));
+  return framedTexts(objectStoreBytes(batch, 'cat-file', "read the cloned repository's link texts"), links);
 }
 
 /** A `cat-file --batch` header: the object, `blob`, its size in canonical decimal. */
@@ -270,9 +303,9 @@ function framedTexts(bytes: Buffer, links: readonly CommittedLink[]): Buffer[] {
     const headerEnd = bytes.indexOf(0x0a, at);
     const header = bytes.subarray(at, headerEnd < 0 ? bytes.length : headerEnd);
     const size = BLOB_HEADER.exec(header.toString('latin1'));
-    if (headerEnd < 0 || size?.[1] !== link.blob || size[2] === undefined) throw refused(`${link.path}: its header (${escapedBytes(header)}) is not \`${link.blob} blob <size>\``);
+    if (headerEnd < 0 || size?.[1] !== link.blob || size[2] === undefined) throw refused(`${shown(link.path)}: its header (${shown(header)}) is not \`${link.blob} blob <size>\``);
     const end = headerEnd + 1 + Number(size[2]);
-    if (end >= bytes.length || bytes[end] !== 0x0a) throw refused(`${link.path}: its bytes do not end where its header says`);
+    if (end >= bytes.length || bytes[end] !== 0x0a) throw refused(`${shown(link.path)}: its bytes do not end where its header says`);
     texts.push(bytes.subarray(headerEnd + 1, end));
     at = end + 1;
   }
@@ -284,17 +317,14 @@ function framedTexts(bytes: Buffer, links: readonly CommittedLink[]): Buffer[] {
 type CommittedLinkRefusal = NonNullable<ReturnType<typeof untrustedLinkRefusal>>;
 
 /**
- * Why a committed link's text alone may not be checked out, and the text as the refusal shows it:
- * `unportable` for bytes that are not UTF-8 — POSIX creates them verbatim while Git for Windows
+ * Why a committed link's text alone may not be checked out: `unportable` for bytes that are not UTF-8 — POSIX creates them verbatim while Git for Windows
  * converts the text from UTF-8 to UTF-16 to create the link, so no one string is what both kernels
  * would be handed — else the one untrusted-link rule (`untrustedLinkRefusal`, shared with the
  * link-chain walk) on the decoded text.
  */
-function committedLinkRefusal(path: string, bytes: Buffer): { readonly refusal: CommittedLinkRefusal; readonly shown: string } | undefined {
-  const text = utf8Text(bytes);
-  if (text === undefined) return { refusal: 'unportable', shown: escapedBytes(bytes) };
-  const refusal = untrustedLinkRefusal(path, text);
-  return refusal === undefined ? undefined : { refusal, shown: refusal === 'unportable' ? JSON.stringify(text) : text };
+function committedLinkRefusal(path: string, bytes: Buffer): CommittedLinkRefusal | undefined {
+  const text = decodeUtf8Exactly(bytes);
+  return text === undefined ? 'unportable' : untrustedLinkRefusal(path, text);
 }
 
 /** How each refusal reads in a refusal message, after "is a symbolic link ". */
@@ -341,7 +371,7 @@ function refuseCommittedLinkTexts(cloneDir: string, commit: string, subpath: str
       if (onSubpath !== undefined && isWithinUnder(onSubpath, link.path, flavor)) throw subpathEscapes(subpath);
       throw new VatError(
         COPY_LINK_ESCAPES_SOURCE_CODE,
-        `Refusing the cloned repository: ${link.path} is a symbolic link ${REFUSAL_TEXT[refused.refusal](refused.shown)}. ` +
+        `Refusing the cloned repository: ${shown(link.path)} is a symbolic link ${REFUSAL_TEXT[refused](shown(bytes))}. ` +
           'Every reader of the source follows links, so it would read files the repository does not hold — replace the link with the files, or point it inside with a relative target.',
       );
     }

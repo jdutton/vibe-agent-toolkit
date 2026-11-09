@@ -57,6 +57,8 @@
  * can mistake either for success.
  */
 
+import { constants } from 'node:buffer';
+
 import { executeGitCommand } from '@vibe-validate/git';
 
 import { decodeTextContent } from './text-content.js';
@@ -67,6 +69,13 @@ import { decodeTextContent } from './text-content.js';
  * 1 MiB default covers about 10,000 — a ceiling ordinary monorepos reach.
  */
 const DEFAULT_MAX_BUFFER = 64 * 1024 * 1024;
+
+/**
+ * The most bytes {@link runGitBytes} can carry: its transport spells each byte as two hex
+ * characters, and the spawn THROWS (rather than reporting) when it builds a string longer than
+ * the engine allows. A larger `maxBuffer` is clamped to this, so an overrun is reported as one.
+ */
+const HEX_MAX_BUFFER = Math.floor(constants.MAX_STRING_LENGTH / 2);
 
 /** Wall-clock ceiling on one invocation, so a hung remote cannot wedge a build. */
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -113,8 +122,8 @@ export interface GitRunOptions {
    * and 0x20 sorts below every printable character, so a path beginning with a
    * space is listed *first* — where the trim reaches it. The caller then holds a
    * path that does not exist, and every lookup against it reads as "not there"
-   * rather than as an error. Also pass `false` when the output is file content
-   * (`git show HEAD:file`), whose trailing newline is data.
+   * rather than as an error. Object contents and committed paths do not come
+   * through here at all: read them with {@link runGitBytes}, which never trims.
    *
    * `ls-files -s -z` does not need it: the mode occupies position 0.
    *
@@ -186,9 +195,13 @@ export interface GitBytesRunResult extends Omit<GitRunResult, 'stdout'> {
 }
 
 /**
- * {@link runGit}, with stdout handed back as the BYTES git wrote — the one way VAT reads output
- * that carries what a repository holds: committed paths (`ls-tree -z`) and object contents
- * (`cat-file --batch`).
+ * {@link runGit}, with stdout handed back as the BYTES git wrote — the one way VAT reads what the
+ * object store holds: the paths a tree names (`ls-tree -z`), object contents (`cat-file`), and the
+ * readers of committed history that print either (`diff-tree`, `rev-list --objects`, `show`).
+ *
+ * Scope, stated rather than implied: this covers the OBJECT STORE. A working-tree index listing
+ * (`ls-files`) is still read as text through {@link runGit}; that lane is recorded in
+ * `docs/contributing/known-defects.md`.
  *
  * ## Why a string cannot carry them
  *
@@ -197,22 +210,26 @@ export interface GitBytesRunResult extends Omit<GitRunResult, 'stdout'> {
  * string, a path comes back spelled otherwise than the checkout writes it, and a stream framed by
  * byte counts (`cat-file --batch`) changes length under the decode — a blob can then plant the
  * next object's header. Decoding is the caller's judgment, made on the bytes, never the
- * transport's. `local/no-text-git-object-read` keeps every object-store read on this function.
+ * transport's. `local/no-text-git-object-read` reports an object-store argv handed to anything
+ * but this function; what a caller does with the bytes afterwards is its own judgment.
  *
  * Mechanically: the spawn runs with `encoding: 'hex'`, a binary-to-text codec, so its strings
  * carry the bytes exactly and are turned back into them here. The spawn encodes `input` by the
  * same codec, so `input` — text, written to git as UTF-8 as {@link runGit} writes it — is handed
  * over as its UTF-8 bytes in hex. stderr is git's own message, decoded as text through the one
- * decoding seam and trimmed as {@link runGit}'s is.
+ * decoding seam and trimmed as {@link runGit}'s is. Hex doubles the string the spawn builds, so
+ * `maxBuffer` is clamped to half the engine's string limit (256 MiB on 64-bit V8): past it the
+ * spawn would throw, and this function, like {@link runGit}, never throws.
  *
  * @param args - Arguments after the `git` executable
  * @param options - {@link GitRunOptions}, less `trim`: bytes are never trimmed
  * @returns The outcome, stdout as bytes
  */
 export function runGitBytes(args: readonly string[], options: Omit<GitRunOptions, 'trim'> = {}): GitBytesRunResult {
-  const { input, ...rest } = options;
+  const { input, maxBuffer = DEFAULT_MAX_BUFFER, ...rest } = options;
   const hexInput = input === undefined ? {} : { input: Buffer.from(input, 'utf8').toString('hex') };
-  const result = execute(args, { ...rest, ...hexInput, trim: false }, 'hex');
+  const capped = { maxBuffer: Math.min(maxBuffer, HEX_MAX_BUFFER), trim: false };
+  const result = execute(args, { ...rest, ...hexInput, ...capped }, 'hex');
   // A spawn-level failure with no word from git arrives as the failure's own message, not as hex.
   const spawnMessage = result.stderr === result.error?.message;
   return {

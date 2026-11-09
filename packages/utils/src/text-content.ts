@@ -481,3 +481,29 @@ function decodeWithinEngineLimits(bytes: Uint8Array): DecodedText {
     return { text, encoding, encodingSource, replacementCharacters: countReplacementCharacters(text) };
   }
 }
+
+/**
+ * Decode bytes as UTF-8 **exactly**, or not at all: the text when the bytes are well-formed UTF-8,
+ * `undefined` when any sequence is not. No BOM is sniffed or stripped and nothing is replaced, so
+ * the text names precisely the bytes it came from.
+ *
+ * For a NAME a byte sequence carries — a path or link text a repository committed — rather than a
+ * document: {@link decodeTextContent} repairs a damaged document, and a repaired name is a
+ * different name. A literal U+FFFD that IS in the bytes, well-formed, decodes as itself.
+ *
+ * @param bytes - The exact bytes
+ * @returns The text the bytes spell, or `undefined` when they are not UTF-8
+ */
+export function decodeUtf8Exactly(bytes: Uint8Array): string | undefined {
+  const fatalDecoder = FATAL_DECODERS.get('utf-8');
+  // Unreachable: FATAL_DECODERS is a constant that holds UTF-8.
+  if (fatalDecoder === undefined) throw new Error('no fatal decoder for encoding "utf-8"');
+  try {
+    return fatalDecoder.decode(bytes);
+  } catch (error) {
+    // A fatal decoder refuses malformed input with a `TypeError` (the WHATWG contract); anything
+    // else is a bug, not an answer.
+    if (error instanceof TypeError) return undefined;
+    throw error;
+  }
+}

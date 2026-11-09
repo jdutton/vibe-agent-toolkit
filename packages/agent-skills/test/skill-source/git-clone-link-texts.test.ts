@@ -106,7 +106,7 @@ describe('cloneGitSource reads committed link texts as the blobs\' bytes', () =>
     const a = Buffer.concat([Buffer.alloc(6, 0xff), filler, Buffer.from('\n'), tail]);
     expect(a.indexOf(0x0a)).toBe(a.length - 12);
     installGit({ links: [link('plugins/foo/a', OID_A, a), link('plugins/foo/b', OID_B, UNC)] });
-    expectRefusedBeforeCheckout(clone(), { code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('plugins/foo/a is a symbolic link whose text is not portable') });
+    expectRefusedBeforeCheckout(clone(), { code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('"plugins/foo/a" is a symbolic link whose text is not portable') });
   });
 
   it.for([
@@ -117,12 +117,12 @@ describe('cloneGitSource reads committed link texts as the blobs\' bytes', () =>
     ['an encoded surrogate', Buffer.from([0xed, 0xa0, 0x80])],
   ] as const)('refuses %s as a text that is not portable, before checkout', ([, bytes]) => {
     installGit({ links: [link('plugins/foo/a', OID_A, bytes)] });
-    expectRefusedBeforeCheckout(clone(), { code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('plugins/foo/a is a symbolic link whose text is not portable') });
+    expectRefusedBeforeCheckout(clone(), { code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('"plugins/foo/a" is a symbolic link whose text is not portable') });
   });
 
   it('shows a text that is not UTF-8 by its bytes, never by a lossy decode', () => {
     installGit({ links: [link('plugins/foo/a', OID_A, Buffer.from([0x6f, 0x6b, 0xff]))] });
-    expectRefusedBeforeCheckout(clone(), { message: expect.stringContaining(String.raw`not portable (ok\xff)`) });
+    expectRefusedBeforeCheckout(clone(), { message: expect.stringContaining(String.raw`not portable ("ok\xff")`) });
   });
 
   it('judges a valid U+FFFD as the text it is: UTF-8, so checked out, not refused as unportable', () => {
@@ -133,21 +133,21 @@ describe('cloneGitSource reads committed link texts as the blobs\' bytes', () =>
 
   it('reads every link text in ONE cat-file spawn, a text that is not UTF-8 among them', () => {
     installGit({ links: [link('plugins/foo/a', OID_A, 'SKILL.md'), link('plugins/foo/b', OID_B, Buffer.from([0xff]))] });
-    expectRefusedBeforeCheckout(clone(), { code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('plugins/foo/b is a symbolic link whose text is not portable') });
+    expectRefusedBeforeCheckout(clone(), { code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('"plugins/foo/b" is a symbolic link whose text is not portable') });
     expect(calls.filter((args) => args[0] === 'cat-file')).toEqual([['cat-file', '--batch']]);
   });
 
   it('judges a planted header inside a valid UTF-8 blob as that blob\'s own text', () => {
     const a = `x\n${OID_B} blob 2\nok`;
     installGit({ links: [link('plugins/foo/a', OID_A, a), link('plugins/foo/b', OID_B, UNC)] });
-    expectRefusedBeforeCheckout(clone(), { code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('plugins/foo/b is a symbolic link whose target leads through a network path') });
+    expectRefusedBeforeCheckout(clone(), { code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('"plugins/foo/b" is a symbolic link whose target leads through a network path') });
   });
 });
 
 describe('cloneGitSource reads committed paths as the bytes git holds', () => {
   it.for([
-    ['a 0xFF byte', Buffer.concat([Buffer.from('plugins/'), Buffer.from([0xff])]), String.raw`plugins/\xff`],
-    ['an encoded surrogate', Buffer.concat([Buffer.from('x'), Buffer.from([0xed, 0xa0, 0x80])]), String.raw`x\xed\xa0\x80`],
+    ['a 0xFF byte', Buffer.concat([Buffer.from('plugins/'), Buffer.from([0xff])]), String.raw`"plugins/\xff"`],
+    ['an encoded surrogate', Buffer.concat([Buffer.from('x'), Buffer.from([0xed, 0xa0, 0x80])]), String.raw`"x\xed\xa0\x80"`],
   ] as const)('refuses a commit holding a path with %s, before checkout, showing its bytes', ([, path, shown]) => {
     installGit({ links: [link(path, OID_A, 'SKILL.md')] });
     expectRefusedBeforeCheckout(clone(), { code: GIT_CLONE_FAILED_CODE, message: expect.stringContaining(`holds a path that is not UTF-8 (${shown})`) });
@@ -155,12 +155,25 @@ describe('cloneGitSource reads committed paths as the bytes git holds', () => {
 
   it('refuses a non-UTF-8 path that is not a link too: the checkout writes every path', () => {
     installGit({ links: [], tree: Buffer.concat([Buffer.from(`100644 blob ${OID_A}\tdocs/`), Buffer.from([0xc3, 0x28]), Buffer.from(NUL)]) });
-    expectRefusedBeforeCheckout(clone(), { code: GIT_CLONE_FAILED_CODE, message: expect.stringContaining(String.raw`not UTF-8 (docs/\xc3()`) });
+    expectRefusedBeforeCheckout(clone(), { code: GIT_CLONE_FAILED_CODE, message: expect.stringContaining(String.raw`not UTF-8 ("docs/\xc3(")`) });
+  });
+
+  it('shows a path and a text by escapes, never as the control or bidi characters they hold', () => {
+    const rlo = String.fromCodePoint(0x20_2e);
+    const esc = String.fromCodePoint(0x1b);
+    installGit({ links: [link(`plugins/${rlo}evil`, OID_A, `${UNC}${esc}[2J`)] });
+    // Built from a backslash rather than written as `String.raw`: a transform may cook its `\u` escapes.
+    const bs = '\\';
+    const refusal = expect.stringContaining(
+      `"plugins/${bs}u202eevil" is a symbolic link whose target leads through a network path ("${bs.repeat(4)}attacker${bs.repeat(2)}share${bs}u001b[2J")`,
+    );
+    expectRefusedBeforeCheckout(clone(), { code: COPY_LINK_ESCAPES_SOURCE_CODE, message: refusal });
+    for (const raw of [esc, rlo]) expect(clone()).toThrow(expect.objectContaining({ message: expect.not.stringContaining(raw) }));
   });
 
   it('judges a link whose path is valid non-ASCII UTF-8 by that path', () => {
     installGit({ links: [link('plugins/foo/é', OID_A, UNC)] });
-    expectRefusedBeforeCheckout(clone(), { code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('plugins/foo/é is a symbolic link whose target leads through a network path') });
+    expectRefusedBeforeCheckout(clone(), { code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('"plugins/foo/é" is a symbolic link whose target leads through a network path') });
   });
 
   it.for([
@@ -184,7 +197,7 @@ describe('cloneGitSource refuses a cat-file stream that does not frame exactly t
 
   it('refuses a short read: an object whose bytes end before its header says', () => {
     installGit({ links: links.slice(0, 1), batch: Buffer.from(`${OID_A} blob 9\nSKILL.md\n`) });
-    expectRefusedBeforeCheckout(clone(), failed(/plugins\/foo\/a: its bytes do not end where its header says/));
+    expectRefusedBeforeCheckout(clone(), failed(/"plugins\/foo\/a": its bytes do not end where its header says/));
   });
 
   it('refuses leftover bytes after the last asked object', () => {
@@ -199,7 +212,7 @@ describe('cloneGitSource refuses a cat-file stream that does not frame exactly t
     ['spells its size loosely', `${OID_A} blob +8`],
   ] as const)('refuses a header that %s', ([, header]) => {
     installGit({ links: links.slice(0, 1), batch: Buffer.from(`${header}\nSKILL.md\n`) });
-    expectRefusedBeforeCheckout(clone(), failed(/plugins\/foo\/a: its header .* is not/));
+    expectRefusedBeforeCheckout(clone(), failed(/"plugins\/foo\/a": its header .* is not/));
   });
 });
 
@@ -210,12 +223,12 @@ describe('cloneGitSource judges committed link texts by the shared untrusted-lin
     ['a component ending in a dot', 'docs./x'],
   ] as const)('refuses a text holding %s as not portable, on every host', ([, text]) => {
     installGit({ links: [link('plugins/foo/a', OID_A, text)] });
-    expectRefusedBeforeCheckout(clone(), { code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('plugins/foo/a is a symbolic link whose text is not portable') });
+    expectRefusedBeforeCheckout(clone(), { code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('"plugins/foo/a" is a symbolic link whose text is not portable') });
   });
 
   it('refuses a text that climbs above the repository by either flavor\'s separators', () => {
     installGit({ links: [link('plugins/foo/a', OID_A, String.raw`..\../..\x`)] });
-    expectRefusedBeforeCheckout(clone(), { code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('plugins/foo/a is a symbolic link to a path outside the clone') });
+    expectRefusedBeforeCheckout(clone(), { code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('"plugins/foo/a" is a symbolic link to a path outside the clone') });
   });
 
   // R12-CONTRACT-I4 part 2: Windows names `Skills` and `skills` the same directory.

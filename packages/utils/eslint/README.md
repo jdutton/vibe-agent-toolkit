@@ -102,7 +102,7 @@ The table is **generated** from each rule's `meta.docs` by `bun run generate:cla
 | `no-link-following-fs` | `stat`/`statSync`/`existsSync`/`realpath`/`realpathSync`, and `symlink`/`symlinkSync` called with no type, from `node:fs` or `node:fs/promises` under `packages/*/src/` | `followedStatSync`/`followedKindSync`/`realpathNativeSync(path, within)` or `pathPresent(path, { follow: within }, …)` | — |  | — |
 | `no-os-tmpdir` | `os.tmpdir()` (8.3 short names on Windows) | `normalizedTmpdir()` | `/fs` | ✓ | `error` |
 | `no-raw-signal-listener` | `process.on(<signal>, …)`, `process.off(<signal>, …)`, `once(process, <signal>)` and `process.on(<non-literal>, …)` | `handleTerminatingSignals()` | `/process` |  | — |
-| `no-text-git-object-read` | an argv holding `'ls-tree'` or `'cat-file'` that is not the first argument of a `…Bytes(…)` call | `runGitBytes()`, decoding the bytes where they are judged | `/git` |  | — |
+| `no-text-git-object-read` | an argv whose subcommand reads the object store, unless it is the first argument of `runGitBytes(…)` | `runGitBytes()`, decoding the bytes where they are judged | `/git` |  | — |
 | `no-unix-shell-commands` | `tar`, `grep`, `rm`, `echo`, … spawned directly | Node APIs, or a portable script fixture | — |  | `error` |
 
 #### URLs and dynamic imports

@@ -602,6 +602,22 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 
 ## Git and crawl
 
+### An index listing (`ls-files -z`) is read as UTF-8 text, so a path that is not UTF-8 is re-spelled
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** yes (a wrong path, no refusal)
+- **Mechanism:** what the OBJECT STORE holds is read as bytes (`runGitBytes`, held there by
+  `local/no-text-git-object-read`), but every `ls-files -z` caller reads through `runGit`, which
+  decodes UTF-8 and replaces each invalid byte with U+FFFD. On a file system that stores name bytes
+  verbatim (Linux), a file named `\xff.md` is listed as `�.md`: a lookup misses it, and two such
+  names collapse into one. macOS and Windows refuse to create such a name, so they never see it.
+- **Traced in code**, not reproduced against the built CLI.
+- **Where:** the `ls-files` readers in [`git-utils.ts`](../../packages/utils/src/git-utils.ts),
+  [`git-publish.ts`](../../packages/cli/src/commands/claude/marketplace/git-publish.ts),
+  [`capture.ts`](../../packages/cli/src/qa-snapshot/capture.ts) and
+  [`git-state.ts`](../../packages/lab/src/harness/git-state.ts)
+- **Fix:** read the listing with `runGitBytes`, decide each path with `decodeUtf8Exactly` and refuse
+  (or report) the ones it cannot name; then add `ls-files` to the rule's subcommands.
+
 ### A one-file edit repopulates the whole tree
 
 - **Blocks:** the stable tag

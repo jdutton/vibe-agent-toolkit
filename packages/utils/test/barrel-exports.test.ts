@@ -86,6 +86,7 @@ const BARREL_EXPORTS = [
   'createSymlink',
   'createSymlinkAsync',
   'decodeTextContent',
+  'decodeUtf8Exactly',
   'detachGitEnv',
   'direntKind',
   'direntKindFollowing',

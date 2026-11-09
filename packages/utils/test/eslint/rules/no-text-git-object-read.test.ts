@@ -1,8 +1,10 @@
 /**
  * `no-text-git-object-read` — an argv reading git's object store (`ls-tree`,
- * `cat-file`) is handed only to a bytes runner. The VALID cases pin the bytes
- * runner and its wrappers, and that other subcommands are out of scope; the
- * INVALID ones pin the text runners and an argv parked in a variable first.
+ * `cat-file`, `diff-tree`, `rev-list`, `show`) is handed only to `runGitBytes`.
+ * The VALID cases pin the bytes runner, the subcommand position (a global option
+ * and its value are skipped, a later element is not the subcommand), and that
+ * other subcommands are out of scope; the INVALID ones pin the text runners, a
+ * wrapper however it is named, and an argv parked in a variable first.
  */
 
 import { describe, it } from 'vitest';
@@ -16,22 +18,30 @@ const CASES: RuleCases = {
   valid: [
     { code: "runGitBytes(['ls-tree', '-r', '-z', commit], { cwd });", filename: SRC },
     { code: "runGitBytes(['cat-file', '--batch'], { cwd, input });", filename: SRC },
-    // A wrapper of the bytes runner, named as one.
-    { code: "readCloneBytes(['cat-file', '--batch'], cloneDir, 'read', input);", filename: SRC },
-    { code: "git.runGitBytes(['ls-tree', commit]);", filename: SRC },
-    // Other subcommands are not object-store reads.
+    { code: "git.runGitBytes(['show', `${commit}:a.md`]);", filename: SRC },
+    { code: "runGitBytes(['-c', 'core.quotepath=false', 'diff-tree', '-r', '-z', commit]);", filename: SRC },
+    // Other subcommands are not object-store reads — `show` as a SUB-subcommand included.
     { code: "runGit(['rev-parse', 'HEAD'], { cwd });", filename: SRC },
     { code: "runGit(['ls-files', '-z'], { cwd, trim: false });", filename: SRC },
+    { code: "runGit(['remote', 'show', 'origin']);", filename: SRC },
+    // A global option's VALUE is not the subcommand.
+    { code: "runGit(['-C', 'show', 'status']);", filename: SRC },
   ],
   invalid: [
     { code: "runGit(['ls-tree', '-r', '-z', commit], { cwd, trim: false });", filename: SRC, errors: [{ messageId: 'textRead', data: { subcommand: 'ls-tree' } }] },
     { code: "runGitOrThrow(['cat-file', 'blob', oid]);", filename: SRC, errors: [{ messageId: 'textRead', data: { subcommand: 'cat-file' } }] },
     { code: "executeGitCommand(['cat-file', '--batch'], { stdin });", filename: SRC, errors: [{ messageId: 'textRead' }] },
+    { code: "runGit(['diff-tree', '-r', '--name-only', commit]);", filename: SRC, errors: [{ messageId: 'textRead', data: { subcommand: 'diff-tree' } }] },
+    { code: "runGit(['rev-list', '--objects', 'HEAD']);", filename: SRC, errors: [{ messageId: 'textRead', data: { subcommand: 'rev-list' } }] },
+    { code: "runGit(['show', `${commit}:a.md`], { trim: false });", filename: SRC, errors: [{ messageId: 'textRead', data: { subcommand: 'show' } }] },
+    // The subcommand after global options is still the subcommand.
+    { code: "runGit(['-c', 'core.quotepath=false', 'ls-tree', commit]);", filename: SRC, errors: [{ messageId: 'textRead', data: { subcommand: 'ls-tree' } }] },
     // Parked in a variable, then handed to anything: the literal is the read.
     { code: "const args = ['ls-tree', commit]; runGitBytes(args);", filename: SRC, errors: [{ messageId: 'textRead' }] },
-    // Not the argv position of a bytes runner.
+    // Not the argv position of the bytes runner.
     { code: "runGitBytes(['--version'], { extra: ['cat-file'] });", filename: SRC, errors: [{ messageId: 'textRead' }] },
-    // A name merely containing Bytes is not a bytes runner.
+    // A wrapper is not the bytes runner, whatever its name says: it may decode.
+    { code: "readCloneBytes(['cat-file', '--batch'], cloneDir);", filename: SRC, errors: [{ messageId: 'textRead' }] },
     { code: "readBytesOf(['ls-tree', commit]);", filename: SRC, errors: [{ messageId: 'textRead' }] },
   ],
 };
