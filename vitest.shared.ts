@@ -144,7 +144,7 @@ declare module 'vitest' {
     tierTestTimeout: number;
     tierHookTimeout: number;
     /** Provided only where `vitest.fork-rss-budget.setup.js` is installed — see {@link forkRssBudgetMb}. */
-    forkRssBudgetMb: number;
+    forkRssBudgetMb?: number;
   }
 }
 
@@ -302,14 +302,16 @@ export function createUnitTestConfig(overrides: UnitTestConfigOverrides = {}) {
  * `resource-compiler` holds 1-3 GB of native memory. `cli` is ~80% of the tier's
  * test time (the serial `coverage.yml` run: 568 s of 707 s, its 576 fault-matrix
  * files most of it), so at 2 workers the whole `test:integration` step waits on
- * `cli` alone while half of a 4-vCPU CI runner sits idle.
+ * `cli` alone, on 2 of a 4-vCPU CI runner's cores, once the other packages finish.
  *
  * Raising the cap is only safe while every fork stays small, and that is
- * ENFORCED, not asserted: a config that raises it gets
+ * checked, not asserted: a config that raises it gets
  * `vitest.fork-rss-budget.setup.js`, which fails a test file whose fork's peak
  * RSS passes {@link forkRssBudgetMb}. RSS, not "no native addon": `vat rag clear`
  * loads LanceDB's binding (~110 MB) to remove a directory, which is harmless —
- * the 1-3 GB is the engine or a model at WORK, and only resident memory sees it.
+ * the 1-3 GB is the engine or a model at WORK. The check sees the fork's own
+ * process only; no `cli` integration test spawns a model-loading `vat` (those
+ * runs are in the system tier, which keeps its own cap).
  *
  * 4 is the vCPU count of the GitHub-hosted ubuntu-latest and windows-latest
  * runners the gate runs on — not `availableParallelism()`, which on a
@@ -320,11 +322,13 @@ export const cliIntegrationTestWorkers = 4;
 /**
  * Peak resident memory one fork of a raised-cap integration tier may reach, in MB.
  *
- * Measured on `cli`'s heaviest integration files (a fault-matrix `top-level-build`
- * shard, `projection-skill-extent-corpus`, `cli-basics`, `rag clear`): 93-389 MB
- * per fork. 1536 MB is the 1024 MB V8 heap cap ({@link integrationExecArgv}) plus
- * 512 MB for everything outside it, so four forks are bounded at 6 GB of a 16 GB
- * runner — beside the native-memory chain's one package at a time (2 forks).
+ * Measured on macOS on `cli`'s heaviest integration files (a fault-matrix
+ * `top-level-build` shard, `projection-skill-extent-corpus`, `cli-basics`,
+ * `rag clear`): 93-389 MB per fork; not yet sampled on Windows. 1536 MB is the
+ * 1024 MB V8 heap cap ({@link integrationExecArgv}) plus 512 MB for everything
+ * outside it, so four in-budget forks come to at most 6 GB of a 16 GB runner,
+ * beside the native-memory chain's one package at a time (2 forks). A detector,
+ * not a limit: a file past it fails, named, after it ran.
  */
 export const forkRssBudgetMb = 1536;
 

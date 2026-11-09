@@ -235,6 +235,9 @@
     "vitest.shared.ts",
     "vitest.setup.js",
     "vitest.fork-rss-budget.setup.js",
+    // Read by dev-tools' turbo-test-concurrency guard, which a package-local
+    // config edit must re-run rather than replay.
+    "packages/*/vitest.integration.config.ts",
     "packages/dev-tools/src/copy-yaml-assets.ts",
     // Loaded by vitest.shared.ts into every tier's reporters: the per-file
     // duration ratchet and its allowlist are inputs of every test task, so an
