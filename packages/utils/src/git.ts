@@ -31,6 +31,12 @@ export {
   type GitRunOptions,
   type GitRunResult,
 } from './git-run.js';
+export {
+  gitChangedFiles,
+  type GitChangedFile,
+  type GitChangedFilesResult,
+  type GitChangeKind,
+} from './git-changed-files.js';
 export { gitFindRoot, gitLsFiles, gitLsOthers, isGitIgnored } from './git-utils.js';
 // The listings' REQUIRED `unreadable` option, typed here so a `./git`-only
 // consumer can spell its policy without reaching for `./crawl`. The class is

@@ -43,9 +43,8 @@
  * (`location` is the project-relative POSIX path of the file you would open,
  * `line` beside it, `field` for a pointer inside the document, `link` for an
  * href the finding is about) with `ignore` removed from the severity — an
- * ignored issue was suppressed by the adopter and is never published — and
- * `column` added, because the one lane that had it (`resources validate`)
- * carried it in a private shape. {@link reportSchema} takes the finding schema
+ * ignored issue was suppressed by the adopter and is never published.
+ * {@link reportSchema} takes the finding schema
  * as a REQUIRED parameter so a verb whose findings carry more (a subject, a
  * harness) passes a narrowed one rather than widening this one.
  */
@@ -65,16 +64,12 @@ export type ReportStatus = z.infer<typeof ReportStatusSchema>;
 
 export const FindingSchema = ValidationIssueSchema
   .omit({ severity: true })
-  .extend({
-    severity: SeveritySchema,
-    /** 1-based column within `line`, when the producer knows it. */
-    column: z.number().int().positive().optional(),
-  })
+  .extend({ severity: SeveritySchema })
   .strict();
 
 /**
  * One published finding. Structurally a {@link ValidationIssue} whose severity
- * is never `ignore`, plus an optional `column`.
+ * is never `ignore`.
  *
  * `code` is a plain string here, not the registry union: a report's findings
  * span every code space a lane draws on — the shipped registry, an adopter's
@@ -85,8 +80,6 @@ export const FindingSchema = ValidationIssueSchema
 export interface Finding extends Omit<ValidationIssue, 'severity' | 'code'> {
   code: string;
   severity: Severity;
-  /** 1-based column within {@link ValidationIssue.line}, when known. */
-  column?: number;
 }
 
 export const SeverityCountsSchema = z.object({

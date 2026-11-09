@@ -165,7 +165,7 @@ const CONFIG_BOTH = {
 const CONFIG_EMPTY = {} as unknown as ProjectConfig;
 /** The root a `vat validate` run resolved (never touched on disk: the phases are stubbed), and the run's flags. */
 const VALIDATE_ROOT = safePath.join(normalizedTmpdir(), 'resolved-project-root');
-const VALIDATE_RUN = { root: VALIDATE_ROOT, verbose: false, debug: false } as const;
+const VALIDATE_RUN = { root: VALIDATE_ROOT, verbose: false, debug: false, base: undefined } as const;
 /** What a config that exists but does not parse hands back to the orchestrator. */
 const BROKEN_CONFIG_ERROR = 'Failed to load config: bad yaml';
 const CONFIG_MARKETPLACE = {

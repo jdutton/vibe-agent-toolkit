@@ -71,6 +71,10 @@
                     "type": "integer",
                     "exclusiveMinimum": 0
                   },
+                  "column": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  },
                   "field": {
                     "type": "string"
                   },
@@ -93,10 +97,6 @@
                       "warning",
                       "info"
                     ]
-                  },
-                  "column": {
-                    "type": "integer",
-                    "exclusiveMinimum": 0
                   }
                 },
                 "required": [
@@ -237,6 +237,14 @@
                       "builtin": {
                         "type": "boolean",
                         "const": true
+                      },
+                      "examined": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "allowEmpty": {
+                        "type": "boolean",
+                        "const": true
                       }
                     },
                     "required": [
@@ -347,6 +355,7 @@
                     "RUN_INCOMPLETE",
                     "INTERNAL_ERROR",
                     "RESOURCE_CHECK_BROKEN",
+                    "RESOURCE_CHECK_EXAMINED_NOTHING",
                     "ARD_NOT_CONFIGURED",
                     "ARD_DERIVATION_FAILED"
                   ]

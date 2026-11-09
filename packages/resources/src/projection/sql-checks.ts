@@ -88,8 +88,8 @@
  * far as you like; you cannot downgrade the report that it stopped asserting.
  */
 
-import { customCheckCode } from '@vibe-agent-toolkit/schema';
-import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { customCheckCode, SEVERITIES, SeveritySchema } from '@vibe-agent-toolkit/schema';
+import type { Severity, ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 import type { ResourceCheck } from '../schemas/project-config.js';
 
@@ -106,7 +106,76 @@ import { findingLocation } from './finding-location.js';
 export const PROJECTION_STATEMENT_REFUSED_CODE = 'PROJECTION_STATEMENT_REFUSED';
 
 /**
+ * The column names a check's row reads as something other than evidence.
+ *
+ * 🔑 Matched EXACTLY, case included. A result row keeps the spelling the
+ * statement used, so `SELECT Severity` and `SELECT severity` arrive as
+ * different keys; only the exact one is reserved, and the other is a
+ * {@link NearMiss}.
+ */
+const RESERVED_CHECK_COLUMNS = ['path', 'severity', 'line', 'column'] as const;
+
+/** One reserved column name. */
+type ReservedCheckColumn = (typeof RESERVED_CHECK_COLUMNS)[number];
+
+/**
+ * A selected column whose name matches a reserved one only case-insensitively —
+ * almost certainly meant as that column, and read as evidence instead.
+ */
+export interface NearMiss {
+  /** The column as the statement spelled it. */
+  readonly column: string;
+  /** The reserved name it nearly is. */
+  readonly reserved: ReservedCheckColumn;
+}
+
+/** A reserved column whose value can refuse a check: every one but `path`. */
+type StrictCheckColumn = Exclude<ReservedCheckColumn, 'path'>;
+
+/**
+ * What one check's rows became.
+ *
+ * - `ok: true` — one finding per row, plus the near-miss column names a caller
+ *   warns about once per check (every row of one statement has the same columns).
+ * - `ok: false` — a row's reserved column held a value it cannot mean, so NONE
+ *   of the rows were reported. `row` is 1-based; `field` is the SQL column NAME
+ *   (never the finding's `column` coordinate); `rowsSelected` is how many rows
+ *   the statement returned — it completed, so the count is real; `reason` is
+ *   the predicate the value failed (`is not a positive integer`).
+ */
+export type CheckRowConversion =
+  | {
+    readonly ok: true;
+    readonly issues: readonly ValidationIssue[];
+    readonly nearMisses: readonly NearMiss[];
+  }
+  | {
+    readonly ok: false;
+    readonly row: number;
+    readonly field: StrictCheckColumn;
+    readonly value: unknown;
+    readonly rowsSelected: number;
+    readonly reason: string;
+  };
+
+/** One row's reading of a reserved column: a value, nothing said, or a refusal. */
+type Read<T> = { readonly ok: true; readonly value: T | undefined } | { readonly ok: false };
+
+/** Why a `severity` value was refused, as a predicate. */
+const SEVERITY_REFUSAL = `is not one of ${SEVERITIES.join(', ')}`;
+/** Why a `line` or `column` value was refused, as a predicate. */
+const POSITION_REFUSAL = 'is not a positive integer';
+
+/**
  * Turn one check's selected rows into findings.
+ *
+ * Four columns are RESERVED ({@link RESERVED_CHECK_COLUMNS}): `path` anchors the
+ * finding, `severity` sets that row's severity, and `line` / `column` place it.
+ * `NULL` or absent means "not said". Anything else in `severity`, `line` or
+ * `column` refuses the whole check rather than being guessed at — a row graded
+ * `'high'` was written by someone who meant something, and reporting it at the
+ * declared severity would re-grade it in silence. (`path` keeps its older rule:
+ * an unusable value is dropped, see {@link locationOf}.)
  *
  * @param name - The check's key in `resources.checks`
  * @param check - Its declaration
@@ -114,30 +183,148 @@ export const PROJECTION_STATEMENT_REFUSED_CODE = 'PROJECTION_STATEMENT_REFUSED';
  *   it. See `SqlQueryableStore.query`: arbitrary SQL has no table spec, so a
  *   boolean arrives as `0`/`1` and a date as text. The message renders what is
  *   there rather than pretending otherwise
- * @returns One finding per row, in the order SQLite produced them
+ * @returns One finding per row, in the order SQLite produced them — or the
+ *   first row that could not be read
  */
 export function issuesFromCheckRows(
   name: string,
   check: ResourceCheck,
   rows: readonly Record<string, unknown>[],
-): ValidationIssue[] {
-  return rows.map((row) => {
+): CheckRowConversion {
+  const issues: ValidationIssue[] = [];
+  for (const [index, row] of rows.entries()) {
+    const read = readRow(row);
+    if (!read.ok) {
+      return { ok: false, row: index + 1, field: read.field, value: row[read.field], rowsSelected: rows.length, reason: read.reason };
+    }
     const location = locationOf(row);
-    return {
+    issues.push({
       code: customCheckCode(name),
-      // Declared, defaulting to `error`. The safe direction: a check whose
-      // author did not think about severity is still an assertion they wanted
-      // enforced, and defaulting to `warning` would let it pass CI in silence —
-      // which is the exact outcome writing a check was meant to prevent.
-      severity: check.severity ?? 'error',
+      // The row's own, else declared, else `error`. The safe direction: a check
+      // whose author did not think about severity is still an assertion they
+      // wanted enforced, and defaulting to `warning` would let it pass CI in
+      // silence — which is the exact outcome writing a check was meant to prevent.
+      severity: read.severity ?? check.severity ?? 'error',
       message: `${check.description} — ${renderRow(row)}`,
       // Spread rather than assigned, because `exactOptionalPropertyTypes` makes
       // an absent key and one holding `undefined` different values, and
       // `ValidationIssue.location` is refined: it must be a project-relative
       // POSIX path or absent. There is no third state to put a placeholder in.
       ...(location === undefined ? {} : { location }),
-    };
-  });
+      ...(read.line === undefined ? {} : { line: read.line }),
+      ...(read.column === undefined ? {} : { column: read.column }),
+    });
+  }
+  return { ok: true, issues, nearMisses: nearMissesOf(rows[0]) };
+}
+
+/**
+ * Every statement a check may run: its violations statement, then its declared
+ * `examined` statement.
+ *
+ * 🔑 The one answer to "which statements can this check execute", so a caller
+ * deciding what the run must prepare for — the derived relations a statement
+ * names, above all — cannot see the violations statement and miss the other.
+ *
+ * @param check - Its declaration
+ * @returns The statements, in the order the check runs them
+ */
+export function checkStatements(check: ResourceCheck): string[] {
+  return check.examined === undefined ? [check.sql] : [check.sql, check.examined];
+}
+
+/**
+ * The sentence for a check whose rows could not be read.
+ *
+ * Here rather than in the CLI because it is a statement about what the ROWS
+ * meant — the value is rendered the way the finding's evidence renders it,
+ * quoted when it is text so `"3"` and `3` read differently.
+ *
+ * @param name - The check's key in `resources.checks`
+ * @param refusal - What {@link issuesFromCheckRows} refused
+ * @returns e.g. `The check "x" ran and selected 3 rows, but row 3's severity =
+ *   "high" is not one of error, warning, info, so none of its rows were reported.`
+ */
+export function describeUninterpretableRows(name: string, refusal: Extract<CheckRowConversion, { ok: false }>): string {
+  const value = typeof refusal.value === 'string' ? JSON.stringify(refusal.value) : renderValue(refusal.value);
+  const noun = refusal.rowsSelected === 1 ? 'row' : 'rows';
+  return `The check "${name}" ran and selected ${String(refusal.rowsSelected)} ${noun}, but row`
+    + ` ${String(refusal.row)}'s ${refusal.field} = ${value} ${refusal.reason}, so none of its rows were reported.`;
+}
+
+/** A row's strict reserved columns, read — or the first one that cannot be. */
+type RowReading =
+  | { readonly ok: true; readonly severity: Severity | undefined; readonly line: number | undefined; readonly column: number | undefined }
+  | { readonly ok: false; readonly field: StrictCheckColumn; readonly reason: string };
+
+/**
+ * Read one row's `severity`, `line` and `column`.
+ *
+ * @param row - One selected row
+ * @returns The three values, or the column that refused
+ */
+function readRow(row: Record<string, unknown>): RowReading {
+  const severity = readSeverity(row['severity']);
+  if (!severity.ok) return { ok: false, field: 'severity', reason: SEVERITY_REFUSAL };
+  const line = readPosition(row['line']);
+  if (!line.ok) return { ok: false, field: 'line', reason: POSITION_REFUSAL };
+  const column = readPosition(row['column']);
+  if (!column.ok) return { ok: false, field: 'column', reason: POSITION_REFUSAL };
+  // A column is a place WITHIN a line; on its own it places nothing.
+  if (column.value !== undefined && line.value === undefined) {
+    return { ok: false, field: 'column', reason: 'is set but its line is not' };
+  }
+  return { ok: true, severity: severity.value, line: line.value, column: column.value };
+}
+
+/**
+ * The `severity` column: exactly a {@link Severity}, case-sensitive.
+ *
+ * ⛔ `'ignore'` is refused: it is an adopter's override, never a fact a row can
+ * state about itself — a row that could ignore itself is a check that passes by
+ * writing its own exemption.
+ *
+ * @param value - The column's value
+ * @returns The severity, nothing, or a refusal
+ */
+function readSeverity(value: unknown): Read<Severity> {
+  if (value === undefined || value === null) return { ok: true, value: undefined };
+  const parsed = SeveritySchema.safeParse(value);
+  return parsed.success ? { ok: true, value: parsed.data } : { ok: false };
+}
+
+/**
+ * The `line` or `column` column: a positive safe integer.
+ *
+ * A `bigint` is accepted in range, because a store that reads 64-bit integers
+ * as `bigint` returns one for an ordinary `INTEGER` column.
+ *
+ * @param value - The column's value
+ * @returns The position, nothing, or a refusal
+ */
+function readPosition(value: unknown): Read<number> {
+  if (value === undefined || value === null) return { ok: true, value: undefined };
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return { ok: true, value };
+  if (typeof value === 'bigint' && value > 0n && value <= BigInt(Number.MAX_SAFE_INTEGER)) {
+    return { ok: true, value: Number(value) };
+  }
+  return { ok: false };
+}
+
+/**
+ * The selected columns whose names match a reserved one in another case.
+ *
+ * @param row - Any one row: every row of one statement has the same columns
+ * @returns The near misses, in the order the statement selected them
+ */
+function nearMissesOf(row: Record<string, unknown> | undefined): NearMiss[] {
+  if (row === undefined) return [];
+  const misses: NearMiss[] = [];
+  for (const column of Object.keys(row)) {
+    const reserved = RESERVED_CHECK_COLUMNS.find((name) => name === column.toLowerCase());
+    if (reserved !== undefined && reserved !== column) misses.push({ column, reserved });
+  }
+  return misses;
 }
 
 /**

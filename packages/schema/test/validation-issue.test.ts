@@ -69,3 +69,24 @@ describe('createRegistryIssue', () => {
     expect(issue.fix).toBe(CODE_REGISTRY.LINK_OUTSIDE_PROJECT.fix);
   });
 });
+
+/**
+ * `column` has ONE home: the issue itself. A published `Finding` inherits it
+ * rather than re-adding it, so a lane that knows a column carries it on the
+ * issue it builds instead of only on the document it publishes.
+ */
+describe('ValidationIssueSchema column', () => {
+  it('accepts a 1-based column beside its line', () => {
+    expect(ValidationIssueSchema.safeParse(issueWith({ location: 'a.md', line: 3, column: 5 })).success).toBe(true);
+  });
+
+  it.each([0, -1, 1.5])('refuses column %s', (column) => {
+    expect(ValidationIssueSchema.safeParse(issueWith({ line: 3, column })).success).toBe(false);
+  });
+
+  it('is an extra createRegistryIssue carries', () => {
+    const issue = createRegistryIssue('LINK_OUTSIDE_PROJECT', 'broken', { location: 'a.md', line: 3, column: 5 });
+
+    expect(issue.column).toBe(5);
+  });
+});

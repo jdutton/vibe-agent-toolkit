@@ -18,11 +18,17 @@
 
 import { sep } from 'node:path';
 
-import { customCheckCode } from '@vibe-agent-toolkit/schema';
+import { customCheckCode, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
 
-import { issuesFromCheckRows } from '../src/projection/sql-checks.js';
+import {
+  checkStatements,
+  describeUninterpretableRows,
+  issuesFromCheckRows,
+  type CheckRowConversion,
+} from '../src/projection/sql-checks.js';
+import { ResourceCheckSchema, type ResourceCheck } from '../src/schemas/project-config.js';
 
 /** The one check name these tests use, and the code it must produce. */
 const NAME = 'orphan-skills';
@@ -41,6 +47,24 @@ const CHECK = {
   sql: 'SELECT path FROM resource_realizations',
 } as const;
 
+/**
+ * The findings of a conversion every case here expects to succeed.
+ *
+ * @throws When the conversion refused a row, naming what it refused
+ */
+function issuesOf(name: string, check: ResourceCheck, rows: readonly Record<string, unknown>[]): readonly ValidationIssue[] {
+  const result = issuesFromCheckRows(name, check, rows);
+  if (!result.ok) throw new Error(`expected the rows to convert; row ${String(result.row)}'s ${result.field} was refused`);
+  return result.issues;
+}
+
+/** The refusal of a conversion a case expects to fail. */
+function refusalOf(rows: readonly Record<string, unknown>[]): Extract<CheckRowConversion, { ok: false }> {
+  const result = issuesFromCheckRows(NAME, CHECK, rows);
+  if (result.ok) throw new Error('expected the rows to be refused');
+  return result;
+}
+
 describe('customCheckCode', () => {
   it('namespaces a check name so it cannot collide with a registry code', () => {
     // The registry's code space is closed and every entry carries a default
@@ -53,11 +77,11 @@ describe('customCheckCode', () => {
 
 describe('issuesFromCheckRows', () => {
   it('emits nothing when the statement selected nothing, because that is the pass', () => {
-    expect(issuesFromCheckRows(NAME, CHECK, [])).toStrictEqual([]);
+    expect(issuesOf(NAME, CHECK, [])).toStrictEqual([]);
   });
 
   it('emits one finding per violating row', () => {
-    const issues = issuesFromCheckRows(NAME, CHECK, [
+    const issues = issuesOf(NAME, CHECK, [
       { path: SKILL_PATH },
       { path: 'skills/b/SKILL.md' },
     ]);
@@ -71,13 +95,13 @@ describe('issuesFromCheckRows', () => {
     // The safe direction. A check whose author did not think about severity is
     // an assertion they wanted enforced; defaulting to `warning` would let it
     // pass CI silently, which is the failure mode a check exists to prevent.
-    const [issue] = issuesFromCheckRows(NAME, CHECK, [{ path: 'a.md' }]);
+    const [issue] = issuesOf(NAME, CHECK, [{ path: 'a.md' }]);
 
     expect(issue?.severity).toBe('error');
   });
 
   it('honours a declared severity', () => {
-    const [issue] = issuesFromCheckRows(NAME, { ...CHECK, severity: 'warning' }, [{ path: 'a.md' }]);
+    const [issue] = issuesOf(NAME, { ...CHECK, severity: 'warning' }, [{ path: 'a.md' }]);
 
     expect(issue?.severity).toBe('warning');
   });
@@ -87,7 +111,7 @@ describe('issuesFromCheckRows', () => {
     // findings a reader can open. Without it every finding would point at the
     // config file, which is where the check is written and not where the problem
     // is.
-    const [issue] = issuesFromCheckRows(NAME, CHECK, [{ path: SKILL_PATH }]);
+    const [issue] = issuesOf(NAME, CHECK, [{ path: SKILL_PATH }]);
 
     expect(issue?.location).toBe(SKILL_PATH);
   });
@@ -97,7 +121,7 @@ describe('issuesFromCheckRows', () => {
     // project-relative POSIX path, and an aggregate check (`SELECT COUNT(*)`)
     // has no file to name — inventing one would put a reader in a file that has
     // nothing to do with the finding.
-    const [issue] = issuesFromCheckRows('too-many-skills', COUNT_CHECK, [{ n: 51 }]);
+    const [issue] = issuesOf('too-many-skills', COUNT_CHECK, [{ n: 51 }]);
 
     expect(issue?.location).toBeUndefined();
   });
@@ -106,7 +130,7 @@ describe('issuesFromCheckRows', () => {
     // The evidence. A message that only repeated the description would make two
     // violations of one check indistinguishable, and the row set is the only
     // thing that says what to go and look at.
-    const [issue] = issuesFromCheckRows('too-many-skills', COUNT_CHECK, [{ n: 51 }]);
+    const [issue] = issuesOf('too-many-skills', COUNT_CHECK, [{ n: 51 }]);
 
     expect(issue?.message).toContain(COUNT_CHECK.description);
     expect(issue?.message).toContain('n=51');
@@ -114,7 +138,7 @@ describe('issuesFromCheckRows', () => {
 
   /** The location a one-row check reports for a given `path` value. */
   const locationFor = (path: unknown): string | undefined =>
-    issuesFromCheckRows(NAME, CHECK, [{ path }])[0]?.location;
+    issuesOf(NAME, CHECK, [{ path }])[0]?.location;
 
   // Gated: a backslash is a separator only on win32; on POSIX it is a filename character (next case).
   it.skipIf(sep !== '\\')('declines a backslashed path rather than emitting an invalid location', () => {
@@ -164,7 +188,7 @@ describe('issuesFromCheckRows', () => {
     // spec), so a BLOB column genuinely reaches the renderer as a Uint8Array.
     // `String()` on one gives the reader `[object Uint8Array]`, which names the
     // TYPE and never the value.
-    const [issue] = issuesFromCheckRows(
+    const [issue] = issuesOf(
       'blobbed',
       { description: 'No blobs', sql: 'SELECT digest FROM blobs' },
       [{ digest: new Uint8Array([1, 255]) }],
@@ -178,12 +202,180 @@ describe('issuesFromCheckRows', () => {
     // meaningfully — `contentKey` is null for a deferred row. A renderer that
     // skipped nulls would make "this column was null" and "this column was not
     // selected" the same finding text.
-    const [issue] = issuesFromCheckRows(
+    const [issue] = issuesOf(
       'unkeyed',
       { description: 'No unkeyed rows', sql: 'SELECT contentKey FROM resource_realizations' },
       [{ contentKey: null }],
     );
 
     expect(issue?.message).toContain('contentKey=null');
+  });
+});
+
+/**
+ * The reserved row columns: `path` (above), `severity`, `line` and `column`.
+ *
+ * 🔑 Each is EXACT. A value the column cannot mean refuses the whole check
+ * rather than being skipped: a row whose `severity` reads `'high'` was written
+ * by an author who meant something, and reporting it at the declared severity
+ * would silently re-grade it.
+ */
+describe('issuesFromCheckRows — the reserved severity column', () => {
+  it('takes a row\'s own severity over the declared one', () => {
+    const issues = issuesOf(NAME, CHECK, [{ path: 'a.md', severity: 'warning' }, { path: 'b.md', severity: 'info' }]);
+
+    expect(issues.map((issue) => issue.severity)).toStrictEqual(['warning', 'info']);
+  });
+
+  it.each([
+    ['NULL', { path: 'a.md', severity: null }],
+    ['absent', { path: 'a.md' }],
+  ])('falls back to the declared severity when the column is %s', (_label, row) => {
+    const [issue] = issuesOf(NAME, { ...CHECK, severity: 'warning' }, [row]);
+
+    expect(issue?.severity).toBe('warning');
+  });
+
+  it.each([
+    ['an unknown word', 'high'],
+    ['the override-only value', 'ignore'],
+    ['a case variant', 'Error'],
+    ['a number', 2],
+    ['a BLOB', new Uint8Array([1])],
+  ])('refuses %s', (_label, value) => {
+    const refusal = refusalOf([{ path: 'a.md' }, { path: 'b.md', severity: value }]);
+
+    expect(refusal).toMatchObject({ ok: false, row: 2, field: 'severity', value, rowsSelected: 2 });
+  });
+});
+
+describe('issuesFromCheckRows — the reserved line and column columns', () => {
+  it('consumes location, line and column', () => {
+    const [issue] = issuesOf(NAME, CHECK, [{ path: 'a.md', line: 3, column: 5 }]);
+
+    expect(issue).toMatchObject({ location: 'a.md', line: 3, column: 5 });
+  });
+
+  it('accepts an in-range bigint, as a store reading int64 returns one', () => {
+    const [issue] = issuesOf(NAME, CHECK, [{ path: 'a.md', line: 3n, column: 5n }]);
+
+    expect(issue).toMatchObject({ line: 3, column: 5 });
+  });
+
+  it('omits both when NULL or absent', () => {
+    const issues = issuesOf(NAME, CHECK, [{ path: 'a.md', line: null, column: null }, { path: 'b.md' }]);
+
+    for (const issue of issues) {
+      expect(Object.hasOwn(issue, 'line')).toBe(false);
+      expect(Object.hasOwn(issue, 'column')).toBe(false);
+    }
+  });
+
+  it('keeps a line with no usable path', () => {
+    const [issue] = issuesOf(NAME, CHECK, [{ n: 1, line: 3 }]);
+
+    expect(issue?.location).toBeUndefined();
+    expect(issue?.line).toBe(3);
+  });
+
+  it.each([
+    ['line', 0],
+    ['line', -1],
+    ['line', 1.5],
+    ['line', '3'],
+    ['line', Number.MAX_SAFE_INTEGER + 1],
+    ['line', BigInt(Number.MAX_SAFE_INTEGER) + 1n],
+    ['line', 0n],
+    ['line', new Uint8Array([3])],
+    ['column', 0],
+    ['column', '5'],
+  ])('refuses %s = %s', (field, value) => {
+    const refusal = refusalOf([{ path: 'a.md', line: 1, [field]: value }]);
+
+    expect(refusal).toMatchObject({ ok: false, row: 1, field, rowsSelected: 1 });
+    expect(refusal.value).toBe(value);
+  });
+
+  it('refuses a column without a line', () => {
+    const refusal = refusalOf([{ path: 'a.md', column: 5 }]);
+
+    expect(refusal).toMatchObject({ ok: false, row: 1, field: 'column', value: 5 });
+  });
+});
+
+describe('issuesFromCheckRows — near misses of the reserved names', () => {
+  it('names a column that matches a reserved name in another case', () => {
+    const result = issuesFromCheckRows(NAME, CHECK, [{ Path: 'a.md', SEVERITY: 'warning', line: 1 }]);
+
+    expect(result.ok && result.nearMisses).toStrictEqual([
+      { column: 'Path', reserved: 'path' },
+      { column: 'SEVERITY', reserved: 'severity' },
+    ]);
+  });
+
+  it('names nothing when every reserved column is spelled exactly', () => {
+    const result = issuesFromCheckRows(NAME, CHECK, [{ path: 'a.md', severity: 'info', line: 1, column: 2 }]);
+
+    expect(result.ok && result.nearMisses).toStrictEqual([]);
+  });
+});
+
+describe('describeUninterpretableRows', () => {
+  it('quotes a text value, so "3" and 3 read differently', () => {
+    expect(describeUninterpretableRows(NAME, refusalOf([{ path: 'a.md', line: '3' }])))
+      .toBe(`The check "${NAME}" ran and selected 1 row, but row 1's line = "3" is not a positive integer, so none of its rows were reported.`);
+  });
+
+  it('names a column with no line as the problem', () => {
+    expect(describeUninterpretableRows(NAME, refusalOf([{ path: 'a.md' }, { path: 'b.md', column: 5 }])))
+      .toBe(`The check "${NAME}" ran and selected 2 rows, but row 2's column = 5 is set but its line is not, so none of its rows were reported.`);
+  });
+});
+
+/**
+ * 🔑 A check's `examined` statement is a second statement over the same
+ * projection, so every place that asks "which statements may this run execute"
+ * must see it — the lens selection most of all, or a derived relation only the
+ * `examined` statement names is never evaluated and reads empty.
+ */
+describe('checkStatements — every statement a check may run', () => {
+  it('is the violations statement alone when nothing else is declared', () => {
+    expect(checkStatements({ description: 'd', sql: 'SELECT path FROM a' })).toStrictEqual(['SELECT path FROM a']);
+  });
+
+  it('adds the examined statement after it when one is declared', () => {
+    expect(checkStatements({ description: 'd', sql: 'SELECT path FROM a', examined: 'SELECT path FROM b' }))
+      .toStrictEqual(['SELECT path FROM a', 'SELECT path FROM b']);
+  });
+});
+
+describe('ResourceCheckSchema — examined and allowEmpty', () => {
+  /** The refusal messages, each prefixed with its dotted path. */
+  const refusalsOf = (declaration: unknown): string[] => {
+    const result = ResourceCheckSchema.safeParse(declaration);
+    return result.success ? [] : result.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`);
+  };
+
+  it('accepts an examined statement, with or without allowEmpty', () => {
+    expect(refusalsOf({ description: 'd', sql: 'SELECT 1', examined: 'SELECT 1' })).toStrictEqual([]);
+    expect(refusalsOf({ description: 'd', sql: 'SELECT 1', examined: 'SELECT 1', allowEmpty: true })).toStrictEqual([]);
+  });
+
+  it('refuses allowEmpty without examined, naming the fix', () => {
+    // Zero is legitimate only about a count the check declared: without an
+    // `examined` statement there is no count for it to excuse, so the line is
+    // either a mistake or a belief that it does something it does not.
+    const messages = refusalsOf({ description: 'd', sql: 'SELECT 1', allowEmpty: true });
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatch(/^allowEmpty: /);
+    expect(messages[0]).toContain('declare `examined`');
+  });
+
+  it('accepts only `true` for allowEmpty — `false` is the absence of the key', () => {
+    expect(refusalsOf({ description: 'd', sql: 'SELECT 1', examined: 'SELECT 1', allowEmpty: false })).not.toStrictEqual([]);
+  });
+
+  it('refuses an empty examined statement', () => {
+    expect(refusalsOf({ description: 'd', sql: 'SELECT 1', examined: '' })).not.toStrictEqual([]);
   });
 });

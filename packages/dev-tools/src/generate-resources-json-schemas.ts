@@ -25,6 +25,7 @@
 import { PROJECTION_TABLES } from '../../resources/src/projection/table-registry.js';
 import { OkfConceptFrontmatterSchema } from '../../resources/src/schemas/okf-concept.js';
 import { ProjectConfigSchema } from '../../resources/src/schemas/project-config.js';
+import { ChangedFileRowSchema } from '../../resources/src/schemas/projection-changed-files.js';
 import {
   ClaudeContextChainRowSchema,
   ClaudeContextLoadRowSchema,
@@ -65,6 +66,7 @@ const NON_TABLE_ROW_SCHEMAS: readonly EmittedSchemaTarget[] = [
   { name: 'projection-lens-entry-points', schema: LensEntryPointRowSchema },
   { name: 'projection-claude-context-chains', schema: ClaudeContextChainRowSchema },
   { name: 'projection-claude-context-loads', schema: ClaudeContextLoadRowSchema },
+  { name: 'projection-changed-files', schema: ChangedFileRowSchema },
 ];
 
 /**

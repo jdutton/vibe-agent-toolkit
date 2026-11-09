@@ -1298,9 +1298,13 @@ describe('runProjectChecks — progress emitted for an outside observer', () => 
     expect(entries).toStrictEqual([
       { kind: 'start', name: FIRST },
       { kind: 'asked', sql: FIRST_SQL },
+      // 🔑 After the statement and BEFORE its cost: the rows are being turned into findings, and
+      // a kill here must read as that, not as a statement that would not return.
+      { kind: 'converting', name: FIRST, durationMs: 1, rows: 3 },
       { kind: 'check', name: FIRST, durationMs: 1, rows: 3 },
       { kind: 'start', name: SECOND },
       { kind: 'asked', sql: SECOND_SQL },
+      { kind: 'converting', name: SECOND, durationMs: 1, rows: 7 },
       { kind: 'check', name: SECOND, durationMs: 1, rows: 7 },
       // 🔑 Emitted HERE — by the loop's own caller, before severities are
       // resolved — and not by `runOutcome` after this function has returned.
@@ -1569,5 +1573,142 @@ describe('the built-in check set runs without any config', () => {
       { kind: 'check', name: LINK_CHECK_NAME, durationMs: 1, rows: 0, builtin: true },
       { kind: 'checks-complete' },
     ]);
+  });
+});
+
+/** A check whose rows carry the reserved `severity` column. */
+const GRADED = 'graded';
+const GRADED_SQL = 'SELECT path, severity FROM graded';
+const GRADED_CHECKS = {
+  [GRADED]: { description: 'graded rows', sql: GRADED_SQL },
+  [SECOND]: { description: 'No orphan skills', sql: SECOND_SQL },
+} as const;
+
+/**
+ * An `ask` that answers each statement with the rows a case names, and refuses any other.
+ *
+ * @param bySql - The rows each statement selects
+ * @returns The fake
+ */
+function askRows(bySql: Readonly<Record<string, readonly Record<string, unknown>[]>>): AskProjection {
+  return (sql) => {
+    const rows = bySql[sql];
+    if (rows === undefined) throw new Error(`This fake declares no rows for: ${sql}`);
+    return rows;
+  };
+}
+
+/** `graded` selects three rows, the third with an unknown severity; `no-orphans` selects one. */
+const ASK_BAD_SEVERITY = askRows({
+  [GRADED_SQL]: [{ path: 'a.md' }, { path: 'b.md' }, { path: 'c.md', severity: 'high' }],
+  [SECOND_SQL]: [{ path: 'd.md' }],
+});
+
+/**
+ * Run {@link GRADED_CHECKS} with one row graded `rowSeverity` and an override on the check's code.
+ *
+ * @param rowSeverity - The `severity` column of the one row
+ * @param override - The adopter's override for `CUSTOM:graded`
+ * @returns The resolved issues
+ */
+function gradedWithOverride(rowSeverity: string, override: 'error' | 'warning' | 'info' | 'ignore'): ReturnType<typeof runProjectChecks>['issues'] {
+  return runProjectChecks({
+    builtins: NO_BUILTINS,
+    checks: { [GRADED]: GRADED_CHECKS[GRADED] },
+    only: undefined,
+    ask: askRows({ [GRADED_SQL]: [{ path: 'a.md', severity: rowSeverity }] }),
+    validation: { severity: { [`CUSTOM:${GRADED}`]: override } },
+    membersEnumerated: POPULATED,
+  }).issues;
+}
+
+describe('runProjectChecks — a row the check cannot interpret', () => {
+  it('reports the check BROKEN with the rows it selected, and still runs the next one', () => {
+    const { issues, costs } = runWithClock({ checks: GRADED_CHECKS, ask: ASK_BAD_SEVERITY });
+
+    // 🔑 `rows` PRESENT beside `broken`: the statement completed, the rows could not be read.
+    expect(costs).toStrictEqual([
+      { name: GRADED, durationMs: 1, rows: 3, broken: true },
+      { name: SECOND, durationMs: 1, rows: 1 },
+    ]);
+    expect(issues.map((issue) => issue.code)).toStrictEqual(['RESOURCE_CHECK_BROKEN', SECOND_CODE]);
+    expect(issues[0]?.severity).toBe('error');
+    expect(issues[0]?.message).toContain(
+      'The check "graded" ran and selected 3 rows, but row 3\'s severity = "high" is not one of error, warning, info, so none of its rows were reported.',
+    );
+  });
+
+  it('is not silenced by an override on the check, as no RESOURCE_CHECK_BROKEN is', () => {
+    const { issues } = runProjectChecks({
+      builtins: NO_BUILTINS,
+      checks: GRADED_CHECKS,
+      only: undefined,
+      ask: ASK_BAD_SEVERITY,
+      validation: { severity: { [`CUSTOM:${GRADED}`]: 'ignore' } },
+      membersEnumerated: POPULATED,
+    });
+
+    expect(issues[0]).toMatchObject({ code: 'RESOURCE_CHECK_BROKEN', severity: 'error' });
+  });
+
+  it('publishes a schema-valid document with the broken check counted', () => {
+    const { payload, checks } = documentFor({ checks: GRADED_CHECKS, ask: ASK_BAD_SEVERITY });
+
+    expect(CHECK_REPORT_SCHEMA.safeParse(payload).success).toBe(true);
+    expect(checks[0]).toStrictEqual({ name: GRADED, durationSecs: expect.any(Number), rows: 3, broken: true });
+  });
+});
+
+describe('runProjectChecks — a row severity, and the adopter override over it', () => {
+  it('reports each row at its own severity', () => {
+    const { issues } = runWithClock({
+      checks: { [GRADED]: GRADED_CHECKS[GRADED] },
+      ask: askRows({ [GRADED_SQL]: [{ path: 'a.md', severity: 'warning' }, { path: 'b.md', severity: null }] }),
+    });
+
+    expect(issues.map((issue) => issue.severity)).toStrictEqual(['warning', 'error']);
+  });
+
+  it.each([
+    ['raises a row graded warning', 'warning', 'error', ['error']],
+    ['lowers a row graded error', 'error', 'warning', ['warning']],
+    ['drops a row under ignore', 'error', 'ignore', []],
+  ] as const)('the override WINS: it %s', (_label, rowSeverity, override, expected) => {
+    expect(gradedWithOverride(rowSeverity, override).map((issue) => issue.severity)).toStrictEqual(expected);
+  });
+});
+
+describe('runProjectChecks — a near miss of a reserved column name', () => {
+  it('warns ONCE per check, naming the column and the reserved name it nearly is', () => {
+    const warnings: string[] = [];
+    runProjectChecks({
+      builtins: NO_BUILTINS,
+      checks: { [GRADED]: GRADED_CHECKS[GRADED] },
+      only: undefined,
+      ask: askRows({ [GRADED_SQL]: [{ path: 'a.md', Severity: 'warning' }, { path: 'b.md', Severity: 'info' }] }),
+      validation: undefined,
+      membersEnumerated: POPULATED,
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('"graded"');
+    expect(warnings[0]).toContain('"Severity"');
+    expect(warnings[0]).toContain('"severity"');
+  });
+
+  it('says nothing when the reserved names are spelled exactly', () => {
+    const warnings: string[] = [];
+    runProjectChecks({
+      builtins: NO_BUILTINS,
+      checks: { [GRADED]: GRADED_CHECKS[GRADED] },
+      only: undefined,
+      ask: askRows({ [GRADED_SQL]: [{ path: 'a.md', severity: 'warning', line: 2 }] }),
+      validation: undefined,
+      membersEnumerated: POPULATED,
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings).toStrictEqual([]);
   });
 });

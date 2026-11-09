@@ -223,6 +223,18 @@ describe('the failure message', () => {
     }
   });
 
+  it('gives a relation whose lens REFUSED that refusal, not "declare this statement"', () => {
+    // 🚨 The statement WAS declared: the lens ran and could not answer (no
+    // `--base`, say). The reason is the fix, and "declare it" would send the
+    // reader after a problem they do not have.
+    const refusals = new Map([['changed_files', 'Pass --base <ref>.']]);
+    const message = describeQueryFailure('SELECT path FROM changed_files', 'no such table: changed_files', refusals);
+
+    expect(message).toContain('no such table: changed_files');
+    expect(message).toContain('could not be evaluated for this run: Pass --base <ref>.');
+    expect(message).not.toContain('Declare this statement');
+  });
+
   it('does not call a missing PROJECTION table unevaluated', () => {
     expect(describeQueryFailure('SELECT * FROM edgesx', 'no such table: edgesx'))
       .not.toContain('not evaluated');

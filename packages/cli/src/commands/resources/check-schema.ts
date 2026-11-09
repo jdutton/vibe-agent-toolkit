@@ -19,11 +19,25 @@ const PublishedCheckCostSchema = z.object({
   name: z.string(),
   /** Three significant figures, so a 0.4 ms rule serializes as 0.0004 rather than a zero that reads as "not measured". */
   durationSecs: z.number().nonnegative(),
-  /** Rows the statement returned. ABSENT, never 0, when the statement did not complete. */
+  /** Rows the statement returned. Present exactly when the statement completed — ABSENT, never 0, when it did not. */
   rows: z.number().int().nonnegative().optional(),
+  /**
+   * The check reported nothing it selected. Without `rows`: the statement failed. With `rows`: it
+   * completed, and then its declared `examined` statement failed, or its rows could not be
+   * interpreted (or the run stopped while running the one or converting the other).
+   */
   broken: z.literal(true).optional(),
   /** Present and `true` only for a rule VAT supplied — see `CheckCost.builtin` in `check.ts`. */
   builtin: z.literal(true).optional(),
+  /**
+   * Rows the check's declared `examined` statement selected — what it ranged over. Present exactly
+   * when the check declares `examined` AND that statement completed: ABSENT on a check that
+   * declares none, and absent (never 0) when it did not complete. 0 without `allowEmpty` comes
+   * with a `RESOURCE_CHECK_EXAMINED_NOTHING` finding naming the check.
+   */
+  examined: z.number().int().nonnegative().optional(),
+  /** Present and `true` only when the check declares that an `examined` count of 0 is legitimate. */
+  allowEmpty: z.literal(true).optional(),
 }).strict();
 
 /**

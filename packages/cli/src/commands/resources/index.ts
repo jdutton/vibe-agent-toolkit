@@ -4,6 +4,7 @@
 
 import { Command, Option } from 'commander';
 
+import { baseOption } from '../../utils/base-option.js';
 import { collectRepeated } from '../../utils/repeatable-option.js';
 
 import { builtinCheckList, builtinSqlTwins } from './builtin-help.js';
@@ -44,7 +45,17 @@ const DERIVED_RELATIONS_HELP = `Derived relations (evaluated only when a stateme
 
   An 'unknown-size' row has no bytes and SUM() skips NULL, so the unsized
   count is what stops a chain whose largest file could not be sized from
-  passing. (A WHERE on 'charged' would also filter those rows away.)`;
+  passing. (A WHERE on 'charged' would also filter those rows away.)
+
+  changed_files -- what changed under the root since --base <ref>: path,
+  status (added | modified | deleted | renamed | copied | type-changed),
+  oldPath and similarity (for a rename or copy). The working tree is
+  compared, staged or not, plus untracked files git does not ignore. A
+  statement reading it without --base, or with a ref that names no commit,
+  is REFUSED -- never answered with an empty relation:
+
+    SELECT c.path FROM changed_files c
+     WHERE c.path LIKE 'docs/specs/%' AND c.status != 'deleted'`;
 
 /** The serializations the resources verbs offer of one document. */
 const OUTPUT_YAML = 'yaml';
@@ -164,6 +175,7 @@ Examples:
       'A value bound to the next ? placeholder in the statement (repeatable, bound in the order given)',
       collectRepeated,
     )
+    .addOption(baseOption())
     .addOption(yamlOrJsonFormat())
     .action(queryCommand)
     .addHelpText(
@@ -283,6 +295,7 @@ Examples:
     .description('Run VAT\'s built-in checks and the project\'s declared SQL assertions over its resource projection')
     .option('--debug', DEBUG_HELP)
     .option('--check <name>', 'Run only this check, by its built-in name or its key in resources.checks')
+    .addOption(baseOption())
     .option('-v, --verbose', 'Print warning and info findings on stderr too, not only the errors')
     .option(
       '--budget <seconds>',
@@ -376,11 +389,37 @@ Declaring a check:
         severity: error        # optional; error is the default
 
   The statement selects the VIOLATIONS -- zero rows is a pass. Each returned
-  row becomes one finding, and its columns are that finding's evidence; a
-  selected \`path\` column anchors the finding to the file.
+  row becomes one finding, and its columns are that finding's evidence.
+
+  Four column names are RESERVED, matched exactly (case-sensitive):
+    path      anchors the finding to that file
+    severity  error | warning | info -- this row's severity; NULL means the
+              check's declared one
+    line      1-based line in that file; NULL omits it
+    column    1-based column in that line; needs a line
+  Any other value in a reserved column (severity 'high' or 'Error', line 0)
+  FAILS the check as RESOURCE_CHECK_BROKEN rather than being guessed at. A
+  column that differs only in case (Severity, LINE) is a warning, and is
+  evidence only.
+
+  A SELECT * or a join feeds a table's OWN columns of those names into the
+  finding: realization_conditions carries severity, blob_conditions severity
+  and line, harness_blob_imports line, and blob_references line and column --
+  after a join, possibly another table's line than the path's. Alias them
+  (b.line AS refLine) when you mean them as evidence.
 
   Findings are ordinary validation issues with the code CUSTOM:<name>, so
   resources.validation.severity can downgrade or ignore one you inherited.
+
+  Optional per check: examined: <SQL> -- a second statement whose ROW COUNT
+  is what the check ranged over. Zero violations over nothing reads exactly
+  like zero over everything, so a check that declares examined publishes
+  examined: N on its data.checks entry, and N = 0 FAILS the run as
+  RESOURCE_CHECK_EXAMINED_NOTHING (error, not overridable; the check's own
+  violations are still reported). allowEmpty: true declares zero legitimate:
+  no finding, and the entry shows examined: 0 and allowEmpty: true.
+  allowEmpty without examined is refused at config load. An examined
+  statement that fails is RESOURCE_CHECK_BROKEN.
 
   A check's SQL runs through the same surface as vat resources query, so
   the same rule applies: it must be a query, beginning SELECT, WITH or VALUES.
@@ -534,7 +573,9 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
              What each check COST -- {name, durationSecs, rows} per check, or
              {name, durationSecs, broken} for one whose statement threw, plus
              \`builtin: true\` on the ones vat supplied (absent, never false, on
-             a rule you declared). rows is what the check SELECTED, and it is
+             a rule you declared), and examined (+ allowEmpty) on a check that
+             declares examined, once that statement completed -- absent, never
+             0, otherwise. rows is what the check SELECTED, and it is
              a memory signal: rows are fully materialised. It is not a finding
              count -- a severity override of 'ignore' drops findings the check
              still selected, so sum(rows) and summary legitimately disagree
@@ -555,7 +596,8 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
 
 Exit Codes:
   0 - No error-severity findings
-  1 - At least one (a violation, a broken check, an empty corpus, no check
+  1 - At least one (a violation, a broken check, an empty corpus, a check
+      whose declared examined statement counted 0, no check
       having run at all, or a run killed by --budget, DEAD, or contradicted
       by its own exit once its population was in)
   2 - System error, an unknown --check name, a [path] that names no directory,

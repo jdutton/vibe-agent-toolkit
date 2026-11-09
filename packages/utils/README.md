@@ -33,7 +33,7 @@ The last two columns are the ones that matter when choosing. **"Resolves with ze
 | `./asset` | `resolveAssetReference` — paths and npm bare specifiers | `fs`, `module`, `os`, `path`, `url` | — | **yes** |
 | `./yaml` | `updateYamlIn`, `verifyConfinedYamlEdit` — byte-surgical YAML edits | **none** | `yaml` | no — needs `yaml` |
 | `./process` | `safeExecSync`, `safeExecResult`, `safeExecFromString`, `isToolAvailable`, `getToolVersion`, `hasShellSyntax`, `CommandExecutionError`, `spawnHardened`, `shouldUseShell`, `windowsShellQuote`, `buildWindowsShellLine`, `resolveShellCommandToken`, `isPathLike`, `makeStdioBlocking`, `describeStdioBlocking`, `TERMINATING_SIGNALS`, `isTerminatingSignal`, `reRaiseSignal`, `handleTerminatingSignals`, `REPEAT_SIGNAL_WINDOW_MS`, `killProcessTree` | `child_process`, `path` | `@vibe-validate/git`, `which` | no — needs both |
-| `./git` | `runGit`, `runGitOrThrow`, `runGitBytes`, `gitFindRoot`, `gitLsFiles`, `gitLsOthers`, `isGitIgnored`, `loadGitignoreRules`, `GitTracker`, `gitTreeSnapshot`, `peekGitTreeSnapshot`, `withGitSnapshotCache`, `parseGitUrl`, `isGitUrl`, `nonInteractiveGitOverrides` | `async_hooks`, `buffer`, `fs`, `fs/promises`, `os`, `path`, `url` | `@vibe-validate/git`, `ignore` | no — needs both |
+| `./git` | `runGit`, `runGitOrThrow`, `runGitBytes`, `gitChangedFiles`, `gitFindRoot`, `gitLsFiles`, `gitLsOthers`, `isGitIgnored`, `loadGitignoreRules`, `GitTracker`, `gitTreeSnapshot`, `peekGitTreeSnapshot`, `withGitSnapshotCache`, `parseGitUrl`, `isGitUrl`, `nonInteractiveGitOverrides` | `async_hooks`, `buffer`, `fs`, `fs/promises`, `os`, `path`, `url` | `@vibe-validate/git`, `ignore` | no — needs both |
 | `./crawl` | `crawlDirectory`, `crawlDirectorySync`, `crawlPathFilter`, `NEVER_CRAWL_GLOBS`, `BUILD_OUTPUT_GLOBS` | `fs`, `os`, `path`, `url` | `@vibe-validate/git`, `picomatch` | no — needs both |
 | `./skill-test` | `spawnHeadlessClaude`, `assembleClaudeArgs`, `killAllActiveClaudeChildren`, `resolveAuth`, `probeAuthStatus`, `AuthPreflightError`, `applyDeclaredEnv`, `buildForwardedEnv`, `formatForwardedEnvLine`, `isProtectedName`, `protectedEnvNames`, `parseStreamJsonTranscript`, `detectInvocationFromTranscript` | `child_process`, `path`, `stream` | `@vibe-validate/git`, `which` | no — needs both |
 | `./project` | `findProjectRoot`, `findConfigFile`, `findNodeWorkspaceRoot`, `resetProjectRootCaches` | `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
@@ -201,6 +201,7 @@ These return **OS-native** separators, because they resolve real filesystem iden
 
 - `gitFindRoot()` - find the repository root from a starting directory
 - `gitLsFiles()` - enumerate tracked files
+- `gitChangedFiles()` - the files under a root that changed since a base ref (working tree plus untracked, non-ignored files), each with its change kind and rename source; paths read as bytes, a non-UTF-8 path refused
 - `isGitIgnored()` - check whether a path is gitignored (outside a repository it answers from the filesystem, spawning nothing)
 - `loadGitignoreRules()` - load a repository's ignore rules
 - `GitTracker` - cached tracked-file lookups for repeated checks

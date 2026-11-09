@@ -25,7 +25,7 @@ import {
 } from '@vibe-agent-toolkit/schema';
 import { TREE_CLEANUP_INCOMPLETE_CODE } from '@vibe-agent-toolkit/utils';
 
-import { formatIssueAnchor } from './issue-anchor.js';
+import { formatIssueAnchor, formatIssuePosition } from './issue-anchor.js';
 
 /**
  * The severity distribution in prose: `1 error, 2 warnings, 3 info`.
@@ -69,10 +69,12 @@ export function formatIssueSetHeading(
  * One finding as ONE compiler-style line: `location:line:column: severity: message [code]`.
  *
  * The GCC/ESLint-compact shape, shared by the `--format text` document and every stderr report.
+ * A finding with a line but no file says it after the code — `severity: message [code] (line 3,
+ * column 5)` — because a bare `3:5:` prefix reads as a file named `3`.
  */
 export function formatFindingLine(issue: ValidationIssue | Finding): string {
   const anchor = formatIssueAnchor(issue);
-  const line = `${issue.severity}: ${String(issue.message)} [${String(issue.code)}]`;
+  const line = `${issue.severity}: ${String(issue.message)} [${String(issue.code)}]${formatIssuePosition(issue)}`;
   return anchor === undefined ? line : `${anchor}: ${line}`;
 }
 

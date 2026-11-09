@@ -219,6 +219,20 @@ location, each load carrying a `launchCharge` — the rows `vat claude context` 
 none pays nothing for them. A statement reaching for a relation nothing evaluated is **refused**,
 never answered from the empty table — an empty table and a healthy tree are the same answer.
 
+`changed_files` (`path`, `status`, `oldPath`, `similarity`) is what changed under the root since a
+base commit: pass `--base <ref>` to `vat resources query`, `vat resources check` or `vat validate`.
+It compares the working tree (staged or not) plus untracked, non-ignored files with that commit;
+`status` is `added`, `modified`, `deleted`, `renamed`, `copied` or `type-changed`, and `oldPath` /
+`similarity` are set for a rename or copy. A rename across the project root's boundary is seen from
+inside it (in = `added`, out = `deleted`). Without `--base`, or with a ref that names no commit
+(fetch it first in a shallow CI clone), a statement reading it is **refused** naming the fix — for a
+check, `RESOURCE_CHECK_BROKEN` on that check only. Scope a check to what a change touched:
+
+```sql
+SELECT c.path FROM changed_files c
+ WHERE c.path LIKE 'docs/specs/%' AND c.status != 'deleted'
+```
+
 🪤 `claude_context_chains` holds ONE ROW PER WORKING LOCATION, so the obvious
 `JOIN claude_context_chains ON chainId` multiplies every load row by the locations sharing that
 chain. Select from `claude_context_loads` alone and reach the chain relation by correlated subquery.
@@ -327,10 +341,59 @@ vat resources check --format json      # honoured on the error path too
 usual "assert true" reflex and it is the single most common authoring mistake — write the query
 that finds what is wrong, not the one that confirms what is right.
 
+**Four column names are reserved**, matched exactly and case-sensitively; every other column is
+evidence rendered into the message:
+
+| Column | Becomes | NULL or absent |
+|---|---|---|
+| `path` | the finding's `location` (a project-relative path; anything else is dropped) | no location |
+| `severity` | that row's severity: `error`, `warning` or `info` | the check's declared severity |
+| `line` | the finding's 1-based `line` | no line |
+| `column` | the finding's 1-based `column` — requires `line` | no column |
+
+A value a reserved column cannot mean — `severity` `'high'`, `'Error'` or `'ignore'`, a `line` of
+`0` or `'3'`, a `column` with no `line` — fails the whole check as `RESOURCE_CHECK_BROKEN`, naming
+the row and the value; its cost record carries `broken: true` **with** `rows` (the statement ran,
+its rows could not be read). A column that matches a reserved name only case-insensitively
+(`Severity`, `LINE`) earns one stderr warning per check and stays evidence.
+
+⚠️ `SELECT *` or a join feeds a table's own columns of those names into the finding:
+`realization_conditions.severity`, `blob_conditions.severity`/`line`,
+`harness_blob_imports.line`, `blob_references.line`/`column`. After a join the `line` can belong
+to a different table than the `path`. Alias a column (`b.line AS refLine`) to keep it evidence.
+
+An adopter's `resources.validation.severity` override on `CUSTOM:<name>` still wins over a row's
+own severity.
+
 `severity` on a check is `error` | `warning` | `info` — there is no `ignore` here; to silence a
 check an adopter overrides its `CUSTOM:<name>` code through `resources.validation.severity`
 (which does accept `ignore`). `RESOURCE_CHECK_BROKEN` is **not overridable** at all: a run that did
 not complete cannot be downgraded to a warning, because the green would mean nothing.
+
+### Declare what a check examined — an empty scan never passes
+
+Zero rows is a check's pass, so zero violations over a thousand files and zero over nothing look
+identical, and the run's `examined` (the whole population) cannot see one check whose `WHERE`
+matches nothing. Give a check its own denominator with `examined:` — a second statement whose ROW
+COUNT is what the check ranged over:
+
+```yaml
+skills-have-owners:
+  description: Every skill names an owner
+  sql: SELECT path FROM resource_realizations WHERE path LIKE 'skills/%' AND …
+  examined: SELECT path FROM resource_realizations WHERE path LIKE 'skills/%'
+  # allowEmpty: true   # only when zero skills is a legitimate answer
+```
+
+- The count lands on the check's `data.checks` entry as `examined` — present exactly when declared
+  and the statement completed, never `0` as a placeholder.
+- `examined: 0` fails the run as `RESOURCE_CHECK_EXAMINED_NOTHING` (error, **not overridable**),
+  naming the check; its violations are still reported.
+- `allowEmpty: true` makes zero legitimate and is published beside `examined: 0`. Without
+  `examined` it is refused at config load.
+- The examined statement obeys every rule `sql` does, is charged to the check's `durationSecs` and
+  bounded by `--budget`; if it fails, the check is `RESOURCE_CHECK_BROKEN` and none of its rows are
+  reported. Same behaviour in `vat validate`'s `checks` phase.
 
 ### A size ratchet is a check with its baseline inline
 

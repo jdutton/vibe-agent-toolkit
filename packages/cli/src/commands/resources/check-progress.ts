@@ -114,8 +114,10 @@ const StartEntrySchema = z.object({
  * A check completed — the same fields `CheckCost` publishes.
  *
  * 🪤 `rows` is optional and `broken` is `true`-or-absent, mirroring `CheckCost`
- * exactly: a statement that threw has no row count, and `rows: 0` on it would
- * read as "selected nothing and passed". Keeping the two shapes identical is
+ * exactly: `rows` is present exactly when the statement completed. `broken`
+ * without `rows` is a statement that threw — `rows: 0` on it would read as
+ * "selected nothing and passed"; `broken` WITH `rows` is a statement that
+ * completed and selected rows the check could not interpret. Keeping the two shapes identical is
  * what lets the parent hand recovered records to the same `buildCheckOutputData`
  * a completed run uses, rather than growing a second payload builder that could
  * drift from it.
@@ -130,6 +132,57 @@ const CheckEntrySchema = z.object({
   // the name up in `BUILTIN_CHECK_NAMES` would be a second authority that
   // disagrees the day a project declares a check of the same name.
   builtin: z.literal(true).optional(),
+  // The check's own denominator and its declared exemption, carried for the
+  // reason every field here is: a killed run's document is rebuilt from these
+  // lines, and a line the strict schema refused would be DROPPED — the check
+  // would vanish from the recovered `checks[]`, not merely lose a field.
+  examined: z.number().optional(),
+  allowEmpty: z.literal(true).optional(),
+}).strict();
+
+/**
+ * A check's violations statement FINISHED, and its declared `examined`
+ * statement is about to run.
+ *
+ * 🚨 **Without it, a kill during the examined statement reads as the violations
+ * statement hanging** — the log would hold only the `start`, and the operator
+ * would rewrite the statement that had already returned. `unitInFlight` reads
+ * this line as `examining`.
+ *
+ * Carries the violations statement's duration and row count, so a run killed
+ * here still publishes them. Written only for a check that declares `examined`.
+ *
+ * ⚠️ It must be a member of {@link ProgressEntrySchema}: `readLine` DROPS a line
+ * the schema does not know.
+ */
+const ExaminingEntrySchema = z.object({
+  kind: z.literal('examining'),
+  name: z.string(),
+  durationMs: z.number(),
+  rows: z.number(),
+}).strict();
+
+/**
+ * A check's statement FINISHED, and its rows are about to become findings.
+ *
+ * 🚨 **Without it, a kill during the conversion reads as a hung statement.**
+ * The conversion runs after the timed span and before the cost is filed, so a
+ * log holding only the `start` would name the check as still running — and the
+ * budget remedy would then say a statement would not finish, which is false.
+ * `unitInFlight` reads this line as `converting`.
+ *
+ * Carries what the cost will carry, so a run killed here still publishes the
+ * check's real statement duration and row count. Written only for a declared
+ * statement: a built-in has no conversion step outside its timed span.
+ *
+ * ⚠️ It must be a member of {@link ProgressEntrySchema}: `readLine` DROPS a line
+ * the schema does not know, and the kill would read as the statement branch.
+ */
+const ConvertingEntrySchema = z.object({
+  kind: z.literal('converting'),
+  name: z.string(),
+  durationMs: z.number(),
+  rows: z.number(),
 }).strict();
 
 /**
@@ -150,8 +203,8 @@ const CheckEntrySchema = z.object({
  * shipped a level up, from `runOutcome` after that function had already
  * returned, which left `resolveIssueSeverity` charged to the last check's window
  * while this comment claimed otherwise. What it still does NOT cover is the last
- * check's row-to-issue conversion — `runUnits` files that check's cost before
- * converting its rows — which is why the report's `idle` sentence hedges.
+ * check's row-to-issue conversion — that window has its own state,
+ * {@link ConvertingEntrySchema}, and the check's cost is filed after it.
  */
 const ChecksCompleteEntrySchema = z.object({
   kind: z.literal('checks-complete'),
@@ -161,6 +214,8 @@ const ProgressEntrySchema = z.discriminatedUnion('kind', [
   StartedEntrySchema,
   PopulationEntrySchema,
   StartEntrySchema,
+  ExaminingEntrySchema,
+  ConvertingEntrySchema,
   CheckEntrySchema,
   ChecksCompleteEntrySchema,
 ]);
@@ -183,6 +238,8 @@ export type UnitInFlight =
   | { readonly kind: 'startup' }
   | { readonly kind: 'population' }
   | { readonly kind: 'check'; readonly name: string }
+  | { readonly kind: 'examining'; readonly name: string; readonly rows: number }
+  | { readonly kind: 'converting'; readonly name: string; readonly rows: number }
   | { readonly kind: 'reporting' }
   | { readonly kind: 'idle' };
 
@@ -265,12 +322,38 @@ export function unitInFlight(entries: readonly ProgressEntry[]): UnitInFlight {
     (entry): entry is Extract<ProgressEntry, { kind: 'start' }> =>
       entry.kind === 'start' && !completed.has(entry.name),
   );
-  if (started !== undefined) return { kind: 'check', name: started.name };
+  if (started !== undefined) return startedUnit(entries, started);
   // 🔑 Checked AFTER the in-flight statement, never before. The line means "no
   // check is running any more"; a `start` without a cost means one still is, and
   // a log holding both is damaged in a way that must still name the rule.
   if (entries.some((entry) => entry.kind === 'checks-complete')) return { kind: 'reporting' };
   return { kind: 'idle' };
+}
+
+/**
+ * What a started, uncosted check was doing: its statement, its examined
+ * statement, or its conversion.
+ *
+ * 🔑 Only a line written AFTER this `start` counts. A built-in and a declared
+ * check may share a name, so an earlier unit's line must not turn this one's
+ * hung statement into a later state. The phases run in a fixed order — the
+ * statement, `examining`, `converting` — so the LAST such line is the state.
+ *
+ * @param entries - What {@link parseProgressLog} recovered
+ * @param started - The one `start` with no cost
+ * @returns The unit in flight
+ */
+function startedUnit(
+  entries: readonly ProgressEntry[],
+  started: Extract<ProgressEntry, { kind: 'start' }>,
+): UnitInFlight {
+  const latest = entries.slice(entries.indexOf(started)).findLast(
+    (entry): entry is Extract<ProgressEntry, { kind: 'examining' | 'converting' }> =>
+      (entry.kind === 'examining' || entry.kind === 'converting') && entry.name === started.name,
+  );
+  return latest === undefined
+    ? { kind: 'check', name: started.name }
+    : { kind: latest.kind, name: started.name, rows: latest.rows };
 }
 
 /**

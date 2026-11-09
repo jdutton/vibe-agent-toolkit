@@ -188,7 +188,23 @@ export const ResourceCheckSchema = z.object({
   severity: z.enum(['error', 'warning', 'info'])
     .optional()
     .describe('How a violation is reported. Defaults to `error` — the safe direction, since a check whose author did not think about severity is still an assertion they wanted enforced. An adopter can override it per code through resources.validation.severity, including to `ignore`.'),
-}).strict().describe('A SQL assertion over the resource projection');
+  examined: z.string().min(1).optional()
+    .describe('A second read-only SQL statement over the same projection whose ROW COUNT is what this check ranged over — e.g. `SELECT path FROM resource_realizations WHERE path LIKE \'skills/%\'` for a check about skills. The violations statement cannot reveal its own denominator: zero violations over a thousand files and zero violations over nothing are the same answer. Declared, the count is published on the check\'s `checks[]` entry as `examined`, and a count of 0 is refused as RESOURCE_CHECK_EXAMINED_NOTHING (error, not overridable) unless `allowEmpty: true`. Held to every rule `sql` is (it must begin with SELECT, WITH or VALUES; one statement), timed and charged to this check, and a failure to run it is RESOURCE_CHECK_BROKEN.'),
+  allowEmpty: z.literal(true).optional()
+    .describe('Declare that an `examined` count of 0 is a legitimate answer for this check — a rule about a directory that may not exist yet. The run then passes over zero and publishes `examined: 0` beside `allowEmpty: true`, so the exemption is visible in every report. Only valid with `examined`: without one there is no count for it to excuse, and the config is refused.'),
+}).strict().superRefine((check, context) => {
+  // 🔑 Refused rather than ignored: `allowEmpty` alone reads as protection the
+  // check does not have — nothing is counted, so nothing is ever refused, and
+  // the line would sit in a config looking like a decision someone made.
+  if (check.allowEmpty === true && check.examined === undefined) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['allowEmpty'],
+      message: '`allowEmpty` only excuses an `examined` count of 0, and this check declares no `examined` statement.'
+        + ' Either declare `examined` (a SELECT whose row count is what the check ranges over) or remove `allowEmpty`.',
+    });
+  }
+}).describe('A SQL assertion over the resource projection');
 
 export type ResourceCheck = z.infer<typeof ResourceCheckSchema>;
 

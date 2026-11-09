@@ -35,6 +35,9 @@ describe('saysFindingLine', () => {
     expect(saysFindingLine('  docs/a.md:3: error: Link target not found [LINK_BROKEN_FILE]\n', FINDING)).toBe(true);
     expect(saysFindingLine('warning: left at /tmp/x [TREE_CLEANUP_INCOMPLETE]\n', { code: 'TREE_CLEANUP_INCOMPLETE', severity: 'warning', message: 'left at /tmp/x' })).toBe(true);
     expect(saysFindingLine('a.md:2:7 (name): info: m [C]\n', { code: 'C', severity: 'info', message: 'm', location: 'a.md', line: 2, column: 7, field: 'name' })).toBe(true);
+    // No file: the coordinates follow the code, never prefix the line as if `2` were a file.
+    expect(saysFindingLine('info: m [C] (line 2, column 7)\n', { code: 'C', severity: 'info', message: 'm', line: 2, column: 7 })).toBe(true);
+    expect(saysFindingLine('2:7: info: m [C]\n', { code: 'C', severity: 'info', message: 'm', line: 2, column: 7 })).toBe(false);
   });
 
   it.each([

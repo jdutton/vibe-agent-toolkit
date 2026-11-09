@@ -67,7 +67,7 @@ describe('formatConfigValidationError', () => {
       { schema: ProjectConfigSchema },
     );
     expect(message).toContain('resources.checks.orphans: unrecognized key "sevrity"');
-    expect(message).toContain('Accepted here: description, severity, sql.');
+    expect(message).toContain('Accepted here: allowEmpty, description, examined, severity, sql.');
   });
 
   it('omits the accepted-key clause rather than guessing when given no schema', () => {

@@ -30,6 +30,7 @@ import { forEachInOrder } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { marksOperandRefusalByHand } from '../command-tree.js';
+import { baseOption } from '../utils/base-option.js';
 import { loadConfig } from '../utils/config-loader.js';
 import { endWithReport } from '../utils/document-writer.js';
 import { createLogger } from '../utils/logger.js';
@@ -85,6 +86,8 @@ export interface ValidateCommandOptions {
   only?: string;
   debug?: boolean;
   verbose?: boolean;
+  /** `--base <ref>`, forwarded to the checks phase for `changed_files`. */
+  base?: string;
 }
 
 /**
@@ -107,6 +110,7 @@ export function createValidateTopLevelCommand(): Command {
     .description('Validate configured surfaces from source (resources, their checks, skills) — no build required')
     .option('--debug', 'Enable debug logging')
     .option('-v, --verbose', 'Show every finding, not just the collapsed counts')
+    .addOption(baseOption())
     .action(validateTopLevelCommand)
     .addHelpText(
       'after',
@@ -132,6 +136,10 @@ Description:
                  resources.include/exclude do not scope it (when 'resources:'
                  configured); its phase entry is that command's own report
     skills     → SKILL.md frontmatter and packaging validation (when 'skills:' configured)
+
+  --base <ref> reaches the checks phase only: a check reading changed_files
+  compares the tree with that commit, and without it that check fails as
+  RESOURCE_CHECK_BROKEN (exit 1) naming the fix. No other check reads it.
 
 Output:
   ONE report envelope (YAML) → stdout: status (ok | findings | error),
@@ -212,12 +220,13 @@ Example:
  * @param run.root - The project root this run resolved; the `checks` phase's child checks exactly it
  * @param run.verbose - Forwarded to the resources, checks and skills phases
  * @param run.debug - Forwarded to the `checks` phase's child
+ * @param run.base - `--base <ref>`, forwarded to the `checks` phase's child; undefined when none was given
  */
 export function selectValidateSurfaces(
   config: ProjectConfig | undefined,
-  run: { readonly root: string; readonly verbose: boolean; readonly debug: boolean },
+  run: { readonly root: string; readonly verbose: boolean; readonly debug: boolean; readonly base: string | undefined },
 ): PhaseSelection {
-  const { root, verbose, debug } = run;
+  const { root, verbose, debug, base } = run;
   // Forwarded to every surface, exactly as `vat verify` forwards its own. Both
   // validators already accept `-v, --verbose`; only this command lacked the
   // flag, which made the collapsed warning/info detail unreachable HERE while
@@ -239,7 +248,7 @@ export function selectValidateSurfaces(
       name: 'checks',
       schema: CHECK_REPORT_SCHEMA,
       examined: RESOURCES_CHECK_EXAMINED,
-      run: () => runResourcesCheckPhase({ root, debug, verbose }),
+      run: () => runResourcesCheckPhase({ root, debug, verbose, base }),
     });
   }
 
@@ -324,6 +333,7 @@ async function validateTopLevelCommand(
         root: projectRoot,
         verbose: options.verbose === true,
         debug: options.debug === true,
+        base: options.base,
       }),
       logger,
     );

@@ -64,6 +64,7 @@ import { populateAndReport } from './population-wiring.js';
 import {
   evaluateLens,
   lensesNamedBy,
+  lensRelationNames,
   lensPopulationOf,
   type LensEvaluation,
 } from './projection-lenses.js';
@@ -286,10 +287,11 @@ type ColumnsOfStatement = (sql: string, ...parameters: readonly string[]) => rea
  *
  * @param sql - The statement that was submitted
  * @param error - What running or compiling it threw
+ * @param refusals - Why each refused lens's relations are absent, by SQL name
  * @returns The error to throw in its place
  */
-function describedFailure(sql: string, error: unknown): Error {
-  const message = describeQueryFailure(sql, error instanceof Error ? error.message : String(error));
+function describedFailure(sql: string, error: unknown, refusals?: ReadonlyMap<string, string>): Error {
+  const message = describeQueryFailure(sql, error instanceof Error ? error.message : String(error), refusals);
   return isVatError(error) ? new VatError(error.code, message, { cause: error }) : new Error(message, { cause: error });
 }
 
@@ -369,6 +371,9 @@ export async function assertQueriesCompile(statements: readonly PreflightStateme
  *   SELECTION only — never compiled, never bound, and deliberately separate from
  *   `preflight`. ⛔ Omitting it evaluates EVERY lens, which is the correct answer
  *   and the expensive one
+ * @param options.base - The ref `--base` named, for the changed-files lens;
+ *   undefined when the run was given none (that lens then refuses, and only a
+ *   statement naming `changed_files` is refused with it)
  * @param work - Given the asker, where its rows came from, how much of the tree
  *   they cover, and the ROWS THEMSELVES. The store is open for exactly this call
  *   and closed however it ends
@@ -380,6 +385,7 @@ export async function withQueriedProjection<T>(
     logger: Logger;
     preflight?: readonly PreflightStatement[];
     statements?: readonly string[];
+    base?: string | undefined;
   },
   work: (
     ask: AskProjection,
@@ -480,8 +486,18 @@ export async function withQueriedProjection<T>(
       // populations racing for one projection store is the concurrency this
       // lane has no reason to invite.
       const lensPopulations: LensEvaluation['population'][] = [];
+      const evaluated: string[] = [];
+      // 🚨 A lens that REFUSED writes nothing, so its relations stay absent and a
+      // statement naming them is refused by SQLite — with this reason attached,
+      // so the reader learns the fix rather than "declare this statement".
+      const refusals = new Map<string, string>();
       await forEachInOrder(lenses, async (lens) => {
-        const evaluation = await evaluateLens(lens, { projection, root, cache, logger });
+        const evaluation = await evaluateLens(lens, { projection, root, base: options.base, cache, logger });
+        if ('refused' in evaluation) {
+          for (const relation of lensRelationNames(lens)) refusals.set(relation, evaluation.refused);
+          return;
+        }
+        evaluated.push(lens.name);
         lensPopulations.push(evaluation.population);
         await store.writeDerived(evaluation.rows);
       });
@@ -492,14 +508,14 @@ export async function withQueriedProjection<T>(
         try {
           return store.query(sql, ...parameters);
         } catch (error) {
-          throw describedFailure(sql, error);
+          throw describedFailure(sql, error, refusals);
         }
       };
       const columnsOf: ColumnsOfStatement = (sql, ...parameters) => {
         try {
           return store.columns(sql, ...parameters);
         } catch (error) {
-          throw describedFailure(sql, error);
+          throw describedFailure(sql, error, refusals);
         }
       };
 
@@ -510,7 +526,8 @@ export async function withQueriedProjection<T>(
           lensPopulation: lensPopulationOf(lensPopulations),
           populationMs,
           lensMs,
-          lensesEvaluated: lenses.map((lens) => lens.name),
+          // Only the lenses that ANSWERED: a refused one produced no relation.
+          lensesEvaluated: evaluated,
         },
         // Read off the PROJECTION rather than counted back out of the store with
         // a `SELECT COUNT(*)`: a count that travelled through the same `ask` the
@@ -579,10 +596,16 @@ function unevaluatedRelationIn(message: string): string | undefined {
  *
  * @param sql - The statement that was submitted
  * @param message - What the engine said
+ * @param refusals - Why each relation a lens REFUSED to produce is absent, by
+ *   SQL name. Such a relation was declared and its lens ran; the reason is the fix
  * @returns The message to surface, with the queryable surface appended when the
  *   failure was a name this projection does not have
  */
-export function describeQueryFailure(sql: string, message: string): string {
+export function describeQueryFailure(
+  sql: string,
+  message: string,
+  refusals: ReadonlyMap<string, string> = new Map(),
+): string {
   if (!NAME_NOT_FOUND.some((prefix) => message.includes(prefix))) return message;
 
   // 🚨 A MISSING DERIVED RELATION IS NOT A TYPO — it is the refusal that makes
@@ -596,6 +619,11 @@ export function describeQueryFailure(sql: string, message: string): string {
   // The compile preflight never reaches here with one: its probe has them all.
   const unevaluated = unevaluatedRelationIn(message);
   if (unevaluated !== undefined) {
+    const refused = refusals.get(unevaluated);
+    if (refused !== undefined) {
+      return `${message}\n\nThis statement reads ${unevaluated}, a derived relation that could not be`
+        + ` evaluated for this run: ${refused}`;
+    }
     return `${message}\n\n`
       + `This statement reads ${unevaluated}, a derived relation that was not evaluated for this run:`
       + ' no statement the run DECLARED names it, so no lens producing it ran and there is no answer'

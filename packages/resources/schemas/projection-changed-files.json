@@ -1,0 +1,61 @@
+{
+  "$ref": "#/definitions/projection-changed-files",
+  "definitions": {
+    "projection-changed-files": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The file, relative to the project root, POSIX-spelled. For a deletion, the path that was deleted"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "added",
+            "modified",
+            "deleted",
+            "renamed",
+            "copied",
+            "type-changed"
+          ],
+          "description": "What happened to it since the base. A rename or copy crossing the root's boundary is reported as seen from inside the root: renamed or copied in is \"added\", renamed out is \"deleted\", copied out is no row. An untracked file is \"added\"; git pairs only paths the index knows into a rename, so an un-added move reads as deleted + added"
+        },
+        "oldPath": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where a \"renamed\" or \"copied\" file came from, relative to the project root; NULL for every other status"
+        },
+        "similarity": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "git's similarity score (0-100) for a \"renamed\" or \"copied\" file; NULL for every other status"
+        }
+      },
+      "required": [
+        "path",
+        "status",
+        "oldPath",
+        "similarity"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the derived `changed_files` relation"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

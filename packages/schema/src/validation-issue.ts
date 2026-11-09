@@ -18,6 +18,7 @@
  * |------------|--------------------------------------------------------------|---------|
  * | `location` | **The file you would open to fix this**, as a project-relative POSIX path | `packages/cli/SKILL.md` |
  * | `line`     | 1-based line within `location`                               | `24` |
+ * | `column`   | 1-based column within `line`                                 | `7` |
  * | `field`    | Dotted pointer INSIDE that document                          | `frontmatter.description` |
  * | `link`     | A link href / target the issue is about (never the file to open) | `./refs/missing.md` |
  *
@@ -162,6 +163,7 @@ export const ValidationIssueSchema = z.object({
     })
     .optional(),
   line: z.number().int().positive().optional(),
+  column: z.number().int().positive().optional(),
   field: z.string().optional(),
   link: z.string().optional(),
   fix: z.string().optional(),
@@ -180,6 +182,8 @@ export interface ValidationIssue {
   location?: string;
   /** 1-based line within {@link ValidationIssue.location}. */
   line?: number;
+  /** 1-based column within {@link ValidationIssue.line}. */
+  column?: number;
   /** Dotted pointer inside the document at {@link ValidationIssue.location}, e.g. `frontmatter.description`. */
   field?: string;
   /** A link href or target the issue concerns — not the file to open. */
@@ -193,7 +197,7 @@ export interface ValidationIssue {
 export function createRegistryIssue(
   code: IssueCode,
   message: string,
-  extras: Partial<Pick<ValidationIssue, 'location' | 'line' | 'field' | 'link' | 'suggestion'>> = {},
+  extras: Partial<Pick<ValidationIssue, 'location' | 'line' | 'column' | 'field' | 'link' | 'suggestion'>> = {},
 ): ValidationIssue {
   const e = CODE_REGISTRY[code];
   return { code, severity: e.defaultSeverity, message, fix: e.fix, reference: e.reference, ...extras };

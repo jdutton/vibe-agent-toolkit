@@ -1378,8 +1378,19 @@ the moved-aside entry. There is no partial remove: an entry is on its path, whol
 
 - **Default:** `error`
 - **What:** A declared check could not run, or a gate examined nothing (a scan over zero files, a budget over no matched path, a marketplace walk that found fewer than the declared local plugins, a verify over zero bundles, one configured phase of `vat validate` / `vat verify` / `vat build` that examined nothing while the others did — except a `skills` phase whose pool is empty in a project that ships plugin-local skills, which is an answer) — the run's green would mean nothing. Published as an `error`-severity finding (exit 1) when the run itself completed: the one code every gate uses for "this run checked nothing", decided once in the CLI's `run-integrity.ts` rather than per verb.
+- **Two `vat resources check` causes that are not a failed statement:**
+  - **Rows the check could not interpret.** The statement ran, but a row's reserved column holds a value it cannot mean — `severity` other than exactly `error`, `warning` or `info` (`'high'`, `'Error'`, `'ignore'`, a number), a `line` or `column` that is not a positive integer, or a `column` with no `line`. The message names the row and the value ("ran and selected N rows, but row 3's severity = "high" is not one of error, warning, info"), none of that check's rows are reported, and its cost record carries `broken: true` **with** `rows` — `rows` is present exactly when the statement completed.
+  - **A run stopped while a check's rows were being converted.** The statement had finished; turning its rows into findings runs in this process, and a budget kill or death there records that check as `broken` with its `rows`, beside the run's own interrupted-run finding.
 - **Why it matters:** A `vat resources check` violation carries `CUSTOM:<name>`, which an adopter may downgrade or ignore. If "the check is broken" shared that code, `severity: { 'CUSTOM:foo': ignore }` would also silence "foo could not run", and a renamed projection column would end a gate at exit 0.
 - **Fix:** Fix the check or the population the message names. This code cannot be downgraded or waived, by design.
+- **A third `vat resources check` cause:** a check's declared `examined` statement failed. The violations statement ran, but nothing says what it ranged over, so none of its rows are reported and its cost record carries `broken: true` with `rows` and no `examined`.
+
+### `RESOURCE_CHECK_EXAMINED_NOTHING`
+
+- **Default:** `error`
+- **What:** A check that declares what it examined (`examined:`) counted zero rows, so its pass asserts nothing. `vat resources check` (and the `checks` phase of `vat validate`) publishes it as an `error`-severity finding (exit 1) naming the check, beside the check's own violations, which are still reported. The check's `data.checks` entry carries `examined: 0`.
+- **Why it matters:** A check selects its violations, so zero rows is its pass — and zero violations over a thousand files reads exactly like zero over nothing. The run's `examined` counts the whole population, and one check whose `WHERE` matches nothing hides behind neighbours that see plenty. Only the check's author knows what it ranges over, so the check declares it, and the refusal is per check, by name.
+- **Fix:** Fix the `examined` statement or the population it reads; if zero is a legitimate answer for this check, declare `allowEmpty: true` on it. This code cannot be downgraded or waived. `allowEmpty: true` is published beside `examined: 0` on the check's entry, so the exemption stays visible; it is refused at config load on a check with no `examined`.
 
 ### `ARD_NOT_CONFIGURED`
 

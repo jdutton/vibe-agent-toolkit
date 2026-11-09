@@ -64,7 +64,7 @@ describe('Severity', () => {
 });
 
 describe('FindingSchema', () => {
-  it('is a ValidationIssue without ignore, plus column', () => {
+  it('is a ValidationIssue without ignore, inheriting its column', () => {
     expect(FindingSchema.safeParse(finding('warning')).success).toBe(true);
     expect(FindingSchema.safeParse({ ...finding('info'), line: 3, column: 7 }).success).toBe(true);
     expect(FindingSchema.safeParse({ ...finding('info'), severity: 'ignore' }).success).toBe(false);

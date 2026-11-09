@@ -21,6 +21,7 @@ import {
   type Projection,
 } from '@vibe-agent-toolkit/resources';
 
+import { evaluateChangedFilesLens } from './changed-files-lens.js';
 import { evaluateClaudeContextLens } from './claude-context-lens.js';
 import { evaluateAuthoredLenses } from './edge-lens-evaluation.js';
 import type { LensPopulation } from './lens-population.js';
@@ -48,6 +49,23 @@ export interface LensEvaluation {
 }
 
 /**
+ * A lens that could not answer, and why — the reason a statement naming its
+ * relations is refused with.
+ *
+ * 🚨 **A refusal leaves the relations ABSENT, never empty.** An empty relation
+ * is an answer ("no rows"), and a lens that cannot evaluate has none to give:
+ * written as `[]`, a check over it could never fail. Absent, SQLite refuses
+ * every statement naming it, and the run says why. The changed-files lens is
+ * the one that refuses today — with no `--base`, there is nothing to compare.
+ */
+export interface LensRefusal {
+  readonly refused: string;
+}
+
+/** What evaluating one lens produced: its rows, or why it has none. */
+export type LensOutcome = LensEvaluation | LensRefusal;
+
+/**
  * A run's {@link LensPopulation} from each evaluated lens's own population.
  *
  * @param populations - Each evaluated lens's `population`, in evaluation order
@@ -65,6 +83,11 @@ export interface LensEvaluationInput {
   readonly projection: Projection;
   /** Absolute corpus root, for a lens that must populate a lane of its own. */
   readonly root: string;
+  /**
+   * The ref the run was handed with `--base`, or undefined when it was handed
+   * none. Only the changed-files lens reads it, and it refuses without one.
+   */
+  readonly base: string | undefined;
   /** The run's projection store, so a lens's own population can hit it. */
   readonly cache: PopulationCache | undefined;
   /** Where a lens that populates reports its own population's refused content. */
@@ -89,9 +112,9 @@ export interface ProjectionLens {
    * @param input - The projection, the root, and the run's oracles
    * @returns Every relation this lens owns — all of them, every time, because
    *   omitting one leaves its previous contents in place — and where its own
-   *   population came from
+   *   population came from; or a {@link LensRefusal} when it cannot answer
    */
-  readonly evaluate: (input: LensEvaluationInput) => Promise<LensEvaluation> | LensEvaluation;
+  readonly evaluate: (input: LensEvaluationInput) => Promise<LensOutcome> | LensOutcome;
 }
 
 /** The authored-link lens: `lens_contexts`, `edges`, `edge_resolutions`. */
@@ -109,10 +132,19 @@ export const CLAUDE_CONTEXT_LENS: ProjectionLens = {
   evaluate: ({ root, cache, logger }) => evaluateClaudeContextLens({ root, cache, logger }),
 };
 
+/** What changed under the root since the run's `--base`: `changed_files`. Refuses without a base. */
+export const CHANGED_FILES_LENS: ProjectionLens = {
+  name: 'changed-files',
+  relations: ['changedFiles'],
+  // Reads the repository, not the projection, so it populates nothing of its own.
+  evaluate: ({ root, base }) => evaluateChangedFilesLens(root, base),
+};
+
 /** Every lens the query lane can evaluate, in evaluation order. */
 export const PROJECTION_LENSES: readonly ProjectionLens[] = [
   AUTHORED_LINK_LENS,
   CLAUDE_CONTEXT_LENS,
+  CHANGED_FILES_LENS,
 ];
 
 /**
@@ -152,16 +184,19 @@ export function lensesNamedBy(statements: readonly string[] | undefined): readon
  * and `writeDerived` would leave that relation empty, a table that reads as a
  * healthy tree. Checked here because this is the one place every lens passes.
  *
+ * A {@link LensRefusal} is handed back as it is: it carries no rows to check.
+ *
  * @param lens - The lens
  * @param input - What it may read
- * @returns Its rows and its own population's provenance
+ * @returns Its rows and its own population's provenance, or its refusal
  * @throws Error When the rows omit a declared relation or carry an undeclared one
  */
 export async function evaluateLens(
   lens: ProjectionLens,
   input: LensEvaluationInput,
-): Promise<LensEvaluation> {
+): Promise<LensOutcome> {
   const evaluation = await lens.evaluate(input);
+  if ('refused' in evaluation) return evaluation;
   const { rows } = evaluation;
   const declared: readonly string[] = lens.relations;
   const missing = declared.filter((name) => !Object.hasOwn(rows, name));
