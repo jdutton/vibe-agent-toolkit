@@ -146,7 +146,7 @@ export function placeOf(name: string): string[] {
  * `LPT1`…`LPT9`, and the superscript-digit forms `COM¹` `LPT³`, which Windows reads as digits. A
  * space before the `.` is over-refused on purpose: Win32 drops it, so `con .md` may be `CON`.
  *
- * @vendor-claim reviewed=2026-10-26 verify=Re-read https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file — "File and Directory Names", the reserved-names list (item 9) and the trailing space or period rule (item 10)
+ * @vendor-claim reviewed=2026-11-08 verify=Re-read https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file — "File and Directory Names", the reserved-names list (item 9) and the trailing space or period rule (item 10)
  */
 const WINDOWS_DEVICE_NAME = /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³]) *(?:\.|$)/i;
 
@@ -170,6 +170,24 @@ function windowsSegmentReason(segment: string): string | undefined {
   return WINDOWS_DEVICE_NAME.test(segment) ? 'is a Windows device name' : undefined;
 }
 
+/** `segment` without the trailing dots and spaces Win32 drops from a name (a loop, not a regex: no backtracking). */
+function withoutTrailingDotsAndSpaces(segment: string): string {
+  let end = segment.length;
+  while (end > 0 && (segment[end - 1] === '.' || segment[end - 1] === ' ')) end -= 1;
+  return segment.slice(0, end);
+}
+
+/**
+ * Whether `segment` is a name Windows or git reads as `.git`: any case, the 8.3 short name `GIT~1`,
+ * or either with the trailing dots and spaces Win32 drops. Extracted, it would make the folder it
+ * lands in a git repository — a planted `config` (`core.fsmonitor`) or a `gitdir:` file that root
+ * discovery and git then act on.
+ */
+function isGitDirectoryName(segment: string): boolean {
+  const name = withoutTrailingDotsAndSpaces(segment).toLowerCase();
+  return name === '.git' || name === 'git~1';
+}
+
 /** Why `name` would land outside the extraction directory, or somewhere other than it says, on some host; or `undefined`. */
 function unsafeNameReason(name: string): string | undefined {
   if (name.includes('\0')) return 'holds a NUL character';
@@ -178,6 +196,7 @@ function unsafeNameReason(name: string): string | undefined {
   if (DRIVE_PREFIX.test(spelled)) return 'begins with a drive letter';
   if (hasParentTraversalSegment(name)) return 'holds a `..` segment';
   for (const segment of placeOf(name)) {
+    if (isGitDirectoryName(segment)) return 'names a `.git`, which would make the folder it lands in a git repository that git and VAT then act on';
     const reason = windowsSegmentReason(segment);
     if (reason !== undefined) return reason;
   }

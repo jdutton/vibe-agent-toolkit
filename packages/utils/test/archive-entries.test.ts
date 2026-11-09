@@ -50,6 +50,8 @@ describe('archiveEntryRefusal', () => {
     ['lpt9/a.md', 'is a Windows device name'],
     ['LPT\u00b9', 'is a Windows device name'],
     ['con .md', 'is a Windows device name'],
+    // A `.git` anywhere would make the folder it lands in a git repository.
+    ...['.git', '.git/config', 'skill/.git/config', 'a/b/.GIT/HEAD', '.Git', 'skill/GIT~1/config', 'git~1', 'skill/.git.', '.git /config', '.git. ./config'].map((name) => [name, 'names a `.git`']),
     ...['<', '>', '"', '|', '?', '*'].map((character) => [`skill/a${character}b.md`, 'holds a character Windows does not allow in a name']),
     ...[1, 9, 31].map((codePoint) => [`skill/a${String.fromCodePoint(codePoint)}b.md`, 'holds a character Windows does not allow in a name']),
   ])('refuses %j, which %s, on every host', (name, why) => {
@@ -58,7 +60,7 @@ describe('archiveEntryRefusal', () => {
     expect(refusal?.why).toContain(why);
   });
 
-  it.each([['console.md'], ['nullable.md'], ['com10.md'], ['lpt.md'], ['auxiliary/a.md'], ['a.b.md'], ['.hidden'], ['a b(1)[2]{3}#&!@=+,;~.md'], [`a${String.fromCodePoint(32)}b.md`], [`caf${String.fromCodePoint(0xe9)}.md`]])('keeps %j, which only looks like one of those', (name) => {
+  it.each([['console.md'], ['nullable.md'], ['com10.md'], ['lpt.md'], ['auxiliary/a.md'], ['a.b.md'], ['.hidden'], ['a b(1)[2]{3}#&!@=+,;~.md'], [`a${String.fromCodePoint(32)}b.md`], [`caf${String.fromCodePoint(0xe9)}.md`], ['.github/workflows/ci.yml'], ['.gitignore'], ['.gitattributes'], ['git/a.md'], ['my.git.md'], ['CONSOLE.md'], ['COM10'], ['LPT10'], ['git~2.md'], ['.git~1']])('keeps %j, which only looks like one of those', (name) => {
     expect(archiveEntryRefusal([file(name)])).toBeUndefined();
   });
 

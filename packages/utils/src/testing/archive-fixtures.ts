@@ -473,6 +473,11 @@ export function hostileArchiveRows(limits: { readonly maxEntries: number; readon
     { what: 'a Windows device name with an extension', formats: BOTH, reason: UNSAFE_NAME, entries: (prefix) => [{ name: `${prefix}docs/Con.md`, data: 'planted' }] },
     { what: 'a name ending in a dot', formats: BOTH, reason: UNSAFE_NAME, entries: (prefix) => [{ name: `${prefix}notes.md.`, data: 'planted' }] },
     { what: 'a directory name ending in a space', formats: BOTH, reason: UNSAFE_NAME, entries: (prefix) => [{ name: `${prefix}docs /x.md`, data: 'planted' }] },
+    // A `.git` entry would make the folder it is extracted into a git repository: a planted `config`, or a `gitdir:` file.
+    { what: 'a `.git` directory', formats: BOTH, reason: UNSAFE_NAME, entries: (prefix) => [{ name: `${prefix}.git/config`, data: '[core] fsmonitor = planted' }] },
+    { what: 'a `.git` file', formats: BOTH, reason: UNSAFE_NAME, entries: (prefix) => [{ name: `${prefix}docs/.git`, data: 'gitdir: //host/share/repo' }] },
+    { what: 'a `.git` spelled in another case', formats: BOTH, reason: UNSAFE_NAME, entries: (prefix) => [{ name: `${prefix}.GIT/HEAD`, data: 'planted' }] },
+    { what: 'the 8.3 short name of `.git`', formats: BOTH, reason: UNSAFE_NAME, entries: (prefix) => [{ name: `${prefix}Git~1/config`, data: 'planted' }] },
     { what: 'a name holding a `?`', formats: BOTH, reason: UNSAFE_NAME, entries: (prefix) => [{ name: `${prefix}faq?.md`, data: 'planted' }] },
     { what: 'a name holding a `|`', formats: BOTH, reason: UNSAFE_NAME, entries: (prefix) => [{ name: `${prefix}a|b.md`, data: 'planted' }] },
     { what: 'a directory named with a `<`, a `>` and a `"`', formats: BOTH, reason: UNSAFE_NAME, entries: (prefix) => [{ name: `${prefix}<"x">/a.md`, data: 'planted' }] },
