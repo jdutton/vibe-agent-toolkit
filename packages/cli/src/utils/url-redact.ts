@@ -1,14 +1,6 @@
 /**
- * URL credential redaction for safe logging.
- *
- * Git remote URLs in VAT may carry embedded credentials — either because the
- * user configured a URL with userinfo, or because `resolveRemoteUrl()` injects
- * a CI token (e.g., `GH_TOKEN`) into HTTPS GitHub URLs for push authentication.
- * Those URLs must never reach stdout, stderr, or log files in raw form.
- *
- * Use `redactUrlCredentials()` on any URL immediately before logging it.
- * The tokenized URL can still be passed to child `git` processes — only the
- * logged copy is redacted.
+ * URL credential redaction for safe logging: a remote URL the user configured with userinfo must
+ * never reach stdout, stderr or a log in raw form. (A CI token never enters a URL.)
  */
 
 /**
@@ -45,12 +37,8 @@ export function redactUrlCredentials(url: string): string {
 const URL_USERINFO_IN_TEXT = /\b([a-z][\d+.a-z-]*:\/\/)[^\s"'/@]+@/gi;
 
 /**
- * Strip the userinfo of every URL embedded in free text — a git child's stderr, which echoes
- * the remote URL as it was given, injected CI token included.
- *
- * {@link redactUrlCredentials} takes one URL and returns any other string unchanged, so it
- * cannot be pointed at a message: `fatal: unable to access 'https://x-access-token:<t>@…'`
- * does not parse as a URL and passed through whole.
+ * Strip the userinfo of every URL embedded in free text — a git child's stderr, which echoes the
+ * remote URL as configured. {@link redactUrlCredentials} cannot: a whole message is not a URL.
  */
 export function redactUrlCredentialsInText(text: string): string {
   return text.replaceAll(URL_USERINFO_IN_TEXT, '$1');

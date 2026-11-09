@@ -283,7 +283,10 @@ When publishing to a **separate repository** (via `publish.remote`), the default
 
 1. Create a PAT with `contents: write` permission on the marketplace repo
 2. Store it as a repository secret (e.g., `MARKETPLACE_GITHUB_PUSH_TOKEN`)
-3. Expose it as `GH_TOKEN` in your workflow — `vat claude marketplace publish` uses `GH_TOKEN` (or `GITHUB_TOKEN`) to authenticate to the remote, and only to an `https://github.com/` remote. It needs git 2.31 or newer to do so, and refuses on an older git. The token never appears in a URL or on a process command line. Any `GIT_CONFIG_*` entries you already export are kept, but your own `http.https://github.com/.extraheader` values are not sent during the publish: the token's header replaces them.
+3. Expose it as `GH_TOKEN` in your workflow — `vat claude marketplace publish` uses `GH_TOKEN` (or `GITHUB_TOKEN`) to authenticate to the remote, and only to an `https://github.com/` remote. It needs git 2.31 or newer to do so, and refuses on an older git. The token never appears in a URL or on a process command line: it is passed as an `http.https://github.com/.extraheader` entry appended to your own `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` entries, which are kept (`GIT_CONFIG_PARAMETERS`, i.e. inherited `git -c` values, is not). While a token applies:
+   - every extra header you configured that applies to github.com — `http.extraheader` or `http.https://github.com/.extraheader`, in any config file or env entry — is dropped for the publish, and only the token's header is sent;
+   - an extra header you key to a **more specific** URL (e.g. `http.https://github.com/org/repo.extraheader`) outranks the token's, so git sends yours and **not** the token. Remove it, or unset `GH_TOKEN`/`GITHUB_TOKEN` and authenticate with it alone;
+   - `GIT_CONFIG_COUNT` must be plain decimal, or the publish is refused.
 
 ```yaml
 # .github/workflows/marketplace-publish.yml

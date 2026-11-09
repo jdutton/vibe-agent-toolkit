@@ -61,10 +61,17 @@ describe('marketplace publish builds on the remote branch', () => {
     await publish(publishDir, bareRemote, '1.0.0');
     expect(history(bareRemote)).toEqual(['publish v1.0.0']);
 
+    // A `refs/remotes/` alias is a WEAK push-destination match, which the existing branch
+    // outranks: the publishes go ahead and never touch it.
+    const weak = `refs/remotes/refs/heads/${BRANCH}`;
+    const seed = seedCommit(bareRemote, 'weak');
+    runGitOrThrow(['update-ref', weak, seed], { cwd: bareRemote });
+
     await publish(publishDir, bareRemote, '1.0.1');
     await publish(publishDir, bareRemote, '1.0.2');
     // Each publish's parent is the previous tip: the plain (non-force) push fast-forwarded.
     expect(history(bareRemote)).toEqual(['publish v1.0.2', 'publish v1.0.1', 'publish v1.0.0']);
+    expect(runGitOrThrow(['rev-parse', weak], { cwd: bareRemote })).toBe(seed);
   });
 
   // `git ls-remote <url> refs/heads/<branch>` matches the pattern against the TAIL of each ref, so
@@ -85,14 +92,14 @@ describe('marketplace publish builds on the remote branch', () => {
   // the remote, `refs/heads/claude-marketplace` names `refs/heads/refs/heads/claude-marketplace`, so
   // a plain push is rejected against it and a --force push overwrites it. v0.1.42 built on its
   // history. No refspec makes git push to exactly the branch, so the publish refuses.
-  it.each([false, true])('refuses as CONFIG_INVALID, touching nothing, when the remote holds refs/heads/refs/heads/<branch> (--force: %s)', async (force) => {
+  it.each([false, true])('refuses as INPUT_UNREADABLE, touching nothing, when the remote holds refs/heads/refs/heads/<branch> (--force: %s)', async (force) => {
     const { bareRemote, publishDir } = setUp();
     const decoy = `refs/heads/refs/heads/${BRANCH}`;
     const seed = seedCommit(bareRemote, 'decoy');
     runGitOrThrow(['update-ref', decoy, seed], { cwd: bareRemote });
 
     const error = await publish(publishDir, bareRemote, '1.0.0', force).then(() => undefined, (rejected: unknown) => rejected);
-    expect(refusalCodeOf(error)).toBe('CONFIG_INVALID');
+    expect(refusalCodeOf(error)).toBe('INPUT_UNREADABLE');
     expect((error as Error).message).toContain(decoy);
     expect(runGitOrThrow(['rev-parse', decoy], { cwd: bareRemote })).toBe(seed);
     expect(runGitOrThrow(['for-each-ref', '--format=%(refname)'], { cwd: bareRemote })).toBe(decoy);

@@ -21,7 +21,7 @@ import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { githubTokenEnv } from '../../src/commands/claude/marketplace/git-publish.js';
+import { __internal } from '../../src/commands/claude/marketplace/git-publish.js';
 import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 import { createTempDirTracker, fs } from '../system/test-common.js';
 
@@ -77,7 +77,7 @@ describe('the publish token environment, as git sends it', () => {
       vi.stubEnv('GH_TOKEN', TOKEN);
       vi.stubEnv('GITHUB_TOKEN', undefined);
 
-      const env = githubTokenEnv(`${server.prefix}r`, server.prefix);
+      const env = __internal.githubTokenEnv(`${server.prefix}r`, server.prefix);
 
       // runGit's scrub keeps the operator's numbered entries beside VAT's.
       expect(runGitOrThrow(['config', '--get', 'vatprobe.operator'], { cwd: dir, env })).toBe('kept');

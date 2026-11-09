@@ -3,9 +3,8 @@ import { runGit } from '@vibe-agent-toolkit/utils/git';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  __internal,
   createCommitMessage,
-  deliverCommit,
-  git,
   publishToGitBranch,
 } from '../../../../src/commands/claude/marketplace/git-publish.js';
 import { refusalCodeOf } from '../../../../src/utils/command-refusal.js';
@@ -46,8 +45,9 @@ function gitReturns(results: Record<string, Partial<ReturnType<typeof runGit>>>)
 
 const logger = createLogger({});
 const DELIVERY = { branch: 'claude-marketplace', remote: 'origin', force: false, dryRun: false, noPush: false, logger };
-/** A remote with nothing to authenticate with. */
-const at = (url: string): { url: string; authEnv: () => Record<string, string> } => ({ url, authEnv: () => ({}) });
+const { deliverCommit, git, resolveRemote } = __internal;
+/** A remote by URL, through the resolver — the only maker of one. */
+const at = (url: string): ReturnType<typeof resolveRemote> => resolveRemote(url, true, '/project');
 
 const HEADLINE_V1 = 'publish v1.0.0';
 
@@ -83,7 +83,7 @@ describe('git-publish', () => {
   });
 
   describe('refusal codes', () => {
-    afterEach(() => { vi.mocked(runGit).mockReset(); });
+    afterEach(() => { vi.mocked(runGit).mockReset(); vi.unstubAllEnvs(); });
 
     const publish = (remote: string, remoteFromConfig: boolean): Promise<unknown> => publishToGitBranch({
       publishDir: '/never-read', branch: 'b', remote, remoteFromConfig, commitMessage: 'm', force: false, dryRun: true, noPush: false, logger,
@@ -129,6 +129,15 @@ describe('git-publish', () => {
       const capture = { ...logger, info: (message: string): void => { said.push(message); } };
       deliverCommit('/staging', '/project', { ...DELIVERY, noPush: true, logger: capture }, at('https://example.invalid/r.git'));
       expect(said).toContain('   To push later: git push origin refs/heads/claude-marketplace:refs/heads/claude-marketplace');
+    });
+
+    it('fetches a --no-push commit from the staging repo with no auth environment, even when a token applies to the remote', () => {
+      vi.stubEnv('GH_TOKEN', 'ghp_NOT_FOR_STAGING');
+      gitBy({});
+      deliverCommit('/staging', '/project', { ...DELIVERY, noPush: true }, at('https://github.com/o/r.git'));
+      expect(vi.mocked(runGit).mock.calls.map(([args, options]) => [args, options?.env])).toEqual([
+        [['fetch', '--', '/staging', 'refs/heads/claude-marketplace:refs/heads/claude-marketplace'], {}],
+      ]);
     });
 
     it('refuses any other failed git step as RUN_INCOMPLETE', () => {
@@ -208,10 +217,10 @@ describe('git-publish', () => {
       expect(calls('reset')).toEqual([]);
     });
 
-    it('refuses as EXTERNAL_API_FAILED when the fetched tip is not the sha the remote reported, and commits nothing', async () => {
+    it('refuses as RUN_INCOMPLETE when the fetched tip is not the sha the remote reported, and commits nothing', async () => {
       gitBy({}, { ...CLEAN_STDOUT, 'rev-parse': 'b'.repeat(40) });
       const error = await publish().then(() => undefined, (rejected: unknown) => rejected);
-      expect(refusalCodeOf(error)).toBe('EXTERNAL_API_FAILED');
+      expect(refusalCodeOf(error)).toBe('RUN_INCOMPLETE');
       expect(calls('reset')).toEqual([]);
       expect(calls('commit')).toEqual([]);
     });
@@ -252,20 +261,35 @@ describe('git-publish', () => {
       expect(calls('reset')).toEqual([]);
     });
 
-    // git push matches its destination by abbreviation rules: each of these is updated in place of
-    // refs/heads/b (overwritten under --force), or makes the push ambiguous beside it.
+    // git push matches its destination by abbreviation rules (remote.c count_refspec_match): a
+    // strong alias is taken in place of refs/heads/b, or makes the push ambiguous beside it; a weak
+    // (refs/remotes/) one is taken only when refs/heads/b is absent.
+    const STRONG = ['refs/refs/heads/b', 'refs/tags/refs/heads/b', 'refs/heads/refs/heads/b'];
+    const WEAK = ['refs/remotes/refs/heads/b', 'refs/remotes/refs/heads/b/HEAD'];
+    const OTHER = 'c'.repeat(40);
+    const EXACT_LINE = `${TIP}\trefs/heads/b\n`;
+    const refusalBy = async (listing: string, force: boolean): Promise<unknown> => {
+      gitBy({}, { ...CLEAN_STDOUT, 'ls-remote': listing });
+      return publish({ force }).then(() => undefined, (rejected: unknown) => rejected);
+    };
     describe.each([false, true])('a ref git push would take for the branch (--force: %s)', (force) => {
-      it.each(['refs/refs/heads/b', 'refs/tags/refs/heads/b', 'refs/heads/refs/heads/b', 'refs/remotes/refs/heads/b', 'refs/remotes/refs/heads/b/HEAD'])(
-        'refuses %s as CONFIG_INVALID, naming it, and commits nothing',
-        async (alias) => {
-          gitBy({}, { ...CLEAN_STDOUT, 'ls-remote': `${TIP}\trefs/heads/b\n${'c'.repeat(40)}\t${alias}` });
-          const error = await publish({ force }).then(() => undefined, (rejected: unknown) => rejected);
-          expect(refusalCodeOf(error)).toBe('CONFIG_INVALID');
-          expect((error as Error).message).toContain(alias);
-          expect(calls('fetch')).toEqual([]);
-          expect(calls('commit')).toEqual([]);
-        },
-      );
+      it.each([
+        ...STRONG.map((alias) => [alias, true] as const),
+        ...[...STRONG, ...WEAK].map((alias) => [alias, false] as const),
+      ])('refuses %s (refs/heads/b listed: %s) as INPUT_UNREADABLE, naming it, and commits nothing', async (alias, exact) => {
+        const exactLine = exact ? EXACT_LINE : '';
+        const listing = `${exactLine}${OTHER}\t${alias}`;
+        const error = await refusalBy(listing, force);
+        expect(refusalCodeOf(error)).toBe('INPUT_UNREADABLE');
+        expect((error as Error).message).toContain(alias);
+        expect(calls('fetch')).toEqual([]);
+        expect(calls('commit')).toEqual([]);
+      });
+
+      it.each(WEAK)('publishes beside %s when refs/heads/b is listed: the exact branch outranks a weak match', async (alias) => {
+        expect(await refusalBy(`${EXACT_LINE}${OTHER}\t${alias}`, force)).toBeUndefined();
+        expect(calls('ls-remote')).toHaveLength(1);
+      });
     });
 
     // `publish.remote` is config text that lands in git's argv: it must never be read as an
@@ -366,13 +390,13 @@ describe('git-publish', () => {
         // git reads the count with strtoumax base 0 plus unit suffixes; VAT does not reimplement that
         // parser, so every spelling but plain decimal is refused rather than guessed at.
         it.each(['two', '0x2', '010', '1k', ' 2', '2 ', '+2', '-1', '99999999999999999999'])(
-          'refuses a GIT_CONFIG_COUNT of %j it does not read as plain decimal as USAGE_INVALID, asking the remote nothing',
+          'refuses a GIT_CONFIG_COUNT of %j it does not read as plain decimal as INPUT_UNREADABLE, asking the remote nothing',
           async (count) => {
             vi.stubEnv('GH_TOKEN', SECRET);
             vi.stubEnv('GIT_CONFIG_COUNT', count);
             gitBy({});
             const error = await rejectionOf(publish({ remote: GITHUB_REMOTE }));
-            expect(refusalCodeOf(error)).toBe('USAGE_INVALID');
+            expect(refusalCodeOf(error)).toBe('INPUT_UNREADABLE');
             expect((error as Error).message).toContain('plain decimal');
             expect(calls('ls-remote')).toEqual([]);
           },
