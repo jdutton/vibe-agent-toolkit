@@ -15,8 +15,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ExternalLinkValidator } from '../../src/external-link-validator.js';
 import { setupExternalLinkValidatorSuite } from '../test-helpers.js';
 
-// GitHub's canonical demo repo — the same host the corpus-scan system test clones
-const WORKING_URL = 'https://github.com/octocat/Hello-World';
+// IANA's reserved example domain, served to be fetched. A github.com page was used before, and
+// GitHub intermittently refuses Actions runners — which redded every branch's CI for hours.
+const WORKING_URL = 'https://example.com/';
 const BROKEN_URL = 'https://this-domain-definitely-does-not-exist-12345.com';
 
 const NET_AVAILABLE = process.env['NET_AVAILABLE'] === '1';

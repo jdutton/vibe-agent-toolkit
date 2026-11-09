@@ -14,6 +14,8 @@
  * (`expectOrphanedChildEnding`).
  */
 
+import fs from 'node:fs';
+
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
@@ -23,25 +25,22 @@ import { preload, TXT_ROWS, writeConfig } from './test-helpers/checks-phase.js';
 import { createMarkdownGitFixture } from './test-helpers/index.js';
 import {
   alive,
+  childEndedWithin,
   expectOrphanedChildEnding,
   killStillRunning,
   type LiveVat,
   pidWrittenTo,
   startVat,
-  within,
 } from './test-helpers/live-vat.js';
 
 // ⛔ Disposal paths: every `vat` process (and its checks child) inherits the scratch TMPDIR.
 const scratch = useScratchTmpdir('vat-scratch-checks-orphan-loop-');
 
-/** How long the child is held inside its first check. */
-const BLOCK_MS = 1500;
-
 /**
- * How long the orphaned child may outlive its supervisor: the rest of the held check, then
- * end-of-file at the next turn — with headroom for a loaded runner.
+ * How long the orphaned child may outlive its RELEASE: the held check returns, then end-of-file
+ * at the next turn — with headroom for a loaded runner.
  */
-const ORPHAN_BOUND_MS = BLOCK_MS + 5000;
+const ORPHAN_BOUND_MS = 5000;
 
 let dir: string;
 let supervisor: LiveVat | undefined;
@@ -66,21 +65,24 @@ describe('a checks child orphaned inside a check', () => {
   it('ends itself once the check returns: its one line, exit 2, and nothing published', async () => {
     const pidFile = safePath.join(scratch(), 'child.pid');
     const trace = safePath.join(scratch(), 'child.trace');
+    const release = safePath.join(scratch(), 'child.release');
     const running = startVat(dir, ['resources', 'check', '--budget', '600'], {
       nodeOptions: [preload('child-only-slow-check.mjs')],
-      env: { TEST_CHILD_PID_FILE: pidFile, TEST_CHILD_TRACE_FILE: trace, TEST_CHILD_BLOCK_MS: String(BLOCK_MS) },
+      env: { TEST_CHILD_PID_FILE: pidFile, TEST_CHILD_TRACE_FILE: trace, TEST_CHILD_RELEASE_FILE: release },
     });
     supervisor = running;
     child = await pidWrittenTo(pidFile);
     const childPid = child;
-    // The positive control: the child is held inside its check now.
+    // The positive control: the child is held inside its check now, and stays held until released.
     expect(alive(childPid)).toBe(true);
 
     running.process.kill('SIGKILL');
 
     await running.ended;
-    // The bound FIRST, at the supervisor's own exit — before anything waits on the child.
-    expect(await within(ORPHAN_BOUND_MS, () => !alive(childPid)), running.stderr()).toBe(true);
+    // Only now does the held check return — however long the kill took to land.
+    fs.writeFileSync(release, '', 'utf-8');
+    // The bound FIRST, from the release — before anything waits on the child.
+    expect(await childEndedWithin(ORPHAN_BOUND_MS, running, childPid), running.stderr()).toBe(true);
     // POSIX: its own ending, unpublished. Windows: terminated with its supervisor, untraced.
     await expectOrphanedChildEnding(running, trace);
   });

@@ -30,9 +30,12 @@
  *   its code runs (`expectOrphanedChildEnding`). A child blocked inside one SQLite statement reads
  *   nothing until it returns: `checks-supervisor-orphan-loop.system.test.ts`.
  *
- * 🚨 Every "the child is gone within N ms" here is asserted the moment the SUPERVISOR has exited
- * (`startVat().ended`), never after its stderr drains: the child inherits that stderr, so a drain
- * waited for the child, and the bound could not fail.
+ * 🚨 Every "the child is gone within N ms" here starts its clock the moment the SUPERVISOR has
+ * exited (`startVat().ended`), never after its stderr drains: the child inherits that stderr, so a
+ * drain waited for the child, and the bound could not fail. On Windows the check itself IS that
+ * drain, raced against the bound (`childEndedWithin`) — and there it proves only that the child
+ * ended with its supervisor, which the job object guarantees: it cannot tell the supervisor's
+ * guard from the OS. POSIX is where the guard is tested.
  *
  * The process that runs the checks' SQL (the child, or `--budget 0`) and its own signal
  * disposition are `checks-sql-process-signals.system.test.ts`.
@@ -47,12 +50,12 @@ import { BIN_PATH, preload, TXT_ROWS, writeConfig } from './test-helpers/checks-
 import { createMarkdownGitFixture } from './test-helpers/index.js';
 import {
   alive,
+  childEndedWithin,
   expectOrphanedChildEnding,
   killStillRunning,
   type LiveVat,
   pidWrittenTo,
   startVat,
-  within,
 } from './test-helpers/live-vat.js';
 
 // ⛔ Disposal paths: every `vat` process (and its checks child) inherits the scratch TMPDIR.
@@ -73,13 +76,16 @@ const NO_HANDLED_SIGNALS = process.platform === 'win32';
 
 /**
  * How long the orphaned child may outlive its supervisor. End-of-file reaches a child whose event
- * loop is free at once; the bound is headroom for a loaded runner. The stalled child never ends on
- * its own, so a child that does not notice cannot meet any bound.
+ * loop is free at once; the bound is headroom for a loaded runner. The stalled child does not end on
+ * its own before its ceiling, so a child that does not notice cannot meet any bound.
  */
 const ORPHAN_BOUND_MS = 5000;
 
 /** How long a child the supervisor's guard SIGKILLs may take to be gone — headroom for a loaded runner. */
 const KILL_BOUND_MS = 5000;
+
+/** When a stalled child kills itself: far past both bounds, so a child nothing ended still fails. */
+const STALL_CEILING_MS = 12 * Math.max(ORPHAN_BOUND_MS, KILL_BOUND_MS);
 
 let dir: string;
 // Both processes of the current case, so a red case cannot leave either running.
@@ -106,7 +112,7 @@ async function superviseChild(
   const pidFile = safePath.join(scratch(), 'child.pid');
   const running = startVat(dir, args, {
     nodeOptions: options.preloads ?? [preload('child-only-stall-in-population.mjs')],
-    env: { ...options.env, TEST_CHILD_PID_FILE: pidFile },
+    env: { ...options.env, TEST_CHILD_PID_FILE: pidFile, TEST_CHILD_MAX_STALL_MS: String(STALL_CEILING_MS) },
     ...(options.entry === undefined ? {} : { entry: options.entry }),
     ...(options.ownGroup === true ? { ownGroup: true } : {}),
   });
@@ -137,7 +143,7 @@ async function expectSignalTakesChildDown(
   send();
 
   const ending = await running.ended;
-  expect(await within(KILL_BOUND_MS, () => !alive(childPid)), running.stderr()).toBe(true);
+  expect(await childEndedWithin(KILL_BOUND_MS, running, childPid), running.stderr()).toBe(true);
   expect({ code: ending.code, signal: ending.signal }, ending.stderr).toStrictEqual({ code: null, signal });
   expect(progressDirsLeft()).toStrictEqual([]);
 }
@@ -209,7 +215,7 @@ describe('the checks supervisor ends — its child ends with it', () => {
     const phases = (ending.document['data'] as { phases: Array<{ name: string; status: string }> }).phases;
     expect(phases.find((phase) => phase.name === 'resources')?.status).toBe('ok');
     expect(phases.find((phase) => phase.name === 'checks')?.status).toBe('error');
-    expect(await within(KILL_BOUND_MS, () => !alive(childPid))).toBe(true);
+    expect(await childEndedWithin(KILL_BOUND_MS, running, childPid)).toBe(true);
     expect(progressDirsLeft()).toStrictEqual([]);
   });
 
@@ -223,7 +229,7 @@ describe('the checks supervisor ends — its child ends with it', () => {
     expect(ending.code).toBe(2);
     expect(ending.document['status']).toBe('error');
     expect((ending.document['error'] as { message: string }).message).toContain('EACCES');
-    expect(await within(KILL_BOUND_MS, () => !alive(childPid))).toBe(true);
+    expect(await childEndedWithin(KILL_BOUND_MS, running, childPid)).toBe(true);
     expect(progressDirsLeft()).toStrictEqual([]);
   });
 
@@ -240,7 +246,7 @@ describe('the checks supervisor ends — its child ends with it', () => {
     fs.writeFileSync(trigger, '', 'utf-8');
     const ending = await running.ended;
 
-    expect(await within(KILL_BOUND_MS, () => !alive(childPid)), running.stderr()).toBe(true);
+    expect(await childEndedWithin(KILL_BOUND_MS, running, childPid), running.stderr()).toBe(true);
     // The CLI's last-resort ending for an uncaught throw (`installLastResortExit`) — no document.
     expect(ending).toMatchObject({ code: 2, signal: null, document: {} });
     expect(progressDirsLeft()).toStrictEqual([]);
@@ -260,7 +266,7 @@ describe('the checks supervisor ends — its child ends with it', () => {
 
     const ending = await running.ended;
     // The bound FIRST, at the supervisor's own exit — before anything waits on the child.
-    expect(await within(ORPHAN_BOUND_MS, () => !alive(childPid)), running.stderr()).toBe(true);
+    expect(await childEndedWithin(ORPHAN_BOUND_MS, running, childPid), running.stderr()).toBe(true);
     if (process.platform !== 'win32') expect(ending.signal, ending.stderr).toBe('SIGKILL');
     // POSIX: the child's own ending — its one line, and exit 2. Windows: terminated with its
     // supervisor by the job object, untraced.

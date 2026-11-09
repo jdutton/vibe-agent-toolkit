@@ -407,13 +407,16 @@ export function createIsolatedScratch(prefix: string): string {
 
 /**
  * The environment that aims a CLI run at an {@link createIsolatedScratch}
- * directory: `HOME`, `USERPROFILE`, `CLAUDE_CONFIG_DIR` and `TMPDIR`.
+ * directory: `HOME`, `USERPROFILE`, `CLAUDE_CONFIG_DIR`, and the temp directory
+ * under all three names — `TMPDIR` on POSIX; `TEMP`, then `TMP`, on Windows, where
+ * setting `TMPDIR` alone left the run in the shared `%TEMP%`.
  *
  * @param scratch - The scratch directory
  * @returns The environment entries
  */
 export function isolatedScratchEnv(scratch: string): Record<string, string> {
-  return { ...fakeHomeEnv(safePath.join(scratch, 'home')), TMPDIR: safePath.join(scratch, 'tmp') };
+  const tmp = safePath.join(scratch, 'tmp');
+  return { ...fakeHomeEnv(safePath.join(scratch, 'home')), TMPDIR: tmp, TEMP: tmp, TMP: tmp };
 }
 
 /**

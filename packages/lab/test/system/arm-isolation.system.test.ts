@@ -83,7 +83,9 @@ function plantDeveloperState(): string {
   vi.stubEnv('HOME', home);
   vi.stubEnv('USERPROFILE', home);
   vi.stubEnv('CLAUDE_CONFIG_DIR', safePath.join(home, '.claude'));
-  vi.stubEnv('TMPDIR', tempDir('lab-arm-isolation-tmp-'));
+  // All three: Windows' os.tmpdir() reads TEMP then TMP, never TMPDIR.
+  const tmp = tempDir('lab-arm-isolation-tmp-');
+  for (const name of ['TMPDIR', 'TEMP', 'TMP']) vi.stubEnv(name, tmp);
   return home;
 }
 

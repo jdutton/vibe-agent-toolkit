@@ -1,6 +1,6 @@
 /**
  * Test-only preload (`NODE_OPTIONS=--import "<file: URL>"`): a supervised `vat resources check`
- * CHILD stalls ASYNCHRONOUSLY, forever, right after it appends its `started` progress entry — its
+ * CHILD stalls ASYNCHRONOUSLY, until its ceiling, right after it appends its `started` progress entry — its
  * event loop keeps turning, but the population waits on I/O that never completes.
  *
  * The sibling `child-only-stall-in-population.mjs` stalls with `Atomics.wait`, which blocks the
@@ -12,9 +12,14 @@
  * makes never completes, and a timer keeps the loop alive (a promise nobody will settle does not).
  * `syncBuiltinESMExports()` makes the ESM bindings the CLI imports see the patches.
  *
- * When `TEST_CHILD_PID_FILE` is set, the child writes its pid there once it has stalled; when
- * `TEST_CHILD_TRACE_FILE` is, it appends `exit:<code>` there as it exits — the one way a case can
- * read the exit code of a process that is not its own child.
+ * - `TEST_CHILD_PID_FILE`: the child writes its pid there once it has stalled.
+ * - `TEST_CHILD_TRACE_FILE`: the child appends `exit:<code>` there as it exits — the one way a
+ *   case can read the exit code of a process that is not its own child.
+ * - `TEST_CHILD_MAX_STALL_MS` (required): the stall's ceiling. Past it the child kills itself
+ *   (SIGKILL; `TerminateProcess` on Windows), so no exit handler runs and no `exit:` line is
+ *   traced. The case sets it well past the bound it asserts — a child that failed to end still
+ *   fails the case — and the child cannot outlive the run if it escaped teardown too (on Windows
+ *   teardown kills the supervisor only and relies on the job object to take the child).
  *
  * Acts only in the process whose argv carries `--supervised-by` (the supervised child). VAT's source
  * gains no knob for this.
@@ -29,6 +34,8 @@ import { PassThrough } from 'node:stream';
 const FS_CALLS = ['access', 'lstat', 'open', 'opendir', 'readdir', 'readFile', 'readlink', 'realpath', 'stat'];
 
 if (process.argv.includes('--supervised-by')) {
+  const ceiling = Number(process.env['TEST_CHILD_MAX_STALL_MS']);
+  if (!Number.isFinite(ceiling) || ceiling <= 0) throw new Error('child-only-async-stall.mjs needs TEST_CHILD_MAX_STALL_MS');
   let stalled = false;
   const trace = process.env['TEST_CHILD_TRACE_FILE'];
   if (trace !== undefined) {
@@ -76,7 +83,8 @@ if (process.argv.includes('--supervised-by')) {
     const result = append(path, data, ...rest);
     if (typeof data === 'string' && data.includes('"kind":"started"')) {
       stalled = true;
-      setInterval(() => {}, 60_000);
+      // Keeps the loop alive (a promise nobody will settle does not) until the ceiling.
+      setTimeout(() => process.kill(process.pid, 'SIGKILL'), ceiling);
       const pidFile = process.env['TEST_CHILD_PID_FILE'];
       if (pidFile !== undefined) fs.writeFileSync(pidFile, String(process.pid), 'utf-8');
     }

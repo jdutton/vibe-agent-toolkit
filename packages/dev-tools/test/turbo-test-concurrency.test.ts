@@ -14,7 +14,7 @@ import { PROJECT_ROOT } from '../src/common.js';
  * vitest.shared.ts, but `turbo run test:<suite>` runs MANY packages' suites
  * concurrently (turbo's default concurrency is 10). The per-package cap does
  * NOT compose across turbo's parallel packages, so ~10 packages × 2 forks
- * spawn at once — and the integration/system forks of the three packages that
+ * spawn at once — and the integration forks of the three packages that
  * load a native model (onnxruntime/transformers in `rag`, LanceDB Arrow in
  * `rag-lancedb`, the TS language service in `resource-compiler`) each hold
  * 1-3GB of NATIVE memory that `--max-old-space-size` cannot bound. That
@@ -41,14 +41,16 @@ function readTurboJson(): { tasks: Record<string, { dependsOn?: string[] }> } {
   return JSON.parse(withoutComments) as { tasks: Record<string, { dependsOn?: string[] }> };
 }
 
-interface IntegrationTestBlock {
+interface PackageTestBlock {
   maxWorkers: number;
+  fileParallelism?: boolean;
+  isolate?: boolean;
   setupFiles: string[];
   provide: { forkRssBudgetMb?: number };
 }
 
-async function loadIntegrationConfig(configPath: string): Promise<{ test: IntegrationTestBlock }> {
-  const loaded = (await import(pathToFileURL(configPath).href)) as { default: { test: IntegrationTestBlock } };
+async function loadPackageTestConfig(configPath: string): Promise<{ test: PackageTestBlock }> {
+  const loaded = (await import(pathToFileURL(configPath).href)) as { default: { test: PackageTestBlock } };
   return loaded.default;
 }
 
@@ -113,7 +115,7 @@ describe('turbo test-suite concurrency (cross-package native-memory guard)', () 
     for (const dir of readdirSync(safePath.join(PROJECT_ROOT, 'packages'))) {
       const configPath = safePath.join(PROJECT_ROOT, 'packages', dir, 'vitest.integration.config.ts');
       if (!existsSync(configPath)) continue;
-      const { test } = await loadIntegrationConfig(configPath);
+      const { test } = await loadPackageTestConfig(configPath);
       if (nativeMemory.has(dir)) expect(test.maxWorkers, `${dir} holds native memory`).toBe(maxTestWorkers);
       if (test.maxWorkers <= maxTestWorkers) continue;
       raised.push(dir);
@@ -122,8 +124,40 @@ describe('turbo test-suite concurrency (cross-package native-memory guard)', () 
     }
     // Both ways: the scan saw the one package that raises its cap, at the one value, so it is not blind.
     expect(raised).toEqual(['cli']);
-    const cli = await loadIntegrationConfig(safePath.join(PROJECT_ROOT, 'packages', 'cli', 'vitest.integration.config.ts'));
+    const cli = await loadPackageTestConfig(safePath.join(PROJECT_ROOT, 'packages', 'cli', 'vitest.integration.config.ts'));
     expect(cli.test.maxWorkers).toBe(cliIntegrationTestWorkers);
+  });
+
+  // The system tier runs at the shared cap in every package and on every platform: Windows ran it
+  // serially long after the RPC deadline that justified that was gone. Its memory was measured
+  // for that cap (`vitest.shared.ts`, `createSystemTestConfig`), and every fork carries the RSS
+  // detector; much of the tier's memory sits in spawned `vat` children that detector cannot see.
+  // Equality, not "at most": the value is read on whichever OS runs the unit tier, so a
+  // platform branch reds there — lowering a package for everyone is a deliberate edit here.
+  // `maxWorkers` is not the only way to serialise, so `fileParallelism` is pinned too, and `isolate`, which the detector's per-file reading needs.
+  it('runs every package\'s system tier at the shared worker cap, on this platform too', async () => {
+    const scanned: string[] = [];
+    for (const dir of readdirSync(safePath.join(PROJECT_ROOT, 'packages'))) {
+      const manifestPath = safePath.join(PROJECT_ROOT, 'packages', dir, 'package.json');
+      if (!existsSync(manifestPath)) continue;
+      const pkg = JSON.parse(readFileSync(manifestPath, 'utf-8')) as { scripts?: Record<string, string> };
+      const script = pkg.scripts?.['test:system'];
+      const configPath = safePath.join(PROJECT_ROOT, 'packages', dir, 'vitest.system.config.ts');
+      // Both ways: a script with no config, or a config no script runs, escapes the checks below.
+      expect(existsSync(configPath), `${dir}: test:system script and vitest.system.config.ts go together`).toBe(script !== undefined);
+      if (script === undefined) continue;
+      expect(script, `${dir} test:system script`).toBe('vitest run --config vitest.system.config.ts');
+      const { test } = await loadPackageTestConfig(configPath);
+      expect(test.maxWorkers, `${dir} system tier`).toBe(maxTestWorkers);
+      expect(test.fileParallelism, `${dir} system tier`).not.toBe(false);
+      // The RSS detector reads one file's peak only while every file gets a fresh fork.
+      expect(test.isolate, `${dir} system tier`).not.toBe(false);
+      expect(test.setupFiles.some((file) => file.endsWith('vitest.fork-rss-budget.setup.js')), `${dir} system tier without the RSS budget`).toBe(true);
+      expect(test.provide.forkRssBudgetMb, `${dir} system tier`).toBe(forkRssBudgetMb);
+      scanned.push(dir);
+    }
+    // Not blind: the scan reached cli, the tier's long pole.
+    expect(scanned).toContain('cli');
   });
 
   it('leaves test:unit parallel (light, no native models — no cap needed)', () => {

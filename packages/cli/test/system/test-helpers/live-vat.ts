@@ -66,6 +66,33 @@ export function within(ms: number, condition: () => boolean): Promise<boolean> {
   });
 }
 
+/**
+ * Whether the checks child of `running` has ended within `ms`.
+ *
+ * POSIX: its pid stops answering ({@link alive}). POSIX hands pids out in sequence and wraps only
+ * after the whole range, so a pid is not reused within a case's few seconds. Windows: the stderr
+ * pipe it inherited from `running` closes ({@link LiveVat.drained}) — tied to the process itself,
+ * where a pid is not: Windows may hand a dead child's pid to a new process at once, and a sibling
+ * worker's process holding it would read as the child still alive.
+ *
+ * On Windows this proves only that the child ended WITH its supervisor — libuv's kill-on-close job
+ * object guarantees that however the supervisor ends — so it cannot tell the supervisor's own guard
+ * from the OS. The guard is tested on POSIX.
+ *
+ * @param ms - The bound
+ * @param running - The child's supervisor
+ * @param pid - The child's pid
+ * @returns True when the child ended within the bound
+ */
+export function childEndedWithin(ms: number, running: LiveVat, pid: number): Promise<boolean> {
+  if (process.platform !== 'win32') return within(ms, () => !alive(pid));
+  let timer: NodeJS.Timeout | undefined;
+  const bound = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms);
+  });
+  return Promise.race([running.drained.then(() => true), bound]).finally(() => clearTimeout(timer));
+}
+
 /** Wait (up to 20 s) for `file` to hold a pid, and return it. */
 export async function pidWrittenTo(file: string): Promise<number> {
   const written = await within(20_000, () => fs.existsSync(file) && fs.readFileSync(file, 'utf-8') !== '');
@@ -77,13 +104,23 @@ export async function pidWrittenTo(file: string): Promise<number> {
  * SIGKILL a case's supervisor and its checks child, whichever is still running — so a red case
  * cannot leave either behind.
  *
+ * The supervisor is signalled through its `ChildProcess`, which does nothing once it has exited.
+ * The child is signalled by pid on POSIX only, which reuses a pid only after wrapping the whole
+ * range (see {@link childEndedWithin}). A pid is not an identity: Windows may hand a number
+ * to a new process once nothing holds a handle to the old one, which can be a sibling test file's
+ * process. Nor is it needed there — the child sits in libuv's kill-on-close job object, which the
+ * OS closes, terminating the child, once the supervisor is gone (see
+ * {@link expectOrphanedChildEnding}); and should a regression let it escape, the stall preloads
+ * end it themselves at their ceiling.
+ *
  * @param supervisor - The supervising `vat`, when the case started one
  * @param child - The checks child's pid, when the case read one
  */
 export function killStillRunning(supervisor: LiveVat | undefined, child: number | undefined): void {
-  const pid = supervisor?.process.pid;
-  if (pid !== undefined) killIfRunning(pid);
-  if (child !== undefined) killIfRunning(child);
+  if (supervisor?.process.exitCode === null && supervisor.process.signalCode === null) {
+    supervisor.process.kill('SIGKILL');
+  }
+  if (child !== undefined && process.platform !== 'win32') killIfRunning(child);
 }
 
 /**
@@ -150,7 +187,9 @@ export interface LiveVat {
    * 🚨 Not on `close`. `close` also waits for stderr, and a checks child INHERITS this process's
    * stderr — so `close` waited for the child too, and a case's "the child is gone within N ms",
    * asserted after it, could never fail: a child that never ended showed up as the case's own
-   * timeout instead. Stdout is the supervisor's alone (the child's goes to the supervisor).
+   * timeout instead. Stdout is the supervisor's alone (the child's goes to the supervisor). A
+   * bound's clock starts here; on Windows the bound then races {@link LiveVat.drained} itself
+   * (`childEndedWithin`), so the bound still decides.
    */
   readonly ended: Promise<Ending>;
   /** Settles with ALL of stderr once every holder of it — a child it outlived included — has closed it. */

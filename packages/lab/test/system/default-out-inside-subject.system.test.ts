@@ -53,7 +53,7 @@ describe('the default --out inside the subject holds reports only', () => {
     const ran = spawnSync(NODE_EXECUTABLE, [LAB_BIN, ...args, '--keep-arms'], {
       cwd: subject,
       encoding: 'utf-8',
-      env: { ...process.env, TMPDIR: scratch, TEMP: scratch, TMP: scratch, HOME: home, CLAUDE_CONFIG_DIR: home },
+      env: { ...process.env, TMPDIR: scratch, TEMP: scratch, TMP: scratch, HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: home },
     });
 
     // A one-pair control A/B may read machine noise as a change (exit 1); a refusal is 2, and none may refuse.

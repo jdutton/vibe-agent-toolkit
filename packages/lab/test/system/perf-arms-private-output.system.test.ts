@@ -54,7 +54,8 @@ function modeOf(path: string): number {
  */
 function sandboxed(): string {
   const sandbox = tempDir('lab-arms-private-env-');
-  vi.stubEnv('HOME', safePath.join(sandbox, 'home'));
+  // Both: Windows' os.homedir() reads USERPROFILE, never HOME.
+  for (const name of ['HOME', 'USERPROFILE']) vi.stubEnv(name, safePath.join(sandbox, 'home'));
   vi.stubEnv('CLAUDE_CONFIG_DIR', safePath.join(sandbox, 'claude'));
   for (const name of ['TMPDIR', 'TEMP', 'TMP']) vi.stubEnv(name, sandbox);
   vi.spyOn(process.stdout, 'write').mockReturnValue(true);

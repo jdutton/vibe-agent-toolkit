@@ -76,8 +76,7 @@ Deep reference document.
   return skillDir;
 }
 
-// Windows: vitest singleFork worker IPC times out when this runs as part of the full system test suite
-describe.skipIf(process.platform === 'win32')('Audit Dogfooding (system test)', () => {
+describe('Audit Dogfooding (system test)', () => {
   let binPath: string;
   let projectRoot: string;
   let tempDir: string;
@@ -104,24 +103,8 @@ describe.skipIf(process.platform === 'win32')('Audit Dogfooding (system test)', 
     expectSuccessfulAudit(result);
   });
 
-  it('should audit dist skills without errors', async () => {
-    const distSkillsDir = safePath.join(projectRoot, 'packages/vat-development-agents/dist/skills');
-    if (!fs.existsSync(distSkillsDir)) {
-      // dist may not exist if build hasn't run — skip gracefully
-      return;
-    }
-
-    const { result, parsed } = await executeCliAndParseYaml(
-      binPath,
-      ['audit', '--verbose', distSkillsDir],
-      { cwd: tempDir },
-    );
-
-    expectSuccessfulAudit(result);
-
-    // Should scan multiple skills (we have 5+ dist skills)
-    expect(parsed['examined']).toBeGreaterThan(1);
-  });
+  // The audit of vat-development-agents' BUILT skills lives in that package
+  // (`dist-skills-audit.system.test.ts`), whose `test:system` already depends on its build.
 
   describe('link traversal (end-to-end)', () => {
     it('should follow transitive links, reporting a finding in a file only a link reaches', async () => {

@@ -1,16 +1,18 @@
 /**
  * Fails a test file whose fork's PEAK resident memory passed the budget.
  *
- * Installed by `createIntegrationTestConfig` (vitest.shared.ts) only for a package
- * that raises its worker cap above `maxTestWorkers`. The cap is 2 because a fork
- * can hold memory `--max-old-space-size` never sees (onnxruntime, LanceDB's Arrow
- * engine: 1-3 GB each); a package may run more forks only while each stays under
- * `forkRssBudgetMb`.
+ * Installed (vitest.shared.ts) where a tier runs more forks than its memory was
+ * once sized for: by `createIntegrationTestConfig` for a package that raises its
+ * worker cap above `maxTestWorkers` — the cap is 2 because an integration fork can
+ * hold memory `--max-old-space-size` never sees (onnxruntime, LanceDB's Arrow
+ * engine: 1-3 GB each) — and by `createSystemTestConfig` for every package, since
+ * Windows runs that tier on 2 workers where it ran 1, beside `rag-lancedb` forks
+ * that load LanceDB and ONNX in-process.
  *
  * A DETECTOR, not a limit: it reads the peak after the file ran, so it names a
  * file that grew, and cannot stop a fork the machine kills first. Its scope is
  * the fork's own process (worker threads included) — a `vat` child a test spawns
- * is outside it (the cap now allows more such children at once than 2 did).
+ * is outside it.
  *
  * `process.resourceUsage().maxRSS` is in KiB on every platform (libuv normalises
  * macOS's bytes; on Windows it is the peak working set). On Linux it also carries
@@ -29,8 +31,8 @@ afterAll(() => {
 	if (typeof budgetMb !== 'number' || peakMb > budgetMb) {
 		throw new Error(
 			`fork peak RSS ${peakMb} MB is over the ${String(budgetMb)} MB budget (vitest.shared.ts: forkRssBudgetMb). ` +
-				'This package runs its integration tier above the shared worker cap, which is only safe while every fork stays small. ' +
-				'Find what grew (a native addon at work, a large fixture), or keep the suite at the default cap.',
+				'This tier\'s forks are sized to this budget so that they can run side by side. ' +
+				'Find what grew (a native addon at work, a large fixture) and shrink it, or re-measure the budget for every tier that carries it.',
 		);
 	}
 });

@@ -33,9 +33,9 @@
  * A findings-only run writes nothing to stderr, so stderr is compared whole
  * rather than as one line.
  *
- * Isolation: `HOME`, `USERPROFILE`, `CLAUDE_CONFIG_DIR` and `TMPDIR` all point
- * into scratch, and the store directory is pinned through the variable the
- * module under test owns.
+ * Isolation: `HOME`, `USERPROFILE`, `CLAUDE_CONFIG_DIR` and the temp directory (`TMPDIR`,
+ * `TEMP`, `TMP`) all point into scratch, and the store directory is pinned through the
+ * variable the module under test owns.
  */
 
 import { chmodSync, rmSync, writeFileSync } from 'node:fs';

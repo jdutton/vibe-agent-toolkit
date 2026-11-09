@@ -16,7 +16,9 @@
  *
  * ⚠️ The headroom is EMPIRICAL. `measureBudget()` times `vat resources check --budget 0`, so it
  * bounds the CHILD's population, not the `resources` phase's — which `vat validate` runs first and
- * nothing here measures. That the multiple holds is observed on the CI runners, not derived.
+ * nothing here measures. That the multiple holds is observed on the CI runners, not derived —
+ * and on Windows it was observed with the system tier on ONE worker; at two, a sibling fork can
+ * load the machine between the measurement and the run it sizes. Re-observe it there if it reds.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -60,12 +62,15 @@ function boundedPhase(...more: string[]): { env: NodeJS.ProcessEnv; withinMs: nu
     writeConfig(projectDir, [['quick', TXT_ROWS]]);
     return vat(projectDir, ['resources', 'check', '--budget', '0']).elapsedMs;
   });
+  const withinMs = KILL_WITHIN_BUDGETS * budgetSeconds * 1000;
   return {
     env: {
       NODE_OPTIONS: [preload('parent-only-fast-clock.mjs'), ...more].join(' '),
       TEST_PARENT_CLOCK_SCALE: String(DEFAULT_BUDGET_SECONDS / budgetSeconds),
+      // A stalled child ends itself only well past the bound, so the kill asserted is the watchdog's.
+      TEST_CHILD_MAX_STALL_MS: String(2 * withinMs),
     },
-    withinMs: KILL_WITHIN_BUDGETS * budgetSeconds * 1000,
+    withinMs,
   };
 }
 
