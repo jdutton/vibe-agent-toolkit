@@ -47,12 +47,14 @@ const DERIVED_RELATIONS_HELP = `Derived relations (evaluated only when a stateme
   count is what stops a chain whose largest file could not be sized from
   passing. (A WHERE on 'charged' would also filter those rows away.)
 
-  changed_files -- what changed under the root since --base <ref>: path,
-  status (added | modified | deleted | renamed | copied | type-changed),
-  oldPath and similarity (for a rename or copy). The working tree is
-  compared, staged or not, plus untracked files git does not ignore. A
-  statement reading it without --base, or with a ref that names no commit,
-  is REFUSED -- never answered with an empty relation:
+  changed_files -- what this change touched under the root: path, status
+  (added | modified | deleted | renamed | copied | type-changed), oldPath
+  and similarity (for a rename or copy). The working tree, staged or not,
+  plus untracked files git does not ignore, is compared with the MERGE BASE
+  of --base <ref> and HEAD, so what <ref> moved since is never listed. A
+  statement reading it without --base, or with a ref that names no commit
+  or shares no history with HEAD, is REFUSED -- never answered with an
+  empty relation. --base is read only when a statement names it:
 
     SELECT c.path FROM changed_files c
      WHERE c.path LIKE 'docs/specs/%' AND c.status != 'deleted'`;
@@ -417,7 +419,9 @@ Declaring a check:
   violations are still reported). allowEmpty: true declares zero legitimate:
   no finding, and the entry shows examined: 0 and allowEmpty: true.
   allowEmpty without examined is refused at config load. An examined
-  statement that fails is RESOURCE_CHECK_BROKEN.
+  statement that fails is RESOURCE_CHECK_BROKEN. examined is OPTIONAL: a
+  check without it can pass over an empty population. Declare it; a
+  consumer can require it on every data.checks entry.
 
   A check's SQL runs through the same surface as vat resources query, so
   the same rule applies: it must be a query, beginning SELECT, WITH or VALUES.
@@ -566,7 +570,9 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
              or a broken / examined-nothing refusal about it) also carries
              check: <name>; a declared check's violation carries evidence:
              the row's non-reserved columns as SQLite returned them (a BLOB
-             as the message renders it). A whole-run finding has no check
+             as the message renders it; a path that is not the location
+             stays). Rows it could not read carry reason: {column, value,
+             row, allowed}. A whole-run finding has no check
   summary:   {errors, warnings, info} over findings; exit 1 iff errors > 0
   durationMs: wall time of the whole run
   data.checksRun:

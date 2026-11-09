@@ -1,23 +1,20 @@
 /**
- * `column` has ONE home — `ValidationIssueSchema` — and the published finding inherits it.
- *
- * The enforcer is the GENERATED artifact an adopter validates against, not the Zod source: a
- * second declaration (a `.extend({ column })` re-added beside the inherited one) is what this file
- * counts, so the count is read where the two would meet.
+ * A finding's `column` coordinate has ONE home — `ValidationIssueSchema` — and every published
+ * finding schema inherits that very schema object. A second declaration (a `.extend({ column })`
+ * beside the inherited one) is a different object, so identity is what this file checks.
  */
 
-import { readFileSync } from 'node:fs';
-
-import { safePath } from '@vibe-agent-toolkit/utils';
-import { resolveFromImportMeta } from '@vibe-agent-toolkit/utils/fs';
+import { FindingSchema, ValidationIssueSchema } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
-const SCHEMA_FILE = safePath.join(resolveFromImportMeta(import.meta.url, '..', '..'), 'schemas', 'resources-check.json');
+import { CHECK_FINDING_SCHEMA } from '../../src/commands/resources/check-schema.js';
 
-describe('resources-check.json', () => {
-  it('declares the finding `column` exactly once', () => {
-    const text = readFileSync(SCHEMA_FILE, 'utf-8');
+describe('the finding column coordinate', () => {
+  it('is ValidationIssueSchema\'s own declaration in the shared finding schema', () => {
+    expect(FindingSchema.shape.column).toBe(ValidationIssueSchema.shape.column);
+  });
 
-    expect(text.match(/"column":/g) ?? []).toHaveLength(1);
+  it('is the same declaration in vat resources check\'s finding schema', () => {
+    expect(CHECK_FINDING_SCHEMA.innerType().shape.column).toBe(ValidationIssueSchema.shape.column);
   });
 });

@@ -292,6 +292,7 @@ const BARREL_EXPORTS = [
   'splitProjectionByScope',
   'strongestLoading',
   'transformContent',
+  'uninterpretableRowsReason',
   'unparsedResourceFacts',
   'validateCompiledFrontmatter',
   'validateFrontmatter',

@@ -10,7 +10,8 @@
   `vat validate`'s `checks` phase. A check entry carries `examinedNothing: true` exactly when that
   check produced `RESOURCE_CHECK_EXAMINED_NOTHING`.
 - **A budget kill or death during a check's examined statement names that statement**, and records
-  the check as broken with its `rows`, instead of blaming the violations statement.
+  the check as broken with its `rows` (and `allowEmpty`), the entry a completed run whose examined
+  statement failed publishes, instead of blaming the violations statement.
 
 ### Changed
 

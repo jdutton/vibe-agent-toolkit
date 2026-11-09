@@ -141,6 +141,8 @@ const ExaminingEntrySchema = z.object({
   name: z.string(),
   durationMs: z.number(),
   rows: z.number(),
+  // 🔑 Every field the cost record carries, so a kill rebuilds the entry a completed run publishes.
+  allowEmpty: z.literal(true).optional(),
 }).strict();
 
 /** 🚨 A declared statement's rows are about to convert; without this a kill reads as a hung statement. */
@@ -149,6 +151,8 @@ const ConvertingEntrySchema = z.object({
   name: z.string(),
   durationMs: z.number(),
   rows: z.number(),
+  examined: z.number().optional(),
+  allowEmpty: z.literal(true).optional(),
 }).strict();
 
 /**

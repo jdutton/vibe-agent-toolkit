@@ -215,14 +215,16 @@ location, each load carrying a `launchCharge` — the rows `vat claude context` 
 none pays nothing for them. A statement reaching for a relation nothing evaluated is **refused**,
 never answered from the empty table — an empty table and a healthy tree are the same answer.
 
-`changed_files` (`path`, `status`, `oldPath`, `similarity`) is what changed under the root since a
-base commit: pass `--base <ref>` to `vat resources query`, `vat resources check` or `vat validate`.
-It compares the working tree (staged or not) plus untracked, non-ignored files with that commit;
-`status` is `added`, `modified`, `deleted`, `renamed`, `copied` or `type-changed`, and `oldPath` /
-`similarity` are set for a rename or copy. A rename across the project root's boundary is seen from
-inside it (in = `added`, out = `deleted`). Without `--base`, or with a ref that names no commit
-(fetch it first in a shallow CI clone), a statement reading it is **refused** naming the fix — for a
-check, `RESOURCE_CHECK_BROKEN` on that check only. Scope a check to what a change touched:
+`changed_files` (`path`, `status`, `oldPath`, `similarity`) is what THIS CHANGE touched under the
+root: pass `--base <ref>` to `vat resources query`, `vat resources check` or `vat validate`. It
+compares the working tree (staged or not) plus untracked, non-ignored files with the **merge base**
+of `<ref>` and `HEAD` — GitHub's "files changed", so a branch behind `main` never lists what `main`
+moved since. `status` is `added`, `modified`, `deleted`, `renamed`, `copied` or `type-changed`, and
+`oldPath` / `similarity` are set for a rename or copy. A rename across the project root's boundary
+is seen from inside it (in = `added`, out = `deleted`). Without `--base`, with a ref that names no
+commit, or with no merge base (a shallow CI clone: fetch more history), a statement reading it is
+**refused** naming the fix — for a check, `RESOURCE_CHECK_BROKEN` on that check only. `--base` is
+read only when a statement names `changed_files`. Scope a check to what a change touched:
 
 ```sql
 SELECT c.path FROM changed_files c
@@ -396,6 +398,9 @@ skills-have-owners:
 - The examined statement obeys every rule `sql` does, is charged to the check's `durationSecs` and
   bounded by `--budget`; if it fails, the check is `RESOURCE_CHECK_BROKEN` and none of its rows are
   reported. Same behaviour in `vat validate`'s `checks` phase.
+- ⚠️ `examined` is OPTIONAL, so a check that declares none **can pass over an empty population** —
+  nothing refuses it. Declare it on every check; a consumer that needs the guarantee can require
+  an `examined` key on each `data.checks` entry.
 
 ### A size ratchet is a check with its baseline inline
 

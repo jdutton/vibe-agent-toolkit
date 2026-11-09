@@ -138,17 +138,19 @@ export type CheckEvidenceValue = string | number | boolean | null;
  * check and, for a declared check's violation, carries its row.
  *
  * 🔑 A separate type rather than a widened `ValidationIssue`: only
- * `vat resources check`'s document publishes these two keys, through its own
+ * `vat resources check`'s document publishes these keys, through its own
  * finding schema.
  */
 export interface CheckIssue extends ValidationIssue {
   /** The check's key in `resources.checks`, or a built-in's name. */
   check?: string;
   /**
-   * The row's columns minus the reserved ones, in the order SQLite returned
-   * them. Present on a declared check's violation only.
+   * The row's columns minus the reserved ones (a `path` that did not become the
+   * location stays), in the order SQLite returned them. A declared check's violation only.
    */
   evidence?: Record<string, CheckEvidenceValue>;
+  /** Why a check's rows could not be read. Only on that refusal. */
+  reason?: UninterpretableRowsReason;
 }
 
 /**
@@ -173,8 +175,9 @@ type StrictCheckColumn = Exclude<ReservedCheckColumn, 'path'>;
  * - `ok: false` — a row's reserved column held a value it cannot mean, so NONE
  *   of the rows were reported. `row` is 1-based; `field` is the SQL column NAME
  *   (never the finding's `column` coordinate); `rowsSelected` is how many rows
- *   the statement returned — it completed, so the count is real; `reason` is
- *   the predicate the value failed (`is not a positive integer`).
+ *   the statement returned — it completed, so the count is real; `allowed` is
+ *   what the column may hold (`a positive integer`) — the one spelling both the
+ *   sentence and {@link uninterpretableRowsReason} use.
  */
 export type CheckRowConversion =
   | {
@@ -188,16 +191,26 @@ export type CheckRowConversion =
     readonly field: StrictCheckColumn;
     readonly value: unknown;
     readonly rowsSelected: number;
-    readonly reason: string;
+    readonly allowed: string;
   };
+
+/** A check's uninterpretable rows as a finding states them: which column, which value, which row. */
+export interface UninterpretableRowsReason {
+  readonly column: StrictCheckColumn;
+  /** The value as evidence renders it. */
+  readonly value: CheckEvidenceValue;
+  /** 1-based. */
+  readonly row: number;
+  readonly allowed: string;
+}
 
 /** One row's reading of a reserved column: a value, nothing said, or a refusal. */
 type Read<T> = { readonly ok: true; readonly value: T | undefined } | { readonly ok: false };
 
-/** Why a `finding_severity` value was refused, as a predicate. */
-const SEVERITY_REFUSAL = `is not one of ${SEVERITIES.join(', ')}`;
-/** Why a `finding_line` or `finding_column` value was refused, as a predicate. */
-const POSITION_REFUSAL = 'is not a positive integer';
+/** What `finding_severity` may hold. */
+const SEVERITY_ALLOWED = `one of ${SEVERITIES.join(' | ')}`;
+/** What `finding_line` and `finding_column` may hold. */
+const POSITION_ALLOWED = 'a positive integer';
 
 /**
  * Turn one check's selected rows into findings.
@@ -229,7 +242,7 @@ export function issuesFromCheckRows(
   for (const [index, row] of rows.entries()) {
     const read = readRow(row);
     if (!read.ok) {
-      return { ok: false, row: index + 1, field: read.field, value: row[read.field], rowsSelected: rows.length, reason: read.reason };
+      return { ok: false, row: index + 1, field: read.field, value: row[read.field], rowsSelected: rows.length, allowed: read.allowed };
     }
     const location = locationOf(row);
     issues.push({
@@ -248,7 +261,7 @@ export function issuesFromCheckRows(
       ...(read.line === undefined ? {} : { line: read.line }),
       ...(read.column === undefined ? {} : { column: read.column }),
       check: name,
-      evidence: evidenceOf(row),
+      evidence: evidenceOf(row, location !== undefined),
     });
   }
   return { ok: true, issues, nearMisses: nearMissesOf(rows[0]) };
@@ -279,28 +292,38 @@ export function checkStatements(check: ResourceCheck): string[] {
  * @param name - The check's key in `resources.checks`
  * @param refusal - What {@link issuesFromCheckRows} refused
  * @returns e.g. `The check "x" ran and selected 3 rows, but row 3's finding_severity =
- *   "high" is not one of error, warning, info, so none of its rows were reported.`
+ *   "high" is not one of error | warning | info, so none of its rows were reported.`
  */
 export function describeUninterpretableRows(name: string, refusal: Extract<CheckRowConversion, { ok: false }>): string {
   const value = typeof refusal.value === 'string' ? JSON.stringify(refusal.value) : renderValue(refusal.value);
   const noun = refusal.rowsSelected === 1 ? 'row' : 'rows';
   return `The check "${name}" ran and selected ${String(refusal.rowsSelected)} ${noun}, but row`
-    + ` ${String(refusal.row)}'s ${refusal.field} = ${value} ${refusal.reason}, so none of its rows were reported.`;
+    + ` ${String(refusal.row)}'s ${refusal.field} = ${value} is not ${refusal.allowed}, so none of its rows were reported.`;
 }
 
 /**
- * A row's evidence: every column but the reserved ones, in the order SQLite
- * returned them, each value through {@link evidenceValue}.
+ * The same refusal as structure, for the finding's `reason`.
+ *
+ * @param refusal - What {@link issuesFromCheckRows} refused
+ * @returns The column, the value as evidence renders it, the 1-based row and what is allowed
+ */
+export function uninterpretableRowsReason(refusal: Extract<CheckRowConversion, { ok: false }>): UninterpretableRowsReason {
+  return { column: refusal.field, value: evidenceValue(refusal.value), row: refusal.row, allowed: refusal.allowed };
+}
+
+/**
+ * A row's evidence: every column but the `finding_*` ones — and `path` only when it became the
+ * finding's location, so an unusable one is still seen — in the order SQLite returned them.
+ * `Object.fromEntries` defines own keys, so a column aliased `__proto__` is kept.
  *
  * @param row - One selected row
+ * @param located - Whether the row's `path` became the finding's location
  * @returns The evidence object
  */
-function evidenceOf(row: Record<string, unknown>): Record<string, CheckEvidenceValue> {
-  const evidence: Record<string, CheckEvidenceValue> = {};
-  for (const [column, value] of Object.entries(row)) {
-    if (!isReserved(column)) evidence[column] = evidenceValue(value);
-  }
-  return evidence;
+function evidenceOf(row: Record<string, unknown>, located: boolean): Record<string, CheckEvidenceValue> {
+  return Object.fromEntries(Object.entries(row)
+    .filter(([column]) => !isReserved(column) || (column === 'path' && !located))
+    .map(([column, value]) => [column, evidenceValue(value)]));
 }
 
 /**
@@ -329,7 +352,7 @@ function evidenceValue(value: unknown): CheckEvidenceValue {
 /** A row's strict reserved columns, read — or the first one that cannot be. */
 type RowReading =
   | { readonly ok: true; readonly severity: Severity | undefined; readonly line: number | undefined; readonly column: number | undefined }
-  | { readonly ok: false; readonly field: StrictCheckColumn; readonly reason: string };
+  | { readonly ok: false; readonly field: StrictCheckColumn; readonly allowed: string };
 
 /**
  * Read one row's `finding_severity`, `finding_line` and `finding_column`.
@@ -339,14 +362,14 @@ type RowReading =
  */
 function readRow(row: Record<string, unknown>): RowReading {
   const severity = readSeverity(row['finding_severity']);
-  if (!severity.ok) return { ok: false, field: 'finding_severity', reason: SEVERITY_REFUSAL };
+  if (!severity.ok) return { ok: false, field: 'finding_severity', allowed: SEVERITY_ALLOWED };
   const line = readPosition(row['finding_line']);
-  if (!line.ok) return { ok: false, field: 'finding_line', reason: POSITION_REFUSAL };
+  if (!line.ok) return { ok: false, field: 'finding_line', allowed: POSITION_ALLOWED };
   const column = readPosition(row['finding_column']);
-  if (!column.ok) return { ok: false, field: 'finding_column', reason: POSITION_REFUSAL };
+  if (!column.ok) return { ok: false, field: 'finding_column', allowed: POSITION_ALLOWED };
   // A column is a place WITHIN a line; on its own it places nothing.
   if (column.value !== undefined && line.value === undefined) {
-    return { ok: false, field: 'finding_column', reason: 'is set but its line is not' };
+    return { ok: false, field: 'finding_column', allowed: 'NULL without a finding_line' };
   }
   return { ok: true, severity: severity.value, line: line.value, column: column.value };
 }

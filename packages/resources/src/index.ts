@@ -893,8 +893,9 @@ export {
   describeUninterpretableRows,
   issuesFromCheckRows,
   PROJECTION_STATEMENT_REFUSED_CODE,
+  uninterpretableRowsReason,
 } from './projection/sql-checks.js';
-export type { CheckEvidenceValue, CheckIssue, CheckRowConversion, NearMiss } from './projection/sql-checks.js';
+export type { CheckEvidenceValue, CheckIssue, CheckRowConversion, NearMiss, UninterpretableRowsReason } from './projection/sql-checks.js';
 
 // VAT's OWN default assertions over the same projection — TypeScript predicates,
 // never SQL, because a default-on rule written as a statement would make the

@@ -213,6 +213,61 @@ describe('examinedNothing on a check entry agrees with the refusal, in both dire
   });
 });
 
+describe('a killed run rebuilds the check entry a completed run publishes', () => {
+  // A kill at either stage is compared with the completed run that BROKE at that stage.
+  it.each([
+    ['converting', { V: [{ finding_line: 0 }], E: [{ n: 1 }] }],
+    ['examining', { V: [{ n: 1 }], E: new Error('no such table: t') }],
+  ] as const)('while %s', (stage, answers) => {
+    const progress: ProgressEntry[] = [];
+    let reading = 0;
+    const ran = runProjectChecks({
+      builtins: [],
+      checks: { c: { description: 'd', sql: 'V', examined: 'E', allowEmpty: true } },
+      only: undefined,
+      ask: askRows(answers),
+      validation: undefined,
+      membersEnumerated: POPULATED.membersEnumerated,
+      now: () => (reading += 5),
+      onProgress: (entry) => progress.push(entry),
+    });
+    const completed = buildCheckOutputData({ root: '/corpus', durationMs: 3, ...ran, populated: POPULATED });
+    const killedAfter = progress.findIndex((entry) => entry.kind === stage);
+    const rebuilt = buildCheckOutputData(buildInterruptedCheckInput({
+      entries: [{ kind: 'population', ...POPULATED }, ...progress.slice(0, killedAfter + 1)],
+      root: '/corpus',
+      ending: { kind: 'budget', budgetSecs: 2, invocation: 'standalone' },
+      durationMs: 9,
+    }));
+
+    // A kill mid-statement cannot know that statement's time; everything else must agree.
+    const withoutTime = (report: CheckReport): unknown[] => (report.data?.checks ?? []).map(({ durationSecs: _t, ...entry }) => entry);
+    expect(killedAfter).toBeGreaterThan(-1);
+    expect(withoutTime(rebuilt)).toStrictEqual(withoutTime(completed));
+    expectValid(rebuilt);
+  });
+});
+
+describe('a check whose rows could not be read carries the reason as structure', () => {
+  it('publishes column, value, row and what is allowed, and validates', () => {
+    const report = publish({ graded: { description: 'd', sql: 'V' } }, askRows({ V: [{ n: 1 }, { finding_severity: 'high' }] }));
+
+    expect(findingsOf(report)[0]?.['reason']).toStrictEqual({
+      column: 'finding_severity', value: 'high', row: 2, allowed: 'one of error | warning | info',
+    });
+    expectValid(report);
+  });
+
+  it.each([
+    ['a statement that threw', { sql: 'V' }, { V: new Error('no such column: x') }],
+    ['an examined statement that threw', { sql: 'V', examined: 'E' }, { V: [], E: new Error('no such table: t') }],
+  ])('carries no reason on %s', (_label, declared, answers) => {
+    const report = publish({ bad: { description: 'd', ...declared } }, askRows(answers));
+
+    expect(findingsOf(report).map((finding) => Object.hasOwn(finding, 'reason'))).toStrictEqual([false]);
+  });
+});
+
 describe('an interrupted run\'s findings', () => {
   it('names the check stopped mid-conversion, and no check on the interruption itself', () => {
     const entries: ProgressEntry[] = [

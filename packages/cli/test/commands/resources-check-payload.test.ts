@@ -1634,7 +1634,7 @@ describe('runProjectChecks — a row the check cannot interpret', () => {
     expect(issues.map((issue) => issue.code)).toStrictEqual(['RESOURCE_CHECK_BROKEN', SECOND_CODE]);
     expect(issues[0]?.severity).toBe('error');
     expect(issues[0]?.message).toContain(
-      'The check "graded" ran and selected 3 rows, but row 3\'s finding_severity = "high" is not one of error, warning, info, so none of its rows were reported.',
+      'The check "graded" ran and selected 3 rows, but row 3\'s finding_severity = "high" is not one of error | warning | info, so none of its rows were reported.',
     );
   });
 

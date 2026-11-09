@@ -7,7 +7,7 @@
  * initialised.
  */
 
-import { LIMIT_DIRECTIONS, POPULATION_ORIGINS } from '@vibe-agent-toolkit/resources';
+import { CHECK_FINDING_COLUMNS, LIMIT_DIRECTIONS, POPULATION_ORIGINS } from '@vibe-agent-toolkit/resources';
 import { FindingSchema, reportSchema, type Report } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
 
@@ -46,6 +46,13 @@ const EvidenceValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null
 export const CHECK_FINDING_SCHEMA = FindingSchema.extend({
   check: z.string().min(1).optional(),
   evidence: z.record(z.string(), EvidenceValueSchema).optional(),
+  /** Only on `RESOURCE_CHECK_BROKEN` for rows the check could not read: what was refused, and what is allowed. */
+  reason: z.object({
+    column: z.enum(CHECK_FINDING_COLUMNS).exclude(['path']),
+    value: EvidenceValueSchema,
+    row: z.number().int().positive(),
+    allowed: z.string().min(1),
+  }).strict().optional(),
 }).strict().refine((finding) => finding.evidence === undefined || finding.check !== undefined, {
   message: 'evidence is a check\'s row, so a finding carrying it must name the check',
   path: ['evidence'],

@@ -138,8 +138,9 @@ Description:
     skills     → SKILL.md frontmatter and packaging validation (when 'skills:' configured)
 
   --base <ref> reaches the checks phase only: a check reading changed_files
-  compares the tree with that commit, and without it that check fails as
-  RESOURCE_CHECK_BROKEN (exit 1) naming the fix. No other check reads it.
+  compares the tree with the merge base of <ref> and HEAD, and without it
+  that check fails as RESOURCE_CHECK_BROKEN (exit 1) naming the fix. No
+  other check reads it.
 
 Output:
   ONE report envelope (YAML) → stdout: status (ok | findings | error),

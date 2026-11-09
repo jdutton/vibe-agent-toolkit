@@ -134,6 +134,20 @@ describe('changedFilesUnderPrefix', () => {
     expect(result.ok ? '' : result.reason).toContain(String.raw`\xff`);
   });
 
+  it('drops an untracked nested repository, which git lists as its directory', () => {
+    expect(under(z(), ['site/nested/', 'site/draft.md'])).toStrictEqual({
+      ok: true,
+      files: [{ path: 'draft.md', status: 'added', oldPath: null, similarity: null }],
+    });
+  });
+
+  it('reports a path git lists twice with one kind once, so (path, status) stays a key', () => {
+    expect(under(z('U', 'site/conflicted.md', 'M', 'site/conflicted.md'))).toStrictEqual({
+      ok: true,
+      files: [{ path: 'conflicted.md', status: 'modified', oldPath: null, similarity: null }],
+    });
+  });
+
   it('ignores a path that is not UTF-8 when it lies outside the root', () => {
     expect(under(z('A', Uint8Array.from([0x6f, 0xff])))).toStrictEqual({ ok: true, files: [] });
   });

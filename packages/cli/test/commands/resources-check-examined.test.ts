@@ -13,7 +13,7 @@
  * Pure: a fake `ask` keyed by statement, no disk, no database.
  */
 
-import { ExitCode, exitCodeForReport } from '@vibe-agent-toolkit/schema';
+import { CODE_REGISTRY, ExitCode, exitCodeForReport } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
 import type { ProgressEntry } from '../../src/commands/resources/check-progress.js';
@@ -137,14 +137,11 @@ describe('a check that declares what it examined', () => {
     expect(exitCodeForReport(report)).toBe(ExitCode.FINDINGS);
   });
 
-  it('refuses it even when the check itself is ignored — the news is not the check\'s to silence', () => {
-    const { issues } = runOne(
-      { examined: EXAMINED_SQL },
-      { [VIOLATIONS_SQL]: 1, [EXAMINED_SQL]: 0 },
-      { severity: { [`CUSTOM:${NAME}`]: 'ignore' } },
-    );
+  it('takes its severity, fix and reference from the code registry', () => {
+    const { issues } = runOne({ examined: EXAMINED_SQL }, { [VIOLATIONS_SQL]: 0, [EXAMINED_SQL]: 0 });
+    const entry = CODE_REGISTRY[EXAMINED_NOTHING];
 
-    expect(issues.map((issue) => [issue.code, issue.severity])).toContainEqual([EXAMINED_NOTHING, 'error']);
+    expect(issues[0]).toMatchObject({ severity: entry.defaultSeverity, fix: entry.fix, reference: entry.reference, check: NAME });
   });
 
   it('accepts zero when the check declares allowEmpty, and publishes that it did', () => {

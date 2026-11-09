@@ -262,13 +262,18 @@ behind RFC-3986-compliant leading-`/` resolution.
 | `claude_context_chains`, `claude_context_loads` | what Claude Code loads at each working location | — |
 | `changed_files` | `path`, `status` (`added` \| `modified` \| `deleted` \| `renamed` \| `copied` \| `type-changed`), `oldPath`, `similarity` | `--base <ref>` |
 
-`changed_files` compares the working tree (staged or not) plus untracked, non-ignored files with
-the commit `--base` names, keeping paths under the project root, relative to it. A rename or copy
-across the root's boundary is seen from inside: renamed or copied in is `added`, renamed out is
-`deleted`. git pairs only paths the index knows into a rename, so a move not yet `git add`ed reads
-as deleted plus added. Without `--base`, with a ref that names no commit, or outside a git working
-tree, a statement reading it is refused with the fix (`USAGE_INVALID`, exit 2) — never answered
-with an empty relation. A path that is not UTF-8 refuses it too.
+`changed_files` lists what THIS CHANGE touched: the working tree (staged or not) plus untracked,
+non-ignored files, compared with the merge base of `--base` and `HEAD` (`git merge-base <ref>
+HEAD`) — GitHub's "files changed", so a branch behind its base never lists what the base moved
+since. Paths are kept under the project root, relative to it. A rename or copy across the root's
+boundary is seen from inside: renamed or copied in is `added`, renamed out is `deleted`. git pairs
+only paths the index knows into a rename, so a move not yet `git add`ed reads as deleted plus
+added. An untracked nested repository is not listed (its files are its own). Without `--base`,
+with a ref that names no commit, with no merge base (a shallow clone: fetch more history), outside
+a git working tree, or from a root whose case differs from the case git tracks it under, a
+statement reading it is refused with the fix (`USAGE_INVALID`, exit 2) — never answered with an
+empty relation. A path that is not UTF-8 refuses it too. `--base` is read only when a statement
+names `changed_files`; otherwise it is accepted and unused.
 
 **Output:** the shared report envelope on stdout — YAML, or JSON with
 `--format json` (schema: `packages/cli/schemas/resources-query.json`):
@@ -319,7 +324,11 @@ each finding also as a `location:line: severity: message [code]` line on stderr.
   run (an empty corpus, no check ran, an interrupted run) carries none.
 - A declared check's violation carries `evidence`: the row's columns other than the reserved ones,
   in the order SQLite returned them, values as SQLite returned them (a BLOB, or an integer too
-  large for JSON, as the text the message shows).
+  large for JSON, as the text the message shows). A `path` that could not become the `location`
+  (absolute, NULL, not text) stays in `evidence`.
+- A check whose rows could not be read carries `reason` on its `RESOURCE_CHECK_BROKEN` finding:
+  `{column, value, row, allowed}` — the reserved column, its value as `evidence` renders it, the
+  first bad row (1-based), and what the column may hold. A statement that failed carries none.
 - `data.checks[]` — one entry per check that ran: `name`, `durationSecs`, `rows`, and `broken`,
   `builtin`, `examined`, `allowEmpty` and `examinedNothing: true` when they apply (below).
 
@@ -338,7 +347,7 @@ the message and in the finding's `evidence`:
 - `finding_column` — the finding's 1-based column within `finding_line`; it requires a line.
 
 Any other value in a reserved column fails the check as `RESOURCE_CHECK_BROKEN` — "ran and selected
-N rows, but row R's finding_severity = "high" is not one of error, warning, info" — and its entry in
+N rows, but row R's finding_severity = "high" is not one of error | warning | info" — and its entry in
 `data.checks` carries `broken: true` with `rows`. A column that matches a reserved name only
 case-insensitively (`Finding_Line`) gets one stderr warning per check and stays evidence.
 
@@ -380,6 +389,9 @@ resources:
   `examined`, and none of its rows are reported.
 - A check that did not run at all is absent from `data.checks` (or `broken` without `rows`), so
   "examined 0" and "not run" never look alike.
+- ⚠️ `examined` is optional, so a check that declares none can pass over an empty population and
+  nothing refuses it. Declare it on every check; a consumer that needs the guarantee can require an
+  `examined` key on each `data.checks` entry.
 
 The same applies when the checks run as the `checks` phase of `vat validate`: its findings are
 these findings, `check` and `evidence` included, and the phase's `data.checks` is this list.

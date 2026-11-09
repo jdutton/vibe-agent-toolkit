@@ -26,6 +26,7 @@ import {
   checkStatements,
   describeUninterpretableRows,
   issuesFromCheckRows,
+  uninterpretableRowsReason,
   type CheckRowConversion,
 } from '../src/projection/sql-checks.js';
 import { ResourceCheckSchema, type ResourceCheck } from '../src/schemas/project-config.js';
@@ -309,6 +310,27 @@ describe('issuesFromCheckRows — the reserved finding_line and finding_column c
 
     expect(refusal).toMatchObject({ ok: false, row: 1, field: 'finding_column', value: 5 });
   });
+
+  it('reports the FIRST bad row when two are bad', () => {
+    const refusal = refusalOf([{ path: 'a.md' }, { path: 'b.md', finding_line: 0 }, { path: 'c.md', finding_severity: 'high' }]);
+
+    expect(refusal).toMatchObject({ row: 2, field: 'finding_line', value: 0, rowsSelected: 3 });
+  });
+});
+
+describe('uninterpretableRowsReason — the refusal as structure', () => {
+  it.each([
+    [{ finding_severity: 'high' }, { column: 'finding_severity', value: 'high', row: 1, allowed: 'one of error | warning | info' }],
+    [{ finding_line: 0 }, { column: 'finding_line', value: 0, row: 1, allowed: 'a positive integer' }],
+    [{ finding_line: new Uint8Array([3]) }, { column: 'finding_line', value: '{"0":3}', row: 1, allowed: 'a positive integer' }],
+    [{ finding_column: 5 }, { column: 'finding_column', value: 5, row: 1, allowed: 'NULL without a finding_line' }],
+  ])('names the column, the value as evidence renders it, the row and what is allowed (%o)', (row, reason) => {
+    const refusal = refusalOf([{ path: 'a.md', ...row }]);
+
+    expect(uninterpretableRowsReason(refusal)).toStrictEqual(reason);
+    // One spelling: the sentence states what the structure allows.
+    expect(describeUninterpretableRows(NAME, refusal)).toContain(`is not ${reason.allowed}, so`);
+  });
 });
 
 describe('issuesFromCheckRows — the bare severity, line and column names are evidence', () => {
@@ -376,6 +398,25 @@ describe('issuesFromCheckRows — the structured check name and evidence', () =>
     expect(issue?.message).toContain(`digest=${String(issue?.evidence?.['digest'])}`);
   });
 
+  it.each([
+    ['absolute', '/abs/a.md'],
+    ['NULL', null],
+    ['not text', 7],
+  ])('keeps an unusable path (%s) in the evidence: only a path that became the location leaves it', (_label, path) => {
+    const [issue] = issuesOf(NAME, CHECK, [{ path, n: 1 }]);
+
+    expect(issue?.location).toBeUndefined();
+    expect(issue?.evidence).toStrictEqual({ path, n: 1 });
+  });
+
+  it('keeps a column aliased __proto__ as an own evidence key', () => {
+    const row: Record<string, unknown> = JSON.parse('{"path":"a.md","__proto__":"x"}') as Record<string, unknown>;
+    const [issue] = issuesOf(NAME, CHECK, [row]);
+
+    expect(Object.keys(issue?.evidence ?? {})).toStrictEqual(['__proto__']);
+    expect(Object.getOwnPropertyDescriptor(issue?.evidence ?? {}, '__proto__')?.value).toBe('x');
+  });
+
   it('carries an empty evidence object when the row selected only reserved columns', () => {
     const [issue] = issuesOf(NAME, CHECK, [{ path: 'a.md' }]);
 
@@ -397,7 +438,7 @@ describe('describeUninterpretableRows', () => {
 
   it('names a column with no line as the problem', () => {
     expect(describeUninterpretableRows(NAME, refusalOf([{ path: 'a.md' }, { path: 'b.md', finding_column: 5 }])))
-      .toBe(`The check "${NAME}" ran and selected 2 rows, but row 2's finding_column = 5 is set but its line is not, so none of its rows were reported.`);
+      .toBe(`The check "${NAME}" ran and selected 2 rows, but row 2's finding_column = 5 is not NULL without a finding_line, so none of its rows were reported.`);
   });
 });
 

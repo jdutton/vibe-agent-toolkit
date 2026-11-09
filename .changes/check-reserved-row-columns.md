@@ -21,7 +21,12 @@
   carries none.
 - **A declared check's violation carries `evidence`**: the row's columns other than the reserved
   ones, values as SQLite returned them (a BLOB, or an integer beyond JSON's range, as the text the
-  message shows). The message is unchanged.
+  message shows). A `path` that could not become the finding's `location` (absolute, NULL, not
+  text) stays in `evidence`; a column aliased `__proto__` is kept. The message is unchanged.
+- **A check whose rows could not be read carries `reason`** on its `RESOURCE_CHECK_BROKEN` finding:
+  `{column, value, row, allowed}` — the reserved column, the value as `evidence` renders it, the
+  1-based row (the FIRST bad one), and what the column may hold (`one of error | warning | info`,
+  `a positive integer`, `NULL without a finding_line`). The message states the same `allowed`.
 - **`column` is a field of `ValidationIssue`** (and `createRegistryIssue`'s extras); the published
   finding inherits it.
 
@@ -32,4 +37,6 @@
 - **A finding with a `line` but no file prints the coordinates after the message** —
   `error: <message> [<code>] (line 3, column 5)` — instead of a bare `3:5:` prefix.
 - **A budget kill while a check's rows were being turned into findings names that state**, and
-  records that check as broken with its `rows`, instead of blaming a statement that would not finish.
+  records that check as broken with its `rows` — and its `examined` and `allowEmpty`, exactly the
+  entry a completed run whose conversion failed publishes — instead of blaming a statement that
+  would not finish.

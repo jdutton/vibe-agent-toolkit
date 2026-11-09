@@ -6,7 +6,8 @@ import { Option } from 'commander';
 export function baseOption(): Option {
   return new Option(
     '--base <ref>',
-    'The commit changed_files compares this tree with (a branch, tag or commit, e.g. origin/main);'
-    + ' a statement reading changed_files without it is refused',
+    'The ref changed_files compares with (a branch, tag or commit, e.g. origin/main): this tree against'
+    + ' the merge base of <ref> and HEAD. Read only when a statement names changed_files, which'
+    + ' without it is refused',
   );
 }

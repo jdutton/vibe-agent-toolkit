@@ -39,6 +39,7 @@ import {
   checkStatements,
   describeUninterpretableRows,
   issuesFromCheckRows,
+  uninterpretableRowsReason,
   type BoundBuiltinCheck,
   type CheckIssue,
   type CheckRowConversion,
@@ -48,6 +49,7 @@ import {
 import {
   buildErrorReport,
   buildReport,
+  createRegistryIssue,
   CUSTOM_CHECK_CODE_PREFIX,
   isCustomCheckCode,
   type RefusalCode,
@@ -520,7 +522,7 @@ function ofCheck(name: string, issue: ValidationIssue): CheckIssue {
 
 /** A check whose rows could not be read: `RESOURCE_CHECK_BROKEN`, as {@link brokenCheckFinding}. */
 function uninterpretableRowsFinding(name: string, refusal: Extract<CheckRowConversion, { ok: false }>): CheckIssue {
-  return ofCheck(name, runIntegrityFinding(describeUninterpretableRows(name, refusal)));
+  return { ...ofCheck(name, runIntegrityFinding(describeUninterpretableRows(name, refusal))), reason: uninterpretableRowsReason(refusal) };
 }
 
 /** A check whose `examined` statement would not run: `RESOURCE_CHECK_BROKEN`, worded apart. */
@@ -541,14 +543,12 @@ const EXAMINED_NOTHING_CODE = 'RESOURCE_CHECK_EXAMINED_NOTHING' satisfies Refusa
  * REFUSAL, so only `allowEmpty: true` escapes it; the check's violations still report.
  */
 function examinedNothingFinding(name: string): CheckIssue {
-  return {
-    code: EXAMINED_NOTHING_CODE,
-    severity: 'error',
-    message: `The check "${name}" declares what it examined, and its examined statement selected 0 rows, so`
+  return ofCheck(name, createRegistryIssue(
+    EXAMINED_NOTHING_CODE,
+    `The check "${name}" declares what it examined, and its examined statement selected 0 rows, so`
       + ' its pass asserts nothing. Fix the `examined` statement or the population it reads; if zero is'
       + ' a legitimate answer for this check, declare `allowEmpty: true` on it.',
-    check: name,
-  };
+  ));
 }
 
 /**
@@ -680,16 +680,18 @@ function checkUnits(
   ];
 }
 
+/** What a `converting` line carries: the cost record so far, without its kind. */
+type ConvertingLine = Omit<Extract<ProgressEntry, { kind: 'converting' }>, 'kind'>;
+
 /** Convert a selection. 🔑 `converting` is announced first, so a kill there names the conversion. */
 function convertSelection(
-  name: string,
-  durationMs: number,
   selection: CheckSelection,
+  line: ConvertingLine,
   sinks: { onProgress: ProgressSink | undefined; warn: ((message: string) => void) | undefined },
 ): CheckRowConversion {
-  if (selection.converts) sinks.onProgress?.({ kind: 'converting', name, durationMs, rows: selection.rows });
+  if (selection.converts) sinks.onProgress?.({ kind: 'converting', ...line });
   const converted = selection.report();
-  if (converted.ok && converted.nearMisses.length > 0) sinks.warn?.(nearMissWarning(name, converted.nearMisses));
+  if (converted.ok && converted.nearMisses.length > 0) sinks.warn?.(nearMissWarning(line.name, converted.nearMisses));
   return converted;
 }
 
@@ -711,7 +713,7 @@ function examineUnit(
   name: string,
   examine: () => number,
   now: () => number,
-  violations: { durationMs: number; rows: number },
+  violations: { durationMs: number; rows: number; allowEmpty?: true },
   onProgress: ProgressSink | undefined,
 ): Timed<number> {
   onProgress?.({ kind: 'examining', name, ...violations });
@@ -727,11 +729,9 @@ function examineUnit(
  */
 function runUnit(unit: CheckUnit, now: () => number, sinks: UnitSinks): UnitResult {
   const { name, examine } = unit;
-  // Spread onto every cost record this unit files, so the arms cannot disagree.
-  const origin = {
-    ...(unit.builtin === undefined ? {} : { builtin: unit.builtin }),
-    ...(unit.allowEmpty === undefined ? {} : { allowEmpty: unit.allowEmpty }),
-  };
+  // Spread onto every cost record and progress line this unit files, so they cannot disagree.
+  const allowEmpty = unit.allowEmpty === undefined ? {} : { allowEmpty: unit.allowEmpty };
+  const origin = { ...(unit.builtin === undefined ? {} : { builtin: unit.builtin }), ...allowEmpty };
   const outcome = timed(now, unit.select);
   if (!outcome.ok) {
     // Priced up to the throw, and with NO row count: a check that did not
@@ -745,7 +745,7 @@ function runUnit(unit: CheckUnit, now: () => number, sinks: UnitSinks): UnitResu
   const { rows } = outcome.value;
   const examined = examine === undefined
     ? undefined
-    : examineUnit(name, examine, now, { durationMs: outcome.durationMs, rows }, sinks.onProgress);
+    : examineUnit(name, examine, now, { durationMs: outcome.durationMs, rows, ...allowEmpty }, sinks.onProgress);
   const durationMs = outcome.durationMs + (examined?.durationMs ?? 0);
   if (examined?.ok === false) {
     // `rows` is real; `examined` is absent, never a refusable 0.
@@ -754,7 +754,7 @@ function runUnit(unit: CheckUnit, now: () => number, sinks: UnitSinks): UnitResu
   }
 
   const counted = examined === undefined ? {} : { examined: examined.value };
-  const converted = convertSelection(name, durationMs, outcome.value, sinks);
+  const converted = convertSelection(outcome.value, { name, durationMs, rows, ...counted, ...allowEmpty }, sinks);
   if (!converted.ok) {
     const cost = { name, durationMs, rows, broken: true as const, ...counted, ...origin };
     return { cost, refusal: uninterpretableRowsFinding(name, converted), issues: [] };
@@ -1494,8 +1494,17 @@ function stoppedMidCheck(
   const stopped = inFlight.kind === 'examining'
     ? 'its examined statement was running, so nothing says what it ranged over and none of them were reported.'
     : 'they were being converted into findings, so none of them were reported.';
+  // The line carries the cost record so far, so the rebuilt entry is the completed run's.
+  const examined = 'examined' in line && line.examined !== undefined ? { examined: line.examined } : {};
   return {
-    cost: { name: line.name, durationMs: line.durationMs, rows: line.rows, broken: true },
+    cost: {
+      name: line.name,
+      durationMs: line.durationMs,
+      rows: line.rows,
+      broken: true,
+      ...examined,
+      ...(line.allowEmpty === undefined ? {} : { allowEmpty: line.allowEmpty }),
+    },
     finding: ofCheck(line.name, runIntegrityFinding(
       `The check "${line.name}" ran and selected ${String(line.rows)} rows, but the run stopped while ${stopped}`,
     )),

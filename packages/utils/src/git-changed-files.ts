@@ -1,15 +1,19 @@
 /**
- * What changed in a working tree since a base commit — the tree a projection holds (tracked files
- * as they stand on disk, plus untracked files git does not ignore), compared with that commit.
+ * What this change touched in a working tree — the tree a projection holds (tracked files as they
+ * stand on disk, plus untracked files git does not ignore), compared with the MERGE BASE of the
+ * base ref and HEAD (`git merge-base <ref> HEAD`): GitHub's "files changed", never what the base
+ * branch moved since this branch left it.
  *
  * ## What is compared, exactly
  *
- * - `git diff -M --name-status -z --no-relative <base> --` — the base commit against the WORKING
+ * - `git diff -M --name-status -z --no-relative <merge-base> --` — that commit against the WORKING
  *   TREE, staged or not. `-M` turns a delete-plus-add of similar content into one rename.
  * - `git ls-files -z --others --exclude-standard --full-name` — untracked, non-ignored files,
  *   each reported as added. ⚠️ git cannot pair one of these with a deletion as a rename: rename
  *   detection sees only paths the index knows, so `mv a b` without `git add` reads as `a` deleted
- *   and `b` added. That is git's answer, reported as git gives it.
+ *   and `b` added. That is git's answer, reported as git gives it. An untracked NESTED repository
+ *   is listed as its directory (`dir/`) and dropped: its contents are its own files, not this tree's.
+ * - A path git lists twice with one kind (an unmerged path) is one row: `(path, status)` is a key.
  *
  * ## Paths are bytes until they are judged
  *
@@ -26,6 +30,11 @@
  * prefix and made relative to it. A rename or copy that crosses the root's boundary is reported as
  * what it is from INSIDE the root: renamed in from outside is `added`, renamed out is `deleted`,
  * copied in is `added`, and copied out is no change (the source stands as it was).
+ *
+ * 🚨 Under `core.ignorecase` the prefix git reports can be spelled differently from the paths the
+ * index holds (a case-only rename on disk), and a byte comparison would then keep nothing. So the
+ * prefix is checked against what git itself tracks under the root, matched as git matches it, and
+ * a mismatch refuses naming both spellings — never an empty answer.
  */
 
 import { compareCodeUnits } from './compare-code-units.js';
@@ -88,6 +97,9 @@ const NUL = 0x00;
 
 /** The newline `rev-parse --show-prefix` ends its answer with. */
 const NEWLINE = 0x0a;
+
+/** The `/` that ends an untracked nested repository's entry. */
+const SLASH = 0x2f;
 
 /**
  * Split a `-z` listing into its fields.
@@ -189,8 +201,11 @@ export function changedFilesUnderPrefix(
   untracked: readonly Uint8Array[],
   prefix: Uint8Array,
 ): GitChangedFilesOutcome {
-  const added = untracked.map((path): GitNameStatusRecord => ({ status: 'added', path, oldPath: null, similarity: null }));
+  const added = untracked
+    .filter((path) => path.at(-1) !== SLASH)
+    .map((path): GitNameStatusRecord => ({ status: 'added', path, oldPath: null, similarity: null }));
   const files: GitChangedFile[] = [];
+  const seenKeys = new Set<string>();
   for (const record of [...records, ...added]) {
     const seen = seenFromRoot(record, prefix);
     if (seen === undefined) continue;
@@ -203,10 +218,19 @@ export function changedFilesUnderPrefix(
         reason: `The path ${shownName(bytes)} is not UTF-8, so VAT cannot name it; rename it in the repository.`,
       };
     }
+    const key = `${seen.status}:${path}`; // a status holds no `:`, so the key is unambiguous
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
     files.push({ path, status: seen.status, oldPath, similarity: seen.similarity });
   }
   files.sort((left, right) => compareCodeUnits(left.path, right.path) || compareCodeUnits(left.status, right.status));
   return { ok: true, files };
+}
+
+/** A condition the caller can fix, and the fix. */
+interface Refusal {
+  readonly ok: false;
+  readonly reason: string;
 }
 
 /** git's own words, for a refusal: what it said, or that it said nothing. */
@@ -219,7 +243,7 @@ function gitSaid(stderr: string): string {
  *
  * @returns The full commit id, or a refusal naming the fix
  */
-function resolveBase(root: string, base: string): { ok: true; commit: string } | { ok: false; reason: string } {
+function resolveBase(root: string, base: string): { ok: true; commit: string } | Refusal {
   // A leading `-` would be read as an option, never as a ref.
   if (base === '' || base.startsWith('-')) {
     return { ok: false, reason: `The base ${shownName(base)} is not a ref; pass a branch, tag or commit.` };
@@ -236,11 +260,29 @@ function resolveBase(root: string, base: string): { ok: true; commit: string } |
 }
 
 /**
+ * The merge base of the base commit and HEAD: where this change left the base.
+ *
+ * @returns The merge-base commit, or a refusal naming the fix when there is none
+ */
+function mergeBase(root: string, base: string, commit: string): { ok: true; commit: string } | Refusal {
+  const result = runGit(['merge-base', commit, 'HEAD'], { cwd: root });
+  if (!result.ok || result.stdout === '') {
+    return {
+      ok: false,
+      reason: `The base ${shownName(base)} shares no history with HEAD here, so there is no merge base to compare with.`
+        + ' A shallow clone lacks it: fetch more history (git fetch --unshallow, or --deepen=<n>), or pass a commit'
+        + ` HEAD descends from.${gitSaid(result.stderr)}`,
+    };
+  }
+  return { ok: true, commit: result.stdout };
+}
+
+/**
  * Run one listing, or say why it could not be read.
  *
  * @returns Its stdout bytes, or a refusal
  */
-function listing(root: string, args: readonly string[]): { ok: true; bytes: Buffer } | { ok: false; reason: string } {
+function listing(root: string, args: readonly string[]): { ok: true; bytes: Buffer } | Refusal {
   const result = runGitBytes(args, { cwd: root });
   if (!result.ok) return { ok: false, reason: `git ${args[0] ?? ''} failed.${gitSaid(result.stderr)}` };
   return { ok: true, bytes: result.stdout };
@@ -251,7 +293,7 @@ function listing(root: string, args: readonly string[]): { ok: true; bytes: Buff
  *
  * @returns The prefix, or a refusal when the root is not inside a git working tree
  */
-function rootPrefix(root: string): { ok: true; prefix: Uint8Array } | { ok: false; reason: string } {
+function rootPrefix(root: string): { ok: true; prefix: Uint8Array } | Refusal {
   const result = runGitBytes(['rev-parse', '--show-prefix'], { cwd: root });
   if (!result.ok) {
     return {
@@ -264,29 +306,57 @@ function rootPrefix(root: string): { ok: true; prefix: Uint8Array } | { ok: fals
 }
 
 /**
- * Every file that changed under `root` since `base`: tracked files as they stand on disk compared
- * with the base commit, plus untracked files git does not ignore (as added). See the module header
- * for exactly what is compared and how a path crossing the root's boundary is reported.
+ * Under `core.ignorecase`, whether every path git tracks under the root — matched case-insensitively,
+ * as git matches there — carries the prefix's exact bytes. See the module header.
  *
- * Never throws for a condition the caller can fix — no repository, a ref that names no commit, a
- * path that is not UTF-8 — and reports it instead, with the fix.
+ * @returns A refusal naming both spellings, or undefined when they agree (or case is significant)
+ */
+function prefixSpellingRefusal(root: string, prefix: Uint8Array): Refusal | undefined {
+  const typed = decodeUtf8Exactly(prefix);
+  // Not UTF-8: no pathspec can name it, and every path under it refuses as not UTF-8 anyway.
+  if (typed === undefined || typed === '') return undefined;
+  if (runGit(['config', '--bool', 'core.ignorecase'], { cwd: root }).stdout !== 'true') return undefined;
+  const tracked = listing(root, ['ls-files', '-z', '--full-name', '--', `:(top,icase,literal)${typed}`]);
+  if (!tracked.ok) return tracked;
+  const other = nulFields(tracked.bytes).find((path) => !isUnder(path, prefix));
+  if (other === undefined) return undefined;
+  return {
+    ok: false,
+    reason: `git reports this root as ${shownName(prefix)} but tracks files under it as`
+      + ` ${shownName(other.subarray(0, prefix.length))}, so their changes cannot be matched to it.`
+      + ' Point VAT at the directory in the spelling git tracks, or fix the case on disk to match it.',
+  };
+}
+
+/**
+ * Every file this change touched under `root`: tracked files as they stand on disk compared with
+ * the merge base of `base` and HEAD, plus untracked files git does not ignore (as added). See the
+ * module header for exactly what is compared and how a path crossing the root's boundary is reported.
+ *
+ * Never throws for a condition the caller can fix — no repository, a ref that names no commit, no
+ * merge base, a root spelled in another case, a path that is not UTF-8 — and reports it instead,
+ * with the fix.
  *
  * @param options - The question
  * @param options.root - Absolute directory inside a git working tree
- * @param options.base - A ref naming the base commit (`main`, `origin/main`, `HEAD~3`, a sha)
- * @returns The commit `base` resolved to and the changes relative to `root`, or why there are none
+ * @param options.base - A ref naming the base (`main`, `origin/main`, `HEAD~3`, a sha)
+ * @returns The merge-base commit compared with and the changes relative to `root`, or why there are none
  * @throws Error When git writes a listing it should never write
  */
 export function gitChangedFiles(options: { root: string; base: string }): GitChangedFilesResult {
   const { root, base } = options;
   const prefix = rootPrefix(root);
   if (!prefix.ok) return prefix;
+  const spelling = prefixSpellingRefusal(root, prefix.prefix);
+  if (spelling !== undefined) return spelling;
   const resolved = resolveBase(root, base);
   if (!resolved.ok) return resolved;
-  const diff = listing(root, ['diff', '-M', '--name-status', '-z', '--no-relative', resolved.commit, '--']);
+  const merged = mergeBase(root, base, resolved.commit);
+  if (!merged.ok) return merged;
+  const diff = listing(root, ['diff', '-M', '--name-status', '-z', '--no-relative', merged.commit, '--']);
   if (!diff.ok) return diff;
   const others = listing(root, ['ls-files', '-z', '--others', '--exclude-standard', '--full-name']);
   if (!others.ok) return others;
   const outcome = changedFilesUnderPrefix(parseNameStatusZ(diff.bytes), nulFields(others.bytes), prefix.prefix);
-  return outcome.ok ? { ok: true, baseCommit: resolved.commit, files: outcome.files } : outcome;
+  return outcome.ok ? { ok: true, baseCommit: merged.commit, files: outcome.files } : outcome;
 }
