@@ -44,6 +44,7 @@ function readTurboJson(): { tasks: Record<string, { dependsOn?: string[] }> } {
 interface PackageTestBlock {
   maxWorkers: number;
   fileParallelism?: boolean;
+  isolate?: boolean;
   setupFiles: string[];
   provide: { forkRssBudgetMb?: number };
 }
@@ -133,7 +134,7 @@ describe('turbo test-suite concurrency (cross-package native-memory guard)', () 
   // detector; much of the tier's memory sits in spawned `vat` children that detector cannot see.
   // Equality, not "at most": the value is read on whichever OS runs the unit tier, so a
   // platform branch reds there — lowering a package for everyone is a deliberate edit here.
-  // `maxWorkers` is not the only way to serialise, so the other two are pinned as well.
+  // `maxWorkers` is not the only way to serialise, so `fileParallelism` is pinned too, and `isolate`, which the detector's per-file reading needs.
   it('runs every package\'s system tier at the shared worker cap, on this platform too', async () => {
     const scanned: string[] = [];
     for (const dir of readdirSync(safePath.join(PROJECT_ROOT, 'packages'))) {
@@ -149,6 +150,8 @@ describe('turbo test-suite concurrency (cross-package native-memory guard)', () 
       const { test } = await loadPackageTestConfig(configPath);
       expect(test.maxWorkers, `${dir} system tier`).toBe(maxTestWorkers);
       expect(test.fileParallelism, `${dir} system tier`).not.toBe(false);
+      // The RSS detector reads one file's peak only while every file gets a fresh fork.
+      expect(test.isolate, `${dir} system tier`).not.toBe(false);
       expect(test.setupFiles.some((file) => file.endsWith('vitest.fork-rss-budget.setup.js')), `${dir} system tier without the RSS budget`).toBe(true);
       expect(test.provide.forkRssBudgetMb, `${dir} system tier`).toBe(forkRssBudgetMb);
       scanned.push(dir);

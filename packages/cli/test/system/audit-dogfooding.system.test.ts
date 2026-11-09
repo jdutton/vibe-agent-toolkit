@@ -103,23 +103,8 @@ describe('Audit Dogfooding (system test)', () => {
     expectSuccessfulAudit(result);
   });
 
-  it('should audit dist skills without errors', async () => {
-    const distSkillsDir = safePath.join(projectRoot, 'packages/vat-development-agents/dist/skills');
-    // Fails on an absent build rather than passing without auditing anything: turbo orders
-    // vat-development-agents' build before this suite (`@vibe-agent-toolkit/cli#test:system`).
-    expect(fs.existsSync(distSkillsDir), `${distSkillsDir} is missing — build vat-development-agents first`).toBe(true);
-
-    const { result, parsed } = await executeCliAndParseYaml(
-      binPath,
-      ['audit', '--verbose', distSkillsDir],
-      { cwd: tempDir },
-    );
-
-    expectSuccessfulAudit(result);
-
-    // Should scan multiple skills (we have 5+ dist skills)
-    expect(parsed['examined']).toBeGreaterThan(1);
-  });
+  // The audit of vat-development-agents' BUILT skills lives in that package
+  // (`dist-skills-audit.system.test.ts`), whose `test:system` already depends on its build.
 
   describe('link traversal (end-to-end)', () => {
     it('should follow transitive links, reporting a finding in a file only a link reaches', async () => {

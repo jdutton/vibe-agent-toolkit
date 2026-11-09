@@ -60,12 +60,15 @@ function boundedPhase(...more: string[]): { env: NodeJS.ProcessEnv; withinMs: nu
     writeConfig(projectDir, [['quick', TXT_ROWS]]);
     return vat(projectDir, ['resources', 'check', '--budget', '0']).elapsedMs;
   });
+  const withinMs = KILL_WITHIN_BUDGETS * budgetSeconds * 1000;
   return {
     env: {
       NODE_OPTIONS: [preload('parent-only-fast-clock.mjs'), ...more].join(' '),
       TEST_PARENT_CLOCK_SCALE: String(DEFAULT_BUDGET_SECONDS / budgetSeconds),
+      // A stalled child ends itself only well past the bound, so the kill asserted is the watchdog's.
+      TEST_CHILD_MAX_STALL_MS: String(2 * withinMs),
     },
-    withinMs: KILL_WITHIN_BUDGETS * budgetSeconds * 1000,
+    withinMs,
   };
 }
 
