@@ -182,6 +182,7 @@
         "@vibe-agent-toolkit/schema": "workspace:*",
         "@vibe-agent-toolkit/utils": "workspace:*",
         "commander": "^12.1.0",
+        "semver": "^7.8.5",
         "yaml": "^2.9.0",
         "zod": "^3.25.0",
       },

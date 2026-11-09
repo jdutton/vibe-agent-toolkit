@@ -18,21 +18,24 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname } from 'node:path';
 
-import { createSymlinkAsync, normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { createSymlinkAsync, isVatError, normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import type { ArmDirectories } from '../../src/harness/arm-dirs.js';
+import { ARM_REFUSED_CODE, type ArmDirectories } from '../../src/harness/arm-dirs.js';
 import type { ArmEnvironment } from '../../src/harness/arm-env.js';
 import { prepareInstrument, resolveInstrument } from '../../src/harness/instrument.js';
 import {
   NPX_INSTALL_TIMEOUT_MS,
   type NpxInstallSite,
   type NpxInstaller,
+  locateNpmCli,
   npxInstallArm,
   npxInstallSite,
 } from '../../src/harness/npx-install.js';
+import type * as RunModule from '../../src/harness/run.js';
 import { runCommand } from '../../src/harness/run.js';
 import type { InstrumentSource } from '../../src/harness/types.js';
+import { layFakeNode } from '../npm-fixtures.js';
 
 /**
  * Both phases a verb runs, back to back.
@@ -121,6 +124,18 @@ function resolveNpx(install: NpxInstaller, root = armsRoot()): ReturnType<typeof
 }
 
 /**
+ * Every install refusal is an arm refusal: the CLI prints it as one `REFUSED:` line.
+ *
+ * @param pending - A resolution expected to be refused
+ * @param message - What the refusal must say
+ */
+async function expectRefusal(pending: Promise<unknown>, message: RegExp): Promise<void> {
+  const outcome = await pending.then(() => null, (error: unknown) => error);
+  expect(isVatError(outcome, ARM_REFUSED_CODE), `not an arm refusal: ${String(outcome)}`).toBe(true);
+  expect((outcome as Error).message).toMatch(message);
+}
+
+/**
  * @param over - Files laid over a cli that depends on a hoisted VAT sibling and a third-party package
  * @returns Those files
  */
@@ -193,19 +208,51 @@ function ragPackage(which: string): Record<string, string> {
 
 /**
  * @param files - The install
- * @returns What the installed entry printed for `peer`, run from a cwd outside the arms root
+ * @param planted - A package planted in a `node_modules` ABOVE the arms root
+ * @param argument - What the installed entry is run with
+ * @returns What the installed entry printed, run from a cwd outside the arms root
  */
-async function peerFrom(files: Readonly<Record<string, string>>): Promise<string> {
+async function peerFrom(
+  files: Readonly<Record<string, string>>,
+  planted: Readonly<Record<string, string>> = ragPackage('planted above the install'),
+  argument = 'peer',
+): Promise<string> {
   // A package planted in a node_modules ABOVE the arms root, where Node's walk reaches
   // when the install lacks the peer: `/tmp/node_modules` on Linux is world-writable.
   const ancestor = mkdtempSync(safePath.join(scratch, 'ancestor-'));
-  await lay(ancestor, ragPackage('planted above the install'));
+  await lay(ancestor, planted);
   const root = mkdtempSync(safePath.join(ancestor, 'arms-'));
   const used = await resolveNpx(installing(files), root);
-  return runCommand({ command: used.command, leadingArgs: used.leadingArgs }, ['peer'], {
+  return runCommand({ command: used.command, leadingArgs: used.leadingArgs }, [argument], {
     cwd: scratch,
     env: { set: {}, unset: [] },
   }).stdout;
+}
+
+/** An optional peer a THIRD-PARTY package of the install declares, and the lab does not install. */
+const CHAIN_PEER = 'chain-optional-peer';
+
+/**
+ * A cli (CommonJS) that, on `chain`, loads a third-party package `chain` which try-requires
+ * {@link CHAIN_PEER} — declared optional in `chain`'s own manifest, not the cli's.
+ *
+ * @returns The install's files
+ */
+function cliWithThirdPartyOptionalPeer(): Record<string, string> {
+  return {
+    ...cliAt(VERSION),
+    [CLI_BIN]: [
+      "if (process.argv[2] === 'chain') { process.stdout.write(String(require('chain'))); }",
+      `else { process.stdout.write(${JSON.stringify(VERSION + '\n')}); }`,
+      '',
+    ].join('\n'),
+    'node_modules/chain/package.json': manifest('chain', '1.0.0', {
+      main: 'index.js',
+      peerDependencies: { [CHAIN_PEER]: '*' },
+      peerDependenciesMeta: { [CHAIN_PEER]: { optional: true } },
+    }),
+    'node_modules/chain/index.js': `try { module.exports = require('${CHAIN_PEER}'); } catch (error) { module.exports = 'absent: ' + error.code; }\n`,
+  };
 }
 
 describe("resolveInstrument({ kind: 'npx' })", () => {
@@ -283,10 +330,29 @@ describe("resolveInstrument({ kind: 'npx' })", () => {
       expect((await resolveSource({ kind: 'dist', path: cliDist }, never)).version.closure).toBe(used.version.closure);
     });
 
-    it('leaves third-party code out: a floated dependency does not move the instrument', async () => {
+    it('moves when a third-party package of the closure resolves at another version', async () => {
+      expect(await npxClosure(closureInstall({ 'node_modules/left-pad/package.json': manifest('left-pad', '1.0.1') }))).not.toBe(
+        await npxClosure(closureInstall()),
+      );
+    });
+
+    it('does not move when a third-party package changes its bytes at the same version', async () => {
       expect(await npxClosure(closureInstall({ 'node_modules/left-pad/index.js': 'module.exports = 2;\n' }))).toBe(
         await npxClosure(closureInstall()),
       );
+    });
+
+    it('refuses a @vibe-agent-toolkit/* dependency the install lacks, though one is planted above the arms root', async () => {
+      // Node's walk would find the planted copy; the closure stops at the install.
+      const ancestor = mkdtempSync(safePath.join(scratch, 'ancestor-'));
+      await lay(ancestor, {
+        [`node_modules/${UTILS}/package.json`]: manifest(UTILS, VERSION),
+        [`node_modules/${UTILS}/dist/index.js`]: 'export const utils = "planted";\n',
+      });
+      const root = mkdtempSync(safePath.join(ancestor, 'arms-'));
+      const files = Object.fromEntries(Object.entries(closureInstall()).filter(([path]) => !toForwardSlash(path).startsWith(`node_modules/${UTILS}/`)));
+
+      await expectRefusal(resolveNpx(installing(files), root), /@vibe-agent-toolkit\/utils is declared by @vibe-agent-toolkit\/cli but does not resolve/u);
     });
 
     it('moves when a @vibe-agent-toolkit/* package of the closure changes', async () => {
@@ -306,6 +372,19 @@ describe("resolveInstrument({ kind: 'npx' })", () => {
       expect(printed).toMatch(/^ERR_MODULE_NOT_FOUND: .*vat-lab-does-not-install-optional-peers/u);
     });
 
+    it('stubs an optional peer a third-party package of the install declares, never loading one planted above', async () => {
+      const printed = await peerFrom(
+        cliWithThirdPartyOptionalPeer(),
+        {
+          [`node_modules/${CHAIN_PEER}/package.json`]: manifest(CHAIN_PEER, '1.0.0', { main: 'index.js' }),
+          [`node_modules/${CHAIN_PEER}/index.js`]: "module.exports = 'planted above the install';\n",
+        },
+        'chain',
+      );
+
+      expect(printed).toBe('absent: MODULE_NOT_FOUND');
+    });
+
     it('leaves an optional peer the install holds as it was installed', async () => {
       expect(await peerFrom({ ...cliWithOptionalPeer(), ...ragPackage('installed') })).toBe('installed');
     });
@@ -316,7 +395,7 @@ describe("resolveInstrument({ kind: 'npx' })", () => {
     // cli's directory, and npm keeps the real package's name in its manifest.
     const files = { ...cliAt(VERSION), [`${CLI_DIR}/package.json`]: manifest('other', VERSION) };
 
-    await expect(resolveNpx(installing(files))).rejects.toThrow(/@vibe-agent-toolkit\/cli resolved to "other"/u);
+    await expectRefusal(resolveNpx(installing(files)), /@vibe-agent-toolkit\/cli resolved to "other"/u);
   });
 
   it("resolves @vibe-agent-toolkit/cli as the hoisted cli, never a copy under that cli's own node_modules", async () => {
@@ -336,17 +415,17 @@ describe("resolveInstrument({ kind: 'npx' })", () => {
   });
 
   it('refuses an install that holds no cli entry, naming the spec', async () => {
-    await expect(resolveNpx(installing({}))).rejects.toThrow(SPEC);
+    await expectRefusal(resolveNpx(installing({})), /the install of vibe-agent-toolkit@0\.1\.43 holds no/u);
   });
 
   it('refuses an install whose cli manifest is not the pinned version, naming both', async () => {
-    await expect(resolveNpx(installing(cliAt('0.1.42')))).rejects.toThrow(/0\.1\.42.*0\.1\.43|0\.1\.43.*0\.1\.42/u);
+    await expectRefusal(resolveNpx(installing(cliAt('0.1.42'))), /0\.1\.42.*0\.1\.43|0\.1\.43.*0\.1\.42/u);
   });
 
   it('refuses an entry that does not start', async () => {
     const files = { ...cliAt(VERSION), [CLI_BIN]: 'process.exit(3);\n' };
 
-    await expect(resolveNpx(installing(files))).rejects.toThrow(/--version exited 3: the install does not start/u);
+    await expectRefusal(resolveNpx(installing(files)), /--version exited 3: the install does not start/u);
   });
 
   it('refuses a cli entry whose real path lies outside the install, though its manifest names the pin', async ({ skip }) => {
@@ -364,7 +443,7 @@ describe("resolveInstrument({ kind: 'npx' })", () => {
       );
     });
 
-    await expect(resolveNpx(install)).rejects.toThrow(/lies outside the install/u);
+    await expectRefusal(resolveNpx(install), /lies outside the install/u);
   });
 
   it('measures the published layout: the umbrella package, its cli dependency, and the cli entry run straight', async () => {
@@ -399,25 +478,33 @@ describe('npxInstallArm', () => {
 });
 
 describe('npmInstall', () => {
-  it('installs with lifecycle scripts off, in the install arm, into its npm cache, on its own timeout', async () => {
+  it("runs the Node's own npm-cli.js with node, no shell: lifecycle scripts off, in the install arm, into its npm cache, on its own timeout", async () => {
     vi.resetModules();
     // An inherited userconfig, in any case, would win over ~/.npmrc.
     for (const name of Object.keys(process.env).filter((key) => key.toLowerCase() === 'npm_config_userconfig')) vi.stubEnv(name, undefined);
-    const calls: { args: readonly string[]; env: ArmEnvironment; timeoutMs: number | undefined }[] = [];
-    vi.doMock('../../src/harness/run.js', () => ({
-      runCommand: (_command: unknown, args: readonly string[], options: { env: ArmEnvironment; timeoutMs?: number }) => {
-        calls.push({ args, env: options.env, timeoutMs: options.timeoutMs });
+    const calls: { command: string; leadingArgs: readonly string[]; args: readonly string[]; env: ArmEnvironment; timeoutMs: number | undefined }[] = [];
+    vi.doMock('../../src/harness/run.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof RunModule>()),
+      runCommand: (
+        instrument: { command: string; leadingArgs: readonly string[] },
+        args: readonly string[],
+        options: { env: ArmEnvironment; timeoutMs?: number },
+      ) => {
+        calls.push({ ...instrument, args, env: options.env, timeoutMs: options.timeoutMs });
         return { exitCode: 0, stdout: '', stderr: '', wallMs: 0, spawnError: undefined };
       },
     }));
-    const { npmInstall } = await import('../../src/harness/npx-install.js');
+    const mocked = await import('../../src/harness/npx-install.js');
     const dirs = npxInstallArm(armsRoot(), SPEC);
 
-    await npmInstall(SPEC, safePath.join(dirs.tmp, 'install'), dirs);
+    await mocked.npmInstall(SPEC, safePath.join(dirs.tmp, 'install'), dirs);
     vi.doUnmock('../../src/harness/run.js');
     vi.unstubAllEnvs();
 
     expect(calls).toHaveLength(1);
+    // node itself, never npm.cmd under cmd.exe: a timeout kills node, not a shell that outlives it.
+    expect(calls[0]?.command).toBe(process.execPath);
+    expect(calls[0]?.leadingArgs).toEqual([locateNpmCli(process.execPath, process.platform)]);
     expect(calls[0]?.args).toContain('--ignore-scripts');
     // The spec is an operand, never an option: it follows `--`.
     expect(calls[0]?.args.slice(-2)).toEqual(['--', SPEC]);
@@ -426,5 +513,62 @@ describe('npmInstall', () => {
     expect(calls[0]?.env.set['npm_config_userconfig']).toBe(safePath.join(homedir(), '.npmrc'));
     // Never a step's --timeout-ms: a cold install outlasts a measured step.
     expect(calls[0]?.timeoutMs).toBe(NPX_INSTALL_TIMEOUT_MS);
+  });
+
+  it('refuses, naming the spec and npm\'s stderr, when npm install fails', async () => {
+    vi.resetModules();
+    vi.doMock('../../src/harness/run.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof RunModule>()),
+      runCommand: () => ({ exitCode: 1, stdout: '', stderr: 'npm ERR! nope\n', wallMs: 0, started: true, spawnError: null }),
+    }));
+    const mocked = await import('../../src/harness/npx-install.js');
+    const dirs = npxInstallArm(armsRoot(), SPEC);
+
+    try {
+      await expectRefusal(
+        Promise.resolve().then(() => mocked.npmInstall(SPEC, safePath.join(dirs.tmp, 'install'), dirs)),
+        /npm install vibe-agent-toolkit@0\.1\.43 failed \(1\): npm ERR! nope/u,
+      );
+    } finally {
+      vi.doUnmock('../../src/harness/run.js');
+    }
+  });
+});
+
+/**
+ * @param locate - A locator call
+ * @returns What it returned, or what it threw
+ */
+function outcomeOf(locate: () => string): unknown {
+  try {
+    return locate();
+  } catch (error: unknown) {
+    return error;
+  }
+}
+
+describe('locateNpmCli: the npm bundled with the Node that runs the lab', () => {
+  it.for(['win32', 'linux', 'darwin'] as const)('finds the bundled npm-cli.js in the %s layout', (platform) => {
+    const node = layFakeNode(mkdtempSync(safePath.join(scratch, 'node-')), platform);
+
+    expect(toForwardSlash(locateNpmCli(node.execPath, platform))).toBe(toForwardSlash(node.cli));
+  });
+
+  it.for(['win32', 'linux'] as const)('refuses a %s Node with no bundled npm, naming the path it looked for', (platform) => {
+    const dir = mkdtempSync(safePath.join(scratch, 'node-'));
+    const node = layFakeNode(dir, platform);
+    rmSync(safePath.join(node.cli, '..', '..', '..'), { recursive: true });
+
+    const outcome = outcomeOf(() => locateNpmCli(node.execPath, platform));
+
+    expect(isVatError(outcome, ARM_REFUSED_CODE)).toBe(true);
+    expect(toForwardSlash((outcome as Error).message)).toContain(toForwardSlash(node.cli));
+  });
+
+  it('finds an npm-cli.js for the Node running this test — the real install the lab uses', () => {
+    const cli = locateNpmCli(process.execPath, process.platform);
+
+    expect(toForwardSlash(cli)).toMatch(/\/node_modules\/npm\/bin\/npm-cli\.js$/u);
+    expect(existsSync(cli)).toBe(true);
   });
 });

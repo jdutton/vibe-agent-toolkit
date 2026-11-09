@@ -137,13 +137,18 @@ single-command facet runs are one-step sequences under `<arms root>/<build>-<com
   `--arms-dir` at a time:** nothing locks it, and every arm under it — the `npx:` install arm
   included — is emptied when its run starts, so two concurrent invocations sharing one `--arms-dir`
   delete each other's stores and installs. The default run directory is fresh per invocation.
-  **Module resolution stays in an `npx:` install:** Node resolves a module up the directory tree,
-  so an optional peer the cli loads on demand (`@vibe-agent-toolkit/rag`, say) that the install
-  lacks would load from a `node_modules` ABOVE the arms root (`/tmp/node_modules` is world-writable
-  on Linux). For every optional peer the installed cli's manifest declares and the install lacks,
-  the lab writes a stub package in the install's own `node_modules`; Node stops there and fails the
-  load as `ERR_MODULE_NOT_FOUND` — the cli's "backend not installed". A `tree:` or `dist:` build
-  resolves from where it lies, as it would for its operator.
+  **Declared optional peers stay in an `npx:` install; nothing else is contained:** Node resolves
+  a module up the directory tree, so an optional peer loaded on demand (the cli's
+  `@vibe-agent-toolkit/rag`, a third-party package's optional integration) that the install lacks
+  would load from a `node_modules` ABOVE the arms root (`/tmp/node_modules` is world-writable on
+  Linux). For every optional peer (`peerDependenciesMeta`, `optional: true`) that ANY package of the
+  install declares and that does not resolve from that package inside the install, the lab writes a
+  stub package at the install's top-level `node_modules`; Node stops there and fails the load as
+  not found — the package's own "not installed". Any other name the install lacks — a package that
+  `try`-requires a name it never declares — is still looked up in ancestor `node_modules`
+  directories, as it is for any Node program: **do not put the arms root under a directory other
+  users can write to on a shared host.** A `tree:` or `dist:` build resolves from where it lies, as
+  it would for its operator.
 - **The default run directory ends with the capture.** When the capture ends — passed or failed —
   the lab removes the whole `run-*` directory (stores, caches, npm's fetch) and prints
   `Removed arms under <root>`; `--keep-arms` keeps it and prints `Kept arms under <root>`. A named
@@ -187,13 +192,25 @@ single-command facet runs are one-step sequences under `<arms root>/<build>-<com
   per install, before any repeat: the entry is looked for only where the named package's own cli
   lives, its `package.json` must name `@vibe-agent-toolkit/cli` at the pin, its real path must lie
   inside the install, and it must start (`--version` exits 0 — `bin.js` and its static imports
-  load). npm gets its own fixed install timeout, never `--timeout-ms`. Its closure is the one
-  definition every kind stamps — the cli and its `@vibe-agent-toolkit/*` packages — so an `npx:`
-  build matches a `dist:` build of the same bytes, the umbrella and the cli pins of one version
-  match, and a floated third-party dependency moves nothing: third-party code is not identity for
-  any kind. A nested `vat` call from the subject's own scripts in an `npx:` arm resolves through
-  the subject's install, not the pin — the lab sets no `VAT_BIN` for it; to pin nested calls too,
-  use a `dist:` arm over a private install plus a shim
+  load). npm is the one bundled with the Node that runs the lab — never PATH's — run as
+  `node <npm-cli.js>` with no shell on every platform (a Node with no bundled npm is refused,
+  naming the path looked for), with its own fixed install timeout, never `--timeout-ms`. Every install
+  refusal — npm failing, the wrong cli, an entry outside the install or one that does not start,
+  a closure that does not resolve inside it — prints one `REFUSED:` line. Its closure is the one
+  definition every kind stamps (see [the closure digest](docs/run-harness.md#the-closure-digest--arm-identity-by-what-it-runs)):
+  the bytes of the cli and its `@vibe-agent-toolkit/*` packages plus the `name@version` of every
+  third-party package in that closure, resolved no higher than the install — so an `npx:` build
+  matches a `dist:` build of the same install, the umbrella and the cli pins of one version match,
+  and a third-party dependency that floated to another version is another instrument. A report
+  stored by an earlier lab whose closure was computed differently compares as a different
+  instrument: re-capture it (nothing detects that; there is no version marker).
+- **Nested `vat` calls are pinned only when the arm says so — for every kind.** No arm kind
+  (`tree:`, `dist:` or `npx:`) sets `VAT_BIN` or `VAT_ROOT_DIR`: they are never inherited and
+  reach a child only through the arm's own `--env`. Without it, a nested `vat` call from the
+  subject's own scripts or hooks resolves through the subject's install, not the build under
+  test. A `tree:` or `dist:` arm pins them with `--env VAT_BIN=<its dist/bin.js>`; an `npx:`
+  install lives at a lab-internal path emptied each run, so to pin nested calls to a release use a
+  `dist:` arm over a private install plus a shim
   ([recipe](../../docs/contributing/vat-debugging.md#crucible-runs)).
 - **A populating arm asks the build for its parse directory**, from its entry — never a guess.
   An arm whose own `--env` turns caching off

@@ -19,21 +19,40 @@
  * inside the install. The entry is then run once with `--version` — a check that
  * `bin.js` and its static imports load, not of which version it is: `--version`
  * reads that same manifest. The coordinate's `closure` is `closureDigest` from the
- * installed cli — the one definition every kind stamps (`closure.ts`): the cli and
- * its `@vibe-agent-toolkit/*` dependencies. Third-party code is not identity, here
- * as for `tree:` and `dist:`: `--no-package-lock` leaves its ranges to float, and a
- * floated dependency does not make another instrument.
+ * installed cli, its ceiling the install — the one definition every kind stamps
+ * (`closure.ts`): the bytes of the cli and its `@vibe-agent-toolkit/*` dependencies,
+ * and the resolved `name@version` of every third-party package in that closure.
+ * `--no-package-lock` leaves third-party ranges to float, so two installs of one pin
+ * that resolved another version of one are two instruments.
  *
- * Containment is of module resolution, not only of the entry: an optional peer the
- * installed cli declares (`@vibe-agent-toolkit/rag`, say) is not installed, and
- * Node's walk for it would climb past the arms root — to `/tmp/node_modules`, which
- * is world-writable on Linux, or `C:\node_modules`. So each such peer the install
- * lacks gets a stub package inside the install's own `node_modules`, which Node
- * stops at and fails to load as `ERR_MODULE_NOT_FOUND` — the cli's "not installed".
+ * Every refusal here — npm failing, the wrong cli, an entry outside the install or one
+ * that does not start, a closure that does not resolve inside the install — is an arm
+ * refusal (`armRefusal`): the CLI prints it as one `REFUSED:` line.
+ *
+ * npm itself is the one bundled with the Node that runs the lab, run as
+ * `node <npm-cli.js>` with no shell on every platform ({@link locateNpmCli}): PATH is
+ * never consulted, and under `cmd.exe` a timeout would kill the shell and leave npm's
+ * node running.
+ *
+ * ## What stays inside the install, and what does not
+ *
+ * Node resolves a bare module name up the directory tree, past the install and the
+ * arms root — to `/tmp/node_modules`, which is world-writable on Linux, or
+ * `C:\node_modules`. For every OPTIONAL PEER any package of the install declares
+ * (`peerDependenciesMeta`, `optional: true` — the cli's `@vibe-agent-toolkit/rag`, a
+ * third-party package's optional integration) that does not resolve from that package
+ * inside the install, the lab writes a stub package at the install's top-level
+ * `node_modules`, which Node stops at and fails to load (`ERR_MODULE_NOT_FOUND` /
+ * `MODULE_NOT_FOUND`) — the package's own "not installed". Only declared optional
+ * peers are stubbed: any other name the install lacks — an undeclared `try { require() }`
+ * — is still looked up in ancestor `node_modules` directories, as it is for any Node
+ * program. Do not put the arms root under a directory other users can write to on a
+ * shared host.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { dirname } from 'node:path';
 
 import { everywhere, isUnderRoot, mkdirSyncReal, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
 
@@ -140,6 +159,37 @@ function operatorNpmUserconfig(): string {
   return named ?? safePath.join(homedir(), '.npmrc');
 }
 
+/** A package's manifest file. */
+const MANIFEST = 'package.json';
+
+/**
+ * The `npm-cli.js` bundled with the Node that runs the lab — the one npm an
+ * `npx:` install uses, run as `node <npm-cli.js>` with no shell: `npm.cmd` runs
+ * under `cmd.exe`, and a timeout kills `cmd.exe` but not npm's node beneath it.
+ * PATH is not consulted, so a version manager's shell shim never decides it.
+ *
+ * - POSIX: `<prefix>/lib/node_modules/npm/bin/npm-cli.js`, `<prefix>` the parent
+ *   of the directory holding `node`.
+ * - Windows: `node_modules/npm/bin/npm-cli.js` beside `node.exe`.
+ *
+ * @param execPath - The Node executable (`process.execPath`)
+ * @param platform - Whose layout
+ * @returns The absolute `npm-cli.js`
+ * @throws {VatError} an arm refusal naming the path looked for when nothing is there
+ */
+export function locateNpmCli(execPath: string, platform: NodeJS.Platform): string {
+  const nodeDir = dirname(execPath);
+  const npmRoot = platform === 'win32' ? nodeDir : safePath.join(dirname(nodeDir), 'lib');
+  const cli = safePath.join(npmRoot, 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  if (!pathPresent(cli, { follow: cli }, everywhere('source'), 'probe')) {
+    throw armRefusal(
+      `an npx: build is installed with the npm bundled with the Node running the lab (${execPath}), ` +
+        `and there is none at ${cli}. Run the lab with a Node installation that ships npm.`,
+    );
+  }
+  return cli;
+}
+
 /**
  * Install a pinned spec with npm, in the install arm's environment — its npm cache,
  * temp directory and home — with lifecycle scripts off: the lab measures vat, never
@@ -149,23 +199,24 @@ function operatorNpmUserconfig(): string {
  * resolves THERE, not to the operator's home.
  * No arm's own `--env` reaches it: one install serves every arm that names the spec, and
  * the inherited network settings (`arm-env.ts`) are what npm needs to reach a registry.
- * Bounded by {@link NPX_INSTALL_TIMEOUT_MS}.
+ * Run as `node <npm-cli.js>` ({@link locateNpmCli}), no shell, and bounded by
+ * {@link NPX_INSTALL_TIMEOUT_MS}.
  *
  * @param spec - The pinned spec
  * @param prefix - The directory to install under
  * @param dirs - The install arm
- * @throws {Error} when npm fails or times out
+ * @throws {VatError} an arm refusal when npm cannot be located, fails or times out
  */
 export const npmInstall: NpxInstaller = (spec, prefix, dirs) => {
   const npmEnv = { set: { npm_config_userconfig: operatorNpmUserconfig() }, unset: [] };
   const result = runCommand(
-    { command: 'npm', leadingArgs: [] },
+    { command: process.execPath, leadingArgs: [locateNpmCli(process.execPath, process.platform)] },
     // `--`: the spec is an operand, never an option, whatever it starts with.
     ['install', '--no-save', '--no-package-lock', '--no-audit', '--no-fund', '--ignore-scripts', '--prefix', prefix, '--', spec],
     { cwd: prefix, env: armStepEnvironment(dirs, npmEnv).env, timeoutMs: NPX_INSTALL_TIMEOUT_MS },
   );
   if (result.exitCode !== 0) {
-    throw new Error(`npm install ${spec} failed (${String(result.spawnError ?? result.exitCode)}): ${result.stderr.trim()}`);
+    throw armRefusal(`npm install ${spec} failed (${String(result.spawnError ?? result.exitCode)}): ${result.stderr.trim()}`);
   }
 };
 
@@ -187,23 +238,21 @@ export function npxInstallArm(armsRoot: string, spec: string): ArmDirectories {
  * @param cliRoot - The package directory of the cli entry an install holds
  * @param pin - The VAT package and the version it pins
  * @param spec - The pinned spec, for the error message
- * @returns The manifest, as read
- * @throws {Error} when its package's `package.json` names another package or version
+ * @throws {VatError} an arm refusal when its package's `package.json` names another package or version
  */
-function requirePinnedCli(cliRoot: string, pin: NpmPin, spec: string): InstalledCliManifest {
-  const manifest = JSON.parse(readFileSync(safePath.join(cliRoot, 'package.json'), 'utf8')) as InstalledCliManifest;
+function requirePinnedCli(cliRoot: string, pin: NpmPin, spec: string): void {
+  const manifest = readInstalledManifest(safePath.join(cliRoot, MANIFEST));
   const { name, version } = manifest;
   const misnamed = name === CLI_PACKAGE ? null : `${CLI_PACKAGE} resolved to "${String(name)}", another package under its name`;
   const misversioned = version === pin.version ? null : `it resolved ${CLI_PACKAGE} ${String(version)}, not ${pin.version}`;
   const wrong = misnamed ?? misversioned;
   if (wrong !== null) {
-    throw new Error(`the install of ${spec}: ${wrong}: the report would name one build and measure another`);
+    throw armRefusal(`the install of ${spec}: ${wrong}: the report would name one build and measure another`);
   }
-  return manifest;
 }
 
-/** The fields of the installed cli's `package.json` an install reads — someone else's file, so unknown. */
-interface InstalledCliManifest {
+/** The fields of an installed `package.json` an install reads — someone else's file, so unknown. */
+interface InstalledManifest {
   readonly name?: unknown;
   readonly version?: unknown;
   readonly peerDependencies?: unknown;
@@ -211,10 +260,23 @@ interface InstalledCliManifest {
 }
 
 /**
- * @param manifest - The installed cli's manifest
+ * @param manifestPath - An installed `package.json`
+ * @returns It, parsed
+ * @throws {VatError} an arm refusal when it is not JSON
+ */
+function readInstalledManifest(manifestPath: string): InstalledManifest {
+  try {
+    return JSON.parse(readFileSync(manifestPath, 'utf8')) as InstalledManifest;
+  } catch (error) {
+    throw armRefusal(`the install holds ${manifestPath}, which cannot be read as JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
+ * @param manifest - An installed package's manifest
  * @returns The peers it declares optional: named under `peerDependencies`, `optional: true` in `peerDependenciesMeta`
  */
-function optionalPeers(manifest: InstalledCliManifest): string[] {
+function optionalPeers(manifest: InstalledManifest): string[] {
   const { peerDependencies: peers, peerDependenciesMeta: meta } = manifest;
   if (typeof peers !== 'object' || peers === null || typeof meta !== 'object' || meta === null) return [];
   const flags = meta as Readonly<Record<string, unknown>>;
@@ -225,31 +287,83 @@ function optionalPeers(manifest: InstalledCliManifest): string[] {
 }
 
 /**
- * Stub every optional peer the installed cli declares and the install lacks, in the
- * install's own `node_modules`, so Node's walk for it ends inside the install
- * (module header). A peer is present when any `node_modules` from the cli's directory
- * up to the install's holds an entry of its name — what Node would find first.
+ * Every package directory of an install, nested ones included: each real directory
+ * under a `node_modules` (a `@scope/` directory's children) that holds a `package.json`,
+ * and the same beneath each one's own `node_modules`. A link is not followed: npm links
+ * only what the pin refuses (a directory spec), and the cli entry is proven inside.
+ *
+ * @param nodeModules - A `node_modules` directory
+ * @returns The package directories under it
+ */
+function installedPackages(nodeModules: string): string[] {
+  const found: string[] = [];
+  const pending = [nodeModules];
+  for (let dir = pending.pop(); dir !== undefined; dir = pending.pop()) {
+    if (!pathPresent(dir, 'entry', everywhere('source'), 'probe')) continue;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      // A link is not followed (above): its package is not one the install laid down.
+      if (entry.isSymbolicLink() || !entry.isDirectory() || entry.name.startsWith('.')) continue;
+      const path = safePath.join(dir, entry.name);
+      if (entry.name.startsWith('@')) {
+        pending.push(path);
+      } else if (pathPresent(safePath.join(path, MANIFEST), 'entry', everywhere('source'), 'probe')) {
+        found.push(path);
+        pending.push(safePath.join(path, 'node_modules'));
+      }
+    }
+  }
+  return found;
+}
+
+/**
+ * Stub every optional peer any package of the install declares and that does not
+ * resolve from that package inside the install, at the install's top-level
+ * `node_modules`, so Node's walk for it ends inside the install (module header). A
+ * peer resolves when any `node_modules` from the package's directory up to the
+ * install's holds an entry of its name — what Node would find first. The top-level
+ * `node_modules` is on every such walk, so a peer that resolves nowhere is absent
+ * there too, and its stub shadows nothing.
  *
  * @param prefix - The install's directory
- * @param cliRoot - The installed cli's package directory, inside it
- * @param manifest - The installed cli's manifest
+ * @throws {VatError} an arm refusal for a declared peer that is not a package name
  */
-function stubAbsentOptionalPeers(prefix: string, cliRoot: string, manifest: InstalledCliManifest): void {
-  const homes: string[] = [];
-  for (let dir = cliRoot; ; dir = safePath.resolve(dir, '..')) {
-    homes.push(safePath.join(dir, 'node_modules'));
-    if (dir === safePath.resolve(prefix) || dir === safePath.resolve(dir, '..')) break;
+function stubAbsentOptionalPeers(prefix: string): void {
+  const top = safePath.join(prefix, 'node_modules');
+  for (const packageDir of installedPackages(top)) {
+    const manifest = readInstalledManifest(safePath.join(packageDir, MANIFEST));
+    for (const peer of optionalPeers(manifest)) {
+      // A name, never a path: the stub is written where the name says.
+      if (!isPackageName(peer)) {
+        throw armRefusal(`the installed package at ${packageDir} declares an optional peer "${peer}" that is not a package name`);
+      }
+      if (!resolvesInside(prefix, packageDir, peer)) writeStubPeer(top, peer);
+    }
   }
-  for (const peer of optionalPeers(manifest)) {
-    // A name, never a path: the stub is written where the name says.
-    if (!isPackageName(peer)) throw new Error(`the installed ${CLI_PACKAGE} declares an optional peer "${peer}" that is not a package name`);
-    const present = homes.some((home) => pathPresent(safePath.join(home, peer), 'entry', everywhere('destination'), 'confirmed'));
-    if (present) continue;
-    const stub = safePath.join(prefix, 'node_modules', peer);
-    mkdirSyncReal(stub, { recursive: true });
-    const description = `Placed by vat-lab: the lab does not install optional peers, so ${peer} is not installed.`;
-    writeFileSync(safePath.join(stub, 'package.json'), `${JSON.stringify({ name: peer, description, exports: STUB_PEER_TARGET })}\n`);
+}
+
+/**
+ * @param prefix - The install's directory
+ * @param packageDir - An installed package's directory, inside it
+ * @param peer - A package name
+ * @returns Whether some `node_modules` from the package's directory up to the install's holds `peer`
+ */
+function resolvesInside(prefix: string, packageDir: string, peer: string): boolean {
+  const ceiling = safePath.resolve(prefix);
+  for (let dir = packageDir; ; dir = safePath.resolve(dir, '..')) {
+    if (pathPresent(safePath.join(dir, 'node_modules', peer), 'entry', everywhere('destination'), 'confirmed')) return true;
+    if (dir === ceiling || dir === safePath.resolve(dir, '..')) return false;
   }
+}
+
+/**
+ * @param top - The install's top-level `node_modules`
+ * @param peer - A package name, checked
+ */
+function writeStubPeer(top: string, peer: string): void {
+  const stub = safePath.join(top, peer);
+  mkdirSyncReal(stub, { recursive: true });
+  const description = `Placed by vat-lab: the lab does not install optional peers, so ${peer} is not installed.`;
+  writeFileSync(safePath.join(stub, MANIFEST), `${JSON.stringify({ name: peer, description, exports: STUB_PEER_TARGET })}\n`);
 }
 
 /**
@@ -260,7 +374,7 @@ function stubAbsentOptionalPeers(prefix: string, cliRoot: string, manifest: Inst
  * @param entry - The cli entry about to be stamped
  * @param spec - The pinned spec, for the error message
  * @param dirs - The install arm, whose step environment it runs under
- * @throws {Error} when it does not start
+ * @throws {VatError} an arm refusal when it does not start
  */
 function requireEntryStarts(entry: string, spec: string, dirs: ArmDirectories): void {
   const ran = runCommand({ command: process.execPath, leadingArgs: [entry] }, ['--version'], {
@@ -269,7 +383,7 @@ function requireEntryStarts(entry: string, spec: string, dirs: ArmDirectories): 
     timeoutMs: START_TIMEOUT_MS,
   });
   if (ran.exitCode !== 0) {
-    throw new Error(
+    throw armRefusal(
       `the install of ${spec}: ${entry} --version exited ${String(ran.spawnError ?? ran.exitCode)}: ` +
         `the install does not start. ${ran.stderr.trim()}`,
     );
@@ -286,8 +400,9 @@ function requireEntryStarts(entry: string, spec: string, dirs: ArmDirectories): 
  * @param pin - The VAT package and the version it pins
  * @param site - The arms root and installer
  * @returns The resolved instrument
- * @throws {Error} when the install holds no cli entry, one outside the install, one of another
- *   package or version, or one that does not start
+ * @throws {VatError} an arm refusal when npm fails, or the install holds no cli entry, one outside
+ *   the install, one of another package or version, one that does not start, or a closure
+ *   that does not resolve inside the install
  */
 export function installNpxInstrument(pin: NpmPin, site: NpxInstallSite): Promise<ResolvedInstrument> {
   const spec = `${pin.name}@${pin.version}`;
@@ -318,14 +433,14 @@ function cliEntryCandidates(prefix: string, name: VatPackageName): string[] {
  * @param name - The VAT package installed there
  * @param spec - The pinned spec, for the error message
  * @returns The install's cli entry, proven to lie inside it
- * @throws {Error} when there is none, or its real path lies outside the install
+ * @throws {VatError} an arm refusal when there is none, or its real path lies outside the install
  */
 function locateCliEntry(prefix: string, name: VatPackageName, spec: string): string {
   const entry = cliEntryCandidates(prefix, name).find((path) => pathPresent(path, { follow: path }, everywhere('source'), 'probe'));
-  if (entry === undefined) throw new Error(`the install of ${spec} holds no ${CLI_ENTRY} to measure`);
+  if (entry === undefined) throw armRefusal(`the install of ${spec} holds no ${CLI_ENTRY} to measure`);
   // Through every link: an entry npm linked from elsewhere is not the published bytes.
   if (isUnderRoot(prefix, entry) !== 'inside') {
-    throw new Error(`the install of ${spec}: ${entry} lies outside the install at ${prefix}; it is not the published package`);
+    throw armRefusal(`the install of ${spec}: ${entry} lies outside the install at ${prefix}; it is not the published package`);
   }
   return entry;
 }
@@ -348,13 +463,28 @@ async function installOnce(pin: NpmPin, spec: string, site: NpxInstallSite): Pro
   await site.install(spec, prefix, dirs);
   const entry = locateCliEntry(prefix, pin.name, spec);
   const cliRoot = safePath.join(entry, '..', '..');
-  const manifest = requirePinnedCli(cliRoot, pin, spec);
-  stubAbsentOptionalPeers(prefix, cliRoot, manifest);
+  requirePinnedCli(cliRoot, pin, spec);
+  stubAbsentOptionalPeers(prefix);
   requireEntryStarts(entry, spec, dirs);
   return {
     command: process.execPath,
     leadingArgs: [entry],
     // No root: every file of the install sits under `node_modules`, which the io facet's site normalizer keys on.
-    version: { version: pin.version, commit: null, dirty: null, closure: closureDigest(cliRoot) },
+    version: { version: pin.version, commit: null, dirty: null, closure: installedClosure(cliRoot, prefix, spec) },
   };
+}
+
+/**
+ * @param cliRoot - The installed cli's directory
+ * @param prefix - The install's directory: the closure's ceiling
+ * @param spec - The pinned spec, for the refusal
+ * @returns The closure ({@link closureDigest}) the install stamps
+ * @throws {VatError} an arm refusal when the closure does not resolve inside the install
+ */
+function installedClosure(cliRoot: string, prefix: string, spec: string): string {
+  try {
+    return closureDigest(cliRoot, prefix);
+  } catch (error) {
+    throw armRefusal(`the install of ${spec}: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }

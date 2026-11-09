@@ -167,11 +167,13 @@ own npm cache, never the operator's global or local install) and runs that insta
 vat from the *subject's* cwd — so every command the lab runs is the pinned version. The spec must
 be `vibe-agent-toolkit` or `@vibe-agent-toolkit/cli` at an exact version; any other package,
 ranges, dist-tags, paths and URLs are refused. Its closure is the same digest a `dist:` build of
-those bytes stamps — the cli and its `@vibe-agent-toolkit/*` packages, never third-party code
-([run harness](../../packages/lab/docs/run-harness.md)). **Not the pinned version:** the lab sets
-no `VAT_BIN` or `VAT_ROOT_DIR` for this arm, and its install lives at a lab-internal path emptied
-each run, so a nested `vat` call made by the subject's own scripts or hooks resolves through the
-subject's own install (on VAT's own tree, its checkout).
+that install stamps — the bytes of the cli and its `@vibe-agent-toolkit/*` packages, and the
+`name@version` of every third-party package in that closure
+([run harness](../../packages/lab/docs/run-harness.md)). **Nested calls are not pinned, for any
+arm kind:** the lab sets no `VAT_BIN` or `VAT_ROOT_DIR` for a `tree:`, `dist:` or `npx:` arm — only
+an arm's own `--env` does — so a nested `vat` call made by the subject's own scripts or hooks
+resolves through the subject's own install (on VAT's own tree, its checkout). An `npx:` install
+lives at a lab-internal path emptied each run, so it cannot be named with `--env VAT_BIN`.
 
 When the baseline must pin nested calls too, use a `dist:` arm over a private install plus a
 shim instead. Install the RC into a private prefix, so it never touches the operator's own

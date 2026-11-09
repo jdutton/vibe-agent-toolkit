@@ -79,6 +79,7 @@ import { basename, dirname } from 'node:path';
 
 import { everyInOrder, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
+import * as semver from 'semver';
 import { z } from 'zod';
 
 import { closureDigest } from './closure.js';
@@ -138,37 +139,21 @@ const HEX = /^[0-9a-f]+$/;
 /** Lengths of a concrete git object id: SHA-1, and SHA-256 repositories. */
 const COMMIT_LENGTHS = new Set([40, 64]);
 
-/** `1.2.3` — the mandatory part of a pinned npm version. */
-const CORE_VERSION_SHAPE = /^\d+\.\d+\.\d+$/;
-
-/** Everything after the first `-`: a prerelease. */
-const VERSION_SUFFIX_SHAPE = /^[0-9A-Za-z.-]+$/;
-
-/** Where a prerelease starts, if it does. */
-const VERSION_SUFFIX_START = '-';
-
 /** Where build metadata starts: npm strips it, so no installed manifest carries it. */
 const BUILD_METADATA_START = '+';
 
 /**
  * Is this string a *concrete* version, as opposed to a range or a dist-tag?
- *
- * Split-then-match rather than one regex on purpose: composing the two parts
- * into a single pattern needs a quantifier inside a quantifier, which is a
- * backtracking hazard over caller-supplied text. Each half here is anchored and
- * flat. Build metadata is refused before this is asked ({@link pinOf}).
+ * Strict semver, as `semver` reads it, spelled exactly as `semver` would print
+ * it: a leading zero, an empty prerelease identifier, a `v` or `=` prefix are
+ * all refused. Build metadata is refused before this is asked ({@link pinOf}).
  *
  * @param value - The text after the spec's version separator
  * @returns `true` for `1.2.3`, `1.2.3-rc.5`; `false` for `latest`, `^0.1.0`,
- *   `0.1`, `1.0.0+build.7`
+ *   `0.1`, `01.2.3`, `1.2.3-rc.05`
  */
 function isPinnedVersion(value: string): boolean {
-  const boundary = value.indexOf(VERSION_SUFFIX_START);
-  if (boundary === -1) return CORE_VERSION_SHAPE.test(value);
-  return (
-    CORE_VERSION_SHAPE.test(value.slice(0, boundary)) &&
-    VERSION_SUFFIX_SHAPE.test(value.slice(boundary + 1))
-  );
+  return semver.valid(value) === value;
 }
 
 /**
@@ -414,7 +399,9 @@ async function resolveTree(path: string): Promise<ResolvedInstrument> {
   const dirty = hasUncommittedChanges(treeRoot, `the instrument checkout at ${treeRoot}`);
   // The bytes, beside the commit: a dirty build is otherwise named only by a
   // HEAD whose bytes did not run. See `closure.ts`.
-  const closure = closureDigest(safePath.join(treeRoot, TREE_CLI_PACKAGE_RELATIVE));
+  // Its ceiling is the checkout: a workspace's packages and their dependencies all
+  // install under its root `node_modules`, and nothing above it is the tree's.
+  const closure = closureDigest(safePath.join(treeRoot, TREE_CLI_PACKAGE_RELATIVE), treeRoot);
 
   return {
     command: process.execPath,
@@ -467,6 +454,67 @@ async function locateDistBin(target: string): Promise<string> {
 }
 
 /**
+ * The root a `dist:` package belongs to — its closure's ceiling (`closure.ts`):
+ * what an install or checkout put there for it to resolve, and nothing above.
+ *
+ * - **A package inside a `node_modules`** (a `dist:` pointed into an npm prefix):
+ *   the directory holding the OUTERMOST `node_modules` of its real path — the
+ *   install's prefix, the same ceiling an `npx:` arm of those bytes uses, so the
+ *   two stamp one closure.
+ * - **Otherwise, the nearest directory, from the package up, whose `package.json`
+ *   declares `workspaces`** — a `dist:` pointed into a checkout resolves from the
+ *   workspace root's `node_modules`, as a `tree:` arm of it does. Nearest, so a
+ *   worktree nested in another checkout stops at its own root.
+ * - **Otherwise the package itself:** a standalone package resolves only from
+ *   its own `node_modules`.
+ *
+ * @param packageRoot - The `dist:` package's directory
+ * @returns The ceiling, a real path
+ * @throws {Error} when an ancestor's `package.json` cannot be read as JSON
+ */
+async function distClosureCeiling(packageRoot: string): Promise<string> {
+  const real = safePath.resolve(await realpath(packageRoot));
+  const ancestors: string[] = [];
+  for (let dir = real; ; dir = safePath.resolve(dir, '..')) {
+    ancestors.push(dir);
+    if (dir === safePath.resolve(dir, '..')) break;
+  }
+  const outermost = ancestors.findLast((dir) => basename(dir) === 'node_modules');
+  if (outermost !== undefined) return safePath.resolve(outermost, '..');
+  return (await nearestWorkspaceRoot(real)) ?? real;
+}
+
+/**
+ * @param dir - A real directory
+ * @returns The nearest directory, from `dir` up, whose `package.json` declares `workspaces`
+ * @throws {Error} when an ancestor's `package.json` cannot be read as JSON
+ */
+async function nearestWorkspaceRoot(dir: string): Promise<string | undefined> {
+  if (await declaresWorkspaces(safePath.join(dir, 'package.json'))) return dir;
+  const parent = safePath.resolve(dir, '..');
+  return parent === dir ? undefined : nearestWorkspaceRoot(parent);
+}
+
+/**
+ * @param manifestPath - A `package.json` that may not exist
+ * @returns Whether it exists and declares `workspaces`
+ * @throws {Error} when it exists but is not JSON
+ */
+async function declaresWorkspaces(manifestPath: string): Promise<boolean> {
+  if (!(await isRegularFile(manifestPath))) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(manifestPath, 'utf8'));
+  } catch (error) {
+    throw new Error(
+      `resolveInstrument({ kind: 'dist' }): ${manifestPath} is not valid JSON ` +
+        `(${error instanceof Error ? error.message : String(error)}), so the root its dist: package belongs to is unknown.`,
+    );
+  }
+  return typeof parsed === 'object' && parsed !== null && 'workspaces' in parsed;
+}
+
+/**
  * Resolve a built artifact. There is no checkout behind it, so `commit` is
  * `null` — a recorded absence rather than a guess.
  *
@@ -491,7 +539,7 @@ async function resolveDist(path: string): Promise<ResolvedInstrument> {
     // ask. A `false` here would be a confident claim of cleanliness over a build
     // whose provenance nobody inspected. The closure is what tells two `dist:`
     // arms of one version apart — see `closure.ts`.
-    version: { version, commit: null, dirty: null, closure: closureDigest(packageRoot) },
+    version: { version, commit: null, dirty: null, closure: closureDigest(packageRoot, await distClosureCeiling(packageRoot)) },
     root: packageRoot,
   };
 }

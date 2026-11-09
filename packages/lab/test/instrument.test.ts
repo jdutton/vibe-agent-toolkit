@@ -525,6 +525,18 @@ describe('resolveInstrument — kind: npx', () => {
   });
 
   /**
+   * Version-shaped, but not strict semver: a leading zero in a numeric part or a
+   * numeric prerelease identifier, an empty prerelease identifier. npm would read
+   * none of them as the exact version it names.
+   */
+  const NOT_SEMVER = ['01.2.3', '1.02.3', '1.2.3-rc.05', '1.2.3-.', '1.2.3-a..b'] as const;
+
+  it.for(NOT_SEMVER)('refuses vibe-agent-toolkit@%s, which is not strict semver, before installing', async (version) => {
+    const spec = `vibe-agent-toolkit@${version}`;
+    await expectRejectionNaming({ kind: 'npx', spec }, `"${spec}" is not pinned`);
+  });
+
+  /**
    * Pinned-looking, but not VAT. A path, tarball, git ref or alias would install
    * something other than a published version under a label that claims one; and any
    * other registry package could carry a dependency aliased to the cli's name, or a

@@ -114,12 +114,17 @@ export interface InstrumentVersion {
    */
   readonly dirty: boolean | null;
   /**
-   * SHA-256 over the arm's whole module closure — the cli package and every
-   * `@vibe-agent-toolkit/*` package it resolves, transitively, each as its
-   * `package.json` plus every file under its `dist/` (see
-   * `harness/closure.ts`). One definition for every kind — an `npx:` arm's starts
-   * at its installed cli — and third-party code is part of none: a floated
-   * dependency does not make another instrument.
+   * SHA-256 over the arm's whole module closure (see `harness/closure.ts`): the
+   * BYTES of the cli package and of every `@vibe-agent-toolkit/*` package it
+   * resolves, transitively, each as its `package.json` plus every file under its
+   * `dist/`; plus the resolved `name@version` — not the bytes — of every
+   * third-party package in that same closure. One definition for every kind — an
+   * `npx:` arm's starts at its installed cli — so a third-party dependency
+   * resolved at another version makes another instrument, for every kind.
+   *
+   * A report stored by an earlier lab whose closure was computed by another
+   * definition compares as a different instrument: re-capture it. Nothing
+   * detects that, and no version marker records the definition.
    *
    * **The field that identifies the BYTES.** A `dist:` arm has no commit, so
    * before this two `dist:` arms of one version were the same instrument to

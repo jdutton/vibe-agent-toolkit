@@ -178,8 +178,10 @@ const NPM_CONFIG = /^npm_config_/iu;
  * scripts still stay off, because the install passes `--ignore-scripts` on the
  * command line, which wins over any config file. What the install resolves can
  * vary with that file (a registry, `before`, `omit`, …): a different VAT package
- * byte moves the closure, but third-party code is not part of the instrument's
- * identity (`closure.ts`), so a difference there is not seen.
+ * byte, or a third-party package resolved at another version, moves the closure
+ * (`closure.ts`); a third-party package of the same version with other bytes (a
+ * mirror serving altered tarballs) does not, since third-party packages enter the
+ * instrument's identity by `name@version` only.
  */
 const NPM_NETWORK = /^npm_config_(?:registry|@[^:/]+:registry|proxy|https[-_]proxy|no[-_]?proxy|ca|cafile|strict[-_]ssl)$/iu;
 
