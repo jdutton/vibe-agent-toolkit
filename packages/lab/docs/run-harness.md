@@ -42,7 +42,7 @@ unpacks them at run time. The pinned version pins them.
 `InstrumentVersion.closure` is a SHA-256 over the arm's whole module closure: the cli package and
 every `@vibe-agent-toolkit/*` package it depends on, transitively — each as its `package.json` plus
 every file under its `dist/`, `*.tsbuildinfo` excluded ([`harness/closure.ts`](../src/harness/closure.ts)).
-`tree:` and `dist:` compute it; `npx:` records `null`.
+`tree:` and `dist:` compute it; `npx:` digests its install's whole `node_modules` (third-party ranges float).
 
 - **Why.** The version cannot see the case that matters most: a dependency's `dist/` rebuilt while
   every `package.json` stays put. Before the digest, two `dist:` arms of one version were the same
@@ -74,12 +74,12 @@ back to it. The CLI reached the same conclusion independently: `resolveVatBinPat
 kept a second copy for its whole-command half; that half moved here as the `verdict` facet and the
 copy was deleted with it.)
 
-The `npx` route is the one exception, and a known limitation: `npx` runs the published package's
-`bin` entry, which *is* the wrapper. A subject with its own vat installed can therefore capture an
-`npx:` arm. Compare published versions on a subject that does not depend on vat, or use `dist:`
-against an unpacked tarball. Its parse directory is still the build's own answer: the lab resolves
-`@vibe-agent-toolkit/resources` from the one project npx installed into the arm's npm cache during
-the untimed start.
+The `npx` route is no exception: `npx` runs the published package's `bin` entry, which *is* the
+wrapper, and a subject with its own vat installed captured an `npx:` arm — a report stamped with the
+pin measured the subject's version. So an `npx:` build is never run through npx: the pinned spec is
+installed under the arms root and resolved to its cli's `dist/bin.js`
+([`harness/npx-install.ts`](../src/harness/npx-install.ts)), refused unless that entry, run with
+`--version`, reports the pin.
 
 ## A dirty instrument is measured, but never mistaken for a commit
 

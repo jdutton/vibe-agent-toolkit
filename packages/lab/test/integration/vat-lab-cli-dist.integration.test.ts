@@ -14,6 +14,7 @@ import { normalizedTmpdir, resolveFromImportMeta, safePath } from '@vibe-agent-t
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { createProgram, resolveAbArms } from '../../src/bin/vat-lab.js';
+import { npxInstallSite } from '../../src/harness/npx-install.js';
 
 let tempDir: string;
 
@@ -26,6 +27,11 @@ afterEach(() => {
   // The actions set this on the real process object; a value leaked from one
   // test would let the next test's assertion pass on its own.
   process.exitCode = undefined;
+});
+
+/** Where an `npx:` arm would install — never reached: every arm here is `dist:`. */
+const NO_NPX = npxInstallSite(safePath.join(normalizedTmpdir(), 'lab-cli-dist-never'), () => {
+  throw new Error('a dist: arm installs nothing');
 });
 
 /** This checkout's own built CLI — the one `dist:` arm every unit test can rely on. */
@@ -61,7 +67,7 @@ describe('vat-lab <facet> ab — indistinguishable arms', () => {
     // machine's noise published as a difference between builds.
     const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
 
-    const arms = await resolveAbArms(sameDistArms());
+    const arms = await resolveAbArms(sameDistArms(), NO_NPX);
 
     expect(arms).toBeNull();
     expect(process.exitCode).toBe(ExitCode.ERROR);
@@ -73,7 +79,7 @@ describe('vat-lab <facet> ab — indistinguishable arms', () => {
   it('accepts one build in two configurations', async () => {
     // The positive control: the same instrument on both arms IS an A/B when the
     // environments differ — the pool-on/pool-off run one build exists to make.
-    const arms = await resolveAbArms(sameDistArms({ envA: { X: '1' } }));
+    const arms = await resolveAbArms(sameDistArms({ envA: { X: '1' } }), NO_NPX);
 
     expect(arms).not.toBeNull();
     expect(arms?.envA).toStrictEqual({ set: { X: '1' }, unset: [] });
@@ -81,7 +87,7 @@ describe('vat-lab <facet> ab — indistinguishable arms', () => {
   });
 
   it('accepts one build where only an UNSET differs', async () => {
-    const arms = await resolveAbArms(sameDistArms({ unsetB: ['XDG_DATA_HOME'] }));
+    const arms = await resolveAbArms(sameDistArms({ unsetB: ['XDG_DATA_HOME'] }), NO_NPX);
 
     expect(arms).not.toBeNull();
     expect(process.exitCode).toBeUndefined();
@@ -92,6 +98,7 @@ describe('vat-lab <facet> ab — indistinguishable arms', () => {
 
     const arms = await resolveAbArms(
       sameDistArms({ envA: { X: '1' }, unsetA: ['X'], instrumentA: { kind: 'dist', path: '/nowhere' } }),
+      NO_NPX,
     );
 
     expect(arms).toBeNull();

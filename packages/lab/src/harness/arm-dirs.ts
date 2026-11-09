@@ -12,9 +12,9 @@
  *   Pointed, not stripped: with `CLAUDE_CONFIG_DIR` unset VAT falls back to
  *   `HOME`, and `~/` imports resolve through `homedir()`, so a stripped variable
  *   would hand the arm the developer's real `~/.claude`.
- * - `npm-cache/` — `npm_config_cache`, where an `npx` build keeps what it
- *   fetched. Never reset: the build's own bytes, fetched once in its untimed
- *   start, never in a timed repetition.
+ * - `npm-cache/` — `npm_config_cache`, where npm in an arm keeps what it
+ *   fetched (an `npx:` build's install among them). Never reset: fetched once,
+ *   never in a timed repetition.
  *
  * ## The arms root lies outside every subject
  *
@@ -128,9 +128,9 @@ export interface ArmDirectories {
   readonly tmp: string;
   readonly home: string;
   /**
-   * npm's cache (`npm_config_cache`), where an `npx` build keeps what it
-   * fetched. Never reset: it holds the build's own bytes, not VAT's state, and
-   * an emptied one would time a download in every repetition.
+   * npm's cache (`npm_config_cache`), where npm in an arm keeps what it
+   * fetched. Never reset: it holds packages, not VAT's state, and an emptied
+   * one would time a download in every repetition.
    */
   readonly npmCache: string;
   /**
@@ -753,7 +753,7 @@ export function armDirectoryEnvironment(dirs: ArmDirectories, platform: NodeJS.P
       // Git in the subject copy never climbs past it into a repository the arms root sits inside.
       // No effect on an arm that runs in the real subject, which is never below the arms root.
       GIT_CEILING_DIRECTORIES: safePath.join(dirs.subject, '..'),
-      // An npx build fetches into the arm's own cache, once, and never asks the registry again.
+      // npm in an arm fetches into the arm's own cache, once, and never asks the registry again.
       npm_config_cache: dirs.npmCache,
       npm_config_prefer_offline: 'true',
       npm_config_update_notifier: 'false',

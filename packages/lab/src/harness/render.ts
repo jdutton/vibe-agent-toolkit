@@ -235,7 +235,7 @@ function sidesWhere(
  * - **An arm with no commit at all** — a `dist:` path or an `npx:` spec. Its
  *   source provenance is unknown. A `dist:` arm's bytes are still pinned by its
  *   closure digest (which `movedAxes` compares); an `npx:` arm by its pinned
- *   version alone.
+ *   version and its install's closure digest.
  *
  * @param before - The baseline instrument
  * @param after - The instrument compared against it
@@ -268,7 +268,7 @@ export function instrumentTrustNotes(
     notes.push(
       `⚠ NO COMMIT ON ${unpinned.toUpperCase()} — a dist: path or an npx: spec carries no ` +
         'source provenance: a dist: arm is identified only by its closure digest, an npx: arm ' +
-        'only by its version. Prefer tree: when you have a checkout.',
+        'by its version and the closure digest of its install. Prefer tree: when you have a checkout.',
     );
   }
 

@@ -161,15 +161,16 @@ single-command facet runs are one-step sequences under `<arms root>/<build>-<com
   (`<NAME> is set by the lab itself on every arm`) — an arm cannot choose them.
 - **npm's cache is the arm's own and never reset.** `npm_config_cache` is `<arm>/npm-cache`, with
   `npm_config_prefer_offline=true` and the update notifier off, and every build is **started once,
-  untimed** (`--version`, cwd the npm cache) before round 1. An `npx:` build therefore fetches its
-  bytes there, once, never in a timed repetition; a build whose start exits non-zero refuses the
-  arm (`the build did not start — '--version' exited N`).
-- **A populating arm asks the build for its parse directory**: from its entry for a `tree:` or
-  `dist:` build, and for an `npx:` build from the copy npx runs: the pinned version installed in
-  the clone's own project (`node_modules`, which npx runs ahead of its cache), else the one install
-  the untimed start left in the arm's npm cache (`<arm>/npm-cache/_npx/<hash>/`). Neither, or two
-  installs, refuses the arm before any measured child — never a guess; the refusal names the cause
-  and says to measure the copy npx did run with a `dist:` instrument. An arm whose own `--env` turns caching off
+  untimed** (`--version`, cwd the npm cache) before round 1; a build whose start exits non-zero
+  refuses the arm (`the build did not start — '--version' exited N`).
+- **An `npx:` build never runs through npx.** npx runs the package's `bin`, the cli's cwd-resolving
+  wrapper, which runs the SUBJECT'S own vat when the subject has one installed — under the pinned
+  name. So the pinned spec is installed once per invocation (`--ignore-scripts`, in an arm of its own
+  under the arms root, `harness/npx-install.ts`) and runs as `node <install>/…/@vibe-agent-toolkit/cli/dist/bin.js`,
+  as a `dist:` build does. The install is refused unless its cli's `package.json` names the pinned
+  version AND that entry, run with `--version`, reports it.
+- **A populating arm asks the build for its parse directory**, from its entry — never a guess.
+  An arm whose own `--env` turns caching off
   (`VAT_PROJECTION_STORE=off`, `VAT_CACHE=0`) is checked for writing nothing there instead, so a
   store-on vs store-off A/B measures both arms.
 - Each step of a CI sequence carries ONE **committed expected exit** — 0 unless
@@ -227,7 +228,7 @@ schemas (they are internal to the CLI, and the lab measures several builds), so 
 `cand-C-warm` fixture models that shape by hand.
 
 ```bash
-vat-lab perf arms ../subject --build base=dist:/path/to/base/cli --build cand=dist:/path/to/cand/cli \
+vat-lab perf arms ../subject --build base=dist:/path/to/base/packages/cli/dist --build cand=dist:/path/to/cand/packages/cli/dist \
   --arm base:ci-b:cold --arm cand:ci-b:cold --prerequisite "bun install" \
   --arms-dir /tmp/lab-arms --out ./arms
 ```

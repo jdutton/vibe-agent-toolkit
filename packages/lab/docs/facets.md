@@ -27,14 +27,9 @@ its parent's resident set, so a vat launched by a 300 MB parent through `sh -c e
 and a shell launch it — read as 300 MB or more. `VmHWM` belongs to the exec'd image alone. macOS's
 `maxRSS` carries nothing over: measured, a vat stand-in under a node parent holding 0, 300 and
 600 MB peaked at 75.4, 75.4 and 75.3 MB. So a repeat is launched straight from the lab, with no
-intermediate launcher — an `npx:` build included: `npx` runs the package's `bin`, the cli's
-cwd-resolving wrapper, which spawns vat as a second process, so the facet installs the pinned spec
-(`--ignore-scripts`, in an arm of its own under the arms root, with that arm's npm cache and the
-operator's `~/.npmrc` as npm's userconfig) and runs
-that install's `@vibe-agent-toolkit/cli/dist/bin.js` with `node`, as a `dist:` build runs
-(`npx-entry.ts`); an install whose cli is not the coordinate's version is refused. The install floats
-third-party ranges (no lockfile), so its whole `node_modules` is digested into the coordinate's
-`closure`, and two installs that resolved differently are two instruments. `test/integration/memory-probe.integration.test.ts`
+intermediate launcher — an `npx:` build included: every facet resolves it to its install's
+`@vibe-agent-toolkit/cli/dist/bin.js`, run with `node` as a `dist:` build is, never through npx's
+cwd-resolving wrapper (`harness/npx-install.ts`). `test/integration/memory-probe.integration.test.ts`
 pins the independence, and it can only go red on Linux: macOS's `maxRSS` carries nothing over, and
 the test needs `sh`, so it is skipped on Windows, where a process is created rather than forked —
 argued there, not measured. A command that writes its subject (`build`) runs in a copy of it, which

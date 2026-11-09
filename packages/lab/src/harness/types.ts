@@ -31,7 +31,7 @@ export type InstrumentSource =
       readonly path: string;
     }
   | {
-      /** A published version, run via `npx <spec>`. */
+      /** A published version: installed under the arms root, its cli entry run with node (`npx-install.ts`). */
       readonly kind: 'npx';
       readonly spec: string;
     };
@@ -40,7 +40,7 @@ export type InstrumentSource =
 export interface ResolvedInstrument {
   /** Executable to spawn. */
   readonly command: string;
-  /** Arguments that precede the vat subcommand (a script path, or npx's spec). */
+  /** Arguments that precede the vat subcommand (the entry script). */
   readonly leadingArgs: readonly string[];
   /** Axis C, as it will appear in every report this instrument produces. */
   readonly version: InstrumentVersion;
@@ -52,7 +52,7 @@ export interface ResolvedInstrument {
    * that makes a report from one machine incomparable to every other.
    *
    * **`undefined` for an `npx` instrument, and that is not a gap.** A published
-   * package is unpacked somewhere inside a cache directory whose path is
+   * package is installed somewhere under the arms root, a path that is
    * arbitrary, and every file in it sits under `node_modules`, which the site
    * normalizer already keys on. Inventing a root here would name a temp
    * directory that means nothing to a later reader.

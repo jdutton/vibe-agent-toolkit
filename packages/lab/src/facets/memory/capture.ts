@@ -9,7 +9,7 @@
  * `harness/preload.ts` the `io` counter uses — and the rule for reducing a
  * repeat's dumps to one number (the largest vat process's peak; see `types.ts`).
  * A repeat is launched straight from the lab: the probe's figure excludes what
- * a parent held (see `rss-probe.cts`). An `npx:` build is too: see `npx-entry.ts`.
+ * a parent held (see `rss-probe.cts`). An `npx:` build is too: it resolves to its install's entry (`harness/npx-install.ts`).
  *
  * Every repeat counts, as in `perf`: there is no warm-up to discard, because a
  * peak is not a cache-sensitive count, and a `warm` arm is already primed by an
@@ -30,7 +30,6 @@ import type { SequenceResult } from '../../harness/sequence.js';
 import type { CaptureRequest } from '../../harness/types.js';
 import { summarize } from '../perf/stats.js';
 
-import { npmInstaller, npxInstallArm, withMemoryInstrument } from './npx-entry.js';
 import {
   MEMORY_FACET,
   type MemoryBody,
@@ -269,22 +268,16 @@ export async function captureMemory(options: CaptureMemoryOptions): Promise<Repo
   // NODE_OPTIONS (a raised `--max-old-space-size`, say) survives under the probe.
   const nodeOptions = nodeOptionsWith(probePath, buildArmEnv(process.env, options.env)['NODE_OPTIONS']);
 
-  const installArm = npxInstallArm(options.arms, options.cache);
-  const install = npmInstaller(installArm, options.env, options.timeoutMs);
-  // The instrument that ran: an `npx:` build's carries its install's closure. Load is read after the install.
-  const { instrument, loadBefore, rows, measured } = await withMemoryInstrument(options.instrument, installArm, install, async (ran) => ({
-    instrument: ran,
-    loadBefore: readLoad(),
-    ...(await captureCommandRows(
-      { ...options, instrument: ran },
-      DUMP_DIR_PREFIX,
-      (directory) => ({ [RSS_LOG_DIR_ENV]: directory, NODE_OPTIONS: nodeOptions }),
-      rowFromDumps,
-    )),
-  }));
+  const loadBefore = readLoad();
+  const { rows, measured } = await captureCommandRows(
+    options,
+    DUMP_DIR_PREFIX,
+    (directory) => ({ [RSS_LOG_DIR_ENV]: directory, NODE_OPTIONS: nodeOptions }),
+    rowFromDumps,
+  );
   const loadAfter = readLoad();
 
-  return buildReportEnvelope(MEMORY_FACET, { ...options, instrument }, {
+  return buildReportEnvelope(MEMORY_FACET, options, {
     commands: rows,
     load: judgeLoad(loadBefore.loadAvg1, loadAfter.loadAvg1, loadAfter.cpus),
   }, measured);

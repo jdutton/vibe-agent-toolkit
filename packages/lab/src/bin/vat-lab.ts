@@ -102,6 +102,7 @@ import {
   POPULATION_MEASURED_COMMANDS,
 } from '../harness/commands.js';
 import { resolveInstrument } from '../harness/instrument.js';
+import { npmInstaller, type NpxInstallSite, npxInstallSite } from '../harness/npx-install.js';
 import { instrumentLabel, instrumentTrustNotes } from '../harness/render.js';
 import type { SequenceStep } from '../harness/sequence.js';
 import { resolveSubject } from '../harness/subject.js';
@@ -635,13 +636,12 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
     )
     .action((subjectPath: string, options: AbOptions) =>
       refusingArmErrors(async () => {
-        const arms = await resolveAbArms(options);
-        if (arms === null) return;
-
         const startedAt = new Date().toISOString();
         const subject = await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath });
         const out = openOutDirectory(options.out, [subject.path]);
         await withArmsRoot(options, [subject.path], async ({ path: armsRoot }) => {
+          const arms = await resolveAbArms(options, npxInstallSite(armsRoot, npmInstaller(undefined)));
+          if (arms === null) return;
           const result = await runAb({
             subject,
             armA: arms.a,
@@ -680,9 +680,10 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
  * construction, so a control can never be mistaken for a two-build comparison.
  *
  * @param options - What the caller passed
+ * @param npx - Where an `npx:` arm is installed
  * @returns The two arms, or `null` when the run was refused
  */
-export async function resolveAbArms(options: AbOptions): Promise<AbArms | null> {
+export async function resolveAbArms(options: AbOptions, npx: NpxInstallSite): Promise<AbArms | null> {
   const envA = armEnvironment(options.envA, options.unsetA, '--env-a and --unset-a');
   if (envA === null) return null;
   const envB = armEnvironment(options.envB, options.unsetB, '--env-b and --unset-b');
@@ -707,7 +708,7 @@ export async function resolveAbArms(options: AbOptions): Promise<AbArms | null> 
       );
       return null;
     }
-    const only = await resolveInstrument(options.instrumentA);
+    const only = await resolveInstrument(options.instrumentA, npx);
     return { a: only, b: only, envA, envB };
   }
 
@@ -719,8 +720,8 @@ export async function resolveAbArms(options: AbOptions): Promise<AbArms | null> 
     return null;
   }
 
-  const a = await resolveInstrument(options.instrumentA);
-  const b = await resolveInstrument(options.instrumentB);
+  const a = await resolveInstrument(options.instrumentA, npx);
+  const b = await resolveInstrument(options.instrumentB, npx);
   if (indistinguishableArms({ instrument: a.version, env: envA }, { instrument: b.version, env: envB })) {
     refuse(
       'REFUSED: the two arms are indistinguishable — same instrument ' +
@@ -818,10 +819,10 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
       refusingArmErrors(async () => {
         const env = armEnvironment(options.env, options.unset, ENV_OPTIONS_LABEL);
         if (env === null) return;
-        const instrument = await resolveInstrument(options.instrument);
         const subject = await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath });
         const out = openOutDirectory(options.out, [subject.path]);
         await withArmsRoot(options, [subject.path], async ({ path: root }) => {
+          const instrument = await resolveInstrument(options.instrument, npxInstallSite(root, npmInstaller(undefined)));
           const report = await wiring.capture({
             instrument,
             subject,
@@ -1212,11 +1213,12 @@ async function runPerfArms(subjectPath: string, options: PerfArmsOptions): Promi
   const arms = options.arm ?? [];
   const expected = options.expectExit ?? [];
   const [first] = arms;
-  if (options.build === undefined || first === undefined) {
+  const declaredBuilds = options.build;
+  if (declaredBuilds === undefined || first === undefined) {
     return refuse('REFUSED: perf arms needs at least one --build and one --arm.');
   }
   // Every --arm and --expect-exit is checked before any build resolves or any clone is prepared.
-  const declared = new Set(options.build.map((build) => build.alias));
+  const declared = new Set(declaredBuilds.map((build) => build.alias));
   const undeclared = arms.find((arm) => !declared.has(arm.build));
   if (undeclared !== undefined) {
     return refuse(`REFUSED: --arm names build '${undeclared.build}', which no --build declares.`);
@@ -1224,18 +1226,21 @@ async function runPerfArms(subjectPath: string, options: PerfArmsOptions): Promi
   const unmatched = expectedExitRefusal(arms, expected);
   if (unmatched !== null) return refuse(`REFUSED: ${unmatched}.`);
 
-  const builds = await Promise.all(
-    options.build.map(async (build) => ({ ...build, instrument: await resolveInstrument(build.source) })),
-  );
-  const warmupBuild = builds.find((build) => build.alias === first.build);
   const [warmupStep] = sequenceSteps(first.sequence, first.build, expected);
-  /* c8 ignore next 3 -- every --arm's build was checked above, and every sequence has a step */
-  if (warmupBuild === undefined || warmupStep === undefined) {
-    return refuse(`REFUSED: --arm names build '${first.build}', which no --build declares.`);
+  /* c8 ignore next 3 -- every sequence has a step */
+  if (warmupStep === undefined) {
+    return refuse(`REFUSED: --arm '${first.sequence.name}' runs no step.`);
   }
   const source = safePath.resolve(subjectPath);
   const out = openOutDirectory(options.out, [source]);
-  await withArmsRoot(options, [source], (root) => captureArmsInto(out, root, { source, options, builds, arms, expected, env, warmup: { instrument: warmupBuild.instrument, step: warmupStep } }));
+  await withArmsRoot(options, [source], async (root) => {
+    // Under the arms root: an npx: build is installed there.
+    const npx = npxInstallSite(root.path, npmInstaller(options.timeoutMs));
+    const builds = await Promise.all(
+      declaredBuilds.map(async (build) => ({ ...build, instrument: await resolveInstrument(build.source, npx) })),
+    );
+    await captureArmsInto(out, root, { source, options, builds, arms, expected, env, warmup: { build: first.build, step: warmupStep } });
+  });
 }
 
 /** Everything {@link captureArmsInto} needs, checked by {@link runPerfArms}. */
@@ -1246,7 +1251,8 @@ interface ArmsCaptureInputs {
   readonly arms: readonly ArmsSelectionOption[];
   readonly expected: readonly ExpectedExit[];
   readonly env: ArmEnvironment;
-  readonly warmup: { readonly instrument: ResolvedInstrument; readonly step: SequenceStep };
+  /** The first arm's build alias and first step: the clone's warm-up. */
+  readonly warmup: { readonly build: string; readonly step: SequenceStep };
 }
 
 /**
@@ -1261,12 +1267,17 @@ async function captureArmsInto(out: string, root: ArmsRootHandle, inputs: ArmsCa
   const armsRoot = root.path;
   const { options, expected } = inputs;
   const timeout = options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs };
+  const warmupBuild = inputs.builds.find((build) => build.alias === inputs.warmup.build);
+  /* c8 ignore next 3 -- every --arm's build was checked by runPerfArms */
+  if (warmupBuild === undefined) {
+    return refuse(`REFUSED: --arm names build '${inputs.warmup.build}', which no --build declares.`);
+  }
   const prepared = await prepareClone({
     source: inputs.source,
     commit: options.commit,
     armsRoot,
     prerequisites: options.prerequisite ?? [],
-    warmup: inputs.warmup,
+    warmup: { instrument: warmupBuild.instrument, step: inputs.warmup.step },
     ...timeout,
   });
   if (!prepared.ok) return refuse(`REFUSED: ${prepared.refusal}`);
@@ -1307,7 +1318,7 @@ async function captureArmsInto(out: string, root: ArmsRootHandle, inputs: ArmsCa
 function createPerfArmsCommand(): Command {
   return new Command('arms')
     .argument('<subject>', 'The subject repository; the arms run in a `git clone --local` of it under the arms root')
-    .option('--build <alias=instrument>', "A build to measure, e.g. 'rc11=dist:/path' (repeatable)", collectArmsBuild)
+    .option('--build <alias=instrument>', "A build to measure, e.g. 'rc11=dist:/path/to/cli/dist' or 'rc11=npx:vibe-agent-toolkit@0.2.0-rc.11' (repeatable)", collectArmsBuild)
     .option(
       '--arm <build:sequence:state>',
       `An arm to time (repeatable), e.g. 'rc11:ci-b:cold'. Sequences: ${Object.keys(MEASURABLE_SEQUENCES).join(', ')}`,
@@ -1472,8 +1483,8 @@ function createVerdictCommand(): Command {
         const prepared = options.prepared ?? {};
         const { subjects } = loaded.subjects;
         const measured = subjects.map((subject) => prepared[subject.alias] ?? subject.path);
-        const instrument = await resolveInstrument(options.instrument);
         await withArmsRoot(options, measured, async ({ path: armsRoot }) => {
+          const instrument = await resolveInstrument(options.instrument, npxInstallSite(armsRoot, npmInstaller(options.timeoutMs)));
           const result = await captureVerdict({
             instrument,
             subjects,

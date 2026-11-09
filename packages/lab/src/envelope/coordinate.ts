@@ -117,7 +117,7 @@ export interface InstrumentVersion {
    * SHA-256 over the arm's whole module closure — the cli package and every
    * `@vibe-agent-toolkit/*` package it resolves, transitively, each as its
    * `package.json` plus every file under its `dist/` (see
-   * `harness/closure.ts`) — or, for an `npx:` arm, see below.
+   * `harness/closure.ts`) — or, for an `npx:` arm, its install's whole `node_modules`.
    *
    * **The field that identifies the BYTES.** A `dist:` arm has no commit, so
    * before this two `dist:` arms of one version were the same instrument to
@@ -126,9 +126,8 @@ export interface InstrumentVersion {
    * is identified by it too, which is what lets two dirty builds at one commit
    * finally compare unequal when their outputs differ.
    *
-   * `null` for `npx:` because a published tarball's closure is not on disk
-   * until npx unpacks it at run time — except `memory`'s, which installs the
-   * spec itself and digests that install's whole `node_modules`.
+   * `null` only in a stored report from before an `npx:` build was installed
+   * by the lab (`harness/npx-install.ts`); every resolved build now carries one.
    * Required and `.strict()`: a stored report from before the field existed is
    * refused, not defaulted — the lab's documented refusal policy.
    */

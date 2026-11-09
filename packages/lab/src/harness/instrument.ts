@@ -59,20 +59,16 @@
  * {@link DIST_BIN_CANDIDATES} name `dist/bin.js`, the CLI's own entry point, and
  * a caller who names the wrapper by hand is told why rather than obeyed.
  *
- * `kind: 'npx'` is the one route still exposed to this: `npx` runs the published
- * package's `bin`, which *is* the wrapper, so a published instrument remains
- * subject to cwd re-resolution in every facet but `memory`, which installs the
- * spec and runs its `dist/bin.js` (see `facets/memory/npx-entry.ts`).
+ * `kind: 'npx'` is never run through `npx`: `npx` runs the published package's
+ * `bin`, which *is* the wrapper, and an adopter with vat installed had its own
+ * copy measured under the pinned name. So the spec is installed under the arms
+ * root and resolved to that install's `dist/bin.js`, which must report the
+ * pinned version when run (see `npx-install.ts`).
  *
  * ## Windows
  *
- * Paths are produced through `safePath` (forward slashes everywhere). The `npx`
- * case returns the **bare** command `npx`, never `npx.cmd` and never a resolved
- * path: the lab's launcher (`run.ts`) resolves a bare name from the CHILD's
- * PATH alone — absolute entries in order, `PATHEXT` on Windows, so it finds
- * `npx.cmd` there — and runs a `.cmd`/`.bat` shim as one `cmd.exe` line naming
- * the file it found, as Node's DEP0190 requires. Hardcoding the extension here
- * would duplicate that decision and break the moment it changes.
+ * Paths are produced through `safePath` (forward slashes everywhere). Every kind
+ * resolves to `node <entry>` — `process.execPath` — so no `.cmd` shim is ever run.
  */
 
 import { readFile, realpath, stat } from 'node:fs/promises';
@@ -84,6 +80,7 @@ import { z } from 'zod';
 
 import { closureDigest } from './closure.js';
 import { hasUncommittedChanges } from './git-state.js';
+import { installNpxInstrument, type NpxInstallSite } from './npx-install.js';
 import type { InstrumentSource, ResolvedInstrument } from './types.js';
 
 /**
@@ -502,13 +499,14 @@ function pinnedVersionOf(spec: string): string | null {
 }
 
 /**
- * Resolve a published version run through `npx`.
+ * Resolve a published version: install the pinned spec and run its cli entry.
  *
  * @param spec - An npm spec pinned to a concrete version
+ * @param site - Where the spec is installed
  * @returns The resolved instrument
- * @throws {Error} when the spec is empty or names no concrete version
+ * @throws {Error} when the spec is empty or names no concrete version, or its install is not that version
  */
-function resolveNpx(spec: string): ResolvedInstrument {
+function resolveNpx(spec: string, site: NpxInstallSite): Promise<ResolvedInstrument> {
   const trimmed = spec.trim();
   if (trimmed === '') {
     throw new Error("resolveInstrument({ kind: 'npx' }): the spec is empty.");
@@ -518,22 +516,15 @@ function resolveNpx(spec: string): ResolvedInstrument {
   if (version === null) {
     throw new Error(
       `resolveInstrument({ kind: 'npx' }): the spec "${trimmed}" is not pinned to a concrete ` +
-        'version. npx would resolve it against the registry at run time, so two reports ' +
+        'version. npm would resolve it against the registry at run time, so two reports ' +
         'stamped from it would claim to be the same instrument while potentially being ' +
         `different builds. Pin it, e.g. "${trimmed}@0.1.41".`,
     );
   }
 
-  return {
-    // Bare on purpose — the spawn wrappers resolve it (and `npx.cmd` on Windows).
-    command: 'npx',
-    leadingArgs: ['--yes', trimmed],
-    // A published tarball carries no provenance: no commit, and therefore
-    // nothing that could have been dirty. No closure either: its bytes are not on
-    // disk until npx unpacks them, and the pin fixes vat's packages but not their
-    // third-party ranges. `memory` installs it itself and stamps that install's.
-    version: { version, commit: null, dirty: null, closure: null },
-  };
+  // A published tarball carries no provenance: no commit, and therefore nothing
+  // that could have been dirty. Its closure is the install's.
+  return installNpxInstrument(trimmed, version, site);
 }
 
 /**
@@ -541,19 +532,20 @@ function resolveNpx(spec: string): ResolvedInstrument {
  * report it produces will carry.
  *
  * @param source - How the caller named the vat
+ * @param npx - Where an `npx:` build is installed (under the invocation's arms root)
  * @returns An executable, its leading arguments, and the instrument version
  * @throws {Error} naming the offending path or spec whenever the named vat
  *   cannot be found or cannot supply its coordinate. Resolution failures are
  *   errors, never fallbacks — see the module header.
  */
-export function resolveInstrument(source: InstrumentSource): Promise<ResolvedInstrument> {
+export function resolveInstrument(source: InstrumentSource, npx: NpxInstallSite): Promise<ResolvedInstrument> {
   switch (source.kind) {
     case 'tree':
       return resolveTree(source.path);
     case 'dist':
       return resolveDist(source.path);
     case 'npx':
-      // `resolveNpx` is synchronous; its throw must still arrive as a rejection.
-      return promised(() => resolveNpx(source.spec));
+      // `resolveNpx` refuses a spec synchronously; its throw must still arrive as a rejection.
+      return promised(() => resolveNpx(source.spec, npx));
   }
 }

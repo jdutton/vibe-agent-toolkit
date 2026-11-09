@@ -85,8 +85,9 @@ function subjectVersionTag(coordinate: Coordinate): string {
  * A build with no commit (`dist:`) is named by its closure digest (see
  * `InstrumentVersion.closure`): two `dist:` builds of one version are two
  * instruments, and a name keyed on the version alone would let the second
- * report silently overwrite the first. Only `npx:` — no commit, no closure,
- * pinned by its version — is `release`.
+ * report silently overwrite the first. An `npx:` build's closure is its
+ * install's, so it is named the same way; `release` names only a stored report
+ * that carries no closure.
  *
  * A dirty build's identity is NOT its commit — the bytes measured were not the
  * bytes at that commit. A dirty instrument is pinned by *when it was observed*,

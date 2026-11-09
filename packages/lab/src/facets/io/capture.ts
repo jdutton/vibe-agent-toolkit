@@ -262,7 +262,7 @@ export async function captureIo(options: CaptureIoOptions): Promise<ReportEnvelo
   );
   const roots: SiteRoots = {
     // Empty for an `npx` instrument, and handled: a published package is
-    // unpacked under an arbitrary cache path and every file in it sits under
+    // installed under an arbitrary arms-root path and every file in it sits under
     // `node_modules`, which the site normalizer already keys on.
     instrumentRoot: options.instrument.root ?? '',
     subjectPath: options.subject.path,
