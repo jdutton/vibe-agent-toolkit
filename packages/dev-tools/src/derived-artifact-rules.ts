@@ -30,11 +30,9 @@ import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 
 import {
-  findScriptReaches,
-  findTestReaches,
+  findBuiltOutputEdgeProblems,
   readTurboTaskGraph,
   type TurboTaskGraph,
-  unorderedReaches,
   workingTreePackageFiles,
 } from './built-output-edges.js';
 import { validateFragments } from './changelog-fragments.js';
@@ -310,25 +308,19 @@ export function checkNoTrackedIgnoredFiles(repoRoot: string): ValidationError[] 
 }
 
 /**
- * Rule: every task that executes another workspace package's built `dist/` — a
- * package script running the CLI binary, or a test spawning or importing a
- * sibling's `dist/` — has turbo order that package's `build` before it. The
- * reaches and the ordering are both derived (`built-output-edges.ts`), so a
- * forgotten edge is a red gate, not a run against a missing or stale `dist/`.
+ * Rule: every task that reads a workspace package's built `dist/` — a package
+ * script running the CLI binary, or a test spawning or importing a package's
+ * `dist/` — has turbo run the task that produces that output before it. The
+ * reaches, their readers, their producers and the ordering are all derived
+ * (`built-output-edges.ts`), so a forgotten edge is a red gate, not a run
+ * against a missing or stale `dist/`.
  */
 export function checkBuiltOutputEdges(
   repoRoot: string,
   taskGraph: TurboTaskGraph = readTurboTaskGraph(repoRoot),
   files: readonly string[] = workingTreePackageFiles(repoRoot),
 ): ValidationError[] {
-  const graph = readWorkspaceGraph(repoRoot);
-  const testReaches = findTestReaches(repoRoot, graph, files);
-  // Not blind: this repository's tests do execute siblings' builds, so a scan
-  // that finds none has stopped seeing them.
-  if (testReaches.length === 0) {
-    return [stale('packages', "No test reaches another package's dist/ — the scan in built-output-edges.ts is blind.")];
-  }
-  return unorderedReaches([...findScriptReaches(graph, taskGraph), ...testReaches], taskGraph).map(({ site, message }) =>
+  return findBuiltOutputEdgeProblems(repoRoot, readWorkspaceGraph(repoRoot), taskGraph, files).map(({ site, message }) =>
     stale(site, message),
   );
 }

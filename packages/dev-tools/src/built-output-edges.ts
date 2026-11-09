@@ -1,209 +1,346 @@
 /**
- * Which turbo tasks reach into ANOTHER workspace package's built `dist/`, and
- * whether turbo orders that package's `build` before each of them.
+ * Which turbo tasks read a workspace package's built output, and whether turbo
+ * runs the task that PRODUCES that output before each of them.
  *
- * A task that runs `node ../cli/dist/bin/vat.js`, or a test that spawns
- * `packages/cli/dist/bin.js`, reads a dozen packages' `dist/`. Only a turbo edge
- * makes turbo build them first — and folds their hash into the task's, so a
+ * A task that runs `node ../cli/dist/bin/vat.js`, or a test that spawns the
+ * cli's `dist/bin.js`, reads a dozen packages' `dist/`. Only a turbo edge makes
+ * turbo produce them first — and folds their hash into the reader's, so a
  * rebuilt dependency re-runs it instead of replaying a cached verdict. Without
- * one, a cold run executes against a missing `dist/` and a warm one against a
- * stale one. Such an edge is either a workspace dependency (so `^build` covers
- * it) or an explicit `<pkg>#<task>` entry in `turbo.json`.
+ * one, a cold run reads a missing `dist/` and a warm one a stale one. Such an
+ * edge is either a workspace dependency (so `^build` covers it) or an explicit
+ * `<pkg>#<task>` entry in `turbo.json`.
  *
- * Both halves are derived, never listed by hand:
+ * Every half is derived, never listed by hand:
  *
- * - **The reaches** — every package script, and every test file under
- *   `packages/<dir>/test/` (or a `src/**\/*.test.*`), is scanned for a path that
- *   starts at another package's `dist/`: `../<dir>/dist…` (any number of `../`),
- *   `packages/<dir>/dist…`, or the segment form `'..', '<dir>', 'dist'`. A test
- *   file's task is its vitest tier, read off its name (`*.system.test.*`,
- *   `*.integration.test.*`, else unit; a helper takes the tier of the
- *   `test/system/` or `test/integration/` directory it sits in).
- * - **The ordering** — turbo's own task graph (`turbo run … --dry=json`), not a
- *   reading of `turbo.json`: `^build`, package overrides and transitive edges
- *   mean exactly what turbo says they mean, with no second implementation of its
- *   rules to drift.
+ * - **The reaches** — test files are read by `built-output-scan.ts` (syntax, not
+ *   spelling); package scripts are shell text, scanned for a word that starts
+ *   `../<dir>/dist` or `packages/<dir>/dist`.
+ * - **Who reads** — a reach in a test file belongs to the tier task of every
+ *   test file that imports it, directly or through other helpers, in whichever
+ *   package that test lives; a reach in a script belongs to every turbo task
+ *   whose command runs that script.
+ * - **Who produces** — the task of the reached package whose declared `outputs`
+ *   cover the path most specifically (`dist/skills/**` → `build:skills` over
+ *   `dist/**` → `build`).
+ * - **The ordering** — turbo's own task graph (`turbo run … --dry=json`):
+ *   `^build`, package overrides and transitive edges mean what turbo says.
+ *
+ * Anything that cannot be decided — a reach with no reader task, a path no
+ * task produces, a test in a tier its package has no script for, a package
+ * segment that is not static — is a finding, never a pass.
  */
 
-import { readFileSync } from 'node:fs';
+import { compareCodeUnits, safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
-
+import { scanTestTree, type FileReach, type TestTreeScan } from './built-output-scan.js';
 import { nonDeletedGitListing } from './comment-density.js';
-import { safeExecSync } from './common.js';
+import { safeExecResult } from './common.js';
 import type { WorkspaceGraph } from './workspace-graph.js';
 
-/** One place a task reaches another package's built output. */
-export interface BuiltOutputReach {
-  /** Where the reach is written: a repo-relative test file, or `packages/<dir>/package.json` + script. */
-  readonly site: string;
-  /** The turbo task that executes the site, e.g. `@vibe-agent-toolkit/resources#test:system`. */
+/** One task in turbo's dry-run graph — a task a package actually has. */
+export interface TurboTask {
+  readonly package: string;
   readonly task: string;
-  /** The build it needs ordered first, e.g. `@vibe-agent-toolkit/cli#build`. */
-  readonly build: string;
+  readonly command: string;
+  readonly dependencies: readonly string[];
+  readonly outputs: readonly string[];
 }
 
-/** turbo's task graph: task id → the task ids it directly depends on. */
-export type TurboTaskGraph = ReadonlyMap<string, readonly string[]>;
+/** turbo's task graph: task id → the task. */
+export type TurboTaskGraph = ReadonlyMap<string, TurboTask>;
 
-const UNIT = 'test:unit';
-const INTEGRATION = 'test:integration';
+/** A reader of built output, attributed to the turbo task that runs it. */
+interface AttributedReach {
+  readonly site: string;
+  readonly task: string;
+  /** Manifest name of the package whose output it reads. */
+  readonly pkg: string;
+  readonly subpath: string;
+}
+
+/** A finding: where, and what is wrong there. */
+export interface EdgeProblem {
+  readonly site: string;
+  readonly message: string;
+}
+
 const SYSTEM = 'test:system';
+const INTEGRATION = 'test:integration';
 
-/** The turbo tasks whose sites this module scans. */
-const SCANNED_TASKS = ['build', 'build:skills', UNIT, INTEGRATION, SYSTEM] as const;
-
-// A path that starts at `<dir>/dist`, through `../` hops or from the repo root.
-/** In source, the path must be where a string literal starts — a fake `/repo/packages/…` is not a reach. */
-const SOURCE_REACH = /['"`](?:(?:\.\.\/)+|packages\/)([a-z0-9][a-z0-9-]*)\/dist(?=$|[\s/'"`])/g;
-/** In a script, a shell word starts it. */
-const SCRIPT_REACH = /(?:^|[\s'"])(?:(?:\.\.\/)+|packages\/)([a-z0-9][a-z0-9-]*)\/dist(?=$|[\s/'"])/g;
-/** The segment form, `…, '..', '<dir>', 'dist'`: the segment before `<dir>` climbs out. */
-const SEGMENT_REACH = /['"]\.\.['"]\s*,\s*['"]([a-z0-9][a-z0-9-]*)['"]\s*,\s*['"]dist['"]/g;
-
-/** A test-tree source file vitest can load, outside fixture and golden trees. */
-const TEST_SOURCE = /^packages\/([^/]+)\/(?:test\/.+\.[cm]?[jt]s|src\/.+\.test\.[cm]?[jt]s)$/;
-const NOT_TEST_CODE = /\/(?:fixtures|golden)\//;
-
-/** The package directory names `text` reaches into, in first-seen order. */
-function reachedDirs(text: string, patterns: readonly RegExp[], dirs: ReadonlySet<string>): string[] {
-  const found = new Set<string>();
-  for (const pattern of patterns) {
-    for (const match of text.matchAll(pattern)) {
-      const dir = match[1];
-      if (dir !== undefined && dirs.has(dir)) found.add(dir);
-    }
-  }
-  return [...found];
-}
-
-/** The vitest tier — and so the turbo task — that runs `rel`. */
-function testTierOf(rel: string): typeof UNIT | typeof INTEGRATION | typeof SYSTEM {
-  const base = rel.slice(rel.lastIndexOf('/') + 1);
-  if (/\.system\.test\.[cm]?[jt]s$/.test(base)) return SYSTEM;
-  if (/\.integration\.test\.[cm]?[jt]s$/.test(base)) return INTEGRATION;
-  if (/\.test\.[cm]?[jt]s$/.test(base)) return UNIT;
-  if (rel.includes('/test/system/')) return SYSTEM;
-  if (rel.includes('/test/integration/')) return INTEGRATION;
-  return UNIT;
-}
+/** The turbo tasks the graph is read for: every task that reads or produces built output here. */
+const SCANNED_TASKS = ['build', 'build:skills', 'test:unit', INTEGRATION, SYSTEM] as const;
 
 /**
- * Every reach written in a package script. A script turbo runs as its own task
- * (`build:skills`) is that task; any other runs inside `build`.
+ * turbo's placeholder `command` for a task the package has no script for: the
+ * dry run lists `<pkg>#test:system` for EVERY package, with this command when
+ * the package cannot run it.
  */
-export function findScriptReaches(graph: WorkspaceGraph, taskGraph: TurboTaskGraph): BuiltOutputReach[] {
-  const dirs = new Set(graph.packages.map((pkg) => pkg.dir));
-  const nameOf = new Map(graph.packages.map((pkg) => [pkg.dir, pkg.name] as const));
-  return graph.packages.flatMap((pkg) =>
-    Object.entries((pkg.manifest['scripts'] ?? {}) as Record<string, string>).flatMap(([script, text]) => {
-      const task = taskGraph.has(`${pkg.name}#${script}`) ? `${pkg.name}#${script}` : `${pkg.name}#build`;
-      return reachedDirs(text, [SCRIPT_REACH], dirs).map((dir) => ({
-        site: `packages/${pkg.dir}/package.json (script "${script}")`,
-        task,
-        build: `${nameOf.get(dir) ?? dir}#build`,
-      }));
-    }),
-  );
-}
+const NONEXISTENT = '<NONEXISTENT>';
 
-/**
- * The files under `packages/` in the working tree: tracked plus
- * untracked-not-ignored, so a test added in this change is seen before it is
- * committed.
- */
+/** A word of a script that starts at a sibling's built output. */
+const SCRIPT_REACH = /(?:\.\.|packages)\/([a-z0-9][a-z0-9-]*)\/(dist(?![^/\s'"])[^\s'"]*)/g;
+/** A script run by name: `bun run x`, `npm run x`. */
+const RUN_SCRIPT = /\b(?:bun|npm|pnpm|yarn)\s+run\s+([\w:.-]+)/g;
+
+/** The files under `packages/` in the working tree: tracked plus untracked-not-ignored. */
 export function workingTreePackageFiles(repoRoot: string): string[] {
   return nonDeletedGitListing(repoRoot, ['packages'], ['--cached', '--others', '--exclude-standard']);
 }
 
-/** Every reach written in a test file among `files` (repo-relative, forward slashes). */
-export function findTestReaches(repoRoot: string, graph: WorkspaceGraph, files: readonly string[]): BuiltOutputReach[] {
-  const dirs = new Set(graph.packages.map((pkg) => pkg.dir));
+/** The vitest tier — and so the turbo task name — that runs a test file. */
+function testTierOf(rel: string): string {
+  if (/\.system\.test\.[cm]?[jt]sx?$/.test(rel)) return SYSTEM;
+  if (/\.integration\.test\.[cm]?[jt]sx?$/.test(rel)) return INTEGRATION;
+  return 'test:unit';
+}
+
+/** The test-tree files `entry` loads: itself and everything it imports, transitively. */
+function closureOf(entry: string, imports: TestTreeScan['imports']): Set<string> {
+  const seen = new Set<string>();
+  const pending = [entry];
+  for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
+    if (seen.has(file)) continue;
+    seen.add(file);
+    pending.push(...(imports.get(file) ?? []));
+  }
+  return seen;
+}
+
+/** The manifest name of the package a `packages/<dir>/…` path sits in. */
+function ownerOf(rel: string, nameOf: ReadonlyMap<string, string>): string | undefined {
+  return nameOf.get(/^packages\/([^/]+)\//.exec(rel)?.[1] ?? '');
+}
+
+/**
+ * Each reach of the scan, once per tier task of every test that loads its file.
+ * A test whose tier task its package does not have is a finding.
+ */
+function attributeTestReaches(scan: TestTreeScan, graph: WorkspaceGraph, taskGraph: TurboTaskGraph): { reaches: AttributedReach[]; problems: EdgeProblem[] } {
   const nameOf = new Map(graph.packages.map((pkg) => [pkg.dir, pkg.name] as const));
-  const reaches: BuiltOutputReach[] = [];
-  for (const rel of files) {
-    const owner = TEST_SOURCE.exec(rel)?.[1];
-    const ownerName = owner === undefined ? undefined : nameOf.get(owner);
-    if (ownerName === undefined || NOT_TEST_CODE.test(rel)) continue;
-    const text = readFileSync(safePath.join(repoRoot, rel), 'utf8');
-    for (const dir of reachedDirs(text, [SOURCE_REACH, SEGMENT_REACH], dirs)) {
-      reaches.push({ site: rel, task: `${ownerName}#${testTierOf(rel)}`, build: `${nameOf.get(dir) ?? dir}#build` });
+  const bySite = new Map<string, FileReach[]>();
+  for (const reach of scan.reaches) bySite.set(reach.site, [...(bySite.get(reach.site) ?? []), reach]);
+  const reaches: AttributedReach[] = [];
+  const problems: EdgeProblem[] = [];
+  for (const entry of scan.entries) {
+    const task = `${ownerOf(entry, nameOf) ?? '?'}#${testTierOf(entry)}`;
+    if (!taskGraph.has(task)) {
+      problems.push({ site: entry, message: `is a ${testTierOf(entry)} test, but turbo has no ${task} task: no script runs it.` });
+      continue;
+    }
+    for (const file of closureOf(entry, scan.imports)) {
+      for (const reach of bySite.get(file) ?? []) {
+        reaches.push({ site: reach.site, task, pkg: nameOf.get(reach.dir) ?? reach.dir, subpath: reach.subpath });
+      }
     }
   }
-  return reaches;
+  return { reaches, problems };
+}
+
+/** The scripts a command runs by name, transitively through `scripts`. */
+function scriptsRunBy(command: string, scripts: Readonly<Record<string, string>>): Set<string> {
+  const run = new Set<string>();
+  const pending = [command];
+  for (let text = pending.pop(); text !== undefined; text = pending.pop()) {
+    for (const match of text.matchAll(RUN_SCRIPT)) {
+      const name = match[1] ?? '';
+      if (run.has(name) || scripts[name] === undefined) continue;
+      run.add(name);
+      pending.push(scripts[name]);
+    }
+  }
+  return run;
+}
+
+/** The workspace packages (by name) whose `dist/` a script's text reads, with the path read. */
+function scriptReachesOf(text: string, dirs: ReadonlyMap<string, string>): Array<{ pkg: string; subpath: string }> {
+  return [...text.matchAll(SCRIPT_REACH)].flatMap((match) => {
+    const pkg = dirs.get(match[1] ?? '');
+    return pkg === undefined ? [] : [{ pkg, subpath: match[2] ?? 'dist' }];
+  });
+}
+
+/** Each reach written in a package script, once per turbo task that runs the script. */
+function attributeScriptReaches(graph: WorkspaceGraph, taskGraph: TurboTaskGraph): { reaches: AttributedReach[]; problems: EdgeProblem[] } {
+  const dirs = new Map(graph.packages.map((pkg) => [pkg.dir, pkg.name] as const));
+  const reaches: AttributedReach[] = [];
+  const problems: EdgeProblem[] = [];
+  for (const pkg of graph.packages) {
+    const scripts = (pkg.manifest['scripts'] ?? {}) as Record<string, string>;
+    const tasks = [...taskGraph.entries()].filter(([, task]) => task.package === pkg.name);
+    for (const [script, text] of Object.entries(scripts)) {
+      const site = `packages/${pkg.dir}/package.json (script "${script}")`;
+      const runners = tasks.filter(([, task]) => task.task === script || scriptsRunBy(task.command, scripts).has(script)).map(([id]) => id);
+      for (const { pkg: reached, subpath } of scriptReachesOf(text, dirs)) {
+        if (runners.length === 0) problems.push({ site, message: `reads ${reached}'s built output, but no turbo task runs this script, so nothing orders it.` });
+        for (const task of runners) reaches.push({ site, task, pkg: reached, subpath });
+      }
+    }
+  }
+  return { reaches, problems };
+}
+
+/** The leading segments of a glob that hold no glob syntax: `dist/skills/**` → `dist/skills`. */
+function staticPrefix(glob: string): string {
+  const segments = toForwardSlashAnyPlatform(glob.replace(/^\.\//, '')).split('/');
+  const end = segments.findIndex((segment) => /[*?[\]{}!]/.test(segment));
+  return segments.slice(0, end === -1 ? segments.length : end).join('/');
+}
+
+/**
+ * The tasks of `pkg` whose outputs cover `subpath` most specifically. An output
+ * covers a path inside its static prefix; a glob with no static prefix
+ * (`*.tsbuildinfo`) names no directory and covers nothing.
+ */
+function producersOf(taskGraph: TurboTaskGraph, pkg: string, subpath: string): string[] {
+  let best = 0;
+  let producers: string[] = [];
+  for (const [id, task] of taskGraph) {
+    if (task.package !== pkg) continue;
+    for (const prefix of task.outputs.map(staticPrefix)) {
+      const covers = prefix !== '' && (subpath === prefix || toForwardSlashAnyPlatform(subpath).startsWith(`${prefix}/`));
+      if (!covers || prefix.length < best) continue;
+      producers = prefix.length > best ? [id] : [...new Set([...producers, id])];
+      best = prefix.length;
+    }
+  }
+  return producers;
 }
 
 /** Whether turbo runs `target` before `from`: `target` is in `from`'s dependency closure. */
 function orders(taskGraph: TurboTaskGraph, from: string, target: string): boolean {
   const seen = new Set<string>();
-  const pending = [...(taskGraph.get(from) ?? [])];
+  const pending = [...(taskGraph.get(from)?.dependencies ?? [])];
   for (let task = pending.pop(); task !== undefined; task = pending.pop()) {
     if (task === target) return true;
     if (seen.has(task)) continue;
     seen.add(task);
-    pending.push(...(taskGraph.get(task) ?? []));
+    pending.push(...(taskGraph.get(task)?.dependencies ?? []));
   }
   return false;
 }
 
-/**
- * Why each reach is unordered, one message per reach turbo does not order.
- * A task or build turbo does not know is a finding, never a pass: a reach from
- * a task nothing runs, or into a package with no build, guards nothing.
- */
-export function unorderedReaches(reaches: readonly BuiltOutputReach[], taskGraph: TurboTaskGraph): Array<{ site: string; message: string }> {
-  const problems: Array<{ site: string; message: string }> = [];
-  for (const { site, task, build } of reaches) {
-    if (!taskGraph.has(task)) {
-      problems.push({ site, message: `reaches ${build}'s output, but turbo has no ${task} task to run it.` });
-    } else if (!taskGraph.has(build)) {
-      problems.push({ site, message: `${task} reaches the built output of a package turbo has no ${build} task for.` });
-    } else if (!orders(taskGraph, task, build)) {
+/** One problem per reach whose producing task turbo does not run first. */
+function unorderedReaches(reaches: readonly AttributedReach[], taskGraph: TurboTaskGraph): EdgeProblem[] {
+  const problems: EdgeProblem[] = [];
+  for (const { site, task, pkg, subpath } of reaches) {
+    const producers = producersOf(taskGraph, pkg, subpath);
+    if (producers.length === 0) {
+      problems.push({ site, message: `${task} reads ${pkg}'s ${subpath}, but no turbo task of ${pkg} declares an output covering it.` });
+    }
+    for (const producer of producers.filter((id) => !orders(taskGraph, task, id))) {
       problems.push({
         site,
         message:
-          `${task} executes ${build.replace('#build', '')}'s built dist/, but turbo does not order ${build} before it, ` +
-          'so a cold run reads a missing dist/ and a warm one a stale one. Add a `workspace:*` devDependency when that ' +
-          `makes no cycle (then \`^build\` covers it); otherwise add "${build}" to a "${task}" entry's dependsOn in turbo.json.`,
+          `${task} reads ${pkg}'s ${subpath}, which ${producer} produces, but turbo does not order ${producer} before it, ` +
+          'so a cold run reads a missing output and a warm one a stale one. Add a `workspace:*` devDependency when that ' +
+          `makes no cycle and the producer is a \`build\`; otherwise add "${producer}" to a "${task}" entry's dependsOn in turbo.json.`,
       });
     }
   }
   return problems;
 }
 
-/** turbo's dry-run JSON, as far as this module reads it. */
-interface TurboDryRun {
-  readonly tasks: ReadonlyArray<{ readonly taskId: string; readonly dependencies: readonly string[] }>;
+/**
+ * Every finding of the rule: unresolvable reaches, unrunnable tests, reaches
+ * with no reader or producer, and reaches turbo does not order.
+ */
+export function findBuiltOutputEdgeProblems(
+  repoRoot: string,
+  graph: WorkspaceGraph,
+  taskGraph: TurboTaskGraph,
+  files: readonly string[],
+): EdgeProblem[] {
+  const scan = scanTestTree(repoRoot, graph, files);
+  const tests = attributeTestReaches(scan, graph, taskGraph);
+  const scripts = attributeScriptReaches(graph, taskGraph);
+  const problems = [
+    ...scan.unresolved.map(({ site, expression }) => ({
+      site,
+      message: `\`${expression}\` reads some package's dist/, but which one is not static, so no rule can tell whose build it needs. Make the package segment a literal.`,
+    })),
+    ...tests.problems,
+    ...scripts.problems,
+    ...unorderedReaches([...scripts.reaches, ...tests.reaches], taskGraph),
+  ];
+  const unique = new Map(problems.map((problem) => [`${problem.site}\0${problem.message}`, problem] as const));
+  return [...unique.values()].sort((a, b) => compareCodeUnits(a.site, b.site) || compareCodeUnits(a.message, b.message));
 }
 
-function isTurboDryRun(value: unknown): value is TurboDryRun {
-  const tasks = (value as { tasks?: unknown } | null)?.tasks;
+/** One dry-run node, as far as this module reads it. */
+interface DryRunTask {
+  readonly taskId: string;
+  readonly task: string;
+  readonly package: string;
+  readonly command: string;
+  readonly dependencies: readonly string[];
+  /** `null` for a task declared with `outputs: []`. */
+  readonly outputs: readonly string[] | null;
+}
+
+const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === 'string');
+
+function isDryRunTask(value: unknown): value is DryRunTask {
+  if (typeof value !== 'object' || value === null) return false;
+  const task = value as Record<string, unknown>;
   return (
-    Array.isArray(tasks) &&
-    tasks.every((task: { taskId?: unknown; dependencies?: unknown }) =>
-      typeof task.taskId === 'string' && Array.isArray(task.dependencies) && task.dependencies.every((dep) => typeof dep === 'string'),
-    )
+    ['taskId', 'task', 'package', 'command'].every((key) => typeof task[key] === 'string') &&
+    isStringArray(task['dependencies']) &&
+    (task['outputs'] === null || isStringArray(task['outputs']))
   );
 }
 
+/** Whether `value` is a turbo dry run with at least one well-formed task. */
+export function isTurboDryRun(value: unknown): value is { tasks: DryRunTask[] } {
+  const tasks = (value as { tasks?: unknown } | null)?.tasks;
+  return Array.isArray(tasks) && tasks.length > 0 && tasks.every(isDryRunTask);
+}
+
 /**
- * turbo's task graph for {@link SCANNED_TASKS} across every package, from turbo
- * itself. Throws when turbo does not answer with the graph — a rule with no
- * graph has checked nothing.
+ * The task graph in `turbo run … --dry=json` output, without the placeholder
+ * nodes turbo lists for tasks a package does not have.
+ *
+ * @throws When the text is not JSON or not a dry run with tasks — a rule with
+ *   no graph has checked nothing
+ */
+export function parseTurboDryRun(stdout: string): TurboTaskGraph {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    throw new Error(`turbo --dry=json printed no JSON: ${JSON.stringify(stdout.slice(0, 200))}`);
+  }
+  if (!isTurboDryRun(parsed)) throw new Error('turbo --dry=json printed no task graph (no `tasks`, or a task missing its id, command, dependencies or outputs)');
+  const real = parsed.tasks.filter((task) => task.command !== NONEXISTENT);
+  return new Map(real.map(({ taskId, outputs, ...task }) => [taskId, { ...task, outputs: outputs ?? [] }] as const));
+}
+
+/** Longest tail of a tool's stderr worth carrying into a finding. */
+const STDERR_TAIL = 2000;
+/** turbo's dry run takes about a second; anything near this is hung. */
+const TURBO_TIMEOUT_MS = 60_000;
+
+/**
+ * turbo's task graph for every package, from the repository's own turbo.
+ *
+ * @throws When turbo cannot be run, fails, times out, or prints no graph —
+ *   carrying the tail of its stderr
  */
 export function readTurboTaskGraph(repoRoot: string): TurboTaskGraph {
   // The repo's own turbo, through its node launcher: `turbo` on PATH exists only
   // under `bun run`, and may be another version.
   const launcher = safePath.join(repoRoot, 'node_modules', 'turbo', 'bin', 'turbo');
-  const stdout = safeExecSync(process.execPath, [launcher, 'run', ...SCANNED_TASKS, '--dry=json'], {
+  const result = safeExecResult(process.execPath, [launcher, 'run', ...SCANNED_TASKS, '--dry=json'], {
     cwd: repoRoot,
     encoding: 'utf8',
+    timeout: TURBO_TIMEOUT_MS,
     // The graph is ~2 MB; spawnSync's 1 MiB default truncates rather than failing.
     maxBuffer: 64 * 1024 * 1024,
   });
-  const parsed: unknown = JSON.parse(String(stdout));
-  if (!isTurboDryRun(parsed) || parsed.tasks.length === 0) {
-    throw new Error('`turbo run --dry=json` returned no task graph');
+  if (result.error !== undefined || result.status !== 0) {
+    const stderr = String(result.stderr).trim().slice(-STDERR_TAIL);
+    const why = result.error?.message ?? `exit ${result.status.toString()}`;
+    const detail = stderr === '' ? '' : `:\n${stderr}`;
+    throw new Error(`turbo run --dry=json failed (${why})${detail}`);
   }
-  return new Map(parsed.tasks.map((task) => [task.taskId, task.dependencies] as const));
+  return parseTurboDryRun(String(result.stdout));
 }

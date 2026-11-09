@@ -19,7 +19,9 @@
     // They must NOT be listed as workspace deps of CLI — that creates a cycle.
     // Instead, declare the binary dependency here using package#task syntax so
     // turbo waits for CLI before building each adopter.
-    // To register a new adopter package, add a "<pkg>#build" entry below.
+    // A new adopter package needs the same edge on whichever task runs the binary
+    // ("<pkg>#build", or "<pkg>#build:skills" below); `checkBuiltOutputEdges`
+    // (validate-structure) fails until it is there.
     // `generated/**` is an output: `build` runs `generate:resources` into it and
     // `src/` imports from it, so a cache hit that restored only `dist/` left
     // `typecheck` (which depends on `^build`, not this package's own `build`)
@@ -145,10 +147,11 @@
     // integration and system config (and each package's `test:system` script) to
     // check its worker cap, so an edit to one must re-run it rather than replay its
     // cached pass. Scoped here, not in `globalDependencies`, which would make that
-    // edit cold for every task.
+    // edit cold for every task. `derived-artifact-rules.test.ts` scans every
+    // package's test tree for reads of built output, so those trees are inputs too.
     "@vibe-agent-toolkit/dev-tools#test:unit": {
       "dependsOn": ["^build", "build"],
-      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/*/vitest.integration.config.ts", "$TURBO_ROOT$/packages/*/vitest.system.config.ts", "$TURBO_ROOT$/packages/*/package.json"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/*/vitest.integration.config.ts", "$TURBO_ROOT$/packages/*/vitest.system.config.ts", "$TURBO_ROOT$/packages/*/package.json", "$TURBO_ROOT$/packages/*/test/**"],
       "outputs": [],
       "cache": true
     },
@@ -170,13 +173,15 @@
       "cache": true
     },
     // --- Suites that execute a sibling package's BUILT output ---
-    // A test that spawns or imports another package's `dist/` needs that package's
-    // `build` ordered first — and its hash folded in, so a rebuild re-runs the suite.
-    // A `workspace:*` devDependency does that through `^build` when it makes no
-    // cycle; each entry below would be one (the cli depends on resources and
+    // A test that spawns or imports a package's `dist/` needs the task that produces
+    // that output ordered first — and its hash folded in, so a rebuild re-runs the
+    // suite. A `workspace:*` devDependency does that through `^build` when it makes
+    // no cycle; each entry below would be one (the cli depends on resources and
     // rag-lancedb; lab depends on resources), so the edge is explicit instead.
-    // `checkBuiltOutputEdges` (validate-structure) derives every such reach from the
-    // test files and fails when turbo's own graph does not order it.
+    // `checkBuiltOutputEdges` (validate-structure) derives every such read from the
+    // test files and fails when turbo's own graph does not order its producer.
+    // A `<pkg>#<task>` entry REPLACES the generic task's settings, it does not merge
+    // with them: each copies the generic `dependsOn`, `outputs`, `cache` and `env`.
     //
     // rag-lancedb: `cli-dogfooding.system.test.ts` runs `packages/cli/dist/bin.js`.
     "@vibe-agent-toolkit/rag-lancedb#test:system": {
@@ -240,8 +245,10 @@
     //     what makes a change to cat-agents' packaged output re-run the gate. Without it a
     //     rewriter change to cat-agents' bundle replays a cached green from a run that never
     //     saw it — a cached verdict on work it could not have measured.
+    // The gate's FIRST tree is this package's own `dist/skills`, which `build:skills`
+    // declares as its output — so the gate waits on that task too, not just on `build`.
     "@vibe-agent-toolkit/vat-development-agents#test:system": {
-      "dependsOn": ["^build", "build", "@vibe-agent-toolkit/vat-example-cat-agents#build:skills"],
+      "dependsOn": ["^build", "build", "build:skills", "@vibe-agent-toolkit/vat-example-cat-agents#build:skills"],
       "outputs": [],
       "cache": true
     },

@@ -44,7 +44,7 @@ describe('createPatternFilter', () => {
         exclude: ['**/dist/**', '**/*.test.ts']
       });
 
-      expect(filter('packages/some-package/dist/index.js')).toBe(false);
+      expect(filter('packages/cli/dist/index.js')).toBe(false);
       expect(filter('src/utils.test.ts')).toBe(false);
       expect(filter('src/utils.ts')).toBe(true);
     });
