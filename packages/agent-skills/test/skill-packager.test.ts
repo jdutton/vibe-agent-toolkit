@@ -4,7 +4,7 @@ import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 
 import { allowUnusedIssues, createAllowUsageLedger, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { FS_FAULT_CODE, toForwardSlash, safePath, TREE_DEST_HOLDS_SOURCE_CODE, TREE_DEST_NOT_OWNED_CODE } from '@vibe-agent-toolkit/utils';
-import { buildHostileTree, CANNOT_DENY_READS, diffSnapshots, HOSTILE_NAMES, installFaultFs, snapshotTree } from '@vibe-agent-toolkit/utils/testing';
+import { buildHostileTree, CANNOT_DENY_READS, diffSnapshots, HOSTILE_NAMES, installFaultFs, snapshotTree, underTemp } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
 import { getResourceSubdirForFile } from '../src/content-type-routing.js';
@@ -1168,7 +1168,7 @@ describe('packageSkill - source-in-output check', () => {
         // somewhere this test may write (an absolute spelling is not), so the
         // survival assertion is on the directory the sink would actually hit,
         // not on a decorative `outside/victim` no title resolves to.
-        const reached = safePath.resolve(safePath.join(tree.root, 'pkg', 'dist', 'skills'), title);
+        const reached = safePath.resolve(safePath.join(underTemp(tree.root, tmp), 'pkg', 'dist', 'skills'), title);
         const plantable = reached.startsWith(`${tmp}/`);
         if (plantable) {
           await mkdir(reached, { recursive: true });

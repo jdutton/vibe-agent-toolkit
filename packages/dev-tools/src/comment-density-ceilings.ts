@@ -22,8 +22,9 @@ export const COMMENT_DENSITY_CEILINGS: Readonly<Record<string, number>> = {
   'cli': 43.2,
   // 29.7 → 31.7 when the 565-row unused-exports allowlist moved out of src
   // into a data file: those rows counted as CODE, so the seed was inflated by
-  // ~1,000 lines of data and the ratio rose with no prose added.
-  'dev-tools': 31.7,
+  // ~1,000 lines of data and the ratio rose with no prose added. Banked to
+  // 30.6 when the built-output path evaluator landed.
+  'dev-tools': 30.6,
   'discovery': 42.1,
   'gateway-mcp': 27.7,
   'lab': 51.1,

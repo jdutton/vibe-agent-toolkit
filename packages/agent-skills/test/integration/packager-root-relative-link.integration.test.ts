@@ -17,10 +17,12 @@
  *
  * The relative-link case is the control: it always worked, and must keep working.
  */
+import { writeFileSync } from 'node:fs';
+
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { createTempDir, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { cleanupTestTempDir, createTestTempDir, writeTestFile } from '../../../cli/test/system/test-common.js';
 import { packageSkill } from '../../src/skill-packager.js';
 
 const SKILL_MD = `---
@@ -44,16 +46,16 @@ interface PackagedFixture {
 async function packageFixture(tempDir: string): Promise<PackagedFixture> {
   // A config marker pins findProjectRoot() to tempDir, so `/docs/...` resolves
   // against the fixture project rather than whatever encloses the temp dir.
-  writeTestFile(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), '{}\n');
+  writeFileSync(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), '{}\n');
 
   const skillDir = safePath.join(tempDir, 'skills', 'demo');
   mkdirSyncReal(skillDir, { recursive: true });
   mkdirSyncReal(safePath.join(tempDir, 'docs', 'adrs'), { recursive: true });
   mkdirSyncReal(safePath.join(tempDir, 'docs', 'guides'), { recursive: true });
 
-  writeTestFile(safePath.join(skillDir, 'SKILL.md'), SKILL_MD);
-  writeTestFile(safePath.join(tempDir, 'docs', 'adrs', 'boundary.md'), '# Boundary ADR\n');
-  writeTestFile(safePath.join(tempDir, 'docs', 'guides', 'guide.md'), '# Guide\n');
+  writeFileSync(safePath.join(skillDir, 'SKILL.md'), SKILL_MD);
+  writeFileSync(safePath.join(tempDir, 'docs', 'adrs', 'boundary.md'), '# Boundary ADR\n');
+  writeFileSync(safePath.join(tempDir, 'docs', 'guides', 'guide.md'), '# Guide\n');
 
   const outputPath = safePath.join(tempDir, 'dist', 'demo');
   const result = await packageSkill(safePath.join(skillDir, 'SKILL.md'), {
@@ -75,12 +77,12 @@ describe('packager — root-relative links', () => {
   let tempDir = '';
 
   afterEach(() => {
-    if (tempDir) cleanupTestTempDir(tempDir);
+    if (tempDir) removeTempDir(tempDir);
     tempDir = '';
   });
 
   it('rewrites a root-relative link to its packaged counterpart instead of stripping it', async () => {
-    tempDir = createTestTempDir('root-relative-link-');
+    tempDir = createTempDir('root-relative-link-');
 
     const { body, hasErrors, unreferenced } = await packageFixture(tempDir);
 

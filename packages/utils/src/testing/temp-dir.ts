@@ -67,6 +67,28 @@ export function removeTempDir(dir: string): void {
 }
 
 /**
+ * Declare that a path handed over by code under test lies in a temp dir the
+ * test owns, and check it: `root` must be inside the host tmpdir and `path`
+ * must not leave `root`. It returns the canonical path — resolved, no `..`
+ * segment left — so what a test goes on to build from it is the place the
+ * check vouched for. The built-output rule reads the result as a temp path, so
+ * a `dist/` segment under it reads no workspace package's build.
+ *
+ * @param path - The path to vouch for (it need not exist yet)
+ * @param root - The temp directory the test minted that holds it
+ * @returns `path`, resolved
+ * @throws When `root` is outside the host tmpdir, or `path` outside `root`
+ */
+export function underTemp(path: string, root: string): string {
+  if (isUnderRoot(normalizedTmpdir(), root) !== 'inside') {
+    throw new Error(`underTemp: ${root} is not inside the host tmpdir ${normalizedTmpdir()}`);
+  }
+  const canonical = safePath.resolve(path);
+  if (isUnderRoot(root, canonical) === 'outside') throw new Error(`underTemp: ${path} is not inside the temp dir ${root}`);
+  return canonical;
+}
+
+/**
  * A factory that remembers every directory it minted, so one `afterEach`
  * removes them all.
  *

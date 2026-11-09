@@ -19,7 +19,9 @@
     // They must NOT be listed as workspace deps of CLI — that creates a cycle.
     // Instead, declare the binary dependency here using package#task syntax so
     // turbo waits for CLI before building each adopter.
-    // To register a new adopter package, add a "<pkg>#build" entry below.
+    // A new adopter package needs the same edge on whichever task runs the binary
+    // ("<pkg>#build", or "<pkg>#build:skills" below); `checkBuiltOutputEdges`
+    // (validate-structure) fails until it is there.
     // `generated/**` is an output: `build` runs `generate:resources` into it and
     // `src/` imports from it, so a cache hit that restored only `dist/` left
     // `typecheck` (which depends on `^build`, not this package's own `build`)
@@ -29,9 +31,12 @@
       "outputs": ["dist/**", "*.tsbuildinfo", "agents/**", "generated/**"],
       "cache": true
     },
+    // cat-agents' `build` does not package its skills — `build:skills` below does — so
+    // `dist/skills/**` is excluded here: a task that reads them must order `build:skills`,
+    // and `checkBuiltOutputEdges` judges producers by these declared outputs.
     "@vibe-agent-toolkit/vat-example-cat-agents#build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", "*.tsbuildinfo", "generated/**"],
+      "outputs": ["dist/**", "!dist/skills/**", "*.tsbuildinfo", "generated/**"],
       "cache": true
     },
     "build:skills": {
@@ -145,12 +150,35 @@
     // integration and system config (and each package's `test:system` script) to
     // check its worker cap, so an edit to one must re-run it rather than replay its
     // cached pass. Scoped here, not in `globalDependencies`, which would make that
-    // edit cold for every task.
+    // edit cold for every task. The scan of every package's test tree for reads of
+    // built output runs in the integration tier and in validate-structure, not here,
+    // so no package's test tree is an input of this task.
     "@vibe-agent-toolkit/dev-tools#test:unit": {
       "dependsOn": ["^build", "build"],
       "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/*/vitest.integration.config.ts", "$TURBO_ROOT$/packages/*/vitest.system.config.ts", "$TURBO_ROOT$/packages/*/package.json"],
       "outputs": [],
       "cache": true
+    },
+    // dev-tools: `built-output-scan.integration.test.ts` is the real-tree control of
+    // `checkBuiltOutputEdges`: it scans every package's test tree, `src/` test
+    // helpers, scripts and the vitest setup files, so an edit to any of them — or
+    // to the turbo config the rule reads beside them — must re-run it rather than
+    // replay a cached pass. The entry keeps the generic tier's env, outputs, cache
+    // and dependsOn, and its inputs as a superset: the parity check enforces it.
+    "@vibe-agent-toolkit/dev-tools#test:integration": {
+      "dependsOn": ["^build", "build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/*/test/**",
+        "$TURBO_ROOT$/packages/*/src/**",
+        "$TURBO_ROOT$/packages/*/package.json",
+        "$TURBO_ROOT$/packages/*/turbo.json",
+        "$TURBO_ROOT$/turbo.json",
+        "$TURBO_ROOT$/vitest.*setup.*"
+      ],
+      "outputs": [],
+      "cache": true,
+      "env": ["CI"]
     },
     "@vibe-agent-toolkit/lab#test:unit": {
       "dependsOn": ["^build", "build", "@vibe-agent-toolkit/cli#build"],
@@ -168,6 +196,39 @@
       "dependsOn": ["^build", "build"],
       "outputs": [],
       "cache": true
+    },
+    // --- Suites that execute a sibling package's BUILT output ---
+    // A test that spawns or imports a package's `dist/` needs the task that produces
+    // that output ordered first — and its hash folded in, so a rebuild re-runs the
+    // suite. A `workspace:*` devDependency does that through `^build` when it makes
+    // no cycle; each entry below would be one (the cli depends on resources and
+    // rag-lancedb; lab depends on resources), so the edge is explicit instead.
+    // `checkBuiltOutputEdges` (validate-structure) derives every such read from the
+    // test files and package scripts, and fails when turbo's own graph orders no task
+    // whose declared outputs cover it.
+    // A `<pkg>#<task>` entry REPLACES the generic task's settings, it does not merge
+    // with them: each copies the generic `dependsOn`, `outputs`, `inputs`, `cache` and
+    // `env` — `checkBuiltOutputEdges` fails a `<pkg>#test:<tier>` entry that drops one.
+    //
+    // rag-lancedb: `cli-dogfooding.system.test.ts` runs `packages/cli/dist/bin.js`.
+    "@vibe-agent-toolkit/rag-lancedb#test:system": {
+      "dependsOn": ["^build", "build", "@vibe-agent-toolkit/cli#build"],
+      "outputs": [],
+      "cache": true
+    },
+    // resources: `external-url-validation.system.test.ts` runs the cli's `dist/bin/vat.js`.
+    "@vibe-agent-toolkit/resources#test:system": {
+      "dependsOn": ["^build", "build", "@vibe-agent-toolkit/cli#build"],
+      "outputs": [],
+      "cache": true
+    },
+    // resources: `git-crawl-io-cost.integration.test.ts` preloads the lab's built I/O
+    // counter (`lab/dist/facets/io/counter.cjs`).
+    "@vibe-agent-toolkit/resources#test:integration": {
+      "dependsOn": ["^build", "build", "@vibe-agent-toolkit/lab#build"],
+      "outputs": [],
+      "cache": true,
+      "env": ["CI"]
     },
     // --- Native-memory serialisation ---
     // The root `test:integration` / `test:system` scripts ran turbo with
@@ -211,6 +272,8 @@
     //     what makes a change to cat-agents' packaged output re-run the gate. Without it a
     //     rewriter change to cat-agents' bundle replays a cached green from a run that never
     //     saw it — a cached verdict on work it could not have measured.
+    // The gate's FIRST tree is this package's own `dist/skills`, which its `build`
+    // (`vat build`) produces and declares under `dist/**`, so `build` orders it.
     "@vibe-agent-toolkit/vat-development-agents#test:system": {
       "dependsOn": ["^build", "build", "@vibe-agent-toolkit/vat-example-cat-agents#build:skills"],
       "outputs": [],
