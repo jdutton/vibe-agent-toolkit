@@ -8,10 +8,11 @@
  *   - Integration: forks on ALL platforms (native modules like lancedb + process.chdir() don't
  *     survive the threads pool — teardown SIGABRTs on Unix).
  *
- * Both unit and integration pools are capped at `maxWorkers: 2` on ALL platforms —
- * integration test files load native ML models (onnxruntime, transformers) + LanceDB's Arrow
- * engine, each ~1-3GB resident in NATIVE memory (not the JS heap, so provider.close() can't
- * reclaim it — only worker exit does). Leaving this unbounded on Unix once spawned
+ * Both unit and integration pools are capped at `maxWorkers: 2` on ALL platforms (one
+ * exception: `cli`'s integration tier, see `cliIntegrationTestWorkers`) — integration
+ * test files load native ML models (onnxruntime, transformers) + LanceDB's Arrow engine,
+ * each ~1-3GB resident in NATIVE memory (not the JS heap, so provider.close() can't reclaim
+ * it — only worker exit does). Leaving this unbounded on Unix once spawned
  * ~availableParallelism (~10) such workers at once, swapping the machine and OOM-killing
  * workers (surfaces as ERR_IPC_CHANNEL_CLOSED, not a test failure) — see commit 9f7ad9c9.
  *
@@ -31,6 +32,7 @@ import { fileURLToPath } from 'node:url';
 import { TestTierBudgetReporter } from './packages/dev-tools/src/test-tier-budget-reporter.js';
 
 const setupFilePath = fileURLToPath(new URL('./vitest.setup.js', import.meta.url));
+const forkRssBudgetSetupPath = fileURLToPath(new URL('./vitest.fork-rss-budget.setup.js', import.meta.url));
 const repoRoot = fileURLToPath(new URL('./', import.meta.url));
 
 type ReporterEntry = string | readonly [string, Record<string, unknown>] | TestTierBudgetReporter;
@@ -142,6 +144,8 @@ declare module 'vitest' {
   export interface ProvidedContext {
     tierTestTimeout: number;
     tierHookTimeout: number;
+    /** Provided only where `vitest.fork-rss-budget.setup.js` is installed — see {@link forkRssBudgetMb}. */
+    forkRssBudgetMb?: number;
   }
 }
 
@@ -163,7 +167,8 @@ export const unitTierTimeouts = tierTimeouts(unitTestTimeout, unitHookTimeout);
 export const unitPool = process.platform === 'win32' ? 'forks' : 'threads';
 
 /**
- * Worker cap, shared by every tier.
+ * Worker cap, shared by every tier — the one exception is a package that raises
+ * its integration tier's cap ({@link cliIntegrationTestWorkers}).
  *
  * One number now covers both pools. Under vitest 3 this was two knobs
  * (`maxForks` for the Windows fork pool, `maxThreads` for the Unix thread pool)
@@ -198,9 +203,8 @@ export const maxTestWorkers = 2;
  * at **166MB** (`dev-tools/test/local-eslint-rule-enablement.test.ts`), with the
  * since-split monolithic ESLint rule suite at 152MB and
  * `cli/test/commands/resources-check-payload.test.ts` at 151MB behind it. 512MB
- * is ~3.1x that, which covers the fork-reuse variance the heap guard's own
- * budget comment describes (a fork is reused across files, so a file's reading
- * depends on what ran before it in the same fork). Re-measure with the same
+ * is ~3.1x that, which covers the run-to-run variance the heap guard's own
+ * budget comment describes. Re-measure with the same
  * command if a suite approaches the cap; the number, not the file names, is
  * what this constant rests on.
  *
@@ -291,16 +295,67 @@ export function createUnitTestConfig(overrides: UnitTestConfigOverrides = {}) {
   };
 }
 
+/**
+ * Integration-tier worker count for a package whose forks hold NO native memory
+ * and whose suite is the tier's long pole: today, only `cli`.
+ *
+ * {@link maxTestWorkers} is 2 because a fork in `rag`, `rag-lancedb` or
+ * `resource-compiler` holds 1-3 GB of native memory. `cli` is ~80% of the tier's
+ * test time (the serial `coverage.yml` run: 568 s of 707 s, its 576 fault-matrix
+ * files most of it), so at 2 workers the whole `test:integration` step waits on
+ * `cli` alone, on 2 of a 4-vCPU CI runner's cores, once the other packages finish.
+ *
+ * Raising the cap is only safe while every fork stays small, and that is
+ * checked, not asserted: a config that raises it gets
+ * `vitest.fork-rss-budget.setup.js`, which fails a test file whose fork's peak
+ * RSS passes {@link forkRssBudgetMb}. RSS, not "no native addon": `vat rag clear`
+ * loads LanceDB's binding (~110 MB) to remove a directory, which is harmless —
+ * the 1-3 GB is the engine or a model at WORK. The check sees the fork's own
+ * process only. That no `cli` integration test spawns a model-loading `vat`
+ * (those runs are in the system tier, which keeps its own cap) is an assumption
+ * nothing enforces (not enforced); with 4 workers, up to 4 such children could
+ * run at once where 2 could before.
+ *
+ * 4 is the vCPU count of the GitHub-hosted ubuntu-latest and windows-latest
+ * runners the gate runs on — not `availableParallelism()`, which on a
+ * developer machine would fork a dozen at once beside the rest of the tier.
+ */
+export const cliIntegrationTestWorkers = 4;
+
+/**
+ * Peak resident memory one fork of a raised-cap integration tier may reach, in MB.
+ *
+ * Measured on macOS on `cli`'s heaviest integration files (a fault-matrix
+ * `top-level-build` shard, `projection-skill-extent-corpus`, `cli-basics`,
+ * `rag clear`): 93-389 MB per fork; not yet sampled on Windows. 1536 MB is the
+ * 1024 MB V8 heap cap ({@link integrationExecArgv}) plus 512 MB for everything
+ * outside it, so four in-budget forks come to at most 6 GB of a 16 GB runner.
+ * Beside them, under turbo's `--concurrency=4`, run up to three other packages'
+ * 2 forks each — at most one of them from the native-memory chain (2 x 1-3 GB):
+ * 10 forks on 4 vCPU at worst, where the cap of 2 everywhere allowed 8. A
+ * detector, not a limit: a file past it fails, named, after it ran.
+ */
+export const forkRssBudgetMb = 1536;
+
 export interface IntegrationTestConfigOverrides {
   exclude?: string[];
+  /**
+   * Raise the worker cap above {@link maxTestWorkers}. Doing so also installs the
+   * per-fork RSS budget ({@link forkRssBudgetMb}), so a package can only raise it
+   * while its forks stay small.
+   */
+  maxWorkers?: number;
 }
 
 /** Builds the `test` block for a package's own vitest.integration.config.ts. */
 export function createIntegrationTestConfig(overrides: IntegrationTestConfigOverrides = {}) {
+  const maxWorkers = overrides.maxWorkers ?? maxTestWorkers;
+  const raised = maxWorkers > maxTestWorkers;
+  const timeouts = tierTimeouts(platformTestTimeout, platformTestTimeout);
   return {
     globals: true,
     environment: 'node' as const,
-    setupFiles: [setupFilePath],
+    setupFiles: raised ? [setupFilePath, forkRssBudgetSetupPath] : [setupFilePath],
     include: ['test/**/*.integration.test.ts', 'src/**/*.integration.test.ts'],
     exclude: ['**/node_modules/**', '**/dist/**', ...(overrides.exclude ?? [])],
     server: { deps: { inline: inlineDeps } },
@@ -308,11 +363,12 @@ export function createIntegrationTestConfig(overrides: IntegrationTestConfigOver
     // hydration, temp-tree setup), so vitest's 10s default is too tight —
     // especially on slow Windows CI runners. Share the same platform-aware
     // ceiling the tests use.
-    ...tierTimeouts(platformTestTimeout, platformTestTimeout),
+    ...timeouts,
+    provide: raised ? { ...timeouts.provide, forkRssBudgetMb } : timeouts.provide,
     passWithNoTests: true,
     clearMocks: CLEAR_MOCKS_BEFORE_EACH_TEST,
     pool: integrationPool,
-    maxWorkers: maxTestWorkers,
+    maxWorkers,
     execArgv: integrationExecArgv,
     reporters: ['default'],
   };
