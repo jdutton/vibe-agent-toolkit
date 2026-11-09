@@ -193,8 +193,19 @@ const NO_FALLBACK_NOTE =
  * @returns Its canonical form
  */
 async function canonicalPath(path: string): Promise<string> {
-  const real = safePath.resolve(await realpath(path));
+  const real = await realPathOf(path);
   return process.platform === 'win32' ? real.toLowerCase() : real;
+}
+
+/**
+ * An operator-named path with its symlinks resolved, casing as the filesystem
+ * reports it — the one place this module follows links.
+ *
+ * @param path - An existing absolute path the operator supplied
+ * @returns Its real path, forward slashes
+ */
+async function realPathOf(path: string): Promise<string> {
+  return safePath.resolve(await realpath(path));
 }
 
 /**
@@ -474,7 +485,7 @@ async function locateDistBin(target: string): Promise<string> {
  * @throws {Error} when an ancestor's `package.json` cannot be read as JSON
  */
 async function distClosureCeiling(packageRoot: string): Promise<string> {
-  const real = safePath.resolve(await realpath(packageRoot));
+  const real = await realPathOf(packageRoot);
   const ancestors: string[] = [];
   for (let dir = real; ; dir = safePath.resolve(dir, '..')) {
     ancestors.push(dir);
