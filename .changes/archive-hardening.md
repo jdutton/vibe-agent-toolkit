@@ -209,7 +209,7 @@
   or a tip that cannot be fetched, is refused with `EXTERNAL_API_FAILED`. `--force` skips the check,
   and `--no-push` still fetches the full history. No action needed.
 - **A failed `vat claude marketplace publish` git step quoted git's stderr with the remote URL's
-  credentials in it** (a `GH_TOKEN` injected in CI included); they are now stripped. A
+  credentials in it**; they are now stripped. A
   `git ls-remote` killed by its timeout says it timed out instead of `exit 1`. No action needed.
 - **A refused symbolic link was named by its target, and a refused rename by the entry being moved.**
   The message now names the link, and both ends of the rename; no action needed.

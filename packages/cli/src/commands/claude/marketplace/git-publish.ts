@@ -63,10 +63,13 @@ export function createCommitMessage(
 }
 
 /**
- * Execute a git command and return the result.
+ * Execute a git command that does not talk to a remote, and return the result.
  * Refuses on non-zero exit code unless allowFailure is true: `refusal` (default
  * `RUN_INCOMPLETE` — a publish step stopped) names what the failure means, so
- * the one step that talks to the remote (the push) says `EXTERNAL_API_FAILED`.
+ * the steps that talk to the remote (ls-remote, fetch, push) say `EXTERNAL_API_FAILED`.
+ *
+ * `ls-remote`, `fetch` and `push` are refused here as a programming error: they go through
+ * {@link gitAtRemote}, the one route that carries the remote's authentication.
  *
  * 🔴 Running through `runGit` is a data-loss guard, not a style choice. Every
  * call here targets the private staging repo under the temp directory — a
@@ -76,9 +79,16 @@ export function createCommitMessage(
  * index and landing a commit, with `push` next in line. `runGit` scrubs by
  * default, so no call site here has to remember.
  */
-function git(args: string[], options: GitStepOptions): GitStepResult {
+export function git(args: string[], options: GitStepOptions): GitStepResult {
+  const subcommand = args[0];
+  if (subcommand !== undefined && REMOTE_SUBCOMMANDS.has(subcommand)) {
+    throw new Error(`git ${subcommand} talks to a remote: run it through gitAtRemote, not git()`);
+  }
   return gitStep(args, options, NO_REMOTE_ENV);
 }
+
+/** The subcommands this module runs that reach a remote — only {@link gitAtRemote} may run them. */
+const REMOTE_SUBCOMMANDS: ReadonlySet<string> = new Set(['ls-remote', 'fetch', 'push']);
 
 /**
  * Run a git command that talks to `remote`: `<before> -- <url> <after>`, with the remote's auth
@@ -186,29 +196,53 @@ function resolveRemote(remote: string, remoteFromConfig: boolean, cwd: string): 
  * URL is git's argv, which any local user reads with `ps`; a process's environment only its owner.
  * Appended after whatever numbered entries the operator already exports, which `runGit`'s scrub
  * deliberately keeps — overwriting entry 0 would drop their configuration.
+ *
+ * Two entries, not one. `http.extraheader` is multi-valued: every value that applies is sent, so
+ * an operator's own `http.https://github.com/.extraheader` (global or system config, or their own
+ * `GIT_CONFIG_*` entry) plus ours made two AUTHORIZATION headers, which GitHub answers with 400. An
+ * EMPTY value resets the list (git-config(1), `http.extraHeader`: "an empty value will reset the
+ * extra headers to the empty list"; http.c `http_options()`: `else if (!*value)
+ * string_list_clear(&extra_http_headers, 0)`), and env entries are read after every config file,
+ * so the reset and then the token header leave ours the only one. That reset also drops any other
+ * extraheader the operator set for github.com. One that git's urlmatch ranks MORE specific than
+ * `https://github.com/` (a per-repository key) outranks both of ours, and git skips ours for it —
+ * still one header, the operator's.
  */
-function githubTokenEnv(url: string): Record<string, string> {
+export function githubTokenEnv(url: string): Record<string, string> {
   const token = process.env['GH_TOKEN'] ?? process.env['GITHUB_TOKEN'];
   if (!token || !url.startsWith(GITHUB_HTTPS)) {
     return {};
   }
-  const index = inheritedConfigCount();
+  const reset = inheritedConfigCount();
+  const header = reset + 1;
+  const key = `http.${GITHUB_HTTPS}.extraheader`;
   const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
   return {
-    GIT_CONFIG_COUNT: String(index + 1),
-    [`GIT_CONFIG_KEY_${index}`]: `http.${GITHUB_HTTPS}.extraheader`,
-    [`GIT_CONFIG_VALUE_${index}`]: `AUTHORIZATION: basic ${basic}`,
+    GIT_CONFIG_COUNT: String(header + 1),
+    [`GIT_CONFIG_KEY_${reset}`]: key,
+    [`GIT_CONFIG_VALUE_${reset}`]: '',
+    [`GIT_CONFIG_KEY_${header}`]: key,
+    [`GIT_CONFIG_VALUE_${header}`]: `AUTHORIZATION: basic ${basic}`,
   };
 }
 
-/** The operator's own `GIT_CONFIG_COUNT`, read as git reads it (unset or empty is 0). */
+/**
+ * The operator's own `GIT_CONFIG_COUNT`: unset or empty is 0 (an empty count git itself would
+ * refuse, but ours replaces it). git parses the count with `git_parse_ulong` — base 0 plus unit
+ * suffixes, so `0x2`, `010` and `1k` are counts to git — and VAT does not reimplement that parser:
+ * anything but plain decimal is refused rather than guessed at.
+ */
 function inheritedConfigCount(): number {
   const raw = process.env['GIT_CONFIG_COUNT'] ?? '';
   if (raw === '') return 0;
-  if (!/^\d+$/.test(raw)) {
-    throw new CommandRefusalError('CONFIG_INVALID', `GIT_CONFIG_COUNT is "${raw}", which git rejects as a bogus count. Unset it or set it to a whole number.`);
+  const count = /^(?:0|[1-9]\d*)$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isSafeInteger(count)) {
+    throw new CommandRefusalError(
+      'USAGE_INVALID',
+      `GIT_CONFIG_COUNT is "${raw}": VAT cannot place its GitHub auth entries after a GIT_CONFIG_COUNT it does not read as plain decimal. Set it as plain decimal (e.g. 2), or unset it.`,
+    );
   }
-  return Number(raw);
+  return count;
 }
 
 /** `publish.remote` as a URL: a remote name is asked of the repository, a URL is taken as-is. */
@@ -256,17 +290,20 @@ export function deliverCommit(
     return;
   }
 
+  // Both sides fully qualified: git expands an unqualified destination by its prefix rules, so a
+  // remote TAG of the branch's name would be the ref pushed to (overwritten under --force), and a
+  // branch and tag of one name would make every push ambiguous.
+  const refspec = `refs/heads/${branch}:refs/heads/${branch}`;
+
   if (noPush) {
-    const fetchSpec = force
-      ? `+refs/heads/${branch}:refs/heads/${branch}`
-      : `refs/heads/${branch}:refs/heads/${branch}`;
-    git(['fetch', '--', tmpRepo, fetchSpec], { cwd });
+    // The staging repo is this fetch's remote: a local path, with nothing to authenticate.
+    gitAtRemote({ url: tmpRepo, authEnv: NO_REMOTE_ENV }, ['fetch'], [force ? `+${refspec}` : refspec], { cwd });
     logger.info(`   Created local branch "${branch}" (not pushed)`);
-    logger.info(`   To push later: git push ${remote} ${branch}`);
+    logger.info(`   To push later: git push ${remote} ${refspec}`);
     return;
   }
 
-  gitAtRemote(target, force ? ['push', '--force'] : ['push'], [`${branch}:${branch}`], { cwd: tmpRepo, refusal: 'EXTERNAL_API_FAILED' });
+  gitAtRemote(target, force ? ['push', '--force'] : ['push'], [refspec], { cwd: tmpRepo, refusal: 'EXTERNAL_API_FAILED' });
   logger.info(`   Pushed to ${redactUrlCredentials(target.url)} branch ${branch}`);
 }
 

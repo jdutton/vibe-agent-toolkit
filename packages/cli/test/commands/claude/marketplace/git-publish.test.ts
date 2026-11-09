@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createCommitMessage,
   deliverCommit,
+  git,
   publishToGitBranch,
 } from '../../../../src/commands/claude/marketplace/git-publish.js';
 import { refusalCodeOf } from '../../../../src/utils/command-refusal.js';
@@ -111,9 +112,28 @@ describe('git-publish', () => {
       expect(refusalCodeOf(thrownBy(() => deliverCommit('/staging', '/project', DELIVERY, at('https://example.invalid/r.git'))))).toBe('EXTERNAL_API_FAILED');
     });
 
+    it('tells a --no-push caller to push the fully qualified branch ref', () => {
+      gitBy({});
+      const said: string[] = [];
+      const capture = { ...logger, info: (message: string): void => { said.push(message); } };
+      deliverCommit('/staging', '/project', { ...DELIVERY, noPush: true, logger: capture }, at('https://example.invalid/r.git'));
+      expect(said).toContain('   To push later: git push origin refs/heads/claude-marketplace:refs/heads/claude-marketplace');
+    });
+
     it('refuses any other failed git step as RUN_INCOMPLETE', () => {
       gitExits(1, 'fetch failed');
       expect(refusalCodeOf(thrownBy(() => deliverCommit('/staging', '/project', { ...DELIVERY, noPush: true }, at('https://example.invalid/r.git'))))).toBe('RUN_INCOMPLETE');
+    });
+  });
+
+  // Only the remote-aware route may reach the network, so no network call can leave its auth behind.
+  describe('network guard', () => {
+    afterEach(() => { vi.mocked(runGit).mockReset(); });
+
+    it.each(['ls-remote', 'fetch', 'push'])('refuses `git %s` through the non-network helper, running nothing', (subcommand) => {
+      gitBy({});
+      expect(() => git([subcommand, '--', 'https://example.invalid/r.git'], { cwd: '/staging' })).toThrow(/gitAtRemote/);
+      expect(vi.mocked(runGit)).not.toHaveBeenCalled();
     });
   });
 
@@ -207,7 +227,9 @@ describe('git-publish', () => {
         gitBy({});
         deliverCommit('/staging', '/project', DELIVERY, at(REMOTE));
         deliverCommit('/staging', '/project', { ...DELIVERY, force: true }, at(REMOTE));
-        const refspec = 'claude-marketplace:claude-marketplace';
+        // Both sides fully qualified: an unqualified destination is matched by git's prefix rules,
+        // so a remote tag of the branch's name would be the one pushed to (or make the push ambiguous).
+        const refspec = 'refs/heads/claude-marketplace:refs/heads/claude-marketplace';
         expect(calls('push')).toEqual([['push', '--', REMOTE, refspec], ['push', '--force', '--', REMOTE, refspec]]);
       });
 
@@ -262,7 +284,12 @@ describe('git-publish', () => {
           for (const [args] of vi.mocked(runGit).mock.calls) {
             expect(args.join(' ')).not.toContain(SECRET);
           }
-          const auth = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: EXTRAHEADER, GIT_CONFIG_VALUE_0: HEADER };
+          // Entry 0 resets the extraheader list, so a header configured elsewhere is not sent twice.
+          const auth = {
+            GIT_CONFIG_COUNT: '2',
+            GIT_CONFIG_KEY_0: EXTRAHEADER, GIT_CONFIG_VALUE_0: '',
+            GIT_CONFIG_KEY_1: EXTRAHEADER, GIT_CONFIG_VALUE_1: HEADER,
+          };
           for (const subcommand of ['ls-remote', 'fetch', 'push']) {
             expect(envOf(subcommand)).toEqual([auth]);
           }
@@ -278,17 +305,27 @@ describe('git-publish', () => {
           vi.stubEnv('GIT_CONFIG_COUNT', '2');
           gitBy({});
           await publish({ remote: GITHUB_REMOTE });
-          expect(envOf('ls-remote')).toEqual([{ GIT_CONFIG_COUNT: '3', GIT_CONFIG_KEY_2: EXTRAHEADER, GIT_CONFIG_VALUE_2: HEADER }]);
+          expect(envOf('ls-remote')).toEqual([{
+            GIT_CONFIG_COUNT: '4',
+            GIT_CONFIG_KEY_2: EXTRAHEADER, GIT_CONFIG_VALUE_2: '',
+            GIT_CONFIG_KEY_3: EXTRAHEADER, GIT_CONFIG_VALUE_3: HEADER,
+          }]);
         });
 
-        it('refuses a GIT_CONFIG_COUNT git itself would reject as CONFIG_INVALID, asking the remote nothing', async () => {
-          vi.stubEnv('GH_TOKEN', SECRET);
-          vi.stubEnv('GIT_CONFIG_COUNT', 'two');
-          gitBy({});
-          const error = await rejectionOf(publish({ remote: GITHUB_REMOTE }));
-          expect(refusalCodeOf(error)).toBe('CONFIG_INVALID');
-          expect(calls('ls-remote')).toEqual([]);
-        });
+        // git reads the count with strtoumax base 0 plus unit suffixes; VAT does not reimplement that
+        // parser, so every spelling but plain decimal is refused rather than guessed at.
+        it.each(['two', '0x2', '010', '1k', ' 2', '2 ', '+2', '-1', '99999999999999999999'])(
+          'refuses a GIT_CONFIG_COUNT of %j it does not read as plain decimal as USAGE_INVALID, asking the remote nothing',
+          async (count) => {
+            vi.stubEnv('GH_TOKEN', SECRET);
+            vi.stubEnv('GIT_CONFIG_COUNT', count);
+            gitBy({});
+            const error = await rejectionOf(publish({ remote: GITHUB_REMOTE }));
+            expect(refusalCodeOf(error)).toBe('USAGE_INVALID');
+            expect((error as Error).message).toContain('plain decimal');
+            expect(calls('ls-remote')).toEqual([]);
+          },
+        );
 
         it('sends no auth header to a remote that is not https://github.com/', async () => {
           vi.stubEnv('GH_TOKEN', SECRET);
