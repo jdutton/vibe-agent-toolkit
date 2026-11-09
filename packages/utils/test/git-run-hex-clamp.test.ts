@@ -38,3 +38,16 @@ describe('runGitBytes maxBuffer', () => {
     expect(spawnedMaxBuffer()).toBe(1024);
   });
 });
+
+describe('runGitBytes stderr', () => {
+  // Told by its shape: a message is kept whatever words the executor put around the failure.
+  it('keeps a spawn failure\'s message that is not hex, worded apart from the error', () => {
+    spawned.mockReturnValueOnce({ success: false, exitCode: -1, stdout: '', stderr: 'spawnSync git ENOENT', error: new Error('git is not installed') } as never);
+    expect(runGitBytes(['cat-file', '--batch']).stderr).toBe('spawnSync git ENOENT');
+  });
+
+  it('decodes what git wrote, which crossed the transport as hex', () => {
+    spawned.mockReturnValueOnce({ success: false, exitCode: 128, stdout: '', stderr: Buffer.from('fatal: bad object\n').toString('hex') } as never);
+    expect(runGitBytes(['cat-file', '--batch']).stderr).toBe('fatal: bad object');
+  });
+});

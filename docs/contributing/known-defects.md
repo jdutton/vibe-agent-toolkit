@@ -644,7 +644,7 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   constructor). Every other `VatError`
   message that interpolates a path — a local skill source, a config path, an archive entry —
   prints it as it is, and the next one written can forget. The link walk shows names unquoted
-  (set off by the message), so a name whose characters ARE a literal `‮` reads like one that
+  (set off by the message), so a name whose characters ARE a literal `\u202e` reads like one that
   holds the override; the git source's own refusals quote them and are unambiguous.
 - **Traced in code**, not reproduced against the built CLI.
 - **Where:** every `new VatError(` / `super(` whose message interpolates a path —

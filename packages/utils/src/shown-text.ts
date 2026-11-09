@@ -13,7 +13,8 @@
  *   (`"` and `\` included) as itself. For text already set off in a message, and for prose a
  *   process wrote.
  * - {@link shownName} — quoted, `"` and `\` escaped too, and bytes that are not UTF-8 spelled byte
- *   by byte. Unambiguous: two different names never show the same.
+ *   by byte. Unambiguous up to the length cap: two different names never show the same unless both
+ *   run past {@link SHOWN_LIMIT}, the same up to it and by the same count after.
  */
 
 import { decodeUtf8Exactly } from './text-content.js';
@@ -26,24 +27,29 @@ const BACKSLASH = '\\';
  * than by a hand-kept list: a control (`Cc` — a terminal acts on C0, C1 and DEL), a format character
  * (`Cf` — bidirectional marks, zero-width and invisible characters, the tag characters that carry
  * hidden text to a model reading the message), a lone surrogate (`Cs` — it prints as U+FFFD, the
- * same as a real one), a line or paragraph separator, a private-use character, an unassigned code
- * point or noncharacter (`Cn` — what a later Unicode may make invisible). {@link UNSHOWABLE_RANGES}
- * adds the invisibles outside them.
+ * same as a real one), a line or paragraph separator, a space separator other than the space itself
+ * (`Zs` — a no-break or an en space reads as a space, so two names would show the same), a
+ * private-use character, an unassigned code point or noncharacter (`Cn` — what a later Unicode may
+ * make invisible). {@link UNSHOWABLE_RANGES} adds the invisibles outside them.
  */
-const UNSHOWABLE_CATEGORY = /^[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\p{Co}\p{Cn}]$/u;
+const UNSHOWABLE_CATEGORY = /^[\p{Cc}\p{Cf}\p{Cs}\p{Zs}\p{Zl}\p{Zp}\p{Co}\p{Cn}]$/u;
 
 /** The invisibles {@link UNSHOWABLE_CATEGORY} does not name, as inclusive code-point ranges. */
 const UNSHOWABLE_RANGES: ReadonlyArray<readonly [number, number]> = [
   [0x3_4f, 0x3_4f], // combining grapheme joiner
   [0x11_5f, 0x11_60], // Hangul choseong and jungseong fillers
+  [0x17_b4, 0x17_b5], // Khmer inherent vowels
+  [0x28_00, 0x28_00], // braille pattern blank
   [0x31_64, 0x31_64], // Hangul filler
   [0xff_a0, 0xff_a0], // halfwidth Hangul filler
   [0xfe_00, 0xfe_0f], // variation selectors
+  [0x1_d1_59, 0x1_d1_59], // musical symbol null notehead
   [0xe_01_00, 0xe_01_ef], // variation selectors supplement
 ];
 
 /** Whether a character must not reach a message as itself — see {@link UNSHOWABLE_CATEGORY}. */
 function unshowable(character: string, code: number): boolean {
+  if (character === ' ') return false;
   return UNSHOWABLE_CATEGORY.test(character) || UNSHOWABLE_RANGES.some(([low, high]) => code >= low && code <= high);
 }
 
@@ -67,7 +73,8 @@ function quotedByte(byte: number): string {
 /**
  * How much of one text a message shows: past it, the rest is counted, not shown, so a name or a
  * link text a repository made megabytes long costs a message no more than this. Twice the longest
- * path a Linux host resolves (4096 bytes), so no real path is cut.
+ * path a POSIX host resolves (4096 bytes on Linux); a Windows long path (`\\?\`, up to 32,767 units)
+ * past it is cut, its length still told.
  */
 const SHOWN_LIMIT = 8192;
 

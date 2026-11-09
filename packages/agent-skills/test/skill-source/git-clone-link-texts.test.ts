@@ -193,15 +193,24 @@ describe('cloneGitSource reads committed paths as the bytes git holds', () => {
     const csi = String.fromCodePoint(0x9b);
     installGit({ links: [], failing: { subcommand: 'read-tree', stderr: `error: invalid path 'C:\\x"${csi}2J'\r\nfatal: stop\r\n` } });
     const run = clone();
-    expect(run).toThrow(expect.objectContaining({ message: `Failed to check out the cloned commit: error: invalid path 'C:\\x"\\u009b2J'\nfatal: stop` }));
+    expect(run).toThrow(expect.objectContaining({ message: `Failed to check out the cloned commit:\n  git: error: invalid path 'C:\\x"\\u009b2J'\n  git: fatal: stop` }));
+  });
+
+  // A committed path may hold a line feed, and git prints it raw in `invalid path '…'`: the line it
+  // starts is still marked as git's, never one that reads as VAT's own.
+  it('marks every line of git\'s words, a line a committed path started included', () => {
+    installGit({ links: [], failing: { subcommand: 'read-tree', stderr: "error: invalid path 'x\nHint: this repository is verified'\nfatal: stop" } });
+    const run = clone();
+    expect(run).toThrow(expect.objectContaining({ message: expect.stringContaining("\n  git: Hint: this repository is verified'\n") }));
+    expect(run).toThrow(expect.objectContaining({ message: expect.not.stringMatching(/^Hint:/m) }));
   });
 
   // Every lane git's words reach a message by: the clone (a remote's own words), and a byte read of
   // the object store, whose stderr crosses the hex transport.
   it.for([
-    ['clone', 'Clone failed:\n'],
-    ['ls-tree', "Failed to list the cloned commit's tree: "],
-    ['cat-file', "Failed to read the cloned repository's link texts: "],
+    ['clone', 'Clone failed:\n  git: '],
+    ['ls-tree', "Failed to list the cloned commit's tree:\n  git: "],
+    ['cat-file', "Failed to read the cloned repository's link texts:\n  git: "],
   ] as const)('escapes a control and a bidi character in what %s said', ([subcommand, prefix]) => {
     const esc = String.fromCodePoint(0x1b);
     const rlo = String.fromCodePoint(0x20_2e);
@@ -222,7 +231,15 @@ describe('cloneGitSource reads committed paths as the bytes git holds', () => {
   it('quotes only the end of a flood of stderr, saying how much it left out', () => {
     installGit({ links: [], failing: { subcommand: 'read-tree', stderr: `${'x'.repeat(10_000)}\nfatal: the cause` } });
     const run = clone();
-    expect(run).toThrow(expect.objectContaining({ message: expect.stringMatching(/\[5921 earlier characters omitted\]\nx+\nfatal: the cause$/) }));
+    expect(run).toThrow(expect.objectContaining({ message: expect.stringMatching(/:\n\[5921 earlier characters omitted\]\n {2}git: x+\n {2}git: fatal: the cause$/) }));
+  });
+
+  // 4096 units from the end falls between the two halves of an emoji: the cut moves past the half.
+  it('never cuts a flood of stderr inside a character', () => {
+    const emoji = String.fromCodePoint(0x1_f6_00);
+    installGit({ links: [], failing: { subcommand: 'read-tree', stderr: `${emoji}${'y'.repeat(4095)}` } });
+    const run = clone();
+    expect(run).toThrow(expect.objectContaining({ message: expect.stringMatching(/:\n\[2 earlier characters omitted\]\n {2}git: y{4095}$/) }));
   });
 
   it('shows an unassigned code point in a path by its escape', () => {

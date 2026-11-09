@@ -110,12 +110,12 @@ export class FsFaultError extends VatError {
     // win32 namespace prefix is already gone: `fsFaultOf` reads every errno path without it.)
     const path = facts.path === undefined ? undefined : toForwardSlash(facts.path);
     const movedFrom = facts.movedFrom === undefined ? undefined : toForwardSlash(facts.movedFrom);
-    const ends = [movedFrom, path].filter((end) => end !== undefined).join(' -> ');
+    // The one place a fault gets its message, so the one place its paths are escaped, each on its
+    // own: an action names a path too (`resolve the symbolic link <link>`), and a path may be a
+    // name a repository or an archive chose. The fields are not escaped.
+    const ends = [movedFrom, path].filter((end) => end !== undefined).map((end) => visibleText(end)).join(' -> ');
     const where = ends === '' ? '' : `: ${ends}`;
-    // The one place a fault gets its message, so the one place its paths are escaped: an action
-    // names a path too (`resolve the symbolic link <link>`), and a path may be a name a
-    // repository or an archive chose. The fields stay as the OS spelled them.
-    super(FS_FAULT_CODE, `Could not ${visibleText(facts.action)} (${facts.errno})${visibleText(where)}`, { cause: facts.cause });
+    super(FS_FAULT_CODE, `Could not ${visibleText(facts.action)} (${facts.errno})${where}`, { cause: facts.cause });
     this.side = facts.side;
     this.faultClass = facts.faultClass;
     this.errno = facts.errno;

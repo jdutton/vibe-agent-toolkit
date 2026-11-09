@@ -70,6 +70,14 @@ import { decodeTextContent } from './text-content.js';
  */
 const DEFAULT_MAX_BUFFER = 64 * 1024 * 1024;
 
+/** The digits the hex transport writes, and nothing else (two per byte: see {@link isHexText}). */
+const HEX_DIGITS = /^[\da-f]*$/;
+
+/** Whether `text` is what the hex transport writes: pairs of lowercase hex digits. */
+function isHexText(text: string): boolean {
+  return text.length % 2 === 0 && HEX_DIGITS.test(text);
+}
+
 /**
  * The most bytes {@link runGitBytes} can carry: its transport spells each byte as two hex
  * characters, and the spawn THROWS (rather than reporting) when it builds a string longer than
@@ -213,8 +221,9 @@ export interface GitBytesRunResult extends Omit<GitRunResult, 'stdout'> {
  * string, a path comes back spelled otherwise than the checkout writes it, and a stream framed by
  * byte counts (`cat-file --batch`) changes length under the decode — a blob can then plant the
  * next object's header. Decoding is the caller's judgment, made on the bytes, never the
- * transport's. `local/no-text-git-object-read` reports an object-store argv handed to anything
- * but this function; what a caller does with the bytes afterwards is its own judgment.
+ * transport's. `local/no-text-git-object-read` reports an object-store argv literal anywhere but
+ * inline as this function's first argument; what a caller does with the bytes afterwards is its
+ * own judgment.
  *
  * Mechanically: the spawn runs with `encoding: 'hex'`, a binary-to-text codec, so its strings
  * carry the bytes exactly and are turned back into them here. The spawn encodes `input` by the
@@ -235,8 +244,9 @@ export function runGitBytes(args: readonly string[], options: Omit<GitRunOptions
   const hexInput = input === undefined ? {} : { input: Buffer.from(input, 'utf8').toString('hex') };
   const capped = { maxBuffer: Math.min(maxBuffer, HEX_MAX_BUFFER), trim: false };
   const result = execute(args, { ...rest, ...hexInput, ...capped }, 'hex');
-  // A spawn-level failure with no word from git arrives as the failure's own message, not as hex.
-  const spawnMessage = result.stderr === result.error?.message;
+  // A spawn-level failure with no word from git arrives as the failure's own message, not as hex:
+  // told apart by its shape, never by matching the executor's wording.
+  const spawnMessage = !isHexText(result.stderr);
   return {
     ...result,
     stdout: Buffer.from(result.stdout, 'hex'),

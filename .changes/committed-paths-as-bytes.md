@@ -11,14 +11,16 @@
   and invisible characters in a path, a link's text or git's own words are shown as escapes
   (`\uHHHH`, `\u{HHHHH}` past U+FFFF; bytes that are not UTF-8 as `\xHH`), and a name past 8192
   characters is cut, with how much was left out. Covered: a git source's refusals before checkout
-  (names quoted, git's own words keeping their line breaks), the link walk's and the followed
+  (names quoted; each line of what git said shown on its own line behind `git:`, so a line a
+  repository wrote cannot pass as VAT's), the link walk's and the followed
   walk's refusals, staging's symlink refusal, a refused directory listing, and every
   `FsFaultError`. Other refusals that show a path still print it as it is.
 
 ### Added
 
-- **(library) `runGitBytes()` on `@vibe-agent-toolkit/utils/git`** — `runGit()` with stdout as the
-  bytes git wrote, for reads of the object store — and **`decodeUtf8Exactly()`, `shownName()` and
-  `visibleText()`** on the barrel. The opt-in rule `@vibe-agent-toolkit/no-text-git-object-read`
-  reports an `ls-tree`, `cat-file`, `diff-tree`, `rev-list` or `show` argv handed to a git runner
-  other than `runGitBytes()`.
+- **(library) `runGitBytes()` and its `GitBytesRunResult` on `@vibe-agent-toolkit/utils/git`** —
+  `runGit()` with stdout as the bytes git wrote, for reads of the object store — and
+  **`decodeUtf8Exactly()`, `shownName()` and `visibleText()`** on the barrel. The opt-in rule
+  `@vibe-agent-toolkit/no-text-git-object-read` reports an `ls-tree`, `cat-file`, `diff-tree`,
+  `rev-list` or `show` argv literal that reaches a call other than as `runGitBytes()`'s first
+  argument, written there inline.

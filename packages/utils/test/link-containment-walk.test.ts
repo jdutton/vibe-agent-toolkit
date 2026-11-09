@@ -18,6 +18,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { isUnresolvableLinkError } from '../src/errors/errno-table.js';
 import { FS_FAULT_CODE } from '../src/errors/fs-fault.js';
 import { safePath, toForwardSlash, toForwardSlashAnyPlatform } from '../src/path-core.js';
+import { visibleText } from '../src/shown-text.js';
 import { HOST_PATH_FLAVOR, type PathFlavor } from '../src/tree-change/link-chain.js';
 
 /** One entry of the fake tree, by its real path. */
@@ -212,6 +213,24 @@ describe('refuseEscapingLinks, a tree that will be relocated', () => {
     expect(refusal?.message).toContain(why);
   });
 
+  // Every way a relocated tree's link is refused shows the link's name and text by their escapes.
+  const esc = String.fromCodePoint(0x1b);
+  const rlo = String.fromCodePoint(0x20_2e);
+  it.each([
+    ['an absolute target', { [`skill/a${rlo}`]: '-> ' + safePath.join(ROOT, 'outside', 'k' + esc) }, 'k' + esc],
+    ['a climb out', { [`skill/c${rlo}`]: `-> ../../outside/k${esc}` }, `../../outside/k${esc}`],
+    ['a target through another link', { [`skill/al${rlo}`]: '-> docs', 'skill/via': `-> al${rlo}/x${esc}.md`, 'skill/docs/x.md': 'file' }, `al${rlo}`],
+    ['a target that is not there', { 'skill/gone': `-> miss${esc}.md` }, `miss${esc}.md`],
+  ])('shows %s by escapes, never raw', (_what, links, shown) => {
+    plant({ ...SKILL, ...links });
+
+    const message = refusalOf(relocated)?.message ?? '';
+
+    expect(message).toContain(visibleText(shown));
+    expect(message).not.toContain(esc);
+    expect(message).not.toContain(rlo);
+  });
+
   // A text naming a link it ends AT walks inside; only the kernel, following it, finds the cycle.
   it('refuses a link the kernel cannot resolve though its text walks inside — a cycle', () => {
     plant({ ...SKILL, 'skill/ping': '-> pong', 'skill/pong': '-> ping' });
@@ -266,6 +285,18 @@ describe('kernelRefusal', () => {
     refusedStat.set(link, 'EACCES');
 
     expect(() => kernelRefusal({ ...relocated, side: 'environment' }, unit, link, '../SKILL.md')).toThrow(expect.objectContaining({ code: FS_FAULT_CODE, side: 'environment' }));
+  });
+
+  it('shows the text of a link to nothing by its escapes, never raw', () => {
+    plant({ ...SKILL, 'skill/docs/up.md': '-> ../SKILL.md' });
+    refusedStat.set(link, 'ENOENT');
+    const esc = String.fromCodePoint(0x1b);
+
+    const text = `..${esc}/SKILL.md`;
+    const refusal = kernelRefusal(relocated, unit, link, text) ?? '';
+
+    expect(refusal).toContain(`(${visibleText(text)} does not resolve`);
+    expect(refusal).not.toContain(esc);
   });
 
   it('throws an error that is no filesystem errno raw', () => {

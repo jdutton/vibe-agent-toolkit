@@ -219,6 +219,23 @@ describe('cloneGitSource refuses a committed link by its text before checkout, o
     for (const code of [0x20_2e, 0x9b]) expect((thrown as Error).message).not.toContain(String.fromCodePoint(code));
   });
 
+  // A repository chooses how many names its root holds: the refusal lists 50 and counts the rest.
+  it('lists only the first 50 names of a crowded root, counting the rest', () => {
+    const entries = Array.from({ length: 53 }, (_, index) => ({ mode: '100644', quotedPath: `n${index.toString().padStart(2, '0')}`, bytes: Buffer.from('x\n') }));
+    const { clone } = cloneIndexEntries(entries);
+    let thrown: unknown;
+    try {
+      clone();
+    } catch (error) {
+      thrown = error;
+    }
+    const message = (thrown as Error).message;
+    // 53 committed names and the clone's own `.git`.
+    const listed = message.slice(message.indexOf('Repo root contains: '));
+    expect(listed.match(/"[^"]*"/g)).toHaveLength(50);
+    expect(listed.endsWith(' and 4 more.')).toBe(true);
+  });
+
   it('checks out a commit whose links\' texts stay inside (positive control)', () => {
     const { clone } = cloneShapedInto(noShape, 'plugins/foo', { 'plugins/foo/alias.md': 'SKILL.md' });
     expect(clone().targetDir).toMatch(/plugins\/foo$/);

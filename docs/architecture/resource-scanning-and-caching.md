@@ -406,6 +406,11 @@ the same cost; the resources lane merely pointed the projection at trees big eno
 error.** Like §2.1 this is a binding statement rather than a note — this repository has no ADRs, so a
 decision lives in an architecture document or in the docstring of the thing it governs.
 
+A NAME is not file content and has its own decode, in the same module: `decodeUtf8Exactly()` turns
+bytes git holds for a committed path or a link's text into the text they spell, or into nothing when
+they are not UTF-8 — no BOM sniffed or stripped, no U+FFFD substituted — so a name is judged as
+written or refused, never re-spelled.
+
 #### Why the seam is a `utils` primitive and not a `resources` one
 
 Bytes-to-text is a pure function of its argument: it knows nothing about content keys, parse caches

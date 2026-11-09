@@ -86,7 +86,7 @@ function objectStoreRead(cloneDir: string, input?: string): Parameters<typeof ru
  */
 function objectStoreBytes(result: GitBytesRunResult, subcommand: string, what: string): Buffer {
   refuseTimedOut([subcommand], result);
-  if (!result.ok) throw new GitCloneFailedError(`Failed to ${what}: ${gitSaid(result.stderr)}`);
+  if (!result.ok) throw new GitCloneFailedError(`Failed to ${what}:${gitSaid(result.stderr)}`);
   return result.stdout;
 }
 
@@ -154,8 +154,11 @@ export function cloneGitSource(parsed: ParsedGitUrl, targetTempdir: string): Git
   const placement = subpathPlacement(targetTempdir, targetDir);
   if (placement === 'outside') throw subpathEscapes(subpath);
   if (placement === 'absent') {
-    // The names are the repository's own, checked out: shown, never printed raw.
-    const topLevel = readdirSync(targetTempdir).map((name) => shownName(name)).join(', ');
+    // The names are the repository's own, checked out: shown, never printed raw, and only the
+    // first {@link LISTED_NAMES_LIMIT} of them, so a root of a million entries is not the message.
+    const names = readdirSync(targetTempdir);
+    const left = names.length - LISTED_NAMES_LIMIT;
+    const topLevel = names.slice(0, LISTED_NAMES_LIMIT).map((name) => shownName(name)).join(', ') + (left > 0 ? ` and ${left.toString()} more` : '');
     throw new VatError(
       GIT_SUBPATH_INVALID_CODE,
       `Subpath not found in cloned repo: ${subpath ?? '(none)'}. Repo root contains: ${topLevel}.`,
@@ -217,22 +220,34 @@ function committedLinks(cloneDir: string, commit: string): CommittedLink[] {
 /** The fields of an `ls-tree` record before its TAB: a mode, an object type, the object (SHA-1 or SHA-256). */
 const TREE_ENTRY = /^(\d{6}) (?:blob|tree|commit) ([\da-f]{40}|[\da-f]{64})$/;
 
+/** How many of the repository root's names an absent subpath's refusal lists. */
+const LISTED_NAMES_LIMIT = 50;
+
 /** How much of git's stderr a message quotes ({@link gitSaid}): its end, where git puts the cause. */
 const GIT_SAID_LIMIT = 4096;
 
+/** What starts every line of git's words in a message: none of them can pass as VAT's own. */
+const GIT_LINE = '\n  git: ';
+
 /**
- * What git said on stderr, as a message shows it: line by line (LF or CRLF), each line
- * `visibleText` — unquoted, so `"` and `\` stay as git wrote them.
- * git quotes some names it prints and not others, and a remote's own words reach clone's stderr.
+ * What git said on stderr, as a message shows it after a colon: line by line (LF or CRLF), each on
+ * its own line behind {@link GIT_LINE}, each `visibleText` — unquoted, so `"` and `\` stay as git
+ * wrote them. The marker, not the line break, sets git's words off: a line break in them may not
+ * be git's own (git prints a committed path raw in `invalid path '…'`, and a remote's words reach
+ * clone's stderr), so a line a repository wrote is still shown as git's.
  * Only its last {@link GIT_SAID_LIMIT} characters, so a flood cannot become the message.
  */
 function gitSaid(stderr: string): string {
   const trimmed = stderr.trim();
-  const kept = trimmed.length > GIT_SAID_LIMIT ? `[${(trimmed.length - GIT_SAID_LIMIT).toString()} earlier characters omitted]\n${trimmed.slice(-GIT_SAID_LIMIT)}` : trimmed;
-  return kept
-    .split(/\r?\n/)
-    .map((line) => visibleText(line))
-    .join('\n');
+  if (trimmed === '') return ' git said nothing.';
+  // The cut never splits a character: past the BMP, one is two units, and its second alone is no character.
+  const cut = Math.max(0, trimmed.length - GIT_SAID_LIMIT);
+  // At a second half, `codePointAt` answers that half alone.
+  const unit = trimmed.codePointAt(cut) ?? 0;
+  const start = cut > 0 && unit >= 0xdc_00 && unit <= 0xdf_ff ? cut + 1 : cut;
+  const omitted = start > 0 ? `\n[${start.toString()} earlier characters omitted]` : '';
+  const lines = trimmed.slice(start).split(/\r?\n/);
+  return omitted + lines.map((line) => GIT_LINE + visibleText(line)).join('');
 }
 /**
  * A committed path as text, or the clone's refusal. A path that is not UTF-8 has no faithful
@@ -359,7 +374,7 @@ function refuseCommittedLinkTexts(cloneDir: string, commit: string, subpath: str
 /** Write the commit's tree to disk — index and working tree — once its links' texts are judged. */
 function checkOut(cloneDir: string, commit: string): void {
   const result = runGit(['read-tree', '--reset', '-u', commit], {}, cloneDir);
-  if ((result.status ?? 1) !== 0) throw new GitCloneFailedError(`Failed to check out the cloned commit: ${gitSaid(result.stderr)}`);
+  if ((result.status ?? 1) !== 0) throw new GitCloneFailedError(`Failed to check out the cloned commit:${gitSaid(result.stderr)}`);
 }
 
 /**
@@ -412,12 +427,12 @@ function cloneFailure(parsed: ParsedGitUrl, stderr: string): GitCloneFailedError
     // With prompts disabled, a nonexistent-or-private repo surfaces as an
     // authentication failure. Name the expansion, because the user never typed it.
     return new GitCloneFailedError(
-      `Clone failed:\n${stderr}\n` +
+      `Clone failed:${stderr}\n` +
         `Hint: shorthand was expanded to ${parsed.cloneUrl}. Check the owner/repo spelling; ` +
         `if the repository is private, pass the full URL to authenticate interactively.`,
     );
   }
-  return new GitCloneFailedError(`Clone failed:\n${stderr}`);
+  return new GitCloneFailedError(`Clone failed:${stderr}`);
 }
 
 function revParseHead(tempdir: string): string {
@@ -425,7 +440,7 @@ function revParseHead(tempdir: string): string {
   const result = runGit(['rev-parse', 'HEAD'], {}, tempdir);
   const status = result.status ?? 1;
   if (status !== 0) {
-    throw new GitCloneFailedError(`Failed to resolve HEAD commit in cloned repo: ${gitSaid(result.stderr)}`);
+    throw new GitCloneFailedError(`Failed to resolve HEAD commit in cloned repo:${gitSaid(result.stderr)}`);
   }
   // Full 40-char SHA: the commit is the git cache key, so truncation risks cross-repo collisions.
   return (result.stdout ?? '').trim();

@@ -348,7 +348,7 @@ describe('decodeUtf8Exactly', () => {
     { name: 'a two-byte character', bytes: [0xc3, 0xa9], text: 'é' },
     { name: 'a literal U+FFFD', bytes: [0xef, 0xbf, 0xbd], text: '�' },
     // A UTF-8 BOM is a character of the name, never a signature to strip.
-    { name: 'a leading UTF-8 BOM', bytes: [0xef, 0xbb, 0xbf, 0x61], text: '﻿a' },
+    { name: 'a leading UTF-8 BOM', bytes: [0xef, 0xbb, 0xbf, 0x61], text: `${String.fromCodePoint(0xfe_ff)}a` },
     // A UTF-16 BOM is not UTF-8, never a reason to decode as UTF-16.
     { name: 'a UTF-16LE BOM', bytes: [0xff, 0xfe, 0x61, 0x00], text: undefined },
     { name: 'a stray continuation byte', bytes: [0x61, 0x80], text: undefined },

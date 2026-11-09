@@ -29,6 +29,11 @@ describe('visibleText', () => {
     ['a private-use character', 0xe0_00, 'ue000'],
     ['a tag character', 0xe_00_41, 'u{e0041}'],
     ['a supplementary variation selector', 0xe_01_00, 'u{e0100}'],
+    ['a no-break space', 0xa0, 'u00a0'],
+    ['an en space', 0x20_02, 'u2002'],
+    ['a Khmer inherent vowel', 0x17_b4, 'u17b4'],
+    ['a braille pattern blank', 0x28_00, 'u2800'],
+    ['a musical null notehead', 0x1_d1_59, 'u{1d159}'],
     ['a lone high surrogate', 0xd8_00, 'ud800'],
     ['a lone low surrogate', 0xdc_00, 'udc00'],
   ] as const)('shows %s by its escape', ([, code, spelled]) => {
