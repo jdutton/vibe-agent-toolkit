@@ -389,9 +389,9 @@ included) is refused, `INPUT_UNREADABLE`, naming the first offending entry, when
 symbolic link, a hard link, a device, a FIFO or a sparse or unknown-type entry; a name that would
 land outside the archive (absolute, drive-rooted, `..`); a name Windows cannot write as named (a
 `:`, one of `<` `>` `"` `|` `?` `*` or a control character, a trailing dot or space, a device name
-such as `CON` or `com1.txt`), on every host; one name
-listed twice, a file with an entry beneath it, or two names that are one where a filesystem folds
-letter case or Unicode form; or more than 50,000 entries or 256 MiB expanded, a tarball compressed
+such as `CON` or `com1.txt`), on every host; a name any filesystem resolves to `.git`, at any
+depth; one name listed twice, a file with an entry beneath it, or two names that are one where a filesystem folds
+letter case or Unicode form or ignores a code point (HFS+ ignores zero-width joiners and direction marks); or more than 50,000 entries or 256 MiB expanded, a tarball compressed
 twice or with zstd, a ZIP64 archive, or a ZIP with data before its first local header (a
 self-extracting ZIP) or a central record whose local header is not its own. A backslash in an entry's name is a path separator on every host. Extracted files are
 plain files with mode `0644` or `0755`, narrowed by your umask. `vat skills package` writes none

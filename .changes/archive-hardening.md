@@ -72,9 +72,10 @@
   on every host: Windows strips the dot or space, and no single spelling is what both kernels create.
   Under Windows rules a `#ref:subpath` matches a committed link's path case-insensitively.
 - **Every command that opens a ZIP or tarball refuses one holding a symbolic link, a hard link, a
-  device, a sparse or unknown-type entry, a name that leaves the archive, or two entries that are
-  one name** (`INPUT_UNREADABLE`, exit 2, nothing written or sent) — `vat skills install` / `list`,
-  `vat claude plugin install`, `vat claude org skills install`, a `url:` skill source. `npm pack`
+  device, a sparse or unknown-type entry, a name that leaves the archive, a `.git` file or folder at
+  any depth in any spelling a filesystem resolves to `.git` (`.GIT`, `GIT~1`, `.git.`), or two
+  entries that are one name** (`INPUT_UNREADABLE`, exit 2, nothing written or sent) — `vat skills install` / `list`,
+  `vat claude plugin install`, `vat claude org skills install` (which refused a ZIP's `.git` folder as `USAGE_INVALID` before), a `url:` skill source. `npm pack`
   writes no symbolic link, and a hard link only for two paths to one file: copy the file instead.
 - **An archive over 50,000 entries or 256 MiB expanded is refused** (`INPUT_UNREADABLE`), as is a
   `url:` skill source over 100 MiB. A package that large installed before; ship the large files

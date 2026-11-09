@@ -431,6 +431,11 @@ const NAME_CLASH = 'name-clash';
 /** `e` with an acute accent, precomposed and as `e` + a combining accent: one name on a normalising volume. */
 const E_ACUTE_COMPOSED = String.fromCodePoint(0xe9);
 const E_ACUTE_DECOMPOSED = `e${String.fromCodePoint(0x301)}`;
+/** A dotless `ı`, which NTFS upper-cases to `I`, and a zero-width non-joiner, which HFS+ ignores in a name. */
+const DOTLESS_I = String.fromCodePoint(0x131);
+const ZERO_WIDTH_NON_JOINER = String.fromCodePoint(0x200c);
+/** A planted git `config` that runs a command the next time git looks at the tree. */
+const PLANTED_GIT_CONFIG = '[core] fsmonitor = planted';
 
 /**
  * A ZIP member that holds more than its directory declares: the archive parses and its entry list
@@ -473,6 +478,14 @@ export function hostileArchiveRows(limits: { readonly maxEntries: number; readon
     { what: 'a Windows device name with an extension', formats: BOTH, reason: UNSAFE_NAME, entries: (prefix) => [{ name: `${prefix}docs/Con.md`, data: 'planted' }] },
     { what: 'a name ending in a dot', formats: BOTH, reason: UNSAFE_NAME, entries: (prefix) => [{ name: `${prefix}notes.md.`, data: 'planted' }] },
     { what: 'a directory name ending in a space', formats: BOTH, reason: UNSAFE_NAME, entries: (prefix) => [{ name: `${prefix}docs /x.md`, data: 'planted' }] },
+    // A `.git` entry would make the folder it is extracted into a git repository: a planted `config`, or a `gitdir:` file.
+    { what: 'a `.git` directory', formats: BOTH, reason: UNSAFE_NAME, entries: (prefix) => [{ name: `${prefix}.git/config`, data: PLANTED_GIT_CONFIG }] },
+    { what: 'a `.git` file', formats: BOTH, reason: UNSAFE_NAME, entries: (prefix) => [{ name: `${prefix}docs/.git`, data: 'gitdir: //host/share/repo' }] },
+    { what: 'a `.git` spelled in another case', formats: BOTH, reason: UNSAFE_NAME, entries: (prefix) => [{ name: `${prefix}.GIT/HEAD`, data: 'planted' }] },
+    { what: 'a `.git` spelled with a dotless i, which NTFS upper-cases to `I`', formats: BOTH, reason: UNSAFE_NAME, entries: (prefix) => [{ name: `${prefix}.g${DOTLESS_I}t/config`, data: PLANTED_GIT_CONFIG }] },
+    { what: 'a `.git` in another case spelled with a dotless i', formats: BOTH, reason: UNSAFE_NAME, entries: (prefix) => [{ name: `${prefix}.G${DOTLESS_I}T/HEAD`, data: 'planted' }] },
+    { what: 'a `.git` holding a code point HFS+ ignores', formats: BOTH, reason: UNSAFE_NAME, entries: (prefix) => [{ name: `${prefix}.g${ZERO_WIDTH_NON_JOINER}it/config`, data: PLANTED_GIT_CONFIG }] },
+    { what: 'the 8.3 short name of `.git`', formats: BOTH, reason: UNSAFE_NAME, entries: (prefix) => [{ name: `${prefix}Git~1/config`, data: 'planted' }] },
     { what: 'a name holding a `?`', formats: BOTH, reason: UNSAFE_NAME, entries: (prefix) => [{ name: `${prefix}faq?.md`, data: 'planted' }] },
     { what: 'a name holding a `|`', formats: BOTH, reason: UNSAFE_NAME, entries: (prefix) => [{ name: `${prefix}a|b.md`, data: 'planted' }] },
     { what: 'a directory named with a `<`, a `>` and a `"`', formats: BOTH, reason: UNSAFE_NAME, entries: (prefix) => [{ name: `${prefix}<"x">/a.md`, data: 'planted' }] },

@@ -42,7 +42,7 @@ export const ARCHIVE_REFUSED_CODE = 'ARCHIVE_REFUSED';
  *   that does not inflate or hold what it declares, asked for after the archive opened, is
  *   {@link ArchiveEntryReadError} instead;
  * - `link`, `hardlink`, `special`: it holds an entry that is not a file or a directory;
- * - `unsafe-name`: an entry is named outside the directory it is extracted into;
+ * - `unsafe-name`: an entry is named outside the directory it is extracted into, or names a `.git`;
  * - `name-clash`: two entries are one name, or one is a file with another at or under it;
  * - `too-many-entries`, `too-large`: it is past an {@link ArchiveLimits} bound.
  */
@@ -146,7 +146,7 @@ export function placeOf(name: string): string[] {
  * `LPT1`…`LPT9`, and the superscript-digit forms `COM¹` `LPT³`, which Windows reads as digits. A
  * space before the `.` is over-refused on purpose: Win32 drops it, so `con .md` may be `CON`.
  *
- * @vendor-claim reviewed=2026-10-26 verify=Re-read https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file — "File and Directory Names", the reserved-names list (item 9) and the trailing space or period rule (item 10)
+ * @vendor-claim reviewed=2026-11-08 verify=Re-read https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file — "File and Directory Names", the reserved-names list (item 9) and the trailing space or period rule (item 10)
  */
 const WINDOWS_DEVICE_NAME = /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³]) *(?:\.|$)/i;
 
@@ -170,16 +170,42 @@ function windowsSegmentReason(segment: string): string | undefined {
   return WINDOWS_DEVICE_NAME.test(segment) ? 'is a Windows device name' : undefined;
 }
 
-/** Why `name` would land outside the extraction directory, or somewhere other than it says, on some host; or `undefined`. */
-function unsafeNameReason(name: string): string | undefined {
+/**
+ * The folds of the names a filesystem resolves to `.git` — `.git` itself and its 8.3 short name
+ * `GIT~1` — through the one fold ({@link foldedSegment}), so the case, Unicode spellings, ignored
+ * code points and trailing dots or spaces of those two names are caught (other NTFS short names
+ * alias only a `.git` that already exists, and every extraction lands in a fresh directory).
+ * Extracted, such an entry would make the folder it lands in a git repository: a planted `config`
+ * (`core.fsmonitor`) or a `gitdir:` file that root discovery and git then act on. This judges the
+ * name only: a bare-repository layout (`HEAD`, `objects/`, `refs/`, `config`) under another name
+ * is not refused here.
+ */
+const GIT_DIRECTORY_FOLDS: ReadonlySet<string> = new Set(['.git', 'git~1'].map((name) => foldedSegment(name)));
+
+/** What a name that lands outside the extraction directory, or in no place every host can write, leads to. */
+const NO_PLACE = 'so it names no place inside the archive that every host can write';
+
+/** Why `name` as a whole would land outside the extraction directory on some host; or `undefined`. */
+function outsideReason(name: string): string | undefined {
   if (name.includes('\0')) return 'holds a NUL character';
   const spelled = toForwardSlashAnyPlatform(name);
   if (spelled.startsWith('/')) return 'is an absolute path';
   if (DRIVE_PREFIX.test(spelled)) return 'begins with a drive letter';
-  if (hasParentTraversalSegment(name)) return 'holds a `..` segment';
+  return hasParentTraversalSegment(name) ? 'holds a `..` segment' : undefined;
+}
+
+/**
+ * Why `name` may not be extracted as named — it would land outside the extraction directory, or
+ * somewhere other than it says, on some host, or it names a `.git` — as the rest of the sentence
+ * after the entry; or `undefined`.
+ */
+function unsafeNameReason(name: string): string | undefined {
+  const outside = outsideReason(name);
+  if (outside !== undefined) return `${outside}, ${NO_PLACE}`;
   for (const segment of placeOf(name)) {
+    if (GIT_DIRECTORY_FOLDS.has(foldedSegment(segment))) return 'names a `.git`, which VAT never installs, extracts or sends';
     const reason = windowsSegmentReason(segment);
-    if (reason !== undefined) return reason;
+    if (reason !== undefined) return `${reason}, ${NO_PLACE}`;
   }
   return undefined;
 }
@@ -198,7 +224,7 @@ function entryRefusal(entry: ArchiveEntry): EntryRefusal | undefined {
     return { reason, entry: entry.name, why: `its entry \`${entry.name}\` is ${what}, and an archive may hold only files and directories` };
   }
   const unsafe = unsafeNameReason(entry.name);
-  if (unsafe !== undefined) return { reason: 'unsafe-name', entry: entry.name, why: `its entry \`${entry.name}\` ${unsafe}, so it names no place inside the archive that every host can write` };
+  if (unsafe !== undefined) return { reason: 'unsafe-name', entry: entry.name, why: `its entry \`${entry.name}\` ${unsafe}` };
   if (entry.kind === 'file' && placeOf(entry.name).length === 0) {
     return { reason: 'unsafe-name', entry: entry.name, why: `its entry \`${entry.name}\` is a file that names no place inside the archive` };
   }
@@ -228,11 +254,11 @@ function claimPlaces(entry: ArchiveEntry, claims: Map<string, Claim>): EntryRefu
     if (held === undefined) {
       claims.set(key, { spelled, kind, entry: entry.name });
     } else if (held.spelled !== spelled) {
-      // A `:` and a trailing dot or space were refused with the name, so only the case and Unicode folds are left.
+      // A `:` and a trailing dot or space were refused with the name, so only the case and Unicode folds and an ignored code point are left.
       return {
         reason: 'name-clash',
         entry: entry.name,
-        why: `its entries \`${held.entry}\` and \`${entry.name}\` are one name where a volume folds letter case or Unicode form (\`${held.spelled}\` and \`${spelled}\`), so one would overwrite the other`,
+        why: `its entries \`${held.entry}\` and \`${entry.name}\` are one name where a volume folds letter case or Unicode form or ignores a code point (\`${held.spelled}\` and \`${spelled}\`), so one would overwrite the other`,
       };
     } else if (held.kind === 'file' || kind === 'file') {
       const why = held.kind === kind
@@ -254,8 +280,11 @@ function claimPlaces(entry: ArchiveEntry, claims: Map<string, Claim>): EntryRefu
  *   NUL (a backslash is read as a separator on every host); or one with a segment Windows cannot
  *   hold as spelled — a `:`, one of `<` `>` `"` `|` `?` `*`, a control character (code points
  *   1–31), a trailing `.` or space, a device name (`CON`, `com1.txt`) — on every host;
- * - two entries that are one name — exactly, or once folded as a case-insensitive or
- *   normalising volume folds them ({@link foldedSegment}) — or a file with another entry under it.
+ * - a name with a segment some filesystem resolves to `.git` — any case or Unicode spelling, the
+ *   8.3 short name `GIT~1` — at any depth: extracted, it would make the folder it lands in a git
+ *   repository;
+ * - two entries that are one name — exactly, or once folded as a case-insensitive,
+ *   normalising or code-point-ignoring (HFS+) volume folds them ({@link foldedSegment}) — or a file with another entry under it.
  *
  * @param entries - Every entry of the archive, in archive order
  * @returns The refusal of the first offending entry, in archive order
