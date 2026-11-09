@@ -41,14 +41,14 @@ function readTurboJson(): { tasks: Record<string, { dependsOn?: string[] }> } {
   return JSON.parse(withoutComments) as { tasks: Record<string, { dependsOn?: string[] }> };
 }
 
-interface IntegrationTestBlock {
+interface PackageTestBlock {
   maxWorkers: number;
   setupFiles: string[];
   provide: { forkRssBudgetMb?: number };
 }
 
-async function loadIntegrationConfig(configPath: string): Promise<{ test: IntegrationTestBlock }> {
-  const loaded = (await import(pathToFileURL(configPath).href)) as { default: { test: IntegrationTestBlock } };
+async function loadPackageTestConfig(configPath: string): Promise<{ test: PackageTestBlock }> {
+  const loaded = (await import(pathToFileURL(configPath).href)) as { default: { test: PackageTestBlock } };
   return loaded.default;
 }
 
@@ -113,7 +113,7 @@ describe('turbo test-suite concurrency (cross-package native-memory guard)', () 
     for (const dir of readdirSync(safePath.join(PROJECT_ROOT, 'packages'))) {
       const configPath = safePath.join(PROJECT_ROOT, 'packages', dir, 'vitest.integration.config.ts');
       if (!existsSync(configPath)) continue;
-      const { test } = await loadIntegrationConfig(configPath);
+      const { test } = await loadPackageTestConfig(configPath);
       if (nativeMemory.has(dir)) expect(test.maxWorkers, `${dir} holds native memory`).toBe(maxTestWorkers);
       if (test.maxWorkers <= maxTestWorkers) continue;
       raised.push(dir);
@@ -122,8 +122,25 @@ describe('turbo test-suite concurrency (cross-package native-memory guard)', () 
     }
     // Both ways: the scan saw the one package that raises its cap, at the one value, so it is not blind.
     expect(raised).toEqual(['cli']);
-    const cli = await loadIntegrationConfig(safePath.join(PROJECT_ROOT, 'packages', 'cli', 'vitest.integration.config.ts'));
+    const cli = await loadPackageTestConfig(safePath.join(PROJECT_ROOT, 'packages', 'cli', 'vitest.integration.config.ts'));
     expect(cli.test.maxWorkers).toBe(cliIntegrationTestWorkers);
+  });
+
+  // The system tier spawns the real `vat` (model-loading verbs included), whose memory no
+  // in-fork check can see, so no package may raise it — and no platform may lower it either:
+  // Windows ran it serially long after the RPC deadline that justified that was gone.
+  // Asserted on whichever OS runs the unit tier, so a platform branch reds there.
+  it('runs every package\'s system tier at the shared worker cap, on this platform too', async () => {
+    const scanned: string[] = [];
+    for (const dir of readdirSync(safePath.join(PROJECT_ROOT, 'packages'))) {
+      const configPath = safePath.join(PROJECT_ROOT, 'packages', dir, 'vitest.system.config.ts');
+      if (!existsSync(configPath)) continue;
+      const { test } = await loadPackageTestConfig(configPath);
+      expect(test.maxWorkers, `${dir} system tier`).toBe(maxTestWorkers);
+      scanned.push(dir);
+    }
+    // Not blind: the scan reached cli, the tier's long pole.
+    expect(scanned).toContain('cli');
   });
 
   it('leaves test:unit parallel (light, no native models — no cap needed)', () => {

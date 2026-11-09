@@ -142,12 +142,12 @@
     // and folds its hash in so a rebuilt closure re-runs the suite. Not a
     // workspace dependency: that would make lab's BUILD wait on the cli too.
     // dev-tools: `turbo-test-concurrency.test.ts` imports EVERY package's
-    // integration config to check its worker cap, so an edit to one must re-run
+    // integration and system config to check its worker cap, so an edit to one must re-run
     // it rather than replay its cached pass. Scoped here, not in
     // `globalDependencies`, which would make that edit cold for every task.
     "@vibe-agent-toolkit/dev-tools#test:unit": {
       "dependsOn": ["^build", "build"],
-      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/*/vitest.integration.config.ts"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/*/vitest.integration.config.ts", "$TURBO_ROOT$/packages/*/vitest.system.config.ts"],
       "outputs": [],
       "cache": true
     },

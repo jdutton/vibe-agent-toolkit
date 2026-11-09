@@ -428,9 +428,14 @@ export function createSystemTestConfig(overrides: SystemTestConfigOverrides = {}
     disableConsoleIntercept: true,
     clearMocks: CLEAR_MOCKS_BEFORE_EACH_TEST,
     pool: 'forks' as const,
-    // Windows: one worker at a time (serial) for reliability on constrained
-    // VMs. Unix: 2 workers for ~2x speedup; system tests are fully isolated.
-    maxWorkers: process.platform === 'win32' ? 1 : maxTestWorkers,
+    // The shared cap on EVERY platform. Windows used to run 1 worker, a
+    // precaution kept from #92: under vitest 3 a worker whose event loop a
+    // `spawnSync` blocked missed birpc's 60 s RPC deadline ("Timeout calling
+    // onTaskUpdate"). Vitest 4 gives the worker's runtime RPC no deadline
+    // (`createRuntimeRpc`, `timeout: -1`), and turbo was already running up to
+    // four packages' system forks side by side there, so the serial cap only
+    // slowed `cli`, the tier's long pole.
+    maxWorkers: maxTestWorkers,
     // Same V8 old-space cap as `integrationExecArgv` — see its comment.
     // Heaviest measured system-test file: cli/inventory-parity.system.test.ts, ~196MB.
     execArgv: integrationExecArgv,
