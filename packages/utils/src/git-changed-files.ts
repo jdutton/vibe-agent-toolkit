@@ -48,7 +48,7 @@ export interface GitChangedFile {
 }
 
 /** One `--name-status -z` record, its paths still the bytes git wrote. */
-export interface GitNameStatusRecord {
+interface GitNameStatusRecord {
   readonly status: GitChangeKind;
   readonly path: Uint8Array;
   readonly oldPath: Uint8Array | null;
@@ -56,7 +56,7 @@ export interface GitNameStatusRecord {
 }
 
 /** The changes, or why there is no answer. */
-export type GitChangedFilesOutcome =
+type GitChangedFilesOutcome =
   | { readonly ok: true; readonly files: readonly GitChangedFile[] }
   | { readonly ok: false; readonly reason: string };
 

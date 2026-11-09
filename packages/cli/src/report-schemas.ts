@@ -50,6 +50,7 @@
 
 import { FrictionReportSchema } from '@vibe-agent-toolkit/agent-skills';
 import {
+  ChangedFileRowSchema,
   ClaudeContextChainRowSchema,
   ClaudeContextLoadRowSchema,
   EdgeResolutionRowSchema,
@@ -591,6 +592,7 @@ const DERIVED_RELATION_SCHEMAS: ReadonlyArray<readonly [string, ZodTypeAny]> = [
   ['projection-lens-entry-points', LensEntryPointRowSchema],
   ['projection-claude-context-chains', ClaudeContextChainRowSchema],
   ['projection-claude-context-loads', ClaudeContextLoadRowSchema],
+  ['projection-changed-files', ChangedFileRowSchema],
 ];
 
 /** Every relation `vat resources query` / `check` expose to an adopter's SQL, as a file artifact. */

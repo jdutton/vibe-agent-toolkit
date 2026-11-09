@@ -314,31 +314,37 @@ vat resources query 'SELECT path FROM resource_realizations LIMIT 5' --format js
 
 **Output:** the shared report envelope on stdout (schema: `packages/cli/schemas/resources-check.json`);
 each finding also as a `location:line: severity: message [code]` line on stderr.
+- Every finding one check produced — its violations, and `RESOURCE_CHECK_BROKEN` or
+  `RESOURCE_CHECK_EXAMINED_NOTHING` about it — carries `check: <name>`. A finding about the whole
+  run (an empty corpus, no check ran, an interrupted run) carries none.
+- A declared check's violation carries `evidence`: the row's columns other than the reserved ones,
+  in the order SQLite returned them, values as SQLite returned them (a BLOB, or an integer too
+  large for JSON, as the text the message shows).
+- `data.checks[]` — one entry per check that ran: `name`, `durationSecs`, `rows`, and `broken`,
+  `builtin`, `examined`, `allowEmpty` and `examinedNothing: true` when they apply (below).
 
 **Exit Codes:** `0` no error-severity check violated, `1` one was (or nothing was checked:
 `RESOURCE_CHECK_BROKEN`), `2` the run could not do its job.
 
 **Reserved row columns.** A check's statement selects its violations, one finding per row. Four
-column names are reserved and matched exactly (case-sensitive); every other column is evidence in
-the message:
+column names are reserved and matched exactly (case-sensitive); every other column is evidence, in
+the message and in the finding's `evidence`:
 
 - `path` — the finding's `location`, when it is a project-relative path.
-- `severity` — that row's severity, exactly `error`, `warning` or `info`; NULL or absent means
-  the check's declared severity. A `resources.validation.severity` override on `CUSTOM:<name>`
-  still wins.
-- `line` — the finding's 1-based line; NULL or absent omits it.
-- `column` — the finding's 1-based column within `line`; it requires a `line`.
+- `finding_severity` — that row's severity, exactly `error`, `warning` or `info`; NULL or absent
+  means the check's declared severity. A `resources.validation.severity` override on
+  `CUSTOM:<name>` still wins.
+- `finding_line` — the finding's 1-based line; NULL or absent omits it.
+- `finding_column` — the finding's 1-based column within `finding_line`; it requires a line.
 
 Any other value in a reserved column fails the check as `RESOURCE_CHECK_BROKEN` — "ran and selected
-N rows, but row R's severity = "high" is not one of error, warning, info" — and its entry in
+N rows, but row R's finding_severity = "high" is not one of error, warning, info" — and its entry in
 `data.checks` carries `broken: true` with `rows`. A column that matches a reserved name only
-case-insensitively (`Severity`) gets one stderr warning per check and stays evidence.
+case-insensitively (`Finding_Line`) gets one stderr warning per check and stays evidence.
 
-⚠️ `SELECT *` or a join feeds a projection table's own columns of those names into the finding:
-`realization_conditions.severity`, `blob_conditions.severity` and `.line`,
-`harness_blob_imports.line`, and `blob_references.line` and `.column`. After a join that line can
-belong to a different table than the `path`. Alias a column (`b.line AS refLine`) to keep it as
-evidence.
+No projection relation has a column named `finding_severity`, `finding_line` or `finding_column`,
+so `SELECT *` or a join never sets one: a table's own `severity`, `line` or `column` is evidence.
+Place a finding by aliasing deliberately — `SELECT r.path, b.line AS finding_line FROM …`.
 
 A finding with a `line` but no usable `path` prints its coordinates after the message, never as a
 prefix: `error: <message> [<code>] (line 3, column 5)`.
@@ -362,7 +368,9 @@ resources:
   exactly when the check declares `examined` and that statement completed — absent on a check that
   declares none (and on every built-in), absent rather than `0` when it did not finish.
 - `examined: 0` fails the run as `RESOURCE_CHECK_EXAMINED_NOTHING` (error, exit 1, not overridable),
-  naming the check; the check's own violations are still reported beside it.
+  naming the check in its `check`; the check's own violations are still reported beside it. The
+  check's entry then carries `examinedNothing: true` — present exactly when that finding is, so
+  `jq '.data.checks[] | select(.examinedNothing)'` lists the same checks the findings name.
 - `allowEmpty: true` declares that zero is legitimate: no finding, and the entry publishes
   `examined: 0` beside `allowEmpty: true`, so the exemption is visible in every report.
   `allowEmpty` without `examined` is refused when the config loads.
@@ -373,7 +381,8 @@ resources:
 - A check that did not run at all is absent from `data.checks` (or `broken` without `rows`), so
   "examined 0" and "not run" never look alike.
 
-The same applies when the checks run as the `checks` phase of `vat validate`.
+The same applies when the checks run as the `checks` phase of `vat validate`: its findings are
+these findings, `check` and `evidence` included, and the phase's `data.checks` is this list.
 
 ## Configuration
 

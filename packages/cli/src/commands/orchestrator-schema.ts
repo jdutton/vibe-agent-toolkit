@@ -31,6 +31,8 @@ import { z } from 'zod';
 
 import type { ExaminedDeclaration } from '../utils/run-integrity.js';
 
+import { CHECK_FINDING_SCHEMA } from './resources/check-schema.js';
+
 /**
  * What `examined` counts for an orchestrator, and the remedy when it is zero.
  *
@@ -75,8 +77,16 @@ export type OrchestratorPhaseEntry = z.infer<typeof PhaseEntrySchema>;
 
 export type OrchestratorData = z.infer<typeof OrchestratorDataSchema>;
 
-/** The document the three orchestrators publish. */
-export const ORCHESTRATOR_REPORT_SCHEMA = reportSchema(OrchestratorDataSchema, FindingSchema);
+/**
+ * The document the three orchestrators publish.
+ *
+ * 🔑 Its findings are `vat resources check`'s finding schema, not the bare `FindingSchema`: the
+ * `checks` phase's findings are folded in flat and unchanged, `check` and `evidence` included, so
+ * `vat validate`'s document says which check spoke exactly as `vat resources check`'s does. A
+ * finding from any other phase simply carries neither key. One declaration, so the two documents
+ * cannot drift; stripping the keys at the fold would have published less than the phase knew.
+ */
+export const ORCHESTRATOR_REPORT_SCHEMA = reportSchema(OrchestratorDataSchema, CHECK_FINDING_SCHEMA);
 
 /**
  * `vat verify`'s `packaged-content` phase `data`: what the crawl should have

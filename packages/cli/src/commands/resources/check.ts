@@ -43,6 +43,7 @@ import {
   describeUninterpretableRows,
   issuesFromCheckRows,
   type BoundBuiltinCheck,
+  type CheckIssue,
   type CheckRowConversion,
   type NearMiss,
   type ResourceCheck,
@@ -192,7 +193,7 @@ export interface CheckCost {
 
 /** What one run of the checks produced. */
 interface CheckOutcome extends ProjectionProvenance, PopulationExtent {
-  issues: readonly ValidationIssue[];
+  issues: readonly CheckIssue[];
   /**
    * One record per check that actually ran — the denominator every count below
    * is read against, and what each of them cost.
@@ -212,7 +213,7 @@ export type PopulatedRun = ProjectionProvenance & PopulationExtent;
 export interface CheckPayloadInput {
   root: string;
   durationMs: number;
-  issues: readonly ValidationIssue[];
+  issues: readonly CheckIssue[];
   /** One record per check that EXECUTED — see {@link CheckOutcome.costs}. */
   costs: readonly CheckCost[];
   /**
@@ -379,6 +380,9 @@ export function buildCheckOutputData(input: CheckPayloadInput): CheckReport {
         // ever means "counted, and there was nothing".
         ...(cost.examined === undefined ? {} : { examined: cost.examined }),
         ...(cost.allowEmpty === undefined ? {} : { allowEmpty: cost.allowEmpty }),
+        // The SAME predicate that emits the refusal, on the same record — so the
+        // entry and the finding cannot disagree. Absent, never `false`.
+        ...(examinedNothing(cost) ? { examinedNothing: true as const } : {}),
       })),
     },
   });
@@ -524,11 +528,27 @@ function timed<T>(now: () => number, run: () => T): Timed<T> {
  * @param error - Whatever the statement threw
  * @returns The run-integrity finding
  */
-function brokenCheckFinding(name: string, error: unknown): ValidationIssue {
-  return runIntegrityFinding(
+function brokenCheckFinding(name: string, error: unknown): CheckIssue {
+  return ofCheck(name, runIntegrityFinding(
     `The check "${name}" could not run, so it is asserting nothing: `
     + (error instanceof Error ? error.message : String(error)),
-  );
+  ));
+}
+
+/**
+ * A finding about one check, naming it.
+ *
+ * 🔑 Every finding a single check produced carries `check` — its violations and
+ * every refusal about it — so a consumer never parses a message to learn which
+ * check spoke. A finding about the whole RUN (an empty corpus, no check ran, an
+ * interruption) goes through no check and carries none.
+ *
+ * @param name - The check's key in `resources.checks`, or a built-in's name
+ * @param issue - The finding
+ * @returns The finding, naming the check
+ */
+function ofCheck(name: string, issue: ValidationIssue): CheckIssue {
+  return { ...issue, check: name };
 }
 
 /**
@@ -542,8 +562,8 @@ function brokenCheckFinding(name: string, error: unknown): ValidationIssue {
  * @param refusal - The row and value the conversion refused
  * @returns The run-integrity finding
  */
-function uninterpretableRowsFinding(name: string, refusal: Extract<CheckRowConversion, { ok: false }>): ValidationIssue {
-  return runIntegrityFinding(describeUninterpretableRows(name, refusal));
+function uninterpretableRowsFinding(name: string, refusal: Extract<CheckRowConversion, { ok: false }>): CheckIssue {
+  return ofCheck(name, runIntegrityFinding(describeUninterpretableRows(name, refusal)));
 }
 
 /**
@@ -559,12 +579,12 @@ function uninterpretableRowsFinding(name: string, refusal: Extract<CheckRowConve
  * @param error - Whatever the examined statement threw
  * @returns The run-integrity finding
  */
-function brokenExaminedFinding(name: string, error: unknown): ValidationIssue {
-  return runIntegrityFinding(
+function brokenExaminedFinding(name: string, error: unknown): CheckIssue {
+  return ofCheck(name, runIntegrityFinding(
     `The check "${name}" ran its violations statement, but its examined statement could not run, so`
     + ' nothing says what it ranged over and none of its rows were reported: '
     + (error instanceof Error ? error.message : String(error)),
-  );
+  ));
 }
 
 /** The code for a check that declared what it examined and counted zero. */
@@ -587,14 +607,34 @@ const EXAMINED_NOTHING_CODE = 'RESOURCE_CHECK_EXAMINED_NOTHING' satisfies Refusa
  * @param name - The check's key in `resources.checks`
  * @returns The refusal finding
  */
-function examinedNothingFinding(name: string): ValidationIssue {
+function examinedNothingFinding(name: string): CheckIssue {
   return {
     code: EXAMINED_NOTHING_CODE,
     severity: 'error',
     message: `The check "${name}" declares what it examined, and its examined statement selected 0 rows, so`
       + ' its pass asserts nothing. Fix the `examined` statement or the population it reads; if zero is'
       + ' a legitimate answer for this check, declare `allowEmpty: true` on it.',
+    check: name,
   };
+}
+
+/**
+ * Whether a check's cost record earns {@link examinedNothingFinding}: its examined
+ * statement completed and counted zero, the check did not declare zero
+ * legitimate, and nothing broke first.
+ *
+ * 🔑 **The ONE decision.** {@link runUnit} emits the refusal from it, the
+ * interrupted-run rebuild re-derives the refusal from it, and
+ * {@link buildCheckOutputData} publishes `examinedNothing: true` on the check's
+ * entry from it — so the entry and the finding cannot disagree in either
+ * direction. A `broken` record never qualifies: its earlier refusal wins, and
+ * its count (when it has one) is not a verdict.
+ *
+ * @param cost - The check's cost record
+ * @returns True when the check examined nothing and may not
+ */
+function examinedNothing(cost: CheckCost): boolean {
+  return cost.examined === 0 && cost.allowEmpty === undefined && cost.broken === undefined;
 }
 
 /**
@@ -607,7 +647,8 @@ function examinedNothingFinding(name: string): ValidationIssue {
 function nearMissWarning(name: string, misses: readonly NearMiss[]): string {
   const pairs = misses.map(({ column, reserved }) => `"${column}" (reserved: "${reserved}")`).join(', ');
   return `The check "${name}" selects ${pairs}. Reserved columns are matched exactly, so these are`
-    + ' evidence only; rename them if you meant the finding\'s own path, severity, line or column.';
+    + ' evidence only; rename them if you meant the finding\'s own path, finding_severity, finding_line or'
+    + ' finding_column.';
 }
 
 /**
@@ -692,8 +733,13 @@ function builtinCheckUnit(builtin: BoundBuiltinCheck): CheckUnit {
     name: builtin.name,
     builtin: true,
     select: () => {
-      const issues = builtin.run();
-      return { rows: issues.length, converts: false, report: () => ({ ok: true, issues, nearMisses: [] }) };
+      const found = builtin.run();
+      // Named in the conversion, outside the timed span, like a statement's rows.
+      return {
+        rows: found.length,
+        converts: false,
+        report: () => ({ ok: true, issues: found.map((issue) => ofCheck(builtin.name, issue)), nearMisses: [] }),
+      };
     },
   };
 }
@@ -765,8 +811,8 @@ interface UnitSinks {
  */
 interface UnitResult {
   readonly cost: CheckCost;
-  readonly refusal?: ValidationIssue;
-  readonly issues: readonly ValidationIssue[];
+  readonly refusal?: CheckIssue;
+  readonly issues: readonly CheckIssue[];
 }
 
 /**
@@ -852,10 +898,10 @@ function runUnit(unit: CheckUnit, now: () => number, sinks: UnitSinks): UnitResu
     const cost = { name, durationMs, rows, broken: true as const, ...counted, ...origin };
     return { cost, refusal: uninterpretableRowsFinding(name, converted), issues: [] };
   }
-  const refused = examined?.value === 0 && unit.allowEmpty === undefined;
+  const cost = { name, durationMs, rows, ...counted, ...origin };
   return {
-    cost: { name, durationMs, rows, ...counted, ...origin },
-    ...(refused ? { refusal: examinedNothingFinding(name) } : {}),
+    cost,
+    ...(examinedNothing(cost) ? { refusal: examinedNothingFinding(name) } : {}),
     issues: converted.issues,
   };
 }
@@ -886,8 +932,8 @@ function runUnits(
   now: () => number,
   onProgress: ProgressSink | undefined,
   warn: ((message: string) => void) | undefined,
-): { issues: ValidationIssue[]; costs: CheckCost[] } {
-  const issues: ValidationIssue[] = [];
+): { issues: CheckIssue[]; costs: CheckCost[] } {
+  const issues: CheckIssue[] = [];
   const costs: CheckCost[] = [];
 
   for (const unit of units) {
@@ -1595,7 +1641,7 @@ function populationRemedy(raise: string): string {
 function stoppedMidCheck(
   entries: readonly ProgressEntry[],
   inFlight: UnitInFlight,
-): { cost: CheckCost; finding: ValidationIssue } | undefined {
+): { cost: CheckCost; finding: CheckIssue } | undefined {
   if (inFlight.kind !== 'converting' && inFlight.kind !== 'examining') return undefined;
   const line = entries.findLast(
     (entry): entry is Extract<ProgressEntry, { kind: 'converting' | 'examining' }> =>
@@ -1607,9 +1653,9 @@ function stoppedMidCheck(
     : 'they were being converted into findings, so none of them were reported.';
   return {
     cost: { name: line.name, durationMs: line.durationMs, rows: line.rows, broken: true },
-    finding: runIntegrityFinding(
+    finding: ofCheck(line.name, runIntegrityFinding(
       `The check "${line.name}" ran and selected ${String(line.rows)} rows, but the run stopped while ${stopped}`,
-    ),
+    )),
   };
 }
 
@@ -1671,9 +1717,7 @@ export function buildInterruptedCheckInput(options: {
   // 🔑 Re-derived from the recovered costs: the child's findings died with it,
   // and a recovered `examined: 0` published without its refusal would read as a
   // check that legitimately counted nothing.
-  const examinedNothing = completed
-    .filter((cost) => cost.examined === 0 && cost.allowEmpty === undefined && cost.broken === undefined)
-    .map((cost) => examinedNothingFinding(cost.name));
+  const refusedEmpty = completed.filter((cost) => examinedNothing(cost)).map((cost) => examinedNothingFinding(cost.name));
 
   return {
     root,
@@ -1691,7 +1735,7 @@ export function buildInterruptedCheckInput(options: {
     issues: [
       interruptedRunFinding(inFlight, ending, completed.length),
       ...(stopped === undefined ? [] : [stopped.finding]),
-      ...examinedNothing,
+      ...refusedEmpty,
     ],
     costs,
   };
@@ -1754,7 +1798,7 @@ export function runProjectChecks(options: {
   onProgress?: ProgressSink | undefined;
   /** Where a near miss of a reserved row column is said — stderr in production. */
   warn?: ((message: string) => void) | undefined;
-}): { issues: ValidationIssue[]; costs: CheckCost[] } {
+}): { issues: CheckIssue[]; costs: CheckCost[] } {
   const now = options.now ?? (() => performance.now());
   const { issues, costs } = runUnits(
     checkUnits(options.builtins, options.checks, options.ask),

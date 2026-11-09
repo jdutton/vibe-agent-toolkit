@@ -97,6 +97,21 @@
                       "warning",
                       "info"
                     ]
+                  },
+                  "check": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "evidence": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "null"
+                      ]
+                    }
                   }
                 },
                 "required": [
@@ -243,6 +258,10 @@
                         "minimum": 0
                       },
                       "allowEmpty": {
+                        "type": "boolean",
+                        "const": true
+                      },
+                      "examinedNothing": {
                         "type": "boolean",
                         "const": true
                       }

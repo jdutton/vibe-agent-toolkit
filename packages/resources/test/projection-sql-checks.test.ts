@@ -213,22 +213,30 @@ describe('issuesFromCheckRows', () => {
 });
 
 /**
- * The reserved row columns: `path` (above), `severity`, `line` and `column`.
+ * The reserved row columns: `path` (above), `finding_severity`, `finding_line`
+ * and `finding_column`.
  *
  * 🔑 Each is EXACT. A value the column cannot mean refuses the whole check
- * rather than being skipped: a row whose `severity` reads `'high'` was written
- * by an author who meant something, and reporting it at the declared severity
- * would silently re-grade it.
+ * rather than being skipped: a row whose `finding_severity` reads `'high'` was
+ * written by an author who meant something, and reporting it at the declared
+ * severity would silently re-grade it.
+ *
+ * 🔑 The `finding_` names are chosen so no projection relation carries them, so a
+ * `SELECT *` can never feed one — `check-reserved-columns.test.ts` in
+ * projection-sqlite holds every relation's columns to that.
  */
-describe('issuesFromCheckRows — the reserved severity column', () => {
+describe('issuesFromCheckRows — the reserved finding_severity column', () => {
   it('takes a row\'s own severity over the declared one', () => {
-    const issues = issuesOf(NAME, CHECK, [{ path: 'a.md', severity: 'warning' }, { path: 'b.md', severity: 'info' }]);
+    const issues = issuesOf(NAME, CHECK, [
+      { path: 'a.md', finding_severity: 'warning' },
+      { path: 'b.md', finding_severity: 'info' },
+    ]);
 
     expect(issues.map((issue) => issue.severity)).toStrictEqual(['warning', 'info']);
   });
 
   it.each([
-    ['NULL', { path: 'a.md', severity: null }],
+    ['NULL', { path: 'a.md', finding_severity: null }],
     ['absent', { path: 'a.md' }],
   ])('falls back to the declared severity when the column is %s', (_label, row) => {
     const [issue] = issuesOf(NAME, { ...CHECK, severity: 'warning' }, [row]);
@@ -243,27 +251,27 @@ describe('issuesFromCheckRows — the reserved severity column', () => {
     ['a number', 2],
     ['a BLOB', new Uint8Array([1])],
   ])('refuses %s', (_label, value) => {
-    const refusal = refusalOf([{ path: 'a.md' }, { path: 'b.md', severity: value }]);
+    const refusal = refusalOf([{ path: 'a.md' }, { path: 'b.md', finding_severity: value }]);
 
-    expect(refusal).toMatchObject({ ok: false, row: 2, field: 'severity', value, rowsSelected: 2 });
+    expect(refusal).toMatchObject({ ok: false, row: 2, field: 'finding_severity', value, rowsSelected: 2 });
   });
 });
 
-describe('issuesFromCheckRows — the reserved line and column columns', () => {
+describe('issuesFromCheckRows — the reserved finding_line and finding_column columns', () => {
   it('consumes location, line and column', () => {
-    const [issue] = issuesOf(NAME, CHECK, [{ path: 'a.md', line: 3, column: 5 }]);
+    const [issue] = issuesOf(NAME, CHECK, [{ path: 'a.md', finding_line: 3, finding_column: 5 }]);
 
     expect(issue).toMatchObject({ location: 'a.md', line: 3, column: 5 });
   });
 
   it('accepts an in-range bigint, as a store reading int64 returns one', () => {
-    const [issue] = issuesOf(NAME, CHECK, [{ path: 'a.md', line: 3n, column: 5n }]);
+    const [issue] = issuesOf(NAME, CHECK, [{ path: 'a.md', finding_line: 3n, finding_column: 5n }]);
 
     expect(issue).toMatchObject({ line: 3, column: 5 });
   });
 
   it('omits both when NULL or absent', () => {
-    const issues = issuesOf(NAME, CHECK, [{ path: 'a.md', line: null, column: null }, { path: 'b.md' }]);
+    const issues = issuesOf(NAME, CHECK, [{ path: 'a.md', finding_line: null, finding_column: null }, { path: 'b.md' }]);
 
     for (const issue of issues) {
       expect(Object.hasOwn(issue, 'line')).toBe(false);
@@ -272,63 +280,124 @@ describe('issuesFromCheckRows — the reserved line and column columns', () => {
   });
 
   it('keeps a line with no usable path', () => {
-    const [issue] = issuesOf(NAME, CHECK, [{ n: 1, line: 3 }]);
+    const [issue] = issuesOf(NAME, CHECK, [{ n: 1, finding_line: 3 }]);
 
     expect(issue?.location).toBeUndefined();
     expect(issue?.line).toBe(3);
   });
 
   it.each([
-    ['line', 0],
-    ['line', -1],
-    ['line', 1.5],
-    ['line', '3'],
-    ['line', Number.MAX_SAFE_INTEGER + 1],
-    ['line', BigInt(Number.MAX_SAFE_INTEGER) + 1n],
-    ['line', 0n],
-    ['line', new Uint8Array([3])],
-    ['column', 0],
-    ['column', '5'],
+    ['finding_line', 0],
+    ['finding_line', -1],
+    ['finding_line', 1.5],
+    ['finding_line', '3'],
+    ['finding_line', Number.MAX_SAFE_INTEGER + 1],
+    ['finding_line', BigInt(Number.MAX_SAFE_INTEGER) + 1n],
+    ['finding_line', 0n],
+    ['finding_line', new Uint8Array([3])],
+    ['finding_column', 0],
+    ['finding_column', '5'],
   ])('refuses %s = %s', (field, value) => {
-    const refusal = refusalOf([{ path: 'a.md', line: 1, [field]: value }]);
+    const refusal = refusalOf([{ path: 'a.md', finding_line: 1, [field]: value }]);
 
     expect(refusal).toMatchObject({ ok: false, row: 1, field, rowsSelected: 1 });
     expect(refusal.value).toBe(value);
   });
 
   it('refuses a column without a line', () => {
-    const refusal = refusalOf([{ path: 'a.md', column: 5 }]);
+    const refusal = refusalOf([{ path: 'a.md', finding_column: 5 }]);
 
-    expect(refusal).toMatchObject({ ok: false, row: 1, field: 'column', value: 5 });
+    expect(refusal).toMatchObject({ ok: false, row: 1, field: 'finding_column', value: 5 });
+  });
+});
+
+describe('issuesFromCheckRows — the bare severity, line and column names are evidence', () => {
+  it('reads them as nothing but evidence: no severity, position or refusal comes from them', () => {
+    // 🔑 Projection tables carry columns of exactly these names, which is why the
+    // reserved ones are prefixed. A value no reserved column could hold is fine here.
+    const result = issuesFromCheckRows(NAME, CHECK, [{ path: 'a.md', severity: 'high', line: 0, column: 'x' }]);
+
+    expect(result.ok).toBe(true);
+    const [issue] = result.ok ? result.issues : [];
+    expect(issue?.severity).toBe('error');
+    expect(Object.hasOwn(issue ?? {}, 'line')).toBe(false);
+    expect(Object.hasOwn(issue ?? {}, 'column')).toBe(false);
+    expect(issue?.evidence).toStrictEqual({ severity: 'high', line: 0, column: 'x' });
+    expect(result.ok && result.nearMisses).toStrictEqual([]);
   });
 });
 
 describe('issuesFromCheckRows — near misses of the reserved names', () => {
   it('names a column that matches a reserved name in another case', () => {
-    const result = issuesFromCheckRows(NAME, CHECK, [{ Path: 'a.md', SEVERITY: 'warning', line: 1 }]);
+    const result = issuesFromCheckRows(NAME, CHECK, [{ Path: 'a.md', FINDING_SEVERITY: 'warning', Finding_Line: 1 }]);
 
     expect(result.ok && result.nearMisses).toStrictEqual([
       { column: 'Path', reserved: 'path' },
-      { column: 'SEVERITY', reserved: 'severity' },
+      { column: 'FINDING_SEVERITY', reserved: 'finding_severity' },
+      { column: 'Finding_Line', reserved: 'finding_line' },
     ]);
   });
 
   it('names nothing when every reserved column is spelled exactly', () => {
-    const result = issuesFromCheckRows(NAME, CHECK, [{ path: 'a.md', severity: 'info', line: 1, column: 2 }]);
+    const result = issuesFromCheckRows(NAME, CHECK, [
+      { path: 'a.md', finding_severity: 'info', finding_line: 1, finding_column: 2 },
+    ]);
 
     expect(result.ok && result.nearMisses).toStrictEqual([]);
   });
 });
 
+describe('issuesFromCheckRows — the structured check name and evidence', () => {
+  it('names the check on every finding', () => {
+    const issues = issuesOf(NAME, CHECK, [{ path: 'a.md' }, { path: 'b.md' }]);
+
+    expect(issues.map((issue) => issue.check)).toStrictEqual([NAME, NAME]);
+  });
+
+  it('carries every column but the reserved ones as evidence, in the order SQLite returned them', () => {
+    const [issue] = issuesOf(NAME, CHECK, [{
+      owner: null,
+      path: 'a.md',
+      finding_severity: 'warning',
+      count: 3,
+      finding_line: 2,
+      finding_column: 4,
+      label: 'x',
+    }]);
+
+    expect(issue?.evidence).toStrictEqual({ owner: null, count: 3, label: 'x' });
+    expect(Object.keys(issue?.evidence ?? {})).toStrictEqual(['owner', 'count', 'label']);
+  });
+
+  it('renders a BLOB as the message renders it, and a bigint as its decimal text', () => {
+    const [issue] = issuesOf(NAME, CHECK, [{ digest: new Uint8Array([1, 255]), big: 2n ** 64n }]);
+
+    expect(issue?.evidence).toStrictEqual({ digest: '{"0":1,"1":255}', big: '18446744073709551616' });
+    expect(issue?.message).toContain(`digest=${String(issue?.evidence?.['digest'])}`);
+  });
+
+  it('carries an empty evidence object when the row selected only reserved columns', () => {
+    const [issue] = issuesOf(NAME, CHECK, [{ path: 'a.md' }]);
+
+    expect(issue?.evidence).toStrictEqual({});
+  });
+
+  it('keeps the message exactly as it was: every column, reserved ones included', () => {
+    const [issue] = issuesOf(NAME, CHECK, [{ path: 'a.md', finding_line: 2, n: 1 }]);
+
+    expect(issue?.message).toBe(`${CHECK.description} — path=a.md, finding_line=2, n=1`);
+  });
+});
+
 describe('describeUninterpretableRows', () => {
   it('quotes a text value, so "3" and 3 read differently', () => {
-    expect(describeUninterpretableRows(NAME, refusalOf([{ path: 'a.md', line: '3' }])))
-      .toBe(`The check "${NAME}" ran and selected 1 row, but row 1's line = "3" is not a positive integer, so none of its rows were reported.`);
+    expect(describeUninterpretableRows(NAME, refusalOf([{ path: 'a.md', finding_line: '3' }])))
+      .toBe(`The check "${NAME}" ran and selected 1 row, but row 1's finding_line = "3" is not a positive integer, so none of its rows were reported.`);
   });
 
   it('names a column with no line as the problem', () => {
-    expect(describeUninterpretableRows(NAME, refusalOf([{ path: 'a.md' }, { path: 'b.md', column: 5 }])))
-      .toBe(`The check "${NAME}" ran and selected 2 rows, but row 2's column = 5 is set but its line is not, so none of its rows were reported.`);
+    expect(describeUninterpretableRows(NAME, refusalOf([{ path: 'a.md' }, { path: 'b.md', finding_column: 5 }])))
+      .toBe(`The check "${NAME}" ran and selected 2 rows, but row 2's finding_column = 5 is set but its line is not, so none of its rows were reported.`);
   });
 });
 

@@ -392,21 +392,19 @@ Declaring a check:
   row becomes one finding, and its columns are that finding's evidence.
 
   Four column names are RESERVED, matched exactly (case-sensitive):
-    path      anchors the finding to that file
-    severity  error | warning | info -- this row's severity; NULL means the
-              check's declared one
-    line      1-based line in that file; NULL omits it
-    column    1-based column in that line; needs a line
-  Any other value in a reserved column (severity 'high' or 'Error', line 0)
-  FAILS the check as RESOURCE_CHECK_BROKEN rather than being guessed at. A
-  column that differs only in case (Severity, LINE) is a warning, and is
-  evidence only.
+    path              anchors the finding to that file
+    finding_severity  error | warning | info -- this row's severity; NULL
+                      means the check's declared one
+    finding_line      1-based line in that file; NULL omits it
+    finding_column    1-based column in that line; needs a finding_line
+  Any other value in a reserved column (finding_severity 'high' or 'Error',
+  finding_line 0) FAILS the check as RESOURCE_CHECK_BROKEN rather than being
+  guessed at. A column that differs only in case (Finding_Line) is a warning,
+  and is evidence only.
 
-  A SELECT * or a join feeds a table's OWN columns of those names into the
-  finding: realization_conditions carries severity, blob_conditions severity
-  and line, harness_blob_imports line, and blob_references line and column --
-  after a join, possibly another table's line than the path's. Alias them
-  (b.line AS refLine) when you mean them as evidence.
+  No projection table has a finding_* column, so SELECT * never sets one: a
+  table's own severity, line or column is evidence. Alias on purpose to place
+  a finding: SELECT r.path, b.line AS finding_line FROM ...
 
   Findings are ordinary validation issues with the code CUSTOM:<name>, so
   resources.validation.severity can downgrade or ignore one you inherited.
@@ -563,7 +561,12 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
              same document, and only one of them is a gate. It counts the
              TRACKED TREE and not your configured resource set, so it is
              legitimately far larger than scan's examined -- see above
-  findings:  One row per violation ({code, severity, message, location?})
+  findings:  One row per violation ({code, severity, message, location?,
+             line?, column?}). A finding one check produced (its violation,
+             or a broken / examined-nothing refusal about it) also carries
+             check: <name>; a declared check's violation carries evidence:
+             the row's non-reserved columns as SQLite returned them (a BLOB
+             as the message renders it). A whole-run finding has no check
   summary:   {errors, warnings, info} over findings; exit 1 iff errors > 0
   durationMs: wall time of the whole run
   data.checksRun:
@@ -575,7 +578,8 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
              \`builtin: true\` on the ones vat supplied (absent, never false, on
              a rule you declared), and examined (+ allowEmpty) on a check that
              declares examined, once that statement completed -- absent, never
-             0, otherwise. rows is what the check SELECTED, and it is
+             0, otherwise -- and examinedNothing: true exactly when that check
+             earned RESOURCE_CHECK_EXAMINED_NOTHING. rows is what the check SELECTED, and it is
              a memory signal: rows are fully materialised. It is not a finding
              count -- a severity override of 'ignore' drops findings the check
              still selected, so sum(rows) and summary legitimately disagree

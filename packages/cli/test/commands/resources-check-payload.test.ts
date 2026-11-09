@@ -1600,14 +1600,14 @@ function askRows(bySql: Readonly<Record<string, readonly Record<string, unknown>
 
 /** `graded` selects three rows, the third with an unknown severity; `no-orphans` selects one. */
 const ASK_BAD_SEVERITY = askRows({
-  [GRADED_SQL]: [{ path: 'a.md' }, { path: 'b.md' }, { path: 'c.md', severity: 'high' }],
+  [GRADED_SQL]: [{ path: 'a.md' }, { path: 'b.md' }, { path: 'c.md', finding_severity: 'high' }],
   [SECOND_SQL]: [{ path: 'd.md' }],
 });
 
 /**
  * Run {@link GRADED_CHECKS} with one row graded `rowSeverity` and an override on the check's code.
  *
- * @param rowSeverity - The `severity` column of the one row
+ * @param rowSeverity - The `finding_severity` column of the one row
  * @param override - The adopter's override for `CUSTOM:graded`
  * @returns The resolved issues
  */
@@ -1616,7 +1616,7 @@ function gradedWithOverride(rowSeverity: string, override: 'error' | 'warning' |
     builtins: NO_BUILTINS,
     checks: { [GRADED]: GRADED_CHECKS[GRADED] },
     only: undefined,
-    ask: askRows({ [GRADED_SQL]: [{ path: 'a.md', severity: rowSeverity }] }),
+    ask: askRows({ [GRADED_SQL]: [{ path: 'a.md', finding_severity: rowSeverity }] }),
     validation: { severity: { [`CUSTOM:${GRADED}`]: override } },
     membersEnumerated: POPULATED,
   }).issues;
@@ -1634,7 +1634,7 @@ describe('runProjectChecks — a row the check cannot interpret', () => {
     expect(issues.map((issue) => issue.code)).toStrictEqual(['RESOURCE_CHECK_BROKEN', SECOND_CODE]);
     expect(issues[0]?.severity).toBe('error');
     expect(issues[0]?.message).toContain(
-      'The check "graded" ran and selected 3 rows, but row 3\'s severity = "high" is not one of error, warning, info, so none of its rows were reported.',
+      'The check "graded" ran and selected 3 rows, but row 3\'s finding_severity = "high" is not one of error, warning, info, so none of its rows were reported.',
     );
   });
 
@@ -1663,7 +1663,7 @@ describe('runProjectChecks — a row severity, and the adopter override over it'
   it('reports each row at its own severity', () => {
     const { issues } = runWithClock({
       checks: { [GRADED]: GRADED_CHECKS[GRADED] },
-      ask: askRows({ [GRADED_SQL]: [{ path: 'a.md', severity: 'warning' }, { path: 'b.md', severity: null }] }),
+      ask: askRows({ [GRADED_SQL]: [{ path: 'a.md', finding_severity: 'warning' }, { path: 'b.md', finding_severity: null }] }),
     });
 
     expect(issues.map((issue) => issue.severity)).toStrictEqual(['warning', 'error']);
@@ -1685,7 +1685,7 @@ describe('runProjectChecks — a near miss of a reserved column name', () => {
       builtins: NO_BUILTINS,
       checks: { [GRADED]: GRADED_CHECKS[GRADED] },
       only: undefined,
-      ask: askRows({ [GRADED_SQL]: [{ path: 'a.md', Severity: 'warning' }, { path: 'b.md', Severity: 'info' }] }),
+      ask: askRows({ [GRADED_SQL]: [{ path: 'a.md', Finding_Severity: 'warning' }, { path: 'b.md', Finding_Severity: 'info' }] }),
       validation: undefined,
       membersEnumerated: POPULATED,
       warn: (message) => warnings.push(message),
@@ -1693,8 +1693,8 @@ describe('runProjectChecks — a near miss of a reserved column name', () => {
 
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('"graded"');
-    expect(warnings[0]).toContain('"Severity"');
-    expect(warnings[0]).toContain('"severity"');
+    expect(warnings[0]).toContain('"Finding_Severity"');
+    expect(warnings[0]).toContain('"finding_severity"');
   });
 
   it('says nothing when the reserved names are spelled exactly', () => {
@@ -1703,7 +1703,7 @@ describe('runProjectChecks — a near miss of a reserved column name', () => {
       builtins: NO_BUILTINS,
       checks: { [GRADED]: GRADED_CHECKS[GRADED] },
       only: undefined,
-      ask: askRows({ [GRADED_SQL]: [{ path: 'a.md', severity: 'warning', line: 2 }] }),
+      ask: askRows({ [GRADED_SQL]: [{ path: 'a.md', finding_severity: 'warning', finding_line: 2, severity: 'x', line: 0 }] }),
       validation: undefined,
       membersEnumerated: POPULATED,
       warn: (message) => warnings.push(message),

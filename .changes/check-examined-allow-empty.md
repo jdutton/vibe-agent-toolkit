@@ -7,7 +7,8 @@
   overridable), naming the check; its own violations are still reported. `allowEmpty: true` declares
   zero legitimate and is published beside `examined: 0`; `allowEmpty` without `examined` is refused
   at config load. A failing examined statement is `RESOURCE_CHECK_BROKEN`. The same holds in
-  `vat validate`'s `checks` phase.
+  `vat validate`'s `checks` phase. A check entry carries `examinedNothing: true` exactly when that
+  check produced `RESOURCE_CHECK_EXAMINED_NOTHING`.
 - **A budget kill or death during a check's examined statement names that statement**, and records
   the check as broken with its `rows`, instead of blaming the violations statement.
 

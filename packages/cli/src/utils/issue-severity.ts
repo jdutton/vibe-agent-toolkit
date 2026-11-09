@@ -61,15 +61,19 @@ export type SeverityOverrides = SeverityConfig;
  * (`materializeIssue` built it from that same registry); and `resolveSeverity`
  * indexes `CODE_REGISTRY` unguarded, so handing it a non-registry code would throw
  * rather than pass the issue through.
+ *
+ * Generic so a caller whose findings carry more than a `ValidationIssue` (a
+ * check's `check` and `evidence`) gets them back typed: an override only ever
+ * replaces `severity`, every other key is spread through.
  */
-export function resolveIssueSeverity(
-  issues: readonly ValidationIssue[],
+export function resolveIssueSeverity<T extends ValidationIssue>(
+  issues: readonly T[],
   validation: SeverityOverrides | undefined,
-): ValidationIssue[] {
+): T[] {
   const overrides = validation?.severity;
   if (overrides === undefined) return [...issues];
 
-  const resolved: ValidationIssue[] = [];
+  const resolved: T[] = [];
   for (const issue of issues) {
     if (!(issue.code in overrides)) {
       resolved.push(issue);

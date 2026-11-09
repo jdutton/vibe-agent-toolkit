@@ -342,25 +342,30 @@ usual "assert true" reflex and it is the single most common authoring mistake �
 that finds what is wrong, not the one that confirms what is right.
 
 **Four column names are reserved**, matched exactly and case-sensitively; every other column is
-evidence rendered into the message:
+evidence — rendered into the message and published as the finding's `evidence` object:
 
 | Column | Becomes | NULL or absent |
 |---|---|---|
 | `path` | the finding's `location` (a project-relative path; anything else is dropped) | no location |
-| `severity` | that row's severity: `error`, `warning` or `info` | the check's declared severity |
-| `line` | the finding's 1-based `line` | no line |
-| `column` | the finding's 1-based `column` — requires `line` | no column |
+| `finding_severity` | that row's severity: `error`, `warning` or `info` | the check's declared severity |
+| `finding_line` | the finding's 1-based `line` | no line |
+| `finding_column` | the finding's 1-based `column` — requires `finding_line` | no column |
 
-A value a reserved column cannot mean — `severity` `'high'`, `'Error'` or `'ignore'`, a `line` of
-`0` or `'3'`, a `column` with no `line` — fails the whole check as `RESOURCE_CHECK_BROKEN`, naming
-the row and the value; its cost record carries `broken: true` **with** `rows` (the statement ran,
-its rows could not be read). A column that matches a reserved name only case-insensitively
-(`Severity`, `LINE`) earns one stderr warning per check and stays evidence.
+A value a reserved column cannot mean — `finding_severity` `'high'`, `'Error'` or `'ignore'`, a
+`finding_line` of `0` or `'3'`, a `finding_column` with no `finding_line` — fails the whole check as
+`RESOURCE_CHECK_BROKEN`, naming the row and the value; its cost record carries `broken: true`
+**with** `rows` (the statement ran, its rows could not be read). A column that matches a reserved
+name only case-insensitively (`Finding_Line`) earns one stderr warning per check and stays evidence.
 
-⚠️ `SELECT *` or a join feeds a table's own columns of those names into the finding:
-`realization_conditions.severity`, `blob_conditions.severity`/`line`,
-`harness_blob_imports.line`, `blob_references.line`/`column`. After a join the `line` can belong
-to a different table than the `path`. Alias a column (`b.line AS refLine`) to keep it evidence.
+No projection table has a `finding_*` column, so `SELECT *` or a join never sets one — a table's own
+`severity`, `line` or `column` is plain evidence. Place a finding on purpose:
+`SELECT r.path, b.line AS finding_line FROM …`.
+
+**Reading the document.** Every finding one check produced — its violations and any
+`RESOURCE_CHECK_BROKEN` / `RESOURCE_CHECK_EXAMINED_NOTHING` about it — carries `check: <name>`; a
+finding about the whole run carries none. A declared check's violation also carries `evidence`
+(the row minus the reserved columns, values as SQLite returned them; a BLOB as the message shows
+it). `vat validate`'s `checks` phase publishes the same findings unchanged.
 
 An adopter's `resources.validation.severity` override on `CUSTOM:<name>` still wins over a row's
 own severity.
@@ -388,7 +393,8 @@ skills-have-owners:
 - The count lands on the check's `data.checks` entry as `examined` — present exactly when declared
   and the statement completed, never `0` as a placeholder.
 - `examined: 0` fails the run as `RESOURCE_CHECK_EXAMINED_NOTHING` (error, **not overridable**),
-  naming the check; its violations are still reported.
+  naming the check; its violations are still reported. The entry then carries
+  `examinedNothing: true` — present exactly when that finding is.
 - `allowEmpty: true` makes zero legitimate and is published beside `examined: 0`. Without
   `examined` it is refused at config load.
 - The examined statement obeys every rule `sql` does, is charged to the check's `durationSecs` and

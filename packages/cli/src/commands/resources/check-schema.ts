@@ -38,7 +38,47 @@ const PublishedCheckCostSchema = z.object({
   examined: z.number().int().nonnegative().optional(),
   /** Present and `true` only when the check declares that an `examined` count of 0 is legitimate. */
   allowEmpty: z.literal(true).optional(),
+  /**
+   * Present and `true` exactly when this check produced a `RESOURCE_CHECK_EXAMINED_NOTHING` finding
+   * (`examined: 0`, no `allowEmpty`, not broken). Derived from the same decision that emits it.
+   */
+  examinedNothing: z.literal(true).optional(),
 }).strict();
+
+/**
+ * One evidence value: what SQLite returned when JSON can carry it; a BLOB or an integer beyond
+ * JSON's range as the text the finding's message renders it as.
+ */
+const EvidenceValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+
+/**
+ * A finding of `vat resources check`'s document.
+ *
+ * - `check` — the check's key in `resources.checks`, or a built-in's name — on every finding ONE
+ *   check produced: its violations, and every refusal about it. ABSENT on a finding about the
+ *   whole run (an empty corpus, no check ran, an interruption).
+ * - `evidence` — a declared check's violation row minus the reserved columns (`path`,
+ *   `finding_severity`, `finding_line`, `finding_column`), in the order SQLite returned them. Only
+ *   beside `check`: evidence is always some check's row.
+ *
+ * 🔑 Passed to {@link reportSchema} rather than widening the shared `FindingSchema`, as that
+ * function's finding parameter exists for. Also the finding schema of the orchestrator envelope
+ * (`orchestrator-schema.ts`): `vat validate` runs these checks as a phase and publishes their
+ * findings flat and unchanged, so one declaration serves both documents.
+ *
+ * ⚠️ One object extended, plus a refinement — NOT a union of "check finding | run finding". A
+ * union emits every inherited key once per branch, and `ValidationIssueSchema` is the one home of
+ * those keys (`resources-check-finding-column.test.ts` counts it in the emitted file). The cost:
+ * "evidence needs check" is enforced when VAT parses a document, and is absent from the emitted
+ * JSON Schema.
+ */
+export const CHECK_FINDING_SCHEMA = FindingSchema.extend({
+  check: z.string().min(1).optional(),
+  evidence: z.record(z.string(), EvidenceValueSchema).optional(),
+}).strict().refine((finding) => finding.evidence === undefined || finding.check !== undefined, {
+  message: 'evidence is a check\'s row, so a finding carrying it must name the check',
+  path: ['evidence'],
+});
 
 /**
  * A signed bound on what the derived rows settle, as `@vibe-agent-toolkit/resources`
@@ -114,7 +154,7 @@ const CheckDataSchema = z.object({
 export type CheckData = z.infer<typeof CheckDataSchema>;
 
 /** The document this command publishes. */
-export const CHECK_REPORT_SCHEMA = reportSchema(CheckDataSchema, FindingSchema);
+export const CHECK_REPORT_SCHEMA = reportSchema(CheckDataSchema, CHECK_FINDING_SCHEMA);
 
 export type CheckReport = Report<CheckData>;
 

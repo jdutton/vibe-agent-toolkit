@@ -1,14 +1,21 @@
 /**
- * What a check's statement feeds a finding when it selects a projection table's OWN columns.
+ * The reserved row columns of `resources.checks` against the projection's real schema.
  *
- * `path`, `severity`, `line` and `column` are reserved row columns of `resources.checks`. Several
- * projection tables carry columns of exactly those names, so a statement that selects them — by
- * name, by `*`, or through a join — hands their values to the finding. These pins run real SQL
- * against a real store so the consequence the docs name is a fact about the shipped tables, not a
- * claim about them.
+ * `path`, `finding_severity`, `finding_line` and `finding_column` are read as something other than
+ * evidence. The last three are spelled so that NO projection relation carries them: several tables
+ * carry a `severity`, `line` or `column` of their own (`blob_conditions`, `blob_references`,
+ * `harness_blob_imports`, `realization_conditions`), and when those names were the reserved ones a
+ * `SELECT bc.*` handed a table's own `severity` to the finding — overriding the check's declared
+ * one. With the prefixed names a `SELECT *` cannot feed a reserved column, by construction; the
+ * enforcer below keeps it so as the schema grows.
  */
 
-import { issuesFromCheckRows, type ExtentKey } from '@vibe-agent-toolkit/resources';
+import {
+  allDerivedSpecs,
+  CHECK_FINDING_COLUMNS,
+  issuesFromCheckRows,
+  type ExtentKey,
+} from '@vibe-agent-toolkit/resources';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { openEphemeralProjectionStore, type SqlQueryableStore } from '../src/store.js';
@@ -41,20 +48,66 @@ function findingsOf(sql: string): ReturnType<typeof issuesFromCheckRows> {
   return issuesFromCheckRows('pin', CHECK, store.query(sql));
 }
 
-describe('a check selecting a projection table\'s reserved columns', () => {
-  it('takes blob_conditions.severity as the finding\'s severity', () => {
-    const result = findingsOf(
-      'SELECT r.path, c.severity FROM blob_conditions c JOIN resource_realizations r ON r.contentKey = c.blob',
-    );
+/**
+ * Every relation a check can read, with its columns: every table and view the store creates, read
+ * back from SQLite itself, and every derived relation, from the registry its DDL is built from.
+ *
+ * @returns Relation name → its column names
+ */
+function everyRelationsColumns(): Map<string, readonly string[]> {
+  const relations = new Map<string, readonly string[]>();
+  const named = store.query("SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%'");
+  for (const { name } of named) {
+    const columns = store.query('SELECT name FROM pragma_table_info(?)', String(name)).map((row) => String(row['name']));
+    relations.set(String(name), columns);
+  }
+  for (const spec of allDerivedSpecs()) relations.set(spec.name, spec.columns);
+  return relations;
+}
 
-    expect(result.ok && result.issues.map((issue) => issue.severity)).toStrictEqual(['info']);
+describe('the reserved check columns and the projection schema', () => {
+  it('reserve exactly path and the three finding_ names', () => {
+    expect(CHECK_FINDING_COLUMNS).toStrictEqual(['path', 'finding_severity', 'finding_line', 'finding_column']);
   });
 
-  it('takes a joined blob_references.line as the finding\'s line, beside the realization\'s path', () => {
+  it('are carried by no relation a check can read, so SELECT * can never feed one', () => {
+    const relations = everyRelationsColumns();
+    const prefixed = new Set<string>(CHECK_FINDING_COLUMNS.filter((name) => name !== 'path'));
+    // Case-insensitively: a relation carrying `Finding_Line` would feed a near miss, not evidence.
+    const carriers = [...relations].flatMap(([relation, columns]) =>
+      columns.filter((column) => prefixed.has(column.toLowerCase())).map((column) => `${relation}.${column}`));
+
+    expect(carriers).toStrictEqual([]);
+  });
+
+  it('saw the tables that motivated the rename, so the scan above is not vacuous', () => {
+    const relations = everyRelationsColumns();
+
+    expect(relations.get('blob_conditions')).toContain('severity');
+    expect(relations.get('blob_references')).toEqual(expect.arrayContaining(['line', 'column']));
+    expect(relations.get('changed_files')).toContain('path');
+  });
+});
+
+describe('a check selecting a projection table\'s own severity, line and column', () => {
+  it('keeps blob_conditions.* as evidence: the declared severity stands', () => {
     const result = findingsOf(
-      'SELECT r.path, b.line FROM blob_references b JOIN resource_realizations r ON r.contentKey = b.blob',
+      'SELECT r.path, c.* FROM blob_conditions c JOIN resource_realizations r ON r.contentKey = c.blob',
     );
 
-    expect(result.ok && result.issues.map((issue) => [issue.location, issue.line])).toStrictEqual([['docs/a.md', 1]]);
+    expect(result.ok && result.issues.map((issue) => issue.severity)).toStrictEqual(['error']);
+    expect(result.ok && result.issues[0]?.evidence).toMatchObject({ severity: 'info' });
+  });
+
+  it('keeps a joined blob_references.line as evidence, and places the finding only by finding_line', () => {
+    const evidenceOnly = findingsOf(
+      'SELECT r.path, b.line FROM blob_references b JOIN resource_realizations r ON r.contentKey = b.blob',
+    );
+    const placed = findingsOf(
+      'SELECT r.path, b.line AS finding_line FROM blob_references b JOIN resource_realizations r ON r.contentKey = b.blob',
+    );
+
+    expect(evidenceOnly.ok && evidenceOnly.issues.map((issue) => [issue.location, issue.line])).toStrictEqual([['docs/a.md', undefined]]);
+    expect(placed.ok && placed.issues.map((issue) => [issue.location, issue.line])).toStrictEqual([['docs/a.md', 1]]);
   });
 });

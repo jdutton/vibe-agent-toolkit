@@ -109,14 +109,47 @@ export const PROJECTION_STATEMENT_REFUSED_CODE = 'PROJECTION_STATEMENT_REFUSED';
  * The column names a check's row reads as something other than evidence.
  *
  * 🔑 Matched EXACTLY, case included. A result row keeps the spelling the
- * statement used, so `SELECT Severity` and `SELECT severity` arrive as
+ * statement used, so `SELECT Finding_Line` and `SELECT finding_line` arrive as
  * different keys; only the exact one is reserved, and the other is a
  * {@link NearMiss}.
+ *
+ * 🔑 **`finding_` because no projection relation carries those names.** They
+ * were `severity`, `line` and `column`, which `blob_conditions`,
+ * `blob_references`, `harness_blob_imports` and `realization_conditions` carry
+ * as their OWN columns — so `SELECT bc.*` overrode a check's declared severity
+ * with a table's. Now a `SELECT *` cannot feed one, and the bare names are
+ * ordinary evidence. `check-reserved-columns.test.ts` in projection-sqlite holds
+ * every relation's columns to that; `path` stays `path`, the anchor every table
+ * that names a file already calls it.
  */
-const RESERVED_CHECK_COLUMNS = ['path', 'severity', 'line', 'column'] as const;
+export const CHECK_FINDING_COLUMNS = ['path', 'finding_severity', 'finding_line', 'finding_column'] as const;
 
 /** One reserved column name. */
-type ReservedCheckColumn = (typeof RESERVED_CHECK_COLUMNS)[number];
+type ReservedCheckColumn = (typeof CHECK_FINDING_COLUMNS)[number];
+
+/**
+ * One evidence value as a finding publishes it: what SQLite returned when JSON
+ * can carry it, else the text the message renders it as (a BLOB, a `bigint`).
+ */
+export type CheckEvidenceValue = string | number | boolean | null;
+
+/**
+ * A finding produced by one check: a {@link ValidationIssue} that names the
+ * check and, for a declared check's violation, carries its row.
+ *
+ * 🔑 A separate type rather than a widened `ValidationIssue`: only
+ * `vat resources check`'s document publishes these two keys, through its own
+ * finding schema.
+ */
+export interface CheckIssue extends ValidationIssue {
+  /** The check's key in `resources.checks`, or a built-in's name. */
+  check?: string;
+  /**
+   * The row's columns minus the reserved ones, in the order SQLite returned
+   * them. Present on a declared check's violation only.
+   */
+  evidence?: Record<string, CheckEvidenceValue>;
+}
 
 /**
  * A selected column whose name matches a reserved one only case-insensitively —
@@ -146,7 +179,7 @@ type StrictCheckColumn = Exclude<ReservedCheckColumn, 'path'>;
 export type CheckRowConversion =
   | {
     readonly ok: true;
-    readonly issues: readonly ValidationIssue[];
+    readonly issues: readonly CheckIssue[];
     readonly nearMisses: readonly NearMiss[];
   }
   | {
@@ -161,18 +194,18 @@ export type CheckRowConversion =
 /** One row's reading of a reserved column: a value, nothing said, or a refusal. */
 type Read<T> = { readonly ok: true; readonly value: T | undefined } | { readonly ok: false };
 
-/** Why a `severity` value was refused, as a predicate. */
+/** Why a `finding_severity` value was refused, as a predicate. */
 const SEVERITY_REFUSAL = `is not one of ${SEVERITIES.join(', ')}`;
-/** Why a `line` or `column` value was refused, as a predicate. */
+/** Why a `finding_line` or `finding_column` value was refused, as a predicate. */
 const POSITION_REFUSAL = 'is not a positive integer';
 
 /**
  * Turn one check's selected rows into findings.
  *
- * Four columns are RESERVED ({@link RESERVED_CHECK_COLUMNS}): `path` anchors the
- * finding, `severity` sets that row's severity, and `line` / `column` place it.
- * `NULL` or absent means "not said". Anything else in `severity`, `line` or
- * `column` refuses the whole check rather than being guessed at — a row graded
+ * Four columns are RESERVED ({@link CHECK_FINDING_COLUMNS}): `path` anchors the
+ * finding, `finding_severity` sets that row's severity, and `finding_line` /
+ * `finding_column` place it. `NULL` or absent means "not said". Anything else in
+ * the three `finding_` columns refuses the whole check rather than being guessed at — a row graded
  * `'high'` was written by someone who meant something, and reporting it at the
  * declared severity would re-grade it in silence. (`path` keeps its older rule:
  * an unusable value is dropped, see {@link locationOf}.)
@@ -183,15 +216,16 @@ const POSITION_REFUSAL = 'is not a positive integer';
  *   it. See `SqlQueryableStore.query`: arbitrary SQL has no table spec, so a
  *   boolean arrives as `0`/`1` and a date as text. The message renders what is
  *   there rather than pretending otherwise
- * @returns One finding per row, in the order SQLite produced them — or the
- *   first row that could not be read
+ * @returns One finding per row, in the order SQLite produced them, each naming
+ *   the check and carrying its non-reserved columns as `evidence` — or the first
+ *   row that could not be read
  */
 export function issuesFromCheckRows(
   name: string,
   check: ResourceCheck,
   rows: readonly Record<string, unknown>[],
 ): CheckRowConversion {
-  const issues: ValidationIssue[] = [];
+  const issues: CheckIssue[] = [];
   for (const [index, row] of rows.entries()) {
     const read = readRow(row);
     if (!read.ok) {
@@ -213,6 +247,8 @@ export function issuesFromCheckRows(
       ...(location === undefined ? {} : { location }),
       ...(read.line === undefined ? {} : { line: read.line }),
       ...(read.column === undefined ? {} : { column: read.column }),
+      check: name,
+      evidence: evidenceOf(row),
     });
   }
   return { ok: true, issues, nearMisses: nearMissesOf(rows[0]) };
@@ -242,7 +278,7 @@ export function checkStatements(check: ResourceCheck): string[] {
  *
  * @param name - The check's key in `resources.checks`
  * @param refusal - What {@link issuesFromCheckRows} refused
- * @returns e.g. `The check "x" ran and selected 3 rows, but row 3's severity =
+ * @returns e.g. `The check "x" ran and selected 3 rows, but row 3's finding_severity =
  *   "high" is not one of error, warning, info, so none of its rows were reported.`
  */
 export function describeUninterpretableRows(name: string, refusal: Extract<CheckRowConversion, { ok: false }>): string {
@@ -252,33 +288,71 @@ export function describeUninterpretableRows(name: string, refusal: Extract<Check
     + ` ${String(refusal.row)}'s ${refusal.field} = ${value} ${refusal.reason}, so none of its rows were reported.`;
 }
 
+/**
+ * A row's evidence: every column but the reserved ones, in the order SQLite
+ * returned them, each value through {@link evidenceValue}.
+ *
+ * @param row - One selected row
+ * @returns The evidence object
+ */
+function evidenceOf(row: Record<string, unknown>): Record<string, CheckEvidenceValue> {
+  const evidence: Record<string, CheckEvidenceValue> = {};
+  for (const [column, value] of Object.entries(row)) {
+    if (!isReserved(column)) evidence[column] = evidenceValue(value);
+  }
+  return evidence;
+}
+
+/**
+ * Whether a column name is one of {@link CHECK_FINDING_COLUMNS}, exactly.
+ *
+ * @param column - The column as the statement spelled it
+ * @returns True for a reserved name
+ */
+function isReserved(column: string): column is ReservedCheckColumn {
+  return (CHECK_FINDING_COLUMNS as readonly string[]).includes(column);
+}
+
+/**
+ * One evidence value: as SQLite returned it when JSON can carry it, else the
+ * message's own rendering ({@link renderValue}) — one renderer, so the
+ * evidence and the message never disagree about a BLOB.
+ *
+ * @param value - Whatever SQLite returned for the column
+ * @returns The value, or its text
+ */
+function evidenceValue(value: unknown): CheckEvidenceValue {
+  if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+  return renderValue(value);
+}
+
 /** A row's strict reserved columns, read — or the first one that cannot be. */
 type RowReading =
   | { readonly ok: true; readonly severity: Severity | undefined; readonly line: number | undefined; readonly column: number | undefined }
   | { readonly ok: false; readonly field: StrictCheckColumn; readonly reason: string };
 
 /**
- * Read one row's `severity`, `line` and `column`.
+ * Read one row's `finding_severity`, `finding_line` and `finding_column`.
  *
  * @param row - One selected row
  * @returns The three values, or the column that refused
  */
 function readRow(row: Record<string, unknown>): RowReading {
-  const severity = readSeverity(row['severity']);
-  if (!severity.ok) return { ok: false, field: 'severity', reason: SEVERITY_REFUSAL };
-  const line = readPosition(row['line']);
-  if (!line.ok) return { ok: false, field: 'line', reason: POSITION_REFUSAL };
-  const column = readPosition(row['column']);
-  if (!column.ok) return { ok: false, field: 'column', reason: POSITION_REFUSAL };
+  const severity = readSeverity(row['finding_severity']);
+  if (!severity.ok) return { ok: false, field: 'finding_severity', reason: SEVERITY_REFUSAL };
+  const line = readPosition(row['finding_line']);
+  if (!line.ok) return { ok: false, field: 'finding_line', reason: POSITION_REFUSAL };
+  const column = readPosition(row['finding_column']);
+  if (!column.ok) return { ok: false, field: 'finding_column', reason: POSITION_REFUSAL };
   // A column is a place WITHIN a line; on its own it places nothing.
   if (column.value !== undefined && line.value === undefined) {
-    return { ok: false, field: 'column', reason: 'is set but its line is not' };
+    return { ok: false, field: 'finding_column', reason: 'is set but its line is not' };
   }
   return { ok: true, severity: severity.value, line: line.value, column: column.value };
 }
 
 /**
- * The `severity` column: exactly a {@link Severity}, case-sensitive.
+ * The `finding_severity` column: exactly a {@link Severity}, case-sensitive.
  *
  * ⛔ `'ignore'` is refused: it is an adopter's override, never a fact a row can
  * state about itself — a row that could ignore itself is a check that passes by
@@ -294,7 +368,7 @@ function readSeverity(value: unknown): Read<Severity> {
 }
 
 /**
- * The `line` or `column` column: a positive safe integer.
+ * The `finding_line` or `finding_column` column: a positive safe integer.
  *
  * A `bigint` is accepted in range, because a store that reads 64-bit integers
  * as `bigint` returns one for an ordinary `INTEGER` column.
@@ -321,7 +395,7 @@ function nearMissesOf(row: Record<string, unknown> | undefined): NearMiss[] {
   if (row === undefined) return [];
   const misses: NearMiss[] = [];
   for (const column of Object.keys(row)) {
-    const reserved = RESERVED_CHECK_COLUMNS.find((name) => name === column.toLowerCase());
+    const reserved = CHECK_FINDING_COLUMNS.find((name) => name === column.toLowerCase());
     if (reserved !== undefined && reserved !== column) misses.push({ column, reserved });
   }
   return misses;
