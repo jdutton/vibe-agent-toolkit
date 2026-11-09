@@ -78,13 +78,8 @@ export type OrchestratorPhaseEntry = z.infer<typeof PhaseEntrySchema>;
 export type OrchestratorData = z.infer<typeof OrchestratorDataSchema>;
 
 /**
- * The document the three orchestrators publish.
- *
- * 🔑 Its findings are `vat resources check`'s finding schema, not the bare `FindingSchema`: the
- * `checks` phase's findings are folded in flat and unchanged, `check` and `evidence` included, so
- * `vat validate`'s document says which check spoke exactly as `vat resources check`'s does. A
- * finding from any other phase simply carries neither key. One declaration, so the two documents
- * cannot drift; stripping the keys at the fold would have published less than the phase knew.
+ * The document the three orchestrators publish. 🔑 Its findings use the check finding schema: the
+ * `checks` phase's findings fold in unchanged, `check` and `evidence` included.
  */
 export const ORCHESTRATOR_REPORT_SCHEMA = reportSchema(OrchestratorDataSchema, CHECK_FINDING_SCHEMA);
 

@@ -1,16 +1,8 @@
-/**
- * `--base <ref>` — the commit the `changed_files` relation compares the tree with — as one option
- * every statement-running verb declares the same way: `vat resources query`, `vat resources check`
- * and `vat validate` (which forwards it to its checks phase).
- */
+/** `--base <ref>`, the commit `changed_files` compares with, for every statement-running verb. */
 
 import { Option } from 'commander';
 
-/**
- * A fresh `--base <ref>` option. A factory, because Commander mutates an `Option` as it is added.
- *
- * @returns The option
- */
+/** A fresh `--base <ref>` option. A factory, because Commander mutates an `Option` as it is added. */
 export function baseOption(): Option {
   return new Option(
     '--base <ref>',

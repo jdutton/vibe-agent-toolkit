@@ -16,11 +16,8 @@
  * - ⚠️ That last one does NOT make the step always able to fail: the only
  *   built-in ships at `info`. Do not invent a second refusal for it — that
  *   would refuse the no-config run the default set exists to serve.
- * - 🔑 **A fifth, per CHECK: one that declares `examined` and counts zero**
- *   ({@link examinedNothingFinding}), under its own refusal code
- *   `RESOURCE_CHECK_EXAMINED_NOTHING` — the run-level counts cannot see one
- *   check matching nothing beside neighbours that see plenty. The check's own
- *   `allowEmpty: true` is the only exemption, and it is published.
+ * - 🔑 **A fifth, per CHECK:** a declared `examined` that counts zero
+ *   ({@link examinedNothingFinding}); only the check's `allowEmpty: true` exempts it.
  * - 🔑 **No built-in check may be SQL.** {@link checkCommand} reads
  *   `config?.resources?.checks` and nothing else for statements; built-ins are
  *   TypeScript predicates over the row model, and a built-in's `sqlTwin` is
@@ -161,17 +158,9 @@ export interface CheckCost {
   readonly name: string;
   /** Wall time of this check's selection, and of nothing it shares with others. */
   readonly durationMs: number;
-  /**
-   * Rows the selection returned — the violations it found. Present exactly when
-   * the statement completed.
-   */
+  /** Rows the selection returned. Present exactly when the statement completed. */
   readonly rows?: number;
-  /**
-   * Set when the check could not report. `broken` without `rows` is a statement
-   * that threw; `broken` WITH `rows` is a statement that completed and then
-   * either its declared `examined` statement failed or its rows could not be
-   * interpreted (or a run stopped while running the one or converting the other).
-   */
+  /** Could not report. Without `rows`: the statement threw; with: `examined` or conversion failed. */
   readonly broken?: true;
   /**
    * Set when VAT supplied this check rather than the project. 🔑 Without it a
@@ -180,12 +169,7 @@ export interface CheckCost {
    * a project declares a check of the same name, to tell the two entries apart.
    */
   readonly builtin?: true;
-  /**
-   * How many rows the check's declared `examined` statement selected — what the
-   * check ranged over. Present exactly when the check declares one AND it
-   * completed: absent on a check that declares none, and absent (never 0) when
-   * the statement did not finish, because 0 is a count the check is refused for.
-   */
+  /** Rows the declared `examined` statement selected; absent (never 0) unless it completed. */
   readonly examined?: number;
   /** Set when the check declares that an `examined` count of 0 is legitimate. */
   readonly allowEmpty?: true;
@@ -363,8 +347,7 @@ export function buildCheckOutputData(input: CheckPayloadInput): CheckReport {
       // 🪤 `rows` and `broken` are spread conditionally rather than defaulted.
       // `rows: 0` on a statement that never returned would read as a clean pass,
       // which is the exact confusion `RESOURCE_CHECK_BROKEN` exists to prevent —
-      // so a check that threw publishes no row count at all. A check that ran
-      // and whose rows could not be read publishes BOTH: its statement did complete.
+      // so a check that threw publishes no row count at all.
       checks: input.costs.map((cost) => ({
         name: cost.name,
         // Three significant figures, so a 0.4 ms rule serializes as 0.0004 rather
@@ -375,13 +358,9 @@ export function buildCheckOutputData(input: CheckPayloadInput): CheckReport {
         // Absent, never `false`, on a declared rule — so the key's presence is
         // the whole claim and a reader never has to tell `false` from unset.
         ...(cost.builtin === undefined ? {} : { builtin: cost.builtin }),
-        // The check's own denominator, under the same rule as `rows`: absent
-        // when it was not declared or did not complete, so `examined: 0` only
-        // ever means "counted, and there was nothing".
         ...(cost.examined === undefined ? {} : { examined: cost.examined }),
         ...(cost.allowEmpty === undefined ? {} : { allowEmpty: cost.allowEmpty }),
-        // The SAME predicate that emits the refusal, on the same record — so the
-        // entry and the finding cannot disagree. Absent, never `false`.
+        // The predicate that emits the refusal, so entry and finding cannot disagree.
         ...(examinedNothing(cost) ? { examinedNothing: true as const } : {}),
       })),
     },
@@ -521,8 +500,7 @@ function timed<T>(now: () => number, run: () => T): Timed<T> {
  *
  * 🪤 Only `ask` reaches this. Turning the selected rows INTO findings is not a
  * statement failure, and reporting it as one told the operator a working rule
- * was broken — see the append in {@link runUnits}. Rows the check could not
- * interpret are {@link uninterpretableRowsFinding}'s.
+ * was broken — see the append in {@link runUnits}.
  *
  * @param name - The check's key in `resources.checks`
  * @param error - Whatever the statement threw
@@ -535,50 +513,17 @@ function brokenCheckFinding(name: string, error: unknown): CheckIssue {
   ));
 }
 
-/**
- * A finding about one check, naming it.
- *
- * 🔑 Every finding a single check produced carries `check` — its violations and
- * every refusal about it — so a consumer never parses a message to learn which
- * check spoke. A finding about the whole RUN (an empty corpus, no check ran, an
- * interruption) goes through no check and carries none.
- *
- * @param name - The check's key in `resources.checks`, or a built-in's name
- * @param issue - The finding
- * @returns The finding, naming the check
- */
+/** A finding about one check, naming it. A finding about the whole RUN carries no `check`. */
 function ofCheck(name: string, issue: ValidationIssue): CheckIssue {
   return { ...issue, check: name };
 }
 
-/**
- * The finding for a check whose statement ran and whose rows could not be read.
- *
- * 🔑 Under `RESOURCE_CHECK_BROKEN`, for the reason {@link brokenCheckFinding}
- * gives: a check that reported none of its rows is asserting nothing, and an
- * override on its `CUSTOM:` code must not be able to hide that.
- *
- * @param name - The check's key in `resources.checks`
- * @param refusal - The row and value the conversion refused
- * @returns The run-integrity finding
- */
+/** A check whose rows could not be read: `RESOURCE_CHECK_BROKEN`, as {@link brokenCheckFinding}. */
 function uninterpretableRowsFinding(name: string, refusal: Extract<CheckRowConversion, { ok: false }>): CheckIssue {
   return ofCheck(name, runIntegrityFinding(describeUninterpretableRows(name, refusal)));
 }
 
-/**
- * The finding for a check whose declared `examined` statement would not run.
- *
- * Under `RESOURCE_CHECK_BROKEN`, for {@link brokenCheckFinding}'s reason: the
- * check's verdict now rests on a denominator nobody counted, so none of its rows
- * are reported and the news cannot be silenced by an override on its `CUSTOM:`
- * code. Its own sentence, so the operator fixes the right statement — the
- * violations statement ran.
- *
- * @param name - The check's key in `resources.checks`
- * @param error - Whatever the examined statement threw
- * @returns The run-integrity finding
- */
+/** A check whose `examined` statement would not run: `RESOURCE_CHECK_BROKEN`, worded apart. */
 function brokenExaminedFinding(name: string, error: unknown): CheckIssue {
   return ofCheck(name, runIntegrityFinding(
     `The check "${name}" ran its violations statement, but its examined statement could not run, so`
@@ -591,21 +536,9 @@ function brokenExaminedFinding(name: string, error: unknown): CheckIssue {
 const EXAMINED_NOTHING_CODE = 'RESOURCE_CHECK_EXAMINED_NOTHING' satisfies RefusalCode;
 
 /**
- * The finding for a check whose declared `examined` statement counted zero rows.
- *
- * 🔑 **Per check, because a run-level count cannot see it.** The run's
- * `examined` counts the population, and one check whose `WHERE` matches nothing
- * hides behind neighbours that see thousands of rows — zero violations over
- * nothing reads exactly like zero violations over everything. The check declared
- * its own denominator, so the refusal is about THAT check, by name.
- *
- * A registered REFUSAL at `error`, so no `severity` or `allow` key can reach it;
- * the one legitimate escape is the check's own `allowEmpty: true`, which every
- * report then shows. The check's violations are still reported beside it — they
- * are real, and hiding them would trade one silence for another.
- *
- * @param name - The check's key in `resources.checks`
- * @returns The refusal finding
+ * A check whose declared `examined` statement counted zero rows. Per check,
+ * because the run-level count hides one empty check behind busy neighbours. A
+ * REFUSAL, so only `allowEmpty: true` escapes it; the check's violations still report.
  */
 function examinedNothingFinding(name: string): CheckIssue {
   return {
@@ -619,31 +552,15 @@ function examinedNothingFinding(name: string): CheckIssue {
 }
 
 /**
- * Whether a check's cost record earns {@link examinedNothingFinding}: its examined
- * statement completed and counted zero, the check did not declare zero
- * legitimate, and nothing broke first.
- *
- * 🔑 **The ONE decision.** {@link runUnit} emits the refusal from it, the
- * interrupted-run rebuild re-derives the refusal from it, and
- * {@link buildCheckOutputData} publishes `examinedNothing: true` on the check's
- * entry from it — so the entry and the finding cannot disagree in either
- * direction. A `broken` record never qualifies: its earlier refusal wins, and
- * its count (when it has one) is not a verdict.
- *
- * @param cost - The check's cost record
- * @returns True when the check examined nothing and may not
+ * Whether a cost record earns {@link examinedNothingFinding}. 🔑 The ONE decision:
+ * the emitter, the interrupted-run rebuild and the published `examinedNothing`
+ * flag all read it. A `broken` record never qualifies — its earlier refusal wins.
  */
 function examinedNothing(cost: CheckCost): boolean {
   return cost.examined === 0 && cost.allowEmpty === undefined && cost.broken === undefined;
 }
 
-/**
- * The one stderr line for a check that selects a near miss of a reserved column.
- *
- * @param name - The check's key in `resources.checks`
- * @param misses - The columns, and the reserved names they nearly are
- * @returns The warning
- */
+/** The one stderr line for a check that selects a near miss of a reserved column. */
 function nearMissWarning(name: string, misses: readonly NearMiss[]): string {
   const pairs = misses.map(({ column, reserved }) => `"${column}" (reserved: "${reserved}")`).join(', ');
   return `The check "${name}" selects ${pairs}. Reserved columns are matched exactly, so these are`
@@ -663,11 +580,7 @@ function nearMissWarning(name: string, misses: readonly NearMiss[]): string {
 interface CheckSelection {
   /** How many violating rows the check selected. */
   readonly rows: number;
-  /**
-   * Set for a statement, whose rows are converted after the timed span — the
-   * loop announces that window as `converting`. A built-in's findings already
-   * exist when its selection returns, so it has no such window.
-   */
+  /** Set for a statement: its rows convert after the timed span, announced as `converting`. */
   readonly converts: boolean;
   /** Turn them into findings. Deliberately OUTSIDE the timed span. */
   readonly report: () => CheckRowConversion;
@@ -686,10 +599,7 @@ interface CheckUnit {
   readonly builtin?: true;
   /** Select the violations. Timed by {@link timed}, and so is {@link examine}. */
   readonly select: () => CheckSelection;
-  /**
-   * Count what the check ranged over — its declared `examined` statement's rows.
-   * Absent when it declares none (every built-in, and most declared checks).
-   */
+  /** Count its declared `examined` statement's rows. Absent when it declares none. */
   readonly examine?: () => number;
   /** Set when an examined count of 0 is declared legitimate. Only alongside {@link examine}. */
   readonly allowEmpty?: true;
@@ -711,8 +621,7 @@ function sqlCheckUnit(name: string, check: ResourceCheck, ask: AskProjection): C
       const rows = ask(check.sql);
       return { rows: rows.length, converts: true, report: () => issuesFromCheckRows(name, check, rows) };
     },
-    // 🪤 The count is all the examined statement contributes — its rows are
-    // never findings and never evidence — so only the length leaves this closure.
+    // 🪤 Only the count leaves: examined rows are never findings or evidence.
     ...(examined === undefined ? {} : { examine: () => ask(examined).length }),
     ...(check.allowEmpty === undefined ? {} : { allowEmpty: check.allowEmpty }),
   };
@@ -734,7 +643,6 @@ function builtinCheckUnit(builtin: BoundBuiltinCheck): CheckUnit {
     builtin: true,
     select: () => {
       const found = builtin.run();
-      // Named in the conversion, outside the timed span, like a statement's rows.
       return {
         rows: found.length,
         converts: false,
@@ -772,19 +680,7 @@ function checkUnits(
   ];
 }
 
-/**
- * Turn one completed selection into findings, announcing the window first.
- *
- * 🔑 The `converting` line is written AFTER the statement and BEFORE the
- * conversion and the cost: the window in which a kill must read as
- * "converting", never as a statement still running.
- *
- * @param name - The check's name
- * @param durationMs - What its statement cost
- * @param selection - What the statement selected
- * @param sinks - Where progress is announced and a near miss is said
- * @returns What the rows became
- */
+/** Convert a selection. 🔑 `converting` is announced first, so a kill there names the conversion. */
 function convertSelection(
   name: string,
   durationMs: number,
@@ -803,32 +699,14 @@ interface UnitSinks {
   readonly warn: ((message: string) => void) | undefined;
 }
 
-/**
- * What one unit produced: its cost, the refusal it earned (if any), and its findings.
- *
- * The refusal travels apart from the findings so the loop can put it FIRST
- * without copying a result set that is unbounded by construction.
- */
+/** What one unit produced. The refusal is apart so the loop can put it FIRST without copying. */
 interface UnitResult {
   readonly cost: CheckCost;
   readonly refusal?: CheckIssue;
   readonly issues: readonly CheckIssue[];
 }
 
-/**
- * Run a unit's declared `examined` statement, announced first and timed.
- *
- * 🔑 Announced as `examining` BEFORE the call, for the reason `start` is: the
- * statement can hang, and a kill there must name the examined statement, not
- * the violations statement that had already returned.
- *
- * @param name - The check's name
- * @param examine - Its examined statement, as a thunk
- * @param now - The clock
- * @param violations - What its violations statement cost and selected
- * @param onProgress - Where it is announced
- * @returns The count or the throw, and what it cost
- */
+/** Run a unit's `examined` statement, timed. 🔑 Announced first, so a hang there names it. */
 function examineUnit(
   name: string,
   examine: () => number,
@@ -841,29 +719,15 @@ function examineUnit(
 }
 
 /**
- * Run one unit: its violations statement, its examined statement when declared,
- * then the conversion of its rows — and price it.
+ * Run one unit — violations statement, examined statement, conversion — and price it.
  *
- * 🚨 **The timed spans are `unit.select()` and `unit.examine()` and nothing
- * else** — structurally, because they are the thunks handed to {@link timed};
- * the conversion is never charged. Both are the check's cost, so a rule whose
- * denominator is expensive is visibly expensive.
- *
- * 🔑 One refusal per check, and the earliest wins: a statement that threw, an
- * examined statement that threw, rows that could not be read, then an examined
- * count of zero. Only the last keeps the check's findings — the check ran
- * correctly and its violations are real; every other arm means none of its rows
- * can be trusted.
- *
- * @param unit - The check
- * @param now - The clock, in milliseconds
- * @param sinks - Where progress and near misses are said
- * @returns The cost, the refusal, and the findings
+ * 🚨 Only `unit.select()` and `unit.examine()` are timed; the conversion never is.
+ * 🔑 One refusal per check, earliest wins; only examined-nothing keeps the
+ * check's findings, because every other arm means its rows cannot be trusted.
  */
 function runUnit(unit: CheckUnit, now: () => number, sinks: UnitSinks): UnitResult {
   const { name, examine } = unit;
-  // Spread onto every cost record this unit files, so the arms below cannot
-  // disagree about which set the rule came from or what it declared.
+  // Spread onto every cost record this unit files, so the arms cannot disagree.
   const origin = {
     ...(unit.builtin === undefined ? {} : { builtin: unit.builtin }),
     ...(unit.allowEmpty === undefined ? {} : { allowEmpty: unit.allowEmpty }),
@@ -873,8 +737,7 @@ function runUnit(unit: CheckUnit, now: () => number, sinks: UnitSinks): UnitResu
     // Priced up to the throw, and with NO row count: a check that did not
     // complete selected nothing, and `rows: 0` would say it selected nothing
     // and passed. A built-in reaches this arm too — a defect in VAT's own
-    // predicate must fail the gate rather than vanish. The examined statement
-    // never runs: there is no verdict for it to be the denominator of.
+    // predicate must fail the gate rather than vanish.
     const cost = { name, durationMs: outcome.durationMs, broken: true as const, ...origin };
     return { cost, refusal: brokenCheckFinding(name, outcome.error), issues: [] };
   }
@@ -885,8 +748,7 @@ function runUnit(unit: CheckUnit, now: () => number, sinks: UnitSinks): UnitResu
     : examineUnit(name, examine, now, { durationMs: outcome.durationMs, rows }, sinks.onProgress);
   const durationMs = outcome.durationMs + (examined?.durationMs ?? 0);
   if (examined?.ok === false) {
-    // The violations statement completed, so `rows` is real; no `examined`,
-    // because that statement did not complete and 0 is a count it is refused for.
+    // `rows` is real; `examined` is absent, never a refusable 0.
     const cost = { name, durationMs, rows, broken: true as const, ...origin };
     return { cost, refusal: brokenExaminedFinding(name, examined.error), issues: [] };
   }
@@ -894,7 +756,6 @@ function runUnit(unit: CheckUnit, now: () => number, sinks: UnitSinks): UnitResu
   const counted = examined === undefined ? {} : { examined: examined.value };
   const converted = convertSelection(name, durationMs, outcome.value, sinks);
   if (!converted.ok) {
-    // The statement completed, so `rows` is real and present beside `broken`.
     const cost = { name, durationMs, rows, broken: true as const, ...counted, ...origin };
     return { cost, refusal: uninterpretableRowsFinding(name, converted), issues: [] };
   }
@@ -909,9 +770,8 @@ function runUnit(unit: CheckUnit, now: () => number, sinks: UnitSinks): UnitResu
 /**
  * Run every unit, collect its findings, and price it.
  *
- * 🚨 **The timed spans are what {@link runUnit} hands {@link timed}, and
- * nothing else** — the statements, never the conversion. 🚨 **And the loop announces a
- * check BEFORE it can be stopped**, because a runaway statement can only be
+ * 🚨 **Only the statements are timed** (see {@link runUnit}). 🚨 **And the loop
+ * announces a check BEFORE it can be stopped**, because a runaway statement can only be
  * ended by an external `SIGKILL` that publishes nothing of the killed process's
  * memory. Both, with the clock-granularity and one-record-per-check rules they
  * rest on: `docs/architecture/cli.md`, "The population is charged to NOBODY" and
@@ -943,11 +803,8 @@ function runUnits(
     // every check except the one whose name the operator needs.
     onProgress?.({ kind: 'start', name: unit.name });
     const { cost, refusal, issues: found } = runUnit(unit, now, { onProgress, warn });
-    // File the cost with the observer as well as with the caller — one place.
     costs.push(cost);
     onProgress?.({ kind: 'check', ...cost });
-    // The refusal leads the check's own findings: they are noise until the
-    // operator knows whether the check's verdict means anything.
     if (refusal !== undefined) issues.push(refusal);
     // 🪤 Appended one at a time, NEVER `issues.push(...findings)`. A spread
     // becomes an ARGUMENT LIST, which throws `RangeError: Maximum call stack
@@ -1183,10 +1040,8 @@ function inFlightPhrase(inFlight: UnitInFlight): string {
   if (inFlight.kind === 'reporting') {
     return 'after the last check had finished, while its document was being assembled';
   }
-  // 🔑 Two windows, and only two: the conversion of a check's rows has its own
-  // `converting` state now, so `idle` is the gap before the first statement or
-  // the instant after the last check filed its cost and before
-  // `checks-complete` — nothing in that second gap but appending findings.
+  // 🔑 Conversion has its own `converting` state, so `idle` is only the gap
+  // before the first statement or after the last cost and before `checks-complete`.
   return 'while no check was running — either between the population and the first'
     + ' statement, or after the last one had filed its cost';
 }
@@ -1623,20 +1478,8 @@ function populationRemedy(raise: string): string {
 }
 
 /**
- * The check a run stopped part-way through AFTER its violations statement had
- * completed — while its examined statement ran, or while its rows were being
- * converted — as its cost and the finding naming it.
- *
- * 🔑 Its statement COMPLETED, so it is recorded with the duration and row count
- * the `examining` or `converting` line carried — and `broken`, because none of
- * its rows became findings. Leaving it out would make the run's `checks` list
- * silently one short of the checks that executed a statement. No `examined`
- * count: a stopped examined statement counted nothing, and a conversion's line
- * does not carry one.
- *
- * @param entries - What `parseProgressLog` recovered
- * @param inFlight - What was running when the log stopped
- * @returns The cost and finding, or undefined when no such check was in flight
+ * The check a run stopped while `examining` or `converting`, as a `broken` cost
+ * with its completed statement's rows — so `checks` is never silently one short.
  */
 function stoppedMidCheck(
   entries: readonly ProgressEntry[],
@@ -1714,9 +1557,7 @@ export function buildInterruptedCheckInput(options: {
   const inFlight = unitInFlight(entries);
   const stopped = stoppedMidCheck(entries, inFlight);
   const costs = stopped === undefined ? completed : [...completed, stopped.cost];
-  // 🔑 Re-derived from the recovered costs: the child's findings died with it,
-  // and a recovered `examined: 0` published without its refusal would read as a
-  // check that legitimately counted nothing.
+  // 🔑 Re-derived: the child's findings died with it, and a bare `examined: 0` would read as legitimate.
   const refusedEmpty = completed.filter((cost) => examinedNothing(cost)).map((cost) => examinedNothingFinding(cost.name));
 
   return {
@@ -1816,8 +1657,6 @@ export function runProjectChecks(options: {
   // the issue count. Emitting it before that call is what makes the claim true,
   // which is the useful direction: the alternative was to weaken three docs.
   //
-  // The last check's row-to-issue conversion is not in this window: it has its
-  // own `converting` state, and that check's cost is filed after it.
   options.onProgress?.({ kind: 'checks-complete' });
   // The run-integrity report leads. An aggregate check selects a row whatever
   // the corpus is, so its findings can outnumber this one — and every one of
@@ -2296,9 +2135,7 @@ function runOutcome(options: {
   // statement goes in, including one `--check` narrows away — the lens is per
   // RUN, and narrowing it would make `--check foo` and a full run disagree about
   // which relations exist.
-  // 🪤 Every statement a check may run, its `examined` one included: a derived
-  // relation only that statement names would otherwise never be evaluated, and
-  // would read EMPTY — an examined count of 0 caused by the lens selection.
+  // 🪤 `examined` statements included, or a relation only they name reads EMPTY.
   const statements = Object.values(checks).flatMap((check) => checkStatements(check));
   return withQueriedProjection({ root, logger, statements, base },(ask, provenance, extent, projection) => {
     // 🔑 Emitted HERE, inside the callback, because this is the one place where

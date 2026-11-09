@@ -114,10 +114,8 @@ const StartEntrySchema = z.object({
  * A check completed — the same fields `CheckCost` publishes.
  *
  * 🪤 `rows` is optional and `broken` is `true`-or-absent, mirroring `CheckCost`
- * exactly: `rows` is present exactly when the statement completed. `broken`
- * without `rows` is a statement that threw — `rows: 0` on it would read as
- * "selected nothing and passed"; `broken` WITH `rows` is a statement that
- * completed and selected rows the check could not interpret. Keeping the two shapes identical is
+ * exactly: a statement that threw has no row count, and `rows: 0` on it would
+ * read as "selected nothing and passed". Keeping the two shapes identical is
  * what lets the parent hand recovered records to the same `buildCheckOutputData`
  * a completed run uses, rather than growing a second payload builder that could
  * drift from it.
@@ -132,29 +130,12 @@ const CheckEntrySchema = z.object({
   // the name up in `BUILTIN_CHECK_NAMES` would be a second authority that
   // disagrees the day a project declares a check of the same name.
   builtin: z.literal(true).optional(),
-  // The check's own denominator and its declared exemption, carried for the
-  // reason every field here is: a killed run's document is rebuilt from these
-  // lines, and a line the strict schema refused would be DROPPED — the check
-  // would vanish from the recovered `checks[]`, not merely lose a field.
+  // 🪤 Must be declared: the strict schema DROPS an unknown line, and the check vanishes.
   examined: z.number().optional(),
   allowEmpty: z.literal(true).optional(),
 }).strict();
 
-/**
- * A check's violations statement FINISHED, and its declared `examined`
- * statement is about to run.
- *
- * 🚨 **Without it, a kill during the examined statement reads as the violations
- * statement hanging** — the log would hold only the `start`, and the operator
- * would rewrite the statement that had already returned. `unitInFlight` reads
- * this line as `examining`.
- *
- * Carries the violations statement's duration and row count, so a run killed
- * here still publishes them. Written only for a check that declares `examined`.
- *
- * ⚠️ It must be a member of {@link ProgressEntrySchema}: `readLine` DROPS a line
- * the schema does not know.
- */
+/** 🚨 `examined` is about to run; without this line a kill here reads as the violations statement hanging. */
 const ExaminingEntrySchema = z.object({
   kind: z.literal('examining'),
   name: z.string(),
@@ -162,22 +143,7 @@ const ExaminingEntrySchema = z.object({
   rows: z.number(),
 }).strict();
 
-/**
- * A check's statement FINISHED, and its rows are about to become findings.
- *
- * 🚨 **Without it, a kill during the conversion reads as a hung statement.**
- * The conversion runs after the timed span and before the cost is filed, so a
- * log holding only the `start` would name the check as still running — and the
- * budget remedy would then say a statement would not finish, which is false.
- * `unitInFlight` reads this line as `converting`.
- *
- * Carries what the cost will carry, so a run killed here still publishes the
- * check's real statement duration and row count. Written only for a declared
- * statement: a built-in has no conversion step outside its timed span.
- *
- * ⚠️ It must be a member of {@link ProgressEntrySchema}: `readLine` DROPS a line
- * the schema does not know, and the kill would read as the statement branch.
- */
+/** 🚨 A declared statement's rows are about to convert; without this a kill reads as a hung statement. */
 const ConvertingEntrySchema = z.object({
   kind: z.literal('converting'),
   name: z.string(),
@@ -330,19 +296,7 @@ export function unitInFlight(entries: readonly ProgressEntry[]): UnitInFlight {
   return { kind: 'idle' };
 }
 
-/**
- * What a started, uncosted check was doing: its statement, its examined
- * statement, or its conversion.
- *
- * 🔑 Only a line written AFTER this `start` counts. A built-in and a declared
- * check may share a name, so an earlier unit's line must not turn this one's
- * hung statement into a later state. The phases run in a fixed order — the
- * statement, `examining`, `converting` — so the LAST such line is the state.
- *
- * @param entries - What {@link parseProgressLog} recovered
- * @param started - The one `start` with no cost
- * @returns The unit in flight
- */
+/** What a started check was doing. 🔑 Only lines AFTER this `start` count (names can repeat). */
 function startedUnit(
   entries: readonly ProgressEntry[],
   started: Extract<ProgressEntry, { kind: 'start' }>,

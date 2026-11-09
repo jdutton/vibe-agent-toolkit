@@ -50,12 +50,8 @@ export function formatIssueAnchor(
 }
 
 /**
- * The coordinates of an issue that names NO file, as a trailing clause:
- * ` (line 3, column 5)`, or `''` when there is nothing to say there.
- *
- * The other half of {@link formatIssueAnchor}: a line with a file is part of
- * the `file:line:column` prefix, and a line without one is said here — so every
- * coordinate an issue carries is printed exactly once.
+ * The coordinates of an issue that names NO file, as ` (line 3, column 5)`, or
+ * `''` — the other half of {@link formatIssueAnchor}, so each prints exactly once.
  */
 export function formatIssuePosition(issue: Pick<ValidationIssue, 'location' | 'line' | 'column'>): string {
   if (namesFile(issue) || issue.line === undefined) return '';

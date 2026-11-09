@@ -19,58 +19,29 @@ const PublishedCheckCostSchema = z.object({
   name: z.string(),
   /** Three significant figures, so a 0.4 ms rule serializes as 0.0004 rather than a zero that reads as "not measured". */
   durationSecs: z.number().nonnegative(),
-  /** Rows the statement returned. Present exactly when the statement completed — ABSENT, never 0, when it did not. */
+  /** Rows the statement returned. ABSENT, never 0, when the statement did not complete. */
   rows: z.number().int().nonnegative().optional(),
-  /**
-   * The check reported nothing it selected. Without `rows`: the statement failed. With `rows`: it
-   * completed, and then its declared `examined` statement failed, or its rows could not be
-   * interpreted (or the run stopped while running the one or converting the other).
-   */
+  /** Nothing reported. Without `rows`: the statement failed; with: `examined` or conversion did. */
   broken: z.literal(true).optional(),
   /** Present and `true` only for a rule VAT supplied — see `CheckCost.builtin` in `check.ts`. */
   builtin: z.literal(true).optional(),
-  /**
-   * Rows the check's declared `examined` statement selected — what it ranged over. Present exactly
-   * when the check declares `examined` AND that statement completed: ABSENT on a check that
-   * declares none, and absent (never 0) when it did not complete. 0 without `allowEmpty` comes
-   * with a `RESOURCE_CHECK_EXAMINED_NOTHING` finding naming the check.
-   */
+  /** Rows the declared `examined` statement selected. ABSENT, never 0, unless it completed. */
   examined: z.number().int().nonnegative().optional(),
-  /** Present and `true` only when the check declares that an `examined` count of 0 is legitimate. */
+  /** The check declares an `examined` count of 0 legitimate. */
   allowEmpty: z.literal(true).optional(),
-  /**
-   * Present and `true` exactly when this check produced a `RESOURCE_CHECK_EXAMINED_NOTHING` finding
-   * (`examined: 0`, no `allowEmpty`, not broken). Derived from the same decision that emits it.
-   */
+  /** Exactly when this check produced a `RESOURCE_CHECK_EXAMINED_NOTHING` finding. */
   examinedNothing: z.literal(true).optional(),
 }).strict();
 
-/**
- * One evidence value: what SQLite returned when JSON can carry it; a BLOB or an integer beyond
- * JSON's range as the text the finding's message renders it as.
- */
+/** One evidence value; a BLOB or an out-of-range integer arrives as its rendered text. */
 const EvidenceValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 
 /**
- * A finding of `vat resources check`'s document.
+ * A finding of `vat resources check`'s document, also used by the `vat validate` envelope.
+ * `check` is absent on a whole-run finding; `evidence` is the row minus reserved columns.
  *
- * - `check` — the check's key in `resources.checks`, or a built-in's name — on every finding ONE
- *   check produced: its violations, and every refusal about it. ABSENT on a finding about the
- *   whole run (an empty corpus, no check ran, an interruption).
- * - `evidence` — a declared check's violation row minus the reserved columns (`path`,
- *   `finding_severity`, `finding_line`, `finding_column`), in the order SQLite returned them. Only
- *   beside `check`: evidence is always some check's row.
- *
- * 🔑 Passed to {@link reportSchema} rather than widening the shared `FindingSchema`, as that
- * function's finding parameter exists for. Also the finding schema of the orchestrator envelope
- * (`orchestrator-schema.ts`): `vat validate` runs these checks as a phase and publishes their
- * findings flat and unchanged, so one declaration serves both documents.
- *
- * ⚠️ One object extended, plus a refinement — NOT a union of "check finding | run finding". A
- * union emits every inherited key once per branch, and `ValidationIssueSchema` is the one home of
- * those keys (`resources-check-finding-column.test.ts` counts it in the emitted file). The cost:
- * "evidence needs check" is enforced when VAT parses a document, and is absent from the emitted
- * JSON Schema.
+ * ⚠️ One object extended plus a refinement, NOT a union: a union emits every inherited key once
+ * per branch. The cost: "evidence needs check" is absent from the emitted JSON Schema.
  */
 export const CHECK_FINDING_SCHEMA = FindingSchema.extend({
   check: z.string().min(1).optional(),

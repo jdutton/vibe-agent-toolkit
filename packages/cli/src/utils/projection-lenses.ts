@@ -49,14 +49,8 @@ export interface LensEvaluation {
 }
 
 /**
- * A lens that could not answer, and why — the reason a statement naming its
- * relations is refused with.
- *
- * 🚨 **A refusal leaves the relations ABSENT, never empty.** An empty relation
- * is an answer ("no rows"), and a lens that cannot evaluate has none to give:
- * written as `[]`, a check over it could never fail. Absent, SQLite refuses
- * every statement naming it, and the run says why. The changed-files lens is
- * the one that refuses today — with no `--base`, there is nothing to compare.
+ * A lens that could not answer, and why. 🚨 Its relations stay ABSENT, never
+ * empty: written as `[]`, a check over them could never fail.
  */
 export interface LensRefusal {
   readonly refused: string;
@@ -83,10 +77,7 @@ export interface LensEvaluationInput {
   readonly projection: Projection;
   /** Absolute corpus root, for a lens that must populate a lane of its own. */
   readonly root: string;
-  /**
-   * The ref the run was handed with `--base`, or undefined when it was handed
-   * none. Only the changed-files lens reads it, and it refuses without one.
-   */
+  /** The run's `--base` ref, or undefined. Only the changed-files lens reads it. */
   readonly base: string | undefined;
   /** The run's projection store, so a lens's own population can hit it. */
   readonly cache: PopulationCache | undefined;
@@ -136,7 +127,6 @@ export const CLAUDE_CONTEXT_LENS: ProjectionLens = {
 export const CHANGED_FILES_LENS: ProjectionLens = {
   name: 'changed-files',
   relations: ['changedFiles'],
-  // Reads the repository, not the projection, so it populates nothing of its own.
   evaluate: ({ root, base }) => evaluateChangedFilesLens(root, base),
 };
 
@@ -183,8 +173,6 @@ export function lensesNamedBy(statements: readonly string[] | undefined): readon
  * `LensRows` makes every relation optional, so a lens that forgot one compiles —
  * and `writeDerived` would leave that relation empty, a table that reads as a
  * healthy tree. Checked here because this is the one place every lens passes.
- *
- * A {@link LensRefusal} is handed back as it is: it carries no rows to check.
  *
  * @param lens - The lens
  * @param input - What it may read

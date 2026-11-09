@@ -371,9 +371,7 @@ export async function assertQueriesCompile(statements: readonly PreflightStateme
  *   SELECTION only — never compiled, never bound, and deliberately separate from
  *   `preflight`. ⛔ Omitting it evaluates EVERY lens, which is the correct answer
  *   and the expensive one
- * @param options.base - The ref `--base` named, for the changed-files lens;
- *   undefined when the run was given none (that lens then refuses, and only a
- *   statement naming `changed_files` is refused with it)
+ * @param options.base - The `--base` ref for the changed-files lens, or undefined
  * @param work - Given the asker, where its rows came from, how much of the tree
  *   they cover, and the ROWS THEMSELVES. The store is open for exactly this call
  *   and closed however it ends
@@ -487,9 +485,7 @@ export async function withQueriedProjection<T>(
       // lane has no reason to invite.
       const lensPopulations: LensEvaluation['population'][] = [];
       const evaluated: string[] = [];
-      // 🚨 A lens that REFUSED writes nothing, so its relations stay absent and a
-      // statement naming them is refused by SQLite — with this reason attached,
-      // so the reader learns the fix rather than "declare this statement".
+      // 🚨 A REFUSED lens writes nothing; its reason rides on SQLite's refusal.
       const refusals = new Map<string, string>();
       await forEachInOrder(lenses, async (lens) => {
         const evaluation = await evaluateLens(lens, { projection, root, base: options.base, cache, logger });
@@ -596,8 +592,7 @@ function unevaluatedRelationIn(message: string): string | undefined {
  *
  * @param sql - The statement that was submitted
  * @param message - What the engine said
- * @param refusals - Why each relation a lens REFUSED to produce is absent, by
- *   SQL name. Such a relation was declared and its lens ran; the reason is the fix
+ * @param refusals - Why each relation a lens REFUSED to produce is absent, by SQL name
  * @returns The message to surface, with the queryable surface appended when the
  *   failure was a name this projection does not have
  */

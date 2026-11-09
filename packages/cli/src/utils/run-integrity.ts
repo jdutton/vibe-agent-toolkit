@@ -29,12 +29,8 @@
  *    it is a registered REFUSAL code, which `ValidationConfigSchema` refuses as a
  *    `severity` or `allow` key — what makes it non-overridable by construction. A code per site would buy a consumer
  *    nothing the message does not already say while adding one more thing an
- *    adopter's CI has to know to look for. ⚠️ ONE registered sibling exists, and
- *    it is not a per-site copy of this claim: `RESOURCE_CHECK_EXAMINED_NOTHING`
- *    is about one `vat resources check` CHECK that declared its own denominator
- *    and counted zero — a check that ran fine — which a consumer judging each
- *    rule separately keys on by code. It is a refusal for the same reason, and
- *    is not derived here, because no run-level count can see it.
+ *    adopter's CI has to know to look for. ⚠️ The one registered sibling,
+ *    `RESOURCE_CHECK_EXAMINED_NOTHING`, is per CHECK, so it is not derived here.
  * 2. **Severity `error`, and not a parameter.** The one thing that must never be
  *    configurable about "the gate did not do its job" is whether it gates.
  * 3. **Derived once, in the writer, from the verb's declared denominator.**
