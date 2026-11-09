@@ -105,10 +105,9 @@ describe('Audit Dogfooding (system test)', () => {
 
   it('should audit dist skills without errors', async () => {
     const distSkillsDir = safePath.join(projectRoot, 'packages/vat-development-agents/dist/skills');
-    if (!fs.existsSync(distSkillsDir)) {
-      // dist may not exist if build hasn't run — skip gracefully
-      return;
-    }
+    // Fails on an absent build rather than passing without auditing anything: turbo orders
+    // vat-development-agents' build before this suite (`@vibe-agent-toolkit/cli#test:system`).
+    expect(fs.existsSync(distSkillsDir), `${distSkillsDir} is missing — build vat-development-agents first`).toBe(true);
 
     const { result, parsed } = await executeCliAndParseYaml(
       binPath,

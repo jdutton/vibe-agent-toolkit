@@ -129,8 +129,8 @@ describe('turbo test-suite concurrency (cross-package native-memory guard)', () 
 
   // The system tier runs at the shared cap in every package and on every platform: Windows ran it
   // serially long after the RPC deadline that justified that was gone. Its memory was measured
-  // for that cap (`vitest.shared.ts`, `createSystemTestConfig`); a package raising it would need
-  // the same, and much of it sits in spawned `vat` children the in-fork RSS check cannot see.
+  // for that cap (`vitest.shared.ts`, `createSystemTestConfig`), and every fork carries the RSS
+  // detector; much of the tier's memory sits in spawned `vat` children that detector cannot see.
   // Equality, not "at most": the value is read on whichever OS runs the unit tier, so a
   // platform branch reds there — lowering a package for everyone is a deliberate edit here.
   // `maxWorkers` is not the only way to serialise, so the other two are pinned as well.
@@ -142,6 +142,8 @@ describe('turbo test-suite concurrency (cross-package native-memory guard)', () 
       const { test } = await loadPackageTestConfig(configPath);
       expect(test.maxWorkers, `${dir} system tier`).toBe(maxTestWorkers);
       expect(test.fileParallelism, `${dir} system tier`).not.toBe(false);
+      expect(test.setupFiles.some((file) => file.endsWith('vitest.fork-rss-budget.setup.js')), `${dir} system tier without the RSS budget`).toBe(true);
+      expect(test.provide.forkRssBudgetMb).toBe(forkRssBudgetMb);
       const pkg = JSON.parse(readFileSync(safePath.join(PROJECT_ROOT, 'packages', dir, 'package.json'), 'utf-8')) as {
         scripts: Record<string, string>;
       };

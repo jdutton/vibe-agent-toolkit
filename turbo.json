@@ -169,6 +169,15 @@
       "outputs": [],
       "cache": true
     },
+    // cli: `audit-dogfooding.system.test.ts` audits vat-development-agents' built
+    // `dist/skills`, which is not a workspace dependency of cli (it is built in the
+    // second pass, after cli). The edge orders that build first and folds its hash
+    // in, so the test can fail on an absent build instead of passing vacuously.
+    "@vibe-agent-toolkit/cli#test:system": {
+      "dependsOn": ["^build", "build", "@vibe-agent-toolkit/vat-development-agents#build"],
+      "outputs": [],
+      "cache": true
+    },
     // --- Native-memory serialisation ---
     // The root `test:integration` / `test:system` scripts ran turbo with
     // `--concurrency=1` because integration forks in THREE packages hold 1–3 GB of
@@ -184,7 +193,8 @@
     // edge turbo can see. When a package's integration tier starts holding native
     // memory on that scale, add it to this chain. The system tier is not chained:
     // its model holders were measured at under 0.5 GB per process (see
-    // `createSystemTestConfig` in vitest.shared.ts) — re-measure if that changes.
+    // `createSystemTestConfig` in vitest.shared.ts) — re-measure if that changes
+    // (not enforced, beyond the per-fork RSS detector the system tier carries).
     "@vibe-agent-toolkit/rag-lancedb#test:integration": {
       "dependsOn": ["^build", "build", "@vibe-agent-toolkit/rag#test:integration"],
       "outputs": [],

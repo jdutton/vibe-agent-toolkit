@@ -334,6 +334,10 @@ export const cliIntegrationTestWorkers = 4;
  * 2 forks each — at most one of them from the native-memory chain (2 x 1-3 GB):
  * 10 forks on 4 vCPU at worst, where the cap of 2 everywhere allowed 8. A
  * detector, not a limit: a file past it fails, named, after it ran.
+ *
+ * The system tier carries the same budget on every fork (see
+ * `createSystemTestConfig`): its in-process model holders, `rag-lancedb`'s forks,
+ * peaked at 412-476 MB on macOS.
  */
 export const forkRssBudgetMb = 1536;
 
@@ -406,16 +410,19 @@ export interface SystemTestConfigOverrides {
 
 /** Builds the `test` block for a package's own vitest.system.config.ts. */
 export function createSystemTestConfig(overrides: SystemTestConfigOverrides = {}) {
+  const timeouts = tierTimeouts(systemTestTimeout, systemHookTimeout);
   return {
     globals: true,
     environment: 'node' as const,
-    setupFiles: [setupFilePath],
+    // The per-fork RSS detector on every system fork — see the memory note at `maxWorkers`.
+    setupFiles: [setupFilePath, forkRssBudgetSetupPath],
     include: ['test/**/*.system.test.ts', 'src/**/*.system.test.ts'],
     exclude: ['**/node_modules/**', '**/dist/**', ...(overrides.exclude ?? [])],
     // Hooks run expensive setup (vat build, git init, fixture hydration), so
     // vitest's 10s default is far too short. Both scale with the platform, as
     // the integration tier's do: a flat value is the slow runner's failure.
-    ...tierTimeouts(systemTestTimeout, systemHookTimeout),
+    ...timeouts,
+    provide: { ...timeouts.provide, forkRssBudgetMb },
     server: { deps: { inline: inlineDeps } },
     // Windows rmSync on large fixture trees can take significant time.
     teardownTimeout: 120_000,
@@ -441,8 +448,11 @@ export function createSystemTestConfig(overrides: SystemTestConfigOverrides = {}
     // 412-476 MB) and the `vat rag` children they and `cli`'s rag files spawn
     // (377-481 MB) — not the 1-3 GB of the integration tier's native-memory
     // chain, which is why the system tier is not chained. Worst case under
-    // `--concurrency=4`: 8 forks, each with at most one such child, ~8 GB of a
-    // 16 GB runner. Not yet sampled on Windows.
+    // `--concurrency=4`: 8 forks, each with one such child at a time, ~8 GB of a
+    // 16 GB runner. Not sampled per process on Windows; there every fork is held
+    // to `forkRssBudgetMb` by the detector above, which cannot see the `vat`
+    // children. That a system file loads no bigger model, and spawns no more
+    // than one model-loading `vat` at a time, is an assumption (not enforced).
     maxWorkers: maxTestWorkers,
     // Same V8 old-space cap as `integrationExecArgv` — see its comment.
     // Heaviest measured system-test file: cli/inventory-parity.system.test.ts, ~196MB.
