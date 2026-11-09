@@ -42,7 +42,7 @@ export const ARCHIVE_REFUSED_CODE = 'ARCHIVE_REFUSED';
  *   that does not inflate or hold what it declares, asked for after the archive opened, is
  *   {@link ArchiveEntryReadError} instead;
  * - `link`, `hardlink`, `special`: it holds an entry that is not a file or a directory;
- * - `unsafe-name`: an entry is named outside the directory it is extracted into;
+ * - `unsafe-name`: an entry is named outside the directory it is extracted into, or names a `.git`;
  * - `name-clash`: two entries are one name, or one is a file with another at or under it;
  * - `too-many-entries`, `too-large`: it is past an {@link ArchiveLimits} bound.
  */
@@ -170,35 +170,39 @@ function windowsSegmentReason(segment: string): string | undefined {
   return WINDOWS_DEVICE_NAME.test(segment) ? 'is a Windows device name' : undefined;
 }
 
-/** `segment` without the trailing dots and spaces Win32 drops from a name (a loop, not a regex: no backtracking). */
-function withoutTrailingDotsAndSpaces(segment: string): string {
-  let end = segment.length;
-  while (end > 0 && (segment[end - 1] === '.' || segment[end - 1] === ' ')) end -= 1;
-  return segment.slice(0, end);
-}
-
 /**
- * Whether `segment` is a name Windows or git reads as `.git`: any case, the 8.3 short name `GIT~1`,
- * or either with the trailing dots and spaces Win32 drops. Extracted, it would make the folder it
- * lands in a git repository — a planted `config` (`core.fsmonitor`) or a `gitdir:` file that root
- * discovery and git then act on.
+ * The folds of the names a filesystem resolves to `.git` — `.git` itself and its 8.3 short name
+ * `GIT~1` — through the one fold ({@link foldedSegment}), so every case, Unicode spelling, ignored
+ * code point and trailing dot or space a volume reads as `.git` is caught. Extracted, such an entry
+ * would make the folder it lands in a git repository: a planted `config` (`core.fsmonitor`) or a
+ * `gitdir:` file that root discovery and git then act on.
  */
-function isGitDirectoryName(segment: string): boolean {
-  const name = withoutTrailingDotsAndSpaces(segment).toLowerCase();
-  return name === '.git' || name === 'git~1';
-}
+const GIT_DIRECTORY_FOLDS: ReadonlySet<string> = new Set(['.git', 'git~1'].map((name) => foldedSegment(name)));
 
-/** Why `name` would land outside the extraction directory, or somewhere other than it says, on some host; or `undefined`. */
-function unsafeNameReason(name: string): string | undefined {
+/** What a name that lands outside the extraction directory, or in no place every host can write, leads to. */
+const NO_PLACE = 'so it names no place inside the archive that every host can write';
+
+/** Why `name` as a whole would land outside the extraction directory on some host; or `undefined`. */
+function outsideReason(name: string): string | undefined {
   if (name.includes('\0')) return 'holds a NUL character';
   const spelled = toForwardSlashAnyPlatform(name);
   if (spelled.startsWith('/')) return 'is an absolute path';
   if (DRIVE_PREFIX.test(spelled)) return 'begins with a drive letter';
-  if (hasParentTraversalSegment(name)) return 'holds a `..` segment';
+  return hasParentTraversalSegment(name) ? 'holds a `..` segment' : undefined;
+}
+
+/**
+ * Why `name` may not be extracted as named — it would land outside the extraction directory, or
+ * somewhere other than it says, on some host, or it names a `.git` — as the rest of the sentence
+ * after the entry; or `undefined`.
+ */
+function unsafeNameReason(name: string): string | undefined {
+  const outside = outsideReason(name);
+  if (outside !== undefined) return `${outside}, ${NO_PLACE}`;
   for (const segment of placeOf(name)) {
-    if (isGitDirectoryName(segment)) return 'names a `.git`, which would make the folder it lands in a git repository that git and VAT then act on';
+    if (GIT_DIRECTORY_FOLDS.has(foldedSegment(segment))) return 'names a `.git`, so extracted it would make the folder it lands in a git repository that git and VAT then act on';
     const reason = windowsSegmentReason(segment);
-    if (reason !== undefined) return reason;
+    if (reason !== undefined) return `${reason}, ${NO_PLACE}`;
   }
   return undefined;
 }
@@ -217,7 +221,7 @@ function entryRefusal(entry: ArchiveEntry): EntryRefusal | undefined {
     return { reason, entry: entry.name, why: `its entry \`${entry.name}\` is ${what}, and an archive may hold only files and directories` };
   }
   const unsafe = unsafeNameReason(entry.name);
-  if (unsafe !== undefined) return { reason: 'unsafe-name', entry: entry.name, why: `its entry \`${entry.name}\` ${unsafe}, so it names no place inside the archive that every host can write` };
+  if (unsafe !== undefined) return { reason: 'unsafe-name', entry: entry.name, why: `its entry \`${entry.name}\` ${unsafe}` };
   if (entry.kind === 'file' && placeOf(entry.name).length === 0) {
     return { reason: 'unsafe-name', entry: entry.name, why: `its entry \`${entry.name}\` is a file that names no place inside the archive` };
   }
@@ -247,7 +251,7 @@ function claimPlaces(entry: ArchiveEntry, claims: Map<string, Claim>): EntryRefu
     if (held === undefined) {
       claims.set(key, { spelled, kind, entry: entry.name });
     } else if (held.spelled !== spelled) {
-      // A `:` and a trailing dot or space were refused with the name, so only the case and Unicode folds are left.
+      // A `:` and a trailing dot or space were refused with the name, so only the case and Unicode folds (an ignored code point among them) are left.
       return {
         reason: 'name-clash',
         entry: entry.name,
@@ -273,6 +277,9 @@ function claimPlaces(entry: ArchiveEntry, claims: Map<string, Claim>): EntryRefu
  *   NUL (a backslash is read as a separator on every host); or one with a segment Windows cannot
  *   hold as spelled — a `:`, one of `<` `>` `"` `|` `?` `*`, a control character (code points
  *   1–31), a trailing `.` or space, a device name (`CON`, `com1.txt`) — on every host;
+ * - a name with a segment some filesystem resolves to `.git` — any case or Unicode spelling, the
+ *   8.3 short name `GIT~1` — at any depth: extracted, it would make the folder it lands in a git
+ *   repository;
  * - two entries that are one name — exactly, or once folded as a case-insensitive or
  *   normalising volume folds them ({@link foldedSegment}) — or a file with another entry under it.
  *
