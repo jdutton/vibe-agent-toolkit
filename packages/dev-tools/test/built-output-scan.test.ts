@@ -76,7 +76,9 @@ describe('scanTestTree on fixture sources', () => {
     ['a comment', "// safePath.join(root, 'packages/alpha/dist')\n/* spawn('../../alpha/dist/x') */"],
     ['plain test data', "expect(filter('packages/alpha/dist/index.js')).toBe(false);"],
     ['a path no call uses', "const NEEDLE = '../../alpha/dist/x.js';\nexpect(urls).toContain(NEEDLE);"],
-    ['a temp tree', "safePath.join(tempDir, 'dist', 'bin');"],
+    ['a let, whose value may change', "let DIR = 'packages/alpha/dist';\nconst BIN = safePath.join(root, DIR, 'bin.js');"],
+    ['a var, whose value may change', "var DIR = 'packages/alpha/dist';\nconst BIN = safePath.join(root, DIR, 'bin.js');"],
+    ['a temp tree',"safePath.join(tempDir, 'dist', 'bin');"],
     ['a package-relative dist', "pathResolve(testDir, '../../dist/bin.js');"],
     ['a directory that is not a package', "safePath.join(root, 'packages', 'nope', 'dist');"],
   ])('ignores %s', (_label, text) => {

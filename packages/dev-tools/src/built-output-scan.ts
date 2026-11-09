@@ -81,7 +81,8 @@ class PathEvaluator {
 
   constructor(private readonly file: ts.SourceFile) {
     const visit = (node: ts.Node): void => {
-      if (ts.isVariableDeclarationList(node) && (node.flags & ts.NodeFlags.Const) !== 0) {
+      // Only a `const` holds one value; the list's keyword token says which it is.
+      if (ts.isVariableDeclarationList(node) && node.getFirstToken(file)?.kind === ts.SyntaxKind.ConstKeyword) {
         for (const decl of node.declarations) {
           if (!ts.isIdentifier(decl.name) || decl.initializer === undefined) continue;
           // A name declared twice in one file has no single value.
