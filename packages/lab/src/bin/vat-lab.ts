@@ -13,6 +13,7 @@ import { isAbsolutePath, isVatError, parseWholeNumberAtLeast, safePath } from '@
 import { isEntrypoint } from '@vibe-agent-toolkit/utils/process';
 import { Command, InvalidArgumentError } from 'commander';
 
+import { sameInstrument } from '../envelope/coordinate.js';
 import type { ReportEnvelope } from '../envelope/envelope.js';
 import { captureCrawl } from '../facets/crawl/capture.js';
 import { compareCrawl } from '../facets/crawl/compare.js';
@@ -101,7 +102,8 @@ import {
   type MeasuredSequenceSpec,
   POPULATION_MEASURED_COMMANDS,
 } from '../harness/commands.js';
-import { resolveInstrument } from '../harness/instrument.js';
+import { pinOf, type PreparedInstrument, prepareInstrument, resolveInstrument } from '../harness/instrument.js';
+import { npmInstall, type NpxInstallSite, npxInstallSite } from '../harness/npx-install.js';
 import { instrumentLabel, instrumentTrustNotes } from '../harness/render.js';
 import type { SequenceStep } from '../harness/sequence.js';
 import { resolveSubject } from '../harness/subject.js';
@@ -247,6 +249,12 @@ export function parseInstrument(value: string): InstrumentSource {
       return { kind: 'dist', path: rest };
     }
     case 'npx': {
+      // Checked here, not first at resolution: a bad spec is refused before any setup.
+      try {
+        pinOf(rest);
+      } catch (error) {
+        throw new InvalidArgumentError(error instanceof Error ? error.message : String(error));
+      }
       return { kind: 'npx', spec: rest };
     }
     default: {
@@ -635,13 +643,17 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
     )
     .action((subjectPath: string, options: AbOptions) =>
       refusingArmErrors(async () => {
-        const arms = await resolveAbArms(options);
-        if (arms === null) return;
-
+        // Every flag refusal, every tree:/dist: build, and two names for one build — but for a
+        // pair that is told apart only once installed (an npx: arm against another kind) —
+        // before the subject, --out, the arms root or an install.
+        const flags = await abArmFlags(options);
+        if (flags === null) return;
         const startedAt = new Date().toISOString();
         const subject = await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath });
         const out = openOutDirectory(options.out, [subject.path]);
         await withArmsRoot(options, [subject.path], async ({ path: armsRoot }) => {
+          const arms = await resolveAbArms(flags, npxInstallSite(armsRoot, npmInstall));
+          if (arms === null) return;
           const result = await runAb({
             subject,
             armA: arms.a,
@@ -672,17 +684,88 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
     );
 }
 
+/** `ab`'s arm flags, checked and prepared by {@link abArmFlags}: nothing set up or installed yet. */
+export interface AbArmFlags {
+  readonly instrumentA: PreparedInstrument;
+  /** `null` for a `--control` run, where arm A is entered twice. */
+  readonly instrumentB: PreparedInstrument | null;
+  readonly envA: ArmEnvironment;
+  readonly envB: ArmEnvironment;
+}
+
 /**
- * Resolve the two arms, or refuse when the flags do not describe an A/B.
+ * @param source - An instrument as named
+ * @returns What it names, comparable: a path resolved, a spec trimmed
+ */
+function namedInstrument(source: InstrumentSource): string {
+  return `${source.kind}:${source.kind === 'npx' ? source.spec.trim() : safePath.resolve(source.path)}`;
+}
+
+/**
+ * Refuse two arms that differ in nothing.
  *
- * A control run uses the *same resolved object* for both arms rather than
- * resolving one spec twice: that is what makes the two stamps identical by
- * construction, so a control can never be mistaken for a two-build comparison.
+ * @param instrument - The instrument both name
+ */
+function refuseIndistinguishableArms(instrument: string): void {
+  refuse(
+    `REFUSED: the two arms are indistinguishable — same instrument (${instrument}) and same ` +
+      'environment. Pass --control to measure the noise floor, or change one arm.',
+  );
+}
+
+/**
+ * Check `ab`'s arm flags and prepare their instruments ({@link prepareInstrument}) —
+ * before anything is opened or installed — or refuse when they do not describe an
+ * A/B. Two arms naming one instrument in one environment are refused before either
+ * is prepared; two names for one build, once prepared ({@link oneBuildBeforeSetup}):
+ * still before any setup. Only a pair told apart once installed — an `npx:` arm
+ * against a `tree:` or `dist:` one — waits for {@link resolveAbArms}.
  *
  * @param options - What the caller passed
- * @returns The two arms, or `null` when the run was refused
+ * @returns The checked, prepared flags, or `null` when the run was refused
+ * @throws {Error} when an arm's build cannot be resolved
  */
-export async function resolveAbArms(options: AbOptions): Promise<AbArms | null> {
+export async function abArmFlags(options: AbOptions): Promise<AbArmFlags | null> {
+  const checked = checkedAbArmFlags(options);
+  if (checked === null) return null;
+  const instrumentA = await prepareInstrument(checked.instrumentA);
+  const instrumentB = checked.instrumentB === null ? null : await prepareInstrument(checked.instrumentB);
+  const one = instrumentB === null ? null : oneBuildBeforeSetup(instrumentA, instrumentB);
+  if (one !== null && sameArmEnvironment(checked.envA, checked.envB)) {
+    refuseIndistinguishableArms(one);
+    return null;
+  }
+  return { ...checked, instrumentA, instrumentB };
+}
+
+/**
+ * Do two prepared arms name one build? A `tree:` or `dist:` pair is fully resolved, so
+ * their instruments are compared as {@link resolveAbArms} compares them. An `npx:` pair
+ * pins two VAT packages, and the umbrella installs the cli of its own version: one
+ * version is one instrument, whichever package names it.
+ *
+ * @param a - Arm A, prepared
+ * @param b - Arm B, prepared
+ * @returns The one build's label, or `null` when they differ or are told apart only once installed
+ */
+function oneBuildBeforeSetup(a: PreparedInstrument, b: PreparedInstrument): string | null {
+  if (a.kind === 'built' && b.kind === 'built') {
+    return sameInstrument(a.instrument.version, b.instrument.version) ? instrumentLabel(a.instrument.version) : null;
+  }
+  if (a.kind === 'npx' && b.kind === 'npx') return a.pin.version === b.pin.version ? `npx: ${a.pin.version}` : null;
+  return null;
+}
+
+/**
+ * {@link abArmFlags}' checks, of the flags as named.
+ *
+ * @param options - What the caller passed
+ * @returns The checked flags, or `null` when the run was refused
+ */
+function checkedAbArmFlags(options: AbOptions): (Omit<AbArmFlags, 'instrumentA' | 'instrumentB'> & {
+  readonly instrumentA: InstrumentSource;
+  readonly instrumentB: InstrumentSource | null;
+}) | null {
   const envA = armEnvironment(options.envA, options.unsetA, '--env-a and --unset-a');
   if (envA === null) return null;
   const envB = armEnvironment(options.envB, options.unsetB, '--env-b and --unset-b');
@@ -707,8 +790,7 @@ export async function resolveAbArms(options: AbOptions): Promise<AbArms | null> 
       );
       return null;
     }
-    const only = await resolveInstrument(options.instrumentA);
-    return { a: only, b: only, envA, envB };
+    return { instrumentA: options.instrumentA, instrumentB: null, envA, envB };
   }
 
   if (options.instrumentB === undefined) {
@@ -718,15 +800,36 @@ export async function resolveAbArms(options: AbOptions): Promise<AbArms | null> 
     );
     return null;
   }
+  const named = namedInstrument(options.instrumentA);
+  if (named === namedInstrument(options.instrumentB) && sameArmEnvironment(envA, envB)) {
+    refuseIndistinguishableArms(named);
+    return null;
+  }
+  return { instrumentA: options.instrumentA, instrumentB: options.instrumentB, envA, envB };
+}
 
-  const a = await resolveInstrument(options.instrumentA);
-  const b = await resolveInstrument(options.instrumentB);
+/**
+ * Resolve the two arms of checked flags, or refuse two that resolve to one build in
+ * one environment.
+ *
+ * A control run uses the *same resolved object* for both arms rather than
+ * resolving one spec twice: that is what makes the two stamps identical by
+ * construction, so a control can never be mistaken for a two-build comparison.
+ *
+ * @param flags - The checked, prepared flags ({@link abArmFlags})
+ * @param npx - Where an `npx:` arm is installed
+ * @returns The two arms, or `null` when the run was refused
+ */
+export async function resolveAbArms(flags: AbArmFlags, npx: NpxInstallSite): Promise<AbArms | null> {
+  const { envA, envB } = flags;
+  if (flags.instrumentB === null) {
+    const only = await resolveInstrument(flags.instrumentA, npx);
+    return { a: only, b: only, envA, envB };
+  }
+  const a = await resolveInstrument(flags.instrumentA, npx);
+  const b = await resolveInstrument(flags.instrumentB, npx);
   if (indistinguishableArms({ instrument: a.version, env: envA }, { instrument: b.version, env: envB })) {
-    refuse(
-      'REFUSED: the two arms are indistinguishable — same instrument ' +
-        `(${instrumentLabel(a.version)}) and same environment. Pass --control to measure the ` +
-        'noise floor, or change one arm.',
-    );
+    refuseIndistinguishableArms(instrumentLabel(a.version));
     return null;
   }
   return { a, b, envA, envB };
@@ -818,10 +921,12 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
       refusingArmErrors(async () => {
         const env = armEnvironment(options.env, options.unset, ENV_OPTIONS_LABEL);
         if (env === null) return;
-        const instrument = await resolveInstrument(options.instrument);
+        // A tree:/dist: build resolves before --out or the arms root exists; only an npx: install waits for the root.
+        const prepared = await prepareInstrument(options.instrument);
         const subject = await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath });
         const out = openOutDirectory(options.out, [subject.path]);
         await withArmsRoot(options, [subject.path], async ({ path: root }) => {
+          const instrument = await resolveInstrument(prepared, npxInstallSite(root, npmInstall));
           const report = await wiring.capture({
             instrument,
             subject,
@@ -1212,11 +1317,12 @@ async function runPerfArms(subjectPath: string, options: PerfArmsOptions): Promi
   const arms = options.arm ?? [];
   const expected = options.expectExit ?? [];
   const [first] = arms;
-  if (options.build === undefined || first === undefined) {
+  const declaredBuilds = options.build;
+  if (declaredBuilds === undefined || first === undefined) {
     return refuse('REFUSED: perf arms needs at least one --build and one --arm.');
   }
   // Every --arm and --expect-exit is checked before any build resolves or any clone is prepared.
-  const declared = new Set(options.build.map((build) => build.alias));
+  const declared = new Set(declaredBuilds.map((build) => build.alias));
   const undeclared = arms.find((arm) => !declared.has(arm.build));
   if (undeclared !== undefined) {
     return refuse(`REFUSED: --arm names build '${undeclared.build}', which no --build declares.`);
@@ -1224,18 +1330,22 @@ async function runPerfArms(subjectPath: string, options: PerfArmsOptions): Promi
   const unmatched = expectedExitRefusal(arms, expected);
   if (unmatched !== null) return refuse(`REFUSED: ${unmatched}.`);
 
-  const builds = await Promise.all(
-    options.build.map(async (build) => ({ ...build, instrument: await resolveInstrument(build.source) })),
-  );
-  const warmupBuild = builds.find((build) => build.alias === first.build);
   const [warmupStep] = sequenceSteps(first.sequence, first.build, expected);
-  /* c8 ignore next 3 -- every --arm's build was checked above, and every sequence has a step */
-  if (warmupBuild === undefined || warmupStep === undefined) {
-    return refuse(`REFUSED: --arm names build '${first.build}', which no --build declares.`);
+  /* c8 ignore next 3 -- every sequence has a step */
+  if (warmupStep === undefined) {
+    return refuse(`REFUSED: --arm '${first.sequence.name}' runs no step.`);
   }
+  // Every tree:/dist: build resolves before --out or the arms root exists; only an npx: install waits for the root.
+  const prepared = await Promise.all(declaredBuilds.map(async (build) => ({ build, instrument: await prepareInstrument(build.source) })));
   const source = safePath.resolve(subjectPath);
   const out = openOutDirectory(options.out, [source]);
-  await withArmsRoot(options, [source], (root) => captureArmsInto(out, root, { source, options, builds, arms, expected, env, warmup: { instrument: warmupBuild.instrument, step: warmupStep } }));
+  await withArmsRoot(options, [source], async (root) => {
+    const npx = npxInstallSite(root.path, npmInstall);
+    const builds = await Promise.all(
+      prepared.map(async ({ build, instrument }) => ({ ...build, instrument: await resolveInstrument(instrument, npx) })),
+    );
+    await captureArmsInto(out, root, { source, options, builds, arms, expected, env, warmup: { build: first.build, step: warmupStep } });
+  });
 }
 
 /** Everything {@link captureArmsInto} needs, checked by {@link runPerfArms}. */
@@ -1246,7 +1356,8 @@ interface ArmsCaptureInputs {
   readonly arms: readonly ArmsSelectionOption[];
   readonly expected: readonly ExpectedExit[];
   readonly env: ArmEnvironment;
-  readonly warmup: { readonly instrument: ResolvedInstrument; readonly step: SequenceStep };
+  /** The first arm's build alias and first step: the clone's warm-up. */
+  readonly warmup: { readonly build: string; readonly step: SequenceStep };
 }
 
 /**
@@ -1261,12 +1372,17 @@ async function captureArmsInto(out: string, root: ArmsRootHandle, inputs: ArmsCa
   const armsRoot = root.path;
   const { options, expected } = inputs;
   const timeout = options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs };
+  const warmupBuild = inputs.builds.find((build) => build.alias === inputs.warmup.build);
+  /* c8 ignore next 3 -- every --arm's build was checked by runPerfArms */
+  if (warmupBuild === undefined) {
+    return refuse(`REFUSED: --arm names build '${inputs.warmup.build}', which no --build declares.`);
+  }
   const prepared = await prepareClone({
     source: inputs.source,
     commit: options.commit,
     armsRoot,
     prerequisites: options.prerequisite ?? [],
-    warmup: inputs.warmup,
+    warmup: { instrument: warmupBuild.instrument, step: inputs.warmup.step },
     ...timeout,
   });
   if (!prepared.ok) return refuse(`REFUSED: ${prepared.refusal}`);
@@ -1307,7 +1423,7 @@ async function captureArmsInto(out: string, root: ArmsRootHandle, inputs: ArmsCa
 function createPerfArmsCommand(): Command {
   return new Command('arms')
     .argument('<subject>', 'The subject repository; the arms run in a `git clone --local` of it under the arms root')
-    .option('--build <alias=instrument>', "A build to measure, e.g. 'rc11=dist:/path' (repeatable)", collectArmsBuild)
+    .option('--build <alias=instrument>', "A build to measure, e.g. 'rc11=dist:/path/to/cli/dist' or 'rc11=npx:vibe-agent-toolkit@0.2.0-rc.11' (repeatable)", collectArmsBuild)
     .option(
       '--arm <build:sequence:state>',
       `An arm to time (repeatable), e.g. 'rc11:ci-b:cold'. Sequences: ${Object.keys(MEASURABLE_SEQUENCES).join(', ')}`,
@@ -1472,8 +1588,10 @@ function createVerdictCommand(): Command {
         const prepared = options.prepared ?? {};
         const { subjects } = loaded.subjects;
         const measured = subjects.map((subject) => prepared[subject.alias] ?? subject.path);
-        const instrument = await resolveInstrument(options.instrument);
+        // A tree:/dist: build resolves before --out or the arms root exists; only an npx: install waits for the root.
+        const build = await prepareInstrument(options.instrument);
         await withArmsRoot(options, measured, async ({ path: armsRoot }) => {
+          const instrument = await resolveInstrument(build, npxInstallSite(armsRoot, npmInstall));
           const result = await captureVerdict({
             instrument,
             subjects,

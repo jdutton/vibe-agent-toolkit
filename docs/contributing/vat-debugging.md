@@ -155,23 +155,46 @@ The verdict facet (`packages/lab`, `vat-lab verdict run|compare`) is the crucibl
 vat builds — never more — over the same subject set and diffs what each one DECIDES (exit code,
 the multiset of findings, the full document), reconciled against a committed deltas file.
 
-**Baseline arm** — the previous published RC, installed into a private prefix so it never
-touches the operator's own global/local install:
+**Baseline arm** — the previous published RC, named by its exact version:
+
+```bash
+--instrument npx:vibe-agent-toolkit@<ver>
+```
+
+The lab never runs it through npx: it installs the pin once under the arms root (scripts off, its
+own npm cache, never the operator's global or local install) and runs that install's
+`@vibe-agent-toolkit/cli/dist/bin.js` with node — the CLI itself, not the wrapper that re-resolves
+vat from the *subject's* cwd — so every command the lab runs is the pinned version. The spec must
+be `vibe-agent-toolkit` or `@vibe-agent-toolkit/cli` at an exact version; any other package,
+ranges, dist-tags, paths and URLs are refused. Its closure is the same digest a `dist:` build of
+that install stamps — the bytes of the cli and its `@vibe-agent-toolkit/*` packages, and the
+`name@version` of every third-party package in that closure
+([run harness](../../packages/lab/docs/run-harness.md)). **Nested calls are not pinned, for any
+arm kind:** the lab sets no `VAT_BIN` or `VAT_ROOT_DIR` for a `tree:`, `dist:` or `npx:` arm — only
+an arm's own `--env` does — so a nested `vat` call made by the subject's own scripts or hooks
+resolves through the subject's own install (on VAT's own tree, its checkout). An `npx:` install
+lives at a lab-internal path emptied each run, so it cannot be named with `--env VAT_BIN`.
+
+When the baseline must pin nested calls too, use a `dist:` arm over a private install plus a
+shim instead. Install the RC into a private prefix, so it never touches the operator's own
+global/local install:
 
 ```bash
 npm install --prefix "$HOME/.cache/vat-lab/instruments/<ver>" --no-save --ignore-scripts \
   @vibe-agent-toolkit/cli@<ver>
 ```
 
-Then a shim directory whose `packages/cli/dist` symlinks to that install, used as:
+Then make a shim directory whose `packages/cli/dist` symlinks to that install's
+`node_modules/@vibe-agent-toolkit/cli/dist`, and name both:
 
 ```bash
 --instrument dist:"$HOME/.cache/vat-lab/instruments/<ver>/node_modules/@vibe-agent-toolkit/cli/dist" \
+--env VAT_BIN="$HOME/.cache/vat-lab/instruments/<ver>/node_modules/@vibe-agent-toolkit/cli/dist/bin.js" \
 --env VAT_ROOT_DIR="$HOME/.cache/vat-lab/shims/<ver>"
 ```
 
-Never `npx:<pkg@version>` for the baseline: its wrapper re-resolves vat from the *subject's* cwd,
-so run against VAT's own tree it dispatches to the candidate, not the pinned version.
+Both overrides, as for the candidate below: an adopter's already-installed wrapper predates
+`VAT_BIN` and honours only `VAT_ROOT_DIR`.
 
 **Candidate arm** — the worktree under test:
 
@@ -180,8 +203,9 @@ so run against VAT's own tree it dispatches to the candidate, not the pinned ver
 --env VAT_ROOT_DIR="$WORKTREE"
 ```
 
-Both overrides, because an adopter's already-installed wrapper predates `VAT_BIN` and honours
-only `VAT_ROOT_DIR`.
+Every command the lab runs is the worktree's build, and so is a nested `vat` call, because the arm
+names the build for it: both overrides, because an adopter's already-installed wrapper predates
+`VAT_BIN` and honours only `VAT_ROOT_DIR`.
 
 **Subjects file** is local (never committed), lives outside every subject it names, and carries
 aliases only (`crucible-1`, `crucible-2`, …) — no adopter names. `--subjects` is required on every

@@ -138,6 +138,14 @@ describe('clearedEnvironment', () => {
     );
   });
 
+  it('removes an inherited NODE_PATH from a VAT step: module resolution never reaches a directory the shell named', () => {
+    const inherited = { ...DEVELOPER, NODE_PATH: '/home/dev/global-modules' };
+    const cleared = clearedEnvironment(inherited, 'vat', { set: {}, unset: [] }, 'linux');
+
+    expect(buildArmEnv(inherited, cleared.env)['NODE_PATH']).toBeUndefined();
+    expect(cleared.removed).toContain('NODE_PATH');
+  });
+
   it('removes only VAT_* names from a non-VAT step, keeping the real home and temp', () => {
     const cleared = clearedEnvironment(DEVELOPER, 'tool', { set: {}, unset: [] }, 'linux');
     const env = buildArmEnv(DEVELOPER, cleared.env);

@@ -47,7 +47,7 @@ export const PROBE_VERSION: InstrumentVersion = {
   version: '0.0.0-test',
   commit: null,
   dirty: null,
-  closure: null,
+  closure: 'c'.repeat(64),
 };
 
 /** Base-environment variable, expected in EVERY child including the cache clear. */
@@ -318,9 +318,9 @@ export function setupProbe(prefix = 'lab-probe-'): Probe {
  * (from the instrument's own module resolution) — under whatever `TMPDIR` the
  * arm hands it.
  *
- * @param base - The directory whose `node_modules` gets it: the probe directory, or an npx project
+ * @param base - The directory whose `node_modules` gets it: the probe directory
  */
-export function writeFakeResourcesPackage(base: string): void {
+function writeFakeResourcesPackage(base: string): void {
   const dir = safePath.join(base, 'node_modules', '@vibe-agent-toolkit', 'resources');
   mkdirSyncReal(dir, { recursive: true });
   writeFileSync(

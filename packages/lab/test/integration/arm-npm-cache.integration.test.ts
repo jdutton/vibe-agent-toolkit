@@ -1,20 +1,19 @@
 /**
- * An instrument that fetches its own bytes on first run (`npx`) under an arm.
+ * A build that writes npm's cache on its first run, under an arm.
  *
- * npx keeps what it fetched in npm's cache, under `$HOME/.npm` by default — and
- * an arm's home is emptied before every sequence, so every repetition would
- * time a download. Every arm instead gives npm a cache of its own beside its
- * store (`npm_config_cache`, never reset, `prefer-offline`), and every build
- * starts once, untimed, before round 1, so the fetch lands there and never in
- * a timed repetition.
+ * npm keeps what it fetched under `$HOME/.npm` by default — and an arm's home is
+ * emptied before every sequence, so a build (or a tool it spawns) that fetches
+ * through npm would time a download in every repetition. Every arm instead gives
+ * npm a cache of its own beside its store (`npm_config_cache`, never reset,
+ * `prefer-offline`), and every build starts once, untimed, before round 1, so the
+ * fetch lands there and never in a timed repetition.
  *
- * The npx stand-in fetches into whatever cache npm would use, exactly as npx
- * does, and logs whether each run fetched.
+ * The stand-in fetches into whatever cache npm would use and logs whether each
+ * run fetched. (No `npx:` build runs this way: one is installed before any arm
+ * runs and resolved to its install's entry — `npx-install.integration.test.ts`.)
  *
- * A build whose parse directory a populating step needs, but that runs neither
- * as `node <entry>` nor through npx, is refused before any measured child. (An
- * npx build's parse directory is resolved from its install in the arm's npm
- * cache — `repeat-npx.integration.test.ts`.)
+ * A build whose parse directory a populating step needs, but that does not run
+ * as `node <entry>`, is refused before any measured child.
  *
  * Integration-tier: spawns node.
  */
@@ -30,15 +29,15 @@ import type { ResolvedInstrument } from '../../src/harness/types.js';
 import { PROBE_VERSION, probeStep } from '../command-probe.js';
 
 /** Where the stand-in logs each run. */
-const LOG_ENV = 'LAB_FAKE_NPX_LOG';
+const LOG_ENV = 'LAB_NPM_CACHE_LOG';
 
-/** Fetches into npm's cache on first run, as npx does, and logs what it saw. */
-const FAKE_NPX = [
+/** Fetches into npm's cache on first run, as npm does, and logs what it saw. */
+const FETCHING_BUILD = [
   "const { appendFileSync, existsSync, mkdirSync, writeFileSync } = require('node:fs');",
   "const { join } = require('node:path');",
   "const cache = process.env.npm_config_cache ?? join(process.env.HOME ?? '', '.npm');",
-  "const fetched = !existsSync(join(cache, '_npx', 'fake-vat'));",
-  "if (fetched) { mkdirSync(join(cache, '_npx'), { recursive: true }); writeFileSync(join(cache, '_npx', 'fake-vat'), 'x'); }",
+  "const fetched = !existsSync(join(cache, '_cacache', 'fetched'));",
+  "if (fetched) { mkdirSync(join(cache, '_cacache'), { recursive: true }); writeFileSync(join(cache, '_cacache', 'fetched'), 'x'); }",
   `appendFileSync(process.env.${LOG_ENV}, JSON.stringify({`,
   '  argv: process.argv.slice(2),',
   '  fetched,',
@@ -51,7 +50,7 @@ const FAKE_NPX = [
 let scratch: string;
 
 beforeEach(() => {
-  scratch = mkdtempSync(safePath.join(normalizedTmpdir(), 'lab-arm-npx-'));
+  scratch = mkdtempSync(safePath.join(normalizedTmpdir(), 'lab-arm-npm-cache-'));
 });
 
 afterEach(() => {
@@ -61,7 +60,7 @@ afterEach(() => {
 /**
  * @param instrument - The build
  * @param populates - Whether its one step populates (so the cold rule needs its parse directory)
- * @returns A three-round cold arm of it under a fresh arms root, logging to `<scratch>/npx.log`
+ * @returns A three-round cold arm of it under a fresh arms root, logging to `<scratch>/fetch.log`
  */
 function coldArm(instrument: ResolvedInstrument, populates = false): RepeatSpec {
   const cwd = mkdtempSync(safePath.join(scratch, 'cwd-'));
@@ -70,23 +69,23 @@ function coldArm(instrument: ResolvedInstrument, populates = false): RepeatSpec 
     cwd,
     steps: [probeStep(['audit'], { populates })],
     runs: 3,
-    arm: { root: mkdtempSync(safePath.join(scratch, 'arms-')), build: 'npx', arm: 'a', state: 'cold' },
-    env: { set: { [LOG_ENV]: safePath.join(scratch, 'npx.log') }, unset: [] },
+    arm: { root: mkdtempSync(safePath.join(scratch, 'arms-')), build: 'fetching', arm: 'a', state: 'cold' },
+    env: { set: { [LOG_ENV]: safePath.join(scratch, 'fetch.log') }, unset: [] },
   };
 }
 
 /** @returns Each logged run */
 function runs(): { readonly argv: readonly string[]; readonly fetched: boolean; readonly cache: string | null; readonly preferOffline: string | null }[] {
-  return readFileSync(safePath.join(scratch, 'npx.log'), 'utf-8')
+  return readFileSync(safePath.join(scratch, 'fetch.log'), 'utf-8')
     .trim()
     .split('\n')
     .map((line) => JSON.parse(line) as ReturnType<typeof runs>[number]);
 }
 
-describe('an npx-shaped instrument under an arm', () => {
+describe('a build that writes npm\'s cache, under an arm', () => {
   it('fetches once, in the untimed start before round 1, into a cache the arm owns — never in a timed repetition', async () => {
-    const script = safePath.join(scratch, 'fake-npx.cjs');
-    writeFileSync(script, FAKE_NPX);
+    const script = safePath.join(scratch, 'fetching-build.cjs');
+    writeFileSync(script, FETCHING_BUILD);
     const spec = coldArm({ command: NODE_EXECUTABLE, leadingArgs: [script], version: PROBE_VERSION });
 
     const run = await runRepeats(spec);
@@ -104,13 +103,13 @@ describe('an npx-shaped instrument under an arm', () => {
     }
   });
 
-  it('refuses, before any measured child, a populating arm whose build runs neither as node <entry> nor through npx', async () => {
+  it('refuses, before any measured child, a populating arm whose build does not run as node <entry>', async () => {
     // `node -e <code>`: it runs (exits 0 on `--version`), but has no entry module to resolve a parse directory from.
     const started = safePath.join(scratch, 'started');
     const code = `require('node:fs').appendFileSync(${JSON.stringify(started)}, 'x')`;
     const spec = coldArm({ command: NODE_EXECUTABLE, leadingArgs: ['-e', code], version: PROBE_VERSION }, true);
 
-    await expect(runRepeats(spec)).rejects.toThrow(/arm 'a': .*runs neither as `node <entry>` nor through npx/u);
+    await expect(runRepeats(spec)).rejects.toThrow(/arm 'a': .*does not run as `node <entry>`/u);
     // Each run of the build appends one 'x': the untimed start at most, never a measured repetition.
     expect(existsSync(started) ? readFileSync(started, 'utf-8') : '').toMatch(/^x?$/u);
   });

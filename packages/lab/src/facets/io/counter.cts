@@ -18,7 +18,8 @@
  * ## Four properties, each load-bearing
  *
  * **Zero non-builtin dependencies.** It is injected into a vat that may be
- * running from a temp dir via `npx`, where nothing of the lab's is installed.
+ * running from an `npx:` build's install under the arms root, where nothing of
+ * the lab's is installed.
  * A single `require` of anything outside `node:` crashes the process it was
  * supposed to observe. `test/io-counter.test.ts` scans the *emitted* file.
  *

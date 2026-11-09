@@ -114,10 +114,17 @@ export interface InstrumentVersion {
    */
   readonly dirty: boolean | null;
   /**
-   * SHA-256 over the arm's whole module closure — the cli package and every
-   * `@vibe-agent-toolkit/*` package it resolves, transitively, each as its
-   * `package.json` plus every file under its `dist/` (see
-   * `harness/closure.ts`) — or, for an `npx:` arm, see below.
+   * SHA-256 over the arm's whole module closure (see `harness/closure.ts`): the
+   * BYTES of the cli package and of every `@vibe-agent-toolkit/*` package it
+   * resolves, transitively, each as its `package.json` plus every file under its
+   * `dist/`; plus the resolved `name@version` — not the bytes — of every
+   * third-party package in that same closure. One definition for every kind — an
+   * `npx:` arm's starts at its installed cli — so a third-party dependency
+   * resolved at another version makes another instrument, for every kind.
+   *
+   * A report stored by an earlier lab whose closure was computed by another
+   * definition compares as a different instrument: re-capture it. Nothing
+   * detects that, and no version marker records the definition.
    *
    * **The field that identifies the BYTES.** A `dist:` arm has no commit, so
    * before this two `dist:` arms of one version were the same instrument to
@@ -126,13 +133,13 @@ export interface InstrumentVersion {
    * is identified by it too, which is what lets two dirty builds at one commit
    * finally compare unequal when their outputs differ.
    *
-   * `null` for `npx:` because a published tarball's closure is not on disk
-   * until npx unpacks it at run time — except `memory`'s, which installs the
-   * spec itself and digests that install's whole `node_modules`.
-   * Required and `.strict()`: a stored report from before the field existed is
-   * refused, not defaulted — the lab's documented refusal policy.
+   * Every resolved build carries one. Required, never null, and `.strict()`: a
+   * stored report without one — from before the field existed, or an `npx:` report
+   * from before the lab installed the pin itself (`harness/npx-install.ts`), which
+   * may have measured another version than it names — is refused, not defaulted:
+   * the lab's documented refusal policy.
    */
-  readonly closure: string | null;
+  readonly closure: string;
 }
 
 /** A complete three-axis coordinate. */
@@ -191,6 +198,9 @@ export const SubjectVersionSchema = SubjectVersionVariants.superRefine((value, c
   });
 });
 
+/** Why a stored instrument with no closure digest is refused rather than compared. */
+const NO_CLOSURE = 'the instrument has no closure digest: it may have measured another version than it names';
+
 /**
  * Axis C, with the one cross-field rule the object shape cannot express alone.
  *
@@ -206,9 +216,8 @@ export const InstrumentVersionSchema = z
     commit: z.string().min(1).nullable(),
     dirty: z.boolean().nullable(),
     closure: z
-      .string()
-      .regex(/^[0-9a-f]{64}$/, 'a closure digest is 64 lowercase hex characters')
-      .nullable(),
+      .string({ invalid_type_error: NO_CLOSURE, required_error: NO_CLOSURE })
+      .regex(/^[0-9a-f]{64}$/, 'a closure digest is 64 lowercase hex characters'),
   })
   .strict()
   .superRefine((value, ctx) => {

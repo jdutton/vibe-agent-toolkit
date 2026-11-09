@@ -75,7 +75,7 @@ function reportWith(command: MemoryCommandStats, base: ReportEnvelope<unknown> =
  * @returns The completed comparison
  */
 function compared(before: MemoryCommandStats, after: MemoryCommandStats): MemoryComparisonResult {
-  const later = makeReportAt({ instrument: { version: '0.1.43', commit: '2'.repeat(40), dirty: false, closure: null } });
+  const later = makeReportAt({ instrument: { version: '0.1.43', commit: '2'.repeat(40), dirty: false, closure: 'c'.repeat(64) } });
   const result = compareMemory(reportWith(before), reportWith(after, later));
   if (!result.ok) throw new Error(result.refusal);
   return result;
@@ -137,7 +137,7 @@ describe('compareMemory', () => {
 
   it('calls a different process count CHANGED across instrument kinds too, with no caveat', () => {
     // An npx arm runs the installed cli's `dist/bin.js` straight, as a tree arm does: the counts mean one thing.
-    const npx = makeReportAt({ instrument: { version: '0.1.43', commit: null, dirty: null, closure: null } });
+    const npx = makeReportAt({ instrument: { version: '0.1.43', commit: null, dirty: null, closure: 'c'.repeat(64) } });
     const result = compareMemory(reportWith(row(GIB_KB)), reportWith(row(GIB_KB, { processesPerRepeat: [2, 2, 2] }), npx));
     if (!result.ok) throw new Error(result.refusal);
     const [diff] = result.commands;

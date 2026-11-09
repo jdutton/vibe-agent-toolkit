@@ -136,8 +136,8 @@ export interface ReportEnvelope<TBody = unknown> {
   readonly exits: readonly RecordedExit[];
   /**
    * The lab's platform, architecture and Node build, and the `NODE_OPTIONS` its measured
-   * children inherited. A `tree:`/`dist:` child, and every `memory` child, runs on this
-   * Node; another facet's `npx:` child runs on the `node` on `PATH`. `memory`, whose peak
+   * children inherited. Every measured child — `tree:`, `dist:` or `npx:` — runs on this
+   * Node. `memory`, whose peak
    * is the runtime's as much as vat's, refuses a pair that differs ({@link refuseDifferentHosts}).
    */
   readonly host: ReportHost;

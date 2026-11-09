@@ -107,10 +107,14 @@ landing inside the tree being measured changes the next run's numbers.
 
 A timed arm is a **sequence of steps** run in `<arms root>/<build>-<arm>-<state>/{store,tmp,home,npm-cache}`
 (created at 0700), from a **cleared environment**: no inherited `VAT_*`, temp, XDG, git config,
-git template or exec path, or inherited `npm_config_*` setting reaches a VAT step — but npm's
+git template or exec path, `NODE_PATH`, or inherited `npm_config_*` setting reaches a VAT step — but npm's
 network settings, an allow list in any case and in either the `-` or `_` spelling (`registry`, a
 scoped `@scope:registry`, `proxy`, `https-proxy`, `noproxy`/`no-proxy`, `ca`, `cafile`,
-`strict-ssl`), so an `npx:` arm still reaches its registry. Everything else under `npm_config_*` is
+`strict-ssl`). An `npx:` build is never run through npm, so the one npm the lab itself runs is that
+build's `npm install`, which reaches its registry through the allow list — an arm's own `--env`
+never reaches that install, which serves every arm naming the spec. That install reads the operator's npm userconfig (an
+inherited `npm_config_userconfig`, else `~/.npmrc`) with `HOME` at the install arm's empty home, so a
+`~/` or `${HOME}` in that file resolves there, not to the operator's home. Everything else under `npm_config_*` is
 removed: identity and config files (`userconfig`, `_auth`, a `//host/:_authToken`, `cert`, `key`)
 and whatever changes what npm does (`ignore-scripts`, `offline`, `node-options`, `script-shell`, …).
 Every report records the names, never the values, of the network settings kept (`npmNetworkEnv`,
@@ -129,7 +133,27 @@ single-command facet runs are one-step sequences under `<arms root>/<build>-<com
   default one before anything is created. Every root the lab uses carries `.vat-lab-root`: an absent
   `--arms-dir` is created 0700 and marked; an existing EMPTY one is adopted as it is — the lab writes
   `.vat-lab-root` into it and then its arms and clone beneath it, and never chmods it; an existing,
-  non-empty one without the marker is refused, nothing written into it.
+  non-empty one without the marker is refused, nothing written into it. **One invocation per
+  `--arms-dir` at a time:** nothing locks it, and every arm under it — the `npx:` install arm
+  included — is emptied when its run starts, so two concurrent invocations sharing one `--arms-dir`
+  delete each other's stores and installs. The default run directory is fresh per invocation.
+  **What keeps an `npx:` install's module resolution inside it.** Node resolves a module up the
+  directory tree, past the install and the arms root. The install is laid out hoisted
+  (`--install-strategy=hoisted` on npm's command line, which beats any `.npmrc`) and refused if it
+  holds a linked package directory or a `node_modules/.store`. It is refused, naming the path, when
+  any directory above its prefix holds a `node_modules`. **That check runs once, at install time,
+  and the default arms root's ancestors are shared:** `/tmp` on Linux (`/tmp/node_modules` is
+  world-writable) and `C:\` on Windows, where another user could plant a `node_modules` after the
+  check — **on a shared host, pass `--arms-dir` under your home.** For every optional peer
+  (`peerDependenciesMeta`, `optional: true`) that ANY package of the install declares and that does
+  not resolve from that package inside the install, the lab writes a stub package at the install's
+  top-level `node_modules`; Node stops there and fails the load as not found — the package's own
+  "not installed". Never stubbed: a name any installed package lists in `optionalDependencies` (npm
+  skipped it, and it stays absent), and a peer name that is not a valid package name (a legacy
+  uppercase one), which is skipped rather than refusing the install. Every arm clears `NODE_PATH`.
+  What remains outside the install: Node's CommonJS global folders — `$HOME/.node_modules`,
+  `$HOME/.node_libraries` (the arm's own empty home) and `$PREFIX/lib/node` of the Node that runs.
+  A `tree:` or `dist:` build resolves from where it lies, as it would for its operator.
 - **The default run directory ends with the capture.** When the capture ends — passed or failed —
   the lab removes the whole `run-*` directory (stores, caches, npm's fetch) and prints
   `Removed arms under <root>`; `--keep-arms` keeps it and prints `Kept arms under <root>`. A named
@@ -161,15 +185,40 @@ single-command facet runs are one-step sequences under `<arms root>/<build>-<com
   (`<NAME> is set by the lab itself on every arm`) — an arm cannot choose them.
 - **npm's cache is the arm's own and never reset.** `npm_config_cache` is `<arm>/npm-cache`, with
   `npm_config_prefer_offline=true` and the update notifier off, and every build is **started once,
-  untimed** (`--version`, cwd the npm cache) before round 1. An `npx:` build therefore fetches its
-  bytes there, once, never in a timed repetition; a build whose start exits non-zero refuses the
-  arm (`the build did not start — '--version' exited N`).
-- **A populating arm asks the build for its parse directory**: from its entry for a `tree:` or
-  `dist:` build, and for an `npx:` build from the copy npx runs: the pinned version installed in
-  the clone's own project (`node_modules`, which npx runs ahead of its cache), else the one install
-  the untimed start left in the arm's npm cache (`<arm>/npm-cache/_npx/<hash>/`). Neither, or two
-  installs, refuses the arm before any measured child — never a guess; the refusal names the cause
-  and says to measure the copy npx did run with a `dist:` instrument. An arm whose own `--env` turns caching off
+  untimed** (`--version`, cwd the npm cache) before round 1; a build whose start exits non-zero
+  refuses the arm (`the build did not start — '--version' exited N`).
+- **An `npx:` build never runs through npx.** npx runs the package's `bin`, the cli's cwd-resolving
+  wrapper, which runs the SUBJECT'S own vat when the subject has one installed — under the pinned
+  name. So the pinned spec is installed once per invocation (`--ignore-scripts`, in an arm of its own
+  under the arms root, `harness/npx-install.ts`) and runs as `node <install>/…/@vibe-agent-toolkit/cli/dist/bin.js`,
+  as a `dist:` build does — `bin.js` is the CLI itself and delegates to no other copy, which is the
+  protection. The spec must be `vibe-agent-toolkit` or `@vibe-agent-toolkit/cli` pinned to an exact
+  version (no other package, path, URL, tarball, git ref or alias), refused before any setup. Once
+  per install, before any repeat: the entry is looked for only where the named package's own cli
+  lives, its `package.json` must name `@vibe-agent-toolkit/cli` at the pin, its real path must lie
+  inside the install, and it must start (`--version` exits 0 — `bin.js` and its static imports
+  load). npm is the one bundled with the Node that runs the lab — never PATH's — run as
+  `node <npm-cli.js>` with no shell on every platform (a Node with no bundled npm is refused,
+  naming the path looked for), with its own fixed install timeout, never `--timeout-ms`. Every install
+  refusal — npm failing, the wrong cli, an entry outside the install or one that does not start,
+  a closure that does not resolve inside it — prints one `REFUSED:` line. Its closure is the one
+  definition every kind stamps (see [the closure digest](docs/run-harness.md#the-closure-digest--arm-identity-by-what-it-runs)):
+  the bytes of the cli and its `@vibe-agent-toolkit/*` packages plus the `name@version` of every
+  third-party package in that closure, resolved no higher than the install — so an `npx:` build
+  matches a `dist:` build of the same install, the umbrella and the cli pins of one version match,
+  and a third-party dependency that floated to another version is another instrument. A report
+  stored by an earlier lab whose closure was computed differently compares as a different
+  instrument: re-capture it (nothing detects that; there is no version marker).
+- **Nested `vat` calls are pinned only when the arm says so — for every kind.** No arm kind
+  (`tree:`, `dist:` or `npx:`) sets `VAT_BIN` or `VAT_ROOT_DIR`: they are never inherited and
+  reach a child only through the arm's own `--env`. Without it, a nested `vat` call from the
+  subject's own scripts or hooks resolves through the subject's install, not the build under
+  test. A `tree:` or `dist:` arm pins them with `--env VAT_BIN=<its dist/bin.js>`; an `npx:`
+  install lives at a lab-internal path emptied each run, so to pin nested calls to a release use a
+  `dist:` arm over a private install plus a shim
+  ([recipe](../../docs/contributing/vat-debugging.md#crucible-runs)).
+- **A populating arm asks the build for its parse directory**, from its entry — never a guess.
+  An arm whose own `--env` turns caching off
   (`VAT_PROJECTION_STORE=off`, `VAT_CACHE=0`) is checked for writing nothing there instead, so a
   store-on vs store-off A/B measures both arms.
 - Each step of a CI sequence carries ONE **committed expected exit** — 0 unless
@@ -227,7 +276,7 @@ schemas (they are internal to the CLI, and the lab measures several builds), so 
 `cand-C-warm` fixture models that shape by hand.
 
 ```bash
-vat-lab perf arms ../subject --build base=dist:/path/to/base/cli --build cand=dist:/path/to/cand/cli \
+vat-lab perf arms ../subject --build base=dist:/path/to/base/packages/cli/dist --build cand=dist:/path/to/cand/packages/cli/dist \
   --arm base:ci-b:cold --arm cand:ci-b:cold --prerequisite "bun install" \
   --arms-dir /tmp/lab-arms --out ./arms
 ```
@@ -306,7 +355,7 @@ This README is the front door. The detail lives next door:
 - **[Roadmap](docs/roadmap.md)** — the staged plan. Deliberately not built all at once.
 - **[Facets](docs/facets.md)** — the report-body contract, and how to add one.
 - **[Run harness](docs/run-harness.md)** — how the lab obtains a vat to run: a working tree, a built
-  `dist/`, or a released version via `npx`.
+  `dist/`, or a released version (`npx:`, installed under the arms root and run as its `dist/bin.js`).
 
 ## Refusals
 

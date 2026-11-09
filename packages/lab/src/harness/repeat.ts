@@ -329,7 +329,7 @@ async function runPreparedArms(
   rounds: number,
   copies: readonly (string | null)[],
 ): Promise<ArmRun[]> {
-  // Start first: an npx build is on disk, and so askable for its parse directory, only once started.
+  // Start first: a build that does not start is refused before anything else is asked of it.
   for (const [index, arm] of arms.entries()) startBuild(arm, specs[index]?.arm.arm ?? '');
   // Before any measured child: an arm that cannot judge its population is refused whole, not after round 1.
   for (const [index, arm] of arms.entries()) parseDirectoryRefusal(arm, specs[index]?.arm.arm ?? '');
@@ -411,9 +411,8 @@ async function clearWrittenOutputs(arm: PreparedArm): Promise<void> {
 
 /**
  * Refuse an arm whose populating step's rule needs the build's parse directory
- * when the build cannot say where it is (no entry and no single npx install in
- * the arm's npm cache, or a directory outside the arm's `tmp/`). Runs after the
- * untimed start, which is what puts an npx build on disk.
+ * when the build cannot say where it is (no `node <entry>`, or a directory
+ * outside the arm's `tmp/`). Runs after the untimed start.
  *
  * @param arm - A prepared arm, its directories made
  * @param name - The arm's name, for the refusal
@@ -427,8 +426,7 @@ function parseDirectoryRefusal(arm: PreparedArm, name: string): void {
 
 /**
  * Start the build once, untimed, before round 1 (`--version`, in the arm's
- * npm cache): an `npx` build fetches its bytes into the arm's npm cache here,
- * so no timed repetition pays for a first start.
+ * npm cache), so no timed repetition pays for a first start.
  *
  * @param arm - A prepared arm, its directories made
  * @param name - The arm's name, for the refusal
@@ -491,7 +489,7 @@ function prepareArm(spec: RepeatSpec): PreparedArm {
     vatEnv: vat.env,
     toolEnv: tool.env,
     timeoutMs: spec.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    parseDirectory: () => (parse ??= resolveParseCacheDirectory(spec.instrument, dirs, cwd)),
+    parseDirectory: () => (parse ??= resolveParseCacheDirectory(spec.instrument, dirs)),
     population: populationExpectation(vat.env, process.platform),
   };
   return {

@@ -32,30 +32,60 @@ A `dist/` has no checkout to ask, so its coordinate records `commit: null` — a
 the header prints as `closure <first 12 hex>`. Prefer a working tree when you have one: the digest
 names the bytes, but only a commit names the source they were built from.
 
-**A released version.** `npx @vibe-agent-toolkit/cli@0.1.41` — the case that makes "did we get better
-since the last release?" a one-liner. The commit is unknown here and the coordinate records `null`
-rather than guessing; so is the closure, because the tarball's bytes are not on disk until npx
-unpacks them at run time. The pinned version pins them.
+**A released version.** `npx:vibe-agent-toolkit@0.1.41` — the case that makes "did we get better
+since the last release?" a one-liner. The spec must be `vibe-agent-toolkit` or
+`@vibe-agent-toolkit/cli` pinned to an exact version, refused before any setup otherwise: any other
+package, a range, a dist-tag, a path, a URL, a tarball, a git ref or an `npm:` alias. The
+pin is installed under the arms root and run as that install's `dist/bin.js` (below). The commit is
+unknown here and the coordinate records `null` rather than guessing; the closure is the one digest
+every kind stamps (below), taken from the installed cli — so an `npx:` build and a `dist:` build of
+the same install are one instrument, as are the umbrella and cli pins of one version. Third-party
+ranges float in the install, so two installs of one pin that resolved a third-party package at
+different versions are two instruments.
 
-### The closure digest — arm identity by the bytes it runs
+### The closure digest — arm identity by what it runs
 
-`InstrumentVersion.closure` is a SHA-256 over the arm's whole module closure: the cli package and
-every `@vibe-agent-toolkit/*` package it depends on, transitively — each as its `package.json` plus
-every file under its `dist/`, `*.tsbuildinfo` excluded ([`harness/closure.ts`](../src/harness/closure.ts)).
-`tree:` and `dist:` compute it; `npx:` records `null`.
+`InstrumentVersion.closure` is a SHA-256 over the arm's whole module closure
+([`harness/closure.ts`](../src/harness/closure.ts)) — one definition for every kind: `tree:` starts
+it at `packages/cli`, `dist:` at the package that owns the named `dist/`, `npx:` at the installed
+`@vibe-agent-toolkit/cli`.
+
+- **`@vibe-agent-toolkit/*` packages by their bytes.** The cli and every `@vibe-agent-toolkit/*`
+  package in its transitive dependency closure, each as its `package.json` plus every file under
+  its `dist/`, `*.tsbuildinfo` excluded.
+- **Third-party packages by their resolved `name@version`, never their bytes.** Every third-party
+  package in that same closure. Another version resolved — a range that floated in an `npx:`
+  install, a lockfile bump in a checkout — is another instrument; the same version with other
+  bytes is not.
 
 - **Why.** The version cannot see the case that matters most: a dependency's `dist/` rebuilt while
   every `package.json` stays put. Before the digest, two `dist:` arms of one version were the same
   instrument to every comparison, whatever they had been built from.
 - **What resolves.** Each dependency is found the way Node finds it — `<dir>/node_modules/<name>`
   from the depending package upward, nearest first, through any symlink — so one walk serves a bun
-  workspace and an npm prefix. Only `dependencies`: the cli's `rag` and `rag-lancedb` are optional
-  peers, absent from a plain install. Third-party packages are out of scope; a lockfile pins those.
-- **Errors, never fallbacks.** A declared `@vibe-agent-toolkit/*` dependency that does not resolve,
-  or a closure member with no `dist/`, throws naming it — a digest of less than what runs would
-  match another arm missing the same thing.
-- **Stored reports.** The field is required under the `.strict()` schema, so a report stored before
-  it existed is refused on read — the lab's refusal policy, not a defect. The store names a
+  workspace and an npm prefix. The walk follows `dependencies`, and the `optionalDependencies` and
+  optional peers (`peerDependenciesMeta`, `optional: true`) that are present: the cli's `rag` and
+  `rag-lancedb` are optional peers npm installs only when asked for, passed over when missing and
+  digested like any other VAT package when installed. The stub an `npx:` install writes for a
+  missing optional peer is passed over as absent. Required peers are not followed.
+- **Never above a ceiling.** Resolution stops at a ceiling: an `npx:` arm's install prefix; a
+  `tree:` arm's checkout root; for a `dist:` arm, the directory holding the outermost
+  `node_modules` of the package's real path when it lies in one (an npm prefix — the ceiling an
+  `npx:` arm of those bytes uses), else the nearest directory from the package up whose
+  `package.json` declares `workspaces` (the checkout a `tree:` arm of it would name), else the
+  package itself. A dependency found only above the ceiling, or whose real directory lies outside
+  it, is not part of the arm.
+- **Errors, never fallbacks.** A declared dependency that does not resolve under the ceiling, or a
+  `@vibe-agent-toolkit/*` closure member with no `dist/`, throws naming it — a digest of less than
+  what runs would match another arm missing the same thing. For an `npx:` arm it is a `REFUSED:`.
+- **Reports from an earlier definition.** A report stored by an earlier lab whose closure was
+  computed differently (before third-party versions were part of it, say) compares as a different
+  instrument from a fresh capture of the same build: re-capture it. Nothing detects this, and no
+  version marker records which definition made a digest.
+- **Stored reports.** The field is required and never null under the `.strict()` schema, so a report
+  stored without one is refused on read — the lab's refusal policy, not a defect. That includes an
+  `npx:` report from before the lab installed the pin itself: it may have measured another version
+  than it names; re-capture it. The store names a
   commit-less build `vat-<version>-closure-<first 8 hex>`, so a second `dist:` build of one version
   never overwrites the first.
 
@@ -74,12 +104,47 @@ back to it. The CLI reached the same conclusion independently: `resolveVatBinPat
 kept a second copy for its whole-command half; that half moved here as the `verdict` facet and the
 copy was deleted with it.)
 
-The `npx` route is the one exception, and a known limitation: `npx` runs the published package's
-`bin` entry, which *is* the wrapper. A subject with its own vat installed can therefore capture an
-`npx:` arm. Compare published versions on a subject that does not depend on vat, or use `dist:`
-against an unpacked tarball. Its parse directory is still the build's own answer: the lab resolves
-`@vibe-agent-toolkit/resources` from the one project npx installed into the arm's npm cache during
-the untimed start.
+The `npx` route is no exception: `npx` runs the published package's `bin` entry, which *is* the
+wrapper, and a subject with its own vat installed captured an `npx:` arm — a report stamped with the
+pin measured the subject's version. So an `npx:` build is never run through npx: the pinned spec is
+installed under the arms root and resolved to its cli's `dist/bin.js`
+([`harness/npx-install.ts`](../src/harness/npx-install.ts)). Running `bin.js` directly is the
+protection: it is the CLI itself and delegates to no other copy. The entry is looked for only where
+the named package's own cli lives (the hoisted `node_modules/@vibe-agent-toolkit/cli`, and for the
+umbrella its own dependency nested under it). The install is refused unless that cli's
+`package.json` names `@vibe-agent-toolkit/cli` (an alias keeps the real package's name) at the pin
+and the entry's real path lies inside the install; the entry is then run once with `--version` to
+prove `bin.js` and its static imports load — not to check its version, which `--version` reads from
+that same `package.json`. These checks run once per install, before any repeat, and each failure
+— npm failing included — is an arm refusal, printed as one `REFUSED:` line. npm runs as
+`node <npm-cli.js>` with no shell on every platform, so a timeout kills npm itself, not a `cmd.exe`
+above it. It is the npm bundled with the Node that runs the lab (`process.execPath`), never one
+found on PATH: POSIX `<prefix>/lib/node_modules/npm/bin/npm-cli.js` (`<prefix>` the parent of
+`node`'s directory), Windows `node_modules/npm/bin/npm-cli.js` beside `node.exe` — the official
+Node layout, npm bundled beside node. A Node with no bundled npm there — a distribution-packaged
+Node such as Debian's, whose npm lives at `/usr/share/nodejs/npm` — is refused, naming the path
+looked for. A timeout kills npm's own node process, not any child it started: VAT's dependency
+closure has no git or script steps, and the next cold reset of the install arm clears a partial
+install. The install is laid out hoisted: `--install-strategy=hoisted` is on npm's command line,
+which beats an `install-strategy=linked` in the operator's `.npmrc`, and an install still holding a
+linked package directory or a `node_modules/.store` is refused.
+
+**What stays inside an `npx:` install, and what does not.** Node resolves a bare module name up the
+directory tree, past the install and the arms root. The install is refused, naming the path, when
+any directory above its prefix — up to the filesystem root — holds a `node_modules` entry. The
+check runs once, at install time, and the default arms root lies under the system temp directory,
+whose ancestors other users may write to: `/tmp` on Linux (`/tmp/node_modules` is world-writable)
+and `C:\` on Windows. **On a shared host, pass `--arms-dir` under your home.** For every optional
+peer (`peerDependenciesMeta`, `optional: true`) that any package of the install declares and that
+does not resolve from that package inside the install, the lab writes a stub package at the
+install's top-level `node_modules`; Node stops there and fails the load as not found — the
+package's own "not installed". Never stubbed: a name any installed package lists in
+`optionalDependencies` (npm skipped it as optional or for another platform, and the closure treats
+it as absent), and an optional-peer name that is not a valid package name (a legacy uppercase
+name), which is skipped, not a refusal of the whole install. Every arm clears an inherited
+`NODE_PATH`. What remains outside the install: Node's CommonJS global folders —
+`$HOME/.node_modules`, `$HOME/.node_libraries` (the arm's own, empty home) and `$PREFIX/lib/node`
+of the Node that runs.
 
 ## A dirty instrument is measured, but never mistaken for a commit
 
@@ -126,8 +191,14 @@ No lab code drives `VAT_ROOT_DIR` — or any other variable that selects which v
 arm-environment contract (see "Each arm's environment" below): `VAT_ROOT_DIR`, `VAT_BIN` and the
 other arm-owned variables are stripped from every child, never inherited, and reach a child only
 when the arm itself sets them with `--env`. A nested `vat` call from a subject's own npm scripts or
-hooks stays in the arm only because the arm says so (`--env VAT_BIN=<bin.js>` for a `dist:` arm,
-`--env VAT_ROOT_DIR=<shim>` for a build whose wrapper predates `VAT_BIN`).
+hooks stays in the arm only because the arm says so (`--env VAT_BIN=<bin.js>` for a `tree:` or
+`dist:` arm, `--env VAT_ROOT_DIR=<shim>` for a build whose wrapper predates `VAT_BIN`). No arm kind
+— `tree:`, `dist:` or `npx:` — sets either itself, so without that `--env` a nested `vat` call
+resolves through the subject's own install, not the build under test. An `npx:` install lives at
+a lab-internal path emptied each run, so only the commands the lab runs itself measure the pin;
+for a pinned baseline whose nested calls are pinned too, use a
+`dist:` arm over a private install of the release plus a shim
+([recipe](../../../docs/contributing/vat-debugging.md#crucible-runs)).
 
 Every timed arm — the `verdict` facet's included — also gets lab-owned directories on top of its
 own settings: a private projection store, temp directory, empty home (`HOME` and

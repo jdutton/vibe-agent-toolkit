@@ -268,8 +268,8 @@ function summaryLine(row: IoCommandStats): string {
  * touches the filesystem; a process that touched it is the process doing the
  * work, however many of them there were.
  *
- * ⚠️ Still reachable, and deliberately kept: `npx:` runs the published package's
- * `bin`, which IS the wrapper, and cannot be fixed the way `tree:` was.
+ * Kept as the tell of any launcher a later route reintroduces: every kind,
+ * `npx:` included, now resolves to the cli's own `dist/bin.js`.
  *
  * @param row - The command's statistics
  * @returns True when the counted process did no filesystem work

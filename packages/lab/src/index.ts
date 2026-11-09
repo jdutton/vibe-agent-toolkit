@@ -453,7 +453,6 @@ export {
   runGit,
   trackedPaths,
 } from './harness/git-state.js';
-export { resolveInstrument } from './harness/instrument.js';
 export {
   armLabel,
   armOf,

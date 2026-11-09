@@ -79,7 +79,7 @@ function arm(commit: string): ResolvedInstrument {
   return {
     command: 'node',
     leadingArgs: ['/nowhere/bin.js'],
-    version: { version: '0.2.0', commit: commit.repeat(40), dirty: false, closure: null },
+    version: { version: '0.2.0', commit: commit.repeat(40), dirty: false, closure: 'c'.repeat(64) },
   };
 }
 
@@ -584,8 +584,8 @@ describe('renderAb', () => {
     const rendered = renderAb(result);
     expect(rendered).toContain('arms ALTERNATED (A B A B …)');
     expect(rendered).toContain('Estimator: MIN across pairs');
-    expect(rendered).toContain('Instrument A: vat 0.2.0 (aaaaaaaa)');
-    expect(rendered).toContain('Instrument B: vat 0.2.0 (bbbbbbbb)');
+    expect(rendered).toContain('Instrument A: vat 0.2.0 (aaaaaaaa, closure cccccccccccc)');
+    expect(rendered).toContain('Instrument B: vat 0.2.0 (bbbbbbbb, closure cccccccccccc)');
     expect(rendered).toContain(result.outDir);
   });
 

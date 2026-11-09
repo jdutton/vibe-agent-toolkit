@@ -37,11 +37,28 @@ import {
 import { removeScratchDir , CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { resolveInstrument } from '../src/harness/instrument.js';
+import { prepareInstrument, resolveInstrument } from '../src/harness/instrument.js';
+import { type NpxInstallSite, npxInstallSite } from '../src/harness/npx-install.js';
 import type { InstrumentSource } from '../src/harness/types.js';
+
+/**
+ * Both phases a verb runs, back to back: prepared before any setup, then finished.
+ *
+ * @param source - The build as named
+ * @param site - Where an `npx:` build installs
+ * @returns The resolved build
+ */
+async function resolveSource(source: InstrumentSource, site: NpxInstallSite): ReturnType<typeof resolveInstrument> {
+  return resolveInstrument(await prepareInstrument(source), site);
+}
 
 /** This checkout — packages/lab/test → packages/lab → packages → root. */
 const REPO_ROOT = resolveFromImportMeta(import.meta.url, '../../..');
+
+/** Where an `npx:` build would install — never reached: these cases resolve no pinned spec. */
+const NO_INSTALL = npxInstallSite(safePath.join(normalizedTmpdir(), 'lab-instrument-never'), () => {
+  throw new Error('this case must install nothing');
+});
 
 /** A closure digest: SHA-256, lowercase hex. */
 const CLOSURE_DIGEST = /^[0-9a-f]{64}$/;
@@ -160,7 +177,7 @@ async function expectRejectionNaming(
   source: InstrumentSource,
   ...fragments: string[]
 ): Promise<void> {
-  const outcome: unknown = await resolveInstrument(source).then(
+  const outcome: unknown = await resolveSource(source, NO_INSTALL).then(
     () => null,
     (error: unknown) => error,
   );
@@ -189,7 +206,7 @@ async function expectEntryPoint(
 ): Promise<void> {
   expect(existsSync(alternative), 'fixture cannot distinguish the two answers').toBe(true);
 
-  const resolved = await resolveInstrument(source);
+  const resolved = await resolveSource(source, NO_INSTALL);
 
   expect(resolved.leadingArgs).toHaveLength(1);
   expect(toForwardSlash(resolved.leadingArgs[0] ?? '')).toBe(toForwardSlash(expected));
@@ -197,7 +214,7 @@ async function expectEntryPoint(
 
 describe('resolveInstrument — kind: tree', () => {
   it('resolves this checkout to its built bin, its version, and its HEAD commit', async () => {
-    const resolved = await resolveInstrument({ kind: 'tree', path: REPO_ROOT });
+    const resolved = await resolveSource({ kind: 'tree', path: REPO_ROOT }, NO_INSTALL);
 
     expect(resolved.command).toBe(process.execPath);
     expect(resolved.leadingArgs).toHaveLength(1);
@@ -216,25 +233,25 @@ describe('resolveInstrument — kind: tree', () => {
     // root and the dist directory — and must land on one package root. A route
     // that digested from the wrong directory would stamp a different (or no)
     // closure for the very same bytes.
-    const tree = await resolveInstrument({ kind: 'tree', path: REPO_ROOT });
-    const dist = await resolveInstrument({
+    const tree = await resolveSource({ kind: 'tree', path: REPO_ROOT }, NO_INSTALL);
+    const dist = await resolveSource({
       kind: 'dist',
       path: safePath.join(REPO_ROOT, CLI_DIST_DIR),
-    });
+    }, NO_INSTALL);
 
     expect(tree.version.closure).toMatch(CLOSURE_DIGEST);
     expect(dist.version.closure).toBe(tree.version.closure);
   });
 
   it('distinguishes two builds carrying the same version by their commit', async () => {
-    const first = await resolveInstrument({
+    const first = await resolveSource({
       kind: 'tree',
       path: await makeTree('same-version-a', { version: '0.1.42', binBody: '// build A\n' }),
-    });
-    const second = await resolveInstrument({
+    }, NO_INSTALL);
+    const second = await resolveSource({
       kind: 'tree',
       path: await makeTree('same-version-b', { version: '0.1.42', binBody: '// build B\n' }),
-    });
+    }, NO_INSTALL);
 
     expect(second.version.version).toBe(first.version.version);
     expect(first.version.commit).toMatch(SHA1);
@@ -274,11 +291,11 @@ describe('resolveInstrument — kind: tree', () => {
   it('reports the instrument checkout as clean, then as dirty once it is edited', async () => {
     const root = await makeTree('dirty-instrument');
 
-    expect((await resolveInstrument({ kind: 'tree', path: root })).version.dirty).toBe(false);
+    expect((await resolveSource({ kind: 'tree', path: root }, NO_INSTALL)).version.dirty).toBe(false);
 
     await writeFile(safePath.join(root, CLI_BIN), '// edited, never committed\n');
 
-    const dirty = await resolveInstrument({ kind: 'tree', path: root });
+    const dirty = await resolveSource({ kind: 'tree', path: root }, NO_INSTALL);
     expect(dirty.version.dirty).toBe(true);
     // The commit is still stamped — a dirty build is measured, not refused. The
     // label is what keeps the stamp honest.
@@ -293,7 +310,7 @@ describe('resolveInstrument — kind: tree', () => {
     const root = await makeTree('untracked-instrument');
     await writeFile(safePath.join(root, 'scratch-note.txt'), 'not committed\n');
 
-    expect((await resolveInstrument({ kind: 'tree', path: root })).version.dirty).toBe(true);
+    expect((await resolveSource({ kind: 'tree', path: root }, NO_INSTALL)).version.dirty).toBe(true);
   });
 
   it('throws naming the path when the tree does not exist', async () => {
@@ -337,10 +354,10 @@ describe('resolveInstrument — kind: tree', () => {
 
 describe('resolveInstrument — kind: dist', () => {
   it('resolves a dist directory with a null commit', async () => {
-    const resolved = await resolveInstrument({
+    const resolved = await resolveSource({
       kind: 'dist',
       path: safePath.join(REPO_ROOT, CLI_DIST_DIR),
-    });
+    }, NO_INSTALL);
 
     expect(resolved.command).toBe(process.execPath);
     expect(toForwardSlash(resolved.leadingArgs[0] ?? '')).toMatch(VAT_BIN_SUFFIX);
@@ -351,10 +368,10 @@ describe('resolveInstrument — kind: dist', () => {
   });
 
   it('resolves a bin file named directly, and reads the nearest package.json', async () => {
-    const resolved = await resolveInstrument({
+    const resolved = await resolveSource({
       kind: 'dist',
       path: safePath.join(REPO_ROOT, CLI_BIN),
-    });
+    }, NO_INSTALL);
 
     expect(toForwardSlash(resolved.leadingArgs[0] ?? '')).toMatch(VAT_BIN_SUFFIX);
     expect(resolved.version.commit).toBeNull();
@@ -362,10 +379,10 @@ describe('resolveInstrument — kind: dist', () => {
 
   it('reads no commit even from a dist sitting inside a git checkout', async () => {
     const root = await makeTree('dist-inside-git');
-    const resolved = await resolveInstrument({
+    const resolved = await resolveSource({
       kind: 'dist',
       path: safePath.join(root, CLI_DIST_DIR),
-    });
+    }, NO_INSTALL);
 
     expect(resolved.version.version).toBe('0.1.42');
     expect(resolved.version.commit).toBeNull();
@@ -430,7 +447,7 @@ describe('resolveInstrument — kind: dist', () => {
       await chmod(locked, 0o000);
       try {
         await expect(
-          resolveInstrument({ kind: 'dist', path: safePath.join(locked, 'bin.js') }),
+          resolveSource({ kind: 'dist', path: safePath.join(locked, 'bin.js') }, NO_INSTALL),
         ).rejects.toMatchObject({ code: 'EACCES' });
       } finally {
         await chmod(locked, 0o700);
@@ -452,21 +469,38 @@ describe('resolveInstrument — kind: dist', () => {
 describe('resolveInstrument — kind: npx', () => {
   const PINNED: readonly (readonly [spec: string, version: string])[] = [
     ['@vibe-agent-toolkit/cli@0.1.41', '0.1.41'],
-    ['vat@1.2.3', '1.2.3'],
+    ['vibe-agent-toolkit@1.2.3', '1.2.3'],
     ['@vibe-agent-toolkit/cli@0.1.42-rc.5', '0.1.42-rc.5'],
-    ['@vibe-agent-toolkit/cli@1.0.0+build.7', '1.0.0+build.7'],
   ];
 
-  it.for(PINNED)('extracts %s to its pinned version', async ([spec, version]) => {
-    const resolved = await resolveInstrument({ kind: 'npx', spec });
+  /**
+   * npm strips build metadata from a version, so the installed cli's manifest can
+   * never carry it: an install would always end refused. Refused before setup instead.
+   */
+  it.for(['@vibe-agent-toolkit/cli@1.0.0+build.7', 'vibe-agent-toolkit@0.1.42-rc.5+sha.1'] as const)(
+    'refuses %s, whose build metadata npm strips, before installing',
+    async (spec) => {
+      await expectRejectionNaming({ kind: 'npx', spec }, `"${spec}"`, 'build metadata');
+    },
+  );
 
-    // Bare `npx`, never `npx.cmd`: the spawn wrappers own PATH resolution and
-    // the Windows `.cmd` shell decision.
-    expect(resolved.command).toBe('npx');
-    expect(resolved.leadingArgs).toEqual(['--yes', spec]);
-    // `dirty: null`, never `false`: a published tarball has no checkout, so
-    // there is nothing that could have been dirty and nothing to claim clean.
-    expect(resolved.version).toEqual({ version, commit: null, dirty: null, closure: null });
+  it.for(PINNED)('prepares %s to its pin and installs nothing: the install waits for the arms root', async ([spec, version]) => {
+    expect(await prepareInstrument({ kind: 'npx', spec })).toEqual({ kind: 'npx', pin: { name: spec.slice(0, spec.lastIndexOf('@')), version } });
+  });
+
+  it.for(PINNED)('installs %s and requires its cli to be the pinned version', async ([spec, version]) => {
+    // The install lays down a cli of ANOTHER version: the refusal names the version the spec pinned.
+    const installed: string[] = [];
+    const site = npxInstallSite(await mkdtemp(safePath.join(scratch, 'npx-arms-')), async (given, prefix) => {
+      installed.push(given);
+      const cli = safePath.join(prefix, 'node_modules/@vibe-agent-toolkit/cli');
+      await mkdir(safePath.join(cli, 'dist'), { recursive: true });
+      await writeFile(safePath.join(cli, 'dist/bin.js'), '');
+      await writeFile(safePath.join(cli, 'package.json'), JSON.stringify({ name: '@vibe-agent-toolkit/cli', version: '9.9.9-other' }));
+    });
+
+    await expect(resolveSource({ kind: 'npx', spec }, site)).rejects.toThrow(`9.9.9-other, not ${version}`);
+    expect(installed).toEqual([spec]);
   });
 
   /**
@@ -490,8 +524,55 @@ describe('resolveInstrument — kind: npx', () => {
     await expectRejectionNaming({ kind: 'npx', spec }, `"${spec}"`);
   });
 
+  /**
+   * Version-shaped, but not strict semver: a leading zero in a numeric part or a
+   * numeric prerelease identifier, an empty prerelease identifier. npm would read
+   * none of them as the exact version it names.
+   */
+  const NOT_SEMVER = ['01.2.3', '1.02.3', '1.2.3-rc.05', '1.2.3-.', '1.2.3-a..b'] as const;
+
+  it.for(NOT_SEMVER)('refuses vibe-agent-toolkit@%s, which is not strict semver, before installing', async (version) => {
+    const spec = `vibe-agent-toolkit@${version}`;
+    await expectRejectionNaming({ kind: 'npx', spec }, `"${spec}" is not pinned`);
+  });
+
+  /**
+   * Pinned-looking, but not VAT. A path, tarball, git ref or alias would install
+   * something other than a published version under a label that claims one; and any
+   * other registry package could carry a dependency aliased to the cli's name, or a
+   * bundled copy of it, that passes every later check.
+   */
+  const NOT_VAT = [
+    'left-pad@1.0.0',
+    'vat@1.2.3',
+    '@vibe-agent-toolkit/rag@0.2.0',
+    '@vibe-agent-toolkit/cli-extra@0.2.0',
+    'vibe-agent-toolkit-fork@0.2.0',
+    '../../../../home/me/proj@0.2.0',
+    './proj@0.2.0',
+    '/abs/proj@0.2.0',
+    'https://host/x.tgz?@0.2.0',
+    'file:../proj@0.2.0',
+    'npm:vibe-agent-toolkit@0.2.0',
+    'alias@npm:vibe-agent-toolkit@0.2.0',
+    'github:owner/repo@0.2.0',
+    'git+ssh://git@host/repo.git@0.2.0',
+    '@scope/a/b@0.2.0',
+    '@scope/..@0.2.0',
+    '..@0.2.0',
+    '.hidden@0.2.0',
+    '_private@0.2.0',
+    'Vibe-Agent-Toolkit@0.2.0',
+    String.raw`a\b@0.2.0`,
+    `${'a'.repeat(215)}@0.2.0`,
+  ] as const;
+
+  it.for(NOT_VAT)('refuses %s, which is not vibe-agent-toolkit or @vibe-agent-toolkit/cli, before installing', async (spec) => {
+    await expectRejectionNaming({ kind: 'npx', spec }, `"${spec}" does not name VAT`);
+  });
+
   it('refuses an empty spec', async () => {
-    await expectRejectionNaming({ kind: 'npx', spec: '   ' }, 'the spec is empty');
+    await expectRejectionNaming({ kind: 'npx', spec: '   ' }, 'the npx: spec is empty');
   });
 });
 
@@ -504,13 +585,14 @@ describe('resolveInstrument — kind: npx', () => {
  * work never share a site key and the N+1 detector sees a hundred lukewarm sites
  * instead of one hot one. A root that is present where it should be absent
  * bakes an `npx` cache path into the report. Both produce a complete, valid,
- * useless report — so all three cases are pinned, not just the interesting one.
+ * useless report — so all three cases are pinned, not just the interesting one
+ * (the `npx` one in `integration/npx-install.integration.test.ts`).
  */
 describe('resolveInstrument — the instrument root', () => {
   it('roots a tree at the checkout, not at its built bin', async () => {
     const root = await makeTree('rooted-tree');
 
-    const resolved = await resolveInstrument({ kind: 'tree', path: root });
+    const resolved = await resolveSource({ kind: 'tree', path: root }, NO_INSTALL);
 
     expect(resolved.root).toBe(safePath.resolve(root));
   });
@@ -521,23 +603,11 @@ describe('resolveInstrument — the instrument root', () => {
     // Named two directories BELOW the package root, and by a file rather than a
     // directory. Rooting at the caller's path would make every site outside
     // `dist/bin` look foreign and leave it absolute.
-    const resolved = await resolveInstrument({
+    const resolved = await resolveSource({
       kind: 'dist',
       path: safePath.join(root, CLI_BIN),
-    });
+    }, NO_INSTALL);
 
     expect(resolved.root).toBe(safePath.resolve(safePath.join(root, 'packages/cli')));
-  });
-
-  it('gives an npx instrument no root at all, which is a fact rather than a gap', async () => {
-    const resolved = await resolveInstrument({
-      kind: 'npx',
-      spec: '@vibe-agent-toolkit/cli@0.1.41',
-    });
-
-    // A published package is unpacked under an arbitrary cache directory, and
-    // every file in it sits under `node_modules` — which the site normalizer
-    // already keys on. Naming a temp path here would mean nothing to a reader.
-    expect(resolved.root).toBeUndefined();
   });
 });

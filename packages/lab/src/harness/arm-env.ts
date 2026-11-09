@@ -124,7 +124,10 @@ export function mergeArmEnvironments(base: ArmEnvironment, over: ArmEnvironment)
  * a cache root; `XDG_CONFIG_HOME` and `GIT_CONFIG_GLOBAL` their global git
  * config and excludes, which decide what both builds' snapshots and listings
  * admit; `GIT_TEMPLATE_DIR` and `GIT_EXEC_PATH` the hooks and git helpers a
- * clone or a git child runs. The arm sets its own `TMPDIR`, `HOME`,
+ * clone or a git child runs; `NODE_PATH` directories outside every build where
+ * Node looks for a module the build lacks. Every arm kind (`tree:`, `dist:`,
+ * `npx:` and its install) runs its VAT steps under this one list. The arm sets
+ * its own `TMPDIR`, `HOME`,
  * `CLAUDE_CONFIG_DIR`, `GIT_CONFIG_NOSYSTEM=1` and `GIT_ATTR_NOSYSTEM=1` (see
  * `arm-dirs.ts`): with the rest removed, git reads no system config or
  * attributes and its global config is the empty arm home. Every other way a
@@ -145,6 +148,7 @@ export const CLEARED_ENV_NAMES = Object.freeze([
   'GIT_CONFIG_SYSTEM',
   'GIT_EXEC_PATH',
   'GIT_TEMPLATE_DIR',
+  'NODE_PATH',
   'TEMP',
   'TMP',
   'TMPDIR',
@@ -160,15 +164,28 @@ const NPM_CONFIG = /^npm_config_/iu;
 
 /**
  * The only inherited npm settings a VAT step keeps — the network ones, so an
- * npx arm behind a proxy, a private registry or a corporate CA still reaches
- * it: `registry`, a scoped `@scope:registry`, `proxy`, `https-proxy`,
+ * `npx:` build's install behind a proxy, a private registry or a corporate CA
+ * still reaches it: `registry`, a scoped `@scope:registry`, `proxy`, `https-proxy`,
  * `noproxy`/`no-proxy`, `ca`, `cafile` and `strict-ssl`, in either the `-` or
- * the `_` spelling and any case. Every other `npm_config_*` is removed: the
- * developer's identity and config files (`userconfig`, `_auth`, a `//host/:…`
+ * the `_` spelling and any case. Every other INHERITED `npm_config_*` is removed:
+ * the developer's identity and config files (`userconfig`, `_auth`, a `//host/:…`
  * token, `cert`/`key`), and everything that changes what npm does
  * (`ignore-scripts`, `offline`, `node-options`, `script-shell`, …). An allow
- * list, so a setting npm adds later is removed until it is named here. The
- * arm's own `npm_config_*` (see `arm-dirs.ts`) are set, not inherited.
+ * list, so a setting npm adds later is removed from the ENVIRONMENT until it is
+ * named here. The arm's own `npm_config_*` (see `arm-dirs.ts`) are set, not
+ * inherited.
+ *
+ * One exception, by design: an `npx:` build's install sets `npm_config_userconfig`
+ * to the operator's npm userconfig (`npx-install.ts`), so their registry, scoped
+ * registries and auth reach it — and with them EVERY other setting that file
+ * holds, today's or one npm adds later; this list does not filter a file. Lifecycle
+ * scripts still stay off, because the install passes `--ignore-scripts` on the
+ * command line, which wins over any config file. What the install resolves can
+ * vary with that file (a registry, `before`, `omit`, …): a different VAT package
+ * byte, or a third-party package resolved at another version, moves the closure
+ * (`closure.ts`); a third-party package of the same version with other bytes (a
+ * mirror serving altered tarballs) does not, since third-party packages enter the
+ * instrument's identity by `name@version` only.
  */
 const NPM_NETWORK = /^npm_config_(?:registry|@[^:/]+:registry|proxy|https[-_]proxy|no[-_]?proxy|ca|cafile|strict[-_]ssl)$/iu;
 
