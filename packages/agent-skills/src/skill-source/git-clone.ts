@@ -9,11 +9,13 @@ import {
   isWithinUnder,
   refuseEscapingLinks,
   safePath,
+  shownName,
   toForwardSlashAnyPlatform,
   treeChain,
   treeContainment,
   untrustedLinkRefusal,
   VatError,
+  visibleText,
   withFsFaultSync,
 } from '@vibe-agent-toolkit/utils';
 import {
@@ -153,7 +155,7 @@ export function cloneGitSource(parsed: ParsedGitUrl, targetTempdir: string): Git
   if (placement === 'outside') throw subpathEscapes(subpath);
   if (placement === 'absent') {
     // The names are the repository's own, checked out: shown, never printed raw.
-    const topLevel = readdirSync(targetTempdir).map((name) => shown(name)).join(', ');
+    const topLevel = readdirSync(targetTempdir).map((name) => shownName(name)).join(', ');
     throw new VatError(
       GIT_SUBPATH_INVALID_CODE,
       `Subpath not found in cloned repo: ${subpath ?? '(none)'}. Repo root contains: ${topLevel}.`,
@@ -203,7 +205,7 @@ function committedLinks(cloneDir: string, commit: string): CommittedLink[] {
     const tab = record.indexOf(0x09);
     const entry = TREE_ENTRY.exec(record.subarray(0, Math.max(tab, 0)).toString('latin1'));
     if (end < 0 || tab < 0 || entry === null) {
-      throw new GitCloneFailedError(`Failed to ${what}: git wrote a record that is not \`<mode> <type> <object>\\t<path>\\0\` (${shown(record)}).`);
+      throw new GitCloneFailedError(`Failed to ${what}: git wrote a record that is not \`<mode> <type> <object>\\t<path>\\0\` (${shownName(record)}).`);
     }
     const path = committedPathText(record.subarray(tab + 1));
     if (entry[1] === '120000' && entry[2] !== undefined) links.push({ path, blob: entry[2] });
@@ -215,71 +217,23 @@ function committedLinks(cloneDir: string, commit: string): CommittedLink[] {
 /** The fields of an `ls-tree` record before its TAB: a mode, an object type, the object (SHA-1 or SHA-256). */
 const TREE_ENTRY = /^(\d{6}) (?:blob|tree|commit) ([\da-f]{40}|[\da-f]{64})$/;
 
-/** The backslash, which opens every escape {@link shown} writes. */
-const BACKSLASH = '\\';
+/** How much of git's stderr a message quotes ({@link gitSaid}): its end, where git puts the cause. */
+const GIT_SAID_LIMIT = 4096;
 
 /**
- * The categories of character that must not reach a message as themselves, named by Unicode rather
- * than by a hand-kept list: a control (`Cc` — a terminal acts on C0, C1 and DEL), a format character
- * (`Cf` — bidirectional marks, zero-width and invisible characters, the tag characters that carry
- * hidden text to a model reading the message), a line or paragraph separator, a private-use
- * character. {@link UNSHOWABLE_RANGES} adds the invisibles outside them.
- */
-const UNSHOWABLE_CATEGORY = /^[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Co}]$/u;
-
-/** The invisibles {@link UNSHOWABLE_CATEGORY} does not name, as inclusive code-point ranges. */
-const UNSHOWABLE_RANGES: ReadonlyArray<readonly [number, number]> = [
-  [0x3_4f, 0x3_4f], // combining grapheme joiner
-  [0x11_5f, 0x11_60], // Hangul choseong and jungseong fillers
-  [0x31_64, 0x31_64], // Hangul filler
-  [0xff_a0, 0xff_a0], // halfwidth Hangul filler
-  [0xfe_00, 0xfe_0f], // variation selectors
-  [0xe_01_00, 0xe_01_ef], // variation selectors supplement
-];
-
-/** Whether a character must not reach a message as itself — see {@link UNSHOWABLE_CATEGORY}. */
-function unshowable(character: string, code: number): boolean {
-  return UNSHOWABLE_CATEGORY.test(character) || UNSHOWABLE_RANGES.some(([low, high]) => code >= low && code <= high);
-}
-
-/** One character of {@link escaped}: itself, or its escape (`\uHHHH`, or `\u{HHHHH}` past the BMP). */
-function escapedCharacter(character: string): string {
-  if (character === '"' || character === BACKSLASH) return BACKSLASH + character;
-  const code = character.codePointAt(0) ?? 0;
-  if (!unshowable(character, code)) return character;
-  return code > 0xff_ff ? `${BACKSLASH}u{${code.toString(16)}}` : `${BACKSLASH}u${code.toString(16).padStart(4, '0')}`;
-}
-
-/** Text with every character a message must not show as itself escaped ({@link escapedCharacter}). */
-function escaped(text: string): string {
-  return [...text].map((character) => escapedCharacter(character)).join('');
-}
-
-/**
- * What the repository wrote — a path, a link text, a record git printed, a name it checked out — as
- * this lane's messages show it: quoted, every character {@link unshowable} names as its escape, `"`
- * and `\` escaped, and bytes that are not UTF-8 as `\xHH` each. So a hostile name can neither act on
- * the operator's terminal nor hide text in the message.
- */
-function shown(value: string | Buffer): string {
-  if (typeof value === 'string') return `"${escaped(value)}"`;
-  const text = decodeUtf8Exactly(value);
-  return text === undefined ? `"${[...value].map((byte) => shownByte(byte)).join('')}"` : shown(text);
-}
-
-/**
- * What git said on stderr, as a message shows it: line by line, each line {@link escaped}. git
- * quotes some names it prints and not others, and a remote's own words reach clone's stderr.
+ * What git said on stderr, as a message shows it: line by line (LF or CRLF), each line
+ * `visibleText` — unquoted, so `"` and `\` stay as git wrote them.
+ * git quotes some names it prints and not others, and a remote's own words reach clone's stderr.
+ * Only its last {@link GIT_SAID_LIMIT} characters, so a flood cannot become the message.
  */
 function gitSaid(stderr: string): string {
-  return stderr.trim().split('\n').map((line) => escaped(line)).join('\n');
+  const trimmed = stderr.trim();
+  const kept = trimmed.length > GIT_SAID_LIMIT ? `[${(trimmed.length - GIT_SAID_LIMIT).toString()} earlier characters omitted]\n${trimmed.slice(-GIT_SAID_LIMIT)}` : trimmed;
+  return kept
+    .split(/\r?\n/)
+    .map((line) => visibleText(line))
+    .join('\n');
 }
-
-/** One byte of {@link shown}'s spelling of bytes that are not UTF-8: ASCII as {@link escapedCharacter}, the rest `\xHH`. */
-function shownByte(byte: number): string {
-  return byte < 0x80 ? escapedCharacter(String.fromCodePoint(byte)) : `${BACKSLASH}x${byte.toString(16).padStart(2, '0')}`;
-}
-
 /**
  * A committed path as text, or the clone's refusal. A path that is not UTF-8 has no faithful
  * spelling in VAT: every judgment and every later read names files by string, a lossy decode can
@@ -294,7 +248,7 @@ function committedPathText(bytes: Buffer): string {
   const text = decodeUtf8Exactly(bytes);
   if (text !== undefined) return text;
   throw new GitCloneFailedError(
-    `Refusing the cloned repository: it holds a path that is not UTF-8 (${shown(bytes)}), so VAT cannot name ` +
+    `Refusing the cloned repository: it holds a path that is not UTF-8 (${shownName(bytes)}), so VAT cannot name ` +
       'the file the checkout would write. Rename it in the repository to a UTF-8 name.',
   );
 }
@@ -326,9 +280,9 @@ function framedTexts(bytes: Buffer, links: readonly CommittedLink[]): Buffer[] {
     const headerEnd = bytes.indexOf(0x0a, at);
     const header = bytes.subarray(at, headerEnd < 0 ? bytes.length : headerEnd);
     const size = BLOB_HEADER.exec(header.toString('latin1'));
-    if (headerEnd < 0 || size?.[1] !== link.blob || size[2] === undefined) throw refused(`${shown(link.path)}: its header (${shown(header)}) is not \`${link.blob} blob <size>\``);
+    if (headerEnd < 0 || size?.[1] !== link.blob || size[2] === undefined) throw refused(`${shownName(link.path)}: its header (${shownName(header)}) is not \`${link.blob} blob <size>\``);
     const end = headerEnd + 1 + Number(size[2]);
-    if (end >= bytes.length || bytes[end] !== 0x0a) throw refused(`${shown(link.path)}: its bytes do not end where its header says`);
+    if (end >= bytes.length || bytes[end] !== 0x0a) throw refused(`${shownName(link.path)}: its bytes do not end where its header says`);
     texts.push(bytes.subarray(headerEnd + 1, end));
     at = end + 1;
   }
@@ -340,8 +294,9 @@ function framedTexts(bytes: Buffer, links: readonly CommittedLink[]): Buffer[] {
 type CommittedLinkRefusal = NonNullable<ReturnType<typeof untrustedLinkRefusal>>;
 
 /**
- * Why a committed link's text alone may not be checked out: `unportable` for bytes that are not UTF-8 — POSIX creates them verbatim while Git for Windows
- * converts the text from UTF-8 to UTF-16 to create the link, so no one string is what both kernels
+ * Why a committed link's text alone may not be checked out: `unportable` for bytes that are not
+ * UTF-8 — POSIX creates them verbatim while Git for Windows converts the text from UTF-8 to UTF-16
+ * to create the link, so no one string is what both kernels
  * would be handed — else the one untrusted-link rule (`untrustedLinkRefusal`, shared with the
  * link-chain walk) on the decoded text.
  */
@@ -394,7 +349,7 @@ function refuseCommittedLinkTexts(cloneDir: string, commit: string, subpath: str
       if (onSubpath !== undefined && isWithinUnder(onSubpath, link.path, flavor)) throw subpathEscapes(subpath);
       throw new VatError(
         COPY_LINK_ESCAPES_SOURCE_CODE,
-        `Refusing the cloned repository: ${shown(link.path)} is a symbolic link ${REFUSAL_TEXT[refused](shown(bytes))}. ` +
+        `Refusing the cloned repository: ${shownName(link.path)} is a symbolic link ${REFUSAL_TEXT[refused](shownName(bytes))}. ` +
           'Every reader of the source follows links, so it would read files the repository does not hold — replace the link with the files, or point it inside with a relative target.',
       );
     }

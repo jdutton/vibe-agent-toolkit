@@ -14,8 +14,10 @@
  * plant the next object's header. `runGitBytes` returns the bytes, and the caller
  * decodes them where it judges them.
  *
- * What it catches: an ARRAY LITERAL that reaches a call — as an argument, or
- * through a variable it initializes — whose subcommand (its first element that is
+ * What it catches: an ARRAY LITERAL that reaches a call or `new` — as an
+ * argument (through `as`, `satisfies`, `!` or a branch of `?:`), or through a
+ * variable it initializes — that does not name another program as its first
+ * argument (`spawnSync('npm', […])`), whose subcommand (its first element that is
  * not a global option, nor the value of `-c`, `-C`, `--git-dir`, `--work-tree`,
  * `--namespace` or `--config-env`, past any leading spread) is one of the above,
  * unless it is the first argument of a call to `runGitBytes` itself. So an argv
@@ -77,10 +79,30 @@ function subcommandOf(array) {
   return undefined;
 }
 
-/** Whether `node` is an argument of a call, directly or spread into an array that is. */
+/** Expressions that hand their operand on unchanged: a type assertion, `satisfies`, `!`, a branch of `?:`. */
+const PASS_THROUGH = new Set(['TSAsExpression', 'TSSatisfiesExpression', 'TSNonNullExpression', 'TSTypeAssertion', 'ConditionalExpression']);
+
+/** `node` with every {@link PASS_THROUGH} around it: the expression its value arrives as. */
+function outermost(node) {
+  let at = node;
+  while (PASS_THROUGH.has(at.parent?.type) && (at.parent.type !== 'ConditionalExpression' || at.parent.test !== at)) at = at.parent;
+  return at;
+}
+
+/**
+ * Whether a call runs another program than git: its first argument is a string literal naming one
+ * (`spawnSync('npm', ['show', pkg])`). A call naming no program is assumed to run git.
+ */
+function runsOtherProgram(call) {
+  const program = call.arguments[0];
+  return program?.type === 'Literal' && typeof program.value === 'string' && program.value !== 'git';
+}
+
+/** Whether `node` is an argument of a call or `new` that may run git, directly or spread into an array that is. */
 function isCallArgument(node) {
-  const { parent } = node;
-  if (parent?.type === 'CallExpression') return parent.arguments.includes(node);
+  const value = outermost(node);
+  const { parent } = value;
+  if (parent?.type === 'CallExpression' || parent?.type === 'NewExpression') return parent.arguments.includes(value) && !runsOtherProgram(parent);
   if (parent?.type === 'SpreadElement' && parent.parent?.type === 'ArrayExpression') return isCallArgument(parent.parent);
   return false;
 }
@@ -92,8 +114,9 @@ function isCallArgument(node) {
  */
 function reachesCall(context, array) {
   if (isCallArgument(array)) return true;
-  const declarator = array.parent;
-  if (declarator?.type !== 'VariableDeclarator' || declarator.init !== array) return false;
+  const value = outermost(array);
+  const declarator = value.parent;
+  if (declarator?.type !== 'VariableDeclarator' || declarator.init !== value) return false;
   return context.sourceCode
     .getDeclaredVariables(declarator)
     .some((variable) => variable.references.some((reference) => isCallArgument(reference.identifier)));
@@ -101,8 +124,9 @@ function reachesCall(context, array) {
 
 /** Whether `array` is the first argument of a call to `runGitBytes` itself. */
 function handedToRunGitBytes(array) {
-  const call = array.parent;
-  return call?.type === 'CallExpression' && call.arguments[0] === array && calleeName(call) === 'runGitBytes';
+  const value = outermost(array);
+  const call = value.parent;
+  return call?.type === 'CallExpression' && call.arguments[0] === value && calleeName(call) === 'runGitBytes';
 }
 
 module.exports = {

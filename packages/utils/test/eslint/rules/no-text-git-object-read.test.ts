@@ -30,6 +30,11 @@ const CASES: RuleCases = {
     // A list of words that never reaches a call is not an argv.
     { code: "const MODES = ['show', 'hide']; const ok = MODES.includes(mode);", filename: SRC },
     { code: "const options = { modes: ['show', 'hide'] };", filename: SRC },
+    // Another program's argv, named as the call's first argument.
+    { code: "spawnSync('npm', ['show', pkg, 'version']);", filename: SRC },
+    { code: "execa('pip', ['show', name]);", filename: SRC },
+    // Wrapped, to the bytes runner.
+    { code: "runGitBytes(['cat-file', '--batch'] as const, options);", filename: SRC },
   ],
   invalid: [
     { code: "runGit(['ls-tree', '-r', '-z', commit], { cwd, trim: false });", filename: SRC, errors: [{ messageId: 'textRead', data: { subcommand: 'ls-tree' } }] },
@@ -52,6 +57,14 @@ const CASES: RuleCases = {
     { code: 'runGit([`show`, c]);', filename: SRC, errors: [{ messageId: 'textRead', data: { subcommand: 'show' } }] },
     // Spread into the argv a call is handed.
     { code: "runGit([...['cat-file', '--batch']]);", filename: SRC, errors: [{ messageId: 'textRead' }] },
+    // Wrapped in an expression that hands it on unchanged, or handed to `new`.
+    { code: "runGit(['ls-tree', c] as string[]);", filename: SRC, errors: [{ messageId: 'textRead' }] },
+    { code: "const a = ['cat-file', '--batch'] as const; runGit(a);", filename: SRC, errors: [{ messageId: 'textRead' }] },
+    { code: "runGit(['ls-tree', c] satisfies readonly string[]);", filename: SRC, errors: [{ messageId: 'textRead' }] },
+    { code: "runGit(cond ? ['ls-tree', c] : ['status']);", filename: SRC, errors: [{ messageId: 'textRead' }] },
+    { code: "new GitReader(['cat-file', '--batch']);", filename: SRC, errors: [{ messageId: 'textRead' }] },
+    // git named as the program is still git.
+    { code: "spawnSync('git', ['cat-file', '--batch']);", filename: SRC, errors: [{ messageId: 'textRead' }] },
     // Not the argv position of the bytes runner.
     { code: "runGitBytes(['--version'], ['cat-file']);", filename: SRC, errors: [{ messageId: 'textRead' }] },
     // A wrapper is not the bytes runner, whatever its name says: it may decode.

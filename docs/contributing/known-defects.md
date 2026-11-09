@@ -617,22 +617,6 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Fix:** read the listing with `runGitBytes`, decide each path with `decodeUtf8Exactly` and refuse
   (or report) the ones it cannot name; then add `ls-files` to the rule's subcommands.
 
-### A link-walk refusal prints a hostile link's path and text raw
-
-- **Severity:** Important · **Effort:** M · **User-visible:** yes (message text)
-- **Mechanism:** the git skill source escapes every name and text the repository supplies in its own
-  messages (`shown` in `git-clone.ts`), but the link-containment walk that runs after checkout, and
-  every install lane that shares it, puts a link's path and text into its refusal raw — or, for
-  `unportable`, through `JSON.stringify`, which leaves C1 controls and bidirectional marks as they are.
-  A committed link named with an escape sequence that passes the text check but escapes through
-  another link reaches the operator's terminal as that sequence.
-- **Traced in code**, not reproduced against the built CLI.
-- **Where:** `linkRefusal`, `describedChainRefusal`, `describedRefusal` and `kernelRefusal` in
-  [`link-containment.ts`](../../packages/utils/src/tree-change/link-containment.ts); `refusalClause`
-  in [`host-chain.ts`](../../packages/utils/src/tree-change/host-chain.ts)
-- **Fix:** move `shown` into `utils` as the one way to show an untrusted name, use it at every site
-  above, and delete the `JSON.stringify` spelling.
-
 ### A git skill source's committed paths are judged for UTF-8 only, not for what the host can hold
 
 - **Severity:** Minor · **Effort:** M · **User-visible:** yes (a different verdict per host)

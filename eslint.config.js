@@ -1054,7 +1054,8 @@ export default [
       'local/no-raw-signal-listener': NO_RAW_SIGNAL_LISTENER,
       'local/no-existssync': ['error', NO_EXISTSSYNC_RATCHET],
       'local/no-link-following-fs': ['error', LINK_FOLLOWING_FS_ALLOW],
-      // Committed paths and blobs are bytes: an object-store read (`ls-tree`, `cat-file`) goes
+      // Committed paths and blobs are bytes: an object-store read (`ls-tree`, `cat-file`,
+      // `diff-tree`, `rev-list`, `show`) goes
       // through `runGitBytes`, never a runner that decodes stdout as UTF-8. No backlog, no allowlist.
       'local/no-text-git-object-read': 'error',
     },

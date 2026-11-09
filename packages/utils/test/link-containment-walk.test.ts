@@ -325,6 +325,20 @@ describe('refuseEscapingLinks, a tree read in place', () => {
     expect(kernelFollowed).toEqual([]);
   });
 
+  // A hostile tree's names reach the operator's terminal: the link's path and its text are shown by
+  // their escapes, never as the control or bidi characters they hold.
+  it('shows a refused link\'s path and text by escapes, never raw', () => {
+    const esc = String.fromCodePoint(0x1b);
+    const rlo = String.fromCodePoint(0x20_2e);
+    plant({ ...SKILL, [`skill/s${rlo}mb`]: `-> //attacker/share/${esc}[2J` });
+
+    const message = refusalOf(inPlace)?.message ?? '';
+    const bs = '\\';
+    expect(message).toContain(`s${bs}u202emb is a symbolic link whose target leads through an absolute path (//attacker/share/${bs}u001b[2J)`);
+    expect(message).not.toContain(esc);
+    expect(message).not.toContain(rlo);
+  });
+
   // A POSIX kernel follows `up` before the `..` after it; a Windows kernel collapses `up/..` by string first.
   it.skipIf(HOST_PATH_FLAVOR === 'win32')('refuses a link whose text climbs out of the tree, even through a link inside it', () => {
     plant({ ...SKILL, 'skill/docs/up': '-> ..', 'skill/docs/out': '-> up/../outside/key.txt' });

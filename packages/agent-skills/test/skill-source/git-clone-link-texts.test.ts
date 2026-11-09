@@ -56,6 +56,8 @@ interface FakeGit {
   readonly links: readonly FakeLink[];
   readonly tree?: Buffer;
   readonly batch?: Buffer;
+  /** A subcommand that fails, and what it says on stderr. */
+  readonly failing?: { readonly subcommand: string; readonly stderr: string };
 }
 
 /** The git invocations the clone made, by their argv. */
@@ -72,11 +74,13 @@ function installGit(fake: FakeGit): void {
     calls.push([...args]);
     // What `spawnSync` hands back: the bytes decoded by the spawn's `encoding`, as the real one does.
     const ok = (stdout: Buffer | string): unknown => ({ status: 0, stdout: (Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout)).toString(options.encoding ?? 'utf8'), stderr: '' });
+    const failed = (stderr: string): unknown => ({ status: 1, stdout: '', stderr: Buffer.from(stderr).toString(options.encoding ?? 'utf8') });
+    if (fake.failing !== undefined && args.includes(fake.failing.subcommand)) return failed(fake.failing.stderr);
     if (args.includes('clone')) return ok('');
     if (args[0] === 'rev-parse') return ok(`${COMMIT}\n`);
     if (args[0] === 'ls-tree') return ok(fake.tree ?? honestTree(fake.links));
     if (args[0] === 'cat-file' && args[1] === '--batch') return ok(fake.batch ?? honestBatch(fake.links));
-    return { status: 1, stdout: '', stderr: `unexpected git ${args.join(' ')}` };
+    return failed(`unexpected git ${args.join(' ')}`);
   });
 }
 
@@ -173,12 +177,8 @@ describe('cloneGitSource reads committed paths as the bytes git holds', () => {
 
   it.for([
     // Escapes spelled after the backslash, which is prefixed below: a transform may cook `\u` in `String.raw`.
+    // The classification itself is pinned in utils' `shown-text` suite; these pin that the path reaches it.
     ['a C1 CSI', 0x9b, 'u009b'],
-    ['a soft hyphen', 0xad, 'u00ad'],
-    ['a combining grapheme joiner', 0x3_4f, 'u034f'],
-    ['a word joiner', 0x20_60, 'u2060'],
-    ['a line separator', 0x20_28, 'u2028'],
-    ['a variation selector', 0xfe_0f, 'ufe0f'],
     ['a tag character', 0xe_00_41, 'u{e0041}'],
   ] as const)('shows %s in a path by its escape', ([, code, spelled]) => {
     const character = String.fromCodePoint(code);
@@ -187,6 +187,48 @@ describe('cloneGitSource reads committed paths as the bytes git holds', () => {
     const run = clone();
     expect(run).toThrow(expect.objectContaining({ message: expect.stringContaining(`"plugins/a${escape}b" is a symbolic link`) }));
     expect(run).toThrow(expect.objectContaining({ message: expect.not.stringContaining(character) }));
+  });
+
+  it('quotes git\'s stderr line by line, unshowables escaped, its own quotes and backslashes and CRLF as lines', () => {
+    const csi = String.fromCodePoint(0x9b);
+    installGit({ links: [], failing: { subcommand: 'read-tree', stderr: `error: invalid path 'C:\\x"${csi}2J'\r\nfatal: stop\r\n` } });
+    const run = clone();
+    expect(run).toThrow(expect.objectContaining({ message: `Failed to check out the cloned commit: error: invalid path 'C:\\x"\\u009b2J'\nfatal: stop` }));
+  });
+
+  // Every lane git's words reach a message by: the clone (a remote's own words), and a byte read of
+  // the object store, whose stderr crosses the hex transport.
+  it.for([
+    ['clone', 'Clone failed:\n'],
+    ['ls-tree', "Failed to list the cloned commit's tree: "],
+    ['cat-file', "Failed to read the cloned repository's link texts: "],
+  ] as const)('escapes a control and a bidi character in what %s said', ([subcommand, prefix]) => {
+    const esc = String.fromCodePoint(0x1b);
+    const rlo = String.fromCodePoint(0x20_2e);
+    installGit({ links: [link('plugins/foo/a', OID_A, 'SKILL.md')], failing: { subcommand, stderr: `remote: ${esc}]0;x${rlo}y` } });
+    let thrown: unknown;
+    try {
+      clone()();
+    } catch (error) {
+      thrown = error;
+    }
+    const { message } = thrown as Error;
+    const bs = '\\';
+    expect(message).toContain(`${prefix}remote: ${bs}u001b]0;x${bs}u202ey`);
+    expect(message).not.toContain(esc);
+    expect(message).not.toContain(rlo);
+  });
+
+  it('quotes only the end of a flood of stderr, saying how much it left out', () => {
+    installGit({ links: [], failing: { subcommand: 'read-tree', stderr: `${'x'.repeat(10_000)}\nfatal: the cause` } });
+    const run = clone();
+    expect(run).toThrow(expect.objectContaining({ message: expect.stringMatching(/\[5921 earlier characters omitted\]\nx+\nfatal: the cause$/) }));
+  });
+
+  it('shows an unassigned code point in a path by its escape', () => {
+    installGit({ links: [link(`plugins/a${String.fromCodePoint(0x20_65)}b`, OID_A, UNC)] });
+    const bs = '\\';
+    expect(clone()).toThrow(expect.objectContaining({ message: expect.stringContaining(`"plugins/a${bs}u2065b" is a symbolic link`) }));
   });
 
   it('judges a link whose path is valid non-ASCII UTF-8 by that path', () => {

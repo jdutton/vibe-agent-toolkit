@@ -48,6 +48,8 @@ export * from './dirent-kind.js';
 // of the repo is a migration ledger in `eslint.config.js`, not a covered claim.
 export * from './text-content.js';
 export * from './text-file.js';
+// THE one way a message shows text it did not write: `shownName` (quoted) and `visibleText`.
+export * from './shown-text.js';
 
 // Asset reference resolution (paths + npm bare specifiers)
 export * from './asset-reference.js';

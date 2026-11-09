@@ -123,8 +123,10 @@ export interface GitRunOptions {
    * and 0x20 sorts below every printable character, so a path beginning with a
    * space is listed *first* — where the trim reaches it. The caller then holds a
    * path that does not exist, and every lookup against it reads as "not there"
-   * rather than as an error. Object contents and committed paths do not come
-   * through here at all: read them with {@link runGitBytes}, which never trims.
+   * rather than as an error. What the object store holds — object contents, the
+   * paths a commit's trees name — is read with {@link runGitBytes} instead, which
+   * never trims. (An index listing, `ls-files -z`, still comes through here: a
+   * known defect.)
    *
    * `ls-files -s -z` does not need it: the mode occupies position 0.
    *
@@ -219,7 +221,8 @@ export interface GitBytesRunResult extends Omit<GitRunResult, 'stdout'> {
  * same codec, so `input` — text, written to git as UTF-8 as {@link runGit} writes it — is handed
  * over as its UTF-8 bytes in hex. stderr is git's own message, decoded as text through the one
  * decoding seam and trimmed as {@link runGit}'s is. Hex doubles the string the spawn builds, so
- * `maxBuffer` is clamped to half the engine's string limit (256 MiB on 64-bit V8): past it the
+ * `maxBuffer` is clamped to half the engine's string limit less 1 MiB of headroom (about 255 MiB on
+ * 64-bit V8): past it the
  * spawn would throw, and this function, like {@link runGit}, never throws.
  *
  * @param args - Arguments after the `git` executable
