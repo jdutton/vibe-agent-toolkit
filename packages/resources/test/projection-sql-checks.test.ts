@@ -16,22 +16,28 @@
  * selecting nothing is exactly what success looks like, deliberately.
  */
 
-import { sep } from 'node:path';
-
-import { customCheckCode, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { customCheckCode } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
 
+import { BUILTIN_CHECK_NAMES } from '../src/projection/builtin-check-names.js';
 import {
   checkStatements,
   describeUninterpretableExamined,
   describeUninterpretableRows,
   examinedCount,
   issuesFromCheckRows,
+  nearMissesOf,
   uninterpretableRowsReason,
+  type CheckIssue,
   type CheckRowConversion,
 } from '../src/projection/sql-checks.js';
-import { EXAMINED_ALLOWED, ResourceCheckSchema, type ResourceCheck } from '../src/schemas/project-config.js';
+import {
+  EXAMINED_ALLOWED,
+  ResourceCheckSchema,
+  ResourcesConfigSchema,
+  type ResourceCheck,
+} from '../src/schemas/project-config.js';
 
 /** The one check name these tests use, and the code it must produce. */
 const NAME = 'orphan-skills';
@@ -55,7 +61,7 @@ const CHECK = {
  *
  * @throws When the conversion refused a row, naming what it refused
  */
-function issuesOf(name: string, check: ResourceCheck, rows: readonly Record<string, unknown>[]): readonly ValidationIssue[] {
+function issuesOf(name: string, check: ResourceCheck, rows: readonly Record<string, unknown>[]): readonly CheckIssue[] {
   const result = issuesFromCheckRows(name, check, rows);
   if (!result.ok) throw new Error(`expected the rows to convert; row ${String(result.row)}'s ${result.field} was refused`);
   return result.issues;
@@ -143,34 +149,30 @@ describe('issuesFromCheckRows', () => {
   const locationFor = (path: unknown): string | undefined =>
     issuesOf(NAME, CHECK, [{ path }])[0]?.location;
 
-  // Gated: a backslash is a separator only on win32; on POSIX it is a filename character (next case).
-  it.skipIf(sep !== '\\')('declines a backslashed path rather than emitting an invalid location', () => {
-    // 🪤 NOTHING on this path parses the findings through ValidationIssueSchema,
-    // so this guard is the ONLY enforcement of its `location` contract. A
-    // backslashed value emitted here would be a schema-violating issue that no
-    // gate catches — `validation.allow` globs are matched against `location`, so
-    // it would also silently fail to match any allow entry an adopter wrote.
-    expect(locationFor(String.raw`docs\guide.md`)).toBeUndefined();
+  it.each([
+    ['POSIX-absolute', '/etc/passwd'],
+    ['drive-letter (even with forward slashes)', 'C:/Users/x/a.md'],
+    // The same rule on every platform: on POSIX a backslash is a filename character, but a
+    // location that means one file on POSIX and another on win32 is no location.
+    ['backslashed', String.raw`docs\guide.md`],
+    ['root-escaping', '../outside.md'],
+    ['mid-path root-escaping', 'docs/../../outside.md'],
+    ['zero-length', ''],
+    ['non-text', 7],
+  ])('refuses the check for a %s path, as it does any other reserved column it cannot read', (_what, path) => {
+    const refusal = refusalOf([{ path: 'fine.md' }, { path }]);
+
+    expect(refusal).toMatchObject({ ok: false, row: 2, field: 'path', value: path, rowsSelected: 2 });
+    expect(uninterpretableRowsReason(refusal)).toMatchObject({ column: 'path', row: 2, allowed: refusal.allowed });
+    expect(describeUninterpretableRows(NAME, refusal)).toContain(`row 2's path =`);
   });
 
-  // Gated: on win32 the backslash is a separator, and the case above is the contract there.
-  it.skipIf(sep === '\\')('keeps a POSIX filename that contains a backslash as the location', () => {
-    expect(locationFor(String.raw`.claude/rules/a\b.md`)).toBe(String.raw`.claude/rules/a\b.md`);
+  it('keeps a path whose .. stays inside the root', () => {
+    expect(locationFor('docs/../guide.md')).toBe('docs/../guide.md');
   });
 
-  it('declines a POSIX-absolute path', () => {
-    // Every projection table stores root-relative POSIX paths, so this only
-    // fires on a statement that built an absolute one itself (a literal, a
-    // concatenation). Losing the anchor beats emitting a location that names a
-    // machine rather than a place in the project.
-    expect(locationFor('/etc/passwd')).toBeUndefined();
-  });
-
-  it('declines a Windows drive-letter path even with forward slashes', () => {
-    // A separate branch from the backslash guard: `C:/Users/x/a.md` contains no
-    // backslash and does not start with `/`, so only the drive-letter test
-    // refuses it.
-    expect(locationFor('C:/Users/x/a.md')).toBeUndefined();
+  it('reads a NULL path as no location, never a refusal', () => {
+    expect(locationFor(null)).toBeUndefined();
   });
 
   it('keeps the anchor when the path names a DIRECTORY (documented decision)', () => {
@@ -339,15 +341,13 @@ describe('issuesFromCheckRows — the bare severity, line and column names are e
     expect(Object.hasOwn(issue ?? {}, 'line')).toBe(false);
     expect(Object.hasOwn(issue ?? {}, 'column')).toBe(false);
     expect(issue?.evidence).toStrictEqual({ severity: 'high', line: 0, column: 'x' });
-    expect(result.ok && result.nearMisses).toStrictEqual([]);
+    expect(nearMissesOf(['path', 'severity', 'line', 'column'])).toStrictEqual([]);
   });
 });
 
-describe('issuesFromCheckRows — near misses of the reserved names', () => {
-  it('names a column that matches a reserved name in another case', () => {
-    const result = issuesFromCheckRows(NAME, CHECK, [{ Path: 'a.md', FINDING_SEVERITY: 'warning', Finding_Line: 1 }]);
-
-    expect(result.ok && result.nearMisses).toStrictEqual([
+describe('nearMissesOf — the result columns that miss a reserved name only by case', () => {
+  it('names each, in the order the statement selected them', () => {
+    expect(nearMissesOf(['Path', 'n', 'FINDING_SEVERITY', 'Finding_Line'])).toStrictEqual([
       { column: 'Path', reserved: 'path' },
       { column: 'FINDING_SEVERITY', reserved: 'finding_severity' },
       { column: 'Finding_Line', reserved: 'finding_line' },
@@ -355,11 +355,7 @@ describe('issuesFromCheckRows — near misses of the reserved names', () => {
   });
 
   it('names nothing when every reserved column is spelled exactly', () => {
-    const result = issuesFromCheckRows(NAME, CHECK, [
-      { path: 'a.md', finding_severity: 'info', finding_line: 1, finding_column: 2 },
-    ]);
-
-    expect(result.ok && result.nearMisses).toStrictEqual([]);
+    expect(nearMissesOf(['path', 'finding_severity', 'finding_line', 'finding_column'])).toStrictEqual([]);
   });
 });
 
@@ -392,15 +388,11 @@ describe('issuesFromCheckRows — the structured check name and evidence', () =>
     expect(issue?.message).toContain(`digest=${String(issue?.evidence?.['digest'])}`);
   });
 
-  it.each([
-    ['absolute', '/abs/a.md'],
-    ['NULL', null],
-    ['not text', 7],
-  ])('keeps an unusable path (%s) in the evidence: only a path that became the location leaves it', (_label, path) => {
-    const [issue] = issuesOf(NAME, CHECK, [{ path, n: 1 }]);
+  it('never carries path as evidence: it is the location, or NULL', () => {
+    const [issue] = issuesOf(NAME, CHECK, [{ path: null, n: 1 }]);
 
     expect(issue?.location).toBeUndefined();
-    expect(issue?.evidence).toStrictEqual({ path, n: 1 });
+    expect(issue?.evidence).toStrictEqual({ n: 1 });
   });
 
   it('keeps a column aliased __proto__ as an own evidence key', () => {
@@ -485,6 +477,24 @@ describe('checkStatements — every statement a check may run', () => {
   });
 });
 
+describe('ResourcesConfigSchema — a declared check never takes a built-in\'s name', () => {
+  it.each([...BUILTIN_CHECK_NAMES])('refuses a check named %s, naming the clash and the fix', (name) => {
+    // The documented trap: copy a built-in's sqlTwin under its own name. Findings, the progress
+    // log and cost records are all keyed on the name, so two checks under one name are one identity.
+    const result = ResourcesConfigSchema.safeParse({ checks: { [name]: { description: 'd', sql: 'SELECT 1' } } });
+
+    expect(result.success).toBe(false);
+    const [issue] = result.success ? [] : result.error.issues;
+    expect(issue?.path).toStrictEqual(['checks', name]);
+    expect(issue?.message).toContain(`"${name}" is a built-in check's name`);
+    expect(issue?.message).toContain('rename');
+  });
+
+  it('accepts a copied sqlTwin under a name of its own', () => {
+    expect(ResourcesConfigSchema.safeParse({ checks: { 'my-glob-inert': { description: 'd', sql: 'SELECT 1' } } }).success).toBe(true);
+  });
+});
+
 describe('ResourceCheckSchema — examined and allowEmpty', () => {
   /** The refusal messages, each prefixed with its dotted path. */
   const refusalsOf = (declaration: unknown): string[] => {
@@ -544,13 +554,20 @@ describe('a non-finite number reads as its text everywhere', () => {
     const refusal = refusalOf([{ path: SKILL_PATH, finding_line: value }]);
 
     expect(uninterpretableRowsReason(refusal).value).toBe(text);
-    expect(describeUninterpretableRows(NAME, refusal)).toContain(`finding_line = ${text} is not`);
+    expect(describeUninterpretableRows(NAME, refusal)).toContain(`finding_line = "${text}" is not`);
+  });
+
+  it.each(NON_FINITE)('a refusal quotes %s exactly as it quotes the same text selected as text', (text, value) => {
+    const asNumber = describeUninterpretableRows(NAME, refusalOf([{ path: SKILL_PATH, finding_line: value }]));
+    const asText = describeUninterpretableRows(NAME, refusalOf([{ path: SKILL_PATH, finding_line: text }]));
+
+    expect(asNumber).toBe(asText);
   });
 
   it.each(NON_FINITE)('a refused examined count carries %s as text', (text, value) => {
     const read = examinedCount([{ n: value }]);
 
     expect(read.ok ? undefined : read.reason.value).toBe(text);
-    expect(read.ok ? '' : describeUninterpretableExamined('n', read.reason)).toContain(`returned the value ${text}, not`);
+    expect(read.ok ? '' : describeUninterpretableExamined('n', read.reason)).toContain(`returned the value "${text}", not`);
   });
 });

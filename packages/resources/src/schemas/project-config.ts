@@ -8,6 +8,7 @@ import {
   isArdNameSegment,
   isArdPublisherDomain,
 } from '../ard/entry-schema.js';
+import { BUILTIN_CHECK_NAMES } from '../projection/builtin-check-names.js';
 
 import { LinkAuthConfigSchema } from './link-auth.js';
 import { ReferenceSyntacticFormSchema } from './projection-blobs.js';
@@ -194,7 +195,7 @@ export const ResourceCheckSchema = z.object({
     .describe('One read-only SQL statement selecting the VIOLATING rows — zero rows is a pass. It must BEGIN with `SELECT`, `WITH` or `VALUES`; the first significant token decides, and anything else — `ATTACH`, `PRAGMA`, `EXPLAIN`, any write — is refused before it reaches SQLite, because a statement the engine accepts without producing rows cannot be told apart from a check that passed. (`EXPLAIN` is refused even though it is side-effect free: it is a PREFIX, and admitting one would mean deciding safety by looking past the first token.) Each returned row becomes one finding; a selected `path` column anchors that finding to the file. Runs against the same projection `vat resources query` reads, under PRAGMA query_only. A second statement is refused — SQLite would compile only the first and discard the rest without error — but a COMMENT after the terminating semicolon is accepted (`... ;  -- see ADR-14`), which SQL written as a YAML block scalar ends with routinely.'),
   severity: z.enum(['error', 'warning', 'info'])
     .optional()
-    .describe('How a violation is reported. Defaults to `error` — the safe direction, since a check whose author did not think about severity is still an assertion they wanted enforced. An adopter can override it per code through resources.validation.severity, including to `ignore`.'),
+    .describe('How a violation is reported; a row whose `finding_severity` column holds `error`, `warning` or `info` overrides it for that row. Defaults to `error` — the safe direction, since a check whose author did not think about severity is still an assertion they wanted enforced. An adopter can override it per code through resources.validation.severity, including to `ignore`.'),
   examined: z.string().min(1).optional()
     .describe(`A second read-only SQL statement over the same projection that returns ONE count — ${EXAMINED_ALLOWED} — of what this check ranged over, e.g. \`SELECT COUNT(*) FROM resource_realizations WHERE path LIKE 'skills/%'\` for a check about skills. Any other result is RESOURCE_CHECK_BROKEN with a \`reason\` naming what came back. The violations statement cannot reveal its own denominator: zero violations over a thousand files and zero violations over nothing are the same answer. Declared, the count is published on the check's \`checks[]\` entry as \`examined\`, and a count of 0 is refused as RESOURCE_CHECK_EXAMINED_NOTHING (error, not overridable) unless \`allowEmpty: true\`. Held to every rule \`sql\` is (it must begin with SELECT, WITH or VALUES; one statement), timed and charged to this check, and a failure to run it is RESOURCE_CHECK_BROKEN.`),
   allowEmpty: z.literal(true).optional()
@@ -253,8 +254,18 @@ export const ResourcesConfigSchema = z.object({
     .describe('Validation framework config: severity overrides and per-code allow entries (applied inside ResourceRegistry.validate)'),
   linkAuth: LinkAuthConfigSchema.optional()
     .describe('Authenticated external link resolution config (issue #113 / link-auth engine)'),
-  checks: z.record(z.string(), ResourceCheckSchema).optional()
-    .describe('Named SQL assertions over the resource projection, run by `vat resources check`. Each key becomes a CUSTOM:<name> validation code.'),
+  checks: z.record(z.string(), ResourceCheckSchema).superRefine((checks, context) => {
+    // 🔑 One identity per check: findings, the progress log and cost records are keyed on the name.
+    for (const name of Object.keys(checks).filter((key) => BUILTIN_CHECK_NAMES.includes(key))) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [name],
+        message: `"${name}" is a built-in check's name, and the built-in always runs, so rename this check`
+          + ' (a copy of a built-in\'s sqlTwin needs a name of its own).',
+      });
+    }
+  }).optional()
+    .describe('Named SQL assertions over the resource projection, run by `vat resources check`. Each key becomes a CUSTOM:<name> validation code. A key may not be a built-in check\'s name.'),
 }).strict().describe('Resources section of project configuration');
 
 export type ResourcesConfig = z.infer<typeof ResourcesConfigSchema>;

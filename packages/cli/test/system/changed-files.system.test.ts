@@ -28,6 +28,8 @@ const CHANGED_DOCS_SQL = "SELECT c.path FROM changed_files c WHERE c.path LIKE '
 const BROKEN = 'RESOURCE_CHECK_BROKEN';
 /** The no-base refusal's fix, as the lens words it. */
 const NO_BASE_FIX = 'Pass --base <ref>';
+/** A statement whose FIRST relation does not exist, beside `changed_files`. */
+const TYPO_BESIDE_CHANGED_FILES = 'SELECT c.path FROM typo_tbl t, changed_files c';
 
 let base: string;
 let branchDir: string;
@@ -131,6 +133,16 @@ describe('changed_files and --base, end to end', () => {
       expect(run.error?.message).toContain(NO_BASE_FIX);
     });
 
+    // The query verb compiles its statement against every relation before any lens runs, so the
+    // typo is the first fault it can name — a usage error naming the typo, not the lens.
+    it('refuses a statement naming a missing table beside changed_files at compile, naming the typo', () => {
+      const run = query(branchDir, TYPO_BESIDE_CHANGED_FILES, []);
+
+      expect(run.status).toBe(2);
+      expect(run.error?.code).toBe('USAGE_INVALID');
+      expect(run.error?.message).toContain('no such table: typo_tbl');
+    });
+
     it('refuses a ref that names no commit as USAGE_INVALID, carrying git\'s reason', () => {
       const run = query(branchDir, 'SELECT path FROM changed_files', ['--base', 'no-such-branch']);
 
@@ -179,6 +191,19 @@ describe('changed_files and --base, end to end', () => {
       expect(broken[0]?.['reason']).toStrictEqual({ refusal: 'USAGE_INVALID' });
       // A refused lens produced no relation, so it is not reported as evaluated.
       expect(run.data['lensesEvaluated']).not.toContain('changed-files');
+    });
+
+    // SQLite names only the FIRST missing table — the typo — so a code read from its text called this
+    // a usage error by luck, and the missing --base never got its remedy.
+    it('carries the lens\'s refusal on a check that also names a missing table, by the relations it names', () => {
+      writeChecks(branchDir, `    typo-docs:\n      description: typo beside changed_files\n      sql: "${TYPO_BESIDE_CHANGED_FILES}"\n`);
+
+      const run = vat(branchDir, ['resources', 'check', '--format', 'json'], env);
+
+      expect(run.status).toBe(1);
+      expect(brokenFindings(run).map((finding) => [finding['check'], finding['message'], finding['reason']])).toStrictEqual([
+        ['typo-docs', expect.stringContaining(NO_BASE_FIX), { refusal: 'USAGE_INVALID' }],
+      ]);
     });
 
     it('names the repository cause in the broken finding when the lens cannot be evaluated', () => {

@@ -93,7 +93,7 @@ import type { RefusalCode, Severity, ValidationIssue } from '@vibe-agent-toolkit
 
 import { EXAMINED_ALLOWED, type ResourceCheck } from '../schemas/project-config.js';
 
-import { findingLocation } from './finding-location.js';
+import { findingLocation, LOCATION_ALLOWED } from './finding-location.js';
 
 /**
  * The code every statement a projection query store REFUSES to run carries:
@@ -167,14 +167,11 @@ export interface NearMiss {
   readonly reserved: ReservedCheckColumn;
 }
 
-/** A reserved column whose value can refuse a check: every one but `path`. */
-type StrictCheckColumn = Exclude<ReservedCheckColumn, 'path'>;
 
 /**
  * What one check's rows became.
  *
- * - `ok: true` — one finding per row, plus the near-miss column names a caller
- *   warns about once per check (every row of one statement has the same columns).
+ * - `ok: true` — one finding per row.
  * - `ok: false` — a row's reserved column held a value it cannot mean, so NONE
  *   of the rows were reported. `row` is 1-based; `field` is the SQL column NAME
  *   (never the finding's `column` coordinate); `rowsSelected` is how many rows
@@ -186,12 +183,11 @@ export type CheckRowConversion =
   | {
     readonly ok: true;
     readonly issues: readonly CheckIssue[];
-    readonly nearMisses: readonly NearMiss[];
   }
   | {
     readonly ok: false;
     readonly row: number;
-    readonly field: StrictCheckColumn;
+    readonly field: ReservedCheckColumn;
     readonly value: unknown;
     readonly rowsSelected: number;
     readonly allowed: string;
@@ -199,7 +195,7 @@ export type CheckRowConversion =
 
 /** A check's uninterpretable rows as a finding states them: which column, which value, which row. */
 interface UninterpretableRowsReason {
-  readonly column: StrictCheckColumn;
+  readonly column: ReservedCheckColumn;
   /** The value as evidence renders it. */
   readonly value: CheckEvidenceValue;
   /** 1-based. */
@@ -291,11 +287,11 @@ const POSITION_ALLOWED = 'a positive integer';
  *
  * Four columns are RESERVED ({@link CHECK_FINDING_COLUMNS}): `path` anchors the
  * finding, `finding_severity` sets that row's severity, and `finding_line` /
- * `finding_column` place it. `NULL` or absent means "not said". Anything else in
- * the three `finding_` columns refuses the whole check rather than being guessed at — a row graded
+ * `finding_column` place it. `NULL` or absent means "not said". Anything else they
+ * cannot mean refuses the whole check rather than being guessed at — a row graded
  * `'high'` was written by someone who meant something, and reporting it at the
- * declared severity would re-grade it in silence. (`path` keeps its older rule:
- * an unusable value is dropped, see {@link locationOf}.)
+ * declared severity would re-grade it in silence; a `path` that is no location
+ * ({@link findingLocation}) would lose its anchor the same way.
  *
  * @param name - The check's key in `resources.checks`
  * @param check - Its declaration
@@ -318,7 +314,7 @@ export function issuesFromCheckRows(
     if (!read.ok) {
       return { ok: false, row: index + 1, field: read.field, value: row[read.field], rowsSelected: rows.length, allowed: read.allowed };
     }
-    const location = locationOf(row);
+    const { location } = read;
     issues.push({
       code: customCheckCode(name),
       // The row's own, else declared, else `error`. The safe direction: a check
@@ -335,10 +331,10 @@ export function issuesFromCheckRows(
       ...(read.line === undefined ? {} : { line: read.line }),
       ...(read.column === undefined ? {} : { column: read.column }),
       check: name,
-      evidence: evidenceOf(row, location !== undefined),
+      evidence: evidenceOf(row),
     });
   }
-  return { ok: true, issues, nearMisses: nearMissesOf(rows[0]) };
+  return { ok: true, issues };
 }
 
 /**
@@ -386,17 +382,15 @@ export function uninterpretableRowsReason(refusal: Extract<CheckRowConversion, {
 }
 
 /**
- * A row's evidence: every column but the `finding_*` ones — and `path` only when it became the
- * finding's location, so an unusable one is still seen — in the order SQLite returned them.
+ * A row's evidence: every column but the reserved ones, in the order SQLite returned them.
  * `Object.fromEntries` defines own keys, so a column aliased `__proto__` is kept.
  *
  * @param row - One selected row
- * @param located - Whether the row's `path` became the finding's location
  * @returns The evidence object
  */
-function evidenceOf(row: Record<string, unknown>, located: boolean): Record<string, CheckEvidenceValue> {
+function evidenceOf(row: Record<string, unknown>): Record<string, CheckEvidenceValue> {
   return Object.fromEntries(Object.entries(row)
-    .filter(([column]) => !isReserved(column) || (column === 'path' && !located))
+    .filter(([column]) => !isReserved(column))
     .map(([column, value]) => [column, evidenceValue(value)]));
 }
 
@@ -424,33 +418,38 @@ function evidenceValue(value: unknown): CheckEvidenceValue {
   return renderValue(value);
 }
 
-/** The text a non-finite number is carried as — {@link renderValue}'s, so message and evidence agree. */
-const NON_FINITE_TEXT: ReadonlySet<string> = new Set([Infinity, -Infinity, Number.NaN].map((value) => renderValue(value)));
-
 /**
  * One evidence value as a refusal's sentence names it: quoted when it is text, so `"3"` and `3`
- * read differently — except a non-finite number's text, which names a number and reads bare,
- * exactly as the row's own rendering writes it.
+ * read differently. A non-finite number is carried as its text (JSON has no `Infinity`), so it is
+ * quoted too: the sentence names exactly the value `reason.value` carries, in JSON and YAML alike.
  *
  * @param value - The value as {@link evidenceValue} carries it
  * @returns Its text in a sentence
  */
 function shownValue(value: CheckEvidenceValue): string {
-  return typeof value === 'string' && !NON_FINITE_TEXT.has(value) ? JSON.stringify(value) : renderValue(value);
+  return typeof value === 'string' ? JSON.stringify(value) : renderValue(value);
 }
 
-/** A row's strict reserved columns, read — or the first one that cannot be. */
+/** A row's reserved columns, read — or the first one that cannot be. */
 type RowReading =
-  | { readonly ok: true; readonly severity: Severity | undefined; readonly line: number | undefined; readonly column: number | undefined }
-  | { readonly ok: false; readonly field: StrictCheckColumn; readonly allowed: string };
+  | {
+    readonly ok: true;
+    readonly location: string | undefined;
+    readonly severity: Severity | undefined;
+    readonly line: number | undefined;
+    readonly column: number | undefined;
+  }
+  | { readonly ok: false; readonly field: ReservedCheckColumn; readonly allowed: string };
 
 /**
- * Read one row's `finding_severity`, `finding_line` and `finding_column`.
+ * Read one row's `path`, `finding_severity`, `finding_line` and `finding_column`.
  *
  * @param row - One selected row
- * @returns The three values, or the column that refused
+ * @returns The four values, or the column that refused
  */
 function readRow(row: Record<string, unknown>): RowReading {
+  const location = readLocation(row['path']);
+  if (!location.ok) return { ok: false, field: 'path', allowed: LOCATION_ALLOWED };
   const severity = readSeverity(row['finding_severity']);
   if (!severity.ok) return { ok: false, field: 'finding_severity', allowed: SEVERITY_ALLOWED };
   const line = readPosition(row['finding_line']);
@@ -461,7 +460,23 @@ function readRow(row: Record<string, unknown>): RowReading {
   if (column.value !== undefined && line.value === undefined) {
     return { ok: false, field: 'finding_column', allowed: 'NULL without a finding_line' };
   }
-  return { ok: true, severity: severity.value, line: line.value, column: column.value };
+  return { ok: true, location: location.value, severity: severity.value, line: line.value, column: column.value };
+}
+
+/**
+ * The `path` column: a location {@link findingLocation} accepts.
+ *
+ * A **convention**, deliberately: a check that selects a `path` column gets findings a reader
+ * can open, and one that does not — an aggregate, a count — gets a finding with no location
+ * rather than a fabricated one.
+ *
+ * @param value - The column's value
+ * @returns The location, nothing, or a refusal
+ */
+function readLocation(value: unknown): Read<string> {
+  if (value === undefined || value === null) return { ok: true, value: undefined };
+  const location = findingLocation(value);
+  return location === undefined ? { ok: false } : { ok: true, value: location };
 }
 
 /**
@@ -493,41 +508,21 @@ function readPosition(value: unknown): Read<number> {
 }
 
 /**
- * The selected columns whose names match a reserved one in another case.
+ * The result columns whose names match a reserved one in another case.
  *
- * @param row - Any one row: every row of one statement has the same columns
+ * 🔑 Read from the statement's COLUMNS, never from a row: a check that selected nothing still
+ * misspelled its column, and a run killed before converting must publish the same answer.
+ *
+ * @param columns - The statement's result columns, in order
  * @returns The near misses, in the order the statement selected them
  */
-function nearMissesOf(row: Record<string, unknown> | undefined): NearMiss[] {
-  if (row === undefined) return [];
+export function nearMissesOf(columns: readonly string[]): NearMiss[] {
   const misses: NearMiss[] = [];
-  for (const column of Object.keys(row)) {
+  for (const column of columns) {
     const reserved = CHECK_FINDING_COLUMNS.find((name) => name === column.toLowerCase());
     if (reserved !== undefined && reserved !== column) misses.push({ column, reserved });
   }
   return misses;
-}
-
-/**
- * The file a row points at, when it points at one.
- *
- * A **convention**, deliberately: a check that selects a `path` column gets
- * findings a reader can open, and one that does not — an aggregate, a count —
- * gets a finding with no location rather than a fabricated one. Anchoring every
- * finding to the config file instead would put the reader where the check is
- * WRITTEN, which is never where the problem is.
- *
- * 🪤 What makes a value USABLE as a location — relative, POSIX, non-empty — is
- * {@link findingLocation}, shared with the built-in check set for the reason its
- * module header gives: two lanes materialise findings from projection rows, and
- * nothing downstream re-validates either lane's `location`, so a second copy of
- * the guard is one of them silently losing a clause.
- *
- * @param row - One selected row
- * @returns The location, or undefined when the row names no usable one
- */
-function locationOf(row: Record<string, unknown>): string | undefined {
-  return findingLocation(row['path']);
 }
 
 /**

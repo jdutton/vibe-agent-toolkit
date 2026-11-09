@@ -24,7 +24,11 @@ import {
   runProjectChecks,
 } from '../../src/commands/resources/check.js';
 import { CommandRefusalError } from '../../src/utils/command-refusal.js';
-import type { AskProjection } from '../../src/utils/projection-query.js';
+import type { AskProjection, ColumnsOfStatement } from '../../src/utils/projection-query.js';
+import { NO_COLUMNS } from '../helpers/no-columns.js';
+
+/** The columns of a statement that selects `path` and a near miss of `finding_line`. */
+const NEAR_COLUMNS: ColumnsOfStatement = () => ['path', 'Finding_Line'];
 
 const EXAMINED_NOTHING = 'RESOURCE_CHECK_EXAMINED_NOTHING';
 const BROKEN = 'RESOURCE_CHECK_BROKEN';
@@ -58,10 +62,11 @@ function askRows(bySql: Readonly<Record<string, readonly Record<string, unknown>
 function publish(
   checks: Readonly<Record<string, ResourceCheck>>,
   ask: AskProjection,
-  options: { builtins?: readonly BoundBuiltinCheck[]; membersEnumerated?: number } = {},
+  options: { builtins?: readonly BoundBuiltinCheck[]; membersEnumerated?: number; columnsOf?: ColumnsOfStatement } = {},
 ): CheckReport {
   const membersEnumerated = options.membersEnumerated ?? POPULATED.membersEnumerated;
   const { issues, costs } = runProjectChecks({
+    columnsOf: options.columnsOf ?? NO_COLUMNS,
     builtins: options.builtins ?? [],
     checks,
     only: undefined,
@@ -98,9 +103,14 @@ function interruptedReport(entries: readonly ProgressEntry[]): CheckReport {
 }
 
 /** Run `checks` over `answers`, then rebuild the document from their logged entries alone. */
-function rebuiltFromLog(checks: Readonly<Record<string, ResourceCheck>>, answers: Parameters<typeof askRows>[0]): CheckReport {
+function rebuiltFromLog(
+  checks: Readonly<Record<string, ResourceCheck>>,
+  answers: Parameters<typeof askRows>[0],
+  columnsOf: ColumnsOfStatement = NO_COLUMNS,
+): CheckReport {
   const progress: ProgressEntry[] = [];
   runProjectChecks({
+    columnsOf,
     builtins: [],
     checks,
     only: undefined,
@@ -241,6 +251,7 @@ describe('a killed run rebuilds the check entry a completed run publishes', () =
     const progress: ProgressEntry[] = [];
     let reading = 0;
     const ran = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: [],
       checks: { c: { description: 'd', sql: 'V', examined: 'E', allowEmpty: true } },
       only: undefined,
@@ -310,6 +321,7 @@ describe('a near miss of a reserved column is published on its check\'s entry', 
   it('lists the column as the statement spelled it, beside the stderr warning', () => {
     const warnings: string[] = [];
     const ran = runProjectChecks({
+      columnsOf: (sql) => (sql === 'V' ? ['path', 'Finding_Line'] : ['path']),
       builtins: [],
       checks: { near: { description: 'd', sql: 'V' }, clean: { description: 'd', sql: 'C' } },
       only: undefined,
@@ -332,9 +344,38 @@ describe('a near miss of a reserved column is published on its check\'s entry', 
   });
 
   it('survives a killed run', () => {
-    const rebuilt = rebuiltFromLog({ near: { description: 'd', sql: 'V' } }, { V: [{ path: 'a.md', Finding_Line: 3 }] });
+    const rebuilt = rebuiltFromLog({ near: { description: 'd', sql: 'V' } }, { V: [{ path: 'a.md', Finding_Line: 3 }] }, NEAR_COLUMNS);
 
     expect(rebuilt.data?.checks[0]?.nearMisses).toStrictEqual(['Finding_Line']);
+  });
+
+  it.each([
+    ['selected no row', { V: [] }],
+    ['was broken by a row it could not read', { V: [{ path: 'a.md', Finding_Line: 3, finding_line: 0 }] }],
+  ])('is read from the statement\'s columns, so it is published when the check %s', (_what, answers) => {
+    const report = publish({ near: { description: 'd', sql: 'V' } }, askRows(answers), { columnsOf: NEAR_COLUMNS });
+
+    expect(report.data?.checks[0]?.nearMisses).toStrictEqual(['Finding_Line']);
+    expectValid(report);
+  });
+
+  it('is the same on a run killed after the statement, before its entry was filed', () => {
+    const progress: ProgressEntry[] = [];
+    runProjectChecks({
+      columnsOf: NEAR_COLUMNS,
+      builtins: [],
+      checks: { near: { description: 'd', sql: 'V', examined: 'E' } },
+      only: undefined,
+      ask: askRows({ V: [], E: [{ n: 1 }] }),
+      validation: undefined,
+      membersEnumerated: POPULATED.membersEnumerated,
+      onProgress: (entry) => progress.push(entry),
+    });
+    const killedWhileExamining = progress.slice(0, progress.findIndex((entry) => entry.kind === 'examining') + 1);
+
+    const rebuilt = interruptedReport([{ kind: 'population', ...POPULATED }, ...killedWhileExamining]);
+
+    expect(rebuilt.data?.checks[0]).toMatchObject({ name: 'near', broken: true, nearMisses: ['Finding_Line'] });
   });
 });
 

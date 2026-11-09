@@ -53,12 +53,13 @@ const DERIVED_RELATIONS_HELP = `Derived relations (evaluated only when a stateme
   similarity (for a rename). The working tree, staged or not, plus untracked
   files git does not ignore, is snapshotted as one tree and diffed against
   the MERGE BASE of --base <ref> and HEAD, so what <ref> moved since is never
-  listed and a move is a rename whether or not it was git-added. A statement
-  reading it without --base, or with a ref that names no commit
-  (USAGE_INVALID), with a git that did not finish (BACKEND_UNAVAILABLE), or
-  over a tree that cannot answer -- no single merge base, no commits, not a
-  working tree (INPUT_UNREADABLE) -- is REFUSED, never answered with an
-  empty relation. query exits 2 with that code as error.code; a check is
+  listed and a move is a rename whether or not it was git-added. A
+  conflicted file is listed as it stands on disk, markers and all. A
+  statement reading it without --base, with a ref that names no commit or
+  has several merge bases (USAGE_INVALID), with a git that did not finish
+  (BACKEND_UNAVAILABLE), or over a tree that cannot answer -- no merge base,
+  a shallow clone cut short of it, no commits, not a working tree
+  (INPUT_UNREADABLE) -- is REFUSED, never answered with an empty relation. query exits 2 with that code as error.code; a check is
   RESOURCE_CHECK_BROKEN with it as reason.refusal. --base is read only when
   a statement names it:
 
@@ -368,7 +369,8 @@ ${builtinCheckList()}
 Asking a built-in's question yourself:
   The facts are ordinary projection rows, so the built-in is the default
   REPORT and not the only way to ask. Copy one of these into resources.checks
-  and narrow it -- a WHERE clause, a different severity, your own message:
+  under a name of its own (a built-in's name is refused) and narrow it -- a
+  WHERE clause, a different severity, your own message:
 
 ${builtinSqlTwins()}
 

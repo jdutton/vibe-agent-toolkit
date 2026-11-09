@@ -163,10 +163,21 @@ export function lensRelationNames(lens: ProjectionLens): readonly string[] {
  */
 export function lensesNamedBy(statements: readonly string[] | undefined): readonly ProjectionLens[] {
   if (statements === undefined) return PROJECTION_LENSES;
-  const readable = statements.map((sql) => wordsIn(withoutCommentsAndLiterals(sql)));
   return PROJECTION_LENSES.filter((lens) =>
-    lensRelationNames(lens).some((relation) =>
-      readable.some((words) => namesRelation(words, relation))));
+    statements.some((sql) => relationsNamedBy(sql, lensRelationNames(lens)).length > 0));
+}
+
+/**
+ * The relations among `relations` that one statement names, by the same scan the lens selector
+ * runs — comments and literals stripped, whole words, case-folded.
+ *
+ * @param sql - One statement
+ * @param relations - SQL relation names to look for
+ * @returns Those it names, in `relations` order
+ */
+export function relationsNamedBy(sql: string, relations: Iterable<string>): string[] {
+  const words = wordsIn(withoutCommentsAndLiterals(sql));
+  return [...relations].filter((relation) => namesRelation(words, relation));
 }
 
 /**

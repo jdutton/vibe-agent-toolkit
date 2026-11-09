@@ -1,5 +1,14 @@
 ### Breaking
 
+- **A `resources.checks` key equal to a built-in check's name is refused at config load**, naming
+  the clash and the fix: rename it. The built-in always runs, so the two shared one name in
+  `data.checks`, `--check` and every finding's `check`. A copy of a built-in's SQL twin needs a
+  name of its own.
+- **A check row's `path` must be a relative POSIX path inside the root, or NULL.** Any other value
+  — not text, absolute, a drive path, a backslash, or a `..` that climbs out of the root — fails the
+  check as `RESOURCE_CHECK_BROKEN` with the structured `reason` (`column: path`), on every platform
+  alike. NULL or absent is no location. `path` is never evidence. A built-in's finding over a file
+  whose name holds a backslash now carries no location.
 - **A `resources.checks` statement's `finding_severity`, `finding_line` and `finding_column` columns
   now feed the finding** (beside `path`), matched exactly. A value they cannot mean —
   `finding_severity: 'high'`, `finding_line: 0` — fails the check as `RESOURCE_CHECK_BROKEN`. No
@@ -15,15 +24,17 @@
   `warning` | `info`, NULL = the declared one), `finding_line`, and `finding_column` (needs
   `finding_line`). An override on `CUSTOM:<name>` still wins. A column that differs from a reserved
   name only in case is a stderr warning, and is listed as spelled on that check's `data.checks`
-  entry as `nearMisses` (absent when there is none).
+  entry as `nearMisses` (absent when there is none) — read from the statement's columns, so it is
+  listed whatever the row count, on a broken check and on a run killed mid-check alike.
 - **Every finding one check produced names it: `check: <name>`** — its violations (built-in or
   declared) and the `RESOURCE_CHECK_BROKEN` / `RESOURCE_CHECK_EXAMINED_NOTHING` refusals about it, in
   `vat resources check` and in `vat validate`'s `checks` phase alike. A finding about the whole run
   carries none.
 - **A declared check's violation carries `evidence`**: the row's columns other than the reserved
   ones, values as SQLite returned them (a BLOB, or a non-finite number such as `Infinity`, as the
-  text the message shows — so the JSON and YAML documents agree). A `path` that could not become the finding's `location` (absolute, NULL, not
-  text) stays in `evidence`; a column aliased `__proto__` is kept. The message is unchanged.
+  text the message shows — so the JSON and YAML documents agree); a column aliased `__proto__` is
+  kept. The message is unchanged. A refusal's message quotes every text value, a non-finite number
+  carried as text included (`finding_line = "Infinity"`).
 - **A check whose rows could not be read carries `reason`** on its `RESOURCE_CHECK_BROKEN` finding:
   `{column, value, row, allowed}` — the reserved column, the value as `evidence` renders it, the
   1-based row (the FIRST bad one), and what the column may hold (`one of error | warning | info`,

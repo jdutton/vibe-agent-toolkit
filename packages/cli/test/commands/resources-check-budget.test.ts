@@ -57,6 +57,7 @@ import {
   NODE_FATAL_ABORT_EXIT_CODE,
   runProjectChecks,
 } from '../../src/commands/resources/check.js';
+import { NO_COLUMNS } from '../helpers/no-columns.js';
 
 /** The log lines a run writes before it hangs on its second rule. */
 const POPULATION: ProgressEntry = {
@@ -1282,6 +1283,7 @@ describe('a run stopped while a check\'s rows were being converted', () => {
     const seen: ProgressEntry[] = [];
     const stall = new Error('killed inside the conversion');
     expect(() => runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: [],
       checks: { 'big-select': { description: 'big', sql: 'SELECT path FROM a' } },
       only: undefined,
@@ -1359,6 +1361,7 @@ describe('a run stopped while a check\'s examined statement was running', () => 
     const seen: ProgressEntry[] = [];
     const stall = new Error('killed inside the examined statement');
     expect(() => runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: [],
       checks: { counted: { description: 'counted', sql: 'SELECT path FROM a', examined: 'SELECT path FROM b' } },
       only: undefined,
@@ -1397,6 +1400,7 @@ describe('a killed run rebuilds a check that completed broken exactly as a compl
     return [{ path: 'b.md' }];
   };
   const run = (onProgress?: (entry: ProgressEntry) => void): ReturnType<typeof runProjectChecks> => runProjectChecks({
+    columnsOf: NO_COLUMNS,
     builtins: [], checks: BROKEN_CHECKS, only: undefined, ask, validation: undefined, membersEnumerated: 2, now: () => 0, onProgress,
   });
 

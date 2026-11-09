@@ -26,21 +26,24 @@ import path from 'node:path';
 /** A drive-lettered Windows path, which is absolute however POSIX it looks. */
 const WINDOWS_DRIVE = /^[A-Za-z]:/;
 
+/** What a location may be: the one spelling a refusal states. */
+export const LOCATION_ALLOWED = 'a relative POSIX path inside the root (no leading /, drive, backslash or climbing ..)';
+
 /**
  * The value as a finding's location, when it can be one.
  *
  * Every projection table stores root-relative POSIX paths, so the refusals below
  * only fire on a value something BUILT — a statement that concatenated a root
- * onto a column, or a producer that forgot to relativize.
+ * onto a column, or a producer that forgot to relativize. The rule is the same on
+ * every platform: a backslash is refused everywhere, because a location that names
+ * one file on POSIX and another on win32 names neither.
  *
  * @param value - Whatever the row held, undecoded
  * @returns The location, or undefined when the value cannot honestly be one
  */
 export function findingLocation(value: unknown): string | undefined {
   if (typeof value !== 'string' || value.length === 0) return undefined;
-  // A backslash is a separator only on win32; on POSIX it is a legal filename
-  // character, and `.claude/rules/a\b.md` is a real file that must keep its anchor.
-  if (path.sep === '\\' && value.includes('\\')) return undefined;
-  if (value.startsWith('/') || WINDOWS_DRIVE.test(value)) return undefined;
-  return value;
+  if (value.includes('\\') || value.startsWith('/') || WINDOWS_DRIVE.test(value)) return undefined;
+  const normalized = path.posix.normalize(value);
+  return normalized === '..' || normalized.startsWith('../') ? undefined : value;
 }

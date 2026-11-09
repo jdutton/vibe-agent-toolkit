@@ -21,6 +21,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type * as SupervisorModule from '../../src/commands/resources/check-supervisor.js';
+import { NO_COLUMNS } from '../helpers/no-columns.js';
 import { captureProcessExit } from '../test-doubles.js';
 
 const recorded: Array<readonly string[]> = [];
@@ -168,6 +169,7 @@ describe('runResourcesCheckPhase — the child\'s findings on this process\'s st
  */
 async function phaseVerdictFor(check: { examined: string; allowEmpty?: true }, answer: number): Promise<Report<unknown>> {
   const { issues, costs } = runProjectChecks({
+    columnsOf: NO_COLUMNS,
     builtins: [],
     checks: { owned: { description: 'owned', sql: 'SELECT path FROM a', ...check } },
     only: undefined,

@@ -8,13 +8,16 @@
  * what this repository answers.
  */
 
-import { renameSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { delimiter } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { gitChangedFiles } from '../../src/git-changed-files.js';
 import { runGit, runGitOrThrow } from '../../src/git-run.js';
 import { mkdirSyncReal, safePath } from '../../src/path-utils.js';
+import { gitExecutable } from '../../src/testing/executables.js';
 import { tmpdirFoldsCase } from '../../src/testing/platform-gates.js';
 import { setupSyncTempDirSuite } from '../../src/testing/temp-dir.js';
 
@@ -40,6 +43,35 @@ function commitAll(repo: string, message: string): void {
 /** The `(path, status)` pairs of an answer, which `changed_files` keys on. */
 function keysOf(result: ReturnType<typeof gitChangedFiles>): string[] {
   return result.ok ? result.files.map((file) => `${file.path}:${file.status}`) : [];
+}
+
+/**
+ * An origin whose `feature` merged a long `side` branch: `Y-Z-A` on main, `A-S1..S4` (side),
+ * `A-F1`, the merge of S4, `F2` (feature), then `B` on main. Cloned at `depth`, the clone's
+ * `feature` is checked out. Both live under `scratch`.
+ */
+function shallowClone(scratch: string, depth: number, extra: readonly string[] = []): string {
+  const origin = safePath.join(scratch, 'origin');
+  mkdirSyncReal(origin);
+  runGitOrThrow(['init', '-q', '-b', 'main'], { cwd: origin });
+  const commit = (name: string): void => {
+    put(origin, `${name}.md`, `${name}\n`);
+    commitAll(origin, name);
+  };
+  for (const name of ['Y', 'Z', 'A']) commit(name);
+  runGitOrThrow(['switch', '-q', '-c', 'side'], { cwd: origin });
+  for (const name of ['S1', 'S2', 'S3', 'S4']) commit(name);
+  runGitOrThrow(['switch', '-q', '-c', 'feature', 'main'], { cwd: origin });
+  commit('F1');
+  runGitOrThrow([...COMMIT_CONFIG, 'merge', '-q', '--no-edit', 'side'], { cwd: origin });
+  commit('F2');
+  runGitOrThrow(['switch', '-q', 'main'], { cwd: origin });
+  runGitOrThrow(['branch', '-q', '-D', 'side'], { cwd: origin });
+  commit('B');
+  const clone = safePath.join(scratch, 'clone');
+  runGitOrThrow(['clone', '-q', '--depth', String(depth), ...extra, pathToFileURL(origin).href, clone], { cwd: scratch });
+  runGitOrThrow(['switch', '-q', 'feature'], { cwd: clone });
+  return clone;
 }
 
 describe('gitChangedFiles', () => {
@@ -148,7 +180,7 @@ describe('gitChangedFiles', () => {
     expect(result.ok ? '' : result.reason).toMatch(/"main" shares no history with HEAD.*fetch/s);
   });
 
-  it('keeps (path, status) a key during a conflicted merge', () => {
+  it('answers mid-merge: a conflicted (UU) file is one modified row, as it stands on disk with its markers', () => {
     runGitOrThrow(['switch', '-q', '-c', 'side'], { cwd: repo });
     put(repo, 'site/edit.md', 'side\n');
     commitAll(repo, 'side');
@@ -157,11 +189,12 @@ describe('gitChangedFiles', () => {
     commitAll(repo, 'main');
     expect(runGit([...COMMIT_CONFIG, 'merge', 'side'], { cwd: repo }).ok).toBe(false);
 
-    const result = gitChangedFiles({ root: repo, base: base });
-    const keys = keysOf(result);
+    expect(runGitOrThrow(['status', '--porcelain', '--', 'site/edit.md'], { cwd: repo })).toBe('UU site/edit.md');
 
-    expect(keys).toContain('site/edit.md:modified');
-    expect(new Set(keys).size).toBe(keys.length);
+    const result = gitChangedFiles({ root: repo, base: base });
+
+    expect(result.ok).toBe(true);
+    expect(keysOf(result)).toStrictEqual(['site/edit.md:modified']);
   });
 
   it.each([['an empty ref', ''], ['a ref git would read as an option', '--output=x']])(
@@ -263,21 +296,81 @@ describe('gitChangedFiles', () => {
 
     const result = gitChangedFiles({ root: repo, base: 'right' });
 
-    expect(result).toMatchObject({ ok: false, kind: 'repository' });
+    expect(result).toMatchObject({ ok: false, kind: 'base' });
     expect(result.ok ? '' : result.reason).toMatch(/"right" has 2 merge bases with HEAD.*Pass one of them/s);
   });
 
-  it('refuses a tree git cannot snapshot, saying why', () => {
-    // `git add --all` refuses a nested repository with no commit checked out.
+  it('refuses a snapshot git did not finish as git\'s failure, naming each cause it could be', () => {
+    // `git add --all` refuses a nested repository with no commit checked out; the snapshot reports
+    // no cause, so a time-out (vibe-validate's limit) cannot be told apart from it.
     mkdirSyncReal(safePath.join(repo, 'site/empty-nested'));
     runGitOrThrow(['init', '-q'], { cwd: safePath.join(repo, 'site/empty-nested') });
     put(repo, 'site/empty-nested/x.md', 'x\n');
 
     expect(gitChangedFiles({ root: repo, base: 'HEAD' })).toMatchObject({
       ok: false,
-      kind: 'repository',
-      reason: expect.stringMatching(/could not snapshot.*git add --all --dry-run/s),
+      kind: 'git-failed',
+      reason: expect.stringMatching(/could not snapshot.*30 s.*nested repository with no commit.*git add --all --dry-run/s),
     });
+  });
+
+  it('reads paths from the repository\'s top whatever diff.relative says, so a subdirectory root still answers', () => {
+    runGitOrThrow(['config', 'diff.relative', 'true'], { cwd: repo });
+    put(repo, 'site/edit.md', 'changed\n');
+
+    expect(keysOf(gitChangedFiles({ root: safePath.join(repo, 'site'), base: 'HEAD' }))).toStrictEqual(['edit.md:modified']);
+  });
+
+  describe('a shallow clone', () => {
+    it('refuses a depth-1 clone of a branch: no merge base is there to compare with', () => {
+      const clone = shallowClone(suite.getTempDir(), 1, ['--no-single-branch']);
+
+      expect(gitChangedFiles({ root: clone, base: 'origin/main' })).toMatchObject({ ok: false, kind: 'repository' });
+    });
+
+    it('refuses a merge base that a cut-off history could be hiding a nearer one behind, naming the fix', () => {
+      const clone = shallowClone(suite.getTempDir(), 3, ['--no-single-branch']);
+      // Deepened once: the merge base A is now reachable, but S3 is still a boundary on the way to it.
+      runGitOrThrow(['fetch', '-q', '--deepen=1'], { cwd: clone });
+
+      expect(gitChangedFiles({ root: clone, base: 'origin/main' })).toMatchObject({
+        ok: false,
+        kind: 'repository',
+        reason: expect.stringMatching(/shallow.*fetch-depth: 0.*git fetch --deepen=<n>/s),
+      });
+    });
+
+    it('answers once deepened until no boundary lies between the merge base and either tip', () => {
+      const clone = shallowClone(suite.getTempDir(), 3, ['--no-single-branch']);
+      runGitOrThrow(['fetch', '-q', '--deepen=4'], { cwd: clone });
+
+      expect(gitChangedFiles({ root: clone, base: 'origin/main' })).toMatchObject({
+        ok: true,
+        files: ['F1.md', 'F2.md', 'S1.md', 'S2.md', 'S3.md', 'S4.md'].map((path) => ({ path, status: 'added' })),
+      });
+    });
+
+    it('answers when the merge base is itself the boundary: nothing can hide a nearer one', () => {
+      // Depth 2 of feature alone: F2 and the merge, which is the boundary.
+      const clone = shallowClone(suite.getTempDir(), 2, ['--single-branch', '--branch', 'feature']);
+
+      expect(gitChangedFiles({ root: clone, base: 'HEAD~1' })).toMatchObject({
+        ok: true,
+        files: [{ path: 'F2.md', status: 'added' }],
+      });
+    });
+  });
+
+  it.skipIf(process.platform === 'win32')('asks git for no history walk in a repository that is not shallow', () => {
+    const shim = safePath.join(suite.getTempDir(), 'logging-git');
+    const log = safePath.join(shim, 'calls.log');
+    mkdirSyncReal(shim);
+    writeFileSync(safePath.join(shim, 'git'), `#!/bin/sh\necho "$1" >> "${log}"\nexec "${gitExecutable()}" "$@"\n`, { mode: 0o755 });
+    vi.stubEnv('PATH', `${shim}${delimiter}${process.env['PATH'] ?? ''}`);
+    put(repo, 'site/edit.md', 'changed\n');
+
+    expect(keysOf(gitChangedFiles({ root: repo, base: 'HEAD' }))).toStrictEqual(['site/edit.md:modified']);
+    expect(readFileSync(log, 'utf8').split('\n')).not.toContain('rev-list');
   });
 
   it('refuses a repository with no commits yet, saying so', () => {

@@ -250,6 +250,7 @@ const BARREL_EXPORTS = [
   'loadConfig',
   'loadParser',
   'matchesCollection',
+  'nearMissesOf',
   'okfBundleRuns',
   'openFrontmatter',
   'outOfCorpusDestination',

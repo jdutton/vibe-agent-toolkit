@@ -32,7 +32,7 @@ export const COMMENT_DENSITY_CEILINGS: Readonly<Record<string, number>> = {
   'rag': 48.9,
   'rag-lancedb': 47.3,
   'resource-compiler': 38.6,
-  'resources': 62.8,
+  'resources': 61.8,
   'runtime-claude-agent-sdk': 42.3,
   'runtime-langchain': 50.8,
   'runtime-openai': 51.6,

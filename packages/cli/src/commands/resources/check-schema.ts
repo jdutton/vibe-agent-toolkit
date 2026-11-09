@@ -21,7 +21,7 @@ const PublishedCheckCostSchema = z.object({
   durationSecs: z.number().nonnegative(),
   /** Rows the statement returned. ABSENT, never 0, when the statement did not complete. */
   rows: z.number().int().nonnegative().optional(),
-  /** Nothing reported. Without `rows`: the statement failed; with: `examined` or conversion did. */
+  /** Nothing reported. Without `rows`: the statement failed; with: `examined` or conversion failed, or the run was killed mid-check. */
   broken: z.literal(true).optional(),
   /** Present and `true` only for a rule VAT supplied — see `CheckCost.builtin` in `check.ts`. */
   builtin: z.literal(true).optional(),
@@ -46,7 +46,7 @@ const EvidenceValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null
 export const CHECK_REFUSAL_REASON_SCHEMA = z.union([
   z.object({ refusal: RefusalCodeSchema }).strict(),
   z.object({
-    column: z.enum(CHECK_FINDING_COLUMNS).exclude(['path']),
+    column: z.enum(CHECK_FINDING_COLUMNS),
     value: EvidenceValueSchema,
     row: z.number().int().positive(),
     allowed: z.string().min(1),

@@ -147,6 +147,7 @@
                           "column": {
                             "type": "string",
                             "enum": [
+                              "path",
                               "finding_severity",
                               "finding_line",
                               "finding_column"

@@ -894,6 +894,7 @@ export {
   describeUninterpretableRows,
   examinedCount,
   issuesFromCheckRows,
+  nearMissesOf,
   PROJECTION_STATEMENT_REFUSED_CODE,
   uninterpretableRowsReason,
 } from './projection/sql-checks.js';
@@ -910,7 +911,6 @@ export type {
 // projection it just built and runs them beside the project's declared checks.
 export {
   bindBuiltinChecks,
-  BUILTIN_CHECK_NAMES,
   BUILTIN_CHECKS,
   CLAUDE_RULE_FRONTMATTER_INVALID_CHECK,
   CLAUDE_RULE_GLOB_INERT_CHECK,
@@ -919,6 +919,7 @@ export {
   type BuiltinCheck,
   type BuiltinCheckInput,
 } from './projection/builtin-checks.js';
+export { BUILTIN_CHECK_NAMES } from './projection/builtin-check-names.js';
 
 export {
   buildResourcePopulation,

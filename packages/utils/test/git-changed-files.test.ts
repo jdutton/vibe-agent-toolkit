@@ -28,9 +28,16 @@ function text(bytes: Uint8Array | null): string | null {
   return bytes === null ? null : Buffer.from(bytes).toString('utf8');
 }
 
+/** The records of a listing the parser must read; fails the test on a refusal. */
+function recordsOf(listing: Uint8Array): Parameters<typeof changedFilesUnderPrefix>[0] {
+  const parsed = parseNameStatusZ(listing);
+  if (!parsed.ok) throw new Error(`expected a readable listing: ${parsed.reason}`);
+  return parsed.records;
+}
+
 describe('parseNameStatusZ', () => {
   it('reads every status letter, with the rename source and score', () => {
-    const records = parseNameStatusZ(z(
+    const records = recordsOf(z(
       'A', 'new.md',
       'M', 'docs/edited.md',
       'D', 'gone.md',
@@ -49,14 +56,14 @@ describe('parseNameStatusZ', () => {
 
   it('keeps a path byte for byte, a leading space and bytes that are not UTF-8 included', () => {
     const notUtf8 = Uint8Array.from([0x61, 0xff, 0x2e, 0x6d, 0x64]);
-    const [spaced, raw] = parseNameStatusZ(z('M', ' lead.md', 'A', notUtf8));
+    const [spaced, raw] = recordsOf(z('M', ' lead.md', 'A', notUtf8));
 
     expect(text(spaced?.path ?? null)).toBe(' lead.md');
     expect(Buffer.from(raw?.path ?? []).equals(Buffer.from(notUtf8))).toBe(true);
   });
 
   it('reads an empty listing as no change', () => {
-    expect(parseNameStatusZ(Buffer.alloc(0))).toStrictEqual([]);
+    expect(recordsOf(Buffer.alloc(0))).toStrictEqual([]);
   });
 
   it.each([
@@ -68,14 +75,18 @@ describe('parseNameStatusZ', () => {
     // Copies are never asked for (no -C), and a tree-to-tree diff has no unmerged path.
     ['a copy', z('C100', 'src.md', 'copy.md')],
     ['an unmerged path', z('U', 'conflicted.md')],
-  ])('refuses %s rather than guessing', (_what, listing) => {
-    expect(() => parseNameStatusZ(listing)).toThrow(/git diff-tree --name-status -z/);
+  ])('refuses %s rather than guessing, as the repository\'s refusal naming the record', (_what, listing) => {
+    expect(parseNameStatusZ(listing)).toMatchObject({
+      ok: false,
+      kind: 'repository',
+      reason: expect.stringMatching(/git diff-tree --name-status -z/),
+    });
   });
 });
 
 /** The rows for a listing under the root `site/`. */
 function under(listing: Buffer): ReturnType<typeof changedFilesUnderPrefix> {
-  return changedFilesUnderPrefix(parseNameStatusZ(listing), Buffer.from('site/', 'utf8'));
+  return changedFilesUnderPrefix(recordsOf(listing), Buffer.from('site/', 'utf8'));
 }
 
 describe('changedFilesUnderPrefix', () => {
@@ -104,7 +115,7 @@ describe('changedFilesUnderPrefix', () => {
   });
 
   it('keeps everything at the repository root when the prefix is empty, sorted by path', () => {
-    expect(changedFilesUnderPrefix(parseNameStatusZ(z('M', 'z.md', 'D', 'a/b.md')), Buffer.alloc(0))).toStrictEqual({
+    expect(changedFilesUnderPrefix(recordsOf(z('M', 'z.md', 'D', 'a/b.md')), Buffer.alloc(0))).toStrictEqual({
       ok: true,
       files: [
         { path: 'a/b.md', status: 'deleted', oldPath: null, similarity: null },
@@ -125,6 +136,11 @@ describe('changedFilesUnderPrefix', () => {
   });
 });
 
+/** U+0301 COMBINING ACUTE ACCENT: `e` + it is NFD for `é`. */
+const ACUTE = String.fromCodePoint(0x03_01);
+/** `café/` composed (NFC), as git reports a root on most systems. */
+const COMPOSED = `caf${String.fromCodePoint(0xE9)}/`;
+
 describe('caseSpellingRefusal', () => {
   const prefix = Buffer.from('docs/', 'utf8');
 
@@ -133,7 +149,7 @@ describe('caseSpellingRefusal', () => {
     ['a deletion', z('D', 'Docs/b.md'), 'Docs/'],
     ['the new side of a rename', z('R100', 'docs/a.md', 'DOCS/a.md'), 'DOCS/'],
   ])('refuses a path spelled in another case on %s, naming both spellings', (_what, listing, other) => {
-    const refusal = caseSpellingRefusal(parseNameStatusZ(listing), prefix);
+    const refusal = caseSpellingRefusal(recordsOf(listing), prefix);
 
     expect(refusal).toMatchObject({ ok: false, kind: 'repository' });
     expect(refusal?.reason).toContain('"docs/"');
@@ -141,12 +157,29 @@ describe('caseSpellingRefusal', () => {
   });
 
   it('accepts paths that carry the prefix exactly, or lie elsewhere', () => {
-    expect(caseSpellingRefusal(parseNameStatusZ(z('M', 'docs/a.md', 'M', 'other/x.md', 'M', 'docsx/y.md')), prefix))
+    expect(caseSpellingRefusal(recordsOf(z('M', 'docs/a.md', 'M', 'other/x.md', 'M', 'docsx/y.md')), prefix))
       .toBeUndefined();
   });
 
+  it.each([
+    ['a non-ASCII letter in another case', 'Été/', 'été/a.md', 'été/'],
+    ['decomposed (NFD) where git reports composed (NFC)', COMPOSED, `cafe${ACUTE}/a.md`, `cafe${ACUTE}/`],
+    ['decomposed AND in another case', COMPOSED, `CAFE${ACUTE}/a.md`, `CAFE${ACUTE}/`],
+  ])('refuses %s, as APFS folds it, naming both spellings', (_what, root, path, other) => {
+    const refusal = caseSpellingRefusal(recordsOf(z('M', path)), Buffer.from(root, 'utf8'));
+
+    expect(refusal).toMatchObject({ ok: false, kind: 'repository' });
+    expect(refusal?.reason).toContain(`"${other}"`);
+  });
+
+  it('accepts a non-ASCII prefix spelled exactly, and a sibling that only shares its letters', () => {
+    const root = Buffer.from('été/', 'utf8');
+
+    expect(caseSpellingRefusal(recordsOf(z('M', 'été/a.md', 'M', 'étéx/a.md', 'M', 'ete/a.md')), root)).toBeUndefined();
+  });
+
   it('has nothing to check at the repository root', () => {
-    expect(caseSpellingRefusal(parseNameStatusZ(z('M', 'Docs/a.md')), Buffer.alloc(0))).toBeUndefined();
+    expect(caseSpellingRefusal(recordsOf(z('M', 'Docs/a.md')), Buffer.alloc(0))).toBeUndefined();
   });
 });
 
@@ -155,10 +188,10 @@ describe('mergeBaseOf', () => {
     expect(mergeBaseOf('main', 'aaa\n')).toStrictEqual({ ok: true, commit: 'aaa' });
   });
 
-  it('refuses more than one, naming each and the fix', () => {
+  it('refuses more than one as the base\'s fault, naming each and the fix: pass one of them', () => {
     expect(mergeBaseOf('main', 'aaa\nbbb\n')).toMatchObject({
       ok: false,
-      kind: 'repository',
+      kind: 'base',
       reason: expect.stringMatching(/"main" has 2 merge bases with HEAD \(aaa, bbb\).*Pass one of them/s),
     });
   });

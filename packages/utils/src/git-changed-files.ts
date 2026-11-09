@@ -9,13 +9,18 @@
  * The working tree is made a git TREE by the repository's one snapshot mechanism,
  * {@link gitTreeSnapshot} (`git add --all` into a throwaway index, then `write-tree`: tracked files
  * with their unstaged edits, plus untracked files git does not ignore). That tree is compared with
- * the merge base by ONE `git diff-tree -r -M -l0 --name-status -z --no-relative`, so every path is
- * judged once, by git, against one answer:
+ * the merge base by ONE `git diff-tree -r -M -l0 --name-status -z`, so every path is judged once,
+ * by git, against one answer:
  *
  * - A move is a rename whether or not it was `git add`ed: both sides are in the snapshot.
  * - A file removed from the index but unchanged on disk (`git rm --cached`) is no change.
  * - `-l0` lifts git's rename limit, so no rename is ever reported as a deletion plus an addition.
- * - No `-C`: a copy is an addition. An unmerged path is whatever its working-tree file holds.
+ * - No `-C`: a copy is an addition. A conflicted (unmerged) path is its working-tree file as it
+ *   stands, conflict markers and all — usually one `modified` row.
+ * - A file marked assume-unchanged or skip-worktree is seen as git sees it: an edit to one is no row.
+ *
+ * In a shallow clone the merge base is trusted only when no commit between it and either tip is a
+ * shallow boundary: one could hide a nearer merge base, so that refuses, naming how to deepen.
  * - A gitlink — a submodule, or a nested repository with a commit — is one row naming its
  *   directory, listed when the commit it records moved; its own files are never this tree's.
  *
@@ -32,21 +37,25 @@
  *
  * ## The root may be a subdirectory of the repository
  *
- * The diff names paths from the repository's top (`--no-relative` overrides a `diff.relative`
- * config); they are kept only under the root's prefix and made relative to it. A rename crossing
+ * The diff names paths from the repository's top (`diff-tree` is plumbing: a `diff.relative` config
+ * does not reach it); they are kept only under the root's prefix and made relative to it. A rename crossing
  * the root's boundary is reported as what it is from INSIDE the root: renamed in is `added`,
  * renamed out is `deleted`.
  *
  * 🚨 Under `core.ignorecase` a path git lists can be spelled differently from the prefix git
- * reports (a case-only rename since the base, a root reached in another case), and a byte
- * comparison would then drop it in silence. So every path on either side of every row that matches
- * the prefix case-insensitively — ASCII, as git folds — but not byte-exactly refuses, naming both.
+ * reports (a case-only rename since the base, a root reached in another case or Unicode
+ * normalisation), and a byte comparison would then drop it in silence. So every path on either side
+ * of every row whose leading segments match the prefix as APFS compares names — Unicode case and
+ * NFC/NFD alike — but not byte for byte refuses, naming both.
  */
 
+import { readFileSync } from 'node:fs';
+
 import { compareCodeUnits } from './compare-code-units.js';
-import { isNoSuchEntryError, isOutputOverrunError, isTimedOutError } from './errors/errno-table.js';
+import { isNoSuchEntryError, isOutputOverrunError, isPathAbsentError, isTimedOutError } from './errors/errno-table.js';
 import { runGit, runGitBytes } from './git-run.js';
 import { gitTreeSnapshot, unreadableSnapshotRefusal } from './git-snapshot.js';
+import { safePath } from './path-utils.js';
 import { shownName } from './shown-text.js';
 import { decodeUtf8Exactly } from './text-content.js';
 
@@ -73,10 +82,11 @@ interface GitNameStatusRecord {
 }
 
 /**
- * Whose fault a refusal is: `base` — the ref passed; `git-failed` — git did not run or did not
- * finish (not on PATH, out of time, more output than VAT reads); `repository` — the tree cannot
- * answer (not a working tree, no commits, no single merge base, a tree git cannot snapshot, a damaged
- * repository, a root in another case, a path that is not UTF-8).
+ * Whose fault a refusal is: `base` — the ref passed (it names no commit, or has more than one
+ * merge base with HEAD); `git-failed` — git did not run or did not finish (not on PATH, out of time,
+ * more output than VAT reads, a snapshot that failed with no cause); `repository` — the tree cannot
+ * answer (not a working tree, no commits, no merge base, a shallow history that cannot vouch for the
+ * merge base, a damaged repository, a root in another case, a path that is not UTF-8).
  */
 export type GitChangedFilesRefusalKind = 'base' | 'git-failed' | 'repository';
 
@@ -108,6 +118,8 @@ const RENAME_STATUS = /^R(\d{1,3})$/;
 
 /** The NUL byte that ends every `-z` field. */
 const NUL = 0x00;
+/** The byte git separates path segments with. */
+const SLASH = 0x2F;
 
 /** The newline `rev-parse --show-prefix` ends its answer with. */
 const NEWLINE = 0x0a;
@@ -119,58 +131,64 @@ const LISTING_COMMAND = 'git diff-tree --name-status -z';
  * Split a `-z` listing into its fields.
  *
  * @param bytes - The listing; every field ends in NUL
- * @returns The fields, as views of `bytes`
- * @throws Error When the listing does not end in NUL
+ * @returns The fields, as views of `bytes`, or undefined when the listing does not end in NUL
  */
-function nulFields(bytes: Uint8Array): Uint8Array[] {
+function nulFields(bytes: Uint8Array): Uint8Array[] | undefined {
   const fields: Uint8Array[] = [];
   let at = 0;
   while (at < bytes.length) {
     const end = bytes.indexOf(NUL, at);
-    if (end === -1) throw malformed('the listing does not end in NUL');
+    if (end === -1) return undefined;
     fields.push(bytes.subarray(at, end));
     at = end + 1;
   }
   return fields;
 }
 
-/** The error a listing git should never have written is thrown with. */
-function malformed(what: string): Error {
-  return new Error(`${LISTING_COMMAND} wrote a listing VAT cannot read: ${what}.`);
+/** The refusal for a listing git should never have written, naming the record. */
+function malformed(what: string): Refusal {
+  return { ok: false, kind: 'repository', reason: `${LISTING_COMMAND} wrote a listing VAT cannot read: ${what}.` };
+}
+
+/** One record read at `at`, and how many fields it took — or the refusal naming it. */
+function readRecord(fields: readonly Uint8Array[], at: number): { record: GitNameStatusRecord; width: number } | Refusal {
+  const status = fields[at] ?? new Uint8Array();
+  // A status that is not UTF-8 is no status git writes: `''` matches nothing and is refused below.
+  const letters = decodeUtf8Exactly(status) ?? '';
+  const single = SINGLE_PATH_STATUS.get(letters);
+  if (single !== undefined) {
+    const path = fields[at + 1];
+    if (path === undefined) return malformed(`status ${shownName(status)} has no path`);
+    return { record: { status: single, path, oldPath: null, similarity: null }, width: 2 };
+  }
+  // A copy (`C`) or an unmerged path (`U`) lands here too: never asked for, so never guessed at.
+  const score = RENAME_STATUS.exec(letters)?.[1];
+  if (score === undefined) return malformed(`unknown status ${shownName(status)}`);
+  const oldPath = fields[at + 1];
+  const path = fields[at + 2];
+  if (oldPath === undefined || path === undefined) return malformed(`status ${shownName(status)} needs two paths`);
+  return { record: { status: 'renamed', path, oldPath, similarity: Number(score) }, width: 3 };
 }
 
 /**
  * Read `git diff-tree -M --name-status -z` output.
  *
  * @param bytes - The listing, byte for byte
- * @returns One record per changed path, in listing order
- * @throws Error When a status is unknown or a record is cut short — never guessed at
+ * @returns One record per changed path, in listing order — or, for a status it does not know or a
+ *   record cut short, the repository's refusal naming it: never guessed at, never thrown
  */
-export function parseNameStatusZ(bytes: Uint8Array): GitNameStatusRecord[] {
+export function parseNameStatusZ(bytes: Uint8Array): { ok: true; records: GitNameStatusRecord[] } | Refusal {
   const fields = nulFields(bytes);
+  if (fields === undefined) return malformed('the listing does not end in NUL');
   const records: GitNameStatusRecord[] = [];
   let at = 0;
   while (at < fields.length) {
-    const status = fields[at] ?? new Uint8Array();
-    // A status that is not UTF-8 is no status git writes: `''` matches nothing and is refused below.
-    const letters = decodeUtf8Exactly(status) ?? '';
-    const single = SINGLE_PATH_STATUS.get(letters);
-    if (single !== undefined) {
-      const path = fields[at + 1];
-      if (path === undefined) throw malformed(`status ${shownName(status)} has no path`);
-      records.push({ status: single, path, oldPath: null, similarity: null });
-      at += 2;
-      continue;
-    }
-    const score = RENAME_STATUS.exec(letters)?.[1];
-    if (score === undefined) throw malformed(`unknown status ${shownName(status)}`);
-    const oldPath = fields[at + 1];
-    const path = fields[at + 2];
-    if (oldPath === undefined || path === undefined) throw malformed(`status ${shownName(status)} needs two paths`);
-    records.push({ status: 'renamed', path, oldPath, similarity: Number(score) });
-    at += 3;
+    const read = readRecord(fields, at);
+    if ('kind' in read) return read;
+    records.push(read.record);
+    at += read.width;
   }
-  return records;
+  return { ok: true, records };
 }
 
 /** Whether `path` lies under `prefix` (which is empty, or ends in `/`). */
@@ -225,15 +243,46 @@ export function changedFilesUnderPrefix(records: readonly GitNameStatusRecord[],
   return { ok: true, files };
 }
 
-/** One ASCII byte, lower-cased — git's own folding under `core.ignorecase`. */
-function foldByte(byte: number): number {
-  return byte >= 0x41 && byte <= 0x5a ? byte + 0x20 : byte;
+/** A path segment as a case-insensitive, normalisation-insensitive filesystem (APFS) compares it. */
+function foldSegment(segment: string): string {
+  return segment.normalize('NFD').toUpperCase().toLowerCase().normalize('NFD');
 }
 
-/** Whether `path` lies under `prefix` once both are case-folded, but not byte for byte. */
-function isUnderInAnotherCase(path: Uint8Array, prefix: Uint8Array): boolean {
-  if (path.length <= prefix.length || isUnder(path, prefix)) return false;
-  return prefix.every((byte, index) => foldByte(byte) === foldByte(path[index] ?? NUL));
+/**
+ * A git path's `/`-separated segments, split on the byte so no decode can move a separator.
+ *
+ * @returns Each segment's text, or undefined when one is not UTF-8
+ */
+function segmentsOf(path: Uint8Array): string[] | undefined {
+  const segments: string[] = [];
+  let start = 0;
+  for (let index = 0; index <= path.length; index++) {
+    if (index < path.length && path[index] !== SLASH) continue;
+    const segment = decodeUtf8Exactly(path.subarray(start, index));
+    if (segment === undefined) return undefined;
+    segments.push(segment);
+    start = index + 1;
+  }
+  return segments;
+}
+
+/**
+ * The leading segments of `path` that spell `prefix` once both are case-folded and normalised, when
+ * they are not `prefix` byte for byte.
+ *
+ * @param path - A path git listed, from the repository's top
+ * @param prefix - The root's path from the repository's top, ending in `/`
+ * @returns That other spelling, ending in `/`, or undefined when the path agrees or lies elsewhere
+ */
+function spellingInAnotherForm(path: Uint8Array, prefix: Uint8Array): string | undefined {
+  if (isUnder(path, prefix)) return undefined;
+  const wanted = segmentsOf(prefix)?.slice(0, -1);
+  const segments = segmentsOf(path);
+  // A segment that is not UTF-8 spells nothing to fold; the listing's own read refuses it.
+  if (wanted === undefined || segments === undefined || segments.length <= wanted.length) return undefined;
+  const leading = segments.slice(0, wanted.length);
+  const agrees = leading.every((segment, index) => foldSegment(segment) === foldSegment(wanted[index] ?? ''));
+  return agrees ? `${leading.join('/')}/` : undefined;
 }
 
 /**
@@ -247,13 +296,13 @@ function isUnderInAnotherCase(path: Uint8Array, prefix: Uint8Array): boolean {
 export function caseSpellingRefusal(records: readonly GitNameStatusRecord[], prefix: Uint8Array): Refusal | undefined {
   if (prefix.length === 0) return undefined;
   const sides = records.flatMap((record) => (record.oldPath === null ? [record.path] : [record.oldPath, record.path]));
-  const other = sides.find((path) => isUnderInAnotherCase(path, prefix));
+  const other = sides.map((path) => spellingInAnotherForm(path, prefix)).find((spelling) => spelling !== undefined);
   if (other === undefined) return undefined;
   return {
     ok: false,
     kind: 'repository',
     reason: `git reports this root as ${shownName(prefix)} but the diff names a path under it as`
-      + ` ${shownName(other.subarray(0, prefix.length))}, so its change cannot be matched to the root.`
+      + ` ${shownName(other)} (another case or Unicode normalisation), so its change cannot be matched to the root.`
       + ' Point VAT at the directory in the spelling git lists, or make the case agree in the repository.',
   };
 }
@@ -359,9 +408,10 @@ export function mergeBaseOf(base: string, listing: string): { ok: true; commit: 
         + ' HEAD descends from.',
     };
   }
+  // The base's fault: the fix is another argument, one of these.
   return {
     ok: false,
-    kind: 'repository',
+    kind: 'base',
     reason: `The base ${shownName(base)} has ${String(commits.length)} merge bases with HEAD (${commits.join(', ')}),`
       + ' so "what this change touched" has no single answer. Pass one of them, or another commit HEAD'
       + ' descends from, as the base.',
@@ -409,28 +459,85 @@ function rootPrefix(root: string): { ok: true; prefix: Uint8Array } | Refusal {
 function snapshotTree(root: string): { ok: true; tree: string } | Refusal {
   const snapshot = gitTreeSnapshot({ cwd: root });
   if (snapshot !== null) return { ok: true, tree: snapshot.hash };
+  const unreadable = unreadableSnapshotRefusal(root);
+  if (unreadable !== undefined) return { ok: false, kind: 'repository', reason: unreadable.message };
+  // The snapshot reports no cause, so what it cannot tell apart is named, never classed as the tree's.
   return {
     ok: false,
-    kind: 'repository',
-    reason: unreadableSnapshotRefusal(root)?.message
-      ?? 'git could not snapshot the working tree (`git add --all` into a throwaway index failed), so there is'
-        + ' nothing to compare with the base. A nested repository with no commit checked out is one cause;'
-        + ' run `git add --all --dry-run` here to see git\'s own reason.',
+    kind: 'git-failed',
+    reason: 'git could not snapshot the working tree (`git add --all` into a throwaway index, then `write-tree`),'
+      + ' so there is nothing to compare with the base. Either git did not finish within the snapshot\'s 30 s limit'
+      + ' (a large or cold tree: run again once it is warm), or git refused the tree (a nested repository with no'
+      + ' commit is one cause). Run `git add --all --dry-run` here to see git\'s own reason.',
   };
+}
+
+/**
+ * One history-sized git command's bytes — the diff, or a walk of the commits — or the
+ * refusal for a git that did not finish or did not succeed. The argv goes to `runGitBytes` at the call site.
+ *
+ * @returns git's output, or a refusal
+ */
+function bytesOf(subcommand: string, result: ReturnType<typeof runGitBytes>): { ok: true; stdout: Uint8Array } | Refusal {
+  if (result.ok) return { ok: true, stdout: result.stdout };
+  return gitDidNotRun(subcommand, result) ?? { ok: false, kind: 'repository', reason: `git ${subcommand} failed.${gitSaid(result.stderr)}` };
 }
 
 /**
  * The one diff: the merge base against the snapshot, every path from the repository's top.
  *
  * @returns The records, or a refusal
- * @throws Error When git writes a listing it should never write
  */
 function diffRecords(root: string, from: string, to: string): { ok: true; records: GitNameStatusRecord[] } | Refusal {
-  const result = runGitBytes(['diff-tree', '-r', '-M', '-l0', '--name-status', '-z', '--no-relative', from, to], { cwd: root });
-  if (!result.ok) {
-    return gitDidNotRun('diff-tree', result) ?? { ok: false, kind: 'repository', reason: `git diff-tree failed.${gitSaid(result.stderr)}` };
+  const listing = bytesOf('diff-tree', runGitBytes(['diff-tree', '-r', '-M', '-l0', '--name-status', '-z', from, to], { cwd: root }));
+  return listing.ok ? parseNameStatusZ(listing.stdout) : listing;
+}
+
+/** The fix for a merge base a shallow history cannot vouch for. */
+const DEEPEN_REMEDY = 'Fetch full history (actions/checkout fetch-depth: 0) or deepen until the merge base is reachable'
+  + ' (git fetch --deepen=<n>).';
+
+/**
+ * In a shallow clone, refuse a merge base a cut-off history could be hiding a nearer one behind:
+ * one of the commits between it and either tip is a shallow boundary, whose parents are not here.
+ * The merge base itself on the boundary is fine — nothing lies behind it that could be nearer.
+ *
+ * @param commits - The base commit and the merge base
+ * @returns A refusal naming the fix, or undefined when the history is whole (or not shallow at all)
+ */
+function shallowHistoryRefusal(root: string, commits: { base: string; mergeBase: string }): Refusal | undefined {
+  const shallow = ask(root, ['rev-parse', '--is-shallow-repository']);
+  if ('kind' in shallow) return shallow;
+  if (shallow.stdout !== 'true') return undefined;
+  const file = ask(root, ['rev-parse', '--git-path', 'shallow']);
+  if ('kind' in file) return file;
+  const boundary = readShallowBoundary(safePath.resolve(root, file.stdout));
+  if (boundary === undefined) {
+    return { ok: false, kind: 'repository', reason: `This shallow clone's boundary list cannot be read. ${DEEPEN_REMEDY}` };
   }
-  return { ok: true, records: parseNameStatusZ(result.stdout) };
+  const between = bytesOf('rev-list', runGitBytes(['rev-list', 'HEAD', commits.base, '--not', commits.mergeBase], { cwd: root }));
+  if (!between.ok) return between;
+  // Object names are hex, so an exact UTF-8 read cannot fail or re-spell one.
+  const hidden = (decodeUtf8Exactly(between.stdout) ?? '').split('\n').find((commit) => boundary.has(commit));
+  if (hidden === undefined) return undefined;
+  return {
+    ok: false,
+    kind: 'repository',
+    reason: `This is a shallow clone, and commit ${hidden} between the merge base and a tip is cut off from its`
+      + ' parents, so a nearer merge base could be hidden behind it and the changes listed could be wrong.'
+      + ` ${DEEPEN_REMEDY}`,
+  };
+}
+
+/** The commits a shallow clone's boundary file lists, or undefined when it cannot be read. */
+function readShallowBoundary(file: string): Set<string> | undefined {
+  try {
+    const text = decodeUtf8Exactly(readFileSync(file));
+    return text === undefined ? undefined : new Set(text.split('\n').filter((line) => line !== ''));
+  } catch (error) {
+    // Removed between the two questions: git unshallowed it, so nothing is a boundary.
+    return isPathAbsentError(error) ? new Set() : undefined;
+  }
 }
 
 /**
@@ -439,14 +546,14 @@ function diffRecords(root: string, from: string, to: string): { ok: true; record
  * what is compared and how a path crossing the root's boundary is reported.
  *
  * Never throws for a condition the caller can fix — no repository, no commits, a ref that names no
- * commit, no single merge base, a tree git cannot snapshot, a root spelled in another case, a path
- * that is not UTF-8 — and reports it instead, with whose fault it is and the fix.
+ * commit, no single merge base, a shallow history that cannot vouch for it, a tree git cannot
+ * snapshot, a root spelled in another case, a path that is not UTF-8, a listing VAT cannot read —
+ * and reports it instead, with whose fault it is and the fix.
  *
  * @param options - The question
  * @param options.root - Absolute directory inside a git working tree
  * @param options.base - A ref naming the base (`main`, `origin/main`, `HEAD~3`, a sha)
  * @returns The merge-base commit compared with and the changes relative to `root`, or why there are none
- * @throws Error When git writes a listing it should never write
  */
 export function gitChangedFiles(options: { root: string; base: string }): GitChangedFilesResult {
   const { root, base } = options;
@@ -458,6 +565,8 @@ export function gitChangedFiles(options: { root: string; base: string }): GitCha
   if (!resolved.ok) return resolved;
   const merged = mergeBase(root, base, resolved.commit);
   if (!merged.ok) return merged;
+  const cutOff = shallowHistoryRefusal(root, { base: resolved.commit, mergeBase: merged.commit });
+  if (cutOff !== undefined) return cutOff;
   const snapshot = snapshotTree(root);
   if (!snapshot.ok) return snapshot;
   const diff = diffRecords(root, merged.commit, snapshot.tree);

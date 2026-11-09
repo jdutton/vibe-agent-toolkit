@@ -227,12 +227,16 @@ moved since. `status` is `added`, `modified`, `deleted`, `renamed` or `type-chan
 `similarity` are set for a rename — a move is `renamed` whether or not you `git add`-ed it, a copy
 is `added`, and `git rm --cached` on an unchanged file is no row. A rename across the project root's
 boundary is seen from inside it (in = `added`, out = `deleted`); a nested repository or submodule is
-one row naming its directory. A statement reading it is **refused** naming the fix, with a code
-naming the fault: `USAGE_INVALID` only for a missing `--base` or a ref that names no commit;
-`BACKEND_UNAVAILABLE` when git could not run or finish; `INPUT_UNREADABLE` when the repository
-cannot answer (no commits yet; no merge base — a shallow CI clone: fetch more history; more than one
-merge base — pass one of them; a working tree git cannot snapshot; the root spelled in another case
-on a case-insensitive filesystem). The exit code does not tell these apart — the code does:
+one row naming its directory. A conflicted file mid-merge is listed as it stands on disk, markers
+and all; a file marked assume-unchanged or skip-worktree is seen as git sees it (an edit to it is
+no row). A statement reading it is **refused** naming the fix, with a code naming the fault:
+`USAGE_INVALID` for a missing `--base`, a ref that names no commit, or one with more than one merge
+base with `HEAD` (pass one of them); `BACKEND_UNAVAILABLE` when git could not run or finish,
+including a snapshot past its 30 s limit or refused over a nested repository with no commit;
+`INPUT_UNREADABLE` when the repository cannot answer (no commits yet; no merge base; a shallow CI
+clone whose history stops before the merge base — `actions/checkout` `fetch-depth: 0`, or
+`git fetch --deepen=<n>` until it is reachable; a file git cannot read; the root spelled in another
+case or Unicode normalisation where git ignores case). The exit code does not tell these apart — the code does:
 `vat resources query` publishes it as `error.code`; for a check it is `RESOURCE_CHECK_BROKEN` on
 that check only, carrying `reason: { refusal: <code> }`. `--base` is read only when a statement
 names `changed_files`. Scope a check to what a change touched:
@@ -308,7 +312,8 @@ mean anything.
 ⛔ **A built-in is never SQL.** It is a TypeScript predicate over the projection's rows
 (`BUILTIN_CHECKS` in `@vibe-agent-toolkit/resources`), so a default-on rule never makes a query
 engine part of somebody's gate. Its SQL twin ships as documentation in `--help` and in the code's
-entry in `validation-codes.md`, for you to copy into your own `resources.checks` and narrow.
+entry in `validation-codes.md`, for you to copy into your own `resources.checks` and narrow —
+under a name of its own: a declared check named like a built-in is refused at config load.
 
 Three consequences worth knowing:
 
@@ -355,7 +360,7 @@ evidence — rendered into the message and published as the finding's `evidence`
 
 | Column | Becomes | NULL or absent |
 |---|---|---|
-| `path` | the finding's `location` (a project-relative path; anything else stays in `evidence`) | no location |
+| `path` | the finding's `location`: a relative POSIX path inside the root (not absolute, no drive, no backslash, no `..` out of the root — anything else breaks the check, on every platform); never evidence | no location |
 | `finding_severity` | that row's severity: `error`, `warning` or `info` | the check's declared severity |
 | `finding_line` | the finding's 1-based `line` | no line |
 | `finding_column` | the finding's 1-based `column` — requires `finding_line` | no column |
@@ -365,7 +370,8 @@ A value a reserved column cannot mean — `finding_severity` `'high'`, `'Error'`
 `RESOURCE_CHECK_BROKEN`, naming the row and the value; its cost record carries `broken: true`
 **with** `rows` (the statement ran, its rows could not be read). A column that matches a reserved
 name only case-insensitively (`Finding_Line`) earns one stderr warning per check, stays evidence,
-and is listed on that check's `data.checks` entry as `nearMisses: ['Finding_Line']`.
+and is listed on that check's `data.checks` entry as `nearMisses: ['Finding_Line']` — read from the
+statement's columns, so even a check that selected no rows lists it.
 
 No projection table has a `finding_*` column, so `SELECT *` or a join never sets one — a table's own
 `severity`, `line` or `column` is plain evidence. Place a finding on purpose:
@@ -416,7 +422,7 @@ skills-have-owners:
   `{ statement: 'examined', rows, columns?, value?, allowed }`.
 - ⚠️ `examined` is OPTIONAL, so a check that declares none **can pass over an empty population** —
   nothing refuses it. Declare it on every check; a consumer that needs the guarantee can require
-  an `examined` key on each `data.checks` entry.
+  an `examined` key on each `data.checks` entry that is neither `builtin` nor `broken`.
 
 ### A size ratchet is a check with its baseline inline
 

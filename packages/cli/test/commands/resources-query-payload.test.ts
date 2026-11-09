@@ -21,7 +21,12 @@ import {
   type ProjectionQueryPayloadInput,
 } from '../../src/commands/resources/query.js';
 import { refusalCodeOf } from '../../src/utils/command-refusal.js';
-import { describedFailure, describeQueryFailure } from '../../src/utils/projection-query.js';
+import { describedFailure, describeQueryFailure, refusedStatement } from '../../src/utils/projection-query.js';
+
+/** Every derived relation absent, as in a run whose statements named none of them. */
+const NONE_EVALUATED: ReadonlySet<string> = new Set(allDerivedSpecs().map((spec) => spec.name));
+/** Nothing absent: the compile probe, which carries every relation. */
+const ALL_PRESENT: ReadonlySet<string> = new Set();
 
 /** A stand-in for whatever a statement selected. Two rows, so a count of 1 cannot pass. */
 const ROWS: readonly Record<string, unknown>[] = [
@@ -184,6 +189,7 @@ describe('the failure message', () => {
     const message = describeQueryFailure(
       'SELECT contentHash FROM blobs',
       'no such column: contentHash',
+      NONE_EVALUATED,
     );
 
     expect(message).toContain('no such column: contentHash');
@@ -194,7 +200,7 @@ describe('the failure message', () => {
   });
 
   it('lists every table when the statement named none of them', () => {
-    const message = describeQueryFailure('SELECT * FROM nope', 'no such table: nope');
+    const message = describeQueryFailure('SELECT * FROM nope', 'no such table: nope', NONE_EVALUATED);
 
     expect(message).toContain('no such table: nope');
     for (const spec of Object.values(PROJECTION_TABLES)) {
@@ -211,7 +217,7 @@ describe('the failure message', () => {
     // engine message is the refusal of an unevaluated relation — not a typo. A
     // listing of "what you could have named" would include the very relation
     // SQLite just said is missing, and read as a contradiction.
-    const message = describeQueryFailure(sql, engine);
+    const message = describeQueryFailure(sql, engine, NONE_EVALUATED);
 
     expect(message).toContain(engine);
     expect(message).toMatch(/edges.*not evaluated for this run/s);
@@ -220,38 +226,39 @@ describe('the failure message', () => {
 
   it('names EVERY derived relation from the registry, not a hand-kept list', () => {
     for (const spec of allDerivedSpecs()) {
-      expect(describeQueryFailure(`SELECT * FROM ${spec.name}`, `no such table: ${spec.name}`))
+      expect(describeQueryFailure(`SELECT * FROM ${spec.name}`, `no such table: ${spec.name}`, NONE_EVALUATED))
         .toContain('not evaluated for this run');
     }
   });
 
-  it('gives a relation whose lens REFUSED that refusal, not "declare this statement"', () => {
-    // 🚨 The statement WAS declared: the lens ran and could not answer (no
-    // `--base`, say). The reason is the fix, and "declare it" would send the
-    // reader after a problem they do not have.
-    const refusals = new Map([['changed_files', { refused: 'Pass --base <ref>.', refusal: 'USAGE_INVALID' as const }]]);
-    const message = describeQueryFailure('SELECT path FROM changed_files', 'no such table: changed_files', refusals);
+  it('refuses a statement naming a REFUSED relation before it runs, with that lens\'s code and fix', () => {
+    // 🚨 Decided from the relations the statement NAMES, never from the engine's text: SQLite
+    // names only the FIRST missing table, so a typo beside `changed_files` used to hide the
+    // lens's refusal behind "no such table: typo_tbl" and a USAGE_INVALID that was not the fix.
+    const refusals = new Map([['changed_files', { refused: 'Pass --base <ref>.', refusal: 'INPUT_UNREADABLE' as const }]]);
 
-    expect(message).toContain('no such table: changed_files');
-    expect(message).toContain('could not be evaluated for this run: Pass --base <ref>.');
-    expect(message).not.toContain('Declare this statement');
-  });
-
-  it('refuses with the LENS\'s refusal code, never the statement\'s USAGE_INVALID', () => {
-    // A repository git cannot read is the environment's fault: the statement is fine.
-    const refusals = new Map([['changed_files', { refused: 'not a git working tree.', refusal: 'INPUT_UNREADABLE' as const }]]);
-    const engine = new VatError(PROJECTION_STATEMENT_REFUSED_CODE, 'no such table: changed_files');
-
-    const error = describedFailure('SELECT path FROM changed_files', engine, refusals);
+    const error = refusedStatement('SELECT t.x, c.path FROM typo_tbl t, changed_files c', refusals);
 
     expect(refusalCodeOf(error)).toBe('INPUT_UNREADABLE');
-    expect(error.message).toContain('not a git working tree.');
-    expect(refusalCodeOf(describedFailure('SELECT * FROM nope', new VatError(PROJECTION_STATEMENT_REFUSED_CODE, 'no such table: nope'), refusals)))
-      .toBe('USAGE_INVALID');
+    expect(error?.message).toContain('could not be evaluated for this run: Pass --base <ref>.');
+    expect(error?.message).not.toContain('Declare this statement');
+  });
+
+  it('refuses nothing a statement does not name: a comment or a literal mentioning the relation is not a read', () => {
+    const refusals = new Map([['changed_files', { refused: 'Pass --base <ref>.', refusal: 'USAGE_INVALID' as const }]]);
+
+    expect(refusedStatement("SELECT 'changed_files' AS x -- changed_files", refusals)).toBeUndefined();
+    expect(refusedStatement('SELECT path FROM resource_realizations', refusals)).toBeUndefined();
+  });
+
+  it('keeps a statement failure\'s own code and never reads a code out of the engine\'s text', () => {
+    const engine = new VatError(PROJECTION_STATEMENT_REFUSED_CODE, 'no such table: changed_files');
+
+    expect(refusalCodeOf(describedFailure('SELECT path FROM changed_files', engine, ALL_PRESENT))).toBe('USAGE_INVALID');
   });
 
   it('does not call a missing PROJECTION table unevaluated', () => {
-    expect(describeQueryFailure('SELECT * FROM edgesx', 'no such table: edgesx'))
+    expect(describeQueryFailure('SELECT * FROM edgesx', 'no such table: edgesx', NONE_EVALUATED))
       .not.toContain('not evaluated');
   });
 
@@ -264,6 +271,7 @@ describe('the failure message', () => {
     const write = describeQueryFailure(
       'DELETE FROM blobs',
       'attempt to write a readonly database',
+      NONE_EVALUATED,
     );
 
     expect(write).toBe('attempt to write a readonly database');

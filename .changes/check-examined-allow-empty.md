@@ -12,7 +12,8 @@
   `SELECT COUNT(*)` returns), is `RESOURCE_CHECK_BROKEN`; for the latter the finding's `reason` is
   `{statement: 'examined', rows, columns?, value?, allowed}`. The same holds in `vat validate`'s
   `checks` phase. A check entry carries `examinedNothing: true` exactly when that check produced
-  `RESOURCE_CHECK_EXAMINED_NOTHING`.
+  `RESOURCE_CHECK_EXAMINED_NOTHING`. A consumer that needs the guarantee can require `examined` on
+  every entry that is neither `builtin` nor `broken`.
 - **A budget kill or death during a check's examined statement names that statement**, and records
   the check as broken with its `rows` (and `allowEmpty`), instead of blaming the violations
   statement. Its `durationSecs` covers only the violations statement — the examined statement never

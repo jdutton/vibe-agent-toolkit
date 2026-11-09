@@ -41,6 +41,7 @@ import {
   describeUninterpretableRows,
   examinedCount,
   issuesFromCheckRows,
+  nearMissesOf,
   uninterpretableRowsReason,
   type BoundBuiltinCheck,
   type CheckIssue,
@@ -83,6 +84,7 @@ import { assertDirectoryArgument, projectRootOrLoudCwd, projectRootOrNull } from
 import {
   withQueriedProjection,
   type AskProjection,
+  type ColumnsOfStatement,
   type PopulationExtent,
   type ProjectionProvenance,
 } from '../../utils/projection-query.js';
@@ -609,6 +611,8 @@ interface CheckSelection {
   readonly rows: number;
   /** Set for a statement: its rows convert after the timed span, announced as `converting`. */
   readonly converts: boolean;
+  /** Result columns that miss a reserved name only by case — from the statement's columns, never a row. */
+  readonly nearMisses: readonly NearMiss[];
   /** Turn them into findings. Deliberately OUTSIDE the timed span. */
   readonly report: () => CheckRowConversion;
 }
@@ -640,16 +644,18 @@ interface CheckUnit {
  *
  * @param name - The check's key in `resources.checks`
  * @param check - Its declaration
- * @param ask - Runs one statement against the populated projection
+ * @param query - Runs one statement against the populated projection, and names a statement's columns
  * @returns The runnable unit
  */
-function sqlCheckUnit(name: string, check: ResourceCheck, ask: AskProjection): CheckUnit {
+function sqlCheckUnit(name: string, check: ResourceCheck, query: CheckQuery): CheckUnit {
   const { examined } = check;
+  const { ask } = query;
   return {
     name,
     select: () => {
       const rows = ask(check.sql);
-      return { rows: rows.length, converts: true, report: () => issuesFromCheckRows(name, check, rows) };
+      const nearMisses = nearMissesOf(query.columnsOf(check.sql));
+      return { rows: rows.length, converts: true, nearMisses, report: () => issuesFromCheckRows(name, check, rows) };
     },
     // 🪤 Only the count leaves: the statement's result is never a finding or evidence.
     ...(examined === undefined ? {} : { examine: () => examinedCount(ask(examined)) }),
@@ -676,7 +682,8 @@ function builtinCheckUnit(builtin: BoundBuiltinCheck): CheckUnit {
       return {
         rows: found.length,
         converts: false,
-        report: () => ({ ok: true, issues: found.map((issue) => ofCheck(builtin.name, issue)), nearMisses: [] }),
+        nearMisses: [],
+        report: () => ({ ok: true, issues: found.map((issue) => ofCheck(builtin.name, issue)) }),
       };
     },
   };
@@ -689,25 +696,29 @@ function builtinCheckUnit(builtin: BoundBuiltinCheck): CheckUnit {
  * document's `checks[]` opens with the same rules in the same order for every
  * project and a reader comparing two runs compares like with like.
  *
- * 🪤 A project MAY declare a check whose key equals a built-in's name. Both run,
- * both are priced, `builtin` on the cost record tells them apart, and
- * `--check <name>` selects both. Not refused: a new config error is a breaking
- * change and nothing about the collision is unsafe.
+ * A declared check never shares a built-in's name: the config refuses it, so every finding,
+ * progress line and cost record is keyed on one check.
  *
  * @param builtins - The default set, bound to this run's projection
  * @param checks - The project's `resources.checks`
- * @param ask - Runs one statement against the populated projection
+ * @param query - Runs one statement against the populated projection, and names its columns
  * @returns The units, built-ins first
  */
 function checkUnits(
   builtins: readonly BoundBuiltinCheck[],
   checks: Readonly<Record<string, ResourceCheck>>,
-  ask: AskProjection,
+  query: CheckQuery,
 ): CheckUnit[] {
   return [
     ...builtins.map((builtin) => builtinCheckUnit(builtin)),
-    ...Object.entries(checks).map(([name, check]) => sqlCheckUnit(name, check, ask)),
+    ...Object.entries(checks).map(([name, check]) => sqlCheckUnit(name, check, query)),
   ];
+}
+
+/** How a declared check reaches the projection: its rows, and its result columns without its rows. */
+interface CheckQuery {
+  readonly ask: AskProjection;
+  readonly columnsOf: ColumnsOfStatement;
 }
 
 /** A completed check's progress line. */
@@ -723,9 +734,12 @@ function convertSelection(
   sinks: { onProgress: ProgressSink | undefined; warn: ((message: string) => void) | undefined },
 ): CheckRowConversion {
   if (selection.converts) sinks.onProgress?.({ kind: 'converting', ...line });
-  const converted = selection.report();
-  if (converted.ok && converted.nearMisses.length > 0) sinks.warn?.(nearMissWarning(line.name, converted.nearMisses));
-  return converted;
+  return selection.report();
+}
+
+/** A selection's near misses as every record after it carries them: absent, never `[]`, when none. */
+function nearMissesField(selection: CheckSelection): { nearMisses?: string[] } {
+  return selection.nearMisses.length === 0 ? {} : { nearMisses: selection.nearMisses.map(({ column }) => column) };
 }
 
 /** Where one unit reports what it is doing: the progress log, and a near miss's warning. */
@@ -746,7 +760,7 @@ function examineUnit(
   name: string,
   examine: () => ExaminedCount,
   now: () => number,
-  violations: { durationMs: number; rows: number; allowEmpty?: true },
+  violations: { durationMs: number; rows: number; allowEmpty?: true; nearMisses?: string[] },
   onProgress: ProgressSink | undefined,
 ): Timed<ExaminedCount> {
   onProgress?.({ kind: 'examining', name, ...violations });
@@ -776,25 +790,26 @@ function runUnit(unit: CheckUnit, now: () => number, sinks: UnitSinks): UnitResu
   }
 
   const { rows } = outcome.value;
+  // From the statement's columns, so on every record after the statement — broken or not, any row count.
+  const nearMisses = nearMissesField(outcome.value);
+  if (outcome.value.nearMisses.length > 0) sinks.warn?.(nearMissWarning(name, outcome.value.nearMisses));
   const examined = examine === undefined
     ? undefined
-    : examineUnit(name, examine, now, { durationMs: outcome.durationMs, rows, ...allowEmpty }, sinks.onProgress);
+    : examineUnit(name, examine, now, { durationMs: outcome.durationMs, rows, ...allowEmpty, ...nearMisses }, sinks.onProgress);
   const durationMs = outcome.durationMs + (examined?.durationMs ?? 0);
   const unexamined = examinedRefusal(name, examined);
   if (unexamined !== undefined) {
     // `rows` is real; `examined` is absent, never a refusable 0.
-    const cost = { name, durationMs, rows, broken: true as const, ...origin };
+    const cost = { name, durationMs, rows, broken: true as const, ...origin, ...nearMisses };
     return { cost, refusal: unexamined, issues: [] };
   }
 
   const counted = examined?.ok === true && examined.value.ok ? { examined: examined.value.count } : {};
-  const converted = convertSelection(outcome.value, { name, durationMs, rows, ...counted, ...allowEmpty }, sinks);
+  const converted = convertSelection(outcome.value, { name, durationMs, rows, ...counted, ...allowEmpty, ...nearMisses }, sinks);
   if (!converted.ok) {
-    const cost = { name, durationMs, rows, broken: true as const, ...counted, ...origin };
+    const cost = { name, durationMs, rows, broken: true as const, ...counted, ...origin, ...nearMisses };
     return { cost, refusal: uninterpretableRowsFinding(name, converted), issues: [] };
   }
-  // The same value the stderr warning is worded from, so the document and stderr cannot disagree.
-  const nearMisses = converted.nearMisses.length === 0 ? {} : { nearMisses: converted.nearMisses.map(({ column }) => column) };
   const cost = { name, durationMs, rows, ...counted, ...origin, ...nearMisses };
   return {
     cost,
@@ -1553,6 +1568,7 @@ function stoppedMidCheck(
       broken: true,
       ...examined,
       ...(line.allowEmpty === undefined ? {} : { allowEmpty: line.allowEmpty }),
+      ...(line.nearMisses === undefined ? {} : { nearMisses: line.nearMisses }),
     },
     finding: ofCheck(line.name, runIntegrityFinding(
       `The check "${line.name}" ran and selected ${String(line.rows)} ${line.rows === 1 ? 'row' : 'rows'}, but the run`
@@ -1693,6 +1709,7 @@ export function runProjectChecks(options: {
   checks: Readonly<Record<string, ResourceCheck>>;
   only: string | undefined;
   ask: AskProjection;
+  columnsOf: ColumnsOfStatement;
   validation: SeverityOverrides | undefined;
   membersEnumerated: number;
   now?: () => number;
@@ -1708,7 +1725,7 @@ export function runProjectChecks(options: {
 }): { issues: CheckIssue[]; costs: CheckCost[] } {
   const now = options.now ?? (() => performance.now());
   const { issues, costs } = runUnits(
-    checkUnits(options.builtins, options.checks, options.ask),
+    checkUnits(options.builtins, options.checks, options),
     options.only,
     now,
     options.onProgress,
@@ -2203,7 +2220,7 @@ function runOutcome(options: {
   // which relations exist.
   // 🪤 `examined` statements included, or a relation only they name reads EMPTY.
   const statements = Object.values(checks).flatMap((check) => checkStatements(check));
-  return withQueriedProjection({ root, logger, statements, base },(ask, provenance, extent, projection) => {
+  return withQueriedProjection({ root, logger, statements, base }, (ask, provenance, extent, projection, columnsOf) => {
     // 🔑 Emitted HERE, inside the callback, because this is the one place where
     // the provenance and the extent are both exactly in hand — and emitted the
     // INSTANT population completes, because its arrival is what tells a
@@ -2233,6 +2250,7 @@ function runOutcome(options: {
       checks,
       only,
       ask,
+      columnsOf,
       validation,
       ...extent,
       onProgress,

@@ -67,6 +67,7 @@ import {
   lensesNamedBy,
   lensRelationNames,
   lensPopulationOf,
+  relationsNamedBy,
   type LensEvaluation,
   type LensRefusal,
 } from './projection-lenses.js';
@@ -83,11 +84,8 @@ import { openCompileProbe, openEphemeralQueryStore, withPopulationCache } from '
  */
 const EPHEMERAL_TREE_HASH = 'ephemeral';
 
-/** What SQLite says when a statement names a table the schema does not have. */
-const TABLE_NOT_FOUND = 'no such table:';
-
-/** What SQLite says when a statement names something the schema does not have. */
-const NAME_NOT_FOUND: readonly string[] = [TABLE_NOT_FOUND, 'no such column:'];
+/** What SQLite says when a statement names something the schema does not have: wording only, never a code. */
+const NAME_NOT_FOUND: readonly string[] = ['no such table:', 'no such column:'];
 
 /**
  * What a run's rows are, and where they came from.
@@ -275,7 +273,7 @@ export type AskProjection = (
 ) => readonly Record<string, unknown>[];
 
 /** The result columns one statement would produce, in order, without running it. */
-type ColumnsOfStatement = (sql: string, ...parameters: readonly string[]) => readonly string[];
+export type ColumnsOfStatement = (sql: string, ...parameters: readonly string[]) => readonly string[];
 
 /**
  * A statement's failure, reworded by {@link describeQueryFailure} — keeping
@@ -287,21 +285,36 @@ type ColumnsOfStatement = (sql: string, ...parameters: readonly string[]) => rea
  * anything uncoded is a defect. Rewording into a bare `Error` used to drop it,
  * so every refused statement read as VAT's own failure.
  *
- * 🔑 A relation a lens REFUSED carries that lens's refusal code instead: a repository git cannot
- * read is the environment's fault, not the statement's.
+ * A relation a lens REFUSED never reaches here: {@link refusedStatement} refuses its statement
+ * before it runs, so no code is ever read out of the engine's text.
  *
  * @param sql - The statement that was submitted
  * @param error - What running or compiling it threw
- * @param refusals - Each refused lens's refusal, by the SQL name of a relation it owns
+ * @param absent - The derived relations the database does not hold (none for the compile probe)
  * @returns The error to throw in its place
  */
-export function describedFailure(sql: string, error: unknown, refusals: ReadonlyMap<string, LensRefusal> = new Map()): Error {
-  const engine = error instanceof Error ? error.message : String(error);
-  const message = describeQueryFailure(sql, engine, refusals);
-  const relation = unevaluatedRelationIn(engine);
-  const refused = relation === undefined ? undefined : refusals.get(relation);
-  if (refused !== undefined) return new CommandRefusalError(refused.refusal, message, { cause: error });
+export function describedFailure(sql: string, error: unknown, absent: ReadonlySet<string>): Error {
+  const message = describeQueryFailure(sql, error instanceof Error ? error.message : String(error), absent);
   return isVatError(error) ? new VatError(error.code, message, { cause: error }) : new Error(message, { cause: error });
+}
+
+/**
+ * The refusal for a statement that names a relation its lens REFUSED to produce — decided from
+ * the relations the statement names, before it runs, so the lens's code and fix reach the
+ * operator whatever else in the statement SQLite would have stopped at first.
+ *
+ * @param sql - The statement about to run
+ * @param refusals - Each refused lens's refusal, by the SQL name of a relation it owns
+ * @returns The refusal, or undefined when the statement names no refused relation
+ */
+export function refusedStatement(sql: string, refusals: ReadonlyMap<string, LensRefusal>): CommandRefusalError | undefined {
+  const [relation] = relationsNamedBy(sql, refusals.keys());
+  const refused = relation === undefined ? undefined : refusals.get(relation);
+  if (relation === undefined || refused === undefined) return undefined;
+  return new CommandRefusalError(
+    refused.refusal,
+    `This statement reads ${relation}, a derived relation that could not be evaluated for this run: ${refused.refused}`,
+  );
 }
 
 /**
@@ -357,7 +370,7 @@ export async function assertQueriesCompile(statements: readonly PreflightStateme
       try {
         probe.assertCompiles(sql, parameters);
       } catch (error) {
-        throw describedFailure(sql, error);
+        throw describedFailure(sql, error, new Set());
       }
     }
   } finally {
@@ -484,9 +497,9 @@ export async function withQueriedProjection<T>(
       // ⛔ The narrowing is safe ONLY because an unevaluated relation does not
       // EXIST in `store`: the backend creates a derived table on the write that
       // fills it, so a statement naming one no lens filled fails `no such table`
-      // in SQLite itself — whatever spelling slipped past the selector's scan —
-      // and {@link describeQueryFailure} says why. Create the relations up front
-      // and this becomes a silent wrong answer: an empty table selecting zero rows.
+      // in SQLite itself — whatever spelling slipped past the selector's scan.
+      // Create the relations up front and this becomes a silent wrong answer: an
+      // empty table selecting zero rows.
       const lenses = lensesNamedBy(options.statements);
       const lensStart = performance.now();
       // Sequential, not `Promise.all`: a lens may populate, and two
@@ -494,8 +507,9 @@ export async function withQueriedProjection<T>(
       // lane has no reason to invite.
       const lensPopulations: LensEvaluation['population'][] = [];
       const evaluated: string[] = [];
-      // 🚨 A REFUSED lens writes nothing; its reason rides on SQLite's refusal.
+      // 🚨 A REFUSED lens writes nothing; a statement naming its relation is refused before it runs.
       const refusals = new Map<string, LensRefusal>();
+      const absent = new Set(allDerivedSpecs().map((spec) => spec.name));
       await forEachInOrder(lenses, async (lens) => {
         const evaluation = await evaluateLens(lens, { projection, root, base: options.base, cache, logger });
         if ('refused' in evaluation) {
@@ -504,25 +518,24 @@ export async function withQueriedProjection<T>(
         }
         evaluated.push(lens.name);
         lensPopulations.push(evaluation.population);
+        for (const relation of lensRelationNames(lens)) absent.delete(relation);
         await store.writeDerived(evaluation.rows);
       });
       const lensMs = performance.now() - lensStart;
       // The shared setup is done. Everything after this line is the caller's.
 
-      const ask: AskProjection = (sql, ...parameters) => {
+      /** Run one statement against the store, unless it names a relation a lens refused. */
+      const guarded = <R>(sql: string, run: () => R): R => {
+        const refused = refusedStatement(sql, refusals);
+        if (refused !== undefined) throw refused;
         try {
-          return store.query(sql, ...parameters);
+          return run();
         } catch (error) {
-          throw describedFailure(sql, error, refusals);
+          throw describedFailure(sql, error, absent);
         }
       };
-      const columnsOf: ColumnsOfStatement = (sql, ...parameters) => {
-        try {
-          return store.columns(sql, ...parameters);
-        } catch (error) {
-          throw describedFailure(sql, error, refusals);
-        }
-      };
+      const ask: AskProjection = (sql, ...parameters) => guarded(sql, () => store.query(sql, ...parameters));
+      const columnsOf: ColumnsOfStatement = (sql, ...parameters) => guarded(sql, () => store.columns(sql, ...parameters));
 
       return await work(
         ask,
@@ -549,25 +562,6 @@ export async function withQueriedProjection<T>(
       await store.close();
     }
   });
-}
-
-/**
- * The derived relation a `no such table` failure names, if it names one.
- *
- * SQLite echoes the reference as written — `edges`, `EDGES`, `main.edges` — so
- * the schema prefix is dropped and the comparison case-folds, as SQLite's own
- * name resolution does. Names come from the relation registry, never a list
- * kept here.
- *
- * @param message - What the engine said
- * @returns The relation's registry spelling, or undefined
- */
-function unevaluatedRelationIn(message: string): string | undefined {
-  const at = message.indexOf(TABLE_NOT_FOUND);
-  if (at === -1) return undefined;
-  const reference = message.slice(at + TABLE_NOT_FOUND.length).trim().split(/\s/u)[0] ?? '';
-  const bare = reference.slice(reference.lastIndexOf('.') + 1).toLowerCase();
-  return allDerivedSpecs().find((spec) => spec.name.toLowerCase() === bare)?.name;
 }
 
 /**
@@ -601,15 +595,11 @@ function unevaluatedRelationIn(message: string): string | undefined {
  *
  * @param sql - The statement that was submitted
  * @param message - What the engine said
- * @param refusals - Why each relation a lens REFUSED to produce is absent, by SQL name
+ * @param absent - The derived relations the database does not hold, by SQL name
  * @returns The message to surface, with the queryable surface appended when the
  *   failure was a name this projection does not have
  */
-export function describeQueryFailure(
-  sql: string,
-  message: string,
-  refusals: ReadonlyMap<string, LensRefusal> = new Map(),
-): string {
+export function describeQueryFailure(sql: string, message: string, absent: ReadonlySet<string>): string {
   if (!NAME_NOT_FOUND.some((prefix) => message.includes(prefix))) return message;
 
   // 🚨 A MISSING DERIVED RELATION IS NOT A TYPO — it is the refusal that makes
@@ -617,17 +607,10 @@ export function describeQueryFailure(
   // relation only when a lens fills it, so one no lens was evaluated for is
   // absent, and SQLite refuses it rather than answering `0` from an empty table
   // (indistinguishable from a tree with no links, and for `vat resources check`
-  // a rule that could no longer fail). The refusal is the engine's, so it holds
-  // for any spelling the lens selector's scan missed; this only says why. For
-  // `check` it surfaces as a `RESOURCE_CHECK_BROKEN` finding naming the rule.
-  // The compile preflight never reaches here with one: its probe has them all.
-  const unevaluated = unevaluatedRelationIn(message);
+  // a rule that could no longer fail). Which relation is read off the statement,
+  // never out of the engine's text. The compile probe holds them all.
+  const [unevaluated] = relationsNamedBy(sql, absent);
   if (unevaluated !== undefined) {
-    const refused = refusals.get(unevaluated);
-    if (refused !== undefined) {
-      return `${message}\n\nThis statement reads ${unevaluated}, a derived relation that could not be`
-        + ` evaluated for this run: ${refused.refused}`;
-    }
     return `${message}\n\n`
       + `This statement reads ${unevaluated}, a derived relation that was not evaluated for this run:`
       + ' no statement the run DECLARED names it, so no lens producing it ran and there is no answer'

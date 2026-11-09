@@ -271,14 +271,20 @@ snapshot, a move is `renamed` whether or not it was `git add`ed; a copy is `adde
 from the index but unchanged on disk (`git rm --cached`) is no row. A rename across the root's
 boundary is seen from inside: renamed in is `added`, renamed out is `deleted`. A submodule, or a
 nested repository with a commit, is one row naming its directory, listed when the commit it records
-moved; its files are its own. A statement reading it is refused with the fix — never answered with
-an empty relation — and the refusal code says whose fault it is: `USAGE_INVALID` without `--base`
-or with a ref that names no commit; `BACKEND_UNAVAILABLE` when git did not finish (not on PATH, out
-of time, more output than VAT reads — compare against a nearer base); `INPUT_UNREADABLE` when the
-tree cannot answer — outside a git working tree, no commits yet, no merge base (a shallow clone:
-fetch more history), several merge bases (a criss-cross history: pass one of them), a tree git
-cannot snapshot, a path under the root that git spells in another case on either side of the diff,
-or a path that is not UTF-8. The exit code does not tell these apart — the code does: `vat
+moved; its files are its own. A conflicted file mid-merge is listed as it stands on disk, conflict
+markers and all — the snapshot is the working tree. A file marked assume-unchanged or skip-worktree
+is seen as git sees it: an edit to it yields no row. A statement reading it is refused with the fix —
+never answered with an empty relation — and the refusal code says whose fault it is:
+`USAGE_INVALID` without `--base`, with a ref that names no commit, or with one that has several
+merge bases with `HEAD` (a criss-cross history: pass one of them); `BACKEND_UNAVAILABLE` when git
+did not finish (not on PATH, out of time, more output than VAT reads — compare against a nearer
+base) or could not snapshot the tree (past the snapshot's 30 s limit, or a nested repository with
+no commit); `INPUT_UNREADABLE` when the tree cannot answer — outside a git working tree, no commits
+yet, no merge base, a shallow clone whose history stops before the merge base (fetch full history —
+`actions/checkout` `fetch-depth: 0` — or deepen until it is reachable: `git fetch --deepen=<n>`), a
+file under the root git cannot read, a path under the root that git spells in another case or
+Unicode normalisation on either side of the diff (where git ignores case), a path that is not
+UTF-8, or a listing git returned that VAT cannot read. The exit code does not tell these apart — the code does: `vat
 resources query` exits 2 with it as `error.code`; `vat resources check` and `vat validate` report
 `RESOURCE_CHECK_BROKEN` (exit 1) on the checks that read it, with it as the finding's
 `reason.refusal`. `--base` is read only when a statement names `changed_files`; otherwise it is
@@ -334,8 +340,8 @@ each finding also as a `location:line: severity: message [code]` line on stderr.
   run (an empty corpus, no check ran, an interrupted run) carries none.
 - A declared check's violation carries `evidence`: the row's columns other than the reserved ones,
   in the order SQLite returned them, values as SQLite returned them (a BLOB, or a non-finite number
-  such as `Infinity`, as the text the message shows — so JSON and YAML agree). A `path` that could
-  not become the `location` (absolute, NULL, not text) stays in `evidence`.
+  such as `Infinity`, as the text the message shows — so JSON and YAML agree). `path` is never
+  evidence.
 - A check whose rows could not be read carries `reason` on its `RESOURCE_CHECK_BROKEN` finding:
   `{column, value, row, allowed}` — the reserved column, its value as `evidence` renders it, the
   first bad row (1-based), and what the column may hold. One whose `examined` statement returned no
@@ -357,7 +363,9 @@ each finding also as a `location:line: severity: message [code]` line on stderr.
 column names are reserved and matched exactly (case-sensitive); every other column is evidence, in
 the message and in the finding's `evidence`:
 
-- `path` — the finding's `location`, when it is a project-relative path.
+- `path` — the finding's `location`: a relative POSIX path inside the root. NULL or absent means
+  no location; any other value — not text, absolute, a drive path, a backslash, or a `..` that
+  climbs out of the root — fails the check as `RESOURCE_CHECK_BROKEN`, the same on every platform.
 - `finding_severity` — that row's severity, exactly `error`, `warning` or `info`; NULL or absent
   means the check's declared severity. A `resources.validation.severity` override on
   `CUSTOM:<name>` still wins.
@@ -369,7 +377,8 @@ N rows, but row R's finding_severity = "high" is not one of error | warning | in
 `data.checks` carries `broken: true` with `rows`. A column that matches a reserved name only
 case-insensitively (`Finding_Line`) gets one stderr warning per check, stays evidence, and is listed
 as the statement spelled it in that check's `data.checks` entry as `nearMisses: ["Finding_Line"]`
-(absent when there is none).
+(absent when there is none). It is read from the statement's columns, so it is listed however many
+rows the check selected — none included — and whether or not they could be read.
 
 No projection relation has a column named `finding_severity`, `finding_line` or `finding_column`,
 so `SELECT *` or a join never sets one: a table's own `severity`, `line` or `column` is evidence.
@@ -421,7 +430,7 @@ resources:
   "examined 0" and "not run" never look alike.
 - ⚠️ `examined` is optional, so a check that declares none can pass over an empty population and
   nothing refuses it. Declare it on every check; a consumer that needs the guarantee can require an
-  `examined` key on each `data.checks` entry.
+  `examined` key on each `data.checks` entry that is neither `builtin` nor `broken`.
 
 The same applies when the checks run as the `checks` phase of `vat validate`: its findings are
 these findings, `check` and `evidence` included, and the phase's `data.checks` is this list.

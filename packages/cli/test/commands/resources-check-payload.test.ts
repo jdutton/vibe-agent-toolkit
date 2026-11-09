@@ -44,6 +44,7 @@ import {
 } from '../../src/commands/resources/check.js';
 import { createLogger, type Logger } from '../../src/utils/logger.js';
 import type { AskProjection } from '../../src/utils/projection-query.js';
+import { NO_COLUMNS } from '../helpers/no-columns.js';
 
 /**
  * A logger that captures what reached stderr, and nothing else.
@@ -102,7 +103,7 @@ const INERT_PROJECTION = {
     pattern: 'gone/**',
     literalPrefix: 'gone',
     witnessPath: null,
-    status: 'inert',
+    status: 'inert' as const,
   }],
   resourceRealizations: [{ resourceId: 'res-rules', path: RULES_FILE, contentKey: null }],
   resourceTags: [],
@@ -341,6 +342,7 @@ function runWithClock(options: {
   builtins?: readonly BoundBuiltinCheck[];
 }): ReturnType<typeof runProjectChecks> {
   return runProjectChecks({
+    columnsOf: NO_COLUMNS,
     builtins: options.builtins ?? NO_BUILTINS,
     checks: options.checks,
     only: options.only,
@@ -414,6 +416,7 @@ describe('runProjectChecks — the loop', () => {
     // `no-orphans` vanishes. Nothing in the spawned system suite could tell,
     // because no spawned case ever ran two checks.
     const { issues, costs } = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: TWO_VIOLATED,
       only: undefined,
@@ -432,6 +435,7 @@ describe('runProjectChecks — the loop', () => {
     const ask = vi.fn<AskProjection>(() => []);
 
     const { costs } = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: TWO_VIOLATED, only: undefined, ask, validation: undefined,
       membersEnumerated: POPULATED,
@@ -443,6 +447,7 @@ describe('runProjectChecks — the loop', () => {
 
   it('runs only the named check under `only`, and counts only that one', () => {
     const { issues, costs } = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: TWO_VIOLATED, only: SECOND, ask: ASK_ONE_ROW, validation: undefined,
       membersEnumerated: POPULATED,
@@ -454,6 +459,7 @@ describe('runProjectChecks — the loop', () => {
 
   it('reports a broken check as a finding, never as a skip', () => {
     const { issues, costs } = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: BROKEN_CHECK,
       only: undefined,
@@ -480,6 +486,7 @@ describe('runProjectChecks — the loop', () => {
     };
 
     const { issues, costs } = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: TWO_VIOLATED, only: undefined, ask, validation: undefined,
       membersEnumerated: POPULATED,
@@ -583,6 +590,7 @@ describe('a check severity override does not silence a BROKEN check', () => {
     // broken finding) and this reds: `resolveIssueSeverity` drops it and the
     // command exits 0 over a check that asserted nothing.
     const { issues, costs } = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: BROKEN_CHECK,
       only: undefined,
@@ -603,6 +611,7 @@ describe('a check severity override does not silence a BROKEN check', () => {
     // it drops it below the exit threshold — so the gate returns 0 and the
     // document says `status: warning` over a check that ran nothing.
     const { issues, costs } = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: BROKEN_CHECK,
       only: undefined,
@@ -619,6 +628,7 @@ describe('a check severity override does not silence a BROKEN check', () => {
     // The other direction, or the guard above would be satisfied by a fix that
     // simply stopped honouring overrides — which is a documented feature.
     const { issues } = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: { soft: { description: 'prefer no markdown', sql: 'SELECT path FROM a' } },
       only: undefined,
@@ -1015,6 +1025,7 @@ describe('a corpus of zero members is a failure, not a pass', () => {
     // 🔑 The reproduced case. Delete the guard and this reds: `issues` is empty,
     // `status` is `success`, and the command exits 0 having asserted nothing.
     const { issues, costs } = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: TWO_VIOLATED,
       only: undefined,
@@ -1038,6 +1049,7 @@ describe('a corpus of zero members is a failure, not a pass', () => {
     // over nothing", and `RESOURCE_CHECK_BROKEN` is refused as a severity key by
     // `ValidationConfigSchema` precisely so no config line can reach it.
     const { issues } = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: TWO_VIOLATED,
       only: undefined,
@@ -1055,6 +1067,7 @@ describe('a corpus of zero members is a failure, not a pass', () => {
     // "empty population" is not actionable. The count, the consequence, and the
     // three things that actually empty an enumeration are.
     const { issues } = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: TWO_VIOLATED, only: undefined, ask: ASK_NO_ROWS, validation: undefined,
       membersEnumerated: 0,
@@ -1073,6 +1086,7 @@ describe('a corpus of zero members is a failure, not a pass', () => {
     // corpus — drop the `> 0` test, compare the wrong number — and this reds:
     // an ordinary clean run starts reporting an error.
     const { issues, costs } = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: TWO_VIOLATED, only: undefined, ask: ASK_NO_ROWS, validation: undefined,
       membersEnumerated: 1,
@@ -1091,6 +1105,7 @@ describe('a corpus of zero members is a failure, not a pass', () => {
     // operator gets two reports about one situation and the less specific of the
     // two sends them to inspect a `.gitignore` that is not the problem.
     const { issues, costs } = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: {}, only: undefined, ask: ASK_NO_ROWS, validation: undefined,
       membersEnumerated: 0,
@@ -1106,6 +1121,7 @@ describe('a corpus of zero members is a failure, not a pass', () => {
     // is exactly what the reproduced repository declared. The run-integrity
     // report is the headline; the derived findings are noise until it is fixed.
     const { issues } = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: TWO_VIOLATED, only: undefined, ask: ASK_ONE_ROW, validation: undefined,
       membersEnumerated: 0,
@@ -1255,6 +1271,7 @@ function progressOf(options: {
 }): Timeline {
   const seen: Timeline = [];
   runProjectChecks({
+    columnsOf: NO_COLUMNS,
     builtins: options.builtins ?? NO_BUILTINS,
     checks: options.checks,
     only: undefined,
@@ -1338,6 +1355,7 @@ describe('runProjectChecks — progress emitted for an outside observer', () => 
     // waiting to disagree.
     const seen: ProgressEntry[] = [];
     const { costs } = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: TWO_VIOLATED,
       only: undefined,
@@ -1358,6 +1376,7 @@ describe('runProjectChecks — progress emitted for an outside observer', () => 
     // `--budget 0` and the in-process lane pass no sink. A loop that required
     // one would turn the documented escape hatch into a crash.
     const { costs } = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: TWO_VIOLATED, only: undefined, ask: ASK_DISTINCT_ROWS, validation: undefined,
       membersEnumerated: POPULATED,
@@ -1390,6 +1409,7 @@ describe('the built-in check set runs without any config', () => {
     // are the same input here. Move the default set into the config object and
     // this reds — the whole point of the invariant.
     const { issues, costs } = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: bindBuiltinChecks(INERT_PROJECTION),
       checks: {},
       only: undefined,
@@ -1409,6 +1429,7 @@ describe('the built-in check set runs without any config', () => {
 
   it('runs the built-ins BEFORE the declared checks, and prices both', () => {
     const { issues, costs } = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: bindBuiltinChecks(INERT_PROJECTION),
       checks: TWO_VIOLATED,
       only: undefined,
@@ -1430,6 +1451,7 @@ describe('the built-in check set runs without any config', () => {
 
   it('selects a built-in by name under `only`, exactly like a declared check', () => {
     const { issues, costs } = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: bindBuiltinChecks(INERT_PROJECTION),
       checks: TWO_VIOLATED,
       only: INERT_CHECK_NAME,
@@ -1448,6 +1470,7 @@ describe('the built-in check set runs without any config', () => {
     // every other code VAT emits accepts — and it is what the code's own entry
     // in docs/validation-codes.md tells an adopter to write.
     const { issues, costs } = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: bindBuiltinChecks(INERT_PROJECTION),
       checks: {},
       only: undefined,
@@ -1469,6 +1492,7 @@ describe('the built-in check set runs without any config', () => {
     // ignores "can I enforce this?" — which is the shipped defect
     // `resolveIssueSeverity` exists to prevent, here on a new lane.
     const { issues, costs } = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: bindBuiltinChecks(INERT_PROJECTION),
       checks: {},
       only: undefined,
@@ -1485,6 +1509,7 @@ describe('the built-in check set runs without any config', () => {
     // 🪤 A defect in VAT's own predicate must fail the gate on the same terms a
     // broken statement does. The arm is shared, which is the point of one loop.
     const { issues, costs } = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: [{ name: 'exploding', run: EXPLODING_PREDICATE }],
       checks: {},
       only: undefined,
@@ -1505,6 +1530,7 @@ describe('the built-in check set runs without any config', () => {
     // reader whose config declares nothing finds a rule they never wrote and
     // cannot tell a shipped default from a stale declaration.
     const { issues, costs } = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: bindBuiltinChecks(INERT_PROJECTION),
       checks: TWO_VIOLATED,
       only: undefined,
@@ -1530,31 +1556,12 @@ describe('the built-in check set runs without any config', () => {
     expect(parsed.success ? [] : parsed.error.issues).toEqual([]);
   });
 
-  it('runs BOTH when a declared check shadows a built-in\'s name', () => {
-    // 📌 Decided, not overlooked: one name can denote two rules, both run, and
-    // `builtin` is what tells the entries apart. Refusing the collision would be
-    // a new breaking config error for a situation that is not unsafe.
-    const { costs } = runProjectChecks({
-      builtins: bindBuiltinChecks(INERT_PROJECTION),
-      checks: { [INERT_CHECK_NAME]: { description: 'mine', sql: FIRST_SQL } },
-      only: INERT_CHECK_NAME,
-      ask: ASK_DISTINCT_ROWS,
-      validation: undefined,
-      membersEnumerated: POPULATED,
-      now: fakeClock(1),
-    });
-
-    expect(costs).toStrictEqual([
-      { name: INERT_CHECK_NAME, durationMs: 1, rows: 1, builtin: true },
-      { name: INERT_CHECK_NAME, durationMs: 1, rows: ROWS_BY_SQL[FIRST_SQL] },
-    ]);
-  });
-
   it('announces a built-in to the progress log like any other unit', () => {
     // A run killed inside a built-in must still name it. The loop is shared, so
     // this is a guard on the sharing rather than on a second emitter.
     const seen: ProgressEntry[] = [];
     runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: bindBuiltinChecks(INERT_PROJECTION),
       checks: {},
       only: undefined,
@@ -1614,6 +1621,7 @@ const ASK_BAD_SEVERITY = askRows({
  */
 function gradedWithOverride(rowSeverity: string, override: 'error' | 'warning' | 'info' | 'ignore'): ReturnType<typeof runProjectChecks>['issues'] {
   return runProjectChecks({
+    columnsOf: NO_COLUMNS,
     builtins: NO_BUILTINS,
     checks: { [GRADED]: GRADED_CHECKS[GRADED] },
     only: undefined,
@@ -1641,6 +1649,7 @@ describe('runProjectChecks — a row the check cannot interpret', () => {
 
   it('is not silenced by an override on the check, as no RESOURCE_CHECK_BROKEN is', () => {
     const { issues } = runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: GRADED_CHECKS,
       only: undefined,
@@ -1683,6 +1692,7 @@ describe('runProjectChecks — a near miss of a reserved column name', () => {
   it('warns ONCE per check, naming the column and the reserved name it nearly is', () => {
     const warnings: string[] = [];
     runProjectChecks({
+      columnsOf: () => ['path', 'Finding_Severity'],
       builtins: NO_BUILTINS,
       checks: { [GRADED]: GRADED_CHECKS[GRADED] },
       only: undefined,
@@ -1701,6 +1711,7 @@ describe('runProjectChecks — a near miss of a reserved column name', () => {
   it('says nothing when the reserved names are spelled exactly', () => {
     const warnings: string[] = [];
     runProjectChecks({
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: { [GRADED]: GRADED_CHECKS[GRADED] },
       only: undefined,

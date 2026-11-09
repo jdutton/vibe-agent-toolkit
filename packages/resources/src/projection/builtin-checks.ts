@@ -36,6 +36,11 @@ import type {
 } from '../schemas/projection-resources.js';
 
 import { RULES_FILE_TAG } from './agentic-tags.js';
+import {
+  CLAUDE_RULE_FRONTMATTER_INVALID_NAME,
+  CLAUDE_RULE_GLOB_INERT_NAME,
+  CLAUDE_RULE_LINK_UNCHECKED_NAME,
+} from './builtin-check-names.js';
 import { nestedRuleParent } from './claude-context-rules.js';
 import {
   DECLINED_SYMLINK_CODES,
@@ -220,7 +225,7 @@ function runClaudeRuleGlobInert(input: BuiltinCheckInput): readonly ValidationIs
 
 /** The dead-`paths:`-glob check. Exported by name so a test can drive one check. */
 export const CLAUDE_RULE_GLOB_INERT_CHECK: BuiltinCheck = {
-  name: 'claude-rule-glob-inert',
+  name: CLAUDE_RULE_GLOB_INERT_NAME,
   description: 'Every paths: glob in .claude/rules/ matches at least one file in the tree',
   code: GLOB_INERT_CODE,
   // A correlated subquery, not a join: a rules file is realized once per extent
@@ -318,7 +323,7 @@ const UNLOCATED_RULES_FILE_ITSELF = 'a rules file';
 
 /** The unparseable-frontmatter check. Exported by name so a test can drive one check. */
 export const CLAUDE_RULE_FRONTMATTER_INVALID_CHECK: BuiltinCheck = {
-  name: 'claude-rule-frontmatter-invalid',
+  name: CLAUDE_RULE_FRONTMATTER_INVALID_NAME,
   description: 'Every .claude/rules/ file has YAML frontmatter that parses, so its paths: globs are evaluated',
   code: FRONTMATTER_INVALID_CODE,
   // DISTINCT, not a join per realization: every realization of one identity
@@ -531,7 +536,7 @@ const DECLINED_SYMLINK_CODES_SQL = DECLINED_SYMLINK_CODES.map((code) => `'${code
 
 /** The linked-rules check. Exported by name so a test can drive one check. */
 export const CLAUDE_RULE_LINK_UNCHECKED_CHECK: BuiltinCheck = {
-  name: 'claude-rule-link-unchecked',
+  name: CLAUDE_RULE_LINK_UNCHECKED_NAME,
   description:
     'No .claude directory, .claude/rules/ directory or file under one is ITSELF a symbolic link,'
     + ' which VAT realizes at no path and cannot check',
@@ -579,9 +584,6 @@ export const BUILTIN_CHECKS: readonly BuiltinCheck[] = [
   CLAUDE_RULE_FRONTMATTER_INVALID_CHECK,
   CLAUDE_RULE_LINK_UNCHECKED_CHECK,
 ];
-
-/** Every built-in's name, for a `--check` guard and for an operator-facing list. */
-export const BUILTIN_CHECK_NAMES: readonly string[] = BUILTIN_CHECKS.map((check) => check.name);
 
 /**
  * Bind the default set to one projection.
