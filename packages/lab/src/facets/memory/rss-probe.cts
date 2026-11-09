@@ -49,8 +49,8 @@
  * ## Three properties, each load-bearing
  *
  * **Zero non-builtin dependencies**, for the same reason as the `io` counter: it
- * is injected into a vat that may be running from an `npx` temp dir, where
- * nothing of the lab's is installed.
+ * is injected into a vat that may be running from an `npx:` build's install
+ * under the arms root, where nothing of the lab's is installed.
  *
  * **Inert unless activated.** Nothing happens without `VAT_LAB_RSS_LOG`.
  *

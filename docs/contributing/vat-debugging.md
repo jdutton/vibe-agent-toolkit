@@ -164,11 +164,14 @@ the multiset of findings, the full document), reconciled against a committed del
 The lab never runs it through npx: it installs the pin once under the arms root (scripts off, its
 own npm cache, never the operator's global or local install) and runs that install's
 `@vibe-agent-toolkit/cli/dist/bin.js` with node — the CLI itself, not the wrapper that re-resolves
-vat from the *subject's* cwd — so run against VAT's own tree it measures the pinned version, not
-the candidate. The spec must be a registry name and an exact version; ranges, dist-tags, paths and
-URLs are refused. The closure is digested from that install, and third-party ranges float, so two
-installs of one pin can carry different closures
-([run harness](../../packages/lab/docs/run-harness.md)).
+vat from the *subject's* cwd — so every command the lab runs is the pinned version. The spec must
+be `vibe-agent-toolkit` or `@vibe-agent-toolkit/cli` at an exact version; any other package,
+ranges, dist-tags, paths and URLs are refused. The closure is digested from that install, and
+third-party ranges float, so two installs of one pin can carry different closures
+([run harness](../../packages/lab/docs/run-harness.md)). **Not the pinned version:** a nested `vat`
+call made by the subject's own scripts or hooks resolves through the subject's own install (on
+VAT's own tree, its checkout). The install's path is made at run time, so there is no `VAT_BIN` to
+hand this arm; nested calls in it measure whatever the subject has installed.
 
 **Candidate arm** — the worktree under test:
 
@@ -177,8 +180,9 @@ installs of one pin can carry different closures
 --env VAT_ROOT_DIR="$WORKTREE"
 ```
 
-Both overrides, because an adopter's already-installed wrapper predates `VAT_BIN` and honours
-only `VAT_ROOT_DIR`.
+Every command the lab runs is the worktree's build, and so is a nested `vat` call, because the arm
+names the build for it: both overrides, because an adopter's already-installed wrapper predates
+`VAT_BIN` and honours only `VAT_ROOT_DIR`.
 
 **Subjects file** is local (never committed), lives outside every subject it names, and carries
 aliases only (`crucible-1`, `crucible-2`, …) — no adopter names. `--subjects` is required on every

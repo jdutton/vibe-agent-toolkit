@@ -47,7 +47,7 @@ export const PROBE_VERSION: InstrumentVersion = {
   version: '0.0.0-test',
   commit: null,
   dirty: null,
-  closure: null,
+  closure: 'c'.repeat(64),
 };
 
 /** Base-environment variable, expected in EVERY child including the cache clear. */

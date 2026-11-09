@@ -48,7 +48,7 @@ const REPO_CLI_DIST = safePath.join(
  * @param over - What the case varies
  * @returns The options object
  */
-function sameDistArms(over: Record<string, unknown> = {}): Parameters<typeof resolveAbArms>[0] {
+function sameDistArms(over: Record<string, unknown> = {}): Parameters<typeof abArmFlags>[0] {
   return {
     instrumentA: { kind: 'dist', path: REPO_CLI_DIST },
     instrumentB: { kind: 'dist', path: REPO_CLI_DIST },
@@ -113,25 +113,48 @@ describe('vat-lab <facet> ab — indistinguishable arms', () => {
   });
 });
 
+/** Commander's exit for a flag its parser refuses — it calls `process.exit` itself. */
+const COMMANDER_USAGE_EXIT = 1;
+
+/** Thrown by the stubbed `process.exit`, carrying the code Commander exited with. */
+class ExitCalled extends Error {
+  constructor(readonly code: number) {
+    super(`process.exit(${String(code)})`);
+  }
+}
+
 describe('vat-lab <facet> ab — flag refusals come before any setup', () => {
   it.for([
-    ['an arm that sets and unsets one variable', ['--instrument-b', 'npx:vibe-agent-toolkit@0.1.43', '--env-a', 'X=1', '--unset-a', 'X'], /--env-a and --unset-a/u],
-    ['two identical arms', ['--instrument-b', 'npx:vibe-agent-toolkit@0.1.42'], /indistinguishable/u],
-    ['--control with --instrument-b', ['--instrument-b', 'npx:vibe-agent-toolkit@0.1.43', '--control'], /--control runs one instrument/u],
-    ['no --instrument-b and no --control', [], /an A\/B needs two arms/u],
-  ] as const)('refuses %s before resolving the subject, opening --out, creating --arms-dir or installing', async ([, flags, refusal]) => {
+    ['an arm that sets and unsets one variable', ['--instrument-b', 'npx:vibe-agent-toolkit@0.1.43', '--env-a', 'X=1', '--unset-a', 'X'], /--env-a and --unset-a/u, ExitCode.ERROR],
+    ['two identical arms', ['--instrument-b', 'npx:vibe-agent-toolkit@0.1.42'], /indistinguishable/u, ExitCode.ERROR],
+    ['--control with --instrument-b', ['--instrument-b', 'npx:vibe-agent-toolkit@0.1.43', '--control'], /--control runs one instrument/u, ExitCode.ERROR],
+    ['no --instrument-b and no --control', [], /an A\/B needs two arms/u, ExitCode.ERROR],
+    ['an unpinned npx: spec', ['--instrument-b', 'npx:vibe-agent-toolkit@latest'], /"vibe-agent-toolkit@latest" is not pinned/u, COMMANDER_USAGE_EXIT],
+    ['an npx: spec that is not VAT', ['--instrument-b', 'npx:left-pad@1.0.0'], /"left-pad@1\.0\.0" does not name VAT/u, COMMANDER_USAGE_EXIT],
+  ] as const)('refuses %s before resolving the subject, opening --out, creating --arms-dir or installing', async ([, flags, refusal, exit]) => {
     const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    vi.spyOn(process, 'exit').mockImplementation((code) => {
+      throw new ExitCalled(Number(code));
+    });
     const missing = safePath.join(tempDir, 'ab-flags-never');
     const out = safePath.join(tempDir, 'ab-flags-out');
     const armsDir = safePath.join(tempDir, 'ab-flags-arms');
 
-    await createProgram().parseAsync([
-      'node', 'vat-lab', 'perf', 'ab', missing,
-      '--instrument-a', 'npx:vibe-agent-toolkit@0.1.42', ...flags,
-      '--out', out, '--arms-dir', armsDir,
-    ]);
+    const exited = await createProgram()
+      .parseAsync([
+        'node', 'vat-lab', 'perf', 'ab', missing,
+        '--instrument-a', 'npx:vibe-agent-toolkit@0.1.42', ...flags,
+        '--out', out, '--arms-dir', armsDir,
+      ])
+      .then(
+        () => process.exitCode,
+        (error: unknown) => {
+          if (error instanceof ExitCalled) return error.code;
+          throw error;
+        },
+      );
 
-    expect(process.exitCode).toBe(ExitCode.ERROR);
+    expect(exited).toBe(exit);
     expect(stderr.mock.calls.map(([chunk]) => String(chunk)).join('')).toMatch(refusal);
     expect(existsSync(out)).toBe(false);
     expect(existsSync(armsDir)).toBe(false);

@@ -33,11 +33,12 @@ the header prints as `closure <first 12 hex>`. Prefer a working tree when you ha
 names the bytes, but only a commit names the source they were built from.
 
 **A released version.** `npx:vibe-agent-toolkit@0.1.41` — the case that makes "did we get better
-since the last release?" a one-liner. The spec must be a registry package name pinned to an exact
-version; a range, a dist-tag, a path, a URL, a tarball, a git ref or an `npm:` alias is refused. The
+since the last release?" a one-liner. The spec must be `vibe-agent-toolkit` or
+`@vibe-agent-toolkit/cli` pinned to an exact version, refused before any setup otherwise: any other
+package, a range, a dist-tag, a path, a URL, a tarball, a git ref or an `npm:` alias. The
 pin is installed under the arms root and run as that install's `dist/bin.js` (below). The commit is
 unknown here and the coordinate records `null` rather than guessing; the closure is a digest of the
-install's whole `node_modules`. Identity is per install: third-party ranges float, so a later install
+install's whole `node_modules`, less npm's own install record (`.package-lock.json`). Identity is per install: third-party ranges float, so a later install
 of the same pin can pick up moved dependencies — a different closure, and a different stored
 identity, for the same version.
 
@@ -58,8 +59,10 @@ every file under its `dist/`, `*.tsbuildinfo` excluded ([`harness/closure.ts`](.
 - **Errors, never fallbacks.** A declared `@vibe-agent-toolkit/*` dependency that does not resolve,
   or a closure member with no `dist/`, throws naming it — a digest of less than what runs would
   match another arm missing the same thing.
-- **Stored reports.** The field is required under the `.strict()` schema, so a report stored before
-  it existed is refused on read — the lab's refusal policy, not a defect. The store names a
+- **Stored reports.** The field is required and never null under the `.strict()` schema, so a report
+  stored without one is refused on read — the lab's refusal policy, not a defect. That includes an
+  `npx:` report from before the lab installed the pin itself: it may have measured another version
+  than it names; re-capture it. The store names a
   commit-less build `vat-<version>-closure-<first 8 hex>`, so a second `dist:` build of one version
   never overwrites the first.
 
@@ -83,10 +86,13 @@ wrapper, and a subject with its own vat installed captured an `npx:` arm — a r
 pin measured the subject's version. So an `npx:` build is never run through npx: the pinned spec is
 installed under the arms root and resolved to its cli's `dist/bin.js`
 ([`harness/npx-install.ts`](../src/harness/npx-install.ts)). Running `bin.js` directly is the
-protection: it is the CLI itself and delegates to no other copy. The install is refused unless its
-cli's `package.json` names the pin and the entry's real path lies inside the install; the entry is
-then run once with `--version` to prove the install starts — not to check its version, which
-`--version` reads from that same `package.json`.
+protection: it is the CLI itself and delegates to no other copy. The entry is looked for only where
+the named package's own cli lives (the hoisted `node_modules/@vibe-agent-toolkit/cli`, and for the
+umbrella its own dependency nested under it). The install is refused unless that cli's
+`package.json` names `@vibe-agent-toolkit/cli` (an alias keeps the real package's name) at the pin
+and the entry's real path lies inside the install; the entry is then run once with `--version` to
+prove `bin.js` and its static imports load — not to check its version, which `--version` reads from
+that same `package.json`. These checks run once per install, before any repeat.
 
 ## A dirty instrument is measured, but never mistaken for a commit
 
@@ -133,8 +139,11 @@ No lab code drives `VAT_ROOT_DIR` — or any other variable that selects which v
 arm-environment contract (see "Each arm's environment" below): `VAT_ROOT_DIR`, `VAT_BIN` and the
 other arm-owned variables are stripped from every child, never inherited, and reach a child only
 when the arm itself sets them with `--env`. A nested `vat` call from a subject's own npm scripts or
-hooks stays in the arm only because the arm says so (`--env VAT_BIN=<bin.js>` for a `dist:` arm,
-`--env VAT_ROOT_DIR=<shim>` for a build whose wrapper predates `VAT_BIN`).
+hooks stays in the arm only because the arm says so (`--env VAT_BIN=<bin.js>` for a `tree:` or
+`dist:` arm, `--env VAT_ROOT_DIR=<shim>` for a build whose wrapper predates `VAT_BIN`). An `npx:`
+arm cannot say so: its install's path is made at run time, so no `--env` can name it, and a nested
+`vat` call in it resolves through the subject's own install — not the pinned version. Only the
+commands the lab runs itself measure the pin.
 
 Every timed arm — the `verdict` facet's included — also gets lab-owned directories on top of its
 own settings: a private projection store, temp directory, empty home (`HOME` and

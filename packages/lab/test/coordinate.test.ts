@@ -27,8 +27,8 @@ import {
 
 const GIT_A: SubjectVersion = { kind: 'git', commit: 'a'.repeat(40), ref: 'main', dirty: false, workingFingerprint: null };
 const GIT_B: SubjectVersion = { kind: 'git', commit: 'b'.repeat(40), ref: 'main', dirty: false, workingFingerprint: null };
-const VAT_RELEASE: InstrumentVersion = { version: '0.1.42', commit: '1'.repeat(40), dirty: false, closure: null };
-const VAT_DEV: InstrumentVersion = { version: '0.1.42', commit: '2'.repeat(40), dirty: false, closure: null };
+const VAT_RELEASE: InstrumentVersion = { version: '0.1.42', commit: '1'.repeat(40), dirty: false, closure: 'c'.repeat(64) };
+const VAT_DEV: InstrumentVersion = { version: '0.1.42', commit: '2'.repeat(40), dirty: false, closure: 'c'.repeat(64) };
 /** Two `dist:` arms of one version: no commit, nothing but the closure to tell them apart. */
 const DIST_ONE: InstrumentVersion = { version: '0.2.0', commit: null, dirty: null, closure: 'a'.repeat(64) };
 const DIST_TWO: InstrumentVersion = { ...DIST_ONE, closure: 'b'.repeat(64) };
@@ -111,7 +111,7 @@ describe('movedAxes', () => {
 
   it('refuses a closure that is not 64 lowercase hex', () => {
     expect(InstrumentVersionSchema.safeParse(DIST_ONE).success).toBe(true);
-    for (const closure of ['A'.repeat(64), 'a'.repeat(63), 'g'.repeat(64), '']) {
+    for (const closure of ['A'.repeat(64), 'a'.repeat(63), 'g'.repeat(64), '', null]) {
       expect(InstrumentVersionSchema.safeParse({ ...DIST_ONE, closure }).success).toBe(false);
     }
     // A stored report from before the field existed is refused, not defaulted.

@@ -42,9 +42,9 @@ describe('armDirectories', () => {
 });
 
 describe('buildAlias', () => {
-  it('names a released build by its version, and a checkout by version and short commit', () => {
-    expect(buildAlias({ version: '0.2.0-rc.11', commit: null, dirty: null, closure: null })).toBe('0.2.0-rc.11');
-    expect(buildAlias({ version: '0.2.0', commit: 'abcdef0123456789', dirty: false, closure: null })).toBe('0.2.0-abcdef0');
+  it('names a released build by version and short closure, and a checkout by version, short commit and short closure', () => {
+    expect(buildAlias({ version: '0.2.0-rc.11', commit: null, dirty: null, closure: 'c'.repeat(64) })).toBe('0.2.0-rc.11-ccccccc');
+    expect(buildAlias({ version: '0.2.0', commit: 'abcdef0123456789', dirty: false, closure: 'c'.repeat(64) })).toBe('0.2.0-abcdef0-ccccccc');
   });
 
   it('gives two dist: builds of one version two aliases — the closure digest tells their bytes apart', () => {
@@ -55,7 +55,7 @@ describe('buildAlias', () => {
   });
 
   it('yields a usable directory segment from a version carrying path characters', () => {
-    const alias = buildAlias({ version: '1.0.0+build/7', commit: null, dirty: null, closure: null });
+    const alias = buildAlias({ version: '1.0.0+build/7', commit: null, dirty: null, closure: 'c'.repeat(64) });
     expect(() => armDirectories({ root: out, build: alias, arm: 'C', state: 'cold' })).not.toThrow();
   });
 });

@@ -126,12 +126,13 @@ export interface InstrumentVersion {
    * is identified by it too, which is what lets two dirty builds at one commit
    * finally compare unequal when their outputs differ.
    *
-   * `null` only in a stored report from before an `npx:` build was installed
-   * by the lab (`harness/npx-install.ts`); every resolved build now carries one.
-   * Required and `.strict()`: a stored report from before the field existed is
-   * refused, not defaulted — the lab's documented refusal policy.
+   * Every resolved build carries one. Required, never null, and `.strict()`: a
+   * stored report without one — from before the field existed, or an `npx:` report
+   * from before the lab installed the pin itself (`harness/npx-install.ts`), which
+   * may have measured another version than it names — is refused, not defaulted:
+   * the lab's documented refusal policy.
    */
-  readonly closure: string | null;
+  readonly closure: string;
 }
 
 /** A complete three-axis coordinate. */
@@ -190,6 +191,9 @@ export const SubjectVersionSchema = SubjectVersionVariants.superRefine((value, c
   });
 });
 
+/** Why a stored instrument with no closure digest is refused rather than compared. */
+const NO_CLOSURE = 'the instrument has no closure digest: it may have measured another version than it names';
+
 /**
  * Axis C, with the one cross-field rule the object shape cannot express alone.
  *
@@ -205,9 +209,8 @@ export const InstrumentVersionSchema = z
     commit: z.string().min(1).nullable(),
     dirty: z.boolean().nullable(),
     closure: z
-      .string()
-      .regex(/^[0-9a-f]{64}$/, 'a closure digest is 64 lowercase hex characters')
-      .nullable(),
+      .string({ invalid_type_error: NO_CLOSURE, required_error: NO_CLOSURE })
+      .regex(/^[0-9a-f]{64}$/, 'a closure digest is 64 lowercase hex characters'),
   })
   .strict()
   .superRefine((value, ctx) => {

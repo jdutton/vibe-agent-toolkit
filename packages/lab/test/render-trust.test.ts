@@ -26,11 +26,11 @@ const CLEAN: InstrumentVersion = {
   version: '0.2.0-rc.2',
   commit: '7b65ba86'.repeat(5),
   dirty: false,
-  closure: null,
+  closure: 'c'.repeat(64),
 };
 const DIRTY: InstrumentVersion = { ...CLEAN, dirty: true };
 const OTHER_CLEAN: InstrumentVersion = { ...CLEAN, commit: 'a'.repeat(40) };
-const RELEASED: InstrumentVersion = { version: '0.1.41', commit: null, dirty: null, closure: null };
+const RELEASED: InstrumentVersion = { version: '0.1.41', commit: null, dirty: null, closure: 'c'.repeat(64) };
 
 /**
  * Every note the two arms produce, as one string.
@@ -51,11 +51,11 @@ describe('instrumentLabel', () => {
   it('says nothing extra about a clean build', () => {
     // The negative control. Without it, "the label mentions DIRTY" would pass
     // for a renderer that appended the words to every instrument.
-    expect(instrumentLabel(CLEAN)).toBe('vat 0.2.0-rc.2 (7b65ba86)');
+    expect(instrumentLabel(CLEAN)).toBe('vat 0.2.0-rc.2 (7b65ba86, closure cccccccccccc)');
   });
 
   it('calls a build with no commit released rather than inventing one', () => {
-    expect(instrumentLabel(RELEASED)).toBe('vat 0.1.41 (released)');
+    expect(instrumentLabel(RELEASED)).toBe('vat 0.1.41 (released, closure cccccccccccc)');
   });
 });
 
@@ -63,7 +63,7 @@ describe('coordinateLines', () => {
   it('carries the instrument dirtiness into the header both facets share', () => {
     const rendered = coordinateLines({ ...COORDINATE, instrument: DIRTY }).join('\n');
 
-    expect(rendered).toContain('Instrument: vat 0.2.0-rc.2 (7b65ba86, DIRTY working tree)');
+    expect(rendered).toContain('Instrument: vat 0.2.0-rc.2 (7b65ba86, DIRTY working tree, closure cccccccccccc)');
   });
 
   it('leaves the header clean when the instrument is', () => {

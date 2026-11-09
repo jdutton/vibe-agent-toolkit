@@ -159,12 +159,39 @@ describe("resolveInstrument({ kind: 'npx' })", () => {
   });
 
   it("stamps the install's whole node_modules as the closure, third-party dependencies included", async () => {
-    const closure = async (dependency: string): Promise<string | null> =>
+    const closure = async (dependency: string): Promise<string> =>
       (await resolveNpx(installing({ ...cliAt(VERSION), 'node_modules/left-pad/index.js': dependency }))).version.closure;
 
     const first = await closure('module.exports = 1;');
     expect(await closure('module.exports = 1;')).toBe(first);
     expect(await closure('module.exports = 2;')).not.toBe(first);
+  });
+
+  it("ignores npm's own .package-lock.json: it records how npm installed, not what was installed", async () => {
+    const closure = async (lock: string): Promise<string> =>
+      (await resolveNpx(installing({ ...cliAt(VERSION), 'node_modules/.package-lock.json': lock }))).version.closure;
+
+    expect(await closure('{"lockfileVersion":3,"resolved":"https://one.example/"}')).toBe(
+      await closure('{"lockfileVersion":4,"resolved":"https://two.example/"}'),
+    );
+  });
+
+  it('refuses an installed cli whose manifest names another package, though its version is the pin', async () => {
+    // An alias (`"@vibe-agent-toolkit/cli": "npm:other@0.1.43"`) installs other code under the
+    // cli's directory, and npm keeps the real package's name in its manifest.
+    const files = { ...cliAt(VERSION), [`${CLI_DIR}/package.json`]: manifest('other', VERSION) };
+
+    await expect(resolveNpx(installing(files))).rejects.toThrow(/@vibe-agent-toolkit\/cli resolved to "other"/u);
+  });
+
+  it("resolves @vibe-agent-toolkit/cli as the hoisted cli, never a copy under that cli's own node_modules", async () => {
+    const spec = `@vibe-agent-toolkit/cli@${VERSION}`;
+    const files = { ...cliAt(VERSION), ...cliAt(VERSION, `${CLI_DIR}/`), [`${CLI_DIR}/${CLI_BIN}`]: entry(VERSION, 'a bundled copy') };
+
+    const used = await resolveInstrument({ kind: 'npx', spec }, npxInstallSite(armsRoot(), installing(files)));
+    const ran = runCommand({ command: used.command, leadingArgs: used.leadingArgs }, [], { cwd: scratch, env: { set: {}, unset: [] } });
+
+    expect(ran.stdout).toBe('cli entry');
   });
 
   it('prefers the cli nested under the named package over a hoisted one', async () => {
@@ -257,6 +284,8 @@ describe('npmInstall', () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.args).toContain('--ignore-scripts');
+    // The spec is an operand, never an option: it follows `--`.
+    expect(calls[0]?.args.slice(-2)).toEqual(['--', SPEC]);
     expect(calls[0]?.env.set['npm_config_cache']).toBe(dirs.npmCache);
     // The arm's HOME holds no .npmrc: the operator's registry, scopes and auth come from theirs.
     expect(calls[0]?.env.set['npm_config_userconfig']).toBe(safePath.join(homedir(), '.npmrc'));

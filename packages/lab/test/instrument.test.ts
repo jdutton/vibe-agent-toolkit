@@ -458,7 +458,7 @@ describe('resolveInstrument — kind: dist', () => {
 describe('resolveInstrument — kind: npx', () => {
   const PINNED: readonly (readonly [spec: string, version: string])[] = [
     ['@vibe-agent-toolkit/cli@0.1.41', '0.1.41'],
-    ['vat@1.2.3', '1.2.3'],
+    ['vibe-agent-toolkit@1.2.3', '1.2.3'],
     ['@vibe-agent-toolkit/cli@0.1.42-rc.5', '0.1.42-rc.5'],
     ['@vibe-agent-toolkit/cli@1.0.0+build.7', '1.0.0+build.7'],
   ];
@@ -471,7 +471,7 @@ describe('resolveInstrument — kind: npx', () => {
       const cli = safePath.join(prefix, 'node_modules/@vibe-agent-toolkit/cli');
       await mkdir(safePath.join(cli, 'dist'), { recursive: true });
       await writeFile(safePath.join(cli, 'dist/bin.js'), '');
-      await writeFile(safePath.join(cli, 'package.json'), JSON.stringify({ version: '9.9.9-other' }));
+      await writeFile(safePath.join(cli, 'package.json'), JSON.stringify({ name: '@vibe-agent-toolkit/cli', version: '9.9.9-other' }));
     });
 
     await expect(resolveInstrument({ kind: 'npx', spec }, site)).rejects.toThrow(`9.9.9-other, not ${version}`);
@@ -500,11 +500,17 @@ describe('resolveInstrument — kind: npx', () => {
   });
 
   /**
-   * Pinned-looking, but not a registry name: npm would install a directory, a
-   * tarball, a git ref or an alias under a label that claims a published version —
-   * and the name half was joined into the entry path, where `..` walked out of the install.
+   * Pinned-looking, but not VAT. A path, tarball, git ref or alias would install
+   * something other than a published version under a label that claims one; and any
+   * other registry package could carry a dependency aliased to the cli's name, or a
+   * bundled copy of it, that passes every later check.
    */
-  const NOT_A_REGISTRY_NAME = [
+  const NOT_VAT = [
+    'left-pad@1.0.0',
+    'vat@1.2.3',
+    '@vibe-agent-toolkit/rag@0.2.0',
+    '@vibe-agent-toolkit/cli-extra@0.2.0',
+    'vibe-agent-toolkit-fork@0.2.0',
     '../../../../home/me/proj@0.2.0',
     './proj@0.2.0',
     '/abs/proj@0.2.0',
@@ -524,12 +530,12 @@ describe('resolveInstrument — kind: npx', () => {
     `${'a'.repeat(215)}@0.2.0`,
   ] as const;
 
-  it.for(NOT_A_REGISTRY_NAME)('refuses %s, which names no registry package, before installing', async (spec) => {
-    await expectRejectionNaming({ kind: 'npx', spec }, `"${spec}" does not name a registry package`);
+  it.for(NOT_VAT)('refuses %s, which is not vibe-agent-toolkit or @vibe-agent-toolkit/cli, before installing', async (spec) => {
+    await expectRejectionNaming({ kind: 'npx', spec }, `"${spec}" does not name VAT`);
   });
 
   it('refuses an empty spec', async () => {
-    await expectRejectionNaming({ kind: 'npx', spec: '   ' }, 'the spec is empty');
+    await expectRejectionNaming({ kind: 'npx', spec: '   ' }, 'the npx: spec is empty');
   });
 });
 

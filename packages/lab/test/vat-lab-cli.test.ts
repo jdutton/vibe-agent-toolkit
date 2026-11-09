@@ -704,8 +704,8 @@ async function judge(bars: readonly string[]): Promise<{ readonly stdout: string
       cwd: tempDir,
       rounds: 5,
       builds: [
-        { alias: 'rc11', source: { kind: 'npx', spec: 'vibe-agent-toolkit@0.2.0-rc.11' }, instrument: { version: '0.2.0-rc.11', commit: null, dirty: null, closure: null } },
-        { alias: 'cand', source: { kind: 'dist', path: '/x/vat' }, instrument: { version: '0.2.0', commit: null, dirty: null, closure: null } },
+        { alias: 'rc11', source: { kind: 'npx', spec: 'vibe-agent-toolkit@0.2.0-rc.11' }, instrument: { version: '0.2.0-rc.11', commit: null, dirty: null, closure: 'c'.repeat(64) } },
+        { alias: 'cand', source: { kind: 'dist', path: '/x/vat' }, instrument: { version: '0.2.0', commit: null, dirty: null, closure: 'd'.repeat(64) } },
       ],
       load: { before: null, after: null, cpus: 8, available: false, contaminated: false },
       arms: [measured('rc11', 'ci-a', 100, 90), measured('cand', 'ci-c', 110, 100)],
@@ -791,8 +791,8 @@ describe('vat-lab verdict union', () => {
 
 /** The two builds bar 3 runs: CI's sequence on the baseline, the single run on the candidate. */
 const UNION_BUILDS = {
-  rc11: { version: '0.2.0-rc.11', commit: null, dirty: null, closure: null },
-  cand: { version: '0.2.0', commit: null, dirty: null, closure: null },
+  rc11: { version: '0.2.0-rc.11', commit: null, dirty: null, closure: 'c'.repeat(64) },
+  cand: { version: '0.2.0', commit: null, dirty: null, closure: 'd'.repeat(64) },
 } as const;
 
 /**

@@ -86,6 +86,18 @@ describe('readEnvelope', () => {
     expect(result.refusal).toContain('dirty');
   });
 
+  it('refuses a stored report whose instrument carries no closure digest, saying it may have measured another version', () => {
+    // An `npx:` report from before the lab installed the pin: it ran through npx's wrapper,
+    // which could run the subject's own vat, so its pinned name proves nothing.
+    const result = readEnvelope(
+      stored({ coordinate: { ...COORDINATE, instrument: { version: '0.2.0', commit: null, dirty: null, closure: null } } }),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.refusal).toContain('re-capture it');
+    expect(result.refusal).toContain('no closure digest: it may have measured another version than it names');
+  });
+
   it('refuses a value that is not an envelope at all — and does not blame an older lab for it', () => {
     const result = readEnvelope({ hello: 'world' });
     expect(result.ok).toBe(false);

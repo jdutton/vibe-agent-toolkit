@@ -5,22 +5,25 @@
  * which re-resolves which vat to run from its cwd (the subject) and, when the
  * subject has vat installed, runs the SUBJECT'S copy: a report stamped with the
  * pinned version measured another one. A `tree:` or `dist:` build runs
- * `dist/bin.js` straight; so does an `npx:` build. The pinned spec — a registry
- * name and an exact version, nothing else (`instrument.ts`) — is installed once,
- * into an arm of its own under the invocation's arms root, and the build runs as
- * `node <that install's @vibe-agent-toolkit/cli/dist/bin.js>`: one vat process per
- * repeat, whatever the subject has installed. Running `dist/bin.js` directly is the
- * protection; `bin.js` is the CLI itself and delegates to no other copy.
+ * `dist/bin.js` straight; so does an `npx:` build. The pinned spec — a VAT package
+ * ({@link VAT_PACKAGE_NAMES}) and an exact version, nothing else (`instrument.ts`) —
+ * is installed once, into an arm of its own under the invocation's arms root, and
+ * the build runs as `node <that install's @vibe-agent-toolkit/cli/dist/bin.js>`: one
+ * vat process per repeat, whatever the subject has installed. Running `dist/bin.js`
+ * directly is the protection; `bin.js` is the CLI itself and delegates to no other copy.
  *
- * What stands between the install and the stamp: npm resolves the cli as a
- * DEPENDENCY of the spec, so the cli's own `package.json` must name the pinned
- * version, and the entry's real path must lie inside the install. The entry is
- * then run once with `--version` — a check that the install STARTS (its modules
- * resolve), not of which version it is: `--version` reads that same manifest.
- * `--no-package-lock` leaves third-party ranges to float, so the install's whole
- * `node_modules` is digested into the coordinate's `closure`, and identity is per
- * install: a later install of the same pin can resolve moved third-party
- * dependencies, and is then another instrument.
+ * What stands between the install and the stamp, checked once per install, before
+ * any repeat: the entry is looked for only where the named package's own cli lives;
+ * that cli's `package.json` must name `@vibe-agent-toolkit/cli` (an alias keeps the
+ * real package's name) at the pinned version; and the entry's real path must lie
+ * inside the install. The entry is then run once with `--version` — a check that
+ * `bin.js` and its static imports load, not of which version it is: `--version`
+ * reads that same manifest. `--no-package-lock` leaves third-party ranges to float,
+ * so the install's whole `node_modules` (less npm's own install record) is digested
+ * into the coordinate's `closure`, and identity is per install: a later install of
+ * the same pin can resolve moved third-party dependencies, and is then another
+ * instrument. Not in the closure: an optional peer (`@vibe-agent-toolkit/rag`, say)
+ * that Node finds in a `node_modules` ABOVE the arms root.
  */
 
 import { readFileSync } from 'node:fs';
@@ -44,9 +47,22 @@ import { fingerprintFiles } from './fingerprint.js';
 import { runCommand } from './run.js';
 import type { ResolvedInstrument } from './types.js';
 
-/** A registry package name and the exact version it pins — checked by `instrument.ts`. */
+/** The cli package: what every `npx:` build runs, whichever VAT package it names. */
+const CLI_PACKAGE = '@vibe-agent-toolkit/cli';
+
+/**
+ * The only packages an `npx:` build may name: VAT's umbrella and its cli. Any other
+ * package could carry a dependency aliased to the cli's name, or a copy of it, and
+ * pass every check the install makes under the pinned label.
+ */
+export const VAT_PACKAGE_NAMES = ['vibe-agent-toolkit', CLI_PACKAGE] as const;
+
+/** One of {@link VAT_PACKAGE_NAMES}. */
+export type VatPackageName = (typeof VAT_PACKAGE_NAMES)[number];
+
+/** A VAT package and the exact version it pins — checked by `instrument.ts`. */
 export interface NpmPin {
-  readonly name: string;
+  readonly name: VatPackageName;
   readonly version: string;
 }
 
@@ -74,11 +90,15 @@ export function npxInstallSite(armsRoot: string, install: NpxInstaller): NpxInst
   return { armsRoot, install, installs: new Map() };
 }
 
-/** The cli's package directory, relative to an install's directory. */
-const CLI_DIR = 'node_modules/@vibe-agent-toolkit/cli';
+/** The cli's entry point, relative to the directory holding a `node_modules`. */
+const CLI_ENTRY = `node_modules/${CLI_PACKAGE}/dist/bin.js`;
 
-/** The cli's entry point, relative to an install's directory. */
-const CLI_ENTRY = `${CLI_DIR}/dist/bin.js`;
+/**
+ * npm's record of how it laid the install out — registry URLs and fields that vary
+ * with npm's version — written even under `--no-package-lock`. It names no byte vat
+ * runs, so it stays out of the closure.
+ */
+const NPM_INSTALL_RECORD = '.package-lock.json';
 
 /** The install arm's name; its build segment is the spec. */
 const INSTALL_ARM = 'npx-install';
@@ -103,6 +123,8 @@ function operatorNpmUserconfig(): string {
  * temp directory and home — with lifecycle scripts off: the lab measures vat, never
  * runs a package's install hooks. The arm's home holds no `.npmrc`, so npm reads the
  * operator's (registry, scoped registries, auth) as its userconfig; an install never writes it.
+ * npm reads that file with `HOME` pointed at the arm's home, so a `~/` or `${HOME}` in it
+ * resolves THERE, not to the operator's home.
  * No arm's own `--env` reaches it: one install serves every arm that names the spec, and
  * the inherited network settings (`arm-env.ts`) are what npm needs to reach a registry.
  * Bounded by {@link NPX_INSTALL_TIMEOUT_MS}.
@@ -116,7 +138,8 @@ export const npmInstall: NpxInstaller = (spec, prefix, dirs) => {
   const npmEnv = { set: { npm_config_userconfig: operatorNpmUserconfig() }, unset: [] };
   const result = runCommand(
     { command: 'npm', leadingArgs: [] },
-    ['install', '--no-save', '--no-package-lock', '--no-audit', '--no-fund', '--ignore-scripts', '--prefix', prefix, spec],
+    // `--`: the spec is an operand, never an option, whatever it starts with.
+    ['install', '--no-save', '--no-package-lock', '--no-audit', '--no-fund', '--ignore-scripts', '--prefix', prefix, '--', spec],
     { cwd: prefix, env: armStepEnvironment(dirs, npmEnv).env, timeoutMs: NPX_INSTALL_TIMEOUT_MS },
   );
   if (result.exitCode !== 0) {
@@ -135,18 +158,30 @@ export function npxInstallArm(armsRoot: string, spec: string): ArmDirectories {
 }
 
 /**
+ * Require the cli an install holds to be the cli, at the pinned version. npm keeps an
+ * aliased package's own name in its manifest, so a name other than the cli's is other
+ * code installed under the cli's directory.
+ *
  * @param entry - The cli entry an install holds
- * @returns The version its package's `package.json` names
+ * @param pin - The VAT package and the version it pins
+ * @param spec - The pinned spec, for the error message
+ * @throws {Error} when its package's `package.json` names another package or version
  */
-function cliVersionAt(entry: string): unknown {
+function requirePinnedCli(entry: string, pin: NpmPin, spec: string): void {
   const manifest = safePath.join(entry, '..', '..', 'package.json');
-  return (JSON.parse(readFileSync(manifest, 'utf8')) as { version?: unknown }).version;
+  const { name, version } = JSON.parse(readFileSync(manifest, 'utf8')) as { name?: unknown; version?: unknown };
+  const misnamed = name === CLI_PACKAGE ? null : `${CLI_PACKAGE} resolved to "${String(name)}", another package under its name`;
+  const misversioned = version === pin.version ? null : `it resolved ${CLI_PACKAGE} ${String(version)}, not ${pin.version}`;
+  const wrong = misnamed ?? misversioned;
+  if (wrong !== null) {
+    throw new Error(`the install of ${spec}: ${wrong}: the report would name one build and measure another`);
+  }
 }
 
 /**
- * Run the entry once with `--version` and require it to exit 0: the install starts —
- * its modules resolve. Not a version check: `--version` reads the manifest
- * {@link cliVersionAt} already read.
+ * Run the entry once with `--version` and require it to exit 0: `bin.js` and its static
+ * imports load. A module the cli imports only on demand is not reached. Not a version
+ * check: `--version` reads the manifest {@link requirePinnedCli} already read.
  *
  * @param entry - The cli entry about to be stamped
  * @param spec - The pinned spec, for the error message
@@ -174,11 +209,11 @@ function requireEntryStarts(entry: string, spec: string, dirs: ArmDirectories): 
  * The install is made in the arm's `tmp/`, emptied first, so an interrupted run leaves
  * it under the arms root — never in the system temp directory — for the next to clear.
  *
- * @param pin - The registry name and the version it pins
+ * @param pin - The VAT package and the version it pins
  * @param site - The arms root and installer
  * @returns The resolved instrument
  * @throws {Error} when the install holds no cli entry, one outside the install, one of another
- *   version, or one that does not start
+ *   package or version, or one that does not start
  */
 export function installNpxInstrument(pin: NpmPin, site: NpxInstallSite): Promise<ResolvedInstrument> {
   const spec = `${pin.name}@${pin.version}`;
@@ -190,17 +225,29 @@ export function installNpxInstrument(pin: NpmPin, site: NpxInstallSite): Promise
 }
 
 /**
+ * Where the named package's own cli lives, in the order Node resolves it from that
+ * package: the cli itself is the hoisted one; the umbrella's is its own dependency,
+ * nested under it when npm cannot hoist it, else hoisted. No other directory is
+ * searched, so no copy a dependency bundles can win.
+ *
  * @param prefix - The install's directory
- * @param name - The registry name installed there
+ * @param name - The VAT package installed there
+ * @returns The candidate cli entries, first match wins
+ */
+function cliEntryCandidates(prefix: string, name: VatPackageName): string[] {
+  const hoisted = safePath.join(prefix, CLI_ENTRY);
+  return name === CLI_PACKAGE ? [hoisted] : [safePath.join(prefix, 'node_modules', name, CLI_ENTRY), hoisted];
+}
+
+/**
+ * @param prefix - The install's directory
+ * @param name - The VAT package installed there
  * @param spec - The pinned spec, for the error message
  * @returns The install's cli entry, proven to lie inside it
  * @throws {Error} when there is none, or its real path lies outside the install
  */
-function locateCliEntry(prefix: string, name: string, spec: string): string {
-  // npm nests the cli under the named package when it cannot hoist it.
-  const entry = [safePath.join(prefix, 'node_modules', name, CLI_ENTRY), safePath.join(prefix, CLI_ENTRY)].find((path) =>
-    pathPresent(path, { follow: path }, everywhere('source'), 'probe'),
-  );
+function locateCliEntry(prefix: string, name: VatPackageName, spec: string): string {
+  const entry = cliEntryCandidates(prefix, name).find((path) => pathPresent(path, { follow: path }, everywhere('source'), 'probe'));
   if (entry === undefined) throw new Error(`the install of ${spec} holds no ${CLI_ENTRY} to measure`);
   // Through every link: an entry npm linked from elsewhere is not the published bytes.
   if (isUnderRoot(prefix, entry) !== 'inside') {
@@ -212,7 +259,7 @@ function locateCliEntry(prefix: string, name: string, spec: string): string {
 /**
  * {@link installNpxInstrument}, for a spec the site has not installed.
  *
- * @param pin - The registry name and the version it pins
+ * @param pin - The VAT package and the version it pins
  * @param spec - Their spec
  * @param site - The arms root and installer
  * @returns The resolved instrument
@@ -226,15 +273,9 @@ async function installOnce(pin: NpmPin, spec: string, site: NpxInstallSite): Pro
   const prefix = mkdirSyncReal(safePath.join(dirs.tmp, 'install'));
   await site.install(spec, prefix, dirs);
   const entry = locateCliEntry(prefix, pin.name, spec);
-  const installed = cliVersionAt(entry);
-  if (installed !== pin.version) {
-    throw new Error(
-      `the install of ${spec} resolved @vibe-agent-toolkit/cli ${String(installed)}, not ${pin.version}: ` +
-        'the report would name one build and measure another',
-    );
-  }
+  requirePinnedCli(entry, pin, spec);
   requireEntryStarts(entry, spec, dirs);
-  const closure = fingerprintFiles(safePath.join(prefix, 'node_modules'), { fromGit: false, exclude: [] }).fingerprint;
+  const closure = fingerprintFiles(safePath.join(prefix, 'node_modules'), { fromGit: false, exclude: [NPM_INSTALL_RECORD] }).fingerprint;
   return {
     command: process.execPath,
     leadingArgs: [entry],

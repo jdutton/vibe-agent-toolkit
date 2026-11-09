@@ -81,7 +81,7 @@ const PREPARED = { path: '/arms/run-1/clone', commit: 'c0ffee'.padEnd(40, '0') }
 
 /** B's build and C's build, as the captures' coordinates and the arms report's builds both name them. */
 const RC11: InstrumentVersion = { version: '0.2.0-rc.11', commit: null, dirty: null, closure: 'a'.repeat(64) };
-const CAND: InstrumentVersion = { version: '0.2.0', commit: null, dirty: null, closure: null };
+const CAND: InstrumentVersion = { version: '0.2.0', commit: null, dirty: null, closure: 'c'.repeat(64) };
 
 /** One subject's capture, run in the prepared clone at its commit unless overridden. */
 function capture(

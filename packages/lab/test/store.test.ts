@@ -45,7 +45,7 @@ describe('reportFileName', () => {
     // The case the whole scheme exists for: every dev build carries the semver
     // of the release it branched from. If the name keyed on version alone, a
     // dev-vs-release comparison would write both sides to one file.
-    const dev = reportAt({ instrument: { version: '0.1.42', commit: '2'.repeat(40), dirty: false, closure: null } });
+    const dev = reportAt({ instrument: { version: '0.1.42', commit: '2'.repeat(40), dirty: false, closure: 'c'.repeat(64) } });
     expect(reportFileName(report())).not.toBe(reportFileName(dev));
   });
 
@@ -64,7 +64,7 @@ describe('reportFileName', () => {
     // branched from are different binaries, so sharing a filename would let one
     // overwrite the other's measurement.
     const dirty = reportAt({
-      instrument: { version: '0.1.42', commit: '1'.repeat(40), dirty: true, closure: null },
+      instrument: { version: '0.1.42', commit: '1'.repeat(40), dirty: true, closure: 'c'.repeat(64) },
     });
     expect(reportFileName(report())).not.toBe(reportFileName(dirty));
   });
@@ -74,7 +74,7 @@ describe('reportFileName', () => {
     // is the built output, not the checkout. So a dirty instrument is pinned by
     // observation time — weaker than an identity, and deliberately so, but it
     // does guarantee the second run never silently overwrites the first.
-    const instrument = { version: '0.1.42', commit: '1'.repeat(40), dirty: true, closure: null };
+    const instrument = { version: '0.1.42', commit: '1'.repeat(40), dirty: true, closure: 'c'.repeat(64) };
     const first = { ...reportAt({ instrument }), capturedAt: '2026-08-14T10:00:00.000Z' };
     const second = { ...reportAt({ instrument }), capturedAt: '2026-08-14T11:30:00.000Z' };
 
@@ -182,7 +182,7 @@ describe('writeReport and readReport', () => {
     const impossible = report({
       coordinate: {
         ...COORDINATE,
-        instrument: { version: '0.1.42', commit: null, dirty: false, closure: null },
+        instrument: { version: '0.1.42', commit: null, dirty: false, closure: 'c'.repeat(64) },
       },
     });
     await expect(writeReport(tempDir, impossible)).rejects.toThrow(/could not read back/);

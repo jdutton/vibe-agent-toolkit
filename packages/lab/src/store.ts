@@ -86,8 +86,7 @@ function subjectVersionTag(coordinate: Coordinate): string {
  * `InstrumentVersion.closure`): two `dist:` builds of one version are two
  * instruments, and a name keyed on the version alone would let the second
  * report silently overwrite the first. An `npx:` build's closure is its
- * install's, so it is named the same way; `release` names only a stored report
- * that carries no closure.
+ * install's, so it is named the same way.
  *
  * A dirty build's identity is NOT its commit — the bytes measured were not the
  * bytes at that commit. A dirty instrument is pinned by *when it was observed*,
@@ -110,12 +109,11 @@ function instrumentTag(envelope: ReportEnvelope<unknown>): string {
  * The part of an instrument's name that says which build it was.
  *
  * @param commit - The build's commit, if it came from a checkout
- * @param closure - The build's closure digest, if its bytes were on disk
- * @returns A short commit, a short closure, or `release`
+ * @param closure - The build's closure digest
+ * @returns A short commit, else a short closure
  */
-function buildTag(commit: string | null, closure: string | null): string {
-  if (commit !== null) return commit.slice(0, SHORT_ID_LENGTH);
-  return closure === null ? 'release' : `closure-${closure.slice(0, SHORT_ID_LENGTH)}`;
+function buildTag(commit: string | null, closure: string): string {
+  return commit === null ? `closure-${closure.slice(0, SHORT_ID_LENGTH)}` : commit.slice(0, SHORT_ID_LENGTH);
 }
 
 /**

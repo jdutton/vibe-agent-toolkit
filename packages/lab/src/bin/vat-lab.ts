@@ -101,7 +101,7 @@ import {
   type MeasuredSequenceSpec,
   POPULATION_MEASURED_COMMANDS,
 } from '../harness/commands.js';
-import { resolveInstrument } from '../harness/instrument.js';
+import { pinOf, resolveInstrument } from '../harness/instrument.js';
 import { npmInstall, type NpxInstallSite, npxInstallSite } from '../harness/npx-install.js';
 import { instrumentLabel, instrumentTrustNotes } from '../harness/render.js';
 import type { SequenceStep } from '../harness/sequence.js';
@@ -248,6 +248,12 @@ export function parseInstrument(value: string): InstrumentSource {
       return { kind: 'dist', path: rest };
     }
     case 'npx': {
+      // Checked here, not first at resolution: a bad spec is refused before any setup.
+      try {
+        pinOf(rest);
+      } catch (error) {
+        throw new InvalidArgumentError(error instanceof Error ? error.message : String(error));
+      }
       return { kind: 'npx', spec: rest };
     }
     default: {

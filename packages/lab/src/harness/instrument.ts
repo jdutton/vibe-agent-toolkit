@@ -63,9 +63,10 @@
  * `bin`, which *is* the wrapper, and an adopter with vat installed had its own
  * copy measured under the pinned name. So the spec is installed under the arms
  * root and resolved to that install's `dist/bin.js` (see `npx-install.ts`).
- * The spec must be a registry package name pinned to an exact version: npm
- * reads anything else — a path, a URL, a tarball, a git ref, an alias — as
- * something other than a published version, under a label that looks pinned.
+ * The spec must be `vibe-agent-toolkit` or `@vibe-agent-toolkit/cli` pinned to an
+ * exact version: npm reads anything else — a path, a URL, a tarball, a git ref, an
+ * alias — as something other than a published version, and any other package could
+ * carry other code under the cli's name, under a label that looks pinned.
  *
  * ## Windows
  *
@@ -82,7 +83,13 @@ import { z } from 'zod';
 
 import { closureDigest } from './closure.js';
 import { hasUncommittedChanges } from './git-state.js';
-import { installNpxInstrument, type NpmPin, type NpxInstallSite } from './npx-install.js';
+import {
+  installNpxInstrument,
+  type NpmPin,
+  type NpxInstallSite,
+  VAT_PACKAGE_NAMES,
+  type VatPackageName,
+} from './npx-install.js';
 import type { InstrumentSource, ResolvedInstrument } from './types.js';
 
 /**
@@ -486,77 +493,47 @@ async function resolveDist(path: string): Promise<ResolvedInstrument> {
   };
 }
 
-/** One segment of an npm package name: lowercase, URL-safe, no leading `.` or `_`. */
-const NPM_NAME_SEGMENT = /^[a-z0-9~-][a-z0-9._~-]*$/u;
-
-/** npm's limit on a package name's length. */
-const NPM_PACKAGE_NAME_MAX_LENGTH = 214;
-
 /**
- * Is this a registry package name, as npm's name grammar has it — an optional
- * `@scope/`, then one name segment, no further `/`, no `:`? No path, URL,
- * tarball, git ref or `npm:` alias can be spelled in it. Split-then-match, as
- * {@link isPinnedVersion} is: each segment's pattern is anchored and flat.
- *
  * @param name - What precedes the spec's version separator
- * @returns `true` for `vibe-agent-toolkit`, `@vibe-agent-toolkit/cli`
+ * @returns `true` for exactly the names in {@link VAT_PACKAGE_NAMES}
  */
-function isNpmPackageName(name: string): boolean {
-  if (name.length > NPM_PACKAGE_NAME_MAX_LENGTH) return false;
-  if (!name.startsWith('@')) return NPM_NAME_SEGMENT.test(name);
-  // A segment holds no `/`, so a second one fails the name half.
-  const slash = name.indexOf('/');
-  return slash > 1 && NPM_NAME_SEGMENT.test(name.slice(1, slash)) && NPM_NAME_SEGMENT.test(name.slice(slash + 1));
+function isVatPackageName(name: string): name is VatPackageName {
+  return (VAT_PACKAGE_NAMES as readonly string[]).includes(name);
 }
 
 /**
- * Split an npm spec into a registry package name and the version it pins.
+ * Split an `npx:` spec into the VAT package it names and the version it pins. Pure:
+ * `parseInstrument` calls it so every verb refuses a bad spec before any setup.
  *
- * @param spec - An npm package spec, trimmed
- * @returns The name and the pinned version
- * @throws {Error} when the spec pins no concrete version, or what precedes it is not a registry package name
+ * @param spec - What follows `npx:`
+ * @returns The package and the pinned version
+ * @throws {Error} when the spec is empty, pins no concrete version, or names a package other than
+ *   `vibe-agent-toolkit` or `@vibe-agent-toolkit/cli`
  */
-function pinOf(spec: string): NpmPin {
-  const at = spec.lastIndexOf('@');
+export function pinOf(spec: string): NpmPin {
+  const trimmed = spec.trim();
+  if (trimmed === '') throw new Error('the npx: spec is empty.');
+  const at = trimmed.lastIndexOf('@');
   // `-1` is a bare name; `0` is the scope sigil of `@scope/pkg`. Neither pins.
-  const version = at <= 0 ? '' : spec.slice(at + 1);
+  const version = at <= 0 ? '' : trimmed.slice(at + 1);
   if (!isPinnedVersion(version)) {
     throw new Error(
-      `resolveInstrument({ kind: 'npx' }): the spec "${spec}" is not pinned to a concrete ` +
+      `the npx: spec "${trimmed}" is not pinned to a concrete ` +
         'version. npm would resolve it against the registry at run time, so two reports ' +
         'stamped from it would claim to be the same instrument while potentially being ' +
-        `different builds. Pin it, e.g. "${spec}@0.1.41".`,
+        `different builds. Pin it, e.g. "${trimmed}@0.1.41".`,
     );
   }
-  const name = spec.slice(0, at);
-  if (!isNpmPackageName(name)) {
+  const name = trimmed.slice(0, at);
+  if (!isVatPackageName(name)) {
     throw new Error(
-      `resolveInstrument({ kind: 'npx' }): the spec "${spec}" does not name a registry package: ` +
-        `"${name}" is not an npm package name, and npm would read it as a path, URL, tarball, git ` +
-        'ref or alias — installing something other than the published version the label pins. ' +
-        `Name the package, e.g. "vibe-agent-toolkit@${version}". ${NO_FALLBACK_NOTE}`,
+      `the npx: spec "${trimmed}" does not name VAT: only ${VAT_PACKAGE_NAMES.join(' and ')} are installed ` +
+        'under a pinned label. Any other spec — another package, a path, URL, tarball, git ref or alias — ' +
+        'could install other code that passes as the pinned cli. ' +
+        `Name VAT, e.g. "vibe-agent-toolkit@${version}". ${NO_FALLBACK_NOTE}`,
     );
   }
   return { name, version };
-}
-
-/**
- * Resolve a published version: install the pinned spec and run its cli entry.
- *
- * @param spec - A registry package name pinned to a concrete version
- * @param site - Where the spec is installed
- * @returns The resolved instrument
- * @throws {Error} when the spec is empty, pins no concrete version or names no registry package,
- *   or its install is not that version
- */
-function resolveNpx(spec: string, site: NpxInstallSite): Promise<ResolvedInstrument> {
-  const trimmed = spec.trim();
-  if (trimmed === '') {
-    throw new Error("resolveInstrument({ kind: 'npx' }): the spec is empty.");
-  }
-  // A published tarball carries no provenance: no commit, and therefore nothing
-  // that could have been dirty. Its closure is the install's.
-  return installNpxInstrument(pinOf(trimmed), site);
 }
 
 /**
@@ -577,7 +554,9 @@ export function resolveInstrument(source: InstrumentSource, npx: NpxInstallSite)
     case 'dist':
       return resolveDist(source.path);
     case 'npx':
-      // `resolveNpx` refuses a spec synchronously; its throw must still arrive as a rejection.
-      return promised(() => resolveNpx(source.spec, npx));
+      // A published tarball carries no provenance: no commit, and therefore nothing that could
+      // have been dirty; its closure is the install's. `pinOf` refuses a spec synchronously;
+      // its throw must still arrive as a rejection.
+      return promised(() => installNpxInstrument(pinOf(source.spec), npx));
   }
 }
