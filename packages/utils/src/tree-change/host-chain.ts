@@ -51,7 +51,11 @@ export function walkHostChain(path: string, rule: ChainRule): LinkChain {
   return walkLinkChain(toForwardSlash(safePath.resolve(path)), rule, HOST_PROBE);
 }
 
-/** How each refusal reads, after "the symbolic link <link> "; the link's text shown, never raw. */
+/**
+ * How each refusal reads, after "the symbolic link <link> "; the link's text shown, never raw —
+ * set off by the message, so unquoted ({@link visibleText}), except where the refusal is about the
+ * text's own last character: a trailing dot or space shows only between quotes ({@link shownName}).
+ */
 function refusalClause(refusal: ChainRefusal): string {
   switch (refusal.why) {
     case 'network':

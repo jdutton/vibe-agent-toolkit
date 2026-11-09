@@ -17,14 +17,16 @@
  * What it catches: an ARRAY LITERAL that reaches a call or `new` — as an
  * argument (through `as`, `satisfies`, `!` or a branch of `?:`), or through a
  * variable it initializes — that does not name another program as its first
- * argument (`spawnSync('npm', […])`), whose subcommand (its first element that is
+ * argument (`spawnSync('npm', […])`; `git`, `/usr/bin/git` and `git.exe` are git), whose subcommand (its first element that is
  * not a global option, nor the value of `-c`, `-C`, `--git-dir`, `--work-tree`,
  * `--namespace` or `--config-env`, past any leading spread) is one of the above,
  * unless it is the first argument of a call to `runGitBytes` itself. So an argv
  * parked in a variable, or handed to a wrapper, is caught too.
  *
  * What it does not, stated rather than implied: an argv built by `push` or from
- * a subcommand held in a variable; what a caller does with the bytes afterwards
+ * a subcommand held in a variable; one assigned after its declaration
+ * (`a = [...]`), returned from a function, or held in an object property; a
+ * local function that is itself named `runGitBytes`; what a caller does with the bytes afterwards
  * (decoding them is the caller's judgment); other subcommands that can print
  * committed paths (`diff --name-only`, `log --name-only`, `archive`, `grep
  * <tree>`), which VAT does not run against a commit it judges; and a WORKING-TREE
@@ -44,6 +46,9 @@ const { calleeName } = require('./callee-name.cjs');
 
 /** The subcommands whose output is what the object store holds. */
 const OBJECT_READS = new Set(['ls-tree', 'cat-file', 'diff-tree', 'rev-list', 'show']);
+
+/** A program that is git: bare, by a path (`/usr/bin/git`, `C:\…\git.exe`), with or without `.exe`, any case. */
+const GIT_PROGRAM = /(?:^|[\\/])git(?:\.exe)?$/i;
 
 /** Global options that take the NEXT element as their value (`--git-dir=<d>` spellings start with `-` and are skipped anyway). */
 const VALUED_GLOBAL_OPTIONS = new Set(['-c', '-C', '--git-dir', '--work-tree', '--namespace', '--config-env']);
@@ -94,8 +99,8 @@ function outermost(node) {
  * (`spawnSync('npm', ['show', pkg])`). A call naming no program is assumed to run git.
  */
 function runsOtherProgram(call) {
-  const program = call.arguments[0];
-  return program?.type === 'Literal' && typeof program.value === 'string' && program.value !== 'git';
+  const program = staticString(call.arguments[0]);
+  return program !== undefined && !GIT_PROGRAM.test(program);
 }
 
 /** Whether `node` is an argument of a call or `new` that may run git, directly or spread into an array that is. */

@@ -74,6 +74,22 @@ describe('stageDirInto', () => {
     });
   });
 
+  // A cloned repository chooses the link's name, and the refusal reaches the operator's terminal:
+  // the name is shown quoted and by its escapes. A C1 CSI and a right-to-left override, both legal
+  // in a name on every host CI runs (NTFS refuses only C0 controls).
+  it('shows a refused symlink\'s name by its escapes, never raw', async ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const csi = String.fromCodePoint(0x9b);
+    const rlo = String.fromCodePoint(0x20_2e);
+    createSymlink(cap, 'SKILL.md', safePath.join(src, `e${csi}v${rlo}il`));
+    const bs = '\\';
+    const refusal: unknown = await stageDirInto(src, ctx, 'sym').catch((error: unknown) => error);
+    const message = refusal instanceof Error ? refusal.message : '';
+    expect(message).toContain(`/e${bs}u009bv${bs}u202eil"`);
+    expect(message).not.toContain(csi);
+    expect(message).not.toContain(rlo);
+  });
+
   it('refuses a pre-existing staged dir not owned by the current uid', async () => {
     // Pre-create the staging root + key dir, then fake a foreign owner via stat override.
     mkdirSyncReal(ctx.stagingRoot, { recursive: true, mode: 0o700 });

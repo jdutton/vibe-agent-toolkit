@@ -220,7 +220,8 @@ export interface GitBytesRunResult extends Omit<GitRunResult, 'stdout'> {
  * carry the bytes exactly and are turned back into them here. The spawn encodes `input` by the
  * same codec, so `input` — text, written to git as UTF-8 as {@link runGit} writes it — is handed
  * over as its UTF-8 bytes in hex. stderr is git's own message, decoded as text through the one
- * decoding seam and trimmed as {@link runGit}'s is. Hex doubles the string the spawn builds, so
+ * decoding seam (`decodeTextContent`, held by `local/no-raw-text-decode`) and trimmed as
+ * {@link runGit}'s is. Hex doubles the string the spawn builds, so
  * `maxBuffer` is clamped to half the engine's string limit less 1 MiB of headroom (about 255 MiB on
  * 64-bit V8): past it the
  * spawn would throw, and this function, like {@link runGit}, never throws.

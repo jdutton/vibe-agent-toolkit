@@ -1,7 +1,11 @@
 /**
- * THE one way a message shows text it did not write — a path, a link's text, a name a repository
+ * THE one way a refusal shows text it did not write — a path, a link's text, a name a repository
  * or an archive supplied, what a child process said — so the text can neither act on the
  * operator's terminal nor hide characters from whoever, human or model, reads the message.
+ * (A grader's model-facing text is sanitized by `grader-text` in agent-skills — a different job:
+ * it neutralizes what a model wrote for a model to read, and keeps the joiners an emoji needs.)
+ * Each message site calls this itself, and no check finds one that forgets: see
+ * `docs/contributing/known-defects.md`.
  *
  * Two spellings of one classification ({@link unshowable}):
  *
@@ -21,11 +25,12 @@ const BACKSLASH = '\\';
  * The categories of character that must not reach a message as themselves, named by Unicode rather
  * than by a hand-kept list: a control (`Cc` — a terminal acts on C0, C1 and DEL), a format character
  * (`Cf` — bidirectional marks, zero-width and invisible characters, the tag characters that carry
- * hidden text to a model reading the message), a line or paragraph separator, a private-use
- * character, an unassigned code point or noncharacter (`Cn` — what a later Unicode may make
- * invisible). {@link UNSHOWABLE_RANGES} adds the invisibles outside them.
+ * hidden text to a model reading the message), a lone surrogate (`Cs` — it prints as U+FFFD, the
+ * same as a real one), a line or paragraph separator, a private-use character, an unassigned code
+ * point or noncharacter (`Cn` — what a later Unicode may make invisible). {@link UNSHOWABLE_RANGES}
+ * adds the invisibles outside them.
  */
-const UNSHOWABLE_CATEGORY = /^[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Co}\p{Cn}]$/u;
+const UNSHOWABLE_CATEGORY = /^[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\p{Co}\p{Cn}]$/u;
 
 /** The invisibles {@link UNSHOWABLE_CATEGORY} does not name, as inclusive code-point ranges. */
 const UNSHOWABLE_RANGES: ReadonlyArray<readonly [number, number]> = [

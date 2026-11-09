@@ -32,6 +32,8 @@ const CASES: RuleCases = {
     { code: "const options = { modes: ['show', 'hide'] };", filename: SRC },
     // Another program's argv, named as the call's first argument.
     { code: "spawnSync('npm', ['show', pkg, 'version']);", filename: SRC },
+    // A program whose name merely ends in "git" is not git.
+    { code: "spawnSync('legit', ['show', thing]);", filename: SRC },
     { code: "execa('pip', ['show', name]);", filename: SRC },
     // Wrapped, to the bytes runner.
     { code: "runGitBytes(['cat-file', '--batch'] as const, options);", filename: SRC },
@@ -65,6 +67,9 @@ const CASES: RuleCases = {
     { code: "new GitReader(['cat-file', '--batch']);", filename: SRC, errors: [{ messageId: 'textRead' }] },
     // git named as the program is still git.
     { code: "spawnSync('git', ['cat-file', '--batch']);", filename: SRC, errors: [{ messageId: 'textRead' }] },
+    { code: "spawnSync('/usr/bin/git', ['cat-file', '--batch']);", filename: SRC, errors: [{ messageId: 'textRead' }] },
+    { code: "execFileSync('git.exe', ['ls-tree', '-z', c]);", filename: SRC, errors: [{ messageId: 'textRead' }] },
+    { code: "spawnSync(`C:\\\\Program Files\\\\Git\\\\cmd\\\\GIT.EXE`, ['show', c]);", filename: SRC, errors: [{ messageId: 'textRead' }] },
     // Not the argv position of the bytes runner.
     { code: "runGitBytes(['--version'], ['cat-file']);", filename: SRC, errors: [{ messageId: 'textRead' }] },
     // A wrapper is not the bytes runner, whatever its name says: it may decode.

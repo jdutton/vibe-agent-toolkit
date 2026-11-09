@@ -632,6 +632,24 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Fix:** judge every committed path on every host, as link texts already are: refuse a commit
   whose paths collide once case-folded and NFC-normalized, and a path no Windows host can hold.
 
+### Nothing finds a refusal that shows a name it did not write without escaping it
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** not today on a git source
+- **Mechanism:** `shownName` / `visibleText` are the one way a message shows a path, a link's text or
+  a child process's words, but each message site has to call them. The sites a repository's names
+  reach today do: a git source's refusals, the tree-change link walk, the followed-walk refusals,
+  staging, and every `FsFaultError` (escaped once in its constructor). Every other `VatError`
+  message that interpolates a path — a local skill source, a config path, an archive entry —
+  prints it as it is, and the next one written can forget. The link walk shows names unquoted
+  (set off by the message), so a name whose characters ARE a literal `‮` reads like one that
+  holds the override; the git source's own refusals quote them and are unambiguous.
+- **Traced in code**, not reproduced against the built CLI.
+- **Where:** every `new VatError(` / `super(` whose message interpolates a path —
+  `git grep -nE "super\(|new VatError\(" -- 'packages/*/src'`
+- **Fix:** escape once where a message is printed (the CLI's error writer, keeping the newlines a
+  message lays out), or a lint rule that reports a refusal template interpolating a value not
+  wrapped in `shownName` / `visibleText`.
+
 ### A one-file edit repopulates the whole tree
 
 - **Blocks:** the stable tag

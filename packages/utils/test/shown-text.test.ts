@@ -29,6 +29,8 @@ describe('visibleText', () => {
     ['a private-use character', 0xe0_00, 'ue000'],
     ['a tag character', 0xe_00_41, 'u{e0041}'],
     ['a supplementary variation selector', 0xe_01_00, 'u{e0100}'],
+    ['a lone high surrogate', 0xd8_00, 'ud800'],
+    ['a lone low surrogate', 0xdc_00, 'udc00'],
   ] as const)('shows %s by its escape', ([, code, spelled]) => {
     const character = String.fromCodePoint(code);
     const shown = visibleText(`a${character}b`);
