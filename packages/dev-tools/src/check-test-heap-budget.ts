@@ -34,8 +34,8 @@ import { PROJECT_ROOT, isEntrypoint, log, safeExecResult } from './common.js';
 
 /** Default per-FILE heap ceiling, in MB. ~1.5x headroom over the heaviest
  * measured file (resource-compiler's transformer.integration.test.ts, up to
- * 382MB across repeated runs — forks are reused across files under
- * maxWorkers:2, so heap varies with what ran earlier in the same fork; budget
+ * 382MB across repeated runs — forks are reused across files (2 workers, or
+ * cli's integration tier's 4), so heap varies with what ran earlier in the same fork; budget
  * headroom must cover that variance, not just one sample). Well under the
  * 1024MB per-fork execArgv cap in vitest.shared.ts. */
 export const DEFAULT_BUDGET_MB = 600;

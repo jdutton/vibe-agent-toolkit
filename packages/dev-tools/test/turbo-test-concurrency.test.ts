@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { maxTestWorkers } from '../../../vitest.shared.js';
+import { cliIntegrationTestWorkers, forkRssBudgetMb, maxTestWorkers } from '../../../vitest.shared.js';
 import { PROJECT_ROOT } from '../src/common.js';
 
 /**
@@ -41,6 +41,38 @@ function readTurboJson(): { tasks: Record<string, { dependsOn?: string[] }> } {
   return JSON.parse(withoutComments) as { tasks: Record<string, { dependsOn?: string[] }> };
 }
 
+interface IntegrationTestBlock {
+  maxWorkers: number;
+  setupFiles: string[];
+  provide: { forkRssBudgetMb?: number };
+}
+
+async function loadIntegrationConfig(configPath: string): Promise<{ test: IntegrationTestBlock }> {
+  const loaded = (await import(pathToFileURL(configPath).href)) as { default: { test: IntegrationTestBlock } };
+  return loaded.default;
+}
+
+const INTEGRATION_TASK = /^@vibe-agent-toolkit\/(.+)#test:integration$/;
+
+/**
+ * The native-memory packages, read from the turbo.json chain itself: every package whose
+ * integration task waits on another package's, and every package waited on. One source.
+ */
+function nativeMemoryChain(turbo: ReturnType<typeof readTurboJson>): Set<string> {
+  const chain = new Set<string>();
+  for (const [task, { dependsOn = [] }] of Object.entries(turbo.tasks)) {
+    const own = INTEGRATION_TASK.exec(task)?.[1];
+    if (own === undefined) continue;
+    for (const dep of dependsOn) {
+      const waitedOn = INTEGRATION_TASK.exec(dep)?.[1];
+      if (waitedOn === undefined) continue;
+      chain.add(own);
+      chain.add(waitedOn);
+    }
+  }
+  return chain;
+}
+
 /** turbo's own cross-package concurrency ceiling for the two heavy tiers. */
 const MAX_HEAVY_TIER_CONCURRENCY = 4;
 
@@ -71,22 +103,27 @@ describe('turbo test-suite concurrency (cross-package native-memory guard)', () 
     );
   });
 
-  // The per-package worker cap is what bounds a native-memory package's peak; a package may raise
-  // its own only when its forks hold none (`cliIntegrationTestWorkers` in vitest.shared.ts).
-  it('lets only a package outside the native-memory chain raise its integration worker cap', async () => {
-    const nativeMemory = new Set(['rag', 'rag-lancedb', 'resource-compiler']);
+  // The per-package worker cap is what bounds a native-memory package's peak. A package may raise
+  // its own only outside that chain, and only with the per-fork RSS budget installed
+  // (`cliIntegrationTestWorkers`, `forkRssBudgetMb` in vitest.shared.ts).
+  it('lets only cli raise its integration worker cap, never a native-memory package, and only under the RSS budget', async () => {
+    const nativeMemory = nativeMemoryChain(turbo);
+    expect([...nativeMemory].toSorted((a, b) => a.localeCompare(b))).toEqual(['rag', 'rag-lancedb', 'resource-compiler']);
     const raised: string[] = [];
     for (const dir of readdirSync(safePath.join(PROJECT_ROOT, 'packages'))) {
       const configPath = safePath.join(PROJECT_ROOT, 'packages', dir, 'vitest.integration.config.ts');
       if (!existsSync(configPath)) continue;
-      const config = (await import(pathToFileURL(configPath).href)) as { default: { test?: { maxWorkers?: unknown } } };
-      const workers = config.default.test?.maxWorkers;
-      expect(typeof workers, `${dir}: maxWorkers must be a number`).toBe('number');
-      if (nativeMemory.has(dir)) expect(workers, `${dir} holds native memory`).toBe(maxTestWorkers);
-      if (Number(workers) > maxTestWorkers) raised.push(dir);
+      const { test } = await loadIntegrationConfig(configPath);
+      if (nativeMemory.has(dir)) expect(test.maxWorkers, `${dir} holds native memory`).toBe(maxTestWorkers);
+      if (test.maxWorkers <= maxTestWorkers) continue;
+      raised.push(dir);
+      expect(test.setupFiles.some((file) => file.endsWith('vitest.fork-rss-budget.setup.js')), `${dir} raised its cap without the RSS budget`).toBe(true);
+      expect(test.provide.forkRssBudgetMb).toBe(forkRssBudgetMb);
     }
-    // Both ways: the scan saw the one package that raises its cap, so it is not blind.
+    // Both ways: the scan saw the one package that raises its cap, at the one value, so it is not blind.
     expect(raised).toEqual(['cli']);
+    const cli = await loadIntegrationConfig(safePath.join(PROJECT_ROOT, 'packages', 'cli', 'vitest.integration.config.ts'));
+    expect(cli.test.maxWorkers).toBe(cliIntegrationTestWorkers);
   });
 
   it('leaves test:unit parallel (light, no native models — no cap needed)', () => {

@@ -234,6 +234,7 @@
     "vitest.*.config.ts",
     "vitest.shared.ts",
     "vitest.setup.js",
+    "vitest.fork-rss-budget.setup.js",
     "packages/dev-tools/src/copy-yaml-assets.ts",
     // Loaded by vitest.shared.ts into every tier's reporters: the per-file
     // duration ratchet and its allowlist are inputs of every test task, so an
