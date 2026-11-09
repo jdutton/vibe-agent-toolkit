@@ -21,7 +21,7 @@ import { dirname } from 'node:path';
 import { createSymlinkAsync, isVatError, normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { ARM_REFUSED_CODE, type ArmDirectories } from '../../src/harness/arm-dirs.js';
+import { ARM_REFUSED_CODE, type ArmDirectories, armDirectories } from '../../src/harness/arm-dirs.js';
 import type { ArmEnvironment } from '../../src/harness/arm-env.js';
 import { prepareInstrument, resolveInstrument } from '../../src/harness/instrument.js';
 import {
@@ -35,6 +35,7 @@ import {
 import type * as RunModule from '../../src/harness/run.js';
 import { runCommand } from '../../src/harness/run.js';
 import type { InstrumentSource } from '../../src/harness/types.js';
+import { distinctSlug } from '../../src/store.js';
 import { layFakeNode } from '../npm-fixtures.js';
 
 /**
@@ -127,9 +128,9 @@ function resolveNpx(install: NpxInstaller, root = armsRoot()): ReturnType<typeof
  * Every install refusal is an arm refusal: the CLI prints it as one `REFUSED:` line.
  *
  * @param pending - A resolution expected to be refused
- * @param message - What the refusal must say
+ * @param message - What the refusal must say: a pattern, or text it must contain
  */
-async function expectRefusal(pending: Promise<unknown>, message: RegExp): Promise<void> {
+async function expectRefusal(pending: Promise<unknown>, message: RegExp | string): Promise<void> {
   const outcome = await pending.then(() => null, (error: unknown) => error);
   expect(isVatError(outcome, ARM_REFUSED_CODE), `not an arm refusal: ${String(outcome)}`).toBe(true);
   expect((outcome as Error).message).toMatch(message);
@@ -201,8 +202,9 @@ function cliWithOptionalPeer(): Record<string, string> {
  */
 function ragPackage(which: string): Record<string, string> {
   return {
-    [`node_modules/${RAG}/package.json`]: manifest(RAG, VERSION, { type: 'module', exports: './index.js' }),
-    [`node_modules/${RAG}/index.js`]: `export const which = ${JSON.stringify(which)};\n`,
+    // Under `dist/`, as a VAT package ships: an installed optional peer is part of the closure.
+    [`node_modules/${RAG}/package.json`]: manifest(RAG, VERSION, { type: 'module', exports: './dist/index.js' }),
+    [`node_modules/${RAG}/dist/index.js`]: `export const which = ${JSON.stringify(which)};\n`,
   };
 }
 
@@ -219,10 +221,11 @@ async function peerFrom(
 ): Promise<string> {
   // A package planted in a node_modules ABOVE the arms root, where Node's walk reaches
   // when the install lacks the peer: `/tmp/node_modules` on Linux is world-writable.
+  // Planted AFTER the install, which refuses an ancestor `node_modules` it can see.
   const ancestor = mkdtempSync(safePath.join(scratch, 'ancestor-'));
-  await lay(ancestor, planted);
   const root = mkdtempSync(safePath.join(ancestor, 'arms-'));
   const used = await resolveNpx(installing(files), root);
+  await lay(ancestor, planted);
   return runCommand({ command: used.command, leadingArgs: used.leadingArgs }, [argument], {
     cwd: scratch,
     env: { set: {}, unset: [] },
@@ -275,9 +278,12 @@ describe("resolveInstrument({ kind: 'npx' })", () => {
     expect(existsSync(npxInstallArm(root, SPEC).home)).toBe(true); // npm's HOME is the arm's, and exists
   });
 
-  it("runs the pinned cli from a subject that has its own vat installed — never the subject's copy", async () => {
+  it("hands back node and the install's own dist/bin.js — never npx, never the vat a subject has installed", async () => {
     // The defect: npx ran the package's wrapper, which delegated to the subject's
-    // local @vibe-agent-toolkit/cli of ANOTHER version, under the pinned name.
+    // local @vibe-agent-toolkit/cli of ANOTHER version, under the pinned name. What this
+    // proves is the resolver's answer: the command is node and the entry is the install's
+    // `bin.js`, wherever the subject is. That the real `bin.js` itself delegates to no other
+    // copy is a property of the cli, which a fixture entry cannot model.
     const subject = mkdtempSync(safePath.join(scratch, 'subject-'));
     await lay(subject, {
       'package.json': manifest('subject', '1.0.0', { devDependencies: { '@vibe-agent-toolkit/cli': '0.1.42' } }),
@@ -285,13 +291,16 @@ describe("resolveInstrument({ kind: 'npx' })", () => {
       [CLI_BIN]: entry('0.1.42', "the subject's own vat"),
       [`${CLI_DIR}/dist/bin/vat.js`]: entry('0.1.42', "the subject's own vat"),
     });
-    const used = await resolveNpx(installing(cliAt(VERSION)));
+    const root = armsRoot();
+    const used = await resolveNpx(installing(cliAt(VERSION)), root);
 
     const ran = runCommand({ command: used.command, leadingArgs: used.leadingArgs }, ['audit'], {
       cwd: subject,
       env: { set: {}, unset: [] },
     });
 
+    expect(used.command).toBe(process.execPath);
+    expect(toForwardSlash(used.leadingArgs[0] ?? '')).toBe(toForwardSlash(safePath.join(npxInstallArm(root, SPEC).tmp, 'install', CLI_BIN)));
     expect(ran.exitCode).toBe(0);
     expect(ran.stdout).toBe('cli entry');
   });
@@ -342,17 +351,26 @@ describe("resolveInstrument({ kind: 'npx' })", () => {
       );
     });
 
-    it('refuses a @vibe-agent-toolkit/* dependency the install lacks, though one is planted above the arms root', async () => {
-      // Node's walk would find the planted copy; the closure stops at the install.
-      const ancestor = mkdtempSync(safePath.join(scratch, 'ancestor-'));
-      await lay(ancestor, {
-        [`node_modules/${UTILS}/package.json`]: manifest(UTILS, VERSION),
-        [`node_modules/${UTILS}/dist/index.js`]: 'export const utils = "planted";\n',
-      });
-      const root = mkdtempSync(safePath.join(ancestor, 'arms-'));
+    it('refuses a @vibe-agent-toolkit/* dependency the install lacks', async () => {
       const files = Object.fromEntries(Object.entries(closureInstall()).filter(([path]) => !toForwardSlash(path).startsWith(`node_modules/${UTILS}/`)));
 
-      await expectRefusal(resolveNpx(installing(files), root), /@vibe-agent-toolkit\/utils is declared by @vibe-agent-toolkit\/cli but does not resolve/u);
+      await expectRefusal(resolveNpx(installing(files)), /@vibe-agent-toolkit\/utils is declared by @vibe-agent-toolkit\/cli but does not resolve/u);
+    });
+
+    it('follows an optional peer the install holds: its bytes move the closure', async () => {
+      const withRag = (which: string): Record<string, string> => ({
+        ...closureInstall({
+          [`${CLI_DIR}/package.json`]: manifest('@vibe-agent-toolkit/cli', VERSION, {
+            dependencies: { [UTILS]: VERSION, 'left-pad': '^1.0.0' },
+            peerDependencies: { [RAG]: VERSION },
+            peerDependenciesMeta: { [RAG]: { optional: true } },
+          }),
+        }),
+        [`node_modules/${RAG}/package.json`]: manifest(RAG, VERSION),
+        [`node_modules/${RAG}/dist/index.js`]: `export const which = ${JSON.stringify(which)};\n`,
+      });
+
+      expect(await npxClosure(withRag('one'))).not.toBe(await npxClosure(withRag('two')));
     });
 
     it('moves when a @vibe-agent-toolkit/* package of the closure changes', async () => {
@@ -387,6 +405,67 @@ describe("resolveInstrument({ kind: 'npx' })", () => {
 
     it('leaves an optional peer the install holds as it was installed', async () => {
       expect(await peerFrom({ ...cliWithOptionalPeer(), ...ragPackage('installed') })).toBe('installed');
+    });
+
+    it('stubs no name an installed package lists in optionalDependencies: npm skipped it, and absent it stays', async () => {
+      const root = armsRoot();
+      const files = {
+        ...cliWithThirdPartyOptionalPeer(),
+        'node_modules/platform-user/package.json': manifest('platform-user', '1.0.0', { optionalDependencies: { [CHAIN_PEER]: '*' } }),
+      };
+
+      await resolveNpx(installing(files), root);
+
+      expect(existsSync(safePath.join(npxInstallArm(root, SPEC).tmp, 'install', 'node_modules', CHAIN_PEER))).toBe(false);
+    });
+
+    it('skips an optional peer whose name is not a valid package name, rather than refusing the install', async () => {
+      const files = {
+        ...cliAt(VERSION),
+        'node_modules/legacy/package.json': manifest('legacy', '1.0.0', {
+          peerDependencies: { LegacyPeer: '*' },
+          peerDependenciesMeta: { LegacyPeer: { optional: true } },
+        }),
+      };
+      const root = armsRoot();
+
+      await expect(resolveNpx(installing(files), root)).resolves.toMatchObject({ version: { version: VERSION } });
+      expect(existsSync(safePath.join(npxInstallArm(root, SPEC).tmp, 'install', 'node_modules', 'LegacyPeer'))).toBe(false);
+    });
+  });
+
+  describe('the layout: hoisted, real directories, nothing to resolve above the install', () => {
+    it('refuses an install below a directory holding a node_modules, naming it', async () => {
+      // Node's walk would reach it for any name the install lacks: on a shared host, another user's planting.
+      const ancestor = mkdtempSync(safePath.join(scratch, 'ancestor-'));
+      await lay(ancestor, { 'node_modules/anything/package.json': manifest('anything', '1.0.0') });
+      const root = mkdtempSync(safePath.join(ancestor, 'arms-'));
+      const install = installing(cliAt(VERSION));
+
+      await expectRefusal(resolveNpx(install, root), `${toForwardSlash(safePath.join(ancestor, 'node_modules'))} lies above its prefix`);
+      expect(install).not.toHaveBeenCalled();
+    });
+
+    it('refuses an install that holds a node_modules/.store: npm laid it out linked, not hoisted', async () => {
+      await expectRefusal(
+        resolveNpx(installing({ ...cliAt(VERSION), 'node_modules/.store/left-pad@1.0.0/node_modules/left-pad/package.json': manifest('left-pad', '1.0.0') })),
+        /node_modules\/\.store/u,
+      );
+    });
+
+    it('refuses an install whose package directory is a link, though it points inside the install', async ({ skip }) => {
+      const capability = symlinkCapability() ?? skip();
+      const install = vi.fn(async (_spec: string, prefix: string) => {
+        await lay(prefix, { ...cliAt(VERSION), 'node_modules/real-left-pad/package.json': manifest('left-pad', '1.0.0') });
+        await createSymlinkAsync(
+          capability,
+          safePath.join(prefix, 'node_modules/real-left-pad'),
+          safePath.join(prefix, 'node_modules/left-pad'),
+          process.platform === 'win32' ? 'junction' : 'dir',
+        );
+      });
+
+      await expectRefusal(resolveNpx(install), /node_modules\/left-pad is a link/u);
     });
   });
 
@@ -475,6 +554,15 @@ describe('npxInstallArm', () => {
     expect(npxInstallArm(root, '@a/b-c@1.0.0').root).not.toBe(npxInstallArm(root, '@a-b/c@1.0.0').root);
     expect(npxInstallArm(root, SPEC).root).toBe(npxInstallArm(root, SPEC).root);
   });
+
+  it('is a directory no measured arm can be laid out at, whatever its build and sequence are named', () => {
+    // A build named exactly as the install arm's slug, measuring a sequence named `npx-install`
+    // cold, once produced the install arm's own directory — and a cold reset of it emptied the install.
+    const root = armsRoot();
+    const measured = armDirectories({ root, build: distinctSlug(SPEC), arm: 'npx-install', state: 'cold' });
+
+    expect(measured.root).not.toBe(npxInstallArm(root, SPEC).root);
+  });
 });
 
 describe('npmInstall', () => {
@@ -506,6 +594,8 @@ describe('npmInstall', () => {
     expect(calls[0]?.command).toBe(process.execPath);
     expect(calls[0]?.leadingArgs).toEqual([locateNpmCli(process.execPath, process.platform)]);
     expect(calls[0]?.args).toContain('--ignore-scripts');
+    // The command line beats any .npmrc: an operator's `install-strategy=linked` never lays out the install.
+    expect(calls[0]?.args).toContain('--install-strategy=hoisted');
     // The spec is an operand, never an option: it follows `--`.
     expect(calls[0]?.args.slice(-2)).toEqual(['--', SPEC]);
     expect(calls[0]?.env.set['npm_config_cache']).toBe(dirs.npmCache);

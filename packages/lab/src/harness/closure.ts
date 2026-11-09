@@ -21,11 +21,14 @@
  *   instrument (an `npx:` install floats its ranges, so two installs of one pin
  *   can differ there); the same version's bytes are the registry's, and are not.
  *
- * The walk follows `dependencies`, and `optionalDependencies` that are present
- * (an absent optional dependency is absent for Node too). Peers are not
- * followed: `@vibe-agent-toolkit/rag` and `rag-lancedb` are OPTIONAL peers of
- * the cli, absent from a plain install, and a closure that required them would
- * refuse every real one.
+ * The walk follows `dependencies`, and — when present — `optionalDependencies`
+ * and optional peers (`peerDependenciesMeta`, `optional: true`): an absent one
+ * is absent for Node too, so the cli's `@vibe-agent-toolkit/rag` and
+ * `rag-lancedb`, which npm does not install unless asked, are passed over when
+ * missing and digested like any other member when installed. A stub an `npx:`
+ * install writes for a missing optional peer (`npx-install.ts`) is absent: its
+ * `exports` names a file it does not hold, so Node fails to load it. Required
+ * peers are not followed.
  *
  * Nothing else in a package directory is read. A VAT package that ships a
  * sibling tree beside `dist/` — `vendor/`, `schemas/`, or any other `files:`
@@ -49,17 +52,19 @@
  *
  * A declared dependency that does not resolve THROWS, naming it — the same rule
  * as `instrument.ts`. Skipping it would digest something smaller than what
- * runs, and two arms both missing it would match.
+ * runs, and two arms both missing it would match. Every such failure is an arm
+ * refusal (`armRefusal`), for every kind: the CLI prints it as one `REFUSED:` line.
  */
 
 import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 
-import { isPathAbsentError, isUnderRoot, safePath } from '@vibe-agent-toolkit/utils';
+import { everywhere, isPathAbsentError, isUnderRoot, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizePath } from '@vibe-agent-toolkit/utils/fs';
 
 import { type InstrumentVersion, sameInstrument } from '../envelope/coordinate.js';
 
+import { armRefusal } from './arm-dirs.js';
 import { type ArmEnvironment, sameArmEnvironment } from './arm-env.js';
 import { compareByCodeUnit, contentDigest, fingerprintFiles } from './fingerprint.js';
 
@@ -75,14 +80,37 @@ const FIELD_SEPARATOR = String.fromCodePoint(0);
 /** What a package's `dist/` digest leaves out: compiler bookkeeping, not code. */
 const CLOSURE_EXCLUDE: readonly string[] = ['**/*.tsbuildinfo'];
 
+/**
+ * The file a stub peer's `exports` names, and never holds: Node resolves the package,
+ * stops its walk there, and fails the load as `ERR_MODULE_NOT_FOUND` naming this file.
+ * A missing target rather than a throwing module body: a named import is checked at
+ * link time, before a body runs, and would fail as a `SyntaxError` the cli does not
+ * read as "not installed". Written by `npx-install.ts`; read here, so the closure passes a stub over as absent.
+ */
+export const STUB_PEER_TARGET = './vat-lab-does-not-install-optional-peers.js';
+
 /** The fields of a package manifest the closure walk reads. */
 interface ClosureManifest {
   readonly name: string;
   readonly version: string;
   /** `dependencies` not also under `optionalDependencies`: each must resolve. */
   readonly required: readonly string[];
-  /** `optionalDependencies`: each is followed when present. */
+  /** `optionalDependencies` and optional peers: each is followed when present. */
   readonly optional: readonly string[];
+}
+
+/**
+ * @param peers - A manifest's `peerDependencies`, as parsed
+ * @param meta - Its `peerDependenciesMeta`, as parsed
+ * @returns The peers it declares optional: named under `peerDependencies`, `optional: true` in `peerDependenciesMeta`
+ */
+export function optionalPeerNames(peers: unknown, meta: unknown): string[] {
+  if (typeof peers !== 'object' || peers === null || typeof meta !== 'object' || meta === null) return [];
+  const flags = meta as Readonly<Record<string, unknown>>;
+  return dependencyNames(peers).filter((name) => {
+    const flag = flags[name];
+    return typeof flag === 'object' && flag !== null && (flag as { optional?: unknown }).optional === true;
+  });
 }
 
 /**
@@ -93,31 +121,53 @@ function dependencyNames(field: unknown): string[] {
   return typeof field === 'object' && field !== null ? Object.keys(field).toSorted(compareByCodeUnit) : [];
 }
 
+/** A package's manifest file. */
+const MANIFEST = 'package.json';
+
+/** The fields of a manifest, as parsed — someone else's file, so unknown. */
+interface RawManifest {
+  readonly name?: unknown;
+  readonly version?: unknown;
+  readonly exports?: unknown;
+  readonly dependencies?: unknown;
+  readonly optionalDependencies?: unknown;
+  readonly peerDependencies?: unknown;
+  readonly peerDependenciesMeta?: unknown;
+}
+
+/**
+ * @param packageRoot - Absolute package directory
+ * @returns Its manifest, parsed
+ * @throws {VatError} an arm refusal when the manifest is missing or not JSON
+ */
+function parseManifest(packageRoot: string): RawManifest {
+  const manifestPath = safePath.join(packageRoot, MANIFEST);
+  try {
+    return JSON.parse(readFileSync(manifestPath, 'utf-8')) as RawManifest;
+  } catch (cause) {
+    // Named for the closure walk that asked, not left as a bare SyntaxError or
+    // ENOENT: the reader needs to know WHICH member of which arm's closure broke.
+    throw armRefusal(`closure: cannot read ${manifestPath}: ${cause instanceof Error ? cause.message : String(cause)}`);
+  }
+}
+
 /**
  * Read a package's name, version and runtime dependencies.
  *
  * @param packageRoot - Absolute package directory
  * @returns What the walk needs
- * @throws {Error} when the manifest is missing, unreadable, or names no package
+ * @throws {VatError} an arm refusal when the manifest is missing, unreadable, or names no package
  *   or version
  */
 function readClosureManifest(packageRoot: string): ClosureManifest {
-  const manifestPath = safePath.join(packageRoot, 'package.json');
-  let parsed: { name?: unknown; version?: unknown; dependencies?: unknown; optionalDependencies?: unknown };
-  try {
-    parsed = JSON.parse(readFileSync(manifestPath, 'utf-8')) as typeof parsed;
-  } catch (cause) {
-    // Named for the closure walk that asked, not left as a bare SyntaxError or
-    // ENOENT: the reader needs to know WHICH member of which arm's closure broke.
-    throw new Error(
-      `closure: cannot read ${manifestPath}: ${cause instanceof Error ? cause.message : String(cause)}`,
-      { cause },
-    );
-  }
+  const manifestPath = safePath.join(packageRoot, MANIFEST);
+  const parsed = parseManifest(packageRoot);
   const { name, version } = parsed;
-  if (typeof name !== 'string' || name === '') throw new Error(`closure: ${manifestPath} names no package`);
-  if (typeof version !== 'string' || version === '') throw new Error(`closure: ${manifestPath} names no version`);
-  const optional = dependencyNames(parsed.optionalDependencies);
+  if (typeof name !== 'string' || name === '') throw armRefusal(`closure: ${manifestPath} names no package`);
+  if (typeof version !== 'string' || version === '') throw armRefusal(`closure: ${manifestPath} names no version`);
+  const optional = [
+    ...new Set([...dependencyNames(parsed.optionalDependencies), ...optionalPeerNames(parsed.peerDependencies, parsed.peerDependenciesMeta)]),
+  ];
   const required = dependencyNames(parsed.dependencies).filter((dependency) => !optional.includes(dependency));
   return { name, version, required, optional };
 }
@@ -162,7 +212,7 @@ function realDirectory(path: string): string {
  * @param ceiling - The real directory resolution never climbs above
  * @returns The package's real directory, or `undefined` when nothing under the
  *   ceiling provides it
- * @throws {Error} when the hit's real directory lies outside the ceiling
+ * @throws {VatError} an arm refusal when the hit's real directory lies outside the ceiling
  */
 function resolvePackage(name: string, fromDir: string, ceiling: string): string | undefined {
   for (let dir = fromDir; ; dir = safePath.resolve(dir, '..')) {
@@ -170,7 +220,7 @@ function resolvePackage(name: string, fromDir: string, ceiling: string): string 
     if (isDirectory(candidate)) {
       const real = realDirectory(candidate);
       if (isUnderRoot(ceiling, real) !== 'inside') {
-        throw new Error(`closure: ${name}, found at ${candidate}, is really ${real}, outside ${ceiling}`);
+        throw armRefusal(`closure: ${name}, found at ${candidate}, is really ${real}, outside ${ceiling}`);
       }
       return real;
     }
@@ -184,16 +234,16 @@ function resolvePackage(name: string, fromDir: string, ceiling: string): string 
  * @param packageRoot - Absolute, real package directory
  * @param name - The package name, for the error
  * @returns A 64-character hex digest
- * @throws {Error} when the package has no `dist/` — a closure member with
+ * @throws {VatError} an arm refusal when the package has no `dist/` — a closure member with
  *   nothing built is not a build that can run
  */
 function packageDigest(packageRoot: string, name: string): string {
   const dist = safePath.join(packageRoot, 'dist');
   if (!isDirectory(dist)) {
-    throw new Error(`closure: ${name} at ${packageRoot} has no dist/ — build it first`);
+    throw armRefusal(`closure: ${name} at ${packageRoot} has no dist/ — build it first`);
   }
   const digest = createHash('sha256');
-  digest.update(`package.json${FIELD_SEPARATOR}${contentDigest(packageRoot, 'package.json')}\n`, 'utf8');
+  digest.update(`${MANIFEST}${FIELD_SEPARATOR}${contentDigest(packageRoot, MANIFEST)}\n`, 'utf8');
   digest.update(`dist${FIELD_SEPARATOR}${fingerprintFiles(dist, { fromGit: false, exclude: CLOSURE_EXCLUDE }).fingerprint}\n`, 'utf8');
   return digest.digest('hex');
 }
@@ -205,22 +255,34 @@ function packageDigest(packageRoot: string, name: string): string {
  * @param manifest - Its manifest
  * @param ceiling - The real directory resolution never climbs above
  * @returns Every required dependency's directory, and every present optional one's
- * @throws {Error} naming a required dependency that does not resolve under the ceiling
+ * @throws {VatError} an arm refusal naming a required dependency that does not resolve under the ceiling
  */
 function dependencyDirectories(dir: string, manifest: ClosureManifest, ceiling: string): string[] {
   const found: string[] = [];
   for (const dependency of manifest.required) {
     const resolved = resolvePackage(dependency, dir, ceiling);
     if (resolved === undefined) {
-      throw new Error(`closure: ${dependency} is declared by ${manifest.name} but does not resolve from ${dir} within ${ceiling}`);
+      throw armRefusal(`closure: ${dependency} is declared by ${manifest.name} but does not resolve from ${dir} within ${ceiling}`);
     }
     found.push(resolved);
   }
   for (const dependency of manifest.optional) {
     const resolved = resolvePackage(dependency, dir, ceiling);
-    if (resolved !== undefined) found.push(resolved);
+    if (resolved !== undefined && !isStubPeer(resolved)) found.push(resolved);
   }
   return found;
+}
+
+/**
+ * @param packageRoot - A resolved package's real directory
+ * @returns Whether it is a stub an `npx:` install wrote: its `exports` is {@link STUB_PEER_TARGET},
+ *   which it does not hold, so Node cannot load it
+ */
+function isStubPeer(packageRoot: string): boolean {
+  return (
+    parseManifest(packageRoot).exports === STUB_PEER_TARGET &&
+    !pathPresent(safePath.join(packageRoot, STUB_PEER_TARGET), 'entry', everywhere('source'), 'probe')
+  );
 }
 
 /**
@@ -231,15 +293,15 @@ function dependencyDirectories(dir: string, manifest: ClosureManifest, ceiling: 
  * @param ceiling - The directory resolution never climbs above (module header);
  *   the cli package must lie inside it
  * @returns 64 lowercase hex characters
- * @throws {Error} when a declared dependency does not resolve under the ceiling,
- *   or a VAT closure member has no `dist/`
+ * @throws {VatError} an arm refusal when a declared dependency does not resolve under the
+ *   ceiling, a manifest cannot be read, or a VAT closure member has no `dist/`
  */
 export function closureDigest(cliPackageRoot: string, ceiling: string): string {
   const root = realDirectory(cliPackageRoot);
   const top = realDirectory(ceiling);
   // A standalone `dist:` package is its own ceiling.
   if (root !== top && isUnderRoot(top, root) !== 'inside') {
-    throw new Error(`closure: the cli package ${root} lies outside its ceiling ${top}`);
+    throw armRefusal(`closure: the cli package ${root} lies outside its ceiling ${top}`);
   }
   // VAT packages keyed by name and path: the same bytes at two paths are two lines,
   // as they always were. Third-party lines are a set: one name@version is one fact.

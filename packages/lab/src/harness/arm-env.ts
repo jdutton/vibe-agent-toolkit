@@ -124,7 +124,10 @@ export function mergeArmEnvironments(base: ArmEnvironment, over: ArmEnvironment)
  * a cache root; `XDG_CONFIG_HOME` and `GIT_CONFIG_GLOBAL` their global git
  * config and excludes, which decide what both builds' snapshots and listings
  * admit; `GIT_TEMPLATE_DIR` and `GIT_EXEC_PATH` the hooks and git helpers a
- * clone or a git child runs. The arm sets its own `TMPDIR`, `HOME`,
+ * clone or a git child runs; `NODE_PATH` directories outside every build where
+ * Node looks for a module the build lacks. Every arm kind (`tree:`, `dist:`,
+ * `npx:` and its install) runs its VAT steps under this one list. The arm sets
+ * its own `TMPDIR`, `HOME`,
  * `CLAUDE_CONFIG_DIR`, `GIT_CONFIG_NOSYSTEM=1` and `GIT_ATTR_NOSYSTEM=1` (see
  * `arm-dirs.ts`): with the rest removed, git reads no system config or
  * attributes and its global config is the empty arm home. Every other way a
@@ -145,6 +148,7 @@ export const CLEARED_ENV_NAMES = Object.freeze([
   'GIT_CONFIG_SYSTEM',
   'GIT_EXEC_PATH',
   'GIT_TEMPLATE_DIR',
+  'NODE_PATH',
   'TEMP',
   'TMP',
   'TMPDIR',

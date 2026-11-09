@@ -13,6 +13,7 @@ import { isAbsolutePath, isVatError, parseWholeNumberAtLeast, safePath } from '@
 import { isEntrypoint } from '@vibe-agent-toolkit/utils/process';
 import { Command, InvalidArgumentError } from 'commander';
 
+import { sameInstrument } from '../envelope/coordinate.js';
 import type { ReportEnvelope } from '../envelope/envelope.js';
 import { captureCrawl } from '../facets/crawl/capture.js';
 import { compareCrawl } from '../facets/crawl/compare.js';
@@ -642,7 +643,9 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
     )
     .action((subjectPath: string, options: AbOptions) =>
       refusingArmErrors(async () => {
-        // Every flag refusal and every tree:/dist: build first: before the subject, --out, the arms root or an install.
+        // Every flag refusal, every tree:/dist: build, and two names for one build — but for a
+        // pair that is told apart only once installed (an npx: arm against another kind) —
+        // before the subject, --out, the arms root or an install.
         const flags = await abArmFlags(options);
         if (flags === null) return;
         const startedAt = new Date().toISOString();
@@ -714,8 +717,9 @@ function refuseIndistinguishableArms(instrument: string): void {
  * Check `ab`'s arm flags and prepare their instruments ({@link prepareInstrument}) —
  * before anything is opened or installed — or refuse when they do not describe an
  * A/B. Two arms naming one instrument in one environment are refused before either
- * is prepared; two spellings of one build are refused once resolved
- * ({@link resolveAbArms}).
+ * is prepared; two names for one build, once prepared ({@link oneBuildBeforeSetup}):
+ * still before any setup. Only a pair told apart once installed — an `npx:` arm
+ * against a `tree:` or `dist:` one — waits for {@link resolveAbArms}.
  *
  * @param options - What the caller passed
  * @returns The checked, prepared flags, or `null` when the run was refused
@@ -726,7 +730,30 @@ export async function abArmFlags(options: AbOptions): Promise<AbArmFlags | null>
   if (checked === null) return null;
   const instrumentA = await prepareInstrument(checked.instrumentA);
   const instrumentB = checked.instrumentB === null ? null : await prepareInstrument(checked.instrumentB);
+  const one = instrumentB === null ? null : oneBuildBeforeSetup(instrumentA, instrumentB);
+  if (one !== null && sameArmEnvironment(checked.envA, checked.envB)) {
+    refuseIndistinguishableArms(one);
+    return null;
+  }
   return { ...checked, instrumentA, instrumentB };
+}
+
+/**
+ * Do two prepared arms name one build? A `tree:` or `dist:` pair is fully resolved, so
+ * their instruments are compared as {@link resolveAbArms} compares them. An `npx:` pair
+ * pins two VAT packages, and the umbrella installs the cli of its own version: one
+ * version is one instrument, whichever package names it.
+ *
+ * @param a - Arm A, prepared
+ * @param b - Arm B, prepared
+ * @returns The one build's label, or `null` when they differ or are told apart only once installed
+ */
+function oneBuildBeforeSetup(a: PreparedInstrument, b: PreparedInstrument): string | null {
+  if (a.kind === 'built' && b.kind === 'built') {
+    return sameInstrument(a.instrument.version, b.instrument.version) ? instrumentLabel(a.instrument.version) : null;
+  }
+  if (a.kind === 'npx' && b.kind === 'npx') return a.pin.version === b.pin.version ? `npx: ${a.pin.version}` : null;
+  return null;
 }
 
 /**

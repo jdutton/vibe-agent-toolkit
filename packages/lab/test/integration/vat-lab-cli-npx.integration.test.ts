@@ -7,7 +7,7 @@
  * Integration-tier: drives a whole verb through Commander.
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
@@ -38,6 +38,16 @@ afterEach(() => {
 /** What the stand-in installer throws once it knows where it was asked to install. */
 const STOPPED = 'the stand-in installer stops here';
 
+/** @returns Every chunk written to stderr from now on, in order; nothing reaches the terminal */
+function capturedStderr(): string[] {
+  const written: string[] = [];
+  vi.spyOn(process.stderr, 'write').mockImplementation((chunk: string | Uint8Array) => {
+    written.push(String(chunk));
+    return true;
+  });
+  return written;
+}
+
 describe('vat-lab perf run --instrument npx:', () => {
   it('installs the pin under the arms root the CLI computes from --arms-dir', async () => {
     const prefixes: string[] = [];
@@ -67,6 +77,31 @@ describe('vat-lab perf run --instrument npx:', () => {
     expect(toForwardSlash(prefixes[0] ?? '').startsWith(`${realArmsDir}/`)).toBe(true);
   });
 
+  it('ab refuses the umbrella and the cli of one version as two arms before resolving the subject, opening --out, creating --arms-dir or installing', async () => {
+    vi.resetModules();
+    vi.doMock('../../src/harness/npx-install.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof NpxInstallModule>()),
+      npmInstall: () => {
+        throw new Error('ab installed an npx: arm whose pin was refused by its version alone');
+      },
+    }));
+    const { createProgram } = await import('../../src/bin/vat-lab.js');
+    const out = safePath.join(tempDir, 'ab-same-pin-out');
+    const armsDir = safePath.join(tempDir, 'ab-same-pin-arms');
+    const written = capturedStderr();
+
+    await createProgram().parseAsync([
+      'node', 'vat-lab', 'perf', 'ab', mkdtempSync(safePath.join(tempDir, 'subject-')),
+      '--instrument-a', 'npx:vibe-agent-toolkit@0.1.43', '--instrument-b', 'npx:@vibe-agent-toolkit/cli@0.1.43',
+      '--out', out, '--arms-dir', armsDir,
+    ]);
+
+    expect(process.exitCode).toBe(ExitCode.ERROR);
+    expect(written.join('')).toMatch(/^REFUSED: the two arms are indistinguishable/mu);
+    expect(existsSync(out)).toBe(false);
+    expect(existsSync(armsDir)).toBe(false);
+  });
+
   it('prints a failed npm install as one REFUSED: line and exits with the refusal code, not a stack trace', async () => {
     // The real installer; only npm's own run is a stand-in, and it fails.
     vi.resetModules();
@@ -82,11 +117,7 @@ describe('vat-lab perf run --instrument npx:', () => {
     });
     const { createProgram } = await import('../../src/bin/vat-lab.js');
     const subject = mkdtempSync(safePath.join(tempDir, 'subject-'));
-    const written: string[] = [];
-    vi.spyOn(process.stderr, 'write').mockImplementation((chunk: string | Uint8Array) => {
-      written.push(String(chunk));
-      return true;
-    });
+    const written = capturedStderr();
 
     await createProgram().parseAsync([
       'node', 'vat-lab', 'perf', 'run', subject,

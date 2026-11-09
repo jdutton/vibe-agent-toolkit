@@ -161,6 +161,47 @@ describe('vat-lab <facet> ab — flag refusals come before any setup', () => {
   });
 });
 
+describe('vat-lab <facet> ab — two names for one build are refused before any setup', () => {
+  it('refuses a dist: directory and its bin.js as arms before opening --out or creating --arms-dir', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const out = safePath.join(tempDir, 'ab-same-dist-out');
+    const armsDir = safePath.join(tempDir, 'ab-same-dist-arms');
+
+    await createProgram().parseAsync([
+      'node', 'vat-lab', 'perf', 'ab', await subject(),
+      '--instrument-a', `dist:${REPO_CLI_DIST}`, '--instrument-b', `dist:${safePath.join(REPO_CLI_DIST, 'bin.js')}`,
+      '--out', out, '--arms-dir', armsDir,
+    ]);
+
+    expect(process.exitCode).toBe(ExitCode.ERROR);
+    expect(stderr.mock.calls.map(([chunk]) => String(chunk)).join('')).toMatch(/^REFUSED: the two arms are indistinguishable/mu);
+    expect(existsSync(out), '--out was created before the refusal').toBe(false);
+    expect(existsSync(armsDir), '--arms-dir was created before the refusal').toBe(false);
+  });
+});
+
+describe('vat-lab — a closure that does not resolve is a REFUSED:, as an npx: install refusal is', () => {
+  it('refuses a dist: build whose declared dependency is not installed, with the refusal exit code', async () => {
+    const dist = await mkdtemp(safePath.join(tempDir, 'closure-broken-'));
+    await mkdir(safePath.join(dist, 'dist'));
+    await writeFile(safePath.join(dist, 'dist', 'bin.js'), '');
+    await writeFile(
+      safePath.join(dist, 'package.json'),
+      JSON.stringify({ name: '@vibe-agent-toolkit/cli', version: '0.0.1', dependencies: { '@vibe-agent-toolkit/utils': '0.0.1' } }),
+    );
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const out = safePath.join(tempDir, 'closure-broken-out');
+
+    await createProgram().parseAsync(['node', 'vat-lab', 'perf', 'run', await subject(), '--instrument', `dist:${safePath.join(dist, 'dist')}`, '--out', out]);
+
+    expect(process.exitCode).toBe(ExitCode.ERROR);
+    expect(stderr.mock.calls.map(([chunk]) => String(chunk)).join('')).toMatch(
+      /^REFUSED: closure: @vibe-agent-toolkit\/utils is declared by @vibe-agent-toolkit\/cli but does not resolve/mu,
+    );
+    expect(existsSync(out)).toBe(false);
+  });
+});
+
 /** @returns A subject of its own, which holds neither --out nor --arms-dir */
 function subject(): Promise<string> {
   return mkdtemp(safePath.join(tempDir, 'resolve-first-subject-'));

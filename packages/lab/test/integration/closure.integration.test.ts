@@ -50,6 +50,7 @@ interface FixturePackage {
   readonly dependencies?: Readonly<Record<string, string>>;
   readonly optionalDependencies?: Readonly<Record<string, string>>;
   readonly peerDependencies?: Readonly<Record<string, string>>;
+  readonly peerDependenciesMeta?: Readonly<Record<string, { readonly optional: boolean }>>;
   /** Files under the package root, relative to it. */
   readonly files: Readonly<Record<string, string>>;
 }
@@ -70,6 +71,7 @@ function layPackage(dir: string, name: string, pkg: FixturePackage): void {
       ...(pkg.dependencies === undefined ? {} : { dependencies: pkg.dependencies }),
       ...(pkg.optionalDependencies === undefined ? {} : { optionalDependencies: pkg.optionalDependencies }),
       ...(pkg.peerDependencies === undefined ? {} : { peerDependencies: pkg.peerDependencies }),
+      ...(pkg.peerDependenciesMeta === undefined ? {} : { peerDependenciesMeta: pkg.peerDependenciesMeta }),
     }),
   );
   for (const [relative, content] of Object.entries(pkg.files)) {
@@ -284,6 +286,18 @@ describe('closureDigest', () => {
       };
 
       expect(withOptional(true)).not.toBe(withOptional(false));
+    });
+
+    it('follows an optional peer that is present, for every kind: its bytes move the closure; an absent one is passed over', () => {
+      const rag = (which: string): FixturePackage => ({ name: 'rag', files: { 'dist/index.js': `// rag ${which}\n` } });
+      const cli: FixturePackage = { ...CLI, peerDependenciesMeta: { [`${SCOPE}/rag`]: { optional: true } } };
+      const digest = (packages: readonly FixturePackage[]): string => {
+        const laid = install(packages);
+        return closureDigest(laid.dirOf('cli'), laid.root);
+      };
+
+      expect(digest([cli, UTILS, rag('one')])).not.toBe(digest([cli, UTILS, rag('two')]));
+      expect(digest([cli, UTILS])).toMatch(/^[0-9a-f]{64}$/u);
     });
 
     it('throws naming a declared third-party dependency that does not resolve', () => {

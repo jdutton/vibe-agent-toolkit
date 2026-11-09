@@ -63,9 +63,11 @@ it at `packages/cli`, `dist:` at the package that owns the named `dist/`, `npx:`
   instrument to every comparison, whatever they had been built from.
 - **What resolves.** Each dependency is found the way Node finds it — `<dir>/node_modules/<name>`
   from the depending package upward, nearest first, through any symlink — so one walk serves a bun
-  workspace and an npm prefix. The walk follows `dependencies` and the `optionalDependencies` that
-  are present; never peers: the cli's `rag` and `rag-lancedb` are optional peers, absent from a
-  plain install.
+  workspace and an npm prefix. The walk follows `dependencies`, and the `optionalDependencies` and
+  optional peers (`peerDependenciesMeta`, `optional: true`) that are present: the cli's `rag` and
+  `rag-lancedb` are optional peers npm installs only when asked for, passed over when missing and
+  digested like any other VAT package when installed. The stub an `npx:` install writes for a
+  missing optional peer is passed over as absent. Required peers are not followed.
 - **Never above a ceiling.** Resolution stops at a ceiling: an `npx:` arm's install prefix; a
   `tree:` arm's checkout root; for a `dist:` arm, the directory holding the outermost
   `node_modules` of the package's real path when it lies in one (an npm prefix — the ceiling an
@@ -118,18 +120,31 @@ that same `package.json`. These checks run once per install, before any repeat, 
 `node <npm-cli.js>` with no shell on every platform, so a timeout kills npm itself, not a `cmd.exe`
 above it. It is the npm bundled with the Node that runs the lab (`process.execPath`), never one
 found on PATH: POSIX `<prefix>/lib/node_modules/npm/bin/npm-cli.js` (`<prefix>` the parent of
-`node`'s directory), Windows `node_modules/npm/bin/npm-cli.js` beside `node.exe`. A Node with no
-bundled npm there is refused, naming the path looked for.
+`node`'s directory), Windows `node_modules/npm/bin/npm-cli.js` beside `node.exe` — the official
+Node layout, npm bundled beside node. A Node with no bundled npm there — a distribution-packaged
+Node such as Debian's, whose npm lives at `/usr/share/nodejs/npm` — is refused, naming the path
+looked for. A timeout kills npm's own node process, not any child it started: VAT's dependency
+closure has no git or script steps, and the next cold reset of the install arm clears a partial
+install. The install is laid out hoisted: `--install-strategy=hoisted` is on npm's command line,
+which beats an `install-strategy=linked` in the operator's `.npmrc`, and an install still holding a
+linked package directory or a `node_modules/.store` is refused.
 
 **What stays inside an `npx:` install, and what does not.** Node resolves a bare module name up the
-directory tree, past the install and the arms root (`/tmp/node_modules` is world-writable on
-Linux). For every optional peer (`peerDependenciesMeta`, `optional: true`) that any package of the
-install declares and that does not resolve from that package inside the install, the lab writes a
-stub package at the install's top-level `node_modules`; Node stops there and fails the load as not
-found — the package's own "not installed". Only declared optional peers are stubbed: any other
-name the install lacks — an undeclared `try { require() }` — is still looked up in ancestor
-`node_modules` directories, as for any Node program. Do not use an arms root under a directory
-other users can write to on a shared host.
+directory tree, past the install and the arms root. The install is refused, naming the path, when
+any directory above its prefix — up to the filesystem root — holds a `node_modules` entry. The
+check runs once, at install time, and the default arms root lies under the system temp directory,
+whose ancestors other users may write to: `/tmp` on Linux (`/tmp/node_modules` is world-writable)
+and `C:\` on Windows. **On a shared host, pass `--arms-dir` under your home.** For every optional
+peer (`peerDependenciesMeta`, `optional: true`) that any package of the install declares and that
+does not resolve from that package inside the install, the lab writes a stub package at the
+install's top-level `node_modules`; Node stops there and fails the load as not found — the
+package's own "not installed". Never stubbed: a name any installed package lists in
+`optionalDependencies` (npm skipped it as optional or for another platform, and the closure treats
+it as absent), and an optional-peer name that is not a valid package name (a legacy uppercase
+name), which is skipped, not a refusal of the whole install. Every arm clears an inherited
+`NODE_PATH`. What remains outside the install: Node's CommonJS global folders —
+`$HOME/.node_modules`, `$HOME/.node_libraries` (the arm's own, empty home) and `$PREFIX/lib/node`
+of the Node that runs.
 
 ## A dirty instrument is measured, but never mistaken for a commit
 

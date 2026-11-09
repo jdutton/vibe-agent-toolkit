@@ -107,7 +107,7 @@ landing inside the tree being measured changes the next run's numbers.
 
 A timed arm is a **sequence of steps** run in `<arms root>/<build>-<arm>-<state>/{store,tmp,home,npm-cache}`
 (created at 0700), from a **cleared environment**: no inherited `VAT_*`, temp, XDG, git config,
-git template or exec path, or inherited `npm_config_*` setting reaches a VAT step — but npm's
+git template or exec path, `NODE_PATH`, or inherited `npm_config_*` setting reaches a VAT step — but npm's
 network settings, an allow list in any case and in either the `-` or `_` spelling (`registry`, a
 scoped `@scope:registry`, `proxy`, `https-proxy`, `noproxy`/`no-proxy`, `ca`, `cafile`,
 `strict-ssl`). An `npx:` build is never run through npm, so the one npm the lab itself runs is that
@@ -137,18 +137,23 @@ single-command facet runs are one-step sequences under `<arms root>/<build>-<com
   `--arms-dir` at a time:** nothing locks it, and every arm under it — the `npx:` install arm
   included — is emptied when its run starts, so two concurrent invocations sharing one `--arms-dir`
   delete each other's stores and installs. The default run directory is fresh per invocation.
-  **Declared optional peers stay in an `npx:` install; nothing else is contained:** Node resolves
-  a module up the directory tree, so an optional peer loaded on demand (the cli's
-  `@vibe-agent-toolkit/rag`, a third-party package's optional integration) that the install lacks
-  would load from a `node_modules` ABOVE the arms root (`/tmp/node_modules` is world-writable on
-  Linux). For every optional peer (`peerDependenciesMeta`, `optional: true`) that ANY package of the
-  install declares and that does not resolve from that package inside the install, the lab writes a
-  stub package at the install's top-level `node_modules`; Node stops there and fails the load as
-  not found — the package's own "not installed". Any other name the install lacks — a package that
-  `try`-requires a name it never declares — is still looked up in ancestor `node_modules`
-  directories, as it is for any Node program: **do not put the arms root under a directory other
-  users can write to on a shared host.** A `tree:` or `dist:` build resolves from where it lies, as
-  it would for its operator.
+  **What keeps an `npx:` install's module resolution inside it.** Node resolves a module up the
+  directory tree, past the install and the arms root. The install is laid out hoisted
+  (`--install-strategy=hoisted` on npm's command line, which beats any `.npmrc`) and refused if it
+  holds a linked package directory or a `node_modules/.store`. It is refused, naming the path, when
+  any directory above its prefix holds a `node_modules`. **That check runs once, at install time,
+  and the default arms root's ancestors are shared:** `/tmp` on Linux (`/tmp/node_modules` is
+  world-writable) and `C:\` on Windows, where another user could plant a `node_modules` after the
+  check — **on a shared host, pass `--arms-dir` under your home.** For every optional peer
+  (`peerDependenciesMeta`, `optional: true`) that ANY package of the install declares and that does
+  not resolve from that package inside the install, the lab writes a stub package at the install's
+  top-level `node_modules`; Node stops there and fails the load as not found — the package's own
+  "not installed". Never stubbed: a name any installed package lists in `optionalDependencies` (npm
+  skipped it, and it stays absent), and a peer name that is not a valid package name (a legacy
+  uppercase one), which is skipped rather than refusing the install. Every arm clears `NODE_PATH`.
+  What remains outside the install: Node's CommonJS global folders — `$HOME/.node_modules`,
+  `$HOME/.node_libraries` (the arm's own empty home) and `$PREFIX/lib/node` of the Node that runs.
+  A `tree:` or `dist:` build resolves from where it lies, as it would for its operator.
 - **The default run directory ends with the capture.** When the capture ends — passed or failed —
   the lab removes the whole `run-*` directory (stores, caches, npm's fetch) and prints
   `Removed arms under <root>`; `--keep-arms` keeps it and prints `Kept arms under <root>`. A named

@@ -400,7 +400,8 @@ async function resolveTree(path: string): Promise<ResolvedInstrument> {
   // The bytes, beside the commit: a dirty build is otherwise named only by a
   // HEAD whose bytes did not run. See `closure.ts`.
   // Its ceiling is the checkout: a workspace's packages and their dependencies all
-  // install under its root `node_modules`, and nothing above it is the tree's.
+  // install under its root `node_modules`, and nothing above it is the tree's. A closure
+  // that does not resolve is an arm refusal, as for every kind.
   const closure = closureDigest(safePath.join(treeRoot, TREE_CLI_PACKAGE_RELATIVE), treeRoot);
 
   return {
@@ -538,7 +539,7 @@ async function resolveDist(path: string): Promise<ResolvedInstrument> {
     // `dirty: null` for the same reason `commit` is: there is no checkout to
     // ask. A `false` here would be a confident claim of cleanliness over a build
     // whose provenance nobody inspected. The closure is what tells two `dist:`
-    // arms of one version apart — see `closure.ts`.
+    // arms of one version apart, and one that does not resolve is an arm refusal — see `closure.ts`.
     version: { version, commit: null, dirty: null, closure: closureDigest(packageRoot, await distClosureCeiling(packageRoot)) },
     root: packageRoot,
   };
