@@ -23,12 +23,17 @@ function gitExits(status: number, stderr = ''): void {
   vi.mocked(runGit).mockReturnValue({ stdout: '', stderr, status } as ReturnType<typeof runGit>);
 }
 
-/** Each git subcommand exits as `exits` says (default 0); `diff` exits 0 so the publish stops at "no changes". */
-function gitBy(exits: Record<string, number>): void {
+/** The tip the remote reports for branch `b`, and what a clean exit of each subcommand prints by default. */
+const TIP = 'a'.repeat(40);
+const CLEAN_STDOUT: Record<string, string> = { 'ls-remote': `${TIP}\trefs/heads/b`, 'rev-parse': TIP };
+
+/** Each git subcommand exits as `exits` says (default 0), printing `stdout[subcommand]` on a clean exit; `diff` exits 0 so the publish stops at "no changes". */
+function gitBy(exits: Record<string, number>, stdout: Record<string, string> = CLEAN_STDOUT): void {
   vi.mocked(runGit).mockImplementation((args: readonly string[]) => {
     const subcommand = args[0] ?? '';
     const status = exits[subcommand] ?? 0;
-    return { stdout: '', stderr: status === 0 ? '' : `${subcommand} failed`, status } as ReturnType<typeof runGit>;
+    const printed = status === 0 ? stdout[subcommand] ?? '' : '';
+    return { stdout: printed, stderr: status === 0 ? '' : `${subcommand} failed`, status } as ReturnType<typeof runGit>;
   });
 }
 
@@ -40,6 +45,8 @@ function gitReturns(results: Record<string, Partial<ReturnType<typeof runGit>>>)
 
 const logger = createLogger({});
 const DELIVERY = { branch: 'claude-marketplace', remote: 'origin', force: false, dryRun: false, noPush: false, logger };
+/** A remote with nothing to authenticate with. */
+const at = (url: string): { url: string; authEnv: Record<string, string> } => ({ url, authEnv: {} });
 
 const HEADLINE_V1 = 'publish v1.0.0';
 
@@ -101,12 +108,12 @@ describe('git-publish', () => {
 
     it('refuses a rejected push as EXTERNAL_API_FAILED', () => {
       gitExits(1, 'rejected');
-      expect(refusalCodeOf(thrownBy(() => deliverCommit('/staging', '/project', DELIVERY, 'https://example.invalid/r.git')))).toBe('EXTERNAL_API_FAILED');
+      expect(refusalCodeOf(thrownBy(() => deliverCommit('/staging', '/project', DELIVERY, at('https://example.invalid/r.git'))))).toBe('EXTERNAL_API_FAILED');
     });
 
     it('refuses any other failed git step as RUN_INCOMPLETE', () => {
       gitExits(1, 'fetch failed');
-      expect(refusalCodeOf(thrownBy(() => deliverCommit('/staging', '/project', { ...DELIVERY, noPush: true }, 'https://example.invalid/r.git')))).toBe('RUN_INCOMPLETE');
+      expect(refusalCodeOf(thrownBy(() => deliverCommit('/staging', '/project', { ...DELIVERY, noPush: true }, at('https://example.invalid/r.git'))))).toBe('RUN_INCOMPLETE');
     });
   });
 
@@ -129,12 +136,29 @@ describe('git-publish', () => {
       });
     };
 
-    it('builds on the tip of a branch the remote has: a shallow fetch, then a soft reset', async () => {
+    it('builds on the tip of a branch the remote has: a shallow fetch, then a soft reset to the sha the remote reported', async () => {
       gitBy({});
       await publish();
       expect(calls('ls-remote')).toEqual([['ls-remote', '--exit-code', '--heads', '--', REMOTE, 'refs/heads/b']]);
       expect(calls('fetch')).toEqual([['fetch', '--depth=1', '--', REMOTE, 'refs/heads/b']]);
-      expect(calls('reset')).toEqual([['reset', '--soft', 'FETCH_HEAD']]);
+      expect(calls('reset')).toEqual([['reset', '--soft', TIP]]);
+    });
+
+    // `ls-remote <url> refs/heads/b` matches its pattern against the TAIL of each ref: a remote
+    // with no `b` but a `x/refs/heads/b` answers exit 0. Only an exact `refs/heads/b` line counts.
+    it('makes the first commit an orphan when ls-remote matched only a ref ending in refs/heads/<branch>', async () => {
+      gitBy({}, { 'ls-remote': `${TIP}\trefs/heads/x/refs/heads/b` });
+      await publish();
+      expect(calls('fetch')).toEqual([]);
+      expect(calls('reset')).toEqual([]);
+    });
+
+    it('refuses as EXTERNAL_API_FAILED when the fetched tip is not the sha the remote reported, and commits nothing', async () => {
+      gitBy({}, { ...CLEAN_STDOUT, 'rev-parse': 'b'.repeat(40) });
+      const error = await publish().then(() => undefined, (rejected: unknown) => rejected);
+      expect(refusalCodeOf(error)).toBe('EXTERNAL_API_FAILED');
+      expect(calls('reset')).toEqual([]);
+      expect(calls('commit')).toEqual([]);
     });
 
     it('makes the first commit an orphan only when the remote says the branch is absent (exit 2)', async () => {
@@ -181,8 +205,8 @@ describe('git-publish', () => {
       const rejectionOf = (run: Promise<unknown>): Promise<unknown> => run.then(() => undefined, (rejected: unknown) => rejected);
       it('ends git option parsing before the remote URL in push, with and without --force', () => {
         gitBy({});
-        deliverCommit('/staging', '/project', DELIVERY, REMOTE);
-        deliverCommit('/staging', '/project', { ...DELIVERY, force: true }, REMOTE);
+        deliverCommit('/staging', '/project', DELIVERY, at(REMOTE));
+        deliverCommit('/staging', '/project', { ...DELIVERY, force: true }, at(REMOTE));
         const refspec = 'claude-marketplace:claude-marketplace';
         expect(calls('push')).toEqual([['push', '--', REMOTE, refspec], ['push', '--force', '--', REMOTE, refspec]]);
       });
@@ -213,9 +237,65 @@ describe('git-publish', () => {
 
       it('redacts credentials from the stderr of a failed push', () => {
         gitExits(1, `error: failed to push some refs to '${TOKENED}'`);
-        const error = thrownBy(() => deliverCommit('/staging', '/project', DELIVERY, TOKENED));
+        const error = thrownBy(() => deliverCommit('/staging', '/project', DELIVERY, at(TOKENED)));
         expect((error as Error).message).toContain('failed to push');
         expect((error as Error).message).not.toContain(SECRET);
+      });
+
+      // The token goes to git through its env-only configuration channel, never in a URL: an
+      // argv is readable by every local user (`ps`), a process's environment only by its owner.
+      describe('CI token', () => {
+        const GITHUB_REMOTE = 'https://github.com/o/r.git';
+        const EXTRAHEADER = 'http.https://github.com/.extraheader';
+        const BASIC = Buffer.from('x-access-token:' + SECRET).toString('base64');
+        const HEADER = `AUTHORIZATION: basic ${BASIC}`;
+        afterEach(() => { vi.unstubAllEnvs(); });
+        const envOf = (subcommand: string): unknown[] =>
+          vi.mocked(runGit).mock.calls.filter(([args]) => args[0] === subcommand).map(([, options]) => options?.env);
+
+        it('never puts GH_TOKEN in any git argv, and hands ls-remote, fetch and push the auth header through the environment', async () => {
+          vi.stubEnv('GH_TOKEN', SECRET);
+          vi.stubEnv('GIT_CONFIG_COUNT', '');
+          gitBy({ diff: 1 });
+          await publish({ remote: GITHUB_REMOTE });
+          expect(calls('push')).toHaveLength(1);
+          for (const [args] of vi.mocked(runGit).mock.calls) {
+            expect(args.join(' ')).not.toContain(SECRET);
+          }
+          const auth = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: EXTRAHEADER, GIT_CONFIG_VALUE_0: HEADER };
+          for (const subcommand of ['ls-remote', 'fetch', 'push']) {
+            expect(envOf(subcommand)).toEqual([auth]);
+          }
+          // Only the calls that talk to the remote carry it.
+          for (const subcommand of ['init', 'add', 'commit']) {
+            expect(JSON.stringify(envOf(subcommand))).not.toContain('extraheader');
+          }
+        });
+
+        it('appends the header after configuration the operator already passes through GIT_CONFIG_COUNT', async () => {
+          vi.stubEnv('GH_TOKEN', undefined);
+          vi.stubEnv('GITHUB_TOKEN', SECRET);
+          vi.stubEnv('GIT_CONFIG_COUNT', '2');
+          gitBy({});
+          await publish({ remote: GITHUB_REMOTE });
+          expect(envOf('ls-remote')).toEqual([{ GIT_CONFIG_COUNT: '3', GIT_CONFIG_KEY_2: EXTRAHEADER, GIT_CONFIG_VALUE_2: HEADER }]);
+        });
+
+        it('refuses a GIT_CONFIG_COUNT git itself would reject as CONFIG_INVALID, asking the remote nothing', async () => {
+          vi.stubEnv('GH_TOKEN', SECRET);
+          vi.stubEnv('GIT_CONFIG_COUNT', 'two');
+          gitBy({});
+          const error = await rejectionOf(publish({ remote: GITHUB_REMOTE }));
+          expect(refusalCodeOf(error)).toBe('CONFIG_INVALID');
+          expect(calls('ls-remote')).toEqual([]);
+        });
+
+        it('sends no auth header to a remote that is not https://github.com/', async () => {
+          vi.stubEnv('GH_TOKEN', SECRET);
+          gitBy({});
+          await publish();
+          expect(envOf('ls-remote')).toEqual([{}]);
+        });
       });
 
       it('says a timed-out ls-remote probe timed out, not that it exited', async () => {

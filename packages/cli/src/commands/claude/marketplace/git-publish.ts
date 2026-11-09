@@ -76,12 +76,28 @@ export function createCommitMessage(
  * index and landing a commit, with `push` next in line. `runGit` scrubs by
  * default, so no call site here has to remember.
  */
-function git(
-  args: string[],
-  options: { cwd: string; allowFailure?: boolean; timeout?: number; input?: string; trim?: boolean; refusal?: RefusalCode }
-): GitStepResult {
+function git(args: string[], options: GitStepOptions): GitStepResult {
+  return gitStep(args, options, NO_REMOTE_ENV);
+}
+
+/**
+ * Run a git command that talks to `remote`: `<before> -- <url> <after>`, with the remote's auth
+ * environment applied after `runGit`'s scrub. The one route to the network, so a call that reaches
+ * the remote cannot leave its authentication behind, and the URL always follows `--`.
+ */
+function gitAtRemote(remote: PublishRemote, before: string[], after: string[], options: GitStepOptions): GitStepResult {
+  return gitStep([...before, '--', remote.url, ...after], options, remote.authEnv);
+}
+
+interface GitStepOptions { cwd: string; allowFailure?: boolean; timeout?: number; input?: string; trim?: boolean; refusal?: RefusalCode }
+
+/** The environment of a git call that does not talk to the remote: nothing beyond `runGit`'s scrubbed base. */
+const NO_REMOTE_ENV: Readonly<Record<string, string>> = {};
+
+function gitStep(args: string[], options: GitStepOptions, env: Readonly<Record<string, string>>): GitStepResult {
   const result = runGit(args, {
     cwd: options.cwd,
+    env: { ...env },
     ...(options.trim === undefined ? {} : { trim: options.trim }),
     ...(options.timeout === undefined ? {} : { timeout: options.timeout }),
     ...(options.input === undefined ? {} : { input: options.input }),
@@ -103,7 +119,7 @@ function git(
 
   const status = result.status === -1 ? 1 : result.status;
   if (status !== 0 && !options.allowFailure) {
-    // git's stderr echoes the remote URL as given — a CI token injected into it included.
+    // git's stderr echoes the remote URL as given — credentials written into publish.remote included.
     throw new CommandRefusalError(refusal, `git ${label} failed (exit ${status}):\n${redactUrlCredentialsInText(result.stderr)}`);
   }
 
@@ -143,11 +159,59 @@ function refuseOptionShaped(value: string, subject: string): void {
   }
 }
 
+/** The remote a publish talks to: its URL, and the environment that authenticates to it. */
+interface PublishRemote {
+  readonly url: string;
+  /** `GIT_CONFIG_*` variables applied after `runGit`'s scrub — `{}` when there is nothing to authenticate with, never absent. */
+  readonly authEnv: Readonly<Record<string, string>>;
+}
+
+const GITHUB_HTTPS = 'https://github.com/';
+
 /**
- * Resolve a remote name (e.g., "origin") to a URL.
- * If the value already looks like a URL, returns it as-is.
- * In CI, injects GITHUB_TOKEN into HTTPS URLs for push authentication.
+ * Resolve `publish.remote` — a remote name (e.g. "origin") or a URL, used as-is — to the remote
+ * the publish talks to.
  */
+function resolveRemote(remote: string, remoteFromConfig: boolean, cwd: string): PublishRemote {
+  const url = resolveRemoteUrl(remote, remoteFromConfig, cwd);
+  return { url, authEnv: githubTokenEnv(url) };
+}
+
+/**
+ * In CI, authenticate to an `https://github.com/` remote with `GH_TOKEN` (or `GITHUB_TOKEN`): the
+ * staging repo does not inherit the credential helper `actions/checkout` set up.
+ *
+ * 🔴 The token travels as an `http.<url>.extraheader` on git's env-only configuration channel
+ * (`GIT_CONFIG_COUNT` / `_KEY_n` / `_VALUE_n`, what `actions/checkout` does), never in the URL: a
+ * URL is git's argv, which any local user reads with `ps`; a process's environment only its owner.
+ * Appended after whatever numbered entries the operator already exports, which `runGit`'s scrub
+ * deliberately keeps — overwriting entry 0 would drop their configuration.
+ */
+function githubTokenEnv(url: string): Record<string, string> {
+  const token = process.env['GH_TOKEN'] ?? process.env['GITHUB_TOKEN'];
+  if (!token || !url.startsWith(GITHUB_HTTPS)) {
+    return {};
+  }
+  const index = inheritedConfigCount();
+  const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
+  return {
+    GIT_CONFIG_COUNT: String(index + 1),
+    [`GIT_CONFIG_KEY_${index}`]: `http.${GITHUB_HTTPS}.extraheader`,
+    [`GIT_CONFIG_VALUE_${index}`]: `AUTHORIZATION: basic ${basic}`,
+  };
+}
+
+/** The operator's own `GIT_CONFIG_COUNT`, read as git reads it (unset or empty is 0). */
+function inheritedConfigCount(): number {
+  const raw = process.env['GIT_CONFIG_COUNT'] ?? '';
+  if (raw === '') return 0;
+  if (!/^\d+$/.test(raw)) {
+    throw new CommandRefusalError('CONFIG_INVALID', `GIT_CONFIG_COUNT is "${raw}", which git rejects as a bogus count. Unset it or set it to a whole number.`);
+  }
+  return Number(raw);
+}
+
+/** `publish.remote` as a URL: a remote name is asked of the repository, a URL is taken as-is. */
 function resolveRemoteUrl(remote: string, remoteFromConfig: boolean, cwd: string): string {
   refuseOptionShaped(remote, `publish.remote "${redactUrlCredentials(remote)}"`);
   let url: string;
@@ -165,13 +229,6 @@ function resolveRemoteUrl(remote: string, remoteFromConfig: boolean, cwd: string
     url = urlResult.stdout;
     refuseOptionShaped(url, `Git remote "${remote}" names the URL "${redactUrlCredentials(url)}", which`);
   }
-
-  // In CI, inject token into HTTPS URLs for push authentication.
-  // The temp repo doesn't inherit the credential helper from actions/checkout.
-  const token = process.env['GH_TOKEN'] ?? process.env['GITHUB_TOKEN'];
-  if (token && url.startsWith('https://github.com/')) {
-    return url.replace('https://github.com/', `https://x-access-token:${token}@github.com/`);
-  }
   return url;
 }
 
@@ -185,7 +242,7 @@ export function deliverCommit(
     PublishGitOptions,
     'branch' | 'remote' | 'force' | 'dryRun' | 'noPush' | 'logger'
   >,
-  remoteUrl: string,
+  target: PublishRemote,
 ): void {
   const { branch, remote, force, dryRun, noPush, logger } = options;
 
@@ -209,12 +266,8 @@ export function deliverCommit(
     return;
   }
 
-  const pushArgs = ['push', '--', remoteUrl, `${branch}:${branch}`];
-  if (force) {
-    pushArgs.splice(1, 0, '--force');
-  }
-  git(pushArgs, { cwd: tmpRepo, refusal: 'EXTERNAL_API_FAILED' });
-  logger.info(`   Pushed to ${redactUrlCredentials(remoteUrl)} branch ${branch}`);
+  gitAtRemote(target, force ? ['push', '--force'] : ['push'], [`${branch}:${branch}`], { cwd: tmpRepo, refusal: 'EXTERNAL_API_FAILED' });
+  logger.info(`   Pushed to ${redactUrlCredentials(target.url)} branch ${branch}`);
 }
 
 /**
@@ -238,9 +291,9 @@ export async function publishToGitBranch(options: PublishGitOptions): Promise<un
   const { branch, dryRun, logger } = options;
 
   const cwd = process.cwd();
-  const remoteUrl = resolveRemoteUrl(options.remote, options.remoteFromConfig, cwd);
+  const target = resolveRemote(options.remote, options.remoteFromConfig, cwd);
 
-  logger.info(`   Remote: ${redactUrlCredentials(remoteUrl)}`);
+  logger.info(`   Remote: ${redactUrlCredentials(target.url)}`);
   logger.info(`   Branch: ${branch}`);
 
   // Through the one classified creation: a temp directory the OS will not make is the environment's fault.
@@ -248,7 +301,7 @@ export async function publishToGitBranch(options: PublishGitOptions): Promise<un
   logger.debug(`   Staging repo: ${tmpRepo}`);
 
   try {
-    await commitAndDeliver(tmpRepo, cwd, remoteUrl, options);
+    await commitAndDeliver(tmpRepo, cwd, target, options);
   } catch (error) {
     if (!dryRun) await disposeTempDirAfterFailure(tmpRepo, error);
     throw error;
@@ -281,24 +334,62 @@ const LS_REMOTE_NO_MATCH = 2;
  *
  * The tip alone is fetched (`--depth=1`): the push needs only the parent the remote already has.
  * `--no-push` fetches the whole history, because it copies the staging repo into the caller's.
+ *
+ * The commit builds on the sha the probe reported, never on whatever the fetch happened to bring:
+ * a fetch source is matched by git's abbreviation rules too, so with `refs/heads/b` gone by the
+ * time the fetch runs, `refs/heads/refs/heads/b` would answer for it. A fetched tip that is not the
+ * probed sha refuses rather than building on it.
  */
-function buildOnRemoteTip(tmpRepo: string, remoteUrl: string, options: Pick<PublishGitOptions, 'branch' | 'noPush' | 'logger'>): void {
+function buildOnRemoteTip(tmpRepo: string, remote: PublishRemote, options: Pick<PublishGitOptions, 'branch' | 'noPush' | 'logger'>): void {
   const ref = `refs/heads/${options.branch}`;
-  const probe = git(['ls-remote', '--exit-code', '--heads', '--', remoteUrl, ref], { cwd: tmpRepo, allowFailure: true });
-  if (probe.status === LS_REMOTE_NO_MATCH) {
+  const tip = remoteTipOf(tmpRepo, remote, ref);
+  if (tip === undefined) {
     options.logger.info(`   Branch ${options.branch} does not exist on the remote; the first commit has no parent`);
     return;
   }
-  if (probe.status !== 0) {
-    throw new CommandRefusalError('EXTERNAL_API_FAILED', `git ls-remote could not read ${redactUrlCredentials(remoteUrl)} ${probeFailure(probe)}`);
-  }
   const depth = options.noPush ? [] : ['--depth=1'];
-  git(['fetch', ...depth, '--', remoteUrl, ref], { cwd: tmpRepo, refusal: 'EXTERNAL_API_FAILED' });
-  git(['reset', '--soft', 'FETCH_HEAD'], { cwd: tmpRepo });
+  gitAtRemote(remote, ['fetch', ...depth], [ref], { cwd: tmpRepo, refusal: 'EXTERNAL_API_FAILED' });
+  const fetched = git(['rev-parse', '--verify', 'FETCH_HEAD'], { cwd: tmpRepo }).stdout;
+  if (fetched !== tip) {
+    throw new CommandRefusalError(
+      'EXTERNAL_API_FAILED',
+      `Branch ${options.branch} on ${redactUrlCredentials(remote.url)} was at ${tip} when asked, but the fetch brought ${fetched}. Run the publish again.`,
+    );
+  }
+  git(['reset', '--soft', tip], { cwd: tmpRepo });
+}
+
+/**
+ * The sha `remote` holds at exactly `ref`, or `undefined` when it holds no such branch.
+ *
+ * `git ls-remote <url> <pattern>` matches the pattern against the TAIL of each ref, so a remote
+ * with no `main` but a `x/refs/heads/main` exits 0 for `refs/heads/main`. Existence is therefore
+ * read from the listing — a line naming `ref` exactly — and not from the exit status.
+ */
+function remoteTipOf(tmpRepo: string, remote: PublishRemote, ref: string): string | undefined {
+  const probe = gitAtRemote(remote, ['ls-remote', '--exit-code', '--heads'], [ref], { cwd: tmpRepo, allowFailure: true });
+  if (probe.status === LS_REMOTE_NO_MATCH) {
+    return undefined;
+  }
+  if (probe.status !== 0) {
+    throw new CommandRefusalError('EXTERNAL_API_FAILED', `git ls-remote could not read ${redactUrlCredentials(remote.url)} ${probeFailure(probe)}`);
+  }
+  for (const line of probe.stdout.split('\n')) {
+    const [sha, name] = line.split('\t');
+    if (name === ref && sha !== undefined && isObjectId(sha)) {
+      return sha;
+    }
+  }
+  return undefined;
+}
+
+/** A full SHA-1 or SHA-256 object id, as `ls-remote` prints one. */
+function isObjectId(text: string): boolean {
+  return (text.length === 40 || text.length === 64) && /^[\da-f]+$/.test(text);
 }
 
 /** {@link publishToGitBranch}'s work in the temp repo: stage the tree, commit it, deliver it. */
-async function commitAndDeliver(tmpRepo: string, cwd: string, remoteUrl: string, options: PublishGitOptions): Promise<void> {
+async function commitAndDeliver(tmpRepo: string, cwd: string, remote: PublishRemote, options: PublishGitOptions): Promise<void> {
   const { publishDir, branch, commitMessage, force, dryRun, logger } = options;
   git(['init'], { cwd: tmpRepo });
   git(['config', 'user.email', 'vat-publish@localhost'], { cwd: tmpRepo });
@@ -308,7 +399,7 @@ async function commitAndDeliver(tmpRepo: string, cwd: string, remoteUrl: string,
   // Build on the branch's tip. Skipped for a dry run (the parent does not matter) and under
   // --force (the push replaces the branch).
   if (!dryRun && !force) {
-    buildOnRemoteTip(tmpRepo, remoteUrl, options);
+    buildOnRemoteTip(tmpRepo, remote, options);
   }
 
   // Copy publish tree content into temp repo. Both trees are VAT's own staging: a fault
@@ -354,5 +445,5 @@ async function commitAndDeliver(tmpRepo: string, cwd: string, remoteUrl: string,
   const log = git(['log', '--oneline', '-1'], { cwd: tmpRepo });
   logger.info(`   Commit: ${log.stdout}`);
 
-  deliverCommit(tmpRepo, cwd, options, remoteUrl);
+  deliverCommit(tmpRepo, cwd, options, remote);
 }

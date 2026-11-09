@@ -60,6 +60,22 @@ describe('marketplace publish builds on the remote branch', () => {
     expect(history(bareRemote)).toEqual(['publish v1.0.2', 'publish v1.0.1', 'publish v1.0.0']);
   });
 
+  // `git ls-remote <url> refs/heads/<branch>` matches the pattern against the TAIL of each ref, so
+  // a remote with no `claude-marketplace` but a `x/refs/heads/claude-marketplace` answers exit 0.
+  it('starts an orphan when the remote holds only a branch whose name ENDS in refs/heads/<branch>', async () => {
+    const { bareRemote, publishDir } = setUp();
+    const decoy = `refs/heads/x/refs/heads/${BRANCH}`;
+    const identity = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@localhost', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@localhost' };
+    const emptyTree = runGitOrThrow(['mktree'], { cwd: bareRemote, input: '' });
+    const seed = runGitOrThrow(['commit-tree', emptyTree, '-m', 'decoy'], { cwd: bareRemote, env: identity });
+    runGitOrThrow(['update-ref', decoy, seed], { cwd: bareRemote });
+
+    await publish(publishDir, bareRemote, '1.0.0');
+    expect(history(bareRemote)).toEqual(['publish v1.0.0']);
+    // The decoy is untouched and is not the new branch's parent.
+    expect(runGitOrThrow(['rev-parse', decoy], { cwd: bareRemote })).toBe(seed);
+  });
+
   it('refuses as EXTERNAL_API_FAILED when the remote cannot be asked, and pushes nothing', async () => {
     const { root, publishDir } = setUp();
     const missingRemote = safePath.join(root, 'no-such-remote.git');
