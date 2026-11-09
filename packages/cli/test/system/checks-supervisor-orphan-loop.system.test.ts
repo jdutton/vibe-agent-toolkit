@@ -25,12 +25,12 @@ import { preload, TXT_ROWS, writeConfig } from './test-helpers/checks-phase.js';
 import { createMarkdownGitFixture } from './test-helpers/index.js';
 import {
   alive,
+  childGoneWithin,
   expectOrphanedChildEnding,
   killStillRunning,
   type LiveVat,
   pidWrittenTo,
   startVat,
-  within,
 } from './test-helpers/live-vat.js';
 
 // ⛔ Disposal paths: every `vat` process (and its checks child) inherits the scratch TMPDIR.
@@ -82,7 +82,7 @@ describe('a checks child orphaned inside a check', () => {
     // Only now does the held check return — however long the kill took to land.
     fs.writeFileSync(release, '', 'utf-8');
     // The bound FIRST, from the release — before anything waits on the child.
-    expect(await within(ORPHAN_BOUND_MS, () => !alive(childPid)), running.stderr()).toBe(true);
+    expect(await childGoneWithin(ORPHAN_BOUND_MS, childPid), running.stderr()).toBe(true);
     // POSIX: its own ending, unpublished. Windows: terminated with its supervisor, untraced.
     await expectOrphanedChildEnding(running, trace);
   });

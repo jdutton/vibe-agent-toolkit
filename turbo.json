@@ -170,8 +170,8 @@
       "cache": true
     },
     // cli: `audit-dogfooding.system.test.ts` audits vat-development-agents' built
-    // `dist/skills`, which is not a workspace dependency of cli (it is built in the
-    // second pass, after cli). The edge orders that build first and folds its hash
+    // `dist/skills`, which is not a workspace dependency of cli (its build runs
+    // cli's binary, so it builds after cli). The edge orders that build first and folds its hash
     // in, so the test can fail on an absent build instead of passing vacuously.
     "@vibe-agent-toolkit/cli#test:system": {
       "dependsOn": ["^build", "build", "@vibe-agent-toolkit/vat-development-agents#build"],

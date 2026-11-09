@@ -73,17 +73,38 @@ export async function pidWrittenTo(file: string): Promise<number> {
   return Number(fs.readFileSync(file, 'utf-8'));
 }
 
+/** Pids a case has shown gone — teardown never signals them again (see {@link childGoneWithin}). */
+const provenGone = new Set<number>();
+
+/**
+ * Whether the checks child `pid` is gone within `ms` — and, when it is, a record that teardown
+ * must not signal that pid. A pid is not an identity: once nothing holds a handle to the process
+ * the OS may hand the number to a new one (Windows does so at once), and with two workers that is
+ * likely a sibling test file's process, which a teardown SIGKILL would take down.
+ *
+ * @param ms - The bound
+ * @param pid - The child's pid
+ * @returns True when the child was gone within the bound
+ */
+export async function childGoneWithin(ms: number, pid: number): Promise<boolean> {
+  const gone = await within(ms, () => !alive(pid));
+  if (gone) provenGone.add(pid);
+  return gone;
+}
+
 /**
  * SIGKILL a case's supervisor and its checks child, whichever is still running — so a red case
- * cannot leave either behind.
+ * cannot leave either behind. The supervisor is signalled through its `ChildProcess`, which does
+ * nothing once it has exited; the child by pid, unless the case showed it gone.
  *
  * @param supervisor - The supervising `vat`, when the case started one
  * @param child - The checks child's pid, when the case read one
  */
 export function killStillRunning(supervisor: LiveVat | undefined, child: number | undefined): void {
-  const pid = supervisor?.process.pid;
-  if (pid !== undefined) killIfRunning(pid);
-  if (child !== undefined) killIfRunning(child);
+  if (supervisor?.process.exitCode === null && supervisor.process.signalCode === null) {
+    supervisor.process.kill('SIGKILL');
+  }
+  if (child !== undefined && !provenGone.has(child)) killIfRunning(child);
 }
 
 /**

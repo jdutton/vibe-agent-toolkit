@@ -137,17 +137,20 @@ describe('turbo test-suite concurrency (cross-package native-memory guard)', () 
   it('runs every package\'s system tier at the shared worker cap, on this platform too', async () => {
     const scanned: string[] = [];
     for (const dir of readdirSync(safePath.join(PROJECT_ROOT, 'packages'))) {
+      const manifestPath = safePath.join(PROJECT_ROOT, 'packages', dir, 'package.json');
+      if (!existsSync(manifestPath)) continue;
+      const pkg = JSON.parse(readFileSync(manifestPath, 'utf-8')) as { scripts?: Record<string, string> };
+      const script = pkg.scripts?.['test:system'];
       const configPath = safePath.join(PROJECT_ROOT, 'packages', dir, 'vitest.system.config.ts');
-      if (!existsSync(configPath)) continue;
+      // Both ways: a script with no config, or a config no script runs, escapes the checks below.
+      expect(existsSync(configPath), `${dir}: test:system script and vitest.system.config.ts go together`).toBe(script !== undefined);
+      if (script === undefined) continue;
+      expect(script, `${dir} test:system script`).toBe('vitest run --config vitest.system.config.ts');
       const { test } = await loadPackageTestConfig(configPath);
       expect(test.maxWorkers, `${dir} system tier`).toBe(maxTestWorkers);
       expect(test.fileParallelism, `${dir} system tier`).not.toBe(false);
       expect(test.setupFiles.some((file) => file.endsWith('vitest.fork-rss-budget.setup.js')), `${dir} system tier without the RSS budget`).toBe(true);
-      expect(test.provide.forkRssBudgetMb).toBe(forkRssBudgetMb);
-      const pkg = JSON.parse(readFileSync(safePath.join(PROJECT_ROOT, 'packages', dir, 'package.json'), 'utf-8')) as {
-        scripts: Record<string, string>;
-      };
-      expect(pkg.scripts['test:system'], `${dir} test:system script`).toBe('vitest run --config vitest.system.config.ts');
+      expect(test.provide.forkRssBudgetMb, `${dir} system tier`).toBe(forkRssBudgetMb);
       scanned.push(dir);
     }
     // Not blind: the scan reached cli, the tier's long pole.
