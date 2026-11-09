@@ -32,7 +32,7 @@ afterAll(() => {
 		throw new Error(
 			`fork peak RSS ${peakMb} MB is over the ${String(budgetMb)} MB budget (vitest.shared.ts: forkRssBudgetMb). ` +
 				'This tier\'s forks are sized to this budget so that they can run side by side. ' +
-				'Find what grew (a native addon at work, a large fixture) and shrink it, or re-measure the budget for the whole tier.',
+				'Find what grew (a native addon at work, a large fixture) and shrink it, or re-measure the budget for every tier that carries it.',
 		);
 	}
 });

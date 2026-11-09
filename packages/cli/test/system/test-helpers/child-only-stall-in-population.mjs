@@ -11,11 +11,20 @@
  * When `TEST_CHILD_PID_FILE` is set, the child writes its pid there before it stalls, so a case
  * can tell whether the stalled child outlived its supervisor.
  *
+ * "Forever" has a ceiling, {@link MAX_STALL_MS}, after which the child SIGKILLs itself, so no
+ * exit handler runs and nothing reads as the child ending itself. It is far beyond every bound a
+ * case asserts, so a child the supervisor failed to kill still fails its case — but it cannot
+ * outlive the run if it escaped teardown too (on Windows teardown kills the supervisor only and
+ * relies on the job object to take the child).
+ *
  * Acts only in the process whose argv carries `--supervised-by` (the supervised child). VAT's source
  * gains no knob for this.
  */
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
+
+/** The stall's ceiling: below the system tier's per-test timeout, above every case's bound. */
+const MAX_STALL_MS = 60_000;
 
 if (process.argv.includes('--supervised-by')) {
   const append = fs.appendFileSync;
@@ -24,7 +33,8 @@ if (process.argv.includes('--supervised-by')) {
     if (typeof data === 'string' && data.includes('"kind":"started"')) {
       const pidFile = process.env['TEST_CHILD_PID_FILE'];
       if (pidFile !== undefined) fs.writeFileSync(pidFile, String(process.pid), 'utf-8');
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, MAX_STALL_MS);
+      process.kill(process.pid, 'SIGKILL');
     }
     return result;
   };

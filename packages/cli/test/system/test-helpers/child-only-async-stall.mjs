@@ -16,6 +16,12 @@
  * `TEST_CHILD_TRACE_FILE` is, it appends `exit:<code>` there as it exits — the one way a case can
  * read the exit code of a process that is not its own child.
  *
+ * "Forever" has a ceiling, {@link MAX_STALL_MS}, after which the child SIGKILLs itself, so no
+ * exit handler runs and nothing reads as the child ending itself. It is far beyond every bound a
+ * case asserts, so a child that failed to end still fails its case — but it cannot outlive the
+ * run if it escaped teardown too (on Windows teardown kills the supervisor only and relies on the
+ * job object to take the child).
+ *
  * Acts only in the process whose argv carries `--supervised-by` (the supervised child). VAT's source
  * gains no knob for this.
  */
@@ -27,6 +33,9 @@ import { PassThrough } from 'node:stream';
 
 /** The asynchronous filesystem calls a population makes, in both API shapes. */
 const FS_CALLS = ['access', 'lstat', 'open', 'opendir', 'readdir', 'readFile', 'readlink', 'realpath', 'stat'];
+
+/** The stall's ceiling: below the system tier's per-test timeout, above every case's bound. */
+const MAX_STALL_MS = 60_000;
 
 if (process.argv.includes('--supervised-by')) {
   let stalled = false;
@@ -76,7 +85,8 @@ if (process.argv.includes('--supervised-by')) {
     const result = append(path, data, ...rest);
     if (typeof data === 'string' && data.includes('"kind":"started"')) {
       stalled = true;
-      setInterval(() => {}, 60_000);
+      // Keeps the loop alive (a promise nobody will settle does not) until the ceiling.
+      setTimeout(() => process.kill(process.pid, 'SIGKILL'), MAX_STALL_MS);
       const pidFile = process.env['TEST_CHILD_PID_FILE'];
       if (pidFile !== undefined) fs.writeFileSync(pidFile, String(process.pid), 'utf-8');
     }
