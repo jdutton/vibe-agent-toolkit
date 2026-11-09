@@ -609,13 +609,15 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   `local/no-text-git-object-read`), but every `ls-files -z` caller reads through `runGit`, which
   decodes UTF-8 and replaces each invalid byte with U+FFFD. On a file system that stores name bytes
   verbatim (Linux), a file named `\xff.md` is listed as `�.md`: a lookup misses it, and two such
-  names collapse into one. NTFS accepts a name holding an unpaired surrogate, which Git for Windows
-  writes as bytes that are not UTF-8, so Windows is re-spelled the same way; APFS refuses such names.
+  names collapse into one. APFS refuses such names. NTFS accepts a name holding an unpaired
+  surrogate, but Git for Windows converts it to UTF-8 itself, writing U+FFFD in its place — valid
+  UTF-8, so the re-spelling happens inside git and no reading of its output can see it.
 - **Traced in code**, not reproduced against the built CLI.
-- **Where:** every product and dev-tools reader of the listing — `git grep -n "'ls-files'" -- 'packages/*/src'`
+- **Where:** every product and dev-tools reader of the listing — `git grep -n "'ls-files'" -- 'packages/*/src/**'`
   (in `utils`, `cli`, `lab` and `dev-tools`)
 - **Fix:** read the listing with `runGitBytes`, decide each path with `decodeUtf8Exactly` and refuse
-  (or report) the ones it cannot name; then add `ls-files` to the rule's subcommands.
+  (or report) the ones it cannot name; then add `ls-files` to the rule's subcommands. That fixes
+  Linux; on Windows only comparing the listing against `readdir` can find the name git re-spelled.
 
 ### A git skill source's committed paths are judged for UTF-8 only, not for what the host can hold
 
@@ -638,14 +640,15 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Mechanism:** `shownName` / `visibleText` are the one way a message shows a path, a link's text or
   a child process's words, but each message site has to call them. The sites a repository's names
   reach today do: a git source's refusals, the tree-change link walk, the followed-walk refusals,
-  staging, and every `FsFaultError` (escaped once in its constructor). Every other `VatError`
+  staging, a refused directory listing, and every `FsFaultError` (escaped once in its
+  constructor). Every other `VatError`
   message that interpolates a path — a local skill source, a config path, an archive entry —
   prints it as it is, and the next one written can forget. The link walk shows names unquoted
   (set off by the message), so a name whose characters ARE a literal `‮` reads like one that
   holds the override; the git source's own refusals quote them and are unambiguous.
 - **Traced in code**, not reproduced against the built CLI.
 - **Where:** every `new VatError(` / `super(` whose message interpolates a path —
-  `git grep -nE "super\(|new VatError\(" -- 'packages/*/src'`
+  `git grep -nE "super\(|new VatError\(" -- 'packages/*/src/**'`
 - **Fix:** escape once where a message is printed (the CLI's error writer, keeping the newlines a
   message lays out), or a lint rule that reports a refusal template interpolating a value not
   wrapped in `shownName` / `visibleText`.

@@ -38,6 +38,10 @@ describe('visibleText', () => {
     expect(shown).not.toContain(character);
   });
 
+  it('shows at most 8192 characters of a flood, and counts the rest', () => {
+    expect(visibleText(`${'c'.repeat(9000)}${String.fromCodePoint(0x1b)}`)).toBe(`${'c'.repeat(8192)}…[809 more characters]`);
+  });
+
   it('leaves printable text, quotes and backslashes as they are', () => {
     expect(visibleText(String.raw`C:\Users\"é" 名前 🙂`)).toBe(String.raw`C:\Users\"é" 名前 🙂`);
   });
@@ -54,6 +58,20 @@ describe('shownName', () => {
 
   it('shows bytes that are not UTF-8 byte for byte, valid sequences among them included', () => {
     expect(shownName(Buffer.from([0x61, 0xc3, 0xa9, 0xff, 0x22]))).toBe(`"a${bs}xc3${bs}xa9${bs}xff${bs}""`);
+  });
+
+  // A repository can make a link's text or a path megabytes long; the message stays bounded, and
+  // says how much it left out.
+  it.for([
+    ['text', 'a'.repeat(1_000_000), `"${'a'.repeat(8192)}"…[991808 more characters]`],
+    ['controls', String.fromCodePoint(1).repeat(1_000_000), `"${(bs + 'u0001').repeat(8192)}"…[991808 more characters]`],
+    ['bytes that are not UTF-8', Buffer.alloc(1_000_000, 0xff), `"${(bs + 'xff').repeat(8192)}"…[991808 more bytes]`],
+  ] as const)('shows at most 8192 of a flood of %s, and counts the rest', ([, flood, expected]) => {
+    expect(shownName(flood)).toBe(expected);
+  });
+
+  it('shows a name of exactly 8192 characters whole', () => {
+    expect(shownName('b'.repeat(8192))).toBe(`"${'b'.repeat(8192)}"`);
   });
 
   it('escapes what visibleText escapes', () => {

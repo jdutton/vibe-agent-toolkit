@@ -339,6 +339,13 @@ describe('refuseEscapingLinks, a tree read in place', () => {
     expect(message).not.toContain(rlo);
   });
 
+  // The refusal is about the text's last character, so the text is quoted: a trailing space shows.
+  it('refuses a link whose text ends in a space, quoting the text', () => {
+    plant({ ...SKILL, 'skill/sp': '-> SKILL.md ' });
+
+    expect(refusalOf(inPlace)?.message).toContain('sp is a symbolic link whose target names a component no Windows host can spell ("SKILL.md ")');
+  });
+
   // A POSIX kernel follows `up` before the `..` after it; a Windows kernel collapses `up/..` by string first.
   it.skipIf(HOST_PATH_FLAVOR === 'win32')('refuses a link whose text climbs out of the tree, even through a link inside it', () => {
     plant({ ...SKILL, 'skill/docs/up': '-> ..', 'skill/docs/out': '-> up/../outside/key.txt' });

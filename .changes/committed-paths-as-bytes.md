@@ -1,13 +1,19 @@
+### Breaking
+
+- **A git skill source (`url:`, `vat audit <git url>`) whose commit holds a path that is not UTF-8
+  is refused before checkout** (`GIT_CLONE_FAILED`, `INPUT_UNREADABLE`), naming the path's bytes —
+  a path anywhere in the commit, not only under the selected subpath. It was cloned before, and
+  judged under a re-spelled name. Rename the path in the repository.
+
 ### Security
 
-- **A git skill source (`url:`, `vat audit <git url>`) holding a committed path that is not UTF-8 is
-  refused before checkout** (`GIT_CLONE_FAILED`, `INPUT_UNREADABLE`), naming the path's bytes.
-  Rename the path in the repository.
-- **A git source's refusals, the link walk's refusals, staging's symlink refusal and every
-  filesystem fault (`FS_FAULT`) no longer print a name or a link text raw.** Control,
-  bidirectional and invisible characters in a path, a link's text or git's own words are shown as
-  `\uHHHH` escapes; a git source's refusals also quote the names they show. Other refusals that
-  show a path still print it as it is.
+- **Refusals that show a name a repository chose no longer print it raw.** Control, bidirectional
+  and invisible characters in a path, a link's text or git's own words are shown as escapes
+  (`\uHHHH`, `\u{HHHHH}` past U+FFFF; bytes that are not UTF-8 as `\xHH`), and a name past 8192
+  characters is cut, with how much was left out. Covered: a git source's refusals before checkout
+  (names quoted, git's own words keeping their line breaks), the link walk's and the followed
+  walk's refusals, staging's symlink refusal, a refused directory listing, and every
+  `FsFaultError`. Other refusals that show a path still print it as it is.
 
 ### Added
 

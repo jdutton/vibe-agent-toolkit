@@ -37,6 +37,16 @@ describe('refusedListingMessage', () => {
     expect(message).toMatch(/cannot be told from a complete one/);
   });
 
+  // A cloned repository names the directory: shown by its escapes, never as the characters it holds.
+  it('shows a hostile directory name by its escapes', () => {
+    const rlo = String.fromCodePoint(0x20_2e);
+    const message = refusedListingMessage(refusal(`${ROOT}/a${rlo}b`), { root: ROOT, remedy: REMEDY });
+
+    const bs = '\\';
+    expect(message).toContain(`the directory 'a${bs}u202eb'`);
+    expect(message).not.toContain(rlo);
+  });
+
   it('asserts nothing about what WAS enumerated beneath the directory — the git route lists tracked members', () => {
     const message = refusedListingMessage(refusal(`${ROOT}/docs/locked`), { root: ROOT, remedy: REMEDY });
     expect(message).not.toMatch(/nothing beneath it was enumerated/);

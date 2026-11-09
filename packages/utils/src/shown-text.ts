@@ -65,27 +65,57 @@ function quotedByte(byte: number): string {
 }
 
 /**
+ * How much of one text a message shows: past it, the rest is counted, not shown, so a name or a
+ * link text a repository made megabytes long costs a message no more than this. Twice the longest
+ * path a Linux host resolves (4096 bytes), so no real path is cut.
+ */
+const SHOWN_LIMIT = 8192;
+
+/**
+ * The first {@link SHOWN_LIMIT} items, each as `show` spells it, and how many more there were. One
+ * pass that builds only what is shown: the rest is counted, never copied.
+ */
+function shownUpTo<T>(items: Iterable<T>, show: (item: T) => string, unit: string): { shown: string; more: string } {
+  let shown = '';
+  let count = 0;
+  for (const item of items) {
+    if (count < SHOWN_LIMIT) shown += show(item);
+    count += 1;
+  }
+  const rest = count - SHOWN_LIMIT;
+  return { shown, more: rest > 0 ? `…[${rest.toString()} more ${unit}]` : '' };
+}
+
+/**
  * Text as a message shows it unquoted: every character a terminal would act on, or a reader would
- * not see, as its escape (`\uHHHH`); every other character — `"` and `\` included — as itself.
+ * not see, as its escape (`\uHHHH`, `\u{HHHHH}` past the BMP); every other character — `"` and `\`
+ * included — as itself. Past {@link SHOWN_LIMIT} characters, only how many more.
  *
  * @param text - Text the message did not write
  * @returns The text, safe to print
  */
 export function visibleText(text: string): string {
-  return [...text].map((character) => visibleCharacter(character)).join('');
+  const { shown, more } = shownUpTo(text, visibleCharacter, 'characters');
+  return shown + more;
 }
 
 /**
  * A name as a message shows it: quoted, `"` and `\` escaped, every character {@link visibleText}
  * escapes escaped the same way. Given bytes, the text they spell when they are UTF-8; when they are
  * not, every byte at or above 0x80 as `\xHH` (valid sequences among them included), so the bytes
- * can be read back exactly.
+ * can be read back exactly. Past {@link SHOWN_LIMIT} characters (or bytes), only how many more,
+ * after the closing quote.
  *
  * @param value - The name, as text or as the bytes it was read as
  * @returns The name, quoted and safe to print
  */
 export function shownName(value: string | Uint8Array): string {
-  if (typeof value === 'string') return `"${[...value].map((character) => quotedCharacter(character)).join('')}"`;
-  const text = decodeUtf8Exactly(value);
-  return text === undefined ? `"${[...value].map((byte) => quotedByte(byte)).join('')}"` : shownName(text);
+  if (typeof value !== 'string') {
+    const text = decodeUtf8Exactly(value);
+    if (text !== undefined) return shownName(text);
+    const { shown, more } = shownUpTo(value, quotedByte, 'bytes');
+    return `"${shown}"${more}`;
+  }
+  const { shown, more } = shownUpTo(value, quotedCharacter, 'characters');
+  return `"${shown}"${more}`;
 }

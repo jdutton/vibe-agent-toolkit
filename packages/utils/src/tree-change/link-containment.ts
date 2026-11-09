@@ -17,7 +17,7 @@ import { VatError } from '../errors/vat-error.js';
 import { requireFollowedStatSync } from '../link-following.js';
 import { canonicalPath, isUnderRoot } from '../path-containment.js';
 import { safePath, toForwardSlash } from '../path-core.js';
-import { visibleText } from '../shown-text.js';
+import { shownName, visibleText } from '../shown-text.js';
 
 import { COPY_LINK_ESCAPES_SOURCE_CODE } from './followed-walk.js';
 import { hostPlaceKind, walkHostChain } from './host-chain.js';
@@ -109,7 +109,8 @@ function describedChainRefusal(check: LinkContainmentCheck, link: string, refusa
     case 'hop-limit':
       return `whose target starts a chain of more than ${MAX_LINK_HOPS.toString()} symbolic links that is not a cycle, so where it ends cannot be shown`;
     case 'unportable':
-      return `whose target names a component no Windows host can spell (${visibleText(refusal.text)}): a NUL, or a name ending in a dot or a space that Windows strips`;
+      // Quoted: the refusal is about the text's last character, and a trailing space shows only between quotes.
+      return `whose target names a component no Windows host can spell (${shownName(refusal.text)}): a NUL, or a name ending in a dot or a space that Windows strips`;
   }
 }
 
