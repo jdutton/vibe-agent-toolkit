@@ -13,7 +13,7 @@
  *   | `package.json` workspaces                | `bun.lock` `@vibe-agent-toolkit/*` entries|
  *   | a package's test directories             | its `test:*` scripts                      |
  *   | `.gitignore`                             | the tracked file list (nothing ignored)   |
- *   | scripts that run the CLI binary          | `turbo.json` `<pkg>#build` edges          |
+ *   | scripts/tests running a sibling's `dist/`| turbo's task graph (`turbo.json` edges)   |
  *
  * Plus two well-formedness rules with no source: `CLAUDE.md` stays under its
  * byte budget, and every `.changes/*.md` fragment parses — and one ratchet,
@@ -29,6 +29,12 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 
+import {
+  findBuiltOutputEdgeProblems,
+  readTurboTaskGraph,
+  type TurboTaskGraph,
+  workingTreeScanFiles,
+} from './built-output-edges.js';
 import { validateFragments } from './changelog-fragments.js';
 import { checkCommentDensity, nonDeletedGitListing } from './comment-density.js';
 import { GENERATED_DOCUMENTS, regenerateDocument } from './generate-claude-md.js';
@@ -302,57 +308,21 @@ export function checkNoTrackedIgnoredFiles(repoRoot: string): ValidationError[] 
 }
 
 /**
- * Whether the turbo task at `key` lists `edge` in its `dependsOn`.
- *
- * turbo.json is JSONC (comments), so this is a text scan: the task's object
- * runs from its key to the next closing brace, and the edge must be inside it.
+ * Rule: every task that reads a workspace package's built `dist/` — a package
+ * script running the CLI binary, or a test spawning or importing a package's
+ * `dist/` — has turbo run the task that produces that output before it. The
+ * reaches, their readers, their producers and the ordering are all derived
+ * (`built-output-edges.ts`), so a forgotten edge is a red gate, not a run
+ * against a missing or stale `dist/`.
  */
-function turboBlockDependsOn(turbo: string, key: string, edge: string): boolean {
-  const start = turbo.indexOf(key);
-  const end = start === -1 ? -1 : turbo.indexOf('}', start);
-  return start !== -1 && end !== -1 && turbo.slice(start, end).includes(edge);
-}
-
-/**
- * Rule: a package whose scripts run the CLI binary has a `turbo.json` edge on
- * `@vibe-agent-toolkit/cli#build`. The edge list in turbo.json is hand-written
- * ("To register a new adopter package, add a `<pkg>#build` entry below"); this
- * derives the population from the scripts so a forgotten entry is a red gate
- * rather than a racing `ERR_MODULE_NOT_FOUND` on a cold cache.
- */
-export function checkTurboAdopterEdges(repoRoot: string): ValidationError[] {
-  const turbo = readFileSync(safePath.join(repoRoot, 'turbo.json'), 'utf8');
-  const findings: ValidationError[] = [];
-  for (const pkg of readWorkspaceGraph(repoRoot).packages) {
-    const scripts = (pkg.manifest['scripts'] ?? {}) as Record<string, string>;
-    const runsCli = Object.entries(scripts).filter(([, script]) => script.includes('cli/dist/bin/vat.js'));
-    if (runsCli.length === 0) continue;
-    // Which turbo task runs the binary: `build` itself, or a `build:*` task turbo
-    // runs separately (`build:skills`). A `build:code`-style step runs INSIDE
-    // `build`, so it counts as `build`.
-    const tasks = new Set(
-      runsCli.map(([name]) => (name === 'build:skills' ? 'build:skills' : 'build')),
-    );
-    for (const task of tasks) {
-      const key = `"${pkg.name}#${task}"`;
-      // A `build:*` task is also covered transitively: the package's own
-      // `#build` carries the edge and the generic task depends on `build`.
-      const viaBuild =
-        task !== 'build' &&
-        turboBlockDependsOn(turbo, `"${pkg.name}#build"`, '"@vibe-agent-toolkit/cli#build"') &&
-        turboBlockDependsOn(turbo, `"${task}"`, '"build"');
-      if (!viaBuild && !turboBlockDependsOn(turbo, key, '"@vibe-agent-toolkit/cli#build"')) {
-        findings.push(
-          stale(
-            'turbo.json',
-            `${pkg.name} runs the CLI binary in its \`${task}\` script but turbo.json has no ${key} task depending on ` +
-              '"@vibe-agent-toolkit/cli#build". Without the edge turbo may run it while the CLI or a package it imports is mid-rebuild.',
-          ),
-        );
-      }
-    }
-  }
-  return findings;
+export function checkBuiltOutputEdges(
+  repoRoot: string,
+  taskGraph: TurboTaskGraph = readTurboTaskGraph(repoRoot),
+  files: readonly string[] = workingTreeScanFiles(repoRoot),
+): ValidationError[] {
+  return findBuiltOutputEdgeProblems(repoRoot, readWorkspaceGraph(repoRoot), taskGraph, files).map(({ site, message }) =>
+    stale(site, message),
+  );
 }
 
 /** Rule: every `.changes/*.md` fragment is well-formed. */
@@ -375,7 +345,7 @@ export function collectDerivedArtifactFindings(repoRoot: string): ValidationErro
     checkLockfileWorkspaceResolutions,
     checkPackageScripts,
     checkNoTrackedIgnoredFiles,
-    checkTurboAdopterEdges,
+    checkBuiltOutputEdges,
     checkChangelogFragments,
     checkCommentDensity,
   ];

@@ -101,6 +101,93 @@ output. Their failure messages carry the regeneration command; the procedure is 
 first** (`bun run build`), then run the one file from its package directory with the env var set.
 Regenerating from a stale `dist/` writes a stale golden that passes.
 
+### Reading a package's built output
+
+A test or package script that reads a workspace package's `dist/` needs turbo to run the task that
+PRODUCES that path before the reader's task. That ordering also puts the producer's hash into the
+reader's hash, so a rebuild re-runs the reader. Without it, a cold run reads a missing `dist/` and
+a warm run reads a stale one. `validate-structure` (`checkBuiltOutputEdges`) derives every such
+read and checks it against turbo's own `--dry=json` graph.
+
+**What it scans.** The rule reads these files:
+
+- every source file under a package's `test/`, except `fixtures/` and `golden/`;
+- every `src/**/*.test.*`;
+- the `src/` test helpers (`testing/`, `*test-helpers*`);
+- the vitest setup and global-setup files at the repo root or a package root;
+- every `package.json` script, word by word.
+
+**What it does not scan.** The rule is not complete. These reads are out of scope and go
+unchecked, so keep a `dist/` path out of them or route it through a scanned file:
+
+- product `src/` code that a test calls (a path a product function builds is unknown to the
+  scan where the test receives it, which makes that test's use a finding, not the function);
+- the TypeScript files a package script runs (`tsx src/x.ts`): the script word is judged, the
+  file's body is not;
+- a bin a script runs by name (`vat …`): it resolves only through a declared dependency, which
+  `^build` already orders.
+
+In the scanned files, every expression handed to a path sink is one of three kinds when it has a
+`dist` segment, compared case-insensitively. A path sink is a `join`/`resolve` call bound by its
+import to `node:path`/`path` or to `safePath` from `@vibe-agent-toolkit/utils` (a local function
+named `join` is none), `new URL`, a module load, a specifier resolution (`require.resolve`,
+`import.meta.resolve`), a process launch (also through `promisify`) or an fs read. The three
+kinds:
+
+- **Resolved.** Every piece is known, and it lands exactly on `packages/<dir>/dist/…` or
+  `node_modules/<workspace pkg>/dist/…`, each segment matching in case. It starts at a repo
+  location: the file's directory, a relative or workspace-package specifier, or a value that
+  traces to one. Relative text with no anchor resolves from the package directory, the working
+  directory of a test and of a script. Reads of the reader's own package count too. A path is
+  absolute only when it starts with an absolute literal; text after a `+` is appended, never a
+  new root.
+- **Temp.** It starts at `tmpdir()` or `mkdtemp*` imported from `node:os`/`node:fs`, or at a
+  temp-dir helper of `@vibe-agent-toolkit/utils`, and no `..` climbs out of that temp dir. When
+  the path comes from something the scan does not follow (a product function's result), wrap it
+  in `underTemp(path, tempRoot)`: at run time it asserts `path` is inside the temp dir and
+  returns it canonical, no `..` segment left. A path that starts with an absolute literal is
+  also no reach.
+- **Unresolved.** Every other one, a finding at `file:line`, never a skip: a piece not known
+  anywhere in it (an untraceable parameter, a call site the scan cannot enumerate, a `let` given
+  an unknown value, a value a cycle guard cut short), a fully known path that lands on no
+  package's `dist/` or on one only when case is ignored, a temp path a `..` climbs out of, and a
+  relative path whose working directory is not the package's: handed to a launch with a `cwd`
+  option or to a shell (`exec*`, `shell: true`), built in a root-level setup file, or run by a
+  script after a `cd`. A file that does not parse is also a finding.
+
+A value with no `dist` segment is none of these.
+
+**Who reads.** A reach in a test file belongs to the tier task of every test that loads that file,
+directly or through relative imports, in any package. A reach in a file no test loads is a finding.
+A reach in a setup file belongs to every tier task of its scope: every package's, for one at the
+repo root. A reach in a script belongs to every turbo task whose command runs that script, by
+`bun run <s>` or bun's `bun <s>` shorthand. A sibling read in a script that no task runs is a
+finding.
+
+**Who produces.** Any task of the reached package whose declared `outputs`, less its
+`excludedOutputs`, cover the path, each glob matched whole: `dist/**/*.d.ts` does not cover
+`dist/bin.js`, and a directory read whole is covered only by a glob holding that tree
+(`dist/**`). One such task ordered first is enough. A read that may reach
+past its static part has a further requirement: one with a non-static tail, or a directory read
+whole. For each task whose outputs lie under that part, one task covering them must also be
+ordered. Declared outputs are what the rule trusts. A task that does not produce a path its glob
+claims must exclude it: cat-agents' `build` declares `!dist/skills/**`, because `build:skills`
+writes those files.
+
+**Wiring the edge.** Use a `workspace:*` devDependency when the reader may depend on the producer's
+package, the producer is that package's `build`, and the dependency makes no cycle. `^build` then
+orders every task of the reader. Otherwise, add the producer to the `dependsOn` of a
+`<pkg>#<task>` entry in `turbo.json`. Two cases need that entry: a cycle, which the cli and its
+dependents would make, and a producer other than `build`. Such an entry REPLACES the generic
+task's definition instead of merging with it. A `<pkg>#test:<tier>` entry, in the root
+`turbo.json` or as a `test:<tier>` task of a package's own `turbo.json`, is checked against the
+root's generic tier both ways. Its `env`, `outputs` and `cache` must equal the generic's: an added
+env var or output splits or widens what the tier caches as surely as a dropped one. Its
+`dependsOn` and `inputs` must keep all of the generic's and may add more: the added producer is
+the point of the entry, and an added input (the trees a repo-wide test reads) only widens the
+hash. An omitted or empty `inputs` reads as `$TURBO_DEFAULT$`, so an entry that lists inputs
+must list `$TURBO_DEFAULT$` too. (enforced by: `validate-structure`, `checkBuiltOutputEdges`)
+
 ### Test Classification Rules
 
 Misclassified tests are the #1 cause of flaky CI and slow unit test suites. If your test does any of the following, it is **NOT a unit test**:

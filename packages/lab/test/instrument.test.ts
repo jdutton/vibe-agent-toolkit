@@ -34,7 +34,7 @@ import {
 import {
   runGitOrThrow,
 } from '@vibe-agent-toolkit/utils/git';
-import { removeScratchDir , CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
+import { removeScratchDir , CANNOT_DENY_READS, underTemp } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { prepareInstrument, resolveInstrument } from '../src/harness/instrument.js';
@@ -493,7 +493,7 @@ describe('resolveInstrument — kind: npx', () => {
     const installed: string[] = [];
     const site = npxInstallSite(await mkdtemp(safePath.join(scratch, 'npx-arms-')), async (given, prefix) => {
       installed.push(given);
-      const cli = safePath.join(prefix, 'node_modules/@vibe-agent-toolkit/cli');
+      const cli = safePath.join(underTemp(prefix, scratch), 'node_modules/@vibe-agent-toolkit/cli');
       await mkdir(safePath.join(cli, 'dist'), { recursive: true });
       await writeFile(safePath.join(cli, 'dist/bin.js'), '');
       await writeFile(safePath.join(cli, 'package.json'), JSON.stringify({ name: '@vibe-agent-toolkit/cli', version: '9.9.9-other' }));

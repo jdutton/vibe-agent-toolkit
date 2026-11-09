@@ -46,7 +46,9 @@ unit run is minutes, not seconds.
 Turbo's `dependsOn: ["^build"]` means dependencies' builds only, never the package's own. Without
 the package's own `build` in the list, `cli#test:system` runs against yesterday's `dist/` while the
 gate reports every task executed fresh. The cross-package case — `resources`' system tests spawning
-the `cli` binary — turbo cannot express at all.
+the `cli` binary, where a workspace dependency would make a cycle — needs a
+`<pkg>#test:<tier>` entry naming the producer in `turbo.json`; `checkBuiltOutputEdges` fails the
+gate until it is there ([writing-tests](../writing-tests.md#reading-a-packages-built-output)).
 **Tell:** dozens of system-test failures whose messages describe code that was deleted hours ago.
 **Remedy:** grep the log for the build's line number versus the test's before believing a
 system-test verdict; `bun run build` before a standalone system run.
