@@ -32,10 +32,12 @@ describe('whole-module subpath entries', () => {
     const mod = await import('../src/git.js');
     expect(typeof mod.runGit).toBe('function');
     expect(typeof mod.runGitOrThrow).toBe('function');
+    expect(typeof mod.runGitBytes).toBe('function');
 
     const barrel: Record<string, unknown> = await import('../src/index.js');
     expect('runGit' in barrel).toBe(false);
     expect('runGitOrThrow' in barrel).toBe(false);
+    expect('runGitBytes' in barrel).toBe(false);
   });
 
   /**

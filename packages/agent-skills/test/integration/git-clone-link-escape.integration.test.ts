@@ -28,7 +28,7 @@ import { parseGitUrl, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { installFaultFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { cloneGitSource, GIT_SUBPATH_INVALID_CODE } from '../../src/skill-source/git-clone.js';
+import { cloneGitSource, GIT_CLONE_FAILED_CODE, GIT_SUBPATH_INVALID_CODE } from '../../src/skill-source/git-clone.js';
 import { makeBareRepoWithSkill } from '../skill-source/test-helpers.js';
 
 /** A directory outside every clone, holding a file no clone owns. */
@@ -65,17 +65,35 @@ function cloneShapedInto(shape: (workDir: string) => void, subpath?: string, lin
  * given BYTES — no UTF-8 round trip on the way in — and the directory a `#main:plugins/foo` clone of it lands in.
  */
 function cloneByteLinks(links: Readonly<Record<string, Buffer>>): { clone: () => ReturnType<typeof cloneGitSource>; tempdir: string } {
+  return cloneIndexEntries(Object.entries(links).map(([path, bytes]) => ({ mode: '120000', quotedPath: path, bytes })));
+}
+
+/** One index entry, its path spelled C-quoted as `update-index --index-info` reads it: `\377` is the byte 0xFF. */
+interface IndexEntry {
+  readonly mode: '100644' | '120000';
+  readonly quotedPath: string;
+  readonly bytes: Buffer;
+}
+
+/**
+ * A repository whose one commit holds exactly `entries`, built in the index and the object store —
+ * never on disk, so a path whose bytes are not UTF-8 (which APFS refuses to create) is committed on
+ * every host — and the directory a `#main:plugins/foo` clone of it lands in.
+ */
+function cloneIndexEntries(entries: readonly IndexEntry[]): { clone: () => ReturnType<typeof cloneGitSource>; tempdir: string } {
   const work = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-gc-bytes-'));
   const tempdir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-gc-bytes-clone-'));
   cleanups.push(() => rmSync(work, { recursive: true, force: true }), () => rmSync(tempdir, { recursive: true, force: true }));
-  const git = (...args: string[]): string => runGitOrThrow(['-c', 'user.name=T', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd: work });
-  git('init', '--initial-branch=main');
-  for (const [index, [path, bytes]] of Object.entries(links).entries()) {
-    const blobFile = safePath.join(work, '.git', `link-${index.toString()}`);
-    writeFileSync(blobFile, bytes);
-    git('update-index', '--add', '--cacheinfo', `120000,${git('hash-object', '-w', blobFile)},${path}`);
-  }
-  git('commit', '-m', 'byte links');
+  const git = (args: string[], input?: string): string =>
+    runGitOrThrow(['-c', 'user.name=T', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd: work, ...(input === undefined ? {} : { input }) });
+  git(['init', '--initial-branch=main']);
+  const records = entries.map((entry, index) => {
+    const blobFile = safePath.join(work, '.git', `blob-${index.toString()}`);
+    writeFileSync(blobFile, entry.bytes);
+    return `${entry.mode} ${git(['hash-object', '-w', blobFile])}\t"${entry.quotedPath}"\n`;
+  });
+  git(['update-index', '--index-info'], records.join(''));
+  git(['commit', '-m', 'index entries']);
   return { clone: () => cloneGitSource(parseGitUrl(`${pathToFileURL(work).href}#main:plugins/foo`), tempdir), tempdir };
 }
 
@@ -158,6 +176,32 @@ describe('cloneGitSource refuses a committed link by its text before checkout, o
     const { clone, tempdir } = cloneByteLinks({ 'plugins/foo/a': forging, 'plugins/foo/b': Buffer.from(UNC) });
     expect(clone).toThrow(expect.objectContaining({ code: COPY_LINK_ESCAPES_SOURCE_CODE }));
     expect(readdirSync(tempdir)).toEqual(['.git']);
+  });
+
+  // A committed PATH is bytes too: one that is not UTF-8 has no spelling VAT can judge and then
+  // read by, and two such paths can decode to one string.
+  it.for([
+    ['a file', '100644', String.raw`plugins/foo/\377.md`, String.raw`plugins/foo/\xff.md`],
+    ['a directory of a file', '100644', String.raw`plugins/\303(/SKILL.md`, String.raw`plugins/\xc3(/SKILL.md`],
+    ['a link', '120000', String.raw`plugins/foo/\376`, String.raw`plugins/foo/\xfe`],
+  ] as const)('refuses a commit holding %s whose path is not UTF-8, before checkout', ([, mode, quotedPath, shown]) => {
+    const { clone, tempdir } = cloneIndexEntries([
+      { mode: '100644', quotedPath: 'plugins/foo/SKILL.md', bytes: Buffer.from('# skill\n') },
+      { mode, quotedPath, bytes: Buffer.from('SKILL.md') },
+    ]);
+    expect(clone).toThrow(expect.objectContaining({ code: GIT_CLONE_FAILED_CODE, message: expect.stringContaining(`holds a path that is not UTF-8 (${shown})`) }));
+    expect(readdirSync(tempdir)).toEqual(['.git']);
+  });
+
+  it('checks out a commit whose paths are non-ASCII UTF-8 (positive control for the path refusal)', () => {
+    const { clone, tempdir } = cloneIndexEntries([
+      { mode: '100644', quotedPath: 'plugins/foo/SKILL.md', bytes: Buffer.from('# skill\n') },
+      { mode: '100644', quotedPath: String.raw`plugins/foo/\303\251.md`, bytes: Buffer.from('é\n') },
+    ]);
+    expect(clone().targetDir).toMatch(/plugins\/foo$/);
+    const names = readdirSync(safePath.join(tempdir, 'plugins', 'foo')).map((name) => name.normalize('NFC'));
+    expect(names).toHaveLength(2);
+    expect(names).toEqual(expect.arrayContaining(['SKILL.md', 'é.md']));
   });
 
   it('checks out a commit whose links\' texts stay inside (positive control)', () => {

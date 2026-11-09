@@ -25,7 +25,9 @@
 
 export {
   runGit,
+  runGitBytes,
   runGitOrThrow,
+  type GitBytesRunResult,
   type GitRunOptions,
   type GitRunResult,
 } from './git-run.js';

@@ -59,6 +59,8 @@
 
 import { executeGitCommand } from '@vibe-validate/git';
 
+import { decodeTextContent } from './text-content.js';
+
 /**
  * 64 MiB. Chosen against `git ls-files -s -z`, the widest-output command here:
  * ~104 bytes per path means this covers roughly 640,000 paths, while Node's
@@ -171,6 +173,57 @@ export interface GitRunResult {
  * ```
  */
 export function runGit(args: readonly string[], options: GitRunOptions = {}): GitRunResult {
+  return execute(args, options, 'utf8');
+}
+
+/**
+ * What one git command did, its stdout kept as the bytes git wrote — see {@link runGitBytes}.
+ * Everything else is {@link GitRunResult}'s.
+ */
+export interface GitBytesRunResult extends Omit<GitRunResult, 'stdout'> {
+  /** stdout, byte for byte: never decoded, never trimmed. */
+  stdout: Buffer;
+}
+
+/**
+ * {@link runGit}, with stdout handed back as the BYTES git wrote — the one way VAT reads output
+ * that carries what a repository holds: committed paths (`ls-tree -z`) and object contents
+ * (`cat-file --batch`).
+ *
+ * ## Why a string cannot carry them
+ *
+ * git stores a path and a blob as bytes, and a commit may hold bytes that are not UTF-8. A UTF-8
+ * decode replaces each invalid sequence with U+FFFD, so two committed paths can come back as one
+ * string, a path comes back spelled otherwise than the checkout writes it, and a stream framed by
+ * byte counts (`cat-file --batch`) changes length under the decode — a blob can then plant the
+ * next object's header. Decoding is the caller's judgment, made on the bytes, never the
+ * transport's. `local/no-text-git-object-read` keeps every object-store read on this function.
+ *
+ * Mechanically: the spawn runs with `encoding: 'hex'`, a binary-to-text codec, so its strings
+ * carry the bytes exactly and are turned back into them here. The spawn encodes `input` by the
+ * same codec, so `input` — text, written to git as UTF-8 as {@link runGit} writes it — is handed
+ * over as its UTF-8 bytes in hex. stderr is git's own message, decoded as text through the one
+ * decoding seam and trimmed as {@link runGit}'s is.
+ *
+ * @param args - Arguments after the `git` executable
+ * @param options - {@link GitRunOptions}, less `trim`: bytes are never trimmed
+ * @returns The outcome, stdout as bytes
+ */
+export function runGitBytes(args: readonly string[], options: Omit<GitRunOptions, 'trim'> = {}): GitBytesRunResult {
+  const { input, ...rest } = options;
+  const hexInput = input === undefined ? {} : { input: Buffer.from(input, 'utf8').toString('hex') };
+  const result = execute(args, { ...rest, ...hexInput, trim: false }, 'hex');
+  // A spawn-level failure with no word from git arrives as the failure's own message, not as hex.
+  const spawnMessage = result.stderr === result.error?.message;
+  return {
+    ...result,
+    stdout: Buffer.from(result.stdout, 'hex'),
+    stderr: spawnMessage ? result.stderr : decodeTextContent(Buffer.from(result.stderr, 'hex')).text.trim(),
+  };
+}
+
+/** The one spawn behind {@link runGit} and {@link runGitBytes}: they differ only in how stdout is decoded. */
+function execute(args: readonly string[], options: GitRunOptions, encoding: 'utf8' | 'hex'): GitRunResult {
   if (args.length === 0) {
     // Handled here rather than by `executeGitCommand`, which THROWS on an empty
     // argv. This function's whole contract is that it never throws.
@@ -193,6 +246,7 @@ export function runGit(args: readonly string[], options: GitRunOptions = {}): Gi
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     ...(options.env === undefined ? {} : { env: options.env }),
     ...(options.input === undefined ? {} : { stdin: options.input }),
+    encoding,
     scrubGitEnv: options.ambient !== true,
     suppressStderr: options.suppressStderr ?? false,
     trimOutput: options.trim ?? true,

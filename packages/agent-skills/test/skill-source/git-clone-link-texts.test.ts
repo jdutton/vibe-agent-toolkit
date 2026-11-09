@@ -2,11 +2,12 @@
  * How `cloneGitSource` reads the committed link texts it judges before checkout, against a git
  * whose output the test writes byte for byte.
  *
- * The texts come from `git cat-file --batch`, whose stdout `runGit` hands back decoded as UTF-8.
- * A blob that is not valid UTF-8 changes length in that decode, and a parser that frames the
- * stream by the declared sizes then reads an attacker's planted `<oid> blob <n>` header as the
+ * The paths come from `git ls-tree -z` and the texts from ONE `git cat-file --batch`, both read as
+ * bytes. A blob that is not valid UTF-8 changes length in a UTF-8 decode, and a parser that frames
+ * the stream by the declared sizes then reads an attacker's planted `<oid> blob <n>` header as the
  * next object — judging a benign text in place of a `\\host\share` one (R12-SEC-C1). Every
- * framing fault here must refuse the clone before `read-tree` writes a single link.
+ * framing fault here, and every path or text that is not UTF-8, must refuse the clone before
+ * `read-tree` writes a single file.
  *
  * `spawnSync` is mocked: nothing here touches the filesystem or the network.
  */
@@ -38,9 +39,9 @@ const OID_B = 'b'.repeat(40);
 const NUL = String.fromCodePoint(0);
 const UNC = String.raw`\\attacker\share`;
 
-/** One committed link: its path, blob and the bytes the blob holds. */
+/** One committed link: its path (bytes when it is not UTF-8), blob and the bytes the blob holds. */
 interface FakeLink {
-  readonly path: string;
+  readonly path: string | Buffer;
   readonly oid: string;
   readonly bytes: Buffer;
 }
@@ -50,25 +51,31 @@ function honestBatch(links: readonly FakeLink[]): Buffer {
   return Buffer.concat(links.flatMap((link) => [Buffer.from(`${link.oid} blob ${link.bytes.length.toString()}\n`), link.bytes, Buffer.from('\n')]));
 }
 
-/** What the fake git answers, per subcommand; `batch` replaces the honest `cat-file --batch` output. */
+/** What the fake git answers, per subcommand; `tree` and `batch` replace the honest `ls-tree` and `cat-file --batch` output. */
 interface FakeGit {
   readonly links: readonly FakeLink[];
+  readonly tree?: Buffer;
   readonly batch?: Buffer;
 }
 
 /** The git invocations the clone made, by their argv. */
 let calls: string[][];
 
+/** `ls-tree -r -z`'s honest answer for `links`: one `120000 blob <oid> TAB <path> NUL` record each, the path as bytes. */
+function honestTree(links: readonly FakeLink[]): Buffer {
+  return Buffer.concat(links.map((link) => Buffer.concat([Buffer.from(`120000 blob ${link.oid}\t`), Buffer.isBuffer(link.path) ? link.path : Buffer.from(link.path), Buffer.from(NUL)])));
+}
+
 function installGit(fake: FakeGit): void {
   calls = [];
-  spawnSyncMock.mockImplementation((_bin: string, args: readonly string[]) => {
+  spawnSyncMock.mockImplementation((_bin: string, args: readonly string[], options: { readonly encoding?: BufferEncoding }) => {
     calls.push([...args]);
-    const ok = (stdout: Buffer | string): unknown => ({ status: 0, stdout, stderr: '' });
+    // What `spawnSync` hands back: the bytes decoded by the spawn's `encoding`, as the real one does.
+    const ok = (stdout: Buffer | string): unknown => ({ status: 0, stdout: (Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout)).toString(options.encoding ?? 'utf8'), stderr: '' });
     if (args.includes('clone')) return ok('');
     if (args[0] === 'rev-parse') return ok(`${COMMIT}\n`);
-    if (args[0] === 'ls-tree') return ok(fake.links.map((link) => `120000 blob ${link.oid}\t${link.path}${NUL}`).join(''));
+    if (args[0] === 'ls-tree') return ok(fake.tree ?? honestTree(fake.links));
     if (args[0] === 'cat-file' && args[1] === '--batch') return ok(fake.batch ?? honestBatch(fake.links));
-    if (args[0] === 'cat-file' && args[1] === 'blob') return ok(fake.links.find((link) => link.oid === args[2])?.bytes ?? '');
     return { status: 1, stdout: '', stderr: `unexpected git ${args.join(' ')}` };
   });
 }
@@ -106,16 +113,63 @@ describe('cloneGitSource reads committed link texts as the blobs\' bytes', () =>
     ['a blob of 0xFF bytes', Buffer.from([0xff, 0xff])],
     // Same byte length after the decode (one U+FFFD for three bytes): a length check alone passes it.
     ['a truncated four-byte sequence', Buffer.from([0xf0, 0x9f, 0x98])],
-    ['a valid U+FFFD, indistinguishable from a lossy decode', Buffer.from(`ok${String.fromCodePoint(0xfffd)}`)],
+    // An encoded surrogate: `toString('utf8')` decodes it to U+FFFD x3 rather than refusing it.
+    ['an encoded surrogate', Buffer.from([0xed, 0xa0, 0x80])],
   ] as const)('refuses %s as a text that is not portable, before checkout', ([, bytes]) => {
     installGit({ links: [link('plugins/foo/a', OID_A, bytes)] });
     expectRefusedBeforeCheckout(clone(), { code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('plugins/foo/a is a symbolic link whose text is not portable') });
+  });
+
+  it('shows a text that is not UTF-8 by its bytes, never by a lossy decode', () => {
+    installGit({ links: [link('plugins/foo/a', OID_A, Buffer.from([0x6f, 0x6b, 0xff]))] });
+    expectRefusedBeforeCheckout(clone(), { message: expect.stringContaining(String.raw`not portable (ok\xff)`) });
+  });
+
+  it('judges a valid U+FFFD as the text it is: UTF-8, so checked out, not refused as unportable', () => {
+    installGit({ links: [link('plugins/foo/a', OID_A, `ok${String.fromCodePoint(0xff_fd)}`)] });
+    // The fake answers `read-tree` with a failure: reaching it is the link passing its judgment.
+    expect(clone()).toThrow(expect.objectContaining({ code: GIT_CLONE_FAILED_CODE, message: expect.stringMatching(/Failed to check out/) }));
+  });
+
+  it('reads every link text in ONE cat-file spawn, a text that is not UTF-8 among them', () => {
+    installGit({ links: [link('plugins/foo/a', OID_A, 'SKILL.md'), link('plugins/foo/b', OID_B, Buffer.from([0xff]))] });
+    expectRefusedBeforeCheckout(clone(), { code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('plugins/foo/b is a symbolic link whose text is not portable') });
+    expect(calls.filter((args) => args[0] === 'cat-file')).toEqual([['cat-file', '--batch']]);
   });
 
   it('judges a planted header inside a valid UTF-8 blob as that blob\'s own text', () => {
     const a = `x\n${OID_B} blob 2\nok`;
     installGit({ links: [link('plugins/foo/a', OID_A, a), link('plugins/foo/b', OID_B, UNC)] });
     expectRefusedBeforeCheckout(clone(), { code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('plugins/foo/b is a symbolic link whose target leads through a network path') });
+  });
+});
+
+describe('cloneGitSource reads committed paths as the bytes git holds', () => {
+  it.for([
+    ['a 0xFF byte', Buffer.concat([Buffer.from('plugins/'), Buffer.from([0xff])]), String.raw`plugins/\xff`],
+    ['an encoded surrogate', Buffer.concat([Buffer.from('x'), Buffer.from([0xed, 0xa0, 0x80])]), String.raw`x\xed\xa0\x80`],
+  ] as const)('refuses a commit holding a path with %s, before checkout, showing its bytes', ([, path, shown]) => {
+    installGit({ links: [link(path, OID_A, 'SKILL.md')] });
+    expectRefusedBeforeCheckout(clone(), { code: GIT_CLONE_FAILED_CODE, message: expect.stringContaining(`holds a path that is not UTF-8 (${shown})`) });
+  });
+
+  it('refuses a non-UTF-8 path that is not a link too: the checkout writes every path', () => {
+    installGit({ links: [], tree: Buffer.concat([Buffer.from(`100644 blob ${OID_A}\tdocs/`), Buffer.from([0xc3, 0x28]), Buffer.from(NUL)]) });
+    expectRefusedBeforeCheckout(clone(), { code: GIT_CLONE_FAILED_CODE, message: expect.stringContaining(String.raw`not UTF-8 (docs/\xc3()`) });
+  });
+
+  it('judges a link whose path is valid non-ASCII UTF-8 by that path', () => {
+    installGit({ links: [link('plugins/foo/é', OID_A, UNC)] });
+    expectRefusedBeforeCheckout(clone(), { code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('plugins/foo/é is a symbolic link whose target leads through a network path') });
+  });
+
+  it.for([
+    ['a record with no TAB', `120000 blob ${OID_A} plugins/foo/a${NUL}`],
+    ['a record with no closing NUL', `120000 blob ${OID_A}\tplugins/foo/a`],
+    ['a record whose object is not an object name', `120000 blob xyz\tplugins/foo/a${NUL}`],
+  ] as const)('refuses a listing holding %s rather than skipping it', ([, tree]) => {
+    installGit({ links: [], tree: Buffer.from(tree) });
+    expectRefusedBeforeCheckout(clone(), { code: GIT_CLONE_FAILED_CODE, message: expect.stringMatching(/Failed to list the cloned commit's tree: git wrote a record/) });
   });
 });
 
