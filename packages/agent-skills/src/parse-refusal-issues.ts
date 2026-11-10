@@ -1,5 +1,7 @@
 /**
- * The two ways a skill lane meets a document it could not parse, as findings.
+ * The two ways a skill lane meets a document it could not parse, as findings —
+ * both through resources' one not-admitted contract (`not-admitted.ts`), so one
+ * pathological document gets one code and one sentence whichever lane found it.
  *
  * 1. **A refusal by the crawl.** The registry parses on the bounded route (a
  *    worker, under its limits) and a file it refused is in no list but
@@ -7,19 +9,20 @@
  *    finds it on disk and ships it as an opaque asset — its links never walked,
  *    nothing checked, exit 0. {@link parseRefusedIssues} names every such file
  *    the skill reaches.
- * 2. **A stack overflow in an in-process parse.** `parseFileCached` and
- *    `parseMarkdown` called on this thread run unbounded; a deep enough
- *    document (nested frontmatter or markdown) overflows the stack, and the
- *    error escaped as a crash or was demoted to a warning.
- *    {@link stackOverflowIssue} classifies it.
- *
- * Both are `error` severity under the codes the resources lane reports them
- * with, so one pathological document gets one answer whichever lane found it.
+ * 2. **A refusal of an in-process parse.** `parseFileCached` falls back to one
+ *    bounded parse through the pool when this thread's stack overflows, so its
+ *    refusal is the worker's; a parse with no bounded route (the SKILL.md
+ *    frontmatter parser, `parseMarkdown`) overflows this thread's stack.
+ *    {@link inProcessRefusalIssue} classifies either.
  */
 
-import { isStackOverflow, type ParseRefusedResource, parseRefusedMessage } from '@vibe-agent-toolkit/resources';
-import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { issueLocation, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import {
+  inProcessRefusalEntry,
+  notAdmittedIssues,
+  type ParseRefusedResource,
+} from '@vibe-agent-toolkit/resources';
+import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 /** One spelling per file, whatever separators or relative segments the caller used. */
 function pathKey(filePath: string): string {
@@ -48,6 +51,20 @@ export function refusedAmong(
 export const SKILL_REACHED_REFUSAL_CONSEQUENCE = "the skill's links reach it but it was neither checked nor walked";
 
 /**
+ * The findings for refused files, each at its location under `locationRoot`.
+ *
+ * @param refused - The refusals
+ * @param locationRoot - The base every location is relative to
+ * @returns `RESOURCE_PARSE_LIMIT_EXCEEDED` / `RESOURCE_PARSE_WORKER_DIED` issues
+ */
+function refusalIssues(refused: readonly ParseRefusedResource[], locationRoot: string): ValidationIssue[] {
+  return notAdmittedIssues(
+    { unreadable: [], parseRefused: refused },
+    { locationRoot, consequence: SKILL_REACHED_REFUSAL_CONSEQUENCE },
+  );
+}
+
+/**
  * One error finding per file the skill reaches whose parse the crawl refused.
  *
  * @param refused - A registry's `getParseRefusedResources()` (or several, concatenated)
@@ -60,25 +77,19 @@ export function parseRefusedIssues(
   reached: readonly string[],
   locationRoot: string,
 ): ValidationIssue[] {
-  return refusedAmong(refused, reached).map((entry) => {
-    const location = issueLocation(entry.filePath, locationRoot);
-    return createRegistryIssue(entry.code, parseRefusedMessage(entry, location, SKILL_REACHED_REFUSAL_CONSEQUENCE), { location });
-  });
+  return refusalIssues(refusedAmong(refused, reached), locationRoot);
 }
 
 /**
- * The finding for an in-process parse that overflowed the stack, or `undefined`
- * for any other error (which the caller handles as it did).
+ * The finding for an in-process parse that refused its document, or
+ * `undefined` for any other error (which the caller handles as it did).
  *
  * @param error - What the parse threw
- * @param location - The document's location, as the caller reports it
- * @returns A `RESOURCE_PARSE_LIMIT_EXCEEDED` error issue, or `undefined`
+ * @param filePath - The document
+ * @param locationRoot - The base its location is relative to
+ * @returns A `RESOURCE_PARSE_LIMIT_EXCEEDED` / `RESOURCE_PARSE_WORKER_DIED` error issue, or `undefined`
  */
-export function stackOverflowIssue(error: unknown, location: string): ValidationIssue | undefined {
-  if (!isStackOverflow(error)) return undefined;
-  return createRegistryIssue(
-    'RESOURCE_PARSE_LIMIT_EXCEEDED',
-    `'${location}' could not be parsed: its parse overflowed the stack (its frontmatter or markdown nests too deeply), so it was not checked.`,
-    { location },
-  );
+export function inProcessRefusalIssue(error: unknown, filePath: string, locationRoot: string): ValidationIssue | undefined {
+  const entry = inProcessRefusalEntry(filePath, error);
+  return entry === undefined ? undefined : refusalIssues([entry], locationRoot)[0];
 }

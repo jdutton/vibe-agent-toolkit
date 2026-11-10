@@ -63,6 +63,7 @@ import {
   type Report,
   type SeverityConfig,
   type SeverityCounts,
+  resolveFindings,
   type ValidationIssue,
   withAddedFindings,
 } from '@vibe-agent-toolkit/schema';
@@ -112,7 +113,6 @@ import {
   formatSeverityBreakdown,
   issuesToRenderAtVerbosity,
 } from '../utils/issue-rendering.js';
-import { resolveIssueSeverity } from '../utils/issue-severity.js';
 import { createLogger } from '../utils/logger.js';
 import { classifyInputFault, readInputFile, unlistableDirectoryRefusal } from '../utils/project-root-policy.js';
 import { relativizePath } from '../utils/relativize-paths.js';
@@ -1241,7 +1241,7 @@ function applySeverityFilter(
       return result;
     }
 
-    const resolvedIssues = resolveIssueSeverity(result.issues, { severity: effectiveSeverity });
+    const resolvedIssues = resolveFindings(result.issues, { severity: effectiveSeverity });
 
     // Short-circuit only when NOTHING moved. Comparing lengths alone was the old
     // test, and it is blind to the promote direction by construction: a resolved

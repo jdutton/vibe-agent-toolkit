@@ -66,7 +66,7 @@ import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
 import { collectPreBuildGlobFindings, preBuildGlobFindingsToIssues } from '../files-config.js';
 import { isSkillPackagingInputError } from '../packaging-errors.js';
-import { parseRefusedIssues, stackOverflowIssue } from '../parse-refusal-issues.js';
+import { inProcessRefusalIssue, parseRefusedIssues } from '../parse-refusal-issues.js';
 import {
   conventionalSuiteProbe,
   partitionTestInputFileEntries,
@@ -1080,7 +1080,7 @@ export async function validateSkillForPackaging(
   // A `built` skill is VAT's own output re-read: every read of its tree the OS refuses is the
   // destination's, never the user's input. The ONE mapping; every read below takes `side`.
   const side: FsSide = context === 'built' ? 'destination' : 'source';
-  const parsed = await parseSkillMarkdown(skillPath, side, skillLocation);
+  const parsed = await parseSkillMarkdown(skillPath, side, locationRoot);
   if ('limit' in parsed) return parseLimitResult(skillPath, parsed.limit, packagingConfig, shared);
   const { parseResult } = parsed;
   // The parser already decoded these bytes; a second whole-file read of the same
@@ -1351,24 +1351,25 @@ function runFrameworkFor(
 }
 
 /**
- * The skill's SKILL.md, parsed on this thread — or the finding that replaces the
- * parse when its frontmatter or markdown nests too deeply for the stack. Any
- * other failure propagates as it always did.
+ * The skill's SKILL.md, parsed on this thread — or, when this thread's stack
+ * overflows, by one bounded parse through the pool (`parseFileCached`) — or the
+ * finding that replaces the parse when that refuses it. Any other failure
+ * propagates as it always did.
  *
  * @param skillPath - The SKILL.md
  * @param side - Whose fault a refused read is
- * @param skillLocation - The SKILL.md's location, as issues report it
- * @returns The parse, or the `RESOURCE_PARSE_LIMIT_EXCEEDED` issue
+ * @param locationRoot - The base issues are located against
+ * @returns The parse, or the refusal's issue
  */
 async function parseSkillMarkdown(
   skillPath: string,
   side: FsSide,
-  skillLocation: string,
+  locationRoot: string,
 ): Promise<{ parseResult: Awaited<ReturnType<typeof parseFileCached>> } | { limit: ValidationIssue }> {
   try {
     return { parseResult: await parseFileCached(skillPath, 'markdown', { side }) };
   } catch (error) {
-    const limit = stackOverflowIssue(error, skillLocation);
+    const limit = inProcessRefusalIssue(error, skillPath, locationRoot);
     if (limit === undefined) throw error;
     return { limit };
   }

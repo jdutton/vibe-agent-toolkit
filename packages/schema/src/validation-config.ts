@@ -182,12 +182,11 @@ export const ValidationConfigSchema: z.ZodType<ValidationConfig, z.ZodTypeDef, u
   severity: z.record(SeverityOverrideCodeSchema, IssueSeveritySchema).optional(),
   // 🔑 `allow` stays keyed by the REGISTRY enum, and the asymmetry with
   // `severity` above is the decision, not an oversight. `severity` reaches a
-  // check's findings for real: `resolveIssueSeverity` is code-agnostic and
-  // `vat resources check` calls it. The allow filter is `IssueCode`-typed and
-  // that command never runs it, so a `CUSTOM:` allow entry would parse, exempt
-  // nothing, and report nothing — the adopter would believe a path was excused
-  // while every finding under it still failed their build. A loud config error
-  // is the honest answer until the check lane actually runs the allow filter.
+  // `CUSTOM:` check's findings for real: `resolveFindings` resolves a
+  // non-registry code's override. A `CUSTOM:` check's finding is located at
+  // whatever its SQL selected, never a path an allow glob is written against,
+  // so a `CUSTOM:` allow entry would parse and exempt nothing the adopter
+  // meant — a loud config error is the honest answer.
   // Finding codes only, like `severity`: a refusal cannot be waived per path.
   allow: z.record(FindingCodeSchema, z.array(AllowEntrySchema)).optional(),
 }).strict();

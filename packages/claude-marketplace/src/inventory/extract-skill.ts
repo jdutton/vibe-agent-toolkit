@@ -9,12 +9,13 @@ import {
 	walkLinkGraph,
 	type WalkableRegistry,
 } from '@vibe-agent-toolkit/agent-skills';
-import { loadConfig, parseRefusedMessage, ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import { loadConfig, type ParseRefusedResource, parseRefusedMessage, ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import {
   compareCodeUnits,
   CRAWL_REGISTRY_ENUMERATE_ID,
   crawlTimingStart,
   findProjectRoot,
+  issueLocation,
   recordRegistryPass,
   safePath,
 } from '@vibe-agent-toolkit/utils';
@@ -305,6 +306,12 @@ export async function crawlSkillLinkRegistry(projectRoot: string): Promise<Resou
 	return registry;
 }
 
+/** A refused file's parse-error row, one sentence on both lanes. */
+function parseRefusedRow(entry: ParseRefusedResource, projectRoot: string): ParseErrors[number] {
+	const location = issueLocation(entry.filePath, projectRoot);
+	return { path: entry.filePath, message: parseRefusedMessage(entry, location, SKILL_REACHED_REFUSAL_CONSEQUENCE), parseRefused: entry.code };
+}
+
 async function walkLinkedFiles(
 	absolute: string,
 	parseErrors: ParseErrors,
@@ -326,7 +333,7 @@ async function walkLinkedFiles(
 			// The same parse-error row the walk's registry reports below, from the
 			// population's refusal rows: a refused file is still a member.
 			for (const refusal of population.parseRefusedAmong([absolute, ...projected])) {
-				parseErrors.push({ path: refusal.filePath, message: `${refusal.message}; ${SKILL_REACHED_REFUSAL_CONSEQUENCE}`, parseRefused: refusal.code });
+				parseErrors.push(parseRefusedRow(refusal, projectRoot));
 			}
 			return [...projected];
 		}
@@ -340,7 +347,7 @@ async function walkLinkedFiles(
 		// A file the crawl refused to parse is not admitted, so the walk met it on
 		// disk as an opaque asset: its links never walked, nothing in it checked.
 		for (const entry of refusedAmong(registry.getParseRefusedResources(), [absolute, ...linked])) {
-			parseErrors.push({ path: entry.filePath, message: parseRefusedMessage(entry, entry.filePath, SKILL_REACHED_REFUSAL_CONSEQUENCE), parseRefused: entry.code });
+			parseErrors.push(parseRefusedRow(entry, projectRoot));
 		}
 	} catch (e) {
 		parseErrors.push({ path: absolute, message: `link walk failed: ${(e as Error).message}` });

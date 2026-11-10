@@ -868,18 +868,10 @@ class WorkerParsePool implements ParsePool {
         const applied = appliedHeapLimitMb(heap, youngGenerationMb(poolWorker.worker), this.#limits.heapMb);
         poolWorker.heapLimitMb = applied;
         if (!exceedsHeapLimit(heap, applied)) return;
-        this.#terminate(poolWorker, this.#heapBreach(poolWorker));
+        this.#terminate(poolWorker, ParseLimitError.heap(applied, this.#limits.heapMb));
       },
       () => undefined,
     );
-  }
-
-  /**
-   * @param poolWorker - The thread that breached its heap
-   * @returns The breach, naming the limit that applied to it
-   */
-  #heapBreach(poolWorker: PoolWorker): ParseLimitError {
-    return ParseLimitError.heap(poolWorker.heapLimitMb, this.#limits.heapMb);
   }
 
   /**
@@ -1022,7 +1014,8 @@ class WorkerParsePool implements ParsePool {
     worker.on('error', (error: Error) => {
       if (poolWorker.retired) return;
       if ((error as { code?: unknown }).code === 'ERR_WORKER_OUT_OF_MEMORY') {
-        this.#terminate(poolWorker, this.#heapBreach(poolWorker));
+        // V8 stopped it, not the sampler: the refusal names V8's ceiling.
+        this.#terminate(poolWorker, ParseLimitError.heapCeiling(poolWorker.heapLimitMb, this.#limits.heapMb));
         return;
       }
       this.#died(poolWorker, poolWorker.ready ? new ParseWorkerDiedError({ cause: error }) : error);

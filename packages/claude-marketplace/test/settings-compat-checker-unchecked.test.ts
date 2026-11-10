@@ -111,7 +111,7 @@ describe.skipIf(CANNOT_DENY_READS)('checkSettingsCompatibility — a path the fi
 describe('checkSettingsCompatibility — a SKILL.md whose frontmatter cannot be read', () => {
   it.each([
     ['malformed YAML', '---\nname: x\nallowed-tools: [Bash\n---\n', 'Failed to parse YAML'],
-    ['an empty block', '---\n\n---\n# x\n', 'not a YAML mapping'],
+    ['an empty block', '---\n\n---\n# x\n', 'Frontmatter is empty'],
     ['a scalar block', '---\nhello\n---\n# x\n', 'not a YAML mapping'],
   ])('lists %s under `unchecked`, carrying the parser message', async (_label, content, reason) => {
     const { pluginDir } = getFixture();

@@ -46,21 +46,71 @@ describe('countOutputRows', () => {
   });
 });
 
+/**
+ * What the store writes for a value: its `JSON.stringify` (the projection's
+ * `json` column), every array element and every mapping entry a row.
+ *
+ * @param value - An acyclic decoded value
+ * @returns The rows and bytes of its stored JSON
+ */
+function storedSize(value: unknown): { rows: number; bytes: number } {
+  const json = JSON.stringify(value);
+  let rows = 0;
+  const pending: unknown[] = [JSON.parse(json)];
+  while (pending.length > 0) {
+    const next = pending.pop();
+    // No spread: a binary's JSON is millions of elements.
+    if (typeof next !== 'object' || next === null) continue;
+    const children: unknown[] = Array.isArray(next) ? next : Object.values(next);
+    rows += children.length;
+    for (const child of children) pending.push(child);
+  }
+  return { rows, bytes: Buffer.byteLength(json) };
+}
+
 describe('expandedSize', () => {
+  it.each([
+    ['a plain mapping', 'title: x\ntags: [a, b]\nmeta: {n: 1, ok: true, none: null}'],
+    ['strings JSON escapes and multi-byte text', 'q: "say \\"hi\\"\\n\\ttab"\nu: "été 😀"\nc: "\\u0001"'],
+    ['numbers JSON spells differently', 'inf: .inf\nnan: .nan\nneg: -0\nbig: 1e21\nsmall: 0.000001'],
+    ['a !!timestamp', 'when: !!timestamp 2001-12-14t21:59:43.10-05:00'],
+    ['a !!set and a !!omap, which JSON writes as {}', 's: !!set {x, y}\nm: !!omap [{p: 1}]'],
+    ['a !!binary', 'b: !!binary aGVsbG8gd29ybGQgMTIzNDU2Nzg5MA=='],
+    ['an aliased anchor, written out at every use', 'a: &x [1, {k: v}]\nb: *x\nc: [*x, *x]'],
+    ['empty containers', 'a: []\nb: {}\nc: [[], {}]'],
+  ])('measures exactly the rows and bytes the store writes for %s', (_label, source) => {
+    const value: unknown = yaml.parse(source);
+    const size = expandedSize(value);
+
+    expect({ rows: size.rows, bytes: size.bytes }).toStrictEqual(storedSize(value));
+  });
+
+  it('counts a binary as its JSON shape: one row per byte, and the bytes of its digits', () => {
+    // `Buffer`'s JSON is {"type":"Buffer","data":[104,105]}: 2 entries + 2 elements.
+    expect(expandedSize(Buffer.from('hi'))).toStrictEqual({ rows: 4, bytes: 34, depth: 2 });
+  });
+
+  it('refuses the 3.9 MB !!binary probe, which the store writes as 11.8 MB of JSON', () => {
+    // Round 3's probe: its base64 counted at its own length (3.9 MB) passed
+    // every output cap, and the store wrote three times that.
+    const base64 = Buffer.alloc(3 * 1024 * 1024 - 200_000, 255).toString('base64');
+    const frontmatter = yaml.parse(`a: !!binary ${base64}`) as Record<string, unknown>;
+
+    expect(outputBreach(withFrontmatter(frontmatter), resolveParseLimits(undefined))).toStrictEqual({ limit: 'outputRows', found: 2_945_728 + 2 + 1 });
+    expect(outputBreach(withFrontmatter(frontmatter), resolveParseLimits({ outputRows: 10_000_000 }))).toStrictEqual({
+      limit: 'outputBytes',
+      found: storedSize(frontmatter).bytes + Buffer.byteLength(JSON.stringify({ links: [], headings: [], estimatedTokenCount: 0 })),
+    });
+  });
+
   it('counts every use of an anchor at the anchor\'s full size', () => {
     const once = expandedSize(yaml.parse('a: &x [1, 2, 3]'));
     const thrice = expandedSize(yaml.parse('a: &x [1, 2, 3]\nb: *x\nc: *x'));
 
-    expect(once.rows).toBe(3);
-    expect(thrice.rows).toBe(9);
+    // Each mapping entry is a row, and each element of every use.
+    expect(once.rows).toBe(1 + 3);
+    expect(thrice.rows).toBe(3 + 9);
     expect(thrice.bytes).toBeGreaterThan(once.bytes * 2);
-  });
-
-  it('counts rows of nested lists, sets and maps', () => {
-    const value = yaml.parse('a: [[1, 2], [3]]\ns: !!set {x, y}\nm: !!omap [{p: 1}]') as Record<string, unknown>;
-
-    // 2 + 2 + 1 under `a`, 2 in the set, 1 entry in the ordered map.
-    expect(expandedSize(value).rows).toBe(8);
   });
 
   it('sizes a billion-laughs shape in time linear in its encoding', () => {
@@ -77,12 +127,13 @@ describe('expandedSize', () => {
   it('counts a cyclic back-reference once, never forever', () => {
     const size = expandedSize(yaml.parse('a: &x [1, *x]'));
 
-    expect(size.rows).toBe(2);
+    // One mapping entry, two elements; the back-reference is not expanded.
+    expect(size.rows).toBe(3);
     expect(Number.isFinite(size.bytes)).toBe(true);
   });
 
   it('sizes a list of 200,000 items with no spread', () => {
-    expect(expandedSize({ a: Array.from({ length: 200_000 }, () => 1) }).rows).toBe(200_000);
+    expect(expandedSize({ a: Array.from({ length: 200_000 }, () => 1) }).rows).toBe(200_001);
   });
 
   it('measures depth as JSON nests it: the mapping itself is level 1, and an alias nests its target', () => {
@@ -246,11 +297,19 @@ describe('the heap measure', () => {
     // V8 can stop a worker at its own ceiling before any sample lands (a parent
     // blocked past the stall window), and a process-wide flag may have lowered
     // that ceiling: the applied value is then unknown, and the refusal says so.
-    const unsampled = ParseLimitError.heap(undefined, 1024);
+    const unsampled = ParseLimitError.heapCeiling(undefined, 1024);
 
     expect(unsampled.limit).toBe('heapMb');
-    expect(unsampled.bound).not.toBe('1024 MiB heap');
+    expect(unsampled.bound).not.toContain('1024 MiB heap');
     expect(unsampled.bound).toContain('before the pool\'s heap sampler read it');
     expect(unsampled.bound).toContain('--max-old-space-size');
+  });
+
+  it('names V8\'s ceiling, twice the sampler\'s bound, when V8 stopped a sampled worker first', () => {
+    const ceiling = ParseLimitError.heapCeiling(256, 1024);
+
+    expect(ceiling.limit).toBe('heapMb');
+    expect(ceiling.bound).toMatch(/^V8's own heap ceiling, 512 MiB heap/);
+    expect(ceiling.bound).not.toMatch(/^256 MiB/);
   });
 });

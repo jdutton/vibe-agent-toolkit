@@ -30,6 +30,7 @@ import {
   toFindings,
   type Finding,
   type Report,
+  resolveFindings,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
 import { everywhere, followedKindSync, forEachInOrder, isPathAbsentError, pathPresent, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
@@ -39,7 +40,6 @@ import { marksOperandRefusalByHand } from '../command-tree.js';
 import { loadConfig } from '../utils/config-loader.js';
 import { endWithReport } from '../utils/document-writer.js';
 import { reportFindings } from '../utils/issue-rendering.js';
-import { resolveIssueSeverity } from '../utils/issue-severity.js';
 import type { createLogger } from '../utils/logger.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
 import { runIntegrityFinding } from '../utils/run-integrity.js';
@@ -479,7 +479,7 @@ function checkFilesConfigDestsOf(built: readonly CheckEntry[], projectRoot: stri
  * comes from {@link explicitFilesConfigDests} rather than from every `files:` entry.
  *
  * Each bundle's findings are then resolved against that skill's effective
- * `validation.severity` (see {@link resolveIssueSeverity}), so the opt-out the
+ * `validation.severity` (see `resolveFindings`), so the opt-out the
  * code's own `fix` text prescribes actually works here. It did not: this phase
  * published `detectPackagedAgentInstructionFiles`' raw output straight into the
  * document, so `severity.PACKAGED_AGENT_INSTRUCTION_FILE: ignore` changed nothing
@@ -519,7 +519,7 @@ export function checkPackagedAgentInstructionFiles(
       // `vat verify` examines what an earlier build wrote; it writes nothing.
       [],
     );
-    issues.push(...resolveIssueSeverity(raw, check.packaging.validation));
+    issues.push(...resolveFindings(raw, check.packaging.validation ?? {}));
   }
   return {
     bundlesInspected: outputs.built.length,

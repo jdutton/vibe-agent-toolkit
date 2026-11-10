@@ -134,11 +134,12 @@ description: [unclosed array
  */
 describe('parseFrontmatter — a block that is not a YAML mapping', () => {
   const NON_MAPPINGS: ReadonlyArray<readonly [label: string, block: string, found: string]> = [
-    ['empty', '', 'empty'],
-    ['blank line', '\n', 'empty'],
-    ['explicit null', '~', 'empty'],
     ['bare scalar', 'hello', 'a scalar'],
     ['sequence', '- a\n- b', 'a sequence'],
+    ['!!set root', '!!set\n? a\n? b', 'a typed value (Set)'],
+    ['!!omap root', '!!omap\n- a: 1\n- b: 2', 'a typed value'],
+    ['!!timestamp root', '!!timestamp 2024-01-01', 'a typed value (Date)'],
+    ['!!binary root', '!!binary aGk=', 'a typed value'],
   ];
 
   for (const [label, block, found] of NON_MAPPINGS) {
@@ -149,6 +150,26 @@ describe('parseFrontmatter — a block that is not a YAML mapping', () => {
       if (!result.success) {
         expect(result.error).toContain('not a YAML mapping');
         expect(result.error).toContain(found);
+      }
+    });
+  }
+
+  // A block that declares nothing is refused as EMPTY — never "not a mapping",
+  // the crawl lane's rule (`parseFrontmatterSource`).
+  const EMPTY_BLOCKS: ReadonlyArray<readonly [label: string, block: string]> = [
+    ['empty', ''],
+    ['blank line', '\n'],
+    ['explicit null', '~'],
+    ['comment only', '# later'],
+  ];
+  for (const [label, block] of EMPTY_BLOCKS) {
+    it(`refuses ${label} as empty, not as a non-mapping`, () => {
+      const result = parseFrontmatter(`---\n${block}\n---\n# body\n`);
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('empty');
+        expect(result.error).not.toContain('not a YAML mapping');
       }
     });
   }

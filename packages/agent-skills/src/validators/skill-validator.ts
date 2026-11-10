@@ -26,7 +26,7 @@ import {
 
 
 import type { EvidenceRecord } from '../evidence/index.js';
-import { stackOverflowIssue } from '../parse-refusal-issues.js';
+import { inProcessRefusalIssue } from '../parse-refusal-issues.js';
 import { parseFrontmatter } from '../parsers/frontmatter-parser.js';
 
 import { detectBundledResourceWithoutLinks } from './bundled-resource-link-detection.js';
@@ -86,7 +86,7 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   if (!parseResult.success) {
     // Frontmatter nested too deeply for this thread's stack is there, and is the
     // author's to simplify: the parse limit, never "add the frontmatter you have".
-    issues.push(stackOverflowIssue(parseResult.cause, skillLocation) ?? {
+    issues.push(inProcessRefusalIssue(parseResult.cause, skillPath, locationRoot) ?? {
       severity: 'error',
       code: 'SKILL_MISSING_FRONTMATTER',
       message: parseResult.error,
@@ -391,11 +391,11 @@ async function traverseLinks(
       // guessed blocklist of Node loader codes that was deleted.
       if (isParserUnavailable(error)) throw error;
 
-      // A document too deep for this thread's stack is not "could not be
-      // parsed, so skipped": nothing in it was checked, and it is the author's
-      // to simplify — an error, under the code the crawl lanes use for it.
-      const location = issueLocation(currentPath, locationRoot);
-      const limit = stackOverflowIssue(error, location);
+      // A document refused by its parse — the bounded fallback's refusal after
+      // this thread's stack overflowed — is not "could not be parsed, so
+      // skipped": nothing in it was checked, and it is the author's to
+      // simplify — an error, under the code and sentence the crawl lanes use.
+      const limit = inProcessRefusalIssue(error, currentPath, locationRoot);
       if (limit !== undefined) {
         issues.push(limit);
         return;

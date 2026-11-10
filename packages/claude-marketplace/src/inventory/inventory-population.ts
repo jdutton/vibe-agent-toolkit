@@ -183,23 +183,13 @@ export interface InventoryPopulation {
    * @param paths - Absolute paths: a skill's SKILL.md and its members
    * @returns One entry per refused file, absolute, in the order of `paths`
    */
-  parseRefusedAmong(paths: readonly string[]): ReadonlyArray<PopulationParseRefusal>;
+  parseRefusedAmong(paths: readonly string[]): ReadonlyArray<ParseRefusedResource>;
   /**
    * The stored rows that say what this population declined to derive or
    * mis-decoded, for a caller to hand `describeBlobRefusals` — the same rows on
    * a store hit as the derive that wrote them.
    */
   readonly refusalRows: BlobRefusalRows;
-}
-
-/** One file a population's parse refused, as {@link InventoryPopulation.parseRefusedAmong} names it. */
-export interface PopulationParseRefusal {
-  /** Absolute path. */
-  readonly filePath: string;
-  /** The code the registry lane reports the same refusal under. */
-  readonly code: ParseRefusedResource['code'];
-  /** What stopped it: the path, the limit and its bound, or the cause of death. */
-  readonly message: string;
 }
 
 /**
@@ -342,10 +332,9 @@ function indexPopulation(
     );
   }
 
-  const refusedByAbsolute = new Map<string, PopulationParseRefusal>();
-  for (const refusal of parseRefusedRealizations(projection)) {
-    const filePath = safePath.resolve(root, refusal.path);
-    refusedByAbsolute.set(filePath, { filePath, code: refusal.code, message: refusal.message });
+  const refusedByAbsolute = new Map<string, ParseRefusedResource>();
+  for (const refusal of parseRefusedRealizations(projection, root)) {
+    refusedByAbsolute.set(refusal.filePath, refusal);
   }
 
   return {

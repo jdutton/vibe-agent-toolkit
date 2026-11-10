@@ -124,7 +124,6 @@ import { threadId } from 'node:worker_threads';
 import {
   applyTreePlan,
   fsFaultOf,
-  type FsSide,
   isPathAbsentError,
   isVatError,
   parseEnvBoolean,
@@ -132,11 +131,10 @@ import {
   renameFileAtomic,
   safePath,
   VatError,
-  withFsFault,
 } from '@vibe-agent-toolkit/utils';
 
 import { parseCacheDirectory } from './cache-namespace.js';
-import { CONTENT_KEY_PATTERN, type KeyedContent, type ParsableContent, readContentWithKey } from './content-key.js';
+import { CONTENT_KEY_PATTERN, type KeyedContent, type ParsableContent } from './content-key.js';
 import { decodeFrontmatterValue, encodeFrontmatterValue, FRONTMATTER_VALUE_MALFORMED } from './frontmatter-codec.js';
 import type { ParseResult } from './link-parser.js';
 import type { DocumentParserKind } from './mime-type.js';
@@ -359,7 +357,7 @@ function rehydrateOrMiss(facts: ParseFacts, keyed: KeyedContent): ParseResult | 
 /**
  * Disk-backed store of parse facts, keyed by content.
  *
- * Most callers want {@link parseFileCached} or {@link parseKeyed} rather than
+ * Most callers want `parseFileCached` (`parse-dispatcher.ts`) or {@link parseKeyed} rather than
  * driving `get`/`set` by hand.
  *
  * @example
@@ -1116,62 +1114,13 @@ export async function parseKeyed(keyed: ParsableContent, cache: ParseCache): Pro
 let sharedCache: ParseCache | undefined;
 
 /**
- * The cache {@link parseFileCached} uses when the caller supplies none.
+ * The cache `parseFileCached` (`parse-dispatcher.ts`) uses when the caller supplies none.
  *
  * @returns The process-wide instance, created on first use
  */
 export function defaultParseCache(): ParseCache {
   sharedCache ??= new ParseCache();
   return sharedCache;
-}
-
-/**
- * Read, key and parse a file, consulting the cache.
- *
- * The cached replacement for `parseMarkdown(path)` / `parseHtml(path)`: those
- * two read the file themselves and hand the bytes straight to a parser, so they
- * bypass the cache entirely. Every call site that does not go through
- * `ResourceRegistry` uses this instead.
- *
- * ⚠ `parserKind` states which parser runs — it is **not** derived from the
- * path, because at least one shipped caller deliberately parses `.html`
- * documents as markdown. Pass the kind you actually parse with, or the entry
- * lands under a key another lane will read (see content-key.ts).
- *
- * It is a {@link DocumentParserKind}, so `parserKindForPath(filePath)` is not
- * directly passable any more: that function can answer `none`, and this one has
- * no parser to run for it. A caller routing by path decides what to do with a
- * `none` blob first — see `parseKeyed`.
- *
- * One difference from `parseMarkdown`/`parseHtml`, deliberate: `sizeBytes` is
- * the length of the bytes this call read, not a separate `stat().size`. For a
- * regular file the two agree; where they can disagree — a file rewritten between
- * the read and the stat — the byte count of what was actually parsed is the
- * honest one, and it is also the number the key covers.
- *
- * @param filePath - Absolute path to the document
- * @param parserKind - The parser to hand the content to
- * @param options - `cache`: store to use, defaulting to the process-wide instance.
- *   `side`: which side of the calling verb the document is on — `source` (the
- *   default: an input the verb reads) or `destination` / `environment` when the
- *   caller re-reads VAT's own output or staging. Only the caller knows; this
- *   function never infers it from the path.
- * @returns The parse result, from an entry or from the parser
- * @throws `FsFaultError` on `side` (origin `content` for a source) when the OS
- *   refuses the read — the caller still decides what it means (`isPathAbsentError`
- *   and `fsFaultOf` read the errno down the `cause` chain) — and
- *   `TextTooLargeError` for a file too large to decode, as `readContentWithKey` does
- */
-export async function parseFileCached(
-  filePath: string,
-  parserKind: DocumentParserKind,
-  options: { cache?: ParseCache; side?: FsSide } = {},
-): Promise<ParseResult> {
-  const side = options.side ?? 'source';
-  const keyed = await withFsFault({ side, origin: 'content', action: `read ${filePath}`, path: filePath }, () =>
-    readContentWithKey(filePath, parserKind),
-  );
-  return parseKeyed(keyed, options.cache ?? defaultParseCache());
 }
 
 /**

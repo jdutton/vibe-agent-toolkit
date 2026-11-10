@@ -16,7 +16,8 @@ import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { ParseCache, parseFileCached } from '../../src/parse-cache.js';
+import { ParseCache } from '../../src/parse-cache.js';
+import { parseFileCached } from '../../src/parse-dispatcher.js';
 import type { ParsePoolPolicy } from '../../src/parse-dispatcher.js';
 import { __setParseWorkerEntryForTest, createParsePool, type ParsePool, type ParsePoolOptions } from '../../src/parse-pool.js';
 import {
@@ -114,7 +115,9 @@ describe('a parse stopped at a limit, on the projection lane', () => {
     // Refused, naming the file and the limit.
     const limited = conditionsWithCode(projection, BLOB_PARSE_LIMIT_EXCEEDED);
     expect(limited).toHaveLength(1);
-    expect(limited[0]?.message).toContain('b.md');
+    // The blob's condition names no path: twin files share it, and each
+    // realization names its own (`parseRefusedRealizations`).
+    expect(limited[0]?.message).not.toContain('b.md');
     expect(limited[0]?.message).toContain('stackMb');
     expect(counts.blobsParseLimited).toBe(1);
     expect(describeBlobRefusals(projection)).toContain('over a parse limit');
@@ -203,7 +206,7 @@ describe('a parse worker that dies holding a job', () => {
 
     const died = conditionsWithCode(projection, BLOB_PARSE_WORKER_DIED);
     expect(died).toHaveLength(1);
-    expect(died[0]?.message).toContain('b.md');
+    expect(died[0]?.message).not.toContain('b.md');
     expect(died[0]?.message).toContain('exited unexpectedly with code 1');
     expect(conditionsWithCode(projection, BLOB_PARSE_FAILED)).toHaveLength(0);
     expect(counts.blobsParseWorkerDied).toBe(1);

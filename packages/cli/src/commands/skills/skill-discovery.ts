@@ -8,7 +8,7 @@
 import { basename } from 'node:path';
 
 import type { PluginLocalSkillIndex } from '@vibe-agent-toolkit/agent-skills';
-import { isStackOverflow, parseFileCached, type ParseResult, type SkillsConfig } from '@vibe-agent-toolkit/resources';
+import { inProcessRefusalEntry, parseFileCached, type ParseResult, type SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { followedKindSync, forEachInOrder, fsFaultOf, mapConcurrentFailingInOrder, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory, type UnreadablePolicy } from '@vibe-agent-toolkit/utils/crawl';
 import picomatch from 'picomatch';
@@ -52,20 +52,21 @@ const DISCOVERY_EXCLUDE = [
 ];
 
 /**
- * Parse a SKILL.md on this thread for what a lane reads off it (its name, its
- * version), or `undefined` when the document nests too deeply for this thread's
- * stack. The parse is in-process and unbounded; an overflow is a fact about the
- * file the packaging validator reports (`RESOURCE_PARSE_LIMIT_EXCEEDED`), never a
- * crash of a lane that only wanted a label. Every other error is rethrown.
+ * Parse a SKILL.md for what a lane reads off it (its name, its version), or
+ * `undefined` when its parse is refused. The parse runs on this thread and, when
+ * the stack overflows, once more bounded through the pool (`parseFileCached`); a
+ * refusal is a fact about the file the packaging validator reports
+ * (`RESOURCE_PARSE_LIMIT_EXCEEDED`), never a crash of a lane that only wanted a
+ * label. Every other error is rethrown.
  *
  * @param skillPath - Absolute path to the SKILL.md
- * @returns Its parse result, or `undefined` when the parse overflowed the stack
+ * @returns Its parse result, or `undefined` when the parse was refused
  */
 export async function skillDocumentOrOverflow(skillPath: string): Promise<ParseResult | undefined> {
   try {
     return await parseFileCached(skillPath, 'markdown');
   } catch (error) {
-    if (isStackOverflow(error)) return undefined;
+    if (inProcessRefusalEntry(skillPath, error) !== undefined) return undefined;
     throw error;
   }
 }

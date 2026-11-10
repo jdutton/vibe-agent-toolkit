@@ -69,8 +69,8 @@ export interface SettingsCheck {
  * how the author indented.
  *
  * Returns the refusal `reason` when the file cannot be read or its frontmatter
- * does not parse (a block that is not a YAML mapping — empty, `~`, a scalar —
- * is a parse failure at the seam, so no shape is guarded here). The skill
+ * does not parse (an empty block, or one that is not a YAML mapping, is a
+ * parse failure at the seam, so no shape is guarded here). The skill
  * validator names the same file `SKILL_MISSING_FRONTMATTER` in the same
  * `vat audit`, off the same parser; the checker reports it as unchecked rather
  * than contributing nothing, because "nothing" reads as "no conflict".

@@ -278,7 +278,7 @@ describe('compat detectors in validateSkill', () => {
 describe('validateSkill on a frontmatter block that is not a mapping', () => {
   const { getTempDir } = setupTempDir('skill-validator-non-mapping-');
 
-  for (const block of ['', '~', 'hello', '- a']) {
+  for (const block of ['', '~', 'hello', '- a', '!!set\n? a', '!!timestamp 2024-01-01']) {
     it(`reports SKILL_MISSING_FRONTMATTER for ${JSON.stringify(block)} instead of throwing`, async () => {
       const result = await createSkillAndValidate(getTempDir(), `---\n${block}\n---\n# x\n`);
 

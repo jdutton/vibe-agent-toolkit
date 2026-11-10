@@ -69,7 +69,7 @@ const REFUSED_CODE = 'RESOURCE_PARSE_LIMIT_EXCEEDED';
 /** What the verbs publish that the refused-file cases read. */
 interface Published {
   examined: number;
-  findings: Array<{ code: string; severity: string; location?: string }>;
+  findings: Array<{ code: string; severity: string; location?: string; message: string }>;
 }
 
 /**
@@ -241,5 +241,163 @@ describe('a file the crawl refused, in every verb that crawls (system test)', ()
 
     expect(refusedIn(report), stderr).toStrictEqual([expect.objectContaining({ severity: 'warning', location: 'docs/deep.md' })]);
     expect(status).toBe(0);
+  });
+});
+
+// One resolver: an allow entry for the refusal code at its path excuses it in
+// every verb that reports it, the allow list read before severity — and the
+// same corpus without the entry fails in every one of them.
+describe('one allow entry for a refused file, in every verb that reports it (system test)', () => {
+  let allowed: string;
+  let strict: string;
+
+  beforeAll(() => {
+    scratch = createIsolatedScratch('vat-not-admitted-allow-');
+    allowed = refusedCorpus('allowed', [
+      '  validation:',
+      '    allow:',
+      `      ${REFUSED_CODE}:`,
+      '        - paths: ["docs/deep.md"]',
+      '          reason: seeded refusal, excused at its one path',
+    ]);
+    strict = refusedCorpus('strict', []);
+  });
+
+  afterAll(() => {
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
+  const verbs: ReadonlyArray<readonly [string, (dbName: string) => string[]]> = [
+    ['resources validate', () => ['resources', 'validate']],
+    ['resources scan', () => ['resources', 'scan']],
+    ['rag index', (dbName) => ['rag', 'index', '.', '--db', safePath.join(scratch, dbName)]],
+    ['resources check', () => ['resources', 'check']],
+  ];
+
+  it.each(verbs)('%s exits 0 with the entry and 1 without it', async (verb, args) => {
+    const excused = await published(allowed, args(`allowed-${verb.replaceAll(' ', '-')}-db`));
+    const failed = await published(strict, args(`strict-${verb.replaceAll(' ', '-')}-db`));
+
+    expect(refusedIn(excused.report), excused.stderr).toStrictEqual([]);
+    expect(excused.status, excused.stderr).toBe(0);
+    expect(refusedIn(failed.report), failed.stderr).toStrictEqual([expect.objectContaining({ severity: 'error', location: 'docs/deep.md' })]);
+    expect(failed.status, failed.stderr).toBe(1);
+  });
+});
+
+// I0: the verdict never depends on cache warmth. A SKILL.md nesting thousands
+// of blockquotes overflows the in-process parse of `skills validate`; the crawl
+// of `resources validate` parses it in a worker and files the facts, so a
+// later `skills validate` was served them from the cache and admitted what the
+// cold run refused. The in-process overflow now falls back to one bounded parse
+// through the pool, so every run gives the worker's answer.
+//
+// Two depths, because the worker's answer differs between them: measured on
+// Node 26 (darwin arm64), 9,500 overflows the main thread's stack and the
+// worker admits it (red before the fix: cold exit 1, warm exit 0), while
+// 10,000 also passes the worker's 1,024 MiB `heapMb`, so the worker refuses it
+// and both runs refuse. The assertion holds whichever way a host's stack and
+// heap fall: `skills validate` agrees with the crawl, cold and warm.
+describe('skills validate, cold and then warm, over a document the in-process parse overflows (system test)', () => {
+  beforeAll(() => {
+    scratch = createIsolatedScratch('vat-cold-warm-');
+  });
+
+  afterAll(() => {
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
+  it.each([9500, 10_000])('at %i nested blockquotes, exits with the crawl\'s code before and after the crawl warms the cache', async (depth) => {
+    const deep = corpus(`cold-warm-${String(depth)}`, {
+      'vibe-agent-toolkit.config.yaml': 'resources:\n  include: ["skills/**/*.md"]\nskills:\n  include:\n    - "skills/deep/SKILL.md"\n',
+      'skills/deep/SKILL.md': '---\nname: deep\ndescription: deep - a skill whose body nests thousands of blockquotes, for the warmth test\n---\n\n'
+        + `${'>'.repeat(depth)} deep\n`,
+    });
+
+    const cold = await published(deep, ['skills', 'validate']);
+    const crawl = await published(deep, ['resources', 'validate']);
+    const warm = await published(deep, ['skills', 'validate']);
+
+    expect(cold.status, `cold: ${cold.stderr}\ncrawl: ${crawl.stderr}`).toBe(crawl.status);
+    expect(warm.status, `warm: ${warm.stderr}`).toBe(cold.status);
+    expect(refusedIn(warm.report).map((finding) => finding.location)).toStrictEqual(refusedIn(cold.report).map((finding) => finding.location));
+  });
+});
+
+// A link anchor into a refused file is unverified: the file never entered the
+// fragment index, so the anchor check answered `skip` and the link read clean.
+// With the refusal itself downgraded to a warning, the run exited 0 over an
+// anchor nothing looked up.
+describe('a link anchor into a refused file (system test)', () => {
+  let linked: string;
+
+  beforeAll(() => {
+    scratch = createIsolatedScratch('vat-refused-anchor-');
+    linked = corpus('linked', {
+      'vibe-agent-toolkit.config.yaml': [
+        'resources:',
+        '  include: ["docs/**/*.md"]',
+        '  validation:',
+        '    severity:',
+        `      ${REFUSED_CODE}: warning`,
+        '',
+      ].join('\n'),
+      'docs/a.md': '# A\n\nSee [the missing part](./big.md#missing).\n',
+      'docs/big.md': `---\na: ${'['.repeat(1000)}${']'.repeat(1000)}\n---\n# Big\n`,
+    });
+  });
+
+  afterAll(() => {
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
+  it('is a LINK_TARGET_UNREADABLE finding naming the refusal, and fails the run', async () => {
+    const { status, report, stderr } = await published(linked, ['resources', 'validate']);
+    const unverified = report.findings.filter((finding) => finding.code === 'LINK_TARGET_UNREADABLE');
+
+    expect(unverified, stderr).toStrictEqual([expect.objectContaining({ severity: 'error', location: 'docs/a.md' })]);
+    expect(unverified[0]?.message).toContain('its parse was refused (its parse was stopped at its outputDepth limit');
+    expect(unverified[0]?.message).toContain('its anchors are unverified');
+    expect(status).toBe(1);
+  });
+});
+
+// One refusal sentence: every verb says a refused file in `parseRefusedMessage`,
+// each at its own project-relative path — two files holding the same bytes are
+// one blob, and the projection lane (`resources check`) named the first path
+// for both.
+describe('two refused files with identical bytes, in every verb that reports them (system test)', () => {
+  let twins: string;
+
+  beforeAll(() => {
+    scratch = createIsolatedScratch('vat-not-admitted-twins-');
+    const deep = `---\na: ${'['.repeat(1000)}${']'.repeat(1000)}\n---\n# Deep\n`;
+    twins = corpus('twins', {
+      'vibe-agent-toolkit.config.yaml': 'resources:\n  include: ["docs/**/*.md"]\n',
+      'docs/a.md': '# A\n',
+      'docs/deep.md': deep,
+      'docs/twin.md': deep,
+    });
+  });
+
+  afterAll(() => {
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
+  it('names each at its own path, in the same sentence in validate, scan and check', async () => {
+    const reasons = new Set<string>();
+    for (const args of [['resources', 'validate'], ['resources', 'scan'], ['resources', 'check']]) {
+      const { report, stderr } = await published(twins, args);
+      const refused = refusedIn(report);
+
+      expect(refused.map((finding) => finding.location), stderr).toStrictEqual(['docs/deep.md', 'docs/twin.md']);
+      for (const finding of refused) {
+        const lead = `'${finding.location ?? ''}' was enumerated but `;
+        expect(finding.message.startsWith(lead), finding.message).toBe(true);
+        reasons.add(finding.message.slice(lead.length).split(', so ')[0] ?? '');
+      }
+    }
+    expect([...reasons]).toHaveLength(1);
+    expect([...reasons][0]).toMatch(/^its parse was stopped at its outputDepth limit/);
   });
 });

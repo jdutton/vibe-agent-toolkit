@@ -112,6 +112,7 @@ import type { TextProvenance } from '@vibe-agent-toolkit/utils/text';
 import { isParsableContent, type KeyedContent, type ParsableContent, type ParserKind } from '../content-key.js';
 import { estimateTokens } from '../link-classify.js';
 import type { ParseResult } from '../link-parser.js';
+import { parseRefusal } from '../not-admitted.js';
 import { type ParseCache, defaultParseCache, isParserUnavailable } from '../parse-cache.js';
 import { ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable } from '../parse-dispatcher.js';
 import { isParseDecodeDefect, isParseLimitError, isParseWorkerDiedError } from '../parse-limits.js';
@@ -1112,22 +1113,16 @@ async function parseTarget(
     // loud, and never a stored `BLOB_PARSE_FAILED` row (`ParseDecodeDefectError`).
     if (isParseDecodeDefect(error)) throw error;
 
+    // 🔑 The message is the refusal's REASON, path-free: the row is keyed by the
+    // blob, and a blob two files share is one row — a path in it named the first
+    // realization for both. `parseRefusedRealizations` hands each realization
+    // this reason under its own path, and every lane says it in the one sentence.
     if (isParseLimitError(error)) {
-      return refused('blobsParseLimited', condition(
-        target.contentKey,
-        BLOB_PARSE_LIMIT_EXCEEDED,
-        `The parse of "${target.path}" was stopped at its ${error.limit} limit (${error.bound});`
-        + ' this blob has no rows this run, and the next run parses it again',
-      ));
+      return refused('blobsParseLimited', condition(target.contentKey, BLOB_PARSE_LIMIT_EXCEEDED, parseRefusal(error).reason));
     }
 
     if (isParseWorkerDiedError(error)) {
-      return refused('blobsParseWorkerDied', condition(
-        target.contentKey,
-        BLOB_PARSE_WORKER_DIED,
-        `The parse of "${target.path}" was lost: ${error.message}`
-        + ' This blob has no rows this run, and the next run parses it again',
-      ));
+      return refused('blobsParseWorkerDied', condition(target.contentKey, BLOB_PARSE_WORKER_DIED, parseRefusal(error).reason));
     }
 
     return refused('blobsParseFailed', condition(

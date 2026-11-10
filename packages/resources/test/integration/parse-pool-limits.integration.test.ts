@@ -259,9 +259,9 @@ const BUILT_POOL = pathToFileURL(safePath.resolve(import.meta.dirname, '..', '..
  * @param stallMs - How long the child's own thread blocks at a time, back to
  *   back, while the job runs (0: never) — so the heap sampler, which runs on
  *   that thread, reads late
- * @returns The limit's name, its bound, and how long the rejection took
+ * @returns The limit's name, its bound, how long the rejection took, and the child's exit status
  */
-function heapBreachUnder(nodeOptions: string, heapMb: number, stallMs: number): { limit: string; bound: string; ms: number } {
+function heapBreachUnder(nodeOptions: string, heapMb: number, stallMs: number): { limit: string; bound: string; ms: number; status: number | null } {
   const script = [
     `const { createParsePool } = await import(${JSON.stringify(BUILT_POOL)});`,
     String.raw`const doc = Array.from({ length: 200000 }, (_, i) => '[link ' + i + '](./t-' + i + '.md)\n').join('\n');`,
@@ -285,7 +285,7 @@ function heapBreachUnder(nodeOptions: string, heapMb: number, stallMs: number): 
   rmSync(directory, { recursive: true, force: true });
 
   expect(child.stderr).toBe('');
-  return JSON.parse(child.stdout) as { limit: string; bound: string; ms: number };
+  return { ...(JSON.parse(child.stdout) as { limit: string; bound: string; ms: number }), status: child.status };
 }
 
 describe('a process-wide heap flag', () => {
@@ -324,7 +324,21 @@ describe('a heap breach while the parent thread stalls', () => {
     const outcome = heapBreachUnder('--max-old-space-size=512', 1024, 400);
 
     expect(outcome.limit).toBe('heapMb');
-    expect(outcome.bound).toContain('256 MiB heap');
+    // Exactly the sampler's bound: a refusal V8 made would name its ceiling.
+    expect(outcome.bound).toBe('256 MiB heap, lowered from 1024 MiB by a process-wide --max-old-space-size');
+  });
+
+  it('names V8\'s ceiling, never the sampler\'s bound, when V8 stops the worker first — and the process survives', () => {
+    // 600 ms stalls let V8 stop the worker at its own ceiling (512 MiB) before
+    // a late sample stops it at 256 (measured on Node 26). The refusal names
+    // the ceiling V8 applied — twice the sampler's — or, when no sample ever
+    // landed, says the ceiling is unknown; never the 256 nobody stopped it at.
+    const outcome = heapBreachUnder('--max-old-space-size=512', 1024, 600);
+
+    expect(outcome.status).toBe(0);
+    expect(outcome.limit).toBe('heapMb');
+    expect(outcome.bound).toMatch(/^V8's own heap ceiling/);
+    expect(outcome.bound).not.toContain('256 MiB');
   });
 });
 

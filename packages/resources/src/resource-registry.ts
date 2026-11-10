@@ -222,16 +222,18 @@ type PreparedResource =
  * One enumerated file whose parse this run refused — stopped at a limit, or lost
  * with the worker that held it — and so is absent from the registry despite the
  * crawl having found it. Never stored: the next run parses it again (ADR I6).
+ *
+ * The one shape every lane reports a refusal from — a crawl's log, a
+ * single-file add's throw, and a projection's refusal rows alike — so
+ * `parseRefusedMessage` says it in one sentence wherever it was met.
  */
 export interface ParseRefusedResource {
   /** Absolute path of the file that was enumerated but not admitted. */
-  filePath: string;
+  readonly filePath: string;
   /** The finding code every consumer reports it under. */
-  code: 'RESOURCE_PARSE_LIMIT_EXCEEDED' | 'RESOURCE_PARSE_WORKER_DIED';
+  readonly code: 'RESOURCE_PARSE_LIMIT_EXCEEDED' | 'RESOURCE_PARSE_WORKER_DIED';
   /** What stopped the parse, e.g. `its parse was stopped at its stackMb limit (1 MiB stack)`. */
-  reason: string;
-  /** The refusal itself. */
-  error: PerRunParseRefusal;
+  readonly reason: string;
 }
 
 export class DuplicateResourceIdError extends VatError {
@@ -1851,11 +1853,12 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       skipGitIgnoreCheck,
     });
 
-    // The files this run enumerated and could NOT read, as the judge's lookup:
-    // an anchor into one of them cannot be checked, and the judge says so
-    // (LINK_TARGET_UNREADABLE) instead of `skip`ping it as if the file held no
-    // headings. Built once from the existing log — a view, not a second ledger.
-    const unreadableTargets = unreadableTargetsFrom(this.unreadableResources);
+    // The files this run enumerated and did NOT admit — unreadable, or their
+    // parse refused — as the judge's lookup: an anchor into one of them cannot
+    // be checked, and the judge says so (LINK_TARGET_UNREADABLE) instead of
+    // `skip`ping it as if the file held no headings. Built once from both logs
+    // (`getNotAdmitted()`) — a view, not a second ledger.
+    const unreadableTargets = unreadableTargetsFrom(this.getNotAdmitted());
 
     // Only pass options if projectRoot is defined (exactOptionalPropertyTypes requirement)
     const judgeOptions: JudgeLinkOptions = this.baseDir === undefined
@@ -2085,7 +2088,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     if (validation.checkFrontmatterLinks !== false && resource.frontmatter) {
       // Same lookup the body-link judge gets (see `validateAllLinks`), so a
       // frontmatter reference with an anchor into a locked file is a finding too.
-      const unreadableTargets = unreadableTargetsFrom(this.unreadableResources);
+      const unreadableTargets = unreadableTargetsFrom(this.getNotAdmitted());
       const linkOptions: ValidateLinkOptions = this.baseDir === undefined
         ? { fsCache: this.fsCache, skipGitIgnoreCheck, unreadableTargets }
         : {

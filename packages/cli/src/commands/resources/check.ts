@@ -42,6 +42,7 @@ import {
   examinedCount,
   issuesFromCheckRows,
   nearMissesOf,
+  notAdmittedFindings,
   parseRefusedRealizations,
   uninterpretableRowsReason,
   type BoundBuiltinCheck,
@@ -58,7 +59,9 @@ import {
   CUSTOM_CHECK_CODE_PREFIX,
   isCustomCheckCode,
   type RefusalCode,
+  resolveFindings,
   toFindings,
+  type ValidationConfig,
   type ValidationIssue,
   withAddedFindings,
 } from '@vibe-agent-toolkit/schema';
@@ -78,7 +81,6 @@ import {
 } from '../../utils/document-writer.js';
 import { formatDurationSecs } from '../../utils/duration.js';
 import { reportFindings } from '../../utils/issue-rendering.js';
-import { resolveIssueSeverity, type SeverityOverrides } from '../../utils/issue-severity.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { EVERY_NOTICE, type NoticeAudience, withNoticeAudience } from '../../utils/operator-notices.js';
 import { assertDirectoryArgument, projectRootOrLoudCwd, projectRootOrNull } from '../../utils/project-root-policy.js';
@@ -249,7 +251,7 @@ export interface CheckPayloadInput {
  * document of an interrupted one, the child a supervisor forwards — so "the
  * denominator is zero and the status is clean" is unrepresentable by
  * construction, and a fourth lane added later inherits the refusal instead of
- * having to remember it. It also lands after `resolveIssueSeverity`, which is
+ * having to remember it. It also lands after `resolveFindings`, which is
  * belt and braces: the code is already unreachable from a `severity` key.
  *
  * The writer refuses a run that examined no RESOURCE; this is the other
@@ -978,7 +980,7 @@ export function requireKnownCheck(
  */
 export function warnUndeclaredOverrides(
   checks: Readonly<Record<string, ResourceCheck>>,
-  validation: SeverityOverrides | undefined,
+  validation: ValidationConfig | undefined,
   logger: Logger,
 ): void {
   const stale = Object.keys(validation?.severity ?? {})
@@ -1662,12 +1664,15 @@ export function buildInterruptedCheckInput(options: {
         lensesEvaluated: population.lensesEvaluated,
         membersEnumerated: population.membersEnumerated,
       },
-    // Earlier checks' refusals before the in-flight check's, as a completed run files them.
-    issues: [
+    // Earlier checks' refusals before the in-flight check's, as a completed run files them —
+    // and through the one finding resolver a completed run's findings go through, so a
+    // re-derived finding carries the same registry fields (`reference`) as the one that died.
+    // Every code here is a refusal, which no `severity` key reaches: no config is needed.
+    issues: resolveFindings([
       interruptedRunFinding(inFlight, ending, completed.length),
       ...refused,
       ...(stopped === undefined ? [] : [stopped.finding]),
-    ],
+    ], {}),
     costs,
   };
 }
@@ -1718,7 +1723,7 @@ export function runProjectChecks(options: {
   only: string | undefined;
   ask: AskProjection;
   columnsOf: ColumnsOfStatement;
-  validation: SeverityOverrides | undefined;
+  validation: ValidationConfig | undefined;
   membersEnumerated: number;
   now?: () => number;
   // `| undefined` explicitly, not merely optional: under
@@ -1746,7 +1751,7 @@ export function runProjectChecks(options: {
   // after the last statement a fresh watchdog window, and three places
   // documented that phase as "resolving severities and serialising". It was
   // emitted a level up, by `runOutcome`, AFTER this function returned — so
-  // `resolveIssueSeverity` below ran inside the LAST CHECK's window and the
+  // `resolveFindings` below ran inside the LAST CHECK's window and the
   // documented claim was false for the half of the phase that is quadratic in
   // the issue count. Emitting it before that call is what makes the claim true,
   // which is the useful direction: the alternative was to weaken three docs.
@@ -1772,7 +1777,7 @@ export function runProjectChecks(options: {
     // silences the default exactly as it silences any other code VAT emits, with
     // no `CUSTOM:` spelling and no second override surface. That the two lanes
     // share this one line is the reason there is nothing to keep in step.
-    issues: resolveIssueSeverity(reported, options.validation),
+    issues: resolveFindings(reported, options.validation ?? {}),
     costs,
   };
 }
@@ -2210,7 +2215,7 @@ function runOutcome(options: {
   only: string | undefined;
   base: string | undefined;
   logger: Logger;
-  validation: SeverityOverrides | undefined;
+  validation: ValidationConfig | undefined;
   onProgress: ProgressSink | undefined;
 }): Promise<CheckOutcome> {
   const { root, checks, only, base, logger, validation, onProgress } = options;
@@ -2249,7 +2254,7 @@ function runOutcome(options: {
       membersEnumerated: extent.membersEnumerated,
     });
     // 🪤 `checks-complete` is NOT emitted here. It used to be, and that put
-    // `resolveIssueSeverity` — which runs inside `runProjectChecks` — on the
+    // `resolveFindings` — which runs inside `runProjectChecks` — on the
     // wrong side of the line, still charged to the last check's budget window
     // while three separate docs said otherwise. It is emitted by
     // `runProjectChecks` itself now, the instant the last statement is done.
@@ -2270,31 +2275,39 @@ function runOutcome(options: {
     });
     // The refusals lead the checks' own findings: every one of those is a
     // statement about a corpus with these files missing from it.
-    const issues = [...resolveIssueSeverity(parseRefusedFindings(projection), validation), ...ran.issues];
+    const issues = [...parseRefusedFindings(projection, root, validation), ...ran.issues];
     return { ...ran, issues, ...provenance, ...extent };
   });
 }
 
 /**
- * One finding per file whose parse this run refused, under the code every
- * crawling verb reports the refusal with, located at the file.
+ * One finding per file whose parse this run refused, through the one
+ * not-admitted contract every crawling verb reports a refusal with
+ * (`notAdmittedFindings`): the same code and sentence, located at the file's
+ * own project-relative path, resolved through `resources.validation` — its
+ * allow list first, then its severity.
  *
  * No check can see a refused file's rows — the blob has none this run — so a
  * clean verdict over the population would be a claim about a corpus the checks
  * never read: the refusal counts against the verdict instead (error by
- * default), and `resources.validation` resolves it like any other finding. A
- * store hit cannot hide it: a refusal is never filed, so its key is held by
- * nothing and the hit's coverage check re-derives it.
+ * default). A store hit cannot hide it: a refusal is never filed, so its key is
+ * held by nothing and the hit's coverage check re-derives it.
  *
  * @param projection - The populated projection
- * @returns The findings, unresolved
+ * @param root - The absolute root its realization paths are relative to
+ * @param validation - The project's `resources.validation`, or undefined
+ * @returns The findings left after the allow filter, each at its resolved severity
  */
-function parseRefusedFindings(projection: Parameters<typeof parseRefusedRealizations>[0]): ValidationIssue[] {
-  return parseRefusedRealizations(projection).map((refusal) => createRegistryIssue(
-    refusal.code,
-    `${refusal.message}. No check saw its rows, so this run's verdict does not cover it.`,
-    { location: refusal.path },
-  ));
+function parseRefusedFindings(
+  projection: Parameters<typeof parseRefusedRealizations>[0],
+  root: string,
+  validation: ValidationConfig | undefined,
+): ValidationIssue[] {
+  return notAdmittedFindings(
+    { unreadable: [], parseRefused: parseRefusedRealizations(projection, root) },
+    { locationRoot: root, consequence: "no check saw its rows and this run's verdict does not cover it" },
+    validation ?? {},
+  );
 }
 
 /** The test-facing seam: helpers the unit tests reach that are not part of this module's API. */

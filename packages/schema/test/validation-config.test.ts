@@ -265,11 +265,12 @@ describe('ValidationConfigSchema — the CUSTOM: override namespace', () => {
 
   it('rejects a custom key under `allow`, because the allow filter would ignore it', () => {
     // 🔑 A deliberate ASYMMETRY, not an oversight. `severity` reaches a check's
-    // findings through `resolveIssueSeverity`, which is code-agnostic. `allow`
-    // does not: the allow filter is `IssueCode`-typed and `vat resources check`
-    // never runs it, so a `CUSTOM:` allow entry would parse, do nothing, and
-    // report nothing — an adopter would believe a path was exempted when every
-    // finding under it still failed their build.
+    // findings through `resolveFindings`, which resolves a non-registry code's
+    // override. `allow` does not: a `CUSTOM:` check's finding is located at
+    // whatever its SQL selected, never a path an allow glob is written against,
+    // so a `CUSTOM:` allow entry would parse and exempt nothing the adopter
+    // meant — they would believe a path was exempted when every finding under
+    // it still failed their build.
     //
     // A loud config error is the honest answer, and this pins that the widening
     // above did not leak into the field where it would be inert.

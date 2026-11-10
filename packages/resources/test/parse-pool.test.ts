@@ -471,6 +471,27 @@ describe('a broken install is loud', () => {
   });
 });
 
+describe('a thread V8 stops at its own heap ceiling', () => {
+  it('names V8\'s ceiling — twice the sampler\'s bound — never the bound the sampler did not stop it at', async () => {
+    // The thread stays responsive for 300 ms, so heap samples land (every
+    // 50 ms) and the pool learns the bound it enforces; then it dies as V8
+    // kills a thread at its ceiling. The sampler never stopped it, so a refusal
+    // naming the sampler's 1,024 MiB names a limit that did not apply.
+    await seedWorkerEntry([
+      "import { parentPort } from 'node:worker_threads';",
+      READY_LINE,
+      "parentPort.on('message', () => { setTimeout(() => { const error = new Error('out of memory'); error.code = 'ERR_WORKER_OUT_OF_MEMORY'; throw error; }, 300); });",
+    ].join('\n'));
+    const pool = trackedPool(1);
+
+    const refusal: unknown = await pool.parse('markdown', '# hi\n', 5).then(() => undefined, (error: unknown) => error);
+
+    expect(isParseLimitError(refusal) && refusal.limit).toBe('heapMb');
+    expect(isParseLimitError(refusal) && refusal.bound).toMatch(/^V8's own heap ceiling, 2048 MiB heap/);
+    expect(isParseLimitError(refusal) && refusal.bound).not.toMatch(/^1024 MiB/);
+  });
+});
+
 describe('a thread that dies uncontrolled', () => {
   it('counts against the pool\'s size until it has exited', async () => {
     // The thread throws, and its `exit` lags its `error` by a busy 400 ms, so a

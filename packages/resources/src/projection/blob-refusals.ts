@@ -61,6 +61,8 @@
  */
 
 
+import { safePath } from '@vibe-agent-toolkit/utils';
+
 import { isTextMimeType } from '../mime-type.js';
 import type { ParseRefusedResource } from '../resource-registry.js';
 
@@ -283,35 +285,33 @@ const PARSE_REFUSAL_CODE_OF_BLOB: ReadonlyMap<string, ParseRefusedResource['code
   [BLOB_PARSE_WORKER_DIED, 'RESOURCE_PARSE_WORKER_DIED'],
 ]);
 
-/** One realization whose blob's parse this run refused, as a projection lane reports it. */
-export interface RefusedRealization {
-  /** Root-relative, forward-slashed: `resource_realizations.path`. */
-  readonly path: string;
-  /** The code the registry lane reports the same refusal under. */
-  readonly code: ParseRefusedResource['code'];
-  /** The blob condition's message: the path, the limit and its bound, or the cause of death. */
-  readonly message: string;
-}
-
 /**
- * Every realization whose blob's parse this run refused — the projection's
- * counterpart of `ResourceRegistry.getParseRefusedResources()`, under the same
- * codes, so a lane answering from a projection names a refused file per path as
- * the registry lane does instead of listing it as an admitted member.
+ * Every realization whose blob's parse this run refused, in the registry's own
+ * refusal shape — the projection's counterpart of
+ * `ResourceRegistry.getParseRefusedResources()`, so a lane answering from a
+ * projection reports a refused file through the same contract
+ * (`not-admitted.ts`) as the registry lane instead of listing it as an admitted
+ * member.
+ *
+ * The adapter is per REALIZATION: the refusal row is per blob and carries only
+ * the reason (`parseRefusal`), so two files holding the same bytes each come
+ * back under their own path.
  *
  * @param rows - The population's rows (a store hit carries none: a refusal is never filed)
- * @returns One entry per refused realization, in realization order
+ * @param root - The absolute root the realizations' paths are relative to
+ * @returns One entry per refused realization, in realization order, each at its absolute path
  */
 export function parseRefusedRealizations(
   rows: Pick<Projection, 'blobConditions' | 'resourceRealizations'>,
-): RefusedRealization[] {
-  const refusedBlobs = new Map<string, { code: ParseRefusedResource['code']; message: string }>();
+  root: string,
+): ParseRefusedResource[] {
+  const refusedBlobs = new Map<string, Pick<ParseRefusedResource, 'code' | 'reason'>>();
   for (const row of rows.blobConditions) {
     const code = PARSE_REFUSAL_CODE_OF_BLOB.get(row.code);
-    if (code !== undefined && !refusedBlobs.has(row.blob)) refusedBlobs.set(row.blob, { code, message: row.message });
+    if (code !== undefined && !refusedBlobs.has(row.blob)) refusedBlobs.set(row.blob, { code, reason: row.message });
   }
   return rows.resourceRealizations.flatMap((row) => {
     const refusal = row.contentKey === null ? undefined : refusedBlobs.get(row.contentKey);
-    return refusal === undefined ? [] : [{ path: row.path, ...refusal }];
+    return refusal === undefined ? [] : [{ filePath: safePath.resolve(root, row.path), ...refusal }];
   });
 }

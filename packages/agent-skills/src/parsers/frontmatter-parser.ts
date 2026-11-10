@@ -1,3 +1,4 @@
+import { isPlainMapping } from '@vibe-agent-toolkit/resources';
 import yaml from 'yaml';
 
 export interface FrontmatterSuccess {
@@ -19,6 +20,13 @@ export interface FrontmatterError {
 }
 
 export type FrontmatterResult = FrontmatterSuccess | FrontmatterError;
+
+/** The refusal for a block that declares nothing. */
+const EMPTY_BLOCK: FrontmatterError = {
+      success: false,
+      error: 'Frontmatter is empty: the block between the "---" delimiters declares no fields',
+      cause: undefined,
+    };
 
 /**
  * Parse YAML frontmatter from SKILL.md content
@@ -70,6 +78,14 @@ export function parseFrontmatter(content: string): FrontmatterResult {
     ? normalized.slice(bodyStartIndex + 1) // Skip newline after ---
     : '';
 
+  // A block that declares NOTHING — empty, whitespace, comment-only, `~`, `null`
+  // — is the rule `parseFrontmatterSource` (the crawl lane's decode) applies:
+  // "no value" by the document's own word, NOT a non-mapping, and no keys. A
+  // skill without frontmatter fields is not a skill, so it is refused — saying
+  // it is empty, never that it is not a mapping — and the packaging lane, which
+  // reads the crawl lane's absent `frontmatter`, refuses the same bytes.
+  if (yamlContent.trim() === '') return EMPTY_BLOCK;
+
   // Parse YAML
   let parsed: unknown;
   try {
@@ -82,16 +98,18 @@ export function parseFrontmatter(content: string): FrontmatterResult {
     };
   }
 
-  // A block that parsed but is not a mapping is refused HERE, once. `yaml.parse`
-  // answers `null` for an empty document or `~`, a string for a bare scalar, an
-  // array for a sequence — and the success arm promises `Record<string,
-  // unknown>`, so every reader dereferenced it. `validateSkill` died with
-  // `Cannot read properties of null (reading 'name')` and took the whole
-  // `vat audit` run with it, while two other readers had grown their own `null`
-  // guards: three consumers of one seam, three answers for one file. The
-  // refusal names what was found, because "no frontmatter" over a file that
-  // plainly has a `---` block sends the author to the wrong fix.
-  if (parsed === null || parsed === undefined || typeof parsed !== 'object' || Array.isArray(parsed)) {
+  if (parsed === null || parsed === undefined) return EMPTY_BLOCK;
+
+  // A block that parsed but is not a PLAIN mapping is refused HERE, once, by
+  // the rule every lane reads (`isPlainMapping`): a string for a bare scalar,
+  // an array for a sequence, and the `Set` / `Map` / `Date` / `Uint8Array` of a
+  // `!!set` / `!!omap` / `!!timestamp` / `!!binary` root. The success arm
+  // promises `Record<string, unknown>`, so a typed root admitted here handed
+  // every reader an object with no keys to read, while the crawl lane called the
+  // same block "not a mapping". The refusal names what was found, because "no
+  // frontmatter" over a file that plainly has a `---` block sends the author to
+  // the wrong fix.
+  if (!isPlainMapping(parsed)) {
     return {
       success: false,
       error: `Frontmatter is not a YAML mapping: the block between the "---" delimiters is ${describeNonMapping(parsed)}`,
@@ -99,16 +117,14 @@ export function parseFrontmatter(content: string): FrontmatterResult {
     };
   }
 
-  return {
-    success: true,
-    frontmatter: parsed as Record<string, unknown>,
-    body,
-  };
+  return { success: true, frontmatter: parsed, body };
 }
 
 /** The shape a non-mapping frontmatter block turned out to be, for the refusal message. */
 function describeNonMapping(parsed: unknown): string {
-  if (parsed === null || parsed === undefined) return 'empty';
   if (Array.isArray(parsed)) return 'a sequence, not key: value fields';
+  if (typeof parsed === 'object' && parsed !== null) {
+    return `a typed value (${parsed.constructor.name}), not key: value fields`;
+  }
   return `a scalar (${JSON.stringify(parsed)}), not key: value fields`;
 }

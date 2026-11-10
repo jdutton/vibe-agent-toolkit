@@ -19,10 +19,12 @@ import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
 import { createStubEmbeddingProvider, setupLanceDBTestSuite } from '../test-helpers.js';
 
 /**
- * Blockquotes nested deeper than a main-thread parse survives: measured, 10,000
- * levels overflow the main thread's stack and parse in a 4 MiB worker.
+ * Blockquotes nested deeper than a main-thread parse survives: measured, 6,000
+ * levels already overflow the main thread's stack and 8,000 parse in a 4 MiB
+ * worker. 10,000 did too, but sometimes needed more than the 512 MiB heap an
+ * integration fork's `--max-old-space-size=1024` leaves a worker, and was refused.
  */
-const DEEP_QUOTE = `${'>'.repeat(10_000)} deep`;
+const DEEP_QUOTE = `${'>'.repeat(8000)} deep`;
 
 const suite = setupLanceDBTestSuite();
 

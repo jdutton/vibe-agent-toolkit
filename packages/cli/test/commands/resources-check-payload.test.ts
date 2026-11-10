@@ -593,7 +593,7 @@ describe('runProjectChecks — what each rule cost', () => {
 describe('a check severity override does not silence a BROKEN check', () => {
   it('still reports the breakage at error when the check is set to ignore', () => {
     // 🔑 Revert the separate code (put `customCheckCode(name)` back on the
-    // broken finding) and this reds: `resolveIssueSeverity` drops it and the
+    // broken finding) and this reds: `resolveFindings` drops it and the
     // command exits 0 over a check that asserted nothing.
     const { issues, costs } = runProjectChecks({
       warn: () => undefined,
@@ -1512,7 +1512,7 @@ describe('the built-in check set runs without any config', () => {
     // ⭐ The other direction, and the half that gets forgotten. A resolver that
     // only knows how to delete answers "can I silence this?" and silently
     // ignores "can I enforce this?" — which is the shipped defect
-    // `resolveIssueSeverity` exists to prevent, here on a new lane.
+    // `resolveFindings` exists to prevent, here on a new lane.
     const { issues, costs } = runProjectChecks({
       warn: () => undefined,
       columnsOf: NO_COLUMNS,

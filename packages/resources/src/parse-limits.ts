@@ -131,25 +131,15 @@ export class ParseLimitError extends VatError {
   }
 
   /**
-   * A heap breach, naming the limit that actually applied.
+   * A heap breach the pool's sampler stopped, naming the limit that actually
+   * applied.
    *
    * @param appliedMb - The heap limit the pool enforced on the worker — see
-   *   {@link appliedHeapLimitMb} — or `undefined` when no heap sample ever
-   *   landed: V8 stopped the worker at its own ceiling first (the parent was
-   *   blocked past the stall window), and that ceiling is unknown, since a
-   *   process-wide `--max-old-space-size` may have lowered it
+   *   {@link appliedHeapLimitMb}
    * @param configuredMb - The `heapMb` this pool was given
    * @returns The breach, saying so when a process-wide flag lowered the limit
    */
-  static heap(appliedMb: number | undefined, configuredMb: number): ParseLimitError {
-    if (appliedMb === undefined) {
-      return new ParseLimitError(
-        'heapMb',
-        configuredMb,
-        undefined,
-        `V8's own heap ceiling, reached before the pool's heap sampler read it: ${LIMIT_UNITS.heapMb(configuredMb)}, or less under a process-wide --max-old-space-size`,
-      );
-    }
+  static heap(appliedMb: number, configuredMb: number): ParseLimitError {
     const bound = LIMIT_UNITS.heapMb(appliedMb);
     return new ParseLimitError(
       'heapMb',
@@ -158,6 +148,36 @@ export class ParseLimitError extends VatError {
       appliedMb < configuredMb
         ? `${bound}, lowered from ${String(configuredMb)} MiB by a process-wide --max-old-space-size`
         : bound,
+    );
+  }
+
+  /**
+   * A heap breach V8 stopped at its OWN ceiling, before the pool's sampler did
+   * (the parent was blocked past the stall window, so a sample landed late or
+   * never). It names that ceiling — {@link workerHeapCeilingMb} of the bound
+   * the sampler enforces — never the sampler's bound, which did not stop it.
+   *
+   * @param appliedMb - The bound the sampler enforced, from the last sample to
+   *   land, or `undefined` when none landed: then the ceiling is unknown, since
+   *   a process-wide `--max-old-space-size` overrides it in either direction
+   * @param configuredMb - The `heapMb` this pool was given
+   * @returns The breach
+   */
+  static heapCeiling(appliedMb: number | undefined, configuredMb: number): ParseLimitError {
+    if (appliedMb === undefined) {
+      return new ParseLimitError(
+        'heapMb',
+        workerHeapCeilingMb(configuredMb),
+        undefined,
+        `V8's own heap ceiling, reached before the pool's heap sampler read it: ${LIMIT_UNITS.heapMb(workerHeapCeilingMb(configuredMb))}, unless a process-wide --max-old-space-size set it instead`,
+      );
+    }
+    const ceilingMb = workerHeapCeilingMb(appliedMb);
+    return new ParseLimitError(
+      'heapMb',
+      ceilingMb,
+      undefined,
+      `V8's own heap ceiling, ${LIMIT_UNITS.heapMb(ceilingMb)} — twice the ${String(appliedMb)} MiB the pool's heap sampler enforces, reached before the sampler read the heap past it`,
     );
   }
 }
@@ -249,16 +269,20 @@ export function countOutputRows(facts: object): number {
   return rows;
 }
 
-/** Rows and bytes a decoded value holds once every alias in it is expanded. */
+/**
+ * Rows and bytes of the JSON the store writes for a decoded value (the
+ * projection's `json` column is its `JSON.stringify`), every alias written out
+ * in full.
+ */
 interface ExpandedSize {
-  /** Elements of every array and set, and entries of every map, at every depth. */
+  /** Every array element and every mapping entry of that JSON, at every depth. */
   readonly rows: number;
-  /** About what the value serialises to as JSON, every alias written out in full. */
+  /** Bytes of that JSON, exactly: `Buffer.byteLength(JSON.stringify(value))` for an acyclic value. */
   readonly bytes: number;
   /**
-   * How deep its JSON nests, a container itself level 1 (a scalar: 0; a binary:
-   * 2, as `Buffer`'s JSON is `{"type", "data": [...]}`). `Infinity` when it
-   * refers back into itself: no writer of JSON can write a cycle out.
+   * How deep that JSON nests, a container itself level 1 (a scalar: 0; a
+   * binary: 2, as `Buffer`'s JSON is `{"type", "data": [...]}`). `Infinity`
+   * when it refers back into itself: no writer of JSON can write a cycle out.
    */
   readonly depth: number;
 }
@@ -282,33 +306,61 @@ interface SizingFrame {
 }
 
 /**
+ * Whether JSON writes a value's own children: an array, or an object with no
+ * `toJSON` of its own — which writes its own enumerable keys, so a `Set` or a
+ * `Map` (a `!!set`, a `!!omap`) is `{}` and a bare `Uint8Array` its indices.
+ * A `Buffer` (a `!!binary`) and a `Date` (a `!!timestamp`) write `toJSON`'s
+ * answer instead, sized as leaves ({@link leafSize}).
+ *
  * @param value - Any decoded value
- * @returns True for a value with children: an array, set, map or object (a binary or date has none)
+ * @returns True for a value whose JSON is its children's
  */
 function isContainer(value: unknown): value is object {
-  return typeof value === 'object' && value !== null && !(value instanceof Uint8Array) && !(value instanceof Date);
+  if (typeof value !== 'object' || value === null) return false;
+  return typeof (value as { toJSON?: unknown }).toJSON !== 'function';
 }
 
-/**
- * @param value - A value with no children
- * @returns About what it serialises to as JSON
- */
-function leafBytes(value: unknown): number {
-  if (typeof value === 'string') return Buffer.byteLength(value) + 2;
-  if (value instanceof Uint8Array) return Math.ceil(value.byteLength / 3) * 4 + 2;
-  if (value instanceof Date) return 26;
-  return String(value).length;
-}
+/** `Buffer`'s JSON around its bytes: `{"type":"Buffer","data":[` … `]}`. */
+const BUFFER_JSON_FRAME_BYTES = '{"type":"Buffer","data":[]}'.length;
 
 /** How deep a binary's JSON nests: `Buffer`'s JSON is `{"type": …, "data": [ … ]}`. */
 const BINARY_DEPTH = 2;
 
 /**
- * @param value - A value with no children
- * @returns How deep its JSON nests
+ * @param byte - 0 to 255
+ * @returns How many decimal digits JSON writes it with
  */
-function leafDepth(value: unknown): number {
-  return value instanceof Uint8Array ? BINARY_DEPTH : 0;
+function decimalDigits(byte: number): number {
+  if (byte < 10) return 1;
+  return byte < 100 ? 2 : 3;
+}
+
+/**
+ * A `Buffer`'s JSON, counted without building it: two entries and one row per
+ * byte, each byte written as its decimal digits.
+ *
+ * @param binary - The decoded `!!binary`
+ * @returns Its stored size
+ */
+function binarySize(binary: Buffer): ExpandedSize {
+  let digits = 0;
+  for (const byte of binary) digits += decimalDigits(byte);
+  const commas = Math.max(0, binary.byteLength - 1);
+  return { rows: 2 + binary.byteLength, bytes: BUFFER_JSON_FRAME_BYTES + digits + commas, depth: BINARY_DEPTH };
+}
+
+/**
+ * A value JSON writes without children of its own: a scalar, or what its
+ * `toJSON` answers (a `Date`'s ISO string).
+ *
+ * @param value - A value {@link isContainer} refuses
+ * @returns Its stored size
+ */
+function leafSize(value: unknown): ExpandedSize {
+  if (Buffer.isBuffer(value)) return binarySize(value);
+  // `undefined` (no writer of YAML produces one) is `null` in an array.
+  const json = JSON.stringify(value) ?? 'null';
+  return { rows: 0, bytes: Buffer.byteLength(json), depth: 0 };
 }
 
 /**
@@ -316,27 +368,22 @@ function leafDepth(value: unknown): number {
  * brackets, separators and keys. No spread: a list of any length is read by
  * iteration.
  *
- * @param node - An array, set, map or object
+ * @param node - An array, or an object JSON writes by its own keys
  * @returns Its frame, before any child is sized
  */
 function openFrame(node: object): SizingFrame {
   if (Array.isArray(node)) {
     return { node, children: node, next: 0, rows: node.length, bytes: 2 + Math.max(0, node.length - 1), deepest: 0 };
   }
-  if (node instanceof Set) {
-    return { node, children: [...(node as Set<unknown>)], next: 0, rows: node.size, bytes: 2 + Math.max(0, node.size - 1), deepest: 0 };
-  }
   const children: unknown[] = [];
-  if (node instanceof Map) {
-    for (const [key, child] of node as Map<unknown, unknown>) children.push(key, child);
-    return { node, children, next: 0, rows: node.size, bytes: 2 + node.size * 2, deepest: 0 };
-  }
-  let bytes = 2;
-  for (const key of Object.keys(node)) {
+  const keys = Object.keys(node);
+  // `{` `}`, a `:` per entry and a `,` between entries.
+  let bytes = 2 + keys.length + Math.max(0, keys.length - 1);
+  for (const key of keys) {
     children.push((node as Record<string, unknown>)[key]);
-    bytes += Buffer.byteLength(key) + 4;
+    bytes += Buffer.byteLength(JSON.stringify(key));
   }
-  return { node, children, next: 0, rows: 0, bytes, deepest: 0 };
+  return { node, children, next: 0, rows: keys.length, bytes, deepest: 0 };
 }
 
 /**
@@ -363,8 +410,7 @@ function addSize(frame: SizingFrame, size: ExpandedSize): void {
  */
 function addChild(frame: SizingFrame, child: unknown, sized: ReadonlyMap<object, ExpandedSize>, open: Set<object>): SizingFrame | undefined {
   if (!isContainer(child)) {
-    frame.bytes += leafBytes(child);
-    frame.deepest = Math.max(frame.deepest, leafDepth(child));
+    addSize(frame, leafSize(child));
     return undefined;
   }
   const known = sized.get(child);
@@ -382,9 +428,12 @@ function addChild(frame: SizingFrame, child: unknown, sized: ReadonlyMap<object,
 }
 
 /**
- * The rows, bytes and depth a decoded frontmatter value holds with every alias
- * expanded: each use of an anchor counts the anchor's full size, as a
- * consumer walking the value meets it.
+ * The rows, bytes and depth of the JSON the store writes for a decoded
+ * frontmatter value, every alias expanded: each use of an anchor counts the
+ * anchor's full size, as `JSON.stringify` writes it and as a consumer walking
+ * the value meets it. Exactly what the store writes — a `!!binary` is its
+ * `Buffer` JSON (one row per byte, each byte its digits), never its base64's
+ * length; a `!!set` / `!!omap` is the `{}` JSON writes.
  *
  * The worker sends frontmatter in an encoding that writes a shared anchor
  * once (`frontmatter-codec.ts`), so a count over what crosses the wire would
@@ -398,7 +447,7 @@ function addChild(frame: SizingFrame, child: unknown, sized: ReadonlyMap<object,
  * @returns Its expanded rows, bytes and depth
  */
 export function expandedSize(root: unknown): ExpandedSize {
-  if (!isContainer(root)) return { rows: 0, bytes: leafBytes(root), depth: leafDepth(root) };
+  if (!isContainer(root)) return leafSize(root);
   const sized = new Map<object, ExpandedSize>();
   const open = new Set<object>([root]);
   const stack: SizingFrame[] = [openFrame(root)];

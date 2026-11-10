@@ -173,7 +173,11 @@ describe('a violation finding names its check and carries its row as evidence', 
     const report = publish({}, askRows({}), { builtins: [builtin] });
 
     expect(findingsOf(report)).toStrictEqual([
-      { code: 'CLAUDE_RULE_GLOB_INERT', severity: 'info', message: 'inert', location: '.claude/rules/a.md', check: 'claude-rule-glob-inert' },
+      // `reference` is the registry's, added by `resolveFindings` as on every lane's findings.
+      {
+        code: 'CLAUDE_RULE_GLOB_INERT', severity: 'info', message: 'inert', location: '.claude/rules/a.md',
+        check: 'claude-rule-glob-inert', reference: '#claude_rule_glob_inert',
+      },
     ]);
     expectValid(report);
   });

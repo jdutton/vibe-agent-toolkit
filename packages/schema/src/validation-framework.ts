@@ -22,7 +22,7 @@ import picomatch from 'picomatch';
 
 import { CODE_REGISTRY, REFUSAL_CODES, type FindingCode, type IssueCode, type IssueSeverity } from './validation-codes.js';
 import type { AllowEntry, ValidationConfig } from './validation-config.js';
-import type { ValidationIssue } from './validation-issue.js';
+import { isCustomCheckCode, type ValidationIssue } from './validation-issue.js';
 
 // The hand-written `ValidationConfig` (from validation-config.ts) is the single
 // canonical config type. The framework's narrower input types derive from it so
@@ -41,7 +41,7 @@ const REFUSALS: ReadonlySet<string> = new Set(REFUSAL_CODES);
  * Whether config may override this code: anything but a refusal.
  *
  * ⚠️ Decided by EXCLUSION, not by `kind === 'finding'`: callers reach here with
- * non-registry codes too (`resolveIssueSeverity` hands over a `CUSTOM:` check
+ * non-registry codes too (`resolveFindings` hands over a `CUSTOM:` check
  * code whose override it found), and those must keep resolving to the override.
  * A lookup of the registry entry would throw on them.
  *
@@ -303,8 +303,14 @@ function finalize(issue: ValidationIssue, config: ValidationConfig): ValidationI
   const code = issue.code as IssueCode;
   const entry = CODE_REGISTRY[code];
   if (!entry) {
-    // Not a registry code — return as-is (non-overridable / info codes bypass framework).
-    return issue;
+    // Not a registry code. A `CUSTOM:<name>` check's takes its override, when
+    // the config names one (`resolveSeverity` keeps it — see `isOverridable`).
+    // Any other unregistered code is a lane's own refusal
+    // (`SKILL_MISSING_FRONTMATTER`): passed through, never demotable.
+    if (!isCustomCheckCode(code) || !(code in (config.severity ?? {}))) return issue;
+    const resolved = resolveSeverity(code, config);
+    if (resolved === 'ignore') return null;
+    return resolved === issue.severity ? issue : { ...issue, severity: resolved };
   }
   const resolved = resolveSeverity(code, config);
   if (resolved === 'ignore') return null;

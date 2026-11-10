@@ -74,6 +74,7 @@ export {
   notAdmittedCount,
   notAdmittedFindings,
   notAdmittedInScope,
+  inProcessRefusalEntry,
   notAdmittedIssues,
   parseRefusedEntry,
   parseRefusedMessage,
@@ -536,6 +537,7 @@ export type { DocumentParserKind } from './mime-type.js';
 // `loadParser` is exported for tests and embedders that want to force or observe
 // the load. ⛔ It is NOT an optimisation hook: awaiting it before a loop, to "warm"
 // the parser, is exactly the regression above.
+export { parseFileCached } from './parse-dispatcher.js';
 export {
   ParseCache,
   ParserUnavailableError,
@@ -543,7 +545,6 @@ export {
   isParserUnavailable,
   loadParser,
   parseCacheDirectory,
-  parseFileCached,
   parseKeyed,
   vatCacheNamespace,
   vatCacheNamespaceRoot,
@@ -629,6 +630,11 @@ export {
 
 // Export href resolution utility (shared by audit and validate code paths)
 export { resolveLocalHref, type ResolveLocalHrefResult } from './utils.js';
+
+// The one statement of what a frontmatter ROOT may be — a plain mapping. The
+// skill lane's `parseFrontmatter` reads it, so a `!!set` / `!!omap` /
+// `!!timestamp` / `!!binary` root is "not a mapping" on every lane.
+export { isPlainMapping } from './frontmatter-codec.js';
 
 // Export frontmatter editor primitive (comment-preserving round-trip)
 export {
@@ -1035,7 +1041,6 @@ export {
   describeBlobRefusals,
   parseRefusedRealizations,
   type BlobRefusalRows,
-  type RefusedRealization,
 } from './projection/blob-refusals.js';
 
 // The declarative closure primitive (zones §7.3): a closure-defined extent is a

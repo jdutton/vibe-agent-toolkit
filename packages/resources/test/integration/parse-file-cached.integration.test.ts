@@ -28,7 +28,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ParserKind } from '../../src/content-key.js';
 import { parseHtml } from '../../src/html-link-parser.js';
 import { type ParseResult, parseMarkdown } from '../../src/link-parser.js';
-import { ParseCache, type ParseCacheStats, parseFileCached } from '../../src/parse-cache.js';
+import { ParseCache, type ParseCacheStats } from '../../src/parse-cache.js';
+import { parseFileCached } from '../../src/parse-dispatcher.js';
 
 // ---------------------------------------------------------------------------
 // Corpus

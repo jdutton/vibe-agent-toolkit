@@ -176,7 +176,7 @@ const ConvertingEntrySchema = z.object({
  *
  * 🪤 **Emitted by `runProjectChecks`, before it resolves severities.** It first
  * shipped a level up, from `runOutcome` after that function had already
- * returned, which left `resolveIssueSeverity` charged to the last check's window
+ * returned, which left `resolveFindings` charged to the last check's window
  * while this comment claimed otherwise. What it still does NOT cover is the last
  * check's row-to-issue conversion — that window has its own state,
  * {@link ConvertingEntrySchema}, and the check's cost is filed after it.

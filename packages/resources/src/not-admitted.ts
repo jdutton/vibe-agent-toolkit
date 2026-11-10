@@ -28,7 +28,7 @@ import { createRegistryIssue, resolveFindings, type ValidationConfig, type Valid
 import { issueLocation } from '@vibe-agent-toolkit/utils';
 
 import { matchesCollection } from './collection-matcher.js';
-import { isParseLimitError, type PerRunParseRefusal } from './parse-limits.js';
+import { isParseLimitError, isPerRunParseRefusal, isStackOverflow, type PerRunParseRefusal } from './parse-limits.js';
 import type { ParseRefusedResource, UnreadableResource } from './resource-registry.js';
 import type { CollectionConfig } from './schemas/project-config.js';
 
@@ -47,14 +47,47 @@ export interface NotAdmittedWording {
 }
 
 /**
+ * What stopped a parse, as the clause every lane reports it with — and, path-free,
+ * as the message of the per-blob refusal row a projection lane reads it back from
+ * (`parseRefusedRealizations`), so a blob two files share names neither.
+ *
+ * @param error - What refused it
+ * @returns The finding code, and the clause naming the limit and its bound or the cause of death
+ */
+export function parseRefusal(error: PerRunParseRefusal): Pick<ParseRefusedResource, 'code' | 'reason'> {
+  return isParseLimitError(error)
+    ? { code: 'RESOURCE_PARSE_LIMIT_EXCEEDED', reason: `its parse was stopped at its ${error.limit} limit (${error.bound})` }
+    : { code: 'RESOURCE_PARSE_WORKER_DIED', reason: `the parse worker holding it died (${error.message})` };
+}
+
+/**
  * @param filePath - The refused file
  * @param error - What refused it
  * @returns The log entry every consumer reads
  */
 export function parseRefusedEntry(filePath: string, error: PerRunParseRefusal): ParseRefusedResource {
-  return isParseLimitError(error)
-    ? { filePath, error, code: 'RESOURCE_PARSE_LIMIT_EXCEEDED', reason: `its parse was stopped at its ${error.limit} limit (${error.bound})` }
-    : { filePath, error, code: 'RESOURCE_PARSE_WORKER_DIED', reason: `the parse worker holding it died (${error.message})` };
+  return { filePath, ...parseRefusal(error) };
+}
+
+/**
+ * The entry for whatever an IN-PROCESS parse threw that refuses the file: a
+ * per-run refusal (the bounded fallback `parseFileCached` takes on an overflow),
+ * or a stack overflow in a parse that has no bounded route (the SKILL.md
+ * frontmatter parser) — `undefined` for anything else, which the caller
+ * handles as it did.
+ *
+ * @param filePath - The document
+ * @param error - What its parse threw
+ * @returns The log entry, or `undefined` when the error is not a refusal
+ */
+export function inProcessRefusalEntry(filePath: string, error: unknown): ParseRefusedResource | undefined {
+  if (isPerRunParseRefusal(error)) return parseRefusedEntry(filePath, error);
+  if (!isStackOverflow(error)) return undefined;
+  return {
+    filePath,
+    code: 'RESOURCE_PARSE_LIMIT_EXCEEDED',
+    reason: 'its parse overflowed the stack of the thread it ran on (its frontmatter or markdown nests too deeply)',
+  };
 }
 
 /**

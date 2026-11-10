@@ -21,16 +21,19 @@
  * mean it lands twice — or, far more likely, on one lane only.
  */
 
+import { type FsSide, withFsFault } from '@vibe-agent-toolkit/utils';
+
 import {
   DOCUMENT_PARSER_KINDS,
   NO_PARSER_KIND,
   type ParsableContent,
   type ParserKind,
+  readContentWithKey,
 } from './content-key.js';
 import type { ParseResult } from './link-parser.js';
 import type { DocumentParserKind } from './mime-type.js';
-import type { ParseCache } from './parse-cache.js';
-import type { ParseLimits } from './parse-limits.js';
+import { defaultParseCache, type ParseCache, parseKeyed } from './parse-cache.js';
+import { isStackOverflow, type ParseLimits } from './parse-limits.js';
 import {
   createParsePool,
   defaultParsePoolSize,
@@ -652,6 +655,96 @@ export class ParseDispatcher {
     this.#pool = null;
     this.#width = 1;
     if (pool !== null) await pool.shutdown();
+  }
+}
+
+/**
+ * Read, key and parse a file, consulting the cache.
+ *
+ * The cached replacement for `parseMarkdown(path)` / `parseHtml(path)`: those
+ * two read the file themselves and hand the bytes straight to a parser, so they
+ * bypass the cache entirely. Every call site that does not go through
+ * `ResourceRegistry` uses this instead.
+ *
+ * The parse runs on this thread, unbounded — except that a stack overflow falls
+ * back to ONE bounded parse through the pool ({@link parseKeyedBounded}), so a
+ * document this thread cannot parse gets the worker's answer, never a refusal
+ * the worker would not give. A hang or heap exhaustion here is still unbounded
+ * (the hazard register's in-process row).
+ *
+ * ⚠ `parserKind` states which parser runs — it is **not** derived from the
+ * path, because at least one shipped caller deliberately parses `.html`
+ * documents as markdown. Pass the kind you actually parse with, or the entry
+ * lands under a key another lane will read (see content-key.ts).
+ *
+ * It is a {@link DocumentParserKind}, so `parserKindForPath(filePath)` is not
+ * directly passable any more: that function can answer `none`, and this one has
+ * no parser to run for it. A caller routing by path decides what to do with a
+ * `none` blob first — see `parseKeyed`.
+ *
+ * One difference from `parseMarkdown`/`parseHtml`, deliberate: `sizeBytes` is
+ * the length of the bytes this call read, not a separate `stat().size`. For a
+ * regular file the two agree; where they can disagree — a file rewritten between
+ * the read and the stat — the byte count of what was actually parsed is the
+ * honest one, and it is also the number the key covers.
+ *
+ * @param filePath - Absolute path to the document
+ * @param parserKind - The parser to hand the content to
+ * @param options - `cache`: store to use, defaulting to the process-wide instance.
+ *   `side`: which side of the calling verb the document is on — `source` (the
+ *   default: an input the verb reads) or `destination` / `environment` when the
+ *   caller re-reads VAT's own output or staging. Only the caller knows; this
+ *   function never infers it from the path.
+ * @returns The parse result, from an entry or from the parser
+ * @throws A `ParseLimitError` / `ParseWorkerDiedError` when the bounded fallback
+ *   refuses the document, `ParserUnavailableError` for a broken install,
+ *   `FsFaultError` on `side` (origin `content` for a source) when the OS
+ *   refuses the read — the caller still decides what it means (`isPathAbsentError`
+ *   and `fsFaultOf` read the errno down the `cause` chain) — and
+ *   `TextTooLargeError` for a file too large to decode, as `readContentWithKey` does
+ */
+export async function parseFileCached(
+  filePath: string,
+  parserKind: DocumentParserKind,
+  options: { cache?: ParseCache; side?: FsSide } = {},
+): Promise<ParseResult> {
+  const side = options.side ?? 'source';
+  const keyed = await withFsFault({ side, origin: 'content', action: `read ${filePath}`, path: filePath }, () =>
+    readContentWithKey(filePath, parserKind),
+  );
+  const cache = options.cache ?? defaultParseCache();
+  try {
+    return await parseKeyed(keyed, cache);
+  } catch (error) {
+    if (!isStackOverflow(error)) throw error;
+    return parseKeyedBounded(keyed, cache);
+  }
+}
+
+/**
+ * One bounded parse through a one-thread pool, for a document this thread's
+ * stack could not parse — so the answer is the worker's, the same one a crawl
+ * gives and files, and the verdict never depends on whether a crawl warmed the
+ * cache first (ADR I0): a document the worker parses is admitted cold and warm,
+ * one over the worker's limits is refused cold and warm.
+ *
+ * A pool per overflow, shut down before it returns: overflows are rare, and a
+ * pool held for the run would need a shutdown every in-process caller forgets.
+ *
+ * @param keyed - The read the in-process parse overflowed on
+ * @param cache - The store a success is filed into (`setByKey` guards it, as for every write)
+ * @returns The worker's parse
+ * @throws A `ParseLimitError` / `ParseWorkerDiedError` when the worker refuses it
+ *   (nothing filed), and `ParserUnavailableError` for a broken install
+ */
+async function parseKeyedBounded(keyed: ParsableContent, cache: ParseCache): Promise<ParseResult> {
+  const pool = createParsePool({ size: 1, cacheDir: cache.directory });
+  try {
+    const result = await pool.parse(keyed.parserKind, keyed.content, keyed.byteLength);
+    await cache.set(keyed, result);
+    return result;
+  } finally {
+    await pool.shutdown();
   }
 }
 

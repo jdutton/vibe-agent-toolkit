@@ -221,8 +221,11 @@ describe('every single-file add classifies the refusal it throws', () => {
   const files = new Map([...packageSources()].map(([file, text]) => [file, code(text)]));
   const adders = [...files].filter(([file, body]) => file !== OWNER && body.includes(SINGLE_ADD));
 
-  it('finds the adders — at least the skill packager', () => {
-    expect(adders.map(([file]) => file)).toContain('packages/agent-skills/src/skill-packager.ts');
+  it('finds the adders — at least the projection builder it lists', () => {
+    // The skill packager admits its bundled assets in one `addResources` batch
+    // now (one dispatcher, so a broken install trips the pool's breaker); the
+    // listed projection builder is what proves the detector still sees a call.
+    expect(adders.map(([file]) => file)).toContain('packages/resources/src/projection/merge.ts');
   });
 
   it('classifies isPerRunParseRefusal(), or is listed as not classified here', () => {

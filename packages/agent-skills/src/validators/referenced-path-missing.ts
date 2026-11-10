@@ -118,7 +118,7 @@ import {
   type PackagingTarget,
   TARGET_SUBDIR_CATEGORIES,
 } from '../content-type-routing.js';
-import { stackOverflowIssue } from '../parse-refusal-issues.js';
+import { inProcessRefusalIssue } from '../parse-refusal-issues.js';
 
 /**
  * Subdirectories a packaged skill may bundle resources into.
@@ -374,7 +374,7 @@ export async function detectMissingReferencedPaths(
   // still fails the check.
   const candidatesByDoc = await mapConcurrentFailingInOrder(docFiles, (docFile) =>
     bundledPathCandidates(docFile).catch((error: unknown) => {
-      const limit = stackOverflowIssue(error, safePath.relative(skillDir, docFile));
+      const limit = inProcessRefusalIssue(error, docFile, skillDir);
       if (limit === undefined) throw error;
       return limit;
     }));
