@@ -24,11 +24,17 @@
  *   collection's own patterns, as the registry assigns membership.
  */
 
-import { createRegistryIssue, resolveFindings, type ValidationConfig, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { issueLocation } from '@vibe-agent-toolkit/utils';
+import {
+  createRegistryIssue,
+  resolveFindings,
+  type ValidationConfig,
+  type ValidationIssue,
+  type ValidationIssueCode,
+} from '@vibe-agent-toolkit/schema';
+import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import { matchesCollection } from './collection-matcher.js';
-import { isParseLimitError, isPerRunParseRefusal, isStackOverflow, type PerRunParseRefusal } from './parse-limits.js';
+import { isParseLimitError, isPerRunParseRefusal, type PerRunParseRefusal } from './parse-limits.js';
 import type { ParseRefusedResource, UnreadableResource } from './resource-registry.js';
 import type { CollectionConfig } from './schemas/project-config.js';
 
@@ -49,7 +55,7 @@ export interface NotAdmittedWording {
 /**
  * What stopped a parse, as the clause every lane reports it with — and, path-free,
  * as the message of the per-blob refusal row a projection lane reads it back from
- * (`parseRefusedRealizations`), so a blob two files share names neither.
+ * (`notAdmittedRealizations`), so a blob two files share names neither.
  *
  * @param error - What refused it
  * @returns The finding code, and the clause naming the limit and its bound or the cause of death
@@ -70,24 +76,16 @@ export function parseRefusedEntry(filePath: string, error: PerRunParseRefusal): 
 }
 
 /**
- * The entry for whatever an IN-PROCESS parse threw that refuses the file: a
- * per-run refusal (the bounded fallback `parseFileCached` takes on an overflow),
- * or a stack overflow in a parse that has no bounded route (the SKILL.md
- * frontmatter parser) — `undefined` for anything else, which the caller
- * handles as it did.
+ * The entry for whatever a single-file parse threw, when it refuses the file
+ * for this run — a limit breach or a dead worker (`isPerRunParseRefusal`) —
+ * and `undefined` for anything else, which the caller handles as it did.
  *
  * @param filePath - The document
  * @param error - What its parse threw
  * @returns The log entry, or `undefined` when the error is not a refusal
  */
-export function inProcessRefusalEntry(filePath: string, error: unknown): ParseRefusedResource | undefined {
-  if (isPerRunParseRefusal(error)) return parseRefusedEntry(filePath, error);
-  if (!isStackOverflow(error)) return undefined;
-  return {
-    filePath,
-    code: 'RESOURCE_PARSE_LIMIT_EXCEEDED',
-    reason: 'its parse overflowed the stack of the thread it ran on (its frontmatter or markdown nests too deeply)',
-  };
+export function parseRefusedEntryFor(filePath: string, error: unknown): ParseRefusedResource | undefined {
+  return isPerRunParseRefusal(error) ? parseRefusedEntry(filePath, error) : undefined;
 }
 
 /**
@@ -147,6 +145,45 @@ export function notAdmittedFindings(
   validation: ValidationConfig,
 ): ValidationIssue[] {
   return resolveFindings(notAdmittedIssues(log, wording), validation);
+}
+
+/** The codes this contract reports a not-admitted file under, and no other finding. */
+const NOT_ADMITTED_CODES: ReadonlySet<string> = new Set<ValidationIssueCode>([
+  'RESOURCE_UNREADABLE',
+  'RESOURCE_PARSE_LIMIT_EXCEEDED',
+  'RESOURCE_PARSE_WORKER_DIED',
+]);
+
+/**
+ * {@link notAdmittedIssues} already built into a report, resolved through the
+ * project's `resources.validation` — its allow list, then its severity — and
+ * every other finding left exactly as it was, in place: for a verb whose other
+ * findings follow a policy of their own (`vat audit` applies no allow list).
+ *
+ * An allow entry's `paths` are project-relative, and the report may be located
+ * against another root (the directory an audit was pointed at), so each finding
+ * is matched at its project-relative path and keeps the location it was reported at.
+ *
+ * @param issues - A report's findings, the not-admitted ones at their default severity
+ * @param validation - The project's `resources.validation` (`{}` when none)
+ * @param roots - The root the report's locations are relative to, and the project's own root
+ * @param roots.locationRoot - The base every `location` in `issues` is relative to
+ * @param roots.projectRoot - The root the project's allow `paths` are relative to
+ * @returns The findings, a not-admitted one dropped when allowed or ignored, else at its resolved severity
+ */
+export function resolveNotAdmittedAmong(
+  issues: readonly ValidationIssue[],
+  validation: ValidationConfig,
+  roots: { readonly locationRoot: string; readonly projectRoot: string },
+): ValidationIssue[] {
+  return issues.flatMap((issue) => {
+    if (!NOT_ADMITTED_CODES.has(issue.code)) return [issue];
+    const location = issue.location === undefined
+      ? undefined
+      : issueLocation(safePath.resolve(roots.locationRoot, issue.location), roots.projectRoot);
+    const [resolved] = resolveFindings([{ ...issue, ...(location !== undefined && { location }) }], validation);
+    return resolved === undefined ? [] : [{ ...resolved, ...(issue.location !== undefined && { location: issue.location }) }];
+  });
 }
 
 /**

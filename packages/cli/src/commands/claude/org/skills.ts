@@ -816,7 +816,7 @@ export async function inspectZipArchive(zipPath: string): Promise<ZipInspection 
 	const unreadable: ZipEntryFailure[] = [];
 	return {
 		uncompressedBytes,
-		declaredName: declaredNameOf(opened, elected, unreadable),
+		declaredName: await declaredNameOf(opened, elected, unreadable),
 		neverUploaded,
 		documents: inflateMarkdownMembers(opened, files, unreadable),
 		bundleRoot: skillRoot === '' ? undefined : skillRoot,
@@ -914,10 +914,10 @@ function skillMdOf(files: readonly ArchiveEntry[], root: string): ArchiveEntry |
  * is already computed from headers) — see {@link inflateOrRecord}, which records
  * the refusal so the operator learns why no name was read.
  */
-function declaredNameOf(archive: OpenedArchive, entry: ArchiveEntry | undefined, unreadable: ZipEntryFailure[]): string | undefined {
-	if (entry === undefined || entry.size > MAX_INSPECTED_DOCUMENT_BYTES) return undefined;
+function declaredNameOf(archive: OpenedArchive, entry: ArchiveEntry | undefined, unreadable: ZipEntryFailure[]): Promise<string | undefined> {
+	if (entry === undefined || entry.size > MAX_INSPECTED_DOCUMENT_BYTES) return Promise.resolve(undefined);
 	const content = inflateOrRecord(archive, entry, unreadable);
-	return content === undefined ? undefined : declaredSkillNameIn(content.toString('utf8'));
+	return content === undefined ? Promise.resolve(undefined) : declaredSkillNameIn(content.toString('utf8'));
 }
 
 async function sendSkillUpload(
@@ -938,8 +938,8 @@ async function sendSkillUpload(
  * The name a SKILL.md declares, which is both the uploaded skill's display
  * title and the top-level directory the API keys it by.
  */
-function requireDeclaredName(skillMdPath: string): string {
-	const declared = readDeclaredSkillName(skillMdPath);
+async function requireDeclaredName(skillMdPath: string): Promise<string> {
+	const declared = await readDeclaredSkillName(skillMdPath);
 	if (declared === undefined) {
 		throw new CommandRefusalError(
 			'USAGE_INVALID',
@@ -1182,7 +1182,7 @@ async function prepareSkillUpload(
 
 	// The skill's own declared name — not the directory it happens to sit in,
 	// which for a built or extracted tree carries no reliable identity.
-	const declaredName = requireDeclaredName(skillMdPath);
+	const declaredName = await requireDeclaredName(skillMdPath);
 	const displayTitle = titleOverride ?? declaredName;
 
 	// API requires files inside a top-level directory (e.g. skill_name/SKILL.md)

@@ -24,7 +24,7 @@
  *
  * Awaiting `loadParser` above each `try` was tried too, and it is what these
  * tests used to drive. It works and it costs too much: the load happens inside
- * `parseKeyed`, past the cache's hit-path return, precisely so a fully warm run
+ * the parse worker, after the cache's hit-path return, precisely so a fully warm run
  * loads no parser at all (measured: 1,049 scripts warm against 1,235 cold). Any
  * hoist cancels that silently.
  *
@@ -110,6 +110,7 @@ function failingPolicy(): ParsePoolPolicy {
           if (error) throw error;
           return real.parseIntoCache(kind, content, byteLength, cacheKey);
         },
+        harnessFacts: async (harness, content, byteLength) => real.harnessFacts(harness, content, byteLength),
         shutdown: async () => real.shutdown(),
       };
     },

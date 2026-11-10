@@ -486,11 +486,11 @@ function checkFilesConfigDestsOf(built: readonly CheckEntry[], projectRoot: stri
  * — measured `warnings: 1` with the override at `skills.defaults`, at
  * `skills.config.<name>`, and with no override at all.
  *
- * `validation.allow` is deliberately NOT applied. Allow is a per-PATH suppression
- * whose usage is only answerable across a whole run, and this phase would have to
- * drain a ledger it is not the run of — reporting ALLOW_UNUSED for every entry the
- * project declares for other lanes. Severity is answerable per unit of work; allow
- * is not. See `AllowUsageLedger` in `@vibe-agent-toolkit/schema`.
+ * `resolveFindings` applies that config's `validation.allow` too (paths relative to
+ * `cwd`), but drains no allow ledger: this phase is not the run of the project's
+ * allow list, so it never reports `ALLOW_UNUSED` — and an expired entry that matches
+ * still suppresses its finding with no `ALLOW_EXPIRED`. See `AllowUsageLedger` in
+ * `@vibe-agent-toolkit/schema`.
  *
  * Locations anchor at `cwd`, the run's stated root, so a reader can open them.
  *

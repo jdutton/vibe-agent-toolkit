@@ -28,11 +28,11 @@
  *   logging it, so its caller must classify it (`isPerRunParseRefusal(`) or the
  *   refusal escapes as a raw `ParseLimitError` with no file named. Same three
  *   ways out, through {@link SINGLE_ADD_NOT_CLASSIFIED_HERE}.
- * - **A population.** A projection files a refused parse as a
- *   `BLOB_PARSE_LIMIT_EXCEEDED`/`BLOB_PARSE_WORKER_DIED` condition row, in no
- *   list but its rows. A file that runs one — `populate(`, or a builder in
+ * - **A population.** A projection files a refused parse, and a file it could
+ *   not read, as a condition row or an `unreadable` realization, in no list but
+ *   its rows. A file that runs one — `populate(`, or a builder in
  *   {@link POPULATION_BUILDERS} — must read the rows
- *   (`describeBlobRefusals(`, `parseRefusedRealizations(`), be a listed builder,
+ *   (`describeBlobRefusals(`, `notAdmittedRealizations(`), be a listed builder,
  *   or be listed in {@link POPULATION_NOT_READ_HERE}.
  *
  * ⚠️ The detector is textual: a crawl reached through a name not listed here —
@@ -95,7 +95,7 @@ const POPULATION_OWNER = 'packages/resources/src/projection/merge.ts';
 const POPULATE = 'populate';
 
 /** The reads that discharge a population: its refusal rows, as a line or per path. */
-const POPULATION_READS = ['describeBlobRefusals(', 'parseRefusedRealizations('] as const;
+const POPULATION_READS = ['describeBlobRefusals(', 'notAdmittedRealizations('] as const;
 
 /**
  * Functions that run a caller's population build and read its refusal rows

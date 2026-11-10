@@ -48,6 +48,7 @@ import { parseMarkdownContent } from '../../src/link-parser.js';
 import { mimeTypeForPath } from '../../src/mime-type.js';
 import { blobRowFor, harnessRowsFor } from '../../src/projection/blob-facts.js';
 import { blobReferencesFor } from '../../src/projection/blob-references.js';
+import { claudeMemoryFactsOf } from '../../src/projection/claude-memory.js';
 import type { ExtentContribution } from '../../src/projection/contributor.js';
 import { AgenticConventionContributor } from '../../src/projection/contributors/agentic-convention.js';
 import {
@@ -65,6 +66,7 @@ import {
   assertHarnessSettled,
   runHarnessPass,
   type HarnessContentReader,
+  type HarnessFactsDeriver,
 } from '../../src/projection/harness/harness-pass.js';
 import { ProjectionBuilder, type Projection, type ProjectionBase } from '../../src/projection/projection.js';
 import type { BlobReferenceRow, ReferenceSyntacticForm } from '../../src/schemas/projection-blobs.js';
@@ -319,7 +321,7 @@ export function addFile(builder: ProjectionBuilder, file: FixtureFile, root: str
 export function addFileWithFacts(builder: ProjectionBuilder, file: FixtureFile, root: string): void {
   addFile(builder, file, root);
   if (file.markdown === undefined || file.deferred === true) return;
-  const harness = harnessRowsFor(contentKeyFor(file), CLAUDE_CODE.id, CLAUDE_CODE.factsOf(file.markdown));
+  const harness = harnessRowsFor(contentKeyFor(file), CLAUDE_CODE.id, claudeMemoryFactsOf(file.markdown));
   for (const row of harness.imports) builder.addHarnessBlobImport(row);
   builder.addHarnessBlobFacts(harness.facts);
 }
@@ -399,11 +401,19 @@ function addDirectory(builder: ProjectionBuilder, dirPath: string, root: string)
   builder.addRealization(realizationRow(resourceId, dirPath, null, true));
 }
 
+/**
+ * The harness pass's deriver for an in-memory fixture: the shipped reader, run
+ * in-process — a fixture has no pool, and its files are never pathological.
+ * Production derives through the run's dispatcher (`dispatcherHarnessFacts`).
+ */
+export const IN_PROCESS_HARNESS_FACTS: HarnessFactsDeriver = (_harness, content) => Promise.resolve(claudeMemoryFactsOf(content));
+
 /** The tables `closureProvenance` reads — see {@link closureFixtureFrom}. */
 export interface ClosureFixture {
   readonly resourceRealizations: ProjectionBase['resourceRealizations'];
   readonly blobs: ProjectionBase['blobs'];
   readonly blobReferences: ProjectionBase['blobReferences'];
+  readonly blobConditions: ProjectionBase['blobConditions'];
   readonly harnessBlobFacts: ProjectionBase['harnessBlobFacts'];
   readonly harnessBlobImports: ProjectionBase['harnessBlobImports'];
 }
@@ -447,6 +457,7 @@ export function closureFixtureFrom(root: string, files: Record<string, string>):
     resourceRealizations: base.resourceRealizations,
     blobs: base.blobs,
     blobReferences: base.blobReferences,
+    blobConditions: base.blobConditions,
     harnessBlobFacts: base.harnessBlobFacts,
     harnessBlobImports: base.harnessBlobImports,
   };
@@ -571,13 +582,13 @@ export async function claudeContextFixture(
   // `frontier` mode, so a member whose facts arrive in one round is followed
   // in the next; and a contributor still changing its answer is unsettled
   // whatever the pass did.
-  await runHarnessPass(builder, [CLAUDE_CODE], readContent);
+  await runHarnessPass(builder, [CLAUDE_CODE], readContent, IN_PROCESS_HARNESS_FACTS);
   const settle = async (round: number, digests: readonly string[]): Promise<void> => {
     if (round > MAX_FIXTURE_ROUNDS) {
       throw new Error(`claudeContextFixture: the closure stratum was still moving after ${MAX_FIXTURE_ROUNDS} rounds.`);
     }
     const next = await contributeClosureStratum(builder, base);
-    const { derived } = await runHarnessPass(builder, [CLAUDE_CODE], readContent);
+    const { derived } = await runHarnessPass(builder, [CLAUDE_CODE], readContent, IN_PROCESS_HARNESS_FACTS);
     const contributorsMoved = next.join('\0') !== digests.join('\0');
     if (derived === 0 && !contributorsMoved) return;
     return settle(round + 1, next);

@@ -19,12 +19,14 @@ import {
   DeferredArtifacts,
   listingRefusalRemedy,
   loadConfig,
+  type ParseDispatcher,
   parseFileCached,
   type ParseRefusedResource,
   type RegistryUnreadablePolicy,
   ResourceRegistry,
   type ResourcePopulationSource,
   type SkillExecutableEntry,
+  withParseDispatcher,
 } from '@vibe-agent-toolkit/resources';
 import {
   CODE_REGISTRY,
@@ -66,7 +68,7 @@ import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
 import { collectPreBuildGlobFindings, preBuildGlobFindingsToIssues } from '../files-config.js';
 import { isSkillPackagingInputError } from '../packaging-errors.js';
-import { inProcessRefusalIssue, parseRefusedIssues } from '../parse-refusal-issues.js';
+import { parseRefusalIssue, parseRefusedIssues } from '../parse-refusal-issues.js';
 import {
   conventionalSuiteProbe,
   partitionTestInputFileEntries,
@@ -936,6 +938,12 @@ export interface SkillValidationSharedContext {
   /** Pre-populated tracker for the repo that contains the skill. */
   gitTracker?: GitTracker;
   /**
+   * The run's parse dispatcher, for the parses this validator makes itself (the
+   * SKILL.md, its frontmatter's `allowed-tools`), so a batch pays one worker
+   * start. Omitted, each skill's validation holds its own and shuts it down.
+   */
+  dispatcher?: ParseDispatcher;
+  /**
    * Root every emitted `ValidationIssue.location` is expressed relative to.
    *
    * This is the ANCHOR base and it is a DIFFERENT concern from the project
@@ -1056,11 +1064,34 @@ function missingFrontmatterIssue(frontmatterError: string | undefined, location:
  * @param shared - Optional shared context (registry + gitTracker) for batched runs
  * @returns Validation result with active errors, warnings, and allowed issues
  */
-export async function validateSkillForPackaging(
+export function validateSkillForPackaging(
   skillPath: string,
   packagingConfig?: SkillPackagingConfig,
   context: 'source' | 'built' = 'source',
   shared?: SkillValidationSharedContext,
+): Promise<PackagingValidationResult> {
+  return withParseDispatcher(
+    (dispatcher) => validateSkillForPackagingOn(skillPath, packagingConfig, context, shared, dispatcher),
+    { dispatcher: shared?.dispatcher },
+  );
+}
+
+/**
+ * {@link validateSkillForPackaging}, on a parse dispatcher.
+ *
+ * @param skillPath - Path to SKILL.md
+ * @param packagingConfig - Optional packaging configuration
+ * @param context - Whether the skill is being validated from source or built output
+ * @param shared - Optional shared context for batched runs
+ * @param dispatcher - Where this validator's own parses run
+ * @returns Validation result
+ */
+async function validateSkillForPackagingOn(
+  skillPath: string,
+  packagingConfig: SkillPackagingConfig | undefined,
+  context: 'source' | 'built',
+  shared: SkillValidationSharedContext | undefined,
+  dispatcher: ParseDispatcher,
 ): Promise<PackagingValidationResult> {
   const rawIssues: ValidationIssue[] = [];
 
@@ -1080,7 +1111,7 @@ export async function validateSkillForPackaging(
   // A `built` skill is VAT's own output re-read: every read of its tree the OS refuses is the
   // destination's, never the user's input. The ONE mapping; every read below takes `side`.
   const side: FsSide = context === 'built' ? 'destination' : 'source';
-  const parsed = await parseSkillMarkdown(skillPath, side, locationRoot);
+  const parsed = await parseSkillMarkdown(skillPath, side, locationRoot, dispatcher);
   if ('limit' in parsed) return parseLimitResult(skillPath, parsed.limit, packagingConfig, shared);
   const { parseResult } = parsed;
   // The parser already decoded these bytes; a second whole-file read of the same
@@ -1103,7 +1134,7 @@ export async function validateSkillForPackaging(
   // surface each as a CAPABILITY_* issue. Observations are also returned
   // on the result so downstream verdict computation (CLI layer) can recover
   // payloads such as EXTERNAL_CLI binary names.
-  const { evidence, observations } = runCompatDetectors(skillContent, skillPath, locationRoot);
+  const { evidence, observations } = await runCompatDetectors(skillContent, skillPath, locationRoot, { dispatcher });
   for (const obs of observations) {
     rawIssues.push(observationToIssue(obs, skillLocation));
   }
@@ -1351,25 +1382,26 @@ function runFrameworkFor(
 }
 
 /**
- * The skill's SKILL.md, parsed on this thread — or, when this thread's stack
- * overflows, by one bounded parse through the pool (`parseFileCached`) — or the
- * finding that replaces the parse when that refuses it. Any other failure
- * propagates as it always did.
+ * The skill's SKILL.md, parsed on the bounded route (`parseFileCached`, in the
+ * worker) — or the finding that replaces the parse when the worker refuses it.
+ * Any other failure propagates as it always did.
  *
  * @param skillPath - The SKILL.md
  * @param side - Whose fault a refused read is
  * @param locationRoot - The base issues are located against
+ * @param dispatcher - Where the parse runs
  * @returns The parse, or the refusal's issue
  */
 async function parseSkillMarkdown(
   skillPath: string,
   side: FsSide,
   locationRoot: string,
+  dispatcher: ParseDispatcher,
 ): Promise<{ parseResult: Awaited<ReturnType<typeof parseFileCached>> } | { limit: ValidationIssue }> {
   try {
-    return { parseResult: await parseFileCached(skillPath, 'markdown', { side }) };
+    return { parseResult: await parseFileCached(skillPath, 'markdown', { side, dispatcher }) };
   } catch (error) {
-    const limit = inProcessRefusalIssue(error, skillPath, locationRoot);
+    const limit = parseRefusalIssue(error, skillPath, locationRoot);
     if (limit === undefined) throw error;
     return { limit };
   }

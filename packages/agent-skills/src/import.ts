@@ -83,7 +83,7 @@ export async function importSkillToAgent(options: ImportOptions): Promise<Import
   }
 
   // Parse frontmatter
-  const parseResult = parseFrontmatter(content);
+  const parseResult = await parseFrontmatter(content);
 
   if (!parseResult.success) {
     return {

@@ -9,7 +9,7 @@ import { readdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { parseFileCached } from '@vibe-agent-toolkit/resources';
+import { parseFileCached, type ParseRoute, withParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
   direntKindFollowingSync,
@@ -132,11 +132,14 @@ function extractLocalLinks(content: string): string[] {
  * For markdown: regex-matches `[text](href)` links, skipping code blocks.
  * For HTML/HTM: uses the parse5-based HTML parser and returns `local_file` hrefs only.
  * Fragments are stripped from all returned hrefs.
+ *
+ * @param filePath - A packaged content file
+ * @param route - The check's parse dispatcher (HTML parses run in the bounded worker)
  */
-async function extractLocalHrefs(filePath: string): Promise<string[]> {
+async function extractLocalHrefs(filePath: string, route: ParseRoute): Promise<string[]> {
   if (filePath.endsWith('.html') || filePath.endsWith('.htm')) {
     // The packaged output this build just wrote: a refused read is the destination's, not the user's input.
-    const result = await parseFileCached(filePath, 'html', { side: 'destination' });
+    const result = await parseFileCached(filePath, 'html', { ...route, side: 'destination' });
     return result.links
       .filter(link => link.type === 'local_file')
       .map(link => {
@@ -251,6 +254,7 @@ function collectBrokenLinkIssues(
 async function collectReferencedPaths(
   outputDir: string,
   allFileSet: Set<string>,
+  route: ParseRoute,
 ): Promise<Set<string>> {
   const referenced = new Set<string>();
   const skillMdPath = safePath.join(outputDir, 'SKILL.md');
@@ -268,7 +272,7 @@ async function collectReferencedPaths(
 
     if (withFsFaultSync(outputProbe(filePath), () => followedKindSync(filePath, outputDir)) === 'absent') return;
 
-    const hrefs = await extractLocalHrefs(filePath);
+    const hrefs = await extractLocalHrefs(filePath, route);
 
     for (const href of hrefs) {
       const resolved = toForwardSlash(safePath.resolve(dirname(filePath), href));
@@ -355,7 +359,7 @@ export async function checkUnreferencedFiles(
   const declaredDests = new Set(filesConfigDests.map(d => normalizeRelPath(d)));
   const allFiles = walkDir(outputDir);
   const allFileSet = new Set(allFiles.map(f => toForwardSlash(f)));
-  const referenced = await collectReferencedPaths(outputDir, allFileSet);
+  const referenced = await withParseDispatcher((dispatcher) => collectReferencedPaths(outputDir, allFileSet, { dispatcher }));
 
   // Second pass: treat any path mention in packaged content files as documentation.
   const candidates = allFiles.filter(f => !referenced.has(toForwardSlash(f)));
@@ -461,7 +465,8 @@ export async function checkBrokenPackagedLinks(
 
   // Independent reads; a failure is the first by file order, and the issues are
   // folded afterwards in that order.
-  const hrefsByFile = await mapConcurrentFailingInOrder(linkableFiles, (sourceFile) => extractLocalHrefs(sourceFile));
+  const hrefsByFile = await withParseDispatcher((dispatcher) =>
+    mapConcurrentFailingInOrder(linkableFiles, (sourceFile) => extractLocalHrefs(sourceFile, { dispatcher })));
   return linkableFiles.flatMap((sourceFile, index) =>
     collectBrokenLinkIssues(sourceFile, hrefsByFile[index] ?? [], allFileSet, outputDir, droppedDestSet),
   );

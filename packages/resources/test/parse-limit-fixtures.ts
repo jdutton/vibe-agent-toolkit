@@ -7,7 +7,10 @@
  * milliseconds, not the seconds the defaults allow.
  */
 
-import type { ParseLimits } from '../src/parse-limits.js';
+import { afterEach } from 'vitest';
+
+import { isParseLimitError, type ParseLimitName, type ParseLimits } from '../src/parse-limits.js';
+import { createParsePool, type ParsePool, type ParsePoolOptions } from '../src/parse-pool.js';
 
 /**
  * A list nested `depth` levels deep. The parser's cost is quadratic in the depth:
@@ -58,3 +61,38 @@ export const TIGHT_LIMITS: ParseLimits = {
   outputDepth: 1000,
   inputBytes: 8 * 1024 * 1024,
 };
+
+/**
+ * Register a suite's pool lifecycle: every pool the returned factory opens is
+ * shut down after the test that opened it.
+ *
+ * @returns A factory for pools under {@link TIGHT_LIMITS} with `limits` named over
+ *   them, one thread unless `options` says otherwise
+ */
+export function limitedPools(): (limits?: Partial<ParseLimits>, options?: Omit<ParsePoolOptions, 'limits'>) => ParsePool {
+  const open: ParsePool[] = [];
+  afterEach(async () => {
+    await Promise.all(open.splice(0, open.length).map((pool) => pool.shutdown()));
+  });
+  return (limits = {}, options = {}) => {
+    const pool = createParsePool({ size: 1, ...options, limits: { ...TIGHT_LIMITS, ...limits } });
+    open.push(pool);
+    return pool;
+  };
+}
+
+/**
+ * The limit a pool job was stopped at.
+ *
+ * @param job - The job's promise
+ * @returns The name of the limit it crossed
+ * @throws If the job completed, or failed for any reason but a limit
+ */
+export async function limitStoppedAt(job: Promise<unknown>): Promise<ParseLimitName> {
+  const error: unknown = await job.then(
+    () => new Error('the job completed; it was meant to be stopped at a limit'),
+    (rejection: unknown) => rejection,
+  );
+  if (!isParseLimitError(error)) throw error;
+  return error.limit;
+}

@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { ParseCache, ParseDispatcher, type ParseRoute } from '@vibe-agent-toolkit/resources';
 import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, type SymlinkCapability } from '@vibe-agent-toolkit/utils';
 import { registerScratchTmpdir, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, expect } from 'vitest';
@@ -14,6 +15,19 @@ import type { LinkedFileValidationResult, ValidationResult } from '../src/valida
  * Setup temporary directory for tests
  * Automatically creates and cleans up temp dir before/after each test
  */
+/**
+ * One parse route for a whole test file: a one-thread dispatcher over a
+ * DISABLED cache, shut down after the file. Every parse runs in the bounded
+ * worker, as shipped code's does, and no test reads another's cache entry.
+ *
+ * @returns The route to pass wherever a `ParseRoute` is taken
+ */
+export function setupParseRoute(): ParseRoute {
+  const dispatcher = new ParseDispatcher(new ParseCache({ enabled: false }), { size: 1 });
+  afterAll(() => dispatcher.shutdown());
+  return { dispatcher };
+}
+
 /**
  * Package `skillPath` IN PLACE into `options.outputPath`: written whether or not its post-build
  * checks pass, for a test that inspects what the packager wrote. `packageSkill` lands only a

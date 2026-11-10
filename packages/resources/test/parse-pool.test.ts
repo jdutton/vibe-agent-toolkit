@@ -25,9 +25,11 @@
  *   thread does not fail a test; it hangs the file, and then CI.
  */
 
-import { promises as fs } from 'node:fs';
+import diagnosticsChannel from 'node:diagnostics_channel';
+import { existsSync, promises as fs } from 'node:fs';
 import { availableParallelism } from 'node:os';
 import { pathToFileURL } from 'node:url';
+import { Worker } from 'node:worker_threads';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
@@ -38,7 +40,14 @@ import { parseHtmlContent } from '../src/html-link-parser.js';
 import { type ParseResult, parseMarkdownContent } from '../src/link-parser.js';
 import type { DocumentParserKind } from '../src/mime-type.js';
 import { isParserUnavailable, ParseCache } from '../src/parse-cache.js';
-import { isParseLimitError, isParseWorkerDiedError } from '../src/parse-limits.js';
+import {
+  type HeapBounds,
+  heapBounds,
+  isParseLimitError,
+  isParseWorkerDiedError,
+  ParseLimitError,
+  resolveParseLimits,
+} from '../src/parse-limits.js';
 import {
   __setParseWorkerEntryForTest,
   createParsePool,
@@ -436,12 +445,31 @@ describe('a broken install is loud', () => {
     // A worker that loads and then never answers (a parser import that hangs)
     // is a broken install too: without this, each document waits out its whole
     // `timeMs` in turn and is blamed for it.
-    await seedWorkerEntry(`import { parentPort } from 'node:worker_threads';\n${READY_LINE}\nparentPort.on('message', () => undefined);\n`);
+    //
+    // 🔑 The clock is the test's (see the next test). A thread that has not yet
+    // posted `ready` when its deadline fires is a broken install at once, so on a
+    // real clock a thread slow to START under CI load (past 150 ms) called the
+    // install broken on the first document. The deadline is advanced only once
+    // `ready` has reached the pool; `performance` is faked with the timers, so
+    // the pool never reads the stop as a late parent's.
+    vi.useFakeTimers(TEST_CLOCK);
+    const entry = await seedWorkerEntry(neverAnswering());
     const pool = createParsePool({ size: 1, limits: { timeMs: 150 } });
     openPools.push(pool);
 
     const outcomes: unknown[] = [];
-    for (const content of ['# a\n', '# b\n', '# c\n', '# d\n']) outcomes.push(await outcomeOf(pool, content));
+    try {
+      for (const content of ['# a\n', '# b\n', '# c\n']) {
+        const outcome = outcomeOf(pool, content);
+        await consumeMarker(readyMarker(entry));
+        vi.advanceTimersByTime(150);
+        outcomes.push(await outcome);
+      }
+      // The install is broken by now: no thread starts, so there is nothing to wait for.
+      outcomes.push(await outcomeOf(pool, '# d\n'));
+    } finally {
+      vi.useRealTimers();
+    }
 
     expect(outcomes.map((outcome) => (isParseLimitError(outcome) ? outcome.limit : isParserUnavailable(outcome)))).toStrictEqual([
       'timeMs',
@@ -462,7 +490,7 @@ describe('a broken install is loud', () => {
     //
     // Three breaches IN A ROW, no answer between them: an answer resets the
     // count, so a run broken up by answers cannot tell counted from uncounted.
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    vi.useFakeTimers(TEST_CLOCK);
     const entry = await seedWorkerEntry([
       "import { writeFileSync } from 'node:fs';",
       "import { parentPort } from 'node:worker_threads';",
@@ -519,25 +547,237 @@ async function announcedParserLoaded(marker: string): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
+/** The timers and clock a test drives by hand: the pool's deadline, its heap sampler, and the clock it judges lateness on. */
+const TEST_CLOCK = { toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] } as const satisfies Parameters<typeof vi.useFakeTimers>[0];
+
+/**
+ * @param entry - A seeded worker entry
+ * @returns The marker {@link announcingReady} writes beside it
+ */
+function readyMarker(entry: string): string {
+  return safePath.join(safePath.resolve(entry, '..'), 'ready');
+}
+
+/**
+ * A seeded worker that posts `ready`, then writes {@link readyMarker} — after
+ * the post, so seeing the marker means `ready` is in the port — and never answers.
+ *
+ * @returns The entry's source
+ */
+function neverAnswering(): string {
+  return [
+    "import { writeFileSync } from 'node:fs';",
+    "import { parentPort } from 'node:worker_threads';",
+    READY_LINE,
+    "writeFileSync(new URL('./ready', import.meta.url), '');",
+    "parentPort.on('message', () => undefined);",
+  ].join('\n');
+}
+
+/**
+ * Wait, on no clock, until `marker` exists and the post before it has reached
+ * the pool, then remove it, so the next thread's marker is its own.
+ *
+ * @param marker - A file a seeded thread writes after a post
+ */
+async function consumeMarker(marker: string): Promise<void> {
+  await announcedParserLoaded(marker);
+  await fs.rm(marker);
+}
+
+/**
+ * Block this thread — the pool's own — until `done` holds, as a parent busy
+ * with synchronous work does. Bounded, so a seed that never satisfies it fails
+ * loud instead of hanging the suite.
+ *
+ * @param done - Read on every spin
+ */
+function blockUntil(done: () => boolean): void {
+  const giveUpAt = performance.now() + 30_000;
+  while (!done()) {
+    if (performance.now() > giveUpAt) throw new Error('blockUntil: the condition never held');
+  }
+}
+
+describe('a parent late to its own deadline', () => {
+  it('admits a document whose answer was already in the port when the late deadline fired', async () => {
+    // The parent blocks past `timeMs` while a fast document is in flight; by the
+    // time its loop turns, the timer is due AND the answer is queued. The timers
+    // phase runs before the poll phase that delivers the port, so a deadline that
+    // decides at once refuses a document that was answered in time.
+    const entry = await seedWorkerEntry([
+      "import { writeFileSync } from 'node:fs';",
+      "import { parentPort } from 'node:worker_threads';",
+      'const post = parentPort.postMessage.bind(parentPort);',
+      "parentPort.postMessage = (message, transfer) => { post(message, transfer); if (typeof message?.id === 'number') writeFileSync(new URL('./answered', import.meta.url), ''); };",
+      `await import(${JSON.stringify(BUILT_WORKER)});`,
+    ].join('\n'));
+    const answered = safePath.join(safePath.resolve(entry, '..'), 'answered');
+    const pool = createParsePool({ size: 1, limits: { timeMs: 200 } });
+    openPools.push(pool);
+
+    const outcome = outcomeOf(pool, '# ok\n');
+    const dispatchedAt = performance.now();
+    blockUntil(() => existsSync(answered) && performance.now() > dispatchedAt + 400);
+
+    expect(await outcome).toBe('answered');
+  });
+
+  it('never counts a stop it made late toward the broken-install breaker', async () => {
+    // A thread that never answers, stopped at `timeMs` before its parser loaded,
+    // counts toward the three — but only when the parent read the clock on time.
+    // A parent this late was starved itself; the thread it judged may have been
+    // starved by the same load, so the stop is a per-run `timeMs` refusal only.
+    const entry = await seedWorkerEntry(neverAnswering());
+    const pool = createParsePool({ size: 1, limits: { timeMs: 100 } });
+    openPools.push(pool);
+
+    // A stopped thread holds its slot until its `exit`, which needs the loop to
+    // turn: each document is dispatched only once the last thread is gone, so the
+    // pool spawns its replacement at once and the block below cannot starve it.
+    const exits: Promise<void>[] = [];
+    const onWorker = (message: unknown): void => {
+      exits.push(new Promise((resolve) => (message as { worker: Worker }).worker.once('exit', () => resolve())));
+    };
+    diagnosticsChannel.subscribe('worker_threads', onWorker);
+    const outcomes: unknown[] = [];
+    try {
+      for (const content of ['# a\n', '# b\n', '# c\n', '# d\n']) {
+        const outcome = outcomeOf(pool, content);
+        const dispatchedAt = performance.now();
+        // Ready first: a thread stopped before `ready` is a broken install outright.
+        blockUntil(() => existsSync(readyMarker(entry)) && performance.now() > dispatchedAt + 600);
+        outcomes.push(await outcome);
+        await exits.at(-1);
+        await fs.rm(readyMarker(entry));
+      }
+    } finally {
+      diagnosticsChannel.unsubscribe('worker_threads', onWorker);
+    }
+
+    expect(outcomes.map((outcome) => (isParseLimitError(outcome) ? outcome.limit : outcome))).toStrictEqual([
+      'timeMs', 'timeMs', 'timeMs', 'timeMs',
+    ]);
+  });
+});
+
 describe('a thread V8 stops at its own heap ceiling', () => {
-  it('names V8\'s ceiling — twice the sampler\'s bound — never the bound the sampler did not stop it at', async () => {
-    // The thread stays responsive for 300 ms, so heap samples land (every
-    // 50 ms) and the pool learns the bound it enforces; then it dies as V8
-    // kills a thread at its ceiling. The sampler never stopped it, so a refusal
-    // naming the sampler's 1,024 MiB names a limit that did not apply.
-    await seedWorkerEntry([
+  it('names V8\'s ceiling as the last sample read it, never the bound the sampler did not stop it at', async () => {
+    // The thread dies as V8 kills a thread at its ceiling, but only once a heap
+    // sample has landed and the pool has learned the bound it enforces: the
+    // test watches the sampler's own call and lets the thread die after it (a
+    // marker the thread polls for). The sampler never stopped it, so a refusal
+    // naming the sampler's bound names a limit that did not apply. The bounds
+    // are read off the sample the test watched land, never assumed from 1,024
+    // MiB: a process-wide `--max-old-space-size` (CI sets 512) lowers them.
+    const entry = await seedWorkerEntry([
+      "import { existsSync } from 'node:fs';",
       "import { parentPort } from 'node:worker_threads';",
       READY_LINE,
-      "parentPort.on('message', () => { setTimeout(() => { const error = new Error('out of memory'); error.code = 'ERR_WORKER_OUT_OF_MEMORY'; throw error; }, 300); });",
+      "const die = new URL('./die', import.meta.url);",
+      "parentPort.on('message', () => { const poll = setInterval(() => { if (!existsSync(die)) return; clearInterval(poll); const error = new Error('out of memory'); error.code = 'ERR_WORKER_OUT_OF_MEMORY'; throw error; }, 5); });",
     ].join('\n'));
+    let landed: HeapBounds | undefined;
+    const sample = Worker.prototype.getHeapStatistics;
+    const spy = vi.spyOn(Worker.prototype, 'getHeapStatistics').mockImplementation(function (this: Worker) {
+      // Recorded a turn later, so the pool's own `then`, chained after this one, has run.
+      return sample.call(this).then((stats) => {
+        setImmediate(() => {
+          landed = heapBounds(stats, this.resourceLimits?.maxYoungGenerationSizeMb ?? 0, resolveParseLimits(undefined).heapMb);
+        });
+        return stats;
+      });
+    });
     const pool = trackedPool(1);
 
-    const refusal: unknown = await pool.parse('markdown', '# hi\n', 5).then(() => undefined, (error: unknown) => error);
+    try {
+      const refusal = pool.parse('markdown', '# hi\n', 5).then(() => undefined, (error: unknown) => error);
+      await vi.waitFor(() => {
+        expect(landed).toBeDefined();
+      }, { timeout: 60_000, interval: 5 });
+      await fs.writeFile(safePath.join(safePath.resolve(entry, '..'), 'die'), '');
+      const bound = await refusal.then((error) => (isParseLimitError(error) && error.limit === 'heapMb' ? error.bound : error));
 
-    expect(isParseLimitError(refusal) && refusal.limit).toBe('heapMb');
-    expect(isParseLimitError(refusal) && refusal.bound).toMatch(/^V8's own heap ceiling, 2048 MiB heap/);
-    expect(isParseLimitError(refusal) && refusal.bound).not.toMatch(/^1024 MiB/);
+      expect(bound).toBe(ParseLimitError.heapCeiling(landed, resolveParseLimits(undefined).heapMb).bound);
+      expect(bound).toMatch(/^V8's own heap ceiling, \d+ MiB heap — above the \d+ MiB the pool's heap sampler enforces/);
+    } finally {
+      spy.mockRestore();
+    }
   });
+});
+
+/**
+ * Serve every heap sample with V8's real bounds but a scripted used heap.
+ *
+ * @param script - The used heap, in MiB, for each sample in turn (the last repeats), given the bounds the
+ *   first real sample reads — a process-wide `--max-old-space-size` (CI sets 512) lowers them
+ * @returns How many samples were served, and the bounds the script was written against
+ */
+function scriptedHeap(script: (bounds: HeapBounds, youngMb: number) => number[]): { served: () => number; bounds: () => HeapBounds | undefined } {
+  const sample = Worker.prototype.getHeapStatistics;
+  let served = 0;
+  let read: HeapBounds | undefined;
+  let usedMb: number[] = [];
+  vi.spyOn(Worker.prototype, 'getHeapStatistics').mockImplementation(function (this: Worker) {
+    return sample.call(this).then((stats) => {
+      const youngMb = this.resourceLimits?.maxYoungGenerationSizeMb ?? 0;
+      if (read === undefined) {
+        read = heapBounds(stats, youngMb, resolveParseLimits(undefined).heapMb);
+        usedMb = script(read, youngMb);
+      }
+      const mb = usedMb[Math.min(served, usedMb.length - 1)] ?? 0;
+      served += 1;
+      return { ...stats, used_heap_size: mb * 1_048_576 };
+    });
+  });
+  return { served: () => served, bounds: () => read };
+}
+
+/**
+ * One job on a thread that never answers, under a scripted heap ({@link scriptedHeap}).
+ *
+ * @param script - See {@link scriptedHeap}
+ * @returns The heap refusal's bound (or the outcome, if not one), the samples served, and the bounds read
+ */
+async function heapRefusalUnder(
+  script: (bounds: HeapBounds, youngMb: number) => number[],
+): Promise<{ bound: unknown; served: number; bounds: HeapBounds | undefined }> {
+  await seedWorkerEntry([
+    "import { parentPort } from 'node:worker_threads';",
+    READY_LINE,
+    "parentPort.on('message', () => undefined);",
+  ].join('\n'));
+  const heap = scriptedHeap(script);
+  try {
+    const outcome = await outcomeOf(trackedPool(1), '# hi\n');
+    return {
+      bound: isParseLimitError(outcome) && outcome.limit === 'heapMb' ? outcome.bound : outcome,
+      served: heap.served(),
+      bounds: heap.bounds(),
+    };
+  } finally {
+    vi.restoreAllMocks();
+  }
+}
+
+describe('a heap past its bound', () => {
+  it('is not stopped while it rises, only once a fall too deep for a scavenge shows what it still holds', async () => {
+    const { bound, served, bounds } = await heapRefusalUnder(({ appliedMb, stopMb }, youngMb) => {
+      // The rise must stay below the stop, or the stop decides instead.
+      expect(appliedMb + youngMb + 4).toBeLessThan(stopMb);
+      return [appliedMb + 1, appliedMb + youngMb + 2, appliedMb + youngMb + 4, appliedMb + 1];
+    });
+
+    expect(bound).toBe(ParseLimitError.heap(bounds?.appliedMb ?? 0, resolveParseLimits(undefined).heapMb).bound);
+    expect(served).toBeGreaterThanOrEqual(4);
+  }, 60_000);
+
+  it('is stopped past the stop with no fall at all, and not a sample before', async () => {
+    const { bound, served, bounds } = await heapRefusalUnder(({ appliedMb, stopMb }) => [appliedMb + 1, stopMb, stopMb, stopMb, stopMb + 1]);
+
+    expect(bound).toBe(ParseLimitError.heap(bounds?.appliedMb ?? 0, resolveParseLimits(undefined).heapMb).bound);
+    expect(served).toBeGreaterThanOrEqual(5);
+  }, 60_000);
 });
 
 describe('a thread that dies uncontrolled', () => {

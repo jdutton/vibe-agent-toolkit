@@ -86,6 +86,23 @@ export function commitTestFixture(dir: string, message = 'fixture'): void {
 }
 
 /**
+ * Write `files` (root-relative path → content) under `root`, outside any git
+ * repository — the corpus a filesystem crawl enumerates.
+ *
+ * @param root - The corpus root, created as needed
+ * @param files - What to write
+ * @returns `root`
+ */
+export function writeCorpus(root: string, files: Readonly<Record<string, string | Buffer>>): string {
+  for (const [relative, content] of Object.entries(files)) {
+    const absolute = safePath.join(root, relative);
+    mkdirSyncReal(dirname(absolute), { recursive: true });
+    writeFileSync(absolute, content);
+  }
+  return root;
+}
+
+/**
  * Write `files` (root-relative path → content) under `root`, then commit them
  * as a git fixture.
  *
@@ -94,11 +111,7 @@ export function commitTestFixture(dir: string, message = 'fixture'): void {
  * @returns `root`
  */
 export function writeCommittedCorpus(root: string, files: Readonly<Record<string, string | Buffer>>): string {
-  for (const [relative, content] of Object.entries(files)) {
-    const absolute = safePath.join(root, relative);
-    mkdirSyncReal(dirname(absolute), { recursive: true });
-    writeFileSync(absolute, content);
-  }
+  writeCorpus(root, files);
   commitTestFixture(root);
   return root;
 }

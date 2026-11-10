@@ -5,17 +5,21 @@ import {
 	LINK_GRAPH_MEMBER_GLOBS,
 	parseFrontmatter,
 	refusedAmong,
-	SKILL_REACHED_REFUSAL_CONSEQUENCE,
 	walkLinkGraph,
 	type WalkableRegistry,
 } from '@vibe-agent-toolkit/agent-skills';
-import { loadConfig, type ParseRefusedResource, parseRefusedMessage, ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import {
+	loadConfig,
+	type ParseDispatcher,
+	type ParseRefusedResource,
+	parseRefusedEntryFor,
+	ResourceRegistry,
+} from '@vibe-agent-toolkit/resources';
 import {
   compareCodeUnits,
   CRAWL_REGISTRY_ENUMERATE_ID,
   crawlTimingStart,
   findProjectRoot,
-  issueLocation,
   recordRegistryPass,
   safePath,
 } from '@vibe-agent-toolkit/utils';
@@ -163,6 +167,12 @@ export interface ClaudeSkillInventoryOptions {
 	 * holds an extent for this skill; anything else falls back to the walk.
 	 */
 	sharedPopulation?: InventoryPopulation | undefined;
+	/**
+	 * The run's parse dispatcher, for the frontmatter decode (in the bounded
+	 * worker), so a plugin's skills share one worker start. Omitted, a cache
+	 * miss builds a one-thread pool for the call.
+	 */
+	dispatcher?: ParseDispatcher | undefined;
 }
 
 /**
@@ -179,7 +189,7 @@ export async function extractClaudeSkillInventory(
 	const absolute = safePath.resolve(skillMdPath);
 	const parseErrors: ParseErrors = [];
 
-	const { name, description } = await parseFrontmatterFields(absolute, parseErrors);
+	const { name, description } = await parseFrontmatterFields(absolute, parseErrors, options.dispatcher);
 	const linked = await walkLinkedFiles(absolute, parseErrors, options);
 
 	return new ClaudeSkillInventory({
@@ -193,18 +203,22 @@ export async function extractClaudeSkillInventory(
 async function parseFrontmatterFields(
 	absolute: string,
 	parseErrors: ParseErrors,
+	dispatcher: ParseDispatcher | undefined,
 ): Promise<{ name: string; description: string | undefined }> {
 	let name = '';
 	let description: string | undefined;
 	try {
 		const raw = await readFile(absolute, 'utf-8');
-		const parsed = parseFrontmatter(raw);
+		const parsed = await parseFrontmatter(raw, dispatcher === undefined ? {} : { dispatcher });
 		if (parsed.success) {
 			const fm = parsed.frontmatter;
 			if (typeof fm['name'] === 'string') name = fm['name'];
 			if (typeof fm['description'] === 'string') description = fm['description'];
 		} else {
-			parseErrors.push({ path: absolute, message: parsed.error });
+			// The worker refused the block for this run: the inventory's one
+			// refusal row, as the link walk files a refused file.
+			const refused = parseRefusedEntryFor(absolute, parsed.cause);
+			pushRow(parseErrors, refused === undefined ? { path: absolute, message: parsed.error } : parseRefusedRow(refused));
 		}
 	} catch (e) {
 		parseErrors.push(recordedFailure(absolute, (e as Error).message, e));
@@ -306,10 +320,22 @@ export async function crawlSkillLinkRegistry(projectRoot: string): Promise<Resou
 	return registry;
 }
 
-/** A refused file's parse-error row, one sentence on both lanes. */
-function parseRefusedRow(entry: ParseRefusedResource, projectRoot: string): ParseErrors[number] {
-	const location = issueLocation(entry.filePath, projectRoot);
-	return { path: entry.filePath, message: parseRefusedMessage(entry, location, SKILL_REACHED_REFUSAL_CONSEQUENCE), parseRefused: entry.code };
+/**
+ * Append a row unless the same file is already refused under the same code —
+ * the frontmatter decode and the link walk can both meet one refused SKILL.md.
+ *
+ * @param parseErrors - The rows so far
+ * @param row - The row to add
+ */
+function pushRow(parseErrors: ParseErrors, row: ParseErrors[number]): void {
+	const refused = row.parseRefused;
+	if (refused !== undefined && parseErrors.some((seen) => seen.path === row.path && seen.parseRefused === refused)) return;
+	parseErrors.push(row);
+}
+
+/** A refused file's row: code and reason; the publishing report builds the sentence from its root. */
+function parseRefusedRow(entry: ParseRefusedResource): ParseErrors[number] {
+	return { path: entry.filePath, message: entry.reason, parseRefused: entry.code };
 }
 
 async function walkLinkedFiles(
@@ -333,7 +359,7 @@ async function walkLinkedFiles(
 			// The same parse-error row the walk's registry reports below, from the
 			// population's refusal rows: a refused file is still a member.
 			for (const refusal of population.parseRefusedAmong([absolute, ...projected])) {
-				parseErrors.push(parseRefusedRow(refusal, projectRoot));
+				pushRow(parseErrors, parseRefusedRow(refusal));
 			}
 			return [...projected];
 		}
@@ -347,7 +373,7 @@ async function walkLinkedFiles(
 		// A file the crawl refused to parse is not admitted, so the walk met it on
 		// disk as an opaque asset: its links never walked, nothing in it checked.
 		for (const entry of refusedAmong(registry.getParseRefusedResources(), [absolute, ...linked])) {
-			parseErrors.push(parseRefusedRow(entry, projectRoot));
+			pushRow(parseErrors, parseRefusedRow(entry));
 		}
 	} catch (e) {
 		parseErrors.push({ path: absolute, message: `link walk failed: ${(e as Error).message}` });

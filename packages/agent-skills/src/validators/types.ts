@@ -1,3 +1,4 @@
+import type { ParseDispatcher } from '@vibe-agent-toolkit/resources';
 import type { SeverityCounts, ValidationConfig, ValidationIssue } from '@vibe-agent-toolkit/schema';
 import type { FsSide } from '@vibe-agent-toolkit/utils';
 
@@ -113,6 +114,13 @@ export interface ValidateOptions {
    * own walk raises is classified there, and only the caller knows which tree it handed over.
    */
   side: FsSide;
+  /**
+   * The run's parse dispatcher, when the caller validates many skills: every
+   * parse this validation makes (the frontmatter, the link walk) runs on it, so
+   * the run pays one worker start. Omitted, the validation holds its own for
+   * the one skill and shuts it down.
+   */
+  dispatcher?: ParseDispatcher;
 }
 
 /**

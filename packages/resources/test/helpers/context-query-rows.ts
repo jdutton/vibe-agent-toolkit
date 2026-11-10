@@ -105,7 +105,7 @@ export function queryPathsBlob(path: string, paths: readonly string[] | undefine
  * @returns Claude Code's index over them
  */
 export function queryFacts(rows: readonly HarnessBlobFactsRow[]): HarnessFactsIndex {
-  return harnessFactsIndex({ harnessBlobFacts: rows, harnessBlobImports: [] }, 'claude-code');
+  return harnessFactsIndex({ harnessBlobFacts: rows, harnessBlobImports: [], blobConditions: [] }, 'claude-code');
 }
 
 /**

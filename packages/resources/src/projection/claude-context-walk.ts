@@ -187,14 +187,15 @@ function skipOf(index: WalkIndex, row: ResourceRealizationRow | undefined): Skip
 /**
  * The harness facts of a file the walk reached, or undefined when it has no
  * blob to have facts OF (unkeyed, or a key with no `blobs` row — a question
- * about content, not facts, and answered as it always was).
+ * about content, not facts, and answered as it always was) or this run
+ * refused its facts (`HarnessFactsIndex.refused`, reported by the population).
  *
  * ⛔ A blob that exists and has no facts row THROWS (`HarnessFactsAbsentError`):
  * the walk reached it, so an absent row is a producer bug — reading it as
  * "injects nothing" or "scoped by nothing" would be a silent wrong answer.
  */
 function factsOfReached(index: WalkIndex, row: ResourceRealizationRow): HarnessBlobFactsRow | undefined {
-  if (row.contentKey === null || !index.blobByKey.has(row.contentKey)) return undefined;
+  if (row.contentKey === null || !index.blobByKey.has(row.contentKey) || index.facts.refused(row.contentKey)) return undefined;
   return index.facts.requireFacts(row.contentKey, row.path);
 }
 
@@ -226,6 +227,7 @@ function hopsOf(index: WalkIndex, path: string): readonly string[] {
     resourceRealizations: index.projection.resourceRealizations,
     blobs: index.projection.blobs,
     blobReferences: index.projection.blobReferences,
+    blobConditions: index.projection.blobConditions,
     harnessBlobFacts: index.projection.harnessBlobFacts,
     harnessBlobImports: index.projection.harnessBlobImports,
     declaration: claudeImportExtentDeclaration(path),

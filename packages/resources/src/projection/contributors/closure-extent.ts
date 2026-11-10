@@ -124,7 +124,7 @@ import {
   type ExtentRefusalRule,
   type ReferenceDialect,
 } from '../../schemas/project-config.js';
-import type { BlobReferenceRow, BlobRow } from '../../schemas/projection-blobs.js';
+import type { BlobConditionRow, BlobReferenceRow, BlobRow } from '../../schemas/projection-blobs.js';
 import type { HarnessBlobFactsRow, HarnessBlobImportRow } from '../../schemas/projection-harness.js';
 import { CONDITION_WITHOUT_REFERENCE } from '../../schemas/projection-resources.js';
 import type {
@@ -513,6 +513,8 @@ export interface ClosureProvenanceInput {
   /** Which content keys have content at all — a key with none has no facts to require. */
   readonly blobs: readonly BlobRow[];
   readonly blobReferences: readonly BlobReferenceRow[];
+  /** Which blobs' harness facts this run refused (`HarnessFactsIndex.refused`). */
+  readonly blobConditions: readonly BlobConditionRow[];
   /** The harness tables — passed whole (identity-stable), so the memos below can serve them. */
   readonly harnessBlobFacts: readonly HarnessBlobFactsRow[];
   readonly harnessBlobImports: readonly HarnessBlobImportRow[];
@@ -578,6 +580,7 @@ function servesProvenanceInput(base: ProvenanceBase, input: ClosureProvenanceInp
   return base.root === input.root
     && base.blobs === input.blobs
     && base.blobReferences === input.blobReferences
+    && base.blobConditions === input.blobConditions
     && base.harnessBlobFacts === input.harnessBlobFacts
     && base.harnessBlobImports === input.harnessBlobImports;
 }
@@ -596,6 +599,7 @@ function provenanceBaseFor(input: ClosureProvenanceInput): ProvenanceBase {
     resourceRealizations: input.resourceRealizations,
     blobs: input.blobs,
     blobReferences: input.blobReferences,
+    blobConditions: input.blobConditions,
     harnessBlobFacts: input.harnessBlobFacts,
     harnessBlobImports: input.harnessBlobImports,
   };
@@ -1589,7 +1593,7 @@ function rootAbsentCondition(extentId: string, rootPath: string): RealizationCon
  */
 type IndexableBase = Pick<
   Projection,
-  'resourceRealizations' | 'blobs' | 'blobReferences' | 'harnessBlobFacts' | 'harnessBlobImports'
+  'resourceRealizations' | 'blobs' | 'blobReferences' | 'blobConditions' | 'harnessBlobFacts' | 'harnessBlobImports'
 >;
 
 /**
@@ -1731,7 +1735,8 @@ function referencesByBlobFor(base: IndexableBase): ReadonlyMap<string, readonly 
  *
  * A key with no `blobs` row at all (unreadable, or refused as not text) has no
  * content to have facts OF, and follows nothing in either mode — a question
- * about content, not facts, answered as it always was.
+ * about content, not facts, answered as it always was. A blob whose facts this
+ * run refused (`HarnessFactsIndex.refused`) follows nothing either.
  *
  * ⚠️ A blob that EXISTS with no facts row reads per `strictness`: `frontier`
  * gives no edges — "not yet", not zero, because the closure contributor runs
@@ -1752,7 +1757,7 @@ function harnessImportsByBlobFor(
     return (contentKey) => index.factsOf(contentKey) === undefined ? [] : index.requireImports(contentKey, null);
   }
   const derived = blobKeysFor(base);
-  return (contentKey, path) => derived.has(contentKey) ? index.requireImports(contentKey, path) : [];
+  return (contentKey, path) => derived.has(contentKey) && !index.refused(contentKey) ? index.requireImports(contentKey, path) : [];
 }
 
 /** Per-run memo of the `blobs` key set, on {@link referencesByBlobMemo}'s terms. */

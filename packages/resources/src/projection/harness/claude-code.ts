@@ -12,7 +12,6 @@ import { dirname } from 'node:path';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import type { ResolveLocalHrefResult } from '../../utils.js';
-import { claudeMemoryFactsOf } from '../claude-memory.js';
 
 import { CLAUDE_CODE_ENTRY_NAMES, CLAUDE_CODE_RULES_DIR_SEGMENTS } from './claude-code-entry-names.js';
 import type { HarnessProfile, ImportShape, LoadTrigger, MemoryKind } from './profile.js';
@@ -216,7 +215,6 @@ export const CLAUDE_CODE: HarnessProfile = {
   entryNames: CLAUDE_CODE_ENTRY_NAMES,
   isEntryPoint,
   isTextPath: isMemoryTextPath,
-  factsOf: claudeMemoryFactsOf,
   resolveImport: resolveClaudeImport,
   importShape,
   renderHeader,

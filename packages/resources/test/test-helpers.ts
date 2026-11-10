@@ -18,12 +18,15 @@ import {
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
+import { readDecodableBytes } from '@vibe-agent-toolkit/utils/fs';
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { createTempDir, gitExecutable, removeScratchDir, removeTempDir, setupAsyncTempDirSuite, type FaultFsSession } from '@vibe-agent-toolkit/utils/testing';
+import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, type Assertion } from 'vitest';
 
 import { ExternalLinkValidator } from '../src/external-link-validator.js';
-import { parseMarkdown } from '../src/link-parser.js';
+import { parseHtmlContent } from '../src/html-link-parser.js';
+import { parseMarkdownContent, type ParseResult } from '../src/link-parser.js';
 import type { FragmentIndex, ValidateLinkOptions as LinkValidatorOptions } from '../src/link-validator.js';
 import { validateLink } from '../src/link-validator.js';
 import { mimeTypeForPath } from '../src/mime-type.js';
@@ -520,7 +523,30 @@ export interface WriteAndParseOptions {
   /** Markdown content to write */
   content: string;
   /** Assertions to run on parse result */
-  assertions: (_: Awaited<ReturnType<typeof parseMarkdown>>) => Promise<void> | void;
+  assertions: (_: ParseResult) => Promise<void> | void;
+}
+
+/**
+ * Read a file as the crawl lane reads one — its raw bytes, decoded as text — and
+ * run a parser composer on it IN-PROCESS. For the parser's own unit tests only:
+ * shipped code parses through the bounded worker (`parseFileCached`).
+ */
+async function parseFileInProcess(
+  filePath: string,
+  parse: (content: string, sizeBytes: number) => ParseResult,
+): Promise<ParseResult> {
+  const bytes = await readDecodableBytes(filePath);
+  return parse(decodeTextContent(bytes).text, bytes.byteLength);
+}
+
+/** The markdown composer over one file, in-process ({@link parseFileInProcess}). */
+export function parseMarkdownFile(filePath: string): Promise<ParseResult> {
+  return parseFileInProcess(filePath, parseMarkdownContent);
+}
+
+/** The HTML parser over one file, in-process ({@link parseFileInProcess}). */
+export function parseHtmlFile(filePath: string): Promise<ParseResult> {
+  return parseFileInProcess(filePath, parseHtmlContent);
 }
 
 /**
@@ -529,11 +555,11 @@ export interface WriteAndParseOptions {
  */
 export async function writeAndParse(
   options: WriteAndParseOptions,
-): Promise<Awaited<ReturnType<typeof parseMarkdown>>> {
+): Promise<ParseResult> {
   const { filePath, content, assertions } = options;
 
   await writeFile(filePath, content, 'utf-8');
-  const parsedResult = await parseMarkdown(filePath);
+  const parsedResult = await parseMarkdownFile(filePath);
   await assertions(parsedResult);
 
   return parsedResult;

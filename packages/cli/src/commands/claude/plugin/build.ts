@@ -10,7 +10,7 @@
 import { mkdir, readdir } from 'node:fs/promises';
 
 import { conventionalSuiteProbe, createProjectRegistry, getMarketplaceOutputDir, getPluginSourceDir, isSkillPackagingInputError, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, materializeIssue, packageSkillInto, packagingConfigToPackageOptions, pluginDirInMarketplace, skillNameToFsPath, stagedPathMapper, type ConventionalSuiteProbe, type DeclaredEvalSuite, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
-import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, ExternalPluginSource, ProjectConfig, ResourceRegistry, SkillsConfig } from '@vibe-agent-toolkit/resources';
+import { type ClaudeMarketplaceConfig, type ClaudeMarketplacePluginEntry, type ExternalPluginSource, type ProjectConfig, type ResourceRegistry, type SkillsConfig, withParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type Finding, type Gate, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { applyTreePlan, compareCodeUnits, direntKindFollowing, everyInOrder, foldedSegment, forEachInOrder, type FsSide, isSingleFsSegment, issueLocation, isTreeChangeResidue, mapInOrder, pathPresent, planTreeChanges, safePath, type SideOfPath, sideWithin, toForwardSlash, VatError, withFsFault, writeFileUnder } from '@vibe-agent-toolkit/utils';
 import { onCrawlOutput } from '@vibe-agent-toolkit/utils/crawl';
@@ -1015,13 +1015,16 @@ function discoverPluginLocalSkills(
     );
   }
   // In order: a SKILL.md that will not read must be the first one named, deterministically.
-  return mapInOrder(listPluginSourceSkillDirs(pluginSourceDir), async (skillDirPath) => {
-    const skillSourceDir = safePath.join(pluginSourceDir, 'skills', skillDirPath);
-    // Resolved through the SAME reader `vat skills build` and `vat verify` use — per-skill
-    // config is keyed by name, so two answers would mean two effective configs.
-    const skillName = await readPluginLocalSkillName(skillSourceDir, skillDirPath);
-    return { skillDirPath, skillPath: safePath.join(skillSourceDir, 'SKILL.md'), skillName };
-  });
+  // One parse dispatcher for the plugin's SKILL.md reads.
+  return withParseDispatcher((dispatcher) =>
+    mapInOrder(listPluginSourceSkillDirs(pluginSourceDir), async (skillDirPath) => {
+      const skillSourceDir = safePath.join(pluginSourceDir, 'skills', skillDirPath);
+      // Resolved through the SAME reader `vat skills build` and `vat verify` use — per-skill
+      // config is keyed by name, so two answers would mean two effective configs.
+      const skillName = await readPluginLocalSkillName(skillSourceDir, dispatcher);
+      return { skillDirPath, skillPath: safePath.join(skillSourceDir, 'SKILL.md'), skillName };
+    }),
+  );
 }
 
 /**

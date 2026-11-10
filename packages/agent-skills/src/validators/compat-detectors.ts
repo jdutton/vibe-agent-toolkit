@@ -1,7 +1,9 @@
 /**
  * Compat capability detectors.
  *
- * Pure module: (content, filePath) -> { evidence, observations }. Detectors
+ * (content, filePath) -> { evidence, observations }; the one parse it makes —
+ * the frontmatter's `allowed-tools`, through `parseFrontmatter` — runs on the
+ * caller's parse route, in the bounded worker. Detectors
  * collect raw EvidenceRecord[] from the source, then deriveObservations()
  * rolls evidence up into capability-level Observation[]. The verdict layer
  * (downstream) decides whether each observation produces a compat issue.
@@ -10,6 +12,7 @@
  * is called against every emitted record).
  */
 
+import type { ParseRoute } from '@vibe-agent-toolkit/resources';
 import { CODE_REGISTRY, type IssueCode, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
@@ -87,11 +90,14 @@ function* iterCodeBlocks(
  * clean over them. The value now goes through the same `parseFrontmatter` the
  * validator uses and the same `allowedToolsOf` the settings-compat checker uses.
  */
-export function allowedToolsDeclarations(content: string): { tools: string[]; line: number } {
+export async function allowedToolsDeclarations(
+  content: string,
+  route: ParseRoute,
+): Promise<{ tools: string[]; line: number }> {
   // A block that is not a mapping (empty, `~`, a scalar, a sequence) is a parse
   // FAILURE at the seam — `parseFrontmatter` refuses it — so there is no shape
   // left for this reader to guard against on its own.
-  const parsed = parseFrontmatter(content);
+  const parsed = await parseFrontmatter(content, route);
   if (!parsed.success) return { tools: [], line: 0 };
   const tools = allowedToolsOf(parsed.frontmatter['allowed-tools']) ?? [];
   if (tools.length === 0) return { tools: [], line: 0 };
@@ -115,15 +121,16 @@ function toolNameOf(declaration: string): string {
   return paren === -1 ? declaration : declaration.slice(0, paren);
 }
 
-export function collectLocalShellEvidence(
+export async function collectLocalShellEvidence(
   content: string,
   filePath: string,
   locationRoot: string,
-): EvidenceRecord[] {
+  route: ParseRoute,
+): Promise<EvidenceRecord[]> {
   const out: EvidenceRecord[] = [];
 
   // Frontmatter allowed-tools
-  const { tools, line: atLine } = allowedToolsDeclarations(content);
+  const { tools, line: atLine } = await allowedToolsDeclarations(content, route);
   const matchedTool = tools.find(t => (LOCAL_SHELL_TOOLS as readonly string[]).includes(toolNameOf(t)));
   if (matchedTool !== undefined) {
     out.push(
@@ -269,14 +276,17 @@ export function observationToIssue(obs: Observation, location: string): Validati
  * @param locationRoot - The ONE base every emitted evidence `location.file` is
  *   expressed relative to. Required, so a producer cannot emit an absolute
  *   location by omission.
+ * @param route - Where the frontmatter parse runs: the run's dispatcher, or
+ *   `{}` for a one-thread pool built on a cache miss
  */
-export function runCompatDetectors(
+export async function runCompatDetectors(
   content: string,
   filePath: string,
   locationRoot: string,
-): DetectorOutput {
+  route: ParseRoute,
+): Promise<DetectorOutput> {
   const evidence: EvidenceRecord[] = [
-    ...collectLocalShellEvidence(content, filePath, locationRoot),
+    ...(await collectLocalShellEvidence(content, filePath, locationRoot, route)),
     ...collectExternalCLIEvidence(content, filePath, locationRoot),
     ...collectBrowserAuthEvidence(content, filePath, locationRoot),
   ];

@@ -3,7 +3,7 @@
  *
  * Replaces the I/O-heavy `collectLinks()` with a pure function that walks
  * the link graph using pre-parsed data from a ResourceRegistry. This eliminates
- * per-file `parseMarkdown()` calls and `existsSync()` checks for markdown files.
+ * per-file parses and `existsSync()` checks for markdown files.
  *
  * Non-markdown assets (images, JSON, etc.) won't be in the registry and still
  * require `existsSync()` checks — this is acceptable since the goal is eliminating

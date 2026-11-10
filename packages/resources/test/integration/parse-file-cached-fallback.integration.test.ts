@@ -1,11 +1,11 @@
 /**
- * `parseFileCached` parses on the calling thread, and a stack overflow there
- * falls back to ONE bounded parse through the pool — so the answer is the
- * worker's, the one a crawl gives and files, and a skill lane's verdict never
- * depends on whether a crawl warmed the cache first (ADR I0).
+ * `parseFileCached` never parses on the calling thread: every miss is ONE
+ * bounded parse in the worker pool — so the answer is the worker's, the one a
+ * crawl gives and files, and a skill lane's verdict never depends on whether a
+ * crawl warmed the cache first (ADR I0), nor on the calling thread's stack.
  *
- * Before the fallback, the overflow WAS the answer: a document the worker
- * parses was refused cold and admitted warm (served the crawl's facts).
+ * When the calling thread parsed, its stack overflow WAS the answer: a document
+ * the worker parses was refused cold and admitted warm (served the crawl's facts).
  *
  * The BUILT module runs in a child process whose main-thread stack is shrunk
  * with `--stack-size`, so the in-process overflow is certain at a depth the
@@ -59,7 +59,7 @@ function parseInChild(content: string, name: string): Outcome {
   return JSON.parse(child.stdout) as Outcome;
 }
 
-describe('parseFileCached when this thread\'s stack overflows', () => {
+describe('parseFileCached under a calling-thread stack too small for the document', () => {
   beforeAll(() => {
     scratch = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-parse-fallback-'));
   });
@@ -72,7 +72,7 @@ describe('parseFileCached when this thread\'s stack overflows', () => {
     const document = `${'>'.repeat(3000)} deep\n`;
 
     expect(parseInChild(document, 'blockquotes.md')).toStrictEqual({ ok: true, blockquotes: 3000 });
-    // Warm: the fallback filed the worker's facts, and a hit gives the same answer.
+    // Warm: the cold parse filed the worker's facts, and a hit gives the same answer.
     expect(parseInChild(document, 'blockquotes.md')).toStrictEqual({ ok: true, blockquotes: 3000 });
   });
 

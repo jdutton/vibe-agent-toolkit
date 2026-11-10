@@ -27,8 +27,8 @@
  * remark stack in every worker the moment the thread starts — including the
  * threads a short batch never dispatches to.
  *
- * It also means a broken install fails here the same way it fails on the main
- * thread: as a `ParserUnavailableError`, whose `code` {@link describeFailure}
+ * It also means a broken install fails here as a `ParserUnavailableError`,
+ * whose `code` {@link describeFailure}
  * carries across the boundary so `isParserUnavailable` still recognises it.
  *
  * ## Why the timings go back over the port, and why `close()` is not `process.exit()`
@@ -49,9 +49,8 @@
 import { parentPort, workerData } from 'node:worker_threads';
 
 import type { ParseResult } from './link-parser.js';
-import type { DocumentParserKind } from './mime-type.js';
-import { loadParser, ParseCache } from './parse-cache.js';
-import { isStackOverflow, outputBreach, type ParseLimits } from './parse-limits.js';
+import { ParseCache, type ParserModuleKind } from './parse-cache.js';
+import { factsOutputBreach, isStackOverflow, outputBreach, type ParseLimits } from './parse-limits.js';
 import {
   type ParseWorkerData,
   type ParseWorkerFailure,
@@ -67,6 +66,7 @@ import {
   recordTierPass,
   TierPass,
 } from './parse-timing.js';
+import { loadHarnessReader, loadParser } from './parser-loader.js';
 
 if (parentPort === null) {
   throw new Error(
@@ -102,8 +102,8 @@ function describeFailure(error: unknown): ParseWorkerFailure {
   };
 }
 
-/** The parser kinds this thread has told the parent are loaded. */
-const announcedKinds = new Set<DocumentParserKind>();
+/** The parser modules this thread has told the parent are loaded. */
+const announcedKinds = new Set<ParserModuleKind>();
 
 /**
  * Tell the parent, once per kind, that a parser loaded — before it runs, so a
@@ -112,15 +112,18 @@ const announcedKinds = new Set<DocumentParserKind>();
  *
  * @param kind - The parser kind that has just loaded
  */
-function announceLoaded(kind: DocumentParserKind): void {
+function announceLoaded(kind: ParserModuleKind): void {
   if (announcedKinds.has(kind)) return;
   announcedKinds.add(kind);
   const loaded: ParseWorkerParserLoaded = { parserLoaded: kind };
   port.postMessage(loaded);
 }
 
+/** A job this thread runs: a document parse or a harness's memory-file read. */
+type JobRequest = Exclude<ParseWorkerRequest, { type: 'shutdown' }>;
+
 /**
- * Parse one document and answer the parent.
+ * Run one job and answer the parent.
  *
  * Never throws: a parser failure becomes a {@link ParseWorkerFailure} the parent
  * re-raises, because an unhandled rejection in a worker kills the thread and
@@ -129,18 +132,13 @@ function announceLoaded(kind: DocumentParserKind): void {
  * A document that merely parses BADLY is not a failure at all — parse5's
  * well-formedness diagnostics ride back inside the facts, in `parseErrors`.
  *
- * @param request - The document and the parser to run over it
+ * @param request - The document and the parser, or the harness, to run over it
  */
-async function respond(request: Extract<ParseWorkerRequest, { type: 'parse' }>): Promise<void> {
+async function respond(request: JobRequest): Promise<void> {
   const jobStartedAt = parseTimingStart();
   let response: ParseWorkerResponse;
   try {
-    const parser = await loadParser(request.kind);
-    announceLoaded(request.kind);
-    // `byteLength` is the parent's RAW byte count, passed through untouched —
-    // never a length derived from `content`, since decoding is lossy.
-    const result = parser.parseContent(request.content, request.byteLength);
-    response = await answerFor(request, result);
+    response = request.type === 'parse' ? await answerParse(request) : await answerHarness(request);
   } catch (error) {
     // A parser recursing past this thread's stack is a limit breach, not a
     // defect in the document or in VAT: it is reported as the limit, so it is
@@ -158,6 +156,38 @@ async function respond(request: Extract<ParseWorkerRequest, { type: 'parse' }>):
   // `settleJob` in parse-pool.ts).
   recordTierPass(TierPass.WorkerReply, replyStartedAt);
   recordTierPass(TierPass.WorkerJob, jobStartedAt);
+}
+
+/**
+ * Parse one document.
+ *
+ * @param request - The document and the parser to run over it
+ * @returns The answer
+ */
+async function answerParse(request: Extract<JobRequest, { type: 'parse' }>): Promise<ParseWorkerResponse> {
+  const parser = await loadParser(request.kind);
+  announceLoaded(request.kind);
+  // `byteLength` is the parent's RAW byte count, passed through untouched —
+  // never a length derived from `content`, since decoding is lossy.
+  const result = parser.parseContent(request.content, request.byteLength);
+  return answerFor(request, result);
+}
+
+/**
+ * Run a harness's memory-file reader over one file, its facts held to the
+ * output caps before they are sent — the same rule a parse's are (I6: a
+ * breach is filed nowhere).
+ *
+ * @param request - The file and the harness whose reader runs over it
+ * @returns The answer
+ */
+async function answerHarness(request: Extract<JobRequest, { type: 'harness' }>): Promise<ParseWorkerResponse> {
+  const reader = await loadHarnessReader(request.harness);
+  announceLoaded(request.harness);
+  const facts = reader(request.content);
+  const breach = factsOutputBreach(facts, workerLimits());
+  if (breach !== undefined) return { id: request.id, breach: breach.limit, found: breach.found };
+  return { id: request.id, harnessFacts: facts };
 }
 
 /**

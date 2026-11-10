@@ -135,7 +135,7 @@ export class ParseLimitError extends VatError {
    * applied.
    *
    * @param appliedMb - The heap limit the pool enforced on the worker — see
-   *   {@link appliedHeapLimitMb}
+   *   {@link heapBounds}
    * @param configuredMb - The `heapMb` this pool was given
    * @returns The breach, saying so when a process-wide flag lowered the limit
    */
@@ -154,17 +154,17 @@ export class ParseLimitError extends VatError {
   /**
    * A heap breach V8 stopped at its OWN ceiling, before the pool's sampler did
    * (the parent was blocked past the stall window, so a sample landed late or
-   * never). It names that ceiling — {@link workerHeapCeilingMb} of the bound
-   * the sampler enforces — never the sampler's bound, which did not stop it.
+   * never). It names that ceiling — as the last sample to land read it —
+   * never the sampler's bound, which did not stop it.
    *
-   * @param appliedMb - The bound the sampler enforced, from the last sample to
-   *   land, or `undefined` when none landed: then the ceiling is unknown, since
-   *   a process-wide `--max-old-space-size` overrides it in either direction
+   * @param bounds - What the last sample to land read ({@link heapBounds}), or
+   *   `undefined` when none landed: then the ceiling is unknown, since a
+   *   process-wide `--max-old-space-size` overrides it in either direction
    * @param configuredMb - The `heapMb` this pool was given
    * @returns The breach
    */
-  static heapCeiling(appliedMb: number | undefined, configuredMb: number): ParseLimitError {
-    if (appliedMb === undefined) {
+  static heapCeiling(bounds: HeapBounds | undefined, configuredMb: number): ParseLimitError {
+    if (bounds === undefined) {
       return new ParseLimitError(
         'heapMb',
         workerHeapCeilingMb(configuredMb),
@@ -172,12 +172,11 @@ export class ParseLimitError extends VatError {
         `V8's own heap ceiling, reached before the pool's heap sampler read it: ${LIMIT_UNITS.heapMb(workerHeapCeilingMb(configuredMb))}, unless a process-wide --max-old-space-size set it instead`,
       );
     }
-    const ceilingMb = workerHeapCeilingMb(appliedMb);
     return new ParseLimitError(
       'heapMb',
-      ceilingMb,
+      bounds.ceilingMb,
       undefined,
-      `V8's own heap ceiling, ${LIMIT_UNITS.heapMb(ceilingMb)} — twice the ${String(appliedMb)} MiB the pool's heap sampler enforces, reached before the sampler read the heap past it`,
+      `V8's own heap ceiling, ${LIMIT_UNITS.heapMb(bounds.ceilingMb)} — above the ${String(bounds.appliedMb)} MiB the pool's heap sampler enforces, reached before the sampler read the heap past it`,
     );
   }
 }
@@ -272,12 +271,17 @@ export function countOutputRows(facts: object): number {
 /**
  * Rows and bytes of the JSON the store writes for a decoded value (the
  * projection's `json` column is its `JSON.stringify`), every alias written out
- * in full.
+ * in full — and every `!!set` member and `!!omap` entry, which the codec
+ * carries to the parent though `JSON.stringify` writes them as `{}`.
  */
 interface ExpandedSize {
-  /** Every array element and every mapping entry of that JSON, at every depth. */
+  /** Every array element, mapping entry, set member and ordered-map entry, at every depth. */
   readonly rows: number;
-  /** Bytes of that JSON, exactly: `Buffer.byteLength(JSON.stringify(value))` for an acyclic value. */
+  /**
+   * Bytes of that JSON, exactly — `Buffer.byteLength(JSON.stringify(value))`
+   * for an acyclic value with no `Set` or `Map`; a `Set` counts as the array
+   * of its members, a `Map` as the object of its entries, each key as its JSON.
+   */
   readonly bytes: number;
   /**
    * How deep that JSON nests, a container itself level 1 (a scalar: 0; a
@@ -306,9 +310,10 @@ interface SizingFrame {
 }
 
 /**
- * Whether JSON writes a value's own children: an array, or an object with no
- * `toJSON` of its own — which writes its own enumerable keys, so a `Set` or a
- * `Map` (a `!!set`, a `!!omap`) is `{}` and a bare `Uint8Array` its indices.
+ * Whether a value is sized by its children: an array, a `Set` or `Map` (a
+ * `!!set`, a `!!omap`, whose members the codec carries — see
+ * {@link openFrame}), or an object with no `toJSON` of its own, which JSON
+ * writes by its own enumerable keys (a bare `Uint8Array` its indices).
  * A `Buffer` (a `!!binary`) and a `Date` (a `!!timestamp`) write `toJSON`'s
  * answer instead, sized as leaves ({@link leafSize}).
  *
@@ -375,6 +380,22 @@ function openFrame(node: object): SizingFrame {
   if (Array.isArray(node)) {
     return { node, children: node, next: 0, rows: node.length, bytes: 2 + Math.max(0, node.length - 1), deepest: 0 };
   }
+  // `JSON.stringify` writes a `Set` or a `Map` as `{}`, but what the parent
+  // rebuilds — and so what any consumer walks — carries every member
+  // (`frontmatter-codec.ts`, nodes `s` and `m`). Counted as `{}`, a million
+  // members cost one row and nesting or a cycle inside one went unseen.
+  if (node instanceof Set) {
+    const children: unknown[] = [];
+    for (const member of node as Set<unknown>) children.push(member);
+    return { node, children, next: 0, rows: children.length, bytes: 2 + Math.max(0, children.length - 1), deepest: 0 };
+  }
+  if (node instanceof Map) {
+    // Each key is a child too: a `!!omap` key may be any value, a container included.
+    const children: unknown[] = [];
+    for (const [key, value] of node as Map<unknown, unknown>) children.push(key, value);
+    const entries = (node as Map<unknown, unknown>).size;
+    return { node, children, next: 0, rows: entries, bytes: 2 + entries + Math.max(0, entries - 1), deepest: 0 };
+  }
   const children: unknown[] = [];
   const keys = Object.keys(node);
   // `{` `}`, a `:` per entry and a `,` between entries.
@@ -433,7 +454,8 @@ function addChild(frame: SizingFrame, child: unknown, sized: ReadonlyMap<object,
  * anchor's full size, as `JSON.stringify` writes it and as a consumer walking
  * the value meets it. Exactly what the store writes — a `!!binary` is its
  * `Buffer` JSON (one row per byte, each byte its digits), never its base64's
- * length; a `!!set` / `!!omap` is the `{}` JSON writes.
+ * length; a `!!set` is the list of its members and a `!!omap` the mapping of
+ * its entries, as the codec carries them — never the `{}` JSON writes.
  *
  * The worker sends frontmatter in an encoding that writes a shared anchor
  * once (`frontmatter-codec.ts`), so a count over what crosses the wire would
@@ -475,9 +497,12 @@ export function expandedSize(root: unknown): ExpandedSize {
   return total;
 }
 
+/** The caps on what a parse answers, as opposed to what running it costs. */
+type OutputLimitName = 'outputDepth' | 'outputRows' | 'outputBytes';
+
 /** An output cap a parse result breached, and what the result measured against it. */
 interface OutputBreach {
-  readonly limit: 'outputDepth' | 'outputRows' | 'outputBytes';
+  readonly limit: OutputLimitName;
   /** The depth, rows or bytes found; `Infinity` for a cyclic frontmatter's depth. */
   readonly found: number;
 }
@@ -509,13 +534,34 @@ interface OutputBreach {
  */
 export function outputBreach(
   result: ParseResult,
-  limits: Pick<ParseLimits, 'outputDepth' | 'outputRows' | 'outputBytes'>,
+  limits: Pick<ParseLimits, OutputLimitName>,
 ): OutputBreach | undefined {
   const facts: Partial<ParseResult> = { ...result };
   delete facts.content;
   delete facts.sizeBytes;
   delete facts.frontmatter;
-  const expanded = result.frontmatter === undefined ? { rows: 0, bytes: 0, depth: 0 } : expandedSize(result.frontmatter);
+  return factsOutputBreach(facts, limits, result.frontmatter === undefined ? NOTHING_EXPANDED : expandedSize(result.frontmatter));
+}
+
+/** The size of no decoded value at all. */
+const NOTHING_EXPANDED: ExpandedSize = { rows: 0, bytes: 0, depth: 0 };
+
+/**
+ * The output cap facts breach under `limits`: depth, then rows, then bytes —
+ * the one rule {@link outputBreach} applies to a parse, and the worker applies
+ * to any other job whose answer is plain JSON (a harness's memory facts).
+ *
+ * @param facts - The answer as sent, plain JSON
+ * @param limits - The caps in force
+ * @param expanded - The expanded size of a decoded value the facts carry
+ *   beside themselves; nothing for an answer that carries none
+ * @returns The breached limit and what was found, or undefined
+ */
+export function factsOutputBreach(
+  facts: object,
+  limits: Pick<ParseLimits, OutputLimitName>,
+  expanded: ExpandedSize = NOTHING_EXPANDED,
+): OutputBreach | undefined {
   if (expanded.depth > limits.outputDepth) return { limit: 'outputDepth', found: expanded.depth };
   const rows = countOutputRows(facts) + expanded.rows;
   if (rows > limits.outputRows) return { limit: 'outputRows', found: rows };
@@ -706,7 +752,7 @@ const BYTES_PER_MIB = 1_048_576;
  * later than its old generation passes the limit.
  *
  * @param stats - `Worker.getHeapStatistics()`
- * @param limitMb - The enforced limit — see {@link appliedHeapLimitMb}
+ * @param limitMb - The enforced limit — see {@link heapBounds}
  * @returns True once the used heap is past the limit
  */
 export function exceedsHeapLimit(stats: { readonly used_heap_size: number }, limitMb: number): boolean {
@@ -741,7 +787,28 @@ export function workerHeapCeilingMb(heapMb: number): number {
 }
 
 /**
- * The heap limit the pool enforces on a worker, in MiB.
+ * The least room, in MiB, a floored bound leaves below V8's ceiling: twice
+ * what a job allocates in one heap-sample interval at the fastest rate
+ * measured (~300 MiB/s over 50 ms, ~15 MiB), so a sample a whole interval late
+ * still stops the job before V8 does. See {@link heapBounds}.
+ */
+const SAMPLER_HEADROOM_MB = 32;
+
+/** The heap bounds of one worker, as a heap sample reads them. */
+export interface HeapBounds {
+  /** The limit the pool's sampler enforces on what the worker's heap holds — see {@link heapBreached}. */
+  readonly appliedMb: number;
+  /** V8's own old-generation ceiling for the worker, past which V8 stops it. */
+  readonly ceilingMb: number;
+  /**
+   * The used heap past which the sampler stops a job without waiting for a
+   * collection to say what of it is held — see {@link heapBreached}.
+   */
+  readonly stopMb: number;
+}
+
+/**
+ * The heap limit the pool enforces on a worker, and V8's own ceiling above it, in MiB.
  *
  * `heap_size_limit` is V8's old-generation ceiling plus the young
  * generation's (measured on Node 26: 2,048 + 96 = 2,144 for `heapMb` 1,024). A
@@ -751,16 +818,87 @@ export function workerHeapCeilingMb(heapMb: number): number {
  * whatever ceiling V8 applies, and a refusal names that lower value, not the
  * configured one.
  *
+ * That share is floored at the young generation's own size, while the ceiling
+ * leaves {@link SAMPLER_HEADROOM_MB} above the floor. The sampler counts the
+ * whole used heap ({@link exceedsHeapLimit}), and the young generation holds
+ * up to its size in garbage between scavenges: measured on Node 26, a cold
+ * worker parsing an ordinary 34 KB document peaks at 54 to 68 MiB used (20
+ * runs at every flag from none to 64 MiB), so under a 128 MiB flag the half
+ * share (64 MiB) refused about one ordinary document in ten. A ceiling too
+ * low for floor plus headroom keeps the half share: such a flag is too small
+ * to parse with, and refusing is right.
+ *
  * @param stats - `Worker.getHeapStatistics()`
  * @param youngGenerationMb - The worker's `resourceLimits.maxYoungGenerationSizeMb`
  * @param heapMb - The configured limit
- * @returns The smaller of the configured limit and the headroom-safe share of V8's ceiling
+ * @returns The enforced limit (never above `heapMb`) and V8's ceiling as read
  */
-export function appliedHeapLimitMb(
+export function heapBounds(
   stats: { readonly heap_size_limit: number },
   youngGenerationMb: number,
   heapMb: number,
-): number {
-  const ceiling = Math.floor(stats.heap_size_limit / BYTES_PER_MIB) - youngGenerationMb;
-  return ceiling > 0 ? Math.min(heapMb, Math.floor(ceiling / HEAP_CEILING_FACTOR)) : heapMb;
+): HeapBounds {
+  const readMb = Math.floor(stats.heap_size_limit / BYTES_PER_MIB) - youngGenerationMb;
+  const ceilingMb = readMb > 0 ? readMb : workerHeapCeilingMb(heapMb);
+  const share = Math.floor(ceilingMb / HEAP_CEILING_FACTOR);
+  const floor = Math.min(youngGenerationMb, ceilingMb - SAMPLER_HEADROOM_MB);
+  const appliedMb = readMb > 0 ? Math.min(heapMb, Math.max(share, floor)) : heapMb;
+  return { appliedMb, ceilingMb, stopMb: unvouchedStopMb(appliedMb, ceilingMb, heapMb) };
+}
+
+/**
+ * Where the sampler stops a job no collection has vouched for: halfway from
+ * the applied bound to V8's ceiling, the ceiling taken as never above
+ * {@link workerHeapCeilingMb} (a process-wide flag that lifts V8's ceiling
+ * does not lift the stop), never within {@link SAMPLER_HEADROOM_MB} of the
+ * ceiling, and never below the bound itself.
+ *
+ * Half the room is the trade between the two ways a used heap past the bound
+ * can be misread: garbage V8 has not yet collected (the room below the stop),
+ * and a parent stalled while a true breach allocates toward V8's ceiling (the
+ * room above it) — see {@link heapBreached}.
+ *
+ * @param appliedMb - The applied bound
+ * @param ceilingMb - V8's ceiling as read
+ * @param heapMb - The configured limit
+ * @returns The stop, in MiB
+ */
+function unvouchedStopMb(appliedMb: number, ceilingMb: number, heapMb: number): number {
+  const roomTopMb = Math.min(ceilingMb, workerHeapCeilingMb(heapMb));
+  const halfwayMb = appliedMb + Math.floor((roomTopMb - appliedMb) / 2);
+  return Math.max(appliedMb, Math.min(halfwayMb, ceilingMb - SAMPLER_HEADROOM_MB));
+}
+
+/**
+ * Whether one heap sample shows a job holding more than its applied bound.
+ *
+ * The used heap counts garbage V8 has not collected yet, and V8 collects
+ * lazily below a ceiling set well past the bound ({@link HEAP_CEILING_FACTOR}).
+ * Measured on Node 24 under a loaded host, a worker parsing a 10,000-level
+ * blockquote that holds 420 to 460 MiB live read 1,079 MiB used, rising with no
+ * collection, so the used heap alone refused a document a quarter of the way
+ * to its limit. A used heap past the bound is therefore a breach only once an
+ * old-generation collection has run: a sample that fell from its predecessor
+ * by more than the young generation can hold (a scavenge frees at most that),
+ * so what it still reads is held. A heap that rises past {@link HeapBounds.stopMb}
+ * with no such collection is stopped there anyway, so V8's ceiling, which can
+ * kill the whole process, is never left to stop a job. A young generation of
+ * unknown size makes any fall a collection: the pool refuses sooner, never later.
+ *
+ * @param stats - This sample, from `Worker.getHeapStatistics()`
+ * @param previousUsedBytes - The same job's previous sample, if one landed
+ * @param bounds - {@link heapBounds}
+ * @param youngGenerationMb - The worker's `resourceLimits.maxYoungGenerationSizeMb`
+ * @returns True when the job is to be stopped at its heap limit
+ */
+export function heapBreached(
+  stats: { readonly used_heap_size: number },
+  previousUsedBytes: number | undefined,
+  bounds: HeapBounds,
+  youngGenerationMb: number,
+): boolean {
+  if (!exceedsHeapLimit(stats, bounds.appliedMb)) return false;
+  if (exceedsHeapLimit(stats, bounds.stopMb)) return true;
+  return previousUsedBytes !== undefined
+    && previousUsedBytes - stats.used_heap_size > youngGenerationMb * BYTES_PER_MIB;
 }

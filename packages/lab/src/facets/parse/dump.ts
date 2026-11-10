@@ -398,8 +398,8 @@ export interface MergedParseDumps {
    * **A remainder of independently measured counters, not a counter.** Every
    * parse increments exactly one kind's document count, and every parse routed
    * through the cache increments `cacheMisses` first, so what is left over is
-   * the parses that reached a parser by another route — `parseMarkdown(path)`
-   * and `parseHtml(path)` read and parse without consulting the cache at all.
+   * the parses that reached a parser by another route. Every parse now goes
+   * through the dispatcher, so a nonzero remainder is a route that bypassed it.
    *
    * Signed and never clamped, for the same reason `unattributedMs` is: negative
    * means more misses were counted than parses completed, which is a parse that

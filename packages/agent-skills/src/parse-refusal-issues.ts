@@ -9,16 +9,15 @@
  *    finds it on disk and ships it as an opaque asset — its links never walked,
  *    nothing checked, exit 0. {@link parseRefusedIssues} names every such file
  *    the skill reaches.
- * 2. **A refusal of an in-process parse.** `parseFileCached` falls back to one
- *    bounded parse through the pool when this thread's stack overflows, so its
- *    refusal is the worker's; a parse with no bounded route (the SKILL.md
- *    frontmatter parser, `parseMarkdown`) overflows this thread's stack.
- *    {@link inProcessRefusalIssue} classifies either.
+ * 2. **A refusal of a single-file parse.** `parseFileCached`,
+ *    `parseContentCached` and `parseFrontmatter` parse on the same bounded
+ *    route, one document at a time, and throw (or, for the frontmatter, carry)
+ *    the worker's refusal. {@link parseRefusalIssue} classifies it.
  */
 
 import {
-  inProcessRefusalEntry,
   notAdmittedIssues,
+  parseRefusedEntryFor,
   type ParseRefusedResource,
 } from '@vibe-agent-toolkit/resources';
 import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
@@ -81,15 +80,16 @@ export function parseRefusedIssues(
 }
 
 /**
- * The finding for an in-process parse that refused its document, or
- * `undefined` for any other error (which the caller handles as it did).
+ * The finding for a single-file parse the worker refused for this run (a limit,
+ * a dead worker), or `undefined` for any other error (which the caller handles
+ * as it did).
  *
  * @param error - What the parse threw
  * @param filePath - The document
  * @param locationRoot - The base its location is relative to
  * @returns A `RESOURCE_PARSE_LIMIT_EXCEEDED` / `RESOURCE_PARSE_WORKER_DIED` error issue, or `undefined`
  */
-export function inProcessRefusalIssue(error: unknown, filePath: string, locationRoot: string): ValidationIssue | undefined {
-  const entry = inProcessRefusalEntry(filePath, error);
+export function parseRefusalIssue(error: unknown, filePath: string, locationRoot: string): ValidationIssue | undefined {
+  const entry = parseRefusedEntryFor(filePath, error);
   return entry === undefined ? undefined : refusalIssues([entry], locationRoot)[0];
 }

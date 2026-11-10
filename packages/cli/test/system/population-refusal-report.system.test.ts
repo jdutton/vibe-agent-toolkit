@@ -21,13 +21,14 @@
  * derives.
  */
 
-import { rmSync } from 'node:fs';
+import { chmodSync, rmSync } from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
 
-import { writeCommittedCorpus } from '../test-helpers.js';
+import { writeCommittedCorpus, writeCorpus } from '../test-helpers.js';
 
 import { createIsolatedScratch, executeCli, getBinPath, isolatedScratchEnv } from './test-common.js';
 
@@ -65,6 +66,10 @@ async function stderrOf(root: string, args: string[]): Promise<{ status: number 
 }
 
 const REFUSED_CODE = 'RESOURCE_PARSE_LIMIT_EXCEEDED';
+
+/** A mode that denies every read, and the one that restores it so the scratch can be removed. */
+const UNREADABLE_MODE = 0o000;
+const READABLE_MODE = 0o644;
 
 /** What the verbs publish that the refused-file cases read. */
 interface Published {
@@ -104,10 +109,15 @@ function refusedCorpus(name: string, validation: readonly string[]): string {
  *
  * @param root - The corpus root
  * @param args - The verb and its arguments
+ * @param env - Variables to set over the isolated environment
  * @returns The exit status, the document, and stderr for failure messages
  */
-async function published(root: string, args: string[]): Promise<{ status: number | null; report: Published; stderr: string }> {
-  const result = await executeCli(binPath, args, { cwd: root, env: isolatedScratchEnv(scratch) });
+async function published(
+  root: string,
+  args: string[],
+  env: Readonly<Record<string, string>> = {},
+): Promise<{ status: number | null; report: Published; stderr: string }> {
+  const result = await executeCli(binPath, args, { cwd: root, env: { ...isolatedScratchEnv(scratch), ...env } });
   return { status: result.status, report: yaml.parse(result.stdout) as Published, stderr: result.stderr };
 }
 
@@ -283,21 +293,37 @@ describe('one allow entry for a refused file, in every verb that reports it (sys
     expect(refusedIn(failed.report), failed.stderr).toStrictEqual([expect.objectContaining({ severity: 'error', location: 'docs/deep.md' })]);
     expect(failed.status, failed.stderr).toBe(1);
   });
+
+  // `resources check` is not the run of the project's allow list: it resolves
+  // through `resolveFindings`, which drains no ledger. An expired entry still
+  // excuses the file, and neither it nor an entry matching nothing is reported.
+  it('resources check: an expired entry still excuses it, and no allow-ledger code is reported', async () => {
+    const lapsed = refusedCorpus('lapsed', [
+      '  validation:',
+      '    allow:',
+      `      ${REFUSED_CODE}:`,
+      '        - paths: ["docs/deep.md"]',
+      '          reason: seeded refusal, excused long ago',
+      '          expires: "2000-01-01"',
+      '        - paths: ["never/**"]',
+      '          reason: seeded entry matching nothing',
+    ]);
+
+    const { status, report, stderr } = await published(lapsed, ['resources', 'check']);
+
+    expect(report.findings.map((finding) => finding.code), stderr).toStrictEqual([]);
+    expect(status, stderr).toBe(0);
+  });
 });
 
 // I0: the verdict never depends on cache warmth. A SKILL.md nesting thousands
-// of blockquotes overflows the in-process parse of `skills validate`; the crawl
-// of `resources validate` parses it in a worker and files the facts, so a
-// later `skills validate` was served them from the cache and admitted what the
-// cold run refused. The in-process overflow now falls back to one bounded parse
-// through the pool, so every run gives the worker's answer.
-//
-// Two depths, because the worker's answer differs between them: measured on
-// Node 26 (darwin arm64), 9,500 overflows the main thread's stack and the
-// worker admits it (red before the fix: cold exit 1, warm exit 0), while
-// 10,000 also passes the worker's 1,024 MiB `heapMb`, so the worker refuses it
-// and both runs refuse. The assertion holds whichever way a host's stack and
-// heap fall: `skills validate` agrees with the crawl, cold and warm.
+// of blockquotes overflowed the in-process parse `skills validate` once ran;
+// the crawl of `resources validate` parses it in a worker and files the facts,
+// so a later `skills validate` was served them from the cache and admitted what
+// the cold run refused (measured at 9,500: cold exit 1, warm exit 0). Every
+// lane now parses in the bounded worker, so every run gives the worker's answer.
+// The assertion holds whichever way a host's worker limits fall: `skills
+// validate` agrees with the crawl, cold and warm.
 describe('skills validate, cold and then warm, over a document the in-process parse overflows (system test)', () => {
   beforeAll(() => {
     scratch = createIsolatedScratch('vat-cold-warm-');
@@ -321,6 +347,53 @@ describe('skills validate, cold and then warm, over a document the in-process pa
     expect(cold.status, `cold: ${cold.stderr}\ncrawl: ${crawl.stderr}`).toBe(crawl.status);
     expect(warm.status, `warm: ${warm.stderr}`).toBe(cold.status);
     expect(refusedIn(warm.report).map((finding) => finding.location)).toStrictEqual(refusedIn(cold.report).map((finding) => finding.location));
+  });
+});
+
+// A skill BUNDLING a document nested 10,000 blockquotes deep goes through every
+// skill verb on the bounded route (ADR I11): the worker parses it, so `skills
+// validate`, `skills build` and `skills package` give the verdict `resources
+// validate` gives the same file. A lane that parsed it on its own thread would
+// overflow the stack and refuse it (or crash), disagreeing with the crawl.
+//
+// Under the default limits the worker ADMITS it — its live heap is about 420 MiB,
+// under the 1,024 MiB `heapMb`, and the garbage a loaded host leaves uncollected is
+// never a breach (limits record, "Garbage is not a breach") — so every verb exits 0
+// with no refusal. Each child runs
+// with `NODE_OPTIONS` cleared: CI's `--max-old-space-size=512` lowers V8's ceiling,
+// the pool then applies half of it (256 MiB), and the document is refused on every
+// lane alike — the same verdict, but not the default one this pins
+// (`docs/architecture/fact-extractors-limits.md`, heap under a small flag).
+describe('a skill bundling a 10,000-level blockquote document (system test)', () => {
+  let deep: string;
+
+  beforeAll(() => {
+    scratch = createIsolatedScratch('vat-deep-bundle-');
+    deep = corpus('deep-bundle', {
+      'vibe-agent-toolkit.config.yaml': 'resources:\n  include: ["skills/**/*.md"]\nskills:\n  include:\n    - "skills/deep/SKILL.md"\n',
+      'skills/deep/SKILL.md': '---\nname: deep\ndescription: deep - a skill bundling a document that nests ten thousand blockquotes\n---\n\nSee [the deep document](./deep.md).\n',
+      'skills/deep/deep.md': `${'>'.repeat(10_000)} deep\n`,
+    });
+  });
+
+  afterAll(() => {
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
+  it.each([
+    ['skills validate', ['skills', 'validate']],
+    ['skills build', ['skills', 'build']],
+    ['skills package', ['skills', 'package', 'skills/deep/SKILL.md', '-o', 'packaged']],
+  ])('%s admits it, as resources validate does', async (_verb, args) => {
+    const defaults = { NODE_OPTIONS: '' };
+    const crawl = await published(deep, ['resources', 'validate'], defaults);
+    const run = await published(deep, args, defaults);
+
+    expect(crawl.status, crawl.stderr).toBe(0);
+    expect(refusedIn(crawl.report), crawl.stderr).toStrictEqual([]);
+    expect(run.status, `${run.stderr}\ncrawl: ${crawl.stderr}`).toBe(crawl.status);
+    expect(refusedIn(run.report).map((finding) => finding.location), run.stderr)
+      .toStrictEqual(refusedIn(crawl.report).map((finding) => finding.location));
   });
 });
 
@@ -399,5 +472,53 @@ describe('two refused files with identical bytes, in every verb that reports the
     }
     expect([...reasons]).toHaveLength(1);
     expect([...reasons][0]).toMatch(/^its parse was stopped at its outputDepth limit/);
+  });
+});
+
+// An unreadable file is not admitted in any verb: `validate` and `scan` meet it
+// in the registry's crawl, `check` as an unreadable realization of the
+// population. One contract (`notAdmittedFindings`): the same code, the same
+// reason clause, at its own path, failing the run by default.
+//
+// Outside git, deliberately: in a repository the git snapshot reads every file
+// git does not ignore, so an unreadable one refuses the whole run before any
+// lane meets it — or does not, when git's stat cache spares the re-read.
+// `chmod 000` denies nothing to uid 0 and means nothing on Windows.
+describe.skipIf(CANNOT_DENY_READS)('an unreadable file, in every verb that crawls (system test)', () => {
+  let locked: string;
+  let lockedFile: string;
+
+  beforeAll(() => {
+    scratch = createIsolatedScratch('vat-not-admitted-unreadable-');
+    locked = writeCorpus(safePath.join(scratch, 'locked'), {
+      'vibe-agent-toolkit.config.yaml': 'resources:\n  include: ["docs/**/*.md"]\n',
+      'docs/a.md': '# A\n',
+      'docs/locked.md': '# Locked\n',
+    });
+    lockedFile = safePath.join(locked, 'docs/locked.md');
+    chmodSync(lockedFile, UNREADABLE_MODE);
+  });
+
+  afterAll(() => {
+    chmodSync(lockedFile, READABLE_MODE);
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
+  it('fails validate, scan and check with RESOURCE_UNREADABLE at its path, in one reason clause', async () => {
+    const reasons = new Set<string>();
+    for (const args of [['resources', 'validate'], ['resources', 'scan'], ['resources', 'check']]) {
+      const { status, report, stderr } = await published(locked, args);
+      const unreadable = report.findings.filter((finding) => finding.code === 'RESOURCE_UNREADABLE');
+      const verb = `${args.join(' ')}: ${stderr}`;
+
+      expect(unreadable, verb).toStrictEqual([expect.objectContaining({ severity: 'error', location: 'docs/locked.md' })]);
+      expect(status, verb).toBe(1);
+      const lead = "'docs/locked.md' was enumerated but ";
+      expect(unreadable[0]?.message.startsWith(lead), unreadable[0]?.message).toBe(true);
+      reasons.add(unreadable[0]?.message.slice(lead.length).split(', so ')[0] ?? '');
+    }
+    // The registry's crawl names the errno; the population records the state
+    // `unreadable` and no errno, so `check` says the same clause without it.
+    expect([...reasons].sort((a, b) => a.localeCompare(b))).toStrictEqual(['could not be read', 'could not be read (EACCES)']);
   });
 });

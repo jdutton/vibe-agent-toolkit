@@ -43,7 +43,7 @@ import {
   issuesFromCheckRows,
   nearMissesOf,
   notAdmittedFindings,
-  parseRefusedRealizations,
+  notAdmittedRealizations,
   uninterpretableRowsReason,
   type BoundBuiltinCheck,
   type CheckIssue,
@@ -1668,11 +1668,17 @@ export function buildInterruptedCheckInput(options: {
     // and through the one finding resolver a completed run's findings go through, so a
     // re-derived finding carries the same registry fields (`reference`) as the one that died.
     // Every code here is a refusal, which no `severity` key reaches: no config is needed.
-    issues: resolveFindings([
-      interruptedRunFinding(inFlight, ending, completed.length),
-      ...refused,
-      ...(stopped === undefined ? [] : [stopped.finding]),
-    ], {}),
+    // The population's not-admitted findings lead, as on a completed run, and are
+    // NOT resolved again: the child resolved them through `resources.validation`,
+    // and a second pass with no config would put a configured severity back to its default.
+    issues: [
+      ...(population?.notAdmitted ?? []),
+      ...resolveFindings([
+        interruptedRunFinding(inFlight, ending, completed.length),
+        ...refused,
+        ...(stopped === undefined ? [] : [stopped.finding]),
+      ], {}),
+    ],
     costs,
   };
 }
@@ -2244,6 +2250,11 @@ function runOutcome(options: {
     // supervisor that a kill has a projection to report on. It also resets the
     // watchdog, so the population is bounded by the budget without being charged
     // the first check's share of it.
+    //
+    // The files it did not admit are findings BEFORE any check runs, and ride on
+    // the same line, so a run killed mid-check still fails on them
+    // (`buildInterruptedCheckInput`).
+    const notAdmitted = notAdmittedPopulationFindings(projection, root, validation);
     onProgress?.({
       kind: 'population',
       population: provenance.population,
@@ -2252,6 +2263,7 @@ function runOutcome(options: {
       lensMs: provenance.lensMs,
       lensesEvaluated: [...provenance.lensesEvaluated],
       membersEnumerated: extent.membersEnumerated,
+      notAdmitted,
     });
     // 🪤 `checks-complete` is NOT emitted here. It used to be, and that put
     // `resolveFindings` — which runs inside `runProjectChecks` — on the
@@ -2275,36 +2287,38 @@ function runOutcome(options: {
     });
     // The refusals lead the checks' own findings: every one of those is a
     // statement about a corpus with these files missing from it.
-    const issues = [...parseRefusedFindings(projection, root, validation), ...ran.issues];
+    const issues = [...notAdmitted, ...ran.issues];
     return { ...ran, issues, ...provenance, ...extent };
   });
 }
 
 /**
- * One finding per file whose parse this run refused, through the one
- * not-admitted contract every crawling verb reports a refusal with
- * (`notAdmittedFindings`): the same code and sentence, located at the file's
- * own project-relative path, resolved through `resources.validation` — its
- * allow list first, then its severity.
+ * One finding per file the population enumerated and did not admit — unreadable,
+ * too large to decode, changed under the run, its parser threw, or its parse
+ * refused this run (`notAdmittedRealizations`) — through the one not-admitted
+ * contract every crawling verb reports such a file with (`notAdmittedFindings`):
+ * the same code and sentence, located at the file's own project-relative path,
+ * resolved through `resources.validation` — its allow list first, then its
+ * severity.
  *
- * No check can see a refused file's rows — the blob has none this run — so a
- * clean verdict over the population would be a claim about a corpus the checks
- * never read: the refusal counts against the verdict instead (error by
- * default). A store hit cannot hide it: a refusal is never filed, so its key is
- * held by nothing and the hit's coverage check re-derives it.
+ * No check can see such a file's rows — it has none this run — so a clean
+ * verdict over the population would be a claim about a corpus the checks never
+ * read: the file counts against the verdict instead (error by default). A store
+ * hit cannot hide a per-run refusal: none is ever filed, so its key is held by
+ * nothing and the hit's coverage check re-derives it.
  *
  * @param projection - The populated projection
  * @param root - The absolute root its realization paths are relative to
  * @param validation - The project's `resources.validation`, or undefined
  * @returns The findings left after the allow filter, each at its resolved severity
  */
-function parseRefusedFindings(
-  projection: Parameters<typeof parseRefusedRealizations>[0],
+function notAdmittedPopulationFindings(
+  projection: Parameters<typeof notAdmittedRealizations>[0],
   root: string,
   validation: ValidationConfig | undefined,
 ): ValidationIssue[] {
   return notAdmittedFindings(
-    { unreadable: [], parseRefused: parseRefusedRealizations(projection, root) },
+    notAdmittedRealizations(projection, root),
     { locationRoot: root, consequence: "no check saw its rows and this run's verdict does not cover it" },
     validation ?? {},
   );

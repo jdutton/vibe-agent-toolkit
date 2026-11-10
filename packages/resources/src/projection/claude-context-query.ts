@@ -630,6 +630,7 @@ function buildImportIndex(projection: Projection, realizations: RealizationIndex
       resourceRealizations: projection.resourceRealizations,
       blobs: projection.blobs,
       blobReferences: projection.blobReferences,
+      blobConditions: projection.blobConditions,
       harnessBlobFacts: projection.harnessBlobFacts,
       harnessBlobImports: projection.harnessBlobImports,
       declaration,
@@ -722,9 +723,12 @@ function rowsFor(
     rows.push({
       resourceId,
       path: realization.path,
-      // `null` (unmeasured) only for a file with no blob. A keyed, walked blob
-      // with no facts row throws — reading it as unmeasured would hide a bug.
-      tokens: blob === undefined ? null : index.facts.requireFacts(blob.contentKey, realization.path).injectedTokens,
+      // `null` (unmeasured) only for a file with no blob, or one whose facts
+      // this run refused (reported by the population). A keyed, walked blob
+      // with no facts row otherwise throws — reading it as unmeasured would hide a bug.
+      tokens: blob === undefined || index.facts.refused(blob.contentKey)
+        ? null
+        : index.facts.requireFacts(blob.contentKey, realization.path).injectedTokens,
       bytes: blob?.bytes ?? null,
       loadClass,
       admissions: list,

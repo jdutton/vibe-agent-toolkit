@@ -11,8 +11,9 @@ import { basename, dirname } from 'node:path';
 import { materializeIssue, readDeclaredSkillName } from '@vibe-agent-toolkit/agent-skills';
 import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { scan, type ScanSummary } from '@vibe-agent-toolkit/discovery';
+import { type ParseDispatcher, withParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, isTreeChangeResidue, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, isTreeChangeResidue, mapInOrder, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
 
 import { refusalCodeOf } from '../../utils/command-refusal.js';
@@ -48,8 +49,8 @@ interface DiscoveredSkill {
  * install never creates. The leaf is only a fallback for a SKILL.md too damaged
  * to declare anything; `vat audit` reports that separately.
  */
-function extractSkillName(skillPath: string): string {
-  return readDeclaredSkillName(skillPath) ?? basename(dirname(skillPath));
+async function extractSkillName(skillPath: string, dispatcher: ParseDispatcher): Promise<string> {
+  return (await readDeclaredSkillName(skillPath, { dispatcher })) ?? basename(dirname(skillPath));
 }
 
 /**
@@ -57,20 +58,24 @@ function extractSkillName(skillPath: string): string {
  */
 function processDiscoveredSkills(
   discoveredSkills: Array<{ path: string }>
-): DiscoveredSkill[] {
-  return discoveredSkills.map(s => {
-    const filenameCheck = validateSkillFilename(s.path);
-    const skill: DiscoveredSkill = {
-      path: s.path,
-      name: extractSkillName(s.path),
-      valid: filenameCheck.valid,
-    };
-    // Only add warning if it exists (exactOptionalPropertyTypes)
-    if (filenameCheck.message !== undefined) {
-      skill.warning = filenameCheck.message;
-    }
-    return skill;
-  });
+): Promise<DiscoveredSkill[]> {
+  // One parse dispatcher for the listing: each name is read from its SKILL.md's
+  // frontmatter on the bounded route, and a cold listing pays one worker start.
+  return withParseDispatcher((dispatcher) =>
+    mapInOrder(discoveredSkills, async (s) => {
+      const filenameCheck = validateSkillFilename(s.path);
+      const skill: DiscoveredSkill = {
+        path: s.path,
+        name: await extractSkillName(s.path, dispatcher),
+        valid: filenameCheck.valid,
+      };
+      // Only add warning if it exists (exactOptionalPropertyTypes)
+      if (filenameCheck.message !== undefined) {
+        skill.warning = filenameCheck.message;
+      }
+      return skill;
+    }),
+  );
 }
 
 /** `vat skills list` has no `--strict`: its one finding is a warning about what it could not see. */
@@ -181,8 +186,8 @@ function outputSkillsHuman(
  * Scan a dist/skills/ directory tree for SKILL.md files and return DiscoveredSkill[].
  * Each immediate subdirectory that contains a SKILL.md is treated as one skill.
  */
-function scanSkillsDir(skillsDir: string): DiscoveredSkill[] {
-  const skills: DiscoveredSkill[] = [];
+function scanSkillsDir(skillsDir: string): Promise<DiscoveredSkill[]> {
+  const found: Array<{ path: string }> = [];
 
   for (const entry of readSourceDir(skillsDir, 'environment')) {
     // Followed: a `--dev` install is a symlinked skill directory and is listed.
@@ -190,11 +195,11 @@ function scanSkillsDir(skillsDir: string): DiscoveredSkill[] {
     if (isTreeChangeResidue(entry.name) || direntKindFollowingSync(skillsDir, entry, skillsDir) !== 'directory') continue;
     const candidate = safePath.join(skillsDir, entry.name);
     if (holdsSkillMd(candidate, skillsDir, 'environment')) {
-      skills.push(...processDiscoveredSkills([{ path: safePath.join(candidate, 'SKILL.md') }]));
+      found.push({ path: safePath.join(candidate, 'SKILL.md') });
     }
   }
 
-  return skills;
+  return processDiscoveredSkills(found);
 }
 
 /**
@@ -218,7 +223,7 @@ async function listUserSkills(logger: ReturnType<typeof createLogger>): Promise<
 
   const { plugins, skills: standaloneSkills, unreadable } = await scanUserContext();
   return {
-    skills: processDiscoveredSkills(discoverSkills([...plugins, ...standaloneSkills])),
+    skills: await processDiscoveredSkills(discoverSkills([...plugins, ...standaloneSkills])),
     context: 'user',
     // `scanUserContext` covers ~/.claude/plugins and ~/.claude/skills, so
     // their common parent is the base that spans both.
@@ -246,7 +251,7 @@ async function listProjectSkills(pathArg: string | undefined, logger: ReturnType
   });
 
   return {
-    skills: processDiscoveredSkills(discoverSkills(scanResult.results)),
+    skills: await processDiscoveredSkills(discoverSkills(scanResult.results)),
     context: 'project',
     root: safePath.resolve(rootDir),
     unreadable: scanResult.unreadable,

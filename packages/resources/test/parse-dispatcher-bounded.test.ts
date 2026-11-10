@@ -67,6 +67,7 @@ function recordingPool(answer: () => Promise<ParseResult>): {
           return answer();
         },
         parseIntoCache: () => Promise.reject(new Error('not used')),
+        harnessFacts: () => Promise.reject(new Error('not used')),
         shutdown: () => Promise.resolve(),
       };
     },

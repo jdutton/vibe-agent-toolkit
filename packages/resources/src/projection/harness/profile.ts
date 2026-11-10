@@ -4,6 +4,13 @@
  * built on top of — is a path an entry point, does it read a path at all, what
  * does it do with one file's bytes, and how does it resolve and render one.
  *
+ * What a harness does with one file's BYTES is not a member of the profile:
+ * that read is a parse (a lexer and a frontmatter decode), so it runs in the
+ * bounded parse worker (ADR I8), which resolves the reader from the profile's
+ * {@link HarnessProfile.id} (`loadHarnessReader` in `parser-loader.ts`) — a
+ * function cannot cross the thread boundary, and no main-thread module may
+ * load a parser. The harness pass asks the run's dispatcher for it.
+ *
  * VAT reads on behalf of a harness rather than owning a generic memory-file
  * model of its own: `CLAUDE.md`, `.claude/rules` and `@` imports are Claude
  * Code's vocabulary, transcribed from the shipped binary
@@ -57,8 +64,9 @@ export interface HarnessContentFacts {
 
 /**
  * One coding harness's own reading of memory files — the entry points it
- * opens without being imported, the text-file test, what it does with a
- * file's bytes, how it resolves and renders one, and the bounds it imposes.
+ * opens without being imported, the text-file test, how it resolves and
+ * renders one, and the bounds it imposes. What it does with a file's bytes is
+ * resolved by {@link HarnessProfile.id} in the parse worker.
  */
 export interface HarnessProfile {
   readonly id: HarnessId;
@@ -74,8 +82,6 @@ export interface HarnessProfile {
   isEntryPoint(rootRelativePath: string): boolean;
   /** Whether the loader reads a file at this path at all (`Syn`). */
   isTextPath(path: string): boolean;
-  /** Everything the harness does with one file's bytes. */
-  factsOf(raw: string): HarnessContentFacts;
   /** Resolve one import target against the importing file. */
   resolveImport(target: string, sourceFilePath: string): ResolveLocalHrefResult;
   /** `path` when the target names a directory component, else `bare`. */

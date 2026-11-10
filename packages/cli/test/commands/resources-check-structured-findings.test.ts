@@ -33,7 +33,7 @@ const NEAR_COLUMNS: ColumnsOfStatement = () => ['path', 'Finding_Line'];
 const EXAMINED_NOTHING = 'RESOURCE_CHECK_EXAMINED_NOTHING';
 const BROKEN = 'RESOURCE_CHECK_BROKEN';
 const POPULATED = {
-  population: 'derived', lensPopulation: 'none', populationMs: 1, lensMs: 0, lensesEvaluated: [], membersEnumerated: 7,
+  population: 'derived', lensPopulation: 'none', populationMs: 1, lensMs: 0, lensesEvaluated: [], membersEnumerated: 7, notAdmitted: [],
 } as const;
 
 /**

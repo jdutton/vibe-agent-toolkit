@@ -160,9 +160,8 @@ export function ruleScopeFor(path: string, paths: HarnessBlobFactsRow['paths']):
 
 /**
  * The harness whose `paths:` this contributor reads — spelled as the literal,
- * typed through {@link HarnessId}, because this module sits on the
- * `claude-code.ts → claude-memory.ts → claude-context-rules.ts` chain and must
- * not import the profile itself.
+ * typed through {@link HarnessId}, so this module stays off the profile's
+ * import graph (see `claude-code-entry-names.ts`).
  */
 const CLAUDE_CODE_HARNESS: HarnessId = 'claude-code';
 
@@ -181,7 +180,8 @@ const FRONTIER = Symbol('frontier');
  * the fixpoint uses `requireFacts`, which throws.
  *
  * A key with no `blobs` row at all (unreadable, or refused as not text) has no
- * content to have facts OF, and reads as declaring no `paths:`, as it always did.
+ * content to have facts OF, and reads as declaring no `paths:`, as it always did;
+ * so does a blob whose facts this run refused (`HarnessFactsIndex.refused`).
  *
  * @param contentKey - The rules file's content key, or null when unkeyed
  * @param derivedBlobs - Every content key with a `blobs` row
@@ -193,7 +193,7 @@ function rulePathsOf(
   derivedBlobs: ReadonlySet<string>,
   facts: HarnessFactsIndex,
 ): HarnessBlobFactsRow['paths'] | typeof FRONTIER {
-  if (contentKey === null || !derivedBlobs.has(contentKey)) return null;
+  if (contentKey === null || !derivedBlobs.has(contentKey) || facts.refused(contentKey)) return null;
   const row = facts.factsOf(contentKey);
   return row === undefined ? FRONTIER : row.paths;
 }

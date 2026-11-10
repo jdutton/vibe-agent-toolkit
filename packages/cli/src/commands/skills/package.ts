@@ -31,7 +31,7 @@ import { resolveSkillPath } from '../skill/review.js';
 
 import { packagingFailedIssue } from './build.js';
 import type { SkillsPackageData } from './package-schema.js';
-import { skillDocumentOrOverflow } from './skill-discovery.js';
+import { skillDocumentOrRefused } from './skill-discovery.js';
 
 /** Default packaging target */
 const DEFAULT_TARGET: PackagingTarget = 'claude-code';
@@ -500,8 +500,8 @@ async function packageAndReport(
     if (code === undefined) throw error;
     const message = errorMessageOf(error);
     logger.error(`Package failed: ${message}`);
-    // A SKILL.md too deep to parse here (the refusal itself, usually) reports as unnamed.
-    const parseResult = await skillDocumentOrOverflow(skillPath);
+    // A SKILL.md the parse worker refuses (the refusal itself, usually) reports as unnamed.
+    const parseResult = await skillDocumentOrRefused(skillPath);
     return buildSkillsPackageReport({
       validation,
       // The package is one plan: a refused one — a too-large ZIP included — landed nothing.

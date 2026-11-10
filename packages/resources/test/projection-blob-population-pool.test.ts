@@ -315,6 +315,7 @@ describe('parse-pool activation', () => {
         // on the wrapper instead of on the thing under test.
         parseIntoCache: async (kind, content, byteLength, cacheKey) =>
           real.parseIntoCache(kind, content, byteLength, cacheKey),
+        harnessFacts: async (harness, content, byteLength) => real.harnessFacts(harness, content, byteLength),
         shutdown: async (): Promise<void> => {
           // Sampled BEFORE the close: this is the only moment at which a thread
           // the run started is guaranteed still to be in the thread table.
@@ -338,7 +339,7 @@ describe('parse-pool activation', () => {
 
     // Every document is now a cache hit, so the run has no parse to hand
     // anywhere — and must therefore create no pool and spawn no thread, exactly
-    // as `parseKeyed` loads no parser.
+    // as a warm dispatcher builds no pool.
     expect(cold.pools).toBe(1);
     expect(observed.pools).toBe(0);
     expect(observed.peak).toBe(workerThreadCount());

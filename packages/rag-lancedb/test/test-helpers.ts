@@ -11,7 +11,7 @@ import { rm, writeFile } from 'node:fs/promises';
 
 import type { EmbeddingProvider } from '@vibe-agent-toolkit/rag';
 import type { ContentTransformOptions, LinkType, ResourceMetadata } from '@vibe-agent-toolkit/resources';
-import { calculateChecksumFromContent, parseMarkdown } from '@vibe-agent-toolkit/resources';
+import { calculateChecksumFromContent, parseFileCached } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { readTextContentSync } from '@vibe-agent-toolkit/utils/fs';
 import { createTempDirAsync } from '@vibe-agent-toolkit/utils/testing';
@@ -48,7 +48,7 @@ export async function createTestResource(
   filePath: string,
   resourceId = 'test-1'
 ): Promise<ResourceMetadata> {
-  const parseResult = await parseMarkdown(filePath);
+  const parseResult = await parseFileCached(filePath, 'markdown');
   return {
     id: resourceId,
     filePath,

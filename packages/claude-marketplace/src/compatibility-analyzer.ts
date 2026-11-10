@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
 
 import type { EvidenceRecord, Observation } from '@vibe-agent-toolkit/agent-skills';
+import { isParserUnavailable, type ParseDispatcher, withParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { issueLocation, mapWithConcurrency, safePath } from '@vibe-agent-toolkit/utils';
 
 import { readMarketplaceDefaultTargets, resolveEffectiveTargets } from './marketplace-defaults.js';
@@ -108,10 +109,11 @@ async function scanFile(
   relativePath: string,
   fullPath: string,
   locationRoot: string,
+  dispatcher: ParseDispatcher,
 ): Promise<{ counter: FileCounter; evidence: EvidenceRecord[] } | undefined> {
   const ext = extname(relativePath).toLowerCase();
   if (MARKDOWN_EXTENSIONS.has(ext)) {
-    return { counter: 'skillFiles', evidence: await scanMarkdownFile(fullPath, locationRoot) };
+    return { counter: 'skillFiles', evidence: await scanMarkdownFile(fullPath, locationRoot, dispatcher) };
   }
   if (SCRIPT_EXTENSIONS.has(ext)) {
     return { counter: 'scriptFiles', evidence: await scanScriptFile(fullPath, locationRoot) };
@@ -131,11 +133,12 @@ async function scanFile(
 async function scanMarkdownFile(
   fullPath: string,
   locationRoot: string,
+  dispatcher: ParseDispatcher,
 ): Promise<EvidenceRecord[]> {
   const content = await readFile(fullPath, 'utf8');
   return [
-    ...scanCodeBlocks(content, fullPath, locationRoot),
-    ...scanFrontmatter(content, fullPath, locationRoot),
+    ...(await scanCodeBlocks(content, fullPath, locationRoot, { dispatcher })),
+    ...(await scanFrontmatter(content, fullPath, locationRoot, { dispatcher })),
   ];
 }
 
@@ -266,15 +269,19 @@ export async function analyzeCompatibility(
   // Each file is scanned on its own: one the filesystem refuses, or one whose
   // JSON will not parse, is named under `unchecked` and the rest are still
   // analyzed. This used to throw out of the whole plugin. The scans are
-  // read-only and run concurrently; their results fold in file order.
-  const outcomes = await mapWithConcurrency(files, async (relativePath) => {
-    const fullPath = safePath.join(pluginDir, relativePath);
-    try {
-      return { scanned: await scanFile(relativePath, fullPath, locationRoot) };
-    } catch (error) {
-      return { failed: uncheckedEntry(fullPath, reasonOf(error), locationRoot) };
-    }
-  });
+  // read-only and run concurrently, on one parse dispatcher; their results fold
+  // in file order. A broken parser install is the run's failure, never a file's.
+  const outcomes = await withParseDispatcher((dispatcher) =>
+    mapWithConcurrency(files, async (relativePath) => {
+      const fullPath = safePath.join(pluginDir, relativePath);
+      try {
+        return { scanned: await scanFile(relativePath, fullPath, locationRoot, dispatcher) };
+      } catch (error) {
+        if (isParserUnavailable(error)) throw error;
+        return { failed: uncheckedEntry(fullPath, reasonOf(error), locationRoot) };
+      }
+    }),
+  );
   for (const outcome of outcomes) {
     if ('failed' in outcome) {
       unchecked.push(outcome.failed);

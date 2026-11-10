@@ -1,15 +1,12 @@
 ### Breaking
 
-- **`VAT_PARSE_POOL` is removed, and every document parse a crawl makes now runs in a bounded
-  worker thread** — `vat resources validate | scan | check | query`, `vat rag index`, the
-  inventory's projection lane, and `ResourceRegistry.addResource` / `addResources`. There is no
-  in-process route for them to switch back to: a parse on the run's own thread cannot be stopped,
-  so one pathological document could hang or crash the whole run. Still in-process, bounded only
-  by the files a skill's link graph reaches: `parseFileCached` (skill validation and packaging,
-  post-build checks, the CLI's skill discovery), direct `parseMarkdown` calls, and the skill lane's
-  frontmatter decode. A stack overflow in `parseFileCached` now falls back to one bounded parse
-  through the pool, so its answer is the worker's, cold or warm. Setting the variable now
-  does nothing; delete it from CI and scripts. A small run that used to parse on the main thread
+- **`VAT_PARSE_POOL` is removed, and every markdown and HTML parse VAT makes now runs in a
+  bounded worker thread** — every crawl (`vat resources validate | scan | check | query`, `vat rag
+  index`, the inventory's projection lane, `ResourceRegistry.addResource` / `addResources`), skill
+  validation, packaging and post-build checks, the CLI's skill discovery, `vat audit`, and the skill
+  lane's frontmatter decode. There is no in-process route left to switch back to: a parse on the
+  run's own thread cannot be stopped, so one pathological document could hang or crash the whole
+  run. Setting the variable now does nothing; delete it from CI and scripts. A small run that used to parse on the main thread
   now starts one worker, which costs a cold small corpus a measured fraction of a second (numbers in
   `docs/architecture/fact-extractors-limits.md`). `VAT_PARSE_POOL_SIZE` and
   `VAT_PARSE_POOL_MIN_MISSES` still size the pool.
@@ -41,20 +38,37 @@
   patterns match it; `scan` reported every one before. `vat rag index` reports an unreadable file as
   `RESOURCE_UNREADABLE`, no longer as `RAG_DOCUMENT_INDEX_FAILED`, which now means only that the
   provider could not chunk or embed an admitted document.
-- **`vat resources check` fails on a file whose parse it refused.** No check can see that file's
-  rows, so each one is a finding at it under its refusal code, an error by default (exit 1),
+- **`vat resources check` fails on every file the population enumerated and did not admit** — one
+  whose parse it refused, and one it could not read, that was over the input size, that changed under
+  the run or whose parse failed (`RESOURCE_UNREADABLE`, as `vat resources validate` and `scan` report
+  an unreadable file). No check can see that file's rows, so each one is a finding at it under the
+  not-admitted contract's code, an error by default (exit 1), computed before the checks run so a
+  killed run's report carries it too,
   resolved through the whole `resources.validation` like every other verb: an `allow` entry naming
   the file clears it, and `severity` sets its level. Every `vat resources check` finding with a
   registry code now carries its `reference`, as other verbs' findings do — a killed run's rebuilt
   findings included. `vat resources query` still answers over the rows it
   has and names the refusal on stderr.
-- **`parseMarkdown` and `parseHtml` throw on a stack overflow** — a document nested too deeply for
-  the calling thread — instead of returning a partial result or a frontmatter error. Classify it
-  with `isStackOverflow` from `@vibe-agent-toolkit/resources`; the bounded crawl never throws it, it
-  refuses the file (`stackMb`). `parseFileCached` never throws it either: it re-parses the document
-  once through a one-thread bounded pool and returns that answer, or throws the pool's
-  `ParseLimitError` / `ParseWorkerDiedError`; it is now exported from the dispatcher module, still
-  through the `@vibe-agent-toolkit/resources` barrel.
+- **Every public parse function is asynchronous and bounded, and the in-process ones are gone.**
+  `parseMarkdown` and `parseHtml` are deleted: use `parseFileCached(path, kind, route?)`, or
+  `parseContentCached(content, kind, route?)` for text you hold. Both read the parse cache and, on a
+  miss, parse in a worker under the default limits: through the `ParseDispatcher` you pass as
+  `route.dispatcher` (build one with `withParseDispatcher(work)`, which shuts it down) when you
+  parse many documents, or a one-thread pool started and shut down for that call. A document over a
+  limit throws `ParseLimitError` / `ParseWorkerDiedError`; nothing throws a stack overflow any more.
+  `parseKeyed`, `loadParser`, `LoadedParser`, `importParserModule` and `isStackOverflow` are no
+  longer exported, and the `./link-parser`, `./remark-parser` and `./markdown-processor` package
+  subpaths are deleted (`./parse-conformance` remains, for testing a parser implementation).
+  `@vibe-agent-toolkit/agent-skills`: `parseFrontmatter(content, route?)`, `readDeclaredSkillName`,
+  `declaredSkillNameIn`, `runCompatDetectors` (whose route is now required),
+  `allowedToolsDeclarations` and `collectLocalShellEvidence` return promises, and
+  `bundledPathCandidates(path, route)` takes a route; `ValidateOptions` and
+  `SkillValidationSharedContext` take an optional `dispatcher`. `@vibe-agent-toolkit/claude-marketplace`:
+  `scanFrontmatter` and `scanCodeBlocks` return promises, `ClaudeSkillInventoryOptions` takes a
+  `dispatcher`, and `readPluginLocalSkillName(skillSourceDir, dispatcher?)` drops its
+  `skillDirPath` parameter. `parseFrontmatter` now takes its value from the worker's decode, so a
+  cyclic anchor or a block nested past `outputDepth` is refused there exactly as the crawl refuses
+  it, and its "not a YAML mapping" message no longer names the decoded type.
 - **`BlobPopulationResult` has two new required counters,** `blobsParseLimited` and
   `blobsParseWorkerDied`. A caller that builds one must set them.
 - **`@vibe-agent-toolkit/rag-lancedb` `indexResources` parses nothing.** It trusts each resource's
@@ -64,26 +78,28 @@
 - **`vat rag index` refuses a document that changed after the crawl.** It is a
   `RAG_DOCUMENT_INDEX_FAILED` error and is not indexed; re-run to index the current content.
 - **Skill validation, packaging and `vat audit` report a document they cannot parse.** A SKILL.md
-  or linked document nested too deeply for an in-process parse is a `RESOURCE_PARSE_LIMIT_EXCEEDED`
-  error at that file; before, it was a link-integrity warning, `SKILL_MISSING_FRONTMATTER`, or a
+  or linked document over a parse limit is a `RESOURCE_PARSE_LIMIT_EXCEEDED` error at that file; before, it was a link-integrity warning, `SKILL_MISSING_FRONTMATTER`, or a
   crash. A linked document the crawl refused to parse is an error too, and `vat skills build` /
   `vat skills package` refuse the skill.
 - **API:** `ResourceRegistry.getParseRefusedResources()` lists every file the crawl refused to
-  parse (`ParseRefusedResource`); `calculateChecksumFromContent` and `isStackOverflow` are exported
+  parse (`ParseRefusedResource`); `calculateChecksumFromContent` is exported
   from `@vibe-agent-toolkit/resources`. `FrontmatterError.cause` is now required, the inventory
   `ParseError` gains `parseRefused`, and `@vibe-agent-toolkit/agent-skills` exports `refusedAmong`
   and `SKILL_REACHED_REFUSAL_CONSEQUENCE`. The not-admitted contract is exported from
   `@vibe-agent-toolkit/resources` (`ResourceRegistry.getNotAdmitted()`, `notAdmittedIssues`,
   `notAdmittedFindings`, `notAdmittedInScope`, `notAdmittedCount`, `parseRefusedEntry`,
-  `parseRefusedMessage(entry, location, consequence)`, `inProcessRefusalEntry`), with
-  `isPerRunParseRefusal`, `isPlainMapping` (the one rule for what a frontmatter root may be) and
-  `parseRefusedRealizations` (a population's refused files, as `ParseRefusedResource` entries; the
-  `RefusedRealization` type is gone). `ParseRefusedResource` carries `code` and `reason` and no
+  `parseRefusedMessage(entry, location, consequence)`, `parseRefusedEntryFor`, `parseRefusal`), with
+  `isPerRunParseRefusal`, `isPlainMapping` (the one rule for what a frontmatter root may be),
+  `notAdmittedRealizations(rows, root)` (every file a population did not admit, as a `NotAdmittedLog`
+  of unreadable and parse-refused entries; it replaces `parseRefusedRealizations`, and the
+  `RefusedRealization` type is gone) and `resolveNotAdmittedAmong`. `ParseRefusedResource` carries `code` and `reason` and no
   longer `error`. `@vibe-agent-toolkit/schema` exports `resolveFindings` (the allow filter and
   severity, for findings reported beside no framework run) — the one finding resolver; the CLI's
   private `resolveIssueSeverity` is deleted. `@vibe-agent-toolkit/agent-skills`'s
-  `stackOverflowIssue` is replaced by `inProcessRefusalIssue`. The inventory's
-  `InventoryPopulation` gains a required `parseRefusedAmong`.
+  `stackOverflowIssue` is replaced by `parseRefusalIssue`. The inventory's
+  `InventoryPopulation` gains a required `parseRefusedAmong`, and an inventory `ParseError` for a
+  refused file carries its reason in `message` and its code in `parseRefused`, never a finished
+  sentence: `vat audit` builds the sentence at its own boundary.
 - **A `ParseResult` you build yourself must set `frontmatterNotAMapping`.** A frontmatter block
   that is valid YAML but decodes to a sequence, a scalar or a typed value (`!!set`, `!!omap`,
   `!!timestamp`, `!!binary`) no longer yields `frontmatter`; the parse
@@ -91,6 +107,37 @@
   judges read only that flag (they no longer decode `frontmatterSource` themselves). A caller that
   hands VAT a `ParseResult` it assembled must set the flag for such a block, or it is read as a
   block that declares nothing.
+
+- **`vat claude context` reads memory files in the parse worker.** Claude Code's memory-file facts
+  (the `marked` lexer and frontmatter split behind `harness_blob_facts`) run under the pool's limits;
+  a file over a limit is refused for the run (`BLOB_PARSE_LIMIT_EXCEEDED` / `BLOB_PARSE_WORKER_DIED`,
+  named in the refusal summary), its imports are not followed, and every other file keeps its facts.
+  API: `HarnessProfile.factsOf` is removed; `runHarnessPass` takes a required `deriveFacts` and its
+  result has a `refused` count; `afterClosurePromotion` takes a required `dispatcher`;
+  `PopulateOptions` has no `parsePool` option.
+- **The projection's query surface changed for frontmatter and refusals** (`vat resources query` /
+  `check` statements read these directly). `blob_conditions` has two new codes,
+  `BLOB_PARSE_LIMIT_EXCEEDED` and `BLOB_PARSE_WORKER_DIED`, for a per-run refusal. A frontmatter block
+  that is valid YAML but not a plain mapping (a sequence, a scalar, or a `!!set`, `!!omap`,
+  `!!timestamp` or `!!binary` root) now leaves `blobs.frontmatter` NULL, where a typed root used to be
+  stored as a value, and sets `blobs.frontmatterError` to the sentence "the frontmatter block is valid
+  YAML but not a YAML mapping — it decodes to a sequence, a scalar or a typed value (!!set, !!omap,
+  !!timestamp, !!binary), so it declares no keys at all". No column or table was renamed, so there is
+  no rename map (ADR P4's rename map covers renames, and none applies); a statement that read a typed
+  root out of `blobs.frontmatter`, or matched an old `frontmatterError` text, must be updated.
+
+- **`vat audit` resolves a refused document through the audited project's `resources.validation`.**
+  A `RESOURCE_PARSE_LIMIT_EXCEEDED`, `RESOURCE_PARSE_WORKER_DIED` or `RESOURCE_UNREADABLE` finding is
+  cleared by an `allow` entry naming the file (matched at its project-relative path) and set by
+  `severity`, and is located from the one root the audit reports from.
+- **`validation.allow` now applies in `vat claude marketplace validate`, the packaged-content phase
+  of `vat verify`, and every `vat resources check` finding.** `verify` reads each skill's packaging
+  validation (`skills.defaults` / `skills.config.<name>`, paths relative to the working directory);
+  `claude marketplace validate` reads `skills.defaults.validation` (paths relative to the marketplace
+  directory; skills inside a marketplace still get `severity` only); `resources check` reads
+  `resources.validation` (paths relative to the project root). These verbs keep no allow ledger, so an
+  entry used only by them is never reported as `ALLOW_UNUSED` or `ALLOW_EXPIRED`, and an expired
+  entry that matches still clears its finding there.
 
 ### Changed
 
@@ -100,15 +147,20 @@
   thread now indexes like any other.
 - **The first run after upgrading is fully cold.** The stored parse facts changed shape, so the
   parse cache's namespace (a digest of that shape) moved and every document is parsed once again.
-- **A pathological frontmatter shape is bounded too.** Frontmatter counts against `outputRows` and
-  `outputBytes` as exactly the JSON the store writes for it: every array element and every mapping
-  entry is a row, YAML aliases count at their expanded size, and a `!!binary` counts as its stored
-  JSON (one row per byte), never its base64. So an anchor aliased many times, or a multi-megabyte
+- **A pathological frontmatter shape is bounded too.** Frontmatter counts against `outputRows`,
+  `outputBytes` and `outputDepth` as exactly what crosses the wire and the store writes for it: every
+  array element and every mapping entry is a row, YAML aliases count at their expanded size, a
+  `!!binary` counts as its stored JSON (one row per byte), never its base64, and a `!!set` / `!!omap`
+  counts every member and entry it carries (a million-member set, a set nested 3,000 deep and a set
+  that contains itself are refused). So an anchor aliased many times, or a multi-megabyte
   binary, is refused like the stored document would be, and nothing is stored.
 - **The skill lane reads one frontmatter shape rule with the crawl.** A `!!set`, `!!omap`,
   `!!timestamp` or `!!binary` frontmatter root is "not a YAML mapping" in skill validation too
   (`SKILL_MISSING_FRONTMATTER`), where it used to pass as an empty mapping; an empty block is
   refused as empty, never as "not a mapping".
+- **A skill whose `SKILL.md` parse was refused is named by its directory,** never by a fallback,
+  in `vat skills` discovery and packaging output.
+- **`vat okf validate` names an unreadable document's real errno** (`EACCES`), not `FS_FAULT`.
 - **A link anchor into a file whose parse was refused is `LINK_TARGET_UNREADABLE`,** naming the
   refusal, as for an unreadable file — never a silent skip and never a broken anchor.
 - **One sentence for a refused file in every lane.** `vat resources check`, both inventory lanes and
@@ -132,6 +184,15 @@
   configured `heapMb`, as the one that applied.
 - **A worker stopped at `timeMs` before its parser loaded counts toward the broken-install
   breaker,** like a worker that died without answering.
+- **Heap is judged on what a job holds, not on garbage.** A used heap past `heapMb` is a breach
+  only once an old-generation collection shows it is held, or once it passes a stop halfway to V8's
+  ceiling with no collection; a document whose live heap is far under the bound (a 10,000-level
+  blockquote, about 420 MiB) is no longer refused on a loaded machine. Under a small
+  `--max-old-space-size` the applied bound is floored at 96 MiB while V8's ceiling leaves room, so an
+  ordinary document is admitted under a 128 MiB flag.
+- **A parse that answered just as its time ran out is admitted.** The wall-clock limit decides only
+  after the worker's queued messages are read, and a stop the busy parent itself made late never
+  counts toward the broken-install breaker.
 - **The pool keeps its width across limit breaches:** a worker being killed for a breach counts
   against the pool size until it has exited, so a run never holds more live parse threads than
   `VAT_PARSE_POOL_SIZE`.
@@ -139,8 +200,8 @@
 ### Added
 
 - **Every parse a crawl or `addResource` makes has limits: wall clock, heap, stack depth, output
-  depth, output rows, output bytes and input size** (the in-process lanes named under Breaking
-  above are bounded only by a skill's link graph, plus the overflow fallback). `outputDepth` (default 1,000, and never above it: SQLite's `json_extract` reads
+  depth, output rows, output bytes and input size** (every parse VAT makes, per the first Breaking
+  entry above). `outputDepth` (default 1,000, and never above it: SQLite's `json_extract` reads
   no deeper) refuses frontmatter nested past what the projection can query, and a cyclic anchor. Time and heap breaches kill and replace the worker; stack and output breaches are
   reported by it; input size is refused before dispatch. Each breach refuses that one file, naming
   it and the limit; every other file keeps its rows, and the run completes. Nothing about a breach

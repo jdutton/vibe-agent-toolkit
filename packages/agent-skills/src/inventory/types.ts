@@ -27,7 +27,11 @@ export type ParseError = {
 	/**
 	 * Set when the crawl refused to parse `path` (over a parse limit, or its
 	 * worker died). The file was read but never parsed, so nothing in it was
-	 * checked: a consumer files the row under this code at error severity.
+	 * checked. The row's `message` is then the refusal's REASON
+	 * (`ParseRefusedResource['reason']`), not a sentence: a consumer reporting it
+	 * builds the sentence with `parseRefusedMessage` at the root its own
+	 * locations are relative to, and resolves it through the subject project's
+	 * `resources.validation` as every verb does.
 	 */
 	parseRefused?: ParseRefusedResource['code'];
 };

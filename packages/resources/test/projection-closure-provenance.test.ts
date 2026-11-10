@@ -24,6 +24,7 @@ function inputFor(files: Record<string, string>, rootFile: string): ClosureProve
     resourceRealizations: fixture.resourceRealizations,
     blobs: fixture.blobs,
     blobReferences: fixture.blobReferences,
+    blobConditions: fixture.blobConditions,
     harnessBlobFacts: fixture.harnessBlobFacts,
     harnessBlobImports: fixture.harnessBlobImports,
     declaration: claudeImportExtentDeclaration(rootFile),

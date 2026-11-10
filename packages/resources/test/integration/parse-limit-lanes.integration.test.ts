@@ -58,6 +58,7 @@ function recordingPolicy(dispatched: Dispatched, limits: NonNullable<ParsePoolOp
         },
         parseIntoCache: async (kind, content, byteLength, cacheKey) =>
           real.parseIntoCache(kind, content, byteLength, cacheKey),
+        harnessFacts: async (harness, content, byteLength) => real.harnessFacts(harness, content, byteLength),
         shutdown: async () => real.shutdown(),
       };
     },
@@ -116,7 +117,7 @@ describe('a parse stopped at a limit, on the projection lane', () => {
     const limited = conditionsWithCode(projection, BLOB_PARSE_LIMIT_EXCEEDED);
     expect(limited).toHaveLength(1);
     // The blob's condition names no path: twin files share it, and each
-    // realization names its own (`parseRefusedRealizations`).
+    // realization names its own (`notAdmittedRealizations`).
     expect(limited[0]?.message).not.toContain('b.md');
     expect(limited[0]?.message).toContain('stackMb');
     expect(counts.blobsParseLimited).toBe(1);
@@ -280,20 +281,22 @@ describe('a frontmatter list of 200,000 items, decoded on the parent thread', ()
 /** More links than the default `outputRows` (16,384) admits. */
 const OVER_DEFAULT_ROWS_LINKS = 17_000;
 
-describe('an in-process parse of a document the bounded route refuses', () => {
+describe('a parse with no dispatcher of a document the bounded route refuses', () => {
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);
   beforeEach(suite.beforeEach);
 
-  it('files nothing, so a later bounded crawl over the same cache still refuses it', async () => {
+  it('is refused under the same limit and files nothing, so a later crawl over the same cache still refuses it', async () => {
     const links = Array.from({ length: OVER_DEFAULT_ROWS_LINKS }, (_, index) => `[l${String(index)}](./t.md)`);
     const file = safePath.join(suite.tempDir, 'many-links.md');
     await writeFile(file, `# Many\n\n${links.join('\n')}\n`, 'utf-8');
-    const cacheDir = safePath.join(suite.suiteDir, `cache-in-process-${String(Date.now())}`);
+    const cacheDir = safePath.join(suite.suiteDir, `cache-no-dispatcher-${String(Date.now())}`);
 
-    // Unbounded, on this thread: it answers, and must leave nothing a bounded run would serve.
-    const inProcess = await parseFileCached(file, 'markdown', { cache: new ParseCache({ cacheDir, enabled: true }) });
-    expect(inProcess.links).toHaveLength(OVER_DEFAULT_ROWS_LINKS);
+    // No dispatcher passed: the call still parses in a bounded worker (there is
+    // no unbounded lane), so it is refused, and leaves nothing a later run would serve.
+    await expect(
+      parseFileCached(file, 'markdown', { cache: new ParseCache({ cacheDir, enabled: true }) }),
+    ).rejects.toMatchObject({ code: 'PARSE_LIMIT_EXCEEDED' });
     expect(await countFilesUnder(cacheDir)).toBe(0);
 
     const registry = new ResourceRegistry({

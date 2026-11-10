@@ -22,10 +22,10 @@ import { basename, dirname } from 'node:path';
 import {
   DeferredArtifacts,
   ResourceRegistry,
-  inProcessRefusalEntry,
   loadConfig,
   openFrontmatter,
   parseFileCached,
+  parseRefusedEntryFor,
   parseRefusedMessage,
   resolveLocalHref,
   rewriteFrontmatterUriReferencesFromSchema,
@@ -1556,16 +1556,15 @@ function unreadableFault(entry: UnreadableResource, ctx: FsFaultContext): unknow
 }
 
 /**
- * The skill's SKILL.md, parsed on this thread — or, when this thread's stack
- * overflows, by one bounded parse through the pool (`parseFileCached`) — or, when
- * that refuses it, the packager's one refusal of a refused file
- * ({@link parseRefusedPackagingError}), never the parser's raw throw.
+ * The skill's SKILL.md, parsed on the bounded route (`parseFileCached`, in the
+ * worker) — or, when the worker refuses it, the packager's one refusal of a
+ * refused file ({@link parseRefusedPackagingError}), never the parser's raw throw.
  */
 async function parseSkillOrRefuse(skillPath: string, side: 'source' | 'destination'): Promise<Awaited<ReturnType<typeof parseFileCached>>> {
   try {
     return await parseFileCached(skillPath, 'markdown', { side });
   } catch (error) {
-    const refused = inProcessRefusalEntry(skillPath, error);
+    const refused = parseRefusedEntryFor(skillPath, error);
     if (refused === undefined) throw error;
     throw parseRefusedPackagingError([refused], findProjectRoot(dirname(skillPath)) ?? dirname(skillPath), { cause: error });
   }

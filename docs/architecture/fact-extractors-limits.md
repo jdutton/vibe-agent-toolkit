@@ -21,11 +21,11 @@ a value here and in the code together, and only from a new lab record.
 | Limit | Value | Observed maximum | How it was set |
 |---|---|---|---|
 | `inputBytes` | 8 MiB | 666,449 bytes (one adopter document); 352,261 in VAT's own tree | Rule 1: 6.7 MB, up to 8 MiB. |
-| `outputRows` | 16,384 | 896 rows in one document, top-level arrays only; p99 203, p50 9 | **Rule 2.** The limit counts every array in a document's facts, nested ones included (a heading's `children` count like any other row, so one `#` over 20,000 `##` is 20,001 rows), and the frontmatter as the JSON the store writes for it — every array element and every mapping entry a row, each YAML alias at its target's full size, a `!!binary` one row per byte. The lab's maximum was counted over top-level arrays only, so rule 1 cannot be applied to it: 16,384 is rule 1 over that count (8,960, up to 16,384). Re-counted as the limit counts it, with the shipped `outputBreach`, over the 2,626 git-tracked markdown documents of the adopter the lab's `adopter-default` arm scans: maximum 1,287 rows (p99 280, p50 24), 12.7× under the limit — and one document's frontmatter alone is 770 rows, so a frontmatter mapping is NOT "a handful of rows", as this record said. That re-count is a one-off probe over the shipped functions, not a lab facet; the per-document count is a lab gap (below). |
-| `outputBytes` | 4 MiB | 233,802 bytes in one parse-cache entry; p99 57,556, p50 3,358 | Rule 1: 2.3 MB, up to 4 MiB. Measured on the stored entry, which is not what the worker checks: the entry holds the facts plus the frontmatter's source text and its encoding, which writes a shared anchor once, while the check counts the facts plus the frontmatter expanded, every alias at its target's full size. So the entry over-states a block with no aliases (its source is stored beside its value) and under-states an aliased one; the measured maximum is 5.6% of the cap, and an aliased block that nears the cap is the breach the cap exists for. |
+| `outputRows` | 16,384 | 896 rows in one document, top-level arrays only; p99 203, p50 9 | **Rule 2.** The limit counts every array in a document's facts, nested ones included (a heading's `children` count like any other row, so one `#` over 20,000 `##` is 20,001 rows), and the frontmatter as the JSON the store writes for it — every array element and every mapping entry a row, each YAML alias at its target's full size, a `!!binary` one row per byte, and every `!!set` member and `!!omap` entry a row (the codec carries them, though `JSON.stringify` writes `{}`). The lab's maximum was counted over top-level arrays only, so rule 1 cannot be applied to it: 16,384 is rule 1 over that count (8,960, up to 16,384). Re-counted as the limit counts it, with the shipped `outputBreach`, over the 2,626 git-tracked markdown documents of the adopter the lab's `adopter-default` arm scans: maximum 1,287 rows (p99 280, p50 24), 12.7× under the limit — and one document's frontmatter alone is 770 rows, so a frontmatter mapping is NOT "a handful of rows", as this record said. That re-count is a one-off probe over the shipped functions, not a lab facet; the per-document count is a lab gap (below). |
+| `outputBytes` | 4 MiB | 297,447 bytes in one document, counted as the limit counts it; p99 58,097, p50 3,810 | Rule 1: 2.97 MB, up to 4 MiB (14.1× the maximum). Counted as the worker checks it — the facts' JSON plus the frontmatter expanded (every alias at its target's full size, every `!!set` member and `!!omap` entry, a `!!binary` as its `Buffer` JSON) — with the shipped pool's own `outputBreach`, over the same 2,626 git-tracked markdown documents as the `outputRows` re-count (the probe also reproduces that row's 1,287 / 280 / 24 rows exactly). The largest is a 251,888-byte document. The value it replaces was measured on stored parse-cache entries (233,802 bytes; p99 57,556, p50 3,358), which is not what the worker checks: an entry holds the frontmatter's source text beside its encoding, and the encoding writes a shared anchor once. That re-count is a one-off probe over the shipped functions, not a lab facet; the per-document count is a lab gap (below). |
 | `outputDepth` | 1,000 levels | Not observable per document. | Not a headroom value: the store's own ceiling. SQLite's JSON functions read at most 1,000 nested containers (`JSON_MAX_DEPTH`); measured on Node 26's `node:sqlite`, 1,000 read and 1,001 throw "malformed JSON" for the whole statement, so one deeper stored row breaks every `json_extract` over `blobs.frontmatter`. `resolveParseLimits` refuses a looser value. A cyclic anchor nests without end and breaches it. |
 | `timeMs` | 30,000 ms | Not observable per document: the `parse` facet reports per-pass sums. Mean 10.3 ms per document over 2,680 documents at a clean load (the adopter arm of [the `vat-lab parse run` arms](#the-vat-lab-parse-run-arms)); 12.1 ms in the cold `resources check` run. | Rule 2: the slowest realistic shape found, a 1,000-level nested list, takes 9.3 s in a worker (the nested-list arm below, a one-document corpus, so its per-pass sum is that document's time); the limit also covers a cold worker's first parser load (about 0.7 s), on a loaded machine. 30 s is that 10.0 s with headroom of three times for load. A mean is no basis: one document can be a thousand times the mean, and the per-document maximum over a real corpus is still not observable (see the gaps below). |
-| `heapMb` | 1,024 MiB | Not observable per worker: the `memory` facet reports process peak RSS. The whole process, every worker included, peaked at 1.17 GiB on the adopter's cold run. | Rule 2: no single job can need more than the whole process held, less the main thread's share. |
+| `heapMb` | 1,024 MiB | Not observable per worker: the `memory` facet reports process peak RSS. The whole process, every worker included, peaked at 1.17 GiB on the adopter's cold run. | Rule 2: no single job can need more than the whole process held, less the main thread's share. Under a process-wide `--max-old-space-size` lower than twice this, the pool applies half of V8's ceiling, floored at the young generation's 96 MiB while the ceiling leaves 32 MiB above the floor (see [the heap under a small flag](#the-heap-under-a-small-flag)). A used heap past the bound is a breach only once an old-generation collection shows it held, or past a stop halfway to V8's ceiling (1,536 MiB at the defaults) with none (see [garbage is not a breach](#garbage-is-not-a-breach)). |
 | `stackMb` | 4 MiB | Not observable. | Rule 2: before this limit existed every corpus parsed on the main thread under Node's default stack of about 1 MiB, so 4 MiB is four times a stack every recorded corpus fit in. |
 
 The output and input values come from the stored parse-cache entries of a cold `vat-lab parse run`
@@ -128,6 +128,57 @@ parse:
 
 Peak RSS of the cold run was 1.17 GiB, worker threads included.
 
+## The heap under a small flag
+
+One-off probes, not a lab facet (darwin/arm64, Node 26.7.0). The pool's sampler counts a worker's
+whole used heap, young generation included, so its applied bound must sit above what an ordinary
+parse holds in garbage alone.
+
+- **An ordinary document.** A cold worker that loads the parser and parses a 34,469-byte document
+  of 400 headed sections peaks at 54 to 68 MiB of used heap, sampled every 5 ms (20 runs at each
+  of no flag, 512, 256, 128 and 64 MiB; ~18 MiB once the parser has loaded). Capping the young
+  generation at 8 MiB still peaks at 37 to 43 MiB, so most of the excess is young-generation
+  garbage. Under `--max-old-space-size=128` the pool applied 64 MiB (half the ceiling) and refused
+  that document at `heapMb` in 2 runs of 20; with the bound floored at the young generation's
+  96 MiB it is admitted in 30 of 30. The floor holds only while V8's ceiling leaves 32 MiB above
+  it (twice what a job allocates in one 50 ms sample interval at ~300 MiB/s), so under a 64 MiB
+  flag the pool still applies 32 MiB and an ordinary document can be refused: such a flag is too
+  small to parse with. A 200,000-link breach under the 128 MiB flag is stopped at 96 MiB with the
+  child exiting cleanly, 15 of 15 (seeded three in a row in `parse-pool-limits.integration.test.ts`).
+- **A 10,000-level nested blockquote** (10,015 bytes, the pathological arm above) needs its heap
+  for real: in a raw worker with V8's full collection before it gives up, it runs out of memory
+  under an old-generation ceiling of 420 MiB and completes under 460 MiB (peak used 414 MiB). The
+  pool admits it with no flag and under `--max-old-space-size=1024`, and refuses it under CI's
+  512 (applied 256 MiB) on every crawl and skill verb alike. The refusal is the halving, not a
+  mis-applied bound: V8's 512 MiB ceiling would itself hold it. Not changed; the CI-flag verdict
+  is recorded, not tuned.
+
+## Garbage is not a breach
+
+One-off probes, not a lab facet (darwin/arm64; the CLI under Node 24.21.0, the raw workers under
+26.7.0). The used heap a sample reads counts garbage V8 has not collected, and V8 collects lazily
+below a ceiling set at twice the bound. With no flag, the 10,000-level blockquote (live heap 420 to
+460 MiB, above) parsed in a raw worker peaks at 595 to 643 MiB used, sawtoothing as V8 collects,
+and allocates about 2.3 GiB in all. On a loaded host the collections stop: run cold through
+`skills build` and `skills package` beside 8 busy loops (load average 15 to 45), its used heap in
+the refused runs rose from nothing to 1,031 and 1,079 MiB with not one fall, and the sampler,
+comparing each sample to 1,024 MiB, refused it at `heapMb` in 3 of 10 runs (`skills build` 1 of 3
+and 1 of 4, `skills package` 1 of 3).
+
+So a used heap past the bound is a breach only once an old-generation collection has run
+(`heapBreached`): a sample that fell from the same job's previous one by more than the young
+generation holds (96 MiB; a scavenge frees no more), so what it still reads is held. A heap that
+rises with no such fall is stopped at `stopMb`, halfway from the bound to V8's ceiling (1,536 MiB at
+the defaults, 384 under a 512 MiB flag), never within the sampler's 32 MiB headroom of the ceiling,
+so V8's ceiling is still never left to stop a job. Half the room is the trade between the two
+misreads: garbage below the stop, and a parent stalled while a true breach allocates toward V8's
+ceiling above it. Measured with the stop in place, all cold and with no flag: 10 of 10 admitted on
+`skills build` and 10 of 10 on `skills package` beside 8 busy loops (load average 36 to 44), and
+8 of 8 on `skills build` beside 16 (load average 50), where 3 of the 8 ran to the end with no
+collection at all and peaked at 1,081 to 1,157 MiB, 379 MiB below the stop. Nothing bounds that
+margin but the measurement: a document that holds little but allocates more than the stop with no
+collection is refused there.
+
 ## What the lab could not see
 
 These gaps are findings, not omissions to fill by hand:
@@ -137,8 +188,9 @@ These gaps are findings, not omissions to fill by hand:
   answer have no facet.
 - **No per-document maximum.** The `parse` facet reports sums and means per pass, so `timeMs` cannot
   be derived by rule 1.
-- **No per-document row count as the limit counts it.** No facet reports a document's rows nested
-  and with its frontmatter expanded, so `outputRows` stays under rule 2.
+- **No per-document row or byte count as the limit counts it.** No facet reports a document's rows
+  or bytes nested and with its frontmatter expanded, so `outputRows` stays under rule 2 and
+  `outputBytes` rests on a one-off probe.
 - **No per-worker heap.** The `memory` facet reports process peak RSS, so `heapMb` cannot be derived
   by rule 1. One one-off probe (not a facet) bears on it: a body of 20,000 links (`[l](x)`, ~320 KB)
   peaks at 300 to 400 MiB of LIVE heap in its parse worker — it fails under a 300 MiB V8 ceiling,

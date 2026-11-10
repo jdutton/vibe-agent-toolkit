@@ -1702,14 +1702,16 @@ export interface DeclaredPattern {
  *
  * @param row - The rule's realization
  * @param facts - Claude Code's facts index
- * @returns The declared patterns, or an empty list
- * @throws {HarnessFactsAbsentError} When the rule is keyed and has no facts row
+ * @returns The declared patterns, or an empty list — empty too for a rule
+ *   whose facts this run refused (`HarnessFactsIndex.refused`)
+ * @throws {HarnessFactsAbsentError} When the rule is keyed, not refused, and has no facts row
  */
 function pathsOf(
   row: ResourceRealizationRow,
   facts: HarnessFactsIndex,
 ): readonly DeclaredPattern[] {
-  return row.contentKey === null ? NO_PATTERNS : declaredPatterns(facts.requireFacts(row.contentKey, row.path).paths);
+  if (row.contentKey === null || facts.refused(row.contentKey)) return NO_PATTERNS;
+  return declaredPatterns(facts.requireFacts(row.contentKey, row.path).paths);
 }
 
 /**

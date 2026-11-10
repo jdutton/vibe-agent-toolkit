@@ -10,11 +10,12 @@
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { basename } from 'node:path';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { readPluginLocalSkillName, skillDocumentOrOverflow } from '../../src/commands/skills/skill-discovery.js';
+import { discoverSkillsFromConfig, readPluginLocalSkillName, skillDocumentOrRefused } from '../../src/commands/skills/skill-discovery.js';
 
 const DEPTH = 50_000;
 const DEEP_SKILL = `---\nname: deep\nnested: ${'['.repeat(DEPTH)}${']'.repeat(DEPTH)}\n---\n# Deep\n`;
@@ -31,11 +32,17 @@ describe('a SKILL.md that overflows an in-process parse', () => {
     rmSync(skillDir, { recursive: true, force: true });
   });
 
-  it('is named by its file key, as a SKILL.md with no frontmatter is, never dropped or a crash', async () => {
-    await expect(readPluginLocalSkillName(skillDir, skillDir)).resolves.toBe('SKILL');
+  it('is named by its DIRECTORY, never by the file name every SKILL.md shares, dropped or a crash', async () => {
+    // Keyed `SKILL`, two refused skills collide on one key and one config.
+    await expect(readPluginLocalSkillName(skillDir)).resolves.toBe(basename(skillDir));
+  });
+
+  it('is keyed by its directory in config discovery too', async () => {
+    const skills = await discoverSkillsFromConfig({ include: ['**/SKILL.md'] }, skillDir, 'refuse');
+    expect(skills.map((skill) => skill.name)).toEqual([basename(skillDir)]);
   });
 
   it('reads as no parse result, so a refused package report still publishes', async () => {
-    await expect(skillDocumentOrOverflow(safePath.join(skillDir, 'SKILL.md'))).resolves.toBeUndefined();
+    await expect(skillDocumentOrRefused(safePath.join(skillDir, 'SKILL.md'))).resolves.toBeUndefined();
   });
 });

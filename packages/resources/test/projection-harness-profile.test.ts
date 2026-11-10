@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+import { loadHarnessReader } from '../src/parser-loader.js';
 import { CLAUDE_MD_TAG, classifyPath, RULES_FILE_TAG } from '../src/projection/agentic-tags.js';
 import { rulesHolder } from '../src/projection/claude-context-walk.js';
+import { claudeMemoryFactsOf } from '../src/projection/claude-memory.js';
 import { CLAUDE_CODE } from '../src/projection/harness/claude-code.js';
 import { harnessById, harnessForDialect, HARNESS_PROFILES } from '../src/projection/harness/profile.js';
 
@@ -91,8 +93,10 @@ describe('the Claude Code harness profile', () => {
     );
   });
 
-  it('reads content through the one extractor', () => {
-    const facts = CLAUDE_CODE.factsOf('---\npaths: src/**\n---\nSee @docs/a.md\n');
+  it('reads content through the one extractor, which the parse worker resolves by the profile id', async () => {
+    const reader = await loadHarnessReader(CLAUDE_CODE.id);
+    expect(reader).toBe(claudeMemoryFactsOf);
+    const facts = reader('---\npaths: src/**\n---\nSee @docs/a.md\n');
     expect(facts.paths).toEqual(['src/**']);
     expect(facts.imports.map((entry) => entry.target)).toEqual(['docs/a.md']);
   });

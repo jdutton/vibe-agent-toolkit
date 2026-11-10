@@ -6,6 +6,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { readDeclaredSkillName } from '../src/skill-identity.js';
 
+import { setupParseRoute } from './test-helpers.js';
+
+/** Every parse in this file runs in the bounded worker, on one dispatcher. */
+const ROUTE = setupParseRoute();
 
 /** Write a SKILL.md with the given raw content under `parent/caseName/`. */
 function writeSkillMdRaw(parent: string, caseName: string, content: string): string {
@@ -32,40 +36,40 @@ describe('readDeclaredSkillName', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('returns the declared name', () => {
+  it('returns the declared name', async () => {
     const path = writeSkillMd(tempDir, 'plain', 'name: pdf-processor\ndescription: Reads PDFs.');
-    expect(readDeclaredSkillName(path)).toBe('pdf-processor');
+    expect(await readDeclaredSkillName(path, ROUTE)).toBe('pdf-processor');
   });
 
-  it('unquotes a YAML-quoted name', () => {
+  it('unquotes a YAML-quoted name', async () => {
     // A hand-rolled `^name:\s*(.+)$` regex returns `"pdf-processor"` here,
     // quotes included — which is why this goes through the YAML parser.
     const path = writeSkillMd(tempDir, 'quoted', 'name: "pdf-processor"\ndescription: Reads PDFs.');
-    expect(readDeclaredSkillName(path)).toBe('pdf-processor');
+    expect(await readDeclaredSkillName(path, ROUTE)).toBe('pdf-processor');
   });
 
-  it('ignores a name-like line in the body', () => {
+  it('ignores a name-like line in the body', async () => {
     const path = writeSkillMdRaw(tempDir, 'body-only', '# Heading\n\nname: not-the-name\n');
-    expect(readDeclaredSkillName(path)).toBeUndefined();
+    expect(await readDeclaredSkillName(path, ROUTE)).toBeUndefined();
   });
 
-  it('returns undefined for a blank name', () => {
+  it('returns undefined for a blank name', async () => {
     const path = writeSkillMd(tempDir, 'blank', 'name: "   "\ndescription: Blank.');
-    expect(readDeclaredSkillName(path)).toBeUndefined();
+    expect(await readDeclaredSkillName(path, ROUTE)).toBeUndefined();
   });
 
-  it('returns undefined for a non-string name', () => {
+  it('returns undefined for a non-string name', async () => {
     const path = writeSkillMd(tempDir, 'numeric', 'name: 42\ndescription: Numeric.');
-    expect(readDeclaredSkillName(path)).toBeUndefined();
+    expect(await readDeclaredSkillName(path, ROUTE)).toBeUndefined();
   });
 
-  it('returns undefined when the file does not exist', () => {
-    expect(readDeclaredSkillName(safePath.join(tempDir, 'nope', 'SKILL.md'))).toBeUndefined();
+  it('returns undefined when the file does not exist', async () => {
+    expect(await readDeclaredSkillName(safePath.join(tempDir, 'nope', 'SKILL.md'), ROUTE)).toBeUndefined();
   });
 
-  it('returns undefined when a path component is a file (ENOTDIR is absence too)', () => {
+  it('returns undefined when a path component is a file (ENOTDIR is absence too)', async () => {
     const path = writeSkillMd(tempDir, 'file-as-dir', 'name: x\ndescription: y.');
-    expect(readDeclaredSkillName(safePath.join(path, 'SKILL.md'))).toBeUndefined();
+    expect(await readDeclaredSkillName(safePath.join(path, 'SKILL.md'), ROUTE)).toBeUndefined();
   });
 
   it('rethrows a refused read instead of reporting the skill as nameless', async () => {
@@ -73,8 +77,8 @@ describe('readDeclaredSkillName', () => {
     // established that, and a caller falling back to the directory leaf would
     // then rename the skill on the operator's behalf.
     const path = writeSkillMd(tempDir, 'refused', 'name: pdf-processor\ndescription: Reads PDFs.');
-    await withSyncFsRefused('readFileSync', path, 'EACCES', () => {
-      expect(() => readDeclaredSkillName(path)).toThrow(/EACCES/);
+    await withSyncFsRefused('readFileSync', path, 'EACCES', async () => {
+      await expect(readDeclaredSkillName(path, ROUTE)).rejects.toThrow(/EACCES/);
     });
   });
 });

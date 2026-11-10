@@ -73,6 +73,7 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
+import { type ParseDispatcher, withParseDispatcher } from '../parse-dispatcher.js';
 import type { CollectionConfig } from '../schemas/project-config.js';
 import type { RealizationConditionRow, ResourceRealizationRow } from '../schemas/projection-resources.js';
 import type { JsonValue } from '../schemas/projection-shared.js';
@@ -89,6 +90,7 @@ import { crawlSourceSelector } from './crawl-source.js';
 import { canonicalJson, extentDigest } from './digest.js';
 import {
   assertHarnessSettled,
+  dispatcherHarnessFacts,
   diskHarnessContentReader,
   harnessSettled,
   runHarnessPass,
@@ -545,7 +547,7 @@ export class ClosureNonConvergenceError extends VatError {
  * @throws Whatever a contributor throws — failures propagate unwrapped
  */
 export async function populate(options: PopulateOptions): Promise<PopulateResult> {
-  const { root, registry, parameters, maxIterations = DEFAULT_MAX_ITERATIONS } = options;
+  const { root } = options;
 
   // Resolved BEFORE anything else, and deliberately before the cache is asked:
   // it refuses an unsound `'skip'` request by throwing, and a run that would
@@ -569,6 +571,38 @@ export async function populate(options: PopulateOptions): Promise<PopulateResult
     return { projection: cached, outcome: populationOutcome('hit') };
   }
 
+  // ONE dispatcher for the run — the blob stage's parses, the post-promotion
+  // re-run's, and every harness pass's memory-file reads share its one pool —
+  // shut down however the derivation ends. Built lazily: a run that parses
+  // nothing starts no worker.
+  const projection = await withParseDispatcher(
+    (dispatcher) => deriveProjection(options, { parseContent, routing, dispatcher }),
+  );
+  const stored = await writeCachedProjection(options, rootId, parseContent, projection, routing);
+  return { projection, outcome: populationOutcome(stored) };
+}
+
+/** What {@link populate} decided before deriving, and the run's one dispatcher. */
+interface DerivationRun {
+  /** Whether this run reads and parses content. */
+  readonly parseContent: boolean;
+  /** The run's parse routing. */
+  readonly routing: CollectionMimeResolver;
+  /** The run's dispatcher: every parse, and every harness's memory-file read. */
+  readonly dispatcher: ParseDispatcher;
+}
+
+/**
+ * Derive the projection: every contributor, the blob stage, the harness passes
+ * and the closure fixpoint, into one builder — {@link populate} on a store miss.
+ *
+ * @param options - The run's options
+ * @param run - The run's parse decision, routing and dispatcher
+ * @returns The frozen projection
+ */
+async function deriveProjection(options: PopulateOptions, run: DerivationRun): Promise<Projection> {
+  const { root, registry, parameters, maxIterations = DEFAULT_MAX_ITERATIONS } = options;
+  const { parseContent, routing, dispatcher } = run;
   // Constructed here and nowhere else, so its lifetime is exactly this run's.
   // A module-level cache would leak bytes across two populations in one process
   // — including two populations of a tree that changed in between, which would
@@ -620,7 +654,7 @@ export async function populate(options: PopulateOptions): Promise<PopulateResult
   //
   // Nothing observes the stage's counters: what a user is told about refused
   // content is read from the rows it writes, which a store hit returns too.
-  if (parseContent) await runBlobStage(builder);
+  if (parseContent) await runBlobStage(builder, dispatcher);
   const attemptsBeforeClosure = builder.contentPromotionAttempts;
 
   // The harness facts, LAZILY: derived only for what a harness reaches. Before
@@ -629,7 +663,7 @@ export async function populate(options: PopulateOptions): Promise<PopulateResult
   // every fixpoint iteration, because a declared closure's members arrive
   // there; and once more after the promotion, which can key a reachable path.
   // Under `'skip'` no blob has a `blobs` row, so there is nothing to reach.
-  const harness = harnessStageFor(builder);
+  const harness = harnessStageFor(builder, dispatcher);
   await harness.run();
 
   await iterateClosure(
@@ -641,7 +675,7 @@ export async function populate(options: PopulateOptions): Promise<PopulateResult
     options.onContributorTiming,
   );
 
-  if (parseContent) await afterClosurePromotion(builder, attemptsBeforeClosure);
+  if (parseContent) await afterClosurePromotion(builder, attemptsBeforeClosure, dispatcher);
   await harness.run();
   // A reached blob with no facts after the last pass is a producer bug: every
   // strict reader of this projection would throw on it later, far from here.
@@ -660,9 +694,7 @@ export async function populate(options: PopulateOptions): Promise<PopulateResult
   // Before `build()`, because a frozen projection takes no more rows.
   recordMimeConflicts(builder, routing);
 
-  const projection = builder.build();
-  const stored = await writeCachedProjection(options, rootId, parseContent, projection, routing);
-  return { projection, outcome: populationOutcome(stored) };
+  return builder.build();
 }
 
 /**
@@ -1133,10 +1165,11 @@ function contentParsingFor(options: PopulateOptions): boolean {
  * see `CRAWL_BLOB_POPULATE_ID`.
  *
  * @param builder - The builder to derive into
+ * @param dispatcher - The run's dispatcher
  */
-async function runBlobStage(builder: ProjectionBuilder): Promise<void> {
+async function runBlobStage(builder: ProjectionBuilder, dispatcher: ParseDispatcher): Promise<void> {
   const startedAt = crawlTimingStart();
-  await populateBlobs(builder);
+  await populateBlobs(builder, { dispatcher });
   recordCrawlPass(CRAWL_BLOB_POPULATE_ID, 'base', BASE_STRATUM_PASS, startedAt);
 }
 
@@ -1195,10 +1228,12 @@ async function runBlobStage(builder: ProjectionBuilder): Promise<void> {
  *
  * @param builder - The builder whose closure stratum has just converged
  * @param attemptsBefore - `contentPromotionAttempts` as it stood before the stratum
+ * @param dispatcher - The run's dispatcher, which the blob stage parsed on
  */
 export async function afterClosurePromotion(
   builder: ProjectionBuilder,
   attemptsBefore: number,
+  dispatcher: ParseDispatcher,
 ): Promise<void> {
   if (builder.contentPromotionAttempts === attemptsBefore) {
     return;
@@ -1209,7 +1244,7 @@ export async function afterClosurePromotion(
   // Files the SAME row as the pre-closure run — one accounting unit, so `calls`
   // reads as "how many times the stage ran" and its ms/call stays divisible.
   const startedAt = crawlTimingStart();
-  await populateBlobs(builder);
+  await populateBlobs(builder, { dispatcher });
   recordCrawlPass(CRAWL_BLOB_POPULATE_ID, 'base', BASE_STRATUM_PASS, startedAt);
 }
 
@@ -1232,17 +1267,20 @@ interface HarnessStage {
 
 /**
  * Bind the harness pass to one population: every harness, the run's content
- * cache as the reader, and the keys any pass could not read.
+ * cache as the reader, the run's dispatcher as what reads it, and the keys any
+ * pass could not read.
  *
  * @param builder - The population's builder
+ * @param dispatcher - The run's dispatcher
  * @returns The stage
  */
-function harnessStageFor(builder: ProjectionBuilder): HarnessStage {
+function harnessStageFor(builder: ProjectionBuilder, dispatcher: ParseDispatcher): HarnessStage {
   const reader = diskHarnessContentReader(builder.base().contentCache);
+  const derive = dispatcherHarnessFacts(dispatcher);
   const unreadable = new Set<string>();
   return {
     run: async () => {
-      const result = await runHarnessPass(builder, HARNESS_PROFILE_LIST, reader);
+      const result = await runHarnessPass(builder, HARNESS_PROFILE_LIST, reader, derive);
       for (const key of result.unreadableKeys) unreadable.add(key);
       return result.derived;
     },

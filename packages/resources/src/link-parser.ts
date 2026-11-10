@@ -19,7 +19,6 @@
 
 import GithubSlugger from 'github-slugger';
 
-import { readCorpusDocument } from './corpus-document.js';
 import { parseFrontmatterSource } from './frontmatter-source.js';
 import { estimateTokens } from './link-classify.js';
 import {
@@ -123,37 +122,14 @@ export interface ParseResult {
 }
 
 /**
- * Parse a markdown file and extract all links, headings, and metadata.
- *
- * Reads the bytes, then delegates every parsing decision to
- * {@link parseMarkdownContent}. The only thing decided here is the byte size
- * attributed to the document: the length of the bytes read, the real size on disk.
- *
- * @param filePath - Absolute path to the markdown file
- * @returns Parsed markdown data including links, headings, size, and token estimate
- * @throws Error if file cannot be read or parsed
- *
- * @example
- * ```typescript
- * const result = await parseMarkdown('/path/to/document.md');
- * console.log(`Found ${result.links.length} links`);
- * console.log(`Document has ${result.headings.length} top-level headings`);
- * ```
- */
-export async function parseMarkdown(filePath: string): Promise<ParseResult> {
-  const { text, sizeBytes } = await readCorpusDocument(filePath);
-  return parseMarkdownContent(text, sizeBytes);
-}
-
-/**
- * Parse markdown **source** — the content-addressable half of
- * {@link parseMarkdown}.
+ * Compose the parse facts for markdown **source** — the composer the parse
+ * worker runs (`parser-loader.ts`), and nothing else in shipped code: every
+ * caller reaches it through the bounded pool (`parse-dispatcher.ts`).
  *
  * This is a pure function of its arguments: no filesystem access, no path, no
  * ambient state. That is what makes it cacheable by content, and it is what a
  * history replay needs — a historical blob read out of git is not on disk under
  * any path, so anything that insists on a `filePath` cannot parse it.
- * {@link parseMarkdown} is now just "read the bytes, then call this".
  *
  * ## Why `sizeBytes` is a parameter and NOT derived from `content`
  *
@@ -169,8 +145,7 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
  *
  * The value reaches packaged-output accounting elsewhere in the toolkit, so it
  * must stay the caller's decision rather than a guess made here.
- * {@link parseMarkdown} passes `stat().size`, exactly as it always has; a
- * caller replaying a git blob passes that blob's byte length.
+ * The dispatcher passes the raw byte count of what it read.
  *
  * @param content - Decoded markdown source
  * @param sizeBytes - Byte size the caller attributes to this content

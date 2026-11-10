@@ -44,7 +44,8 @@ import {
   FilesystemExtentContributor,
   ProjectionBuilder,
   blobReferencesFor,
-  parseMarkdown,
+  parseFileCached,
+  withParseDispatcher,
   type ExtentContribution,
   type ProjectionBase,
   type ResourceRealizationRow,
@@ -96,7 +97,7 @@ const FIXTURE_ROOT = safePath.resolve(import.meta.dirname, '../fixtures/skill-fi
  * preimage and spells it in the key, so a key naming a different parser is a
  * different document even for identical bytes. That is why `addBlobReferences`
  * filters on it rather than on "has a blob row" — handing an `html.`-keyed blob
- * to `parseMarkdown` and filing the result under that same key is precisely the
+ * to the markdown parser and filing the result under that same key is precisely the
  * one-lane-served-the-other's-facts mis-filing `content-key.ts` warns about.
  */
 const MARKDOWN_KEY_PREFIX = 'markdown.';
@@ -255,7 +256,7 @@ function difference(left: readonly string[], right: readonly string[]): string[]
  *
  * The filter has to be the content key's parser prefix (see
  * {@link MARKDOWN_KEY_PREFIX} — "has a blob row" would feed an HTML-keyed blob to
- * `parseMarkdown`), and a prefix filter is exactly the shape that NARROWS in
+ * the markdown parser), and a prefix filter is exactly the shape that NARROWS in
  * silence: a parser-kind change drops files from this population, the base loses
  * those edges, and the exact member-set equalities downstream keep PASSING while
  * covering strictly less — the one failure mode a green suite cannot report.
@@ -319,22 +320,25 @@ async function addBlobReferences(
     unparsed.filter((row) => row.contentKey?.startsWith(NONE_KEY_PREFIX) !== true).map((row) => row.path),
   )).toEqual([]);
 
-  for (const row of unparsed) {
-    // (4b) …and each is a LEAF, so excluding it removes no edge from the base.
-    // Read, counted, discarded — never added to the builder.
-    const parsed = await parseMarkdown(safePath.join(root, row.path));
-    expect({ path: row.path, links: parsed.links, lexical: parsed.lexicalReferences ?? [] })
-      .toEqual({ path: row.path, links: [], lexical: [] });
-  }
-
-  for (const { contentKey, path } of admitted) {
-    // Sequential: `parseMarkdown` reads the file, and fanning a whole corpus out
-    // at once puts one handle per markdown file in flight for no shorter test.
-    const parsed = await parseMarkdown(safePath.join(root, path));
-    for (const row of blobReferencesFor(contentKey, parsed)) {
-      builder.addBlobReference(row);
+  // One parse dispatcher for every read below, shut down after them.
+  await withParseDispatcher(async (dispatcher) => {
+    for (const row of unparsed) {
+      // (4b) …and each is a LEAF, so excluding it removes no edge from the base.
+      // Read, counted, discarded — never added to the builder.
+      const parsed = await parseFileCached(safePath.join(root, row.path), 'markdown', { dispatcher });
+      expect({ path: row.path, links: parsed.links, lexical: parsed.lexicalReferences ?? [] })
+        .toEqual({ path: row.path, links: [], lexical: [] });
     }
-  }
+
+    for (const { contentKey, path } of admitted) {
+      // Sequential: `parseFileCached` reads the file, and fanning a whole corpus out
+      // at once puts one handle per markdown file in flight for no shorter test.
+      const parsed = await parseFileCached(safePath.join(root, path), 'markdown', { dispatcher });
+      for (const row of blobReferencesFor(contentKey, parsed)) {
+        builder.addBlobReference(row);
+      }
+    }
+  });
 }
 
 /**

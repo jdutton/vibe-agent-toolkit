@@ -1,12 +1,15 @@
 /**
- * A document deep enough to overflow an IN-PROCESS parse is an error finding,
+ * A document deep enough to overflow an in-process parse is an error finding,
  * `RESOURCE_PARSE_LIMIT_EXCEEDED` at that file — never a crash, never a warning.
  *
- * The skill lanes parse on this thread (`parseFileCached`, `parseMarkdown`, the
- * SKILL.md frontmatter parser), outside the bounded crawl route. The seed is a
- * 50,000-level flow sequence in the frontmatter, which overflows the stack
- * in `yaml` on the main thread and in a vitest worker alike (a `YAMLParseError` with code `RESOURCE_EXHAUSTION`,
- * probed on the main thread before this suite was written). Before the fix:
+ * The skill lanes once parsed on the run's own thread (`parseFileCached`'s
+ * in-thread parse, `parseMarkdown`, the SKILL.md frontmatter parser's own
+ * `yaml` decode). Every one now parses in the bounded worker, which refuses the
+ * seed at its `outputDepth` limit. The seed is a 50,000-level flow sequence in
+ * the frontmatter, which overflows the stack in `yaml` on the main thread and in
+ * a vitest worker alike (probed on the main thread before this suite was
+ * written), so a lane that ever parses in-process again fails here. Before the
+ * first fix:
  *
  * - `validateSkill` demoted a linked document's overflow to a
  *   `LINK_INTEGRITY_BROKEN` WARNING, so the skill passed;

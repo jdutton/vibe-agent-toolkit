@@ -19,9 +19,9 @@ import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 
-import { parseMarkdown, parseMarkdownContent } from '../src/link-parser.js';
+import { parseMarkdownContent } from '../src/link-parser.js';
 
-import { assertAllLinksClassifiedAs, expectHeadingStructure, findPackageRoot, writeAndParse } from './test-helpers.js';
+import { assertAllLinksClassifiedAs, expectHeadingStructure, findPackageRoot, parseMarkdownFile, writeAndParse } from './test-helpers.js';
 
 /**
  * Parse `content` as markdown in `dir` and return its explicit HTML anchor set,
@@ -80,7 +80,7 @@ describe('link-parser', () => {
     await mkdir(tempDir, { recursive: true });
   });
 
-  describe('parseMarkdown', () => {
+  describe('parseMarkdownContent over a file', () => {
     it('should parse a simple markdown file with links and headings', async () => {
       const content = `# Main Heading
 
@@ -94,7 +94,7 @@ Content here.
       const filePath = safePath.join(tempDir, 'test.md');
       await writeFile(filePath, content, 'utf-8');
 
-      const result = await parseMarkdown(filePath);
+      const result = await parseMarkdownFile(filePath);
 
       expect(result.content).toBe(content);
       // Against stat().size, not Buffer.byteLength(content): the two coincide for
@@ -111,7 +111,7 @@ Content here.
       const filePath = safePath.join(tempDir, 'empty.md');
       await writeFile(filePath, content, 'utf-8');
 
-      const result = await parseMarkdown(filePath);
+      const result = await parseMarkdownFile(filePath);
 
       expect(result.content).toBe('');
       expect(result.sizeBytes).toBe(0);
@@ -128,7 +128,7 @@ Just plain text content.
       const filePath = safePath.join(tempDir, 'no-links.md');
       await writeFile(filePath, content, 'utf-8');
 
-      const result = await parseMarkdown(filePath);
+      const result = await parseMarkdownFile(filePath);
 
       expect(result.links).toEqual([]);
       expect(result.headings).toHaveLength(1);
@@ -142,7 +142,7 @@ Just plain text content.
       const filePath = safePath.join(tempDir, 'no-headings.md');
       await writeFile(filePath, content, 'utf-8');
 
-      const result = await parseMarkdown(filePath);
+      const result = await parseMarkdownFile(filePath);
 
       expect(result.headings).toEqual([]);
       expect(result.links).toHaveLength(2);
@@ -151,7 +151,7 @@ Just plain text content.
     it('should throw error for non-existent files', async () => {
       const filePath = safePath.join(tempDir, 'non-existent.md');
 
-      await expect(parseMarkdown(filePath)).rejects.toThrow();
+      await expect(parseMarkdownFile(filePath)).rejects.toThrow();
     });
   });
 
@@ -163,7 +163,7 @@ Just plain text content.
       const filePath = safePath.join(tempDir, 'regular-links.md');
       await writeFile(filePath, content, 'utf-8');
 
-      const result = await parseMarkdown(filePath);
+      const result = await parseMarkdownFile(filePath);
 
       expect(result.links).toHaveLength(2);
       expect(result.links[0]).toMatchObject({
@@ -189,7 +189,7 @@ Just plain text content.
       const filePath = safePath.join(tempDir, 'autolinks.md');
       await writeFile(filePath, content, 'utf-8');
 
-      const result = await parseMarkdown(filePath);
+      const result = await parseMarkdownFile(filePath);
 
       expect(result.links).toHaveLength(2);
       expect(result.links[0]).toMatchObject({
@@ -210,7 +210,7 @@ Just plain text content.
       const filePath = safePath.join(tempDir, 'reference-links.md');
       await writeFile(filePath, content, 'utf-8');
 
-      const result = await parseMarkdown(filePath);
+      const result = await parseMarkdownFile(filePath);
 
       // Both the resolved linkReference node and the definition node (with URL) are extracted
       expect(result.links).toHaveLength(2);
@@ -275,7 +275,7 @@ See [the docs][docs] for details.
       const filePath = safePath.join(tempDir, 'mixed-links.md');
       await writeFile(filePath, content, 'utf-8');
 
-      const result = await parseMarkdown(filePath);
+      const result = await parseMarkdownFile(filePath);
 
       expect(result.links.length).toBeGreaterThanOrEqual(3);
       const types = result.links.map((link) => link.type);
@@ -294,7 +294,7 @@ See [the docs][docs] for details.
       const filePath = safePath.join(tempDir, 'link-lines.md');
       await writeFile(filePath, content, 'utf-8');
 
-      const result = await parseMarkdown(filePath);
+      const result = await parseMarkdownFile(filePath);
 
       expect(result.links[0]!.line).toBe(3);
       expect(result.links[1]!.line).toBe(5);
@@ -306,7 +306,7 @@ See [the docs][docs] for details.
       const filePath = safePath.join(tempDir, 'nested-link-text.md');
       await writeFile(filePath, content, 'utf-8');
 
-      const result = await parseMarkdown(filePath);
+      const result = await parseMarkdownFile(filePath);
 
       expect(result.links).toHaveLength(1);
       expect(result.links[0]).toMatchObject({
@@ -327,7 +327,7 @@ See [the docs][docs] for details.
       const filePath = safePath.join(tempDir, 'link-text-with-image.md');
       await writeFile(filePath, content, 'utf-8');
 
-      const result = await parseMarkdown(filePath);
+      const result = await parseMarkdownFile(filePath);
 
       expect(result.links).toHaveLength(1);
       expect(result.links[0]).toMatchObject({
@@ -346,7 +346,7 @@ See [the docs][docs] for details.
       const filePath = safePath.join(tempDir, 'external.md');
       await writeFile(filePath, content, 'utf-8');
 
-      const result = await parseMarkdown(filePath);
+      const result = await parseMarkdownFile(filePath);
 
       expect(result.links[0]!.type).toBe('external');
       expect(result.links[1]!.type).toBe('external');
@@ -357,7 +357,7 @@ See [the docs][docs] for details.
       const filePath = safePath.join(tempDir, 'email.md');
       await writeFile(filePath, content, 'utf-8');
 
-      const result = await parseMarkdown(filePath);
+      const result = await parseMarkdownFile(filePath);
 
       expect(result.links[0]!.type).toBe('email');
     });
@@ -367,7 +367,7 @@ See [the docs][docs] for details.
       const filePath = safePath.join(tempDir, 'anchor.md');
       await writeFile(filePath, content, 'utf-8');
 
-      const result = await parseMarkdown(filePath);
+      const result = await parseMarkdownFile(filePath);
 
       expect(result.links[0]!.type).toBe('anchor');
     });
@@ -381,7 +381,7 @@ See [the docs][docs] for details.
       const filePath = safePath.join(tempDir, 'local-files.md');
       await writeFile(filePath, content, 'utf-8');
 
-      const result = await parseMarkdown(filePath);
+      const result = await parseMarkdownFile(filePath);
 
       expect(result.links[0]!.type).toBe('local_file');
       expect(result.links[1]!.type).toBe('local_file');
@@ -394,7 +394,7 @@ See [the docs][docs] for details.
       const filePath = safePath.join(tempDir, 'file-anchor.md');
       await writeFile(filePath, content, 'utf-8');
 
-      const result = await parseMarkdown(filePath);
+      const result = await parseMarkdownFile(filePath);
 
       expect(result.links[0]!.type).toBe('local_file');
     });
@@ -407,7 +407,7 @@ See [the docs][docs] for details.
       const filePath = safePath.join(tempDir, 'unknown.md');
       await writeFile(filePath, content, 'utf-8');
 
-      const result = await parseMarkdown(filePath);
+      const result = await parseMarkdownFile(filePath);
 
       // Image and PDF with relative paths are classified as local_file
       expect(result.links[0]!.type).toBe('local_file');
@@ -455,7 +455,7 @@ See [the docs][docs] for details.
       const filePath = safePath.join(tempDir, 'headings.md');
       await writeFile(filePath, content, 'utf-8');
 
-      const result = await parseMarkdown(filePath);
+      const result = await parseMarkdownFile(filePath);
 
       expect(result.headings).toHaveLength(1);
       expect(result.headings[0]!.level).toBe(1);
@@ -551,7 +551,7 @@ See [the docs][docs] for details.
       const filePath = safePath.join(tempDir, 'duplicates.md');
       await writeFile(filePath, content, 'utf-8');
 
-      const result = await parseMarkdown(filePath);
+      const result = await parseMarkdownFile(filePath);
 
       // GithubSlugger deduplicates: first occurrence gets base slug, subsequent get -1, -2, etc.
       expect(result.headings[0]!.slug).toBe('introduction');
@@ -573,7 +573,7 @@ Content
       const filePath = safePath.join(tempDir, 'heading-lines.md');
       await writeFile(filePath, content, 'utf-8');
 
-      const result = await parseMarkdown(filePath);
+      const result = await parseMarkdownFile(filePath);
 
       expect(result.headings[0]!.line).toBe(3);
       expect(result.headings[0]!.children![0]!.line).toBe(7);
@@ -663,7 +663,7 @@ Content
       const filePath = safePath.join(tempDir, 'deep-nesting.md');
       await writeFile(filePath, content, 'utf-8');
 
-      const result = await parseMarkdown(filePath);
+      const result = await parseMarkdownFile(filePath);
 
       let current = result.headings[0]!;
       expect(current.level).toBe(1);
@@ -698,7 +698,7 @@ Content
       const filePath = safePath.join(tempDir, 'start-h2.md');
       await writeFile(filePath, content, 'utf-8');
 
-      const result = await parseMarkdown(filePath);
+      const result = await parseMarkdownFile(filePath);
 
       // h2 headings should be at root level since there's no h1
       expect(result.headings).toHaveLength(2);
@@ -716,7 +716,7 @@ Content
     it('should parse valid.md fixture', async () => {
       const fixturePath = safePath.join(FIXTURES_DIR, 'valid.md');
 
-      const result = await parseMarkdown(fixturePath);
+      const result = await parseMarkdownFile(fixturePath);
 
       expect(result.links.length).toBeGreaterThan(0);
       expect(result.headings.length).toBeGreaterThan(0);
@@ -731,7 +731,7 @@ Content
     it('should parse external.md fixture', async () => {
       const fixturePath = safePath.join(FIXTURES_DIR, 'external.md');
 
-      const result = await parseMarkdown(fixturePath);
+      const result = await parseMarkdownFile(fixturePath);
 
       // All links should be external or email
       for (const link of result.links) {
@@ -742,7 +742,7 @@ Content
     it('should parse complex.md fixture', async () => {
       const fixturePath = safePath.join(FIXTURES_DIR, 'complex.md');
 
-      const result = await parseMarkdown(fixturePath);
+      const result = await parseMarkdownFile(fixturePath);
 
       // Verify nested heading structure
       expect(result.headings).toHaveLength(1);
@@ -769,7 +769,7 @@ Content
       const filePath = safePath.join(tempDir, 'tokens.md');
       await writeFile(filePath, content, 'utf-8');
 
-      const result = await parseMarkdown(filePath);
+      const result = await parseMarkdownFile(filePath);
 
       expect(result.estimatedTokenCount).toBe(100);
     });
@@ -779,7 +779,7 @@ Content
       const filePath = safePath.join(tempDir, 'tokens-round.md');
       await writeFile(filePath, content, 'utf-8');
 
-      const result = await parseMarkdown(filePath);
+      const result = await parseMarkdownFile(filePath);
 
       expect(result.estimatedTokenCount).toBe(101); // Rounds up
     });
@@ -801,7 +801,7 @@ priority: 1
 Some content here.`,
       );
 
-      const result = await parseMarkdown(mdPath);
+      const result = await parseMarkdownFile(mdPath);
 
       expect(result.frontmatter).toEqual({
         title: 'Test Document',
@@ -814,7 +814,7 @@ Some content here.`,
       const mdPath = safePath.join(tempDir, 'no-frontmatter.md');
       await writeFile(mdPath, '# Just Content\n\nNo frontmatter here.');
 
-      const result = await parseMarkdown(mdPath);
+      const result = await parseMarkdownFile(mdPath);
 
       expect(result.frontmatter).toBeUndefined();
     });
@@ -829,7 +829,7 @@ Some content here.`,
 # Content`,
       );
 
-      const result = await parseMarkdown(mdPath);
+      const result = await parseMarkdownFile(mdPath);
 
       expect(result.frontmatter).toBeUndefined();
     });
@@ -850,7 +850,7 @@ date: 2026-04-15
 # ADR`,
       );
 
-      const result = await parseMarkdown(mdPath);
+      const result = await parseMarkdownFile(mdPath);
 
       expect(result.frontmatter?.date).toBe('2026-04-15');
       expect(result.frontmatter?.date).not.toBeInstanceOf(Date);
@@ -869,7 +869,7 @@ tags: test
 # Content`,
       );
 
-      const result = await parseMarkdown(mdPath);
+      const result = await parseMarkdownFile(mdPath);
 
       expect(result.frontmatter).toBeUndefined();
       expect(result.frontmatterError).toBeDefined();
@@ -1150,10 +1150,10 @@ description: "use [a][nope-fm]"
     });
   });
 
-  // `parseMarkdownContent` is the content-addressable half of `parseMarkdown`:
-  // a pure function of (content, sizeBytes) that never touches the filesystem.
-  // The equivalence test is what pins the split as a refactor rather than a
-  // behaviour change — if the two halves ever disagree, this fails.
+  // `parseMarkdownContent` is the composer the parse worker runs: a pure
+  // function of (content, sizeBytes) that never touches the filesystem. The file
+  // lane (`parseFileCached`) owns the read; its byte count is pinned in
+  // `parse-file-cached.integration.test.ts`.
   describe('parseMarkdownContent', () => {
     const RICH_MARKDOWN = [
       '---',
@@ -1173,19 +1173,6 @@ description: "use [a][nope-fm]"
       '[defined]: ./defined-target.md',
       '',
     ].join('\n');
-
-    it('produces a ParseResult identical to parseMarkdown for the same file', async () => {
-      const filePath = safePath.join(tempDir, 'equivalence.md');
-      await writeFile(filePath, RICH_MARKDOWN, 'utf-8');
-
-      const [fromFile, content, stats] = await Promise.all([
-        parseMarkdown(filePath),
-        readFile(filePath, 'utf-8'),
-        stat(filePath),
-      ]);
-
-      expect(parseMarkdownContent(content, stats.size)).toEqual(fromFile);
-    });
 
     // No file is written anywhere in this test: the content corresponds to
     // nothing on disk, which is exactly the history-replay / cache-hit case.
@@ -1214,10 +1201,8 @@ description: "use [a][nope-fm]"
       // them can tell those three apart. A lone 0xFF is invalid UTF-8 and decodes
       // to U+FFFD, which re-encodes to THREE bytes, making them disagree.
       //
-      // Without this fixture, swapping `stat().size` for
-      // `Buffer.byteLength(content)` inside `parseMarkdown` leaves all 74 tests
-      // green. That swap is a real defect — `sizeBytes` reaches packaged output
-      // bytes via content-transform.ts — so it has to be falsifiable somewhere.
+      // `sizeBytes` reaches packaged output bytes via content-transform.ts, so
+      // the composer must report what it is handed, never a length it derives.
       const filePath = safePath.join(tempDir, 'malformed.md');
       await writeFile(
         filePath,
@@ -1230,10 +1215,6 @@ description: "use [a][nope-fm]"
       // assertion below becomes vacuous.
       expect(stats.size).toBe(8);
       expect(Buffer.byteLength(content)).toBe(10);
-
-      const fromFile = await parseMarkdown(filePath);
-      expect(fromFile.sizeBytes).toBe(stats.size);
-      expect(fromFile.sizeBytes).not.toBe(Buffer.byteLength(content));
 
       expect(parseMarkdownContent(content, stats.size).sizeBytes).toBe(8);
     });

@@ -54,8 +54,8 @@ import {
   crawlSourceFor,
   DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
+  notAdmittedRealizations,
   populate,
-  parseRefusedRealizations,
   populationOracles,
   type BlobRefusalRows,
   type ParseRefusedResource,
@@ -333,7 +333,8 @@ function indexPopulation(
   }
 
   const refusedByAbsolute = new Map<string, ParseRefusedResource>();
-  for (const refusal of parseRefusedRealizations(projection, root)) {
+  // Parse refusals only, as the registry lane reports (`getParseRefusedResources()`).
+  for (const refusal of notAdmittedRealizations(projection, root).parseRefused) {
     refusedByAbsolute.set(refusal.filePath, refusal);
   }
 

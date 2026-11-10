@@ -59,13 +59,13 @@
  *
  * ## What the counts do and do not reconcile
  *
- * `cache.hits`/`cache.misses` count every parser kind, because `parseKeyed`
+ * `cache.hits`/`cache.misses` count every parser kind, because the dispatcher
  * routes both kinds through one cache. Document counts are now per kind, so the
  * cache's population and the parsers' population are finally comparable — but
  * they are still **not** equal, and nothing here derives one from the other:
- * several call sites (`parseMarkdown(filePath)`, `parseHtml(filePath)`) reach a
- * parser without consulting the cache at all, so the parse counts can exceed the
- * misses. Every term is recorded where the work happens; what is left over is
+ * every parse now goes through the dispatcher, which counts a miss before a
+ * worker parses, but a miss whose parse is refused completes no document, so the
+ * two can still differ. Every term is recorded where the work happens; what is left over is
  * left to a reader who now has all of them.
  *
  * ## Why the process-level CPU reading is one syscall and the passes are not

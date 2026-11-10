@@ -601,7 +601,7 @@ function collectionSchemaCacheKey(resolvedSchemaPath: string, mode: ValidationMo
  * What a resource is when nothing parses it.
  *
  * `parserKindForPath` answers `none` for every type that is neither prose nor
- * markup, and `parseKeyed` refuses that kind in its SIGNATURE — so this is not a
+ * markup, and the dispatcher refuses that kind in its SIGNATURE — so this is not a
  * fallback the registry may forget, it is the other half of a decision the
  * compiler insists on. The alternative was the status quo ante, where a `.ts`
  * file went to `remark-parse` and came back with reference-style "links" made of
@@ -1223,7 +1223,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // THE read. Everything below is a function of these bytes plus one stat —
     // this used to be two whole-file reads (parse, then checksum) and two stats.
     // The discriminator runs exactly ONCE here and its answer rides on `keyed`
-    // into both the content key and the parser selection in `parseKeyed`:
+    // into both the content key and the parser selection in the dispatcher:
     // parser selection is part of a document's parse identity (content-key.ts),
     // and running the discriminator twice is how the parse route and the key's
     // parse-route component drift apart.
@@ -1233,10 +1233,10 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     const keyed = await readContentWithKey(absolutePath, this.parserKindFor(absolutePath));
 
     // Parse from the bytes already in hand — or from a cache entry filed under
-    // the key those bytes just produced. See `parseKeyed` for the interception.
+    // the key those bytes just produced. See `ParseDispatcher.parse`.
     //
     // …unless nothing parses this at all. `parserKindForPath` answers `none` for
-    // every type that is neither prose nor markup, and `parseKeyed` refuses that
+    // every type that is neither prose nor markup, and the dispatcher refuses that
     // kind by TYPE rather than by throwing, so the branch cannot be forgotten.
     // See {@link unparsedResourceFacts} for what a resource is without a parse.
     const parseResult = isParsableContent(keyed)

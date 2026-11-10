@@ -71,6 +71,7 @@ const POPULATION: ProgressEntry = {
   lensMs: 340,
   lensesEvaluated: ['claude-context'],
   membersEnumerated: 8123,
+  notAdmitted: [],
 };
 const FIRST_COST: ProgressEntry = { kind: 'check', name: 'no-markdown', durationMs: 4.25, rows: 3 };
 const HUNG_START: ProgressEntry = { kind: 'start', name: 'runaway' };
@@ -309,6 +310,19 @@ describe('buildInterruptedCheckInput', () => {
     expect(populated?.lensesEvaluated).toStrictEqual(['claude-context']);
     expect(populated?.populationMs).toBe(1180);
     expect(populated?.membersEnumerated).toBe(8123);
+  });
+
+  it('still reports the files the population did not admit, as resolved before the checks ran', () => {
+    // The population's not-admitted findings are computed before any check runs
+    // and carried on its line, so a run killed mid-check still fails on them —
+    // at the severity `resources.validation` resolved them to, never re-defaulted.
+    const notAdmitted = [
+      { code: 'RESOURCE_UNREADABLE', severity: 'warning', message: "'docs/locked.md' was enumerated but could not be read, so no check saw its rows.", location: 'docs/locked.md' },
+    ] as const;
+    const input = killed([{ ...POPULATION, notAdmitted: [...notAdmitted] }, FIRST_COST, HUNG_START]);
+
+    expect(input.issues.filter((issue) => issue.code === 'RESOURCE_UNREADABLE')).toStrictEqual([...notAdmitted]);
+    expect(input.issues[0]?.code).toBe('RESOURCE_UNREADABLE');
   });
 
   it('keeps the checks that COMPLETED, with the rows each selected', () => {

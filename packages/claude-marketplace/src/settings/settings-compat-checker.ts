@@ -6,6 +6,7 @@ import * as fs from 'node:fs/promises';
 import { basename } from 'node:path';
 
 import { allowedToolsOf, parseFrontmatter } from '@vibe-agent-toolkit/agent-skills';
+import { type ParseDispatcher, withParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { isPathAbsentError, mapWithConcurrency, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { SettingsConflict } from '../types.js';
@@ -76,7 +77,8 @@ export interface SettingsCheck {
  * than contributing nothing, because "nothing" reads as "no conflict".
  */
 async function parseSkillFrontmatter(
-  skillPath: string
+  skillPath: string,
+  dispatcher: ParseDispatcher,
 ): Promise<{ frontmatter: SkillFrontmatter } | { reason: string }> {
   let content: string;
   try {
@@ -85,7 +87,7 @@ async function parseSkillFrontmatter(
     return { reason: reasonOf(error) };
   }
 
-  const parsed = parseFrontmatter(content);
+  const parsed = await parseFrontmatter(content, { dispatcher });
   if (!parsed.success) return { reason: parsed.error };
   const fields = parsed.frontmatter;
 
@@ -273,7 +275,10 @@ export async function checkSettingsCompatibility(
   // Each SKILL.md is read ONCE, here, and every lane below consults the same
   // reading — a file the checker could not read is unchecked for all of them.
   // The reads are independent and run concurrently; their results fold in file order.
-  const reads = await mapWithConcurrency(skillFiles, async (path) => ({ path, read: await parseSkillFrontmatter(path) }));
+  // One parse dispatcher for the run: the frontmatter decode runs in the bounded worker.
+  const reads = await withParseDispatcher((dispatcher) =>
+    mapWithConcurrency(skillFiles, async (path) => ({ path, read: await parseSkillFrontmatter(path, dispatcher) })),
+  );
   const skills: ReadSkill[] = [];
   for (const { path, read } of reads) {
     if ('reason' in read) unchecked.push({ path, reason: read.reason });

@@ -13,6 +13,7 @@
 
 import { readFileSync } from 'node:fs';
 
+import type { ParseRoute } from '@vibe-agent-toolkit/resources';
 import { isPathAbsentError } from '@vibe-agent-toolkit/utils';
 
 import { parseFrontmatter } from './parsers/frontmatter-parser.js';
@@ -29,15 +30,14 @@ import { parseFrontmatter } from './parsers/frontmatter-parser.js';
  * and a refusal has not established that — a caller falling back to the
  * directory leaf would otherwise rename the skill on the operator's behalf.
  */
-export function readDeclaredSkillName(skillMdPath: string): string | undefined {
+export function readDeclaredSkillName(skillMdPath: string, route: ParseRoute = {}): Promise<string | undefined> {
   let content: string;
   try {
     content = readFileSync(skillMdPath, 'utf-8');
   } catch (error) {
-    if (isPathAbsentError(error)) return undefined;
-    throw error;
+    return isPathAbsentError(error) ? Promise.resolve(undefined) : Promise.reject(error as Error);
   }
-  return declaredSkillNameIn(content);
+  return declaredSkillNameIn(content, route);
 }
 
 /**
@@ -49,8 +49,11 @@ export function readDeclaredSkillName(skillMdPath: string): string | undefined {
  * second parse beside it: two spellings of "what name does this declare" is
  * exactly how one lane starts answering differently from another.
  */
-export function declaredSkillNameIn(content: string): string | undefined {
-  const parsed = parseFrontmatter(content);
+export async function declaredSkillNameIn(content: string, route: ParseRoute = {}): Promise<string | undefined> {
+  // A block the parse worker refused for this run declares nothing this run can
+  // read, so it is "no usable name" — the caller's fallback (the directory leaf)
+  // applies, as for a SKILL.md with no frontmatter.
+  const parsed = await parseFrontmatter(content, route);
   if (!parsed.success) return undefined;
 
   const declared = parsed.frontmatter['name'];

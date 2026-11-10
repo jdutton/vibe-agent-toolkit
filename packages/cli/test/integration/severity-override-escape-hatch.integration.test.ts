@@ -269,6 +269,35 @@ async function auditStatuses(target: string): Promise<string[]> {
     .map((r) => (r.summary.errors > 0 ? 'error' : 'warning'));
 }
 
+/**
+ * Rewrite the project config with `skills.defaults.validation.allow` for {@link CODE}:
+ * one EXPIRED entry matching `matched`, and one entry matching nothing.
+ */
+function writeAllowConfig(root: string, matched: string): void {
+  writeFileSync(
+    safePath.join(root, 'vibe-agent-toolkit.config.yaml'),
+    [
+      'skills:',
+      '  include:',
+      '    - "skills/**/SKILL.md"',
+      '  defaults:',
+      '    validation:',
+      '      allow:',
+      `        ${CODE}:`,
+      `          - paths: ["${matched}"]`,
+      '            reason: seeded, expired long ago',
+      '            expires: "2000-01-01"',
+      '          - paths: ["never/**"]',
+      '            reason: seeded, matches nothing',
+      '  config:',
+      `    ${SKILL_NAME}:`,
+      '      publish: true',
+      '',
+    ].join('\n'),
+    'utf-8',
+  );
+}
+
 describe('severity escape hatch: PACKAGED_AGENT_INSTRUCTION_FILE (integration)', () => {
   afterEach(() => {
     cleanupTempDirs();
@@ -408,6 +437,29 @@ describe('severity escape hatch: PACKAGED_AGENT_INSTRUCTION_FILE (integration)',
         status: result.status,
         codes: result.issues.filter((i) => i.code === CODE).length,
       }))).toEqual([{ status: 'ok', codes: 0 }]);
+    });
+  });
+
+  // Neither lane is the run of a whole-project allow ledger: each resolves through
+  // `resolveFindings`, which applies `validation.allow` and drains no ledger. An
+  // EXPIRED entry therefore still suppresses its finding (a matcher hit ignores
+  // expiry), and neither `ALLOW_EXPIRED` nor `ALLOW_UNUSED` is ever reported.
+  describe('validation.allow, applied with no allow ledger', () => {
+    it('vat verify packaged-content: an expired entry suppresses the file, and no other finding appears', async () => {
+      const { root } = projectWithBundle('none');
+      writeAllowConfig(root, 'dist/skills/demo/CLAUDE.md');
+      await expect(verifyFindings(root)).resolves.toEqual([]);
+    });
+
+    it('vat claude marketplace validate: an expired entry suppresses the file at its marketplace-relative path, and no ledger code appears', async () => {
+      const { root, marketplace } = projectWithMarketplace('none');
+      writeAllowConfig(root, `plugins/${PLUGIN_NAME}/CLAUDE.md`);
+
+      const { pluginResults, issues } = await collectMarketplaceFindings(marketplace, silentLogger);
+      const codes = [...issues, ...pluginResults.flatMap(({ result }) => result.issues)].map((i) => i.code);
+
+      await expect(marketplaceOutcome(marketplace)).resolves.toEqual({ findings: [], exitCode: 0, errors: 0, warnings: 0 });
+      expect(codes.filter((code) => code === 'ALLOW_UNUSED' || code === 'ALLOW_EXPIRED')).toEqual([]);
     });
   });
 });

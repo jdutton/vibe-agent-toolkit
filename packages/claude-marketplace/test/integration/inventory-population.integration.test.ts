@@ -303,7 +303,7 @@ describe('vat inventory: a refused linked document is a parse error in both arms
     rmSync(refusedRoot, { recursive: true, force: true });
   });
 
-  it('reports the same row, in the same sentence, from the projection as from the walk', async () => {
+  it('reports the same row, with the same reason, from the projection as from the walk', async () => {
     const population = await buildInventoryPopulation({
       root: refusedRoot,
       skillMdPaths: ['delta', 'gamma'].map((name) => safePath.join(refusedRoot, 'skills', name, 'SKILL.md')),
@@ -317,10 +317,11 @@ describe('vat inventory: a refused linked document is a parse error in both arms
       { path: 'skills/gamma/reference.md', parseRefused: 'RESOURCE_PARSE_LIMIT_EXCEEDED' },
     ]);
     expect(projected).toStrictEqual(walked);
+    // The row carries the REASON, path-free; each consumer builds the sentence at
+    // its own root. One blob, one reason: the two rows share it exactly.
     for (const row of walked) {
-      expect(row.message.startsWith(`'${row.path}' was enumerated but its parse was stopped at its outputRows limit`)).toBe(true);
+      expect(row.message.startsWith('its parse was stopped at its outputRows limit')).toBe(true);
     }
-    // One blob, one reason: the two rows differ by their own path and nothing else.
-    expect(walked[1]?.message).toBe(walked[0]?.message.replace('skills/delta/', 'skills/gamma/'));
+    expect(walked[1]?.message).toBe(walked[0]?.message);
   });
 });

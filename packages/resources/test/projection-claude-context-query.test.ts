@@ -671,6 +671,7 @@ describe('whatLoadsAt', () => {
       resourceRealizations: projection.resourceRealizations,
       blobs: projection.blobs,
       blobReferences: projection.blobReferences,
+      blobConditions: projection.blobConditions,
       harnessBlobFacts: projection.harnessBlobFacts,
       harnessBlobImports: projection.harnessBlobImports,
       declaration: ExtentDeclarationSchema.parse(provenanceRow.parameterSet),

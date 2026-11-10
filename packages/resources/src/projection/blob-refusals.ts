@@ -61,10 +61,11 @@
  */
 
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, TextTooLargeError } from '@vibe-agent-toolkit/utils';
 
 import { isTextMimeType } from '../mime-type.js';
-import type { ParseRefusedResource } from '../resource-registry.js';
+import type { NotAdmittedLog } from '../not-admitted.js';
+import type { ParseRefusedResource, UnreadableResource } from '../resource-registry.js';
 
 import {
   BLOB_CONTENT_CHANGED,
@@ -286,32 +287,94 @@ const PARSE_REFUSAL_CODE_OF_BLOB: ReadonlyMap<string, ParseRefusedResource['code
 ]);
 
 /**
- * Every realization whose blob's parse this run refused, in the registry's own
- * refusal shape — the projection's counterpart of
- * `ResourceRegistry.getParseRefusedResources()`, so a lane answering from a
- * projection reports a refused file through the same contract
- * (`not-admitted.ts`) as the registry lane instead of listing it as an admitted
- * member.
- *
- * The adapter is per REALIZATION: the refusal row is per blob and carries only
- * the reason (`parseRefusal`), so two files holding the same bytes each come
- * back under their own path.
- *
- * @param rows - The population's rows (a store hit carries none: a refusal is never filed)
- * @param root - The absolute root the realizations' paths are relative to
- * @returns One entry per refused realization, in realization order, each at its absolute path
+ * The blob conditions that leave every realization of a blob with no rows: its
+ * bytes could not be read, changed under the run, or its parser threw.
  */
-export function parseRefusedRealizations(
+const UNADMITTED_BLOB_CODES: ReadonlySet<string> = new Set([BLOB_UNREADABLE, BLOB_CONTENT_CHANGED, BLOB_PARSE_FAILED]);
+
+/** Which of the two logs one realization goes in, and its entry less the path. */
+type NotAdmittedEntry =
+  | { readonly log: 'unreadable'; readonly entry: Omit<UnreadableResource, 'filePath'> }
+  | { readonly log: 'parseRefused'; readonly entry: Omit<ParseRefusedResource, 'filePath'> };
+
+/**
+ * The entry for one blob condition row, or `undefined` when the row leaves the
+ * blob admitted (`BLOB_NOT_TEXT`, `PARSE_ODDITY`, …).
+ *
+ * A `BLOB_PARSE_FAILED` row — a stored fact of the bytes — is logged
+ * `unreadable` under the code its parser threw (`parseFailureOf`, the one reader
+ * of that message), so the file fails `RESOURCE_UNREADABLE` like any other file
+ * the run holds no rows for. The registry lane never gets that far: a parse that
+ * throws anything but a read failure ends its run.
+ *
+ * @param row - A blob condition row
+ * @returns Its entry, or `undefined`
+ */
+function blobConditionEntry(row: Projection['blobConditions'][number]): NotAdmittedEntry | undefined {
+  const refusalCode = PARSE_REFUSAL_CODE_OF_BLOB.get(row.code);
+  if (refusalCode !== undefined) return { log: 'parseRefused', entry: { code: refusalCode, reason: row.message } };
+  if (!UNADMITTED_BLOB_CODES.has(row.code)) return undefined;
+  const failure = row.code === BLOB_PARSE_FAILED ? parseFailureOf(row.message) : undefined;
+  return { log: 'unreadable', entry: { reason: row.message, ...(failure?.kind === 'code' && { code: failure.text }) } };
+}
+
+/**
+ * The entry for a realization with no content key: `unreadable` and `oversize`
+ * are the two states in which the bytes are there and the run holds none of them.
+ *
+ * @param contentState - The realization's state
+ * @returns Its entry, or `undefined` when the state is not a refusal (`none`, `deferred`)
+ */
+function unkeyedEntry(contentState: Projection['resourceRealizations'][number]['contentState']): NotAdmittedEntry | undefined {
+  if (contentState === 'unreadable') {
+    return { log: 'unreadable', entry: { reason: 'its bytes could not be read when the realization was keyed' } };
+  }
+  // The registry lane's code for the same file (`TextTooLargeError`), so both lanes name it alike.
+  if (contentState === 'oversize') return { log: 'unreadable', entry: { reason: 'too large to decode', code: TextTooLargeError.code } };
+  return undefined;
+}
+
+/**
+ * Every realization the population enumerated and holds no rows for, in the
+ * registry's own two logs — the projection's counterpart of
+ * `ResourceRegistry.getNotAdmitted()`, so a lane answering from a projection
+ * reports such a file through the same contract (`not-admitted.ts`) as the
+ * registry lane, never as though it were absent or admitted:
+ *
+ * - `unreadable`: a realization whose bytes could not be read or were too large
+ *   to decode (`contentState` `unreadable` / `oversize`), and every realization
+ *   of a blob that could not be read, changed under the run, or whose parser
+ *   threw (`BLOB_UNREADABLE`, `BLOB_CONTENT_CHANGED`, `BLOB_PARSE_FAILED`);
+ * - `parseRefused`: every realization of a blob whose parse this run refused
+ *   (`BLOB_PARSE_LIMIT_EXCEEDED`, `BLOB_PARSE_WORKER_DIED`).
+ *
+ * Per REALIZATION, each path once: a condition row is per blob and carries only
+ * the reason, so two files holding the same bytes each come back under their own
+ * path, and a path several extents realize comes back once. The first condition
+ * row of a blob decides it.
+ *
+ * @param rows - The population's rows (a store hit repeats only `BLOB_PARSE_FAILED`: the per-run rows are never filed)
+ * @param root - The absolute root the realizations' paths are relative to
+ * @returns The two logs, each in realization order, each entry at its absolute path
+ */
+export function notAdmittedRealizations(
   rows: Pick<Projection, 'blobConditions' | 'resourceRealizations'>,
   root: string,
-): ParseRefusedResource[] {
-  const refusedBlobs = new Map<string, Pick<ParseRefusedResource, 'code' | 'reason'>>();
+): NotAdmittedLog {
+  const byBlob = new Map<string, NotAdmittedEntry>();
   for (const row of rows.blobConditions) {
-    const code = PARSE_REFUSAL_CODE_OF_BLOB.get(row.code);
-    if (code !== undefined && !refusedBlobs.has(row.blob)) refusedBlobs.set(row.blob, { code, reason: row.message });
+    const found = byBlob.has(row.blob) ? undefined : blobConditionEntry(row);
+    if (found !== undefined) byBlob.set(row.blob, found);
   }
-  return rows.resourceRealizations.flatMap((row) => {
-    const refusal = row.contentKey === null ? undefined : refusedBlobs.get(row.contentKey);
-    return refusal === undefined ? [] : [{ filePath: safePath.resolve(root, row.path), ...refusal }];
-  });
+  const seen = new Set<string>();
+  const log: { unreadable: UnreadableResource[]; parseRefused: ParseRefusedResource[] } = { unreadable: [], parseRefused: [] };
+  for (const row of rows.resourceRealizations) {
+    const found = row.contentKey === null ? unkeyedEntry(row.contentState) : byBlob.get(row.contentKey);
+    if (found === undefined || seen.has(row.path)) continue;
+    seen.add(row.path);
+    const filePath = safePath.resolve(root, row.path);
+    if (found.log === 'parseRefused') log.parseRefused.push({ filePath, ...found.entry });
+    else log.unreadable.push({ filePath, ...found.entry });
+  }
+  return log;
 }

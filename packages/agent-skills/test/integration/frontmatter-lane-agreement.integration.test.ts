@@ -1,7 +1,8 @@
 /**
- * One frontmatter shape rule, two lanes. The crawl lane decodes a block with
- * `parseFrontmatterSource` (via `parseMarkdown`); the skill lane with
- * `parseFrontmatter`. For the same block they must give the same answer:
+ * One frontmatter rule, two lanes. The crawl lane decodes a block with
+ * `parseFrontmatterSource` in the parse worker (via `parseFileCached`); the skill
+ * lane with `parseFrontmatter`, which hands the block to the same worker. For the
+ * same block they must give the same answer:
  *
  * - a root that is not a PLAIN mapping (a sequence, a scalar, or the typed
  *   value of a `!!set` / `!!omap` / `!!timestamp` / `!!binary` root) is "not a
@@ -10,7 +11,13 @@
  * - a block that declares nothing (empty, `~`, `null`, comment-only) is no
  *   frontmatter on both and a non-mapping on neither — no flag and no
  *   `frontmatter` on the crawl lane, a refusal that says "empty" on the skill
- *   lane.
+ *   lane;
+ * - a block the worker refuses for this run (a cyclic anchor, nesting past
+ *   `outputDepth`) is refused on both, under the same code — never decoded on
+ *   the run's own thread, where it would overflow the stack or nest without end;
+ * - where the block IS — the fence rule (`---` then optional spaces or tabs, on
+ *   the first line only, closed by the next such line; CRLF and a BOM tolerated)
+ *   — is the same on both.
  *
  * Before the skill lane read `isPlainMapping`, it admitted every typed root as
  * a `Record<string, unknown>` with no keys, and called an empty block "not a
@@ -18,11 +25,15 @@
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import { parseMarkdown } from '@vibe-agent-toolkit/resources';
+import { isPerRunParseRefusal, parseFileCached } from '@vibe-agent-toolkit/resources';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { parseFrontmatter } from '../../src/parsers/frontmatter-parser.js';
+import { setupParseRoute } from '../test-helpers.js';
+
+/** Both lanes parse in the bounded worker, on one dispatcher over a disabled cache. */
+const ROUTE = setupParseRoute();
 
 let scratch: string;
 
@@ -34,25 +45,52 @@ afterAll(() => {
   rmSync(scratch, { recursive: true, force: true });
 });
 
+/** One lane's verdict: refused for this run (and the code), or the shape it read. */
+type Verdict = { refused: string } | { notAMapping: boolean; keys: string[] | null };
+
+/** The refusal's code, for a per-run refusal; anything else is rethrown. */
+function refusalCode(error: unknown): string {
+  if (!isPerRunParseRefusal(error)) throw error;
+  return String((error as { code: unknown }).code);
+}
+
+/** The crawl lane's verdict on one file. */
+async function crawlVerdict(file: string): Promise<Verdict> {
+  try {
+    const crawled = await parseFileCached(file, 'markdown', ROUTE);
+    return {
+      notAMapping: crawled.frontmatterNotAMapping === true,
+      keys: crawled.frontmatter === undefined ? null : Object.keys(crawled.frontmatter),
+    };
+  } catch (error) {
+    return { refused: refusalCode(error) };
+  }
+}
+
+/** The skill lane's verdict on the same bytes. */
+async function skillVerdict(content: string): Promise<Verdict> {
+  const skill = await parseFrontmatter(content, ROUTE);
+  if (skill.success) return { notAMapping: false, keys: Object.keys(skill.frontmatter) };
+  if (skill.cause !== undefined) return { refused: refusalCode(skill.cause) };
+  return { notAMapping: skill.error.includes('not a YAML mapping'), keys: null };
+}
+
 /**
- * Both lanes' answer for one block.
+ * Both lanes' answer for one document.
  *
- * @param name - A file name for the block
- * @param block - The YAML between the delimiters
+ * @param name - A file name for the document
+ * @param content - The whole document
  * @returns The crawl lane's and the skill lane's verdicts
  */
-async function bothLanes(name: string, block: string): Promise<{ crawl: unknown; skill: unknown }> {
-  const content = `---\n${block}\n---\n# Body\n`;
-  const file = safePath.join(scratch, `${name}.md`);
+async function bothLanesOn(name: string, content: string): Promise<{ crawl: Verdict; skill: Verdict }> {
+  const file = safePath.join(scratch, `${name.replaceAll(/\W/g, '-')}.md`);
   writeFileSync(file, content, 'utf-8');
-  const crawled = await parseMarkdown(file);
-  const skill = parseFrontmatter(content);
-  return {
-    crawl: { notAMapping: crawled.frontmatterNotAMapping === true, keys: crawled.frontmatter === undefined ? null : Object.keys(crawled.frontmatter) },
-    skill: skill.success
-      ? { notAMapping: false, keys: Object.keys(skill.frontmatter) }
-      : { notAMapping: skill.error.includes('not a YAML mapping'), keys: null },
-  };
+  return { crawl: await crawlVerdict(file), skill: await skillVerdict(content) };
+}
+
+/** Both lanes' answer for one block, fenced the plain way. */
+function bothLanes(name: string, block: string): Promise<{ crawl: Verdict; skill: Verdict }> {
+  return bothLanesOn(name, `---\n${block}\n---\n# Body\n`);
 }
 
 describe('the crawl lane and the skill lane read one frontmatter shape rule', () => {
@@ -83,6 +121,40 @@ describe('the crawl lane and the skill lane read one frontmatter shape rule', ()
   it('a mapping is the same keys on both lanes', async () => {
     const { crawl, skill } = await bothLanes('mapping', 'name: x\ndescription: y');
     expect(crawl).toStrictEqual({ notAMapping: false, keys: ['name', 'description'] });
+    expect(skill).toStrictEqual(crawl);
+  });
+
+  it.each([
+    ['cyclic anchor', 'a: &x [*x]'],
+    ['1,001-deep nesting', `a: ${'['.repeat(1001)}${']'.repeat(1001)}`],
+  ])('a %s block is refused on both lanes, under one code', async (name, block) => {
+    const { crawl, skill } = await bothLanes(name, block);
+    expect(crawl).toStrictEqual({ refused: 'PARSE_LIMIT_EXCEEDED' });
+    expect(skill).toStrictEqual(crawl);
+  });
+});
+
+describe('the crawl lane and the skill lane find the block by one fence rule', () => {
+  const CR = String.fromCodePoint(0x0d);
+  const BOM = String.fromCodePoint(0xfe_ff);
+  const MAPPING = { notAMapping: false, keys: ['name'] };
+  const NONE = { notAMapping: false, keys: null };
+
+  it.each([
+    ['plain', '---\nname: x\n---\n# Body\n', MAPPING],
+    ['trailing spaces on the opener', '---  \nname: x\n---\n# Body\n', MAPPING],
+    ['a trailing tab on the closer', '---\nname: x\n---\t\n# Body\n', MAPPING],
+    ['no body', '---\nname: x\n---', MAPPING],
+    ['CRLF line endings', `---${CR}\nname: x${CR}\n---${CR}\n# Body${CR}\n`, MAPPING],
+    ['a leading BOM', `${BOM}---\nname: x\n---\n# Body\n`, MAPPING],
+    ['four dashes', '----\nname: x\n----\n# Body\n', NONE],
+    ['dashes then text', '---x\nname: x\n---\n# Body\n', NONE],
+    ['an indented closer', '---\nname: x\n ---\n# Body\n', NONE],
+    ['a blank line before the opener', '\n---\nname: x\n---\n# Body\n', NONE],
+    ['no closer', '---\nname: x\n# Body\n', NONE],
+  ])('%s', async (name, content, expected) => {
+    const { crawl, skill } = await bothLanesOn(`fence-${name}`, content);
+    expect(crawl).toStrictEqual(expected);
     expect(skill).toStrictEqual(crawl);
   });
 });

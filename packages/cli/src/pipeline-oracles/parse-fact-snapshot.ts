@@ -13,22 +13,21 @@ import { createHash } from 'node:crypto';
 
 import {
   flattenHeadings,
+  type HeadingNode,
   isParsableContent,
   isParserUnavailable,
-  parseHtml,
-  parseMarkdown,
+  ParseCache,
+  type KeyedContent,
+  type LexicalReference,
+  type ParseDispatcher,
+  type ParserKind,
   parserKindForPath,
+  type ParseResult,
   readContentWithKey,
   relativize,
+  type ResourceLink,
   unparsedResourceFacts,
-} from '@vibe-agent-toolkit/resources';
-import type {
-  HeadingNode,
-  KeyedContent,
-  LexicalReference,
-  ParserKind,
-  ParseResult,
-  ResourceLink,
+  withParseDispatcher,
 } from '@vibe-agent-toolkit/resources';
 import { forEachInOrder, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
@@ -132,7 +131,9 @@ export async function captureParseFactSnapshot(
   const keyDisagreements: KeyDisagreement[] = [];
 
   // In order: a measurement, and `firstPathByKey` means first in input order.
-  await forEachInOrder(absolutePaths, async (absolutePath) => {
+  // Every parse runs in the bounded worker, on ONE dispatcher over a DISABLED
+  // cache: a cache hit here would be the assumption under test answering itself.
+  await withParseDispatcher((dispatcher) => forEachInOrder(absolutePaths, async (absolutePath) => {
     const keyed = await readKeyedOrSkip(absolutePath);
     if (keyed === null) {
       return;
@@ -147,7 +148,7 @@ export async function captureParseFactSnapshot(
     // key already recorded. Skipping them would be the cache's assumption —
     // "same key implies same facts" — implemented inside the instrument that
     // exists to test it, leaving nothing to compare against.
-    const parsed = await parseOrNull(absolutePath, keyed);
+    const parsed = await parseOrNull(keyed, dispatcher);
     if (parsed === null) {
       return;
     }
@@ -169,7 +170,7 @@ export async function captureParseFactSnapshot(
         fields,
       });
     }
-  });
+  }), { cache: new ParseCache({ enabled: false }) });
 
   return {
     corpus: options.corpus,
@@ -255,9 +256,9 @@ async function readKeyedOrSkip(absolutePath: string): Promise<KeyedContent | nul
  * ## Why the one rethrow
  *
  * `null` for any throw is deliberate — this oracle crawls a real tree, and one
- * unparseable file must not abandon the whole snapshot. But `parseMarkdown` /
- * `parseHtml` load their parser by `import()` on first use, so a broken INSTALL
- * arrives here too, and swallowed it produced a well-formed snapshot with
+ * unparseable file (a per-run refusal included) must not abandon the whole
+ * snapshot. But the worker loads its parser by `import()` on first use, so a
+ * broken INSTALL arrives here too, and swallowed it produced a well-formed snapshot with
  * `rows: []`: a measurement that did not run, reported as a measurement whose
  * answer was nothing. This snapshot is the parse cache's correctness oracle, so
  * an empty one is a green gate over an unrun check.
@@ -268,14 +269,14 @@ async function readKeyedOrSkip(absolutePath: string): Promise<KeyedContent | nul
  * `isParserUnavailable` matches one type VAT constructs at one place, so it is
  * complete by construction, unlike the errno blocklist that preceded it.
  *
- * @param absolutePath - The document to parse
  * @param keyed - The bytes and the kind the path routed to, from ONE read
+ * @param dispatcher - The run's parse dispatcher (cache disabled)
  * @returns The parse, or `null` when this document alone could not be parsed
  * @throws {ParserUnavailableError} If the parser module cannot be loaded
  */
 async function parseOrNull(
-  absolutePath: string,
   keyed: KeyedContent,
+  dispatcher: ParseDispatcher,
 ): Promise<ParseResult | null> {
   // No parser routes here, so there is nothing to load, nothing to throw, and
   // nothing to re-read: the facts come from the bytes this function was already
@@ -284,9 +285,7 @@ async function parseOrNull(
   if (!isParsableContent(keyed)) return unparsedResourceFacts(keyed);
 
   try {
-    return keyed.parserKind === 'html'
-      ? await parseHtml(absolutePath)
-      : await parseMarkdown(absolutePath);
+    return await dispatcher.parse(keyed);
   } catch (error) {
     if (isParserUnavailable(error)) throw error;
     return null;

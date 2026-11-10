@@ -5,6 +5,7 @@
  * collection's own patterns.
  */
 
+import { createRegistryIssue } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
@@ -15,6 +16,7 @@ import {
   notAdmittedInScope,
   notAdmittedIssues,
   parseRefusedEntry,
+  resolveNotAdmittedAmong,
 } from '../src/not-admitted.js';
 import { ParseLimitError } from '../src/parse-limits.js';
 
@@ -79,5 +81,35 @@ describe('notAdmittedInScope', () => {
     expect(notes.parseRefused).toHaveLength(1);
     expect(notAdmittedCount(docs)).toBe(1);
     expect(docs.unreadable).toHaveLength(1);
+  });
+});
+
+describe('resolveNotAdmittedAmong', () => {
+  // A report located against a SUBDIRECTORY of the project whose config it resolves under.
+  const DOCS = safePath.join(ROOT, 'docs');
+  const ROOTS = { locationRoot: DOCS, projectRoot: ROOT };
+  const other = createRegistryIssue('LINK_MISSING_TARGET', 'a broken link', { location: 'a.md' });
+  const refused = notAdmittedIssues(
+    { unreadable: LOG.unreadable, parseRefused: [parseRefusedEntry(safePath.join(DOCS, 'deep.md'), new ParseLimitError('outputDepth', 1000, 1001))] },
+    { locationRoot: DOCS, consequence: 'it was not audited' },
+  );
+
+  it('leaves every finding outside the not-admitted codes untouched, in place', () => {
+    const resolved = resolveNotAdmittedAmong([other, ...refused], { allow: { LINK_MISSING_TARGET: [{ paths: ['docs/a.md'], reason: 'r' }] } }, ROOTS);
+
+    expect(resolved[0]).toBe(other);
+    expect(resolved).toHaveLength(3);
+  });
+
+  it('excuses one allowed at its PROJECT-relative path, and keeps the rest located as reported', () => {
+    const resolved = resolveNotAdmittedAmong(refused, { allow: { RESOURCE_UNREADABLE: [{ paths: ['docs/bad.md'], reason: 'r' }] } }, ROOTS);
+
+    expect(resolved.map((issue) => [issue.code, issue.location])).toStrictEqual([['RESOURCE_PARSE_LIMIT_EXCEEDED', 'deep.md']]);
+  });
+
+  it('resolves their severity through the project config', () => {
+    const resolved = resolveNotAdmittedAmong(refused, { severity: { RESOURCE_PARSE_LIMIT_EXCEEDED: 'warning' } }, ROOTS);
+
+    expect(resolved.map((issue) => issue.severity)).toStrictEqual(['error', 'warning']);
   });
 });

@@ -18,6 +18,7 @@ import {
   detectResourceFormat,
   enumerateSurfaces,
   materializeIssue,
+  SKILL_REACHED_REFUSAL_CONSEQUENCE,
   validate,
   validateMarketplace,
   validateSkill,
@@ -48,11 +49,15 @@ import {
   type Target,
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
-import { listingRefusalRemedy, type RegistryUnreadablePolicy } from '@vibe-agent-toolkit/resources';
+import {
+  listingRefusalRemedy,
+  notAdmittedIssues,
+  type RegistryUnreadablePolicy,
+  resolveNotAdmittedAmong,
+} from '@vibe-agent-toolkit/resources';
 import {
   buildReport,
   countBySeverity,
-  createRegistryIssue,
   exitCodeForReport,
   summarizeIssues,
   toFindings,
@@ -923,8 +928,11 @@ Config-Aware Validation:
   which prevents false warnings for links the build pipeline resolves.
 
   Config-aware mode never applies validation.allow — audit always shows
-  all issues. validation.severity IS applied, from three scopes, least
-  specific first:
+  all issues — except to a file the scan could not read or parse
+  (RESOURCE_UNREADABLE, RESOURCE_PARSE_LIMIT_EXCEEDED,
+  RESOURCE_PARSE_WORKER_DIED), which resources.validation.allow excuses
+  as in every other verb. validation.severity IS applied, from three
+  scopes, least specific first:
     resources.validation.severity          project-wide (the same dial
                                            'vat resources validate' reads)
     skills.defaults.validation.severity    project-wide (skills, plugins and
@@ -1209,9 +1217,14 @@ function buildFilteredResult(
  */
 function applySeverityFilter(
   results: ValidationResult[],
-  config: ReturnType<typeof loadConfig>
+  config: ReturnType<typeof loadConfig>,
+  roots: { readonly locationRoot: string; readonly projectRoot: string },
 ): ValidationResult[] {
   const skillsConfig = config?.skills;
+  // The one exception to "audit applies no allow list": a file the scan
+  // enumerated and could not read or parse is resolved through the project's
+  // `resources.validation` allow list as in every other verb (`not-admitted.ts`).
+  const resourceAllow = config?.resources?.validation?.allow;
   // NOT gated on `config.skills` existing. It was, and that made the resources
   // dial below inert for exactly the projects that have only one — a repo of
   // plugins declares no skills at all.
@@ -1237,11 +1250,14 @@ function applySeverityFilter(
     const effectiveSeverity: NonNullable<SeverityConfig['severity']> =
       { ...projectSeverity, ...perSkillSeverity };
 
-    if (Object.keys(effectiveSeverity).length === 0) {
+    if (Object.keys(effectiveSeverity).length === 0 && resourceAllow === undefined) {
       return result;
     }
 
-    const resolvedIssues = resolveFindings(result.issues, { severity: effectiveSeverity });
+    const allowed = resourceAllow === undefined
+      ? result.issues
+      : resolveNotAdmittedAmong(result.issues, { allow: resourceAllow, severity: effectiveSeverity }, roots);
+    const resolvedIssues = resolveFindings(allowed, { severity: effectiveSeverity });
 
     // Short-circuit only when NOTHING moved. Comparing lengths alone was the old
     // test, and it is blind to the promote direction by construction: a resolved
@@ -1359,12 +1375,14 @@ export async function buildAuditReport(
   // `skills.include` even when the scan reached no SKILL.md under the config,
   // and a refusal it meets is recorded in the same ledger the append below
   // reads. Built afterwards, that finding reached stderr and not the document.
-  const vatContextForCompat = await buildVATProjectContext(deriveConfigRoot(scanPath), logger, scanRoot);
+  const configRoot = deriveConfigRoot(scanPath);
+  const vatContextForCompat = await buildVATProjectContext(configRoot, logger, scanRoot);
 
   // See {@link withDegradedConfigFindings} for why these are appended, not merged.
   const rawResults = withDegradedConfigFindings(scanned);
 
-  // Load config for severity filtering (audit ignores allow; only severity matters).
+  // Load config for severity filtering (audit ignores allow but for a file it
+  // could not read or parse; otherwise only severity matters).
   //
   // Guarded, and the ordering is why: the scan above has ALREADY run and collected
   // every finding by this point. An unreadable or malformed config here threw past
@@ -1378,7 +1396,7 @@ export async function buildAuditReport(
   // only show more than the adopter asked for, never less.
   let config: ReturnType<typeof loadConfig> | undefined;
   try {
-    config = loadConfig(deriveConfigRoot(scanPath), 'source');
+    config = loadConfig(configRoot, 'source');
   } catch (err) {
     // `warn`, not `debug`. Falling back to no config is the safe direction — it
     // can only show more than the adopter asked for, never less — but it means
@@ -1390,8 +1408,10 @@ export async function buildAuditReport(
   }
 
   // Apply severity filtering: hide codes whose effective severity is 'ignore'.
-  // Allow is deliberately NOT applied — audit shows every finding.
-  const results = applySeverityFilter(rawResults, config);
+  // Allow is deliberately NOT applied — audit shows every finding — except to a
+  // file it could not read or parse, which the project's allow list excuses as
+  // every other verb does (see `applySeverityFilter`).
+  const results = applySeverityFilter(rawResults, config, { locationRoot: scanRoot, projectRoot: configRoot });
 
   // Run compatibility analysis if --compat flag is set
   const compatMap = options.compat
@@ -1756,16 +1776,21 @@ function appendInventoryParseErrors(
 	const parseIssues: ValidationIssue[] = [];
 	for (const err of inv.parseErrors) {
 		if (err.path.endsWith(pluginJsonSuffix) || basename(err.path) === 'SKILL.md') continue;
-		const message = withRelativePath(err.message, err.path, locationRoot);
 		const location = issueLocation(err.path, locationRoot);
 		if (err.parseRefused !== undefined) {
-			// Read but never parsed: its own code, not a JSON defect. The skill lane
-			// may already have filed it on this result — one file, one finding.
+			// Read but never parsed: its own code, not a JSON defect, in the one
+			// refusal sentence built here from the row's code and reason, located
+			// against this report's root. The skill lane may already have filed it
+			// on this result — one file, one finding.
 			if (!result.issues.some((issue) => issue.code === err.parseRefused && issue.location === location)) {
-				parseIssues.push(createRegistryIssue(err.parseRefused, message, { location }));
+				parseIssues.push(...notAdmittedIssues(
+					{ unreadable: [], parseRefused: [{ filePath: err.path, code: err.parseRefused, reason: err.message }] },
+					{ locationRoot, consequence: SKILL_REACHED_REFUSAL_CONSEQUENCE },
+				));
 			}
 			continue;
 		}
+		const message = withRelativePath(err.message, err.path, locationRoot);
 		if (err.unreadable !== true) {
 			parseIssues.push({ severity: 'error', code: 'PLUGIN_INVALID_JSON', message, location });
 			continue;
