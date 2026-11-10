@@ -793,6 +793,18 @@ const ERROR_CONTRACT_RESTRICTED_SYNTAX = [
   },
 ];
 
+// git's silence about a root has ONE classifier (`gitNoAnswerFor` in packages/utils/src/git-no-answer.ts):
+// a git missing from PATH is coded apart from "not a repository, or unreadable". A site that wrote its
+// own sentence blamed the repository for a git that never ran (INTERNAL_ERROR instead of
+// BACKEND_UNAVAILABLE). Banned as literals in product `src` everywhere but the classifier; no backlog.
+const GIT_NO_ANSWER_PROSE = '/git (was not found on PATH|did not answer for)/';
+const GIT_NO_ANSWER_MESSAGE = 'Classify git\'s silence with gitNoAnswerFor / gitNoAnswerError (or GIT_NOT_FOUND_REMEDY) from @vibe-agent-toolkit/utils/git — never write the sentence yourself: a missing binary must not be blamed on the repository.';
+const GIT_NO_ANSWER_RESTRICTED_SYNTAX = [
+  { selector: `Literal[value=${GIT_NO_ANSWER_PROSE}]`, message: GIT_NO_ANSWER_MESSAGE },
+  { selector: `TemplateElement[value.raw=${GIT_NO_ANSWER_PROSE}]`, message: GIT_NO_ANSWER_MESSAGE },
+];
+const GIT_NO_ANSWER_CLASSIFIER_FILE = 'packages/utils/src/git-no-answer.ts';
+
 // General rules that apply to both TS and JS — except `no-unused-vars`,
 // which the TS block overrides with the @typescript-eslint variant.
 const generalRulesConfig = {
@@ -1020,8 +1032,13 @@ export default [
     files: [PRODUCT_SOURCE_TS],
     rules: {
       'local/explicit-zod-strictness': ['error', { allowDefaultStripIn: [] }],
-      'no-restricted-syntax': ['error', ...ERROR_CONTRACT_RESTRICTED_SYNTAX, ...RESTRICTED_SPECIFIER_SYNTAX],
+      'no-restricted-syntax': ['error', ...ERROR_CONTRACT_RESTRICTED_SYNTAX, ...GIT_NO_ANSWER_RESTRICTED_SYNTAX, ...RESTRICTED_SPECIFIER_SYNTAX],
     },
+  },
+  // The git-silence classifier: the one file that may spell its two sentences (see GIT_NO_ANSWER_PROSE).
+  {
+    files: [GIT_NO_ANSWER_CLASSIFIER_FILE],
+    rules: { 'no-restricted-syntax': ['error', ...ERROR_CONTRACT_RESTRICTED_SYNTAX, ...RESTRICTED_SPECIFIER_SYNTAX] },
   },
   // The archive module: the one place `tar` and `adm-zip` may be imported (see
   // ARCHIVE_LIBRARY_BAN). It keeps every other restriction its neighbours carry.
@@ -1029,7 +1046,7 @@ export default [
     files: [ARCHIVE_MODULE_FILES],
     rules: {
       'no-restricted-imports': ['error', { paths: [...YAML_LIBRARY_BAN, ...ESLINT_INSTANCE_BAN] }],
-      'no-restricted-syntax': ['error', ...ERROR_CONTRACT_RESTRICTED_SYNTAX, ...ESLINT_INSTANCE_RESTRICTED_SYNTAX],
+      'no-restricted-syntax': ['error', ...ERROR_CONTRACT_RESTRICTED_SYNTAX, ...GIT_NO_ANSWER_RESTRICTED_SYNTAX, ...ESLINT_INSTANCE_RESTRICTED_SYNTAX],
     },
   },
   // The files that may construct an ESLint (see ESLINT_INSTANCE_BAN). They keep every

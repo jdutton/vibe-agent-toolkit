@@ -5,7 +5,16 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { toJsonSchema } from '../src/index.js';
+import { presenceImplies, toJsonSchema } from '../src/index.js';
+
+describe('presenceImplies', () => {
+  it('spells "a present key implies a schema" with no conditional keyword', () => {
+    const rule = presenceImplies('allowEmpty', { required: ['examined'] });
+
+    expect(rule).toStrictEqual({ anyOf: [{ not: { required: ['allowEmpty'] } }, { required: ['examined'] }] });
+    expect(JSON.stringify(rule)).not.toMatch(/"(if|then|else)"/);
+  });
+});
 
 describe('toJsonSchema', () => {
   it('converts Zod schema to JSON Schema', () => {

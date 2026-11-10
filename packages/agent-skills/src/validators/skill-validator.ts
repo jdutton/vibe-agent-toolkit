@@ -3,6 +3,7 @@ import { basename, dirname } from 'node:path';
 
 import { isLocalFileLink, isParserUnavailable, parseFileCached, resolveLocalHref, type LinkType } from '@vibe-agent-toolkit/resources';
 import {
+  anchoredAt,
   createRegistryIssue,
   runSingleUnitValidation,
   type ValidationConfig,
@@ -267,8 +268,7 @@ function validateLocalLink(
     issues.push({
       severity: 'error',
       code: 'LINK_INTEGRITY_BROKEN',
-      message: `Link target not found: ${link.href}`,
-      location: issueLocation(currentPath, locationRoot),
+      ...anchoredAt(`Link target not found: ${link.href}`, issueLocation(currentPath, locationRoot)),
       ...(link.line !== undefined && { line: link.line }),
       link: link.href,
       fix: 'Fix link path or restore missing file',
@@ -391,8 +391,7 @@ async function traverseLinks(
       issues.push({
         severity: 'warning',
         code: 'LINK_INTEGRITY_BROKEN',
-        message: `File exists but could not be parsed: ${issueLocation(currentPath, locationRoot)}`,
-        location: issueLocation(currentPath, locationRoot),
+        ...anchoredAt(`File exists but could not be parsed: ${issueLocation(currentPath, locationRoot)}`, issueLocation(currentPath, locationRoot)),
       });
       return;
     }
@@ -491,16 +490,14 @@ function detectUnreferencedFiles(
       issues.push({
         severity: 'info',
         code: 'SKILL_IMPLICIT_REFERENCE',
-        message: `File implicitly referenced (not via markdown link) in ${basename(ref.foundIn)}: ${ref.matchedText}`,
-        location: issueLocation(absPath, locationRoot),
+        ...anchoredAt(`File implicitly referenced (not via markdown link) in ${basename(ref.foundIn)}: ${ref.matchedText}`, issueLocation(absPath, locationRoot)),
         fix: 'Consider using a standard markdown link [text](path) for better tooling support',
       });
     } else {
       issues.push({
         severity: 'info',
         code: 'SKILL_UNREFERENCED_FILE',
-        message: `Markdown file not referenced from SKILL.md link graph: ${relPath}`,
-        location: issueLocation(absPath, locationRoot),
+        ...anchoredAt(`Markdown file not referenced from SKILL.md link graph: ${relPath}`, issueLocation(absPath, locationRoot)),
         fix: 'Add a link to this file from SKILL.md or a linked document, or remove the file',
       });
     }

@@ -66,6 +66,8 @@ interface QueryOptions {
   param?: string[];
   /** `yaml` (default) or `json`. Same document either way. */
   format?: string;
+  /** `--base <ref>`: what `changed_files` compares this tree with. */
+  base?: string;
 }
 
 /** What one query run produced, and what produced it. */
@@ -147,6 +149,7 @@ export function buildProjectionQueryReport(input: ProjectionQueryPayloadInput): 
  * @param options.sql - The single read-only statement
  * @param options.parameters - Bound in order, for every `?`
  * @param options.logger - Where blob-stage refusals are reported
+ * @param options.base - The ref `changed_files` compares with, or undefined when none was given
  * @returns The rows and the provenance of the population behind them
  */
 function runProjectionQuery(options: {
@@ -154,8 +157,9 @@ function runProjectionQuery(options: {
   sql: string;
   parameters: readonly string[];
   logger: Logger;
+  base: string | undefined;
 }): Promise<QueryOutcome> {
-  const { root, sql, parameters, logger } = options;
+  const { root, sql, parameters, logger, base } = options;
   // The statement is compiled against the empty schema first, so a typo'd
   // column — or a `?` with no `--param` behind it — costs milliseconds instead
   // of a full population.
@@ -164,7 +168,7 @@ function runProjectionQuery(options: {
     // preflight COMPILES this statement early, while `statements` decides which
     // derived relations get evaluated at all. One statement, two questions asked
     // of it.
-    { root, logger, preflight: [{ sql, parameters }], statements: [sql] },
+    { root, logger, preflight: [{ sql, parameters }], statements: [sql], base },
     (ask, provenance, extent, _projection, columnsOf) => ({
       columns: columnsOf(sql, ...parameters),
       rows: ask(sql, ...parameters),
@@ -219,6 +223,7 @@ export async function queryCommand(
       sql,
       parameters: options.param ?? [],
       logger,
+      base: options.base,
     });
 
     endWithReport('resources query', buildProjectionQueryReport({

@@ -88,9 +88,9 @@ import {
 import {
   gitFindRoot,
   gitLsOthers,
+  gitSnapshotError,
   gitTreeSnapshot,
   isGitIgnored,
-  unreadableSnapshotRefusal,
 } from '@vibe-agent-toolkit/utils/git';
 
 import type { PathShape } from './realizations.js';
@@ -623,20 +623,21 @@ export class GitCrawlSource implements CrawlSource {
    * @param admits - The shipped include/exclude decision
    * @returns The admitted entries, and separately the submodule directories
    *   whose contents git declined to describe
-   * @throws When git could not answer at all
+   * @throws When git could not answer at all, coded by cause as the one
+   *   classifier decides (see `gitSnapshotFailureOf`)
    */
   #snapshotMembers(admits: (absolutePath: string) => boolean): {
     members: CrawlCandidate[];
     submodules: string[];
   } {
     const snapshot = gitTreeSnapshot({ cwd: this.#root });
-    if (snapshot === null) {
-      // The common refusal inside a real repository: one file git could not read.
-      // It is the input's, and names the file; only a refusal with no such cause
-      // falls through to the uncoded error below.
-      throw unreadableSnapshotRefusal(this.#root) ?? new Error(
-        `git did not answer for "${this.#root}" — it is not a git repository, or git could not read it.`
-        + ' Returning an empty population would be indistinguishable from an empty repository, so this is an error.',
+    if (!snapshot.ok) {
+      // Classified by the one classifier `changed_files` uses too, so each cause
+      // — a missing binary, an unreadable file, a stray sparse path — carries
+      // one code in both lanes, never "not a repository" by default.
+      throw gitSnapshotError(
+        snapshot,
+        'Returning an empty population would be indistinguishable from an empty repository, so this is an error.',
       );
     }
 

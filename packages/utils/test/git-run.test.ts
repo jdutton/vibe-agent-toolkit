@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { runGit, runGitBytes, runGitOrThrow } from '../src/git-run.js';
+import { gitIsMissing, runGit, runGitBytes, runGitOrThrow } from '../src/git-run.js';
 import {
   getToolVersion,
   isToolAvailable,
@@ -154,5 +154,21 @@ describe('runGitOrThrow', () => {
     expect(() => runGitOrThrow(['definitely-not-a-subcommand'])).toThrow(
       /git definitely-not-a-subcommand failed/,
     );
+  });
+});
+
+describe('gitIsMissing', () => {
+  it('is false where git runs', () => {
+    expect(gitIsMissing()).toBe(false);
+  });
+
+  it('is true when PATH holds no git', () => {
+    const saved = process.env['PATH'];
+    try {
+      process.env['PATH'] = '';
+      expect(gitIsMissing()).toBe(true);
+    } finally {
+      process.env['PATH'] = saved;
+    }
   });
 });

@@ -1,6 +1,7 @@
 /**
  * Whether stderr says a finding as the SHARED reporter does: its own line, indented or not, holding
- * exactly `[anchor: ]severity: message [CODE]`, the code at the line's end. A home-made format that
+ * exactly `[anchor: ]severity: message [CODE][ (line N, column M)]` — the trailer only for a finding
+ * with a line and no file — at the line's end. A home-made format that
  * merely contains `[CODE]` does not match.
  *
  * The expected line is spelled out HERE, never borrowed from the CLI's `formatFindingLine`: a
@@ -10,17 +11,29 @@
 
 import type { Finding } from '@vibe-agent-toolkit/schema';
 
+/** Whether the finding names a file its coordinates can be put on. */
+function hasFile(finding: Finding): boolean {
+  return finding.location !== undefined && finding.location !== '';
+}
+
 /** `location[:line[:column]]`, then ` (field)` — what precedes the severity word, or `''`. */
 function expectedAnchor(finding: Finding): string {
   const position = finding.line === undefined ? [] : [finding.line, ...(finding.column === undefined ? [] : [finding.column])];
-  const at = finding.location === undefined || finding.location === '' ? '' : [finding.location, ...position.map(String)].join(':');
+  const at = hasFile(finding) ? [finding.location, ...position.map(String)].join(':') : '';
   if (finding.field === undefined || finding.field === '') return at;
   return at === '' ? `(${finding.field})` : `${at} (${finding.field})`;
 }
 
+/** ` (line N[, column M])` after the code — where a finding with NO file says its coordinates. */
+function expectedTrailer(finding: Finding): string {
+  if (hasFile(finding) || finding.line === undefined) return '';
+  const column = finding.column === undefined ? '' : `, column ${String(finding.column)}`;
+  return ` (line ${String(finding.line)}${column})`;
+}
+
 /** The one line the shared reporter prints for `finding`, spelled independently of it. */
 function expectedLine(finding: Finding): string {
-  const body = `${finding.severity}: ${finding.message} [${finding.code}]`;
+  const body = `${finding.severity}: ${finding.message} [${finding.code}]${expectedTrailer(finding)}`;
   const anchor = expectedAnchor(finding);
   return anchor === '' ? body : `${anchor}: ${body}`;
 }

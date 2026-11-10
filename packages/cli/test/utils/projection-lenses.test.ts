@@ -19,12 +19,13 @@
  * does not depend on this scan — see `projection-lens-laziness`.
  */
 
-import { DERIVED_TABLES, type Projection } from '@vibe-agent-toolkit/resources';
+import { checkStatements, DERIVED_TABLES, type Projection } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
 import { createLogger } from '../../src/utils/logger.js';
 import {
   AUTHORED_LINK_LENS,
+  CHANGED_FILES_LENS,
   CLAUDE_CONTEXT_LENS,
   PROJECTION_LENSES,
   evaluateLens,
@@ -68,11 +69,30 @@ describe('lensesNamedBy', () => {
     ]);
   });
 
+  it('selects the changed-files lens, and ONLY it, for a statement naming changed_files', () => {
+    expect(namesOf(lensesNamedBy(["SELECT path FROM changed_files WHERE status = 'added'"]))).toStrictEqual([
+      CHANGED_FILES_LENS.name,
+    ]);
+  });
+
+  it('selects a lens whose relation only a check\'s `examined` statement names', () => {
+    // 🪤 The gap this pins: a run that fed the selector only `sql` would skip the
+    // lens, leave the relation absent, and refuse a check whose violations
+    // statement never read it — its examined count unanswerable for no reason.
+    const statements = checkStatements({
+      description: 'specs touched by this change carry a status',
+      sql: 'SELECT path FROM resource_realizations WHERE 0',
+      examined: 'SELECT path FROM changed_files',
+    });
+
+    expect(namesOf(lensesNamedBy(statements))).toStrictEqual([CHANGED_FILES_LENS.name]);
+  });
+
   it('selects both when one run declares statements naming both', () => {
     expect(namesOf(lensesNamedBy([
       'SELECT COUNT(*) FROM edges',
       'SELECT COUNT(*) FROM claude_context_chains',
-    ]))).toStrictEqual(namesOf(PROJECTION_LENSES));
+    ]))).toStrictEqual([AUTHORED_LINK_LENS.name, CLAUDE_CONTEXT_LENS.name]);
   });
 
   it('selects EVERY lens when the caller declared no statements at all', () => {
@@ -169,6 +189,7 @@ describe('evaluateLens', () => {
   const input = {
     projection: {} as Projection,
     root: '/corpus',
+    base: undefined,
     cache: undefined,
     logger: createLogger(),
   };
@@ -180,6 +201,11 @@ describe('evaluateLens', () => {
 
   it('refuses rows that omit a declared relation', async () => {
     await expect(evaluateLens(lensReturning({ edges: [] }), input)).rejects.toThrow(/missing \[edgeResolutions\]/);
+  });
+
+  it('hands back a lens\'s refusal as it is, with no rows to check', async () => {
+    const refusing: ProjectionLens = { name: 'stub', relations: ['edges'], evaluate: () => ({ refused: 'no base' }) };
+    await expect(evaluateLens(refusing, input)).resolves.toStrictEqual({ refused: 'no base' });
   });
 
   it('refuses rows carrying a relation the lens does not own', async () => {

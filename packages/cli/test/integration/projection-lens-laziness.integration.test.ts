@@ -78,7 +78,7 @@ interface LensOutcome {
  * @returns The lenses that were evaluated, what they cost, and the rows
  */
 async function runDeclaring(root: string, sql: string): Promise<LensOutcome> {
-  return withQueriedProjection({ root, logger, statements: [sql] }, (ask, provenance) => ({
+  return withQueriedProjection({ root, logger, statements: [sql], base: undefined }, (ask, provenance) => ({
     rows: ask(sql),
     lensesEvaluated: provenance.lensesEvaluated,
     lensMs: provenance.lensMs,
@@ -145,7 +145,7 @@ describe('lens evaluation is driven by what the run declares', () => {
 
   it('evaluates both lenses for a run that declares statements naming both', async () => {
     const both = await withQueriedProjection(
-      { root, logger, statements: [COUNT_EDGES, COUNT_ALWAYS_LOADED] },
+      { root, logger, statements: [COUNT_EDGES, COUNT_ALWAYS_LOADED], base: undefined },
       (ask, provenance) => ({
         edges: Number(ask(COUNT_EDGES)[0]?.n),
         loads: Number(ask(COUNT_ALWAYS_LOADED)[0]?.n),
@@ -170,7 +170,7 @@ describe('lens evaluation is driven by what the run declares', () => {
     // because the relation is ABSENT from the run's database and SQLite itself
     // refuses it.
     await expect(
-      withQueriedProjection({ root, logger, statements: [NAMES_NOTHING] }, (ask) =>
+      withQueriedProjection({ root, logger, statements: [NAMES_NOTHING], base: undefined }, (ask) =>
         ask(COUNT_EDGES)),
     ).rejects.toThrow(/no such table: edges.*not evaluated for this run/s);
   });
@@ -179,7 +179,7 @@ describe('lens evaluation is driven by what the run declares', () => {
     // ⛔ The fail-safe direction. `vat resources check` used to reach the lane
     // this way, and a caller that cannot enumerate its statements must get
     // correct rows rather than cheap ones.
-    const outcome = await withQueriedProjection({ root, logger }, (ask, provenance) => ({
+    const outcome = await withQueriedProjection({ root, logger, base: undefined }, (ask, provenance) => ({
       rows: ask(COUNT_EDGES),
       lensesEvaluated: provenance.lensesEvaluated,
       lensMs: provenance.lensMs,

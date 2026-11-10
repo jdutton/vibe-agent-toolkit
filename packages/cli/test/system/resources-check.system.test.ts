@@ -17,10 +17,8 @@
  * populated for the cases above it to mean anything.
  */
 
-import { spawnSync } from 'node:child_process';
-
 import { BUILTIN_CHECK_NAMES } from '@vibe-agent-toolkit/resources';
-import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
+import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
 
@@ -224,6 +222,23 @@ describe('vat resources check', () => {
     expect(status).toBe(0);
     expect(doc['status']).toBe('findings');
     expect((doc['summary'] as { errors: number }).errors).toBe(0);
+  });
+
+  it('reports a natural check over a relation whose path is no location at its declared severity', () => {
+    // 🔑 `roots.path` is ABSOLUTE by the projection's own design, as `realization_conditions.path`
+    // is `../`-prefixed for an outside-root closure reference. A check selecting either is
+    // natural, and its `path` text that is no location means "no location" — never a broken
+    // check. The value stays as evidence.
+    writeChecks(checkBlock('root-seen', 'The root is listed', 'SELECT path FROM roots', 'warning'));
+
+    const { status, doc } = check('--check', 'root-seen');
+
+    expect(status).toBe(0);
+    const findings = doc['findings'] as { code: string; severity: string; location?: string; evidence?: Record<string, unknown> }[];
+    expect(findings.map((f) => [f.code, f.severity, f.location])).toStrictEqual([['CUSTOM:root-seen', 'warning', undefined]]);
+    const evidencePath = findings[0]?.evidence?.['path'];
+    expect(typeof evidencePath).toBe('string');
+    expect(fs.realpathSync(String(evidencePath))).toBe(fs.realpathSync(projectDir));
   });
 
   it('FAILS a check whose SQL will not run, rather than skipping it', () => {
@@ -494,7 +509,7 @@ describe('vat resources check over an emptied corpus', () => {
     fs.writeFileSync(safePath.join(emptyDir, '.gitignore'), '*\n', 'utf-8');
     // A git repository, because the ignore oracle is `gitTrackerForProjectRoot`
     // and without one `.gitignore` is just a file.
-    spawnSync(gitExecutable(), ['init', '--quiet'], { cwd: emptyDir });
+    runGitOrThrow(['init', '--quiet'], { cwd: emptyDir });
     writeChecksIn(
       emptyDir,
       checkBlock(NO_MD_KEY, NO_MARKDOWN, MD_ROWS) + checkBlock('no-txt', NO_TXT, TXT_ROWS),

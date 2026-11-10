@@ -65,9 +65,14 @@
                     "type": "string"
                   },
                   "location": {
-                    "type": "string"
+                    "type": "string",
+                    "description": "The file to open to fix this: a non-empty relative path with / separators inside the root, in its normalised form (not the root itself; no leading / or \\, no drive, no UNC path, no climbing .., no . or .. segment and no doubled /, and no \\ where \\ is the platform separator)"
                   },
                   "line": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  },
+                  "column": {
                     "type": "integer",
                     "exclusiveMinimum": 0
                   },
@@ -94,9 +99,103 @@
                       "info"
                     ]
                   },
-                  "column": {
-                    "type": "integer",
-                    "exclusiveMinimum": 0
+                  "check": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "evidence": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "null"
+                      ]
+                    }
+                  },
+                  "reason": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "refusal": {
+                            "type": "string",
+                            "enum": [
+                              "USAGE_INVALID",
+                              "BACKEND_UNAVAILABLE",
+                              "INPUT_UNREADABLE"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "refusal"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "column": {
+                            "type": "string",
+                            "enum": [
+                              "path",
+                              "finding_severity",
+                              "finding_line",
+                              "finding_column"
+                            ]
+                          },
+                          "value": {
+                            "$ref": "#/definitions/resources-check/anyOf/0/properties/findings/items/properties/evidence/additionalProperties"
+                          },
+                          "row": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0
+                          },
+                          "allowed": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "column",
+                          "value",
+                          "row",
+                          "allowed"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "statement": {
+                            "type": "string",
+                            "const": "examined"
+                          },
+                          "rows": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "columns": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "value": {
+                            "$ref": "#/definitions/resources-check/anyOf/0/properties/findings/items/properties/evidence/additionalProperties"
+                          },
+                          "allowed": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "statement",
+                          "rows",
+                          "allowed"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
                   }
                 },
                 "required": [
@@ -104,7 +203,62 @@
                   "message",
                   "severity"
                 ],
-                "additionalProperties": false
+                "additionalProperties": false,
+                "allOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "not": {
+                          "required": [
+                            "column"
+                          ]
+                        }
+                      },
+                      {
+                        "required": [
+                          "line"
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "anyOf": [
+                      {
+                        "not": {
+                          "required": [
+                            "evidence"
+                          ]
+                        }
+                      },
+                      {
+                        "required": [
+                          "check"
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "anyOf": [
+                      {
+                        "not": {
+                          "required": [
+                            "reason"
+                          ]
+                        }
+                      },
+                      {
+                        "required": [
+                          "code"
+                        ],
+                        "properties": {
+                          "code": {
+                            "const": "RESOURCE_CHECK_BROKEN"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
               },
               "maxItems": 0
             },
@@ -237,6 +391,25 @@
                       "builtin": {
                         "type": "boolean",
                         "const": true
+                      },
+                      "examined": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "allowEmpty": {
+                        "type": "boolean",
+                        "const": true
+                      },
+                      "nearMisses": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "minItems": 1
+                      },
+                      "examinedNothing": {
+                        "type": "boolean",
+                        "const": true
                       }
                     },
                     "required": [
@@ -347,6 +520,7 @@
                     "RUN_INCOMPLETE",
                     "INTERNAL_ERROR",
                     "RESOURCE_CHECK_BROKEN",
+                    "RESOURCE_CHECK_EXAMINED_NOTHING",
                     "ARD_NOT_CONFIGURED",
                     "ARD_DERIVATION_FAILED"
                   ]

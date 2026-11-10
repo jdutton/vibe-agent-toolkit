@@ -36,7 +36,7 @@ import { ExitCode, exitCodeForReport } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
 import type { ProgressEntry } from '../../src/commands/resources/check-progress.js';
-import { unitInFlight } from '../../src/commands/resources/check-progress.js';
+import { parseProgressLog, unitInFlight } from '../../src/commands/resources/check-progress.js';
 import { CHECK_REPORT_SCHEMA } from '../../src/commands/resources/check-schema.js';
 import {
   type AbnormalDeath,
@@ -55,7 +55,9 @@ import {
   buildInterruptedCheckInput,
   type CheckPayloadInput,
   NODE_FATAL_ABORT_EXIT_CODE,
+  runProjectChecks,
 } from '../../src/commands/resources/check.js';
+import { NO_COLUMNS } from '../helpers/no-columns.js';
 
 /** The log lines a run writes before it hangs on its second rule. */
 const POPULATION: ProgressEntry = {
@@ -79,6 +81,14 @@ const BROKEN_COST: ProgressEntry = {
   durationMs: 0.9,
   broken: true,
 };
+
+/** A check whose statement FINISHED and whose rows were still being converted when the run stopped. */
+const CONVERTING_START: ProgressEntry = { kind: 'start', name: 'big-select' };
+const CONVERTING: ProgressEntry = { kind: 'converting', name: 'big-select', durationMs: 2.5, rows: 40_000 };
+
+/** A check whose violations statement FINISHED and whose declared `examined` statement was running when the run stopped. */
+const EXAMINING_START: ProgressEntry = { kind: 'start', name: 'counted' };
+const EXAMINING: ProgressEntry = { kind: 'examining', name: 'counted', durationMs: 1.5, rows: 2 };
 
 /** The line the child writes the moment it has booted, before any work. */
 const STARTED: ProgressEntry = { kind: 'started' };
@@ -1112,16 +1122,18 @@ describe('the remedy each ending earns', () => {
  * its branch gives, so a row whose message came from the wrong branch (or the generic one) reds
  * instead of passing on the shared `--budget` clause.
  *
- * `converting` is the window after the last check filed its cost and before `checks-complete`
- * (its rows still becoming issues): a log of completed checks only, which reads as no unit in
- * flight and earns the statement remedy.
+ * `idle` is a log of completed checks only: no unit in flight, which earns the statement remedy.
+ * `converting` is a check whose statement FINISHED and whose rows were still becoming findings —
+ * its own state, so a kill there is never blamed on a statement that would not return.
  */
 const BRANCHES: ReadonlyArray<readonly [string, readonly ProgressEntry[], string, string]> = [
   // An empty log is a child that never booted; `started` alone is one that was populating.
   ['startup', [], 'before the child process had finished starting', 'Node and vat were still loading'],
   ['population', [STARTED], 'before its population completed', 'Population is legitimately slow'],
   ['a statement', [POPULATION, FIRST_COST, HUNG_START], 'while the check "', 'A statement that will not finish'],
-  ['converting', [POPULATION, FIRST_COST], 'after the last one had filed its cost', 'A statement that will not finish'],
+  ['idle', [POPULATION, FIRST_COST], 'after the last one had filed its cost', 'A statement that will not finish'],
+  ['converting', [POPULATION, FIRST_COST, CONVERTING_START, CONVERTING], 'while its rows were being converted', 'the conversion runs in this process'],
+  ['examining', [POPULATION, FIRST_COST, EXAMINING_START, EXAMINING], 'while its examined statement was running', 'A statement that will not finish'],
   ['reporting', [POPULATION, FIRST_COST, CHECKS_DONE], 'while its document was being assembled', 'the SIZE of the document'],
 ];
 const BRANCH_MARKERS = BRANCHES.map(([, , marker]) => marker);
@@ -1220,5 +1232,195 @@ describe('parseBudgetSeconds — a value that is ZERO without saying so', () => 
     // 16 and stays 16. Only a value that MEANS zero without saying so is
     // refused.
     expect(parseBudgetSeconds('0x10')).toBe(16);
+  });
+});
+
+/**
+ * 🔑 The `converting` state. The check's statement FINISHED and its rows were being turned into
+ * findings — work that runs in this process, after the timed span. A kill there used to read as
+ * `while the check "X" was running`, whose remedy says a statement would not finish: false.
+ */
+describe('a run stopped while a check\'s rows were being converted', () => {
+  const converting = (): CheckPayloadInput => killed([POPULATION, FIRST_COST, CONVERTING_START, CONVERTING]);
+
+  it('keeps the converting line through the log reader, which drops any line it does not know', () => {
+    expect(parseProgressLog(`${JSON.stringify(CONVERTING)}\n`)).toStrictEqual([CONVERTING]);
+  });
+
+  it('reads as converting, naming the check and the rows its statement selected', () => {
+    expect(unitInFlight([POPULATION, FIRST_COST, CONVERTING_START, CONVERTING]))
+      .toStrictEqual({ kind: 'converting', name: 'big-select', rows: 40_000 });
+  });
+
+  it('records the check as broken WITH the rows it selected — its statement did complete', () => {
+    expect(converting().costs).toStrictEqual([
+      { name: 'no-markdown', durationMs: 4.25, rows: 3 },
+      { name: 'big-select', durationMs: 2.5, rows: 40_000, broken: true },
+    ]);
+  });
+
+  it('says where it stopped, and never blames a statement that would not return', () => {
+    const [stopped, broken] = converting().issues;
+
+    expect(stopped?.message).toContain('after the check "big-select" had finished its statement (40000 rows), while its rows were being converted');
+    expect(stopped?.message).not.toContain('A statement that will not finish');
+    expect(stopped?.message).not.toContain('was running');
+    expect(broken?.code).toBe('RESOURCE_CHECK_BROKEN');
+    expect(broken?.message).toContain('"big-select"');
+    expect(broken?.message).toContain('converted');
+  });
+
+  it('publishes a schema-valid document that fails the gate', () => {
+    const report = buildCheckOutputData(converting());
+
+    expect(CHECK_REPORT_SCHEMA.safeParse(report).success).toBe(true);
+    expect(exitCodeForReport(report)).toBe(ExitCode.FINDINGS);
+  });
+
+  it('is what the loop itself leaves on disk when it is killed inside a conversion', () => {
+    // The fault injection: the sink stops the run the instant the loop files `converting`, which
+    // is exactly the log a SIGKILL during the conversion leaves behind.
+    const seen: ProgressEntry[] = [];
+    const stall = new Error('killed inside the conversion');
+    expect(() => runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: [],
+      checks: { 'big-select': { description: 'big', sql: 'SELECT path FROM a' } },
+      only: undefined,
+      ask: () => [{ path: 'a.md' }, { path: 'b.md' }],
+      validation: undefined,
+      membersEnumerated: 2,
+      now: () => 0,
+      onProgress: (entry) => {
+        seen.push(entry);
+        if (entry.kind === 'converting') throw stall;
+      },
+    })).toThrow(stall);
+
+    const message = killed([POPULATION, ...seen]).issues[0]?.message ?? '';
+    expect(message).toContain('while its rows were being converted');
+    expect(message).not.toContain('A statement that will not finish');
+  });
+});
+
+/**
+ * 🔑 The `examining` state. A check that declares `examined` runs a SECOND statement after its
+ * violations statement; a kill there is a statement that would not return, and the message must
+ * name it as the examined statement — never as the violations statement, which had finished.
+ */
+describe('a run stopped while a check\'s examined statement was running', () => {
+  const examining = (): CheckPayloadInput => killed([POPULATION, FIRST_COST, EXAMINING_START, EXAMINING]);
+
+  it('keeps the examining line through the log reader, which drops any line it does not know', () => {
+    expect(parseProgressLog(`${JSON.stringify(EXAMINING)}\n`)).toStrictEqual([EXAMINING]);
+  });
+
+  it('keeps a completed check\'s examined count and allowEmpty through the log reader', () => {
+    const counted: ProgressEntry = { kind: 'check', name: 'counted', durationMs: 3, rows: 0, examined: 0, allowEmpty: true };
+    expect(parseProgressLog(`${JSON.stringify(counted)}\n`)).toStrictEqual([counted]);
+  });
+
+  it('reads as examining, naming the check and the rows its violations statement selected', () => {
+    expect(unitInFlight([POPULATION, FIRST_COST, EXAMINING_START, EXAMINING]))
+      .toStrictEqual({ kind: 'examining', name: 'counted', rows: 2 });
+  });
+
+  it('records the check as broken WITH its rows and WITHOUT an examined count', () => {
+    expect(examining().costs).toStrictEqual([
+      { name: 'no-markdown', durationMs: 4.25, rows: 3 },
+      { name: 'counted', durationMs: 1.5, rows: 2, broken: true },
+    ]);
+  });
+
+  it('names the examined statement, never the violations statement, as the one in flight', () => {
+    const [stopped, broken] = examining().issues;
+
+    expect(stopped?.message).toContain('after the check "counted" had finished its violations statement (2 rows), while its examined statement was running');
+    expect(stopped?.message).not.toContain('while the check "counted" was running');
+    expect(broken?.code).toBe('RESOURCE_CHECK_BROKEN');
+    expect(broken?.message).toContain('"counted"');
+    expect(broken?.message).toContain('examined statement');
+  });
+
+  it('carries a completed check\'s examined count onto the recovered cost', () => {
+    const counted: ProgressEntry = { kind: 'check', name: 'counted', durationMs: 3, rows: 1, examined: 9 };
+    expect(killed([POPULATION, counted, HUNG_START]).costs)
+      .toStrictEqual([{ name: 'counted', durationMs: 3, rows: 1, examined: 9 }]);
+  });
+
+  it('re-derives the refusal for a completed check that counted 0, since the child\'s findings died with it', () => {
+    const empty: ProgressEntry = { kind: 'check', name: 'counted', durationMs: 3, rows: 0, examined: 0 };
+    const allowed: ProgressEntry = { kind: 'check', name: 'allowed', durationMs: 3, rows: 0, examined: 0, allowEmpty: true };
+    const codes = killed([POPULATION, empty, allowed, HUNG_START]).issues.map((issue) => [issue.code, issue.message.includes('"counted"')]);
+
+    expect(codes).toContainEqual(['RESOURCE_CHECK_EXAMINED_NOTHING', true]);
+    expect(codes.filter(([code]) => code === 'RESOURCE_CHECK_EXAMINED_NOTHING')).toHaveLength(1);
+  });
+
+  it('is what the loop itself leaves on disk when it is killed inside the examined statement', () => {
+    const seen: ProgressEntry[] = [];
+    const stall = new Error('killed inside the examined statement');
+    expect(() => runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: [],
+      checks: { counted: { description: 'counted', sql: 'SELECT path FROM a', examined: 'SELECT path FROM b' } },
+      only: undefined,
+      ask: () => [{ path: 'a.md' }],
+      validation: undefined,
+      membersEnumerated: 2,
+      now: () => 0,
+      onProgress: (entry) => {
+        seen.push(entry);
+        if (entry.kind === 'examining') throw stall;
+      },
+    })).toThrow(stall);
+
+    const message = killed([POPULATION, ...seen]).issues[0]?.message ?? '';
+    expect(message).toContain('while its examined statement was running');
+    expect(seen.map((entry) => entry.kind)).toStrictEqual(['start', 'examining']);
+  });
+});
+
+/**
+ * 🔑 Killed-run parity. A check that COMPLETED broken before the kill filed its cost; its finding
+ * died with the child. The rebuild must publish that finding exactly as a completed run does —
+ * code, `check`, message and `reason` — or the same check reads differently by how the run ended.
+ */
+describe('a killed run rebuilds a check that completed broken exactly as a completed run publishes it', () => {
+  const BROKEN_CHECKS = {
+    graded: { description: 'graded', sql: 'SELECT graded' },
+    shapeless: { description: 'shapeless', sql: 'SELECT shapeless', examined: 'SELECT nothing' },
+    throws: { description: 'throws', sql: 'SELECT throws' },
+    hangs: { description: 'hangs', sql: 'SELECT hangs' },
+  };
+  const ask = (sql: string): Record<string, unknown>[] => {
+    if (sql === 'SELECT graded') return [{ path: 'a.md', finding_severity: 'high' }];
+    if (sql === 'SELECT throws') throw new Error('no such column: nope');
+    if (sql === 'SELECT nothing') return [];
+    return [{ path: 'b.md' }];
+  };
+  const run = (onProgress?: (entry: ProgressEntry) => void): ReturnType<typeof runProjectChecks> => runProjectChecks({
+    warn: () => undefined,
+    columnsOf: NO_COLUMNS,
+    builtins: [], checks: BROKEN_CHECKS, only: undefined, ask, validation: undefined, membersEnumerated: 2, now: () => 0, onProgress,
+  });
+
+  it.each(['graded', 'shapeless', 'throws'])('re-derives %s\'s RESOURCE_CHECK_BROKEN, check and reason', (name) => {
+    const completed = run().issues.filter((issue) => issue.check === name);
+    const seen: ProgressEntry[] = [];
+    const stall = new Error('killed while the last check hangs');
+    expect(() => run((entry) => {
+      seen.push(entry);
+      if (entry.kind === 'start' && entry.name === 'hangs') throw stall;
+    })).toThrow(stall);
+    // Through the log reader, which drops a line its schema does not declare.
+    const logged = parseProgressLog(`${seen.map((entry) => JSON.stringify(entry)).join('\n')}\n`);
+
+    const rebuilt = killed([POPULATION, ...logged]).issues.filter((issue) => issue.check === name);
+
+    expect(completed.map((issue) => issue.code)).toStrictEqual(['RESOURCE_CHECK_BROKEN']);
+    expect(rebuilt).toStrictEqual(completed);
   });
 });

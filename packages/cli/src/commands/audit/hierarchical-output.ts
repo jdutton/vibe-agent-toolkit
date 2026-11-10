@@ -1,7 +1,7 @@
 import * as os from 'node:os';
 
 import { describeIssues, type ValidationResult } from '@vibe-agent-toolkit/agent-skills';
-import { summarizeIssues, type SeverityCounts, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { anchoredAt, summarizeIssues, type SeverityCounts, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { issueLocation, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 export interface HierarchicalOutput {
@@ -456,8 +456,7 @@ export function addMisconfigurationIssues(results: ValidationResult[], locationR
     const misconfigIssue: ValidationIssue = {
       severity: 'error',
       code: 'SKILL_MISCONFIGURED_LOCATION',
-      message: 'Standalone skill in plugins directory won\'t be recognized by Claude Code',
-      location: issueLocation(result.path, locationRoot),
+      ...anchoredAt('Standalone skill in plugins directory won\'t be recognized by Claude Code', issueLocation(result.path, locationRoot)),
       fix: 'Move to ~/.claude/skills/ for standalone skills, or add .claude-plugin/plugin.json for a proper plugin',
     };
 

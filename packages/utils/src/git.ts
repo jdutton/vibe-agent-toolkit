@@ -23,6 +23,8 @@
  * finder in the package.
  */
 
+// `gitIsMissing` is deliberately NOT here: classify git's silence through `gitNoAnswerFor` or, for a
+// snapshot, `gitSnapshotFailureOf` — the one classifier — so no caller decides the cause with its own sentence.
 export {
   runGit,
   runGitBytes,
@@ -31,19 +33,41 @@ export {
   type GitRunOptions,
   type GitRunResult,
 } from './git-run.js';
+export {
+  GIT_CHANGED_FILES_KIND_BY_CODE,
+  gitChangedFiles,
+  type GitChangedFile,
+  type GitChangedFilesRefusalKind,
+  type GitChangedFilesResult,
+  type GitChangeKind,
+} from './git-changed-files.js';
 export { gitFindRoot, gitLsFiles, gitLsOthers, isGitIgnored } from './git-utils.js';
+export {
+  GIT_FAILED_CODE,
+  GIT_NO_ANSWER_CODE,
+  GIT_NOT_FOUND_CODE,
+  GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE,
+  GIT_SNAPSHOT_REFUSED_CODE,
+  GIT_SNAPSHOT_UNREADABLE_CODE,
+  gitNoAnswerError,
+  gitNoAnswerFor,
+  gitSnapshotError,
+  gitSnapshotFailureOf,
+  type GitNoAnswer,
+  type GitNoAnswerCode,
+} from './git-no-answer.js';
 // The listings' REQUIRED `unreadable` option, typed here so a `./git`-only
 // consumer can spell its policy without reaching for `./crawl`. The class is
 // on `./crawl`, where every thrower and catcher of it already lives.
 export type { RefuseListingContext, UnreadablePolicy } from './listing-refusal.js';
 export {
   freshGitTreeSnapshot,
-  GIT_SNAPSHOT_UNREADABLE_CODE,
   gitTreeSnapshot,
   peekGitTreeSnapshot,
-  unreadableSnapshotRefusal,
   withGitSnapshotCache,
   type GitSnapshotEntry,
+  type GitSnapshotFailure,
+  type GitSnapshotOutcome,
   type GitTreeSnapshot,
 } from './git-snapshot.js';
 export { loadGitignoreRules } from './gitignore-checker.js';

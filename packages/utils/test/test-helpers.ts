@@ -99,6 +99,22 @@ export async function setupNestedDirectory(
   return { srcDir, destDir };
 }
 
+/** Run `fn` with `PATH` emptied, so spawning `git` fails with ENOENT and `gitIsMissing()` is true. */
+export function withoutGit<T>(fn: () => T): T {
+  const saved = process.env['PATH'];
+  try {
+    process.env['PATH'] = '';
+    return fn();
+  } finally {
+    process.env['PATH'] = saved;
+  }
+}
+
+/** A git spawn that failed with `code` (ENOENT, ETIMEDOUT, ...), as Node reports one: no exit status, no stderr. */
+export function gitSpawnFailure(code: string): { ok: false; stderr: string; error: Error } {
+  return { ok: false, stderr: '', error: Object.assign(new Error(`spawnSync git ${code}`), { code }) };
+}
+
 /**
  * The errno `code` a call throws with, or `undefined` when it does not throw.
  *

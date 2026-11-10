@@ -295,7 +295,7 @@ describe('ValidationConfigSchema — refusal codes are not config keys', () => {
   // 🔑 A refusal says a run could not do its job. It has no legitimate
   // `ignore` and no path to waive, so it is refused under BOTH maps — and the
   // severity refusal still names the code as deliberately non-overridable.
-  it.each(['RESOURCE_CHECK_BROKEN', 'INTERNAL_ERROR'])(
+  it.each(['RESOURCE_CHECK_BROKEN', 'RESOURCE_CHECK_EXAMINED_NOTHING', 'INTERNAL_ERROR'])(
     'refuses a refusal code as a severity key and as an allow key (%s)',
     (code) => {
       const message = refusalFor(code);

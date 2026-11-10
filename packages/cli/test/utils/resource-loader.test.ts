@@ -122,6 +122,8 @@ vi.mock('@vibe-agent-toolkit/utils/git', async (importOriginal) => ({
 // eslint-disable-next-line import/first -- must come after vi.mock calls
 import type { Logger } from '../../src/utils/logger.js';
 // eslint-disable-next-line import/first -- must come after vi.mock calls
+import { PROJECTION_STORE_ENV, PROJECTION_STORE_OFF } from '../../src/utils/projection-store.js';
+// eslint-disable-next-line import/first -- must come after vi.mock calls
 import {
   crawlLaneDebugLine,
   extentSourceOf,
@@ -131,7 +133,6 @@ import {
   RESOURCES_CRAWL_PROJECTION,
   RESOURCES_CRAWL_WALK,
 } from '../../src/utils/resource-loader.js';
-
 
 const HIT = { population: 'store', stored: 'hit' } as const;
 const WRITTEN = { population: 'derived', stored: 'written' } as const;
@@ -183,6 +184,9 @@ async function loadedPopulation(): Promise<CrawlPopulation> {
 
 describe('loadResourcesWithConfig', () => {
   beforeEach(() => {
+    // `node:fs` is faked here, so no store can key this tree: keying a tree in
+    // no repository asks git why in a throwaway index under the real temp dir.
+    vi.stubEnv(PROJECTION_STORE_ENV, PROJECTION_STORE_OFF);
     loadConfigMock.mockReset();
     gitTrackerInitializeMock.mockReset();
     gitTrackerGetStatsMock.mockReset();
@@ -197,6 +201,7 @@ describe('loadResourcesWithConfig', () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('uses projectRoot as baseDir and applies config patterns when no pathArg', async () => {

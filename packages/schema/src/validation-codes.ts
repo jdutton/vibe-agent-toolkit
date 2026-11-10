@@ -1165,6 +1165,21 @@ export const CODE_REGISTRY = {
     'Fix the check or the population the message names. This code cannot be downgraded or waived, by design.',
     'resource_check_broken',
   ),
+  // A `vat resources check` check that DECLARED its denominator (`examined:`)
+  // and counted zero. Its own code rather than `RESOURCE_CHECK_BROKEN` because
+  // it is a different claim about a check that ran fine: the statement worked
+  // and asserted over nothing. A consumer judging "a rule that examined nothing
+  // never passes" per check keys on it, and the check's name is in the message.
+  // A refusal, so it is unsilenceable exactly as `RESOURCE_CHECK_BROKEN` is —
+  // the legitimate-zero escape is the check's own `allowEmpty: true`, which
+  // stays visible in every report, never a config override nobody reads.
+  RESOURCE_CHECK_EXAMINED_NOTHING: entry(
+    'refusal',
+    'error',
+    'A check that declares what it examined (`examined:`) counted zero rows, so its pass asserts nothing.',
+    'Fix the `examined` statement or the population it reads; if zero is a legitimate answer for this check, declare `allowEmpty: true` on it. This code cannot be downgraded or waived.',
+    'resource_check_examined_nothing',
+  ),
   // `vat ard emit` publishes these two as error-severity FINDINGS (exit 1): VAT
   // read the project and its own rules produced no manifest, so the PROJECT is
   // the subject and editing config fixes it. Registered here so the command has

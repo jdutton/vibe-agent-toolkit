@@ -53,6 +53,7 @@
  * shipped, published schema a declared one would be, so the two cannot drift.
  */
 
+import { ChangedFileRowSchema } from '../schemas/projection-changed-files.js';
 import {
   ClaudeContextChainRowSchema,
   ClaudeContextLoadRowSchema,
@@ -120,6 +121,10 @@ export const DERIVED_TABLES = {
     ClaudeContextLoadRowSchema,
     ['chainId', 'resourceId'],
   ),
+  // What changed since the run's `--base`. Derived for the reason the others
+  // are, and one more: its rows are a function of a BASE COMMIT the run was
+  // handed, which no population knows.
+  changedFiles: derived('changedFiles', 'changed_files', ChangedFileRowSchema, ['path', 'status']),
 } as const satisfies Readonly<Record<string, DerivedTableSpec>>;
 
 /** The name a derived relation is carried under. */

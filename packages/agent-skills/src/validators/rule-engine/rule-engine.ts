@@ -15,7 +15,7 @@
  * intents may share a context signature while expecting different codes.
  */
 
-import { CODE_REGISTRY, type IssueCode, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { anchoredAt, CODE_REGISTRY, type IssueCode, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 import type { FileKind, RuleContext } from './rule-context.js';
 
@@ -196,16 +196,15 @@ export function materializeIssue(code: IssueCode, opts: MaterializeOpts = {}): V
   const e = CODE_REGISTRY[code];
   const message = opts.message
     ?? (opts.detail === undefined ? e.description : `${e.description} (${opts.detail})`);
+  // A location that cannot be one (another drive, a climb out of the root) is omitted and its path
+  // named in the message, so no issue built here is refused by the published schema.
   const issue: ValidationIssue = {
     severity: e.defaultSeverity,
     code,
-    message,
     fix: e.fix,
     reference: e.reference,
+    ...(opts.location === undefined ? { message } : anchoredAt(message, opts.location)),
   };
-  if (opts.location !== undefined) {
-    issue.location = opts.location;
-  }
   if (opts.line !== undefined) {
     issue.line = opts.line;
   }

@@ -215,6 +215,53 @@ location, each load carrying a `launchCharge` — the rows `vat claude context` 
 none pays nothing for them. A statement reaching for a relation nothing evaluated is **refused**,
 never answered from the empty table — an empty table and a healthy tree are the same answer.
 
+`changed_files` (`path`, `status`, `oldPath`, `similarity`) is what THIS CHANGE touched under the
+root: pass `--base <ref>` to `vat resources query`, `vat resources check` or `vat validate`. It
+compares the working tree (staged or not) plus untracked, non-ignored files with the **merge base**
+of `<ref>` and `HEAD` — GitHub's "files changed", so a branch behind `main` never lists what `main`
+moved since. `status` is `added`, `modified`, `deleted`, `renamed` or `type-changed`; `oldPath` /
+`similarity` are set for a rename — a move is `renamed` whether or not you `git add`-ed it, a copy
+is `added`, and `git rm --cached` on an unchanged file is no row. A rename across the project root's
+boundary is seen from inside it (in = `added`, out = `deleted`); a nested repository or submodule is
+one row naming its directory. A conflicted file mid-merge is listed as it stands on disk, markers
+and all; a file on disk marked assume-unchanged or skip-worktree refuses (git would hide an edit
+to it — clear the flag with `git update-index --no-assume-unchanged` / `--no-skip-worktree`). A statement reading it is **refused** naming the fix, with a code naming the fault:
+
+| Cause | Fault (`kind`) | Code |
+|---|---|---|
+| no `--base` | `base` | `USAGE_INVALID` |
+| a ref that names no commit | `base` | `USAGE_INVALID` |
+| a ref that shares no history with `HEAD` in a full history (no merge base) | `base` | `USAGE_INVALID` |
+| a ref with more than one merge base with `HEAD` (a criss-cross history: pass one of them) | `base` | `USAGE_INVALID` |
+| git not found on `PATH` | `git-failed` | `BACKEND_UNAVAILABLE` |
+| git out of time, or more output than VAT reads (compare against a nearer base) | `git-failed` | `BACKEND_UNAVAILABLE` |
+| a snapshot that fails for a cause git does not state, or whose second attempt times out | `git-failed` | `BACKEND_UNAVAILABLE` |
+| not inside a git working tree (a bare repository and a directory inside `.git` included) | `repository` | `INPUT_UNREADABLE` |
+| no commits yet, or a git that cannot resolve `HEAD` | `repository` | `INPUT_UNREADABLE` |
+| a shallow clone cut off before the base and `HEAD` meet (no merge base, shallow) | `repository` | `INPUT_UNREADABLE` |
+| a shallow clone whose history may hide a nearer merge base (`fetch-depth: 0`, or `git fetch --deepen=<n>`) | `repository` | `INPUT_UNREADABLE` |
+| a partial clone missing blobs the diff needs (`git fetch --refetch`) | `repository` | `INPUT_UNREADABLE` |
+| a snapshot git refuses, its `fatal:`/`error:` quoted (a nested repository with no commit, an object it cannot write, a clean filter that fails) | `repository` | `INPUT_UNREADABLE` |
+| an untracked file outside a sparse checkout's definition (add it to the definition, remove it, or ignore it) | `repository` | `INPUT_UNREADABLE` |
+| a directory under the root git cannot list (fix its permissions, or ignore it) | `repository` | `INPUT_UNREADABLE` |
+| a file under the root git cannot read | `repository` | `INPUT_UNREADABLE` |
+| a file on disk marked assume-unchanged or skip-worktree (`git update-index --no-assume-unchanged` / `--no-skip-worktree`) | `repository` | `INPUT_UNREADABLE` |
+| a filesystem that folds case whose `core.ignorecase` is not true (`git config core.ignorecase true`) | `repository` | `INPUT_UNREADABLE` |
+| on such a filesystem, a changed path, or a rename's old side wherever its new side lands, spelling the root in another case or Unicode normalisation | `repository` | `INPUT_UNREADABLE` |
+| a path under the root that is not UTF-8 | `repository` | `INPUT_UNREADABLE` |
+| a listing git returned that VAT cannot read | `repository` | `INPUT_UNREADABLE` |
+
+A CTE named `changed_files` is refused as `USAGE_INVALID` too; so is a bare alias `changed_files`
+with no `AS` run without `--base` (a known over-match: spell the alias with `AS`). The exit code does not tell these apart — the code does:
+`vat resources query` publishes it as `error.code`; for a check it is `RESOURCE_CHECK_BROKEN` on
+that check only, carrying `reason: { refusal: <code> }`. `--base` is read only when a statement
+names `changed_files`. Scope a check to what a change touched:
+
+```sql
+SELECT c.path FROM changed_files c
+ WHERE c.path LIKE 'docs/specs/%' AND c.status != 'deleted'
+```
+
 🪤 `claude_context_chains` holds ONE ROW PER WORKING LOCATION, so the obvious
 `JOIN claude_context_chains ON chainId` multiplies every load row by the locations sharing that
 chain. Select from `claude_context_loads` alone and reach the chain relation by correlated subquery.
@@ -281,7 +328,8 @@ mean anything.
 ⛔ **A built-in is never SQL.** It is a TypeScript predicate over the projection's rows
 (`BUILTIN_CHECKS` in `@vibe-agent-toolkit/resources`), so a default-on rule never makes a query
 engine part of somebody's gate. Its SQL twin ships as documentation in `--help` and in the code's
-entry in `validation-codes.md`, for you to copy into your own `resources.checks` and narrow.
+entry in `validation-codes.md`, for you to copy into your own `resources.checks` and narrow —
+under a name of its own: a declared check named like a built-in is refused at config load.
 
 Three consequences worth knowing:
 
@@ -323,10 +371,75 @@ vat resources check --format json      # honoured on the error path too
 usual "assert true" reflex and it is the single most common authoring mistake — write the query
 that finds what is wrong, not the one that confirms what is right.
 
+**Four column names are reserved**, matched exactly and case-sensitively; every other column is
+evidence — rendered into the message and published as the finding's `evidence` object:
+
+| Column | Becomes | NULL or absent |
+|---|---|---|
+| `path` | text: the finding's `location` when it is one — a non-empty relative path with `/` separators inside the root (no leading `/`, no drive, no `..` out of the root, no `\` on Windows). Text that is no location (absolute, climbing, empty — `roots.path`, say) gives a finding with no location and stays as `evidence.path`; a value that is not text (a number, a BLOB) breaks the check | no location, no evidence entry |
+| `finding_severity` | that row's severity: `error`, `warning` or `info` | the check's declared severity |
+| `finding_line` | the finding's 1-based `line` | no line |
+| `finding_column` | the finding's 1-based `column` — requires `finding_line` | no column |
+
+A value a reserved column cannot mean — `finding_severity` `'high'`, `'Error'` or `'ignore'`, a
+`finding_line` of `0` or `'3'`, a `finding_column` with no `finding_line` — fails the whole check as
+`RESOURCE_CHECK_BROKEN`, naming the row and the value; its cost record carries `broken: true`
+**with** `rows` (the statement ran, its rows could not be read). A column that nearly names a
+reserved one — equal once case and `_` are removed (`Finding_Line`, `findingSeverity`), or the bare
+`severity`, `line` or `column` — earns one stderr warning per check, stays evidence, and is listed
+on that check's `data.checks` entry as `nearMisses: ['Finding_Line']` — read from the statement's
+columns before it runs, so even a check that selected no rows, or threw, lists it.
+
+No projection table has a `finding_*` column, so `SELECT *` or a join never sets one — a table's own
+`severity`, `line` or `column` is plain evidence. Place a finding on purpose:
+`SELECT r.path, b.line AS finding_line FROM …`.
+
+**Reading the document.** Every finding one check produced — its violations and any
+`RESOURCE_CHECK_BROKEN` / `RESOURCE_CHECK_EXAMINED_NOTHING` about it — carries `check: <name>`; a
+finding about the whole run carries none. A declared check's violation also carries `evidence`
+(the row minus the reserved columns, values as SQLite returned them; a BLOB or a non-finite number
+such as `Infinity` as the message shows it). `vat validate`'s `checks` phase publishes the same findings unchanged.
+
+An adopter's `resources.validation.severity` override on `CUSTOM:<name>` replaces the severity of
+EVERY row of that check — it raises a row's `info` as well as lowering its `error`.
+
 `severity` on a check is `error` | `warning` | `info` — there is no `ignore` here; to silence a
 check an adopter overrides its `CUSTOM:<name>` code through `resources.validation.severity`
 (which does accept `ignore`). `RESOURCE_CHECK_BROKEN` is **not overridable** at all: a run that did
 not complete cannot be downgraded to a warning, because the green would mean nothing.
+
+### Declare what a check examined — an empty scan never passes
+
+Zero rows is a check's pass, so zero violations over a thousand files and zero over nothing look
+identical, and the run's `examined` (the whole population) cannot see one check whose `WHERE`
+matches nothing. Give a check its own denominator with `examined:` — a second statement returning
+ONE COUNT of what the check ranged over:
+
+```yaml
+skills-have-owners:
+  description: Every skill names an owner
+  sql: SELECT path FROM resource_realizations WHERE path LIKE 'skills/%' AND …
+  examined: SELECT COUNT(*) FROM resource_realizations WHERE path LIKE 'skills/%'
+  # allowEmpty: true   # only when zero skills is a legitimate answer
+```
+
+- The count lands on the check's `data.checks` entry as `examined` — present exactly when declared
+  and the statement completed, never `0` as a placeholder.
+- `examined: 0` fails the run as `RESOURCE_CHECK_EXAMINED_NOTHING` (error, **not overridable**),
+  naming the check; its violations are still reported. The entry then carries
+  `examinedNothing: true` — present exactly when that finding is.
+- `allowEmpty: true` makes zero legitimate and is published on every entry of that check. Without
+  `examined` it is refused at config load.
+- The examined statement obeys every rule `sql` does, is charged to the check's `durationSecs` and
+  bounded by `--budget`; if it fails, the check is `RESOURCE_CHECK_BROKEN` and none of its rows are
+  reported. Same behaviour in `vat validate`'s `checks` phase.
+- Anything but exactly one row with one column holding a non-negative integer, as `SELECT COUNT(*)`
+  returns, is
+  `RESOURCE_CHECK_BROKEN` too; the finding's `reason` is
+  `{ statement: 'examined', rows, columns?, value?, allowed }`.
+- ⚠️ `examined` is OPTIONAL, so a check that declares none **can pass over an empty population** —
+  nothing refuses it. Declare it on every check; a consumer that needs the guarantee can require
+  an `examined` key on each `data.checks` entry that is neither `builtin` nor `broken`.
 
 ### A size ratchet is a check with its baseline inline
 

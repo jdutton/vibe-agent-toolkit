@@ -5,7 +5,7 @@
  */
 
 // JSON Schema utilities
-export { toJsonSchema, type JsonSchemaOptions } from './schema-utils.js';
+export { presenceImplies, toJsonSchema, type JsonSchemaOptions } from './schema-utils.js';
 
 // Result types
 export * from './result-types.js';

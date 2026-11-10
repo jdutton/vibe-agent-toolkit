@@ -43,7 +43,6 @@ import {
   isVatError,
   pathPresent,
   prefixMessageOnce,
-  relativeEscapesRoot,
   resolveAssetReference,
   safePath,
   toForwardSlash,
@@ -1362,13 +1361,11 @@ interface RunFailure {
 }
 
 /**
- * `path` as a finding `location`: relative to the project root, or `undefined`
- * when it lies outside the project (a location is a file inside the project to
- * open — an OS temp copy or another tree is not one).
+ * `path` relative to the project root, as a finding's raw `location`: `toFindings` publishes one
+ * that can be no location (an OS temp copy, another tree, another drive) in the message instead.
  */
-function projectLocation(path: string): string | undefined {
-  const relative = issueLocation(path, resolveRepoRoot());
-  return relativeEscapesRoot(relative) ? undefined : relative;
+function projectLocation(path: string): string {
+  return issueLocation(path, resolveRepoRoot());
 }
 
 /**

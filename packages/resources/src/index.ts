@@ -171,6 +171,13 @@ export {
   type ClaudeContextLoadRow,
 } from './schemas/projection-claude-context.js';
 
+// The derived relation of what changed since a run's `--base`, exported as a row
+// shape for the reason the two above are.
+export {
+  ChangedFileRowSchema,
+  type ChangedFileRow,
+} from './schemas/projection-changed-files.js';
+
 export {
   LensEntryPointRowSchema,
   ResolutionContextRowSchema,
@@ -614,6 +621,7 @@ export {
 } from './config-issues.js';
 
 export {
+  EXAMINED_ALLOWED,
   ExternalPluginSourceSchema,
   ProjectConfigSchema,
   SkillExecutableEntrySchema,
@@ -879,7 +887,27 @@ export {
 // A project's own SQL assertions over its projection: what a returned row MEANS.
 // The statement itself is the CLI's business — only it knows a storage backend
 // exists — so the rule engine here never opens a database.
-export { issuesFromCheckRows, PROJECTION_STATEMENT_REFUSED_CODE } from './projection/sql-checks.js';
+export {
+  CHECK_EVIDENCE_VALUE_SCHEMA,
+  CHECK_FINDING_COLUMNS,
+  CHECK_REFUSAL_REASON_SCHEMA,
+  checkStatements,
+  describeUninterpretableExamined,
+  describeUninterpretableRows,
+  examinedCount,
+  issuesFromCheckRows,
+  LENS_REFUSAL_CODES,
+  nearMissesOf,
+  PROJECTION_STATEMENT_REFUSED_CODE,
+  uninterpretableRowsReason,
+} from './projection/sql-checks.js';
+export type {
+  CheckIssue,
+  CheckRowConversion,
+  ExaminedShapeReason,
+  LensRefusalCode,
+  NearMiss,
+} from './projection/sql-checks.js';
 
 // VAT's OWN default assertions over the same projection — TypeScript predicates,
 // never SQL, because a default-on rule written as a statement would make the
@@ -887,7 +915,6 @@ export { issuesFromCheckRows, PROJECTION_STATEMENT_REFUSED_CODE } from './projec
 // projection it just built and runs them beside the project's declared checks.
 export {
   bindBuiltinChecks,
-  BUILTIN_CHECK_NAMES,
   BUILTIN_CHECKS,
   CLAUDE_RULE_FRONTMATTER_INVALID_CHECK,
   CLAUDE_RULE_GLOB_INERT_CHECK,
@@ -896,6 +923,7 @@ export {
   type BuiltinCheck,
   type BuiltinCheckInput,
 } from './projection/builtin-checks.js';
+export { BUILTIN_CHECK_NAMES } from './projection/builtin-check-names.js';
 
 export {
   buildResourcePopulation,

@@ -21,6 +21,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type * as SupervisorModule from '../../src/commands/resources/check-supervisor.js';
+import { NO_COLUMNS } from '../helpers/no-columns.js';
 import { captureProcessExit } from '../test-doubles.js';
 
 const recorded: Array<readonly string[]> = [];
@@ -45,7 +46,9 @@ vi.mock('../../src/commands/resources/check-supervisor.js', async (importOrigina
   })),
 }));
 
-const { buildCheckOutputData, runResourcesCheckPhase } = await import('../../src/commands/resources/check.js');
+const { buildCheckOutputData, runProjectChecks, runResourcesCheckPhase } = await import('../../src/commands/resources/check.js');
+const { CHECK_REPORT_SCHEMA, RESOURCES_CHECK_EXAMINED } = await import('../../src/commands/resources/check-schema.js');
+const { runPhase } = await import('../../src/commands/phase-utils.js');
 
 forwarded.report = buildCheckOutputData({
   root: '/corpus',
@@ -59,9 +62,9 @@ forwarded.report = buildCheckOutputData({
 const ROOT = safePath.join('/resolved', 'project-root');
 
 /** The one argv the phase handed the supervisor — its stderr captured, so the run writes nothing to the real one. */
-async function phaseArgs(debug: boolean): Promise<readonly string[]> {
+async function phaseArgs(debug: boolean, base?: string): Promise<readonly string[]> {
   const { exited } = await captureProcessExit(async () => {
-    await runResourcesCheckPhase({ root: ROOT, debug, verbose: false });
+    await runResourcesCheckPhase({ root: ROOT, debug, verbose: false, base });
   });
   expect(exited).toBeUndefined();
   expect(recorded).toHaveLength(1);
@@ -88,6 +91,22 @@ describe('runResourcesCheckPhase — the child\'s argv', () => {
     ]);
   });
 
+  it('forwards `--base <ref>`, so a check over changed_files compares with the base vat validate was given', async () => {
+    const args = await phaseArgs(false, 'origin/main');
+
+    expect(args).toStrictEqual([
+      'resources',
+      'check',
+      ROOT,
+      '--format',
+      'json',
+      '--base',
+      'origin/main',
+      '--supervised-by',
+      `phase:${String(process.pid)}:${PROGRESS_LOG}`,
+    ]);
+  });
+
   it('never narrows the run to one check, and never passes a flag the child does not take', async () => {
     const args = await phaseArgs(true);
 
@@ -95,6 +114,7 @@ describe('runResourcesCheckPhase — the child\'s argv', () => {
     expect(args).not.toContain('--verbose');
     expect(args).not.toContain('-v');
     expect(args).not.toContain('--budget');
+    expect(args).not.toContain('--base');
   });
 });
 
@@ -114,7 +134,7 @@ async function stderrAt(verbose: boolean): Promise<string> {
   });
   try {
     const { stderr } = await captureProcessExit(async () => {
-      await runResourcesCheckPhase({ root: ROOT, debug: false, verbose });
+      await runResourcesCheckPhase({ root: ROOT, debug: false, verbose, base: undefined });
     });
     return stderr;
   } finally {
@@ -135,5 +155,80 @@ describe('runResourcesCheckPhase — the child\'s findings on this process\'s st
 
     expect(stderr).not.toContain('[CUSTOM:warn-a]');
     expect(stderr).toContain('1 warning/info finding(s) not shown');
+  });
+});
+
+/**
+ * The phase's verdict on a run whose one check declared `examined` and whose examined statement
+ * counted `answer` — through the same `runPhase` `vat validate` uses, with the verb's own
+ * schema and run-level declaration.
+ *
+ * @param check - The check's `examined` half
+ * @param answer - The count the examined statement returns
+ * @returns The phase's judged report
+ */
+async function phaseVerdictFor(check: { examined: string; allowEmpty?: true }, answer: number): Promise<Report<unknown>> {
+  const { issues, costs } = runProjectChecks({
+    warn: () => undefined,
+    columnsOf: NO_COLUMNS,
+    builtins: [],
+    checks: { owned: { description: 'owned', sql: 'SELECT path FROM a', ...check } },
+    only: undefined,
+    ask: (sql) => (sql === check.examined ? [{ n: answer }] : []),
+    validation: undefined,
+    membersEnumerated: 3,
+  });
+  const previous = forwarded.report;
+  forwarded.report = buildCheckOutputData({
+    root: '/corpus',
+    durationMs: 1,
+    populated: { population: 'store', lensPopulation: 'none', populationMs: 1, lensMs: 0, lensesEvaluated: [], membersEnumerated: 3 },
+    issues,
+    costs,
+  });
+  try {
+    const verdict: { report?: Report<unknown> } = {};
+    await captureProcessExit(async () => {
+      verdict.report = (await runPhase({
+        name: 'checks',
+        schema: CHECK_REPORT_SCHEMA,
+        examined: RESOURCES_CHECK_EXAMINED,
+        run: () => runResourcesCheckPhase({ root: ROOT, debug: false, verbose: false, base: undefined }),
+      })).report;
+    });
+    if (verdict.report === undefined) throw new Error('the phase produced no verdict');
+    return verdict.report;
+  } finally {
+    forwarded.report = previous;
+  }
+}
+
+/**
+ * 🔑 A check's own `examined` as `vat validate`'s `checks` phase carries it. The phase forwards the
+ * child's document, and the orchestrator re-parses it against the verb's strict schema and judges
+ * it with the verb's run-level declaration — so the per-check refusal and fields must come through
+ * that path untouched: a field the schema does not know would throw the phase, and a refusal lost
+ * there would fold into a run-level pass.
+ */
+describe('runResourcesCheckPhase — a check that examined nothing', () => {
+  it('keeps the refusal and the examined count through the phase', async () => {
+    const verdict = await phaseVerdictFor({ examined: 'SELECT COUNT(*) FROM b' }, 0);
+
+    expect(verdict.status === 'error' ? verdict.error : undefined).toBeUndefined();
+    expect(verdict.status).toBe('findings');
+    expect(verdict.findings.map((finding) => [finding.code, finding.severity]))
+      .toStrictEqual([['RESOURCE_CHECK_EXAMINED_NOTHING', 'error']]);
+    expect((verdict.data as { checks: unknown[] }).checks).toStrictEqual([
+      expect.objectContaining({ name: 'owned', rows: 0, examined: 0 }),
+    ]);
+  });
+
+  it('passes the phase when the check declared that zero is legitimate, and says so', async () => {
+    const verdict = await phaseVerdictFor({ examined: 'SELECT COUNT(*) FROM b', allowEmpty: true }, 0);
+
+    expect(verdict.status).toBe('ok');
+    expect((verdict.data as { checks: unknown[] }).checks).toStrictEqual([
+      expect.objectContaining({ name: 'owned', examined: 0, allowEmpty: true }),
+    ]);
   });
 });

@@ -64,7 +64,7 @@ describe('Severity', () => {
 });
 
 describe('FindingSchema', () => {
-  it('is a ValidationIssue without ignore, plus column', () => {
+  it('is a ValidationIssue without ignore, inheriting its column', () => {
     expect(FindingSchema.safeParse(finding('warning')).success).toBe(true);
     expect(FindingSchema.safeParse({ ...finding('info'), line: 3, column: 7 }).success).toBe(true);
     expect(FindingSchema.safeParse({ ...finding('info'), severity: 'ignore' }).success).toBe(false);
@@ -90,6 +90,20 @@ describe('toFindings', () => {
       { code: 'LINK_MISSING_TARGET', severity: 'error', message: 'e' },
     ];
     expect(toFindings(issues).map((f) => f.severity)).toEqual(['info', 'error']);
+  });
+
+  // A validator whose subject lies outside its location root (`vat skills validate ../other`) built
+  // `location: '../other/SKILL.md'`, which the published schema refuses: the run died on its own report.
+  it('publishes a location that cannot be one as no location, its path named in the message', () => {
+    const findings = toFindings([
+      { code: 'LINK_MISSING_TARGET', severity: 'error', message: 'Link target not found', location: '../other/SKILL.md' },
+      { code: 'LINK_MISSING_TARGET', severity: 'error', message: 'Here', location: './docs/a.md' },
+    ]);
+
+    expect(findings).toStrictEqual([
+      { code: 'LINK_MISSING_TARGET', severity: 'error', message: 'Link target not found (../other/SKILL.md)' },
+      { code: 'LINK_MISSING_TARGET', severity: 'error', message: 'Here', location: 'docs/a.md' },
+    ]);
   });
 });
 
@@ -322,5 +336,15 @@ describe('reportSchema', () => {
     const report = buildReport({ examined: 1, findings: [finding('error')], data: {}, gate: LENIENT });
     expect(narrowed.safeParse(report).success).toBe(false);
     expect(narrowed.safeParse({ ...report, findings: [{ ...finding('error'), line: 3 }] }).success).toBe(true);
+  });
+});
+
+describe('a published finding\'s column', () => {
+  it('refuses a column with no line on every finding, whatever finding schema the verb passed', () => {
+    const schema = reportSchema(z.object({}).strict(), FindingSchema);
+    const report = buildReport({ examined: 1, findings: [{ ...finding('error'), location: 'docs/a.md', column: 4 }], data: {}, gate: LENIENT });
+
+    expect(schema.safeParse(report).success).toBe(false);
+    expect(schema.safeParse({ ...report, findings: [{ ...report.findings[0], line: 2 }] }).success).toBe(true);
   });
 });

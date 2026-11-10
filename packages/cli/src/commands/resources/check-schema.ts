@@ -7,12 +7,17 @@
  * initialised.
  */
 
-import { LIMIT_DIRECTIONS, POPULATION_ORIGINS } from '@vibe-agent-toolkit/resources';
-import { FindingSchema, reportSchema, type Report } from '@vibe-agent-toolkit/schema';
+import {
+  CHECK_EVIDENCE_VALUE_SCHEMA,
+  CHECK_REFUSAL_REASON_SCHEMA,
+  LIMIT_DIRECTIONS,
+  POPULATION_ORIGINS,
+} from '@vibe-agent-toolkit/resources';
+import { FindingSchema, presenceImplies, reportSchema, type Report } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
 
 import { LENS_POPULATIONS } from '../../utils/lens-population.js';
-import type { ExaminedDeclaration } from '../../utils/run-integrity.js';
+import { RUN_INTEGRITY_CODE, type ExaminedDeclaration } from '../../utils/run-integrity.js';
 
 /** What one rule cost, as the document publishes it. */
 const PublishedCheckCostSchema = z.object({
@@ -21,10 +26,66 @@ const PublishedCheckCostSchema = z.object({
   durationSecs: z.number().nonnegative(),
   /** Rows the statement returned. ABSENT, never 0, when the statement did not complete. */
   rows: z.number().int().nonnegative().optional(),
+  /** Nothing reported. Without `rows`: the statement failed; with: `examined` or conversion failed, or the run was killed mid-check. */
   broken: z.literal(true).optional(),
   /** Present and `true` only for a rule VAT supplied — see `CheckCost.builtin` in `check.ts`. */
   builtin: z.literal(true).optional(),
+  /** The one count the declared `examined` statement returned (`EXAMINED_ALLOWED`). ABSENT, never 0, unless it completed. */
+  examined: z.number().int().nonnegative().optional(),
+  /** The check declares an `examined` count of 0 legitimate. */
+  allowEmpty: z.literal(true).optional(),
+  /** Selected columns that nearly name a reserved one (case and `_` aside, or a bare `severity`/`line`/`column`), as spelled — the stderr warning's. */
+  nearMisses: z.array(z.string()).min(1).optional(),
+  /** Exactly when this check produced a `RESOURCE_CHECK_EXAMINED_NOTHING` finding. */
+  examinedNothing: z.literal(true).optional(),
 }).strict();
+
+/**
+ * A finding of `vat resources check`'s document, also used by the `vat validate` envelope.
+ * `check` is absent on a whole-run finding; `evidence` is the row minus reserved columns (plus
+ * `path` when its text is no location — see `CheckIssue.evidence`). The evidence value and the
+ * `reason` shapes are `@vibe-agent-toolkit/resources`' own schemas, never respelled here.
+ *
+ * Two cross-field rules, in ONE `superRefine` (a second `.refine` would nest the effects and hide
+ * the object's `shape`): `evidence` names its `check`, and only a `RESOURCE_CHECK_BROKEN` finding
+ * carries a `reason`. Every document is re-parsed against this schema at publish, so both hold at
+ * run time; `zod-to-json-schema` drops a refinement, so the generator emits
+ * {@link CHECK_FINDING_JSON_RULES} into the committed JSON Schemas.
+ *
+ * ⚠️ One object extended plus a refinement, NOT a union: a union emits every inherited key once
+ * per branch.
+ */
+export const CHECK_FINDING_SCHEMA = FindingSchema.extend({
+  check: z.string().min(1).optional(),
+  evidence: z.record(z.string(), CHECK_EVIDENCE_VALUE_SCHEMA).optional(),
+  /** Only on `RESOURCE_CHECK_BROKEN`: output it could not read (what, and what is allowed), or a relation's refusal code. */
+  reason: CHECK_REFUSAL_REASON_SCHEMA.optional(),
+}).strict().superRefine((finding, context) => {
+  if (finding.evidence !== undefined && finding.check === undefined) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'evidence is a check\'s row, so a finding carrying it must name the check',
+      path: ['evidence'],
+    });
+  }
+  if (finding.reason !== undefined && finding.code !== RUN_INTEGRITY_CODE) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `reason explains a broken check, so only a ${RUN_INTEGRITY_CODE} finding carries it`,
+      path: ['reason'],
+    });
+  }
+});
+
+/**
+ * {@link CHECK_FINDING_SCHEMA}'s two refinements as JSON Schema, for the generator to emit on every
+ * published finding node that carries `evidence` and `reason` — the same two rules, so the
+ * artifact refuses what the runtime refuses.
+ */
+export const CHECK_FINDING_JSON_RULES: readonly Record<string, unknown>[] = [
+  presenceImplies('evidence', { required: ['check'] }),
+  presenceImplies('reason', { required: ['code'], properties: { code: { const: RUN_INTEGRITY_CODE } } }),
+];
 
 /**
  * A signed bound on what the derived rows settle, as `@vibe-agent-toolkit/resources`
@@ -100,7 +161,7 @@ const CheckDataSchema = z.object({
 export type CheckData = z.infer<typeof CheckDataSchema>;
 
 /** The document this command publishes. */
-export const CHECK_REPORT_SCHEMA = reportSchema(CheckDataSchema, FindingSchema);
+export const CHECK_REPORT_SCHEMA = reportSchema(CheckDataSchema, CHECK_FINDING_SCHEMA);
 
 export type CheckReport = Report<CheckData>;
 

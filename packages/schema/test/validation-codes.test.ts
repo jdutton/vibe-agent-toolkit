@@ -343,6 +343,7 @@ describe('CODE_REGISTRY — every code has a kind', () => {
     'RUN_INCOMPLETE',
     'INTERNAL_ERROR',
     'RESOURCE_CHECK_BROKEN',
+    'RESOURCE_CHECK_EXAMINED_NOTHING',
     'ARD_NOT_CONFIGURED',
     'ARD_DERIVATION_FAILED',
   ];
@@ -353,9 +354,9 @@ describe('CODE_REGISTRY — every code has a kind', () => {
     }
   });
 
-  it('registers RESOURCE_CHECK_BROKEN as a refusal', () => {
-    expect(CODE_REGISTRY.RESOURCE_CHECK_BROKEN.kind).toBe('refusal');
-    expect(CODE_REGISTRY.RESOURCE_CHECK_BROKEN.defaultSeverity).toBe('error');
+  it.each(['RESOURCE_CHECK_BROKEN', 'RESOURCE_CHECK_EXAMINED_NOTHING'] as const)('registers %s as a refusal at error', (code) => {
+    expect(CODE_REGISTRY[code].kind).toBe('refusal');
+    expect(CODE_REGISTRY[code].defaultSeverity).toBe('error');
   });
 
   it('registers exactly the refusal vocabulary, and derives it from the registry by kind', () => {

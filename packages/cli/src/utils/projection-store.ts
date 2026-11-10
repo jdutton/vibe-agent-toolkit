@@ -50,7 +50,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type * as ProjectionSqlite from '@vibe-agent-toolkit/projection-sqlite';
 import type { PopulationCache, ProjectionStore } from '@vibe-agent-toolkit/resources';
 import { parseEnvBoolean } from '@vibe-agent-toolkit/utils';
-import { freshGitTreeSnapshot, gitTreeSnapshot, type GitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
+import { freshGitTreeSnapshot, gitSnapshotFailureOf, gitTreeSnapshot, type GitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 
 import { noticeToOperator, withNoticeLedger } from './operator-notices.js';
 import { isModuleMissing, missingBackendError, type OptionalBackend } from './optional-backend.js';
@@ -235,9 +235,9 @@ export interface OpenedPopulationCache {
  * root per command run (the notice scope {@link withPopulationCache} enters), that the run
  * populates without a cache.
  *
- * `gitTreeSnapshot` returns null for every "git could not answer" case — no `git` on PATH, not a
- * repository, a bare or unreadable one — and an empty snapshot of an initialized repository stays
- * distinguishable from it.
+ * `gitTreeSnapshot` returns a failure for every "git could not answer" case — no `git` on PATH, not
+ * a repository, a bare or unreadable one — and an empty snapshot of an initialized repository stays
+ * distinguishable from it. The notice names the cause the one classifier (`gitSnapshotFailureOf`) decides.
  *
  * 🪤 Once per root: `vat validate`'s orchestrator scope and each lane's own scope inside it both ask
  * when the outer one could not key ({@link joinableCache} "asks again" for a root it cannot vouch
@@ -248,18 +248,17 @@ export interface OpenedPopulationCache {
  */
 function storeKeyOrNotice(root: string): GitTreeSnapshot | null {
   const snapshot = gitTreeSnapshot({ cwd: root });
-  if (snapshot === null) {
-    // Not "the selector is set": the store is on by default, so most users who
-    // see this never wrote the variable.
-    noticeToOperator(
-      'store',
-      `The projection store is on, but ${root} is not inside a readable git`
-      + ' repository, so there is no deterministic key to store a projection under.'
-      + ` Populating without a cache. Set ${PROJECTION_STORE_ENV}=${PROJECTION_STORE_OFF} to silence this.`,
-      root,
-    );
-  }
-  return snapshot;
+  if (snapshot.ok) return snapshot;
+  // Not "the selector is set": the store is on by default, so most users who
+  // see this never wrote the variable.
+  noticeToOperator(
+    'store',
+    'The projection store is on, but git cannot key this tree, so there is no deterministic key to store a'
+    + ` projection under: ${gitSnapshotFailureOf(snapshot).reason}`
+    + ` Populating without a cache. Set ${PROJECTION_STORE_ENV}=${PROJECTION_STORE_OFF} to silence this.`,
+    root,
+  );
+  return null;
 }
 
 /**
@@ -292,7 +291,10 @@ export async function openPopulationCache(options: {
     cache: {
       store,
       treeHash: snapshot.hash,
-      treeUnchanged: () => freshGitTreeSnapshot({ cwd })?.hash === snapshot.hash,
+      treeUnchanged: () => {
+        const fresh = freshGitTreeSnapshot({ cwd });
+        return fresh.ok && fresh.hash === snapshot.hash;
+      },
     },
     close: () => store.close(),
   };
@@ -513,7 +515,7 @@ function joinableCache(
   // `(rootId, treeHash)`, so a lane in another repository handed this one's hash
   // would file its extent under a key that does not describe it — silently. Two
   // roots inside ONE repository do share a hash: the key covers the repository.
-  return snapshot !== null && snapshot.hash === active.cache.treeHash ? { cache: active.cache } : undefined;
+  return snapshot.ok && snapshot.hash === active.cache.treeHash ? { cache: active.cache } : undefined;
 }
 
 /**

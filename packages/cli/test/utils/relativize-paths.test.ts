@@ -14,7 +14,6 @@ import { describe, expect, it } from 'vitest';
 import { refusalCodeOf } from '../../src/utils/command-refusal.js';
 import {
   relativeLocationOrRefuse,
-  relativeLocationOrUndefined,
   relativizePath,
   relativizePathEntries,
 } from '../../src/utils/relativize-paths.js';
@@ -115,24 +114,19 @@ const CROSS_DRIVE_CASES = [
   ['/elsewhere/agent.yaml', 'a POSIX-absolute location'],
 ] as const;
 
-describe('relativeLocationOrUndefined', () => {
-  it('passes a relative location through unchanged, a climb included', () => {
-    expect(relativeLocationOrUndefined('agents/a/agent.yaml')).toBe('agents/a/agent.yaml');
-    expect(relativeLocationOrUndefined('../sibling/agent.yaml')).toBe('../sibling/agent.yaml');
-    expect(relativeLocationOrUndefined('')).toBe('');
-  });
-
-  it.each(CROSS_DRIVE_CASES)('answers undefined for %s — %s', (location) => {
-    expect(relativeLocationOrUndefined(location)).toBeUndefined();
-  });
-});
-
 describe('relativeLocationOrRefuse', () => {
-  it('passes a relative location through unchanged', () => {
+  it('passes a relative path through unchanged, a climb included: it is a path, never a location', () => {
     expect(relativeLocationOrRefuse('agents/a/agent.yaml', '/work/repo', 'vat agent validate')).toBe('agents/a/agent.yaml');
+    expect(relativeLocationOrRefuse('../sibling/agent.yaml', '/work/repo', 'vat agent validate')).toBe('../sibling/agent.yaml');
   });
 
-  it.each(CROSS_DRIVE_CASES)('refuses %s as USAGE_INVALID — %s', (location) => {
+  // One definition of absolute with the location contract (`isAbsoluteOnAnyHost`): a drive-relative
+  // `C:x` and a UNC path are refused here exactly as a finding's location refuses them.
+  it.each([
+    ...CROSS_DRIVE_CASES,
+    ['C:agent.yaml', 'a drive-relative path, relative to that drive\'s cwd and never to the root'],
+    [String.raw`\\host\share\agent.yaml`, 'a UNC path'],
+  ])('refuses %s as USAGE_INVALID — %s', (location) => {
     let refusal: unknown;
     try {
       relativeLocationOrRefuse(location, 'D:/a/repo', 'vat agent validate');

@@ -18,9 +18,11 @@ import {
   type DerivedTableName,
   type PopulationCache,
   type PopulationOutcome,
+  type LensRefusalCode,
   type Projection,
 } from '@vibe-agent-toolkit/resources';
 
+import { evaluateChangedFilesLens } from './changed-files-lens.js';
 import { evaluateClaudeContextLens } from './claude-context-lens.js';
 import { evaluateAuthoredLenses } from './edge-lens-evaluation.js';
 import type { LensPopulation } from './lens-population.js';
@@ -48,6 +50,19 @@ export interface LensEvaluation {
 }
 
 /**
+ * A lens that could not answer, and why. 🚨 Its relations stay ABSENT, never
+ * empty: written as `[]`, a check over them could never fail.
+ */
+export interface LensRefusal {
+  readonly refused: string;
+  /** Whose fault, as the refusal a statement reading the relation is published under. */
+  readonly refusal: LensRefusalCode;
+}
+
+/** What evaluating one lens produced: its rows, or why it has none. */
+export type LensOutcome = LensEvaluation | LensRefusal;
+
+/**
  * A run's {@link LensPopulation} from each evaluated lens's own population.
  *
  * @param populations - Each evaluated lens's `population`, in evaluation order
@@ -65,6 +80,8 @@ export interface LensEvaluationInput {
   readonly projection: Projection;
   /** Absolute corpus root, for a lens that must populate a lane of its own. */
   readonly root: string;
+  /** The run's `--base` ref, or undefined. Only the changed-files lens reads it. */
+  readonly base: string | undefined;
   /** The run's projection store, so a lens's own population can hit it. */
   readonly cache: PopulationCache | undefined;
   /** Where a lens that populates reports its own population's refused content. */
@@ -89,9 +106,9 @@ export interface ProjectionLens {
    * @param input - The projection, the root, and the run's oracles
    * @returns Every relation this lens owns — all of them, every time, because
    *   omitting one leaves its previous contents in place — and where its own
-   *   population came from
+   *   population came from; or a {@link LensRefusal} when it cannot answer
    */
-  readonly evaluate: (input: LensEvaluationInput) => Promise<LensEvaluation> | LensEvaluation;
+  readonly evaluate: (input: LensEvaluationInput) => Promise<LensOutcome> | LensOutcome;
 }
 
 /** The authored-link lens: `lens_contexts`, `edges`, `edge_resolutions`. */
@@ -109,10 +126,18 @@ export const CLAUDE_CONTEXT_LENS: ProjectionLens = {
   evaluate: ({ root, cache, logger }) => evaluateClaudeContextLens({ root, cache, logger }),
 };
 
+/** What changed under the root since the run's `--base`: `changed_files`. Refuses without a base. */
+export const CHANGED_FILES_LENS: ProjectionLens = {
+  name: 'changed-files',
+  relations: ['changedFiles'],
+  evaluate: ({ root, base }) => evaluateChangedFilesLens(root, base),
+};
+
 /** Every lens the query lane can evaluate, in evaluation order. */
 export const PROJECTION_LENSES: readonly ProjectionLens[] = [
   AUTHORED_LINK_LENS,
   CLAUDE_CONTEXT_LENS,
+  CHANGED_FILES_LENS,
 ];
 
 /**
@@ -138,10 +163,77 @@ export function lensRelationNames(lens: ProjectionLens): readonly string[] {
  */
 export function lensesNamedBy(statements: readonly string[] | undefined): readonly ProjectionLens[] {
   if (statements === undefined) return PROJECTION_LENSES;
-  const readable = statements.map((sql) => wordsIn(withoutCommentsAndLiterals(sql)));
   return PROJECTION_LENSES.filter((lens) =>
-    lensRelationNames(lens).some((relation) =>
-      readable.some((words) => namesRelation(words, relation))));
+    statements.some((sql) => relationsNamedBy(sql, lensRelationNames(lens)).length > 0));
+}
+
+/**
+ * The relations among `relations` that one statement names, by the same scan the lens selector
+ * runs — comments, literals and `AS` aliases stripped, whole words, case-folded.
+ *
+ * @param sql - One statement
+ * @param relations - SQL relation names to look for
+ * @returns Those it names, in `relations` order
+ */
+export function relationsNamedBy(sql: string, relations: Iterable<string>): string[] {
+  const words = wordsIn(withoutAliases(withoutCommentsAndLiterals(sql)));
+  return [...relations].filter((relation) => namesRelation(words, relation));
+}
+
+/** Identifier runs and the punctuation a CTE definition is read from, in statement order. */
+const CTE_TOKENS = /[a-z0-9_]+|[(),]/gi;
+
+/**
+ * Whether a statement defines a common table expression named `relation` — `WITH relation AS (`
+ * or `, relation AS (`, with an optional `RECURSIVE`, column list, quoting and `[NOT]
+ * MATERIALIZED`. Read from the statement's tokens once comments and literals are blanked, so a
+ * literal or comment spelling one defines nothing.
+ *
+ * @param sql - One statement
+ * @param relation - A SQL relation name
+ * @returns True when the statement defines a CTE of that name
+ */
+export function definesCteNamed(sql: string, relation: string): boolean {
+  const tokens = (withoutCommentsAndLiterals(sql).match(CTE_TOKENS) ?? []).map((token) => token.toLowerCase());
+  const wanted = relation.toLowerCase();
+  return tokens.some((token, at) => token === wanted && opensCte(tokens[at - 1]) && isCteBody(tokens, at + 1));
+}
+
+/** Whether the token before a name opens a CTE definition: `WITH`, `RECURSIVE` or a comma. */
+function opensCte(previous: string | undefined): boolean {
+  return previous === 'with' || previous === 'recursive' || previous === ',';
+}
+
+/** Whether the tokens from `at` read `[(columns)] AS [NOT] [MATERIALIZED] (`. */
+function isCteBody(tokens: readonly string[], at: number): boolean {
+  let next = at;
+  if (tokens[next] === '(') {
+    const close = tokens.indexOf(')', next);
+    if (close === -1) return false;
+    next = close + 1;
+  }
+  if (tokens[next] !== 'as') return false;
+  next += 1;
+  if (tokens[next] === 'not') next += 1;
+  if (tokens[next] === 'materialized') next += 1;
+  return tokens[next] === '(';
+}
+
+/** `AS`, then the identifier it names — bare or opened by a quote — as one run. */
+const ALIAS_AFTER_AS = /\bas(\s+["[`]?)([a-z0-9_]+)/gi;
+
+/**
+ * Blank the identifier directly after every `AS` (case-insensitive): a column or table ALIAS is a
+ * name the statement gives, never a relation it reads, so `SELECT COUNT(*) AS changed_files FROM
+ * resources` must not be refused for naming `changed_files`. A statement that also reads the
+ * relation still names it elsewhere, so this never hides a read. `WITH x AS (` names `x` BEFORE
+ * the `AS`, and is untouched.
+ *
+ * @param sql - One statement, comments and literals already blanked
+ * @returns The statement with each alias blanked to spaces
+ */
+function withoutAliases(sql: string): string {
+  return sql.replaceAll(ALIAS_AFTER_AS, (_match, gap: string, alias: string) => `as${gap}${' '.repeat(alias.length)}`);
 }
 
 /**
@@ -154,14 +246,15 @@ export function lensesNamedBy(statements: readonly string[] | undefined): readon
  *
  * @param lens - The lens
  * @param input - What it may read
- * @returns Its rows and its own population's provenance
+ * @returns Its rows and its own population's provenance, or its refusal
  * @throws Error When the rows omit a declared relation or carry an undeclared one
  */
 export async function evaluateLens(
   lens: ProjectionLens,
   input: LensEvaluationInput,
-): Promise<LensEvaluation> {
+): Promise<LensOutcome> {
   const evaluation = await lens.evaluate(input);
+  if ('refused' in evaluation) return evaluation;
   const { rows } = evaluation;
   const declared: readonly string[] = lens.relations;
   const missing = declared.filter((name) => !Object.hasOwn(rows, name));

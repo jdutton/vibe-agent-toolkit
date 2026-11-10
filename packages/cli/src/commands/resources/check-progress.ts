@@ -40,7 +40,7 @@
 
 import { appendFileSync } from 'node:fs';
 
-import { POPULATION_ORIGINS } from '@vibe-agent-toolkit/resources';
+import { CHECK_REFUSAL_REASON_SCHEMA, POPULATION_ORIGINS } from '@vibe-agent-toolkit/resources';
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
 
@@ -130,6 +130,34 @@ const CheckEntrySchema = z.object({
   // the name up in `BUILTIN_CHECK_NAMES` would be a second authority that
   // disagrees the day a project declares a check of the same name.
   builtin: z.literal(true).optional(),
+  // 🪤 Must be declared: the strict schema DROPS an unknown line, and the check vanishes.
+  examined: z.number().int().nonnegative().optional(),
+  allowEmpty: z.literal(true).optional(),
+  nearMisses: z.array(z.string()).min(1).optional(),
+  // 🔑 A broken check's RESOURCE_CHECK_BROKEN as published, so a killed run rebuilds it word for word.
+  refusal: z.object({ message: z.string(), reason: CHECK_REFUSAL_REASON_SCHEMA.optional() }).strict().optional(),
+}).strict();
+
+/** 🚨 `examined` is about to run; without this line a kill here reads as the violations statement hanging. */
+const ExaminingEntrySchema = z.object({
+  kind: z.literal('examining'),
+  name: z.string(),
+  durationMs: z.number(),
+  rows: z.number(),
+  // 🔑 Every field the cost record carries, so a kill rebuilds the entry a completed run publishes.
+  allowEmpty: z.literal(true).optional(),
+  nearMisses: z.array(z.string()).min(1).optional(),
+}).strict();
+
+/** 🚨 A declared statement's rows are about to convert; without this a kill reads as a hung statement. */
+const ConvertingEntrySchema = z.object({
+  kind: z.literal('converting'),
+  name: z.string(),
+  durationMs: z.number(),
+  rows: z.number(),
+  examined: z.number().int().nonnegative().optional(),
+  allowEmpty: z.literal(true).optional(),
+  nearMisses: z.array(z.string()).min(1).optional(),
 }).strict();
 
 /**
@@ -150,8 +178,8 @@ const CheckEntrySchema = z.object({
  * shipped a level up, from `runOutcome` after that function had already
  * returned, which left `resolveIssueSeverity` charged to the last check's window
  * while this comment claimed otherwise. What it still does NOT cover is the last
- * check's row-to-issue conversion — `runUnits` files that check's cost before
- * converting its rows — which is why the report's `idle` sentence hedges.
+ * check's row-to-issue conversion — that window has its own state,
+ * {@link ConvertingEntrySchema}, and the check's cost is filed after it.
  */
 const ChecksCompleteEntrySchema = z.object({
   kind: z.literal('checks-complete'),
@@ -161,6 +189,8 @@ const ProgressEntrySchema = z.discriminatedUnion('kind', [
   StartedEntrySchema,
   PopulationEntrySchema,
   StartEntrySchema,
+  ExaminingEntrySchema,
+  ConvertingEntrySchema,
   CheckEntrySchema,
   ChecksCompleteEntrySchema,
 ]);
@@ -183,6 +213,8 @@ export type UnitInFlight =
   | { readonly kind: 'startup' }
   | { readonly kind: 'population' }
   | { readonly kind: 'check'; readonly name: string }
+  | { readonly kind: 'examining'; readonly name: string; readonly rows: number }
+  | { readonly kind: 'converting'; readonly name: string; readonly rows: number }
   | { readonly kind: 'reporting' }
   | { readonly kind: 'idle' };
 
@@ -265,12 +297,26 @@ export function unitInFlight(entries: readonly ProgressEntry[]): UnitInFlight {
     (entry): entry is Extract<ProgressEntry, { kind: 'start' }> =>
       entry.kind === 'start' && !completed.has(entry.name),
   );
-  if (started !== undefined) return { kind: 'check', name: started.name };
+  if (started !== undefined) return startedUnit(entries, started);
   // 🔑 Checked AFTER the in-flight statement, never before. The line means "no
   // check is running any more"; a `start` without a cost means one still is, and
   // a log holding both is damaged in a way that must still name the rule.
   if (entries.some((entry) => entry.kind === 'checks-complete')) return { kind: 'reporting' };
   return { kind: 'idle' };
+}
+
+/** What a started check was doing. 🔑 Only lines AFTER this `start` count (names can repeat). */
+function startedUnit(
+  entries: readonly ProgressEntry[],
+  started: Extract<ProgressEntry, { kind: 'start' }>,
+): UnitInFlight {
+  const latest = entries.slice(entries.indexOf(started)).findLast(
+    (entry): entry is Extract<ProgressEntry, { kind: 'examining' | 'converting' }> =>
+      (entry.kind === 'examining' || entry.kind === 'converting') && entry.name === started.name,
+  );
+  return latest === undefined
+    ? { kind: 'check', name: started.name }
+    : { kind: latest.kind, name: started.name, rows: latest.rows };
 }
 
 /**

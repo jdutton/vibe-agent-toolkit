@@ -190,6 +190,8 @@ describe('detectPackagedAgentInstructionFiles', () => {
     const issues = await withReaddirSyncRefused(root, 'EACCES', () =>
       detectPackagedAgentInstructionFiles(root, root, [], []),
     );
-    expect(issues.map(i => [i.code, i.location])).toEqual([['SCAN_PATH_UNREADABLE', '.']]);
+    // The root itself is no project location: the finding carries none, and its message names it `.`.
+    expect(issues.map(i => [i.code, i.location])).toEqual([['SCAN_PATH_UNREADABLE', undefined]]);
+    expect(issues[0]?.message).toContain('.: listing was refused with EACCES');
   });
 });

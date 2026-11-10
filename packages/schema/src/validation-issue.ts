@@ -18,6 +18,7 @@
  * |------------|--------------------------------------------------------------|---------|
  * | `location` | **The file you would open to fix this**, as a project-relative POSIX path | `packages/cli/SKILL.md` |
  * | `line`     | 1-based line within `location`                               | `24` |
+ * | `column`   | 1-based column within `line`                                 | `7` |
  * | `field`    | Dotted pointer INSIDE that document                          | `frontmatter.description` |
  * | `link`     | A link href / target the issue is about (never the file to open) | `./refs/missing.md` |
  *
@@ -40,6 +41,7 @@ import path from 'node:path';
 import { z } from 'zod';
 
 import { escapeRegExpLiteral } from './regexp-escape.js';
+import { presenceImplies } from './schema-utils.js';
 import {
   CODE_REGISTRY,
   IssueSeveritySchema,
@@ -137,37 +139,119 @@ export function isCustomCheckCode(code: string): code is CustomCheckCode {
 /** Full code space: registry codes (overridable) + info codes + structural/non-overridable codes + user checks. */
 export type ValidationIssueCode = IssueCode | InfoCode | NonOverridableCode | CustomCheckCode;
 
+/** A drive prefix (`C:` or `C:foo`), which is never project-relative however POSIX it looks. */
+const DRIVE_PREFIX = /^[A-Za-z]:/;
+
+/** What a `location` may be — the one spelling every refusal of one states. */
+export const PROJECT_LOCATION_RULE
+  = String.raw`a non-empty relative path with / separators inside the root, in its normalised form (not the root itself; no leading / or \, no drive, no UNC path, no climbing .., no . or .. segment and no doubled /, and no \ where \ is the platform separator)`;
+
 /**
- * Host-independent absolute-path test, mirroring `isAbsoluteAnyPlatform` in
- * `@vibe-agent-toolkit/utils`. Inlined because `schema` is the bottom of
- * the dependency graph and carries no workspace runtime dependencies; a
- * Windows-absolute `location` must be rejected even when validating on POSIX CI.
+ * 🔑 THE one definition of "absolute" for a path a report states relative to its root, the same on
+ * every host: POSIX-rooted, Windows-rooted (leading `\`, UNC, `C:\x`), or drive-prefixed (`C:x`).
  */
-function isAbsoluteAnyPlatform(p: string): boolean {
-  return path.posix.isAbsolute(p) || path.win32.isAbsolute(p);
+export function isAbsoluteOnAnyHost(value: string): boolean {
+  return path.posix.isAbsolute(value) || path.win32.isAbsolute(value) || DRIVE_PREFIX.test(value);
 }
 
-export const ValidationIssueSchema = z.object({
+/**
+ * 🔑 **THE location predicate** — the one answer to "may this string be an
+ * issue's `location`?". {@link ValidationIssueSchema} refines with it and the
+ * resources projection's `findingLocation` (a row value → a finding's location)
+ * calls it, so a value one lane emits is a value the other parses. Inlined here,
+ * not in `utils`, because `schema` is the bottom of the dependency graph.
+ *
+ * A location is non-empty, not absolute ({@link isAbsoluteOnAnyHost}: no
+ * leading `/` or `\`, no UNC path, no drive — checked on every host, so a
+ * Windows-absolute value is refused on POSIX CI too), not the root itself (a
+ * value that normalises to `.`), and does not climb out of the root. A
+ * backslash anywhere else is refused only where it IS the platform separator
+ * (win32): there it is a separator a producer forgot to convert, while on
+ * POSIX it is a legal filename character and the projection holds real files
+ * named with one (`docs/x\y.md` is one file). A POSIX filename that STARTS with
+ * `\` is refused on every host all the same, because a published location must
+ * be valid on every host that reads the report: its producer omits the location
+ * and names the path in the message ({@link anchoredAt}).
+ *
+ * @param value - A candidate location
+ * @returns Whether it may be a `location`
+ */
+export function isProjectLocation(value: string): boolean {
+  if (value.length === 0 || isAbsoluteOnAnyHost(value)) return false;
+  if (path.sep === '\\' && value.includes('\\')) return false;
+  const normalized = path.posix.normalize(value);
+  // `posix.normalize` keeps a trailing slash: `./` and `docs/../` normalise to `./`, still the root.
+  return normalized !== '.' && normalized !== './' && normalized !== '..' && !normalized.startsWith('../');
+}
+
+/**
+ * A value as an issue's `location`, when it can be one — the one way a producer turns a computed
+ * path into a location. It must pass {@link isProjectLocation}, and is emitted in its normalised
+ * POSIX form: `./docs/a.md` as `docs/a.md`, `docs/../README.md` as `README.md`.
+ *
+ * @param value - A candidate location, e.g. what `issueLocation` returned
+ * @returns The location, or undefined when the value is no location (empty, absolute, on a drive,
+ *   the root itself, climbing out of the root): the caller then omits `location` and names the
+ *   path in its message
+ */
+export function projectLocationOf(value: string): string | undefined {
+  return isProjectLocation(value) ? path.posix.normalize(value) : undefined;
+}
+
+/**
+ * An issue's `message` and `location` for a computed path: the location when the path can be one
+ * ({@link projectLocationOf}), else no location and the path named in the message — so a producer
+ * whose subject lies outside its root (another drive, `../shared-docs`, the root itself) degrades
+ * instead of emitting a finding the published schema refuses.
+ *
+ * @param message - The issue's message
+ * @param relative - The subject's path relative to the location root (`issueLocation`'s answer)
+ * @returns The fields to spread into the issue
+ */
+export function anchoredAt(message: string, relative: string): { message: string; location?: string } {
+  const location = projectLocationOf(relative);
+  return location === undefined ? { message: `${message} (${relative})` } : { message, location };
+}
+
+/** A location as published: one in the normalised form {@link projectLocationOf} emits, one spelling per file. */
+function isPublishedLocation(value: string): boolean {
+  return projectLocationOf(value) === value;
+}
+
+/** A `column` is within a `line`: an issue carrying one carries the other. `at` is the issue's path in the parsed value. */
+export function columnRequiresLine(
+  issue: { line?: number | undefined; column?: number | undefined },
+  context: z.RefinementCtx,
+  at: readonly (string | number)[],
+): void {
+  if (issue.column !== undefined && issue.line === undefined) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'column is within a line, so an issue carrying it must carry line', path: [...at, 'column'] });
+  }
+}
+
+/** {@link columnRequiresLine} as JSON Schema, which `zod-to-json-schema` would drop. */
+export const COLUMN_REQUIRES_LINE_JSON_RULE: Readonly<Record<string, unknown>> = presenceImplies('column', { required: ['line'] });
+
+/** {@link ValidationIssueSchema} without its refinement, to derive finding schemas from; never validate with it. */
+export const ValidationIssueObjectSchema = z.object({
   code: z.string(),                                  // full code space; narrowed in the TS type below
   severity: IssueSeveritySchema,
   message: z.string(),
   location: z.string()
-    .refine((v) => !isAbsoluteAnyPlatform(v), {
-      message: 'location must be a project-relative POSIX path, not an absolute path',
-    })
-    // Win32 only: there a backslash is a separator a producer forgot to convert;
-    // on POSIX it is a legal filename character (`docs/x\y.md` is one file).
-    .refine((v) => path.sep !== '\\' || !v.includes('\\'), {
-      message: 'location must use forward slashes, not backslashes',
-    })
+    .refine(isPublishedLocation, { message: `location must be ${PROJECT_LOCATION_RULE}` })
+    .describe(`The file to open to fix this: ${PROJECT_LOCATION_RULE}`)
     .optional(),
   line: z.number().int().positive().optional(),
+  column: z.number().int().positive().optional(),
   field: z.string().optional(),
   link: z.string().optional(),
   fix: z.string().optional(),
   reference: z.string().optional(),
   suggestion: z.string().optional(),
 }).strict();
+
+/** One validation issue: {@link ValidationIssueObjectSchema}, refined so a `column` carries its `line`. */
+export const ValidationIssueSchema = ValidationIssueObjectSchema.superRefine((issue, context) => columnRequiresLine(issue, context, []));
 
 // Schema validates structure; the TS type narrows code+severity and uses exact
 // optional properties (no `| undefined`) to match how validators construct issues
@@ -180,6 +264,8 @@ export interface ValidationIssue {
   location?: string;
   /** 1-based line within {@link ValidationIssue.location}. */
   line?: number;
+  /** 1-based column within {@link ValidationIssue.line}. */
+  column?: number;
   /** Dotted pointer inside the document at {@link ValidationIssue.location}, e.g. `frontmatter.description`. */
   field?: string;
   /** A link href or target the issue concerns — not the file to open. */
@@ -189,14 +275,20 @@ export interface ValidationIssue {
   suggestion?: string;
 }
 
-/** Build an issue from the registry, filling severity/fix/reference from the code entry. */
+/**
+ * Build an issue from the registry, filling severity/fix/reference from the code entry. A
+ * `location` that cannot be one is routed through {@link anchoredAt}: omitted, its path named in
+ * the message.
+ */
 export function createRegistryIssue(
   code: IssueCode,
   message: string,
-  extras: Partial<Pick<ValidationIssue, 'location' | 'line' | 'field' | 'link' | 'suggestion'>> = {},
+  extras: Partial<Pick<ValidationIssue, 'location' | 'line' | 'column' | 'field' | 'link' | 'suggestion'>> = {},
 ): ValidationIssue {
   const e = CODE_REGISTRY[code];
-  return { code, severity: e.defaultSeverity, message, fix: e.fix, reference: e.reference, ...extras };
+  const { location, ...rest } = extras;
+  const anchored = location === undefined ? { message } : anchoredAt(message, location);
+  return { code, severity: e.defaultSeverity, fix: e.fix, reference: e.reference, ...rest, ...anchored };
 }
 
 /**

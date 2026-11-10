@@ -141,6 +141,19 @@ describe('summarizeOkfBundles', () => {
     expect(OKF_VALIDATE_REPORT_SCHEMA.safeParse(summarize([report('knowledge', [finding('error')])])).success).toBe(true);
   });
 
+  // A bundle declared at `../shared-docs` lies outside the project: its documents have no location
+  // the published schema accepts, so the finding names its path instead of killing the report.
+  it('publishes a finding in a bundle outside the project with no location, its path in the message', () => {
+    const outside: CheckedOkfBundle = { ...report('shared', [finding('error')]), root: safePath.resolve(PROJECT_ROOT, '../shared-docs') };
+    const summary = summarize([outside]);
+
+    expect(OKF_VALIDATE_REPORT_SCHEMA.safeParse(summary).success).toBe(true);
+    expect(exitCodeForReport(summary)).toBe(1);
+    expect(summary.findings).toHaveLength(1);
+    expect(summary.findings[0]).not.toHaveProperty('location');
+    expect(summary.findings[0]?.message).toContain('shared-docs/concepts/a.md');
+  });
+
   it('names the bundle root itself for the root-unreadable finding', () => {
     const summary = summarize([report('knowledge', [finding('error', '.')])]);
 

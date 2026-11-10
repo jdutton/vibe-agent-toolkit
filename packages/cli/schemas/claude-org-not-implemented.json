@@ -65,9 +65,14 @@
                     "type": "string"
                   },
                   "location": {
-                    "type": "string"
+                    "type": "string",
+                    "description": "The file to open to fix this: a non-empty relative path with / separators inside the root, in its normalised form (not the root itself; no leading / or \\, no drive, no UNC path, no climbing .., no . or .. segment and no doubled /, and no \\ where \\ is the platform separator)"
                   },
                   "line": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  },
+                  "column": {
                     "type": "integer",
                     "exclusiveMinimum": 0
                   },
@@ -93,10 +98,6 @@
                       "warning",
                       "info"
                     ]
-                  },
-                  "column": {
-                    "type": "integer",
-                    "exclusiveMinimum": 0
                   }
                 },
                 "required": [
@@ -104,7 +105,25 @@
                   "message",
                   "severity"
                 ],
-                "additionalProperties": false
+                "additionalProperties": false,
+                "allOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "not": {
+                          "required": [
+                            "column"
+                          ]
+                        }
+                      },
+                      {
+                        "required": [
+                          "line"
+                        ]
+                      }
+                    ]
+                  }
+                ]
               },
               "maxItems": 0
             },
@@ -199,6 +218,7 @@
                     "RUN_INCOMPLETE",
                     "INTERNAL_ERROR",
                     "RESOURCE_CHECK_BROKEN",
+                    "RESOURCE_CHECK_EXAMINED_NOTHING",
                     "ARD_NOT_CONFIGURED",
                     "ARD_DERIVATION_FAILED"
                   ]

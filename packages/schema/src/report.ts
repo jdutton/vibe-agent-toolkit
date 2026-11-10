@@ -43,9 +43,8 @@
  * (`location` is the project-relative POSIX path of the file you would open,
  * `line` beside it, `field` for a pointer inside the document, `link` for an
  * href the finding is about) with `ignore` removed from the severity — an
- * ignored issue was suppressed by the adopter and is never published — and
- * `column` added, because the one lane that had it (`resources validate`)
- * carried it in a private shape. {@link reportSchema} takes the finding schema
+ * ignored issue was suppressed by the adopter and is never published.
+ * {@link reportSchema} takes the finding schema
  * as a REQUIRED parameter so a verb whose findings carry more (a subject, a
  * harness) passes a narrowed one rather than widening this one.
  */
@@ -54,7 +53,15 @@ import { z } from 'zod';
 
 import { SeveritySchema, type Severity } from './severity.js';
 import { RefusalCodeSchema, type RefusalCode } from './validation-codes.js';
-import { countBySeverity, resultStatus, ValidationIssueSchema, type SeverityCounts, type ValidationIssue } from './validation-issue.js';
+import {
+  anchoredAt,
+  columnRequiresLine,
+  countBySeverity,
+  resultStatus,
+  ValidationIssueObjectSchema,
+  type SeverityCounts,
+  type ValidationIssue,
+} from './validation-issue.js';
 
 export const REPORT_STATUSES = ['ok', 'findings', 'error'] as const;
 
@@ -63,18 +70,14 @@ export const ReportStatusSchema = z.enum(REPORT_STATUSES);
 /** `ok`: examined, nothing found. `findings`: at least one. `error`: did not finish. */
 export type ReportStatus = z.infer<typeof ReportStatusSchema>;
 
-export const FindingSchema = ValidationIssueSchema
+export const FindingSchema = ValidationIssueObjectSchema
   .omit({ severity: true })
-  .extend({
-    severity: SeveritySchema,
-    /** 1-based column within `line`, when the producer knows it. */
-    column: z.number().int().positive().optional(),
-  })
+  .extend({ severity: SeveritySchema })
   .strict();
 
 /**
  * One published finding. Structurally a {@link ValidationIssue} whose severity
- * is never `ignore`, plus an optional `column`.
+ * is never `ignore`.
  *
  * `code` is a plain string here, not the registry union: a report's findings
  * span every code space a lane draws on — the shipped registry, an adopter's
@@ -85,8 +88,6 @@ export const FindingSchema = ValidationIssueSchema
 export interface Finding extends Omit<ValidationIssue, 'severity' | 'code'> {
   code: string;
   severity: Severity;
-  /** 1-based column within {@link ValidationIssue.line}, when known. */
-  column?: number;
 }
 
 export const SeverityCountsSchema = z.object({
@@ -166,8 +167,11 @@ export interface ErrorReport<T> extends ReportBase {
 /** The envelope, discriminated on `status`. */
 export type Report<T> = OkReport<T> | FindingsReport<T> | ErrorReport<T>;
 
-/** The one shape a finding schema must produce: a severity the summary can count. */
-type FindingZodSchema = z.ZodType<Pick<Finding, 'severity'>>;
+/** A finding's coordinates as zod parses them: an optional key may hold `undefined`. */
+type FindingCoordinates = Parameters<typeof columnRequiresLine>[0];
+
+/** The one shape a finding schema must produce: a severity the summary can count, and the coordinates a column needs. */
+type FindingZodSchema = z.ZodType<Pick<Finding, 'severity'> & FindingCoordinates>;
 
 /**
  * Every published finding's severity, counted, must equal `summary`.
@@ -229,7 +233,15 @@ export function reportSchema<T extends z.ZodTypeAny, F extends FindingZodSchema>
       error: ReportErrorSchema,
       data: dataSchema.nullable(),
     }).strict(),
-  ]).superRefine(summaryMatchesFindings);
+  ]).superRefine((report, context) => {
+    summaryMatchesFindings(report, context);
+    findingsCarryTheirLine(report.findings, context);
+  });
+}
+
+/** {@link columnRequiresLine} on every finding: a verb's finding schema is an object, which cannot carry it. */
+function findingsCarryTheirLine(findings: readonly FindingCoordinates[], context: z.RefinementCtx): void {
+  for (const [index, finding] of findings.entries()) columnRequiresLine(finding, context, ['findings', index]);
 }
 
 /**
@@ -276,13 +288,20 @@ export const REPORT_ENVELOPE_KEYS = ['status', 'examined', 'findings', 'summary'
  * `validation.allow` decision, and a report that listed a silenced finding
  * under any other name would resurrect it.
  *
+ * 🔑 Every `location` is routed through {@link anchoredAt} — the publication boundary of every
+ * producer that builds an issue as a literal rather than through `createRegistryIssue`: one whose
+ * subject lies outside its root (another drive, a climb, the root itself) is published with no
+ * location and its path named in the message, never as a finding the schema refuses.
+ *
  * @param issues - A validator's issues, severities already resolved
  * @returns The same issues minus the ignored ones, typed as findings
  */
 export function toFindings(issues: readonly ValidationIssue[]): Finding[] {
   const findings: Finding[] = [];
   for (const issue of issues) {
-    if (issue.severity !== 'ignore') findings.push(issue as Finding);
+    if (issue.severity === 'ignore') continue;
+    const { location, message, ...rest } = issue;
+    findings.push({ ...rest, ...(location === undefined ? { message } : anchoredAt(message, location)) } as Finding);
   }
   return findings;
 }

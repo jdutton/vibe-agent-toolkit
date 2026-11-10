@@ -44,6 +44,7 @@ import {
 } from '../../src/commands/resources/check.js';
 import { createLogger, type Logger } from '../../src/utils/logger.js';
 import type { AskProjection } from '../../src/utils/projection-query.js';
+import { NO_COLUMNS } from '../helpers/no-columns.js';
 
 /**
  * A logger that captures what reached stderr, and nothing else.
@@ -102,7 +103,7 @@ const INERT_PROJECTION = {
     pattern: 'gone/**',
     literalPrefix: 'gone',
     witnessPath: null,
-    status: 'inert',
+    status: 'inert' as const,
   }],
   resourceRealizations: [{ resourceId: 'res-rules', path: RULES_FILE, contentKey: null }],
   resourceTags: [],
@@ -341,6 +342,8 @@ function runWithClock(options: {
   builtins?: readonly BoundBuiltinCheck[];
 }): ReturnType<typeof runProjectChecks> {
   return runProjectChecks({
+    warn: () => undefined,
+    columnsOf: NO_COLUMNS,
     builtins: options.builtins ?? NO_BUILTINS,
     checks: options.checks,
     only: options.only,
@@ -414,6 +417,8 @@ describe('runProjectChecks — the loop', () => {
     // `no-orphans` vanishes. Nothing in the spawned system suite could tell,
     // because no spawned case ever ran two checks.
     const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: TWO_VIOLATED,
       only: undefined,
@@ -432,6 +437,8 @@ describe('runProjectChecks — the loop', () => {
     const ask = vi.fn<AskProjection>(() => []);
 
     const { costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: TWO_VIOLATED, only: undefined, ask, validation: undefined,
       membersEnumerated: POPULATED,
@@ -443,6 +450,8 @@ describe('runProjectChecks — the loop', () => {
 
   it('runs only the named check under `only`, and counts only that one', () => {
     const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: TWO_VIOLATED, only: SECOND, ask: ASK_ONE_ROW, validation: undefined,
       membersEnumerated: POPULATED,
@@ -454,6 +463,8 @@ describe('runProjectChecks — the loop', () => {
 
   it('reports a broken check as a finding, never as a skip', () => {
     const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: BROKEN_CHECK,
       only: undefined,
@@ -480,6 +491,8 @@ describe('runProjectChecks — the loop', () => {
     };
 
     const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: TWO_VIOLATED, only: undefined, ask, validation: undefined,
       membersEnumerated: POPULATED,
@@ -583,6 +596,8 @@ describe('a check severity override does not silence a BROKEN check', () => {
     // broken finding) and this reds: `resolveIssueSeverity` drops it and the
     // command exits 0 over a check that asserted nothing.
     const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: BROKEN_CHECK,
       only: undefined,
@@ -603,6 +618,8 @@ describe('a check severity override does not silence a BROKEN check', () => {
     // it drops it below the exit threshold — so the gate returns 0 and the
     // document says `status: warning` over a check that ran nothing.
     const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: BROKEN_CHECK,
       only: undefined,
@@ -619,6 +636,8 @@ describe('a check severity override does not silence a BROKEN check', () => {
     // The other direction, or the guard above would be satisfied by a fix that
     // simply stopped honouring overrides — which is a documented feature.
     const { issues } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: { soft: { description: 'prefer no markdown', sql: 'SELECT path FROM a' } },
       only: undefined,
@@ -1015,6 +1034,8 @@ describe('a corpus of zero members is a failure, not a pass', () => {
     // 🔑 The reproduced case. Delete the guard and this reds: `issues` is empty,
     // `status` is `success`, and the command exits 0 having asserted nothing.
     const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: TWO_VIOLATED,
       only: undefined,
@@ -1038,6 +1059,8 @@ describe('a corpus of zero members is a failure, not a pass', () => {
     // over nothing", and `RESOURCE_CHECK_BROKEN` is refused as a severity key by
     // `ValidationConfigSchema` precisely so no config line can reach it.
     const { issues } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: TWO_VIOLATED,
       only: undefined,
@@ -1055,6 +1078,8 @@ describe('a corpus of zero members is a failure, not a pass', () => {
     // "empty population" is not actionable. The count, the consequence, and the
     // three things that actually empty an enumeration are.
     const { issues } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: TWO_VIOLATED, only: undefined, ask: ASK_NO_ROWS, validation: undefined,
       membersEnumerated: 0,
@@ -1073,6 +1098,8 @@ describe('a corpus of zero members is a failure, not a pass', () => {
     // corpus — drop the `> 0` test, compare the wrong number — and this reds:
     // an ordinary clean run starts reporting an error.
     const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: TWO_VIOLATED, only: undefined, ask: ASK_NO_ROWS, validation: undefined,
       membersEnumerated: 1,
@@ -1091,6 +1118,8 @@ describe('a corpus of zero members is a failure, not a pass', () => {
     // operator gets two reports about one situation and the less specific of the
     // two sends them to inspect a `.gitignore` that is not the problem.
     const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: {}, only: undefined, ask: ASK_NO_ROWS, validation: undefined,
       membersEnumerated: 0,
@@ -1106,6 +1135,8 @@ describe('a corpus of zero members is a failure, not a pass', () => {
     // is exactly what the reproduced repository declared. The run-integrity
     // report is the headline; the derived findings are noise until it is fixed.
     const { issues } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: TWO_VIOLATED, only: undefined, ask: ASK_ONE_ROW, validation: undefined,
       membersEnumerated: 0,
@@ -1255,6 +1286,8 @@ function progressOf(options: {
 }): Timeline {
   const seen: Timeline = [];
   runProjectChecks({
+    warn: () => undefined,
+    columnsOf: NO_COLUMNS,
     builtins: options.builtins ?? NO_BUILTINS,
     checks: options.checks,
     only: undefined,
@@ -1298,9 +1331,13 @@ describe('runProjectChecks — progress emitted for an outside observer', () => 
     expect(entries).toStrictEqual([
       { kind: 'start', name: FIRST },
       { kind: 'asked', sql: FIRST_SQL },
+      // 🔑 After the statement and BEFORE its cost: the rows are being turned into findings, and
+      // a kill here must read as that, not as a statement that would not return.
+      { kind: 'converting', name: FIRST, durationMs: 1, rows: 3 },
       { kind: 'check', name: FIRST, durationMs: 1, rows: 3 },
       { kind: 'start', name: SECOND },
       { kind: 'asked', sql: SECOND_SQL },
+      { kind: 'converting', name: SECOND, durationMs: 1, rows: 7 },
       { kind: 'check', name: SECOND, durationMs: 1, rows: 7 },
       // 🔑 Emitted HERE — by the loop's own caller, before severities are
       // resolved — and not by `runOutcome` after this function has returned.
@@ -1320,7 +1357,8 @@ describe('runProjectChecks — progress emitted for an outside observer', () => 
     expect(entries).toStrictEqual([
       { kind: 'start', name: 'broken' },
       { kind: 'asked', sql: 'SELECT contentHash FROM blobs' },
-      { kind: 'check', name: 'broken', durationMs: 1, broken: true },
+      // 🔑 With its refusal as published, so a run killed later rebuilds it word for word.
+      { kind: 'check', name: 'broken', durationMs: 1, broken: true, refusal: { message: expect.stringContaining('"broken" could not run') } },
       // Filed even when every rule broke: "no statement is running any more" is
       // true however the statements ended, and the phase after it still costs.
       { kind: 'checks-complete' },
@@ -1333,6 +1371,8 @@ describe('runProjectChecks — progress emitted for an outside observer', () => 
     // waiting to disagree.
     const seen: ProgressEntry[] = [];
     const { costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: TWO_VIOLATED,
       only: undefined,
@@ -1353,6 +1393,8 @@ describe('runProjectChecks — progress emitted for an outside observer', () => 
     // `--budget 0` and the in-process lane pass no sink. A loop that required
     // one would turn the documented escape hatch into a crash.
     const { costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
       builtins: NO_BUILTINS,
       checks: TWO_VIOLATED, only: undefined, ask: ASK_DISTINCT_ROWS, validation: undefined,
       membersEnumerated: POPULATED,
@@ -1385,6 +1427,8 @@ describe('the built-in check set runs without any config', () => {
     // are the same input here. Move the default set into the config object and
     // this reds — the whole point of the invariant.
     const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
       builtins: bindBuiltinChecks(INERT_PROJECTION),
       checks: {},
       only: undefined,
@@ -1404,6 +1448,8 @@ describe('the built-in check set runs without any config', () => {
 
   it('runs the built-ins BEFORE the declared checks, and prices both', () => {
     const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
       builtins: bindBuiltinChecks(INERT_PROJECTION),
       checks: TWO_VIOLATED,
       only: undefined,
@@ -1425,6 +1471,8 @@ describe('the built-in check set runs without any config', () => {
 
   it('selects a built-in by name under `only`, exactly like a declared check', () => {
     const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
       builtins: bindBuiltinChecks(INERT_PROJECTION),
       checks: TWO_VIOLATED,
       only: INERT_CHECK_NAME,
@@ -1443,6 +1491,8 @@ describe('the built-in check set runs without any config', () => {
     // every other code VAT emits accepts — and it is what the code's own entry
     // in docs/validation-codes.md tells an adopter to write.
     const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
       builtins: bindBuiltinChecks(INERT_PROJECTION),
       checks: {},
       only: undefined,
@@ -1464,6 +1514,8 @@ describe('the built-in check set runs without any config', () => {
     // ignores "can I enforce this?" — which is the shipped defect
     // `resolveIssueSeverity` exists to prevent, here on a new lane.
     const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
       builtins: bindBuiltinChecks(INERT_PROJECTION),
       checks: {},
       only: undefined,
@@ -1480,6 +1532,8 @@ describe('the built-in check set runs without any config', () => {
     // 🪤 A defect in VAT's own predicate must fail the gate on the same terms a
     // broken statement does. The arm is shared, which is the point of one loop.
     const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
       builtins: [{ name: 'exploding', run: EXPLODING_PREDICATE }],
       checks: {},
       only: undefined,
@@ -1500,6 +1554,8 @@ describe('the built-in check set runs without any config', () => {
     // reader whose config declares nothing finds a rule they never wrote and
     // cannot tell a shipped default from a stale declaration.
     const { issues, costs } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
       builtins: bindBuiltinChecks(INERT_PROJECTION),
       checks: TWO_VIOLATED,
       only: undefined,
@@ -1525,31 +1581,13 @@ describe('the built-in check set runs without any config', () => {
     expect(parsed.success ? [] : parsed.error.issues).toEqual([]);
   });
 
-  it('runs BOTH when a declared check shadows a built-in\'s name', () => {
-    // 📌 Decided, not overlooked: one name can denote two rules, both run, and
-    // `builtin` is what tells the entries apart. Refusing the collision would be
-    // a new breaking config error for a situation that is not unsafe.
-    const { costs } = runProjectChecks({
-      builtins: bindBuiltinChecks(INERT_PROJECTION),
-      checks: { [INERT_CHECK_NAME]: { description: 'mine', sql: FIRST_SQL } },
-      only: INERT_CHECK_NAME,
-      ask: ASK_DISTINCT_ROWS,
-      validation: undefined,
-      membersEnumerated: POPULATED,
-      now: fakeClock(1),
-    });
-
-    expect(costs).toStrictEqual([
-      { name: INERT_CHECK_NAME, durationMs: 1, rows: 1, builtin: true },
-      { name: INERT_CHECK_NAME, durationMs: 1, rows: ROWS_BY_SQL[FIRST_SQL] },
-    ]);
-  });
-
   it('announces a built-in to the progress log like any other unit', () => {
     // A run killed inside a built-in must still name it. The loop is shared, so
     // this is a guard on the sharing rather than on a second emitter.
     const seen: ProgressEntry[] = [];
     runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
       builtins: bindBuiltinChecks(INERT_PROJECTION),
       checks: {},
       only: undefined,
@@ -1569,5 +1607,148 @@ describe('the built-in check set runs without any config', () => {
       { kind: 'check', name: LINK_CHECK_NAME, durationMs: 1, rows: 0, builtin: true },
       { kind: 'checks-complete' },
     ]);
+  });
+});
+
+/** A check whose rows carry the reserved `severity` column. */
+const GRADED = 'graded';
+const GRADED_SQL = 'SELECT path, severity FROM graded';
+const GRADED_CHECKS = {
+  [GRADED]: { description: 'graded rows', sql: GRADED_SQL },
+  [SECOND]: { description: 'No orphan skills', sql: SECOND_SQL },
+} as const;
+
+/**
+ * An `ask` that answers each statement with the rows a case names, and refuses any other.
+ *
+ * @param bySql - The rows each statement selects
+ * @returns The fake
+ */
+function askRows(bySql: Readonly<Record<string, readonly Record<string, unknown>[]>>): AskProjection {
+  return (sql) => {
+    const rows = bySql[sql];
+    if (rows === undefined) throw new Error(`This fake declares no rows for: ${sql}`);
+    return rows;
+  };
+}
+
+/** `graded` selects three rows, the third with an unknown severity; `no-orphans` selects one. */
+const ASK_BAD_SEVERITY = askRows({
+  [GRADED_SQL]: [{ path: 'a.md' }, { path: 'b.md' }, { path: 'c.md', finding_severity: 'high' }],
+  [SECOND_SQL]: [{ path: 'd.md' }],
+});
+
+/**
+ * Run {@link GRADED_CHECKS} with one row graded `rowSeverity` and an override on the check's code.
+ *
+ * @param rowSeverity - The `finding_severity` column of the one row
+ * @param override - The adopter's override for `CUSTOM:graded`
+ * @returns The resolved issues
+ */
+function gradedWithOverride(rowSeverity: string, override: 'error' | 'warning' | 'info' | 'ignore'): ReturnType<typeof runProjectChecks>['issues'] {
+  return runProjectChecks({
+    warn: () => undefined,
+    columnsOf: NO_COLUMNS,
+    builtins: NO_BUILTINS,
+    checks: { [GRADED]: GRADED_CHECKS[GRADED] },
+    only: undefined,
+    ask: askRows({ [GRADED_SQL]: [{ path: 'a.md', finding_severity: rowSeverity }] }),
+    validation: { severity: { [`CUSTOM:${GRADED}`]: override } },
+    membersEnumerated: POPULATED,
+  }).issues;
+}
+
+describe('runProjectChecks — a row the check cannot interpret', () => {
+  it('reports the check BROKEN with the rows it selected, and still runs the next one', () => {
+    const { issues, costs } = runWithClock({ checks: GRADED_CHECKS, ask: ASK_BAD_SEVERITY });
+
+    // 🔑 `rows` PRESENT beside `broken`: the statement completed, the rows could not be read.
+    expect(costs).toStrictEqual([
+      { name: GRADED, durationMs: 1, rows: 3, broken: true },
+      { name: SECOND, durationMs: 1, rows: 1 },
+    ]);
+    expect(issues.map((issue) => issue.code)).toStrictEqual(['RESOURCE_CHECK_BROKEN', SECOND_CODE]);
+    expect(issues[0]?.severity).toBe('error');
+    expect(issues[0]?.message).toContain(
+      'The check "graded" ran and selected 3 rows, but row 3\'s finding_severity = "high" is not one of error | warning | info, so none of its rows were reported.',
+    );
+  });
+
+  it('is not silenced by an override on the check, as no RESOURCE_CHECK_BROKEN is', () => {
+    const { issues } = runProjectChecks({
+      warn: () => undefined,
+      columnsOf: NO_COLUMNS,
+      builtins: NO_BUILTINS,
+      checks: GRADED_CHECKS,
+      only: undefined,
+      ask: ASK_BAD_SEVERITY,
+      validation: { severity: { [`CUSTOM:${GRADED}`]: 'ignore' } },
+      membersEnumerated: POPULATED,
+    });
+
+    expect(issues[0]).toMatchObject({ code: 'RESOURCE_CHECK_BROKEN', severity: 'error' });
+  });
+
+  it('publishes a schema-valid document with the broken check counted', () => {
+    const { payload, checks } = documentFor({ checks: GRADED_CHECKS, ask: ASK_BAD_SEVERITY });
+
+    expect(CHECK_REPORT_SCHEMA.safeParse(payload).success).toBe(true);
+    expect(checks[0]).toStrictEqual({ name: GRADED, durationSecs: expect.any(Number), rows: 3, broken: true });
+  });
+});
+
+describe('runProjectChecks — a row severity, and the adopter override over it', () => {
+  it('reports each row at its own severity', () => {
+    const { issues } = runWithClock({
+      checks: { [GRADED]: GRADED_CHECKS[GRADED] },
+      ask: askRows({ [GRADED_SQL]: [{ path: 'a.md', finding_severity: 'warning' }, { path: 'b.md', finding_severity: null }] }),
+    });
+
+    expect(issues.map((issue) => issue.severity)).toStrictEqual(['warning', 'error']);
+  });
+
+  it.each([
+    ['raises a row graded warning', 'warning', 'error', ['error']],
+    ['lowers a row graded error', 'error', 'warning', ['warning']],
+    ['drops a row under ignore', 'error', 'ignore', []],
+  ] as const)('the override WINS: it %s', (_label, rowSeverity, override, expected) => {
+    expect(gradedWithOverride(rowSeverity, override).map((issue) => issue.severity)).toStrictEqual(expected);
+  });
+});
+
+describe('runProjectChecks — a near miss of a reserved column name', () => {
+  it('warns ONCE per check, naming the column and the reserved name it nearly is', () => {
+    const warnings: string[] = [];
+    runProjectChecks({
+      columnsOf: () => ['path', 'Finding_Severity'],
+      builtins: NO_BUILTINS,
+      checks: { [GRADED]: GRADED_CHECKS[GRADED] },
+      only: undefined,
+      ask: askRows({ [GRADED_SQL]: [{ path: 'a.md', Finding_Severity: 'warning' }, { path: 'b.md', Finding_Severity: 'info' }] }),
+      validation: undefined,
+      membersEnumerated: POPULATED,
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('"graded"');
+    expect(warnings[0]).toContain('"Finding_Severity"');
+    expect(warnings[0]).toContain('"finding_severity"');
+  });
+
+  it('says nothing when the reserved names are spelled exactly', () => {
+    const warnings: string[] = [];
+    runProjectChecks({
+      columnsOf: NO_COLUMNS,
+      builtins: NO_BUILTINS,
+      checks: { [GRADED]: GRADED_CHECKS[GRADED] },
+      only: undefined,
+      ask: askRows({ [GRADED_SQL]: [{ path: 'a.md', finding_severity: 'warning', finding_line: 2, severity: 'x', line: 0 }] }),
+      validation: undefined,
+      membersEnumerated: POPULATED,
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings).toStrictEqual([]);
   });
 });

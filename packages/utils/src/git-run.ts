@@ -61,6 +61,7 @@ import { constants } from 'node:buffer';
 
 import { executeGitCommand } from '@vibe-validate/git';
 
+import { isNoSuchEntryError } from './errors/errno-table.js';
 import { decodeTextContent } from './text-content.js';
 
 /**
@@ -319,4 +320,16 @@ export function runGitOrThrow(args: readonly string[], options: GitRunOptions = 
   const label = args[0] ?? '<no args>';
   const detail = result.stderr || `exit ${String(result.status)}`;
   throw new Error(`git ${label} failed: ${detail}`);
+}
+
+/**
+ * Whether the git executable is absent from PATH — the one cause a "not inside a
+ * readable git repository" answer must not hide, since its repair is to install
+ * git, not to fix the repository.
+ *
+ * @returns `true` exactly when spawning `git --version` failed with ENOENT
+ */
+export function gitIsMissing(): boolean {
+  const { error } = runGit(['--version'], { ambient: true });
+  return error !== undefined && isNoSuchEntryError(error);
 }

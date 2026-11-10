@@ -878,7 +878,17 @@
                       "warning",
                       "info"
                     ],
-                    "description": "How a violation is reported. Defaults to `error` — the safe direction, since a check whose author did not think about severity is still an assertion they wanted enforced. An adopter can override it per code through resources.validation.severity, including to `ignore`."
+                    "description": "How a violation is reported; a row whose `finding_severity` column holds `error`, `warning` or `info` overrides it for that row. Defaults to `error` — the safe direction, since a check whose author did not think about severity is still an assertion they wanted enforced. An adopter can override it per code through resources.validation.severity, including to `ignore`."
+                  },
+                  "examined": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "A second read-only SQL statement over the same projection that returns ONE count — exactly one row with one column holding a non-negative integer, as SELECT COUNT(*) returns — of what this check ranged over, e.g. `SELECT COUNT(*) FROM resource_realizations WHERE path LIKE 'skills/%'` for a check about skills. Any other result is RESOURCE_CHECK_BROKEN with a `reason` naming what came back. The violations statement cannot reveal its own denominator: zero violations over a thousand files and zero violations over nothing are the same answer. Declared, the count is published on the check's `checks[]` entry as `examined`, and a count of 0 is refused as RESOURCE_CHECK_EXAMINED_NOTHING (error, not overridable) unless `allowEmpty: true`. Held to every rule `sql` is (it must begin with SELECT, WITH or VALUES; one statement), timed and charged to this check, and a failure to run it is RESOURCE_CHECK_BROKEN."
+                  },
+                  "allowEmpty": {
+                    "type": "boolean",
+                    "const": true,
+                    "description": "Declare that an `examined` count of 0 is a legitimate answer for this check — a rule about a directory that may not exist yet. The run then passes over zero and publishes `examined: 0` beside `allowEmpty: true`, so the exemption is visible in every report. Only valid with `examined`: without one there is no count for it to excuse, and the config is refused. Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead."
                   }
                 },
                 "required": [
@@ -886,9 +896,36 @@
                   "sql"
                 ],
                 "additionalProperties": false,
-                "description": "A SQL assertion over the resource projection"
+                "description": "A SQL assertion over the resource projection",
+                "allOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "not": {
+                          "required": [
+                            "allowEmpty"
+                          ]
+                        }
+                      },
+                      {
+                        "required": [
+                          "examined"
+                        ]
+                      }
+                    ]
+                  }
+                ]
               },
-              "description": "Named SQL assertions over the resource projection, run by `vat resources check`. Each key becomes a CUSTOM:<name> validation code."
+              "description": "Named SQL assertions over the resource projection, run by `vat resources check`. Each key becomes a CUSTOM:<name> validation code. A key may not be a built-in check's name.",
+              "propertyNames": {
+                "not": {
+                  "enum": [
+                    "claude-rule-glob-inert",
+                    "claude-rule-frontmatter-invalid",
+                    "claude-rule-link-unchecked"
+                  ]
+                }
+              }
             }
           },
           "additionalProperties": false,

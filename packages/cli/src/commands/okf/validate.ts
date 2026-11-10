@@ -17,14 +17,13 @@ import {
   type OkfBundleReport,
   type OkfFinding,
 } from '@vibe-agent-toolkit/resources';
-import { buildReport, withDurationMs, type Finding } from '@vibe-agent-toolkit/schema';
+import { anchoredAt, buildReport, withDurationMs, type Finding } from '@vibe-agent-toolkit/schema';
 import { findConfigFile, issueLocation, mapConcurrentFailingInOrder, safePath } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, findingsGoToStderr, NOTHING_FINISHED, type FinishedWork } from '../../utils/document-writer.js';
 import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger } from '../../utils/logger.js';
-import { relativeLocationOrUndefined } from '../../utils/relativize-paths.js';
 
 import type { OkfValidateData, OkfValidateReport } from './validate-schema.js';
 
@@ -109,15 +108,12 @@ const NO_BUNDLES_NOTICE =
  */
 function toFinding(finding: OkfFinding, root: string, projectRoot: string): Finding {
   const document = safePath.join(root, finding.document);
-  // A bundle root on another drive than the project (an absolute or package
-  // root) has no project-relative spelling: the finding names the document in
-  // its message and carries no `location`, rather than killing the document.
-  const location = relativeLocationOrUndefined(issueLocation(document, projectRoot));
+  // A bundle outside the project (`../shared-docs`, another drive) has no location: `anchoredAt`
+  // names the document in the message and carries no `location`, rather than killing the document.
   return {
     code: finding.code,
     severity: finding.severity,
-    message: location === undefined ? `${finding.message} (${document})` : finding.message,
-    ...(location === undefined ? {} : { location }),
+    ...anchoredAt(finding.message, issueLocation(document, projectRoot)),
     ...(finding.link === undefined ? {} : { link: finding.link }),
     ...(finding.line === undefined ? {} : { line: finding.line }),
   };

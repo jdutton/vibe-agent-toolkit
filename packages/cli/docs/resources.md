@@ -248,6 +248,68 @@ behind RFC-3986-compliant leading-`/` resolution.
 
 **Purpose:** Ask this tree's resource projection one read-only SQL question.
 
+**Options:**
+- `--param <value>` - A value bound to the next `?` placeholder (repeatable, in order)
+- `--base <ref>` - The commit `changed_files` compares this tree with (below)
+- `--format <format>` - `yaml` (default) or `json`
+- `--debug` - Enable debug logging
+
+**Derived relations** — computed for the run, and only when the statement names one:
+
+| Relation | Columns | Needs |
+|---|---|---|
+| `edges`, `edge_resolutions`, `lens_contexts` | the resolved link graph | — |
+| `claude_context_chains`, `claude_context_loads` | what Claude Code loads at each working location | — |
+| `changed_files` | `path`, `status` (`added` \| `modified` \| `deleted` \| `renamed` \| `type-changed`), `oldPath`, `similarity` | `--base <ref>` |
+
+`changed_files` lists what THIS CHANGE touched: the working tree (staged or not) plus untracked,
+non-ignored files, snapshotted as one git tree (the snapshot the projection itself takes) and
+diffed once against the merge base of `--base` and `HEAD` (`git merge-base --all <ref> HEAD`) —
+GitHub's "files changed", so a branch behind its base never lists what the base moved since. Paths
+are kept under the project root, relative to it. Because both sides of every move are in the
+snapshot, a move is `renamed` whether or not it was `git add`ed; a copy is `added`; a file removed
+from the index but unchanged on disk (`git rm --cached`) is no row. A rename across the root's
+boundary is seen from inside: renamed in is `added`, renamed out is `deleted`. A submodule, or a
+nested repository with a commit, is one row naming its directory, listed when the commit it records
+moved; its files are its own. A conflicted file mid-merge is listed as it stands on disk, conflict
+markers and all — the snapshot is the working tree. A file on disk marked assume-unchanged or
+skip-worktree refuses the relation, naming it and the flag to clear (`git update-index
+--no-assume-unchanged` / `--no-skip-worktree`): git would hide an edit to it. A statement reading it is refused with the fix —
+never answered with an empty relation — and the refusal code says whose fault it is:
+
+| Cause | Fault (`kind`) | Code |
+|---|---|---|
+| no `--base` | `base` | `USAGE_INVALID` |
+| a ref that names no commit | `base` | `USAGE_INVALID` |
+| a ref that shares no history with `HEAD` in a full history (no merge base) | `base` | `USAGE_INVALID` |
+| a ref with more than one merge base with `HEAD` (a criss-cross history: pass one of them) | `base` | `USAGE_INVALID` |
+| git not found on `PATH` | `git-failed` | `BACKEND_UNAVAILABLE` |
+| git out of time, or more output than VAT reads (compare against a nearer base) | `git-failed` | `BACKEND_UNAVAILABLE` |
+| a snapshot that fails for a cause git does not state, or whose second attempt times out | `git-failed` | `BACKEND_UNAVAILABLE` |
+| not inside a git working tree (a bare repository and a directory inside `.git` included) | `repository` | `INPUT_UNREADABLE` |
+| no commits yet, or a git that cannot resolve `HEAD` | `repository` | `INPUT_UNREADABLE` |
+| a shallow clone cut off before the base and `HEAD` meet (no merge base, shallow) | `repository` | `INPUT_UNREADABLE` |
+| a shallow clone whose history may hide a nearer merge base (`fetch-depth: 0`, or `git fetch --deepen=<n>`) | `repository` | `INPUT_UNREADABLE` |
+| a partial clone missing blobs the diff needs (`git fetch --refetch`) | `repository` | `INPUT_UNREADABLE` |
+| a snapshot git refuses, its `fatal:`/`error:` quoted (a nested repository with no commit, an object it cannot write, a clean filter that fails) | `repository` | `INPUT_UNREADABLE` |
+| an untracked file outside a sparse checkout's definition (add it to the definition, remove it, or ignore it) | `repository` | `INPUT_UNREADABLE` |
+| a directory under the root git cannot list (fix its permissions, or ignore it) | `repository` | `INPUT_UNREADABLE` |
+| a file under the root git cannot read | `repository` | `INPUT_UNREADABLE` |
+| a file on disk marked assume-unchanged or skip-worktree (`git update-index --no-assume-unchanged` / `--no-skip-worktree`) | `repository` | `INPUT_UNREADABLE` |
+| a filesystem that folds case whose `core.ignorecase` is not true (`git config core.ignorecase true`) | `repository` | `INPUT_UNREADABLE` |
+| on such a filesystem, a changed path, or a rename's old side wherever its new side lands, spelling the root in another case or Unicode normalisation | `repository` | `INPUT_UNREADABLE` |
+| a path under the root that is not UTF-8 | `repository` | `INPUT_UNREADABLE` |
+| a listing git returned that VAT cannot read | `repository` | `INPUT_UNREADABLE` |
+
+A statement defining a CTE named `changed_files` is refused as `USAGE_INVALID` too, with or without
+`--base`. So is one that uses `changed_files` as a bare alias with no `AS` (`FROM resources
+changed_files`) and is run without `--base`: a known over-match — the relation is detected by name,
+so spell the alias with `AS`, or name it something else. The exit code does not tell these apart — the code does: `vat
+resources query` exits 2 with it as `error.code`; `vat resources check` and `vat validate` report
+`RESOURCE_CHECK_BROKEN` (exit 1) on the checks that read it, with it as the finding's
+`reason.refusal`. `--base` is read only when a statement names `changed_files`; otherwise it is
+accepted and unused.
+
 **Output:** the shared report envelope on stdout — YAML, or JSON with
 `--format json` (schema: `packages/cli/schemas/resources-query.json`):
 - `examined` — resources in the population the statement ran over (the tracked
@@ -265,8 +327,9 @@ behind RFC-3986-compliant leading-`/` resolution.
 - `0` - The statement ran over a populated tree — zero rows is an answer, `ok`
 - `1` - The population was empty (`RESOURCE_CHECK_BROKEN`)
 - `2` - The statement was refused (`USAGE_INVALID`: not a query, a second
-  statement, an unbound `?`, a name the projection lacks), `[path]` names no
-  directory, or the crawl failed
+  statement, an unbound `?`, a name the projection lacks), a derived relation it reads could not
+  be evaluated (under that relation's own refusal code, above), `[path]` names no directory, or
+  the crawl failed
 
 **Example:**
 ```bash
@@ -280,7 +343,12 @@ vat resources query 'SELECT path FROM resource_realizations LIMIT 5' --format js
 
 **Options:**
 - `[path]` - Project root to check (defaults to the current directory)
-- `--check <name>` - Run only this check, by its built-in name or its key in `resources.checks`
+- `--check <name>` - Run only this check, by its built-in name or its key in `resources.checks`.
+  A lens is evaluated only when the selected statements name one of its relations, so this also
+  skips the cost of lenses only other checks read
+- `--base <ref>` - The ref whose merge base with HEAD `changed_files` compares this tree with. A check reading
+  `changed_files` without it fails as `RESOURCE_CHECK_BROKEN` naming the fix; other checks are
+  unaffected. `vat validate --base <ref>` forwards it to its checks phase
 - `-v, --verbose` - Print warning and info findings on stderr too; errors are always printed there
 - `--budget <seconds>` - Kill the run if it goes this long without completing a unit of work
   (default 300; `0` removes the bound)
@@ -289,9 +357,120 @@ vat resources query 'SELECT path FROM resource_realizations LIMIT 5' --format js
 
 **Output:** the shared report envelope on stdout (schema: `packages/cli/schemas/resources-check.json`);
 each finding also as a `location:line: severity: message [code]` line on stderr.
+- Every finding one check produced — its violations, and `RESOURCE_CHECK_BROKEN` or
+  `RESOURCE_CHECK_EXAMINED_NOTHING` about it — carries `check: <name>`. A finding about the whole
+  run (an empty corpus, no check ran, an interrupted run) carries none.
+- A declared check's violation carries `evidence`: the row's columns other than the reserved ones,
+  in the order SQLite returned them, values as SQLite returned them (a BLOB, or a non-finite number
+  such as `Infinity`, as the text the message shows — so JSON and YAML agree). `path` is evidence
+  only when its text is no location (below); then the finding has no `location`.
+- A check whose rows could not be read carries `reason` on its `RESOURCE_CHECK_BROKEN` finding:
+  `{column, value, row, allowed}` — the reserved column, its value as `evidence` renders it, the
+  first bad row (1-based), and what the column may hold. One whose `examined` statement returned no
+  count carries `{statement: "examined", rows, columns?, value?, allowed}` (below). A statement that
+  failed carries none — unless it read a derived relation that refused (`changed_files` without
+  `--base`, say): then `{refusal: <code>}`, the code `vat resources query` exits with for it.
+- Two cross-field rules hold for every finding: `evidence` only on one that names its `check`, and
+  `reason` only on `RESOURCE_CHECK_BROKEN`. The document is re-parsed against its schema before it
+  is published, and the committed JSON Schemas (`resources-check.json`, `orchestrator.json`) carry
+  both rules — and every finding's own, a `column` only beside its `line` — as
+  `anyOf: [{not: {required: [key]}}, <rule>]` (`presenceImplies`), never as `if`/`then`, so a
+  consumer validating against them refuses what the run refuses.
+- `data.checks[]` — one entry per check that ran: `name`, `durationSecs`, `rows`, and `broken`,
+  `builtin`, `examined`, `allowEmpty`, `examinedNothing: true` and `nearMisses` when they apply
+  (below).
 
 **Exit Codes:** `0` no error-severity check violated, `1` one was (or nothing was checked:
 `RESOURCE_CHECK_BROKEN`), `2` the run could not do its job.
+
+**Reserved row columns.** A check's statement selects its violations, one finding per row. Four
+column names are reserved and matched exactly (case-sensitive); every other column is evidence, in
+the message and in the finding's `evidence`:
+
+- `path` — text, the finding's `location` when it is one: a non-empty relative path with `/`
+  separators inside the root (not the root itself, no leading `/` or `\`, no drive, no UNC path,
+  no `..` that climbs out, and no other `\` on Windows, where it is the separator), published in
+  its normalised form (`docs/../a.md` is the location `a.md`). Text that is no location — absolute, climbing, empty — gives
+  a finding with no location and keeps the value as `evidence.path`: the projection's own relations
+  hold such values (`roots.path` is absolute; `realization_conditions.path` is `../`-prefixed for an
+  outside-root closure reference), and a check over them reports at its declared severity. A value
+  that is not text (a number, a BLOB) fails the check as `RESOURCE_CHECK_BROKEN`. NULL or absent:
+  no location and no evidence entry.
+- `finding_severity` — that row's severity, exactly `error`, `warning` or `info`; NULL or absent
+  means the check's declared severity. A `resources.validation.severity` override on
+  `CUSTOM:<name>` replaces the severity of EVERY row of that check — raising a row's `info` as
+  well as lowering its `error`.
+- `finding_line` — the finding's 1-based line; NULL or absent omits it.
+- `finding_column` — the finding's 1-based column within `finding_line`; it requires a line.
+
+Any other value in a reserved column fails the check as `RESOURCE_CHECK_BROKEN` — "ran and selected
+N rows, but row R's finding_severity = "high" is not one of error | warning | info" — and its entry in
+`data.checks` carries `broken: true` with `rows`. A column that nearly names a reserved one — the
+same once case and every `_` are removed (`Finding_Line`, `findingSeverity`), or the bare
+`severity`, `line` or `column` — gets one stderr warning per check, stays evidence, and is listed
+as the statement spelled it in that check's `data.checks` entry as `nearMisses: ["Finding_Line"]`
+(absent when there is none). It is read from the statement's columns before the statement runs, so
+it is listed however many rows the check selected — none included — whether or not they could be
+read, and on a check that threw as it ran.
+
+No projection relation has a column named `finding_severity`, `finding_line` or `finding_column`,
+so `SELECT *` or a join never sets one: a table's own `severity`, `line` or `column` is evidence
+(and, as a near miss, warned about).
+Place a finding by aliasing deliberately — `SELECT r.path, b.line AS finding_line FROM …`.
+`path` is different: many relations carry one, and a `SELECT *` over a join of two of them returns
+two `path` columns, of which a row keeps only one — the rightmost. Name the `path` you mean
+(`SELECT r.path, …`), or the finding is placed at whichever relation the join listed last.
+
+A finding with a `line` but no usable `path` prints its coordinates after the message, never as a
+prefix: `error: <message> [<code>] (line 3, column 5)`.
+
+**What a check examined.** Zero rows is a check's pass, so zero violations over a thousand files and
+zero violations over nothing read the same — and the run's `examined` counts the whole population,
+which one check whose `WHERE` matches nothing hides behind. A check states its own denominator with
+`examined`, a second statement returning ONE count of what the check ranged over — exactly one row
+with one column holding a non-negative integer, as `SELECT COUNT(*)` returns:
+
+```yaml
+resources:
+  checks:
+    skills-have-owners:
+      description: Every skill names an owner
+      sql: SELECT path FROM resource_realizations WHERE path LIKE 'skills/%' AND path NOT IN (…)
+      examined: SELECT COUNT(*) FROM resource_realizations WHERE path LIKE 'skills/%'
+      # allowEmpty: true   # only if zero skills is a legitimate answer
+```
+
+- Any other result — no row, several rows or columns, NULL, text, a negative or a fraction — fails
+  the check as `RESOURCE_CHECK_BROKEN` with `reason: {statement: "examined", rows, columns?,
+  value?, allowed}`: how many rows came back, how many columns when one did, and the value when
+  exactly one cell did. Its entry carries `broken: true` with `rows` and no `examined`.
+
+- Its count is published on the check's `data.checks` entry as `examined`. The key is present
+  exactly when the check declares `examined` and that statement completed — absent on a check that
+  declares none (and on every built-in), absent rather than `0` when it did not finish.
+- `examined: 0` fails the run as `RESOURCE_CHECK_EXAMINED_NOTHING` (error, exit 1, not overridable),
+  naming the check in its `check`; the check's own violations are still reported beside it. The
+  check's entry then carries `examinedNothing: true` — present exactly when that finding is, so
+  `jq '.data.checks[] | select(.examinedNothing)'` lists the same checks the findings name.
+- `allowEmpty: true` declares that zero is legitimate: no finding, and every entry of that check
+  publishes `allowEmpty: true` whatever it counted, so the exemption is visible in every report.
+  `allowEmpty` without `examined` is refused when the config loads.
+- The examined statement follows every rule `sql` does, names derived relations the same way, is
+  timed into the check's `durationSecs`, and is bounded by `--budget` like any statement. If it
+  fails, the check is `RESOURCE_CHECK_BROKEN`, its entry carries `broken: true` with `rows` and no
+  `examined`, and none of its rows are reported.
+- A run killed by `--budget` (or dying) after a check completed broken still publishes that check's
+  `RESOURCE_CHECK_BROKEN` as a completed run does — message, `check` and `reason`. One killed
+  during its examined statement is `broken` with `rows`, but its `durationSecs` covers only the
+  violations statement (the unfinished one cannot be charged) and its message says the run stopped.
+- A check that did not run at all is absent from `data.checks` (or `broken` without `rows`), so
+  "examined 0" and "not run" never look alike.
+- ⚠️ `examined` is optional, so a check that declares none can pass over an empty population and
+  nothing refuses it. Declare it on every check; a consumer that needs the guarantee can require an
+  `examined` key on each `data.checks` entry that is neither `builtin` nor `broken`.
+
+The same applies when the checks run as the `checks` phase of `vat validate`: its findings are
+these findings, `check` and `evidence` included, and the phase's `data.checks` is this list.
 
 ## Configuration
 

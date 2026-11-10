@@ -85,3 +85,11 @@ export function toJsonSchema(schema: ZodSchema, options?: JsonSchemaOptions): ob
 
   return jsonSchema;
 }
+
+/**
+ * "An instance carrying `key` must also satisfy `schema`" — the one JSON Schema spelling of a
+ * cross-field rule. Not `if`/`then`: an object with a `then` key is a thenable (Sonar S7739).
+ */
+export function presenceImplies(key: string, schema: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  return { anyOf: [{ not: { required: [key] } }, schema] };
+}

@@ -33,6 +33,11 @@ import { gitAddAll, initTestGitRepo } from '../test-helpers.js';
 vi.mock('@vibe-agent-toolkit/projection-sqlite', async () =>
   (await import('../projection-store-test-doubles.js')).backend.moduleExports());
 
+/** The tree hash a snapshot answered, or undefined when git could not answer. */
+function hashOf(outcome: ReturnType<typeof gitTreeSnapshot>): string | undefined {
+  return outcome.ok ? outcome.hash : undefined;
+}
+
 const {
   CACHE_ENV,
   openPopulationCache,
@@ -102,7 +107,7 @@ describe('openPopulationCache', () => {
     // failure that says nothing about the subject.
     const snapshot = gitTreeSnapshot({ cwd: repoRoot });
     expect(snapshot).not.toBeNull();
-    expect(opened?.cache.treeHash).toBe(snapshot?.hash);
+    expect(opened?.cache.treeHash).toBe(snapshot.ok ? snapshot.hash : undefined);
     expect(opened?.cache.store).toBeDefined();
 
     // `close` must reach the store, not merely resolve. A closer that forgot to
@@ -326,7 +331,7 @@ describe('withPopulationCache', () => {
       const verdicts = await withPopulationCache({ root: repoRoot }, async (cache) => {
         const before = cache?.treeUnchanged();
         writeFileSync(arrivedLate, '# moved\n', 'utf-8');
-        return { before, after: cache?.treeUnchanged(), memo: gitTreeSnapshot({ cwd: repoRoot })?.hash, key: cache?.treeHash };
+        return { before, after: cache?.treeUnchanged(), memo: hashOf(gitTreeSnapshot({ cwd: repoRoot })), key: cache?.treeHash };
       });
 
       expect(verdicts.before).toBe(true);
@@ -362,7 +367,7 @@ describe('withPopulationCache', () => {
         writeFileSync(arrivedLate, '# late\n', 'utf-8');
         // Stands in for `GitCrawlSource.#snapshotMembers`.
         const crawled = gitTreeSnapshot({ cwd: repoRoot });
-        return { treeHash: cache?.treeHash, crawledHash: crawled?.hash };
+        return { treeHash: cache?.treeHash, crawledHash: hashOf(crawled) };
       });
 
       expect(keyed.treeHash).toMatch(/^[0-9a-f]{40}$/);
@@ -371,7 +376,7 @@ describe('withPopulationCache', () => {
       // And the edit was REAL: outside the scope the hash moves. Without this
       // the assertion above would also hold for a mutation git never noticed,
       // which is the shape that makes a race test pass while proving nothing.
-      expect(gitTreeSnapshot({ cwd: repoRoot })?.hash).not.toBe(keyed.treeHash);
+      expect(hashOf(gitTreeSnapshot({ cwd: repoRoot }))).not.toBe(keyed.treeHash);
     } finally {
       // The fixture repo is shared by every test in this file, so the edit is
       // undone rather than left for whatever runs next.

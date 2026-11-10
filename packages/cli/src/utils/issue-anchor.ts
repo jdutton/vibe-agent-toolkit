@@ -22,26 +22,44 @@ import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
  * - `(frontmatter.description)` — field with no known file (should not happen
  *   for skills-lane issues, but the renderer must not silently drop it)
  *
+ * 🪤 The coordinates join the anchor ONLY when there is a file to put them on.
+ * Without one, `:3` or `3:5` in front of the severity reads as a file named
+ * `3`; {@link formatIssuePosition} says them after the message instead.
+ *
  * Returns `undefined` when the issue carries no anchor at all, so callers can
  * skip the line entirely rather than print an empty label.
  */
 export function formatIssueAnchor(
-  issue: Pick<ValidationIssue, 'location' | 'line' | 'field'> & { readonly column?: number | undefined },
+  issue: Pick<ValidationIssue, 'location' | 'line' | 'column' | 'field'>,
 ): string | undefined {
-  const hasLocation = issue.location !== undefined && issue.location !== '';
+  const hasLocation = namesFile(issue);
   const hasField = issue.field !== undefined && issue.field !== '';
   if (!hasLocation && !hasField) {
     return undefined;
   }
 
   let anchor = hasLocation ? (issue.location as string) : '';
-  if (issue.line !== undefined) {
+  if (hasLocation && issue.line !== undefined) {
     anchor = `${anchor}:${String(issue.line)}`;
-    // A published `Finding` may carry the column within that line.
     if (issue.column !== undefined) anchor = `${anchor}:${String(issue.column)}`;
   }
   if (hasField) {
     anchor = anchor === '' ? `(${issue.field as string})` : `${anchor} (${issue.field as string})`;
   }
   return anchor;
+}
+
+/**
+ * The coordinates of an issue that names NO file, as ` (line 3, column 5)`, or
+ * `''` — the other half of {@link formatIssueAnchor}, so each prints exactly once.
+ */
+export function formatIssuePosition(issue: Pick<ValidationIssue, 'location' | 'line' | 'column'>): string {
+  if (namesFile(issue) || issue.line === undefined) return '';
+  const column = issue.column === undefined ? '' : `, column ${String(issue.column)}`;
+  return ` (line ${String(issue.line)}${column})`;
+}
+
+/** Whether the issue names a file — the one thing its coordinates can be put in front of. */
+function namesFile(issue: Pick<ValidationIssue, 'location'>): boolean {
+  return issue.location !== undefined && issue.location !== '';
 }

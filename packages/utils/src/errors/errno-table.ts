@@ -337,6 +337,11 @@ export function isTimedOutError(error: unknown): boolean {
   return hasAnyErrno(error, ['ETIMEDOUT']);
 }
 
+/** `ENOBUFS`: a child process wrote more than the `maxBuffer` its caller allowed, and was stopped. */
+export function isOutputOverrunError(error: unknown): boolean {
+  return hasAnyErrno(error, ['ENOBUFS']);
+}
+
 /** `EAGAIN`: a non-blocking descriptor (stdout on a full pipe) would block. */
 export function isWouldBlockError(error: unknown): boolean {
   return hasAnyErrno(error, ['EAGAIN']);

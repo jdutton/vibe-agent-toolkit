@@ -266,7 +266,7 @@ describe('openPopulationCache', () => {
     expect(backend.openCalls.count).toBe(0);
   });
 
-  it('declines out loud on stderr when the selector is set but the root is not inside a readable git repository', async () => {
+  it('declines out loud on stderr when the selector is set but git gives no answer for the root', async () => {
     process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
     const stderr = captureStderr();
     try {
@@ -282,7 +282,7 @@ describe('openPopulationCache', () => {
       const said = stderr.written.join('');
       expect(said).toContain(PROJECTION_STORE_ENV);
       expect(said).toContain(outsideAnyRepo);
-      expect(said).toContain('not inside a readable git repository');
+      expect(said).toContain('it is not a git repository, or git could not read it');
       // Names the consequence too, so the reader knows the run is still correct
       // and only slower — this is an explanation, not an error.
       expect(said).toContain('without a cache');
@@ -291,6 +291,23 @@ describe('openPopulationCache', () => {
       // cannot be keyed, which is why the git call is placed before the import.
       expect(backend.openCalls.count).toBe(0);
     } finally {
+      stderr.restore();
+    }
+  });
+
+  it('names a git missing from PATH instead of blaming the repository', async () => {
+    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
+    const savedPath = process.env['PATH'];
+    const stderr = captureStderr();
+    try {
+      process.env['PATH'] = '';
+      const opened = await openPopulationCache({ root: outsideAnyRepo });
+      expect(opened).toBeUndefined();
+      const said = stderr.written.join('');
+      expect(said).toContain('git was not found on PATH');
+      expect(said).not.toContain('it is not a git repository, or git could not read it');
+    } finally {
+      process.env['PATH'] = savedPath;
       stderr.restore();
     }
   });
@@ -429,6 +446,6 @@ describe('the cannot-key notice — once per command run', () => {
       stderr.restore();
     }
 
-    expect(stderr.written.join('').split('not inside a readable git repository')).toHaveLength(3);
+    expect(stderr.written.join('').split('it is not a git repository, or git could not read it')).toHaveLength(3);
   });
 });

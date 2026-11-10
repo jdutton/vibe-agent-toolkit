@@ -8,9 +8,17 @@ import { AGENT_PACKAGE_ROOT_MISSING_CODE } from '@vibe-agent-toolkit/agent-skill
 import { ApiRequestError, ApiTransportError, OrgApiClient } from '@vibe-agent-toolkit/claude-marketplace';
 import { LinkAuthConfigError, OKF_UNKNOWN_BUNDLE_CODE, okfBundleRuns, PROJECTION_STATEMENT_REFUSED_CODE } from '@vibe-agent-toolkit/resources';
 import { ExitCode, type ErrorReport } from '@vibe-agent-toolkit/schema';
-import { COPY_LINK_ESCAPES_SOURCE_CODE, CopyLinkEscapesSourceError, DIRECTORY_WALK_REVISITED_CODE, DirectoryWalkRevisitedError, RAG_DATABASE_UNREADABLE_CODE, RAG_INDEX_EMPTY_CODE, classifyFsFault, FS_FAULT_CODE, TEMP_DIR_OUTSIDE_TMPDIR_CODE, TREE_DEST_HOLDS_SOURCE_CODE, TREE_DEST_NOT_OWNED_CODE, TREE_DEST_OCCUPIED_CODE, TREE_DESTS_OVERLAP_CODE, TREE_ROLLBACK_INCOMPLETE_CODE, TREE_SOURCE_HOLDS_DEST_CODE, VatError } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, COPY_LINK_ESCAPES_SOURCE_CODE, CopyLinkEscapesSourceError, DIRECTORY_WALK_REVISITED_CODE, DirectoryWalkRevisitedError, RAG_DATABASE_UNREADABLE_CODE, RAG_INDEX_EMPTY_CODE, classifyFsFault, FS_FAULT_CODE, TEMP_DIR_OUTSIDE_TMPDIR_CODE, TREE_DEST_HOLDS_SOURCE_CODE, TREE_DEST_NOT_OWNED_CODE, TREE_DEST_OCCUPIED_CODE, TREE_DESTS_OVERLAP_CODE, TREE_ROLLBACK_INCOMPLETE_CODE, TREE_SOURCE_HOLDS_DEST_CODE, VatError } from '@vibe-agent-toolkit/utils';
 import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
-import { GIT_SNAPSHOT_UNREADABLE_CODE } from '@vibe-agent-toolkit/utils/git';
+import {
+  GIT_CHANGED_FILES_KIND_BY_CODE,
+  GIT_FAILED_CODE,
+  GIT_NO_ANSWER_CODE,
+  GIT_NOT_FOUND_CODE,
+  GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE,
+  GIT_SNAPSHOT_REFUSED_CODE,
+  GIT_SNAPSHOT_UNREADABLE_CODE,
+} from '@vibe-agent-toolkit/utils/git';
 import { updateYamlIn } from '@vibe-agent-toolkit/utils/yaml';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -18,6 +26,7 @@ import { AgentNameEscapesScopeError } from '../../src/commands/agent/install-pat
 import { PluginSymlinkRefusedError } from '../../src/commands/claude/plugin/tree-copy.js';
 import { parseBudgetSeconds, requireSupervisableFlags } from '../../src/commands/resources/check-supervisor.js';
 import { requireKnownCheck } from '../../src/commands/resources/check.js';
+import { REFUSAL_BY_KIND } from '../../src/utils/changed-files-lens.js';
 import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../src/utils/command-refusal.js';
 import { endWithRefusal, NOTHING_FINISHED } from '../../src/utils/document-writer.js';
 
@@ -72,6 +81,27 @@ describe('refusalCodeOf', () => {
   // One unreadable file in a git repository refuses the whole snapshot: the input, never a VAT defect.
   it('reads a git snapshot refused by an unreadable file as INPUT_UNREADABLE', () => {
     expect(refusalCodeOf(new VatError(GIT_SNAPSHOT_UNREADABLE_CODE, 'secret.txt'))).toBe('INPUT_UNREADABLE');
+  });
+
+  // One cause, one refusal in every lane: a git code thrown (the crawl) and the same cause reported as
+  // `changed_files`' fault kind must publish the same refusal. The codes come from the kind map itself,
+  // whose type requires every `GitNoAnswerCode`, so a seventh code cannot be left out of this test.
+  it.each(Object.entries(GIT_CHANGED_FILES_KIND_BY_CODE))(
+    'publishes git code %s as the refusal its changed_files fault kind (%s) carries',
+    (code, kind) => {
+      expect(refusalCodeOf(new VatError(code, 'git gave no answer'))).toBe(REFUSAL_BY_KIND[kind]);
+    },
+  );
+
+  it('covers all six git codes', () => {
+    expect(Object.keys(GIT_CHANGED_FILES_KIND_BY_CODE).sort(compareCodeUnits)).toStrictEqual([
+      GIT_FAILED_CODE,
+      GIT_NO_ANSWER_CODE,
+      GIT_NOT_FOUND_CODE,
+      GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE,
+      GIT_SNAPSHOT_REFUSED_CODE,
+      GIT_SNAPSHOT_UNREADABLE_CODE,
+    ].sort(compareCodeUnits));
   });
 
   it('reads a plugin symlink no bundle can ship as the input\'s refusal', () => {

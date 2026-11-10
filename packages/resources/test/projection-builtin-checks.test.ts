@@ -22,6 +22,7 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { BUILTIN_CHECK_NAMES } from '../src/projection/builtin-check-names.js';
 import {
   bindBuiltinChecks,
   BUILTIN_CHECKS,
@@ -84,6 +85,8 @@ describe('the built-in check registry', () => {
       'claude-rule-link-unchecked',
     ]);
     for (const check of BUILTIN_CHECKS) expect(check.description.length).toBeGreaterThan(20);
+    // The names the config refuses for a declared check are these, in both directions.
+    expect(BUILTIN_CHECK_NAMES).toStrictEqual(BUILTIN_CHECKS.map((check) => check.name));
   });
 
   it('binds each built-in to one projection, so the runner never sees the rows', () => {

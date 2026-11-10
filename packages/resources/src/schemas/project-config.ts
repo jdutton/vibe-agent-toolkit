@@ -8,6 +8,7 @@ import {
   isArdNameSegment,
   isArdPublisherDomain,
 } from '../ard/entry-schema.js';
+import { BUILTIN_CHECK_NAMES } from '../projection/builtin-check-names.js';
 
 import { LinkAuthConfigSchema } from './link-auth.js';
 import { ReferenceSyntacticFormSchema } from './projection-blobs.js';
@@ -180,6 +181,13 @@ export type CollectionConfig = z.infer<typeof CollectionConfigSchema>;
  *
  * See `projection/sql-checks.ts` for how rows become findings.
  */
+/**
+ * What a check's `examined` statement must return — the ONE statement of that contract. The
+ * config description, the `allowEmpty` refusal, the runtime refusal's `reason.allowed` and the
+ * CLI's help all quote it, so a change to the contract is a change to this line.
+ */
+export const EXAMINED_ALLOWED = 'exactly one row with one column holding a non-negative integer, as SELECT COUNT(*) returns';
+
 export const ResourceCheckSchema = z.object({
   description: z.string().min(1)
     .describe('What this check asserts, in the author\'s own words. REQUIRED: it becomes the finding\'s message, and a check whose intent is only inferable from its SQL is one nobody can review or act on.'),
@@ -187,8 +195,25 @@ export const ResourceCheckSchema = z.object({
     .describe('One read-only SQL statement selecting the VIOLATING rows — zero rows is a pass. It must BEGIN with `SELECT`, `WITH` or `VALUES`; the first significant token decides, and anything else — `ATTACH`, `PRAGMA`, `EXPLAIN`, any write — is refused before it reaches SQLite, because a statement the engine accepts without producing rows cannot be told apart from a check that passed. (`EXPLAIN` is refused even though it is side-effect free: it is a PREFIX, and admitting one would mean deciding safety by looking past the first token.) Each returned row becomes one finding; a selected `path` column anchors that finding to the file. Runs against the same projection `vat resources query` reads, under PRAGMA query_only. A second statement is refused — SQLite would compile only the first and discard the rest without error — but a COMMENT after the terminating semicolon is accepted (`... ;  -- see ADR-14`), which SQL written as a YAML block scalar ends with routinely.'),
   severity: z.enum(['error', 'warning', 'info'])
     .optional()
-    .describe('How a violation is reported. Defaults to `error` — the safe direction, since a check whose author did not think about severity is still an assertion they wanted enforced. An adopter can override it per code through resources.validation.severity, including to `ignore`.'),
-}).strict().describe('A SQL assertion over the resource projection');
+    .describe('How a violation is reported; a row whose `finding_severity` column holds `error`, `warning` or `info` overrides it for that row. Defaults to `error` — the safe direction, since a check whose author did not think about severity is still an assertion they wanted enforced. An adopter can override it per code through resources.validation.severity, including to `ignore`.'),
+  examined: z.string().min(1).optional()
+    .describe(`A second read-only SQL statement over the same projection that returns ONE count — ${EXAMINED_ALLOWED} — of what this check ranged over, e.g. \`SELECT COUNT(*) FROM resource_realizations WHERE path LIKE 'skills/%'\` for a check about skills. Any other result is RESOURCE_CHECK_BROKEN with a \`reason\` naming what came back. The violations statement cannot reveal its own denominator: zero violations over a thousand files and zero violations over nothing are the same answer. Declared, the count is published on the check's \`checks[]\` entry as \`examined\`, and a count of 0 is refused as RESOURCE_CHECK_EXAMINED_NOTHING (error, not overridable) unless \`allowEmpty: true\`. Held to every rule \`sql\` is (it must begin with SELECT, WITH or VALUES; one statement), timed and charged to this check, and a failure to run it is RESOURCE_CHECK_BROKEN.`),
+  allowEmpty: z.literal(true).optional()
+    .describe('Declare that an `examined` count of 0 is a legitimate answer for this check — a rule about a directory that may not exist yet. The run then passes over zero and publishes `examined: 0` beside `allowEmpty: true`, so the exemption is visible in every report. Only valid with `examined`: without one there is no count for it to excuse, and the config is refused. Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead.'),
+}).strict().superRefine((check, context) => {
+  // 🔑 Refused rather than ignored: `allowEmpty` alone reads as protection the
+  // check does not have — nothing is counted, so nothing is ever refused, and
+  // the line would sit in a config looking like a decision someone made.
+  if (check.allowEmpty === true && check.examined === undefined) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['allowEmpty'],
+      message: '`allowEmpty` only excuses an `examined` count of 0, and this check declares no `examined` statement.'
+        + ` Either declare \`examined\` (a statement returning ${EXAMINED_ALLOWED}: the count of what the check`
+        + ' ranges over) or remove `allowEmpty`.',
+    });
+  }
+}).describe('A SQL assertion over the resource projection');
 
 export type ResourceCheck = z.infer<typeof ResourceCheckSchema>;
 
@@ -229,8 +254,18 @@ export const ResourcesConfigSchema = z.object({
     .describe('Validation framework config: severity overrides and per-code allow entries (applied inside ResourceRegistry.validate)'),
   linkAuth: LinkAuthConfigSchema.optional()
     .describe('Authenticated external link resolution config (issue #113 / link-auth engine)'),
-  checks: z.record(z.string(), ResourceCheckSchema).optional()
-    .describe('Named SQL assertions over the resource projection, run by `vat resources check`. Each key becomes a CUSTOM:<name> validation code.'),
+  checks: z.record(z.string(), ResourceCheckSchema).superRefine((checks, context) => {
+    // 🔑 One identity per check: findings, the progress log and cost records are keyed on the name.
+    for (const name of Object.keys(checks).filter((key) => BUILTIN_CHECK_NAMES.includes(key))) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [name],
+        message: `"${name}" is a built-in check's name, and the built-in always runs, so rename this check`
+          + ' (a copy of a built-in\'s sqlTwin needs a name of its own).',
+      });
+    }
+  }).optional()
+    .describe('Named SQL assertions over the resource projection, run by `vat resources check`. Each key becomes a CUSTOM:<name> validation code. A key may not be a built-in check\'s name.'),
 }).strict().describe('Resources section of project configuration');
 
 export type ResourcesConfig = z.infer<typeof ResourcesConfigSchema>;

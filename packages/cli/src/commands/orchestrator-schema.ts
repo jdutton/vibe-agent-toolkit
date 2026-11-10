@@ -31,6 +31,8 @@ import { z } from 'zod';
 
 import type { ExaminedDeclaration } from '../utils/run-integrity.js';
 
+import { CHECK_FINDING_SCHEMA } from './resources/check-schema.js';
+
 /**
  * What `examined` counts for an orchestrator, and the remedy when it is zero.
  *
@@ -75,8 +77,11 @@ export type OrchestratorPhaseEntry = z.infer<typeof PhaseEntrySchema>;
 
 export type OrchestratorData = z.infer<typeof OrchestratorDataSchema>;
 
-/** The document the three orchestrators publish. */
-export const ORCHESTRATOR_REPORT_SCHEMA = reportSchema(OrchestratorDataSchema, FindingSchema);
+/**
+ * The document the three orchestrators publish. 🔑 Its findings use the check finding schema: the
+ * `checks` phase's findings fold in unchanged, `check` and `evidence` included.
+ */
+export const ORCHESTRATOR_REPORT_SCHEMA = reportSchema(OrchestratorDataSchema, CHECK_FINDING_SCHEMA);
 
 /**
  * `vat verify`'s `packaged-content` phase `data`: what the crawl should have

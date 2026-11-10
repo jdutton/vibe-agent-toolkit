@@ -215,3 +215,25 @@ describe('runSkillBuild - the failure message names what THIS run promotes', () 
     expect(lines.join('\n')).toContain('Nothing was written — dist/skills does not exist');
   });
 });
+
+describe('skillsBuildWork - a packaging refusal for a skill outside the root', () => {
+  it('names the source path in the message, since it can be no location', () => {
+    const cwd = safePath.join(safePath.resolve('/'), 'work', 'project');
+    const run: SkillBuildRun = {
+      results: [],
+      runIssues: [],
+      skillsWithErrors: [],
+      failures: [{ name: 'shared', message: 'The packager refused the skill', error: new Error('refused') }],
+      validationFailures: [],
+      outputCommitted: false,
+      residue: [],
+    };
+    const skills = [{ name: 'shared', sourcePath: safePath.join(cwd, '..', 'shared-skills', 'shared', 'SKILL.md') }];
+
+    const { findings } = skillsBuildWork({ cwd, skills, setAside: { inPlace: [], pluginOnly: [] }, dryRun: false, run, setAsideIssues: [] });
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).not.toHaveProperty('location');
+    expect(findings[0]?.message).toContain('(../shared-skills/shared/SKILL.md)');
+  });
+});

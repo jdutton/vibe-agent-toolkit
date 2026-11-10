@@ -8,7 +8,8 @@
  * shown. These are pure: no file system, no clock, no exit.
  */
 
-import { PROJECTION_TABLES, allDerivedSpecs } from '@vibe-agent-toolkit/resources';
+import { PROJECTION_STATEMENT_REFUSED_CODE, PROJECTION_TABLES, allDerivedSpecs } from '@vibe-agent-toolkit/resources';
+import { VatError } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -19,7 +20,13 @@ import {
   buildProjectionQueryReport,
   type ProjectionQueryPayloadInput,
 } from '../../src/commands/resources/query.js';
-import { describeQueryFailure } from '../../src/utils/projection-query.js';
+import { refusalCodeOf } from '../../src/utils/command-refusal.js';
+import { describedFailure, describeQueryFailure, refusedStatement } from '../../src/utils/projection-query.js';
+
+/** Every derived relation absent, as in a run whose statements named none of them. */
+const NONE_EVALUATED: ReadonlySet<string> = new Set(allDerivedSpecs().map((spec) => spec.name));
+/** Nothing absent: the compile probe, which carries every relation. */
+const ALL_PRESENT: ReadonlySet<string> = new Set();
 
 /** A stand-in for whatever a statement selected. Two rows, so a count of 1 cannot pass. */
 const ROWS: readonly Record<string, unknown>[] = [
@@ -182,6 +189,7 @@ describe('the failure message', () => {
     const message = describeQueryFailure(
       'SELECT contentHash FROM blobs',
       'no such column: contentHash',
+      NONE_EVALUATED,
     );
 
     expect(message).toContain('no such column: contentHash');
@@ -192,7 +200,7 @@ describe('the failure message', () => {
   });
 
   it('lists every table when the statement named none of them', () => {
-    const message = describeQueryFailure('SELECT * FROM nope', 'no such table: nope');
+    const message = describeQueryFailure('SELECT * FROM nope', 'no such table: nope', NONE_EVALUATED);
 
     expect(message).toContain('no such table: nope');
     for (const spec of Object.values(PROJECTION_TABLES)) {
@@ -209,7 +217,7 @@ describe('the failure message', () => {
     // engine message is the refusal of an unevaluated relation — not a typo. A
     // listing of "what you could have named" would include the very relation
     // SQLite just said is missing, and read as a contradiction.
-    const message = describeQueryFailure(sql, engine);
+    const message = describeQueryFailure(sql, engine, NONE_EVALUATED);
 
     expect(message).toContain(engine);
     expect(message).toMatch(/edges.*not evaluated for this run/s);
@@ -218,13 +226,76 @@ describe('the failure message', () => {
 
   it('names EVERY derived relation from the registry, not a hand-kept list', () => {
     for (const spec of allDerivedSpecs()) {
-      expect(describeQueryFailure(`SELECT * FROM ${spec.name}`, `no such table: ${spec.name}`))
+      expect(describeQueryFailure(`SELECT * FROM ${spec.name}`, `no such table: ${spec.name}`, NONE_EVALUATED))
         .toContain('not evaluated for this run');
     }
   });
 
+  it('refuses a statement naming a REFUSED relation before it runs, with that lens\'s code and fix', () => {
+    // 🚨 Decided from the relations the statement NAMES, never from the engine's text: SQLite
+    // names only the FIRST missing table, so a typo beside `changed_files` used to hide the
+    // lens's refusal behind "no such table: typo_tbl" and a USAGE_INVALID that was not the fix.
+    const refusals = new Map([['changed_files', { refused: 'Pass --base <ref>.', refusal: 'INPUT_UNREADABLE' as const }]]);
+
+    const error = refusedStatement('SELECT t.x, c.path FROM typo_tbl t, changed_files c', refusals);
+
+    expect(refusalCodeOf(error)).toBe('INPUT_UNREADABLE');
+    expect(error?.message).toContain('could not be evaluated for this run: Pass --base <ref>.');
+    expect(error?.message).not.toContain('Declare this statement');
+  });
+
+  it('refuses nothing a statement does not name: a comment or a literal mentioning the relation is not a read', () => {
+    const refusals = new Map([['changed_files', { refused: 'Pass --base <ref>.', refusal: 'USAGE_INVALID' as const }]]);
+
+    expect(refusedStatement("SELECT 'changed_files' AS x -- changed_files", refusals)).toBeUndefined();
+    expect(refusedStatement('SELECT path FROM resource_realizations', refusals)).toBeUndefined();
+  });
+
+  it.each([
+    'SELECT COUNT(*) AS changed_files FROM resource_realizations',
+    'SELECT COUNT(*) as Changed_Files FROM resource_realizations',
+    'SELECT COUNT(*) AS "changed_files" FROM resource_realizations',
+    'SELECT COUNT(*) AS\n  [changed_files] FROM resource_realizations',
+  ])('refuses nothing for a column alias spelled like the relation: %s', (sql) => {
+    const refusals = new Map([['changed_files', { refused: 'Pass --base <ref>.', refusal: 'USAGE_INVALID' as const }]]);
+
+    expect(refusedStatement(sql, refusals)).toBeUndefined();
+  });
+
+  it.each([
+    ['opening a WITH', 'WITH changed_files AS (SELECT 1 AS path) SELECT path FROM changed_files'],
+    ['RECURSIVE, quoted and with a column list', 'with recursive "Changed_Files"(path) as (select 1) select path from changed_files'],
+    ['after another CTE', 'WITH a AS (SELECT 1), changed_files AS (SELECT 2 AS path) SELECT path FROM changed_files'],
+    ['MATERIALIZED', 'WITH changed_files AS NOT MATERIALIZED (SELECT 1 AS path) SELECT path FROM changed_files'],
+  ])('refuses a CTE named changed_files, %s, as a reserved name — never with the --base remedy', (_what, sql) => {
+    // With or without a base: the name is the relation's, so the CTE either shadows it or trips its refusal.
+    for (const refusals of [new Map(), new Map([['changed_files', { refused: 'Pass --base <ref>.', refusal: 'USAGE_INVALID' as const }]])]) {
+      const error = refusedStatement(sql, refusals);
+
+      expect(refusalCodeOf(error)).toBe('USAGE_INVALID');
+      expect(error?.message).toBe('`changed_files` is a reserved relation name; rename the CTE.');
+    }
+  });
+
+  it('refuses no CTE of another name, nor a statement that only mentions one in a literal', () => {
+    expect(refusedStatement('WITH changes AS (SELECT path FROM resource_realizations) SELECT path FROM changes', new Map())).toBeUndefined();
+    expect(refusedStatement("SELECT 'WITH changed_files AS (' AS x FROM resource_realizations", new Map())).toBeUndefined();
+  });
+
+  it('still refuses a statement that reads the relation beside an alias of the same name', () => {
+    const refusals = new Map([['changed_files', { refused: 'Pass --base <ref>.', refusal: 'USAGE_INVALID' as const }]]);
+
+    expect(refusalCodeOf(refusedStatement('SELECT COUNT(*) AS changed_files FROM changed_files', refusals))).toBe('USAGE_INVALID');
+  });
+
+  it('keeps a statement failure\'s own code and never reads a code out of the engine\'s text', () => {
+    const engine = new VatError(PROJECTION_STATEMENT_REFUSED_CODE, 'no such table: changed_files');
+
+    expect(refusalCodeOf(describedFailure('SELECT path FROM changed_files', engine, ALL_PRESENT))).toBe('USAGE_INVALID');
+  });
+
   it('does not call a missing PROJECTION table unevaluated', () => {
-    expect(describeQueryFailure('SELECT * FROM edgesx', 'no such table: edgesx'))
+    expect(describeQueryFailure('SELECT * FROM edgesx', 'no such table: edgesx', NONE_EVALUATED))
       .not.toContain('not evaluated');
   });
 
@@ -237,6 +308,7 @@ describe('the failure message', () => {
     const write = describeQueryFailure(
       'DELETE FROM blobs',
       'attempt to write a readonly database',
+      NONE_EVALUATED,
     );
 
     expect(write).toBe('attempt to write a readonly database');

@@ -105,7 +105,7 @@ describe('withQueriedProjection preflight', () => {
 
     await expect(
       withQueriedProjection(
-        { root: missingRoot, logger, preflight: [unbound(TYPO_STATEMENT)] },
+        { root: missingRoot, logger, preflight: [unbound(TYPO_STATEMENT)], base: undefined },
         () => undefined,
       ),
     ).rejects.toThrow(/contentKey/);

@@ -66,6 +66,12 @@ const { freshGitTreeSnapshot, gitTreeSnapshot, withGitSnapshotCache } = await im
 
 const created: string[] = [];
 
+/** The snapshot an outcome must be; fails the test on a refusal. */
+function answered(outcome: ReturnType<typeof gitTreeSnapshot>): Extract<ReturnType<typeof gitTreeSnapshot>, { ok: true }> {
+  if (!outcome.ok) throw new Error(`expected a snapshot: ${outcome.attempt.stderr}`);
+  return outcome;
+}
+
 /** Written INSIDE a bracket, so a snapshot that contains it is a snapshot taken too late. */
 const LATE_ARRIVAL = 'appeared-mid-bracket.md';
 
@@ -108,7 +114,7 @@ describe('withGitSnapshotCache', () => {
 
     expect(git.calls).toBe(1);
     expect(second).toBe(first);
-    expect(first?.entries.length).toBeGreaterThan(0);
+    expect(answered(first).entries.length).toBeGreaterThan(0);
   });
 
   it('caches nothing outside a bracket', () => {
@@ -119,7 +125,7 @@ describe('withGitSnapshotCache', () => {
 
     expect(git.calls).toBe(2);
     expect(second).not.toBe(first);
-    expect(second?.hash).toBe(first?.hash);
+    expect(answered(second).hash).toBe(answered(first).hash);
   });
 
   it('shares one entry across DIFFERENT cwds that resolve to the same repository root', () => {
@@ -132,7 +138,7 @@ describe('withGitSnapshotCache', () => {
 
     expect(git.calls).toBe(1);
     expect(inner).toBe(outer);
-    expect(inner?.repositoryRoot).toBe(outer?.repositoryRoot);
+    expect(answered(inner).repositoryRoot).toBe(answered(outer).repositoryRoot);
   });
 
   it('keeps separate roots separate inside one bracket', () => {
@@ -145,7 +151,7 @@ describe('withGitSnapshotCache', () => {
     ]);
 
     expect(git.calls).toBe(2);
-    expect(second?.repositoryRoot).not.toBe(first?.repositoryRoot);
+    expect(answered(second).repositoryRoot).not.toBe(answered(first).repositoryRoot);
   });
 
   it('does not let two concurrent brackets share entries', async () => {
@@ -185,12 +191,12 @@ describe('withGitSnapshotCache', () => {
 
     expect(git.calls).toBe(1);
     expect(after).toBe(before);
-    expect(after?.entries.some((e) => e.absolutePath.endsWith(LATE_ARRIVAL))).toBe(false);
+    expect(answered(after).entries.some((e) => e.absolutePath.endsWith(LATE_ARRIVAL))).toBe(false);
 
     // ...and the same edit IS visible to the next call outside the bracket, so
     // the assertion above is about the bracket rather than about git.
     const reread = gitTreeSnapshot({ cwd: root });
-    expect(reread?.entries.some((e) => e.absolutePath.endsWith(LATE_ARRIVAL))).toBe(true);
+    expect(answered(reread).entries.some((e) => e.absolutePath.endsWith(LATE_ARRIVAL))).toBe(true);
   });
 
   it('offers a FRESH snapshot inside a bracket, which is how a caller checks the memo still holds', () => {
@@ -206,7 +212,7 @@ describe('withGitSnapshotCache', () => {
       return [first, freshGitTreeSnapshot({ cwd: root }), gitTreeSnapshot({ cwd: root })];
     });
 
-    expect(fresh?.hash).not.toBe(memoized?.hash);
+    expect(answered(fresh).hash).not.toBe(answered(memoized).hash);
     // The fresh call neither read nor replaced the bracket's answer.
     expect(memoizedAgain).toBe(memoized);
     expect(git.calls).toBe(2);
@@ -228,8 +234,9 @@ describe('withGitSnapshotCache', () => {
       gitTreeSnapshot({ cwd: root }),
     ]);
 
-    expect(first).toBeNull();
-    expect(second).toBeNull();
+    expect(first?.ok).toBe(false);
+    // The memo hands back the very failure the first call took: its diagnostic attempt ran once too.
+    expect(second).toBe(first);
     expect(git.calls).toBe(1);
     expect(warned).toHaveBeenCalledTimes(1);
     warned.mockRestore();

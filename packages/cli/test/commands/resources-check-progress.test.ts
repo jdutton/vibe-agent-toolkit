@@ -98,6 +98,14 @@ describe('parseProgressLog', () => {
     expect(entries).toStrictEqual([]);
   });
 
+  // `examined` is a count, as the published cost record states it: a log can never rebuild one
+  // the completed document's schema would refuse.
+  it.each([['a negative', -1], ['a fractional', 1.5]])('refuses a check line whose examined count is %s number', (_what, examined) => {
+    const line = JSON.stringify({ kind: 'check', name: 'x', durationMs: 1, rows: 0, examined });
+
+    expect(parseProgressLog(`${line}\n`)).toStrictEqual([]);
+  });
+
   it('reads an empty log as no entries', () => {
     expect(parseProgressLog('')).toStrictEqual([]);
   });
