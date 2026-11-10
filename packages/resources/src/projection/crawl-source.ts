@@ -88,6 +88,7 @@ import {
 import {
   gitFindRoot,
   gitLsOthers,
+  gitNoAnswerError,
   gitTreeSnapshot,
   isGitIgnored,
   unreadableSnapshotRefusal,
@@ -623,7 +624,8 @@ export class GitCrawlSource implements CrawlSource {
    * @param admits - The shipped include/exclude decision
    * @returns The admitted entries, and separately the submodule directories
    *   whose contents git declined to describe
-   * @throws When git could not answer at all
+   * @throws When git could not answer at all — `GIT_NOT_FOUND` for a git missing
+   *   from PATH, `GIT_NO_ANSWER` otherwise (see `gitNoAnswerError`)
    */
   #snapshotMembers(admits: (absolutePath: string) => boolean): {
     members: CrawlCandidate[];
@@ -633,10 +635,10 @@ export class GitCrawlSource implements CrawlSource {
     if (snapshot === null) {
       // The common refusal inside a real repository: one file git could not read.
       // It is the input's, and names the file; only a refusal with no such cause
-      // falls through to the uncoded error below.
-      throw unreadableSnapshotRefusal(this.#root) ?? new Error(
-        `git did not answer for "${this.#root}" — it is not a git repository, or git could not read it.`
-        + ' Returning an empty population would be indistinguishable from an empty repository, so this is an error.',
+      // falls through to git's silence, classified: a missing binary, or the tree.
+      throw unreadableSnapshotRefusal(this.#root) ?? gitNoAnswerError(
+        this.#root,
+        'Returning an empty population would be indistinguishable from an empty repository, so this is an error.',
       );
     }
 

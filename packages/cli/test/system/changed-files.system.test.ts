@@ -172,6 +172,26 @@ describe('changed_files and --base, end to end', () => {
       expect(run.data['columns']).toStrictEqual(['path']);
       expect(run.data['rows']).toStrictEqual([]);
     });
+
+    // The crawl meets the missing binary before the lens does. Its silence must be attributed to the
+    // environment (BACKEND_UNAVAILABLE, naming PATH), never to the repository, never INTERNAL_ERROR.
+    it('refuses as BACKEND_UNAVAILABLE naming PATH when git is not on PATH', () => {
+      const gitless = safePath.join(base, 'gitless-path');
+      fs.mkdirSync(gitless, { recursive: true });
+      // Every spelling of the PATH key the ambient environment uses (Windows spells it `Path`).
+      const pathKeys = Object.keys(process.env).filter((key) => key.toUpperCase() === 'PATH');
+      const noGit = Object.fromEntries((pathKeys.length === 0 ? ['PATH'] : pathKeys).map((key) => [key, gitless]));
+
+      const run = vat(branchDir, ['resources', 'query', 'SELECT path, status FROM changed_files', '--base', 'main', '--format', 'json'], {
+        ...env,
+        ...noGit,
+      });
+
+      expect(run.status, run.stderr).toBe(2);
+      expect(run.error?.code).toBe('BACKEND_UNAVAILABLE');
+      expect(run.error?.message).toContain('git was not found on PATH');
+      expect(run.error?.message).not.toContain('not a git repository');
+    });
   });
 
   describe('vat resources check', () => {

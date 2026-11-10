@@ -50,7 +50,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type * as ProjectionSqlite from '@vibe-agent-toolkit/projection-sqlite';
 import type { PopulationCache, ProjectionStore } from '@vibe-agent-toolkit/resources';
 import { parseEnvBoolean } from '@vibe-agent-toolkit/utils';
-import { freshGitTreeSnapshot, gitIsMissing, gitTreeSnapshot, type GitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
+import { freshGitTreeSnapshot, gitNoAnswerFor, gitTreeSnapshot, type GitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 
 import { noticeToOperator, withNoticeLedger } from './operator-notices.js';
 import { isModuleMissing, missingBackendError, type OptionalBackend } from './optional-backend.js';
@@ -246,13 +246,6 @@ export interface OpenedPopulationCache {
  * @param root - The absolute corpus root
  * @returns The snapshot, or `null` when the tree cannot be keyed
  */
-/** Why a root yields no tree key: a git binary missing from PATH, or a root outside any readable repository. */
-function unkeyableBecause(root: string): string {
-  return gitIsMissing()
-    ? `git was not found on PATH (install it, or put it on PATH), so ${root} cannot be read as a git repository`
-    : `${root} is not inside a readable git repository`;
-}
-
 function storeKeyOrNotice(root: string): GitTreeSnapshot | null {
   const snapshot = gitTreeSnapshot({ cwd: root });
   if (snapshot === null) {
@@ -260,7 +253,7 @@ function storeKeyOrNotice(root: string): GitTreeSnapshot | null {
     // see this never wrote the variable.
     noticeToOperator(
       'store',
-      `The projection store is on, but ${unkeyableBecause(root)},`
+      `The projection store is on, but ${gitNoAnswerFor(root).reason},`
       + ' so there is no deterministic key to store a projection under.'
       + ` Populating without a cache. Set ${PROJECTION_STORE_ENV}=${PROJECTION_STORE_OFF} to silence this.`,
       root,

@@ -4,7 +4,7 @@
  *
  * The child reads the same config and keys the same store as the process that spawned it, and its
  * stderr is inherited — so before the rule every notice it printed was a second copy: an unknown
- * config key warned twice per run, the "not inside a readable git repository" store notice twice
+ * config key warned twice per run, the "not a git repository" store notice twice
  * under `vat validate`. Counted on a config-only root (no git), which is the one tree that earns
  * both notices, under every way the checks run: as `vat validate`'s phase, standalone (supervised),
  * and standalone in process (`--budget 0`).
@@ -31,7 +31,7 @@ const scratch = useScratchTmpdir('vat-scratch-checks-notices-');
 /** The config loader's warning for a key VAT has no field for. */
 const UNKNOWN_KEY = 'Ignoring the unknown key(s) and continuing';
 /** The projection store's notice for a tree it cannot key. */
-const UNKEYABLE = 'not inside a readable git repository';
+const UNKEYABLE = 'it is not a git repository, or git could not read it';
 /** What `child-only-tag-stderr.mjs` prefixes each of the checks child's stderr writes with. */
 const CHILD_TAG = '[checks child] ';
 

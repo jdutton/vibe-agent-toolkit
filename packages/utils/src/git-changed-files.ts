@@ -66,6 +66,7 @@ import { lstatSync, readFileSync, rmSync } from 'node:fs';
 
 import { compareCodeUnits } from './compare-code-units.js';
 import { fsFaultOf, isNoSuchEntryError, isOutputOverrunError, isPathAbsentError, isTimedOutError } from './errors/errno-table.js';
+import { GIT_NOT_FOUND_REMEDY } from './git-no-answer.js';
 import { runGit, runGitBytes } from './git-run.js';
 import { gitTreeSnapshot, unreadableSnapshotRefusal } from './git-snapshot.js';
 import { isAbsoluteAnyPlatform, toForwardSlash } from './path-core.js';
@@ -420,7 +421,7 @@ export function gitDidNotRun(subcommand: string, result: Ran): Refusal | undefin
   const command = `git ${subcommand}`;
   let remedy = 'Check that git runs here.';
   if (isNoSuchEntryError(error)) {
-    remedy = 'git was not found on PATH: install it, or put it on PATH.';
+    remedy = GIT_NOT_FOUND_REMEDY;
   } else if (isTimedOutError(error)) {
     remedy = `${command} did not finish within its time limit; compare against a nearer base, so there is less to diff.`;
   } else if (isOutputOverrunError(error)) {

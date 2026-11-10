@@ -42,6 +42,7 @@ import {
   crawlDirectory,
   NEVER_CONTENT_GLOBS,
 } from '@vibe-agent-toolkit/utils/crawl';
+import { gitNoAnswerError } from '@vibe-agent-toolkit/utils/git';
 
 import type {
   ResourceExtentRow,
@@ -104,8 +105,9 @@ export class GitExtentContributor implements ExtentContributor {
    *   git's answer, and narrowing it with globs would produce an extent whose
    *   name says "git" and whose membership does not.
    * @returns The git extent's context, resources, realizations and memberships
-   * @throws When the base carries no git oracle, or git did not answer for this
-   *   root — an empty git extent is a confident wrong answer, not a result
+   * @throws When the base carries no git oracle, or git gave no answer for this
+   *   root (`gitNoAnswerError`: a git missing from PATH, or the tree) — an empty
+   *   git extent is a confident wrong answer, not a result
    */
   async contribute(base: ProjectionBase, _parameters: JsonValue): Promise<ExtentContribution> {
     const tracker = base.gitTracker;
@@ -118,9 +120,9 @@ export class GitExtentContributor implements ExtentContributor {
     }
     await tracker.initialize({ includeUntracked: true });
     if (!tracker.isUsable()) {
-      throw new Error(
-        `git did not answer for "${base.root}" — it is not a git repository, or git could not read it.`
-        + ' Reporting an empty git extent would be indistinguishable from an empty repository, so this is an error.',
+      throw gitNoAnswerError(
+        base.root,
+        'Reporting an empty git extent would be indistinguishable from an empty repository, so this is an error.',
       );
     }
 

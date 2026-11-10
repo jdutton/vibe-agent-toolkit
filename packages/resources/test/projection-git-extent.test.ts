@@ -25,7 +25,7 @@ import {
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory, NEVER_CRAWL_GLOBS } from '@vibe-agent-toolkit/utils/crawl';
-import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import { GIT_NO_ANSWER_CODE, GIT_NOT_FOUND_CODE, GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { refuseUnreadableFixture } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -246,8 +246,23 @@ describe('GitExtentContributor outside a repository', () => {
       const builder = new ProjectionBuilder({ root: bare, gitTracker: new GitTracker(bare) });
 
       await expect(new GitExtentContributor().contribute(builder.base(), null))
-        .rejects.toThrow(/not a git repository|did not answer/iu);
+        .rejects.toMatchObject({ code: GIT_NO_ANSWER_CODE, message: expect.stringMatching(/not a git repository/u) });
     } finally {
+      rmSync(bare, { recursive: true, force: true });
+    }
+  });
+
+  it('names a git missing from PATH rather than blaming the repository', async () => {
+    const bare = toForwardSlash(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-git-extent-nobinary-')));
+    const savedPath = process.env['PATH'];
+    try {
+      process.env['PATH'] = '';
+      const builder = new ProjectionBuilder({ root: bare, gitTracker: new GitTracker(bare) });
+
+      await expect(new GitExtentContributor().contribute(builder.base(), null))
+        .rejects.toMatchObject({ code: GIT_NOT_FOUND_CODE, message: expect.stringMatching(/git was not found on PATH/u) });
+    } finally {
+      process.env['PATH'] = savedPath;
       rmSync(bare, { recursive: true, force: true });
     }
   });

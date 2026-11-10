@@ -57,7 +57,7 @@ import {
   TREE_SOURCE_HOLDS_DEST_CODE,
   VatError,
 } from '@vibe-agent-toolkit/utils';
-import { GIT_SNAPSHOT_UNREADABLE_CODE } from '@vibe-agent-toolkit/utils/git';
+import { GIT_NO_ANSWER_CODE, GIT_NOT_FOUND_CODE, GIT_SNAPSHOT_UNREADABLE_CODE } from '@vibe-agent-toolkit/utils/git';
 import { YAML_EDIT_INPUT_REFUSED_CODE } from '@vibe-agent-toolkit/utils/yaml';
 
 import { AGENT_NAME_ESCAPES_SCOPE_CODE, PLUGIN_SYMLINK_REFUSED_CODE } from './command-error-codes.js';
@@ -118,6 +118,10 @@ const REFUSAL_BY_ERROR_CODE: Readonly<Record<string, RefusalCode>> = {
   [YAML_EDIT_INPUT_REFUSED_CODE]: 'CONFIG_INVALID',
   // A git snapshot refused because a file in the repository is unreadable: the input, named, not VAT.
   [GIT_SNAPSHOT_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
+  // git gave no answer for a root (`gitNoAnswerError`): a git binary missing from PATH is the environment's,
+  // the backend the run needs; anything else — not a repository, or one git could not read — is the input's.
+  [GIT_NOT_FOUND_CODE]: 'BACKEND_UNAVAILABLE',
+  [GIT_NO_ANSWER_CODE]: 'INPUT_UNREADABLE',
   // An org command run without the key its endpoint authenticates with: nothing was sent.
   [ORG_API_KEY_MISSING_CODE]: 'USAGE_INVALID',
   // The Anthropic API answered with a non-success status (`ApiRequestError`)…
