@@ -29,6 +29,7 @@ import {
   RAGQuerySchema,
 } from '@vibe-agent-toolkit/rag';
 import {
+  calculateChecksumFromContent,
   transformContent,
   type ContentTransformOptions,
   type ResourceMetadata,
@@ -923,6 +924,17 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       { side: 'source', origin: 'content', action: `read ${resource.filePath}`, path: resource.filePath },
       () => readTextContent(resource.filePath),
     );
+
+    // The facts above describe the bytes the registry ADMITTED; these are the
+    // bytes on disk now. A file changed in between would be indexed as new text
+    // under old links, headings and frontmatter — so the text is re-hashed at use
+    // and a mismatch refuses this resource before anything is written for it
+    // (ADR I2a). Thrown, it becomes this resource's entry in `result.errors`.
+    if (calculateChecksumFromContent(text) !== resource.checksum) {
+      throw new Error(
+        `${resource.filePath} changed since it was crawled: its content no longer matches the checksum the registry recorded, so it was not indexed. Re-run to index the current content.`,
+      );
+    }
 
     // Apply content transform if configured (e.g., rewrite links before chunking)
     const content = this.config.contentTransform

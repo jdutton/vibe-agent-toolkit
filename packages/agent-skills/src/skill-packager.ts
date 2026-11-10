@@ -92,6 +92,7 @@ import {
 } from './files-config.js';
 import { LINK_GRAPH_MEMBER_GLOBS } from './link-graph-members.js';
 import { packagingInputError, SKILL_NAME_NOT_A_SEGMENT_CODE, SkillPackageChecksFailedError } from './packaging-errors.js';
+import { parseRefusedMessage, refusedAmong, stackOverflowIssue } from './parse-refusal-issues.js';
 import { checkBrokenPackagedLinks, checkMissingReferencedPaths, checkUnreferencedFiles } from './post-build-checks.js';
 import {
   checkPackagedTestInput,
@@ -769,7 +770,7 @@ async function preparePackage(
   } = options;
 
   // 1. Parse SKILL.md frontmatter and links
-  const parseResult = await parseFileCached(skillPath, 'markdown', { side: skillSide });
+  const parseResult = await parseSkillOrRefuse(skillPath, skillSide);
   const skillMetadata = extractSkillMetadata(parseResult, skillPath);
 
   // 2. Find project boundary (config root -> git root -> skill dir).
@@ -861,6 +862,9 @@ async function preparePackage(
     registry as WalkableRegistry,
     packagerWalkOptions,
   );
+  // A reached file whose parse the crawl refused is no asset: it would ship
+  // verbatim with its links unwalked and unrewritten. Refused before anything is written.
+  refuseParseRefusedFiles(registry, [skillPath, ...bundledAssets], projectRoot);
 
   // Register non-markdown bundled assets in the source registry so link rewriting
   // can resolve them (resolvedId must be set on links pointing to YAML, JSON, etc.).
@@ -1535,6 +1539,35 @@ function refuseUnreadableSkill(registry: ResourceRegistry, skillPath: string, si
   if (unread === undefined) return;
   const failure = Object.assign(new Error(unread.reason), { code: unread.code ?? 'UNKNOWN' });
   throw classifyFsFault(failure, { side, origin: 'content', action: `read the skill's SKILL.md ${skillPath}`, path: skillPath });
+}
+
+/**
+ * The skill's SKILL.md, parsed on this thread — or, when its frontmatter or
+ * markdown nests too deeply for the stack, the packager's content refusal naming
+ * `RESOURCE_PARSE_LIMIT_EXCEEDED`, never the parser's raw throw.
+ */
+async function parseSkillOrRefuse(skillPath: string, side: 'source' | 'destination'): Promise<Awaited<ReturnType<typeof parseFileCached>>> {
+  try {
+    return await parseFileCached(skillPath, 'markdown', { side });
+  } catch (error) {
+    const limit = stackOverflowIssue(error, skillPath);
+    if (limit === undefined) throw error;
+    throw packagingInputError(`${limit.code}: ${limit.message}`, { cause: error });
+  }
+}
+
+/**
+ * Refuse a package that reaches a file whose parse the crawl refused — the skill's
+ * own SKILL.md or anything its walk bundles — as the packager's content refusal
+ * (`SKILL_PACKAGING_FAILED`), naming every such file under its own code. The
+ * validation lane reports the same files as `RESOURCE_PARSE_LIMIT_EXCEEDED` /
+ * `RESOURCE_PARSE_WORKER_DIED` findings; `vat skills build` validates first.
+ */
+function refuseParseRefusedFiles(registry: ResourceRegistry, reached: readonly string[], projectRoot: string): void {
+  const refused = refusedAmong(registry.getParseRefusedResources(), reached);
+  if (refused.length === 0) return;
+  const lines = refused.map((entry) => `${entry.code}: ${parseRefusedMessage(entry, issueLocation(entry.filePath, projectRoot))}`);
+  throw packagingInputError(`The skill reaches ${refused.length} file(s) whose parse was refused:\n${lines.join('\n')}`);
 }
 
 /** Input for assemblePackageResult — avoids a long parameter list. */

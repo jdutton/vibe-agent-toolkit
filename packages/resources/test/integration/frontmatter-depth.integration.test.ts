@@ -8,9 +8,9 @@
  * - at 1,000 levels the mapping must come back identical on a cold run, a warm
  *   (cache-hit) run and a second cold run, with no `frontmatterError` — which
  *   holds only if the PARENT never decodes the YAML, on either path;
- * - at 4,000 levels the worker's own stack gives out, and that is a `stackMb`
- *   limit refusal with nothing stored — never a `frontmatterError` a cache
- *   would serve as a fact of the bytes.
+ * - at 20,000 levels under an explicit 1 MiB `stackMb`, the worker's own stack
+ *   gives out, and that is a `stackMb` limit refusal with nothing stored —
+ *   never a `frontmatterError` a cache would serve as a fact of the bytes.
  */
 
 import { writeFile } from 'node:fs/promises';
@@ -21,7 +21,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { isParsableContent, readContentWithKey, type ParsableContent } from '../../src/content-key.js';
 import type { ParseResult } from '../../src/link-parser.js';
 import { ParseCache } from '../../src/parse-cache.js';
-import { ParseDispatcher } from '../../src/parse-dispatcher.js';
+import { ParseDispatcher, type ParsePoolPolicy } from '../../src/parse-dispatcher.js';
 import { isParseLimitError } from '../../src/parse-limits.js';
 import { countFilesUnder, setupSubdirTestSuite } from '../test-helpers.js';
 
@@ -58,8 +58,8 @@ async function keyedDocument(name: string, content: string): Promise<ParsableCon
 }
 
 /** One run: a fresh dispatcher over `cache`, shut down after its one parse. */
-async function oneRun(cache: ParseCache, keyed: ParsableContent): Promise<ParseResult> {
-  const dispatcher = new ParseDispatcher(cache, {});
+async function oneRun(cache: ParseCache, keyed: ParsableContent, policy: ParsePoolPolicy = {}): Promise<ParseResult> {
+  const dispatcher = new ParseDispatcher(cache, policy);
   try {
     return await dispatcher.parse(keyed);
   } finally {
@@ -92,12 +92,15 @@ describe('frontmatter nested past the main thread stack', () => {
     expect(coldAgain).toStrictEqual(cold);
   });
 
-  it('refuses 4,000 levels at the stack limit and stores nothing', async () => {
-    const keyed = await keyedDocument('deeper.md', deepFrontmatter(4000));
+  it('refuses 20,000 levels at a 1 MiB stack limit and stores nothing', async () => {
+    // The stack is named, never left at its default: the refusal must come from
+    // the limit this test sets. 1 MiB gives out near 1,000 levels (the main
+    // thread's own default does), so 20,000 is far past it at any frame size.
+    const keyed = await keyedDocument('deeper.md', deepFrontmatter(20_000));
     const cacheDir = safePath.join(suite.tempDir, 'cache');
     const cache = new ParseCache({ cacheDir, enabled: true });
 
-    const error: unknown = await oneRun(cache, keyed).then(
+    const error: unknown = await oneRun(cache, keyed, { limits: { stackMb: 1 } }).then(
       (result) => new Error(`the parse answered, frontmatterError: ${String(result.frontmatterError)}`),
       (rejection: unknown) => rejection,
     );

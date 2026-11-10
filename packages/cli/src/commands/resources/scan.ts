@@ -3,11 +3,13 @@
  */
 
 import type { CrawlSourceKind } from '@vibe-agent-toolkit/resources';
-import { buildReport } from '@vibe-agent-toolkit/schema';
+import { buildReport, toFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 import { refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
+import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger } from '../../utils/logger.js';
+import { parseRefusedIssues, unreadableResourceIssues } from '../../utils/not-admitted-issues.js';
 import { projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
 import { relativizePathEntries } from '../../utils/relativize-paths.js';
 import {
@@ -69,6 +71,12 @@ export interface ScanPayloadInput {
    */
   extentSource: CrawlSourceKind | null;
   durationMs: number;
+  /**
+   * Every file the crawl enumerated and did not admit — unreadable, or its parse
+   * refused — as error findings. Required: a scan that omits them reports the
+   * survivors as the whole population.
+   */
+  notAdmitted: readonly ValidationIssue[];
   /** Resources per collection; `{}` when the project configures none. */
   collections: Record<string, { resourceCount: number }>;
   verbose: boolean;
@@ -95,11 +103,13 @@ function countHeadings(headings: readonly HeadingWithChildren[]): number {
  * the machine it ran on and cannot be diffed across two checkouts.
  *
  * `examined` is the number of files scanned — the denominator the lab's
- * population facet reads, beside `data.files`. A scan has no findings of its
- * own; a scan of nothing gets the writer's run-integrity refusal.
+ * population facet reads, beside `data.files`: the admitted files plus every
+ * one the crawl enumerated and did not admit. Those are the scan's only
+ * findings, one error each (exit 1); a scan of nothing gets the writer's
+ * run-integrity refusal.
  */
 export function buildScanReport(input: ScanPayloadInput): ResourcesScanReport {
-  const { resources, root, lane, extentSource, durationMs, collections, verbose } = input;
+  const { resources, root, lane, extentSource, durationMs, collections, verbose, notAdmitted } = input;
 
   const data: ResourcesScanData = {
     // Stated once, and the only absolute path in the document.
@@ -123,8 +133,14 @@ export function buildScanReport(input: ScanPayloadInput): ResourcesScanReport {
     );
   }
 
-  // `vat resources scan` offers no `--strict`, and reports no finding of its own.
-  return buildReport({ examined: resources.length, findings: [], data, gate: { strict: false }, durationMs });
+  // `vat resources scan` offers no `--strict`; its only findings are the files it could not admit.
+  return buildReport({
+    examined: resources.length + notAdmitted.length,
+    findings: toFindings([...notAdmitted]),
+    data,
+    gate: { strict: false },
+    durationMs,
+  });
 }
 
 /**
@@ -168,8 +184,16 @@ export async function scanCommand(
     const resources = collection === undefined
       ? registry.getAllResources()
       : registry.getAllResources().filter((r) => r.collections?.includes(collection) ?? false);
+    // Unfiltered by `--collection`, as `resources validate` reports them: a file
+    // that was never admitted has no collection membership to filter on.
+    const notAdmitted = [
+      ...unreadableResourceIssues(registry.getUnreadableResources(), projectRoot),
+      ...parseRefusedIssues(registry.getParseRefusedResources(), projectRoot, 'it is absent from every count in this report'),
+    ];
+    reportFindings(notAdmitted, { verbose: true, write: logger.warn });
 
     const report = buildScanReport({
+      notAdmitted,
       resources,
       root: projectRoot,
       lane: population.lane,

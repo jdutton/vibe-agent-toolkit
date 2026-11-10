@@ -28,11 +28,12 @@
  */
 
 import { mkdir, writeFile } from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
 
 import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { ParseCache } from '../src/parse-cache.js';
+import { isParserUnavailable, ParseCache } from '../src/parse-cache.js';
 import { __setParseWorkerEntryForTest, createParsePool, defaultParsePoolSize, type ParsePool } from '../src/parse-pool.js';
 import { BLOB_PARSE_FAILED, BLOB_PARSE_WORKER_DIED, populateBlobs, type BlobPopulationResult } from '../src/projection/blob-population.js';
 import { describeBlobRefusals } from '../src/projection/blob-refusals.js';
@@ -425,37 +426,67 @@ describe('parse-pool activation', () => {
  * contains kills a thread, so the thread is pointed at an entry that throws, exactly as
  * `parse-pool.test.ts` does.
  */
+const CODE = 'ERR_TEST_PARSE_WORKER_DIED';
+
+/**
+ * @param dies - JavaScript condition on `request`, the job a message carries, under which the thread dies
+ * @returns A worker entry that answers like the built worker and dies of a coded error when `dies` holds
+ */
+async function dyingEntry(dies: string): Promise<string> {
+  const entryDir = safePath.join(suite.suiteDir, 'dying-worker');
+  await mkdir(entryDir, { recursive: true });
+  const entry = safePath.join(entryDir, `dying-worker-${String(Date.now())}.mjs`);
+  const realWorker = pathToFileURL(safePath.resolve(import.meta.dirname, '..', 'dist', 'parse-worker.js')).href;
+  await writeFile(
+    entry,
+    [
+      "import { parentPort } from 'node:worker_threads';",
+      `await import(${JSON.stringify(realWorker)});`,
+      `parentPort.on('message', (request) => { if (request?.type === 'parse' && (${dies})) throw Object.assign(new Error('died'), { code: '${CODE}' }); });`,
+    ].join('\n'),
+    'utf-8',
+  );
+  return entry;
+}
+
+/** @returns What populating the loop corpus through a one-thread pool did: the projection, or what it threw */
+async function populateOnOneThread(): Promise<unknown> {
+  const builder = await baseBuilderForRoot(suite.tempDir);
+  return populateBlobs(builder, {
+    parseCache: NO_CACHE,
+    parsePool: { missThreshold: 1, size: 1, createPool: (): ParsePool => createParsePool({ size: 1 }) },
+  }).then(() => builder.build(), (error: unknown) => error);
+}
+
 describe('a real parse-pool rejection', () => {
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);
   beforeEach(suite.beforeEach);
   beforeEach(writeLoopCorpus);
 
-  const CODE = 'ERR_TEST_PARSE_WORKER_DIED';
-
   it('is a per-run worker death carrying its cause, and is named by the population warning', async () => {
-    const entryDir = safePath.join(suite.suiteDir, 'dying-worker');
-    await mkdir(entryDir, { recursive: true });
-    const entry = safePath.join(entryDir, 'dying-worker.mjs');
-    await writeFile(
-      entry,
-      `import { parentPort } from 'node:worker_threads';\nparentPort.on('message', () => { throw Object.assign(new Error('died'), { code: '${CODE}' }); });\n`,
-      'utf-8',
-    );
-    __setParseWorkerEntryForTest(entry);
+    await writeFile(safePath.join(suite.tempDir, 'dies.md'), '# DIE\n', 'utf-8');
+    __setParseWorkerEntryForTest(await dyingEntry("request.content.startsWith('# DIE')"));
     try {
-      const builder = await baseBuilderForRoot(suite.tempDir);
-      await populateBlobs(builder, {
-        parseCache: NO_CACHE,
-        parsePool: { missThreshold: 1, size: 1, createPool: (): ParsePool => createParsePool({ size: 1 }) },
-      });
-      const projection = builder.build();
+      const projection = (await populateOnOneThread()) as Projection;
 
       expect(conditionsWithCode(projection, BLOB_PARSE_FAILED)).toHaveLength(0);
       const died = conditionsWithCode(projection, BLOB_PARSE_WORKER_DIED);
-      expect(died.length).toBeGreaterThan(0);
-      for (const row of died) expect(row.message).toContain(CODE);
+      expect(died).toHaveLength(1);
+      expect(died[0]?.message).toContain(CODE);
       expect(describeBlobRefusals(projection)).toContain('parse worker died');
+    } finally {
+      __setParseWorkerEntryForTest(null);
+    }
+  });
+
+  it('is a broken install, thrown and never a row, when every thread dies on every document', async () => {
+    __setParseWorkerEntryForTest(await dyingEntry('true'));
+    try {
+      const outcome = await populateOnOneThread();
+
+      expect(isParserUnavailable(outcome)).toBe(true);
+      expect(String((outcome as Error).message)).toContain(CODE);
     } finally {
       __setParseWorkerEntryForTest(null);
     }

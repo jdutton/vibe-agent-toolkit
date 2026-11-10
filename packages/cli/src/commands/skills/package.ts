@@ -17,7 +17,7 @@ import {
   type SkillPackageChecksFailedError,
   type ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
-import { parseFileCached, type ParseResult } from '@vibe-agent-toolkit/resources';
+import type { ParseResult } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type Gate, type Report, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { findProjectRoot, followedStatSync, issueLocation, isVatError, requireFollowedStatSync, safePath, toForwardSlash, withFsFault } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
@@ -31,6 +31,7 @@ import { resolveSkillPath } from '../skill/review.js';
 
 import { packagingFailedIssue } from './build.js';
 import type { SkillsPackageData } from './package-schema.js';
+import { skillDocumentOrOverflow } from './skill-discovery.js';
 
 /** Default packaging target */
 const DEFAULT_TARGET: PackagingTarget = 'claude-code';
@@ -499,11 +500,17 @@ async function packageAndReport(
     if (code === undefined) throw error;
     const message = errorMessageOf(error);
     logger.error(`Package failed: ${message}`);
-    const parseResult = await parseFileCached(skillPath, 'markdown');
+    // A SKILL.md too deep to parse here (the refusal itself, usually) reports as unnamed.
+    const parseResult = await skillDocumentOrOverflow(skillPath);
     return buildSkillsPackageReport({
       validation,
       // The package is one plan: a refused one — a too-large ZIP included — landed nothing.
-      data: { skill: extractSkillName(parseResult), version: frontmatterVersion(parseResult), outputPath: null, dryRun: options.dryRun === true },
+      data: {
+        skill: parseResult === undefined ? 'unknown' : extractSkillName(parseResult),
+        version: parseResult === undefined ? null : frontmatterVersion(parseResult),
+        outputPath: null,
+        dryRun: options.dryRun === true,
+      },
       refused: { code, message, location: issueLocation(skillPath, locationRoot), thrown: error },
       runFindings: leftoverIssuesOf(error),
     });

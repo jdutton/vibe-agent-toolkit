@@ -140,6 +140,7 @@ import { CONTENT_KEY_PATTERN, type KeyedContent, type ParsableContent, readConte
 import { decodeFrontmatterValue, encodeFrontmatterValue, FRONTMATTER_VALUE_MALFORMED } from './frontmatter-codec.js';
 import type { ParseResult } from './link-parser.js';
 import type { DocumentParserKind } from './mime-type.js';
+import { storableUnderDefaultLimits } from './parse-limits.js';
 import {
   parseTimingStart,
   recordParseCacheHit,
@@ -334,20 +335,24 @@ export function rehydrate(facts: ParseFacts, keyed: KeyedContent): ParseResult {
 }
 
 /**
- * {@link rehydrate}, with a stored frontmatter encoding this build did not
- * write read as a miss — the same fail-soft rule as every other malformed
- * entry ({@link readFacts}). Anything else it throws stays loud.
+ * {@link rehydrate}, with an entry whose frontmatter encoding is not one this
+ * build wrote read as a miss — the same fail-soft rule as every other
+ * malformed entry ({@link readFacts}). The caller then parses the document
+ * again through the worker, so a corrupt entry costs one re-parse, never the
+ * run. The codec refuses everything it did not write with
+ * `FRONTMATTER_VALUE_MALFORMED`; any other throw is a defect in VAT, not in
+ * the entry, and stays loud, as a bug in this class does in `get`.
  *
  * @param facts - Facts that passed the schema
  * @param keyed - The fresh read whose key selected them
- * @returns The parse result, or `null` for a malformed encoding
+ * @returns The parse result, or `null` when the entry's encoding is malformed
  */
 function rehydrateOrMiss(facts: ParseFacts, keyed: KeyedContent): ParseResult | null {
   try {
     return rehydrate(facts, keyed);
   } catch (error) {
-    if (isVatError(error, FRONTMATTER_VALUE_MALFORMED) || error instanceof SyntaxError) return null;
-    throw error;
+    if (!isVatError(error, FRONTMATTER_VALUE_MALFORMED)) throw error;
+    return null;
   }
 }
 
@@ -1082,7 +1087,11 @@ export async function parseKeyed(keyed: ParsableContent, cache: ParseCache): Pro
   // disk (see link-parser.ts and content-key.ts).
   const result = parser.parseContent(keyed.content, keyed.byteLength);
 
-  await cache.set(keyed, result);
+  // This parse ran unbounded, on this thread. Filed past the bounded route's
+  // input or output caps, it would be served to a later bounded crawl as an
+  // admission that run would have refused: the outcome would hang on what ran
+  // first, not on the bytes (I0). So it is answered, and filed only within them.
+  if (storableUnderDefaultLimits(keyed.byteLength, result)) await cache.set(keyed, result);
   return result;
 }
 

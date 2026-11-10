@@ -27,6 +27,7 @@
 
 import { promises as fs } from 'node:fs';
 import { availableParallelism } from 'node:os';
+import { pathToFileURL } from 'node:url';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
@@ -36,7 +37,8 @@ import { computeContentKey, type KeyedContent } from '../src/content-key.js';
 import { parseHtmlContent } from '../src/html-link-parser.js';
 import { type ParseResult, parseMarkdownContent } from '../src/link-parser.js';
 import type { DocumentParserKind } from '../src/mime-type.js';
-import { ParseCache } from '../src/parse-cache.js';
+import { isParserUnavailable, ParseCache } from '../src/parse-cache.js';
+import { isParseWorkerDiedError } from '../src/parse-limits.js';
 import {
   __setParseWorkerEntryForTest,
   createParsePool,
@@ -338,7 +340,7 @@ describe('ParsePool.parse', () => {
     const entry = safePath.join(directory, 'suicidal-worker.mjs');
     await fs.writeFile(
       entry,
-      "import { parentPort } from 'node:worker_threads';\nparentPort.on('message', () => { process.exit(3); });\n",
+      `import { parentPort } from 'node:worker_threads';\n${READY_LINE}\nparentPort.on('message', () => { process.exit(3); });\n`,
       'utf-8',
     );
     __setParseWorkerEntryForTest(entry);
@@ -352,6 +354,82 @@ describe('ParsePool.parse', () => {
     );
 
     await fs.rm(directory, { recursive: true, force: true });
+  });
+});
+
+/** What a seeded worker entry posts once its module has loaded, as the real worker does. */
+const READY_LINE = 'parentPort.postMessage({ ready: true });';
+
+/** The built worker, which a seeded entry can import to answer real parses. */
+const BUILT_WORKER = pathToFileURL(safePath.resolve(import.meta.dirname, '..', 'dist', 'parse-worker.js')).href;
+
+/**
+ * @param body - The seeded entry's source
+ * @returns The entry's path, already installed as the pool's worker entry
+ */
+async function seedWorkerEntry(body: string): Promise<string> {
+  const directory = await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'vat-pool-seed-'));
+  cacheRoots.push(directory);
+  const entry = safePath.join(directory, 'seeded-worker.mjs');
+  await fs.writeFile(entry, body, 'utf-8');
+  __setParseWorkerEntryForTest(entry);
+  return entry;
+}
+
+/**
+ * @param pool - The pool
+ * @param content - One document
+ * @returns What the parse rejected with, or the string `answered`
+ */
+async function outcomeOf(pool: ParsePool, content: string): Promise<unknown> {
+  return pool.parse('markdown', content, Buffer.byteLength(content)).then(
+    () => 'answered',
+    (error: unknown) => error,
+  );
+}
+
+describe('a broken install is loud', () => {
+  it('fails every job as parser-unavailable when the worker entry throws as its module loads', async () => {
+    await seedWorkerEntry("throw Object.assign(new Error('seeded load failure'), { code: 'ERR_SEEDED_LOAD' });\n");
+    const pool = trackedPool(2);
+
+    const outcomes = await Promise.all(['# a\n', '# b\n', '# c\n'].map(async (content) => outcomeOf(pool, content)));
+
+    for (const outcome of outcomes) expect(isParserUnavailable(outcome)).toBe(true);
+    expect(String((outcomes[0] as Error).message)).toContain('ERR_SEEDED_LOAD');
+  });
+
+  it('calls three consecutive deaths with no answer between them a broken install', async () => {
+    await seedWorkerEntry(`import { parentPort } from 'node:worker_threads';\n${READY_LINE}\nparentPort.on('message', () => { process.exit(3); });\n`);
+    const pool = trackedPool(1);
+
+    const first = await outcomeOf(pool, '# a\n');
+    const second = await outcomeOf(pool, '# b\n');
+    const third = await outcomeOf(pool, '# c\n');
+    const fourth = await outcomeOf(pool, '# d\n');
+
+    expect([first, second].map((outcome) => isParseWorkerDiedError(outcome))).toStrictEqual([true, true]);
+    expect([third, fourth].map((outcome) => isParserUnavailable(outcome))).toStrictEqual([true, true]);
+  });
+
+  it('resets the count on any answer between deaths', async () => {
+    await seedWorkerEntry([
+      "import { parentPort } from 'node:worker_threads';",
+      `await import(${JSON.stringify(BUILT_WORKER)});`,
+      "parentPort.on('message', (request) => { if (request?.content?.startsWith?.('# DIE')) process.exit(1); });",
+    ].join('\n'));
+    const pool = trackedPool(1);
+
+    const outcomes: unknown[] = [];
+    for (const content of ['# DIE 1\n', '# DIE 2\n', '# ok\n', '# DIE 3\n', '# DIE 4\n']) outcomes.push(await outcomeOf(pool, content));
+
+    expect(outcomes.map((outcome) => (outcome === 'answered' ? 'answered' : isParseWorkerDiedError(outcome)))).toStrictEqual([
+      true,
+      true,
+      'answered',
+      true,
+      true,
+    ]);
   });
 });
 

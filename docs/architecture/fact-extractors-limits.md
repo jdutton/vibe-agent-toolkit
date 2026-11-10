@@ -21,15 +21,38 @@ a value here and in the code together, and only from a new lab record.
 | Limit | Value | Observed maximum | How it was set |
 |---|---|---|---|
 | `inputBytes` | 8 MiB | 666,449 bytes (one adopter document); 352,261 in VAT's own tree | Rule 1: 6.7 MB, up to 8 MiB. |
-| `outputRows` | 16,384 | 896 rows in one document; p99 203, p50 9 | Rule 1: 8,960, up to 16,384. Rows are counted over every array in a document's facts, nested ones included: a heading's `children` count like any other row, so one `#` over 20,000 `##` is 20,001 rows. The observed maximum was counted over top-level arrays only; a nested heading adds at most one row per heading, which the record did not separate. |
+| `outputRows` | 16,384 | 896 rows in one document, top-level arrays only; p99 203, p50 9 | **Rule 2.** The limit counts every array in a document's facts, nested ones included (a heading's `children` count like any other row, so one `#` over 20,000 `##` is 20,001 rows), and the frontmatter at its expanded size, each YAML alias at its target's full size. The observed maximum was counted over top-level arrays only, so rule 1 cannot be applied to it: 16,384 is rule 1 over that count (8,960, up to 16,384), kept because a nested heading adds at most one row per heading and a frontmatter mapping is a handful of rows, both well inside the factor of ten. The per-document nested count is a lab gap (below). |
 | `outputBytes` | 4 MiB | 233,802 bytes in one parse-cache entry; p99 57,556, p50 3,358 | Rule 1: 2.3 MB, up to 4 MiB. Measured on the stored entry, which is never smaller than the facts the worker checks. |
-| `timeMs` | 30,000 ms | Not observable per document: the `parse` facet reports per-pass sums. Mean 13.7 ms per document over 2,680 documents under load (the `vat-lab parse run` below); 12.1 ms in the cold `resources check` run. | Rule 2: the slowest realistic shape found, a 1,000-level nested list, takes 10.6 s; the limit also covers a cold worker's first parser load (about 0.7 s), on a loaded machine. 30 s is that 11.3 s with headroom of more than 2.5 times for load. A mean is no basis: one document can be a thousand times the mean, and the per-document maximum is still not observable (see the gaps below). |
+| `timeMs` | 30,000 ms | Not observable per document: the `parse` facet reports per-pass sums. Mean 10.3 ms per document over 2,680 documents at a clean load (the adopter arm of [the `vat-lab parse run` arms](#the-vat-lab-parse-run-arms)); 12.1 ms in the cold `resources check` run. | Rule 2: the slowest realistic shape found, a 1,000-level nested list, takes 9.3 s in a worker (the nested-list arm below, a one-document corpus, so its per-pass sum is that document's time); the limit also covers a cold worker's first parser load (about 0.7 s), on a loaded machine. 30 s is that 10.0 s with headroom of three times for load. A mean is no basis: one document can be a thousand times the mean, and the per-document maximum over a real corpus is still not observable (see the gaps below). |
 | `heapMb` | 1,024 MiB | Not observable per worker: the `memory` facet reports process peak RSS. The whole process, every worker included, peaked at 1.17 GiB on the adopter's cold run. | Rule 2: no single job can need more than the whole process held, less the main thread's share. |
 | `stackMb` | 4 MiB | Not observable. | Rule 2: before this limit existed every corpus parsed on the main thread under Node's default stack of about 1 MiB, so 4 MiB is four times a stack every recorded corpus fit in. |
 
 The output and input values come from the stored parse-cache entries of a cold `vat-lab parse run`
 over the adopter monorepo, kept with `--arms-dir`, and from the sizes of the markdown and HTML files
-in both trees.
+in both trees. That first run's exact invocation was not recorded; the arms below were re-run and
+are the record.
+
+## The `vat-lab parse run` arms
+
+Run from the VAT repository root against the working tree at `06eb2589` plus the round-2 review
+fixes (the lab names it `DIRTY`), darwin/arm64, 10 CPUs, Node 26.7.0. The lab judged the load clean
+for every arm (1-minute load average 3.0 to 3.6). The two pathological arms are one-document
+subjects, so the `parse` facet's per-pass sum is that document's own parse time.
+
+```bash
+node packages/lab/dist/bin/vat-lab.js parse run <subject> --instrument tree:. \
+  --command resources-scan --runs <n> --cache cold --id <id> --out <dir>
+```
+
+| Arm (`--id`) | Subject | `--runs` | Parse time | What it shows |
+|---|---|---|---|---|
+| `adopter-monorepo` | the adopter monorepo | 1 | 27,469.7 ms summed over 2,680 documents (53,443,554 bytes), 10.3 ms mean; `remark-parse` 90.8% of markdown; 18,974 ms wall, 57,595 ms CPU | The per-document mean behind `timeMs`; reproducibility untested (one repeat). |
+| `pathological-nested-list` | one document: a list nested 1,000 levels (1,009,900 bytes) | 3 | 9,302.9 ms in `remark-parse`; repeat totals 9,317.1, 9,157.5, 9,356.7 ms; worker job 9,364.1 ms | The slowest realistic shape `timeMs` covers. |
+| `pathological-blockquote` | one document: 10,000 nested `>` (10,015 bytes) | 3 | 613.2 ms; repeat totals 649.4, 593.2, 613.2 ms | Under the default 4 MiB worker stack it parses; it overflows only a main thread's stack (about 1 MiB), which is why a breach fixture names a 1 MiB `stackMb`. |
+
+The pathological subjects are generated, not checked in: the nested list is `"  ".repeat(i) + "- item " + i`
+for `i` from 0 to 999 under a `# Nested` heading, and the blockquote is `# Quote` followed by
+10,000 `>` and the word `deep`.
 
 ## The record
 
@@ -91,7 +114,7 @@ parse:
 
 - The cold check spends 32.5 s of parse time, summed across worker threads, on 2,680 documents. That
   is 12.1 ms per document on average. This is the `resources check` run in the table above, not the
-  `vat-lab parse run` whose 13.7 ms mean the `timeMs` row quotes: two runs, at different loads.
+  `vat-lab parse run` adopter arm whose 10.3 ms mean the `timeMs` row quotes: two runs, at different loads.
 - 90.9% of the markdown time is `remark-parse` (29.5 s), the tokenizer and tree build. Fact
   extraction from the tree is 1.2 s, and lexical references are 0.45 s.
 - The parent thread spends 2.4 s writing parse-cache entries and 0.46 s reading them.
@@ -113,6 +136,8 @@ These gaps are findings, not omissions to fill by hand:
   answer have no facet.
 - **No per-document maximum.** The `parse` facet reports sums and means per pass, so `timeMs` cannot
   be derived by rule 1.
+- **No per-document row count as the limit counts it.** No facet reports a document's rows nested
+  and with its frontmatter expanded, so `outputRows` stays under rule 2.
 - **No per-worker heap.** The `memory` facet reports process peak RSS, so `heapMb` cannot be derived
   by rule 1.
 - **No width-1 or contended arm.** Nothing runs the cold check with the pool held to one worker,

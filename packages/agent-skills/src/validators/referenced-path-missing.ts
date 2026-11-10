@@ -118,6 +118,7 @@ import {
   type PackagingTarget,
   TARGET_SUBDIR_CATEGORIES,
 } from '../content-type-routing.js';
+import { stackOverflowIssue } from '../parse-refusal-issues.js';
 
 /**
  * Subdirectories a packaged skill may bundle resources into.
@@ -368,9 +369,22 @@ export async function detectMissingReferencedPaths(
 
   // Independent reads; a failure is the first by document order, and the issues
   // are folded in that order.
-  const candidatesByDoc = await mapConcurrentFailingInOrder(docFiles, (docFile) => bundledPathCandidates(docFile));
+  // A document too deep for this thread's stack is a finding at that document —
+  // the parse limit — and its neighbours are still checked; any other failure
+  // still fails the check.
+  const candidatesByDoc = await mapConcurrentFailingInOrder(docFiles, (docFile) =>
+    bundledPathCandidates(docFile).catch((error: unknown) => {
+      const limit = stackOverflowIssue(error, safePath.relative(skillDir, docFile));
+      if (limit === undefined) throw error;
+      return limit;
+    }));
   for (const [index, docFile] of docFiles.entries()) {
-    const candidates = candidatesByDoc[index] ?? [];
+    const scanned = candidatesByDoc[index] ?? [];
+    if (!Array.isArray(scanned)) {
+      issues.push(scanned);
+      continue;
+    }
+    const candidates = scanned;
     const missing = candidates.filter(
       rel => !bundleHas(skillDir, rel) && !bundleHas(skillDir, routedSpelling(rel, target)),
     );

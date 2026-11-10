@@ -50,13 +50,13 @@ import { parentPort, workerData } from 'node:worker_threads';
 
 import type { ParseResult } from './link-parser.js';
 import { loadParser, ParseCache } from './parse-cache.js';
-import { countOutputRows, isStackOverflow, type ParseLimitName, type ParseLimits } from './parse-limits.js';
+import { isStackOverflow, outputBreach, type ParseLimits } from './parse-limits.js';
 import {
   type ParseWorkerData,
   type ParseWorkerFailure,
+  type ParseWorkerReady,
   type ParseWorkerRequest,
   type ParseWorkerResponse,
-  type ParseWireFacts,
   toParseWire,
 } from './parse-pool.js';
 import {
@@ -171,29 +171,13 @@ async function answerFor(
   const { cacheKey } = request;
   const facts = toParseWire(result);
   // Checked BEFORE the cache write: a breach is filed nowhere (I6).
-  const breach = outputBreach(facts);
+  const breach = outputBreach(result, workerLimits());
   if (breach !== undefined) return { id: request.id, breach };
   if (cacheKey === undefined) return { id: request.id, facts };
 
   const persisted = await workerCache().setByKey(cacheKey, result);
   if (!persisted) return { id: request.id, facts };
   return { id: request.id, stored: cacheKey };
-}
-
-/**
- * The output cap a job's facts breach, if any: rows first, then bytes.
- *
- * Bytes are the facts' JSON, the form the cache stores and close to what the
- * wire carries. Paid here, on the worker, in parallel.
- *
- * @param facts - What crosses the boundary
- * @returns The breached limit, or undefined
- */
-function outputBreach(facts: ParseWireFacts): ParseLimitName | undefined {
-  const { outputRows, outputBytes } = workerLimits();
-  if (countOutputRows(facts) > outputRows) return 'outputRows';
-  if (Buffer.byteLength(JSON.stringify(facts)) > outputBytes) return 'outputBytes';
-  return undefined;
 }
 
 /**
@@ -256,3 +240,9 @@ port.on('message', (request: ParseWorkerRequest) => {
     port.postMessage({ id: request.id, failure: describeFailure(error) });
   });
 });
+
+// Last, once every import above has evaluated: a thread that dies before this
+// could not load its own module graph, so the pool calls the install broken
+// rather than blaming whatever document it was holding (`ParseWorkerReady`).
+const ready: ParseWorkerReady = { ready: true };
+port.postMessage(ready);

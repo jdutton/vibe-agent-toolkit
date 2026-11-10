@@ -10,6 +10,8 @@
  * vendor-specific packages.
  */
 
+import type { ParseRefusedResource } from '@vibe-agent-toolkit/resources';
+
 export type ParseError = {
 	path: string;
 	message: string;
@@ -22,6 +24,12 @@ export type ParseError = {
 	 * failure, a missing manifest, or any other defect the subject owns.
 	 */
 	unreadable?: true;
+	/**
+	 * Set when the crawl refused to parse `path` (over a parse limit, or its
+	 * worker died). The file was read but never parsed, so nothing in it was
+	 * checked: a consumer files the row under this code at error severity.
+	 */
+	parseRefused?: ParseRefusedResource['code'];
 };
 
 export type ComponentRef = {

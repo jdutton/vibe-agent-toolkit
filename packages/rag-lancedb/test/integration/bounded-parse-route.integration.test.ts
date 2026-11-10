@@ -72,6 +72,18 @@ describe('rag indexing on the bounded parse route', () => {
     expect(chunks.map((chunk) => chunk.headingPath)).toStrictEqual(chunks.map(() => undefined));
   });
 
+  // The indexer re-hashes what it reads and refuses a mismatch with the
+  // registry's checksum, so its hash must be the registry's for every text — a
+  // BOM and multibyte characters are where a byte-vs-string preimage would split.
+  it('indexes a non-ASCII document the registry admitted: the re-hash at use agrees with admission', async () => {
+    const resources = await admitted({ 'intl.md': `${String.fromCodePoint(0xfe_ff)}# Café\n\nnaïve façade — 東京 and 🚀 prose.\n` });
+
+    const result = await suite.provider?.indexResources(resources);
+
+    expect(result?.errors).toStrictEqual([]);
+    expect(result?.resourcesIndexed).toBe(1);
+  });
+
   it('indexes a markdown document deep enough to overflow a main-thread parse', async () => {
     const resources = await admitted({ 'deep.md': `# Deep\n\nintro\n\n${DEEP_QUOTE}\n` });
     expect(resources).toHaveLength(1);

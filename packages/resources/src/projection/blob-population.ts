@@ -114,7 +114,7 @@ import { estimateTokens } from '../link-classify.js';
 import type { ParseResult } from '../link-parser.js';
 import { type ParseCache, defaultParseCache, isParserUnavailable } from '../parse-cache.js';
 import { ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable } from '../parse-dispatcher.js';
-import { isParseLimitError, isParseWorkerDiedError } from '../parse-limits.js';
+import { isParseDecodeDefect, isParseLimitError, isParseWorkerDiedError } from '../parse-limits.js';
 import { type CodeContextRanges, findLexicalReferences } from '../reference-lexer.js';
 import type { BlobConditionRow } from '../schemas/projection-blobs.js';
 import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
@@ -1108,6 +1108,9 @@ async function parseTarget(
     // type check and not a hoist, and `isParserUnavailable` for why matching one
     // constructed type is not the guessed blocklist that preceded it.
     if (isParserUnavailable(error)) throw error;
+    // VAT's own defect rebuilding the worker's answer, never the document's:
+    // loud, and never a stored `BLOB_PARSE_FAILED` row (`ParseDecodeDefectError`).
+    if (isParseDecodeDefect(error)) throw error;
 
     if (isParseLimitError(error)) {
       return refused('blobsParseLimited', condition(

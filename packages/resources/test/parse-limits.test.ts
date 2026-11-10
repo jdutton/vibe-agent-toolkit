@@ -10,6 +10,7 @@ import * as yaml from 'yaml';
 import {
   appliedHeapLimitMb,
   countOutputRows,
+  expandedSize,
   isParseLimitError,
   isParseWorkerDiedError,
   isPerRunParseRefusal,
@@ -23,7 +24,7 @@ import {
 const MIB = 1_048_576;
 
 describe('the default parse limits', () => {
-  it('allow 30 s of wall clock: the slowest realistic shape (10.6 s) plus a cold parser load under load', () => {
+  it('allow 30 s of wall clock: the slowest realistic shape (9.3 s) plus a cold parser load under load', () => {
     expect(resolveParseLimits(undefined).timeMs).toBe(30_000);
   });
 });
@@ -39,6 +40,46 @@ describe('countOutputRows', () => {
 
   it('counts arrays inside objects inside arrays, and skips scalars', () => {
     expect(countOutputRows({ a: [{ b: [1, 2] }, 3], c: 'x', d: { e: [4] } })).toBe(5);
+  });
+});
+
+describe('expandedSize', () => {
+  it('counts every use of an anchor at the anchor\'s full size', () => {
+    const once = expandedSize(yaml.parse('a: &x [1, 2, 3]'));
+    const thrice = expandedSize(yaml.parse('a: &x [1, 2, 3]\nb: *x\nc: *x'));
+
+    expect(once.rows).toBe(3);
+    expect(thrice.rows).toBe(9);
+    expect(thrice.bytes).toBeGreaterThan(once.bytes * 2);
+  });
+
+  it('counts rows of nested lists, sets and maps', () => {
+    const value = yaml.parse('a: [[1, 2], [3]]\ns: !!set {x, y}\nm: !!omap [{p: 1}]') as Record<string, unknown>;
+
+    // 2 + 2 + 1 under `a`, 2 in the set, 1 entry in the ordered map.
+    expect(expandedSize(value).rows).toBe(8);
+  });
+
+  it('sizes a billion-laughs shape in time linear in its encoding', () => {
+    const levels = ['l0: &l0 [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]'];
+    for (let level = 1; level < 9; level += 1) {
+      const alias = `*l${String(level - 1)}`;
+      levels.push(`l${String(level)}: &l${String(level)} [${Array.from({ length: 10 }, () => alias).join(', ')}]`);
+    }
+    const value: unknown = yaml.parse(levels.join('\n'), { maxAliasCount: -1 });
+
+    expect(expandedSize(value).rows).toBeGreaterThan(1_000_000_000);
+  });
+
+  it('counts a cyclic back-reference once, never forever', () => {
+    const size = expandedSize(yaml.parse('a: &x [1, *x]'));
+
+    expect(size.rows).toBe(2);
+    expect(Number.isFinite(size.bytes)).toBe(true);
+  });
+
+  it('sizes a list of 200,000 items with no spread', () => {
+    expect(expandedSize({ a: Array.from({ length: 200_000 }, () => 1) }).rows).toBe(200_000);
   });
 });
 

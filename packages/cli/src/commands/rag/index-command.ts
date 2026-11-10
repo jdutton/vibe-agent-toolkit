@@ -12,6 +12,7 @@ import { refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger } from '../../utils/logger.js';
+import { parseRefusedIssues } from '../../utils/not-admitted-issues.js';
 import { assertReadableDirectoryArgument, projectRootOrNull } from '../../utils/project-root-policy.js';
 import { requireWritableDatabase } from '../../utils/rag-database.js';
 import { loadResourcesWithConfig } from '../../utils/resource-loader.js';
@@ -145,9 +146,9 @@ export async function indexCommand(
   const startTime = Date.now();
 
   let report: RagIndexReport;
-  // Held outside the `try`: a run the database then refuses still names every file it could not read,
+  // Held outside the `try`: a run the database then refuses still names every file it could not read or parse,
   // every document the provider failed before the refusal, and every finding of a finished index.
-  let unreadable: ValidationIssue[] = [];
+  let notAdmitted: ValidationIssue[] = [];
   let locations: ReadonlyMap<string, string> = new Map();
   let indexed: IndexResult | undefined;
   try {
@@ -173,8 +174,13 @@ export async function indexCommand(
     const allResources = registry.getAllResources();
     // The declared population is the admitted one PLUS what the crawl could not
     // read; the second half is reported below, not dropped — see `unreadableIndexIssues`.
-    unreadable = unreadableIndexIssues(registry.getUnreadableResources(), crawlRoot);
-    logger.debug(`Found ${allResources.length} resources to index (${unreadable.length} enumerated but unreadable)`);
+    // Likewise every file whose parse the crawl refused (a limit, a dead worker):
+    // it is in no list but the registry's refusal log, so unread it is silently absent.
+    notAdmitted = [
+      ...unreadableIndexIssues(registry.getUnreadableResources(), crawlRoot),
+      ...parseRefusedIssues(registry.getParseRefusedResources(), crawlRoot, 'it is not in the index and its content is not searchable'),
+    ];
+    logger.debug(`Found ${allResources.length} resources to index (${notAdmitted.length} enumerated but not admitted)`);
     requireWritableDatabase(dbPath, options.db !== undefined && options.db !== '');
 
     // Create RAG provider in admin mode (readonly: false)
@@ -193,18 +199,18 @@ export async function indexCommand(
 
     const recorded = providerIssues(indexResult, locations);
     // Every one, on stderr: this verb has no `--verbose`.
-    reportFindings([...unreadable, ...recorded], { verbose: true, write: logger.warn });
+    reportFindings([...notAdmitted, ...recorded], { verbose: true, write: logger.warn });
     report = buildIndexReport({
-      examined: allResources.length + unreadable.length,
+      examined: allResources.length + notAdmitted.length,
       result: indexResult,
-      issues: [...unreadable, ...recorded],
+      issues: [...notAdmitted, ...recorded],
       durationMs: Date.now() - startTime,
     });
   } catch (error) {
     const partial = partialIndexResultOf(error) ?? indexed;
     // The writer says them on stderr, with the refusal.
     const recorded = partial ? providerIssues(partial, locations) : [];
-    return endWithRefusal('rag index', refusalCodeOf(error), error, 'yaml', RAG_GATE, { ...NOTHING_FINISHED, findings: toFindings([...unreadable, ...recorded]) });
+    return endWithRefusal('rag index', refusalCodeOf(error), error, 'yaml', RAG_GATE, { ...NOTHING_FINISHED, findings: toFindings([...notAdmitted, ...recorded]) });
   }
   endWithReport('rag index', report, 'yaml');
 }

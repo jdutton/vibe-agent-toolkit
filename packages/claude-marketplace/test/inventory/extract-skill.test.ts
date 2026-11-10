@@ -1,7 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { type ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import {
   CRAWL_PASS_INSIDE,
   CRAWL_REGISTRY_ADMIT_ID,
@@ -370,6 +371,47 @@ describe('crawlSkillLinkRegistry on a directory it cannot list', () => {
 		);
 		expect(inv.parseErrors.map(e => e.message)).toEqual([
 			expect.stringMatching(/^link walk failed: Listing the directory 'locked' was refused \(EACCES\)/),
+		]);
+	});
+});
+
+/**
+ * A linked document whose parse the crawl refused is not admitted, so the walk
+ * found it on disk and listed it as an opaque linked asset — nothing said it was
+ * never parsed. It is now a parse-error row on the skill naming the file and the
+ * refusal code. The seed is 20,000 links, over the default `outputRows` (16,384),
+ * behind a nonce: an in-process parse of the same bytes elsewhere stores unbounded
+ * facts in the shared parse cache, which a later crawl serves as an admission.
+ */
+describe('a linked document whose parse the registry refused', () => {
+	const suite = setupAsyncTempDirSuite('extract-skill-parse-refused');
+	let root = '';
+
+	beforeAll(async () => {
+		await suite.beforeAll();
+		await suite.beforeEach();
+		root = safePath.join(suite.getTempDir(), 'refused');
+		writeRepoFile(root, SKILL_FILENAME, DIVERGENT_SKILL_MD.replace(`[Late note](./${LATE_NOTE_FILENAME})\n`, ''));
+		writeRepoFile(root, REFERENCE_FILENAME, `<!-- ${randomUUID()} -->\n${'[l](./SKILL.md)\n\n'.repeat(20_000)}`);
+		writeRepoFile(root, IGNORED_NOTE_FILENAME, '# note\n');
+		resetProjectRootCaches();
+	});
+
+	afterAll(suite.afterAll);
+
+	it('records a parse-error row naming the file and its refusal code', async () => {
+		const projectRoot = findProjectRoot(root) ?? root;
+		const registry = new ResourceRegistry({ baseDir: projectRoot });
+		await registry.addResources([SKILL_FILENAME, REFERENCE_FILENAME, IGNORED_NOTE_FILENAME].map((name) => safePath.join(root, name)));
+		registry.resolveLinks();
+		const refusedPath = safePath.join(root, REFERENCE_FILENAME);
+		// The fixture breaches only where it means to: the SKILL.md itself is admitted.
+		expect(registry.getParseRefusedResources().map((entry) => entry.filePath)).toEqual([refusedPath]);
+
+		const { parseErrors } = await extractWith(safePath.join(root, SKILL_FILENAME), registry, NO_GIT_TRACKER);
+
+		expect(parseErrors).toEqual([
+			{ path: refusedPath, message: expect.stringContaining('outputRows') as unknown, parseRefused: 'RESOURCE_PARSE_LIMIT_EXCEEDED' },
 		]);
 	});
 });

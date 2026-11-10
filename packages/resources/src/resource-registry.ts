@@ -217,10 +217,31 @@ type PreparedResource =
   | { outcome: 'parse-refused'; filePath: string; error: PerRunParseRefusal }
   | { outcome: 'failed'; error: unknown };
 
-/** A file whose parse this run refused (a limit breach or a worker's death), so it was not admitted. */
-interface ParseRefusedResource {
+/**
+ * One enumerated file whose parse this run refused — stopped at a limit, or lost
+ * with the worker that held it — and so is absent from the registry despite the
+ * crawl having found it. Never stored: the next run parses it again (ADR I6).
+ */
+export interface ParseRefusedResource {
+  /** Absolute path of the file that was enumerated but not admitted. */
   filePath: string;
+  /** The finding code every consumer reports it under. */
+  code: 'RESOURCE_PARSE_LIMIT_EXCEEDED' | 'RESOURCE_PARSE_WORKER_DIED';
+  /** What stopped the parse, e.g. `its parse was stopped at its stackMb limit (1 MiB stack)`. */
+  reason: string;
+  /** The refusal itself. */
   error: PerRunParseRefusal;
+}
+
+/**
+ * @param filePath - The refused file
+ * @param error - What refused it
+ * @returns The log entry every consumer reads
+ */
+function parseRefusedEntry(filePath: string, error: PerRunParseRefusal): ParseRefusedResource {
+  return isParseLimitError(error)
+    ? { filePath, error, code: 'RESOURCE_PARSE_LIMIT_EXCEEDED', reason: `its parse was stopped at its ${error.limit} limit (${error.bound})` }
+    : { filePath, error, code: 'RESOURCE_PARSE_WORKER_DIED', reason: `the parse worker holding it died (${error.message})` };
 }
 
 export class DuplicateResourceIdError extends VatError {
@@ -848,6 +869,22 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
+   * Files whose parse this run refused, in the order `addResources` met them.
+   *
+   * ⛔ Not optional to read. Such a file is in no other list this registry
+   * keeps: not admitted, not unreadable, not in `getAllResources()`. A consumer
+   * that crawls and never calls {@link validate} must report every entry here
+   * as an error finding and count it as examined, exactly as it reports
+   * {@link getUnreadableResources}; otherwise a pathological document silently
+   * drops out of its output at exit 0.
+   *
+   * @returns A copy of the refusal log, oldest first
+   */
+  getParseRefusedResources(): ParseRefusedResource[] {
+    return [...this.parseRefusedResources];
+  }
+
+  /**
    * Duplicate-id drops, in the order `addResources` made them.
    *
    * Exposed because admission order is behaviour, not bookkeeping: the rule is
@@ -1282,7 +1319,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private emitPreparedResource(prepared: PreparedResource): ResourceMetadata | undefined {
     if (prepared.outcome === 'failed') throw prepared.error;
     if (prepared.outcome === 'parse-refused') {
-      this.parseRefusedResources.push({ filePath: prepared.filePath, error: prepared.error });
+      this.parseRefusedResources.push(parseRefusedEntry(prepared.filePath, prepared.error));
       return undefined;
     }
     if (prepared.outcome === 'unreadable') {
@@ -1754,14 +1791,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * during addResources(), each naming the file and what stopped it.
    */
   private collectParseRefusedErrors(): ValidationIssue[] {
-    return this.parseRefusedResources.map(({ filePath, error }) => {
+    return this.parseRefusedResources.map(({ filePath, code, reason }) => {
       const where = issueLocation(filePath, locationRoot(this.baseDir));
-      const [code, what] = isParseLimitError(error)
-        ? ['RESOURCE_PARSE_LIMIT_EXCEEDED', `its parse was stopped at its ${error.limit} limit (${error.bound})`] as const
-        : ['RESOURCE_PARSE_WORKER_DIED', `the parse worker holding it died (${error.message})`] as const;
       return createRegistryIssue(
         code,
-        `'${where}' was enumerated but ${what}, so it was skipped and is absent from every count in this report. Nothing was stored for it: the next run parses it again.`,
+        `'${where}' was enumerated but ${reason}, so it was skipped and is absent from every count in this report. Nothing was stored for it: the next run parses it again.`,
         { location: where },
       );
     });

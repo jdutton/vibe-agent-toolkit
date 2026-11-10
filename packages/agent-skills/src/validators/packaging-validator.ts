@@ -20,6 +20,7 @@ import {
   listingRefusalRemedy,
   loadConfig,
   parseFileCached,
+  type ParseRefusedResource,
   type RegistryUnreadablePolicy,
   ResourceRegistry,
   type ResourcePopulationSource,
@@ -65,6 +66,7 @@ import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
 import { collectPreBuildGlobFindings, preBuildGlobFindingsToIssues } from '../files-config.js';
 import { isSkillPackagingInputError } from '../packaging-errors.js';
+import { parseRefusedIssues, stackOverflowIssue } from '../parse-refusal-issues.js';
 import {
   conventionalSuiteProbe,
   partitionTestInputFileEntries,
@@ -746,7 +748,9 @@ export function resetPackagingRegistryCache(): void {
  *   memoized, since a packaged skill's directory is a staging name no later caller asks for again
  * @param shared - The batching caller's context, if any
  * @param context - `built` for output this run wrote, which the crawl never holds — see {@link withOwnBundle}
- * @returns A registry whose links are resolved and that covers `skillPath`
+ * @returns A registry whose links are resolved and that covers `skillPath`, and
+ *   every parse refusal behind it — the base crawl's and, when a built bundle is
+ *   layered over it, the bundle's (the layered copy carries only its own log)
  */
 async function registryForSkill(
   skillPath: string,
@@ -754,15 +758,19 @@ async function registryForSkill(
   inProject: boolean,
   shared: SkillValidationSharedContext | undefined,
   context: 'source' | 'built',
-): Promise<ResourceRegistry> {
+): Promise<{ registry: ResourceRegistry; parseRefused: ParseRefusedResource[] }> {
   const outputs = crawlOutputs(context, skillPath, shared);
   const unreadable = shared === undefined ? 'refuse' : shared.unreadable;
-  const registry = await baseRegistryForSkill(skillPath, projectRoot, inProject, shared, { outputs, unreadable });
+  const base = await baseRegistryForSkill(skillPath, projectRoot, inProject, shared, { outputs, unreadable });
   // The caller's registry "covers" the skill by directory alone — one crawled before a build wrote
   // the bundle covers it and holds none of it — so it takes the same layering as the crawl.
-  return context === 'built' && registry.getResource(safePath.resolve(skillPath)) === undefined
-    ? withOwnBundle(registry, dirname(skillPath), unreadable, outputs)
-    : registry;
+  const registry = context === 'built' && base.getResource(safePath.resolve(skillPath)) === undefined
+    ? await withOwnBundle(base, dirname(skillPath), unreadable, outputs)
+    : base;
+  const parseRefused = registry === base
+    ? base.getParseRefusedResources()
+    : [...base.getParseRefusedResources(), ...registry.getParseRefusedResources()];
+  return { registry, parseRefused };
 }
 
 /**
@@ -1072,7 +1080,9 @@ export async function validateSkillForPackaging(
   // A `built` skill is VAT's own output re-read: every read of its tree the OS refuses is the
   // destination's, never the user's input. The ONE mapping; every read below takes `side`.
   const side: FsSide = context === 'built' ? 'destination' : 'source';
-  const parseResult = await parseFileCached(skillPath, 'markdown', { side });
+  const parsed = await parseSkillMarkdown(skillPath, side, skillLocation);
+  if ('limit' in parsed) return parseLimitResult(skillPath, parsed.limit, packagingConfig, shared);
+  const { parseResult } = parsed;
   // The parser already decoded these bytes; a second whole-file read of the same
   // path would only add a syscall and a TOCTOU window. `content` is the raw
   // source verbatim, so fenced code blocks reach `runCompatDetectors` intact.
@@ -1115,7 +1125,7 @@ export async function validateSkillForPackaging(
   // reuse when the shared registry covers this skill's projectRoot; otherwise
   // fall back to a fresh crawl to avoid leaking resources across roots.
   // A `built` skill sits in output this run wrote inside the project: the project root is then a destination.
-  const registry = await registryForSkill(skillPath, projectRoot, foundRoot !== null, shared, context);
+  const { registry, parseRefused } = await registryForSkill(skillPath, projectRoot, foundRoot !== null, shared, context);
 
   const skillResource = registry.getResource(safePath.resolve(skillPath));
   // Only the entries the PACKAGER will actually copy defer a link: an entry pointing
@@ -1210,14 +1220,18 @@ export async function validateSkillForPackaging(
   const bundledFileSet = new Set(bundledFiles);
   const directFileCount = directLinks.filter(p => bundledFileSet.has(p)).length;
 
-  // Four producers, one append, order significant, all anchored on `locationRoot`:
+  // Five producers, one append, order significant, all anchored on `locationRoot`:
   //  1. walker exclusions (LINK_OUTSIDE_PROJECT, LINK_TARGETS_DIRECTORY, etc.)
   //  2. links dropped for pointing into declared test input — the same issue, at
   //     the same location, the packager emits for it. `projectRoot` scopes WHICH
   //     dirs count as declared test input; `locationRoot` only anchors.
   //  3. one info issue per deferred asset declared in files: config
   //  4. followed links bundled from outside the skill directory (LINK_OUTSIDE_SKILL_DIR)
+  //  5. every file the skill reaches whose parse the crawl refused: absent from the
+  //     registry, the walk found it on disk and bundled it as an opaque asset, its
+  //     links unwalked and nothing in it checked
   rawIssues.push(
+    ...parseRefusedIssues(parseRefused, [skillPath, ...bundledAssets], locationRoot),
     ...walkerExclusionsToIssues(excludedReferences, locationRoot),
     ...testInputLinkIssues(excludedReferences, testInputDirs, projectRoot, locationRoot),
     ...deferredAssetsToIssues(deferredAssets, locationRoot),
@@ -1298,10 +1312,7 @@ export async function validateSkillForPackaging(
   // happened to be validated when the entry went unmatched); a caller that
   // supplied none is claiming its run is this one skill, and gets the run-level
   // answer folded in here.
-  const validationConfig = packagingConfig?.validation ?? {};
-  const framework = shared?.allowLedger === undefined
-    ? runSingleUnitValidation(filteredIssues, validationConfig)
-    : runValidationFramework(filteredIssues, validationConfig, shared.allowLedger);
+  const framework = runFrameworkFor(filteredIssues, packagingConfig, shared);
 
   const skillName = extractSkillName(parseResult, skillPath);
 
@@ -1320,6 +1331,83 @@ export async function validateSkillForPackaging(
       maxLinkDepth,
       excludedReferenceCount: excludedDetails.length,
       excludedReferences: excludedDetails,
+    },
+  };
+}
+
+/**
+ * One skill's issues through the validation framework: the batching caller's
+ * ledger when it supplied one, else this skill as the whole run.
+ */
+function runFrameworkFor(
+  issues: ValidationIssue[],
+  packagingConfig: SkillPackagingConfig | undefined,
+  shared: SkillValidationSharedContext | undefined,
+): ReturnType<typeof runSingleUnitValidation> {
+  const validationConfig = packagingConfig?.validation ?? {};
+  return shared?.allowLedger === undefined
+    ? runSingleUnitValidation(issues, validationConfig)
+    : runValidationFramework(issues, validationConfig, shared.allowLedger);
+}
+
+/**
+ * The skill's SKILL.md, parsed on this thread — or the finding that replaces the
+ * parse when its frontmatter or markdown nests too deeply for the stack. Any
+ * other failure propagates as it always did.
+ *
+ * @param skillPath - The SKILL.md
+ * @param side - Whose fault a refused read is
+ * @param skillLocation - The SKILL.md's location, as issues report it
+ * @returns The parse, or the `RESOURCE_PARSE_LIMIT_EXCEEDED` issue
+ */
+async function parseSkillMarkdown(
+  skillPath: string,
+  side: FsSide,
+  skillLocation: string,
+): Promise<{ parseResult: Awaited<ReturnType<typeof parseFileCached>> } | { limit: ValidationIssue }> {
+  try {
+    return { parseResult: await parseFileCached(skillPath, 'markdown', { side }) };
+  } catch (error) {
+    const limit = stackOverflowIssue(error, skillLocation);
+    if (limit === undefined) throw error;
+    return { limit };
+  }
+}
+
+/**
+ * The result for a skill whose SKILL.md could not be parsed at all: the one
+ * finding, through the same framework (so an allow entry and the run's ledger
+ * see it), and nothing else — no frontmatter, links or bundle to check.
+ *
+ * @param skillPath - The SKILL.md
+ * @param limit - Its `RESOURCE_PARSE_LIMIT_EXCEEDED` issue
+ * @param packagingConfig - The skill's packaging config, for its validation block
+ * @param shared - The batching caller's context, for its ledger
+ * @returns A result whose only finding is `limit`
+ */
+function parseLimitResult(
+  skillPath: string,
+  limit: ValidationIssue,
+  packagingConfig: SkillPackagingConfig | undefined,
+  shared: SkillValidationSharedContext | undefined,
+): PackagingValidationResult {
+  const framework = runFrameworkFor([limit], packagingConfig, shared);
+  return {
+    // Named by its directory: there is no frontmatter or H1 to read a name from.
+    skillName: basename(dirname(skillPath)),
+    ...summarizeIssues(framework.emitted),
+    allErrors: framework.emitted,
+    ignoredErrors: framework.allowed,
+    observations: [],
+    evidence: [],
+    metadata: {
+      skillLines: 0,
+      totalLines: 0,
+      fileCount: 1,
+      directFileCount: 0,
+      maxLinkDepth: 0,
+      excludedReferenceCount: 0,
+      excludedReferences: [],
     },
   };
 }

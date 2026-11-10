@@ -60,12 +60,17 @@ export {
   type RegistryUnreadablePolicy,
   type DuplicateIdCollision,
   type UnreadableResource,
+  type ParseRefusedResource,
   type RegistryCrawl,
   type ResourceRegistryOptions,
   type RegistryStats,
   type CollectionStats,
   type CollectionStat,
 } from './resource-registry.js';
+
+// The checksum the registry records for a resource's decoded text, so a consumer
+// re-hashing that text at use (ADR I2a) runs the one implementation.
+export { calculateChecksumFromContent } from './checksum.js';
 
 // Export ResourceQuery for lazy evaluation and filtering
 export { ResourceQuery } from './resource-query.js';
@@ -546,6 +551,10 @@ export {
   ParseWorkerDiedError,
   isParseLimitError,
   isParseWorkerDiedError,
+  // An in-process caller of `parseFileCached`/`parseMarkdown*` (skill packaging
+  // and validation) classifies a parser's stack overflow with this, and reports
+  // it as `RESOURCE_PARSE_LIMIT_EXCEEDED` at error severity, never a crash.
+  isStackOverflow,
   type ParseLimitName,
   type ParseLimits,
 } from './parse-limits.js';

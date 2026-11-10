@@ -4,6 +4,8 @@ import { dirname } from 'node:path';
 import {
 	LINK_GRAPH_MEMBER_GLOBS,
 	parseFrontmatter,
+	parseRefusedMessage,
+	refusedAmong,
 	walkLinkGraph,
 	type WalkableRegistry,
 } from '@vibe-agent-toolkit/agent-skills';
@@ -326,6 +328,11 @@ async function walkLinkedFiles(
 		if (skillResource !== undefined) {
 			const gitTracker = await gitTrackerFor(projectRoot, options.gitTrackerSource);
 			collectLinkedFiles(skillResource.id, registry, absolute, projectRoot, linked, gitTracker);
+		}
+		// A file the crawl refused to parse is not admitted, so the walk met it on
+		// disk as an opaque asset: its links never walked, nothing in it checked.
+		for (const entry of refusedAmong(registry.getParseRefusedResources(), [absolute, ...linked])) {
+			parseErrors.push({ path: entry.filePath, message: parseRefusedMessage(entry, entry.filePath), parseRefused: entry.code });
 		}
 	} catch (e) {
 		parseErrors.push({ path: absolute, message: `link walk failed: ${(e as Error).message}` });

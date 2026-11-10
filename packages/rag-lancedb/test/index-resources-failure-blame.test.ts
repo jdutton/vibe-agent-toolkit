@@ -29,6 +29,7 @@ import {
   createBareResource,
   createStubEmbeddingProvider,
   createTestMarkdownFile,
+  createTestResource,
   setupLanceDBTestSuite,
 } from './test-helpers.js';
 
@@ -146,6 +147,34 @@ describe('an ordinary read failure during resource indexing', () => {
  * travels on the refusal, so the caller still reports the document that failed
  * before it.
  */
+/**
+ * The bytes the indexer reads are re-hashed and checked against the registry's
+ * checksum for them (ADR I2a): the resource's facts — links, headings,
+ * frontmatter — describe the bytes the registry admitted, and a file changed
+ * between admission and indexing would otherwise be indexed as new text under
+ * the old facts. A mismatch refuses that one resource and writes nothing for it.
+ */
+describe('a file changed between registry admission and indexing', () => {
+  it('records an error for that resource, indexes nothing for it, and finishes the batch', async () => {
+    const changedPath = await createTestMarkdownFile(suite.tempDir, 'changed.md', '# Before\n\nThe admitted text.\n');
+    const steadyPath = await createTestMarkdownFile(suite.tempDir, 'steady.md', '# Steady\n\nUnchanged prose.\n');
+    const changed = await createTestResource(changedPath, 'changed');
+    const steady = await createTestResource(steadyPath, 'steady');
+    await createTestMarkdownFile(suite.tempDir, 'changed.md', '# After\n\nText the registry never saw.\n');
+    const embedBatch = vi.spyOn(STUB_EMBEDDINGS, 'embedBatch');
+
+    const result = await provider().indexResources([changed, steady]);
+
+    expect(result.errors).toEqual([
+      { resourceId: 'changed', error: expect.stringContaining('changed since') as unknown },
+    ]);
+    expect(result.resourcesIndexed).toBe(1);
+    // One embed call — the steady neighbour's — and none for the changed file.
+    expect(embedBatch).toHaveBeenCalledTimes(1);
+    embedBatch.mockRestore();
+  });
+});
+
 describe('a store refusal partway through a batch', () => {
   it('carries the earlier resource failures on the refusal', async () => {
     failures.queue = [new Error('embedder refused'), new VatError(RAG_DATABASE_UNREADABLE_CODE, 'store unreadable')];

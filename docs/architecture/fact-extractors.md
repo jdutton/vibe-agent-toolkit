@@ -145,7 +145,7 @@ Cross-host or container-shared stores; replay of past trees.
 
 ## Deferred
 
-P3 governs only detail beyond the bound row sets; pinned git's dropped keys pass through once shown answer-neutral; limit defaults come from the lab (Measure), the parse pool's recorded in [Parse Limits](./fact-extractors-limits.md) and the extractors' still open; an off-Linux network-fs probe.
+P3 governs only detail beyond the bound row sets; pinned git's dropped keys pass through once shown answer-neutral; limit defaults come from the lab (Measure), the parse pool's recorded in [Parse Limits](./fact-extractors-limits.md) and the extractors' still open; an off-Linux network-fs probe; storing key-determined limit outcomes (the output and input caps) under their limit, until which they are per run like the rest ([register](./fact-extractors-hazard-register.md): `Cost: key-determined parse-limit breaches`).
 
 ## How this ADR changes
 

@@ -35,10 +35,13 @@ including link integrity checking and anchor validation.
 - `--format <format>` - `yaml` (default) or `json`. The same document either way
 
 **Exit Codes:** derived from the published document, never chosen beside it.
-- `0` - Scanned at least one file
-- `1` - Scanned nothing: one non-overridable `RESOURCE_CHECK_BROKEN` finding
-  (the path or config enumerates no markdown, or `--collection` names a
-  collection no file matched) — a scan of nothing is not a population
+- `0` - Scanned at least one file, and admitted every file it enumerated
+- `1` - A file enumerated but not admitted: one error finding each —
+  `RESOURCE_UNREADABLE` (the read failed), `RESOURCE_PARSE_LIMIT_EXCEEDED` or
+  `RESOURCE_PARSE_WORKER_DIED` (its parse was refused); or scanned nothing: one
+  non-overridable `RESOURCE_CHECK_BROKEN` finding (the path or config
+  enumerates no markdown, or `--collection` names a collection no file
+  matched) — a scan of nothing is not a population
 - `2` - The scan could not run: `[path]` names no directory (`USAGE_INVALID`), a
   directory the OS will not list (`INPUT_UNREADABLE`), an unusable config
   (`CONFIG_INVALID`)
@@ -47,7 +50,8 @@ including link integrity checking and anchor validation.
 `--format json` (schema: `packages/cli/schemas/resources-scan.json`); logs on
 stderr.
 
-- `examined` — files scanned. A scan reports no finding of its own.
+- `examined` — files enumerated, admitted or not. The scan's only findings are
+  the files it could not admit.
 - `durationMs` — wall time of the run.
 - `data.root` is stated once and is the only absolute path in the document;
   every `data.files[].path` is relative to it.

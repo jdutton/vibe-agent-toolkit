@@ -118,13 +118,47 @@ function encodeNode(value: unknown, slot: (child: unknown) => Slot): EncodedNode
   if (typeof value === 'number') return ['n', Object.is(value, -0) ? '-0' : String(value)];
   if (typeof value === 'bigint') return ['g', value.toString()];
   if (value === undefined) return ['u'];
-  if (Array.isArray(value)) return ['a', ...value.map((child) => slot(child))];
   if (value instanceof Uint8Array) return ['b', Buffer.from(value).toString('base64')];
   if (value instanceof Date) return ['d', String(value.getTime())];
-  if (value instanceof Map) return ['m', ...[...value].flatMap(([key, child]) => [slot(key), slot(child)])];
-  if (value instanceof Set) return ['s', ...[...value].map((child) => slot(child))];
-  if (isPlainObject(value)) return ['o', ...Object.entries(value).flatMap(([key, child]) => [key, slot(child)])];
+  const node = containerNode(value, slot);
+  if (node !== undefined) return node;
   throw new VatError(FRONTMATTER_VALUE_MALFORMED, `Cannot encode a frontmatter value of type ${describeType(value)}.`);
+}
+
+/**
+ * A container's table entry, built by appending one slot at a time: never a
+ * spread, `apply` or `flatMap` whose argument count or intermediate array grows
+ * with the container, so a list of any length encodes.
+ *
+ * @param value - A value that is not an inline scalar or a leaf
+ * @param slot - Turns a child into a slot
+ * @returns The node, or undefined when the value is no container
+ */
+function containerNode(value: unknown, slot: (child: unknown) => Slot): EncodedNode | undefined {
+  if (Array.isArray(value)) return appendSlots(['a'], value as unknown[], slot);
+  if (value instanceof Set) return appendSlots(['s'], value as Set<unknown>, slot);
+  if (value instanceof Map) {
+    const node: EncodedNode = ['m'];
+    for (const [key, child] of value as Map<unknown, unknown>) node.push(slot(key), slot(child));
+    return node;
+  }
+  if (isPlainObject(value)) {
+    const node: EncodedNode = ['o'];
+    for (const key of Object.keys(value)) node.push(key, slot(value[key]));
+    return node;
+  }
+  return undefined;
+}
+
+/**
+ * @param node - A container node holding only its tag
+ * @param children - Its children, in order
+ * @param slot - Turns a child into a slot
+ * @returns The node, one slot appended per child
+ */
+function appendSlots(node: EncodedNode, children: Iterable<unknown>, slot: (child: unknown) => Slot): EncodedNode {
+  for (const child of children) node.push(slot(child));
+  return node;
 }
 
 /**
@@ -160,7 +194,7 @@ function describeType(value: unknown): string {
  * @throws A `VatError` coded `FRONTMATTER_VALUE_MALFORMED` for anything it did not write
  */
 export function decodeFrontmatterValue(encoded: string): Record<string, unknown> {
-  const parsed: unknown = JSON.parse(encoded);
+  const parsed = parseTable(encoded);
   if (!Array.isArray(parsed) || parsed.length === 0) throw malformed('not a node table');
   const nodes = parsed.map((node) => requireNode(node));
   const shells = nodes.map((node) => shellFor(node));
@@ -170,6 +204,21 @@ export function decodeFrontmatterValue(encoded: string): Record<string, unknown>
   const root = shells[0];
   if (nodes[0]?.[0] !== 'o' || !isPlainObject(root)) throw malformed('the first node is not a mapping');
   return root;
+}
+
+/**
+ * @param encoded - An encoding, as stored or sent
+ * @returns Its JSON value
+ * @throws `FRONTMATTER_VALUE_MALFORMED` when it is not JSON at all
+ */
+function parseTable(encoded: string): unknown {
+  try {
+    return JSON.parse(encoded);
+  } catch (error) {
+    // `JSON.parse` throws nothing but a SyntaxError for its input.
+    if (!(error instanceof SyntaxError)) throw error;
+    throw malformed('not JSON');
+  }
 }
 
 /**
@@ -237,10 +286,19 @@ function leafFor(tag: string, payload: unknown): unknown {
  * @param resolve - Turns a slot into a value
  */
 function fill(node: EncodedNode, shell: unknown, resolve: (child: unknown) => unknown): void {
-  const [tag, ...rest] = node;
-  if (tag === 'a') (shell as unknown[]).push(...rest.map((child) => resolve(child)));
-  if (tag === 's') for (const child of rest) (shell as Set<unknown>).add(resolve(child));
-  if (tag === 'm' || tag === 'o') fillPairs(tag, rest, shell, resolve);
+  const tag = node[0];
+  // An index loop from 1, never `[tag, ...rest]` or `push(...children)`: a
+  // spread's arguments live on the stack, and a long enough list overflows it
+  // on whatever thread decodes (about 130,000 on Node's default main stack).
+  if (tag === 'a') {
+    const array = shell as unknown[];
+    for (let index = 1; index < node.length; index += 1) array.push(resolve(node[index]));
+  }
+  if (tag === 's') {
+    const set = shell as Set<unknown>;
+    for (let index = 1; index < node.length; index += 1) set.add(resolve(node[index]));
+  }
+  if (tag === 'm' || tag === 'o') fillPairs(tag, node, shell, resolve);
 }
 
 /**
@@ -250,19 +308,19 @@ function fill(node: EncodedNode, shell: unknown, resolve: (child: unknown) => un
  * object's prototype.
  *
  * @param tag - `o` or `m`
- * @param rest - Key, child, key, child, …
+ * @param node - The tag, then key, child, key, child, …
  * @param shell - The object or `Map`
  * @param resolve - Turns a slot into a value
  */
-function fillPairs(tag: string, rest: unknown[], shell: unknown, resolve: (child: unknown) => unknown): void {
-  if (rest.length % 2 !== 0) throw malformed(`a "${tag}" node has an unpaired key`);
-  for (let index = 0; index < rest.length; index += 2) {
-    const value = resolve(rest[index + 1]);
+function fillPairs(tag: string, node: EncodedNode, shell: unknown, resolve: (child: unknown) => unknown): void {
+  if ((node.length - 1) % 2 !== 0) throw malformed(`a "${tag}" node has an unpaired key`);
+  for (let index = 1; index < node.length; index += 2) {
+    const value = resolve(node[index + 1]);
     if (tag === 'm') {
-      (shell as Map<unknown, unknown>).set(resolve(rest[index]), value);
+      (shell as Map<unknown, unknown>).set(resolve(node[index]), value);
       continue;
     }
-    const key = rest[index];
+    const key = node[index];
     if (typeof key !== 'string') throw malformed('a mapping key is not a string');
     Object.defineProperty(shell, key, { value, writable: true, enumerable: true, configurable: true });
   }

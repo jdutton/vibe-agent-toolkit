@@ -11,7 +11,7 @@ import type { ParseLimits } from '../src/parse-limits.js';
 
 /**
  * A list nested `depth` levels deep. The parser's cost is quadratic in the depth:
- * 1,000 levels measured 10.6 s, so 1,500 runs for ~25 s — an order of magnitude
+ * 1,000 levels measured 9.3 s, so 1,500 runs for ~20 s — an order of magnitude
  * past the test's wall-clock bound, so a kill at the bound is unmistakable.
  *
  * @param depth - Nesting levels

@@ -76,6 +76,30 @@ describe('the decoded-frontmatter codec', () => {
     expect(depth).toBe(50_000);
   });
 
+  it.each([
+    ['an array', (items: number[]): unknown => items],
+    ['a set', (items: number[]): unknown => new Set(items)],
+    ['a map', (items: number[]): unknown => new Map(items.map((item) => [item, item]))],
+    ['a mapping', (items: number[]): unknown => Object.fromEntries(items.map((item) => [`k${String(item)}`, item]))],
+  ])('round-trips %s of 200,000 elements, past any argument-count or spread limit', (_label, build) => {
+    const items = Array.from({ length: 200_000 }, (_, index) => index);
+    const value = { a: build(items) };
+
+    expect(roundTrip(value)).toStrictEqual(value);
+  });
+
+  it('decodes an array of 2,000,000 elements, past the argument limit of any thread stack', () => {
+    // 200,000 overflows a spread on Node's default main-thread stack, but a test
+    // worker's stack is not that one, so the count alone could prove nothing
+    // here. Two million arguments need 16 MB of stack, more than any thread VAT
+    // or vitest starts, so a spread anywhere on the decode path is red here.
+    const items = Array.from({ length: 2_000_000 }, (_, index) => index % 7);
+
+    const rebuilt = roundTrip({ a: items });
+
+    expect(rebuilt['a']).toStrictEqual(items);
+  });
+
   it('refuses a malformed encoding rather than inventing a value', () => {
     expect(() => decodeFrontmatterValue('["?", 1]')).toThrow(/frontmatter/i);
     expect(() => decodeFrontmatterValue('not json')).toThrow();

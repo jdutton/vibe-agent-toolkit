@@ -10,16 +10,18 @@
  * populated by the extractor (Task 2.5 left it as []).
  */
 
+import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
 	createSuiteContext,
 	executeCli,
 	executeCliAndParseYaml,
+	overOutputRowsDocument,
 } from './test-common.js';
 
 // ---------------------------------------------------------------------------
@@ -102,6 +104,29 @@ describe('vat audit — inventory detector codes (system test)', () => {
 		// Exit 1: the exit code follows `status`, and this tree has an error-severity finding.
 		expect(result.status).toBe(1);
 		expect(result.stdout).toContain('MARKETPLACE_PLUGIN_SOURCE_MISSING');
+	});
+
+	// -------------------------------------------------------------------------
+	// RESOURCE_PARSE_LIMIT_EXCEEDED — a linked document the crawl refused to parse
+	// -------------------------------------------------------------------------
+	it('files a linked document the crawl refused to parse once, under its own code, not PLUGIN_INVALID_JSON', async () => {
+		const plugin = safePath.join(ctx.createTempDir(), 'p');
+		const skillDir = safePath.join(plugin, 'skills', 'linker');
+		mkdirSyncReal(safePath.join(plugin, '.claude-plugin'), { recursive: true });
+		mkdirSyncReal(skillDir, { recursive: true });
+		writeFileSync(safePath.join(plugin, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'p', version: '0.0.1', description: 'Fixture plugin.' }));
+		writeFileSync(
+			safePath.join(skillDir, 'SKILL.md'),
+			'---\nname: linker\ndescription: Fixture skill linking one reference document too large to parse.\n---\n\n# linker\n\nSee [the reference](reference.md).\n',
+		);
+		writeFileSync(safePath.join(skillDir, 'reference.md'), overOutputRowsDocument('SKILL.md'));
+
+		const result = await executeCli(ctx.binPath, ['audit', plugin]);
+
+		expect(result.status).toBe(1);
+		expect(result.stdout.match(/RESOURCE_PARSE_LIMIT_EXCEEDED/g)?.length ?? 0).toBeGreaterThan(0);
+		expect(result.stdout).toContain('reference.md');
+		expect(result.stdout).not.toContain('PLUGIN_INVALID_JSON');
 	});
 
 	// -------------------------------------------------------------------------

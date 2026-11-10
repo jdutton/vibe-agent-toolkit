@@ -86,6 +86,7 @@ function scanPayload(verbose: boolean, lane: 'walk' | 'projection' = 'walk') {
     durationMs: 234,
     collections: {},
     verbose,
+    notAdmitted: [],
   });
   RESOURCES_SCAN_REPORT_SCHEMA.parse(report);
   return report.data;
@@ -122,6 +123,7 @@ describe('resources scan payload', () => {
       durationMs: 234,
       collections: {},
       verbose: false,
+      notAdmitted: [],
     });
 
     expect(report.examined).toBe(2);

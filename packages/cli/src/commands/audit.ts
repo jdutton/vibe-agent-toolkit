@@ -52,6 +52,7 @@ import { listingRefusalRemedy, type RegistryUnreadablePolicy } from '@vibe-agent
 import {
   buildReport,
   countBySeverity,
+  createRegistryIssue,
   exitCodeForReport,
   summarizeIssues,
   toFindings,
@@ -1757,6 +1758,14 @@ function appendInventoryParseErrors(
 		if (err.path.endsWith(pluginJsonSuffix) || basename(err.path) === 'SKILL.md') continue;
 		const message = withRelativePath(err.message, err.path, locationRoot);
 		const location = issueLocation(err.path, locationRoot);
+		if (err.parseRefused !== undefined) {
+			// Read but never parsed: its own code, not a JSON defect. The skill lane
+			// may already have filed it on this result — one file, one finding.
+			if (!result.issues.some((issue) => issue.code === err.parseRefused && issue.location === location)) {
+				parseIssues.push(createRegistryIssue(err.parseRefused, message, { location }));
+			}
+			continue;
+		}
 		if (err.unreadable !== true) {
 			parseIssues.push({ severity: 'error', code: 'PLUGIN_INVALID_JSON', message, location });
 			continue;

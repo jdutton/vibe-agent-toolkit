@@ -9,6 +9,13 @@ export interface FrontmatterSuccess {
 export interface FrontmatterError {
   success: false;
   error: string;
+  /**
+   * What the YAML parser threw, or `undefined` for a refusal this parser made
+   * itself (no delimiter, not a mapping). Carried so a caller can classify the
+   * throw — a stack overflow on deeply nested YAML is a parse LIMIT, not missing
+   * frontmatter — without reading `error`'s text.
+   */
+  cause: unknown;
 }
 
 export type FrontmatterResult = FrontmatterSuccess | FrontmatterError;
@@ -37,6 +44,7 @@ export function parseFrontmatter(content: string): FrontmatterResult {
     return {
       success: false,
       error: 'No frontmatter found - must start at beginning with "---" delimiter',
+      cause: undefined,
     };
   }
 
@@ -48,6 +56,7 @@ export function parseFrontmatter(content: string): FrontmatterResult {
     return {
       success: false,
       error: 'No closing delimiter found',
+      cause: undefined,
     };
   }
 
@@ -69,6 +78,7 @@ export function parseFrontmatter(content: string): FrontmatterResult {
     return {
       success: false,
       error: `Failed to parse YAML frontmatter: ${error instanceof Error ? error.message : String(error)}`,
+      cause: error,
     };
   }
 
@@ -85,6 +95,7 @@ export function parseFrontmatter(content: string): FrontmatterResult {
     return {
       success: false,
       error: `Frontmatter is not a YAML mapping: the block between the "---" delimiters is ${describeNonMapping(parsed)}`,
+      cause: undefined,
     };
   }
 

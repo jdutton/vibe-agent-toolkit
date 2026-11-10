@@ -9,16 +9,20 @@
  * the same thread, and a stack or heap it exhausts takes the whole process with
  * it. So every parse runs in a worker of `parse-pool.ts`, and that pool is the
  * only place these limits are enforced. Measured on the shipped markdown parser:
- * a 1,000-level nested list parses in 10.6 s and a 10,000-level one does not
- * finish; 10,000 nested `>` overflow the stack.
+ * a 1,000-level nested list parses in 9.3 s in a worker (a lab arm, recorded in
+ * `fact-extractors-limits.md`) and a 10,000-level one does not finish; 10,000
+ * nested `>` overflow the main thread's stack (a worker's 4 MiB parses them in 0.6 s).
  *
  * ## Why a breach persists nothing (I6)
  *
  * Time, heap and stack outcomes depend on the machine and its load, not on the
  * bytes, so a breach is filed nowhere: no parse-cache entry, no stored failure.
  * The next run re-attempts the pair. Output and input caps ARE functions of the
- * bytes, but storing them is the "failures stored under their limit" step the
- * ADR defers, so for now they are per-run too — one rule, no second lane.
+ * bytes, but storing them under their limit is Deferred in the ADR, so for now
+ * they are per-run too — one rule, no second lane. The cost, a key-determined
+ * breach re-attempted every run, is the hazard register's accepted, counted row
+ * `Cost: key-determined parse-limit breaches (output and input caps) re-attempted every run`
+ * (`docs/architecture/fact-extractors-hazard-register.md`).
  *
  * ## Where the values come from
  *
@@ -28,6 +32,8 @@
  */
 
 import { VatError } from '@vibe-agent-toolkit/utils';
+
+import type { ParseResult } from './link-parser.js';
 
 /** The limits one parse job runs under. */
 export interface ParseLimits {
@@ -56,7 +62,7 @@ export type ParseLimitName = keyof ParseLimits;
  * times ten, rounded up to a power of two in its unit. A limit the lab cannot
  * yet observe per job (`timeMs`, `heapMb`) keeps a bound the record justifies
  * another way — `timeMs` covers the slowest realistic shape found (a
- * 1,000-level nested list, 10.6 s) plus a cold worker's parser load, with
+ * 1,000-level nested list, 9.3 s) plus a cold worker's parser load, with
  * headroom for a loaded machine. Named for what they bound, never a version.
  */
 const DEFAULT_PARSE_LIMITS: ParseLimits = {
@@ -183,6 +189,198 @@ export function countOutputRows(facts: object): number {
   return rows;
 }
 
+/** Rows and bytes a decoded value holds once every alias in it is expanded. */
+interface ExpandedSize {
+  /** Elements of every array and set, and entries of every map, at every depth. */
+  readonly rows: number;
+  /** About what the value serialises to as JSON, every alias written out in full. */
+  readonly bytes: number;
+}
+
+/**
+ * A back-reference into a value still being sized (a cyclic anchor) costs this
+ * many bytes: no consumer can write out a cycle in full, so it is counted as
+ * the reference it is, never as an expansion that has no end.
+ */
+const CYCLE_REFERENCE_BYTES = 8;
+
+/** One container being sized: its children, the next one to visit, and what it has added up so far. */
+interface SizingFrame {
+  readonly node: object;
+  readonly children: readonly unknown[];
+  next: number;
+  rows: number;
+  bytes: number;
+}
+
+/**
+ * @param value - Any decoded value
+ * @returns True for a value with children: an array, set, map or object (a binary or date has none)
+ */
+function isContainer(value: unknown): value is object {
+  return typeof value === 'object' && value !== null && !(value instanceof Uint8Array) && !(value instanceof Date);
+}
+
+/**
+ * @param value - A value with no children
+ * @returns About what it serialises to as JSON
+ */
+function leafBytes(value: unknown): number {
+  if (typeof value === 'string') return Buffer.byteLength(value) + 2;
+  if (value instanceof Uint8Array) return Math.ceil(value.byteLength / 3) * 4 + 2;
+  if (value instanceof Date) return 26;
+  return String(value).length;
+}
+
+/**
+ * A container's frame: its children, its own rows, and the bytes of its
+ * brackets, separators and keys. No spread: a list of any length is read by
+ * iteration.
+ *
+ * @param node - An array, set, map or object
+ * @returns Its frame, before any child is sized
+ */
+function openFrame(node: object): SizingFrame {
+  if (Array.isArray(node)) {
+    return { node, children: node, next: 0, rows: node.length, bytes: 2 + Math.max(0, node.length - 1) };
+  }
+  if (node instanceof Set) {
+    return { node, children: [...(node as Set<unknown>)], next: 0, rows: node.size, bytes: 2 + Math.max(0, node.size - 1) };
+  }
+  const children: unknown[] = [];
+  if (node instanceof Map) {
+    for (const [key, child] of node as Map<unknown, unknown>) children.push(key, child);
+    return { node, children, next: 0, rows: node.size, bytes: 2 + node.size * 2 };
+  }
+  let bytes = 2;
+  for (const key of Object.keys(node)) {
+    children.push((node as Record<string, unknown>)[key]);
+    bytes += Buffer.byteLength(key) + 4;
+  }
+  return { node, children, next: 0, rows: 0, bytes };
+}
+
+/**
+ * Add one child to its parent's frame: a leaf or an already-sized node at
+ * once, a back-reference as a reference, and a node not yet seen by opening it.
+ *
+ * @param frame - The parent being sized
+ * @param child - One of its children
+ * @param sized - Every node sized so far
+ * @param open - The nodes still being sized: the path from the root
+ * @returns The child's own frame when it must be sized first
+ */
+function addChild(frame: SizingFrame, child: unknown, sized: ReadonlyMap<object, ExpandedSize>, open: Set<object>): SizingFrame | undefined {
+  if (!isContainer(child)) {
+    frame.bytes += leafBytes(child);
+    return undefined;
+  }
+  const known = sized.get(child);
+  if (known !== undefined) {
+    frame.rows += known.rows;
+    frame.bytes += known.bytes;
+    return undefined;
+  }
+  if (open.has(child)) {
+    frame.bytes += CYCLE_REFERENCE_BYTES;
+    return undefined;
+  }
+  open.add(child);
+  return openFrame(child);
+}
+
+/**
+ * The rows and bytes a decoded frontmatter value holds with every alias
+ * expanded: each use of an anchor counts the anchor's full size, as a
+ * consumer walking the value meets it.
+ *
+ * The worker sends frontmatter in an encoding that writes a shared anchor
+ * once (`frontmatter-codec.ts`), so a count over what crosses the wire would
+ * let an anchor aliased a hundred times through at the price of one. This
+ * counts what the parent rebuilds. Each node is sized once and its size reused
+ * at every reference, so the cost is linear in the encoding, however large
+ * the expansion; a cyclic back-reference counts {@link CYCLE_REFERENCE_BYTES}.
+ * A loop over an explicit stack, never a recursion.
+ *
+ * @param root - What `yaml` decoded a frontmatter block to
+ * @returns Its expanded rows and bytes
+ */
+export function expandedSize(root: unknown): ExpandedSize {
+  if (!isContainer(root)) return { rows: 0, bytes: leafBytes(root) };
+  const sized = new Map<object, ExpandedSize>();
+  const open = new Set<object>([root]);
+  const stack: SizingFrame[] = [openFrame(root)];
+  let total: ExpandedSize = { rows: 0, bytes: 0 };
+  while (stack.length > 0) {
+    const frame = stack.at(-1) as SizingFrame;
+    if (frame.next < frame.children.length) {
+      const child = frame.children[frame.next];
+      frame.next += 1;
+      const opened = addChild(frame, child, sized, open);
+      if (opened !== undefined) stack.push(opened);
+      continue;
+    }
+    stack.pop();
+    open.delete(frame.node);
+    const size: ExpandedSize = { rows: frame.rows, bytes: frame.bytes };
+    sized.set(frame.node, size);
+    const parent = stack.at(-1);
+    if (parent === undefined) {
+      total = size;
+    } else {
+      parent.rows += size.rows;
+      parent.bytes += size.bytes;
+    }
+  }
+  return total;
+}
+
+/**
+ * The output cap a parse result breaches under `limits`, if any: rows first,
+ * then bytes — the ONE statement of that rule, applied by the worker before it
+ * answers and by an in-process parse before it files an entry, so the shared
+ * cache never holds facts the bounded route would refuse.
+ *
+ * Counted over the facts as stored and sent (the result minus `content`,
+ * `sizeBytes` and the decoded `frontmatter`); bytes are their JSON. The
+ * frontmatter is counted over its EXPANDED value, never its encoding: the
+ * encoding writes a shared anchor once, so an anchor aliased 99 times would
+ * cost one anchor's rows and bytes on the wire and a hundred in every consumer
+ * that walks it. Each alias counts its target's full size ({@link expandedSize}).
+ *
+ * @param result - What a parser produced
+ * @param limits - The caps in force
+ * @returns The breached limit, or undefined
+ */
+export function outputBreach(
+  result: ParseResult,
+  limits: Pick<ParseLimits, 'outputRows' | 'outputBytes'>,
+): 'outputRows' | 'outputBytes' | undefined {
+  const facts: Partial<ParseResult> = { ...result };
+  delete facts.content;
+  delete facts.sizeBytes;
+  delete facts.frontmatter;
+  const expanded = result.frontmatter === undefined ? { rows: 0, bytes: 0 } : expandedSize(result.frontmatter);
+  if (countOutputRows(facts) + expanded.rows > limits.outputRows) return 'outputRows';
+  if (Buffer.byteLength(JSON.stringify(facts)) + expanded.bytes > limits.outputBytes) return 'outputBytes';
+  return undefined;
+}
+
+/**
+ * Whether an in-process parse's result may be filed in the shared cache: only
+ * when the bounded route, under the default limits, would have admitted the
+ * same bytes. Time, heap and stack are per run and never stored either way; the
+ * input and output caps are key-determined, so an entry past them would turn a
+ * bounded run's refusal into an admission that depends on what ran first.
+ *
+ * @param byteLength - Raw bytes of the document parsed
+ * @param result - What the in-process parser produced
+ * @returns True when a bounded parse of the same bytes would not be refused for its size
+ */
+export function storableUnderDefaultLimits(byteLength: number, result: ParseResult): boolean {
+  return byteLength <= DEFAULT_PARSE_LIMITS.inputBytes && outputBreach(result, DEFAULT_PARSE_LIMITS) === undefined;
+}
+
 /**
  * The running engine's own stack-overflow message, captured once by
  * overflowing on purpose.
@@ -285,6 +483,36 @@ function describeDeath(cause: Error): string {
  */
 export function isParseWorkerDiedError(error: unknown): error is ParseWorkerDiedError {
   return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === PARSE_WORKER_DIED;
+}
+
+/** The `code` every {@link ParseDecodeDefectError} carries. */
+const PARSE_DECODE_DEFECT = 'PARSE_DECODE_DEFECT';
+
+/**
+ * The parent thread could not rebuild a worker's answer: a VAT defect, never a
+ * fact about the document.
+ *
+ * The frontmatter codec is loops end to end, so no size or depth of input can
+ * make the parent's decode throw. A throw there is therefore rethrown loud by
+ * every lane: never stored as `BLOB_PARSE_FAILED`, never a per-file finding
+ * that blames the document. Classified by {@link isParseDecodeDefect}.
+ */
+export class ParseDecodeDefectError extends VatError {
+  constructor(cause: unknown) {
+    super(
+      PARSE_DECODE_DEFECT,
+      `VAT could not rebuild a parse worker's answer on the parent thread (${cause instanceof Error ? cause.message : String(cause)}). This is a VAT defect, not a problem with the document; please report it.`,
+      { cause },
+    );
+  }
+}
+
+/**
+ * @param error - Anything a parse threw
+ * @returns True for a {@link ParseDecodeDefectError}, or anything wearing its code
+ */
+export function isParseDecodeDefect(error: unknown): error is ParseDecodeDefectError {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === PARSE_DECODE_DEFECT;
 }
 
 /** A parse outcome that belongs to this run, never to the bytes: a limit breach or a worker's death. */

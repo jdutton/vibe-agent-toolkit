@@ -26,6 +26,7 @@ import {
 
 
 import type { EvidenceRecord } from '../evidence/index.js';
+import { stackOverflowIssue } from '../parse-refusal-issues.js';
 import { parseFrontmatter } from '../parsers/frontmatter-parser.js';
 
 import { detectBundledResourceWithoutLinks } from './bundled-resource-link-detection.js';
@@ -83,7 +84,9 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   const parseResult = parseFrontmatter(content);
 
   if (!parseResult.success) {
-    issues.push({
+    // Frontmatter nested too deeply for this thread's stack is there, and is the
+    // author's to simplify: the parse limit, never "add the frontmatter you have".
+    issues.push(stackOverflowIssue(parseResult.cause, skillLocation) ?? {
       severity: 'error',
       code: 'SKILL_MISSING_FRONTMATTER',
       message: parseResult.error,
@@ -387,6 +390,16 @@ async function traverseLinks(
       // constructs at one place, so it is complete by construction — not the
       // guessed blocklist of Node loader codes that was deleted.
       if (isParserUnavailable(error)) throw error;
+
+      // A document too deep for this thread's stack is not "could not be
+      // parsed, so skipped": nothing in it was checked, and it is the author's
+      // to simplify — an error, under the code the crawl lanes use for it.
+      const location = issueLocation(currentPath, locationRoot);
+      const limit = stackOverflowIssue(error, location);
+      if (limit !== undefined) {
+        issues.push(limit);
+        return;
+      }
 
       issues.push({
         severity: 'warning',

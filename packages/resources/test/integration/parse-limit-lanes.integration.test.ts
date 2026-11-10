@@ -16,7 +16,7 @@ import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { ParseCache } from '../../src/parse-cache.js';
+import { ParseCache, parseFileCached } from '../../src/parse-cache.js';
 import type { ParsePoolPolicy } from '../../src/parse-dispatcher.js';
 import { __setParseWorkerEntryForTest, createParsePool, type ParsePool, type ParsePoolOptions } from '../../src/parse-pool.js';
 import {
@@ -44,9 +44,9 @@ interface Dispatched {
 }
 
 /** A policy whose real, limited pool records what it is asked to parse. */
-function recordingPolicy(dispatched: Dispatched): ParsePoolPolicy {
+function recordingPolicy(dispatched: Dispatched, limits: NonNullable<ParsePoolOptions['limits']> = LIMITS): ParsePoolPolicy {
   return {
-    limits: LIMITS,
+    limits,
     createPool: (options?: ParsePoolOptions): ParsePool => {
       const real = createParsePool(options);
       return {
@@ -227,5 +227,76 @@ describe('a parse worker that dies holding a job', () => {
     const findings = await registryRefusalsOfB('RESOURCE_PARSE_WORKER_DIED');
 
     expect(findings[0]?.message).toContain('exited unexpectedly with code 1');
+  });
+});
+
+/** Items in the long frontmatter list: past the ~130,000 arguments a spread fits on Node's default stack. */
+const LONG_LIST_ITEMS = 200_000;
+
+/** Limits loose enough for the long list's own rows, which count against `outputRows`. */
+const LONG_LIST_LIMITS: NonNullable<ParsePoolOptions['limits']> = { outputRows: 1_000_000, outputBytes: 64 * 1024 * 1024 };
+
+describe('a frontmatter list of 200,000 items, decoded on the parent thread', () => {
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(suite.beforeEach);
+
+  it('is admitted with every item, stored, and served whole from the cache on the next run', async () => {
+    const items = Array.from({ length: LONG_LIST_ITEMS }, (_, index) => String(index % 10));
+    const file = safePath.join(suite.tempDir, 'long.md');
+    await writeFile(file, `---\nitems: [${items.join(', ')}]\n---\n\n# Long\n`, 'utf-8');
+    const cacheDir = safePath.join(suite.suiteDir, `cache-long-${String(Date.now())}`);
+
+    const runOnce = async (dispatched: Dispatched): Promise<{ admitted: number; listed: unknown; refused: number }> => {
+      const registry = new ResourceRegistry({
+        baseDir: suite.tempDir,
+        parseCache: new ParseCache({ cacheDir, enabled: true }),
+        parsePool: recordingPolicy(dispatched, LONG_LIST_LIMITS),
+      });
+      const admitted = await registry.addResources([file]);
+      const refused = (await registry.validate()).issues.filter((issue) => issue.code.startsWith('RESOURCE_PARSE_')).length;
+      const listed = admitted[0]?.frontmatter?.['items'];
+      return { admitted: admitted.length, listed: Array.isArray(listed) ? listed.length : listed, refused };
+    };
+
+    const first: Dispatched = { firstLines: [] };
+    expect(await runOnce(first)).toStrictEqual({ admitted: 1, listed: LONG_LIST_ITEMS, refused: 0 });
+    expect(first.firstLines).toHaveLength(1);
+    expect(await countFilesUnder(cacheDir)).toBe(1);
+
+    const second: Dispatched = { firstLines: [] };
+    expect(await runOnce(second)).toStrictEqual({ admitted: 1, listed: LONG_LIST_ITEMS, refused: 0 });
+    expect(second.firstLines).toHaveLength(0);
+  });
+});
+
+/** More links than the default `outputRows` (16,384) admits. */
+const OVER_DEFAULT_ROWS_LINKS = 17_000;
+
+describe('an in-process parse of a document the bounded route refuses', () => {
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(suite.beforeEach);
+
+  it('files nothing, so a later bounded crawl over the same cache still refuses it', async () => {
+    const links = Array.from({ length: OVER_DEFAULT_ROWS_LINKS }, (_, index) => `[l${String(index)}](./t.md)`);
+    const file = safePath.join(suite.tempDir, 'many-links.md');
+    await writeFile(file, `# Many\n\n${links.join('\n')}\n`, 'utf-8');
+    const cacheDir = safePath.join(suite.suiteDir, `cache-in-process-${String(Date.now())}`);
+
+    // Unbounded, on this thread: it answers, and must leave nothing a bounded run would serve.
+    const inProcess = await parseFileCached(file, 'markdown', { cache: new ParseCache({ cacheDir, enabled: true }) });
+    expect(inProcess.links).toHaveLength(OVER_DEFAULT_ROWS_LINKS);
+    expect(await countFilesUnder(cacheDir)).toBe(0);
+
+    const registry = new ResourceRegistry({
+      baseDir: suite.tempDir,
+      parseCache: new ParseCache({ cacheDir, enabled: true }),
+      parsePool: recordingPolicy({ firstLines: [] }, {}),
+    });
+    expect(await registry.addResources([file])).toHaveLength(0);
+    expect(registry.getParseRefusedResources().map((entry) => entry.reason)).toStrictEqual([
+      expect.stringContaining('outputRows'),
+    ]);
   });
 });

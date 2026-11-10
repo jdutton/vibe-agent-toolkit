@@ -16,8 +16,10 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import diagnosticsChannel from 'node:diagnostics_channel';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import type { Worker } from 'node:worker_threads';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -35,7 +37,7 @@ import {
   manyLinks,
   TIGHT_LIMITS,
 } from '../parse-limit-fixtures.js';
-import { workerThreadCount } from '../test-helpers.js';
+import { countFilesUnder, workerThreadCount } from '../test-helpers.js';
 
 const openPools: ParsePool[] = [];
 
@@ -79,6 +81,16 @@ async function expectWorkerKilled(baseline: number): Promise<void> {
 async function expectPoolStillParses(pool: ParsePool): Promise<void> {
   const result = await pool.parse('markdown', '# ok\n\n[a](./b.md)\n', 21);
   expect(result.links).toHaveLength(1);
+}
+
+/**
+ * @param anchored - The YAML flow value to anchor
+ * @param aliases - How many keys alias it
+ * @returns A markdown document whose frontmatter writes `anchored` once and aliases it `aliases` times
+ */
+function aliasedFrontmatter(anchored: string, aliases: number): string {
+  const keys = Array.from({ length: aliases }, (_, index) => `k${String(index)}: *x`);
+  return `---\nanchor: &x ${anchored}\n${keys.join('\n')}\n---\n\n# Body\n`;
 }
 
 describe('a parse job stopped at its limit', () => {
@@ -161,6 +173,78 @@ describe('a parse job stopped at its limit', () => {
 
     expect(limit).toBe('outputBytes');
     await expectPoolStillParses(pool);
+  });
+
+  it('counts each frontmatter alias by its target: an anchor aliased 99 times breaches the row cap, and nothing is stored', async () => {
+    // 20 items, written once and aliased 99 times: 2,000 rows expanded, over
+    // the cap of 1,000; the encoding the worker sends shares the anchor, so a
+    // count over what crosses the wire sees none of them.
+    const cacheDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-alias-rows-'));
+    const pool = createParsePool({ size: 1, cacheDir, limits: { ...TIGHT_LIMITS, timeMs: 30_000 } });
+    openPools.push(pool);
+    const document = aliasedFrontmatter('[' + Array.from({ length: 20 }, () => '1').join(', ') + ']', 99);
+
+    const error: unknown = await pool.parseIntoCache('markdown', document, Buffer.byteLength(document), 'a'.repeat(64)).then(
+      () => new Error('the parse completed; it was meant to be stopped at outputRows'),
+      (rejection: unknown) => rejection,
+    );
+
+    expect(isParseLimitError(error) ? error.limit : error).toBe('outputRows');
+    expect(await countFilesUnder(cacheDir)).toBe(0);
+    rmSync(cacheDir, { recursive: true, force: true });
+    await expectPoolStillParses(pool);
+  });
+
+  it('counts each frontmatter alias by its target: a list of one long string aliased 99 times breaches the byte cap', async () => {
+    // A list, so the encoding shares it (a bare string is inlined at every
+    // use): 400 kB expanded, over the cap of 256 KiB, in 100 rows, under the row cap.
+    const pool = limitedPool({ timeMs: 30_000 });
+
+    const { limit } = await breach(pool, aliasedFrontmatter(`[${'x'.repeat(4000)}]`, 99));
+
+    expect(limit).toBe('outputBytes');
+  });
+
+  it('lets the same anchor through when it is aliased once', async () => {
+    const pool = limitedPool({ timeMs: 30_000 });
+    const document = aliasedFrontmatter('[' + Array.from({ length: 20 }, () => '1').join(', ') + ']', 1);
+
+    const result = await pool.parse('markdown', document, Buffer.byteLength(document));
+
+    expect(result.frontmatter?.['k0']).toHaveLength(20);
+  });
+
+  it('never runs wider than its size while every worker breaches at once and is replaced', async () => {
+    const size = 3;
+    const pool = createParsePool({ size, limits: { ...TIGHT_LIMITS, heapMb: 1024 } });
+    openPools.push(pool);
+    // Every thread from its construction to its real `exit`. Node's report drops a thread the
+    // moment it is told to terminate and lists a new one only once it runs, so a replacement
+    // started beside a thread still exiting is invisible to `workerThreadCount`; this is not.
+    let live = 0;
+    let widest = 0;
+    const onWorker = (message: unknown): void => {
+      live += 1;
+      widest = Math.max(widest, live);
+      (message as { worker: Worker }).worker.once('exit', () => {
+        live -= 1;
+      });
+    };
+    diagnosticsChannel.subscribe('worker_threads', onWorker);
+
+    try {
+      // `size` jobs that each run past the clock, then ordinary ones queued behind them: each kill
+      // frees a job for the queue, and its replacement must wait for the killed thread to exit.
+      const stopped = Array.from({ length: size }, async () => breach(pool, deeplyNestedList()));
+      const queued = Array.from({ length: size * 2 }, async () => pool.parse('markdown', '# ok\n', 5));
+      const limits = await Promise.all(stopped);
+      await Promise.all(queued);
+
+      expect(limits.map((outcome) => outcome.limit)).toStrictEqual(Array.from({ length: size }, () => 'timeMs'));
+    } finally {
+      diagnosticsChannel.unsubscribe('worker_threads', onWorker);
+    }
+    expect(widest).toBe(size);
   });
 
   it('answers the other jobs in flight beside a breach', async () => {

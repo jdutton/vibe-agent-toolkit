@@ -8,8 +8,7 @@
 import { basename } from 'node:path';
 
 import type { PluginLocalSkillIndex } from '@vibe-agent-toolkit/agent-skills';
-import { parseFileCached } from '@vibe-agent-toolkit/resources';
-import type { SkillsConfig } from '@vibe-agent-toolkit/resources';
+import { isStackOverflow, parseFileCached, type ParseResult, type SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { followedKindSync, forEachInOrder, fsFaultOf, mapConcurrentFailingInOrder, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory, type UnreadablePolicy } from '@vibe-agent-toolkit/utils/crawl';
 import picomatch from 'picomatch';
@@ -53,6 +52,25 @@ const DISCOVERY_EXCLUDE = [
 ];
 
 /**
+ * Parse a SKILL.md on this thread for what a lane reads off it (its name, its
+ * version), or `undefined` when the document nests too deeply for this thread's
+ * stack. The parse is in-process and unbounded; an overflow is a fact about the
+ * file the packaging validator reports (`RESOURCE_PARSE_LIMIT_EXCEEDED`), never a
+ * crash of a lane that only wanted a label. Every other error is rethrown.
+ *
+ * @param skillPath - Absolute path to the SKILL.md
+ * @returns Its parse result, or `undefined` when the parse overflowed the stack
+ */
+export async function skillDocumentOrOverflow(skillPath: string): Promise<ParseResult | undefined> {
+  try {
+    return await parseFileCached(skillPath, 'markdown');
+  } catch (error) {
+    if (isStackOverflow(error)) return undefined;
+    throw error;
+  }
+}
+
+/**
  * Read a skill's name from SKILL.md frontmatter, falling back to its H1 title and
  * then its filename. The Claude plugin build and `vat verify` reach it through
  * {@link readPluginLocalSkillName}, so a plugin-local skill is named by the SAME
@@ -68,7 +86,10 @@ const DISCOVERY_EXCLUDE = [
  * which is the exact tell-less drop `includeUntracked` below exists to prevent.
  */
 async function readSkillName(skillPath: string): Promise<string | undefined> {
-  const parsed = await parseFileCached(skillPath, 'markdown');
+  const parsed = await skillDocumentOrOverflow(skillPath);
+  // Too deep to parse here: keyed by its filename, like a file with no frontmatter,
+  // and refused by the packaging validator as `RESOURCE_PARSE_LIMIT_EXCEEDED`.
+  if (parsed === undefined) return basename(skillPath, '.md');
   // The H1 fallback below reads the SAME bytes the parse already decoded, so it
   // uses `parsed.content` rather than a second read of the same path.
   const content = parsed.content;
