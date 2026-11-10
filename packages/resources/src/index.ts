@@ -68,6 +68,19 @@ export {
   type CollectionStat,
 } from './resource-registry.js';
 
+// The one contract for a file a crawl enumerated and did not admit: its log
+// entry, its findings, and its place in `examined` — see `not-admitted.ts`.
+export {
+  notAdmittedCount,
+  notAdmittedFindings,
+  notAdmittedInScope,
+  notAdmittedIssues,
+  parseRefusedEntry,
+  parseRefusedMessage,
+  type NotAdmittedLog,
+  type NotAdmittedWording,
+} from './not-admitted.js';
+
 // The checksum the registry records for a resource's decoded text, so a consumer
 // re-hashing that text at use (ADR I2a) runs the one implementation.
 export { calculateChecksumFromContent } from './checksum.js';
@@ -551,6 +564,8 @@ export {
   ParseWorkerDiedError,
   isParseLimitError,
   isParseWorkerDiedError,
+  isPerRunParseRefusal,
+  type PerRunParseRefusal,
   // An in-process caller of `parseFileCached`/`parseMarkdown*` (skill packaging
   // and validation) classifies a parser's stack overflow with this, and reports
   // it as `RESOURCE_PARSE_LIMIT_EXCEEDED` at error severity, never a crash.
@@ -1016,7 +1031,12 @@ export {
 // derive or mis-decoded. A function of the projection's stored rows, so a store
 // hit reports exactly what the derive that wrote it would have — nobody queries
 // a projection they were never told to look at.
-export { describeBlobRefusals, type BlobRefusalRows } from './projection/blob-refusals.js';
+export {
+  describeBlobRefusals,
+  parseRefusedRealizations,
+  type BlobRefusalRows,
+  type RefusedRealization,
+} from './projection/blob-refusals.js';
 
 // The declarative closure primitive (zones §7.3): a closure-defined extent is a
 // GENERIC contributor handed an `ExtentDeclaration`, never new privileged code —

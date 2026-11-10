@@ -17,7 +17,7 @@
  * with, so one pathological document gets one answer whichever lane found it.
  */
 
-import { isStackOverflow, type ParseRefusedResource } from '@vibe-agent-toolkit/resources';
+import { isStackOverflow, type ParseRefusedResource, parseRefusedMessage } from '@vibe-agent-toolkit/resources';
 import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { issueLocation, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
@@ -42,15 +42,10 @@ export function refusedAmong(
 }
 
 /**
- * The message for one refused file a skill reaches.
- *
- * @param entry - The refusal
- * @param location - Where to say it is
- * @returns The sentence every skill lane reports it with
+ * What a refused file costs every skill lane, in the one sentence resources'
+ * `parseRefusedMessage` reports a refusal with.
  */
-export function parseRefusedMessage(entry: ParseRefusedResource, location: string): string {
-  return `'${location}' is reached by the skill's links but ${entry.reason}, so it was neither checked nor walked. Nothing was stored for it: the next run parses it again.`;
-}
+export const SKILL_REACHED_REFUSAL_CONSEQUENCE = "the skill's links reach it but it was neither checked nor walked";
 
 /**
  * One error finding per file the skill reaches whose parse the crawl refused.
@@ -67,7 +62,7 @@ export function parseRefusedIssues(
 ): ValidationIssue[] {
   return refusedAmong(refused, reached).map((entry) => {
     const location = issueLocation(entry.filePath, locationRoot);
-    return createRegistryIssue(entry.code, parseRefusedMessage(entry, location), { location });
+    return createRegistryIssue(entry.code, parseRefusedMessage(entry, location, SKILL_REACHED_REFUSAL_CONSEQUENCE), { location });
   });
 }
 

@@ -38,7 +38,7 @@ import { parseHtmlContent } from '../src/html-link-parser.js';
 import { type ParseResult, parseMarkdownContent } from '../src/link-parser.js';
 import type { DocumentParserKind } from '../src/mime-type.js';
 import { isParserUnavailable, ParseCache } from '../src/parse-cache.js';
-import { isParseWorkerDiedError } from '../src/parse-limits.js';
+import { isParseLimitError, isParseWorkerDiedError } from '../src/parse-limits.js';
 import {
   __setParseWorkerEntryForTest,
   createParsePool,
@@ -51,7 +51,7 @@ import {
   type ParseTimingDump,
 } from '../src/parse-timing.js';
 
-import { workerThreadCount } from './test-helpers.js';
+import { widestLiveWorkerThreads, workerThreadCount } from './test-helpers.js';
 
 /** One document, and the parser it routes to. */
 interface Fixture {
@@ -430,6 +430,68 @@ describe('a broken install is loud', () => {
       true,
       true,
     ]);
+  });
+
+  it('counts a thread stopped at its time limit before its parser loaded toward the same three', async () => {
+    // A worker that loads and then never answers (a parser import that hangs)
+    // is a broken install too: without this, each document waits out its whole
+    // `timeMs` in turn and is blamed for it.
+    await seedWorkerEntry(`import { parentPort } from 'node:worker_threads';\n${READY_LINE}\nparentPort.on('message', () => undefined);\n`);
+    const pool = createParsePool({ size: 1, limits: { timeMs: 150 } });
+    openPools.push(pool);
+
+    const outcomes: unknown[] = [];
+    for (const content of ['# a\n', '# b\n', '# c\n', '# d\n']) outcomes.push(await outcomeOf(pool, content));
+
+    expect(outcomes.map((outcome) => (isParseLimitError(outcome) ? outcome.limit : isParserUnavailable(outcome)))).toStrictEqual([
+      'timeMs',
+      'timeMs',
+      true,
+      true,
+    ]);
+  });
+
+  it('does not count a time breach on a thread whose parser loaded', async () => {
+    await seedWorkerEntry([
+      "import { parentPort } from 'node:worker_threads';",
+      `await import(${JSON.stringify(BUILT_WORKER)});`,
+      "parentPort.on('message', (request) => { if (request?.content?.startsWith?.('# SLOW')) { const until = Date.now() + 5000; while (Date.now() < until); } });",
+    ].join('\n'));
+    const pool = createParsePool({ size: 1, limits: { timeMs: 300 } });
+    openPools.push(pool);
+
+    const outcomes: unknown[] = [];
+    for (const content of ['# ok\n', '# SLOW 1\n', '# ok\n', '# SLOW 2\n', '# ok\n', '# SLOW 3\n', '# ok\n']) {
+      outcomes.push(await outcomeOf(pool, content));
+    }
+
+    expect(outcomes.map((outcome) => (isParseLimitError(outcome) ? outcome.limit : outcome))).toStrictEqual([
+      'answered', 'timeMs', 'answered', 'timeMs', 'answered', 'timeMs', 'answered',
+    ]);
+  });
+});
+
+describe('a thread that dies uncontrolled', () => {
+  it('counts against the pool\'s size until it has exited', async () => {
+    // The thread throws, and its `exit` lags its `error` by a busy 400 ms, so a
+    // pool that frees the slot at the error starts a replacement beside it.
+    await seedWorkerEntry([
+      "import { parentPort } from 'node:worker_threads';",
+      "process.on('exit', () => { const until = Date.now() + 400; while (Date.now() < until); });",
+      // Registered before the real worker's listener, so its throw ends the
+      // dispatch and the real worker never answers the job.
+      "parentPort.on('message', (request) => { if (request?.content?.startsWith?.('# DIE')) throw new Error('seeded death'); });",
+      `await import(${JSON.stringify(BUILT_WORKER)});`,
+    ].join('\n'));
+    const pool = trackedPool(1);
+
+    const { value: outcomes, widest } = await widestLiveWorkerThreads(
+      async () => Promise.all([outcomeOf(pool, '# DIE\n'), outcomeOf(pool, '# ok\n')]),
+    );
+
+    expect(isParseWorkerDiedError(outcomes[0])).toBe(true);
+    expect(outcomes[1]).toBe('answered');
+    expect(widest).toBe(1);
   });
 });
 

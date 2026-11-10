@@ -62,6 +62,7 @@
 
 
 import { isTextMimeType } from '../mime-type.js';
+import type { ParseRefusedResource } from '../resource-registry.js';
 
 import {
   BLOB_CONTENT_CHANGED,
@@ -274,4 +275,43 @@ export function describeBlobRefusals(rows: BlobRefusalRows): string | undefined 
     pointers.push('The mis-decoded blobs are the `blobs` rows with replacementCharacters > 0.');
   }
   return `blob derivation ${clauses.join('; ')}. ${pointers.join(' ')}`;
+}
+
+/** The finding code a per-run parse refusal is reported under, from its blob condition code. */
+const PARSE_REFUSAL_CODE_OF_BLOB: ReadonlyMap<string, ParseRefusedResource['code']> = new Map([
+  [BLOB_PARSE_LIMIT_EXCEEDED, 'RESOURCE_PARSE_LIMIT_EXCEEDED'],
+  [BLOB_PARSE_WORKER_DIED, 'RESOURCE_PARSE_WORKER_DIED'],
+]);
+
+/** One realization whose blob's parse this run refused, as a projection lane reports it. */
+export interface RefusedRealization {
+  /** Root-relative, forward-slashed: `resource_realizations.path`. */
+  readonly path: string;
+  /** The code the registry lane reports the same refusal under. */
+  readonly code: ParseRefusedResource['code'];
+  /** The blob condition's message: the path, the limit and its bound, or the cause of death. */
+  readonly message: string;
+}
+
+/**
+ * Every realization whose blob's parse this run refused — the projection's
+ * counterpart of `ResourceRegistry.getParseRefusedResources()`, under the same
+ * codes, so a lane answering from a projection names a refused file per path as
+ * the registry lane does instead of listing it as an admitted member.
+ *
+ * @param rows - The population's rows (a store hit carries none: a refusal is never filed)
+ * @returns One entry per refused realization, in realization order
+ */
+export function parseRefusedRealizations(
+  rows: Pick<Projection, 'blobConditions' | 'resourceRealizations'>,
+): RefusedRealization[] {
+  const refusedBlobs = new Map<string, { code: ParseRefusedResource['code']; message: string }>();
+  for (const row of rows.blobConditions) {
+    const code = PARSE_REFUSAL_CODE_OF_BLOB.get(row.code);
+    if (code !== undefined && !refusedBlobs.has(row.blob)) refusedBlobs.set(row.blob, { code, message: row.message });
+  }
+  return rows.resourceRealizations.flatMap((row) => {
+    const refusal = row.contentKey === null ? undefined : refusedBlobs.get(row.contentKey);
+    return refusal === undefined ? [] : [{ path: row.path, ...refusal }];
+  });
 }

@@ -8,18 +8,26 @@
  * image and the ordinary shape of a repository, which is NOT reported, and at a
  * path typed as text, which is. So `(1 not text)` pins the line both ways.
  *
+ * A file whose parse was REFUSED has one contract in every verb that crawls
+ * (`not-admitted.ts` in `resources`): the same code, the same severity under the
+ * project's `resources.validation`, and the same place in `examined` — counted,
+ * and scoped to a `--collection` by the collection's own patterns. `vat
+ * resources check`, which answers from a population, holds the refusal against
+ * its verdict the same way. That corpus nests one file's frontmatter 1,001
+ * levels deep as JSON, past `outputDepth`: a real refusal, quick to produce.
+ *
  * Isolation: `HOME`, `USERPROFILE`, `CLAUDE_CONFIG_DIR` and the temp directory (`TMPDIR`,
  * `TEMP`, `TMP`) all point into scratch, and no projection store is selected, so every run
  * derives.
  */
 
-import { rmSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { rmSync } from 'node:fs';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import yaml from 'yaml';
 
-import { commitTestFixture } from '../test-helpers.js';
+import { writeCommittedCorpus } from '../test-helpers.js';
 
 import { createIsolatedScratch, executeCli, getBinPath, isolatedScratchEnv } from './test-common.js';
 
@@ -38,14 +46,7 @@ let scratch: string;
  * @returns The corpus root
  */
 function corpus(name: string, files: Readonly<Record<string, string | Buffer>>): string {
-  const root = safePath.join(scratch, name);
-  for (const [relative, content] of Object.entries({ ...files, 'assets/logo.png': PNG_BYTES })) {
-    const absolute = safePath.join(root, relative);
-    mkdirSyncReal(dirname(absolute), { recursive: true });
-    writeFileSync(absolute, content);
-  }
-  commitTestFixture(root);
-  return root;
+  return writeCommittedCorpus(safePath.join(scratch, name), { ...files, 'assets/logo.png': PNG_BYTES });
 }
 
 /**
@@ -61,6 +62,58 @@ async function stderrOf(root: string, args: string[]): Promise<{ status: number 
     env: isolatedScratchEnv(scratch),
   });
   return { status: result.status, stderr: result.stderr };
+}
+
+const REFUSED_CODE = 'RESOURCE_PARSE_LIMIT_EXCEEDED';
+
+/** What the verbs publish that the refused-file cases read. */
+interface Published {
+  examined: number;
+  findings: Array<{ code: string; severity: string; location?: string }>;
+}
+
+/**
+ * A corpus holding one refused file in two collections' worth of documents,
+ * under `validation` (YAML lines nested under `resources:`, or none).
+ *
+ * @param name - The corpus directory's name under scratch
+ * @param validation - The `resources.validation` block's lines
+ * @returns The corpus root
+ */
+function refusedCorpus(name: string, validation: readonly string[]): string {
+  return corpus(name, {
+    'vibe-agent-toolkit.config.yaml': [
+      'resources:',
+      '  include: ["docs/**/*.md", "notes/**/*.md"]',
+      '  collections:',
+      '    docs:',
+      '      include: ["docs/**/*.md"]',
+      '    notes:',
+      '      include: ["notes/**/*.md"]',
+      ...validation,
+      '',
+    ].join('\n'),
+    'docs/a.md': '# A\n',
+    'docs/deep.md': `---\na: ${'['.repeat(1000)}${']'.repeat(1000)}\n---\n# Deep\n`,
+    'notes/n.md': '# N\n',
+  });
+}
+
+/**
+ * Run one verb in a corpus and read its published document.
+ *
+ * @param root - The corpus root
+ * @param args - The verb and its arguments
+ * @returns The exit status, the document, and stderr for failure messages
+ */
+async function published(root: string, args: string[]): Promise<{ status: number | null; report: Published; stderr: string }> {
+  const result = await executeCli(binPath, args, { cwd: root, env: isolatedScratchEnv(scratch) });
+  return { status: result.status, report: yaml.parse(result.stdout) as Published, stderr: result.stderr };
+}
+
+/** The refusal findings of a report. */
+function refusedIn(report: Published): Published['findings'] {
+  return report.findings.filter((finding) => finding.code === REFUSED_CODE);
 }
 
 describe('the population refusal report, on every lane that populates (system test)', () => {
@@ -96,5 +149,97 @@ describe('the population refusal report, on every lane that populates (system te
 
     expect(run.stderr, `exit ${String(run.status)}`).toContain('inventory population: blob derivation declined');
     expect(run.stderr).toContain('(1 not text)');
+  });
+
+  it('vat resources query refuses frontmatter deeper than SQLite reads, and json_extract still answers the rest', async () => {
+    // 2,000 nested lists are 2,001 levels of JSON, past the 1,000 SQLite's JSON
+    // functions read; a cyclic anchor nests without end. Stored, either makes
+    // EVERY statement reading `blobs.frontmatter` throw "malformed JSON" — or,
+    // for the cycle, crashes the encoder — so the one ordinary row below is the
+    // witness that the refusal kept the query answerable.
+    const root = corpus('depth', {
+      'docs/a.md': '---\ntitle: ok\n---\n# A\n',
+      'docs/cyclic.md': '---\na: &x [*x]\ntitle: cyclic\n---\n# B\n',
+      'docs/deep.md': `---\ntitle: deep\na: ${'['.repeat(2000)}${']'.repeat(2000)}\n---\n# C\n`,
+    });
+
+    const result = await executeCli(
+      binPath,
+      [
+        'resources', 'query',
+        "select r.path, json_extract(b.frontmatter, '$.title') as title, c.message as refusal"
+          + ' from resource_realizations r left join blobs b on b.contentKey = r.contentKey'
+          + ' left join blob_conditions c on c.blob = r.contentKey'
+          + " where r.path like 'docs/%' order by r.path",
+      ],
+      { cwd: root, env: isolatedScratchEnv(scratch) },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain('(2 over a parse limit)');
+    const rows = (yaml.parse(result.stdout) as { data: { rows: Array<{ path: string; title: string | null; refusal: string | null }> } }).data.rows;
+    expect(rows.map((row) => [row.path, row.title])).toStrictEqual([
+      ['docs/a.md', 'ok'],
+      ['docs/cyclic.md', null],
+      ['docs/deep.md', null],
+    ]);
+    expect(rows[1]?.refusal).toContain('outputDepth limit');
+    expect(rows[1]?.refusal).toContain('without end');
+    expect(rows[2]?.refusal).toContain('this document nests 2001');
+  });
+});
+
+describe('a file the crawl refused, in every verb that crawls (system test)', () => {
+  let warned: string;
+  let strict: string;
+
+  beforeAll(() => {
+    scratch = createIsolatedScratch('vat-not-admitted-');
+    warned = refusedCorpus('warned', ['  validation:', '    severity:', `      ${REFUSED_CODE}: warning`]);
+    strict = refusedCorpus('strict', []);
+  });
+
+  afterAll(() => {
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
+  it.each([
+    ['resources validate', ['resources', 'validate']],
+    ['resources scan', ['resources', 'scan']],
+  ])('%s reports it at the configured severity and counts it in examined', async (_verb, args) => {
+    const { status, report, stderr } = await published(warned, args);
+
+    expect(refusedIn(report), stderr).toStrictEqual([expect.objectContaining({ severity: 'warning', location: 'docs/deep.md' })]);
+    expect(report.examined).toBe(3);
+    expect(status).toBe(0);
+  });
+
+  it.each([
+    ['resources validate', ['resources', 'validate', '--collection']],
+    ['resources scan', ['resources', 'scan', '--collection']],
+  ])('%s --collection counts it only in the collection whose patterns match it', async (_verb, args) => {
+    const docs = await published(warned, [...args, 'docs']);
+    const notes = await published(warned, [...args, 'notes']);
+
+    expect(docs.report.examined, docs.stderr).toBe(2);
+    expect(docs.report.findings.map((finding) => finding.code)).toContain(REFUSED_CODE);
+    expect(notes.report.examined, notes.stderr).toBe(1);
+    expect(notes.report.findings.map((finding) => finding.code)).not.toContain(REFUSED_CODE);
+  });
+
+  // No check can see a refused file's rows, so a clean verdict over it would be
+  // a claim about a corpus the checks never read.
+  it('resources check fails closed with a finding at it', async () => {
+    const { status, report, stderr } = await published(strict, ['resources', 'check']);
+
+    expect(refusedIn(report), stderr).toStrictEqual([expect.objectContaining({ severity: 'error', location: 'docs/deep.md' })]);
+    expect(status).toBe(1);
+  });
+
+  it('resources check holds it to the configured severity, as every other finding is', async () => {
+    const { status, report, stderr } = await published(warned, ['resources', 'check']);
+
+    expect(refusedIn(report), stderr).toStrictEqual([expect.objectContaining({ severity: 'warning', location: 'docs/deep.md' })]);
+    expect(status).toBe(0);
   });
 });

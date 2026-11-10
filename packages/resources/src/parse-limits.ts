@@ -10,8 +10,9 @@
  * it. So every parse runs in a worker of `parse-pool.ts`, and that pool is the
  * only place these limits are enforced. Measured on the shipped markdown parser:
  * a 1,000-level nested list parses in 9.3 s in a worker (a lab arm, recorded in
- * `fact-extractors-limits.md`) and a 10,000-level one does not finish; 10,000
- * nested `>` overflow the main thread's stack (a worker's 4 MiB parses them in 0.6 s).
+ * `fact-extractors-limits.md`), so parse time grows past any fixed budget with
+ * depth; 10,000 nested `>` overflow the main thread's stack (a worker's 4 MiB
+ * parses them in 0.6 s).
  *
  * ## Why a breach persists nothing (I6)
  *
@@ -47,6 +48,12 @@ export interface ParseLimits {
   readonly outputRows: number;
   /** Bytes one job's facts may serialise to. */
   readonly outputBytes: number;
+  /**
+   * Levels of nesting the frontmatter may reach as JSON, the mapping itself
+   * level 1. Never more than {@link STORE_JSON_DEPTH}: past it the stored value
+   * makes every statement that reads the projection's frontmatter column throw.
+   */
+  readonly outputDepth: number;
   /** Raw bytes of one document a parser is handed at all. */
   readonly inputBytes: number;
 }
@@ -71,8 +78,18 @@ const DEFAULT_PARSE_LIMITS: ParseLimits = {
   stackMb: 4,
   outputRows: 16_384,
   outputBytes: 4 * 1024 * 1024,
+  outputDepth: 1000,
   inputBytes: 8 * 1024 * 1024,
 };
+
+/**
+ * The deepest JSON SQLite's JSON functions read (its `JSON_MAX_DEPTH`): one
+ * level deeper and `json_extract` throws "malformed JSON" for the whole
+ * statement, so every other row's answer is lost with it. Measured on Node
+ * 26's `node:sqlite`: 1,000 nested containers read, 1,001 refuse. The store's
+ * own ceiling, not a tuned value: `outputDepth` may be set tighter, never looser.
+ */
+const STORE_JSON_DEPTH = 1000;
 
 /** How each limit is spelled to a user, so a refusal names the bound in its own unit. */
 const LIMIT_UNITS: Readonly<Record<ParseLimitName, (value: number) => string>> = {
@@ -81,6 +98,7 @@ const LIMIT_UNITS: Readonly<Record<ParseLimitName, (value: number) => string>> =
   stackMb: (value) => `${value} MiB stack`,
   outputRows: (value) => `${value} output rows`,
   outputBytes: (value) => `${value} output bytes`,
+  outputDepth: (value) => `${value} levels of nesting`,
   inputBytes: (value) => `${value} input bytes`,
 };
 
@@ -99,7 +117,14 @@ export class ParseLimitError extends VatError {
   /** The bound in its own unit, e.g. `10000 ms wall clock`. */
   readonly bound: string;
 
-  constructor(limit: ParseLimitName, value: number, bound: string = LIMIT_UNITS[limit](value)) {
+  /**
+   * @param limit - The limit crossed
+   * @param value - Its value in force
+   * @param found - What the document measured against it, when known (an
+   *   output breach), so the refusal says how far past the limit it was
+   * @param bound - The bound as spelled, overriding the default spelling
+   */
+  constructor(limit: ParseLimitName, value: number, found?: number, bound: string = describeBound(limit, value, found)) {
     super(PARSE_LIMIT_EXCEEDED, `The parse was stopped at its ${limit} limit (${bound}).`);
     this.limit = limit;
     this.bound = bound;
@@ -108,20 +133,50 @@ export class ParseLimitError extends VatError {
   /**
    * A heap breach, naming the limit that actually applied.
    *
-   * @param appliedMb - The heap limit the pool enforced on the worker — see {@link appliedHeapLimitMb}
+   * @param appliedMb - The heap limit the pool enforced on the worker — see
+   *   {@link appliedHeapLimitMb} — or `undefined` when no heap sample ever
+   *   landed: V8 stopped the worker at its own ceiling first (the parent was
+   *   blocked past the stall window), and that ceiling is unknown, since a
+   *   process-wide `--max-old-space-size` may have lowered it
    * @param configuredMb - The `heapMb` this pool was given
    * @returns The breach, saying so when a process-wide flag lowered the limit
    */
-  static heap(appliedMb: number, configuredMb: number): ParseLimitError {
+  static heap(appliedMb: number | undefined, configuredMb: number): ParseLimitError {
+    if (appliedMb === undefined) {
+      return new ParseLimitError(
+        'heapMb',
+        configuredMb,
+        undefined,
+        `V8's own heap ceiling, reached before the pool's heap sampler read it: ${LIMIT_UNITS.heapMb(configuredMb)}, or less under a process-wide --max-old-space-size`,
+      );
+    }
     const bound = LIMIT_UNITS.heapMb(appliedMb);
     return new ParseLimitError(
       'heapMb',
       appliedMb,
+      undefined,
       appliedMb < configuredMb
         ? `${bound}, lowered from ${String(configuredMb)} MiB by a process-wide --max-old-space-size`
         : bound,
     );
   }
+}
+
+/**
+ * A limit's bound in its own unit, and what the document measured when known.
+ *
+ * @param limit - The limit
+ * @param value - Its value in force
+ * @param found - What the document measured; `Infinity` for a cyclic frontmatter's depth
+ * @returns e.g. `1000 levels of nesting; this document nests 2000`
+ */
+function describeBound(limit: ParseLimitName, value: number, found: number | undefined): string {
+  const bound = LIMIT_UNITS[limit](value);
+  if (found === undefined) return bound;
+  if (limit !== 'outputDepth') return `${bound}; this document has ${String(found)}`;
+  return Number.isFinite(found)
+    ? `${bound}; this document nests ${String(found)}`
+    : `${bound}; this document's frontmatter refers back into itself (a cyclic anchor), so it nests without end`;
 }
 
 /**
@@ -157,6 +212,11 @@ export function resolveParseLimits(named: Partial<ParseLimits> | undefined): Par
     if (!Number.isFinite(value) || value <= 0) {
       throw new Error(`Parse limit ${name} must be a positive finite number; got ${String(value)}.`);
     }
+  }
+  if (resolved.outputDepth > STORE_JSON_DEPTH) {
+    throw new Error(
+      `Parse limit outputDepth may not exceed ${String(STORE_JSON_DEPTH)}, the deepest JSON the projection store reads; got ${String(resolved.outputDepth)}.`,
+    );
   }
   return resolved;
 }
@@ -195,6 +255,12 @@ interface ExpandedSize {
   readonly rows: number;
   /** About what the value serialises to as JSON, every alias written out in full. */
   readonly bytes: number;
+  /**
+   * How deep its JSON nests, a container itself level 1 (a scalar: 0; a binary:
+   * 2, as `Buffer`'s JSON is `{"type", "data": [...]}`). `Infinity` when it
+   * refers back into itself: no writer of JSON can write a cycle out.
+   */
+  readonly depth: number;
 }
 
 /**
@@ -211,6 +277,8 @@ interface SizingFrame {
   next: number;
   rows: number;
   bytes: number;
+  /** The deepest child's depth so far. */
+  deepest: number;
 }
 
 /**
@@ -232,6 +300,17 @@ function leafBytes(value: unknown): number {
   return String(value).length;
 }
 
+/** How deep a binary's JSON nests: `Buffer`'s JSON is `{"type": …, "data": [ … ]}`. */
+const BINARY_DEPTH = 2;
+
+/**
+ * @param value - A value with no children
+ * @returns How deep its JSON nests
+ */
+function leafDepth(value: unknown): number {
+  return value instanceof Uint8Array ? BINARY_DEPTH : 0;
+}
+
 /**
  * A container's frame: its children, its own rows, and the bytes of its
  * brackets, separators and keys. No spread: a list of any length is read by
@@ -242,22 +321,34 @@ function leafBytes(value: unknown): number {
  */
 function openFrame(node: object): SizingFrame {
   if (Array.isArray(node)) {
-    return { node, children: node, next: 0, rows: node.length, bytes: 2 + Math.max(0, node.length - 1) };
+    return { node, children: node, next: 0, rows: node.length, bytes: 2 + Math.max(0, node.length - 1), deepest: 0 };
   }
   if (node instanceof Set) {
-    return { node, children: [...(node as Set<unknown>)], next: 0, rows: node.size, bytes: 2 + Math.max(0, node.size - 1) };
+    return { node, children: [...(node as Set<unknown>)], next: 0, rows: node.size, bytes: 2 + Math.max(0, node.size - 1), deepest: 0 };
   }
   const children: unknown[] = [];
   if (node instanceof Map) {
     for (const [key, child] of node as Map<unknown, unknown>) children.push(key, child);
-    return { node, children, next: 0, rows: node.size, bytes: 2 + node.size * 2 };
+    return { node, children, next: 0, rows: node.size, bytes: 2 + node.size * 2, deepest: 0 };
   }
   let bytes = 2;
   for (const key of Object.keys(node)) {
     children.push((node as Record<string, unknown>)[key]);
     bytes += Buffer.byteLength(key) + 4;
   }
-  return { node, children, next: 0, rows: 0, bytes };
+  return { node, children, next: 0, rows: 0, bytes, deepest: 0 };
+}
+
+/**
+ * Fold a sized child into its parent's frame.
+ *
+ * @param frame - The parent
+ * @param size - The child's size
+ */
+function addSize(frame: SizingFrame, size: ExpandedSize): void {
+  frame.rows += size.rows;
+  frame.bytes += size.bytes;
+  frame.deepest = Math.max(frame.deepest, size.depth);
 }
 
 /**
@@ -273,16 +364,17 @@ function openFrame(node: object): SizingFrame {
 function addChild(frame: SizingFrame, child: unknown, sized: ReadonlyMap<object, ExpandedSize>, open: Set<object>): SizingFrame | undefined {
   if (!isContainer(child)) {
     frame.bytes += leafBytes(child);
+    frame.deepest = Math.max(frame.deepest, leafDepth(child));
     return undefined;
   }
   const known = sized.get(child);
   if (known !== undefined) {
-    frame.rows += known.rows;
-    frame.bytes += known.bytes;
+    addSize(frame, known);
     return undefined;
   }
   if (open.has(child)) {
     frame.bytes += CYCLE_REFERENCE_BYTES;
+    frame.deepest = Number.POSITIVE_INFINITY;
     return undefined;
   }
   open.add(child);
@@ -290,7 +382,7 @@ function addChild(frame: SizingFrame, child: unknown, sized: ReadonlyMap<object,
 }
 
 /**
- * The rows and bytes a decoded frontmatter value holds with every alias
+ * The rows, bytes and depth a decoded frontmatter value holds with every alias
  * expanded: each use of an anchor counts the anchor's full size, as a
  * consumer walking the value meets it.
  *
@@ -299,18 +391,18 @@ function addChild(frame: SizingFrame, child: unknown, sized: ReadonlyMap<object,
  * let an anchor aliased a hundred times through at the price of one. This
  * counts what the parent rebuilds. Each node is sized once and its size reused
  * at every reference, so the cost is linear in the encoding, however large
- * the expansion; a cyclic back-reference counts {@link CYCLE_REFERENCE_BYTES}.
- * A loop over an explicit stack, never a recursion.
+ * the expansion; a cyclic back-reference counts {@link CYCLE_REFERENCE_BYTES}
+ * and makes the depth unbounded. A loop over an explicit stack, never a recursion.
  *
  * @param root - What `yaml` decoded a frontmatter block to
- * @returns Its expanded rows and bytes
+ * @returns Its expanded rows, bytes and depth
  */
 export function expandedSize(root: unknown): ExpandedSize {
-  if (!isContainer(root)) return { rows: 0, bytes: leafBytes(root) };
+  if (!isContainer(root)) return { rows: 0, bytes: leafBytes(root), depth: leafDepth(root) };
   const sized = new Map<object, ExpandedSize>();
   const open = new Set<object>([root]);
   const stack: SizingFrame[] = [openFrame(root)];
-  let total: ExpandedSize = { rows: 0, bytes: 0 };
+  let total: ExpandedSize = { rows: 0, bytes: 0, depth: 0 };
   while (stack.length > 0) {
     const frame = stack.at(-1) as SizingFrame;
     if (frame.next < frame.children.length) {
@@ -322,22 +414,28 @@ export function expandedSize(root: unknown): ExpandedSize {
     }
     stack.pop();
     open.delete(frame.node);
-    const size: ExpandedSize = { rows: frame.rows, bytes: frame.bytes };
+    const size: ExpandedSize = { rows: frame.rows, bytes: frame.bytes, depth: frame.deepest + 1 };
     sized.set(frame.node, size);
     const parent = stack.at(-1);
     if (parent === undefined) {
       total = size;
     } else {
-      parent.rows += size.rows;
-      parent.bytes += size.bytes;
+      addSize(parent, size);
     }
   }
   return total;
 }
 
+/** An output cap a parse result breached, and what the result measured against it. */
+interface OutputBreach {
+  readonly limit: 'outputDepth' | 'outputRows' | 'outputBytes';
+  /** The depth, rows or bytes found; `Infinity` for a cyclic frontmatter's depth. */
+  readonly found: number;
+}
+
 /**
- * The output cap a parse result breaches under `limits`, if any: rows first,
- * then bytes — the ONE statement of that rule, applied by the worker before it
+ * The output cap a parse result breaches under `limits`, if any: depth, then
+ * rows, then bytes — the ONE statement of that rule, applied by the worker before it
  * answers and by an in-process parse before it files an entry, so the shared
  * cache never holds facts the bounded route would refuse.
  *
@@ -348,21 +446,32 @@ export function expandedSize(root: unknown): ExpandedSize {
  * cost one anchor's rows and bytes on the wire and a hundred in every consumer
  * that walks it. Each alias counts its target's full size ({@link expandedSize}).
  *
+ * Depth is the frontmatter's as JSON, because that is how the projection stores
+ * it: past `outputDepth` (never looser than SQLite's JSON depth) the stored
+ * value makes every statement reading the column throw, every other row's
+ * answer lost with it; a cyclic anchor nests without end and no writer of JSON
+ * can write it at all. Refusing both here, in the worker, is the frontmatter
+ * shape contract's depth half — the root half is `isPlainMapping` in
+ * `frontmatter-source.ts` — so no consumer ever meets either.
+ *
  * @param result - What a parser produced
  * @param limits - The caps in force
- * @returns The breached limit, or undefined
+ * @returns The breached limit and what was found, or undefined
  */
 export function outputBreach(
   result: ParseResult,
-  limits: Pick<ParseLimits, 'outputRows' | 'outputBytes'>,
-): 'outputRows' | 'outputBytes' | undefined {
+  limits: Pick<ParseLimits, 'outputDepth' | 'outputRows' | 'outputBytes'>,
+): OutputBreach | undefined {
   const facts: Partial<ParseResult> = { ...result };
   delete facts.content;
   delete facts.sizeBytes;
   delete facts.frontmatter;
-  const expanded = result.frontmatter === undefined ? { rows: 0, bytes: 0 } : expandedSize(result.frontmatter);
-  if (countOutputRows(facts) + expanded.rows > limits.outputRows) return 'outputRows';
-  if (Buffer.byteLength(JSON.stringify(facts)) + expanded.bytes > limits.outputBytes) return 'outputBytes';
+  const expanded = result.frontmatter === undefined ? { rows: 0, bytes: 0, depth: 0 } : expandedSize(result.frontmatter);
+  if (expanded.depth > limits.outputDepth) return { limit: 'outputDepth', found: expanded.depth };
+  const rows = countOutputRows(facts) + expanded.rows;
+  if (rows > limits.outputRows) return { limit: 'outputRows', found: rows };
+  const bytes = Buffer.byteLength(JSON.stringify(facts)) + expanded.bytes;
+  if (bytes > limits.outputBytes) return { limit: 'outputBytes', found: bytes };
   return undefined;
 }
 
@@ -492,8 +601,10 @@ const PARSE_DECODE_DEFECT = 'PARSE_DECODE_DEFECT';
  * The parent thread could not rebuild a worker's answer: a VAT defect, never a
  * fact about the document.
  *
- * The frontmatter codec is loops end to end, so no size or depth of input can
- * make the parent's decode throw. A throw there is therefore rethrown loud by
+ * No input the worker emits can make the parent's decode throw: the codec is
+ * loops end to end, so no size or depth reaches a throw, and the worker emits
+ * only a plain-mapping root (`isPlainMapping`, `frontmatter-source.ts`) the
+ * decode accepts. A throw there is therefore rethrown loud by
  * every lane: never stored as `BLOB_PARSE_FAILED`, never a per-file finding
  * that blames the document. Classified by {@link isParseDecodeDefect}.
  */

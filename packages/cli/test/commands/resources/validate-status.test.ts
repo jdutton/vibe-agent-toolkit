@@ -43,6 +43,7 @@ function report(issues: readonly ValidationIssue[], overrides: Partial<Resources
   const built = buildResourcesValidateReport({
     root: ROOT,
     resources: RESOURCES,
+    notAdmitted: 0,
     issues,
     collectionStats: undefined,
     verbose: false,

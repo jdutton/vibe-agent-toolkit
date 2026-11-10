@@ -391,11 +391,7 @@ export function runValidationFramework(
   const filtered = applyAllowFilter(rawIssues, config, now);
 
   // 2. Resolve severities and drop ignored issues.
-  const emitted: ValidationIssue[] = [];
-  for (const i of filtered.emitted) {
-    const final = finalize(i, config);
-    if (final) emitted.push(final);
-  }
+  const emitted = finalizeAll(filtered.emitted, config);
 
   // 3. Emit ALLOW_EXPIRED for each expired entry (severity from config).
   //    Expiry is a property of the entry's own `expires` date, so unlike
@@ -412,6 +408,44 @@ export function runValidationFramework(
     allowed,
     hasErrors: emitted.some(i => i.severity === 'error'),
   };
+}
+
+/**
+ * @param issues - Issues past the allow filter
+ * @param config - The validation config in force
+ * @returns Each with its resolved severity, `ignore`d ones dropped
+ */
+function finalizeAll(issues: readonly ValidationIssue[], config: ValidationConfig): ValidationIssue[] {
+  const emitted: ValidationIssue[] = [];
+  for (const issue of issues) {
+    const final = finalize(issue, config);
+    if (final) emitted.push(final);
+  }
+  return emitted;
+}
+
+/**
+ * Resolve findings a verb reports BESIDE any run of the framework — the same
+ * allow filter and the same severity resolution `runValidationFramework`
+ * applies, and nothing else: no `ALLOW_EXPIRED` or `ALLOW_UNUSED` meta issue,
+ * because these findings are not the run's whole issue set, so whether an
+ * allow entry matched nothing, or has expired, is not theirs to say.
+ *
+ * So `validation.severity.<CODE>` and `validation.allow.<CODE>` mean the same
+ * thing in a verb that reports a handful of findings (`vat resources scan`,
+ * `vat rag index`) as in one that validates the whole registry.
+ *
+ * @param rawIssues - The findings, at their registry default severities
+ * @param config - The validation config in force
+ * @param now - The clock allow-entry expiry is judged against
+ * @returns The findings left after the allow filter, each with its resolved severity
+ */
+export function resolveFindings(
+  rawIssues: readonly ValidationIssue[],
+  config: ValidationConfig,
+  now: Date = new Date(),
+): ValidationIssue[] {
+  return finalizeAll(applyAllowFilter(rawIssues, config, now).emitted, config);
 }
 
 /**

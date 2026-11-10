@@ -8,10 +8,11 @@
  * optional backend) at runtime.
  *
  * `examined` counts the resources submitted: every markdown file the crawl
- * enumerated, read or not. Each one the index does not hold — a file the crawl
- * could not read, or one the provider failed to chunk or embed — is a
- * `RAG_DOCUMENT_INDEX_FAILED` finding (error, exit 1) located at its path; the
- * counters still report everything that did land.
+ * enumerated, admitted or not. One the provider failed to chunk or embed is a
+ * `RAG_DOCUMENT_INDEX_FAILED` finding located at its path; one the crawl could
+ * not read or refused to parse is its `RESOURCE_*` not-admitted finding, as in
+ * every crawling verb (an error by default, exit 1). The counters still report
+ * everything that did land.
  */
 
 import { FindingSchema, reportSchema, type Report } from '@vibe-agent-toolkit/schema';

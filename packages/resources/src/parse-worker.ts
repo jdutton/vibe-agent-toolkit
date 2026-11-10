@@ -49,11 +49,13 @@
 import { parentPort, workerData } from 'node:worker_threads';
 
 import type { ParseResult } from './link-parser.js';
+import type { DocumentParserKind } from './mime-type.js';
 import { loadParser, ParseCache } from './parse-cache.js';
 import { isStackOverflow, outputBreach, type ParseLimits } from './parse-limits.js';
 import {
   type ParseWorkerData,
   type ParseWorkerFailure,
+  type ParseWorkerParserLoaded,
   type ParseWorkerReady,
   type ParseWorkerRequest,
   type ParseWorkerResponse,
@@ -100,6 +102,23 @@ function describeFailure(error: unknown): ParseWorkerFailure {
   };
 }
 
+/** The parser kinds this thread has told the parent are loaded. */
+const announcedKinds = new Set<DocumentParserKind>();
+
+/**
+ * Tell the parent, once per kind, that a parser loaded — before it runs, so a
+ * slow document is never taken for a parser load that hangs. See
+ * {@link ParseWorkerParserLoaded}.
+ *
+ * @param kind - The parser kind that has just loaded
+ */
+function announceLoaded(kind: DocumentParserKind): void {
+  if (announcedKinds.has(kind)) return;
+  announcedKinds.add(kind);
+  const loaded: ParseWorkerParserLoaded = { parserLoaded: kind };
+  port.postMessage(loaded);
+}
+
 /**
  * Parse one document and answer the parent.
  *
@@ -117,6 +136,7 @@ async function respond(request: Extract<ParseWorkerRequest, { type: 'parse' }>):
   let response: ParseWorkerResponse;
   try {
     const parser = await loadParser(request.kind);
+    announceLoaded(request.kind);
     // `byteLength` is the parent's RAW byte count, passed through untouched —
     // never a length derived from `content`, since decoding is lossy.
     const result = parser.parseContent(request.content, request.byteLength);
@@ -172,7 +192,7 @@ async function answerFor(
   const facts = toParseWire(result);
   // Checked BEFORE the cache write: a breach is filed nowhere (I6).
   const breach = outputBreach(result, workerLimits());
-  if (breach !== undefined) return { id: request.id, breach };
+  if (breach !== undefined) return { id: request.id, breach: breach.limit, found: breach.found };
   if (cacheKey === undefined) return { id: request.id, facts };
 
   const persisted = await workerCache().setByKey(cacheKey, result);

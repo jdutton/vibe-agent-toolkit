@@ -4,7 +4,7 @@
 
 import { type IndexResult, partialIndexResultOf } from '@vibe-agent-toolkit/rag';
 import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
-import type { UnreadableResource } from '@vibe-agent-toolkit/resources';
+import { notAdmittedCount, notAdmittedFindings } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
@@ -12,7 +12,6 @@ import { refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger } from '../../utils/logger.js';
-import { parseRefusedIssues } from '../../utils/not-admitted-issues.js';
 import { assertReadableDirectoryArgument, projectRootOrNull } from '../../utils/project-root-policy.js';
 import { requireWritableDatabase } from '../../utils/rag-database.js';
 import { loadResourcesWithConfig } from '../../utils/resource-loader.js';
@@ -54,31 +53,6 @@ export function providerIndexIssues(
   locations: ReadonlyMap<string, string>,
 ): ValidationIssue[] {
   return (errors ?? []).map((entry) => notIndexedIssue(locations.get(entry.resourceId) ?? entry.resourceId, entry.error));
-}
-
-/**
- * The resources the crawl enumerated but could not read, as findings.
- *
- * Such a file never reaches `indexResources`: the crawl reads and parses every
- * file itself, so an unreadable one is dropped before the provider sees it. It
- * is therefore in none of the provider's counters and not in its `errors` —
- * the registry keeps the reconciliation log (`getUnreadableResources()`), and
- * without reading it a corpus with a document missing from the index was
- * reported clean. It is the same finding as a provider failure: the document
- * is not in the index.
- *
- * @param unreadable - The registry's read-failure log
- * @param crawlRoot - The directory the crawl was rooted at
- * @returns One issue per unreadable file, in the order the crawl met them
- */
-export function unreadableIndexIssues(
-  unreadable: readonly UnreadableResource[],
-  crawlRoot: string,
-): ValidationIssue[] {
-  return unreadable.map((entry) => notIndexedIssue(
-    toForwardSlash(safePath.relative(crawlRoot, entry.filePath)),
-    `enumerated by the crawl but could not be read: ${entry.reason}`,
-  ));
 }
 
 /**
@@ -148,7 +122,7 @@ export async function indexCommand(
   let report: RagIndexReport;
   // Held outside the `try`: a run the database then refuses still names every file it could not read or parse,
   // every document the provider failed before the refusal, and every finding of a finished index.
-  let notAdmitted: ValidationIssue[] = [];
+  let notAdmitted: readonly ValidationIssue[] = [];
   let locations: ReadonlyMap<string, string> = new Map();
   let indexed: IndexResult | undefined;
   try {
@@ -169,18 +143,22 @@ export async function indexCommand(
     // when projectRoot is null we fall back to cwd for the crawl baseDir.
     // Indexing doesn't surface URI-reference resolution, so cwd is fine here.
     const crawlRoot = projectRoot ?? process.cwd();
-    const { registry } = await loadResourcesWithConfig(pathArg, crawlRoot, logger);
+    const { registry, config } = await loadResourcesWithConfig(pathArg, crawlRoot, logger);
 
     const allResources = registry.getAllResources();
-    // The declared population is the admitted one PLUS what the crawl could not
-    // read; the second half is reported below, not dropped — see `unreadableIndexIssues`.
-    // Likewise every file whose parse the crawl refused (a limit, a dead worker):
-    // it is in no list but the registry's refusal log, so unread it is silently absent.
-    notAdmitted = [
-      ...unreadableIndexIssues(registry.getUnreadableResources(), crawlRoot),
-      ...parseRefusedIssues(registry.getParseRefusedResources(), crawlRoot, 'it is not in the index and its content is not searchable'),
-    ];
-    logger.debug(`Found ${allResources.length} resources to index (${notAdmitted.length} enumerated but not admitted)`);
+    // The declared population is the admitted one PLUS every file the crawl
+    // enumerated and did not admit (unreadable, or its parse refused). Such a
+    // file never reaches `indexResources`, so it is in none of the provider's
+    // counters: it is reported and counted here, through the one contract every
+    // crawling verb uses, or a corpus missing a document is reported clean.
+    const notAdmittedLog = registry.getNotAdmitted();
+    const notAdmittedFiles = notAdmittedCount(notAdmittedLog);
+    notAdmitted = notAdmittedFindings(
+      notAdmittedLog,
+      { locationRoot: crawlRoot, consequence: 'it is not in the index and its content is not searchable' },
+      config?.resources?.validation ?? {},
+    );
+    logger.debug(`Found ${allResources.length} resources to index (${String(notAdmittedFiles)} enumerated but not admitted)`);
     requireWritableDatabase(dbPath, options.db !== undefined && options.db !== '');
 
     // Create RAG provider in admin mode (readonly: false)
@@ -201,7 +179,7 @@ export async function indexCommand(
     // Every one, on stderr: this verb has no `--verbose`.
     reportFindings([...notAdmitted, ...recorded], { verbose: true, write: logger.warn });
     report = buildIndexReport({
-      examined: allResources.length + notAdmitted.length,
+      examined: allResources.length + notAdmittedFiles,
       result: indexResult,
       issues: [...notAdmitted, ...recorded],
       durationMs: Date.now() - startTime,

@@ -57,7 +57,7 @@ interface ParsedFrontmatter {
  *
  * The distinguishing evidence is therefore the decoded VALUE, which only the
  * parse's own decode sees: it sets `frontmatterNotAMapping` for a block whose
- * YAML is a sequence or a scalar, and {@link ParsedFrontmatter} carries it on
+ * YAML is a sequence, a scalar or a typed value (!!set, !!omap, !!timestamp, !!binary), and {@link ParsedFrontmatter} carries it on
  * both lanes. Nothing here decodes YAML: that runs once, in the parse worker.
  *
  * ⚠️ A block whose value is NULL is excluded deliberately, and is not the same
@@ -84,12 +84,12 @@ function notAMappingDraft(document: string): OkfFindingDraft {
 }
 
 /**
- * True when the block's YAML value is a sequence or a scalar — the parse's
+ * True when the block's YAML value is a sequence, a scalar or a typed value (!!set, !!omap, !!timestamp, !!binary) — the parse's
  * `frontmatterNotAMapping`, the same flag the projection's `blob_conditions`
  * reads.
  *
  * @param parsed - What the markdown parser made of the file
- * @returns Whether the YAML parsed to a sequence or a scalar
+ * @returns Whether the YAML parsed to a sequence, a scalar or a typed value
  */
 function isNotAMapping(parsed: ParsedFrontmatter): boolean {
   return parsed.frontmatterNotAMapping === true;

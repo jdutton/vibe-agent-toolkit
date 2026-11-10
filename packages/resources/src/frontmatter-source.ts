@@ -20,6 +20,7 @@
 
 import * as yaml from 'yaml';
 
+import { isPlainMapping } from './frontmatter-codec.js';
 import { isStackOverflow } from './parse-limits.js';
 
 /**
@@ -30,10 +31,15 @@ import { isStackOverflow } from './parse-limits.js';
  *
  * - Empty, whitespace-only, or decoding to YAML `null` (`~`, `null`,
  *   comment-only) → `{}`. The block declares nothing; no error.
- * - Parses to a non-null, non-array object → `{ frontmatter }`.
- * - Parses to a sequence or a scalar → `{ frontmatterNotAMapping: true }`: no
- *   keys can be read from it, and the projection's `blob_conditions` and the
- *   OKF judges say so. Carried on the result because only the decoded VALUE
+ * - Parses to a PLAIN mapping (prototype `Object.prototype` or `null`,
+ *   {@link isPlainMapping}) → `{ frontmatter }`.
+ * - Parses to anything else — a sequence, a scalar, or a non-plain object such
+ *   as the `Set` of a `!!set` root, the `Map` of `!!omap`, the `Date` of
+ *   `!!timestamp` or the `Buffer` of `!!binary` → `{ frontmatterNotAMapping: true }`:
+ *   no keys can be read from it, and the projection's `blob_conditions` and the
+ *   OKF judges say so. A non-plain root admitted as `frontmatter` would reach a
+ *   parent that cannot rebuild it (the codec's decode accepts only a mapping
+ *   root) and every consumer that reads keys off it. Carried on the result because only the decoded VALUE
  *   tells it from a block that declares nothing, and the parent never decodes.
  * - Invalid YAML → `{ frontmatterError }`: a function of the bytes.
  * - A stack overflow, bare or wrapped by `yaml` → **thrown**. It is a `stackMb`
@@ -62,8 +68,6 @@ export function parseFrontmatterSource(source: string): {
     return { frontmatterError: error instanceof Error ? error.message : String(error) };
   }
   if (parsed === null) return {};
-  if (typeof parsed === 'object' && !Array.isArray(parsed)) {
-    return { frontmatter: parsed as Record<string, unknown> };
-  }
+  if (isPlainMapping(parsed)) return { frontmatter: parsed };
   return { frontmatterNotAMapping: true };
 }

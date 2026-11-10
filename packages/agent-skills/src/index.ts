@@ -33,7 +33,7 @@ export {
 } from './walk-link-graph.js';
 
 // A document the crawl refused to parse, named the same way in every skill lane.
-export { parseRefusedMessage, refusedAmong } from './parse-refusal-issues.js';
+export { refusedAmong, SKILL_REACHED_REFUSAL_CONSEQUENCE } from './parse-refusal-issues.js';
 
 // The skill extent (zones §7.3): the closure primitive under a skill's name,
 // plus the translation of `SkillPackagingConfig` into the declaration that

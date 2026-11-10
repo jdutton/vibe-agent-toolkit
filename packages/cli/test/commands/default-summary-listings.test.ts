@@ -61,6 +61,7 @@ const resourceReport = (verbose: boolean) =>
   buildResourcesValidateReport({
     root: RESOURCE_ROOT,
     resources: RESOURCES,
+    notAdmitted: 0,
     issues: RESOURCE_ISSUES as Parameters<typeof buildResourcesValidateReport>[0]['issues'],
     collectionStats: undefined,
     verbose,

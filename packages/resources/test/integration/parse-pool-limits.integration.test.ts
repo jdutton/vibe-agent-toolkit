@@ -16,10 +16,8 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import diagnosticsChannel from 'node:diagnostics_channel';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import type { Worker } from 'node:worker_threads';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -37,7 +35,7 @@ import {
   manyLinks,
   TIGHT_LIMITS,
 } from '../parse-limit-fixtures.js';
-import { countFilesUnder, workerThreadCount } from '../test-helpers.js';
+import { countFilesUnder, widestLiveWorkerThreads, workerThreadCount } from '../test-helpers.js';
 
 const openPools: ParsePool[] = [];
 
@@ -218,32 +216,17 @@ describe('a parse job stopped at its limit', () => {
     const size = 3;
     const pool = createParsePool({ size, limits: { ...TIGHT_LIMITS, heapMb: 1024 } });
     openPools.push(pool);
-    // Every thread from its construction to its real `exit`. Node's report drops a thread the
-    // moment it is told to terminate and lists a new one only once it runs, so a replacement
-    // started beside a thread still exiting is invisible to `workerThreadCount`; this is not.
-    let live = 0;
-    let widest = 0;
-    const onWorker = (message: unknown): void => {
-      live += 1;
-      widest = Math.max(widest, live);
-      (message as { worker: Worker }).worker.once('exit', () => {
-        live -= 1;
-      });
-    };
-    diagnosticsChannel.subscribe('worker_threads', onWorker);
-
-    try {
+    const { value: limits, widest } = await widestLiveWorkerThreads(async () => {
       // `size` jobs that each run past the clock, then ordinary ones queued behind them: each kill
       // frees a job for the queue, and its replacement must wait for the killed thread to exit.
       const stopped = Array.from({ length: size }, async () => breach(pool, deeplyNestedList()));
       const queued = Array.from({ length: size * 2 }, async () => pool.parse('markdown', '# ok\n', 5));
-      const limits = await Promise.all(stopped);
+      const outcomes = await Promise.all(stopped);
       await Promise.all(queued);
+      return outcomes;
+    });
 
-      expect(limits.map((outcome) => outcome.limit)).toStrictEqual(Array.from({ length: size }, () => 'timeMs'));
-    } finally {
-      diagnosticsChannel.unsubscribe('worker_threads', onWorker);
-    }
+    expect(limits.map((outcome) => outcome.limit)).toStrictEqual(Array.from({ length: size }, () => 'timeMs'));
     expect(widest).toBe(size);
   });
 
@@ -273,15 +256,20 @@ const BUILT_POOL = pathToFileURL(safePath.resolve(import.meta.dirname, '..', '..
  *
  * @param nodeOptions - The child's `NODE_OPTIONS`
  * @param heapMb - The pool's `heapMb`
+ * @param stallMs - How long the child's own thread blocks at a time, back to
+ *   back, while the job runs (0: never) — so the heap sampler, which runs on
+ *   that thread, reads late
  * @returns The limit's name, its bound, and how long the rejection took
  */
-function heapBreachUnder(nodeOptions: string, heapMb: number): { limit: string; bound: string; ms: number } {
+function heapBreachUnder(nodeOptions: string, heapMb: number, stallMs: number): { limit: string; bound: string; ms: number } {
   const script = [
     `const { createParsePool } = await import(${JSON.stringify(BUILT_POOL)});`,
     String.raw`const doc = Array.from({ length: 200000 }, (_, i) => '[link ' + i + '](./t-' + i + '.md)\n').join('\n');`,
     `const pool = createParsePool({ size: 1, limits: { heapMb: ${String(heapMb)}, timeMs: 60000, outputRows: 1e9, outputBytes: 1e10, inputBytes: 1e9 } });`,
+    `const stall = ${String(stallMs)} > 0 ? setInterval(() => { const until = performance.now() + ${String(stallMs)}; while (performance.now() < until); }, 1) : undefined;`,
     'const startedAt = performance.now();',
     "const outcome = await pool.parse('markdown', doc, doc.length).then(() => ({ limit: 'none', bound: '' }), (error) => ({ limit: error.limit ?? String(error), bound: error.bound ?? '' }));",
+    'if (stall !== undefined) clearInterval(stall);',
     'console.log(JSON.stringify({ ...outcome, ms: performance.now() - startedAt }));',
     'await pool.shutdown();',
   ].join('\n');
@@ -307,7 +295,7 @@ describe('a process-wide heap flag', () => {
     // 4096 a worker given 48 MiB reports a 4,192 MiB heap limit and a runaway
     // allocation runs until the wall clock stops it. The job must still be
     // stopped at its HEAP limit, well before its wall-clock one.
-    const outcome = heapBreachUnder('--max-old-space-size=4096', 48);
+    const outcome = heapBreachUnder('--max-old-space-size=4096', 48, 0);
 
     expect(outcome.limit).toBe('heapMb');
     expect(outcome.bound).toBe('48 MiB heap');
@@ -317,11 +305,26 @@ describe('a process-wide heap flag', () => {
   it('is named in the refusal when it lowers the limit', () => {
     // Lower than `heapMb`, the flag caps V8's ceiling, and the pool stops the
     // job at half of it, so the refusal names that value, not the configured one.
-    const outcome = heapBreachUnder('--max-old-space-size=64', 1024);
+    const outcome = heapBreachUnder('--max-old-space-size=64', 1024, 0);
 
     expect(outcome.limit).toBe('heapMb');
     expect(outcome.bound).toContain('32 MiB heap');
     expect(outcome.bound).toContain('--max-old-space-size');
+  });
+});
+
+describe('a heap breach while the parent thread stalls', () => {
+  it('is still stopped at the applied limit when every stall is shorter than the window', () => {
+    // The sampler runs on the parent's event loop, so a parent blocked
+    // synchronously reads the worker's heap late. Under a 512 MiB flag the job
+    // is stopped at 256 MiB, and V8's ceiling is 512: a sample up to about two
+    // stalls late (400 ms back to back, so at most ~800 ms) still lands before
+    // the worker reaches it. Measured on Node 26: 600 ms stalls let V8 stop the
+    // worker first. See the hazard register's heap-flag row.
+    const outcome = heapBreachUnder('--max-old-space-size=512', 1024, 400);
+
+    expect(outcome.limit).toBe('heapMb');
+    expect(outcome.bound).toContain('256 MiB heap');
   });
 });
 
@@ -332,7 +335,7 @@ describe('a heap breach with no process-wide flag', () => {
     // (3 runs in 4 at 64 MiB), so the pool must stop the job before V8 does.
     // Three breaches in a row, so a pool that leaves the race to V8 loses it.
     for (let attempt = 0; attempt < 3; attempt++) {
-      const outcome = heapBreachUnder('', 64);
+      const outcome = heapBreachUnder('', 64, 0);
 
       expect(outcome.limit).toBe('heapMb');
       expect(outcome.bound).toBe('64 MiB heap');

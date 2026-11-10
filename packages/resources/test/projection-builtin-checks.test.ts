@@ -311,7 +311,7 @@ describe('CLAUDE_RULE_FRONTMATTER_INVALID — a rules file whose frontmatter doe
     // cannot be read from it and the rule looks unconditional. `blob-facts.ts`
     // gives the blob that verdict; this check is where it reaches the operator.
     const notMapping = 'the frontmatter block is valid YAML but not a YAML mapping — it decodes'
-      + ' to a sequence or a scalar, so it declares no keys at all';
+      + ' to a sequence, a scalar or a typed value (!!set, !!omap, !!timestamp, !!binary), so it declares no keys at all';
     const [issue] = CLAUDE_RULE_FRONTMATTER_INVALID_CHECK.run(brokenRuleInput({
       blobs: [{ contentKey: BROKEN_KEY, frontmatterError: notMapping }],
     }));

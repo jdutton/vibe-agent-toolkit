@@ -241,7 +241,11 @@ describe('a frontmatter list of 200,000 items, decoded on the parent thread', ()
   afterAll(suite.afterAll);
   beforeEach(suite.beforeEach);
 
-  it('is admitted with every item, stored, and served whole from the cache on the next run', async () => {
+  // Past the DEFAULT `outputRows`, so no run files it (`ParseCache.setByKey`): each
+  // run parses it again under the looser limits, and the parent rebuilds the
+  // whole list from the worker's encoding every time. A hit's decode at this size
+  // is the codec's own round-trip test.
+  it('is admitted with every item on every run, and never filed past the default caps', async () => {
     const items = Array.from({ length: LONG_LIST_ITEMS }, (_, index) => String(index % 10));
     const file = safePath.join(suite.tempDir, 'long.md');
     await writeFile(file, `---\nitems: [${items.join(', ')}]\n---\n\n# Long\n`, 'utf-8');
@@ -262,11 +266,11 @@ describe('a frontmatter list of 200,000 items, decoded on the parent thread', ()
     const first: Dispatched = { firstLines: [] };
     expect(await runOnce(first)).toStrictEqual({ admitted: 1, listed: LONG_LIST_ITEMS, refused: 0 });
     expect(first.firstLines).toHaveLength(1);
-    expect(await countFilesUnder(cacheDir)).toBe(1);
+    expect(await countFilesUnder(cacheDir)).toBe(0);
 
     const second: Dispatched = { firstLines: [] };
     expect(await runOnce(second)).toStrictEqual({ admitted: 1, listed: LONG_LIST_ITEMS, refused: 0 });
-    expect(second.firstLines).toHaveLength(0);
+    expect(second.firstLines).toHaveLength(1);
   });
 });
 
@@ -296,6 +300,40 @@ describe('an in-process parse of a document the bounded route refuses', () => {
     });
     expect(await registry.addResources([file])).toHaveLength(0);
     expect(registry.getParseRefusedResources().map((entry) => entry.reason)).toStrictEqual([
+      expect.stringContaining('outputRows'),
+    ]);
+  });
+});
+
+describe('a bounded run under limits looser than the defaults', () => {
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(suite.beforeEach);
+
+  // Both transports: on `wire` the parent files the entry, on `cache` the worker
+  // does. Either way an entry past the DEFAULT caps would be served to a later
+  // default run as an admission that run would have refused.
+  it.each(['wire', 'cache'] as const)('admits the file over %s but files nothing a default run would serve', async (transport) => {
+    const links = Array.from({ length: OVER_DEFAULT_ROWS_LINKS }, (_, index) => `[l${String(index)}](./t.md)`);
+    const file = safePath.join(suite.tempDir, `loose-${transport}.md`);
+    await writeFile(file, `# Many\n\n${links.join('\n')}\n`, 'utf-8');
+    const cacheDir = safePath.join(suite.suiteDir, `cache-loose-${transport}-${String(Date.now())}`);
+
+    const loose = new ResourceRegistry({
+      baseDir: suite.tempDir,
+      parseCache: new ParseCache({ cacheDir, enabled: true }),
+      parsePool: { ...recordingPolicy({ firstLines: [] }, { outputRows: 1_000_000 }), transport },
+    });
+    expect(await loose.addResources([file])).toHaveLength(1);
+    expect(await countFilesUnder(cacheDir)).toBe(0);
+
+    const strict = new ResourceRegistry({
+      baseDir: suite.tempDir,
+      parseCache: new ParseCache({ cacheDir, enabled: true }),
+      parsePool: recordingPolicy({ firstLines: [] }, {}),
+    });
+    expect(await strict.addResources([file])).toHaveLength(0);
+    expect(strict.getParseRefusedResources().map((entry) => entry.reason)).toStrictEqual([
       expect.stringContaining('outputRows'),
     ]);
   });

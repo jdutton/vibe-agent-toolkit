@@ -38,9 +38,11 @@ const PACKAGES_DIR = safePath.join(REPO_ROOT, 'packages');
  * and the condition under which its entry is removed.
  */
 const UNDOCUMENTED_EMITTED_CODES: Record<string, string> = {
-  // Empty today: every emitted code is documented. An entry here names a code
-  // that is emitted but deliberately undocumented, with the reason and the
-  // condition under which its entry is removed.
+  // An entry here names a code that is emitted but deliberately undocumented,
+  // with the reason and the condition under which its entry is removed.
+  FRONTMATTER_NOT_A_MAPPING:
+    'a pipeline-oracle snapshot label (parse-fact-snapshot.ts) compared between lanes, never in a report: users meet the '
+    + 'condition as the projection\'s frontmatter error and as OKF_FRONTMATTER_NOT_A_MAPPING. Remove when a report carries it.',
 };
 
 const CODE_LITERAL = /\bcode:\s*['"]([A-Z][A-Z0-9_]{4,})['"]/g;

@@ -3,9 +3,11 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import diagnosticsChannel from 'node:diagnostics_channel';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { Worker } from 'node:worker_threads';
 
 import {
   forEachInOrder,
@@ -939,6 +941,37 @@ export async function countFilesUnder(root: string): Promise<number> {
 export function workerThreadCount(): number {
   const report = process.report?.getReport() as { workers?: unknown[] } | undefined;
   return Array.isArray(report?.workers) ? report.workers.length : 0;
+}
+
+/**
+ * Run `body`, counting every worker thread from its construction to its real
+ * `exit` — the widest the live set ever got.
+ *
+ * Node's report ({@link workerThreadCount}) drops a thread the moment it is
+ * told to terminate and lists a new one only once it runs, so a replacement
+ * started beside a thread still exiting is invisible to it; the
+ * `worker_threads` diagnostics channel is not.
+ *
+ * @param body - The work to watch
+ * @returns What `body` returned, and the widest live count while it ran
+ */
+export async function widestLiveWorkerThreads<T>(body: () => Promise<T>): Promise<{ value: T; widest: number }> {
+  let live = 0;
+  let widest = 0;
+  const onWorker = (message: unknown): void => {
+    live += 1;
+    widest = Math.max(widest, live);
+    (message as { worker: Worker }).worker.once('exit', () => {
+      live -= 1;
+    });
+  };
+  diagnosticsChannel.subscribe('worker_threads', onWorker);
+  try {
+    const value = await body();
+    return { value, widest };
+  } finally {
+    diagnosticsChannel.unsubscribe('worker_threads', onWorker);
+  }
 }
 
 /** A fixture writer that isolates every file and cleans up after the suite. */

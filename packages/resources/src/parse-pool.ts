@@ -330,8 +330,9 @@ export type ParseWorkerResponse =
   | { id: number; facts: ParseWireFacts }
   | { id: number; stored: string }
   | { id: number; failure: ParseWorkerFailure }
-  | { id: number; breach: ParseLimitName }
+  | { id: number; breach: ParseLimitName; found?: number }
   | ParseWorkerReady
+  | ParseWorkerParserLoaded
   | ParseWorkerTimingReport;
 
 /**
@@ -341,6 +342,17 @@ export type ParseWorkerResponse =
  */
 export interface ParseWorkerReady {
   ready: true;
+}
+
+/**
+ * Posted by a worker the first time a parser of `parserLoaded`'s kind has
+ * loaded on it, BEFORE that parser runs. A thread stopped at `timeMs` before
+ * its job's parser loaded is a load that hangs, which no document can cause,
+ * so it counts toward the broken-install count; one stopped after is a slow
+ * document, which never does.
+ */
+export interface ParseWorkerParserLoaded {
+  parserLoaded: DocumentParserKind;
 }
 
 /**
@@ -664,6 +676,11 @@ interface PoolWorker {
   /** Set once the thread posted {@link ParseWorkerReady}: its module graph loaded. */
   ready: boolean;
   /**
+   * The parser kinds that have loaded on this thread ({@link ParseWorkerParserLoaded}):
+   * a time breach on a job whose kind is not here is counted as a death.
+   */
+  parsersLoaded: Set<DocumentParserKind>;
+  /**
    * Set once the pool is done with this thread — terminated at a limit, closed
    * at shutdown, or already counted as dead — so its later `error` or `exit`
    * is bookkeeping, never a second death.
@@ -674,10 +691,11 @@ interface PoolWorker {
   /**
    * The heap limit the pool enforces on this thread, in MiB, re-read from
    * every heap sample — lower than `heapMb` when a process-wide
-   * `--max-old-space-size` lowered V8's ceiling. `heapMb` until the first
-   * sample. See `appliedHeapLimitMb`.
+   * `--max-old-space-size` lowered V8's ceiling. Undefined until a sample
+   * lands — never assumed to be `heapMb`, because a flag may have lowered it
+   * and a refusal must not name a limit nobody read. See `appliedHeapLimitMb`.
    */
-  heapLimitMb: number;
+  heapLimitMb: number | undefined;
 }
 
 /**
@@ -691,7 +709,7 @@ class WorkerParsePool implements ParsePool {
   readonly #limits: ParseLimits;
   readonly #workers: PoolWorker[] = [];
   /**
-   * Threads told to terminate (a time or heap breach) that have not exited
+   * Threads told to terminate (a time or heap breach), or that died uncontrolled, that have not exited
    * yet. They count against {@link size} until they do, so a breach replaces
    * its thread without the pool ever running wider than its width.
    */
@@ -847,8 +865,9 @@ class WorkerParsePool implements ParsePool {
         if (poolWorker.job !== job) return;
         // Each sample carries V8's ceiling, so the limit is known from the
         // first one, never left to a read that may land after the job starts.
-        poolWorker.heapLimitMb = appliedHeapLimitMb(heap, youngGenerationMb(poolWorker.worker), this.#limits.heapMb);
-        if (!exceedsHeapLimit(heap, poolWorker.heapLimitMb)) return;
+        const applied = appliedHeapLimitMb(heap, youngGenerationMb(poolWorker.worker), this.#limits.heapMb);
+        poolWorker.heapLimitMb = applied;
+        if (!exceedsHeapLimit(heap, applied)) return;
         this.#terminate(poolWorker, this.#heapBreach(poolWorker));
       },
       () => undefined,
@@ -872,7 +891,13 @@ class WorkerParsePool implements ParsePool {
    */
   #stopAtDeadline(poolWorker: PoolWorker, job: PendingJob): void {
     if (poolWorker.job !== job) return;
-    this.#terminate(poolWorker, new ParseLimitError('timeMs', this.#limits.timeMs));
+    const breach = new ParseLimitError('timeMs', this.#limits.timeMs);
+    // A thread whose parser for this job never loaded, stopped at `timeMs`, is a
+    // death toward the broken-install count like any other: a parser load that
+    // hangs would otherwise wait out `timeMs` on every document in turn. One
+    // stopped after its parser loaded is a slow document, and never counts.
+    if (!poolWorker.parsersLoaded.has(job.request.kind)) this.#countDeath(poolWorker, breach);
+    this.#terminate(poolWorker, this.#unavailable ?? breach);
   }
 
   /**
@@ -902,12 +927,26 @@ class WorkerParsePool implements ParsePool {
    */
   #died(poolWorker: PoolWorker, error: Error): void {
     poolWorker.retired = true;
+    // Reported by its `error`, the thread is still exiting: it counts against
+    // `size` until its `exit`, like a thread terminated at a limit.
+    if (!poolWorker.exited) this.#terminating.add(poolWorker);
+    this.#countDeath(poolWorker, error);
+    this.#abandon(poolWorker, this.#unavailable ?? error);
+    if (this.#unavailable !== undefined) this.#failQueue(this.#unavailable);
+  }
+
+  /**
+   * Count one death toward {@link DEATHS_BEFORE_UNAVAILABLE}, and judge the
+   * install broken when it is one too many, or when the thread never loaded.
+   *
+   * @param poolWorker - The thread that died, or ran out of time never having answered
+   * @param error - What it died of
+   */
+  #countDeath(poolWorker: PoolWorker, error: Error): void {
     this.#consecutiveDeaths += 1;
     if (!poolWorker.ready || this.#consecutiveDeaths >= DEATHS_BEFORE_UNAVAILABLE) {
       this.#unavailable ??= this.#brokenInstall(poolWorker, error);
     }
-    this.#abandon(poolWorker, this.#unavailable ?? error);
-    if (this.#unavailable !== undefined) this.#failQueue(this.#unavailable);
   }
 
   /**
@@ -918,7 +957,7 @@ class WorkerParsePool implements ParsePool {
   #brokenInstall(poolWorker: PoolWorker, error: Error): ParserUnavailableError {
     const kind = poolWorker.job?.request.kind ?? 'markdown';
     const cause = poolWorker.ready
-      ? new Error(`${String(this.#consecutiveDeaths)} parse workers in a row died with no answer between them; the last: ${error.message}`)
+      ? new Error(`${String(this.#consecutiveDeaths)} parse workers in a row died, or ran out of time before their parser loaded, with no answer between them; the last: ${error.message}`)
       : error;
     return new ParserUnavailableError(kind, poolWorker.entry, cause);
   }
@@ -968,9 +1007,10 @@ class WorkerParsePool implements ParsePool {
       exited: false,
       gone,
       ready: false,
+      parsersLoaded: new Set(),
       retired: false,
       entry,
-      heapLimitMb: this.#limits.heapMb,
+      heapLimitMb: undefined,
     };
     worker.on('message', (response: ParseWorkerResponse) => {
       this.#settle(poolWorker, response);
@@ -1014,6 +1054,11 @@ class WorkerParsePool implements ParsePool {
     }
     if ('ready' in response) {
       poolWorker.ready = true;
+      return;
+    }
+
+    if ('parserLoaded' in response) {
+      poolWorker.parsersLoaded.add(response.parserLoaded);
       return;
     }
 
@@ -1108,11 +1153,11 @@ function disarm(job: PendingJob): void {
  */
 function settleJob(
   job: PendingJob,
-  response: Exclude<ParseWorkerResponse, ParseWorkerTimingReport | ParseWorkerReady>,
+  response: Exclude<ParseWorkerResponse, ParseWorkerTimingReport | ParseWorkerReady | ParseWorkerParserLoaded>,
   limits: ParseLimits,
 ): void {
   if ('breach' in response) {
-    job.reject(new ParseLimitError(response.breach, limits[response.breach]));
+    job.reject(new ParseLimitError(response.breach, limits[response.breach], response.found));
     return;
   }
   if ('failure' in response) {
@@ -1132,8 +1177,8 @@ function settleJob(
     result = attachContent(response.facts, job.request.content, job.request.byteLength);
   } catch (error) {
     // Thrown in a `message` listener it would be uncaught, and this job would
-    // never settle. The codec is loops end to end, so no input's size or depth
-    // can make this decode throw: whatever did is VAT's defect, and every lane
+    // never settle. The codec is loops end to end and the worker emits only a
+    // plain-mapping root, so no input can make this decode throw: whatever did is VAT's defect, and every lane
     // rethrows it loud rather than blaming, or storing a failure of, the bytes.
     job.reject(new ParseDecodeDefectError(error));
     return;

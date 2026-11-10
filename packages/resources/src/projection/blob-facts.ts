@@ -178,7 +178,7 @@ export function blobRowFor(
  *
  * The YAML parser's own failure is the first and is passed through verbatim.
  * The second is the silent one: a block that is valid YAML and decodes to a
- * **sequence or a scalar** (`---\n- a\n- b\n---`). `parseFrontmatterSource`
+ * **sequence, a scalar or a typed value** such as `!!set` (`---\n- a\n- b\n---`). `parseFrontmatterSource`
  * reports no `frontmatter` and no `frontmatterError` for such a value by design
  * (its acceptance rules are behaviour-preserving for every lane that reads
  * `frontmatter`), only `frontmatterNotAMapping`; before that flag the row that came out was byte-identical to one for a
@@ -215,8 +215,8 @@ function frontmatterErrorFor(parsed: ParseResult): string | null {
  * every finding that reads the column.
  */
 const NOT_A_MAPPING =
-  'the frontmatter block is valid YAML but not a YAML mapping — it decodes to a sequence or a'
-  + ' scalar, so it declares no keys at all';
+  'the frontmatter block is valid YAML but not a YAML mapping — it decodes to a sequence, a'
+  + ' scalar or a typed value (!!set, !!omap, !!timestamp, !!binary), so it declares no keys at all';
 
 /**
  * Build the `blob_conditions` rows for one parse.

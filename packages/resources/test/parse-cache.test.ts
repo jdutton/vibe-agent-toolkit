@@ -57,25 +57,27 @@ See [the other doc](./other.md), [ref][label] and [dangling][nope].
 [label]: ./target.md
 `;
 
+/** Frontmatter that refers back into itself: unbounded depth, so never filed. */
+const CYCLIC_FRONTMATTER_DOC = '---\ncyc: &anchor\n  self: *anchor\n---\n\n# Cyclic\n';
+
 /**
  * Frontmatter JSON **cannot** carry. Every value here survives `yaml.parse`
  * but is destroyed (or fatal) under `JSON.stringify`:
  *
  * - `.inf` / `.nan` → `Infinity` / `NaN`, both of which JSON writes as `null`
  * - `!!binary`      → a `Buffer`, which JSON writes as `{type,data}`
- * - a cyclic anchor → `JSON.stringify` **throws**
  *
- * The last one is the sharp edge: a cache that stored the parsed object would
- * not merely corrupt this document, it would silently never cache it. The
- * "fixture can distinguish" test below pins that this is really true of this
- * exact string rather than merely believed.
+ * A cache that stored the parsed object as JSON would hand a warm run different
+ * values from a cold one. The "fixture can distinguish" test below pins that
+ * this is really true of this exact string rather than merely believed. (A
+ * cyclic anchor, which `JSON.stringify` cannot write at all, is no longer here:
+ * it nests without end, so `outputDepth` refuses it and nothing is ever filed —
+ * {@link CYCLIC_FRONTMATTER_DOC}.)
  */
 const EXOTIC_FRONTMATTER_DOC = `---
 inf: .inf
 nan: .nan
 bin: !!binary "R0lGODlh"
-cyc: &anchor
-  self: *anchor
 ---
 
 # Exotic
@@ -385,9 +387,13 @@ describe('fixture distinguishability', () => {
     expect(frontmatter['inf']).toBe(Number.POSITIVE_INFINITY);
     expect(Number.isNaN(frontmatter['nan'])).toBe(true);
     expect(Buffer.isBuffer(frontmatter['bin'])).toBe(true);
-    // The whole object is unserializable — which makes "cache the source, not
-    // the object" a correctness requirement rather than a preference.
-    expect(() => JSON.stringify(frontmatter)).toThrow();
+    // A JSON round trip of the object loses every one of them — which makes
+    // "cache the source, not the object" a correctness requirement rather than
+    // a preference.
+    const written = JSON.stringify(frontmatter);
+    expect(written).toContain('"inf":null');
+    expect(written).toContain('"nan":null');
+    expect(written).toContain('"bin":{"type":"Buffer"');
   });
 
   it('DUAL_PARSER_DOC really makes the two parsers disagree', () => {
@@ -1089,6 +1095,16 @@ describe('parseKeyed', () => {
     expect(Number.isNaN(warm.frontmatter?.['nan'])).toBe(true);
     expect(Buffer.isBuffer(warm.frontmatter?.['bin'])).toBe(true);
     expect(warm.links).toStrictEqual(cold.links);
+  });
+
+  it('never files frontmatter that refers back into itself: it nests without end', async () => {
+    const keyed = keyedFromText(CYCLIC_FRONTMATTER_DOC);
+    const cache = suite.makeCache();
+
+    await parseKeyed(keyed, cache);
+    await parseKeyed(keyed, cache);
+
+    expect(cache.stats).toStrictEqual({ hits: 0, misses: 2, writeFailures: 0 });
   });
 
   it('chooses the parser from keyed.parserKind, on identical bytes', async () => {

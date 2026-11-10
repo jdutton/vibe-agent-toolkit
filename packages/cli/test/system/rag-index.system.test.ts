@@ -137,7 +137,7 @@ describe('RAG index command (system test)', () => {
   });
 
   it.skipIf(CANNOT_DENY_READS)(
-    'reports a RAG_DOCUMENT_INDEX_FAILED finding and exits 1 when a declared resource cannot be read, naming it',
+    'reports a RESOURCE_UNREADABLE finding and exits 1 when a declared resource cannot be read, naming it',
     async () => {
       const unreadableProjectDir = setupTestProject(tempDir, {
         name: 'unreadable-test-project',
@@ -163,7 +163,7 @@ describe('RAG index command (system test)', () => {
       expect(report.status).toBe('findings');
       expect(report.data?.resourcesIndexed).toBe(1);
       expect(report.findings).toHaveLength(1);
-      expect(report.findings[0]).toMatchObject({ code: 'RAG_DOCUMENT_INDEX_FAILED', severity: 'error', location: 'docs/locked.md' });
+      expect(report.findings[0]).toMatchObject({ code: 'RESOURCE_UNREADABLE', severity: 'error', location: 'docs/locked.md' });
       expect(report.findings[0]?.message).toContain('EACCES');
     }
   );

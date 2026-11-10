@@ -82,8 +82,9 @@ Output:
     recorded, not searchable, not an error
   - resourcesUpdated: files with new content
   - chunksCreated / chunksDeleted: chunks added, and removed from updated files
-  Each file NOT in the index (unreadable, or failed to chunk or embed) is a
-  RAG_DOCUMENT_INDEX_FAILED finding at its path; its content is not searchable.
+  Each file NOT in the index is a finding at its path: RAG_DOCUMENT_INDEX_FAILED
+  when it failed to chunk or embed, RESOURCE_UNREADABLE / RESOURCE_PARSE_* when
+  the crawl could not read or parse it. Its content is not searchable.
   A chunk budget clamped to the embedding model's limit is a
   RAG_CHUNKING_CONFIG_ADJUSTED warning (exit unaffected). Findings also go to stderr.
 

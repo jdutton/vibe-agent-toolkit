@@ -1,8 +1,9 @@
 import { spawnSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 
 import type { AuditCommandOptions } from '../src/commands/audit.js';
@@ -82,6 +83,24 @@ export function commitTestFixture(dir: string, message = 'fixture'): void {
   initTestGitRepo(dir);
   gitAddAll(dir);
   spawnSync(gitExecutable(), ['-C', dir, 'commit', '-q', '-m', message], { stdio: 'ignore' });
+}
+
+/**
+ * Write `files` (root-relative path → content) under `root`, then commit them
+ * as a git fixture.
+ *
+ * @param root - The corpus root, created as needed
+ * @param files - What to write
+ * @returns `root`
+ */
+export function writeCommittedCorpus(root: string, files: Readonly<Record<string, string | Buffer>>): string {
+  for (const [relative, content] of Object.entries(files)) {
+    const absolute = safePath.join(root, relative);
+    mkdirSyncReal(dirname(absolute), { recursive: true });
+    writeFileSync(absolute, content);
+  }
+  commitTestFixture(root);
+  return root;
 }
 
 /**

@@ -42,6 +42,7 @@ import {
   examinedCount,
   issuesFromCheckRows,
   nearMissesOf,
+  parseRefusedRealizations,
   uninterpretableRowsReason,
   type BoundBuiltinCheck,
   type CheckIssue,
@@ -2267,8 +2268,33 @@ function runOutcome(options: {
       onProgress,
       warn: (message) => logger.warn(message),
     });
-    return { ...ran, ...provenance, ...extent };
+    // The refusals lead the checks' own findings: every one of those is a
+    // statement about a corpus with these files missing from it.
+    const issues = [...resolveIssueSeverity(parseRefusedFindings(projection), validation), ...ran.issues];
+    return { ...ran, issues, ...provenance, ...extent };
   });
+}
+
+/**
+ * One finding per file whose parse this run refused, under the code every
+ * crawling verb reports the refusal with, located at the file.
+ *
+ * No check can see a refused file's rows — the blob has none this run — so a
+ * clean verdict over the population would be a claim about a corpus the checks
+ * never read: the refusal counts against the verdict instead (error by
+ * default), and `resources.validation` resolves it like any other finding. A
+ * store hit cannot hide it: a refusal is never filed, so its key is held by
+ * nothing and the hit's coverage check re-derives it.
+ *
+ * @param projection - The populated projection
+ * @returns The findings, unresolved
+ */
+function parseRefusedFindings(projection: Parameters<typeof parseRefusedRealizations>[0]): ValidationIssue[] {
+  return parseRefusedRealizations(projection).map((refusal) => createRegistryIssue(
+    refusal.code,
+    `${refusal.message}. No check saw its rows, so this run's verdict does not cover it.`,
+    { location: refusal.path },
+  ));
 }
 
 /** The test-facing seam: helpers the unit tests reach that are not part of this module's API. */

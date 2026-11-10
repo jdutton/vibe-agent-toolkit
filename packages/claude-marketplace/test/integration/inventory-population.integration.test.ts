@@ -25,6 +25,7 @@
  * extents, produces a different set.
  */
 
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import {
@@ -204,6 +205,7 @@ describe('vat inventory: a population that cannot serve the question defers to t
     const misrooted: InventoryPopulation = {
       root: safePath.join(root, 'skills'),
       membersOf: () => [],
+      parseRefusedAmong: () => [],
     };
 
     expect(await linkedBySkill(misrooted)).toEqual(await linkedBySkill(undefined));
@@ -240,5 +242,66 @@ describe('vat inventory: a population that cannot serve the question defers to t
 
     expect(population.membersOf(safePath.join(bare, 'SKILL.md'))).toEqual([]);
     rmSync(bare, { recursive: true, force: true });
+  });
+});
+
+/**
+ * Each arm's parse-refused rows over a plugin, root-relative.
+ *
+ * @param pluginRoot - The plugin's root
+ * @param population - The population lane, or undefined for the incumbent walk
+ * @returns One row per refused file per skill
+ */
+async function refusedRows(
+  pluginRoot: string,
+  population: InventoryPopulation | undefined,
+): Promise<Array<{ path: string; parseRefused: unknown; limitNamed: boolean }>> {
+  const inventory = await extractClaudePluginInventory(pluginRoot, {
+    gitTrackerSource: NO_GIT_TRACKER,
+    ...(population !== undefined && { sharedPopulation: async () => population }),
+  });
+  return inventory.discovered.skills.flatMap((skill) => skill.parseErrors
+    .filter((row) => row.parseRefused !== undefined)
+    .map((row) => ({
+      path: toForwardSlash(safePath.relative(pluginRoot, row.path)),
+      parseRefused: row.parseRefused,
+      limitNamed: row.message.includes('outputRows'),
+    })));
+}
+
+/**
+ * A linked document whose parse was refused this run (over `outputRows`: 20,000
+ * links, behind a nonce so no earlier in-process parse of the same bytes is
+ * served from the shared cache). The walker arm names it as a `parseRefused`
+ * parse-error row on the skill; the projection arm returned membership alone,
+ * so the default `vat inventory` lane listed it as a linked asset and said
+ * nothing — its `BLOB_PARSE_LIMIT_EXCEEDED` row was never read per skill.
+ */
+describe('vat inventory: a refused linked document is a parse error in both arms', () => {
+  let refusedRoot: string;
+
+  beforeAll(() => {
+    refusedRoot = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-inventory-refused-'));
+    write(safePath.join(refusedRoot, 'vibe-agent-toolkit.config.yaml'), '{}\n');
+    mkdirSyncReal(safePath.join(refusedRoot, '.claude-plugin'), { recursive: true });
+    write(safePath.join(refusedRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'refused-plugin', version: '0.0.0' }));
+    const dir = safePath.join(refusedRoot, 'skills', 'gamma');
+    mkdirSyncReal(dir, { recursive: true });
+    write(safePath.join(dir, 'SKILL.md'),
+      `---\nname: gamma\ndescription: Fixture skill linking a document too large to parse.\n---\n\n- [reference](./reference.md)\n`,
+    );
+    write(safePath.join(dir, 'reference.md'), `<!-- ${randomUUID()} -->\n${'[l](./SKILL.md)\n\n'.repeat(20_000)}`);
+  });
+
+  afterAll(() => {
+    rmSync(refusedRoot, { recursive: true, force: true });
+  });
+
+  it('reports the same row from the projection as from the walk', async () => {
+    const expected = [{ path: 'skills/gamma/reference.md', parseRefused: 'RESOURCE_PARSE_LIMIT_EXCEEDED', limitNamed: true }];
+    const population = await buildInventoryPopulation({ root: refusedRoot, skillMdPaths: [safePath.join(refusedRoot, 'skills', 'gamma', 'SKILL.md')] });
+
+    expect(await refusedRows(refusedRoot, undefined)).toStrictEqual(expected);
+    expect(await refusedRows(refusedRoot, population)).toStrictEqual(expected);
   });
 });

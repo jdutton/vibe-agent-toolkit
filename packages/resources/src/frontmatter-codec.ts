@@ -69,9 +69,15 @@ const SPECIAL_NUMBERS: ReadonlyMap<string, number> = new Map([
  *
  * @param mapping - What `yaml` decoded the block to
  * @returns The encoding, a JSON string
- * @throws If the mapping holds a value `yaml` never produces (a function, a symbol, a class instance)
+ * @throws If the root is not a plain mapping (see {@link isPlainMapping}), or the
+ *   mapping holds a value `yaml` never produces (a function, a symbol, a class instance)
  */
 export function encodeFrontmatterValue(mapping: Record<string, unknown>): string {
+  // The decode refuses any other root, so an encoding written past this line
+  // would be one the parent cannot rebuild: refused here, in the worker.
+  if (!isPlainMapping(mapping)) {
+    throw new VatError(FRONTMATTER_VALUE_MALFORMED, `A frontmatter root must be a plain mapping, not ${describeType(mapping)}.`);
+  }
   const nodes: EncodedNode[] = [];
   const indexOf = new Map<unknown, number>();
   const pending: unknown[] = [];
@@ -142,7 +148,7 @@ function containerNode(value: unknown, slot: (child: unknown) => Slot): EncodedN
     for (const [key, child] of value as Map<unknown, unknown>) node.push(slot(key), slot(child));
     return node;
   }
-  if (isPlainObject(value)) {
+  if (isPlainMapping(value)) {
     const node: EncodedNode = ['o'];
     for (const key of Object.keys(value)) node.push(key, slot(value[key]));
     return node;
@@ -162,10 +168,15 @@ function appendSlots(node: EncodedNode, children: Iterable<unknown>, slot: (chil
 }
 
 /**
+ * Whether a value is a plain mapping: an object whose prototype is
+ * `Object.prototype` or `null`. The one statement of what a frontmatter root may
+ * be — `parseFrontmatterSource` admits nothing else as `frontmatter`, and the
+ * encoding refuses any other root.
+ *
  * @param value - Any value
  * @returns True for an object whose prototype is `Object.prototype` or `null`
  */
-function isPlainObject(value: unknown): value is Record<string, unknown> {
+export function isPlainMapping(value: unknown): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null) return false;
   const prototype: unknown = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
@@ -202,7 +213,7 @@ export function decodeFrontmatterValue(encoded: string): Record<string, unknown>
   for (const [index, node] of nodes.entries()) fill(node, shells[index], resolve);
 
   const root = shells[0];
-  if (nodes[0]?.[0] !== 'o' || !isPlainObject(root)) throw malformed('the first node is not a mapping');
+  if (nodes[0]?.[0] !== 'o' || !isPlainMapping(root)) throw malformed('the first node is not a mapping');
   return root;
 }
 

@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 
+import type { ParseResult } from '../src/link-parser.js';
 import {
   appliedHeapLimitMb,
   countOutputRows,
@@ -16,6 +17,7 @@ import {
   isParseWorkerDiedError,
   isPerRunParseRefusal,
   isStackOverflow,
+  outputBreach,
   ParseLimitError,
   ParseWorkerDiedError,
   resolveParseLimits,
@@ -81,6 +83,60 @@ describe('expandedSize', () => {
 
   it('sizes a list of 200,000 items with no spread', () => {
     expect(expandedSize({ a: Array.from({ length: 200_000 }, () => 1) }).rows).toBe(200_000);
+  });
+
+  it('measures depth as JSON nests it: the mapping itself is level 1, and an alias nests its target', () => {
+    expect(expandedSize({ title: 'x' }).depth).toBe(1);
+    expect(expandedSize({ a: [[1]] }).depth).toBe(3);
+    expect(expandedSize(yaml.parse('x: &x [[1]]\ny: {z: *x}')).depth).toBe(4);
+  });
+
+  it('gives a cyclic back-reference unbounded depth: no writer of JSON can write it out', () => {
+    expect(expandedSize(yaml.parse('a: &x [1, *x]')).depth).toBe(Number.POSITIVE_INFINITY);
+  });
+});
+
+/**
+ * @param frontmatter - A decoded frontmatter value
+ * @returns A parse result carrying it and nothing else
+ */
+function withFrontmatter(frontmatter: Record<string, unknown>): ParseResult {
+  return { links: [], headings: [], frontmatter, content: '', sizeBytes: 0, estimatedTokenCount: 0 };
+}
+
+/**
+ * @param levels - Containers to nest, the mapping included
+ * @returns A mapping whose JSON nests exactly `levels` deep
+ */
+function nestedMapping(levels: number): Record<string, unknown> {
+  let inner: unknown = 1;
+  for (let level = 1; level < levels; level += 1) inner = [inner];
+  return { a: inner };
+}
+
+describe('outputBreach on frontmatter depth', () => {
+  const limits = resolveParseLimits(undefined);
+
+  it('admits a mapping that nests as deep as SQLite reads JSON (1,000 levels)', () => {
+    expect(outputBreach(withFrontmatter(nestedMapping(1000)), limits)).toBeUndefined();
+  });
+
+  it('refuses one level deeper as an output breach naming the depth', () => {
+    expect(outputBreach(withFrontmatter(nestedMapping(1001)), limits)).toStrictEqual({ limit: 'outputDepth', found: 1001 });
+  });
+
+  it('refuses a cyclic anchor, whose depth has no end', () => {
+    expect(outputBreach(withFrontmatter(yaml.parse('a: &x [*x]') as Record<string, unknown>), limits)?.limit).toBe('outputDepth');
+  });
+
+  it('names the depth found in the refusal', () => {
+    const error = new ParseLimitError('outputDepth', 1000, 2000);
+
+    expect(error.bound).toBe('1000 levels of nesting; this document nests 2000');
+  });
+
+  it('is never set looser than the store can read', () => {
+    expect(() => resolveParseLimits({ outputDepth: 1001 })).toThrow(/outputDepth/);
   });
 });
 
@@ -184,5 +240,17 @@ describe('the heap measure', () => {
     expect(lowered.bound).toContain('32 MiB heap');
     expect(lowered.bound).toContain('--max-old-space-size');
     expect(ParseLimitError.heap(1024, 1024).bound).toBe('1024 MiB heap');
+  });
+
+  it('never names the configured limit as the one that applied when no sample ever read it', () => {
+    // V8 can stop a worker at its own ceiling before any sample lands (a parent
+    // blocked past the stall window), and a process-wide flag may have lowered
+    // that ceiling: the applied value is then unknown, and the refusal says so.
+    const unsampled = ParseLimitError.heap(undefined, 1024);
+
+    expect(unsampled.limit).toBe('heapMb');
+    expect(unsampled.bound).not.toBe('1024 MiB heap');
+    expect(unsampled.bound).toContain('before the pool\'s heap sampler read it');
+    expect(unsampled.bound).toContain('--max-old-space-size');
   });
 });

@@ -82,6 +82,19 @@ describe('a linked document whose parse the crawl refused (integration)', () => 
     expect(await limitRejectionMessage(tempDir, skillPath)).toContain('reference.md');
   });
 
+  // A bundled asset the crawl never enumerated (HTML is outside its include) is
+  // admitted by the packager's own `addResource`, which throws the refusal: it
+  // escaped as a raw `ParseLimitError`, no skill named and no remedy.
+  it('packageSkill refuses a bundled HTML asset over a parse limit as a packaging input error naming it', async () => {
+    const page = `<!-- ${randomUUID()} -->\n${'<a href="./SKILL.md">l</a>\n'.repeat(20_000)}`;
+    writeFileSync(safePath.join(tempDir, 'skills', 'linker', 'reference.md'), '# Reference\n\nSee [the page](page.html).\n');
+    writeFileSync(safePath.join(tempDir, 'skills', 'linker', 'page.html'), page);
+
+    const message = await limitRejectionMessage(tempDir, skillPath);
+    expect(message).toContain('skills/linker/page.html');
+    expect(message).toContain('outputRows');
+  });
+
   // The in-process sibling: the packager parses SKILL.md on this thread, and a
   // frontmatter nested past the stack escaped as `yaml`'s raw `YAMLParseError`.
   it('packageSkill refuses a SKILL.md whose frontmatter overflows the parse as a packaging input error', async () => {

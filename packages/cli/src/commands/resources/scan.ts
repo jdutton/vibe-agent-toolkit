@@ -2,14 +2,13 @@
  * Resources scan command - discover markdown resources
  */
 
-import type { CrawlSourceKind } from '@vibe-agent-toolkit/resources';
+import { type CrawlSourceKind, notAdmittedCount, notAdmittedFindings, notAdmittedInScope } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 import { refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger } from '../../utils/logger.js';
-import { parseRefusedIssues, unreadableResourceIssues } from '../../utils/not-admitted-issues.js';
 import { projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
 import { relativizePathEntries } from '../../utils/relativize-paths.js';
 import {
@@ -73,10 +72,11 @@ export interface ScanPayloadInput {
   durationMs: number;
   /**
    * Every file the crawl enumerated and did not admit — unreadable, or its parse
-   * refused — as error findings. Required: a scan that omits them reports the
-   * survivors as the whole population.
+   * refused — in scope: how many (counted in `examined` whatever their findings
+   * resolve to), and their findings at their configured severity. Required: a
+   * scan that omits them reports the survivors as the whole population.
    */
-  notAdmitted: readonly ValidationIssue[];
+  notAdmitted: { readonly count: number; readonly findings: readonly ValidationIssue[] };
   /** Resources per collection; `{}` when the project configures none. */
   collections: Record<string, { resourceCount: number }>;
   verbose: boolean;
@@ -105,8 +105,8 @@ function countHeadings(headings: readonly HeadingWithChildren[]): number {
  * `examined` is the number of files scanned — the denominator the lab's
  * population facet reads, beside `data.files`: the admitted files plus every
  * one the crawl enumerated and did not admit. Those are the scan's only
- * findings, one error each (exit 1); a scan of nothing gets the writer's
- * run-integrity refusal.
+ * findings, one each at its configured severity (an error by default, so exit
+ * 1); a scan of nothing gets the writer's run-integrity refusal.
  */
 export function buildScanReport(input: ScanPayloadInput): ResourcesScanReport {
   const { resources, root, lane, extentSource, durationMs, collections, verbose, notAdmitted } = input;
@@ -135,8 +135,8 @@ export function buildScanReport(input: ScanPayloadInput): ResourcesScanReport {
 
   // `vat resources scan` offers no `--strict`; its only findings are the files it could not admit.
   return buildReport({
-    examined: resources.length + notAdmitted.length,
-    findings: toFindings([...notAdmitted]),
+    examined: resources.length + notAdmitted.count,
+    findings: toFindings([...notAdmitted.findings]),
     data,
     gate: { strict: false },
     durationMs,
@@ -184,13 +184,21 @@ export async function scanCommand(
     const resources = collection === undefined
       ? registry.getAllResources()
       : registry.getAllResources().filter((r) => r.collections?.includes(collection) ?? false);
-    // Unfiltered by `--collection`, as `resources validate` reports them: a file
-    // that was never admitted has no collection membership to filter on.
-    const notAdmitted = [
-      ...unreadableResourceIssues(registry.getUnreadableResources(), projectRoot),
-      ...parseRefusedIssues(registry.getParseRefusedResources(), projectRoot, 'it is absent from every count in this report'),
-    ];
-    reportFindings(notAdmitted, { verbose: true, write: logger.warn });
+    // Scoped to `--collection` by the collection's own patterns, as `resources
+    // validate` scopes them, and resolved through `resources.validation`.
+    const notAdmittedLog = notAdmittedInScope(
+      registry.getNotAdmitted(),
+      collection === undefined ? undefined : config?.resources?.collections?.[collection],
+    );
+    const notAdmitted = {
+      count: notAdmittedCount(notAdmittedLog),
+      findings: notAdmittedFindings(
+        notAdmittedLog,
+        { locationRoot: projectRoot, consequence: 'it is in no collection count in this report' },
+        config?.resources?.validation ?? {},
+      ),
+    };
+    reportFindings(notAdmitted.findings, { verbose: true, write: logger.warn });
 
     const report = buildScanReport({
       notAdmitted,

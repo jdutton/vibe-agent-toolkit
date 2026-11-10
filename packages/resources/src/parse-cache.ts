@@ -537,14 +537,26 @@ export class ParseCache {
    * invented decode provenance into a struct nothing reads, which is the same
    * mistake `parse-pool.ts`'s `attachContent` docstring refuses.
    *
+   * ⛔ **Every write files only what a default bounded run would admit.** The
+   * cache is shared by every run, whatever limits produced an entry, so an
+   * entry past the default input or output caps — written by an in-process
+   * parse, or by a pool given looser limits, on either side of the thread
+   * boundary — would be served to a later default run as an admission that run
+   * would have refused: the outcome would hang on what ran first (I0). This is
+   * the one place every write passes, so the guard lives here and no caller
+   * can forget it. `result.sizeBytes` is the raw byte count every parser is
+   * handed.
+   *
    * @param key - The content key to file under
    * @param result - The parse result whose facts to store
-   * @returns True when the entry was persisted. A write failure is REPORTED
-   *   here as well as counted, never thrown — see below.
+   * @returns True when the entry was persisted; false when it is not storable
+   *   under the default limits, the cache is off, or the write failed. A write
+   *   failure is REPORTED here as well as counted, never thrown — see below.
    */
   async setByKey(key: string, result: ParseResult): Promise<boolean> {
     // Outside the bracket for the same reason `get`'s guards are — see there.
     if (!this.enabled || !SAFE_KEY.test(key)) return false;
+    if (!storableUnderDefaultLimits(result.sizeBytes, result)) return false;
 
     const startedAt = parseTimingStart();
     try {
@@ -1087,11 +1099,9 @@ export async function parseKeyed(keyed: ParsableContent, cache: ParseCache): Pro
   // disk (see link-parser.ts and content-key.ts).
   const result = parser.parseContent(keyed.content, keyed.byteLength);
 
-  // This parse ran unbounded, on this thread. Filed past the bounded route's
-  // input or output caps, it would be served to a later bounded crawl as an
-  // admission that run would have refused: the outcome would hang on what ran
-  // first, not on the bytes (I0). So it is answered, and filed only within them.
-  if (storableUnderDefaultLimits(keyed.byteLength, result)) await cache.set(keyed, result);
+  // This parse ran unbounded, on this thread. `set` files it only within the
+  // bounded route's default caps (see `setByKey`), so it is answered either way.
+  await cache.set(keyed, result);
   return result;
 }
 

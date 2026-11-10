@@ -55,8 +55,10 @@ import {
   DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
   populate,
+  parseRefusedRealizations,
   populationOracles,
   type BlobRefusalRows,
+  type ParseRefusedResource,
   type CollectionConfig,
   type JsonValue,
   type PopulationCache,
@@ -172,11 +174,32 @@ export interface InventoryPopulation {
    */
   membersOf(skillMdPath: string): readonly string[] | undefined;
   /**
+   * The files among `paths` whose parse this run refused (over a limit, or its
+   * worker died), under the code the walk's registry reports them with. Their
+   * rows are members all the same — they were enumerated and linked — so a lane
+   * answering from {@link membersOf} alone listed a never-parsed file as an
+   * ordinary linked asset and said nothing.
+   *
+   * @param paths - Absolute paths: a skill's SKILL.md and its members
+   * @returns One entry per refused file, absolute, in the order of `paths`
+   */
+  parseRefusedAmong(paths: readonly string[]): ReadonlyArray<PopulationParseRefusal>;
+  /**
    * The stored rows that say what this population declined to derive or
    * mis-decoded, for a caller to hand `describeBlobRefusals` — the same rows on
    * a store hit as the derive that wrote them.
    */
   readonly refusalRows: BlobRefusalRows;
+}
+
+/** One file a population's parse refused, as {@link InventoryPopulation.parseRefusedAmong} names it. */
+export interface PopulationParseRefusal {
+  /** Absolute path. */
+  readonly filePath: string;
+  /** The code the registry lane reports the same refusal under. */
+  readonly code: ParseRefusedResource['code'];
+  /** What stopped it: the path, the limit and its bound, or the cause of death. */
+  readonly message: string;
 }
 
 /**
@@ -319,9 +342,17 @@ function indexPopulation(
     );
   }
 
+  const refusedByAbsolute = new Map<string, PopulationParseRefusal>();
+  for (const refusal of parseRefusedRealizations(projection)) {
+    const filePath = safePath.resolve(root, refusal.path);
+    refusedByAbsolute.set(filePath, { filePath, code: refusal.code, message: refusal.message });
+  }
+
   return {
     root,
     membersOf: (skillMdPath: string) => byAbsoluteSkill.get(safePath.resolve(skillMdPath)),
+    parseRefusedAmong: (paths: readonly string[]) =>
+      paths.flatMap((path) => refusedByAbsolute.get(safePath.resolve(path)) ?? []),
     refusalRows: projection,
   };
 }

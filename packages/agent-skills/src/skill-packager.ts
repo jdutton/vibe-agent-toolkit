@@ -37,7 +37,11 @@ import {
   type ResourceLink,
   type ResourceMetadata,
   type ResourcePopulationSource,
+  isPerRunParseRefusal,
+  type ParseRefusedResource,
   parseFileCached,
+  parseRefusedEntry,
+  parseRefusedMessage,
 } from '@vibe-agent-toolkit/resources';
 import {
   allowUnusedIssues,
@@ -92,7 +96,7 @@ import {
 } from './files-config.js';
 import { LINK_GRAPH_MEMBER_GLOBS } from './link-graph-members.js';
 import { packagingInputError, SKILL_NAME_NOT_A_SEGMENT_CODE, SkillPackageChecksFailedError } from './packaging-errors.js';
-import { parseRefusedMessage, refusedAmong, stackOverflowIssue } from './parse-refusal-issues.js';
+import { refusedAmong, SKILL_REACHED_REFUSAL_CONSEQUENCE, stackOverflowIssue } from './parse-refusal-issues.js';
 import { checkBrokenPackagedLinks, checkMissingReferencedPaths, checkUnreferencedFiles } from './post-build-checks.js';
 import {
   checkPackagedTestInput,
@@ -1566,8 +1570,17 @@ async function parseSkillOrRefuse(skillPath: string, side: 'source' | 'destinati
 function refuseParseRefusedFiles(registry: ResourceRegistry, reached: readonly string[], projectRoot: string): void {
   const refused = refusedAmong(registry.getParseRefusedResources(), reached);
   if (refused.length === 0) return;
-  const lines = refused.map((entry) => `${entry.code}: ${parseRefusedMessage(entry, issueLocation(entry.filePath, projectRoot))}`);
-  throw packagingInputError(`The skill reaches ${refused.length} file(s) whose parse was refused:\n${lines.join('\n')}`);
+  throw parseRefusedPackagingError(refused, projectRoot);
+}
+
+/**
+ * The packager's one refusal of files whose parse was refused, each under its
+ * own code in the sentence every lane reports a refusal with — whether a crawl
+ * logged the refusal or a single-file `addResource` threw it.
+ */
+function parseRefusedPackagingError(refused: readonly ParseRefusedResource[], projectRoot: string, options?: ErrorOptions): Error {
+  const lines = refused.map((entry) => `${entry.code}: ${parseRefusedMessage(entry, issueLocation(entry.filePath, projectRoot), SKILL_REACHED_REFUSAL_CONSEQUENCE)}`);
+  return packagingInputError(`The skill reaches ${refused.length} file(s) whose parse was refused:\n${lines.join('\n')}`, options);
 }
 
 /** Input for assemblePackageResult — avoids a long parameter list. */
@@ -1844,6 +1857,11 @@ async function registerBundledAssets(
           existingPath: error.existingPath,
           conflictingPath: error.conflictingPath,
         });
+      } else if (isPerRunParseRefusal(error)) {
+        // An asset the crawl never enumerated (outside its include) is parsed
+        // here first, and `addResource` THROWS its refusal rather than logging
+        // it: the same refusal `refuseParseRefusedFiles` raises for a logged one.
+        throw parseRefusedPackagingError([parseRefusedEntry(assetPath, error)], projectRoot, { cause: error });
       } else {
         throw error;
       }

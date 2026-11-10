@@ -488,14 +488,14 @@ export const CODE_REGISTRY = {
   RESOURCE_PARSE_LIMIT_EXCEEDED: entry(
     'finding',
     'error',
-    'A file the crawl enumerated was not admitted because its parse was stopped at one of its limits — wall clock, heap, stack, output rows or bytes, or input size — so it is absent from every count in the report. Nothing was stored for it; the next run parses it again.',
+    'A file the crawl enumerated was not admitted because its parse was stopped at one of its limits — wall clock, heap, stack, output depth, rows or bytes, or input size — so nothing in it was checked; it is still counted in `examined`. Nothing was stored for it; the next run parses it again.',
     'Find what makes the named file pathological to parse (deep nesting, a huge generated document) and simplify or exclude it. A limit breach on an ordinary file under heavy machine load clears on the next run.',
     'resource_parse_limit_exceeded',
   ),
   RESOURCE_PARSE_WORKER_DIED: entry(
     'finding',
     'error',
-    'A file the crawl enumerated was not admitted because the parse worker holding it died without answering — it exited, or an uncaught error killed the thread — so it is absent from every count in the report. Nothing was stored for it; the next run parses it again.',
+    'A file the crawl enumerated was not admitted because the parse worker holding it died without answering — it exited, or an uncaught error killed the thread — so nothing in it was checked; it is still counted in `examined`. Nothing was stored for it; the next run parses it again.',
     'Re-run. A death that repeats on the same file is a VAT defect, not the file\'s: report it with the named file and the cause in the message.',
     'resource_parse_worker_died',
   ),
@@ -1066,8 +1066,8 @@ export const CODE_REGISTRY = {
   CLAUDE_RULE_FRONTMATTER_INVALID: entry(
     'finding',
     'warning',
-    'A rules file under .claude/rules/ has YAML frontmatter VAT could not read — it does not parse, or it parses to a sequence or a scalar rather than a mapping — so VAT read no paths: from it: the rule is counted as if it had no paths: (a project-root rule at launch, a nested one on demand), and claude_rule_patterns holds no row for any glob it declares — which is why CLAUDE_RULE_GLOB_INERT cannot report them. What Claude Code does with such a file is not documented.',
-    'Fix the YAML. The usual cause is a glob that starts with * left unquoted — YAML reads a leading * as an alias — so quote every paths: entry ("**/x/*.ts"); a value containing ": " needs quoting for the same reason. A block that is valid YAML but decodes to a sequence or a scalar draws the same code: frontmatter has to be a mapping for paths: to exist at all. Set resources.validation.severity.CLAUDE_RULE_FRONTMATTER_INVALID to ignore to silence it.',
+    'A rules file under .claude/rules/ has YAML frontmatter VAT could not read — it does not parse, or it parses to a sequence, a scalar or a typed value (!!set, !!omap, !!timestamp, !!binary) rather than a mapping — so VAT read no paths: from it: the rule is counted as if it had no paths: (a project-root rule at launch, a nested one on demand), and claude_rule_patterns holds no row for any glob it declares — which is why CLAUDE_RULE_GLOB_INERT cannot report them. What Claude Code does with such a file is not documented.',
+    'Fix the YAML. The usual cause is a glob that starts with * left unquoted — YAML reads a leading * as an alias — so quote every paths: entry ("**/x/*.ts"); a value containing ": " needs quoting for the same reason. A block that is valid YAML but decodes to a sequence, a scalar or a typed value draws the same code: frontmatter has to be a mapping for paths: to exist at all. Set resources.validation.severity.CLAUDE_RULE_FRONTMATTER_INVALID to ignore to silence it.',
     'claude_rule_frontmatter_invalid',
   ),
   // Projection path — a `.claude/rules/` file or directory that is ITSELF a

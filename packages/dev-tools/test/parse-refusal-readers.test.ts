@@ -22,8 +22,22 @@
  * functions, and a {@link NOT_READ_HERE} entry must still crawl and must
  * not read the log itself (then it needs no entry).
  *
+ * Two more routes reach a parse that can be refused, each with its own read:
+ *
+ * - **A single-file add.** `.addResource(` THROWS a per-run refusal instead of
+ *   logging it, so its caller must classify it (`isPerRunParseRefusal(`) or the
+ *   refusal escapes as a raw `ParseLimitError` with no file named. Same three
+ *   ways out, through {@link SINGLE_ADD_NOT_CLASSIFIED_HERE}.
+ * - **A population.** A projection files a refused parse as a
+ *   `BLOB_PARSE_LIMIT_EXCEEDED`/`BLOB_PARSE_WORKER_DIED` condition row, in no
+ *   list but its rows. A file that runs one — `populate(`, or a builder in
+ *   {@link POPULATION_BUILDERS} — must read the rows
+ *   (`describeBlobRefusals(`, `parseRefusedRealizations(`), be a listed builder,
+ *   or be listed in {@link POPULATION_NOT_READ_HERE}.
+ *
  * ⚠️ The detector is textual: a crawl reached through a name not listed here —
- * a new builder — is invisible until it is added to {@link BUILDERS}.
+ * a new builder — is invisible until it is added to {@link BUILDERS} or
+ * {@link POPULATION_BUILDERS}.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -47,8 +61,6 @@ const BUILDERS: Readonly<Record<string, readonly string[]>> = {
  * refusals still reach the user, or why there is no user to reach.
  */
 const NOT_READ_HERE: Readonly<Record<string, string>> = {
-  'packages/cli/src/commands/resources/validate.ts':
-    '`registry.validate()` reports every refused file as an error finding (`collectParseRefusedErrors`).',
   'packages/cli/src/commands/skills/validate.ts':
     'its shared registry reaches `registryForSkill` in `packaging-validator.ts`, which reads the log for every skill it validates.',
   'packages/cli/src/pipeline-oracles/lanes.ts':
@@ -58,8 +70,60 @@ const NOT_READ_HERE: Readonly<Record<string, string>> = {
 /** The registry itself: it defines the log and reads it in `validate()`. */
 const OWNER = 'packages/resources/src/resource-registry.ts';
 
-/** The read every crawler owes. */
-const READ = 'getParseRefusedResources(';
+/** The reads that discharge a registry crawl: the refusal log, or both not-admitted logs. */
+const READS = ['getParseRefusedResources(', 'getNotAdmitted('] as const;
+
+/** The single-file add, which throws its refusal. */
+const SINGLE_ADD = '.addResource(';
+
+/** The classification every single-file add owes. */
+const SINGLE_ADD_READ = 'isPerRunParseRefusal(';
+
+/**
+ * Files that call `.addResource(` and do not classify the refusal themselves,
+ * with how it still reaches the user.
+ */
+const SINGLE_ADD_NOT_CLASSIFIED_HERE: Readonly<Record<string, string>> = {
+  'packages/resources/src/projection/merge.ts':
+    '`builder.addResource(row)` inserts a projection row; it is no registry\'s single-file add and parses nothing.',
+};
+
+/** The projection driver: it defines `populate` and runs no population of its own. */
+const POPULATION_OWNER = 'packages/resources/src/projection/merge.ts';
+
+/** The projection's own entry point. */
+const POPULATE = 'populate';
+
+/** The reads that discharge a population: its refusal rows, as a line or per path. */
+const POPULATION_READS = ['describeBlobRefusals(', 'parseRefusedRealizations('] as const;
+
+/**
+ * Functions that run a caller's population build and read its refusal rows
+ * themselves: a call to one discharges the caller. Asserted to still define the
+ * function and still make a {@link POPULATION_READS} read.
+ */
+const POPULATION_REPORTERS: Readonly<Record<string, string>> = {
+  'packages/cli/src/utils/population-wiring.ts': 'populateAndReport',
+};
+
+/**
+ * Files that run a population and hand it out, and the functions they hand it
+ * out through. Every caller of one of these is held to the rule in turn.
+ */
+const POPULATION_BUILDERS: Readonly<Record<string, readonly string[]>> = {
+  'packages/resources/src/projection/resource-population.ts': ['buildResourcePopulation', 'buildResourceProjection'],
+  'packages/resources/src/projection/claude-context-population.ts': ['buildClaudeContextPopulation'],
+};
+
+/**
+ * Files that run a population and do not read its refusal rows, with how the
+ * refusals still reach the user, or why there is no user to reach.
+ */
+const POPULATION_NOT_READ_HERE: Readonly<Record<string, string>> = {
+  'packages/cli/src/utils/resource-loader.ts':
+    'the population only ENUMERATES (`ResourcePopulationSource` hands the registry paths): the registry parses each on its own '
+    + 'bounded route and logs every refusal, which `loadResourcesWithConfig`\'s callers read (`getNotAdmitted()`).',
+};
 
 /** What a comment line starts with, once indentation is trimmed. */
 const COMMENT_STARTS = ['*', '//', '/*'] as const;
@@ -75,11 +139,14 @@ function continuesName(char: string | undefined): boolean {
   return char !== undefined && (char === '.' || char === '_' || char === '$' || /[\p{L}\p{N}]/u.test(char));
 }
 
-/** Whether `body` calls the free function `name` — never its definition, never a method of that name. */
+/**
+ * Whether `body` calls the free function `name` — never its definition, never a
+ * method of that name, never a backquoted mention in a message string.
+ */
 function callsFunction(body: string, name: string): boolean {
   const call = `${name}(`;
   for (let at = body.indexOf(call); at !== -1; at = body.indexOf(call, at + 1)) {
-    if (!continuesName(body[at - 1]) && !body.slice(0, at).endsWith('function ')) return true;
+    if (!continuesName(body[at - 1]) && body[at - 1] !== '`' && !body.slice(0, at).endsWith('function ')) return true;
   }
   return false;
 }
@@ -87,6 +154,38 @@ function callsFunction(body: string, name: string): boolean {
 /** Whether `body` calls one of the crawl entry points (builder definitions excluded). */
 function crawls(body: string, builderNames: readonly string[]): boolean {
   return CRAWL_METHODS.some((method) => body.includes(`.${method}(`)) || builderNames.some((name) => callsFunction(body, name));
+}
+
+/** Whether `body` runs a population: `populate(` itself or a listed builder (definitions excluded). */
+function populates(body: string, builderNames: readonly string[]): boolean {
+  return [POPULATE, ...builderNames].some((name) => callsFunction(body, name));
+}
+
+/** Whether `body` makes any of `reads`. */
+function readsAny(body: string, reads: readonly string[]): boolean {
+  return reads.some((read) => body.includes(read));
+}
+
+/** Whether `body` reads a population's refusal rows, itself or through a listed reporter. */
+function readsPopulation(body: string): boolean {
+  return readsAny(body, POPULATION_READS) || Object.values(POPULATION_REPORTERS).some((name) => callsFunction(body, name));
+}
+
+/**
+ * The entries of a builder table that no longer crawl, or no longer define a
+ * function they are listed with.
+ */
+function staleBuilders(
+  table: Readonly<Record<string, readonly string[]>>,
+  files: ReadonlyMap<string, string>,
+  runs: (body: string, otherBuilders: readonly string[]) => boolean,
+): string[] {
+  const all = Object.values(table).flat();
+  return Object.entries(table).flatMap(([file, names]) => {
+    const body = files.get(file);
+    if (body === undefined || !runs(body, all.filter((name) => !names.includes(name)))) return [file];
+    return names.filter((name) => !body.includes(`function ${name}(`) && !body.includes(`function ${name}<`)).map((name) => `${file}#${name}`);
+  });
 }
 
 describe('every resource crawl reports its parse refusals', () => {
@@ -100,24 +199,81 @@ describe('every resource crawl reports its parse refusals', () => {
 
   it('reads getParseRefusedResources(), hands the registry to a listed builder\'s callers, or is listed as not read here', () => {
     const unread = crawlers
-      .filter(([file, body]) => !body.includes(READ) && BUILDERS[file] === undefined && NOT_READ_HERE[file] === undefined)
+      .filter(([file, body]) => !readsAny(body, READS) && BUILDERS[file] === undefined && NOT_READ_HERE[file] === undefined)
       .map(([file]) => file);
     expect(unread).toEqual([]);
   });
 
   it('lists only builders that still crawl and still define what they are listed with', () => {
-    const stale = Object.entries(BUILDERS).flatMap(([file, names]) => {
-      const body = files.get(file);
-      if (body === undefined || !crawls(body, builderNames.filter((name) => !names.includes(name)))) return [file];
-      return names.filter((name) => !body.includes(`function ${name}(`)).map((name) => `${file}#${name}`);
-    });
-    expect(stale).toEqual([]);
+    expect(staleBuilders(BUILDERS, files, crawls)).toEqual([]);
   });
 
   it('lists as not read here only files that still crawl and do not read the log themselves', () => {
     const stale = Object.keys(NOT_READ_HERE).filter((file) => {
       const body = files.get(file);
-      return body === undefined || !crawls(body, builderNames) || body.includes(READ);
+      return body === undefined || !crawls(body, builderNames) || readsAny(body, READS);
+    });
+    expect(stale).toEqual([]);
+  });
+});
+
+describe('every single-file add classifies the refusal it throws', () => {
+  const files = new Map([...packageSources()].map(([file, text]) => [file, code(text)]));
+  const adders = [...files].filter(([file, body]) => file !== OWNER && body.includes(SINGLE_ADD));
+
+  it('finds the adders — at least the skill packager', () => {
+    expect(adders.map(([file]) => file)).toContain('packages/agent-skills/src/skill-packager.ts');
+  });
+
+  it('classifies isPerRunParseRefusal(), or is listed as not classified here', () => {
+    const unclassified = adders
+      .filter(([file, body]) => !body.includes(SINGLE_ADD_READ) && SINGLE_ADD_NOT_CLASSIFIED_HERE[file] === undefined)
+      .map(([file]) => file);
+    expect(unclassified).toEqual([]);
+  });
+
+  it('lists as not classified here only files that still add and do not classify', () => {
+    const stale = Object.keys(SINGLE_ADD_NOT_CLASSIFIED_HERE).filter((file) => {
+      const body = files.get(file);
+      return body === undefined || !body.includes(SINGLE_ADD) || body.includes(SINGLE_ADD_READ);
+    });
+    expect(stale).toEqual([]);
+  });
+});
+
+describe('every population reports its parse refusals', () => {
+  const files = new Map([...packageSources()].map(([file, text]) => [file, code(text)]));
+  const builderNames = Object.values(POPULATION_BUILDERS).flat();
+  const populators = [...files].filter(([file, body]) => file !== POPULATION_OWNER && populates(body, builderNames));
+
+  it('finds the populators — at least the inventory lane', () => {
+    expect(populators.map(([file]) => file)).toContain('packages/claude-marketplace/src/inventory/inventory-population.ts');
+  });
+
+  it('reads the refusal rows, hands the population to a listed builder\'s callers, or is listed as not read here', () => {
+    const unread = populators
+      .filter(([file, body]) => !readsPopulation(body)
+        && POPULATION_BUILDERS[file] === undefined && POPULATION_NOT_READ_HERE[file] === undefined)
+      .map(([file]) => file);
+    expect(unread).toEqual([]);
+  });
+
+  it('lists only builders that still populate and still define what they are listed with', () => {
+    expect(staleBuilders(POPULATION_BUILDERS, files, populates)).toEqual([]);
+  });
+
+  it('lists as not read here only files that still populate and do not read the rows themselves', () => {
+    const stale = Object.keys(POPULATION_NOT_READ_HERE).filter((file) => {
+      const body = files.get(file);
+      return body === undefined || !populates(body, builderNames) || readsPopulation(body);
+    });
+    expect(stale).toEqual([]);
+  });
+
+  it('lists as reporters only files that still define the function and still read the rows', () => {
+    const stale = Object.entries(POPULATION_REPORTERS).filter(([file, name]) => {
+      const body = files.get(file);
+      return body === undefined || !body.includes(`function ${name}<`) && !body.includes(`function ${name}(`) || !readsAny(body, POPULATION_READS);
     });
     expect(stale).toEqual([]);
   });

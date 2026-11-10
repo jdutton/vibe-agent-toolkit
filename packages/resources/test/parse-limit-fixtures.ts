@@ -55,5 +55,6 @@ export const TIGHT_LIMITS: ParseLimits = {
   stackMb: 1,
   outputRows: 1000,
   outputBytes: 256 * 1024,
+  outputDepth: 1000,
   inputBytes: 8 * 1024 * 1024,
 };

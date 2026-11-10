@@ -66,9 +66,10 @@ import { estimateTokens } from './link-classify.js';
 import type { ParseResult } from './link-parser.js';
 import { fillLinkFacts, fragmentIndex, judgeLink, resolveLinkEntries, unreadableTargetsFrom, type FragmentIndex, type JudgeLinkOptions, type LinkEntry, type ValidateLinkOptions } from './link-validator.js';
 import { parserKindForMimeType } from './mime-type.js';
+import { type NotAdmittedLog, notAdmittedIssues, parseRefusedEntry } from './not-admitted.js';
 import { ParseCache, type ParseCacheStats, vatCacheRoot } from './parse-cache.js';
 import { ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable } from './parse-dispatcher.js';
-import { isParseLimitError, isPerRunParseRefusal, type PerRunParseRefusal } from './parse-limits.js';
+import { isPerRunParseRefusal, type PerRunParseRefusal } from './parse-limits.js';
 // A value import, and acyclic: `crawl-source.ts` reaches only `utils` and a
 // type from `realizations.ts`, never back into the registry. The remedy is
 // shared so the walk lane refuses with the projection's exact sentence.
@@ -231,17 +232,6 @@ export interface ParseRefusedResource {
   reason: string;
   /** The refusal itself. */
   error: PerRunParseRefusal;
-}
-
-/**
- * @param filePath - The refused file
- * @param error - What refused it
- * @returns The log entry every consumer reads
- */
-function parseRefusedEntry(filePath: string, error: PerRunParseRefusal): ParseRefusedResource {
-  return isParseLimitError(error)
-    ? { filePath, error, code: 'RESOURCE_PARSE_LIMIT_EXCEEDED', reason: `its parse was stopped at its ${error.limit} limit (${error.bound})` }
-    : { filePath, error, code: 'RESOURCE_PARSE_WORKER_DIED', reason: `the parse worker holding it died (${error.message})` };
 }
 
 export class DuplicateResourceIdError extends VatError {
@@ -883,6 +873,18 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   getParseRefusedResources(): ParseRefusedResource[] {
     return [...this.parseRefusedResources];
+  }
+
+  /**
+   * Both logs of files this registry enumerated and did not admit
+   * ({@link getUnreadableResources}, {@link getParseRefusedResources}), in the
+   * shape the one not-admitted contract reads (`not-admitted.ts`): every verb
+   * turns them into findings and counts them in `examined` through it.
+   *
+   * @returns Copies of both logs
+   */
+  getNotAdmitted(): NotAdmittedLog {
+    return { unreadable: this.getUnreadableResources(), parseRefused: this.getParseRefusedResources() };
   }
 
   /**
@@ -1787,43 +1789,17 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
-   * Emit RESOURCE_PARSE_LIMIT_EXCEEDED errors for parses stopped at a limit,
-   * and RESOURCE_PARSE_WORKER_DIED errors for parses lost with their worker,
-   * during addResources(), each naming the file and what stopped it.
-   */
-  private collectParseRefusedErrors(): ValidationIssue[] {
-    return this.parseRefusedResources.map(({ filePath, code, reason }) => {
-      const where = issueLocation(filePath, locationRoot(this.baseDir));
-      return createRegistryIssue(
-        code,
-        `'${where}' was enumerated but ${reason}, so it was skipped and is absent from every count in this report. Nothing was stored for it: the next run parses it again.`,
-        { location: where },
-      );
-    });
-  }
-
-  /**
-   * Emit RESOURCE_UNREADABLE errors for reads that failed during addResources().
-   *
-   * The message states that the file was **skipped**, because the consequence
-   * a reader needs is not "a read failed" but "this file is in none of the
-   * counts you are about to read".
+   * RESOURCE_UNREADABLE, RESOURCE_PARSE_LIMIT_EXCEEDED and
+   * RESOURCE_PARSE_WORKER_DIED errors for every file addResources() enumerated
+   * and did not admit, through the one contract every verb reports them with
+   * (`not-admitted.ts`). Unresolved: `validate()` runs the framework over them
+   * with everything else.
    * @private
    */
-  private collectUnreadableResourceErrors(): ValidationIssue[] {
-    return this.unreadableResources.map(({ filePath, code }) => {
-      const where = issueLocation(filePath, locationRoot(this.baseDir));
-      const errno = code === undefined ? '' : ` (${code})`;
-      return createRegistryIssue(
-        'RESOURCE_UNREADABLE',
-        // `reason` (the raw fs error message) is deliberately omitted: Node's fs
-        // errors embed the absolute path (e.g. "ENOENT: ... open '/Users/...'"),
-        // which would leak the developer's home directory into CI logs -- the
-        // same class of leak `where` was computed to avoid. The errno code is
-        // signal enough; see the ValidationIssue docstring's `location` contract.
-        `'${where}' was enumerated but could not be read, so it was skipped and is absent from every count in this report${errno}.`,
-        { location: where },
-      );
+  private collectNotAdmittedErrors(): ValidationIssue[] {
+    return notAdmittedIssues(this.getNotAdmitted(), {
+      locationRoot: locationRoot(this.baseDir),
+      consequence: 'it was skipped: nothing in it was checked',
     });
   }
 
@@ -2218,8 +2194,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       ...this.collectHtmlParseErrors(),
       ...this.collectUnresolvedReferenceIssues(),
       ...this.collectDuplicateIdErrors(),
-      ...this.collectUnreadableResourceErrors(),
-      ...this.collectParseRefusedErrors(),
+      ...this.collectNotAdmittedErrors(),
       ...this.collectPopulationConditionIssues(),
     );
 

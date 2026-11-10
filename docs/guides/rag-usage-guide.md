@@ -41,8 +41,9 @@ vat rag index docs/
 #   chunksCreated: 156
 ```
 
-A file that did not make it into the index — unreadable, or rejected by the chunker or embedder —
-is a `RAG_DOCUMENT_INDEX_FAILED` finding at its path, and the run exits 1. An uninstalled RAG backend
+A file that did not make it into the index is a finding at its path, and the run exits 1:
+`RAG_DOCUMENT_INDEX_FAILED` when the chunker or embedder rejected it, and `RESOURCE_UNREADABLE` /
+`RESOURCE_PARSE_LIMIT_EXCEEDED` / `RESOURCE_PARSE_WORKER_DIED` when the crawl could not read or parse it. An uninstalled RAG backend
 is the `BACKEND_UNAVAILABLE` refusal (exit 2) naming the package to install.
 
 ### 2. Search Your Documentation

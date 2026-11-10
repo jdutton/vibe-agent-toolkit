@@ -866,7 +866,7 @@ export const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> =
   'rag index': [
     // A frontmatter-only document indexes as empty — clean, and no embedding model is loaded.
     { status: 'ok', run: () => ({ args: ['rag', 'index', '.', '--db', ragDb('index-ok')], cwd: project('rag-index-ok', '{}\n', { 'docs/a.md': '---\ntitle: A\n---\n' }) }) },
-    // A document the crawl cannot read is not in the index: a RAG_DOCUMENT_INDEX_FAILED finding (exit 1).
+    // A document the crawl cannot read is not in the index: a RESOURCE_UNREADABLE finding (exit 1).
     {
       status: 'findings',
       skipReason: () => (CANNOT_DENY_READS ? 'this platform or user cannot deny a file its reads' : undefined),

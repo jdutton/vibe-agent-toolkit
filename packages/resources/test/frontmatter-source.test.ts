@@ -28,6 +28,15 @@ describe('parseFrontmatterSource', () => {
   });
 
   it.each([
+    ['a !!set', '!!set\n? a\n? b'],
+    ['a !!omap', '!!omap\n- a: 1\n- b: 2'],
+    ['a !!timestamp', '!!timestamp 2024-01-01'],
+    ['a !!binary', '!!binary aGk='],
+  ])('flags a root that decodes to %s, no plain mapping, as not a mapping', (_label, source) => {
+    expect(parseFrontmatterSource(source)).toStrictEqual({ frontmatterNotAMapping: true });
+  });
+
+  it.each([
     ['empty', ''],
     ['whitespace-only', '  \n '],
     ['comment-only', '# TODO: add paths later'],
