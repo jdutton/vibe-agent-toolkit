@@ -18,7 +18,7 @@ export const NO_BASE_REFUSAL = 'changed_files compares this tree with a base com
   + ' vat resources check or vat validate.';
 
 /** Only the `--base` passed is the invocation's fault; git and the repository are the environment's. */
-const REFUSAL_BY_KIND: Readonly<Record<GitChangedFilesRefusalKind, LensRefusalCode>> = {
+export const REFUSAL_BY_KIND: Readonly<Record<GitChangedFilesRefusalKind, LensRefusalCode>> = {
   base: 'USAGE_INVALID',
   'git-failed': 'BACKEND_UNAVAILABLE',
   repository: 'INPUT_UNREADABLE',

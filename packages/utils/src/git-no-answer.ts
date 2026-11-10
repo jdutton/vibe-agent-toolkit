@@ -7,7 +7,7 @@
  * |---|---|---|
  * | git missing from PATH | `GIT_NOT_FOUND` | the environment's |
  * | git out of time or output, a spawn that failed otherwise, a snapshot failure git states no cause for | `GIT_FAILED` | the environment's |
- * | not a git repository (or one git could not read, for a listing) | `GIT_NO_ANSWER` | the tree's |
+ * | not a git repository (or one git could not read, for a listing), or a directory that does not exist | `GIT_NO_ANSWER` | the tree's |
  * | a file in the repository the OS will not let git read | `GIT_SNAPSHOT_UNREADABLE` | the tree's |
  * | an untracked path outside a sparse checkout's definition | `GIT_SNAPSHOT_OUTSIDE_SPARSE` | the tree's |
  * | a snapshot git refuses, its `fatal:`/`error:` quoted | `GIT_SNAPSHOT_REFUSED` | the tree's |
@@ -108,15 +108,27 @@ export interface GitAttempt {
 /**
  * Why one git command did not run to completion — never the caller's ref or tree.
  *
+ * ⚠️ Node answers `ENOENT` both for a binary missing from PATH and for a spawn whose `cwd` does not
+ * exist, so an `ENOENT` is `GIT_NOT_FOUND` only when {@link gitIsMissing} agrees; otherwise it is the
+ * directory's, `GIT_NO_ANSWER`, and the reason names it.
+ *
  * @param command - The git command that ran, as the reason names it (`git diff-tree`)
+ * @param cwd - The directory it ran in, as the reason names it
  * @param attempt - What running it did
  * @returns The cause, or undefined when git ran to an exit status
  */
-export function gitRunFailureOf(command: string, attempt: GitAttempt): GitNoAnswer | undefined {
+export function gitRunFailureOf(command: string, cwd: string, attempt: GitAttempt): GitNoAnswer | undefined {
   const { error } = attempt;
   if (error === undefined) return undefined;
   const ran = `${command} did not run to completion here (${error.message}).`;
-  if (isNoSuchEntryError(error)) return { code: GIT_NOT_FOUND_CODE, reason: `${ran} ${GIT_NOT_FOUND_REMEDY}` };
+  if (isNoSuchEntryError(error)) {
+    if (gitIsMissing()) return { code: GIT_NOT_FOUND_CODE, reason: `${ran} ${GIT_NOT_FOUND_REMEDY}` };
+    return {
+      code: GIT_NO_ANSWER_CODE,
+      reason: `git is on PATH, but ${command} could not run in ${shownName(cwd)}: that directory does not exist.`
+        + ' Point VAT at a directory that exists.',
+    };
+  }
   let remedy = 'Check that git runs here.';
   if (isTimedOutError(error)) {
     remedy = `${command} did not finish within its time limit; ask it for less (for changed_files, a nearer base), or run again once the tree is warm.`;
@@ -176,7 +188,7 @@ function outsideSparsePaths(stderr: string): string[] {
  */
 export function snapshotAttemptCause(root: string, attempt: GitAttempt, sparseCheckout: boolean): GitNoAnswer {
   const could = `git could not snapshot the working tree at ${shownName(root)} (${SNAPSHOT})`;
-  const ran = gitRunFailureOf(SNAPSHOT_ATTEMPT, attempt);
+  const ran = gitRunFailureOf(SNAPSHOT_ATTEMPT, root, attempt);
   if (ran !== undefined) return { code: ran.code, reason: `${could}, and a second attempt failed: ${ran.reason}` };
   if (!attempt.ok && sparseCheckout && attempt.stderr.includes(OUTSIDE_SPARSE_DEFINITION)) {
     const paths = outsideSparsePaths(attempt.stderr);
@@ -215,13 +227,13 @@ export function snapshotAttemptCause(root: string, attempt: GitAttempt, sparseCh
  * @returns The cause, its reason one or more whole sentences
  */
 export function gitSnapshotFailureOf(failure: GitSnapshotFailure): GitNoAnswer {
-  const ran = gitRunFailureOf(SNAPSHOT_ATTEMPT, failure.attempt);
+  const ran = gitRunFailureOf(SNAPSHOT_ATTEMPT, failure.cwd, failure.attempt);
   if (ran !== undefined) return snapshotAttemptCause(failure.cwd, failure.attempt, false);
   if (failure.repositoryRoot === null) return { code: GIT_NO_ANSWER_CODE, reason: `${notARepositoryReason(failure.cwd)}.` };
   const unreadable = unreadableSnapshotReason(failure.repositoryRoot);
   if (unreadable !== undefined) return { code: GIT_SNAPSHOT_UNREADABLE_CODE, reason: unreadable };
   const sparse = runGit(['config', '--type=bool', '--get', SPARSE_CHECKOUT_KEY], { cwd: failure.repositoryRoot });
-  const sparseRan = gitRunFailureOf('git config', sparse);
+  const sparseRan = gitRunFailureOf('git config', failure.repositoryRoot, sparse);
   if (sparseRan !== undefined) return sparseRan;
   return snapshotAttemptCause(failure.repositoryRoot, failure.attempt, sparse.ok && sparse.stdout === 'true');
 }

@@ -26,21 +26,10 @@ import {
 import { gitTreeSnapshot, type GitSnapshotFailure } from '../src/git-snapshot.js';
 import { normalizedTmpdir } from '../src/path-utils.js';
 
-import { gitSpawnFailure } from './test-helpers.js';
+import { gitSpawnFailure, withoutGit } from './test-helpers.js';
 
 const ROOT = '/corpus/root';
 const CONSEQUENCE = 'An empty population would read as an empty repository.';
-
-/** Run `fn` with `PATH` emptied, so spawning `git` fails with ENOENT. */
-function withoutGit<T>(fn: () => T): T {
-  const saved = process.env['PATH'];
-  try {
-    process.env['PATH'] = '';
-    return fn();
-  } finally {
-    process.env['PATH'] = saved;
-  }
-}
 
 describe('gitNoAnswerFor', () => {
   it('names a git missing from PATH, and never blames the repository', () => {
@@ -94,14 +83,23 @@ describe('gitRunFailureOf', () => {
     ['the output overran the buffer', 'ENOBUFS', GIT_FAILED_CODE, /more output than VAT reads/],
     ['the spawn failed otherwise', 'EACCES', GIT_FAILED_CODE, /Check that git runs here/],
   ])('codes it when %s, naming the command and the remedy', (_what, code, expected, remedy) => {
-    const cause = gitRunFailureOf('git diff-tree', gitSpawnFailure(code));
+    // ENOENT is the binary's only when git is in fact missing, so every row runs without git on PATH.
+    const cause = withoutGit(() => gitRunFailureOf('git diff-tree', ROOT, gitSpawnFailure(code)));
 
     expect(cause).toMatchObject({ code: expected, reason: expect.stringMatching(remedy) });
     expect(cause?.reason).toContain('git diff-tree');
   });
 
+  it('codes an ENOENT with git on PATH as the directory\'s GIT_NO_ANSWER, naming it, never GIT_NOT_FOUND', () => {
+    const cause = gitRunFailureOf('git diff-tree', ROOT, gitSpawnFailure('ENOENT'));
+
+    expect(cause).toMatchObject({ code: GIT_NO_ANSWER_CODE, reason: expect.stringContaining(`"${ROOT}"`) });
+    expect(cause?.reason).toContain('git diff-tree');
+    expect(cause?.reason).not.toContain(GIT_NOT_FOUND_REMEDY);
+  });
+
   it('is silent for a git that ran to an exit status', () => {
-    expect(gitRunFailureOf('git diff-tree', { ok: false, stderr: 'fatal: bad object' })).toBeUndefined();
+    expect(gitRunFailureOf('git diff-tree', ROOT, { ok: false, stderr: 'fatal: bad object' })).toBeUndefined();
   });
 });
 
@@ -181,10 +179,11 @@ describe('gitSnapshotFailureOf', () => {
   });
 
   it('classes a git missing from PATH as GIT_NOT_FOUND, never as no repository', () => {
-    const failure = withoutGit(() => gitTreeSnapshot({ cwd: normalizedTmpdir() }));
-    if (failure.ok) throw new Error('expected no snapshot without git');
-
-    const cause = gitSnapshotFailureOf(failure);
+    const cause = withoutGit(() => {
+      const failure = gitTreeSnapshot({ cwd: normalizedTmpdir() });
+      if (failure.ok) throw new Error('expected no snapshot without git');
+      return gitSnapshotFailureOf(failure);
+    });
 
     expect(cause.code).toBe(GIT_NOT_FOUND_CODE);
     expect(cause.reason).toContain(GIT_NOT_FOUND_REMEDY);

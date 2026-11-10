@@ -40,10 +40,10 @@
   files would be missing), a flagged file as above, a file under the root git cannot read, a
   listing VAT cannot read (the diff's or the flagged-file listing's), a filesystem
   that folds case (probed at the root) whose `core.ignorecase` is not true
-  (`git config core.ignorecase true`), or, on such a filesystem, a changed path (a deletion, a
-  rename's new side, or the old side of a rename out of the root — a delete and a rename-out follow
-  one rule; a rename into the root keeps its old side as history) that spells the root in another
-  case or Unicode normalisation
+  (`git config core.ignorecase true`), or, on such a filesystem, a changed path, or a rename's old
+  side wherever its new side lands (a rename from `Docs/` into a `docs/` root was under the root
+  all along, so it is not `added`; a delete, a rename-in and a rename-out follow one rule), that
+  spells the root in another case or Unicode normalisation
   (both spellings named; on a case-sensitive
   filesystem a sibling such as `Docs/` beside a `docs/` root is simply another directory). The exit code does not tell these faults apart; the code does — `query`
   publishes it as `error.code`, and for `check` and `validate` it is `RESOURCE_CHECK_BROKEN` on

@@ -34,6 +34,7 @@ export {
   type GitRunResult,
 } from './git-run.js';
 export {
+  GIT_CHANGED_FILES_KIND_BY_CODE,
   gitChangedFiles,
   type GitChangedFile,
   type GitChangedFilesRefusalKind,

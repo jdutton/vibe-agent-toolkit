@@ -321,24 +321,19 @@ describe('gitChangedFiles', () => {
   });
 
   // Skipped where the filesystem is case-sensitive: there `Docs` and `docs` are two directories.
-  it.skipIf(!tmpdirFoldsCase())('answers a case-only directory rename made before HEAD: its old side is history', () => {
-    const capitalised = stageCaseOnlyDocsRename(repo, ['a.md']);
-    commitAll(repo, 'docs, lower case');
-
-    const result = gitChangedFiles({ root: safePath.join(repo, 'docs'), base: capitalised });
-
-    expect(result.ok ? '' : result.reason).toBe('');
-    // Renamed in from a spelling git keeps apart from the root: an addition, seen from inside it.
-    expect(keysOf(result)).toStrictEqual(['a.md:added']);
-  });
-
-  // Skipped where the filesystem is case-sensitive: there `Docs` and `docs` are two directories.
-  // A deletion under the old spelling already refuses; a rename OUT of it follows the same rule.
-  it.skipIf(!tmpdirFoldsCase())('refuses a rename out of the root from its old spelling, as a deletion there would', () => {
+  // A deletion under the old spelling refuses; a rename's old side there follows the same rule
+  // wherever its new side lands. Renamed INTO the root, the file was under it all along, so `added`
+  // would be false; renamed OUT, it is the deletion's case.
+  it.skipIf(!tmpdirFoldsCase()).each([
+    ['into the root (a case-only directory rename)', false],
+    ['out of the root', true],
+  ])('refuses a rename %s from its old spelling', (_where, moveOut) => {
     const capitalised = stageCaseOnlyDocsRename(repo, ['a.md', 'keep.md']);
     commitAll(repo, 'docs, lower case');
-    mkdirSyncReal(safePath.join(repo, 'other'));
-    runGitOrThrow(['mv', 'docs/a.md', 'other/a.md'], { cwd: repo });
+    if (moveOut) {
+      mkdirSyncReal(safePath.join(repo, 'other'));
+      runGitOrThrow(['mv', 'docs/a.md', 'other/a.md'], { cwd: repo });
+    }
 
     const result = gitChangedFiles({ root: safePath.join(repo, 'docs'), base: capitalised });
 
@@ -708,7 +703,7 @@ describe('gitChangedFiles', () => {
       },
       // Unit seam: a git out of time cannot be produced on demand, so its classifier is driven directly.
       'git out of time, or more output than VAT reads (compare against a nearer base)': {
-        produce: () => gitDidNotRun('diff-tree', gitSpawnFailure('ETIMEDOUT')) ?? { ok: true },
+        produce: () => gitDidNotRun('diff-tree', repo, gitSpawnFailure('ETIMEDOUT')) ?? { ok: true },
         reason: /did not finish within its time limit.*nearer base/s,
       },
       'a snapshot that fails for a cause git does not state, or whose second attempt times out': {
@@ -823,7 +818,7 @@ describe('gitChangedFiles', () => {
         reason: /folds case.*git config core\.ignorecase true/s,
         cannot: NO_FOLDING,
       },
-      'on such a filesystem, a changed path (a deletion, a rename\'s new side, or the old side of a rename out of the root) spelling the root in another case or Unicode normalisation': {
+      'on such a filesystem, a changed path, or a rename\'s old side wherever its new side lands, spelling the root in another case or Unicode normalisation': {
         produce: () => {
           // The BASE spells the root `Docs/`; one file is gone since, a deletion under that spelling.
           const capitalised = stageCaseOnlyDocsRename(repo, ['a.md', 'b.md']);

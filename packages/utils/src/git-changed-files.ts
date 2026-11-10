@@ -26,7 +26,7 @@
  *   `git ls-files --others` under the unreadable-listing policy, never of the crawl lane.
  * - If the snapshot fails, the failure carries git's own account of why, and the ONE classifier
  *   the crawl uses too (`gitSnapshotFailureOf`, `git-no-answer.ts`) decides the cause: each cause
- *   has one code there, and one fault kind here ({@link KIND_BY_CODE}).
+ *   has one code there, and one fault kind here ({@link GIT_CHANGED_FILES_KIND_BY_CODE}).
  *
  * In a shallow clone the merge base is trusted only when no commit between it and either tip is a
  * shallow boundary: one could hide a nearer merge base, so that refuses, naming how to deepen.
@@ -53,11 +53,11 @@
  *
  * 🚨 On a filesystem that folds case or normalisation, a path git lists can be spelled differently
  * from the prefix git reports (a case-only rename since the base, a root reached in another case or
- * Unicode normalisation), and a byte comparison would then drop it in silence. So every path a row
- * reports (a rename's new side; its old side is history) whose leading segments match the prefix as
- * APFS compares names — Unicode case and NFC/NFD alike — but not byte for byte refuses, naming both.
- * A rename whose new side is not under the root reports a deletion of its old side, so that old side
- * is judged as a deletion's path is.
+ * Unicode normalisation), and a byte comparison would then drop it in silence. So every changed path,
+ * and a rename's old side wherever its new side lands, whose leading segments match the prefix as
+ * APFS compares names — Unicode case and NFC/NFD alike — but not byte for byte refuses, naming both:
+ * an old side under another spelling was under the root already, so neither `added` nor `deleted`
+ * would be true of it.
  *
  * Whether the filesystem folds is PROBED at the root (its path with one segment's case flipped,
  * compared by `dev`/`ino`), never read from `core.ignorecase`, a config that can disagree with the
@@ -325,22 +325,21 @@ function spellingInAnotherForm(path: Uint8Array, prefix: Uint8Array): string | u
 }
 
 /**
- * The other spelling of the root a record reports a row under, if any. Its path — a deletion's
- * included — always counts. A rename's old side counts only when its new side is not under the root
- * byte for byte: the rename then reports a DELETION of the old side, so it follows the one rule a
- * deletion follows. A rename that lands under the root (a case-only directory rename in history,
- * `Docs/` -> `docs/`) reports its new side, and its old side is only history.
+ * The other spelling of the root a record names, if any: its path (a deletion's included), and a
+ * rename's old side WHEREVER its new side lands. On a filesystem that folds case, an old side under
+ * another spelling was under the root already, so a rename into the root (`Docs/a.md` ->
+ * `docs/a.md`) is no addition, and a rename out of it is no plain deletion — one rule for all three.
  */
 function reportedSpellingInAnotherForm(record: GitNameStatusRecord, prefix: Uint8Array): string | undefined {
   const reported = spellingInAnotherForm(record.path, prefix);
-  if (reported !== undefined || record.oldPath === null || isUnder(record.path, prefix)) return reported;
+  if (reported !== undefined || record.oldPath === null) return reported;
   return spellingInAnotherForm(record.oldPath, prefix);
 }
 
 /**
- * Refuse when the path a row reports (a deletion, a rename's new side, or the old side of a rename
- * out of the root) is spelled under the root in another case
- * or normalisation: the byte filter would otherwise drop it in silence.
+ * Refuse when a changed path, or a rename's old side wherever its new side lands, is spelled under
+ * the root in another case or normalisation: the byte filter would otherwise drop it in silence, or
+ * report a rename the root never saw as an addition.
  *
  * @param records - The `--name-status` records, paths from the repository's top
  * @param prefix - The root's path from the repository's top: empty, or ending in `/`
@@ -428,7 +427,7 @@ function gitSaid(stderr: string): string {
 }
 
 /** Whose fault each of git's causes is, as this module reports it — the classifier's codes, one kind each. */
-const KIND_BY_CODE: Readonly<Record<GitNoAnswerCode, GitChangedFilesRefusalKind>> = {
+export const GIT_CHANGED_FILES_KIND_BY_CODE: Readonly<Record<GitNoAnswerCode, GitChangedFilesRefusalKind>> = {
   GIT_NOT_FOUND: GIT_FAILED_KIND,
   GIT_FAILED: GIT_FAILED_KIND,
   GIT_NO_ANSWER: 'repository',
@@ -439,7 +438,7 @@ const KIND_BY_CODE: Readonly<Record<GitNoAnswerCode, GitChangedFilesRefusalKind>
 
 /** The refusal for a cause the one classifier (`git-no-answer.ts`) decided. */
 function refusalOf(cause: GitNoAnswer): Refusal {
-  return { ok: false, kind: KIND_BY_CODE[cause.code], reason: cause.reason };
+  return { ok: false, kind: GIT_CHANGED_FILES_KIND_BY_CODE[cause.code], reason: cause.reason };
 }
 
 /**
@@ -447,18 +446,19 @@ function refusalOf(cause: GitNoAnswer): Refusal {
  * the one classifier words it ({@link gitRunFailureOf}).
  *
  * @param subcommand - The git subcommand that ran (`diff-tree`)
+ * @param cwd - The directory it ran in
  * @param result - What running it did
  * @returns The refusal, or undefined when git ran to an exit status
  */
-export function gitDidNotRun(subcommand: string, result: GitAttempt): Refusal | undefined {
-  const cause = gitRunFailureOf(`git ${subcommand}`, result);
+export function gitDidNotRun(subcommand: string, cwd: string, result: GitAttempt): Refusal | undefined {
+  const cause = gitRunFailureOf(`git ${subcommand}`, cwd, result);
   return cause === undefined ? undefined : refusalOf(cause);
 }
 
 /** Run one git command for its trimmed text answer, or the refusal for a git that did not finish. */
 function ask(root: string, args: readonly string[]): { ok: boolean; stdout: string; stderr: string } | Refusal {
   const result = runGit(args, { cwd: root });
-  return gitDidNotRun(args[0] ?? '', result) ?? result;
+  return gitDidNotRun(args[0] ?? '', root, result) ?? result;
 }
 
 /**
@@ -584,7 +584,7 @@ function rootPrefix(root: string): { ok: true; prefix: Uint8Array } | Refusal {
     reason: `${shownName(root)} is not inside a git working tree (no repository, a bare one, or a directory inside .git),`
       + ` so there is no tree to compare with the base.${said}`,
   });
-  if (!result.ok) return gitDidNotRun('rev-parse', result) ?? notWorkTree(gitSaid(result.stderr));
+  if (!result.ok) return gitDidNotRun('rev-parse', root, result) ?? notWorkTree(gitSaid(result.stderr));
   const bytes = result.stdout;
   const firstEnd = bytes.indexOf(NEWLINE);
   if (firstEnd === -1 || decodeUtf8Exactly(bytes.subarray(0, firstEnd)) !== 'true') return notWorkTree('');
@@ -636,7 +636,7 @@ function configIsTrue(root: string, key: string): { ok: true; value: boolean } |
  * @returns A refusal naming the first such file and every flag to clear, or undefined
  */
 function hiddenEditsRefusal(root: string): Refusal | undefined {
-  const listed = bytesOf('ls-files', runGitBytes(['ls-files', '-v', '-z'], { cwd: root }));
+  const listed = bytesOf('ls-files', root, runGitBytes(['ls-files', '-v', '-z'], { cwd: root }));
   if (!listed.ok) return listed;
   const read = hiddenEditEntriesOf(listed.stdout);
   if (!read.ok) return read;
@@ -737,9 +737,9 @@ function unlistableDirectoryRefusal(root: string): Refusal | undefined {
  *
  * @returns git's output, or a refusal
  */
-function bytesOf(subcommand: string, result: ReturnType<typeof runGitBytes>): { ok: true; stdout: Uint8Array } | Refusal {
+function bytesOf(subcommand: string, root: string, result: ReturnType<typeof runGitBytes>): { ok: true; stdout: Uint8Array } | Refusal {
   if (result.ok) return { ok: true, stdout: result.stdout };
-  return gitDidNotRun(subcommand, result) ?? { ok: false, kind: 'repository', reason: `git ${subcommand} failed.${gitSaid(result.stderr)}` };
+  return gitDidNotRun(subcommand, root, result) ?? { ok: false, kind: 'repository', reason: `git ${subcommand} failed.${gitSaid(result.stderr)}` };
 }
 
 /**
@@ -748,7 +748,7 @@ function bytesOf(subcommand: string, result: ReturnType<typeof runGitBytes>): { 
  * @returns The records, or a refusal
  */
 function diffRecords(root: string, from: string, to: string): { ok: true; records: GitNameStatusRecord[] } | Refusal {
-  const listing = bytesOf('diff-tree', runGitBytes(['diff-tree', '-r', '-M', '-l0', '--name-status', '-z', from, to], { cwd: root }));
+  const listing = bytesOf('diff-tree', root, runGitBytes(['diff-tree', '-r', '-M', '-l0', '--name-status', '-z', from, to], { cwd: root }));
   if (listing.ok) return parseNameStatusZ(listing.stdout);
   if (listing.kind !== 'repository' || !isPartialClone(root)) return listing;
   return {
@@ -850,7 +850,7 @@ function shallowHistoryRefusal(root: string, commits: { base: string; mergeBase:
   if (!read.ok) return read;
   const { boundary } = read;
   if (boundary === null) return undefined;
-  const between = bytesOf('rev-list', runGitBytes(['rev-list', 'HEAD', commits.base, '--not', commits.mergeBase], { cwd: root }));
+  const between = bytesOf('rev-list', root, runGitBytes(['rev-list', 'HEAD', commits.base, '--not', commits.mergeBase], { cwd: root }));
   if (!between.ok) return between;
   // Object names are hex, so an exact UTF-8 read cannot fail or re-spell one.
   const hidden = (decodeUtf8Exactly(between.stdout) ?? '').split('\n').find((commit) => boundary.has(commit));

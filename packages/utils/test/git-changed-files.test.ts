@@ -16,7 +16,7 @@ import {
   parseNameStatusZ,
 } from '../src/git-changed-files.js';
 
-import { gitSpawnFailure } from './test-helpers.js';
+import { gitSpawnFailure, withoutGit } from './test-helpers.js';
 
 /** A NUL-separated record stream, as `-z` writes it. */
 function z(...fields: readonly (string | Uint8Array)[]): Buffer {
@@ -165,10 +165,15 @@ describe('caseSpellingRefusal', () => {
     expect(refusal?.reason).toContain(`"${other}"`);
   });
 
-  // A case-only directory rename in history (`Docs/` -> `docs/` before HEAD): the old side names
-  // where the file WAS, which is no path the root's answer reports when the new side is under the root.
-  it('checks only the new side of a rename into the root: an old side in another case is history', () => {
-    expect(caseSpellingRefusalWhereFolded(recordsOf(z('R100', 'Docs/a.md', 'docs/a.md')), prefix)).toBeUndefined();
+  // A case-only directory rename (`Docs/` -> `docs/`): on a filesystem that folds case the old side
+  // was already under the root, so reporting the new side as `added` would be false. An old side
+  // under another spelling refuses wherever the new side lands — rename-in, rename-out and deletion
+  // follow one rule.
+  it('refuses a rename into the root whose old side sits under another case spelling of it', () => {
+    const refusal = caseSpellingRefusalWhereFolded(recordsOf(z('R100', 'Docs/a.md', 'docs/a.md')), prefix);
+
+    expect(refusal).toMatchObject({ ok: false, kind: 'repository' });
+    expect(refusal?.reason).toContain('"Docs/"');
   });
 
   it('accepts paths that carry the prefix exactly, or lie elsewhere', () => {
@@ -248,15 +253,23 @@ describe('gitDidNotRun', () => {
     ['git ran out of time', 'ETIMEDOUT', /did not finish within.*nearer base/s],
     ['the output overran the buffer', 'ENOBUFS', /more output than VAT reads.*nearer base/s],
   ])('names the real remedy when %s', (_what, code, remedy) => {
-    const refusal = gitDidNotRun('diff-tree', gitSpawnFailure(code));
+    const refusal = withoutGit(() => gitDidNotRun('diff-tree', '/repo', gitSpawnFailure(code)));
 
     expect(refusal).toMatchObject({ ok: false, kind: 'git-failed', reason: expect.stringMatching(remedy) });
     expect(refusal?.reason).toContain('git diff-tree');
     expect(refusal?.reason).not.toMatch(/re-run/);
   });
 
+  it('refuses an ENOENT with git on PATH as the repository\'s, naming the directory', () => {
+    expect(gitDidNotRun('diff-tree', '/repo', gitSpawnFailure('ENOENT'))).toMatchObject({
+      ok: false,
+      kind: 'repository',
+      reason: expect.stringMatching(/could not run in "\/repo": that directory does not exist/),
+    });
+  });
+
   it('is silent for a git that ran to an exit status', () => {
-    expect(gitDidNotRun('diff-tree', { ok: false, stderr: 'fatal: bad object' })).toBeUndefined();
+    expect(gitDidNotRun('diff-tree', '/repo', { ok: false, stderr: 'fatal: bad object' })).toBeUndefined();
   });
 });
 
