@@ -305,7 +305,11 @@ Examples:
     .command('check [path]')
     .description('Run VAT\'s built-in checks and the project\'s declared SQL assertions over its resource projection')
     .option('--debug', DEBUG_HELP)
-    .option('--check <name>', 'Run only this check, by its built-in name or its key in resources.checks')
+    .option(
+      '--check <name>',
+      'Run only this check, by its built-in name or its key in resources.checks'
+      + ' (a lens is evaluated only when the selected statements name one of its relations, so this also skips the cost of lenses only other checks read)',
+    )
     .addOption(baseOption())
     .option('-v, --verbose', 'Print warning and info findings on stderr too, not only the errors')
     .option(

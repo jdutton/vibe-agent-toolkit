@@ -17,7 +17,7 @@ const CHANGED_FILE_STATUSES = [
 
 /**
  * A row of the derived `changed_files` relation — one file under the project
- * root that differs between a base commit (`--base <ref>`) and the tree the
+ * root that differs between the merge base of `<ref>` and HEAD (`--base <ref>`) and the tree the
  * projection holds: tracked files as they stand on disk, plus untracked files
  * git does not ignore, snapshotted as one git tree and diffed once.
  *
@@ -29,7 +29,7 @@ export const ChangedFileRowSchema = z.object({
     .describe('The file, relative to the project root, POSIX-spelled. For a deletion, the path that was deleted'),
   status: z.enum(CHANGED_FILE_STATUSES)
     .describe(
-      'What happened to it since the base. A move is "renamed" whether or not it was `git add`ed; a copy is "added".'
+      'What happened to it since the merge base of `<ref>` and HEAD (`--base <ref>`). A move is "renamed" whether or not it was `git add`ed; a copy is "added".'
       + ' A rename crossing the root\'s boundary is reported as seen from inside the root: renamed in is "added",'
       + ' renamed out is "deleted". A file removed from the index but unchanged on disk is no row',
     ),

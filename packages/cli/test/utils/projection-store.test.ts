@@ -294,6 +294,23 @@ describe('openPopulationCache', () => {
       stderr.restore();
     }
   });
+
+  it('names a git missing from PATH instead of blaming the repository', async () => {
+    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
+    const savedPath = process.env['PATH'];
+    const stderr = captureStderr();
+    try {
+      process.env['PATH'] = '';
+      const opened = await openPopulationCache({ root: outsideAnyRepo });
+      expect(opened).toBeUndefined();
+      const said = stderr.written.join('');
+      expect(said).toContain('git was not found on PATH');
+      expect(said).not.toContain('not inside a readable git repository');
+    } finally {
+      process.env['PATH'] = savedPath;
+      stderr.restore();
+    }
+  });
 });
 
 /**

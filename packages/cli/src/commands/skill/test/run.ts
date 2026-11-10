@@ -43,7 +43,6 @@ import {
   isVatError,
   pathPresent,
   prefixMessageOnce,
-  relativeEscapesRoot,
   resolveAssetReference,
   safePath,
   toForwardSlash,
@@ -63,6 +62,7 @@ import {
 import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../../utils/command-refusal.js';
 import { loadConfig, loadConfigCached } from '../../../utils/config-loader.js';
 import { endWithRefusal, endWithReport, leftoverIssueOf, NOTHING_FINISHED } from '../../../utils/document-writer.js';
+import { relativeLocationOrUndefined } from '../../../utils/relativize-paths.js';
 import { collectRepeated } from '../../../utils/repeatable-option.js';
 import { isSkillPublished } from '../../../utils/skill-packaging-config.js';
 import { runClaudePluginBuild } from '../../claude/plugin/build.js';
@@ -1367,8 +1367,7 @@ interface RunFailure {
  * open — an OS temp copy or another tree is not one).
  */
 function projectLocation(path: string): string | undefined {
-  const relative = issueLocation(path, resolveRepoRoot());
-  return relativeEscapesRoot(relative) ? undefined : relative;
+  return relativeLocationOrUndefined(issueLocation(path, resolveRepoRoot()));
 }
 
 /**

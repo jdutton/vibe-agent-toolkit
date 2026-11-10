@@ -22,6 +22,8 @@
  * indistinguishably among the tables — see below.
  */
 
+import { presenceImplies } from '@vibe-agent-toolkit/schema';
+
 import { BUILTIN_CHECK_NAMES } from '../../resources/src/projection/builtin-check-names.js';
 import { PROJECTION_TABLES } from '../../resources/src/projection/table-registry.js';
 import { OkfConceptFrontmatterSchema } from '../../resources/src/schemas/okf-concept.js';
@@ -123,15 +125,17 @@ function nodeAt(node: SchemaNode, path: readonly string[]): SchemaNode {
 /**
  * Emit the two `resources.checks` refusals `ProjectConfigSchema` states as Zod refinements, which
  * `zod-to-json-schema` drops: a key equal to a built-in check's name (`propertyNames`), and
- * `allowEmpty` without `examined` (`if`/`then`, the draft-07 spelling of a dependent requirement).
+ * `allowEmpty` without `examined` (`presenceImplies`, the one spelling of a dependent requirement).
  * Without them the published artifact accepts a config `loadConfig` refuses.
  */
 function emitCheckRefusals(document: SchemaNode): void {
   const checks = nodeAt(document, ['definitions', 'project-config', 'properties', 'resources', 'properties', 'checks']);
   checks['propertyNames'] = { not: { enum: [...BUILTIN_CHECK_NAMES] } };
   const entry = nodeAt(checks, ['additionalProperties']);
-  entry['if'] = { required: ['allowEmpty'] };
-  entry['then'] = { required: ['examined'] };
+  if (entry['allOf'] !== undefined) {
+    throw new Error('project-config.json checks entry already carries an allOf: the allowEmpty refusal cannot be emitted beside it');
+  }
+  entry['allOf'] = [presenceImplies('allowEmpty', { required: ['examined'] })];
 }
 
 /** Every JSON Schema `packages/resources` ships under `schemas/`. */

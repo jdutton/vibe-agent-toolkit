@@ -13,6 +13,7 @@ import {
   gitDidNotRun,
   mergeBaseOf,
   parseNameStatusZ,
+  snapshotProbeRefusal,
 } from '../src/git-changed-files.js';
 
 /** A NUL-separated record stream, as `-z` writes it. */
@@ -143,13 +144,18 @@ const COMPOSED = `caf${String.fromCodePoint(0xE9)}/`;
 
 describe('caseSpellingRefusal', () => {
   const prefix = Buffer.from('docs/', 'utf8');
+  /** The check as it runs on a filesystem that folds case. */
+  const caseSpellingRefusalWhereFolded = (
+    records: Parameters<typeof caseSpellingRefusal>[0],
+    root: Uint8Array,
+  ): ReturnType<typeof caseSpellingRefusal> => caseSpellingRefusal(records, root, true);
 
   it.each([
     ['the old side of a rename', z('R100', 'Docs/a.md', 'docs/a.md'), 'Docs/'],
     ['a deletion', z('D', 'Docs/b.md'), 'Docs/'],
     ['the new side of a rename', z('R100', 'docs/a.md', 'DOCS/a.md'), 'DOCS/'],
   ])('refuses a path spelled in another case on %s, naming both spellings', (_what, listing, other) => {
-    const refusal = caseSpellingRefusal(recordsOf(listing), prefix);
+    const refusal = caseSpellingRefusalWhereFolded(recordsOf(listing), prefix);
 
     expect(refusal).toMatchObject({ ok: false, kind: 'repository' });
     expect(refusal?.reason).toContain('"docs/"');
@@ -157,7 +163,7 @@ describe('caseSpellingRefusal', () => {
   });
 
   it('accepts paths that carry the prefix exactly, or lie elsewhere', () => {
-    expect(caseSpellingRefusal(recordsOf(z('M', 'docs/a.md', 'M', 'other/x.md', 'M', 'docsx/y.md')), prefix))
+    expect(caseSpellingRefusalWhereFolded(recordsOf(z('M', 'docs/a.md', 'M', 'other/x.md', 'M', 'docsx/y.md')), prefix))
       .toBeUndefined();
   });
 
@@ -166,7 +172,7 @@ describe('caseSpellingRefusal', () => {
     ['decomposed (NFD) where git reports composed (NFC)', COMPOSED, `cafe${ACUTE}/a.md`, `cafe${ACUTE}/`],
     ['decomposed AND in another case', COMPOSED, `CAFE${ACUTE}/a.md`, `CAFE${ACUTE}/`],
   ])('refuses %s, as APFS folds it, naming both spellings', (_what, root, path, other) => {
-    const refusal = caseSpellingRefusal(recordsOf(z('M', path)), Buffer.from(root, 'utf8'));
+    const refusal = caseSpellingRefusalWhereFolded(recordsOf(z('M', path)), Buffer.from(root, 'utf8'));
 
     expect(refusal).toMatchObject({ ok: false, kind: 'repository' });
     expect(refusal?.reason).toContain(`"${other}"`);
@@ -175,18 +181,24 @@ describe('caseSpellingRefusal', () => {
   it('accepts a non-ASCII prefix spelled exactly, and a sibling that only shares its letters', () => {
     const root = Buffer.from('été/', 'utf8');
 
-    expect(caseSpellingRefusal(recordsOf(z('M', 'été/a.md', 'M', 'étéx/a.md', 'M', 'ete/a.md')), root)).toBeUndefined();
+    expect(caseSpellingRefusalWhereFolded(recordsOf(z('M', 'été/a.md', 'M', 'étéx/a.md', 'M', 'ete/a.md')), root)).toBeUndefined();
   });
 
   it('folds as APFS does: case and normalisation, never ß into ss', () => {
     // `straße` and `strasse` are two names to APFS; an upper-case round trip made them one.
-    expect(caseSpellingRefusal(recordsOf(z('M', 'strasse/a.md')), Buffer.from('straße/', 'utf8'))).toBeUndefined();
-    expect(caseSpellingRefusal(recordsOf(z('M', 'STRASSE/a.md')), Buffer.from('strasse/', 'utf8'))).toMatchObject({ ok: false, kind: 'repository' });
-    expect(caseSpellingRefusal(recordsOf(z('M', `${'été'.normalize('NFD')}/a.md`)), Buffer.from('été/', 'utf8'))).toMatchObject({ ok: false, kind: 'repository' });
+    expect(caseSpellingRefusalWhereFolded(recordsOf(z('M', 'strasse/a.md')), Buffer.from('straße/', 'utf8'))).toBeUndefined();
+    expect(caseSpellingRefusalWhereFolded(recordsOf(z('M', 'STRASSE/a.md')), Buffer.from('strasse/', 'utf8'))).toMatchObject({ ok: false, kind: 'repository' });
+    expect(caseSpellingRefusalWhereFolded(recordsOf(z('M', `${'été'.normalize('NFD')}/a.md`)), Buffer.from('été/', 'utf8'))).toMatchObject({ ok: false, kind: 'repository' });
   });
 
   it('has nothing to check at the repository root', () => {
-    expect(caseSpellingRefusal(recordsOf(z('M', 'Docs/a.md')), Buffer.alloc(0))).toBeUndefined();
+    expect(caseSpellingRefusalWhereFolded(recordsOf(z('M', 'Docs/a.md')), Buffer.alloc(0))).toBeUndefined();
+  });
+
+  // On a case-sensitive filesystem `Docs/` and `docs/` are two sibling directories: a change under
+  // the other one is simply not under the root, and refusing it would refuse every such repository.
+  it('answers where the filesystem does not fold case: a sibling in another case is another directory', () => {
+    expect(caseSpellingRefusal(recordsOf(z('M', 'Docs/a.md', 'R100', 'Docs/b.md', 'docs/b.md')), prefix, false)).toBeUndefined();
   });
 });
 
@@ -197,9 +209,12 @@ describe('mergeBaseOf', () => {
       kind: 'repository',
       reason: expect.stringMatching(/shallow clone.*cut off before the base "main" and HEAD meet.*fetch-depth: 0.*between the merge base and the tips is complete/s),
     });
+  });
+
+  it('refuses no merge base in a whole history as the base\'s fault: another base is the fix', () => {
     expect(mergeBaseOf('main', '', false)).toMatchObject({
       ok: false,
-      kind: 'repository',
+      kind: 'base',
       reason: expect.stringMatching(/"main" shares no history with HEAD/),
     });
   });
@@ -224,7 +239,7 @@ function failed(code: string): { ok: false; stderr: string; error: Error } {
 
 describe('gitDidNotRun', () => {
   it.each([
-    ['git is not on PATH', 'ENOENT', /Put git on PATH/],
+    ['git is not on PATH', 'ENOENT', /git was not found on PATH/],
     ['git ran out of time', 'ETIMEDOUT', /did not finish within.*nearer base/s],
     ['the output overran the buffer', 'ENOBUFS', /more output than VAT reads.*nearer base/s],
   ])('names the real remedy when %s', (_what, code, remedy) => {
@@ -237,5 +252,36 @@ describe('gitDidNotRun', () => {
 
   it('is silent for a git that ran to an exit status', () => {
     expect(gitDidNotRun('diff-tree', { ok: false, stderr: 'fatal: bad object' })).toBeUndefined();
+  });
+});
+
+describe('snapshotProbeRefusal', () => {
+  it('says git timed out only when the second attempt was seen to time out', () => {
+    expect(snapshotProbeRefusal(failed('ETIMEDOUT'))).toMatchObject({
+      ok: false,
+      kind: 'git-failed',
+      reason: expect.stringMatching(/did not finish within its time limit/),
+    });
+  });
+
+  it.each([
+    ['the second attempt succeeded', { ok: true, stderr: '' }],
+    ['git failed stating no refusal', { ok: false, stderr: 'warning: something odd' }],
+  ])('calls the cause unknown, never a time-out, when %s', (_what, probe) => {
+    const refusal = snapshotProbeRefusal(probe);
+
+    expect(refusal).toMatchObject({ ok: false, kind: 'git-failed', reason: expect.stringMatching(/cause is unknown/) });
+    expect(refusal.reason).not.toMatch(/timed out|time limit/);
+  });
+
+  it.each([
+    ['an object git cannot write', 'error: insufficient permission for adding an object to repository database .git/objects'],
+    ['a clean filter that fails', 'error: external filter \'false\' failed 1\nfatal: site/a.md: clean filter \'broken\' failed'],
+  ])('refuses %s as the repository\'s fault, quoting git', (_what, stderr) => {
+    expect(snapshotProbeRefusal({ ok: false, stderr })).toMatchObject({
+      ok: false,
+      kind: 'repository',
+      reason: expect.stringMatching(/git refused to snapshot the working tree.*git said: (?:error|fatal): /s),
+    });
   });
 });

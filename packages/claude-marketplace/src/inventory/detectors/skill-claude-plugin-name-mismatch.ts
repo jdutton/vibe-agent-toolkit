@@ -7,7 +7,7 @@
  * directory that has both a root SKILL.md and a .claude-plugin/plugin.json).
  */
 
-import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { anchoredAt, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ClaudePluginInventory } from '../types.js';
@@ -33,8 +33,7 @@ export function detectSkillClaudePluginNameMismatch(inv: ClaudePluginInventory, 
 	return [{
 		severity: 'warning',
 		code: 'SKILL_CLAUDE_PLUGIN_NAME_MISMATCH',
-		message: `plugin.json name "${pluginName}" does not match co-located SKILL.md frontmatter name "${skillName}"`,
-		location: issueLocation(safePath.join(inv.path, '.claude-plugin', 'plugin.json'), locationRoot),
+		...anchoredAt(`plugin.json name "${pluginName}" does not match co-located SKILL.md frontmatter name "${skillName}"`, issueLocation(safePath.join(inv.path, '.claude-plugin', 'plugin.json'), locationRoot)),
 		fix: 'Align the names: update plugin.json `name` to match SKILL.md `name` (the skill is authoritative), or intentionally namespace the plugin (configure `validation.severity` or `validation.allow` with a reason).',
 	}];
 }

@@ -4,13 +4,14 @@
 
 import { buildAgentSkill, isSkillPackagingInputError } from '@vibe-agent-toolkit/agent-skills';
 import { buildReport, toFindings, type Gate } from '@vibe-agent-toolkit/schema';
-import { issueLocation, relativeEscapesRoot, safePath } from '@vibe-agent-toolkit/utils';
+import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import { resolveAgentPath } from '../../utils/agent-discovery.js';
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, leftoverIssuesOfWarnings, NOTHING_FINISHED, type FinishedWork } from '../../utils/document-writer.js';
 import { createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
+import { relativeLocationOrUndefined } from '../../utils/relativize-paths.js';
 import { packagingFailedIssue } from '../skills/build.js';
 
 import type { AgentBuildReport } from './build-schema.js';
@@ -107,6 +108,5 @@ function buildRefusalOf(
 /** The agent's path relative to the project root, or `undefined` when it is outside it (or unknown). */
 function agentLocation(agentPath: string | undefined, projectRoot: string | undefined): string | undefined {
   if (agentPath === undefined || projectRoot === undefined) return undefined;
-  const location = issueLocation(safePath.resolve(agentPath), projectRoot);
-  return relativeEscapesRoot(location) ? undefined : location;
+  return relativeLocationOrUndefined(issueLocation(safePath.resolve(agentPath), projectRoot));
 }

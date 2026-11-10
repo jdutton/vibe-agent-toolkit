@@ -65,7 +65,8 @@
                     "type": "string"
                   },
                   "location": {
-                    "type": "string"
+                    "type": "string",
+                    "description": "The file to open to fix this: a non-empty relative path with / separators inside the root (no leading /, no drive, no climbing .., and no \\ where \\ is the platform separator)"
                   },
                   "line": {
                     "type": "integer",

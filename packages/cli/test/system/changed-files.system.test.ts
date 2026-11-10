@@ -86,6 +86,12 @@ function brokenFindings(run: Run): Array<Record<string, unknown>> {
   return (run.findings as unknown as Array<Record<string, unknown>>).filter((finding) => finding['code'] === BROKEN);
 }
 
+/** A run that must fail, as its broken findings' `[check, message, reason]`. */
+function brokenTriples(run: Run): unknown[] {
+  expect(run.status).toBe(1);
+  return brokenFindings(run).map((finding) => [finding['check'], finding['message'], finding['reason']]);
+}
+
 /** The findings of a run with `code`, as `[location, check]`. */
 function findingsWith(run: Run, code: string): unknown[] {
   return (run.findings as unknown as Array<Record<string, unknown>>)
@@ -198,12 +204,24 @@ describe('changed_files and --base, end to end', () => {
     it('carries the lens\'s refusal on a check that also names a missing table, by the relations it names', () => {
       writeChecks(branchDir, `    typo-docs:\n      description: typo beside changed_files\n      sql: "${TYPO_BESIDE_CHANGED_FILES}"\n`);
 
-      const run = vat(branchDir, ['resources', 'check', '--format', 'json'], env);
-
-      expect(run.status).toBe(1);
-      expect(brokenFindings(run).map((finding) => [finding['check'], finding['message'], finding['reason']])).toStrictEqual([
+      expect(brokenTriples(vat(branchDir, ['resources', 'check', '--format', 'json'], env))).toStrictEqual([
         ['typo-docs', expect.stringContaining(NO_BASE_FIX), { refusal: 'USAGE_INVALID' }],
       ]);
+    });
+
+    it('fails a check defining a CTE named changed_files as broken, naming the reserved name rather than --base', () => {
+      writeChecks(
+        branchDir,
+        '    shadowing-cte:\n      description: a CTE in the relation\'s name\n'
+        + '      sql: "WITH changed_files AS (SELECT path FROM resource_realizations) SELECT path FROM changed_files"\n',
+      );
+
+      const triples = brokenTriples(vat(branchDir, ['resources', 'check', '--format', 'json'], env));
+
+      expect(triples).toStrictEqual([
+        ['shadowing-cte', expect.stringContaining('`changed_files` is a reserved relation name; rename the CTE'), { refusal: 'USAGE_INVALID' }],
+      ]);
+      expect(String((triples[0] as unknown[])[1])).not.toContain(NO_BASE_FIX);
     });
 
     it('names the repository cause in the broken finding when the lens cannot be evaluated', () => {
@@ -237,7 +255,7 @@ describe('changed_files and --base, end to end', () => {
 
       expect(run.status).toBe(1);
       expect(brokenFindings(run).map((finding) => [finding['check'], finding['message'], finding['reason']])).toStrictEqual([
-        ['changed-docs', expect.stringContaining('nearer base'), { refusal: 'BACKEND_UNAVAILABLE' }],
+        ['changed-docs', expect.stringMatching(/more output than VAT reads/), { refusal: 'BACKEND_UNAVAILABLE' }],
       ]);
     });
 

@@ -141,6 +141,9 @@ export type ValidationIssueCode = IssueCode | InfoCode | NonOverridableCode | Cu
 /** A drive prefix (`C:` or `C:foo`), which is never project-relative however POSIX it looks. */
 const DRIVE_PREFIX = /^[A-Za-z]:/;
 
+/** Every leading `./` segment, repeated or not — `./` names the root it is relative to. */
+const LEADING_DOT_SLASHES = /^(?:\.\/)+/;
+
 /** What a `location` may be — the one spelling every refusal of one states. */
 export const PROJECT_LOCATION_RULE
   = String.raw`a non-empty relative path with / separators inside the root (no leading /, no drive, no climbing .., and no \ where \ is the platform separator)`;
@@ -169,12 +172,42 @@ export function isProjectLocation(value: string): boolean {
   return normalized !== '..' && !normalized.startsWith('../');
 }
 
+/**
+ * A value as an issue's `location`, when it can be one — the one way a producer turns a computed
+ * path into a location. A leading `./` (repeated or not) is dropped, so `./docs/a.md` is emitted as
+ * `docs/a.md`; what remains must pass {@link isProjectLocation}.
+ *
+ * @param value - A candidate location, e.g. what `issueLocation` returned
+ * @returns The location, or undefined when the value is no location (empty, absolute, on a drive,
+ *   climbing out of the root): the caller then omits `location` and names the path in its message
+ */
+export function projectLocationOf(value: string): string | undefined {
+  const location = value.replace(LEADING_DOT_SLASHES, '');
+  return isProjectLocation(location) ? location : undefined;
+}
+
+/**
+ * An issue's `message` and `location` for a computed path: the location when the path can be one
+ * ({@link projectLocationOf}), else no location and the path named in the message — so a producer
+ * whose subject lies outside its root (another drive, `../shared-docs`, the root itself) degrades
+ * instead of emitting a finding the published schema refuses.
+ *
+ * @param message - The issue's message
+ * @param relative - The subject's path relative to the location root (`issueLocation`'s answer)
+ * @returns The fields to spread into the issue
+ */
+export function anchoredAt(message: string, relative: string): { message: string; location?: string } {
+  const location = projectLocationOf(relative);
+  return location === undefined ? { message: `${message} (${relative})` } : { message, location };
+}
+
 export const ValidationIssueSchema = z.object({
   code: z.string(),                                  // full code space; narrowed in the TS type below
   severity: IssueSeveritySchema,
   message: z.string(),
   location: z.string()
     .refine(isProjectLocation, { message: `location must be ${PROJECT_LOCATION_RULE}` })
+    .describe(`The file to open to fix this: ${PROJECT_LOCATION_RULE}`)
     .optional(),
   line: z.number().int().positive().optional(),
   column: z.number().int().positive().optional(),
@@ -207,14 +240,20 @@ export interface ValidationIssue {
   suggestion?: string;
 }
 
-/** Build an issue from the registry, filling severity/fix/reference from the code entry. */
+/**
+ * Build an issue from the registry, filling severity/fix/reference from the code entry. A
+ * `location` that cannot be one is routed through {@link anchoredAt}: omitted, its path named in
+ * the message.
+ */
 export function createRegistryIssue(
   code: IssueCode,
   message: string,
   extras: Partial<Pick<ValidationIssue, 'location' | 'line' | 'column' | 'field' | 'link' | 'suggestion'>> = {},
 ): ValidationIssue {
   const e = CODE_REGISTRY[code];
-  return { code, severity: e.defaultSeverity, message, fix: e.fix, reference: e.reference, ...extras };
+  const { location, ...rest } = extras;
+  const anchored = location === undefined ? { message } : anchoredAt(message, location);
+  return { code, severity: e.defaultSeverity, fix: e.fix, reference: e.reference, ...rest, ...anchored };
 }
 
 /**

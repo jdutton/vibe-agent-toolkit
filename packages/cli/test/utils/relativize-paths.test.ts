@@ -116,20 +116,30 @@ const CROSS_DRIVE_CASES = [
 ] as const;
 
 describe('relativeLocationOrUndefined', () => {
-  it('passes a relative location through unchanged, a climb included', () => {
+  it('passes a location inside the root through unchanged', () => {
     expect(relativeLocationOrUndefined('agents/a/agent.yaml')).toBe('agents/a/agent.yaml');
-    expect(relativeLocationOrUndefined('../sibling/agent.yaml')).toBe('../sibling/agent.yaml');
-    expect(relativeLocationOrUndefined('')).toBe('');
   });
 
-  it.each(CROSS_DRIVE_CASES)('answers undefined for %s — %s', (location) => {
+  it.each([['./a.md'], ['././a.md']])('emits %s without its leading ./', (location) => {
+    expect(relativeLocationOrUndefined(location)).toBe('a.md');
+  });
+
+  // 🔑 Every value `isProjectLocation` refuses, so no published finding can carry one.
+  it.each([
+    ...CROSS_DRIVE_CASES,
+    ['../sibling/agent.yaml', 'a path that climbs out of the root'],
+    ['..', 'the root\'s parent itself'],
+    ['', 'the empty string, which names no file'],
+    ['./', 'a bare ./, which names no file once normalized'],
+  ])('answers undefined for %s — %s', (location) => {
     expect(relativeLocationOrUndefined(location)).toBeUndefined();
   });
 });
 
 describe('relativeLocationOrRefuse', () => {
-  it('passes a relative location through unchanged', () => {
+  it('passes a relative path through unchanged, a climb included: it is a path, never a location', () => {
     expect(relativeLocationOrRefuse('agents/a/agent.yaml', '/work/repo', 'vat agent validate')).toBe('agents/a/agent.yaml');
+    expect(relativeLocationOrRefuse('../sibling/agent.yaml', '/work/repo', 'vat agent validate')).toBe('../sibling/agent.yaml');
   });
 
   it.each(CROSS_DRIVE_CASES)('refuses %s as USAGE_INVALID — %s', (location) => {

@@ -329,9 +329,9 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit under a config whose skills.includ
   interface Report { status: string; findings: ReportIssue[]; data: { files: ReportFile[] } }
 
   /** Each lane's target and where it anchors the refused directory. */
-  const lanes: Array<{ lane: string; target: () => string; expectedLocation: string; alphaPath: string }> = [
-    { lane: 'directory', target: () => projectDir, expectedLocation: `skills/${LOCKED_DIR}`, alphaPath: 'skills/alpha/SKILL.md' },
-    { lane: 'single-file', target: () => alphaSkillMd, expectedLocation: `../${LOCKED_DIR}`, alphaPath: 'SKILL.md' },
+  const lanes: Array<{ lane: string; target: () => string; expectedLocation: string; outsideRoot: boolean; alphaPath: string }> = [
+    { lane: 'directory', target: () => projectDir, expectedLocation: `skills/${LOCKED_DIR}`, outsideRoot: false, alphaPath: 'skills/alpha/SKILL.md' },
+    { lane: 'single-file', target: () => alphaSkillMd, expectedLocation: `../${LOCKED_DIR}`, outsideRoot: true, alphaPath: 'SKILL.md' },
   ];
 
   function audit(target: string): { exit: number | null; stderr: string; report: Report } {
@@ -384,7 +384,7 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit under a config whose skills.includ
     expect(discoveryWarnings(stderr)).toEqual([]);
   });
 
-  it.each(lanes)('$lane lane: files the refusal once, on the directory, and the status says so', ({ target, expectedLocation }) => {
+  it.each(lanes)('$lane lane: files the refusal once, on the directory, and the status says so', ({ target, expectedLocation, outsideRoot }) => {
     fs.chmodSync(lockedDir, UNREADABLE);
     const { exit, report } = audit(target());
 
@@ -395,7 +395,9 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit under a config whose skills.includ
     // guard and the refused discovery — and the report must carry the fact once.
     // In the single-file lane there is no walk, so the refused discovery is the
     // ONLY report, anchored against the skill's own root.
-    expect(issuesWithCode(report, 'SCAN_PATH_UNREADABLE').map((i) => i.location)).toEqual([expectedLocation]);
+    // A directory outside the run's root (`../locked`) is no `location`: it closes the message instead.
+    const anchors = issuesWithCode(report, 'SCAN_PATH_UNREADABLE').map((i) => [i.location, i.message.endsWith(` (${expectedLocation})`)]);
+    expect(anchors).toEqual([outsideRoot ? [undefined, true] : [expectedLocation, false]]);
   });
 
   it.each(lanes)('$lane lane: warns once on stderr, naming the directory, WITHOUT --debug', ({ target }) => {

@@ -17,8 +17,13 @@
  * - `-l0` lifts git's rename limit, so no rename is ever reported as a deletion plus an addition.
  * - No `-C`: a copy is an addition. A conflicted (unmerged) path is its working-tree file as it
  *   stands, conflict markers and all — usually one `modified` row.
- * - A file marked assume-unchanged or skip-worktree that is on disk REFUSES the answer: git does
- *   not read its edits, so a change to it would be missing, and the refusal names the flag to clear.
+ * - A file marked assume-unchanged or skip-worktree REFUSES the answer: git does not read it, so an
+ *   edit to it, or its deletion, would be missing, and the refusal names every flag to clear. The
+ *   one exemption is a skip-worktree file absent from disk in a sparse checkout
+ *   (`core.sparseCheckout` true), absent by design rather than deleted.
+ * - If the snapshot fails, one real `git add --all` into another throwaway index asks git why: a
+ *   `fatal:` or `error:` it states is the repository's to fix; otherwise the cause is unknown, and
+ *   the refusal says so (a time-out only when that second attempt was seen to time out).
  *
  * In a shallow clone the merge base is trusted only when no commit between it and either tip is a
  * shallow boundary: one could hide a nearer merge base, so that refuses, naming how to deepen.
@@ -47,19 +52,23 @@
  * from the prefix git reports (a case-only rename since the base, a root reached in another case or
  * Unicode normalisation), and a byte comparison would then drop it in silence. So every path on
  * either side of every row whose leading segments match the prefix as APFS compares names — Unicode
- * case and NFC/NFD alike — but not byte for byte refuses, naming both. The check is keyed on the
- * FILESYSTEM, not on `core.ignorecase` (a config that can disagree with the disk), and it runs
- * whenever the root is a subdirectory: it only ever refuses, so running it everywhere is safe.
+ * case and NFC/NFD alike — but not byte for byte refuses, naming both.
+ *
+ * Whether the filesystem folds is PROBED at the root (its path with one segment's case flipped,
+ * compared by `dev`/`ino`), never read from `core.ignorecase`, a config that can disagree with the
+ * disk. Where it folds, a `core.ignorecase` that is not true refuses, naming the fix, and the
+ * spelling check runs whenever the root is a subdirectory. Where it does not, the check is skipped:
+ * there `Docs/` beside a `docs/` root is another directory, and its changes are simply not the root's.
  */
 
 import { randomUUID } from 'node:crypto';
 import { lstatSync, readFileSync, rmSync } from 'node:fs';
 
 import { compareCodeUnits } from './compare-code-units.js';
-import { isNoSuchEntryError, isOutputOverrunError, isPathAbsentError, isTimedOutError } from './errors/errno-table.js';
+import { fsFaultOf, isNoSuchEntryError, isOutputOverrunError, isPathAbsentError, isTimedOutError } from './errors/errno-table.js';
 import { runGit, runGitBytes } from './git-run.js';
 import { gitTreeSnapshot, unreadableSnapshotRefusal } from './git-snapshot.js';
-import { isAbsoluteAnyPlatform } from './path-core.js';
+import { isAbsoluteAnyPlatform, toForwardSlash } from './path-core.js';
 import { normalizedTmpdir, normalizePath, safePath } from './path-utils.js';
 import { shownName } from './shown-text.js';
 import { decodeUtf8Exactly } from './text-content.js';
@@ -87,12 +96,14 @@ interface GitNameStatusRecord {
 }
 
 /**
- * Whose fault a refusal is: `base` — the ref passed (it names no commit, or has more than one
- * merge base with HEAD); `git-failed` — git did not run or did not finish (not on PATH, out of time,
- * more output than VAT reads, a probe that answered neither `true` nor `false`); `repository` — the
- * tree cannot answer (not a working tree, no commits, no merge base, a shallow history that cannot
- * vouch for the merge base, a file git is told not to read, a tree git refuses to snapshot, a
- * damaged or partial clone, a root in another case, a path that is not UTF-8).
+ * Whose fault a refusal is: `base` — the ref passed (it names no commit, shares no history with
+ * HEAD in a whole history, or has more than one merge base with HEAD); `git-failed` — git did not
+ * run or did not finish (not on PATH, out of time, more output than VAT reads, a probe that
+ * answered neither `true` nor `false`, a snapshot that failed for no cause git states);
+ * `repository` — the tree cannot answer (not a working tree, no commits, a git that cannot resolve
+ * HEAD, a shallow history cut off before the merge base or unable to vouch for it, a file git is
+ * told not to read, a folding filesystem whose `core.ignorecase` is not true, a tree git refuses to
+ * snapshot, a damaged or partial clone, a root in another case, a path that is not UTF-8).
  */
 export type GitChangedFilesRefusalKind = 'base' | 'git-failed' | 'repository';
 
@@ -304,10 +315,12 @@ function spellingInAnotherForm(path: Uint8Array, prefix: Uint8Array): string | u
  *
  * @param records - The `--name-status` records, paths from the repository's top
  * @param prefix - The root's path from the repository's top: empty, or ending in `/`
+ * @param folds - Whether the root's filesystem folds case ({@link rootFoldsCase}). Where it does
+ *   not, a path in another case is another directory, simply not under the root
  * @returns A refusal naming both spellings, or undefined when every path agrees
  */
-export function caseSpellingRefusal(records: readonly GitNameStatusRecord[], prefix: Uint8Array): Refusal | undefined {
-  if (prefix.length === 0) return undefined;
+export function caseSpellingRefusal(records: readonly GitNameStatusRecord[], prefix: Uint8Array, folds: boolean): Refusal | undefined {
+  if (!folds || prefix.length === 0) return undefined;
   const sides = records.flatMap((record) => (record.oldPath === null ? [record.path] : [record.oldPath, record.path]));
   const other = sides.map((path) => spellingInAnotherForm(path, prefix)).find((spelling) => spelling !== undefined);
   if (other === undefined) return undefined;
@@ -317,6 +330,67 @@ export function caseSpellingRefusal(records: readonly GitNameStatusRecord[], pre
     reason: `git reports this root as ${shownName(prefix)} but the diff names a path under it as`
       + ` ${shownName(other)} (another case or Unicode normalisation), so its change cannot be matched to the root.`
       + ' Point VAT at the directory in the spelling git lists, or make the case agree in the repository.',
+  };
+}
+
+/** The identity of what `path` names, or undefined when it names nothing; a stat the OS refuses throws. */
+function entryIdentity(path: string): { dev: bigint; ino: bigint } | undefined {
+  try {
+    const { dev, ino } = lstatSync(path, { bigint: true });
+    return { dev, ino };
+  } catch (error) {
+    if (isPathAbsentError(error)) return undefined;
+    throw error;
+  }
+}
+
+/**
+ * Whether the filesystem holding `root` folds case — PROBED, never assumed from the platform or
+ * from `core.ignorecase`: the root's path with its last cased segment spelled in the other case is
+ * looked up, and it folds when that names the same entry (`dev` and `ino`). A probe that cannot
+ * decide — no cased segment, an `ino` of 0, a stat the OS refuses — answers true, which only ever
+ * turns on checks that refuse.
+ *
+ * @param root - The absolute root
+ * @returns Whether two spellings differing only in case name one entry there
+ */
+function rootFoldsCase(root: string): boolean {
+  const segments = toForwardSlash(root).split('/');
+  const at = segments.findLastIndex((segment) => segment.toUpperCase() !== segment.toLowerCase());
+  const segment = segments[at];
+  if (segment === undefined) return true;
+  const flipped = segment === segment.toUpperCase() ? segment.toLowerCase() : segment.toUpperCase();
+  try {
+    const own = entryIdentity(root);
+    const other = entryIdentity([...segments.slice(0, at), flipped, ...segments.slice(at + 1)].join('/'));
+    if (other === undefined) return false;
+    if (own === undefined || own.ino === 0n) return true;
+    return own.dev === other.dev && own.ino === other.ino;
+  } catch (error) {
+    // A stat the OS refused cannot decide; anything else is a bug and propagates.
+    if (fsFaultOf(error) !== undefined) return true;
+    throw error;
+  }
+}
+
+/**
+ * On a filesystem that folds case, refuse a repository whose `core.ignorecase` is not true: git
+ * then treats two spellings the disk holds as one file as two, and a case-only change is
+ * misreported.
+ *
+ * @returns A refusal naming the fix, or undefined
+ */
+function ignoreCaseRefusal(root: string, folds: boolean): Refusal | undefined {
+  if (!folds) return undefined;
+  const ignoreCase = configIsTrue(root, 'core.ignorecase');
+  if (!ignoreCase.ok) return ignoreCase;
+  if (ignoreCase.value) return undefined;
+  return {
+    ok: false,
+    kind: 'repository',
+    reason: `${shownName(root)} is on a filesystem that folds case, but this repository's core.ignorecase is not true,`
+      + ' so git can read one file as two and a case-only change would be misreported.'
+      + ' Run git config core.ignorecase true, then run again.',
   };
 }
 
@@ -346,7 +420,7 @@ export function gitDidNotRun(subcommand: string, result: Ran): Refusal | undefin
   const command = `git ${subcommand}`;
   let remedy = 'Check that git runs here.';
   if (isNoSuchEntryError(error)) {
-    remedy = 'Put git on PATH.';
+    remedy = 'git was not found on PATH: install it, or put it on PATH.';
   } else if (isTimedOutError(error)) {
     remedy = `${command} did not finish within its time limit; compare against a nearer base, so there is less to diff.`;
   } else if (isOutputOverrunError(error)) {
@@ -374,6 +448,17 @@ function resolveBase(root: string, base: string): { ok: true; commit: string } |
   const result = ask(root, ['rev-parse', '--verify', '--quiet', `${base}^{commit}`]);
   if ('kind' in result) return result;
   if (!result.ok || result.stdout === '') {
+    // A git that cannot resolve HEAD either is a repository that cannot answer, whatever ref was typed.
+    const head = ask(root, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
+    if ('kind' in head) return head;
+    if (!head.ok || head.stdout === '') {
+      return {
+        ok: false,
+        kind: 'repository',
+        reason: `git could not resolve the base ${shownName(base)}, and it cannot resolve HEAD either, so the`
+          + ` repository, not the ref, is what fails.${gitSaid(result.stderr || head.stderr)} Check the repository (git fsck).`,
+      };
+    }
     return {
       ok: false,
       kind: 'base',
@@ -415,15 +500,21 @@ export function mergeBaseOf(base: string, listing: string, shallow: boolean): { 
   const [only] = commits;
   if (commits.length === 1 && only !== undefined) return { ok: true, commit: only };
   if (commits.length === 0) {
-    return {
-      ok: false,
-      kind: 'repository',
-      reason: shallow
-        ? `This is a shallow clone, and the history it holds is cut off before the base ${shownName(base)} and HEAD`
-          + ` meet, so there is no merge base to compare with. ${DEEPEN_REMEDY}`
-        : `The base ${shownName(base)} shares no history with HEAD here, so there is no merge base to compare with.`
+    // Shallow: the history is cut off, the repository's to deepen. Whole: the two never meet, so the
+    // fix is another argument — the base's fault.
+    return shallow
+      ? {
+        ok: false,
+        kind: 'repository',
+        reason: `This is a shallow clone, and the history it holds is cut off before the base ${shownName(base)} and HEAD`
+          + ` meet, so there is no merge base to compare with. ${DEEPEN_REMEDY}`,
+      }
+      : {
+        ok: false,
+        kind: 'base',
+        reason: `The base ${shownName(base)} shares no history with HEAD here, so there is no merge base to compare with.`
           + ' Pass a commit HEAD descends from.',
-    };
+      };
   }
   // The base's fault: the fix is another argument, one of these.
   return {
@@ -475,11 +566,18 @@ function rootPrefix(root: string): { ok: true; prefix: Uint8Array } | Refusal {
   return { ok: true, prefix: rest.at(-1) === NEWLINE ? rest.subarray(0, -1) : rest };
 }
 
-/** The index tags `git ls-files -v` writes for a flag that hides a file's edits from git. */
-const HIDDEN_EDIT_FLAGS = [
-  { flag: 'skip-worktree', clear: '--no-skip-worktree', matches: (tag: string): boolean => tag === 'S' || tag === 's' },
-  { flag: 'assume-unchanged', clear: '--no-assume-unchanged', matches: (tag: string): boolean => tag >= 'a' && tag <= 'z' },
-] as const;
+/** The flags an `ls-files -v` tag carries that hide a file's edits from git. */
+interface HiddenEditFlags {
+  /** `S`, or `s` (both flags). */
+  readonly skipWorktree: boolean;
+  /** Any lowercase tag. */
+  readonly assumeUnchanged: boolean;
+}
+
+/** The flags `tag` carries: `S` skip-worktree, a lowercase letter assume-unchanged, `s` both. */
+function hiddenEditFlagsOf(tag: string): HiddenEditFlags {
+  return { skipWorktree: tag === 'S' || tag === 's', assumeUnchanged: tag >= 'a' && tag <= 'z' };
+}
 
 /** Whether anything is at `path` on disk; a path the OS will not stat counts as there. */
 function onDisk(path: string): boolean {
@@ -492,30 +590,61 @@ function onDisk(path: string): boolean {
 }
 
 /**
- * Refuse a file under the root that git is told not to read: assume-unchanged (a lowercase
- * `ls-files -v` tag) or skip-worktree (`S`). The snapshot is git's own `add --all`, which skips
- * both, so an edit to one is no row — a silent wrong answer. A flagged entry whose file is gone
- * (a sparse checkout's skip-worktree) holds no edit to miss, and is not refused.
+ * Whether a boolean git config is set to true here: unset, or any other value, is not.
  *
- * @returns A refusal naming the first such file and the flag to clear, or undefined
+ * @returns The answer, or `git-failed` for a git that did not run
+ */
+function configIsTrue(root: string, key: string): { ok: true; value: boolean } | Refusal {
+  const result = ask(root, ['config', '--type=bool', '--get', key]);
+  if ('kind' in result) return result;
+  return { ok: true, value: result.ok && result.stdout === 'true' };
+}
+
+/**
+ * Refuse a file under the root that git is told not to read: assume-unchanged (a lowercase
+ * `ls-files -v` tag), skip-worktree (`S`), or both (`s`). The snapshot is git's own `add --all`,
+ * which skips them, so an edit — or a deletion — of one is no row: a silent wrong answer. The one
+ * flagged entry that holds nothing to miss is a sparse checkout's skip-worktree file, absent from
+ * disk by design (`core.sparseCheckout` true).
+ *
+ * @returns A refusal naming the first such file and every flag to clear, or undefined
  */
 function hiddenEditsRefusal(root: string): Refusal | undefined {
   const listed = bytesOf('ls-files', runGitBytes(['ls-files', '-v', '-z'], { cwd: root }));
   if (!listed.ok) return listed;
+  let sparseAnswer: { ok: true; value: boolean } | Refusal | undefined;
+  const sparse = (): { ok: true; value: boolean } | Refusal => (sparseAnswer ??= configIsTrue(root, 'core.sparseCheckout'));
   for (const entry of nulFields(listed.stdout) ?? []) {
-    const tag = String.fromCodePoint(entry[0] ?? 0);
-    const flagged = HIDDEN_EDIT_FLAGS.find((candidate) => candidate.matches(tag));
+    const flags = hiddenEditFlagsOf(String.fromCodePoint(entry[0] ?? 0));
+    if (!flags.skipWorktree && !flags.assumeUnchanged) continue;
     const path = decodeUtf8Exactly(entry.subarray(2));
-    if (flagged === undefined || (path !== undefined && !onDisk(safePath.join(root, path)))) continue;
-    const named = shownName(path ?? entry.subarray(2));
-    return {
-      ok: false,
-      kind: 'repository',
-      reason: `${named} is marked ${flagged.flag} in git's index, so git does not read its edits and a change to it`
-        + ` would be missing from the answer. Clear the flag (git update-index ${flagged.clear} -- ${named}) and run again.`,
-    };
+    const present = path === undefined || onDisk(safePath.join(root, path));
+    // Absent and only skip-worktree: a sparse checkout's file, absent by design — else a deletion git hides.
+    if (!present && !flags.assumeUnchanged) {
+      const answer = sparse();
+      if (!answer.ok) return answer;
+      if (answer.value) continue;
+    }
+    return hiddenEditRefusal(shownName(path ?? entry.subarray(2)), flags);
   }
   return undefined;
+}
+
+/** The refusal for one flagged file: every flag it carries, and the one command that clears them. */
+function hiddenEditRefusal(named: string, flags: HiddenEditFlags): Refusal {
+  const set = [
+    ...(flags.skipWorktree ? [{ flag: 'skip-worktree', clear: '--no-skip-worktree' }] : []),
+    ...(flags.assumeUnchanged ? [{ flag: 'assume-unchanged', clear: '--no-assume-unchanged' }] : []),
+  ];
+  const marked = set.map(({ flag }) => flag).join(' and ');
+  const clear = set.map(({ clear: option }) => option).join(' ');
+  return {
+    ok: false,
+    kind: 'repository',
+    reason: `${named} is marked ${marked} in git's index, so git does not read it and a change to it (an edit, or`
+      + ` its deletion) would be missing from the answer. Clear ${set.length > 1 ? 'the flags' : 'the flag'}`
+      + ` (git update-index ${clear} -- ${named}) and run again.`,
+  };
 }
 
 /**
@@ -528,39 +657,66 @@ function snapshotTree(root: string): { ok: true; tree: string } | Refusal {
   if (snapshot !== null) return { ok: true, tree: snapshot.hash };
   const unreadable = unreadableSnapshotRefusal(root);
   if (unreadable !== undefined) return { ok: false, kind: 'repository', reason: unreadable.message };
-  return snapshotRefusedBy(root) ?? gitFailed(
-    'git could not snapshot the working tree (`git add --all` into a throwaway index, then `write-tree`),'
-      + ' so there is nothing to compare with the base, and `git add --all --dry-run` here names no reason: git'
-      + ' most likely did not finish within the snapshot\'s 30 s limit (a large or cold tree: run again once it is warm).',
-  );
+  return snapshotProbeRefusal(probeSnapshot(root));
 }
 
 /** The lines of git's stderr that state a refusal. */
 const GIT_REFUSAL_LINE = /^(?:fatal|error): /;
 
+/** What the snapshot is, as a refusal names it. */
+const SNAPSHOT = '`git add --all` into a throwaway index, then `write-tree`';
+
 /**
- * Ask git ONCE why the snapshot failed: `git add --all --dry-run` against an index that does not
- * exist yet (so the real index is neither read nor locked). A refusal git states — a nested
- * repository with no commit, say — is deterministic and the tree's to fix.
+ * Ask git ONCE why the snapshot failed: a REAL `git add --all` into an index that does not exist yet
+ * (so the real index is neither read nor locked). Real, not `--dry-run`: a dry run writes no object
+ * and runs no clean filter, so it cannot meet the faults those raise.
  *
- * @returns The repository's refusal quoting git, or undefined when git states none (a time-out)
+ * @returns What that second attempt did
  */
-function snapshotRefusedBy(root: string): Refusal | undefined {
+function probeSnapshot(root: string): Ran {
   const index = safePath.join(normalizedTmpdir(), `vat-snapshot-probe-${randomUUID()}.index`);
   try {
-    const probe = runGit(['add', '--all', '--dry-run'], { cwd: root, env: { GIT_INDEX_FILE: index } });
-    if (probe.ok || probe.error !== undefined) return undefined;
-    const said = probe.stderr.split('\n').filter((line) => GIT_REFUSAL_LINE.test(line));
-    if (said.length === 0) return undefined;
+    return runGit(['add', '--all'], { cwd: root, env: { GIT_INDEX_FILE: index } });
+  } finally {
+    rmSync(index, { force: true });
+  }
+}
+
+/**
+ * Classify a failed snapshot by what its diagnostic second attempt did. A refusal git states
+ * (`fatal:` or `error:` — a nested repository with no commit, an object it cannot write, a clean
+ * filter that fails) is deterministic and the tree's to fix. A second attempt seen to time out or
+ * not run is git's failure, named as such. Anything else — it succeeded, or failed stating no
+ * refusal — leaves the first failure's cause unknown, and says so rather than guessing.
+ *
+ * @param probe - What the diagnostic `git add --all` did
+ * @returns The refusal
+ */
+export function snapshotProbeRefusal(probe: Ran): Refusal {
+  if (probe.error !== undefined && isTimedOutError(probe.error)) {
+    return gitFailed(
+      `git could not snapshot the working tree (${SNAPSHOT}), and a second \`git add --all\` here did not finish within`
+        + ' its time limit either: the tree is large or cold. Run again once it is warm.',
+    );
+  }
+  const didNotRun = gitDidNotRun('add --all', probe);
+  if (didNotRun !== undefined) {
+    return gitFailed(`git could not snapshot the working tree (${SNAPSHOT}), so there is nothing to compare with the base. ${didNotRun.reason}`);
+  }
+  const said = probe.ok ? [] : probe.stderr.split('\n').filter((line) => GIT_REFUSAL_LINE.test(line));
+  if (said.length > 0) {
     return {
       ok: false,
       kind: 'repository',
       reason: `git refused to snapshot the working tree, so there is nothing to compare with the base. git said: ${said.join(' ')}`
         + ' Fix what git names (a nested repository with no commit: commit in it, or remove it), then run again.',
     };
-  } finally {
-    rmSync(index, { force: true });
   }
+  return gitFailed(
+    `git could not snapshot the working tree (${SNAPSHOT}), so there is nothing to compare with the base, and the`
+      + ` cause is unknown: a second \`git add --all\` here ${probe.ok ? 'succeeded' : 'failed stating no refusal'}.`
+      + ` Run again; if it keeps failing, run git add --all in a copy of the repository to see what git says.${gitSaid(probe.stderr)}`,
+  );
 }
 
 /**
@@ -718,8 +874,9 @@ function readShallowBoundary(file: string): BoundaryRead {
  *
  * Never throws for a condition the caller can fix — no working tree, no commits, a ref that names no
  * commit, no single merge base, a shallow history that cannot vouch for it, a file git is told not
- * to read, a tree git cannot snapshot, a partial clone missing objects, a root spelled in another
- * case, a path that is not UTF-8, a listing VAT cannot read —
+ * to read, a folding filesystem git is told is case-sensitive, a tree git cannot snapshot, a
+ * partial clone missing objects, a root spelled in another case, a path that is not UTF-8, a
+ * listing VAT cannot read —
  * and reports it instead, with whose fault it is and the fix.
  *
  * @param options - The question
@@ -741,13 +898,14 @@ export function gitChangedFiles(options: { root: string; base: string }): GitCha
   if (!merged.ok) return merged;
   const cutOff = shallow.value ? shallowHistoryRefusal(root, { base: resolved.commit, mergeBase: merged.commit }) : undefined;
   if (cutOff !== undefined) return cutOff;
-  const hidden = hiddenEditsRefusal(root);
-  if (hidden !== undefined) return hidden;
+  const folds = rootFoldsCase(root);
+  const unread = ignoreCaseRefusal(root, folds) ?? hiddenEditsRefusal(root);
+  if (unread !== undefined) return unread;
   const snapshot = snapshotTree(root);
   if (!snapshot.ok) return snapshot;
   const diff = diffRecords(root, merged.commit, snapshot.tree);
   if (!diff.ok) return diff;
-  const spelling = caseSpellingRefusal(diff.records, prefix.prefix);
+  const spelling = caseSpellingRefusal(diff.records, prefix.prefix, folds);
   if (spelling !== undefined) return spelling;
   const outcome = changedFilesUnderPrefix(diff.records, prefix.prefix);
   return outcome.ok ? { ok: true, baseCommit: merged.commit, files: outcome.files } : outcome;

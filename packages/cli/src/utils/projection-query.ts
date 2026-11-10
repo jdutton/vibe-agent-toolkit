@@ -64,6 +64,8 @@ import type { LensPopulation } from './lens-population.js';
 import type { Logger } from './logger.js';
 import { populateAndReport } from './population-wiring.js';
 import {
+  CHANGED_FILES_LENS,
+  definesCteNamed,
   evaluateLens,
   lensesNamedBy,
   lensRelationNames,
@@ -299,6 +301,9 @@ export function describedFailure(sql: string, error: unknown, absent: ReadonlySe
   return isVatError(error) ? new VatError(error.code, message, { cause: error }) : new Error(message, { cause: error });
 }
 
+/** The relations a lens can REFUSE to produce: a CTE may not take one of their names. */
+const REFUSABLE_RELATIONS: readonly string[] = lensRelationNames(CHANGED_FILES_LENS);
+
 /**
  * A statement refused because it names a derived relation its lens could not evaluate. Its
  * `refusal` is narrowed to {@link LensRefusalCode}, so the check lane can publish it as a broken
@@ -322,6 +327,12 @@ export class RelationRefusedError extends CommandRefusalError {
  * @returns The refusal, or undefined when the statement names no refused relation
  */
 export function refusedStatement(sql: string, refusals: ReadonlyMap<string, LensRefusal>): RelationRefusedError | undefined {
+  // A CTE in a refusable relation's name either shadows the relation or trips its refusal, whose
+  // remedy (`--base`) would be wrong: the fix is the statement's, so it is refused first, either way.
+  const reserved = REFUSABLE_RELATIONS.find((name) => definesCteNamed(sql, name));
+  if (reserved !== undefined) {
+    return new RelationRefusedError('USAGE_INVALID', `\`${reserved}\` is a reserved relation name; rename the CTE.`);
+  }
   const [relation] = relationsNamedBy(sql, refusals.keys());
   const refused = relation === undefined ? undefined : refusals.get(relation);
   if (relation === undefined || refused === undefined) return undefined;

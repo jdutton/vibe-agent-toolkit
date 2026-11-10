@@ -75,15 +75,16 @@ describe('vat audit settings — one stated root (system test)', () => {
     expect(report.data.root).toBe(toForwardSlash(projectDir));
     const paths: Array<{ trail: string; value: string }> = [];
     pathsIn({ findings: report.findings, data: { ...report.data, root: undefined } }, '', paths);
-    // Both sides of the document are exercised: a finding and the data.
-    expect(paths.some((p) => p.trail.startsWith('findings'))).toBe(true);
+    // The data side is exercised; the one finding lies outside the root, so it has no location.
     expect(paths.some((p) => p.trail.startsWith('data.layers'))).toBe(true);
     for (const { trail, value } of paths) {
       expect(isAbsoluteAnyPlatform(value), `${trail} is absolute: ${value}`).toBe(false);
       expect(fs.existsSync(safePath.join(projectDir, value)), `${trail} does not resolve under data.root: ${value}`).toBe(true);
     }
-    // The user file, outside the root, is spelled from it — never with $HOME.
-    expect(report.findings.map((f) => f.location)).toContain('../home/.claude/settings.json');
+    // The user file, outside the root, is no location: the message names it, spelled from the
+    // root — never with $HOME.
+    expect(report.findings.map((f) => [f.location, f.message.endsWith(' (../home/.claude/settings.json)')]))
+      .toContainEqual([undefined, true]);
     expect(result.stdout).not.toContain(toForwardSlash(fakeHome));
   });
 

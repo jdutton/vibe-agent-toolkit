@@ -888,7 +888,7 @@
                   "allowEmpty": {
                     "type": "boolean",
                     "const": true,
-                    "description": "Declare that an `examined` count of 0 is a legitimate answer for this check — a rule about a directory that may not exist yet. The run then passes over zero and publishes `examined: 0` beside `allowEmpty: true`, so the exemption is visible in every report. Only valid with `examined`: without one there is no count for it to excuse, and the config is refused."
+                    "description": "Declare that an `examined` count of 0 is a legitimate answer for this check — a rule about a directory that may not exist yet. The run then passes over zero and publishes `examined: 0` beside `allowEmpty: true`, so the exemption is visible in every report. Only valid with `examined`: without one there is no count for it to excuse, and the config is refused. Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead."
                   }
                 },
                 "required": [
@@ -897,16 +897,24 @@
                 ],
                 "additionalProperties": false,
                 "description": "A SQL assertion over the resource projection",
-                "if": {
-                  "required": [
-                    "allowEmpty"
-                  ]
-                },
-                "then": {
-                  "required": [
-                    "examined"
-                  ]
-                }
+                "allOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "not": {
+                          "required": [
+                            "allowEmpty"
+                          ]
+                        }
+                      },
+                      {
+                        "required": [
+                          "examined"
+                        ]
+                      }
+                    ]
+                  }
+                ]
               },
               "description": "Named SQL assertions over the resource projection, run by `vat resources check`. Each key becomes a CUSTOM:<name> validation code. A key may not be a built-in check's name.",
               "propertyNames": {

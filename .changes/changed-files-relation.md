@@ -10,27 +10,35 @@
   no row; a rename across the root's boundary is seen from inside it (in = `added`, out =
   `deleted`). A submodule, or a nested repository with a commit, is one row naming its directory,
   listed when the commit it records moved. A conflicted file mid-merge is listed as it stands on
-  disk, markers and all. A file on disk marked assume-unchanged or skip-worktree refuses the
-  relation, naming it and the flag to clear (`git update-index --no-assume-unchanged` /
-  `--no-skip-worktree`), since git would hide an edit to it. Paths are read from git as bytes; a path under the root that is not
+  disk, markers and all. A file marked assume-unchanged or skip-worktree refuses the relation,
+  naming it and every flag to clear (`git update-index --no-assume-unchanged` /
+  `--no-skip-worktree`, both for a file carrying both), since git would hide an edit to it or its
+  deletion; the one exemption is a skip-worktree file absent from disk in a sparse checkout
+  (`core.sparseCheckout` true). Paths are read from git as bytes; a path under the root that is not
   UTF-8 refuses the relation, naming its bytes. Lets a `resources.checks` entry judge
   only what a change touched.
 - **`--base <ref>` on `vat resources query`, `vat resources check` and `vat validate`** (which
   forwards it to its checks phase). A statement reading `changed_files` is refused naming the fix,
   never answered with an empty relation, with a code naming the fault: `USAGE_INVALID` without
-  `--base`, with a ref that names no commit, or with one that has more than one merge base with
-  `HEAD` (a criss-cross history: pass one of them as the base); `BACKEND_UNAVAILABLE` when git did
-  not run to completion (not on PATH; out of time or over the output VAT reads — compare against a
-  nearer base) or could not snapshot the working tree (past the snapshot's 30 s limit, or a nested
-  repository with no commit); `INPUT_UNREADABLE` when the repository cannot answer — outside a git
-  working tree (a bare repository or a directory inside `.git` included), no commits yet, no merge
-  base (unrelated histories), a shallow clone whose history may hide a nearer merge base (fetch
-  full history, e.g. `actions/checkout` `fetch-depth: 0`, or deepen until the history between the
-  merge base and the tips is complete), a partial clone missing blobs the diff needs
-  (`git fetch --refetch`), a snapshot git refuses (git's message quoted), a flagged file as above,
-  a file under the root git cannot read, a listing
-  VAT cannot read, or, where git ignores case, a changed path that spells the root in another case
-  or Unicode normalisation (both spellings named). The exit code does not tell these faults apart; the code does — `query`
+  `--base`, with a ref that names no commit, with one that shares no history with `HEAD` in a
+  whole (not shallow) history, with one that has more than one merge base with `HEAD` (a
+  criss-cross history: pass one of them as the base), or for a statement defining a CTE named
+  `changed_files`; `BACKEND_UNAVAILABLE` when git did not run to completion (git was not found on
+  PATH; out of time or over the output VAT reads — compare against a nearer base) or could not
+  snapshot the working tree for a cause git does not state (a second `git add --all` into a
+  throwaway index is run to ask; a time-out is named only when that attempt was seen to time out);
+  `INPUT_UNREADABLE` when the repository cannot answer — outside a git working tree (a bare
+  repository or a directory inside `.git` included), no commits yet, a git that cannot resolve
+  `HEAD`, a shallow clone cut off before the base and `HEAD` meet or whose history may hide a
+  nearer merge base (fetch full history, e.g. `actions/checkout` `fetch-depth: 0`, or deepen until
+  the history between the merge base and the tips is complete), a partial clone missing blobs the
+  diff needs (`git fetch --refetch`), a snapshot git refuses (an object it cannot write, a clean
+  filter that fails, a nested repository with no commit: git's `fatal:`/`error:` quoted), a flagged
+  file as above, a file under the root git cannot read, a listing VAT cannot read, a filesystem
+  that folds case (probed at the root) whose `core.ignorecase` is not true
+  (`git config core.ignorecase true`), or, on such a filesystem, a changed path that spells the
+  root in another case or Unicode normalisation (both spellings named; on a case-sensitive
+  filesystem a sibling such as `Docs/` beside a `docs/` root is simply another directory). The exit code does not tell these faults apart; the code does — `query`
   publishes it as `error.code`, and for `check` and `validate` it is `RESOURCE_CHECK_BROKEN` on
   exactly the checks that read it, carrying `reason: {refusal: <code>}` beside a message naming the
   cause. `--base` is read only when a statement names `changed_files`.

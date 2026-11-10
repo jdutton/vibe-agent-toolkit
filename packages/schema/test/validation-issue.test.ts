@@ -3,7 +3,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { CODE_REGISTRY } from '../src/validation-codes.js';
-import { createRegistryIssue, isProjectLocation, ValidationIssueSchema } from '../src/validation-issue.js';
+import { anchoredAt, createRegistryIssue, isProjectLocation, projectLocationOf, ValidationIssueSchema } from '../src/validation-issue.js';
 
 /** A minimal valid issue; each case below varies exactly one anchor field. */
 function issueWith(extras: Record<string, unknown>): Record<string, unknown> {
@@ -41,6 +41,36 @@ describe('ValidationIssueSchema location contract', () => {
     expect(ValidationIssueSchema.safeParse(issueWith({ location })).success).toBe(true);
     expect(isProjectLocation(location)).toBe(true);
   });
+
+  it.each([
+    ['a plain location', 'docs/a.md', 'docs/a.md'],
+    ['a leading ./', './docs/a.md', 'docs/a.md'],
+    ['a repeated leading ./', '././docs/a.md', 'docs/a.md'],
+  ])('projectLocationOf emits %s as the location without any leading ./', (_label, value, location) => {
+    expect(projectLocationOf(value)).toBe(location);
+    expect(ValidationIssueSchema.safeParse(issueWith({ location: projectLocationOf(value) })).success).toBe(true);
+  });
+
+  it('anchoredAt keeps a location that can be one, and otherwise names the path in the message', () => {
+    expect(anchoredAt('Broken link', './docs/a.md')).toStrictEqual({ message: 'Broken link', location: 'docs/a.md' });
+    expect(anchoredAt('Broken link', '../shared-docs/a.md')).toStrictEqual({ message: 'Broken link (../shared-docs/a.md)' });
+  });
+
+  it('createRegistryIssue omits a location that cannot be one and names its path in the message', () => {
+    const issue = createRegistryIssue('LINK_OUTSIDE_SKILL_DIR', 'Link points outside', { location: '../outside/SKILL.md', line: 3 });
+
+    expect(issue.location).toBeUndefined();
+    expect(issue.message).toBe('Link points outside (../outside/SKILL.md)');
+    expect(issue.line).toBe(3);
+    expect(ValidationIssueSchema.safeParse(issue).success).toBe(true);
+  });
+
+  it.each([['empty', ''], ['bare ./', './'], ['climbing', './../x.md'], ['absolute', '/abs/x.md']])(
+    'projectLocationOf has no location for %s',
+    (_label, value) => {
+      expect(projectLocationOf(value)).toBeUndefined();
+    },
+  );
 
   // Gated: a backslash is a separator only on win32; on POSIX `skills\foo\SKILL.md` is one legal filename.
   it.skipIf(path.sep !== '\\')('rejects a backslashed relative location on win32', () => {

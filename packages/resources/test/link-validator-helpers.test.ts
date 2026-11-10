@@ -259,8 +259,12 @@ describe('fileExistenceIssue', () => {
       SOURCE,
     );
     expect(issue?.code).toBe('LINK_BROKEN_FILE');
-    expect(issue?.message).toBe(`File not found: ${issueLocation(TARGET_MISSING, process.cwd())}`);
-    expect(issue?.location).toBe(issueLocation(SOURCE, process.cwd()));
+    // The source lies outside cwd, so its cwd-relative spelling climbs: it is
+    // no `location`, and is named in the message instead.
+    expect(issue?.message).toBe(
+      `File not found: ${issueLocation(TARGET_MISSING, process.cwd())} (${issueLocation(SOURCE, process.cwd())})`,
+    );
+    expect(issue).not.toHaveProperty('location');
   });
 
   it('carries no `suggestion` when it has none to make', () => {

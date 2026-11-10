@@ -13,7 +13,26 @@
   `RESOURCE_CHECK_BROKEN` with the structured `reason` (`column: path`). NULL or absent is no
   location and no evidence entry. A published finding's `location` (`ValidationIssueSchema`) now
   refuses an empty or root-climbing value too: one predicate, `isProjectLocation` in
-  `@vibe-agent-toolkit/schema`, decides both.
+  `@vibe-agent-toolkit/schema`, decides both. A leading `./` is dropped (`./docs/a.md` is the
+  location `docs/a.md`).
+- **A finding whose file lies outside the run's root now has no `location`, its path named in the
+  message instead** — where it used to carry a climbing `../…` (or, from `vat resources check`, an
+  empty) location. Every verb that publishes findings can emit one: `vat okf validate` (a bundle
+  declared at `../shared-docs`), `vat skills validate`, `vat skills build`, `vat skills package`,
+  `vat audit` (a user-scope `settings.json` included), `vat resources validate`, `vat claude marketplace validate`, `vat claude plugin
+  build`, `vat agent build`, `vat agent validate`, `vat skill test run`, `vat build`, `vat verify`
+  and `vat validate`. A consumer that requires `location` on every finding must accept its absence.
+  `createRegistryIssue` and `toFindings` (`@vibe-agent-toolkit/schema`) apply the rule, through the
+  new `projectLocationOf` and `anchoredAt`.
+- **`ResourceCheckSchema` (`@vibe-agent-toolkit/resources`) is a `ZodEffects`, not a `ZodObject`**,
+  since it refuses `allowEmpty` without `examined`: `.shape`, `.extend()`, `.pick()` and the other
+  object methods are gone from it. Validate with `.parse()` / `.safeParse()`, or compose from the
+  `checks` record of the project config schema.
+- **A `resources.checks` statement that defines a CTE named `changed_files`** (`WITH changed_files
+  AS (` or `, changed_files AS (`) is `RESOURCE_CHECK_BROKEN` (`reason: {refusal: USAGE_INVALID}`),
+  "`changed_files` is a reserved relation name; rename the CTE" — with or without `--base`, since
+  the CTE either shadows the relation or trips its refusal. `vat resources query` refuses it as
+  `USAGE_INVALID`.
 - **A `resources.checks` statement's `finding_severity`, `finding_line` and `finding_column` columns
   now feed the finding** (beside `path`), matched exactly. A value they cannot mean —
   `finding_severity: 'high'`, `finding_line: 0` — fails the check as `RESOURCE_CHECK_BROKEN`. No

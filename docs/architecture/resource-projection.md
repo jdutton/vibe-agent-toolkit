@@ -59,7 +59,7 @@ carry, and the zone modeling several tables depend on.
 producers as a MATERIALISED TABLE**, and `edge_resolutions` alongside it. ⚠️ **They are not
 unimplemented.** `resolveEdges()` COMPUTES both per lens, and `vat resources query` /
 `vat resources check` expose them as derived relations beside `lens_contexts`,
-`claude_context_chains` and `claude_context_loads` — nothing *stores*
+`claude_context_chains`, `claude_context_loads` and `changed_files` — nothing *stores*
 them, something *evaluates* them, and a lens is evaluated only when a declared statement names one
 of its relations (see [zones.md §5](zones.md#5-references-and-edges)
 and §9 item 3). Several columns (e.g. `wordCount`, `proseCodeUnits`, `codeBlockCodeUnits`, `sectionCount`,
@@ -136,7 +136,9 @@ exceptions, because saying "none" here contradicts §2. `roots`, `resources`, `r
 `resource_tags` and `claude_rule_patterns` ship as real `PROJECTION_TABLES` entries and are populated
 at runtime; `edges` and `edge_resolutions` exist as **derived relations** (`DERIVED_TABLES`),
 computed per lens by `resolveEdges()` and never materialised, as do `claude_context_chains` and
-`claude_context_loads`, computed by the claude-context lens. They
+`claude_context_loads`, computed by the claude-context lens, and `changed_files` — the files under
+the root that differ from the merge base of `--base <ref>` and HEAD, computed by the changed-files
+lens from git rather than the projection, the one lens that can refuse ([zones.md](zones.md)). They
 carry everything that depends on *where* content lives, not what it is, and are designed to be cheap
 to rebuild by joining against the blob-keyed tables above, so they'd carry no durability promise of
 their own.

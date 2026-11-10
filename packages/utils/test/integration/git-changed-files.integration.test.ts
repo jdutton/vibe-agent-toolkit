@@ -187,14 +187,14 @@ describe('gitChangedFiles', () => {
     });
   });
 
-  it('refuses a base that shares no history with HEAD, naming the fix', () => {
+  it('refuses a base that shares no history with HEAD as the base\'s fault, naming the fix', () => {
     runGitOrThrow(['switch', '-q', '--orphan', 'unrelated'], { cwd: repo });
     put(repo, 'other.md', 'unrelated\n');
     commitAll(repo, 'unrelated root');
 
     const result = gitChangedFiles({ root: repo, base: 'main' });
 
-    expect(result).toMatchObject({ ok: false, kind: 'repository' });
+    expect(result).toMatchObject({ ok: false, kind: 'base' });
     expect(result.ok ? '' : result.reason).toMatch(/"main" shares no history with HEAD.*Pass a commit HEAD descends from/s);
   });
 
@@ -454,11 +454,54 @@ describe('gitChangedFiles', () => {
       // Deepened once: the merge base A is now reachable, but S3 is still a boundary on the way to it.
       runGitOrThrow(['fetch', '-q', '--deepen=1'], { cwd: clone });
 
+      const result = gitChangedFiles({ root: clone, base: 'origin/main' });
+
+      expect(result).toMatchObject({ ok: false, kind: 'repository', reason: expect.stringMatching(SHALLOW_REMEDY) });
+      expect(result.ok ? '' : result.reason).toMatch(/cut off from its parents/);
+    });
+
+    it.skipIf(process.platform === 'win32')('finds the boundary list through an older git\'s relative --git-path answer', () => {
+      const scratch = suite.getTempDir();
+      const clone = shallowClone(scratch, 3, ['--no-single-branch']);
+      runGitOrThrow(['fetch', '-q', '--deepen=1'], { cwd: clone });
+      // A git before 2.31 does not know `--path-format`: it echoes the flag, then answers relative.
+      shimGit(scratch, 'if [ "$2" = "--path-format=absolute" ]; then echo "--path-format=absolute"; echo ".git/shallow"; exit 0; fi');
+
       expect(gitChangedFiles({ root: clone, base: 'origin/main' })).toMatchObject({
         ok: false,
         kind: 'repository',
-        reason: expect.stringMatching(SHALLOW_REMEDY),
+        reason: expect.stringMatching(/cut off from its parents/),
       });
+    });
+
+    it.skipIf(process.platform === 'win32')('refuses a boundary list that is absent while git still calls the clone shallow', () => {
+      const scratch = suite.getTempDir();
+      const clone = shallowClone(scratch, 3, ['--no-single-branch']);
+      runGitOrThrow(['fetch', '-q', '--deepen=1'], { cwd: clone });
+      const nowhere = safePath.join(scratch, 'no-such-shallow-file');
+      shimGit(scratch, `if [ "$3" = "--git-path" ]; then echo "${nowhere}"; exit 0; fi`);
+
+      expect(gitChangedFiles({ root: clone, base: 'origin/main' })).toMatchObject({
+        ok: false,
+        kind: 'repository',
+        reason: expect.stringMatching(/boundary list is not at/),
+      });
+    });
+
+    it.skipIf(process.platform === 'win32')('answers when the boundary list is gone because the clone was unshallowed in between', () => {
+      const scratch = suite.getTempDir();
+      const clone = shallowClone(scratch, 3, ['--no-single-branch']);
+      runGitOrThrow(['fetch', '-q', '--deepen=4'], { cwd: clone });
+      const nowhere = safePath.join(scratch, 'no-such-shallow-file');
+      const asked = safePath.join(scratch, 'asked-shallow');
+      // The first shallow probe is real (true); the boundary file is gone; the second says false.
+      shimGit(
+        scratch,
+        `if [ "$3" = "--git-path" ]; then echo "${nowhere}"; exit 0; fi\n`
+        + `if [ "$2" = "--is-shallow-repository" ]; then if [ -e "${asked}" ]; then echo false; exit 0; fi; : > "${asked}"; fi`,
+      );
+
+      expect(gitChangedFiles({ root: clone, base: 'origin/main' })).toMatchObject({ ok: true });
     });
 
     it('finds the boundary list through a root reached by a symlink or junction into the clone', ({ skip }) => {
@@ -519,13 +562,15 @@ describe('gitChangedFiles', () => {
     });
   });
 
-  it.skipIf(process.platform === 'win32')('asks git for no history walk in a repository that is not shallow', () => {
+  it.skipIf(process.platform === 'win32')('asks git for no history walk in a repository that is not shallow, and takes ONE snapshot', () => {
     const log = safePath.join(suite.getTempDir(), 'calls.log');
     shimGit(suite.getTempDir(), `echo "$1" >> "${log}"`);
     put(repo, 'site/edit.md', 'changed\n');
 
     expect(keysOf(gitChangedFiles({ root: repo, base: 'HEAD' }))).toStrictEqual(['site/edit.md:modified']);
-    expect(readFileSync(log, 'utf8').split('\n')).not.toContain('rev-list');
+    const calls = readFileSync(log, 'utf8').split('\n');
+    expect(calls).not.toContain('rev-list');
+    expect(calls.filter((call) => call === 'write-tree')).toHaveLength(1);
   });
 
   it('refuses a repository with no commits yet, saying so', () => {
@@ -564,15 +609,127 @@ describe('gitChangedFiles', () => {
     expect(gitChangedFiles({ root: repo, base: ref })).toMatchObject({ ok: false, kind });
   });
 
-  it('classes no merge base and no working tree as the repository\'s fault, never the base\'s', () => {
+  it('classes no working tree as the repository\'s fault, never the base\'s', () => {
     const bare = safePath.join(suite.getTempDir(), 'not-a-repo-either');
     mkdirSyncReal(bare);
-    runGitOrThrow(['switch', '-q', '--orphan', 'unrelated'], { cwd: repo });
-    put(repo, 'other.md', 'unrelated\n');
-    commitAll(repo, 'unrelated root');
 
     expect(gitChangedFiles({ root: bare, base: 'HEAD' })).toMatchObject({ ok: false, kind: 'repository' });
-    expect(gitChangedFiles({ root: repo, base: 'main' })).toMatchObject({ ok: false, kind: 'repository' });
+  });
+
+  it.skipIf(process.platform === 'win32')('classes a base git cannot resolve as the repository\'s fault when git cannot resolve HEAD either', () => {
+    // The first HEAD probe answers; every `rev-parse --verify` after it fails, as in a damaged repository.
+    const seen = safePath.join(suite.getTempDir(), 'head-seen');
+    shimGit(
+      suite.getTempDir(),
+      `if [ "$1" = "rev-parse" ] && [ "$2" = "--verify" ]; then if [ -e "${seen}" ]; then exit 1; fi; : > "${seen}"; fi`,
+    );
+
+    expect(gitChangedFiles({ root: repo, base: 'main' })).toMatchObject({
+      ok: false,
+      kind: 'repository',
+      reason: expect.stringMatching(/cannot resolve HEAD either/),
+    });
+  });
+
+  it('refuses where git is not on PATH as git\'s failure, saying so', () => {
+    const empty = safePath.join(suite.getTempDir(), 'no-git-here');
+    mkdirSyncReal(empty);
+    vi.stubEnv('PATH', empty);
+
+    expect(gitChangedFiles({ root: repo, base: 'HEAD' })).toMatchObject({
+      ok: false,
+      kind: 'git-failed',
+      reason: expect.stringMatching(/git was not found on PATH/),
+    });
+  });
+
+  describe('a file git is told not to read', () => {
+    // Its deletion would be missing from the answer; skip-worktree is exempt only in a sparse checkout.
+    it.each(['assume-unchanged', 'skip-worktree'])('refuses a %s file that was deleted outside a sparse checkout', (flag) => {
+      runGitOrThrow(['update-index', `--${flag}`, '--', 'site/edit.md'], { cwd: repo });
+      rmSync(safePath.join(repo, 'site/edit.md'));
+
+      expect(gitChangedFiles({ root: repo, base: 'HEAD' })).toMatchObject({
+        ok: false,
+        kind: 'repository',
+        reason: expect.stringContaining(`"site/edit.md" is marked ${flag}`),
+      });
+    });
+
+    it('answers a sparse checkout, whose skip-worktree files are absent from disk by design', () => {
+      // Non-cone, so the top-level `outside.md` is left out and removed from disk.
+      runGitOrThrow(['sparse-checkout', 'set', '--no-cone', '/site/'], { cwd: repo });
+      expect(runGitOrThrow(['ls-files', '-v', '--', 'outside.md'], { cwd: repo })).toBe('S outside.md');
+      put(repo, 'site/edit.md', 'changed\n');
+
+      const result = gitChangedFiles({ root: repo, base: 'HEAD' });
+
+      expect(result.ok).toBe(true);
+      expect(keysOf(result)).toStrictEqual(['site/edit.md:modified']);
+    });
+
+    it('names both flags, and clears both, for a file marked assume-unchanged AND skip-worktree', () => {
+      // Two calls: one `update-index` given both mark options applies only the last.
+      runGitOrThrow(['update-index', '--skip-worktree', '--', 'site/edit.md'], { cwd: repo });
+      runGitOrThrow(['update-index', '--assume-unchanged', '--', 'site/edit.md'], { cwd: repo });
+      expect(runGitOrThrow(['ls-files', '-v', '--', 'site/edit.md'], { cwd: repo })).toBe('s site/edit.md');
+
+      const result = gitChangedFiles({ root: repo, base: 'HEAD' });
+
+      expect(result).toMatchObject({ ok: false, kind: 'repository' });
+      expect(result.ok ? '' : result.reason).toContain('is marked skip-worktree and assume-unchanged');
+      expect(result.ok ? '' : result.reason).toContain('git update-index --no-skip-worktree --no-assume-unchanged -- "site/edit.md"');
+    });
+  });
+
+  // Skipped where the filesystem folds case: there `Docs` and `docs` are one directory.
+  it.skipIf(tmpdirFoldsCase())('answers on a case-sensitive filesystem with sibling directories in another case', () => {
+    put(repo, 'Docs/a.md', 'capitalised sibling\n');
+    put(repo, 'docs/b.md', 'the root\n');
+    commitAll(repo, 'two siblings');
+    put(repo, 'Docs/a.md', 'changed in the sibling\n');
+    put(repo, 'docs/b.md', 'changed in the root\n');
+
+    expect(keysOf(gitChangedFiles({ root: safePath.join(repo, 'docs'), base: 'HEAD' }))).toStrictEqual(['b.md:modified']);
+  });
+
+  // Skipped where the filesystem is case-sensitive: there git's own case handling is moot.
+  it.skipIf(!tmpdirFoldsCase())('refuses a folding filesystem whose repository says core.ignorecase is not true, naming the fix', () => {
+    runGitOrThrow(['config', 'core.ignorecase', 'false'], { cwd: repo });
+
+    expect(gitChangedFiles({ root: repo, base: 'HEAD' })).toMatchObject({
+      ok: false,
+      kind: 'repository',
+      reason: expect.stringMatching(/folds case.*git config core\.ignorecase true/s),
+    });
+  });
+
+  describe('a snapshot that fails', () => {
+    /** A git whose snapshot `add` (any index but the diagnostic's) fails saying nothing. */
+    const FAILING_SNAPSHOT = 'if [ "$1" = "add" ]; then case "$GIT_INDEX_FILE" in *vat-snapshot-probe-*) ;; *) exit 1;; esac; fi';
+
+    it.skipIf(process.platform === 'win32')('calls the cause unknown when the diagnostic add succeeds', () => {
+      shimGit(suite.getTempDir(), FAILING_SNAPSHOT);
+
+      const result = gitChangedFiles({ root: repo, base: 'HEAD' });
+
+      expect(result).toMatchObject({ ok: false, kind: 'git-failed', reason: expect.stringMatching(/cause is unknown/) });
+      expect(result.ok ? '' : result.reason).not.toMatch(/timed out|time limit/);
+    });
+
+    it.skipIf(process.platform === 'win32')('refuses a failure the REAL diagnostic add states, which a dry run would not reach', () => {
+      // A write fault: `--dry-run` writes no object, so it could never surface one.
+      shimGit(
+        suite.getTempDir(),
+        `${FAILING_SNAPSHOT}\nif [ "$1" = "add" ] && [ "$3" != "--dry-run" ]; then echo "error: simulated object write failure" >&2; exit 128; fi`,
+      );
+
+      expect(gitChangedFiles({ root: repo, base: 'HEAD' })).toMatchObject({
+        ok: false,
+        kind: 'repository',
+        reason: expect.stringMatching(/git refused to snapshot.*git said: error: simulated object write failure/s),
+      });
+    });
   });
 
   // Skipped where the filesystem is case-sensitive: a case-only rename on disk is a different directory there.

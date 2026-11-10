@@ -159,6 +159,8 @@ describe('settingsAuditFindings', () => {
     // `location` is the file to open, relative to where the command ran.
     expect(findings[0]?.location).toBe('.claude/settings.json');
     expect(findings[1]?.message).toContain('GITHUB_TOKEN');
-    expect(findings[1]?.location).toBe('../home/dev/.claude/settings.json');
+    // A file outside the run's root is no location: its path closes the message instead.
+    expect(findings[1]).not.toHaveProperty('location');
+    expect(findings[1]?.message).toMatch(/\(\.\.\/home\/dev\/\.claude\/settings\.json\)$/);
   });
 });

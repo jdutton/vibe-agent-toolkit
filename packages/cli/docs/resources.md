@@ -327,8 +327,10 @@ vat resources query 'SELECT path FROM resource_realizations LIMIT 5' --format js
 
 **Options:**
 - `[path]` - Project root to check (defaults to the current directory)
-- `--check <name>` - Run only this check, by its built-in name or its key in `resources.checks`
-- `--base <ref>` - The commit `changed_files` compares this tree with. A check reading
+- `--check <name>` - Run only this check, by its built-in name or its key in `resources.checks`.
+  A lens is evaluated only when the selected statements name one of its relations, so this also
+  skips the cost of lenses only other checks read
+- `--base <ref>` - The ref whose merge base with HEAD `changed_files` compares this tree with. A check reading
   `changed_files` without it fails as `RESOURCE_CHECK_BROKEN` naming the fix; other checks are
   unaffected. `vat validate --base <ref>` forwards it to its checks phase
 - `-v, --verbose` - Print warning and info findings on stderr too; errors are always printed there
@@ -392,6 +394,9 @@ rows the check selected — none included — and whether or not they could be r
 No projection relation has a column named `finding_severity`, `finding_line` or `finding_column`,
 so `SELECT *` or a join never sets one: a table's own `severity`, `line` or `column` is evidence.
 Place a finding by aliasing deliberately — `SELECT r.path, b.line AS finding_line FROM …`.
+`path` is different: many relations carry one, and a `SELECT *` over a join of two of them returns
+two `path` columns, of which a row keeps only one — the rightmost. Name the `path` you mean
+(`SELECT r.path, …`), or the finding is placed at whichever relation the join listed last.
 
 A finding with a `line` but no usable `path` prints its coordinates after the message, never as a
 prefix: `error: <message> [<code>] (line 3, column 5)`.

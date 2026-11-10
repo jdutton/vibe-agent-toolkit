@@ -12,7 +12,7 @@ import { mkdir, readdir } from 'node:fs/promises';
 import { conventionalSuiteProbe, createProjectRegistry, getMarketplaceOutputDir, getPluginSourceDir, isSkillPackagingInputError, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, materializeIssue, packageSkillInto, packagingConfigToPackageOptions, pluginDirInMarketplace, skillNameToFsPath, stagedPathMapper, type ConventionalSuiteProbe, type DeclaredEvalSuite, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
 import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, ExternalPluginSource, ProjectConfig, ResourceRegistry, SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type Finding, type Gate, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { applyTreePlan, compareCodeUnits, direntKindFollowing, everyInOrder, foldedSegment, forEachInOrder, type FsSide, isSingleFsSegment, issueLocation, isTreeChangeResidue, mapInOrder, pathPresent, planTreeChanges, relativeEscapesRoot, safePath, type SideOfPath, sideWithin, toForwardSlash, VatError, withFsFault, writeFileUnder } from '@vibe-agent-toolkit/utils';
+import { applyTreePlan, compareCodeUnits, direntKindFollowing, everyInOrder, foldedSegment, forEachInOrder, type FsSide, isSingleFsSegment, issueLocation, isTreeChangeResidue, mapInOrder, pathPresent, planTreeChanges, safePath, type SideOfPath, sideWithin, toForwardSlash, VatError, withFsFault, writeFileUnder } from '@vibe-agent-toolkit/utils';
 import { onCrawlOutput } from '@vibe-agent-toolkit/utils/crawl';
 import { Command } from 'commander';
 
@@ -31,6 +31,7 @@ import { createLogger } from '../../../utils/logger.js';
 import { copyFileIntoMarketplace, copyTreeIntoMarketplace, writingMarketplace } from '../../../utils/marketplace-io.js';
 import { readPackageJsonOrAbsent } from '../../../utils/package-json.js';
 import { requireInputPath } from '../../../utils/project-root-policy.js';
+import { relativeLocationOrUndefined } from '../../../utils/relativize-paths.js';
 import { withResourcePopulationSource } from '../../../utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig, pluginLocalSkillConfigEntry } from '../../../utils/skill-packaging-config.js';
 import type { PhaseOutcome } from '../../phase-utils.js';
@@ -526,7 +527,7 @@ class SkillPackagingStop extends CommandRefusalError {
 function withPackagingStop(finished: FinishedWork, error: unknown, configDir: string | undefined): FinishedWork {
   if (!(error instanceof SkillPackagingStop)) return finished;
   const relative = configDir === undefined ? undefined : issueLocation(error.skillPath, configDir);
-  const location = relative === undefined || relativeEscapesRoot(relative) ? undefined : relative;
+  const location = relative === undefined ? undefined : relativeLocationOrUndefined(relative);
   return { ...finished, findings: [...finished.findings, ...toFindings([packagingFailedIssue(error.message, location, 'rebuild', error.cause)])] };
 }
 

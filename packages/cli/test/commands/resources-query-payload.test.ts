@@ -262,6 +262,26 @@ describe('the failure message', () => {
     expect(refusedStatement(sql, refusals)).toBeUndefined();
   });
 
+  it.each([
+    ['opening a WITH', 'WITH changed_files AS (SELECT 1 AS path) SELECT path FROM changed_files'],
+    ['RECURSIVE, quoted and with a column list', 'with recursive "Changed_Files"(path) as (select 1) select path from changed_files'],
+    ['after another CTE', 'WITH a AS (SELECT 1), changed_files AS (SELECT 2 AS path) SELECT path FROM changed_files'],
+    ['MATERIALIZED', 'WITH changed_files AS NOT MATERIALIZED (SELECT 1 AS path) SELECT path FROM changed_files'],
+  ])('refuses a CTE named changed_files, %s, as a reserved name — never with the --base remedy', (_what, sql) => {
+    // With or without a base: the name is the relation's, so the CTE either shadows it or trips its refusal.
+    for (const refusals of [new Map(), new Map([['changed_files', { refused: 'Pass --base <ref>.', refusal: 'USAGE_INVALID' as const }]])]) {
+      const error = refusedStatement(sql, refusals);
+
+      expect(refusalCodeOf(error)).toBe('USAGE_INVALID');
+      expect(error?.message).toBe('`changed_files` is a reserved relation name; rename the CTE.');
+    }
+  });
+
+  it('refuses no CTE of another name, nor a statement that only mentions one in a literal', () => {
+    expect(refusedStatement('WITH changes AS (SELECT path FROM resource_realizations) SELECT path FROM changes', new Map())).toBeUndefined();
+    expect(refusedStatement("SELECT 'WITH changed_files AS (' AS x FROM resource_realizations", new Map())).toBeUndefined();
+  });
+
   it('still refuses a statement that reads the relation beside an alias of the same name', () => {
     const refusals = new Map([['changed_files', { refused: 'Pass --base <ref>.', refusal: 'USAGE_INVALID' as const }]]);
 

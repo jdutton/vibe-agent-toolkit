@@ -13,7 +13,7 @@ import {
   LIMIT_DIRECTIONS,
   POPULATION_ORIGINS,
 } from '@vibe-agent-toolkit/resources';
-import { FindingSchema, reportSchema, type Report } from '@vibe-agent-toolkit/schema';
+import { FindingSchema, presenceImplies, reportSchema, type Report } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
 
 import { LENS_POPULATIONS } from '../../utils/lens-population.js';
@@ -83,8 +83,8 @@ export const CHECK_FINDING_SCHEMA = FindingSchema.extend({
  * artifact refuses what the runtime refuses.
  */
 export const CHECK_FINDING_JSON_RULES: readonly Record<string, unknown>[] = [
-  { if: { required: ['evidence'] }, then: { required: ['check'] } },
-  { if: { required: ['reason'] }, then: { required: ['code'], properties: { code: { const: RUN_INTEGRITY_CODE } } } },
+  presenceImplies('evidence', { required: ['check'] }),
+  presenceImplies('reason', { required: ['code'], properties: { code: { const: RUN_INTEGRITY_CODE } } }),
 ];
 
 /**

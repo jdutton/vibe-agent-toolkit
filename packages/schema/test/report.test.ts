@@ -91,6 +91,20 @@ describe('toFindings', () => {
     ];
     expect(toFindings(issues).map((f) => f.severity)).toEqual(['info', 'error']);
   });
+
+  // A validator whose subject lies outside its location root (`vat skills validate ../other`) built
+  // `location: '../other/SKILL.md'`, which the published schema refuses: the run died on its own report.
+  it('publishes a location that cannot be one as no location, its path named in the message', () => {
+    const findings = toFindings([
+      { code: 'LINK_MISSING_TARGET', severity: 'error', message: 'Link target not found', location: '../other/SKILL.md' },
+      { code: 'LINK_MISSING_TARGET', severity: 'error', message: 'Here', location: './docs/a.md' },
+    ]);
+
+    expect(findings).toStrictEqual([
+      { code: 'LINK_MISSING_TARGET', severity: 'error', message: 'Link target not found (../other/SKILL.md)' },
+      { code: 'LINK_MISSING_TARGET', severity: 'error', message: 'Here', location: 'docs/a.md' },
+    ]);
+  });
 });
 
 const LENIENT = { strict: false } as const;

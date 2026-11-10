@@ -377,7 +377,10 @@ describe('a link path is judged component by component', () => {
           `Link target ${issueLocation(safePath.join(root, 'docs', 'open', 'inner', 'target.md'), cwd)} was NOT checked`,
         );
         expect(issue?.message).toContain(`"${issueLocation(safePath.join(root, 'docs', 'open'), cwd)}"`);
-        expect(issue?.location).toBe(issueLocation(safePath.join(root, 'a.md'), cwd));
+        // The temp tree lies outside cwd, so the source's cwd-relative spelling
+        // climbs: it is no `location`, and closes the message instead.
+        expect(issue?.message.endsWith(` (${issueLocation(safePath.join(root, 'a.md'), cwd)})`)).toBe(true);
+        expect(issue).not.toHaveProperty('location');
         expect(issue).not.toHaveProperty('suggestion');
       });
 

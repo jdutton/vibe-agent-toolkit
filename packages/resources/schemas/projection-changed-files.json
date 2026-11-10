@@ -18,7 +18,7 @@
             "renamed",
             "type-changed"
           ],
-          "description": "What happened to it since the base. A move is \"renamed\" whether or not it was `git add`ed; a copy is \"added\". A rename crossing the root's boundary is reported as seen from inside the root: renamed in is \"added\", renamed out is \"deleted\". A file removed from the index but unchanged on disk is no row"
+          "description": "What happened to it since the merge base of `<ref>` and HEAD (`--base <ref>`). A move is \"renamed\" whether or not it was `git add`ed; a copy is \"added\". A rename crossing the root's boundary is reported as seen from inside the root: renamed in is \"added\", renamed out is \"deleted\". A file removed from the index but unchanged on disk is no row"
         },
         "oldPath": {
           "anyOf": [

@@ -23,6 +23,7 @@ import {
 } from '@vibe-agent-toolkit/agent-skills';
 import { validatePlugin } from '@vibe-agent-toolkit/claude-marketplace';
 import {
+  anchoredAt,
   buildReport,
   exitCodeForReport,
   summarizeIssues,
@@ -75,8 +76,7 @@ function checkMarketplaceFiles(marketplacePath: string): ValidationIssue[] {
       issues.push({
         severity: check.severity,
         code: check.code as ValidationIssue['code'],
-        message: `Marketplace is missing a ${check.file} — ${check.verb}`,
-        location: issueLocation(safePath.join(marketplacePath, check.file), marketplacePath),
+        ...anchoredAt(`Marketplace is missing a ${check.file} — ${check.verb}`, issueLocation(safePath.join(marketplacePath, check.file), marketplacePath)),
         fix: `Add a ${check.file} to the marketplace root directory`,
       });
     }

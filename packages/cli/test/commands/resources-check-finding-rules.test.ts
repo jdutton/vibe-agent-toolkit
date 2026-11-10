@@ -5,12 +5,14 @@
  * - `evidence` is a check's row, so a finding carrying it names its `check`.
  * - `reason` explains why a check is broken, so only a `RESOURCE_CHECK_BROKEN` finding carries it.
  *
- * `zod-to-json-schema` drops refinements, so the generator emits both as `if`/`then`; the
+ * `zod-to-json-schema` drops refinements, so the generator emits both through `presenceImplies`; the
  * committed-file cases fail the day it stops.
  */
 
 import { readFileSync } from 'node:fs';
 
+import { createAjvWithUriFormats } from '@vibe-agent-toolkit/resources';
+import { presenceImplies } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
@@ -37,8 +39,8 @@ describe('CHECK_FINDING_SCHEMA', () => {
 
 /** The rules the generator emits on a check finding's items node. */
 const EMITTED_RULES = [
-  { if: { required: ['evidence'] }, then: { required: ['check'] } },
-  { if: { required: ['reason'] }, then: { required: ['code'], properties: { code: { const: 'RESOURCE_CHECK_BROKEN' } } } },
+  presenceImplies('evidence', { required: ['check'] }),
+  presenceImplies('reason', { required: ['code'], properties: { code: { const: 'RESOURCE_CHECK_BROKEN' } } }),
 ];
 
 describe.each(['resources-check', 'orchestrator'])('the committed %s.json', (name) => {
@@ -50,5 +52,15 @@ describe.each(['resources-check', 'orchestrator'])('the committed %s.json', (nam
     const items = document.definitions[name]?.anyOf[0]?.properties.findings.items;
 
     expect(items?.allOf).toStrictEqual(EMITTED_RULES);
+  });
+
+  it('refuses what the runtime refuses, through a real validator', () => {
+    const validate = createAjvWithUriFormats({}).compile({ allOf: EMITTED_RULES });
+    const unnamed = Object.fromEntries(Object.entries(VIOLATION).filter(([key]) => key !== 'check'));
+
+    expect(validate(VIOLATION)).toBe(true);
+    expect(validate({ ...BROKEN, reason: { refusal: 'USAGE_INVALID' } })).toBe(true);
+    expect(validate(unnamed)).toBe(false);
+    expect(validate({ ...VIOLATION, reason: { refusal: 'USAGE_INVALID' } })).toBe(false);
   });
 });

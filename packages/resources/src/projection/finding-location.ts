@@ -17,16 +17,16 @@
  * allow the directory itself when a check selects directory rows.
  */
 
-import { isProjectLocation } from '@vibe-agent-toolkit/schema';
+import { projectLocationOf } from '@vibe-agent-toolkit/schema';
 
 /**
  * The value as a finding's location, when it can be one.
  *
  * @param value - Whatever the row held, undecoded
- * @returns The location, or undefined when the value is not text or is text
+ * @returns The location (a leading `./` dropped), or undefined when the value is not text or is text
  *   that is no location (absolute, drive-prefixed, climbing, empty, or
  *   backslashed where `\` is the platform separator)
  */
 export function findingLocation(value: unknown): string | undefined {
-  return typeof value === 'string' && isProjectLocation(value) ? value : undefined;
+  return typeof value === 'string' ? projectLocationOf(value) : undefined;
 }

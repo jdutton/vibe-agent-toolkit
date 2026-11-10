@@ -16,6 +16,7 @@
  * The caller names the nested carriers it owns instead.
  */
 
+import { projectLocationOf } from '@vibe-agent-toolkit/schema';
 import { isAbsoluteAnyPlatform, issueLocation } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError } from './command-refusal.js';
@@ -89,35 +90,36 @@ export function relativizePathEntries<T extends PathEntry>(
 }
 
 /**
- * A relativized location, or `undefined` when it has no relative spelling.
+ * A relativized path as a finding's `location`, or `undefined` when it cannot be one.
  *
- * On Windows a target on another drive than its root has no path relative to
- * it: `path.relative` hands back the absolute one, which a published finding's
- * `location` refuses — so a run that let it through died on its own document.
- * The lanes that can meet a cross-drive path ask here and degrade (omit the
- * location) or refuse ({@link relativeLocationOrRefuse}).
+ * 🔑 Undefined for EVERY value `isProjectLocation` (the published `location` predicate) refuses —
+ * a path on another drive (Windows `path.relative` hands back the absolute one), a path that
+ * climbs out of the root (an OKF bundle at `../shared-docs`), and the empty string (the root
+ * itself) — so no finding a lane builds can kill its own document. A leading `./` is dropped.
+ * Every location producer that relativizes asks here and degrades: it omits `location` and names
+ * the path in its message.
  *
  * @param location - What `issueLocation` / `safePath.relative` returned
- * @returns The location, unchanged, when it is relative
+ * @returns The location, when it can be one
  */
 export function relativeLocationOrUndefined(location: string): string | undefined {
-  return isAbsoluteAnyPlatform(location) ? undefined : location;
+  return projectLocationOf(location);
 }
 
 /**
- * A relativized location, or the invocation's refusal when it has none.
+ * A relativized PATH (a report's data field, never a finding's `location`: it may climb), or the
+ * invocation's refusal when it has no relative spelling at all.
  *
- * @param location - What `issueLocation` / `safePath.relative` returned
+ * @param relative - What `issueLocation` / `safePath.relative` returned
  * @param root - What it is relative to, for the message
  * @param verb - The command, for the message (`vat agent validate`)
- * @returns The location, unchanged, when it is relative
+ * @returns The path, unchanged, when it is relative
  * @throws {CommandRefusalError} `USAGE_INVALID` when it is absolute (another drive)
  */
-export function relativeLocationOrRefuse(location: string, root: string, verb: string): string {
-  const relative = relativeLocationOrUndefined(location);
-  if (relative !== undefined) return relative;
+export function relativeLocationOrRefuse(relative: string, root: string, verb: string): string {
+  if (!isAbsoluteAnyPlatform(relative)) return relative;
   throw new CommandRefusalError(
     'USAGE_INVALID',
-    `${verb} reports locations relative to ${root}, and ${location} has no path relative to it (it is on another drive). Run from that drive.`,
+    `${verb} reports locations relative to ${root}, and ${relative} has no path relative to it (it is on another drive). Run from that drive.`,
   );
 }

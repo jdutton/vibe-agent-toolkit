@@ -7,7 +7,8 @@
   `RESOURCE_CHECK_EXAMINED_NOTHING` (error, not overridable), whose message names the check and says
   its examined statement counted 0; its own violations are still reported. `allowEmpty: true`
   declares zero legitimate and is published on every entry of that check, whatever it counted;
-  `allowEmpty` without `examined` is refused at config load. An examined statement that fails, or
+  `allowEmpty` without `examined` is refused at config load, and so is `allowEmpty: false` (only
+  `true` means anything; omit the key instead). An examined statement that fails, or
   returns anything but exactly one row with one column holding a non-negative integer (as
   `SELECT COUNT(*)` returns), is `RESOURCE_CHECK_BROKEN`; for the latter the finding's `reason` is
   `{statement: 'examined', rows, columns?, value?, allowed}`. The same holds in `vat validate`'s

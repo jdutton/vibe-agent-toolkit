@@ -53,7 +53,7 @@ import { z } from 'zod';
 
 import { SeveritySchema, type Severity } from './severity.js';
 import { RefusalCodeSchema, type RefusalCode } from './validation-codes.js';
-import { countBySeverity, resultStatus, ValidationIssueSchema, type SeverityCounts, type ValidationIssue } from './validation-issue.js';
+import { anchoredAt, countBySeverity, resultStatus, ValidationIssueSchema, type SeverityCounts, type ValidationIssue } from './validation-issue.js';
 
 export const REPORT_STATUSES = ['ok', 'findings', 'error'] as const;
 
@@ -269,13 +269,20 @@ export const REPORT_ENVELOPE_KEYS = ['status', 'examined', 'findings', 'summary'
  * `validation.allow` decision, and a report that listed a silenced finding
  * under any other name would resurrect it.
  *
+ * 🔑 Every `location` is routed through {@link anchoredAt} — the publication boundary of every
+ * producer that builds an issue as a literal rather than through `createRegistryIssue`: one whose
+ * subject lies outside its root (another drive, a climb, the root itself) is published with no
+ * location and its path named in the message, never as a finding the schema refuses.
+ *
  * @param issues - A validator's issues, severities already resolved
  * @returns The same issues minus the ignored ones, typed as findings
  */
 export function toFindings(issues: readonly ValidationIssue[]): Finding[] {
   const findings: Finding[] = [];
   for (const issue of issues) {
-    if (issue.severity !== 'ignore') findings.push(issue as Finding);
+    if (issue.severity === 'ignore') continue;
+    const { location, message, ...rest } = issue;
+    findings.push({ ...rest, ...(location === undefined ? { message } : anchoredAt(message, location)) } as Finding);
   }
   return findings;
 }

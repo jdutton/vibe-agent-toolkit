@@ -24,6 +24,7 @@
  */
 
 export {
+  gitIsMissing,
   runGit,
   runGitBytes,
   runGitOrThrow,

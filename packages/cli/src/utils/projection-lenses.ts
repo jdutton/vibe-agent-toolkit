@@ -180,6 +180,45 @@ export function relationsNamedBy(sql: string, relations: Iterable<string>): stri
   return [...relations].filter((relation) => namesRelation(words, relation));
 }
 
+/** Identifier runs and the punctuation a CTE definition is read from, in statement order. */
+const CTE_TOKENS = /[a-z0-9_]+|[(),]/gi;
+
+/**
+ * Whether a statement defines a common table expression named `relation` — `WITH relation AS (`
+ * or `, relation AS (`, with an optional `RECURSIVE`, column list, quoting and `[NOT]
+ * MATERIALIZED`. Read from the statement's tokens once comments and literals are blanked, so a
+ * literal or comment spelling one defines nothing.
+ *
+ * @param sql - One statement
+ * @param relation - A SQL relation name
+ * @returns True when the statement defines a CTE of that name
+ */
+export function definesCteNamed(sql: string, relation: string): boolean {
+  const tokens = (withoutCommentsAndLiterals(sql).match(CTE_TOKENS) ?? []).map((token) => token.toLowerCase());
+  const wanted = relation.toLowerCase();
+  return tokens.some((token, at) => token === wanted && opensCte(tokens[at - 1]) && isCteBody(tokens, at + 1));
+}
+
+/** Whether the token before a name opens a CTE definition: `WITH`, `RECURSIVE` or a comma. */
+function opensCte(previous: string | undefined): boolean {
+  return previous === 'with' || previous === 'recursive' || previous === ',';
+}
+
+/** Whether the tokens from `at` read `[(columns)] AS [NOT] [MATERIALIZED] (`. */
+function isCteBody(tokens: readonly string[], at: number): boolean {
+  let next = at;
+  if (tokens[next] === '(') {
+    const close = tokens.indexOf(')', next);
+    if (close === -1) return false;
+    next = close + 1;
+  }
+  if (tokens[next] !== 'as') return false;
+  next += 1;
+  if (tokens[next] === 'not') next += 1;
+  if (tokens[next] === 'materialized') next += 1;
+  return tokens[next] === '(';
+}
+
 /** `AS`, then the identifier it names — bare or opened by a quote — as one run. */
 const ALIAS_AFTER_AS = /\bas(\s+["[`]?)([a-z0-9_]+)/gi;
 

@@ -191,6 +191,13 @@ describe('issuesFromCheckRows', () => {
     expect(describeUninterpretableRows(NAME, refusal)).toContain(`row 2's path =`);
   });
 
+  it.each([['docs/guide.md'], ['./docs/guide.md'], ['././docs/guide.md']])(
+    'reports the path %s at the location docs/guide.md, never with a leading ./',
+    (path) => {
+      expect(locationFor(path)).toBe('docs/guide.md');
+    },
+  );
+
   it('keeps a path whose .. stays inside the root', () => {
     expect(locationFor('docs/../guide.md')).toBe('docs/../guide.md');
   });

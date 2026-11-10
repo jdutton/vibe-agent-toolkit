@@ -44,6 +44,10 @@ describe('the published project-config schema', () => {
     expect(verdicts(withChecks({ [name]: CHECK }))).toStrictEqual({ published: false, runtime: false });
   });
 
+  it('spells its cross-field rules through presenceImplies, never as an if/then conditional', () => {
+    expect(readFileSync(SCHEMA_FILE, 'utf8')).not.toMatch(/"(if|then)":/);
+  });
+
   it('refuses allowEmpty without examined, as loadConfig does', () => {
     expect(verdicts(withChecks({ mine: { ...CHECK, allowEmpty: true } }))).toStrictEqual({ published: false, runtime: false });
   });

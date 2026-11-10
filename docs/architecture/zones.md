@@ -19,8 +19,8 @@ evaluated only when one of the statements a run DECLARED names one of its relati
 claude-context lens runs a population of its own, so an unconditional evaluation would charge every
 `SELECT 1` for it; a statement reaching for a relation nothing evaluated is refused rather than
 answered from the empty table. ✅ A third lens, **changed-files**, produces `changed_files` — the
-files under the root that differ from the commit a run's `--base <ref>` names (working tree plus
-untracked, non-ignored files). It reads git rather than the projection, and it is the one lens that
+files under the root that differ from the merge base of `<ref>` and HEAD, where `<ref>` is the
+run's `--base <ref>` (working tree plus untracked, non-ignored files). It reads git rather than the projection, and it is the one lens that
 can REFUSE: with no `--base`, a ref that names no commit, or a root outside a git working tree it
 writes nothing, so its relation stays absent and the refusal carries the fix (see "A lens is
 evaluated only when…" below).
@@ -122,8 +122,10 @@ Its rows are never cached; any cache added later must key on the commit the base
 the ref typed (`main` moves).
 
 The selector still over-selects on purpose, because a false negative now fails a run that had an
-answer: the scan strips comments and string literals and then matches whole identifiers (a CTE or
-alias sharing a relation's name still selects it, harmlessly), and a caller that declares NO
+answer: the scan strips comments and string literals and then matches whole identifiers (an alias
+sharing a relation's name still selects it, harmlessly; a CTE named after a lens that can refuse —
+`changed_files` — is refused as a reserved relation name, "rename the CTE", since it would either
+shadow the relation or trip its refusal), and a caller that declares NO
 statements gets every lens, because "I cannot say what I will ask" must mean correct rows rather
 than cheap ones.
 
