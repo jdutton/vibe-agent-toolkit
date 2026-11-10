@@ -4,11 +4,16 @@
   the clash and the fix: rename it. The built-in always runs, so the two shared one name in
   `data.checks`, `--check` and every finding's `check`. A copy of a built-in's SQL twin needs a
   name of its own.
-- **A check row's `path` must be a relative POSIX path inside the root, or NULL.** Any other value
-  — not text, absolute, a drive path, a backslash, or a `..` that climbs out of the root — fails the
-  check as `RESOURCE_CHECK_BROKEN` with the structured `reason` (`column: path`), on every platform
-  alike. NULL or absent is no location. `path` is never evidence. A built-in's finding over a file
-  whose name holds a backslash now carries no location.
+- **A check row's `path` must be text or NULL.** Text is the finding's `location` when it is one —
+  a non-empty relative path with `/` separators inside the root (no leading `/`, no drive, no `..`
+  that climbs out, and no `\` on Windows, where it is the separator). Text that is no location
+  (absolute, climbing, empty — `roots.path`, an outside-root closure reference's
+  `realization_conditions.path`) gives a finding with no location at the declared severity, the
+  value kept as `evidence.path`. A value that is not text (a number, a BLOB) fails the check as
+  `RESOURCE_CHECK_BROKEN` with the structured `reason` (`column: path`). NULL or absent is no
+  location and no evidence entry. A published finding's `location` (`ValidationIssueSchema`) now
+  refuses an empty or root-climbing value too: one predicate, `isProjectLocation` in
+  `@vibe-agent-toolkit/schema`, decides both.
 - **A `resources.checks` statement's `finding_severity`, `finding_line` and `finding_column` columns
   now feed the finding** (beside `path`), matched exactly. A value they cannot mean —
   `finding_severity: 'high'`, `finding_line: 0` — fails the check as `RESOURCE_CHECK_BROKEN`. No

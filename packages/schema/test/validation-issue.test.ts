@@ -3,7 +3,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { CODE_REGISTRY } from '../src/validation-codes.js';
-import { createRegistryIssue, ValidationIssueSchema } from '../src/validation-issue.js';
+import { createRegistryIssue, isProjectLocation, ValidationIssueSchema } from '../src/validation-issue.js';
 
 /** A minimal valid issue; each case below varies exactly one anchor field. */
 function issueWith(extras: Record<string, unknown>): Record<string, unknown> {
@@ -20,6 +20,26 @@ describe('ValidationIssueSchema location contract', () => {
     // shipped unnoticed. A Windows-absolute path must be rejected on POSIX CI
     // too, hence the host-independent check.
     expect(ValidationIssueSchema.safeParse(issueWith({ location })).success).toBe(false);
+  });
+
+  it.each([
+    ['empty', ''],
+    ['drive-relative', 'C:foo/SKILL.md'],
+    ['climbing', '../outside/SKILL.md'],
+    ['climbing after a descent', 'docs/../../outside.md'],
+    ['bare parent', '..'],
+  ])('rejects a %s location', (_label, location) => {
+    expect(ValidationIssueSchema.safeParse(issueWith({ location })).success).toBe(false);
+    expect(isProjectLocation(location)).toBe(false);
+  });
+
+  it.each([
+    ['nested', 'skills/foo/SKILL.md'],
+    ['descend then rise inside', 'docs/../README.md'],
+    ['dot-led name', '..hidden/x.md'],
+  ])('accepts a %s location through the one predicate', (_label, location) => {
+    expect(ValidationIssueSchema.safeParse(issueWith({ location })).success).toBe(true);
+    expect(isProjectLocation(location)).toBe(true);
   });
 
   // Gated: a backslash is a separator only on win32; on POSIX `skills\foo\SKILL.md` is one legal filename.

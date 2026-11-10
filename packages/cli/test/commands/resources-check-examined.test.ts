@@ -78,6 +78,7 @@ function runOne(
   const asked: string[] = [];
   const progress: ProgressEntry[] = [];
   const { costs, issues } = runProjectChecks({
+    warn: () => undefined,
     columnsOf: NO_COLUMNS,
     builtins: [],
     checks: { [NAME]: { description: 'Every skill names an owner', sql: VIOLATIONS_SQL, ...check } },

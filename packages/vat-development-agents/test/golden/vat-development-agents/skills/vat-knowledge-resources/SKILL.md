@@ -228,14 +228,16 @@ moved since. `status` is `added`, `modified`, `deleted`, `renamed` or `type-chan
 is `added`, and `git rm --cached` on an unchanged file is no row. A rename across the project root's
 boundary is seen from inside it (in = `added`, out = `deleted`); a nested repository or submodule is
 one row naming its directory. A conflicted file mid-merge is listed as it stands on disk, markers
-and all; a file marked assume-unchanged or skip-worktree is seen as git sees it (an edit to it is
-no row). A statement reading it is **refused** naming the fix, with a code naming the fault:
+and all; a file on disk marked assume-unchanged or skip-worktree refuses (git would hide an edit
+to it — clear the flag with `git update-index --no-assume-unchanged` / `--no-skip-worktree`). A statement reading it is **refused** naming the fix, with a code naming the fault:
 `USAGE_INVALID` for a missing `--base`, a ref that names no commit, or one with more than one merge
 base with `HEAD` (pass one of them); `BACKEND_UNAVAILABLE` when git could not run or finish,
 including a snapshot past its 30 s limit or refused over a nested repository with no commit;
-`INPUT_UNREADABLE` when the repository cannot answer (no commits yet; no merge base; a shallow CI
-clone whose history stops before the merge base — `actions/checkout` `fetch-depth: 0`, or
-`git fetch --deepen=<n>` until it is reachable; a file git cannot read; the root spelled in another
+`INPUT_UNREADABLE` when the repository cannot answer (not a working tree; no commits yet; no merge
+base; a shallow CI clone whose history may hide a nearer merge base — fetch full history, e.g.
+`actions/checkout` `fetch-depth: 0`, or deepen until the history between the merge base and the
+tips is complete; a partial clone missing blobs — `git fetch --refetch`; a snapshot git refuses;
+a flagged file as above; a file git cannot read; the root spelled in another
 case or Unicode normalisation where git ignores case). The exit code does not tell these apart — the code does:
 `vat resources query` publishes it as `error.code`; for a check it is `RESOURCE_CHECK_BROKEN` on
 that check only, carrying `reason: { refusal: <code> }`. `--base` is read only when a statement
@@ -360,7 +362,7 @@ evidence — rendered into the message and published as the finding's `evidence`
 
 | Column | Becomes | NULL or absent |
 |---|---|---|
-| `path` | the finding's `location`: a relative POSIX path inside the root (not absolute, no drive, no backslash, no `..` out of the root — anything else breaks the check, on every platform); never evidence | no location |
+| `path` | text: the finding's `location` when it is one — a non-empty relative path with `/` separators inside the root (no leading `/`, no drive, no `..` out of the root, no `\` on Windows). Text that is no location (absolute, climbing, empty — `roots.path`, say) gives a finding with no location and stays as `evidence.path`; a value that is not text (a number, a BLOB) breaks the check | no location, no evidence entry |
 | `finding_severity` | that row's severity: `error`, `warning` or `info` | the check's declared severity |
 | `finding_line` | the finding's 1-based `line` | no line |
 | `finding_column` | the finding's 1-based `column` — requires `finding_line` | no column |

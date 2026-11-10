@@ -272,17 +272,21 @@ from the index but unchanged on disk (`git rm --cached`) is no row. A rename acr
 boundary is seen from inside: renamed in is `added`, renamed out is `deleted`. A submodule, or a
 nested repository with a commit, is one row naming its directory, listed when the commit it records
 moved; its files are its own. A conflicted file mid-merge is listed as it stands on disk, conflict
-markers and all — the snapshot is the working tree. A file marked assume-unchanged or skip-worktree
-is seen as git sees it: an edit to it yields no row. A statement reading it is refused with the fix —
+markers and all — the snapshot is the working tree. A file on disk marked assume-unchanged or
+skip-worktree refuses the relation, naming it and the flag to clear (`git update-index
+--no-assume-unchanged` / `--no-skip-worktree`): git would hide an edit to it. A statement reading it is refused with the fix —
 never answered with an empty relation — and the refusal code says whose fault it is:
 `USAGE_INVALID` without `--base`, with a ref that names no commit, or with one that has several
 merge bases with `HEAD` (a criss-cross history: pass one of them); `BACKEND_UNAVAILABLE` when git
 did not finish (not on PATH, out of time, more output than VAT reads — compare against a nearer
 base) or could not snapshot the tree (past the snapshot's 30 s limit, or a nested repository with
-no commit); `INPUT_UNREADABLE` when the tree cannot answer — outside a git working tree, no commits
-yet, no merge base, a shallow clone whose history stops before the merge base (fetch full history —
-`actions/checkout` `fetch-depth: 0` — or deepen until it is reachable: `git fetch --deepen=<n>`), a
-file under the root git cannot read, a path under the root that git spells in another case or
+no commit); `INPUT_UNREADABLE` when the tree cannot answer — outside a git working tree (a bare
+repository and a directory inside `.git` included), no commits yet, no merge base, a shallow clone
+whose history may hide a nearer merge base (fetch full history, e.g. `actions/checkout`
+`fetch-depth: 0`, or deepen until the history between the merge base and the tips is complete:
+`git fetch --deepen=<n>`), a partial clone missing blobs the diff needs (`git fetch --refetch`), a
+snapshot git refuses (git's own message quoted), an assume-unchanged or skip-worktree file on disk,
+a file under the root git cannot read, a path under the root that git spells in another case or
 Unicode normalisation on either side of the diff (where git ignores case), a path that is not
 UTF-8, or a listing git returned that VAT cannot read. The exit code does not tell these apart — the code does: `vat
 resources query` exits 2 with it as `error.code`; `vat resources check` and `vat validate` report
@@ -340,18 +344,18 @@ each finding also as a `location:line: severity: message [code]` line on stderr.
   run (an empty corpus, no check ran, an interrupted run) carries none.
 - A declared check's violation carries `evidence`: the row's columns other than the reserved ones,
   in the order SQLite returned them, values as SQLite returned them (a BLOB, or a non-finite number
-  such as `Infinity`, as the text the message shows — so JSON and YAML agree). `path` is never
-  evidence.
+  such as `Infinity`, as the text the message shows — so JSON and YAML agree). `path` is evidence
+  only when its text is no location (below); then the finding has no `location`.
 - A check whose rows could not be read carries `reason` on its `RESOURCE_CHECK_BROKEN` finding:
   `{column, value, row, allowed}` — the reserved column, its value as `evidence` renders it, the
   first bad row (1-based), and what the column may hold. One whose `examined` statement returned no
   count carries `{statement: "examined", rows, columns?, value?, allowed}` (below). A statement that
   failed carries none — unless it read a derived relation that refused (`changed_files` without
   `--base`, say): then `{refusal: <code>}`, the code `vat resources query` exits with for it.
-- ⚠️ The JSON Schema generator cannot express two rules, so the published schema omits them:
-  `evidence` only on a finding that names its `check`, and `reason` only on `RESOURCE_CHECK_BROKEN`.
-  Both hold by construction — only the check's own finding builders set those keys — and the
-  document is not re-parsed against the schema at run time.
+- Two cross-field rules hold for every finding: `evidence` only on one that names its `check`, and
+  `reason` only on `RESOURCE_CHECK_BROKEN`. The document is re-parsed against its schema before it
+  is published, and the committed JSON Schemas (`resources-check.json`, `orchestrator.json`) carry
+  both rules as `if`/`then`, so a consumer validating against them refuses what the run refuses.
 - `data.checks[]` — one entry per check that ran: `name`, `durationSecs`, `rows`, and `broken`,
   `builtin`, `examined`, `allowEmpty`, `examinedNothing: true` and `nearMisses` when they apply
   (below).
@@ -363,9 +367,14 @@ each finding also as a `location:line: severity: message [code]` line on stderr.
 column names are reserved and matched exactly (case-sensitive); every other column is evidence, in
 the message and in the finding's `evidence`:
 
-- `path` — the finding's `location`: a relative POSIX path inside the root. NULL or absent means
-  no location; any other value — not text, absolute, a drive path, a backslash, or a `..` that
-  climbs out of the root — fails the check as `RESOURCE_CHECK_BROKEN`, the same on every platform.
+- `path` — text, the finding's `location` when it is one: a non-empty relative path with `/`
+  separators inside the root (no leading `/`, no drive, no `..` that climbs out, and no `\` on
+  Windows, where it is the separator). Text that is no location — absolute, climbing, empty — gives
+  a finding with no location and keeps the value as `evidence.path`: the projection's own relations
+  hold such values (`roots.path` is absolute; `realization_conditions.path` is `../`-prefixed for an
+  outside-root closure reference), and a check over them reports at its declared severity. A value
+  that is not text (a number, a BLOB) fails the check as `RESOURCE_CHECK_BROKEN`. NULL or absent:
+  no location and no evidence entry.
 - `finding_severity` — that row's severity, exactly `error`, `warning` or `info`; NULL or absent
   means the check's declared severity. A `resources.validation.severity` override on
   `CUSTOM:<name>` still wins.

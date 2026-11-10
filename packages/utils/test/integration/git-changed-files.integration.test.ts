@@ -8,7 +8,7 @@
  * what this repository answers.
  */
 
-import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { delimiter } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -17,8 +17,9 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { gitChangedFiles } from '../../src/git-changed-files.js';
 import { runGit, runGitOrThrow } from '../../src/git-run.js';
 import { mkdirSyncReal, safePath } from '../../src/path-utils.js';
+import { createSymlink, symlinkCapability } from '../../src/test-helpers.js';
 import { gitExecutable } from '../../src/testing/executables.js';
-import { tmpdirFoldsCase } from '../../src/testing/platform-gates.js';
+import { CANNOT_DENY_READS, tmpdirFoldsCase } from '../../src/testing/platform-gates.js';
 import { setupSyncTempDirSuite } from '../../src/testing/temp-dir.js';
 
 /** Enough content that git's rename detection pairs a moved file with its source. */
@@ -44,6 +45,23 @@ function commitAll(repo: string, message: string): void {
 function keysOf(result: ReturnType<typeof gitChangedFiles>): string[] {
   return result.ok ? result.files.map((file) => `${file.path}:${file.status}`) : [];
 }
+
+/**
+ * Put a `git` wrapper first on PATH: `prelude` (POSIX sh) runs first and may answer for git, else
+ * the real git runs. POSIX only — the wrapper is a shell script.
+ *
+ * @returns The wrapper's directory
+ */
+function shimGit(scratch: string, prelude: string): string {
+  const shim = safePath.join(scratch, 'shim-git');
+  mkdirSyncReal(shim);
+  writeFileSync(safePath.join(shim, 'git'), `#!/bin/sh\n${prelude}\nexec "${gitExecutable()}" "$@"\n`, { mode: 0o755 });
+  vi.stubEnv('PATH', `${shim}${delimiter}${process.env['PATH'] ?? ''}`);
+  return shim;
+}
+
+/** The refusal reason a shallow clone's cut-off history earns, its remedy included. */
+const SHALLOW_REMEDY = /fetch-depth: 0.*between the merge base and the tips is complete.*git fetch --deepen=<n>/s;
 
 /**
  * An origin whose `feature` merged a long `side` branch: `Y-Z-A` on main, `A-S1..S4` (side),
@@ -176,8 +194,8 @@ describe('gitChangedFiles', () => {
 
     const result = gitChangedFiles({ root: repo, base: 'main' });
 
-    expect(result.ok).toBe(false);
-    expect(result.ok ? '' : result.reason).toMatch(/"main" shares no history with HEAD.*fetch/s);
+    expect(result).toMatchObject({ ok: false, kind: 'repository' });
+    expect(result.ok ? '' : result.reason).toMatch(/"main" shares no history with HEAD.*Pass a commit HEAD descends from/s);
   });
 
   it('answers mid-merge: a conflicted (UU) file is one modified row, as it stands on disk with its markers', () => {
@@ -224,17 +242,33 @@ describe('gitChangedFiles', () => {
     expect(result.ok ? '' : result.reason).toMatch(/is not inside a git working tree/);
   });
 
+  it('refuses a bare repository and a directory inside .git: neither is a working tree', () => {
+    const bareRepo = safePath.join(suite.getTempDir(), 'bare.git');
+    mkdirSyncReal(bareRepo);
+    runGitOrThrow(['init', '-q', '--bare'], { cwd: bareRepo });
+
+    for (const root of [bareRepo, safePath.join(repo, '.git')]) {
+      expect(gitChangedFiles({ root, base: 'HEAD' })).toMatchObject({
+        ok: false,
+        kind: 'repository',
+        reason: expect.stringMatching(/is not inside a git working tree/),
+      });
+    }
+  });
+
   // Skipped where the filesystem is case-sensitive: there `Site` and `site` are two directories.
   it.skipIf(!tmpdirFoldsCase())('answers, or refuses, from a root spelled in another case — never silently empty', () => {
     put(repo, 'site/edit.md', 'changed\n');
 
     const result = gitChangedFiles({ root: safePath.join(repo, 'SITE'), base: 'HEAD' });
 
-    // git reports the root's prefix in the tracked spelling (macOS) or the typed one; either way
-    // the edit is reported, or the run refuses naming both spellings.
-    expect(result.ok ? result.files.map((file) => file.path) : result.reason).toEqual(
-      result.ok ? ['edit.md'] : expect.stringMatching(/"SITE\/".*"site\/"/s),
-    );
+    // macOS's getcwd answers the on-disk spelling, so git's prefix is `site/` and the edit is
+    // reported; Windows keeps the typed `SITE`, so the run refuses naming both spellings.
+    if (process.platform === 'win32') {
+      expect(result).toMatchObject({ ok: false, kind: 'repository', reason: expect.stringMatching(/"SITE\/".*"site\/"/s) });
+    } else {
+      expect(keysOf(result)).toStrictEqual(['edit.md:modified']);
+    }
   });
 
   // Skipped where the filesystem is case-sensitive: there `DRAFTS` and `drafts` are two directories.
@@ -243,9 +277,12 @@ describe('gitChangedFiles', () => {
 
     const result = gitChangedFiles({ root: safePath.join(repo, 'DRAFTS'), base: 'HEAD' });
 
-    expect(result.ok ? result.files.map((file) => file.path) : result.reason).toEqual(
-      result.ok ? ['new.md'] : expect.stringMatching(/"DRAFTS\/".*"drafts\/"/s),
-    );
+    // As above: macOS answers in the on-disk spelling, Windows refuses naming both.
+    if (process.platform === 'win32') {
+      expect(result).toMatchObject({ ok: false, kind: 'repository', reason: expect.stringMatching(/"DRAFTS\/".*"drafts\/"/s) });
+    } else {
+      expect(keysOf(result)).toStrictEqual(['new.md:added']);
+    }
   });
 
   // Skipped where the filesystem is case-sensitive: there `Docs` and `docs` are two directories.
@@ -300,17 +337,97 @@ describe('gitChangedFiles', () => {
     expect(result.ok ? '' : result.reason).toMatch(/"right" has 2 merge bases with HEAD.*Pass one of them/s);
   });
 
-  it('refuses a snapshot git did not finish as git\'s failure, naming each cause it could be', () => {
-    // `git add --all` refuses a nested repository with no commit checked out; the snapshot reports
-    // no cause, so a time-out (vibe-validate's limit) cannot be told apart from it.
+  it('refuses a snapshot git deterministically refuses as the repository\'s fault, quoting git', () => {
+    // `git add --all` refuses a nested repository with no commit checked out. The snapshot reports
+    // no cause, so one `git add --all --dry-run` asks git for it.
     mkdirSyncReal(safePath.join(repo, 'site/empty-nested'));
     runGitOrThrow(['init', '-q'], { cwd: safePath.join(repo, 'site/empty-nested') });
     put(repo, 'site/empty-nested/x.md', 'x\n');
 
     expect(gitChangedFiles({ root: repo, base: 'HEAD' })).toMatchObject({
       ok: false,
+      kind: 'repository',
+      reason: expect.stringMatching(/git refused to snapshot.*git said: .*site\/empty-nested\/.*does not have a commit checked out/s),
+    });
+  });
+
+  it.skipIf(CANNOT_DENY_READS)('refuses a tree holding a file the OS will not let git read, naming it', () => {
+    put(repo, 'site/secret.md', 'nobody reads this\n');
+    const secret = safePath.join(repo, 'site/secret.md');
+    chmodSync(secret, 0o000);
+    try {
+      expect(gitChangedFiles({ root: repo, base: 'HEAD' })).toMatchObject({
+        ok: false,
+        kind: 'repository',
+        reason: expect.stringMatching(/will not let it read site\/secret\.md/),
+      });
+    } finally {
+      chmodSync(secret, 0o644);
+    }
+  });
+
+  it('reports a copied file as one added row: copies are never detected', () => {
+    copyFileSync(safePath.join(repo, 'site/keep.md'), safePath.join(repo, 'site/copy.md'));
+
+    expect(keysOf(gitChangedFiles({ root: repo, base: 'HEAD' }))).toStrictEqual(['site/copy.md:added']);
+  });
+
+  it.each([
+    ['assume-unchanged', '--assume-unchanged', '--no-assume-unchanged'],
+    ['skip-worktree', '--skip-worktree', '--no-skip-worktree'],
+  ])('refuses a %s file on disk, naming it and the flag to clear', (flag, set, clear) => {
+    runGitOrThrow(['update-index', set, '--', 'site/edit.md'], { cwd: repo });
+    put(repo, 'site/edit.md', 'an edit git is told not to read\n');
+
+    const result = gitChangedFiles({ root: safePath.join(repo, 'site'), base: 'HEAD' });
+
+    expect(result).toMatchObject({ ok: false, kind: 'repository' });
+    expect(result.ok ? '' : result.reason).toContain(`"edit.md" is marked ${flag}`);
+    expect(result.ok ? '' : result.reason).toContain(`git update-index ${clear} -- "edit.md"`);
+  });
+
+  it('refuses a diff a partial clone cannot complete, naming the refetch', () => {
+    const scratch = suite.getTempDir();
+    const origin = safePath.join(scratch, 'promisor-origin');
+    mkdirSyncReal(origin);
+    runGitOrThrow(['init', '-q', '-b', 'main'], { cwd: origin });
+    runGitOrThrow(['config', 'uploadpack.allowFilter', 'true'], { cwd: origin });
+    put(origin, 'old.md', `old.md\n${BODY}`);
+    commitAll(origin, 'old');
+    rmSync(safePath.join(origin, 'old.md'));
+    put(origin, 'keep.md', 'keep\n');
+    commitAll(origin, 'old gone');
+    const clone = safePath.join(scratch, 'promisor-clone');
+    runGitOrThrow(['clone', '-q', '--filter=blob:none', pathToFileURL(origin).href, clone], { cwd: scratch });
+    // The promisor is gone, so the base's never-fetched blob cannot arrive.
+    rmSync(origin, { recursive: true, force: true });
+    // Similar but not identical, so rename detection must read the old blob's bytes.
+    put(clone, 'new.md', `new.md\n${BODY}`);
+
+    expect(gitChangedFiles({ root: clone, base: 'HEAD~1' })).toMatchObject({
+      ok: false,
+      kind: 'repository',
+      reason: expect.stringMatching(/partial clone.*git fetch --refetch.*no --filter/s),
+    });
+  });
+
+  it.skipIf(process.platform === 'win32')('refuses a merge-base git fails, quoting it', () => {
+    shimGit(suite.getTempDir(), 'if [ "$1" = "merge-base" ]; then echo "fatal: simulated merge-base fault" >&2; exit 128; fi');
+
+    expect(gitChangedFiles({ root: repo, base: 'HEAD' })).toMatchObject({
+      ok: false,
+      kind: 'repository',
+      reason: 'git merge-base failed. git said: fatal: simulated merge-base fault',
+    });
+  });
+
+  it.skipIf(process.platform === 'win32')('refuses a shallow probe that answers neither true nor false as git\'s failure', () => {
+    shimGit(suite.getTempDir(), 'if [ "$2" = "--is-shallow-repository" ]; then echo maybe; exit 0; fi');
+
+    expect(gitChangedFiles({ root: repo, base: 'HEAD' })).toMatchObject({
+      ok: false,
       kind: 'git-failed',
-      reason: expect.stringMatching(/could not snapshot.*30 s.*nested repository with no commit.*git add --all --dry-run/s),
+      reason: expect.stringMatching(/--is-shallow-repository answered "maybe", not true or false/),
     });
   });
 
@@ -322,10 +439,14 @@ describe('gitChangedFiles', () => {
   });
 
   describe('a shallow clone', () => {
-    it('refuses a depth-1 clone of a branch: no merge base is there to compare with', () => {
+    it('refuses a depth-1 clone of a branch: the history is cut off before the base and HEAD meet', () => {
       const clone = shallowClone(suite.getTempDir(), 1, ['--no-single-branch']);
 
-      expect(gitChangedFiles({ root: clone, base: 'origin/main' })).toMatchObject({ ok: false, kind: 'repository' });
+      const result = gitChangedFiles({ root: clone, base: 'origin/main' });
+
+      expect(result).toMatchObject({ ok: false, kind: 'repository' });
+      expect(result.ok ? '' : result.reason).toMatch(/shallow clone, and the history it holds is cut off before the base "origin\/main" and HEAD meet/);
+      expect(result.ok ? '' : result.reason).toMatch(SHALLOW_REMEDY);
     });
 
     it('refuses a merge base that a cut-off history could be hiding a nearer one behind, naming the fix', () => {
@@ -336,7 +457,44 @@ describe('gitChangedFiles', () => {
       expect(gitChangedFiles({ root: clone, base: 'origin/main' })).toMatchObject({
         ok: false,
         kind: 'repository',
-        reason: expect.stringMatching(/shallow.*fetch-depth: 0.*git fetch --deepen=<n>/s),
+        reason: expect.stringMatching(SHALLOW_REMEDY),
+      });
+    });
+
+    it('finds the boundary list through a root reached by a symlink or junction into the clone', ({ skip }) => {
+      const capability = symlinkCapability();
+      if (capability === null) {
+        skip('this process cannot create symlinks');
+        return;
+      }
+      const scratch = suite.getTempDir();
+      const clone = shallowClone(scratch, 3, ['--no-single-branch']);
+      runGitOrThrow(['fetch', '-q', '--deepen=1'], { cwd: clone });
+      put(clone, 'sub/note.md', 'untracked\n');
+      const link = safePath.join(scratch, 'linked-sub');
+      createSymlink(capability, safePath.join(clone, 'sub'), link, 'junction');
+
+      // A relative `../.git/shallow` resolved against the LINK names nothing, which read as "not shallow".
+      expect(gitChangedFiles({ root: link, base: 'origin/main' })).toMatchObject({
+        ok: false,
+        kind: 'repository',
+        reason: expect.stringMatching(/cut off from its parents/),
+      });
+    });
+
+    it.skipIf(process.platform === 'win32')('refuses a boundary list it cannot read', () => {
+      const scratch = suite.getTempDir();
+      const clone = shallowClone(scratch, 3, ['--no-single-branch']);
+      runGitOrThrow(['fetch', '-q', '--deepen=1'], { cwd: clone });
+      // A directory where the list should be: a read that fails with EISDIR, not ENOENT.
+      const directory = safePath.join(scratch, 'not-a-file');
+      mkdirSyncReal(directory);
+      shimGit(scratch, `if [ "$3" = "--git-path" ]; then echo "${directory}"; exit 0; fi`);
+
+      expect(gitChangedFiles({ root: clone, base: 'origin/main' })).toMatchObject({
+        ok: false,
+        kind: 'repository',
+        reason: expect.stringMatching(/boundary list .* cannot be read/),
       });
     });
 
@@ -362,11 +520,8 @@ describe('gitChangedFiles', () => {
   });
 
   it.skipIf(process.platform === 'win32')('asks git for no history walk in a repository that is not shallow', () => {
-    const shim = safePath.join(suite.getTempDir(), 'logging-git');
-    const log = safePath.join(shim, 'calls.log');
-    mkdirSyncReal(shim);
-    writeFileSync(safePath.join(shim, 'git'), `#!/bin/sh\necho "$1" >> "${log}"\nexec "${gitExecutable()}" "$@"\n`, { mode: 0o755 });
-    vi.stubEnv('PATH', `${shim}${delimiter}${process.env['PATH'] ?? ''}`);
+    const log = safePath.join(suite.getTempDir(), 'calls.log');
+    shimGit(suite.getTempDir(), `echo "$1" >> "${log}"`);
     put(repo, 'site/edit.md', 'changed\n');
 
     expect(keysOf(gitChangedFiles({ root: repo, base: 'HEAD' }))).toStrictEqual(['site/edit.md:modified']);

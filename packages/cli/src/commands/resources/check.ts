@@ -82,6 +82,7 @@ import { createLogger, type Logger } from '../../utils/logger.js';
 import { EVERY_NOTICE, type NoticeAudience, withNoticeAudience } from '../../utils/operator-notices.js';
 import { assertDirectoryArgument, projectRootOrLoudCwd, projectRootOrNull } from '../../utils/project-root-policy.js';
 import {
+  RelationRefusedError,
   withQueriedProjection,
   type AskProjection,
   type ColumnsOfStatement,
@@ -529,7 +530,7 @@ function brokenCheckFinding(name: string, error: unknown): CheckIssue {
  * same statement — so the fault is machine-readable here too, and not only in the message.
  */
 function withRelationRefusal(issue: CheckIssue, error: unknown): CheckIssue {
-  return error instanceof CommandRefusalError ? { ...issue, reason: { refusal: error.refusal } } : issue;
+  return error instanceof RelationRefusedError ? { ...issue, reason: { refusal: error.refusal } } : issue;
 }
 
 /** A finding about one check, naming it. A finding about the whole RUN carries no `check`. */
@@ -731,7 +732,7 @@ type ConvertingLine = Omit<Extract<ProgressEntry, { kind: 'converting' }>, 'kind
 function convertSelection(
   selection: CheckSelection,
   line: ConvertingLine,
-  sinks: { onProgress: ProgressSink | undefined; warn: ((message: string) => void) | undefined },
+  sinks: { onProgress: ProgressSink | undefined; warn: (message: string) => void },
 ): CheckRowConversion {
   if (selection.converts) sinks.onProgress?.({ kind: 'converting', ...line });
   return selection.report();
@@ -745,7 +746,7 @@ function nearMissesField(selection: CheckSelection): { nearMisses?: string[] } {
 /** Where one unit reports what it is doing: the progress log, and a near miss's warning. */
 interface UnitSinks {
   readonly onProgress: ProgressSink | undefined;
-  readonly warn: ((message: string) => void) | undefined;
+  readonly warn: (message: string) => void;
 }
 
 /** What one unit produced. The refusal is apart so the loop can put it FIRST without copying. */
@@ -792,7 +793,7 @@ function runUnit(unit: CheckUnit, now: () => number, sinks: UnitSinks): UnitResu
   const { rows } = outcome.value;
   // From the statement's columns, so on every record after the statement — broken or not, any row count.
   const nearMisses = nearMissesField(outcome.value);
-  if (outcome.value.nearMisses.length > 0) sinks.warn?.(nearMissWarning(name, outcome.value.nearMisses));
+  if (outcome.value.nearMisses.length > 0) sinks.warn(nearMissWarning(name, outcome.value.nearMisses));
   const examined = examine === undefined
     ? undefined
     : examineUnit(name, examine, now, { durationMs: outcome.durationMs, rows, ...allowEmpty, ...nearMisses }, sinks.onProgress);
@@ -855,7 +856,7 @@ function runUnits(
   only: string | undefined,
   now: () => number,
   onProgress: ProgressSink | undefined,
-  warn: ((message: string) => void) | undefined,
+  warn: (message: string) => void,
 ): { issues: CheckIssue[]; costs: CheckCost[] } {
   const issues: CheckIssue[] = [];
   const costs: CheckCost[] = [];
@@ -1720,8 +1721,11 @@ export function runProjectChecks(options: {
   // where a conditional spread silently dropped a renamed field, because a
   // spread gets no excess-property check.
   onProgress?: ProgressSink | undefined;
-  /** Where a near miss of a reserved row column is said — stderr in production. */
-  warn?: ((message: string) => void) | undefined;
+  /**
+   * Where a near miss of a reserved row column is said — stderr in production. REQUIRED: an
+   * omitted sink would drop the only signal that a misspelt reserved column was read as evidence.
+   */
+  warn: (message: string) => void;
 }): { issues: CheckIssue[]; costs: CheckCost[] } {
   const now = options.now ?? (() => performance.now());
   const { issues, costs } = runUnits(

@@ -583,8 +583,9 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
              or a broken / examined-nothing refusal about it) also carries
              check: <name>; a declared check's violation carries evidence:
              the row's non-reserved columns as SQLite returned them (a BLOB
-             as the message renders it; a path that is not the location
-             stays). Rows it could not read carry reason: {column, value,
+             as the message renders it), plus path when its text is no
+             location (absolute, climbing, empty): that finding has no
+             location. A path that is not text breaks the check. Rows it could not read carry reason: {column, value,
              row, allowed}; an examined statement that returned no count,
              {statement, rows, columns?, value?, allowed}; a statement over
              a derived relation that refused, {refusal: <that code>}. A

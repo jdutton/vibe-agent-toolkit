@@ -40,13 +40,12 @@
 
 import { appendFileSync } from 'node:fs';
 
-import { POPULATION_ORIGINS } from '@vibe-agent-toolkit/resources';
+import { CHECK_REFUSAL_REASON_SCHEMA, POPULATION_ORIGINS } from '@vibe-agent-toolkit/resources';
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
 
 import { LENS_POPULATIONS } from '../../utils/lens-population.js';
 
-import { CHECK_REFUSAL_REASON_SCHEMA } from './check-schema.js';
 import type { SupervisedChild } from './check-supervisor.js';
 
 /**

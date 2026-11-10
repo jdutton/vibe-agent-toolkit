@@ -18,9 +18,9 @@ import {
   type DerivedTableName,
   type PopulationCache,
   type PopulationOutcome,
+  type LensRefusalCode,
   type Projection,
 } from '@vibe-agent-toolkit/resources';
-import type { RefusalCode } from '@vibe-agent-toolkit/schema';
 
 import { evaluateChangedFilesLens } from './changed-files-lens.js';
 import { evaluateClaudeContextLens } from './claude-context-lens.js';
@@ -56,7 +56,7 @@ export interface LensEvaluation {
 export interface LensRefusal {
   readonly refused: string;
   /** Whose fault, as the refusal a statement reading the relation is published under. */
-  readonly refusal: RefusalCode;
+  readonly refusal: LensRefusalCode;
 }
 
 /** What evaluating one lens produced: its rows, or why it has none. */
@@ -169,15 +169,32 @@ export function lensesNamedBy(statements: readonly string[] | undefined): readon
 
 /**
  * The relations among `relations` that one statement names, by the same scan the lens selector
- * runs — comments and literals stripped, whole words, case-folded.
+ * runs — comments, literals and `AS` aliases stripped, whole words, case-folded.
  *
  * @param sql - One statement
  * @param relations - SQL relation names to look for
  * @returns Those it names, in `relations` order
  */
 export function relationsNamedBy(sql: string, relations: Iterable<string>): string[] {
-  const words = wordsIn(withoutCommentsAndLiterals(sql));
+  const words = wordsIn(withoutAliases(withoutCommentsAndLiterals(sql)));
   return [...relations].filter((relation) => namesRelation(words, relation));
+}
+
+/** `AS`, then the identifier it names — bare or opened by a quote — as one run. */
+const ALIAS_AFTER_AS = /\bas(\s+["[`]?)([a-z0-9_]+)/gi;
+
+/**
+ * Blank the identifier directly after every `AS` (case-insensitive): a column or table ALIAS is a
+ * name the statement gives, never a relation it reads, so `SELECT COUNT(*) AS changed_files FROM
+ * resources` must not be refused for naming `changed_files`. A statement that also reads the
+ * relation still names it elsewhere, so this never hides a read. `WITH x AS (` names `x` BEFORE
+ * the `AS`, and is untouched.
+ *
+ * @param sql - One statement, comments and literals already blanked
+ * @returns The statement with each alias blanked to spaces
+ */
+function withoutAliases(sql: string): string {
+  return sql.replaceAll(ALIAS_AFTER_AS, (_match, gap: string, alias: string) => `as${gap}${' '.repeat(alias.length)}`);
 }
 
 /**

@@ -16,7 +16,7 @@ import { describe, expect, it } from 'vitest';
 
 import { ORCHESTRATOR_REPORT_SCHEMA } from '../../src/commands/orchestrator-schema.js';
 import { orchestratorReport } from '../../src/commands/phase-utils.js';
-import type { ProgressEntry } from '../../src/commands/resources/check-progress.js';
+import { parseProgressLog, type ProgressEntry } from '../../src/commands/resources/check-progress.js';
 import { CHECK_REPORT_SCHEMA, type CheckReport } from '../../src/commands/resources/check-schema.js';
 import {
   buildCheckOutputData,
@@ -24,7 +24,7 @@ import {
   runProjectChecks,
 } from '../../src/commands/resources/check.js';
 import { CommandRefusalError } from '../../src/utils/command-refusal.js';
-import type { AskProjection, ColumnsOfStatement } from '../../src/utils/projection-query.js';
+import { RelationRefusedError, type AskProjection, type ColumnsOfStatement } from '../../src/utils/projection-query.js';
 import { NO_COLUMNS } from '../helpers/no-columns.js';
 
 /** The columns of a statement that selects `path` and a near miss of `finding_line`. */
@@ -66,6 +66,7 @@ function publish(
 ): CheckReport {
   const membersEnumerated = options.membersEnumerated ?? POPULATED.membersEnumerated;
   const { issues, costs } = runProjectChecks({
+    warn: () => undefined,
     columnsOf: options.columnsOf ?? NO_COLUMNS,
     builtins: options.builtins ?? [],
     checks,
@@ -110,6 +111,7 @@ function rebuiltFromLog(
 ): CheckReport {
   const progress: ProgressEntry[] = [];
   runProjectChecks({
+    warn: () => undefined,
     columnsOf,
     builtins: [],
     checks,
@@ -119,7 +121,10 @@ function rebuiltFromLog(
     membersEnumerated: POPULATED.membersEnumerated,
     onProgress: (entry) => progress.push(entry),
   });
-  return interruptedReport([{ kind: 'population', ...POPULATED }, ...progress.filter((entry) => entry.kind === 'check')]);
+  // 🔑 Through the log's own text and parser, as a killed run reads it back: an in-memory hand-off
+  // would keep a field the progress schema silently strips.
+  const logged = [{ kind: 'population', ...POPULATED }, ...progress.filter((entry) => entry.kind === 'check')];
+  return interruptedReport(parseProgressLog(logged.map((entry) => JSON.stringify(entry)).join('\n')));
 }
 
 /**
@@ -251,6 +256,7 @@ describe('a killed run rebuilds the check entry a completed run publishes', () =
     const progress: ProgressEntry[] = [];
     let reading = 0;
     const ran = runProjectChecks({
+      warn: () => undefined,
       columnsOf: NO_COLUMNS,
       builtins: [],
       checks: { c: { description: 'd', sql: 'V', examined: 'E', allowEmpty: true } },
@@ -294,7 +300,7 @@ describe('a check whose rows could not be read carries the reason as structure',
 });
 
 /** What `vat resources query` refuses a statement over a relation its run could not evaluate with. */
-const LENS_REFUSED = new CommandRefusalError('INPUT_UNREADABLE', 'changed_files cannot be evaluated: no commits yet');
+const LENS_REFUSED = new RelationRefusedError('INPUT_UNREADABLE', 'changed_files cannot be evaluated: no commits yet');
 
 describe('a check over a relation its run could not evaluate keeps the relation\'s refusal code', () => {
   it.each([
@@ -306,6 +312,13 @@ describe('a check over a relation its run could not evaluate keeps the relation\
     expect(findingsOf(report).map((finding) => [finding['code'], finding['reason']])).toStrictEqual([
       [BROKEN, { refusal: 'INPUT_UNREADABLE' }],
     ]);
+    expectValid(report);
+  });
+
+  it('but a refusal that is not a relation\'s carries no reason: only a lens refusal code fits the field', () => {
+    const report = publish({ other: { description: 'd', sql: 'V' } }, askRows({ V: new CommandRefusalError('CONFIG_INVALID', 'not a relation') }));
+
+    expect(findingsOf(report).map((finding) => [finding['code'], Object.hasOwn(finding, 'reason')])).toStrictEqual([[BROKEN, false]]);
     expectValid(report);
   });
 
@@ -362,6 +375,7 @@ describe('a near miss of a reserved column is published on its check\'s entry', 
   it('is the same on a run killed after the statement, before its entry was filed', () => {
     const progress: ProgressEntry[] = [];
     runProjectChecks({
+      warn: () => undefined,
       columnsOf: NEAR_COLUMNS,
       builtins: [],
       checks: { near: { description: 'd', sql: 'V', examined: 'E' } },

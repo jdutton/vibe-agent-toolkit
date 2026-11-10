@@ -7,12 +7,17 @@
  * initialised.
  */
 
-import { CHECK_FINDING_COLUMNS, LIMIT_DIRECTIONS, POPULATION_ORIGINS } from '@vibe-agent-toolkit/resources';
-import { FindingSchema, RefusalCodeSchema, reportSchema, type Report } from '@vibe-agent-toolkit/schema';
+import {
+  CHECK_EVIDENCE_VALUE_SCHEMA,
+  CHECK_REFUSAL_REASON_SCHEMA,
+  LIMIT_DIRECTIONS,
+  POPULATION_ORIGINS,
+} from '@vibe-agent-toolkit/resources';
+import { FindingSchema, reportSchema, type Report } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
 
 import { LENS_POPULATIONS } from '../../utils/lens-population.js';
-import type { ExaminedDeclaration } from '../../utils/run-integrity.js';
+import { RUN_INTEGRITY_CODE, type ExaminedDeclaration } from '../../utils/run-integrity.js';
 
 /** What one rule cost, as the document publishes it. */
 const PublishedCheckCostSchema = z.object({
@@ -35,47 +40,52 @@ const PublishedCheckCostSchema = z.object({
   examinedNothing: z.literal(true).optional(),
 }).strict();
 
-/** One evidence value; a BLOB arrives as its rendered text. */
-const EvidenceValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
-
-/**
- * Why a check's own output could not be read: a row's reserved column, or an `examined` statement
- * that did not return one count (`rows`, `columns` when a row came back, `value` when one cell did).
- * Or why a statement could not run at all: a derived relation it reads refused, with its code.
- */
-export const CHECK_REFUSAL_REASON_SCHEMA = z.union([
-  z.object({ refusal: RefusalCodeSchema }).strict(),
-  z.object({
-    column: z.enum(CHECK_FINDING_COLUMNS),
-    value: EvidenceValueSchema,
-    row: z.number().int().positive(),
-    allowed: z.string().min(1),
-  }).strict(),
-  z.object({
-    statement: z.literal('examined'),
-    rows: z.number().int().nonnegative(),
-    columns: z.number().int().nonnegative().optional(),
-    value: EvidenceValueSchema.optional(),
-    allowed: z.string().min(1),
-  }).strict(),
-]);
-
 /**
  * A finding of `vat resources check`'s document, also used by the `vat validate` envelope.
- * `check` is absent on a whole-run finding; `evidence` is the row minus reserved columns.
+ * `check` is absent on a whole-run finding; `evidence` is the row minus reserved columns (plus
+ * `path` when its text is no location — see `CheckIssue.evidence`). The evidence value and the
+ * `reason` shapes are `@vibe-agent-toolkit/resources`' own schemas, never respelled here.
+ *
+ * Two cross-field rules, in ONE `superRefine` (a second `.refine` would nest the effects and hide
+ * the object's `shape`): `evidence` names its `check`, and only a `RESOURCE_CHECK_BROKEN` finding
+ * carries a `reason`. Every document is re-parsed against this schema at publish, so both hold at
+ * run time; `zod-to-json-schema` drops a refinement, so the generator emits
+ * {@link CHECK_FINDING_JSON_RULES} into the committed JSON Schemas.
  *
  * ⚠️ One object extended plus a refinement, NOT a union: a union emits every inherited key once
- * per branch. The cost: "evidence needs check" is absent from the emitted JSON Schema.
+ * per branch.
  */
 export const CHECK_FINDING_SCHEMA = FindingSchema.extend({
   check: z.string().min(1).optional(),
-  evidence: z.record(z.string(), EvidenceValueSchema).optional(),
+  evidence: z.record(z.string(), CHECK_EVIDENCE_VALUE_SCHEMA).optional(),
   /** Only on `RESOURCE_CHECK_BROKEN`: output it could not read (what, and what is allowed), or a relation's refusal code. */
   reason: CHECK_REFUSAL_REASON_SCHEMA.optional(),
-}).strict().refine((finding) => finding.evidence === undefined || finding.check !== undefined, {
-  message: 'evidence is a check\'s row, so a finding carrying it must name the check',
-  path: ['evidence'],
+}).strict().superRefine((finding, context) => {
+  if (finding.evidence !== undefined && finding.check === undefined) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'evidence is a check\'s row, so a finding carrying it must name the check',
+      path: ['evidence'],
+    });
+  }
+  if (finding.reason !== undefined && finding.code !== RUN_INTEGRITY_CODE) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `reason explains a broken check, so only a ${RUN_INTEGRITY_CODE} finding carries it`,
+      path: ['reason'],
+    });
+  }
 });
+
+/**
+ * {@link CHECK_FINDING_SCHEMA}'s two refinements as JSON Schema, for the generator to emit on every
+ * published finding node that carries `evidence` and `reason` — the same two rules, so the
+ * artifact refuses what the runtime refuses.
+ */
+export const CHECK_FINDING_JSON_RULES: readonly Record<string, unknown>[] = [
+  { if: { required: ['evidence'] }, then: { required: ['check'] } },
+  { if: { required: ['reason'] }, then: { required: ['code'], properties: { code: { const: RUN_INTEGRITY_CODE } } } },
+];
 
 /**
  * A signed bound on what the derived rows settle, as `@vibe-agent-toolkit/resources`

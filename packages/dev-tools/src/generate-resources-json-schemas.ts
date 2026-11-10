@@ -22,6 +22,7 @@
  * indistinguishably among the tables — see below.
  */
 
+import { BUILTIN_CHECK_NAMES } from '../../resources/src/projection/builtin-check-names.js';
 import { PROJECTION_TABLES } from '../../resources/src/projection/table-registry.js';
 import { OkfConceptFrontmatterSchema } from '../../resources/src/schemas/okf-concept.js';
 import { ProjectConfigSchema } from '../../resources/src/schemas/project-config.js';
@@ -97,8 +98,41 @@ const EXTERNAL_FORMAT_SCHEMAS: readonly EmittedSchemaTarget[] = [
  * never be one the published schema refuses, or the reverse.
  */
 const CONFIG_SCHEMAS: readonly EmittedSchemaTarget[] = [
-  { name: 'project-config', schema: ProjectConfigSchema },
+  { name: 'project-config', schema: ProjectConfigSchema, postProcess: emitCheckRefusals },
 ];
+
+/** A JSON Schema node, as the rendered document holds it. */
+type SchemaNode = Record<string, unknown>;
+
+/**
+ * The node at `path` under `node`, or a throw naming the first step that is missing — a refusal
+ * this generator can no longer place must fail the build, never be dropped from the artifact.
+ */
+function nodeAt(node: SchemaNode, path: readonly string[]): SchemaNode {
+  let at = node;
+  for (const [index, step] of path.entries()) {
+    const next = at[step];
+    if (typeof next !== 'object' || next === null) {
+      throw new Error(`project-config.json has no ${path.slice(0, index + 1).join('.')}: the check refusals cannot be emitted`);
+    }
+    at = next as SchemaNode;
+  }
+  return at;
+}
+
+/**
+ * Emit the two `resources.checks` refusals `ProjectConfigSchema` states as Zod refinements, which
+ * `zod-to-json-schema` drops: a key equal to a built-in check's name (`propertyNames`), and
+ * `allowEmpty` without `examined` (`if`/`then`, the draft-07 spelling of a dependent requirement).
+ * Without them the published artifact accepts a config `loadConfig` refuses.
+ */
+function emitCheckRefusals(document: SchemaNode): void {
+  const checks = nodeAt(document, ['definitions', 'project-config', 'properties', 'resources', 'properties', 'checks']);
+  checks['propertyNames'] = { not: { enum: [...BUILTIN_CHECK_NAMES] } };
+  const entry = nodeAt(checks, ['additionalProperties']);
+  entry['if'] = { required: ['allowEmpty'] };
+  entry['then'] = { required: ['examined'] };
+}
 
 /** Every JSON Schema `packages/resources` ships under `schemas/`. */
 export const RESOURCES_SCHEMA_TARGETS: readonly EmittedSchemaTarget[] = [

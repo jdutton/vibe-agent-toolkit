@@ -241,6 +241,39 @@ describe('changed_files and --base, end to end', () => {
       ]);
     });
 
+    // `--base` is read only when a statement names `changed_files`: a bad ref beside checks that never
+    // read it is no fault, and git is never asked about it (a logging git on PATH proves the second).
+    it.skipIf(process.platform === 'win32')('accepts and never resolves --base when no statement names changed_files', () => {
+      writeChecks(
+        branchDir,
+        '    no-lens:\n      description: nothing violates\n'
+        + "      sql: \"SELECT path FROM resource_realizations WHERE path = 'none'\"\n",
+      );
+      const shim = safePath.join(base, 'logging-git');
+      const log = safePath.join(shim, 'calls.log');
+      fs.mkdirSync(shim, { recursive: true });
+      fs.writeFileSync(log, '', 'utf-8');
+      fs.writeFileSync(
+        safePath.join(shim, 'git'),
+        `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\nexec "${gitExecutable()}" "$@"\n`,
+        { encoding: 'utf-8', mode: 0o755 },
+      );
+
+      const run = vat(branchDir, ['resources', 'check', '--base', 'no-such-ref', '--format', 'json'], {
+        ...env,
+        PATH: `${shim}${delimiter}${process.env['PATH'] ?? ''}`,
+      });
+
+      expect(run.status, run.stderr).toBe(0);
+      expect(run.error).toBeUndefined();
+      expect(brokenFindings(run)).toStrictEqual([]);
+      expect(run.data['lensesEvaluated']).not.toContain('changed-files');
+      const calls = fs.readFileSync(log, 'utf-8');
+      // The shim is the git VAT runs (the population lists the tree through it), so its silence counts.
+      expect(calls).toMatch(/ls-files/);
+      expect(calls).not.toContain('no-such-ref');
+    });
+
     it('evaluates the lens for a check that names changed_files only in its examined statement', () => {
       writeChecks(
         branchDir,

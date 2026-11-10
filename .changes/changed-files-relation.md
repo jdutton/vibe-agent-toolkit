@@ -10,8 +10,9 @@
   no row; a rename across the root's boundary is seen from inside it (in = `added`, out =
   `deleted`). A submodule, or a nested repository with a commit, is one row naming its directory,
   listed when the commit it records moved. A conflicted file mid-merge is listed as it stands on
-  disk, markers and all. A file marked assume-unchanged or skip-worktree is seen as git sees it: an
-  edit to it yields no row. Paths are read from git as bytes; a path under the root that is not
+  disk, markers and all. A file on disk marked assume-unchanged or skip-worktree refuses the
+  relation, naming it and the flag to clear (`git update-index --no-assume-unchanged` /
+  `--no-skip-worktree`), since git would hide an edit to it. Paths are read from git as bytes; a path under the root that is not
   UTF-8 refuses the relation, naming its bytes. Lets a `resources.checks` entry judge
   only what a change touched.
 - **`--base <ref>` on `vat resources query`, `vat resources check` and `vat validate`** (which
@@ -22,9 +23,12 @@
   not run to completion (not on PATH; out of time or over the output VAT reads — compare against a
   nearer base) or could not snapshot the working tree (past the snapshot's 30 s limit, or a nested
   repository with no commit); `INPUT_UNREADABLE` when the repository cannot answer — outside a git
-  working tree, no commits yet, no merge base (unrelated histories), a shallow clone whose history
-  stops before the merge base (fetch full history — `actions/checkout` `fetch-depth: 0` — or
-  `git fetch --deepen=<n>` until it is reachable), a file under the root git cannot read, a listing
+  working tree (a bare repository or a directory inside `.git` included), no commits yet, no merge
+  base (unrelated histories), a shallow clone whose history may hide a nearer merge base (fetch
+  full history, e.g. `actions/checkout` `fetch-depth: 0`, or deepen until the history between the
+  merge base and the tips is complete), a partial clone missing blobs the diff needs
+  (`git fetch --refetch`), a snapshot git refuses (git's message quoted), a flagged file as above,
+  a file under the root git cannot read, a listing
   VAT cannot read, or, where git ignores case, a changed path that spells the root in another case
   or Unicode normalisation (both spellings named). The exit code does not tell these faults apart; the code does — `query`
   publishes it as `error.code`, and for `check` and `validate` it is `RESOURCE_CHECK_BROKEN` on

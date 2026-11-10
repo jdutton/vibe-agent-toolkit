@@ -90,10 +90,11 @@
 
 import { customCheckCode, SEVERITIES, SeveritySchema } from '@vibe-agent-toolkit/schema';
 import type { RefusalCode, Severity, ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { z } from 'zod';
 
 import { EXAMINED_ALLOWED, type ResourceCheck } from '../schemas/project-config.js';
 
-import { findingLocation, LOCATION_ALLOWED } from './finding-location.js';
+import { findingLocation } from './finding-location.js';
 
 /**
  * The code every statement a projection query store REFUSES to run carries:
@@ -134,7 +135,21 @@ type ReservedCheckColumn = (typeof CHECK_FINDING_COLUMNS)[number];
  * An integer beyond JSON's safe range never arrives: the store throws before
  * reading a row.
  */
-type CheckEvidenceValue = string | number | boolean | null;
+export const CHECK_EVIDENCE_VALUE_SCHEMA = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+
+/** One evidence value — see {@link CHECK_EVIDENCE_VALUE_SCHEMA}. */
+type CheckEvidenceValue = z.infer<typeof CHECK_EVIDENCE_VALUE_SCHEMA>;
+
+/**
+ * The refusal codes a derived relation (a lens) can refuse with, and so the only codes a broken
+ * check's `reason.refusal` can carry: the invocation's fault (`USAGE_INVALID` — no `--base`, or a
+ * bad one), the environment's (`BACKEND_UNAVAILABLE` — git did not run) or the input's
+ * (`INPUT_UNREADABLE` — the repository cannot answer).
+ */
+export const LENS_REFUSAL_CODES = ['USAGE_INVALID', 'BACKEND_UNAVAILABLE', 'INPUT_UNREADABLE'] as const satisfies readonly RefusalCode[];
+
+/** One of {@link LENS_REFUSAL_CODES}. */
+export type LensRefusalCode = (typeof LENS_REFUSAL_CODES)[number];
 
 /**
  * A finding produced by one check: a {@link ValidationIssue} that names the
@@ -148,8 +163,10 @@ export interface CheckIssue extends ValidationIssue {
   /** The check's key in `resources.checks`, or a built-in's name. */
   check?: string;
   /**
-   * The row's columns minus the reserved ones (a `path` that did not become the
-   * location stays), in the order SQLite returned them. A declared check's violation only.
+   * The row's columns minus the reserved ones, in the order SQLite returned them. `path` is
+   * reserved too, except when it held text that is no location (absolute, drive-prefixed,
+   * climbing out of the root, empty): then the finding has no `location` and `path` stays here.
+   * A NULL or absent `path` is neither. A declared check's violation only.
    */
   evidence?: Record<string, CheckEvidenceValue>;
   /** Why a check's rows, or its `examined` count, could not be read. Only on that refusal. */
@@ -193,40 +210,53 @@ export type CheckRowConversion =
     readonly allowed: string;
   };
 
-/** A check's uninterpretable rows as a finding states them: which column, which value, which row. */
-interface UninterpretableRowsReason {
-  readonly column: ReservedCheckColumn;
-  /** The value as evidence renders it. */
-  readonly value: CheckEvidenceValue;
-  /** 1-based. */
-  readonly row: number;
-  readonly allowed: string;
-}
+/** A check's uninterpretable rows as a finding states them: which column, which value (as evidence renders it), which 1-based row. */
+const UNINTERPRETABLE_ROWS_REASON_SCHEMA = z.object({
+  column: z.enum(CHECK_FINDING_COLUMNS),
+  value: CHECK_EVIDENCE_VALUE_SCHEMA,
+  row: z.number().int().positive(),
+  allowed: z.string().min(1),
+}).strict();
 
 /**
  * An `examined` statement whose result is not one count: how many rows came back, how many
  * columns (when a row did), and the one value (when exactly one cell did).
  */
-export interface ExaminedShapeReason {
-  readonly statement: 'examined';
-  readonly rows: number;
-  // `| undefined`: the progress log hands this back through Zod, whose optionals admit it.
-  readonly columns?: number | undefined;
-  readonly value?: CheckEvidenceValue | undefined;
-  readonly allowed: string;
-}
+const EXAMINED_SHAPE_REASON_SCHEMA = z.object({
+  statement: z.literal('examined'),
+  rows: z.number().int().nonnegative(),
+  columns: z.number().int().nonnegative().optional(),
+  value: CHECK_EVIDENCE_VALUE_SCHEMA.optional(),
+  allowed: z.string().min(1),
+}).strict();
 
 /**
  * A statement that read a derived relation its run could not evaluate (`changed_files` without
  * `--base`, say): the refusal code the relation earned — the code `vat resources query` exits
  * with for the same statement — so the fault stays machine-readable on the check lane.
  */
-interface RelationRefusedReason {
-  readonly refusal: RefusalCode;
-}
+const RELATION_REFUSED_REASON_SCHEMA = z.object({ refusal: z.enum(LENS_REFUSAL_CODES) }).strict();
+
+/**
+ * 🔑 THE definition of a broken check's `reason`: why its own output could not be read, or why its
+ * statement could not run at all. Every reason type below is inferred from it, and the CLI's
+ * published finding schema and progress log import it, so the shape a producer builds and the
+ * shape a consumer parses cannot drift apart.
+ */
+export const CHECK_REFUSAL_REASON_SCHEMA = z.union([
+  RELATION_REFUSED_REASON_SCHEMA,
+  UNINTERPRETABLE_ROWS_REASON_SCHEMA,
+  EXAMINED_SHAPE_REASON_SCHEMA,
+]);
+
+/** See {@link UNINTERPRETABLE_ROWS_REASON_SCHEMA}. */
+type UninterpretableRowsReason = z.infer<typeof UNINTERPRETABLE_ROWS_REASON_SCHEMA>;
+
+/** See {@link EXAMINED_SHAPE_REASON_SCHEMA}. */
+export type ExaminedShapeReason = z.infer<typeof EXAMINED_SHAPE_REASON_SCHEMA>;
 
 /** Why a check's own output could not be read, or its statement could not run, as its finding's `reason` states it. */
-type CheckRefusalReason = UninterpretableRowsReason | ExaminedShapeReason | RelationRefusedReason;
+type CheckRefusalReason = z.infer<typeof CHECK_REFUSAL_REASON_SCHEMA>;
 
 /**
  * Read an `examined` statement's result as the count it must be: one row, one column, a
@@ -277,6 +307,8 @@ export function describeUninterpretableExamined(name: string, reason: ExaminedSh
 /** One row's reading of a reserved column: a value, nothing said, or a refusal. */
 type Read<T> = { readonly ok: true; readonly value: T | undefined } | { readonly ok: false };
 
+/** What `path` may hold. */
+const PATH_ALLOWED = 'text or NULL';
 /** What `finding_severity` may hold. */
 const SEVERITY_ALLOWED = `one of ${SEVERITIES.join(' | ')}`;
 /** What `finding_line` and `finding_column` may hold. */
@@ -290,8 +322,9 @@ const POSITION_ALLOWED = 'a positive integer';
  * `finding_column` place it. `NULL` or absent means "not said". Anything else they
  * cannot mean refuses the whole check rather than being guessed at — a row graded
  * `'high'` was written by someone who meant something, and reporting it at the
- * declared severity would re-grade it in silence; a `path` that is no location
- * ({@link findingLocation}) would lose its anchor the same way.
+ * declared severity would re-grade it in silence. A `path` that is not text refuses too; text
+ * that is no location ({@link findingLocation}) reports with no location and the value as
+ * evidence — see {@link readLocation}.
  *
  * @param name - The check's key in `resources.checks`
  * @param check - Its declaration
@@ -331,7 +364,7 @@ export function issuesFromCheckRows(
       ...(read.line === undefined ? {} : { line: read.line }),
       ...(read.column === undefined ? {} : { column: read.column }),
       check: name,
-      evidence: evidenceOf(row),
+      evidence: evidenceOf(row, read.pathIsEvidence),
     });
   }
   return { ok: true, issues };
@@ -382,15 +415,17 @@ export function uninterpretableRowsReason(refusal: Extract<CheckRowConversion, {
 }
 
 /**
- * A row's evidence: every column but the reserved ones, in the order SQLite returned them.
+ * A row's evidence: every column but the reserved ones, in the order SQLite returned them — and
+ * `path` too when its text did not become the location, so the value is never lost.
  * `Object.fromEntries` defines own keys, so a column aliased `__proto__` is kept.
  *
  * @param row - One selected row
+ * @param keepPath - Whether `path` held text that is no location
  * @returns The evidence object
  */
-function evidenceOf(row: Record<string, unknown>): Record<string, CheckEvidenceValue> {
+function evidenceOf(row: Record<string, unknown>, keepPath: boolean): Record<string, CheckEvidenceValue> {
   return Object.fromEntries(Object.entries(row)
-    .filter(([column]) => !isReserved(column))
+    .filter(([column]) => !isReserved(column) || (keepPath && column === 'path'))
     .map(([column, value]) => [column, evidenceValue(value)]));
 }
 
@@ -435,6 +470,8 @@ type RowReading =
   | {
     readonly ok: true;
     readonly location: string | undefined;
+    /** `path` held text that is no location, so it is evidence instead. */
+    readonly pathIsEvidence: boolean;
     readonly severity: Severity | undefined;
     readonly line: number | undefined;
     readonly column: number | undefined;
@@ -448,8 +485,9 @@ type RowReading =
  * @returns The four values, or the column that refused
  */
 function readRow(row: Record<string, unknown>): RowReading {
-  const location = readLocation(row['path']);
-  if (!location.ok) return { ok: false, field: 'path', allowed: LOCATION_ALLOWED };
+  const path = row['path'];
+  const location = readLocation(path);
+  if (!location.ok) return { ok: false, field: 'path', allowed: PATH_ALLOWED };
   const severity = readSeverity(row['finding_severity']);
   if (!severity.ok) return { ok: false, field: 'finding_severity', allowed: SEVERITY_ALLOWED };
   const line = readPosition(row['finding_line']);
@@ -460,23 +498,36 @@ function readRow(row: Record<string, unknown>): RowReading {
   if (column.value !== undefined && line.value === undefined) {
     return { ok: false, field: 'finding_column', allowed: 'NULL without a finding_line' };
   }
-  return { ok: true, location: location.value, severity: severity.value, line: line.value, column: column.value };
+  return {
+    ok: true,
+    location: location.value,
+    pathIsEvidence: typeof path === 'string' && location.value === undefined,
+    severity: severity.value,
+    line: line.value,
+    column: column.value,
+  };
 }
 
 /**
- * The `path` column: a location {@link findingLocation} accepts.
+ * The `path` column: TEXT, which anchors the finding when {@link findingLocation} accepts it.
  *
  * A **convention**, deliberately: a check that selects a `path` column gets findings a reader
  * can open, and one that does not — an aggregate, a count — gets a finding with no location
  * rather than a fabricated one.
  *
+ * 🔑 Text that is no location (absolute, climbing, empty) is NOT a refusal: the projection's own
+ * relations hold such values — `realization_conditions.path` carries `../` for an outside-root
+ * closure reference, `roots.path` is absolute — and a natural check over them must report at
+ * its declared severity. Such a finding has no location and keeps the value as evidence. Only a
+ * value that is not text at all (a number, a BLOB) is one the column cannot mean.
+ *
  * @param value - The column's value
- * @returns The location, nothing, or a refusal
+ * @returns The location (or nothing), or a refusal
  */
 function readLocation(value: unknown): Read<string> {
   if (value === undefined || value === null) return { ok: true, value: undefined };
-  const location = findingLocation(value);
-  return location === undefined ? { ok: false } : { ok: true, value: location };
+  if (typeof value !== 'string') return { ok: false };
+  return { ok: true, value: findingLocation(value) };
 }
 
 /**

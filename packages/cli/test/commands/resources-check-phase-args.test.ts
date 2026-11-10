@@ -169,6 +169,7 @@ describe('runResourcesCheckPhase — the child\'s findings on this process\'s st
  */
 async function phaseVerdictFor(check: { examined: string; allowEmpty?: true }, answer: number): Promise<Report<unknown>> {
   const { issues, costs } = runProjectChecks({
+    warn: () => undefined,
     columnsOf: NO_COLUMNS,
     builtins: [],
     checks: { owned: { description: 'owned', sql: 'SELECT path FROM a', ...check } },

@@ -888,12 +888,15 @@ export {
 // The statement itself is the CLI's business — only it knows a storage backend
 // exists — so the rule engine here never opens a database.
 export {
+  CHECK_EVIDENCE_VALUE_SCHEMA,
   CHECK_FINDING_COLUMNS,
+  CHECK_REFUSAL_REASON_SCHEMA,
   checkStatements,
   describeUninterpretableExamined,
   describeUninterpretableRows,
   examinedCount,
   issuesFromCheckRows,
+  LENS_REFUSAL_CODES,
   nearMissesOf,
   PROJECTION_STATEMENT_REFUSED_CODE,
   uninterpretableRowsReason,
@@ -902,6 +905,7 @@ export type {
   CheckIssue,
   CheckRowConversion,
   ExaminedShapeReason,
+  LensRefusalCode,
   NearMiss,
 } from './projection/sql-checks.js';
 

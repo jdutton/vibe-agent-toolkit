@@ -16,17 +16,20 @@
  * selecting nothing is exactly what success looks like, deliberately.
  */
 
+import { sep } from 'node:path';
+
 import { customCheckCode } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
-
 import { BUILTIN_CHECK_NAMES } from '../src/projection/builtin-check-names.js';
 import {
+  CHECK_REFUSAL_REASON_SCHEMA,
   checkStatements,
   describeUninterpretableExamined,
   describeUninterpretableRows,
   examinedCount,
   issuesFromCheckRows,
+  LENS_REFUSAL_CODES,
   nearMissesOf,
   uninterpretableRowsReason,
   type CheckIssue,
@@ -149,20 +152,41 @@ describe('issuesFromCheckRows', () => {
   const locationFor = (path: unknown): string | undefined =>
     issuesOf(NAME, CHECK, [{ path }])[0]?.location;
 
+  /**
+   * 🔑 A text `path` that is no location is NOT a broken check. The projection's own relations
+   * hold such values (`realization_conditions.path` carries `../` for an outside-root closure
+   * reference; `roots.path` is absolute), and a natural check over them must report at its
+   * declared severity. The value moves to evidence so nothing is lost.
+   */
   it.each([
     ['POSIX-absolute', '/etc/passwd'],
     ['drive-letter (even with forward slashes)', 'C:/Users/x/a.md'],
-    // The same rule on every platform: on POSIX a backslash is a filename character, but a
-    // location that means one file on POSIX and another on win32 is no location.
-    ['backslashed', String.raw`docs\guide.md`],
+    ['drive-relative', 'C:a.md'],
     ['root-escaping', '../outside.md'],
     ['mid-path root-escaping', 'docs/../../outside.md'],
     ['zero-length', ''],
-    ['non-text', 7],
+  ])('reports a %s text path with no location, carrying the value as evidence', (_what, path) => {
+    const [issue] = issuesOf(NAME, CHECK, [{ path, n: 1 }]);
+
+    expect(issue).toBeDefined();
+    expect(issue?.location).toBeUndefined();
+    expect(issue?.severity).toBe('error');
+    expect(issue?.evidence).toStrictEqual({ path, n: 1 });
+  });
+
+  // Gated: the backslash rule is per platform — a separator on win32, a filename character on POSIX.
+  it.skipIf(sep === '\\')('keeps a POSIX filename containing a backslash as the location', () => {
+    expect(locationFor(String.raw`docs\guide.md`)).toBe(String.raw`docs\guide.md`);
+  });
+
+  it.each([
+    ['numeric', 7],
+    ['BLOB', new Uint8Array([1])],
+    ['boolean', true],
   ])('refuses the check for a %s path, as it does any other reserved column it cannot read', (_what, path) => {
     const refusal = refusalOf([{ path: 'fine.md' }, { path }]);
 
-    expect(refusal).toMatchObject({ ok: false, row: 2, field: 'path', value: path, rowsSelected: 2 });
+    expect(refusal).toMatchObject({ ok: false, row: 2, field: 'path', rowsSelected: 2 });
     expect(uninterpretableRowsReason(refusal)).toMatchObject({ column: 'path', row: 2, allowed: refusal.allowed });
     expect(describeUninterpretableRows(NAME, refusal)).toContain(`row 2's path =`);
   });
@@ -388,10 +412,14 @@ describe('issuesFromCheckRows — the structured check name and evidence', () =>
     expect(issue?.message).toContain(`digest=${String(issue?.evidence?.['digest'])}`);
   });
 
-  it('never carries path as evidence: it is the location, or NULL', () => {
-    const [issue] = issuesOf(NAME, CHECK, [{ path: null, n: 1 }]);
+  it.each([
+    ['a location', { path: 'a.md', n: 1 }, 'a.md'],
+    ['NULL', { path: null, n: 1 }, undefined],
+    ['absent', { n: 1 }, undefined],
+  ])('never carries path as evidence when it is %s', (_what, row, location) => {
+    const [issue] = issuesOf(NAME, CHECK, [row]);
 
-    expect(issue?.location).toBeUndefined();
+    expect(issue?.location).toBe(location);
     expect(issue?.evidence).toStrictEqual({ n: 1 });
   });
 
@@ -569,5 +597,32 @@ describe('a non-finite number reads as its text everywhere', () => {
 
     expect(read.ok ? undefined : read.reason.value).toBe(text);
     expect(read.ok ? '' : describeUninterpretableExamined('n', read.reason)).toContain(`returned the value "${text}", not`);
+  });
+});
+
+/**
+ * 🔑 A refusal reason has ONE definition: the strict schema, from which every reason type is
+ * inferred. `reason.refusal` is narrowed to the codes a derived relation can refuse with.
+ */
+describe('CHECK_REFUSAL_REASON_SCHEMA', () => {
+  it.each(LENS_REFUSAL_CODES)('admits the lens refusal %s', (refusal) => {
+    expect(CHECK_REFUSAL_REASON_SCHEMA.safeParse({ refusal }).success).toBe(true);
+  });
+
+  it.each(['CONFIG_INVALID', 'RUN_INCOMPLETE', 'RESOURCE_CHECK_BROKEN'])('refuses %s, which no relation refuses with', (refusal) => {
+    expect(CHECK_REFUSAL_REASON_SCHEMA.safeParse({ refusal }).success).toBe(false);
+  });
+
+  it('parses what uninterpretableRowsReason and examinedCount produce', () => {
+    const rows = uninterpretableRowsReason(refusalOf([{ path: 7 }]));
+    const examined = examinedCount([]);
+    if (examined.ok) throw new Error('an empty result is no count');
+
+    expect(CHECK_REFUSAL_REASON_SCHEMA.parse(rows)).toStrictEqual(rows);
+    expect(CHECK_REFUSAL_REASON_SCHEMA.parse(examined.reason)).toStrictEqual(examined.reason);
+  });
+
+  it('is strict', () => {
+    expect(CHECK_REFUSAL_REASON_SCHEMA.safeParse({ refusal: 'USAGE_INVALID', extra: 1 }).success).toBe(false);
   });
 });

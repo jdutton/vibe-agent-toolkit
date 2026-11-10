@@ -178,18 +178,38 @@ describe('caseSpellingRefusal', () => {
     expect(caseSpellingRefusal(recordsOf(z('M', 'été/a.md', 'M', 'étéx/a.md', 'M', 'ete/a.md')), root)).toBeUndefined();
   });
 
+  it('folds as APFS does: case and normalisation, never ß into ss', () => {
+    // `straße` and `strasse` are two names to APFS; an upper-case round trip made them one.
+    expect(caseSpellingRefusal(recordsOf(z('M', 'strasse/a.md')), Buffer.from('straße/', 'utf8'))).toBeUndefined();
+    expect(caseSpellingRefusal(recordsOf(z('M', 'STRASSE/a.md')), Buffer.from('strasse/', 'utf8'))).toMatchObject({ ok: false, kind: 'repository' });
+    expect(caseSpellingRefusal(recordsOf(z('M', `${'été'.normalize('NFD')}/a.md`)), Buffer.from('été/', 'utf8'))).toMatchObject({ ok: false, kind: 'repository' });
+  });
+
   it('has nothing to check at the repository root', () => {
     expect(caseSpellingRefusal(recordsOf(z('M', 'Docs/a.md')), Buffer.alloc(0))).toBeUndefined();
   });
 });
 
 describe('mergeBaseOf', () => {
+  it('names the history a shallow clone cut off when there is no merge base, and how to complete it', () => {
+    expect(mergeBaseOf('main', '', true)).toMatchObject({
+      ok: false,
+      kind: 'repository',
+      reason: expect.stringMatching(/shallow clone.*cut off before the base "main" and HEAD meet.*fetch-depth: 0.*between the merge base and the tips is complete/s),
+    });
+    expect(mergeBaseOf('main', '', false)).toMatchObject({
+      ok: false,
+      kind: 'repository',
+      reason: expect.stringMatching(/"main" shares no history with HEAD/),
+    });
+  });
+
   it('answers the one merge base', () => {
-    expect(mergeBaseOf('main', 'aaa\n')).toStrictEqual({ ok: true, commit: 'aaa' });
+    expect(mergeBaseOf('main', 'aaa\n', false)).toStrictEqual({ ok: true, commit: 'aaa' });
   });
 
   it('refuses more than one as the base\'s fault, naming each and the fix: pass one of them', () => {
-    expect(mergeBaseOf('main', 'aaa\nbbb\n')).toMatchObject({
+    expect(mergeBaseOf('main', 'aaa\nbbb\n', false)).toMatchObject({
       ok: false,
       kind: 'base',
       reason: expect.stringMatching(/"main" has 2 merge bases with HEAD \(aaa, bbb\).*Pass one of them/s),

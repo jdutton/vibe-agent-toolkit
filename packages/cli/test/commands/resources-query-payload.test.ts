@@ -251,6 +251,23 @@ describe('the failure message', () => {
     expect(refusedStatement('SELECT path FROM resource_realizations', refusals)).toBeUndefined();
   });
 
+  it.each([
+    'SELECT COUNT(*) AS changed_files FROM resource_realizations',
+    'SELECT COUNT(*) as Changed_Files FROM resource_realizations',
+    'SELECT COUNT(*) AS "changed_files" FROM resource_realizations',
+    'SELECT COUNT(*) AS\n  [changed_files] FROM resource_realizations',
+  ])('refuses nothing for a column alias spelled like the relation: %s', (sql) => {
+    const refusals = new Map([['changed_files', { refused: 'Pass --base <ref>.', refusal: 'USAGE_INVALID' as const }]]);
+
+    expect(refusedStatement(sql, refusals)).toBeUndefined();
+  });
+
+  it('still refuses a statement that reads the relation beside an alias of the same name', () => {
+    const refusals = new Map([['changed_files', { refused: 'Pass --base <ref>.', refusal: 'USAGE_INVALID' as const }]]);
+
+    expect(refusalCodeOf(refusedStatement('SELECT COUNT(*) AS changed_files FROM changed_files', refusals))).toBe('USAGE_INVALID');
+  });
+
   it('keeps a statement failure\'s own code and never reads a code out of the engine\'s text', () => {
     const engine = new VatError(PROJECTION_STATEMENT_REFUSED_CODE, 'no such table: changed_files');
 

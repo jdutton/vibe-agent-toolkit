@@ -224,6 +224,23 @@ describe('vat resources check', () => {
     expect((doc['summary'] as { errors: number }).errors).toBe(0);
   });
 
+  it('reports a natural check over a relation whose path is no location at its declared severity', () => {
+    // 🔑 `roots.path` is ABSOLUTE by the projection's own design, as `realization_conditions.path`
+    // is `../`-prefixed for an outside-root closure reference. A check selecting either is
+    // natural, and its `path` text that is no location means "no location" — never a broken
+    // check. The value stays as evidence.
+    writeChecks(checkBlock('root-seen', 'The root is listed', 'SELECT path FROM roots', 'warning'));
+
+    const { status, doc } = check('--check', 'root-seen');
+
+    expect(status).toBe(0);
+    const findings = doc['findings'] as { code: string; severity: string; location?: string; evidence?: Record<string, unknown> }[];
+    expect(findings.map((f) => [f.code, f.severity, f.location])).toStrictEqual([['CUSTOM:root-seen', 'warning', undefined]]);
+    const evidencePath = findings[0]?.evidence?.['path'];
+    expect(typeof evidencePath).toBe('string');
+    expect(fs.realpathSync(String(evidencePath))).toBe(fs.realpathSync(projectDir));
+  });
+
   it('FAILS a check whose SQL will not run, rather than skipping it', () => {
     // 🔑 The property this verb lives or dies on. VAT ships no schema version, so
     // a renamed column simply breaks a check. Logging and carrying on would make

@@ -53,6 +53,7 @@ import {
   buildResourceProjection,
   PROJECTION_TABLES,
   splitProjectionByScope,
+  type LensRefusalCode,
   type PopulationOutcome,
   type Projection,
 } from '@vibe-agent-toolkit/resources';
@@ -299,6 +300,19 @@ export function describedFailure(sql: string, error: unknown, absent: ReadonlySe
 }
 
 /**
+ * A statement refused because it names a derived relation its lens could not evaluate. Its
+ * `refusal` is narrowed to {@link LensRefusalCode}, so the check lane can publish it as a broken
+ * check's `reason.refusal` and the type proves the value is one that field admits.
+ */
+export class RelationRefusedError extends CommandRefusalError {
+  declare readonly refusal: LensRefusalCode;
+
+  constructor(refusal: LensRefusalCode, message: string) {
+    super(refusal, message);
+  }
+}
+
+/**
  * The refusal for a statement that names a relation its lens REFUSED to produce — decided from
  * the relations the statement names, before it runs, so the lens's code and fix reach the
  * operator whatever else in the statement SQLite would have stopped at first.
@@ -307,11 +321,11 @@ export function describedFailure(sql: string, error: unknown, absent: ReadonlySe
  * @param refusals - Each refused lens's refusal, by the SQL name of a relation it owns
  * @returns The refusal, or undefined when the statement names no refused relation
  */
-export function refusedStatement(sql: string, refusals: ReadonlyMap<string, LensRefusal>): CommandRefusalError | undefined {
+export function refusedStatement(sql: string, refusals: ReadonlyMap<string, LensRefusal>): RelationRefusedError | undefined {
   const [relation] = relationsNamedBy(sql, refusals.keys());
   const refused = relation === undefined ? undefined : refusals.get(relation);
   if (relation === undefined || refused === undefined) return undefined;
-  return new CommandRefusalError(
+  return new RelationRefusedError(
     refused.refusal,
     `This statement reads ${relation}, a derived relation that could not be evaluated for this run: ${refused.refused}`,
   );

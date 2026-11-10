@@ -1283,6 +1283,7 @@ describe('a run stopped while a check\'s rows were being converted', () => {
     const seen: ProgressEntry[] = [];
     const stall = new Error('killed inside the conversion');
     expect(() => runProjectChecks({
+      warn: () => undefined,
       columnsOf: NO_COLUMNS,
       builtins: [],
       checks: { 'big-select': { description: 'big', sql: 'SELECT path FROM a' } },
@@ -1361,6 +1362,7 @@ describe('a run stopped while a check\'s examined statement was running', () => 
     const seen: ProgressEntry[] = [];
     const stall = new Error('killed inside the examined statement');
     expect(() => runProjectChecks({
+      warn: () => undefined,
       columnsOf: NO_COLUMNS,
       builtins: [],
       checks: { counted: { description: 'counted', sql: 'SELECT path FROM a', examined: 'SELECT path FROM b' } },
@@ -1400,6 +1402,7 @@ describe('a killed run rebuilds a check that completed broken exactly as a compl
     return [{ path: 'b.md' }];
   };
   const run = (onProgress?: (entry: ProgressEntry) => void): ReturnType<typeof runProjectChecks> => runProjectChecks({
+    warn: () => undefined,
     columnsOf: NO_COLUMNS,
     builtins: [], checks: BROKEN_CHECKS, only: undefined, ask, validation: undefined, membersEnumerated: 2, now: () => 0, onProgress,
   });

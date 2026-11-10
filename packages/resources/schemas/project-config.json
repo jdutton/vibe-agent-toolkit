@@ -896,9 +896,28 @@
                   "sql"
                 ],
                 "additionalProperties": false,
-                "description": "A SQL assertion over the resource projection"
+                "description": "A SQL assertion over the resource projection",
+                "if": {
+                  "required": [
+                    "allowEmpty"
+                  ]
+                },
+                "then": {
+                  "required": [
+                    "examined"
+                  ]
+                }
               },
-              "description": "Named SQL assertions over the resource projection, run by `vat resources check`. Each key becomes a CUSTOM:<name> validation code. A key may not be a built-in check's name."
+              "description": "Named SQL assertions over the resource projection, run by `vat resources check`. Each key becomes a CUSTOM:<name> validation code. A key may not be a built-in check's name.",
+              "propertyNames": {
+                "not": {
+                  "enum": [
+                    "claude-rule-glob-inert",
+                    "claude-rule-frontmatter-invalid",
+                    "claude-rule-link-unchecked"
+                  ]
+                }
+              }
             }
           },
           "additionalProperties": false,

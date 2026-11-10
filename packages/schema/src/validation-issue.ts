@@ -138,14 +138,35 @@ export function isCustomCheckCode(code: string): code is CustomCheckCode {
 /** Full code space: registry codes (overridable) + info codes + structural/non-overridable codes + user checks. */
 export type ValidationIssueCode = IssueCode | InfoCode | NonOverridableCode | CustomCheckCode;
 
+/** A drive prefix (`C:` or `C:foo`), which is never project-relative however POSIX it looks. */
+const DRIVE_PREFIX = /^[A-Za-z]:/;
+
+/** What a `location` may be — the one spelling every refusal of one states. */
+export const PROJECT_LOCATION_RULE
+  = String.raw`a non-empty relative path with / separators inside the root (no leading /, no drive, no climbing .., and no \ where \ is the platform separator)`;
+
 /**
- * Host-independent absolute-path test, mirroring `isAbsoluteAnyPlatform` in
- * `@vibe-agent-toolkit/utils`. Inlined because `schema` is the bottom of
- * the dependency graph and carries no workspace runtime dependencies; a
- * Windows-absolute `location` must be rejected even when validating on POSIX CI.
+ * 🔑 **THE location predicate** — the one answer to "may this string be an
+ * issue's `location`?". {@link ValidationIssueSchema} refines with it and the
+ * resources projection's `findingLocation` (a row value → a finding's location)
+ * calls it, so a value one lane emits is a value the other parses. Inlined here,
+ * not in `utils`, because `schema` is the bottom of the dependency graph.
+ *
+ * A location is non-empty, relative (no leading `/`, no drive prefix — checked
+ * on every host, so a Windows-absolute value is refused on POSIX CI too), and
+ * does not climb out of the root. A backslash is refused only where it IS the
+ * platform separator (win32): there it is a separator a producer forgot to
+ * convert, while on POSIX it is a legal filename character and the projection
+ * holds real files named with one (`docs/x\y.md` is one file).
+ *
+ * @param value - A candidate location
+ * @returns Whether it may be a `location`
  */
-function isAbsoluteAnyPlatform(p: string): boolean {
-  return path.posix.isAbsolute(p) || path.win32.isAbsolute(p);
+export function isProjectLocation(value: string): boolean {
+  if (value.length === 0 || value.startsWith('/') || DRIVE_PREFIX.test(value)) return false;
+  if (path.sep === '\\' && value.includes('\\')) return false;
+  const normalized = path.posix.normalize(value);
+  return normalized !== '..' && !normalized.startsWith('../');
 }
 
 export const ValidationIssueSchema = z.object({
@@ -153,14 +174,7 @@ export const ValidationIssueSchema = z.object({
   severity: IssueSeveritySchema,
   message: z.string(),
   location: z.string()
-    .refine((v) => !isAbsoluteAnyPlatform(v), {
-      message: 'location must be a project-relative POSIX path, not an absolute path',
-    })
-    // Win32 only: there a backslash is a separator a producer forgot to convert;
-    // on POSIX it is a legal filename character (`docs/x\y.md` is one file).
-    .refine((v) => path.sep !== '\\' || !v.includes('\\'), {
-      message: 'location must use forward slashes, not backslashes',
-    })
+    .refine(isProjectLocation, { message: `location must be ${PROJECT_LOCATION_RULE}` })
     .optional(),
   line: z.number().int().positive().optional(),
   column: z.number().int().positive().optional(),
