@@ -89,7 +89,8 @@ design survives the worktree it was written in.
 
 - **[Fact Extractors](./architecture/fact-extractors.md)** — the accepted, not-yet-built decision
   record for the fact store and the extractor contract, with its living
-  [hazard register](./architecture/fact-extractors-hazard-register.md).
+  [hazard register](./architecture/fact-extractors-hazard-register.md) and the measured
+  [parse limits](./architecture/fact-extractors-limits.md).
 - **[Result Envelope Design](./result-envelope-design.md)** — the complete specification for VAT
   agent result envelopes: error constants, observability fields, and retry semantics.
 - **[Skill-Test Eval Runner (2026-06-24)](./research/2026-06-24-skill-test-eval-runner-design.md)**

@@ -68,6 +68,7 @@ import { fillLinkFacts, fragmentIndex, judgeLink, resolveLinkEntries, unreadable
 import { parserKindForMimeType } from './mime-type.js';
 import { ParseCache, type ParseCacheStats, vatCacheRoot } from './parse-cache.js';
 import { ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable } from './parse-dispatcher.js';
+import { isParseLimitError, type ParseLimitError } from './parse-limits.js';
 // A value import, and acyclic: `crawl-source.ts` reaches only `utils` and a
 // type from `realizations.ts`, never back into the registry. The remedy is
 // shared so the walk lane refuses with the projection's exact sentence.
@@ -213,7 +214,14 @@ export interface UnreadableResource {
 type PreparedResource =
   | { outcome: 'admitted'; resource: ResourceMetadata }
   | { outcome: 'unreadable'; filePath: string; reason: string; code?: string; error: Error }
+  | { outcome: 'parse-limited'; filePath: string; error: ParseLimitError }
   | { outcome: 'failed'; error: unknown };
+
+/** A file whose parse was stopped at a limit, so it was not admitted this run. */
+interface ParseLimitedResource {
+  filePath: string;
+  error: ParseLimitError;
+}
 
 export class DuplicateResourceIdError extends VatError {
   readonly id: string;
@@ -452,7 +460,7 @@ export interface ResourceRegistryOptions {
   /**
    * How, and whether, to move this registry's parsing off the main thread.
    *
-   * Defaults are what a command gets — ON, unless `VAT_PARSE_POOL=0` — and the
+   * Defaults are what a command gets — there is no off switch — and the
    * meaning of every field is {@link ParsePoolPolicy}'s, shared verbatim with
    * the projection lane so the two cannot reach different verdicts about a
    * switch that has already been measured once.
@@ -808,6 +816,14 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private unreadableResources: UnreadableResource[] = [];
 
   /**
+   * Files whose parse was stopped at a limit (`parse-limits.ts`), so they were
+   * not admitted this run. Cleared by clear(). Surfaced as
+   * RESOURCE_PARSE_LIMIT_EXCEEDED issues in validate(). Nothing about them is
+   * stored, so the next run parses them again.
+   */
+  private parseLimitedResources: ParseLimitedResource[] = [];
+
+  /**
    * Population-time conditions the population source handed over with the
    * paths — the projection's `realization_conditions` for the extents the lane
    * registered. Empty on the walk lane, which has no projection. Cleared by
@@ -1022,10 +1038,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   async addResource(filePath: string): Promise<ResourceMetadata> {
     const startedAt = crawlTimingStart();
-    // Its own dispatcher, which can never activate: one document cannot clear
-    // the miss threshold, so `shutdown()` closes nothing and the width stays 1.
-    // Built anyway rather than special-cased, so this route and `addResources`
-    // reach the parser through exactly one code path.
+    // Its own dispatcher, so this route and `addResources` reach the parser
+    // through exactly one code path: a miss parses in a bounded one-shot worker
+    // (I8), and `shutdown()` closes it. A hit spawns nothing.
     const dispatcher = new ParseDispatcher(this.parseCache(), this.parsePoolPolicy);
     try {
       const prepared = await this.prepareAdmission(filePath, dispatcher);
@@ -1071,6 +1086,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     try {
       return { outcome: 'admitted', resource: await this.readAndKey(filePath, dispatcher) };
     } catch (error) {
+      // A parse stopped at a limit is the run's, not the file's or VAT's: a
+      // finding, so one runaway document never fails the whole crawl (ADR I8).
+      if (isParseLimitError(error)) return { outcome: 'parse-limited', filePath, error };
       if (isReadFailure(error)) {
         // A file the crawl handed us that we cannot read. Recorded, not thrown:
         // previously this terminated `vat resources scan|validate` and `vat
@@ -1261,6 +1279,10 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   private emitPreparedResource(prepared: PreparedResource): ResourceMetadata | undefined {
     if (prepared.outcome === 'failed') throw prepared.error;
+    if (prepared.outcome === 'parse-limited') {
+      this.parseLimitedResources.push({ filePath: prepared.filePath, error: prepared.error });
+      return undefined;
+    }
     if (prepared.outcome === 'unreadable') {
       this.unreadableResources.push({
         filePath: prepared.filePath,
@@ -1725,6 +1747,21 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
+   * Emit RESOURCE_PARSE_LIMIT_EXCEEDED errors for parses stopped at a limit
+   * during addResources(), each naming the file and the limit.
+   */
+  private collectParseLimitedErrors(): ValidationIssue[] {
+    return this.parseLimitedResources.map(({ filePath, error }) => {
+      const where = issueLocation(filePath, locationRoot(this.baseDir));
+      return createRegistryIssue(
+        'RESOURCE_PARSE_LIMIT_EXCEEDED',
+        `'${where}' was enumerated but its parse was stopped at its ${error.limit} limit (${error.bound}), so it was skipped and is absent from every count in this report. Nothing was stored for it: the next run parses it again.`,
+        { location: where },
+      );
+    });
+  }
+
+  /**
    * Emit RESOURCE_UNREADABLE errors for reads that failed during addResources().
    *
    * The message states that the file was **skipped**, because the consequence
@@ -2141,6 +2178,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       ...this.collectUnresolvedReferenceIssues(),
       ...this.collectDuplicateIdErrors(),
       ...this.collectUnreadableResourceErrors(),
+      ...this.collectParseLimitedErrors(),
       ...this.collectPopulationConditionIssues(),
     );
 
@@ -2580,6 +2618,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     this.resourcesByChecksum.clear();
     this.duplicateIdCollisions = [];
     this.unreadableResources = [];
+    this.parseLimitedResources = [];
     this.populationConditions = [];
     // The resolver's conflict accumulator belongs to the files it typed; a fresh
     // crawl types afresh and must not re-report the previous population's.

@@ -678,6 +678,28 @@ shim for a renamed thing — it is the one backend's own name. An unrecognised v
 leaves the store selected rather than refusing: there is one backend, so a refusal has no
 alternative to offer. The day a second exists is the day that variable becomes an enumeration.
 
+### 3.8 ✅ Every parse is bounded — one route, in a worker, under limits
+
+Both crawl lanes reach the parser through one `ParseDispatcher`, and every cache miss is parsed in a
+worker thread of the parse pool (`parse-pool.ts`). There is no in-process route: `VAT_PARSE_POOL=0`
+and the below-threshold main-thread parse are gone, because a parse on the run's own thread cannot be
+stopped ([Fact Extractors](./fact-extractors.md) I8). Below the activation threshold the pool runs
+one job at a time; `VAT_PARSE_POOL_SIZE` and `VAT_PARSE_POOL_MIN_MISSES` still size it.
+
+Each job runs under `ParseLimits` (`parse-limits.ts`): wall clock (`timeMs`, which includes a cold
+worker's first parser load), heap (`heapMb`), stack depth (`stackMb`), output rows and bytes
+(`outputRows`, `outputBytes`, checked in the worker before anything is cached) and input size
+(`inputBytes`, refused before any worker is asked). A breach kills the worker, the pool replaces it,
+and the job rejects with `ParseLimitError`. The projection lane refuses that one blob
+(`BLOB_PARSE_LIMIT_EXCEEDED`, a per-run code `storableBlobFacts` never stores); the registry lane
+reports `RESOURCE_PARSE_LIMIT_EXCEEDED` and admits every other file. Nothing about a breach persists
+(I6): no cache entry, no stored condition, so the next run parses the file again.
+
+⚠️ A process-wide `--max-old-space-size` (in `NODE_OPTIONS` or `execArgv`) overrides a worker's
+`resourceLimits`, so the heap ceiling is also enforced by sampling the worker's heap every 50 ms.
+The defaults, how they were measured and the headroom rule are in
+[Fact Extractors — Parse Limits](./fact-extractors-limits.md).
+
 ## 4. Symlinks
 
 Detection is free in the git lane: `git ls-files -s` (and the write-tree manifest built from it)

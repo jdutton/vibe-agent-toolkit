@@ -485,6 +485,13 @@ export const CODE_REGISTRY = {
     'Repoint or delete the dangling symlink, restore the missing target, or fix the permissions. Set severity.RESOURCE_UNREADABLE to warning if a corpus is expected to contain unresolvable entries.',
     'resource_unreadable',
   ),
+  RESOURCE_PARSE_LIMIT_EXCEEDED: entry(
+    'finding',
+    'error',
+    'A file the crawl enumerated was not admitted because its parse was stopped at one of its limits — wall clock, heap, stack, output rows or bytes, or input size — so it is absent from every count in the report. Nothing was stored for it; the next run parses it again.',
+    'Find what makes the named file pathological to parse (deep nesting, a huge generated document) and simplify or exclude it. A limit breach on an ordinary file under heavy machine load clears on the next run.',
+    'resource_parse_limit_exceeded',
+  ),
   // The two population-time conditions `vat resources validate` surfaces off
   // the projection's `realization_conditions` table (and, for the MIME
   // conflict, off the registry's own resolver on the walk lane). Default

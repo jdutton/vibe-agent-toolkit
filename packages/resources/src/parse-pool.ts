@@ -99,6 +99,12 @@ import { parseFrontmatterSource } from './frontmatter-source.js';
 import type { ParseResult } from './link-parser.js';
 import type { DocumentParserKind } from './mime-type.js';
 import {
+  type ParseLimitName,
+  type ParseLimits,
+  ParseLimitError,
+  resolveParseLimits,
+} from './parse-limits.js';
+import {
   type ParseThreadTiming,
   parseTimingStart,
   recordThreadTiming,
@@ -164,6 +170,24 @@ const DEFAULT_POOL_SIZE_CAP = 4;
  * hung `shutdown()` would hang the command.
  */
 const GRACEFUL_EXIT_TIMEOUT_MS = 5000;
+
+/**
+ * How often the parent samples a busy worker's heap against its limit.
+ *
+ * The backstop for `resourceLimits`, which a process-wide
+ * `--max-old-space-size` (in `NODE_OPTIONS`, as CI often sets it) silently
+ * overrides: it is a V8 global flag, and measured on Node 26, a worker given a
+ * 48 MiB limit under `--max-old-space-size=4096` reports a 4,192 MiB heap limit
+ * and allocates until the wall clock stops it. `Worker.getHeapStatistics()`
+ * answers from the worker's own isolate even mid-way through a synchronous
+ * parse (measured: 1 ms), so the limit holds whatever flags the process runs
+ * under. The sample interval bounds how far past the limit a job can allocate
+ * before it is stopped.
+ */
+const HEAP_SAMPLE_INTERVAL_MS = 50;
+
+/** Bytes per MiB, to compare a heap sample against a limit stated in MiB. */
+const BYTES_PER_MIB = 1_048_576;
 
 /** The parse job that crosses to a worker. Plain data — see property 2 above. */
 interface ParseWorkerParseRequest {
@@ -263,6 +287,7 @@ export type ParseWorkerResponse =
   | { id: number; facts: ParseWireFacts }
   | { id: number; stored: string }
   | { id: number; failure: ParseWorkerFailure }
+  | { id: number; breach: ParseLimitName }
   | ParseWorkerTimingReport;
 
 /**
@@ -322,7 +347,10 @@ export interface ParsePool {
    * @returns The same `ParseResult` the in-process parser returns, `content` included
    * @throws If the parser module cannot be loaded, if the pool is shut down, or
    *   if the worker holding the job dies. A document that merely fails to parse
-   *   is NOT an error — it comes back in `parseErrors`.
+   *   is NOT an error — it comes back in `parseErrors`. And a
+   *   {@link ParseLimitError} when the job breached one of its limits (time,
+   *   heap, stack, output rows or bytes, input size): the worker is killed and
+   *   replaced, nothing is cached, and the caller refuses the file (I6, I8).
    */
   parse(kind: DocumentParserKind, content: string, byteLength: number): Promise<ParseResult>;
   /**
@@ -358,7 +386,7 @@ export interface ParsePool {
    * @returns `null` when the worker stored the entry and the caller should read
    *   its own cache, or a full `ParseResult` when the worker could NOT store and
    *   sent the facts instead. Never both.
-   * @throws On the same three conditions {@link ParsePool.parse} throws on.
+   * @throws On the same conditions {@link ParsePool.parse} throws on.
    */
   parseIntoCache(
     kind: DocumentParserKind,
@@ -402,12 +430,20 @@ export interface ParsePoolOptions {
    * Ignored by {@link ParsePool.parse}, which sends no key and stores nothing.
    */
   cacheDir?: string;
+  /**
+   * Limits tighter (or looser) than `DEFAULT_PARSE_LIMITS`, per limit. Every job
+   * runs under the resolved set; a breach rejects that job with a
+   * `ParseLimitError` and never the pool. See `parse-limits.ts`.
+   */
+  limits?: Partial<ParseLimits>;
 }
 
-/** What a worker is told at construction. See {@link ParsePoolOptions.cacheDir}. */
+/** What a worker is told at construction. */
 export interface ParseWorkerData {
-  /** Parse-cache root, or `undefined` to let the worker use the default. */
+  /** Parse-cache root, or `undefined` to let the worker use the default. See {@link ParsePoolOptions.cacheDir}. */
   cacheDir?: string;
+  /** The limits the worker checks its own output against. Heap, stack and time are enforced from outside it. */
+  limits: ParseLimits;
 }
 
 /**
@@ -553,6 +589,10 @@ interface PendingJob {
    * look like a serialization problem. `0` until dispatch.
    */
   dispatchedAt: number;
+  /** The wall-clock limit's timer, armed at dispatch and cleared when the job settles. */
+  deadline?: ReturnType<typeof setTimeout>;
+  /** The heap sampler — see {@link HEAP_SAMPLE_INTERVAL_MS} — armed and cleared with the deadline. */
+  heapWatch?: ReturnType<typeof setInterval>;
 }
 
 /** One worker thread and the job it currently holds. */
@@ -572,6 +612,7 @@ class WorkerParsePool implements ParsePool {
   readonly size: number;
 
   readonly #workerData: ParseWorkerData;
+  readonly #limits: ParseLimits;
   readonly #workers: PoolWorker[] = [];
   readonly #queue: PendingJob[] = [];
   readonly #drainWaiters: (() => void)[] = [];
@@ -583,6 +624,7 @@ class WorkerParsePool implements ParsePool {
   constructor(size: number, workerData: ParseWorkerData) {
     this.size = size;
     this.#workerData = workerData;
+    this.#limits = workerData.limits;
   }
 
   /** @inheritdoc */
@@ -631,6 +673,11 @@ class WorkerParsePool implements ParsePool {
   ): Promise<ParseResult | null> {
     if (this.#closed) {
       return Promise.reject(new Error('This parse pool has been shut down; create a new one to parse again.'));
+    }
+    // Refused before any thread sees it: the input cap is the one limit that is
+    // a property of the request alone, so it costs no worker to enforce.
+    if (job.byteLength > this.#limits.inputBytes) {
+      return Promise.reject(new ParseLimitError('inputBytes', this.#limits.inputBytes));
     }
 
     this.#nextId += 1;
@@ -681,7 +728,45 @@ class WorkerParsePool implements ParsePool {
       recordTierPass(TierPass.WireDispatch, dispatchStartedAt);
       // After the post, so queue-wait time is never charged to the boundary.
       job.dispatchedAt = parseTimingStart();
+      // The wall-clock limit runs from dispatch, never from queueing: time spent
+      // waiting for a free worker is the pool's, not the document's.
+      job.deadline = setTimeout(() => {
+        this.#stopAtDeadline(target, job);
+      }, this.#limits.timeMs);
+      job.heapWatch = setInterval(() => {
+        this.#sampleHeap(target, job);
+      }, HEAP_SAMPLE_INTERVAL_MS);
     }
+  }
+
+  /**
+   * Stop a job whose worker's heap has passed its limit. See {@link HEAP_SAMPLE_INTERVAL_MS}.
+   *
+   * A sample that fails (the thread is already gone) is ignored: its `exit`
+   * settles the job.
+   */
+  #sampleHeap(poolWorker: PoolWorker, job: PendingJob): void {
+    poolWorker.worker.getHeapStatistics().then(
+      (heap) => {
+        if (poolWorker.job !== job) return;
+        if (heap.used_heap_size <= this.#limits.heapMb * BYTES_PER_MIB) return;
+        this.#abandon(poolWorker, new ParseLimitError('heapMb', this.#limits.heapMb));
+        poolWorker.worker.terminate().catch(() => undefined);
+      },
+      () => undefined,
+    );
+  }
+  /**
+   * A job ran past its wall-clock limit: reject it, and terminate its thread.
+   *
+   * Terminating is the only way to stop a synchronous parser, and it costs the
+   * thread, so the worker leaves the pool here and the next {@link #pump}
+   * spawns its replacement. The `exit` that follows finds no job to abandon.
+   */
+  #stopAtDeadline(poolWorker: PoolWorker, job: PendingJob): void {
+    if (poolWorker.job !== job) return;
+    this.#abandon(poolWorker, new ParseLimitError('timeMs', this.#limits.timeMs));
+    poolWorker.worker.terminate().catch(() => undefined);
   }
 
   #idleWorker(): PoolWorker | undefined {
@@ -700,7 +785,16 @@ class WorkerParsePool implements ParsePool {
 
     let worker: Worker;
     try {
-      worker = new Worker(resolveWorkerEntry(), { workerData: this.#workerData });
+      // Heap and stack are enforced by V8 itself, per thread. A thread that
+      // breaches its heap dies with `ERR_WORKER_OUT_OF_MEMORY`; one that
+      // breaches its stack throws a `RangeError` the worker reports as a breach.
+      worker = new Worker(resolveWorkerEntry(), {
+        workerData: this.#workerData,
+        resourceLimits: {
+          maxOldGenerationSizeMb: this.#limits.heapMb,
+          stackSizeMb: this.#limits.stackMb,
+        },
+      });
     } catch (error) {
       this.#failQueue(error instanceof Error ? error : new Error(String(error)));
       return undefined;
@@ -711,7 +805,12 @@ class WorkerParsePool implements ParsePool {
       this.#settle(poolWorker, response);
     });
     worker.on('error', (error: Error) => {
-      this.#abandon(poolWorker, error);
+      this.#abandon(
+        poolWorker,
+        (error as { code?: unknown }).code === 'ERR_WORKER_OUT_OF_MEMORY'
+          ? new ParseLimitError('heapMb', this.#limits.heapMb)
+          : error,
+      );
     });
     worker.on('exit', (code: number) => {
       poolWorker.exited = true;
@@ -740,8 +839,9 @@ class WorkerParsePool implements ParsePool {
     poolWorker.worker.unref();
 
     if (job !== null) {
+      disarm(job);
       recordTierPass(TierPass.WireRoundtrip, job.dispatchedAt);
-      settleJob(job, response);
+      settleJob(job, response, this.#limits);
     }
 
     this.#pump();
@@ -759,7 +859,10 @@ class WorkerParsePool implements ParsePool {
 
     const job = poolWorker.job;
     poolWorker.job = null;
-    job?.reject(error);
+    if (job !== null) {
+      disarm(job);
+      job.reject(error);
+    }
 
     this.#pump();
     this.#notifyDrained();
@@ -790,6 +893,16 @@ class WorkerParsePool implements ParsePool {
 }
 
 /**
+ * Stop a job's limit timers; it has settled, one way or another.
+ *
+ * @param job - The job
+ */
+function disarm(job: PendingJob): void {
+  clearTimeout(job.deadline);
+  clearInterval(job.heapWatch);
+}
+
+/**
  * Hand one worker's answer to the job that asked for it, whichever arm it is.
  *
  * A free function rather than a method because it needs nothing from the pool —
@@ -806,11 +919,17 @@ class WorkerParsePool implements ParsePool {
  *
  * @param job - The job awaiting an answer
  * @param response - What the worker sent
+ * @param limits - The limits the job ran under, so a breach names its bound
  */
 function settleJob(
   job: PendingJob,
   response: Exclude<ParseWorkerResponse, ParseWorkerTimingReport>,
+  limits: ParseLimits,
 ): void {
+  if ('breach' in response) {
+    job.reject(new ParseLimitError(response.breach, limits[response.breach]));
+    return;
+  }
   if ('failure' in response) {
     job.reject(reviveFailure(response.failure));
     return;
@@ -883,8 +1002,9 @@ export function createParsePool(options?: ParsePoolOptions): ParsePool {
   const size =
     requested === undefined ? defaultParsePoolSize() : Math.max(1, Math.floor(requested));
   const cacheDir = options?.cacheDir;
+  const limits = resolveParseLimits(options?.limits);
   // Conditional spread, never `{ cacheDir: undefined }`: `workerData` is
   // structured-cloned, and an own property valued `undefined` is not the same as
   // an absent one to the `in` check on the other side.
-  return new WorkerParsePool(size, cacheDir === undefined ? {} : { cacheDir });
+  return new WorkerParsePool(size, cacheDir === undefined ? { limits } : { cacheDir, limits });
 }

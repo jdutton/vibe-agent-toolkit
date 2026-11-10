@@ -421,7 +421,7 @@ describe('vat-lab <facet> ab — every facet gets the verb, not just the one tha
       ABSENT_TREE,
       '--control',
       '--env-b',
-      'VAT_PARSE_POOL=1',
+      'VAT_PARSE_POOL_SIZE=1',
     ]);
 
     expect(process.exitCode).toBe(ExitCode.ERROR);

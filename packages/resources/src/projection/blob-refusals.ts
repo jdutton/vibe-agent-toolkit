@@ -12,14 +12,15 @@
  * the population's answer:
  *
  * - a declined blob is a `blob_conditions` row coded `BLOB_NOT_TEXT`,
- *   `BLOB_UNREADABLE`, `BLOB_CONTENT_CHANGED` or `BLOB_PARSE_FAILED`;
+ *   `BLOB_UNREADABLE`, `BLOB_CONTENT_CHANGED`, `BLOB_PARSE_FAILED` or
+ *   `BLOB_PARSE_LIMIT_EXCEEDED`;
  * - an unkeyed realization is a `resource_realizations` row whose
  *   `contentState` is `unreadable` or `oversize`;
  * - a mis-decoded blob is a `blobs` row with `replacementCharacters > 0`.
  *
- * Every one of those the store round-trips, with two deliberate exceptions:
+ * Every one of those the store round-trips, with three deliberate exceptions:
  * `BLOB_UNREADABLE` and `BLOB_CONTENT_CHANGED` record one READ at one path, not
- * the bytes, so `storableBlobFacts` never files them in the shared,
+ * the bytes, and `BLOB_PARSE_LIMIT_EXCEEDED` records one run's limits, so `storableBlobFacts` never files them in the shared,
  * content-addressed tier. A store hit therefore does not repeat them — the run
  * that observed the failed read is the one that says so, and the next run that
  * derives the key reads it again. Everything else describes alike on a hit and
@@ -65,6 +66,7 @@ import {
   BLOB_CONTENT_CHANGED,
   BLOB_NOT_TEXT,
   BLOB_PARSE_FAILED,
+  BLOB_PARSE_LIMIT_EXCEEDED,
   BLOB_UNREADABLE,
 } from './blob-population.js';
 import { formatParseFailures, parseFailureOf } from './parse-failure.js';
@@ -94,6 +96,7 @@ const REFUSAL_CODES: ReadonlyArray<readonly [code: string, label: string]> = [
   [BLOB_UNREADABLE, 'unreadable'],
   [BLOB_CONTENT_CHANGED, 'changed under the run'],
   [BLOB_PARSE_FAILED, 'parse failed'],
+  [BLOB_PARSE_LIMIT_EXCEEDED, 'over a parse limit'],
 ];
 
 const REFUSAL_CODE_SET: ReadonlySet<string> = new Set(REFUSAL_CODES.map(([code]) => code));

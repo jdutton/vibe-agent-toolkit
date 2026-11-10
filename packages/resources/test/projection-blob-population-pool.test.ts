@@ -176,13 +176,13 @@ function blobTablesOf(projection: Projection): {
 /**
  * Derive the loop corpus once.
  *
- * `size` is stated rather than left to the default on purpose: the default is
- * derived from how many documents remain, and this fixture is deliberately far
- * too small to earn a worker. A suite that let the default decide would silently
- * stop creating a pool at all, and every assertion below would pass by
- * describing the un-pooled path.
+ * `size` is stated rather than left to the default on purpose: the default width
+ * is derived from how many documents remain, and this fixture is deliberately
+ * far too small to earn a second worker. A suite that let the default decide
+ * would run one job at a time, and every order assertion below would pass
+ * trivially.
  *
- * @param pool - The pool to force on, or `undefined` for the unpooled path
+ * @param pool - The fake pool to force on, or `undefined` for the real pool
  * @returns The projection and the stage's counters
  */
 async function derive(
@@ -191,16 +191,14 @@ async function derive(
   const builder = await baseBuilderForRoot(suite.tempDir);
   const counts = await populateBlobs(builder, {
     parseCache: NO_CACHE,
-    // `enabled` is stated on BOTH arms, never inherited. The pool ships ON and
-    // declines a corpus too small to pay for a thread (see `ParsePoolPolicy`),
-    // so a pooled test that omitted it would silently become an unpooled test
-    // and keep passing — asserting nothing about the pool while looking like it
-    // did — and an unpooled test that omitted it would be whatever this
-    // fixture's size happened to buy.
+    // The fake arm states its width: the default stays at one thread for a
+    // corpus this small, so a test that inherited it would never exercise the
+    // concurrent half. The other arm is the shipped route — the real bounded
+    // pool — because there is no unpooled route left to compare against.
     parsePool:
       pool === undefined
-        ? { enabled: false }
-        : { enabled: true, missThreshold: 1, size: pool.size, createPool: (): ParsePool => pool },
+        ? {}
+        : { missThreshold: 1, size: pool.size, createPool: (): ParsePool => pool },
   });
   return { projection: builder.build(), counts };
 }
@@ -232,12 +230,12 @@ describe('the blob stage under a parse pool', () => {
     expect(second.counts).toStrictEqual(first.counts);
   });
 
-  it('derives exactly what the unpooled path derives', async () => {
-    const unpooled = await derive();
+  it('derives exactly what the shipped bounded pool derives', async () => {
+    const shipped = await derive();
     const pooled = await derive(fakePool(3).pool);
 
-    expect(blobTablesOf(pooled.projection)).toStrictEqual(blobTablesOf(unpooled.projection));
-    expect(pooled.counts).toStrictEqual(unpooled.counts);
+    expect(blobTablesOf(pooled.projection)).toStrictEqual(blobTablesOf(shipped.projection));
+    expect(pooled.counts).toStrictEqual(shipped.counts);
   });
 
   it('never fans out wider than the pool', async () => {
@@ -264,9 +262,8 @@ describe('the blob stage under a parse pool', () => {
     // either.
     expect(counts.blobsWithoutParser).toBe(1);
     expect(counts.blobsNotText).toBe(1);
-    // Ten parsable blobs (nine markdown, one HTML); exactly one of them is
-    // parsed in-process to trip the miss threshold, and the rest are dispatched.
-    expect(record.calls).toBe(DOC_COUNT);
+    // Every parsable blob is dispatched — there is no in-process route.
+    expect(record.calls).toBe(DOC_COUNT + 1);
   });
 
   it('shuts the pool down on the success path', async () => {
@@ -326,7 +323,7 @@ describe('parse-pool activation', () => {
         },
       };
     };
-    const options = { parseCache: cache, parsePool: { enabled: true, missThreshold: 1, size: 1, createPool } };
+    const options = { parseCache: cache, parsePool: { missThreshold: 1, size: 1, createPool } };
 
     await populateBlobs(await baseBuilderForRoot(suite.tempDir), options);
 
@@ -352,98 +349,73 @@ describe('parse-pool activation', () => {
 
     await populateBlobs(await baseBuilderForRoot(suite.tempDir), {
       parseCache: NO_CACHE,
-      parsePool: { enabled: true, missThreshold: 1, size: 2 },
+      parsePool: { missThreshold: 1, size: 2 },
     });
 
     expect(workerThreadCount()).toBe(before);
   });
 
-  it('sizes the pool from the work that is left, once there is enough of it', async () => {
-    // The other half of the differential. Without it, "starts no pool" below
+  it('widens the pool from the work that is left, once there is enough of it', async () => {
+    // The other half of the differential. Without it, "does not widen" below
     // would be satisfied by a stage that never starts a pool under any corpus —
     // and the whole wiring would be dead code again, silently, with a green
     // suite.
     const tailDir = await writeTail(LONG_TAIL_DOCS, TAIL_DOCUMENT_BYTES);
-    const requested: (number | undefined)[] = [];
-    // `emptyFacts`, because the only assertion here is the WIDTH the stage asked
-    // for. This fake parses in-process, and the corpus is megabytes by
+    // `emptyFacts`, because the only assertion here is the WIDTH the stage
+    // reached. This fake parses in-process, and the corpus is megabytes by
     // construction — running remark over all of it would cost seconds to derive
     // rows nothing below reads.
-    const { pool } = fakePool(2, { emptyFacts: true });
+    const { pool, record } = fakePool(2, { emptyFacts: true });
 
     await populateBlobs(await baseBuilderForRoot(tailDir), {
       parseCache: NO_CACHE,
-      parsePool: {
-        enabled: true,
-        missThreshold: 1,
-        createPool: (options): ParsePool => {
-          requested.push(options?.size);
-          return pool;
-        },
-      },
+      parsePool: { missThreshold: 1, createPool: (): ParsePool => pool },
     });
 
     if (defaultParsePoolSize() < 2) {
-      // A box with fewer than three cores cannot afford a useful pool however
-      // long the tail is, and must then start none. Asserted rather than
+      // A box with fewer than three cores cannot afford a second thread however
+      // long the tail is, and must then stay at one. Asserted rather than
       // skipped: a skip on a small CI runner is a hole, and this is the same
       // claim taken from the other side.
-      expect(requested).toHaveLength(0);
+      expect(record.maxInFlight).toBe(1);
       return;
     }
-    expect(requested).toHaveLength(1);
-    expect(requested[0]).toBeGreaterThanOrEqual(2);
+    expect(record.maxInFlight).toBe(2);
   });
 
-  it('starts none for the same document COUNT in stub documents', async () => {
+  it('does not widen for the same document COUNT in stub documents', async () => {
     // 🔑 The unit is BYTES, and this is the lane-level proof of it. Same tail,
     // same count, same kinds — 60-byte documents instead of 32 KB ones. A stage
-    // that had regressed to counting documents would open a pool here and could
+    // that had regressed to counting documents would widen the pool here and could
     // not be told apart from a correct one by the case above.
     const tailDir = await writeTail(LONG_TAIL_DOCS, 60);
-    let created = 0;
-    const { pool } = fakePool(2);
+    const { pool, record } = fakePool(2);
 
     await populateBlobs(await baseBuilderForRoot(tailDir), {
       parseCache: NO_CACHE,
-      parsePool: {
-        enabled: true,
-        missThreshold: 1,
-        createPool: (): ParsePool => {
-          created += 1;
-          return pool;
-        },
-      },
+      parsePool: { missThreshold: 1, createPool: (): ParsePool => pool },
     });
 
     // 200 documents at 60 bytes is 12 KB of markdown — four thousandths of a
-    // second of parsing, against ~723 ms of module load per pool.
-    expect(created).toBe(0);
+    // second of parsing, against ~723 ms of module load per extra thread.
+    expect(record.maxInFlight).toBe(1);
   });
 
-  it('starts no pool at all for a tail too short to pay for one worker', async () => {
+  it('does not widen for a tail too short to pay for a second worker', async () => {
     // The measured regression this rule exists for: sized at the machine's
     // default, activation started workers for a 177-document tail and made
     // `vat claude context` on this repository SLOWER. A threshold cannot bound
     // that, because the cost scales with the WIDTH and the threshold says
     // nothing about width.
-    let created = 0;
-    const { pool } = fakePool(4);
+    const { pool, record } = fakePool(4);
 
     await populateBlobs(await baseBuilderForRoot(suite.tempDir), {
       parseCache: NO_CACHE,
-      parsePool: {
-        enabled: true,
-        missThreshold: 1,
-        createPool: (): ParsePool => {
-          created += 1;
-          return pool;
-        },
-      },
+      parsePool: { missThreshold: 1, createPool: (): ParsePool => pool },
     });
 
-    // Ten short documents against a ~2,000 ms two-worker break-even: not one.
-    expect(created).toBe(0);
+    // Ten short documents against a ~2,000 ms two-worker break-even: no second thread.
+    expect(record.maxInFlight).toBe(1);
   });
 });
 
@@ -475,7 +447,7 @@ describe('a real parse-pool rejection', () => {
       const builder = await baseBuilderForRoot(suite.tempDir);
       await populateBlobs(builder, {
         parseCache: NO_CACHE,
-        parsePool: { enabled: true, missThreshold: 1, size: 1, createPool: (): ParsePool => createParsePool({ size: 1 }) },
+        parsePool: { missThreshold: 1, size: 1, createPool: (): ParsePool => createParsePool({ size: 1 }) },
       });
       const projection = builder.build();
 

@@ -742,6 +742,13 @@ Reported like every other packaging finding — a located, coded issue on the bu
 - **Scope:** Only recognized filesystem errno codes (`ENOENT`, `EACCES`, `ELOOP`, `EISDIR`, …) are reported this way. A parse or indexing defect still throws, so a bug in VAT cannot disguise itself as a per-file warning.
 - **Fix:** Repoint or delete the dangling symlink, restore the missing target, or fix the permissions. Set `severity.RESOURCE_UNREADABLE` to `warning` if a corpus is expected to contain unresolvable entries.
 
+### `RESOURCE_PARSE_LIMIT_EXCEEDED`
+
+- **Default:** `error`
+- **What:** A file the crawl enumerated was not admitted because its parse was stopped at one of its limits: wall clock, heap, stack depth, output rows or bytes, or input size. The finding names the file and the limit.
+- **Why it matters:** Every parse runs in a bounded worker so that one pathological document cannot hang or crash the whole run. The file is absent from every count in the report, the same way an unreadable file is. Nothing about the breach is stored, because time, heap and stack outcomes depend on the machine, so the next run parses the file again.
+- **Fix:** Find what makes the file pathological to parse, such as nesting thousands of levels deep or a huge generated document, and simplify or exclude it. A breach on an ordinary file under heavy machine load clears on the next run.
+
 ### `COLLECTION_MIME_CONFLICT`
 
 - **Default:** `error`

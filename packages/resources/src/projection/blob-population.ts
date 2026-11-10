@@ -114,6 +114,7 @@ import { estimateTokens } from '../link-classify.js';
 import type { ParseResult } from '../link-parser.js';
 import { type ParseCache, defaultParseCache, isParserUnavailable } from '../parse-cache.js';
 import { ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable } from '../parse-dispatcher.js';
+import { isParseLimitError } from '../parse-limits.js';
 import { type CodeContextRanges, findLexicalReferences } from '../reference-lexer.js';
 import type { BlobConditionRow } from '../schemas/projection-blobs.js';
 import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
@@ -135,6 +136,15 @@ export const BLOB_CONTENT_CHANGED = 'BLOB_CONTENT_CHANGED';
 
 /** The parser threw on this blob's bytes. */
 export const BLOB_PARSE_FAILED = 'BLOB_PARSE_FAILED';
+
+/**
+ * The parse of this blob was stopped at one of its limits (`parse-limits.ts`).
+ *
+ * A per-run outcome, never stored (ADR I6): the next run re-attempts the blob.
+ * The message names the path and the limit, like {@link BLOB_UNREADABLE}'s,
+ * because the row describes this run, not the bytes.
+ */
+export const BLOB_PARSE_LIMIT_EXCEEDED = 'BLOB_PARSE_LIMIT_EXCEEDED';
 
 /** The bytes are not text, so no text parser was run over them. */
 export const BLOB_NOT_TEXT = 'BLOB_NOT_TEXT';
@@ -305,6 +315,8 @@ export interface BlobPopulationResult {
   readonly blobsContentChanged: number;
   /** Blobs the parser threw on — a {@link BLOB_PARSE_FAILED} row each. */
   readonly blobsParseFailed: number;
+  /** Blobs whose parse was stopped at a limit — a {@link BLOB_PARSE_LIMIT_EXCEEDED} row each, never stored. */
+  readonly blobsParseLimited: number;
   /**
    * Blobs declined as binary before any parse — a {@link BLOB_NOT_TEXT} row each.
    *
@@ -628,6 +640,7 @@ function emptyCounts(): MutableCounts {
     blobsUnreadable: 0,
     blobsContentChanged: 0,
     blobsParseFailed: 0,
+    blobsParseLimited: 0,
     blobsNotText: 0,
     blobsWithoutParser: 0,
     realizationsSkippedDirectory: 0,
@@ -768,7 +781,12 @@ function blobTargets(base: ProjectionBase): BlobTarget[] {
  * the counter cannot drift: a renamed counter stops this compiling, whereas a
  * `switch` mapping one to the other would happily keep charging the old one.
  */
-type RefusalBucket = 'blobsUnreadable' | 'blobsContentChanged' | 'blobsNotText' | 'blobsParseFailed';
+type RefusalBucket =
+  | 'blobsUnreadable'
+  | 'blobsContentChanged'
+  | 'blobsNotText'
+  | 'blobsParseFailed'
+  | 'blobsParseLimited';
 
 /** A blob the stage declined, with the row and the bucket that say why. */
 interface RefusedBlob {
@@ -1077,6 +1095,15 @@ async function parseTarget(
     // constructed type is not the guessed blocklist that preceded it.
     if (isParserUnavailable(error)) throw error;
 
+    if (isParseLimitError(error)) {
+      return refused('blobsParseLimited', condition(
+        target.contentKey,
+        BLOB_PARSE_LIMIT_EXCEEDED,
+        `The parse of "${target.path}" was stopped at its ${error.limit} limit (${error.bound});`
+        + ' this blob has no rows this run, and the next run parses it again',
+      ));
+    }
+
     return refused('blobsParseFailed', condition(
       target.contentKey,
       BLOB_PARSE_FAILED,
@@ -1178,7 +1205,8 @@ export function parserKindOf(contentKey: string): ParserKind {
  * ⛔ A row there must be a pure function of the bytes: every root on the machine
  * holding those bytes is served it. {@link BLOB_UNREADABLE} and
  * {@link BLOB_CONTENT_CHANGED} are not — each records that one read, at one path,
- * in one run, never observed the bytes at all. Filed, either one marked its key
+ * in one run, never observed the bytes at all — and neither is
+ * {@link BLOB_PARSE_LIMIT_EXCEEDED}, a parse stopped by this run's limits. Filed, either one marked its key
  * "held" (a `blobs` row OR a `blob_conditions` row holds a key), so a single
  * transient failure stopped those bytes being parsed again, in every repository,
  * until the store was cleared. Dropped here, the key is held by nothing and the
@@ -1194,8 +1222,16 @@ export function storableBlobFacts(blobs: BlobScopedRows): BlobScopedRows {
   };
 }
 
-/** Conditions about one read attempt rather than about the bytes it was after. */
-const READ_OBSERVATIONS: ReadonlySet<string> = new Set([BLOB_UNREADABLE, BLOB_CONTENT_CHANGED]);
+/**
+ * Conditions about one run's attempt rather than about the bytes it was after:
+ * a failed read, and a parse stopped at a limit (ADR I6 — a time, heap or stack
+ * outcome depends on the machine, not the bytes).
+ */
+const READ_OBSERVATIONS: ReadonlySet<string> = new Set([
+  BLOB_UNREADABLE,
+  BLOB_CONTENT_CHANGED,
+  BLOB_PARSE_LIMIT_EXCEEDED,
+]);
 
 /**
  * A `blob_conditions` row with no line, since none of this module's conditions

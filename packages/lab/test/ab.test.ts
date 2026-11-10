@@ -262,7 +262,7 @@ describe('runAb — the arms alternate', () => {
 });
 
 describe('runAb — an arm can carry its own configuration', () => {
-  const POOL_ON: ArmEnvironment = { set: { VAT_PARSE_POOL: '1' }, unset: [] };
+  const POOL_ON: ArmEnvironment = { set: { VAT_PARSE_POOL_SIZE: '1' }, unset: [] };
 
   it('hands each arm its OWN env, so one build can be measured in two configurations', async () => {
     // The pool-on/pool-off A/B: one build, two settings. Without this the only
@@ -291,13 +291,13 @@ describe('runAb — an arm can carry its own configuration', () => {
         aValues: [10],
         bValues: [20],
         script: ['changed'],
-        envA: { set: { VAT_PARSE_POOL: '0' }, unset: [] },
+        envA: { set: { VAT_PARSE_POOL_SIZE: '0' }, unset: [] },
         envB: POOL_ON,
       },
       'env-both-arms',
     );
 
-    expect(envs).toEqual([{ set: { VAT_PARSE_POOL: '0' }, unset: [] }, POOL_ON]);
+    expect(envs).toEqual([{ set: { VAT_PARSE_POOL_SIZE: '0' }, unset: [] }, POOL_ON]);
   });
 
   it('publishes each arm’s env on the result, so the report can disclose it', async () => {
@@ -598,14 +598,14 @@ describe('renderAb', () => {
         aValues: [100],
         bValues: [60],
         script: ['changed'],
-        envB: { set: { VAT_PARSE_POOL: '1' }, unset: [] },
+        envB: { set: { VAT_PARSE_POOL_SIZE: '1' }, unset: [] },
       },
       'render-config',
     );
 
     const rendered = renderAb(result);
     expect(rendered).toContain('Config A: (none)');
-    expect(rendered).toContain('Config B: VAT_PARSE_POOL=1');
+    expect(rendered).toContain('Config B: VAT_PARSE_POOL_SIZE=1');
   });
 
   it('discloses an UNSET as configuration, not as an arm that set nothing', async () => {

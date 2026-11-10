@@ -21,8 +21,6 @@
  * mean it lands twice — or, far more likely, on one lane only.
  */
 
-import { parseEnvBoolean } from '@vibe-agent-toolkit/utils';
-
 import {
   DOCUMENT_PARSER_KINDS,
   NO_PARSER_KIND,
@@ -31,7 +29,8 @@ import {
 } from './content-key.js';
 import type { ParseResult } from './link-parser.js';
 import type { DocumentParserKind } from './mime-type.js';
-import { type ParseCache, parseKeyed } from './parse-cache.js';
+import type { ParseCache } from './parse-cache.js';
+import type { ParseLimits } from './parse-limits.js';
 import {
   createParsePool,
   defaultParsePoolSize,
@@ -109,72 +108,16 @@ export type ParseTransport = 'wire' | 'cache';
  */
 export interface ParsePoolPolicy {
   /**
-   * Master switch. Defaults to **ON**; set `VAT_PARSE_POOL=0` (or `false`/`off`/`no`)
-   * to opt out.
+   * Limits tighter (or looser) than `DEFAULT_PARSE_LIMITS`, per limit, for
+   * every job this dispatcher's pool runs. Programmatic only — there is no
+   * config or environment surface for parse limits; see `parse-limits.ts`.
    *
-   * ## 🔑 MEASURED, cold, A/B ALTERNATED (`vat-lab perf ab`, one instrument, two
-   * environments)
-   *
-   * On a 12.6k-file adopter monorepo, `vat claude context`, pool OFF against
-   * pool ON:
-   *
-   * ```text
-   * OFF   27.7 s / 24.6 s
-   * ON    16.4 s / 16.1 s      1.5–1.7x, ~9 s
-   * ```
-   *
-   * ⛔ **THE 6.5× REGRESSION THIS DEFAULT WAS ONCE SET FOR NEVER EXISTED.** It was
-   * an instrument artifact, and the table that used to stand here is deleted rather
-   * than corrected in place, because a wrong measurement left visible gets cited.
-   * Parse worker threads share their parent's PID, each filed its own timing dump
-   * reporting the WHOLE PROCESS's `uptime()` and `cpuUsage()`, and the lab summed
-   * them — 9 files, 1 pid, inflating both lifetime scalars by exactly 9×. Closed
-   * at the source: a worker reports its counters to the main thread, which writes
-   * ONE dump per process carrying every thread, so a lifetime cannot be observed
-   * twice.
-   *
-   * ## ⭐ There is no corpus-size gate, because the activation arithmetic IS one
-   *
-   * A default that wins on a large corpus and loses on a small one would need a
-   * threshold; this one does not, and the reason is that a small corpus never
-   * reaches a pool at all. {@link considerActivation} demands
-   * {@link PARSES_BEFORE_SIZING} cache misses *and* a priced remainder worth
-   * {@link MINIMUM_WORKERS} × {@link PARSE_MS_PER_WORKER} of serial parse.
-   * Measured on VAT's own repository, cold, with the pool enabled: 335 misses,
-   * 332 markdown documents, 3.49 MB, and the parse-timing dump reports
-   * `wire-dispatch` **0 calls** and exactly one thread — the pool declined
-   * itself. The matching A/B is what that predicts: OFF min 3,931 ms against ON
-   * min 3,711 ms, an effect of −220 ms with no measured noise floor, over two
-   * arms that provably ran the same code path.
-   *
-   * A second gate on file count would be a second contract for one decision, and
-   * the two would drift.
-   *
-   * ## What the escape hatch is for
-   *
-   * `VAT_PARSE_POOL` set to any off spelling `parseEnvBoolean` recognises (`0`,
-   * `false`, `no`, `n`, `off`, case- and whitespace-insensitive), and an explicit
-   * `enabled: false` from a caller that has already decided. Each worker holds its own
-   * remark/unified heap (~730 ms to load, not shared between isolates), so a
-   * host that is already running `availableParallelism()` jobs of its own has a
-   * reason to say no. Nothing else is a disable: an unrecognised or misspelled
-   * value reads as `undefined` and leaves the pool on rather than silently
-   * costing the measured speed-up.
-   *
-   * ⚠️ The per-call-lifetime hypothesis recorded here is RETIRED, not merely
-   * unconfirmed: `populateBlobs` runs ONCE per command, so a per-call dispatcher
-   * builds one pool per run and there was never a repeated module load to pay for.
-   *
-   * ⭐ Kept, because it is the one lesson that survived: the pool's own unit tests
-   * drive `populateBlobs` ONCE, so any per-call setup defect would have been
-   * invisible to them by construction. A fixed cost paid per CALL looks free in
-   * any test that calls once, and almost no unit test calls twice.
-   *
-   * The environment is read per call rather than at module load, matching
-   * `ParseCache`'s handling of `VAT_CACHE`: a module-level read binds the
-   * decision to import order, which no caller has reason to expect.
+   * ⛔ **There is no `enabled`.** Every parse runs in the bounded pool, because a
+   * parse on the run's own thread cannot be stopped at a limit (ADR I8). The
+   * old `VAT_PARSE_POOL=0` opt-out and the below-threshold in-process route are
+   * gone; a small corpus pays one worker, never an unbounded parse.
    */
-  enabled?: boolean;
+  limits?: Partial<ParseLimits>;
   /**
    * How parse facts get back from a worker. Defaults to `VAT_PARSE_TRANSPORT`,
    * and to `'wire'` when that names nothing.
@@ -441,7 +384,7 @@ function resolveKnob(fromPolicy: number | undefined, envName: string, fallback: 
  */
 export class ParseDispatcher {
   readonly #cache: ParseCache;
-  readonly #enabled: boolean;
+  readonly #limits: Partial<ParseLimits> | undefined;
   readonly #transport: ParseTransport;
   readonly #missThreshold: number;
   readonly #baselineHits: number;
@@ -476,12 +419,8 @@ export class ParseDispatcher {
 
   constructor(cache: ParseCache, policy: ParsePoolPolicy) {
     this.#cache = cache;
-    // Opt-OUT, read through the repo's one switch reader: any recognised off
-    // spelling disables, anything unreadable leaves the pool on. See
-    // {@link ParsePoolPolicy.enabled} for the A/B and for why no corpus-size
-    // gate accompanies this.
-    this.#enabled = policy.enabled ?? parseEnvBoolean(process.env['VAT_PARSE_POOL']) !== false;
-    // Read per construction for the same reason `enabled` is. `'cache'` exactly,
+    this.#limits = policy.limits;
+    // Read per construction, not at module load. `'cache'` exactly,
     // so the shipped behaviour is the wire protocol unless someone names the
     // other one — this switch exists to be A/B'd, not to be guessed at.
     // A disabled cache cannot BE the transport — the worker's write is a no-op
@@ -493,8 +432,8 @@ export class ParseDispatcher {
     this.#transport = cache.enabled ? asked : 'wire';
     // Explicit policy BEATS the environment, for every numeric knob: a caller
     // that has already decided must not have its decision overridden by an
-    // ambient variable it never saw. Read per construction, matching `enabled`
-    // above — and every one of them through the SAME validation, so a knob
+    // ambient variable it never saw. Read per construction, matching the
+    // transport above — and every one of them through the SAME validation, so a knob
     // cannot be guarded on one of its two routes and open on the other. See
     // {@link resolveKnob}.
     this.#missThreshold = resolveKnob(
@@ -560,13 +499,38 @@ export class ParseDispatcher {
     seen.documents += 1;
     seen.bytes += keyed.byteLength;
 
-    const pool = this.#pool;
-    if (pool !== null) return parseKeyedInPool(keyed, this.#cache, pool, this.#transport);
-    return parseKeyed(keyed, this.#cache);
+    return parseKeyedInPool(keyed, this.#cache, () => this.#poolForMiss(), this.#transport);
   }
 
   /**
-   * Create the pool, if this run has proved cold enough and rich enough.
+   * The pool, built on the first MISS and never before.
+   *
+   * Built at its ceiling — the named size, or the machine's default — because
+   * the pool spawns threads only as concurrent jobs demand them, and that
+   * demand is {@link width}: 1 until {@link considerActivation} decides
+   * otherwise. So a small or mostly warm run owns one thread, and a fully warm
+   * one, which never misses, builds no pool at all.
+   *
+   * @returns The run's one pool
+   * @throws If the dispatcher was shut down
+   */
+  #poolForMiss(): ParsePool {
+    if (this.#closed) throw new Error('This parse dispatcher has been shut down.');
+    if (this.#pool === null) {
+      const create = this.#createPool;
+      // `cacheDir` unconditionally, not only under cache transport: the
+      // transport is read per document. It costs one string in `workerData`.
+      this.#pool = create({
+        size: this.#pinnedSize ?? defaultParsePoolSize(),
+        cacheDir: this.#cache.directory,
+        ...(this.#limits !== undefined && { limits: this.#limits }),
+      });
+    }
+    return this.#pool;
+  }
+
+  /**
+   * Widen the pool, if this run has proved cold enough and rich enough.
    *
    * Both halves of the test are load-bearing, and they measure different things.
    * The MISS count says the run is genuinely parsing rather than replaying a
@@ -602,9 +566,9 @@ export class ParseDispatcher {
    * being wrong about kind, which the old document count was by construction,
    * cost a measured 5.5% on an HTML tree.
    *
-   * `createParsePool` spawns nothing, so this is an allocation; the first thread
-   * starts on the first dispatched document. That is why activating mid-run is
-   * cheap enough to be gated on evidence rather than guessed at up front.
+   * Until this decides, the width is 1: every miss runs in the pool's one
+   * thread. Widening only lets more jobs be outstanding at once, so the pool
+   * spawns more threads; a decline leaves the width at 1.
    *
    * @param remainingParsable - Tallies what is still to be parsed, by kind. A
    *   callback, not a value, because the tally is an O(remaining) scan and every
@@ -613,7 +577,7 @@ export class ParseDispatcher {
    *   width.
    */
   considerActivation(remainingParsable: () => ParsableRemainder): void {
-    if (!this.#enabled || this.#closed || this.#decided) return;
+    if (this.#closed || this.#decided) return;
     if (this.#cache.stats.misses - this.#baselineMisses < this.#missThreshold) return;
 
     // ⛔ ONE decision per run, taken here, whichever way it goes — and the flag
@@ -626,20 +590,13 @@ export class ParseDispatcher {
     // is the common path rather than the exotic one.
     this.#decided = true;
 
-    // `#pinnedSize` is already a positive whole or absent, so the `< 1` decline
-    // below is answering only the estimate: `workersFor` returns 0 for a
-    // remainder too small to pay for a thread.
+    // `#pinnedSize` is already a positive whole or absent. `workersFor` answers
+    // 0 for a remainder too small to pay for a second thread: the width then
+    // stays at the one thread every miss already runs in.
     const size =
       this.#pinnedSize ?? workersFor(this.#estimateRemainingParseMs(remainingParsable()));
     if (size < 1) return;
-
-    const create = this.#createPool;
-    // `cacheDir` unconditionally, not only under cache transport: a pool is
-    // built once and the transport is read per document, so a pool told nothing
-    // would be the wrong pool the moment either changes. It costs one string in
-    // `workerData` and `parse()` ignores it.
-    this.#pool = create({ size, cacheDir: this.#cache.directory });
-    this.#width = this.#pool.size;
+    this.#width = Math.min(size, this.#pool?.size ?? size);
   }
 
   /**
@@ -682,7 +639,7 @@ export class ParseDispatcher {
   }
 
   /**
-   * Close the pool, if one was ever created.
+   * Close the pool, if a miss ever built one.
    *
    * ⚠️ MUST be reached on the throw path as well. A pool that is not shut down
    * loses every worker's parse-timing dump — a process exiting with live threads
@@ -699,28 +656,29 @@ export class ParseDispatcher {
 }
 
 /**
- * `parseKeyed`, with the parser call on a worker thread.
+ * The one parse route: the cache, and on a miss the bounded pool.
  *
- * Deliberately not a flag inside `parseKeyed` itself: that function's shape is
- * load-bearing — its `loadParser` sits past the cache-hit return, and its
- * docstring records that hoisting it has regressed twice — so the pooled variant
- * lives here rather than adding a branch to the one hot path in the package that
- * must not grow one. The cache lookup and the `set` are the same two calls in
- * the same order; only the middle line differs, and the hit path still costs no
- * thread, no clone and no parser load.
+ * The hit path costs no thread, no clone and no parser load — the pool is not
+ * even built until the first miss. On a miss the parse runs in a worker under
+ * the pool's limits; there is no other route.
+ *
+ * A parse stopped at a limit rejects out of here with a `ParseLimitError`
+ * BEFORE `cache.set`, so nothing is filed for it (ADR I6) and the next run
+ * misses and re-attempts it.
  *
  * The two `parse-timing` calls are not bookkeeping: without them a pooled run's
  * sub-phase dump would report zero cache activity and read as a dead seam.
  *
  * @param keyed - The confirmed read, of a kind that has a parser
  * @param cache - The store to consult and file into
- * @param pool - The worker pool to hand the parse to
- * @returns Parse facts equal to what the in-process parser would have produced
+ * @param poolForMiss - The pool, built on the first miss — so a hit builds none
+ * @param transport - How a worker's facts come back
+ * @returns Parse facts equal to what the parser produces
  */
 async function parseKeyedInPool(
   keyed: ParsableContent,
   cache: ParseCache,
-  pool: ParsePool,
+  poolForMiss: () => ParsePool,
   transport: ParseTransport,
 ): Promise<ParseResult> {
   const hit = await cache.get(keyed);
@@ -733,6 +691,7 @@ async function parseKeyedInPool(
   // Content, never a path: `RunContentCache` guarantees one read per file per
   // run, and a worker re-reading by path would break that and could parse bytes
   // nobody else in the run ever saw.
+  const pool = poolForMiss();
   if (transport === 'cache') return parseThroughCache(keyed, cache, pool);
 
   const result = await pool.parse(keyed.parserKind, keyed.content, keyed.byteLength);
@@ -783,18 +742,20 @@ async function parseThroughCache(
   // The worker read the entry back before answering `stored`, so reaching here
   // means it was removed between that read and this one — a concurrent `vat
   // cache clear`, or the OS purging its temp directory mid-run. Rare, real, and
-  // recoverable on this thread rather than worth failing a whole population for.
-  return parseKeyed(keyed, cache);
+  // recoverable — in the pool again, under its limits, never on this thread.
+  const result = await pool.parse(keyed.parserKind, keyed.content, keyed.byteLength);
+  await cache.set(keyed, result);
+  return result;
 }
+
 /**
- * The smallest pool worth having: **two**.
+ * The smallest widening worth deciding: **two**.
  *
- * A one-worker pool parallelizes nothing, and the window is why. Width is the
- * pool's size, so a pool of one prepares one blob at a time — the main thread
- * hands over a document, then waits for a thread to do work it could have done
- * itself, having first paid a structured clone each way and a remark load once.
- * Measured: sized at 1 for a 177-document tail, `vat claude context` over this
- * repository went from 2.27 s to 2.45 s. Overlap begins at two.
+ * Every miss already runs in one worker — the bounded route has no alternative
+ * — so the question {@link ParseDispatcher.considerActivation} answers is only
+ * whether a SECOND thread pays. Width 1 prepares one blob at a time; overlap
+ * begins at two. The one-worker floor's own cost against the retired in-process
+ * route is measured in `docs/architecture/fact-extractors-limits.md`.
  */
 const MINIMUM_WORKERS = 2;
 
@@ -803,12 +764,11 @@ const MINIMUM_WORKERS = 2;
  *
  * Integer division by {@link PARSE_MS_PER_WORKER}, floored at
  * {@link MINIMUM_WORKERS} in the sense that anything below it answers **0** and
- * no pool is created at all — the two ways of spending nothing are "no pool" and
- * "a pool that helps", and there is no third. The cap is the pool's own default,
+ * the width stays at the one thread every miss already runs in. The cap is the pool's own default,
  * which keeps a 64-core build agent from starting 63 remark instances.
  *
  * @param estimatedSerialMs - Serial parse time the remainder is worth
- * @returns The worker count to ask for, or 0 for "do not start a pool"
+ * @returns The width to widen to, or 0 for "stay at one thread"
  */
 function workersFor(estimatedSerialMs: number): number {
   const affordable = Math.min(

@@ -50,11 +50,13 @@ import { parentPort, workerData } from 'node:worker_threads';
 
 import type { ParseResult } from './link-parser.js';
 import { loadParser, ParseCache } from './parse-cache.js';
+import { countOutputRows, isStackOverflow, type ParseLimitName, type ParseLimits } from './parse-limits.js';
 import {
   type ParseWorkerData,
   type ParseWorkerFailure,
   type ParseWorkerRequest,
   type ParseWorkerResponse,
+  type ParseWireFacts,
   toParseWire,
 } from './parse-pool.js';
 import {
@@ -120,7 +122,12 @@ async function respond(request: Extract<ParseWorkerRequest, { type: 'parse' }>):
     const result = parser.parseContent(request.content, request.byteLength);
     response = await answerFor(request, result);
   } catch (error) {
-    response = { id: request.id, failure: describeFailure(error) };
+    // A parser recursing past this thread's stack is a limit breach, not a
+    // defect in the document or in VAT: it is reported as the limit, so it is
+    // never stored as a failure of these bytes (I6).
+    response = isStackOverflow(error)
+      ? { id: request.id, breach: 'stackMb' }
+      : { id: request.id, failure: describeFailure(error) };
   }
   const replyStartedAt = parseTimingStart();
   port.postMessage(response);
@@ -162,11 +169,38 @@ async function answerFor(
   result: ParseResult,
 ): Promise<ParseWorkerResponse> {
   const { cacheKey } = request;
-  if (cacheKey === undefined) return { id: request.id, facts: toParseWire(result) };
+  const facts = toParseWire(result);
+  // Checked BEFORE the cache write: a breach is filed nowhere (I6).
+  const breach = outputBreach(facts);
+  if (breach !== undefined) return { id: request.id, breach };
+  if (cacheKey === undefined) return { id: request.id, facts };
 
   const persisted = await workerCache().setByKey(cacheKey, result);
-  if (!persisted) return { id: request.id, facts: toParseWire(result) };
+  if (!persisted) return { id: request.id, facts };
   return { id: request.id, stored: cacheKey };
+}
+
+/**
+ * The output cap a job's facts breach, if any: rows first, then bytes.
+ *
+ * Bytes are the facts' JSON, the form the cache stores and close to what the
+ * wire carries. Paid here, on the worker, in parallel.
+ *
+ * @param facts - What crosses the boundary
+ * @returns The breached limit, or undefined
+ */
+function outputBreach(facts: ParseWireFacts): ParseLimitName | undefined {
+  const { outputRows, outputBytes } = workerLimits();
+  if (countOutputRows(facts) > outputRows) return 'outputRows';
+  if (Buffer.byteLength(JSON.stringify(facts)) > outputBytes) return 'outputBytes';
+  return undefined;
+}
+
+/**
+ * @returns The limits the parent resolved for this pool
+ */
+function workerLimits(): ParseLimits {
+  return (workerData as ParseWorkerData).limits;
 }
 
 /**

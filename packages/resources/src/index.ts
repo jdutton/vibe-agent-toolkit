@@ -1037,6 +1037,7 @@ export {
   BLOB_CONTENT_CHANGED,
   BLOB_NOT_TEXT,
   BLOB_PARSE_FAILED,
+  BLOB_PARSE_LIMIT_EXCEEDED,
   BLOB_UNREADABLE,
   populateBlobs,
   type BlobPopulationOptions,
