@@ -315,12 +315,27 @@ describe('a process-wide heap flag', () => {
   });
 
   it('is named in the refusal when it lowers the limit', () => {
-    // Lower than `heapMb`, the flag is what V8 stops the worker at, so the
-    // refusal names that value, not the configured one.
+    // Lower than `heapMb`, the flag caps V8's ceiling, and the pool stops the
+    // job at half of it, so the refusal names that value, not the configured one.
     const outcome = heapBreachUnder('--max-old-space-size=64', 1024);
 
     expect(outcome.limit).toBe('heapMb');
-    expect(outcome.bound).toContain('64 MiB heap');
+    expect(outcome.bound).toContain('32 MiB heap');
     expect(outcome.bound).toContain('--max-old-space-size');
+  });
+});
+
+describe('a heap breach with no process-wide flag', () => {
+  it('never takes the process down', () => {
+    // Measured on Node 26: a worker that reaches V8's OWN ceiling under fast
+    // allocation dies with a FATAL out-of-memory that kills the whole process
+    // (3 runs in 4 at 64 MiB), so the pool must stop the job before V8 does.
+    // Three breaches in a row, so a pool that leaves the race to V8 loses it.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const outcome = heapBreachUnder('', 64);
+
+      expect(outcome.limit).toBe('heapMb');
+      expect(outcome.bound).toBe('64 MiB heap');
+    }
   });
 });

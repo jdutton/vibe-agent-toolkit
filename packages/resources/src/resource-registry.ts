@@ -876,7 +876,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * that crawls and never calls {@link validate} must report every entry here
    * as an error finding and count it as examined, exactly as it reports
    * {@link getUnreadableResources}; otherwise a pathological document silently
-   * drops out of its output at exit 0.
+   * drops out of its output at exit 0. Every crawl in `src` is held to this by
+   * `packages/dev-tools/test/parse-refusal-readers.test.ts`.
    *
    * @returns A copy of the refusal log, oldest first
    */

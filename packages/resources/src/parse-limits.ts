@@ -39,7 +39,7 @@ import type { ParseResult } from './link-parser.js';
 export interface ParseLimits {
   /** Wall-clock milliseconds a job may take, from dispatch to answer. */
   readonly timeMs: number;
-  /** A worker's old-generation heap ceiling, in MiB (`resourceLimits.maxOldGenerationSizeMb`). */
+  /** A worker's heap limit, in MiB, enforced by the pool's heap sampler (V8's own ceiling sits past it: `workerHeapCeilingMb`). */
   readonly heapMb: number;
   /** A worker's stack, in MiB (`resourceLimits.stackSizeMb`) — what bounds parser recursion. */
   readonly stackMb: number;
@@ -108,7 +108,7 @@ export class ParseLimitError extends VatError {
   /**
    * A heap breach, naming the limit that actually applied.
    *
-   * @param appliedMb - The old-generation ceiling the worker ran under — see {@link appliedHeapLimitMb}
+   * @param appliedMb - The heap limit the pool enforced on the worker — see {@link appliedHeapLimitMb}
    * @param configuredMb - The `heapMb` this pool was given
    * @returns The breach, saying so when a process-wide flag lowered the limit
    */
@@ -534,44 +534,73 @@ export function isPerRunParseRefusal(error: unknown): error is PerRunParseRefusa
 const BYTES_PER_MIB = 1_048_576;
 
 /**
- * The old generation's size, from a worker's heap statistics: the ONE measure
- * `heapMb` is defined over (`resourceLimits.maxOldGenerationSizeMb`).
+ * Whether a worker's heap has passed the limit the pool enforces on it.
  *
- * A worker's own space statistics are out of the parent's reach: `Worker` has
- * `getHeapStatistics` and no `getHeapSpaceStatistics` (Node 26), and a worker
- * busy in a synchronous parse answers no message of its own. So the young
- * generation is subtracted at its ceiling. The result never overstates the old
- * generation, so the sampler stops a job only once its old generation is
- * provably past the limit, which is where V8 itself stops one when no
- * process-wide flag overrides `resourceLimits`.
+ * The measure is the WHOLE used heap, young generation included. A worker's
+ * own space statistics are out of the parent's reach (`Worker` has
+ * `getHeapStatistics` and no `getHeapSpaceStatistics` on Node 26), so the old
+ * generation alone cannot be read; subtracting the young generation at its
+ * 96 MiB ceiling instead understates it by up to that much, which measured on
+ * Node 26 let a worker reach V8's own ceiling unseen and kill the process. The
+ * whole heap never understates the old generation, so a job is stopped no
+ * later than its old generation passes the limit.
  *
  * @param stats - `Worker.getHeapStatistics()`
- * @param youngGenerationMb - The worker's `resourceLimits.maxYoungGenerationSizeMb`
- * @returns Bytes the old generation holds, at least
+ * @param limitMb - The enforced limit — see {@link appliedHeapLimitMb}
+ * @returns True once the used heap is past the limit
  */
-export function oldGenerationBytes(stats: { readonly used_heap_size: number }, youngGenerationMb: number): number {
-  return Math.max(0, stats.used_heap_size - youngGenerationMb * BYTES_PER_MIB);
+export function exceedsHeapLimit(stats: { readonly used_heap_size: number }, limitMb: number): boolean {
+  return stats.used_heap_size > limitMb * BYTES_PER_MIB;
 }
 
 /**
- * The old-generation ceiling a worker actually runs under, in MiB.
+ * How far V8's own heap ceiling for a worker sits above the limit the pool
+ * enforces: V8's ceiling is this many times the enforced one.
  *
- * `heap_size_limit` is the old generation's ceiling plus the young
- * generation's (measured on Node 26: 1,024 + 96 = 1,120). A process-wide
- * `--max-old-space-size` overrides `resourceLimits` in BOTH directions: higher,
- * and the sampler is what holds `heapMb`; lower, and V8 stops the worker below
- * `heapMb`, so a refusal must name the lower value, not the configured one.
+ * V8 reaching a worker's ceiling is not a recoverable `ERR_WORKER_OUT_OF_MEMORY`
+ * under fast allocation: measured on Node 26, a worker given 64 MiB and parsing
+ * a 200,000-link document dies with a FATAL "Reached heap limit" that kills the
+ * WHOLE process in 3 runs of 4. Node grants a dying worker 16 MiB of leeway, and
+ * a parse allocating ~300 MiB/s outruns it before termination lands. So V8's
+ * ceiling is never the enforcer: the pool's heap sampler stops the job at the
+ * enforced limit, and the ceiling is headroom past it the sampler cannot miss
+ * (one 50 ms sample interval allocates ~15 MiB at that rate). The cost is a
+ * lazier V8 garbage collector below a higher ceiling, so garbage counts toward
+ * `heapMb` until it is collected.
+ */
+const HEAP_CEILING_FACTOR = 2;
+
+/**
+ * V8's old-generation ceiling for a worker whose enforced limit is `heapMb`.
+ *
+ * @param heapMb - The configured limit
+ * @returns `resourceLimits.maxOldGenerationSizeMb` — see {@link HEAP_CEILING_FACTOR}
+ */
+export function workerHeapCeilingMb(heapMb: number): number {
+  return heapMb * HEAP_CEILING_FACTOR;
+}
+
+/**
+ * The heap limit the pool enforces on a worker, in MiB.
+ *
+ * `heap_size_limit` is V8's old-generation ceiling plus the young
+ * generation's (measured on Node 26: 2,048 + 96 = 2,144 for `heapMb` 1,024). A
+ * process-wide `--max-old-space-size` overrides `resourceLimits` in BOTH
+ * directions: higher, and the ceiling only moves further away; lower, and the
+ * pool cannot raise it, so it enforces {@link HEAP_CEILING_FACTOR} below
+ * whatever ceiling V8 applies, and a refusal names that lower value, not the
+ * configured one.
  *
  * @param stats - `Worker.getHeapStatistics()`
  * @param youngGenerationMb - The worker's `resourceLimits.maxYoungGenerationSizeMb`
  * @param heapMb - The configured limit
- * @returns The smaller of the configured limit and the one V8 enforces
+ * @returns The smaller of the configured limit and the headroom-safe share of V8's ceiling
  */
 export function appliedHeapLimitMb(
   stats: { readonly heap_size_limit: number },
   youngGenerationMb: number,
   heapMb: number,
 ): number {
-  const enforced = Math.floor(stats.heap_size_limit / BYTES_PER_MIB) - youngGenerationMb;
-  return enforced > 0 ? Math.min(heapMb, enforced) : heapMb;
+  const ceiling = Math.floor(stats.heap_size_limit / BYTES_PER_MIB) - youngGenerationMb;
+  return ceiling > 0 ? Math.min(heapMb, Math.floor(ceiling / HEAP_CEILING_FACTOR)) : heapMb;
 }

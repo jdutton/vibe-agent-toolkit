@@ -15,39 +15,11 @@
  * to the same two lines the day it appears.
  */
 
-import { readFileSync } from 'node:fs';
-
-import { isPathAbsentError, resolveFromImportMeta, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { crawlDirectorySync } from '@vibe-agent-toolkit/utils/crawl';
 import { describe, expect, it } from 'vitest';
 
-const REPO_ROOT = resolveFromImportMeta(import.meta.url, '..', '..', '..');
-const SEAM = '__internal';
+import { packageSources } from './package-sources.js';
 
-/**
- * Every package source file, repo-relative, with its text. Untracked files
- * count (a seam is a seam before it is committed); a tracked file deleted but
- * not yet committed is skipped — the crawl answers from git's index.
- */
-function sources(): Map<string, string> {
-  const files = crawlDirectorySync({
-    outputs: [],
-    baseDir: REPO_ROOT,
-    include: ['packages/*/src/**/*.ts'],
-    includeUntracked: true,
-    absolute: false,
-    unreadable: { refuse: { root: REPO_ROOT, remedy: 'Fix the directory permissions and re-run.', side: 'source' } },
-  });
-  const out = new Map<string, string>();
-  for (const file of files) {
-    try {
-      out.set(toForwardSlash(file), readFileSync(safePath.join(REPO_ROOT, file), 'utf-8'));
-    } catch (error) {
-      if (!isPathAbsentError(error)) throw error;
-    }
-  }
-  return out;
-}
+const SEAM = '__internal';
 
 /** `export * from './x.js'` in `barrel` republishes every value export of `seam`, the seam included. */
 function starExports(barrel: string, barrelSource: string, seam: string): boolean {
@@ -58,7 +30,7 @@ function starExports(barrel: string, barrelSource: string, seam: string): boolea
 }
 
 describe('the __internal seam', () => {
-  const files = sources();
+  const files = packageSources();
   const seamModules = [...files].filter(([, source]) => source.includes(`export const ${SEAM} =`)).map(([file]) => file);
 
   it('exists — at least the worked example declares one', () => {

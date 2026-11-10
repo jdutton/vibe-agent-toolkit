@@ -111,13 +111,14 @@ import type { DocumentParserKind } from './mime-type.js';
 import { ParserUnavailableError } from './parse-cache.js';
 import {
   appliedHeapLimitMb,
-  oldGenerationBytes,
+  exceedsHeapLimit,
   type ParseLimitName,
   type ParseLimits,
   ParseDecodeDefectError,
   ParseLimitError,
   ParseWorkerDiedError,
   resolveParseLimits,
+  workerHeapCeilingMb,
 } from './parse-limits.js';
 import {
   type ParseThreadTiming,
@@ -189,11 +190,12 @@ const GRACEFUL_EXIT_TIMEOUT_MS = 5000;
 /**
  * How often the parent samples a busy worker's heap against its limit.
  *
- * The backstop for `resourceLimits`, which a process-wide
- * `--max-old-space-size` (in `NODE_OPTIONS`, as CI often sets it) silently
- * overrides: it is a V8 global flag, and measured on Node 26, a worker given a
- * 48 MiB limit under `--max-old-space-size=4096` reports a 4,192 MiB heap limit
- * and allocates until the wall clock stops it. `Worker.getHeapStatistics()`
+ * The ONE enforcer of `heapMb`. V8's own ceiling (`resourceLimits`) is set
+ * past it, because reaching that ceiling can kill the whole process (see
+ * `workerHeapCeilingMb`), and a process-wide `--max-old-space-size` (in
+ * `NODE_OPTIONS`, as CI often sets it) overrides it anyway: it is a V8 global
+ * flag, and measured on Node 26, a worker given a 48 MiB limit under
+ * `--max-old-space-size=4096` reports a 4,192 MiB heap limit. `Worker.getHeapStatistics()`
  * answers from the worker's own isolate even mid-way through a synchronous
  * parse (measured: 1 ms), so the limit holds whatever flags the process runs
  * under. The sample interval bounds how far past the limit a job can allocate
@@ -214,14 +216,11 @@ const HEAP_SAMPLE_INTERVAL_MS = 50;
  */
 const DEATHS_BEFORE_UNAVAILABLE = 3;
 
-/** Bytes per MiB, to compare a heap sample against a limit stated in MiB. */
-const BYTES_PER_MIB = 1_048_576;
-
 /**
- * The young generation a worker was given, in MiB — what separates its whole
- * heap from the old generation `heapMb` bounds. Node fills it in on every
- * started worker (96 MiB measured on Node 26); 0 if a runtime ever does not,
- * which only makes the sampler count the young generation as old.
+ * The young generation a worker was given, in MiB — what separates V8's
+ * old-generation ceiling from the `heap_size_limit` a worker reports. Node
+ * fills it in on every started worker (96 MiB measured on Node 26); 0 if a
+ * runtime ever does not, which only makes the pool read the ceiling as higher.
  *
  * @param worker - A started worker
  * @returns `resourceLimits.maxYoungGenerationSizeMb`
@@ -673,9 +672,10 @@ interface PoolWorker {
   /** The entry the thread was started from, named when it cannot start. */
   entry: string;
   /**
-   * The old-generation ceiling this thread actually runs under, in MiB, read
-   * once the thread is online — lower than `heapMb` when a process-wide
-   * `--max-old-space-size` lowered it. `heapMb` until then. See `appliedHeapLimitMb`.
+   * The heap limit the pool enforces on this thread, in MiB, re-read from
+   * every heap sample — lower than `heapMb` when a process-wide
+   * `--max-old-space-size` lowered V8's ceiling. `heapMb` until the first
+   * sample. See `appliedHeapLimitMb`.
    */
   heapLimitMb: number;
 }
@@ -845,10 +845,10 @@ class WorkerParsePool implements ParsePool {
     poolWorker.worker.getHeapStatistics().then(
       (heap) => {
         if (poolWorker.job !== job) return;
-        // The old generation — the one measure `heapMb` is defined over — never
-        // the whole heap: young-generation churn is not what the limit bounds.
-        const oldGeneration = oldGenerationBytes(heap, youngGenerationMb(poolWorker.worker));
-        if (oldGeneration <= poolWorker.heapLimitMb * BYTES_PER_MIB) return;
+        // Each sample carries V8's ceiling, so the limit is known from the
+        // first one, never left to a read that may land after the job starts.
+        poolWorker.heapLimitMb = appliedHeapLimitMb(heap, youngGenerationMb(poolWorker.worker), this.#limits.heapMb);
+        if (!exceedsHeapLimit(heap, poolWorker.heapLimitMb)) return;
         this.#terminate(poolWorker, this.#heapBreach(poolWorker));
       },
       () => undefined,
@@ -861,21 +861,6 @@ class WorkerParsePool implements ParsePool {
    */
   #heapBreach(poolWorker: PoolWorker): ParseLimitError {
     return ParseLimitError.heap(poolWorker.heapLimitMb, this.#limits.heapMb);
-  }
-
-  /**
-   * Learn the old-generation ceiling a new thread actually runs under.
-   *
-   * Read once it is online: a process-wide `--max-old-space-size` lower than
-   * `heapMb` lowers it, and a refusal must name the limit that applied.
-   */
-  #readHeapLimit(poolWorker: PoolWorker): void {
-    poolWorker.worker.getHeapStatistics().then(
-      (heap) => {
-        poolWorker.heapLimitMb = appliedHeapLimitMb(heap, youngGenerationMb(poolWorker.worker), this.#limits.heapMb);
-      },
-      () => undefined,
-    );
   }
 
   /**
@@ -956,14 +941,15 @@ class WorkerParsePool implements ParsePool {
     let entry: string;
     try {
       entry = resolveWorkerEntry();
-      // Heap and stack are enforced by V8 itself, per thread. A thread that
-      // breaches its heap dies with `ERR_WORKER_OUT_OF_MEMORY` and is replaced;
-      // one that breaches its stack throws a `RangeError` (bare, or wrapped by
-      // `yaml`) the worker itself reports as a breach, and it stays in the pool.
+      // The stack is enforced by V8 itself, per thread: a breach throws a
+      // `RangeError` (bare, or wrapped by `yaml`) the worker itself reports,
+      // and the thread stays in the pool. The heap is NOT left to V8: reaching
+      // V8's ceiling can kill the whole process, so the sampler enforces
+      // `heapMb` and V8's ceiling is headroom past it (`workerHeapCeilingMb`).
       worker = new Worker(entry, {
         workerData: this.#workerData,
         resourceLimits: {
-          maxOldGenerationSizeMb: this.#limits.heapMb,
+          maxOldGenerationSizeMb: workerHeapCeilingMb(this.#limits.heapMb),
           stackSizeMb: this.#limits.stackMb,
         },
       });
@@ -986,9 +972,6 @@ class WorkerParsePool implements ParsePool {
       entry,
       heapLimitMb: this.#limits.heapMb,
     };
-    worker.once('online', () => {
-      this.#readHeapLimit(poolWorker);
-    });
     worker.on('message', (response: ParseWorkerResponse) => {
       this.#settle(poolWorker, response);
     });

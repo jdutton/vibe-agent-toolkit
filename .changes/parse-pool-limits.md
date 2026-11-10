@@ -77,7 +77,11 @@
   `BLOB_PARSE_LIMIT_EXCEEDED` ("over a parse limit" in the refusal summary), and `vat resources
   validate` as the new error finding `RESOURCE_PARSE_LIMIT_EXCEEDED`. A worker that dies holding a
   job is the same kind of per-run outcome: `BLOB_PARSE_WORKER_DIED` ("parse worker died") and
-  `RESOURCE_PARSE_WORKER_DIED`, never stored, never a parse failure of the file.
+  `RESOURCE_PARSE_WORKER_DIED`, never stored, never a parse failure of the file. `heapMb` bounds
+  a worker's whole used heap and is enforced by the pool, never by V8's own ceiling: a worker that
+  reaches V8's ceiling can take the whole process down with it, so that ceiling sits at twice
+  `heapMb`, and under a process-wide `--max-old-space-size` lower than that the job is stopped at
+  half the flag's value, which the refusal names.
 - **Frontmatter YAML is decoded only in the parse worker,** under its limits. A block nested deep
   enough to overflow the worker's stack is a `stackMb` breach, never a `frontmatterError`. A
   1,000-level nested block that used to overflow the main thread on a parse-cache hit now parses

@@ -1,7 +1,7 @@
 /**
  * The pure half of the parse limits: the defaults, how rows are counted, which
- * thrown values are a stack breach, the worker-death refusal, and the one heap
- * measure the pool's sampler compares against `heapMb`.
+ * thrown values are a stack breach, the worker-death refusal, and the heap
+ * measure and ceiling the pool's sampler enforces `heapMb` with.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -10,15 +10,16 @@ import * as yaml from 'yaml';
 import {
   appliedHeapLimitMb,
   countOutputRows,
+  exceedsHeapLimit,
   expandedSize,
   isParseLimitError,
   isParseWorkerDiedError,
   isPerRunParseRefusal,
   isStackOverflow,
-  oldGenerationBytes,
   ParseLimitError,
   ParseWorkerDiedError,
   resolveParseLimits,
+  workerHeapCeilingMb,
 } from '../src/parse-limits.js';
 
 const MIB = 1_048_576;
@@ -153,16 +154,27 @@ describe('ParseWorkerDiedError', () => {
 });
 
 describe('the heap measure', () => {
-  it('is the old generation: used heap less the young generation the worker was given', () => {
-    expect(oldGenerationBytes({ used_heap_size: 200 * MIB }, 96)).toBe(104 * MIB);
-    expect(oldGenerationBytes({ used_heap_size: 10 * MIB }, 96)).toBe(0);
+  it('is the whole used heap, so it never understates the old generation', () => {
+    // Young-generation bytes count: subtracting the young generation at its
+    // 96 MiB ceiling left a worker's old generation unseen up to V8's ceiling.
+    expect(exceedsHeapLimit({ used_heap_size: 33 * MIB }, 32)).toBe(true);
+    expect(exceedsHeapLimit({ used_heap_size: 32 * MIB }, 32)).toBe(false);
+  });
+
+  it('sets V8\'s own ceiling well above heapMb, so the sampler always stops a job first', () => {
+    // V8 reaching a worker's ceiling is process-fatal under fast allocation, so
+    // the ceiling is headroom past heapMb, never heapMb itself.
+    expect(workerHeapCeilingMb(48)).toBe(96);
+    expect(workerHeapCeilingMb(1024)).toBe(2048);
   });
 
   it('names the limit that applied, a lower process-wide --max-old-space-size included', () => {
     // heap_size_limit is the old generation's ceiling plus the young generation's.
-    expect(appliedHeapLimitMb({ heap_size_limit: 1120 * MIB }, 96, 1024)).toBe(1024);
-    expect(appliedHeapLimitMb({ heap_size_limit: 128 * MIB }, 96, 1024)).toBe(32);
+    expect(appliedHeapLimitMb({ heap_size_limit: (2048 + 96) * MIB }, 96, 1024)).toBe(1024);
     expect(appliedHeapLimitMb({ heap_size_limit: 4192 * MIB }, 96, 48)).toBe(48);
+    // A flag lowering V8's ceiling to 64 MiB: the job is stopped at half of it,
+    // keeping the same headroom below a ceiling the pool could not raise.
+    expect(appliedHeapLimitMb({ heap_size_limit: (64 + 96) * MIB }, 96, 1024)).toBe(32);
   });
 
   it('says in the refusal when a process-wide flag lowered the limit', () => {
