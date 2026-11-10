@@ -1,6 +1,18 @@
 # Resource Projection
 
-**Status markers used throughout:** ✅ shipped — 🔷 proposed, not yet built.
+**Status markers used throughout:** ✅ shipped — 🔷 proposed, not yet built — 🎯 **Target, per
+[fact-extractors.md](./fact-extractors.md)**: decided, not yet built.
+
+🎯 **Target, per [fact-extractors.md](./fact-extractors.md): the projection becomes a fact store.**
+Its invariants, settled decisions and enforcers are the ones in [Fact Extractors](./fact-extractors.md),
+and every hazard it enforces or accepts is a row in the
+[hazard register](./fact-extractors-hazard-register.md); this document does not restate them. Each
+section below keeps its description of what ships today and carries a 🎯 note for the target beside
+it. Where a 🎯 note and the shipped description differ, the shipped description is what the code does
+and the 🎯 note is what the change building it makes true; that change rewrites the section and drops
+the note. Two things do not change: a key covers every input its cached value depends on — the target
+generalises that rule from the content key to every stored artifact — and `check`'s whole-run
+supervision.
 
 ## 1. Overview
 
@@ -19,6 +31,12 @@ Dispositions, tags, problems and relationships are all many-to-many. Adding a zo
 quality code, or an edge-resolution state is adding rows, never migrating the schema. Extensibility
 lives in the vocabularies, which stay open; the table shapes are few and are meant to stay stable.
 
+🎯 **Target, per [fact-extractors.md](./fact-extractors.md): what the store holds.** Two kinds of
+fact. **Per-file facts** are row sets, one per (content key × extractor instance), each identified by
+its `row_set_key` and shared by every path, tree and repository holding those bytes. **Extent facts**
+say where content lives in one tree, including which instances read each path. **Per-run relations**
+(resolve outputs and core producers) are computed per run or read from a memo.
+
 ## 2. What's shipped today, vs. the proposed blob-keyed schema
 
 **The stage-2 parse cache's actual output shape today (✅ shipped) is not the table set below** — it's
@@ -34,6 +52,13 @@ Two other details that matter and that the proposed schema below deliberately do
 depends on this — and frontmatter is kept as YAML **source**, never JSON. A companion shape used for
 correctness testing, `packages/cli/src/pipeline-oracles/types.ts` (`ParseFactRow`, `EnumerationRow`,
 `ConditionFact`), exists as a test oracle, not as a queryable projection.
+
+🎯 **Target, per [fact-extractors.md](./fact-extractors.md) (I2a): the content key is the bytes
+alone.** The parser kind leaves the preimage and `CONTENT_KEY_PATTERN`, which carries no display
+label and stays the one pattern every consumer shares. The content key and `checksum` remain separate
+columns. The parse cache and its `ParseFacts` tenant retire, and the store becomes the one persistent
+tier for per-file facts. The per-format tables are renamed per instance (`<instance>__<table>`), a
+`Breaking` query-surface change. Today the key is `<parserKind>.<sha256>`, as described above.
 
 **The table sets in §2 and §3 below are the proposed (🔷), unbuilt blob-keyed schema** — carried
 over from the (retired, uncommitted) design spec as the target shape for stage 3 ("projection
@@ -54,6 +79,14 @@ row schemas' shape instead (the parse cache's `parseFactsShapeSource()` is the p
 and `ResourceRegistry` at runtime, and `vat resources query` writes them into a per-run in-memory
 store. What remains 🔷 proposed is the REMAINDER described below: columns the parser does not yet
 carry, and the zone modeling several tables depend on.
+
+🎯 **Target, per [fact-extractors.md](./fact-extractors.md): querying and provenance.** Each run
+hydrates a fresh database with only the relations its statements need, rows restricted to the bound
+tree's extent, and the store is never attached while a statement runs. A relation the run did not
+hydrate does not exist there, so a statement reaching it refuses instead of reading it empty (I1).
+That replaces copying the whole projection per run — today `vat resources query` populates a per-run
+in-memory store, as the paragraph above describes.
+Every report says what it was bound to (I1).
 
 ⚠️ `edges` was listed among the tables with a partial source and does **not** belong: it has **zero
 producers as a MATERIALISED TABLE**, and `edge_resolutions` alongside it. ⚠️ **They are not
@@ -156,6 +189,12 @@ their own.
 **`roots` is a table, so `path` alone is never an identifier.** Any SQL check's column contract must
 return a root (or a resource id), never a bare `path`, or a federated corpus with two roots sharing a
 relative path becomes ambiguous.
+
+🎯 **Target, per [fact-extractors.md](./fact-extractors.md) (I4): path-dependent tables gain the
+routing record,** the store's only routing fact. Which instances read a path is an extent fact and
+never enters a `row_set_key`; the chosen variant enters as an option; `mime` enters only through those
+two. Routability is a traversal rule, owned by [fact-extractors.md](./fact-extractors.md#settled-decisions);
+`routable` below describes how it is enforced today.
 
 **Content key ≠ `checksum`, and both must be kept as separate columns.** Both are real and shipped
 today, in different roles. `checksum` is `SHA256` of the *decoded* UTF-8 string (`checksum.ts`);
@@ -328,7 +367,22 @@ run's actual wall-clock saving comes from. Conflating the two is the mistake thi
 prevent: a blob-SHA memo (🔷 proposed) is a lane-specific shortcut *into* the lane-agnostic object
 cache, not a replacement for either layer.
 
+🎯 **Target, per [fact-extractors.md](./fact-extractors.md) (I2, I2a): the extent key covers every
+input its derivation observed,** including the code that derived it, the effective routing, git's
+repo-local file inputs, binary and passed-through keys, and `VAT_GIT_SAFE_DIRECTORY`. Every hit is
+checked against the stat tuple under the racy rule, and every byte consumed is re-hashed at use.
+Extent derivation stays full until the incremental extent lands, its design blind-reviewed.
+
 ## 5. Cache properties (parse cache, ✅ shipped stage 2)
+
+🎯 **Target, per [fact-extractors.md](./fact-extractors.md): the namespace and eviction.** The
+namespace isolates the shapes of the core and store-protocol tables and the code identity of the
+store-protocol implementation, and only those. Instance schemas and extractor and resolve code
+identity live in `row_set_key` and the resolve memo key, never in the namespace, so an extractor edit
+misses only what changed. Package version and worktree path leave the namespace once every stored
+tier carries code identity — until then the version-based namespacing below is what ships. Eviction
+covers every tier, extents included, and never makes a running answer read facts as absent (I7). A
+move or restore clears leases.
 
 - **Disposable.** No durability promise, no generations, no compaction, no CI-restore contract, no
   on-disk format obligation to adopters. Recovery is "rescan." ⚠️ **OS purge is the eviction policy
@@ -466,6 +520,9 @@ and one finding dissolves most of the demand for the door.
   HEAD and parsed at a commit from last year must land on the same entry, or any historical pass
   re-parses the entire corpus from cold.
 
+  🎯 **Target, per [fact-extractors.md](./fact-extractors.md):** nothing path-, origin- or
+  commit-derived enters the content key or a `row_set_key`.
+
 **Validation stays HEAD-only by design**, and that is not a gap waiting to be filled. Checking a
 historical document against today's config is an anachronism — it reports findings that were not
 findings when the document was written, under rules that did not exist.
@@ -500,7 +557,12 @@ which a bare commit key cannot express.
 - ✅ **Shipped** (stage 3): population of those tables from `ParseFacts`/`ResourceRegistry` at
   runtime, and export.
 - 🔷 **Proposed** (beyond stage 3): the git-lane and non-git-lane change-detection manifests from
-  the scanning doc; the blob-SHA memo.
+  the scanning doc; the blob-SHA memo. 🎯 Per [fact-extractors.md](./fact-extractors.md), the
+  git-lane change-detection delta is **not decided** — extent derivation stays full until the
+  incremental extent's design passes a blind review — and the non-git manifest stays proposed.
+- 🎯 **Target, per [fact-extractors.md](./fact-extractors.md): the fact store** — per-file row sets
+  under `row_set_key`, extent facts, per-run hydration and the extractor contract, governed by that
+  document's invariants and its [hazard register](./fact-extractors-hazard-register.md).
 - ✅ **Shipped** (stage 4): `resource_tags` has a producer. `AgenticConventionContributor`
   (`stratum: 'base'`, `readsBlobs: false`) classifies every realization by path and emits the
   convention vocabulary plus a `loading` row; it is registered in the repo-wide lane after the
@@ -604,6 +666,9 @@ which a bare commit key cannot express.
 
 ## Related
 
+- [Fact Extractors](./fact-extractors.md) — the decided target for this store: invariants I0–I11,
+  settled decisions and their rejected alternatives; every 🎯 note above defers to it. Its
+  [hazard register](./fact-extractors-hazard-register.md) lists what the store enforces or accepts.
 - [Zones](./zones.md) — the lens model these tables are read through: storage vs. viewer zones,
   per-zone resolution, resource identity and realizations, and the contributor seam.
 - [Resource Scanning and Object Caching](./resource-scanning-and-caching.md) — the input side: how
