@@ -85,8 +85,10 @@ const DOCUMENTED = {
   ),
 };
 
-// The table is the class fix for a documented cause → code that drifted from the lens: every row is
-// checked against what the lens actually maps its fault kind to.
+// cause → kind → code, every link real: each row's cause is produced by its REAL producer (a fixture
+// or the unit seam that decides it) and checked for its documented kind in utils'
+// `test/integration/git-changed-files.integration.test.ts`; here each row's documented kind is
+// checked for the code the lens maps it to.
 describe('the documented changed_files refusal table', () => {
   it('is stated, and stated identically, in the CLI reference and the skill', () => {
     expect(DOCUMENTED.reference.length).toBeGreaterThanOrEqual(20);
@@ -94,7 +96,7 @@ describe('the documented changed_files refusal table', () => {
   });
 
   it.each(DOCUMENTED.reference.map((row) => [row.cause, row.kind, row.code]))(
-    'documents "%s" (%s) with the code the lens refuses it with, %s',
+    'documents "%s" (%s, its producer\'s kind in utils) with the code the lens maps that kind to, %s',
     (_cause, kind, code) => {
       gitChangedFiles.mockReset();
       gitChangedFiles.mockReturnValue({ ok: false, kind, reason: 'The reason.' });

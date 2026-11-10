@@ -192,6 +192,24 @@ describe('changed_files and --base, end to end', () => {
       expect(run.error?.message).toContain('git was not found on PATH');
       expect(run.error?.message).not.toContain('not a git repository');
     });
+
+    // The crawl's snapshot meets the stray file before the lens does: it must name the sparse cause
+    // and its three fixes, never "not a git repository".
+    it('refuses a sparse checkout holding a stray untracked file as INPUT_UNREADABLE, naming the three fixes', () => {
+      const sparse = committedRepo('sparse');
+      put(sparse, 'outside/kept.md', '# Outside the definition\n');
+      git(sparse, ['add', '-A']);
+      git(sparse, ['commit', '-q', '-m', 'outside']);
+      git(sparse, ['sparse-checkout', 'set', '--no-cone', '/docs/']);
+      put(sparse, 'stray.md', '# Stray, outside the sparse definition\n');
+
+      const run = query(sparse, 'SELECT path FROM changed_files', ['--base', 'main']);
+
+      expect(run.status, run.stderr).toBe(2);
+      expect(run.error?.code).toBe('INPUT_UNREADABLE');
+      expect(run.error?.message).toMatch(/"stray\.md".*sparse-checkout definition.*git sparse-checkout add.*remove.*\.gitignore/s);
+      expect(run.error?.message).not.toContain('not a git repository');
+    });
   });
 
   describe('vat resources check', () => {

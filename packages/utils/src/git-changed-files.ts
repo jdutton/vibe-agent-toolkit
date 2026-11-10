@@ -24,11 +24,9 @@
  * - A directory under the root git cannot list REFUSES the answer: `git add --all` only warns on it
  *   and exits 0, so the untracked files beneath it would be missing. It is asked of
  *   `git ls-files --others` under the unreadable-listing policy, never of the crawl lane.
- * - If the snapshot fails, one real `git add --all` into another throwaway index asks git why: a
- *   `fatal:` or `error:` it states is the repository's to fix, as is an untracked path outside a
- *   sparse checkout's definition (`core.sparseCheckout` true, and git says so with no `fatal:`);
- *   otherwise the cause is unknown, and the refusal says so (a time-out only when that second
- *   attempt was seen to time out).
+ * - If the snapshot fails, the failure carries git's own account of why, and the ONE classifier
+ *   the crawl uses too (`gitSnapshotFailureOf`, `git-no-answer.ts`) decides the cause: each cause
+ *   has one code there, and one fault kind here ({@link KIND_BY_CODE}).
  *
  * In a shallow clone the merge base is trusted only when no commit between it and either tip is a
  * shallow boundary: one could hide a nearer merge base, so that refuses, naming how to deepen.
@@ -58,6 +56,8 @@
  * Unicode normalisation), and a byte comparison would then drop it in silence. So every path a row
  * reports (a rename's new side; its old side is history) whose leading segments match the prefix as
  * APFS compares names — Unicode case and NFC/NFD alike — but not byte for byte refuses, naming both.
+ * A rename whose new side is not under the root reports a deletion of its old side, so that old side
+ * is judged as a deletion's path is.
  *
  * Whether the filesystem folds is PROBED at the root (its path with one segment's case flipped,
  * compared by `dev`/`ino`), never read from `core.ignorecase`, a config that can disagree with the
@@ -66,19 +66,18 @@
  * there `Docs/` beside a `docs/` root is another directory, and its changes are simply not the root's.
  */
 
-import { randomUUID } from 'node:crypto';
-import { lstatSync, readFileSync, rmSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
 
 import { compareCodeUnits } from './compare-code-units.js';
-import { fsFaultOf, isNoSuchEntryError, isOutputOverrunError, isPathAbsentError, isTimedOutError } from './errors/errno-table.js';
+import { fsFaultOf, isPathAbsentError } from './errors/errno-table.js';
 import type { DirectoryRefusal } from './fs-utils.js';
-import { GIT_NOT_FOUND_REMEDY } from './git-no-answer.js';
+import { type GitAttempt, type GitNoAnswer, type GitNoAnswerCode, gitRunFailureOf, gitSnapshotFailureOf, SPARSE_CHECKOUT_KEY } from './git-no-answer.js';
 import { runGit, runGitBytes } from './git-run.js';
-import { gitTreeSnapshot, unreadableSnapshotRefusal } from './git-snapshot.js';
+import { gitTreeSnapshot } from './git-snapshot.js';
 import { gitLsOthers } from './git-utils.js';
 import { refusedListingMessage } from './listing-refusal.js';
 import { isAbsoluteAnyPlatform, toForwardSlash } from './path-core.js';
-import { normalizedTmpdir, normalizePath, safePath } from './path-utils.js';
+import { normalizePath, safePath } from './path-utils.js';
 import { shownName } from './shown-text.js';
 import { decodeUtf8Exactly } from './text-content.js';
 
@@ -124,9 +123,12 @@ interface Refusal {
   readonly reason: string;
 }
 
+/** The fault kind of a git that did not run, or did not answer as a git that ran here would. */
+const GIT_FAILED_KIND: GitChangedFilesRefusalKind = 'git-failed';
+
 /** The refusal for a git that did not run, or did not answer, as a git that ran here would. */
 function gitFailed(reason: string): Refusal {
-  return { ok: false, kind: 'git-failed', reason };
+  return { ok: false, kind: GIT_FAILED_KIND, reason };
 }
 
 /** The changes, or why there is no answer. */
@@ -323,7 +325,21 @@ function spellingInAnotherForm(path: Uint8Array, prefix: Uint8Array): string | u
 }
 
 /**
- * Refuse when the path a row reports (a rename's NEW side) is spelled under the root in another case
+ * The other spelling of the root a record reports a row under, if any. Its path — a deletion's
+ * included — always counts. A rename's old side counts only when its new side is not under the root
+ * byte for byte: the rename then reports a DELETION of the old side, so it follows the one rule a
+ * deletion follows. A rename that lands under the root (a case-only directory rename in history,
+ * `Docs/` -> `docs/`) reports its new side, and its old side is only history.
+ */
+function reportedSpellingInAnotherForm(record: GitNameStatusRecord, prefix: Uint8Array): string | undefined {
+  const reported = spellingInAnotherForm(record.path, prefix);
+  if (reported !== undefined || record.oldPath === null || isUnder(record.path, prefix)) return reported;
+  return spellingInAnotherForm(record.oldPath, prefix);
+}
+
+/**
+ * Refuse when the path a row reports (a deletion, a rename's new side, or the old side of a rename
+ * out of the root) is spelled under the root in another case
  * or normalisation: the byte filter would otherwise drop it in silence.
  *
  * @param records - The `--name-status` records, paths from the repository's top
@@ -334,10 +350,7 @@ function spellingInAnotherForm(path: Uint8Array, prefix: Uint8Array): string | u
  */
 export function caseSpellingRefusal(records: readonly GitNameStatusRecord[], prefix: Uint8Array, folds: boolean): Refusal | undefined {
   if (!folds || prefix.length === 0) return undefined;
-  // The new side only: a rename's old side names where a file WAS — a case-only directory rename in
-  // history (`Docs/` -> `docs/`) is not the root in another spelling, and refusing it would refuse
-  // every repository that ever made one.
-  const other = records.map((record) => spellingInAnotherForm(record.path, prefix)).find((spelling) => spelling !== undefined);
+  const other = records.map((record) => reportedSpellingInAnotherForm(record, prefix)).find((spelling) => spelling !== undefined);
   if (other === undefined) return undefined;
   return {
     ok: false,
@@ -414,34 +427,32 @@ function gitSaid(stderr: string): string {
   return stderr === '' ? '' : ` git said: ${stderr}`;
 }
 
-/** One git invocation's outcome, as much of it as a refusal reads. */
-interface Ran {
-  readonly ok: boolean;
-  readonly stderr: string;
-  readonly error?: Error;
+/** Whose fault each of git's causes is, as this module reports it — the classifier's codes, one kind each. */
+const KIND_BY_CODE: Readonly<Record<GitNoAnswerCode, GitChangedFilesRefusalKind>> = {
+  GIT_NOT_FOUND: GIT_FAILED_KIND,
+  GIT_FAILED: GIT_FAILED_KIND,
+  GIT_NO_ANSWER: 'repository',
+  GIT_SNAPSHOT_UNREADABLE: 'repository',
+  GIT_SNAPSHOT_OUTSIDE_SPARSE: 'repository',
+  GIT_SNAPSHOT_REFUSED: 'repository',
+};
+
+/** The refusal for a cause the one classifier (`git-no-answer.ts`) decided. */
+function refusalOf(cause: GitNoAnswer): Refusal {
+  return { ok: false, kind: KIND_BY_CODE[cause.code], reason: cause.reason };
 }
 
 /**
- * The refusal for a git that did not run or did not finish — never the caller's ref or tree —
- * with the remedy for the way it failed.
+ * The refusal for a git that did not run or did not finish — never the caller's ref or tree — as
+ * the one classifier words it ({@link gitRunFailureOf}).
  *
  * @param subcommand - The git subcommand that ran (`diff-tree`)
  * @param result - What running it did
  * @returns The refusal, or undefined when git ran to an exit status
  */
-export function gitDidNotRun(subcommand: string, result: Ran): Refusal | undefined {
-  const { error } = result;
-  if (error === undefined) return undefined;
-  const command = `git ${subcommand}`;
-  let remedy = 'Check that git runs here.';
-  if (isNoSuchEntryError(error)) {
-    remedy = GIT_NOT_FOUND_REMEDY;
-  } else if (isTimedOutError(error)) {
-    remedy = `${command} did not finish within its time limit; compare against a nearer base, so there is less to diff.`;
-  } else if (isOutputOverrunError(error)) {
-    remedy = `${command} wrote more output than VAT reads; compare against a nearer base, so there is less to list.`;
-  }
-  return gitFailed(`${command} did not run to completion here (${error.message}). ${remedy}`);
+export function gitDidNotRun(subcommand: string, result: GitAttempt): Refusal | undefined {
+  const cause = gitRunFailureOf(`git ${subcommand}`, result);
+  return cause === undefined ? undefined : refusalOf(cause);
 }
 
 /** Run one git command for its trimmed text answer, or the refusal for a git that did not finish. */
@@ -686,50 +697,12 @@ function hiddenEditRefusal(named: string, flags: HiddenEditFlags): Refusal {
 /**
  * The working tree as one git tree — see the module header.
  *
- * @returns The tree's id, or a refusal saying why git could not take it
+ * @returns The tree's id, or a refusal saying why git could not take it, as the one classifier
+ *   (`gitSnapshotFailureOf`) decides for every lane
  */
 function snapshotTree(root: string): { ok: true; tree: string } | Refusal {
   const snapshot = gitTreeSnapshot({ cwd: root });
-  if (snapshot !== null) return { ok: true, tree: snapshot.hash };
-  const unreadable = unreadableSnapshotRefusal(root);
-  if (unreadable !== undefined) return { ok: false, kind: 'repository', reason: unreadable.message };
-  const probe = probeSnapshot(root);
-  const sparse = configIsTrue(root, SPARSE_CHECKOUT_KEY);
-  if (!sparse.ok) return sparse;
-  return snapshotProbeRefusal(probe, sparse.value);
-}
-
-/** The config that turns a sparse checkout on. */
-const SPARSE_CHECKOUT_KEY = 'core.sparseCheckout';
-
-/** git's words, in the C locale, for an untracked path `add --all` will not take: it is outside the sparse definition. */
-const OUTSIDE_SPARSE_DEFINITION = 'outside of your sparse-checkout definition';
-
-/** The line ending git's header before it lists those paths, one per line, up to its `hint:` lines. */
-const OUTSIDE_SPARSE_LIST_HEADER = 'updated in the index:';
-
-/**
- * The refusal for untracked paths outside a sparse checkout's definition: `git add --all` will not
- * take them, exits 1 and states no `fatal:`, so the snapshot fails with git's cause in no other words.
- *
- * @param stderr - What the diagnostic `git add --all` wrote (C locale)
- * @param sparseCheckout - Whether `core.sparseCheckout` is true: git's text alone is not trusted
- * @returns The refusal naming the paths and the three fixes, or undefined when this is not the cause
- */
-function outsideSparseDefinitionRefusal(stderr: string, sparseCheckout: boolean): Refusal | undefined {
-  if (!sparseCheckout || !stderr.includes(OUTSIDE_SPARSE_DEFINITION)) return undefined;
-  const lines = stderr.split('\n');
-  const listed = lines.slice(lines.findIndex((line) => line.trim() === OUTSIDE_SPARSE_LIST_HEADER) + 1);
-  const end = listed.findIndex((line) => line === '' || line.startsWith('hint:'));
-  const paths = end === -1 ? listed : listed.slice(0, end);
-  const named = paths.length === 0 ? 'An untracked path' : paths.map((path) => shownName(path)).join(', ');
-  return {
-    ok: false,
-    kind: 'repository',
-    reason: `${named} lies outside this sparse checkout's sparse-checkout definition, so git will not snapshot it`
-      + ' and its change cannot be compared with the base. Add the path to the sparse definition'
-      + ' (git sparse-checkout add <path>), remove the path, or ignore it (.gitignore), then run again.',
-  };
+  return snapshot.ok ? { ok: true, tree: snapshot.hash } : refusalOf(gitSnapshotFailureOf(snapshot));
 }
 
 /** What a person whose directory git cannot list can do about it. */
@@ -756,72 +729,6 @@ function unlistableDirectoryRefusal(root: string): Refusal | undefined {
   if (listed !== null) return undefined;
   return gitFailed('git ls-files --others gave no listing here, so VAT cannot tell whether every directory under the root'
     + ' was read. Check that git runs here.');
-}
-
-/** The lines of git's stderr that state a refusal. */
-const GIT_REFUSAL_LINE = /^(?:fatal|error): /;
-
-/** What the snapshot is, as a refusal names it. */
-const SNAPSHOT = '`git add --all` into a throwaway index, then `write-tree`';
-
-/**
- * Ask git ONCE why the snapshot failed: a REAL `git add --all` into an index that does not exist yet
- * (so the real index is neither read nor locked). Real, not `--dry-run`: a dry run writes no object
- * and runs no clean filter, so it cannot meet the faults those raise.
- *
- * @returns What that second attempt did
- */
-function probeSnapshot(root: string): Ran {
-  const index = safePath.join(normalizedTmpdir(), `vat-snapshot-probe-${randomUUID()}.index`);
-  try {
-    // `LC_ALL=C`: what this is read for (`fatal:`, the sparse-definition sentence) is git's C-locale wording.
-    return runGit(['add', '--all'], { cwd: root, env: { GIT_INDEX_FILE: index, LC_ALL: 'C' } });
-  } finally {
-    rmSync(index, { force: true });
-  }
-}
-
-/**
- * Classify a failed snapshot by what its diagnostic second attempt did. A refusal git states
- * (`fatal:` or `error:` — a nested repository with no commit, an object it cannot write, a clean
- * filter that fails) is deterministic and the tree's to fix. A second attempt seen to time out or
- * not run is git's failure, named as such. Anything else — it succeeded, or failed stating no
- * refusal — leaves the first failure's cause unknown, and says so rather than guessing.
- *
- * An untracked path outside a sparse checkout's definition is the tree's too
- * ({@link outsideSparseDefinitionRefusal}), though git states it with no `fatal:`.
- *
- * @param probe - What the diagnostic `git add --all` did
- * @param sparseCheckout - Whether `core.sparseCheckout` is true here
- * @returns The refusal
- */
-export function snapshotProbeRefusal(probe: Ran, sparseCheckout: boolean): Refusal {
-  if (probe.error !== undefined && isTimedOutError(probe.error)) {
-    return gitFailed(
-      `git could not snapshot the working tree (${SNAPSHOT}), and a second \`git add --all\` here did not finish within`
-        + ' its time limit either: the tree is large or cold. Run again once it is warm.',
-    );
-  }
-  const didNotRun = gitDidNotRun('add --all', probe);
-  if (didNotRun !== undefined) {
-    return gitFailed(`git could not snapshot the working tree (${SNAPSHOT}), so there is nothing to compare with the base. ${didNotRun.reason}`);
-  }
-  const outsideSparse = probe.ok ? undefined : outsideSparseDefinitionRefusal(probe.stderr, sparseCheckout);
-  if (outsideSparse !== undefined) return outsideSparse;
-  const said = probe.ok ? [] : probe.stderr.split('\n').filter((line) => GIT_REFUSAL_LINE.test(line));
-  if (said.length > 0) {
-    return {
-      ok: false,
-      kind: 'repository',
-      reason: `git refused to snapshot the working tree, so there is nothing to compare with the base. git said: ${said.join(' ')}`
-        + ' Fix what git names (a nested repository with no commit: commit in it, or remove it), then run again.',
-    };
-  }
-  return gitFailed(
-    `git could not snapshot the working tree (${SNAPSHOT}), so there is nothing to compare with the base, and the`
-      + ` cause is unknown: a second \`git add --all\` here ${probe.ok ? 'succeeded' : 'failed stating no refusal'}.`
-      + ` Run again; if it keeps failing, run git add --all in a copy of the repository to see what git says.${gitSaid(probe.stderr)}`,
-  );
 }
 
 /**

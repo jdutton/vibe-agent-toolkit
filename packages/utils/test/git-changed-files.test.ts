@@ -14,8 +14,9 @@ import {
   hiddenEditEntriesOf,
   mergeBaseOf,
   parseNameStatusZ,
-  snapshotProbeRefusal,
 } from '../src/git-changed-files.js';
+
+import { gitSpawnFailure } from './test-helpers.js';
 
 /** A NUL-separated record stream, as `-z` writes it. */
 function z(...fields: readonly (string | Uint8Array)[]): Buffer {
@@ -154,6 +155,8 @@ describe('caseSpellingRefusal', () => {
   it.each([
     ['a deletion', z('D', 'Docs/b.md'), 'Docs/'],
     ['the new side of a rename', z('R100', 'docs/a.md', 'DOCS/a.md'), 'DOCS/'],
+    // Reported as a deletion of its old side, so judged by the deletion's rule.
+    ['the old side of a rename out of the root', z('R100', 'Docs/a.md', 'other/a.md'), 'Docs/'],
   ])('refuses a path spelled in another case on %s, naming both spellings', (_what, listing, other) => {
     const refusal = caseSpellingRefusalWhereFolded(recordsOf(listing), prefix);
 
@@ -163,8 +166,8 @@ describe('caseSpellingRefusal', () => {
   });
 
   // A case-only directory rename in history (`Docs/` -> `docs/` before HEAD): the old side names
-  // where the file WAS, which is no path the root's answer reports, so only the new side is checked.
-  it('checks only the new side of a rename: an old side in another case is history, not the root', () => {
+  // where the file WAS, which is no path the root's answer reports when the new side is under the root.
+  it('checks only the new side of a rename into the root: an old side in another case is history', () => {
     expect(caseSpellingRefusalWhereFolded(recordsOf(z('R100', 'Docs/a.md', 'docs/a.md')), prefix)).toBeUndefined();
   });
 
@@ -238,18 +241,14 @@ describe('mergeBaseOf', () => {
   });
 });
 
-/** A spawn failure carrying `code`, as Node reports one. */
-function failed(code: string): { ok: false; stderr: string; error: Error } {
-  return { ok: false, stderr: '', error: Object.assign(new Error(`spawnSync git ${code}`), { code }) };
-}
-
+// The lens's view of the one classifier (`gitRunFailureOf`): every cause of a git that did not finish is git's.
 describe('gitDidNotRun', () => {
   it.each([
     ['git is not on PATH', 'ENOENT', /git was not found on PATH/],
     ['git ran out of time', 'ETIMEDOUT', /did not finish within.*nearer base/s],
     ['the output overran the buffer', 'ENOBUFS', /more output than VAT reads.*nearer base/s],
   ])('names the real remedy when %s', (_what, code, remedy) => {
-    const refusal = gitDidNotRun('diff-tree', failed(code));
+    const refusal = gitDidNotRun('diff-tree', gitSpawnFailure(code));
 
     expect(refusal).toMatchObject({ ok: false, kind: 'git-failed', reason: expect.stringMatching(remedy) });
     expect(refusal?.reason).toContain('git diff-tree');
@@ -258,57 +257,6 @@ describe('gitDidNotRun', () => {
 
   it('is silent for a git that ran to an exit status', () => {
     expect(gitDidNotRun('diff-tree', { ok: false, stderr: 'fatal: bad object' })).toBeUndefined();
-  });
-});
-
-describe('snapshotProbeRefusal', () => {
-  it('says git timed out only when the second attempt was seen to time out', () => {
-    expect(snapshotProbeRefusal(failed('ETIMEDOUT'), false)).toMatchObject({
-      ok: false,
-      kind: 'git-failed',
-      reason: expect.stringMatching(/did not finish within its time limit/),
-    });
-  });
-
-  it.each([
-    ['the second attempt succeeded', { ok: true, stderr: '' }],
-    ['git failed stating no refusal', { ok: false, stderr: 'warning: something odd' }],
-  ])('calls the cause unknown, never a time-out, when %s', (_what, probe) => {
-    const refusal = snapshotProbeRefusal(probe, false);
-
-    expect(refusal).toMatchObject({ ok: false, kind: 'git-failed', reason: expect.stringMatching(/cause is unknown/) });
-    expect(refusal.reason).not.toMatch(/timed out|time limit/);
-  });
-
-  it.each([
-    ['an object git cannot write', 'error: insufficient permission for adding an object to repository database .git/objects'],
-    ['a clean filter that fails', 'error: external filter \'false\' failed 1\nfatal: site/a.md: clean filter \'broken\' failed'],
-  ])('refuses %s as the repository\'s fault, quoting git', (_what, stderr) => {
-    expect(snapshotProbeRefusal({ ok: false, stderr }, false)).toMatchObject({
-      ok: false,
-      kind: 'repository',
-      reason: expect.stringMatching(/git refused to snapshot the working tree.*git said: (?:error|fatal): /s),
-    });
-  });
-
-  /** What `git add --all` writes, exit 1 and no `fatal:`, for an untracked file outside the sparse cone. */
-  const OUTSIDE_CONE = 'The following paths and/or pathspecs matched paths that exist\n'
-    + 'outside of your sparse-checkout definition, so will not be\n'
-    + 'updated in the index:\n'
-    + 'out2.md\n'
-    + 'hint: If you intend to update such entries, try one of the following:\n'
-    + 'hint: * Use the --sparse option.\n';
-
-  it('refuses an untracked file outside a sparse checkout\'s definition as the repository\'s, naming it and the three fixes', () => {
-    const refusal = snapshotProbeRefusal({ ok: false, stderr: OUTSIDE_CONE }, true);
-
-    expect(refusal).toMatchObject({ ok: false, kind: 'repository' });
-    expect(refusal.reason).toContain('"out2.md"');
-    expect(refusal.reason).toMatch(/sparse-checkout definition.*add.*remove.*ignore/s);
-  });
-
-  it('does not read git\'s sparse text as a sparse refusal where core.sparseCheckout is not true', () => {
-    expect(snapshotProbeRefusal({ ok: false, stderr: OUTSIDE_CONE }, false)).toMatchObject({ ok: false, kind: 'git-failed' });
   });
 });
 

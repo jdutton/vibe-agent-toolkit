@@ -1,24 +1,29 @@
 /**
  * A snapshot runs `git add --all`, which reads every un-ignored file's bytes —
  * so ONE file the OS will not read, anywhere in the repository and referenced by
- * nothing, makes git refuse the whole snapshot. `getGitTreeSnapshot` answers
- * that with `null`, the same `null` as "not a repository", and the crawl that
- * needs it used to throw an uncoded "it is not a git repository" about a
- * directory that is one. `unreadableSnapshotRefusal` names the file instead.
+ * nothing, makes git refuse the whole snapshot. The crawl that needs it used to
+ * throw an uncoded "it is not a git repository" about a directory that is one.
+ * The one classifier (`gitSnapshotFailureOf`) names the file instead.
  */
 
 import { chmodSync, writeFileSync } from 'node:fs';
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { isVatError } from '../../src/errors/vat-error.js';
-import { gitTreeSnapshot, GIT_SNAPSHOT_UNREADABLE_CODE, unreadableSnapshotRefusal } from '../../src/git-snapshot.js';
+import { GIT_NO_ANSWER_CODE, GIT_SNAPSHOT_UNREADABLE_CODE, gitSnapshotFailureOf } from '../../src/git-no-answer.js';
+import { gitTreeSnapshot, type GitSnapshotOutcome, unreadableSnapshotReason } from '../../src/git-snapshot.js';
 import { safePath } from '../../src/path-utils.js';
 import { CANNOT_DENY_READS } from '../../src/testing/platform-gates.js';
 import { setupSyncTempDirSuite } from '../../src/testing/temp-dir.js';
 import { createGitRepo } from '../test-helpers.js';
 
-describe('unreadableSnapshotRefusal', () => {
+/** The classifier's answer for a snapshot that must have failed. */
+function causeOf(outcome: GitSnapshotOutcome): ReturnType<typeof gitSnapshotFailureOf> {
+  if (outcome.ok) throw new Error('expected the snapshot to fail');
+  return gitSnapshotFailureOf(outcome);
+}
+
+describe('a snapshot git refuses for an unreadable file', () => {
   const suite = setupSyncTempDirSuite('git-snapshot-unreadable');
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);
@@ -32,14 +37,11 @@ describe('unreadableSnapshotRefusal', () => {
     chmodSync(secret, 0o000);
 
     try {
-      // The premise: git itself refuses the snapshot for this one file.
-      expect(gitTreeSnapshot({ cwd: root })).toBeNull();
+      const cause = causeOf(gitTreeSnapshot({ cwd: root }));
 
-      const refusal = unreadableSnapshotRefusal(root);
-
-      expect(isVatError(refusal, GIT_SNAPSHOT_UNREADABLE_CODE), String(refusal)).toBe(true);
-      expect(refusal?.message).toContain('secret.txt');
-      expect(refusal?.message).not.toContain('readme.md');
+      expect(cause.code).toBe(GIT_SNAPSHOT_UNREADABLE_CODE);
+      expect(cause.reason).toContain('secret.txt');
+      expect(cause.reason).not.toContain('readme.md');
     } finally {
       chmodSync(secret, 0o644);
     }
@@ -49,10 +51,13 @@ describe('unreadableSnapshotRefusal', () => {
     const root = createGitRepo(suite.getTempDir());
     writeFileSync(safePath.join(root, 'readme.md'), '# readable\n');
 
-    expect(unreadableSnapshotRefusal(root)).toBeUndefined();
+    expect(unreadableSnapshotReason(root)).toBeUndefined();
   });
 
-  it('has nothing to say outside a repository', () => {
-    expect(unreadableSnapshotRefusal(suite.getTempDir())).toBeUndefined();
+  it('calls a directory in no repository not a repository, never unreadable', () => {
+    const cause = causeOf(gitTreeSnapshot({ cwd: suite.getTempDir() }));
+
+    expect(cause.code).toBe(GIT_NO_ANSWER_CODE);
+    expect(cause.reason).toContain('it is not a git repository');
   });
 });

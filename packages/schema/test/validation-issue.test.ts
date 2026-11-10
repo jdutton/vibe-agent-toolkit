@@ -57,6 +57,16 @@ describe('ValidationIssueSchema location contract', () => {
     expect(ValidationIssueSchema.safeParse(issueWith({ location: projectLocationOf(value) })).success).toBe(true);
   });
 
+  // A location is PUBLISHED normalised: a spelling projectLocationOf would rewrite is refused at the schema.
+  it.each([
+    ['a leading ./', './docs/a.md'],
+    ['a descent that rises back inside', 'docs/../a.md'],
+    ['a ./ segment in the middle', 'docs/./a.md'],
+    ['a doubled separator', 'docs//a.md'],
+  ])('rejects a location not in its normalised form: %s', (_label, location) => {
+    expect(ValidationIssueSchema.safeParse(issueWith({ location })).success).toBe(false);
+  });
+
   it('anchoredAt keeps a location that can be one, and otherwise names the path in the message', () => {
     expect(anchoredAt('Broken link', './docs/a.md')).toStrictEqual({ message: 'Broken link', location: 'docs/a.md' });
     expect(anchoredAt('Broken link', '../shared-docs/a.md')).toStrictEqual({ message: 'Broken link (../shared-docs/a.md)' });

@@ -40,13 +40,22 @@
   files would be missing), a flagged file as above, a file under the root git cannot read, a
   listing VAT cannot read (the diff's or the flagged-file listing's), a filesystem
   that folds case (probed at the root) whose `core.ignorecase` is not true
-  (`git config core.ignorecase true`), or, on such a filesystem, a changed path (a rename's new
-  side: its old side is history) that spells the root in another case or Unicode normalisation
+  (`git config core.ignorecase true`), or, on such a filesystem, a changed path (a deletion, a
+  rename's new side, or the old side of a rename out of the root — a delete and a rename-out follow
+  one rule; a rename into the root keeps its old side as history) that spells the root in another
+  case or Unicode normalisation
   (both spellings named; on a case-sensitive
   filesystem a sibling such as `Docs/` beside a `docs/` root is simply another directory). The exit code does not tell these faults apart; the code does — `query`
   publishes it as `error.code`, and for `check` and `validate` it is `RESOURCE_CHECK_BROKEN` on
   exactly the checks that read it, carrying `reason: {refusal: <code>}` beside a message naming the
   cause. `--base` is read only when a statement names `changed_files`.
+- **One classifier for a failed git snapshot** (`gitSnapshotFailureOf` / `gitSnapshotError` on
+  `@vibe-agent-toolkit/utils/git`): `gitTreeSnapshot` returns the git error it hit instead of
+  `null`, and the crawl and `changed_files` decide its cause in one place, so each cause carries one
+  code in every lane. A sparse checkout holding an untracked file outside its definition, run through
+  any crawling verb, is now refused `INPUT_UNREADABLE` naming the file and its three fixes, not "not
+  a git repository"; new codes `GIT_FAILED`, `GIT_SNAPSHOT_OUTSIDE_SPARSE` and
+  `GIT_SNAPSHOT_REFUSED`.
 - **`gitChangedFiles()` on `@vibe-agent-toolkit/utils/git`**, the reader behind the relation, and
   `ChangedFileRowSchema` (with its JSON Schema, `projection-changed-files.json`) on
   `@vibe-agent-toolkit/resources`. It returns every refusal as a value carrying its kind, and never

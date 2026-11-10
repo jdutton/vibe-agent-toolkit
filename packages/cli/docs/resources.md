@@ -297,7 +297,7 @@ never answered with an empty relation — and the refusal code says whose fault 
 | a file under the root git cannot read | `repository` | `INPUT_UNREADABLE` |
 | a file on disk marked assume-unchanged or skip-worktree (`git update-index --no-assume-unchanged` / `--no-skip-worktree`) | `repository` | `INPUT_UNREADABLE` |
 | a filesystem that folds case whose `core.ignorecase` is not true (`git config core.ignorecase true`) | `repository` | `INPUT_UNREADABLE` |
-| on such a filesystem, a changed path (a rename's new side) spelling the root in another case or Unicode normalisation | `repository` | `INPUT_UNREADABLE` |
+| on such a filesystem, a changed path (a deletion, a rename's new side, or the old side of a rename out of the root) spelling the root in another case or Unicode normalisation | `repository` | `INPUT_UNREADABLE` |
 | a path under the root that is not UTF-8 | `repository` | `INPUT_UNREADABLE` |
 | a listing git returned that VAT cannot read | `repository` | `INPUT_UNREADABLE` |
 

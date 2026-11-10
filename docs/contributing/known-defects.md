@@ -732,18 +732,17 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 
 - **Severity:** Important · **Effort:** L · **User-visible:** yes
 - **Mechanism:** the git snapshot fails when git's temp index cannot be written (`ENOSPC`).
-  `unreadableSnapshotRefusal` recognises only an unreadable file, so it falls through to an
-  uncoded "git did not answer … it is not a git repository". That is a user's environment
-  published as a VAT defect, with a false diagnosis attached. On this path the probe also opens
-  every listed file before returning `undefined`.
+  The one snapshot classifier (`gitSnapshotFailureOf`) reads git's own account of the failure,
+  so it no longer says "not a git repository" — but it has no cause for an output-side errno: what
+  git states lands as `GIT_SNAPSHOT_REFUSED` (the tree's, `INPUT_UNREADABLE`) and anything else as
+  `GIT_FAILED`, never `RUN_INCOMPLETE`. On this path the unreadable-file check also opens every
+  listed file first. (Not re-measured on a full volume since the classifier landed.)
 - **Reproduce:** put the project on a full volume (a 2 MiB disk image works). `skills validate`,
   `resources validate`, `resources scan`, `claude context` and `rag index` then all exit 2
   `INTERNAL_ERROR`.
-- **Where:** [`crawl-source.ts:632-635`](../../packages/resources/src/projection/crawl-source.ts),
-  [`git-snapshot.ts:330`](../../packages/utils/src/git-snapshot.ts) (`unreadableSnapshotRefusal`)
-- **Fix:** a structural answer to an output-side errno during *any* crawl, rather than one more
-  call site: carry git's stderr and errno through the snapshot result, and code `ENOSPC`/`EROFS`
-  as `RUN_INCOMPLETE`.
+- **Where:** [`git-no-answer.ts`](../../packages/utils/src/git-no-answer.ts) (`gitSnapshotFailureOf`)
+- **Fix:** give the classifier an output-side cause (`ENOSPC`/`EROFS` in git's account) coded
+  `RUN_INCOMPLETE`, so every lane that snapshots inherits it.
 
 ### The same tree flips between exit 1 and exit 2 across runs
 

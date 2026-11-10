@@ -14,13 +14,15 @@ import { pathToFileURL } from 'node:url';
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { gitChangedFiles } from '../../src/git-changed-files.js';
+import { compareCodeUnits } from '../../src/compare-code-units.js';
+import { changedFilesUnderPrefix, gitChangedFiles, gitDidNotRun, parseNameStatusZ } from '../../src/git-changed-files.js';
 import { runGit, runGitOrThrow } from '../../src/git-run.js';
 import { mkdirSyncReal, safePath } from '../../src/path-utils.js';
 import { createSymlink, symlinkCapability } from '../../src/test-helpers.js';
 import { gitExecutable } from '../../src/testing/executables.js';
 import { CANNOT_DENY_READS, tmpdirFoldsCase } from '../../src/testing/platform-gates.js';
 import { setupSyncTempDirSuite } from '../../src/testing/temp-dir.js';
+import { gitSpawnFailure } from '../test-helpers.js';
 
 /** Enough content that git's rename detection pairs a moved file with its source. */
 const BODY = 'line one\nline two\nline three\nline four\nline five\n';
@@ -82,6 +84,37 @@ function shimGit(scratch: string, prelude: string): string {
   writeFileSync(safePath.join(shim, 'git'), `#!/bin/sh\n${prelude}\nexec "${gitExecutable()}" "$@"\n`, { mode: 0o755 });
   vi.stubEnv('PATH', `${shim}${delimiter}${process.env['PATH'] ?? ''}`);
   return shim;
+}
+
+/** A git whose snapshot `add` (any index but the diagnostic's) fails saying nothing. */
+const FAILING_SNAPSHOT = 'if [ "$1" = "add" ]; then case "$GIT_INDEX_FILE" in *vat-snapshot-probe-*) ;; *) exit 1;; esac; fi';
+
+/** One documented `changed_files` refusal: its cause, and git's fault kind for it. */
+interface DocumentedRefusal {
+  readonly cause: string;
+  readonly kind: string;
+}
+
+/** A refusal-table row: `| cause | \`kind\` | \`CODE\` |`. */
+const REFUSAL_ROW = /^\| (.+) \| `(base|git-failed|repository)` \| `[A-Z_]+` \|$/;
+
+/** The `changed_files` refusal table the CLI reference states (the skill states it identically: the CLI's lens test). */
+const DOCUMENTED_REFUSALS: readonly DocumentedRefusal[] = readFileSync(
+  safePath.join(import.meta.dirname, '..', '..', '..', 'cli', 'docs', 'resources.md'),
+  'utf8',
+).split('\n').flatMap((line) => {
+  const match = REFUSAL_ROW.exec(line);
+  return match === null ? [] : [{ cause: match[1] ?? '', kind: match[2] ?? '' }];
+});
+
+/** Run `produce` with `path` at `mode` (0 for a file, a mode without read for a directory), restoring 0o755 after. */
+function withDenied(path: string, mode: number, produce: () => ReturnType<typeof gitChangedFiles>): ReturnType<typeof gitChangedFiles> {
+  chmodSync(path, mode);
+  try {
+    return produce();
+  } finally {
+    chmodSync(path, 0o755);
+  }
 }
 
 /** The refusal reason a shallow clone's cut-off history earns, its remedy included. */
@@ -211,17 +244,6 @@ describe('gitChangedFiles', () => {
     });
   });
 
-  it('refuses a base that shares no history with HEAD as the base\'s fault, naming the fix', () => {
-    runGitOrThrow(['switch', '-q', '--orphan', 'unrelated'], { cwd: repo });
-    put(repo, 'other.md', 'unrelated\n');
-    commitAll(repo, 'unrelated root');
-
-    const result = gitChangedFiles({ root: repo, base: 'main' });
-
-    expect(result).toMatchObject({ ok: false, kind: 'base' });
-    expect(result.ok ? '' : result.reason).toMatch(/"main" shares no history with HEAD.*Pass a commit HEAD descends from/s);
-  });
-
   it('answers mid-merge: a conflicted (UU) file is one modified row, as it stands on disk with its markers', () => {
     runGitOrThrow(['switch', '-q', '-c', 'side'], { cwd: repo });
     put(repo, 'site/edit.md', 'side\n');
@@ -248,23 +270,6 @@ describe('gitChangedFiles', () => {
       expect(result.ok ? '' : result.reason).toMatch(/is not a ref; pass a branch, tag or commit/);
     },
   );
-
-  it('refuses a base that names no commit, naming the fix', () => {
-    const result = gitChangedFiles({ root: repo, base: 'no-such-branch' });
-
-    expect(result.ok).toBe(false);
-    expect(result.ok ? '' : result.reason).toMatch(/"no-such-branch" does not name a commit.*git fetch/s);
-  });
-
-  it('refuses a root that is not inside a git working tree', () => {
-    const bare = safePath.join(suite.getTempDir(), 'not-a-repo');
-    mkdirSyncReal(bare);
-
-    const result = gitChangedFiles({ root: bare, base: 'HEAD' });
-
-    expect(result.ok).toBe(false);
-    expect(result.ok ? '' : result.reason).toMatch(/is not inside a git working tree/);
-  });
 
   it('refuses a bare repository and a directory inside .git: neither is a working tree', () => {
     const bareRepo = safePath.join(suite.getTempDir(), 'bare.git');
@@ -316,18 +321,6 @@ describe('gitChangedFiles', () => {
   });
 
   // Skipped where the filesystem is case-sensitive: there `Docs` and `docs` are two directories.
-  it.skipIf(!tmpdirFoldsCase())('refuses when the BASE spells the root in another case, naming both spellings', () => {
-    const capitalised = stageCaseOnlyDocsRename(repo, ['a.md', 'b.md']);
-    rmSync(safePath.join(repo, 'docs/b.md'));
-    commitAll(repo, 'docs, lower case, one file fewer');
-
-    const result = gitChangedFiles({ root: safePath.join(repo, 'docs'), base: capitalised });
-
-    expect(result).toMatchObject({ ok: false, kind: 'repository' });
-    expect(result.ok ? '' : result.reason).toMatch(/"docs\/".*"Docs\/"/s);
-  });
-
-  // Skipped where the filesystem is case-sensitive: there `Docs` and `docs` are two directories.
   it.skipIf(!tmpdirFoldsCase())('answers a case-only directory rename made before HEAD: its old side is history', () => {
     const capitalised = stageCaseOnlyDocsRename(repo, ['a.md']);
     commitAll(repo, 'docs, lower case');
@@ -337,6 +330,20 @@ describe('gitChangedFiles', () => {
     expect(result.ok ? '' : result.reason).toBe('');
     // Renamed in from a spelling git keeps apart from the root: an addition, seen from inside it.
     expect(keysOf(result)).toStrictEqual(['a.md:added']);
+  });
+
+  // Skipped where the filesystem is case-sensitive: there `Docs` and `docs` are two directories.
+  // A deletion under the old spelling already refuses; a rename OUT of it follows the same rule.
+  it.skipIf(!tmpdirFoldsCase())('refuses a rename out of the root from its old spelling, as a deletion there would', () => {
+    const capitalised = stageCaseOnlyDocsRename(repo, ['a.md', 'keep.md']);
+    commitAll(repo, 'docs, lower case');
+    mkdirSyncReal(safePath.join(repo, 'other'));
+    runGitOrThrow(['mv', 'docs/a.md', 'other/a.md'], { cwd: repo });
+
+    const result = gitChangedFiles({ root: safePath.join(repo, 'docs'), base: capitalised });
+
+    expect(result).toMatchObject({ ok: false, kind: 'repository' });
+    expect(result.ok ? '' : result.reason).toMatch(/"docs\/".*"Docs\/"/s);
   });
 
   it('reports no row for a file removed from the index but unchanged on disk (git rm --cached)', () => {
@@ -353,71 +360,6 @@ describe('gitChangedFiles', () => {
       'site/keep.md:modified',
       'site/kept.md:added',
     ]);
-  });
-
-  it('refuses a base with more than one merge base with HEAD, naming the fix', () => {
-    runGitOrThrow(['switch', '-q', '-c', 'left'], { cwd: repo });
-    put(repo, 'left.md', 'left\n');
-    commitAll(repo, 'left');
-    runGitOrThrow(['switch', '-q', '-c', 'right', 'main'], { cwd: repo });
-    put(repo, 'right.md', 'right\n');
-    commitAll(repo, 'right');
-    const right = runGitOrThrow(['rev-parse', 'HEAD'], { cwd: repo });
-    // Criss-cross: each side merges the other's tip as it stood before either merge.
-    runGitOrThrow([...COMMIT_CONFIG, 'merge', '-q', '--no-edit', 'left'], { cwd: repo });
-    runGitOrThrow(['switch', '-q', 'left'], { cwd: repo });
-    runGitOrThrow([...COMMIT_CONFIG, 'merge', '-q', '--no-edit', right], { cwd: repo });
-
-    const result = gitChangedFiles({ root: repo, base: 'right' });
-
-    expect(result).toMatchObject({ ok: false, kind: 'base' });
-    expect(result.ok ? '' : result.reason).toMatch(/"right" has 2 merge bases with HEAD.*Pass one of them/s);
-  });
-
-  it('refuses a snapshot git deterministically refuses as the repository\'s fault, quoting git', () => {
-    // `git add --all` refuses a nested repository with no commit checked out. The snapshot reports
-    // no cause, so one `git add --all --dry-run` asks git for it.
-    mkdirSyncReal(safePath.join(repo, 'site/empty-nested'));
-    runGitOrThrow(['init', '-q'], { cwd: safePath.join(repo, 'site/empty-nested') });
-    put(repo, 'site/empty-nested/x.md', 'x\n');
-
-    expect(gitChangedFiles({ root: repo, base: 'HEAD' })).toMatchObject({
-      ok: false,
-      kind: 'repository',
-      reason: expect.stringMatching(/git refused to snapshot.*git said: .*site\/empty-nested\/.*does not have a commit checked out/s),
-    });
-  });
-
-  it.skipIf(CANNOT_DENY_READS)('refuses a tree holding a file the OS will not let git read, naming it', () => {
-    put(repo, 'site/secret.md', 'nobody reads this\n');
-    const secret = safePath.join(repo, 'site/secret.md');
-    chmodSync(secret, 0o000);
-    try {
-      expect(gitChangedFiles({ root: repo, base: 'HEAD' })).toMatchObject({
-        ok: false,
-        kind: 'repository',
-        reason: expect.stringMatching(/will not let it read site\/secret\.md/),
-      });
-    } finally {
-      chmodSync(secret, 0o644);
-    }
-  });
-
-  // `git add --all` only WARNS on a directory it cannot open, and exits 0: its untracked files would be
-  // missing from an answer that still succeeds.
-  it.skipIf(CANNOT_DENY_READS)('refuses a directory under the root git cannot list, naming it', () => {
-    put(repo, 'site/locked/untracked.md', 'never seen\n');
-    const locked = safePath.join(repo, 'site/locked');
-    chmodSync(locked, 0o311);
-    try {
-      expect(gitChangedFiles({ root: safePath.join(repo, 'site'), base: 'HEAD' })).toMatchObject({
-        ok: false,
-        kind: 'repository',
-        reason: expect.stringMatching(/'locked'/),
-      });
-    } finally {
-      chmodSync(locked, 0o755);
-    }
   });
 
   it('reports a copied file as one added row: copies are never detected', () => {
@@ -438,31 +380,6 @@ describe('gitChangedFiles', () => {
     expect(result).toMatchObject({ ok: false, kind: 'repository' });
     expect(result.ok ? '' : result.reason).toContain(`"edit.md" is marked ${flag}`);
     expect(result.ok ? '' : result.reason).toContain(`git update-index ${clear} -- "edit.md"`);
-  });
-
-  it('refuses a diff a partial clone cannot complete, naming the refetch', () => {
-    const scratch = suite.getTempDir();
-    const origin = safePath.join(scratch, 'promisor-origin');
-    mkdirSyncReal(origin);
-    runGitOrThrow(['init', '-q', '-b', 'main'], { cwd: origin });
-    runGitOrThrow(['config', 'uploadpack.allowFilter', 'true'], { cwd: origin });
-    put(origin, 'old.md', `old.md\n${BODY}`);
-    commitAll(origin, 'old');
-    rmSync(safePath.join(origin, 'old.md'));
-    put(origin, 'keep.md', 'keep\n');
-    commitAll(origin, 'old gone');
-    const clone = safePath.join(scratch, 'promisor-clone');
-    runGitOrThrow(['clone', '-q', '--filter=blob:none', pathToFileURL(origin).href, clone], { cwd: scratch });
-    // The promisor is gone, so the base's never-fetched blob cannot arrive.
-    rmSync(origin, { recursive: true, force: true });
-    // Similar but not identical, so rename detection must read the old blob's bytes.
-    put(clone, 'new.md', `new.md\n${BODY}`);
-
-    expect(gitChangedFiles({ root: clone, base: 'HEAD~1' })).toMatchObject({
-      ok: false,
-      kind: 'repository',
-      reason: expect.stringMatching(/partial clone.*git fetch --refetch.*no --filter/s),
-    });
   });
 
   it.skipIf(process.platform === 'win32')('refuses a merge-base git fails, quoting it', () => {
@@ -493,27 +410,6 @@ describe('gitChangedFiles', () => {
   });
 
   describe('a shallow clone', () => {
-    it('refuses a depth-1 clone of a branch: the history is cut off before the base and HEAD meet', () => {
-      const clone = shallowClone(suite.getTempDir(), 1, ['--no-single-branch']);
-
-      const result = gitChangedFiles({ root: clone, base: 'origin/main' });
-
-      expect(result).toMatchObject({ ok: false, kind: 'repository' });
-      expect(result.ok ? '' : result.reason).toMatch(/shallow clone, and the history it holds is cut off before the base "origin\/main" and HEAD meet/);
-      expect(result.ok ? '' : result.reason).toMatch(SHALLOW_REMEDY);
-    });
-
-    it('refuses a merge base that a cut-off history could be hiding a nearer one behind, naming the fix', () => {
-      const clone = shallowClone(suite.getTempDir(), 3, ['--no-single-branch']);
-      // Deepened once: the merge base A is now reachable, but S3 is still a boundary on the way to it.
-      runGitOrThrow(['fetch', '-q', '--deepen=1'], { cwd: clone });
-
-      const result = gitChangedFiles({ root: clone, base: 'origin/main' });
-
-      expect(result).toMatchObject({ ok: false, kind: 'repository', reason: expect.stringMatching(SHALLOW_REMEDY) });
-      expect(result.ok ? '' : result.reason).toMatch(/cut off from its parents/);
-    });
-
     it.skipIf(process.platform === 'win32')('finds the boundary list through an older git\'s relative --git-path answer', () => {
       const scratch = suite.getTempDir();
       const clone = shallowClone(scratch, 3, ['--no-single-branch']);
@@ -627,17 +523,6 @@ describe('gitChangedFiles', () => {
     expect(calls.filter((call) => call === 'write-tree')).toHaveLength(1);
   });
 
-  it('refuses a repository with no commits yet, saying so', () => {
-    const fresh = safePath.join(suite.getTempDir(), 'unborn');
-    mkdirSyncReal(fresh);
-    runGitOrThrow(['init', '-q', '-b', 'main'], { cwd: fresh });
-    put(fresh, 'a.md', 'a\n');
-
-    const result = gitChangedFiles({ root: fresh, base: 'main' });
-
-    expect(result).toMatchObject({ ok: false, kind: 'repository', reason: expect.stringMatching(/no commits yet/) });
-  });
-
   it('lists a submodule whose commit moved as its directory, and ignores one that is only dirty', () => {
     const library = safePath.join(suite.getTempDir(), 'library');
     mkdirSyncReal(library);
@@ -685,18 +570,6 @@ describe('gitChangedFiles', () => {
     });
   });
 
-  it('refuses where git is not on PATH as git\'s failure, saying so', () => {
-    const empty = safePath.join(suite.getTempDir(), 'no-git-here');
-    mkdirSyncReal(empty);
-    vi.stubEnv('PATH', empty);
-
-    expect(gitChangedFiles({ root: repo, base: 'HEAD' })).toMatchObject({
-      ok: false,
-      kind: 'git-failed',
-      reason: expect.stringMatching(/git was not found on PATH/),
-    });
-  });
-
   describe('a file git is told not to read', () => {
     // Its deletion would be missing from the answer; skip-worktree is exempt only in a sparse checkout.
     it.each(['assume-unchanged', 'skip-worktree'])('refuses a %s file that was deleted outside a sparse checkout', (flag) => {
@@ -720,17 +593,6 @@ describe('gitChangedFiles', () => {
 
       expect(result.ok).toBe(true);
       expect(keysOf(result)).toStrictEqual(['site/edit.md:modified']);
-    });
-
-    // git's `add --all` exits 1 stating no `fatal:` for it, so it once read as git's failure.
-    it('refuses an untracked file outside a sparse checkout\'s definition as the repository\'s, naming the fixes', () => {
-      runGitOrThrow(['sparse-checkout', 'set', '--no-cone', '/site/'], { cwd: repo });
-      put(repo, 'stray.md', 'outside the sparse definition\n');
-
-      const result = gitChangedFiles({ root: repo, base: 'HEAD' });
-
-      expect(result).toMatchObject({ ok: false, kind: 'repository' });
-      expect(result.ok ? '' : result.reason).toMatch(/"stray\.md".*sparse-checkout definition.*add.*remove.*ignore/s);
     });
 
     it('names both flags, and clears both, for a file marked assume-unchanged AND skip-worktree', () => {
@@ -758,30 +620,7 @@ describe('gitChangedFiles', () => {
     expect(keysOf(gitChangedFiles({ root: safePath.join(repo, 'docs'), base: 'HEAD' }))).toStrictEqual(['b.md:modified']);
   });
 
-  // Skipped where the filesystem is case-sensitive: there git's own case handling is moot.
-  it.skipIf(!tmpdirFoldsCase())('refuses a folding filesystem whose repository says core.ignorecase is not true, naming the fix', () => {
-    runGitOrThrow(['config', 'core.ignorecase', 'false'], { cwd: repo });
-
-    expect(gitChangedFiles({ root: repo, base: 'HEAD' })).toMatchObject({
-      ok: false,
-      kind: 'repository',
-      reason: expect.stringMatching(/folds case.*git config core\.ignorecase true/s),
-    });
-  });
-
   describe('a snapshot that fails', () => {
-    /** A git whose snapshot `add` (any index but the diagnostic's) fails saying nothing. */
-    const FAILING_SNAPSHOT = 'if [ "$1" = "add" ]; then case "$GIT_INDEX_FILE" in *vat-snapshot-probe-*) ;; *) exit 1;; esac; fi';
-
-    it.skipIf(process.platform === 'win32')('calls the cause unknown when the diagnostic add succeeds', () => {
-      shimGit(suite.getTempDir(), FAILING_SNAPSHOT);
-
-      const result = gitChangedFiles({ root: repo, base: 'HEAD' });
-
-      expect(result).toMatchObject({ ok: false, kind: 'git-failed', reason: expect.stringMatching(/cause is unknown/) });
-      expect(result.ok ? '' : result.reason).not.toMatch(/timed out|time limit/);
-    });
-
     it.skipIf(process.platform === 'win32')('refuses a failure the REAL diagnostic add states, which a dry run would not reach', () => {
       // A write fault: `--dry-run` writes no object, so it could never surface one.
       shimGit(
@@ -807,5 +646,227 @@ describe('gitChangedFiles', () => {
 
     expect(result.ok).toBe(false);
     expect(result.ok ? '' : result.reason).toMatch(/"Site\/".*"site\/"/s);
+  });
+  /**
+   * Every documented `changed_files` refusal, keyed to the REAL producer of its cause: a fixture
+   * through `gitChangedFiles`, or — where no fixture can reach the cause — the unit seam that
+   * decides it. Each asserts the documented fault kind and the cause's own words; the CLI's lens test
+   * maps each kind to its code. A producer this host cannot run says so in its test name.
+   */
+  describe('the documented changed_files refusal table, each row from its real producer', () => {
+    /** How one documented cause is produced, and the words its reason must carry. */
+    interface Producer {
+      readonly produce: () => { ok: boolean; kind?: string; reason?: string };
+      readonly reason: RegExp;
+      /** Why this host cannot produce it, or undefined when it can. */
+      readonly cannot?: string | undefined;
+    }
+
+    const POSIX_SHIM = process.platform === 'win32' ? 'the git shim is a POSIX shell script' : undefined;
+    const NO_DENIED_READS = CANNOT_DENY_READS ? 'this host cannot deny a read' : undefined;
+    const NO_FOLDING = tmpdirFoldsCase() ? undefined : 'the temp filesystem does not fold case';
+
+    const PRODUCERS: Readonly<Record<string, Producer>> = {
+      'a ref that names no commit': {
+        produce: () => gitChangedFiles({ root: repo, base: 'no-such-branch' }),
+        reason: /"no-such-branch" does not name a commit.*git fetch/s,
+      },
+      'a ref that shares no history with `HEAD` in a full history (no merge base)': {
+        produce: () => {
+          runGitOrThrow(['switch', '-q', '--orphan', 'unrelated'], { cwd: repo });
+          put(repo, 'other.md', 'unrelated\n');
+          commitAll(repo, 'unrelated root');
+          return gitChangedFiles({ root: repo, base: 'main' });
+        },
+        reason: /"main" shares no history with HEAD.*Pass a commit HEAD descends from/s,
+      },
+      'a ref with more than one merge base with `HEAD` (a criss-cross history: pass one of them)': {
+        produce: () => {
+          runGitOrThrow(['switch', '-q', '-c', 'left'], { cwd: repo });
+          put(repo, 'left.md', 'left\n');
+          commitAll(repo, 'left');
+          runGitOrThrow(['switch', '-q', '-c', 'right', 'main'], { cwd: repo });
+          put(repo, 'right.md', 'right\n');
+          commitAll(repo, 'right');
+          const right = runGitOrThrow(['rev-parse', 'HEAD'], { cwd: repo });
+          // Criss-cross: each side merges the other's tip as it stood before either merge.
+          runGitOrThrow([...COMMIT_CONFIG, 'merge', '-q', '--no-edit', 'left'], { cwd: repo });
+          runGitOrThrow(['switch', '-q', 'left'], { cwd: repo });
+          runGitOrThrow([...COMMIT_CONFIG, 'merge', '-q', '--no-edit', right], { cwd: repo });
+          return gitChangedFiles({ root: repo, base: 'right' });
+        },
+        reason: /"right" has 2 merge bases with HEAD.*Pass one of them/s,
+      },
+      'git not found on `PATH`': {
+        produce: () => {
+          const empty = safePath.join(suite.getTempDir(), 'no-git-here');
+          mkdirSyncReal(empty);
+          vi.stubEnv('PATH', empty);
+          return gitChangedFiles({ root: repo, base: 'HEAD' });
+        },
+        reason: /git was not found on PATH/,
+      },
+      // Unit seam: a git out of time cannot be produced on demand, so its classifier is driven directly.
+      'git out of time, or more output than VAT reads (compare against a nearer base)': {
+        produce: () => gitDidNotRun('diff-tree', gitSpawnFailure('ETIMEDOUT')) ?? { ok: true },
+        reason: /did not finish within its time limit.*nearer base/s,
+      },
+      'a snapshot that fails for a cause git does not state, or whose second attempt times out': {
+        produce: () => {
+          shimGit(suite.getTempDir(), FAILING_SNAPSHOT);
+          return gitChangedFiles({ root: repo, base: 'HEAD' });
+        },
+        reason: /cause is unknown/,
+        cannot: POSIX_SHIM,
+      },
+      'not inside a git working tree (a bare repository and a directory inside `.git` included)': {
+        produce: () => {
+          const bare = safePath.join(suite.getTempDir(), 'not-a-repo');
+          mkdirSyncReal(bare);
+          return gitChangedFiles({ root: bare, base: 'HEAD' });
+        },
+        reason: /is not inside a git working tree/,
+      },
+      'no commits yet, or a git that cannot resolve `HEAD`': {
+        produce: () => {
+          const fresh = safePath.join(suite.getTempDir(), 'unborn');
+          mkdirSyncReal(fresh);
+          runGitOrThrow(['init', '-q', '-b', 'main'], { cwd: fresh });
+          put(fresh, 'a.md', 'a\n');
+          return gitChangedFiles({ root: fresh, base: 'main' });
+        },
+        reason: /no commits yet/,
+      },
+      'a shallow clone cut off before the base and `HEAD` meet (no merge base, shallow)': {
+        produce: () => gitChangedFiles({ root: shallowClone(suite.getTempDir(), 1, ['--no-single-branch']), base: 'origin/main' }),
+        reason: /shallow clone, and the history it holds is cut off before the base "origin\/main" and HEAD meet.*fetch-depth: 0/s,
+      },
+      'a shallow clone whose history may hide a nearer merge base (`fetch-depth: 0`, or `git fetch --deepen=<n>`)': {
+        produce: () => {
+          const clone = shallowClone(suite.getTempDir(), 3, ['--no-single-branch']);
+          // Deepened once: the merge base A is now reachable, but S3 is still a boundary on the way to it.
+          runGitOrThrow(['fetch', '-q', '--deepen=1'], { cwd: clone });
+          return gitChangedFiles({ root: clone, base: 'origin/main' });
+        },
+        reason: SHALLOW_REMEDY,
+      },
+      'a partial clone missing blobs the diff needs (`git fetch --refetch`)': {
+        produce: () => {
+          const scratch = suite.getTempDir();
+          const origin = safePath.join(scratch, 'promisor-origin');
+          mkdirSyncReal(origin);
+          runGitOrThrow(['init', '-q', '-b', 'main'], { cwd: origin });
+          runGitOrThrow(['config', 'uploadpack.allowFilter', 'true'], { cwd: origin });
+          put(origin, 'old.md', `old.md\n${BODY}`);
+          commitAll(origin, 'old');
+          rmSync(safePath.join(origin, 'old.md'));
+          put(origin, 'keep.md', 'keep\n');
+          commitAll(origin, 'old gone');
+          const clone = safePath.join(scratch, 'promisor-clone');
+          runGitOrThrow(['clone', '-q', '--filter=blob:none', pathToFileURL(origin).href, clone], { cwd: scratch });
+          // The promisor is gone, so the base's never-fetched blob cannot arrive.
+          rmSync(origin, { recursive: true, force: true });
+          // Similar but not identical, so rename detection must read the old blob's bytes.
+          put(clone, 'new.md', `new.md\n${BODY}`);
+          return gitChangedFiles({ root: clone, base: 'HEAD~1' });
+        },
+        reason: /partial clone.*git fetch --refetch.*no --filter/s,
+      },
+      'a snapshot git refuses, its `fatal:`/`error:` quoted (a nested repository with no commit, an object it cannot write, a clean filter that fails)': {
+        produce: () => {
+          // `git add --all` refuses a nested repository with no commit checked out.
+          mkdirSyncReal(safePath.join(repo, 'site/empty-nested'));
+          runGitOrThrow(['init', '-q'], { cwd: safePath.join(repo, 'site/empty-nested') });
+          put(repo, 'site/empty-nested/x.md', 'x\n');
+          return gitChangedFiles({ root: repo, base: 'HEAD' });
+        },
+        reason: /git refused to snapshot.*git said: .*site\/empty-nested\/.*does not have a commit checked out/s,
+      },
+      'an untracked file outside a sparse checkout\'s definition (add it to the definition, remove it, or ignore it)': {
+        produce: () => {
+          runGitOrThrow(['sparse-checkout', 'set', '--no-cone', '/site/'], { cwd: repo });
+          put(repo, 'stray.md', 'outside the sparse definition\n');
+          return gitChangedFiles({ root: repo, base: 'HEAD' });
+        },
+        reason: /"stray\.md".*sparse-checkout definition.*git sparse-checkout add.*remove.*\.gitignore/s,
+      },
+      // `git add --all` only WARNS on a directory it cannot open, and exits 0: its untracked files
+      // would be missing from an answer that still succeeds.
+      'a directory under the root git cannot list (fix its permissions, or ignore it)': {
+        produce: () => {
+          put(repo, 'site/locked/untracked.md', 'never seen\n');
+          return withDenied(safePath.join(repo, 'site/locked'), 0o311, () => gitChangedFiles({ root: safePath.join(repo, 'site'), base: 'HEAD' }));
+        },
+        reason: /'locked'/,
+        cannot: NO_DENIED_READS,
+      },
+      'a file under the root git cannot read': {
+        produce: () => {
+          put(repo, 'site/secret.md', 'nobody reads this\n');
+          return withDenied(safePath.join(repo, 'site/secret.md'), 0o000, () => gitChangedFiles({ root: repo, base: 'HEAD' }));
+        },
+        reason: /will not let it read site\/secret\.md/,
+        cannot: NO_DENIED_READS,
+      },
+      'a file on disk marked assume-unchanged or skip-worktree (`git update-index --no-assume-unchanged` / `--no-skip-worktree`)': {
+        produce: () => {
+          runGitOrThrow(['update-index', '--assume-unchanged', '--', 'site/edit.md'], { cwd: repo });
+          return gitChangedFiles({ root: repo, base: 'HEAD' });
+        },
+        reason: /"site\/edit\.md" is marked assume-unchanged.*--no-assume-unchanged/s,
+      },
+      'a filesystem that folds case whose `core.ignorecase` is not true (`git config core.ignorecase true`)': {
+        produce: () => {
+          runGitOrThrow(['config', 'core.ignorecase', 'false'], { cwd: repo });
+          return gitChangedFiles({ root: repo, base: 'HEAD' });
+        },
+        reason: /folds case.*git config core\.ignorecase true/s,
+        cannot: NO_FOLDING,
+      },
+      'on such a filesystem, a changed path (a deletion, a rename\'s new side, or the old side of a rename out of the root) spelling the root in another case or Unicode normalisation': {
+        produce: () => {
+          // The BASE spells the root `Docs/`; one file is gone since, a deletion under that spelling.
+          const capitalised = stageCaseOnlyDocsRename(repo, ['a.md', 'b.md']);
+          rmSync(safePath.join(repo, 'docs/b.md'));
+          commitAll(repo, 'docs, lower case, one file fewer');
+          return gitChangedFiles({ root: safePath.join(repo, 'docs'), base: capitalised });
+        },
+        reason: /"docs\/".*"Docs\/"/s,
+        cannot: NO_FOLDING,
+      },
+      // Unit seam: APFS refuses a name that is not UTF-8, so no fixture can hold one everywhere.
+      'a path under the root that is not UTF-8': {
+        produce: () => {
+          const listing = parseNameStatusZ(Buffer.from([0x4D, 0, 0x61, 0xFF, 0x2E, 0x6D, 0x64, 0]));
+          return listing.ok ? changedFilesUnderPrefix(listing.records, new Uint8Array()) : listing;
+        },
+        reason: /is not UTF-8, so VAT cannot name it/,
+      },
+      // Unit seam: a listing git would never write cannot be had from a real git.
+      'a listing git returned that VAT cannot read': {
+        produce: () => parseNameStatusZ(Buffer.from('X\0what.md\0', 'utf8')),
+        reason: /git diff-tree --name-status -z wrote a listing VAT cannot read/,
+      },
+    };
+
+    const rows = DOCUMENTED_REFUSALS.filter((row) => row.cause !== 'no `--base`');
+
+    it('has one producer for every documented cause git decides, and a documented cause for every producer', () => {
+      expect(rows.length).toBeGreaterThanOrEqual(19);
+      expect(Object.keys(PRODUCERS).sort(compareCodeUnits)).toStrictEqual(rows.map((row) => row.cause).sort(compareCodeUnits));
+    });
+
+    it.for(rows.map((row) => {
+      const cannot = PRODUCERS[row.cause]?.cannot;
+      return [cannot === undefined ? row.cause : `${row.cause} (not produced on this host: ${cannot})`, row.cause, row.kind] as const;
+    }))('produces "%s" as the documented fault kind', ([, cause, kind], { skip }) => {
+      const producer = PRODUCERS[cause];
+      if (producer === undefined) throw new Error(`no producer for "${cause}"`);
+      if (producer.cannot !== undefined) skip(producer.cannot);
+
+      const produced = producer.produce();
+
+      expect(produced).toMatchObject({ ok: false, kind, reason: expect.stringMatching(producer.reason) });
+    });
   });
 });

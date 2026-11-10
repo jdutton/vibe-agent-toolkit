@@ -76,18 +76,18 @@ describe('vat inventory locates an unreadable path against the subject', () => {
     expect(findings[0]?.message).toContain('(skills/locked: the OS refused the read');
   });
 
-  it('files the subject directory itself at "."', async () => {
+  it('names the subject directory itself in the message and publishes no location for the root', async () => {
     const findings = await findingsFor([plugin]);
 
-    expect(findings.map((f) => [f.code, f.location])).toEqual([['SCAN_PATH_UNREADABLE', '.']]);
+    expect(findings.map((f) => [f.code, f.location])).toEqual([['SCAN_PATH_UNREADABLE', undefined]]);
     expect(findings[0]?.message).toContain('(.: the OS refused the read');
   });
 
-  it('files a path outside the subject on the subject, and keeps its absolute path out of the finding', async () => {
+  it('files a path outside the subject on the subject with no location, and keeps its absolute path out of the finding', async () => {
     const outside = safePath.join(scratch, 'elsewhere', 'linked.md');
     const findings = await findingsFor([outside]);
 
-    expect(findings.map((f) => [f.code, f.location])).toEqual([['SCAN_PATH_UNREADABLE', '.']]);
+    expect(findings.map((f) => [f.code, f.location])).toEqual([['SCAN_PATH_UNREADABLE', undefined]]);
     expect(findings[0]?.message).toContain('(a path it links to outside the subject: the OS refused the read');
     expect(JSON.stringify(findings)).not.toContain(outside);
     expect(JSON.stringify(findings)).not.toContain('..');

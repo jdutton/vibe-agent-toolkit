@@ -98,7 +98,7 @@ describe('GitTracker priming from an open snapshot', () => {
     await withGitSnapshotCache(async () => {
       // Somebody else's snapshot — in production this is the projection store
       // taking one to key itself, before the tracker is ever initialized.
-      expect(gitTreeSnapshot({ cwd: root })).not.toBeNull();
+      expect(gitTreeSnapshot({ cwd: root }).ok).toBe(true);
 
       // Created AFTER, so the two routes now disagree about it.
       writeFileSync(safePath.join(root, APPEARED_AFTER), 'x\n');
@@ -145,7 +145,7 @@ describe('GitTracker priming from an open snapshot', () => {
     const root = makeRepo();
 
     await withGitSnapshotCache(async () => {
-      expect(gitTreeSnapshot({ cwd: root })).not.toBeNull();
+      expect(gitTreeSnapshot({ cwd: root }).ok).toBe(true);
       writeFileSync(safePath.join(root, APPEARED_AFTER), 'x\n');
 
       const tracker = new GitTracker(root);

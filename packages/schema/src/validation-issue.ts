@@ -144,7 +144,7 @@ const DRIVE_PREFIX = /^[A-Za-z]:/;
 
 /** What a `location` may be — the one spelling every refusal of one states. */
 export const PROJECT_LOCATION_RULE
-  = String.raw`a non-empty relative path with / separators inside the root (not the root itself; no leading / or \, no drive, no UNC path, no climbing .., and no \ where \ is the platform separator)`;
+  = String.raw`a non-empty relative path with / separators inside the root, in its normalised form (not the root itself; no leading / or \, no drive, no UNC path, no climbing .., no . or .. segment and no doubled /, and no \ where \ is the platform separator)`;
 
 /**
  * 🔑 THE one definition of "absolute" for a path a report states relative to its root, the same on
@@ -168,7 +168,10 @@ export function isAbsoluteOnAnyHost(value: string): boolean {
  * backslash anywhere else is refused only where it IS the platform separator
  * (win32): there it is a separator a producer forgot to convert, while on
  * POSIX it is a legal filename character and the projection holds real files
- * named with one (`docs/x\y.md` is one file).
+ * named with one (`docs/x\y.md` is one file). A POSIX filename that STARTS with
+ * `\` is refused on every host all the same, because a published location must
+ * be valid on every host that reads the report: its producer omits the location
+ * and names the path in the message ({@link anchoredAt}).
  *
  * @param value - A candidate location
  * @returns Whether it may be a `location`
@@ -210,6 +213,11 @@ export function anchoredAt(message: string, relative: string): { message: string
   return location === undefined ? { message: `${message} (${relative})` } : { message, location };
 }
 
+/** A location as published: one in the normalised form {@link projectLocationOf} emits, one spelling per file. */
+function isPublishedLocation(value: string): boolean {
+  return projectLocationOf(value) === value;
+}
+
 /** A `column` is within a `line`: an issue carrying one carries the other. `at` is the issue's path in the parsed value. */
 export function columnRequiresLine(
   issue: { line?: number | undefined; column?: number | undefined },
@@ -230,7 +238,7 @@ export const ValidationIssueObjectSchema = z.object({
   severity: IssueSeveritySchema,
   message: z.string(),
   location: z.string()
-    .refine(isProjectLocation, { message: `location must be ${PROJECT_LOCATION_RULE}` })
+    .refine(isPublishedLocation, { message: `location must be ${PROJECT_LOCATION_RULE}` })
     .describe(`The file to open to fix this: ${PROJECT_LOCATION_RULE}`)
     .optional(),
   line: z.number().int().positive().optional(),

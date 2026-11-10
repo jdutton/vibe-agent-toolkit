@@ -57,7 +57,14 @@ import {
   TREE_SOURCE_HOLDS_DEST_CODE,
   VatError,
 } from '@vibe-agent-toolkit/utils';
-import { GIT_NO_ANSWER_CODE, GIT_NOT_FOUND_CODE, GIT_SNAPSHOT_UNREADABLE_CODE } from '@vibe-agent-toolkit/utils/git';
+import {
+  GIT_FAILED_CODE,
+  GIT_NO_ANSWER_CODE,
+  GIT_NOT_FOUND_CODE,
+  GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE,
+  GIT_SNAPSHOT_REFUSED_CODE,
+  GIT_SNAPSHOT_UNREADABLE_CODE,
+} from '@vibe-agent-toolkit/utils/git';
 import { YAML_EDIT_INPUT_REFUSED_CODE } from '@vibe-agent-toolkit/utils/yaml';
 
 import { AGENT_NAME_ESCAPES_SCOPE_CODE, PLUGIN_SYMLINK_REFUSED_CODE } from './command-error-codes.js';
@@ -116,12 +123,16 @@ const REFUSAL_BY_ERROR_CODE: Readonly<Record<string, RefusalCode>> = {
   [PLUGIN_SYMLINK_REFUSED_CODE]: 'INPUT_UNREADABLE',
   // An adopter's YAML (their config) that the surgical editor cannot take the edit into: not YAML, or the wrong shape at the path.
   [YAML_EDIT_INPUT_REFUSED_CODE]: 'CONFIG_INVALID',
-  // A git snapshot refused because a file in the repository is unreadable: the input, named, not VAT.
-  [GIT_SNAPSHOT_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
-  // git gave no answer for a root (`gitNoAnswerError`): a git binary missing from PATH is the environment's,
-  // the backend the run needs; anything else — not a repository, or one git could not read — is the input's.
+  // git gave no answer, each cause coded by the one classifier (`git-no-answer.ts`), the same code in every
+  // lane (`changed_files` reports the same split as its fault kinds). A git missing from PATH, or one that did
+  // not finish or failed stating no cause, is the environment's — the backend the run needs; not a repository,
+  // a file git cannot read, a stray path outside a sparse definition, or a snapshot git refuses, the input's.
   [GIT_NOT_FOUND_CODE]: 'BACKEND_UNAVAILABLE',
+  [GIT_FAILED_CODE]: 'BACKEND_UNAVAILABLE',
   [GIT_NO_ANSWER_CODE]: 'INPUT_UNREADABLE',
+  [GIT_SNAPSHOT_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
+  [GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE]: 'INPUT_UNREADABLE',
+  [GIT_SNAPSHOT_REFUSED_CODE]: 'INPUT_UNREADABLE',
   // An org command run without the key its endpoint authenticates with: nothing was sent.
   [ORG_API_KEY_MISSING_CODE]: 'USAGE_INVALID',
   // The Anthropic API answered with a non-success status (`ApiRequestError`)…

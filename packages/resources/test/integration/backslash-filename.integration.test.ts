@@ -136,7 +136,7 @@ describe.skipIf(BACKSLASH_IS_SEPARATOR)('a POSIX filename containing a backslash
     const root = planted(gitRoot);
     const snapshot = gitTreeSnapshot({ cwd: root });
     expect(snapshot).not.toBeNull();
-    const relative = (snapshot?.entries ?? []).map((entry) => safePath.relative(root, entry.absolutePath));
+    const relative = (snapshot.ok ? snapshot.entries : []).map((entry) => safePath.relative(root, entry.absolutePath));
     expect(relative.toSorted(byName)).toEqual(EXPECTED_FILES);
   });
 
