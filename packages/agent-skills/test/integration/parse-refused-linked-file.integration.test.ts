@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 
 import { isVatError, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
-import { createTempDir, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
+import { createTempDir, overOutputRowsMarkdown, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { SKILL_PACKAGING_INPUT_INVALID_CODE } from '../../src/packaging-errors.js';
@@ -38,7 +38,7 @@ See [the reference](reference.md).
  * the content new to the shared parse cache: an in-process parse of the same
  * bytes stores unbounded facts that a later crawl serves as an admission.
  */
-const OVER_OUTPUT_ROWS = `<!-- ${randomUUID()} -->\n${'[l](./SKILL.md)\n\n'.repeat(20_000)}`;
+const OVER_OUTPUT_ROWS = overOutputRowsMarkdown('SKILL.md');
 
 /** Package the skill; return the rejection's message, asserting it is a packaging input error over the limit. */
 async function limitRejectionMessage(tempDir: string, skillPath: string): Promise<string> {

@@ -1,7 +1,7 @@
 import { chmodSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
-import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
+import { CANNOT_DENY_READS, overOutputRowsMarkdown } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { RESOURCES_SCAN_REPORT_SCHEMA } from '../../src/commands/resources/scan-schema.js';
@@ -13,7 +13,6 @@ import {
   writeTestFile,
   executeCli,
   executeCliAndParseYaml,
-  overOutputRowsDocument,
 } from './test-common.js';
 
 const binPath = getBinPath(import.meta.url);
@@ -100,7 +99,7 @@ describe('vat resources scan (system test)', () => {
     'reports a file whose parse was refused as an error finding and counts it examined (%s lane)',
     async (lane) => {
       writeTestFile(safePath.join(tempDir, 'good.md'), '# Good\n');
-      writeTestFile(safePath.join(tempDir, 'huge.md'), overOutputRowsDocument('good.md'));
+      writeTestFile(safePath.join(tempDir, 'huge.md'), overOutputRowsMarkdown('good.md'));
 
       const { result, parsed } = await executeCliAndParseYaml(
         binPath,

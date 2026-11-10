@@ -5,7 +5,6 @@
 
 import type { SpawnOptionsWithoutStdio, SpawnSyncReturns } from 'node:child_process';
 import { spawn as nodeSpawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import { dirname as pathDirname, join as pathJoin, resolve as pathResolve } from 'node:path';
 import { fileURLToPath as urlFileURLToPath, pathToFileURL } from 'node:url';
@@ -520,15 +519,3 @@ This is ${description ?? 'a test skill'}.
 `;
 }
 
-/**
- * A markdown document over the default parse `outputRows` limit (16,384): one
- * link row per line, 20,000 lines, every link aimed at `target`.
- *
- * The leading nonce makes the bytes new to the shared parse cache: an in-process
- * parse of identical content elsewhere stores unbounded facts under the same
- * content key, and a later crawl serves that entry as an admission.
- */
-export function overOutputRowsDocument(target: string): string {
-  const linkLine = `[l](./${target})\n\n`;
-  return `<!-- ${randomUUID()} -->\n${linkLine.repeat(20_000)}`;
-}

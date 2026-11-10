@@ -15,13 +15,13 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { overOutputRowsMarkdown } from '@vibe-agent-toolkit/utils/testing';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
 	createSuiteContext,
 	executeCli,
 	executeCliAndParseYaml,
-	overOutputRowsDocument,
 } from './test-common.js';
 
 // ---------------------------------------------------------------------------
@@ -119,7 +119,7 @@ describe('vat audit — inventory detector codes (system test)', () => {
 			safePath.join(skillDir, 'SKILL.md'),
 			'---\nname: linker\ndescription: Fixture skill linking one reference document too large to parse.\n---\n\n# linker\n\nSee [the reference](reference.md).\n',
 		);
-		writeFileSync(safePath.join(skillDir, 'reference.md'), overOutputRowsDocument('SKILL.md'));
+		writeFileSync(safePath.join(skillDir, 'reference.md'), overOutputRowsMarkdown('SKILL.md'));
 
 		const result = await executeCli(ctx.binPath, ['audit', plugin]);
 

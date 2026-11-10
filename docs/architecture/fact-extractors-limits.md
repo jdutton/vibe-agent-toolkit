@@ -140,7 +140,13 @@ These gaps are findings, not omissions to fill by hand:
 - **No per-document row count as the limit counts it.** No facet reports a document's rows nested
   and with its frontmatter expanded, so `outputRows` stays under rule 2.
 - **No per-worker heap.** The `memory` facet reports process peak RSS, so `heapMb` cannot be derived
-  by rule 1.
+  by rule 1. One one-off probe (not a facet) bears on it: a body of 20,000 links (`[l](x)`, ~320 KB)
+  peaks at 300 to 400 MiB of LIVE heap in its parse worker — it fails under a 300 MiB V8 ceiling,
+  which collects every byte of garbage before giving up, and completes under 400 MiB. Under a
+  process-wide `--max-old-space-size=512` (CI's) the pool applies 256 MiB, so that document is a
+  true `heapMb` breach there, not garbage counted by the sampler. Test fixtures that mean to breach
+  `outputRows` alone use frontmatter rows instead (`overOutputRowsMarkdown`, ~130 KB, refused at
+  `outputRows` even under `--max-old-space-size=256`).
 - **No width-1 or contended arm.** Nothing runs the cold check with the pool held to one worker,
   or on a host with a known competing load, so "up to about a minute" is an inference from CPU time,
   not a measurement.

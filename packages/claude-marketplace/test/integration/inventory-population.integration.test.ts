@@ -25,7 +25,6 @@
  * extents, produces a different set.
  */
 
-import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import {
@@ -40,6 +39,7 @@ import {
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
+import { overOutputRowsMarkdown } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 let root: string;
@@ -272,8 +272,8 @@ async function refusedRows(
 
 /**
  * Two skills each linking a document whose parse was refused this run (over
- * `outputRows`: 20,000 links, behind a nonce so no earlier in-process parse of
- * the same bytes is served from the shared cache), the two documents holding
+ * `outputRows`: `overOutputRowsMarkdown`, under the heap limit whatever
+ * `--max-old-space-size` runs), the two documents holding
  * IDENTICAL bytes — one blob, two realizations. The walker arm names each as a
  * `parseRefused` parse-error row on its skill; the projection arm reads the
  * same refusal from the population's per-blob row. Both arms say it in the
@@ -288,7 +288,7 @@ describe('vat inventory: a refused linked document is a parse error in both arms
     write(safePath.join(refusedRoot, 'vibe-agent-toolkit.config.yaml'), '{}\n');
     mkdirSyncReal(safePath.join(refusedRoot, '.claude-plugin'), { recursive: true });
     write(safePath.join(refusedRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'refused-plugin', version: '0.0.0' }));
-    const bytes = `<!-- ${randomUUID()} -->\n${'[l](./SKILL.md)\n\n'.repeat(20_000)}`;
+    const bytes = overOutputRowsMarkdown('SKILL.md');
     for (const name of ['delta', 'gamma']) {
       const dir = safePath.join(refusedRoot, 'skills', name);
       mkdirSyncReal(dir, { recursive: true });

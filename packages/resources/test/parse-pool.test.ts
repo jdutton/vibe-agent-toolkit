@@ -31,7 +31,7 @@ import { pathToFileURL } from 'node:url';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { computeContentKey, type KeyedContent } from '../src/content-key.js';
 import { parseHtmlContent } from '../src/html-link-parser.js';
@@ -452,24 +452,72 @@ describe('a broken install is loud', () => {
   });
 
   it('does not count a time breach on a thread whose parser loaded', async () => {
-    await seedWorkerEntry([
+    // 🔑 The clock is the test's, not the machine's. The pool's deadline is a
+    // `setTimeout` armed at dispatch, so with timers faked it fires only when the
+    // test advances them — and the test advances them only once the thread has
+    // posted `parserLoaded` and the pool has read it. Each thread also takes
+    // 350 ms (a real timer, in the worker) to load, past the 300 ms limit: on a
+    // real clock a slow load under CI load was charged as a load that never
+    // finished, and three of them called the install broken.
+    //
+    // Three breaches IN A ROW, no answer between them: an answer resets the
+    // count, so a run broken up by answers cannot tell counted from uncounted.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    const entry = await seedWorkerEntry([
+      "import { writeFileSync } from 'node:fs';",
       "import { parentPort } from 'node:worker_threads';",
+      // A job posted meanwhile waits in the port: no listener is attached yet.
+      'await new Promise((resolve) => setTimeout(resolve, 350));',
+      // The real worker's own listener, wrapped: a SLOW document is announced as a
+      // loaded parser, as the real worker does before parsing, then blocks the thread
+      // unanswered. The marker is written AFTER the post, so seeing it means the post is queued.
+      'const on = parentPort.on.bind(parentPort);',
+      "parentPort.on = (event, listener) => on(event, event === 'message' ? (request) => {",
+      "  if (!request?.content?.startsWith?.('# SLOW')) return listener(request);",
+      '  parentPort.postMessage({ parserLoaded: request.kind });',
+      "  writeFileSync(new URL(`./${request.content.trim().replace('# ', '').replace(' ', '-')}`, import.meta.url), '');",
+      '  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);',
+      '} : listener);',
       `await import(${JSON.stringify(BUILT_WORKER)});`,
-      "parentPort.on('message', (request) => { if (request?.content?.startsWith?.('# SLOW')) { const until = Date.now() + 5000; while (Date.now() < until); } });",
     ].join('\n'));
     const pool = createParsePool({ size: 1, limits: { timeMs: 300 } });
     openPools.push(pool);
 
     const outcomes: unknown[] = [];
-    for (const content of ['# ok\n', '# SLOW 1\n', '# ok\n', '# SLOW 2\n', '# ok\n', '# SLOW 3\n', '# ok\n']) {
-      outcomes.push(await outcomeOf(pool, content));
+    try {
+      for (const content of ['# SLOW 1\n', '# SLOW 2\n', '# SLOW 3\n', '# ok\n']) {
+        const outcome = outcomeOf(pool, content);
+        if (content.startsWith('# SLOW')) {
+          await announcedParserLoaded(safePath.join(safePath.resolve(entry, '..'), content.trim().replace('# ', '').replace(' ', '-')));
+          vi.advanceTimersByTime(300);
+        }
+        outcomes.push(await outcome);
+      }
+    } finally {
+      vi.useRealTimers();
     }
 
     expect(outcomes.map((outcome) => (isParseLimitError(outcome) ? outcome.limit : outcome))).toStrictEqual([
-      'answered', 'timeMs', 'answered', 'timeMs', 'answered', 'timeMs', 'answered',
+      'timeMs', 'timeMs', 'timeMs', 'answered',
     ]);
   });
 });
+
+/**
+ * Wait, on no clock, until a seeded thread's `parserLoaded` has reached the pool.
+ *
+ * The thread writes `marker` after posting it, so once the marker exists the
+ * message is in the port's queue; the port delivers its queue in the poll phase,
+ * which every turn of the loop below passes through before its `setImmediate`.
+ *
+ * @param marker - The file the thread writes after its post
+ */
+async function announcedParserLoaded(marker: string): Promise<void> {
+  while (!(await fs.stat(marker).then(() => true, () => false))) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+}
 
 describe('a thread V8 stops at its own heap ceiling', () => {
   it('names V8\'s ceiling — twice the sampler\'s bound — never the bound the sampler did not stop it at', async () => {

@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
@@ -17,6 +16,7 @@ import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import {
   __readCrawlTimingSnapshot,
   __setCrawlTimingForTest,
+  overOutputRowsMarkdown,
   setupAsyncTempDirSuite,
   withReaddirSyncRefused,
 } from '@vibe-agent-toolkit/utils/testing';
@@ -379,9 +379,8 @@ describe('crawlSkillLinkRegistry on a directory it cannot list', () => {
  * A linked document whose parse the crawl refused is not admitted, so the walk
  * found it on disk and listed it as an opaque linked asset — nothing said it was
  * never parsed. It is now a parse-error row on the skill naming the file and the
- * refusal code. The seed is 20,000 links, over the default `outputRows` (16,384),
- * behind a nonce: an in-process parse of the same bytes elsewhere stores unbounded
- * facts in the shared parse cache, which a later crawl serves as an admission.
+ * refusal code. The seed is `overOutputRowsMarkdown`: over the default
+ * `outputRows` and under the heap limit whatever `--max-old-space-size` runs.
  */
 describe('a linked document whose parse the registry refused', () => {
 	const suite = setupAsyncTempDirSuite('extract-skill-parse-refused');
@@ -392,7 +391,7 @@ describe('a linked document whose parse the registry refused', () => {
 		await suite.beforeEach();
 		root = safePath.join(suite.getTempDir(), 'refused');
 		writeRepoFile(root, SKILL_FILENAME, DIVERGENT_SKILL_MD.replace(`[Late note](./${LATE_NOTE_FILENAME})\n`, ''));
-		writeRepoFile(root, REFERENCE_FILENAME, `<!-- ${randomUUID()} -->\n${'[l](./SKILL.md)\n\n'.repeat(20_000)}`);
+		writeRepoFile(root, REFERENCE_FILENAME, overOutputRowsMarkdown(SKILL_FILENAME));
 		writeRepoFile(root, IGNORED_NOTE_FILENAME, '# note\n');
 		resetProjectRootCaches();
 	});

@@ -23,7 +23,7 @@
  * root, where `chmod 000` denies nothing.
  */
 
-import { getTestOutputDir , CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
+import { getTestOutputDir , CANNOT_DENY_READS, overOutputRowsMarkdown } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, it } from 'vitest';
 import yaml from 'yaml';
 
@@ -36,7 +36,6 @@ import {
   expect,
   fs,
   getBinPath,
-  overOutputRowsDocument,
   safePath,
 } from './test-common.js';
 import { FINDER_DS_STORE, setupRagTestProject, setupTestProject } from './test-helpers/index.js';
@@ -177,7 +176,7 @@ describe('RAG index command (system test)', () => {
     const refusedDbPath = getTestOutputDir('cli', 'system', 'rag-index-refused-db');
     const docsDir = safePath.join(refusedProjectDir, 'docs');
     fs.writeFileSync(safePath.join(docsDir, 'good.md'), '# Good\n\nReadable prose.\n');
-    fs.writeFileSync(safePath.join(docsDir, 'huge.md'), overOutputRowsDocument('good.md'));
+    fs.writeFileSync(safePath.join(docsDir, 'huge.md'), overOutputRowsMarkdown('good.md'));
 
     const { result, parsed } = await executeCliAndParseYaml(
       binPath,
