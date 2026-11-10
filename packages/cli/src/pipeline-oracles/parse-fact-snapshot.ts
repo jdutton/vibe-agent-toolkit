@@ -73,6 +73,7 @@ type CapturedParseResultField =
   | 'headings'
   | 'frontmatter'
   | 'frontmatterError'
+  | 'frontmatterNotAMapping'
   | 'frontmatterSource'
   | 'sizeBytes'
   | 'estimatedTokenCount'
@@ -508,6 +509,11 @@ function collectConditions(parsed: ParseResult): ConditionFact[] {
 
   if (parsed.frontmatterError !== undefined) {
     conditions.push({ code: 'FRONTMATTER_INVALID_YAML', message: parsed.frontmatterError, line: 1 });
+  }
+  // Valid YAML that decodes to no mapping: only the worker's decode can say so,
+  // so a cache that dropped the flag would turn a sequence into "no block".
+  if (parsed.frontmatterNotAMapping === true) {
+    conditions.push({ code: 'FRONTMATTER_NOT_A_MAPPING', message: 'valid YAML, not a mapping', line: 1 });
   }
   for (const error of parsed.parseErrors ?? []) {
     conditions.push({

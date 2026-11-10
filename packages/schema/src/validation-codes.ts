@@ -492,6 +492,13 @@ export const CODE_REGISTRY = {
     'Find what makes the named file pathological to parse (deep nesting, a huge generated document) and simplify or exclude it. A limit breach on an ordinary file under heavy machine load clears on the next run.',
     'resource_parse_limit_exceeded',
   ),
+  RESOURCE_PARSE_WORKER_DIED: entry(
+    'finding',
+    'error',
+    'A file the crawl enumerated was not admitted because the parse worker holding it died without answering — it exited, or an uncaught error killed the thread — so it is absent from every count in the report. Nothing was stored for it; the next run parses it again.',
+    'Re-run. A death that repeats on the same file is a VAT defect, not the file\'s: report it with the named file and the cause in the message.',
+    'resource_parse_worker_died',
+  ),
   // The two population-time conditions `vat resources validate` surfaces off
   // the projection's `realization_conditions` table (and, for the MIME
   // conflict, off the registry's own resolver on the walk lane). Default

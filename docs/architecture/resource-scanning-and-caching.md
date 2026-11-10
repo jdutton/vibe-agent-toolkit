@@ -689,11 +689,20 @@ one job at a time; `VAT_PARSE_POOL_SIZE` and `VAT_PARSE_POOL_MIN_MISSES` still s
 Each job runs under `ParseLimits` (`parse-limits.ts`): wall clock (`timeMs`, which includes a cold
 worker's first parser load), heap (`heapMb`), stack depth (`stackMb`), output rows and bytes
 (`outputRows`, `outputBytes`, checked in the worker before anything is cached) and input size
-(`inputBytes`, refused before any worker is asked). A breach kills the worker, the pool replaces it,
-and the job rejects with `ParseLimitError`. The projection lane refuses that one blob
+(`inputBytes`, refused before any worker is asked). Time and heap breaches kill and replace the
+worker; stack and output breaches are reported by it; input size is refused before dispatch. Either
+way the job rejects with `ParseLimitError`. The projection lane refuses that one blob
 (`BLOB_PARSE_LIMIT_EXCEEDED`, a per-run code `storableBlobFacts` never stores); the registry lane
-reports `RESOURCE_PARSE_LIMIT_EXCEEDED` and admits every other file. Nothing about a breach persists
-(I6): no cache entry, no stored condition, so the next run parses the file again.
+reports `RESOURCE_PARSE_LIMIT_EXCEEDED` and admits every other file. A worker that dies holding a
+job — it exits, or an uncaught error kills it — rejects with `ParseWorkerDiedError`, handled the same
+way (`BLOB_PARSE_WORKER_DIED`, `RESOURCE_PARSE_WORKER_DIED`): nothing says the bytes caused it, so it
+is never a stored `BLOB_PARSE_FAILED`. Nothing about a breach or a death persists (I6): no cache
+entry, no stored condition, so the next run parses the file again.
+
+Frontmatter YAML is decoded in the worker too, and only there: the worker sends the decoded mapping
+back in a flat tagged encoding (`frontmatter-codec.ts`) that the parse cache stores beside the raw
+source, so neither a worker answer nor a cache hit decodes YAML on the main thread. `vat rag index`
+parses nothing: it chunks by the facts the registry derived on this route and reads only the text.
 
 ⚠️ A process-wide `--max-old-space-size` (in `NODE_OPTIONS` or `execArgv`) overrides a worker's
 `resourceLimits`, so the heap ceiling is also enforced by sampling the worker's heap every 50 ms.

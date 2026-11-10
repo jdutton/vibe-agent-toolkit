@@ -19,7 +19,6 @@ import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 
-import { parseFrontmatterSource } from '../src/frontmatter-source.js';
 import { parseMarkdown, parseMarkdownContent } from '../src/link-parser.js';
 
 import { assertAllLinksClassifiedAs, expectHeadingStructure, findPackageRoot, writeAndParse } from './test-helpers.js';
@@ -1434,64 +1433,6 @@ description: "use [a][nope-fm]"
 
       expect(result.frontmatterSource).toBe('a: 1');
       expect(result.frontmatter).toEqual({ a: 1 });
-    });
-  });
-
-  // ── parseFrontmatterSource ─────────────────────────────────────────────────
-  //
-  // The single implementation of "what does this YAML source mean?", exported
-  // so the parse cache re-derives `frontmatter` on a hit by calling the same
-  // function the cold path calls rather than re-implementing the decision.
-  describe('parseFrontmatterSource', () => {
-    it('returns the parsed object for a well-formed mapping', () => {
-      expect(parseFrontmatterSource('title: T\nn: 1')).toEqual({ frontmatter: { title: 'T', n: 1 } });
-    });
-
-    it('returns an empty decision for an empty source', () => {
-      expect(parseFrontmatterSource('')).toEqual({});
-      expect(Object.keys(parseFrontmatterSource(''))).toEqual([]);
-    });
-
-    it('returns an empty decision for a whitespace-only source', () => {
-      expect(Object.keys(parseFrontmatterSource('  \n \t '))).toEqual([]);
-    });
-
-    // Behaviour-preserving: the pre-extraction code accepted only non-null,
-    // non-array objects and silently ignored everything else. Not "improved".
-    it('ignores a bare scalar', () => {
-      expect(Object.keys(parseFrontmatterSource('just a string'))).toEqual([]);
-    });
-
-    it('ignores an explicit null document', () => {
-      expect(Object.keys(parseFrontmatterSource('null'))).toEqual([]);
-    });
-
-    it('ignores a sequence at the document root', () => {
-      expect(Object.keys(parseFrontmatterSource('- a\n- b'))).toEqual([]);
-    });
-
-    it('reports a parse failure as frontmatterError and nothing else', () => {
-      const decision = parseFrontmatterSource(INVALID_YAML);
-
-      expect(Object.keys(decision)).toEqual(['frontmatterError']);
-      expect(decision.frontmatterError).toBeTruthy();
-    });
-
-    // Purity/totality: the cache calls this on a stored string with no AST and
-    // no filesystem in reach, and must never see it throw.
-    it('is total — never throws, for any of the shapes above', () => {
-      for (const source of ['', '   ', 'a: 1', 'null', '- a', INVALID_YAML, '\t bad: 1']) {
-        expect(() => parseFrontmatterSource(source)).not.toThrow();
-      }
-    });
-
-    // No undefined-valued keys, same rule as the parser itself.
-    it('never returns an undefined-valued key', () => {
-      for (const source of ['', 'a: 1', INVALID_YAML, 'just a string']) {
-        for (const [key, value] of Object.entries(parseFrontmatterSource(source))) {
-          expect(value, `key ${key}`).toBeDefined();
-        }
-      }
     });
   });
 });

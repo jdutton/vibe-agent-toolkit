@@ -37,21 +37,22 @@
  * |---|---|
  * | `links`, `headings`, `estimatedTokenCount` | stored |
  * | `anchors`, `parseErrors`, `unresolvedReferences`, `lexicalReferences`, `contentMeasures` | stored when present |
- * | `frontmatterSource`, `frontmatterError` | stored when present |
+ * | `frontmatterSource`, `frontmatterError`, `frontmatterNotAMapping` | stored when present |
+ * | `frontmatterValue` | the decoded mapping, encoded (`frontmatter-codec.ts`), when present |
  * | `content`, `sizeBytes` | **never stored** — re-attached from `KeyedContent` |
- * | `frontmatter` | **never stored** — re-derived from `frontmatterSource` |
+ * | `frontmatter` | **never stored as an object** — rebuilt from `frontmatterValue` |
  *
- * ## Why frontmatter is cached as YAML SOURCE, never as the parsed object
+ * ## Why frontmatter is cached as the worker's ENCODED decode, never re-decoded
  *
- * Measured, against this repo's `yaml`: `.inf` parses to `Infinity`, `.nan` to
- * `NaN`, `!!binary` to a `Buffer`. `JSON.stringify` maps the first two to
- * `null`, rewrites the third as `{type,data}`, and **throws outright** on a
- * cyclic YAML anchor — so documents in that last class would silently never
- * cache at all. Re-parsing the source is lossless by construction, because it
- * is literally the computation the cold path runs: {@link rehydrate} calls
- * `parseFrontmatterSource`, the *same* function `parseMarkdownContent` uses.
- * There is deliberately no second implementation of "YAML source → frontmatter"
- * in this file.
+ * A hit never decodes YAML. `yaml` recurses once per nesting level, so a
+ * decode on this thread is an unbounded parse beside the bounded one (ADR I8):
+ * a 1,000-level `a: [[[…]]]` overflows the main thread's stack, and its
+ * outcome would hang on the stack, not on the bytes. The decode runs once, in
+ * the parse worker under its `stackMb`, and its result is stored in the tagged,
+ * flat encoding `frontmatter-codec.ts` defines — lossless for every value
+ * `yaml` produces (`.inf`, `.nan`, `-0`, `!!binary`, `!!set`, `!!omap`,
+ * `!!timestamp`, shared and cyclic anchors), which plain JSON is not.
+ * {@link rehydrate} rebuilds `frontmatter` from it with a loop, at any depth.
  *
  * ## Standing constraint: never hand out a shared object
  *
@@ -125,6 +126,7 @@ import {
   fsFaultOf,
   type FsSide,
   isPathAbsentError,
+  isVatError,
   parseEnvBoolean,
   planTreeChanges,
   renameFileAtomic,
@@ -135,7 +137,7 @@ import {
 
 import { parseCacheDirectory } from './cache-namespace.js';
 import { CONTENT_KEY_PATTERN, type KeyedContent, type ParsableContent, readContentWithKey } from './content-key.js';
-import { parseFrontmatterSource } from './frontmatter-source.js';
+import { decodeFrontmatterValue, encodeFrontmatterValue, FRONTMATTER_VALUE_MALFORMED } from './frontmatter-codec.js';
 import type { ParseResult } from './link-parser.js';
 import type { DocumentParserKind } from './mime-type.js';
 import {
@@ -276,7 +278,11 @@ export function dehydrate(result: ParseResult): ParseFacts {
     ...(result.frontmatterSource !== undefined && {
       frontmatterSource: result.frontmatterSource,
     }),
+    ...(result.frontmatter !== undefined && {
+      frontmatterValue: encodeFrontmatterValue(result.frontmatter),
+    }),
     ...(result.frontmatterError !== undefined && { frontmatterError: result.frontmatterError }),
+    ...(result.frontmatterNotAMapping === true && { frontmatterNotAMapping: true }),
   };
 }
 
@@ -288,16 +294,17 @@ export function dehydrate(result: ParseResult): ParseFacts {
  * recoverable from the decoded string (invalid UTF-8 decodes to U+FFFD and
  * re-encodes to three bytes, so the round trip does not preserve length).
  *
- * `frontmatter` is re-derived by `parseFrontmatterSource` — the same function
- * the cold path uses — so a cache hit and a cold parse cannot disagree.
+ * `frontmatter` is rebuilt from `frontmatterValue`, the worker's own decode,
+ * so a cache hit and a cold parse cannot disagree — and no YAML is decoded on
+ * this thread (see "Why frontmatter is cached as the worker's ENCODED decode").
  *
  * @param facts - The stored facts
  * @param keyed - The fresh read whose key selected those facts
  * @returns A parse result equal to what the parser would have produced
+ * @throws A `VatError` coded `FRONTMATTER_VALUE_MALFORMED` when the stored
+ *   encoding is not one this build wrote; `get` reads that as a miss
  */
 export function rehydrate(facts: ParseFacts, keyed: KeyedContent): ParseResult {
-  const derived = deriveFrontmatter(facts);
-
   return {
     links: facts.links,
     headings: facts.headings,
@@ -315,8 +322,11 @@ export function rehydrate(facts: ParseFacts, keyed: KeyedContent): ParseResult {
     ...(facts.frontmatterSource !== undefined && {
       frontmatterSource: facts.frontmatterSource,
     }),
-    ...(derived.frontmatter !== undefined && { frontmatter: derived.frontmatter }),
-    ...(derived.frontmatterError !== undefined && { frontmatterError: derived.frontmatterError }),
+    ...(facts.frontmatterValue !== undefined && {
+      frontmatter: decodeFrontmatterValue(facts.frontmatterValue),
+    }),
+    ...(facts.frontmatterError !== undefined && { frontmatterError: facts.frontmatterError }),
+    ...(facts.frontmatterNotAMapping === true && { frontmatterNotAMapping: true }),
     content: keyed.content,
     sizeBytes: keyed.byteLength,
     estimatedTokenCount: facts.estimatedTokenCount,
@@ -324,26 +334,21 @@ export function rehydrate(facts: ParseFacts, keyed: KeyedContent): ParseResult {
 }
 
 /**
- * The frontmatter half of {@link rehydrate}, kept separate so there is exactly
- * one place that decides where `frontmatter` / `frontmatterError` come from.
+ * {@link rehydrate}, with a stored frontmatter encoding this build did not
+ * write read as a miss — the same fail-soft rule as every other malformed
+ * entry ({@link readFacts}). Anything else it throws stays loud.
  *
- * When a source is stored, `parseFrontmatterSource` — the same function the
- * cold path runs — is the authority, so a hit and a cold parse cannot disagree.
- * The stored `frontmatterError` is only a fallback for a producer that reported
- * an error without a source; for markdown the no-source branch simply means
- * "this document had no frontmatter".
+ * @param facts - Facts that passed the schema
+ * @param keyed - The fresh read whose key selected them
+ * @returns The parse result, or `null` for a malformed encoding
  */
-function deriveFrontmatter(facts: ParseFacts): {
-  frontmatter?: Record<string, unknown>;
-  frontmatterError?: string;
-} {
-  if (facts.frontmatterSource !== undefined) {
-    return parseFrontmatterSource(facts.frontmatterSource);
+function rehydrateOrMiss(facts: ParseFacts, keyed: KeyedContent): ParseResult | null {
+  try {
+    return rehydrate(facts, keyed);
+  } catch (error) {
+    if (isVatError(error, FRONTMATTER_VALUE_MALFORMED) || error instanceof SyntaxError) return null;
+    throw error;
   }
-  if (facts.frontmatterError !== undefined) {
-    return { frontmatterError: facts.frontmatterError };
-  }
-  return {};
 }
 
 /**
@@ -494,7 +499,7 @@ export class ParseCache {
       // `readFacts` returns the product of a fresh `JSON.parse`, so this graph is
       // not shared with any previous caller. See the standing constraint in the
       // module docstring — do NOT memoize this object.
-      return rehydrate(facts, keyed);
+      return rehydrateOrMiss(facts, keyed);
     } finally {
       recordTierPass(TierPass.CacheReadDecode, decodeStartedAt);
     }

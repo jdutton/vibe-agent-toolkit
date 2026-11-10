@@ -36,13 +36,15 @@
  * and `sizeBytes` on the parent side, so callers observe a `ParseResult` that is
  * `toStrictEqual` to what the in-process parser returns.
  *
- * `frontmatter` does not come back either, and that one is a **correctness**
- * requirement rather than a size one: `ParseResult.frontmatter` is whatever
- * `yaml` decoded, and structured clone is not the identity on it. Verified —
- * `blob: !!binary aGVsbG8=` decodes to a `Buffer` and arrives on the other side
- * as a `Uint8Array`, which `deepStrictEqual` rejects. So the source travels and
- * `parseFrontmatterSource` re-derives the object here, exactly as
- * `parse-cache.ts`'s `rehydrate` does on a cache hit. Everything else in
+ * `frontmatter` does not come back as an object either, and that one is a
+ * **correctness** requirement rather than a size one: `ParseResult.frontmatter`
+ * is whatever `yaml` decoded, and structured clone is not the identity on it.
+ * Verified — `blob: !!binary aGVsbG8=` decodes to a `Buffer` and arrives on the
+ * other side as a `Uint8Array`, which `deepStrictEqual` rejects. Nor may this
+ * side re-decode the source: a deep block overflows the main thread's stack, so
+ * YAML is decoded only in the worker, under its limits. So the worker's decode
+ * travels as `frontmatterValue` (`frontmatter-codec.ts`) and is rebuilt here,
+ * exactly as `parse-cache.ts`'s `rehydrate` does on a cache hit. Everything else in
  * `ParseFacts` is plain JSON-shaped data — it has to be, because the parse cache
  * already round-trips it through JSON — and `parse-pool.test.ts` pins that with
  * a `structuredClone` identity check over every fixture.
@@ -62,7 +64,15 @@
  * loaded comes back as a rejection carrying the original `name`, `message` and
  * `code`, so `isParserUnavailable` (which matches on `code`, not only on
  * `instanceof`) still classifies it as a broken install. A thread that dies
- * without answering rejects its job with an error that says so.
+ * without answering rejects its job with a `ParseWorkerDiedError` — a per-run
+ * outcome beside the limit breaches, never stored as a failure of the bytes.
+ *
+ * ## What a breach does to the worker
+ *
+ * Time and heap breaches kill and replace the worker: the job cannot be
+ * interrupted any other way. Stack and output breaches are reported by the
+ * worker itself, which stays in the pool. Input size is refused before
+ * dispatch, so no worker sees the document at all.
  *
  * ## ⚠️ `shutdown()` is not optional — it is what collects the timings
  *
@@ -95,13 +105,16 @@ import { Worker } from 'node:worker_threads';
 
 import { followedKindSync } from '@vibe-agent-toolkit/utils';
 
-import { parseFrontmatterSource } from './frontmatter-source.js';
+import { decodeFrontmatterValue, encodeFrontmatterValue } from './frontmatter-codec.js';
 import type { ParseResult } from './link-parser.js';
 import type { DocumentParserKind } from './mime-type.js';
 import {
+  appliedHeapLimitMb,
+  oldGenerationBytes,
   type ParseLimitName,
   type ParseLimits,
   ParseLimitError,
+  ParseWorkerDiedError,
   resolveParseLimits,
 } from './parse-limits.js';
 import {
@@ -189,6 +202,19 @@ const HEAP_SAMPLE_INTERVAL_MS = 50;
 /** Bytes per MiB, to compare a heap sample against a limit stated in MiB. */
 const BYTES_PER_MIB = 1_048_576;
 
+/**
+ * The young generation a worker was given, in MiB — what separates its whole
+ * heap from the old generation `heapMb` bounds. Node fills it in on every
+ * started worker (96 MiB measured on Node 26); 0 if a runtime ever does not,
+ * which only makes the sampler count the young generation as old.
+ *
+ * @param worker - A started worker
+ * @returns `resourceLimits.maxYoungGenerationSizeMb`
+ */
+function youngGenerationMb(worker: Worker): number {
+  return worker.resourceLimits?.maxYoungGenerationSizeMb ?? 0;
+}
+
 /** The parse job that crosses to a worker. Plain data — see property 2 above. */
 interface ParseWorkerParseRequest {
   type: 'parse';
@@ -269,7 +295,10 @@ export interface ParseWorkerFailure {
  *   rebuilds field by field with conditional spreads. `Omit` on `ParseResult`
  *   preserves the exact optionality instead, so the round trip is two spreads.
  */
-export type ParseWireFacts = Omit<ParseResult, 'content' | 'sizeBytes' | 'frontmatter'>;
+export type ParseWireFacts = Omit<ParseResult, 'content' | 'sizeBytes' | 'frontmatter'> & {
+  /** The decoded frontmatter mapping, encoded by `frontmatter-codec.ts`. Absent when there is none. */
+  frontmatterValue?: string;
+};
 
 /**
  * Everything a worker sends back.
@@ -320,14 +349,19 @@ type ParseWireDraft = ParseWireFacts &
  * and because a test must be able to check the wire shape without starting a
  * thread — `parse-worker.js` throws on the main thread by design.
  *
+ * `frontmatter` travels as `frontmatterValue`, the worker's decode encoded by
+ * `frontmatter-codec.ts` — a string, so neither the structured clone nor the
+ * parent ever meets its depth, and the parent never decodes YAML.
+ *
  * @param result - What the parser produced, in the worker
- * @returns The same facts minus `content`, `sizeBytes` and `frontmatter`
+ * @returns The same facts minus `content` and `sizeBytes`, the mapping encoded
  */
 export function toParseWire(result: ParseResult): ParseWireFacts {
   const wire: ParseWireDraft = { ...result };
   delete wire.content;
   delete wire.sizeBytes;
   delete wire.frontmatter;
+  if (result.frontmatter !== undefined) wire.frontmatterValue = encodeFrontmatterValue(result.frontmatter);
   return wire;
 }
 
@@ -345,12 +379,13 @@ export interface ParsePool {
    *   `content` — decoding is lossy on malformed UTF-8 and the source need not
    *   be UTF-8 at all. It becomes `ParseResult.sizeBytes` verbatim.
    * @returns The same `ParseResult` the in-process parser returns, `content` included
-   * @throws If the parser module cannot be loaded, if the pool is shut down, or
-   *   if the worker holding the job dies. A document that merely fails to parse
-   *   is NOT an error — it comes back in `parseErrors`. And a
-   *   {@link ParseLimitError} when the job breached one of its limits (time,
-   *   heap, stack, output rows or bytes, input size): the worker is killed and
-   *   replaced, nothing is cached, and the caller refuses the file (I6, I8).
+   * @throws If the parser module cannot be loaded or the pool is shut down. A
+   *   document that merely fails to parse is NOT an error — it comes back in
+   *   `parseErrors`. A {@link ParseLimitError} when the job breached one of its
+   *   limits: time and heap breaches kill and replace the worker, stack and
+   *   output breaches are reported by it, and input size is refused before
+   *   dispatch. A `ParseWorkerDiedError` when the worker holding the job died.
+   *   Either way nothing is cached, and the caller refuses the file (I6, I8).
    */
   parse(kind: DocumentParserKind, content: string, byteLength: number): Promise<ParseResult>;
   /**
@@ -533,16 +568,11 @@ export function defaultParsePoolSize(): number {
  *
  * The mirror of `parse-cache.ts`'s `rehydrate`, and deliberately the same
  * decision: `content`/`sizeBytes` come from the caller's own bytes, and
- * `frontmatter` is re-derived by `parseFrontmatterSource` — the *same function
- * the cold path runs* — so an off-thread parse and an in-process one cannot
- * disagree about it. It is not `rehydrate` itself only because that function
- * takes a `KeyedContent`, and a pool holds no bytes to key and no decode
- * provenance to report; fabricating those two fields to reach it would put a
- * lie in the data to save four lines.
- *
- * Spreading `facts` first is what keeps a stored `frontmatterError` that has no
- * `frontmatterSource` beside it — `rehydrate`'s second branch — while a source
- * that IS present wins, because `derived` is spread after.
+ * `frontmatter` is rebuilt from `frontmatterValue` — the worker's own decode,
+ * encoded — so this thread never decodes YAML (ADR I8: a deep block would
+ * overflow the main thread's stack). It is not `rehydrate` itself only because
+ * that function takes a `KeyedContent`, and a pool holds no bytes to key and no
+ * decode provenance to report.
  *
  * @param facts - What the worker sent back
  * @param content - The caller's own bytes, decoded
@@ -550,10 +580,13 @@ export function defaultParsePoolSize(): number {
  * @returns A parse result equal to the in-process parser's
  */
 function attachContent(facts: ParseWireFacts, content: string, byteLength: number): ParseResult {
-  const { frontmatterSource } = facts;
-  const derived = frontmatterSource === undefined ? {} : parseFrontmatterSource(frontmatterSource);
-
-  return { ...facts, ...derived, content, sizeBytes: byteLength };
+  const { frontmatterValue, ...rest } = facts;
+  return {
+    ...rest,
+    ...(frontmatterValue !== undefined && { frontmatter: decodeFrontmatterValue(frontmatterValue) }),
+    content,
+    sizeBytes: byteLength,
+  };
 }
 
 /**
@@ -602,6 +635,12 @@ interface PoolWorker {
   job: PendingJob | null;
   /** Set from the `exit` listener, so shutdown never awaits an exit that already happened. */
   exited: boolean;
+  /**
+   * The old-generation ceiling this thread actually runs under, in MiB, read
+   * once the thread is online — lower than `heapMb` when a process-wide
+   * `--max-old-space-size` lowered it. `heapMb` until then. See `appliedHeapLimitMb`.
+   */
+  heapLimitMb: number;
 }
 
 /**
@@ -749,13 +788,40 @@ class WorkerParsePool implements ParsePool {
     poolWorker.worker.getHeapStatistics().then(
       (heap) => {
         if (poolWorker.job !== job) return;
-        if (heap.used_heap_size <= this.#limits.heapMb * BYTES_PER_MIB) return;
-        this.#abandon(poolWorker, new ParseLimitError('heapMb', this.#limits.heapMb));
+        // The old generation — the one measure `heapMb` is defined over — never
+        // the whole heap: young-generation churn is not what the limit bounds.
+        const oldGeneration = oldGenerationBytes(heap, youngGenerationMb(poolWorker.worker));
+        if (oldGeneration <= poolWorker.heapLimitMb * BYTES_PER_MIB) return;
+        this.#abandon(poolWorker, this.#heapBreach(poolWorker));
         poolWorker.worker.terminate().catch(() => undefined);
       },
       () => undefined,
     );
   }
+
+  /**
+   * @param poolWorker - The thread that breached its heap
+   * @returns The breach, naming the limit that applied to it
+   */
+  #heapBreach(poolWorker: PoolWorker): ParseLimitError {
+    return ParseLimitError.heap(poolWorker.heapLimitMb, this.#limits.heapMb);
+  }
+
+  /**
+   * Learn the old-generation ceiling a new thread actually runs under.
+   *
+   * Read once it is online: a process-wide `--max-old-space-size` lower than
+   * `heapMb` lowers it, and a refusal must name the limit that applied.
+   */
+  #readHeapLimit(poolWorker: PoolWorker): void {
+    poolWorker.worker.getHeapStatistics().then(
+      (heap) => {
+        poolWorker.heapLimitMb = appliedHeapLimitMb(heap, youngGenerationMb(poolWorker.worker), this.#limits.heapMb);
+      },
+      () => undefined,
+    );
+  }
+
   /**
    * A job ran past its wall-clock limit: reject it, and terminate its thread.
    *
@@ -786,8 +852,9 @@ class WorkerParsePool implements ParsePool {
     let worker: Worker;
     try {
       // Heap and stack are enforced by V8 itself, per thread. A thread that
-      // breaches its heap dies with `ERR_WORKER_OUT_OF_MEMORY`; one that
-      // breaches its stack throws a `RangeError` the worker reports as a breach.
+      // breaches its heap dies with `ERR_WORKER_OUT_OF_MEMORY` and is replaced;
+      // one that breaches its stack throws a `RangeError` (bare, or wrapped by
+      // `yaml`) the worker itself reports as a breach, and it stays in the pool.
       worker = new Worker(resolveWorkerEntry(), {
         workerData: this.#workerData,
         resourceLimits: {
@@ -800,24 +867,28 @@ class WorkerParsePool implements ParsePool {
       return undefined;
     }
 
-    const poolWorker: PoolWorker = { worker, job: null, exited: false };
+    const poolWorker: PoolWorker = { worker, job: null, exited: false, heapLimitMb: this.#limits.heapMb };
+    worker.once('online', () => {
+      this.#readHeapLimit(poolWorker);
+    });
     worker.on('message', (response: ParseWorkerResponse) => {
       this.#settle(poolWorker, response);
     });
+    // A thread that dies holding a job never answered it: a heap breach when V8
+    // stopped it at its heap, otherwise a worker death. Both are per-run
+    // outcomes, never stored as a failure of the bytes (I6). `error` precedes
+    // `exit`, so a thread that threw is reported by what it threw.
     worker.on('error', (error: Error) => {
       this.#abandon(
         poolWorker,
         (error as { code?: unknown }).code === 'ERR_WORKER_OUT_OF_MEMORY'
-          ? new ParseLimitError('heapMb', this.#limits.heapMb)
-          : error,
+          ? this.#heapBreach(poolWorker)
+          : new ParseWorkerDiedError({ cause: error }),
       );
     });
-    worker.on('exit', (code: number) => {
+    worker.on('exit', (exitCode: number) => {
       poolWorker.exited = true;
-      this.#abandon(
-        poolWorker,
-        new Error(`VAT's parse worker exited unexpectedly with code ${String(code)}.`),
-      );
+      this.#abandon(poolWorker, new ParseWorkerDiedError({ exitCode }));
     });
 
     this.#workers.push(poolWorker);
@@ -942,8 +1013,17 @@ function settleJob(
   }
 
   const attachStartedAt = parseTimingStart();
-  const result = attachContent(response.facts, job.request.content, job.request.byteLength);
-  recordTierPass(TierPass.WireAttach, attachStartedAt);
+  let result: ParseResult;
+  try {
+    result = attachContent(response.facts, job.request.content, job.request.byteLength);
+  } catch (error) {
+    // Thrown in a `message` listener it would be uncaught, and this job would
+    // never settle. Rejected, it fails this one document, loudly.
+    job.reject(error instanceof Error ? error : new Error(String(error)));
+    return;
+  } finally {
+    recordTierPass(TierPass.WireAttach, attachStartedAt);
+  }
   job.resolve(result);
 }
 

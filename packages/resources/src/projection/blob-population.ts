@@ -114,7 +114,7 @@ import { estimateTokens } from '../link-classify.js';
 import type { ParseResult } from '../link-parser.js';
 import { type ParseCache, defaultParseCache, isParserUnavailable } from '../parse-cache.js';
 import { ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable } from '../parse-dispatcher.js';
-import { isParseLimitError } from '../parse-limits.js';
+import { isParseLimitError, isParseWorkerDiedError } from '../parse-limits.js';
 import { type CodeContextRanges, findLexicalReferences } from '../reference-lexer.js';
 import type { BlobConditionRow } from '../schemas/projection-blobs.js';
 import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
@@ -145,6 +145,16 @@ export const BLOB_PARSE_FAILED = 'BLOB_PARSE_FAILED';
  * because the row describes this run, not the bytes.
  */
 export const BLOB_PARSE_LIMIT_EXCEEDED = 'BLOB_PARSE_LIMIT_EXCEEDED';
+
+/**
+ * The parse worker holding this blob's job died without answering — it exited,
+ * or an uncaught error killed it (`ParseWorkerDiedError`).
+ *
+ * A per-run outcome, never stored (ADR I6), and never {@link BLOB_PARSE_FAILED}:
+ * nothing says the bytes caused it, so the next run re-attempts the blob. The
+ * message names the path and the cause, because the row describes this run.
+ */
+export const BLOB_PARSE_WORKER_DIED = 'BLOB_PARSE_WORKER_DIED';
 
 /** The bytes are not text, so no text parser was run over them. */
 export const BLOB_NOT_TEXT = 'BLOB_NOT_TEXT';
@@ -317,6 +327,8 @@ export interface BlobPopulationResult {
   readonly blobsParseFailed: number;
   /** Blobs whose parse was stopped at a limit — a {@link BLOB_PARSE_LIMIT_EXCEEDED} row each, never stored. */
   readonly blobsParseLimited: number;
+  /** Blobs whose parse worker died holding them — a {@link BLOB_PARSE_WORKER_DIED} row each, never stored. */
+  readonly blobsParseWorkerDied: number;
   /**
    * Blobs declined as binary before any parse — a {@link BLOB_NOT_TEXT} row each.
    *
@@ -641,6 +653,7 @@ function emptyCounts(): MutableCounts {
     blobsContentChanged: 0,
     blobsParseFailed: 0,
     blobsParseLimited: 0,
+    blobsParseWorkerDied: 0,
     blobsNotText: 0,
     blobsWithoutParser: 0,
     realizationsSkippedDirectory: 0,
@@ -786,7 +799,8 @@ type RefusalBucket =
   | 'blobsContentChanged'
   | 'blobsNotText'
   | 'blobsParseFailed'
-  | 'blobsParseLimited';
+  | 'blobsParseLimited'
+  | 'blobsParseWorkerDied';
 
 /** A blob the stage declined, with the row and the bucket that say why. */
 interface RefusedBlob {
@@ -1104,6 +1118,15 @@ async function parseTarget(
       ));
     }
 
+    if (isParseWorkerDiedError(error)) {
+      return refused('blobsParseWorkerDied', condition(
+        target.contentKey,
+        BLOB_PARSE_WORKER_DIED,
+        `The parse of "${target.path}" was lost: ${error.message}`
+        + ' This blob has no rows this run, and the next run parses it again',
+      ));
+    }
+
     return refused('blobsParseFailed', condition(
       target.contentKey,
       BLOB_PARSE_FAILED,
@@ -1206,7 +1229,8 @@ export function parserKindOf(contentKey: string): ParserKind {
  * holding those bytes is served it. {@link BLOB_UNREADABLE} and
  * {@link BLOB_CONTENT_CHANGED} are not — each records that one read, at one path,
  * in one run, never observed the bytes at all — and neither is
- * {@link BLOB_PARSE_LIMIT_EXCEEDED}, a parse stopped by this run's limits. Filed, either one marked its key
+ * {@link BLOB_PARSE_LIMIT_EXCEEDED}, a parse stopped by this run's limits, nor
+ * {@link BLOB_PARSE_WORKER_DIED}, a parse lost with its worker. Filed, any one marked its key
  * "held" (a `blobs` row OR a `blob_conditions` row holds a key), so a single
  * transient failure stopped those bytes being parsed again, in every repository,
  * until the store was cleared. Dropped here, the key is held by nothing and the
@@ -1224,13 +1248,15 @@ export function storableBlobFacts(blobs: BlobScopedRows): BlobScopedRows {
 
 /**
  * Conditions about one run's attempt rather than about the bytes it was after:
- * a failed read, and a parse stopped at a limit (ADR I6 — a time, heap or stack
- * outcome depends on the machine, not the bytes).
+ * a failed read, a parse stopped at a limit, and a parse lost with its worker
+ * (ADR I6 — a time, heap or stack outcome, or a thread's death, depends on the
+ * machine, not the bytes).
  */
 const READ_OBSERVATIONS: ReadonlySet<string> = new Set([
   BLOB_UNREADABLE,
   BLOB_CONTENT_CHANGED,
   BLOB_PARSE_LIMIT_EXCEEDED,
+  BLOB_PARSE_WORKER_DIED,
 ]);
 
 /**

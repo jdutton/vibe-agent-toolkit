@@ -77,7 +77,7 @@ extractors and gates every built-in; plugins per the [register](./fact-extractor
 
 **I6. Only key-determined outcomes persist.** A row set is stored whole or not at all, an outcome only
 if the key preimage plus the recorded limit determine it, so time, heap, stack-depth
-and recursion outcomes stay per run. A success replaces a stored failure and may be
+and recursion outcomes, and a parse worker's death, stay per run. A success replaces a stored failure and may be
 served under a limit tighter than its own. *Fails:* a timeout on a loaded box
 becomes a permanent blank. *Enforcer:* a kill mid-write leaves no partial row set; a seeded per-run
 timeout leaves no stored outcome; a seeded success replaces a stored failure.
@@ -86,8 +86,9 @@ timeout leaves no stored outcome; a seeded success replaces a stored failure.
 mixed; each is a [register](./fact-extractors-hazard-register.md) row. *Fails:* parallel checks answer from half of two states.
 *Enforcer:* one two-process test per row.
 
-**I8. Termination.** Every run ends with an answer or a refusal within its limit. *Fails:* a never-returning check blocks a commit. *Enforcer:* one kill-at-limit
-fixture per blocking class, every wait, child process and handshake included.
+**I8. Termination.** Every run ends with an answer or a refusal within its limit. *Fails:* a never-returning check blocks a commit. *Enforcer:* one stop-at-limit
+fixture per blocking class, every wait, child process and handshake included; where the class is
+stopped by killing a thread, the fixture proves the thread is gone.
 
 **I9. Trust is explicit.** A plugin loads only because config names it (rejected: auto-discovery). *Fails:* unchosen code runs. *Enforcer:* an installed but
 unnamed extractor is never imported.

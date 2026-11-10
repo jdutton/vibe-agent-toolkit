@@ -482,8 +482,10 @@ refusal. The one shipped skip is the claude-context discovery pass,
 
 What the stage declined or mis-decoded is reported as a function of the **population's rows**
 (`blob_conditions`, `resource_realizations.contentState`, `blobs.replacementCharacters`), so a store
-hit reports what the derive that wrote it did — except a failed read (`BLOB_UNREADABLE`,
-`BLOB_CONTENT_CHANGED`), which is never stored, so only the run that observed it reports it. Binary
+hit reports what the derive that wrote it did — except a per-run outcome: a failed read
+(`BLOB_UNREADABLE`, `BLOB_CONTENT_CHANGED`), a parse stopped at a limit (`BLOB_PARSE_LIMIT_EXCEEDED`)
+or a parse lost with its worker (`BLOB_PARSE_WORKER_DIED`), which is never stored, so only the run
+that observed it reports it. Binary
 content is reported only at a path whose type promises text, so a committed image stays silent; a
 population that derived no blob at all reports every refusal. The query lanes report it — `vat
 resources query`, `vat resources check` (and so `vat validate`'s checks child), `vat claude context`,

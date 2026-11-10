@@ -68,7 +68,7 @@ import { fillLinkFacts, fragmentIndex, judgeLink, resolveLinkEntries, unreadable
 import { parserKindForMimeType } from './mime-type.js';
 import { ParseCache, type ParseCacheStats, vatCacheRoot } from './parse-cache.js';
 import { ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable } from './parse-dispatcher.js';
-import { isParseLimitError, type ParseLimitError } from './parse-limits.js';
+import { isParseLimitError, isPerRunParseRefusal, type PerRunParseRefusal } from './parse-limits.js';
 // A value import, and acyclic: `crawl-source.ts` reaches only `utils` and a
 // type from `realizations.ts`, never back into the registry. The remedy is
 // shared so the walk lane refuses with the projection's exact sentence.
@@ -214,13 +214,13 @@ export interface UnreadableResource {
 type PreparedResource =
   | { outcome: 'admitted'; resource: ResourceMetadata }
   | { outcome: 'unreadable'; filePath: string; reason: string; code?: string; error: Error }
-  | { outcome: 'parse-limited'; filePath: string; error: ParseLimitError }
+  | { outcome: 'parse-refused'; filePath: string; error: PerRunParseRefusal }
   | { outcome: 'failed'; error: unknown };
 
-/** A file whose parse was stopped at a limit, so it was not admitted this run. */
-interface ParseLimitedResource {
+/** A file whose parse this run refused (a limit breach or a worker's death), so it was not admitted. */
+interface ParseRefusedResource {
   filePath: string;
-  error: ParseLimitError;
+  error: PerRunParseRefusal;
 }
 
 export class DuplicateResourceIdError extends VatError {
@@ -816,12 +816,13 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private unreadableResources: UnreadableResource[] = [];
 
   /**
-   * Files whose parse was stopped at a limit (`parse-limits.ts`), so they were
-   * not admitted this run. Cleared by clear(). Surfaced as
-   * RESOURCE_PARSE_LIMIT_EXCEEDED issues in validate(). Nothing about them is
+   * Files whose parse this run refused (`parse-limits.ts`): stopped at a limit,
+   * or lost with the worker that held it. Not admitted this run. Cleared by
+   * clear(). Surfaced as RESOURCE_PARSE_LIMIT_EXCEEDED or
+   * RESOURCE_PARSE_WORKER_DIED issues in validate(). Nothing about them is
    * stored, so the next run parses them again.
    */
-  private parseLimitedResources: ParseLimitedResource[] = [];
+  private parseRefusedResources: ParseRefusedResource[] = [];
 
   /**
    * Population-time conditions the population source handed over with the
@@ -1086,9 +1087,10 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     try {
       return { outcome: 'admitted', resource: await this.readAndKey(filePath, dispatcher) };
     } catch (error) {
-      // A parse stopped at a limit is the run's, not the file's or VAT's: a
-      // finding, so one runaway document never fails the whole crawl (ADR I8).
-      if (isParseLimitError(error)) return { outcome: 'parse-limited', filePath, error };
+      // A parse stopped at a limit, or lost with its worker, is the run's, not
+      // the file's or VAT's: a finding, so one runaway document never fails the
+      // whole crawl (ADR I6, I8).
+      if (isPerRunParseRefusal(error)) return { outcome: 'parse-refused', filePath, error };
       if (isReadFailure(error)) {
         // A file the crawl handed us that we cannot read. Recorded, not thrown:
         // previously this terminated `vat resources scan|validate` and `vat
@@ -1279,8 +1281,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   private emitPreparedResource(prepared: PreparedResource): ResourceMetadata | undefined {
     if (prepared.outcome === 'failed') throw prepared.error;
-    if (prepared.outcome === 'parse-limited') {
-      this.parseLimitedResources.push({ filePath: prepared.filePath, error: prepared.error });
+    if (prepared.outcome === 'parse-refused') {
+      this.parseRefusedResources.push({ filePath: prepared.filePath, error: prepared.error });
       return undefined;
     }
     if (prepared.outcome === 'unreadable') {
@@ -1747,15 +1749,19 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
-   * Emit RESOURCE_PARSE_LIMIT_EXCEEDED errors for parses stopped at a limit
-   * during addResources(), each naming the file and the limit.
+   * Emit RESOURCE_PARSE_LIMIT_EXCEEDED errors for parses stopped at a limit,
+   * and RESOURCE_PARSE_WORKER_DIED errors for parses lost with their worker,
+   * during addResources(), each naming the file and what stopped it.
    */
-  private collectParseLimitedErrors(): ValidationIssue[] {
-    return this.parseLimitedResources.map(({ filePath, error }) => {
+  private collectParseRefusedErrors(): ValidationIssue[] {
+    return this.parseRefusedResources.map(({ filePath, error }) => {
       const where = issueLocation(filePath, locationRoot(this.baseDir));
+      const [code, what] = isParseLimitError(error)
+        ? ['RESOURCE_PARSE_LIMIT_EXCEEDED', `its parse was stopped at its ${error.limit} limit (${error.bound})`] as const
+        : ['RESOURCE_PARSE_WORKER_DIED', `the parse worker holding it died (${error.message})`] as const;
       return createRegistryIssue(
-        'RESOURCE_PARSE_LIMIT_EXCEEDED',
-        `'${where}' was enumerated but its parse was stopped at its ${error.limit} limit (${error.bound}), so it was skipped and is absent from every count in this report. Nothing was stored for it: the next run parses it again.`,
+        code,
+        `'${where}' was enumerated but ${what}, so it was skipped and is absent from every count in this report. Nothing was stored for it: the next run parses it again.`,
         { location: where },
       );
     });
@@ -2178,7 +2184,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       ...this.collectUnresolvedReferenceIssues(),
       ...this.collectDuplicateIdErrors(),
       ...this.collectUnreadableResourceErrors(),
-      ...this.collectParseLimitedErrors(),
+      ...this.collectParseRefusedErrors(),
       ...this.collectPopulationConditionIssues(),
     );
 
@@ -2618,7 +2624,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     this.resourcesByChecksum.clear();
     this.duplicateIdCollisions = [];
     this.unreadableResources = [];
-    this.parseLimitedResources = [];
+    this.parseRefusedResources = [];
     this.populationConditions = [];
     // The resolver's conflict accumulator belongs to the files it typed; a fresh
     // crawl types afresh and must not re-report the previous population's.

@@ -21,9 +21,9 @@ a value here and in the code together, and only from a new lab record.
 | Limit | Value | Observed maximum | How it was set |
 |---|---|---|---|
 | `inputBytes` | 8 MiB | 666,449 bytes (one adopter document); 352,261 in VAT's own tree | Rule 1: 6.7 MB, up to 8 MiB. |
-| `outputRows` | 16,384 | 896 rows in one document; p99 203, p50 9 | Rule 1: 8,960, up to 16,384. Rows are counted over every top-level array of a document's facts. |
+| `outputRows` | 16,384 | 896 rows in one document; p99 203, p50 9 | Rule 1: 8,960, up to 16,384. Rows are counted over every array in a document's facts, nested ones included: a heading's `children` count like any other row, so one `#` over 20,000 `##` is 20,001 rows. The observed maximum was counted over top-level arrays only; a nested heading adds at most one row per heading, which the record did not separate. |
 | `outputBytes` | 4 MiB | 233,802 bytes in one parse-cache entry; p99 57,556, p50 3,358 | Rule 1: 2.3 MB, up to 4 MiB. Measured on the stored entry, which is never smaller than the facts the worker checks. |
-| `timeMs` | 10,000 ms | Not observable per document: the `parse` facet reports per-pass sums. Mean 13.7 ms per document over 2,680 documents under load. | Rule 2: about 700 times the loaded mean. The limit includes a cold worker's first parser load. A 1,000-level nested list, the slowest realistic shape found, takes 10.6 s. |
+| `timeMs` | 30,000 ms | Not observable per document: the `parse` facet reports per-pass sums. Mean 13.7 ms per document over 2,680 documents under load (the `vat-lab parse run` below); 12.1 ms in the cold `resources check` run. | Rule 2: the slowest realistic shape found, a 1,000-level nested list, takes 10.6 s; the limit also covers a cold worker's first parser load (about 0.7 s), on a loaded machine. 30 s is that 11.3 s with headroom of more than 2.5 times for load. A mean is no basis: one document can be a thousand times the mean, and the per-document maximum is still not observable (see the gaps below). |
 | `heapMb` | 1,024 MiB | Not observable per worker: the `memory` facet reports process peak RSS. The whole process, every worker included, peaked at 1.17 GiB on the adopter's cold run. | Rule 2: no single job can need more than the whole process held, less the main thread's share. |
 | `stackMb` | 4 MiB | Not observable. | Rule 2: before this limit existed every corpus parsed on the main thread under Node's default stack of about 1 MiB, so 4 MiB is four times a stack every recorded corpus fit in. |
 
@@ -52,14 +52,16 @@ The quiet arm is still owed.
 
 Every A/B but the first ran at load 18 to 29, and in every one the pairs disagreed, so the lab calls
 none of them a result. The `parse` facet shows the mechanism. In-process, the 20 parses take 458.5 ms
-on the main thread. Through the pool at width 1, the same parses take 632.7 ms of worker time and the
-main thread waits 835.6 ms for the round trips: about 200 ms more, which is the worker's start, its
-parser load and the message hops.
+on the main thread. Through the pool at width 1, the same parses take 632.7 ms of worker time, and
+the main thread waits 835.6 ms for the round trips, where the in-process parse took 458.5 ms. The
+difference is the worker's start, its parser load and the message hops.
 
-**Decision:** the pool stays on for every parse. The cost on a small cold corpus is between nothing
-measurable and about 17% of wall time, against a 10% threshold, so it is recorded as an accepted
-`Cost:` row in the register instead of keeping an unbounded route (I8). A warm run parses nothing and
-starts no worker, so a served run does not pay it.
+**Decision:** the pool stays on for every parse. The cost on a small cold corpus runs from about −1%
+to +64% of wall time across the arms above; the worst arm is `resources query` cold-small, at
++464.9 ms (731.7 ms to 1,196.6 ms). It is recorded as an accepted `Cost:` row in the register, and
+counted there (B1b), for three reasons: I8 forbids keeping an unbounded in-process route for small
+runs; a warm run parses nothing and starts no worker, so a served run does not pay it; and the cost
+is a fixed start-up cost per run, not a cost per file, so it shrinks as a share of a larger run.
 
 ### VAT's own tree
 
@@ -83,17 +85,19 @@ crawl follows links out of the tree's own listing.
 | Served (warm store, 3 runs) | 1,730 ms median (1,632–2,254) |
 | Derived (cold, 2 runs) | 22,075 ms median (21,968–22,182) |
 
-**Why a whole-tree check takes about a minute.** It is the derived path, and almost all of that is the
-markdown parse:
+**How long a cold whole-tree check takes: 22 s cold here; 64 s of CPU, so up to about a minute on a
+contended host (not measured).** It is the derived path, and almost all of that is the markdown
+parse:
 
 - The cold check spends 32.5 s of parse time, summed across worker threads, on 2,680 documents. That
-  is 12.1 ms per document on average.
+  is 12.1 ms per document on average. This is the `resources check` run in the table above, not the
+  `vat-lab parse run` whose 13.7 ms mean the `timeMs` row quotes: two runs, at different loads.
 - 90.9% of the markdown time is `remark-parse` (29.5 s), the tokenizer and tree build. Fact
   extraction from the tree is 1.2 s, and lexical references are 0.45 s.
 - The parent thread spends 2.4 s writing parse-cache entries and 0.46 s reading them.
 - The run took 41.7 s of process wall time across its two processes and 64.2 s of CPU. With the pool
-  narrowed or the machine busy, wall time approaches that CPU figure, which is where "about a
-  minute" comes from.
+  narrowed or the machine busy, wall time would approach that CPU figure, which is where "up to about
+  a minute" comes from. No arm measured it (see the gaps below).
 - Served from the store, the same check takes 1.7 s. Of that, the `crawl` facet sees 116 ms: 81 ms
   reading the projection store and 35 ms initializing git. The rest is process start-up and the SQL
   answer, and no facet can attribute it yet (see the gaps below).
@@ -111,5 +115,8 @@ These gaps are findings, not omissions to fill by hand:
   be derived by rule 1.
 - **No per-worker heap.** The `memory` facet reports process peak RSS, so `heapMb` cannot be derived
   by rule 1.
+- **No width-1 or contended arm.** Nothing runs the cold check with the pool held to one worker,
+  or on a host with a known competing load, so "up to about a minute" is an inference from CPU time,
+  not a measurement.
 - **No one-file-edit arm.** No facet edits one file between repetitions, so the cost of a one-file
   edit per file kind is not recorded.

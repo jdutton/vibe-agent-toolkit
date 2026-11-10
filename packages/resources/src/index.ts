@@ -535,6 +535,21 @@ export {
   type ParseCacheStats,
 } from './parse-cache.js';
 
+// Parse limits: what `ResourceRegistry.addResource` throws when one document's
+// parse is refused for this run — a `ParseLimitError` at a limit, a
+// `ParseWorkerDiedError` when the worker holding it died — and the shape a
+// caller names tighter limits in (`ParsePoolPolicy.limits`). The batch path
+// (`addResources`) records both as findings instead; a caller of the
+// single-file path classifies them with the predicates, which read `code`.
+export {
+  ParseLimitError,
+  ParseWorkerDiedError,
+  isParseLimitError,
+  isParseWorkerDiedError,
+  type ParseLimitName,
+  type ParseLimits,
+} from './parse-limits.js';
+
 /**
  * Parse an HTML file from disk.
  *
@@ -1038,6 +1053,7 @@ export {
   BLOB_NOT_TEXT,
   BLOB_PARSE_FAILED,
   BLOB_PARSE_LIMIT_EXCEEDED,
+  BLOB_PARSE_WORKER_DIED,
   BLOB_UNREADABLE,
   populateBlobs,
   type BlobPopulationOptions,

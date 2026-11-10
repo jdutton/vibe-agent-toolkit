@@ -2,11 +2,17 @@
  * Every parse job is stopped at its limit, and the pool survives it (I8).
  *
  * Each breach is driven by a real document through the real built worker — see
- * `parse-limit-fixtures.ts` — and each test asserts three things: the job
- * rejects with a {@link ParseLimitError} naming the limit it crossed, it does so
- * near that bound rather than whenever the document would have finished, and the
- * SAME pool then parses an ordinary document, so a breach costs one job and never
+ * `parse-limit-fixtures.ts` — and each test asserts: the job rejects with a
+ * {@link ParseLimitError} naming the limit it crossed, it does so near that
+ * bound rather than whenever the document would have finished, and the SAME
+ * pool then parses an ordinary document, so a breach costs one job and never
  * the pool.
+ *
+ * Time and heap breaches kill and replace the worker; stack and output breaches
+ * are reported by it; input size is refused before dispatch. A kill is proved by
+ * Node's own thread table returning to its baseline BEFORE the pool is asked
+ * again — the pool spawns lazily, so the old thread is gone, not merely
+ * abandoned while it keeps parsing.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -14,9 +20,14 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { type ParseLimitName, type ParseLimits, isParseLimitError } from '../../src/parse-limits.js';
+import {
+  type ParseLimitName,
+  type ParseLimits,
+  isParseLimitError,
+  resolveParseLimits,
+} from '../../src/parse-limits.js';
 import { createParsePool, type ParsePool } from '../../src/parse-pool.js';
 import {
   deeplyNestedList,
@@ -54,6 +65,16 @@ async function breach(pool: ParsePool, content: string): Promise<{ limit: ParseL
   return { limit: error.limit, ms };
 }
 
+/**
+ * The breached thread really died: Node's thread table is back to `baseline`.
+ * The pool spawns only on demand, so a replacement cannot mask a survivor.
+ */
+async function expectWorkerKilled(baseline: number): Promise<void> {
+  await vi.waitFor(() => {
+    expect(workerThreadCount()).toBe(baseline);
+  }, { timeout: 5000, interval: 25 });
+}
+
 /** The pool still answers an ordinary document after a breach. */
 async function expectPoolStillParses(pool: ParsePool): Promise<void> {
   const result = await pool.parse('markdown', '# ok\n\n[a](./b.md)\n', 21);
@@ -62,6 +83,7 @@ async function expectPoolStillParses(pool: ParsePool): Promise<void> {
 
 describe('a parse job stopped at its limit', () => {
   it('kills a job that runs past its wall-clock limit, and replaces the worker', async () => {
+    const baseline = workerThreadCount();
     // A heap roomy enough that the clock, not the heap, is what the nesting meets first.
     const pool = limitedPool({ heapMb: 1024 });
 
@@ -70,10 +92,12 @@ describe('a parse job stopped at its limit', () => {
     expect(limit).toBe('timeMs');
     // Near the bound, not when the parse would have finished (seconds later).
     expect(ms).toBeLessThan(TIGHT_LIMITS.timeMs + 5000);
+    await expectWorkerKilled(baseline);
     await expectPoolStillParses(pool);
   });
 
-  it('stops a job that recurses past its stack', async () => {
+  it('reports a job that recurses past its stack, and keeps its worker', async () => {
+    const baseline = workerThreadCount();
     // The wall clock includes the worker's first parser load, which on a cold
     // thread can outlast the tight bound before the recursion is ever reached.
     // A heap roomy enough that the stack, not the heap, is what the recursion meets first.
@@ -82,15 +106,19 @@ describe('a parse job stopped at its limit', () => {
     const { limit } = await breach(pool, deeplyNestedQuote());
 
     expect(limit).toBe('stackMb');
+    // The worker reported the breach itself, so it is still the pool's one thread.
+    expect(workerThreadCount()).toBe(baseline + 1);
     await expectPoolStillParses(pool);
   });
 
   it('kills a job whose allocation outgrows its heap, and replaces the worker', async () => {
+    const baseline = workerThreadCount();
     const pool = limitedPool({ timeMs: 60_000, outputRows: 10_000_000, outputBytes: 1024 * 1024 * 1024 });
 
     const { limit } = await breach(pool, manyLinks(200_000));
 
     expect(limit).toBe('heapMb');
+    await expectWorkerKilled(baseline);
     await expectPoolStillParses(pool);
   });
 
@@ -104,7 +132,20 @@ describe('a parse job stopped at its limit', () => {
     expect(workerThreadCount()).toBe(before);
   });
 
-  it('stops a job whose output has more rows than its cap', async () => {
+  it('counts nested rows: one heading over 20,000 subheadings breaches the default row cap', async () => {
+    // Default limits but the clock: the tree has ONE top-level heading, so a
+    // top-level count would see 1 row and let it through.
+    const pool = limitedPool({ ...resolveParseLimits(undefined), timeMs: 60_000 });
+    const subheadings = Array.from({ length: 20_000 }, (_, index) => `## h${String(index)}\n`);
+    const document = ['# top\n', ...subheadings].join('\n');
+
+    const { limit } = await breach(pool, document);
+
+    expect(limit).toBe('outputRows');
+    await expectPoolStillParses(pool);
+  });
+
+  it('reports a job whose output has more rows than its cap', async () => {
     const pool = limitedPool({ outputRows: 10 });
 
     const { limit } = await breach(pool, manyLinks(20));
@@ -113,7 +154,7 @@ describe('a parse job stopped at its limit', () => {
     await expectPoolStillParses(pool);
   });
 
-  it('stops a job whose output serialises past its byte cap', async () => {
+  it('reports a job whose output serialises past its byte cap', async () => {
     const pool = limitedPool({ outputBytes: 512 });
 
     const { limit } = await breach(pool, manyLinks(20));
@@ -142,6 +183,39 @@ describe('a parse job stopped at its limit', () => {
  */
 const BUILT_POOL = pathToFileURL(safePath.resolve(import.meta.dirname, '..', '..', 'dist', 'parse-pool.js')).href;
 
+/**
+ * Run the built pool in a child process under `nodeOptions`, parsing a document
+ * that outgrows its heap, and report the limit it was stopped at.
+ *
+ * @param nodeOptions - The child's `NODE_OPTIONS`
+ * @param heapMb - The pool's `heapMb`
+ * @returns The limit's name, its bound, and how long the rejection took
+ */
+function heapBreachUnder(nodeOptions: string, heapMb: number): { limit: string; bound: string; ms: number } {
+  const script = [
+    `const { createParsePool } = await import(${JSON.stringify(BUILT_POOL)});`,
+    String.raw`const doc = Array.from({ length: 200000 }, (_, i) => '[link ' + i + '](./t-' + i + '.md)\n').join('\n');`,
+    `const pool = createParsePool({ size: 1, limits: { heapMb: ${String(heapMb)}, timeMs: 60000, outputRows: 1e9, outputBytes: 1e10, inputBytes: 1e9 } });`,
+    'const startedAt = performance.now();',
+    "const outcome = await pool.parse('markdown', doc, doc.length).then(() => ({ limit: 'none', bound: '' }), (error) => ({ limit: error.limit ?? String(error), bound: error.bound ?? '' }));",
+    'console.log(JSON.stringify({ ...outcome, ms: performance.now() - startedAt }));',
+    'await pool.shutdown();',
+  ].join('\n');
+  // A script FILE, not `--eval`: a worker inherits its parent's execArgv,
+  // and `--input-type` is refused by a worker started from a file.
+  const directory = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-heap-flag-'));
+  const entry = safePath.join(directory, 'heap-flag.mjs');
+  writeFileSync(entry, script, 'utf-8');
+  const child = spawnSync(process.execPath, [entry], {
+    env: { ...process.env, NODE_OPTIONS: nodeOptions },
+    encoding: 'utf-8',
+  });
+  rmSync(directory, { recursive: true, force: true });
+
+  expect(child.stderr).toBe('');
+  return JSON.parse(child.stdout) as { limit: string; bound: string; ms: number };
+}
+
 describe('a process-wide heap flag', () => {
   it('cannot lift a job\'s heap limit', () => {
     // A process-wide `--max-old-space-size` (NODE_OPTIONS, common in CI) is a V8
@@ -149,29 +223,20 @@ describe('a process-wide heap flag', () => {
     // 4096 a worker given 48 MiB reports a 4,192 MiB heap limit and a runaway
     // allocation runs until the wall clock stops it. The job must still be
     // stopped at its HEAP limit, well before its wall-clock one.
-    const script = [
-      `const { createParsePool } = await import(${JSON.stringify(BUILT_POOL)});`,
-      String.raw`const doc = Array.from({ length: 200000 }, (_, i) => '[link ' + i + '](./t-' + i + '.md)\n').join('\n');`,
-      'const pool = createParsePool({ size: 1, limits: { heapMb: 48, timeMs: 60000, outputRows: 1e9, outputBytes: 1e10, inputBytes: 1e9 } });',
-      'const startedAt = performance.now();',
-      "const limit = await pool.parse('markdown', doc, doc.length).then(() => 'none', (error) => error.limit ?? String(error));",
-      'console.log(JSON.stringify({ limit, ms: performance.now() - startedAt }));',
-      'await pool.shutdown();',
-    ].join('\n');
-    // A script FILE, not `--eval`: a worker inherits its parent's execArgv,
-    // and `--input-type` is refused by a worker started from a file.
-    const directory = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-heap-flag-'));
-    const entry = safePath.join(directory, 'heap-flag.mjs');
-    writeFileSync(entry, script, 'utf-8');
-    const child = spawnSync(process.execPath, [entry], {
-      env: { ...process.env, NODE_OPTIONS: '--max-old-space-size=4096' },
-      encoding: 'utf-8',
-    });
-    rmSync(directory, { recursive: true, force: true });
+    const outcome = heapBreachUnder('--max-old-space-size=4096', 48);
 
-    expect(child.stderr).toBe('');
-    const outcome = JSON.parse(child.stdout) as { limit: string; ms: number };
     expect(outcome.limit).toBe('heapMb');
+    expect(outcome.bound).toBe('48 MiB heap');
     expect(outcome.ms).toBeLessThan(30_000);
+  });
+
+  it('is named in the refusal when it lowers the limit', () => {
+    // Lower than `heapMb`, the flag is what V8 stops the worker at, so the
+    // refusal names that value, not the configured one.
+    const outcome = heapBreachUnder('--max-old-space-size=64', 1024);
+
+    expect(outcome.limit).toBe('heapMb');
+    expect(outcome.bound).toContain('64 MiB heap');
+    expect(outcome.bound).toContain('--max-old-space-size');
   });
 });

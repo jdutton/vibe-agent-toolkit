@@ -339,14 +339,12 @@ export function isParsableContent(keyed: KeyedContent): keyed is ParsableContent
  * ## Why `parserKind` is a REQUIRED argument and not defaulted to the extension
  *
  * The key must name the parser that will actually run, not the one the
- * extension implies, and those genuinely differ in shipped code:
- * `rag-lancedb/src/lancedb-rag-provider.ts` hands every resource — including the
- * `.html` ones the registry crawls — to the **markdown** parser. Defaulting to
- * {@link parserKindForPath} would file that document's markdown facts under
- * `k2.html.<digest>`, the same key the registry's genuine HTML parse uses, and
- * one lane would then be served the other's facts. That is a well-formed entry
- * with the wrong contents — the failure class fail-soft explicitly does not
- * cover (see parse-cache.ts).
+ * extension implies, and those can differ: a collection's declared `mimeType`
+ * routes a file to a parser its extension does not name. Defaulting to
+ * {@link parserKindForPath} would file one parser's facts under the key the
+ * other parser's facts use, and one caller would then be served the other's
+ * facts. That is a well-formed entry with the wrong contents — the failure
+ * class fail-soft explicitly does not cover (see parse-cache.ts).
  *
  * Making it required rather than defaulted is deliberate: a default here is
  * silent at every call site that gets it wrong, and correct at none that a

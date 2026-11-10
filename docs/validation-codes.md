@@ -749,6 +749,13 @@ Reported like every other packaging finding — a located, coded issue on the bu
 - **Why it matters:** Every parse runs in a bounded worker so that one pathological document cannot hang or crash the whole run. The file is absent from every count in the report, the same way an unreadable file is. Nothing about the breach is stored, because time, heap and stack outcomes depend on the machine, so the next run parses the file again.
 - **Fix:** Find what makes the file pathological to parse, such as nesting thousands of levels deep or a huge generated document, and simplify or exclude it. A breach on an ordinary file under heavy machine load clears on the next run.
 
+### `RESOURCE_PARSE_WORKER_DIED`
+
+- **Default:** `error`
+- **What:** A file the crawl enumerated was not admitted because the parse worker holding it died without answering: it exited, or an uncaught error killed the thread. The finding names the file and the cause.
+- **Why it matters:** The file is absent from every count in the report. Nothing about the death is stored, because a thread's death says nothing proven about the bytes, so the next run parses the file again. It is kept apart from a parse failure, which the bytes did cause and which is stored.
+- **Fix:** Re-run. A death that repeats on the same file is a VAT defect, not the file's: report it with the named file and the cause in the message.
+
 ### `COLLECTION_MIME_CONFLICT`
 
 - **Default:** `error`

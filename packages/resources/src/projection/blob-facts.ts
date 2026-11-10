@@ -9,7 +9,6 @@
 
 import type { TextProvenance } from '@vibe-agent-toolkit/utils/text';
 
-import { frontmatterIsNonMapping } from '../frontmatter-source.js';
 import type { ParseResult } from '../link-parser.js';
 import type { OffsetRange } from '../reference-lexer.js';
 import type { ContentMeasures } from '../schemas/parse-facts.js';
@@ -180,24 +179,23 @@ export function blobRowFor(
  * The YAML parser's own failure is the first and is passed through verbatim.
  * The second is the silent one: a block that is valid YAML and decodes to a
  * **sequence or a scalar** (`---\n- a\n- b\n---`). `parseFrontmatterSource`
- * ignores such a value by design — its acceptance rules are behaviour-preserving
- * for every lane that reads `frontmatter` — so the parse reports neither an
- * object nor an error, and the row that came out was byte-identical to one for a
+ * reports no `frontmatter` and no `frontmatterError` for such a value by design
+ * (its acceptance rules are behaviour-preserving for every lane that reads
+ * `frontmatter`), only `frontmatterNotAMapping`; before that flag the row that came out was byte-identical to one for a
  * file with no frontmatter at all. A `.claude/rules/` file in that state reads
  * as declaring no `paths:`, so it is counted as an unconditional rule and no
  * check can tell it from one.
  *
- * ⚠️ Decided from `frontmatterSource`, which a cache HIT carries and re-parses
- * through the same function the cold path runs (`parse-cache.ts`'s
- * `deriveFrontmatter`), so warm and cold cannot disagree here.
+ * ⚠️ Decided from `frontmatterNotAMapping`, set by the one decode in the parse
+ * worker and stored with the facts, so a cache HIT carries it and warm and
+ * cold cannot disagree here. Nothing on this thread decodes YAML.
  *
  * 🪤 **A block that decodes to YAML `null` declares nothing — it is not a
- * non-mapping value.** a comment-only block, `~` and `null` all decode to `null`,
- * which `parseFrontmatterSource` drops exactly as it drops a sequence, so
- * "no object and no error" cannot tell a placeholder from a `- a` list. Only
- * the decoded value can; `frontmatterIsNonMapping` is the one statement of that
- * rule, shared with the OKF judges. The KIND of a real non-mapping value is
- * still not named: the author is sent to the block either way.
+ * non-mapping value.** A comment-only block, `~` and `null` all decode to `null`,
+ * so "no object and no error" cannot tell a placeholder from a `- a` list. Only
+ * the decoded value can, and only the decode sets the flag; the OKF judges read
+ * the same one. The KIND of a real non-mapping value is still not named: the
+ * author is sent to the block either way.
  *
  * @param parsed - The parse this row describes
  * @returns The reason, or null when the frontmatter parsed (including "no block")
@@ -207,7 +205,7 @@ function frontmatterErrorFor(parsed: ParseResult): string | null {
   if (parsed.frontmatter !== undefined) return null;
   // Absent, blank, or declaring nothing (`~`, comment-only): not a value that
   // was ignored, and not a defect.
-  return frontmatterIsNonMapping(parsed.frontmatterSource) ? NOT_A_MAPPING : null;
+  return parsed.frontmatterNotAMapping === true ? NOT_A_MAPPING : null;
 }
 
 /**

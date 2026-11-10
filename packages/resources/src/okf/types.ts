@@ -39,8 +39,8 @@ export const OKF_FINDING_CODES = [
    * dashes that were never there. See `isNotAMapping` in findings.ts.
    *
    * 🪤 Its own code because it used to have none, and the absence was SILENT.
-   * `parseFrontmatterSource` returns a bare `{}` for every non-mapping shape — no
-   * `frontmatter`, no `frontmatterError` — so such a document arrived at the
+   * `parseFrontmatterSource` returns no `frontmatter` and no `frontmatterError`
+   * for a non-mapping shape, so such a document arrived at the
    * judges looking exactly like one carrying no keys. `indexFindings` returned no
    * drafts at all and VAT certified the bundle clean; `conceptFindings` reported
    * `OKF_TYPE_MISSING`, which sends the author to add a `type` key to a block

@@ -739,10 +739,11 @@ async function parseThroughCache(
   const stored = await cache.read(keyed);
   if (stored !== null) return stored;
 
-  // The worker read the entry back before answering `stored`, so reaching here
-  // means it was removed between that read and this one — a concurrent `vat
-  // cache clear`, or the OS purging its temp directory mid-run. Rare, real, and
-  // recoverable — in the pool again, under its limits, never on this thread.
+  // The worker answered `stored` only after its `setByKey` returned true, so
+  // reaching here means the entry was written and then removed, or written in a
+  // form this read refuses — a concurrent `vat cache clear`, the OS purging its
+  // temp directory mid-run, or a torn write. Rare, real, and recoverable — in
+  // the pool again, under its limits, never on this thread.
   const result = await pool.parse(keyed.parserKind, keyed.content, keyed.byteLength);
   await cache.set(keyed, result);
   return result;

@@ -55,10 +55,12 @@ export type ParseLimitName = keyof ParseLimits;
  * a limit the lab observes is the largest value seen on any measured corpus,
  * times ten, rounded up to a power of two in its unit. A limit the lab cannot
  * yet observe per job (`timeMs`, `heapMb`) keeps a bound the record justifies
- * another way. Named for what they bound, never a version.
+ * another way — `timeMs` covers the slowest realistic shape found (a
+ * 1,000-level nested list, 10.6 s) plus a cold worker's parser load, with
+ * headroom for a loaded machine. Named for what they bound, never a version.
  */
 const DEFAULT_PARSE_LIMITS: ParseLimits = {
-  timeMs: 10_000,
+  timeMs: 30_000,
   heapMb: 1024,
   stackMb: 4,
   outputRows: 16_384,
@@ -91,11 +93,28 @@ export class ParseLimitError extends VatError {
   /** The bound in its own unit, e.g. `10000 ms wall clock`. */
   readonly bound: string;
 
-  constructor(limit: ParseLimitName, value: number) {
-    const bound = LIMIT_UNITS[limit](value);
+  constructor(limit: ParseLimitName, value: number, bound: string = LIMIT_UNITS[limit](value)) {
     super(PARSE_LIMIT_EXCEEDED, `The parse was stopped at its ${limit} limit (${bound}).`);
     this.limit = limit;
     this.bound = bound;
+  }
+
+  /**
+   * A heap breach, naming the limit that actually applied.
+   *
+   * @param appliedMb - The old-generation ceiling the worker ran under — see {@link appliedHeapLimitMb}
+   * @param configuredMb - The `heapMb` this pool was given
+   * @returns The breach, saying so when a process-wide flag lowered the limit
+   */
+  static heap(appliedMb: number, configuredMb: number): ParseLimitError {
+    const bound = LIMIT_UNITS.heapMb(appliedMb);
+    return new ParseLimitError(
+      'heapMb',
+      appliedMb,
+      appliedMb < configuredMb
+        ? `${bound}, lowered from ${String(configuredMb)} MiB by a process-wide --max-old-space-size`
+        : bound,
+    );
   }
 }
 
@@ -137,18 +156,29 @@ export function resolveParseLimits(named: Partial<ParseLimits> | undefined): Par
 }
 
 /**
- * How many rows a job's facts hold: the length of every array among them.
+ * How many rows a job's facts hold: the length of every array among them,
+ * nested ones included.
  *
  * Every array, not a named list of fields, so a field added to the facts is
- * counted without anyone remembering to.
+ * counted without anyone remembering to — and every NESTED array, because a
+ * heading tree carries its rows in `children`: one `#` over 20,000 `##` is one
+ * top-level heading and 20,001 rows. A loop over an explicit stack, never a
+ * recursion, so the count cannot overflow on deep facts.
  *
  * @param facts - What a parser produced, minus the content
- * @returns The total number of array elements at the top level
+ * @returns The total number of array elements, at every depth
  */
 export function countOutputRows(facts: object): number {
   let rows = 0;
-  for (const value of Object.values(facts)) {
-    if (Array.isArray(value)) rows += value.length;
+  const pending: unknown[] = Object.values(facts);
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (Array.isArray(value)) {
+      rows += value.length;
+      for (const element of value as unknown[]) pending.push(element);
+    } else if (typeof value === 'object' && value !== null) {
+      for (const field of Object.values(value)) pending.push(field);
+    }
   }
   return rows;
 }
@@ -177,16 +207,143 @@ function overflowMessage(): string {
 }
 
 /**
- * Whether a thrown value is the engine running out of stack.
+ * Whether a thrown value is the engine running out of stack, in any shape a
+ * parser reports it.
  *
  * Classified here, in one place, at the one boundary where a parser's own
- * recursion surfaces; nothing else in VAT classifies it.
+ * recursion surfaces; nothing else in VAT classifies it. Two shapes:
+ *
+ * - the engine's own `RangeError`, thrown straight through;
+ * - `yaml`'s wrapping of it. Its composer catches whatever a collection throws
+ *   ("almost certainly here due to a stack overflow", its source says) and
+ *   re-raises a `YAMLParseError` coded `RESOURCE_EXHAUSTION`. That catch is
+ *   the code's only producer in `yaml`'s composer (its alias-count guard
+ *   throws a `ReferenceError` instead), so the name and code identify it —
+ *   never the message, and never `instanceof`, so this module loads no YAML
+ *   library. Should anything else ever reach that catch, it is classified
+ *   per-run, the direction that stores nothing.
+ *
+ * Either is a `stackMb` breach: a function of the stack the thread was given,
+ * never of the bytes, so it is never stored and never a `frontmatterError`.
  *
  * @param error - Anything a parser threw
  * @returns True for a stack overflow
  */
 export function isStackOverflow(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (error.name === 'YAMLParseError') return (error as { code?: unknown }).code === 'RESOURCE_EXHAUSTION';
   if (!(error instanceof RangeError)) return false;
   const signature = overflowMessage();
   return signature !== '' && error.message === signature;
+}
+
+/** The `code` every {@link ParseWorkerDiedError} carries. */
+const PARSE_WORKER_DIED = 'PARSE_WORKER_DIED';
+
+/** How a worker died: the exit code it left with, or the error it died of. */
+type ParseWorkerDeath = { readonly exitCode: number } | { readonly cause: Error };
+
+/**
+ * The worker holding a job died without answering it.
+ *
+ * A per-run outcome, like a limit breach: a thread's death is a fact about this
+ * run, never about the bytes, so it is never stored as a parse failure (ADR
+ * I6). The run refuses that one file, and the next run parses it again.
+ * Classified by {@link isParseWorkerDiedError}, which reads `code`.
+ */
+export class ParseWorkerDiedError extends VatError {
+  /** The worker's exit code, when it exited rather than threw. */
+  readonly exitCode: number | undefined;
+
+  constructor(death: ParseWorkerDeath) {
+    const exited = 'exitCode' in death;
+    super(
+      PARSE_WORKER_DIED,
+      exited
+        ? `VAT's parse worker exited unexpectedly with code ${String(death.exitCode)} while parsing.`
+        : `VAT's parse worker died of ${describeDeath(death.cause)} while parsing.`,
+      exited ? undefined : { cause: death.cause },
+    );
+    this.exitCode = exited ? death.exitCode : undefined;
+  }
+}
+
+/**
+ * @param cause - What a worker died of
+ * @returns Its code (or name) and message
+ */
+function describeDeath(cause: Error): string {
+  const code: unknown = (cause as { code?: unknown }).code;
+  return `${typeof code === 'string' ? code : cause.name}: ${cause.message}`;
+}
+
+/**
+ * Whether a thrown value is a worker that died holding the job.
+ *
+ * @param error - Anything a parse threw
+ * @returns True for a {@link ParseWorkerDiedError}, or anything wearing its code
+ */
+export function isParseWorkerDiedError(error: unknown): error is ParseWorkerDiedError {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === PARSE_WORKER_DIED;
+}
+
+/** A parse outcome that belongs to this run, never to the bytes: a limit breach or a worker's death. */
+export type PerRunParseRefusal = ParseLimitError | ParseWorkerDiedError;
+
+/**
+ * Whether a thrown value is a per-run parse outcome: the set no lane ever
+ * stores (ADR I6), and that every crawl lane refuses for one file and
+ * re-attempts on the next run.
+ *
+ * @param error - Anything a parse threw
+ * @returns True for a limit breach or a worker's death
+ */
+export function isPerRunParseRefusal(error: unknown): error is PerRunParseRefusal {
+  return isParseLimitError(error) || isParseWorkerDiedError(error);
+}
+
+/** Bytes per MiB. */
+const BYTES_PER_MIB = 1_048_576;
+
+/**
+ * The old generation's size, from a worker's heap statistics: the ONE measure
+ * `heapMb` is defined over (`resourceLimits.maxOldGenerationSizeMb`).
+ *
+ * A worker's own space statistics are out of the parent's reach: `Worker` has
+ * `getHeapStatistics` and no `getHeapSpaceStatistics` (Node 26), and a worker
+ * busy in a synchronous parse answers no message of its own. So the young
+ * generation is subtracted at its ceiling. The result never overstates the old
+ * generation, so the sampler stops a job only once its old generation is
+ * provably past the limit, which is where V8 itself stops one when no
+ * process-wide flag overrides `resourceLimits`.
+ *
+ * @param stats - `Worker.getHeapStatistics()`
+ * @param youngGenerationMb - The worker's `resourceLimits.maxYoungGenerationSizeMb`
+ * @returns Bytes the old generation holds, at least
+ */
+export function oldGenerationBytes(stats: { readonly used_heap_size: number }, youngGenerationMb: number): number {
+  return Math.max(0, stats.used_heap_size - youngGenerationMb * BYTES_PER_MIB);
+}
+
+/**
+ * The old-generation ceiling a worker actually runs under, in MiB.
+ *
+ * `heap_size_limit` is the old generation's ceiling plus the young
+ * generation's (measured on Node 26: 1,024 + 96 = 1,120). A process-wide
+ * `--max-old-space-size` overrides `resourceLimits` in BOTH directions: higher,
+ * and the sampler is what holds `heapMb`; lower, and V8 stops the worker below
+ * `heapMb`, so a refusal must name the lower value, not the configured one.
+ *
+ * @param stats - `Worker.getHeapStatistics()`
+ * @param youngGenerationMb - The worker's `resourceLimits.maxYoungGenerationSizeMb`
+ * @param heapMb - The configured limit
+ * @returns The smaller of the configured limit and the one V8 enforces
+ */
+export function appliedHeapLimitMb(
+  stats: { readonly heap_size_limit: number },
+  youngGenerationMb: number,
+  heapMb: number,
+): number {
+  const enforced = Math.floor(stats.heap_size_limit / BYTES_PER_MIB) - youngGenerationMb;
+  return enforced > 0 ? Math.min(heapMb, enforced) : heapMb;
 }

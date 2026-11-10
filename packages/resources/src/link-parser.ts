@@ -53,6 +53,15 @@ export interface ParseResult {
   frontmatter?: Record<string, unknown>;
   frontmatterError?: string;
   /**
+   * Present (`true`) when the block is valid YAML that decodes to a sequence or
+   * a scalar: no keys can be read from it, and `frontmatter` and
+   * `frontmatterError` are both absent. A block that declares nothing (`~`,
+   * `null`, comment-only) does not set it. Decided by the one decode, in the
+   * parse worker — only the decoded VALUE tells the two apart, and the parent
+   * never decodes YAML (`frontmatter-source.ts`).
+   */
+  frontmatterNotAMapping?: true;
+  /**
    * The frontmatter block's YAML **source**, delimiters excluded.
    *
    * Absent (key omitted) when the document has no frontmatter block at all;
@@ -61,20 +70,9 @@ export interface ParseResult {
    * {@link frontmatter} nor {@link frontmatterError} can make (an empty block
    * leaves both absent, exactly as no block does).
    *
-   * ## Why the source is carried next to the parsed object
-   *
-   * {@link frontmatter} cannot survive a JSON round trip, so nothing that
-   * stores a `ParseResult` as JSON — a disk-backed parse cache, chiefly — can
-   * reconstruct it from that field. Measured: `yaml` decodes `.inf` to
-   * `Infinity`, `.nan` to `NaN` and `!!binary` to a `Buffer`; `JSON.stringify`
-   * then maps the first two to `null` and mangles the third into an envelope
-   * object, and a cyclic YAML anchor makes it throw outright — meaning such a
-   * document could not be stored at all.
-   *
-   * Storing the source and re-running {@link parseFrontmatterSource} on a hit
-   * is lossless **by construction**, because it is literally the same
-   * computation the cold path runs. That is the only reason this field exists;
-   * it is not a convenience copy.
+   * The block as written, for readers that report or rewrite it. It is never
+   * re-decoded to rebuild {@link frontmatter}: the worker's decode crosses the
+   * thread boundary and the parse cache as `frontmatter-codec.ts`'s encoding.
    *
    * HTML documents leave it undefined, exactly as they leave
    * {@link frontmatter} undefined.
@@ -238,9 +236,10 @@ export function parseMarkdownContent(
   const contentMeasures = measureContent(content, ranges.fences);
   recordParsePass(ParsePass.MeasureContent, passStartedAt);
 
-  // The parse decision is `parseFrontmatterSource`'s, not this function's, so a
-  // cache rebuilding a hit reaches the identical logic.
-  const { frontmatter, frontmatterError } =
+  // The decode is `parseFrontmatterSource`'s, the one decode of a block. In the
+  // parse worker it runs under the worker's stack limit; a cache hit and the
+  // parent never re-run it — they rebuild the mapping from the worker's encoding.
+  const { frontmatter, frontmatterError, frontmatterNotAMapping } =
     frontmatterSource === undefined
       ? {}
       : parseFrontmatterSource(frontmatterSource);
@@ -255,6 +254,7 @@ export function parseMarkdownContent(
     ...(anchors.length > 0 && { anchors }),
     ...(frontmatter !== undefined && { frontmatter }),
     ...(frontmatterError !== undefined && { frontmatterError }),
+    ...(frontmatterNotAMapping === true && { frontmatterNotAMapping }),
     ...(frontmatterSource !== undefined && { frontmatterSource }),
     contentMeasures,
     content,

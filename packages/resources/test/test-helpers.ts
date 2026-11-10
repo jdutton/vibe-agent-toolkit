@@ -4,7 +4,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -902,6 +902,18 @@ export function projectionRealizationRow(row: {
     isSymlink: row.isSymlink ?? false,
     symlinkResolves: null,
   };
+}
+
+/**
+ * Files anywhere under `root`, 0 when it does not exist — how many entries a
+ * parse cache holds, to prove a refused parse stored nothing.
+ *
+ * @param root - A directory
+ * @returns The file count
+ */
+export async function countFilesUnder(root: string): Promise<number> {
+  const entries = await readdir(root, { recursive: true, withFileTypes: true }).catch(() => []);
+  return entries.filter((entry) => entry.isFile()).length;
 }
 
 /**
