@@ -11,6 +11,7 @@ import {
   caseSpellingRefusal,
   changedFilesUnderPrefix,
   gitDidNotRun,
+  hiddenEditEntriesOf,
   mergeBaseOf,
   parseNameStatusZ,
   snapshotProbeRefusal,
@@ -151,7 +152,6 @@ describe('caseSpellingRefusal', () => {
   ): ReturnType<typeof caseSpellingRefusal> => caseSpellingRefusal(records, root, true);
 
   it.each([
-    ['the old side of a rename', z('R100', 'Docs/a.md', 'docs/a.md'), 'Docs/'],
     ['a deletion', z('D', 'Docs/b.md'), 'Docs/'],
     ['the new side of a rename', z('R100', 'docs/a.md', 'DOCS/a.md'), 'DOCS/'],
   ])('refuses a path spelled in another case on %s, naming both spellings', (_what, listing, other) => {
@@ -160,6 +160,12 @@ describe('caseSpellingRefusal', () => {
     expect(refusal).toMatchObject({ ok: false, kind: 'repository' });
     expect(refusal?.reason).toContain('"docs/"');
     expect(refusal?.reason).toContain(`"${other}"`);
+  });
+
+  // A case-only directory rename in history (`Docs/` -> `docs/` before HEAD): the old side names
+  // where the file WAS, which is no path the root's answer reports, so only the new side is checked.
+  it('checks only the new side of a rename: an old side in another case is history, not the root', () => {
+    expect(caseSpellingRefusalWhereFolded(recordsOf(z('R100', 'Docs/a.md', 'docs/a.md')), prefix)).toBeUndefined();
   });
 
   it('accepts paths that carry the prefix exactly, or lie elsewhere', () => {
@@ -257,7 +263,7 @@ describe('gitDidNotRun', () => {
 
 describe('snapshotProbeRefusal', () => {
   it('says git timed out only when the second attempt was seen to time out', () => {
-    expect(snapshotProbeRefusal(failed('ETIMEDOUT'))).toMatchObject({
+    expect(snapshotProbeRefusal(failed('ETIMEDOUT'), false)).toMatchObject({
       ok: false,
       kind: 'git-failed',
       reason: expect.stringMatching(/did not finish within its time limit/),
@@ -268,7 +274,7 @@ describe('snapshotProbeRefusal', () => {
     ['the second attempt succeeded', { ok: true, stderr: '' }],
     ['git failed stating no refusal', { ok: false, stderr: 'warning: something odd' }],
   ])('calls the cause unknown, never a time-out, when %s', (_what, probe) => {
-    const refusal = snapshotProbeRefusal(probe);
+    const refusal = snapshotProbeRefusal(probe, false);
 
     expect(refusal).toMatchObject({ ok: false, kind: 'git-failed', reason: expect.stringMatching(/cause is unknown/) });
     expect(refusal.reason).not.toMatch(/timed out|time limit/);
@@ -278,10 +284,47 @@ describe('snapshotProbeRefusal', () => {
     ['an object git cannot write', 'error: insufficient permission for adding an object to repository database .git/objects'],
     ['a clean filter that fails', 'error: external filter \'false\' failed 1\nfatal: site/a.md: clean filter \'broken\' failed'],
   ])('refuses %s as the repository\'s fault, quoting git', (_what, stderr) => {
-    expect(snapshotProbeRefusal({ ok: false, stderr })).toMatchObject({
+    expect(snapshotProbeRefusal({ ok: false, stderr }, false)).toMatchObject({
       ok: false,
       kind: 'repository',
       reason: expect.stringMatching(/git refused to snapshot the working tree.*git said: (?:error|fatal): /s),
+    });
+  });
+
+  /** What `git add --all` writes, exit 1 and no `fatal:`, for an untracked file outside the sparse cone. */
+  const OUTSIDE_CONE = 'The following paths and/or pathspecs matched paths that exist\n'
+    + 'outside of your sparse-checkout definition, so will not be\n'
+    + 'updated in the index:\n'
+    + 'out2.md\n'
+    + 'hint: If you intend to update such entries, try one of the following:\n'
+    + 'hint: * Use the --sparse option.\n';
+
+  it('refuses an untracked file outside a sparse checkout\'s definition as the repository\'s, naming it and the three fixes', () => {
+    const refusal = snapshotProbeRefusal({ ok: false, stderr: OUTSIDE_CONE }, true);
+
+    expect(refusal).toMatchObject({ ok: false, kind: 'repository' });
+    expect(refusal.reason).toContain('"out2.md"');
+    expect(refusal.reason).toMatch(/sparse-checkout definition.*add.*remove.*ignore/s);
+  });
+
+  it('does not read git\'s sparse text as a sparse refusal where core.sparseCheckout is not true', () => {
+    expect(snapshotProbeRefusal({ ok: false, stderr: OUTSIDE_CONE }, false)).toMatchObject({ ok: false, kind: 'git-failed' });
+  });
+});
+
+describe('hiddenEditEntriesOf', () => {
+  it('reads each `ls-files -v -z` entry as its tag and path bytes', () => {
+    const read = hiddenEditEntriesOf(z('H site/a.md', 'S out.md'));
+
+    expect(read.ok).toBe(true);
+    expect(read.ok ? read.entries.map(({ tag, path }) => `${tag}:${text(path) ?? ''}`) : []).toStrictEqual(['H:site/a.md', 'S:out.md']);
+  });
+
+  it('refuses a listing that does not end in NUL as malformed, never as no flagged file', () => {
+    expect(hiddenEditEntriesOf(Buffer.from('S out.md', 'utf8'))).toMatchObject({
+      ok: false,
+      kind: 'repository',
+      reason: expect.stringMatching(/git ls-files -v -z wrote a listing VAT cannot read: the listing does not end in NUL/),
     });
   });
 });

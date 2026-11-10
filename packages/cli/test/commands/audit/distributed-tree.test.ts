@@ -255,7 +255,10 @@ describe('distributedTreeFindings', () => {
   // Every sibling case above anchors at the REPO root, so the tree is always a
   // subdirectory and `''` and `.` are indistinguishable there — fixtures that
   // agree with the defect as readily as with the fix.
-  it('anchors the finding at `.` when the audited target IS the tree', async () => {
+  //
+  // `.` names the root itself, which is no project location (`isProjectLocation`),
+  // so the finding carries none and the message names the tree as `.`.
+  it('names the tree as `.`, with no location, when the audited target IS the tree', async () => {
     const root = createTempDir();
     const skillMd = placeSkill(root, SKILL_REL_DIR);
     placeGuidanceBeside(skillMd);
@@ -267,7 +270,7 @@ describe('distributedTreeFindings', () => {
     const issues = await distributedTreeFindings(skillMd, treeRoot, true);
 
     expect(issues.map((i) => i.code)).toEqual(['TREE_PROVENANCE_INDETERMINATE']);
-    expect(issues[0]?.location).toBe('.');
+    expect(issues[0]).not.toHaveProperty('location');
     expect(issues[0]?.message).not.toContain('( (');
     expect(issues[0]?.message).toContain('(. (1 agent-instruction file(s) found, unclassified))');
   });

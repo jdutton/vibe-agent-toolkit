@@ -372,6 +372,19 @@ describe('a near miss of a reserved column is published on its check\'s entry', 
     expectValid(report);
   });
 
+  // The columns are read BEFORE the statement steps: one that compiles and then throws misspelled
+  // its column all the same, and its broken cost record (and the log a kill rebuilds from) says so.
+  it('is published on the broken entry of a check that throws as it steps', () => {
+    const answers = { V: new Error('SQLITE_ERROR: a step-time fault') };
+    const report = publish({ near: { description: 'd', sql: 'V' } }, askRows(answers), { columnsOf: NEAR_COLUMNS });
+    const rebuilt = rebuiltFromLog({ near: { description: 'd', sql: 'V' } }, answers, NEAR_COLUMNS);
+
+    expect(report.data?.checks[0]).toMatchObject({ name: 'near', broken: true, nearMisses: ['Finding_Line'] });
+    expect(report.data?.checks[0]).not.toHaveProperty('rows');
+    expect(rebuilt.data?.checks[0]).toMatchObject({ name: 'near', broken: true, nearMisses: ['Finding_Line'] });
+    expectValid(report);
+  });
+
   it('is the same on a run killed after the statement, before its entry was filed', () => {
     const progress: ProgressEntry[] = [];
     runProjectChecks({

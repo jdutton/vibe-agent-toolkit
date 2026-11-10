@@ -131,7 +131,7 @@ const CheckEntrySchema = z.object({
   // disagrees the day a project declares a check of the same name.
   builtin: z.literal(true).optional(),
   // 🪤 Must be declared: the strict schema DROPS an unknown line, and the check vanishes.
-  examined: z.number().optional(),
+  examined: z.number().int().nonnegative().optional(),
   allowEmpty: z.literal(true).optional(),
   nearMisses: z.array(z.string()).min(1).optional(),
   // 🔑 A broken check's RESOURCE_CHECK_BROKEN as published, so a killed run rebuilds it word for word.
@@ -155,7 +155,7 @@ const ConvertingEntrySchema = z.object({
   name: z.string(),
   durationMs: z.number(),
   rows: z.number(),
-  examined: z.number().optional(),
+  examined: z.number().int().nonnegative().optional(),
   allowEmpty: z.literal(true).optional(),
   nearMisses: z.array(z.string()).min(1).optional(),
 }).strict();

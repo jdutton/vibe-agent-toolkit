@@ -41,6 +41,7 @@ import path from 'node:path';
 import { z } from 'zod';
 
 import { escapeRegExpLiteral } from './regexp-escape.js';
+import { presenceImplies } from './schema-utils.js';
 import {
   CODE_REGISTRY,
   IssueSeveritySchema,
@@ -141,12 +142,17 @@ export type ValidationIssueCode = IssueCode | InfoCode | NonOverridableCode | Cu
 /** A drive prefix (`C:` or `C:foo`), which is never project-relative however POSIX it looks. */
 const DRIVE_PREFIX = /^[A-Za-z]:/;
 
-/** Every leading `./` segment, repeated or not — `./` names the root it is relative to. */
-const LEADING_DOT_SLASHES = /^(?:\.\/)+/;
-
 /** What a `location` may be — the one spelling every refusal of one states. */
 export const PROJECT_LOCATION_RULE
-  = String.raw`a non-empty relative path with / separators inside the root (no leading /, no drive, no climbing .., and no \ where \ is the platform separator)`;
+  = String.raw`a non-empty relative path with / separators inside the root (not the root itself; no leading / or \, no drive, no UNC path, no climbing .., and no \ where \ is the platform separator)`;
+
+/**
+ * 🔑 THE one definition of "absolute" for a path a report states relative to its root, the same on
+ * every host: POSIX-rooted, Windows-rooted (leading `\`, UNC, `C:\x`), or drive-prefixed (`C:x`).
+ */
+export function isAbsoluteOnAnyHost(value: string): boolean {
+  return path.posix.isAbsolute(value) || path.win32.isAbsolute(value) || DRIVE_PREFIX.test(value);
+}
 
 /**
  * 🔑 **THE location predicate** — the one answer to "may this string be an
@@ -155,35 +161,38 @@ export const PROJECT_LOCATION_RULE
  * calls it, so a value one lane emits is a value the other parses. Inlined here,
  * not in `utils`, because `schema` is the bottom of the dependency graph.
  *
- * A location is non-empty, relative (no leading `/`, no drive prefix — checked
- * on every host, so a Windows-absolute value is refused on POSIX CI too), and
- * does not climb out of the root. A backslash is refused only where it IS the
- * platform separator (win32): there it is a separator a producer forgot to
- * convert, while on POSIX it is a legal filename character and the projection
- * holds real files named with one (`docs/x\y.md` is one file).
+ * A location is non-empty, not absolute ({@link isAbsoluteOnAnyHost}: no
+ * leading `/` or `\`, no UNC path, no drive — checked on every host, so a
+ * Windows-absolute value is refused on POSIX CI too), not the root itself (a
+ * value that normalises to `.`), and does not climb out of the root. A
+ * backslash anywhere else is refused only where it IS the platform separator
+ * (win32): there it is a separator a producer forgot to convert, while on
+ * POSIX it is a legal filename character and the projection holds real files
+ * named with one (`docs/x\y.md` is one file).
  *
  * @param value - A candidate location
  * @returns Whether it may be a `location`
  */
 export function isProjectLocation(value: string): boolean {
-  if (value.length === 0 || value.startsWith('/') || DRIVE_PREFIX.test(value)) return false;
+  if (value.length === 0 || isAbsoluteOnAnyHost(value)) return false;
   if (path.sep === '\\' && value.includes('\\')) return false;
   const normalized = path.posix.normalize(value);
-  return normalized !== '..' && !normalized.startsWith('../');
+  // `posix.normalize` keeps a trailing slash: `./` and `docs/../` normalise to `./`, still the root.
+  return normalized !== '.' && normalized !== './' && normalized !== '..' && !normalized.startsWith('../');
 }
 
 /**
  * A value as an issue's `location`, when it can be one — the one way a producer turns a computed
- * path into a location. A leading `./` (repeated or not) is dropped, so `./docs/a.md` is emitted as
- * `docs/a.md`; what remains must pass {@link isProjectLocation}.
+ * path into a location. It must pass {@link isProjectLocation}, and is emitted in its normalised
+ * POSIX form: `./docs/a.md` as `docs/a.md`, `docs/../README.md` as `README.md`.
  *
  * @param value - A candidate location, e.g. what `issueLocation` returned
  * @returns The location, or undefined when the value is no location (empty, absolute, on a drive,
- *   climbing out of the root): the caller then omits `location` and names the path in its message
+ *   the root itself, climbing out of the root): the caller then omits `location` and names the
+ *   path in its message
  */
 export function projectLocationOf(value: string): string | undefined {
-  const location = value.replace(LEADING_DOT_SLASHES, '');
-  return isProjectLocation(location) ? location : undefined;
+  return isProjectLocation(value) ? path.posix.normalize(value) : undefined;
 }
 
 /**
@@ -201,7 +210,22 @@ export function anchoredAt(message: string, relative: string): { message: string
   return location === undefined ? { message: `${message} (${relative})` } : { message, location };
 }
 
-export const ValidationIssueSchema = z.object({
+/** A `column` is within a `line`: an issue carrying one carries the other. `at` is the issue's path in the parsed value. */
+export function columnRequiresLine(
+  issue: { line?: number | undefined; column?: number | undefined },
+  context: z.RefinementCtx,
+  at: readonly (string | number)[],
+): void {
+  if (issue.column !== undefined && issue.line === undefined) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'column is within a line, so an issue carrying it must carry line', path: [...at, 'column'] });
+  }
+}
+
+/** {@link columnRequiresLine} as JSON Schema, which `zod-to-json-schema` would drop. */
+export const COLUMN_REQUIRES_LINE_JSON_RULE: Readonly<Record<string, unknown>> = presenceImplies('column', { required: ['line'] });
+
+/** {@link ValidationIssueSchema} without its refinement, to derive finding schemas from; never validate with it. */
+export const ValidationIssueObjectSchema = z.object({
   code: z.string(),                                  // full code space; narrowed in the TS type below
   severity: IssueSeveritySchema,
   message: z.string(),
@@ -217,6 +241,9 @@ export const ValidationIssueSchema = z.object({
   reference: z.string().optional(),
   suggestion: z.string().optional(),
 }).strict();
+
+/** One validation issue: {@link ValidationIssueObjectSchema}, refined so a `column` carries its `line`. */
+export const ValidationIssueSchema = ValidationIssueObjectSchema.superRefine((issue, context) => columnRequiresLine(issue, context, []));
 
 // Schema validates structure; the TS type narrows code+severity and uses exact
 // optional properties (no `| undefined`) to match how validators construct issues

@@ -181,7 +181,7 @@ export interface CheckCost {
   readonly examined?: number;
   /** Set when the check declares that an `examined` count of 0 is legitimate. */
   readonly allowEmpty?: true;
-  /** Selected columns that miss a reserved name only by case, as spelled; absent when none. */
+  /** Selected columns that nearly name a reserved one ({@link nearMissesOf}), as spelled; absent when none. */
   readonly nearMisses?: string[];
 }
 
@@ -612,8 +612,6 @@ interface CheckSelection {
   readonly rows: number;
   /** Set for a statement: its rows convert after the timed span, announced as `converting`. */
   readonly converts: boolean;
-  /** Result columns that miss a reserved name only by case — from the statement's columns, never a row. */
-  readonly nearMisses: readonly NearMiss[];
   /** Turn them into findings. Deliberately OUTSIDE the timed span. */
   readonly report: () => CheckRowConversion;
 }
@@ -632,8 +630,12 @@ interface CheckUnit {
   readonly name: string;
   /** Set for a rule VAT supplied — carried onto the cost record. */
   readonly builtin?: true;
-  /** Select the violations. Timed by {@link timed}, and so is {@link examine}. */
-  readonly select: () => CheckSelection;
+  /**
+   * Select the violations. Timed by {@link timed}, and so is {@link examine}. A statement names
+   * its near misses to `noteNearMisses` FIRST — from its result columns, before it runs — so a
+   * check that then throws still carries them.
+   */
+  readonly select: (noteNearMisses: (misses: readonly NearMiss[]) => void) => CheckSelection;
   /** Run its declared `examined` statement and read its one count. Absent when it declares none. */
   readonly examine?: () => ExaminedCount;
   /** Set when an examined count of 0 is declared legitimate. Only alongside {@link examine}. */
@@ -653,10 +655,12 @@ function sqlCheckUnit(name: string, check: ResourceCheck, query: CheckQuery): Ch
   const { ask } = query;
   return {
     name,
-    select: () => {
+    select: (noteNearMisses) => {
+      // 🔑 Columns BEFORE rows: a statement that compiles but throws as it steps has still
+      // misspelled its column, and its broken cost record must say so.
+      noteNearMisses(nearMissesOf(query.columnsOf(check.sql)));
       const rows = ask(check.sql);
-      const nearMisses = nearMissesOf(query.columnsOf(check.sql));
-      return { rows: rows.length, converts: true, nearMisses, report: () => issuesFromCheckRows(name, check, rows) };
+      return { rows: rows.length, converts: true, report: () => issuesFromCheckRows(name, check, rows) };
     },
     // 🪤 Only the count leaves: the statement's result is never a finding or evidence.
     ...(examined === undefined ? {} : { examine: () => examinedCount(ask(examined)) }),
@@ -683,7 +687,6 @@ function builtinCheckUnit(builtin: BoundBuiltinCheck): CheckUnit {
       return {
         rows: found.length,
         converts: false,
-        nearMisses: [],
         report: () => ({ ok: true, issues: found.map((issue) => ofCheck(builtin.name, issue)) }),
       };
     },
@@ -738,9 +741,9 @@ function convertSelection(
   return selection.report();
 }
 
-/** A selection's near misses as every record after it carries them: absent, never `[]`, when none. */
-function nearMissesField(selection: CheckSelection): { nearMisses?: string[] } {
-  return selection.nearMisses.length === 0 ? {} : { nearMisses: selection.nearMisses.map(({ column }) => column) };
+/** A statement's near misses as every record after them carries them: absent, never `[]`, when none. */
+function nearMissesField(misses: readonly NearMiss[]): { nearMisses?: string[] } {
+  return misses.length === 0 ? {} : { nearMisses: misses.map(({ column }) => column) };
 }
 
 /** Where one unit reports what it is doing: the progress log, and a near miss's warning. */
@@ -780,20 +783,23 @@ function runUnit(unit: CheckUnit, now: () => number, sinks: UnitSinks): UnitResu
   // Spread onto every cost record and progress line this unit files, so they cannot disagree.
   const allowEmpty = unit.allowEmpty === undefined ? {} : { allowEmpty: unit.allowEmpty };
   const origin = { ...(unit.builtin === undefined ? {} : { builtin: unit.builtin }), ...allowEmpty };
-  const outcome = timed(now, unit.select);
+  let misses: readonly NearMiss[] = [];
+  const outcome = timed(now, () => unit.select((noted) => {
+    misses = noted;
+  }));
+  // From the statement's columns, so on every record after them — broken or not, thrown or not, any row count.
+  const nearMisses = nearMissesField(misses);
+  if (misses.length > 0) sinks.warn(nearMissWarning(name, misses));
   if (!outcome.ok) {
     // Priced up to the throw, and with NO row count: a check that did not
     // complete selected nothing, and `rows: 0` would say it selected nothing
     // and passed. A built-in reaches this arm too — a defect in VAT's own
     // predicate must fail the gate rather than vanish.
-    const cost = { name, durationMs: outcome.durationMs, broken: true as const, ...origin };
+    const cost = { name, durationMs: outcome.durationMs, broken: true as const, ...origin, ...nearMisses };
     return { cost, refusal: brokenCheckFinding(name, outcome.error), issues: [] };
   }
 
   const { rows } = outcome.value;
-  // From the statement's columns, so on every record after the statement — broken or not, any row count.
-  const nearMisses = nearMissesField(outcome.value);
-  if (outcome.value.nearMisses.length > 0) sinks.warn(nearMissWarning(name, outcome.value.nearMisses));
   const examined = examine === undefined
     ? undefined
     : examineUnit(name, examine, now, { durationMs: outcome.durationMs, rows, ...allowEmpty, ...nearMisses }, sinks.onProgress);
@@ -2222,7 +2228,8 @@ function runOutcome(options: {
   // statement goes in, including one `--check` narrows away — the lens is per
   // RUN, and narrowing it would make `--check foo` and a full run disagree about
   // which relations exist.
-  // 🪤 `examined` statements included, or a relation only they name reads EMPTY.
+  // 🪤 `examined` statements included, or a relation only they name is absent, so the statement
+  // fails with "no such table".
   const statements = Object.values(checks).flatMap((check) => checkStatements(check));
   return withQueriedProjection({ root, logger, statements, base }, (ask, provenance, extent, projection, columnsOf) => {
     // 🔑 Emitted HERE, inside the callback, because this is the one place where

@@ -230,15 +230,33 @@ boundary is seen from inside it (in = `added`, out = `deleted`); a nested reposi
 one row naming its directory. A conflicted file mid-merge is listed as it stands on disk, markers
 and all; a file on disk marked assume-unchanged or skip-worktree refuses (git would hide an edit
 to it — clear the flag with `git update-index --no-assume-unchanged` / `--no-skip-worktree`). A statement reading it is **refused** naming the fix, with a code naming the fault:
-`USAGE_INVALID` for a missing `--base`, a ref that names no commit, or one with more than one merge
-base with `HEAD` (pass one of them); `BACKEND_UNAVAILABLE` when git could not run or finish,
-including a snapshot past its 30 s limit or refused over a nested repository with no commit;
-`INPUT_UNREADABLE` when the repository cannot answer (not a working tree; no commits yet; no merge
-base; a shallow CI clone whose history may hide a nearer merge base — fetch full history, e.g.
-`actions/checkout` `fetch-depth: 0`, or deepen until the history between the merge base and the
-tips is complete; a partial clone missing blobs — `git fetch --refetch`; a snapshot git refuses;
-a flagged file as above; a file git cannot read; the root spelled in another
-case or Unicode normalisation where git ignores case). The exit code does not tell these apart — the code does:
+
+| Cause | Fault (`kind`) | Code |
+|---|---|---|
+| no `--base` | `base` | `USAGE_INVALID` |
+| a ref that names no commit | `base` | `USAGE_INVALID` |
+| a ref that shares no history with `HEAD` in a full history (no merge base) | `base` | `USAGE_INVALID` |
+| a ref with more than one merge base with `HEAD` (a criss-cross history: pass one of them) | `base` | `USAGE_INVALID` |
+| git not found on `PATH` | `git-failed` | `BACKEND_UNAVAILABLE` |
+| git out of time, or more output than VAT reads (compare against a nearer base) | `git-failed` | `BACKEND_UNAVAILABLE` |
+| a snapshot that fails for a cause git does not state, or whose second attempt times out | `git-failed` | `BACKEND_UNAVAILABLE` |
+| not inside a git working tree (a bare repository and a directory inside `.git` included) | `repository` | `INPUT_UNREADABLE` |
+| no commits yet, or a git that cannot resolve `HEAD` | `repository` | `INPUT_UNREADABLE` |
+| a shallow clone cut off before the base and `HEAD` meet (no merge base, shallow) | `repository` | `INPUT_UNREADABLE` |
+| a shallow clone whose history may hide a nearer merge base (`fetch-depth: 0`, or `git fetch --deepen=<n>`) | `repository` | `INPUT_UNREADABLE` |
+| a partial clone missing blobs the diff needs (`git fetch --refetch`) | `repository` | `INPUT_UNREADABLE` |
+| a snapshot git refuses, its `fatal:`/`error:` quoted (a nested repository with no commit, an object it cannot write, a clean filter that fails) | `repository` | `INPUT_UNREADABLE` |
+| an untracked file outside a sparse checkout's definition (add it to the definition, remove it, or ignore it) | `repository` | `INPUT_UNREADABLE` |
+| a directory under the root git cannot list (fix its permissions, or ignore it) | `repository` | `INPUT_UNREADABLE` |
+| a file under the root git cannot read | `repository` | `INPUT_UNREADABLE` |
+| a file on disk marked assume-unchanged or skip-worktree (`git update-index --no-assume-unchanged` / `--no-skip-worktree`) | `repository` | `INPUT_UNREADABLE` |
+| a filesystem that folds case whose `core.ignorecase` is not true (`git config core.ignorecase true`) | `repository` | `INPUT_UNREADABLE` |
+| on such a filesystem, a changed path (a rename's new side) spelling the root in another case or Unicode normalisation | `repository` | `INPUT_UNREADABLE` |
+| a path under the root that is not UTF-8 | `repository` | `INPUT_UNREADABLE` |
+| a listing git returned that VAT cannot read | `repository` | `INPUT_UNREADABLE` |
+
+A CTE named `changed_files` is refused as `USAGE_INVALID` too; so is a bare alias `changed_files`
+with no `AS` run without `--base` (a known over-match: spell the alias with `AS`). The exit code does not tell these apart — the code does:
 `vat resources query` publishes it as `error.code`; for a check it is `RESOURCE_CHECK_BROKEN` on
 that check only, carrying `reason: { refusal: <code> }`. `--base` is read only when a statement
 names `changed_files`. Scope a check to what a change touched:
@@ -370,10 +388,11 @@ evidence — rendered into the message and published as the finding's `evidence`
 A value a reserved column cannot mean — `finding_severity` `'high'`, `'Error'` or `'ignore'`, a
 `finding_line` of `0` or `'3'`, a `finding_column` with no `finding_line` — fails the whole check as
 `RESOURCE_CHECK_BROKEN`, naming the row and the value; its cost record carries `broken: true`
-**with** `rows` (the statement ran, its rows could not be read). A column that matches a reserved
-name only case-insensitively (`Finding_Line`) earns one stderr warning per check, stays evidence,
-and is listed on that check's `data.checks` entry as `nearMisses: ['Finding_Line']` — read from the
-statement's columns, so even a check that selected no rows lists it.
+**with** `rows` (the statement ran, its rows could not be read). A column that nearly names a
+reserved one — equal once case and `_` are removed (`Finding_Line`, `findingSeverity`), or the bare
+`severity`, `line` or `column` — earns one stderr warning per check, stays evidence, and is listed
+on that check's `data.checks` entry as `nearMisses: ['Finding_Line']` — read from the statement's
+columns before it runs, so even a check that selected no rows, or threw, lists it.
 
 No projection table has a `finding_*` column, so `SELECT *` or a join never sets one — a table's own
 `severity`, `line` or `column` is plain evidence. Place a finding on purpose:
@@ -385,8 +404,8 @@ finding about the whole run carries none. A declared check's violation also carr
 (the row minus the reserved columns, values as SQLite returned them; a BLOB or a non-finite number
 such as `Infinity` as the message shows it). `vat validate`'s `checks` phase publishes the same findings unchanged.
 
-An adopter's `resources.validation.severity` override on `CUSTOM:<name>` still wins over a row's
-own severity.
+An adopter's `resources.validation.severity` override on `CUSTOM:<name>` replaces the severity of
+EVERY row of that check — it raises a row's `info` as well as lowering its `error`.
 
 `severity` on a check is `error` | `warning` | `info` — there is no `ignore` here; to silence a
 check an adopter overrides its `CUSTOM:<name>` code through `resources.validation.severity`

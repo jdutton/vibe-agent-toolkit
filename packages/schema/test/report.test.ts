@@ -338,3 +338,13 @@ describe('reportSchema', () => {
     expect(narrowed.safeParse({ ...report, findings: [{ ...finding('error'), line: 3 }] }).success).toBe(true);
   });
 });
+
+describe('a published finding\'s column', () => {
+  it('refuses a column with no line on every finding, whatever finding schema the verb passed', () => {
+    const schema = reportSchema(z.object({}).strict(), FindingSchema);
+    const report = buildReport({ examined: 1, findings: [{ ...finding('error'), location: 'docs/a.md', column: 4 }], data: {}, gate: LENIENT });
+
+    expect(schema.safeParse(report).success).toBe(false);
+    expect(schema.safeParse({ ...report, findings: [{ ...report.findings[0], line: 2 }] }).success).toBe(true);
+  });
+});

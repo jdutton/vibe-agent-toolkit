@@ -4,6 +4,9 @@
  * would pass. The git reading itself is `gitChangedFiles`'s, under test in utils.
  */
 
+import { readFileSync } from 'node:fs';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const gitChangedFiles = vi.hoisted(() => vi.fn());
@@ -53,5 +56,56 @@ describe('evaluateChangedFilesLens', () => {
     gitChangedFiles.mockReturnValue({ ok: true, baseCommit: 'abc123', files: [] });
 
     expect(evaluateChangedFilesLens('/corpus', 'HEAD')).toStrictEqual({ rows: { changedFiles: [] }, population: null });
+  });
+});
+
+/** One documented `changed_files` refusal: its cause, git's fault kind, and the code it is documented to carry. */
+interface DocumentedRefusal {
+  readonly cause: string;
+  readonly kind: string;
+  readonly code: string;
+}
+
+/** A refusal-table row: `| cause | \`kind\` | \`CODE\` |`. */
+const REFUSAL_ROW = /^\| (.+) \| `(base|git-failed|repository)` \| `([A-Z_]+)` \|$/;
+
+/** The `changed_files` refusal table a document carries. */
+function refusalTableOf(file: string): DocumentedRefusal[] {
+  return readFileSync(file, 'utf8').split('\n').flatMap((line) => {
+    const match = REFUSAL_ROW.exec(line);
+    return match === null ? [] : [{ cause: match[1] ?? '', kind: match[2] ?? '', code: match[3] ?? '' }];
+  });
+}
+
+/** The two documents that state the table: the CLI reference and the shipped skill. */
+const DOCUMENTED = {
+  reference: refusalTableOf(safePath.join(import.meta.dirname, '..', '..', 'docs', 'resources.md')),
+  skill: refusalTableOf(
+    safePath.join(import.meta.dirname, '..', '..', '..', 'vat-development-agents', 'resources', 'skills', 'vat-knowledge-resources.md'),
+  ),
+};
+
+// The table is the class fix for a documented cause → code that drifted from the lens: every row is
+// checked against what the lens actually maps its fault kind to.
+describe('the documented changed_files refusal table', () => {
+  it('is stated, and stated identically, in the CLI reference and the skill', () => {
+    expect(DOCUMENTED.reference.length).toBeGreaterThanOrEqual(20);
+    expect(DOCUMENTED.skill).toStrictEqual(DOCUMENTED.reference);
+  });
+
+  it.each(DOCUMENTED.reference.map((row) => [row.cause, row.kind, row.code]))(
+    'documents "%s" (%s) with the code the lens refuses it with, %s',
+    (_cause, kind, code) => {
+      gitChangedFiles.mockReset();
+      gitChangedFiles.mockReturnValue({ ok: false, kind, reason: 'The reason.' });
+
+      expect(evaluateChangedFilesLens('/corpus', 'main')).toMatchObject({ refusal: code });
+    },
+  );
+
+  it('documents no --base with the code the lens refuses it with', () => {
+    const noBase = DOCUMENTED.reference.find((row) => row.cause === 'no `--base`');
+
+    expect(evaluateChangedFilesLens('/corpus', undefined)).toMatchObject({ refusal: noBase?.code });
   });
 });

@@ -28,6 +28,11 @@ describe('ValidationIssueSchema location contract', () => {
     ['climbing', '../outside/SKILL.md'],
     ['climbing after a descent', 'docs/../../outside.md'],
     ['bare parent', '..'],
+    ['root-itself', '.'],
+    ['root-through-a-descent', 'docs/..'],
+    ['backslash-led (on every host)', String.raw`\docs\a.md`],
+    ['UNC (on every host)', String.raw`\\host\share\a.md`],
+    ['forward-slashed UNC', '//host/share/a.md'],
   ])('rejects a %s location', (_label, location) => {
     expect(ValidationIssueSchema.safeParse(issueWith({ location })).success).toBe(false);
     expect(isProjectLocation(location)).toBe(false);
@@ -35,7 +40,6 @@ describe('ValidationIssueSchema location contract', () => {
 
   it.each([
     ['nested', 'skills/foo/SKILL.md'],
-    ['descend then rise inside', 'docs/../README.md'],
     ['dot-led name', '..hidden/x.md'],
   ])('accepts a %s location through the one predicate', (_label, location) => {
     expect(ValidationIssueSchema.safeParse(issueWith({ location })).success).toBe(true);
@@ -46,7 +50,9 @@ describe('ValidationIssueSchema location contract', () => {
     ['a plain location', 'docs/a.md', 'docs/a.md'],
     ['a leading ./', './docs/a.md', 'docs/a.md'],
     ['a repeated leading ./', '././docs/a.md', 'docs/a.md'],
-  ])('projectLocationOf emits %s as the location without any leading ./', (_label, value, location) => {
+    ['a descent that rises back inside', 'docs/../README.md', 'README.md'],
+    ['a ./ segment in the middle', 'docs/./a.md', 'docs/a.md'],
+  ])('projectLocationOf emits %s as the location in its normalised form', (_label, value, location) => {
     expect(projectLocationOf(value)).toBe(location);
     expect(ValidationIssueSchema.safeParse(issueWith({ location: projectLocationOf(value) })).success).toBe(true);
   });
@@ -65,7 +71,14 @@ describe('ValidationIssueSchema location contract', () => {
     expect(ValidationIssueSchema.safeParse(issue).success).toBe(true);
   });
 
-  it.each([['empty', ''], ['bare ./', './'], ['climbing', './../x.md'], ['absolute', '/abs/x.md']])(
+  it.each([
+    ['empty', ''],
+    ['bare ./', './'],
+    ['the root through a descent', 'docs/..'],
+    ['climbing', './../x.md'],
+    ['absolute', '/abs/x.md'],
+    ['a leading backslash', String.raw`\abs\x.md`],
+  ])(
     'projectLocationOf has no location for %s',
     (_label, value) => {
       expect(projectLocationOf(value)).toBeUndefined();
@@ -87,6 +100,11 @@ describe('ValidationIssueSchema location contract', () => {
       issueWith({ location: 'skills/foo/SKILL.md', line: 24, field: 'frontmatter.description' }),
     );
     expect(parsed.success).toBe(true);
+  });
+
+  it('rejects a column with no line: a column is within a line', () => {
+    expect(ValidationIssueSchema.safeParse(issueWith({ location: 'docs/a.md', column: 3 })).success).toBe(false);
+    expect(ValidationIssueSchema.safeParse(issueWith({ location: 'docs/a.md', line: 2, column: 3 })).success).toBe(true);
   });
 
   it('accepts an issue with no location at all', () => {

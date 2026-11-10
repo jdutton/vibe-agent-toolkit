@@ -174,7 +174,7 @@ export interface CheckIssue extends ValidationIssue {
 }
 
 /**
- * A selected column whose name matches a reserved one only case-insensitively —
+ * A selected column whose name nearly matches a reserved one ({@link nearMissesOf}) —
  * almost certainly meant as that column, and read as evidence instead.
  */
 export interface NearMiss {
@@ -558,8 +558,27 @@ function readPosition(value: unknown): Read<number> {
   return { ok: false };
 }
 
+/** A column name as a near miss compares it: case and every `_` removed (`findingSeverity` is `finding_severity`). */
+function nearMissKey(name: string): string {
+  return name.toLowerCase().replaceAll('_', '');
+}
+
 /**
- * The result columns whose names match a reserved one in another case.
+ * The spelling a near miss is recognised by → the reserved name it nearly is: every reserved name
+ * itself, and the bare `severity`, `line` and `column` the reserved names were before they took
+ * their `finding_` prefix — a check written against the old names reads its intent as evidence.
+ */
+const NEAR_MISS_TARGETS: ReadonlyMap<string, ReservedCheckColumn> = new Map<string, ReservedCheckColumn>([
+  ...CHECK_FINDING_COLUMNS.map((name): [string, ReservedCheckColumn] => [nearMissKey(name), name]),
+  ['severity', 'finding_severity'],
+  ['line', 'finding_line'],
+  ['column', 'finding_column'],
+]);
+
+/**
+ * The result columns that nearly name a reserved one: equal to it once case and `_` are removed
+ * (`Finding_Line`, `findingSeverity`), or the bare `severity`, `line` or `column` — but not it
+ * exactly. Each is read as evidence, so the check almost certainly reports less than it meant.
  *
  * 🔑 Read from the statement's COLUMNS, never from a row: a check that selected nothing still
  * misspelled its column, and a run killed before converting must publish the same answer.
@@ -570,7 +589,7 @@ function readPosition(value: unknown): Read<number> {
 export function nearMissesOf(columns: readonly string[]): NearMiss[] {
   const misses: NearMiss[] = [];
   for (const column of columns) {
-    const reserved = CHECK_FINDING_COLUMNS.find((name) => name === column.toLowerCase());
+    const reserved = NEAR_MISS_TARGETS.get(nearMissKey(column));
     if (reserved !== undefined && reserved !== column) misses.push({ column, reserved });
   }
   return misses;

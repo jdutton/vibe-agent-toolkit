@@ -21,9 +21,14 @@
  *   edit to it, or its deletion, would be missing, and the refusal names every flag to clear. The
  *   one exemption is a skip-worktree file absent from disk in a sparse checkout
  *   (`core.sparseCheckout` true), absent by design rather than deleted.
+ * - A directory under the root git cannot list REFUSES the answer: `git add --all` only warns on it
+ *   and exits 0, so the untracked files beneath it would be missing. It is asked of
+ *   `git ls-files --others` under the unreadable-listing policy, never of the crawl lane.
  * - If the snapshot fails, one real `git add --all` into another throwaway index asks git why: a
- *   `fatal:` or `error:` it states is the repository's to fix; otherwise the cause is unknown, and
- *   the refusal says so (a time-out only when that second attempt was seen to time out).
+ *   `fatal:` or `error:` it states is the repository's to fix, as is an untracked path outside a
+ *   sparse checkout's definition (`core.sparseCheckout` true, and git says so with no `fatal:`);
+ *   otherwise the cause is unknown, and the refusal says so (a time-out only when that second
+ *   attempt was seen to time out).
  *
  * In a shallow clone the merge base is trusted only when no commit between it and either tip is a
  * shallow boundary: one could hide a nearer merge base, so that refuses, naming how to deepen.
@@ -50,9 +55,9 @@
  *
  * 🚨 On a filesystem that folds case or normalisation, a path git lists can be spelled differently
  * from the prefix git reports (a case-only rename since the base, a root reached in another case or
- * Unicode normalisation), and a byte comparison would then drop it in silence. So every path on
- * either side of every row whose leading segments match the prefix as APFS compares names — Unicode
- * case and NFC/NFD alike — but not byte for byte refuses, naming both.
+ * Unicode normalisation), and a byte comparison would then drop it in silence. So every path a row
+ * reports (a rename's new side; its old side is history) whose leading segments match the prefix as
+ * APFS compares names — Unicode case and NFC/NFD alike — but not byte for byte refuses, naming both.
  *
  * Whether the filesystem folds is PROBED at the root (its path with one segment's case flipped,
  * compared by `dev`/`ino`), never read from `core.ignorecase`, a config that can disagree with the
@@ -66,9 +71,12 @@ import { lstatSync, readFileSync, rmSync } from 'node:fs';
 
 import { compareCodeUnits } from './compare-code-units.js';
 import { fsFaultOf, isNoSuchEntryError, isOutputOverrunError, isPathAbsentError, isTimedOutError } from './errors/errno-table.js';
+import type { DirectoryRefusal } from './fs-utils.js';
 import { GIT_NOT_FOUND_REMEDY } from './git-no-answer.js';
 import { runGit, runGitBytes } from './git-run.js';
 import { gitTreeSnapshot, unreadableSnapshotRefusal } from './git-snapshot.js';
+import { gitLsOthers } from './git-utils.js';
+import { refusedListingMessage } from './listing-refusal.js';
 import { isAbsoluteAnyPlatform, toForwardSlash } from './path-core.js';
 import { normalizedTmpdir, normalizePath, safePath } from './path-utils.js';
 import { shownName } from './shown-text.js';
@@ -103,8 +111,9 @@ interface GitNameStatusRecord {
  * answered neither `true` nor `false`, a snapshot that failed for no cause git states);
  * `repository` — the tree cannot answer (not a working tree, no commits, a git that cannot resolve
  * HEAD, a shallow history cut off before the merge base or unable to vouch for it, a file git is
- * told not to read, a folding filesystem whose `core.ignorecase` is not true, a tree git refuses to
- * snapshot, a damaged or partial clone, a root in another case, a path that is not UTF-8).
+ * told not to read, a directory git cannot list, a folding filesystem whose `core.ignorecase` is not
+ * true, a tree git refuses to snapshot, an untracked path outside a sparse checkout's definition, a
+ * damaged or partial clone, a root in another case, a path that is not UTF-8, a listing VAT cannot read).
  */
 export type GitChangedFilesRefusalKind = 'base' | 'git-failed' | 'repository';
 
@@ -150,6 +159,9 @@ const NEWLINE = 0x0a;
 /** The command whose listing {@link parseNameStatusZ} reads, as its errors name it. */
 const LISTING_COMMAND = 'git diff-tree --name-status -z';
 
+/** The command whose listing {@link hiddenEditEntriesOf} reads, as its errors name it. */
+const FLAGS_LISTING_COMMAND = 'git ls-files -v -z';
+
 /**
  * Split a `-z` listing into its fields.
  *
@@ -168,9 +180,9 @@ function nulFields(bytes: Uint8Array): Uint8Array[] | undefined {
   return fields;
 }
 
-/** The refusal for a listing git should never have written, naming the record. */
-function malformed(what: string): Refusal {
-  return { ok: false, kind: 'repository', reason: `${LISTING_COMMAND} wrote a listing VAT cannot read: ${what}.` };
+/** The refusal for a listing git should never have written, naming the command and the record. */
+function malformed(command: string, what: string): Refusal {
+  return { ok: false, kind: 'repository', reason: `${command} wrote a listing VAT cannot read: ${what}.` };
 }
 
 /** One record read at `at`, and how many fields it took — or the refusal naming it. */
@@ -181,15 +193,15 @@ function readRecord(fields: readonly Uint8Array[], at: number): { record: GitNam
   const single = SINGLE_PATH_STATUS.get(letters);
   if (single !== undefined) {
     const path = fields[at + 1];
-    if (path === undefined) return malformed(`status ${shownName(status)} has no path`);
+    if (path === undefined) return malformed(LISTING_COMMAND, `status ${shownName(status)} has no path`);
     return { record: { status: single, path, oldPath: null, similarity: null }, width: 2 };
   }
   // A copy (`C`) or an unmerged path (`U`) lands here too: never asked for, so never guessed at.
   const score = RENAME_STATUS.exec(letters)?.[1];
-  if (score === undefined) return malformed(`unknown status ${shownName(status)}`);
+  if (score === undefined) return malformed(LISTING_COMMAND, `unknown status ${shownName(status)}`);
   const oldPath = fields[at + 1];
   const path = fields[at + 2];
-  if (oldPath === undefined || path === undefined) return malformed(`status ${shownName(status)} needs two paths`);
+  if (oldPath === undefined || path === undefined) return malformed(LISTING_COMMAND, `status ${shownName(status)} needs two paths`);
   return { record: { status: 'renamed', path, oldPath, similarity: Number(score) }, width: 3 };
 }
 
@@ -202,7 +214,7 @@ function readRecord(fields: readonly Uint8Array[], at: number): { record: GitNam
  */
 export function parseNameStatusZ(bytes: Uint8Array): { ok: true; records: GitNameStatusRecord[] } | Refusal {
   const fields = nulFields(bytes);
-  if (fields === undefined) return malformed('the listing does not end in NUL');
+  if (fields === undefined) return malformed(LISTING_COMMAND, 'the listing does not end in NUL');
   const records: GitNameStatusRecord[] = [];
   let at = 0;
   while (at < fields.length) {
@@ -311,8 +323,8 @@ function spellingInAnotherForm(path: Uint8Array, prefix: Uint8Array): string | u
 }
 
 /**
- * Refuse when a path on either side of a row is spelled under the root in another case or
- * normalisation: the byte filter would otherwise drop it, or re-kind its rename, in silence.
+ * Refuse when the path a row reports (a rename's NEW side) is spelled under the root in another case
+ * or normalisation: the byte filter would otherwise drop it in silence.
  *
  * @param records - The `--name-status` records, paths from the repository's top
  * @param prefix - The root's path from the repository's top: empty, or ending in `/`
@@ -322,8 +334,10 @@ function spellingInAnotherForm(path: Uint8Array, prefix: Uint8Array): string | u
  */
 export function caseSpellingRefusal(records: readonly GitNameStatusRecord[], prefix: Uint8Array, folds: boolean): Refusal | undefined {
   if (!folds || prefix.length === 0) return undefined;
-  const sides = records.flatMap((record) => (record.oldPath === null ? [record.path] : [record.oldPath, record.path]));
-  const other = sides.map((path) => spellingInAnotherForm(path, prefix)).find((spelling) => spelling !== undefined);
+  // The new side only: a rename's old side names where a file WAS — a case-only directory rename in
+  // history (`Docs/` -> `docs/`) is not the root in another spelling, and refusing it would refuse
+  // every repository that ever made one.
+  const other = records.map((record) => spellingInAnotherForm(record.path, prefix)).find((spelling) => spelling !== undefined);
   if (other === undefined) return undefined;
   return {
     ok: false,
@@ -613,12 +627,14 @@ function configIsTrue(root: string, key: string): { ok: true; value: boolean } |
 function hiddenEditsRefusal(root: string): Refusal | undefined {
   const listed = bytesOf('ls-files', runGitBytes(['ls-files', '-v', '-z'], { cwd: root }));
   if (!listed.ok) return listed;
+  const read = hiddenEditEntriesOf(listed.stdout);
+  if (!read.ok) return read;
   let sparseAnswer: { ok: true; value: boolean } | Refusal | undefined;
-  const sparse = (): { ok: true; value: boolean } | Refusal => (sparseAnswer ??= configIsTrue(root, 'core.sparseCheckout'));
-  for (const entry of nulFields(listed.stdout) ?? []) {
-    const flags = hiddenEditFlagsOf(String.fromCodePoint(entry[0] ?? 0));
+  const sparse = (): { ok: true; value: boolean } | Refusal => (sparseAnswer ??= configIsTrue(root, SPARSE_CHECKOUT_KEY));
+  for (const entry of read.entries) {
+    const flags = hiddenEditFlagsOf(entry.tag);
     if (!flags.skipWorktree && !flags.assumeUnchanged) continue;
-    const path = decodeUtf8Exactly(entry.subarray(2));
+    const path = decodeUtf8Exactly(entry.path);
     const present = path === undefined || onDisk(safePath.join(root, path));
     // Absent and only skip-worktree: a sparse checkout's file, absent by design — else a deletion git hides.
     if (!present && !flags.assumeUnchanged) {
@@ -626,9 +642,28 @@ function hiddenEditsRefusal(root: string): Refusal | undefined {
       if (!answer.ok) return answer;
       if (answer.value) continue;
     }
-    return hiddenEditRefusal(shownName(path ?? entry.subarray(2)), flags);
+    return hiddenEditRefusal(shownName(path ?? entry.path), flags);
   }
   return undefined;
+}
+
+/** One `ls-files -v -z` entry: its one-letter tag and its path, still the bytes git wrote. */
+interface TaggedEntry {
+  readonly tag: string;
+  readonly path: Uint8Array;
+}
+
+/**
+ * Read `git ls-files -v -z` output: each entry is a tag letter, a space, and the path.
+ *
+ * @param bytes - The listing, byte for byte
+ * @returns The entries, or — for a listing that does not end in NUL — the repository's refusal
+ *   naming it: a cut-short listing is never read as "no file flagged"
+ */
+export function hiddenEditEntriesOf(bytes: Uint8Array): { ok: true; entries: TaggedEntry[] } | Refusal {
+  const fields = nulFields(bytes);
+  if (fields === undefined) return malformed(FLAGS_LISTING_COMMAND, 'the listing does not end in NUL');
+  return { ok: true, entries: fields.map((entry) => ({ tag: String.fromCodePoint(entry[0] ?? 0), path: entry.subarray(2) })) };
 }
 
 /** The refusal for one flagged file: every flag it carries, and the one command that clears them. */
@@ -658,7 +693,69 @@ function snapshotTree(root: string): { ok: true; tree: string } | Refusal {
   if (snapshot !== null) return { ok: true, tree: snapshot.hash };
   const unreadable = unreadableSnapshotRefusal(root);
   if (unreadable !== undefined) return { ok: false, kind: 'repository', reason: unreadable.message };
-  return snapshotProbeRefusal(probeSnapshot(root));
+  const probe = probeSnapshot(root);
+  const sparse = configIsTrue(root, SPARSE_CHECKOUT_KEY);
+  if (!sparse.ok) return sparse;
+  return snapshotProbeRefusal(probe, sparse.value);
+}
+
+/** The config that turns a sparse checkout on. */
+const SPARSE_CHECKOUT_KEY = 'core.sparseCheckout';
+
+/** git's words, in the C locale, for an untracked path `add --all` will not take: it is outside the sparse definition. */
+const OUTSIDE_SPARSE_DEFINITION = 'outside of your sparse-checkout definition';
+
+/** The line ending git's header before it lists those paths, one per line, up to its `hint:` lines. */
+const OUTSIDE_SPARSE_LIST_HEADER = 'updated in the index:';
+
+/**
+ * The refusal for untracked paths outside a sparse checkout's definition: `git add --all` will not
+ * take them, exits 1 and states no `fatal:`, so the snapshot fails with git's cause in no other words.
+ *
+ * @param stderr - What the diagnostic `git add --all` wrote (C locale)
+ * @param sparseCheckout - Whether `core.sparseCheckout` is true: git's text alone is not trusted
+ * @returns The refusal naming the paths and the three fixes, or undefined when this is not the cause
+ */
+function outsideSparseDefinitionRefusal(stderr: string, sparseCheckout: boolean): Refusal | undefined {
+  if (!sparseCheckout || !stderr.includes(OUTSIDE_SPARSE_DEFINITION)) return undefined;
+  const lines = stderr.split('\n');
+  const listed = lines.slice(lines.findIndex((line) => line.trim() === OUTSIDE_SPARSE_LIST_HEADER) + 1);
+  const end = listed.findIndex((line) => line === '' || line.startsWith('hint:'));
+  const paths = end === -1 ? listed : listed.slice(0, end);
+  const named = paths.length === 0 ? 'An untracked path' : paths.map((path) => shownName(path)).join(', ');
+  return {
+    ok: false,
+    kind: 'repository',
+    reason: `${named} lies outside this sparse checkout's sparse-checkout definition, so git will not snapshot it`
+      + ' and its change cannot be compared with the base. Add the path to the sparse definition'
+      + ' (git sparse-checkout add <path>), remove the path, or ignore it (.gitignore), then run again.',
+  };
+}
+
+/** What a person whose directory git cannot list can do about it. */
+const UNLISTABLE_REMEDY = 'Fix its permissions so git can list it, or add it to .gitignore, then run again.';
+
+/**
+ * Refuse a directory under the root git cannot list. `git add --all` only WARNS on one and exits 0,
+ * so the untracked files beneath it would be missing from a snapshot that still succeeds. Asked of
+ * the repository's one unreadable-policy listing (`git ls-files --others`, the same warning the
+ * snapshot meets), never of the crawl lane, so this relation answers the same whichever lane built
+ * the projection.
+ *
+ * @returns A refusal naming the first such directory, or undefined
+ */
+function unlistableDirectoryRefusal(root: string): Refusal | undefined {
+  const refused: DirectoryRefusal[] = [];
+  const listed = gitLsOthers({ cwd: root, unreadable: { degrade: (refusal) => refused.push(refusal) } });
+  const [first] = refused;
+  if (first !== undefined) {
+    const more = refused.length > 1 ? ` (and ${String(refused.length - 1)} more directories git could not list)` : '';
+    const message = refusedListingMessage(first, { root, remedy: UNLISTABLE_REMEDY, side: 'source' });
+    return { ok: false, kind: 'repository', reason: `${message}${more}` };
+  }
+  if (listed !== null) return undefined;
+  return gitFailed('git ls-files --others gave no listing here, so VAT cannot tell whether every directory under the root'
+    + ' was read. Check that git runs here.');
 }
 
 /** The lines of git's stderr that state a refusal. */
@@ -677,7 +774,8 @@ const SNAPSHOT = '`git add --all` into a throwaway index, then `write-tree`';
 function probeSnapshot(root: string): Ran {
   const index = safePath.join(normalizedTmpdir(), `vat-snapshot-probe-${randomUUID()}.index`);
   try {
-    return runGit(['add', '--all'], { cwd: root, env: { GIT_INDEX_FILE: index } });
+    // `LC_ALL=C`: what this is read for (`fatal:`, the sparse-definition sentence) is git's C-locale wording.
+    return runGit(['add', '--all'], { cwd: root, env: { GIT_INDEX_FILE: index, LC_ALL: 'C' } });
   } finally {
     rmSync(index, { force: true });
   }
@@ -690,10 +788,14 @@ function probeSnapshot(root: string): Ran {
  * not run is git's failure, named as such. Anything else — it succeeded, or failed stating no
  * refusal — leaves the first failure's cause unknown, and says so rather than guessing.
  *
+ * An untracked path outside a sparse checkout's definition is the tree's too
+ * ({@link outsideSparseDefinitionRefusal}), though git states it with no `fatal:`.
+ *
  * @param probe - What the diagnostic `git add --all` did
+ * @param sparseCheckout - Whether `core.sparseCheckout` is true here
  * @returns The refusal
  */
-export function snapshotProbeRefusal(probe: Ran): Refusal {
+export function snapshotProbeRefusal(probe: Ran, sparseCheckout: boolean): Refusal {
   if (probe.error !== undefined && isTimedOutError(probe.error)) {
     return gitFailed(
       `git could not snapshot the working tree (${SNAPSHOT}), and a second \`git add --all\` here did not finish within`
@@ -704,6 +806,8 @@ export function snapshotProbeRefusal(probe: Ran): Refusal {
   if (didNotRun !== undefined) {
     return gitFailed(`git could not snapshot the working tree (${SNAPSHOT}), so there is nothing to compare with the base. ${didNotRun.reason}`);
   }
+  const outsideSparse = probe.ok ? undefined : outsideSparseDefinitionRefusal(probe.stderr, sparseCheckout);
+  if (outsideSparse !== undefined) return outsideSparse;
   const said = probe.ok ? [] : probe.stderr.split('\n').filter((line) => GIT_REFUSAL_LINE.test(line));
   if (said.length > 0) {
     return {
@@ -875,8 +979,8 @@ function readShallowBoundary(file: string): BoundaryRead {
  *
  * Never throws for a condition the caller can fix — no working tree, no commits, a ref that names no
  * commit, no single merge base, a shallow history that cannot vouch for it, a file git is told not
- * to read, a folding filesystem git is told is case-sensitive, a tree git cannot snapshot, a
- * partial clone missing objects, a root spelled in another case, a path that is not UTF-8, a
+ * to read, a directory git cannot list, a folding filesystem git is told is case-sensitive, a tree
+ * git cannot snapshot, an untracked path outside a sparse definition, a partial clone missing objects, a root spelled in another case, a path that is not UTF-8, a
  * listing VAT cannot read —
  * and reports it instead, with whose fault it is and the fix.
  *
@@ -900,7 +1004,7 @@ export function gitChangedFiles(options: { root: string; base: string }): GitCha
   const cutOff = shallow.value ? shallowHistoryRefusal(root, { base: resolved.commit, mergeBase: merged.commit }) : undefined;
   if (cutOff !== undefined) return cutOff;
   const folds = rootFoldsCase(root);
-  const unread = ignoreCaseRefusal(root, folds) ?? hiddenEditsRefusal(root);
+  const unread = ignoreCaseRefusal(root, folds) ?? hiddenEditsRefusal(root) ?? unlistableDirectoryRefusal(root);
   if (unread !== undefined) return unread;
   const snapshot = snapshotTree(root);
   if (!snapshot.ok) return snapshot;

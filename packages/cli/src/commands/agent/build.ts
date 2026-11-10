@@ -11,7 +11,6 @@ import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.
 import { endWithRefusal, endWithReport, leftoverIssuesOfWarnings, NOTHING_FINISHED, type FinishedWork } from '../../utils/document-writer.js';
 import { createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
-import { relativeLocationOrUndefined } from '../../utils/relativize-paths.js';
 import { packagingFailedIssue } from '../skills/build.js';
 
 import type { AgentBuildReport } from './build-schema.js';
@@ -105,8 +104,11 @@ function buildRefusalOf(
   return { code: 'RUN_INCOMPLETE', finished: { examined: 0, findings: toFindings([issue]), data: null } };
 }
 
-/** The agent's path relative to the project root, or `undefined` when it is outside it (or unknown). */
+/**
+ * The agent's path relative to the project root, or `undefined` when unknown. Raw: `toFindings`
+ * publishes one that can be no location (outside the root, another drive) in the message.
+ */
 function agentLocation(agentPath: string | undefined, projectRoot: string | undefined): string | undefined {
   if (agentPath === undefined || projectRoot === undefined) return undefined;
-  return relativeLocationOrUndefined(issueLocation(safePath.resolve(agentPath), projectRoot));
+  return issueLocation(safePath.resolve(agentPath), projectRoot);
 }

@@ -607,7 +607,8 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
              declares examined, once that statement completed -- absent, never
              0, otherwise -- and examinedNothing: true exactly when that check
              earned RESOURCE_CHECK_EXAMINED_NOTHING, and nearMisses: the
-             columns that miss a reserved name only by case (the stderr
+             columns that nearly name a reserved one (case and _ aside,
+             or a bare severity, line or column; the stderr
              warning's, absent when none). rows is what the check SELECTED, and it is
              a memory signal: rows are fully materialised. It is not a finding
              count -- a severity override of 'ignore' drops findings the check

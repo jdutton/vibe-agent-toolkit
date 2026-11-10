@@ -37,6 +37,18 @@ export const ChangedFileRowSchema = z.object({
     .describe('Where a "renamed" file came from, relative to the project root; NULL for every other status'),
   similarity: z.number().int().min(0).max(100).nullable()
     .describe('git\'s similarity score (0-100) for a "renamed" file; NULL for every other status'),
-}).strict().describe('A row of the derived `changed_files` relation');
+}).strict().superRefine((row, context) => {
+  // A rename carries both its source and its score; every other status carries neither.
+  const renamed = row.status === 'renamed';
+  for (const key of ['oldPath', 'similarity'] as const) {
+    if ((row[key] === null) === renamed) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [key],
+        message: renamed ? `a "renamed" row names its ${key}` : `only a "renamed" row carries ${key}; it is NULL on a "${row.status}" row`,
+      });
+    }
+  }
+}).describe('A row of the derived `changed_files` relation');
 
 export type ChangedFileRow = z.infer<typeof ChangedFileRowSchema>;

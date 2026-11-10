@@ -16,8 +16,8 @@
  * The caller names the nested carriers it owns instead.
  */
 
-import { projectLocationOf } from '@vibe-agent-toolkit/schema';
-import { isAbsoluteAnyPlatform, issueLocation } from '@vibe-agent-toolkit/utils';
+import { isAbsoluteOnAnyHost } from '@vibe-agent-toolkit/schema';
+import { issueLocation } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError } from './command-refusal.js';
 
@@ -90,23 +90,6 @@ export function relativizePathEntries<T extends PathEntry>(
 }
 
 /**
- * A relativized path as a finding's `location`, or `undefined` when it cannot be one.
- *
- * 🔑 Undefined for EVERY value `isProjectLocation` (the published `location` predicate) refuses —
- * a path on another drive (Windows `path.relative` hands back the absolute one), a path that
- * climbs out of the root (an OKF bundle at `../shared-docs`), and the empty string (the root
- * itself) — so no finding a lane builds can kill its own document. A leading `./` is dropped.
- * Every location producer that relativizes asks here and degrades: it omits `location` and names
- * the path in its message.
- *
- * @param location - What `issueLocation` / `safePath.relative` returned
- * @returns The location, when it can be one
- */
-export function relativeLocationOrUndefined(location: string): string | undefined {
-  return projectLocationOf(location);
-}
-
-/**
  * A relativized PATH (a report's data field, never a finding's `location`: it may climb), or the
  * invocation's refusal when it has no relative spelling at all.
  *
@@ -117,7 +100,8 @@ export function relativeLocationOrUndefined(location: string): string | undefine
  * @throws {CommandRefusalError} `USAGE_INVALID` when it is absolute (another drive)
  */
 export function relativeLocationOrRefuse(relative: string, root: string, verb: string): string {
-  if (!isAbsoluteAnyPlatform(relative)) return relative;
+  // The location contract's own definition of absolute, so a report's path and a finding's location agree.
+  if (!isAbsoluteOnAnyHost(relative)) return relative;
   throw new CommandRefusalError(
     'USAGE_INVALID',
     `${verb} reports locations relative to ${root}, and ${relative} has no path relative to it (it is on another drive). Run from that drive.`,

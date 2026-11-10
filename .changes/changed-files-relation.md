@@ -2,7 +2,8 @@
 
 - **`changed_files`: what changed since a base commit, as a derived relation.** Columns `path`,
   `status` (`added` | `modified` | `deleted` | `renamed` | `type-changed`), `oldPath` and
-  `similarity` (set for a rename). It lists what the change touched: a snapshot of the working tree
+  `similarity` (set for a rename, and only for one — `ChangedFileRowSchema` refuses either
+  missing on a rename or present on any other status). It lists what the change touched: a snapshot of the working tree
   — staged or not, plus untracked non-ignored files — compared in one `git diff-tree` with the
   MERGE BASE of `--base <ref>` and `HEAD` (GitHub's "files changed" — a branch behind its base never
   lists what the base moved since), restricted to the project root and relative to it. A move is
@@ -33,11 +34,15 @@
   nearer merge base (fetch full history, e.g. `actions/checkout` `fetch-depth: 0`, or deepen until
   the history between the merge base and the tips is complete), a partial clone missing blobs the
   diff needs (`git fetch --refetch`), a snapshot git refuses (an object it cannot write, a clean
-  filter that fails, a nested repository with no commit: git's `fatal:`/`error:` quoted), a flagged
-  file as above, a file under the root git cannot read, a listing VAT cannot read, a filesystem
+  filter that fails, a nested repository with no commit: git's `fatal:`/`error:` quoted), an
+  untracked file outside a sparse checkout's definition (add it to the definition, remove it, or
+  ignore it), a directory under the root git cannot list (`git add` only warns, and its untracked
+  files would be missing), a flagged file as above, a file under the root git cannot read, a
+  listing VAT cannot read (the diff's or the flagged-file listing's), a filesystem
   that folds case (probed at the root) whose `core.ignorecase` is not true
-  (`git config core.ignorecase true`), or, on such a filesystem, a changed path that spells the
-  root in another case or Unicode normalisation (both spellings named; on a case-sensitive
+  (`git config core.ignorecase true`), or, on such a filesystem, a changed path (a rename's new
+  side: its old side is history) that spells the root in another case or Unicode normalisation
+  (both spellings named; on a case-sensitive
   filesystem a sibling such as `Docs/` beside a `docs/` root is simply another directory). The exit code does not tell these faults apart; the code does — `query`
   publishes it as `error.code`, and for `check` and `validate` it is `RESOURCE_CHECK_BROKEN` on
   exactly the checks that read it, carrying `reason: {refusal: <code>}` beside a message naming the

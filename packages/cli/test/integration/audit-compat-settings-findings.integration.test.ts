@@ -61,7 +61,9 @@ describe('vat audit --compat --settings: a settings conflict is a finding', () =
     // …and so does the envelope: one finding, on the plugin, naming the tool and the policy file.
     const conflicts = conflictsOf(envelope);
     expect(conflicts).toHaveLength(1);
-    expect(conflicts[0]).toMatchObject({ severity: 'warning', location: '.' });
+    // On the plugin root itself: `.` is no project location, so the finding carries none.
+    expect(conflicts[0]).toMatchObject({ severity: 'warning' });
+    expect(conflicts[0]).not.toHaveProperty('location');
     expect(conflicts[0]?.message).toContain('Tool "Bash" in skills/deploy/SKILL.md blocked by org policy');
     expect(conflicts[0]?.message).toContain('managed-settings.json');
     expect(envelope.status).toBe('findings');

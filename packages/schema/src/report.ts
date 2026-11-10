@@ -53,7 +53,15 @@ import { z } from 'zod';
 
 import { SeveritySchema, type Severity } from './severity.js';
 import { RefusalCodeSchema, type RefusalCode } from './validation-codes.js';
-import { anchoredAt, countBySeverity, resultStatus, ValidationIssueSchema, type SeverityCounts, type ValidationIssue } from './validation-issue.js';
+import {
+  anchoredAt,
+  columnRequiresLine,
+  countBySeverity,
+  resultStatus,
+  ValidationIssueObjectSchema,
+  type SeverityCounts,
+  type ValidationIssue,
+} from './validation-issue.js';
 
 export const REPORT_STATUSES = ['ok', 'findings', 'error'] as const;
 
@@ -62,7 +70,7 @@ export const ReportStatusSchema = z.enum(REPORT_STATUSES);
 /** `ok`: examined, nothing found. `findings`: at least one. `error`: did not finish. */
 export type ReportStatus = z.infer<typeof ReportStatusSchema>;
 
-export const FindingSchema = ValidationIssueSchema
+export const FindingSchema = ValidationIssueObjectSchema
   .omit({ severity: true })
   .extend({ severity: SeveritySchema })
   .strict();
@@ -159,8 +167,11 @@ export interface ErrorReport<T> extends ReportBase {
 /** The envelope, discriminated on `status`. */
 export type Report<T> = OkReport<T> | FindingsReport<T> | ErrorReport<T>;
 
-/** The one shape a finding schema must produce: a severity the summary can count. */
-type FindingZodSchema = z.ZodType<Pick<Finding, 'severity'>>;
+/** A finding's coordinates as zod parses them: an optional key may hold `undefined`. */
+type FindingCoordinates = Parameters<typeof columnRequiresLine>[0];
+
+/** The one shape a finding schema must produce: a severity the summary can count, and the coordinates a column needs. */
+type FindingZodSchema = z.ZodType<Pick<Finding, 'severity'> & FindingCoordinates>;
 
 /**
  * Every published finding's severity, counted, must equal `summary`.
@@ -222,7 +233,15 @@ export function reportSchema<T extends z.ZodTypeAny, F extends FindingZodSchema>
       error: ReportErrorSchema,
       data: dataSchema.nullable(),
     }).strict(),
-  ]).superRefine(summaryMatchesFindings);
+  ]).superRefine((report, context) => {
+    summaryMatchesFindings(report, context);
+    findingsCarryTheirLine(report.findings, context);
+  });
+}
+
+/** {@link columnRequiresLine} on every finding: a verb's finding schema is an object, which cannot carry it. */
+function findingsCarryTheirLine(findings: readonly FindingCoordinates[], context: z.RefinementCtx): void {
+  for (const [index, finding] of findings.entries()) columnRequiresLine(finding, context, ['findings', index]);
 }
 
 /**

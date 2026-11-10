@@ -13,8 +13,12 @@
   `RESOURCE_CHECK_BROKEN` with the structured `reason` (`column: path`). NULL or absent is no
   location and no evidence entry. A published finding's `location` (`ValidationIssueSchema`) now
   refuses an empty or root-climbing value too: one predicate, `isProjectLocation` in
-  `@vibe-agent-toolkit/schema`, decides both. A leading `./` is dropped (`./docs/a.md` is the
-  location `docs/a.md`).
+  `@vibe-agent-toolkit/schema`, decides both; it also refuses the root itself (`.`, `docs/..`) and
+  a leading `\` or UNC path on every host, and shares its one definition of absolute
+  (`isAbsoluteOnAnyHost`) with the relative paths a report states. A location is published in its
+  normalised form (`./docs/a.md` is `docs/a.md`, `docs/../a.md` is `a.md`). A published finding's
+  `column` requires its `line` (`ValidationIssueSchema`, every report schema, and the committed
+  JSON Schemas).
 - **A finding whose file lies outside the run's root now has no `location`, its path named in the
   message instead** — where it used to carry a climbing `../…` (or, from `vat resources check`, an
   empty) location. Every verb that publishes findings can emit one: `vat okf validate` (a bundle
@@ -46,10 +50,13 @@
 
 - **A check's rows can set their own severity, line and column**: `finding_severity` (`error` |
   `warning` | `info`, NULL = the declared one), `finding_line`, and `finding_column` (needs
-  `finding_line`). An override on `CUSTOM:<name>` still wins. A column that differs from a reserved
-  name only in case is a stderr warning, and is listed as spelled on that check's `data.checks`
-  entry as `nearMisses` (absent when there is none) — read from the statement's columns, so it is
-  listed whatever the row count, on a broken check and on a run killed mid-check alike.
+  `finding_line`). A `resources.validation.severity` override on `CUSTOM:<name>` replaces the
+  severity of EVERY row of that check, raising a row's `info` as well as lowering its `error`. A
+  column that nearly names a reserved one — equal once case and `_` are removed (`Finding_Line`,
+  `findingSeverity`), or the bare `severity`, `line` or `column` — is a stderr warning, and is
+  listed as spelled on that check's `data.checks` entry as `nearMisses` (absent when there is none)
+  — read from the statement's columns before it runs, so it is listed whatever the row count, on a
+  broken check, a check that threw, and a run killed mid-check alike.
 - **Every finding one check produced names it: `check: <name>`** — its violations (built-in or
   declared) and the `RESOURCE_CHECK_BROKEN` / `RESOURCE_CHECK_EXAMINED_NOTHING` refusals about it, in
   `vat resources check` and in `vat validate`'s `checks` phase alike. A finding about the whole run

@@ -62,7 +62,6 @@ import {
 import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../../utils/command-refusal.js';
 import { loadConfig, loadConfigCached } from '../../../utils/config-loader.js';
 import { endWithRefusal, endWithReport, leftoverIssueOf, NOTHING_FINISHED } from '../../../utils/document-writer.js';
-import { relativeLocationOrUndefined } from '../../../utils/relativize-paths.js';
 import { collectRepeated } from '../../../utils/repeatable-option.js';
 import { isSkillPublished } from '../../../utils/skill-packaging-config.js';
 import { runClaudePluginBuild } from '../../claude/plugin/build.js';
@@ -1362,12 +1361,11 @@ interface RunFailure {
 }
 
 /**
- * `path` as a finding `location`: relative to the project root, or `undefined`
- * when it lies outside the project (a location is a file inside the project to
- * open — an OS temp copy or another tree is not one).
+ * `path` relative to the project root, as a finding's raw `location`: `toFindings` publishes one
+ * that can be no location (an OS temp copy, another tree, another drive) in the message instead.
  */
-function projectLocation(path: string): string | undefined {
-  return relativeLocationOrUndefined(issueLocation(path, resolveRepoRoot()));
+function projectLocation(path: string): string {
+  return issueLocation(path, resolveRepoRoot());
 }
 
 /**

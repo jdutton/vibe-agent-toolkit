@@ -42,6 +42,30 @@ function commitAll(repo: string, message: string): void {
 }
 
 /** The `(path, status)` pairs of an answer, which `changed_files` keys on. */
+/**
+ * The prefix git reports for `dir`: the spelling the run is judged against. A git that answers the
+ * on-disk spelling (macOS's getcwd, Git for Windows' final-path lookup) makes a root typed in
+ * another case an ordinary root; one that keeps the typed spelling makes it a case-spelling refusal.
+ */
+function gitPrefixOf(dir: string): string {
+  return runGitOrThrow(['rev-parse', '--show-prefix'], { cwd: dir });
+}
+
+/**
+ * Commit `files` under `Docs/`, then stage a case-only rename of the directory to `docs/` (through a
+ * temporary name, as a folding filesystem needs). The rename is left uncommitted.
+ *
+ * @returns The commit holding the capitalised spelling
+ */
+function stageCaseOnlyDocsRename(repo: string, files: readonly string[]): string {
+  for (const file of files) put(repo, `Docs/${file}`, `Docs/${file}\n${BODY}`);
+  commitAll(repo, 'docs, capitalised');
+  const capitalised = runGitOrThrow(['rev-parse', 'HEAD'], { cwd: repo });
+  runGitOrThrow(['mv', 'Docs', 'tmp-case'], { cwd: repo });
+  runGitOrThrow(['mv', 'tmp-case', 'docs'], { cwd: repo });
+  return capitalised;
+}
+
 function keysOf(result: ReturnType<typeof gitChangedFiles>): string[] {
   return result.ok ? result.files.map((file) => `${file.path}:${file.status}`) : [];
 }
@@ -260,14 +284,17 @@ describe('gitChangedFiles', () => {
   it.skipIf(!tmpdirFoldsCase())('answers, or refuses, from a root spelled in another case — never silently empty', () => {
     put(repo, 'site/edit.md', 'changed\n');
 
-    const result = gitChangedFiles({ root: safePath.join(repo, 'SITE'), base: 'HEAD' });
+    const root = safePath.join(repo, 'SITE');
+    const prefix = gitPrefixOf(root);
+    const result = gitChangedFiles({ root, base: 'HEAD' });
 
-    // macOS's getcwd answers the on-disk spelling, so git's prefix is `site/` and the edit is
-    // reported; Windows keeps the typed `SITE`, so the run refuses naming both spellings.
-    if (process.platform === 'win32') {
-      expect(result).toMatchObject({ ok: false, kind: 'repository', reason: expect.stringMatching(/"SITE\/".*"site\/"/s) });
-    } else {
+    // Keyed on the prefix git reports, never on the platform: git spelling the root as on disk
+    // reports the edit; git keeping the typed `SITE` refuses, naming both spellings.
+    expect(['site/', 'SITE/']).toContain(prefix);
+    if (prefix === 'site/') {
       expect(keysOf(result)).toStrictEqual(['edit.md:modified']);
+    } else {
+      expect(result).toMatchObject({ ok: false, kind: 'repository', reason: expect.stringMatching(/"SITE\/".*"site\/"/s) });
     }
   });
 
@@ -275,24 +302,22 @@ describe('gitChangedFiles', () => {
   it.skipIf(!tmpdirFoldsCase())('answers, or refuses, from a never-committed root reached in another case', () => {
     put(repo, 'drafts/new.md', 'untracked only\n');
 
-    const result = gitChangedFiles({ root: safePath.join(repo, 'DRAFTS'), base: 'HEAD' });
+    const root = safePath.join(repo, 'DRAFTS');
+    const prefix = gitPrefixOf(root);
+    const result = gitChangedFiles({ root, base: 'HEAD' });
 
-    // As above: macOS answers in the on-disk spelling, Windows refuses naming both.
-    if (process.platform === 'win32') {
-      expect(result).toMatchObject({ ok: false, kind: 'repository', reason: expect.stringMatching(/"DRAFTS\/".*"drafts\/"/s) });
-    } else {
+    // As above, keyed on the prefix git reports.
+    expect(['drafts/', 'DRAFTS/']).toContain(prefix);
+    if (prefix === 'drafts/') {
       expect(keysOf(result)).toStrictEqual(['new.md:added']);
+    } else {
+      expect(result).toMatchObject({ ok: false, kind: 'repository', reason: expect.stringMatching(/"DRAFTS\/".*"drafts\/"/s) });
     }
   });
 
   // Skipped where the filesystem is case-sensitive: there `Docs` and `docs` are two directories.
   it.skipIf(!tmpdirFoldsCase())('refuses when the BASE spells the root in another case, naming both spellings', () => {
-    put(repo, 'Docs/a.md', `Docs/a.md\n${BODY}`);
-    put(repo, 'Docs/b.md', `Docs/b.md\n${BODY}`);
-    commitAll(repo, 'docs, capitalised');
-    const capitalised = runGitOrThrow(['rev-parse', 'HEAD'], { cwd: repo });
-    runGitOrThrow(['mv', 'Docs', 'tmp-case'], { cwd: repo });
-    runGitOrThrow(['mv', 'tmp-case', 'docs'], { cwd: repo });
+    const capitalised = stageCaseOnlyDocsRename(repo, ['a.md', 'b.md']);
     rmSync(safePath.join(repo, 'docs/b.md'));
     commitAll(repo, 'docs, lower case, one file fewer');
 
@@ -300,6 +325,18 @@ describe('gitChangedFiles', () => {
 
     expect(result).toMatchObject({ ok: false, kind: 'repository' });
     expect(result.ok ? '' : result.reason).toMatch(/"docs\/".*"Docs\/"/s);
+  });
+
+  // Skipped where the filesystem is case-sensitive: there `Docs` and `docs` are two directories.
+  it.skipIf(!tmpdirFoldsCase())('answers a case-only directory rename made before HEAD: its old side is history', () => {
+    const capitalised = stageCaseOnlyDocsRename(repo, ['a.md']);
+    commitAll(repo, 'docs, lower case');
+
+    const result = gitChangedFiles({ root: safePath.join(repo, 'docs'), base: capitalised });
+
+    expect(result.ok ? '' : result.reason).toBe('');
+    // Renamed in from a spelling git keeps apart from the root: an addition, seen from inside it.
+    expect(keysOf(result)).toStrictEqual(['a.md:added']);
   });
 
   it('reports no row for a file removed from the index but unchanged on disk (git rm --cached)', () => {
@@ -363,6 +400,23 @@ describe('gitChangedFiles', () => {
       });
     } finally {
       chmodSync(secret, 0o644);
+    }
+  });
+
+  // `git add --all` only WARNS on a directory it cannot open, and exits 0: its untracked files would be
+  // missing from an answer that still succeeds.
+  it.skipIf(CANNOT_DENY_READS)('refuses a directory under the root git cannot list, naming it', () => {
+    put(repo, 'site/locked/untracked.md', 'never seen\n');
+    const locked = safePath.join(repo, 'site/locked');
+    chmodSync(locked, 0o311);
+    try {
+      expect(gitChangedFiles({ root: safePath.join(repo, 'site'), base: 'HEAD' })).toMatchObject({
+        ok: false,
+        kind: 'repository',
+        reason: expect.stringMatching(/'locked'/),
+      });
+    } finally {
+      chmodSync(locked, 0o755);
     }
   });
 
@@ -666,6 +720,17 @@ describe('gitChangedFiles', () => {
 
       expect(result.ok).toBe(true);
       expect(keysOf(result)).toStrictEqual(['site/edit.md:modified']);
+    });
+
+    // git's `add --all` exits 1 stating no `fatal:` for it, so it once read as git's failure.
+    it('refuses an untracked file outside a sparse checkout\'s definition as the repository\'s, naming the fixes', () => {
+      runGitOrThrow(['sparse-checkout', 'set', '--no-cone', '/site/'], { cwd: repo });
+      put(repo, 'stray.md', 'outside the sparse definition\n');
+
+      const result = gitChangedFiles({ root: repo, base: 'HEAD' });
+
+      expect(result).toMatchObject({ ok: false, kind: 'repository' });
+      expect(result.ok ? '' : result.reason).toMatch(/"stray\.md".*sparse-checkout definition.*add.*remove.*ignore/s);
     });
 
     it('names both flags, and clears both, for a file marked assume-unchanged AND skip-worktree', () => {

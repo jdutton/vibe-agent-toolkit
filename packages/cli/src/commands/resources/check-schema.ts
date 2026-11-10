@@ -34,7 +34,7 @@ const PublishedCheckCostSchema = z.object({
   examined: z.number().int().nonnegative().optional(),
   /** The check declares an `examined` count of 0 legitimate. */
   allowEmpty: z.literal(true).optional(),
-  /** Selected columns matching a reserved name only in another case, as spelled — the stderr warning's. */
+  /** Selected columns that nearly name a reserved one (case and `_` aside, or a bare `severity`/`line`/`column`), as spelled — the stderr warning's. */
   nearMisses: z.array(z.string()).min(1).optional(),
   /** Exactly when this check produced a `RESOURCE_CHECK_EXAMINED_NOTHING` finding. */
   examinedNothing: z.literal(true).optional(),

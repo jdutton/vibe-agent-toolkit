@@ -31,7 +31,6 @@ import { createLogger } from '../../../utils/logger.js';
 import { copyFileIntoMarketplace, copyTreeIntoMarketplace, writingMarketplace } from '../../../utils/marketplace-io.js';
 import { readPackageJsonOrAbsent } from '../../../utils/package-json.js';
 import { requireInputPath } from '../../../utils/project-root-policy.js';
-import { relativeLocationOrUndefined } from '../../../utils/relativize-paths.js';
 import { withResourcePopulationSource } from '../../../utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig, pluginLocalSkillConfigEntry } from '../../../utils/skill-packaging-config.js';
 import type { PhaseOutcome } from '../../phase-utils.js';
@@ -526,8 +525,8 @@ class SkillPackagingStop extends CommandRefusalError {
  */
 function withPackagingStop(finished: FinishedWork, error: unknown, configDir: string | undefined): FinishedWork {
   if (!(error instanceof SkillPackagingStop)) return finished;
-  const relative = configDir === undefined ? undefined : issueLocation(error.skillPath, configDir);
-  const location = relative === undefined ? undefined : relativeLocationOrUndefined(relative);
+  // Raw: `toFindings` publishes a path that can be no location (another drive, a climb) in the message.
+  const location = configDir === undefined ? undefined : issueLocation(error.skillPath, configDir);
   return { ...finished, findings: [...finished.findings, ...toFindings([packagingFailedIssue(error.message, location, 'rebuild', error.cause)])] };
 }
 

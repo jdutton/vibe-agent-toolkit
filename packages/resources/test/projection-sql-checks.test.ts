@@ -198,8 +198,8 @@ describe('issuesFromCheckRows', () => {
     },
   );
 
-  it('keeps a path whose .. stays inside the root', () => {
-    expect(locationFor('docs/../guide.md')).toBe('docs/../guide.md');
+  it('keeps a path whose .. stays inside the root, in its normalised form', () => {
+    expect(locationFor('docs/../guide.md')).toBe('guide.md');
   });
 
   it('reads a NULL path as no location, never a refusal', () => {
@@ -372,17 +372,28 @@ describe('issuesFromCheckRows — the bare severity, line and column names are e
     expect(Object.hasOwn(issue ?? {}, 'line')).toBe(false);
     expect(Object.hasOwn(issue ?? {}, 'column')).toBe(false);
     expect(issue?.evidence).toStrictEqual({ severity: 'high', line: 0, column: 'x' });
-    expect(nearMissesOf(['path', 'severity', 'line', 'column'])).toStrictEqual([]);
   });
 });
 
-describe('nearMissesOf — the result columns that miss a reserved name only by case', () => {
-  it('names each, in the order the statement selected them', () => {
+describe('nearMissesOf — the result columns that nearly name a reserved one', () => {
+  it('names each in another case, in the order the statement selected them', () => {
     expect(nearMissesOf(['Path', 'n', 'FINDING_SEVERITY', 'Finding_Line'])).toStrictEqual([
       { column: 'Path', reserved: 'path' },
       { column: 'FINDING_SEVERITY', reserved: 'finding_severity' },
       { column: 'Finding_Line', reserved: 'finding_line' },
     ]);
+  });
+
+  it.each([
+    ['camel case, its _ dropped', 'findingSeverity', 'finding_severity'],
+    ['another case AND its _ dropped', 'FindingLine', 'finding_line'],
+    ['an extra _', 'finding__column', 'finding_column'],
+    ['the bare severity the reserved name was before its prefix', 'severity', 'finding_severity'],
+    ['the bare line', 'line', 'finding_line'],
+    ['the bare column', 'column', 'finding_column'],
+    ['a bare name in another case', 'Severity', 'finding_severity'],
+  ])('names %s', (_what, column, reserved) => {
+    expect(nearMissesOf(['n', column])).toStrictEqual([{ column, reserved }]);
   });
 
   it('names nothing when every reserved column is spelled exactly', () => {

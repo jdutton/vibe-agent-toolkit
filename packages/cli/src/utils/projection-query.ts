@@ -418,7 +418,8 @@ export async function assertQueriesCompile(statements: readonly PreflightStateme
  *   SELECTION only — never compiled, never bound, and deliberately separate from
  *   `preflight`. ⛔ Omitting it evaluates EVERY lens, which is the correct answer
  *   and the expensive one
- * @param options.base - The `--base` ref for the changed-files lens, or undefined
+ * @param options.base - The `--base` ref for the changed-files lens, or undefined when the run was
+ *   given none. REQUIRED, so no caller can drop the person's `--base` and still compile
  * @param work - Given the asker, where its rows came from, how much of the tree
  *   they cover, and the ROWS THEMSELVES. The store is open for exactly this call
  *   and closed however it ends
@@ -430,7 +431,7 @@ export async function withQueriedProjection<T>(
     logger: Logger;
     preflight?: readonly PreflightStatement[];
     statements?: readonly string[];
-    base?: string | undefined;
+    base: string | undefined;
   },
   work: (
     ask: AskProjection,

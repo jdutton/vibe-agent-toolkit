@@ -276,19 +276,35 @@ markers and all — the snapshot is the working tree. A file on disk marked assu
 skip-worktree refuses the relation, naming it and the flag to clear (`git update-index
 --no-assume-unchanged` / `--no-skip-worktree`): git would hide an edit to it. A statement reading it is refused with the fix —
 never answered with an empty relation — and the refusal code says whose fault it is:
-`USAGE_INVALID` without `--base`, with a ref that names no commit, or with one that has several
-merge bases with `HEAD` (a criss-cross history: pass one of them); `BACKEND_UNAVAILABLE` when git
-did not finish (not on PATH, out of time, more output than VAT reads — compare against a nearer
-base) or could not snapshot the tree (past the snapshot's 30 s limit, or a nested repository with
-no commit); `INPUT_UNREADABLE` when the tree cannot answer — outside a git working tree (a bare
-repository and a directory inside `.git` included), no commits yet, no merge base, a shallow clone
-whose history may hide a nearer merge base (fetch full history, e.g. `actions/checkout`
-`fetch-depth: 0`, or deepen until the history between the merge base and the tips is complete:
-`git fetch --deepen=<n>`), a partial clone missing blobs the diff needs (`git fetch --refetch`), a
-snapshot git refuses (git's own message quoted), an assume-unchanged or skip-worktree file on disk,
-a file under the root git cannot read, a path under the root that git spells in another case or
-Unicode normalisation on either side of the diff (where git ignores case), a path that is not
-UTF-8, or a listing git returned that VAT cannot read. The exit code does not tell these apart — the code does: `vat
+
+| Cause | Fault (`kind`) | Code |
+|---|---|---|
+| no `--base` | `base` | `USAGE_INVALID` |
+| a ref that names no commit | `base` | `USAGE_INVALID` |
+| a ref that shares no history with `HEAD` in a full history (no merge base) | `base` | `USAGE_INVALID` |
+| a ref with more than one merge base with `HEAD` (a criss-cross history: pass one of them) | `base` | `USAGE_INVALID` |
+| git not found on `PATH` | `git-failed` | `BACKEND_UNAVAILABLE` |
+| git out of time, or more output than VAT reads (compare against a nearer base) | `git-failed` | `BACKEND_UNAVAILABLE` |
+| a snapshot that fails for a cause git does not state, or whose second attempt times out | `git-failed` | `BACKEND_UNAVAILABLE` |
+| not inside a git working tree (a bare repository and a directory inside `.git` included) | `repository` | `INPUT_UNREADABLE` |
+| no commits yet, or a git that cannot resolve `HEAD` | `repository` | `INPUT_UNREADABLE` |
+| a shallow clone cut off before the base and `HEAD` meet (no merge base, shallow) | `repository` | `INPUT_UNREADABLE` |
+| a shallow clone whose history may hide a nearer merge base (`fetch-depth: 0`, or `git fetch --deepen=<n>`) | `repository` | `INPUT_UNREADABLE` |
+| a partial clone missing blobs the diff needs (`git fetch --refetch`) | `repository` | `INPUT_UNREADABLE` |
+| a snapshot git refuses, its `fatal:`/`error:` quoted (a nested repository with no commit, an object it cannot write, a clean filter that fails) | `repository` | `INPUT_UNREADABLE` |
+| an untracked file outside a sparse checkout's definition (add it to the definition, remove it, or ignore it) | `repository` | `INPUT_UNREADABLE` |
+| a directory under the root git cannot list (fix its permissions, or ignore it) | `repository` | `INPUT_UNREADABLE` |
+| a file under the root git cannot read | `repository` | `INPUT_UNREADABLE` |
+| a file on disk marked assume-unchanged or skip-worktree (`git update-index --no-assume-unchanged` / `--no-skip-worktree`) | `repository` | `INPUT_UNREADABLE` |
+| a filesystem that folds case whose `core.ignorecase` is not true (`git config core.ignorecase true`) | `repository` | `INPUT_UNREADABLE` |
+| on such a filesystem, a changed path (a rename's new side) spelling the root in another case or Unicode normalisation | `repository` | `INPUT_UNREADABLE` |
+| a path under the root that is not UTF-8 | `repository` | `INPUT_UNREADABLE` |
+| a listing git returned that VAT cannot read | `repository` | `INPUT_UNREADABLE` |
+
+A statement defining a CTE named `changed_files` is refused as `USAGE_INVALID` too, with or without
+`--base`. So is one that uses `changed_files` as a bare alias with no `AS` (`FROM resources
+changed_files`) and is run without `--base`: a known over-match — the relation is detected by name,
+so spell the alias with `AS`, or name it something else. The exit code does not tell these apart — the code does: `vat
 resources query` exits 2 with it as `error.code`; `vat resources check` and `vat validate` report
 `RESOURCE_CHECK_BROKEN` (exit 1) on the checks that read it, with it as the finding's
 `reason.refusal`. `--base` is read only when a statement names `changed_files`; otherwise it is
@@ -357,7 +373,9 @@ each finding also as a `location:line: severity: message [code]` line on stderr.
 - Two cross-field rules hold for every finding: `evidence` only on one that names its `check`, and
   `reason` only on `RESOURCE_CHECK_BROKEN`. The document is re-parsed against its schema before it
   is published, and the committed JSON Schemas (`resources-check.json`, `orchestrator.json`) carry
-  both rules as `if`/`then`, so a consumer validating against them refuses what the run refuses.
+  both rules — and every finding's own, a `column` only beside its `line` — as
+  `anyOf: [{not: {required: [key]}}, <rule>]` (`presenceImplies`), never as `if`/`then`, so a
+  consumer validating against them refuses what the run refuses.
 - `data.checks[]` — one entry per check that ran: `name`, `durationSecs`, `rows`, and `broken`,
   `builtin`, `examined`, `allowEmpty`, `examinedNothing: true` and `nearMisses` when they apply
   (below).
@@ -370,8 +388,9 @@ column names are reserved and matched exactly (case-sensitive); every other colu
 the message and in the finding's `evidence`:
 
 - `path` — text, the finding's `location` when it is one: a non-empty relative path with `/`
-  separators inside the root (no leading `/`, no drive, no `..` that climbs out, and no `\` on
-  Windows, where it is the separator). Text that is no location — absolute, climbing, empty — gives
+  separators inside the root (not the root itself, no leading `/` or `\`, no drive, no UNC path,
+  no `..` that climbs out, and no other `\` on Windows, where it is the separator), published in
+  its normalised form (`docs/../a.md` is the location `a.md`). Text that is no location — absolute, climbing, empty — gives
   a finding with no location and keeps the value as `evidence.path`: the projection's own relations
   hold such values (`roots.path` is absolute; `realization_conditions.path` is `../`-prefixed for an
   outside-root closure reference), and a check over them reports at its declared severity. A value
@@ -379,20 +398,24 @@ the message and in the finding's `evidence`:
   no location and no evidence entry.
 - `finding_severity` — that row's severity, exactly `error`, `warning` or `info`; NULL or absent
   means the check's declared severity. A `resources.validation.severity` override on
-  `CUSTOM:<name>` still wins.
+  `CUSTOM:<name>` replaces the severity of EVERY row of that check — raising a row's `info` as
+  well as lowering its `error`.
 - `finding_line` — the finding's 1-based line; NULL or absent omits it.
 - `finding_column` — the finding's 1-based column within `finding_line`; it requires a line.
 
 Any other value in a reserved column fails the check as `RESOURCE_CHECK_BROKEN` — "ran and selected
 N rows, but row R's finding_severity = "high" is not one of error | warning | info" — and its entry in
-`data.checks` carries `broken: true` with `rows`. A column that matches a reserved name only
-case-insensitively (`Finding_Line`) gets one stderr warning per check, stays evidence, and is listed
+`data.checks` carries `broken: true` with `rows`. A column that nearly names a reserved one — the
+same once case and every `_` are removed (`Finding_Line`, `findingSeverity`), or the bare
+`severity`, `line` or `column` — gets one stderr warning per check, stays evidence, and is listed
 as the statement spelled it in that check's `data.checks` entry as `nearMisses: ["Finding_Line"]`
-(absent when there is none). It is read from the statement's columns, so it is listed however many
-rows the check selected — none included — and whether or not they could be read.
+(absent when there is none). It is read from the statement's columns before the statement runs, so
+it is listed however many rows the check selected — none included — whether or not they could be
+read, and on a check that threw as it ran.
 
 No projection relation has a column named `finding_severity`, `finding_line` or `finding_column`,
-so `SELECT *` or a join never sets one: a table's own `severity`, `line` or `column` is evidence.
+so `SELECT *` or a join never sets one: a table's own `severity`, `line` or `column` is evidence
+(and, as a near miss, warned about).
 Place a finding by aliasing deliberately — `SELECT r.path, b.line AS finding_line FROM …`.
 `path` is different: many relations carry one, and a `SELECT *` over a join of two of them returns
 two `path` columns, of which a row keeps only one — the rightmost. Name the `path` you mean

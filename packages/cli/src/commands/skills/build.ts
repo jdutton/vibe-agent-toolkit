@@ -67,7 +67,6 @@ import {
 } from '../../utils/issue-rendering.js';
 import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
-import { relativeLocationOrUndefined } from '../../utils/relativize-paths.js';
 import { withResourcePopulationSource } from '../../utils/resource-loader.js';
 import { verdictBanner } from '../../utils/run-integrity.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig, publishScope } from '../../utils/skill-packaging-config.js';
@@ -557,11 +556,6 @@ function reportPath(cwd: string, path: string): string {
   return toForwardSlash(safePath.relative(cwd, path));
 }
 
-/** A finding's `location` for `path`, or none when it has no `cwd`-relative spelling (another drive). */
-function reportLocation(cwd: string, path: string): string | undefined {
-  return relativeLocationOrUndefined(reportPath(cwd, path));
-}
-
 /**
  * Every issue ONE skill contributed, keyed by skill name: its pre-build
  * rejection, the packager's refusal of its content (as a `SKILL_PACKAGING_FAILED`
@@ -575,7 +569,7 @@ function issuesBySkill(input: SkillsBuildWorkInput): Map<string, ValidationIssue
   for (const { name, issues } of run.validationFailures) bySkill.set(name, [...issues]);
   for (const { name, message, error } of run.failures) {
     const source = sources.get(name);
-    bySkill.set(name, [packagingFailedIssue(message, source === undefined ? undefined : reportLocation(cwd, source), 'rebuild', error)]);
+    bySkill.set(name, [packagingFailedIssue(message, source === undefined ? undefined : reportPath(cwd, source), 'rebuild', error)]);
   }
   for (const { name, result } of run.results) bySkill.set(name, collectPostBuildIssues(result));
   return bySkill;
@@ -1288,7 +1282,7 @@ async function prepareBuild(
   const refusal = inPlaceSkillRefusal(options.skill, inPlace) ?? pluginOnlySkillRefusal(options.skill, pluginOnly);
   const target = [...inPlace, ...pluginOnly][0];
   if (refusal !== undefined && target !== undefined) {
-    const issue = notBuildableIssue(refusal.message, reportLocation(cwd, target.skill.sourcePath));
+    const issue = notBuildableIssue(refusal.message, reportPath(cwd, target.skill.sourcePath));
     reportFindings([issue], { verbose: true, write: logger.error });
     return { kind: 'done', report: earlyReport({ ...planned, setAsideIssues: [issue] }, startTime) };
   }
