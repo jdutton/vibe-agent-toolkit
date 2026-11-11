@@ -55,7 +55,7 @@ import {
   notAdmittedIssues,
   type ParseDispatcher,
   type RegistryUnreadablePolicy,
-  resolveNotAdmittedAmong,
+  partitionNotAdmitted,
   withParseDispatcher,
 } from '@vibe-agent-toolkit/resources';
 import {
@@ -713,7 +713,9 @@ async function validateSingleSkill(
     if (gitTracker !== null) {
       sharedCtx.gitTracker = gitTracker;
     }
-    const packagingResult = await validateSkillForPackaging(skillPath, skillConfig, 'source', sharedCtx);
+    // `{}`: audit resolves a file not admitted at its own boundary (`applySeverityFilter`), under
+    // the AUDITED project's `resources.validation` — never twice, never under a config found here.
+    const packagingResult = await validateSkillForPackaging(skillPath, {}, skillConfig, 'source', sharedCtx);
     const configAware = packagingResultToValidationResult(
       skillPath,
       packagingResult,
@@ -726,7 +728,7 @@ async function validateSingleSkill(
 
   // Fallback: basic validation. Severity is applied by `applySeverityFilter`.
   // The audited skill is the verb's input.
-  const validateOptions: ValidateOptions = { skillPath, locationRoot, validation: {}, side: 'source' };
+  const validateOptions: ValidateOptions = { skillPath, locationRoot, validation: {}, resourcesValidation: {}, side: 'source' };
   if (options.warnUnreferencedFiles) {
     validateOptions.checkUnreferencedFiles = true;
   }
@@ -1228,12 +1230,13 @@ function applySeverityFilter(
   const skillsConfig = config?.skills;
   // The one exception to "audit applies no allow list": a file the scan
   // enumerated and could not read or parse is resolved through the project's
-  // `resources.validation` allow list as in every other verb (`not-admitted.ts`).
-  const resourceAllow = config?.resources?.validation?.allow;
+  // `resources.validation` — its allow list AND its severity, and no other
+  // config's — as in every other verb (`not-admitted.ts`).
+  const resourceValidation = config?.resources?.validation ?? {};
   // NOT gated on `config.skills` existing. It was, and that made the resources
   // dial below inert for exactly the projects that have only one — a repo of
   // plugins declares no skills at all.
-  const resourceSeverity = config?.resources?.validation?.severity ?? {};
+  const resourceSeverity = resourceValidation.severity ?? {};
   const defaultSeverity = skillsConfig?.defaults?.validation?.severity ?? {};
   const projectSeverity: NonNullable<SeverityConfig['severity']> =
     { ...resourceSeverity, ...defaultSeverity };
@@ -1255,14 +1258,15 @@ function applySeverityFilter(
     const effectiveSeverity: NonNullable<SeverityConfig['severity']> =
       { ...projectSeverity, ...perSkillSeverity };
 
-    if (Object.keys(effectiveSeverity).length === 0 && resourceAllow === undefined) {
+    if (Object.keys(effectiveSeverity).length === 0 && resourceValidation.allow === undefined) {
       return result;
     }
 
-    const allowed = resourceAllow === undefined
-      ? result.issues
-      : resolveNotAdmittedAmong(result.issues, { allow: resourceAllow, severity: effectiveSeverity }, roots);
-    const resolvedIssues = resolveFindings(allowed, { severity: effectiveSeverity });
+    // In place, one at a time: the comparison below is by index.
+    const resolvedIssues = result.issues.flatMap((issue) => {
+      const { rest, notAdmitted } = partitionNotAdmitted([issue], resourceValidation, roots);
+      return [...resolveFindings(rest, { severity: effectiveSeverity }), ...notAdmitted];
+    });
 
     // Short-circuit only when NOTHING moved. Comparing lengths alone was the old
     // test, and it is blind to the promote direction by construction: a resolved
@@ -2915,7 +2919,8 @@ async function handleFileEntry(
       const sharedCtx: SkillValidationSharedContext = scanCtx.gitTracker === null
         ? { locationRoot, projectSkills, suiteProbe, unreadable, outputs: [] }
         : { gitTracker: scanCtx.gitTracker, locationRoot, projectSkills, suiteProbe, unreadable, outputs: [] };
-      const packagingResult = await validateSkillForPackaging(fullPath, skillConfig, 'source', sharedCtx);
+      // `{}`: resolved at audit's own boundary, as in the lane above.
+      const packagingResult = await validateSkillForPackaging(fullPath, {}, skillConfig, 'source', sharedCtx);
       const configAware = packagingResultToValidationResult(
         fullPath,
         packagingResult,
@@ -2928,7 +2933,7 @@ async function handleFileEntry(
 
     // Wild mode: basic validation. Severity is applied by `applySeverityFilter`.
     // The audited skill is the verb's input.
-    const validateOptions: ValidateOptions = { skillPath: fullPath, locationRoot, validation: {}, side: 'source' };
+    const validateOptions: ValidateOptions = { skillPath: fullPath, locationRoot, validation: {}, resourcesValidation: {}, side: 'source' };
     if (options.warnUnreferencedFiles) {
       validateOptions.checkUnreferencedFiles = true;
     }

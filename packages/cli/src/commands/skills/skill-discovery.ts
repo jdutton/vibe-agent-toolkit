@@ -63,12 +63,12 @@ const DISCOVERY_EXCLUDE = [
 ];
 
 /** What one SKILL.md read gave a lane: its parse, or the parse worker's refusal of it for this run. */
-export type SkillDocumentRead =
+type SkillDocumentRead =
   | { readonly kind: 'parsed'; readonly document: ParseResult }
   | { readonly kind: 'refused'; readonly refused: ParseRefusedResource };
 
 /** A skill's name, or the refusal that left it with none this run can read — never a fallback. */
-export type SkillNameRead =
+type SkillNameRead =
   | { readonly kind: 'named'; readonly name: string }
   | { readonly kind: 'refused'; readonly refused: ParseRefusedResource };
 
@@ -77,7 +77,7 @@ export type SkillNameRead =
  * worker refused for this run. Both required: a refused skill has no name to key its config
  * by, so each caller reports these through the not-admitted contract or refuses the run.
  */
-export interface SkillDiscovery {
+interface SkillDiscovery {
   readonly skills: DiscoveredSkill[];
   readonly parseRefused: readonly ParseRefusedResource[];
 }

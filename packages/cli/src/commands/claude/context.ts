@@ -115,7 +115,7 @@ import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
 import { Command, Option } from 'commander';
 
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
-import { loadConfig } from '../../utils/config-loader.js';
+import { loadConfigCached } from '../../utils/config-loader.js';
 import { targetPathWithin } from '../../utils/corpus-target.js';
 import { NOTHING_FINISHED, refusalReport, writeLegacyDocument } from '../../utils/document-writer.js';
 import { reportFindings } from '../../utils/issue-rendering.js';
@@ -455,28 +455,17 @@ export async function claudeContextCommand(
     // be told they mistyped.
     const requested = requestedTargets(root, pathArgs, options);
     const projection = await populateContext(root, logger);
-    let refused: readonly RefusedContextFile[];
-    if (sweep) {
-      // Every number in the map is decided in `@vibe-agent-toolkit/resources`.
-      // This branch calls one function and formats what it returns.
-      const map = buildContextCostMap(projection);
-      emit(costMapEnvelope(root, map), renderCostMapText(map), format);
-      refused = map.refused;
-    } else {
-      // ONE population, N queries. `whatLoadsAt` is a pure read of materialised
-      // tables, so the marginal cost of another path is a map lookup — which is
-      // the whole reason this command takes a list rather than being run twice.
-      const answers = requested.map(
-        (target) => documentFor(target, projection, root, options.discoverable === true),
-      );
-      emit(contextEnvelope(root, answers), renderEnvelopeText(answers), format);
-      refused = answers.flatMap((answer) => (answer.kind === 'answer' ? answer.refused : []));
-    }
+    const answer = sweep
+      ? sweepAnswer(root, projection)
+      : pathsAnswer(root, projection, requested, options.discoverable === true);
+    // Resolved BEFORE anything is written: a config that will not load here is
+    // a refusal with stdout still empty, never a second document after the answer.
+    const findings = refusedFindings(root, answer.refused);
+    emit(answer.document, answer.text, format);
     // ⛔ No threshold, and there is not going to be one — a number that fails a
     // build is a number people learn to stop reading. The one non-OK exit is an
     // answer VAT could not give (see the header). The explicit exit guarantees
     // the process ends rather than waiting on whatever the population left behind.
-    const findings = refusedFindings(root, refused);
     reportFindings(findings, { verbose: true, write: logger.warn });
     process.exit(exitCodeForReport(refusedVerdict(findings)));
   } catch (error) {
@@ -487,12 +476,39 @@ export async function claudeContextCommand(
   }
 }
 
+/** One run's answer, built and not yet written: the document, its text rendering, and the refused files it reached. */
+interface ContextAnswer {
+  readonly document: unknown;
+  readonly text: string;
+  readonly refused: readonly RefusedContextFile[];
+}
+
+/** `--all`: every number in the map is decided in `@vibe-agent-toolkit/resources`; this formats what it returns. */
+function sweepAnswer(root: string, projection: Projection): ContextAnswer {
+  const map = buildContextCostMap(projection);
+  return { document: costMapEnvelope(root, map), text: renderCostMapText(map), refused: map.refused };
+}
+
+/**
+ * ONE population, N queries. `whatLoadsAt` is a pure read of materialised
+ * tables, so the marginal cost of another path is a map lookup — which is the
+ * whole reason this command takes a list rather than being run twice.
+ */
+function pathsAnswer(root: string, projection: Projection, requested: readonly string[], discoverable: boolean): ContextAnswer {
+  const answers = requested.map((target) => documentFor(target, projection, root, discoverable));
+  return {
+    document: contextEnvelope(root, answers),
+    text: renderEnvelopeText(answers),
+    refused: answers.flatMap((answer) => (answer.kind === 'answer' ? answer.refused : [])),
+  };
+}
+
 /**
  * Every reached file whose facts were refused, as the not-admitted contract
  * reports it, resolved through the project's `resources.validation`.
  *
- * The config is read only when something was refused: a run with nothing to
- * resolve asks it nothing, as it always did.
+ * The config is asked only when something was refused, through the same
+ * cached load the population made — one answer per root, no second read.
  *
  * @param root - The corpus root
  * @param refused - The refused files the run's answers reached, possibly repeated
@@ -507,7 +523,7 @@ function refusedFindings(root: string, refused: readonly RefusedContextFile[]): 
       parseRefused: [...byPath.values()].map(({ path, code, reason }) => ({ filePath: safePath.resolve(root, path), code, reason })),
     },
     { locationRoot: root, consequence: 'whether and how much it loads into context was not measured' },
-    loadConfig(root, 'source')?.resources?.validation ?? {},
+    loadConfigCached(root, 'source')?.resources?.validation ?? {},
   );
 }
 

@@ -139,6 +139,7 @@ const BARREL_EXPORTS = [
   'detectPresentButUndeclared',
   'detectReferenceTargetMissing',
   'detectResourceFormat',
+  'detectorFrontmatter',
   'droppedGlobMatchesToIssues',
   'enumerateSurfaces',
   'evalSuiteUnitPath',

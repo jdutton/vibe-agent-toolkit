@@ -174,15 +174,13 @@ const DIRECT_PARSE_REPORTERS: Readonly<Record<string, string>> = {
  * themselves, with how it still reaches the user.
  */
 const DIRECT_PARSE_NOT_REPORTED_HERE: Readonly<Record<string, string>> = {
-  'packages/agent-skills/src/post-build-checks.ts':
-    'Checks the PACKAGED output VAT just wrote; a refused parse there throws and fails the build loud — there is no adopter file to allow-list.',
   'packages/agent-skills/src/parsers/frontmatter-parser.ts':
     'Defines `parseFrontmatter`: it returns the refusal as its result\'s `cause`, and each caller is held by this same rule at its own call site.',
   'packages/agent-skills/src/skill-identity.ts':
     'Defines the name readers: `declaredSkillNameIn` rethrows a refused parse, and each caller is held by this same rule at its own call site.',
   'packages/agent-skills/src/validators/compat-detectors.ts':
-    '`allowedToolsDeclarations` rethrows a refused parse. Every lane that reaches it parsed the same file first and reported the refusal there; '
-    + 'the compatibility analyzer names the file under `unchecked`.',
+    '`detectorFrontmatter` rethrows a refused parse for the one caller with no parse of its own — the compatibility analyzer, which names '
+    + 'the file under `unchecked`. Every skill lane hands the detectors the frontmatter its own parse returned.',
   'packages/agent-skills/src/import.ts':
     '`vat agent import` converts the one SKILL.md the user named: a refused parse refuses the run (`INPUT_UNREADABLE`) with the parser\'s sentence. '
     + 'There is no project allow list to consult.',
@@ -205,13 +203,21 @@ function continuesName(char: string | undefined): boolean {
 }
 
 /**
+ * Whether the name at `at` in `body` continues another name or a member access. A spread
+ * (`...x(`) is neither: it is a call to `x`, which a bare `continuesName` read as `.x(`.
+ */
+function precededByName(body: string, at: number): boolean {
+  return continuesName(body[at - 1]) && !body.slice(0, at).endsWith('...');
+}
+
+/**
  * Whether `body` calls the free function `name` — never its definition, never a
  * method of that name, never a backquoted mention in a message string.
  */
 function callsFunction(body: string, name: string): boolean {
   const call = `${name}(`;
   for (let at = body.indexOf(call); at !== -1; at = body.indexOf(call, at + 1)) {
-    if (!continuesName(body[at - 1]) && body[at - 1] !== '`' && !body.slice(0, at).endsWith('function ')) return true;
+    if (!precededByName(body, at) && body[at - 1] !== '`' && !body.slice(0, at).endsWith('function ')) return true;
   }
   return false;
 }
@@ -355,7 +361,7 @@ describe('every population reports its parse refusals', () => {
 function keepsResultOf(body: string, call: string): boolean {
   for (let at = body.indexOf(call); at !== -1; at = body.indexOf(call, at + 1)) {
     const before = body.slice(body.lastIndexOf('\n', at) + 1, at).trim();
-    if (!['', 'await', 'void'].includes(before) && !continuesName(body[at - 1])) return true;
+    if (!['', 'await', 'void'].includes(before) && !precededByName(body, at)) return true;
   }
   return false;
 }
@@ -378,6 +384,11 @@ describe('every direct parse reports its refusal through the one contract', () =
       'packages/cli/src/commands/claude/plugin/install.ts',
       'packages/claude-marketplace/src/inventory/extract-skill.ts',
     ]));
+  });
+
+  it('reads a spread call as a call, and a member call as none', () => {
+    expect(callsFunction('  issues.push(...notAdmittedIssues(paths));\n', 'notAdmittedIssues')).toBe(true);
+    expect(callsFunction('  issues.push(lane.notAdmittedIssues(paths));\n', 'notAdmittedIssues')).toBe(false);
   });
 
   it('keeps a classified refusal only when the result is used', () => {
@@ -409,5 +420,217 @@ describe('every direct parse reports its refusal through the one contract', () =
         || !(readsAny(body, CONTRACT_READS) || keepsResultOf(body, CONTRACT_CLASSIFIER));
     });
     expect(stale).toEqual([]);
+  });
+});
+
+/**
+ * The producers of a not-admitted finding left at its default severity:
+ * `RESOURCE_UNREADABLE`, `RESOURCE_PARSE_LIMIT_EXCEEDED`, `RESOURCE_PARSE_WORKER_DIED`.
+ */
+const UNRESOLVED_PRODUCERS = ['notAdmittedIssues', 'parseRefusalIssue', 'parseRefusedIssues'] as const;
+
+/**
+ * The resolvers: each settles those codes through the project's
+ * `resources.validation` alone, never through a skill's `validation`.
+ */
+const NOT_ADMITTED_RESOLVERS = ['notAdmittedFindings', 'partitionNotAdmitted', 'resolveNotAdmittedAmong'] as const;
+
+/** Where the producers and resolvers are defined. */
+const NOT_ADMITTED_OWNERS = new Set(['packages/resources/src/not-admitted.ts', 'packages/agent-skills/src/parse-refusal-issues.ts']);
+
+/**
+ * Files that produce an unresolved not-admitted finding and resolve none
+ * themselves, with where it is resolved under `resources.validation`.
+ */
+const RESOLVED_ELSEWHERE: Readonly<Record<string, string>> = {
+  'packages/resources/src/resource-registry.ts':
+    '`validate()` runs the framework over them under the config it was given — `resources.validation`, the codes\' one owner.',
+  'packages/agent-skills/src/validators/referenced-path-missing.ts':
+    'a post-build check: the packager splits its findings with `partitionNotAdmitted` (under no config — a refused file never ships) before the skill\'s framework sees them.',
+  'packages/agent-skills/src/post-build-checks.ts':
+    'a post-build check, as above; `vat build`\'s shipped-links lane reports its findings at their default severity, under no config.',
+};
+
+/**
+ * The calls that resolve findings under a SKILL's (or a lane's own) `validation`.
+ * In a producer file, each must be handed only what a not-admitted split left —
+ * a finding these codes produce reaching one is resolved by the wrong owner.
+ */
+const FRAMEWORK_CALLS = ['runSingleUnitValidation', 'runValidationFramework', 'resolveFindings'] as const;
+
+/** The splits whose `rest` is a framework input free of not-admitted findings. */
+const NOT_ADMITTED_SPLITS = ['partitionNotAdmitted'] as const;
+
+/**
+ * Framework inputs in a producer file that are not a split's remainder, with why
+ * no not-admitted finding can be among them. Keyed `file` → input text.
+ */
+const FRAMEWORK_INPUTS_CLEAR: Readonly<Record<string, Readonly<Record<string, string>>>> = {};
+
+/**
+ * Producer files whose framework runs under `resources.validation` itself, so every
+ * input is already resolved by its owner. Asserted to still produce.
+ */
+const FRAMEWORK_IS_RESOURCES_VALIDATION = new Set(['packages/resources/src/resource-registry.ts']);
+
+/** The first argument of the call whose `(` is at `open`, as written. */
+function firstArgument(body: string, open: number): string {
+  let depth = 0;
+  for (let at = open + 1; at < body.length; at++) {
+    const char = body[at];
+    if (char === '(' || char === '[' || char === '{') depth++;
+    else if (char === ')' || char === ']' || char === '}') {
+      if (depth === 0) return body.slice(open + 1, at).trim();
+      depth--;
+    } else if (char === ',' && depth === 0) return body.slice(open + 1, at).trim();
+  }
+  return body.slice(open + 1).trim();
+}
+
+/** The elements an argument hands in: an array literal's entries (spreads unwrapped), or the argument itself. */
+function argumentElements(argument: string): string[] {
+  if (!argument.startsWith('[') || !argument.endsWith(']')) return [argument];
+  const inner = argument.slice(1, -1);
+  const elements: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let at = 0; at <= inner.length; at++) {
+    const char = inner[at];
+    if (char === '(' || char === '[' || char === '{') depth++;
+    else if (char === ')' || char === ']' || char === '}') depth--;
+    else if ((char === ',' && depth === 0) || at === inner.length) {
+      const element = inner.slice(start, at).trim().replace(/^\.\.\./, '');
+      if (element.length > 0) elements.push(element);
+      start = at + 1;
+    }
+  }
+  return elements;
+}
+
+/**
+ * What the one-line `const <binding> = [await] <split>(` that a split call at `at` opens binds,
+ * or `undefined` when the call is not so bound.
+ */
+function splitBinding(body: string, at: number): string | undefined {
+  const head = body.slice(body.lastIndexOf('\n', at) + 1, at).trim();
+  if (!head.startsWith('const ') || !head.endsWith('=') && !head.endsWith('= await')) return undefined;
+  return head.slice('const '.length, head.lastIndexOf('=')).trim();
+}
+
+/** The names `body` binds to a not-admitted split's remainder: `rest` destructured (or renamed), or `<split>.rest`. */
+function splitRemainders(body: string): Set<string> {
+  const remainders = new Set<string>();
+  for (const split of NOT_ADMITTED_SPLITS) {
+    for (let at = body.indexOf(`${split}(`); at !== -1; at = body.indexOf(`${split}(`, at + 1)) {
+      if (precededByName(body, at)) continue;
+      const binding = splitBinding(body, at);
+      if (binding === undefined) continue;
+      if (!binding.startsWith('{')) {
+        remainders.add(`${binding}.rest`);
+        continue;
+      }
+      for (const entry of binding.slice(1, -1).split(',')) {
+        const [key, renamed] = entry.split(':').map((part) => part.trim());
+        if (key === 'rest') remainders.add(renamed ?? key);
+      }
+    }
+  }
+  return remainders;
+}
+
+/**
+ * Every framework input in `body` that is neither a split's remainder nor listed
+ * as clear for `file`, as `call(input)`.
+ */
+function unsplitFrameworkInputs(file: string, body: string): string[] {
+  const remainders = splitRemainders(body);
+  const clear = FRAMEWORK_INPUTS_CLEAR[file] ?? {};
+  const found: string[] = [];
+  for (const name of FRAMEWORK_CALLS) {
+    const call = `${name}(`;
+    for (let at = body.indexOf(call); at !== -1; at = body.indexOf(call, at + 1)) {
+      if (precededByName(body, at) || body.slice(0, at).endsWith('function ')) continue;
+      for (const element of argumentElements(firstArgument(body, at + name.length))) {
+        if (!remainders.has(element) && clear[element] === undefined) found.push(`${name}(${element})`);
+      }
+    }
+  }
+  return found;
+}
+
+describe('every not-admitted finding resolves under resources.validation, never a skill\'s validation', () => {
+  const files = new Map([...packageSources()].map(([file, text]) => [file, code(text)]));
+  const produces = (body: string): boolean => UNRESOLVED_PRODUCERS.some((name) => callsFunction(body, name));
+  const resolves = (body: string): boolean => NOT_ADMITTED_RESOLVERS.some((name) => callsFunction(body, name));
+  const producers = [...files].filter(([file, body]) => !NOT_ADMITTED_OWNERS.has(file) && produces(body));
+
+  it('finds the producers — at least both skill validators and audit', () => {
+    expect(producers.map(([file]) => file)).toEqual(expect.arrayContaining([
+      'packages/agent-skills/src/validators/packaging-validator.ts',
+      'packages/agent-skills/src/validators/skill-validator.ts',
+      'packages/cli/src/commands/audit.ts',
+    ]));
+  });
+
+  it('resolves through a resources.validation resolver, or is listed as resolved elsewhere', () => {
+    const unresolved = producers
+      .filter(([file, body]) => !resolves(body) && RESOLVED_ELSEWHERE[file] === undefined)
+      .map(([file]) => file);
+    expect(unresolved).toEqual([]);
+  });
+
+  it('lists as resolved elsewhere only files that still produce and do not resolve', () => {
+    const stale = Object.keys(RESOLVED_ELSEWHERE).filter((file) => {
+      const body = files.get(file);
+      return body === undefined || !produces(body) || resolves(body);
+    });
+    expect(stale).toEqual([]);
+  });
+
+  // The file-coarse check above passes a file that calls a resolver ANYWHERE. This one holds each
+  // framework call: a not-admitted finding handed to a skill's framework is resolved by the skill.
+  it('hands every framework call in a producer file only a not-admitted split\'s remainder', () => {
+    const leaks = producers
+      .filter(([file]) => !FRAMEWORK_IS_RESOURCES_VALIDATION.has(file))
+      .flatMap(([file, body]) => unsplitFrameworkInputs(file, body).map((input) => `${file}: ${input}`));
+    expect(leaks).toEqual([]);
+  });
+
+  it('lists as clear only inputs a producer file still hands a framework call', () => {
+    const stale = Object.entries(FRAMEWORK_INPUTS_CLEAR).flatMap(([file, inputs]) => {
+      const body = files.get(file) ?? '';
+      const handed = new Set(FRAMEWORK_CALLS.flatMap((name) => {
+        const elements: string[] = [];
+        for (let at = body.indexOf(`${name}(`); at !== -1; at = body.indexOf(`${name}(`, at + 1)) {
+          elements.push(...argumentElements(firstArgument(body, at + name.length)));
+        }
+        return elements;
+      }));
+      return Object.keys(inputs).filter((input) => !produces(body) || !handed.has(input)).map((input) => `${file}: ${input}`);
+    });
+    expect(stale).toEqual([]);
+  });
+
+  it('lists as framed by resources.validation only files that still produce', () => {
+    expect([...FRAMEWORK_IS_RESOURCES_VALIDATION].filter((file) => !produces(files.get(file) ?? ''))).toEqual([]);
+  });
+
+  // The shape `vat audit` had: an allow-only filter, then the skill's severity over the not-admitted
+  // findings it left — a `resources.validation` severity overridden by `skills.defaults`.
+  it('flags a framework call handed findings no split removed', () => {
+    const leaky = [
+      '  const allowed = resolveNotAdmittedAmong(result.issues, config, roots);',
+      '  const resolvedIssues = resolveFindings(allowed, { severity });',
+    ].join('\n');
+    expect(unsplitFrameworkInputs('x.ts', leaky)).toEqual(['resolveFindings(allowed)']);
+
+    const split = [
+      '  const { rest, notAdmitted } = partitionNotAdmitted([issue], resourceValidation, roots);',
+      '  return [...resolveFindings(rest, { severity }), ...notAdmitted];',
+      '  const parts = partitionNotAdmitted(issues, v, roots);',
+      '  runSingleUnitValidation(parts.rest, v);',
+      '  runValidationFramework([...rawLinkIssues, ...rest], v, ledger);',
+    ].join('\n');
+    expect(unsplitFrameworkInputs('x.ts', split)).toEqual(['runValidationFramework(rawLinkIssues)']);
   });
 });

@@ -68,8 +68,10 @@ export {
   notAdmittedIssues,
   parseRefusedEntry,
   parseRefusedMessage,
+  partitionNotAdmitted,
   resolveNotAdmittedAmong,
   type NotAdmittedLog,
+  type NotAdmittedRoots,
   type NotAdmittedWording,
 } from './not-admitted.js';
 

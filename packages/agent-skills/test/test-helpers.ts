@@ -148,7 +148,7 @@ export function createSkillAndValidate(
 ): Promise<ValidationResult> {
   const skillPath = safePath.join(tempDir, 'SKILL.md');
   fs.writeFileSync(skillPath, content);
-  return validateSkill({ side: 'source', skillPath, validation: {} });
+  return validateSkill({ resourcesValidation: {}, side: 'source', skillPath, validation: {} });
 }
 
 /**
@@ -197,7 +197,7 @@ export function validateSkillWithTransitiveChecking(
   skillPath: string,
   rootDir?: string,
 ): Promise<ValidationResult> {
-  return validateSkill({
+  return validateSkill({ resourcesValidation: {},
     side: 'source',
     skillPath,
     rootDir: rootDir ?? path.dirname(skillPath),
@@ -216,7 +216,7 @@ export function validateSkillWithUnreferencedFileCheck(
   skillPath: string,
   rootDir: string,
 ): Promise<ValidationResult> {
-  return validateSkill({
+  return validateSkill({ resourcesValidation: {},
     side: 'source',
     skillPath,
     rootDir,
@@ -566,7 +566,7 @@ export async function setupPackagingValidationTest(
 	const content = createSkillContent(contentOptions, bodyContent);
 	const { skillPath } = createTransitiveSkillStructure(tempDir, linkedFiles, content);
 
-	return validateSkillForPackaging(skillPath, metadata as never);
+	return validateSkillForPackaging(skillPath, {}, metadata as never);
 }
 
 /**
@@ -595,7 +595,7 @@ export async function setupTransitiveValidationTest(
 	const skillContent = createSkillContent(contentOptions, skillBody);
 	const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
 
-	return validateSkillForPackaging(skillPath);
+	return validateSkillForPackaging(skillPath, {});
 }
 
 /**
@@ -624,7 +624,7 @@ export async function setupNavigationValidationTest(
 	const skillContent = createSkillContent(contentOptions, skillBody);
 	const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
 
-	const result = await validateSkillForPackaging(skillPath);
+	const result = await validateSkillForPackaging(skillPath, {});
 
 	return {
 		result,

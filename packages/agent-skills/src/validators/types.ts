@@ -109,6 +109,16 @@ export interface ValidateOptions {
   validation: ValidationConfig;
 
   /**
+   * The project's `resources.validation`, as the VERB resolved it: the one config
+   * that settles a file not admitted (`RESOURCE_UNREADABLE`,
+   * `RESOURCE_PARSE_LIMIT_EXCEEDED`, `RESOURCE_PARSE_WORKER_DIED`) — never
+   * `validation` above. REQUIRED: only the verb knows which config governs the
+   * run; `{}` when none does, or when the caller resolves these codes itself
+   * (`vat audit`).
+   */
+  resourcesValidation: ValidationConfig;
+
+  /**
    * The side of the caller's verb the skill tree is on: `source` for an author's skill, `environment`
    * for one VAT extracted into its own staging (a ZIP under $TMPDIR). REQUIRED: a fault the validator's
    * own walk raises is classified there, and only the caller knows which tree it handed over.

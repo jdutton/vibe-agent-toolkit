@@ -4,6 +4,8 @@ import { basename, dirname } from 'node:path';
 import {
   classifyParseFailure,
   isLocalFileLink,
+  type NotAdmittedRoots,
+  partitionNotAdmitted,
   parseFileCached,
   type ParseDispatcher,
   resolveLocalHref,
@@ -79,8 +81,14 @@ async function validateSkillOn(options: ValidateOptions, dispatcher: ParseDispat
   // `validateSkillForPackaging` uses (config root -> git root -> skill dir) so
   // the two skills-lane entry points cannot disagree about the coordinate
   // system their issues are expressed in.
-  const locationRoot = options.locationRoot ?? findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
+  const projectRoot = findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
+  const locationRoot = options.locationRoot ?? projectRoot;
   const skillLocation = issueLocation(skillPath, locationRoot);
+  const policy: ResultPolicy = {
+    validation: options.validation,
+    resourcesValidation: options.resourcesValidation,
+    roots: { locationRoot, projectRoot },
+  };
 
   const issues: ValidationIssue[] = [];
   const allEvidence: EvidenceRecord[] = [];
@@ -94,7 +102,7 @@ async function validateSkillOn(options: ValidateOptions, dispatcher: ParseDispat
       message: 'File does not exist',
       location: skillLocation,
     });
-    return buildResult(skillPath, isVATGenerated, issues, options.validation);
+    return buildResult(skillPath, isVATGenerated, issues, policy);
   }
 
   // Read file
@@ -116,7 +124,7 @@ async function validateSkillOn(options: ValidateOptions, dispatcher: ParseDispat
       fix: 'Add YAML frontmatter with name and description fields',
     });
 
-    return buildResult(skillPath, isVATGenerated, issues, options.validation, { lineCount });
+    return buildResult(skillPath, isVATGenerated, issues, policy, { lineCount });
   }
 
   const { frontmatter } = parseResult;
@@ -151,7 +159,7 @@ async function validateSkillOn(options: ValidateOptions, dispatcher: ParseDispat
   // Compat capability detection: collect raw evidence, derive observations,
   // surface each observation as an issue (severity comes from CODE_REGISTRY).
   const { evidence: rootEvidence, observations: rootObservations } =
-    await runCompatDetectors(content, skillPath, locationRoot, { dispatcher });
+    runCompatDetectors(content, skillPath, locationRoot, frontmatter);
   allEvidence.push(...rootEvidence);
   for (const obs of rootObservations) {
     issues.push(observationToIssue(obs, skillLocation));
@@ -194,7 +202,7 @@ async function validateSkillOn(options: ValidateOptions, dispatcher: ParseDispat
   // Build metadata
   const metadata = buildMetadata(frontmatter, lineCount);
 
-  const result = buildResult(skillPath, isVATGenerated, issues, options.validation, metadata);
+  const result = buildResult(skillPath, isVATGenerated, issues, policy, metadata);
 
   if (linkedFiles.length > 0) {
     // Derived from the RESOLVED issues, so an ignored finding cannot resurface here.
@@ -435,7 +443,7 @@ async function traverseLinks(
     if (currentPath !== resolvedSkillPath) {
       const linkedContent = fs.readFileSync(currentPath, 'utf-8');
       const { evidence: linkedEvidence, observations: linkedObservations } =
-        await runCompatDetectors(linkedContent, currentPath, locationRoot, { dispatcher });
+        runCompatDetectors(linkedContent, currentPath, locationRoot, parseResult.frontmatter);
       allEvidence.push(...linkedEvidence);
       issues.push(...linkedObservations.map(obs => observationToIssue(obs, issueLocation(currentPath, locationRoot))));
       // Same detector on each linked file, mirroring the per-bundled-file call
@@ -752,15 +760,26 @@ function buildMetadata(
   return metadata;
 }
 
-/** The ONE exit for this lane: resolves every issue against `validation`. */
+/** What resolves this lane's findings: the skill's `validation`, and the project's `resources.validation` for a file not admitted. */
+interface ResultPolicy {
+  readonly validation: ValidationConfig;
+  readonly resourcesValidation: ValidationConfig;
+  readonly roots: NotAdmittedRoots;
+}
+
+/**
+ * The ONE exit for this lane: resolves every issue against `validation`, except
+ * a file not admitted — that is `resources.validation`'s alone (`partitionNotAdmitted`).
+ */
 function buildResult(
   skillPath: string,
   isVATGenerated: boolean,
   rawIssues: readonly ValidationIssue[],
-  validation: ValidationConfig,
+  policy: ResultPolicy,
   metadata?: ValidationResult['metadata']
 ): ValidationResult {
-  const issues = runSingleUnitValidation(rawIssues, validation).emitted;
+  const { rest, notAdmitted } = partitionNotAdmitted(rawIssues, policy.resourcesValidation, policy.roots);
+  const issues = [...runSingleUnitValidation(rest, policy.validation).emitted, ...notAdmitted];
   const result: ValidationResult = {
     path: skillPath,
     type: isVATGenerated ? 'vat-agent' : 'agent-skill',

@@ -11,8 +11,8 @@ import { basename, dirname } from 'node:path';
 import { materializeIssue, readDeclaredSkillName } from '@vibe-agent-toolkit/agent-skills';
 import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { scan, type ScanSummary } from '@vibe-agent-toolkit/discovery';
-import { notAdmittedIssues, type ParseDispatcher, type ParseRefusedResource, parseRefusedEntryFor, withParseDispatcher } from '@vibe-agent-toolkit/resources';
-import { buildReport, toFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { notAdmittedFindings, type ParseDispatcher, type ParseRefusedResource, parseRefusedEntryFor, withParseDispatcher } from '@vibe-agent-toolkit/resources';
+import { buildReport, toFindings, type ValidationConfig, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { direntKindFollowingSync, isTreeChangeResidue, mapInOrder, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
 
@@ -108,6 +108,8 @@ interface Listing extends ListedSkills {
   leftovers: readonly ValidationIssue[];
   /** Search roots scanned — see `SKILLS_LIST_EXAMINED`. */
   examined: number;
+  /** The project's `resources.validation`, which resolves a SKILL.md not admitted; `{}` outside a project. */
+  validation: ValidationConfig;
 }
 
 /**
@@ -141,9 +143,10 @@ export function buildSkillsListReport(listing: Listing, durationMs: number): Ski
     findings: [
       ...toFindings(listing.unreadable.map((refusal) => unlistableDirectoryFinding(refusal, listing.root))),
       ...toFindings(listing.leftovers),
-      ...toFindings(notAdmittedIssues(
+      ...toFindings(notAdmittedFindings(
         { unreadable: [], parseRefused: listing.parseRefused },
         { locationRoot: listing.root, consequence: 'it is missing from this list' },
+        listing.validation,
       )),
     ],
     data: {
@@ -234,7 +237,7 @@ async function listFromNpmSource(source: string, logger: ReturnType<typeof creat
   // statement, not a default: this is one listing of a tree this process just
   // extracted, and a listing it cannot read refuses the run instead.
   const { value: listed, leftovers } = await withResolvedTempDirs(resolved.tempDirs, () => scanSkillsDir(resolved.skillsDir));
-  return { ...listed, context: 'npm', root: resolved.skillsDir, unreadable: [], leftovers, examined: 1 };
+  return { ...listed, context: 'npm', root: resolved.skillsDir, unreadable: [], leftovers, examined: 1, validation: {} };
 }
 
 /** `--user`: Claude's `plugins/` and `skills/` directories — both scanned, an absent one empty. */
@@ -251,6 +254,7 @@ async function listUserSkills(logger: ReturnType<typeof createLogger>): Promise<
     unreadable,
     leftovers: [],
     examined: USER_SEARCH_ROOTS,
+    validation: {},
   };
 }
 
@@ -277,6 +281,7 @@ async function listProjectSkills(pathArg: string | undefined, logger: ReturnType
     unreadable: scanResult.unreadable,
     leftovers: [],
     examined: 1,
+    validation: config?.resources?.validation ?? {},
   };
 }
 

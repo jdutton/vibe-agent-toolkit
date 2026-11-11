@@ -8,7 +8,6 @@
  */
 
 import { runCompatDetectors, type EvidenceRecord } from '@vibe-agent-toolkit/agent-skills';
-import type { ParseRoute } from '@vibe-agent-toolkit/resources';
 
 const FRONTMATTER_PATTERN_IDS: ReadonlySet<string> = new Set([
   'ALLOWED_TOOLS_LOCAL_SHELL',
@@ -17,15 +16,15 @@ const FRONTMATTER_PATTERN_IDS: ReadonlySet<string> = new Set([
 
 /**
  * Scan SKILL.md frontmatter (and prose tool references) for compatibility
- * signals. Returns evidence records for each matched pattern. `route` is the
- * run's parse dispatcher.
+ * signals. Returns evidence records for each matched pattern. `frontmatter` is the
+ * caller's one parse of it.
  */
-export async function scanFrontmatter(
+export function scanFrontmatter(
   content: string,
   filePath: string,
   locationRoot: string,
-  route: ParseRoute,
-): Promise<EvidenceRecord[]> {
-  const { evidence } = await runCompatDetectors(content, filePath, locationRoot, route);
+  frontmatter: Readonly<Record<string, unknown>> | undefined,
+): EvidenceRecord[] {
+  const { evidence } = runCompatDetectors(content, filePath, locationRoot, frontmatter);
   return evidence.filter(e => FRONTMATTER_PATTERN_IDS.has(e.patternId));
 }

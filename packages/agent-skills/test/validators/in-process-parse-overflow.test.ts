@@ -81,7 +81,7 @@ describe('validateSkillForPackaging (the build / skills-validate lane)', () => {
   it('reports a SKILL.md that overflows the parse as an error finding instead of throwing', async () => {
     const { skillPath } = createTransitiveSkillStructure(getTempDir(), {}, DEEP_FRONTMATTER);
 
-    const result = await validateSkillForPackaging(skillPath);
+    const result = await validateSkillForPackaging(skillPath, {});
 
     const found = activeErrorsOf(result).filter((issue) => issue.code === LIMIT);
     expect(found).toHaveLength(1);

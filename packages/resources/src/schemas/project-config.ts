@@ -8,6 +8,7 @@ import {
   isArdNameSegment,
   isArdPublisherDomain,
 } from '../ard/entry-schema.js';
+import { NOT_ADMITTED_CODE_LIST } from '../not-admitted.js';
 import { BUILTIN_CHECK_NAMES } from '../projection/builtin-check-names.js';
 
 import { LinkAuthConfigSchema } from './link-auth.js';
@@ -435,6 +436,27 @@ export const TestConfigSchema = z.object({
 export type TestConfig = z.infer<typeof TestConfigSchema>;
 
 /**
+ * A skill's `validation`: the shared framework config, less the codes a file not
+ * admitted is reported under. Those resolve under `resources.validation` alone —
+ * every skill lane splits them out before its own framework runs — so a skill
+ * key naming one would parse and do nothing. Refused here, naming where it goes.
+ */
+const SkillValidationConfigSchema = ValidationConfigSchema.superRefine((config, context) => {
+  for (const field of ['severity', 'allow'] as const) {
+    for (const code of Object.keys(config[field] ?? {})) {
+      if (!(NOT_ADMITTED_CODE_LIST as readonly string[]).includes(code)) continue;
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [field, code],
+        message: `\`${code}\` reports a file the resource crawl did not admit, and only`
+          + ' `resources.validation` resolves it — a skill\'s `validation` never sees it.'
+          + ` Move this \`${field}\` entry to \`resources.validation.${field}\`.`,
+      });
+    }
+  }
+});
+
+/**
  * Skill packaging configuration.
  *
  * Controls how a skill is bundled: link-follow depth, resource naming,
@@ -448,8 +470,8 @@ export const SkillPackagingConfigSchema = z.object({
   stripPrefix: z.string().optional(),
   excludeNavigationFiles: z.boolean().optional(),
   excludeReferencesFromBundle: ExcludeReferencesFromBundleSchema.optional(),
-  validation: ValidationConfigSchema.optional()
-    .describe('Validation framework config: severity overrides and per-path allow entries'),
+  validation: SkillValidationConfigSchema.optional()
+    .describe('Validation framework config: severity overrides and per-path allow entries. Not the codes of a file not admitted (RESOURCE_UNREADABLE, RESOURCE_PARSE_LIMIT_EXCEEDED, RESOURCE_PARSE_WORKER_DIED): those belong in resources.validation.'),
   targets: z.array(z.enum(['claude-chat', 'claude-cowork', 'claude-code'])).optional()
     .describe('Declared runtime targets for this skill. Suppresses non-applicable compat verdicts.'),
   files: z.array(SkillFileEntrySchema).optional().describe('Explicit source→dest file mappings for build artifacts, unlinked files, or routing overrides'),

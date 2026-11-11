@@ -282,6 +282,7 @@ const BARREL_EXPORTS = [
   'parseRefusedEntryFor',
   'parseRefusedMessage',
   'parserKindForPath',
+  'partitionNotAdmitted',
   'pluginRootsFrom',
   'populate',
   'populateBlobs',

@@ -267,7 +267,7 @@ describe('validateSkillForPackaging — routes its private crawl through the sha
   it('walks the whole chain when no source is supplied', async () => {
     const { skillPath } = chainRoot();
 
-    const result = await validateSkillForPackaging(skillPath);
+    const result = await validateSkillForPackaging(skillPath, {});
 
     expect(result.metadata.fileCount).toBe(3);
     expect(result.metadata.maxLinkDepth).toBe(2);
@@ -282,7 +282,7 @@ describe('validateSkillForPackaging — routes its private crawl through the sha
     // stops dead rather than one hop short, which is why the bundled depth is 0.
     const { source, calls } = countingSource(root, ['SKILL.md', 'b.md']);
 
-    const result = await validateSkillForPackaging(skillPath, undefined, 'source', {
+    const result = await validateSkillForPackaging(skillPath, {}, undefined, 'source', {
       unreadable: 'refuse',
       outputs: [],
       populationSource: source,
@@ -300,8 +300,8 @@ describe('validateSkillForPackaging — routes its private crawl through the sha
     const { source, calls } = countingSource(root, ['SKILL.md', 'a.md', 'b.md']);
     const shared = { unreadable: 'refuse', outputs: [], populationSource: source } as const;
 
-    await validateSkillForPackaging(skillPath, undefined, 'source', shared);
-    await validateSkillForPackaging(skillPath, undefined, 'source', shared);
+    await validateSkillForPackaging(skillPath, {}, undefined, 'source', shared);
+    await validateSkillForPackaging(skillPath, {}, undefined, 'source', shared);
 
     expect(calls()).toBe(2);
   });
@@ -560,7 +560,7 @@ describe('validateSkillForPackaging — the calling verb declares the side of th
     resetPackagingRegistryCache();
     const { root, skillPath } = chainRoot();
 
-    await expect(withReaddirSyncRefused(root, 'ENOENT', () => validateSkillForPackaging(skillPath, undefined, 'source', { unreadable: 'refuse', outputs: [safePath.join(root, 'dist')] })))
+    await expect(withReaddirSyncRefused(root, 'ENOENT', () => validateSkillForPackaging(skillPath, {}, undefined, 'source', { unreadable: 'refuse', outputs: [safePath.join(root, 'dist')] })))
       .rejects.toMatchObject({ code: FS_FAULT_CODE, side: 'destination', faultClass: 'absent' });
   });
 });

@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
 
-import type { EvidenceRecord, Observation } from '@vibe-agent-toolkit/agent-skills';
+import { detectorFrontmatter, type EvidenceRecord, type Observation } from '@vibe-agent-toolkit/agent-skills';
 import { classifyParseFailure, type ParseDispatcher, type ParseFailureKind } from '@vibe-agent-toolkit/resources';
 import { issueLocation, mapWithConcurrency, safePath } from '@vibe-agent-toolkit/utils';
 
@@ -150,10 +150,8 @@ async function scanMarkdownFile(
   dispatcher: ParseDispatcher,
 ): Promise<EvidenceRecord[]> {
   const content = await readFile(fullPath, 'utf8');
-  return [
-    ...(await scanCodeBlocks(content, fullPath, locationRoot, { dispatcher })),
-    ...(await scanFrontmatter(content, fullPath, locationRoot, { dispatcher })),
-  ];
+  const frontmatter = await detectorFrontmatter(content, { dispatcher });
+  return [...scanCodeBlocks(content, fullPath, locationRoot, frontmatter), ...scanFrontmatter(content, fullPath, locationRoot, frontmatter)];
 }
 
 /**

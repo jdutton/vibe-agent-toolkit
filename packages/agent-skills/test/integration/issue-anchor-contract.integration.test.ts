@@ -98,8 +98,8 @@ beforeAll(async () => {
   const gitTracker = new GitTracker(tempDir);
   await gitTracker.initialize();
 
-  const validated = await validateSkill({ side: 'source', skillPath, checkUnreferencedFiles: true, validation: {} });
-  const packaged = await validateSkillForPackaging(skillPath, undefined, 'source', {
+  const validated = await validateSkill({ resourcesValidation: {}, side: 'source', skillPath, checkUnreferencedFiles: true, validation: {} });
+  const packaged = await validateSkillForPackaging(skillPath, {}, undefined, 'source', {
     unreadable: 'refuse',
     outputs: [],
     gitTracker,

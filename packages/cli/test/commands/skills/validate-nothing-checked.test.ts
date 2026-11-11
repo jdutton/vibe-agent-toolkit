@@ -128,7 +128,7 @@ describe('the stderr half names what the document cannot', () => {
   });
 
   it('the builder leaves the zero-examined decision to the writer', () => {
-    const report = buildSkillsValidateReport({ root: '/project', results: [], runIssues: [], durationMs: 3 });
+    const report = buildSkillsValidateReport({ root: '/project', results: [], runIssues: [], refused: 0, durationMs: 3 });
 
     expect(report.status).toBe('ok');
     expect(report.examined).toBe(0);

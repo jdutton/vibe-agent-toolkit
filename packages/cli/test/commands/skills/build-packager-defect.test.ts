@@ -60,7 +60,7 @@ async function seedProject(cwd: string, thrown: Error[]): Promise<DiscoveredSkil
 
 async function buildWithPackagerThrowing(cwd: string, thrown: Error[]): Promise<SkillBuildRun> {
   const specs = (await seedProject(cwd, thrown)).map((skill): BuildSkillSpec => ({ skill, packagingConfig: {} as BuildSkillSpec['packagingConfig'] }));
-  return runSkillBuild({ specs, cwd, logger: silentLogger, projectSkills: [], onlySkill: undefined, verbose: false, runOutputs: [] });
+  return runSkillBuild({ specs, cwd, logger: silentLogger, projectSkills: [], onlySkill: undefined, verbose: false, runOutputs: [], resourcesValidation: {} });
 }
 
 /** What `vat skills build` would publish for the project, and the exit code that document derives. */

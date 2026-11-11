@@ -9,7 +9,8 @@
  * 🔑 **One base, one meaning of `summary`.** `data.root` is the directory the
  * config was read from, stated once; every finding's `location` is relative to
  * it. `summary` — on the envelope and on a skill row — always counts FINDINGS
- * by severity; the number of skills validated is the envelope's `examined`.
+ * by severity; the envelope's `examined` is the skills validated (`data.skills.length`) plus
+ * the SKILL.md files in scope whose parse was refused, each reported as a run finding.
  * Every finding is on the envelope, flat: a skill's own and the run's
  * (`ALLOW_UNUSED`), so a row is a tally, never a second list.
  */

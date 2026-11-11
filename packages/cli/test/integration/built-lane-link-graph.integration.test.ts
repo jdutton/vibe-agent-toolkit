@@ -79,7 +79,7 @@ afterEach(() => {
 describe('bundling skill fixture — the built lane cannot see what it bundled', () => {
   it('sees the bundled reference at SOURCE', async () => {
     const { skillPath } = makeProject('source');
-    const result = await validateSkillForPackaging(skillPath, undefined, 'source');
+    const result = await validateSkillForPackaging(skillPath, {}, undefined, 'source');
     expect(result.metadata.fileCount).toBe(2);
     expect(result.metadata.directFileCount).toBe(1);
     expect(result.metadata.maxLinkDepth).toBe(1);
@@ -129,7 +129,7 @@ describe('bundling skill fixture — the built lane cannot see what it bundled',
     const inside = await packageSkill(skillPath, {
       outputPath: safePath.join(root, 'dist', 'skills', SKILL_NAME),
     });
-    const source = await validateSkillForPackaging(skillPath, undefined, 'source');
+    const source = await validateSkillForPackaging(skillPath, {}, undefined, 'source');
 
     expect(inside.postBuildValidation?.metadata.totalLines).toBeLessThan(source.metadata.totalLines);
   });

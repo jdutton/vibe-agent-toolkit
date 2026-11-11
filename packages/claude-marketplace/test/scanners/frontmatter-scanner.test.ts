@@ -1,7 +1,13 @@
+import { detectorFrontmatter, type EvidenceRecord } from '@vibe-agent-toolkit/agent-skills';
 import { describe, expect, it } from 'vitest';
 
 import { scanFrontmatter } from '../../src/scanners/frontmatter-scanner.js';
 import { TEST_LOCATION_ROOT } from '../test-helpers.js';
+
+/** Scan `content`, parsing its frontmatter once as the compatibility analyzer does. */
+async function scan(content: string, filePath: string): Promise<EvidenceRecord[]> {
+  return scanFrontmatter(content, filePath, TEST_LOCATION_ROOT, await detectorFrontmatter(content, {}));
+}
 
 describe('scanFrontmatter', () => {
   it('returns empty array for skill with no compatibility-relevant frontmatter', async () => {
@@ -13,7 +19,7 @@ describe('scanFrontmatter', () => {
       '# Simple Skill',
     ].join('\n');
 
-    const result = await scanFrontmatter(content, 'skills/simple/SKILL.md', TEST_LOCATION_ROOT, {});
+    const result = await scan(content, 'skills/simple/SKILL.md');
     expect(result).toEqual([]);
   });
 
@@ -26,7 +32,7 @@ describe('scanFrontmatter', () => {
       '---',
     ].join('\n');
 
-    const result = await scanFrontmatter(content, 'SKILL.md', TEST_LOCATION_ROOT, {});
+    const result = await scan(content, 'SKILL.md');
     const evidence = result.find(e => e.patternId === 'ALLOWED_TOOLS_LOCAL_SHELL');
     expect(evidence).toBeDefined();
     expect(evidence?.location.file).toBe('SKILL.md');
@@ -41,7 +47,7 @@ describe('scanFrontmatter', () => {
       '---',
     ].join('\n');
 
-    const result = await scanFrontmatter(content, 'SKILL.md', TEST_LOCATION_ROOT, {});
+    const result = await scan(content, 'SKILL.md');
     expect(result.some(e => e.patternId === 'ALLOWED_TOOLS_LOCAL_SHELL')).toBe(true);
   });
 
@@ -54,7 +60,7 @@ describe('scanFrontmatter', () => {
       '---',
     ].join('\n');
 
-    const result = await scanFrontmatter(content, 'SKILL.md', TEST_LOCATION_ROOT, {});
+    const result = await scan(content, 'SKILL.md');
     expect(result).toEqual([]);
   });
 
@@ -67,13 +73,13 @@ describe('scanFrontmatter', () => {
       '---',
     ].join('\n');
 
-    const result = await scanFrontmatter(content, 'SKILL.md', TEST_LOCATION_ROOT, {});
+    const result = await scan(content, 'SKILL.md');
     expect(result).toEqual([]);
   });
 
   it('handles malformed frontmatter gracefully', async () => {
     const content = '---\ninvalid yaml: [[[bad\n---\n# Content';
-    const result = await scanFrontmatter(content, 'SKILL.md', TEST_LOCATION_ROOT, {});
+    const result = await scan(content, 'SKILL.md');
     expect(Array.isArray(result)).toBe(true);
   });
 });

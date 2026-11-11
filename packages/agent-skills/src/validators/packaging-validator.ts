@@ -19,6 +19,8 @@ import {
   DeferredArtifacts,
   listingRefusalRemedy,
   loadConfig,
+  type NotAdmittedRoots,
+  partitionNotAdmitted,
   type ParseDispatcher,
   parseFileCached,
   type ParseRefusedResource,
@@ -938,8 +940,8 @@ export interface SkillValidationSharedContext {
   /** Pre-populated tracker for the repo that contains the skill. */
   gitTracker?: GitTracker;
   /**
-   * The run's parse dispatcher, for the parses this validator makes itself (the
-   * SKILL.md, its frontmatter's `allowed-tools`), so a batch pays one worker
+   * The run's parse dispatcher, for the parse this validator makes itself (the
+   * SKILL.md, whose frontmatter the detectors then read), so a batch pays one worker
    * start. Omitted, each skill's validation holds its own and shuts it down.
    */
   dispatcher?: ParseDispatcher;
@@ -1059,6 +1061,10 @@ function missingFrontmatterIssue(frontmatterError: string | undefined, location:
  * - Framework-based severity / allow config
  *
  * @param skillPath - Path to SKILL.md
+ * @param resourcesValidation - The project's `resources.validation`, as the verb resolved it: the
+ *   one config that settles a file not admitted — never `packagingConfig.validation`. Required:
+ *   only the verb knows which config governs the run; `{}` when none does, or when the caller
+ *   resolves those codes itself (`vat audit`)
  * @param packagingConfig - Optional packaging configuration (depth, excludes, validation)
  * @param context - Whether the skill is being validated from source or built output
  * @param shared - Optional shared context (registry + gitTracker) for batched runs
@@ -1066,12 +1072,13 @@ function missingFrontmatterIssue(frontmatterError: string | undefined, location:
  */
 export function validateSkillForPackaging(
   skillPath: string,
+  resourcesValidation: ValidationConfig,
   packagingConfig?: SkillPackagingConfig,
   context: 'source' | 'built' = 'source',
   shared?: SkillValidationSharedContext,
 ): Promise<PackagingValidationResult> {
   return withParseDispatcher(
-    (dispatcher) => validateSkillForPackagingOn(skillPath, packagingConfig, context, shared, dispatcher),
+    (dispatcher) => validateSkillForPackagingOn(skillPath, { resourcesValidation, packagingConfig, context, shared }, dispatcher),
     { dispatcher: shared?.dispatcher },
   );
 }
@@ -1080,19 +1087,16 @@ export function validateSkillForPackaging(
  * {@link validateSkillForPackaging}, on a parse dispatcher.
  *
  * @param skillPath - Path to SKILL.md
- * @param packagingConfig - Optional packaging configuration
- * @param context - Whether the skill is being validated from source or built output
- * @param shared - Optional shared context for batched runs
+ * @param call - The caller's arguments, as {@link validateSkillForPackaging} took them
  * @param dispatcher - Where this validator's own parses run
  * @returns Validation result
  */
 async function validateSkillForPackagingOn(
   skillPath: string,
-  packagingConfig: SkillPackagingConfig | undefined,
-  context: 'source' | 'built',
-  shared: SkillValidationSharedContext | undefined,
+  call: PackagingValidationCall,
   dispatcher: ParseDispatcher,
 ): Promise<PackagingValidationResult> {
+  const { resourcesValidation, packagingConfig, context, shared } = call;
   const rawIssues: ValidationIssue[] = [];
 
   // Validation-POLICY boundary (config root -> git root -> skill dir): what is
@@ -1112,7 +1116,8 @@ async function validateSkillForPackagingOn(
   // destination's, never the user's input. The ONE mapping; every read below takes `side`.
   const side: FsSide = context === 'built' ? 'destination' : 'source';
   const parsed = await parseSkillMarkdown(skillPath, side, locationRoot, dispatcher);
-  if ('limit' in parsed) return parseLimitResult(skillPath, parsed.limit, packagingConfig, shared);
+  const notAdmitted: NotAdmittedPolicy = { resourcesValidation, roots: { locationRoot, projectRoot } };
+  if ('limit' in parsed) return parseLimitResult(skillPath, parsed.limit, packagingConfig, shared, notAdmitted);
   const { parseResult } = parsed;
   // The parser already decoded these bytes; a second whole-file read of the same
   // path would only add a syscall and a TOCTOU window. `content` is the raw
@@ -1134,7 +1139,7 @@ async function validateSkillForPackagingOn(
   // surface each as a CAPABILITY_* issue. Observations are also returned
   // on the result so downstream verdict computation (CLI layer) can recover
   // payloads such as EXTERNAL_CLI binary names.
-  const { evidence, observations } = await runCompatDetectors(skillContent, skillPath, locationRoot, { dispatcher });
+  const { evidence, observations } = runCompatDetectors(skillContent, skillPath, locationRoot, parseResult.frontmatter);
   for (const obs of observations) {
     rawIssues.push(observationToIssue(obs, skillLocation));
   }
@@ -1343,7 +1348,7 @@ async function validateSkillForPackagingOn(
   // happened to be validated when the entry went unmatched); a caller that
   // supplied none is claiming its run is this one skill, and gets the run-level
   // answer folded in here.
-  const framework = runFrameworkFor(filteredIssues, packagingConfig, shared);
+  const framework = runFrameworkFor(filteredIssues, packagingConfig, shared, notAdmitted);
 
   const skillName = extractSkillName(parseResult, skillPath);
 
@@ -1366,19 +1371,39 @@ async function validateSkillForPackagingOn(
   };
 }
 
+/** {@link validateSkillForPackaging}'s arguments after the SKILL.md. */
+interface PackagingValidationCall {
+  readonly resourcesValidation: ValidationConfig;
+  readonly packagingConfig: SkillPackagingConfig | undefined;
+  readonly context: 'source' | 'built';
+  readonly shared: SkillValidationSharedContext | undefined;
+}
+
+/** How a file not admitted is resolved: by the project's `resources.validation`, matched at its project-relative path. */
+interface NotAdmittedPolicy {
+  readonly resourcesValidation: ValidationConfig;
+  readonly roots: NotAdmittedRoots;
+}
+
 /**
  * One skill's issues through the validation framework: the batching caller's
- * ledger when it supplied one, else this skill as the whole run.
+ * ledger when it supplied one, else this skill as the whole run. A file not
+ * admitted is split out first (`partitionNotAdmitted`) and resolved by
+ * `resources.validation` alone; the framework sees only the remainder.
  */
 function runFrameworkFor(
   issues: ValidationIssue[],
   packagingConfig: SkillPackagingConfig | undefined,
   shared: SkillValidationSharedContext | undefined,
+  policy: NotAdmittedPolicy,
 ): ReturnType<typeof runSingleUnitValidation> {
+  const { rest, notAdmitted } = partitionNotAdmitted(issues, policy.resourcesValidation, policy.roots);
   const validationConfig = packagingConfig?.validation ?? {};
-  return shared?.allowLedger === undefined
-    ? runSingleUnitValidation(issues, validationConfig)
-    : runValidationFramework(issues, validationConfig, shared.allowLedger);
+  const framework = shared?.allowLedger === undefined
+    ? runSingleUnitValidation(rest, validationConfig)
+    : runValidationFramework(rest, validationConfig, shared.allowLedger);
+  const emitted = [...framework.emitted, ...notAdmitted];
+  return { ...framework, emitted, hasErrors: emitted.some((issue) => issue.severity === 'error') };
 }
 
 /**
@@ -1409,13 +1434,14 @@ async function parseSkillMarkdown(
 
 /**
  * The result for a skill whose SKILL.md could not be parsed at all: the one
- * finding, through the same framework (so an allow entry and the run's ledger
- * see it), and nothing else — no frontmatter, links or bundle to check.
+ * finding, resolved as every not-admitted finding is (`resources.validation`),
+ * and nothing else — no frontmatter, links or bundle to check.
  *
  * @param skillPath - The SKILL.md
  * @param limit - Its `RESOURCE_PARSE_LIMIT_EXCEEDED` issue
  * @param packagingConfig - The skill's packaging config, for its validation block
  * @param shared - The batching caller's context, for its ledger
+ * @param policy - How a file not admitted is resolved
  * @returns A result whose only finding is `limit`
  */
 function parseLimitResult(
@@ -1423,8 +1449,9 @@ function parseLimitResult(
   limit: ValidationIssue,
   packagingConfig: SkillPackagingConfig | undefined,
   shared: SkillValidationSharedContext | undefined,
+  policy: NotAdmittedPolicy,
 ): PackagingValidationResult {
-  const framework = runFrameworkFor([limit], packagingConfig, shared);
+  const framework = runFrameworkFor([limit], packagingConfig, shared, policy);
   return {
     // Named by its directory: there is no frontmatter or H1 to read a name from.
     skillName: basename(dirname(skillPath)),

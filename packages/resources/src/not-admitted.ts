@@ -19,6 +19,10 @@
  *   beside no framework run (`vat resources scan`, `vat rag index`), so
  *   `validation.severity.RESOURCE_PARSE_LIMIT_EXCEEDED` means the same thing in
  *   every verb;
+ * - {@link partitionNotAdmitted} splits them out of a mixed issue list and
+ *   resolves them through `resources.validation` alone, for a lane whose own
+ *   framework run carries another config (a skill's `validation`, which never
+ *   governs these codes);
  * - {@link notAdmittedInScope} and {@link notAdmittedCount} are how a verb
  *   counts them in `examined`: every one, scoped to a `--collection` by the
  *   collection's own patterns, as the registry assigns membership.
@@ -147,12 +151,35 @@ export function notAdmittedFindings(
   return resolveFindings(notAdmittedIssues(log, wording), validation);
 }
 
-/** The codes this contract reports a not-admitted file under, and no other finding. */
-const NOT_ADMITTED_CODES: ReadonlySet<string> = new Set<ValidationIssueCode>([
+/**
+ * The codes this contract reports a not-admitted file under, and no other finding.
+ * Only `resources.validation` resolves them, so a skill's `validation` refuses them
+ * as keys (`SkillPackagingConfigSchema`).
+ */
+export const NOT_ADMITTED_CODE_LIST: readonly ValidationIssueCode[] = [
   'RESOURCE_UNREADABLE',
   'RESOURCE_PARSE_LIMIT_EXCEEDED',
   'RESOURCE_PARSE_WORKER_DIED',
-]);
+];
+
+const NOT_ADMITTED_CODES: ReadonlySet<string> = new Set<string>(NOT_ADMITTED_CODE_LIST);
+
+/** Where a report's locations are relative to, and where the project's allow `paths` are. */
+export interface NotAdmittedRoots {
+  /** The base every `location` in the report is relative to. */
+  readonly locationRoot: string;
+  /** The root the project's allow `paths` are relative to. */
+  readonly projectRoot: string;
+}
+
+/** One not-admitted finding through `resources.validation`, matched at its project-relative path. */
+function resolveOneNotAdmitted(issue: ValidationIssue, validation: ValidationConfig, roots: NotAdmittedRoots): ValidationIssue[] {
+  const location = issue.location === undefined
+    ? undefined
+    : issueLocation(safePath.resolve(roots.locationRoot, issue.location), roots.projectRoot);
+  const [resolved] = resolveFindings([{ ...issue, ...(location !== undefined && { location }) }], validation);
+  return resolved === undefined ? [] : [{ ...resolved, ...(issue.location !== undefined && { location: issue.location }) }];
+}
 
 /**
  * {@link notAdmittedIssues} already built into a report, resolved through the
@@ -167,23 +194,35 @@ const NOT_ADMITTED_CODES: ReadonlySet<string> = new Set<ValidationIssueCode>([
  * @param issues - A report's findings, the not-admitted ones at their default severity
  * @param validation - The project's `resources.validation` (`{}` when none)
  * @param roots - The root the report's locations are relative to, and the project's own root
- * @param roots.locationRoot - The base every `location` in `issues` is relative to
- * @param roots.projectRoot - The root the project's allow `paths` are relative to
  * @returns The findings, a not-admitted one dropped when allowed or ignored, else at its resolved severity
  */
 export function resolveNotAdmittedAmong(
   issues: readonly ValidationIssue[],
   validation: ValidationConfig,
-  roots: { readonly locationRoot: string; readonly projectRoot: string },
+  roots: NotAdmittedRoots,
 ): ValidationIssue[] {
-  return issues.flatMap((issue) => {
-    if (!NOT_ADMITTED_CODES.has(issue.code)) return [issue];
-    const location = issue.location === undefined
-      ? undefined
-      : issueLocation(safePath.resolve(roots.locationRoot, issue.location), roots.projectRoot);
-    const [resolved] = resolveFindings([{ ...issue, ...(location !== undefined && { location }) }], validation);
-    return resolved === undefined ? [] : [{ ...resolved, ...(issue.location !== undefined && { location: issue.location }) }];
-  });
+  return issues.flatMap((issue) => NOT_ADMITTED_CODES.has(issue.code) ? resolveOneNotAdmitted(issue, validation, roots) : [issue]);
+}
+
+/**
+ * A lane's findings split for a lane that runs a validation framework of its
+ * own (a skill's `validation`): the not-admitted ones resolved here, through
+ * `resources.validation` alone, and the rest handed back for that framework —
+ * so no other config can allow, ignore or re-severity a file not admitted.
+ *
+ * @param issues - The lane's raw findings
+ * @param validation - The project's `resources.validation` (`{}` when none)
+ * @param roots - The root the lane's locations are relative to, and the project's own root
+ * @returns `rest` for the lane's own framework; `notAdmitted` already resolved
+ */
+export function partitionNotAdmitted(
+  issues: readonly ValidationIssue[],
+  validation: ValidationConfig,
+  roots: NotAdmittedRoots,
+): { rest: ValidationIssue[]; notAdmitted: ValidationIssue[] } {
+  const rest = issues.filter((issue) => !NOT_ADMITTED_CODES.has(issue.code));
+  const raw = issues.filter((issue) => NOT_ADMITTED_CODES.has(issue.code));
+  return { rest, notAdmitted: resolveNotAdmittedAmong(raw, validation, roots) };
 }
 
 /**

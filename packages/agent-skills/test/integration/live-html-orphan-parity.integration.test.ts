@@ -52,7 +52,7 @@ describe('live path HTML link parity (AC2)', () => {
       '<html><body><a href="missing.md">missing</a></body></html>\n',
     );
 
-    const result = await validateSkillForPackaging(skillPath);
+    const result = await validateSkillForPackaging(skillPath, {});
     const codes = result.allErrors.map(i => i.code);
 
     // The HTML file's broken local link is detected via the widened crawl.
@@ -73,7 +73,7 @@ describe('live path HTML link parity (AC2)', () => {
     );
     writeFileSync(safePath.join(skillDir, 'ref.md'), '# Ref\n');
 
-    const result = await validateSkillForPackaging(skillPath);
+    const result = await validateSkillForPackaging(skillPath, {});
     const codes = result.allErrors.map(i => i.code);
     expect(codes).not.toContain('LINK_MISSING_TARGET');
     expect(codes).not.toContain('PACKAGED_BROKEN_LINK');

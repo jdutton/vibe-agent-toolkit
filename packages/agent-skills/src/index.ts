@@ -125,6 +125,7 @@ export { materializeIssue, type MaterializeOpts } from './validators/rule-engine
 export { detectHostedIncompatibleShape } from './validators/plugin-hosted-shape.js';
 export {
   deriveObservations,
+  detectorFrontmatter,
   observationToIssue,
   runCompatDetectors,
   type DetectorOutput,

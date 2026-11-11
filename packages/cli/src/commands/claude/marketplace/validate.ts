@@ -38,7 +38,7 @@ import { direntKindFollowingSync, everywhere, findProjectRoot, followedKindSync,
 import { Command } from 'commander';
 
 import { refusalCodeOf } from '../../../utils/command-refusal.js';
-import { loadConfig } from '../../../utils/config-loader.js';
+import { ConfigLoadError, loadConfig, loadConfigCached } from '../../../utils/config-loader.js';
 import { NOTHING_FINISHED, refusalReport, writeDocument } from '../../../utils/document-writer.js';
 import { reportFindings } from '../../../utils/issue-rendering.js';
 import { createLogger } from '../../../utils/logger.js';
@@ -218,10 +218,34 @@ async function validateOneSkill(
     if (!boundary.contains(skillMdPath) || !pathPresent(skillMdPath, { follow: marketplacePath }, everywhere('source'), 'probe')) return [];
     // Severity only (no `allow`), resolved here so a default-`ignore` code can still be raised.
     const severity = validation?.severity === undefined ? {} : { severity: validation.severity };
-    const skillResult = await validateSkill({ skillPath: skillMdPath, rootDir: skillDir, locationRoot: marketplacePath, validation: severity, side: 'source' });
+    const skillResult = await validateSkill({
+      skillPath: skillMdPath,
+      rootDir: skillDir,
+      locationRoot: marketplacePath,
+      validation: severity,
+      resourcesValidation: projectResourcesValidation(marketplacePath),
+      side: 'source',
+    });
     return skillResult.issues;
   } catch (error) {
     return refusedAt(skillMdPath, error);
+  }
+}
+
+/**
+ * The governing project's `resources.validation` — what a file the parse worker refused is
+ * resolved under. `{}` when no config governs the marketplace, or when it cannot be loaded: the
+ * same lenient ruling as {@link resolveProjectValidationConfig}, which already logged why.
+ */
+function projectResourcesValidation(marketplacePath: string): ValidationConfig {
+  const projectRoot = findProjectRoot(marketplacePath);
+  if (projectRoot === null) return {};
+  try {
+    return loadConfigCached(projectRoot, 'source')?.resources?.validation ?? {};
+  } catch (error) {
+    // A broken config, reported once by resolveProjectValidationConfig's own load of it.
+    if (error instanceof ConfigLoadError) return {};
+    throw error;
   }
 }
 

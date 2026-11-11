@@ -13,8 +13,9 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 
+import type { ValidationConfig } from '@vibe-agent-toolkit/schema';
 import { isVatError, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { createTempDir, overOutputRowsMarkdown, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -22,6 +23,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SKILL_PACKAGING_INPUT_INVALID_CODE } from '../../src/packaging-errors.js';
 import { packageSkill } from '../../src/skill-packager.js';
 import { activeErrorsOf, validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
+import { validateSkill } from '../../src/validators/skill-validator.js';
 
 const SKILL_MD = `---
 name: linker
@@ -70,7 +72,7 @@ describe('a linked document whose parse the crawl refused (integration)', () => 
   });
 
   it('validateSkillForPackaging reports it as RESOURCE_PARSE_LIMIT_EXCEEDED at that document', async () => {
-    const result = await validateSkillForPackaging(skillPath);
+    const result = await validateSkillForPackaging(skillPath, {});
 
     const found = activeErrorsOf(result).filter((issue) => issue.code === 'RESOURCE_PARSE_LIMIT_EXCEEDED');
     expect(found).toHaveLength(1);
@@ -102,5 +104,87 @@ describe('a linked document whose parse the crawl refused (integration)', () => 
     writeFileSync(skillPath, `---\nname: linker\nnested: ${'['.repeat(depth)}${']'.repeat(depth)}\n---\n# linker\n`);
 
     await limitRejectionMessage(tempDir, skillPath);
+  });
+});
+
+/** `resources.validation` allowing a refused document, by its project-relative path, as the verb hands it in. */
+const allowLimitAt = (...paths: string[]): ValidationConfig => ({
+  allow: { RESOURCE_PARSE_LIMIT_EXCEEDED: [{ paths, reason: 'generated, too large to parse' }] },
+});
+const RESOURCES_ALLOW_REFERENCE_PATH = 'skills/linker/reference.md';
+const RESOURCES_ALLOW_REFERENCE = allowLimitAt(RESOURCES_ALLOW_REFERENCE_PATH);
+
+/** A skill's own `validation` trying to silence the same code: it has no say over it. */
+const SKILL_IGNORES_LIMIT = { severity: { RESOURCE_PARSE_LIMIT_EXCEEDED: 'ignore' as const } };
+
+describe('a refused linked document is reported under resources.validation, and refused by the packager whatever it allows (integration)', () => {
+  let tempDir: string;
+  let skillDir: string;
+  let skillPath: string;
+
+  beforeEach(() => {
+    tempDir = createTempDir('parse-refused-resolved-');
+    skillDir = safePath.join(tempDir, 'skills', 'linker');
+    mkdirSyncReal(skillDir, { recursive: true });
+    // A config marks the project root. It carries no `resources.validation`: the validation
+    // lanes take the one the verb hands them, and the packager reads none.
+    writeFileSync(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), '{}\n');
+    skillPath = safePath.join(skillDir, 'SKILL.md');
+    writeFileSync(skillPath, SKILL_MD);
+    // Over `outputRows` in external links only: no relative link a walk could have missed.
+    writeFileSync(safePath.join(skillDir, 'reference.md'), `<!-- ${randomUUID()} -->\n${'[x](https://example.com/)\n'.repeat(20_000)}`);
+  });
+
+  afterEach(() => {
+    removeTempDir(tempDir);
+  });
+
+  const limitFindings = (issues: readonly { code: string }[]): unknown[] =>
+    issues.filter((issue) => issue.code === 'RESOURCE_PARSE_LIMIT_EXCEEDED');
+  /** Where `vat skills build` writes: outside the built lane's crawl, as in every real project. */
+  const buildInto = (): Promise<unknown> =>
+    packageSkill(skillPath, { outputPath: safePath.join(tempDir, 'dist', 'skills', 'linker'), formats: ['directory'] });
+
+  it('validateSkillForPackaging drops it when resources.validation allows it', async () => {
+    const result = await validateSkillForPackaging(skillPath, RESOURCES_ALLOW_REFERENCE);
+    expect(limitFindings(result.allErrors)).toEqual([]);
+  });
+
+  it('validateSkillForPackaging keeps it at error when only the skill validation ignores it', async () => {
+    const result = await validateSkillForPackaging(skillPath, {}, { validation: SKILL_IGNORES_LIMIT });
+    expect(limitFindings(activeErrorsOf(result))).toHaveLength(1);
+  });
+
+  it('validateSkill drops it when resources.validation allows it, and keeps it when only the skill ignores it', async () => {
+    const allowed = await validateSkill({ resourcesValidation: RESOURCES_ALLOW_REFERENCE, skillPath, validation: {}, side: 'source' });
+    expect(limitFindings(allowed.issues)).toEqual([]);
+
+    const ignored = await validateSkill({ resourcesValidation: {}, skillPath, validation: SKILL_IGNORES_LIMIT, side: 'source' });
+    expect(limitFindings(ignored.issues)).toHaveLength(1);
+  });
+
+  // `resources.validation` governs what a run REPORTS, never what it ships: an allowed refused
+  // file would ship verbatim with its links unwalked (ADR P1 — no opt-in turns a refused
+  // parse into an answer). The packager refuses it unconditionally, before anything is written.
+  it.each([
+    ['a refused markdown document', (): string => RESOURCES_ALLOW_REFERENCE_PATH],
+    ['a refused HTML page', (): string => {
+      // The only refused file: the crawl's refusal of `reference.md` would be named first.
+      writeFileSync(safePath.join(skillDir, 'reference.md'), '# Reference\n');
+      writeFileSync(skillPath, `${SKILL_MD}\nAnd [the page](page.html).\n`);
+      writeFileSync(safePath.join(skillDir, 'page.html'), `<!-- ${randomUUID()} -->\n${'<a href="./SKILL.md">l</a>\n'.repeat(20_000)}`);
+      return 'skills/linker/page.html';
+    }],
+    ['a refused markdown document carrying relative links', (): string => {
+      writeFileSync(safePath.join(skillDir, 'notes.md'), '# Notes\n');
+      writeFileSync(safePath.join(skillDir, 'reference.md'), `<!-- ${randomUUID()} -->\n${'[x](./notes.md)\n'.repeat(20_000)}`);
+      return RESOURCES_ALLOW_REFERENCE_PATH;
+    }],
+  ])('packageSkill refuses %s the skill reaches, writing nothing', async (_name, seed) => {
+    const refusedPath = seed();
+    const rejection: unknown = await buildInto().catch((error: unknown) => error);
+    expect(isVatError(rejection, SKILL_PACKAGING_INPUT_INVALID_CODE)).toBe(true);
+    expect((rejection as Error).message).toContain(refusedPath);
+    expect(existsSync(safePath.join(tempDir, 'dist'))).toBe(false);
   });
 });

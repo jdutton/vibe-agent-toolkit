@@ -475,6 +475,34 @@ describe('resources.validation config block', () => {
   });
 });
 
+// A file not admitted is resolved under `resources.validation` alone: a skill key naming its
+// code would parse and do nothing, so it is refused, naming where the entry belongs.
+describe('a skill validation naming a not-admitted code', () => {
+  const NOT_ADMITTED = ['RESOURCE_UNREADABLE', 'RESOURCE_PARSE_LIMIT_EXCEEDED', 'RESOURCE_PARSE_WORKER_DIED'] as const;
+  const allowEntry = [{ paths: ['x.md'], reason: 'generated' }];
+
+  it.each(NOT_ADMITTED.flatMap((code) => [
+    ['defaults', 'severity', code, { defaults: { validation: { severity: { [code]: 'ignore' } } } }],
+    ['defaults', 'allow', code, { defaults: { validation: { allow: { [code]: allowEntry } } } }],
+    ['config.<name>', 'severity', code, { config: { demo: { validation: { severity: { [code]: 'warning' } } } } }],
+    ['config.<name>', 'allow', code, { config: { demo: { validation: { allow: { [code]: allowEntry } } } } }],
+  ] as const))('refuses skills.%s.validation.%s.%s, pointing at resources.validation', (_where, field, code, skills) => {
+    const result = ProjectConfigSchema.safeParse({ skills: { include: ['skills/*/SKILL.md'], ...skills } });
+
+    expect(result.success).toBe(false);
+    const messages = result.error?.issues.map((issue) => issue.message) ?? [];
+    expect(messages).toEqual([expect.stringContaining(`resources.validation.${field}`)]);
+    expect(messages[0]).toContain(code);
+  });
+
+  it('accepts the same codes under resources.validation, and any other code under a skill', () => {
+    expect(ProjectConfigSchema.safeParse({
+      resources: { validation: { allow: { RESOURCE_PARSE_LIMIT_EXCEEDED: allowEntry }, severity: { RESOURCE_UNREADABLE: 'warning' } } },
+      skills: { include: ['skills/*/SKILL.md'], defaults: { validation: { severity: { LINK_MISSING_TARGET: 'warning' } } } },
+    }).success).toBe(true);
+  });
+});
+
 describe('ClaudeMarketplaceSchema with publish config', () => {
   it('should accept valid publish config with all fields', () => {
     const result = ClaudeMarketplaceSchema.safeParse({

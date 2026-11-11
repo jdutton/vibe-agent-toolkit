@@ -10,6 +10,7 @@
  * `vibe-agent-toolkit.config.yaml` contributes.
  */
 import type { DeclaredEvalSuite, SkillPackagingConfig } from '@vibe-agent-toolkit/agent-skills';
+import type { ValidationConfig } from '@vibe-agent-toolkit/schema';
 import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
 
 import { type DiscoveryUnreadablePolicy, discoverSkillsFromConfig, namedSkillsOrRefuse } from '../commands/skills/skill-discovery.js';
@@ -162,6 +163,19 @@ export async function resolveSkillPackagingConfig(
     defaults as Record<string, unknown> | undefined,
     perSkillConfig?.[matchedName] as Record<string, unknown> | undefined,
   );
+}
+
+/**
+ * The governing project's `resources.validation` for one path — what a file the
+ * parse worker refused is resolved under (its `allow`, its severity override).
+ * `{}` when no config governs the path (wild mode). A config that exists and
+ * cannot be loaded propagates (`ConfigLoadError`): which overrides apply is then
+ * unknown, not "none".
+ */
+export function resolveProjectResourcesValidation(path: string): ValidationConfig {
+  const projectRoot = findProjectRoot(safePath.resolve(safePath.join(safePath.resolve(path), '..')));
+  if (projectRoot === null) return {};
+  return loadConfigCached(projectRoot, 'source')?.resources?.validation ?? {};
 }
 
 /**

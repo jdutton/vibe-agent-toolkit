@@ -27,6 +27,7 @@ import {
   parseFileCached,
   parseRefusedEntryFor,
   parseRefusedMessage,
+  partitionNotAdmitted,
   resolveLocalHref,
   rewriteFrontmatterUriReferencesFromSchema,
   rewriteHtmlLinks,
@@ -866,7 +867,9 @@ async function preparePackage(
     packagerWalkOptions,
   );
   // A reached file whose parse the crawl refused is no asset: it would ship
-  // verbatim with its links unwalked and unrewritten. Refused before anything is written.
+  // verbatim with its links unwalked and unrewritten. Refused before anything is
+  // written — whatever `resources.validation` says: an `allow` there settles what
+  // a run REPORTS, never what it ships.
   refuseParseRefusedFiles(registry, [skillPath, ...bundledAssets], projectRoot);
 
   // Register non-markdown bundled assets in the source registry so link rewriting
@@ -1137,11 +1140,12 @@ async function preparePackage(
     const ownsRun = options.allowLedger === undefined;
     const buildRunLedger = options.allowLedger ?? createAllowUsageLedger();
 
-    const framework = runValidationFramework(
-      [...rawLinkIssues, ...rawPostBuildIssues],
-      options.validation ?? {},
-      buildRunLedger,
-    );
+    // A packaged document the parse worker refused on this run's read-back is no
+    // skill finding: split out at its default severity — no config resolves it,
+    // as none lets a refused file ship — and the skill's `validation` rules the rest.
+    const { rest, notAdmitted } = partitionNotAdmitted(rawPostBuildIssues, {}, { locationRoot: outputPath, projectRoot });
+    const ruled = runValidationFramework([...rawLinkIssues, ...rest], options.validation ?? {}, buildRunLedger);
+    const framework = withIssues(ruled, notAdmitted);
 
     // 13c. Run full validation suite on built output
     const postBuildValidation = await runPostBuildValidation(
@@ -1433,9 +1437,13 @@ export function reanchorStagedResult(
  * the single channel (`postBuildIssues`) rather than on both.
  */
 function withRunAllowUnused(framework: FrameworkResult, ledger: AllowUsageLedger): FrameworkResult {
-  const unused = allowUnusedIssues(ledger);
-  if (unused.length === 0) return framework;
-  const emitted = [...framework.emitted, ...unused];
+  return withIssues(framework, allowUnusedIssues(ledger));
+}
+
+/** `framework` with `issues` appended to what it emits. */
+function withIssues(framework: FrameworkResult, issues: readonly ValidationIssue[]): FrameworkResult {
+  if (issues.length === 0) return framework;
+  const emitted = [...framework.emitted, ...issues];
   return { ...framework, emitted, hasErrors: emitted.some(i => i.severity === 'error') };
 }
 
@@ -1521,6 +1529,9 @@ function runPostBuildValidation(
   const builtSkillPath = safePath.join(outputPath, 'SKILL.md');
   return validateSkillForPackaging(
     builtSkillPath,
+    // The built copy of a skill the packager let through: nothing in it was refused at
+    // the crawl, so a refusal here is this run's read-back, and no config clears it.
+    {},
     validation ? { validation } : undefined,
     'built',
     // The built skill IS this run's output, inside the project the check crawls — and so is
@@ -1576,6 +1587,8 @@ async function parseSkillOrRefuse(skillPath: string, side: 'source' | 'destinati
  * (`SKILL_PACKAGING_FAILED`), naming every such file under its own code. The
  * validation lane reports the same files as `RESOURCE_PARSE_LIMIT_EXCEEDED` /
  * `RESOURCE_PARSE_WORKER_DIED` findings; `vat skills build` validates first.
+ * Unconditional: `resources.validation` decides what a run reports, never what
+ * it ships, so no `allow` lets a refused file through.
  */
 function refuseParseRefusedFiles(registry: ResourceRegistry, reached: readonly string[], projectRoot: string): void {
   const refused = refusedAmong(registry.getParseRefusedResources(), reached);

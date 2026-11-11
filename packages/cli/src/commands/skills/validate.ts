@@ -6,10 +6,12 @@
  *
  * Publishes the `Report<T>` envelope (`validate-schema.ts`): every finding
  * flat with its `location` relative to `data.root`, one `data.skills` row per
- * skill validated, `examined` = skills validated. A run over zero skills is
+ * skill validated, `examined` = skills validated plus SKILL.md files refused. A run over zero is
  * refused by the writer, from the registry's declared denominator — never by
  * a check at this site. `--verbose` decides only how much stderr prints.
  */
+
+import { basename, dirname } from 'node:path';
 
 import {
   conventionalSuiteProbe,
@@ -22,6 +24,7 @@ import {
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
 import {
   notAdmittedFindings,
+  type ParseRefusedResource,
   ResourceRegistry,
   type ProjectConfig,
   type ResourcePopulationSource,
@@ -131,8 +134,10 @@ type SkillDiscoveryPatterns = Pick<SkillsConfig, 'include' | 'exclude'>;
 interface SkillsValidateInput {
   /** The directory the config was read from: the ONE base every `location` is relative to. */
   readonly root: string;
-  /** One result per skill the run validated: the denominator. */
+  /** One result per skill the run validated. */
   readonly results: readonly PackagingValidationResult[];
+  /** SKILL.md files in scope the parse worker refused: examined, and reported in `runIssues`. */
+  readonly refused: number;
   /**
    * Findings about the RUN rather than about any one skill — the
    * `validation.allow` entries no skill in the batch matched (ALLOW_UNUSED).
@@ -150,8 +155,10 @@ interface SkillsValidateInput {
  * Every finding is on the envelope, flat — each skill's, then the run's — so
  * the envelope `summary` is exactly the sum of the `data.skills[].summary`
  * rows plus the run-level findings, by construction. Every validated skill has
- * a row, clean or not: `examined` and `data.skills.length` agree, so a reader
- * never has to guess whether an absent skill was clean or never validated.
+ * a row, clean or not, so a reader never has to guess whether an absent skill
+ * was clean or never validated. `examined` is `data.skills.length` plus the
+ * SKILL.md files in scope whose parse was refused: examined, but with no name
+ * to key a row by, so each is a run finding instead.
  *
  * The run-integrity refusal for a run over zero skills is NOT decided here;
  * the writer adds it from the registry's declared denominator.
@@ -167,7 +174,7 @@ export function buildSkillsValidateReport(input: SkillsValidateInput): SkillsVal
   }));
 
   return buildReport({
-    examined: input.results.length,
+    examined: input.results.length + input.refused,
     findings: [...input.results.flatMap(skillFindings), ...toFindings(input.runIssues)],
     data: { root: input.root, skills },
     gate: GATE,
@@ -617,6 +624,25 @@ export async function buildSharedValidationContext(
 interface SkillsRun {
   readonly results: PackagingValidationResult[];
   readonly runIssues: ValidationIssue[];
+  /** In-scope SKILL.md files the parse worker refused. */
+  readonly refused: number;
+}
+
+/**
+ * The run's scope under `--skill`: the discovered skills of that name and the
+ * refused SKILL.md files under a directory of that name (a refused file has no
+ * name to read, and a skill's directory is its name). A name matching neither
+ * is the usual unknown-skill refusal.
+ */
+function skillsInScope(
+  skills: ValidatableSkill[],
+  parseRefused: readonly ParseRefusedResource[],
+  skillName: string | undefined,
+): { skills: ValidatableSkill[]; refused: ParseRefusedResource[] } {
+  if (skillName === undefined) return { skills, refused: [...parseRefused] };
+  const refused = parseRefused.filter((entry) => basename(dirname(entry.filePath)) === skillName);
+  const named = refused.length > 0 && !skills.some((skill) => skill.name === skillName);
+  return { skills: named ? [] : filterSkillsByName(skills, skillName), refused };
 }
 
 /**
@@ -654,20 +680,22 @@ async function validateConfiguredSkills(
     ),
   }));
 
-  const skillsToValidate = filterSkillsByName(validatableSkills, options.skill);
+  const { skills: skillsToValidate, refused } = skillsInScope(validatableSkills, parseRefused, options.skill);
   logger.info(`🔍 Found ${skillsToValidate.length} skill(s) to validate\n`);
 
   // Every declared skill, not just `skillsToValidate`: `--skill x` narrows what is
   // REPORTED on, never what counts as some skill's declared test input.
   const projectSkills = collectDeclaredEvalSuites(skillsConfig, discovered);
   const sharedContext = await buildSharedValidationContext(skillsToValidate, projectSkills, config, logger);
+  // The one config a file not admitted is resolved under — this command's own, never a second read.
+  const resourcesValidation = config.resources?.validation ?? {};
 
   // In order: `sharedContext`'s caches and the per-skill progress lines.
   const results: PackagingValidationResult[] = await mapInOrder(skillsToValidate, async (skill) => {
     logger.info(`   Validating: ${skill.name}`);
     logger.debug(`   Source: ${skill.sourcePath}`);
 
-    const result = await validateSkillForPackaging(skill.sourcePath, skill.packagingConfig, 'source', sharedContext);
+    const result = await validateSkillForPackaging(skill.sourcePath, resourcesValidation, skill.packagingConfig, 'source', sharedContext);
     // `cwd` is the anchor root: config is read from it and discovery globs
     // resolve against it, so every other location in this report is already
     // relative to it.
@@ -681,13 +709,13 @@ async function validateConfiguredSkills(
   // "matched nothing" is answerable.
   const runIssues = [
     ...notAdmittedFindings(
-      { unreadable: [], parseRefused },
+      { unreadable: [], parseRefused: refused },
       { locationRoot: cwd, consequence: 'its skill has no name this run can read and was not validated' },
       config.resources?.validation ?? {},
     ),
     ...(sharedContext.allowLedger === undefined ? [] : allowUnusedIssues(sharedContext.allowLedger)),
   ];
-  return { results, runIssues };
+  return { results, runIssues, refused: refused.length };
 }
 
 /**
@@ -726,14 +754,15 @@ export async function runSkillsValidatePhase(
 
     // Load config yaml from cwd (not workspace root — config lives next to the package)
     const config = loadConfig(cwd, 'source');
-    const { results, runIssues } = config?.skills === undefined
-      ? { results: [], runIssues: [] }
+    const { results, runIssues, refused } = config?.skills === undefined
+      ? { results: [], runIssues: [], refused: 0 }
       : await validateConfiguredSkills(config.skills, cwd, config, options, logger);
 
     const report = buildSkillsValidateReport({
       root: cwd,
       results,
       runIssues,
+      refused,
       durationMs: Date.now() - startTime,
     });
     reportValidationToStderr(results, runIssues, report.examined, logger, options.verbose === true);

@@ -13,6 +13,13 @@
  *    `parseContentCached` and `parseFrontmatter` parse on the same bounded
  *    route, one document at a time, and throw (or, for the frontmatter, carry)
  *    the worker's refusal. {@link parseRefusalIssue} classifies it.
+ *
+ * Either way the finding is REPORTED under the project's `resources.validation`
+ * alone, never a skill's `validation`: each validation lane splits it out with
+ * `partitionNotAdmitted` under the `resources.validation` its verb handed in
+ * (`resourcesValidation`, a required field), and runs its own framework over
+ * the remainder only. That config never decides what SHIPS: the packager
+ * refuses every refused file a skill reaches, whatever it allows.
  */
 
 import {

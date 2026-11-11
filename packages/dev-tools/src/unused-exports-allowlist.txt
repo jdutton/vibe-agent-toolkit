@@ -44,7 +44,6 @@ packages/agent-skills/src/skill-test/vendor-manifest.ts VendoredManifest dead
 packages/agent-skills/src/test-input.ts ExcludedLinkRef dead
 packages/agent-skills/src/validators/compat-detectors.ts collectBrowserAuthEvidence dead
 packages/agent-skills/src/validators/compat-detectors.ts collectExternalCLIEvidence dead
-packages/agent-skills/src/validators/compat-detectors.ts collectLocalShellEvidence dead
 packages/agent-skills/src/validators/description-style-detection.ts DescriptionStyleInput dead
 packages/agent-skills/src/validators/description-style-detection.ts DescriptionYamlStyle dead
 packages/agent-skills/src/validators/packaged-size-limit.ts BundleWalk dead

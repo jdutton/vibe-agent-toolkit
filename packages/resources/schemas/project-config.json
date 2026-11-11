@@ -250,7 +250,7 @@
                     }
                   },
                   "additionalProperties": false,
-                  "description": "Validation framework config: severity overrides and per-path allow entries"
+                  "description": "Validation framework config: severity overrides and per-path allow entries. Not the codes of a file not admitted (RESOURCE_UNREADABLE, RESOURCE_PARSE_LIMIT_EXCEEDED, RESOURCE_PARSE_WORKER_DIED): those belong in resources.validation."
                 },
                 "targets": {
                   "type": "array",

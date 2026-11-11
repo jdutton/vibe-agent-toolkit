@@ -213,6 +213,7 @@ async function validateForPackage(
       rootDir: basePath,
       locationRoot,
       validation: {},
+      resourcesValidation: {},
       side: 'source',
     }),
   );

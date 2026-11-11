@@ -37,6 +37,7 @@ import {
   type Finding,
   type Gate,
   type Report,
+  type ValidationConfig,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
 import {
@@ -352,6 +353,8 @@ interface ValidateSkillInput {
   outputs: readonly string[];
   sourcePath: string;
   packagingConfig: SkillPackagingConfig;
+  /** The project's `resources.validation` (see {@link SkillBuildRunInput.resourcesValidation}). */
+  resourcesValidation: ValidationConfig;
   logger: ReturnType<typeof createLogger>;
   locationRoot: string;
   /** The RUN's allow-entry usage ledger, drained once after the last skill. */
@@ -396,7 +399,7 @@ interface ValidateSkillInput {
 async function validateSkillBeforeBuild(
   input: ValidateSkillInput,
 ): Promise<SkillValidationFailure | undefined> {
-  const { skillName, sourcePath, packagingConfig, logger, locationRoot, allowLedger, projectSkills, suiteProbe, populationSource, verbose, outputs } = input;
+  const { skillName, sourcePath, packagingConfig, resourcesValidation, logger, locationRoot, allowLedger, projectSkills, suiteProbe, populationSource, verbose, outputs } = input;
   logger.debug(`   Validating skill: ${skillName}`);
 
   // The run's ledger, not this call's: an allow entry scoped to a SOURCE
@@ -408,6 +411,7 @@ async function validateSkillBeforeBuild(
   // the packager below produces, and that bundle excludes EVERY skill's test input.
   const validationResult = await validateSkillForPackaging(
     sourcePath,
+    resourcesValidation,
     packagingConfig,
     'source',
     {
@@ -908,6 +912,11 @@ export interface SkillBuildRunInput {
    * for `vat skills build` on its own.
    */
   runOutputs: readonly string[];
+  /**
+   * The project's `resources.validation`, from the config this run loaded: the one config a
+   * file not admitted is REPORTED under, in both validation lanes. The packager reads no config: it refuses every refused file a skill reaches.
+   */
+  resourcesValidation: ValidationConfig;
 }
 
 /** What the build wrote into the staged tree, before the plan decides whether it lands. */
@@ -1042,6 +1051,7 @@ async function buildInto(input: SkillBuildRunInput, target: BuildTarget, staged:
         skillName: skill.name,
         sourcePath: skill.sourcePath,
         packagingConfig,
+        resourcesValidation: input.resourcesValidation,
         logger,
         locationRoot: cwd,
         allowLedger,
@@ -1224,6 +1234,7 @@ type PreparedBuild =
     buildSpecs: BuildSkillSpec[];
     setAside: SetAsideSkillNames;
     projectSkills: readonly DeclaredEvalSuite[];
+    resourcesValidation: ValidationConfig;
   };
 
 /** A report for a run that built nothing, from the skills it examined. */
@@ -1300,7 +1311,13 @@ async function prepareBuild(
 
   // From the UNFILTERED discovery: `--skill x` narrows the build, not the set
   // of files that count as some skill's declared test input.
-  return { kind: 'build', buildSpecs, setAside, projectSkills: collectDeclaredEvalSuites(skillsConfig, discoveredSkills) };
+  return {
+    kind: 'build',
+    buildSpecs,
+    setAside,
+    projectSkills: collectDeclaredEvalSuites(skillsConfig, discoveredSkills),
+    resourcesValidation: config.resources?.validation ?? {},
+  };
 }
 
 /**
@@ -1331,7 +1348,7 @@ export async function runSkillsBuildPhase(
     assertScopableSkillsPath(SCOPE_SUBJECT, pathArg);
     const prepared = await prepareBuild(cwd, options, logger, startTime);
     if (prepared.kind === 'done') return prepared;
-    const { buildSpecs, setAside, projectSkills } = prepared;
+    const { buildSpecs, setAside, projectSkills, resourcesValidation } = prepared;
     finished = skillsBuildWork({
       cwd, skills: buildSpecs.map((spec) => spec.skill), setAside, dryRun: false, run: undefined, setAsideIssues: [],
     });
@@ -1344,6 +1361,7 @@ export async function runSkillsBuildPhase(
       onlySkill: options.skill,
       verbose: options.verbose === true,
       runOutputs,
+      resourcesValidation,
     });
     for (const line of formatRunIssueLines(run.runIssues)) {
       logger.info(line);

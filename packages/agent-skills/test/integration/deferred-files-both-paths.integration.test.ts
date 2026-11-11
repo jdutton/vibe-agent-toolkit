@@ -147,7 +147,7 @@ async function runBothPaths(
   // Source path — no injected gitTracker; real git check-ignore runs.
   const sourceResult = await validateSkillForPackaging(
     skillPath,
-    { files: FILES_CONFIG },
+    {}, { files: FILES_CONFIG },
     'source',
   );
 
