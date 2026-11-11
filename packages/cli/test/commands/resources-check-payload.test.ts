@@ -562,7 +562,10 @@ describe('runProjectChecks — what each rule cost', () => {
     expect(costs).toStrictEqual([{ name: 'broken', durationMs: 1, rows: rowCount }]);
     expect(issues).toHaveLength(rowCount);
     expect(issues.filter((issue) => issue.code === 'RESOURCE_CHECK_BROKEN')).toStrictEqual([]);
-  });
+    // Its subject is a result set too wide to spread, so its cost is that many findings built and
+    // resolved: ~3-8 s typical on CI's runners, past the 15 s default once on a loaded one. The budget is
+    // the case's size, not a margin over a slow path; a regression shows as the file's duration.
+  }, 60_000);
 
   it('marks a check that threw as broken, with NO row count at all', () => {
     // 🪤 `rows: 0` on a statement that never returned would read as a clean

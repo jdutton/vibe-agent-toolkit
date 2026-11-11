@@ -1758,8 +1758,8 @@ export function runProjectChecks(options: {
   // documented that phase as "resolving severities and serialising". It was
   // emitted a level up, by `runOutcome`, AFTER this function returned — so
   // `resolveFindings` below ran inside the LAST CHECK's window and the
-  // documented claim was false for the half of the phase that is quadratic in
-  // the issue count. Emitting it before that call is what makes the claim true,
+  // documented claim was false for the half of the phase that grows with the
+  // issue count. Emitting it before that call is what makes the claim true,
   // which is the useful direction: the alternative was to weaken three docs.
   //
   options.onProgress?.({ kind: 'checks-complete' });

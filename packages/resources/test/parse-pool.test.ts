@@ -808,10 +808,16 @@ describe('a thread V8 stops at its own heap ceiling', () => {
     let landed: HeapBounds | undefined;
     const sample = Worker.prototype.getHeapStatistics;
     const spy = vi.spyOn(Worker.prototype, 'getHeapStatistics').mockImplementation(function (this: Worker) {
-      // Recorded a turn later, so the pool's own `then`, chained after this one, has run.
+      // The young generation is read while the thread lives: once it has exited `resourceLimits`
+      // is empty, and a sample landing after the death (one the pool ignores) would read 0.
+      const youngMb = this.resourceLimits?.maxYoungGenerationSizeMb ?? 0;
+      // Recorded a turn later, so the pool's own `then`, chained after this one, has run. Only
+      // the first sample counts: every in-job sample carries the same bounds (the young
+      // generation is fixed at spawn and nothing raises `heap_size_limit`), and a later one may
+      // land after the thread is gone.
       return sample.call(this).then((stats) => {
         setImmediate(() => {
-          landed = heapBounds(stats, this.resourceLimits?.maxYoungGenerationSizeMb ?? 0, resolveParseLimits(undefined).heapMb);
+          landed ??= heapBounds(stats, youngMb, resolveParseLimits(undefined).heapMb);
         });
         return stats;
       });
