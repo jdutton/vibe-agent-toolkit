@@ -1340,24 +1340,37 @@ describe('a parked thread', () => {
 
   it('is never left by a pool judged broken, even a healthy idle one', async () => {
     stubParkingMachine();
-    // The first thread to load claims the marker and serves; the second fails to load, late
-    // enough that the first has answered and sits idle when the pool is judged broken.
-    const marker = safePath.join(await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'vat-pool-claim-')), 'claimed');
-    cacheRoots.push(safePath.resolve(marker, '..'));
+    // The first thread to load claims the marker and serves; the second fails to load only once
+    // the PARENT has settled the first answer — an event the test writes, never a sleep (a slow
+    // Windows fork outlasted one) nor the worker's own post (a stalled parent may handle the
+    // second thread's error first) — so the first sits idle when the pool is judged broken.
+    const claimDir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'vat-pool-claim-'));
+    cacheRoots.push(claimDir);
+    const marker = safePath.join(claimDir, 'claimed');
+    const answered = safePath.join(claimDir, 'answered');
     await seedWorkerEntry([
-      "import { closeSync, openSync } from 'node:fs';",
+      "import { closeSync, existsSync, openSync } from 'node:fs';",
       'let first = true;',
       `try { closeSync(openSync(${JSON.stringify(marker)}, 'wx')); } catch { first = false; }`,
       'if (!first) {',
-      '  await new Promise((resolve) => setTimeout(resolve, 1500));',
+      `  while (!existsSync(${JSON.stringify(answered)})) await new Promise((resolve) => setTimeout(resolve, 20));`,
       "  throw new Error('seeded second-thread load failure');",
       '}',
       `await import(${JSON.stringify(BUILT_WORKER)});`,
     ].join('\n'));
-    const pool = createParsePool({ size: 2 });
+    // A deadline far past any runner's cold load, so the second thread is judged by its own
+    // load failure and never by a clock that started while the first was still loading.
+    const pool = createParsePool({ size: 2, limits: { timeMs: 120_000 } });
     openPools.push(pool);
+    // Whatever the first outcome, release the second thread: a failed first answer then reads
+    // as the assertion below, not as a wait on the second thread's deadline.
+    const settle = async (content: string): Promise<unknown> => {
+      const outcome = await outcomeOf(pool, content);
+      await fs.writeFile(answered, '');
+      return outcome;
+    };
 
-    const outcomes = await Promise.all([outcomeOf(pool, '# one\n'), outcomeOf(pool, '# two\n')]);
+    const outcomes = await Promise.all([settle('# one\n'), settle('# two\n')]);
     await pool.shutdown();
 
     expect(outcomes.filter((outcome) => outcome === 'answered')).toHaveLength(1);
