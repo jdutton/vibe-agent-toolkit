@@ -191,18 +191,18 @@ async function deriveFrontier(
 }
 
 /**
- * The on-disk reader: the run's cache when there is one — the same bytes the
- * base keyed and the blob stage parsed — and the disk when there is not.
+ * The on-disk reader, through the run's cache: the same bytes the base keyed and
+ * the blob stage parsed.
  *
  * Null when the file is gone or its bytes no longer key to the blob: deriving
  * from other bytes would file one blob's facts under another blob's key. Any
  * other failure — a refusal, a bug — is rethrown: the blob stage read these
  * very bytes moments ago, so it is not an absence to paper over.
  *
- * @param cache - The run's content cache, or undefined outside a population
+ * @param cache - The run's content cache
  * @returns The reader
  */
-export function diskHarnessContentReader(cache: RunContentCache | undefined): HarnessContentReader {
+export function diskHarnessContentReader(cache: RunContentCache): HarnessContentReader {
   return async (entry) => {
     // Outside the `try`: a key naming no parser kind is a producer bug, and
     // reading it as "unreadable" would blame the corpus for it.

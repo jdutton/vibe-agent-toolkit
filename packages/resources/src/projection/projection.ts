@@ -29,7 +29,7 @@
  * *different* identity.
  */
 
-import { isVatError, safePath, TextTooLargeError } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { KeyedContent, ParserKind } from '../content-key.js';
@@ -54,7 +54,7 @@ import type {
 } from '../schemas/projection-resources.js';
 import type { ResolutionContextRow, ZoneProvenanceRow } from '../schemas/projection-zones.js';
 
-import { readKeyedContent, type RunContentCache } from './content-cache.js';
+import { isSizeRefusal, readKeyedContent, type RunContentCache } from './content-cache.js';
 import { errorLabel } from './error-label.js';
 import { ResourceIdentityMap } from './identity.js';
 import type { CollectionMimeResolver } from './realizations.js';
@@ -202,7 +202,7 @@ export interface ProjectionBase extends Projection {
    * per-contributor cache would reintroduce exactly the cross-extent re-read it
    * exists to remove.
    */
-  readonly contentCache?: RunContentCache | undefined;
+  readonly contentCache: RunContentCache;
   /**
    * The run's parse routing, or absent when nothing declared a type.
    *
@@ -398,7 +398,7 @@ export class ProjectionBuilder {
 
   readonly #gitTracker: GitTracker | undefined;
 
-  readonly #contentCache: RunContentCache | undefined;
+  readonly #contentCache: RunContentCache;
 
   #base: ProjectionBase | undefined;
 
@@ -424,11 +424,11 @@ export class ProjectionBuilder {
     /** Optional git oracle supplying index casing to identity minting. */
     gitTracker?: GitTracker | undefined;
     /**
-     * Optional per-run read-and-key memo, shared with every contributor and with
-     * the blob-derivation stage. Omitted by a caller assembling a builder by
-     * hand that wants each read to touch disk.
+     * The run's read-and-key memo, shared with every contributor and with the
+     * blob-derivation stage. Required: it carries the run's parse input cap, so a
+     * builder without one would read past the cap its parses refuse at.
      */
-    contentCache?: RunContentCache | undefined;
+    contentCache: RunContentCache;
     /**
      * The run's collection-declared parse routing, or omitted to type every
      * path from `mime-type.ts`'s tables alone.
@@ -569,7 +569,8 @@ export class ProjectionBuilder {
    *   to make the failure indistinguishable from the deliberate no-op — the
    *   state column said `unreadable`, but no row said why and no counter said
    *   anyone had tried.
-   * - A file too large to decode rewrites the rows to `oversize` with a null key
+   * - A file refused by its size (too large to decode, or a parsed kind past the run's input
+   *   cap) rewrites the rows to `oversize` with a null key
    *   and no condition — the same state, and the same silence, as the eager
    *   path in `keyOrState` — and still counts as an attempt.
    *
@@ -632,10 +633,10 @@ export class ProjectionBuilder {
         this.#contentCache,
       );
     } catch (error) {
-      // Too large to decode: the same `oversize` the eager path (`keyOrState`)
+      // Refused by its size: the same `oversize` the eager path (`keyOrState`)
       // records, and like it no condition row — the state column IS the fact,
       // and nothing about the file needs explaining beyond its size.
-      if (isVatError(error, TextTooLargeError.code)) {
+      if (isSizeRefusal(error)) {
         this.#rewriteRealizations(deferred, null, 'oversize');
         return null;
       }
@@ -836,7 +837,7 @@ export class ProjectionBuilder {
       // `exactOptionalPropertyTypes` distinguishes an absent key from one
       // holding `undefined`, and the field is declared optional.
       ...(this.#gitTracker !== undefined && { gitTracker: this.#gitTracker }),
-      ...(this.#contentCache !== undefined && { contentCache: this.#contentCache }),
+      contentCache: this.#contentCache,
       ...(this.#mimeResolver !== undefined && { mimeResolver: this.#mimeResolver }),
       roots: this.#roots.rows,
       resources: this.#resources.rows,

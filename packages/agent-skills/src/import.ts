@@ -1,6 +1,6 @@
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { isPerRunParseRefusal, parseRefusal, readContentForParse } from '@vibe-agent-toolkit/resources';
 import type { RefusalCode } from '@vibe-agent-toolkit/schema';
 import { applyTreePlan, followedKindSync, isPathAbsentError, planTreeChanges, safePath, withFsFaultSync } from '@vibe-agent-toolkit/utils';
 import { stringify as stringifyYaml } from 'yaml';
@@ -70,20 +70,24 @@ export async function importSkillToAgent(options: ImportOptions): Promise<Import
   const { skillPath, outputPath, force = false } = options;
 
   // Read SKILL.md — only an ABSENCE is "does not exist"; anything else the OS
-  // says (a directory, EACCES) is an input that is there and cannot be read.
+  // says (a directory, EACCES) is an input that is there and cannot be read, and
+  // one past the parse input cap is refused by its size before it is read.
   let content: string;
   try {
-    content = fs.readFileSync(skillPath, 'utf-8');
+    ({ content } = await readContentForParse(skillPath, 'markdown', {}));
   } catch (error) {
     if (isPathAbsentError(error)) {
       return { success: false, error: `SKILL.md does not exist: ${skillPath}`, refusal: 'USAGE_INVALID' };
+    }
+    if (isPerRunParseRefusal(error)) {
+      return { success: false, error: `SKILL.md was not read: ${parseRefusal(error).reason}: ${skillPath}`, refusal: 'INPUT_UNREADABLE' };
     }
     const code = (error as NodeJS.ErrnoException).code ?? 'unknown error';
     return { success: false, error: `SKILL.md cannot be read (${code}): ${skillPath}`, refusal: 'INPUT_UNREADABLE' };
   }
 
   // Parse frontmatter
-  const parseResult = await parseFrontmatter(content);
+  const parseResult = await parseFrontmatter(content, {});
 
   if (!parseResult.success) {
     return {

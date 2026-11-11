@@ -112,7 +112,7 @@ async function expectLoudDefect(run: Promise<unknown>): Promise<void> {
 
 /** The test document, parsed and filed in a fresh cache that serves it back. */
 async function cachedDocument(): Promise<{ cache: ParseCache; cacheDir: string; keyed: KeyedContent }> {
-  const keyed = await readContentWithKey(safePath.join(suite.tempDir, 'doc.md'), 'markdown');
+  const keyed = await readContentWithKey(safePath.join(suite.tempDir, 'doc.md'), 'markdown', null);
   const cacheDir = safePath.join(suite.tempDir, 'cache');
   const cache = new ParseCache({ cacheDir, enabled: true });
   await cache.set(keyed, parseMarkdownContent(keyed.content, keyed.byteLength));

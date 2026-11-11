@@ -6,7 +6,7 @@ import * as fs from 'node:fs/promises';
 import { basename } from 'node:path';
 
 import { allowedToolsOf, parseFrontmatter } from '@vibe-agent-toolkit/agent-skills';
-import type { ParseDispatcher } from '@vibe-agent-toolkit/resources';
+import { type ParseDispatcher, readContentForParse } from '@vibe-agent-toolkit/resources';
 import { isPathAbsentError, mapWithConcurrency, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { SettingsConflict } from '../types.js';
@@ -82,7 +82,7 @@ async function parseSkillFrontmatter(
 ): Promise<{ frontmatter: SkillFrontmatter } | { reason: string }> {
   let content: string;
   try {
-    content = await fs.readFile(skillPath, 'utf-8');
+    ({ content } = await readContentForParse(skillPath, 'markdown', { dispatcher }));
   } catch (error) {
     return { reason: reasonOf(error) };
   }

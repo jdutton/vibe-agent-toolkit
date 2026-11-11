@@ -28,10 +28,10 @@ import { refuseAsyncFs , CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/tes
 import { describe, expect, it } from 'vitest';
 
 import { checkSettingsCompatibility } from '../src/settings/settings-compat-checker.js';
-import type { EffectiveSettings } from '../src/settings/settings-merger.js';
 
 import {
   BASH_SKILL,
+  DENY_BASH,
   LINKED_SKILL_FILES,
   PLAIN_SKILL,
   SKILLS,
@@ -41,14 +41,6 @@ import {
   writeSkill,
 } from './refused-skill-fixture.js';
 import { useSuiteParseDispatcher } from './test-helpers.js';
-
-const DENY_BASH: EffectiveSettings = {
-  permissions: {
-    allow: [],
-    ask: [],
-    deny: [{ rule: 'Bash', provenance: { level: 'managed', file: 'managed-settings.json' } }],
-  },
-};
 
 const getFixture = setupRefusedSkillFixture('vat-compat-unchecked-');
 

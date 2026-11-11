@@ -332,7 +332,8 @@ in a zone*, not of an identity. `resources` keeps `(resourceId, kind, origin, ob
 answers four different questions at once, and demand-driven keying adds a fifth. A file that could
 not be read and a file nobody has asked about are not the same fact, and letting them share a
 spelling is the completeness failure `zone_provenance.extentDigest` exists to prevent. Nor is a file
-too large to decode into a JS string (`oversize`, refused by size and never read) an unreadable one:
+too large to decode into a JS string, or a file a parser reads — markdown, HTML, or `text/plain`
+prose, which routes to the markdown parser — past the parse input cap (`inputBytes`) — both `oversize`, refused by size and never read — an unreadable one:
 its permissions are fine, and a reader told otherwise would look in the wrong place. The pairing
 is pinned by a schema refinement in both directions, so a key without the state — or a state without
 the key — fails to parse rather than being merged into the projection.

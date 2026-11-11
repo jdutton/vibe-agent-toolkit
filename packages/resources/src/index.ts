@@ -485,6 +485,7 @@ export {
   ParseDispatcher,
   parseContentCached,
   parseFileCached,
+  readContentForParse,
   withParseDispatcher,
   type ParsePoolPolicy,
   type ParseRoute,

@@ -69,8 +69,8 @@ export type ParseLimitName = keyof ParseLimits;
  * times ten, rounded up to a power of two in its unit. A limit the lab cannot
  * yet observe per job (`timeMs`, `heapMb`) keeps a bound the record justifies
  * another way — `timeMs` covers the slowest realistic shape found (a
- * 1,000-level nested list, 9.3 s) plus a cold worker's parser load, with
- * headroom for a loaded machine. Named for what they bound, never a version.
+ * 1,000-level nested list, 9.3 s), with headroom for a loaded machine; a cold
+ * worker's parser load runs on a clock of its own (`JobClock` in `parse-pool.ts`). Named for what they bound, never a version.
  */
 const DEFAULT_PARSE_LIMITS: ParseLimits = {
   timeMs: 30_000,
@@ -790,7 +790,7 @@ const BYTES_PER_MIB = 1_048_576;
  * own space statistics are out of the parent's reach (`Worker` has
  * `getHeapStatistics` and no `getHeapSpaceStatistics` on Node 26), so the old
  * generation alone cannot be read; subtracting the young generation at its
- * 96 MiB ceiling instead understates it by up to that much, which measured on
+ * size instead (192 MiB on Node 26.7) understates it by up to that much, which measured on
  * Node 26 let a worker reach V8's own ceiling unseen and kill the process. The
  * whole heap never understates the old generation, so a job is stopped no
  * later than its old generation passes the limit.
@@ -845,8 +845,10 @@ export interface HeapBounds {
   /** V8's own old-generation ceiling for the worker, past which V8 stops it. */
   readonly ceilingMb: number;
   /**
-   * The used heap past which the sampler stops a job without waiting for a
-   * collection to say what of it is held — see {@link heapBreached}.
+   * The used heap past which the sampler stops a job no collection has vouched for: see
+   * {@link heapBreached}. The same for every job on every thread, fresh or reused — a reused thread
+   * starts a job holding no more than {@link reusedThreadHeapMb} ({@link settleReusedHeap}) —
+   * so a document's verdict and the room above the stop do not depend on which thread ran it.
    */
   readonly stopMb: number;
 }
@@ -855,7 +857,7 @@ export interface HeapBounds {
  * The heap limit the pool enforces on a worker, and V8's own ceiling above it, in MiB.
  *
  * `heap_size_limit` is V8's old-generation ceiling plus the young
- * generation's (measured on Node 26: 2,048 + 96 = 2,144 for `heapMb` 1,024). A
+ * generation's (measured on Node 26.7: 2,048 + 192 = 2,240 for `heapMb` 1,024). A
  * process-wide `--max-old-space-size` overrides `resourceLimits` in BOTH
  * directions: higher, and the ceiling only moves further away; lower, and the
  * pool cannot raise it, so it enforces {@link HEAP_CEILING_FACTOR} below
@@ -891,16 +893,18 @@ export function heapBounds(
 }
 
 /**
- * Where the sampler stops a job no collection has vouched for: halfway from
- * the applied bound to V8's ceiling, the ceiling taken as never above
- * {@link workerHeapCeilingMb} (a process-wide flag that lifts V8's ceiling
- * does not lift the stop), never within {@link SAMPLER_HEADROOM_MB} of the
- * ceiling, and never below the bound itself.
+ * The used heap at which the sampler stops a job no collection has vouched for
+ * ({@link HeapBounds.stopMb}): halfway from the applied bound to V8's ceiling,
+ * the ceiling taken as never above {@link workerHeapCeilingMb} (a process-wide
+ * flag that lifts V8's ceiling does not lift the stop), never within
+ * {@link SAMPLER_HEADROOM_MB} of the ceiling, and never below the bound itself.
  *
  * Half the room is the trade between the two ways a used heap past the bound
  * can be misread: garbage V8 has not yet collected (the room below the stop),
  * and a parent stalled while a true breach allocates toward V8's ceiling (the
- * room above it) — see {@link heapBreached}.
+ * room above it) — see {@link heapBreached}. Every job on every thread is
+ * stopped there: a reused thread is settled before its job instead
+ * ({@link settleReusedHeap}).
  *
  * @param appliedMb - The applied bound
  * @param ceilingMb - V8's ceiling as read
@@ -911,6 +915,104 @@ function unvouchedStopMb(appliedMb: number, ceilingMb: number, heapMb: number): 
   const roomTopMb = Math.min(ceilingMb, workerHeapCeilingMb(heapMb));
   const halfwayMb = appliedMb + Math.floor((roomTopMb - appliedMb) / 2);
   return Math.max(appliedMb, Math.min(halfwayMb, ceilingMb - SAMPLER_HEADROOM_MB));
+}
+
+/**
+ * The used heap a fresh parse thread holds once its parsers have loaded, in MiB: 24.
+ *
+ * Measured on Node 26 (`used_heap_size`, three runs): 20.7–21.5 MiB after loading the markdown
+ * parser, 23.3–24.1 MiB after the HTML one too. What a reused thread is held near before its next
+ * job ({@link reusedThreadHeapMb}), and half of what a parked thread may hold.
+ */
+export const FRESH_THREAD_HEAP_MB = 24;
+
+/**
+ * What a reused thread may hold past a fresh one's {@link FRESH_THREAD_HEAP_MB}, as a share of the
+ * applied bound: an eighth. See {@link reusedThreadHeapMb}.
+ */
+const REUSED_THREAD_SLACK_SHARE = 8;
+
+/**
+ * The most a reused parse thread may hold as it starts a job, in MiB: what a fresh thread holds
+ * once its parsers have loaded ({@link FRESH_THREAD_HEAP_MB}) plus an eighth of the job's applied
+ * bound — 152 MiB at the default 1,024, 88 under a 1,024 MiB process flag (applied 512), 56 under
+ * 512 (applied 256). See {@link settleReusedHeap}.
+ *
+ * It is what keeps every job on one stop and one bound: a document on a reused thread starts with
+ * at most this much used heap, where on a fresh one it starts with the parsers' load, so the room
+ * the two leave a job differs by at most an eighth of the bound, never by an earlier job's whole
+ * leftover. The slack scales with the bound, and is no smaller, because what a job leaves is set by
+ * the document, so how often a check collects follows the slack's absolute size: a fixed 8 MiB
+ * collected before a quarter of reused-thread jobs (7.7–10% of worker time), a sixteenth before 12%
+ * under a 512 MiB flag (4.75%), an eighth before at most 1.1% (under 0.7% at every flag measured;
+ * `fact-extractors-limits.md`, "A reused thread").
+ *
+ * @param appliedMb - The thread's applied heap bound (`heapBounds`)
+ * @returns The bound, in MiB
+ */
+export function reusedThreadHeapMb(appliedMb: number): number {
+  return FRESH_THREAD_HEAP_MB + Math.floor(appliedMb / REUSED_THREAD_SLACK_SHARE);
+}
+
+/**
+ * The young generation a worker was given, in MiB — what separates V8's old-generation ceiling
+ * from the `heap_size_limit` a worker reports. Node fills it in on every started worker (192 MiB
+ * measured on Node 26.7); 0 if a runtime ever does not, which only makes the ceiling read higher.
+ *
+ * @param limits - A worker's `resourceLimits`, as the parent or the thread itself sees them
+ * @returns `maxYoungGenerationSizeMb`, or 0
+ */
+export function youngGenerationMb(limits: { readonly maxYoungGenerationSizeMb?: number | undefined } | undefined): number {
+  return limits?.maxYoungGenerationSizeMb ?? 0;
+}
+
+/** A reused thread's heap as it was settled before its next job ({@link settleReusedHeap}). */
+export interface ReuseCheck {
+  /** The used heap the job starts on, after the collection when one ran, in bytes. */
+  readonly usedBytes: number;
+  /** How long the forced collection took, in ms; `null` when none ran. */
+  readonly collectMs: number | null;
+  /** How long the whole check took, in ms: the reads and any collection. */
+  readonly checkMs: number;
+  /** Whether the thread holds too much to run the job: it is retired, and the job runs on a fresh one. */
+  readonly retire: boolean;
+}
+
+/**
+ * Settle a reused thread's heap before its next job, on that thread: past `boundMb`
+ * ({@link reusedThreadHeapMb}), force a full collection and read again; still past it, the thread
+ * is to be retired.
+ *
+ * Collected rather than credited: what earlier jobs left is mostly garbage V8 has not collected,
+ * and a job judged on top of it would be stopped sooner, or (credited for it) later, than on a
+ * fresh thread. After a full collection what is left is held, and it is at most a few MiB past a
+ * fresh thread's within the bound's slack, so every job is judged on the same absolute stop and bound. With no collector
+ * (a runtime where none could be had) nothing past the bound is collected, so such a thread is
+ * retired: a thread start, never a verdict that depends on garbage.
+ *
+ * @param boundMb - The most the thread may hold as the job starts ({@link reusedThreadHeapMb})
+ * @param readUsedBytes - Reads the thread's used heap, in bytes
+ * @param collect - Forces a full collection on the thread, or `null` when none is available
+ * @param now - A millisecond clock
+ * @returns The check — see {@link ReuseCheck}
+ */
+export function settleReusedHeap(
+  boundMb: number,
+  readUsedBytes: () => number,
+  collect: (() => void) | null,
+  now: () => number,
+): ReuseCheck {
+  const boundBytes = boundMb * BYTES_PER_MIB;
+  const startedAt = now();
+  let usedBytes = readUsedBytes();
+  let collectMs: number | null = null;
+  if (usedBytes > boundBytes && collect !== null) {
+    const collectFrom = now();
+    collect();
+    collectMs = now() - collectFrom;
+    usedBytes = readUsedBytes();
+  }
+  return { usedBytes, collectMs, checkMs: now() - startedAt, retire: usedBytes > boundBytes };
 }
 
 /**
@@ -961,10 +1063,10 @@ const MAIN_THREAD_RESERVE_MB = 1024;
 
 /**
  * The least enforced heap a memory-bounded worker is given. A judgement, not a
- * measurement: it is the young generation's own ceiling (see
- * {@link exceedsHeapLimit}), so a worker on a machine too small for one default
- * worker can still hold an ordinary document, and a larger one is refused as a
- * per-run heap breach rather than taking the process down.
+ * measurement: above what an ordinary document peaks at on a cold worker (54 to
+ * 68 MiB used, see {@link heapBounds}), so a worker on a machine too small for one
+ * default worker can still hold an ordinary document, and a larger one is refused
+ * as a per-run heap breach rather than taking the process down.
  */
 const MIN_BOUNDED_HEAP_MB = 96;
 

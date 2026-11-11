@@ -19,7 +19,7 @@ import { writeFile } from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
-import type { RunContentCache } from '../src/projection/content-cache.js';
+import { RunContentCache } from '../src/projection/content-cache.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
@@ -50,7 +50,9 @@ export const IN_CRAWL_ORDER: RealizationOrder = (rows) => rows;
  *
  * @param rootDir - The corpus root to enumerate
  * @param order - How to reorder the realizations before recording them
- * @param contentCache - The run cache to share with the derivation stage, if any
+ * @param contentCache - The run cache the enumeration shares with the derivation stage. Omitted,
+ *   each stage gets a fresh cache of its own, so the derivation-time read is a genuine second read
+ *   — the lane of a key the run recorded without reading the bytes
  * @returns A builder carrying the base stratum and nothing else
  */
 export async function baseBuilderForRoot(
@@ -58,8 +60,10 @@ export async function baseBuilderForRoot(
   order: RealizationOrder = IN_CRAWL_ORDER,
   contentCache?: RunContentCache,
 ): Promise<ProjectionBuilder> {
-  const builder = new ProjectionBuilder({ root: rootDir, contentCache });
-  const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(builder.base(), null);
+  const freshBuilder = (): ProjectionBuilder => new ProjectionBuilder({ root: rootDir, contentCache: new RunContentCache({ inputBytes: null }) });
+  const enumerator = contentCache === undefined ? freshBuilder() : new ProjectionBuilder({ root: rootDir, contentCache });
+  const builder = contentCache === undefined ? freshBuilder() : enumerator;
+  const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(enumerator.base(), null);
   for (const row of contribution.contexts) builder.addContext(row);
   for (const row of contribution.resources) builder.addResource(row);
   for (const row of order(contribution.realizations)) builder.addRealization(row);

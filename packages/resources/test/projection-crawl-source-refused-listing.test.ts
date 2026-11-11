@@ -43,6 +43,7 @@ import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { withReaddirSyncRefused , CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { RunContentCache } from '../src/projection/content-cache.js';
 import type { ExtentContribution } from '../src/projection/contributor.js';
 import {
   EXTENT_DIRECTORY_UNLISTABLE,
@@ -94,7 +95,7 @@ async function enumerated(source: CrawlSource): Promise<string[]> {
 async function contribute(sourceFor: (root: string) => CrawlSource): Promise<ExtentContribution> {
   const tracker = new GitTracker(root);
   await tracker.initialize();
-  const base = new ProjectionBuilder({ root, gitTracker: tracker }).base();
+  const base = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache({ inputBytes: null }) }).base();
   return new FilesystemExtentContributor(sourceFor, DEFAULT_CONTENT_DEMAND).contribute(base, null);
 }
 

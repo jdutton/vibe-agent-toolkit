@@ -124,6 +124,7 @@ import { readDecodableBytes } from '@vibe-agent-toolkit/utils/fs';
 import { decodeTextContent, type TextProvenance } from '@vibe-agent-toolkit/utils/text';
 
 import { type DocumentParserKind, mimeTypeForPath, parserKindForMimeType } from './mime-type.js';
+import { ParseLimitError } from './parse-limits.js';
 
 /**
  * The kind that means "no document parser runs on this".
@@ -350,27 +351,45 @@ export function isParsableContent(keyed: KeyedContent): keyed is ParsableContent
  * silent at every call site that gets it wrong, and correct at none that a
  * reviewer can see.
  *
+ * ## Why `inputBytes` is REQUIRED too
+ *
+ * Every lane that reads a file a parser will read holds it to the run's parse input cap here, by
+ * its `fstat` size, before a byte is read — the registry lane, the projection lane, and every lane
+ * that reads a `SKILL.md` for its frontmatter, through `readContentForParse` (skill identity,
+ * import, the skill validator, the compat detectors, the settings checker, the skill inventory) —
+ * so a file past the cap is the same `ParseLimitError` (`inputBytes`, naming the cap alone) on
+ * every one. `null` says the read is for the bytes themselves (a content key no parse
+ * follows), and each caller says which it is: an optional cap was omitted by every caller that
+ * never thought about it. The cap applies only to a kind a parser reads; a `none` read is never
+ * parsed, so it is never capped.
+ *
  * @param filePath - Absolute path to read
  * @param parserKind - The parser this content will actually be handed to.
  *   Callers that route by extension pass `parserKindForPath(filePath)`.
+ * @param inputBytes - The run's parse input cap, or `null` when the read is for the bytes themselves
  * @returns The content, its key, and the parser it routes to
  * @throws Whatever `readFile` throws — callers decide whether a read failure is
- *   fatal or a miss — and `TextTooLargeError` (`TEXT_TOO_LARGE`) for a file too
+ *   fatal or a miss — `TextTooLargeError` (`TEXT_TOO_LARGE`) for a file too
  *   large to decode, which is neither: the bytes are readable, just not as one
- *   string
+ *   string — and a `ParseLimitError` (`inputBytes`) for a parsed kind past `inputBytes`
  */
 export async function readContentWithKey<K extends ParserKind>(
   filePath: string,
   parserKind: K,
+  inputBytes: number | null,
 ): Promise<KeyedContent<K>> {
   // Read as bytes and decode here, rather than letting readFile decode: the key
   // must be over what was on disk, the decode is lossy, and `readFile(path,
   // 'utf-8')` offers no BOM or encoding handling at all.
   //
-  // `readDecodableBytes`, not a bare `readFile`: a file too large to become a
-  // string is refused by `fstat` with `TextTooLargeError` before a byte is read,
-  // rather than read whole (up to 2 GiB) only for the decode below to refuse it.
-  const bytes = await readDecodableBytes(filePath);
+  // The one read path, `readDecodableBytes` (a pipe or device is refused, never waited on; sized
+  // by `fstat` on the handle it reads, so a rename cannot substitute another file): a file past the
+  // input cap, or too large to become a string at all (`TextTooLargeError`), is refused before a
+  // byte is read, rather than read whole (up to 2 GiB) only for the parse or the decode to refuse it.
+  const cap = inputBytes !== null && parserKind !== NO_PARSER_KIND ? inputBytes : null;
+  const bytes = await readDecodableBytes(filePath, (size) => {
+    if (cap !== null && size > cap) throw new ParseLimitError('inputBytes', cap);
+  });
   // `decodeTextContent` is the ONE decoder — see `utils`' text-content.ts. The
   // bytes handed to `computeContentKey` are the same ones, undecoded, on purpose:
   // this function COMPOSES a decode with a raw-bytes key.

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { LOADING_TAG, RULE_SCOPE_TAG } from '../src/projection/agentic-tags.js';
 import { harnessPaths } from '../src/projection/claude-context-rules.js';
+import { RunContentCache } from '../src/projection/content-cache.js';
 import {
   CLAUDE_RULES_SCOPE_KIND,
   ClaudeRulesScopeContributor,
@@ -126,7 +127,7 @@ function buildBase(files: readonly FixtureFile[], extraExtents: readonly string[
   base: ProjectionBase;
   idOf: (path: string) => string;
 } {
-  const builder = new ProjectionBuilder({ root: ROOT });
+  const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache({ inputBytes: null }) });
   const ids = new Map<string, string>();
   for (const file of files) {
     ids.set(file.path, builder.identities.idFor(safePath.join(ROOT, file.path)));

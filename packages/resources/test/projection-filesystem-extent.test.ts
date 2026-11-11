@@ -22,7 +22,7 @@ import {
   unlistableRowStillHolds,
 } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
-import { ProjectionBuilder } from '../src/projection/projection.js';
+import { type ProjectionBase, ProjectionBuilder } from '../src/projection/projection.js';
 import type { ContentDemand } from '../src/projection/realizations.js';
 import {
   CONDITION_WITHOUT_REFERENCE,
@@ -52,7 +52,7 @@ function pathsOf(contribution: ExtentContribution): string[] {
 
 /** Run the contributor against a fresh base over the fixture root. */
 async function contribute(): Promise<ExtentContribution> {
-  const base = new ProjectionBuilder({ root }).base();
+  const base = new ProjectionBuilder({ root, contentCache: new RunContentCache({ inputBytes: null }) }).base();
   return new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(base, null);
 }
 
@@ -70,6 +70,18 @@ async function contributeInRepo(): Promise<ExtentContribution> {
 }
 
 /**
+ * A projection base over {@link root} made a git repository, with a real git oracle.
+ *
+ * @returns The base
+ */
+async function baseInRepo(): Promise<ProjectionBase> {
+  runGitOrThrow(['init'], { cwd: root });
+  const tracker = new GitTracker(root);
+  await tracker.initialize();
+  return new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache({ inputBytes: null }) }).base();
+}
+
+/**
  * Run the contributor in a git repository under a parameter set.
  *
  * A repository, because {@link DECLINE_IGNORED} is only distinguishable from the
@@ -80,10 +92,7 @@ async function contributeInRepo(): Promise<ExtentContribution> {
  * @returns The contribution
  */
 async function contributeWithParameters(parameters: JsonValue): Promise<ExtentContribution> {
-  runGitOrThrow(['init'], { cwd: root });
-  const tracker = new GitTracker(root);
-  await tracker.initialize();
-  const base = new ProjectionBuilder({ root, gitTracker: tracker }).base();
+  const base = await baseInRepo();
   return new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(base, parameters);
 }
 
@@ -99,10 +108,7 @@ async function contributeWithParameters(parameters: JsonValue): Promise<ExtentCo
  * @returns The contribution
  */
 async function contributeUnder(demand?: ContentDemand): Promise<ExtentContribution> {
-  runGitOrThrow(['init'], { cwd: root });
-  const tracker = new GitTracker(root);
-  await tracker.initialize();
-  const base = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache() }).base();
+  const base = await baseInRepo();
   const contributor = new FilesystemExtentContributor((at) => crawlSourceFor(at, []), demand ?? DEFAULT_CONTENT_DEMAND);
   return contributor.contribute(base, null);
 }
@@ -221,7 +227,7 @@ describe('FilesystemExtentContributor declining the ignored half', () => {
     // Deliberately no `git init`: with no ignore oracle nothing is ignorable, so
     // the decline has nothing to act on and must not guess from `.gitignore`'s
     // mere presence.
-    const base = new ProjectionBuilder({ root }).base();
+    const base = new ProjectionBuilder({ root, contentCache: new RunContentCache({ inputBytes: null }) }).base();
     const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(base, DECLINE_IGNORED);
 
     expect(pathsOf(contribution)).toContain(BUILD_OUTPUT);
@@ -326,7 +332,7 @@ describe('FilesystemExtentContributor rows', () => {
     // The id, not just the column: `resolution_contexts` is keyed on
     // `contextId` alone, so a federated projection over two roots keeps these
     // extents apart only if the root is inside the id.
-    const builder = new ProjectionBuilder({ root });
+    const builder = new ProjectionBuilder({ root, contentCache: new RunContentCache({ inputBytes: null }) });
     const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(builder.base(), null);
 
     expect(contribution.contexts[0]?.rootId).toBe(builder.identities.rootId);

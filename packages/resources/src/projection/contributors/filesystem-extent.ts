@@ -402,7 +402,7 @@ export class FilesystemExtentContributor implements ExtentContributor {
         // The run's cache, never a local one: most of these paths are realized
         // by the git extent too, and the point is that the second realization
         // costs no read.
-        ...(base.contentCache !== undefined && { contentCache: base.contentCache }),
+        contentCache: base.contentCache,
         // The run's single resolver, never one built here: it accumulates the
         // config conflicts it finds, and a per-extent instance would report one
         // authoring mistake once per extent that realizes the file.

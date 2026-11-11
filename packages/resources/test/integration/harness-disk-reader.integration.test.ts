@@ -10,6 +10,7 @@ import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { computeContentKey } from '../../src/content-key.js';
+import { RunContentCache } from '../../src/projection/content-cache.js';
 import { diskHarnessContentReader } from '../../src/projection/harness/harness-pass.js';
 import type { HarnessFrontierEntry } from '../../src/projection/harness/reach.js';
 
@@ -39,25 +40,25 @@ describe('diskHarnessContentReader', () => {
 
   it('reads the bytes while they still key to the blob', async () => {
     const { entry } = entryFor(WIDGETS);
-    await expect(diskHarnessContentReader(undefined)(entry)).resolves.toBe(WIDGETS);
+    await expect(diskHarnessContentReader(new RunContentCache({ inputBytes: null }))(entry)).resolves.toBe(WIDGETS);
   });
 
   it('answers null when the bytes no longer key to the blob', async () => {
     const { absolutePath, entry } = entryFor(WIDGETS);
     writeFileSync(absolutePath, '# rewritten\n', 'utf-8');
-    await expect(diskHarnessContentReader(undefined)(entry)).resolves.toBeNull();
+    await expect(diskHarnessContentReader(new RunContentCache({ inputBytes: null }))(entry)).resolves.toBeNull();
   });
 
   it('answers null when the file is gone', async () => {
     const { absolutePath, entry } = entryFor(WIDGETS);
     rmSync(absolutePath);
-    await expect(diskHarnessContentReader(undefined)(entry)).resolves.toBeNull();
+    await expect(diskHarnessContentReader(new RunContentCache({ inputBytes: null }))(entry)).resolves.toBeNull();
   });
 
   it('rethrows a failure that is not an absence', async () => {
     const { absolutePath, entry } = entryFor(WIDGETS);
     rmSync(absolutePath);
     mkdirSyncReal(absolutePath);
-    await expect(diskHarnessContentReader(undefined)(entry)).rejects.toThrow();
+    await expect(diskHarnessContentReader(new RunContentCache({ inputBytes: null }))(entry)).rejects.toThrow();
   });
 });

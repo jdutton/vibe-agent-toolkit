@@ -12,6 +12,7 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { RunContentCache } from '../src/projection/content-cache.js';
 import { DERIVED_TABLES } from '../src/projection/derived-table-registry.js';
 import { exportProjection } from '../src/projection/export.js';
 import { ProjectionBuilder, type Projection } from '../src/projection/projection.js';
@@ -54,7 +55,7 @@ function patternRow(overrides: Partial<ClaudeRulePatternRow> = {}): ClaudeRulePa
  * @returns The built projection
  */
 function projectionWith(rows: readonly ClaudeRulePatternRow[]): Projection {
-  const builder = new ProjectionBuilder({ root: ROOT });
+  const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache({ inputBytes: null }) });
   for (const row of rows) builder.addClaudeRulePattern(row);
   return builder.build();
 }
@@ -197,7 +198,7 @@ describe('claude_rule_patterns in the exported document', () => {
   });
 
   it('is emitted at the registry position its declaration order gives it', () => {
-    const tables = exportProjection(new ProjectionBuilder({ root: ROOT }).build()).tables;
+    const tables = exportProjection(new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache({ inputBytes: null }) }).build()).tables;
 
     expect(Object.keys(tables).indexOf('claudeRulePatterns'))
       .toBe(Object.keys(PROJECTION_TABLES).indexOf('claudeRulePatterns'));
@@ -211,7 +212,7 @@ describe('claude_rule_patterns hydration', () => {
     // directly, and an absent field is a TypeError at the first reader rather
     // than a cache miss anyone can diagnose.
     const stored = selectRequestedRows(
-      splitProjectionByScope(new ProjectionBuilder({ root: ROOT }).build()).extent,
+      splitProjectionByScope(new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache({ inputBytes: null }) }).build()).extent,
       { contexts: [], rootId: 'root-none' },
     );
 
@@ -224,7 +225,7 @@ describe('claude_rule_patterns hydration', () => {
     // The reachability rule the three context-less tables are recovered by. The
     // pair is the point: a filter that kept everything and one that kept nothing
     // both satisfy either half alone.
-    const builder = new ProjectionBuilder({ root: ROOT });
+    const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache({ inputBytes: null }) });
     builder.addExtentMembership({ resourceId: RULE_A, extentId: 'ctx-kept' });
     builder.addContext({
       contextId: 'ctx-kept',

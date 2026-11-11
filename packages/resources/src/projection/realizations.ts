@@ -9,7 +9,7 @@
 
 import { lstatSync } from 'node:fs';
 
-import { followedStatSync, type FsFaultFacts, fsFaultOf, isLinkChainRefusedError, isVatError, linkResolutionFault, realpathNativeSync, safePath, TextTooLargeError, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { followedStatSync, type FsFaultFacts, fsFaultOf, isLinkChainRefusedError, linkResolutionFault, realpathNativeSync, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import { matchesCollection } from '../collection-matcher.js';
@@ -23,7 +23,7 @@ import {
   type ResourceRealizationRow,
 } from '../schemas/projection-resources.js';
 
-import { readKeyedContent, type RunContentCache } from './content-cache.js';
+import { isSizeRefusal, readKeyedContent, type RunContentCache } from './content-cache.js';
 import { canonicalJson } from './digest.js';
 
 /**
@@ -108,15 +108,15 @@ export interface RealizationContext {
   /** Absent (or unusable) when the root is not a git repository. */
   gitTracker?: GitTracker | undefined;
   /**
-   * The run's content cache, so one path keyed in two extents is read once.
-   *
-   * Optional because this function is also called outside a population — the
-   * CLI's enumeration oracle keys a single path with no run to belong to — and a
-   * cache with a lifetime of one call would be a pure cost. Inside `populate` it
-   * is always present, threaded from the builder through
-   * {@link ProjectionBase.contentCache}.
+   * The run's content cache, so one path keyed in two extents is read once, and
+   * every read is held to the run's parse input cap; inside `populate` it is
+   * always the builder's, threaded through {@link ProjectionBase.contentCache}.
+   * `null` only for a caller outside a population that wants the bytes
+   * themselves and parses none of them — the CLI's enumeration oracle, which keys
+   * a single path with no run to belong to: such a read has no cap
+   * (`readKeyedContent`).
    */
-  contentCache?: RunContentCache | undefined;
+  contentCache: RunContentCache | null;
   /**
    * Whether this extent wants the bytes keyed. Absent means {@link ContentDemand}
    * `'eager'` — the historical behaviour, and the reason no existing caller had
@@ -424,9 +424,11 @@ interface ObservedPath {
  *    consumer could not tell a corpus of directories from one it declined to
  *    read.
  * 2. **The demand policy defers.** No read happens at all; that is the saving.
- * 3. **Otherwise read.** Success keys it; a file too large to decode is
- *    `oversize` (refused by size, never read); a filesystem refusal is
- *    `unreadable`; anything else is a bug and is rethrown.
+ * 3. **Otherwise read.** Success keys it; a file refused by its size is
+ *    `oversize`, never read — too large to decode, or, for a kind a parser
+ *    reads, past the run's parse input cap (the run's cache holds it to it);
+ *    a filesystem refusal is `unreadable`; anything else is a bug and is
+ *    rethrown.
  *
  * A read failure is a fact about the corpus, not an error in the harness — an
  * unreadable file must show up as a row with a null key, not abort the
@@ -468,9 +470,9 @@ async function keyOrState(
     );
     return { contentKey: keyed.key, contentState: 'keyed' };
   } catch (error) {
-    // Too large to become a string: a fact about the corpus with its own name,
-    // refused by size before any read (see `readDecodableBytes`).
-    if (isVatError(error, TextTooLargeError.code)) {
+    // Refused by its size before any read (see `readDecodableBytes`): too large
+    // to become a string, or past the parse input cap a parser would refuse it at.
+    if (isSizeRefusal(error)) {
       return { contentKey: null, contentState: 'oversize' };
     }
     // `unreadable` means the filesystem refused the bytes, and that is the

@@ -12,6 +12,7 @@ import { computeContentKey } from '../src/content-key.js';
 import { ParseLimitError, ParseWorkerDiedError } from '../src/parse-limits.js';
 import { BLOB_PARSE_LIMIT_EXCEEDED, BLOB_PARSE_WORKER_DIED } from '../src/projection/blob-population.js';
 import { describeBlobRefusals, notAdmittedRealizations } from '../src/projection/blob-refusals.js';
+import { RunContentCache } from '../src/projection/content-cache.js';
 import { extentContextId } from '../src/projection/contributors/context-id.js';
 import { CLAUDE_CODE, CLAUDE_OVERSIZE_BYTES } from '../src/projection/harness/claude-code.js';
 import { runHarnessPass, type HarnessContentReader, type HarnessFactsDeriver } from '../src/projection/harness/harness-pass.js';
@@ -47,7 +48,7 @@ function readerOver(files: Readonly<Record<string, string>>): HarnessContentRead
 
 /** A builder holding the files — realizations, blobs, NO harness facts. */
 function builderFor(files: Readonly<Record<string, string>>, deferred: readonly string[] = []): ProjectionBuilder {
-  const builder = new ProjectionBuilder({ root: ROOT });
+  const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache({ inputBytes: null }) });
   builder.addRoot({ id: builder.identities.rootId, path: ROOT });
   for (const [path, markdown] of Object.entries(files)) {
     addFile(builder, { path, refs: [], markdown, deferred: deferred.includes(path) }, ROOT);
@@ -220,7 +221,7 @@ describe('runHarnessPass', () => {
     };
     const realBlob = builderFor(files).base().blobs.find((row) => row.contentKey === keyOf(files['big.md']));
     if (realBlob === undefined) throw new Error('fixture: big.md has no blob row');
-    const builder = new ProjectionBuilder({ root: ROOT });
+    const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache({ inputBytes: null }) });
     builder.addRoot({ id: builder.identities.rootId, path: ROOT });
     // Planted FIRST so `addFile`'s own blob row for these bytes is the duplicate:
     // the cliff is about `blobs.bytes`, and 4 MiB of real text would cost the
@@ -340,7 +341,7 @@ describe('runHarnessPass', () => {
   });
 
   it('refuses a projection with realizations and no root', () => {
-    const builder = new ProjectionBuilder({ root: ROOT });
+    const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache({ inputBytes: null }) });
     addFile(builder, { path: 'CLAUDE.md', refs: [], markdown: '# acme\n' }, ROOT);
 
     expect(() => harnessFrontier(builder.base(), CLAUDE_CODE)).toThrow(/no root/);

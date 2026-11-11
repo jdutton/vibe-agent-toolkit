@@ -16,6 +16,7 @@ import {
   flattenHeadings,
   type HeadingNode,
   isParsableContent,
+  isParseLimitError,
   ParseCache,
   type KeyedContent,
   type LexicalReference,
@@ -134,7 +135,7 @@ export async function captureParseFactSnapshot(
   // Every parse runs in the bounded worker, on ONE dispatcher over a DISABLED
   // cache: a cache hit here would be the assumption under test answering itself.
   await withParseDispatcher((dispatcher) => forEachInOrder(absolutePaths, async (absolutePath) => {
-    const keyed = await readKeyedOrSkip(absolutePath);
+    const keyed = await readKeyedOrSkip(absolutePath, dispatcher.inputBytes);
     if (keyed === null) {
       return;
     }
@@ -225,12 +226,20 @@ export function diffParseFactRows(first: ParseFactRow, other: ParseFactRow): str
  * Returns the whole `KeyedContent` rather than a narrowed struct because
  * `parseOrNull` needs to NARROW it: `isParsableContent` is a type guard on the
  * object, and a hand-picked subset of its fields cannot be narrowed by one.
+ *
+ * Read only to parse, so it is held to the dispatcher's input cap before it is read, as every
+ * other lane's read is. A file past the cap is the parse refusal `parseOrNull` skips, met one
+ * step earlier, so it is skipped the same way.
+ *
+ * @param absolutePath - The path
+ * @param inputBytes - The run's parse input cap
+ * @returns The keyed content, or null when nothing is there or its parse is refused by its size
  */
-async function readKeyedOrSkip(absolutePath: string): Promise<KeyedContent | null> {
+async function readKeyedOrSkip(absolutePath: string, inputBytes: number): Promise<KeyedContent | null> {
   try {
-    return await readContentWithKey(absolutePath, parserKindForPath(absolutePath));
+    return await readContentWithKey(absolutePath, parserKindForPath(absolutePath), inputBytes);
   } catch (error) {
-    if (isPathAbsentError(error)) return null;
+    if (isPathAbsentError(error) || isParseLimitError(error)) return null;
     throw error;
   }
 }

@@ -14,6 +14,7 @@ import {
   countOutputRows,
   exceedsHeapLimit,
   expandedSize,
+  FRESH_THREAD_HEAP_MB,
   isParseLimitError,
   isParseWorkerDiedError,
   isPerRunParseRefusal,
@@ -24,7 +25,10 @@ import {
   ParseLimitError,
   ParseWorkerDiedError,
   resolveParseLimits,
+  reusedThreadHeapMb,
+  settleReusedHeap,
   workerHeapCeilingMb,
+  youngGenerationMb,
 } from '../src/parse-limits.js';
 
 const MIB = 1_048_576;
@@ -406,7 +410,7 @@ describe('a heap breach', () => {
     expect(heapBreached(sample(1025), 1500 * MIB, bounds, 96)).toBe(true);
   });
 
-  it('is declared past the stop whatever came before, so V8\'s ceiling is never left to stop a job', () => {
+  it('is declared past the stop whatever came before, leaving the room above it for a sample that lands late', () => {
     expect(heapBreached(sample(1537), 1500 * MIB, bounds, 96)).toBe(true);
     expect(heapBreached(sample(1537), undefined, bounds, 96)).toBe(true);
     expect(heapBreached(sample(1536), 1500 * MIB, bounds, 96)).toBe(false);
@@ -414,6 +418,85 @@ describe('a heap breach', () => {
 
   it('reads any drop as an old-generation collection when the young generation is unknown, so it refuses sooner, never later', () => {
     expect(heapBreached(sample(1100), 1101 * MIB, bounds, 0)).toBe(true);
+  });
+});
+
+/**
+ * A scripted reused thread: the used heap it reads before and after a collection, and whether one
+ * ran.
+ *
+ * @param beforeMb - The used heap the first read returns, in MiB
+ * @param afterMb - The used heap every read after a collection returns, in MiB
+ * @returns The reader and collector to hand `settleReusedHeap`, and how many collections ran
+ */
+function scriptedThread(beforeMb: number, afterMb: number): { read: () => number; collect: () => void; collections: () => number } {
+  let collections = 0;
+  return {
+    read: () => (collections === 0 ? beforeMb : afterMb) * MIB,
+    collect: () => {
+      collections += 1;
+    },
+    collections: () => collections,
+  };
+}
+
+/** A clock that moves 2 ms on every read. */
+function steppingClock(): () => number {
+  let at = 0;
+  return () => (at += 2);
+}
+
+describe('a reused thread\'s heap before its next job', () => {
+  it.each([
+    { label: 'the default 1,024 MiB', appliedMb: 1024, boundMb: FRESH_THREAD_HEAP_MB + 128 },
+    { label: '512 MiB (a 1,024 MiB flag)', appliedMb: 512, boundMb: FRESH_THREAD_HEAP_MB + 64 },
+    { label: '256 MiB (a 512 MiB flag)', appliedMb: 256, boundMb: FRESH_THREAD_HEAP_MB + 32 },
+    { label: '103 MiB, rounded down', appliedMb: 103, boundMb: FRESH_THREAD_HEAP_MB + 12 },
+  ])('may hold what a fresh thread holds plus an eighth of the applied bound: $label', ({ appliedMb, boundMb }) => {
+    expect(reusedThreadHeapMb(appliedMb)).toBe(boundMb);
+  });
+
+  const BOUND_MB = reusedThreadHeapMb(1024);
+
+  it('is not collected when it holds no more than that, and the thread is kept', () => {
+    const thread = scriptedThread(BOUND_MB, 0);
+    const check = settleReusedHeap(BOUND_MB, thread.read, thread.collect, steppingClock());
+
+    expect(thread.collections()).toBe(0);
+    expect(check).toStrictEqual({ usedBytes: BOUND_MB * MIB, collectMs: null, checkMs: 2, retire: false });
+  });
+
+  it('is collected when it holds 1 byte more, and the thread is kept when what the collection leaves is within the bound', () => {
+    const thread = scriptedThread(BOUND_MB, BOUND_MB);
+    const read = (): number => thread.read() + (thread.collections() === 0 ? 1 : 0);
+    const check = settleReusedHeap(BOUND_MB, read, thread.collect, steppingClock());
+
+    expect(thread.collections()).toBe(1);
+    expect(check).toStrictEqual({ usedBytes: BOUND_MB * MIB, collectMs: 2, checkMs: 6, retire: false });
+  });
+
+  it('retires the thread when even a collection leaves it holding 1 byte more than the bound', () => {
+    const thread = scriptedThread(400, BOUND_MB);
+    const read = (): number => thread.read() + (thread.collections() === 0 ? 0 : 1);
+    const check = settleReusedHeap(BOUND_MB, read, thread.collect, steppingClock());
+
+    expect(check.retire).toBe(true);
+    expect(check.usedBytes).toBe(BOUND_MB * MIB + 1);
+  });
+
+  it('retires a thread holding more without collecting when no collection is available, never judging garbage as held', () => {
+    const thread = scriptedThread(BOUND_MB + 1, 0);
+    const check = settleReusedHeap(BOUND_MB, thread.read, null, steppingClock());
+
+    expect(check).toStrictEqual({ usedBytes: (BOUND_MB + 1) * MIB, collectMs: null, checkMs: 2, retire: true });
+  });
+});
+
+describe('a thread\'s young generation', () => {
+  it('is what its resource limits say, and 0 when a runtime gives none', () => {
+    expect(youngGenerationMb({ maxYoungGenerationSizeMb: 192 })).toBe(192);
+    expect(youngGenerationMb({})).toBe(0);
+    expect(youngGenerationMb(undefined)).toBe(0);
   });
 });
 

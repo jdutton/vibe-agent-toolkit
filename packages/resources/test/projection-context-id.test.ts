@@ -15,6 +15,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { RunContentCache } from '../src/projection/content-cache.js';
 import type { ExtentContribution } from '../src/projection/contributor.js';
 import { extentContextId } from '../src/projection/contributors/context-id.js';
 import { PackageExtentContributor } from '../src/projection/contributors/package-extent.js';
@@ -48,7 +49,7 @@ function makeRoot(): string {
 
 /** The package extents of one corpus root. */
 async function contribute(root: string): Promise<ExtentContribution> {
-  return new PackageExtentContributor().contribute(new ProjectionBuilder({ root }).base(), {});
+  return new PackageExtentContributor().contribute(new ProjectionBuilder({ root, contentCache: new RunContentCache({ inputBytes: null }) }).base(), {});
 }
 
 /** The context ids one contribution declared. */
@@ -137,7 +138,7 @@ describe('federated roots depending on the same package', () => {
   it('keeps both roots extents when they land in ONE federated projection', () => {
     // The failure this scheme exists to prevent, observed where it happens:
     // the keep-first `resolution_contexts` table.
-    const builder = new ProjectionBuilder({ root: rootA });
+    const builder = new ProjectionBuilder({ root: rootA, contentCache: new RunContentCache({ inputBytes: null }) });
     const rows = [...contributionA.contexts, ...contributionB.contexts];
 
     const recorded = rows.map((row) => builder.addContext(row));

@@ -18,7 +18,7 @@
 import { spawnSync } from 'node:child_process';
 import { chmodSync, writeFileSync } from 'node:fs';
 
-import { FilesystemCrawlSource, DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor, ProjectionBuilder, ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import { FilesystemCrawlSource, DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor, ProjectionBuilder, ResourceRegistry, RunContentCache } from '@vibe-agent-toolkit/resources';
 import { createSymlink, FS_FAULT_CODE, mkdirSyncReal, realpathNativeSync, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { CANNOT_DENY_READS, createTempDir, gitExecutable, installFaultFs, removeTempDir, type FaultFsSession, type InjectedErrno } from '@vibe-agent-toolkit/utils/testing';
@@ -104,7 +104,7 @@ async function validatorCode(root: string): Promise<string | null> {
 async function extentRow(root: string): Promise<{ code: string; targetFaultClass: string | null } | undefined> {
   const tracker = new GitTracker(root);
   await tracker.initialize({ includeUntracked: true });
-  const builder = new ProjectionBuilder({ root, gitTracker: tracker });
+  const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache({ inputBytes: null }) });
   const contribution = await new FilesystemExtentContributor((at) => new FilesystemCrawlSource(at, []), DEFAULT_CONTENT_DEMAND).contribute(builder.base(), null);
   return contribution.conditions.find((row) => row.path === 'docs/alias');
 }

@@ -686,12 +686,20 @@ and the below-threshold main-thread parse are gone, because a parse on the run's
 stopped ([Fact Extractors](./fact-extractors.md) I8). Below the activation threshold the pool runs
 one job at a time; `VAT_PARSE_POOL_SIZE` and `VAT_PARSE_POOL_MIN_MISSES` still size it.
 
-Each job runs under `ParseLimits` (`parse-limits.ts`): wall clock (`timeMs`, which includes a cold
-worker's first parser load), heap (`heapMb`), stack depth (`stackMb`), output rows and bytes
+Each job runs under `ParseLimits` (`parse-limits.ts`): wall clock (`timeMs`, from the moment the
+job's parser has loaded; a cold worker's load runs on a clock of its own, `JobClock`), heap (`heapMb`), stack depth (`stackMb`), output rows and bytes
 (`outputRows`, `outputBytes`, checked in the worker before anything is cached) and input size
-(`inputBytes`, refused before any worker is asked). Time and heap breaches kill and replace the
-worker; stack and output breaches are reported by it; input size is refused before dispatch. Either
-way the job rejects with `ParseLimitError`. The projection lane refuses that one blob
+(`inputBytes`, refused by the file's size before it is read on every lane that reads through
+`readContentWithKey` — the registry, the projection's content cache and the parse-fact oracle all
+hand it the run's cap, and every lane that reads a `SKILL.md` for its frontmatter — skill identity
+(`skill-identity.ts`), import (`import.ts`), the skill validator, the compat detectors, the
+settings checker and the skill inventory — reads it through `readContentForParse`, which hands it
+the cap of the run's dispatcher, or the default one; content handed over already in memory is
+refused by the pool, at the same cap, by its UTF-8 byte length).
+Time and heap breaches kill and replace the worker; stack and output breaches are reported by it.
+Either way the job rejects with `ParseLimitError`. A projection realization refused at the input cap
+is `contentState: 'oversize'` with no blob, reported as `RESOURCE_PARSE_LIMIT_EXCEEDED` like the
+registry lane's refusal of the same file. The projection lane refuses that one blob
 (`BLOB_PARSE_LIMIT_EXCEEDED`, a per-run code `storableBlobFacts` never stores); the registry lane
 reports `RESOURCE_PARSE_LIMIT_EXCEEDED` and admits every other file. A worker that dies holding a
 job — it exits, or an uncaught error kills it — rejects with `ParseWorkerDiedError`, handled the same

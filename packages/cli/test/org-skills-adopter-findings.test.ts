@@ -19,6 +19,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 
 import { API_SKILL_MAX_UPLOAD_BYTES } from '@vibe-agent-toolkit/agent-skills';
+import { ParseLimitError, withParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { installFaultFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -214,16 +215,29 @@ describe('inspectZipArchive', () => {
   });
 
   /**
-   * `getData()` allocates whatever `header.size` claims, and a header can claim
-   * anything. Bounding it is the only thing standing between an archive and an
-   * allocation VAT performs on its say-so.
+   * The elected SKILL.md is held to the parse input cap, as every lane that reads
+   * a SKILL.md off disk holds it: a large one still declares its name, and one
+   * past the cap is the same refusal, never a skill that "declares no name".
    */
-  it('does not inflate a SKILL.md far larger than any real one', async () => {
-    const zipPath = writeZip('huge-skill-md.zip', [
+  it('reads the name a SKILL.md larger than the portability checks read declares', async () => {
+    const zipPath = writeZip('large-skill-md.zip', [
       [SKILL_MD, skillMdBytes('demo', 'x'.repeat(2 * 1024 * 1024))],
     ]);
 
-    await expect(inspectZipArchive(zipPath)).resolves.toMatchObject({ declaredName: undefined });
+    await expect(inspectZipArchive(zipPath)).resolves.toMatchObject({ declaredName: 'demo' });
+  });
+
+  it('refuses a SKILL.md past the parse input cap with the cap the path lanes refuse it at, before inflating it', async () => {
+    const cap = await withParseDispatcher((dispatcher) => Promise.resolve(dispatcher.inputBytes));
+    const head = skillMdBytes('demo', '');
+    const zipPath = writeZip('over-cap-skill-md.zip', [
+      [SKILL_MD, Buffer.concat([head, Buffer.alloc(cap + 1 - head.length, 0x78)])],
+    ]);
+
+    await expect(inspectZipArchive(zipPath)).rejects.toMatchObject({
+      refusal: 'INPUT_UNREADABLE',
+      message: expect.stringContaining(new ParseLimitError('inputBytes', cap).bound),
+    });
   });
 
   /**

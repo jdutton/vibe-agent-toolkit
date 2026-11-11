@@ -125,10 +125,12 @@ export type ResourceRow = z.infer<typeof ResourceRowSchema>;
  * - `unreadable` — a read was attempted and the filesystem refused it. A fact
  *   about the corpus (a permissions quirk, a vanished file), never an error in
  *   the harness — and never anything but the filesystem's refusal.
- * - `oversize` — the file is too large to decode into a JS string (past
- *   `MAX_DECODABLE_BYTES`, V8's string-length limit), so it was refused by size
- *   and never read. Not `unreadable`: nothing is wrong with the file's
- *   permissions, and a reader sent to check them would find nothing.
+ * - `oversize` — the file was refused by its size and never read: too large to
+ *   decode into a JS string (past `MAX_DECODABLE_BYTES`, V8's string-length
+ *   limit), or, for a type a parser reads, past the population's parse input cap
+ *   (`inputBytes`), which a parse would refuse it at anyway. Not `unreadable`:
+ *   nothing is wrong with the file's permissions, and a reader sent to check them
+ *   would find nothing.
  * - `none` — there are no bytes here to key at all: the path is absent, or a
  *   directory, or a dangling symlink.
  */

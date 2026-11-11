@@ -954,7 +954,7 @@ async function handleLocalInstall(source: string, run: InstallRun): Promise<void
   const skillMd = safePath.join(sourcePath, 'SKILL.md');
   const skillName =
     options.name ??
-    (await declaredNameOrRefuse(skillMd, readDeclaredSkillName(skillMd), dirname(sourcePath))) ??
+    (await declaredNameOrRefuse(skillMd, readDeclaredSkillName(skillMd, {}), dirname(sourcePath))) ??
     basename(sourcePath);
   await install(run, { kind: 'skill-dir', side: 'source', skillPath: sourcePath, skillName }, 'copy');
 }
@@ -982,7 +982,7 @@ async function handleZipInstall(source: string, run: InstallRun): Promise<void> 
     // skill is at the top level or in the single top-level folder, installed under the name its SKILL.md declares.
     const skillPath = await extractSkillZip(sourcePath, extracted);
     const skillMd = safePath.join(skillPath, 'SKILL.md');
-    const skillName = options.name ?? (await declaredNameOrRefuse(skillMd, readDeclaredSkillName(skillMd), skillPath)) ?? basename(sourcePath, '.zip');
+    const skillName = options.name ?? (await declaredNameOrRefuse(skillMd, readDeclaredSkillName(skillMd, {}), skillPath)) ?? basename(sourcePath, '.zip');
     await install(run, { kind: 'skill-dir', side: 'environment', skillPath, skillName }, 'copy');
   });
 }

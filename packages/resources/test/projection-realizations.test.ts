@@ -54,6 +54,7 @@ async function realize(
   return collectRealization(safePath.join(root, relativePath), RESOURCE_ID, {
     root,
     extentId: EXTENT_ID,
+    contentCache: null,
     ...options,
   });
 }
@@ -287,7 +288,7 @@ describe('collectRealization observed shape', () => {
   });
 
   it('still reads the bytes: the shape replaces the stat, never the content key', async () => {
-    const cache = new RunContentCache();
+    const cache = new RunContentCache({ inputBytes: null });
 
     const row = await realize(NESTED_RELATIVE, { contentCache: cache, observedShape: 'file' });
 
@@ -315,7 +316,7 @@ describe('collectRealization observed shape', () => {
 
 describe('collectRealization content demand', () => {
   it('keys eagerly when no demand is stated at all', async () => {
-    const cache = new RunContentCache();
+    const cache = new RunContentCache({ inputBytes: null });
 
     const row = await realize(NESTED_RELATIVE, { contentCache: cache });
 
@@ -334,7 +335,7 @@ describe('collectRealization content demand', () => {
   });
 
   it('does not read the bytes it defers', async () => {
-    const cache = new RunContentCache();
+    const cache = new RunContentCache({ inputBytes: null });
 
     await realize(NESTED_RELATIVE, { contentCache: cache, contentDemand: 'deferred' });
 

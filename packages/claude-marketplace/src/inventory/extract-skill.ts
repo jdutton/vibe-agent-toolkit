@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import {
@@ -14,6 +13,7 @@ import {
 	type ParseDispatcher,
 	type ParseRefusedResource,
 	parseRefusedEntryFor,
+	readContentForParse,
 	ResourceRegistry,
 } from '@vibe-agent-toolkit/resources';
 import {
@@ -210,8 +210,9 @@ async function parseFrontmatterFields(
 	let name = '';
 	let description: string | undefined;
 	try {
-		const raw = await readFile(absolute, 'utf-8');
-		const parsed = await parseFrontmatter(raw, dispatcher === undefined ? {} : { dispatcher });
+		const route = dispatcher === undefined ? {} : { dispatcher };
+		const { content: raw } = await readContentForParse(absolute, 'markdown', route);
+		const parsed = await parseFrontmatter(raw, route);
 		if (parsed.success) {
 			const fm = parsed.frontmatter;
 			if (typeof fm['name'] === 'string') name = fm['name'];

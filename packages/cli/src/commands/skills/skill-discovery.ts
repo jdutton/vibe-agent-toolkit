@@ -86,7 +86,7 @@ interface SkillDiscovery {
  * Parse a SKILL.md in the bounded worker (`parseFileCached`). A per-run refusal is carried as
  * `refused`; every other error — a broken parser install included — is rethrown.
  */
-export async function skillDocumentOrRefused(skillPath: string, route: ParseRoute = {}): Promise<SkillDocumentRead> {
+export async function skillDocumentOrRefused(skillPath: string, route: ParseRoute): Promise<SkillDocumentRead> {
   try {
     return { kind: 'parsed', document: await parseFileCached(skillPath, 'markdown', route) };
   } catch (error) {
@@ -180,9 +180,10 @@ export type PluginLocalSkillNames = ReadonlyMap<string, string>;
 /**
  * The name of the plugin-local skill in `skillSourceDir` ({@link readSkillName}), or its
  * refusal. The plugin build and `vat verify` both name a plugin-local skill through THIS,
- * so they look up the same config.
+ * so they look up the same config. `dispatcher` is required: the run's, or `undefined` for one
+ * read, which holds its own for the call.
  */
-export function readPluginLocalSkillName(skillSourceDir: string, dispatcher?: ParseDispatcher): Promise<SkillNameRead> {
+export function readPluginLocalSkillName(skillSourceDir: string, dispatcher: ParseDispatcher | undefined): Promise<SkillNameRead> {
   return withParseDispatcher((run) => readSkillName(safePath.join(skillSourceDir, 'SKILL.md'), run), { dispatcher });
 }
 

@@ -502,7 +502,7 @@ async function packageAndReport(
     const message = errorMessageOf(error);
     logger.error(`Package failed: ${message}`);
     // A SKILL.md the parse worker refuses (the refusal itself, usually) reports as unnamed.
-    const read = await skillDocumentOrRefused(skillPath);
+    const read = await skillDocumentOrRefused(skillPath, {});
     return buildSkillsPackageReport({
       validation,
       // The package is one plan: a refused one — a too-large ZIP included — landed nothing.

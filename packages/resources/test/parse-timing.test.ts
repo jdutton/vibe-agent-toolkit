@@ -21,6 +21,7 @@ import {
   type ParseThreadTiming,
   type ParseTimingDump,
   type ParseTimingKind,
+  recordReuseCheck,
   recordTierPass,
   TIER_PASS_NAMES,
   TierPass,
@@ -454,6 +455,19 @@ describe('parse timing seam', () => {
       expect(tierRowOf(snapshot, CACHE_READ_IO).calls).toBe(2);
       expect(tierRowOf(snapshot, 'wire-dispatch').calls).toBe(1);
       expect(tierRowOf(snapshot, CACHE_READ_DECODE).calls).toBe(0);
+    });
+
+    it('records every reused-thread check: the check, its collection and its retirement as tier rows, and the heap it settled to', () => {
+      const MIB = 1_048_576;
+      recordReuseCheck({ usedBytes: 20 * MIB, collectMs: null, checkMs: 0.5, retire: false });
+      recordReuseCheck({ usedBytes: 30 * MIB, collectMs: 4, checkMs: 4.5, retire: false });
+      recordReuseCheck({ usedBytes: 40 * MIB, collectMs: 6, checkMs: 6.5, retire: true });
+
+      const snapshot = __readParseTimingSnapshot();
+      expect(tierRowOf(snapshot, 'reuse-check')).toStrictEqual({ pass: 'reuse-check', calls: 3, elapsedMs: 11.5 });
+      expect(tierRowOf(snapshot, 'reuse-collect')).toStrictEqual({ pass: 'reuse-collect', calls: 2, elapsedMs: 10 });
+      expect(tierRowOf(snapshot, 'reuse-retire')).toStrictEqual({ pass: 'reuse-retire', calls: 1, elapsedMs: 6.5 });
+      expect(snapshot.reuseHeap).toStrictEqual({ settledMibTotal: 90, settledMibMax: 40 });
     });
 
     it('keeps tier work OUT of every parser kind group', () => {

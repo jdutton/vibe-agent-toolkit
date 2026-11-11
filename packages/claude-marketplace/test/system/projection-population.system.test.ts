@@ -122,6 +122,7 @@ import {
   type ExtentContributor,
   type JsonValue,
   type Projection,
+  RunContentCache,
 } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { NEVER_CRAWL_GLOBS, crawlDirectory } from '@vibe-agent-toolkit/utils/crawl';
@@ -181,7 +182,7 @@ interface RederivedBlobs {
  * @returns The stage's counters and the content keys it derived
  */
 async function rederiveBlobs(projection: Projection): Promise<RederivedBlobs> {
-  const builder = new ProjectionBuilder({ root: ROOT });
+  const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache({ inputBytes: null }) });
   for (const row of projection.resolutionContexts) builder.addContext(row);
   for (const row of projection.resources) builder.addResource(row);
   for (const row of projection.resourceRealizations) builder.addRealization(row);

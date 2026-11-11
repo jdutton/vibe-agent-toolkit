@@ -8,6 +8,7 @@ import {
   partitionNotAdmitted,
   parseFileCached,
   type ParseDispatcher,
+  readContentForParse,
   resolveLocalHref,
   type LinkType,
   withParseDispatcher,
@@ -105,8 +106,17 @@ async function validateSkillOn(options: ValidateOptions, dispatcher: ParseDispat
     return buildResult(skillPath, isVATGenerated, issues, policy);
   }
 
-  // Read file
-  const content = fs.readFileSync(skillPath, 'utf-8');
+  // Read file — held to the parse input cap by its size before it is read, as every lane that
+  // parses it is: past the cap, the limit, never a frontmatter parse of the block at its top.
+  let content: string;
+  try {
+    ({ content } = await readContentForParse(skillPath, 'markdown', { dispatcher }));
+  } catch (error) {
+    const refused = parseRefusalIssue(error, skillPath, locationRoot);
+    if (refused === undefined) throw error;
+    issues.push(refused);
+    return buildResult(skillPath, isVATGenerated, issues, policy);
+  }
   const lineCount = content.split('\n').length;
 
   // Parse frontmatter

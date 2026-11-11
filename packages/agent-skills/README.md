@@ -339,9 +339,10 @@ const result = VATAgentSkillFrontmatterSchema.safeParse(frontmatter);
 **Additional Requirements:**
 - `metadata.version` - Semantic version (required for VAT)
 
-### parseFrontmatter(content): ParseResult
+### parseFrontmatter(content, route): Promise&lt;FrontmatterResult&gt;
 
-Parse YAML frontmatter from SKILL.md content.
+Parse YAML frontmatter from SKILL.md content, in the bounded parse worker. `route` is required:
+`{ dispatcher }` inside a run that holds one (`withParseDispatcher`), `{}` for a single read.
 
 **Example:**
 ```typescript
@@ -349,7 +350,7 @@ import { parseFrontmatter } from '@vibe-agent-toolkit/agent-skills';
 import * as fs from 'node:fs';
 
 const content = fs.readFileSync('./SKILL.md', 'utf-8');
-const result = parseFrontmatter(content);
+const result = await parseFrontmatter(content, {});
 
 if (result.success) {
   console.log('Frontmatter:', result.frontmatter);

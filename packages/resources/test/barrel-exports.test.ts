@@ -294,6 +294,7 @@ const BARREL_EXPORTS = [
   'quoteIdentifier',
   'readConfigText',
   'readConfigTextSync',
+  'readContentForParse',
   'readContentWithKey',
   'readKeyedContent',
   'readStoredMembership',

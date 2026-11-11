@@ -96,13 +96,14 @@ function asParserReads(source: string): string {
  * ({@link FENCE}); no closing fence, no frontmatter.
  *
  * @param content - Full SKILL.md content
- * @param route - The run's parse dispatcher, when a run decodes many blocks;
- *   omitted, a cache miss builds a one-thread pool for this call
+ * @param route - Where the parse runs: the run's dispatcher when a run decodes many
+ *   blocks, or `{}` for one read, whose cache miss builds a one-thread pool for this
+ *   call. Required, so a caller holding a run's dispatcher cannot forget to pass it
  * @returns Parsed frontmatter and body, or the refusal
  * @throws `ParserUnavailableError` for a broken install, and anything else the
  *   bounded route throws that is not a per-run refusal of this block
  */
-export function parseFrontmatter(content: string, route: ParseRoute = {}): Promise<FrontmatterResult> {
+export function parseFrontmatter(content: string, route: ParseRoute): Promise<FrontmatterResult> {
   const normalized = (content.startsWith(BOM) ? content.slice(1) : content).replaceAll(/\r\n?/g, '\n');
   const lines = normalized.split('\n');
 

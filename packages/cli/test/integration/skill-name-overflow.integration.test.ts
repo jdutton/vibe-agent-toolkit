@@ -41,7 +41,7 @@ describe('a SKILL.md the parse worker refuses', () => {
   });
 
   it('is read as a refusal, never named by its directory', async () => {
-    await expect(readPluginLocalSkillName(skillDir)).resolves.toMatchObject({
+    await expect(readPluginLocalSkillName(skillDir, undefined)).resolves.toMatchObject({
       kind: 'refused',
       refused: { code: 'RESOURCE_PARSE_LIMIT_EXCEEDED' },
     });
@@ -56,7 +56,7 @@ describe('a SKILL.md the parse worker refuses', () => {
   });
 
   it('reads as refused, so a refused package report still publishes', async () => {
-    await expect(skillDocumentOrRefused(safePath.join(skillDir, 'SKILL.md'))).resolves.toMatchObject({ kind: 'refused' });
+    await expect(skillDocumentOrRefused(safePath.join(skillDir, 'SKILL.md'), {})).resolves.toMatchObject({ kind: 'refused' });
   });
 });
 

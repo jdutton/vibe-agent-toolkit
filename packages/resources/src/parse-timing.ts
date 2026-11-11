@@ -298,6 +298,25 @@ export const TierPass = {
   WorkerJob: 6,
   /** Worker-side `postMessage` of the reply — the facts clone. */
   WorkerReply: 7,
+  /**
+   * A reused thread's check of its own heap before a job (`settleReusedHeap`), charged the
+   * thread's own reads and any collection. Recorded on the main thread, one call for every check
+   * whose report reaches the pool — from a thread retired or stopped since included.
+   *
+   * ⚠️ A lower bound, not every check made: the pool stops listening to a thread as it
+   * terminates it, so a check still in flight then — its job stopped at its clock before the
+   * report was delivered, or the pool shut down — is made and never counted, and neither is its
+   * collection or its retirement. The retirement rate ({@link TierPass.ReuseRetire} over this) is
+   * therefore over the checks the pool heard. See {@link recordReuseCheck}.
+   */
+  ReuseCheck: 8,
+  /** The forced full collections among those checks, charged each collection's own time. */
+  ReuseCollect: 9,
+  /**
+   * The checks that retired their thread, charged the check. Its calls over
+   * {@link TierPass.ReuseCheck}'s are the pool's retirement rate.
+   */
+  ReuseRetire: 10,
 } as const;
 
 /** One of {@link TierPass}'s slot indices. */
@@ -320,6 +339,9 @@ export const TIER_PASS_NAMES: readonly string[] = [
   'wire-attach',
   'worker-job',
   'worker-reply',
+  'reuse-check',
+  'reuse-collect',
+  'reuse-retire',
 ];
 
 /** How many slots {@link ParsePass} declares. */
@@ -455,6 +477,19 @@ export interface ParseThreadTiming {
    * measure. Always every row, even at zero.
    */
   tier: ParseTimingPass[];
+  /**
+   * The used heap each reused-thread check left its thread holding as its job started, after the
+   * collection when one ran — in MiB, summed and at its largest; divide the sum by the
+   * `reuse-check` row's calls for the mean. Zero but on the main thread, which records the checks
+   * every thread reports. See {@link recordReuseCheck}.
+   */
+  reuseHeap: ParseReuseHeap;
+}
+
+/** See {@link ParseThreadTiming.reuseHeap}. */
+export interface ParseReuseHeap {
+  settledMibTotal: number;
+  settledMibMax: number;
 }
 
 /**
@@ -534,6 +569,7 @@ const documentBytes = new Float64Array(PARSE_KIND_SHAPES.length);
 
 let cacheHits = 0;
 let cacheMisses = 0;
+const reuseHeap: ParseReuseHeap = { settledMibTotal: 0, settledMibMax: 0 };
 
 /**
  * Counters other threads of this process have handed over, in arrival order.
@@ -610,6 +646,7 @@ function buildThreadTiming(): ParseThreadTiming {
       calls: tierCalls[slot] ?? 0,
       elapsedMs: tierElapsedMs[slot] ?? 0,
     })),
+    reuseHeap: { ...reuseHeap },
   };
 }
 
@@ -657,6 +694,8 @@ function resetAccumulators(): void {
   documentBytes.fill(0);
   cacheHits = 0;
   cacheMisses = 0;
+  reuseHeap.settledMibTotal = 0;
+  reuseHeap.settledMibMax = 0;
   reportedThreads.length = 0;
 }
 
@@ -721,6 +760,43 @@ export function recordTierPass(pass: TierPassSlot, startedAt: number): void {
   const elapsed = performance.now() - startedAt;
   tierElapsedMs[pass] = (tierElapsedMs[pass] ?? 0) + elapsed;
   tierCalls[pass] = (tierCalls[pass] ?? 0) + 1;
+}
+
+/**
+ * Charge a time a thread measured itself to a tier pass.
+ *
+ * @param pass - Which tier slot to charge
+ * @param elapsedMs - The time, in ms
+ */
+function chargeTierPass(pass: TierPassSlot, elapsedMs: number): void {
+  tierElapsedMs[pass] = (tierElapsedMs[pass] ?? 0) + elapsedMs;
+  tierCalls[pass] = (tierCalls[pass] ?? 0) + 1;
+}
+
+/**
+ * Record one reused thread's check of its own heap before a job, as that thread reported it: the
+ * check, its collection and its retirement as tier rows ({@link TierPass.ReuseCheck},
+ * {@link TierPass.ReuseCollect}, {@link TierPass.ReuseRetire}) charged the times the thread
+ * measured, and the heap it settled to ({@link ParseThreadTiming.reuseHeap}). Recorded by the
+ * parent as the report arrives, so a thread terminated later — one this check retired, above all
+ * — is still counted, where its own counters would never reach a dump.
+ *
+ * @param check - The thread's report: the used heap it settled to, in bytes, its collection's and
+ *   its whole check's time, in ms, and whether it retires
+ */
+export function recordReuseCheck(check: {
+  readonly usedBytes: number;
+  readonly collectMs: number | null;
+  readonly checkMs: number;
+  readonly retire: boolean;
+}): void {
+  if (!timingEnabled) return;
+  chargeTierPass(TierPass.ReuseCheck, check.checkMs);
+  if (check.collectMs !== null) chargeTierPass(TierPass.ReuseCollect, check.collectMs);
+  if (check.retire) chargeTierPass(TierPass.ReuseRetire, check.checkMs);
+  const settledMib = check.usedBytes / 1_048_576;
+  reuseHeap.settledMibTotal += settledMib;
+  reuseHeap.settledMibMax = Math.max(reuseHeap.settledMibMax, settledMib);
 }
 
 /**

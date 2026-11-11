@@ -67,6 +67,7 @@ import {
   type JsonValue,
   type Projection,
   type ProjectionBase,
+  RunContentCache,
 } from '@vibe-agent-toolkit/resources';
 import {
   mkdirSyncReal,
@@ -300,7 +301,7 @@ function baseFrom(
   extentIds: ReadonlySet<string>,
   gitTracker: GitTracker | undefined,
 ): ProjectionBase {
-  const builder = new ProjectionBuilder({ root, gitTracker });
+  const builder = new ProjectionBuilder({ root, gitTracker, contentCache: new RunContentCache({ inputBytes: null }) });
   builder.addRoot({ id: builder.identities.rootId, path: safePath.resolve(root) });
 
   for (const row of projection.resources) builder.addResource(row);

@@ -95,6 +95,17 @@ export type ParseAttribution =
   | 'nothing-parsed'
   | 'not-measured';
 
+/**
+ * The used heap the parse pool's reused-thread checks settled to, each as its job started — after
+ * the forced collection when one ran — in MiB: summed over every check, and the largest. Divide
+ * the sum by the `reuse-check` tier row's calls for the mean; that row's calls over `reuse-retire`'s
+ * are the retirement rate, and `reuse-collect`'s are the collections and their cost.
+ */
+export interface ParseReuseHeapStats {
+  readonly settledMibTotal: number;
+  readonly settledMibMax: number;
+}
+
 /** One pass of the parse pipeline, as the report carries it. */
 export interface ParsePassStats {
   /** The seam's own name for this pass — `remark-parse`, `lexical-references`. */
@@ -230,6 +241,11 @@ export interface ParseCommandStats {
    */
   readonly tier: readonly TierRowStats[];
   /**
+   * See {@link ParseReuseHeapStats}; summed over every process, the max the largest. `null` when
+   * the instrument reported none — a build that predates the check — rendered as not measured.
+   */
+  readonly reuseHeap: ParseReuseHeapStats | null;
+  /**
    * Main threads that reported — one per process.
    *
    * The denominator for every `mainElapsedMs` above.
@@ -363,6 +379,11 @@ export interface ParseBody {
   readonly load: LoadReadings;
 }
 
+/** Runtime schema for {@link ParseReuseHeapStats}, shared with the dump reader. */
+export const parseReuseHeapSchema = z
+  .object({ settledMibTotal: z.number().nonnegative(), settledMibMax: z.number().nonnegative() })
+  .strict();
+
 /** The schema fields describing one pass, shared with the dump reader. */
 export const parsePassShape = {
   pass: z.string().min(1),
@@ -408,6 +429,8 @@ export const ParseBodySchema = z
               })
               .strict(),
           ),
+          // A report written before the field existed reads as not measured, never as unreadable.
+          reuseHeap: parseReuseHeapSchema.nullable().default(null),
           kinds: z.array(
             z
               .object({

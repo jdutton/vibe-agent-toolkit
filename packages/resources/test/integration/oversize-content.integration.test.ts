@@ -21,8 +21,11 @@ import { MAX_DECODABLE_BYTES, TextTooLargeError } from '@vibe-agent-toolkit/util
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { readContentWithKey } from '../../src/content-key.js';
-import { describeBlobRefusals } from '../../src/projection/blob-refusals.js';
-import { RunContentCache } from '../../src/projection/content-cache.js';
+import { ParseCache } from '../../src/parse-cache.js';
+import { ParseDispatcher, parseFileCached } from '../../src/parse-dispatcher.js';
+import { ParseLimitError } from '../../src/parse-limits.js';
+import { describeBlobRefusals, notAdmittedRealizations } from '../../src/projection/blob-refusals.js';
+import { POPULATION_PARSE_LIMITS, RunContentCache } from '../../src/projection/content-cache.js';
 import { ContributorRegistry } from '../../src/projection/contributor.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../../src/projection/crawl-source.js';
@@ -73,20 +76,91 @@ async function thrownBy(run: () => Promise<unknown>): Promise<unknown> {
 describe('readContentWithKey refuses an undecodable size by stat, before any read', () => {
   it('throws TextTooLargeError one byte past the limit', async () => {
     const file = await sparse(HUGE, MAX_DECODABLE_BYTES + 1);
-    const error = await thrownBy(() => readContentWithKey(file, 'none'));
+    const error = await thrownBy(() => readContentWithKey(file, 'none', null));
     expect(isVatError(error, TextTooLargeError.code)).toBe(true);
   });
 
   it('throws the same error past 2 GiB, where a read would have failed differently', async () => {
     const file = await sparse(HUGE, PAST_READFILE_LIMIT);
-    const error = await thrownBy(() => readContentWithKey(file, 'none'));
+    const error = await thrownBy(() => readContentWithKey(file, 'none', null));
     expect(isVatError(error, TextTooLargeError.code)).toBe(true);
   });
 });
 
-describe('ResourceRegistry over an undecodable document', () => {
-  it('records it as a RESOURCE_UNREADABLE finding coded TEXT_TOO_LARGE, not a crash', async () => {
-    const file = await sparse('huge.md', MAX_DECODABLE_BYTES + 1);
+describe('readContentWithKey holds a parsed kind to the input cap at its boundary', () => {
+  // The read lane's cap is the pool's: a document of exactly the cap is admitted and one byte more
+  // is refused (`size > cap`), so a file the read admits is never one the pool then refuses.
+  const CAP = 16;
+
+  it('admits a document of exactly the cap', async () => {
+    const file = safePath.join(root, NOTES);
+    await writeFile(file, '#'.repeat(CAP));
+    const keyed = await readContentWithKey(file, 'markdown', CAP);
+    expect(keyed.content).toHaveLength(CAP);
+  });
+
+  it('refuses a document one byte past the cap, before reading it', async () => {
+    const file = safePath.join(root, NOTES);
+    await writeFile(file, '#'.repeat(CAP + 1));
+    const error = await thrownBy(() => readContentWithKey(file, 'markdown', CAP));
+    // The read lane names the cap alone, as the projection's oversize realization does: neither has
+    // read the bytes it refuses, so one sentence serves both.
+    expect(error).toMatchObject({ code: 'PARSE_LIMIT_EXCEEDED', limit: 'inputBytes', bound: new ParseLimitError('inputBytes', CAP).bound });
+  });
+});
+
+/**
+ * A dispatcher whose pool records being asked for, and is never built.
+ *
+ * @param inputBytes - The input cap, or the default
+ * @returns The dispatcher and how many pools it asked for
+ */
+function capOnlyDispatcher(inputBytes?: number): { dispatcher: ParseDispatcher; poolsAsked: () => number } {
+  let asked = 0;
+  const dispatcher = new ParseDispatcher(new ParseCache({ enabled: false }), {
+    createPool: () => {
+      asked += 1;
+      throw new Error('the input cap must refuse before any pool is asked for');
+    },
+    ...(inputBytes !== undefined && { limits: { inputBytes } }),
+  });
+  return { dispatcher, poolsAsked: () => asked };
+}
+
+describe('parseFileCached holds a file to the input cap by its size, before reading it', () => {
+  it('refuses a file past the cap and never asks for a pool', async () => {
+    const file = safePath.join(root, 'big.md');
+    await writeFile(file, '#'.repeat(64));
+    const { dispatcher, poolsAsked } = capOnlyDispatcher(16);
+
+    try {
+      await expect(parseFileCached(file, 'markdown', { dispatcher })).rejects.toMatchObject({
+        code: 'PARSE_LIMIT_EXCEEDED', limit: 'inputBytes', bound: new ParseLimitError('inputBytes', 16).bound,
+      });
+    } finally {
+      await dispatcher.shutdown();
+    }
+    expect(poolsAsked()).toBe(0);
+  });
+
+  it('refuses a sparse file past 2 GiB as the input cap, where a read would have failed differently', async () => {
+    const file = await sparse('huge.md', PAST_READFILE_LIMIT);
+    const { dispatcher, poolsAsked } = capOnlyDispatcher();
+
+    try {
+      await expect(parseFileCached(file, 'markdown', { dispatcher })).rejects.toMatchObject({
+        code: 'PARSE_LIMIT_EXCEEDED', limit: 'inputBytes', bound: new ParseLimitError('inputBytes', dispatcher.inputBytes).bound,
+      });
+    } finally {
+      await dispatcher.shutdown();
+    }
+    expect(poolsAsked()).toBe(0);
+  });
+});
+
+describe('ResourceRegistry over an undecodable file', () => {
+  it('records one nothing parses as a RESOURCE_UNREADABLE finding coded TEXT_TOO_LARGE, not a crash', async () => {
+    const file = await sparse(HUGE, MAX_DECODABLE_BYTES + 1);
     const registry = new ResourceRegistry({ baseDir: root });
 
     await registry.addResources([file]);
@@ -95,12 +169,24 @@ describe('ResourceRegistry over an undecodable document', () => {
     const issue = result.issues.find((candidate) => candidate.code === 'RESOURCE_UNREADABLE');
     expect(issue?.message).toContain(`(${TextTooLargeError.code})`);
   });
+
+  it('refuses a document a parser would read by the input cap, by its size, before reading it', async () => {
+    const file = await sparse('huge.md', MAX_DECODABLE_BYTES + 1);
+    const registry = new ResourceRegistry({ baseDir: root });
+
+    await registry.addResources([file]);
+    const result = await registry.validate({ skipGitIgnoreCheck: true });
+    const codes = result.issues.map((issue) => issue.code);
+
+    expect(codes).toContain('RESOURCE_PARSE_LIMIT_EXCEEDED');
+    expect(codes).not.toContain('RESOURCE_UNREADABLE');
+  });
 });
 
 describe('demand promotion of a deferred undecodable file', () => {
   it('rewrites the row to oversize, not unreadable, and records no unreadable condition', async () => {
     await sparse(HUGE, MAX_DECODABLE_BYTES + 1);
-    const cache = new RunContentCache();
+    const cache = new RunContentCache({ inputBytes: null });
     const builder = new ProjectionBuilder({ root, contentCache: cache });
     builder.addRealization(await collectRealization(safePath.join(root, HUGE), 'res-huge', {
       root,
@@ -136,6 +222,27 @@ describe('populate over a tree holding one undecodable file', () => {
     expect(rowAt(NOTES)?.contentState).toBe('keyed');
 
     expect(projection.resourceRealizations.filter((row) => row.contentState === 'oversize')).toHaveLength(1);
-    expect(describeBlobRefusals(projection)).toContain('could not key 1 realization(s) (1 too large to decode)');
+    expect(describeBlobRefusals(projection)).toContain('could not key 1 realization(s) (1 refused by size)');
+  });
+});
+
+describe('populate over a tree holding a document past the parse input cap', () => {
+  it('refuses the document by its size, as the registry lane does, and keys a kind nothing parses at the same size', async () => {
+    // Decodable, so only the run's input cap can refuse it; sparse, so a read would cost nothing.
+    const pastCap = POPULATION_PARSE_LIMITS.inputBytes + 1;
+    await sparse('big.md', pastCap);
+    await sparse('big.csv', pastCap);
+
+    const registry = new ContributorRegistry();
+    registry.register(new FilesystemExtentContributor(() => crawlSourceFor(root, []), DEFAULT_CONTENT_DEMAND));
+    const { projection } = await populate({ root, registry });
+
+    const stateAt = (name: string) =>
+      projection.resourceRealizations.find((row) => toForwardSlash(row.path) === name)?.contentState;
+    expect(stateAt('big.md')).toBe('oversize');
+    // The control: the cap is a parse's, so a file no parser reads is keyed at the same size.
+    expect(stateAt('big.csv')).toBe('keyed');
+    expect(notAdmittedRealizations(projection, root).parseRefused.map(({ code }) => code))
+      .toStrictEqual(['RESOURCE_PARSE_LIMIT_EXCEEDED']);
   });
 });

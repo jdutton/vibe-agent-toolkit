@@ -4,6 +4,7 @@ import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { RunContentCache } from '../src/projection/content-cache.js';
 import type { ExtentContribution } from '../src/projection/contributor.js';
 import { extentContextId } from '../src/projection/contributors/context-id.js';
 import {
@@ -71,7 +72,7 @@ function forPackage(contribution: ExtentContribution, packageName: string) {
 
 /** Run the contributor against the fixture root. */
 async function contribute(parameters: Record<string, unknown> = {}): Promise<ExtentContribution> {
-  const base = new ProjectionBuilder({ root }).base();
+  const base = new ProjectionBuilder({ root, contentCache: new RunContentCache({ inputBytes: null }) }).base();
   return new PackageExtentContributor().contribute(base, parameters as never);
 }
 

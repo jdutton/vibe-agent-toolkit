@@ -49,6 +49,7 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { RunContentCache } from '../src/projection/content-cache.js';
 import type { HarnessId } from '../src/projection/harness/profile.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
 import {
@@ -134,7 +135,7 @@ function fixture<Name extends ProjectionTableName>(
     alt: asRecord(alt),
     probeColumns: [],
     rowsAfterPair(overrides: RowRecord): number {
-      const builder = new ProjectionBuilder({ root: ROOT });
+      const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache({ inputBytes: null }) });
       add(builder, base);
       add(builder, { ...base, ...overrides } as ProjectionRow<Name>);
       return builder.build()[name].length;

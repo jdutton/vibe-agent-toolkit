@@ -20,12 +20,12 @@ a value here and in the code together, and only from a new lab record.
 
 | Limit | Value | Observed maximum | How it was set |
 |---|---|---|---|
-| `inputBytes` | 8 MiB | 666,449 bytes (one adopter document); 352,261 in VAT's own tree | Rule 1: 6.7 MB, up to 8 MiB. |
+| `inputBytes` | 8 MiB | 666,449 bytes (one adopter document); 352,261 in VAT's own tree | Rule 1: 6.7 MB, up to 8 MiB. A lane that reads the file measures its raw bytes on disk (`fstat`, before a byte is read); content handed over already in memory is measured as its UTF-8 encoding. The two agree for UTF-8 on disk and differ for a UTF-16 file (decoded to fewer UTF-8 bytes for ASCII text) or one with a byte-order mark, so the same text can sit on either side of the cap by lane. |
 | `outputRows` | 16,384 | 896 rows in one document, top-level arrays only; p99 203, p50 9 | **Rule 2.** The limit counts every array in a document's facts, nested ones included (a heading's `children` count like any other row, so one `#` over 20,000 `##` is 20,001 rows), and the frontmatter as the JSON the store writes for it — every array element and every mapping entry a row, each YAML alias at its target's full size, a `!!binary` one row per byte, and every `!!set` member and `!!omap` entry a row (the codec carries them, though `JSON.stringify` writes `{}`). The lab's maximum was counted over top-level arrays only, so rule 1 cannot be applied to it: 16,384 is rule 1 over that count (8,960, up to 16,384). Re-counted as the limit counts it, with the shipped `outputBreach`, over the 2,626 git-tracked markdown documents of the adopter the lab's `adopter-default` arm scans: maximum 1,287 rows (p99 280, p50 24), 12.7× under the limit — and one document's frontmatter alone is 770 rows, so a frontmatter mapping is NOT "a handful of rows", as this record said. That re-count is a one-off probe over the shipped functions, not a lab facet; the per-document count is a lab gap (below). |
 | `outputBytes` | 4 MiB | 297,447 bytes in one document, counted as the limit counts it; p99 58,097, p50 3,810 | Rule 1: 2.97 MB, up to 4 MiB (14.1× the maximum). Counted as the worker checks it — the facts' JSON plus the frontmatter expanded (every alias at its target's full size, every `!!set` member and `!!omap` entry, a `!!binary` as its `Buffer` JSON) — with the shipped pool's own `outputBreach`, over the same 2,626 git-tracked markdown documents as the `outputRows` re-count (the probe also reproduces that row's 1,287 / 280 / 24 rows exactly). The largest is a 251,888-byte document. The value it replaces was measured on stored parse-cache entries (233,802 bytes; p99 57,556, p50 3,358), which is not what the worker checks: an entry holds the frontmatter's source text beside its encoding, and the encoding writes a shared anchor once. That re-count is a one-off probe over the shipped functions, not a lab facet; the per-document count is a lab gap (below). |
 | `outputDepth` | 1,000 levels | Not observable per document. | Not a headroom value: the store's own ceiling. SQLite's JSON functions read at most 1,000 nested containers (`JSON_MAX_DEPTH`); measured on Node 26's `node:sqlite`, 1,000 read and 1,001 throw "malformed JSON" for the whole statement, so one deeper stored row breaks every `json_extract` over `blobs.frontmatter`. `resolveParseLimits` refuses a looser value. A cyclic anchor nests without end and breaches it. |
-| `timeMs` | 30,000 ms | Not observable per document: the `parse` facet reports per-pass sums. Mean 10.3 ms per document over 2,680 documents at a clean load (the adopter arm of [the `vat-lab parse run` arms](#the-vat-lab-parse-run-arms)); 12.1 ms in the cold `resources check` run. | Rule 2: the slowest realistic shape found, a 1,000-level nested list, takes 9.3 s in a worker (the nested-list arm below, a one-document corpus, so its per-pass sum is that document's time); the limit also covers a cold worker's first parser load (about 0.7 s), on a loaded machine. 30 s is that 10.0 s with headroom of three times for load. A mean is no basis: one document can be a thousand times the mean, and the per-document maximum over a real corpus is still not observable (see the gaps below). |
-| `heapMb` | 1,024 MiB | Not observable per worker: the `memory` facet reports process peak RSS. The whole process, every worker included, peaked at 1.17 GiB on the adopter's cold run. | Rule 2: no single job can need more than the whole process held, less the main thread's share. Under a process-wide `--max-old-space-size` lower than twice this, the pool applies half of V8's ceiling, floored at the young generation's 96 MiB while the ceiling leaves 32 MiB above the floor (see [the heap under a small flag](#the-heap-under-a-small-flag)). A used heap past the bound is a breach only once an old-generation collection shows it held, or past a stop halfway to V8's ceiling (1,536 MiB at the defaults) with none (see [garbage is not a breach](#garbage-is-not-a-breach)). |
+| `timeMs` | 30,000 ms | Not observable per document: the `parse` facet reports per-pass sums. Mean 10.3 ms per document over 2,680 documents at a clean load (the adopter arm of [the `vat-lab parse run` arms](#the-vat-lab-parse-run-arms)); 12.1 ms in the cold `resources check` run. | Rule 2: the slowest realistic shape found, a 1,000-level nested list, takes 9.3 s in a worker (the nested-list arm below, a one-document corpus, so its per-pass sum is that document's time); a cold worker's first parser load (about 0.7 s), and a reused thread's heap check before the job, are not charged to it: they run on their own `timeMs` clock, whose stop is the thread's and runs the document again, at most three times, so one document ends within about four `timeMs` (two minutes at the default), plus a check on each reused thread it was moved off, plus any time it waited in the queue (hazard register, the slow-start row). 30 s is that 9.3 s with headroom of three times for a loaded machine. A mean is no basis: one document can be a thousand times the mean, and the per-document maximum over a real corpus is still not observable (see the gaps below). |
+| `heapMb` | 1,024 MiB | Not observable per worker: the `memory` facet reports process peak RSS. The whole process, every worker included, peaked at 1.17 GiB on the adopter's cold run. | Rule 2: no single job can need more than the whole process held, less the main thread's share. Under a process-wide `--max-old-space-size` lower than twice this, the pool applies `max(⌊ceiling / 2⌋, min(youngGen, ceiling − 32))` MiB, never above `heapMb` — half of V8's ceiling, floored at the worker's young generation while the ceiling leaves 32 MiB above it; 96 MiB under a 128 MiB flag on Node 26.7, whose young generation is 192 MiB (see [the heap under a small flag](#the-heap-under-a-small-flag)). A used heap past the bound is a breach only once an old-generation collection shows it held, or past a stop halfway to V8's ceiling (1,536 MiB at the defaults) with none (see [garbage is not a breach](#garbage-is-not-a-breach)). |
 | `stackMb` | 4 MiB | Not observable. | Rule 2: before this limit existed every corpus parsed on the main thread under Node's default stack of about 1 MiB, so 4 MiB is four times a stack every recorded corpus fit in. |
 
 The output and input values come from the stored parse-cache entries of a cold `vat-lab parse run`
@@ -150,8 +150,9 @@ parse holds in garbage alone.
   of no flag, 512, 256, 128 and 64 MiB; ~18 MiB once the parser has loaded). Capping the young
   generation at 8 MiB still peaks at 37 to 43 MiB, so most of the excess is young-generation
   garbage. Under `--max-old-space-size=128` the pool applied 64 MiB (half the ceiling) and refused
-  that document at `heapMb` in 2 runs of 20; with the bound floored at the young generation's
-  96 MiB it is admitted in 30 of 30. The floor holds only while V8's ceiling leaves 32 MiB above
+  that document at `heapMb` in 2 runs of 20; with the bound floored at 96 MiB it is admitted in 30
+  of 30. The floor is the young generation's size (192 MiB on Node 26.7) held to 32 MiB under V8's
+  ceiling, so under this flag it is 96 MiB. It holds only while V8's ceiling leaves 32 MiB above
   it (twice what a job allocates in one 50 ms sample interval at ~300 MiB/s), so under a 64 MiB
   flag the pool still applies 32 MiB and an ordinary document can be refused: such a flag is too
   small to parse with. A 200,000-link breach under the 128 MiB flag is stopped at 96 MiB with the
@@ -178,7 +179,8 @@ and 1 of 4, `skills package` 1 of 3).
 
 So a used heap past the bound is a breach only once an old-generation collection has run
 (`heapBreached`): a sample that fell from the same job's previous one by more than the young
-generation holds (96 MiB; a scavenge frees no more), so what it still reads is held. A heap that
+generation holds (192 MiB on Node 26.7, read from the worker's `resourceLimits`; a scavenge frees
+no more), so what it still reads is held. A heap that
 rises with no such fall is stopped at `stopMb`, halfway from the bound to V8's ceiling (1,536 MiB at
 the defaults, 384 under a 512 MiB flag), never within the sampler's 32 MiB headroom of the ceiling,
 so V8's ceiling is still never left to stop a job. Half the room is the trade between the two
@@ -189,6 +191,55 @@ ceiling above it. Measured with the stop in place, all cold and with no flag: 10
 collection at all and peaked at 1,081 to 1,157 MiB, 379 MiB below the stop. Nothing bounds that
 margin but the measurement: a document that holds little but allocates more than the stop with no
 collection is refused there.
+
+## A reused thread
+
+Every job, on any thread, is judged against the same applied bound and the same stop — no job gets
+credit for, or is charged with, what its thread held before it. That is sound only if a reused
+thread starts its job holding about what a fresh one does, so a reused thread checks its own heap
+before the job (`settleReusedHeap` in `parse-limits.ts`):
+
+- **The bound** is `reusedThreadHeapMb(appliedMb)` = `FRESH_THREAD_HEAP_MB` + B, with
+  **B = ⌊appliedMb / 8⌋**, the thread's own applied bound read as the pool reads it. A fresh thread
+  holds 20.7 to 24.1 MiB of used heap once both parsers have loaded (Node 26.7.0), so
+  `FRESH_THREAD_HEAP_MB` is 24, and the bound is 152 MiB at the default applied 1,024 MiB, 88 under
+  a 1,024 MiB process flag (applied 512), 72 under 768 (applied 384) and 56 under 512 (applied
+  256). The worst-case difference between a job's verdict on a fresh and on a reused thread is B:
+  an eighth of the room, at every bound.
+- **Over the bound**, the thread forces a full collection of its own heap (V8's `gc`, taken once as
+  the worker loads — `acquireCollector` in `parse-worker.ts` says why that is safe) and reads again.
+- **Still over**, the thread is retired before it runs anything: the job runs on a fresh thread,
+  never on another reused one, and the jobs behind it may use an idle thread meanwhile.
+
+The pool samples a reused thread's heap only once its check has reported, so the job is never
+judged on what the previous job left. Every check is reported to the parent and counted there
+(`reuse-check`, `reuse-collect`, `reuse-retire` tier passes; `reuseHeap` the heap each settled to).
+
+Measured with the `parse` facet (`vat-lab parse run <subject> --instrument tree:. --command
+resources-validate --env NODE_OPTIONS=--max-old-space-size=N`, darwin/arm64, Node 24.21.0, cold, 2
+runs each, on a host the lab called contaminated, so the milliseconds are indicative; the adopter's
+corpus is 2,680 documents, 53 MB, VAT's 362). The cost is the whole check (reads and collections)
+against the workers' `worker-job` time:
+
+| Corpus | Flag | Applied | B | Checks | Collected | Cost per collection | Cost of worker time | Retired | Settled heap, mean / max |
+|---|---|---|---|---|---|---|---|---|---|
+| VAT | 1,024 | 512 | 64 | 390 | 2 (0.5%) | 2.1 ms | 4.5 / 1,902 ms (0.24%) | 0 | 41.2 / 87.5 MiB |
+| VAT | 512 | 256 | 32 | 390 | 4 (1.0%) | 3.2 ms | 13.1 / 2,079 ms (0.63%) | 0 | 32.1 / 54.0 MiB |
+| adopter | 1,024 | 512 | 64 | 3,175 | 13 (0.4%) | 4.3 ms | 58.9 / 27,697 ms (0.21%) | 0 | 39.2 / 86.2 MiB |
+| adopter | 768 | 384 | 48 | 3,175 | 35 (1.1%) | 4.7 ms | 166.7 / 30,846 ms (0.54%) | 0 | 35.8 / 71.9 MiB |
+
+Every settled maximum is within its bound, so the measured difference from a fresh thread (the
+maximum less 24 MiB) is 63.5, 30.0, 62.2 and 47.9 MiB against B of 64, 32, 64 and 48.
+
+**Why an eighth.** What a job leaves behind is garbage of a size set by the document, not by the
+bound, so how often a check collects follows B's absolute size. A fixed 8 MiB collected before a
+quarter of the jobs: 3–5 ms each, 7.7–10% of worker time (390 and 3,175 checks, 96 and 832
+collected). A sixteenth met a 2% budget at a 1,024 MiB flag (B = 32: VAT 1.1%, the adopter 1.4%)
+and under 768 (B = 24: 1.9%), but not under 512, where B = 16 collected before 47 of 390 jobs
+(12%, 4.75% of worker time). An eighth is under 0.7% at every flag measured. The adopter's tree
+under a 512 MiB flag cannot be measured at all: the process dies of the MAIN thread's out-of-memory
+(a 511.6 MB live mark-compact on the main isolate), on this build and on 0.2.0-rc.13 alike, not of
+a parse worker's.
 
 ## What the lab could not see
 

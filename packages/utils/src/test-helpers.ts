@@ -218,7 +218,7 @@ export type RefusableSyncFsMethod =
   | 'writeFileSync';
 
 /** The `node:fs/promises` calls a refusal can be injected into. */
-export type RefusableAsyncFsMethod = 'readdir' | 'readFile' | 'stat' | 'lstat' | 'access' | 'copyFile' | 'mkdir' | 'writeFile';
+export type RefusableAsyncFsMethod = 'readdir' | 'readFile' | 'open' | 'stat' | 'lstat' | 'access' | 'copyFile' | 'mkdir' | 'writeFile';
 
 /**
  * Assign `fn` over `module[method]` and republish the builtin's ESM bindings.

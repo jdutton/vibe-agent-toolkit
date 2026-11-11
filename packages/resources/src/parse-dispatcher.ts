@@ -25,6 +25,7 @@ import { type FsSide, withFsFault } from '@vibe-agent-toolkit/utils';
 
 import {
   DOCUMENT_PARSER_KINDS,
+  type KeyedContent,
   NO_PARSER_KIND,
   type ParsableContent,
   keyContent,
@@ -34,7 +35,7 @@ import {
 import type { ParseResult } from './link-parser.js';
 import type { DocumentParserKind } from './mime-type.js';
 import { defaultParseCache, type ParseCache } from './parse-cache.js';
-import type { ParseLimits } from './parse-limits.js';
+import { ParseLimitError, type ParseLimits, resolveParseLimits } from './parse-limits.js';
 import {
   createParsePool,
   defaultParsePoolSize,
@@ -390,6 +391,8 @@ function resolveKnob(fromPolicy: number | undefined, envName: string, fallback: 
 export class ParseDispatcher {
   readonly #cache: ParseCache;
   readonly #limits: Partial<ParseLimits> | undefined;
+  /** The input cap, resolved from {@link #limits} once, at construction: see {@link inputBytes}. */
+  readonly #inputBytes: number;
   readonly #transport: ParseTransport;
   readonly #missThreshold: number;
   readonly #baselineHits: number;
@@ -425,6 +428,7 @@ export class ParseDispatcher {
   constructor(cache: ParseCache, policy: ParsePoolPolicy) {
     this.#cache = cache;
     this.#limits = policy.limits;
+    this.#inputBytes = resolveParseLimits(policy.limits).inputBytes;
     // Read per construction, not at module load. `'cache'` exactly,
     // so the shipped behaviour is the wire protocol unless someone names the
     // other one — this switch exists to be A/B'd, not to be guessed at.
@@ -489,6 +493,20 @@ export class ParseDispatcher {
   }
 
   /**
+   * The input cap every parse on this dispatcher runs under, in bytes: a caller that reads a file
+   * only to parse it hands this to the read (`readContentWithKey`), so a file past it is refused
+   * by its size before it is read. {@link parse} refuses the same bytes again, before its cache,
+   * for content handed over in memory, which no read preceded. Resolved once, as the dispatcher is constructed — from the same
+   * named limits its pool resolves — so a named cap that is not a positive number is refused there,
+   * not at the first read, and no read re-derives it.
+   *
+   * @returns The resolved `inputBytes` limit
+   */
+  get inputBytes(): number {
+    return this.#inputBytes;
+  }
+
+  /**
    * Parse one document, off-thread once a pool is active.
    *
    * Every document that passes through here is also the sizing's SAMPLE — see
@@ -496,10 +514,16 @@ export class ParseDispatcher {
    * what is being sampled is how big this corpus's documents are, and a cached
    * document is as good a witness to that as a parsed one.
    *
+   * Content past {@link inputBytes} is refused BEFORE the cache is consulted: content handed over
+   * in memory had no read to refuse it, and an entry a run under a larger cap filed would
+   * otherwise answer it — a verdict that depended on what an earlier run cached.
+   *
    * @param keyed - The confirmed read, narrowed to a kind that has a parser
    * @returns The parse, identical either way
+   * @throws A `ParseLimitError` (`inputBytes`) for content past the cap
    */
   parse(keyed: ParsableContent): Promise<ParseResult> {
+    if (keyed.byteLength > this.#inputBytes) return Promise.reject(new ParseLimitError('inputBytes', this.#inputBytes));
     const seen = this.#observed[keyed.parserKind];
     seen.documents += 1;
     seen.bytes += keyed.byteLength;
@@ -775,9 +799,31 @@ export async function parseFileCached(
 ): Promise<ParseResult> {
   const side = options.side ?? 'source';
   const keyed = await withFsFault({ side, origin: 'content', action: `read ${filePath}`, path: filePath }, () =>
-    readContentWithKey(filePath, parserKind),
+    readContentForParse(filePath, parserKind, options),
   );
   return parseOnRoute(keyed, options);
+}
+
+/**
+ * Read a file a parse follows — whole, or only its frontmatter block, as the skill lanes parse a
+ * `SKILL.md` — held to the route's parse input cap by its size before a byte is read: the cap the
+ * route's dispatcher runs under, or the default one. The one read every lane that parses a file
+ * makes, so a file past the cap is the same `ParseLimitError` on each, never read and refused
+ * later by the length of what was handed over.
+ *
+ * @param filePath - Absolute path to the document
+ * @param parserKind - The parser its content will be handed to
+ * @param route - The {@link ParseRoute} the parse will take; `{}` for the default one
+ * @returns The content, its key, and the parser it routes to
+ * @throws A `ParseLimitError` (`inputBytes`) for a file past the cap, and whatever
+ *   `readContentWithKey` throws otherwise
+ */
+export function readContentForParse<K extends DocumentParserKind>(
+  filePath: string,
+  parserKind: K,
+  route: ParseRoute,
+): Promise<KeyedContent<K>> {
+  return readContentWithKey(filePath, parserKind, route.dispatcher?.inputBytes ?? resolveParseLimits(undefined).inputBytes);
 }
 
 /**

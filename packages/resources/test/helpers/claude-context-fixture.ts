@@ -49,6 +49,7 @@ import { mimeTypeForPath } from '../../src/mime-type.js';
 import { blobRowFor, harnessRowsFor } from '../../src/projection/blob-facts.js';
 import { blobReferencesFor } from '../../src/projection/blob-references.js';
 import { claudeMemoryFactsOf } from '../../src/projection/claude-memory.js';
+import { RunContentCache } from '../../src/projection/content-cache.js';
 import type { ExtentContribution } from '../../src/projection/contributor.js';
 import { AgenticConventionContributor } from '../../src/projection/contributors/agentic-convention.js';
 import {
@@ -448,7 +449,7 @@ export interface ClosureFixture {
  * @returns Just the tables `closureProvenance` reads
  */
 export function closureFixtureFrom(root: string, files: Record<string, string>): ClosureFixture {
-  const builder = new ProjectionBuilder({ root });
+  const builder = new ProjectionBuilder({ root, contentCache: new RunContentCache({ inputBytes: null }) });
   for (const [path, markdown] of Object.entries(files)) {
     addFileWithFacts(builder, { path, refs: [], markdown }, root);
   }
@@ -557,7 +558,7 @@ export async function claudeContextFixture(
   options: ClaudeContextFixtureOptions = {},
 ): Promise<Projection> {
   const root = CLAUDE_CONTEXT_FIXTURE_ROOT;
-  const builder = new ProjectionBuilder({ root });
+  const builder = new ProjectionBuilder({ root, contentCache: new RunContentCache({ inputBytes: null }) });
   builder.addRoot({ id: builder.identities.rootId, path: root });
 
   const deferred = new Set(options.deferred ?? []);
