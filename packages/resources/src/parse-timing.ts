@@ -675,6 +675,16 @@ if (dumpDirectory !== null) {
 }
 
 /**
+ * Whether this thread is recording parse timings — the parse pool parks no
+ * thread while it is, because a parked thread's counters reach no dump.
+ *
+ * @returns `true` when a dump directory is set
+ */
+export function parseTimingEnabled(): boolean {
+  return timingEnabled;
+}
+
+/**
  * Start a pass timer.
  *
  * @returns `performance.now()` when the seam is on, `0` when it is off

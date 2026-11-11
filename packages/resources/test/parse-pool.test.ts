@@ -51,9 +51,13 @@ import {
   workerHeapCeilingMb,
 } from '../src/parse-limits.js';
 import {
+  __closeParkedParseWorkersForTest,
+  __parkedParseWorkerCountForTest,
   __setParseWorkerEntryForTest,
   createParsePool,
   describeParseFailure,
+  PARKED_HEAP_MB,
+  PARKED_IDLE_MS,
   type ParsePool,
   toParseWire,
 } from '../src/parse-pool.js';
@@ -280,6 +284,8 @@ afterEach(async () => {
   const roots = cacheRoots.splice(0, cacheRoots.length);
   await Promise.all(roots.map(async (root) => removeScratchDir(root)));
   __setParseWorkerEntryForTest(null);
+  // Every test starts with no parked thread: one an earlier test left would serve its first pool.
+  await __closeParkedParseWorkersForTest();
 });
 
 describe('createParsePool', () => {
@@ -1045,14 +1051,355 @@ describe('ParsePool.shutdown', () => {
     await expect(pool.shutdown()).resolves.toBeUndefined();
   });
 
-  it('leaves no worker thread behind', async () => {
+  it('leaves no worker thread behind but the ones it parked', async () => {
     const before = workerThreadCount();
     const pool = createParsePool({ size: 2 });
     await Promise.all([pool.parse('markdown', '# a\n', 4), pool.parse('html', '<p>b</p>', 8)]);
 
     await pool.shutdown();
 
+    const parked = __parkedParseWorkerCountForTest();
+    expect(parked).toBeGreaterThan(0);
+    expect(workerThreadCount()).toBe(before + parked);
+    await __closeParkedParseWorkersForTest();
     expect(workerThreadCount()).toBe(before);
+  });
+});
+
+/**
+ * Run `body`, collecting every worker thread STARTED while it ran (the
+ * `worker_threads` diagnostics channel publishes one per construction).
+ *
+ * @param body - The work to watch
+ * @returns The threads started
+ */
+async function startedThreads(body: () => Promise<void>): Promise<Worker[]> {
+  const started: Worker[] = [];
+  const onWorker = (message: unknown): void => {
+    started.push((message as { worker: Worker }).worker);
+  };
+  diagnosticsChannel.subscribe('worker_threads', onWorker);
+  try {
+    await body();
+  } finally {
+    diagnosticsChannel.unsubscribe('worker_threads', onWorker);
+  }
+  return started;
+}
+
+/**
+ * One pool's whole life: a parse, then shutdown.
+ *
+ * @param options - The pool's options
+ * @returns What the parse settled to
+ */
+async function oneParse(options: Parameters<typeof createParsePool>[0]): Promise<unknown> {
+  const pool = createParsePool(options);
+  openPools.push(pool);
+  try {
+    return await outcomeOf(pool, '# parked\n');
+  } finally {
+    await pool.shutdown();
+  }
+}
+
+/**
+ * Hold the park cap at exactly one on any machine with at least 6 GiB: memory − 1,024 MiB fits a
+ * pool of at most two workers at their 2,048 MiB ceiling, and the room left beside the widest
+ * one parks one thread (`parkedThreadRoom`), whatever the default pool width is here.
+ */
+function parkCapOfOne(): void {
+  vi.spyOn(process, 'constrainedMemory').mockReturnValue(6144 * BYTES_PER_MIB);
+}
+
+describe('a parked thread', () => {
+  it('serves the next pool of the same shape, which starts none of its own', async () => {
+    const first = await startedThreads(async () => {
+      expect(await oneParse({ size: 1 })).toBe('answered');
+    });
+    expect(first).toHaveLength(1);
+    expect(__parkedParseWorkerCountForTest()).toBe(1);
+
+    const second = await startedThreads(async () => {
+      expect(await oneParse({ size: 1 })).toBe('answered');
+    });
+
+    expect(second).toHaveLength(0);
+    expect(__parkedParseWorkerCountForTest()).toBe(1);
+  });
+
+  it('never serves a pool of another shape', async () => {
+    parkCapOfOne();
+    await oneParse({ size: 1 });
+
+    const other = await startedThreads(async () => {
+      expect(await oneParse({ size: 1, limits: { timeMs: 29_000 } })).toBe('answered');
+    });
+
+    expect(other).toHaveLength(1);
+    expect(__parkedParseWorkerCountForTest()).toBe(1);
+  });
+
+  it('is closed, oldest first, past the cap', async () => {
+    parkCapOfOne();
+    const before = workerThreadCount();
+    for (let index = 0; index <= 1; index += 1) await oneParse({ size: 1, limits: { timeMs: 20_000 + index } });
+
+    expect(__parkedParseWorkerCountForTest()).toBe(1);
+    expect(workerThreadCount()).toBe(before + 1);
+    // The oldest shape was the one evicted: a pool of it starts its own thread again.
+    const oldest = await startedThreads(async () => {
+      await oneParse({ size: 1, limits: { timeMs: 20_000 } });
+    });
+    expect(oldest).toHaveLength(1);
+  });
+
+  it('is dropped if it dies while parked, and counted against no later pool', async () => {
+    const [parked] = await startedThreads(async () => {
+      await oneParse({ size: 1 });
+    });
+    await parked?.terminate();
+    await vi.waitFor(() => {
+      expect(__parkedParseWorkerCountForTest()).toBe(0);
+    });
+
+    const next = await startedThreads(async () => {
+      expect(await oneParse({ size: 1 })).toBe('answered');
+    });
+    expect(next).toHaveLength(1);
+  });
+
+  it('is never a thread stopped at a limit', async () => {
+    const entry = await seedWorkerEntry([
+      "import { parentPort } from 'node:worker_threads';",
+      'const on = parentPort.on.bind(parentPort);',
+      "parentPort.on = (event, listener) => on(event, event === 'message' ? (request) => {",
+      "  if (!request?.content?.startsWith?.('# SLOW')) return listener(request);",
+      '  parentPort.postMessage({ parserLoaded: request.kind });',
+      '  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);',
+      '} : listener);',
+      `await import(${JSON.stringify(BUILT_WORKER)});`,
+    ].join('\n'));
+    expect(entry).toContain('seeded-worker');
+    const pool = createParsePool({ size: 1, limits: { timeMs: 300 } });
+    openPools.push(pool);
+
+    const outcome = await outcomeOf(pool, '# SLOW\n');
+    await pool.shutdown();
+
+    expect(isParseLimitError(outcome) ? outcome.limit : outcome).toBe('timeMs');
+    expect(__parkedParseWorkerCountForTest()).toBe(0);
+  });
+
+  it.each([
+    { label: 'one byte past', usedBytes: PARKED_HEAP_MB * BYTES_PER_MIB + 1, parked: 0 },
+    { label: 'exactly at', usedBytes: PARKED_HEAP_MB * BYTES_PER_MIB, parked: 1 },
+  ])('is parked only at or under PARKED_HEAP_MB of used heap: $label it', async ({ usedBytes, parked }) => {
+    const pool = createParsePool({ size: 1 });
+    openPools.push(pool);
+    await pool.parse('markdown', '# heavy\n', 8);
+    const real = Worker.prototype.getHeapStatistics;
+    vi.spyOn(Worker.prototype, 'getHeapStatistics').mockImplementation(async function (this: Worker) {
+      const heap = await real.call(this);
+      return { ...heap, used_heap_size: usedBytes };
+    });
+
+    await pool.shutdown();
+
+    expect(__parkedParseWorkerCountForTest()).toBe(parked);
+  });
+
+  it('owns its death once it has posted anything to the pool that adopted it', async () => {
+    // `DIE` loads a parser the parked thread never had, says so, then kills the thread: the
+    // document's doing, on a thread proven alive after adoption, so nothing runs it again.
+    await seedWorkerEntry([
+      "import { parentPort } from 'node:worker_threads';",
+      'const on = parentPort.on.bind(parentPort);',
+      "parentPort.on = (event, listener) => on(event, event === 'message' ? (request) => {",
+      "  if (!request?.content?.startsWith?.('<p>DIE')) return listener(request);",
+      "  parentPort.postMessage({ parserLoaded: 'html' });",
+      '  setTimeout(() => process.exit(3), 200);',
+      '} : listener);',
+      `await import(${JSON.stringify(BUILT_WORKER)});`,
+    ].join('\n'));
+    expect(await oneParse({ size: 1 })).toBe('answered');
+    const pool = createParsePool({ size: 1 });
+    openPools.push(pool);
+
+    let outcome: unknown;
+    const started = await startedThreads(async () => {
+      const content = '<p>DIE</p>';
+      outcome = await pool.parse('html', content, content.length).catch((error: unknown) => error);
+    });
+
+    expect(isParseWorkerDiedError(outcome)).toBe(true);
+    expect(started).toHaveLength(0);
+  });
+
+  it('is closed without crashing the process when its thread errors on the way out', async () => {
+    await seedWorkerEntry([
+      "import { parentPort } from 'node:worker_threads';",
+      'const on = parentPort.on.bind(parentPort);',
+      "parentPort.on = (event, listener) => on(event, event === 'message' ? (request) => {",
+      "  if (request?.type === 'shutdown') setImmediate(() => { throw new Error('seeded close failure'); });",
+      '  else listener(request);',
+      '} : listener);',
+      `await import(${JSON.stringify(BUILT_WORKER)});`,
+    ].join('\n'));
+    const [thread] = await startedThreads(async () => {
+      expect(await oneParse({ size: 1 })).toBe('answered');
+    });
+    expect(__parkedParseWorkerCountForTest()).toBe(1);
+    const gone = new Promise((resolve) => thread?.once('exit', resolve));
+
+    await __closeParkedParseWorkersForTest();
+
+    await gone;
+    expect(__parkedParseWorkerCountForTest()).toBe(0);
+  });
+
+  it('closes itself once it has waited the idle timeout unadopted', async () => {
+    const pool = createParsePool({ size: 1 });
+    openPools.push(pool);
+    expect(await outcomeOf(pool, '# parked\n')).toBe('answered');
+    // Faked only now, so the parse ran on real timers and the park arms a fake one.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await pool.shutdown();
+      expect(__parkedParseWorkerCountForTest()).toBe(1);
+
+      vi.advanceTimersByTime(PARKED_IDLE_MS - 1);
+      expect(__parkedParseWorkerCountForTest()).toBe(1);
+      vi.advanceTimersByTime(1);
+      expect(__parkedParseWorkerCountForTest()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('is never closed by its idle timeout once a pool has adopted it', async () => {
+    const first = createParsePool({ size: 1 });
+    openPools.push(first);
+    expect(await outcomeOf(first, '# parked\n')).toBe('answered');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await first.shutdown();
+      const second = createParsePool({ size: 1 });
+      openPools.push(second);
+      const started = await startedThreads(async () => {
+        expect(await outcomeOf(second, '# adopted\n')).toBe('answered');
+        // Adoption cancelled the park's timer, and the answered job disarmed its own deadline.
+        expect(vi.getTimerCount()).toBe(0);
+        // Past the timeout the park armed: a timer adoption left running would close this thread.
+        vi.advanceTimersByTime(PARKED_IDLE_MS * 2);
+        expect(await outcomeOf(second, '# still here\n')).toBe('answered');
+      });
+      expect(started).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('is never kept on a machine whose memory the bound already spent on a live pool', async () => {
+    // 3 GiB: memory − 1,024 MiB fits exactly one worker at its 2,048 MiB ceiling, and nothing beside it.
+    vi.spyOn(process, 'constrainedMemory').mockReturnValue(3072 * BYTES_PER_MIB);
+
+    expect(await oneParse({ size: 1 })).toBe('answered');
+
+    expect(__parkedParseWorkerCountForTest()).toBe(0);
+  });
+
+  it('is never left by a pool judged broken, even a healthy idle one', async () => {
+    // The first thread to load claims the marker and serves; the second fails to load, late
+    // enough that the first has answered and sits idle when the pool is judged broken.
+    const marker = safePath.join(await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'vat-pool-claim-')), 'claimed');
+    cacheRoots.push(safePath.resolve(marker, '..'));
+    await seedWorkerEntry([
+      "import { closeSync, openSync } from 'node:fs';",
+      'let first = true;',
+      `try { closeSync(openSync(${JSON.stringify(marker)}, 'wx')); } catch { first = false; }`,
+      'if (!first) {',
+      '  await new Promise((resolve) => setTimeout(resolve, 1500));',
+      "  throw new Error('seeded second-thread load failure');",
+      '}',
+      `await import(${JSON.stringify(BUILT_WORKER)});`,
+    ].join('\n'));
+    const pool = createParsePool({ size: 2 });
+    openPools.push(pool);
+
+    const outcomes = await Promise.all([outcomeOf(pool, '# one\n'), outcomeOf(pool, '# two\n')]);
+    await pool.shutdown();
+
+    expect(outcomes.filter((outcome) => outcome === 'answered')).toHaveLength(1);
+    expect(outcomes.filter((outcome) => isParserUnavailable(outcome))).toHaveLength(1);
+    expect(__parkedParseWorkerCountForTest()).toBe(0);
+  });
+
+  it('brings the parsers it loaded, so a slow document on it is never a death', async () => {
+    // `# SLOW` blocks before the real worker sees it: on a fresh thread its parser never loads,
+    // so a stop at `timeMs` is a death; on the adopted thread the parser loaded a pool ago.
+    await seedWorkerEntry([
+      "import { parentPort } from 'node:worker_threads';",
+      'const on = parentPort.on.bind(parentPort);',
+      "parentPort.on = (event, listener) => on(event, event === 'message' ? (request) => {",
+      "  if (!request?.content?.startsWith?.('# SLOW')) return listener(request);",
+      '  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);',
+      '} : listener);',
+      `await import(${JSON.stringify(BUILT_WORKER)});`,
+    ].join('\n'));
+    const limits = { timeMs: 1500 };
+    expect(await oneParse({ size: 1, limits })).toBe('answered');
+    expect(__parkedParseWorkerCountForTest()).toBe(1);
+
+    const pool = createParsePool({ size: 1, limits });
+    openPools.push(pool);
+    const outcomes: unknown[] = [];
+    // The adopted thread first, then two fresh ones: two deaths in a row, one short of the
+    // broken-install verdict — which a third, charged to the adopted thread, would reach.
+    for (let index = 0; index < 3; index += 1) outcomes.push(await outcomeOf(pool, '# SLOW\n'));
+
+    expect(outcomes.map((outcome) => (isParseLimitError(outcome) ? outcome.limit : outcome))).toStrictEqual(['timeMs', 'timeMs', 'timeMs']);
+  });
+
+  it('runs its job again on another thread when it dies before answering, charged to no document', async () => {
+    await seedWorkerEntry([
+      "import { parentPort } from 'node:worker_threads';",
+      'const on = parentPort.on.bind(parentPort);',
+      "parentPort.on = (event, listener) => on(event, event === 'message' ? (request) => {",
+      "  if (request?.content?.startsWith?.('# WAIT')) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);",
+      '  return listener(request);',
+      '} : listener);',
+      `await import(${JSON.stringify(BUILT_WORKER)});`,
+    ].join('\n'));
+    const [parked] = await startedThreads(async () => {
+      expect(await oneParse({ size: 1 })).toBe('answered');
+    });
+    const pool = createParsePool({ size: 1 });
+    openPools.push(pool);
+
+    const started = await startedThreads(async () => {
+      const outcome = outcomeOf(pool, '# WAIT\n');
+      // Adopted and handed the job; it dies before it answers, as one dying while parked would.
+      await parked?.terminate();
+      expect(await outcome).toBe('answered');
+    });
+
+    expect(started).toHaveLength(1);
+  });
+
+  it('carries no broken-install verdict to a later pool', async () => {
+    await oneParse({ size: 1 });
+    await seedWorkerEntry("throw Object.assign(new Error('seeded load failure'), { code: 'ERR_SEEDED_LOAD' });\n");
+
+    expect(isParserUnavailable(await oneParse({ size: 1 }))).toBe(true);
+    expect(__parkedParseWorkerCountForTest()).toBe(1);
+
+    __setParseWorkerEntryForTest(null);
+    const healthy = await startedThreads(async () => {
+      expect(await oneParse({ size: 1 })).toBe('answered');
+    });
+    // The thread parked before the broken pool served this one; that pool's verdict stayed its own.
+    expect(healthy).toHaveLength(0);
   });
 });
 
@@ -1112,6 +1459,8 @@ describe('the parse-timing seam', () => {
       const pool = createParsePool({ size: 1 });
       await pool.parse('markdown', MARKDOWN_RICH, Buffer.byteLength(MARKDOWN_RICH));
       await pool.shutdown();
+      // A timed run parks nothing: a parked thread's counters would reach no dump.
+      expect(__parkedParseWorkerCountForTest()).toBe(0);
 
       const beforeWriting = await fs.readdir(directory);
       // The worker files nothing of its own. A second, partial file would report

@@ -7,9 +7,14 @@
   lane's frontmatter decode. There is no in-process route left to switch back to: a parse on the
   run's own thread cannot be stopped, so one pathological document could hang or crash the whole
   run. Setting the variable now does nothing; delete it from CI and scripts. A small run that used to parse on the main thread
-  now starts one worker, which costs a cold small corpus a measured fraction of a second (numbers in
-  `docs/architecture/fact-extractors-limits.md`). `VAT_PARSE_POOL_SIZE` and
+  now starts a worker for each parse pool it holds open at once (two for a cold `vat build`; an idle
+  worker is handed from one pool to the next rather than closed), which costs a cold small corpus a
+  measured fraction of a second (numbers in `docs/architecture/fact-extractors-limits.md`). `VAT_PARSE_POOL_SIZE` and
   `VAT_PARSE_POOL_MIN_MISSES` still size the pool.
+- **A parse pool's `shutdown()` no longer closes every thread it started at once.** A healthy idle
+  thread is parked, `unref`'d, for up to 5 s for the next pool of the same shape in the process,
+  then closes itself. A command still exits on its own, and a long-lived host (a server, a
+  watcher) has nothing to call: its idle parse threads are gone 5 s after its last parse.
 - **`ParsePoolPolicy.enabled` is removed** from `@vibe-agent-toolkit/resources`. A policy now
   takes `limits` (a partial `ParseLimits`) instead; pass nothing to get the defaults.
 - **A document over a parse limit now fails `vat resources validate`.** It is reported as

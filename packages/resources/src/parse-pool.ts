@@ -91,6 +91,10 @@
  * answer at all goes unreported, and it goes unreported visibly, as a thread
  * count below the pool's width.
  *
+ * While timings are recorded, shutdown closes every thread; otherwise it parks
+ * the healthy idle ones for the next pool (see `parkedWorkers`), and a parked
+ * thread is `unref`'d like any idle one and closes itself after `PARKED_IDLE_MS`.
+ *
  * A pool that is never shut down reports no worker timings, because nothing ever
  * asks the threads for them. Idle workers are `unref`'d so a forgotten pool
  * cannot HANG a CLI, but that is damage control, not a substitute: call
@@ -109,10 +113,12 @@ import type { ParseResult } from './link-parser.js';
 import type { DocumentParserKind } from './mime-type.js';
 import { type ParserModuleKind, ParserUnavailableError } from './parse-cache.js';
 import {
+  exceedsHeapLimit,
   heapBounds,
   heapBreached,
   type HeapBounds,
   memoryBoundedPool,
+  parkedThreadRoom,
   type ParseLimitName,
   type ParseLimits,
   ParseDecodeDefectError,
@@ -124,6 +130,7 @@ import {
 } from './parse-limits.js';
 import {
   type ParseThreadTiming,
+  parseTimingEnabled,
   parseTimingStart,
   recordThreadTiming,
   recordTierPass,
@@ -567,9 +574,13 @@ export interface ParsePool {
    */
   harnessFacts(harness: HarnessId, content: string, byteLength: number): Promise<HarnessContentFacts>;
   /**
-   * Close the pool. Queued and in-flight work is awaited first, then every
-   * worker is closed gracefully so its parse-timing dump reaches disk. Safe to
-   * call twice; the second call awaits the first.
+   * Close the pool. Queued and in-flight work is awaited first; then each
+   * healthy idle thread is parked for the next pool of the same shape (never
+   * while parse timing is recorded, nor from a pool judged broken, nor past the
+   * memory left beside a bounded pool — see `parkedWorkers`; a parked thread
+   * closes itself after `PARKED_IDLE_MS`), and every other one is closed gracefully so its
+   * parse-timing dump reaches disk. Safe to call twice; the second call awaits
+   * the first.
    */
   shutdown(): Promise<void>;
   /**
@@ -814,6 +825,19 @@ interface PoolWorker {
    * lowered them and a refusal must not name a limit nobody read. See `heapBounds`.
    */
   heapBounds: HeapBounds | undefined;
+  /**
+   * What makes this thread interchangeable with another — {@link workerKey}, taken when it was
+   * started, because the environment it copied then is the one it runs under.
+   */
+  key: string;
+  /**
+   * Set for a thread taken from the parked set until it first posts anything in this pool. One that
+   * dies before then may have died while parked, its `exit` not yet delivered when it was
+   * adopted: its job is queued again, and the death is charged to no document.
+   */
+  adopted: boolean;
+  /** Removes this pool's listeners, so a parked thread answers to nobody's bookkeeping. */
+  detach: () => void;
 }
 
 /**
@@ -843,10 +867,14 @@ class WorkerParsePool implements ParsePool {
   #closed = false;
   #shutdown: Promise<void> | undefined;
 
-  constructor(size: number, workerData: ParseWorkerData) {
+  /** How many threads may stay parked once this pool shuts down: see {@link parkedThreadRoom}. */
+  readonly #parkCap: number;
+
+  constructor(size: number, workerData: ParseWorkerData, parkCap: number) {
     this.size = size;
     this.#workerData = workerData;
     this.#limits = workerData.limits;
+    this.#parkCap = parkCap;
   }
 
   /** @inheritdoc */
@@ -938,11 +966,45 @@ class WorkerParsePool implements ParsePool {
 
     const closing = this.#workers.splice(0, this.#workers.length);
     for (const poolWorker of closing) poolWorker.retired = true;
+    // A pool judged broken parks nothing: its verdict is its own, and no thread it
+    // ran is carried to a later pool. Nor does a timed run, whose counters a parked
+    // thread would never hand back. Nor, past its cap, a pool on a machine with no memory to spare.
+    const mayPark = this.#unavailable === undefined && !parseTimingEnabled() && this.#parkCap > 0;
     await Promise.all([
-      ...closing.map((poolWorker) => closeWorker(poolWorker)),
+      ...closing.map(async (poolWorker) => {
+        if (mayPark && (await this.#park(poolWorker))) return;
+        if (!poolWorker.exited) await closeWorker(poolWorker.worker);
+      }),
       // A thread terminated at a limit is still exiting; shutdown is not done until it has.
       ...[...this.#terminating].map((poolWorker) => poolWorker.gone),
     ]);
+  }
+
+  /**
+   * Leave a healthy idle thread for the next pool of the same shape, rather than close it.
+   *
+   * Only a thread that loaded, holds no job, is still alive, and whose used heap is at most
+   * {@link PARKED_HEAP_MB}: a thread that breached or died was retired out of {@link #workers}
+   * before shutdown ever saw it, and one carrying more than a fresh thread does would hand the
+   * next pool's first job less room than a fresh thread has.
+   *
+   * @param poolWorker - A thread this pool is done with
+   * @returns Whether it was parked; `false` leaves it to be closed
+   */
+  async #park(poolWorker: PoolWorker): Promise<boolean> {
+    if (poolWorker.exited || !poolWorker.ready || poolWorker.job !== null) return false;
+    // Re-`ref` it for the read, as `closeWorker` does for the close: an idle thread is unref'd, and
+    // a heap read from an unref'd thread holds nothing open — a command whose last work is this
+    // shutdown would exit, mid-shutdown and at code 0, before the read answered. `parkWorker`
+    // unrefs it again once it is parked; a thread declined here is closed, which refs it anyway.
+    poolWorker.worker.ref();
+    // The read rejects only for a thread that has gone, which is closed, never parked.
+    const heap = await poolWorker.worker.getHeapStatistics().catch(() => undefined);
+    if (heap === undefined || poolWorker.exited) return false;
+    if (exceedsHeapLimit(heap, PARKED_HEAP_MB)) return false;
+    poolWorker.detach();
+    await parkWorker(poolWorker.worker, poolWorker.key, poolWorker.parsersLoaded, this.#parkCap);
+    return true;
   }
 
   /** Assign queued jobs to idle threads, spawning up to {@link size} of them. */
@@ -1066,10 +1128,27 @@ class WorkerParsePool implements ParsePool {
     // Only a thread that held a job, or never loaded, says anything about the
     // install. One that died idle took no document with it and is simply
     // replaced; counting it would let three idle deaths refuse a document
-    // nothing was wrong with.
-    if (poolWorker.job !== null || !poolWorker.ready) this.#countDeath(poolWorker, error);
+    // nothing was wrong with. Nor does an adopted thread that never answered here: it may have
+    // died while parked, so its job runs again on another thread, which is charged if it dies too.
+    if (poolWorker.adopted) this.#requeue(poolWorker);
+    else if (poolWorker.job !== null || !poolWorker.ready) this.#countDeath(poolWorker, error);
     this.#abandon(poolWorker, this.#unavailable ?? error);
     if (this.#unavailable !== undefined) this.#failAll(this.#unavailable);
+  }
+
+  /**
+   * Put an adopted thread's job back at the head of the queue, unanswered and unlimited, for
+   * {@link #abandon}'s pump to dispatch afresh.
+   *
+   * @param poolWorker - An adopted thread that died before it first answered
+   */
+  #requeue(poolWorker: PoolWorker): void {
+    const job = poolWorker.job;
+    if (job === null) return;
+    poolWorker.job = null;
+    disarm(job);
+    delete job.lastHeapUsed;
+    this.#queue.unshift(job);
   }
 
   /**
@@ -1117,8 +1196,12 @@ class WorkerParsePool implements ParsePool {
 
     let worker: Worker;
     let entry: string | undefined;
+    let key: string;
     try {
       entry = resolveWorkerEntry();
+      key = workerKey(entry, this.#workerData);
+      const parked = adoptParkedWorker(key);
+      if (parked !== undefined) return this.#track(parked.worker, entry, key, parked.parsersLoaded);
       // The stack is enforced by V8 itself, per thread: a breach throws a
       // `RangeError` (bare, or wrapped by `yaml`) the worker itself reports,
       // and the thread stays in the pool. The heap is NOT left to V8: reaching
@@ -1136,7 +1219,20 @@ class WorkerParsePool implements ParsePool {
       this.#failAll(this.#unavailable);
       return undefined;
     }
+    return this.#track(worker, entry, key, undefined);
+  }
 
+  /**
+   * Take a thread into this pool: one just started, or one a shut-down pool parked.
+   *
+   * @param worker - The thread
+   * @param entry - The entry it was started from
+   * @param key - Its {@link workerKey}
+   * @param loaded - The parser kinds a parked thread already loaded; `undefined` for a new thread,
+   *   which has posted nothing yet. A parked thread posted {@link ParseWorkerReady} to the pool it came from.
+   * @returns The tracked thread
+   */
+  #track(worker: Worker, entry: string, key: string, loaded: ReadonlySet<ParserModuleKind> | undefined): PoolWorker {
     let markGone: () => void = () => undefined;
     const gone = new Promise<void>((resolve) => {
       markGone = resolve;
@@ -1146,20 +1242,23 @@ class WorkerParsePool implements ParsePool {
       job: null,
       exited: false,
       gone,
-      ready: false,
-      parsersLoaded: new Set(),
+      ready: loaded !== undefined,
+      parsersLoaded: new Set(loaded),
       retired: false,
       entry,
       heapBounds: undefined,
+      key,
+      adopted: loaded !== undefined,
+      detach: () => undefined,
     };
-    worker.on('message', (response: ParseWorkerResponse) => {
+    const onMessage = (response: ParseWorkerResponse): void => {
       this.#settle(poolWorker, response);
-    });
+    };
     // A thread that dies holding a job never answered it: a heap breach when V8
     // stopped it at its heap, otherwise a worker death. Both are per-run
     // outcomes, never stored as a failure of the bytes (I6). `error` precedes
     // `exit`, so a thread that threw is reported by what it threw.
-    worker.on('error', (error: Error) => {
+    const onError = (error: Error): void => {
       if (poolWorker.retired) return;
       if ((error as { code?: unknown }).code === 'ERR_WORKER_OUT_OF_MEMORY') {
         // V8 stopped it, not the sampler: the refusal names V8's ceiling.
@@ -1167,8 +1266,8 @@ class WorkerParsePool implements ParsePool {
         return;
       }
       this.#died(poolWorker, poolWorker.ready ? new ParseWorkerDiedError({ cause: error }) : error);
-    });
-    worker.on('exit', (exitCode: number) => {
+    };
+    const onExit = (exitCode: number): void => {
       poolWorker.exited = true;
       markGone();
       if (this.#terminating.delete(poolWorker)) {
@@ -1178,7 +1277,15 @@ class WorkerParsePool implements ParsePool {
         return;
       }
       if (!poolWorker.retired) this.#died(poolWorker, new ParseWorkerDiedError({ exitCode }));
-    });
+    };
+    worker.on('message', onMessage);
+    worker.on('error', onError);
+    worker.on('exit', onExit);
+    poolWorker.detach = () => {
+      worker.off('message', onMessage);
+      worker.off('error', onError);
+      worker.off('exit', onExit);
+    };
 
     this.#workers.push(poolWorker);
     return poolWorker;
@@ -1186,6 +1293,8 @@ class WorkerParsePool implements ParsePool {
 
   /** Hand one worker's answer to the job that asked for it. */
   #settle(poolWorker: PoolWorker, response: ParseWorkerResponse): void {
+    // Any message proves the thread was alive after it was adopted: from here a death is its own.
+    poolWorker.adopted = false;
     if ('timing' in response) {
       // Answers the SHUTDOWN request, not a parse. Handled before anything
       // touches `poolWorker.job`, because this thread may well still be holding
@@ -1381,15 +1490,14 @@ function parseAnswer(answer: JobAnswer): ParseResult | null {
  * `terminate()` is reached only when a thread ignores the close for
  * {@link GRACEFUL_EXIT_TIMEOUT_MS}, and costs that thread's parse-timing dump.
  *
- * @param poolWorker - The thread to close
+ * @param worker - A live thread to close
  */
-async function closeWorker(poolWorker: PoolWorker): Promise<void> {
-  if (poolWorker.exited) return;
-
-  const { worker } = poolWorker;
+async function closeWorker(worker: Worker): Promise<void> {
   // Re-`ref` it: an idle worker is unref'd, and an unref'd thread cannot keep
   // the process alive long enough for its own exit to be observed.
   worker.ref();
+  // `once` is also this close's `error` listener: an `error` the thread raises on the way out
+  // rejects it rather than crashing the process, for a parked thread whose listeners were released.
   const exited = once(worker, 'exit');
   worker.postMessage(SHUTDOWN_REQUEST);
 
@@ -1404,6 +1512,173 @@ async function closeWorker(poolWorker: PoolWorker): Promise<void> {
   } finally {
     clearTimeout(escape);
   }
+}
+
+/**
+ * The most used heap a thread may hold and still be parked, in MiB: 48.
+ *
+ * A parked thread carries whatever its last jobs left on its heap, and the heap sampler stops a
+ * rising heap at its limit without waiting for a collection, so leftover garbage would make the
+ * next pool refuse a document a fresh thread admits. Only a thread holding about what a fresh one
+ * does is parked. Measured on Node 26 (`used_heap_size`, three runs): a fresh thread holds
+ * 20.7–21.5 MiB after loading the markdown parser and 23.3–24.1 MiB after the HTML one too, and
+ * 142–268 MiB after fifty 15 KiB documents. 48 MiB is twice the fresh figure, so a parked thread
+ * hands the next job at most about 24 MiB less than a fresh thread would (2.4% of the default
+ * 1,024 MiB limit). A thread that parsed a few small documents — every pool of a cold
+ * `vat build` — stays under it; one a large crawl filled is closed, and its pool's successor
+ * starts its own.
+ */
+export const PARKED_HEAP_MB = 48;
+
+/**
+ * How long a parked thread waits for a pool to adopt it before it closes itself: 5 s.
+ *
+ * A command's pools follow one another within milliseconds, so a few seconds keeps every hand-off
+ * one run makes, and a long-lived host (a server, a watcher) that stops parsing gets the threads'
+ * memory back with nothing to call. The timer is `unref`'d, so it never keeps a process alive,
+ * and adoption cancels it.
+ */
+export const PARKED_IDLE_MS = 5000;
+
+/** A healthy idle thread a shut-down pool left for the next pool of the same {@link workerKey}. */
+interface ParkedWorker {
+  readonly worker: Worker;
+  readonly key: string;
+  /** The parser kinds it loaded, so the adopting pool's death count reads its stops right. */
+  readonly parsersLoaded: ReadonlySet<ParserModuleKind>;
+  /** Removes the parked listeners and cancels the idle timer ({@link PARKED_IDLE_MS}). */
+  readonly release: () => void;
+}
+
+/**
+ * Parked threads, oldest first.
+ *
+ * ## 🔑 Why a process keeps threads between pools
+ *
+ * Every parse runs in a pool (ADR I8), and a command builds one per lane and one per
+ * single-file parse, not one per run: a cold `vat build` of one skill built eleven, and
+ * each started a thread and loaded its parser (about 110 ms) for one or two documents.
+ * Parking hands the next pool the thread the last one finished with, so a process pays one
+ * start per concurrent thread rather than one per pool.
+ *
+ * A parked thread is `unref`'d, so it never keeps the process alive; one that dies while
+ * parked is dropped here and counted against no pool. Limits are the adopting pool's, per
+ * job, exactly as for a thread it started: the key carries every input a thread is started
+ * with, so a thread only ever serves a pool that would have started an identical one.
+ */
+const parkedWorkers: ParkedWorker[] = [];
+
+/**
+ * Everything that makes one parse thread interchangeable with another: its entry, its
+ * `workerData` (cache directory and limits — the heap and stack `resourceLimits` derive from
+ * them), the process's `execArgv` it inherits, and the environment it copied at start.
+ *
+ * @param entry - The worker entry
+ * @param workerData - What the thread is told at construction
+ * @returns A string equal for two threads exactly when either may serve the other's pool
+ */
+function workerKey(entry: string, workerData: ParseWorkerData): string {
+  const env = Object.entries(process.env).sort(([a], [b]) => a.localeCompare(b));
+  return JSON.stringify([entry, workerData, process.execArgv, env]);
+}
+
+/**
+ * Release a parked thread and close it; it is no pool's, so a failed close is nobody's to report.
+ *
+ * @param parked - A thread taken out of {@link parkedWorkers}
+ * @returns Resolves once it has exited
+ */
+async function closeParked(parked: ParkedWorker): Promise<void> {
+  parked.release();
+  await closeWorker(parked.worker).catch(() => undefined);
+}
+
+/**
+ * Park a thread, closing the oldest parked ones past `cap`.
+ *
+ * @param worker - A healthy idle thread whose pool has detached from it
+ * @param key - Its {@link workerKey}
+ * @param parsersLoaded - The parser kinds it loaded
+ * @param cap - The parking pool's cap: {@link defaultParsePoolSize}, lowered to what memory
+ *   leaves beside a bounded pool ({@link parkedThreadRoom})
+ * @returns Resolves once any thread evicted for it has closed
+ */
+async function parkWorker(
+  worker: Worker,
+  key: string,
+  parsersLoaded: ReadonlySet<ParserModuleKind>,
+  cap: number,
+): Promise<void> {
+  const unpark = (): boolean => {
+    const index = parkedWorkers.indexOf(record);
+    if (index === -1) return false;
+    parkedWorkers.splice(index, 1);
+    return true;
+  };
+  const drop = (): void => {
+    unpark();
+    clearTimeout(idle);
+  };
+  const idle = setTimeout(() => {
+    if (unpark()) closeParked(record).catch(() => undefined);
+  }, PARKED_IDLE_MS);
+  idle.unref();
+  const record: ParkedWorker = {
+    worker,
+    key,
+    parsersLoaded: new Set(parsersLoaded),
+    release: () => {
+      clearTimeout(idle);
+      worker.off('error', drop);
+      worker.off('exit', drop);
+    },
+  };
+  // `error` as well as `exit`: an `error` with no listener would throw in this process.
+  worker.on('error', drop);
+  worker.on('exit', drop);
+  worker.unref();
+  parkedWorkers.push(record);
+
+  const evicted = parkedWorkers.splice(0, Math.max(0, parkedWorkers.length - cap));
+  await Promise.all(evicted.map((old) => closeParked(old)));
+}
+
+/**
+ * Take the most recently parked thread with this key, if one is still running.
+ *
+ * @param key - The adopting pool's {@link workerKey}
+ * @returns The thread, released from the parked set, or `undefined`
+ */
+function adoptParkedWorker(key: string): ParkedWorker | undefined {
+  for (let index = parkedWorkers.length - 1; index >= 0; index -= 1) {
+    const candidate = parkedWorkers[index];
+    if (candidate?.key !== key) continue;
+    parkedWorkers.splice(index, 1);
+    candidate.release();
+    // A thread already gone, whose `exit` has not been delivered yet, is dropped, never adopted.
+    if (candidate.worker.threadId < 0) continue;
+    return candidate;
+  }
+  return undefined;
+}
+
+/**
+ * Close every parked thread now, rather than at {@link PARKED_IDLE_MS} — for a test that counts
+ * the threads a run starts, which a thread an earlier test parked would otherwise serve.
+ *
+ * @returns Resolves once every one has exited
+ */
+export async function __closeParkedParseWorkersForTest(): Promise<void> {
+  await Promise.all(parkedWorkers.splice(0, parkedWorkers.length).map((parked) => closeParked(parked)));
+}
+
+/**
+ * How many threads are parked — for a test of park, adopt and eviction.
+ *
+ * @returns The count
+ */
+export function __parkedParseWorkerCountForTest(): number {
+  return parkedWorkers.length;
 }
 
 /**
@@ -1448,10 +1723,15 @@ export function createParsePool(options?: ParsePoolOptions): ParsePool {
   const requestedLimits = resolveParseLimits(options?.limits);
   // The one choke point every width passes, pinned or estimated: the pool's
   // worst-case heap is held inside this machine's memory (`memoryBoundedPool`).
-  const bounded = memoryBoundedPool({ size, heapMb: requestedLimits.heapMb }, machineMemoryBytes());
+  const memoryBytes = machineMemoryBytes();
+  const bounded = memoryBoundedPool({ size, heapMb: requestedLimits.heapMb }, memoryBytes);
   const limits: ParseLimits = { ...requestedLimits, heapMb: bounded.heapMb };
+  // Threads it parks are charged beside the widest pool of this shape a process starts, so
+  // parking never spends the memory the bound above held for a live pool.
+  const widest = memoryBoundedPool({ size: Math.max(size, defaultParsePoolSize()), heapMb: requestedLimits.heapMb }, memoryBytes);
+  const parkCap = Math.min(defaultParsePoolSize(), parkedThreadRoom(widest, memoryBytes));
   // Conditional spread, never `{ cacheDir: undefined }`: `workerData` is
   // structured-cloned, and an own property valued `undefined` is not the same as
   // an absent one to the `in` check on the other side.
-  return new WorkerParsePool(bounded.size, cacheDir === undefined ? { limits } : { cacheDir, limits });
+  return new WorkerParsePool(bounded.size, cacheDir === undefined ? { limits } : { cacheDir, limits }, parkCap);
 }

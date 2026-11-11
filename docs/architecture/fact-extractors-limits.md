@@ -87,6 +87,17 @@ counted there by the `wire-roundtrip` tier row of the lab's `parse` facet, for t
 runs; a warm run parses nothing and starts no worker, so a served run does not pay it; and the cost
 is a fixed start-up cost per run, not a cost per file, so it shrinks as a share of a larger run.
 
+**Per run, not per pool, only because shutdown parks the thread.** A command builds a pool per lane
+and per single-file parse, and each pool used to start its own thread: a cold `vat build` of one
+skill and one plugin started eleven, about 1.1 s of a run that takes 60 ms in-process (the
+`top-level-build` fault-matrix case, cache off, on this host: 32 runs in 34.5 s against 1.99 s
+before the pool). A pool's shutdown now parks each healthy idle thread, and the next pool of the same
+shape adopts it (`parkedWorkers` in `parse-pool.ts`), so a run starts one thread per pool it holds
+open AT ONCE — two for that build, and the same 32 runs take 2.2 s. Parking is off while parse timing
+is recorded, so a timed run still closes, and reports, every thread; it is capped by the memory the
+pool bound leaves (`parkedThreadRoom`), so a machine with none to spare parks nothing and pays a
+start per pool again.
+
 ### VAT's own tree
 
 A clean clone at `692ac3e4`, 330 markdown and HTML files, 3 runs each:

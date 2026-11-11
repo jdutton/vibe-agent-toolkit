@@ -20,6 +20,7 @@ import {
   isStackOverflow,
   memoryBoundedPool,
   outputBreach,
+  parkedThreadRoom,
   ParseLimitError,
   ParseWorkerDiedError,
   resolveParseLimits,
@@ -470,5 +471,19 @@ describe('memoryBoundedPool', () => {
 
   it('never raises a heap the caller set below what fits', () => {
     expect(memoryBoundedPool({ size: 1, heapMb: 64 }, 2048 * MIB)).toStrictEqual({ size: 1, heapMb: 64 });
+  });
+});
+
+describe('parkedThreadRoom', () => {
+  // What the bounded pool leaves of memory − 1,024 MiB, at 1,024 MiB per parked thread.
+  it.each([
+    { label: 'a 16 GiB machine beside a width-4 pool parks 7', memoryMb: 16_384, expected: 7 },
+    { label: 'an 8 GiB machine beside its width-3 pool parks 1', memoryMb: 8192, expected: 1 },
+    { label: 'a 4 GiB container beside its width-1 pool parks 1', memoryMb: 4096, expected: 1 },
+    { label: 'a 3 GiB container whose one worker fills it parks none', memoryMb: 3072, expected: 0 },
+    { label: 'a 2 GiB container whose heap the bound lowered parks none', memoryMb: 2048, expected: 0 },
+  ])('$label', ({ memoryMb, expected }) => {
+    const pool = memoryBoundedPool({ size: 4, heapMb: 1024 }, memoryMb * MIB);
+    expect(parkedThreadRoom(pool, memoryMb * MIB)).toBe(expected);
   });
 });

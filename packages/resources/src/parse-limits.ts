@@ -992,3 +992,23 @@ export function memoryBoundedPool(requested: PoolShape, memoryBytes: number): Po
   const fitting = Math.max(MIN_BOUNDED_HEAP_MB, Math.floor(availableMb / HEAP_CEILING_FACTOR));
   return { size: 1, heapMb: Math.min(requested.heapMb, fitting) };
 }
+
+/**
+ * How many idle threads a process may keep parked beside a pool running at its worst case.
+ *
+ * A parked thread (see `parkedWorkers` in `parse-pool.ts`) is idle, so it is charged its whole
+ * enforced limit, `heapMb`: twice the used heap it may be parked with, leaving room for what V8
+ * committed beyond it. What is charged comes out of what {@link memoryBoundedPool} left after
+ * `pool` grew every thread to {@link workerHeapCeilingMb}, so parked threads never take the
+ * memory a live pool was bounded by. A pool whose heap the bound lowered leaves none; one whose
+ * width it lowered leaves only what the narrower pool's worst case does not fill, often none.
+ *
+ * @param pool - The widest pool this process runs at this shape, as {@link memoryBoundedPool} bounded it
+ * @param memoryBytes - The memory this process may use
+ * @returns How many threads of this shape may be parked; `0` parks none
+ */
+export function parkedThreadRoom(pool: PoolShape, memoryBytes: number): number {
+  const availableMb = Math.floor(memoryBytes / BYTES_PER_MIB) - MAIN_THREAD_RESERVE_MB;
+  const spareMb = availableMb - pool.size * workerHeapCeilingMb(pool.heapMb);
+  return Math.max(0, Math.floor(spareMb / pool.heapMb));
+}

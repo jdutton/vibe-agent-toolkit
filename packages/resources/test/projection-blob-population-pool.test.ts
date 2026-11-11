@@ -34,7 +34,14 @@ import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { isParserUnavailable, ParseCache } from '../src/parse-cache.js';
-import { __setParseWorkerEntryForTest, createParsePool, defaultParsePoolSize, type ParsePool } from '../src/parse-pool.js';
+import {
+  __closeParkedParseWorkersForTest,
+  __parkedParseWorkerCountForTest,
+  __setParseWorkerEntryForTest,
+  createParsePool,
+  defaultParsePoolSize,
+  type ParsePool,
+} from '../src/parse-pool.js';
 import { BLOB_PARSE_FAILED, BLOB_PARSE_WORKER_DIED, populateBlobs, type BlobPopulationResult } from '../src/projection/blob-population.js';
 import { describeBlobRefusals } from '../src/projection/blob-refusals.js';
 import type { Projection } from '../src/projection/projection.js';
@@ -345,7 +352,8 @@ describe('parse-pool activation', () => {
     expect(observed.peak).toBe(workerThreadCount());
   });
 
-  it('leaves no worker thread behind after a real pooled run', async () => {
+  it('leaves no worker thread behind after a real pooled run but the ones it parked', async () => {
+    await __closeParkedParseWorkersForTest();
     const before = workerThreadCount();
 
     await populateBlobs(await baseBuilderForRoot(suite.tempDir), {
@@ -353,6 +361,11 @@ describe('parse-pool activation', () => {
       parsePool: { missThreshold: 1, size: 2 },
     });
 
+    // Every thread still running is one shutdown parked for the next pool; closing them is the rest.
+    const parked = __parkedParseWorkerCountForTest();
+    expect(parked).toBeGreaterThan(0);
+    expect(workerThreadCount()).toBe(before + parked);
+    await __closeParkedParseWorkersForTest();
     expect(workerThreadCount()).toBe(before);
   });
 
