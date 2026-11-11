@@ -82,6 +82,7 @@ import { strongerSeverity, type Severity } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { estimateTokens } from '../link-classify.js';
+import type { ParseRefusedResource } from '../resource-registry.js';
 import { ExtentDeclarationSchema } from '../schemas/project-config.js';
 import type { BlobReferenceRow, BlobRow } from '../schemas/projection-blobs.js';
 import type { ClaudeContextFinding } from '../schemas/projection-claude-context.js';
@@ -93,6 +94,7 @@ import type {
 } from '../schemas/projection-resources.js';
 
 import { CLAUDE_MD_TAG, classifyPath } from './agentic-tags.js';
+import { parseRefusalOf } from './blob-refusals.js';
 import { ancestorDirectories } from './claude-context-ancestry.js';
 import { selectRules, type RuleAdmission } from './claude-context-rules.js';
 import { launchWalk, readWalk } from './claude-context-walk.js';
@@ -196,6 +198,23 @@ export interface LoadedContextAnswer {
   readonly conditions: readonly GradedCondition[];
   readonly overBudgetRules: readonly string[];
   readonly unattributedImports: readonly string[];
+  /**
+   * Every file this query reached whose harness facts the run REFUSED,
+   * path-ordered. ⛔ Not an empty-cost row: a refused rule's `paths:` were never
+   * read, so it is in no row at all (whether it loads is unknown), and a
+   * refused file under a `CLAUDE.md` is a row whose `tokens` is null. Either
+   * way the answer is incomplete, and this is where it says so.
+   */
+  readonly refused: readonly RefusedContextFile[];
+}
+
+/**
+ * A file a context query reached and could not measure, because this run
+ * refused its facts — under the not-admitted contract's own code and reason.
+ */
+export interface RefusedContextFile extends Omit<ParseRefusedResource, 'filePath'> {
+  /** Root-relative path. */
+  readonly path: string;
 }
 
 /**
@@ -235,7 +254,7 @@ export function whatLoadsAt(projection: Projection, inputPath: string): LoadedCo
   const directory = isFile ? (realization?.dir ?? '') : inputPath;
   const file = isFile ? inputPath : null;
 
-  const { admissions, classes, roots, overBudget } = loadedAt(projection, directory, file);
+  const { admissions, classes, roots, overBudget, refused } = loadedAt(projection, directory, file);
   // `importReport` (via `buildImportIndex`) throws when the projection carries
   // no root, so `rootPath` below is guaranteed present past this line — but it
   // is asserted explicitly rather than defaulted, the same way `hopsOf` does.
@@ -254,7 +273,34 @@ export function whatLoadsAt(projection: Projection, inputPath: string): LoadedCo
     conditions: gradeConditions(projection, index, imports.walkedExtents, directory),
     overBudgetRules: overBudget,
     unattributedImports: imports.unattributed,
+    refused,
   };
+}
+
+/**
+ * The reached files whose facts this run refused, each with the refusal its
+ * blob condition records, path-ordered and once each.
+ *
+ * @param projection - The populated projection
+ * @param paths - Root-relative paths the walk reported refused, possibly repeated
+ * @returns One entry per path
+ * @throws {Error} When a path the walk called refused has no refusal row — the
+ *   walk and the conditions read one table, so that is a VAT defect
+ */
+function refusedFiles(projection: Projection, paths: readonly string[]): RefusedContextFile[] {
+  if (paths.length === 0) return [];
+  const index = contextQueryIndexFor(projection);
+  const refusalByKey = new Map<string, Omit<ParseRefusedResource, 'filePath'>>();
+  for (const row of projection.blobConditions) {
+    const refusal = parseRefusalOf(row);
+    if (refusal !== undefined && !refusalByKey.has(row.blob)) refusalByKey.set(row.blob, refusal);
+  }
+  return [...new Set(paths)].sort(comparePaths).map((path) => {
+    const key = index.realizationByPath.get(path)?.contentKey;
+    const refusal = key === undefined || key === null ? undefined : refusalByKey.get(key);
+    if (refusal === undefined) throw new Error(`whatLoadsAt: ${path} was reached as refused but carries no refusal row. This is a VAT bug.`);
+    return { path, ...refusal };
+  });
 }
 
 /** The rule admissions that load a rule ON DEMAND — the `paths:` family. */
@@ -283,7 +329,8 @@ const ON_DEMAND_RULE_KINDS: ReadonlySet<Admission['kind']> = new Set([
  * @param projection - The populated projection
  * @param directory - The query's directory — the session's working directory
  * @param file - The query's file, or null for a directory query
- * @returns Admissions and classes by `resourceId`, walked roots, over-budget rules
+ * @returns Admissions and classes by `resourceId`, walked roots, over-budget
+ *   rules, and the reached files whose facts were refused, path-ordered
  */
 function loadedAt(
   projection: Projection,
@@ -294,6 +341,7 @@ function loadedAt(
   classes: Map<string, LoadClass>;
   roots: ReadonlySet<string>;
   overBudget: readonly string[];
+  refused: readonly RefusedContextFile[];
 } {
   const admissions = new Map<string, Admission[]>();
   const classes = new Map<string, LoadClass>();
@@ -332,7 +380,10 @@ function loadedAt(
     if (entry.admission.kind !== 'import') roots.add(entry.path);
     if (!classes.has(entry.resourceId) || prunedOnly.has(entry.resourceId)) classes.set(entry.resourceId, 'on-demand');
   }
-  return { admissions, classes, roots, overBudget: selection.overBudget };
+  // The launch walk reaches every rules closure the read walk can (same
+  // directories, no `within` bound), so its refused list covers both halves.
+  const refused = refusedFiles(projection, walk.refused.map((entry) => entry.path));
+  return { admissions, classes, roots, overBudget: selection.overBudget, refused };
 }
 
 /**
@@ -630,6 +681,7 @@ function buildImportIndex(projection: Projection, realizations: RealizationIndex
       resourceRealizations: projection.resourceRealizations,
       blobs: projection.blobs,
       blobReferences: projection.blobReferences,
+      blobConditions: projection.blobConditions,
       harnessBlobFacts: projection.harnessBlobFacts,
       harnessBlobImports: projection.harnessBlobImports,
       declaration,
@@ -722,9 +774,12 @@ function rowsFor(
     rows.push({
       resourceId,
       path: realization.path,
-      // `null` (unmeasured) only for a file with no blob. A keyed, walked blob
-      // with no facts row throws — reading it as unmeasured would hide a bug.
-      tokens: blob === undefined ? null : index.facts.requireFacts(blob.contentKey, realization.path).injectedTokens,
+      // `null` (unmeasured) only for a file with no blob, or one whose facts
+      // this run refused (reported by the population). A keyed, walked blob
+      // with no facts row otherwise throws — reading it as unmeasured would hide a bug.
+      tokens: blob === undefined || index.facts.refused(blob.contentKey)
+        ? null
+        : index.facts.requireFacts(blob.contentKey, realization.path).injectedTokens,
       bytes: blob?.bytes ?? null,
       loadClass,
       admissions: list,

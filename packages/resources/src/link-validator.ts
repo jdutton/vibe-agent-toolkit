@@ -72,6 +72,7 @@ import {
 } from '@vibe-agent-toolkit/utils/git';
 
 import type { DeferredArtifacts } from './deferred-artifacts.js';
+import type { NotAdmittedLog } from './not-admitted.js';
 import type { ResourceLink } from './types.js';
 import {
   isWithinProjectFrom,
@@ -311,8 +312,10 @@ export interface JudgeLinkOptions extends LinkFactTables {
    */
   deferredArtifacts?: DeferredArtifacts;
   /**
-   * Files the population enumerated but could not READ — the registry's
-   * `RESOURCE_UNREADABLE` set, as {@link unreadableTargetsFrom} shapes it.
+   * Files the population enumerated and did not admit — could not READ
+   * (`RESOURCE_UNREADABLE`) or whose parse was refused
+   * (`RESOURCE_PARSE_LIMIT_EXCEEDED` / `RESOURCE_PARSE_WORKER_DIED`) — as
+   * {@link unreadableTargetsFrom} shapes the registry's two logs.
    *
    * 🪤 **Without it, a link INTO such a file reads as clean.** The file is on
    * disk and its parent lists it, so existence passes; but it never entered the
@@ -324,36 +327,48 @@ export interface JudgeLinkOptions extends LinkFactTables {
    * because VAT was never asked to read it" from "not indexed because VAT was
    * refused", and reports the second as `LINK_TARGET_UNREADABLE`.
    *
-   * Not a second ledger: it is a lookup VIEW over the list the registry
-   * already keeps (`getUnreadableResources()`), built once per run.
+   * A refused parse is the same gap: the file never entered the fragment index
+   * either, so its anchors are unverified too.
+   *
+   * Not a second ledger: it is a lookup VIEW over the logs the registry
+   * already keeps (`getNotAdmitted()`), built once per run.
    */
   unreadableTargets?: UnreadableTargets;
 }
 
 /**
- * The files a run could not read, keyed for the judge: NFC-normalised absolute
- * path → the errno the platform gave, or `undefined` when it gave none.
+ * The files a run enumerated and did not admit, keyed for the judge:
+ * NFC-normalised absolute path → why its anchors cannot be looked up, and what
+ * clears that.
  *
  * Keyed the way {@link fragmentIndex} keys — NFC, see that function — because
  * it is queried with the same derived-from-link-text path `checkAnchor` is, and
  * for the same reason: on macOS the enumerated spelling and the link's spelling
  * of one file routinely differ in normalization form.
  */
-export type UnreadableTargets = ReadonlyMap<string, string | undefined>;
+export type UnreadableTargets = ReadonlyMap<string, { readonly why: string; readonly remedy: string }>;
 
 /**
- * Shape the registry's unreadable-file log into the judge's lookup.
+ * Shape the registry's two not-admitted logs into the judge's lookup.
  *
- * @param unreadable - Files that were enumerated and could not be read, each
- *   with the errno the platform reported when it reported one
+ * @param log - Files enumerated and not read (each with the errno the platform
+ *   reported, when it reported one), and files whose parse was refused
  * @returns The lookup {@link JudgeLinkOptions.unreadableTargets} takes
  */
-export function unreadableTargetsFrom(
-  unreadable: Iterable<{ readonly filePath: string; readonly code?: string | undefined }>,
-): UnreadableTargets {
-  const targets = new Map<string, string | undefined>();
-  for (const { filePath, code } of unreadable) {
-    targets.set(toNfc(filePath), code);
+export function unreadableTargetsFrom(log: NotAdmittedLog): UnreadableTargets {
+  const targets = new Map<string, { why: string; remedy: string }>();
+  for (const { filePath, code } of log.unreadable) {
+    const errno = code === undefined ? '' : ` (${code})`;
+    targets.set(toNfc(filePath), {
+      why: `it could not be read${errno}, so it holds no headings this run could look the anchor up in (it is the file reported as RESOURCE_UNREADABLE)`,
+      remedy: 'Fix the permissions on that file, then validate again.',
+    });
+  }
+  for (const { filePath, code, reason } of log.parseRefused) {
+    targets.set(toNfc(filePath), {
+      why: `its parse was refused (${reason}), so its anchors are unverified (it is the file reported as ${code})`,
+      remedy: 'Simplify or exclude that file, then validate again.',
+    });
   }
   return targets;
 }
@@ -1282,7 +1297,8 @@ function judgeVerifiedTarget(
 }
 
 /**
- * The issue an anchor into a file the population could not READ earns.
+ * The issue an anchor into a file the population could not READ, or whose parse
+ * it refused, earns.
  *
  * The file-level counterpart of {@link unreadableTargetIssue}, and the same
  * code for the same reason: `LINK_TARGET_UNREADABLE` is the registry's word
@@ -1308,15 +1324,13 @@ function unreadableFileAnchorIssue(
   options: Pick<JudgeLinkOptions, 'unreadableTargets' | 'projectRoot'>,
 ): ValidationIssue | null {
   // NFC on both sides — the same key rule as `fragmentIndex`/`checkAnchor`.
-  const key = toNfc(resolvedPath);
-  if (!options.unreadableTargets?.has(key)) return null;
-  const code = options.unreadableTargets.get(key);
-  const errno = code === undefined ? '' : ` (${code})`;
+  const gap = options.unreadableTargets?.get(toNfc(resolvedPath));
+  if (gap === undefined) return null;
   const target = messagePath(resolvedPath, options.projectRoot);
 
   return createRegistryIssue(
     'LINK_TARGET_UNREADABLE',
-    `Link anchor #${anchor} in ${target} was NOT checked: the file exists and is spelled as written, but it could not be read${errno}, so it holds no headings this run could look the anchor up in (it is the file reported as RESOURCE_UNREADABLE). Its anchor is unverified, so treat this as a gap in the run rather than as a clean result. Fix the permissions on that file, then validate again.`,
+    `Link anchor #${anchor} in ${target} was NOT checked: the file exists and is spelled as written, but ${gap.why}. Its anchor is unverified, so treat this as a gap in the run rather than as a clean result. ${gap.remedy}`,
     linkExtras(link, sourceFilePath, options.projectRoot),
   );
 }

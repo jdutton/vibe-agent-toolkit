@@ -55,6 +55,7 @@
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { withParseDispatcher } from '../src/parse-dispatcher.js';
 import { populateBlobs } from '../src/projection/blob-population.js';
 import { RunContentCache } from '../src/projection/content-cache.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
@@ -175,7 +176,7 @@ describe('demand promotion, over a row the shipped deferral policy produced', ()
     expect(statesAt(builder, DEFERRED_DOC)).toEqual([{ state: 'keyed', key }]);
 
     const blobsBeforePromotion = builder.build().blobs.length;
-    await afterClosurePromotion(builder, attemptsBeforeClosure);
+    await withParseDispatcher(async (dispatcher) => afterClosurePromotion(builder, attemptsBeforeClosure, dispatcher));
 
     // One blob, not two: `DEFERRED_LEAF` is still deferred, so a stage that
     // simply re-derived everything keyed would add a different number of rows.

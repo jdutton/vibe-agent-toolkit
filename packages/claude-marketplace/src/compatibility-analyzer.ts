@@ -1,7 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
 
-import type { EvidenceRecord, Observation } from '@vibe-agent-toolkit/agent-skills';
+import { detectorFrontmatter, type EvidenceRecord, type Observation } from '@vibe-agent-toolkit/agent-skills';
+import { classifyParseFailure, type ParseDispatcher, type ParseFailureKind } from '@vibe-agent-toolkit/resources';
 import { issueLocation, mapWithConcurrency, safePath } from '@vibe-agent-toolkit/utils';
 
 import { readMarketplaceDefaultTargets, resolveEffectiveTargets } from './marketplace-defaults.js';
@@ -48,7 +49,8 @@ async function readPluginManifest(pluginDir: string): Promise<PluginManifest> {
   const parsed = JSON.parse(raw) as Record<string, unknown>;
 
   if (!parsed['name'] || typeof parsed['name'] !== 'string') {
-    throw new Error(`plugin.json missing required "name" field in ${manifestPath}`);
+    // A `SyntaxError`, like non-JSON: the plugin's fault, not VAT's.
+    throw new SyntaxError(`plugin.json missing required "name" field in ${manifestPath}`);
   }
 
   const manifest: PluginManifest = { name: parsed['name'] };
@@ -97,6 +99,19 @@ function uncheckedEntry(absolutePath: string, reason: string, locationRoot: stri
   return { path, reason: reason.replaceAll(absolutePath, path) };
 }
 
+/**
+ * Whose fault a compatibility-analysis failure is, for the per-file catch and
+ * for `vat audit`'s whole-plugin catch: a `SyntaxError` is `malformed`, the rest
+ * is `classifyParseFailure`'s answer — which rethrows any VAT defect.
+ *
+ * @param error - What a scan, or a whole plugin's analysis, threw
+ * @returns The kind of failure that is the plugin's
+ * @throws `error` itself, for anything that is VAT's
+ */
+export function classifyCompatibilityFailure(error: unknown): ParseFailureKind | 'malformed' {
+  return error instanceof SyntaxError ? 'malformed' : classifyParseFailure(error);
+}
+
 /** Which `summary` counter a scanned file lands in. */
 type FileCounter = Exclude<keyof FileCounts, 'totalFiles'>;
 
@@ -108,10 +123,11 @@ async function scanFile(
   relativePath: string,
   fullPath: string,
   locationRoot: string,
+  dispatcher: ParseDispatcher,
 ): Promise<{ counter: FileCounter; evidence: EvidenceRecord[] } | undefined> {
   const ext = extname(relativePath).toLowerCase();
   if (MARKDOWN_EXTENSIONS.has(ext)) {
-    return { counter: 'skillFiles', evidence: await scanMarkdownFile(fullPath, locationRoot) };
+    return { counter: 'skillFiles', evidence: await scanMarkdownFile(fullPath, locationRoot, dispatcher) };
   }
   if (SCRIPT_EXTENSIONS.has(ext)) {
     return { counter: 'scriptFiles', evidence: await scanScriptFile(fullPath, locationRoot) };
@@ -131,12 +147,11 @@ async function scanFile(
 async function scanMarkdownFile(
   fullPath: string,
   locationRoot: string,
+  dispatcher: ParseDispatcher,
 ): Promise<EvidenceRecord[]> {
   const content = await readFile(fullPath, 'utf8');
-  return [
-    ...scanCodeBlocks(content, fullPath, locationRoot),
-    ...scanFrontmatter(content, fullPath, locationRoot),
-  ];
+  const frontmatter = await detectorFrontmatter(content, { dispatcher });
+  return [...scanCodeBlocks(content, fullPath, locationRoot, frontmatter), ...scanFrontmatter(content, fullPath, locationRoot, frontmatter)];
 }
 
 /**
@@ -234,6 +249,7 @@ export interface AnalyzeCompatibilityOptions {
  *   `vat audit`) MUST pass its invocation scan root, not each plugin directory,
  *   or the report mixes coordinate systems. Required: "relative to what?" has no
  *   safe default.
+ * @param dispatcher - The run's parse dispatcher, shared across plugins
  * @param options - Optional analysis options; see {@link AnalyzeCompatibilityOptions}.
  *   `options.configTargets` lets callers thread a config-layer target declaration
  *   through to the verdict engine — plugin.json / marketplace.json targets still
@@ -243,11 +259,13 @@ export interface AnalyzeCompatibilityOptions {
  *   read, list or parse. Those are named per path and the rest is analyzed;
  *   the result is a verdict over the files it names as read.
  * @throws Only for a failure that is plugin-wide: no valid
- *   `.claude-plugin/plugin.json`, or a plugin root that cannot be listed.
+ *   `.claude-plugin/plugin.json`, an unlistable plugin root, or a VAT defect
+ *   ({@link classifyCompatibilityFailure} tells which).
  */
 export async function analyzeCompatibility(
   pluginDir: string,
   locationRoot: string,
+  dispatcher: ParseDispatcher,
   options?: AnalyzeCompatibilityOptions,
 ): Promise<CompatibilityResult> {
   const manifest = await readPluginManifest(pluginDir);
@@ -265,13 +283,13 @@ export async function analyzeCompatibility(
 
   // Each file is scanned on its own: one the filesystem refuses, or one whose
   // JSON will not parse, is named under `unchecked` and the rest are still
-  // analyzed. This used to throw out of the whole plugin. The scans are
-  // read-only and run concurrently; their results fold in file order.
+  // analyzed; results fold in file order. A VAT defect is rethrown.
   const outcomes = await mapWithConcurrency(files, async (relativePath) => {
     const fullPath = safePath.join(pluginDir, relativePath);
     try {
-      return { scanned: await scanFile(relativePath, fullPath, locationRoot) };
+      return { scanned: await scanFile(relativePath, fullPath, locationRoot, dispatcher) };
     } catch (error) {
+      classifyCompatibilityFailure(error);
       return { failed: uncheckedEntry(fullPath, reasonOf(error), locationRoot) };
     }
   });

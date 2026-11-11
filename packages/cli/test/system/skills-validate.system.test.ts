@@ -3,8 +3,9 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { NODE_EXECUTABLE, gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
@@ -54,6 +55,31 @@ describe('skills validate command (system test)', () => {
     // The envelope's summary is exactly the findings it publishes.
     expect(document.summary.errors + document.summary.warnings + document.summary.info).toBe(document.findings.length);
     expect(document.data.root).toBe(fixtureDir);
+  });
+
+  // A refused SKILL.md has no name to key a row by: it is examined, and a run finding.
+  it('counts a SKILL.md whose parse was refused in examined, beside one row per skill validated', () => {
+    const projectDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'skills-validate-refused-row-'));
+    try {
+      const depth = 50_000;
+      for (const name of ['alpha', 'deep']) mkdirSyncReal(safePath.join(projectDir, 'skills', name), { recursive: true });
+      writeTestFile(safePath.join(projectDir, 'skills', 'alpha', 'SKILL.md'), makeSkillMd('alpha'));
+      writeTestFile(
+        safePath.join(projectDir, 'skills', 'deep', 'SKILL.md'),
+        `---\nname: deep\nnested: ${'['.repeat(depth)}${']'.repeat(depth)}\n---\n# Deep\n`,
+      );
+      writeTestFile(safePath.join(projectDir, VAT_CONFIG_FILENAME), 'skills:\n  include:\n    - "skills/*/SKILL.md"\n');
+
+      const result = spawnSync(NODE_EXECUTABLE, [binPath, 'skills', 'validate', projectDir], { encoding: 'utf-8' });
+      const document = publishedDocument(result.stdout);
+
+      const rows = document.data?.skills ?? [];
+      expect(rows.map((skill) => skill.name)).toEqual(['alpha']);
+      expect(document.examined).toBe(rows.length + 1);
+      expect(document.findings.map((finding) => finding.code)).toContain('RESOURCE_PARSE_LIMIT_EXCEEDED');
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
   });
 
   it('publishes the same document with and without --verbose — it only changes stderr', () => {

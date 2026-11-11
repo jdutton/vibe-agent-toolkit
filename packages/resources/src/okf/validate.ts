@@ -25,7 +25,11 @@ import type { Severity } from '@vibe-agent-toolkit/schema';
 import { forEachInOrder, FsLookupCache, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ParseResult } from '../link-parser.js';
-import { importParserModule, isParserUnavailable } from '../parse-cache.js';
+import { parseRefusedEntry } from '../not-admitted.js';
+import { type ParseDispatcher, parseFileCached, withParseDispatcher } from '../parse-dispatcher.js';
+import { classifyParseFailure } from '../parse-failure.js';
+import type { PerRunParseRefusal } from '../parse-limits.js';
+import type { ParseRefusedResource } from '../resource-registry.js';
 
 import {
   discoverOkfBundle,
@@ -104,49 +108,14 @@ export interface ValidateOkfBundleOptions {
   specVersion?: string;
 }
 
-/**
- * Read and parse one bundle document, loading the markdown parser on first use.
- *
- * ⚠️ **The `import()` must stay dynamic.** A static
- * `import { parseMarkdown } from '../link-parser.js'` here is invisible in
- * review and reaches far outside this lane: `okf/index.js` is value-re-exported
- * by the package barrel, so a static import puts the whole remark stack —
- * ~730ms on Windows — into the module graph of EVERY command that touches
- * `@vibe-agent-toolkit/resources`, including the ones that parse nothing. That
- * is the exact regression
- * `packages/cli/test/integration/module-load-budget.integration.test.ts`
- * exists to catch, and it is what fails if this is flattened back. It has
- * already happened once, on this very file.
- *
- * The load goes through `importParserModule` for the same reason the barrel's
- * `parseMarkdown` wrapper does: this route reads the file itself, so it bypasses
- * `loadParser` and owns its own load failure. Unwrapped, a broken install
- * arrives here as a bare `EACCES` and gets reported as a bad *document*. The
- * parse call is deliberately outside that boundary — a document that will not
- * parse is not a broken install.
- *
- * Loaded per document rather than hoisted above the walk: `import()` is a
- * module-cache lookup after the first call, and hoisting a parser load above a
- * per-document loop is the shape that has twice cancelled this saving elsewhere.
- *
- * @param absolutePath - Absolute path to the document to parse
- * @returns Links, headings, frontmatter and measures for the document
- * @throws {ParserUnavailableError} If the parser module cannot be loaded
- */
-async function parseOkfDocument(absolutePath: string): Promise<ParseResult> {
-  const parse = await importParserModule(
-    'markdown',
-    async () => (await import('../link-parser.js')).parseMarkdown,
-  );
-  return parse(absolutePath);
-}
-
 /** One document's contribution to the report. */
 interface DocumentInspection {
   drafts: OkfFindingDraft[];
   /** Findings whose severity the per-bundle dial does not reach. */
   hardFindings: OkfFinding[];
   declaredOkfVersion?: string;
+  /** Its parse, refused for this run — see {@link OkfBundleReport.parseRefused}. */
+  parseRefused?: ParseRefusedResource;
 }
 
 /**
@@ -180,11 +149,26 @@ function unreadableDocumentFinding(document: string, error: unknown): OkfFinding
  * @returns A hard-error finding naming the document and the errno, no path
  */
 function unreadableDocumentFindingByCode(document: string, code: string): OkfFinding {
+  return notAssessedFinding(document, `could not be read (${code})`, ' Fix its permissions, or remove it from the bundle root.');
+}
+
+/**
+ * The `OKF_DOCUMENT_UNREADABLE` finding: the document was not assessed, and the
+ * errno that explains why. A parse refused for this run is not this finding:
+ * it is carried as {@link OkfBundleReport.parseRefused} and reported through
+ * the not-admitted contract.
+ *
+ * @param document - Bundle-relative path of the document
+ * @param why - What stopped the assessment, as a clause
+ * @param remedy - What to do about it, when there is something to do
+ * @returns A hard-error finding naming the document, no path
+ */
+function notAssessedFinding(document: string, why: string, remedy = ''): OkfFinding {
   return {
     code: 'OKF_DOCUMENT_UNREADABLE',
     severity: 'error',
     document,
-    message: `This document is inside the bundle and could not be read (${code}), so its conformance was not assessed. Every other document in the bundle still was. Fix its permissions, or remove it from the bundle root.`,
+    message: `This document is inside the bundle and ${why}, so its conformance was not assessed. Every other document in the bundle still was.${remedy}`,
   };
 }
 
@@ -195,17 +179,24 @@ async function inspectDocument(
   reserved: boolean,
   specVersion: string | undefined,
   index: BundleDirectoryIndex,
+  dispatcher: ParseDispatcher,
 ): Promise<DocumentInspection> {
   const absolutePath = safePath.join(root, document);
 
   let parsed: ParseResult;
   try {
-    parsed = await parseOkfDocument(absolutePath);
+    // The bounded route, on the bundle's one dispatcher: a miss parses in the
+    // worker pool under its limits, a hit loads no parser at all.
+    parsed = await parseFileCached(absolutePath, 'markdown', { dispatcher });
   } catch (error) {
-    // ⛔ A broken parser install is NOT a bad document, and reporting it as one
-    // would send an adopter editing a file that is fine. `importParserModule`
-    // owns that failure and it is rethrown untouched.
-    if (isParserUnavailable(error)) throw error;
+    // ⛔ Only the allowlist is the document's: a broken parser install, or any
+    // other VAT defect, is rethrown untouched by the classifier — reported as a
+    // bad document it would send an adopter editing a file that is fine.
+    // A refusal is a fact about this run: carried for the one contract every
+    // lane reports it through, under the project's allow list and severity.
+    if (classifyParseFailure(error) === 'refused') {
+      return { drafts: [], hardFindings: [], parseRefused: parseRefusedEntry(absolutePath, error as PerRunParseRefusal) };
+    }
     return { drafts: [], hardFindings: [unreadableDocumentFinding(document, error)] };
   }
 
@@ -275,6 +266,7 @@ function unreadableRootReport(
       document: '.',
       message: `okf.bundles.${options.bundle}.root ('${options.rootSpecifier}') is not a readable directory (${fsErrorCode(error)}), so this bundle was not checked at all. Point it at the directory holding the bundle's concept documents, relative to vibe-agent-toolkit.config.yaml.`,
     }],
+    parseRefused: [],
     hasErrors: true,
   };
 }
@@ -389,6 +381,7 @@ export async function validateOkfBundle(
     ...files.unreadableDocuments.map((entry) => unreadableDocumentFindingByCode(entry.document, entry.code)),
   ];
   let declaredOkfVersion: string | undefined;
+  const parseRefused: ParseRefusedResource[] = [];
 
   const documents: ReadonlyArray<readonly [string, boolean]> = [
     ...files.conceptDocuments.map((document) => [document, false] as const),
@@ -396,12 +389,16 @@ export async function validateOkfBundle(
   ];
 
   // In order: one shared directory index, and the first declared version wins.
-  await forEachInOrder(documents, async ([document, reserved]) => {
-    const inspection = await inspectDocument(root, document, reserved, options.specVersion, index);
-    drafts.push(...inspection.drafts);
-    hardFindings.push(...inspection.hardFindings);
-    declaredOkfVersion ??= inspection.declaredOkfVersion;
-  });
+  // One dispatcher for the bundle, so a cold run pays one worker start.
+  await withParseDispatcher((dispatcher) =>
+    forEachInOrder(documents, async ([document, reserved]) => {
+      const inspection = await inspectDocument(root, document, reserved, options.specVersion, index, dispatcher);
+      drafts.push(...inspection.drafts);
+      hardFindings.push(...inspection.hardFindings);
+      if (inspection.parseRefused !== undefined) parseRefused.push(inspection.parseRefused);
+      declaredOkfVersion ??= inspection.declaredOkfVersion;
+    }),
+  );
 
   // The dial is stamped by `stamp`, which withholds it from the codes that say
   // conformance was never ASSESSED — see UNASSESSED_CODES and the dial's doc. The
@@ -419,6 +416,7 @@ export async function validateOkfBundle(
     reservedDocuments: files.reservedDocuments,
     ...(declaredOkfVersion !== undefined && { declaredOkfVersion }),
     findings,
-    hasErrors: findings.some((finding) => finding.severity === 'error'),
+    parseRefused,
+    hasErrors: parseRefused.length > 0 || findings.some((finding) => finding.severity === 'error'),
   };
 }

@@ -14,6 +14,8 @@ import { conventionalSuiteProbe, packagedFileEntries } from '@vibe-agent-toolkit
 import {
   DeferredArtifacts,
   matchesCollection,
+  notAdmittedCount,
+  notAdmittedInScope,
   type CollectionConfig,
   type CollectionStats,
   type DeferredSkillFiles,
@@ -44,7 +46,7 @@ import {
 } from '../../utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
 import type { PhaseOutcome } from '../phase-utils.js';
-import { discoverSkillsFromConfig } from '../skills/skill-discovery.js';
+import { discoverSkillsFromConfig, namedSkillsOrRefuse } from '../skills/skill-discovery.js';
 
 import type { ResourcesValidateData, ResourcesValidateReport } from './validate-schema.js';
 
@@ -119,8 +121,14 @@ export interface ValidatedResource {
 export interface ResourcesValidateInput {
   /** The project root: the ONE base every `location` and `path` is relative to. */
   readonly root: string;
-  /** The resources in scope (the `--collection` ones when filtered) — `examined` is their count. */
+  /** The resources in scope (the `--collection` ones when filtered). */
   readonly resources: readonly ValidatedResource[];
+  /**
+   * How many files in scope the crawl enumerated and did not admit (unreadable,
+   * or parse refused): `examined` is these plus {@link resources}, as every
+   * crawling verb counts them (`notAdmittedCount`).
+   */
+  readonly notAdmitted: number;
   /** The library's severity-resolved issues over those resources; `ignore` is dropped here. */
   readonly issues: readonly ValidationIssue[];
   /** The configured collections, narrowed to the `--collection` one when filtered. */
@@ -200,7 +208,7 @@ export function buildResourcesValidateReport(input: ResourcesValidateInput): Res
     });
   }
 
-  return buildReport({ examined: resources.length, findings, data, gate: GATE, durationMs: input.durationMs });
+  return buildReport({ examined: resources.length + input.notAdmitted, findings, data, gate: GATE, durationMs: input.durationMs });
 }
 
 export interface ValidateOptions {
@@ -280,8 +288,9 @@ export async function computeDeferredArtifacts(
   }
 
   // `'refuse'`: the `files:` dest check below is only as complete as this
-  // list. The throw lands in the command's catch → a refusal by its code, exit 2.
-  const discovered = await discoverSkillsFromConfig(config.skills, projectRoot, 'refuse');
+  // list — a SKILL.md whose parse was refused included, since its `files:` are keyed
+  // by a name it has none of. The throw lands in the command's catch → a refusal by its code, exit 2.
+  const discovered = namedSkillsOrRefuse(await discoverSkillsFromConfig(config.skills, projectRoot, 'refuse'), projectRoot);
   const { defaults, config: perSkillConfig } = config.skills;
 
   // Assembled ONCE for the whole run, then handed to every skill below. Rebuilding
@@ -374,18 +383,21 @@ async function runValidation(
   // the published document alone, so a report and its exit code never disagree.
   const resources = registry.getAllResources()
     .filter((resource) => options.collection === undefined || (resource.collections?.includes(options.collection) ?? false));
+  const collectionConfig = options.collection === undefined ? undefined : config?.resources?.collections?.[options.collection];
   // `ValidationResult` is Zod-inferred and widens `code` to string; the issues
   // themselves are the `ValidationIssue`s every producer built.
   const issues = inCollectionScope(validationResult.issues as ValidationIssue[], {
     projectRoot,
     all: registry.getAllResources(),
     inScope: resources,
-    collection: options.collection === undefined ? undefined : config?.resources?.collections?.[options.collection],
+    collection: collectionConfig,
   });
 
   return buildResourcesValidateReport({
     root: projectRoot,
     resources,
+    // Every file enumerated and not admitted is examined too, scoped as its findings are.
+    notAdmitted: notAdmittedCount(notAdmittedInScope(registry.getNotAdmitted(), collectionConfig)),
     issues,
     collectionStats: narrowCollectionStats(registry.getCollectionStats(), options.collection),
     verbose: options.verbose === true,

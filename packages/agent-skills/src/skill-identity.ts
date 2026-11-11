@@ -13,6 +13,7 @@
 
 import { readFileSync } from 'node:fs';
 
+import { isPerRunParseRefusal, type ParseRoute } from '@vibe-agent-toolkit/resources';
 import { isPathAbsentError } from '@vibe-agent-toolkit/utils';
 
 import { parseFrontmatter } from './parsers/frontmatter-parser.js';
@@ -25,19 +26,19 @@ import { parseFrontmatter } from './parsers/frontmatter-parser.js';
  * whether some fallback (typically the directory leaf) applies.
  *
  * A file that IS there but could not be read (a permission refusal, a path
- * component that is a directory) throws: `undefined` means "declares no name",
- * and a refusal has not established that — a caller falling back to the
- * directory leaf would otherwise rename the skill on the operator's behalf.
+ * component that is a directory), or whose frontmatter the parse worker refused
+ * for this run, throws: `undefined` means "declares no name", and neither has
+ * established that — a caller falling back to the directory leaf would
+ * otherwise rename the skill on the operator's behalf.
  */
-export function readDeclaredSkillName(skillMdPath: string): string | undefined {
+export function readDeclaredSkillName(skillMdPath: string, route: ParseRoute = {}): Promise<string | undefined> {
   let content: string;
   try {
     content = readFileSync(skillMdPath, 'utf-8');
   } catch (error) {
-    if (isPathAbsentError(error)) return undefined;
-    throw error;
+    return isPathAbsentError(error) ? Promise.resolve(undefined) : Promise.reject(error as Error);
   }
-  return declaredSkillNameIn(content);
+  return declaredSkillNameIn(content, route);
 }
 
 /**
@@ -49,9 +50,13 @@ export function readDeclaredSkillName(skillMdPath: string): string | undefined {
  * second parse beside it: two spellings of "what name does this declare" is
  * exactly how one lane starts answering differently from another.
  */
-export function declaredSkillNameIn(content: string): string | undefined {
-  const parsed = parseFrontmatter(content);
-  if (!parsed.success) return undefined;
+export async function declaredSkillNameIn(content: string, route: ParseRoute = {}): Promise<string | undefined> {
+  const parsed = await parseFrontmatter(content, route);
+  if (!parsed.success) {
+    // Refused for this run is not "declares no name": thrown, never a fallback.
+    if (isPerRunParseRefusal(parsed.cause)) throw parsed.cause;
+    return undefined;
+  }
 
   const declared = parsed.frontmatter['name'];
   if (typeof declared !== 'string') return undefined;

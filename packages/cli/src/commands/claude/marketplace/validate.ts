@@ -31,16 +31,16 @@ import {
   type Report,
   type Severity,
   type ValidationConfig,
+  resolveFindings,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
 import { direntKindFollowingSync, everywhere, findProjectRoot, followedKindSync, forEachInOrder, fsFaultOf, isLinkChainRefusedError, isPathAbsentError, issueLocation, isVatError, mapInOrder, normalizePath, PathEscapesRootError, pathPresent, relativeEscapesRoot, safePath, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { refusalCodeOf } from '../../../utils/command-refusal.js';
-import { loadConfig } from '../../../utils/config-loader.js';
+import { ConfigLoadError, loadConfig, loadConfigCached } from '../../../utils/config-loader.js';
 import { NOTHING_FINISHED, refusalReport, writeDocument } from '../../../utils/document-writer.js';
 import { reportFindings } from '../../../utils/issue-rendering.js';
-import { resolveIssueSeverity } from '../../../utils/issue-severity.js';
 import { createLogger } from '../../../utils/logger.js';
 import { assertReadableDirectoryArgument } from '../../../utils/project-root-policy.js';
 import { relativizePath } from '../../../utils/relativize-paths.js';
@@ -183,7 +183,7 @@ async function validatePluginSkills(
     if (!pathPresent(skillsDir, { follow: marketplacePath }, everywhere('source'), 'probe')) return [];
     skillEntries = readdirSync(skillsDir, { withFileTypes: true });
   } catch (error) {
-    return resolveIssueSeverity([boundary.unreadable(skillsDir, error)], validation);
+    return resolveFindings([boundary.unreadable(skillsDir, error)], validation ?? {});
   }
 
   // In order: `boundary` records refused and unread paths in the order the run names them.
@@ -205,7 +205,7 @@ async function validateOneSkill(
   validation: ValidationConfig | undefined,
 ): Promise<ValidationIssue[]> {
   const refusedAt = (path: string, error: unknown): ValidationIssue[] =>
-    resolveIssueSeverity([boundary.unreadable(path, error)], validation);
+    resolveFindings([boundary.unreadable(path, error)], validation ?? {});
   // Containment before every followed probe: `contains` reads the chain and refuses a link out
   // (a network one included) by name, so the probe after it only ever follows a chain in the root.
   try {
@@ -218,10 +218,34 @@ async function validateOneSkill(
     if (!boundary.contains(skillMdPath) || !pathPresent(skillMdPath, { follow: marketplacePath }, everywhere('source'), 'probe')) return [];
     // Severity only (no `allow`), resolved here so a default-`ignore` code can still be raised.
     const severity = validation?.severity === undefined ? {} : { severity: validation.severity };
-    const skillResult = await validateSkill({ skillPath: skillMdPath, rootDir: skillDir, locationRoot: marketplacePath, validation: severity, side: 'source' });
+    const skillResult = await validateSkill({
+      skillPath: skillMdPath,
+      rootDir: skillDir,
+      locationRoot: marketplacePath,
+      validation: severity,
+      resourcesValidation: projectResourcesValidation(marketplacePath),
+      side: 'source',
+    });
     return skillResult.issues;
   } catch (error) {
     return refusedAt(skillMdPath, error);
+  }
+}
+
+/**
+ * The governing project's `resources.validation` — what a file the parse worker refused is
+ * resolved under. `{}` when no config governs the marketplace, or when it cannot be loaded: the
+ * same lenient ruling as {@link resolveProjectValidationConfig}, which already logged why.
+ */
+function projectResourcesValidation(marketplacePath: string): ValidationConfig {
+  const projectRoot = findProjectRoot(marketplacePath);
+  if (projectRoot === null) return {};
+  try {
+    return loadConfigCached(projectRoot, 'source')?.resources?.validation ?? {};
+  } catch (error) {
+    // A broken config, reported once by resolveProjectValidationConfig's own load of it.
+    if (error instanceof ConfigLoadError) return {};
+    throw error;
   }
 }
 
@@ -450,7 +474,7 @@ async function validateContainedPlugin(
   const manifestRead = !rawResult.issues.some(
     (issue) => issue.code === 'SCAN_PATH_UNREADABLE' && issue.location === manifestLocation,
   );
-  const pluginIssues = resolveIssueSeverity(rawResult.issues, validation);
+  const pluginIssues = resolveFindings(rawResult.issues, validation ?? {});
   return {
     manifestRead,
     result: {
@@ -647,8 +671,8 @@ export async function collectMarketplaceFindings(
   );
 
   const issues = [
-    ...resolveIssueSeverity(marketplaceResult.issues, validation),
-    ...resolveIssueSeverity(fileIssues, validation),
+    ...resolveFindings(marketplaceResult.issues, validation ?? {}),
+    ...resolveFindings(fileIssues, validation ?? {}),
     ...pluginIssues,
   ];
 

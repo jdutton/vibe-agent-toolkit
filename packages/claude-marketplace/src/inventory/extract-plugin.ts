@@ -8,7 +8,7 @@ import type {
 	LspRef,
 	McpRef,
 } from '@vibe-agent-toolkit/agent-skills';
-import type { ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import { type ResourceRegistry, withParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { forEachInOrder, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { ClaudePluginSchema } from '../schemas/claude-plugin.js';
@@ -383,15 +383,19 @@ async function discoverSkills(
 	}
 
 	// In order: the memoized registry and the tracker cache are shared, and inventory order is report order.
-	await forEachInOrder(skillMdPaths, async (skillMd) => {
-		const inv = await extractClaudeSkillInventory(skillMd, {
-			sharedRegistry: resolveSharedRegistry,
-			gitTrackerSource,
-			...(population !== undefined && { sharedPopulation: population }),
-		});
-		for (const err of inv.parseErrors) parseErrors.push(err);
-		skillInventories.push(inv);
-	});
+	// One parse dispatcher for every skill's frontmatter decode.
+	await withParseDispatcher((dispatcher) =>
+		forEachInOrder(skillMdPaths, async (skillMd) => {
+			const inv = await extractClaudeSkillInventory(skillMd, {
+				sharedRegistry: resolveSharedRegistry,
+				gitTrackerSource,
+				dispatcher,
+				...(population !== undefined && { sharedPopulation: population }),
+			});
+			for (const err of inv.parseErrors) parseErrors.push(err);
+			skillInventories.push(inv);
+		}),
+	);
 
 	return skillInventories;
 }

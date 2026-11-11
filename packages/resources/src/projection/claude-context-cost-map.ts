@@ -50,7 +50,7 @@
  */
 
 import { account, type AccountedContext, type AccountedRow } from './claude-context-accounting.js';
-import { whatLoadsAt } from './claude-context-query.js';
+import { whatLoadsAt, type RefusedContextFile } from './claude-context-query.js';
 import {
   comparePaths,
   contextRegions,
@@ -213,6 +213,13 @@ export interface ContextCostMap {
    * directories.length` would leave a reader guessing why the two disagree.
    */
   readonly skippedUnknownLocations: number;
+  /**
+   * Every file some query in this map reached whose facts the run refused,
+   * once each, path-ordered. ⛔ No figure above includes them — a refused rule
+   * is in no row at all — so a non-empty list means every total here is short
+   * by an unknown amount.
+   */
+  readonly refused: readonly RefusedContextFile[];
 }
 
 /**
@@ -228,6 +235,7 @@ export function buildContextCostMap(projection: Projection): ContextCostMap {
     projection,
     answers: new Map(),
     queries: 0,
+    refused: new Map(),
   };
 
   const regions: RegionCost[] = [];
@@ -256,6 +264,7 @@ export function buildContextCostMap(projection: Projection): ContextCostMap {
     queriedDirectories: state.queries,
     evaluatedDirectories: evaluated,
     skippedUnknownLocations: skipped,
+    refused: [...state.refused.values()].sort((left, right) => comparePaths(left.path, right.path)),
   };
 }
 
@@ -278,6 +287,8 @@ interface MapState {
   readonly answers: Map<string, AccountedContext | null>;
   /** `whatLoadsAt` calls issued so far — see {@link ContextCostMap.queriedDirectories}. */
   queries: number;
+  /** Path → every refused file any answer so far reached — see {@link ContextCostMap.refused}. */
+  readonly refused: Map<string, RefusedContextFile>;
 }
 
 /**
@@ -298,6 +309,7 @@ function accountOnce(state: MapState, directory: string): AccountedContext | nul
   state.queries += 1;
   const answer = whatLoadsAt(state.projection, directory);
   const accounted = answer.kind === 'unknown' ? null : account(answer);
+  if (answer.kind === 'answer') for (const file of answer.refused) state.refused.set(file.path, file);
   state.answers.set(directory, accounted);
   return accounted;
 }

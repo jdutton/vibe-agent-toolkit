@@ -117,11 +117,18 @@ export function unreadableParseErrors(inv: AnyInventory): ParseError[] {
 
 // ── The published schema ─────────────────────────────────────────────────────
 
+/** Every `ParseError['parseRefused']` code; the record below fails to compile if one is missing or extra. */
+const PARSE_REFUSED_CODES = {
+	RESOURCE_PARSE_LIMIT_EXCEEDED: true,
+	RESOURCE_PARSE_WORKER_DIED: true,
+} as const satisfies Record<NonNullable<ParseError['parseRefused']>, true>;
+
 const ParseErrorSchema = z.object({
 	path: z.string(),
 	message: z.string(),
 	line: z.number().int().optional(),
 	unreadable: z.literal(true).optional(),
+	parseRefused: z.enum(Object.keys(PARSE_REFUSED_CODES) as [keyof typeof PARSE_REFUSED_CODES, ...Array<keyof typeof PARSE_REFUSED_CODES>]).optional(),
 }).strict();
 
 const ComponentRefSchema = z.object({

@@ -7,6 +7,7 @@
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 
 import type { SkillPackagingConfig } from '@vibe-agent-toolkit/agent-skills';
+import type { ValidationConfig } from '@vibe-agent-toolkit/schema';
 import { forEachInOrder, mapInOrder, safePath } from '@vibe-agent-toolkit/utils';
 
 import { runSkillBuild, type BuildSkillSpec, type SkillBuildRun, type SkillBuildRunInput } from '../../src/commands/skills/build.js';
@@ -57,6 +58,8 @@ interface BuildOptions {
   onlySkill?: string;
   logger?: Logger;
   verbose?: boolean;
+  /** The project's `resources.validation`, as the verb hands it to the validation lane (`{}` when omitted). */
+  resourcesValidation?: ValidationConfig;
 }
 
 async function writeSkill(
@@ -105,6 +108,7 @@ export async function build(
     onlySkill: options.onlySkill,
     verbose: options.verbose ?? false,
     runOutputs: [],
+    resourcesValidation: options.resourcesValidation ?? {},
   };
   return runSkillBuild(input);
 }

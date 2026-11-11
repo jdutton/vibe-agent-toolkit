@@ -10,10 +10,12 @@
  * populated by the extractor (Task 2.5 left it as []).
  */
 
+import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { overOutputRowsMarkdown } from '@vibe-agent-toolkit/utils/testing';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -48,6 +50,39 @@ const loaderSemanticsBase = safePath.join(
 	'fixtures',
 	'loader-semantics',
 );
+
+/** The linked document {@link refusedProject}'s skill links, root-relative. */
+const REFUSED = 'skills/linker/reference.md';
+
+/**
+ * A project that is a plugin, its one skill linking a document too large to parse.
+ *
+ * @param resources - The `resources:` block's lines, or `null` for a project with no config file
+ * @returns The project root
+ */
+function refusedProject(resources: readonly string[] | null): string {
+	const root = ctx.createTempDir();
+	const skillDir = safePath.join(root, 'skills', 'linker');
+	mkdirSyncReal(safePath.join(root, '.claude-plugin'), { recursive: true });
+	mkdirSyncReal(skillDir, { recursive: true });
+	if (resources !== null) {
+		writeFileSync(safePath.join(root, 'vibe-agent-toolkit.config.yaml'), ['resources:', ...resources, ''].join('\n'));
+	}
+	writeFileSync(safePath.join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'p', version: '0.0.1', description: 'Fixture plugin.' }));
+	writeFileSync(
+		safePath.join(skillDir, 'SKILL.md'),
+		'---\nname: linker\ndescription: Fixture skill linking one reference document too large to parse.\n---\n\n# linker\n\nSee [the reference](reference.md).\n',
+	);
+	writeFileSync(safePath.join(skillDir, 'reference.md'), overOutputRowsMarkdown('SKILL.md'));
+	return root;
+}
+
+/** The audit's refusal findings for one project, audited at `target` (the project root by default). */
+async function refusals(root: string, target = root): Promise<{ status: number | null; found: Array<Record<string, unknown>>; stderr: string }> {
+	const { result, parsed } = await executeCliAndParseYaml(ctx.binPath, ['audit', target]);
+	const findings = (parsed['findings'] ?? []) as Array<Record<string, unknown>>;
+	return { status: result.status, found: findings.filter((finding) => finding['code'] === 'RESOURCE_PARSE_LIMIT_EXCEEDED'), stderr: result.stderr };
+}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -102,6 +137,74 @@ describe('vat audit — inventory detector codes (system test)', () => {
 		// Exit 1: the exit code follows `status`, and this tree has an error-severity finding.
 		expect(result.status).toBe(1);
 		expect(result.stdout).toContain('MARKETPLACE_PLUGIN_SOURCE_MISSING');
+	});
+
+	// -------------------------------------------------------------------------
+	// RESOURCE_PARSE_LIMIT_EXCEEDED — a linked document the crawl refused to parse
+	// -------------------------------------------------------------------------
+	it('files a linked document the crawl refused to parse once, under its own code, not PLUGIN_INVALID_JSON', async () => {
+		const plugin = refusedProject(null);
+
+		const result = await executeCli(ctx.binPath, ['audit', plugin]);
+
+		expect(result.status).toBe(1);
+		expect(result.stdout.match(/RESOURCE_PARSE_LIMIT_EXCEEDED/g)?.length ?? 0).toBeGreaterThan(0);
+		expect(result.stdout).toContain('reference.md');
+		expect(result.stdout).not.toContain('PLUGIN_INVALID_JSON');
+	});
+
+	// The refusal resolves through the SUBJECT project's `resources.validation` —
+	// its allow list and its severity — as every other verb resolves it, located
+	// against the one root the audit reports from.
+	describe('a refused linked document under the subject project\'s resources.validation', () => {
+		it('is an error at its root-relative path, in the one refusal sentence, and fails the audit', async () => {
+			const { status, found, stderr } = await refusals(refusedProject(['  include: ["**/*.md"]']));
+
+			// Once per audited subject that reaches it (the plugin and its skill), each alike.
+			expect(found.length, stderr).toBeGreaterThan(0);
+			for (const finding of found) {
+				expect(finding).toStrictEqual(expect.objectContaining({ severity: 'error', location: REFUSED }));
+				expect(String(finding['message'])).toMatch(new RegExp(`^'${REFUSED}' was enumerated but its parse was stopped at its outputRows limit`));
+			}
+			expect(status).toBe(1);
+		});
+
+		it('is a warning when the project sets its severity to warning', async () => {
+			const { found, stderr } = await refusals(refusedProject(['  validation:', '    severity:', '      RESOURCE_PARSE_LIMIT_EXCEEDED: warning']));
+
+			expect(found.length, stderr).toBeGreaterThan(0);
+			for (const finding of found) expect(finding).toStrictEqual(expect.objectContaining({ severity: 'warning', location: REFUSED }));
+		});
+
+		it('is no finding when the project allows it at its path', async () => {
+			const { found, stderr } = await refusals(refusedProject([
+				'  validation:',
+				'    allow:',
+				'      RESOURCE_PARSE_LIMIT_EXCEEDED:',
+				`        - paths: ["${REFUSED}"]`,
+				'          reason: seeded refusal, excused at its one path',
+			]));
+
+			expect(found, stderr).toStrictEqual([]);
+		});
+
+		it('locates it against the audited directory, and still matches the allow entry at its project path', async () => {
+			const strict = refusedProject(['  include: ["**/*.md"]']);
+			const allowed = refusedProject([
+				'  validation:',
+				'    allow:',
+				'      RESOURCE_PARSE_LIMIT_EXCEEDED:',
+				`        - paths: ["${REFUSED}"]`,
+				'          reason: seeded refusal, excused at its one path',
+			]);
+
+			const located = await refusals(strict, safePath.join(strict, 'skills'));
+			const excused = await refusals(allowed, safePath.join(allowed, 'skills'));
+
+			expect(located.found.length, located.stderr).toBeGreaterThan(0);
+			for (const finding of located.found) expect(finding['location']).toBe('linker/reference.md');
+			expect(excused.found, excused.stderr).toStrictEqual([]);
+		});
 	});
 
 	// -------------------------------------------------------------------------

@@ -107,14 +107,14 @@ describe('vat rag index — a provider failure on stderr', () => {
   });
 
   it('names an unreadable document on a run the database then refuses, in the document and on stderr', async () => {
-    crawl.unreadable = [{ filePath: safePath.join(tempDir, 'docs', 'locked.md'), reason: 'EACCES' }];
+    crawl.unreadable = [{ filePath: safePath.join(tempDir, 'docs', 'locked.md'), reason: 'EACCES: permission denied', code: 'EACCES' }];
     const notADirectory = safePath.join(tempDir, 'db-file');
     writeFileSync(notADirectory, 'x');
 
     const { document, stderr } = await refusedIndex(tempDir, notADirectory);
 
     expect(document.findings.map((finding) => finding.location)).toEqual(['docs/locked.md']);
-    expect(stderr).toMatch(/^ {2}docs\/locked\.md: error: .*EACCES \[RAG_DOCUMENT_INDEX_FAILED\]$/m);
+    expect(stderr).toMatch(/^ {2}docs\/locked\.md: error: .*EACCES.* \[RESOURCE_UNREADABLE\]$/m);
   });
 
   it.each([

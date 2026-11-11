@@ -12,15 +12,16 @@
  * HarnessFactsIndex.factsOf}, and a {@link HarnessFactsAbsentError} everywhere
  * the caller already knows the harness reached the blob.
  *
- * Only type imports from this package, deliberately: `claude-rules-scope.ts`
- * reads this module, and it sits on the `claude-code.ts → claude-memory.ts →
- * claude-context-rules.ts` import chain, so a runtime dependency on the harness
- * profiles here would close a cycle.
+ * Only type imports from this package's harness modules, deliberately: the
+ * rules modules read this one, and a runtime dependency on the harness
+ * profiles here would put them on the profile's import graph.
  */
 
 import { VatError } from '@vibe-agent-toolkit/utils';
 
+import type { BlobConditionRow } from '../../schemas/projection-blobs.js';
 import type { HarnessBlobFactsRow, HarnessBlobImportRow } from '../../schemas/projection-harness.js';
+import { PARSE_REFUSAL_BLOB_CODES } from '../blob-population.js';
 
 import type { HarnessId } from './profile.js';
 
@@ -57,10 +58,14 @@ export class HarnessFactsAbsentError extends VatError {
   }
 }
 
-/** The two harness tables, as any projection-shaped object carries them. */
+/**
+ * The two harness tables, as any projection-shaped object carries them, and
+ * the blob conditions that say which blobs' facts this run refused.
+ */
 export interface HarnessFactsView {
   readonly harnessBlobFacts: readonly HarnessBlobFactsRow[];
   readonly harnessBlobImports: readonly HarnessBlobImportRow[];
+  readonly blobConditions: readonly BlobConditionRow[];
 }
 
 /** One harness's facts, by blob. */
@@ -73,10 +78,29 @@ export interface HarnessFactsIndex {
   requireImports(contentKey: string, path: string | null): readonly HarnessBlobImportRow[];
   /** Every import row of this harness, in table order — for a reader that wants the whole table, never per blob. */
   imports(): readonly HarnessBlobImportRow[];
+  /**
+   * Whether this run REFUSED to derive the blob's facts — its memory-file read
+   * was stopped at a parse limit or lost with its worker (a per-run
+   * `blob_conditions` row, never stored). Such a blob has no facts and never
+   * will this run: nothing measured, nothing imported — and, ⛔ unlike a blob
+   * with no content, NO `paths:` answer either. Its `paths:` were never read,
+   * so "declares none" would be a guess that charges a path-scoped rule to
+   * every launch; a reader that needs `paths:` answers {@link FACTS_REFUSED}
+   * and the query names the file instead of classifying it. The population
+   * reports it by name through its refusal rows. Never a facts row (I1).
+   */
+  refused(contentKey: string): boolean;
 }
 
 /**
- * One memo entry: an index plus the two row counts that were its whole premise.
+ * A reader's answer for a blob whose facts this run refused
+ * ({@link HarnessFactsIndex.refused}): distinct from "declares no `paths:`",
+ * which is a fact about bytes that WERE read.
+ */
+export const FACTS_REFUSED = Symbol('facts-refused');
+
+/**
+ * One memo entry: an index plus the three row counts that were its whole premise.
  *
  * The counts are READ off the tables the index was derived from — not a
  * version anyone bumps — so a table that grows (a lazy derivation pass adding
@@ -85,6 +109,7 @@ export interface HarnessFactsIndex {
 interface MemoizedFactsIndex {
   readonly factsCount: number;
   readonly importsCount: number;
+  readonly conditionsCount: number;
   readonly index: HarnessFactsIndex;
 }
 
@@ -107,10 +132,13 @@ export function harnessFactsIndex(view: HarnessFactsView, harness: HarnessId): H
   }
   const factsCount = view.harnessBlobFacts.length;
   const importsCount = view.harnessBlobImports.length;
+  const conditionsCount = view.blobConditions.length;
   const cached = byHarness.get(harness);
-  if (cached?.factsCount === factsCount && cached.importsCount === importsCount) return cached.index;
+  if (cached?.factsCount === factsCount && cached.importsCount === importsCount && cached.conditionsCount === conditionsCount) {
+    return cached.index;
+  }
   const index = buildIndex(view, harness);
-  byHarness.set(harness, { factsCount, importsCount, index });
+  byHarness.set(harness, { factsCount, importsCount, conditionsCount, index });
   return index;
 }
 
@@ -142,6 +170,8 @@ function buildIndex(view: HarnessFactsView, harness: HarnessId): HarnessFactsInd
   // follows a blob's imports in; insertion order is whatever the producer did.
   for (const list of imports.values()) list.sort((left, right) => left.ordinal - right.ordinal);
 
+  const refused = new Set(view.blobConditions.filter((row) => PARSE_REFUSAL_BLOB_CODES.has(row.code)).map((row) => row.blob));
+
   const requireFacts = (contentKey: string, path: string | null): HarnessBlobFactsRow => {
     const row = facts.get(contentKey);
     if (row === undefined) throw new HarnessFactsAbsentError(harness, contentKey, path);
@@ -155,5 +185,6 @@ function buildIndex(view: HarnessFactsView, harness: HarnessId): HarnessFactsInd
       return imports.get(contentKey) ?? NO_IMPORTS;
     },
     imports: () => all,
+    refused: (contentKey) => refused.has(contentKey),
   };
 }

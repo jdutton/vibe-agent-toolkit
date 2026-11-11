@@ -23,7 +23,7 @@
  * root, where `chmod 000` denies nothing.
  */
 
-import { getTestOutputDir , CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
+import { getTestOutputDir , CANNOT_DENY_READS, overOutputRowsMarkdown } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, it } from 'vitest';
 import yaml from 'yaml';
 
@@ -136,7 +136,7 @@ describe('RAG index command (system test)', () => {
   });
 
   it.skipIf(CANNOT_DENY_READS)(
-    'reports a RAG_DOCUMENT_INDEX_FAILED finding and exits 1 when a declared resource cannot be read, naming it',
+    'reports a RESOURCE_UNREADABLE finding and exits 1 when a declared resource cannot be read, naming it',
     async () => {
       const unreadableProjectDir = setupTestProject(tempDir, {
         name: 'unreadable-test-project',
@@ -162,10 +162,37 @@ describe('RAG index command (system test)', () => {
       expect(report.status).toBe('findings');
       expect(report.data?.resourcesIndexed).toBe(1);
       expect(report.findings).toHaveLength(1);
-      expect(report.findings[0]).toMatchObject({ code: 'RAG_DOCUMENT_INDEX_FAILED', severity: 'error', location: 'docs/locked.md' });
+      expect(report.findings[0]).toMatchObject({ code: 'RESOURCE_UNREADABLE', severity: 'error', location: 'docs/locked.md' });
       expect(report.findings[0]?.message).toContain('EACCES');
     }
   );
+
+  // The parse-refusal sibling of the unreadable case: a document over the parse
+  // pool's DEFAULT `outputRows` (16,384 — 20,000 links is real and cheap) is refused
+  // by the crawl, so it never reaches the provider and sits in no list but the
+  // registry's refusal log. Unread, the run indexed the rest and said `ok`.
+  it('reports a document whose parse was refused as an error finding and exits 1, naming it', async () => {
+    const refusedProjectDir = setupTestProject(tempDir, { name: 'refused-test-project', withDocs: true });
+    const refusedDbPath = getTestOutputDir('cli', 'system', 'rag-index-refused-db');
+    const docsDir = safePath.join(refusedProjectDir, 'docs');
+    fs.writeFileSync(safePath.join(docsDir, 'good.md'), '# Good\n\nReadable prose.\n');
+    fs.writeFileSync(safePath.join(docsDir, 'huge.md'), overOutputRowsMarkdown('good.md'));
+
+    const { result, parsed } = await executeCliAndParseYaml(
+      binPath,
+      ['rag', 'index', refusedProjectDir, '--db', refusedDbPath],
+      { cwd: refusedProjectDir }
+    );
+
+    const report = RAG_INDEX_REPORT_SCHEMA.parse(parsed);
+    expect(result.status).toBe(1);
+    expect(report.status).toBe('findings');
+    expect(report.data?.resourcesIndexed).toBe(1);
+    expect(report.examined).toBe(2);
+    expect(report.findings).toHaveLength(1);
+    expect(report.findings[0]).toMatchObject({ code: 'RESOURCE_PARSE_LIMIT_EXCEEDED', severity: 'error', location: 'docs/huge.md' });
+    expect(report.findings[0]?.message).toContain('outputRows');
+  });
 
   it('should error when no path and no project root', async () => {
     // Create a temp dir without .git (no project root)

@@ -1,5 +1,7 @@
+import { chmodSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS, overOutputRowsMarkdown } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { RESOURCES_SCAN_REPORT_SCHEMA } from '../../src/commands/resources/scan-schema.js';
@@ -87,6 +89,50 @@ describe('vat resources scan (system test)', () => {
     const report = RESOURCES_SCAN_REPORT_SCHEMA.parse(parsed);
     expect(report.examined).toBe(0);
     expect(report.findings.map((finding) => finding.code)).toEqual(['RESOURCE_CHECK_BROKEN']);
+  });
+
+  // A document over the parse pool's DEFAULT `outputRows` (16,384): 20,000 links is
+  // real and cheap. Its parse is refused, so it is in no list the registry hands
+  // the scan — and the scan used to report the survivors as the whole population,
+  // `status: ok`, exit 0. Both lanes, because each crawls through its own route.
+  it.each(['projection', 'walk'])(
+    'reports a file whose parse was refused as an error finding and counts it examined (%s lane)',
+    async (lane) => {
+      writeTestFile(safePath.join(tempDir, 'good.md'), '# Good\n');
+      writeTestFile(safePath.join(tempDir, 'huge.md'), overOutputRowsMarkdown('good.md'));
+
+      const { result, parsed } = await executeCliAndParseYaml(
+        binPath,
+        ['resources', 'scan', tempDir],
+        { env: { VAT_RESOURCES_CRAWL: lane } },
+      );
+
+      expect(result.status).toBe(1);
+      const report = RESOURCES_SCAN_REPORT_SCHEMA.parse(parsed);
+      expect(report.status).toBe('findings');
+      expect(report.examined).toBe(2);
+      expect(report.findings).toHaveLength(1);
+      expect(report.findings[0]).toMatchObject({ code: 'RESOURCE_PARSE_LIMIT_EXCEEDED', severity: 'error', location: 'huge.md' });
+      expect(report.findings[0]?.message).toContain('outputRows');
+    },
+  );
+
+  // The same hole, by the read rather than the parse: `chmod 000` denies nothing to
+  // uid 0 and does not exist on Windows.
+  it.skipIf(CANNOT_DENY_READS)('reports a file it could not read as RESOURCE_UNREADABLE and counts it examined', async () => {
+    writeTestFile(safePath.join(tempDir, 'good.md'), '# Good\n');
+    const locked = safePath.join(tempDir, 'locked.md');
+    writeTestFile(locked, '# Locked\n');
+    chmodSync(locked, 0o000);
+
+    const { result, parsed } = await executeCliAndParseYaml(binPath, ['resources', 'scan', tempDir]);
+    chmodSync(locked, 0o600);
+
+    expect(result.status).toBe(1);
+    const report = RESOURCES_SCAN_REPORT_SCHEMA.parse(parsed);
+    expect(report.examined).toBe(2);
+    expect(report.findings).toHaveLength(1);
+    expect(report.findings[0]).toMatchObject({ code: 'RESOURCE_UNREADABLE', severity: 'error', location: 'locked.md' });
   });
 
   it('should use current directory if no path provided', async () => {

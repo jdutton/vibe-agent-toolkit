@@ -75,9 +75,9 @@ async function judge(
 describe('a link into a file the population could not read', () => {
   it('reports LINK_TARGET_UNREADABLE for an anchor into it, naming the file and the errno', async () => {
     const root = plantTree();
-    const unreadableTargets = unreadableTargetsFrom([
+    const unreadableTargets = unreadableTargetsFrom({ unreadable: [
       { filePath: safePath.join(root, TARGET), code: 'EACCES' },
-    ]);
+    ], parseRefused: [] });
 
     const issue = await judge(root, ANCHOR_HREF, { unreadableTargets });
 
@@ -100,7 +100,7 @@ describe('a link into a file the population could not read', () => {
     // The e2e shape: two links, two findings. A ledger that marked the file
     // "already reported" would leave the second link reading as clean.
     const root = plantTree();
-    const unreadableTargets = unreadableTargetsFrom([{ filePath: safePath.join(root, TARGET) }]);
+    const unreadableTargets = unreadableTargetsFrom({ unreadable: [{ filePath: safePath.join(root, TARGET) }], parseRefused: [] });
 
     const first = await judge(root, ANCHOR_HREF, { unreadableTargets });
     const second = await judge(root, './sub/target.md#nope-unreadable', { unreadableTargets });
@@ -112,7 +112,7 @@ describe('a link into a file the population could not read', () => {
 
   it('omits the errno clause when the platform supplied none', async () => {
     const root = plantTree();
-    const unreadableTargets = unreadableTargetsFrom([{ filePath: safePath.join(root, TARGET) }]);
+    const unreadableTargets = unreadableTargetsFrom({ unreadable: [{ filePath: safePath.join(root, TARGET) }], parseRefused: [] });
 
     const issue = await judge(root, ANCHOR_HREF, { unreadableTargets });
 
@@ -126,7 +126,7 @@ describe('a link into a file the population could not read', () => {
     // unchecked. The FILE's own refusal is `RESOURCE_UNREADABLE`, reported once
     // against the file, not once per link into it.
     const root = plantTree();
-    const unreadableTargets = unreadableTargetsFrom([{ filePath: safePath.join(root, TARGET) }]);
+    const unreadableTargets = unreadableTargetsFrom({ unreadable: [{ filePath: safePath.join(root, TARGET) }], parseRefused: [] });
 
     expect(await judge(root, './sub/target.md', { unreadableTargets })).toBeNull();
   });
@@ -148,7 +148,7 @@ describe('a link into a file the population could not read', () => {
     // Out of `include`, or not markdown: nothing declared it unreadable, so the
     // old `'skip'` is still the honest answer — VAT was never asked to read it.
     const root = plantTree();
-    const unreadableTargets = unreadableTargetsFrom([]);
+    const unreadableTargets = unreadableTargetsFrom({ unreadable: [], parseRefused: [] });
 
     expect(await judge(root, ANCHOR_HREF, { unreadableTargets })).toBeNull();
     expect(await judge(root, ANCHOR_HREF)).toBeNull();
@@ -158,18 +158,43 @@ describe('a link into a file the population could not read', () => {
     // A set keyed on the wrong thing (the directory, a prefix) would flag the
     // whole tree.
     const root = plantTree();
-    const unreadableTargets = unreadableTargetsFrom([
+    const unreadableTargets = unreadableTargetsFrom({ unreadable: [
       { filePath: safePath.join(root, 'docs', 'sub', 'other.md'), code: 'EACCES' },
-    ]);
+    ], parseRefused: [] });
 
     expect(await judge(root, ANCHOR_HREF, { unreadableTargets })).toBeNull();
   });
 
+  it('reports LINK_TARGET_UNREADABLE for an anchor into a file whose parse was refused, naming the refusal', async () => {
+    // A refused parse never entered the fragment index either: skipping the
+    // anchor would read as clean, and `LINK_BROKEN_ANCHOR` would be a lie.
+    const root = plantTree();
+    const unreadableTargets = unreadableTargetsFrom({
+      unreadable: [],
+      parseRefused: [
+        {
+          filePath: safePath.join(root, TARGET),
+          code: 'RESOURCE_PARSE_LIMIT_EXCEEDED',
+          reason: 'its parse was stopped at its outputDepth limit (512)',
+        },
+      ],
+    });
+
+    const issue = await judge(root, ANCHOR_HREF, { unreadableTargets });
+
+    expect(issue?.code).toBe('LINK_TARGET_UNREADABLE');
+    expect(issue?.message).toContain('its parse was refused (its parse was stopped at its outputDepth limit (512))');
+    expect(issue?.message).toContain('RESOURCE_PARSE_LIMIT_EXCEEDED');
+    expect(issue?.message).toContain('unverified');
+    expect(issue?.message).not.toContain('could not be read');
+    expect(issue?.message).not.toContain(root);
+  });
+
   it('is reached only after existence: a MISSING target is still a broken file', async () => {
     const root = plantTree();
-    const unreadableTargets = unreadableTargetsFrom([
+    const unreadableTargets = unreadableTargetsFrom({ unreadable: [
       { filePath: safePath.join(root, 'docs', 'sub', 'nope.md'), code: 'EACCES' },
-    ]);
+    ], parseRefused: [] });
 
     const issue = await judge(root, './sub/nope.md#x', { unreadableTargets });
 

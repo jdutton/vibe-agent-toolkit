@@ -17,11 +17,11 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 /** A read of one path: the shape both mocked reads are driven through. */
 type PathRead = (path: string) => Promise<never>;
 
-const mocks = vi.hoisted(() => ({ parseMarkdown: vi.fn<PathRead>(), readFile: vi.fn<PathRead>() }));
+const mocks = vi.hoisted(() => ({ parseFileCached: vi.fn<PathRead>(), readFile: vi.fn<PathRead>() }));
 
 vi.mock('@vibe-agent-toolkit/resources', async (importOriginal) => ({
   ...(await importOriginal<typeof Resources>()),
-  parseMarkdown: mocks.parseMarkdown,
+  parseFileCached: mocks.parseFileCached,
 }));
 
 vi.mock('node:fs/promises', async (importOriginal) => ({
@@ -60,7 +60,7 @@ afterEach(() => {
 
 describe('packaged-output scans raise the first failure by position', () => {
   it('detectMissingReferencedPaths names the first failing document, not the first to finish', async () => {
-    const started = failFirstStartedLast(mocks.parseMarkdown);
+    const started = failFirstStartedLast(mocks.parseFileCached);
     const first = safePath.join(root, 'a.md');
     const docs = [first, safePath.join(root, 'b.md')];
 

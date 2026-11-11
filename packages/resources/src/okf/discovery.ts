@@ -32,7 +32,7 @@
 import type { Dirent } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 
-import { compareCodeUnits, forEachInOrder, isPathAbsentError, requireFollowedStat, safePath } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, forEachInOrder, fsFaultOf, isPathAbsentError, requireFollowedStat, safePath } from '@vibe-agent-toolkit/utils';
 
 import { isWithinProject } from '../utils.js';
 
@@ -53,10 +53,15 @@ const RESERVED_FILENAMES: ReadonlySet<string> = new Set(['index.md', 'log.md']);
  * what went wrong — absent, not a directory, not permitted — and the
  * bundle-relative path says where.
  *
+ * The errno is read down the `cause` chain (`fsFaultOf`), so a VAT wrapper
+ * (`FsFaultError`, code `FS_FAULT`) still names the errno beneath it.
+ *
  * @param error - Whatever the filesystem threw
  * @returns The errno string, or a neutral word when there is none
  */
 export function fsErrorCode(error: unknown): string {
+  const errno = fsFaultOf(error)?.errno;
+  if (errno !== undefined) return errno;
   if (error instanceof Error && 'code' in error && typeof error.code === 'string') {
     return error.code;
   }

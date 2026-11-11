@@ -39,6 +39,7 @@ import {
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
+import { overOutputRowsMarkdown } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 let root: string;
@@ -204,6 +205,7 @@ describe('vat inventory: a population that cannot serve the question defers to t
     const misrooted: InventoryPopulation = {
       root: safePath.join(root, 'skills'),
       membersOf: () => [],
+      parseRefusedAmong: () => [],
     };
 
     expect(await linkedBySkill(misrooted)).toEqual(await linkedBySkill(undefined));
@@ -240,5 +242,86 @@ describe('vat inventory: a population that cannot serve the question defers to t
 
     expect(population.membersOf(safePath.join(bare, 'SKILL.md'))).toEqual([]);
     rmSync(bare, { recursive: true, force: true });
+  });
+});
+
+/**
+ * Each arm's parse-refused rows over a plugin, root-relative.
+ *
+ * @param pluginRoot - The plugin's root
+ * @param population - The population lane, or undefined for the incumbent walk
+ * @returns One row per refused file per skill
+ */
+async function refusedRows(
+  pluginRoot: string,
+  population: InventoryPopulation | undefined,
+): Promise<Array<{ path: string; parseRefused: unknown; message: string }>> {
+  const inventory = await extractClaudePluginInventory(pluginRoot, {
+    gitTrackerSource: NO_GIT_TRACKER,
+    ...(population !== undefined && { sharedPopulation: async () => population }),
+  });
+  return inventory.discovered.skills.flatMap((skill) => skill.parseErrors
+    .filter((row) => row.parseRefused !== undefined)
+    .map((row) => ({
+      path: toForwardSlash(safePath.relative(pluginRoot, row.path)),
+      parseRefused: row.parseRefused,
+      message: row.message,
+    })))
+    .sort((a, b) => (a.path < b.path ? -1 : 1));
+}
+
+/**
+ * Two skills each linking a document whose parse was refused this run (over
+ * `outputRows`: `overOutputRowsMarkdown`, under the heap limit whatever
+ * `--max-old-space-size` runs), the two documents holding
+ * IDENTICAL bytes — one blob, two realizations. The walker arm names each as a
+ * `parseRefused` parse-error row on its skill; the projection arm reads the
+ * same refusal from the population's per-blob row. Both arms say it in the
+ * one sentence (`parseRefusedMessage`), each row naming its OWN project-relative
+ * path — never the path the shared blob was first parsed under.
+ */
+describe('vat inventory: a refused linked document is a parse error in both arms', () => {
+  let refusedRoot: string;
+
+  beforeAll(() => {
+    refusedRoot = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-inventory-refused-'));
+    write(safePath.join(refusedRoot, 'vibe-agent-toolkit.config.yaml'), '{}\n');
+    mkdirSyncReal(safePath.join(refusedRoot, '.claude-plugin'), { recursive: true });
+    write(safePath.join(refusedRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'refused-plugin', version: '0.0.0' }));
+    const bytes = overOutputRowsMarkdown('SKILL.md');
+    for (const name of ['delta', 'gamma']) {
+      const dir = safePath.join(refusedRoot, 'skills', name);
+      mkdirSyncReal(dir, { recursive: true });
+      write(safePath.join(dir, 'SKILL.md'),
+        `---\nname: ${name}\ndescription: Fixture skill linking a document too large to parse.\n---\n\n- [reference](./reference.md)\n`,
+      );
+      write(safePath.join(dir, 'reference.md'), bytes);
+    }
+  });
+
+  afterAll(() => {
+    rmSync(refusedRoot, { recursive: true, force: true });
+  });
+
+  it('reports the same row, with the same reason, from the projection as from the walk', async () => {
+    const population = await buildInventoryPopulation({
+      root: refusedRoot,
+      skillMdPaths: ['delta', 'gamma'].map((name) => safePath.join(refusedRoot, 'skills', name, 'SKILL.md')),
+    });
+
+    const walked = await refusedRows(refusedRoot, undefined);
+    const projected = await refusedRows(refusedRoot, population);
+
+    expect(walked.map(({ path, parseRefused }) => ({ path, parseRefused }))).toStrictEqual([
+      { path: 'skills/delta/reference.md', parseRefused: 'RESOURCE_PARSE_LIMIT_EXCEEDED' },
+      { path: 'skills/gamma/reference.md', parseRefused: 'RESOURCE_PARSE_LIMIT_EXCEEDED' },
+    ]);
+    expect(projected).toStrictEqual(walked);
+    // The row carries the REASON, path-free; each consumer builds the sentence at
+    // its own root. One blob, one reason: the two rows share it exactly.
+    for (const row of walked) {
+      expect(row.message.startsWith('its parse was stopped at its outputRows limit')).toBe(true);
+    }
+    expect(walked[1]?.message).toBe(walked[0]?.message);
   });
 });

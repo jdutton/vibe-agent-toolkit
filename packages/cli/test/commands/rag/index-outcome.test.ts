@@ -15,13 +15,10 @@
  */
 
 import { exitCodeForReport, toFindings } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { buildIndexReport, providerIndexIssues, unreadableIndexIssues } from '../../../src/commands/rag/index-command.js';
+import { buildIndexReport, providerIndexIssues } from '../../../src/commands/rag/index-command.js';
 import { RAG_INDEX_REPORT_SCHEMA } from '../../../src/commands/rag/index-schema.js';
-
-const ROOT = safePath.resolve('/srv/project');
 
 const COUNTS = {
   resourcesIndexed: 1,
@@ -77,31 +74,3 @@ describe('providerIndexIssues', () => {
   });
 });
 
-/**
- * A resource the crawl enumerated but could not READ never reaches
- * `indexResources`, so it is in none of the provider's counters and not in its
- * `errors` — the registry logs it (`getUnreadableResources()`). It is the same
- * finding as a provider failure: the document is not in the index.
- */
-describe('unreadableIndexIssues', () => {
-  it('maps nothing to nothing', () => {
-    expect(unreadableIndexIssues([], ROOT)).toEqual([]);
-  });
-
-  it('locates each file relative to the crawl root, with the reason', () => {
-    const issues = unreadableIndexIssues(
-      [
-        { filePath: safePath.join(ROOT, 'docs/bad.md'), reason: 'EACCES: permission denied', code: 'EACCES' },
-        { filePath: safePath.join(ROOT, 'docs/gone.md'), reason: 'ENOENT: no such file' },
-      ],
-      ROOT,
-    );
-
-    expect(issues.map((issue) => issue.location)).toEqual(['docs/bad.md', 'docs/gone.md']);
-    expect(issues.map((issue) => issue.code)).toEqual(['RAG_DOCUMENT_INDEX_FAILED', 'RAG_DOCUMENT_INDEX_FAILED']);
-    expect(issues[0]?.message).toContain('EACCES: permission denied');
-    expect(issues[1]?.message).toContain('ENOENT: no such file');
-    // The finding has to say the document is NOT in the index, not merely that a read failed.
-    for (const issue of issues) expect(issue.message).toMatch(/not in the index/u);
-  });
-});

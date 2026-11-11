@@ -207,7 +207,7 @@ describe('declared test input never ships (integration)', () => {
     // from the two commands that exist to agree.
     const { skillPath } = writeProject();
 
-    const validated = await validateSkillForPackaging(skillPath, {
+    const validated = await validateSkillForPackaging(skillPath, {}, {
       test: { evals: EVALS_SUBPATH },
     });
 
@@ -261,7 +261,7 @@ describe('declared test input never ships (integration)', () => {
     // Lane 2 — `vat skills validate` (source-level, no build): same input, and now
     // the same answer. It used to call this link an info-severity
     // LINK_DEFERRED_ARTIFACT because it modeled the RAW files: list.
-    const validated = await validateSkillForPackaging(skillPath, {
+    const validated = await validateSkillForPackaging(skillPath, {}, {
       files,
       test: { evals: EVALS_SUBPATH },
     });
@@ -362,7 +362,7 @@ describe('a skill\'s bundle never carries another skill\'s eval suite (integrati
 
     const validated = await validateSkillForPackaging(
       skillPath,
-      { test: { evals: SUBJECT_EVALS } },
+      {}, { test: { evals: SUBJECT_EVALS } },
       'source',
       { unreadable: 'refuse', outputs: [], projectSkills: projectSkills() },
     );

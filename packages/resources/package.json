@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/resources",
-  "version": "0.2.0-rc.13",
+  "version": "0.2.0-rc.14",
   "description": "Markdown resource parsing, validation, and link integrity checking",
   "type": "module",
   "main": "./dist/index.js",
@@ -9,18 +9,6 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    },
-    "./markdown-processor": {
-      "types": "./dist/markdown-processor.d.ts",
-      "default": "./dist/markdown-processor.js"
-    },
-    "./link-parser": {
-      "types": "./dist/link-parser.d.ts",
-      "default": "./dist/link-parser.js"
-    },
-    "./remark-parser": {
-      "types": "./dist/remark-parser.d.ts",
-      "default": "./dist/remark-parser.js"
     },
     "./parse-conformance": {
       "types": "./dist/parse-conformance.d.ts",

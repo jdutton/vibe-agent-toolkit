@@ -112,8 +112,10 @@ import type { TextProvenance } from '@vibe-agent-toolkit/utils/text';
 import { isParsableContent, type KeyedContent, type ParsableContent, type ParserKind } from '../content-key.js';
 import { estimateTokens } from '../link-classify.js';
 import type { ParseResult } from '../link-parser.js';
-import { type ParseCache, defaultParseCache, isParserUnavailable } from '../parse-cache.js';
-import { ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable } from '../parse-dispatcher.js';
+import { parseRefusal } from '../not-admitted.js';
+import { type ParseCache, defaultParseCache } from '../parse-cache.js';
+import { type ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable, withParseDispatcher } from '../parse-dispatcher.js';
+import { isParseLimitError, isParserThrewError, isPerRunParseRefusal, type PerRunParseRefusal } from '../parse-limits.js';
 import { type CodeContextRanges, findLexicalReferences } from '../reference-lexer.js';
 import type { BlobConditionRow } from '../schemas/projection-blobs.js';
 import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
@@ -135,6 +137,25 @@ export const BLOB_CONTENT_CHANGED = 'BLOB_CONTENT_CHANGED';
 
 /** The parser threw on this blob's bytes. */
 export const BLOB_PARSE_FAILED = 'BLOB_PARSE_FAILED';
+
+/**
+ * The parse of this blob was stopped at one of its limits (`parse-limits.ts`).
+ *
+ * A per-run outcome, never stored (ADR I6): the next run re-attempts the blob.
+ * The message names the path and the limit, like {@link BLOB_UNREADABLE}'s,
+ * because the row describes this run, not the bytes.
+ */
+export const BLOB_PARSE_LIMIT_EXCEEDED = 'BLOB_PARSE_LIMIT_EXCEEDED';
+
+/**
+ * The parse worker holding this blob's job died without answering — it exited,
+ * or an uncaught error killed it (`ParseWorkerDiedError`).
+ *
+ * A per-run outcome, never stored (ADR I6), and never {@link BLOB_PARSE_FAILED}:
+ * nothing says the bytes caused it, so the next run re-attempts the blob. The
+ * message names the path and the cause, because the row describes this run.
+ */
+export const BLOB_PARSE_WORKER_DIED = 'BLOB_PARSE_WORKER_DIED';
 
 /** The bytes are not text, so no text parser was run over them. */
 export const BLOB_NOT_TEXT = 'BLOB_NOT_TEXT';
@@ -305,6 +326,10 @@ export interface BlobPopulationResult {
   readonly blobsContentChanged: number;
   /** Blobs the parser threw on — a {@link BLOB_PARSE_FAILED} row each. */
   readonly blobsParseFailed: number;
+  /** Blobs whose parse was stopped at a limit — a {@link BLOB_PARSE_LIMIT_EXCEEDED} row each, never stored. */
+  readonly blobsParseLimited: number;
+  /** Blobs whose parse worker died holding them — a {@link BLOB_PARSE_WORKER_DIED} row each, never stored. */
+  readonly blobsParseWorkerDied: number;
   /**
    * Blobs declined as binary before any parse — a {@link BLOB_NOT_TEXT} row each.
    *
@@ -509,6 +534,12 @@ export interface BlobPopulationOptions {
    * Defaults are what a command gets; see {@link ParsePoolPolicy}.
    */
   parsePool?: ParsePoolPolicy | undefined;
+  /**
+   * The run's dispatcher, when the caller holds one for the whole population
+   * — its owner shuts it down, and `parseCache` / `parsePool` are its own.
+   * Omitted, the call builds one from those two and shuts it down itself.
+   */
+  dispatcher?: ParseDispatcher | undefined;
 }
 
 
@@ -568,9 +599,12 @@ export async function populateBlobs(
   }
 
   const pending = pendingTargets(base, counts);
-  const dispatcher = new ParseDispatcher(cache, options.parsePool ?? {});
-  try {
-    await driveInOrder(
+  // The run's dispatcher when the caller holds one (a population's, shut down
+  // by it); otherwise one of this call's own, shut down however the call ends —
+  // `withParseDispatcher` keeps the shutdown in a `finally`, which is what
+  // closes each worker's port gracefully so its parse-timing dump reaches disk.
+  await withParseDispatcher(
+    (dispatcher) => driveInOrder(
       pending,
       dispatcher,
       (target) => prepareBlob(target, base, dispatcher),
@@ -579,15 +613,9 @@ export async function populateBlobs(
       // is the single authority so this cannot drift from what `prepareBlob`
       // decides, and which answers without touching the file.
       (from) => tallyParsable(pending, from, (target) => parserKindOf(target.contentKey)),
-    );
-  } finally {
-    // ⚠️ In a `finally`, and it must stay there. `pool.shutdown()` is what closes
-    // each worker's port gracefully so its `exit` listeners run and its
-    // parse-timing dump reaches disk; a run that threw past this would leave live
-    // threads, and a process that exits with live threads runs none of their exit
-    // listeners. See `parse-pool.ts` — `terminate()` is not shutdown.
-    await dispatcher.shutdown();
-  }
+    ),
+    { dispatcher: options.dispatcher, cache, policy: options.parsePool ?? {} },
+  );
 
   return counts;
 }
@@ -628,6 +656,8 @@ function emptyCounts(): MutableCounts {
     blobsUnreadable: 0,
     blobsContentChanged: 0,
     blobsParseFailed: 0,
+    blobsParseLimited: 0,
+    blobsParseWorkerDied: 0,
     blobsNotText: 0,
     blobsWithoutParser: 0,
     realizationsSkippedDirectory: 0,
@@ -768,7 +798,13 @@ function blobTargets(base: ProjectionBase): BlobTarget[] {
  * the counter cannot drift: a renamed counter stops this compiling, whereas a
  * `switch` mapping one to the other would happily keep charging the old one.
  */
-type RefusalBucket = 'blobsUnreadable' | 'blobsContentChanged' | 'blobsNotText' | 'blobsParseFailed';
+type RefusalBucket =
+  | 'blobsUnreadable'
+  | 'blobsContentChanged'
+  | 'blobsNotText'
+  | 'blobsParseFailed'
+  | 'blobsParseLimited'
+  | 'blobsParseWorkerDied';
 
 /** A blob the stage declined, with the row and the bucket that say why. */
 interface RefusedBlob {
@@ -1034,26 +1070,25 @@ async function readTarget(
  * not abort a whole population.
  *
  * ⚠️ A broken INSTALL must not be reported as a broken DOCUMENT. The parser
- * arrives by `import()` from inside `parseKeyed`, so a module that cannot be
+ * arrives by `import()` inside the parse worker, so a module that cannot be
  * loaded — a half-extracted tarball, a quarantined or `chmod 000` file — lands in
  * this very catch, and unguarded was reported as
  * `The markdown parser threw on these bytes (code EACCES)`, once per
  * document, blaming every innocent file in the corpus while the exit code stayed
  * 0.
  *
- * The guard is the error TYPE, not the load's position. Hoisting the load above
- * this `try` also closes it, and was tried — it costs every fully warm
- * population the ~730 ms remark load for parses that never happen, which is the
- * whole point of loading past the cache's hit-path return. `isParserUnavailable`
- * matches one type VAT constructs at one place, so it is complete by
- * construction; it is emphatically not the errno blocklist that was deleted (see
- * its docstring). The errno classes remain indistinguishable by inspection —
- * that is why nothing here inspects.
- *
- * The guard covers the pooled route too: a worker's `ParserUnavailableError`
- * arrives as a plain `Error` — structured clone cannot carry a class — but it
- * still wears the original `code`, which is the half `isParserUnavailable`
- * matches on. That is why the code exists rather than only the class.
+ * The guard is the error's PROVENANCE, not the load's position. Hoisting the
+ * load above this `try` also closes the load case, and was tried — it costs
+ * every fully warm population the ~730 ms remark load for parses that never
+ * happen. Instead only a throw `isParserThrewError` accepts — the brand the worker sets around
+ * the parser's own call over the bytes, and nowhere else — is a fact about the
+ * document. Everything else is VAT's or the install's and is rethrown loud: a
+ * parser module that cannot load (`ParserUnavailableError`), a worker entry that
+ * cannot be found or spawned, a reply the parent cannot rebuild
+ * (`ParseDecodeDefectError`), a reply the worker could not post. That is an
+ * allowlist of one constructed type, so a failure class nobody has met yet
+ * fails loud rather than being filed under the bytes' key; nothing reads a
+ * message or guesses an errno.
  *
  * @param target - The blob and its path
  * @param keyed - The confirmed read, narrowed to a kind that HAS a parser. The
@@ -1072,10 +1107,16 @@ async function parseTarget(
   try {
     return await dispatcher.parse(keyed);
   } catch (error) {
-    // The install, not the document. See the ⚠️ block above for why this is a
-    // type check and not a hoist, and `isParserUnavailable` for why matching one
-    // constructed type is not the guessed blocklist that preceded it.
-    if (isParserUnavailable(error)) throw error;
+    // 🔑 The message is the refusal's REASON, path-free: the row is keyed by the
+    // blob, and a blob two files share is one row — a path in it named the first
+    // realization for both. `notAdmittedRealizations` hands each realization
+    // this reason under its own path, and every lane says it in the one sentence.
+    if (isPerRunParseRefusal(error)) {
+      return refused(isParseLimitError(error) ? 'blobsParseLimited' : 'blobsParseWorkerDied', parseRefusalCondition(target.contentKey, error));
+    }
+    // Not the parser's throw from these bytes, so not the document's: see the
+    // ⚠️ block above. Loud, and never a stored row.
+    if (!isParserThrewError(error)) throw error;
 
     return refused('blobsParseFailed', condition(
       target.contentKey,
@@ -1178,7 +1219,9 @@ export function parserKindOf(contentKey: string): ParserKind {
  * ⛔ A row there must be a pure function of the bytes: every root on the machine
  * holding those bytes is served it. {@link BLOB_UNREADABLE} and
  * {@link BLOB_CONTENT_CHANGED} are not — each records that one read, at one path,
- * in one run, never observed the bytes at all. Filed, either one marked its key
+ * in one run, never observed the bytes at all — and neither is
+ * {@link BLOB_PARSE_LIMIT_EXCEEDED}, a parse stopped by this run's limits, nor
+ * {@link BLOB_PARSE_WORKER_DIED}, a parse lost with its worker. Filed, any one marked its key
  * "held" (a `blobs` row OR a `blob_conditions` row holds a key), so a single
  * transient failure stopped those bytes being parsed again, in every repository,
  * until the store was cleared. Dropped here, the key is held by nothing and the
@@ -1194,8 +1237,42 @@ export function storableBlobFacts(blobs: BlobScopedRows): BlobScopedRows {
   };
 }
 
-/** Conditions about one read attempt rather than about the bytes it was after. */
-const READ_OBSERVATIONS: ReadonlySet<string> = new Set([BLOB_UNREADABLE, BLOB_CONTENT_CHANGED]);
+/**
+ * Conditions about one run's attempt rather than about the bytes it was after:
+ * a failed read, a parse stopped at a limit, and a parse lost with its worker
+ * (ADR I6 — a time, heap or stack outcome, or a thread's death, depends on the
+ * machine, not the bytes).
+ */
+const READ_OBSERVATIONS: ReadonlySet<string> = new Set([
+  BLOB_UNREADABLE,
+  BLOB_CONTENT_CHANGED,
+  BLOB_PARSE_LIMIT_EXCEEDED,
+  BLOB_PARSE_WORKER_DIED,
+]);
+
+/**
+ * The codes {@link parseRefusalCondition} writes: a parse of the blob — the
+ * blob stage's, or a harness's memory-file read — this run refused. A reader
+ * asking whether a blob's harness facts were refused asks this set.
+ */
+export const PARSE_REFUSAL_BLOB_CODES: ReadonlySet<string> = new Set([BLOB_PARSE_LIMIT_EXCEEDED, BLOB_PARSE_WORKER_DIED]);
+
+/**
+ * The `blob_conditions` row a per-run parse refusal leaves for a blob —
+ * {@link BLOB_PARSE_LIMIT_EXCEEDED} or {@link BLOB_PARSE_WORKER_DIED}, its
+ * message the refusal's path-free reason. The ONE spelling of that row, for
+ * every lane that parses a blob: the blob stage, and the harness pass, whose
+ * memory-file read is a parse under the same limits. Never stored
+ * ({@link storableBlobFacts}): it describes this run, not the bytes (I6).
+ *
+ * @param blob - The refused blob's content key
+ * @param error - What refused it
+ * @returns The condition row
+ */
+export function parseRefusalCondition(blob: string, error: PerRunParseRefusal): BlobConditionRow {
+  const code = isParseLimitError(error) ? BLOB_PARSE_LIMIT_EXCEEDED : BLOB_PARSE_WORKER_DIED;
+  return condition(blob, code, parseRefusal(error).reason);
+}
 
 /**
  * A `blob_conditions` row with no line, since none of this module's conditions

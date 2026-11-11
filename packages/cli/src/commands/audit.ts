@@ -18,6 +18,7 @@ import {
   detectResourceFormat,
   enumerateSurfaces,
   materializeIssue,
+  SKILL_REACHED_REFUSAL_CONSEQUENCE,
   validate,
   validateMarketplace,
   validateSkill,
@@ -34,6 +35,7 @@ import {
 import {
   analyzeCompatibility,
   checkSettingsCompatibility,
+  classifyCompatibilityFailure,
   detectSkillClaudePluginNameMismatch,
   crawlSkillLinkRegistry,
   extractClaudeMarketplaceInventory,
@@ -48,7 +50,14 @@ import {
   type Target,
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
-import { listingRefusalRemedy, type RegistryUnreadablePolicy } from '@vibe-agent-toolkit/resources';
+import {
+  listingRefusalRemedy,
+  notAdmittedIssues,
+  type ParseDispatcher,
+  type RegistryUnreadablePolicy,
+  partitionNotAdmitted,
+  withParseDispatcher,
+} from '@vibe-agent-toolkit/resources';
 import {
   buildReport,
   countBySeverity,
@@ -62,6 +71,7 @@ import {
   type Report,
   type SeverityConfig,
   type SeverityCounts,
+  resolveFindings,
   type ValidationIssue,
   withAddedFindings,
 } from '@vibe-agent-toolkit/schema';
@@ -111,7 +121,6 @@ import {
   formatSeverityBreakdown,
   issuesToRenderAtVerbosity,
 } from '../utils/issue-rendering.js';
-import { resolveIssueSeverity } from '../utils/issue-severity.js';
 import { createLogger } from '../utils/logger.js';
 import { classifyInputFault, readInputFile, unlistableDirectoryRefusal } from '../utils/project-root-policy.js';
 import { relativizePath } from '../utils/relativize-paths.js';
@@ -215,7 +224,9 @@ async function buildVATProjectContext(
 
   const skillConfigs = new Map<string, SkillPackagingConfig>();
   try {
-    const discovered = await discoverSkillsFromConfig(
+    // A SKILL.md the parse worker refused has no name to key a config by, so it gets none
+    // here; this audit's own validation of that file reports the refusal under its code.
+    const { skills: discovered } = await discoverSkillsFromConfig(
       config.skills,
       scanRoot,
       degradingDiscovery(scanRoot, logger, locationRoot),
@@ -702,7 +713,9 @@ async function validateSingleSkill(
     if (gitTracker !== null) {
       sharedCtx.gitTracker = gitTracker;
     }
-    const packagingResult = await validateSkillForPackaging(skillPath, skillConfig, 'source', sharedCtx);
+    // `{}`: audit resolves a file not admitted at its own boundary (`applySeverityFilter`), under
+    // the AUDITED project's `resources.validation` — never twice, never under a config found here.
+    const packagingResult = await validateSkillForPackaging(skillPath, {}, skillConfig, 'source', sharedCtx);
     const configAware = packagingResultToValidationResult(
       skillPath,
       packagingResult,
@@ -715,7 +728,7 @@ async function validateSingleSkill(
 
   // Fallback: basic validation. Severity is applied by `applySeverityFilter`.
   // The audited skill is the verb's input.
-  const validateOptions: ValidateOptions = { skillPath, locationRoot, validation: {}, side: 'source' };
+  const validateOptions: ValidateOptions = { skillPath, locationRoot, validation: {}, resourcesValidation: {}, side: 'source' };
   if (options.warnUnreferencedFiles) {
     validateOptions.checkUnreferencedFiles = true;
   }
@@ -922,8 +935,11 @@ Config-Aware Validation:
   which prevents false warnings for links the build pipeline resolves.
 
   Config-aware mode never applies validation.allow — audit always shows
-  all issues. validation.severity IS applied, from three scopes, least
-  specific first:
+  all issues — except to a file the scan could not read or parse
+  (RESOURCE_UNREADABLE, RESOURCE_PARSE_LIMIT_EXCEEDED,
+  RESOURCE_PARSE_WORKER_DIED), which resources.validation.allow excuses
+  as in every other verb. validation.severity IS applied, from three
+  scopes, least specific first:
     resources.validation.severity          project-wide (the same dial
                                            'vat resources validate' reads)
     skills.defaults.validation.severity    project-wide (skills, plugins and
@@ -1208,13 +1224,19 @@ function buildFilteredResult(
  */
 function applySeverityFilter(
   results: ValidationResult[],
-  config: ReturnType<typeof loadConfig>
+  config: ReturnType<typeof loadConfig>,
+  roots: { readonly locationRoot: string; readonly projectRoot: string },
 ): ValidationResult[] {
   const skillsConfig = config?.skills;
+  // The one exception to "audit applies no allow list": a file the scan
+  // enumerated and could not read or parse is resolved through the project's
+  // `resources.validation` — its allow list AND its severity, and no other
+  // config's — as in every other verb (`not-admitted.ts`).
+  const resourceValidation = config?.resources?.validation ?? {};
   // NOT gated on `config.skills` existing. It was, and that made the resources
   // dial below inert for exactly the projects that have only one — a repo of
   // plugins declares no skills at all.
-  const resourceSeverity = config?.resources?.validation?.severity ?? {};
+  const resourceSeverity = resourceValidation.severity ?? {};
   const defaultSeverity = skillsConfig?.defaults?.validation?.severity ?? {};
   const projectSeverity: NonNullable<SeverityConfig['severity']> =
     { ...resourceSeverity, ...defaultSeverity };
@@ -1236,11 +1258,15 @@ function applySeverityFilter(
     const effectiveSeverity: NonNullable<SeverityConfig['severity']> =
       { ...projectSeverity, ...perSkillSeverity };
 
-    if (Object.keys(effectiveSeverity).length === 0) {
+    if (Object.keys(effectiveSeverity).length === 0 && resourceValidation.allow === undefined) {
       return result;
     }
 
-    const resolvedIssues = resolveIssueSeverity(result.issues, { severity: effectiveSeverity });
+    // In place, one at a time: the comparison below is by index.
+    const resolvedIssues = result.issues.flatMap((issue) => {
+      const { rest, notAdmitted } = partitionNotAdmitted([issue], resourceValidation, roots);
+      return [...resolveFindings(rest, { severity: effectiveSeverity }), ...notAdmitted];
+    });
 
     // Short-circuit only when NOTHING moved. Comparing lengths alone was the old
     // test, and it is blind to the promote direction by construction: a resolved
@@ -1358,12 +1384,14 @@ export async function buildAuditReport(
   // `skills.include` even when the scan reached no SKILL.md under the config,
   // and a refusal it meets is recorded in the same ledger the append below
   // reads. Built afterwards, that finding reached stderr and not the document.
-  const vatContextForCompat = await buildVATProjectContext(deriveConfigRoot(scanPath), logger, scanRoot);
+  const configRoot = deriveConfigRoot(scanPath);
+  const vatContextForCompat = await buildVATProjectContext(configRoot, logger, scanRoot);
 
   // See {@link withDegradedConfigFindings} for why these are appended, not merged.
   const rawResults = withDegradedConfigFindings(scanned);
 
-  // Load config for severity filtering (audit ignores allow; only severity matters).
+  // Load config for severity filtering (audit ignores allow but for a file it
+  // could not read or parse; otherwise only severity matters).
   //
   // Guarded, and the ordering is why: the scan above has ALREADY run and collected
   // every finding by this point. An unreadable or malformed config here threw past
@@ -1377,7 +1405,7 @@ export async function buildAuditReport(
   // only show more than the adopter asked for, never less.
   let config: ReturnType<typeof loadConfig> | undefined;
   try {
-    config = loadConfig(deriveConfigRoot(scanPath), 'source');
+    config = loadConfig(configRoot, 'source');
   } catch (err) {
     // `warn`, not `debug`. Falling back to no config is the safe direction — it
     // can only show more than the adopter asked for, never less — but it means
@@ -1389,8 +1417,10 @@ export async function buildAuditReport(
   }
 
   // Apply severity filtering: hide codes whose effective severity is 'ignore'.
-  // Allow is deliberately NOT applied — audit shows every finding.
-  const results = applySeverityFilter(rawResults, config);
+  // Allow is deliberately NOT applied — audit shows every finding — except to a
+  // file it could not read or parse, which the project's allow list excuses as
+  // every other verb does (see `applySeverityFilter`).
+  const results = applySeverityFilter(rawResults, config, { locationRoot: scanRoot, projectRoot: configRoot });
 
   // Run compatibility analysis if --compat flag is set
   const compatMap = options.compat
@@ -1755,8 +1785,21 @@ function appendInventoryParseErrors(
 	const parseIssues: ValidationIssue[] = [];
 	for (const err of inv.parseErrors) {
 		if (err.path.endsWith(pluginJsonSuffix) || basename(err.path) === 'SKILL.md') continue;
-		const message = withRelativePath(err.message, err.path, locationRoot);
 		const location = issueLocation(err.path, locationRoot);
+		if (err.parseRefused !== undefined) {
+			// Read but never parsed: its own code, not a JSON defect, in the one
+			// refusal sentence built here from the row's code and reason, located
+			// against this report's root. The skill lane may already have filed it
+			// on this result — one file, one finding.
+			if (!result.issues.some((issue) => issue.code === err.parseRefused && issue.location === location)) {
+				parseIssues.push(...notAdmittedIssues(
+					{ unreadable: [], parseRefused: [{ filePath: err.path, code: err.parseRefused, reason: err.message }] },
+					{ locationRoot, consequence: SKILL_REACHED_REFUSAL_CONSEQUENCE },
+				));
+			}
+			continue;
+		}
+		const message = withRelativePath(err.message, err.path, locationRoot);
 		if (err.unreadable !== true) {
 			parseIssues.push({ severity: 'error', code: 'PLUGIN_INVALID_JSON', message, location });
 			continue;
@@ -2187,17 +2230,21 @@ export async function runCompatAnalysis(
   const compatMap = new Map<string, PluginCompatEntry>();
 
   // In order: each plugin's explanations go to the logger as it is analyzed.
-  await forEachInOrder(results, async (result) => {
-    if (result.type !== RESOURCE_TYPE_CLAUDE_PLUGIN) return;
+  // One parse dispatcher for both lanes across the whole run: a pool per plugin
+  // was started and torn down for each, which the run paid once per plugin.
+  await withParseDispatcher((dispatcher) =>
+    forEachInOrder(results, async (result) => {
+      if (result.type !== RESOURCE_TYPE_CLAUDE_PLUGIN) return;
 
-    const entry: PluginCompatEntry = {
-      compat: await analyzeOrExplain(result.path, locationRoot, vatContext, logger),
-    };
-    if (effectiveSettings !== undefined) {
-      entry.settings = await settingsVerdict(result.path, effectiveSettings, locationRoot, logger);
-    }
-    compatMap.set(result.path, entry);
-  });
+      const entry: PluginCompatEntry = {
+        compat: await analyzeOrExplain(result.path, locationRoot, vatContext, logger, dispatcher),
+      };
+      if (effectiveSettings !== undefined) {
+        entry.settings = await settingsVerdict(result.path, effectiveSettings, locationRoot, logger, dispatcher);
+      }
+      compatMap.set(result.path, entry);
+    }),
+  );
 
   fileLaneFindings(results, compatMap, locationRoot);
   return compatMap;
@@ -2225,23 +2272,27 @@ function fileLaneFindings(results: ValidationResult[], compatMap: ReadonlyMap<st
 }
 
 /**
- * The analyzer's result for one plugin, or — when it threw — the reason, said
- * on stderr and carried into the document. Compat analysis is best-effort:
- * it never fails the audit, but a plugin it could not analyze is reported as
- * exactly that, never as a plugin with no `compatibility:` block.
+ * The analyzer's result for one plugin, or — when it threw for a reason that is
+ * the plugin's — that reason, said on stderr and carried into the document.
+ * Compat analysis is best-effort per plugin: a plugin it could not analyze is
+ * reported as exactly that, never as a plugin with no `compatibility:` block.
+ * A VAT defect (a broken parser install) is not the plugin's:
+ * `classifyCompatibilityFailure` rethrows it, and the audit fails loud.
  */
 async function analyzeOrExplain(
   pluginDir: string,
   locationRoot: string,
   vatContext: VATProjectContext | null,
   logger: ReturnType<typeof createLogger>,
+  dispatcher: ParseDispatcher,
 ): Promise<CompatibilityBlock> {
   try {
     logger.debug(`Running compatibility analysis for: ${pluginDir}`);
     const configTargets = resolveConfigTargetsForPlugin(pluginDir, vatContext);
     const analyzeOptions = configTargets === undefined ? undefined : { configTargets };
-    return await analyzeCompatibility(pluginDir, locationRoot, analyzeOptions);
+    return await analyzeCompatibility(pluginDir, locationRoot, dispatcher, analyzeOptions);
   } catch (err) {
+    classifyCompatibilityFailure(err);
     const refused = typeof (err as { path?: unknown }).path === 'string' ? (err as { path: string }).path : undefined;
     const raw = err instanceof Error ? err.message : String(err);
     const reason = refused === undefined ? raw : withRelativePath(raw, refused, locationRoot);
@@ -2252,8 +2303,9 @@ async function analyzeOrExplain(
 
 /**
  * One plugin's settings verdict: the checker's conflicts and the paths it
- * never saw — and, when the checker itself fails, the plugin as the one thing
- * unchecked, rather than no `settings:` block at all.
+ * never saw — and, when the checker itself fails for a reason that is the
+ * plugin's, the plugin as the one thing unchecked, rather than no `settings:`
+ * block at all. A VAT defect is rethrown by `classifyCompatibilityFailure`.
  *
  * The checker failing used to be `logger.debug` and a result with no settings
  * block, so a plugin the check could not run on was indistinguishable from one
@@ -2265,10 +2317,12 @@ async function settingsVerdict(
   effectiveSettings: EffectiveSettings,
   locationRoot: string,
   logger: ReturnType<typeof createLogger>,
+  dispatcher: ParseDispatcher,
 ): Promise<SettingsCheck> {
   try {
-    return await checkSettingsCompatibility(pluginDir, effectiveSettings);
+    return await checkSettingsCompatibility(pluginDir, effectiveSettings, dispatcher);
   } catch (settingsErr) {
+    classifyCompatibilityFailure(settingsErr);
     const reason = settingsErr instanceof Error ? settingsErr.message : String(settingsErr);
     logger.warn(`Settings compatibility could not be checked for ${issueLocation(pluginDir, locationRoot) || '.'}: ${reason}`);
     return { conflicts: [], unchecked: [{ path: pluginDir, reason }] };
@@ -2865,7 +2919,8 @@ async function handleFileEntry(
       const sharedCtx: SkillValidationSharedContext = scanCtx.gitTracker === null
         ? { locationRoot, projectSkills, suiteProbe, unreadable, outputs: [] }
         : { gitTracker: scanCtx.gitTracker, locationRoot, projectSkills, suiteProbe, unreadable, outputs: [] };
-      const packagingResult = await validateSkillForPackaging(fullPath, skillConfig, 'source', sharedCtx);
+      // `{}`: resolved at audit's own boundary, as in the lane above.
+      const packagingResult = await validateSkillForPackaging(fullPath, {}, skillConfig, 'source', sharedCtx);
       const configAware = packagingResultToValidationResult(
         fullPath,
         packagingResult,
@@ -2878,7 +2933,7 @@ async function handleFileEntry(
 
     // Wild mode: basic validation. Severity is applied by `applySeverityFilter`.
     // The audited skill is the verb's input.
-    const validateOptions: ValidateOptions = { skillPath: fullPath, locationRoot, validation: {}, side: 'source' };
+    const validateOptions: ValidateOptions = { skillPath: fullPath, locationRoot, validation: {}, resourcesValidation: {}, side: 'source' };
     if (options.warnUnreferencedFiles) {
       validateOptions.checkUnreferencedFiles = true;
     }

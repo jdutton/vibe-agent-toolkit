@@ -36,7 +36,9 @@
  *    or two instead of one iteration per hop.
  *
  * A key with no `blobs` row is never in the frontier: it has no content to
- * have facts OF, and every strict reader already reads it as having none.
+ * have facts OF, and every strict reader already reads it as having none. Nor
+ * is a key whose facts this run refused (`HarnessFactsIndex.refused`): every
+ * strict reader reads it the same way, and the population reports it.
  *
  * ## One corpus root
  *
@@ -269,7 +271,9 @@ function importTargets(context: ReachContext, hop: Seed, loader: boolean): strin
   const contentKey = context.files.get(hop.path)?.contentKey;
   if (contentKey === undefined || contentKey === null) return [];
   if (loader && !context.profile.isTextPath(hop.path)) return [];
-  if (!context.content.has(contentKey)) return [];
+  // No content, or content whose facts this run refused: nothing to derive and
+  // nothing to follow — never frontier, or the pass would ask for it forever.
+  if (!context.content.has(contentKey) || context.facts.refused(contentKey)) return [];
   const facts = context.facts.factsOf(contentKey);
   if (facts === undefined) {
     noteFrontier(context, contentKey, hop.path);

@@ -86,6 +86,7 @@ function scanPayload(verbose: boolean, lane: 'walk' | 'projection' = 'walk') {
     durationMs: 234,
     collections: {},
     verbose,
+    notAdmitted: { count: 0, findings: [] },
   });
   RESOURCES_SCAN_REPORT_SCHEMA.parse(report);
   return report.data;
@@ -122,6 +123,7 @@ describe('resources scan payload', () => {
       durationMs: 234,
       collections: {},
       verbose: false,
+      notAdmitted: { count: 0, findings: [] },
     });
 
     expect(report.examined).toBe(2);
@@ -137,7 +139,7 @@ describe('resources scan payload', () => {
 describe('skills list payload', () => {
   const skills = [{ name: 'alpha', path: SKILL, valid: true }];
   const listing = (unreadable: Parameters<typeof buildSkillsListReport>[0]['unreadable']) =>
-    buildSkillsListReport({ skills, context: 'project', root: ROOT, unreadable, leftovers: [], examined: 1 }, 7);
+    buildSkillsListReport({ skills, context: 'project', root: ROOT, unreadable, parseRefused: [], leftovers: [], examined: 1, validation: {} }, 7);
 
   it('publishes each skill path relative to the stated root', () => {
     const report = SKILLS_LIST_REPORT_SCHEMA.parse(listing([]));

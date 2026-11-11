@@ -13,6 +13,18 @@
  * The lexer is the one the binary bundles, `marked` 15.0.6, pinned exactly, with
  * `gfm: false` as the loader asks for it.
  *
+ * ## Where it runs: the parse worker, never the run's own thread
+ *
+ * The lexer and the YAML decode are parsers: over a pathological memory file
+ * (deep nesting, a huge input) they hang, exhaust the heap or overflow the
+ * stack, and on the run's own thread nothing could stop them (ADR I8). So this
+ * module is in the parse worker's closure: the parser loader is its only
+ * importer (`loadHarnessReader`, by harness id), and the harness pass reaches
+ * it through the run's dispatcher under the pool's limits. A refusal is a
+ * per-run `blob_conditions` row, never a facts row
+ * (`packages/dev-tools/test/parser-import-boundary.test.ts` holds the import
+ * boundary from the tree).
+ *
  * ## One extractor, whatever the file is
  *
  * The harness runs this over a `.ts` import exactly as over a `.md` one, so VAT
@@ -51,7 +63,6 @@ import { parseDocument } from 'yaml';
 import { estimateTokens } from '../link-classify.js';
 
 import { harnessPaths } from './claude-context-rules.js';
-// Type-only: erased at runtime, so it adds no edge to the claude-code.ts → claude-memory.ts cycle guard.
 import type { HarnessContentFacts, HarnessImport } from './harness/profile.js';
 
 /** One JS `\s` character. */

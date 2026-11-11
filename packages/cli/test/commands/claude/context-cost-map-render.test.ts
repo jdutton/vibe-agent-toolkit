@@ -153,6 +153,7 @@ function mapOf(overrides: Partial<ContextCostMap> = {}): ContextCostMap {
     queriedDirectories: 2,
     evaluatedDirectories: 2,
     skippedUnknownLocations: 0,
+    refused: [],
     ...overrides,
   };
 }

@@ -30,6 +30,7 @@ import {
   toFindings,
   type Finding,
   type Report,
+  resolveFindings,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
 import { everywhere, followedKindSync, forEachInOrder, isPathAbsentError, pathPresent, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
@@ -39,7 +40,6 @@ import { marksOperandRefusalByHand } from '../command-tree.js';
 import { loadConfig } from '../utils/config-loader.js';
 import { endWithReport } from '../utils/document-writer.js';
 import { reportFindings } from '../utils/issue-rendering.js';
-import { resolveIssueSeverity } from '../utils/issue-severity.js';
 import type { createLogger } from '../utils/logger.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
 import { runIntegrityFinding } from '../utils/run-integrity.js';
@@ -72,7 +72,7 @@ import { rejectPositionalArguments } from './positional-args.js';
 import { RESOURCES_VALIDATE_EXAMINED, RESOURCES_VALIDATE_REPORT_SCHEMA } from './resources/validate-schema.js';
 import { runResourcesValidatePhase } from './resources/validate.js';
 import type { DiscoveredSkill } from './skills/command-helpers.js';
-import { discoverSkillsFromConfig, readPluginLocalSkillNames, type PluginLocalSkillNames } from './skills/skill-discovery.js';
+import { discoverSkillsFromConfig, namedSkillsOrRefuse, readPluginLocalSkillNames, type PluginLocalSkillNames } from './skills/skill-discovery.js';
 import { SKILLS_VALIDATE_EXAMINED, SKILLS_VALIDATE_REPORT_SCHEMA } from './skills/validate-schema.js';
 import { runSkillsValidatePhase } from './skills/validate.js';
 
@@ -479,18 +479,18 @@ function checkFilesConfigDestsOf(built: readonly CheckEntry[], projectRoot: stri
  * comes from {@link explicitFilesConfigDests} rather than from every `files:` entry.
  *
  * Each bundle's findings are then resolved against that skill's effective
- * `validation.severity` (see {@link resolveIssueSeverity}), so the opt-out the
+ * `validation.severity` (see `resolveFindings`), so the opt-out the
  * code's own `fix` text prescribes actually works here. It did not: this phase
  * published `detectPackagedAgentInstructionFiles`' raw output straight into the
  * document, so `severity.PACKAGED_AGENT_INSTRUCTION_FILE: ignore` changed nothing
  * — measured `warnings: 1` with the override at `skills.defaults`, at
  * `skills.config.<name>`, and with no override at all.
  *
- * `validation.allow` is deliberately NOT applied. Allow is a per-PATH suppression
- * whose usage is only answerable across a whole run, and this phase would have to
- * drain a ledger it is not the run of — reporting ALLOW_UNUSED for every entry the
- * project declares for other lanes. Severity is answerable per unit of work; allow
- * is not. See `AllowUsageLedger` in `@vibe-agent-toolkit/schema`.
+ * `resolveFindings` applies that config's `validation.allow` too (paths relative to
+ * `cwd`), but drains no allow ledger: this phase is not the run of the project's
+ * allow list, so it never reports `ALLOW_UNUSED` — and an expired entry that matches
+ * still suppresses its finding with no `ALLOW_EXPIRED`. See `AllowUsageLedger` in
+ * `@vibe-agent-toolkit/schema`.
  *
  * Locations anchor at `cwd`, the run's stated root, so a reader can open them.
  *
@@ -519,7 +519,7 @@ export function checkPackagedAgentInstructionFiles(
       // `vat verify` examines what an earlier build wrote; it writes nothing.
       [],
     );
-    issues.push(...resolveIssueSeverity(raw, check.packaging.validation));
+    issues.push(...resolveFindings(raw, check.packaging.validation ?? {}));
   }
   return {
     bundlesInspected: outputs.built.length,
@@ -951,13 +951,14 @@ async function runInProcessPhases(run: {
   // ONE discovery for the whole in-process half of the run: every phase below
   // asks "which skills does this project have", and each used to answer it
   // differently. `'refuse'`: a verify over a population it could not see is the
-  // green-without-checking shape this command exists to refuse — the throw is
+  // green-without-checking shape this command exists to refuse (a SKILL.md whose
+  // parse was refused has no name to check by, so it refuses too) — the throw is
   // the run's refusal, published with the phases that already finished.
-  const discoveredSkills = await discoverSkillsFromConfig(run.skills, projectRoot, 'refuse');
+  const discoveredSkills = namedSkillsOrRefuse(await discoverSkillsFromConfig(run.skills, projectRoot, 'refuse'), projectRoot);
   // ONE plugin-local index likewise, and the declared name of each plugin-local
   // skill, which keys its config exactly as the plugin build keyed it.
   const pluginLocal = indexPluginLocalSkills(config, projectRoot);
-  const pluginLocalNames = await readPluginLocalSkillNames(pluginLocal);
+  const pluginLocalNames = await readPluginLocalSkillNames(pluginLocal, projectRoot);
 
   if (phases.includes(FILES_CONFIG_DESTS)) {
     results.push(await inProcess(IN_PROCESS_PHASES[FILES_CONFIG_DESTS], () =>

@@ -188,6 +188,7 @@ describe('whole-module subpath entries', () => {
     expect(typeof mod.diffSnapshots).toBe('function');
     expect(typeof mod.subtree).toBe('function');
     expect(typeof mod.untracedFs).toBe('function');
+    expect(typeof mod.overOutputRowsMarkdown).toBe('function');
   });
 
   // The harness's vocabulary is exported BY NAME: an `export *` of `fault-spec.ts` made its op table

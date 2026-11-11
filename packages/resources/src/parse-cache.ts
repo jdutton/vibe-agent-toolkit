@@ -37,21 +37,22 @@
  * |---|---|
  * | `links`, `headings`, `estimatedTokenCount` | stored |
  * | `anchors`, `parseErrors`, `unresolvedReferences`, `lexicalReferences`, `contentMeasures` | stored when present |
- * | `frontmatterSource`, `frontmatterError` | stored when present |
+ * | `frontmatterSource`, `frontmatterError`, `frontmatterNotAMapping` | stored when present |
+ * | `frontmatterValue` | the decoded mapping, encoded (`frontmatter-codec.ts`), when present |
  * | `content`, `sizeBytes` | **never stored** — re-attached from `KeyedContent` |
- * | `frontmatter` | **never stored** — re-derived from `frontmatterSource` |
+ * | `frontmatter` | **never stored as an object** — rebuilt from `frontmatterValue` |
  *
- * ## Why frontmatter is cached as YAML SOURCE, never as the parsed object
+ * ## Why frontmatter is cached as the worker's ENCODED decode, never re-decoded
  *
- * Measured, against this repo's `yaml`: `.inf` parses to `Infinity`, `.nan` to
- * `NaN`, `!!binary` to a `Buffer`. `JSON.stringify` maps the first two to
- * `null`, rewrites the third as `{type,data}`, and **throws outright** on a
- * cyclic YAML anchor — so documents in that last class would silently never
- * cache at all. Re-parsing the source is lossless by construction, because it
- * is literally the computation the cold path runs: {@link rehydrate} calls
- * `parseFrontmatterSource`, the *same* function `parseMarkdownContent` uses.
- * There is deliberately no second implementation of "YAML source → frontmatter"
- * in this file.
+ * A hit never decodes YAML. `yaml` recurses once per nesting level, so a
+ * decode on this thread is an unbounded parse beside the bounded one (ADR I8):
+ * a 1,000-level `a: [[[…]]]` overflows the main thread's stack, and its
+ * outcome would hang on the stack, not on the bytes. The decode runs once, in
+ * the parse worker under its `stackMb`, and its result is stored in the tagged,
+ * flat encoding `frontmatter-codec.ts` defines — lossless for every value
+ * `yaml` produces (`.inf`, `.nan`, `-0`, `!!binary`, `!!set`, `!!omap`,
+ * `!!timestamp`, shared and cyclic anchors), which plain JSON is not.
+ * {@link rehydrate} rebuilds `frontmatter` from it with a loop, at any depth.
  *
  * ## Standing constraint: never hand out a shared object
  *
@@ -123,28 +124,27 @@ import { threadId } from 'node:worker_threads';
 import {
   applyTreePlan,
   fsFaultOf,
-  type FsSide,
   isPathAbsentError,
+  isVatError,
   parseEnvBoolean,
   planTreeChanges,
   renameFileAtomic,
   safePath,
   VatError,
-  withFsFault,
 } from '@vibe-agent-toolkit/utils';
 
 import { parseCacheDirectory } from './cache-namespace.js';
-import { CONTENT_KEY_PATTERN, type KeyedContent, type ParsableContent, readContentWithKey } from './content-key.js';
-import { parseFrontmatterSource } from './frontmatter-source.js';
+import { CONTENT_KEY_PATTERN, type KeyedContent } from './content-key.js';
+import { decodeFrontmatterValue, encodeFrontmatterValue, FRONTMATTER_VALUE_MALFORMED } from './frontmatter-codec.js';
 import type { ParseResult } from './link-parser.js';
 import type { DocumentParserKind } from './mime-type.js';
+import { storableUnderDefaultLimits } from './parse-limits.js';
 import {
   parseTimingStart,
-  recordParseCacheHit,
-  recordParseCacheMiss,
   recordTierPass,
   TierPass,
 } from './parse-timing.js';
+import type { HarnessId } from './projection/harness/profile.js';
 import { type ParseFacts, ParseFactsSchema } from './schemas/parse-facts.js';
 
 /**
@@ -276,7 +276,11 @@ export function dehydrate(result: ParseResult): ParseFacts {
     ...(result.frontmatterSource !== undefined && {
       frontmatterSource: result.frontmatterSource,
     }),
+    ...(result.frontmatter !== undefined && {
+      frontmatterValue: encodeFrontmatterValue(result.frontmatter),
+    }),
     ...(result.frontmatterError !== undefined && { frontmatterError: result.frontmatterError }),
+    ...(result.frontmatterNotAMapping === true && { frontmatterNotAMapping: true }),
   };
 }
 
@@ -288,16 +292,17 @@ export function dehydrate(result: ParseResult): ParseFacts {
  * recoverable from the decoded string (invalid UTF-8 decodes to U+FFFD and
  * re-encodes to three bytes, so the round trip does not preserve length).
  *
- * `frontmatter` is re-derived by `parseFrontmatterSource` — the same function
- * the cold path uses — so a cache hit and a cold parse cannot disagree.
+ * `frontmatter` is rebuilt from `frontmatterValue`, the worker's own decode,
+ * so a cache hit and a cold parse cannot disagree — and no YAML is decoded on
+ * this thread (see "Why frontmatter is cached as the worker's ENCODED decode").
  *
  * @param facts - The stored facts
  * @param keyed - The fresh read whose key selected those facts
  * @returns A parse result equal to what the parser would have produced
+ * @throws A `VatError` coded `FRONTMATTER_VALUE_MALFORMED` when the stored
+ *   encoding is not one this build wrote; `get` reads that as a miss
  */
 export function rehydrate(facts: ParseFacts, keyed: KeyedContent): ParseResult {
-  const derived = deriveFrontmatter(facts);
-
   return {
     links: facts.links,
     headings: facts.headings,
@@ -315,8 +320,11 @@ export function rehydrate(facts: ParseFacts, keyed: KeyedContent): ParseResult {
     ...(facts.frontmatterSource !== undefined && {
       frontmatterSource: facts.frontmatterSource,
     }),
-    ...(derived.frontmatter !== undefined && { frontmatter: derived.frontmatter }),
-    ...(derived.frontmatterError !== undefined && { frontmatterError: derived.frontmatterError }),
+    ...(facts.frontmatterValue !== undefined && {
+      frontmatter: decodeFrontmatterValue(facts.frontmatterValue),
+    }),
+    ...(facts.frontmatterError !== undefined && { frontmatterError: facts.frontmatterError }),
+    ...(facts.frontmatterNotAMapping === true && { frontmatterNotAMapping: true }),
     content: keyed.content,
     sizeBytes: keyed.byteLength,
     estimatedTokenCount: facts.estimatedTokenCount,
@@ -324,42 +332,34 @@ export function rehydrate(facts: ParseFacts, keyed: KeyedContent): ParseResult {
 }
 
 /**
- * The frontmatter half of {@link rehydrate}, kept separate so there is exactly
- * one place that decides where `frontmatter` / `frontmatterError` come from.
+ * {@link rehydrate}, with an entry whose frontmatter encoding is not one this
+ * build wrote read as a miss — the same fail-soft rule as every other
+ * malformed entry ({@link readFacts}). The caller then parses the document
+ * again through the worker, so a corrupt entry costs one re-parse, never the
+ * run. The codec refuses everything it did not write with
+ * `FRONTMATTER_VALUE_MALFORMED`; any other throw is a defect in VAT, not in
+ * the entry, and stays loud, as a bug in this class does in `get`.
  *
- * When a source is stored, `parseFrontmatterSource` — the same function the
- * cold path runs — is the authority, so a hit and a cold parse cannot disagree.
- * The stored `frontmatterError` is only a fallback for a producer that reported
- * an error without a source; for markdown the no-source branch simply means
- * "this document had no frontmatter".
+ * @param facts - Facts that passed the schema
+ * @param keyed - The fresh read whose key selected them
+ * @returns The parse result, or `null` when the entry's encoding is malformed
  */
-function deriveFrontmatter(facts: ParseFacts): {
-  frontmatter?: Record<string, unknown>;
-  frontmatterError?: string;
-} {
-  if (facts.frontmatterSource !== undefined) {
-    return parseFrontmatterSource(facts.frontmatterSource);
+function rehydrateOrMiss(facts: ParseFacts, keyed: KeyedContent): ParseResult | null {
+  try {
+    return rehydrate(facts, keyed);
+  } catch (error) {
+    if (!isVatError(error, FRONTMATTER_VALUE_MALFORMED)) throw error;
+    return null;
   }
-  if (facts.frontmatterError !== undefined) {
-    return { frontmatterError: facts.frontmatterError };
-  }
-  return {};
 }
 
 /**
  * Disk-backed store of parse facts, keyed by content.
  *
- * Most callers want {@link parseFileCached} or {@link parseKeyed} rather than
- * driving `get`/`set` by hand.
- *
- * @example
- * ```typescript
- * const cache = new ParseCache();
- * const keyed = await readContentWithKey(filePath, 'markdown');
- * const hit = await cache.get(keyed);
- * const result = hit ?? parseMarkdownContent(keyed.content, keyed.byteLength);
- * if (hit === null) await cache.set(keyed, result);
- * ```
+ * Every caller reaches it through `parse-dispatcher.ts` (`parseFileCached`,
+ * `parseContentCached`, a run's `ParseDispatcher`): a hit is served here, a
+ * miss is parsed in the bounded worker pool and filed back. Nothing parses on
+ * the calling thread.
  */
 export class ParseCache {
   /** Whether reads and writes touch the filesystem at all. */
@@ -380,9 +380,8 @@ export class ParseCache {
   /**
    * Counters behind {@link stats}, cumulative for this instance's life.
    *
-   * They live on the cache rather than on each caller because every caller of
-   * {@link parseKeyed} would otherwise keep its own pair, and the eight direct
-   * parse sites bite 2 migrates have nowhere to keep one.
+   * They live on the cache rather than on each caller because every dispatcher
+   * would otherwise keep its own pair, and a run's sizing reads them as deltas.
    */
   private hitCount = 0;
   private missCount = 0;
@@ -494,7 +493,7 @@ export class ParseCache {
       // `readFacts` returns the product of a fresh `JSON.parse`, so this graph is
       // not shared with any previous caller. See the standing constraint in the
       // module docstring — do NOT memoize this object.
-      return rehydrate(facts, keyed);
+      return rehydrateOrMiss(facts, keyed);
     } finally {
       recordTierPass(TierPass.CacheReadDecode, decodeStartedAt);
     }
@@ -527,14 +526,26 @@ export class ParseCache {
    * invented decode provenance into a struct nothing reads, which is the same
    * mistake `parse-pool.ts`'s `attachContent` docstring refuses.
    *
+   * ⛔ **Every write files only what a default bounded run would admit.** The
+   * cache is shared by every run, whatever limits produced an entry, so an
+   * entry past the default input or output caps — written by an in-process
+   * parse, or by a pool given looser limits, on either side of the thread
+   * boundary — would be served to a later default run as an admission that run
+   * would have refused: the outcome would hang on what ran first (I0). This is
+   * the one place every write passes, so the guard lives here and no caller
+   * can forget it. `result.sizeBytes` is the raw byte count every parser is
+   * handed.
+   *
    * @param key - The content key to file under
    * @param result - The parse result whose facts to store
-   * @returns True when the entry was persisted. A write failure is REPORTED
-   *   here as well as counted, never thrown — see below.
+   * @returns True when the entry was persisted; false when it is not storable
+   *   under the default limits, the cache is off, or the write failed. A write
+   *   failure is REPORTED here as well as counted, never thrown — see below.
    */
   async setByKey(key: string, result: ParseResult): Promise<boolean> {
     // Outside the bracket for the same reason `get`'s guards are — see there.
     if (!this.enabled || !SAFE_KEY.test(key)) return false;
+    if (!storableUnderDefaultLimits(result.sizeBytes, result)) return false;
 
     const startedAt = parseTimingStart();
     try {
@@ -684,61 +695,6 @@ export class ParseCache {
 }
 
 /**
- * The one thing a parser module contributes: content of a known byte length in,
- * parse facts out.
- *
- * Both parsers already have this shape (`parseMarkdownContent`,
- * `parseHtmlContent`); naming it lets {@link loadParser} return one type for
- * either kind, so no caller has to re-derive which export belongs to which kind.
- */
-export interface LoadedParser {
-  /**
-   * @param content - The decoded document
-   * @param sizeBytes - The RAW byte count of what was read, never a length
-   *   derived from `content` — decoding is lossy on malformed UTF-8
-   * @returns The parse facts for those bytes
-   */
-  parseContent(content: string, sizeBytes: number): ParseResult;
-}
-
-/**
- * In-flight or settled loads, one per kind. Memoizing the PROMISE (not the
- * module) is what makes concurrent first callers share a single import.
- */
-const parserLoads = new Map<DocumentParserKind, Promise<LoadedParser>>();
-
-/**
- * The module specifier {@link importParser} loads for each kind, for the error
- * message only.
- *
- * Kept beside the `import()` calls rather than derived from them because the
- * specifiers there MUST stay static literals — a computed specifier is invisible
- * to a bundler and to the module-mocking these are tested through. Duplicating
- * them here is the cost of naming the module in the message; both entries are
- * exercised by the message tests, so a specifier changed on one side without the
- * other shows up as a message naming a module the loader never touched.
- *
- * ## Why this is keyed on `DocumentParserKind` and not on `ParserKind`
- *
- * `ParserKind` grew a third member, `none`, which names the ABSENCE of a parser
- * (see content-key.ts). There is no module specifier for it — not `null`, not a
- * placeholder — so widening this record would have forced an entry that is a
- * lie, and every reader of that entry would then be handling a case that cannot
- * happen. Narrowing the key instead pushes the impossibility one level up, into
- * the types of {@link loadParser} and {@link parseKeyed}, where a caller holding
- * a `none` blob gets a compile error at the call site rather than an invented
- * answer far from it.
- *
- * The record therefore stays compile-exhaustive over exactly the kinds that HAVE
- * a parser, which is the property that made it worth having: a fourth real
- * parser cannot be added without a specifier for it.
- */
-const PARSER_MODULE_SPECIFIERS: Record<DocumentParserKind, string> = {
-  html: './html-link-parser.js',
-  markdown: './link-parser.js',
-};
-
-/**
  * The `code` every {@link ParserUnavailableError} carries.
  *
  * ⚠️ It must NEVER be an errno, and the original errno must NEVER be passed
@@ -754,6 +710,13 @@ const PARSER_MODULE_SPECIFIERS: Record<DocumentParserKind, string> = {
 const PARSER_UNAVAILABLE_CODE = 'VAT_PARSER_UNAVAILABLE';
 
 /**
+ * What a parse worker loads to run a job: a document parser by its kind, or a
+ * harness's memory-file reader by the harness's id. Every one is a module the
+ * worker imports lazily, so a load that fails is a broken install either way.
+ */
+export type ParserModuleKind = DocumentParserKind | HarnessId;
+
+/**
  * A parser module could not be loaded — the INSTALL is broken, not a document.
  *
  * ## Why a dedicated type rather than letting the loader's error through
@@ -763,7 +726,7 @@ const PARSER_UNAVAILABLE_CODE = 'VAT_PARSER_UNAVAILABLE';
  * `EMFILE` under fd pressure, `ENOENT` for a half-extracted tarball. That is
  * byte-for-byte the shape a genuinely unreadable *document* throws, and every
  * outer boundary that has to survive a hostile tree allow-lists exactly those
- * codes. Hoisting the load out of the per-document `try` (see {@link loadParser})
+ * codes. Hoisting the load out of the per-document `try` (see `loadParser` in `parser-loader.ts`)
  * stopped the failure being blamed on individual documents, but it did not stop
  * the NEXT boundary out from degrading it: measured, `chmod 000` on the built
  * `link-parser.js` still exited 0 with a `SCAN_PATH_UNREADABLE` warning.
@@ -798,11 +761,11 @@ export class ParserUnavailableError extends VatError {
   readonly loaderError: unknown;
 
   /**
-   * @param kind - Which parser failed to load
+   * @param kind - Which parser module failed to load
    * @param specifier - The module specifier that could not be imported
    * @param loaderError - Whatever the module loader threw
    */
-  constructor(kind: DocumentParserKind, specifier: string, loaderError: unknown) {
+  constructor(kind: ParserModuleKind, specifier: string, loaderError: unknown) {
     // The code is never an errno. See {@link PARSER_UNAVAILABLE_CODE} before changing it.
     super(
       PARSER_UNAVAILABLE_CODE,
@@ -827,7 +790,7 @@ export class ParserUnavailableError extends VatError {
  * and this is not it.
  *
  * This matches exactly one error type, constructed by VAT, at exactly one place
- * ({@link importParserModule}). It is therefore **complete by construction**:
+ * (`importParser` in `parser-loader.ts`). It is therefore **complete by construction**:
  * there is no error a parser load can produce that does not pass through that
  * wrap, so there is no code to enumerate and none to keep up to date.
  *
@@ -875,213 +838,6 @@ function describeLoaderError(error: unknown): string {
 }
 
 /**
- * Load the parser for one kind, once per process.
- *
- * ## Why the load is DEFERRED and not hoisted
- *
- * Called from two places, both past a cache decision: {@link parseKeyed} after
- * its cache-hit return, and the parse worker (`parse-worker.ts`) once it has
- * been handed a document to parse. That position is the whole point. The remark stack behind
- * `parseMarkdownContent` costs ~730 ms of module load on Windows, and a fully
- * warm run — every document a hit, nothing ever parsed — must not pay it.
- * Measured on a warm `vat resources scan docs/contributing`: 779 scripts loaded
- * with the parser absent, against 962 with it present.
- *
- * ⚠️ It has been hoisted above the cache twice, both times to fix the
- * attribution problem below, and both times it silently cancelled the deferral —
- * the warm run went straight back to 963 scripts and the measured ~1.0 s saving
- * disappeared while every test stayed green. `parse-cache`'s own tests cannot see
- * it; `packages/cli/test/integration/module-load-budget.integration.test.ts` can,
- * and its warm-scan case is what fails if this moves.
- *
- * ## How a load failure is kept off the documents WITHOUT a hoist
- *
- * Loading the parser is an INSTALL-level operation; parsing is a DOCUMENT-level
- * one. Since the import sits inside `parseKeyed`, every caller that wraps
- * `parseKeyed` in a per-document `try` — and they all do, because a corpus
- * contains documents that legitimately fail to parse — would otherwise blame a
- * broken install on each innocent file in turn (measured: 8 ×
- * `RESOURCE_UNREADABLE`, `filesScanned: 0`, on `chmod 000` of the built parser).
- *
- * That is closed at the origin instead of by position: the import is wrapped in
- * {@link ParserUnavailableError}, which wears a code no errno allow-list holds,
- * and each of those catches rethrows it via {@link isParserUnavailable}. The
- * predicate is safe where the deleted `isModuleLoadFailure` blocklist was not,
- * because it matches one type this file constructs rather than guessing at
- * Node's codes — see its docstring.
- *
- * ## Why the exit code needed the type too
- *
- * Attribution and exit code are separate failures. One boundary further out —
- * `vat audit`'s per-entry scan catch — degrades ANY error carrying a filesystem
- * errno into a `SCAN_PATH_UNREADABLE` warning, so a `chmod 000` parser still
- * exited 0 even when no document was blamed. Every such boundary allow-lists
- * errnos, so no amount of hoisting reaches it; only a non-errno code does.
- *
- * A rejected load is dropped from the memo rather than retained: a loader
- * failure can be transient (`EMFILE` under fd pressure), and caching the
- * rejection would turn one bad moment into a dead process.
- *
- * @param kind - Which parser to load
- * @returns The parser for that kind
- * @throws {ParserUnavailableError} If the parser module cannot be imported. The
- *   loader's own error is carried on `loaderError`, never re-thrown bare — see
- *   {@link PARSER_UNAVAILABLE_CODE}.
- */
-export function loadParser(kind: DocumentParserKind): Promise<LoadedParser> {
-  const pending = parserLoads.get(kind);
-  if (pending !== undefined) return pending;
-
-  const loading = importParser(kind).catch((error: unknown) => {
-    parserLoads.delete(kind);
-    throw error;
-  });
-  parserLoads.set(kind, loading);
-  return loading;
-}
-
-/**
- * The `import()`s of a parser in this package, and nothing else.
- *
- * ⚠️ This only pays off while `index.ts` keeps `parseMarkdown` / `parseHtml` as
- * LAZY WRAPPERS. They were plain value re-exports until this was measured: the
- * package publishes only `"."`, so every consumer goes through the barrel, and
- * the barrel evaluated both parser modules before this line ever ran. Verified
- * then with NODE_V8_COVERAGE on a warm `vat resources scan` — remark-parse
- * loaded, `parseMarkdownContent` called zero times. Restore either re-export and
- * this deferral silently buys nothing again.
- *
- * Only the markdown half actually saves anything. parse5 (~38 ms) is loaded
- * eagerly regardless, because `html-transform.ts` imports html-link-parser
- * statically for the SYNCHRONOUS `rewriteHtmlLinks`; deferring that needs it to
- * become async first.
- *
- * The export read is INSIDE the callback, and so inside
- * {@link importParserModule}'s `try`, deliberately: a module can fail by throwing
- * while it evaluates, which surfaces at the destructure rather than at the
- * `import()` itself.
- *
- * @param kind - Which parser to load
- * @returns The parser for that kind
- * @throws {ParserUnavailableError} If the module cannot be imported
- */
-function importParser(kind: DocumentParserKind): Promise<LoadedParser> {
-  if (kind === 'html') {
-    return importParserModule(kind, async () => ({
-      parseContent: (await import('./html-link-parser.js')).parseHtmlContent,
-    }));
-  }
-  return importParserModule(kind, async () => ({
-    parseContent: (await import('./link-parser.js')).parseMarkdownContent,
-  }));
-}
-
-/**
- * Run one parser-module import so its failure is a {@link ParserUnavailableError}
- * rather than a bare loader errno.
- *
- * The wrap lives HERE, at the single boundary where a loader error originates,
- * rather than at the parse sites that would otherwise have to classify one: an
- * outer boundary cannot tell a loader `EACCES` from a document `EACCES` by
- * inspection, so a classification added further out is guesswork. Inside this
- * `try` there is nothing to classify — anything it catches came from loading a
- * parser module.
- *
- * Takes the import as a CALLBACK rather than performing it, because the
- * specifiers must stay static literals: a computed specifier is invisible to a
- * bundler and to the module-mocking these are tested through. Two callers pass
- * one — {@link importParser} here, and the lazy `parseMarkdown`/`parseHtml`
- * wrappers in `index.ts`, which import the same two modules by a different route
- * (they read the file themselves) and so cannot go through {@link loadParser}.
- * Both must produce the same error type or a boundary guarded by
- * {@link isParserUnavailable} covers only one of them.
- *
- * @param kind - Which parser is being loaded, for the message
- * @param importModule - Performs the `import()` and reads what it needs off it
- * @returns Whatever `importModule` resolves to
- * @throws {ParserUnavailableError} If `importModule` throws
- */
-export async function importParserModule<T>(
-  kind: DocumentParserKind,
-  importModule: () => Promise<T>,
-): Promise<T> {
-  try {
-    return await importModule();
-  } catch (error) {
-    throw new ParserUnavailableError(kind, PARSER_MODULE_SPECIFIERS[kind], error);
-  }
-}
-
-/**
- * Produce the parse facts for an already-read document, from the cache when one
- * is filed under its content key and from the parser otherwise.
- *
- * THE interception point: it sits between the single read that keyed the bytes
- * and the parser that would otherwise consume them, so on a hit the parser does
- * not run at all. Nothing downstream changes — `rehydrate` re-attaches
- * `content`/`sizeBytes` from the caller's own fresh read rather than from the
- * entry, so a caller that publishes `stat().size` separately (as
- * `ResourceRegistry.addResource` does) is unaffected.
- *
- * The `set` is **awaited**, not fired and forgotten. `vat validate`, `vat verify`
- * and `vat build` each `spawnSync` the vat binary once per phase, so an entry
- * that has not reached disk by process exit buys nothing; the write is measured
- * at ~30 ms for 265 documents and `set` never throws.
- *
- * The parser is chosen by `keyed.parserKind`, which is the same value that went
- * into the key — that is the whole reason `readContentWithKey` takes the kind as
- * an argument rather than re-deriving it. Running the discriminator twice is how
- * the parse route and the key's parse-route component drift apart.
- *
- * ## Why the parameter is `ParsableContent` and not `KeyedContent`
- *
- * A `none` blob has no parser, so there is no honest answer this function could
- * give for one. Both alternatives to a type are worse: a throw turns a routing
- * fact into a runtime surprise, and an empty `ParseResult` fabricated here would
- * be indistinguishable from "a document with no links" at every consumer that
- * counts rows. Requiring the narrowed type moves the decision to the caller,
- * which is the only place that knows whether a blob with no parser is expected —
- * and makes forgetting to decide a compile error. `isParsableContent` in
- * content-key.ts is the narrowing.
- *
- * @param keyed - Content, key and byte length from ONE read, of a kind that has
- *   a parser
- * @param cache - The store to consult and file into
- * @returns Parse facts equal to what the parser would have produced
- */
-export async function parseKeyed(keyed: ParsableContent, cache: ParseCache): Promise<ParseResult> {
-  const hit = await cache.get(keyed);
-  if (hit !== null) {
-    // Feeds the sub-phase timing dump (`parse-timing.ts`), never this cache's
-    // own per-instance `ParseCacheStats`. Without it a dump from a fully warm
-    // run would show zero parse invocations and read as a dead seam.
-    recordParseCacheHit();
-    return hit;
-  }
-  recordParseCacheMiss();
-
-  // ⛔ Past the hit-path return, and it must stay there: this line is the ONLY
-  // reason a fully warm run loads no parser at all. Hoisting it — here, or into
-  // any caller's pre-loop — costs every warm invocation the ~730 ms remark load
-  // for a parse that never happens, and no test in this package can see that.
-  // It has regressed twice; see {@link loadParser}. A load failure is kept off
-  // the innocent documents by the error TYPE, not by this line's position.
-  //
-  // The parser is chosen by `keyed.parserKind` — the same value that went into
-  // the key.
-  const parser = await loadParser(keyed.parserKind);
-
-  // The `sizeBytes` argument is `keyed.byteLength` — the raw byte count of what
-  // was read — never a length derived from `keyed.content`, since decoding is
-  // lossy on malformed UTF-8 and a re-encoded count diverges from what is on
-  // disk (see link-parser.ts and content-key.ts).
-  const result = parser.parseContent(keyed.content, keyed.byteLength);
-
-  await cache.set(keyed, result);
-  return result;
-}
-
-/**
  * Process-wide cache instance for callers with nowhere to keep one.
  *
  * Lazy rather than constructed at module load: `ParseCache` reads `VAT_CACHE`
@@ -1092,62 +848,13 @@ export async function parseKeyed(keyed: ParsableContent, cache: ParseCache): Pro
 let sharedCache: ParseCache | undefined;
 
 /**
- * The cache {@link parseFileCached} uses when the caller supplies none.
+ * The cache `parseFileCached` (`parse-dispatcher.ts`) uses when the caller supplies none.
  *
  * @returns The process-wide instance, created on first use
  */
 export function defaultParseCache(): ParseCache {
   sharedCache ??= new ParseCache();
   return sharedCache;
-}
-
-/**
- * Read, key and parse a file, consulting the cache.
- *
- * The cached replacement for `parseMarkdown(path)` / `parseHtml(path)`: those
- * two read the file themselves and hand the bytes straight to a parser, so they
- * bypass the cache entirely. Every call site that does not go through
- * `ResourceRegistry` uses this instead.
- *
- * ⚠ `parserKind` states which parser runs — it is **not** derived from the
- * path, because at least one shipped caller deliberately parses `.html`
- * documents as markdown. Pass the kind you actually parse with, or the entry
- * lands under a key another lane will read (see content-key.ts).
- *
- * It is a {@link DocumentParserKind}, so `parserKindForPath(filePath)` is not
- * directly passable any more: that function can answer `none`, and this one has
- * no parser to run for it. A caller routing by path decides what to do with a
- * `none` blob first — see `parseKeyed`.
- *
- * One difference from `parseMarkdown`/`parseHtml`, deliberate: `sizeBytes` is
- * the length of the bytes this call read, not a separate `stat().size`. For a
- * regular file the two agree; where they can disagree — a file rewritten between
- * the read and the stat — the byte count of what was actually parsed is the
- * honest one, and it is also the number the key covers.
- *
- * @param filePath - Absolute path to the document
- * @param parserKind - The parser to hand the content to
- * @param options - `cache`: store to use, defaulting to the process-wide instance.
- *   `side`: which side of the calling verb the document is on — `source` (the
- *   default: an input the verb reads) or `destination` / `environment` when the
- *   caller re-reads VAT's own output or staging. Only the caller knows; this
- *   function never infers it from the path.
- * @returns The parse result, from an entry or from the parser
- * @throws `FsFaultError` on `side` (origin `content` for a source) when the OS
- *   refuses the read — the caller still decides what it means (`isPathAbsentError`
- *   and `fsFaultOf` read the errno down the `cause` chain) — and
- *   `TextTooLargeError` for a file too large to decode, as `readContentWithKey` does
- */
-export async function parseFileCached(
-  filePath: string,
-  parserKind: DocumentParserKind,
-  options: { cache?: ParseCache; side?: FsSide } = {},
-): Promise<ParseResult> {
-  const side = options.side ?? 'source';
-  const keyed = await withFsFault({ side, origin: 'content', action: `read ${filePath}`, path: filePath }, () =>
-    readContentWithKey(filePath, parserKind),
-  );
-  return parseKeyed(keyed, options.cache ?? defaultParseCache());
 }
 
 /**

@@ -81,13 +81,13 @@ async function testIgnoreWarnings(
 	const { skillPath } = createTransitiveSkillStructure(tempDir, {}, content);
 
 	const severity = Object.fromEntries(codes.map(c => [c, 'ignore' as const]));
-	return validateSkillForPackaging(skillPath, {
+	return validateSkillForPackaging(skillPath, {}, {
 		validation: { severity },
 	});
 }
 
 type AllowMap = NonNullable<
-	NonNullable<Parameters<typeof validateSkillForPackaging>[1]>['validation']
+	NonNullable<Parameters<typeof validateSkillForPackaging>[2]>['validation']
 >['allow'];
 
 /**
@@ -104,7 +104,7 @@ async function setupLongSkillAllowTest(
 		LONG_SKILL_BODY,
 	);
 	const { skillPath } = createTransitiveSkillStructure(tempDir, {}, content);
-	return validateSkillForPackaging(skillPath, { validation: { allow } });
+	return validateSkillForPackaging(skillPath, {}, { validation: { allow } });
 }
 
 describe('validateSkillForPackaging - Size validation', () => {
@@ -116,7 +116,7 @@ describe('validateSkillForPackaging - Size validation', () => {
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, content);
 
-		const result = await validateSkillForPackaging(skillPath);
+		const result = await validateSkillForPackaging(skillPath, {});
 
 		expect(result.summary.errors).toBe(0);
 		expect(activeErrorsOf(result)).toHaveLength(0);
@@ -130,7 +130,7 @@ describe('validateSkillForPackaging - Size validation', () => {
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, content);
 
-		const result = await validateSkillForPackaging(skillPath);
+		const result = await validateSkillForPackaging(skillPath, {});
 
 		// Size checks are warnings not errors — status is success
 		expect(result.summary.errors).toBe(0);
@@ -199,7 +199,7 @@ describe('validateSkillForPackaging - File count validation', () => {
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
 
-		const result = await validateSkillForPackaging(skillPath);
+		const result = await validateSkillForPackaging(skillPath, {});
 
 		expect(result.metadata.fileCount).toBe(6); // 5 refs + SKILL.md
 		expect(activeWarningsOf(result).filter((e) => e.code === 'SKILL_TOO_MANY_FILES')).toHaveLength(0);
@@ -222,7 +222,7 @@ describe('validateSkillForPackaging - File count validation', () => {
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
 
-		const result = await validateSkillForPackaging(skillPath);
+		const result = await validateSkillForPackaging(skillPath, {});
 
 		expect(result.summary.errors).toBe(0); // warnings don't fail the gate
 		expect(result.metadata.fileCount).toBe(8); // 7 refs + SKILL.md
@@ -244,7 +244,7 @@ describe('validateSkillForPackaging - Link depth validation', () => {
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
 
-		const result = await validateSkillForPackaging(skillPath);
+		const result = await validateSkillForPackaging(skillPath, {});
 
 		expect(result.metadata.maxLinkDepth).toBeLessThanOrEqual(2);
 		expect(activeWarningsOf(result).filter((e) => e.code === 'REFERENCE_TOO_DEEP')).toHaveLength(0);
@@ -255,7 +255,7 @@ describe('validateSkillForPackaging - Link depth validation', () => {
 
 		// With linkFollowDepth: 'full', all links are followed regardless of depth
 		const metadata = { linkFollowDepth: 'full' as const };
-		const result = await validateSkillForPackaging(skillPath, metadata as never);
+		const result = await validateSkillForPackaging(skillPath, {}, metadata as never);
 
 		expect(result.summary.errors).toBe(0); // warnings don't fail the gate
 		expect(result.metadata.maxLinkDepth).toBeGreaterThan(2);
@@ -267,7 +267,7 @@ describe('validateSkillForPackaging - Link depth validation', () => {
 		const { skillPath } = createThreeLevelChain(getTempDir());
 
 		// Default behavior: linkFollowDepth = 2, so level3.md is excluded
-		const result = await validateSkillForPackaging(skillPath);
+		const result = await validateSkillForPackaging(skillPath, {});
 
 		expect(result.summary.errors).toBe(0);
 		expect(result.metadata.maxLinkDepth).toBeLessThanOrEqual(2);
@@ -279,7 +279,7 @@ describe('validateSkillForPackaging - Link depth validation', () => {
 	it('should include reason detail in excludedReferences for depth-exceeded files', async () => {
 		const { skillPath } = createThreeLevelChain(getTempDir());
 
-		const result = await validateSkillForPackaging(skillPath);
+		const result = await validateSkillForPackaging(skillPath, {});
 
 		expect(result.metadata.excludedReferenceCount).toBe(1);
 		expect(result.metadata.excludedReferences).toHaveLength(1);
@@ -301,7 +301,7 @@ describe('validateSkillForPackaging - Navigation file detection', () => {
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
 
-		const result = await validateSkillForPackaging(skillPath);
+		const result = await validateSkillForPackaging(skillPath, {});
 
 		// Navigation file links are warnings, not errors
 		expect(result.summary.errors).toBe(0);
@@ -359,7 +359,7 @@ describe('validateSkillForPackaging - Reserved word in name', () => {
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, content);
 
-		const result = await validateSkillForPackaging(skillPath);
+		const result = await validateSkillForPackaging(skillPath, {});
 
 		const issue = activeWarningsOf(result).find((e) => e.code === 'RESERVED_WORD_IN_NAME');
 		expect(issue).toBeDefined();
@@ -376,7 +376,7 @@ describe('validateSkillForPackaging - Reserved word in name', () => {
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, content);
 
-		const result = await validateSkillForPackaging(skillPath);
+		const result = await validateSkillForPackaging(skillPath, {});
 
 		const issue = result.allErrors.find((e) => e.code === 'RESERVED_WORD_IN_NAME');
 		expect(issue).toBeUndefined();
@@ -395,7 +395,7 @@ describe('validateSkillForPackaging - Description validation', () => {
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, content);
 
-		const result = await validateSkillForPackaging(skillPath);
+		const result = await validateSkillForPackaging(skillPath, {});
 
 		const descWarn = activeWarningsOf(result).find((e) => e.code === 'DESCRIPTION_TOO_VAGUE');
 		expect(descWarn).toBeUndefined();
@@ -409,7 +409,7 @@ describe('validateSkillForPackaging - Description validation', () => {
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, content);
 
-		const result = await validateSkillForPackaging(skillPath);
+		const result = await validateSkillForPackaging(skillPath, {});
 
 		// Description warning — status is still success
 		expect(result.summary.errors).toBe(0);
@@ -423,7 +423,7 @@ describe('validateSkillForPackaging - Description validation', () => {
 		const content = createSkillContent({ name: TEST_SKILL_NAME }, SKILL_HEADER_NO_TRAILING);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, content);
 
-		const result = await validateSkillForPackaging(skillPath);
+		const result = await validateSkillForPackaging(skillPath, {});
 
 		// Missing description is handled by existing validator, not packaging validator
 		const descWarn = activeWarningsOf(result).find((e) => e.code === 'DESCRIPTION_TOO_VAGUE');
@@ -506,7 +506,7 @@ async function findTimeSensitiveIssue(
 		bodyText,
 	);
 	const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
-	const result = await validateSkillForPackaging(skillPath);
+	const result = await validateSkillForPackaging(skillPath, {});
 	const allIssues = [...activeErrorsOf(result), ...activeWarningsOf(result), ...result.allErrors];
 	return allIssues.find((e) => e.code === 'SKILL_TIME_SENSITIVE_CONTENT');
 }
@@ -540,7 +540,7 @@ async function findNonPortableAssetIssue(
 		bodyText,
 	);
 	const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
-	const result = await validateSkillForPackaging(skillPath);
+	const result = await validateSkillForPackaging(skillPath, {});
 	const allIssues = [...activeErrorsOf(result), ...activeWarningsOf(result), ...result.allErrors];
 	return allIssues.find((e) => e.code === 'NON_PORTABLE_ASSET_REFERENCE');
 }
@@ -759,7 +759,7 @@ describe('validateSkillForPackaging - Non-portable asset references', () => {
 			'\n# Test Skill\n\nSee [toolbox](./toolbox.md).',
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
-		const result = await validateSkillForPackaging(skillPath);
+		const result = await validateSkillForPackaging(skillPath, {});
 		const allIssues = [...activeErrorsOf(result), ...activeWarningsOf(result), ...result.allErrors];
 		const issue = allIssues.find((e) => e.code === 'NON_PORTABLE_ASSET_REFERENCE');
 		expect(issue).toBeDefined();
@@ -779,7 +779,7 @@ async function findNonPortableCommandIssue(
 		bodyText,
 	);
 	const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
-	const result = await validateSkillForPackaging(skillPath);
+	const result = await validateSkillForPackaging(skillPath, {});
 	const allIssues = [...activeErrorsOf(result), ...activeWarningsOf(result), ...result.allErrors];
 	return allIssues.find((e) => e.code === 'NON_PORTABLE_COMMAND');
 }
@@ -856,7 +856,7 @@ describe('validateSkillForPackaging - Non-portable commands', () => {
 			'\n# Test Skill\n\nSee [toolbox](./toolbox.md).',
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
-		const result = await validateSkillForPackaging(skillPath);
+		const result = await validateSkillForPackaging(skillPath, {});
 		const allIssues = [...activeErrorsOf(result), ...activeWarningsOf(result), ...result.allErrors];
 		const issue = allIssues.find((e) => e.code === 'NON_PORTABLE_COMMAND');
 		expect(issue).toBeDefined();
@@ -877,7 +877,7 @@ describe('validateSkillForPackaging - Progressive disclosure validation', () => 
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
 
-		const result = await validateSkillForPackaging(skillPath);
+		const result = await validateSkillForPackaging(skillPath, {});
 
 		// Should have SKILL_LENGTH_EXCEEDS_RECOMMENDED but not NO_PROGRESSIVE_DISCLOSURE
 		const pdWarn = activeWarningsOf(result).find((e) => e.code === 'NO_PROGRESSIVE_DISCLOSURE');
@@ -972,7 +972,7 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 		futureDate.setFullYear(futureDate.getFullYear() + 1);
 		const futureDateStr = futureDate.toISOString().split('T')[0];
 
-		const result = await validateSkillForPackaging(skillPath, {
+		const result = await validateSkillForPackaging(skillPath, {}, {
 			validation: {
 				allow: {
 					SKILL_LENGTH_EXCEEDS_RECOMMENDED: [{ paths: ['**'], reason: 'Time-limited exception', expires: futureDateStr }],
@@ -1004,7 +1004,7 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
 
-		const result = await validateSkillForPackaging(skillPath, {
+		const result = await validateSkillForPackaging(skillPath, {}, {
 			validation: { severity },
 		});
 
@@ -1031,7 +1031,7 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 			'\n# Test Skill\n\nSee [shared](../shared.md).',
 		));
 
-		const result = await validateSkillForPackaging(skillPath, { validation: { severity } });
+		const result = await validateSkillForPackaging(skillPath, {}, { validation: { severity } });
 
 		const boundary = result.allErrors.filter(e => e.code === 'LINK_OUTSIDE_SKILL_DIR');
 		expect(boundary.map(e => e.severity)).toEqual(expectedSeverities);
@@ -1055,7 +1055,7 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
 
 		// A navigational link to an existing directory is valid — no error, no allow needed.
-		const result = await validateSkillForPackaging(skillPath);
+		const result = await validateSkillForPackaging(skillPath, {});
 
 		expect(activeErrorsOf(result).map(e => e.code)).not.toContain('LINK_TARGETS_DIRECTORY');
 	});
@@ -1074,7 +1074,7 @@ describe('validateSkillForPackaging - Metadata reporting', () => {
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
 
-		const result = await validateSkillForPackaging(skillPath);
+		const result = await validateSkillForPackaging(skillPath, {});
 
 		expect(result.metadata.skillLines).toBeGreaterThan(300);
 		expect(result.metadata.totalLines).toBeGreaterThan(400);
@@ -1100,7 +1100,7 @@ describe('validateSkillForPackaging - Metadata reporting', () => {
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
 
-		const result = await validateSkillForPackaging(skillPath);
+		const result = await validateSkillForPackaging(skillPath, {});
 
 		expect(result.metadata.fileCount).toBe(3); // SKILL.md + ref1.md + ref2.md
 		expect(result.metadata.directFileCount).toBe(2); // ref1.md + ref2.md, not 6 link occurrences
@@ -1115,7 +1115,7 @@ describe('validateSkillForPackaging - Metadata reporting', () => {
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, content);
 
-		const result = await validateSkillForPackaging(skillPath);
+		const result = await validateSkillForPackaging(skillPath, {});
 
 		expect(result.skillName).toBe('my-awesome-skill');
 	});
@@ -1128,7 +1128,7 @@ describe('validateSkillForPackaging - Metadata reporting', () => {
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, content);
 
-		const result = await validateSkillForPackaging(skillPath);
+		const result = await validateSkillForPackaging(skillPath, {});
 
 		expect(result.skillName).toBe('My H1 Title');
 	});
@@ -1162,7 +1162,7 @@ async function expectFilesConfigError(
 	files: Array<{ source: string; dest: string }>,
 	code: string,
 ): Promise<ValidationIssue | undefined> {
-	const result = await validateSkillForPackaging(skillPath, { files });
+	const result = await validateSkillForPackaging(skillPath, {}, { files });
 	expect(result.summary.errors).toBeGreaterThan(0);
 	const issue = activeErrorsOf(result).find(e => e.code === code);
 	expect(issue).toBeDefined();
@@ -1188,7 +1188,7 @@ describe('validateSkillForPackaging - Files config validation', () => {
 	it('should pass validation when files config dests are unique', async () => {
 		const skillPath = createMinimalSkill(getTempDir());
 
-		const result = await validateSkillForPackaging(skillPath, {
+		const result = await validateSkillForPackaging(skillPath, {}, {
 			files: [
 				{ source: 'a.md', dest: FILES_DEST_A },
 				{ source: 'b.md', dest: FILES_DEST_B },
@@ -1202,7 +1202,7 @@ describe('validateSkillForPackaging - Files config validation', () => {
 	it('should pass validation when files config is empty', async () => {
 		const skillPath = createMinimalSkill(getTempDir());
 
-		const result = await validateSkillForPackaging(skillPath, { files: [] });
+		const result = await validateSkillForPackaging(skillPath, {}, { files: [] });
 
 		const dupError = activeErrorsOf(result).find(e => e.code === DUPLICATE_FILES_DEST_CODE);
 		expect(dupError).toBeUndefined();
@@ -1211,7 +1211,7 @@ describe('validateSkillForPackaging - Files config validation', () => {
 	it('should detect multiple duplicate dests', async () => {
 		const skillPath = createMinimalSkill(getTempDir());
 
-		const result = await validateSkillForPackaging(skillPath, {
+		const result = await validateSkillForPackaging(skillPath, {}, {
 			files: [
 				{ source: 'a.md', dest: FILES_DEST_A },
 				{ source: 'b.md', dest: FILES_DEST_A },
@@ -1259,7 +1259,7 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 		fs.chmodSync(guide, 0o000);
 
 		try {
-			const result = await validateSkillForPackaging(skillPath, {} as never);
+			const result = await validateSkillForPackaging(skillPath, {}, {} as never);
 
 			const unreadable = activeErrorsOf(result).filter((issue: ValidationIssue) => issue.code === 'LINK_TARGET_UNREADABLE');
 			expect(unreadable, JSON.stringify(result.allErrors)).toHaveLength(1);
@@ -1274,7 +1274,7 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 		const { skillPath } = createThreeLevelChain(getTempDir());
 
 		const metadata = { linkFollowDepth: 1 };
-		const result = await validateSkillForPackaging(skillPath, metadata as never);
+		const result = await validateSkillForPackaging(skillPath, {}, metadata as never);
 
 		// Only level1.md should be bundled (depth 1), level2.md excluded at depth boundary
 		expect(result.metadata.fileCount).toBe(2); // SKILL.md + level1.md
@@ -1301,7 +1301,7 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 				],
 			},
 		};
-		const result = await validateSkillForPackaging(skillPath, metadata as never);
+		const result = await validateSkillForPackaging(skillPath, {}, metadata as never);
 
 		// guide.md bundled, internal/notes.md excluded by pattern
 		expect(result.metadata.fileCount).toBe(2); // SKILL.md + guide.md
@@ -1325,7 +1325,7 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
 
 		// No metadata at all - should use default depth of 2
-		const result = await validateSkillForPackaging(skillPath);
+		const result = await validateSkillForPackaging(skillPath, {});
 
 		// Both level1.md and level2.md should be bundled (within depth 2)
 		expect(result.metadata.fileCount).toBe(3); // SKILL.md + level1.md + level2.md
@@ -1351,7 +1351,7 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 		// the drop is no longer SILENT. The directory does not travel, so the
 		// packaged link points at nothing, and the whole path (walker → engine →
 		// issue lane) must surface that as a warning rather than swallowing it.
-		const result = await validateSkillForPackaging(skillPath);
+		const result = await validateSkillForPackaging(skillPath, {});
 
 		expect(activeErrorsOf(result).map(e => e.code)).not.toContain('LINK_TARGETS_DIRECTORY');
 		expect(activeWarningsOf(result).map(e => e.code)).toContain('LINK_TO_UNBUNDLED_DIRECTORY');
@@ -1372,7 +1372,7 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 
 		// depth=0 means no links followed
 		const metadata = { linkFollowDepth: 0 };
-		const result = await validateSkillForPackaging(skillPath, metadata as never);
+		const result = await validateSkillForPackaging(skillPath, {}, metadata as never);
 
 		// fileCount=1 (SKILL.md only), directFileCount should NOT exceed fileCount
 		expect(result.metadata.fileCount).toBe(1);
@@ -1391,7 +1391,7 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
 
 		const metadata = { linkFollowDepth: 0 };
-		const result = await validateSkillForPackaging(skillPath, metadata as never);
+		const result = await validateSkillForPackaging(skillPath, {}, metadata as never);
 
 		// Only SKILL.md should be bundled, reference.md excluded
 		expect(result.metadata.fileCount).toBe(1); // SKILL.md only
@@ -1416,9 +1416,9 @@ describe('validateSkillForPackaging - gitignored files: source (validate path)',
 
 		const result = await validateSkillForPackaging(
 			skillPath,
-			{ files: [{ source: gitIgnoredSrc, dest: 'config/secret.env' }] },
+			{}, { files: [{ source: gitIgnoredSrc, dest: 'config/secret.env' }] },
 			'source',
-			{ unreadable: 'refuse', outputs: [], gitTracker: tracker as Parameters<typeof validateSkillForPackaging>[3] extends { gitTracker?: infer T } ? T : never },
+			{ unreadable: 'refuse', outputs: [], gitTracker: tracker as Parameters<typeof validateSkillForPackaging>[4] extends { gitTracker?: infer T } ? T : never },
 		);
 
 		// No warning for a gitignored source — the files: entry is the declaration of intent.
@@ -1438,7 +1438,7 @@ describe('validateSkillForPackaging - deferred dest links (files: config)', () =
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
 
-		const result = await validateSkillForPackaging(skillPath, {
+		const result = await validateSkillForPackaging(skillPath, {}, {
 			files: [{ source: 'dist/cli.mjs', dest: DEFERRED_DEST }],
 		});
 
@@ -1474,7 +1474,7 @@ async function setupMixedSeverityResult(tempDir: string): Promise<PackagingValid
 		`${SKILL_HEADER}See [gone](./gone.md).\n\n${LINE_CONTENT.repeat(550)}`,
 	);
 	const { skillPath } = createTransitiveSkillStructure(tempDir, {}, content);
-	return validateSkillForPackaging(skillPath, {
+	return validateSkillForPackaging(skillPath, {}, {
 		validation: { severity: { DESCRIPTION_TOO_VAGUE: 'info' } },
 	});
 }
@@ -1551,7 +1551,7 @@ async function validateWithExtras(
 		{ [`${EXTRAS_SRC_DIR}/keep.json`]: '{}\n', [EXTRAS_README_SOURCE]: '# extras\n' },
 		skillContent,
 	);
-	return validateSkillForPackaging(skillPath, { files });
+	return validateSkillForPackaging(skillPath, {}, { files });
 }
 
 describe('glob files: drops are reported before any build', () => {

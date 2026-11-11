@@ -37,10 +37,14 @@ import {
   setupRefusedSkillFixture,
   writeSkill,
 } from './refused-skill-fixture.js';
+import { useSuiteParseDispatcher } from './test-helpers.js';
 
 const LOCKED_SKILL = 'skills/locked-file/SKILL.md';
 
 const getFixture = setupRefusedSkillFixture('vat-analyzer-unchecked-');
+
+/** One dispatcher for the whole file, as `vat audit` holds one for a run. */
+const parseDispatcher = useSuiteParseDispatcher();
 
 /** The files (root-relative) the analyzer found `allowed-tools: Bash` in, each once. */
 function bashEvidenceFiles(result: CompatibilityResult): string[] {
@@ -58,7 +62,7 @@ describe('analyzeCompatibility — skills reached through a symlink', () => {
     await linkSharedSkills(cap, getFixture());
     const { pluginDir } = getFixture();
 
-    const result = await analyzeCompatibility(pluginDir, pluginDir);
+    const result = await analyzeCompatibility(pluginDir, pluginDir, parseDispatcher());
 
     expect(bashEvidenceFiles(result)).toEqual(LINKED_SKILL_FILES);
     expect(result.fileCounts.skillFiles).toBe(2);
@@ -70,7 +74,7 @@ describe('analyzeCompatibility — skills reached through a symlink', () => {
     await linkCycle(cap, getFixture());
     const { pluginDir } = getFixture();
 
-    const result = await analyzeCompatibility(pluginDir, pluginDir);
+    const result = await analyzeCompatibility(pluginDir, pluginDir, parseDispatcher());
 
     const files = result.evidence.map((e) => e.location.file);
     expect(files.length).toBeGreaterThan(0);
@@ -86,7 +90,7 @@ describe.skipIf(CANNOT_DENY_READS)('analyzeCompatibility — a path the filesyst
     const lockedFile = await writeSkill(safePath.join(pluginDir, SKILLS, 'locked-file'), BASH_SKILL('locked-file'));
     await getFixture().lock(lockedFile);
 
-    const result = await analyzeCompatibility(pluginDir, pluginDir);
+    const result = await analyzeCompatibility(pluginDir, pluginDir, parseDispatcher());
 
     expect(bashEvidenceFiles(result)).toContain(PLAIN_SKILL);
     expect(bashEvidenceFiles(result)).not.toContain(LOCKED_SKILL);
@@ -107,7 +111,7 @@ describe.skipIf(CANNOT_DENY_READS)('analyzeCompatibility — a path the filesyst
     await writeSkill(lockedDir, BASH_SKILL('locked'));
     await getFixture().lock(lockedDir);
 
-    const result = await analyzeCompatibility(pluginDir, pluginDir);
+    const result = await analyzeCompatibility(pluginDir, pluginDir, parseDispatcher());
 
     expect(bashEvidenceFiles(result)).toContain(PLAIN_SKILL);
     const unchecked = result.unchecked.find((u) => u.path === 'skills/locked-dir');
@@ -119,7 +123,7 @@ describe.skipIf(CANNOT_DENY_READS)('analyzeCompatibility — a path the filesyst
   it('anchors `unchecked[].path` at `locationRoot`, like every evidence location', async () => {
     const { root, pluginDir } = getFixture();
 
-    const result = await analyzeCompatibility(pluginDir, root);
+    const result = await analyzeCompatibility(pluginDir, root, parseDispatcher());
 
     expect(result.unchecked.map((u) => u.path).sort((a, b) => a.localeCompare(b))).toEqual([
       'plugin/skills/locked-dir',
@@ -135,12 +139,30 @@ describe('analyzeCompatibility — a file the analyzer cannot parse', () => {
     await writeSkill(safePath.join(pluginDir, SKILLS, 'plain'), BASH_SKILL('plain'));
     await fs.writeFile(safePath.join(pluginDir, 'hooks.json'), '{ not json', 'utf-8');
 
-    const result = await analyzeCompatibility(pluginDir, pluginDir);
+    const result = await analyzeCompatibility(pluginDir, pluginDir, parseDispatcher());
 
     expect(bashEvidenceFiles(result)).toContain(PLAIN_SKILL);
     const unchecked = result.unchecked.find((u) => u.path === 'hooks.json');
     expect(unchecked?.reason).toMatch(/JSON/);
     expect(result.fileCounts.hookFiles).toBe(0);
+  });
+
+  it('lists a SKILL.md whose frontmatter parse was refused under `unchecked`, never as declaring no tools', async () => {
+    const { root } = getFixture();
+    const plugin = safePath.join(root, 'refused-parse-plugin');
+    const depth = 50_000;
+    await fs.mkdir(safePath.join(plugin, '.claude-plugin'), { recursive: true });
+    await fs.writeFile(safePath.join(plugin, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'refused-parse' }), 'utf-8');
+    await writeSkill(
+      safePath.join(plugin, SKILLS, 'deep'),
+      `---\nname: deep\ndescription: d\nallowed-tools: [Bash]\nnested: ${'['.repeat(depth)}${']'.repeat(depth)}\n---\n\nBody.\n`,
+    );
+
+    const result = await analyzeCompatibility(plugin, plugin, parseDispatcher());
+
+    expect(result.unchecked.map((u) => u.path)).toEqual(['skills/deep/SKILL.md']);
+    expect(result.unchecked[0]?.reason).toMatch(/limit/);
+    expect(result.fileCounts.skillFiles).toBe(0);
   });
 
   it('reports nothing unchecked for a plugin whose every file it read', async () => {
@@ -150,7 +172,7 @@ describe('analyzeCompatibility — a file the analyzer cannot parse', () => {
     await fs.writeFile(safePath.join(clean, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'clean' }), 'utf-8');
     await writeSkill(safePath.join(clean, SKILLS, 'a'), BASH_SKILL('a'));
 
-    const result = await analyzeCompatibility(clean, clean);
+    const result = await analyzeCompatibility(clean, clean, parseDispatcher());
 
     expect(bashEvidenceFiles(result)).toEqual(['skills/a/SKILL.md']);
     expect(result.unchecked).toEqual([]);

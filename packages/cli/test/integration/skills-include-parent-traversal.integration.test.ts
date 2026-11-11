@@ -43,7 +43,7 @@ async function discoveredNames(
   exclude?: string[],
 ): Promise<string[]> {
   const config = (exclude ? { include, exclude } : { include }) as SkillsConfig;
-  const skills = await discoverSkillsFromConfig(config, projectRoot, 'refuse');
+  const { skills } = await discoverSkillsFromConfig(config, projectRoot, 'refuse');
   return skills.map(s => s.name).sort((a, b) => a.localeCompare(b));
 }
 

@@ -28,7 +28,7 @@ describe('validateSkill', () => {
   });
 
   it('should return error when file does not exist', async () => {
-    const result = await validateSkill({ side: 'source', skillPath: '/nonexistent/path/SKILL.md', validation: {} });
+    const result = await validateSkill({ resourcesValidation: {}, side: 'source', skillPath: '/nonexistent/path/SKILL.md', validation: {} });
 
     expect(result.summary.errors).toBeGreaterThan(0);
     expect(result.type).toBe('agent-skill');
@@ -228,7 +228,7 @@ describe('compat detectors in validateSkill', () => {
         '',
       ].join('\n'),
     );
-    const result = await validateSkill({ side: 'source', skillPath, validation: {} });
+    const result = await validateSkill({ resourcesValidation: {}, side: 'source', skillPath, validation: {} });
     expect(result.issues.some(i => i.code === 'CAPABILITY_BROWSER_AUTH')).toBe(true);
   });
 
@@ -258,7 +258,7 @@ describe('compat detectors in validateSkill', () => {
         '',
       ].join('\n'),
     );
-    const result = await validateSkill({ side: 'source', skillPath, validation: {} });
+    const result = await validateSkill({ resourcesValidation: {}, side: 'source', skillPath, validation: {} });
     const linked = result.linkedFiles?.find(lf => lf.path.endsWith('cli.md'));
     expect(linked).toBeDefined();
     expect(linked?.issues.some(i => i.code === 'CAPABILITY_EXTERNAL_CLI')).toBe(true);
@@ -278,7 +278,7 @@ describe('compat detectors in validateSkill', () => {
 describe('validateSkill on a frontmatter block that is not a mapping', () => {
   const { getTempDir } = setupTempDir('skill-validator-non-mapping-');
 
-  for (const block of ['', '~', 'hello', '- a']) {
+  for (const block of ['', '~', 'hello', '- a', '!!set\n? a', '!!timestamp 2024-01-01']) {
     it(`reports SKILL_MISSING_FRONTMATTER for ${JSON.stringify(block)} instead of throwing`, async () => {
       const result = await createSkillAndValidate(getTempDir(), `---\n${block}\n---\n# x\n`);
 

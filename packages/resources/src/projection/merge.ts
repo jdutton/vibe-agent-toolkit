@@ -73,11 +73,12 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
+import { type ParseDispatcher, withParseDispatcher } from '../parse-dispatcher.js';
 import type { CollectionConfig } from '../schemas/project-config.js';
 import type { RealizationConditionRow, ResourceRealizationRow } from '../schemas/projection-resources.js';
 import type { JsonValue } from '../schemas/projection-shared.js';
 
-import { populateBlobs, storableBlobFacts } from './blob-population.js';
+import { PARSE_REFUSAL_BLOB_CODES, populateBlobs, storableBlobFacts } from './blob-population.js';
 import { RunContentCache } from './content-cache.js';
 import type { ContributorRegistry, ExtentContribution, ExtentContributor } from './contributor.js';
 import {
@@ -89,8 +90,9 @@ import { crawlSourceSelector } from './crawl-source.js';
 import { canonicalJson, extentDigest } from './digest.js';
 import {
   assertHarnessSettled,
+  dispatcherHarnessFacts,
   diskHarnessContentReader,
-  harnessSettled,
+  harnessUnsettledKeys,
   runHarnessPass,
 } from './harness/harness-pass.js';
 import { HARNESS_PROFILES, type HarnessProfile } from './harness/profile.js';
@@ -103,11 +105,11 @@ import {
 } from './realizations.js';
 import {
   assembleProjection,
-  blobFactsCover,
   emptyBlobRows,
   keyedContentKeys,
   selectRequestedContexts,
   selectRequestedRows,
+  uncoveredContentKeys,
   type RequestedContributor,
 } from './store-hydration.js';
 import {
@@ -390,10 +392,51 @@ export interface PopulationCache {
  * - `skipped-tree-changed` — derived, and the extent was NOT filed because the
  *   tree moved during the run (see {@link PopulationCache.treeUnchanged}).
  * - `no-store` — derived, with no store to read or write.
+ *
+ * A derived run also carries `storeMiss` when the store held this population's
+ * extent and missed only because of pairs this run refused — see {@link StoreMiss}.
  */
 export type PopulationOutcome =
   | { readonly population: 'store'; readonly stored: 'hit' }
-  | { readonly population: 'derived'; readonly stored: 'written' | 'skipped-tree-changed' | 'no-store' };
+  | {
+    readonly population: 'derived';
+    readonly stored: 'written' | 'skipped-tree-changed' | 'no-store';
+    readonly storeMiss?: StoreMiss;
+  };
+
+/**
+ * A store miss a refusal caused, counted (ADR I10: misses are counted and named).
+ *
+ * A refused parse is filed nowhere (I6), so its key — or its `(blob, harness)`
+ * pair — is held by no store, and while the refusal persists the store can
+ * never serve the population: every run re-derives all of it. That cost is
+ * allowed only when it is visible, so the run that pays it says so.
+ */
+export interface StoreMiss {
+  /** The pairs the store lacked that this run refused again. */
+  readonly refusedPairs: number;
+}
+
+/**
+ * @param outcome - What `populate` said about the run
+ * @returns The store miss a refusal caused it, if one did
+ */
+export function storeMissOf(outcome: PopulationOutcome): StoreMiss | undefined {
+  return outcome.population === 'derived' ? outcome.storeMiss : undefined;
+}
+
+/**
+ * The sentence a run whose store miss a refusal caused reports it with.
+ *
+ * @param storeMiss - The run's {@link storeMissOf}
+ * @returns The sentence, or `undefined` when no refusal cost the store a hit
+ */
+export function describeStoreMiss(storeMiss: StoreMiss | undefined): string | undefined {
+  if (storeMiss === undefined) return undefined;
+  const count = storeMiss.refusedPairs;
+  const noun = count === 1 ? 'pair is' : 'pairs are';
+  return `store miss: ${String(count)} refused ${noun} held by no store, so the whole population was re-derived; it is re-derived on every run while the refusal persists`;
+}
 
 /**
  * Each `population` value, keyed so the compiler checks the list against
@@ -418,8 +461,25 @@ export const POPULATION_ORIGINS = Object.keys(POPULATION_ORIGIN_SET) as [
  * @param stored - What the run did with the store
  * @returns The outcome, with `population` derived from `stored`
  */
-function populationOutcome(stored: PopulationOutcome['stored']): PopulationOutcome {
-  return stored === 'hit' ? { population: 'store', stored } : { population: 'derived', stored };
+function populationOutcome(stored: PopulationOutcome['stored'], storeMiss?: StoreMiss): PopulationOutcome {
+  if (stored === 'hit') return { population: 'store', stored };
+  return storeMiss === undefined ? { population: 'derived', stored } : { population: 'derived', stored, storeMiss };
+}
+
+/**
+ * How many of the pairs a store lacked this derivation refused again.
+ *
+ * @param missed - One content key per pair the store lacked
+ * @param projection - What this run derived
+ * @returns The count, or `undefined` when no refusal explains the miss
+ */
+function storeMissFor(missed: readonly string[], projection: Projection): StoreMiss | undefined {
+  if (missed.length === 0) return undefined;
+  const refused = new Set(
+    projection.blobConditions.filter((row) => PARSE_REFUSAL_BLOB_CODES.has(row.code)).map((row) => row.blob),
+  );
+  const refusedPairs = missed.filter((key) => refused.has(key)).length;
+  return refusedPairs === 0 ? undefined : { refusedPairs };
 }
 
 /**
@@ -545,7 +605,7 @@ export class ClosureNonConvergenceError extends VatError {
  * @throws Whatever a contributor throws — failures propagate unwrapped
  */
 export async function populate(options: PopulateOptions): Promise<PopulateResult> {
-  const { root, registry, parameters, maxIterations = DEFAULT_MAX_ITERATIONS } = options;
+  const { root } = options;
 
   // Resolved BEFORE anything else, and deliberately before the cache is asked:
   // it refuses an unsound `'skip'` request by throwing, and a run that would
@@ -565,10 +625,51 @@ export async function populate(options: PopulateOptions): Promise<PopulateResult
   // {@link PopulationCache} on why the caller does not supply it.
   const rootId = rootIdFor(root);
   const cached = await readCachedProjection(options, rootId, parseContent, routing);
-  if (cached !== undefined) {
-    return { projection: cached, outcome: populationOutcome('hit') };
+  if ('hit' in cached) {
+    return { projection: cached.hit, outcome: populationOutcome('hit') };
   }
 
+  // ONE dispatcher for the run — the blob stage's parses, the post-promotion
+  // re-run's, and every harness pass's memory-file reads share its one pool —
+  // shut down however the derivation ends. Built lazily: a run that parses
+  // nothing starts no worker.
+  const projection = await withParseDispatcher(
+    (dispatcher) => deriveProjection(options, { parseContent, routing, dispatcher }),
+  );
+  const stored = await writeCachedProjection(options, rootId, parseContent, projection, routing);
+  return { projection, outcome: populationOutcome(stored, storeMissFor(cached.missed, projection)) };
+}
+
+/**
+ * What the store answered: the population, or the pairs it lacked — one content
+ * key per pair, empty when it held no extent for this question at all.
+ */
+type CachedRead = { readonly hit: Projection } | { readonly missed: readonly string[] };
+
+/** A store that held nothing for this question. */
+const NOTHING_HELD: CachedRead = { missed: [] };
+
+/** What {@link populate} decided before deriving, and the run's one dispatcher. */
+interface DerivationRun {
+  /** Whether this run reads and parses content. */
+  readonly parseContent: boolean;
+  /** The run's parse routing. */
+  readonly routing: CollectionMimeResolver;
+  /** The run's dispatcher: every parse, and every harness's memory-file read. */
+  readonly dispatcher: ParseDispatcher;
+}
+
+/**
+ * Derive the projection: every contributor, the blob stage, the harness passes
+ * and the closure fixpoint, into one builder — {@link populate} on a store miss.
+ *
+ * @param options - The run's options
+ * @param run - The run's parse decision, routing and dispatcher
+ * @returns The frozen projection
+ */
+async function deriveProjection(options: PopulateOptions, run: DerivationRun): Promise<Projection> {
+  const { root, registry, parameters, maxIterations = DEFAULT_MAX_ITERATIONS } = options;
+  const { parseContent, routing, dispatcher } = run;
   // Constructed here and nowhere else, so its lifetime is exactly this run's.
   // A module-level cache would leak bytes across two populations in one process
   // — including two populations of a tree that changed in between, which would
@@ -620,7 +721,7 @@ export async function populate(options: PopulateOptions): Promise<PopulateResult
   //
   // Nothing observes the stage's counters: what a user is told about refused
   // content is read from the rows it writes, which a store hit returns too.
-  if (parseContent) await runBlobStage(builder);
+  if (parseContent) await runBlobStage(builder, dispatcher);
   const attemptsBeforeClosure = builder.contentPromotionAttempts;
 
   // The harness facts, LAZILY: derived only for what a harness reaches. Before
@@ -629,7 +730,7 @@ export async function populate(options: PopulateOptions): Promise<PopulateResult
   // every fixpoint iteration, because a declared closure's members arrive
   // there; and once more after the promotion, which can key a reachable path.
   // Under `'skip'` no blob has a `blobs` row, so there is nothing to reach.
-  const harness = harnessStageFor(builder);
+  const harness = harnessStageFor(builder, dispatcher);
   await harness.run();
 
   await iterateClosure(
@@ -641,7 +742,7 @@ export async function populate(options: PopulateOptions): Promise<PopulateResult
     options.onContributorTiming,
   );
 
-  if (parseContent) await afterClosurePromotion(builder, attemptsBeforeClosure);
+  if (parseContent) await afterClosurePromotion(builder, attemptsBeforeClosure, dispatcher);
   await harness.run();
   // A reached blob with no facts after the last pass is a producer bug: every
   // strict reader of this projection would throw on it later, far from here.
@@ -660,9 +761,7 @@ export async function populate(options: PopulateOptions): Promise<PopulateResult
   // Before `build()`, because a frozen projection takes no more rows.
   recordMimeConflicts(builder, routing);
 
-  const projection = builder.build();
-  const stored = await writeCachedProjection(options, rootId, parseContent, projection, routing);
-  return { projection, outcome: populationOutcome(stored) };
+  return builder.build();
 }
 
 /**
@@ -848,16 +947,17 @@ export function requestedContributors(options: PopulateOptions): readonly Reques
  * @param rootId - This run's corpus root id
  * @param parseContent - Whether this run reads and parses content at all
  * @param routing - The run's parse routing, whose fingerprint is part of the key
- * @returns The hydrated projection, or `undefined` on any kind of miss
+ * @returns The hydrated projection, or the pairs it lacked on a miss — so a
+ *   miss a refusal caused can be counted (ADR I10)
  */
 async function readCachedProjection(
   options: PopulateOptions,
   rootId: string,
   parseContent: boolean,
   routing: CollectionMimeResolver,
-): Promise<Projection | undefined> {
+): Promise<CachedRead> {
   const cache = options.cache;
-  if (cache === undefined) return undefined;
+  if (cache === undefined) return NOTHING_HELD;
 
   const extent = await readStoredExtent(
     options,
@@ -865,27 +965,29 @@ async function readCachedProjection(
     routing,
     requestedContributors(options),
   );
-  if (extent === undefined) return undefined;
+  if (extent === undefined) return NOTHING_HELD;
 
   // A run that declined to derive the blob tier must also decline to read it
   // back, or a hit would hand it four tables a populate would have left empty
   // — and `'skip'` is a claim about what the caller reads, so honouring it on
   // both paths is what keeps hydrated and populated indistinguishable.
-  if (!parseContent) return assembleProjection(extent, emptyBlobRows());
+  if (!parseContent) return { hit: assembleProjection(extent, emptyBlobRows()) };
 
   const contentKeys = keyedContentKeys(extent);
   const blobs = await cache.store.readBlobFacts(contentKeys);
   // See `store-hydration.ts`: an extent written by a run that skipped blob
   // derivation names keys the blob tier does not hold, and accepting it would
   // reduce every closure extent to its own root while reporting success.
-  if (!blobFactsCover(blobs, contentKeys)) return undefined;
+  const uncovered = uncoveredContentKeys(blobs, contentKeys);
+  if (uncovered.length > 0) return { missed: uncovered };
 
   // The harness facts are derived lazily and stored per `(blob, harness)`, so
   // a blob tier that covers every key can still lack a reached blob's facts —
   // another root's run filed those bytes without reaching them. Served, that
   // absence would throw at the first strict reader; a miss re-derives it.
   const projection = assembleProjection(extent, blobs);
-  return harnessSettled(projection, HARNESS_PROFILE_LIST) ? projection : undefined;
+  const unsettled = harnessUnsettledKeys(projection, HARNESS_PROFILE_LIST);
+  return unsettled.length === 0 ? { hit: projection } : { missed: unsettled };
 }
 
 /**
@@ -1133,10 +1235,11 @@ function contentParsingFor(options: PopulateOptions): boolean {
  * see `CRAWL_BLOB_POPULATE_ID`.
  *
  * @param builder - The builder to derive into
+ * @param dispatcher - The run's dispatcher
  */
-async function runBlobStage(builder: ProjectionBuilder): Promise<void> {
+async function runBlobStage(builder: ProjectionBuilder, dispatcher: ParseDispatcher): Promise<void> {
   const startedAt = crawlTimingStart();
-  await populateBlobs(builder);
+  await populateBlobs(builder, { dispatcher });
   recordCrawlPass(CRAWL_BLOB_POPULATE_ID, 'base', BASE_STRATUM_PASS, startedAt);
 }
 
@@ -1195,10 +1298,12 @@ async function runBlobStage(builder: ProjectionBuilder): Promise<void> {
  *
  * @param builder - The builder whose closure stratum has just converged
  * @param attemptsBefore - `contentPromotionAttempts` as it stood before the stratum
+ * @param dispatcher - The run's dispatcher, which the blob stage parsed on
  */
 export async function afterClosurePromotion(
   builder: ProjectionBuilder,
   attemptsBefore: number,
+  dispatcher: ParseDispatcher,
 ): Promise<void> {
   if (builder.contentPromotionAttempts === attemptsBefore) {
     return;
@@ -1209,7 +1314,7 @@ export async function afterClosurePromotion(
   // Files the SAME row as the pre-closure run — one accounting unit, so `calls`
   // reads as "how many times the stage ran" and its ms/call stays divisible.
   const startedAt = crawlTimingStart();
-  await populateBlobs(builder);
+  await populateBlobs(builder, { dispatcher });
   recordCrawlPass(CRAWL_BLOB_POPULATE_ID, 'base', BASE_STRATUM_PASS, startedAt);
 }
 
@@ -1232,17 +1337,20 @@ interface HarnessStage {
 
 /**
  * Bind the harness pass to one population: every harness, the run's content
- * cache as the reader, and the keys any pass could not read.
+ * cache as the reader, the run's dispatcher as what reads it, and the keys any
+ * pass could not read.
  *
  * @param builder - The population's builder
+ * @param dispatcher - The run's dispatcher
  * @returns The stage
  */
-function harnessStageFor(builder: ProjectionBuilder): HarnessStage {
+function harnessStageFor(builder: ProjectionBuilder, dispatcher: ParseDispatcher): HarnessStage {
   const reader = diskHarnessContentReader(builder.base().contentCache);
+  const derive = dispatcherHarnessFacts(dispatcher);
   const unreadable = new Set<string>();
   return {
     run: async () => {
-      const result = await runHarnessPass(builder, HARNESS_PROFILE_LIST, reader);
+      const result = await runHarnessPass(builder, HARNESS_PROFILE_LIST, reader, derive);
       for (const key of result.unreadableKeys) unreadable.add(key);
       return result.derived;
     },

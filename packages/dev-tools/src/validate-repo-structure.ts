@@ -1134,6 +1134,10 @@ const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   // a second, weaker answer. Listed here rather than NOT_APPLICABLE on purpose:
   // this keeps a live assertion that the counts field cannot silently vanish.
   'packages/cli/src/commands/phase-utils.ts',
+  // `vat claude context` publishes no status: `summarizeIssues` derives only the
+  // exit from its refused-file findings (stderr, at their resolved severities),
+  // and the summary it returns carries the full per-severity distribution.
+  'packages/cli/src/commands/claude/context.ts',
   // Was INVISIBLE to this gate, not merely unclassified: it declares `status:
   // AuditStatus` / `status: ReviewStatus`, and the old status recogniser demanded a
   // string literal on the `status:` line. Conforms on the audit side — the row's

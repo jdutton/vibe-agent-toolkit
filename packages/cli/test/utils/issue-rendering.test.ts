@@ -74,7 +74,7 @@ function validateReport(
   results: readonly PackagingValidationResult[],
   runIssues: readonly ValidationIssue[] = [],
 ): ReturnType<typeof buildSkillsValidateReport> {
-  return buildSkillsValidateReport({ root: '/project', results, runIssues, durationMs: 1 });
+  return buildSkillsValidateReport({ root: '/project', results, runIssues, refused: 0, durationMs: 1 });
 }
 
 function issue(

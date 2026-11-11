@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { ParseCache, ParseDispatcher, type ParseRoute } from '@vibe-agent-toolkit/resources';
 import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, type SymlinkCapability } from '@vibe-agent-toolkit/utils';
 import { registerScratchTmpdir, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, expect } from 'vitest';
@@ -14,6 +15,19 @@ import type { LinkedFileValidationResult, ValidationResult } from '../src/valida
  * Setup temporary directory for tests
  * Automatically creates and cleans up temp dir before/after each test
  */
+/**
+ * One parse route for a whole test file: a one-thread dispatcher over a
+ * DISABLED cache, shut down after the file. Every parse runs in the bounded
+ * worker, as shipped code's does, and no test reads another's cache entry.
+ *
+ * @returns The route to pass wherever a `ParseRoute` is taken
+ */
+export function setupParseRoute(): ParseRoute {
+  const dispatcher = new ParseDispatcher(new ParseCache({ enabled: false }), { size: 1 });
+  afterAll(() => dispatcher.shutdown());
+  return { dispatcher };
+}
+
 /**
  * Package `skillPath` IN PLACE into `options.outputPath`: written whether or not its post-build
  * checks pass, for a test that inspects what the packager wrote. `packageSkill` lands only a
@@ -134,7 +148,7 @@ export function createSkillAndValidate(
 ): Promise<ValidationResult> {
   const skillPath = safePath.join(tempDir, 'SKILL.md');
   fs.writeFileSync(skillPath, content);
-  return validateSkill({ side: 'source', skillPath, validation: {} });
+  return validateSkill({ resourcesValidation: {}, side: 'source', skillPath, validation: {} });
 }
 
 /**
@@ -183,7 +197,7 @@ export function validateSkillWithTransitiveChecking(
   skillPath: string,
   rootDir?: string,
 ): Promise<ValidationResult> {
-  return validateSkill({
+  return validateSkill({ resourcesValidation: {},
     side: 'source',
     skillPath,
     rootDir: rootDir ?? path.dirname(skillPath),
@@ -202,7 +216,7 @@ export function validateSkillWithUnreferencedFileCheck(
   skillPath: string,
   rootDir: string,
 ): Promise<ValidationResult> {
-  return validateSkill({
+  return validateSkill({ resourcesValidation: {},
     side: 'source',
     skillPath,
     rootDir,
@@ -552,7 +566,7 @@ export async function setupPackagingValidationTest(
 	const content = createSkillContent(contentOptions, bodyContent);
 	const { skillPath } = createTransitiveSkillStructure(tempDir, linkedFiles, content);
 
-	return validateSkillForPackaging(skillPath, metadata as never);
+	return validateSkillForPackaging(skillPath, {}, metadata as never);
 }
 
 /**
@@ -581,7 +595,7 @@ export async function setupTransitiveValidationTest(
 	const skillContent = createSkillContent(contentOptions, skillBody);
 	const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
 
-	return validateSkillForPackaging(skillPath);
+	return validateSkillForPackaging(skillPath, {});
 }
 
 /**
@@ -610,7 +624,7 @@ export async function setupNavigationValidationTest(
 	const skillContent = createSkillContent(contentOptions, skillBody);
 	const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
 
-	const result = await validateSkillForPackaging(skillPath);
+	const result = await validateSkillForPackaging(skillPath, {});
 
 	return {
 		result,

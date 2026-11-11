@@ -2,11 +2,9 @@ import type { InventoryParseError } from '@vibe-agent-toolkit/agent-skills';
 import { everywhere, fsFaultOf, isFsFaultError, isLinkChainRefusedError, pathPresent } from '@vibe-agent-toolkit/utils';
 
 /**
- * One `parseErrors[]` row, marked `unreadable` when the OS refused the path so
- * the consumer files it as a refusal, not a defect: an `EACCES` on `skills/<name>`
- * used to reach `vat audit` as `PLUGIN_INVALID_JSON` at error severity. A link chain VAT
- * would not hand the kernel (`LINK_CHAIN_REFUSED`, a hop naming a network path) is a refusal too —
- * raw, or as the classified fault a probe (`pathPresent`) wraps it in.
+ * One `parseErrors[]` row, marked `unreadable` when the OS refused the path, or a
+ * link chain VAT would not hand the kernel (`LINK_CHAIN_REFUSED`, raw or wrapped
+ * by `pathPresent`), so the consumer files it as a refusal, not a defect.
  */
 export function recordedFailure(path: string, message: string, cause: unknown): InventoryParseError {
 	const refused = fsFaultOf(cause) !== undefined || isFsFaultError(cause) || isLinkChainRefusedError(cause);
@@ -29,10 +27,8 @@ export function recordOnce(parseErrors: InventoryParseError[], path: string, cau
 type Presence = 'present' | 'absent' | 'refused';
 
 /**
- * What is at `path` (followed: a dangling link is absent). `refused` — a `stat`
- * the OS would not answer — has its row recorded, because the extractors never
- * throw; `absent` has none, and what an absence means is the caller's to say. A link
- * chain VAT will not hand the kernel (`link-following.ts`) is a refusal recorded the same way.
+ * What is at `path` (followed: a dangling link is absent). A `refused` probe has
+ * its row recorded, since the extractors never throw; `absent` has none.
  *
  * @param path - The path to probe
  * @param within - The tree it is read in: the plugin, marketplace or install root the operator named

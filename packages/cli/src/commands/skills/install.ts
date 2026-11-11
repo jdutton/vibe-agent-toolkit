@@ -159,6 +159,7 @@ async function preVerifySkill(skillDir: string, boundary: FsBoundary, side: FsSi
   const result = await boundary.run(`validate the skill at ${skillDir}`, side, () => validateSkill({
     skillPath: skillMdPath,
     validation: {},
+    resourcesValidation: {},
     side,
   }));
   const issues = result.issues ?? [];

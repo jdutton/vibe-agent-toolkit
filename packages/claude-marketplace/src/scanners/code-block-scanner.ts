@@ -18,14 +18,15 @@ function isCodeBlockEvidence(record: EvidenceRecord): boolean {
 /**
  * Scan markdown content for fenced shell blocks and the external-CLI /
  * browser-auth invocations they may contain. Returns an EvidenceRecord
- * for each detected pattern.
+ * for each detected pattern. `frontmatter` is the caller's one parse of it.
  */
 export function scanCodeBlocks(
   content: string,
   filePath: string,
   locationRoot: string,
+  frontmatter: Readonly<Record<string, unknown>> | undefined,
 ): EvidenceRecord[] {
-  const { evidence } = runCompatDetectors(content, filePath, locationRoot);
+  const { evidence } = runCompatDetectors(content, filePath, locationRoot, frontmatter);
   // Filter to evidence types this scanner is responsible for: shell-block /
   // external-CLI / browser-auth. Frontmatter-scoped evidence is emitted by
   // scanFrontmatter.

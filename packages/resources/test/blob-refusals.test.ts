@@ -8,15 +8,17 @@
  * end-to-end proof that a really-declined binary reaches this function lives in
  * `projection-blob-not-text-binary.test.ts`, over real PNG bytes.
  */
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import {
   BLOB_CONTENT_CHANGED,
   BLOB_NOT_TEXT,
   BLOB_PARSE_FAILED,
+  BLOB_PARSE_LIMIT_EXCEEDED,
   BLOB_UNREADABLE,
 } from '../src/projection/blob-population.js';
-import { describeBlobRefusals, type BlobRefusalRows } from '../src/projection/blob-refusals.js';
+import { describeBlobRefusals, notAdmittedRealizations, type BlobRefusalRows } from '../src/projection/blob-refusals.js';
 import { parseFailedMessage, parseFailureOf } from '../src/projection/parse-failure.js';
 import type { BlobConditionRow, BlobRow } from '../src/schemas/projection-blobs.js';
 import type { ContentState, ResourceRealizationRow } from '../src/schemas/projection-resources.js';
@@ -288,5 +290,82 @@ describe('describeBlobRefusals', () => {
     expect(describeBlobRefusals(rowsOf({
       blobs: [...blobs(4424), blob('markdown.bad', { replacementCharacters: 1 })],
     }))).toContain('mis-decoded 1 of 4425 blob(s)');
+  });
+});
+
+// Built, never a POSIX literal: a drive-less root is not absolute on Windows.
+const ROOT = safePath.resolve('corpus');
+
+/** The log {@link notAdmittedRealizations} reads from `rows`, each unreadable entry as its path and code. */
+function unreadableLog(rows: Parameters<typeof notAdmittedRealizations>[0]): { parseRefused: unknown[]; unreadable: Array<{ filePath: string; code: string | undefined }> } {
+  const log = notAdmittedRealizations(rows, ROOT);
+  return { parseRefused: [...log.parseRefused], unreadable: log.unreadable.map(({ filePath, code }) => ({ filePath, code })) };
+}
+
+describe('notAdmittedRealizations', () => {
+
+  it('is empty for a population that admitted every realization', () => {
+    expect(notAdmittedRealizations({
+      blobConditions: [condition(BLOB_NOT_TEXT, 'none.png')],
+      resourceRealizations: [keyedAt('a.md', 'markdown.a', 'text/markdown'), realization('dir', 'none'), realization('big.log', 'deferred')],
+    }, ROOT)).toStrictEqual({ unreadable: [], parseRefused: [] });
+  });
+
+  it('logs an unreadable or oversize realization as unreadable, the oversize one under the registry\'s TEXT_TOO_LARGE', () => {
+    expect(unreadableLog({
+      blobConditions: [],
+      resourceRealizations: [realization('locked.md', 'unreadable'), realization('huge.md', 'oversize')],
+    })).toStrictEqual({ parseRefused: [], unreadable: [
+      { filePath: `${ROOT}/locked.md`, code: undefined },
+      { filePath: `${ROOT}/huge.md`, code: 'TEXT_TOO_LARGE' },
+    ] });
+  });
+
+  it('logs every realization of a blob it could not read, saw change, or failed to parse, each at its own path', () => {
+    const failed: BlobConditionRow = {
+      ...condition(BLOB_PARSE_FAILED, 'markdown.failed'),
+      message: parseFailedMessage('markdown', Object.assign(new Error('boom'), { code: WORKER_OUT_OF_MEMORY_CODE })),
+    };
+    expect(unreadableLog({
+      blobConditions: [condition(BLOB_UNREADABLE, 'markdown.gone'), condition(BLOB_CONTENT_CHANGED, 'markdown.moved'), failed],
+      resourceRealizations: [
+        keyedAt('gone.md', 'markdown.gone', 'text/markdown'),
+        keyedAt('moved.md', 'markdown.moved', 'text/markdown'),
+        keyedAt('failed.md', 'markdown.failed', 'text/markdown'),
+        keyedAt('twin.md', 'markdown.failed', 'text/markdown'),
+      ],
+    })).toStrictEqual({ parseRefused: [], unreadable: [
+      { filePath: `${ROOT}/gone.md`, code: undefined },
+      { filePath: `${ROOT}/moved.md`, code: undefined },
+      { filePath: `${ROOT}/failed.md`, code: WORKER_OUT_OF_MEMORY_CODE },
+      { filePath: `${ROOT}/twin.md`, code: WORKER_OUT_OF_MEMORY_CODE },
+    ] });
+  });
+
+  it('logs a parse refused for this run as parse-refused, never as unreadable', () => {
+    const log = notAdmittedRealizations({
+      blobConditions: [{ ...condition(BLOB_PARSE_LIMIT_EXCEEDED, 'markdown.deep'), message: 'its parse was stopped at its stackMb limit (1 MiB)' }],
+      resourceRealizations: [keyedAt('deep.md', 'markdown.deep', 'text/markdown')],
+    }, ROOT);
+
+    expect(log.unreadable).toStrictEqual([]);
+    expect(log.parseRefused).toStrictEqual([
+      { filePath: `${ROOT}/deep.md`, code: 'RESOURCE_PARSE_LIMIT_EXCEEDED', reason: 'its parse was stopped at its stackMb limit (1 MiB)' },
+    ]);
+  });
+
+  it('names a path once however many extents realize it', () => {
+    const log = notAdmittedRealizations({
+      blobConditions: [condition(BLOB_PARSE_LIMIT_EXCEEDED, 'markdown.deep')],
+      resourceRealizations: [
+        realization('locked.md', 'unreadable'),
+        realization('locked.md', 'unreadable'),
+        keyedAt('deep.md', 'markdown.deep', 'text/markdown'),
+        keyedAt('deep.md', 'markdown.deep', 'text/markdown'),
+      ],
+    }, ROOT);
+
+    expect(log.unreadable).toHaveLength(1);
+    expect(log.parseRefused).toHaveLength(1);
   });
 });

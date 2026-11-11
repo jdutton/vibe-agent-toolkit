@@ -1,4 +1,9 @@
-import yaml from 'yaml';
+import {
+  isPerRunParseRefusal,
+  parseContentCached,
+  parseRefusal,
+  type ParseRoute,
+} from '@vibe-agent-toolkit/resources';
 
 export interface FrontmatterSuccess {
   success: true;
@@ -9,12 +14,58 @@ export interface FrontmatterSuccess {
 export interface FrontmatterError {
   success: false;
   error: string;
+  /**
+   * The parse worker's refusal of the block for this run — a `ParseLimitError`
+   * or `ParseWorkerDiedError` (`isPerRunParseRefusal`) — or `undefined` for a
+   * refusal of the BYTES (no delimiter, invalid YAML, not a mapping, empty).
+   * Carried so a caller reports a refusal as `RESOURCE_PARSE_LIMIT_EXCEEDED` /
+   * `RESOURCE_PARSE_WORKER_DIED` (`parseRefusalIssue`) without reading `error`'s text.
+   */
+  cause: unknown;
 }
 
 export type FrontmatterResult = FrontmatterSuccess | FrontmatterError;
 
+/** The refusal for a block that declares nothing. */
+const EMPTY_BLOCK: FrontmatterError = {
+  success: false,
+  error: 'Frontmatter is empty: the block between the "---" delimiters declares no fields',
+  cause: undefined,
+};
+
 /**
- * Parse YAML frontmatter from SKILL.md content
+ * A frontmatter fence line, as the markdown parser's frontmatter extension
+ * (`remark-frontmatter`) reads one: exactly three dashes at the start of the
+ * line, then optional spaces or tabs. Not `----`, not `---x`, not an indented
+ * `---` — the crawl lane sees no fence in any of those, so neither does this.
+ */
+const FENCE = /^---[ \t]*$/;
+
+/** U+FEFF, which the crawl lane's decode strips before the parser sees a byte. */
+const BOM = String.fromCodePoint(0xfe_ff);
+
+/** U+0000, which CommonMark replaces before any extension reads the block. */
+const NUL = String.fromCodePoint(0);
+
+/** U+FFFD, what the markdown parser reads a {@link NUL} as. */
+const REPLACEMENT_CHARACTER = String.fromCodePoint(0xff_fd);
+
+/**
+ * A block's source as the markdown parser reads it back: CommonMark replaces
+ * every U+0000 with U+FFFD before an extension sees the text (line endings and
+ * a leading BOM are already normalized by the time this is called), so the
+ * worker's `frontmatterSource` for a block holding a NUL is this, never the
+ * bytes handed over.
+ *
+ * @param source - The block's YAML, as found by the fence rule
+ * @returns What the parser's frontmatter extension reads for it
+ */
+function asParserReads(source: string): string {
+  return source.replaceAll(NUL, REPLACEMENT_CHARACTER);
+}
+
+/**
+ * Parse YAML frontmatter from SKILL.md content.
  *
  * Expected format:
  * ```
@@ -25,79 +76,106 @@ export type FrontmatterResult = FrontmatterSuccess | FrontmatterError;
  * Body content...
  * ```
  *
+ * ## The decode is the parse worker's, never this thread's
+ *
+ * `yaml`'s composer recurses once per nesting level, so a deep block overflows
+ * the stack of whatever thread decodes it, and a cyclic anchor (`a: &x [*x]`)
+ * nests without end. Only the worker decodes, under its limits (ADR I8): this
+ * function finds the block, hands exactly that block to the bounded route as a
+ * one-block markdown document, and reads back the worker's decode — the one
+ * `parseFrontmatterSource`, the one `isPlainMapping` and the one output check
+ * (`outputBreach`: depth, rows, bytes, cycles) every crawl applies to the same
+ * YAML. So both lanes give one answer per block, and a block the worker refuses
+ * is refused here under the same code (`cause`). A cache hit starts no worker.
+ *
+ * ## Where the block is — the crawl lane's fence rule
+ *
+ * Line endings are normalized first (`\r\n` and a lone `\r` are both one line
+ * ending, as they are to the markdown parser) and a leading BOM dropped. The
+ * first line must be a fence; the block ends at the next fence line
+ * ({@link FENCE}); no closing fence, no frontmatter.
+ *
  * @param content - Full SKILL.md content
- * @returns Parsed frontmatter and body, or error
+ * @param route - The run's parse dispatcher, when a run decodes many blocks;
+ *   omitted, a cache miss builds a one-thread pool for this call
+ * @returns Parsed frontmatter and body, or the refusal
+ * @throws `ParserUnavailableError` for a broken install, and anything else the
+ *   bounded route throws that is not a per-run refusal of this block
  */
-export function parseFrontmatter(content: string): FrontmatterResult {
-  // Normalize line endings
-  const normalized = content.replaceAll('\r\n', '\n');
+export function parseFrontmatter(content: string, route: ParseRoute = {}): Promise<FrontmatterResult> {
+  const normalized = (content.startsWith(BOM) ? content.slice(1) : content).replaceAll(/\r\n?/g, '\n');
+  const lines = normalized.split('\n');
 
-  // Check for opening delimiter at start
-  if (!normalized.startsWith('---\n')) {
-    return {
+  if (!FENCE.test(lines[0] ?? '')) {
+    return Promise.resolve({
       success: false,
       error: 'No frontmatter found - must start at beginning with "---" delimiter',
-    };
+      cause: undefined,
+    });
   }
 
-  // Find closing delimiter
-  const closingIndex = normalized.indexOf('\n---\n', 4);
-  const closingIndexAlt = normalized.indexOf('\n---', 4);
-
-  if (closingIndex === -1 && closingIndexAlt === -1) {
-    return {
-      success: false,
-      error: 'No closing delimiter found',
-    };
+  const closing = lines.findIndex((line, index) => index > 0 && FENCE.test(line));
+  if (closing === -1) {
+    return Promise.resolve({ success: false, error: 'No closing delimiter found', cause: undefined });
   }
 
-  // Extract YAML content (between delimiters)
-  const actualClosingIndex = closingIndex === -1 ? closingIndexAlt : closingIndex;
-  const yamlContent = normalized.slice(4, actualClosingIndex);
+  const source = lines.slice(1, closing).join('\n');
+  const body = lines.slice(closing + 1).join('\n');
 
-  // Extract body (after closing delimiter)
-  const bodyStartIndex = actualClosingIndex + 4; // Skip "\n---"
-  const body = bodyStartIndex < normalized.length
-    ? normalized.slice(bodyStartIndex + 1) // Skip newline after ---
-    : '';
+  // A block that declares NOTHING — empty, whitespace, comment-only, `~`, `null`
+  // — is the rule `parseFrontmatterSource` (the crawl lane's decode) applies:
+  // "no value" by the document's own word, NOT a non-mapping, and no keys. A
+  // skill without frontmatter fields is not a skill, so it is refused — saying
+  // it is empty, never that it is not a mapping.
+  if (source.trim() === '') return Promise.resolve(EMPTY_BLOCK);
 
-  // Parse YAML
-  let parsed: unknown;
-  try {
-    parsed = yaml.parse(yamlContent);
-  } catch (error) {
-    return {
-      success: false,
-      error: `Failed to parse YAML frontmatter: ${error instanceof Error ? error.message : String(error)}`,
-    };
-  }
-
-  // A block that parsed but is not a mapping is refused HERE, once. `yaml.parse`
-  // answers `null` for an empty document or `~`, a string for a bare scalar, an
-  // array for a sequence — and the success arm promises `Record<string,
-  // unknown>`, so every reader dereferenced it. `validateSkill` died with
-  // `Cannot read properties of null (reading 'name')` and took the whole
-  // `vat audit` run with it, while two other readers had grown their own `null`
-  // guards: three consumers of one seam, three answers for one file. The
-  // refusal names what was found, because "no frontmatter" over a file that
-  // plainly has a `---` block sends the author to the wrong fix.
-  if (parsed === null || parsed === undefined || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return {
-      success: false,
-      error: `Frontmatter is not a YAML mapping: the block between the "---" delimiters is ${describeNonMapping(parsed)}`,
-    };
-  }
-
-  return {
-    success: true,
-    frontmatter: parsed as Record<string, unknown>,
-    body,
-  };
+  return decodeBlock(source, body, route);
 }
 
-/** The shape a non-mapping frontmatter block turned out to be, for the refusal message. */
-function describeNonMapping(parsed: unknown): string {
-  if (parsed === null || parsed === undefined) return 'empty';
-  if (Array.isArray(parsed)) return 'a sequence, not key: value fields';
-  return `a scalar (${JSON.stringify(parsed)}), not key: value fields`;
+/**
+ * The worker's decode of one block's YAML source, as this parser's result.
+ *
+ * @param source - The block's YAML, delimiters excluded
+ * @param body - What follows the closing fence
+ * @param route - Where the parse runs
+ * @returns The frontmatter, or the refusal
+ */
+async function decodeBlock(source: string, body: string, route: ParseRoute): Promise<FrontmatterResult> {
+  let parsed: Awaited<ReturnType<typeof parseContentCached>>;
+  try {
+    parsed = await parseContentCached(`---\n${source}\n---\n`, 'markdown', route);
+  } catch (error) {
+    if (!isPerRunParseRefusal(error)) throw error;
+    return { success: false, error: `Frontmatter was not decoded: ${parseRefusal(error).reason}`, cause: error };
+  }
+
+  // The block handed over is fenced by construction, so the worker reads back
+  // exactly `source`, normalized as CommonMark normalizes it (`asParserReads`).
+  // Anything else is VAT's defect, never a fact about the bytes.
+  if (parsed.frontmatterSource !== asParserReads(source)) {
+    throw new Error(
+      'VAT defect: the parse worker read a different frontmatter block than the one it was handed. Please report it.',
+    );
+  }
+
+  if (parsed.frontmatterError !== undefined) {
+    return { success: false, error: `Failed to parse YAML frontmatter: ${parsed.frontmatterError}`, cause: undefined };
+  }
+
+  // A block that decoded but is not a PLAIN mapping is refused HERE, by the
+  // rule every lane reads (`isPlainMapping`, applied by the worker): a scalar,
+  // a sequence, and the typed roots `!!set` / `!!omap` / `!!timestamp` /
+  // `!!binary`. The refusal says so, because "no frontmatter" over a file that
+  // plainly has a `---` block sends the author to the wrong fix.
+  if (parsed.frontmatterNotAMapping === true) {
+    return {
+      success: false,
+      error:
+        'Frontmatter is not a YAML mapping: the block between the "---" delimiters is a sequence, a scalar or a typed value, not key: value fields',
+      cause: undefined,
+    };
+  }
+
+  if (parsed.frontmatter === undefined) return EMPTY_BLOCK;
+  return { success: true, frontmatter: parsed.frontmatter, body };
 }

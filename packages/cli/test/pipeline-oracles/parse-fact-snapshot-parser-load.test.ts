@@ -18,17 +18,12 @@
  * and deleted.
  *
  * Loading every kind the corpus routes to, above the loop, was tried too and is
- * what this suite used to drive. It works and it costs too much: `parseMarkdown`
- * / `parseHtml` import their parser on first use precisely so a run that parses
- * nothing loads nothing. So the load stays lazy and `parseOrNull` rethrows one
- * TYPE — `ParserUnavailableError`, matched by `isParserUnavailable`, complete by
- * construction because VAT mints it at its only parser-import boundary.
- *
- * ⚠️ These two wrappers reach that boundary by a DIFFERENT route from the cached
- * parse: they read the file themselves, so they never touch `loadParser` and
- * carry their own `import()`. Unwrapped, that route threw a bare `EACCES` here
- * and the snapshot went back to being empty at exit 0 — the guard would have
- * covered a call this lane never makes.
+ * what this suite used to drive. It works and it costs too much: the parse
+ * worker imports its parser on first use precisely so a run that parses nothing
+ * loads nothing. So the load stays lazy and `parseOrNull` rethrows one TYPE —
+ * `ParserUnavailableError`, matched by `isParserUnavailable`, complete by
+ * construction because VAT mints it at its only parser-import boundary
+ * (`parser-loader.ts`) and the worker sends its code back over the wire.
  *
  * ## Why both directions are pinned
  *
@@ -39,7 +34,7 @@
  */
 
 import type * as ResourcesModule from '@vibe-agent-toolkit/resources';
-import { ParserUnavailableError } from '@vibe-agent-toolkit/resources';
+import { ParseLimitError, ParserUnavailableError } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -48,12 +43,13 @@ import { captureParseFactSnapshot } from '../../src/pipeline-oracles/parse-fact-
 import { setupCorpusFixture } from './helpers/corpus-fixture.js';
 
 /**
- * What the next `parseMarkdown` / `parseHtml` call throws, or nothing.
+ * What the next dispatcher parse throws, or nothing.
  *
  * `vi.hoisted` because the mock factory below is hoisted above every import and
  * would otherwise close over an uninitialised binding. The parse failure is
- * armed by path SUBSTRING: failing every document could not distinguish "the
- * loop kept going and each file was skipped" from "the loop stopped".
+ * armed by CONTENT substring (a dispatcher is handed bytes, never a path):
+ * failing every document could not distinguish "the loop kept going and each
+ * file was skipped" from "the loop stopped".
  */
 const failures = vi.hoisted(() => ({
   load: undefined as Error | undefined,
@@ -61,26 +57,39 @@ const failures = vi.hoisted(() => ({
   markdownFor: undefined as MarkdownArm,
 }));
 
-/** A markdown-parse failure armed for every path containing `pathContains`. */
-type MarkdownArm = { pathContains: string; error: Error } | undefined;
+/** A markdown-parse failure armed for every document containing `contentContains`. */
+type MarkdownArm = { contentContains: string; error: Error } | undefined;
 
-// Only the two parse wrappers are replaced — the seam a failed parser load
-// throws THROUGH on this lane. The content-key machinery, `parserKindForPath`
-// and the real `isParserUnavailable` stay live via `importOriginal`, so the rows
-// this oracle produces are the real ones and the predicate under test is the
-// shipped one. The html arm is separate from the markdown one because an
-// `.html`-only corpus is the case that proves the guard is not markdown-shaped.
+// Only the run's dispatcher is wrapped — the seam a failed parser load throws
+// THROUGH on this lane. The content-key machinery, `parserKindForPath`, the real
+// dispatcher and the real `isParserUnavailable` stay live via `importOriginal`,
+// so the rows this oracle produces are the real ones and the predicate under
+// test is the shipped one. The html arm is separate from the markdown one
+// because an `.html`-only corpus is the case that proves the guard is not
+// markdown-shaped.
 vi.mock('@vibe-agent-toolkit/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof ResourcesModule>();
-  const parseMarkdown = async (absolutePath: string) => {
-    if (failures.load) return Promise.reject(failures.load);
-    return failures.markdownFor && absolutePath.includes(failures.markdownFor.pathContains)
-      ? Promise.reject(failures.markdownFor.error)
-      : actual.parseMarkdown(absolutePath);
+  const armed = (keyed: ResourcesModule.ParsableContent): Error | undefined => {
+    if (keyed.parserKind === 'html') return failures.htmlLoad;
+    if (failures.load) return failures.load;
+    return failures.markdownFor && keyed.content.includes(failures.markdownFor.contentContains)
+      ? failures.markdownFor.error
+      : undefined;
   };
-  const parseHtml = async (absolutePath: string) =>
-    failures.htmlLoad ? Promise.reject(failures.htmlLoad) : actual.parseHtml(absolutePath);
-  return { ...actual, parseMarkdown, parseHtml };
+  const withParseDispatcher: typeof actual.withParseDispatcher = (work, options) =>
+    actual.withParseDispatcher(
+      (dispatcher) =>
+        work(
+          Object.assign(Object.create(dispatcher) as ResourcesModule.ParseDispatcher, {
+            parse: (keyed: ResourcesModule.ParsableContent) => {
+              const error = armed(keyed);
+              return error === undefined ? dispatcher.parse(keyed) : Promise.reject(error);
+            },
+          }),
+        ),
+      options,
+    );
+  return { ...actual, withParseDispatcher };
 });
 
 /**
@@ -209,7 +218,9 @@ describe('a parser-load failure during parse-fact capture', () => {
  */
 describe('an ordinary parse failure during parse-fact capture', () => {
   it('skips only the failing document and captures the rest', async () => {
-    failures.markdownFor = { pathContains: 'bad-b', error: new Error('unexpected token') };
+    // A failure on `classifyParseFailure`'s allowlist — a document refused for
+    // this run at a limit. An unbranded `Error` is VAT's defect and is rethrown.
+    failures.markdownFor = { contentContains: 'Nothing links out of here', error: new ParseLimitError('timeMs', 10) };
 
     const snapshot = await capture();
 

@@ -137,9 +137,11 @@ Filtering:
                      resources.collections does not declare is refused (exit 2)
 
 Output Fields (the shared report envelope):
-  status:     ok | findings | error. A scan reports no finding of its own:
-              findings means it scanned NOTHING (RESOURCE_CHECK_BROKEN)
-  examined:   Files scanned
+  status:     ok | findings | error. findings means a file was enumerated
+              but not admitted (RESOURCE_UNREADABLE, RESOURCE_PARSE_LIMIT_EXCEEDED,
+              RESOURCE_PARSE_WORKER_DIED), or it scanned NOTHING
+              (RESOURCE_CHECK_BROKEN)
+  examined:   Files enumerated, admitted or not
   durationMs: Wall time of the run
   data.root:  The one absolute path every data.files[].path is relative to
   data.lane:  Which enumerator produced the population — 'walk' or 'projection'
@@ -151,9 +153,10 @@ Output Fields (the shared report envelope):
   data.files: (only with --verbose) {path, links, anchors, checksum} per file
 
 Exit Codes:
-  0 - Scanned at least one file
-  1 - Scanned nothing (RESOURCE_CHECK_BROKEN): the path or config enumerates
-      no markdown, or --collection names a collection no file matched
+  0 - Scanned at least one file, and admitted every file it enumerated
+  1 - A file it could not read or whose parse was refused, or scanned nothing
+      (RESOURCE_CHECK_BROKEN): the path or config enumerates no markdown, or
+      --collection names a collection no file matched
   2 - The scan could not run: [path] names no directory, a directory the OS
       will not list, an undeclared --collection, or an unusable config
   The code is derived from the document's status and summary, never chosen

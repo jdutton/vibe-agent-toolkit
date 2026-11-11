@@ -150,8 +150,10 @@ const config: KnipConfig = {
       project: [SRC_TS],
     },
 
+    // resources: the parse worker is an entry point the pool starts by path
+    // (`new Worker(entry)`), so nothing imports it and its imports would read as unused.
     'packages/resources': {
-      entry: sourceEntriesFromExports('resources'),
+      entry: [...sourceEntriesFromExports('resources'), 'src/parse-worker.ts'],
       project: [SRC_TS],
     },
 

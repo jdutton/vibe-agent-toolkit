@@ -108,7 +108,7 @@
  * bundled subdirectory and which carries no glob character.
  */
 
-import { parseMarkdown } from '@vibe-agent-toolkit/resources';
+import { parseFileCached, type ParseRoute, withParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { everywhere, mapConcurrentFailingInOrder, pathPresent, safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
@@ -118,6 +118,7 @@ import {
   type PackagingTarget,
   TARGET_SUBDIR_CATEGORIES,
 } from '../content-type-routing.js';
+import { parseRefusalIssue } from '../parse-refusal-issues.js';
 
 /**
  * Subdirectories a packaged skill may bundle resources into.
@@ -197,17 +198,20 @@ export function isBundledSubdirPath(token: string): boolean {
  * `scripts\x.mjs` and `scripts/x.mjs` one finding with one `link` anchor, so a
  * single allow glob waives all three spellings of the same reference.
  *
- * Goes through `parseMarkdown` rather than reaching for the lexer directly, for
- * two reasons. It keeps ONE definition of "path-shaped token" in the codebase —
- * `isCandidate` in `reference-lexer.ts` already requires a slash and a file
- * extension, which is this check's admission rule too, so re-deriving it here
- * would be a second matcher to drift. And `parseMarkdown` is the package's lazy
- * wrapper: a value import of the lexer would pull the remark stack into the eager
- * module graph of every `@vibe-agent-toolkit/resources` consumer (~730ms on
- * Windows), which `module-load-budget.integration.test.ts` exists to prevent.
+ * Goes through the parse route (`parseFileCached`) rather than reaching for the
+ * lexer directly, for two reasons. It keeps ONE definition of "path-shaped
+ * token" in the codebase — `isCandidate` in `reference-lexer.ts` already
+ * requires a slash and a file extension, which is this check's admission rule
+ * too, so re-deriving it here would be a second matcher to drift. And the parse
+ * runs in the bounded worker (ADR I8): a document no worker admits is refused
+ * under the worker's limit, never parsed on this thread.
+ *
+ * @param filePath - A packaged markdown document (the verb's destination side)
+ * @param route - The run's parse dispatcher
+ * @returns The bundle-relative path candidates it names
  */
-export async function bundledPathCandidates(filePath: string): Promise<string[]> {
-  const parsed = await parseMarkdown(filePath);
+export async function bundledPathCandidates(filePath: string, route: ParseRoute): Promise<string[]> {
+  const parsed = await parseFileCached(filePath, 'markdown', { ...route, side: 'destination' });
   const out = new Set<string>();
   for (const ref of parsed.lexicalReferences ?? []) {
     // NOT the markdown-link exclusion — see the module docstring. This drops
@@ -368,9 +372,23 @@ export async function detectMissingReferencedPaths(
 
   // Independent reads; a failure is the first by document order, and the issues
   // are folded in that order.
-  const candidatesByDoc = await mapConcurrentFailingInOrder(docFiles, (docFile) => bundledPathCandidates(docFile));
+  // A document the worker refuses (a limit, a dead worker) is a finding at that
+  // document and its neighbours are still checked; any other failure still
+  // fails the check. One dispatcher for every document.
+  const candidatesByDoc = await withParseDispatcher((dispatcher) =>
+    mapConcurrentFailingInOrder(docFiles, (docFile) =>
+      bundledPathCandidates(docFile, { dispatcher }).catch((error: unknown) => {
+        const limit = parseRefusalIssue(error, docFile, skillDir);
+        if (limit === undefined) throw error;
+        return limit;
+      })));
   for (const [index, docFile] of docFiles.entries()) {
-    const candidates = candidatesByDoc[index] ?? [];
+    const scanned = candidatesByDoc[index] ?? [];
+    if (!Array.isArray(scanned)) {
+      issues.push(scanned);
+      continue;
+    }
+    const candidates = scanned;
     const missing = candidates.filter(
       rel => !bundleHas(skillDir, rel) && !bundleHas(skillDir, routedSpelling(rel, target)),
     );

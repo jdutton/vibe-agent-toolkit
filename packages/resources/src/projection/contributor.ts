@@ -144,7 +144,7 @@ export interface ExtentContributor {
    * that it "changes what a row *says* (`contentState`), never which rows
    * exist" — which is true, and incomplete in one direction. A `'deferred'`
    * registration keys nothing, so `keyedContentKeys` returns the empty list and
-   * `blobFactsCover` — the guard that stops a blob-reading run accepting a
+   * `uncoveredContentKeys` — the guard that stops a blob-reading run accepting a
    * content-less extent — passes **vacuously**, having no keys to fail on. The
    * deriving run then hydrates four empty blob tables and reports success.
    *

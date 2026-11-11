@@ -19,11 +19,16 @@ import {
   DeferredArtifacts,
   listingRefusalRemedy,
   loadConfig,
+  type NotAdmittedRoots,
+  partitionNotAdmitted,
+  type ParseDispatcher,
   parseFileCached,
+  type ParseRefusedResource,
   type RegistryUnreadablePolicy,
   ResourceRegistry,
   type ResourcePopulationSource,
   type SkillExecutableEntry,
+  withParseDispatcher,
 } from '@vibe-agent-toolkit/resources';
 import {
   CODE_REGISTRY,
@@ -65,6 +70,7 @@ import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
 import { collectPreBuildGlobFindings, preBuildGlobFindingsToIssues } from '../files-config.js';
 import { isSkillPackagingInputError } from '../packaging-errors.js';
+import { parseRefusalIssue, parseRefusedIssues } from '../parse-refusal-issues.js';
 import {
   conventionalSuiteProbe,
   partitionTestInputFileEntries,
@@ -746,7 +752,9 @@ export function resetPackagingRegistryCache(): void {
  *   memoized, since a packaged skill's directory is a staging name no later caller asks for again
  * @param shared - The batching caller's context, if any
  * @param context - `built` for output this run wrote, which the crawl never holds — see {@link withOwnBundle}
- * @returns A registry whose links are resolved and that covers `skillPath`
+ * @returns A registry whose links are resolved and that covers `skillPath`, and
+ *   every parse refusal behind it — the base crawl's and, when a built bundle is
+ *   layered over it, the bundle's (the layered copy carries only its own log)
  */
 async function registryForSkill(
   skillPath: string,
@@ -754,15 +762,19 @@ async function registryForSkill(
   inProject: boolean,
   shared: SkillValidationSharedContext | undefined,
   context: 'source' | 'built',
-): Promise<ResourceRegistry> {
+): Promise<{ registry: ResourceRegistry; parseRefused: ParseRefusedResource[] }> {
   const outputs = crawlOutputs(context, skillPath, shared);
   const unreadable = shared === undefined ? 'refuse' : shared.unreadable;
-  const registry = await baseRegistryForSkill(skillPath, projectRoot, inProject, shared, { outputs, unreadable });
+  const base = await baseRegistryForSkill(skillPath, projectRoot, inProject, shared, { outputs, unreadable });
   // The caller's registry "covers" the skill by directory alone — one crawled before a build wrote
   // the bundle covers it and holds none of it — so it takes the same layering as the crawl.
-  return context === 'built' && registry.getResource(safePath.resolve(skillPath)) === undefined
-    ? withOwnBundle(registry, dirname(skillPath), unreadable, outputs)
-    : registry;
+  const registry = context === 'built' && base.getResource(safePath.resolve(skillPath)) === undefined
+    ? await withOwnBundle(base, dirname(skillPath), unreadable, outputs)
+    : base;
+  const parseRefused = registry === base
+    ? base.getParseRefusedResources()
+    : [...base.getParseRefusedResources(), ...registry.getParseRefusedResources()];
+  return { registry, parseRefused };
 }
 
 /**
@@ -928,6 +940,12 @@ export interface SkillValidationSharedContext {
   /** Pre-populated tracker for the repo that contains the skill. */
   gitTracker?: GitTracker;
   /**
+   * The run's parse dispatcher, for the parse this validator makes itself (the
+   * SKILL.md, whose frontmatter the detectors then read), so a batch pays one worker
+   * start. Omitted, each skill's validation holds its own and shuts it down.
+   */
+  dispatcher?: ParseDispatcher;
+  /**
    * Root every emitted `ValidationIssue.location` is expressed relative to.
    *
    * This is the ANCHOR base and it is a DIFFERENT concern from the project
@@ -1043,17 +1061,42 @@ function missingFrontmatterIssue(frontmatterError: string | undefined, location:
  * - Framework-based severity / allow config
  *
  * @param skillPath - Path to SKILL.md
+ * @param resourcesValidation - The project's `resources.validation`, as the verb resolved it: the
+ *   one config that settles a file not admitted — never `packagingConfig.validation`. Required:
+ *   only the verb knows which config governs the run; `{}` when none does, or when the caller
+ *   resolves those codes itself (`vat audit`)
  * @param packagingConfig - Optional packaging configuration (depth, excludes, validation)
  * @param context - Whether the skill is being validated from source or built output
  * @param shared - Optional shared context (registry + gitTracker) for batched runs
  * @returns Validation result with active errors, warnings, and allowed issues
  */
-export async function validateSkillForPackaging(
+export function validateSkillForPackaging(
   skillPath: string,
+  resourcesValidation: ValidationConfig,
   packagingConfig?: SkillPackagingConfig,
   context: 'source' | 'built' = 'source',
   shared?: SkillValidationSharedContext,
 ): Promise<PackagingValidationResult> {
+  return withParseDispatcher(
+    (dispatcher) => validateSkillForPackagingOn(skillPath, { resourcesValidation, packagingConfig, context, shared }, dispatcher),
+    { dispatcher: shared?.dispatcher },
+  );
+}
+
+/**
+ * {@link validateSkillForPackaging}, on a parse dispatcher.
+ *
+ * @param skillPath - Path to SKILL.md
+ * @param call - The caller's arguments, as {@link validateSkillForPackaging} took them
+ * @param dispatcher - Where this validator's own parses run
+ * @returns Validation result
+ */
+async function validateSkillForPackagingOn(
+  skillPath: string,
+  call: PackagingValidationCall,
+  dispatcher: ParseDispatcher,
+): Promise<PackagingValidationResult> {
+  const { resourcesValidation, packagingConfig, context, shared } = call;
   const rawIssues: ValidationIssue[] = [];
 
   // Validation-POLICY boundary (config root -> git root -> skill dir): what is
@@ -1072,7 +1115,10 @@ export async function validateSkillForPackaging(
   // A `built` skill is VAT's own output re-read: every read of its tree the OS refuses is the
   // destination's, never the user's input. The ONE mapping; every read below takes `side`.
   const side: FsSide = context === 'built' ? 'destination' : 'source';
-  const parseResult = await parseFileCached(skillPath, 'markdown', { side });
+  const parsed = await parseSkillMarkdown(skillPath, side, locationRoot, dispatcher);
+  const notAdmitted: NotAdmittedPolicy = { resourcesValidation, roots: { locationRoot, projectRoot } };
+  if ('limit' in parsed) return parseLimitResult(skillPath, parsed.limit, packagingConfig, shared, notAdmitted);
+  const { parseResult } = parsed;
   // The parser already decoded these bytes; a second whole-file read of the same
   // path would only add a syscall and a TOCTOU window. `content` is the raw
   // source verbatim, so fenced code blocks reach `runCompatDetectors` intact.
@@ -1093,7 +1139,7 @@ export async function validateSkillForPackaging(
   // surface each as a CAPABILITY_* issue. Observations are also returned
   // on the result so downstream verdict computation (CLI layer) can recover
   // payloads such as EXTERNAL_CLI binary names.
-  const { evidence, observations } = runCompatDetectors(skillContent, skillPath, locationRoot);
+  const { evidence, observations } = runCompatDetectors(skillContent, skillPath, locationRoot, parseResult.frontmatter);
   for (const obs of observations) {
     rawIssues.push(observationToIssue(obs, skillLocation));
   }
@@ -1115,7 +1161,7 @@ export async function validateSkillForPackaging(
   // reuse when the shared registry covers this skill's projectRoot; otherwise
   // fall back to a fresh crawl to avoid leaking resources across roots.
   // A `built` skill sits in output this run wrote inside the project: the project root is then a destination.
-  const registry = await registryForSkill(skillPath, projectRoot, foundRoot !== null, shared, context);
+  const { registry, parseRefused } = await registryForSkill(skillPath, projectRoot, foundRoot !== null, shared, context);
 
   const skillResource = registry.getResource(safePath.resolve(skillPath));
   // Only the entries the PACKAGER will actually copy defer a link: an entry pointing
@@ -1210,14 +1256,18 @@ export async function validateSkillForPackaging(
   const bundledFileSet = new Set(bundledFiles);
   const directFileCount = directLinks.filter(p => bundledFileSet.has(p)).length;
 
-  // Four producers, one append, order significant, all anchored on `locationRoot`:
+  // Five producers, one append, order significant, all anchored on `locationRoot`:
   //  1. walker exclusions (LINK_OUTSIDE_PROJECT, LINK_TARGETS_DIRECTORY, etc.)
   //  2. links dropped for pointing into declared test input — the same issue, at
   //     the same location, the packager emits for it. `projectRoot` scopes WHICH
   //     dirs count as declared test input; `locationRoot` only anchors.
   //  3. one info issue per deferred asset declared in files: config
   //  4. followed links bundled from outside the skill directory (LINK_OUTSIDE_SKILL_DIR)
+  //  5. every file the skill reaches whose parse the crawl refused: absent from the
+  //     registry, the walk found it on disk and bundled it as an opaque asset, its
+  //     links unwalked and nothing in it checked
   rawIssues.push(
+    ...parseRefusedIssues(parseRefused, [skillPath, ...bundledAssets], locationRoot),
     ...walkerExclusionsToIssues(excludedReferences, locationRoot),
     ...testInputLinkIssues(excludedReferences, testInputDirs, projectRoot, locationRoot),
     ...deferredAssetsToIssues(deferredAssets, locationRoot),
@@ -1298,10 +1348,7 @@ export async function validateSkillForPackaging(
   // happened to be validated when the entry went unmatched); a caller that
   // supplied none is claiming its run is this one skill, and gets the run-level
   // answer folded in here.
-  const validationConfig = packagingConfig?.validation ?? {};
-  const framework = shared?.allowLedger === undefined
-    ? runSingleUnitValidation(filteredIssues, validationConfig)
-    : runValidationFramework(filteredIssues, validationConfig, shared.allowLedger);
+  const framework = runFrameworkFor(filteredIssues, packagingConfig, shared, notAdmitted);
 
   const skillName = extractSkillName(parseResult, skillPath);
 
@@ -1320,6 +1367,107 @@ export async function validateSkillForPackaging(
       maxLinkDepth,
       excludedReferenceCount: excludedDetails.length,
       excludedReferences: excludedDetails,
+    },
+  };
+}
+
+/** {@link validateSkillForPackaging}'s arguments after the SKILL.md. */
+interface PackagingValidationCall {
+  readonly resourcesValidation: ValidationConfig;
+  readonly packagingConfig: SkillPackagingConfig | undefined;
+  readonly context: 'source' | 'built';
+  readonly shared: SkillValidationSharedContext | undefined;
+}
+
+/** How a file not admitted is resolved: by the project's `resources.validation`, matched at its project-relative path. */
+interface NotAdmittedPolicy {
+  readonly resourcesValidation: ValidationConfig;
+  readonly roots: NotAdmittedRoots;
+}
+
+/**
+ * One skill's issues through the validation framework: the batching caller's
+ * ledger when it supplied one, else this skill as the whole run. A file not
+ * admitted is split out first (`partitionNotAdmitted`) and resolved by
+ * `resources.validation` alone; the framework sees only the remainder.
+ */
+function runFrameworkFor(
+  issues: ValidationIssue[],
+  packagingConfig: SkillPackagingConfig | undefined,
+  shared: SkillValidationSharedContext | undefined,
+  policy: NotAdmittedPolicy,
+): ReturnType<typeof runSingleUnitValidation> {
+  const { rest, notAdmitted } = partitionNotAdmitted(issues, policy.resourcesValidation, policy.roots);
+  const validationConfig = packagingConfig?.validation ?? {};
+  const framework = shared?.allowLedger === undefined
+    ? runSingleUnitValidation(rest, validationConfig)
+    : runValidationFramework(rest, validationConfig, shared.allowLedger);
+  const emitted = [...framework.emitted, ...notAdmitted];
+  return { ...framework, emitted, hasErrors: emitted.some((issue) => issue.severity === 'error') };
+}
+
+/**
+ * The skill's SKILL.md, parsed on the bounded route (`parseFileCached`, in the
+ * worker) — or the finding that replaces the parse when the worker refuses it.
+ * Any other failure propagates as it always did.
+ *
+ * @param skillPath - The SKILL.md
+ * @param side - Whose fault a refused read is
+ * @param locationRoot - The base issues are located against
+ * @param dispatcher - Where the parse runs
+ * @returns The parse, or the refusal's issue
+ */
+async function parseSkillMarkdown(
+  skillPath: string,
+  side: FsSide,
+  locationRoot: string,
+  dispatcher: ParseDispatcher,
+): Promise<{ parseResult: Awaited<ReturnType<typeof parseFileCached>> } | { limit: ValidationIssue }> {
+  try {
+    return { parseResult: await parseFileCached(skillPath, 'markdown', { side, dispatcher }) };
+  } catch (error) {
+    const limit = parseRefusalIssue(error, skillPath, locationRoot);
+    if (limit === undefined) throw error;
+    return { limit };
+  }
+}
+
+/**
+ * The result for a skill whose SKILL.md could not be parsed at all: the one
+ * finding, resolved as every not-admitted finding is (`resources.validation`),
+ * and nothing else — no frontmatter, links or bundle to check.
+ *
+ * @param skillPath - The SKILL.md
+ * @param limit - Its `RESOURCE_PARSE_LIMIT_EXCEEDED` issue
+ * @param packagingConfig - The skill's packaging config, for its validation block
+ * @param shared - The batching caller's context, for its ledger
+ * @param policy - How a file not admitted is resolved
+ * @returns A result whose only finding is `limit`
+ */
+function parseLimitResult(
+  skillPath: string,
+  limit: ValidationIssue,
+  packagingConfig: SkillPackagingConfig | undefined,
+  shared: SkillValidationSharedContext | undefined,
+  policy: NotAdmittedPolicy,
+): PackagingValidationResult {
+  const framework = runFrameworkFor([limit], packagingConfig, shared, policy);
+  return {
+    // Named by its directory: there is no frontmatter or H1 to read a name from.
+    skillName: basename(dirname(skillPath)),
+    ...summarizeIssues(framework.emitted),
+    allErrors: framework.emitted,
+    ignoredErrors: framework.allowed,
+    observations: [],
+    evidence: [],
+    metadata: {
+      skillLines: 0,
+      totalLines: 0,
+      fileCount: 1,
+      directFileCount: 0,
+      maxLinkDepth: 0,
+      excludedReferenceCount: 0,
+      excludedReferences: [],
     },
   };
 }

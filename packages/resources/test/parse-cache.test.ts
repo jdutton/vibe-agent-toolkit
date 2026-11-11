@@ -15,12 +15,12 @@ import {
   defaultParseCache,
   dehydrate,
   parseCacheDirectory,
-  parseKeyed,
   rehydrate,
   vatCacheNamespace,
   vatCacheNamespaceRoot,
   vatCacheRoot,
 } from '../src/parse-cache.js';
+import { parseContentCached } from '../src/parse-dispatcher.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures — external constants, never derived from the code under test.
@@ -57,25 +57,27 @@ See [the other doc](./other.md), [ref][label] and [dangling][nope].
 [label]: ./target.md
 `;
 
+/** Frontmatter that refers back into itself: unbounded depth, so never filed. */
+const CYCLIC_FRONTMATTER_DOC = '---\ncyc: &anchor\n  self: *anchor\n---\n\n# Cyclic\n';
+
 /**
  * Frontmatter JSON **cannot** carry. Every value here survives `yaml.parse`
  * but is destroyed (or fatal) under `JSON.stringify`:
  *
  * - `.inf` / `.nan` → `Infinity` / `NaN`, both of which JSON writes as `null`
  * - `!!binary`      → a `Buffer`, which JSON writes as `{type,data}`
- * - a cyclic anchor → `JSON.stringify` **throws**
  *
- * The last one is the sharp edge: a cache that stored the parsed object would
- * not merely corrupt this document, it would silently never cache it. The
- * "fixture can distinguish" test below pins that this is really true of this
- * exact string rather than merely believed.
+ * A cache that stored the parsed object as JSON would hand a warm run different
+ * values from a cold one. The "fixture can distinguish" test below pins that
+ * this is really true of this exact string rather than merely believed. (A
+ * cyclic anchor, which `JSON.stringify` cannot write at all, is no longer here:
+ * it nests without end, so `outputDepth` refuses it and nothing is ever filed —
+ * {@link CYCLIC_FRONTMATTER_DOC}.)
  */
 const EXOTIC_FRONTMATTER_DOC = `---
 inf: .inf
 nan: .nan
 bin: !!binary "R0lGODlh"
-cyc: &anchor
-  self: *anchor
 ---
 
 # Exotic
@@ -115,7 +117,7 @@ const LOSSY_BYTES = new Uint8Array([0x23, 0x20, 0x54, 0xc3, 0xa9, 0x0a, 0xff, 0x
 /**
  * One document the two parsers read differently.
  *
- * `parseKeyed` picks its parser off `keyed.parserKind`, and a dispatch test is
+ * The dispatcher picks its parser off `keyed.parserKind`, and a dispatch test is
  * worthless unless the two branches can produce different answers on the same
  * bytes. The markdown parser reads `[text](href)` and treats the raw `<a>` as
  * opaque HTML; parse5 reads the `<a href>` and treats the bracket syntax as
@@ -385,9 +387,13 @@ describe('fixture distinguishability', () => {
     expect(frontmatter['inf']).toBe(Number.POSITIVE_INFINITY);
     expect(Number.isNaN(frontmatter['nan'])).toBe(true);
     expect(Buffer.isBuffer(frontmatter['bin'])).toBe(true);
-    // The whole object is unserializable — which makes "cache the source, not
-    // the object" a correctness requirement rather than a preference.
-    expect(() => JSON.stringify(frontmatter)).toThrow();
+    // A JSON round trip of the object loses every one of them — which makes
+    // "cache the source, not the object" a correctness requirement rather than
+    // a preference.
+    const written = JSON.stringify(frontmatter);
+    expect(written).toContain('"inf":null');
+    expect(written).toContain('"nan":null');
+    expect(written).toContain('"bin":{"type":"Buffer"');
   });
 
   it('DUAL_PARSER_DOC really makes the two parsers disagree', () => {
@@ -1052,14 +1058,20 @@ describe('ParseCache stats', () => {
   });
 });
 
-describe('parseKeyed', () => {
+/** One bounded parse of `keyed` through `cache` — the dispatcher's cache front. */
+function parseKeyedThrough(keyed: KeyedContent, cache: ParseCache): Promise<ParseResult> {
+  if (keyed.parserKind === 'none') throw new Error('test fixture: no parser routes a `none` document');
+  return parseContentCached(keyed.content, keyed.parserKind, { cache });
+}
+
+describe('the dispatcher\'s cache front (parseContentCached)', () => {
   const suite = setupParseCacheTestSuite();
 
   it('parses on a cold cache and records the miss', async () => {
     const keyed = keyedFromText(SIMPLE_DOC);
     const cache = suite.makeCache();
 
-    const result = await parseKeyed(keyed, cache);
+    const result = await parseKeyedThrough(keyed, cache);
 
     expect(result).toStrictEqual(freshParse(keyed));
     expect(cache.stats).toStrictEqual({ hits: 0, misses: 1, writeFailures: 0 });
@@ -1069,8 +1081,8 @@ describe('parseKeyed', () => {
     const keyed = keyedFromText(SIMPLE_DOC);
     const cache = suite.makeCache();
 
-    const cold = await parseKeyed(keyed, cache);
-    const warm = await parseKeyed(keyed, cache);
+    const cold = await parseKeyedThrough(keyed, cache);
+    const warm = await parseKeyedThrough(keyed, cache);
 
     expect(warm).toStrictEqual(cold);
     // Without this line the assertion above holds under an always-miss cache.
@@ -1081,8 +1093,8 @@ describe('parseKeyed', () => {
     const keyed = keyedFromText(EXOTIC_FRONTMATTER_DOC);
     const cache = suite.makeCache();
 
-    const cold = await parseKeyed(keyed, cache);
-    const warm = await parseKeyed(keyed, cache);
+    const cold = await parseKeyedThrough(keyed, cache);
+    const warm = await parseKeyedThrough(keyed, cache);
 
     expect(cache.stats).toStrictEqual({ hits: 1, misses: 1, writeFailures: 0 });
     expect(warm.frontmatter?.['inf']).toBe(Number.POSITIVE_INFINITY);
@@ -1091,13 +1103,25 @@ describe('parseKeyed', () => {
     expect(warm.links).toStrictEqual(cold.links);
   });
 
+  it('never files frontmatter that refers back into itself: it nests without end', async () => {
+    const keyed = keyedFromText(CYCLIC_FRONTMATTER_DOC);
+    const cache = suite.makeCache();
+
+    // The worker refuses it for this run (ADR I6: a per-run outcome is never
+    // stored), so the second call misses and is refused again.
+    await expect(parseKeyedThrough(keyed, cache)).rejects.toMatchObject({ code: 'PARSE_LIMIT_EXCEEDED' });
+    await expect(parseKeyedThrough(keyed, cache)).rejects.toMatchObject({ code: 'PARSE_LIMIT_EXCEEDED' });
+
+    expect(cache.stats).toStrictEqual({ hits: 0, misses: 2, writeFailures: 0 });
+  });
+
   it('chooses the parser from keyed.parserKind, on identical bytes', async () => {
     const asMarkdown = keyedFromText(DUAL_PARSER_DOC, 'markdown');
     const asHtml = keyedFromText(DUAL_PARSER_DOC, 'html');
     const cache = suite.makeCache();
 
-    const markdownResult = await parseKeyed(asMarkdown, cache);
-    const htmlResult = await parseKeyed(asHtml, cache);
+    const markdownResult = await parseKeyedThrough(asMarkdown, cache);
+    const htmlResult = await parseKeyedThrough(asHtml, cache);
 
     expect(markdownResult).toStrictEqual(
       parseMarkdownContent(asMarkdown.content, asMarkdown.byteLength),
@@ -1112,11 +1136,11 @@ describe('parseKeyed', () => {
     const asMarkdown = keyedFromText(DUAL_PARSER_DOC, 'markdown');
     const asHtml = keyedFromText(DUAL_PARSER_DOC, 'html');
     const cache = suite.makeCache();
-    await parseKeyed(asMarkdown, cache);
-    await parseKeyed(asHtml, cache);
+    await parseKeyedThrough(asMarkdown, cache);
+    await parseKeyedThrough(asHtml, cache);
 
-    const warmMarkdown = await parseKeyed(asMarkdown, cache);
-    const warmHtml = await parseKeyed(asHtml, cache);
+    const warmMarkdown = await parseKeyedThrough(asMarkdown, cache);
+    const warmHtml = await parseKeyedThrough(asHtml, cache);
 
     expect(cache.stats).toStrictEqual({ hits: 2, misses: 2, writeFailures: 0 });
     expect(hrefsOf(warmMarkdown)).toContain(MARKDOWN_ONLY_HREF);
@@ -1127,15 +1151,15 @@ describe('parseKeyed', () => {
   it('never lets one hit alias the next (skill-packager mutates links in place)', async () => {
     const keyed = keyedFromText(SIMPLE_DOC);
     const cache = suite.makeCache();
-    await parseKeyed(keyed, cache);
+    await parseKeyedThrough(keyed, cache);
 
-    const firstHit = await parseKeyed(keyed, cache);
+    const firstHit = await parseKeyedThrough(keyed, cache);
     const [firstLink] = firstHit.links;
     // Throw rather than skip: a fixture with no links would make this test pass
     // vacuously, which is the failure mode it exists to rule out.
     if (firstLink === undefined) throw new Error('SIMPLE_DOC produced no links to mutate');
     firstLink.resolvedId = 'mutated-downstream';
-    const secondHit = await parseKeyed(keyed, cache);
+    const secondHit = await parseKeyedThrough(keyed, cache);
 
     // Both reads really were hits — a miss would re-parse and hide the aliasing.
     expect(cache.stats).toStrictEqual({ hits: 2, misses: 1, writeFailures: 0 });
@@ -1148,8 +1172,8 @@ describe('parseKeyed', () => {
     const keyed = keyedFromText(SIMPLE_DOC);
     const cache = suite.makeCache({ enabled: false });
 
-    const first = await parseKeyed(keyed, cache);
-    const second = await parseKeyed(keyed, cache);
+    const first = await parseKeyedThrough(keyed, cache);
+    const second = await parseKeyedThrough(keyed, cache);
 
     expect(second).toStrictEqual(first);
     expect(second).not.toBe(first);

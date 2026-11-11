@@ -20,24 +20,27 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
 import {
-  admissionOrder,
   DeferredArtifacts,
-  DuplicateResourceIdError,
   ResourceRegistry,
   loadConfig,
   openFrontmatter,
+  parseFileCached,
+  parseRefusedEntryFor,
+  parseRefusedMessage,
+  partitionNotAdmitted,
   resolveLocalHref,
   rewriteFrontmatterUriReferencesFromSchema,
   rewriteHtmlLinks,
   transformContent,
   type DuplicateIdCollision,
   type LinkRewriteRule,
+  type ParseRefusedResource,
   type ParseResult,
   type ProjectConfig,
   type ResourceLink,
   type ResourceMetadata,
   type ResourcePopulationSource,
-  parseFileCached,
+  type UnreadableResource,
 } from '@vibe-agent-toolkit/resources';
 import {
   allowUnusedIssues,
@@ -56,6 +59,7 @@ import {
   findProjectRoot,
   followedKindSync,
   forEachInOrder,
+  type FsFaultContext,
   isGlob,
   isSingleFsSegment,
   issueLocation,
@@ -92,6 +96,7 @@ import {
 } from './files-config.js';
 import { LINK_GRAPH_MEMBER_GLOBS } from './link-graph-members.js';
 import { packagingInputError, SKILL_NAME_NOT_A_SEGMENT_CODE, SkillPackageChecksFailedError } from './packaging-errors.js';
+import { refusedAmong, SKILL_REACHED_REFUSAL_CONSEQUENCE } from './parse-refusal-issues.js';
 import { checkBrokenPackagedLinks, checkMissingReferencedPaths, checkUnreferencedFiles } from './post-build-checks.js';
 import {
   checkPackagedTestInput,
@@ -769,7 +774,7 @@ async function preparePackage(
   } = options;
 
   // 1. Parse SKILL.md frontmatter and links
-  const parseResult = await parseFileCached(skillPath, 'markdown', { side: skillSide });
+  const parseResult = await parseSkillOrRefuse(skillPath, skillSide);
   const skillMetadata = extractSkillMetadata(parseResult, skillPath);
 
   // 2. Find project boundary (config root -> git root -> skill dir).
@@ -861,6 +866,11 @@ async function preparePackage(
     registry as WalkableRegistry,
     packagerWalkOptions,
   );
+  // A reached file whose parse the crawl refused is no asset: it would ship
+  // verbatim with its links unwalked and unrewritten. Refused before anything is
+  // written — whatever `resources.validation` says: an `allow` there settles what
+  // a run REPORTS, never what it ships.
+  refuseParseRefusedFiles(registry, [skillPath, ...bundledAssets], projectRoot);
 
   // Register non-markdown bundled assets in the source registry so link rewriting
   // can resolve them (resolvedId must be set on links pointing to YAML, JSON, etc.).
@@ -989,11 +999,9 @@ async function preparePackage(
       pathMap,
       rewriteLinks,
       fromRegistry: registry as WalkableRegistry,
-      // Both sources, because they record disjoint populations: the registry's
-      // own log holds crawl-time drops made by `addResources`, while
-      // `registerBundledAssets` holds the per-asset drops `addResource` only ever
-      // signalled by throwing. An HTML file that collides with a same-named
-      // markdown file appears ONLY in the second.
+      // The registry's log holds every drop — the crawl's and the bundled
+      // assets' batch alike; `assetCollisions` is the assets' slice of it, so
+      // the map's keys repeat and its values agree.
       duplicateIdDrops: new Map(
         [...registry.getDuplicateIdCollisions(), ...assetCollisions]
           .map(c => [toForwardSlash(c.conflictingPath), c.existingPath]),
@@ -1132,11 +1140,12 @@ async function preparePackage(
     const ownsRun = options.allowLedger === undefined;
     const buildRunLedger = options.allowLedger ?? createAllowUsageLedger();
 
-    const framework = runValidationFramework(
-      [...rawLinkIssues, ...rawPostBuildIssues],
-      options.validation ?? {},
-      buildRunLedger,
-    );
+    // A packaged document the parse worker refused on this run's read-back is no
+    // skill finding: split out at its default severity — no config resolves it,
+    // as none lets a refused file ship — and the skill's `validation` rules the rest.
+    const { rest, notAdmitted } = partitionNotAdmitted(rawPostBuildIssues, {}, { locationRoot: outputPath, projectRoot });
+    const ruled = runValidationFramework([...rawLinkIssues, ...rest], options.validation ?? {}, buildRunLedger);
+    const framework = withIssues(ruled, notAdmitted);
 
     // 13c. Run full validation suite on built output
     const postBuildValidation = await runPostBuildValidation(
@@ -1428,9 +1437,13 @@ export function reanchorStagedResult(
  * the single channel (`postBuildIssues`) rather than on both.
  */
 function withRunAllowUnused(framework: FrameworkResult, ledger: AllowUsageLedger): FrameworkResult {
-  const unused = allowUnusedIssues(ledger);
-  if (unused.length === 0) return framework;
-  const emitted = [...framework.emitted, ...unused];
+  return withIssues(framework, allowUnusedIssues(ledger));
+}
+
+/** `framework` with `issues` appended to what it emits. */
+function withIssues(framework: FrameworkResult, issues: readonly ValidationIssue[]): FrameworkResult {
+  if (issues.length === 0) return framework;
+  const emitted = [...framework.emitted, ...issues];
   return { ...framework, emitted, hasErrors: emitted.some(i => i.severity === 'error') };
 }
 
@@ -1516,6 +1529,9 @@ function runPostBuildValidation(
   const builtSkillPath = safePath.join(outputPath, 'SKILL.md');
   return validateSkillForPackaging(
     builtSkillPath,
+    // The built copy of a skill the packager let through: nothing in it was refused at
+    // the crawl, so a refusal here is this run's read-back, and no config clears it.
+    {},
     validation ? { validation } : undefined,
     'built',
     // The built skill IS this run's output, inside the project the check crawls — and so is
@@ -1533,8 +1549,61 @@ function refuseUnreadableSkill(registry: ResourceRegistry, skillPath: string, si
   const wanted = toForwardSlash(safePath.resolve(skillPath));
   const unread = registry.getUnreadableResources().find((entry) => toForwardSlash(safePath.resolve(entry.filePath)) === wanted);
   if (unread === undefined) return;
-  const failure = Object.assign(new Error(unread.reason), { code: unread.code ?? 'UNKNOWN' });
-  throw classifyFsFault(failure, { side, origin: 'content', action: `read the skill's SKILL.md ${skillPath}`, path: skillPath });
+  throw unreadableFault(unread, { side, origin: 'content', action: `read the skill's SKILL.md ${skillPath}`, path: skillPath });
+}
+
+/**
+ * A file the registry logged as unreadable, as the read fault it was: the log
+ * keeps the platform's errno and message, and the one side × class table
+ * classifies them.
+ *
+ * @param entry - The logged read failure
+ * @param ctx - What was being read, and on whose side
+ * @returns The classified fault, to throw
+ */
+function unreadableFault(entry: UnreadableResource, ctx: FsFaultContext): unknown {
+  const failure = Object.assign(new Error(entry.reason), { code: entry.code ?? 'UNKNOWN' });
+  return classifyFsFault(failure, ctx);
+}
+
+/**
+ * The skill's SKILL.md, parsed on the bounded route (`parseFileCached`, in the
+ * worker) — or, when the worker refuses it, the packager's one refusal of a
+ * refused file ({@link parseRefusedPackagingError}), never the parser's raw throw.
+ */
+async function parseSkillOrRefuse(skillPath: string, side: 'source' | 'destination'): Promise<Awaited<ReturnType<typeof parseFileCached>>> {
+  try {
+    return await parseFileCached(skillPath, 'markdown', { side });
+  } catch (error) {
+    const refused = parseRefusedEntryFor(skillPath, error);
+    if (refused === undefined) throw error;
+    throw parseRefusedPackagingError([refused], findProjectRoot(dirname(skillPath)) ?? dirname(skillPath), { cause: error });
+  }
+}
+
+/**
+ * Refuse a package that reaches a file whose parse the crawl refused — the skill's
+ * own SKILL.md or anything its walk bundles — as the packager's content refusal
+ * (`SKILL_PACKAGING_FAILED`), naming every such file under its own code. The
+ * validation lane reports the same files as `RESOURCE_PARSE_LIMIT_EXCEEDED` /
+ * `RESOURCE_PARSE_WORKER_DIED` findings; `vat skills build` validates first.
+ * Unconditional: `resources.validation` decides what a run reports, never what
+ * it ships, so no `allow` lets a refused file through.
+ */
+function refuseParseRefusedFiles(registry: ResourceRegistry, reached: readonly string[], projectRoot: string): void {
+  const refused = refusedAmong(registry.getParseRefusedResources(), reached);
+  if (refused.length === 0) return;
+  throw parseRefusedPackagingError(refused, projectRoot);
+}
+
+/**
+ * The packager's one refusal of files whose parse was refused, each under its
+ * own code in the sentence every lane reports a refusal with — whether a crawl
+ * logged the refusal or a single-file `addResource` threw it.
+ */
+function parseRefusedPackagingError(refused: readonly ParseRefusedResource[], projectRoot: string, options?: ErrorOptions): Error {
+  const lines = refused.map((entry) => `${entry.code}: ${parseRefusedMessage(entry, issueLocation(entry.filePath, projectRoot), SKILL_REACHED_REFUSAL_CONSEQUENCE)}`);
+  return packagingInputError(`The skill reaches ${refused.length} file(s) whose parse was refused:\n${lines.join('\n')}`, options);
 }
 
 /** Input for assemblePackageResult — avoids a long parameter list. */
@@ -1753,9 +1822,17 @@ function collectResourcesWithLinks(
  * and compute the output `relativePath`. Without this, non-markdown links get stripped
  * to empty `()` parentheses.
  *
- * Collision handling: if an asset's generated id is already taken, `addResource`
- * throws. We catch this, skip source-registry indexing for the asset, and return
- * it so the caller can synthesize a unique ID for link rewriting.
+ * One `addResources` batch, never one `addResource` per asset: the batch is ONE
+ * parse dispatcher, as a crawl's is, so the pool's broken-install breaker sees
+ * every asset's parse. Per asset, each pool saw exactly one thread death, never
+ * the run of them that trips it, and a broken install was refused as a broken
+ * FIRST ASSET (`RESOURCE_PARSE_WORKER_DIED`). Now it throws
+ * `ParserUnavailableError`, the install's fault.
+ *
+ * The batch records what it did not admit instead of throwing it, so this reads
+ * the registry's logs for the entries the batch added, in admission order:
+ * an unreadable asset is the read's own fault, a refused parse the packager's
+ * one refusal of a refused file, and an id collision is returned.
  *
  * The clash is a **path-slug** one, not an extension one. This used to claim the
  * example was "paired `config.yaml` + `config.md`, both producing id
@@ -1767,57 +1844,49 @@ function collectResourcesWithLinks(
  * @returns The colliding asset paths, and the collisions themselves. The caller
  *   must wire the paths up manually; the collisions are what let the
  *   verbatim-copy diagnostic name the file that actually won the id.
+ * @throws `ParserUnavailableError` for a broken install; the classified read
+ *   fault of the first unreadable asset; the packager's refusal of every asset
+ *   whose parse was refused
  */
 async function registerBundledAssets(
   registry: ResourceRegistry,
   bundledAssets: string[],
   projectRoot: string,
 ): Promise<{ collidedAssets: string[]; collisions: DuplicateIdCollision[] }> {
-  const collidedAssets: string[] = [];
-  const collisions: DuplicateIdCollision[] = [];
   if (bundledAssets.length === 0) {
-    return { collidedAssets, collisions };
+    return { collidedAssets: [], collisions: [] };
   }
-  // In the registry's admission order, never link order: `addResource` mutates
-  // the shared registry and the first to claim an id keeps it, so this is the
-  // one order that makes the code-unit-first of two clashing assets win, as it
-  // does in every `addResources` batch.
-  await forEachInOrder(admissionOrder(bundledAssets), async (assetPath) => {
-    try {
-      // `addResource` parses the file, so it READS it — which makes this the first
-      // place a build touches a linked asset, and the place an unreadable one
-      // actually fails. It reported a bare `EACCES … open '/abs/path'` with no
-      // skill named and no remedy: the same shape as the copiers, one step
-      // earlier, and the step that fires first.
-      await withFsFault(
-        {
-          side: 'source',
-          origin: 'content',
-          // The file is read to discover its links before anything is copied, so
-          // naming the copy would point past the step that actually failed.
-          action: `read linked file ${issueLocation(assetPath, projectRoot) || '.'} while collecting the files this skill links to`,
-        },
-        () => registry.addResource(assetPath),
-      );
-    } catch (error) {
-      // `addResource` (singular) THROWS on a collision and — unlike
-      // `addResources` — records nothing in the registry's collision log. So
-      // this catch is the ONLY place a bundled-asset collision is ever
-      // observable; drop the structured error here and the fact is gone.
-      if (error instanceof DuplicateResourceIdError) {
-        collidedAssets.push(assetPath);
-        collisions.push({
-          id: error.id,
-          existingPath: error.existingPath,
-          conflictingPath: error.conflictingPath,
-        });
-      } else {
-        throw error;
-      }
-    }
-  });
+  const before = {
+    collisions: registry.getDuplicateIdCollisions().length,
+    unreadable: registry.getUnreadableResources().length,
+    refused: registry.getParseRefusedResources().length,
+  };
+  // The registry sorts the batch into admission order, so the code-unit-first
+  // of two clashing assets wins, as in every `addResources` batch.
+  await registry.addResources(bundledAssets);
+
+  // `addResources` parses each asset, so it READS it — the first place a build
+  // touches a linked asset, and the place an unreadable one actually fails. It
+  // used to surface a bare `EACCES … open '/abs/path'` with no skill named.
+  const unreadable = registry.getUnreadableResources().slice(before.unreadable)[0];
+  if (unreadable !== undefined) {
+    throw unreadableFault(unreadable, {
+      side: 'source',
+      origin: 'content',
+      // The file is read to discover its links before anything is copied, so
+      // naming the copy would point past the step that actually failed.
+      action: `read linked file ${issueLocation(unreadable.filePath, projectRoot) || '.'} while collecting the files this skill links to`,
+      path: unreadable.filePath,
+    });
+  }
+  // An asset the crawl never enumerated (outside its include) is parsed here
+  // first: the same refusal `refuseParseRefusedFiles` raises for a crawled one.
+  const refused = registry.getParseRefusedResources().slice(before.refused);
+  if (refused.length > 0) throw parseRefusedPackagingError(refused, projectRoot);
+
+  const collisions = registry.getDuplicateIdCollisions().slice(before.collisions);
   registry.resolveLinks();
-  return { collidedAssets, collisions };
+  return { collidedAssets: collisions.map((collision) => collision.conflictingPath), collisions };
 }
 
 /**

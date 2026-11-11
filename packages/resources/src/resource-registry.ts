@@ -22,10 +22,7 @@ import {
   CRAWL_REGISTRY_RESOLVE_LINKS_ID,
   crawlTimingStart,
   forEachInOrder,
-  type FsFaultClass,
-  fsFaultOf,
   FsLookupCache,
-  isFsFaultError,
   issueLocation,
   isVatError,
   recordRegistryPass,
@@ -46,7 +43,7 @@ import {
   type UnreadablePolicy,
 } from '@vibe-agent-toolkit/utils/crawl';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
-import { decodeTextContent, TextTooLargeError } from '@vibe-agent-toolkit/utils/text';
+import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 
 import { calculateChecksumFromContent } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
@@ -66,8 +63,11 @@ import { estimateTokens } from './link-classify.js';
 import type { ParseResult } from './link-parser.js';
 import { fillLinkFacts, fragmentIndex, judgeLink, resolveLinkEntries, unreadableTargetsFrom, type FragmentIndex, type JudgeLinkOptions, type LinkEntry, type ValidateLinkOptions } from './link-validator.js';
 import { parserKindForMimeType } from './mime-type.js';
+import { type NotAdmittedLog, notAdmittedIssues, parseRefusedEntry } from './not-admitted.js';
 import { ParseCache, type ParseCacheStats, vatCacheRoot } from './parse-cache.js';
 import { ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable } from './parse-dispatcher.js';
+import { isReadFailure, readFailureCode } from './parse-failure.js';
+import { isPerRunParseRefusal, type PerRunParseRefusal } from './parse-limits.js';
 // A value import, and acyclic: `crawl-source.ts` reaches only `utils` and a
 // type from `realizations.ts`, never back into the registry. The remedy is
 // shared so the walk lane refuses with the projection's exact sentence.
@@ -112,75 +112,6 @@ export interface DuplicateIdCollision {
 }
 
 /**
- * The fault classes ({@link fsFaultOf}) that mean "this path could not be read",
- * as opposed to "VAT is broken".
- *
- * Deliberately an allow-list rather than a catch-all. Demoting every non-
- * duplicate error to a finding would silently convert a parser or indexing
- * defect into a per-file warning, and the corpus-wide symptom of that is a
- * quietly shrinking population — the exact failure mode this code exists to
- * make loud.
- *
- * `absent` is the dangling symlink and the file deleted between enumeration and
- * parse; `refused` a mode bit; `wrong-type` a symlink cycle, a name too long, a
- * path whose type changed underneath the crawl, or a pipe or device where a
- * file was expected. `exhausted` (descriptors, disk, quota) is deliberately NOT
- * here: it is the machine's fault, not the file's, so it throws classified and
- * refuses `RUN_INCOMPLETE` — a per-file finding could be downgraded by config to
- * exit 0 over a run that never read the file. A `device` fault (a hung mount,
- * failing hardware) is not something a finding about the file can describe
- * either.
- *
- * Being an allow-list is also what makes this boundary safe for the parser load
- * that now happens inside `addResource`: a failed load arrives as
- * `ParserUnavailableError`, which carries no errno and no `cause`, so it is never
- * demoted. That holds by construction — no `isParserUnavailable` call is needed
- * here, and adding one would suggest this set could otherwise contain it.
- */
-const READ_FAILURE_CLASSES: ReadonlySet<FsFaultClass> = new Set(['absent', 'refused', 'wrong-type']);
-
-/**
- * Whether an error is a filesystem read failure rather than a defect.
- *
- * The file past what one JS string can hold (`TEXT_TOO_LARGE`) is admitted too:
- * not an errno, refused by size before any read, but the consequence is the same
- * — the file is enumerated and cannot be admitted — and it reaches the finding as
- * its own code, so no reader goes looking for a permissions problem.
- *
- * @param error - The thrown value
- * @returns True when the error is a read failure the classifier recognizes
- */
-function isReadFailure(error: unknown): error is Error {
-  if (!(error instanceof Error)) return false;
-  if (isVatError(error, TextTooLargeError.code)) return true;
-  const faultClass = readFault(error)?.faultClass;
-  return faultClass !== undefined && READ_FAILURE_CLASSES.has(faultClass);
-}
-
-/**
- * The fault a read failure IS: a classified `FsFaultError`, or a raw errno on the
- * error itself. Deliberately not a walk of the `cause` chain: a coded error, or a
- * wrapper, that merely carries an errno underneath has already said what it
- * means, and demoting it to a per-file finding would hide that.
- */
-function readFault(error: Error): { faultClass: FsFaultClass; errno: string } | undefined {
-  if (isFsFaultError(error)) return { faultClass: error.faultClass, errno: error.errno };
-  if (isVatError(error)) return undefined;
-  // The classifier asked of the error itself (its syscall and path decide an unlisted or network
-  // errno), and kept only when the errno it found is this error's own, never one down its cause chain.
-  const facts = fsFaultOf(error);
-  return facts !== undefined && facts.errno === (error as { code?: unknown }).code ? facts : undefined;
-}
-
-/**
- * The code a {@link isReadFailure} error is recorded under: its errno ({@link readFault}),
- * else its own code (`TEXT_TOO_LARGE`).
- */
-function readFailureCode(error: Error): string {
-  return readFault(error)?.errno ?? (isVatError(error) ? error.code : 'UNKNOWN');
-}
-
-/**
  * One enumerated file that could not be read, and so is absent from the
  * registry despite the crawl having found it.
  */
@@ -213,7 +144,26 @@ export interface UnreadableResource {
 type PreparedResource =
   | { outcome: 'admitted'; resource: ResourceMetadata }
   | { outcome: 'unreadable'; filePath: string; reason: string; code?: string; error: Error }
+  | { outcome: 'parse-refused'; filePath: string; error: PerRunParseRefusal }
   | { outcome: 'failed'; error: unknown };
+
+/**
+ * One enumerated file whose parse this run refused — stopped at a limit, or lost
+ * with the worker that held it — and so is absent from the registry despite the
+ * crawl having found it. Never stored: the next run parses it again (ADR I6).
+ *
+ * The one shape every lane reports a refusal from — a crawl's log, a
+ * single-file add's throw, and a projection's refusal rows alike — so
+ * `parseRefusedMessage` says it in one sentence wherever it was met.
+ */
+export interface ParseRefusedResource {
+  /** Absolute path of the file that was enumerated but not admitted. */
+  readonly filePath: string;
+  /** The finding code every consumer reports it under. */
+  readonly code: 'RESOURCE_PARSE_LIMIT_EXCEEDED' | 'RESOURCE_PARSE_WORKER_DIED';
+  /** What stopped the parse, e.g. `its parse was stopped at its stackMb limit (1 MiB stack)`. */
+  readonly reason: string;
+}
 
 export class DuplicateResourceIdError extends VatError {
   readonly id: string;
@@ -452,7 +402,7 @@ export interface ResourceRegistryOptions {
   /**
    * How, and whether, to move this registry's parsing off the main thread.
    *
-   * Defaults are what a command gets — ON, unless `VAT_PARSE_POOL=0` — and the
+   * Defaults are what a command gets — there is no off switch — and the
    * meaning of every field is {@link ParsePoolPolicy}'s, shared verbatim with
    * the projection lane so the two cannot reach different verdicts about a
    * switch that has already been measured once.
@@ -580,7 +530,7 @@ function collectionSchemaCacheKey(resolvedSchemaPath: string, mode: ValidationMo
  * What a resource is when nothing parses it.
  *
  * `parserKindForPath` answers `none` for every type that is neither prose nor
- * markup, and `parseKeyed` refuses that kind in its SIGNATURE — so this is not a
+ * markup, and the dispatcher refuses that kind in its SIGNATURE — so this is not a
  * fallback the registry may forget, it is the other half of a decision the
  * compiler insists on. The alternative was the status quo ante, where a `.ts`
  * file went to `remark-parse` and came back with reference-style "links" made of
@@ -808,6 +758,15 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private unreadableResources: UnreadableResource[] = [];
 
   /**
+   * Files whose parse this run refused (`parse-limits.ts`): stopped at a limit,
+   * or lost with the worker that held it. Not admitted this run. Cleared by
+   * clear(). Surfaced as RESOURCE_PARSE_LIMIT_EXCEEDED or
+   * RESOURCE_PARSE_WORKER_DIED issues in validate(). Nothing about them is
+   * stored, so the next run parses them again.
+   */
+  private parseRefusedResources: ParseRefusedResource[] = [];
+
+  /**
    * Population-time conditions the population source handed over with the
    * paths — the projection's `realization_conditions` for the extents the lane
    * registered. Empty on the walk lane, which has no projection. Cleared by
@@ -828,6 +787,35 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   getUnreadableResources(): UnreadableResource[] {
     return [...this.unreadableResources];
+  }
+
+  /**
+   * Files whose parse this run refused, in the order `addResources` met them.
+   *
+   * ⛔ Not optional to read. Such a file is in no other list this registry
+   * keeps: not admitted, not unreadable, not in `getAllResources()`. A consumer
+   * that crawls and never calls {@link validate} must report every entry here
+   * as an error finding and count it as examined, exactly as it reports
+   * {@link getUnreadableResources}; otherwise a pathological document silently
+   * drops out of its output at exit 0. Every crawl in `src` is held to this by
+   * `packages/dev-tools/test/parse-refusal-readers.test.ts`.
+   *
+   * @returns A copy of the refusal log, oldest first
+   */
+  getParseRefusedResources(): ParseRefusedResource[] {
+    return [...this.parseRefusedResources];
+  }
+
+  /**
+   * Both logs of files this registry enumerated and did not admit
+   * ({@link getUnreadableResources}, {@link getParseRefusedResources}), in the
+   * shape the one not-admitted contract reads (`not-admitted.ts`): every verb
+   * turns them into findings and counts them in `examined` through it.
+   *
+   * @returns Copies of both logs
+   */
+  getNotAdmitted(): NotAdmittedLog {
+    return { unreadable: this.getUnreadableResources(), parseRefused: this.getParseRefusedResources() };
   }
 
   /**
@@ -1022,10 +1010,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   async addResource(filePath: string): Promise<ResourceMetadata> {
     const startedAt = crawlTimingStart();
-    // Its own dispatcher, which can never activate: one document cannot clear
-    // the miss threshold, so `shutdown()` closes nothing and the width stays 1.
-    // Built anyway rather than special-cased, so this route and `addResources`
-    // reach the parser through exactly one code path.
+    // Its own dispatcher, so this route and `addResources` reach the parser
+    // through exactly one code path: a miss parses in a bounded one-shot worker
+    // (I8), and `shutdown()` closes it. A hit spawns nothing.
     const dispatcher = new ParseDispatcher(this.parseCache(), this.parsePoolPolicy);
     try {
       const prepared = await this.prepareAdmission(filePath, dispatcher);
@@ -1071,6 +1058,10 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     try {
       return { outcome: 'admitted', resource: await this.readAndKey(filePath, dispatcher) };
     } catch (error) {
+      // A parse stopped at a limit, or lost with its worker, is the run's, not
+      // the file's or VAT's: a finding, so one runaway document never fails the
+      // whole crawl (ADR I6, I8).
+      if (isPerRunParseRefusal(error)) return { outcome: 'parse-refused', filePath, error };
       if (isReadFailure(error)) {
         // A file the crawl handed us that we cannot read. Recorded, not thrown:
         // previously this terminated `vat resources scan|validate` and `vat
@@ -1161,7 +1152,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // THE read. Everything below is a function of these bytes plus one stat —
     // this used to be two whole-file reads (parse, then checksum) and two stats.
     // The discriminator runs exactly ONCE here and its answer rides on `keyed`
-    // into both the content key and the parser selection in `parseKeyed`:
+    // into both the content key and the parser selection in the dispatcher:
     // parser selection is part of a document's parse identity (content-key.ts),
     // and running the discriminator twice is how the parse route and the key's
     // parse-route component drift apart.
@@ -1171,10 +1162,10 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     const keyed = await readContentWithKey(absolutePath, this.parserKindFor(absolutePath));
 
     // Parse from the bytes already in hand — or from a cache entry filed under
-    // the key those bytes just produced. See `parseKeyed` for the interception.
+    // the key those bytes just produced. See `ParseDispatcher.parse`.
     //
     // …unless nothing parses this at all. `parserKindForPath` answers `none` for
-    // every type that is neither prose nor markup, and `parseKeyed` refuses that
+    // every type that is neither prose nor markup, and the dispatcher refuses that
     // kind by TYPE rather than by throwing, so the branch cannot be forgotten.
     // See {@link unparsedResourceFacts} for what a resource is without a parse.
     const parseResult = isParsableContent(keyed)
@@ -1261,6 +1252,10 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   private emitPreparedResource(prepared: PreparedResource): ResourceMetadata | undefined {
     if (prepared.outcome === 'failed') throw prepared.error;
+    if (prepared.outcome === 'parse-refused') {
+      this.parseRefusedResources.push(parseRefusedEntry(prepared.filePath, prepared.error));
+      return undefined;
+    }
     if (prepared.outcome === 'unreadable') {
       this.unreadableResources.push({
         filePath: prepared.filePath,
@@ -1725,27 +1720,17 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
-   * Emit RESOURCE_UNREADABLE errors for reads that failed during addResources().
-   *
-   * The message states that the file was **skipped**, because the consequence
-   * a reader needs is not "a read failed" but "this file is in none of the
-   * counts you are about to read".
+   * RESOURCE_UNREADABLE, RESOURCE_PARSE_LIMIT_EXCEEDED and
+   * RESOURCE_PARSE_WORKER_DIED errors for every file addResources() enumerated
+   * and did not admit, through the one contract every verb reports them with
+   * (`not-admitted.ts`). Unresolved: `validate()` runs the framework over them
+   * with everything else.
    * @private
    */
-  private collectUnreadableResourceErrors(): ValidationIssue[] {
-    return this.unreadableResources.map(({ filePath, code }) => {
-      const where = issueLocation(filePath, locationRoot(this.baseDir));
-      const errno = code === undefined ? '' : ` (${code})`;
-      return createRegistryIssue(
-        'RESOURCE_UNREADABLE',
-        // `reason` (the raw fs error message) is deliberately omitted: Node's fs
-        // errors embed the absolute path (e.g. "ENOENT: ... open '/Users/...'"),
-        // which would leak the developer's home directory into CI logs -- the
-        // same class of leak `where` was computed to avoid. The errno code is
-        // signal enough; see the ValidationIssue docstring's `location` contract.
-        `'${where}' was enumerated but could not be read, so it was skipped and is absent from every count in this report${errno}.`,
-        { location: where },
-      );
+  private collectNotAdmittedErrors(): ValidationIssue[] {
+    return notAdmittedIssues(this.getNotAdmitted(), {
+      locationRoot: locationRoot(this.baseDir),
+      consequence: 'it was skipped: nothing in it was checked',
     });
   }
 
@@ -1797,11 +1782,12 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       skipGitIgnoreCheck,
     });
 
-    // The files this run enumerated and could NOT read, as the judge's lookup:
-    // an anchor into one of them cannot be checked, and the judge says so
-    // (LINK_TARGET_UNREADABLE) instead of `skip`ping it as if the file held no
-    // headings. Built once from the existing log — a view, not a second ledger.
-    const unreadableTargets = unreadableTargetsFrom(this.unreadableResources);
+    // The files this run enumerated and did NOT admit — unreadable, or their
+    // parse refused — as the judge's lookup: an anchor into one of them cannot
+    // be checked, and the judge says so (LINK_TARGET_UNREADABLE) instead of
+    // `skip`ping it as if the file held no headings. Built once from both logs
+    // (`getNotAdmitted()`) — a view, not a second ledger.
+    const unreadableTargets = unreadableTargetsFrom(this.getNotAdmitted());
 
     // Only pass options if projectRoot is defined (exactOptionalPropertyTypes requirement)
     const judgeOptions: JudgeLinkOptions = this.baseDir === undefined
@@ -2031,7 +2017,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     if (validation.checkFrontmatterLinks !== false && resource.frontmatter) {
       // Same lookup the body-link judge gets (see `validateAllLinks`), so a
       // frontmatter reference with an anchor into a locked file is a finding too.
-      const unreadableTargets = unreadableTargetsFrom(this.unreadableResources);
+      const unreadableTargets = unreadableTargetsFrom(this.getNotAdmitted());
       const linkOptions: ValidateLinkOptions = this.baseDir === undefined
         ? { fsCache: this.fsCache, skipGitIgnoreCheck, unreadableTargets }
         : {
@@ -2140,7 +2126,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       ...this.collectHtmlParseErrors(),
       ...this.collectUnresolvedReferenceIssues(),
       ...this.collectDuplicateIdErrors(),
-      ...this.collectUnreadableResourceErrors(),
+      ...this.collectNotAdmittedErrors(),
       ...this.collectPopulationConditionIssues(),
     );
 
@@ -2580,6 +2566,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     this.resourcesByChecksum.clear();
     this.duplicateIdCollisions = [];
     this.unreadableResources = [];
+    this.parseRefusedResources = [];
     this.populationConditions = [];
     // The resolver's conflict accumulator belongs to the files it typed; a fresh
     // crawl types afresh and must not re-report the previous population's.

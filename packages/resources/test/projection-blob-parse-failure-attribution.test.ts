@@ -24,7 +24,7 @@
  *
  * Awaiting `loadParser` above each `try` was tried too, and it is what these
  * tests used to drive. It works and it costs too much: the load happens inside
- * `parseKeyed`, past the cache's hit-path return, precisely so a fully warm run
+ * the parse worker, after the cache's hit-path return, precisely so a fully warm run
  * loads no parser at all (measured: 1,049 scripts warm against 1,235 cold). Any
  * hoist cancels that silently.
  *
@@ -36,8 +36,9 @@
  *
  * ## What these tests drive, and what they do not
  *
- * They inject a genuine `ParserUnavailableError` at the parse seam, which is
- * exactly what the lazy load produces there. That the real import boundary
+ * They inject a genuine `ParserUnavailableError` at the parse pool, the one
+ * route every parse takes, which is exactly what a worker whose parser cannot
+ * load answers with. That the real import boundary
  * really MINTS that error — for both parser kinds, and through both routes into
  * the parser modules — is `parser-unavailable-error.test.ts`'s job, driven
  * against the real `import()` with a fresh module instance per case. Splitting
@@ -64,10 +65,12 @@
  */
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type * as ParseCacheModule from '../src/parse-cache.js';
 import { ParseCache, ParserUnavailableError } from '../src/parse-cache.js';
+import type { ParsePoolPolicy } from '../src/parse-dispatcher.js';
+import { reviveParserThrow } from '../src/parse-limits.js';
+import { createParsePool, type ParsePool, type ParsePoolOptions } from '../src/parse-pool.js';
 import { BLOB_PARSE_FAILED, populateBlobs } from '../src/projection/blob-population.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 
@@ -75,36 +78,45 @@ import { baseBuilderForRoot, conditionsWithCode } from './blob-fixture-populatio
 import { setupSubdirTestSuite, useCorpusSuite, type CorpusFile } from './test-helpers.js';
 
 /**
- * What the next `parseKeyed` call throws, or nothing.
- *
- * `vi.hoisted` because the mock factory below is hoisted above every import and
- * would otherwise close over an uninitialised binding. One field per class,
- * because the whole subject is which of the two the catch may swallow.
+ * What the next parse throws, or nothing. One field per class, because the
+ * whole subject is which of the two the catch may swallow.
  */
-const failures = vi.hoisted(() => ({
-  load: undefined as Error | undefined,
-  parse: undefined as Error | undefined,
-}));
+const failures: { load: Error | undefined; parse: Error | undefined } = { load: undefined, parse: undefined };
 
-// Only `parseKeyed` is replaced — the seam the lazy parser load throws THROUGH.
-// Everything else — `ParseCache`, `isParserUnavailable`, the content-key
-// machinery the base stratum runs — stays real via `importOriginal`, so the
-// realizations these tests derive blobs from are the ones a real crawl produces
-// and the predicate under test is the shipped one. Mocking the whole module
-// would make the fixture's keys fictional and the stages under test would never
-// be reached with a genuine target. `ResourceRegistry` imports from this same
-// module, so one mock covers both call sites.
-vi.mock('../src/parse-cache.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof ParseCacheModule>();
+/**
+ * A policy whose pool fails the way the worker reports a failure, or else
+ * parses for real.
+ *
+ * The pool is the seam because it is the one route every parse takes: there is
+ * no in-process parse left to intercept. A real pool's worker reports a parser
+ * that cannot load as a `ParserUnavailableError` rebuilt on this side, and any
+ * other parser throw as a plain error, which is what this pool rejects with.
+ *
+ * @returns The policy both crawl lanes accept as `parsePool`
+ */
+function failingPolicy(): ParsePoolPolicy {
   return {
-    ...actual,
-    parseKeyed: async (...args: Parameters<typeof actual.parseKeyed>) => {
-      if (failures.load) throw failures.load;
-      if (failures.parse) throw failures.parse;
-      return actual.parseKeyed(...args);
+    createPool: (options?: ParsePoolOptions): ParsePool => {
+      const real = createParsePool(options);
+      const failure = (): Error | undefined => failures.load ?? failures.parse;
+      return {
+        size: real.size,
+        parse: async (kind, content, byteLength) => {
+          const error = failure();
+          if (error) throw error;
+          return real.parse(kind, content, byteLength);
+        },
+        parseIntoCache: async (kind, content, byteLength, cacheKey) => {
+          const error = failure();
+          if (error) throw error;
+          return real.parseIntoCache(kind, content, byteLength, cacheKey);
+        },
+        harnessFacts: async (harness, content, byteLength) => real.harnessFacts(harness, content, byteLength),
+        shutdown: async () => real.shutdown(),
+      };
     },
   };
-});
+}
 
 /**
  * Two documents, deliberately: the defect being guarded against is "once per
@@ -190,7 +202,7 @@ describe('a parser-load failure during blob derivation', () => {
 
     // Identity, not `toThrow(message)`: what must survive is the loader's own
     // error object, because the caller's top-level handler prints its code.
-    await expect(populateBlobs(builder, { parseCache: NO_CACHE })).rejects.toBe(thrown);
+    await expect(populateBlobs(builder, { parseCache: NO_CACHE, parsePool: failingPolicy() })).rejects.toBe(thrown);
 
     const projection = builder.build();
     expect(conditionsWithCode(projection, BLOB_PARSE_FAILED)).toEqual([]);
@@ -206,15 +218,22 @@ describe('a parser-load failure during blob derivation', () => {
  * unparseable file, which is the failure the catch exists to prevent.
  */
 describe('an ordinary parser failure during blob derivation', () => {
+  // As the pool revives them: a throw the worker saw the PARSER make from the
+  // bytes carries the worker's `fromDocument` brand (`reviveParserThrow`), its own
+  // name, message and code carried across.
   const ORDINARY_FAILURES = [
     // No `code` at all: the shape a parser's own `throw new Error(...)` has.
-    { label: 'a plain Error with no code', error: new Error('unexpected token') },
+    { label: 'a plain Error with no code', error: reviveParserThrow({ name: 'Error', message: 'unexpected token' }, true) },
     // A `code`, but one that reaches the catch from the parse rather than from
     // the load — proves the catch still swallows a coded error, so the guard is
-    // the one constructed type and not a resurrected code check.
+    // the brand and not a resurrected code check.
     {
       label: 'a coded error thrown by the parse',
-      error: codedError('ERR_INVALID_ARG_TYPE', 'The "input" argument must be of type string'),
+      error: reviveParserThrow({
+        name: 'TypeError',
+        message: 'The "input" argument must be of type string',
+        code: 'ERR_INVALID_ARG_TYPE',
+      }, true),
     },
   ];
 
@@ -222,7 +241,7 @@ describe('an ordinary parser failure during blob derivation', () => {
     failures.parse = error;
     const builder = await baseBuilderForRoot(suite.tempDir);
 
-    const counts = await populateBlobs(builder, { parseCache: NO_CACHE });
+    const counts = await populateBlobs(builder, { parseCache: NO_CACHE, parsePool: failingPolicy() });
 
     expect(counts.blobsParseFailed).toBe(CORPUS.length);
     const conditions = conditionsWithCode(builder.build(), BLOB_PARSE_FAILED);
@@ -230,6 +249,26 @@ describe('an ordinary parser failure during blob derivation', () => {
     expect(conditions[0]?.message).toContain('parser threw on these bytes');
     // Content-addressed and shared across repositories: no path belongs in it.
     expect(conditions[0]?.message).not.toMatch(/ at "/);
+  });
+});
+
+/**
+ * Only a throw the PARSER made from the bytes is a fact about them. Anything
+ * else the pool rejects with — a worker entry that cannot be found, a reply that
+ * could not be posted, a protocol defect — arrives as a plain error with no
+ * brand, and storing it as `BLOB_PARSE_FAILED` would file VAT's own defect
+ * under the bytes' content key, served to every repository that holds them.
+ */
+describe('a failure no parser produced from the bytes', () => {
+  it.each([
+    { label: 'a plain Error with no code', error: new Error('Cannot locate VAT\'s parse worker.') },
+    { label: 'a coded error', error: codedError('ERR_WORKER_INIT_FAILED', 'the worker could not start') },
+  ])('is rethrown loud and stores nothing: $label', async ({ error }) => {
+    failures.parse = error;
+    const builder = await baseBuilderForRoot(suite.tempDir);
+
+    await expect(populateBlobs(builder, { parseCache: NO_CACHE, parsePool: failingPolicy() })).rejects.toBe(error);
+    expect(conditionsWithCode(builder.build(), BLOB_PARSE_FAILED)).toEqual([]);
   });
 });
 
@@ -243,7 +282,7 @@ describe('a parser-load failure during registry admission', () => {
   it('propagates instead of blaming every enumerated file', async () => {
     const thrown = parserLoadFailure();
     failures.load = thrown;
-    const registry = new ResourceRegistry();
+    const registry = new ResourceRegistry({ parseCache: NO_CACHE, parsePool: failingPolicy() });
 
     await expect(registry.addResources(corpusPaths())).rejects.toBe(thrown);
 
@@ -257,7 +296,7 @@ describe('a parser-load failure during registry admission', () => {
   // registry that had stopped demoting read failures at all — which is the
   // silent-population-shrink bug that demotion exists to prevent.
   it('still demotes a genuinely unreadable document to RESOURCE_UNREADABLE', async () => {
-    const registry = new ResourceRegistry();
+    const registry = new ResourceRegistry({ parseCache: NO_CACHE, parsePool: failingPolicy() });
     const missing = safePath.join(suite.tempDir, 'gone.md');
 
     const admitted = await registry.addResources([...corpusPaths(), missing]);

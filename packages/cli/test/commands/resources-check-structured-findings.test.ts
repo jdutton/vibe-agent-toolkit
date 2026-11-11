@@ -33,7 +33,7 @@ const NEAR_COLUMNS: ColumnsOfStatement = () => ['path', 'Finding_Line'];
 const EXAMINED_NOTHING = 'RESOURCE_CHECK_EXAMINED_NOTHING';
 const BROKEN = 'RESOURCE_CHECK_BROKEN';
 const POPULATED = {
-  population: 'derived', lensPopulation: 'none', populationMs: 1, lensMs: 0, lensesEvaluated: [], membersEnumerated: 7,
+  population: 'derived', lensPopulation: 'none', populationMs: 1, lensMs: 0, lensesEvaluated: [], membersEnumerated: 7, notAdmitted: [],
 } as const;
 
 /**
@@ -173,7 +173,11 @@ describe('a violation finding names its check and carries its row as evidence', 
     const report = publish({}, askRows({}), { builtins: [builtin] });
 
     expect(findingsOf(report)).toStrictEqual([
-      { code: 'CLAUDE_RULE_GLOB_INERT', severity: 'info', message: 'inert', location: '.claude/rules/a.md', check: 'claude-rule-glob-inert' },
+      // `reference` is the registry's, added by `resolveFindings` as on every lane's findings.
+      {
+        code: 'CLAUDE_RULE_GLOB_INERT', severity: 'info', message: 'inert', location: '.claude/rules/a.md',
+        check: 'claude-rule-glob-inert', reference: '#claude_rule_glob_inert',
+      },
     ]);
     expectValid(report);
   });

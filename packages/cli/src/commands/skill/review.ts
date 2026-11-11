@@ -30,7 +30,7 @@ import {
 import { everywhere, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
-import { resolveProjectDeclaredEvalSuites, resolveSkillPackagingConfig } from '../../skill-resolution/packaging-config.js';
+import { resolveProjectDeclaredEvalSuites, resolveProjectResourcesValidation, resolveSkillPackagingConfig } from '../../skill-resolution/packaging-config.js';
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { formatIssueLines } from '../../utils/issue-rendering.js';
@@ -268,7 +268,7 @@ export async function reviewCommand(
     const packagingConfig = (await resolveSkillPackagingConfig(skillPath, 'refuse')) ?? undefined;
     // Project-wide test input: a review of skill A must not count skill B's eval
     // suite as content A ships. Memoized per config root; `[]` in wild mode.
-    const result = await validateSkillForPackaging(skillPath, packagingConfig, 'source', {
+    const result = await validateSkillForPackaging(skillPath, resolveProjectResourcesValidation(skillPath), packagingConfig, 'source', {
       projectSkills: await resolveProjectDeclaredEvalSuites(skillPath, 'refuse'),
       // Same ruling as the discovery above: a review is acted on whole, so a
       // directory the registry crawl cannot list refuses it by name.

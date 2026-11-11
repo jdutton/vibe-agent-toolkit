@@ -33,6 +33,8 @@
  */
 
 
+import { writeFile } from 'node:fs/promises';
+
 import { CRAWL_STORE_READ_ID, CRAWL_STORE_WRITE_ID, safePath } from '@vibe-agent-toolkit/utils';
 import {
   GitTracker,
@@ -40,12 +42,13 @@ import {
 import { __readCrawlTimingSnapshot, __setCrawlTimingForTest } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { resolveParseLimits } from '../src/parse-limits.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { ClosureExtentContributor } from '../src/projection/contributors/closure-extent.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor, EXTENT_SOURCE_ENV, EXTENT_SOURCE_GIT } from '../src/projection/crawl-source.js';
 import { serializeProjection } from '../src/projection/export.js';
-import { CONTENT_PARSING_SKIP, populate, type PopulationOutcome } from '../src/projection/merge.js';
+import { CONTENT_PARSING_SKIP, describeStoreMiss, populate, type PopulationOutcome, storeMissOf } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 import type { ContentDemand } from '../src/projection/realizations.js';
 import type { BlobScopedRows, ExtentKey, ExtentScopedRows, ProjectionStore } from '../src/projection/store.js';
@@ -423,6 +426,30 @@ describe('populate through a projection store', () => {
 
       expect(populated.outcome).toEqual({ population: 'derived', stored: 'written' });
       expect(hydrated.outcome).toEqual({ population: 'store', stored: 'hit' });
+    });
+
+    it('counts and names the store miss a persisting refusal costs every run (I10)', async () => {
+      // A refused parse is filed nowhere (I6), so its key is held by no store
+      // and every run re-derives the whole population while it persists. That
+      // cost is allowed only counted and named: never a silent miss.
+      //
+      // Refused at its input size, which the pool decides before any thread
+      // parses it: which limit refuses is not under test, and a row-cap breach
+      // parses 16,385 links on every run (~0.8 s each here, past the 15 s test
+      // timeout on a loaded CI box).
+      await writeFile(safePath.join(suite.tempDir, 'huge.md'), 'x'.repeat(resolveParseLimits(undefined).inputBytes + 1), 'utf-8');
+      const store = new FakeProjectionStore();
+
+      const cold = await run({ registry: filesystemAndClosure(), store });
+      const warm = await run({ registry: filesystemAndClosure(), store });
+
+      // The cold run met no stored extent, so no refusal caused its miss.
+      expect(cold.outcome).toEqual({ population: 'derived', stored: 'written' });
+      expect(warm.outcome).toEqual({ population: 'derived', stored: 'written', storeMiss: { refusedPairs: 1 } });
+      expect(describeStoreMiss(storeMissOf(warm.outcome))).toBe(
+        'store miss: 1 refused pair is held by no store, so the whole population was re-derived; it is re-derived on every run while the refusal persists',
+      );
+      expect(describeStoreMiss(storeMissOf(cold.outcome))).toBeUndefined();
     });
   });
 

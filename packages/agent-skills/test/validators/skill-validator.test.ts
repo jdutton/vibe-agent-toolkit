@@ -122,7 +122,7 @@ describe('transitive link traversal — broken links', () => {
     const session = installFaultFs({ within: tempDir, faults: [{ op: 'lstat', path: (path) => path === target, errno: 'EACCES' }] });
     let result: ValidationResult;
     try {
-      result = await validateSkill({ side: 'source', skillPath, rootDir: tempDir, validation: {} });
+      result = await validateSkill({ resourcesValidation: {}, side: 'source', skillPath, rootDir: tempDir, validation: {} });
     } finally {
       session.restore();
     }
@@ -148,7 +148,7 @@ async function validateSkillLinkingOutsideItsDir(tempDir: string, validation: Va
   writeFileSync(safePath.join(tempDir, 'sibling.md'), '# Sibling\n');
   const skillPath = safePath.join(skillDir, 'SKILL.md');
   writeFileSync(skillPath, skillWithLink('../sibling.md', 'sibling'));
-  return validateSkill({ side: 'source', skillPath, rootDir: skillDir, validation });
+  return validateSkill({ resourcesValidation: {}, side: 'source', skillPath, rootDir: skillDir, validation });
 }
 
 describe('transitive link traversal — boundary escape', () => {
@@ -473,7 +473,7 @@ describe('transitive link traversal — rootDir default', () => {
       getTempDir(), { 'doc.md': '# Doc\n\nContent.' }, skillWithLink('./doc.md', 'doc'),
     );
 
-    const result = await validateSkill({ side: 'source', skillPath, validation: {} });
+    const result = await validateSkill({ resourcesValidation: {}, side: 'source', skillPath, validation: {} });
 
     expect(result.linkedFiles).toHaveLength(1);
     expect(findIssues(result, 'LINK_INTEGRITY_BROKEN')).toHaveLength(0);
@@ -506,7 +506,7 @@ describe('transitive link traversal — directory links', () => {
     // does not try to write a file into it
     mkdirSyncReal(safePath.join(tempDir, 'existing-dir'), { recursive: true });
 
-    const result = await validateSkill({ side: 'source', skillPath, validation: {} });
+    const result = await validateSkill({ resourcesValidation: {}, side: 'source', skillPath, validation: {} });
     expect(findIssues(result, 'LINK_INTEGRITY_BROKEN')).toHaveLength(0);
   });
 });
@@ -531,7 +531,7 @@ describe('kebab-case detection — skill', () => {
         'Body.',
       ].join('\n'),
     );
-    const result = await validateSkill({ side: 'source', skillPath, validation: {} });
+    const result = await validateSkill({ resourcesValidation: {}, side: 'source', skillPath, validation: {} });
     const codes = result.issues.map((i) => i.code);
     expect(codes).toContain('SKILL_NAME_NOT_KEBAB_CASE');
     const kebabIssue = result.issues.find((i) => i.code === 'SKILL_NAME_NOT_KEBAB_CASE');

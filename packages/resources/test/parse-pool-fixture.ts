@@ -30,7 +30,8 @@ export interface PoolRecord {
 /** How a fake pool should behave beyond parsing. */
 export interface FakePoolBehaviour {
   /**
-   * Reject every dispatched document with the error this builds from its bytes.
+   * Reject a dispatched document with the error this builds from its bytes, or
+   * parse it normally when this returns `undefined`.
    *
    * A FUNCTION of the content, not a fixed `Error`, because "which failure
    * surfaced" is a question one shared error object cannot answer: two documents
@@ -38,7 +39,7 @@ export interface FakePoolBehaviour {
    * from a completion-ordered one. A caller that does not care ignores the
    * argument.
    */
-  failWith?: (content: string) => Error;
+  failWith?: (content: string) => Error | undefined;
   /** Answer in reverse dispatch order, so completion order ≠ emission order. */
   reverseCompletion?: boolean;
   /**
@@ -130,7 +131,8 @@ export function fakePool(
             ? Math.max(0, LADDER_TOP - dispatchIndex) * COMPLETION_STEP_MS
             : 1,
         );
-        if (behaviour.failWith !== undefined) throw behaviour.failWith(content);
+        const failure = behaviour.failWith?.(content);
+        if (failure !== undefined) throw failure;
         if (behaviour.emptyFacts === true) return emptyParse(content, byteLength);
         return kind === 'html'
           ? parseHtmlContent(content, byteLength)
@@ -146,6 +148,8 @@ export function fakePool(
     // nothing.
     parseIntoCache: (): Promise<never> =>
       Promise.reject(new Error('cache transport is not exercised by these suites')),
+    // Never reached either: neither suite runs a harness read.
+    harnessFacts: (): Promise<never> => Promise.reject(new Error('harness reads are not exercised by these suites')),
     shutdown: (): Promise<void> => {
       record.shutdowns += 1;
       return Promise.resolve();

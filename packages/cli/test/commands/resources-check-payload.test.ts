@@ -562,7 +562,10 @@ describe('runProjectChecks — what each rule cost', () => {
     expect(costs).toStrictEqual([{ name: 'broken', durationMs: 1, rows: rowCount }]);
     expect(issues).toHaveLength(rowCount);
     expect(issues.filter((issue) => issue.code === 'RESOURCE_CHECK_BROKEN')).toStrictEqual([]);
-  });
+    // Its subject is a result set too wide to spread, so its cost is that many findings built and
+    // resolved: ~3-8 s typical on CI's runners, past the 15 s default once on a loaded one. The budget is
+    // the case's size, not a margin over a slow path; a regression shows as the file's duration.
+  }, 60_000);
 
   it('marks a check that threw as broken, with NO row count at all', () => {
     // 🪤 `rows: 0` on a statement that never returned would read as a clean
@@ -593,7 +596,7 @@ describe('runProjectChecks — what each rule cost', () => {
 describe('a check severity override does not silence a BROKEN check', () => {
   it('still reports the breakage at error when the check is set to ignore', () => {
     // 🔑 Revert the separate code (put `customCheckCode(name)` back on the
-    // broken finding) and this reds: `resolveIssueSeverity` drops it and the
+    // broken finding) and this reds: `resolveFindings` drops it and the
     // command exits 0 over a check that asserted nothing.
     const { issues, costs } = runProjectChecks({
       warn: () => undefined,
@@ -1512,7 +1515,7 @@ describe('the built-in check set runs without any config', () => {
     // ⭐ The other direction, and the half that gets forgotten. A resolver that
     // only knows how to delete answers "can I silence this?" and silently
     // ignores "can I enforce this?" — which is the shipped defect
-    // `resolveIssueSeverity` exists to prevent, here on a new lane.
+    // `resolveFindings` exists to prevent, here on a new lane.
     const { issues, costs } = runProjectChecks({
       warn: () => undefined,
       columnsOf: NO_COLUMNS,

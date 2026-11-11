@@ -628,7 +628,7 @@ other member.
 **A built-in's findings carry an ORDINARY registry code.** A built-in is not a custom check: its
 findings carry a `CODE_REGISTRY` code with the registry's own default severity, so
 `resources.validation.severity.<CODE>` moves it exactly like every other code VAT emits, through the
-identical `resolveIssueSeverity` call. The `CUSTOM:<name>` space that `sql-checks.ts` mints is for
+identical `resolveFindings` call. The `CUSTOM:<name>` space that `sql-checks.ts` mints is for
 ADOPTER-declared statements, whose severity is declared beside them because the registry holds no
 entry for a name a user invented; reusing it for a built-in would put a shipped rule in a key space
 the schema validates by shape instead of by identity, and a misspelled override would silently reach

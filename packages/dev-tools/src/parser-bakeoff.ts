@@ -90,10 +90,9 @@
 
 import { readFile } from 'node:fs/promises';
 
-// The subpath, not the barrel: the barrel is loaded by commands that must never
-// pay for the parser, so it deliberately does not re-export this.
-import { parseMarkdownContent } from '@vibe-agent-toolkit/resources/link-parser';
-import { createMarkdownProcessor } from '@vibe-agent-toolkit/resources/markdown-processor';
+// The conformance harness subpath, not the barrel: it is the one sanctioned
+// in-process route to the parser, for private tooling that times it on purpose.
+import { createMarkdownProcessor, parseMarkdownContent } from '@vibe-agent-toolkit/resources/parse-conformance';
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { safeExecResult } from '@vibe-agent-toolkit/utils/process';

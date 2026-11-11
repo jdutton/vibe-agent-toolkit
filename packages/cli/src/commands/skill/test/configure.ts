@@ -20,7 +20,7 @@ import { CommandRefusalError, refusalCodeOf } from '../../../utils/command-refus
 import { endWithRefusal, endWithReport, NOTHING_FINISHED, writeArtifact } from '../../../utils/document-writer.js';
 import { createLogger } from '../../../utils/logger.js';
 import { requireProjectRoot } from '../../../utils/project-root-policy.js';
-import { discoverSkillsFromConfig } from '../../skills/skill-discovery.js';
+import { discoverSkillsFromConfig, namedSkillsOrRefuse } from '../../skills/skill-discovery.js';
 
 import { assertValidAuth, type AuthValue } from './auth-flags.js';
 
@@ -207,7 +207,7 @@ async function requireDeclaredSkill(
   skills: ProjectConfig['skills'],
   skillName: string,
 ): Promise<void> {
-  const declared = skills === undefined ? [] : await discoverSkillsFromConfig(skills, dirname(configPath), 'refuse');
+  const declared = skills === undefined ? [] : namedSkillsOrRefuse(await discoverSkillsFromConfig(skills, dirname(configPath), 'refuse'), dirname(configPath));
   if (declared.some((skill) => skill.name === skillName)) return;
   const known = declared.map((skill) => skill.name).sort((a, b) => a.localeCompare(b)).join(', ') || '(none)';
   throw new CommandRefusalError(

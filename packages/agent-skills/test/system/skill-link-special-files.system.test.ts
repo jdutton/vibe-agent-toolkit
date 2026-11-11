@@ -64,7 +64,7 @@ describe.skipIf(process.platform === 'win32')('skill validation - a link to a na
 
   it.for(['ref/notes.md', 'data.txt'])('validateSkill refuses a pipe at %s as LINK_TARGET_UNREADABLE', async (href) => {
     await plantSkillLinkingPipe(href);
-    const result = await withinBound(() => validateSkill({ side: 'source', skillPath, validation: {} }));
+    const result = await withinBound(() => validateSkill({ resourcesValidation: {}, side: 'source', skillPath, validation: {} }));
     expect(result).not.toBe('hung on the pipe');
     expect(result === 'hung on the pipe' ? [] : result.issues).toContainEqual(expect.objectContaining({
       code: 'LINK_TARGET_UNREADABLE',
@@ -76,7 +76,7 @@ describe.skipIf(process.platform === 'win32')('skill validation - a link to a na
 
   it('validateSkillForPackaging refuses a pipe .md as LINK_TARGET_UNREADABLE', async () => {
     await plantSkillLinkingPipe('ref/notes.md');
-    const result = await withinBound(() => validateSkillForPackaging(skillPath));
+    const result = await withinBound(() => validateSkillForPackaging(skillPath, {}));
     expect(result).not.toBe('hung on the pipe');
     expect(result === 'hung on the pipe' ? [] : result.allErrors).toContainEqual(expect.objectContaining({
       code: 'LINK_TARGET_UNREADABLE',

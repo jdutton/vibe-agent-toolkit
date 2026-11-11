@@ -50,15 +50,15 @@ const FRONTMATTER_WITHOUT_NAME =
  */
 const CONFIG_TRYING_TO_IGNORE = (code: string) => ({
   validation: { severity: { [code]: 'ignore' } },
-}) as unknown as Parameters<typeof validateSkillForPackaging>[1];
+}) as unknown as Parameters<typeof validateSkillForPackaging>[2];
 
 /** Write `body` as SKILL.md in a fresh temp dir and validate it with `config`. */
 async function validateBody(
   body: string,
-  config?: Parameters<typeof validateSkillForPackaging>[1],
+  config?: Parameters<typeof validateSkillForPackaging>[2],
 ): Promise<PackagingValidationResult> {
   const { skillPath } = createTransitiveSkillStructure(getTempDir(), {}, body);
-  return validateSkillForPackaging(skillPath, config);
+  return validateSkillForPackaging(skillPath, {}, config);
 }
 
 /** The one error of `code`, asserted present, at `error`, anchored to SKILL.md. */

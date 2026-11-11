@@ -10,9 +10,10 @@
  * `vibe-agent-toolkit.config.yaml` contributes.
  */
 import type { DeclaredEvalSuite, SkillPackagingConfig } from '@vibe-agent-toolkit/agent-skills';
+import type { ValidationConfig } from '@vibe-agent-toolkit/schema';
 import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
 
-import { type DiscoveryUnreadablePolicy, discoverSkillsFromConfig } from '../commands/skills/skill-discovery.js';
+import { type DiscoveryUnreadablePolicy, discoverSkillsFromConfig, namedSkillsOrRefuse } from '../commands/skills/skill-discovery.js';
 import { ConfigLoadError, type loadConfig, loadConfigCached } from '../utils/config-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
 
@@ -94,6 +95,10 @@ export async function resolveProjectDeclaredEvalSuites(
  * decides how that root's refusals are handled for the rest of the run. Every
  * command resets the memo at its start (`resetSkillDiscoveryCache`), and only
  * `vat audit` degrades, so a run never mixes the two.
+ *
+ * A SKILL.md the parse worker refused has no name: under `'refuse'` it refuses the
+ * run like an unlistable directory; under `{ degrade }` it is absent here, and the
+ * audit's own validation of that file reports the refusal under its code.
  */
 export async function getDiscoveredSkillsByPath(
   skillsSection: NonNullable<ReturnType<typeof loadConfig>>['skills'],
@@ -104,8 +109,9 @@ export async function getDiscoveredSkillsByPath(
   if (cached !== undefined) return cached;
   const map = new Map<string, string>();
   if (skillsSection !== undefined) {
-    const discovered = await discoverSkillsFromConfig(skillsSection, configRoot, unreadable);
-    for (const entry of discovered) {
+    const discovery = await discoverSkillsFromConfig(skillsSection, configRoot, unreadable);
+    const named = unreadable === 'refuse' ? namedSkillsOrRefuse(discovery, configRoot) : discovery.skills;
+    for (const entry of named) {
       map.set(safePath.resolve(entry.sourcePath), entry.name);
     }
   }
@@ -157,6 +163,19 @@ export async function resolveSkillPackagingConfig(
     defaults as Record<string, unknown> | undefined,
     perSkillConfig?.[matchedName] as Record<string, unknown> | undefined,
   );
+}
+
+/**
+ * The governing project's `resources.validation` for one path — what a file the
+ * parse worker refused is resolved under (its `allow`, its severity override).
+ * `{}` when no config governs the path (wild mode). A config that exists and
+ * cannot be loaded propagates (`ConfigLoadError`): which overrides apply is then
+ * unknown, not "none".
+ */
+export function resolveProjectResourcesValidation(path: string): ValidationConfig {
+  const projectRoot = findProjectRoot(safePath.resolve(safePath.join(safePath.resolve(path), '..')));
+  if (projectRoot === null) return {};
+  return loadConfigCached(projectRoot, 'source')?.resources?.validation ?? {};
 }
 
 /**

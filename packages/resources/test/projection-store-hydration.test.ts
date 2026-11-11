@@ -23,12 +23,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   assembleProjection,
-  blobFactsCover,
   emptyBlobRows,
   keyedContentKeys,
   selectRequestedContexts,
   selectRequestedRows,
   type RequestedContributor,
+  uncoveredContentKeys,
 } from '../src/projection/store-hydration.js';
 import type { BlobScopedRows, ExtentScopedRows } from '../src/projection/store.js';
 import { PROJECTION_TABLES } from '../src/projection/table-registry.js';
@@ -570,9 +570,9 @@ describe('selectRequestedRows', () => {
   });
 });
 
-describe('blobFactsCover', () => {
+describe('uncoveredContentKeys', () => {
   it('counts a key that a blobs row accounts for as covered', () => {
-    expect(blobFactsCover(blobFacts({ blobs: [blobRow(KEY_SHARED)] }), [KEY_SHARED])).toBe(true);
+    expect(uncoveredContentKeys(blobFacts({ blobs: [blobRow(KEY_SHARED)] }), [KEY_SHARED])).toEqual([]);
   });
 
   it('counts a key that ONLY a blobConditions row accounts for as covered, because declining to parse is an accounting', () => {
@@ -581,21 +581,21 @@ describe('blobFactsCover', () => {
     // underneath, or binary (the NUL sniff). Any corpus shipping one image has
     // such keys, so a cover check reading `blobs` alone would call every real
     // corpus a miss forever and the blob tier would never be reused once.
-    expect(blobFactsCover(blobFacts({ blobConditions: [blobConditionRow(KEY_BETA)] }), [KEY_BETA])).toBe(true);
+    expect(uncoveredContentKeys(blobFacts({ blobConditions: [blobConditionRow(KEY_BETA)] }), [KEY_BETA])).toEqual([]);
   });
 
-  it('reports the whole extent uncovered when a single key is accounted for by neither table', () => {
+  it('names the one key accounted for by neither table, which makes the whole extent a miss', () => {
     // One unaccounted key means the extent was written by a run that skipped
     // blob derivation. Accepting it leaves `blob_references` empty, reduces every
     // closure extent to its own declared root, converges on iteration one, and
     // reports success — the silent-emptiness failure arriving through the cache.
     const blobs = blobFacts({ blobs: [blobRow(KEY_SHARED)], blobConditions: [blobConditionRow(KEY_BETA)] });
 
-    expect(blobFactsCover(blobs, [KEY_SHARED, KEY_BETA, KEY_ALPHA])).toBe(false);
+    expect(uncoveredContentKeys(blobs, [KEY_SHARED, KEY_BETA, KEY_ALPHA])).toEqual([KEY_ALPHA]);
   });
 
   it('trivially covers an empty key list, so a run naming no bytes is not a miss', () => {
-    expect(blobFactsCover(emptyBlobRows(), [])).toBe(true);
+    expect(uncoveredContentKeys(emptyBlobRows(), [])).toEqual([]);
   });
 });
 

@@ -5,15 +5,24 @@
  * The first ANALYSIS verb under `vat claude`, which until now held only
  * management verbs (plugins, marketplaces, org administration). It answers a
  * question, changes nothing, and never gates: there is no threshold anywhere in
- * this file, and the only non-zero exit is a refusal's 2. A number that fails a
- * build teaches people to stop reading it.
+ * this file. A number that fails a build teaches people to stop reading it.
+ *
+ * ⛔ **The one other non-zero exit is not a threshold: it is an ANSWER VAT could
+ * not give.** A file the walk reached whose facts this run refused (a parse
+ * stopped at a limit, or lost with its worker) is named in the document
+ * (`refused: <code>`) and reported on stderr through the not-admitted contract
+ * — the project's `resources.validation` resolves its severity — and an
+ * error-severity one ends the run on 1. A refused rule's `paths:` were never
+ * read, so whether it loads is unknown and every total here is short by it;
+ * exiting 0 would publish that as a complete answer. A refusal's 2 is unchanged.
  *
  * ## The one legacy document — interim, until wave C replaces the verb
  *
  * Its answer is not the `Report<T>` envelope; it is the registry's one
  * remaining `legacy` entry, published through the writer's
  * `writeLegacyDocument` (the only serializer a legacy verb may use) and ended on
- * `ExitCode.OK`. A refusal IS the envelope's error branch — `refusalReport`,
+ * the exit its refused-file findings derive (`exitCodeForReport`). A refusal IS
+ * the envelope's error branch — `refusalReport`,
  * with the code {@link refusalCodeOf} reads off the throw (a path outside the
  * corpus is `USAGE_INVALID`, a missing projection backend `BACKEND_UNAVAILABLE`,
  * VAT's own defect `INTERNAL_ERROR`) — written the same way and ended on the
@@ -91,16 +100,25 @@ import {
   type LoadedContextAnswer,
   type ModelledBehaviour,
   type Projection,
+  notAdmittedFindings,
+  type RefusedContextFile,
   type RegionCost,
   type StatedLimit,
 } from '@vibe-agent-toolkit/resources';
-import { ExitCode, exitCodeForReport } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot } from '@vibe-agent-toolkit/utils';
+import {
+  exitCodeForReport,
+  summarizeIssues,
+  type ExitDeterminingDocument,
+  type ValidationIssue,
+} from '@vibe-agent-toolkit/schema';
+import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
 import { Command, Option } from 'commander';
 
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
+import { loadConfigCached } from '../../utils/config-loader.js';
 import { targetPathWithin } from '../../utils/corpus-target.js';
 import { NOTHING_FINISHED, refusalReport, writeLegacyDocument } from '../../utils/document-writer.js';
+import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { populateAndReport } from '../../utils/population-wiring.js';
 import { withPopulationCache } from '../../utils/projection-store.js';
@@ -268,6 +286,12 @@ export interface ContextAnswerDocument {
   readonly overBudgetRules: readonly string[];
   readonly unattributedImports: readonly string[];
   /**
+   * Every file this answer reached and could not measure, because this run
+   * refused its facts — each under its not-admitted code. ⛔ No row and no total
+   * includes them, so a non-empty list means the answer is incomplete.
+   */
+  readonly refused: readonly RefusedContextFile[];
+  /**
    * What the loaded set POINTS AT in one hop and the harness does not load, or
    * null when `--discoverable` was not asked for.
    *
@@ -383,6 +407,10 @@ Output:
 
 Exit Codes:
   0 - An answer was produced (there is no threshold and no gate)
+  1 - An answer was produced but is incomplete: a file it reached had its
+      facts refused this run (a parse stopped at a limit, or its worker
+      died). It is listed as "refused: <code>" and reported on stderr under
+      that code; resources.validation can lower its severity
   2 - Invalid usage rejected before the verb runs (an unknown option, or an
       unsupported --format value: Commander's message on stderr, no document),
       or refused: error.code USAGE_INVALID (a path outside the corpus root,
@@ -427,31 +455,87 @@ export async function claudeContextCommand(
     // be told they mistyped.
     const requested = requestedTargets(root, pathArgs, options);
     const projection = await populateContext(root, logger);
-    if (sweep) {
-      // Every number in the map is decided in `@vibe-agent-toolkit/resources`.
-      // This branch calls one function and formats what it returns.
-      const map = buildContextCostMap(projection);
-      emit(costMapEnvelope(root, map), renderCostMapText(map), format);
-    } else {
-      // ONE population, N queries. `whatLoadsAt` is a pure read of materialised
-      // tables, so the marginal cost of another path is a map lookup — which is
-      // the whole reason this command takes a list rather than being run twice.
-      const answers = requested.map(
-        (target) => documentFor(target, projection, root, options.discoverable === true),
-      );
-      emit(contextEnvelope(root, answers), renderEnvelopeText(answers), format);
-    }
-    // ⛔ Always 0 for an answer. There is no threshold in this command and there
-    // is not going to be one — a number that fails a build is a number people
-    // learn to stop reading. The explicit exit guarantees the process ends rather
-    // than waiting on whatever the population left behind.
-    process.exit(ExitCode.OK);
+    const answer = sweep
+      ? sweepAnswer(root, projection)
+      : pathsAnswer(root, projection, requested, options.discoverable === true);
+    // Resolved BEFORE anything is written: a config that will not load here is
+    // a refusal with stdout still empty, never a second document after the answer.
+    const findings = refusedFindings(root, answer.refused);
+    emit(answer.document, answer.text, format);
+    // ⛔ No threshold, and there is not going to be one — a number that fails a
+    // build is a number people learn to stop reading. The one non-OK exit is an
+    // answer VAT could not give (see the header). The explicit exit guarantees
+    // the process ends rather than waiting on whatever the population left behind.
+    reportFindings(findings, { verbose: true, write: logger.warn });
+    process.exit(exitCodeForReport(refusedVerdict(findings)));
   } catch (error) {
     // Coded at the cause, read here — never relabelled by where it was thrown.
     const report = refusalReport(refusalCodeOf(error), error, CLAUDE_CONTEXT_GATE, NOTHING_FINISHED);
     writeLegacyDocument('claude context', report, format, undefined);
     process.exit(exitCodeForReport(report));
   }
+}
+
+/** One run's answer, built and not yet written: the document, its text rendering, and the refused files it reached. */
+interface ContextAnswer {
+  readonly document: unknown;
+  readonly text: string;
+  readonly refused: readonly RefusedContextFile[];
+}
+
+/** `--all`: every number in the map is decided in `@vibe-agent-toolkit/resources`; this formats what it returns. */
+function sweepAnswer(root: string, projection: Projection): ContextAnswer {
+  const map = buildContextCostMap(projection);
+  return { document: costMapEnvelope(root, map), text: renderCostMapText(map), refused: map.refused };
+}
+
+/**
+ * ONE population, N queries. `whatLoadsAt` is a pure read of materialised
+ * tables, so the marginal cost of another path is a map lookup — which is the
+ * whole reason this command takes a list rather than being run twice.
+ */
+function pathsAnswer(root: string, projection: Projection, requested: readonly string[], discoverable: boolean): ContextAnswer {
+  const answers = requested.map((target) => documentFor(target, projection, root, discoverable));
+  return {
+    document: contextEnvelope(root, answers),
+    text: renderEnvelopeText(answers),
+    refused: answers.flatMap((answer) => (answer.kind === 'answer' ? answer.refused : [])),
+  };
+}
+
+/**
+ * Every reached file whose facts were refused, as the not-admitted contract
+ * reports it, resolved through the project's `resources.validation`.
+ *
+ * The config is asked only when something was refused, through the same
+ * cached load the population made — one answer per root, no second read.
+ *
+ * @param root - The corpus root
+ * @param refused - The refused files the run's answers reached, possibly repeated
+ * @returns One finding per refused file, or none (dropped when allowed or ignored)
+ */
+function refusedFindings(root: string, refused: readonly RefusedContextFile[]): ValidationIssue[] {
+  if (refused.length === 0) return [];
+  const byPath = new Map(refused.map((file) => [file.path, file]));
+  return notAdmittedFindings(
+    {
+      unreadable: [],
+      parseRefused: [...byPath.values()].map(({ path, code, reason }) => ({ filePath: safePath.resolve(root, path), code, reason })),
+    },
+    { locationRoot: root, consequence: 'whether and how much it loads into context was not measured' },
+    loadConfigCached(root, 'source')?.resources?.validation ?? {},
+  );
+}
+
+/**
+ * What the run's exit is derived from: the refused-file findings, under this
+ * command's gate. With none, it is `ok` and the run ends 0, as it always did.
+ *
+ * @param findings - {@link refusedFindings}
+ * @returns The exit-determining document
+ */
+function refusedVerdict(findings: readonly ValidationIssue[]): ExitDeterminingDocument {
+  return { ...summarizeIssues(findings), gate: CLAUDE_CONTEXT_GATE };
 }
 
 /**
@@ -519,6 +603,7 @@ export function answerDocument(
     conditions: answer.conditions,
     overBudgetRules: answer.overBudgetRules,
     unattributedImports: answer.unattributedImports,
+    refused: answer.refused,
     // The ANSWER is passed, not recomputed: it is the authority for what is
     // already loaded, and the two lenses partitioning depends on both reading
     // one loaded set.
@@ -678,6 +763,7 @@ export function renderCostMapText(map: ContextCostMap): string {
     ...map.regions.slice(0, COST_MAP_ROW_LIMIT).flatMap(regionDetail),
     ...directoryTable(map.directories),
     ...coverageLines(map),
+    ...refusedSection(map.refused),
   ];
   return `${lines.join('\n')}\n${limitSection().join('\n')}\n`;
 }
@@ -967,6 +1053,7 @@ function populateContext(root: string, logger: Logger): Promise<Projection> {
       { root, cache, logger, population: 'claude-context' },
       (wiring) => buildClaudeContextPopulation({ root, ...wiring }),
       (result) => result.projection,
+      (result) => result.storeMiss,
     );
     return projection;
   });
@@ -1044,6 +1131,7 @@ function renderAnswerText(document: ContextAnswerDocument): string {
     ...listSection('Conditions', document.conditions.map(conditionLine)),
     ...listSection('Rules with a paths: pattern the vendor expansion budget refused (their other patterns still apply)', document.overBudgetRules),
     ...listSection('Imported files no importer could be attributed to', document.unattributedImports),
+    ...refusedSection(document.refused),
     ...discoverySection(document.discoverable),
   ];
   return `${lines.join('\n')}\n`;
@@ -1304,6 +1392,19 @@ function conditionLocation(condition: GradedCondition): string {
 function listSection(title: string, entries: readonly string[]): string[] {
   if (entries.length === 0) return [];
   return [title, ...entries.map((entry) => (entry.startsWith('  ') ? entry : `  ${entry}`)), ''];
+}
+
+/**
+ * The files a query reached and could not measure, each with its refusal code.
+ *
+ * @param refused - The refused files, path-ordered
+ * @returns The section's lines, or none when nothing was refused
+ */
+function refusedSection(refused: readonly RefusedContextFile[]): string[] {
+  return listSection(
+    'Reached and NOT counted — this run refused their facts, so no figure above includes them',
+    refused.map((file) => `${displayPath(file.path)}  refused: ${file.code}`),
+  );
 }
 
 /**

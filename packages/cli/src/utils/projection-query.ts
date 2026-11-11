@@ -53,6 +53,7 @@ import {
   buildResourceProjection,
   PROJECTION_TABLES,
   splitProjectionByScope,
+  storeMissOf,
   type LensRefusalCode,
   type PopulationOutcome,
   type Projection,
@@ -483,6 +484,7 @@ export async function withQueriedProjection<T>(
       { root, cache, logger, population: 'resources' },
       (wiring) => buildResourceProjection({ root, ...wiring }),
       (result) => result.projection,
+      (result) => storeMissOf(result.outcome),
     );
 
     // ONE tree, in a database nothing else can reach, built fresh for this call.

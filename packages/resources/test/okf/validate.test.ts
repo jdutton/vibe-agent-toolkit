@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
 
 import { BundleDirectoryIndex, linkFindings } from '../../src/okf/links.js';
 import { validateOkfBundle } from '../../src/okf/validate.js';
+import { resolveParseLimits } from '../../src/parse-limits.js';
 import type { ResourceLink } from '../../src/types.js';
 import { LINK_ABSENCE_ERRNOS, REFUSAL_ERRNOS, withReaddirRefused } from '../helpers/refused-listing.js';
 
@@ -823,6 +824,29 @@ describe('validateOkfBundle', () => {
         expect(report.findings[0]?.severity).toBe('error');
         expect(report.hasErrors).toBe(true);
       });
+    });
+  });
+
+  describe('a document whose parse is refused for this run', () => {
+    // One contract (ADR I11): a refused parse is a not-admitted file, reported
+    // by the caller through `notAdmittedFindings` under the project's allow list
+    // and severity — never a lane-local `OKF_DOCUMENT_UNREADABLE` no config reaches.
+    it('is carried as a parse refusal, never as an OKF finding', async () => {
+      // Refused at its input size, before any thread parses it: a row-cap
+      // breach parsed 16,385 links and ran to 14,995 ms of a 15 s timeout on CI.
+      const root = plantOkfBundle({
+        'ok.md': conceptDoc(TABLE_TYPE),
+        'huge.md': `${conceptDoc(TABLE_TYPE)}\n${'x'.repeat(resolveParseLimits(undefined).inputBytes)}`,
+      });
+
+      const report = await validateOkfBundle({ bundle: 'docs', root, rootSpecifier: ROOT_SPECIFIER });
+
+      expect(codesOf(report.findings)).toEqual([]);
+      expect(report.parseRefused.map((entry) => ({ file: safePath.relative(root, entry.filePath), code: entry.code }))).toEqual([
+        { file: 'huge.md', code: 'RESOURCE_PARSE_LIMIT_EXCEEDED' },
+      ]);
+      // Nothing says it was assessed: the refusal still fails a caller that reads only the report.
+      expect(report.hasErrors).toBe(true);
     });
   });
 

@@ -6,6 +6,7 @@ import * as fs from 'node:fs/promises';
 import { basename } from 'node:path';
 
 import { allowedToolsOf, parseFrontmatter } from '@vibe-agent-toolkit/agent-skills';
+import type { ParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { isPathAbsentError, mapWithConcurrency, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { SettingsConflict } from '../types.js';
@@ -69,14 +70,15 @@ export interface SettingsCheck {
  * how the author indented.
  *
  * Returns the refusal `reason` when the file cannot be read or its frontmatter
- * does not parse (a block that is not a YAML mapping — empty, `~`, a scalar —
- * is a parse failure at the seam, so no shape is guarded here). The skill
+ * does not parse (an empty block, or one that is not a YAML mapping, is a
+ * parse failure at the seam, so no shape is guarded here). The skill
  * validator names the same file `SKILL_MISSING_FRONTMATTER` in the same
  * `vat audit`, off the same parser; the checker reports it as unchecked rather
  * than contributing nothing, because "nothing" reads as "no conflict".
  */
 async function parseSkillFrontmatter(
-  skillPath: string
+  skillPath: string,
+  dispatcher: ParseDispatcher,
 ): Promise<{ frontmatter: SkillFrontmatter } | { reason: string }> {
   let content: string;
   try {
@@ -85,7 +87,7 @@ async function parseSkillFrontmatter(
     return { reason: reasonOf(error) };
   }
 
-  const parsed = parseFrontmatter(content);
+  const parsed = await parseFrontmatter(content, { dispatcher });
   if (!parsed.success) return { reason: parsed.error };
   const fields = parsed.frontmatter;
 
@@ -263,17 +265,22 @@ function modelUnavailabilityConflicts(
  * Only deny rules are checked here — Claude Code evaluates deny → ask → allow
  * (first match wins), so a deny rule is the only bucket that can actually block
  * a tool the plugin needs. Ask rules prompt rather than block; allow rules permit.
+ *
+ * @param pluginDir - The plugin root
+ * @param effectiveSettings - The merged settings to check against
+ * @param dispatcher - The run's parse dispatcher, shared across plugins
  */
 export async function checkSettingsCompatibility(
   pluginDir: string,
-  effectiveSettings: EffectiveSettings
+  effectiveSettings: EffectiveSettings,
+  dispatcher: ParseDispatcher,
 ): Promise<SettingsCheck> {
   const { skillFiles, unchecked } = await findSkillFiles(pluginDir);
 
   // Each SKILL.md is read ONCE, here, and every lane below consults the same
   // reading — a file the checker could not read is unchecked for all of them.
-  // The reads are independent and run concurrently; their results fold in file order.
-  const reads = await mapWithConcurrency(skillFiles, async (path) => ({ path, read: await parseSkillFrontmatter(path) }));
+  // The reads run concurrently; their results fold in file order.
+  const reads = await mapWithConcurrency(skillFiles, async (path) => ({ path, read: await parseSkillFrontmatter(path, dispatcher) }));
   const skills: ReadSkill[] = [];
   for (const { path, read } of reads) {
     if ('reason' in read) unchecked.push({ path, reason: read.reason });

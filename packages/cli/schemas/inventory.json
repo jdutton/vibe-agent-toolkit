@@ -164,6 +164,13 @@
                                   "unreadable": {
                                     "type": "boolean",
                                     "const": true
+                                  },
+                                  "parseRefused": {
+                                    "type": "string",
+                                    "enum": [
+                                      "RESOURCE_PARSE_LIMIT_EXCEEDED",
+                                      "RESOURCE_PARSE_WORKER_DIED"
+                                    ]
                                   }
                                 },
                                 "required": [

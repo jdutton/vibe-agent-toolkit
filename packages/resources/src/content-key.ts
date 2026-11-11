@@ -306,9 +306,9 @@ export interface KeyedContent<K extends ParserKind = ParserKind> {
 /**
  * Content that routes to a real document parser — i.e. not `none`.
  *
- * The type `parseKeyed` takes, so "hand these bytes to a parser" is unreachable
+ * The type a parse dispatcher takes, so "hand these bytes to a parser" is unreachable
  * for a blob that has no parser. Expressing it in the type rather than as a
- * runtime branch inside `parseKeyed` is the whole point: the alternative is a
+ * runtime branch inside the dispatcher is the whole point: the alternative is a
  * throw, or an empty `ParseResult` invented on the caller's behalf, at a place
  * that has no idea what the caller wanted. A producer that silently emits
  * nothing is a bug nursery; a compile error at the call site is not.
@@ -339,14 +339,12 @@ export function isParsableContent(keyed: KeyedContent): keyed is ParsableContent
  * ## Why `parserKind` is a REQUIRED argument and not defaulted to the extension
  *
  * The key must name the parser that will actually run, not the one the
- * extension implies, and those genuinely differ in shipped code:
- * `rag-lancedb/src/lancedb-rag-provider.ts` hands every resource — including the
- * `.html` ones the registry crawls — to the **markdown** parser. Defaulting to
- * {@link parserKindForPath} would file that document's markdown facts under
- * `k2.html.<digest>`, the same key the registry's genuine HTML parse uses, and
- * one lane would then be served the other's facts. That is a well-formed entry
- * with the wrong contents — the failure class fail-soft explicitly does not
- * cover (see parse-cache.ts).
+ * extension implies, and those can differ: a collection's declared `mimeType`
+ * routes a file to a parser its extension does not name. Defaulting to
+ * {@link parserKindForPath} would file one parser's facts under the key the
+ * other parser's facts use, and one caller would then be served the other's
+ * facts. That is a well-formed entry with the wrong contents — the failure
+ * class fail-soft explicitly does not cover (see parse-cache.ts).
  *
  * Making it required rather than defaulted is deliberate: a default here is
  * silent at every call site that gets it wrong, and correct at none that a
@@ -381,6 +379,34 @@ export async function readContentWithKey<K extends ParserKind>(
   // `TextProvenance` holds. A decoder that learns to report a fourth fact about
   // its input then reaches the projection without an edit here — and, more to the
   // point, cannot be silently dropped here either.
+  return keyBytes(bytes, parserKind);
+}
+
+/**
+ * Key a document a caller already holds as a string — the same struct
+ * {@link readContentWithKey} builds from a file.
+ *
+ * The bytes keyed are the string's UTF-8 encoding, and they are decoded back
+ * through the one decoder, so what is parsed is exactly what the key covers: a
+ * leading U+FEFF is stripped as a BOM and a lone surrogate becomes U+FFFD, the
+ * same as for those bytes read from disk.
+ *
+ * @param text - The document
+ * @param parserKind - The parser this content will actually be handed to
+ * @returns The content, its key, and the parser it routes to
+ */
+export function keyContent<K extends ParserKind>(text: string, parserKind: K): KeyedContent<K> {
+  return keyBytes(Buffer.from(text, 'utf-8'), parserKind);
+}
+
+/**
+ * Decode and key one buffer of raw bytes: the composition both entry points share.
+ *
+ * @param bytes - The raw bytes
+ * @param parserKind - The parser they route to
+ * @returns The keyed content
+ */
+function keyBytes<K extends ParserKind>(bytes: Uint8Array, parserKind: K): KeyedContent<K> {
   const { text, ...decoding } = decodeTextContent(bytes);
   return {
     content: text,

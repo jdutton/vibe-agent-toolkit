@@ -8,7 +8,8 @@ import { computeContentKey, type ParsableContent } from '../src/content-key.js';
 import { parseHtmlContent } from '../src/html-link-parser.js';
 import { parseMarkdownContent } from '../src/link-parser.js';
 import type { DocumentParserKind } from '../src/mime-type.js';
-import { ParseCache, parseKeyed } from '../src/parse-cache.js';
+import { ParseCache } from '../src/parse-cache.js';
+import { parseContentCached } from '../src/parse-dispatcher.js';
 import {
   __readParseTimingSnapshot,
   __setParseTimingForTest,
@@ -115,12 +116,11 @@ function parseHtmlSample(times: number): void {
 }
 
 /**
- * Key a string for {@link parseKeyed}, exactly as `readContentWithKey` would.
+ * Key a string exactly as `readContentWithKey` would.
  *
- * Returns the NARROWED `ParsableContent` rather than a bare `KeyedContent`:
- * `parseKeyed` refuses a `none` blob at the type level, and the wide type made
- * every call site here an error nothing surfaced (test files are not
- * typechecked — `tsconfig.test.json` is broken).
+ * Returns the NARROWED `ParsableContent` rather than a bare `KeyedContent`: no
+ * parser routes a `none` blob, and the wide type made every call site here an
+ * error nothing surfaced (test files are not typechecked).
  */
 function keyFor(content: string, parserKind: DocumentParserKind = 'markdown'): ParsableContent {
   const bytes = Buffer.from(content, 'utf-8');
@@ -146,6 +146,14 @@ function groupOf(thread: ParseThreadTiming, kind: string): ParseTimingKind {
   const group = thread.kinds.find((one) => one.kind === kind);
   if (group === undefined) throw new Error(`dump carries no '${kind}' group`);
   return group;
+}
+
+/**
+ * One bounded parse of `keyed` through `cache` — the dispatcher's cache front,
+ * which counts the hit or miss on THIS thread; the parse itself runs in a worker.
+ */
+function parseKeyed(keyed: ParsableContent, cache: ParseCache): Promise<unknown> {
+  return parseContentCached(keyed.content, keyed.parserKind, { cache });
 }
 
 /** Every pass row's `calls` for one kind, in dump order. Excludes the total. */
@@ -404,27 +412,23 @@ describe('parse timing seam', () => {
       cache = new ParseCache({ cacheDir: safePath.join(tempDir, 'cache'), enabled: true });
     });
 
-    it('counts a miss and the parse work it caused', async () => {
+    it('counts a miss here and charges no parse to this thread: the worker parsed it', async () => {
       await parseKeyed(keyFor(SAMPLE_DOC), cache);
 
       const snapshot = __readParseTimingSnapshot();
       expect(snapshot.cache).toEqual({ hits: 0, misses: 1 });
-      expect(callsOf(snapshot, 'markdown')).toEqual(markdownCalls(1));
-      expect(groupOf(snapshot, 'markdown').documents.count).toBe(1);
+      expect(callsOf(snapshot, 'markdown')).toEqual(repeated(MARKDOWN_PASS_ORDER.length, 0));
+      expect(groupOf(snapshot, 'markdown').documents.count).toBe(0);
     });
 
-    it('routes an HTML miss to the HTML group, not to markdown', async () => {
-      // The cache counts every parser kind. Before HTML was instrumented this
-      // miss produced a document count of zero and no passes anywhere, which
-      // read as "the cache missed and parsing was free".
+    it('counts an HTML miss too, and parses it off this thread', async () => {
+      // The cache counts every parser kind.
       await parseKeyed(keyFor(SAMPLE_HTML, 'html'), cache);
 
       const snapshot = __readParseTimingSnapshot();
       expect(snapshot.cache).toEqual({ hits: 0, misses: 1 });
-      expect(groupOf(snapshot, 'html').documents.count).toBe(1);
-      expect(groupOf(snapshot, 'markdown').documents.count).toBe(0);
-      expect(callsOf(snapshot, 'html')).toEqual(repeated(HTML_PASS_ORDER.length, 1));
-      expect(callsOf(snapshot, 'markdown')).toEqual(repeated(MARKDOWN_PASS_ORDER.length, 0));
+      expect(groupOf(snapshot, 'html').documents.count).toBe(0);
+      expect(callsOf(snapshot, 'html')).toEqual(repeated(HTML_PASS_ORDER.length, 0));
     });
 
     it('counts a hit without charging any pass', async () => {

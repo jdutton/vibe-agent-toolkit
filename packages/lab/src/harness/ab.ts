@@ -201,7 +201,7 @@ export interface AbSpec<TBody, TComparison extends ComparisonLike>
    * `process.env` by the runner, arm-owned keys stripped (see `arm-env.ts`).
    *
    * The second axis this verb can vary. Without it the only difference an A/B
-   * can express is WHICH BUILD ran, so a setting — `VAT_PARSE_POOL`, a transport
+   * can express is WHICH BUILD ran, so a setting — a transport
    * choice, a pool width — has to be measured as two un-interleaved captures,
    * giving up the alternation that controls for machine drift.
    *

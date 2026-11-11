@@ -17,7 +17,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
 
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
-import { createTempDir, createTestMarkdownFile } from '../test-helpers.js';
+import { createTempDir, createTestMarkdownFile, fileChecksum } from '../test-helpers.js';
 
 describe('Custom metadata system tests', () => {
   let tempDir: string;
@@ -94,7 +94,7 @@ describe('Custom metadata system tests', () => {
           sizeBytes: 100,
           estimatedTokenCount: 20,
           modifiedAt: new Date(),
-          checksum: '0000000000000000000000000000000000000000000000000000000000000001',
+          checksum: fileChecksum(securityDoc),
           frontmatter: {
             filePath: securityDoc,
             domain: 'security',
@@ -110,7 +110,7 @@ describe('Custom metadata system tests', () => {
           sizeBytes: 100,
           estimatedTokenCount: 20,
           modifiedAt: new Date(),
-          checksum: '0000000000000000000000000000000000000000000000000000000000000002',
+          checksum: fileChecksum(apiDoc),
           frontmatter: {
             filePath: apiDoc,
             domain: 'api',
@@ -127,7 +127,7 @@ describe('Custom metadata system tests', () => {
           sizeBytes: 100,
           estimatedTokenCount: 20,
           modifiedAt: new Date(),
-          checksum: '0000000000000000000000000000000000000000000000000000000000000003',
+          checksum: fileChecksum(tutorialDoc),
           frontmatter: {
             filePath: tutorialDoc,
             domain: 'tutorial',
@@ -237,7 +237,7 @@ describe('Custom metadata system tests', () => {
           sizeBytes: 100,
           estimatedTokenCount: 20,
           modifiedAt: new Date(),
-          checksum: '1111111111111111111111111111111111111111111111111111111111111111',
+          checksum: fileChecksum(docV1),
           frontmatter: {
             filePath: docV1,
             category: DOCUMENTATION_CATEGORY,
@@ -301,7 +301,7 @@ describe('Custom metadata system tests', () => {
           sizeBytes: 100,
           estimatedTokenCount: 20,
           modifiedAt: new Date(),
-          checksum: '2222222222222222222222222222222222222222222222222222222222222222',
+          checksum: fileChecksum(docV2),
           frontmatter: {
             filePath: docV2,
             category: 'documentation',
@@ -380,7 +380,7 @@ describe('Custom metadata system tests', () => {
           sizeBytes: 100,
           estimatedTokenCount: 20,
           modifiedAt: new Date(),
-          checksum: '3333333333333333333333333333333333333333333333333333333333333333',
+          checksum: fileChecksum(complexDoc),
           frontmatter: {
             filePath: complexDoc,
             author: {

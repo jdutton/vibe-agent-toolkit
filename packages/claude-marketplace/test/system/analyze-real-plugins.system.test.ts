@@ -15,8 +15,12 @@ import { describe, expect, it } from 'vitest';
 
 import { analyzeCompatibility } from '../../src/compatibility-analyzer.js';
 import type { CompatibilityResult } from '../../src/types.js';
+import { useSuiteParseDispatcher } from '../test-helpers.js';
 
 const PLUGINS_DIR = safePath.resolve(homedir(), '.claude', 'plugins', 'cache');
+
+/** One dispatcher for every plugin analyzed, as `vat audit` holds one for a run. */
+const parseDispatcher = useSuiteParseDispatcher();
 
 describe('analyzeCompatibility against local plugins', () => {
   const hasPlugins = existsSync(PLUGINS_DIR);
@@ -47,7 +51,7 @@ describe('analyzeCompatibility against local plugins', () => {
 
         if (!existsSync(safePath.resolve(latestDir, '.claude-plugin/plugin.json'))) continue;
 
-        const result = await analyzeCompatibility(latestDir, latestDir);
+        const result = await analyzeCompatibility(latestDir, latestDir, parseDispatcher());
         results.push(result);
 
         expect(result.plugin).toBeTruthy();

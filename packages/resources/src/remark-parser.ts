@@ -457,7 +457,7 @@ function extractHeadingText(node: Heading): string {
  * what spares every in-repo caller a presence check it would then have to
  * decide what to do about.
  */
-export interface RemarkSession extends ParseSession {
+interface RemarkSession extends ParseSession {
   spansAndKinds(): SpanFacts;
   structure(): StructureFacts;
 }

@@ -45,6 +45,13 @@ const POPULATION: ProgressEntry = {
   lensMs: 12.5,
   lensesEvaluated: ['authored-link'],
   membersEnumerated: 12,
+  // A finding, not an empty list: the strict schema would drop a line carrying a field it does not declare.
+  notAdmitted: [{
+    code: 'RESOURCE_PARSE_LIMIT_EXCEEDED',
+    severity: 'warning',
+    message: "'docs/deep.md' was enumerated but its parse was stopped at its stackMb limit (1 MiB), so no check saw its rows.",
+    location: 'docs/deep.md',
+  }],
 };
 
 /** The line the child writes the moment it has booted, before any work. */

@@ -1,10 +1,16 @@
+import { detectorFrontmatter, type EvidenceRecord } from '@vibe-agent-toolkit/agent-skills';
 import { describe, expect, it } from 'vitest';
 
 import { scanFrontmatter } from '../../src/scanners/frontmatter-scanner.js';
 import { TEST_LOCATION_ROOT } from '../test-helpers.js';
 
+/** Scan `content`, parsing its frontmatter once as the compatibility analyzer does. */
+async function scan(content: string, filePath: string): Promise<EvidenceRecord[]> {
+  return scanFrontmatter(content, filePath, TEST_LOCATION_ROOT, await detectorFrontmatter(content, {}));
+}
+
 describe('scanFrontmatter', () => {
-  it('returns empty array for skill with no compatibility-relevant frontmatter', () => {
+  it('returns empty array for skill with no compatibility-relevant frontmatter', async () => {
     const content = [
       '---',
       'name: simple-skill',
@@ -13,11 +19,11 @@ describe('scanFrontmatter', () => {
       '# Simple Skill',
     ].join('\n');
 
-    const result = scanFrontmatter(content, 'skills/simple/SKILL.md', TEST_LOCATION_ROOT);
+    const result = await scan(content, 'skills/simple/SKILL.md');
     expect(result).toEqual([]);
   });
 
-  it('detects Bash in allowed-tools as ALLOWED_TOOLS_LOCAL_SHELL evidence', () => {
+  it('detects Bash in allowed-tools as ALLOWED_TOOLS_LOCAL_SHELL evidence', async () => {
     const content = [
       '---',
       'name: code-skill',
@@ -26,39 +32,26 @@ describe('scanFrontmatter', () => {
       '---',
     ].join('\n');
 
-    const result = scanFrontmatter(content, 'SKILL.md', TEST_LOCATION_ROOT);
+    const result = await scan(content, 'SKILL.md');
     const evidence = result.find(e => e.patternId === 'ALLOWED_TOOLS_LOCAL_SHELL');
     expect(evidence).toBeDefined();
     expect(evidence?.location.file).toBe('SKILL.md');
   });
 
-  it('detects Edit in allowed-tools as ALLOWED_TOOLS_LOCAL_SHELL evidence', () => {
+  it.each(['Edit', 'Write'])('detects %s in allowed-tools as ALLOWED_TOOLS_LOCAL_SHELL evidence', async (tool) => {
     const content = [
       '---',
-      'name: edit-skill',
-      'description: Needs edit',
-      'allowed-tools: [Edit, Read]',
+      `name: ${tool.toLowerCase()}-skill`,
+      `description: Needs ${tool.toLowerCase()}`,
+      `allowed-tools: [${tool}, Read]`,
       '---',
     ].join('\n');
 
-    const result = scanFrontmatter(content, 'SKILL.md', TEST_LOCATION_ROOT);
+    const result = await scan(content, 'SKILL.md');
     expect(result.some(e => e.patternId === 'ALLOWED_TOOLS_LOCAL_SHELL')).toBe(true);
   });
 
-  it('detects Write in allowed-tools as ALLOWED_TOOLS_LOCAL_SHELL evidence', () => {
-    const content = [
-      '---',
-      'name: write-skill',
-      'description: Needs write',
-      'allowed-tools: [Write, Read]',
-      '---',
-    ].join('\n');
-
-    const result = scanFrontmatter(content, 'SKILL.md', TEST_LOCATION_ROOT);
-    expect(result.some(e => e.patternId === 'ALLOWED_TOOLS_LOCAL_SHELL')).toBe(true);
-  });
-
-  it('ignores Read and other non-restricted tools in allowed-tools', () => {
+  it('ignores Read and other non-restricted tools in allowed-tools', async () => {
     const content = [
       '---',
       'name: read-only',
@@ -67,11 +60,11 @@ describe('scanFrontmatter', () => {
       '---',
     ].join('\n');
 
-    const result = scanFrontmatter(content, 'SKILL.md', TEST_LOCATION_ROOT);
+    const result = await scan(content, 'SKILL.md');
     expect(result).toEqual([]);
   });
 
-  it('handles frontmatter without allowed-tools', () => {
+  it('handles frontmatter without allowed-tools', async () => {
     const content = [
       '---',
       'name: basic',
@@ -80,13 +73,13 @@ describe('scanFrontmatter', () => {
       '---',
     ].join('\n');
 
-    const result = scanFrontmatter(content, 'SKILL.md', TEST_LOCATION_ROOT);
+    const result = await scan(content, 'SKILL.md');
     expect(result).toEqual([]);
   });
 
-  it('handles malformed frontmatter gracefully', () => {
+  it('handles malformed frontmatter gracefully', async () => {
     const content = '---\ninvalid yaml: [[[bad\n---\n# Content';
-    const result = scanFrontmatter(content, 'SKILL.md', TEST_LOCATION_ROOT);
+    const result = await scan(content, 'SKILL.md');
     expect(Array.isArray(result)).toBe(true);
   });
 });

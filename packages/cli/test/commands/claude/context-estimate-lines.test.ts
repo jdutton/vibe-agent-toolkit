@@ -50,6 +50,7 @@ describe('estimateLines — the header + preamble share of the totals', () => {
       conditions: [],
       overBudgetRules: [],
       unattributedImports: [],
+      refused: [],
     };
 
     const document = answerDocument(answer, emptyClaudeContextProjection(), false);

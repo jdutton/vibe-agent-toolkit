@@ -1,7 +1,17 @@
 import * as fs from 'node:fs';
 import { basename, dirname } from 'node:path';
 
-import { isLocalFileLink, isParserUnavailable, parseFileCached, resolveLocalHref, type LinkType } from '@vibe-agent-toolkit/resources';
+import {
+  classifyParseFailure,
+  isLocalFileLink,
+  type NotAdmittedRoots,
+  partitionNotAdmitted,
+  parseFileCached,
+  type ParseDispatcher,
+  resolveLocalHref,
+  type LinkType,
+  withParseDispatcher,
+} from '@vibe-agent-toolkit/resources';
 import {
   anchoredAt,
   createRegistryIssue,
@@ -26,6 +36,7 @@ import {
 
 
 import type { EvidenceRecord } from '../evidence/index.js';
+import { parseRefusalIssue } from '../parse-refusal-issues.js';
 import { parseFrontmatter } from '../parsers/frontmatter-parser.js';
 
 import { detectBundledResourceWithoutLinks } from './bundled-resource-link-detection.js';
@@ -49,7 +60,20 @@ import { isNeverPackagedBasename } from './validation-rules.js';
  * @param options - Validation options
  * @returns Validation result with all validation issues
  */
-export async function validateSkill(options: ValidateOptions): Promise<ValidationResult> {
+export function validateSkill(options: ValidateOptions): Promise<ValidationResult> {
+  // One dispatcher for every parse this validation makes — the frontmatter and
+  // the whole link walk — or the run's, when the caller holds one.
+  return withParseDispatcher((dispatcher) => validateSkillOn(options, dispatcher), { dispatcher: options.dispatcher });
+}
+
+/**
+ * {@link validateSkill}, on a dispatcher.
+ *
+ * @param options - Validation options
+ * @param dispatcher - Where every parse runs
+ * @returns Validation result with all validation issues
+ */
+async function validateSkillOn(options: ValidateOptions, dispatcher: ParseDispatcher): Promise<ValidationResult> {
   const { skillPath, isVATGenerated = false } = options;
 
   // Root every emitted location is relative to. A batching caller supplies its
@@ -57,8 +81,14 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   // `validateSkillForPackaging` uses (config root -> git root -> skill dir) so
   // the two skills-lane entry points cannot disagree about the coordinate
   // system their issues are expressed in.
-  const locationRoot = options.locationRoot ?? findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
+  const projectRoot = findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
+  const locationRoot = options.locationRoot ?? projectRoot;
   const skillLocation = issueLocation(skillPath, locationRoot);
+  const policy: ResultPolicy = {
+    validation: options.validation,
+    resourcesValidation: options.resourcesValidation,
+    roots: { locationRoot, projectRoot },
+  };
 
   const issues: ValidationIssue[] = [];
   const allEvidence: EvidenceRecord[] = [];
@@ -72,7 +102,7 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
       message: 'File does not exist',
       location: skillLocation,
     });
-    return buildResult(skillPath, isVATGenerated, issues, options.validation);
+    return buildResult(skillPath, isVATGenerated, issues, policy);
   }
 
   // Read file
@@ -80,10 +110,12 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   const lineCount = content.split('\n').length;
 
   // Parse frontmatter
-  const parseResult = parseFrontmatter(content);
+  const parseResult = await parseFrontmatter(content, { dispatcher });
 
   if (!parseResult.success) {
-    issues.push({
+    // Frontmatter the worker refused (a limit, a dead worker) is there, and is
+    // the author's to simplify: the parse limit, never "add the frontmatter you have".
+    issues.push(parseRefusalIssue(parseResult.cause, skillPath, locationRoot) ?? {
       severity: 'error',
       code: 'SKILL_MISSING_FRONTMATTER',
       message: parseResult.error,
@@ -92,7 +124,7 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
       fix: 'Add YAML frontmatter with name and description fields',
     });
 
-    return buildResult(skillPath, isVATGenerated, issues, options.validation, { lineCount });
+    return buildResult(skillPath, isVATGenerated, issues, policy, { lineCount });
   }
 
   const { frontmatter } = parseResult;
@@ -127,7 +159,7 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   // Compat capability detection: collect raw evidence, derive observations,
   // surface each observation as an issue (severity comes from CODE_REGISTRY).
   const { evidence: rootEvidence, observations: rootObservations } =
-    runCompatDetectors(content, skillPath, locationRoot);
+    runCompatDetectors(content, skillPath, locationRoot, frontmatter);
   allEvidence.push(...rootEvidence);
   for (const obs of rootObservations) {
     issues.push(observationToIssue(obs, skillLocation));
@@ -149,7 +181,7 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
 
   // Transitive link traversal (BFS)
   const skillDir = options.rootDir ?? dirname(skillPath);
-  const linkedFiles = await traverseLinks(skillPath, skillDir, locationRoot, issues, allEvidence);
+  const linkedFiles = await traverseLinks(skillPath, skillDir, locationRoot, issues, allEvidence, dispatcher);
 
   // Bundled-resource link detection — fires after link traversal so the
   // linkedFiles set reflects everything reachable from SKILL.md.
@@ -170,7 +202,7 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   // Build metadata
   const metadata = buildMetadata(frontmatter, lineCount);
 
-  const result = buildResult(skillPath, isVATGenerated, issues, options.validation, metadata);
+  const result = buildResult(skillPath, isVATGenerated, issues, policy, metadata);
 
   if (linkedFiles.length > 0) {
     // Derived from the RESOLVED issues, so an ignored finding cannot resurface here.
@@ -361,6 +393,7 @@ async function traverseLinks(
   locationRoot: string,
   issues: ValidationIssue[],
   allEvidence: EvidenceRecord[],
+  dispatcher: ParseDispatcher,
 ): Promise<LinkedFileWalkRecord[]> {
   const resolvedSkillPath = safePath.resolve(skillPath);
   const visited = new Set<string>([resolvedSkillPath]);
@@ -372,21 +405,26 @@ async function traverseLinks(
   await forEachInOrder(queue, async (currentPath) => {
     let parseResult;
     try {
-      parseResult = await parseFileCached(currentPath, 'markdown');
+      parseResult = await parseFileCached(currentPath, 'markdown', { dispatcher });
     } catch (error) {
-      // A broken INSTALL, not a broken document. The parser arrives by
-      // `import()` from inside `parseFileCached` — lazily, past the parse
-      // cache's hit-path return, so a fully warm validation loads no parser at
-      // all — which puts a loader failure in this catch. Unguarded it minted one
-      // `LINK_INTEGRITY_BROKEN` per file, blamed every innocent document, never
-      // walked the link graph, and still exited 0 on "passed with warnings".
-      //
-      // A type check rather than a hoisted `loadParser` above the loop: that
-      // also works and costs every warm run the ~730 ms remark load for parses
-      // that never happen. `isParserUnavailable` matches one type VAT
-      // constructs at one place, so it is complete by construction — not the
-      // guessed blocklist of Node loader codes that was deleted.
-      if (isParserUnavailable(error)) throw error;
+      // A broken INSTALL, not a broken document. The parser loads in the
+      // worker — lazily, only on a cache miss, so a fully warm validation loads
+      // no parser at all — which puts a loader failure in this catch. Unguarded
+      // it minted one `LINK_INTEGRITY_BROKEN` per file, blamed every innocent
+      // document, never walked the link graph, and still exited 0. The
+      // classifier is an allowlist: it rethrows that, and every other VAT
+      // defect, untouched.
+      classifyParseFailure(error);
+
+      // A document the worker refused (a limit, a dead worker) is not "could
+      // not be parsed, so skipped": nothing in it was checked, and it is the
+      // author's to simplify — an error, under the code and sentence the crawl
+      // lanes use.
+      const limit = parseRefusalIssue(error, currentPath, locationRoot);
+      if (limit !== undefined) {
+        issues.push(limit);
+        return;
+      }
 
       issues.push({
         severity: 'warning',
@@ -405,7 +443,7 @@ async function traverseLinks(
     if (currentPath !== resolvedSkillPath) {
       const linkedContent = fs.readFileSync(currentPath, 'utf-8');
       const { evidence: linkedEvidence, observations: linkedObservations } =
-        runCompatDetectors(linkedContent, currentPath, locationRoot);
+        runCompatDetectors(linkedContent, currentPath, locationRoot, parseResult.frontmatter);
       allEvidence.push(...linkedEvidence);
       issues.push(...linkedObservations.map(obs => observationToIssue(obs, issueLocation(currentPath, locationRoot))));
       // Same detector on each linked file, mirroring the per-bundled-file call
@@ -722,15 +760,26 @@ function buildMetadata(
   return metadata;
 }
 
-/** The ONE exit for this lane: resolves every issue against `validation`. */
+/** What resolves this lane's findings: the skill's `validation`, and the project's `resources.validation` for a file not admitted. */
+interface ResultPolicy {
+  readonly validation: ValidationConfig;
+  readonly resourcesValidation: ValidationConfig;
+  readonly roots: NotAdmittedRoots;
+}
+
+/**
+ * The ONE exit for this lane: resolves every issue against `validation`, except
+ * a file not admitted — that is `resources.validation`'s alone (`partitionNotAdmitted`).
+ */
 function buildResult(
   skillPath: string,
   isVATGenerated: boolean,
   rawIssues: readonly ValidationIssue[],
-  validation: ValidationConfig,
+  policy: ResultPolicy,
   metadata?: ValidationResult['metadata']
 ): ValidationResult {
-  const issues = runSingleUnitValidation(rawIssues, validation).emitted;
+  const { rest, notAdmitted } = partitionNotAdmitted(rawIssues, policy.resourcesValidation, policy.roots);
+  const issues = [...runSingleUnitValidation(rest, policy.validation).emitted, ...notAdmitted];
   const result: ValidationResult = {
     path: skillPath,
     type: isVATGenerated ? 'vat-agent' : 'agent-skill',

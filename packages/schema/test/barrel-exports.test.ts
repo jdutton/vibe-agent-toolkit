@@ -104,6 +104,7 @@ const BARREL_EXPORTS = [
   'presenceImplies',
   'projectLocationOf',
   'reportSchema',
+  'resolveFindings',
   'resolveSeverity',
   'resultStatus',
   'runSingleUnitValidation',

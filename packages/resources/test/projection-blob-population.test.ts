@@ -4,6 +4,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { ParseCache } from '../src/parse-cache.js';
+import { withParseDispatcher } from '../src/parse-dispatcher.js';
 import {
   BLOB_CONTENT_CHANGED,
   BLOB_NOT_TEXT,
@@ -695,7 +696,7 @@ describe('afterClosurePromotion', () => {
     const before = builder.contentPromotionAttempts;
     const key = await builder.ensureContentKey(DOC_A);
 
-    await afterClosurePromotion(builder, before);
+    await withParseDispatcher(async (dispatcher) => afterClosurePromotion(builder, before, dispatcher), { cache: NO_CACHE });
 
     expect(builder.build().blobs).toHaveLength(2);
     expect(builder.build().blobs.map((row) => row.contentKey)).toContain(key);
@@ -716,7 +717,7 @@ describe('afterClosurePromotion', () => {
     expect(builder.contentPromotionAttempts).toBe(before + 1);
     expect(builder.contentPromotions).toBe(0);
 
-    await afterClosurePromotion(builder, before);
+    await withParseDispatcher(async (dispatcher) => afterClosurePromotion(builder, before, dispatcher), { cache: NO_CACHE });
 
     // Nothing new was derivable, because no key entered the projection.
     expect(builder.build().blobs).toHaveLength(1);

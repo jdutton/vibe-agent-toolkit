@@ -1,7 +1,9 @@
 /**
  * Compat capability detectors.
  *
- * Pure module: (content, filePath) -> { evidence, observations }. Detectors
+ * (content, filePath, frontmatter) -> { evidence, observations }. It parses
+ * nothing: `allowed-tools` is read from the frontmatter the caller's own parse
+ * returned ({@link detectorFrontmatter} for a caller that has none). Detectors
  * collect raw EvidenceRecord[] from the source, then deriveObservations()
  * rolls evidence up into capability-level Observation[]. The verdict layer
  * (downstream) decides whether each observation produces a compat issue.
@@ -10,6 +12,7 @@
  * is called against every emitted record).
  */
 
+import { isPerRunParseRefusal, type ParseRoute } from '@vibe-agent-toolkit/resources';
 import { CODE_REGISTRY, type IssueCode, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
@@ -75,25 +78,36 @@ function* iterCodeBlocks(
 }
 
 /**
+ * A file's frontmatter, parsed once for the detectors by a caller that has no
+ * parse of its own: `undefined` when it does not parse (the skill validator
+ * names that file `SKILL_MISSING_FRONTMATTER` on the same run). A block the
+ * parse worker refused for this run throws that refusal — refused is not
+ * "declares nothing", and the caller names the file unchecked.
+ */
+export async function detectorFrontmatter(content: string, route: ParseRoute): Promise<Record<string, unknown> | undefined> {
+  const parsed = await parseFrontmatter(content, route);
+  if (parsed.success) return parsed.frontmatter;
+  if (isPerRunParseRefusal(parsed.cause)) throw parsed.cause;
+  return undefined;
+}
+
+/**
  * The `allowed-tools:` declarations a SKILL.md carries and the 1-based line of
- * the key; `{ tools: [], line: 0 }` when the key is absent or the frontmatter
- * does not parse (the skill validator names that file
- * `SKILL_MISSING_FRONTMATTER` on the same run — nothing is read out of it here).
+ * the key; `{ tools: [], line: 0 }` when the key is absent or there is no
+ * parsed frontmatter.
  *
  * 🚩 This used to be a hand parser that saw ONLY the `[…]` flow form and split
  * it on commas. Claude Code's documented spelling is space-separated, and a
  * block sequence is valid YAML, so `allowed-tools: Read Bash` and a `- Bash`
  * list both read as NO declaration and the local-shell capability reported
- * clean over them. The value now goes through the same `parseFrontmatter` the
- * validator uses and the same `allowedToolsOf` the settings-compat checker uses.
+ * clean over them. The value comes from the caller's YAML parse and goes
+ * through the same `allowedToolsOf` the settings-compat checker uses.
  */
-export function allowedToolsDeclarations(content: string): { tools: string[]; line: number } {
-  // A block that is not a mapping (empty, `~`, a scalar, a sequence) is a parse
-  // FAILURE at the seam — `parseFrontmatter` refuses it — so there is no shape
-  // left for this reader to guard against on its own.
-  const parsed = parseFrontmatter(content);
-  if (!parsed.success) return { tools: [], line: 0 };
-  const tools = allowedToolsOf(parsed.frontmatter['allowed-tools']) ?? [];
+export function allowedToolsDeclarations(
+  content: string,
+  frontmatter: Readonly<Record<string, unknown>> | undefined,
+): { tools: string[]; line: number } {
+  const tools = allowedToolsOf(frontmatter?.['allowed-tools']) ?? [];
   if (tools.length === 0) return { tools: [], line: 0 };
 
   // Locate the line of the key. parseFrontmatter normalized CRLF; do the same.
@@ -115,15 +129,16 @@ function toolNameOf(declaration: string): string {
   return paren === -1 ? declaration : declaration.slice(0, paren);
 }
 
-export function collectLocalShellEvidence(
+function collectLocalShellEvidence(
   content: string,
   filePath: string,
   locationRoot: string,
+  frontmatter: Readonly<Record<string, unknown>> | undefined,
 ): EvidenceRecord[] {
   const out: EvidenceRecord[] = [];
 
   // Frontmatter allowed-tools
-  const { tools, line: atLine } = allowedToolsDeclarations(content);
+  const { tools, line: atLine } = allowedToolsDeclarations(content, frontmatter);
   const matchedTool = tools.find(t => (LOCAL_SHELL_TOOLS as readonly string[]).includes(toolNameOf(t)));
   if (matchedTool !== undefined) {
     out.push(
@@ -269,14 +284,17 @@ export function observationToIssue(obs: Observation, location: string): Validati
  * @param locationRoot - The ONE base every emitted evidence `location.file` is
  *   expressed relative to. Required, so a producer cannot emit an absolute
  *   location by omission.
+ * @param frontmatter - The frontmatter the caller's parse of `content` returned
+ *   (`undefined` when it did not parse) — never parsed again here
  */
 export function runCompatDetectors(
   content: string,
   filePath: string,
   locationRoot: string,
+  frontmatter: Readonly<Record<string, unknown>> | undefined,
 ): DetectorOutput {
   const evidence: EvidenceRecord[] = [
-    ...collectLocalShellEvidence(content, filePath, locationRoot),
+    ...collectLocalShellEvidence(content, filePath, locationRoot, frontmatter),
     ...collectExternalCLIEvidence(content, filePath, locationRoot),
     ...collectBrowserAuthEvidence(content, filePath, locationRoot),
   ];

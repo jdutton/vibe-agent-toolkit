@@ -1,3 +1,4 @@
+import type { ParseDispatcher } from '@vibe-agent-toolkit/resources';
 import type { SeverityCounts, ValidationConfig, ValidationIssue } from '@vibe-agent-toolkit/schema';
 import type { FsSide } from '@vibe-agent-toolkit/utils';
 
@@ -108,11 +109,28 @@ export interface ValidateOptions {
   validation: ValidationConfig;
 
   /**
+   * The project's `resources.validation`, as the VERB resolved it: the one config
+   * that settles a file not admitted (`RESOURCE_UNREADABLE`,
+   * `RESOURCE_PARSE_LIMIT_EXCEEDED`, `RESOURCE_PARSE_WORKER_DIED`) — never
+   * `validation` above. REQUIRED: only the verb knows which config governs the
+   * run; `{}` when none does, or when the caller resolves these codes itself
+   * (`vat audit`).
+   */
+  resourcesValidation: ValidationConfig;
+
+  /**
    * The side of the caller's verb the skill tree is on: `source` for an author's skill, `environment`
    * for one VAT extracted into its own staging (a ZIP under $TMPDIR). REQUIRED: a fault the validator's
    * own walk raises is classified there, and only the caller knows which tree it handed over.
    */
   side: FsSide;
+  /**
+   * The run's parse dispatcher, when the caller validates many skills: every
+   * parse this validation makes (the frontmatter, the link walk) runs on it, so
+   * the run pays one worker start. Omitted, the validation holds its own for
+   * the one skill and shuts it down.
+   */
+  dispatcher?: ParseDispatcher;
 }
 
 /**

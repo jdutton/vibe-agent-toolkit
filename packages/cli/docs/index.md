@@ -65,8 +65,8 @@ Discover markdown resources in directory and report statistics
 
 **Exit codes:**
 
-- `0` - Scanned at least one file
-- `1` - Scanned nothing (`RESOURCE_CHECK_BROKEN`)
+- `0` - Scanned at least one file, and admitted every file it enumerated
+- `1` - A file it could not read or whose parse was refused, or scanned nothing (`RESOURCE_CHECK_BROKEN`)
 - `2` - The scan could not run (path names no directory, unreadable, bad config)
 
 **Creates/modifies:** None (read-only scan)

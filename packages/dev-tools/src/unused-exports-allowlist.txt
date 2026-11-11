@@ -44,7 +44,6 @@ packages/agent-skills/src/skill-test/vendor-manifest.ts VendoredManifest dead
 packages/agent-skills/src/test-input.ts ExcludedLinkRef dead
 packages/agent-skills/src/validators/compat-detectors.ts collectBrowserAuthEvidence dead
 packages/agent-skills/src/validators/compat-detectors.ts collectExternalCLIEvidence dead
-packages/agent-skills/src/validators/compat-detectors.ts collectLocalShellEvidence dead
 packages/agent-skills/src/validators/description-style-detection.ts DescriptionStyleInput dead
 packages/agent-skills/src/validators/description-style-detection.ts DescriptionYamlStyle dead
 packages/agent-skills/src/validators/packaged-size-limit.ts BundleWalk dead
@@ -342,16 +341,9 @@ packages/resources/src/link-validator.ts pathCorrection dead
 packages/resources/src/link-validator.ts PathCorrection dead
 packages/resources/src/link-validator.ts UnreadableTarget dead
 packages/resources/src/okf/findings.ts IndexInspection dead
-packages/resources/src/parse-pool.ts ParseWireFacts dead
-packages/resources/src/parse-pool.ts ParseWorkerData dead
-packages/resources/src/parse-pool.ts ParseWorkerFailure dead
-packages/resources/src/parse-pool.ts ParseWorkerRequest dead
-packages/resources/src/parse-pool.ts ParseWorkerResponse dead
-packages/resources/src/parse-pool.ts ParseWorkerTimingReport dead
 packages/resources/src/parse-timing.ts ParseKindShape dead
 packages/resources/src/parse-timing.ts ParsePassSlot dead
 packages/resources/src/parse-timing.ts ParserKindSlot dead
-packages/resources/src/parse-timing.ts readThreadTiming dead
 packages/resources/src/parse-timing.ts TierPassSlot dead
 packages/resources/src/parse-tokenize-probe.ts TokenizeEvents dead
 packages/resources/src/parse-tokenize-probe.ts TokenizeProbeOrder dead

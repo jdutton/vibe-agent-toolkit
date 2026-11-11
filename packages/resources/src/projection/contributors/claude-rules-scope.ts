@@ -105,7 +105,7 @@ import {
 } from '../claude-context-rules.js';
 import type { ContributorStratum, ExtentContribution, ExtentContributor } from '../contributor.js';
 import { CLAUDE_CODE_ENTRY_NAMES } from '../harness/claude-code-entry-names.js';
-import { harnessFactsIndex, type HarnessFactsIndex } from '../harness/facts-index.js';
+import { FACTS_REFUSED, harnessFactsIndex, type HarnessFactsIndex } from '../harness/facts-index.js';
 import type { HarnessId } from '../harness/profile.js';
 import type { ProjectionBase } from '../projection.js';
 import { isAtOrBelow } from '../root-relative-path.js';
@@ -160,9 +160,8 @@ export function ruleScopeFor(path: string, paths: HarnessBlobFactsRow['paths']):
 
 /**
  * The harness whose `paths:` this contributor reads — spelled as the literal,
- * typed through {@link HarnessId}, because this module sits on the
- * `claude-code.ts → claude-memory.ts → claude-context-rules.ts` chain and must
- * not import the profile itself.
+ * typed through {@link HarnessId}, so this module stays off the profile's
+ * import graph (see `claude-code-entry-names.ts`).
  */
 const CLAUDE_CODE_HARNESS: HarnessId = 'claude-code';
 
@@ -170,8 +169,8 @@ const CLAUDE_CODE_HARNESS: HarnessId = 'claude-code';
 const FRONTIER = Symbol('frontier');
 
 /**
- * One rules file's stored `paths`, or {@link FRONTIER} when its blob has not
- * had its facts derived yet.
+ * One rules file's stored `paths`, {@link FRONTIER} when its blob has not had
+ * its facts derived yet, or {@link FACTS_REFUSED} when this run refused them.
  *
  * ⚠️ This is the ONE place an absent facts row is legitimately "not yet"
  * rather than a bug: this contributor runs INSIDE the closure fixpoint, where
@@ -183,16 +182,23 @@ const FRONTIER = Symbol('frontier');
  * A key with no `blobs` row at all (unreadable, or refused as not text) has no
  * content to have facts OF, and reads as declaring no `paths:`, as it always did.
  *
+ * ⛔ **A refusal is asked FIRST, and is never "no `paths:`".** A rule whose read
+ * was stopped at a parse limit (the blob stage or the harness lane — both file
+ * the same per-run code) may well be path-scoped; reading it as paths-less
+ * tagged it `root` and charged it to every launch. Checked before the `blobs`
+ * test because a blob-stage refusal leaves no `blobs` row either.
+ *
  * @param contentKey - The rules file's content key, or null when unkeyed
  * @param derivedBlobs - Every content key with a `blobs` row
  * @param facts - Claude Code's facts index over the base
- * @returns The stored `paths`, null, or {@link FRONTIER}
+ * @returns The stored `paths`, null, {@link FRONTIER} or {@link FACTS_REFUSED}
  */
 function rulePathsOf(
   contentKey: string | null,
   derivedBlobs: ReadonlySet<string>,
   facts: HarnessFactsIndex,
-): HarnessBlobFactsRow['paths'] | typeof FRONTIER {
+): HarnessBlobFactsRow['paths'] | typeof FRONTIER | typeof FACTS_REFUSED {
+  if (contentKey !== null && facts.refused(contentKey)) return FACTS_REFUSED;
   if (contentKey === null || !derivedBlobs.has(contentKey)) return null;
   const row = facts.factsOf(contentKey);
   return row === undefined ? FRONTIER : row.paths;
@@ -300,6 +306,9 @@ export class ClaudeRulesScopeContributor implements ExtentContributor {
       if (paths === FRONTIER) continue;
       seen.add(row.resourceId);
       memberships.push({ resourceId: row.resourceId, extentId });
+      // Unclassified, and no globs: its `paths:` were never read. The query
+      // names it as refused rather than guessing a scope (see `rulePathsOf`).
+      if (paths === FACTS_REFUSED) continue;
       tags.push({
         resourceId: row.resourceId,
         tag: RULE_SCOPE_TAG,

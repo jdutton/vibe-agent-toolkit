@@ -187,7 +187,7 @@ function registryRows(dump: CrawlTimingDump): CrawlTimingEntry[] {
  * Nothing shipped does this: no file under `src/projection/` so much as imports
  * `ResourceRegistry` (the base contributors reach for `crawlDirectory`,
  * `GitTracker` and `node:fs` directly, and `blob-population.ts` parses through
- * `parseKeyed`). It is written here rather than waited for because the accounting
+ * the dispatcher). It is written here rather than waited for because the accounting
  * rule it pins has to hold on the FIRST commit that routes a contributor through
  * the registry, not on the one after somebody notices the arms disagreed.
  */

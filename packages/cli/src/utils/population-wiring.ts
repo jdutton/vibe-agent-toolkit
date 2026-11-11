@@ -23,9 +23,11 @@
 
 import {
   describeBlobRefusals,
+  describeStoreMiss,
   type BlobRefusalRows,
   type CollectionConfig,
   type PopulationCache,
+  type StoreMiss,
 } from '@vibe-agent-toolkit/resources';
 import type { GitTracker } from '@vibe-agent-toolkit/utils/git';
 
@@ -56,18 +58,24 @@ export interface PopulationWiring {
  * @param options - The run: `root`, `cache`, `logger`, and the `population` name
  * @param build - Builds the population from the wiring this entry supplies
  * @param refusalRowsOf - The rows the report reads, from a derive or a hit alike
+ * @param storeMissOf - The store miss a refusal caused the run, if one did —
+ *   reported beside the refusals, because a persisting refusal makes every run
+ *   re-derive the whole population and that cost is allowed only named (ADR I10)
  * @returns Whatever `build` returned
  */
 export async function populateAndReport<R>(
   options: { root: string; cache: PopulationCache | undefined; logger: Logger; population: string },
   build: (wiring: PopulationWiring) => Promise<R>,
   refusalRowsOf: (result: R) => BlobRefusalRows,
+  storeMissOf: (result: R) => StoreMiss | undefined,
 ): Promise<R> {
   const { root, cache, logger, population } = options;
   const gitTracker = await gitTrackerForProjectRoot(root);
   const result = await build(populationWiring(gitTracker, cache, root));
   const refusals = describeBlobRefusals(refusalRowsOf(result));
   if (refusals !== undefined) logger.warn(`${population} population: ${refusals}`);
+  const storeMiss = describeStoreMiss(storeMissOf(result));
+  if (storeMiss !== undefined) logger.warn(`${population} population: ${storeMiss}`);
   return result;
 }
 

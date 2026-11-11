@@ -31,7 +31,7 @@ import { loadConfig } from '../../utils/config-loader.js';
 import { endWithRefusal, findingsGoToStderr, NOTHING_FINISHED, writeDocument } from '../../utils/document-writer.js';
 import { reportFindings } from '../../utils/issue-rendering.js';
 import { readPackageJsonOrAbsent } from '../../utils/package-json.js';
-import { discoverSkillsFromConfig } from '../skills/skill-discovery.js';
+import { discoverSkillsFromConfig, namedSkillsOrRefuse } from '../skills/skill-discovery.js';
 
 import type { ArdEmitData } from './emit-schema.js';
 import { collectArdSurfaces, type SkippedArdSurface } from './surfaces.js';
@@ -170,12 +170,14 @@ export async function runArdEmit(options: ArdEmitOptions): Promise<ArdEmitResult
       ? {}
       : {
           // `'refuse'`: a manifest cross-checked against a partial skill list
-          // would advertise or omit entries on a population it never saw. The
+          // would advertise or omit entries on a population it never saw — an
+          // unlistable directory or a SKILL.md whose parse was refused alike. The
           // throw is an invocation failure → exit 2 (see the catch in
           // `ardEmitCommand`).
-          discoveredSkills: (await discoverSkillsFromConfig(config.skills, projectRoot, 'refuse')).map(
-            (skill) => skill.name
-          ),
+          discoveredSkills: namedSkillsOrRefuse(
+            await discoverSkillsFromConfig(config.skills, projectRoot, 'refuse'),
+            projectRoot,
+          ).map((skill) => skill.name),
         }),
   });
   const manifest = buildArdManifest(buildArdEntries(surfaces, ard));

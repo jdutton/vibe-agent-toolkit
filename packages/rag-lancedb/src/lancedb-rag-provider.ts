@@ -29,8 +29,7 @@ import {
   RAGQuerySchema,
 } from '@vibe-agent-toolkit/rag';
 import {
-  isParserUnavailable,
-  parseFileCached,
+  calculateChecksumFromContent,
   transformContent,
   type ContentTransformOptions,
   type ResourceMetadata,
@@ -41,7 +40,9 @@ import {
   RAG_DATABASE_UNREADABLE_CODE,
   RAG_INDEX_EMPTY_CODE,
   VatError,
+  withFsFault,
 } from '@vibe-agent-toolkit/utils';
+import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import type { ZodObject, ZodRawShape } from 'zod';
 
 import { chunkTableReadFailure, type ChunkTableShape, foreignTableRefusal } from './chunk-table-failure.js';
@@ -555,9 +556,10 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
   /**
    * Index resources into the RAG database
    *
-   * @throws {ParserUnavailableError} If the markdown parser module cannot be
-   *   loaded — a broken install fails the whole batch rather than becoming one
-   *   error entry per resource
+   * Parses nothing: every resource arrives with the facts the registry derived
+   * on the one bounded parse route (a worker, under its limits, with the parser
+   * its type names), and only its text is read here.
+   *
    * @throws {VatError} `RAG_DATABASE_UNREADABLE` when the chunk table cannot be
    *   read or is not one this build writes — files the OS refuses, a foreign
    *   schema or vector size, or damage, the message says which — the store's
@@ -623,20 +625,6 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       try {
         await this.indexResource(resource, result, documented);
       } catch (error) {
-        // A broken INSTALL, not a broken corpus. `indexResource`'s parse carries
-        // no local try, so this catch is the one that sees a failed parser load —
-        // the parser arrives by `import()` from inside `parseFileCached`, lazily,
-        // past the parse cache's hit-path return so a fully warm index loads no
-        // parser at all. Unguarded, a `chmod 000` on the built parser produced
-        // one `errors` entry per resource, `resourcesIndexed: 0`, and a resolved
-        // promise with nothing to act on.
-        //
-        // A type check rather than a `loadParser('markdown')` hoisted above the
-        // loop: that also closes it and costs every warm run the ~730 ms remark
-        // load for parses that never happen. `isParserUnavailable` matches one
-        // type VAT constructs at one place, so it is complete by construction —
-        // not the guessed blocklist of Node loader codes that was deleted.
-        if (isParserUnavailable(error)) throw error;
         // A damaged STORE, not a damaged resource: every later resource would fail
         // the same read, so the batch is refused once, carrying what it recorded so far.
         if (isVatError(error, RAG_DATABASE_UNREADABLE_CODE)) {
@@ -924,17 +912,34 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     result: IndexResult,
     documented: DocumentedResources,
   ): Promise<void> {
-    // Read + parse, served from the disk parse cache when one is filed under
-    // these bytes. 'markdown' is stated rather than derived from the extension:
-    // this lane has always parsed every resource as markdown, including the
-    // .html ones the registry crawls, and the key must name the parser that
-    // actually ran (see content-key.ts).
-    const parseResult = await parseFileCached(resource.filePath, 'markdown');
+    // The text only, never a parse. The registry already parsed this resource
+    // on the one bounded route — in a worker, under its limits, with the parser
+    // its type names — and `resource` carries those facts (links, headings).
+    // A parse here would run on this thread, unbounded (ADR I8), and as
+    // markdown whatever the type: an HTML resource re-read as markdown, and a
+    // deep enough document overflowing the stack of the process running the
+    // index. Decoded by the one decoder, so the text is the one the registry's
+    // facts describe.
+    const { text } = await withFsFault(
+      { side: 'source', origin: 'content', action: `read ${resource.filePath}`, path: resource.filePath },
+      () => readTextContent(resource.filePath),
+    );
+
+    // The facts above describe the bytes the registry ADMITTED; these are the
+    // bytes on disk now. A file changed in between would be indexed as new text
+    // under old links, headings and frontmatter — so the text is re-hashed at use
+    // and a mismatch refuses this resource before anything is written for it
+    // (ADR I2a). Thrown, it becomes this resource's entry in `result.errors`.
+    if (calculateChecksumFromContent(text) !== resource.checksum) {
+      throw new Error(
+        `${resource.filePath} changed since it was crawled: its content no longer matches the checksum the registry recorded, so it was not indexed. Re-run to index the current content.`,
+      );
+    }
 
     // Apply content transform if configured (e.g., rewrite links before chunking)
     const content = this.config.contentTransform
-      ? transformContent(parseResult.content, resource.links, this.config.contentTransform)
-      : parseResult.content;
+      ? transformContent(text, resource.links, this.config.contentTransform)
+      : text;
 
     // Generate content hash for change detection (based on transformed content)
     const resourceContentHash = generateContentHash(content);

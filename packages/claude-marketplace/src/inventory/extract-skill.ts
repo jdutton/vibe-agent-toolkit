@@ -4,10 +4,18 @@ import { dirname } from 'node:path';
 import {
 	LINK_GRAPH_MEMBER_GLOBS,
 	parseFrontmatter,
+	refusedAmong,
 	walkLinkGraph,
 	type WalkableRegistry,
 } from '@vibe-agent-toolkit/agent-skills';
-import { loadConfig, ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import {
+	classifyParseFailure,
+	loadConfig,
+	type ParseDispatcher,
+	type ParseRefusedResource,
+	parseRefusedEntryFor,
+	ResourceRegistry,
+} from '@vibe-agent-toolkit/resources';
 import {
   compareCodeUnits,
   CRAWL_REGISTRY_ENUMERATE_ID,
@@ -18,6 +26,7 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import {
   crawlDirectory,
+  DirectoryListingRefusedError,
 } from '@vibe-agent-toolkit/utils/crawl';
 import {
   type GitTracker,
@@ -160,6 +169,12 @@ export interface ClaudeSkillInventoryOptions {
 	 * holds an extent for this skill; anything else falls back to the walk.
 	 */
 	sharedPopulation?: InventoryPopulation | undefined;
+	/**
+	 * The run's parse dispatcher, for the frontmatter decode (in the bounded
+	 * worker), so a plugin's skills share one worker start. Omitted, a cache
+	 * miss builds a one-thread pool for the call.
+	 */
+	dispatcher?: ParseDispatcher | undefined;
 }
 
 /**
@@ -176,7 +191,7 @@ export async function extractClaudeSkillInventory(
 	const absolute = safePath.resolve(skillMdPath);
 	const parseErrors: ParseErrors = [];
 
-	const { name, description } = await parseFrontmatterFields(absolute, parseErrors);
+	const { name, description } = await parseFrontmatterFields(absolute, parseErrors, options.dispatcher);
 	const linked = await walkLinkedFiles(absolute, parseErrors, options);
 
 	return new ClaudeSkillInventory({
@@ -190,20 +205,24 @@ export async function extractClaudeSkillInventory(
 async function parseFrontmatterFields(
 	absolute: string,
 	parseErrors: ParseErrors,
+	dispatcher: ParseDispatcher | undefined,
 ): Promise<{ name: string; description: string | undefined }> {
 	let name = '';
 	let description: string | undefined;
 	try {
 		const raw = await readFile(absolute, 'utf-8');
-		const parsed = parseFrontmatter(raw);
+		const parsed = await parseFrontmatter(raw, dispatcher === undefined ? {} : { dispatcher });
 		if (parsed.success) {
 			const fm = parsed.frontmatter;
 			if (typeof fm['name'] === 'string') name = fm['name'];
 			if (typeof fm['description'] === 'string') description = fm['description'];
 		} else {
-			parseErrors.push({ path: absolute, message: parsed.error });
+			// A refused block: the inventory's one refusal row.
+			const refused = parseRefusedEntryFor(absolute, parsed.cause);
+			pushRow(parseErrors, refused === undefined ? { path: absolute, message: parsed.error } : parseRefusedRow(refused));
 		}
 	} catch (e) {
+		classifyParseFailure(e);
 		parseErrors.push(recordedFailure(absolute, (e as Error).message, e));
 	}
 	return { name, description };
@@ -303,6 +322,24 @@ export async function crawlSkillLinkRegistry(projectRoot: string): Promise<Resou
 	return registry;
 }
 
+/**
+ * Append a row unless the same file is already refused under the same code —
+ * the frontmatter decode and the link walk can both meet one refused SKILL.md.
+ *
+ * @param parseErrors - The rows so far
+ * @param row - The row to add
+ */
+function pushRow(parseErrors: ParseErrors, row: ParseErrors[number]): void {
+	const refused = row.parseRefused;
+	if (refused !== undefined && parseErrors.some((seen) => seen.path === row.path && seen.parseRefused === refused)) return;
+	parseErrors.push(row);
+}
+
+/** A refused file's row: code and reason; the publishing report builds the sentence from its root. */
+function parseRefusedRow(entry: ParseRefusedResource): ParseErrors[number] {
+	return { path: entry.filePath, message: entry.reason, parseRefused: entry.code };
+}
+
 async function walkLinkedFiles(
 	absolute: string,
 	parseErrors: ParseErrors,
@@ -318,8 +355,16 @@ async function walkLinkedFiles(
 		// the registry so the incumbent's whole-corpus crawl is not paid and then
 		// discarded — the point of the lane is that it replaces that crawl, and a
 		// version that ran both would measure neither.
-		const projected = membersFromPopulation(projectRoot, absolute, options.sharedPopulation);
-		if (projected !== undefined) return [...projected];
+		const population = populationFor(projectRoot, options.sharedPopulation);
+		const projected = population?.membersOf(absolute);
+		if (population !== undefined && projected !== undefined) {
+			// The same parse-error row the walk's registry reports below, from the
+			// population's refusal rows: a refused file is still a member.
+			for (const refusal of population.parseRefusedAmong([absolute, ...projected])) {
+				pushRow(parseErrors, parseRefusedRow(refusal));
+			}
+			return [...projected];
+		}
 
 		const registry = await registryFor(projectRoot, options.sharedRegistry);
 		const skillResource = registry.getResource(absolute);
@@ -327,17 +372,25 @@ async function walkLinkedFiles(
 			const gitTracker = await gitTrackerFor(projectRoot, options.gitTrackerSource);
 			collectLinkedFiles(skillResource.id, registry, absolute, projectRoot, linked, gitTracker);
 		}
+		// A file the crawl refused to parse is not admitted, so the walk met it on
+		// disk as an opaque asset: its links never walked, nothing in it checked.
+		for (const entry of refusedAmong(registry.getParseRefusedResources(), [absolute, ...linked])) {
+			pushRow(parseErrors, parseRefusedRow(entry));
+		}
 	} catch (e) {
+		// A row only for an unlistable directory or what the classifier allowlists.
+		if (!(e instanceof DirectoryListingRefusedError)) classifyParseFailure(e);
 		parseErrors.push({ path: absolute, message: `link walk failed: ${(e as Error).message}` });
 	}
 	return linked;
 }
 
 /**
- * This skill's membership from a supplied population, or `undefined` to fall back
- * to the walk.
+ * The supplied population when it may answer for this root, or `undefined` to fall
+ * back to the walk.
  *
- * Two independent guards, and both have to hold:
+ * Two independent guards, and both have to hold — this is the first; the caller
+ * applies the second:
  *
  * 1. **Exact-root equality**, the same rule and the same reason as
  *    {@link registryFor}: membership is resolved relative to a root, so a
@@ -348,21 +401,19 @@ async function walkLinkedFiles(
  *    as having no linked files, which is a confident wrong answer rather than a
  *    missing one. `membersOf` returns `undefined` for that case and an empty array
  *    for a skill that genuinely links to nothing, and the two must not be
- *    conflated here.
+ *    conflated.
  *
  * @param projectRoot - The root this skill's walk resolves against
- * @param skillMdPath - Absolute path to the skill's SKILL.md
  * @param population - The caller's population, if any
- * @returns Absolute linked-file paths, or `undefined` when the walk must run
+ * @returns The population, or `undefined` when the walk must run
  */
-function membersFromPopulation(
+function populationFor(
 	projectRoot: string,
-	skillMdPath: string,
 	population: InventoryPopulation | undefined,
-): readonly string[] | undefined {
+): InventoryPopulation | undefined {
 	if (population === undefined) return undefined;
 	if (safePath.resolve(population.root) !== safePath.resolve(projectRoot)) return undefined;
-	return population.membersOf(skillMdPath);
+	return population;
 }
 
 /**

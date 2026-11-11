@@ -58,7 +58,7 @@
  * by one pattern, `SEVERITY_KEY_PATTERN` — composed from the registry enum's own
  * code names alternated with `CUSTOM_CHECK_CODE_PATTERN_SOURCE` — so
  * `CUSTOM:<name>` parses as a `severity` key while a misspelled REGISTRY code is
- * still refused. Resolution is safe on the same key: `resolveIssueSeverity`
+ * still refused. Resolution is safe on the same key: `resolveFindings`
  * calls `resolveSeverity` only for a code the overrides map actually lists, and
  * `resolveSeverity` returns a listed value before it ever indexes
  * `CODE_REGISTRY`. So an adopter downgrades or ignores a check they inherited

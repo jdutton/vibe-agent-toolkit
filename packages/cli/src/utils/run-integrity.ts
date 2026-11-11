@@ -36,7 +36,7 @@
  * 3. **Derived once, in the writer, from the verb's declared denominator.**
  *    {@link withRunIntegrity} is the one function every lane's `Report` passes
  *    through on its way out, so deriving the refusal there lands it after
- *    `resolveIssueSeverity` and `applyAllowFilter` and makes "denominator zero,
+ *    `resolveFindings` and `applyAllowFilter` and makes "denominator zero,
  *    status clean" unrepresentable rather than merely unwritten. A pure
  *    function, unit-testable without I/O — no verb decides this at its own site.
  *    An orchestrated PHASE passes through the same function, with its verb's own

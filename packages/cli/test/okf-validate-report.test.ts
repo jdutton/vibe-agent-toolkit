@@ -47,6 +47,7 @@ function report(bundle: string, findings: OkfFinding[] = []): CheckedOkfBundle {
       conceptDocuments: ['concepts/a.md'],
       reservedDocuments: [],
       findings,
+      parseRefused: [],
       hasErrors: findings.some((f) => f.severity === 'error'),
     },
     root: safePath.join(PROJECT_ROOT, 'bundles', bundle),
@@ -72,6 +73,7 @@ function emptyReport(bundle: string): CheckedOkfBundle {
       conceptDocuments: [],
       reservedDocuments: [],
       findings: [],
+      parseRefused: [],
       hasErrors: false,
     },
     root: safePath.join(PROJECT_ROOT, 'bundles', bundle),
@@ -79,7 +81,7 @@ function emptyReport(bundle: string): CheckedOkfBundle {
 }
 
 function summarize(checked: readonly CheckedOkfBundle[]) {
-  return publishedReport('okf validate', summarizeOkfBundles(checked, PROJECT_ROOT));
+  return publishedReport('okf validate', summarizeOkfBundles(checked, PROJECT_ROOT, {}));
 }
 
 /** The `validate` subcommand, with Commander's process.exit disabled. */
@@ -91,6 +93,48 @@ function validateSubcommand() {
   validate.exitOverride();
   return { okf, validate };
 }
+
+/** A bundle one of whose documents had its parse refused for this run. */
+function refusedReport(): CheckedOkfBundle {
+  const checked = report('knowledge');
+  const filePath = safePath.join(checked.root, 'concepts', 'huge.md');
+  return {
+    ...checked,
+    report: {
+      ...checked.report,
+      parseRefused: [{ filePath, code: 'RESOURCE_PARSE_LIMIT_EXCEEDED', reason: 'its parse was stopped at its outputRows limit (16384)' }],
+      hasErrors: true,
+    },
+  };
+}
+
+describe('a refused parse in a bundle', () => {
+  // One contract (ADR I11): the same code, sentence, allow list and severity as
+  // every other lane — never a lane-local finding no config reaches.
+  it('is reported as the not-admitted contract reports it', () => {
+    const summary = summarizeOkfBundles([refusedReport()], PROJECT_ROOT, {});
+
+    expect(summary.findings).toHaveLength(1);
+    expect(summary.findings).toMatchObject([
+      {
+        code: 'RESOURCE_PARSE_LIMIT_EXCEEDED',
+        severity: 'error',
+        location: 'bundles/knowledge/concepts/huge.md',
+        message: "'bundles/knowledge/concepts/huge.md' was enumerated but its parse was stopped at its outputRows limit (16384), so its OKF conformance was not assessed. Nothing was stored for it: the next run parses it again.",
+      },
+    ]);
+  });
+
+  it('honours the project\'s allow list and severity', () => {
+    const allowed = summarizeOkfBundles([refusedReport()], PROJECT_ROOT, {
+      allow: { RESOURCE_PARSE_LIMIT_EXCEEDED: [{ paths: ['bundles/knowledge/**'], reason: 'generated' }] },
+    });
+    const lowered = summarizeOkfBundles([refusedReport()], PROJECT_ROOT, { severity: { RESOURCE_PARSE_LIMIT_EXCEEDED: 'warning' } });
+
+    expect(allowed.findings).toEqual([]);
+    expect(lowered.findings.map((found) => found.severity)).toEqual(['warning']);
+  });
+});
 
 describe('summarizeOkfBundles', () => {
   it('refuses the run as RESOURCE_CHECK_BROKEN, exit 1, when nothing was declared', () => {
@@ -243,7 +287,7 @@ describe('summarizeOkfBundles', () => {
       // "declare a bundle" remedy would be wrong here: the bundle IS declared.
       const gone = emptyReport('gone');
       const unreadable = { ...gone, report: { ...gone.report, findings: [rootUnreadable('gone')], hasErrors: true } };
-      const summary = summarizeOkfBundles([unreadable, report('knowledge', [finding('error')])], PROJECT_ROOT);
+      const summary = summarizeOkfBundles([unreadable, report('knowledge', [finding('error')])], PROJECT_ROOT, {});
       const refusal = unreadableRootRefusal(summary);
 
       expect(refusal?.message).toContain('okf.bundles.gone.root');
@@ -257,7 +301,7 @@ describe('summarizeOkfBundles', () => {
     });
 
     it('does not refuse a run whose every root was read', () => {
-      expect(unreadableRootRefusal(summarizeOkfBundles([report('knowledge', [finding('error')])], PROJECT_ROOT))).toBeUndefined();
+      expect(unreadableRootRefusal(summarizeOkfBundles([report('knowledge', [finding('error')])], PROJECT_ROOT, {}))).toBeUndefined();
     });
 
     it('names every empty bundle, not just the first', () => {

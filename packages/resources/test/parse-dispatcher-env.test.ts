@@ -16,46 +16,40 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { ParseDispatcher, type ParsableRemainder, type ParsePoolPolicy } from '../src/parse-dispatcher.js';
-import { type ParsePool, type ParsePoolOptions } from '../src/parse-pool.js';
+import type { ParsePool } from '../src/parse-pool.js';
 
 import { inertPool, mutableCache } from './parse-dispatcher-fixture.js';
 
 /** Env names this suite sets, cleared after every case. */
-const POOL_ENV = 'VAT_PARSE_POOL';
 const SIZE_ENV = 'VAT_PARSE_POOL_SIZE';
 const MISSES_ENV = 'VAT_PARSE_POOL_MIN_MISSES';
 const LOOK_AHEAD_ENV = 'VAT_PARSE_LOOK_AHEAD';
 
 /**
- * Activate a dispatcher and report the size the pool was built with.
+ * Activate a dispatcher and report the width it settled on.
  *
- * @param policy - Policy under test, minus the capturing `createPool`
+ * Every miss runs in the bounded pool whatever this answers; the width is how
+ * many may run at once. `1` is the floor — "not widened".
+ *
+ * @param policy - Policy under test
  * @param misses - Misses the cache should report
  * @param remaining - Markdown documents still needing a parse
- * @returns The size the pool was asked for, or `null` if no pool was built
+ * @returns The dispatcher's width after the activation decision
  */
-function sizeFromActivation(
+function widthFromActivation(
   policy: ParsePoolPolicy,
   misses: number,
   remaining: number,
-): number | null {
-  let asked: number | null = null;
+): number {
   const { cache, accrue } = mutableCache();
-  const dispatcher = new ParseDispatcher(cache, {
-    ...policy,
-    createPool: (options?: ParsePoolOptions): ParsePool => {
-      asked = options?.size ?? null;
-      return inertPool();
-    },
-  });
+  const dispatcher = new ParseDispatcher(cache, { ...policy, createPool: (): ParsePool => inertPool() });
   accrue({ misses });
   const tally: ParsableRemainder = { markdown: remaining, html: 0 };
   dispatcher.considerActivation(() => tally);
-  return asked;
+  return dispatcher.width;
 }
 
 afterEach(() => {
-  delete process.env[POOL_ENV];
   delete process.env[SIZE_ENV];
   delete process.env[MISSES_ENV];
   delete process.env[LOOK_AHEAD_ENV];
@@ -71,58 +65,13 @@ function lookAheadOf(policy: ParsePoolPolicy): number {
   return new ParseDispatcher(mutableCache().cache, policy).lookAhead;
 }
 
-describe('ParsePoolPolicy.enabled — the pool is OPT-OUT', () => {
-  it('activates with nothing in the environment at all', () => {
-    // The default arm. Measured on a 12.6k-file adopter, cold `vat claude
-    // context`, A/B alternated: OFF 27.7/24.6 s against ON 16.4/16.1 s.
-    delete process.env[POOL_ENV];
-
-    expect(sizeFromActivation({ size: 2 }, 256, 4096)).toBe(2);
-  });
-
-  it.each(['0', 'false', 'off', 'no', 'n', 'FALSE', ' Off '])(
-    'is turned OFF by VAT_PARSE_POOL=%j — every off spelling parseEnvBoolean reads',
-    (raw) => {
-      // One switch reader for the repo. A switch whose off position is the one
-      // literal `'0'` failed open for `false`/`off`/`no` — the defect
-      // `parseEnvBoolean` exists to close.
-      process.env[POOL_ENV] = raw;
-      expect(sizeFromActivation({ size: 2 }, 256, 4096)).toBeNull();
-    },
-  );
-
-  it.each(['1', 'true', 'on', 'yes', '', 'garbage', 'disable'])(
-    'stays ON for VAT_PARSE_POOL=%j — on spellings and anything unreadable',
-    (raw) => {
-      // `parseEnvBoolean` returns `undefined` for an unrecognised value, and
-      // THIS call site reads `undefined` as "leave the pool on": a typo must not
-      // silently cost the measured speed-up.
-      process.env[POOL_ENV] = raw;
-      expect(sizeFromActivation({ size: 2 }, 256, 4096)).toBe(2);
-    },
-  );
-
-  it('lets an explicit policy decision BEAT the environment, both ways', () => {
-    process.env[POOL_ENV] = '0';
-    expect(sizeFromActivation({ size: 2, enabled: true }, 256, 4096)).toBe(2);
-
-    delete process.env[POOL_ENV];
-    expect(sizeFromActivation({ size: 2, enabled: false }, 256, 4096)).toBeNull();
-  });
-
-  it('declines a corpus too small to pay for a thread, with the pool ON', () => {
-    // ⭐ This is why the default needed no NEW corpus-size threshold. The
-    // activation arithmetic already IS one: 128 misses (`PARSES_BEFORE_SIZING`)
-    // and an estimated 2 x 1,000 ms of serial parse still to come. Measured on
-    // VAT's own repository, cold, with the pool enabled: 335 misses, 332
-    // markdown documents, 3.49 MB — `wire-dispatch` 0 calls, ZERO worker
-    // threads in the timing dump. A second gate on file count would be a second
-    // contract for one decision.
-    delete process.env[POOL_ENV];
-
-    // No `size`, so the estimate decides: 200 documents left at the sampled
-    // mean of this fixture's zero-byte parses is worth no thread at all.
-    expect(sizeFromActivation({}, 256, 200)).toBeNull();
+describe('the width decision', () => {
+  it('stays at one thread for a corpus too small to pay for a second', () => {
+    // Widening needs 128 misses (`PARSES_BEFORE_SIZING`) and an estimated
+    // 2 x 1,000 ms of serial parse still to come. No `size`, so the estimate
+    // decides: 200 documents left at the sampled mean of this fixture's
+    // zero-byte parses is worth no second thread.
+    expect(widthFromActivation({}, 256, 200)).toBe(1);
   });
 });
 
@@ -131,42 +80,36 @@ describe('ParsePoolPolicy.size — reachable from the environment', () => {
     // The pin the cross-machine comparison needs: this box would otherwise size
     // itself from its own core count, so two machines could not be held at one
     // width and any difference between them would confound width with platform.
-    process.env[POOL_ENV] = '1';
     process.env[SIZE_ENV] = '3';
 
-    expect(sizeFromActivation({}, 1000, 4096)).toBe(3);
+    expect(widthFromActivation({}, 1000, 4096)).toBe(3);
   });
 
   it('lets an explicit policy size BEAT the environment', () => {
-    process.env[POOL_ENV] = '1';
     process.env[SIZE_ENV] = '3';
 
-    expect(sizeFromActivation({ size: 6 }, 1000, 4096)).toBe(6);
+    expect(widthFromActivation({ size: 6 }, 1000, 4096)).toBe(6);
   });
 
   it('ignores a value that is not a positive whole number, rather than sizing to NaN', () => {
     // A pool built with NaN workers is not a smaller pool, it is an unusable
     // one — and the failure would surface as a hung command, far from the typo.
-    process.env[POOL_ENV] = '1';
     process.env[SIZE_ENV] = 'wide';
 
-    // Null is the discriminating answer, and both halves of it matter. Coerced,
-    // `size` would be NaN — and `NaN < 1` is false, so a pool WOULD be built,
-    // with NaN workers. Ignored, the width falls through to the byte estimate,
-    // which this dispatcher has parsed nothing to build: no sample, no claim, no
-    // pool.
-    expect(sizeFromActivation({}, 1000, 4096)).toBeNull();
+    // 1 is the discriminating answer, and both halves of it matter. Coerced,
+    // `size` would be NaN — and `NaN < 1` is false, so the width WOULD be NaN.
+    // Ignored, the width falls through to the byte estimate, which this
+    // dispatcher has parsed nothing to build: no sample, no claim, no widening.
+    expect(widthFromActivation({}, 1000, 4096)).toBe(1);
   });
 
   it('applies that same test to an explicit policy size', () => {
     // The OTHER half of a two-route field. The case above pins the guarded
     // route; a policy route that skipped the test would build a pool of NaN
     // workers, because `NaN < 1` is false and the decline guard never fires.
-    process.env[POOL_ENV] = '1';
-
-    expect(sizeFromActivation({ size: Number.NaN }, 1000, 4096)).toBeNull();
-    expect(sizeFromActivation({ size: 2.5 }, 1000, 4096)).toBeNull();
-    expect(sizeFromActivation({ size: 0 }, 1000, 4096)).toBeNull();
+    expect(widthFromActivation({ size: Number.NaN }, 1000, 4096)).toBe(1);
+    expect(widthFromActivation({ size: 2.5 }, 1000, 4096)).toBe(1);
+    expect(widthFromActivation({ size: 0 }, 1000, 4096)).toBe(1);
   });
 });
 
@@ -219,26 +162,23 @@ describe('ParsePoolPolicy.lookAhead — reachable from the environment', () => {
 
 describe('ParsePoolPolicy.missThreshold — reachable from the environment', () => {
   it('takes the activation threshold from VAT_PARSE_POOL_MIN_MISSES', () => {
-    process.env[POOL_ENV] = '1';
     process.env[MISSES_ENV] = '1';
 
     // One miss is below the 128 default, so a pool exists here only if the
     // environment was read.
-    expect(sizeFromActivation({ size: 2 }, 1, 256)).toBe(2);
+    expect(widthFromActivation({ size: 2 }, 1, 256)).toBe(2);
   });
 
   it('does not activate below the threshold the environment named', () => {
-    process.env[POOL_ENV] = '1';
     process.env[MISSES_ENV] = '500';
 
-    expect(sizeFromActivation({ size: 2 }, 499, 256)).toBeNull();
+    expect(widthFromActivation({ size: 2 }, 499, 256)).toBe(1);
   });
 
   it('lets an explicit policy threshold BEAT the environment', () => {
-    process.env[POOL_ENV] = '1';
     process.env[MISSES_ENV] = '500';
 
-    expect(sizeFromActivation({ size: 2, missThreshold: 1 }, 1, 256)).toBe(2);
+    expect(widthFromActivation({ size: 2, missThreshold: 1 }, 1, 256)).toBe(2);
   });
 
   it('ignores a threshold that is not a positive whole number, on BOTH routes', () => {
@@ -246,11 +186,10 @@ describe('ParsePoolPolicy.missThreshold — reachable from the environment', () 
     // count, so the guard never returns and a FULLY WARM run (zero misses,
     // nothing parsed) buys a pool it has no work for. That is the documented
     // floor inverted, and `Math.max(1, Math.floor(NaN))` is still NaN.
-    process.env[POOL_ENV] = '1';
     process.env[MISSES_ENV] = 'soon';
 
-    expect(sizeFromActivation({ size: 2 }, 0, 256)).toBeNull();
-    expect(sizeFromActivation({ size: 2, missThreshold: Number.NaN }, 0, 256)).toBeNull();
-    expect(sizeFromActivation({ size: 2, missThreshold: 0 }, 0, 256)).toBeNull();
+    expect(widthFromActivation({ size: 2 }, 0, 256)).toBe(1);
+    expect(widthFromActivation({ size: 2, missThreshold: Number.NaN }, 0, 256)).toBe(1);
+    expect(widthFromActivation({ size: 2, missThreshold: 0 }, 0, 256)).toBe(1);
   });
 });

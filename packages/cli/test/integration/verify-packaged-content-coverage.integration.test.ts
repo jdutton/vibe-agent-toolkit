@@ -75,15 +75,15 @@ function setupTwoBuiltSkills(): string {
   return root;
 }
 
-async function discoveredIn(root: string): Promise<Awaited<ReturnType<typeof discoverSkillsFromConfig>>> {
+async function discoveredIn(root: string): Promise<Awaited<ReturnType<typeof discoverSkillsFromConfig>>['skills']> {
   const config = loadConfig(root, 'source');
-  return config?.skills ? discoverSkillsFromConfig(config.skills, root, 'refuse') : [];
+  return config?.skills ? (await discoverSkillsFromConfig(config.skills, root, 'refuse')).skills : [];
 }
 
 /** The plugin-local index `vat verify` builds for `root`, and the declared names it reads for it. */
 async function pluginLocalIn(root: string): Promise<[PluginLocalSkillIndex, PluginLocalSkillNames]> {
   const index = indexPluginLocalSkills(loadConfig(root, 'source') ?? {}, root);
-  return [index, await readPluginLocalSkillNames(index)];
+  return [index, await readPluginLocalSkillNames(index, root)];
 }
 
 async function crawlIn(root: string): Promise<PackagedContentCrawl> {

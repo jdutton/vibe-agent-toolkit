@@ -22,7 +22,7 @@ import picomatch from 'picomatch';
 
 import { CODE_REGISTRY, REFUSAL_CODES, type FindingCode, type IssueCode, type IssueSeverity } from './validation-codes.js';
 import type { AllowEntry, ValidationConfig } from './validation-config.js';
-import type { ValidationIssue } from './validation-issue.js';
+import { isCustomCheckCode, type ValidationIssue } from './validation-issue.js';
 
 // The hand-written `ValidationConfig` (from validation-config.ts) is the single
 // canonical config type. The framework's narrower input types derive from it so
@@ -41,7 +41,7 @@ const REFUSALS: ReadonlySet<string> = new Set(REFUSAL_CODES);
  * Whether config may override this code: anything but a refusal.
  *
  * ⚠️ Decided by EXCLUSION, not by `kind === 'finding'`: callers reach here with
- * non-registry codes too (`resolveIssueSeverity` hands over a `CUSTOM:` check
+ * non-registry codes too (`resolveFindings` hands over a `CUSTOM:` check
  * code whose override it found), and those must keep resolving to the override.
  * A lookup of the registry entry would throw on them.
  *
@@ -303,8 +303,14 @@ function finalize(issue: ValidationIssue, config: ValidationConfig): ValidationI
   const code = issue.code as IssueCode;
   const entry = CODE_REGISTRY[code];
   if (!entry) {
-    // Not a registry code — return as-is (non-overridable / info codes bypass framework).
-    return issue;
+    // Not a registry code. A `CUSTOM:<name>` check's takes its override, when
+    // the config names one (`resolveSeverity` keeps it — see `isOverridable`).
+    // Any other unregistered code is a lane's own refusal
+    // (`SKILL_MISSING_FRONTMATTER`): passed through, never demotable.
+    if (!isCustomCheckCode(code) || !(code in (config.severity ?? {}))) return issue;
+    const resolved = resolveSeverity(code, config);
+    if (resolved === 'ignore') return null;
+    return resolved === issue.severity ? issue : { ...issue, severity: resolved };
   }
   const resolved = resolveSeverity(code, config);
   if (resolved === 'ignore') return null;
@@ -391,11 +397,7 @@ export function runValidationFramework(
   const filtered = applyAllowFilter(rawIssues, config, now);
 
   // 2. Resolve severities and drop ignored issues.
-  const emitted: ValidationIssue[] = [];
-  for (const i of filtered.emitted) {
-    const final = finalize(i, config);
-    if (final) emitted.push(final);
-  }
+  const emitted = finalizeAll(filtered.emitted, config);
 
   // 3. Emit ALLOW_EXPIRED for each expired entry (severity from config).
   //    Expiry is a property of the entry's own `expires` date, so unlike
@@ -412,6 +414,44 @@ export function runValidationFramework(
     allowed,
     hasErrors: emitted.some(i => i.severity === 'error'),
   };
+}
+
+/**
+ * @param issues - Issues past the allow filter
+ * @param config - The validation config in force
+ * @returns Each with its resolved severity, `ignore`d ones dropped
+ */
+function finalizeAll(issues: readonly ValidationIssue[], config: ValidationConfig): ValidationIssue[] {
+  const emitted: ValidationIssue[] = [];
+  for (const issue of issues) {
+    const final = finalize(issue, config);
+    if (final) emitted.push(final);
+  }
+  return emitted;
+}
+
+/**
+ * Resolve findings a verb reports BESIDE any run of the framework — the same
+ * allow filter and the same severity resolution `runValidationFramework`
+ * applies, and nothing else: no `ALLOW_EXPIRED` or `ALLOW_UNUSED` meta issue,
+ * because these findings are not the run's whole issue set, so whether an
+ * allow entry matched nothing, or has expired, is not theirs to say.
+ *
+ * So `validation.severity.<CODE>` and `validation.allow.<CODE>` mean the same
+ * thing in a verb that reports a handful of findings (`vat resources scan`,
+ * `vat rag index`) as in one that validates the whole registry.
+ *
+ * @param rawIssues - The findings, at their registry default severities
+ * @param config - The validation config in force
+ * @param now - The clock allow-entry expiry is judged against
+ * @returns The findings left after the allow filter, each with its resolved severity
+ */
+export function resolveFindings(
+  rawIssues: readonly ValidationIssue[],
+  config: ValidationConfig,
+  now: Date = new Date(),
+): ValidationIssue[] {
+  return finalizeAll(applyAllowFilter(rawIssues, config, now).emitted, config);
 }
 
 /**

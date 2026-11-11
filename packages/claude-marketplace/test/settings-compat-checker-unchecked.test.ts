@@ -40,6 +40,7 @@ import {
   setupRefusedSkillFixture,
   writeSkill,
 } from './refused-skill-fixture.js';
+import { useSuiteParseDispatcher } from './test-helpers.js';
 
 const DENY_BASH: EffectiveSettings = {
   permissions: {
@@ -50,6 +51,9 @@ const DENY_BASH: EffectiveSettings = {
 };
 
 const getFixture = setupRefusedSkillFixture('vat-compat-unchecked-');
+
+/** One dispatcher for the whole file, as `vat audit` holds one for a run. */
+const parseDispatcher = useSuiteParseDispatcher();
 
 /** The skill files (plugin-relative) the checker reported a Bash conflict on. */
 function conflictFiles(check: Awaited<ReturnType<typeof checkSettingsCompatibility>>): string[] {
@@ -63,7 +67,7 @@ describe('checkSettingsCompatibility — skills reached through a symlink', () =
     if (cap === null) return;
     await linkSharedSkills(cap, getFixture());
 
-    const check = await checkSettingsCompatibility(getFixture().pluginDir, DENY_BASH);
+    const check = await checkSettingsCompatibility(getFixture().pluginDir, DENY_BASH, parseDispatcher());
 
     expect(conflictFiles(check)).toEqual(LINKED_SKILL_FILES);
     expect(check.unchecked).toEqual([]);
@@ -74,7 +78,7 @@ describe('checkSettingsCompatibility — skills reached through a symlink', () =
     await linkCycle(cap, getFixture());
 
     // Terminates, and still finds everything reachable exactly once.
-    const check = await checkSettingsCompatibility(getFixture().pluginDir, DENY_BASH);
+    const check = await checkSettingsCompatibility(getFixture().pluginDir, DENY_BASH, parseDispatcher());
     const files = conflictFiles(check);
     expect(new Set(files).size).toBe(files.length);
   });
@@ -88,7 +92,7 @@ describe.skipIf(CANNOT_DENY_READS)('checkSettingsCompatibility — a path the fi
     await writeSkill(safePath.join(pluginDir, SKILLS, 'plain'), BASH_SKILL('plain'));
     await getFixture().lock(lockedDir);
 
-    const check = await checkSettingsCompatibility(pluginDir, DENY_BASH);
+    const check = await checkSettingsCompatibility(pluginDir, DENY_BASH, parseDispatcher());
 
     expect(conflictFiles(check)).toContain(PLAIN_SKILL);
     const unchecked = check.unchecked.find((u) => u.path === lockedDir);
@@ -100,7 +104,7 @@ describe.skipIf(CANNOT_DENY_READS)('checkSettingsCompatibility — a path the fi
     const lockedFile = await writeSkill(safePath.join(pluginDir, SKILLS, 'locked-file'), BASH_SKILL('locked-file'));
     await getFixture().lock(lockedFile);
 
-    const check = await checkSettingsCompatibility(pluginDir, DENY_BASH);
+    const check = await checkSettingsCompatibility(pluginDir, DENY_BASH, parseDispatcher());
 
     expect(conflictFiles(check)).not.toContain('skills/locked-file/SKILL.md');
     const unchecked = check.unchecked.find((u) => u.path === lockedFile);
@@ -111,13 +115,13 @@ describe.skipIf(CANNOT_DENY_READS)('checkSettingsCompatibility — a path the fi
 describe('checkSettingsCompatibility — a SKILL.md whose frontmatter cannot be read', () => {
   it.each([
     ['malformed YAML', '---\nname: x\nallowed-tools: [Bash\n---\n', 'Failed to parse YAML'],
-    ['an empty block', '---\n\n---\n# x\n', 'not a YAML mapping'],
+    ['an empty block', '---\n\n---\n# x\n', 'Frontmatter is empty'],
     ['a scalar block', '---\nhello\n---\n# x\n', 'not a YAML mapping'],
   ])('lists %s under `unchecked`, carrying the parser message', async (_label, content, reason) => {
     const { pluginDir } = getFixture();
     const file = await writeSkill(safePath.join(pluginDir, SKILLS, 'unparseable'), content);
 
-    const check = await checkSettingsCompatibility(pluginDir, DENY_BASH);
+    const check = await checkSettingsCompatibility(pluginDir, DENY_BASH, parseDispatcher());
 
     expect(conflictFiles(check)).not.toContain('skills/unparseable/SKILL.md');
     expect(check.unchecked.find((u) => u.path === file)?.reason).toContain(reason);
@@ -127,7 +131,7 @@ describe('checkSettingsCompatibility — a SKILL.md whose frontmatter cannot be 
     const clean = safePath.join(getFixture().root, 'clean-plugin');
     await writeSkill(safePath.join(clean, SKILLS, 'a'), BASH_SKILL('a'));
 
-    const check = await checkSettingsCompatibility(clean, DENY_BASH);
+    const check = await checkSettingsCompatibility(clean, DENY_BASH, parseDispatcher());
 
     expect(conflictFiles(check)).toEqual(['skills/a/SKILL.md']);
     expect(check.unchecked).toEqual([]);
@@ -154,7 +158,7 @@ describe('checkSettingsCompatibility — a hooks.json the OS refuses', () => {
 
     const restore = refuseAsyncFs('access', hooksPath, 'EACCES');
     try {
-      await expect(checkSettingsCompatibility(plugin, DISABLE_HOOKS)).rejects.toThrow(/EACCES/);
+      await expect(checkSettingsCompatibility(plugin, DISABLE_HOOKS, parseDispatcher())).rejects.toThrow(/EACCES/);
     } finally {
       restore();
     }
@@ -165,7 +169,7 @@ describe('checkSettingsCompatibility — a hooks.json the OS refuses', () => {
     await writeSkill(safePath.join(plugin, SKILLS, 'a'), BASH_SKILL('a'));
     await fs.writeFile(safePath.join(plugin, 'hooks.json'), '{}', 'utf-8');
 
-    const check = await checkSettingsCompatibility(plugin, DISABLE_HOOKS);
+    const check = await checkSettingsCompatibility(plugin, DISABLE_HOOKS, parseDispatcher());
     expect(check.conflicts.map((c) => c.type)).toEqual(['hook-disabled']);
   });
 
@@ -173,7 +177,7 @@ describe('checkSettingsCompatibility — a hooks.json the OS refuses', () => {
     const plugin = safePath.join(getFixture().root, 'hooks-absent-plugin');
     await writeSkill(safePath.join(plugin, SKILLS, 'a'), BASH_SKILL('a'));
 
-    const check = await checkSettingsCompatibility(plugin, DISABLE_HOOKS);
+    const check = await checkSettingsCompatibility(plugin, DISABLE_HOOKS, parseDispatcher());
     expect(check.conflicts).toEqual([]);
   });
 });

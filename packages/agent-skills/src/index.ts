@@ -32,6 +32,9 @@ export {
   type WalkLinkGraphOptions,
 } from './walk-link-graph.js';
 
+// A document the crawl refused to parse, named the same way in every skill lane.
+export { refusedAmong, SKILL_REACHED_REFUSAL_CONSEQUENCE } from './parse-refusal-issues.js';
+
 // The skill extent (zones §7.3): the closure primitive under a skill's name,
 // plus the translation of `SkillPackagingConfig` into the declaration that
 // shapes it. Deliberately NOT a second walker — see the module note for the
@@ -122,6 +125,7 @@ export { materializeIssue, type MaterializeOpts } from './validators/rule-engine
 export { detectHostedIncompatibleShape } from './validators/plugin-hosted-shape.js';
 export {
   deriveObservations,
+  detectorFrontmatter,
   observationToIssue,
   runCompatDetectors,
   type DetectorOutput,

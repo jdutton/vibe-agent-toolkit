@@ -173,7 +173,9 @@ describe('an ordinary parse failure during skill link traversal', () => {
       // SKILL.md keeps parsing, so both linked documents are still discovered
       // and queued; only they fail.
       pathContains: 'linked-',
-      error: new Error('unexpected token'),
+      // A failure on `classifyParseFailure`'s allowlist — a read the OS refused
+      // for the file. An unbranded `Error` is VAT's defect and is rethrown.
+      error: Object.assign(new Error("EACCES: permission denied, open 'linked-a.md'"), { code: 'EACCES', syscall: 'open', path: 'linked-a.md' }),
     };
     const skillPath = writeSkill();
 

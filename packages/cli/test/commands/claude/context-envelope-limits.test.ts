@@ -57,6 +57,7 @@ function answerFor(input: string): LoadedContextAnswer {
     conditions: [],
     overBudgetRules: [],
     unattributedImports: [],
+    refused: [],
   };
 }
 

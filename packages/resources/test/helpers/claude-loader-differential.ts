@@ -50,6 +50,7 @@ import { forEachInOrder } from '@vibe-agent-toolkit/utils';
 import { estimateTokens } from '../../src/link-classify.js';
 import { account, type AccountedRow } from '../../src/projection/claude-context-accounting.js';
 import { whatLoadsAt } from '../../src/projection/claude-context-query.js';
+import { claudeMemoryFactsOf } from '../../src/projection/claude-memory.js';
 import { CLAUDE_CODE } from '../../src/projection/harness/claude-code.js';
 import { harnessFactsIndex } from '../../src/projection/harness/facts-index.js';
 import type { Projection } from '../../src/projection/projection.js';
@@ -334,7 +335,7 @@ function importRowsOf(
   if (!projection.blobs.some((row) => row.contentKey === contentKey)) return [];
   const facts = harnessFactsIndex(projection, CLAUDE_CODE.id);
   if (facts.factsOf(contentKey) !== undefined) return facts.requireImports(contentKey, path);
-  return CLAUDE_CODE.factsOf(tree.get(path) ?? '').imports;
+  return claudeMemoryFactsOf(tree.get(path) ?? '').imports;
 }
 
 /** Every file whose import set VAT reads differently from the harness. */

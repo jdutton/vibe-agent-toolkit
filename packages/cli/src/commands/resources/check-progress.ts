@@ -41,7 +41,7 @@
 import { appendFileSync } from 'node:fs';
 
 import { CHECK_REFUSAL_REASON_SCHEMA, POPULATION_ORIGINS } from '@vibe-agent-toolkit/resources';
-import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { ExitCode, type ValidationIssue, ValidationIssueSchema } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
 
 import { LENS_POPULATIONS } from '../../utils/lens-population.js';
@@ -95,6 +95,12 @@ const PopulationEntrySchema = z.object({
   // interrupted run's document is rebuilt from these lines alone.
   lensesEvaluated: z.array(z.string()),
   membersEnumerated: z.number(),
+  // The files the population enumerated and did not admit, as findings already
+  // resolved through `resources.validation` — computed before any check runs, so
+  // a run killed mid-check still fails on them (`notAdmittedFindings`).
+  // Validated by the issue schema, typed as the issue the child built: zod's own
+  // inference widens every optional field to `| undefined`, which no issue carries.
+  notAdmitted: z.array(z.custom<ValidationIssue>((value) => ValidationIssueSchema.safeParse(value).success)),
 }).strict();
 
 /**
@@ -176,7 +182,7 @@ const ConvertingEntrySchema = z.object({
  *
  * 🪤 **Emitted by `runProjectChecks`, before it resolves severities.** It first
  * shipped a level up, from `runOutcome` after that function had already
- * returned, which left `resolveIssueSeverity` charged to the last check's window
+ * returned, which left `resolveFindings` charged to the last check's window
  * while this comment claimed otherwise. What it still does NOT cover is the last
  * check's row-to-issue conversion — that window has its own state,
  * {@link ConvertingEntrySchema}, and the check's cost is filed after it.
