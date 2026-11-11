@@ -68,7 +68,7 @@ import {
   type ParseTimingDump,
 } from '../src/parse-timing.js';
 
-import { widestLiveWorkerThreads, workerThreadCount } from './test-helpers.js';
+import { stubParkingMachine, widestLiveWorkerThreads, workerThreadCount } from './test-helpers.js';
 
 /** One document, and the parser it routes to. */
 interface Fixture {
@@ -1053,6 +1053,7 @@ describe('ParsePool.shutdown', () => {
   });
 
   it('leaves no worker thread behind but the ones it parked', async () => {
+    stubParkingMachine();
     const before = workerThreadCount();
     const pool = createParsePool({ size: 2 });
     await Promise.all([pool.parse('markdown', '# a\n', 4), pool.parse('html', '<p>b</p>', 8)]);
@@ -1105,21 +1106,54 @@ async function oneParse(options: Parameters<typeof createParsePool>[0]): Promise
 }
 
 /**
- * Hold the park cap at exactly one on any machine with at least 6 GiB: memory − 1,024 MiB fits a
- * pool of at most two workers at their 2,048 MiB ceiling, and the room left beside the widest
- * one parks one thread (`parkedThreadRoom`), whatever the default pool width is here.
+ * A seeded entry whose real worker sees every request but the ones `intercept` handles: each
+ * line is the body run for a request `matches` accepts, inside the message listener.
+ *
+ * @param matches - JS expression over `request` choosing which requests to intercept
+ * @param intercept - JS statements run for such a request instead of the real listener
+ * @returns The entry's source
  */
-function parkCapOfOne(): void {
-  vi.spyOn(process, 'constrainedMemory').mockReturnValue(6144 * BYTES_PER_MIB);
+function intercepting(matches: string, intercept: string[]): string {
+  return [
+    "import { parentPort } from 'node:worker_threads';",
+    'const on = parentPort.on.bind(parentPort);',
+    "parentPort.on = (event, listener) => on(event, event === 'message' ? (request) => {",
+    `  if (!(${matches})) return listener(request);`,
+    ...intercept.map((line) => `  ${line}`),
+    '} : listener);',
+    `await import(${JSON.stringify(BUILT_WORKER)});`,
+  ].join('\n');
 }
 
+/** A request whose content starts with `prefix`, as a JS expression for {@link intercepting}. */
+function contentStartsWith(prefix: string): string {
+  return `request?.content?.startsWith?.(${JSON.stringify(prefix)})`;
+}
+
+/**
+ * Park one thread from a pool of `options`, and prove it parked: the precondition every
+ * reuse test stands on, asserted rather than assumed so a runner that parks nothing fails
+ * here with that name, not later with a misleading verdict.
+ *
+ * @param options - The pool's options
+ * @returns The thread now parked
+ */
+async function parkOne(options: Parameters<typeof createParsePool>[0]): Promise<Worker> {
+  const [thread, ...more] = await startedThreads(async () => {
+    expect(await oneParse(options)).toBe('answered');
+  });
+  expect(more, 'one pool of one parse starts one thread').toHaveLength(0);
+  expect(__parkedParseWorkerCountForTest(), 'precondition: the thread was parked').toBe(1);
+  if (thread === undefined) throw new Error('precondition: the pool started a thread');
+  return thread;
+}
+
+// Every test here holds the machine with `stubParkingMachine` (memory and the heap ceiling a
+// thread reads), so whether a thread parks is the code's decision, never the runner's.
 describe('a parked thread', () => {
   it('serves the next pool of the same shape, which starts none of its own', async () => {
-    const first = await startedThreads(async () => {
-      expect(await oneParse({ size: 1 })).toBe('answered');
-    });
-    expect(first).toHaveLength(1);
-    expect(__parkedParseWorkerCountForTest()).toBe(1);
+    stubParkingMachine();
+    await parkOne({ size: 1 });
 
     const second = await startedThreads(async () => {
       expect(await oneParse({ size: 1 })).toBe('answered');
@@ -1130,21 +1164,23 @@ describe('a parked thread', () => {
   });
 
   it('never serves a pool of another shape', async () => {
-    parkCapOfOne();
-    await oneParse({ size: 1 });
+    stubParkingMachine();
+    await parkOne({ size: 1 });
 
     const other = await startedThreads(async () => {
       expect(await oneParse({ size: 1, limits: { timeMs: 29_000 } })).toBe('answered');
     });
 
     expect(other).toHaveLength(1);
+    // The cap is one (`stubParkingMachine`'s 6 GiB), so the other shape's thread replaced it.
     expect(__parkedParseWorkerCountForTest()).toBe(1);
   });
 
   it('is closed, oldest first, past the cap', async () => {
-    parkCapOfOne();
+    stubParkingMachine();
     const before = workerThreadCount();
-    for (let index = 0; index <= 1; index += 1) await oneParse({ size: 1, limits: { timeMs: 20_000 + index } });
+    await parkOne({ size: 1, limits: { timeMs: 20_000 } });
+    await oneParse({ size: 1, limits: { timeMs: 20_001 } });
 
     expect(__parkedParseWorkerCountForTest()).toBe(1);
     expect(workerThreadCount()).toBe(before + 1);
@@ -1156,10 +1192,9 @@ describe('a parked thread', () => {
   });
 
   it('is dropped if it dies while parked, and counted against no later pool', async () => {
-    const [parked] = await startedThreads(async () => {
-      await oneParse({ size: 1 });
-    });
-    await parked?.terminate();
+    stubParkingMachine();
+    const parked = await parkOne({ size: 1 });
+    await parked.terminate();
     await vi.waitFor(() => {
       expect(__parkedParseWorkerCountForTest()).toBe(0);
     });
@@ -1171,18 +1206,13 @@ describe('a parked thread', () => {
   });
 
   it('is never a thread stopped at a limit', async () => {
-    const entry = await seedWorkerEntry([
-      "import { parentPort } from 'node:worker_threads';",
-      'const on = parentPort.on.bind(parentPort);',
-      "parentPort.on = (event, listener) => on(event, event === 'message' ? (request) => {",
-      "  if (!request?.content?.startsWith?.('# SLOW')) return listener(request);",
-      '  parentPort.postMessage({ parserLoaded: request.kind });',
-      '  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);',
-      '} : listener);',
-      `await import(${JSON.stringify(BUILT_WORKER)});`,
-    ].join('\n'));
-    expect(entry).toContain('seeded-worker');
-    const pool = createParsePool({ size: 1, limits: { timeMs: 300 } });
+    stubParkingMachine();
+    await seedWorkerEntry(intercepting(contentStartsWith('# SLOW'), [
+      'parentPort.postMessage({ parserLoaded: request.kind });',
+      'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);',
+    ]));
+    // Long enough for a fresh thread on a loaded runner to load before its deadline.
+    const pool = createParsePool({ size: 1, limits: { timeMs: 3000 } });
     openPools.push(pool);
 
     const outcome = await outcomeOf(pool, '# SLOW\n');
@@ -1196,16 +1226,9 @@ describe('a parked thread', () => {
     { label: 'one byte past', usedBytes: PARKED_HEAP_MB * BYTES_PER_MIB + 1, parked: 0 },
     { label: 'exactly at', usedBytes: PARKED_HEAP_MB * BYTES_PER_MIB, parked: 1 },
   ])('is parked only at or under PARKED_HEAP_MB of used heap: $label it', async ({ usedBytes, parked }) => {
-    const pool = createParsePool({ size: 1 });
-    openPools.push(pool);
-    await pool.parse('markdown', '# heavy\n', 8);
-    const real = Worker.prototype.getHeapStatistics;
-    vi.spyOn(Worker.prototype, 'getHeapStatistics').mockImplementation(async function (this: Worker) {
-      const heap = await real.call(this);
-      return { ...heap, used_heap_size: usedBytes };
-    });
+    stubParkingMachine({ usedBytes });
 
-    await pool.shutdown();
+    expect(await oneParse({ size: 1 })).toBe('answered');
 
     expect(__parkedParseWorkerCountForTest()).toBe(parked);
   });
@@ -1218,35 +1241,22 @@ describe('a parked thread', () => {
     { label: 'still at 960 MiB, where it applies the floor exactly', ceilingMb: MIN_PARKING_APPLIED_MB * 2, parked: 1 },
     { label: 'still at 1,024 MiB (the integration tier), where it applies 512 MiB', ceilingMb: 1024, parked: 1 },
   ])('is parked under a lowered heap ceiling only while the applied bound keeps the leftover small: $label', async ({ ceilingMb, parked }) => {
-    const pool = createParsePool({ size: 1 });
-    openPools.push(pool);
-    await pool.parse('markdown', '# lowered\n', 10);
-    const real = Worker.prototype.getHeapStatistics;
-    vi.spyOn(Worker.prototype, 'getHeapStatistics').mockImplementation(async function (this: Worker) {
-      const heap = await real.call(this);
-      const youngMb = this.resourceLimits?.maxYoungGenerationSizeMb ?? 0;
-      return { ...heap, heap_size_limit: (youngMb + ceilingMb) * BYTES_PER_MIB };
-    });
+    stubParkingMachine({ ceilingMb });
 
-    await pool.shutdown();
+    expect(await oneParse({ size: 1 })).toBe('answered');
 
     expect(__parkedParseWorkerCountForTest()).toBe(parked);
   });
 
   it('owns its death once it has posted anything to the pool that adopted it', async () => {
+    stubParkingMachine();
     // `DIE` loads a parser the parked thread never had, says so, then kills the thread: the
     // document's doing, on a thread proven alive after adoption, so nothing runs it again.
-    await seedWorkerEntry([
-      "import { parentPort } from 'node:worker_threads';",
-      'const on = parentPort.on.bind(parentPort);',
-      "parentPort.on = (event, listener) => on(event, event === 'message' ? (request) => {",
-      "  if (!request?.content?.startsWith?.('<p>DIE')) return listener(request);",
-      "  parentPort.postMessage({ parserLoaded: 'html' });",
-      '  setTimeout(() => process.exit(3), 200);',
-      '} : listener);',
-      `await import(${JSON.stringify(BUILT_WORKER)});`,
-    ].join('\n'));
-    expect(await oneParse({ size: 1 })).toBe('answered');
+    await seedWorkerEntry(intercepting(contentStartsWith('<p>DIE'), [
+      "parentPort.postMessage({ parserLoaded: 'html' });",
+      'setTimeout(() => process.exit(3), 200);',
+    ]));
+    await parkOne({ size: 1 });
     const pool = createParsePool({ size: 1 });
     openPools.push(pool);
 
@@ -1261,20 +1271,12 @@ describe('a parked thread', () => {
   });
 
   it('is closed without crashing the process when its thread errors on the way out', async () => {
-    await seedWorkerEntry([
-      "import { parentPort } from 'node:worker_threads';",
-      'const on = parentPort.on.bind(parentPort);',
-      "parentPort.on = (event, listener) => on(event, event === 'message' ? (request) => {",
-      "  if (request?.type === 'shutdown') setImmediate(() => { throw new Error('seeded close failure'); });",
-      '  else listener(request);',
-      '} : listener);',
-      `await import(${JSON.stringify(BUILT_WORKER)});`,
-    ].join('\n'));
-    const [thread] = await startedThreads(async () => {
-      expect(await oneParse({ size: 1 })).toBe('answered');
-    });
-    expect(__parkedParseWorkerCountForTest()).toBe(1);
-    const gone = new Promise((resolve) => thread?.once('exit', resolve));
+    stubParkingMachine();
+    await seedWorkerEntry(intercepting("request?.type === 'shutdown'", [
+      "setImmediate(() => { throw new Error('seeded close failure'); });",
+    ]));
+    const thread = await parkOne({ size: 1 });
+    const gone = new Promise((resolve) => thread.once('exit', resolve));
 
     await __closeParkedParseWorkersForTest();
 
@@ -1283,6 +1285,7 @@ describe('a parked thread', () => {
   });
 
   it('closes itself once it has waited the idle timeout unadopted', async () => {
+    stubParkingMachine();
     const pool = createParsePool({ size: 1 });
     openPools.push(pool);
     expect(await outcomeOf(pool, '# parked\n')).toBe('answered');
@@ -1290,7 +1293,7 @@ describe('a parked thread', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       await pool.shutdown();
-      expect(__parkedParseWorkerCountForTest()).toBe(1);
+      expect(__parkedParseWorkerCountForTest(), 'precondition: the thread was parked').toBe(1);
 
       vi.advanceTimersByTime(PARKED_IDLE_MS - 1);
       expect(__parkedParseWorkerCountForTest()).toBe(1);
@@ -1302,12 +1305,14 @@ describe('a parked thread', () => {
   });
 
   it('is never closed by its idle timeout once a pool has adopted it', async () => {
+    stubParkingMachine();
     const first = createParsePool({ size: 1 });
     openPools.push(first);
     expect(await outcomeOf(first, '# parked\n')).toBe('answered');
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       await first.shutdown();
+      expect(__parkedParseWorkerCountForTest(), 'precondition: the thread was parked').toBe(1);
       const second = createParsePool({ size: 1 });
       openPools.push(second);
       const started = await startedThreads(async () => {
@@ -1326,7 +1331,7 @@ describe('a parked thread', () => {
 
   it('is never kept on a machine whose memory the bound already spent on a live pool', async () => {
     // 3 GiB: memory − 1,024 MiB fits exactly one worker at its 2,048 MiB ceiling, and nothing beside it.
-    vi.spyOn(process, 'constrainedMemory').mockReturnValue(3072 * BYTES_PER_MIB);
+    stubParkingMachine({ memoryMb: 3072 });
 
     expect(await oneParse({ size: 1 })).toBe('answered');
 
@@ -1334,6 +1339,7 @@ describe('a parked thread', () => {
   });
 
   it('is never left by a pool judged broken, even a healthy idle one', async () => {
+    stubParkingMachine();
     // The first thread to load claims the marker and serves; the second fails to load, late
     // enough that the first has answered and sits idle when the pool is judged broken.
     const marker = safePath.join(await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'vat-pool-claim-')), 'claimed');
@@ -1360,51 +1366,51 @@ describe('a parked thread', () => {
   });
 
   it('brings the parsers it loaded, so a slow document on it is never a death', async () => {
-    // `# SLOW` blocks before the real worker sees it: on a fresh thread its parser never loads,
-    // so a stop at `timeMs` is a death; on the adopted thread the parser loaded a pool ago.
-    await seedWorkerEntry([
-      "import { parentPort } from 'node:worker_threads';",
-      'const on = parentPort.on.bind(parentPort);',
-      "parentPort.on = (event, listener) => on(event, event === 'message' ? (request) => {",
-      "  if (!request?.content?.startsWith?.('# SLOW')) return listener(request);",
-      '  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);',
-      '} : listener);',
-      `await import(${JSON.stringify(BUILT_WORKER)});`,
-    ].join('\n'));
-    const limits = { timeMs: 1500 };
-    expect(await oneParse({ size: 1, limits })).toBe('answered');
-    expect(__parkedParseWorkerCountForTest()).toBe(1);
-
+    stubParkingMachine();
+    // `# SLOW` blocks before the real worker sees it, so on a thread whose parser never loaded a
+    // stop at `timeMs` is a death; on the adopted thread the parser loaded a pool ago. `<p>DIE`
+    // kills a fresh thread mid-job: a death everywhere. Deadline long enough for a loaded runner.
+    await seedWorkerEntry(intercepting(`${contentStartsWith('# SLOW')} || ${contentStartsWith('<p>DIE')}`, [
+      "if (request.content.startsWith('<p>DIE')) setTimeout(() => process.exit(3), 100);",
+      'else Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);',
+    ]));
+    const limits = { timeMs: 4000 };
+    await parkOne({ size: 1, limits });
     const pool = createParsePool({ size: 1, limits });
     openPools.push(pool);
-    const outcomes: unknown[] = [];
-    // The adopted thread first, then two fresh ones: two deaths in a row, one short of the
-    // broken-install verdict — which a third, charged to the adopted thread, would reach.
-    for (let index = 0; index < 3; index += 1) outcomes.push(await outcomeOf(pool, '# SLOW\n'));
 
-    expect(outcomes.map((outcome) => (isParseLimitError(outcome) ? outcome.limit : outcome))).toStrictEqual(['timeMs', 'timeMs', 'timeMs']);
+    const outcomes: unknown[] = [];
+    const started = await startedThreads(async () => {
+      // The adopted thread stopped, then two deaths on fresh threads: two in a row, one short of
+      // the broken-install verdict — which charging the adopted thread's stop would reach.
+      outcomes.push(await outcomeOf(pool, '# SLOW\n'));
+      for (const content of ['<p>DIE one</p>', '<p>DIE two</p>']) {
+        outcomes.push(await pool.parse('html', content, content.length).catch((error: unknown) => error));
+      }
+    });
+
+    expect(started, 'precondition: the slow document ran on the adopted thread').toHaveLength(2);
+    expect(outcomes.map((outcome) => {
+      if (isParseLimitError(outcome)) return outcome.limit;
+      return isParseWorkerDiedError(outcome) ? 'died' : outcome;
+    })).toStrictEqual(['timeMs', 'died', 'died']);
   });
 
   it('runs its job again on another thread when it dies before answering, charged to no document', async () => {
-    await seedWorkerEntry([
-      "import { parentPort } from 'node:worker_threads';",
-      'const on = parentPort.on.bind(parentPort);',
-      "parentPort.on = (event, listener) => on(event, event === 'message' ? (request) => {",
-      "  if (request?.content?.startsWith?.('# WAIT')) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);",
-      '  return listener(request);',
-      '} : listener);',
-      `await import(${JSON.stringify(BUILT_WORKER)});`,
-    ].join('\n'));
-    const [parked] = await startedThreads(async () => {
-      expect(await oneParse({ size: 1 })).toBe('answered');
-    });
+    stubParkingMachine();
+    await seedWorkerEntry(intercepting(contentStartsWith('# WAIT'), [
+      'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);',
+      'listener(request);',
+    ]));
+    const parked = await parkOne({ size: 1 });
     const pool = createParsePool({ size: 1 });
     openPools.push(pool);
 
     const started = await startedThreads(async () => {
       const outcome = outcomeOf(pool, '# WAIT\n');
+      expect(__parkedParseWorkerCountForTest(), 'precondition: the pool adopted the parked thread').toBe(0);
       // Adopted and handed the job; it dies before it answers, as one dying while parked would.
-      await parked?.terminate();
+      await parked.terminate();
       expect(await outcome).toBe('answered');
     });
 
@@ -1412,7 +1418,8 @@ describe('a parked thread', () => {
   });
 
   it('carries no broken-install verdict to a later pool', async () => {
-    await oneParse({ size: 1 });
+    stubParkingMachine();
+    await parkOne({ size: 1 });
     await seedWorkerEntry("throw Object.assign(new Error('seeded load failure'), { code: 'ERR_SEEDED_LOAD' });\n");
 
     expect(isParserUnavailable(await oneParse({ size: 1 }))).toBe(true);
@@ -1480,6 +1487,7 @@ describe('the parse-timing seam', () => {
     __setParseTimingForTest(directory);
 
     try {
+      stubParkingMachine();
       const pool = createParsePool({ size: 1 });
       await pool.parse('markdown', MARKDOWN_RICH, Buffer.byteLength(MARKDOWN_RICH));
       await pool.shutdown();

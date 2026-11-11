@@ -31,7 +31,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
 import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { isParserUnavailable, ParseCache } from '../src/parse-cache.js';
 import {
@@ -48,7 +48,7 @@ import type { Projection } from '../src/projection/projection.js';
 
 import { baseBuilderForRoot, conditionsWithCode } from './blob-fixture-population.js';
 import { fakePool } from './parse-pool-fixture.js';
-import { setupSubdirTestSuite, workerThreadCount } from './test-helpers.js';
+import { setupSubdirTestSuite, stubParkingMachine, workerThreadCount } from './test-helpers.js';
 
 /**
  * A cache that never touches disk, for every test whose subject is the loop.
@@ -354,6 +354,11 @@ describe('parse-pool activation', () => {
 
   it('leaves no worker thread behind after a real pooled run but the ones it parked', async () => {
     await __closeParkedParseWorkersForTest();
+    // Whether a thread parks is the machine's too (memory, the heap ceiling a thread reads): held.
+    stubParkingMachine();
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
     const before = workerThreadCount();
 
     await populateBlobs(await baseBuilderForRoot(suite.tempDir), {
