@@ -29,22 +29,37 @@ import type * as ResourcesSurface from '../../src/index.js';
 type BuiltResources = typeof ResourcesSurface;
 
 const PACKAGE_DIR = safePath.resolve(import.meta.dirname, '..', '..');
-const REPO_NODE_MODULES = safePath.resolve(PACKAGE_DIR, '..', '..', 'node_modules');
+const SCRATCH_PREFIX = '.vat-missing-worker-';
+/** A scratch copy this old belongs to no live run of this suite. */
+const STALE_SCRATCH_MS = 60 * 60 * 1000;
 
-let scratch: string;
+let scratch = '';
+let pkgScratch = '';
 let copiedWorker: string;
 let corpus: string;
 let built: BuiltResources;
 
 beforeAll(async () => {
   scratch = await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'vat-missing-worker-'));
-  const pkg = safePath.join(scratch, 'pkg');
+  // The copy lives INSIDE the package's own `node_modules` (gitignored), so its
+  // dependencies resolve by the plain upward walk a real install uses — this
+  // package's `node_modules`, then the workspace's — with no link in the path.
+  // Junctions to those directories resolve on POSIX but not for a worker thread
+  // on Windows, where the copy could not find `zod` once the worker was back.
+  const scratchParent = safePath.join(PACKAGE_DIR, 'node_modules');
+  await fs.mkdir(scratchParent, { recursive: true });
+  // No OS reclaims a source-tree dir, so a run killed before its teardown leaves its copy here:
+  // sweep those, older than any live run, so they cannot pile up across runs.
+  const now = Date.now();
+  for (const name of await fs.readdir(scratchParent)) {
+    if (!name.startsWith(SCRATCH_PREFIX)) continue;
+    const stale = safePath.join(scratchParent, name);
+    if (now - (await fs.stat(stale)).mtimeMs > STALE_SCRATCH_MS) await removeScratchDir(stale);
+  }
+  pkgScratch = await fs.mkdtemp(safePath.join(scratchParent, SCRATCH_PREFIX));
+  const pkg = safePath.join(pkgScratch, 'pkg');
   await fs.cp(safePath.join(PACKAGE_DIR, 'dist'), safePath.join(pkg, 'dist'), { recursive: true });
   await fs.copyFile(safePath.join(PACKAGE_DIR, 'package.json'), safePath.join(pkg, 'package.json'));
-  // Dependency resolution walks up from the copy exactly as it would from the
-  // package: its own `node_modules`, then the workspace's.
-  await fs.symlink(safePath.join(PACKAGE_DIR, 'node_modules'), safePath.join(pkg, 'node_modules'), 'junction');
-  await fs.symlink(REPO_NODE_MODULES, safePath.join(scratch, 'node_modules'), 'junction');
 
   copiedWorker = safePath.join(pkg, 'dist', 'parse-worker.js');
   await fs.rm(copiedWorker);
@@ -59,6 +74,9 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await removeScratchDir(scratch);
+  // The same bounded removal as the temp dir: a 646-file copy on a loaded Windows runner is the
+  // teardown `removeScratchDir` exists for. `''` (beforeAll threw first) is a no-op.
+  await removeScratchDir(pkgScratch);
 });
 
 /**
