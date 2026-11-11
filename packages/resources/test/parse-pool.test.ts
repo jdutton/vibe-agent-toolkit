@@ -48,6 +48,7 @@ import {
   isParseWorkerDiedError,
   ParseLimitError,
   resolveParseLimits,
+  workerHeapCeilingMb,
 } from '../src/parse-limits.js';
 import {
   __setParseWorkerEntryForTest,
@@ -206,21 +207,24 @@ function trackedPool(size = 2): ParsePool {
   return pool;
 }
 
-/** A wall clock far past every test timeout here, so it can never decide a heap test. */
-const NEVER_BY_TIME_MS = 600_000;
+/**
+ * The wall clock a heap test's job is stopped at if the heap never decides it.
+ *
+ * A heap decision takes a handful of 50 ms samples once the thread is up, so
+ * this is a backstop, never the decider: a sampler that stops deciding ends the
+ * job as a `timeMs` refusal the test's assertion names, well inside the 60 s
+ * test timeout. A clock no test reaches would instead hold the job open forever,
+ * and the pool's drain-first shutdown with it — a hung `afterEach`, not a red.
+ */
+const HEAP_DECISION_BACKSTOP_MS = 20_000;
 
 /**
- * A one-thread pool on which only the heap can stop a job that never answers.
- *
- * Under the default `timeMs` a cold worker on a slow box (Windows CI) reached
- * the wall-clock stop before the heap script decided, so a heap test failed on
- * a `ParseLimitError` for `timeMs`. Production timing is untouched: the limit is
- * named for this pool alone.
+ * A one-thread pool for a heap test, with the wall clock only as a backstop.
  *
  * @returns The pool, shut down after the test
  */
-function heapOnlyPool(): ParsePool {
-  const pool = createParsePool({ size: 1, limits: { timeMs: NEVER_BY_TIME_MS } });
+function heapTestPool(): ParsePool {
+  const pool = createParsePool({ size: 1, limits: { timeMs: HEAP_DECISION_BACKSTOP_MS } });
   openPools.push(pool);
   return pool;
 }
@@ -268,6 +272,9 @@ function keyedFor(fixture: Fixture): KeyedContent {
 }
 
 afterEach(async () => {
+  // First: a spy a timed-out test left on `Worker.prototype` would otherwise be
+  // captured as the "real" method by the next test's spy, which then calls itself.
+  vi.restoreAllMocks();
   const pools = openPools.splice(0, openPools.length);
   await Promise.all(pools.map(async (pool) => pool.shutdown()));
   const roots = cacheRoots.splice(0, cacheRoots.length);
@@ -802,7 +809,7 @@ describe('a thread V8 stops at its own heap ceiling', () => {
         return stats;
       });
     });
-    const pool = heapOnlyPool();
+    const pool = heapTestPool();
 
     try {
       const refusal = pool.parse('markdown', '# hi\n', 5).then(() => undefined, (error: unknown) => error);
@@ -820,50 +827,101 @@ describe('a thread V8 stops at its own heap ceiling', () => {
   });
 });
 
+const BYTES_PER_MIB = 1_048_576;
+
 /**
- * Serve every heap sample with V8's real bounds but a scripted used heap.
+ * Samples served past the end of a script before the job counts as undecided.
+ * Counted in samples, never in wall clock, so a slow box cannot trip it.
+ */
+const UNDECIDED_AFTER_SAMPLES = 20;
+
+/**
+ * V8's ceiling a scripted heap reports: what the thread really reads, or a
+ * fixed one. A process-wide `--max-old-space-size` (the Windows unit tier sets
+ * 512) lowers the real one, and a young generation the Node version sizes
+ * (96 MiB on Node 26, 192 on Node 24) decides whether a scripted shape fits
+ * under it at all.
+ */
+type ScriptedCeiling = 'as-read' | { readonly ceilingMb: number };
+
+/** What a scripted heap observed, read once the job has settled. */
+interface ScriptedHeap {
+  /** Samples served. */
+  served: () => number;
+  /** The bounds the script was written against. */
+  bounds: () => HeapBounds | undefined;
+  /** Why the script could not decide the job, if it could not: see {@link scriptedHeap}. */
+  undecided: () => string | undefined;
+}
+
+/**
+ * Serve every heap sample with a scripted used heap, under V8's bounds as
+ * {@link ScriptedCeiling} names them.
+ *
+ * ⛔ Nothing here may throw into the pool: it treats a failed sample as a
+ * thread already gone and ignores it, so an assertion thrown in a sample is
+ * swallowed and the job waits forever. A script that refuses the bounds it was
+ * given, or a pool still undecided {@link UNDECIDED_AFTER_SAMPLES} samples past
+ * the script's end, is recorded instead, and every later sample serves a heap
+ * past any stop so the job settles and the pool can shut down;
+ * {@link heapRefusalUnder} then fails with the recorded reason.
  *
  * @param script - The used heap, in MiB, for each sample in turn (the last repeats), given the bounds the
- *   first real sample reads — a process-wide `--max-old-space-size` (CI sets 512) lowers them
- * @returns How many samples were served, and the bounds the script was written against
+ *   first sample reads
+ * @param ceiling - See {@link ScriptedCeiling}
+ * @returns What the scripted heap observed
  */
-function scriptedHeap(script: (bounds: HeapBounds, youngMb: number) => number[]): { served: () => number; bounds: () => HeapBounds | undefined } {
+function scriptedHeap(script: (bounds: HeapBounds, youngMb: number) => number[], ceiling: ScriptedCeiling): ScriptedHeap {
   const sample = Worker.prototype.getHeapStatistics;
   let served = 0;
   let read: HeapBounds | undefined;
+  let undecided: string | undefined;
   let usedMb: number[] = [];
   vi.spyOn(Worker.prototype, 'getHeapStatistics').mockImplementation(function (this: Worker) {
     return sample.call(this).then((stats) => {
       const youngMb = this.resourceLimits?.maxYoungGenerationSizeMb ?? 0;
+      const limitBytes = ceiling === 'as-read' ? stats.heap_size_limit : (ceiling.ceilingMb + youngMb) * BYTES_PER_MIB;
       if (read === undefined) {
-        read = heapBounds(stats, youngMb, resolveParseLimits(undefined).heapMb);
-        usedMb = script(read, youngMb);
+        read = heapBounds({ heap_size_limit: limitBytes }, youngMb, resolveParseLimits(undefined).heapMb);
+        try {
+          usedMb = script(read, youngMb);
+        } catch (error) {
+          undecided = `the script refused the bounds it read (${JSON.stringify(read)}, young ${youngMb} MiB): ${String(error)}`;
+        }
       }
-      const mb = usedMb[Math.min(served, usedMb.length - 1)] ?? 0;
+      if (undecided === undefined && served >= usedMb.length + UNDECIDED_AFTER_SAMPLES) {
+        undecided = `the pool was still undecided ${UNDECIDED_AFTER_SAMPLES} samples past a ${usedMb.length}-sample script`;
+      }
+      const usedBytes = undecided === undefined ? (usedMb[Math.min(served, usedMb.length - 1)] ?? 0) * BYTES_PER_MIB : limitBytes;
       served += 1;
-      return { ...stats, used_heap_size: mb * 1_048_576 };
+      return { ...stats, heap_size_limit: limitBytes, used_heap_size: usedBytes };
     });
   });
-  return { served: () => served, bounds: () => read };
+  return { served: () => served, bounds: () => read, undecided: () => undecided };
 }
 
 /**
  * One job on a thread that never answers, under a scripted heap ({@link scriptedHeap}).
  *
  * @param script - See {@link scriptedHeap}
+ * @param ceiling - See {@link ScriptedCeiling}
  * @returns The heap refusal's bound (or the outcome, if not one), the samples served, and the bounds read
+ * @throws When the scripted heap could not decide the job — see {@link scriptedHeap}
  */
 async function heapRefusalUnder(
   script: (bounds: HeapBounds, youngMb: number) => number[],
+  ceiling: ScriptedCeiling,
 ): Promise<{ bound: unknown; served: number; bounds: HeapBounds | undefined }> {
   await seedWorkerEntry([
     "import { parentPort } from 'node:worker_threads';",
     READY_LINE,
     "parentPort.on('message', () => undefined);",
   ].join('\n'));
-  const heap = scriptedHeap(script);
+  const heap = scriptedHeap(script, ceiling);
   try {
-    const outcome = await outcomeOf(heapOnlyPool(), '# hi\n');
+    const outcome = await outcomeOf(heapTestPool(), '# hi\n');
+    const undecided = heap.undecided();
+    if (undecided !== undefined) throw new Error(`The scripted heap did not decide the job: ${undecided}`);
     return {
       bound: isParseLimitError(outcome) && outcome.limit === 'heapMb' ? outcome.bound : outcome,
       served: heap.served(),
@@ -876,18 +934,23 @@ async function heapRefusalUnder(
 
 describe('a heap past its bound', () => {
   it('is not stopped while it rises, only once a fall too deep for a scavenge shows what it still holds', async () => {
+    // V8's ceiling is fixed at what an unflagged thread reads, not the real one:
+    // under the Windows unit tier's 512 MiB flag the stop sits 128 MiB above the
+    // bound, and Node 24's 192 MiB young generation leaves no rise below the stop
+    // that a fall deeper than a scavenge can come back from.
+    const unflagged = { ceilingMb: workerHeapCeilingMb(resolveParseLimits(undefined).heapMb) };
     const { bound, served, bounds } = await heapRefusalUnder(({ appliedMb, stopMb }, youngMb) => {
       // The rise must stay below the stop, or the stop decides instead.
       expect(appliedMb + youngMb + 4).toBeLessThan(stopMb);
       return [appliedMb + 1, appliedMb + youngMb + 2, appliedMb + youngMb + 4, appliedMb + 1];
-    });
+    }, unflagged);
 
     expect(bound).toBe(ParseLimitError.heap(bounds?.appliedMb ?? 0, resolveParseLimits(undefined).heapMb).bound);
     expect(served).toBeGreaterThanOrEqual(4);
   }, 60_000);
 
   it('is stopped past the stop with no fall at all, and not a sample before', async () => {
-    const { bound, served, bounds } = await heapRefusalUnder(({ appliedMb, stopMb }) => [appliedMb + 1, stopMb, stopMb, stopMb, stopMb + 1]);
+    const { bound, served, bounds } = await heapRefusalUnder(({ appliedMb, stopMb }) => [appliedMb + 1, stopMb, stopMb, stopMb, stopMb + 1], 'as-read');
 
     expect(bound).toBe(ParseLimitError.heap(bounds?.appliedMb ?? 0, resolveParseLimits(undefined).heapMb).bound);
     expect(served).toBeGreaterThanOrEqual(5);

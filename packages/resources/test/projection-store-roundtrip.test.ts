@@ -55,7 +55,6 @@ import type { BlobScopedRows, ExtentKey, ExtentScopedRows, ProjectionStore } fro
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
 import { FakeProjectionStore } from './fake-projection-store.js';
-import { manyLinks } from './parse-limit-fixtures.js';
 import { setupSubdirTestSuite, useCorpusSuite } from './test-helpers.js';
 
 // ---------------------------------------------------------------------------
@@ -433,7 +432,12 @@ describe('populate through a projection store', () => {
       // A refused parse is filed nowhere (I6), so its key is held by no store
       // and every run re-derives the whole population while it persists. That
       // cost is allowed only counted and named: never a silent miss.
-      await writeFile(safePath.join(suite.tempDir, 'huge.md'), manyLinks(resolveParseLimits(undefined).outputRows + 1), 'utf-8');
+      //
+      // Refused at its input size, which the pool decides before any thread
+      // parses it: which limit refuses is not under test, and a row-cap breach
+      // parses 16,385 links on every run (~0.8 s each here, past the 15 s test
+      // timeout on a loaded CI box).
+      await writeFile(safePath.join(suite.tempDir, 'huge.md'), 'x'.repeat(resolveParseLimits(undefined).inputBytes + 1), 'utf-8');
       const store = new FakeProjectionStore();
 
       const cold = await run({ registry: filesystemAndClosure(), store });

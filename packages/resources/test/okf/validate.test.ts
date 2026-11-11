@@ -18,7 +18,6 @@ import { validateOkfBundle } from '../../src/okf/validate.js';
 import { resolveParseLimits } from '../../src/parse-limits.js';
 import type { ResourceLink } from '../../src/types.js';
 import { LINK_ABSENCE_ERRNOS, REFUSAL_ERRNOS, withReaddirRefused } from '../helpers/refused-listing.js';
-import { manyLinks } from '../parse-limit-fixtures.js';
 
 import {
   NFC_CAFE_DIR,
@@ -833,9 +832,11 @@ describe('validateOkfBundle', () => {
     // by the caller through `notAdmittedFindings` under the project's allow list
     // and severity — never a lane-local `OKF_DOCUMENT_UNREADABLE` no config reaches.
     it('is carried as a parse refusal, never as an OKF finding', async () => {
+      // Refused at its input size, before any thread parses it: a row-cap
+      // breach parsed 16,385 links and ran to 14,995 ms of a 15 s timeout on CI.
       const root = plantOkfBundle({
         'ok.md': conceptDoc(TABLE_TYPE),
-        'huge.md': `${conceptDoc(TABLE_TYPE)}\n${manyLinks(resolveParseLimits(undefined).outputRows + 1)}`,
+        'huge.md': `${conceptDoc(TABLE_TYPE)}\n${'x'.repeat(resolveParseLimits(undefined).inputBytes)}`,
       });
 
       const report = await validateOkfBundle({ bundle: 'docs', root, rootSpecifier: ROOT_SPECIFIER });
