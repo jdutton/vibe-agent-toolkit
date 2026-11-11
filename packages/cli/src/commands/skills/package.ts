@@ -501,13 +501,13 @@ async function packageAndReport(
     const message = errorMessageOf(error);
     logger.error(`Package failed: ${message}`);
     // A SKILL.md the parse worker refuses (the refusal itself, usually) reports as unnamed.
-    const parseResult = await skillDocumentOrRefused(skillPath);
+    const read = await skillDocumentOrRefused(skillPath);
     return buildSkillsPackageReport({
       validation,
       // The package is one plan: a refused one — a too-large ZIP included — landed nothing.
       data: {
-        skill: parseResult === undefined ? 'unknown' : extractSkillName(parseResult),
-        version: parseResult === undefined ? null : frontmatterVersion(parseResult),
+        skill: read.kind === 'refused' ? 'unknown' : extractSkillName(read.document),
+        version: read.kind === 'refused' ? null : frontmatterVersion(read.document),
         outputPath: null,
         dryRun: options.dryRun === true,
       },

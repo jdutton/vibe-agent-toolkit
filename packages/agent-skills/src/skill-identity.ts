@@ -13,7 +13,7 @@
 
 import { readFileSync } from 'node:fs';
 
-import type { ParseRoute } from '@vibe-agent-toolkit/resources';
+import { isPerRunParseRefusal, type ParseRoute } from '@vibe-agent-toolkit/resources';
 import { isPathAbsentError } from '@vibe-agent-toolkit/utils';
 
 import { parseFrontmatter } from './parsers/frontmatter-parser.js';
@@ -26,9 +26,10 @@ import { parseFrontmatter } from './parsers/frontmatter-parser.js';
  * whether some fallback (typically the directory leaf) applies.
  *
  * A file that IS there but could not be read (a permission refusal, a path
- * component that is a directory) throws: `undefined` means "declares no name",
- * and a refusal has not established that — a caller falling back to the
- * directory leaf would otherwise rename the skill on the operator's behalf.
+ * component that is a directory), or whose frontmatter the parse worker refused
+ * for this run, throws: `undefined` means "declares no name", and neither has
+ * established that — a caller falling back to the directory leaf would
+ * otherwise rename the skill on the operator's behalf.
  */
 export function readDeclaredSkillName(skillMdPath: string, route: ParseRoute = {}): Promise<string | undefined> {
   let content: string;
@@ -50,11 +51,12 @@ export function readDeclaredSkillName(skillMdPath: string, route: ParseRoute = {
  * exactly how one lane starts answering differently from another.
  */
 export async function declaredSkillNameIn(content: string, route: ParseRoute = {}): Promise<string | undefined> {
-  // A block the parse worker refused for this run declares nothing this run can
-  // read, so it is "no usable name" — the caller's fallback (the directory leaf)
-  // applies, as for a SKILL.md with no frontmatter.
   const parsed = await parseFrontmatter(content, route);
-  if (!parsed.success) return undefined;
+  if (!parsed.success) {
+    // Refused for this run is not "declares no name": thrown, never a fallback.
+    if (isPerRunParseRefusal(parsed.cause)) throw parsed.cause;
+    return undefined;
+  }
 
   const declared = parsed.frontmatter['name'];
   if (typeof declared !== 'string') return undefined;

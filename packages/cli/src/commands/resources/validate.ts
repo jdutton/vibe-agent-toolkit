@@ -46,7 +46,7 @@ import {
 } from '../../utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
 import type { PhaseOutcome } from '../phase-utils.js';
-import { discoverSkillsFromConfig } from '../skills/skill-discovery.js';
+import { discoverSkillsFromConfig, namedSkillsOrRefuse } from '../skills/skill-discovery.js';
 
 import type { ResourcesValidateData, ResourcesValidateReport } from './validate-schema.js';
 
@@ -288,8 +288,9 @@ export async function computeDeferredArtifacts(
   }
 
   // `'refuse'`: the `files:` dest check below is only as complete as this
-  // list. The throw lands in the command's catch → a refusal by its code, exit 2.
-  const discovered = await discoverSkillsFromConfig(config.skills, projectRoot, 'refuse');
+  // list — a SKILL.md whose parse was refused included, since its `files:` are keyed
+  // by a name it has none of. The throw lands in the command's catch → a refusal by its code, exit 2.
+  const discovered = namedSkillsOrRefuse(await discoverSkillsFromConfig(config.skills, projectRoot, 'refuse'), projectRoot);
   const { defaults, config: perSkillConfig } = config.skills;
 
   // Assembled ONCE for the whole run, then handed to every skill below. Rebuilding

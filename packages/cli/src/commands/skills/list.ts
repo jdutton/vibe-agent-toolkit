@@ -11,7 +11,7 @@ import { basename, dirname } from 'node:path';
 import { materializeIssue, readDeclaredSkillName } from '@vibe-agent-toolkit/agent-skills';
 import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { scan, type ScanSummary } from '@vibe-agent-toolkit/discovery';
-import { type ParseDispatcher, withParseDispatcher } from '@vibe-agent-toolkit/resources';
+import { notAdmittedIssues, type ParseDispatcher, type ParseRefusedResource, parseRefusedEntryFor, withParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { direntKindFollowingSync, isTreeChangeResidue, mapInOrder, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
@@ -46,44 +46,60 @@ interface DiscoveredSkill {
  *
  * `vat skills list` is the preview for `vat skills install`, which keys on the
  * declared name — so listing a directory leaf here would name a directory the
- * install never creates. The leaf is only a fallback for a SKILL.md too damaged
- * to declare anything; `vat audit` reports that separately.
+ * install never creates. The leaf is only a fallback for a SKILL.md that declares
+ * no name; `vat audit` reports that separately. One the parse worker refused is
+ * listed under no name: it is the listing's not-admitted finding.
  */
-async function extractSkillName(skillPath: string, dispatcher: ParseDispatcher): Promise<string> {
-  return (await readDeclaredSkillName(skillPath, { dispatcher })) ?? basename(dirname(skillPath));
+async function extractSkillName(skillPath: string, dispatcher: ParseDispatcher): Promise<string | ParseRefusedResource> {
+  try {
+    return (await readDeclaredSkillName(skillPath, { dispatcher })) ?? basename(dirname(skillPath));
+  } catch (error) {
+    const refused = parseRefusedEntryFor(skillPath, error);
+    if (refused === undefined) throw error;
+    return refused;
+  }
+}
+
+/** The skills a listing named, and the SKILL.md files the parse worker refused for this run. */
+interface ListedSkills {
+  skills: DiscoveredSkill[];
+  parseRefused: ParseRefusedResource[];
 }
 
 /**
  * Convert discovered skills to DiscoveredSkill format with validation
  */
-function processDiscoveredSkills(
+async function processDiscoveredSkills(
   discoveredSkills: Array<{ path: string }>
-): Promise<DiscoveredSkill[]> {
+): Promise<ListedSkills> {
   // One parse dispatcher for the listing: each name is read from its SKILL.md's
   // frontmatter on the bounded route, and a cold listing pays one worker start.
-  return withParseDispatcher((dispatcher) =>
-    mapInOrder(discoveredSkills, async (s) => {
-      const filenameCheck = validateSkillFilename(s.path);
-      const skill: DiscoveredSkill = {
-        path: s.path,
-        name: await extractSkillName(s.path, dispatcher),
-        valid: filenameCheck.valid,
-      };
-      // Only add warning if it exists (exactOptionalPropertyTypes)
-      if (filenameCheck.message !== undefined) {
-        skill.warning = filenameCheck.message;
-      }
-      return skill;
-    }),
+  const names = await withParseDispatcher((dispatcher) =>
+    mapInOrder(discoveredSkills, (s) => extractSkillName(s.path, dispatcher)),
   );
+  const listed: ListedSkills = { skills: [], parseRefused: [] };
+  for (const [index, s] of discoveredSkills.entries()) {
+    const name = names[index] as string | ParseRefusedResource;
+    if (typeof name !== 'string') {
+      listed.parseRefused.push(name);
+      continue;
+    }
+    const filenameCheck = validateSkillFilename(s.path);
+    const skill: DiscoveredSkill = { path: s.path, name, valid: filenameCheck.valid };
+    // Only add warning if it exists (exactOptionalPropertyTypes)
+    if (filenameCheck.message !== undefined) {
+      skill.warning = filenameCheck.message;
+    }
+    listed.skills.push(skill);
+  }
+  return listed;
 }
 
 /** `vat skills list` has no `--strict`: its one finding is a warning about what it could not see. */
 const GATE = { strict: false } as const;
 
 /** What one listing run found: the skills, where they are relative to, and what it could not list. */
-interface Listing {
-  skills: DiscoveredSkill[];
+interface Listing extends ListedSkills {
   context: string;
   /** The ONE base every published path is relative to. */
   root: string;
@@ -125,6 +141,10 @@ export function buildSkillsListReport(listing: Listing, durationMs: number): Ski
     findings: [
       ...toFindings(listing.unreadable.map((refusal) => unlistableDirectoryFinding(refusal, listing.root))),
       ...toFindings(listing.leftovers),
+      ...toFindings(notAdmittedIssues(
+        { unreadable: [], parseRefused: listing.parseRefused },
+        { locationRoot: listing.root, consequence: 'it is missing from this list' },
+      )),
     ],
     data: {
       root: listing.root,
@@ -183,10 +203,10 @@ function outputSkillsHuman(
 }
 
 /**
- * Scan a dist/skills/ directory tree for SKILL.md files and return DiscoveredSkill[].
+ * Scan a dist/skills/ directory tree for SKILL.md files and list them ({@link ListedSkills}).
  * Each immediate subdirectory that contains a SKILL.md is treated as one skill.
  */
-function scanSkillsDir(skillsDir: string): Promise<DiscoveredSkill[]> {
+function scanSkillsDir(skillsDir: string): Promise<ListedSkills> {
   const found: Array<{ path: string }> = [];
 
   for (const entry of readSourceDir(skillsDir, 'environment')) {
@@ -213,8 +233,8 @@ async function listFromNpmSource(source: string, logger: ReturnType<typeof creat
   // directory is an implementation detail nobody can act on. `[]` is a
   // statement, not a default: this is one listing of a tree this process just
   // extracted, and a listing it cannot read refuses the run instead.
-  const { value: skills, leftovers } = await withResolvedTempDirs(resolved.tempDirs, () => scanSkillsDir(resolved.skillsDir));
-  return { skills, context: 'npm', root: resolved.skillsDir, unreadable: [], leftovers, examined: 1 };
+  const { value: listed, leftovers } = await withResolvedTempDirs(resolved.tempDirs, () => scanSkillsDir(resolved.skillsDir));
+  return { ...listed, context: 'npm', root: resolved.skillsDir, unreadable: [], leftovers, examined: 1 };
 }
 
 /** `--user`: Claude's `plugins/` and `skills/` directories — both scanned, an absent one empty. */
@@ -223,7 +243,7 @@ async function listUserSkills(logger: ReturnType<typeof createLogger>): Promise<
 
   const { plugins, skills: standaloneSkills, unreadable } = await scanUserContext();
   return {
-    skills: await processDiscoveredSkills(discoverSkills([...plugins, ...standaloneSkills])),
+    ...(await processDiscoveredSkills(discoverSkills([...plugins, ...standaloneSkills]))),
     context: 'user',
     // `scanUserContext` covers ~/.claude/plugins and ~/.claude/skills, so
     // their common parent is the base that spans both.
@@ -251,7 +271,7 @@ async function listProjectSkills(pathArg: string | undefined, logger: ReturnType
   });
 
   return {
-    skills: await processDiscoveredSkills(discoverSkills(scanResult.results)),
+    ...(await processDiscoveredSkills(discoverSkills(scanResult.results))),
     context: 'project',
     root: safePath.resolve(rootDir),
     unreadable: scanResult.unreadable,

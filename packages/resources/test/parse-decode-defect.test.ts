@@ -65,14 +65,7 @@ describe('a frontmatter decode that throws on the parent thread', () => {
     seam.decodeFails = true;
     const builder = await baseBuilderForRoot(suite.tempDir);
 
-    const outcome: unknown = await populateBlobs(builder, { parseCache: new ParseCache({ enabled: false }) }).then(
-      () => 'completed',
-      (error: unknown) => error,
-    );
-
-    expect(outcome).toBeInstanceOf(ParseDecodeDefectError);
-    // VAT's defect: the one classifier every per-file catch asks rethrows it.
-    expect(() => classifyParseFailure(outcome)).toThrow(outcome as Error);
+    await expectLoudDefect(populateBlobs(builder, { parseCache: new ParseCache({ enabled: false }) }));
     expect(conditionsWithCode(builder.build(), BLOB_PARSE_FAILED)).toHaveLength(0);
   });
 
@@ -80,14 +73,7 @@ describe('a frontmatter decode that throws on the parent thread', () => {
     seam.decodeFails = true;
     const registry = new ResourceRegistry({ baseDir: suite.tempDir, parseCache: new ParseCache({ enabled: false }) });
 
-    const outcome: unknown = await registry.addResources([safePath.join(suite.tempDir, 'doc.md')]).then(
-      () => 'completed',
-      (error: unknown) => error,
-    );
-
-    expect(outcome).toBeInstanceOf(ParseDecodeDefectError);
-    // VAT's defect: the one classifier every per-file catch asks rethrows it.
-    expect(() => classifyParseFailure(outcome)).toThrow(outcome as Error);
+    await expectLoudDefect(registry.addResources([safePath.join(suite.tempDir, 'doc.md')]));
     expect(registry.getParseRefusedResources()).toHaveLength(0);
   });
 
@@ -110,6 +96,19 @@ describe('a frontmatter decode that throws on the parent thread', () => {
     expect(await cache.get(keyed)).toBeNull();
   });
 });
+
+/**
+ * Settle `run`, and assert it rejected with the decode defect — VAT's defect,
+ * which the one classifier every per-file catch asks rethrows.
+ */
+async function expectLoudDefect(run: Promise<unknown>): Promise<void> {
+  const outcome: unknown = await run.then(
+    () => 'completed',
+    (error: unknown) => error,
+  );
+  expect(outcome).toBeInstanceOf(ParseDecodeDefectError);
+  expect(() => classifyParseFailure(outcome)).toThrow(outcome as Error);
+}
 
 /** The test document, parsed and filed in a fresh cache that serves it back. */
 async function cachedDocument(): Promise<{ cache: ParseCache; cacheDir: string; keyed: KeyedContent }> {

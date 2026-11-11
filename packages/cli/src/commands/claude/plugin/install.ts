@@ -20,7 +20,7 @@
 
 import { readdirSync, type Dirent } from 'node:fs';
 import fs from 'node:fs/promises';
-import { basename } from 'node:path';
+import { basename, dirname } from 'node:path';
 
 import { readDeclaredSkillName } from '@vibe-agent-toolkit/agent-skills';
 import {
@@ -70,6 +70,7 @@ import { extractSkillZip, inStaging, installLinks, installUnit, occupiedRefusal,
 import { reportFindings } from '../../../utils/issue-rendering.js';
 import { createLogger } from '../../../utils/logger.js';
 import { requireInputPath } from '../../../utils/project-root-policy.js';
+import { declaredNameOrRefuse } from '../../skills/skill-discovery.js';
 
 import {
   detectSource,
@@ -949,9 +950,11 @@ async function handleLocalInstall(source: string, run: InstallRun): Promise<void
   }
   // The package.json branch above installs each skill under its declared name;
   // do the same here rather than under whatever the source directory is called.
+  // A SKILL.md whose parse was refused declares no name this run can read: refused, never renamed.
+  const skillMd = safePath.join(sourcePath, 'SKILL.md');
   const skillName =
     options.name ??
-    (await readDeclaredSkillName(safePath.join(sourcePath, 'SKILL.md'))) ??
+    (await declaredNameOrRefuse(skillMd, readDeclaredSkillName(skillMd), dirname(sourcePath))) ??
     basename(sourcePath);
   await install(run, { kind: 'skill-dir', side: 'source', skillPath: sourcePath, skillName }, 'copy');
 }
@@ -978,7 +981,8 @@ async function handleZipInstall(source: string, run: InstallRun): Promise<void> 
     // The one extraction of a skill ZIP, shared with `vat skills install` and the org upload: the
     // skill is at the top level or in the single top-level folder, installed under the name its SKILL.md declares.
     const skillPath = await extractSkillZip(sourcePath, extracted);
-    const skillName = options.name ?? (await readDeclaredSkillName(safePath.join(skillPath, 'SKILL.md'))) ?? basename(sourcePath, '.zip');
+    const skillMd = safePath.join(skillPath, 'SKILL.md');
+    const skillName = options.name ?? (await declaredNameOrRefuse(skillMd, readDeclaredSkillName(skillMd), skillPath)) ?? basename(sourcePath, '.zip');
     await install(run, { kind: 'skill-dir', side: 'environment', skillPath, skillName }, 'copy');
   });
 }

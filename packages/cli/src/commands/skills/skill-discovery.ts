@@ -5,22 +5,25 @@
  * finds matching SKILL.md files, and extracts skill names from frontmatter.
  */
 
-import { basename, dirname } from 'node:path';
+import { basename } from 'node:path';
 
 import type { PluginLocalSkillIndex } from '@vibe-agent-toolkit/agent-skills';
 import {
   type ParseDispatcher,
   parseFileCached,
+  type ParseRefusedResource,
   parseRefusedEntryFor,
+  parseRefusedMessage,
   type ParseResult,
   type ParseRoute,
   type SkillsConfig,
   withParseDispatcher,
 } from '@vibe-agent-toolkit/resources';
-import { followedKindSync, forEachInOrder, fsFaultOf, mapConcurrentFailingInOrder, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { followedKindSync, forEachInOrder, fsFaultOf, issueLocation, mapConcurrentFailingInOrder, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory, type UnreadablePolicy } from '@vibe-agent-toolkit/utils/crawl';
 import picomatch from 'picomatch';
 
+import { CommandRefusalError } from '../../utils/command-refusal.js';
 
 import type { DiscoveredSkill } from './command-helpers.js';
 
@@ -59,24 +62,71 @@ const DISCOVERY_EXCLUDE = [
   '**/coverage/**',
 ];
 
+/** What one SKILL.md read gave a lane: its parse, or the parse worker's refusal of it for this run. */
+export type SkillDocumentRead =
+  | { readonly kind: 'parsed'; readonly document: ParseResult }
+  | { readonly kind: 'refused'; readonly refused: ParseRefusedResource };
+
+/** A skill's name, or the refusal that left it with none this run can read — never a fallback. */
+export type SkillNameRead =
+  | { readonly kind: 'named'; readonly name: string }
+  | { readonly kind: 'refused'; readonly refused: ParseRefusedResource };
+
 /**
- * Parse a SKILL.md for what a lane reads off it (its name, its version), or
- * `undefined` when the parse worker refuses it for this run. The parse runs in
- * the bounded worker (`parseFileCached`); a refusal is a fact about the file the
- * packaging validator reports (`RESOURCE_PARSE_LIMIT_EXCEEDED` /
- * `RESOURCE_PARSE_WORKER_DIED`), never a crash of a lane that only wanted a
- * label. Every other error — a broken parser install included — is rethrown.
- *
- * @param skillPath - Absolute path to the SKILL.md
- * @param route - The run's parse dispatcher, when a run reads many SKILL.md files
- * @returns Its parse result, or `undefined` when the parse was refused
+ * What config discovery found: the skills it could name, and the SKILL.md files the parse
+ * worker refused for this run. Both required: a refused skill has no name to key its config
+ * by, so each caller reports these through the not-admitted contract or refuses the run.
  */
-export async function skillDocumentOrRefused(skillPath: string, route: ParseRoute = {}): Promise<ParseResult | undefined> {
+export interface SkillDiscovery {
+  readonly skills: DiscoveredSkill[];
+  readonly parseRefused: readonly ParseRefusedResource[];
+}
+
+/**
+ * Parse a SKILL.md in the bounded worker (`parseFileCached`). A per-run refusal is carried as
+ * `refused`; every other error — a broken parser install included — is rethrown.
+ */
+export async function skillDocumentOrRefused(skillPath: string, route: ParseRoute = {}): Promise<SkillDocumentRead> {
   try {
-    return await parseFileCached(skillPath, 'markdown', route);
+    return { kind: 'parsed', document: await parseFileCached(skillPath, 'markdown', route) };
   } catch (error) {
-    if (parseRefusedEntryFor(skillPath, error) !== undefined) return undefined;
-    throw error;
+    const refused = parseRefusedEntryFor(skillPath, error);
+    if (refused === undefined) throw error;
+    return { kind: 'refused', refused };
+  }
+}
+
+/** What a refused SKILL.md cost a lane that needed its skill's name. */
+const SKILL_NAME_UNREAD = 'the skill it defines has no name this run can read, and nothing was done with it';
+
+/**
+ * The refusal of a run that needed the name of a skill whose SKILL.md the parse worker refused:
+ * `INPUT_UNREADABLE` for a limit, `RUN_INCOMPLETE` for a dead worker, in the not-admitted sentence.
+ */
+export function skillParseRefusal(entry: ParseRefusedResource, locationRoot: string): CommandRefusalError {
+  const message = parseRefusedMessage(entry, issueLocation(entry.filePath, locationRoot), SKILL_NAME_UNREAD);
+  return new CommandRefusalError(entry.code === 'RESOURCE_PARSE_WORKER_DIED' ? 'RUN_INCOMPLETE' : 'INPUT_UNREADABLE', message);
+}
+
+/** The discovered skills, or the run's refusal when any SKILL.md was refused: for a verb that cannot act on what it could not name. */
+export function namedSkillsOrRefuse(discovery: SkillDiscovery, locationRoot: string): DiscoveredSkill[] {
+  const [first] = discovery.parseRefused;
+  if (first !== undefined) throw skillParseRefusal(first, locationRoot);
+  return discovery.skills;
+}
+
+/** The name `read` resolves to, or the run's refusal when the parse worker refused `skillMdPath`. */
+export async function declaredNameOrRefuse(
+  skillMdPath: string,
+  read: Promise<string | undefined>,
+  locationRoot: string,
+): Promise<string | undefined> {
+  try {
+    return await read;
+  } catch (error) {
+    const refused = parseRefusedEntryFor(skillMdPath, error);
+    if (refused === undefined) throw error;
+    throw skillParseRefusal(refused, locationRoot);
   }
 }
 
@@ -95,21 +145,17 @@ export async function skillDocumentOrRefused(skillPath: string, route: ParseRout
  * file's path. Excluding it here instead would shrink the denominator silently,
  * which is the exact tell-less drop `includeUntracked` below exists to prevent.
  *
- * A SKILL.md the parse worker refuses is keyed by its DIRECTORY, the name
- * `vat skills list` gives it: its bytes declare nothing this run could read, and
- * every SKILL.md shares the file name, so a file-name key would put two refused
- * skills under one name and one config. The packaging validator refuses it as
- * `RESOURCE_PARSE_LIMIT_EXCEEDED` / `RESOURCE_PARSE_WORKER_DIED`.
+ * A SKILL.md the parse worker refuses has no name: it is `refused`, never a key.
  */
-async function readSkillName(skillPath: string, dispatcher: ParseDispatcher): Promise<string> {
-  const parsed = await skillDocumentOrRefused(skillPath, { dispatcher });
-  if (parsed === undefined) return basename(dirname(skillPath));
+async function readSkillName(skillPath: string, dispatcher: ParseDispatcher): Promise<SkillNameRead> {
+  const read = await skillDocumentOrRefused(skillPath, { dispatcher });
+  if (read.kind === 'refused') return read;
   // The H1 fallback below reads the SAME bytes the parse already decoded, so it
-  // uses `parsed.content` rather than a second read of the same path.
-  const content = parsed.content;
-  const name = parsed.frontmatter?.['name'];
+  // uses `content` rather than a second read of the same path.
+  const { content, frontmatter } = read.document;
+  const name = frontmatter?.['name'];
   if (typeof name === 'string' && name.length > 0) {
-    return name;
+    return { kind: 'named', name };
   }
   // Fallback: try H1 title
   // `[ \t]` is a single fixed-width class, not a quantifier, so it cannot compete
@@ -117,9 +163,9 @@ async function readSkillName(skillPath: string, dispatcher: ParseDispatcher): Pr
   // old `\s+([^\n]+)` form backtrack super-linearly. .trim() below is unchanged.
   const h1Match = /^#[ \t]([^\n]*)$/m.exec(content);
   if (h1Match?.[1]) {
-    return h1Match[1].trim();
+    return { kind: 'named', name: h1Match[1].trim() };
   }
-  return basename(skillPath, '.md');
+  return { kind: 'named', name: basename(skillPath, '.md') };
 }
 
 /**
@@ -132,16 +178,16 @@ async function readSkillName(skillPath: string, dispatcher: ParseDispatcher): Pr
 export type PluginLocalSkillNames = ReadonlyMap<string, string>;
 
 /**
- * The declared name of the plugin-local skill in `skillSourceDir` ({@link readSkillName}),
- * else `skillDirPath`'s trailing segment. The plugin build and `vat verify` both name a
- * plugin-local skill through THIS, so they look up the same config.
+ * The name of the plugin-local skill in `skillSourceDir` ({@link readSkillName}), or its
+ * refusal. The plugin build and `vat verify` both name a plugin-local skill through THIS,
+ * so they look up the same config.
  */
-export function readPluginLocalSkillName(skillSourceDir: string, dispatcher?: ParseDispatcher): Promise<string> {
+export function readPluginLocalSkillName(skillSourceDir: string, dispatcher?: ParseDispatcher): Promise<SkillNameRead> {
   return withParseDispatcher((run) => readSkillName(safePath.join(skillSourceDir, 'SKILL.md'), run), { dispatcher });
 }
 
-/** {@link PluginLocalSkillNames} for every location in `pluginLocal`. */
-export async function readPluginLocalSkillNames(pluginLocal: PluginLocalSkillIndex): Promise<PluginLocalSkillNames> {
+/** {@link PluginLocalSkillNames} for every location in `pluginLocal`, or the run's refusal ({@link skillParseRefusal}). */
+export async function readPluginLocalSkillNames(pluginLocal: PluginLocalSkillIndex, locationRoot: string): Promise<PluginLocalSkillNames> {
   // The first location per resolved directory, as before; their reads are independent.
   const firstByKey = new Map<string, (typeof pluginLocal.locations)[number]>();
   for (const loc of pluginLocal.locations) {
@@ -152,7 +198,11 @@ export async function readPluginLocalSkillNames(pluginLocal: PluginLocalSkillInd
   const read = await withParseDispatcher((dispatcher) =>
     mapConcurrentFailingInOrder(entries, ([, loc]) => readPluginLocalSkillName(loc.skillSourceDir, dispatcher)),
   );
-  return new Map(entries.map(([key], index) => [key, read[index] as string]));
+  return new Map(entries.map(([key], index) => {
+    const name = read[index] as SkillNameRead;
+    if (name.kind === 'refused') throw skillParseRefusal(name.refused, locationRoot);
+    return [key, name.name];
+  }));
 }
 
 /**
@@ -279,13 +329,13 @@ export const SKILLS_INCLUDE_REMEDY =
  * @param projectRoot - Absolute path to project root (where config yaml lives)
  * @param unreadable - What to do with a directory the crawl cannot list —
  *   see {@link DiscoveryUnreadablePolicy}; required, no default
- * @returns Array of discovered skills with names and source paths
+ * @returns The skills it named, with their source paths, and the SKILL.md files the parse worker refused
  */
 export async function discoverSkillsFromConfig(
   skillsConfig: SkillsConfig,
   projectRoot: string,
   unreadable: DiscoveryUnreadablePolicy,
-): Promise<DiscoveredSkill[]> {
+): Promise<SkillDiscovery> {
   const { include, exclude } = skillsConfig;
 
   const patternsByBase = groupIncludePatternsByBase(include, projectRoot);
@@ -312,8 +362,12 @@ export async function discoverSkillsFromConfig(
   const names = await withParseDispatcher((dispatcher) =>
     mapConcurrentFailingInOrder(skillPaths, (skillPath) => readSkillName(skillPath, dispatcher)),
   );
-  return skillPaths.flatMap((skillPath, index) => {
-    const name = names[index];
-    return name ? [{ name, sourcePath: skillPath }] : [];
-  });
+  const skills: DiscoveredSkill[] = [];
+  const parseRefused: ParseRefusedResource[] = [];
+  for (const [index, sourcePath] of skillPaths.entries()) {
+    const read = names[index] as SkillNameRead;
+    if (read.kind === 'refused') parseRefused.push(read.refused);
+    else if (read.name) skills.push({ name: read.name, sourcePath });
+  }
+  return { skills, parseRefused };
 }

@@ -42,15 +42,15 @@ import { silentLogger } from '../test-doubles.js';
 // question these cases exist to answer.
 // ---------------------------------------------------------------------------
 
-async function discoveredIn(cwd: string): Promise<Awaited<ReturnType<typeof discoverSkillsFromConfig>>> {
+async function discoveredIn(cwd: string): Promise<Awaited<ReturnType<typeof discoverSkillsFromConfig>>['skills']> {
   const config = loadConfig(cwd, 'source');
-  return config?.skills ? discoverSkillsFromConfig(config.skills, cwd, 'refuse') : [];
+  return config?.skills ? (await discoverSkillsFromConfig(config.skills, cwd, 'refuse')).skills : [];
 }
 
 /** The plugin-local index `vat verify` builds for `cwd`, and the declared names it reads for it. */
 async function pluginLocalIn(cwd: string): Promise<[PluginLocalSkillIndex, PluginLocalSkillNames]> {
   const index = indexPluginLocalSkills(loadConfig(cwd, 'source') ?? {}, cwd);
-  return [index, await readPluginLocalSkillNames(index)];
+  return [index, await readPluginLocalSkillNames(index, cwd)];
 }
 
 /** The `files-config-dests` phase's report over `cwd`: how many bundles it checked, and its findings. */

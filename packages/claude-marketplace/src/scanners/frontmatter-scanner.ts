@@ -17,9 +17,8 @@ const FRONTMATTER_PATTERN_IDS: ReadonlySet<string> = new Set([
 
 /**
  * Scan SKILL.md frontmatter (and prose tool references) for compatibility
- * signals. Returns evidence records for each matched pattern.
- *
- * @param route - The run's parse dispatcher: the frontmatter decode runs in the bounded worker
+ * signals. Returns evidence records for each matched pattern. `route` is the
+ * run's parse dispatcher.
  */
 export async function scanFrontmatter(
   content: string,

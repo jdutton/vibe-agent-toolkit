@@ -19,9 +19,7 @@ function isCodeBlockEvidence(record: EvidenceRecord): boolean {
 /**
  * Scan markdown content for fenced shell blocks and the external-CLI /
  * browser-auth invocations they may contain. Returns an EvidenceRecord
- * for each detected pattern.
- *
- * @param route - The run's parse dispatcher: the frontmatter decode runs in the bounded worker
+ * for each detected pattern. `route` is the run's parse dispatcher.
  */
 export async function scanCodeBlocks(
   content: string,

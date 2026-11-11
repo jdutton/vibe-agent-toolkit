@@ -72,7 +72,7 @@ import { rejectPositionalArguments } from './positional-args.js';
 import { RESOURCES_VALIDATE_EXAMINED, RESOURCES_VALIDATE_REPORT_SCHEMA } from './resources/validate-schema.js';
 import { runResourcesValidatePhase } from './resources/validate.js';
 import type { DiscoveredSkill } from './skills/command-helpers.js';
-import { discoverSkillsFromConfig, readPluginLocalSkillNames, type PluginLocalSkillNames } from './skills/skill-discovery.js';
+import { discoverSkillsFromConfig, namedSkillsOrRefuse, readPluginLocalSkillNames, type PluginLocalSkillNames } from './skills/skill-discovery.js';
 import { SKILLS_VALIDATE_EXAMINED, SKILLS_VALIDATE_REPORT_SCHEMA } from './skills/validate-schema.js';
 import { runSkillsValidatePhase } from './skills/validate.js';
 
@@ -951,13 +951,14 @@ async function runInProcessPhases(run: {
   // ONE discovery for the whole in-process half of the run: every phase below
   // asks "which skills does this project have", and each used to answer it
   // differently. `'refuse'`: a verify over a population it could not see is the
-  // green-without-checking shape this command exists to refuse — the throw is
+  // green-without-checking shape this command exists to refuse (a SKILL.md whose
+  // parse was refused has no name to check by, so it refuses too) — the throw is
   // the run's refusal, published with the phases that already finished.
-  const discoveredSkills = await discoverSkillsFromConfig(run.skills, projectRoot, 'refuse');
+  const discoveredSkills = namedSkillsOrRefuse(await discoverSkillsFromConfig(run.skills, projectRoot, 'refuse'), projectRoot);
   // ONE plugin-local index likewise, and the declared name of each plugin-local
   // skill, which keys its config exactly as the plugin build keyed it.
   const pluginLocal = indexPluginLocalSkills(config, projectRoot);
-  const pluginLocalNames = await readPluginLocalSkillNames(pluginLocal);
+  const pluginLocalNames = await readPluginLocalSkillNames(pluginLocal, projectRoot);
 
   if (phases.includes(FILES_CONFIG_DESTS)) {
     results.push(await inProcess(IN_PROCESS_PHASES[FILES_CONFIG_DESTS], () =>

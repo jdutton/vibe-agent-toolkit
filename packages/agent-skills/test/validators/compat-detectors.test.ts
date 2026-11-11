@@ -1,3 +1,4 @@
+import { isPerRunParseRefusal } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
@@ -241,6 +242,13 @@ describe('allowed-tools frontmatter spellings', () => {
     expect(await allowedToolsDeclarations(content, ROUTE)).toEqual({ tools: [], line: 0 });
     const { evidence } = await runCompatDetectors(content, 'SKILL.md', LOCATION_ROOT, ROUTE);
     expect(evidence.map(e => e.patternId)).toEqual(['FENCED_SHELL_BLOCK']);
+  });
+
+  it('rethrows a parse the worker refused: an unread block is not "no allowed-tools"', async () => {
+    const depth = 50_000;
+    const content = skill({ extraFrontmatter: `allowed-tools: [Bash]\nnested: ${'['.repeat(depth)}${']'.repeat(depth)}`, body: 'Body.' });
+    const thrown: unknown = await allowedToolsDeclarations(content, ROUTE).then(() => undefined, (error: unknown) => error);
+    expect(isPerRunParseRefusal(thrown)).toBe(true);
   });
 
   it('declares nothing when the key is absent', async () => {

@@ -21,6 +21,7 @@ import {
 } from '@vibe-agent-toolkit/agent-skills';
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
 import {
+  notAdmittedFindings,
   ResourceRegistry,
   type ProjectConfig,
   type ResourcePopulationSource,
@@ -636,7 +637,9 @@ async function validateConfiguredSkills(
 ): Promise<SkillsRun> {
   // `'refuse'`: one fewer skill at exit 0 is the drop this command must not
   // make. A directory the OS will not list is refused by code (INPUT_UNREADABLE).
-  const discovered = await discoverSkillsFromConfig(skillsConfig, cwd, 'refuse');
+  // A SKILL.md the parse worker refused has no name to key its config by: it is
+  // reported through the not-admitted contract below, never validated under a guess.
+  const { skills: discovered, parseRefused } = await discoverSkillsFromConfig(skillsConfig, cwd, 'refuse');
 
   // No early return on `discovered.length === 0`: the empty batch flows through
   // every step below unchanged — the shared context is built for zero skills
@@ -676,7 +679,14 @@ async function validateConfiguredSkills(
   // Drain the run's allow ledger AFTER the last skill — an entry matched by
   // any skill in the batch is used, so this is the first point at which
   // "matched nothing" is answerable.
-  const runIssues = sharedContext.allowLedger === undefined ? [] : allowUnusedIssues(sharedContext.allowLedger);
+  const runIssues = [
+    ...notAdmittedFindings(
+      { unreadable: [], parseRefused },
+      { locationRoot: cwd, consequence: 'its skill has no name this run can read and was not validated' },
+      config.resources?.validation ?? {},
+    ),
+    ...(sharedContext.allowLedger === undefined ? [] : allowUnusedIssues(sharedContext.allowLedger)),
+  ];
   return { results, runIssues };
 }
 

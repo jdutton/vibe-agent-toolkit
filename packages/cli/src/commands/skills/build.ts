@@ -80,7 +80,7 @@ import {
   type DiscoveredSkill,
 } from './command-helpers.js';
 import { assertScopableSkillsPath, type SkillsScopeSubject } from './scope-guard.js';
-import { discoverSkillsFromConfig } from './skill-discovery.js';
+import { discoverSkillsFromConfig, namedSkillsOrRefuse } from './skill-discovery.js';
 
 export interface SkillsBuildCommandOptions {
   skill?: string;
@@ -1257,7 +1257,7 @@ async function prepareBuild(
   logger.info(`Discovering skills from config...`);
   // `'refuse'`: a build that silently ships fewer skills is the drop this
   // command exists to prevent — the coded throw is the report's refusal.
-  const discoveredSkills = await discoverSkillsFromConfig(skillsConfig, cwd, 'refuse');
+  const discoveredSkills = namedSkillsOrRefuse(await discoverSkillsFromConfig(skillsConfig, cwd, 'refuse'), cwd);
   if (discoveredSkills.length === 0) {
     // Before the staging swap, so a glob typo never promotes an EMPTY dist/skills.
     logger.error(`No SKILL.md files found matching include patterns: ${skillsConfig.include.join(', ')}`);

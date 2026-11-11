@@ -217,14 +217,11 @@ async function parseFrontmatterFields(
 			if (typeof fm['name'] === 'string') name = fm['name'];
 			if (typeof fm['description'] === 'string') description = fm['description'];
 		} else {
-			// The worker refused the block for this run: the inventory's one
-			// refusal row, as the link walk files a refused file.
+			// A refused block: the inventory's one refusal row.
 			const refused = parseRefusedEntryFor(absolute, parsed.cause);
 			pushRow(parseErrors, refused === undefined ? { path: absolute, message: parsed.error } : parseRefusedRow(refused));
 		}
 	} catch (e) {
-		// An unreadable SKILL.md, or the parser's own throw over its bytes, is a
-		// row; a broken install — any VAT defect — is rethrown by the classifier.
 		classifyParseFailure(e);
 		parseErrors.push(recordedFailure(absolute, (e as Error).message, e));
 	}
@@ -381,10 +378,7 @@ async function walkLinkedFiles(
 			pushRow(parseErrors, parseRefusedRow(entry));
 		}
 	} catch (e) {
-		// A row only for what is the tree's: a directory the crawl could not list,
-		// and what `classifyParseFailure` allowlists. A broken install — any VAT
-		// defect — is rethrown: as a row, `vat audit` dropped it and exited 0
-		// having walked nothing.
+		// A row only for an unlistable directory or what the classifier allowlists.
 		if (!(e instanceof DirectoryListingRefusedError)) classifyParseFailure(e);
 		parseErrors.push({ path: absolute, message: `link walk failed: ${(e as Error).message}` });
 	}

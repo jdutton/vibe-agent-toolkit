@@ -16,7 +16,6 @@ import { applyTreePlan, compareCodeUnits, direntKindFollowing, everyInOrder, fol
 import { onCrawlOutput } from '@vibe-agent-toolkit/utils/crawl';
 import { Command } from 'commander';
 
-import { readPluginLocalSkillName } from '../../../commands/skills/skill-discovery.js';
 import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../../utils/command-refusal.js';
 import { loadConfig } from '../../../utils/config-loader.js';
 import { endWithReport, leftoverIssuesOf, leftoverIssuesOfWarnings, NOTHING_FINISHED, refusalReport, type FinishedWork } from '../../../utils/document-writer.js';
@@ -35,7 +34,7 @@ import { withResourcePopulationSource } from '../../../utils/resource-loader.js'
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig, pluginLocalSkillConfigEntry } from '../../../utils/skill-packaging-config.js';
 import type { PhaseOutcome } from '../../phase-utils.js';
 import { packagingFailedIssue } from '../../skills/build.js';
-import { discoverSkillsFromConfig } from '../../skills/skill-discovery.js';
+import { discoverSkillsFromConfig, namedSkillsOrRefuse, readPluginLocalSkillName, skillParseRefusal } from '../../skills/skill-discovery.js';
 import { assertMarketplaceDeclared, loadClaudeProjectConfig } from '../claude-config.js';
 
 import type { PluginBuildData } from './build-schema.js';
@@ -374,11 +373,12 @@ async function buildClaudePluginMarketplaces(
   // a plugin-local skill's bundle must exclude the OTHER skills' suites too — not
   // just its own. Discovery is not free, hence once per run rather than per skill.
   // `'refuse'`: a bundle assembled around a directory discovery could not
-  // list may ship another skill's answer key. The throw carries the classified
+  // list, or around a SKILL.md whose parse was refused (its suites are keyed by a
+  // name it has none of), may ship another skill's answer key. The throw carries the classified
   // fault (a `source` listing), which the command publishes as the table says.
   const projectSkills = skillsConfig === undefined
     ? []
-    : collectDeclaredEvalSuites(skillsConfig, await discoverSkillsFromConfig(skillsConfig, configDir, 'refuse'));
+    : collectDeclaredEvalSuites(skillsConfig, namedSkillsOrRefuse(await discoverSkillsFromConfig(skillsConfig, configDir, 'refuse'), configDir));
   logger.debug(`Project declared eval suites: ${projectSkills.length}`);
 
   // Once per run for the same reason, and it is the costlier half: resolving a skill's
@@ -1021,7 +1021,10 @@ function discoverPluginLocalSkills(
       const skillSourceDir = safePath.join(pluginSourceDir, 'skills', skillDirPath);
       // Resolved through the SAME reader `vat skills build` and `vat verify` use — per-skill
       // config is keyed by name, so two answers would mean two effective configs.
-      const skillName = await readPluginLocalSkillName(skillSourceDir, dispatcher);
+      // A SKILL.md the parse worker refused has no name to package or key config by: refused.
+      const read = await readPluginLocalSkillName(skillSourceDir, dispatcher);
+      if (read.kind === 'refused') throw skillParseRefusal(read.refused, pluginSourceDir);
+      const skillName = read.name;
       return { skillDirPath, skillPath: safePath.join(skillSourceDir, 'SKILL.md'), skillName };
     }),
   );

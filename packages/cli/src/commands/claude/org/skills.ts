@@ -43,6 +43,7 @@ import { leftoverIssueOf } from '../../../utils/document-writer.js';
 import { requireSkillZipLayout } from '../../../utils/install-plan.js';
 import { formatIssueLines } from '../../../utils/issue-rendering.js';
 import { requireInputPath } from '../../../utils/project-root-policy.js';
+import { declaredNameOrRefuse } from '../../skills/skill-discovery.js';
 import { downloadNpmPackage } from '../plugin/helpers.js';
 
 import type { OrgCommandFailure, OrgFailureOutcome } from './helpers.js';
@@ -917,7 +918,9 @@ function skillMdOf(files: readonly ArchiveEntry[], root: string): ArchiveEntry |
 function declaredNameOf(archive: OpenedArchive, entry: ArchiveEntry | undefined, unreadable: ZipEntryFailure[]): Promise<string | undefined> {
 	if (entry === undefined || entry.size > MAX_INSPECTED_DOCUMENT_BYTES) return Promise.resolve(undefined);
 	const content = inflateOrRecord(archive, entry, unreadable);
-	return content === undefined ? Promise.resolve(undefined) : declaredSkillNameIn(content.toString('utf8'));
+	if (content === undefined) return Promise.resolve(undefined);
+	// A parse the worker refused is the run's refusal, never "declares no name".
+	return declaredNameOrRefuse(toForwardSlashAnyPlatform(entry.name), declaredSkillNameIn(content.toString('utf8')), '');
 }
 
 async function sendSkillUpload(
@@ -939,7 +942,7 @@ async function sendSkillUpload(
  * title and the top-level directory the API keys it by.
  */
 async function requireDeclaredName(skillMdPath: string): Promise<string> {
-	const declared = await readDeclaredSkillName(skillMdPath);
+	const declared = await declaredNameOrRefuse(skillMdPath, readDeclaredSkillName(skillMdPath), safePath.join(skillMdPath, '..', '..'));
 	if (declared === undefined) {
 		throw new CommandRefusalError(
 			'USAGE_INVALID',

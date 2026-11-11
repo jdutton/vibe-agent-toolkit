@@ -224,7 +224,9 @@ async function buildVATProjectContext(
 
   const skillConfigs = new Map<string, SkillPackagingConfig>();
   try {
-    const discovered = await discoverSkillsFromConfig(
+    // A SKILL.md the parse worker refused has no name to key a config by, so it gets none
+    // here; this audit's own validation of that file reports the refusal under its code.
+    const { skills: discovered } = await discoverSkillsFromConfig(
       config.skills,
       scanRoot,
       degradingDiscovery(scanRoot, logger, locationRoot),

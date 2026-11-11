@@ -171,8 +171,14 @@
   `!!timestamp` or `!!binary` frontmatter root is "not a YAML mapping" in skill validation too
   (`SKILL_MISSING_FRONTMATTER`), where it used to pass as an empty mapping; an empty block is
   refused as empty, never as "not a mapping".
-- **A skill whose `SKILL.md` parse was refused is named by its directory,** never by a fallback,
-  in `vat skills` discovery and packaging output.
+- **A skill whose `SKILL.md` parse was refused has no name — never its directory's, never a
+  fallback.** `vat skills validate` and `vat skills list` report it as a
+  `RESOURCE_PARSE_LIMIT_EXCEEDED` / `RESOURCE_PARSE_WORKER_DIED` finding; `vat skills build`,
+  `vat claude plugin build`, `vat verify`, `vat ard emit`, `vat skill test configure`,
+  `vat claude plugin install` and `vat claude org skills` uploads refuse the run (exit 2) naming
+  the file and the limit; `vat audit` validates it config-free and reports the refusal on the file.
+  Reading `name` or `allowed-tools` from a refused block throws the refusal instead of answering
+  "declares nothing".
 - **`vat okf validate` names an unreadable document's real errno** (`EACCES`), not `FS_FAULT`.
 - **A link anchor into a file whose parse was refused is `LINK_TARGET_UNREADABLE`,** naming the
   refusal, as for an unreadable file — never a silent skip and never a broken anchor.

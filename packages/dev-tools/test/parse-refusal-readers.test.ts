@@ -35,10 +35,11 @@
  *   (`describeBlobRefusals(`, `notAdmittedRealizations(`), be a listed builder,
  *   or be listed in {@link POPULATION_NOT_READ_HERE}.
  *
- * - **A direct cached parse.** `parseFileCached(` / `parseContentCached(` throw
- *   a per-run refusal for one file, so a caller must report it through the one
- *   not-admitted contract every lane shares — {@link CONTRACT_READS} — or be
- *   listed in {@link DIRECT_PARSE_NOT_REPORTED_HERE}. A lane-local finding built
+ * - **A direct parse.** The cached parses and the SKILL.md name readers throw a
+ *   per-run refusal for one file, and `parseFrontmatter(` returns it, so a
+ *   caller must report it through the one not-admitted contract every lane
+ *   shares — {@link CONTRACT_READS}, a kept `parseRefusedEntryFor(` result, or a
+ *   listed reporter — or be listed in {@link DIRECT_PARSE_NOT_REPORTED_HERE}. A lane-local finding built
  *   from `parseRefusal(` alone is NOT the contract: it reaches no allow list and
  *   no severity, which is how `vat okf validate` once reported its refusals.
  *
@@ -132,20 +133,41 @@ const POPULATION_NOT_READ_HERE: Readonly<Record<string, string>> = {
     + 'bounded route and logs every refusal, which `loadResourcesWithConfig`\'s callers read (`getNotAdmitted()`).',
 };
 
-/** The single-file cached parses, which throw a per-run refusal for their one file. */
-const DIRECT_PARSES = ['parseFileCached', 'parseContentCached'] as const;
+/**
+ * The single-file parses, which refuse their one file for this run: the cached
+ * parses and the SKILL.md name readers throw the refusal, `parseFrontmatter`
+ * returns it as `{ success: false, cause }`.
+ */
+const DIRECT_PARSES = [
+  'parseFileCached',
+  'parseContentCached',
+  'parseFrontmatter',
+  'declaredSkillNameIn',
+  'readDeclaredSkillName',
+] as const;
 
 /** Where the cached parses are defined; it reports nothing itself. */
 const DIRECT_PARSE_OWNER = 'packages/resources/src/parse-dispatcher.ts';
 
 /** The not-admitted contract's entry points: each yields the `RESOURCE_PARSE_*` code and sentence under the project's allow list and severity. */
 const CONTRACT_READS = [
-  'parseRefusedEntryFor(',
   'parseRefusedEntry(',
   'parseRefusalIssue(',
   'notAdmittedIssues(',
   'notAdmittedFindings(',
 ] as const;
+
+/** The classifier: a read only when its result is kept — a bare `parseRefusedEntryFor(…);` reports nothing. */
+const CONTRACT_CLASSIFIER = 'parseRefusedEntryFor(';
+
+/**
+ * Functions that run a caller's direct parse and report its refusal through the
+ * contract themselves: a call to one discharges the caller. Asserted to still
+ * define the function and still read the contract.
+ */
+const DIRECT_PARSE_REPORTERS: Readonly<Record<string, string>> = {
+  'packages/cli/src/commands/skills/skill-discovery.ts': 'declaredNameOrRefuse',
+};
 
 /**
  * Files that parse directly and do not report a refusal through the contract
@@ -155,7 +177,17 @@ const DIRECT_PARSE_NOT_REPORTED_HERE: Readonly<Record<string, string>> = {
   'packages/agent-skills/src/post-build-checks.ts':
     'Checks the PACKAGED output VAT just wrote; a refused parse there throws and fails the build loud — there is no adopter file to allow-list.',
   'packages/agent-skills/src/parsers/frontmatter-parser.ts':
-    'Returns the refusal as its result\'s `cause`; every caller reports it through `parseRefusalIssue(` (held by this same rule at their own call sites).',
+    'Defines `parseFrontmatter`: it returns the refusal as its result\'s `cause`, and each caller is held by this same rule at its own call site.',
+  'packages/agent-skills/src/skill-identity.ts':
+    'Defines the name readers: `declaredSkillNameIn` rethrows a refused parse, and each caller is held by this same rule at its own call site.',
+  'packages/agent-skills/src/validators/compat-detectors.ts':
+    '`allowedToolsDeclarations` rethrows a refused parse. Every lane that reaches it parsed the same file first and reported the refusal there; '
+    + 'the compatibility analyzer names the file under `unchecked`.',
+  'packages/agent-skills/src/import.ts':
+    '`vat agent import` converts the one SKILL.md the user named: a refused parse refuses the run (`INPUT_UNREADABLE`) with the parser\'s sentence. '
+    + 'There is no project allow list to consult.',
+  'packages/claude-marketplace/src/settings/settings-compat-checker.ts':
+    'A refused parse names the SKILL.md under `unchecked` with the parser\'s sentence; a settings conflict check has no allow list.',
 };
 
 /** What a comment line starts with, once indentation is trimmed. */
@@ -315,18 +347,49 @@ describe('every population reports its parse refusals', () => {
   });
 });
 
-describe('every direct cached parse reports its refusal through the one contract', () => {
+/**
+ * Whether `body` keeps the result of a `call` somewhere — assigned, returned,
+ * passed, thrown. A call that opens its statement (`await` or `void` aside)
+ * discards it.
+ */
+function keepsResultOf(body: string, call: string): boolean {
+  for (let at = body.indexOf(call); at !== -1; at = body.indexOf(call, at + 1)) {
+    const before = body.slice(body.lastIndexOf('\n', at) + 1, at).trim();
+    if (!['', 'await', 'void'].includes(before) && !continuesName(body[at - 1])) return true;
+  }
+  return false;
+}
+
+/** Whether `body` reports a refusal through the contract, itself or through a listed reporter. */
+function readsContract(body: string): boolean {
+  return readsAny(body, CONTRACT_READS)
+    || keepsResultOf(body, CONTRACT_CLASSIFIER)
+    || Object.values(DIRECT_PARSE_REPORTERS).some((name) => callsFunction(body, name));
+}
+
+describe('every direct parse reports its refusal through the one contract', () => {
   const files = new Map([...packageSources()].map(([file, text]) => [file, code(text)]));
   const parses = (body: string): boolean => DIRECT_PARSES.some((name) => callsFunction(body, name));
   const parsers = [...files].filter(([file, body]) => file !== DIRECT_PARSE_OWNER && parses(body));
 
-  it('finds the direct parsers — at least the OKF lane', () => {
-    expect(parsers.map(([file]) => file)).toContain('packages/resources/src/okf/validate.ts');
+  it('finds the direct parsers — the OKF lane, and the SKILL.md name readers\' callers', () => {
+    expect(parsers.map(([file]) => file)).toEqual(expect.arrayContaining([
+      'packages/resources/src/okf/validate.ts',
+      'packages/cli/src/commands/claude/plugin/install.ts',
+      'packages/claude-marketplace/src/inventory/extract-skill.ts',
+    ]));
+  });
+
+  it('keeps a classified refusal only when the result is used', () => {
+    expect(keepsResultOf('  parseRefusedEntryFor(p, e);\n', CONTRACT_CLASSIFIER)).toBe(false);
+    expect(keepsResultOf('  await parseRefusedEntryFor(p, e);\n', CONTRACT_CLASSIFIER)).toBe(false);
+    expect(keepsResultOf('  const refused = parseRefusedEntryFor(p, e);\n', CONTRACT_CLASSIFIER)).toBe(true);
+    expect(keepsResultOf('  return parseRefusedEntryFor(p, e);\n', CONTRACT_CLASSIFIER)).toBe(true);
   });
 
   it('reports through the not-admitted contract, or is listed as not reported here', () => {
     const unreported = parsers
-      .filter(([file, body]) => !readsAny(body, CONTRACT_READS) && DIRECT_PARSE_NOT_REPORTED_HERE[file] === undefined)
+      .filter(([file, body]) => !readsContract(body) && DIRECT_PARSE_NOT_REPORTED_HERE[file] === undefined)
       .map(([file]) => file);
     expect(unreported).toEqual([]);
   });
@@ -334,7 +397,16 @@ describe('every direct cached parse reports its refusal through the one contract
   it('lists as not reported here only files that still parse directly and do not report', () => {
     const stale = Object.keys(DIRECT_PARSE_NOT_REPORTED_HERE).filter((file) => {
       const body = files.get(file);
-      return body === undefined || !parses(body) || readsAny(body, CONTRACT_READS);
+      return body === undefined || !parses(body) || readsContract(body);
+    });
+    expect(stale).toEqual([]);
+  });
+
+  it('lists as reporters only files that still define the function and still read the contract', () => {
+    const stale = Object.entries(DIRECT_PARSE_REPORTERS).filter(([file, name]) => {
+      const body = files.get(file);
+      return body === undefined || !body.includes(`function ${name}(`)
+        || !(readsAny(body, CONTRACT_READS) || keepsResultOf(body, CONTRACT_CLASSIFIER));
     });
     expect(stale).toEqual([]);
   });

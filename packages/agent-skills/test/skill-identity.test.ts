@@ -1,12 +1,16 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
+import { isPerRunParseRefusal } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { readDeclaredSkillName } from '../src/skill-identity.js';
+import { declaredSkillNameIn, readDeclaredSkillName } from '../src/skill-identity.js';
 
 import { setupParseRoute } from './test-helpers.js';
+
+/** Nested past the worker's depth limit, so its parse is refused for the run. */
+const DEEP_SKILL = `---\nname: deep\nnested: ${'['.repeat(50_000)}${']'.repeat(50_000)}\n---\n# Deep\n`;
 
 /** Every parse in this file runs in the bounded worker, on one dispatcher. */
 const ROUTE = setupParseRoute();
@@ -80,5 +84,14 @@ describe('readDeclaredSkillName', () => {
     await withSyncFsRefused('readFileSync', path, 'EACCES', async () => {
       await expect(readDeclaredSkillName(path, ROUTE)).rejects.toThrow(/EACCES/);
     });
+  });
+  it('rethrows a parse the worker refused instead of reporting the skill as nameless', async () => {
+    // A refusal declares nothing THIS run could read; `undefined` would send a
+    // caller to its fallback (the directory leaf) and rename the skill.
+    const path = writeSkillMdRaw(tempDir, 'parse-refused', DEEP_SKILL);
+    const thrown: unknown = await readDeclaredSkillName(path, ROUTE).then(() => undefined, (error: unknown) => error);
+    expect(isPerRunParseRefusal(thrown)).toBe(true);
+    const fromBytes: unknown = await declaredSkillNameIn(DEEP_SKILL, ROUTE).then(() => undefined, (error: unknown) => error);
+    expect(isPerRunParseRefusal(fromBytes)).toBe(true);
   });
 });

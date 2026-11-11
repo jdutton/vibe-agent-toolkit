@@ -268,9 +268,7 @@ function modelUnavailabilityConflicts(
  *
  * @param pluginDir - The plugin root
  * @param effectiveSettings - The merged settings to check against
- * @param dispatcher - The RUN's parse dispatcher, held by the caller across every
- *   plugin it checks. Required: a dispatcher opened per call started and tore
- *   down a worker pool per plugin, which `vat audit` paid once per plugin.
+ * @param dispatcher - The run's parse dispatcher, shared across plugins
  */
 export async function checkSettingsCompatibility(
   pluginDir: string,
@@ -281,8 +279,7 @@ export async function checkSettingsCompatibility(
 
   // Each SKILL.md is read ONCE, here, and every lane below consults the same
   // reading — a file the checker could not read is unchecked for all of them.
-  // The reads are independent and run concurrently; their results fold in file order.
-  // The frontmatter decode runs in the bounded worker, on the run's dispatcher.
+  // The reads run concurrently; their results fold in file order.
   const reads = await mapWithConcurrency(skillFiles, async (path) => ({ path, read: await parseSkillFrontmatter(path, dispatcher) }));
   const skills: ReadSkill[] = [];
   for (const { path, read } of reads) {

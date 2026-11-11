@@ -147,6 +147,24 @@ describe('analyzeCompatibility — a file the analyzer cannot parse', () => {
     expect(result.fileCounts.hookFiles).toBe(0);
   });
 
+  it('lists a SKILL.md whose frontmatter parse was refused under `unchecked`, never as declaring no tools', async () => {
+    const { root } = getFixture();
+    const plugin = safePath.join(root, 'refused-parse-plugin');
+    const depth = 50_000;
+    await fs.mkdir(safePath.join(plugin, '.claude-plugin'), { recursive: true });
+    await fs.writeFile(safePath.join(plugin, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'refused-parse' }), 'utf-8');
+    await writeSkill(
+      safePath.join(plugin, SKILLS, 'deep'),
+      `---\nname: deep\ndescription: d\nallowed-tools: [Bash]\nnested: ${'['.repeat(depth)}${']'.repeat(depth)}\n---\n\nBody.\n`,
+    );
+
+    const result = await analyzeCompatibility(plugin, plugin, parseDispatcher());
+
+    expect(result.unchecked.map((u) => u.path)).toEqual(['skills/deep/SKILL.md']);
+    expect(result.unchecked[0]?.reason).toMatch(/limit/);
+    expect(result.fileCounts.skillFiles).toBe(0);
+  });
+
   it('reports nothing unchecked for a plugin whose every file it read', async () => {
     const { root } = getFixture();
     const clean = safePath.join(root, 'clean-plugin');

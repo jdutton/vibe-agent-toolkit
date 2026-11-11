@@ -239,9 +239,9 @@ async function marketplaceOutcome(
 /** Agent-instruction findings `vat verify`'s packaged-content phase publishes for `root`. */
 async function verifyFindings(root: string): Promise<string[]> {
   const config = loadConfig(root, 'source');
-  const discovered = config?.skills ? await discoverSkillsFromConfig(config.skills, root, 'refuse') : [];
+  const discovered = config?.skills ? (await discoverSkillsFromConfig(config.skills, root, 'refuse')).skills : [];
   const pluginLocal = indexPluginLocalSkills(config ?? {}, root);
-  return checkPackagedAgentInstructionFiles(root, discovered, pluginLocal, await readPluginLocalSkillNames(pluginLocal)).issues.map((i) => String(i.location));
+  return checkPackagedAgentInstructionFiles(root, discovered, pluginLocal, await readPluginLocalSkillNames(pluginLocal, root)).issues.map((i) => String(i.location));
 }
 
 /** Every agent-instruction issue `vat audit <target>` publishes, AFTER severity resolution. */

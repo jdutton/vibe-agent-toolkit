@@ -49,9 +49,7 @@ async function readPluginManifest(pluginDir: string): Promise<PluginManifest> {
   const parsed = JSON.parse(raw) as Record<string, unknown>;
 
   if (!parsed['name'] || typeof parsed['name'] !== 'string') {
-    // A `SyntaxError`, as `JSON.parse` throws for a manifest that is not JSON:
-    // both are the manifest's content refusing analysis, which
-    // `classifyCompatibilityFailure` reports as the plugin's, not VAT's.
+    // A `SyntaxError`, like non-JSON: the plugin's fault, not VAT's.
     throw new SyntaxError(`plugin.json missing required "name" field in ${manifestPath}`);
   }
 
@@ -102,18 +100,9 @@ function uncheckedEntry(absolutePath: string, reason: string, locationRoot: stri
 }
 
 /**
- * Whose fault a compatibility-analysis failure is — the one rule for the
- * analyzer's per-file catch and for a caller that catches a whole plugin's
- * analysis (`vat audit`).
- *
- * The plugin's: a JSON config or manifest whose content refuses analysis
- * (`malformed`: a `SyntaxError`, as `JSON.parse` throws and as the manifest
- * reader throws for a manifest with no `name`), and everything
- * `classifyParseFailure` allowlists (a read the OS refused, a per-run parse
- * refusal, the parser's own throw over the bytes). Everything else — a broken
- * parser install, any other VAT defect — is rethrown untouched: reported as a
- * plugin "that could not be analyzed", it let `vat audit` exit 0 over a run
- * that analyzed nothing.
+ * Whose fault a compatibility-analysis failure is, for the per-file catch and
+ * for `vat audit`'s whole-plugin catch: a `SyntaxError` is `malformed`, the rest
+ * is `classifyParseFailure`'s answer — which rethrows any VAT defect.
  *
  * @param error - What a scan, or a whole plugin's analysis, threw
  * @returns The kind of failure that is the plugin's
@@ -262,9 +251,7 @@ export interface AnalyzeCompatibilityOptions {
  *   `vat audit`) MUST pass its invocation scan root, not each plugin directory,
  *   or the report mixes coordinate systems. Required: "relative to what?" has no
  *   safe default.
- * @param dispatcher - The RUN's parse dispatcher, held by the caller across every
- *   plugin it analyzes. Required: one opened per call started and tore down a
- *   worker pool per plugin.
+ * @param dispatcher - The run's parse dispatcher, shared across plugins
  * @param options - Optional analysis options; see {@link AnalyzeCompatibilityOptions}.
  *   `options.configTargets` lets callers thread a config-layer target declaration
  *   through to the verdict engine — plugin.json / marketplace.json targets still
@@ -274,9 +261,8 @@ export interface AnalyzeCompatibilityOptions {
  *   read, list or parse. Those are named per path and the rest is analyzed;
  *   the result is a verdict over the files it names as read.
  * @throws Only for a failure that is plugin-wide: no valid
- *   `.claude-plugin/plugin.json`, or a plugin root that cannot be listed — and
- *   for a VAT defect (a broken parser install), which is never a file's. A
- *   caller classifies what it caught with {@link classifyCompatibilityFailure}.
+ *   `.claude-plugin/plugin.json`, an unlistable plugin root, or a VAT defect
+ *   ({@link classifyCompatibilityFailure} tells which).
  */
 export async function analyzeCompatibility(
   pluginDir: string,
@@ -299,10 +285,7 @@ export async function analyzeCompatibility(
 
   // Each file is scanned on its own: one the filesystem refuses, or one whose
   // JSON will not parse, is named under `unchecked` and the rest are still
-  // analyzed. This used to throw out of the whole plugin. The scans are
-  // read-only and run concurrently, on the run's parse dispatcher; their results
-  // fold in file order. A broken parser install — or any other VAT defect — is
-  // the run's failure, never a file's: `classifyCompatibilityFailure` rethrows it.
+  // analyzed; results fold in file order. A VAT defect is rethrown.
   const outcomes = await mapWithConcurrency(files, async (relativePath) => {
     const fullPath = safePath.join(pluginDir, relativePath);
     try {

@@ -12,7 +12,7 @@
  * is called against every emitted record).
  */
 
-import type { ParseRoute } from '@vibe-agent-toolkit/resources';
+import { isPerRunParseRefusal, type ParseRoute } from '@vibe-agent-toolkit/resources';
 import { CODE_REGISTRY, type IssueCode, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
@@ -82,6 +82,7 @@ function* iterCodeBlocks(
  * the key; `{ tools: [], line: 0 }` when the key is absent or the frontmatter
  * does not parse (the skill validator names that file
  * `SKILL_MISSING_FRONTMATTER` on the same run — nothing is read out of it here).
+ * A block the parse worker refused for this run throws that refusal.
  *
  * 🚩 This used to be a hand parser that saw ONLY the `[…]` flow form and split
  * it on commas. Claude Code's documented spelling is space-separated, and a
@@ -98,7 +99,11 @@ export async function allowedToolsDeclarations(
   // FAILURE at the seam — `parseFrontmatter` refuses it — so there is no shape
   // left for this reader to guard against on its own.
   const parsed = await parseFrontmatter(content, route);
-  if (!parsed.success) return { tools: [], line: 0 };
+  if (!parsed.success) {
+    // Refused for this run is not "declares nothing": the caller names the file unchecked.
+    if (isPerRunParseRefusal(parsed.cause)) throw parsed.cause;
+    return { tools: [], line: 0 };
+  }
   const tools = allowedToolsOf(parsed.frontmatter['allowed-tools']) ?? [];
   if (tools.length === 0) return { tools: [], line: 0 };
 

@@ -51,7 +51,7 @@ vi.mock('../../../src/utils/config-loader.js', async (importOriginal) => ({
 }));
 vi.mock('../../../src/commands/skills/skill-discovery.js', async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  discoverSkillsFromConfig: () => Promise.resolve(harness.discovered),
+  discoverSkillsFromConfig: () => Promise.resolve({ skills: harness.discovered, parseRefused: [] }),
 }));
 vi.mock('../../../src/utils/project-root-policy.js', async (importOriginal) => ({
   ...(await importOriginal<object>()),
