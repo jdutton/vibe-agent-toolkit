@@ -35,6 +35,13 @@
  *   (`describeBlobRefusals(`, `notAdmittedRealizations(`), be a listed builder,
  *   or be listed in {@link POPULATION_NOT_READ_HERE}.
  *
+ * - **A direct cached parse.** `parseFileCached(` / `parseContentCached(` throw
+ *   a per-run refusal for one file, so a caller must report it through the one
+ *   not-admitted contract every lane shares — {@link CONTRACT_READS} — or be
+ *   listed in {@link DIRECT_PARSE_NOT_REPORTED_HERE}. A lane-local finding built
+ *   from `parseRefusal(` alone is NOT the contract: it reaches no allow list and
+ *   no severity, which is how `vat okf validate` once reported its refusals.
+ *
  * ⚠️ The detector is textual: a crawl reached through a name not listed here —
  * a new builder — is invisible until it is added to {@link BUILDERS} or
  * {@link POPULATION_BUILDERS}.
@@ -123,6 +130,32 @@ const POPULATION_NOT_READ_HERE: Readonly<Record<string, string>> = {
   'packages/cli/src/utils/resource-loader.ts':
     'the population only ENUMERATES (`ResourcePopulationSource` hands the registry paths): the registry parses each on its own '
     + 'bounded route and logs every refusal, which `loadResourcesWithConfig`\'s callers read (`getNotAdmitted()`).',
+};
+
+/** The single-file cached parses, which throw a per-run refusal for their one file. */
+const DIRECT_PARSES = ['parseFileCached', 'parseContentCached'] as const;
+
+/** Where the cached parses are defined; it reports nothing itself. */
+const DIRECT_PARSE_OWNER = 'packages/resources/src/parse-dispatcher.ts';
+
+/** The not-admitted contract's entry points: each yields the `RESOURCE_PARSE_*` code and sentence under the project's allow list and severity. */
+const CONTRACT_READS = [
+  'parseRefusedEntryFor(',
+  'parseRefusedEntry(',
+  'parseRefusalIssue(',
+  'notAdmittedIssues(',
+  'notAdmittedFindings(',
+] as const;
+
+/**
+ * Files that parse directly and do not report a refusal through the contract
+ * themselves, with how it still reaches the user.
+ */
+const DIRECT_PARSE_NOT_REPORTED_HERE: Readonly<Record<string, string>> = {
+  'packages/agent-skills/src/post-build-checks.ts':
+    'Checks the PACKAGED output VAT just wrote; a refused parse there throws and fails the build loud — there is no adopter file to allow-list.',
+  'packages/agent-skills/src/parsers/frontmatter-parser.ts':
+    'Returns the refusal as its result\'s `cause`; every caller reports it through `parseRefusalIssue(` (held by this same rule at their own call sites).',
 };
 
 /** What a comment line starts with, once indentation is trimmed. */
@@ -277,6 +310,31 @@ describe('every population reports its parse refusals', () => {
     const stale = Object.entries(POPULATION_REPORTERS).filter(([file, name]) => {
       const body = files.get(file);
       return body === undefined || !body.includes(`function ${name}<`) && !body.includes(`function ${name}(`) || !readsAny(body, POPULATION_READS);
+    });
+    expect(stale).toEqual([]);
+  });
+});
+
+describe('every direct cached parse reports its refusal through the one contract', () => {
+  const files = new Map([...packageSources()].map(([file, text]) => [file, code(text)]));
+  const parses = (body: string): boolean => DIRECT_PARSES.some((name) => callsFunction(body, name));
+  const parsers = [...files].filter(([file, body]) => file !== DIRECT_PARSE_OWNER && parses(body));
+
+  it('finds the direct parsers — at least the OKF lane', () => {
+    expect(parsers.map(([file]) => file)).toContain('packages/resources/src/okf/validate.ts');
+  });
+
+  it('reports through the not-admitted contract, or is listed as not reported here', () => {
+    const unreported = parsers
+      .filter(([file, body]) => !readsAny(body, CONTRACT_READS) && DIRECT_PARSE_NOT_REPORTED_HERE[file] === undefined)
+      .map(([file]) => file);
+    expect(unreported).toEqual([]);
+  });
+
+  it('lists as not reported here only files that still parse directly and do not report', () => {
+    const stale = Object.keys(DIRECT_PARSE_NOT_REPORTED_HERE).filter((file) => {
+      const body = files.get(file);
+      return body === undefined || !parses(body) || readsAny(body, CONTRACT_READS);
     });
     expect(stale).toEqual([]);
   });

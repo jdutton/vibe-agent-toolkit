@@ -84,7 +84,7 @@ function row(overrides: Partial<LoadedRow> & Pick<LoadedRow, 'path'>): LoadedRow
 function answer(rows: readonly LoadedRow[]): LoadedContextAnswer {
   return {
     kind: 'answer', input: '', directory: '', file: null, rows,
-    conditions: [], overBudgetRules: [], unattributedImports: [],
+    conditions: [], overBudgetRules: [], unattributedImports: [], refused: [],
   };
 }
 

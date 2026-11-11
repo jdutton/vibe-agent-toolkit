@@ -98,7 +98,7 @@
  */
 
 import { once } from 'node:events';
-import { availableParallelism } from 'node:os';
+import { availableParallelism, totalmem } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 
@@ -112,10 +112,12 @@ import {
   heapBounds,
   heapBreached,
   type HeapBounds,
+  memoryBoundedPool,
   type ParseLimitName,
   type ParseLimits,
   ParseDecodeDefectError,
   ParseLimitError,
+  reviveParserThrow,
   ParseWorkerDiedError,
   resolveParseLimits,
   workerHeapCeilingMb,
@@ -333,6 +335,39 @@ export interface ParseWorkerFailure {
   message: string;
   stack?: string;
   code?: string;
+  /**
+   * Set only when the PARSER threw this over the document's bytes — never for a
+   * loader, cache or protocol failure. The parent revives a branded failure as
+   * a branded throw (`reviveParserThrow`), the one failure a lane may store as the document's.
+   */
+  fromDocument?: true;
+}
+
+/**
+ * Flatten a thrown value into something structured clone can carry.
+ *
+ * `code` is the load-bearing field: `isParserUnavailable` matches on it as well
+ * as on `instanceof`, and an error rebuilt in the parent is necessarily a plain
+ * `Error`. Dropping the code would silently downgrade a broken VAT install into
+ * an ordinary per-document failure — the exact defect `ParserUnavailableError`
+ * exists to close.
+ *
+ * @param error - Whatever the worker caught
+ * @param fromDocument - Whether the PARSER threw it over the bytes — see {@link ParseWorkerFailure.fromDocument}
+ * @returns The failure as plain data, with no undefined-valued keys
+ */
+export function describeParseFailure(error: unknown, fromDocument: boolean): ParseWorkerFailure {
+  const brand = fromDocument ? { fromDocument: true as const } : {};
+  if (!(error instanceof Error)) return { name: 'Error', message: String(error), ...brand };
+
+  const code: unknown = (error as { code?: unknown }).code;
+  return {
+    name: error.name,
+    message: error.message,
+    ...(error.stack === undefined ? {} : { stack: error.stack }),
+    ...(typeof code === 'string' ? { code } : {}),
+    ...brand,
+  };
 }
 
 /**
@@ -655,6 +690,21 @@ function resolveWorkerEntry(): string {
   return found;
 }
 
+/** The worker entry's file name, named in a verdict when it could not be resolved at all. */
+const WORKER_ENTRY_NAME = 'parse-worker.js';
+
+/**
+ * The verdict every job fails with once the install is judged broken.
+ *
+ * @param job - A job the verdict lands on, to name the parser it needed; none names markdown
+ * @param entry - The worker entry that could not start, or its file name when none resolved
+ * @param cause - What failed
+ * @returns A parser-unavailable error, which every lane rethrows loud (`isParserUnavailable`)
+ */
+function unavailableFor(job: PendingJob | undefined, entry: string, cause: unknown): ParserUnavailableError {
+  return new ParserUnavailableError(job === undefined ? 'markdown' : moduleKindOf(job.request), entry, cause);
+}
+
 /**
  * The worker count a pool picks when the caller names none.
  *
@@ -692,21 +742,14 @@ function attachContent(facts: ParseWireFacts, content: string, byteLength: numbe
 }
 
 /**
- * Rebuild a thrown parser failure on this side of the boundary.
- *
- * Not the original class — structured clone cannot carry one — but it wears the
- * original `name`, `message`, `stack` and, critically, `code`. See
- * {@link ParseWorkerFailure}.
+ * Rebuild a thrown parser failure on this side of the boundary — branded only
+ * when the worker says the parser threw it from the bytes ({@link reviveParserThrow}).
  *
  * @param failure - The flattened failure
  * @returns An error the toolkit's existing classifiers still recognise
  */
 function reviveFailure(failure: ParseWorkerFailure): Error {
-  const error: Error & { code?: string } = new Error(failure.message);
-  error.name = failure.name;
-  if (failure.stack !== undefined) error.stack = failure.stack;
-  if (failure.code !== undefined) error.code = failure.code;
-  return error;
+  return reviveParserThrow(failure, failure.fromDocument === true);
 }
 
 /**
@@ -905,7 +948,7 @@ class WorkerParsePool implements ParsePool {
   /** Assign queued jobs to idle threads, spawning up to {@link size} of them. */
   #pump(): void {
     if (this.#unavailable !== undefined) {
-      this.#failQueue(this.#unavailable);
+      this.#failAll(this.#unavailable);
       return;
     }
     while (this.#queue.length > 0) {
@@ -1010,7 +1053,8 @@ class WorkerParsePool implements ParsePool {
    * A thread that never posted {@link ParseWorkerReady} could not load its own
    * module graph, which no document can cause; nor can
    * {@link DEATHS_BEFORE_UNAVAILABLE} deaths in a row with no answer between
-   * them be the documents' doing. Either way the install is broken: every job,
+   * them be the documents' doing — a death counts only while the thread held a
+   * job (or had not loaded), never one that died idle. Either way the install is broken: every job,
    * held, queued or yet to come, fails with a parser-unavailable error, which
    * every lane rethrows loud. Anything less is one per-run death of one job.
    */
@@ -1019,9 +1063,13 @@ class WorkerParsePool implements ParsePool {
     // Reported by its `error`, the thread is still exiting: it counts against
     // `size` until its `exit`, like a thread terminated at a limit.
     if (!poolWorker.exited) this.#terminating.add(poolWorker);
-    this.#countDeath(poolWorker, error);
+    // Only a thread that held a job, or never loaded, says anything about the
+    // install. One that died idle took no document with it and is simply
+    // replaced; counting it would let three idle deaths refuse a document
+    // nothing was wrong with.
+    if (poolWorker.job !== null || !poolWorker.ready) this.#countDeath(poolWorker, error);
     this.#abandon(poolWorker, this.#unavailable ?? error);
-    if (this.#unavailable !== undefined) this.#failQueue(this.#unavailable);
+    if (this.#unavailable !== undefined) this.#failAll(this.#unavailable);
   }
 
   /**
@@ -1044,11 +1092,10 @@ class WorkerParsePool implements ParsePool {
    * @returns The parser-unavailable error every job fails with from now on
    */
   #brokenInstall(poolWorker: PoolWorker, error: Error): ParserUnavailableError {
-    const kind = poolWorker.job === null ? 'markdown' : moduleKindOf(poolWorker.job.request);
     const cause = poolWorker.ready
       ? new Error(`${String(this.#consecutiveDeaths)} parse workers in a row died, or ran out of time before their parser loaded, with no answer between them; the last: ${error.message}`)
       : error;
-    return new ParserUnavailableError(kind, poolWorker.entry, cause);
+    return unavailableFor(poolWorker.job ?? this.#queue[0], poolWorker.entry, cause);
   }
 
   #idleWorker(): PoolWorker | undefined {
@@ -1058,15 +1105,18 @@ class WorkerParsePool implements ParsePool {
   /**
    * Start one more thread, or answer `undefined` when the ceiling is reached.
    *
-   * A worker entry that cannot be resolved is not transient — no later job
-   * would fare better — so it fails every queued job rather than being retried
-   * once per document.
+   * A worker entry that cannot be resolved, or a thread that cannot be
+   * constructed, is not transient — no later job would fare better — and it is
+   * the install's fault, never a document's: the pool is judged unavailable,
+   * so every job held, queued or yet to come fails with a parser-unavailable
+   * error every lane rethrows loud. A plain `Error` here was once stored as
+   * `BLOB_PARSE_FAILED` against every document in the corpus.
    */
   #spawn(): PoolWorker | undefined {
     if (this.#workers.length + this.#terminating.size >= this.size) return undefined;
 
     let worker: Worker;
-    let entry: string;
+    let entry: string | undefined;
     try {
       entry = resolveWorkerEntry();
       // The stack is enforced by V8 itself, per thread: a breach throws a
@@ -1082,7 +1132,8 @@ class WorkerParsePool implements ParsePool {
         },
       });
     } catch (error) {
-      this.#failQueue(error instanceof Error ? error : new Error(String(error)));
+      this.#unavailable ??= unavailableFor(this.#queue[0], entry ?? WORKER_ENTRY_NAME, error);
+      this.#failAll(this.#unavailable);
       return undefined;
     }
 
@@ -1188,9 +1239,21 @@ class WorkerParsePool implements ParsePool {
     this.#notifyDrained();
   }
 
-  /** Reject everything outstanding — used when no thread can ever be started. */
-  #failQueue(error: Error): void {
+  /**
+   * Reject everything outstanding once the install is judged broken: every
+   * queued job, and every job a live thread still holds (its thread is
+   * stopped, since nothing it answers can be trusted over the verdict).
+   *
+   * @param error - The pool's parser-unavailable verdict
+   */
+  #failAll(error: Error): void {
     for (const job of this.#queue.splice(0, this.#queue.length)) job.reject(error);
+    // Re-entrant: stopping one thread pumps, which lands back here, so each
+    // holder is re-checked for its job rather than trusted from the snapshot
+    // (`#terminate` removes threads from `#workers` as it goes).
+    for (const poolWorker of this.#workers.filter((candidate) => candidate.job !== null)) {
+      if (poolWorker.job !== null) this.#terminate(poolWorker, error);
+    }
     this.#notifyDrained();
   }
 
@@ -1344,6 +1407,21 @@ async function closeWorker(poolWorker: PoolWorker): Promise<void> {
 }
 
 /**
+ * The memory this process may use: a container's limit when one is set and
+ * below the machine's, otherwise the machine's.
+ *
+ * `process.constrainedMemory()` answers 0 where no limit applies, and on some platforms
+ * a huge sentinel, so it is only ever taken when it is the smaller.
+ *
+ * @returns Bytes
+ */
+function machineMemoryBytes(): number {
+  const total = totalmem();
+  const constrained = process.constrainedMemory();
+  return constrained > 0 ? Math.min(constrained, total) : total;
+}
+
+/**
  * Create a parse pool.
  *
  * Spawns nothing and loads no parser — see property 3 in the module docstring.
@@ -1367,9 +1445,13 @@ export function createParsePool(options?: ParsePoolOptions): ParsePool {
   const size =
     requested === undefined ? defaultParsePoolSize() : Math.max(1, Math.floor(requested));
   const cacheDir = options?.cacheDir;
-  const limits = resolveParseLimits(options?.limits);
+  const requestedLimits = resolveParseLimits(options?.limits);
+  // The one choke point every width passes, pinned or estimated: the pool's
+  // worst-case heap is held inside this machine's memory (`memoryBoundedPool`).
+  const bounded = memoryBoundedPool({ size, heapMb: requestedLimits.heapMb }, machineMemoryBytes());
+  const limits: ParseLimits = { ...requestedLimits, heapMb: bounded.heapMb };
   // Conditional spread, never `{ cacheDir: undefined }`: `workerData` is
   // structured-cloned, and an own property valued `undefined` is not the same as
   // an absent one to the `in` check on the other side.
-  return new WorkerParsePool(size, cacheDir === undefined ? { limits } : { cacheDir, limits });
+  return new WorkerParsePool(bounded.size, cacheDir === undefined ? { limits } : { cacheDir, limits });
 }

@@ -69,6 +69,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ParseCache, ParserUnavailableError } from '../src/parse-cache.js';
 import type { ParsePoolPolicy } from '../src/parse-dispatcher.js';
+import { reviveParserThrow } from '../src/parse-limits.js';
 import { createParsePool, type ParsePool, type ParsePoolOptions } from '../src/parse-pool.js';
 import { BLOB_PARSE_FAILED, populateBlobs } from '../src/projection/blob-population.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
@@ -217,15 +218,22 @@ describe('a parser-load failure during blob derivation', () => {
  * unparseable file, which is the failure the catch exists to prevent.
  */
 describe('an ordinary parser failure during blob derivation', () => {
+  // As the pool revives them: a throw the worker saw the PARSER make from the
+  // bytes carries the worker's `fromDocument` brand (`reviveParserThrow`), its own
+  // name, message and code carried across.
   const ORDINARY_FAILURES = [
     // No `code` at all: the shape a parser's own `throw new Error(...)` has.
-    { label: 'a plain Error with no code', error: new Error('unexpected token') },
+    { label: 'a plain Error with no code', error: reviveParserThrow({ name: 'Error', message: 'unexpected token' }, true) },
     // A `code`, but one that reaches the catch from the parse rather than from
     // the load — proves the catch still swallows a coded error, so the guard is
-    // the one constructed type and not a resurrected code check.
+    // the brand and not a resurrected code check.
     {
       label: 'a coded error thrown by the parse',
-      error: codedError('ERR_INVALID_ARG_TYPE', 'The "input" argument must be of type string'),
+      error: reviveParserThrow({
+        name: 'TypeError',
+        message: 'The "input" argument must be of type string',
+        code: 'ERR_INVALID_ARG_TYPE',
+      }, true),
     },
   ];
 
@@ -241,6 +249,26 @@ describe('an ordinary parser failure during blob derivation', () => {
     expect(conditions[0]?.message).toContain('parser threw on these bytes');
     // Content-addressed and shared across repositories: no path belongs in it.
     expect(conditions[0]?.message).not.toMatch(/ at "/);
+  });
+});
+
+/**
+ * Only a throw the PARSER made from the bytes is a fact about them. Anything
+ * else the pool rejects with — a worker entry that cannot be found, a reply that
+ * could not be posted, a protocol defect — arrives as a plain error with no
+ * brand, and storing it as `BLOB_PARSE_FAILED` would file VAT's own defect
+ * under the bytes' content key, served to every repository that holds them.
+ */
+describe('a failure no parser produced from the bytes', () => {
+  it.each([
+    { label: 'a plain Error with no code', error: new Error('Cannot locate VAT\'s parse worker.') },
+    { label: 'a coded error', error: codedError('ERR_WORKER_INIT_FAILED', 'the worker could not start') },
+  ])('is rethrown loud and stores nothing: $label', async ({ error }) => {
+    failures.parse = error;
+    const builder = await baseBuilderForRoot(suite.tempDir);
+
+    await expect(populateBlobs(builder, { parseCache: NO_CACHE, parsePool: failingPolicy() })).rejects.toBe(error);
+    expect(conditionsWithCode(builder.build(), BLOB_PARSE_FAILED)).toEqual([]);
   });
 });
 

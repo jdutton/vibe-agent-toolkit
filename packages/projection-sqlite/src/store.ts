@@ -95,7 +95,7 @@
  * write just recorded, inside the same transaction.
  *
  * 🔑 Evicting a key a surviving extent still references is SAFE — that is what
- * makes a global window admissible here and not for extents. `blobFactsCover`
+ * makes a global window admissible here and not for extents. `uncoveredContentKeys`
  * turns a missing key into a MISS, so the cost is one cold re-derivation rather
  * than a partial projection.
  */

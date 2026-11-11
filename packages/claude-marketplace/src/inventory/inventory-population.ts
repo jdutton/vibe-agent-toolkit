@@ -57,12 +57,14 @@ import {
   notAdmittedRealizations,
   populate,
   populationOracles,
+  storeMissOf,
   type BlobRefusalRows,
   type ParseRefusedResource,
   type CollectionConfig,
   type JsonValue,
   type PopulationCache,
   type Projection,
+  type StoreMiss,
 } from '@vibe-agent-toolkit/resources';
 import { compareCodeUnits, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
@@ -190,6 +192,8 @@ export interface InventoryPopulation {
    * a store hit as the derive that wrote them.
    */
   readonly refusalRows: BlobRefusalRows;
+  /** The store miss a refusal caused this run, for `describeStoreMiss` — see `StoreMiss`. */
+  readonly storeMiss: StoreMiss | undefined;
 }
 
 /**
@@ -277,14 +281,14 @@ export async function buildInventoryPopulation(options: {
     ) as unknown as JsonValue;
   }
 
-  const { projection } = await populate({
+  const { projection, outcome } = await populate({
     root,
     registry,
     parameters,
     ...populationOracles(options),
   });
 
-  return indexPopulation(root, options.skillMdPaths, projection);
+  return indexPopulation(root, options.skillMdPaths, projection, storeMissOf(outcome));
 }
 
 /**
@@ -293,12 +297,14 @@ export async function buildInventoryPopulation(options: {
  * @param root - The absolute projection root
  * @param skillMdPaths - The same skill list the population was built from
  * @param projection - The populated projection
+ * @param storeMiss - The store miss a refusal caused the run, if one did
  * @returns The population's read surface
  */
 function indexPopulation(
   root: string,
   skillMdPaths: readonly string[],
   projection: Projection,
+  storeMiss: StoreMiss | undefined,
 ): InventoryPopulation {
   const extentIdByRelative = new Map<string, string>();
   for (const row of projection.zoneProvenance) {
@@ -344,6 +350,7 @@ function indexPopulation(
     parseRefusedAmong: (paths: readonly string[]) =>
       paths.flatMap((path) => refusedByAbsolute.get(safePath.resolve(path)) ?? []),
     refusalRows: projection,
+    storeMiss,
   };
 }
 

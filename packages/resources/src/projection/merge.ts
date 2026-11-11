@@ -78,7 +78,7 @@ import type { CollectionConfig } from '../schemas/project-config.js';
 import type { RealizationConditionRow, ResourceRealizationRow } from '../schemas/projection-resources.js';
 import type { JsonValue } from '../schemas/projection-shared.js';
 
-import { populateBlobs, storableBlobFacts } from './blob-population.js';
+import { PARSE_REFUSAL_BLOB_CODES, populateBlobs, storableBlobFacts } from './blob-population.js';
 import { RunContentCache } from './content-cache.js';
 import type { ContributorRegistry, ExtentContribution, ExtentContributor } from './contributor.js';
 import {
@@ -92,7 +92,7 @@ import {
   assertHarnessSettled,
   dispatcherHarnessFacts,
   diskHarnessContentReader,
-  harnessSettled,
+  harnessUnsettledKeys,
   runHarnessPass,
 } from './harness/harness-pass.js';
 import { HARNESS_PROFILES, type HarnessProfile } from './harness/profile.js';
@@ -105,11 +105,11 @@ import {
 } from './realizations.js';
 import {
   assembleProjection,
-  blobFactsCover,
   emptyBlobRows,
   keyedContentKeys,
   selectRequestedContexts,
   selectRequestedRows,
+  uncoveredContentKeys,
   type RequestedContributor,
 } from './store-hydration.js';
 import {
@@ -392,10 +392,51 @@ export interface PopulationCache {
  * - `skipped-tree-changed` — derived, and the extent was NOT filed because the
  *   tree moved during the run (see {@link PopulationCache.treeUnchanged}).
  * - `no-store` — derived, with no store to read or write.
+ *
+ * A derived run also carries `storeMiss` when the store held this population's
+ * extent and missed only because of pairs this run refused — see {@link StoreMiss}.
  */
 export type PopulationOutcome =
   | { readonly population: 'store'; readonly stored: 'hit' }
-  | { readonly population: 'derived'; readonly stored: 'written' | 'skipped-tree-changed' | 'no-store' };
+  | {
+    readonly population: 'derived';
+    readonly stored: 'written' | 'skipped-tree-changed' | 'no-store';
+    readonly storeMiss?: StoreMiss;
+  };
+
+/**
+ * A store miss a refusal caused, counted (ADR I10: misses are counted and named).
+ *
+ * A refused parse is filed nowhere (I6), so its key — or its `(blob, harness)`
+ * pair — is held by no store, and while the refusal persists the store can
+ * never serve the population: every run re-derives all of it. That cost is
+ * allowed only when it is visible, so the run that pays it says so.
+ */
+export interface StoreMiss {
+  /** The pairs the store lacked that this run refused again. */
+  readonly refusedPairs: number;
+}
+
+/**
+ * @param outcome - What `populate` said about the run
+ * @returns The store miss a refusal caused it, if one did
+ */
+export function storeMissOf(outcome: PopulationOutcome): StoreMiss | undefined {
+  return outcome.population === 'derived' ? outcome.storeMiss : undefined;
+}
+
+/**
+ * The sentence a run whose store miss a refusal caused reports it with.
+ *
+ * @param storeMiss - The run's {@link storeMissOf}
+ * @returns The sentence, or `undefined` when no refusal cost the store a hit
+ */
+export function describeStoreMiss(storeMiss: StoreMiss | undefined): string | undefined {
+  if (storeMiss === undefined) return undefined;
+  const count = storeMiss.refusedPairs;
+  const noun = count === 1 ? 'pair is' : 'pairs are';
+  return `store miss: ${String(count)} refused ${noun} held by no store, so the whole population was re-derived; it is re-derived on every run while the refusal persists`;
+}
 
 /**
  * Each `population` value, keyed so the compiler checks the list against
@@ -420,8 +461,25 @@ export const POPULATION_ORIGINS = Object.keys(POPULATION_ORIGIN_SET) as [
  * @param stored - What the run did with the store
  * @returns The outcome, with `population` derived from `stored`
  */
-function populationOutcome(stored: PopulationOutcome['stored']): PopulationOutcome {
-  return stored === 'hit' ? { population: 'store', stored } : { population: 'derived', stored };
+function populationOutcome(stored: PopulationOutcome['stored'], storeMiss?: StoreMiss): PopulationOutcome {
+  if (stored === 'hit') return { population: 'store', stored };
+  return storeMiss === undefined ? { population: 'derived', stored } : { population: 'derived', stored, storeMiss };
+}
+
+/**
+ * How many of the pairs a store lacked this derivation refused again.
+ *
+ * @param missed - One content key per pair the store lacked
+ * @param projection - What this run derived
+ * @returns The count, or `undefined` when no refusal explains the miss
+ */
+function storeMissFor(missed: readonly string[], projection: Projection): StoreMiss | undefined {
+  if (missed.length === 0) return undefined;
+  const refused = new Set(
+    projection.blobConditions.filter((row) => PARSE_REFUSAL_BLOB_CODES.has(row.code)).map((row) => row.blob),
+  );
+  const refusedPairs = missed.filter((key) => refused.has(key)).length;
+  return refusedPairs === 0 ? undefined : { refusedPairs };
 }
 
 /**
@@ -567,8 +625,8 @@ export async function populate(options: PopulateOptions): Promise<PopulateResult
   // {@link PopulationCache} on why the caller does not supply it.
   const rootId = rootIdFor(root);
   const cached = await readCachedProjection(options, rootId, parseContent, routing);
-  if (cached !== undefined) {
-    return { projection: cached, outcome: populationOutcome('hit') };
+  if ('hit' in cached) {
+    return { projection: cached.hit, outcome: populationOutcome('hit') };
   }
 
   // ONE dispatcher for the run — the blob stage's parses, the post-promotion
@@ -579,8 +637,17 @@ export async function populate(options: PopulateOptions): Promise<PopulateResult
     (dispatcher) => deriveProjection(options, { parseContent, routing, dispatcher }),
   );
   const stored = await writeCachedProjection(options, rootId, parseContent, projection, routing);
-  return { projection, outcome: populationOutcome(stored) };
+  return { projection, outcome: populationOutcome(stored, storeMissFor(cached.missed, projection)) };
 }
+
+/**
+ * What the store answered: the population, or the pairs it lacked — one content
+ * key per pair, empty when it held no extent for this question at all.
+ */
+type CachedRead = { readonly hit: Projection } | { readonly missed: readonly string[] };
+
+/** A store that held nothing for this question. */
+const NOTHING_HELD: CachedRead = { missed: [] };
 
 /** What {@link populate} decided before deriving, and the run's one dispatcher. */
 interface DerivationRun {
@@ -880,16 +947,17 @@ export function requestedContributors(options: PopulateOptions): readonly Reques
  * @param rootId - This run's corpus root id
  * @param parseContent - Whether this run reads and parses content at all
  * @param routing - The run's parse routing, whose fingerprint is part of the key
- * @returns The hydrated projection, or `undefined` on any kind of miss
+ * @returns The hydrated projection, or the pairs it lacked on a miss — so a
+ *   miss a refusal caused can be counted (ADR I10)
  */
 async function readCachedProjection(
   options: PopulateOptions,
   rootId: string,
   parseContent: boolean,
   routing: CollectionMimeResolver,
-): Promise<Projection | undefined> {
+): Promise<CachedRead> {
   const cache = options.cache;
-  if (cache === undefined) return undefined;
+  if (cache === undefined) return NOTHING_HELD;
 
   const extent = await readStoredExtent(
     options,
@@ -897,27 +965,29 @@ async function readCachedProjection(
     routing,
     requestedContributors(options),
   );
-  if (extent === undefined) return undefined;
+  if (extent === undefined) return NOTHING_HELD;
 
   // A run that declined to derive the blob tier must also decline to read it
   // back, or a hit would hand it four tables a populate would have left empty
   // — and `'skip'` is a claim about what the caller reads, so honouring it on
   // both paths is what keeps hydrated and populated indistinguishable.
-  if (!parseContent) return assembleProjection(extent, emptyBlobRows());
+  if (!parseContent) return { hit: assembleProjection(extent, emptyBlobRows()) };
 
   const contentKeys = keyedContentKeys(extent);
   const blobs = await cache.store.readBlobFacts(contentKeys);
   // See `store-hydration.ts`: an extent written by a run that skipped blob
   // derivation names keys the blob tier does not hold, and accepting it would
   // reduce every closure extent to its own root while reporting success.
-  if (!blobFactsCover(blobs, contentKeys)) return undefined;
+  const uncovered = uncoveredContentKeys(blobs, contentKeys);
+  if (uncovered.length > 0) return { missed: uncovered };
 
   // The harness facts are derived lazily and stored per `(blob, harness)`, so
   // a blob tier that covers every key can still lack a reached blob's facts —
   // another root's run filed those bytes without reaching them. Served, that
   // absence would throw at the first strict reader; a miss re-derives it.
   const projection = assembleProjection(extent, blobs);
-  return harnessSettled(projection, HARNESS_PROFILE_LIST) ? projection : undefined;
+  const unsettled = harnessUnsettledKeys(projection, HARNESS_PROFILE_LIST);
+  return unsettled.length === 0 ? { hit: projection } : { missed: unsettled };
 }
 
 /**

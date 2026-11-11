@@ -374,12 +374,12 @@ export {
 // reinterpret — a store holds rows, this decides what they are worth.
 export {
   assembleProjection,
-  blobFactsCover,
   emptyBlobRows,
   keyedContentKeys,
   selectRequestedContexts,
   selectRequestedRows,
   type RequestedContributor,
+  uncoveredContentKeys,
 } from './projection/store-hydration.js';
 
 // How the registry's names are spelled inside SQL — one rule, beside the
@@ -742,6 +742,7 @@ export {
   type LoadedContext,
   type LoadedContextAnswer,
   type LoadedRow,
+  type RefusedContextFile,
 } from './projection/claude-context-query.js';
 
 // What the harness actually CHARGES for what the query says is loaded — the
@@ -940,10 +941,12 @@ export {
   CONTENT_PARSING_DERIVE,
   CONTENT_PARSING_SKIP,
   ClosureNonConvergenceError,
+  describeStoreMiss,
   POPULATION_ORIGINS,
   populate,
   populationOracles,
   readStoredMembership,
+  storeMissOf,
   type ContentParsing,
   type ContributorTiming,
   type PopulateOptions,
@@ -951,6 +954,7 @@ export {
   type PopulationCache,
   type PopulationOutcome,
   type StoredMembership,
+  type StoreMiss,
   type TreePopulationOptions,
 } from './projection/merge.js';
 

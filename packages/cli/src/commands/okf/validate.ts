@@ -11,13 +11,14 @@
 import { dirname } from 'node:path';
 
 import {
+  notAdmittedFindings,
   okfBundleRuns,
   parseConfigFile,
   validateOkfBundle,
   type OkfBundleReport,
   type OkfFinding,
 } from '@vibe-agent-toolkit/resources';
-import { anchoredAt, buildReport, withDurationMs, type Finding } from '@vibe-agent-toolkit/schema';
+import { anchoredAt, buildReport, toFindings, withDurationMs, type Finding, type ValidationConfig } from '@vibe-agent-toolkit/schema';
 import { findConfigFile, issueLocation, mapConcurrentFailingInOrder, safePath } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
@@ -127,18 +128,31 @@ function toFinding(finding: OkfFinding, root: string, projectRoot: string): Find
  * reserved alike — across every bundle. A declared-but-empty bundle and an
  * empty declaration both examine zero, and the notice tells them apart.
  *
+ * A document whose parse was refused for this run is reported through the
+ * not-admitted contract every lane shares (`notAdmittedFindings`): its
+ * `RESOURCE_PARSE_*` code and sentence, under the project's
+ * `resources.validation` allow list and severity — not the bundle's dial.
+ *
  * @param checked - One report per bundle that was actually checked, with its root
  * @param projectRoot - What every finding's `location` is relative to
+ * @param validation - The project's `resources.validation` (`{}` when none)
  * @returns The report
  */
 export function summarizeOkfBundles(
   checked: readonly CheckedOkfBundle[],
   projectRoot: string,
+  validation: ValidationConfig,
 ): OkfValidateReport {
   const bundles = checked.map((entry) => entry.report);
-  const findings = checked.flatMap((entry) =>
-    entry.report.findings.map((finding) => toFinding(finding, entry.root, projectRoot)),
+  const refused = notAdmittedFindings(
+    { unreadable: [], parseRefused: bundles.flatMap((report) => report.parseRefused) },
+    { locationRoot: projectRoot, consequence: 'its OKF conformance was not assessed' },
+    validation,
   );
+  const findings = [
+    ...checked.flatMap((entry) => entry.report.findings.map((finding) => toFinding(finding, entry.root, projectRoot))),
+    ...toFindings(refused),
+  ];
   const examined = bundles.reduce(
     (sum, report) => sum + report.conceptDocuments.length + report.reservedDocuments.length,
     0,
@@ -225,7 +239,7 @@ export async function okfValidateReport(
     async (run) => ({ report: await validateOkfBundle(run), root: run.root }),
   );
 
-  return summarizeOkfBundles(checked, projectRoot);
+  return summarizeOkfBundles(checked, projectRoot, config.resources?.validation ?? {});
 }
 
 const VERB = 'okf validate';

@@ -28,7 +28,7 @@
  * threads a short batch never dispatches to.
  *
  * It also means a broken install fails here as a `ParserUnavailableError`,
- * whose `code` {@link describeFailure}
+ * whose `code` `describeParseFailure`
  * carries across the boundary so `isParserUnavailable` still recognises it.
  *
  * ## Why the timings go back over the port, and why `close()` is not `process.exit()`
@@ -52,8 +52,8 @@ import type { ParseResult } from './link-parser.js';
 import { ParseCache, type ParserModuleKind } from './parse-cache.js';
 import { factsOutputBreach, isStackOverflow, outputBreach, type ParseLimits } from './parse-limits.js';
 import {
+  describeParseFailure,
   type ParseWorkerData,
-  type ParseWorkerFailure,
   type ParseWorkerParserLoaded,
   type ParseWorkerReady,
   type ParseWorkerRequest,
@@ -79,27 +79,33 @@ if (parentPort === null) {
 const port = parentPort;
 
 /**
- * Flatten a thrown value into something structured clone can carry.
+ * What the PARSER threw over a document's bytes, held apart from every other
+ * throw in this thread.
  *
- * `code` is the load-bearing field: `isParserUnavailable` matches on it as well
- * as on `instanceof`, and an error rebuilt in the parent is necessarily a plain
- * `Error`. Dropping the code would silently downgrade a broken VAT install into
- * an ordinary per-document failure — the exact defect `ParserUnavailableError`
- * exists to close.
- *
- * @param error - Whatever the parser or its loader threw
- * @returns The failure as plain data, with no undefined-valued keys
+ * Only the parser's own call over the content is wrapped (`fromTheBytes`), so
+ * only its throw is posted branded `fromDocument` — the one failure a lane may
+ * store as the document's (`reviveParserThrow` in `parse-limits.ts`). A parser
+ * module that will not load, a cache-write defect, a reply that will not post:
+ * none of them passes through the wrapper, so none of them is ever filed under
+ * the bytes' key.
  */
-function describeFailure(error: unknown): ParseWorkerFailure {
-  if (!(error instanceof Error)) return { name: 'Error', message: String(error) };
+class ThrownByParser {
+  constructor(readonly thrown: unknown) {}
+}
 
-  const code: unknown = (error as { code?: unknown }).code;
-  return {
-    name: error.name,
-    message: error.message,
-    ...(error.stack === undefined ? {} : { stack: error.stack }),
-    ...(typeof code === 'string' ? { code } : {}),
-  };
+/**
+ * Run the parser over the bytes, marking anything it throws as the parser's.
+ *
+ * @param run - The parser's own call over the content, and nothing else
+ * @returns What the parser returned
+ * @throws {ThrownByParser} Wrapping whatever the parser threw
+ */
+function fromTheBytes<T>(run: () => T): T {
+  try {
+    return run();
+  } catch (error) {
+    throw new ThrownByParser(error);
+  }
 }
 
 /** The parser modules this thread has told the parent are loaded. */
@@ -140,12 +146,14 @@ async function respond(request: JobRequest): Promise<void> {
   try {
     response = request.type === 'parse' ? await answerParse(request) : await answerHarness(request);
   } catch (error) {
+    const byParser = error instanceof ThrownByParser;
+    const thrown = byParser ? error.thrown : error;
     // A parser recursing past this thread's stack is a limit breach, not a
     // defect in the document or in VAT: it is reported as the limit, so it is
     // never stored as a failure of these bytes (I6).
-    response = isStackOverflow(error)
+    response = isStackOverflow(thrown)
       ? { id: request.id, breach: 'stackMb' }
-      : { id: request.id, failure: describeFailure(error) };
+      : { id: request.id, failure: describeParseFailure(thrown, byParser) };
   }
   const replyStartedAt = parseTimingStart();
   port.postMessage(response);
@@ -169,7 +177,7 @@ async function answerParse(request: Extract<JobRequest, { type: 'parse' }>): Pro
   announceLoaded(request.kind);
   // `byteLength` is the parent's RAW byte count, passed through untouched —
   // never a length derived from `content`, since decoding is lossy.
-  const result = parser.parseContent(request.content, request.byteLength);
+  const result = fromTheBytes(() => parser.parseContent(request.content, request.byteLength));
   return answerFor(request, result);
 }
 
@@ -184,7 +192,7 @@ async function answerParse(request: Extract<JobRequest, { type: 'parse' }>): Pro
 async function answerHarness(request: Extract<JobRequest, { type: 'harness' }>): Promise<ParseWorkerResponse> {
   const reader = await loadHarnessReader(request.harness);
   announceLoaded(request.harness);
-  const facts = reader(request.content);
+  const facts = fromTheBytes(() => reader(request.content));
   const breach = factsOutputBreach(facts, workerLimits());
   if (breach !== undefined) return { id: request.id, breach: breach.limit, found: breach.found };
   return { id: request.id, harnessFacts: facts };
@@ -287,7 +295,7 @@ port.on('message', (request: ParseWorkerRequest) => {
     // settled; an unhandled rejection would kill the thread and take every
     // other job on it with it. The failure payload is plain data, so this
     // second post cannot fail the same way.
-    port.postMessage({ id: request.id, failure: describeFailure(error) });
+    port.postMessage({ id: request.id, failure: describeParseFailure(error, false) });
   });
 });
 

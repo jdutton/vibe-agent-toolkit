@@ -73,7 +73,7 @@
  * reports success — the exact silent-emptiness failure `blob-population.ts`
  * exists to prevent, arriving through the cache instead.
  *
- * {@link blobFactsCover} is the guard, and it needs no new metadata: the
+ * {@link uncoveredContentKeys} is the guard, and it needs no new metadata: the
  * derivation stage accounts for **every** keyed content key, with a `blobs` row
  * when it parsed and a `blobConditions` row when it declined to (unreadable,
  * changed underneath, or binary). A key with neither is a key the store never
@@ -189,8 +189,8 @@ export function selectRequestedRows(
 }
 
 /**
- * Whether the stored blob tier accounts for every content key these
- * realizations name.
+ * The content keys these realizations name that the stored blob tier does not
+ * account for — none, when it covers them all.
  *
  * See this module's header: accounted for means a `blobs` row **or** a
  * `blobConditions` row, because the derivation stage records the latter instead
@@ -200,13 +200,15 @@ export function selectRequestedRows(
  * @param blobs - What {@link ProjectionStore.readBlobFacts} returned for
  *   {@link keyedContentKeys} of the same realizations
  * @param contentKeys - The keys those realizations name
- * @returns True when every key is accounted for
+ * @returns The keys accounted for by neither table, in `contentKeys` order —
+ *   empty when every key is covered. Returned rather than a yes/no so a miss
+ *   can be counted and named (ADR I10).
  */
-export function blobFactsCover(blobs: BlobScopedRows, contentKeys: readonly string[]): boolean {
+export function uncoveredContentKeys(blobs: BlobScopedRows, contentKeys: readonly string[]): string[] {
   const held = new Set<string>();
   for (const row of blobs.blobs) held.add(row.contentKey);
   for (const row of blobs.blobConditions) held.add(row.blob);
-  return contentKeys.every((key) => held.has(key));
+  return contentKeys.filter((key) => !held.has(key));
 }
 
 /**

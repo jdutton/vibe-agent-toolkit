@@ -25,10 +25,11 @@ import type { Severity } from '@vibe-agent-toolkit/schema';
 import { forEachInOrder, FsLookupCache, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ParseResult } from '../link-parser.js';
-import { parseRefusal } from '../not-admitted.js';
+import { parseRefusedEntry } from '../not-admitted.js';
 import { isParserUnavailable } from '../parse-cache.js';
 import { type ParseDispatcher, parseFileCached, withParseDispatcher } from '../parse-dispatcher.js';
 import { isPerRunParseRefusal } from '../parse-limits.js';
+import type { ParseRefusedResource } from '../resource-registry.js';
 
 import {
   discoverOkfBundle,
@@ -113,6 +114,8 @@ interface DocumentInspection {
   /** Findings whose severity the per-bundle dial does not reach. */
   hardFindings: OkfFinding[];
   declaredOkfVersion?: string;
+  /** Its parse, refused for this run — see {@link OkfBundleReport.parseRefused}. */
+  parseRefused?: ParseRefusedResource;
 }
 
 /**
@@ -130,7 +133,6 @@ interface DocumentInspection {
  * @returns A hard-error finding naming the document and the errno, no path
  */
 function unreadableDocumentFinding(document: string, error: unknown): OkfFinding {
-  if (isPerRunParseRefusal(error)) return notAssessedFinding(document, parseRefusal(error).reason);
   return unreadableDocumentFindingByCode(document, fsErrorCode(error));
 }
 
@@ -151,9 +153,10 @@ function unreadableDocumentFindingByCode(document: string, code: string): OkfFin
 }
 
 /**
- * The `OKF_DOCUMENT_UNREADABLE` finding: the document was not assessed, and why
- * — an errno, or its parse refused for this run (a limit, a dead worker), in
- * the clause every lane names a refused parse with (`parseRefusal`).
+ * The `OKF_DOCUMENT_UNREADABLE` finding: the document was not assessed, and the
+ * errno that explains why. A parse refused for this run is not this finding:
+ * it is carried as {@link OkfBundleReport.parseRefused} and reported through
+ * the not-admitted contract.
  *
  * @param document - Bundle-relative path of the document
  * @param why - What stopped the assessment, as a clause
@@ -189,6 +192,9 @@ async function inspectDocument(
     // ⛔ A broken parser install is NOT a bad document, and reporting it as one
     // would send an adopter editing a file that is fine: rethrown untouched.
     if (isParserUnavailable(error)) throw error;
+    // A refusal is a fact about this run: carried for the one contract every
+    // lane reports it through, under the project's allow list and severity.
+    if (isPerRunParseRefusal(error)) return { drafts: [], hardFindings: [], parseRefused: parseRefusedEntry(absolutePath, error) };
     return { drafts: [], hardFindings: [unreadableDocumentFinding(document, error)] };
   }
 
@@ -258,6 +264,7 @@ function unreadableRootReport(
       document: '.',
       message: `okf.bundles.${options.bundle}.root ('${options.rootSpecifier}') is not a readable directory (${fsErrorCode(error)}), so this bundle was not checked at all. Point it at the directory holding the bundle's concept documents, relative to vibe-agent-toolkit.config.yaml.`,
     }],
+    parseRefused: [],
     hasErrors: true,
   };
 }
@@ -372,6 +379,7 @@ export async function validateOkfBundle(
     ...files.unreadableDocuments.map((entry) => unreadableDocumentFindingByCode(entry.document, entry.code)),
   ];
   let declaredOkfVersion: string | undefined;
+  const parseRefused: ParseRefusedResource[] = [];
 
   const documents: ReadonlyArray<readonly [string, boolean]> = [
     ...files.conceptDocuments.map((document) => [document, false] as const),
@@ -385,6 +393,7 @@ export async function validateOkfBundle(
       const inspection = await inspectDocument(root, document, reserved, options.specVersion, index, dispatcher);
       drafts.push(...inspection.drafts);
       hardFindings.push(...inspection.hardFindings);
+      if (inspection.parseRefused !== undefined) parseRefused.push(inspection.parseRefused);
       declaredOkfVersion ??= inspection.declaredOkfVersion;
     }),
   );
@@ -405,6 +414,7 @@ export async function validateOkfBundle(
     reservedDocuments: files.reservedDocuments,
     ...(declaredOkfVersion !== undefined && { declaredOkfVersion }),
     findings,
-    hasErrors: findings.some((finding) => finding.severity === 'error'),
+    parseRefused,
+    hasErrors: parseRefused.length > 0 || findings.some((finding) => finding.severity === 'error'),
   };
 }

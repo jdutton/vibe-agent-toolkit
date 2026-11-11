@@ -27,7 +27,7 @@
 
 import diagnosticsChannel from 'node:diagnostics_channel';
 import { existsSync, promises as fs } from 'node:fs';
-import { availableParallelism } from 'node:os';
+import { availableParallelism, totalmem } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
 
@@ -44,6 +44,7 @@ import {
   type HeapBounds,
   heapBounds,
   isParseLimitError,
+  isParserThrewError,
   isParseWorkerDiedError,
   ParseLimitError,
   resolveParseLimits,
@@ -51,6 +52,7 @@ import {
 import {
   __setParseWorkerEntryForTest,
   createParsePool,
+  describeParseFailure,
   type ParsePool,
   toParseWire,
 } from '../src/parse-pool.js';
@@ -292,6 +294,15 @@ describe('createParsePool', () => {
     expect(pool.size).toBeGreaterThanOrEqual(1);
     expect(pool.size).toBeLessThanOrEqual(Math.max(1, availableParallelism() - 1));
   });
+
+  it('caps any width it is asked for at what this machine\'s memory holds', () => {
+    const pool = createParsePool({ size: 100_000 });
+    openPools.push(pool);
+
+    // Each default worker may grow to 2,048 MiB; 1,024 MiB stays with the main thread.
+    const fits = Math.max(1, Math.floor((totalmem() / 1_048_576 - 1024) / 2048));
+    expect(pool.size).toBe(fits);
+  });
 });
 
 describe('ParsePool.parse', () => {
@@ -397,6 +408,59 @@ async function outcomeOf(pool: ParsePool, content: string): Promise<unknown> {
   );
 }
 
+/**
+ * A worker that answers every job with the failure a test hands it.
+ *
+ * @param failure - The `failure` payload, as JSON source
+ * @returns The seeded entry's source
+ */
+function failingWith(failure: string): string {
+  return [
+    "import { parentPort } from 'node:worker_threads';",
+    READY_LINE,
+    "parentPort.on('message', (request) => {",
+    "  if (request?.type === 'shutdown') { parentPort.close(); return; }",
+    `  parentPort.postMessage({ id: request.id, failure: ${failure} });`,
+    '});',
+  ].join('\n');
+}
+
+describe('who threw a failure', () => {
+  it('revives a throw the worker branded as the parser\'s, its code kept', async () => {
+    await seedWorkerEntry(failingWith("{ name: 'TypeError', message: 'bad bytes', code: 'ERR_X', fromDocument: true }"));
+    const pool = trackedPool(1);
+
+    const outcome = await outcomeOf(pool, '# a\n');
+
+    expect(isParserThrewError(outcome)).toBe(true);
+    expect(outcome).toMatchObject({ name: 'TypeError', message: 'bad bytes', code: 'ERR_X' });
+  });
+
+  it('never revives an unbranded failure as the parser\'s', async () => {
+    await seedWorkerEntry(failingWith("{ name: 'Error', message: 'could not post the reply' }"));
+    const pool = trackedPool(1);
+
+    const outcome = await outcomeOf(pool, '# a\n');
+
+    expect(outcome).toMatchObject({ message: 'could not post the reply' });
+    expect(isParserThrewError(outcome)).toBe(false);
+  });
+});
+
+/**
+ * The worker side of the brand. `describeParseFailure` is what both of the
+ * worker's catches post, and only the parser's own call is marked.
+ */
+describe('describeParseFailure', () => {
+  it('brands only when told the parser threw it', () => {
+    const error = Object.assign(new Error('boom'), { code: 'ERR_B' });
+
+    expect(describeParseFailure(error, true)).toMatchObject({ message: 'boom', code: 'ERR_B', fromDocument: true });
+    expect(describeParseFailure(error, false)).not.toHaveProperty('fromDocument');
+    expect(describeParseFailure('thrown string', true)).toStrictEqual({ name: 'Error', message: 'thrown string', fromDocument: true });
+  });
+});
+
 describe('a broken install is loud', () => {
   it('fails every job as parser-unavailable when the worker entry throws as its module loads', async () => {
     await seedWorkerEntry("throw Object.assign(new Error('seeded load failure'), { code: 'ERR_SEEDED_LOAD' });\n");
@@ -439,6 +503,37 @@ describe('a broken install is loud', () => {
       true,
       true,
     ]);
+  });
+
+  it('never counts the death of a thread holding no job toward the three', async () => {
+    // Each thread answers its document, then dies idle. No document was on it,
+    // so no document can have caused it and none may be refused over it: three
+    // such deaths are not a broken install, and the next document is parsed.
+    await seedWorkerEntry([
+      "import { parentPort } from 'node:worker_threads';",
+      'const post = parentPort.postMessage.bind(parentPort);',
+      'parentPort.postMessage = (message) => {',
+      '  post(message);',
+      "  if (typeof message?.id === 'number') setTimeout(() => process.exit(1), 50);",
+      '};',
+      `await import(${JSON.stringify(BUILT_WORKER)});`,
+    ].join('\n'));
+    const pool = trackedPool(3);
+    const exits: Promise<void>[] = [];
+    const onWorker = (message: unknown): void => {
+      exits.push(new Promise((resolve) => (message as { worker: Worker }).worker.once('exit', () => resolve())));
+    };
+    diagnosticsChannel.subscribe('worker_threads', onWorker);
+    let answers: unknown[];
+    try {
+      answers = await Promise.all(['# a\n', '# b\n', '# c\n'].map(async (content) => outcomeOf(pool, content)));
+      await Promise.all(exits);
+    } finally {
+      diagnosticsChannel.unsubscribe('worker_threads', onWorker);
+    }
+
+    expect({ answers, idleDeaths: exits.length }).toStrictEqual({ answers: ['answered', 'answered', 'answered'], idleDeaths: 3 });
+    expect(await outcomeOf(pool, '# d\n')).toBe('answered');
   });
 
   it('counts a thread stopped at its time limit before its parser loaded toward the same three', async () => {

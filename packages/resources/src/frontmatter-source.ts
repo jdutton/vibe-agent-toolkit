@@ -12,10 +12,6 @@
  * `stackMb`, and sends the mapping back encoded (`frontmatter-codec.ts`); the
  * parent and a parse-cache hit rebuild it from that encoding and never call
  * this module. Neither `parse-cache.ts` nor `parse-pool.ts` imports it.
- *
- * It lives in its own module, not in `link-parser.js`, because callers that
- * still parse in-process (skill packaging; see the hazard register) reach it
- * through `parseMarkdownContent` and nothing else.
  */
 
 import * as yaml from 'yaml';

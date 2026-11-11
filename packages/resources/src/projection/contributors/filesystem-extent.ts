@@ -311,7 +311,7 @@ export class FilesystemExtentContributor implements ExtentContributor {
    * 🚨 Not decoration and not provenance: without it a `'deferred'` registration
    * and a keying one are **one question** to the reuse rule — same id, same
    * `null` parameter set — and the deriving run is served an extent that names
-   * no content at all. `blobFactsCover` cannot catch that, because an extent
+   * no content at all. `uncoveredContentKeys` cannot catch that, because an extent
    * with no keyed rows gives it nothing to fail on. See
    * {@link ExtentContributor.registrationQuestion}.
    */

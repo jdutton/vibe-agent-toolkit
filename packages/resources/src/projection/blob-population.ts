@@ -113,9 +113,9 @@ import { isParsableContent, type KeyedContent, type ParsableContent, type Parser
 import { estimateTokens } from '../link-classify.js';
 import type { ParseResult } from '../link-parser.js';
 import { parseRefusal } from '../not-admitted.js';
-import { type ParseCache, defaultParseCache, isParserUnavailable } from '../parse-cache.js';
+import { type ParseCache, defaultParseCache } from '../parse-cache.js';
 import { type ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable, withParseDispatcher } from '../parse-dispatcher.js';
-import { isParseDecodeDefect, isParseLimitError, isPerRunParseRefusal, type PerRunParseRefusal } from '../parse-limits.js';
+import { isParseLimitError, isParserThrewError, isPerRunParseRefusal, type PerRunParseRefusal } from '../parse-limits.js';
 import { type CodeContextRanges, findLexicalReferences } from '../reference-lexer.js';
 import type { BlobConditionRow } from '../schemas/projection-blobs.js';
 import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
@@ -1077,19 +1077,18 @@ async function readTarget(
  * document, blaming every innocent file in the corpus while the exit code stayed
  * 0.
  *
- * The guard is the error TYPE, not the load's position. Hoisting the load above
- * this `try` also closes it, and was tried — it costs every fully warm
- * population the ~730 ms remark load for parses that never happen, which is the
- * whole point of loading past the cache's hit-path return. `isParserUnavailable`
- * matches one type VAT constructs at one place, so it is complete by
- * construction; it is emphatically not the errno blocklist that was deleted (see
- * its docstring). The errno classes remain indistinguishable by inspection —
- * that is why nothing here inspects.
- *
- * The guard covers the pooled route too: a worker's `ParserUnavailableError`
- * arrives as a plain `Error` — structured clone cannot carry a class — but it
- * still wears the original `code`, which is the half `isParserUnavailable`
- * matches on. That is why the code exists rather than only the class.
+ * The guard is the error's PROVENANCE, not the load's position. Hoisting the
+ * load above this `try` also closes the load case, and was tried — it costs
+ * every fully warm population the ~730 ms remark load for parses that never
+ * happen. Instead only a throw `isParserThrewError` accepts — the brand the worker sets around
+ * the parser's own call over the bytes, and nowhere else — is a fact about the
+ * document. Everything else is VAT's or the install's and is rethrown loud: a
+ * parser module that cannot load (`ParserUnavailableError`), a worker entry that
+ * cannot be found or spawned, a reply the parent cannot rebuild
+ * (`ParseDecodeDefectError`), a reply the worker could not post. That is an
+ * allowlist of one constructed type, so a failure class nobody has met yet
+ * fails loud rather than being filed under the bytes' key; nothing reads a
+ * message or guesses an errno.
  *
  * @param target - The blob and its path
  * @param keyed - The confirmed read, narrowed to a kind that HAS a parser. The
@@ -1108,14 +1107,6 @@ async function parseTarget(
   try {
     return await dispatcher.parse(keyed);
   } catch (error) {
-    // The install, not the document. See the ⚠️ block above for why this is a
-    // type check and not a hoist, and `isParserUnavailable` for why matching one
-    // constructed type is not the guessed blocklist that preceded it.
-    if (isParserUnavailable(error)) throw error;
-    // VAT's own defect rebuilding the worker's answer, never the document's:
-    // loud, and never a stored `BLOB_PARSE_FAILED` row (`ParseDecodeDefectError`).
-    if (isParseDecodeDefect(error)) throw error;
-
     // 🔑 The message is the refusal's REASON, path-free: the row is keyed by the
     // blob, and a blob two files share is one row — a path in it named the first
     // realization for both. `notAdmittedRealizations` hands each realization
@@ -1123,6 +1114,9 @@ async function parseTarget(
     if (isPerRunParseRefusal(error)) {
       return refused(isParseLimitError(error) ? 'blobsParseLimited' : 'blobsParseWorkerDied', parseRefusalCondition(target.contentKey, error));
     }
+    // Not the parser's throw from these bytes, so not the document's: see the
+    // ⚠️ block above. Loud, and never a stored row.
+    if (!isParserThrewError(error)) throw error;
 
     return refused('blobsParseFailed', condition(
       target.contentKey,

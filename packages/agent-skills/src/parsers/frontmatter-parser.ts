@@ -44,6 +44,26 @@ const FENCE = /^---[ \t]*$/;
 /** U+FEFF, which the crawl lane's decode strips before the parser sees a byte. */
 const BOM = String.fromCodePoint(0xfe_ff);
 
+/** U+0000, which CommonMark replaces before any extension reads the block. */
+const NUL = String.fromCodePoint(0);
+
+/** U+FFFD, what the markdown parser reads a {@link NUL} as. */
+const REPLACEMENT_CHARACTER = String.fromCodePoint(0xff_fd);
+
+/**
+ * A block's source as the markdown parser reads it back: CommonMark replaces
+ * every U+0000 with U+FFFD before an extension sees the text (line endings and
+ * a leading BOM are already normalized by the time this is called), so the
+ * worker's `frontmatterSource` for a block holding a NUL is this, never the
+ * bytes handed over.
+ *
+ * @param source - The block's YAML, as found by the fence rule
+ * @returns What the parser's frontmatter extension reads for it
+ */
+function asParserReads(source: string): string {
+  return source.replaceAll(NUL, REPLACEMENT_CHARACTER);
+}
+
 /**
  * Parse YAML frontmatter from SKILL.md content.
  *
@@ -130,8 +150,9 @@ async function decodeBlock(source: string, body: string, route: ParseRoute): Pro
   }
 
   // The block handed over is fenced by construction, so the worker reads back
-  // exactly `source`. Anything else is VAT's defect, never a fact about the bytes.
-  if (parsed.frontmatterSource !== source) {
+  // exactly `source`, normalized as CommonMark normalizes it (`asParserReads`).
+  // Anything else is VAT's defect, never a fact about the bytes.
+  if (parsed.frontmatterSource !== asParserReads(source)) {
     throw new Error(
       'VAT defect: the parse worker read a different frontmatter block than the one it was handed. Please report it.',
     );

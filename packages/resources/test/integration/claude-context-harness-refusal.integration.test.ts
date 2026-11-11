@@ -12,15 +12,19 @@
 import { describe, expect, it } from 'vitest';
 
 import { resolveParseLimits } from '../../src/parse-limits.js';
+import { RULE_SCOPE_TAG } from '../../src/projection/agentic-tags.js';
 import { BLOB_PARSE_LIMIT_EXCEEDED, storableBlobFacts } from '../../src/projection/blob-population.js';
 import { describeBlobRefusals, notAdmittedRealizations } from '../../src/projection/blob-refusals.js';
-import { whatLoadsAt } from '../../src/projection/claude-context-query.js';
+import { whatLoadsAt, type LoadedContext } from '../../src/projection/claude-context-query.js';
 import type { Projection } from '../../src/projection/projection.js';
 
 import { setupClaudeContextTree } from './claude-context-tree.js';
 
 /** The file the worker refuses: past the default row cap, by one import. */
 const REFUSED = 'deep.ts';
+
+/** A path-scoped rule the worker refuses: its `paths:` are never read. */
+const REFUSED_RULE = '.claude/rules/scoped.md';
 
 /** One import more than the default cap allows a single read to produce. */
 const PAST_THE_CAP = Array.from({ length: resolveParseLimits(undefined).outputRows + 1 }, (_, index) => `@a${index}.md`)
@@ -38,6 +42,12 @@ function treeWith(deep: string): Record<string, string> {
 }
 
 const refusedTree = setupClaudeContextTree(treeWith(`${PAST_THE_CAP}\n`));
+const refusedRuleTree = setupClaudeContextTree({
+  'CLAUDE.md': '# Root\n',
+  [REFUSED_RULE]: `---\npaths: ['src/**/*.ts']\n---\n\n${PAST_THE_CAP}\n`,
+  'src/index.ts': 'export {};\n',
+  'docs/readme.md': '# Readme\n',
+});
 const ordinaryTree = setupClaudeContextTree(treeWith('// nothing to import\n'));
 
 /** The content key of the one realization at `path`. */
@@ -92,5 +102,36 @@ describe('a memory file the parse worker refuses', () => {
   it('answers a context query without throwing over the refused file', () => {
     const projection = refusedTree.projection();
     expect(() => whatLoadsAt(projection, 'src/index.ts')).not.toThrow();
+  });
+});
+
+/** The answer at `path`, asserted to be one. */
+function answerAt(projection: Projection, path: string): Extract<LoadedContext, { kind: 'answer' }> {
+  const answer = whatLoadsAt(projection, path);
+  if (answer.kind !== 'answer') throw new Error(`no answer at ${path}`);
+  return answer;
+}
+
+describe('a rules file whose harness facts were refused', () => {
+  it('is never classified: no rule-scope tag says what its unread paths: imply', () => {
+    const projection = refusedRuleTree.projection();
+    const rule = projection.resourceRealizations.find((row) => row.path === REFUSED_RULE);
+
+    expect(rule).toBeDefined();
+    expect(projection.resourceTags.filter((row) => row.resourceId === rule?.resourceId && row.tag === RULE_SCOPE_TAG))
+      .toEqual([]);
+  });
+
+  // A directory query is the launch alone; a file query adds the read walk.
+  it.each([
+    { query: 'docs', label: 'kept out of the launch tally' },
+    { query: 'src/index.ts', label: 'not charged on a read of a file its globs name' },
+  ])('is $label, and named as refused instead', ({ query }) => {
+    const answer = answerAt(refusedRuleTree.projection(), query);
+
+    expect(answer.rows.map((row) => row.path)).toEqual(['CLAUDE.md']);
+    expect(answer.refused).toEqual([
+      { path: REFUSED_RULE, code: 'RESOURCE_PARSE_LIMIT_EXCEEDED', reason: expect.stringContaining('outputRows') },
+    ]);
   });
 });

@@ -82,12 +82,22 @@ export interface HarnessFactsIndex {
    * Whether this run REFUSED to derive the blob's facts — its memory-file read
    * was stopped at a parse limit or lost with its worker (a per-run
    * `blob_conditions` row, never stored). Such a blob has no facts and never
-   * will this run: every reader treats it as it treats a blob with no content
-   * — nothing measured, nothing imported, no `paths:` — and the population
+   * will this run: nothing measured, nothing imported — and, ⛔ unlike a blob
+   * with no content, NO `paths:` answer either. Its `paths:` were never read,
+   * so "declares none" would be a guess that charges a path-scoped rule to
+   * every launch; a reader that needs `paths:` answers {@link FACTS_REFUSED}
+   * and the query names the file instead of classifying it. The population
    * reports it by name through its refusal rows. Never a facts row (I1).
    */
   refused(contentKey: string): boolean;
 }
+
+/**
+ * A reader's answer for a blob whose facts this run refused
+ * ({@link HarnessFactsIndex.refused}): distinct from "declares no `paths:`",
+ * which is a fact about bytes that WERE read.
+ */
+export const FACTS_REFUSED = Symbol('facts-refused');
 
 /**
  * One memo entry: an index plus the three row counts that were its whole premise.

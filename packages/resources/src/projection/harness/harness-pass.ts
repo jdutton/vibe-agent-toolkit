@@ -219,14 +219,15 @@ export function diskHarnessContentReader(cache: RunContentCache | undefined): Ha
 }
 
 /**
- * Whether a projection holds every harness's facts for everything it reaches.
+ * The reached `(blob, harness)` pairs a projection holds no harness facts for —
+ * none, when it is settled.
  *
  * @param view - A populated or hydrated projection
  * @param profiles - The harnesses to check
- * @returns True when every profile's frontier is empty
+ * @returns One content key per unsettled pair, profile by profile
  */
-export function harnessSettled(view: HarnessReachView, profiles: readonly HarnessProfile[]): boolean {
-  return profiles.every((profile) => harnessFrontier(view, profile).length === 0);
+export function harnessUnsettledKeys(view: HarnessReachView, profiles: readonly HarnessProfile[]): string[] {
+  return profiles.flatMap((profile) => harnessFrontier(view, profile).map((entry) => entry.contentKey));
 }
 
 /**

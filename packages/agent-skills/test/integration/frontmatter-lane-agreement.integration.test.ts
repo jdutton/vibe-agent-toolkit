@@ -16,8 +16,9 @@
  *   `outputDepth`) is refused on both, under the same code — never decoded on
  *   the run's own thread, where it would overflow the stack or nest without end;
  * - where the block IS — the fence rule (`---` then optional spaces or tabs, on
- *   the first line only, closed by the next such line; CRLF and a BOM tolerated)
- *   — is the same on both.
+ *   the first line only, closed by the next such line; CRLF, a lone CR and a BOM
+ *   tolerated) — is the same on both, and so is what CommonMark does to the
+ *   characters inside it (a NUL read back as U+FFFD), so neither lane crashes.
  *
  * Before the skill lane read `isPlainMapping`, it admitted every typed root as
  * a `Record<string, unknown>` with no keys, and called an empty block "not a
@@ -137,6 +138,8 @@ describe('the crawl lane and the skill lane read one frontmatter shape rule', ()
 describe('the crawl lane and the skill lane find the block by one fence rule', () => {
   const CR = String.fromCodePoint(0x0d);
   const BOM = String.fromCodePoint(0xfe_ff);
+  const NUL = String.fromCodePoint(0);
+  const REPLACEMENT = String.fromCodePoint(0xff_fd);
   const MAPPING = { notAMapping: false, keys: ['name'] };
   const NONE = { notAMapping: false, keys: null };
 
@@ -147,6 +150,13 @@ describe('the crawl lane and the skill lane find the block by one fence rule', (
     ['no body', '---\nname: x\n---', MAPPING],
     ['CRLF line endings', `---${CR}\nname: x${CR}\n---${CR}\n# Body${CR}\n`, MAPPING],
     ['a leading BOM', `${BOM}---\nname: x\n---\n# Body\n`, MAPPING],
+    ['lone CR line endings', `---${CR}name: x${CR}---${CR}# Body${CR}`, MAPPING],
+    // CommonMark replaces U+0000 with U+FFFD before any extension sees it, so the
+    // worker reads back a block that differs from the source by exactly that.
+    ['a NUL in a value', `---\nname: a${NUL}b\n---\n# Body\n`, MAPPING],
+    ['a NUL in a key', `---\nna${NUL}me: x\n---\n# Body\n`, { notAMapping: false, keys: [`na${REPLACEMENT}me`] }],
+    ['CRLF with a NUL', `---${CR}\nname: a${NUL}b${CR}\n---${CR}\n# Body${CR}\n`, MAPPING],
+    ['a BOM inside a value', `---\nname: a${BOM}b\n---\n# Body\n`, MAPPING],
     ['four dashes', '----\nname: x\n----\n# Body\n', NONE],
     ['dashes then text', '---x\nname: x\n---\n# Body\n', NONE],
     ['an indented closer', '---\nname: x\n ---\n# Body\n', NONE],

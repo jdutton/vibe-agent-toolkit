@@ -147,7 +147,7 @@ import type {
 
 import { RULE_SCOPE_TAG, type RuleScope } from './agentic-tags.js';
 import { CLAUDE_CODE_ENTRY_NAMES } from './harness/claude-code-entry-names.js';
-import type { HarnessFactsIndex } from './harness/facts-index.js';
+import { FACTS_REFUSED, type HarnessFactsIndex } from './harness/facts-index.js';
 import { isAtOrBelow } from './root-relative-path.js';
 
 /**
@@ -1185,7 +1185,9 @@ function admissionFor(
   if (scope !== 'path-scoped') return undefined;
 
   const declared = pathsOf(row, facts);
-  if (declared.length === 0) return undefined;
+  // A refused rule carries no `rule-scope` tag, so it never reaches here; if
+  // one did, its unread `paths:` would admit nothing rather than a guess.
+  if (declared === FACTS_REFUSED || declared.length === 0) return undefined;
   const rule = compileRule(nestedRuleParent(row.path), declared);
   // ⚠️ Reported, never used to DROP the rule, and that changed with the budget
   // itself: refusal is per pattern, so a list with one oversized entry still
@@ -1702,15 +1704,17 @@ export interface DeclaredPattern {
  *
  * @param row - The rule's realization
  * @param facts - Claude Code's facts index
- * @returns The declared patterns, or an empty list — empty too for a rule
- *   whose facts this run refused (`HarnessFactsIndex.refused`)
+ * @returns The declared patterns, an empty list when it declares none, or
+ *   {@link FACTS_REFUSED} when this run refused its facts — never the empty
+ *   list, which would claim its unread `paths:` declare nothing
  * @throws {HarnessFactsAbsentError} When the rule is keyed, not refused, and has no facts row
  */
 function pathsOf(
   row: ResourceRealizationRow,
   facts: HarnessFactsIndex,
-): readonly DeclaredPattern[] {
-  if (row.contentKey === null || facts.refused(row.contentKey)) return NO_PATTERNS;
+): readonly DeclaredPattern[] | typeof FACTS_REFUSED {
+  if (row.contentKey === null) return NO_PATTERNS;
+  if (facts.refused(row.contentKey)) return FACTS_REFUSED;
   return declaredPatterns(facts.requireFacts(row.contentKey, row.path).paths);
 }
 

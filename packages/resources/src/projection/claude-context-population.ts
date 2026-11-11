@@ -141,9 +141,11 @@ import {
   populate,
   populationOracles,
   readStoredMembership,
+  storeMissOf,
   type PopulateOptions,
   type PopulateResult,
   type PopulationOutcome,
+  type StoreMiss,
   type TreePopulationOptions,
 } from './merge.js';
 import { resourceContributors } from './resource-population.js';
@@ -159,6 +161,8 @@ import { resourceContributors } from './resource-population.js';
 export interface ClaudeContextPopulation {
   readonly projection: PopulateResult['projection'];
   readonly population: PopulationOutcome['population'];
+  /** The store miss a refusal caused the real pass, if one did — see `StoreMiss`. */
+  readonly storeMiss: StoreMiss | undefined;
 }
 
 /**
@@ -342,7 +346,7 @@ export async function buildClaudeContextPopulation(options: TreePopulationOption
   const { projection, outcome } = await populate(populateOptions);
   // Two store reads, so they can disagree: a run filing this extent between them
   // leaves a crawled root list behind a hit (claude-context-store-roots pins it).
-  return { projection, population: claudeContextProvenance(discovered.population, outcome) };
+  return { projection, population: claudeContextProvenance(discovered.population, outcome), storeMiss: storeMissOf(outcome) };
 }
 
 /** {@link importRoots}' answer: the roots, and which of the two routes found them. */

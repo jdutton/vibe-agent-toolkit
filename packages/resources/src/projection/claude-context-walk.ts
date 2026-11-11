@@ -81,7 +81,23 @@ interface LaunchWalk {
   readonly pruned: readonly WalkEntry[];
   /** Every walk root — each file the walk started a `$q` at — in walk order. */
   readonly roots: readonly string[];
+  /**
+   * Every file the launch reached whose harness facts this run REFUSED, in
+   * walk order, whether or not it is in {@link reached}. Under a `CLAUDE.md`
+   * it loads (nothing there is filtered) with its cost unmeasured; in a rules
+   * closure its `paths:` were never read, so whether it loads is unknown and
+   * it is left out of {@link reached} rather than guessed at.
+   */
+  readonly refused: readonly WalkEntry[];
 }
+
+/**
+ * What a reached file's own `paths:` say: none, some, or — when this run
+ * refused its facts — nothing known. `refused` is never folded into either of
+ * the others: `unscoped` loads it at every launch, `scoped` drops it, and both
+ * would be a guess.
+ */
+type Scope = 'unscoped' | 'scoped' | 'refused';
 
 /** The per-projection facts the walk reads, indexed once. */
 interface WalkIndex {
@@ -209,9 +225,10 @@ function harnessPathsOf(index: WalkIndex, row: ResourceRealizationRow): HarnessB
   return factsOfReached(index, row)?.paths ?? null;
 }
 
-/** Does this file declare `paths:` the harness keeps? `kyn`'s `globs`. */
-function isScoped(index: WalkIndex, row: ResourceRealizationRow): boolean {
-  return harnessPathsOf(index, row) !== null;
+/** Does this file declare `paths:` the harness keeps (`kyn`'s `globs`), or was its read refused? */
+function scopeOf(index: WalkIndex, row: ResourceRealizationRow): Scope {
+  if (row.contentKey !== null && index.facts.refused(row.contentKey)) return 'refused';
+  return harnessPathsOf(index, row) === null ? 'unscoped' : 'scoped';
 }
 
 /** One file's import targets, through the closure primitive's own resolver. */
@@ -256,9 +273,9 @@ interface Visit {
 /**
  * `$q` — one file and its import subtree, depth-first, pre-order.
  *
- * @returns The entries it loaded, each with whether it is path-scoped
+ * @returns The entries it loaded, each with its {@link Scope}
  */
-function visit(state: Visit, path: string, depth: number, viaPath: string | null): Array<WalkEntry & { scoped: boolean }> {
+function visit(state: Visit, path: string, depth: number, viaPath: string | null): Array<WalkEntry & { scope: Scope }> {
   if (state.processed.has(path) || depth > CLAUDE_IMPORT_MAX_DEPTH) return [];
   if (depth > 0 && state.within !== null && !isAtOrBelow(path, state.within)) return [];
   state.processed.add(path);
@@ -271,9 +288,9 @@ function visit(state: Visit, path: string, depth: number, viaPath: string | null
   const entry = { resourceId: row.resourceId, path, admission };
   if (skip === 'oversize') {
     state.oversize.push(entry);
-    return [{ ...entry, scoped: false }];
+    return [{ ...entry, scope: 'unscoped' as const }];
   }
-  const loaded = [{ ...entry, scoped: isScoped(state.index, row) }];
+  const loaded = [{ ...entry, scope: scopeOf(state.index, row) }];
   for (const target of hopsOf(state.index, path)) {
     loaded.push(...visit(state, target, depth + 1, path));
   }
@@ -293,11 +310,13 @@ export function launchWalk(projection: Projection, directory: string): LaunchWal
   const reached: WalkEntry[] = [];
   const oversize: WalkEntry[] = [];
   const roots: string[] = [];
-  const run = (path: string, admission: Admission, keep: (scoped: boolean) => boolean): void => {
+  const refused: WalkEntry[] = [];
+  const run = (path: string, admission: Admission, keep: (scope: Scope) => boolean): void => {
     roots.push(path);
     const state: Visit = { index, processed, within: null, rootPath: path, rootAdmission: admission, reached, oversize };
-    for (const entry of visit(state, path, 0, null)) {
-      if (keep(entry.scoped)) reached.push({ resourceId: entry.resourceId, path: entry.path, admission: entry.admission });
+    for (const { scope, ...entry } of visit(state, path, 0, null)) {
+      if (scope === 'refused') refused.push(entry);
+      if (keep(scope)) reached.push(entry);
     }
   };
   const chain = claudeAncestry(projection.resourceRealizations, projection.resourceTags, directory);
@@ -313,7 +332,7 @@ export function launchWalk(projection: Projection, directory: string): LaunchWal
     for (const rule of index.rulesByHolder.get(holder) ?? []) run(rule, ruleAdmission, keepUnscoped);
     for (const entry of own.filter((candidate) => candidate.local)) run(entry.path, { kind: 'ancestry', dir: entry.dir, local: entry.local }, keepAll);
   }
-  return { reached, pruned: prunedBehind(index, oversize, processed), roots };
+  return { reached, pruned: prunedBehind(index, oversize, processed), roots, refused };
 }
 
 /**
@@ -346,7 +365,7 @@ export function readWalk(projection: Projection, directory: string, file: string
         index, processed, within: directory, rootPath: rule, rootAdmission: { kind: 'root-rule' }, reached: [], oversize: [],
       };
       for (const entry of visit(state, rule, 0, null)) {
-        const kept = entry.scoped ? loadedOnRead(index, holder, entry, file) : undefined;
+        const kept = entry.scope === 'scoped' ? loadedOnRead(index, holder, entry, file) : undefined;
         if (kept !== undefined) loaded.push(kept);
       }
     }
@@ -372,8 +391,11 @@ function loadedOnRead(index: WalkIndex, holder: string, entry: WalkEntry, file: 
 /** Nothing under a `CLAUDE.md`-family root is filtered. */
 const keepAll = (): boolean => true;
 
-/** A rules file's closure keeps, at launch, only the entries with no `paths:` of their own. */
-const keepUnscoped = (scoped: boolean): boolean => !scoped;
+/**
+ * A rules file's closure keeps, at launch, only the entries with no `paths:`
+ * of their own — and never one whose `paths:` were refused, which may not load.
+ */
+const keepUnscoped = (scope: Scope): boolean => scope === 'unscoped';
 
 /**
  * The files reachable only through a file the cliff skipped, attributed to it.

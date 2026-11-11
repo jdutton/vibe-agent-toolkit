@@ -50,6 +50,7 @@ export async function evaluateClaudeContextLens(options: {
     { root, cache, logger, population: 'claude-context' },
     (wiring) => buildClaudeContextPopulation({ root, ...wiring }),
     (result) => result.projection,
+    (result) => result.storeMiss,
   );
   return { rows: claudeContextRelations(projection), population };
 }

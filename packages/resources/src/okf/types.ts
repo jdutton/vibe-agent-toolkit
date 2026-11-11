@@ -16,6 +16,8 @@
 
 import type { Severity } from '@vibe-agent-toolkit/schema';
 
+import type { ParseRefusedResource } from '../resource-registry.js';
+
 /**
  * Every conformance finding this lane can emit.
  *
@@ -195,6 +197,19 @@ export interface OkfBundleReport {
   declaredOkfVersion?: string;
   /** Findings, ordered by document then by code, so two runs compare. */
   findings: OkfFinding[];
-  /** Whether any finding resolved to `error` severity. */
+  /**
+   * Documents whose parse was refused for this run (a limit, a dead worker), so
+   * their conformance was not assessed, in the order the bundle met them.
+   *
+   * Not findings: a refused parse is a not-admitted file, reported through the
+   * one contract every lane uses (`notAdmittedFindings`) with the project's
+   * `resources.validation` allow list and severity — never through this lane's
+   * own severity dial. `filePath` is absolute; the caller locates it.
+   */
+  parseRefused: ParseRefusedResource[];
+  /**
+   * Whether any finding resolved to `error` severity, or any parse was refused —
+   * a refusal is an error until the caller's `resources.validation` says otherwise.
+   */
   hasErrors: boolean;
 }

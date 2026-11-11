@@ -18,6 +18,7 @@ import {
   isParseWorkerDiedError,
   isPerRunParseRefusal,
   isStackOverflow,
+  memoryBoundedPool,
   outputBreach,
   ParseLimitError,
   ParseWorkerDiedError,
@@ -445,5 +446,29 @@ describe('the heap refusal', () => {
     expect(ceiling.bound).not.toMatch(/^256 MiB/);
     // Under a floored bound the ceiling is not twice it: named as read, never derived.
     expect(ParseLimitError.heapCeiling({ appliedMb: 96, ceilingMb: 128, stopMb: 96 }, 1024).bound).toMatch(/^V8's own heap ceiling, 128 MiB heap — above the 96 MiB/);
+  });
+});
+
+describe('memoryBoundedPool', () => {
+  // A width-4 pool at the default 1,024 MiB limit asks V8 for 4 × 2,048 MiB of
+  // worker heap ceilings; the bound holds that, plus a 1,024 MiB main-thread
+  // reserve, inside the machine's memory.
+  it.each([
+    { label: 'a 64 GiB machine leaves the width alone', memoryMb: 65_536, expected: { size: 4, heapMb: 1024 } },
+    { label: 'a 16 GiB machine fits 7, so 4 stands', memoryMb: 16_384, expected: { size: 4, heapMb: 1024 } },
+    { label: 'an 8 GiB machine fits 3', memoryMb: 8192, expected: { size: 3, heapMb: 1024 } },
+    { label: 'a 4 GiB container fits 1', memoryMb: 4096, expected: { size: 1, heapMb: 1024 } },
+    { label: 'a 2 GiB container lowers the heap, never the width below 1', memoryMb: 2048, expected: { size: 1, heapMb: 512 } },
+    { label: 'a 1 GiB container floors the heap', memoryMb: 1024, expected: { size: 1, heapMb: 96 } },
+  ])('$label', ({ memoryMb, expected }) => {
+    expect(memoryBoundedPool({ size: 4, heapMb: 1024 }, memoryMb * MIB)).toStrictEqual(expected);
+  });
+
+  it('caps a pinned width of any size at the same bound', () => {
+    expect(memoryBoundedPool({ size: 100_000, heapMb: 1024 }, 8192 * MIB)).toStrictEqual({ size: 3, heapMb: 1024 });
+  });
+
+  it('never raises a heap the caller set below what fits', () => {
+    expect(memoryBoundedPool({ size: 1, heapMb: 64 }, 2048 * MIB)).toStrictEqual({ size: 1, heapMb: 64 });
   });
 });

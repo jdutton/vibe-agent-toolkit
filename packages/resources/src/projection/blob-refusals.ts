@@ -287,6 +287,20 @@ const PARSE_REFUSAL_CODE_OF_BLOB: ReadonlyMap<string, ParseRefusedResource['code
 ]);
 
 /**
+ * A per-run parse refusal's finding code and reason, read off its blob
+ * condition row — or `undefined` when the row is not one. The one reader of
+ * that mapping, for the not-admitted log and for any lane that names a refused
+ * file it reached (`whatLoadsAt`'s `refused`).
+ *
+ * @param row - A blob condition row
+ * @returns The refusal less its path, or `undefined`
+ */
+export function parseRefusalOf(row: Projection['blobConditions'][number]): Omit<ParseRefusedResource, 'filePath'> | undefined {
+  const code = PARSE_REFUSAL_CODE_OF_BLOB.get(row.code);
+  return code === undefined ? undefined : { code, reason: row.message };
+}
+
+/**
  * The blob conditions that leave every realization of a blob with no rows: its
  * bytes could not be read, changed under the run, or its parser threw.
  */
@@ -311,8 +325,8 @@ type NotAdmittedEntry =
  * @returns Its entry, or `undefined`
  */
 function blobConditionEntry(row: Projection['blobConditions'][number]): NotAdmittedEntry | undefined {
-  const refusalCode = PARSE_REFUSAL_CODE_OF_BLOB.get(row.code);
-  if (refusalCode !== undefined) return { log: 'parseRefused', entry: { code: refusalCode, reason: row.message } };
+  const refusal = parseRefusalOf(row);
+  if (refusal !== undefined) return { log: 'parseRefused', entry: refusal };
   if (!UNADMITTED_BLOB_CODES.has(row.code)) return undefined;
   const failure = row.code === BLOB_PARSE_FAILED ? parseFailureOf(row.message) : undefined;
   return { log: 'unreadable', entry: { reason: row.message, ...(failure?.kind === 'code' && { code: failure.text }) } };

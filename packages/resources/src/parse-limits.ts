@@ -698,7 +698,7 @@ const PARSE_DECODE_DEFECT = 'PARSE_DECODE_DEFECT';
  *
  * No input the worker emits can make the parent's decode throw: the codec is
  * loops end to end, so no size or depth reaches a throw, and the worker emits
- * only a plain-mapping root (`isPlainMapping`, `frontmatter-source.ts`) the
+ * only a plain-mapping root (`isPlainMapping`, `frontmatter-codec.ts`) the
  * decode accepts. A throw there is therefore rethrown loud by
  * every lane: never stored as `BLOB_PARSE_FAILED`, never a per-file finding
  * that blames the document. Classified by {@link isParseDecodeDefect}.
@@ -734,6 +734,57 @@ export type PerRunParseRefusal = ParseLimitError | ParseWorkerDiedError;
  */
 export function isPerRunParseRefusal(error: unknown): error is PerRunParseRefusal {
   return isParseLimitError(error) || isParseWorkerDiedError(error);
+}
+
+/** What a parser threw, as the worker flattened it: `ParseWorkerFailure` minus the brand. */
+interface ParserThrow {
+  readonly name: string;
+  readonly message: string;
+  readonly stack?: string;
+  readonly code?: string;
+}
+
+/** The brand {@link reviveParserThrow} sets on a throw the parser made from the bytes. */
+const FROM_DOCUMENT = Symbol('parser-threw-from-document');
+
+/**
+ * Rebuild a parser's throw on this side of the worker boundary, branded when
+ * it was the PARSER's, made from the bytes: the one failure that is a fact
+ * about a document, and so the only one a lane may store as
+ * `BLOB_PARSE_FAILED` (ADR I6).
+ *
+ * The worker sets the brand (`fromDocument` on its reply) only around the
+ * parser's own call over the content. Everything else a parse can reject with
+ * — a worker entry that cannot be found or spawned, a reply that could not be
+ * posted, a protocol defect — arrives unbranded, and every lane rethrows it
+ * loud instead of filing VAT's own defect under the bytes' content key.
+ * Nothing classifies by message text.
+ *
+ * Not the original class — structured clone cannot carry one — but it wears
+ * the original `name`, `message`, `stack` and, critically, `code`: the stored
+ * condition's reason is built from them (`parseFailedMessage`). A brand on a
+ * plain `Error`, not a subclass, so every reader of `code` keeps reading the
+ * parser's own.
+ *
+ * @param thrown - The flattened throw
+ * @param fromDocument - Whether the worker branded it as the parser's own
+ * @returns The rebuilt error
+ */
+export function reviveParserThrow(thrown: ParserThrow, fromDocument: boolean): Error {
+  const error: Error & { code?: string } = new Error(thrown.message);
+  error.name = thrown.name;
+  if (thrown.stack !== undefined) error.stack = thrown.stack;
+  if (thrown.code !== undefined) error.code = thrown.code;
+  if (fromDocument) Object.defineProperty(error, FROM_DOCUMENT, { value: true });
+  return error;
+}
+
+/**
+ * @param error - Anything a parse threw
+ * @returns True only for a throw the parser made from the bytes — see {@link reviveParserThrow}
+ */
+export function isParserThrewError(error: unknown): error is Error & { readonly code?: string } {
+  return error instanceof Error && Object.hasOwn(error, FROM_DOCUMENT);
 }
 
 /** Bytes per MiB. */
@@ -901,4 +952,50 @@ export function heapBreached(
   if (exceedsHeapLimit(stats, bounds.stopMb)) return true;
   return previousUsedBytes !== undefined
     && previousUsedBytes - stats.used_heap_size > youngGenerationMb * BYTES_PER_MIB;
+}
+
+/** A pool's width and each worker's enforced heap limit. */
+interface PoolShape {
+  readonly size: number;
+  readonly heapMb: number;
+}
+
+/**
+ * MiB the bound holds back for the main thread — the projection, the run
+ * caches and the store — before any worker heap is counted against memory.
+ */
+const MAIN_THREAD_RESERVE_MB = 1024;
+
+/**
+ * The least enforced heap a memory-bounded worker is given. A judgement, not a
+ * measurement: it is the young generation's own ceiling (see
+ * {@link exceedsHeapLimit}), so a worker on a machine too small for one default
+ * worker can still hold an ordinary document, and a larger one is refused as a
+ * per-run heap breach rather than taking the process down.
+ */
+const MIN_BOUNDED_HEAP_MB = 96;
+
+/**
+ * Bound a pool's total heap by the memory the machine actually has.
+ *
+ * Every worker may grow to V8's ceiling, {@link workerHeapCeilingMb} of its
+ * enforced limit, so a pool's worst case is `size × workerHeapCeilingMb(heapMb)`
+ * on top of the main thread. That product is held inside `memoryBytes` (a
+ * container's limit where one is set — see `machineMemoryBytes` in
+ * `parse-pool.ts`) minus {@link MAIN_THREAD_RESERVE_MB}. Width is lowered
+ * first, since a narrower pool refuses nothing; only when even one worker does
+ * not fit is the heap limit lowered, floored at {@link MIN_BOUNDED_HEAP_MB}. A
+ * width someone pinned (`VAT_PARSE_POOL_SIZE`, a policy) is capped the same
+ * way: no route to the pool skips it.
+ *
+ * @param requested - The width and heap limit asked for
+ * @param memoryBytes - The memory this process may use
+ * @returns The width and heap limit the pool runs at; never above what was asked
+ */
+export function memoryBoundedPool(requested: PoolShape, memoryBytes: number): PoolShape {
+  const availableMb = Math.floor(memoryBytes / BYTES_PER_MIB) - MAIN_THREAD_RESERVE_MB;
+  const width = Math.floor(availableMb / workerHeapCeilingMb(requested.heapMb));
+  if (width >= 1) return { size: Math.min(requested.size, width), heapMb: requested.heapMb };
+  const fitting = Math.max(MIN_BOUNDED_HEAP_MB, Math.floor(availableMb / HEAP_CEILING_FACTOR));
+  return { size: 1, heapMb: Math.min(requested.heapMb, fitting) };
 }

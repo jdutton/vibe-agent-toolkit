@@ -14,6 +14,17 @@ with a regression test.
 
 #### CLI
 
+- **`vat claude context` exits `1` when an answer reached a file whose facts this run refused**
+  (a parse stopped at a limit, or its worker died). The file is listed as `refused: <code>` in the
+  answer (`refused` in json/yaml, also on the `--all` map) and reported on stderr under its
+  `RESOURCE_PARSE_*` code; `resources.validation` can lower it or allow it. Before, a refused
+  path-scoped rule was read as paths-less, charged to every launch, and the run exited `0`.
+
+- **`vat okf validate` reports a refused parse under the not-admitted contract**
+  (`RESOURCE_PARSE_LIMIT_EXCEEDED` / `RESOURCE_PARSE_WORKER_DIED`, resolved through
+  `resources.validation`) instead of an `OKF_DOCUMENT_UNREADABLE` finding at error severity no
+  allow list could reach. `OkfBundleReport` gains `parseRefused`.
+
 - **One exit-code contract for every `vat` verb, `vat-lab` and every dev-tools script: `0` nothing
   at error severity, `1` the run completed and what it examined failed its gate, `2` the command
   could not do its job** (usage, environment, internal). `ExitCode` in `@vibe-agent-toolkit/schema` is the only vocabulary.
@@ -231,6 +242,16 @@ with a regression test.
   negative counters are rejected); the hand-written interface is gone.
 
 #### Library
+
+- **Store-coverage helpers report WHICH keys are missing**: `blobFactsCover` is replaced by
+  `uncoveredContentKeys` (returns the keys), and the harness pass's `harnessSettled` by
+  `harnessUnsettledKeys`. `populateAndReport`'s CLI wiring takes a required `storeMissOf`.
+  `describeStoreMiss` / `storeMissOf` / `StoreMiss` are new.
+
+- **`LoadedContextAnswer` gains `refused: RefusedContextFile[]` and `ContextCostMap` gains
+  `refused`**: the files a query reached whose facts this run refused. A refused rules file now
+  carries no `rule-scope` tag and no `claude_rule_patterns` rows, and is in no launch or on-demand
+  tally.
 
 - **`validateSkill()` now requires `validation: ValidationConfig`** (`{}` when no config applies)
   and applies its `severity` and `allow` to every issue it emits.
@@ -772,6 +793,20 @@ with a regression test.
   tree and `handlebars` leaves it.
 
 ### Fixed
+
+- **A VAT install with no parse worker (or one that will not spawn) fails the run as
+  parser-unavailable** instead of filing every document as `BLOB_PARSE_FAILED`. Only an error the
+  parser raised from a document's own bytes is stored against it; anything else fails the run loud.
+- **A NUL byte in a SKILL.md's frontmatter no longer crashes `vat audit` / `vat skills list`**
+  with `INTERNAL_ERROR`; the identity check now compares against the source as the parser
+  normalises it.
+- **The parse pool's total worker heap is bounded by the machine's memory** (the width first, then
+  the heap, floored at 96 MiB; 1 GiB reserved for the main thread), including a pinned
+  `VAT_PARSE_POOL_SIZE`.
+- **An idle parse worker's death no longer counts toward the broken-install breaker**, so three
+  idle deaths can no longer fail the next real document as parser-unavailable.
+- **A store miss caused by a parse refusal is named**: `store miss: N refused pair(s)` on stderr.
+  While a refusal persists, the whole population re-derives every run.
 
 - **A file too large to decode as text (over ~512 MiB) no longer crashes a whole run.** It is
   refused by size without being read: `vat resources` reports it as `RESOURCE_UNREADABLE

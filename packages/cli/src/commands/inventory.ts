@@ -307,6 +307,7 @@ function populationProviderFor(
 		{ root: projectRoot, cache, logger, population: 'inventory' },
 		(wiring) => buildInventoryPopulation({ root: projectRoot, skillMdPaths, ...wiring }),
 		(population) => population.refusalRows,
+		(population) => population.storeMiss,
 	);
 }
 
