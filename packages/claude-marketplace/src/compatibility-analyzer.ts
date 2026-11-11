@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
 
 import type { EvidenceRecord, Observation } from '@vibe-agent-toolkit/agent-skills';
-import { isParserUnavailable, type ParseDispatcher, withParseDispatcher } from '@vibe-agent-toolkit/resources';
+import { classifyParseFailure, type ParseDispatcher, type ParseFailureKind } from '@vibe-agent-toolkit/resources';
 import { issueLocation, mapWithConcurrency, safePath } from '@vibe-agent-toolkit/utils';
 
 import { readMarketplaceDefaultTargets, resolveEffectiveTargets } from './marketplace-defaults.js';
@@ -49,7 +49,10 @@ async function readPluginManifest(pluginDir: string): Promise<PluginManifest> {
   const parsed = JSON.parse(raw) as Record<string, unknown>;
 
   if (!parsed['name'] || typeof parsed['name'] !== 'string') {
-    throw new Error(`plugin.json missing required "name" field in ${manifestPath}`);
+    // A `SyntaxError`, as `JSON.parse` throws for a manifest that is not JSON:
+    // both are the manifest's content refusing analysis, which
+    // `classifyCompatibilityFailure` reports as the plugin's, not VAT's.
+    throw new SyntaxError(`plugin.json missing required "name" field in ${manifestPath}`);
   }
 
   const manifest: PluginManifest = { name: parsed['name'] };
@@ -96,6 +99,28 @@ async function collectFiles(
 function uncheckedEntry(absolutePath: string, reason: string, locationRoot: string): CompatibilityUnchecked {
   const path = issueLocation(absolutePath, locationRoot) || '.';
   return { path, reason: reason.replaceAll(absolutePath, path) };
+}
+
+/**
+ * Whose fault a compatibility-analysis failure is — the one rule for the
+ * analyzer's per-file catch and for a caller that catches a whole plugin's
+ * analysis (`vat audit`).
+ *
+ * The plugin's: a JSON config or manifest whose content refuses analysis
+ * (`malformed`: a `SyntaxError`, as `JSON.parse` throws and as the manifest
+ * reader throws for a manifest with no `name`), and everything
+ * `classifyParseFailure` allowlists (a read the OS refused, a per-run parse
+ * refusal, the parser's own throw over the bytes). Everything else — a broken
+ * parser install, any other VAT defect — is rethrown untouched: reported as a
+ * plugin "that could not be analyzed", it let `vat audit` exit 0 over a run
+ * that analyzed nothing.
+ *
+ * @param error - What a scan, or a whole plugin's analysis, threw
+ * @returns The kind of failure that is the plugin's
+ * @throws `error` itself, for anything that is VAT's
+ */
+export function classifyCompatibilityFailure(error: unknown): ParseFailureKind | 'malformed' {
+  return error instanceof SyntaxError ? 'malformed' : classifyParseFailure(error);
 }
 
 /** Which `summary` counter a scanned file lands in. */
@@ -237,6 +262,9 @@ export interface AnalyzeCompatibilityOptions {
  *   `vat audit`) MUST pass its invocation scan root, not each plugin directory,
  *   or the report mixes coordinate systems. Required: "relative to what?" has no
  *   safe default.
+ * @param dispatcher - The RUN's parse dispatcher, held by the caller across every
+ *   plugin it analyzes. Required: one opened per call started and tore down a
+ *   worker pool per plugin.
  * @param options - Optional analysis options; see {@link AnalyzeCompatibilityOptions}.
  *   `options.configTargets` lets callers thread a config-layer target declaration
  *   through to the verdict engine — plugin.json / marketplace.json targets still
@@ -246,11 +274,14 @@ export interface AnalyzeCompatibilityOptions {
  *   read, list or parse. Those are named per path and the rest is analyzed;
  *   the result is a verdict over the files it names as read.
  * @throws Only for a failure that is plugin-wide: no valid
- *   `.claude-plugin/plugin.json`, or a plugin root that cannot be listed.
+ *   `.claude-plugin/plugin.json`, or a plugin root that cannot be listed — and
+ *   for a VAT defect (a broken parser install), which is never a file's. A
+ *   caller classifies what it caught with {@link classifyCompatibilityFailure}.
  */
 export async function analyzeCompatibility(
   pluginDir: string,
   locationRoot: string,
+  dispatcher: ParseDispatcher,
   options?: AnalyzeCompatibilityOptions,
 ): Promise<CompatibilityResult> {
   const manifest = await readPluginManifest(pluginDir);
@@ -269,19 +300,18 @@ export async function analyzeCompatibility(
   // Each file is scanned on its own: one the filesystem refuses, or one whose
   // JSON will not parse, is named under `unchecked` and the rest are still
   // analyzed. This used to throw out of the whole plugin. The scans are
-  // read-only and run concurrently, on one parse dispatcher; their results fold
-  // in file order. A broken parser install is the run's failure, never a file's.
-  const outcomes = await withParseDispatcher((dispatcher) =>
-    mapWithConcurrency(files, async (relativePath) => {
-      const fullPath = safePath.join(pluginDir, relativePath);
-      try {
-        return { scanned: await scanFile(relativePath, fullPath, locationRoot, dispatcher) };
-      } catch (error) {
-        if (isParserUnavailable(error)) throw error;
-        return { failed: uncheckedEntry(fullPath, reasonOf(error), locationRoot) };
-      }
-    }),
-  );
+  // read-only and run concurrently, on the run's parse dispatcher; their results
+  // fold in file order. A broken parser install — or any other VAT defect — is
+  // the run's failure, never a file's: `classifyCompatibilityFailure` rethrows it.
+  const outcomes = await mapWithConcurrency(files, async (relativePath) => {
+    const fullPath = safePath.join(pluginDir, relativePath);
+    try {
+      return { scanned: await scanFile(relativePath, fullPath, locationRoot, dispatcher) };
+    } catch (error) {
+      classifyCompatibilityFailure(error);
+      return { failed: uncheckedEntry(fullPath, reasonOf(error), locationRoot) };
+    }
+  });
   for (const outcome of outcomes) {
     if ('failed' in outcome) {
       unchecked.push(outcome.failed);

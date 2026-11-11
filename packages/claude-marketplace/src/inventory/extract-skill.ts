@@ -9,6 +9,7 @@ import {
 	type WalkableRegistry,
 } from '@vibe-agent-toolkit/agent-skills';
 import {
+	classifyParseFailure,
 	loadConfig,
 	type ParseDispatcher,
 	type ParseRefusedResource,
@@ -25,6 +26,7 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import {
   crawlDirectory,
+  DirectoryListingRefusedError,
 } from '@vibe-agent-toolkit/utils/crawl';
 import {
   type GitTracker,
@@ -221,6 +223,9 @@ async function parseFrontmatterFields(
 			pushRow(parseErrors, refused === undefined ? { path: absolute, message: parsed.error } : parseRefusedRow(refused));
 		}
 	} catch (e) {
+		// An unreadable SKILL.md, or the parser's own throw over its bytes, is a
+		// row; a broken install — any VAT defect — is rethrown by the classifier.
+		classifyParseFailure(e);
 		parseErrors.push(recordedFailure(absolute, (e as Error).message, e));
 	}
 	return { name, description };
@@ -376,6 +381,11 @@ async function walkLinkedFiles(
 			pushRow(parseErrors, parseRefusedRow(entry));
 		}
 	} catch (e) {
+		// A row only for what is the tree's: a directory the crawl could not list,
+		// and what `classifyParseFailure` allowlists. A broken install — any VAT
+		// defect — is rethrown: as a row, `vat audit` dropped it and exited 0
+		// having walked nothing.
+		if (!(e instanceof DirectoryListingRefusedError)) classifyParseFailure(e);
 		parseErrors.push({ path: absolute, message: `link walk failed: ${(e as Error).message}` });
 	}
 	return linked;

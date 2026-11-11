@@ -1,9 +1,10 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 
 
+import { ParseCache, ParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { applyTreePlan, type ApplyResult, copyTree, mkdirSyncReal, normalizedTmpdir, planTreeChanges, safePath } from '@vibe-agent-toolkit/utils';
 import { type FaultFsSession, type FaultRule, installFaultFs, registerScratchTmpdir, type StatRewrite } from '@vibe-agent-toolkit/utils/testing';
-import { afterEach, beforeEach } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach } from 'vitest';
 
 import { planPackageInstall } from '../src/install/package-install.js';
 import type { InstallPluginOptions } from '../src/install/plugin-registry.js';
@@ -160,4 +161,27 @@ export async function installOnePlugin(
     paths,
   });
   return applyTreePlan(await planTreeChanges(changes), { afterSwap: () => registry.apply() });
+}
+
+/**
+ * One parse dispatcher for a whole suite, as `vat audit` holds one for a run:
+ * opened in `beforeAll`, shut down in `afterAll`. A dispatcher per call starts
+ * and tears down a worker pool per call, which timed a 56-call suite out on CI.
+ * The cache is off, so every parse runs in the pool and none leaks into the
+ * user's cache.
+ *
+ * @returns The suite's dispatcher, read inside a test
+ */
+export function useSuiteParseDispatcher(): () => ParseDispatcher {
+  let dispatcher: ParseDispatcher | undefined;
+  beforeAll(() => {
+    dispatcher = new ParseDispatcher(new ParseCache({ enabled: false }), {});
+  });
+  afterAll(async () => {
+    await dispatcher?.shutdown();
+  });
+  return () => {
+    if (dispatcher === undefined) throw new Error('useSuiteParseDispatcher: read outside a test');
+    return dispatcher;
+  };
 }

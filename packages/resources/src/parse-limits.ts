@@ -701,7 +701,8 @@ const PARSE_DECODE_DEFECT = 'PARSE_DECODE_DEFECT';
  * only a plain-mapping root (`isPlainMapping`, `frontmatter-codec.ts`) the
  * decode accepts. A throw there is therefore rethrown loud by
  * every lane: never stored as `BLOB_PARSE_FAILED`, never a per-file finding
- * that blames the document. Classified by {@link isParseDecodeDefect}.
+ * that blames the document. `classifyParseFailure` rethrows it, as it
+ * rethrows every failure not on its allowlist.
  */
 export class ParseDecodeDefectError extends VatError {
   constructor(cause: unknown) {
@@ -711,14 +712,6 @@ export class ParseDecodeDefectError extends VatError {
       { cause },
     );
   }
-}
-
-/**
- * @param error - Anything a parse threw
- * @returns True for a {@link ParseDecodeDefectError}, or anything wearing its code
- */
-export function isParseDecodeDefect(error: unknown): error is ParseDecodeDefectError {
-  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === PARSE_DECODE_DEFECT;
 }
 
 /** A parse outcome that belongs to this run, never to the bytes: a limit breach or a worker's death. */

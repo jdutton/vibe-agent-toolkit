@@ -34,7 +34,7 @@
  */
 
 import type * as ResourcesModule from '@vibe-agent-toolkit/resources';
-import { ParserUnavailableError } from '@vibe-agent-toolkit/resources';
+import { ParseLimitError, ParserUnavailableError } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -218,7 +218,9 @@ describe('a parser-load failure during parse-fact capture', () => {
  */
 describe('an ordinary parse failure during parse-fact capture', () => {
   it('skips only the failing document and captures the rest', async () => {
-    failures.markdownFor = { contentContains: 'Nothing links out of here', error: new Error('unexpected token') };
+    // A failure on `classifyParseFailure`'s allowlist — a document refused for
+    // this run at a limit. An unbranded `Error` is VAT's defect and is rethrown.
+    failures.markdownFor = { contentContains: 'Nothing links out of here', error: new ParseLimitError('timeMs', 10) };
 
     const snapshot = await capture();
 

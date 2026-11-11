@@ -93,7 +93,9 @@ vi.mock('@vibe-agent-toolkit/utils/crawl', async (importOriginal) => {
       crawlBaseDirs.push(options.baseDir);
       const base = safePath.resolve(options.baseDir);
       if (failingCrawlRoots.some((dir) => safePath.resolve(dir) === base)) {
-        throw new Error(CRAWL_FAILURE_MESSAGE);
+        // The OS refusing a read, as `node:fs` raises it — the premise above. An
+        // unbranded `Error` would be VAT's own defect, which no lane degrades.
+        throw Object.assign(new Error(`EACCES: ${CRAWL_FAILURE_MESSAGE}`), { code: 'EACCES', syscall: 'scandir', path: base });
       }
       return actual.crawlDirectory(options);
     },

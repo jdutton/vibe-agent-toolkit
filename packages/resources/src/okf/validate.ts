@@ -26,9 +26,9 @@ import { forEachInOrder, FsLookupCache, safePath } from '@vibe-agent-toolkit/uti
 
 import type { ParseResult } from '../link-parser.js';
 import { parseRefusedEntry } from '../not-admitted.js';
-import { isParserUnavailable } from '../parse-cache.js';
 import { type ParseDispatcher, parseFileCached, withParseDispatcher } from '../parse-dispatcher.js';
-import { isPerRunParseRefusal } from '../parse-limits.js';
+import { classifyParseFailure } from '../parse-failure.js';
+import type { PerRunParseRefusal } from '../parse-limits.js';
 import type { ParseRefusedResource } from '../resource-registry.js';
 
 import {
@@ -189,12 +189,14 @@ async function inspectDocument(
     // worker pool under its limits, a hit loads no parser at all.
     parsed = await parseFileCached(absolutePath, 'markdown', { dispatcher });
   } catch (error) {
-    // ⛔ A broken parser install is NOT a bad document, and reporting it as one
-    // would send an adopter editing a file that is fine: rethrown untouched.
-    if (isParserUnavailable(error)) throw error;
+    // ⛔ Only the allowlist is the document's: a broken parser install, or any
+    // other VAT defect, is rethrown untouched by the classifier — reported as a
+    // bad document it would send an adopter editing a file that is fine.
     // A refusal is a fact about this run: carried for the one contract every
     // lane reports it through, under the project's allow list and severity.
-    if (isPerRunParseRefusal(error)) return { drafts: [], hardFindings: [], parseRefused: parseRefusedEntry(absolutePath, error) };
+    if (classifyParseFailure(error) === 'refused') {
+      return { drafts: [], hardFindings: [], parseRefused: parseRefusedEntry(absolutePath, error as PerRunParseRefusal) };
+    }
     return { drafts: [], hardFindings: [unreadableDocumentFinding(document, error)] };
   }
 

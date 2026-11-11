@@ -203,6 +203,7 @@ const BARREL_EXPORTS = [
   'calculateChecksumFromContent',
   'checkStatements',
   'classifyLink',
+  'classifyParseFailure',
   'classifyPath',
   'claudeContextRelations',
   'claudeImportContributorId',

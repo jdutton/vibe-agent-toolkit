@@ -468,18 +468,14 @@ export type { DocumentParserKind } from './mime-type.js';
 // passes it as `{ dispatcher }`, so the run pays one worker start, not one per
 // file; a call without one builds a one-thread pool on a miss and shuts it down.
 //
-// `isParserUnavailable` and `ParserUnavailableError` are exported for one narrow
-// purpose: a caller that wraps a parse in a per-document `try` must rethrow this
-// one type, or its catch silently reports a broken INSTALL as a broken DOCUMENT —
-// once per document. The parser is loaded lazily, past the parse cache's hit-path
+// A caller that wraps a parse in a per-document `try` classifies what it caught
+// with `classifyParseFailure` — an ALLOWLIST (a per-run refusal, the parser's own
+// throw over the bytes, a read the OS refused) that rethrows everything else
+// untouched, so a broken INSTALL or any other VAT defect is never reported as a
+// broken DOCUMENT. The parser is loaded lazily, past the parse cache's hit-path
 // return (a fully warm run must load no parser at all), so the load happens INSIDE
-// those trys by design and position cannot be the guard.
-//
-// The type also carries a `code` no errno allow-list holds, which is what gets a
-// broken install past the boundaries one layer further out — `vat audit`'s scan
-// catch, `ResourceRegistry`'s read-failure demotion — that would otherwise degrade
-// it to a warning and exit 0. Those two need no predicate call for that reason;
-// only a catch that swallows EVERYTHING does.
+// those trys by design and position cannot be the guard. `isParserUnavailable`
+// names one of those defects for a test or a report; it is never a catch's guard.
 export {
   ParseDispatcher,
   parseContentCached,
@@ -507,6 +503,7 @@ export {
 // caller names tighter limits in (`ParsePoolPolicy.limits`). The batch path
 // (`addResources`) records both as findings instead; a caller of the
 // single-file path classifies them with the predicates, which read `code`.
+export { classifyParseFailure, type ParseFailureKind } from './parse-failure.js';
 export {
   ParseLimitError,
   ParseWorkerDiedError,

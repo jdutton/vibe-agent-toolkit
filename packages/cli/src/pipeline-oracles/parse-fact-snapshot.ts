@@ -12,10 +12,10 @@
 import { createHash } from 'node:crypto';
 
 import {
+  classifyParseFailure,
   flattenHeadings,
   type HeadingNode,
   isParsableContent,
-  isParserUnavailable,
   ParseCache,
   type KeyedContent,
   type LexicalReference,
@@ -263,16 +263,18 @@ async function readKeyedOrSkip(absolutePath: string): Promise<KeyedContent | nul
  * answer was nothing. This snapshot is the parse cache's correctness oracle, so
  * an empty one is a green gate over an unrun check.
  *
- * The guard is the error TYPE. Loading both kinds up front — derived from the
- * paths — also closes it and was tried; it made every warm capture pay the
- * ~730 ms remark load for parses that may never happen.
- * `isParserUnavailable` matches one type VAT constructs at one place, so it is
- * complete by construction, unlike the errno blocklist that preceded it.
+ * The guard is the error's CLASS, by allowlist: `classifyParseFailure` accepts
+ * only a per-run refusal or the parser's own throw over the bytes, and rethrows
+ * everything else — a broken install, any other VAT defect — untouched. Loading
+ * both kinds up front — derived from the paths — also closes the install case
+ * and was tried; it made every warm capture pay the ~730 ms remark load for
+ * parses that may never happen.
  *
  * @param keyed - The bytes and the kind the path routed to, from ONE read
  * @param dispatcher - The run's parse dispatcher (cache disabled)
  * @returns The parse, or `null` when this document alone could not be parsed
- * @throws {ParserUnavailableError} If the parser module cannot be loaded
+ * @throws {ParserUnavailableError} If the parser module cannot be loaded, and
+ *   any other failure that is VAT's rather than the document's
  */
 async function parseOrNull(
   keyed: KeyedContent,
@@ -287,7 +289,7 @@ async function parseOrNull(
   try {
     return await dispatcher.parse(keyed);
   } catch (error) {
-    if (isParserUnavailable(error)) throw error;
+    classifyParseFailure(error);
     return null;
   }
 }

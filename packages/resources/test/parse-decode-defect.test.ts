@@ -25,7 +25,8 @@ import { type KeyedContent, readContentWithKey } from '../src/content-key.js';
 import type * as FrontmatterCodec from '../src/frontmatter-codec.js';
 import { parseMarkdownContent } from '../src/link-parser.js';
 import { ParseCache } from '../src/parse-cache.js';
-import { isParseDecodeDefect } from '../src/parse-limits.js';
+import { classifyParseFailure } from '../src/parse-failure.js';
+import { ParseDecodeDefectError } from '../src/parse-limits.js';
 import { BLOB_PARSE_FAILED, populateBlobs } from '../src/projection/blob-population.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 
@@ -69,7 +70,9 @@ describe('a frontmatter decode that throws on the parent thread', () => {
       (error: unknown) => error,
     );
 
-    expect(isParseDecodeDefect(outcome)).toBe(true);
+    expect(outcome).toBeInstanceOf(ParseDecodeDefectError);
+    // VAT's defect: the one classifier every per-file catch asks rethrows it.
+    expect(() => classifyParseFailure(outcome)).toThrow(outcome as Error);
     expect(conditionsWithCode(builder.build(), BLOB_PARSE_FAILED)).toHaveLength(0);
   });
 
@@ -82,7 +85,9 @@ describe('a frontmatter decode that throws on the parent thread', () => {
       (error: unknown) => error,
     );
 
-    expect(isParseDecodeDefect(outcome)).toBe(true);
+    expect(outcome).toBeInstanceOf(ParseDecodeDefectError);
+    // VAT's defect: the one classifier every per-file catch asks rethrows it.
+    expect(() => classifyParseFailure(outcome)).toThrow(outcome as Error);
     expect(registry.getParseRefusedResources()).toHaveLength(0);
   });
 

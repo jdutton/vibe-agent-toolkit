@@ -206,6 +206,25 @@ function trackedPool(size = 2): ParsePool {
   return pool;
 }
 
+/** A wall clock far past every test timeout here, so it can never decide a heap test. */
+const NEVER_BY_TIME_MS = 600_000;
+
+/**
+ * A one-thread pool on which only the heap can stop a job that never answers.
+ *
+ * Under the default `timeMs` a cold worker on a slow box (Windows CI) reached
+ * the wall-clock stop before the heap script decided, so a heap test failed on
+ * a `ParseLimitError` for `timeMs`. Production timing is untouched: the limit is
+ * named for this pool alone.
+ *
+ * @returns The pool, shut down after the test
+ */
+function heapOnlyPool(): ParsePool {
+  const pool = createParsePool({ size: 1, limits: { timeMs: NEVER_BY_TIME_MS } });
+  openPools.push(pool);
+  return pool;
+}
+
 /** Cache roots the running test created, removed in `afterEach`. */
 const cacheRoots: string[] = [];
 
@@ -783,7 +802,7 @@ describe('a thread V8 stops at its own heap ceiling', () => {
         return stats;
       });
     });
-    const pool = trackedPool(1);
+    const pool = heapOnlyPool();
 
     try {
       const refusal = pool.parse('markdown', '# hi\n', 5).then(() => undefined, (error: unknown) => error);
@@ -844,7 +863,7 @@ async function heapRefusalUnder(
   ].join('\n'));
   const heap = scriptedHeap(script);
   try {
-    const outcome = await outcomeOf(trackedPool(1), '# hi\n');
+    const outcome = await outcomeOf(heapOnlyPool(), '# hi\n');
     return {
       bound: isParseLimitError(outcome) && outcome.limit === 'heapMb' ? outcome.bound : outcome,
       served: heap.served(),

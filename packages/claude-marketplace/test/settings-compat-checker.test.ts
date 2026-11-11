@@ -26,6 +26,11 @@ import { matchesDenyRule, ruleConstrainsDeclaration } from '../src/settings/perm
 import { checkSettingsCompatibility } from '../src/settings/settings-compat-checker.js';
 import type { EffectiveSettings } from '../src/settings/settings-merger.js';
 
+import { useSuiteParseDispatcher } from './test-helpers.js';
+
+/** One dispatcher for the whole file, as `vat audit` holds one for a run. */
+const parseDispatcher = useSuiteParseDispatcher();
+
 const SETTINGS_FILE = 'managed-settings.json';
 
 function settingsDenying(rule: string): EffectiveSettings {
@@ -149,7 +154,7 @@ async function blockedTools(
   rule: string
 ): Promise<string[]> {
   await writeSkill(fixture, `allowed-tools: [${tools.join(', ')}]`);
-  const { conflicts } = await checkSettingsCompatibility(fixture.pluginDir, settingsDenying(rule));
+  const { conflicts } = await checkSettingsCompatibility(fixture.pluginDir, settingsDenying(rule), parseDispatcher());
   return tools.filter((tool) =>
     conflicts.some((conflict) => conflict.detail.startsWith(`Tool "${tool}" `))
   );
@@ -380,7 +385,7 @@ const MALFORMED_ALLOWED_TOOLS = 'allowed-tools: [Read, Edit';
 /** The declarations the checker read, in order, as witnessed against a deny of everything. */
 async function declarationsReadFrom(fixture: SkillFixture, frontmatter: string): Promise<string[]> {
   await writeSkill(fixture, frontmatter);
-  const { conflicts } = await checkSettingsCompatibility(fixture.pluginDir, settingsDenying('*'));
+  const { conflicts } = await checkSettingsCompatibility(fixture.pluginDir, settingsDenying('*'), parseDispatcher());
   return conflicts.map((conflict) => /^Tool "(.*)" in /.exec(conflict.detail)?.[1] ?? conflict.detail);
 }
 
@@ -403,7 +408,7 @@ describe('settings compatibility checker — the allowed-tools value', () => {
     ];
     for (const frontmatter of forms) {
       await writeSkill(getFixture(), frontmatter);
-      const { conflicts } = await checkSettingsCompatibility(getFixture().pluginDir, settingsDenying('Read(.env)'));
+      const { conflicts } = await checkSettingsCompatibility(getFixture().pluginDir, settingsDenying('Read(.env)'), parseDispatcher());
       expect(conflicts.map((c) => c.value), JSON.stringify(frontmatter)).toEqual(['Read(.env)']);
     }
   });
@@ -419,7 +424,7 @@ describe('settings compatibility checker — the allowed-tools value', () => {
   it('reports as unchecked, with the same reason, a frontmatter the skill validator names as unparseable', async () => {
     await writeSkill(getFixture(), MALFORMED_ALLOWED_TOOLS);
 
-    const { conflicts, unchecked } = await checkSettingsCompatibility(getFixture().pluginDir, settingsDenying('*'));
+    const { conflicts, unchecked } = await checkSettingsCompatibility(getFixture().pluginDir, settingsDenying('*'), parseDispatcher());
     const verdict = await validateSkill({ side: 'source', skillPath: getFixture().skillFile, validation: {} });
 
     expect(conflicts).toEqual([]);
@@ -438,11 +443,11 @@ describe('settings compatibility checker — the allowed-tools value', () => {
     };
     for (const spelling of ['model: sonnet', "model: 'sonnet'", 'model: "sonnet"']) {
       await writeSkill(getFixture(), spelling);
-      const { conflicts } = await checkSettingsCompatibility(getFixture().pluginDir, opusOnly);
+      const { conflicts } = await checkSettingsCompatibility(getFixture().pluginDir, opusOnly, parseDispatcher());
       expect(conflicts.map((c) => c.type), spelling).toEqual(['model-unavailable']);
       expect(conflicts[0]?.detail, spelling).toContain('Model "sonnet"');
     }
     await writeSkill(getFixture(), 'model: opus');
-    expect((await checkSettingsCompatibility(getFixture().pluginDir, opusOnly)).conflicts).toEqual([]);
+    expect((await checkSettingsCompatibility(getFixture().pluginDir, opusOnly, parseDispatcher())).conflicts).toEqual([]);
   });
 });

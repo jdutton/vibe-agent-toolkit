@@ -5,7 +5,7 @@
  * extent, and for nothing else.
  */
 
-import { compareCodeUnits, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, vi } from 'vitest';
 
 import { computeContentKey } from '../src/content-key.js';
@@ -22,7 +22,12 @@ import type { JsonValue } from '../src/schemas/projection-shared.js';
 
 import { addFile, IN_PROCESS_HARNESS_FACTS } from './helpers/claude-context-fixture.js';
 
-const ROOT = '/vat-corpus/acme-harness-pass';
+/**
+ * Resolved, so it is absolute on every platform: a bare `/vat-corpus/…` has no
+ * drive letter on Windows, and the not-admitted adapter resolves the paths it
+ * reports, so a `${ROOT}/…` expectation built from the literal missed the drive.
+ */
+const ROOT = safePath.resolve('/vat-corpus/acme-harness-pass');
 
 /** A deriver that is a spy over the shipped reader, run in-process. */
 function spiedDeriver(): HarnessFactsDeriver & ReturnType<typeof vi.fn> {

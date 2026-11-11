@@ -89,7 +89,9 @@
   `@vibe-agent-toolkit/resources` (`ResourceRegistry.getNotAdmitted()`, `notAdmittedIssues`,
   `notAdmittedFindings`, `notAdmittedInScope`, `notAdmittedCount`, `parseRefusedEntry`,
   `parseRefusedMessage(entry, location, consequence)`, `parseRefusedEntryFor`, `parseRefusal`), with
-  `isPerRunParseRefusal`, `isPlainMapping` (the one rule for what a frontmatter root may be),
+  `isPerRunParseRefusal`, `classifyParseFailure` (the one answer to whose fault a per-file parse
+  failure is: an allowlist that rethrows every VAT defect), `isPlainMapping` (the one rule for what
+  a frontmatter root may be),
   `notAdmittedRealizations(rows, root)` (every file a population did not admit, as a `NotAdmittedLog`
   of unreadable and parse-refused entries; it replaces `parseRefusedRealizations`, and the
   `RefusedRealization` type is gone) and `resolveNotAdmittedAmong`. `ParseRefusedResource` carries `code` and `reason` and no
@@ -126,6 +128,17 @@
   no rename map (ADR P4's rename map covers renames, and none applies); a statement that read a typed
   root out of `blobs.frontmatter`, or matched an old `frontmatterError` text, must be updated.
 
+- **`checkSettingsCompatibility` takes a required `dispatcher`** (`@vibe-agent-toolkit/claude-marketplace`):
+  the run's parse dispatcher, held across every plugin it checks, so a run starts one worker pool
+  rather than one per plugin. Open one with `withParseDispatcher` from
+  `@vibe-agent-toolkit/resources` around the run and pass it to each call.
+- **`analyzeCompatibility` takes a required `dispatcher`** (`@vibe-agent-toolkit/claude-marketplace`),
+  `analyzeCompatibility(pluginDir, locationRoot, dispatcher, options?)`: it no longer opens a worker
+  pool of its own per plugin. Open one with `withParseDispatcher` around the run, as for
+  `checkSettingsCompatibility`. Its per-file catch, and any caller's catch around either entry,
+  classifies through the new `classifyCompatibilityFailure` export (a plugin's malformed manifest,
+  a per-run refusal, the parser's throw over the bytes or a read the OS refused is the plugin's;
+  every VAT defect is rethrown). A manifest with no `name` is now a `SyntaxError`.
 - **`vat audit` resolves a refused document through the audited project's `resources.validation`.**
   A `RESOURCE_PARSE_LIMIT_EXCEEDED`, `RESOURCE_PARSE_WORKER_DIED` or `RESOURCE_UNREADABLE` finding is
   cleared by an `allow` entry naming the file (matched at its project-relative path) and set by
@@ -170,7 +183,12 @@
   parser-unavailable instead of refusing the first asset as a worker death.
 - **A broken install is loud.** A parse worker that dies before it is ready, or three in a row that
   die without answering, fail the run with a parser-unavailable error naming the worker entry,
-  instead of reporting every file as a worker death.
+  instead of reporting every file as a worker death. Every per-file parse catch — skill validation,
+  both inventory catches, `vat okf validate`, plugin compatibility analysis, `vat audit`'s two
+  compat lanes (compatibility and `--settings`) and the parse-fact oracle — classifies what it
+  caught through one allowlist, so a broken install or any other VAT defect fails the run:
+  `vat audit` and `vat inventory` no longer file it as a `link walk failed` row on `SKILL.md`, or a
+  plugin "that could not be analyzed", and exit 0.
 - **A parse-cache entry whose stored frontmatter is corrupt is a cache miss,** parsed again in a
   worker, never an error; a failure rebuilding a fresh worker answer is a VAT defect thrown as
   `PARSE_DECODE_DEFECT`, never a finding about the file.

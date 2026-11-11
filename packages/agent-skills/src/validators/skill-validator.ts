@@ -2,8 +2,8 @@ import * as fs from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 import {
+  classifyParseFailure,
   isLocalFileLink,
-  isParserUnavailable,
   parseFileCached,
   type ParseDispatcher,
   resolveLocalHref,
@@ -403,9 +403,10 @@ async function traverseLinks(
       // worker — lazily, only on a cache miss, so a fully warm validation loads
       // no parser at all — which puts a loader failure in this catch. Unguarded
       // it minted one `LINK_INTEGRITY_BROKEN` per file, blamed every innocent
-      // document, never walked the link graph, and still exited 0.
-      // `isParserUnavailable` matches one type VAT constructs at one place.
-      if (isParserUnavailable(error)) throw error;
+      // document, never walked the link graph, and still exited 0. The
+      // classifier is an allowlist: it rethrows that, and every other VAT
+      // defect, untouched.
+      classifyParseFailure(error);
 
       // A document the worker refused (a limit, a dead worker) is not "could
       // not be parsed, so skipped": nothing in it was checked, and it is the

@@ -35,6 +35,7 @@ import {
 import {
   analyzeCompatibility,
   checkSettingsCompatibility,
+  classifyCompatibilityFailure,
   detectSkillClaudePluginNameMismatch,
   crawlSkillLinkRegistry,
   extractClaudeMarketplaceInventory,
@@ -52,8 +53,10 @@ import { detectFormat } from '@vibe-agent-toolkit/discovery';
 import {
   listingRefusalRemedy,
   notAdmittedIssues,
+  type ParseDispatcher,
   type RegistryUnreadablePolicy,
   resolveNotAdmittedAmong,
+  withParseDispatcher,
 } from '@vibe-agent-toolkit/resources';
 import {
   buildReport,
@@ -2221,17 +2224,21 @@ export async function runCompatAnalysis(
   const compatMap = new Map<string, PluginCompatEntry>();
 
   // In order: each plugin's explanations go to the logger as it is analyzed.
-  await forEachInOrder(results, async (result) => {
-    if (result.type !== RESOURCE_TYPE_CLAUDE_PLUGIN) return;
+  // One parse dispatcher for both lanes across the whole run: a pool per plugin
+  // was started and torn down for each, which the run paid once per plugin.
+  await withParseDispatcher((dispatcher) =>
+    forEachInOrder(results, async (result) => {
+      if (result.type !== RESOURCE_TYPE_CLAUDE_PLUGIN) return;
 
-    const entry: PluginCompatEntry = {
-      compat: await analyzeOrExplain(result.path, locationRoot, vatContext, logger),
-    };
-    if (effectiveSettings !== undefined) {
-      entry.settings = await settingsVerdict(result.path, effectiveSettings, locationRoot, logger);
-    }
-    compatMap.set(result.path, entry);
-  });
+      const entry: PluginCompatEntry = {
+        compat: await analyzeOrExplain(result.path, locationRoot, vatContext, logger, dispatcher),
+      };
+      if (effectiveSettings !== undefined) {
+        entry.settings = await settingsVerdict(result.path, effectiveSettings, locationRoot, logger, dispatcher);
+      }
+      compatMap.set(result.path, entry);
+    }),
+  );
 
   fileLaneFindings(results, compatMap, locationRoot);
   return compatMap;
@@ -2259,23 +2266,27 @@ function fileLaneFindings(results: ValidationResult[], compatMap: ReadonlyMap<st
 }
 
 /**
- * The analyzer's result for one plugin, or — when it threw — the reason, said
- * on stderr and carried into the document. Compat analysis is best-effort:
- * it never fails the audit, but a plugin it could not analyze is reported as
- * exactly that, never as a plugin with no `compatibility:` block.
+ * The analyzer's result for one plugin, or — when it threw for a reason that is
+ * the plugin's — that reason, said on stderr and carried into the document.
+ * Compat analysis is best-effort per plugin: a plugin it could not analyze is
+ * reported as exactly that, never as a plugin with no `compatibility:` block.
+ * A VAT defect (a broken parser install) is not the plugin's:
+ * `classifyCompatibilityFailure` rethrows it, and the audit fails loud.
  */
 async function analyzeOrExplain(
   pluginDir: string,
   locationRoot: string,
   vatContext: VATProjectContext | null,
   logger: ReturnType<typeof createLogger>,
+  dispatcher: ParseDispatcher,
 ): Promise<CompatibilityBlock> {
   try {
     logger.debug(`Running compatibility analysis for: ${pluginDir}`);
     const configTargets = resolveConfigTargetsForPlugin(pluginDir, vatContext);
     const analyzeOptions = configTargets === undefined ? undefined : { configTargets };
-    return await analyzeCompatibility(pluginDir, locationRoot, analyzeOptions);
+    return await analyzeCompatibility(pluginDir, locationRoot, dispatcher, analyzeOptions);
   } catch (err) {
+    classifyCompatibilityFailure(err);
     const refused = typeof (err as { path?: unknown }).path === 'string' ? (err as { path: string }).path : undefined;
     const raw = err instanceof Error ? err.message : String(err);
     const reason = refused === undefined ? raw : withRelativePath(raw, refused, locationRoot);
@@ -2286,8 +2297,9 @@ async function analyzeOrExplain(
 
 /**
  * One plugin's settings verdict: the checker's conflicts and the paths it
- * never saw — and, when the checker itself fails, the plugin as the one thing
- * unchecked, rather than no `settings:` block at all.
+ * never saw — and, when the checker itself fails for a reason that is the
+ * plugin's, the plugin as the one thing unchecked, rather than no `settings:`
+ * block at all. A VAT defect is rethrown by `classifyCompatibilityFailure`.
  *
  * The checker failing used to be `logger.debug` and a result with no settings
  * block, so a plugin the check could not run on was indistinguishable from one
@@ -2299,10 +2311,12 @@ async function settingsVerdict(
   effectiveSettings: EffectiveSettings,
   locationRoot: string,
   logger: ReturnType<typeof createLogger>,
+  dispatcher: ParseDispatcher,
 ): Promise<SettingsCheck> {
   try {
-    return await checkSettingsCompatibility(pluginDir, effectiveSettings);
+    return await checkSettingsCompatibility(pluginDir, effectiveSettings, dispatcher);
   } catch (settingsErr) {
+    classifyCompatibilityFailure(settingsErr);
     const reason = settingsErr instanceof Error ? settingsErr.message : String(settingsErr);
     logger.warn(`Settings compatibility could not be checked for ${issueLocation(pluginDir, locationRoot) || '.'}: ${reason}`);
     return { conflicts: [], unchecked: [{ path: pluginDir, reason }] };

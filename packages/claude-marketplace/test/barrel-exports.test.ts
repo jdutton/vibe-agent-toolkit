@@ -66,6 +66,7 @@ const BARREL_EXPORTS = [
   'buildInventoryPopulation',
   'buildMultipartFormData',
   'checkSettingsCompatibility',
+  'classifyCompatibilityFailure',
   'computeVerdicts',
   'crawlSkillLinkRegistry',
   'createOrgApiClientFromEnv',
