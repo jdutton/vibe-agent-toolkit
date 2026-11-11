@@ -1003,7 +1003,7 @@ export function memoryBoundedPool(requested: PoolShape, memoryBytes: number): Po
  * memory a live pool was bounded by. A pool whose heap the bound lowered leaves none; one whose
  * width it lowered leaves only what the narrower pool's worst case does not fill, often none.
  *
- * @param pool - The widest pool this process runs at this shape, as {@link memoryBoundedPool} bounded it
+ * @param pool - The pool to charge parked threads beside, as {@link memoryBoundedPool} bounded it
  * @param memoryBytes - The memory this process may use
  * @returns How many threads of this shape may be parked; `0` parks none
  */

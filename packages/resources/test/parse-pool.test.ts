@@ -56,6 +56,7 @@ import {
   __setParseWorkerEntryForTest,
   createParsePool,
   describeParseFailure,
+  MIN_PARKING_APPLIED_MB,
   PARKED_HEAP_MB,
   PARKED_IDLE_MS,
   type ParsePool,
@@ -1202,6 +1203,29 @@ describe('a parked thread', () => {
     vi.spyOn(Worker.prototype, 'getHeapStatistics').mockImplementation(async function (this: Worker) {
       const heap = await real.call(this);
       return { ...heap, used_heap_size: usedBytes };
+    });
+
+    await pool.shutdown();
+
+    expect(__parkedParseWorkerCountForTest()).toBe(parked);
+  });
+
+  // V8's old-generation ceiling as a process `--max-old-space-size` leaves it; the pool applies
+  // half. The used heap is left real, well under PARKED_HEAP_MB, so only the bound decides.
+  it.each([
+    { label: 'never at 192 MiB, where the leftover would be a large share of the room', ceilingMb: 192, parked: 0 },
+    { label: 'never at 958 MiB, where it applies one MiB under the floor', ceilingMb: MIN_PARKING_APPLIED_MB * 2 - 2, parked: 0 },
+    { label: 'still at 960 MiB, where it applies the floor exactly', ceilingMb: MIN_PARKING_APPLIED_MB * 2, parked: 1 },
+    { label: 'still at 1,024 MiB (the integration tier), where it applies 512 MiB', ceilingMb: 1024, parked: 1 },
+  ])('is parked under a lowered heap ceiling only while the applied bound keeps the leftover small: $label', async ({ ceilingMb, parked }) => {
+    const pool = createParsePool({ size: 1 });
+    openPools.push(pool);
+    await pool.parse('markdown', '# lowered\n', 10);
+    const real = Worker.prototype.getHeapStatistics;
+    vi.spyOn(Worker.prototype, 'getHeapStatistics').mockImplementation(async function (this: Worker) {
+      const heap = await real.call(this);
+      const youngMb = this.resourceLimits?.maxYoungGenerationSizeMb ?? 0;
+      return { ...heap, heap_size_limit: (youngMb + ceilingMb) * BYTES_PER_MIB };
     });
 
     await pool.shutdown();

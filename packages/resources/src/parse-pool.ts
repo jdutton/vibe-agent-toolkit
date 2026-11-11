@@ -1002,6 +1002,11 @@ class WorkerParsePool implements ParsePool {
     const heap = await poolWorker.worker.getHeapStatistics().catch(() => undefined);
     if (heap === undefined || poolWorker.exited) return false;
     if (exceedsHeapLimit(heap, PARKED_HEAP_MB)) return false;
+    // A process flag can lower the applied bound far below `heapMb`, where the leftover a
+    // parked thread may carry is a real share of the room: park none there.
+    if (heapBounds(heap, youngGenerationMb(poolWorker.worker), this.#limits.heapMb).appliedMb < MIN_PARKING_APPLIED_MB) {
+      return false;
+    }
     poolWorker.detach();
     await parkWorker(poolWorker.worker, poolWorker.key, poolWorker.parsersLoaded, this.#parkCap);
     return true;
@@ -1531,6 +1536,19 @@ async function closeWorker(worker: Worker): Promise<void> {
 export const PARKED_HEAP_MB = 48;
 
 /**
+ * The least applied heap bound, in MiB, under which a thread is parked: 480, ten times
+ * {@link PARKED_HEAP_MB}.
+ *
+ * A parked thread hands the next job at most about 24 MiB less than a fresh thread
+ * ({@link PARKED_HEAP_MB} less the fresh figure). At 480 MiB that is at most 5% of the bound,
+ * and less above it; under a process `--max-old-space-size` that lowers the bound further (to
+ * as little as 96 MiB) a fresh thread is started instead. Not the configured `heapMb` itself: a
+ * process run at `--max-old-space-size=1024` (this repo's integration tier) applies 512 MiB, and
+ * parking there costs at most 4.7% of the room, where refusing it costs every pool a thread start.
+ */
+export const MIN_PARKING_APPLIED_MB = PARKED_HEAP_MB * 10;
+
+/**
  * How long a parked thread waits for a pool to adopt it before it closes itself: 5 s.
  *
  * A command's pools follow one another within milliseconds, so a few seconds keeps every hand-off
@@ -1726,8 +1744,9 @@ export function createParsePool(options?: ParsePoolOptions): ParsePool {
   const memoryBytes = machineMemoryBytes();
   const bounded = memoryBoundedPool({ size, heapMb: requestedLimits.heapMb }, memoryBytes);
   const limits: ParseLimits = { ...requestedLimits, heapMb: bounded.heapMb };
-  // Threads it parks are charged beside the widest pool of this shape a process starts, so
-  // parking never spends the memory the bound above held for a live pool.
+  // Threads it parks are charged beside a pool as wide as this one or the default, whichever is
+  // wider, so parking never spends the memory the bound above held for such a pool. A wider pool
+  // pinned elsewhere in the process is not counted (see the hazard register).
   const widest = memoryBoundedPool({ size: Math.max(size, defaultParsePoolSize()), heapMb: requestedLimits.heapMb }, memoryBytes);
   const parkCap = Math.min(defaultParsePoolSize(), parkedThreadRoom(widest, memoryBytes));
   // Conditional spread, never `{ cacheDir: undefined }`: `workerData` is

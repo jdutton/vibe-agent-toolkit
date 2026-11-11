@@ -467,6 +467,7 @@ export type { DocumentParserKind } from './mime-type.js';
 // a cache hit on this thread and parse a miss in the bounded worker pool, under
 // its limits (ADR I8); nothing parses on the calling thread. A caller that parses
 // many documents holds one dispatcher for the run (`withParseDispatcher`) and
+// passes it as `{ dispatcher }`, so the run pays one worker start, not one per
 // file; a call without one builds a one-thread pool on a miss and shuts it down.
 // A pool's shutdown parks its healthy idle threads (unref'd) for the next pool of
 // the same shape, so a process pays one worker start per concurrent thread, not
