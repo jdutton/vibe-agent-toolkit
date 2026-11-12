@@ -38,8 +38,8 @@ so `vat` is on PATH during `postinstall`:
 ```
 
 `vat.version` is the metadata schema version string (`"1.0"`). `vat.type` is deprecated, optional
-and read by nothing — omit it. `vat.agents`, `vat.pureFunctions` and `vat.runtimes` are accepted by
-the schema but no install path consumes them yet.
+and read by nothing — omit it. `vat.agents`, `vat.pureFunctions` and `vat.runtimes` are not part of the
+`vat` metadata contract: they are tolerated as unknown keys and ignored.
 
 **2. `vibe-agent-toolkit.config.yaml`** — where every skill and plugin is declared:
 

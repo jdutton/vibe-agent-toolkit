@@ -49,15 +49,15 @@ is the `BACKEND_UNAVAILABLE` refusal (exit 2) naming the package to install.
 
 ```bash
 # Ask a question in natural language
-vat rag query "How do I configure agent tools?"
+vat rag query "How do I configure link validation?"
 
 # Output shows relevant chunks under data:
 # status: ok
 # data:
 #   chunks:
-#     - content: "Agent tools are configured in the spec.tools section..."
-#       filePath: docs/agent-configuration.md   # relative to data.root
-#       headingPath: Configuration > Tools
+#     - content: "Link validation is configured in the resources.validation section..."
+#       filePath: docs/configuration.md   # relative to data.root
+#       headingPath: Configuration > Validation
 ```
 
 ### 3. View Database Statistics

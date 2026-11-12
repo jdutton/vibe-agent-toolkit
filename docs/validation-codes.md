@@ -37,7 +37,7 @@ skills:
             - reason: "whole-skill concern; paths defaults to ['**/*']"
 ```
 
-`validation.severity` sets class-level behavior; `validation.allow` suppresses specific `(code, path)` instances with an audit trail. `paths` is optional on allow entries and defaults to `["**/*"]` (the whole skill). Full docs at the VAT agent-authoring skill.
+`validation.severity` sets class-level behavior; `validation.allow` suppresses specific `(code, path)` instances with an audit trail. `paths` is optional on allow entries and defaults to `["**/*"]` (the whole skill). Full docs in the `vibe-agent-toolkit:vat-skill-authoring` skill.
 
 ## Where an issue points — the four anchors
 

@@ -1,0 +1,4 @@
+# A synthetic multi-file skill for the packaged-output drift gate: the packager
+# rewrites links inside a bundled non-SKILL.md file, which no dogfood skill has.
+skills:
+  include: ["skills/**/SKILL.md"]

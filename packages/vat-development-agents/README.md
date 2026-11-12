@@ -1,9 +1,8 @@
 # @vibe-agent-toolkit/vat-development-agents
 
 VAT's own Claude Code plugin, `vibe-agent-toolkit`: the skills an agent loads to work with
-vibe-agent-toolkit — adoption and configuration, skill authoring, audit, distribution, knowledge
-resources, RAG, skill review and testing, and enterprise org admin. The package is also VAT's
-dogfood: it is built, verified and published with VAT's own commands.
+vibe-agent-toolkit. The package is also VAT's dogfood: it is built, verified and published with
+VAT's own commands.
 
 Skill sources live in [`resources/skills/`](resources/skills/); the router `SKILL.md` lists every
 sub-skill and when to load it.

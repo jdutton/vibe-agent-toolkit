@@ -9,7 +9,6 @@
  * This is required for:
  * - System tests that spawn CLI with `node` (not `bun`)
  * - Runtime usage where users run CLI with `node`
- * - MCP gateway imports that use package names
  *
  * Usage:
  *   bun packages/dev-tools/src/link-workspace-packages.ts

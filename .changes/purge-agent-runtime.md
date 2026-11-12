@@ -21,7 +21,7 @@
     `MemoryConfigSchema`, `PromptConfigSchema`, `PromptsConfigSchema`, `RAGConfigSchema`,
     `TestConfigSchema`), `AgentMetadataSchema`, `BuildMetadataSchema`, `LLMConfigSchema`,
     `AgentInterfaceSchema`, `SchemaRefSchema`, `Agent`, `ToolSchema`, `ToolAlternativeSchema`,
-    `ResourceRegistrySchema`, `ResourceSchema`, `PackagingOptionsSchema`, `VatAgentMetadataSchema`,
+    `ResourceRegistrySchema`, `ResourceSchema`, `VatAgentMetadataSchema`,
     `VatPureFunctionMetadataSchema` (each with its type); the agent result envelope
     (`AgentResult`, `StatefulAgentResult`, `OneShotAgentOutput`, `ConversationalAgentOutput`,
     `ExecutionMetadata`, `createSuccess`, `createError`, `createInProgress`, `RESULT_SUCCESS`,
@@ -32,6 +32,12 @@
     `agent-metadata.json`, `agent-interface.json`, `llm-config.json`, `tool.json` and
     `resource-registry.json` are gone. `VatPackageMetadataSchema` no longer models `vat.agents`,
     `vat.pureFunctions` or `vat.runtimes`.
+  - `@vibe-agent-toolkit/schema` also drops `PackagingOptionsSchema` (and its type), an unused
+    skill-packaging shape: skill packaging is configured in `vibe-agent-toolkit.config.yaml`.
+  - `@vibe-agent-toolkit/agent-skills`: no VAT command applies `VATAgentSkillFrontmatterSchema` (or
+    its published `vat-skill-frontmatter.json`) any more — it was applied only to agent-generated
+    skills. `vat skills validate` and `vat skills build` use `AgentSkillFrontmatterSchema`; the
+    stricter schema stays exported for callers that opt in.
   - `@vibe-agent-toolkit/discovery`: `'vat-agent'` is gone from `DetectedFormat`; an `agent.yaml`
     is detected as `unknown`.
   - `vat audit` no longer classifies `agent.yaml`: the `vat-agent` format is gone from audit output
@@ -42,6 +48,9 @@
     artifact (`vat mcp serve --print-config`), are no longer published.
   - The `vat-agent-authoring` skill is gone from the `vibe-agent-toolkit` plugin
     (`@vibe-agent-toolkit/vat-development-agents`).
+  - `@vibe-agent-toolkit/vat-development-agents` drops the subpath exports
+    `./agents/agent-generator` and `./agents/resource-optimizer`, no longer ships `agents/`, and
+    drops its `vat.agents` metadata.
   - Validation and refusal codes: `AGENT_MANIFEST_INVALID`, `AGENT_REFERENCE_MISSING`,
     `AGENT_REFERENCE_UNREADABLE`, `AGENT_RAG_NO_SOURCES`, `AGENT_MANIFEST_NOT_FOUND`,
     `AGENT_MANIFEST_UNREADABLE`, `AGENT_PACKAGE_ROOT_MISSING`, `AGENT_NAME_ESCAPES_SCOPE`.

@@ -358,8 +358,9 @@ function collectBuiltSkillOutputs(
   const outputs: BuiltSkillOutputs = { built: [], expected: 0, inPlace: 0, missing: [] };
   // No `try`, deliberately. The config was already loaded by the command (see
   // `loadConfigTolerant`) and the in-process phases run only when it loaded, so
-  // `loadConfig` here answers from cache. The `catch { return outputs }` that
-  // A `catch` here could only ever absorb a DEFECT into an empty candidate list.
+  // `loadConfig` here answers from cache. A `catch` here could only ever absorb a
+  // DEFECT — into an empty candidate list that every phase below would then
+  // verify against: zero bundles, zero findings, exit 0.
   const config = loadConfig(cwd, 'source');
   if (!config) return outputs;
 
@@ -932,10 +933,11 @@ async function runInProcessPhases(run: {
 }): Promise<void> {
   const { phases, config, projectRoot, logger, verbose, results } = run;
   // ONE discovery for the whole in-process half of the run: every phase below
-  // asks "which skills does this project have". `'refuse'`
-  // green-without-checking shape this command exists to refuse (a SKILL.md whose
-  // parse was refused has no name to check by, so it refuses too) — the throw is
-  // the run's refusal, published with the phases that already finished.
+  // asks "which skills does this project have". `'refuse'`: a verify over a
+  // population it could not see is the green-without-checking shape this
+  // command exists to refuse (a SKILL.md whose parse was refused has no name to
+  // check by, so it refuses too) — the throw is the run's refusal, published
+  // with the phases that already finished.
   const discoveredSkills = namedSkillsOrRefuse(await discoverSkillsFromConfig(run.skills, projectRoot, 'refuse'), projectRoot);
   // ONE plugin-local index likewise, and the declared name of each plugin-local
   // skill, which keys its config exactly as the plugin build keyed it.

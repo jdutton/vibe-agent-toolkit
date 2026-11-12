@@ -181,7 +181,9 @@ if (result.success) {
 
 #### VATAgentSkillFrontmatterSchema
 
-Extended schema for VAT skills that carry a version:
+A stricter, opt-in variant of the base schema (requires `name`, `description` and
+`metadata.version`). No VAT command applies it — `vat skills validate` and `vat skills build`
+use `AgentSkillFrontmatterSchema`:
 
 ```typescript
 import { VATAgentSkillFrontmatterSchema } from '@vibe-agent-toolkit/agent-skills';
@@ -190,7 +192,7 @@ const frontmatter = {
   name: 'my-skill',
   description: 'Does something useful',
   metadata: {
-    version: '1.0.0',   // Required for VAT skills
+    version: '1.0.0',   // Required by this schema
     tags: ['utility', 'data'],
   },
 };
@@ -199,7 +201,7 @@ const result = VATAgentSkillFrontmatterSchema.safeParse(frontmatter);
 ```
 
 **Additional Requirements:**
-- `metadata.version` - Semantic version (required for VAT)
+- `metadata.version` - Semantic version
 
 ### parseFrontmatter(content): ParseResult
 

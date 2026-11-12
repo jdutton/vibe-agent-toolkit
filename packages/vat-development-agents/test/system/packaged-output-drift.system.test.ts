@@ -47,12 +47,15 @@
  *
  * ## What it compares
  *
- * `vat-development-agents`' own dogfood plugin, whose golden lives under this
- * test's fixture directory because the gate, not the package, owns the baseline.
- * Every skill in it is a lone `SKILL.md`, so no bundled non-`SKILL.md` file is
- * under this gate: a rewriter change that only alters links inside a bundled
- * `resources/*.md` is invisible here until a multi-file bundle is added to
- * `BUNDLES`.
+ * Every entry in `BUNDLES`, each golden under this test's `test/golden/<name>/`
+ * because the gate, not the package, owns the baseline:
+ *
+ *  - `vat-development-agents`' own dogfood plugin, read from its built `dist/`.
+ *    Every skill in it is a lone `SKILL.md`.
+ *  - A synthetic multi-file skill (`test/fixtures/multi-file-skill/`, never
+ *    shipped), built by this test into a temp dir, so the rewriter's work on a
+ *    bundled `resources/*.md` — links back to `SKILL.md` and to siblings — is
+ *    under the gate too.
  *
  * ## Line endings: compared byte-exact, on purpose
  *
@@ -71,11 +74,12 @@
  * the test fails closed if a `dist/` is missing entirely, but it cannot detect
  * staleness, so build first if you are running it on its own.
  */
+import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { compareCodeUnits, mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { createTempDir, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
+import { createTempDir, NODE_EXECUTABLE, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /** Package root — two levels up from `test/system/`. */
@@ -83,26 +87,44 @@ const PACKAGE_ROOT = toForwardSlash(fileURLToPath(new URL('../../', import.meta.
 /** The monorepo's `packages/` directory, so a sibling package's `dist/` is reachable. */
 const PACKAGES_DIR = safePath.join(PACKAGE_ROOT, '..');
 const GOLDEN_ROOT = safePath.join(PACKAGE_ROOT, 'test', 'golden');
+const FIXTURES_ROOT = safePath.join(PACKAGE_ROOT, 'test', 'fixtures');
+// The cli is a workspace dependency, so `^build` has built its binary.
+const CLI_BIN = safePath.join(PACKAGE_ROOT, '../cli/dist/bin.js');
 
 const UPDATING = process.env.UPDATE_DRIFT_GOLDEN === '1';
 const itUnlessUpdating = it.skipIf(UPDATING);
 
 /** One packaged bundle tree under this gate. */
-interface GoldenBundle {
-  /**
-   * Directory name under `packages/`, and the golden subdirectory name. A
-   * literal: it is what lets `validate-structure` see whose build this test
-   * reads and demand turbo order it (`checkBuiltOutputEdges`).
-   */
-  readonly pkg: string;
-  /** Why this package is in the gate — read this before deleting an entry. */
-  readonly covers: string;
-}
+type GoldenBundle =
+  | {
+      readonly kind: 'package';
+      /**
+       * Directory name under `packages/`, and the golden subdirectory name. A
+       * literal: it is what lets `validate-structure` see whose build this test
+       * reads and demand turbo order it (`checkBuiltOutputEdges`).
+       */
+      readonly pkg: string;
+      /** Why this bundle is in the gate — read this before deleting an entry. */
+      readonly covers: string;
+    }
+  | {
+      readonly kind: 'fixture';
+      /** Directory name under `test/fixtures/`, and the golden subdirectory name. */
+      readonly fixture: string;
+      /** Why this bundle is in the gate — read this before deleting an entry. */
+      readonly covers: string;
+    };
 
 const BUNDLES: readonly GoldenBundle[] = [
   {
+    kind: 'package',
     pkg: 'vat-development-agents',
     covers: 'the single-file skills of the dogfood plugin',
+  },
+  {
+    kind: 'fixture',
+    fixture: 'multi-file-skill',
+    covers: 'link rewriting inside a bundled non-SKILL.md file',
   },
 ];
 
@@ -119,13 +141,30 @@ const UPDATE_HINT =
   '    cd packages/vat-development-agents && UPDATE_DRIFT_GOLDEN=1 bunx vitest run --config vitest.system.config.ts test/system/packaged-output-drift.system.test.ts\n' +
   'If it is NOT intended, a packager/rewriter change altered shipped bundle content.';
 
-/** The bundle's built `dist/skills` — what the build packaged. */
-function builtSkillsDirFor(bundle: GoldenBundle): string {
+/** The golden subdirectory name: the package's directory, or the fixture's. */
+function nameOf(bundle: GoldenBundle): string {
+  return bundle.kind === 'package' ? bundle.pkg : bundle.fixture;
+}
+
+/** A package bundle's built `dist/skills` — what its build packaged. */
+function builtPackageSkillsDir(bundle: GoldenBundle & { kind: 'package' }): string {
   return safePath.join(PACKAGES_DIR, bundle.pkg, 'dist', 'skills');
 }
 
+/**
+ * Build a fixture bundle with the cli in a temp copy, so the fixture tree never
+ * holds build output. Returns the temp root (to remove) and its `dist/skills`.
+ */
+function buildFixture(bundle: GoldenBundle & { kind: 'fixture' }): { tempRoot: string; builtDir: string } {
+  const tempRoot = createTempDir('vat-packaged-drift-fixture-');
+  const project = safePath.join(tempRoot, 'project');
+  fs.cpSync(safePath.join(FIXTURES_ROOT, bundle.fixture), project, { recursive: true });
+  execFileSync(NODE_EXECUTABLE, [CLI_BIN, 'skills', 'build'], { cwd: project, stdio: 'pipe' });
+  return { tempRoot, builtDir: safePath.join(tempRoot, 'project', 'dist', 'skills') };
+}
+
 function goldenSkillsDirFor(bundle: GoldenBundle): string {
-  return safePath.join(GOLDEN_ROOT, bundle.pkg, 'skills');
+  return safePath.join(GOLDEN_ROOT, nameOf(bundle), 'skills');
 }
 
 /**
@@ -224,9 +263,12 @@ function regenerateGolden(builtDir: string, goldenDir: string): void {
   }
 }
 
-describe.each(BUNDLES)('packaged output drift: $pkg (system)', (bundle) => {
-  const builtDir = builtSkillsDirFor(bundle);
+describe.each(BUNDLES)('packaged output drift: $kind, $covers (system)', (bundle) => {
   const goldenDir = goldenSkillsDirFor(bundle);
+  const name = nameOf(bundle);
+  /** Holds a fixture's build; empty for a package bundle. */
+  let workDir = '';
+  let builtDir = '';
   /**
    * The built tree, copied whole into a temp dir before any file of it is read.
    * The copy is this suite's one read of `dist/skills`, a path every piece of
@@ -236,6 +278,13 @@ describe.each(BUNDLES)('packaged output drift: $pkg (system)', (bundle) => {
   let snapshot = '';
 
   beforeAll(() => {
+    if (bundle.kind === 'fixture') {
+      const built = buildFixture(bundle);
+      workDir = built.tempRoot;
+      builtDir = built.builtDir;
+    } else {
+      builtDir = builtPackageSkillsDir(bundle);
+    }
     if (!fs.existsSync(builtDir)) return;
     snapshot = createTempDir('vat-packaged-drift-');
     fs.cpSync(builtDir, snapshot, { recursive: true });
@@ -244,12 +293,13 @@ describe.each(BUNDLES)('packaged output drift: $pkg (system)', (bundle) => {
 
   afterAll(() => {
     if (snapshot !== '') removeTempDir(snapshot);
+    if (workDir !== '') removeTempDir(workDir);
   });
 
   it('has a BUILT bundle tree to compare — an absent build fails, it does not skip', () => {
     expect(
       fs.existsSync(builtDir),
-      `No built skills at ${builtDir} (${bundle.pkg} covers: ${bundle.covers}).\n` +
+      `No built skills at ${builtDir} (${name} covers: ${bundle.covers}).\n` +
         'This test compares BUILT output, so an absent build is a FAILURE, not a skip:\n' +
         'a bundle that fails to build, gets renamed, or is dropped would otherwise report green.\n' +
         BUILD_HINT,
@@ -266,7 +316,7 @@ describe.each(BUNDLES)('packaged output drift: $pkg (system)', (bundle) => {
   itUnlessUpdating('has a REVIEWED golden tree — an unreviewed bundle fails, it does not skip', () => {
     expect(
       filesUnder(goldenDir).length,
-      `No golden recorded at ${goldenDir} (${bundle.pkg} covers: ${bundle.covers}).\n` +
+      `No golden recorded at ${goldenDir} (${name} covers: ${bundle.covers}).\n` +
         'Its packaged output is therefore UNREVIEWED and this gate would be blind to it.\n' +
         UPDATE_HINT,
     ).toBeGreaterThan(0);
@@ -287,7 +337,7 @@ describe.each(BUNDLES)('packaged output drift: $pkg (system)', (bundle) => {
 
     expect(
       { missing, unexpected },
-      `Packaged file SET changed for ${bundle.pkg}.\n${report}\n\n${UPDATE_HINT}`,
+      `Packaged file SET changed for ${name}.\n${report}\n\n${UPDATE_HINT}`,
     ).toEqual({ missing: [], unexpected: [] });
   });
 
@@ -305,7 +355,7 @@ describe.each(BUNDLES)('packaged output drift: $pkg (system)', (bundle) => {
 
     expect(
       drifted,
-      `Packaged content drifted for ${bundle.pkg}.\n\n${drifted.join('\n\n')}\n\n${UPDATE_HINT}`,
+      `Packaged content drifted for ${name}.\n\n${drifted.join('\n\n')}\n\n${UPDATE_HINT}`,
     ).toEqual([]);
   });
 });

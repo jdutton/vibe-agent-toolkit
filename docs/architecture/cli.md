@@ -39,8 +39,8 @@ packages/cli/
 │   │   └── vat.ts              # Smart wrapper (context detection)
 │   ├── commands/
 │   │   ├── resources/          # Resources command group
-│   │   ├── rag/                # Future: RAG commands
-│   │   └── skills/             # Future: Skills commands
+│   │   ├── rag/                # RAG commands
+│   │   └── skills/             # Skills commands
 │   ├── utils/
 │   │   ├── logger.ts           # stderr logging
 │   │   ├── project-root.ts     # Root detection
@@ -144,8 +144,8 @@ Commands are scoped by package name for scalability:
 ```bash
 vat resources scan [path]       # Resource discovery
 vat resources validate [path]   # Resource validation
-vat rag ...                     # Future: RAG commands
-vat skills ...                  # Future: Skill commands
+vat rag ...                     # RAG commands
+vat skills ...                  # Skill commands
 vat validate                    # Run all configured source validators (resources, their checks, skills)
 ```
 
@@ -192,9 +192,7 @@ contract" below.
 
 ## Configuration
 
-### One Project Config
-
-#### Project-Level Config
+### Project-Level Config
 
 **File:** `vibe-agent-toolkit.config.yaml` (at project root)
 

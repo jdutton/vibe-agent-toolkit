@@ -108,7 +108,7 @@ expect it to move.
 What makes the fit natural is the other half: VAT already knows what a repo publishes, so an
 `entries` array is very nearly a restatement of what the project config already declares.
 
-That extends VAT's portability thesis from *portable agents* to *portable discovery*: today a
+That extends VAT's portability thesis from *portable skills* to *portable discovery*: today a
 VAT-built skill reaches agents through npm and a Claude marketplace branch, both Claude-shaped
 channels, while ARD is vendor-neutral.
 

@@ -1079,7 +1079,9 @@ async function prepareSkillUpload(
 		logger.info(`   Excluded from upload: ${excluded} (never published with a skill)`);
 	}
 	// The SAME cached merge `declaredTestInputPaths` read, so asking twice costs
-	// one map lookup.
+	// one map lookup. Resolved HERE rather than plumbed out of the exported
+	// `collectSkillUploadFiles`, which resolves its own so no caller can hand it
+	// a config with the exclusion skipped.
 	const packaging = await resolveSkillPackagingConfig(skillMdPath, 'refuse');
 	warnUnportableReferences(files, dirName, packaging?.validation, logger);
 

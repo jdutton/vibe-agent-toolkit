@@ -39,7 +39,7 @@ import {
  * - **Windows: NOTHING is forwarded.** The only signals delivered there are console events
  *   (Ctrl-C, Ctrl-Break, the console closing), which the console already sends to every attached
  *   process, the CLI included; and `child.kill` there is `TerminateProcess`, which would PRE-EMPT
- *   the CLI's own cleanup (a progress directory, a clone, the MCP shutdown line). The guard still
+ *   the CLI's own cleanup (a progress directory, a clone). The guard still
  *   keeps this process waiting for the CLI, so it ends as the CLI ended.
  * - **A SIGKILL of this wrapper** (POSIX) runs none of this: the CLI (and anything it supervises)
  *   runs on to its own end, bounded by its own watchdog. The CLI's stdin is this process's,

@@ -34,13 +34,13 @@
     "@vibe-agent-toolkit/utils": "workspace:*",
     "glob": "^14.0.3",
     "picomatch": "^4.0.3",
-    "yaml": "^2.9.0",
     "zod": "^3.25.0",
     "zod-to-json-schema": "^3.24.5"
   },
   "devDependencies": {
     "ajv": "^8.17.1",
-    "github-slugger": "^2.0.0"
+    "github-slugger": "^2.0.0",
+    "yaml": "^2.9.0"
   },
   "keywords": [
     "ai",

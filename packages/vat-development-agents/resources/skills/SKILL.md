@@ -20,9 +20,8 @@ Good fits:
 
 Poor fits:
 
-- Simple one-off scripts where the framework is already decided
 - Non-TypeScript/JavaScript projects
-- Cases where you need deep framework-specific features with no reuse goal
+- A single private skill with no packaging, validation or distribution need
 
 ## Picking a Sub-skill
 

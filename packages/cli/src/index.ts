@@ -2,7 +2,7 @@
  * @vibe-agent-toolkit/cli
  *
  * Command-line interface for vibe-agent-toolkit.
- * Provides resource scanning, validation, and future agent commands.
+ * Provides resource scanning, validation, skill and plugin build, audit and RAG commands.
  */
 
 // Public API exports (for programmatic use)

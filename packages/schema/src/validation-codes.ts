@@ -87,12 +87,12 @@ export const CODE_REGISTRY = {
     'link_targets_directory',
   ),
   // The prose-link sibling of LINK_TARGETS_DIRECTORY, and deliberately NOT that
-  // code: its own `fix` says in as
-  // many words that navigational prose links to a directory do not trigger it,
-  // so emitting it here would hand a reader a finding that denies its own
-  // applicability — and its `error` default would fail exactly the builds the
-  // directory-link decision (a navigational directory link is a valid target)
-  // allows.
+  // code: its own `fix` says in as many words that navigational prose links to a
+  // directory do not trigger it, so emitting it here would hand a reader a
+  // finding that denies its own applicability — and its `error` default would
+  // fail exactly the builds the directory-link decision (a navigational
+  // directory link is a valid target) allows. `warning`: the link resolves at
+  // source; only the packaged copy points at nothing.
   LINK_TO_UNBUNDLED_DIRECTORY: entry(
     'finding',
     'warning',
@@ -293,7 +293,8 @@ export const CODE_REGISTRY = {
   // nothing and `copyGlobEntry` raises its own distinct error.
   //
   // A separate code from FILES_GLOB_MATCHED_NOTHING because the two have
-  // different causes and therefore different remedies.
+  // different causes and therefore different remedies. `warning`, not `error`:
+  // a pre-build tree can be a partial artifact, so blocking CI here can be wrong.
   FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED: entry(
     'finding',
     'warning',

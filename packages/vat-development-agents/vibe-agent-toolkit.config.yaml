@@ -16,6 +16,9 @@ resources:
     # dist/ artifacts whose links are already rewritten for the packaged layout, so
     # they must not be link-validated as authored docs. Mirrors the repo-root config.
     - "**/test/golden/**"
+    # Synthetic input for the packaged-output drift gate, not this package's docs.
+    # Mirrors the repo-root config.
+    - "**/test/fixtures/**"
 
 skills:
   # `coherence-audit` and `markdown-rewriting` are named individually because the

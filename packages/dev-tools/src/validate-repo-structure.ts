@@ -455,7 +455,7 @@ function validateSourceFileLocations(): void {
       const isInPackageSrc = /^packages\/[^/]+\/src\//.test(normalizedPath);
       const isInPackageTest = /^packages\/[^/]+\/test\//.test(normalizedPath);
       const isInPackageExamples = /^packages\/[^/]+\/examples\//.test(normalizedPath);
-            const isInPackageGenerated = /^packages\/[^/]+\/generated\//.test(normalizedPath); // Build artifacts
+      const isInPackageGenerated = /^packages\/[^/]+\/generated\//.test(normalizedPath); // Build artifacts
       const isInPackageScripts = /^packages\/[^/]+\/scripts\//.test(normalizedPath); // Build scripts
       const isInDocs = normalizedPath.startsWith('docs/');
 

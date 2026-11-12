@@ -1713,7 +1713,7 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     // link an author should fix.
     //
     // The PRODUCTION corpora are where this bites, which is why the loop is over
-    // all three rather than over the repo-root sweep: under
+    // every corpus rather than over the repo-root sweep: under
     // `packages/vat-development-agents` a skill's `../../../../docs/*.md` link
     // leaves the project root, and under the repository root the same link is an
     // ordinary in-project edge. The corpus that makes the two answers differ is
