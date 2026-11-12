@@ -527,7 +527,7 @@ export class ParseDispatcher {
    * @throws A `ParseLimitError` (`inputBytes`) for content past the cap
    */
   parse(keyed: ParsableContent): Promise<ParseResult> {
-    const breach = inputBytesBreach(keyed.byteLength, this.#inputBytes);
+    const breach: Error | undefined = inputBytesBreach(keyed.byteLength, this.#inputBytes);
     if (breach !== undefined) return Promise.reject(breach);
     const seen = this.#observed[keyed.parserKind];
     seen.documents += 1;

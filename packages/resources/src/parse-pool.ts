@@ -1052,7 +1052,7 @@ class WorkerParsePool implements ParsePool {
     if (this.#unavailable !== undefined) return Promise.reject(this.#unavailable);
     // Refused before any thread sees it: the input cap is the one limit that is
     // a property of the request alone, so it costs no worker to enforce.
-    const tooLarge = inputBytesBreach(job.byteLength, this.#limits.inputBytes);
+    const tooLarge: Error | undefined = inputBytesBreach(job.byteLength, this.#limits.inputBytes);
     if (tooLarge !== undefined) return Promise.reject(tooLarge);
 
     this.#nextId += 1;
