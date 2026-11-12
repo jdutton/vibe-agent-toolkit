@@ -377,9 +377,10 @@ function runInChild(nodeOptions: string, script: readonly string[]): string {
   });
   rmSync(directory, { recursive: true, force: true });
 
-  // A spawn that failed, or output past `maxBuffer`, is named here rather than read as a status.
-  expect(child.error, `the child could not run: ${String(child.error)}`).toBeUndefined();
+  // A hung child is killed at the tier timeout (`signal` and an ETIMEDOUT `error` both set), so
+  // the signal is read first; a spawn that failed, or output past `maxBuffer`, is named after it.
   expect(child.signal, 'the child was killed, hung past the tier timeout').toBeNull();
+  expect(child.error, `the child could not run: ${String(child.error)}`).toBeUndefined();
   // A benign process warning (`VAT_PARSE_NO_COLLECTOR` on a runtime with no collector) may be
   // there; an abort may not.
   expect(child.stderr).not.toMatch(/FATAL|out of memory/i);

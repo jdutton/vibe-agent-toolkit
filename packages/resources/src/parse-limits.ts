@@ -277,7 +277,7 @@ export function resolveParseLimits(named: Partial<ParseLimits> | undefined): Par
   }
   if (resolved.heapMb < MIN_HEAP_MB) {
     throw new Error(
-      `Parse limit heapMb may not be below ${String(MIN_HEAP_MB)} MiB, the least bound shown to stop a breach before V8's own out-of-memory, which aborts the process (a process-wide heap flag can still lower the bound applied); got ${String(resolved.heapMb)}.`,
+      `Parse limit heapMb may not be below ${String(MIN_HEAP_MB)} MiB, the least bound seeded to run cleanly (a process-wide heap flag can still lower the bound applied); got ${String(resolved.heapMb)}.`,
     );
   }
   if (resolved.outputDepth > STORE_JSON_DEPTH) {
@@ -1140,11 +1140,13 @@ export const FRESH_THREAD_HEAP_MB = 24;
  * reaches V8's own ceiling dies with a FATAL out-of-memory that aborts the whole process, the
  * caller's included ({@link HEAP_CEILING_FACTOR}); at 64 MiB, no-flag breaches are stopped by the
  * pool three times in a row, each in a child process that exits 0
- * (`parse-pool-limits.integration.test.ts`, "a heap breach with no process-wide flag"). A smaller
- * bound was not shown safe on Windows CI, so it is refused. It promises nothing more about a
- * document past the bound,
- * and it holds the CONFIGURED value only: a process-wide heap flag can still lower the bound the
- * pool APPLIES below it (see {@link heapBounds}).
+ * (`parse-pool-limits.integration.test.ts`, "a heap breach with no process-wide flag"). 32 MiB is
+ * not shown UNSAFE: on Windows CI the vitest fork running a pool at 32 exited unexpectedly on two
+ * runs in a row, with no exit reason captured, while a breach stopped at an applied 32 MiB bound
+ * under a 64 MiB flag runs cleanly in a child. So the minimum is the least bound seeded clean, not
+ * a measured safety threshold. It promises nothing more about a document past the bound, and it
+ * holds the CONFIGURED value only: a process-wide heap flag can still lower the bound the pool
+ * APPLIES below it (see {@link heapBounds}).
  * Held: `resolveParseLimits` refuses 63 and accepts 64, and a pool at this minimum loads and runs
  * both parsers in a child process that exits cleanly.
  */
