@@ -12,9 +12,10 @@
  * are reported by it; input size is refused before dispatch. A real pool at a
  * small heap bound runs only in a child process that must exit 0: a thread that
  * reaches V8's own ceiling can abort its whole process, which in this one would
- * take the test runner's fork down and every test in it unreported. A kill is proved by
- * Node's own thread table returning to its baseline BEFORE the pool is asked
- * again — the pool spawns lazily, so the old thread is gone, not merely
+ * take the test runner's fork down and every test in it unreported. A kill is
+ * proved BEFORE the pool is asked again — in this process by Node's own thread
+ * table returning to its baseline, in a child by the breached thread's own
+ * `exit` — and the pool spawns lazily, so the old thread is gone, not merely
  * abandoned while it keeps parsing.
  */
 
@@ -24,7 +25,7 @@ import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, inject, it, vi } from 'vitest';
 
 import {
   type ParseLimitName,
@@ -113,24 +114,27 @@ describe('a parse job stopped at its limit', () => {
   });
 
   it('kills a job whose allocation outgrows its heap, and replaces the worker', () => {
-    // In a child process: see the file's header. The breach is the document's alone, the
-    // thread it ran on is replaced (a second start), and the same pool answers next.
-    const limits = JSON.stringify({ ...TIGHT_LIMITS, timeMs: 60_000, outputRows: 10_000_000, outputBytes: 1024 * 1024 * 1024 });
+    // In a child process, at the least bound a caller may name: see the file's header. The
+    // breach is the document's alone; a second thread is started only once the breached one has
+    // exited; and the same pool answers on it.
+    const limits = JSON.stringify({ ...TIGHT_LIMITS, heapMb: MIN_HEAP_MB, timeMs: 60_000, outputRows: 10_000_000, outputBytes: 1024 * 1024 * 1024 });
     const { stdout, status } = runInChild('', [
       "const { subscribe } = await import('node:diagnostics_channel');",
-      'let started = 0;',
-      "subscribe('worker_threads', () => { started += 1; });",
+      'const exited = [];',
+      // At each thread's start: had every thread before it already exited?
+      'const startedAfterExits = [];',
+      "subscribe('worker_threads', ({ worker }) => { startedAfterExits.push(exited.every(Boolean)); const index = exited.push(false) - 1; worker.once('exit', () => { exited[index] = true; }); });",
       `const { createParsePool } = await import(${JSON.stringify(BUILT_POOL)});`,
       `const pool = createParsePool({ size: 1, limits: ${limits} });`,
       `const doc = ${MANY_LINKS_EXPRESSION};`,
       "const limit = await pool.parse('markdown', doc, doc.length).then(() => 'none', (error) => error.limit ?? String(error));",
       String.raw`const links = await pool.parse('markdown', '# ok\n\n[a](./b.md)\n', 21).then((result) => result.links.length, (error) => String(error));`,
-      'console.log(JSON.stringify({ limit, links, started }));',
+      'console.log(JSON.stringify({ limit, links, startedAfterExits }));',
       'await pool.shutdown();',
     ]);
 
     expect(status).toBe(0);
-    expect(JSON.parse(stdout)).toStrictEqual({ limit: 'heapMb', links: 1, started: 2 });
+    expect(JSON.parse(stdout)).toStrictEqual({ limit: 'heapMb', links: 1, startedAfterExits: [true, true] });
   });
 
   it('refuses an oversize document without handing it to a worker', async () => {
@@ -359,6 +363,7 @@ function parseInChild(
  * @returns What it printed, and its exit status (asserted with nothing on stderr)
  */
 function runInChild(nodeOptions: string, script: readonly string[]): { stdout: string; status: number | null } {
+  // `spawnSync` blocks the loop the test's own timeout runs on, so a hung child is bounded here.
   // A script FILE, not `--eval`: a worker inherits its parent's execArgv,
   // and `--input-type` is refused by a worker started from a file.
   const directory = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-heap-flag-'));
@@ -367,10 +372,15 @@ function runInChild(nodeOptions: string, script: readonly string[]): { stdout: s
   const child = spawnSync(process.execPath, [entry], {
     env: { ...process.env, NODE_OPTIONS: nodeOptions },
     encoding: 'utf-8',
+    timeout: inject('tierTestTimeout'),
+    killSignal: 'SIGKILL',
   });
   rmSync(directory, { recursive: true, force: true });
 
-  expect(child.stderr).toBe('');
+  expect(child.signal, 'the child was killed, hung past the tier timeout').toBeNull();
+  // A benign process warning (`VAT_PARSE_NO_COLLECTOR` on a runtime with no collector) may be
+  // there; an abort may not. Each caller asserts the exit status.
+  expect(child.stderr).not.toMatch(/FATAL|out of memory/i);
   return { stdout: child.stdout, status: child.status };
 }
 
@@ -482,9 +492,9 @@ describe('a heap breach while the parent thread stalls', () => {
 
 describe('the least heapMb a caller may configure', () => {
   it('is more than a fresh thread really holds once it has loaded both parsers', async () => {
-    // MIN_HEAP_MB is a measurement's margin: on a runtime whose thread loads its parsers in more,
-    // the least bound a caller may name could not load one. Measured on the thread that parsed,
-    // through the pool, after a markdown and an HTML parse.
+    // The least bound a caller may name must leave a thread room to load its parsers: on a
+    // runtime whose thread loads them in more, it could not load one. Measured on the thread that
+    // parsed, through the pool, after a markdown and an HTML parse.
     await __closeParkedParseWorkersForTest();
     const threads = new Set<Worker>();
     const post = Worker.prototype.postMessage;
@@ -532,13 +542,15 @@ describe('a heap breach with no process-wide flag', () => {
   it('never takes the process down', () => {
     // Measured on Node 26: a worker that reaches V8's OWN ceiling under fast
     // allocation dies with a FATAL out-of-memory that kills the whole process
-    // (3 runs in 4 at 64 MiB), so the pool must stop the job before V8 does.
-    // Three breaches in a row, so a pool that leaves the race to V8 loses it.
+    // (3 runs in 4 at a V8 ceiling of 64 MiB, heapMb 32), so the pool must stop
+    // the job before V8 does. Three breaches in a row at the least bound a caller
+    // may name, so a pool that leaves the race to V8 loses it.
     for (let attempt = 0; attempt < 3; attempt++) {
-      const outcome = heapBreachUnder('', 64, 0);
+      const outcome = heapBreachUnder('', MIN_HEAP_MB, 0);
 
+      expect(outcome.status).toBe(0);
       expect(outcome.limit).toBe('heapMb');
-      expect(outcome.bound).toBe('64 MiB heap');
+      expect(outcome.bound).toBe(`${String(MIN_HEAP_MB)} MiB heap`);
     }
   });
 });

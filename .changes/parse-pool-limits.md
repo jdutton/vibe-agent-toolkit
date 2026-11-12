@@ -137,9 +137,9 @@
     through one allowlist (`classifyParseFailure`), so a broken install or any other VAT defect
     fails the run rather than filing a finding about the file.
   - **Heap.** `heapMb` bounds a worker's whole used heap; a document past it is refused, before
-    V8's own ceiling (twice `heapMb`) is reached. A `heapMb` below 64 MiB, under which a thread
-    can reach V8's own ceiling and abort the process, is refused as a configuration error. A
-    thread reused for another document starts it holding at most what a fresh thread does plus an
+    V8's own ceiling (twice `heapMb`) is reached. A configured `heapMb` below 64 MiB, under which
+    a thread can reach V8's own ceiling and abort the process, is refused as a configuration error;
+    a process-wide heap flag (below) can still lower the bound applied under it. A thread reused for another document starts it holding at most what a fresh thread does plus an
     eighth of the bound, or is replaced. A process-wide
     `--max-old-space-size`, `--max-semi-space-size` or `--max-heap-size` that lowers V8's ceiling
     lowers the bound with it (96 MiB under a 128 MiB old space on Node 26), and the refusal names

@@ -9,7 +9,7 @@
 
 import { afterEach } from 'vitest';
 
-import { isParseLimitError, MIN_HEAP_MB, type ParseLimitName, type ParseLimits } from '../src/parse-limits.js';
+import { isParseLimitError, type ParseLimitName, type ParseLimits } from '../src/parse-limits.js';
 import { createParsePool, type ParsePool, type ParsePoolOptions } from '../src/parse-pool.js';
 
 /**
@@ -50,11 +50,14 @@ export function manyLinks(count: number): string {
 /**
  * Limits tight enough for a test to breach quickly, loose enough for a normal
  * document. `timeMs` covers a cold worker's first parser load as well as the
- * parse, so it keeps room for a slow CI box to load the parser.
+ * parse, so it keeps room for a slow CI box to load the parser. The heap is NOT
+ * tight: these pools run in the test runner's own process, where a thread that
+ * reaches V8's ceiling can abort it. A test of the heap names a small bound
+ * itself, in a child process (`parse-pool-limits.integration.test.ts`).
  */
 export const TIGHT_LIMITS: ParseLimits = {
   timeMs: 2000,
-  heapMb: MIN_HEAP_MB,
+  heapMb: 512,
   stackMb: 1,
   outputRows: 1000,
   outputBytes: 256 * 1024,

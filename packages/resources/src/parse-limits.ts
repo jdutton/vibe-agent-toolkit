@@ -277,7 +277,7 @@ export function resolveParseLimits(named: Partial<ParseLimits> | undefined): Par
   }
   if (resolved.heapMb < MIN_HEAP_MB) {
     throw new Error(
-      `Parse limit heapMb may not be below ${String(MIN_HEAP_MB)} MiB: under it a thread can reach V8's own ceiling, whose out-of-memory aborts the process; got ${String(resolved.heapMb)}.`,
+      `Parse limit heapMb may not be below ${String(MIN_HEAP_MB)} MiB: under it a thread can reach V8's own ceiling, whose out-of-memory aborts the process (a process-wide heap flag can still lower the bound applied); got ${String(resolved.heapMb)}.`,
     );
   }
   if (resolved.outputDepth > STORE_JSON_DEPTH) {
@@ -1141,7 +1141,9 @@ export const FRESH_THREAD_HEAP_MB = 24;
  * acts, and V8's out-of-memory there is FATAL: it aborts the whole process, the caller's included.
  * Measured on Node 26: no-flag breaches at 64 MiB are stopped by the pool three times in a row,
  * each in a child process that exits cleanly (`parse-pool-limits.integration.test.ts`, "a heap
- * breach with no process-wide flag"). It promises nothing more about a document past the bound.
+ * breach with no process-wide flag"). It promises nothing more about a document past the bound,
+ * and it holds the CONFIGURED value only: a process-wide heap flag can still lower the bound the
+ * pool APPLIES below it (see {@link heapBounds}).
  * Held: `resolveParseLimits` refuses 63 and accepts 64, and a pool at this minimum loads and runs
  * both parsers in a child process that exits cleanly.
  */
