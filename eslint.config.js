@@ -73,9 +73,6 @@ const SAFE_EXEC_EXEMPT = { exemptFiles: ['packages/utils/src/safe-exec.ts'] };
  * A file that leaves one list usually leaves the other; check both.
  */
 const UNIT_TIER_IO_RATCHET = { allowFiles: [
-  'packages/agent-config/test/loader/manifest-loader.test.ts',
-  'packages/agent-config/test/validator/agent-validator.test.ts',
-  'packages/agent-runtime/test/session/file-session-store.test.ts',
   'packages/agent-skills/test/files-config.test.ts',
   'packages/agent-skills/test/skill-identity.test.ts',
   'packages/agent-skills/test/skill-source/content-hash.test.ts',
@@ -121,7 +118,6 @@ const UNIT_TIER_IO_RATCHET = { allowFiles: [
   'packages/cli/test/commands/skills/validate-non-skill-discovered.test.ts',
   'packages/cli/test/commands/skills/validate-nothing-checked.test.ts',
   'packages/cli/test/org-skill-upload-payload.test.ts',
-  'packages/cli/test/utils/agent-runner.test.ts',
   'packages/cli/test/utils/resource-population-source.test.ts',
   'packages/cli/test/utils/user-context-scanner.test.ts',
   'packages/cli/test/verify-vendor-licensing.test.ts',
@@ -216,17 +212,7 @@ const PRODUCT_SOURCE_TS = 'packages/*/src/**/*.ts';
 /** `local/no-raw-signal-listener` over product source; `allow` names the one helper that listens. */
 const NO_RAW_SIGNAL_LISTENER = ['error', { allow: ['packages/utils/src/terminating-signals.ts'] }];
 
-/**
- * The one command file that writes stdout outside the document writer
- * (`packages/cli/src/utils/document-writer.ts`): `vat agent run`, whose stdout
- * is the agent's reply, not a document. Asserted BOTH ways by the rule: were it
- * to stop writing stdout, the entry is a `staleAllow` error. Never add one.
- */
-const STDOUT_OUTSIDE_WRITER_ALLOW = ['packages/cli/src/commands/agent/run.ts'];
-
 const COMMANDS_IMPORT_BOUNDARY_RATCHET = { allowFiles: [
-  'packages/cli/src/commands/agent/install.ts',                       // access — the package.json probe around the agent
-  'packages/cli/src/commands/agent/installed.ts',                     // ENUM: readdir of the install dir
   'packages/cli/src/commands/audit.ts',                               // existsSync/stat probes only — the walker is gone (audit/scan-population.ts)
   'packages/cli/src/commands/build.ts',                               // ENUM: readdir for phase output; existsSync probes
   'packages/cli/src/commands/cache/clear.ts',                         // ENUM: readdir/lstat measuring the cache before its remove plan
@@ -366,9 +352,6 @@ export const NO_UNSAFE_BACKLOG = [
   'packages/resources/src/link-auth/expand-macro.ts', // 1
   'packages/utils/src/yaml/surgical-yaml.ts', // 2
   'packages/utils/src/zod-introspection.ts', // 9
-  'packages/vat-example-cat-agents/src/mcp-collections.ts', // 1
-  'packages/vat-example-cat-agents/src/one-shot-llm-analyzer/description-parser.ts', // 1
-  'packages/vat-example-cat-agents/src/one-shot-llm-analyzer/photo-analyzer.ts', // 1
 ];
 
 /**
@@ -553,9 +536,7 @@ const localRulesConfig = {
   // Five vocabularies used to coexist (skill test read 1 as "the harness
   // broke", audit exited 0 over `status: error`, the lab had a 3) and the
   // orchestrator read all of them as one. No backlog: 176 sites were migrated
-  // the day this was enabled. `allow` is not a ratchet of product code — it
-  // names the three EXAMPLE scripts that are not vat verbs and would otherwise
-  // take a dependency on `schema` for one line each.
+  // the day this was enabled. No file is exempt.
   //
   // `derived` is the second floor, for the `vat` verbs: an exit code is DERIVED
   // from the document the verb published (`exitCodeForReport`), never decided
@@ -565,11 +546,6 @@ const localRulesConfig = {
   // derivation. No file is exempt: the migration ratchet reached zero and the
   // option went with it.
   'local/no-literal-process-exit': ['error', {
-    allow: [
-      'packages/gateway-mcp/examples/example-helpers.ts',
-      'packages/vat-development-agents/agents/agent-generator/validate-agent.ts',
-      'packages/vat-example-cat-agents/examples/photo-analysis-demo.ts',
-    ],
     derived: {
       paths: ['packages/cli/src/'],
       calls: ['exitCodeForReport', 'exitCodeOfChild', 'exitCodeForCommanderEnding', 'exitCodeForExternal', 'endWithReport', 'endWithRefusal', 'writeExternalDocument'],
@@ -579,10 +555,11 @@ const localRulesConfig = {
   // through `utils/document-writer.ts` (validated against its registered schema,
   // exit derived from what was written) and nowhere else — `process.stdout.write`,
   // the stdout `console` methods and the stdout helpers (called or handed
-  // on) are errors. `allowFiles` names the one protocol leaf above.
+  // on) are errors. No file is exempt: an `allowFiles` entry is asserted both
+  // ways (`staleAllow`), so never add one.
   'local/no-stdout-outside-writer': ['error', {
     paths: ['packages/cli/src/commands/'],
-    allowFiles: STDOUT_OUTSIDE_WRITER_ALLOW,
+    allowFiles: [],
   }],
   // The containment trio, from the sweep that watched a delete, a copy and an
   // uninstall walk out of their root. No backlog and no ratchet: every site
@@ -1220,19 +1197,6 @@ export default [
     rules: {
       'no-await-in-loop': 'off',
       'require-await': 'off',
-    },
-  },
-
-  // Override for factory-based test files
-  // These files generate complete test suites dynamically via factory functions
-  // ESLint's static analysis doesn't recognize dynamically generated tests
-  {
-    files: [
-      '**/runtime-*/test/pure-function.test.ts',
-      '**/runtime-*/test/llm-analyzer.test.ts',
-    ],
-    rules: {
-      'sonarjs/no-empty-test-file': 'off',
     },
   },
 

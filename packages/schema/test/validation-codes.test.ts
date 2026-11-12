@@ -288,9 +288,8 @@ describe('CONSISTENCY_CODES', () => {
 });
 
 describe('findings no validation config is applied to', () => {
-  // `vat claude plugin install|uninstall`, `vat audit settings` and `vat agent validate`
-  // examine Claude user state, a settings file and an agent manifest, and none loads a
-  // project `validation:` block. `vat audit --compat` does load one — and applies it to the
+  // `vat claude plugin install|uninstall` and `vat audit settings` examine Claude user
+  // state and a settings file, and neither loads a project `validation:` block. `vat audit --compat` does load one — and applies it to the
   // scan's findings BEFORE its two lanes file theirs (`SETTINGS_POLICY_CONFLICT`,
   // `COMPAT_NOT_CHECKED`), so the block never reaches those either. For every code here a
   // registry entry would let the config accept a key nothing applies.
@@ -305,10 +304,6 @@ describe('findings no validation config is applied to', () => {
     'SETTINGS_MARKETPLACE_TOKEN_MISSING',
     'SETTINGS_POLICY_CONFLICT',
     'COMPAT_NOT_CHECKED',
-    'AGENT_MANIFEST_INVALID',
-    'AGENT_REFERENCE_MISSING',
-    'AGENT_REFERENCE_UNREADABLE',
-    'AGENT_RAG_NO_SOURCES',
   ];
   const ALLOW_ENTRY = [{ reason: 'expected here' }];
 
@@ -381,7 +376,7 @@ describe('CODE_REGISTRY — every code has a kind', () => {
 });
 
 describe('SCAN_PATH_UNREADABLE remedy', () => {
-  // Emitted by audit, skills list, agent list and agent installed — and only
+  // Emitted by audit and skills list — and only
   // audit takes --exclude, while the listings load no config. The registry text
   // must not hand every other verb a flag or an override it does not have.
   it('names --exclude and the severity override only as the levers of the verbs that have them', () => {

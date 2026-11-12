@@ -22,21 +22,9 @@
     // A new adopter package needs the same edge on whichever task runs the binary
     // ("<pkg>#build", or "<pkg>#build:skills" below); `checkBuiltOutputEdges`
     // (validate-structure) fails until it is there.
-    // `generated/**` is an output: `build` runs `generate:resources` into it and
-    // `src/` imports from it, so a cache hit that restored only `dist/` left
-    // `typecheck` (which depends on `^build`, not this package's own `build`)
-    // failing on a clean clone or after a clean of ignored files.
     "@vibe-agent-toolkit/vat-development-agents#build": {
       "dependsOn": ["@vibe-agent-toolkit/cli#build", "^build"],
-      "outputs": ["dist/**", "*.tsbuildinfo", "agents/**", "generated/**"],
-      "cache": true
-    },
-    // cat-agents' `build` does not package its skills — `build:skills` below does — so
-    // `dist/skills/**` is excluded here: a task that reads them must order `build:skills`,
-    // and `checkBuiltOutputEdges` judges producers by these declared outputs.
-    "@vibe-agent-toolkit/vat-example-cat-agents#build": {
-      "dependsOn": ["^build"],
-      "outputs": ["dist/**", "!dist/skills/**", "*.tsbuildinfo", "generated/**"],
+      "outputs": ["dist/**"],
       "cache": true
     },
     "build:skills": {
@@ -44,39 +32,8 @@
       "outputs": ["dist/skills/**"],
       "cache": true
     },
-    // cat-agents runs the CLI *binary* from `build:skills`, not from `build`, so the
-    // adopter registration above does not cover it. Without this edge turbo is free to
-    // start `node ../cli/dist/bin/vat.js skills build` while a transitive dependency of
-    // the CLI is mid-rebuild. Observed as a hard, repeating failure: gateway-mcp's
-    // `dist/` was removed at the instant the CLI tried to import it
-    // (`ERR_MODULE_NOT_FOUND` on gateway-mcp/dist/index.js), turbo then killed the
-    // gateway build (130) so nothing was cached, and the next run raced identically.
-    // Warm caches hid it until a change upstream of gateway-mcp forced a cache miss.
-    //
-    // `tsc-clean-build.ts` no longer deletes `dist/` before emitting, so an
-    // undeclared edge now degrades to "the reader sees the previous complete build"
-    // instead of a crash. That is a safety net, not a substitute: keep declaring the
-    // edge. Any task that runs the CLI binary reads a dozen packages' `dist/`, and
-    // only an explicit edge makes turbo order them — or rebuild the CLI when they change.
-    "@vibe-agent-toolkit/vat-example-cat-agents#build:skills": {
-      "dependsOn": ["@vibe-agent-toolkit/cli#build", "build"],
-      "outputs": ["dist/skills/**"],
-      "cache": true
-    },
-    // `typecheck` also depends on the package's OWN `build` for the two
-    // packages whose `src/` imports generated code; see the adopter entries.
     "typecheck": {
       "dependsOn": ["^build"],
-      "outputs": [],
-      "cache": true
-    },
-    "@vibe-agent-toolkit/vat-development-agents#typecheck": {
-      "dependsOn": ["^build", "build"],
-      "outputs": [],
-      "cache": true
-    },
-    "@vibe-agent-toolkit/vat-example-cat-agents#typecheck": {
-      "dependsOn": ["^build", "build"],
       "outputs": [],
       "cache": true
     },
@@ -258,26 +215,6 @@
       "outputs": [],
       "cache": true,
       "env": ["CI"]
-    },
-    // `packaged-output-drift.system.test.ts` lives in vat-development-agents but compares
-    // TWO packages' `dist/skills` trees against committed goldens — the second is cat-agents,
-    // the repo's only multi-file bundle and the only place the link rewriter rewrites a link
-    // in a packaged non-SKILL.md file. cat-agents is not a workspace dependency of
-    // vat-development-agents, so without this edge the generic `test:system` above gives the
-    // gate neither ordering nor invalidation:
-    //   - ORDERING: `turbo run test:system` on a clean clone can run the gate before
-    //     cat-agents' skills exist. The gate now FAILS on an absent build rather than
-    //     skipping, so that would be a spurious red.
-    //   - INVALIDATION: a turbo task hash folds in its dependencies' hashes, so this edge is
-    //     what makes a change to cat-agents' packaged output re-run the gate. Without it a
-    //     rewriter change to cat-agents' bundle replays a cached green from a run that never
-    //     saw it — a cached verdict on work it could not have measured.
-    // The gate's FIRST tree is this package's own `dist/skills`, which its `build`
-    // (`vat build`) produces and declares under `dist/**`, so `build` orders it.
-    "@vibe-agent-toolkit/vat-development-agents#test:system": {
-      "dependsOn": ["^build", "build", "@vibe-agent-toolkit/vat-example-cat-agents#build:skills"],
-      "outputs": [],
-      "cache": true
     },
     "test:coverage": {
       "dependsOn": ["^build"],

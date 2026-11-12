@@ -286,9 +286,7 @@ export type EvalArm = 'with' | 'without';
 /**
  * The opaque directory segment each arm's workspaces live under, minted fresh per
  * run. `with` is required and `without` present only under `--baseline`, so the
- * set of arms is the keys — a shape that cannot express "stage nothing", unlike
- * the `readonly EvalArm[]` this replaced (an empty array was a legal input that
- * silently left every executor with a non-existent cwd).
+ * set of arms is the keys — a shape that cannot express "stage nothing".
  *
  * ⚠️ The VALUES must not be the literal arm names, and must not be derivable from
  * each other. See {@link stageEvalWorkspaces}.
@@ -342,31 +340,18 @@ export interface StageEvalWorkspacesInput {
  * without it). Returns `workspacesRoot`.
  *
  * EVERY eval gets a directory, including one that declares no `files` — it is
- * simply left empty. An eval without a workspace used to leave the executor with
- * no cwd of its own, so it ran inside the staged subject dir instead; for the
- * skill-absent arm of a `--baseline` run that placed the control's cwd inside the
- * very skill the arm exists to withhold. An empty dir costs nothing and keeps cwd
+ * simply left empty, so the control arm's cwd is never the staged skill. An
+ * empty dir costs nothing and keeps cwd
  * shaped identically across both arms, which is what makes the A/B a comparison.
  *
  * WHY THE `<arm>` SEGMENT. The two arms of one eval are dispatched ADJACENTLY into
- * a bounded-parallel pool, so they run at the same time. When they shared one
- * directory, the control arm could simply `ls` and read whatever the treatment arm
- * had just written — recovering the treatment's answer without ever touching the
- * skill, and without producing a single detectable harness path. That is a channel
- * BETWEEN the arms rather than into one of them, which is why auditing the four
- * channels into a process (prompt, argv, cwd, env) did not surface it: each arm's
- * own cwd was correct in isolation, and wrong as a pair. The arms must be
- * byte-identical at start and unable to observe each other after it.
+ * a bounded-parallel pool, so they run at the same time; a shared directory is a
+ * channel BETWEEN the arms. The arms must be byte-identical at start and unable
+ * to observe each other after it.
  *
- * WHY THE SEGMENT IS AN OPAQUE TOKEN and not the arm's name. It used to be the
- * literal `with`/`without`, which made the executor's own working directory the
- * loudest possible unblinding: the prompt tells each arm `Your working directory
- * is …/vat-skill-test-ws-<token>/without/e1`, so the skill-absent arm was told, in
- * the one string it cannot avoid reading, which side of the experiment it was on —
- * while `buildExecutorPrompt`'s docblock promises it "must NEVER be told (directly
- * or by implication) that it is being tested, evaluated, or graded". It also named
- * the sibling: `../with/<id>/` was a guessable path to the treatment arm's live
- * output. Independent random tokens fix both, and cost nothing.
+ * WHY THE SEGMENT IS AN OPAQUE TOKEN and not the arm's name: the prompt quotes the
+ * working directory verbatim, so `…/without/e1` would unblind the arm and
+ * `../with/<id>/` would name the treatment arm's live output.
  */
 export async function stageEvalWorkspaces(input: StageEvalWorkspacesInput): Promise<string> {
   // In order: an input error names the first offending arm and eval, as it always has.

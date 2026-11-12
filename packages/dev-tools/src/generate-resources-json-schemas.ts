@@ -17,9 +17,7 @@
  *
  * The **table** schemas are not listed by hand: they come from
  * `PROJECTION_TABLES`, the single registry that also supplies `exportProjection`
- * its primary keys. This file used to enumerate fifteen schemas in one
- * undifferentiated list, which is how three non-tables came to sit
- * indistinguishably among the tables — see below.
+ * its primary keys.
  */
 
 import { presenceImplies } from '@vibe-agent-toolkit/schema';
@@ -51,10 +49,9 @@ export const RESOURCES_SCHEMAS_DIR = `${PROJECT_ROOT}/packages/resources/schemas
  * `edges`, `edge_resolutions` and `lens_entry_points` are absent from
  * {@link PROJECTION_TABLES} on purpose — zones.md §2 places them in the
  * derived-per-lens column, so they are the output of evaluating a lens rather
- * than rows anything materialises. ⚠️ They ARE referenced under `projection/`
- * now: `derived-table-registry.ts` imports `EdgeRowSchema` and
- * `EdgeResolutionRowSchema` to declare the derived relations. This docstring
- * used to say nothing did.
+ * than rows anything materialises. ⚠️ They ARE referenced under `projection/`:
+ * `derived-table-registry.ts` imports `EdgeRowSchema` and
+ * `EdgeResolutionRowSchema` to declare the derived relations.
  * They still have committed JSON Schemas, so they are still generated; the list
  * is separate so that "generated but not a table" is a visible, deliberate
  * category rather than three entries indistinguishable from the thirteen.

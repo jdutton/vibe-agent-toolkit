@@ -412,9 +412,9 @@ describe('the other writer entry points', () => {
   });
 
   it('writeArtifact writes a raw artifact verbatim and refuses an unregistered name', () => {
-    writeArtifact('claude-desktop-config', '{"mcpServers":{}}\n', 'raw');
+    writeArtifact('skill-test-config', 'skillTest:\n  model: x\n', 'raw');
 
-    expect(written()).toBe('{"mcpServers":{}}\n');
+    expect(written()).toBe('skillTest:\n  model: x\n');
     expect(() => writeArtifact('no-such-artifact', {}, 'json')).toThrow(/no-such-artifact/);
   });
 

@@ -6,7 +6,7 @@ import type { EvidenceRecord } from '../evidence/index.js';
 
 export interface ValidationResult {
   path: string;
-  type: 'agent-skill' | 'vat-agent' | 'claude-plugin' | 'marketplace' | 'registry' | 'unknown';
+  type: 'agent-skill' | 'claude-plugin' | 'marketplace' | 'registry' | 'unknown';
   /**
    * `findings` when any issue is published, `ok` when none is — derived by
    * `resultStatus(issues)` from `@vibe-agent-toolkit/schema`, the same
@@ -94,9 +94,6 @@ export interface ValidateOptions {
    * scan root and project root coincide — needs no ceremony.
    */
   locationRoot?: string;
-
-  /** Treat as VAT-generated skill (stricter validation) */
-  isVATGenerated?: boolean;
 
   /** Check for files in skill directory that aren't referenced in markdown content */
   checkUnreferencedFiles?: boolean;

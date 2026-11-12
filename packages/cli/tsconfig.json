@@ -8,12 +8,10 @@
   },
   "include": ["src/**/*"],
   "references": [
-    { "path": "../agent-config" },
     { "path": "../agent-skills" },
     { "path": "../claude-marketplace" },
     { "path": "../dev-tools" },
     { "path": "../discovery" },
-    { "path": "../gateway-mcp" },
     { "path": "../projection-sqlite" },
     { "path": "../rag" },
     { "path": "../rag-lancedb" },

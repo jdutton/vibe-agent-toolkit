@@ -205,7 +205,7 @@ claude:
 
   // The packager refusing a plugin-local skill's own content is the project's to
   // fix — the same `SKILL_PACKAGING_FAILED` finding on a stopped run that
-  // `vat skill test run` and `vat agent build` publish for it, never a defect in VAT.
+  // `vat skill test run` publishes for it, never a defect in VAT.
   it.each(PLUGIN_BUILD_LANES)('vat %s: a plugin-local skill whose files: source is missing stops the run, coded at the skill', async (_verb, args) => {
     const tempDir = createTempDir();
     seedPluginLocalSkillWithFilesSource(tempDir);

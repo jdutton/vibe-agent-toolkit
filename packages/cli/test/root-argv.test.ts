@@ -83,7 +83,6 @@ describe('wantsGroupVerboseHelp', () => {
   it.each([
     { argv: 'resources --verbose', group: 'resources' },
     { argv: 'rag --verbose', group: 'rag' },
-    { argv: 'agent --verbose', group: 'agent' },
     // Root flags before the group are commander's business, not a disqualifier.
     { argv: '--debug resources --verbose', group: 'resources' },
     { argv: 'resources --help --verbose', group: 'resources' },

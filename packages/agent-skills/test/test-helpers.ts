@@ -636,24 +636,6 @@ export async function setupNavigationValidationTest(
 
 
 /**
- * A minimal buildable agent dir — package.json, prompts/system.md, agent.yaml —
- * for the `buildAgentSkill` cases that only care what sits BESIDE the manifest.
- */
-export async function writeMinimalAgent(tempDir: string, name: string): Promise<{ agentDir: string; manifestPath: string }> {
-  const agentDir = safePath.join(tempDir, name);
-  await fs.promises.mkdir(safePath.join(agentDir, 'prompts'), { recursive: true });
-  await fs.promises.writeFile(safePath.join(agentDir, 'package.json'), JSON.stringify({ name }));
-  await fs.promises.writeFile(safePath.join(agentDir, 'prompts', 'system.md'), 'Test agent');
-  const manifestPath = safePath.join(agentDir, 'agent.yaml');
-  await fs.promises.writeFile(
-    manifestPath,
-    `metadata:\n  name: ${name}\n  description: Minimal\n\nspec:\n  llm:\n    provider: anthropic\n` +
-      `    model: claude-sonnet-5\n  prompts:\n    system:\n      $ref: ./prompts/system.md\n`,
-  );
-  return { agentDir, manifestPath };
-}
-
-/**
  * ⛔ DESTRUCTIVE CODE: make a fresh scratch THE temp directory (`TMPDIR` / `TEMP` / `TMP`) for
  * each test (`scratchTmpdirEnv`). Everything the harness derives under the temp directory — and
  * every child it spawns — lands there, so no test, and no mutation of the disposal code under

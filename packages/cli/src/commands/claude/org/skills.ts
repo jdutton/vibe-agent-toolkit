@@ -86,13 +86,8 @@ interface UploadResponseFieldMap {
  * that does not carry the fields the printed document promises.
  *
  * 🔑 The client's `<T>` is a type ASSERTION, not a check: any 2xx with a JSON
- * body satisfies it. Without this, a response whose keys differ from the ones
- * named here resolves happily and the operator reads `status: success` beside
- * `version: null` — and `version` is precisely the value a later
- * `skills versions delete` takes, so the run that "succeeded" leaves them unable
- * to address what it created. The create endpoint's shape was measured against
- * the live API; `POST /v1/skills/{id}/versions` was not, which is exactly why it
- * must fail loudly rather than print nulls if it differs.
+ * body satisfies it, and `version` is the value a later `skills versions delete`
+ * takes, so a drifted shape must fail loudly rather than print nulls.
  *
  * The message names both the fields that were missing and the keys the body did
  * carry, because those two lists together are the whole diagnosis when a shape
@@ -147,34 +142,18 @@ export interface SkillDeleteResult {
 /**
  * Read a DELETE response into the result a delete command prints.
  *
- * 🔑 Same class of problem as {@link readSkillUploadResponse} — the client's
- * `<T>` is an assertion, not a check — but the OPPOSITE verdict on an empty
- * body, and deliberately so. The client used to reject a 2xx carrying no body
- * with a parse error, which reported a 204 DELETE that SUCCEEDED as a failure;
- * that is fixed, and the value now handed to this reader for such a response is
- * `undefined`. Refusing it here, the way an upload response is refused, would
- * reinstate the same lie one layer up — and reading `.id` off it, which is what
- * the two call sites did, is a `TypeError` in place of a report.
- *
- * So an empty body is read as the success it is: the status already said the
- * resource is gone, the id is the one this process asked for, and there is
- * nothing else to learn. Measured live behaviour today is a JSON body carrying
- * `type: skill_deleted`, so the empty case is LATENT rather than a live
- * regression — but it is one 204 away, and a latent `TypeError` is not a
- * contract.
+ * 🔑 Same class of problem as {@link readSkillUploadResponse}, but the OPPOSITE
+ * verdict on an empty body: a 204 is the success its status says (the id is the
+ * one this process asked for), and refusing it would report a deletion as a
+ * failure.
  *
  * `deleted` is false only when the body affirmatively names a DIFFERENT
- * outcome, which is the one case where the API is saying something this command
- * must not paper over — and {@link reportDelete} is what makes the run END that
- * way rather than merely say so in a field nothing reads.
+ * outcome; {@link reportDelete} makes the run END that way.
  *
- * ⚠️ `expectedTypes` is a LIST because only one member of it is measured.
- * `skill_deleted` came back from a live `DELETE /v1/skills/{id}`;
- * `skill_version_deleted` is the plausible spelling for the version endpoint and
- * has never been seen. A single guessed string would make every version delete
- * report `deleted: false` — and now exit 2 — if the vendor spells it differently
- * by one character. Accepting either keeps the check honest about what it knows:
- * a body naming something that is neither is a real divergence worth failing on.
+ * ⚠️ `expectedTypes` is a LIST because only `skill_deleted` is measured;
+ * `skill_version_deleted` is the plausible spelling for the version endpoint,
+ * and a single guessed string would fail every version delete on a
+ * one-character difference.
  */
 export function readDeleteResponse(
 	raw: unknown,
@@ -207,16 +186,9 @@ const NOT_CONFIRMED: OrgFailureOutcome = { kind: 'failed', cause: 'the API named
  * A delete's document, tagged as a FAILED run when the API said the thing was
  * not deleted.
  *
- * 🔑 Without this, `deleted: false` was computed, printed under
- * `status: success`, and exited 0 — the exact "the run completed and its outcome
- * is wrong" shape that {@link orgCommandFailure} was added in this same change to
- * fix for `--from-npm`, in the one branch that never got wired to it. A CI
- * wrapper spelled `vat claude org skills delete X || fail` reported green while
- * the skill was still there.
- *
- * The document is still PUBLISHED — the id and the verdict are what the operator
- * needs — and only the exit code changes. Throwing instead would end non-zero and
- * discard the report.
+ * 🔑 Without this, `deleted: false` would print under `status: success` and exit
+ * 0, so `vat claude org skills delete X || fail` reports green while the skill
+ * is still there. The document is still PUBLISHED; only the exit code changes.
  */
 export function reportDelete(
 	raw: unknown,
@@ -236,21 +208,10 @@ export interface SkillVersionDeleteResult extends SkillDeleteResult {
  * A version delete's document — the same verdict as {@link reportDelete}, about
  * a subject that can actually be identified.
  *
- * 🚨 **The version-delete document used to name no version at all, and its `id`
- * meant two different things depending on the response.** It went through
- * `reportDelete(raw, skillId, …)`, so `readDeleteResponse` returned the API's
- * ECHOED id when there was a body — the VERSION identifier — and fell back to
- * the requested id — the SKILL identifier — on a 204. Two runs of the same
- * command therefore published `id` fields from two different namespaces, and
- * neither run's document said which of a skill's versions had been destroyed.
- * An audit trail of an irreversible operation that cannot name what it destroyed
- * is not an audit trail.
- *
- * Both fields are now local knowledge, which is the whole point: this process
- * asked to delete `version` of `skillId` and the API confirmed a deletion, so
- * nothing about the subject's identity has to be recovered from the response
- * shape. The response is still read — for the VERDICT, which is the one thing
- * only the API knows.
+ * Both fields are local knowledge: this process asked to delete `version` of
+ * `skillId`, so the subject's identity is never recovered from the response
+ * (whose echoed `id` and 204 fallback name different namespaces). The response
+ * is read only for the VERDICT.
  */
 export function reportVersionDelete(
 	raw: unknown,
@@ -290,53 +251,20 @@ export function readSkillVersionResponse(raw: unknown): SkillUploadResult {
  * Build the multipart request body for an upload, refusing it before anything is
  * sent when THAT BODY is OVER the API's upload ceiling.
  *
- * 🔑 **The ceiling is INCLUSIVE, and that is measured rather than reasoned.** A
- * request body of exactly {@link API_SKILL_MAX_UPLOAD_BYTES} bytes is ACCEPTED;
- * one byte more is refused `413`:
- *
- * | raw file bytes | + framing | = body | live API |
- * |---|---|---|---|
- * | 31,456,735 | 545 | **31,457,280** | `status: success` |
- * | 31,456,736 | 545 | 31,457,281 | `413` |
- *
- * So the comparison here is `>`, not `>=`. An earlier version of this code used
- * `>=` on the argument that firing AT the ceiling was the conservative reading —
- * an argument that was never measured, and the measurement above refutes it. It
- * is not conservative: it refuses a body the API takes, and the operator has no
- * way to tell that VAT and not Anthropic said no.
+ * 🔑 **The ceiling is INCLUSIVE, measured:** a request body of exactly
+ * {@link API_SKILL_MAX_UPLOAD_BYTES} bytes is ACCEPTED and one byte more is
+ * refused `413`, so the comparison is `>`, not `>=`.
  *
  * ⚠️ **The build-time lane deliberately differs, and must not be "harmonised"
  * with this one.** `checkPackagedSizeLimit` fires when FILE BYTES reach the same
- * number — `>=` — because framing is never zero, so files totalling exactly the
- * limit always produce a request LARGER than the limit and therefore a real 413.
- * Two lanes, two measures, two rules: **file bytes `>=` refuse; request bytes `>`
- * refuse.** Both are right about the quantity each can see.
+ * number — `>=` — because framing is never zero. **File bytes `>=` refuse;
+ * request bytes `>` refuse.**
  *
- * THE one gate every upload passes through, whichever shape it started as. The
- * check used to live inside the directory-packaging step alone, so
- * `skills install big-skill.zip` — the one input that is by construction a
- * single large binary, and the shape the check was written for — reached the
- * wire unmeasured.
+ * THE one gate every upload passes through, whichever shape it started as.
  *
- * 🔑 **It weighs the BODY, not the sum of the file bytes.** The API measures the
- * request, and the request is this buffer. Summing `file.content.length` — what
- * this did — ignores the per-part framing `buildMultipartFormData` adds: a
- * 51-byte boundary line, a `Content-Disposition` of 61 bytes plus the filename, a
- * 42-byte content-type-and-blank-line and a 2-byte trailing CRLF, so 156 bytes
- * plus the filename PER FILE, plus a 53-byte terminator. A 1,000-file bundle
- * therefore carries ~180 KiB that the old measure could not see, and a bundle
- * whose content sat just under the ceiling passed the pre-flight and then earned
- * the 413 this check exists to prevent — 11 seconds for 30 MB, measured.
- *
- * No headroom constant closes that gap, and none is added: the exact number is
- * available for free by building the body first and asking it how long it is.
- * The body is then RETURNED, so the bytes that were weighed are the bytes that go
- * out; a gate that only inspected its inputs would be one refactor away from
- * measuring something the caller no longer sends.
- *
- * The build-time `PACKAGED_SIZE_EXCEEDS_API_LIMIT` cannot do this — there is no
- * request at build time — so it weighs files on disk and says so. The two
- * messages name what each measured rather than pretending to be the same number.
+ * 🔑 **It weighs the BODY, not the sum of the file bytes**: per-part multipart
+ * framing is real request weight. The body is then RETURNED, so the bytes that
+ * were weighed are the bytes that go out.
  */
 export function buildUploadBodyOrRefuse(
 	fields: Record<string, string>,
@@ -344,9 +272,7 @@ export function buildUploadBodyOrRefuse(
 	bundleRoot?: string,
 ): MultipartResult {
 	const multipart = buildMultipartFormData(fields, [...files]);
-	// `>`, not `>=`: a body of exactly the ceiling was ACCEPTED by the live API and
-	// one byte more was refused 413. The two measured rows, and why the build-time
-	// lane keeps `>=` on a different quantity, are in this function's doc comment.
+	// `>`, not `>=`: see this function's doc comment.
 	if (multipart.body.length > API_SKILL_MAX_UPLOAD_BYTES) {
 		const sized = files.map(f => ({ path: bundleRelativeName(f.filename, bundleRoot), bytes: f.content.length }));
 		const measure = { of: 'upload-request' as const, bytes: multipart.body.length };
@@ -360,11 +286,8 @@ export function buildUploadBodyOrRefuse(
  *
  * A directory's parts are keyed `<declared-name>/<bundle-relative-path>`, because
  * that is how the API roots them; `PACKAGED_SIZE_EXCEEDS_API_LIMIT` names files
- * relative to the bundle root. Printing the keyed spelling here meant the path an
- * author copied out of an upload refusal never matched the `link` their build had
- * reported, so a `validation.allow` entry written from one message did not waive
- * the other. The prefix is stripped when it is there and left alone when it is
- * not — a ZIP is one part named for the archive itself, with no root to strip.
+ * relative to the bundle root; stripping the prefix lets one `validation.allow`
+ * entry waive both. A ZIP is one part named for the archive, with no root.
  */
 function bundleRelativeName(filename: string, bundleRoot: string | undefined): string {
 	if (bundleRoot === undefined) return filename;
@@ -527,23 +450,11 @@ async function deleteSkillOrExplain(
  * A failure that got NO answer from the server, re-thrown saying what was
  * actually sent and what a retry would risk.
  *
- * ⛔ **The trigger is a RECORDED FACT, never the error's class.** This used to
- * read `if (error instanceof ApiRequestError) return error;` — "a completed
- * exchange always arrives as an `ApiRequestError`, so anything else must be a
- * dropped connection". The first half is true and the converse is not, and the
- * converse is what shipped: `buildSkillsHeaders()` throws a plain `Error` before
- * a socket is ever opened, so
- * `ANTHROPIC_API_KEY= vat claude org skills install <dir>` told a first-time
- * operator, on top of the real "no key" message, that a connection had closed,
- * that VAT had sent 6.8 KiB (the length of a buffer that never left the process),
- * and that the outcome was unknown — then sent them to a recovery command that
- * fails with the identical missing-key error. Three false statements and a loop.
- *
- * So the gate is POSITIVE and evidential: annotate only an
- * {@link ApiTransportError}, which exists only once the transport has been
- * reached and carries `bytesSent` read off the socket at failure time. Anything
- * else — a missing credential, a bad URL, a response VAT refused to read —
- * passes through with its own message untouched.
+ * ⛔ **The trigger is a RECORDED FACT, never the error's class.** Only an
+ * {@link ApiTransportError} is annotated: it exists only once the transport has
+ * been reached and carries `bytesSent` read off the socket. Anything else — a
+ * missing credential (thrown before any socket opens), a bad URL, a response VAT
+ * refused to read — passes through with its own message untouched.
  *
  * Two outcomes, because the byte count decides which is TRUE:
  *
@@ -610,12 +521,8 @@ async function sendUpload<T>(
 /**
  * Resolve a `<source>` CLI argument to an absolute path.
  *
- * 🪤 The test used to be `source.startsWith('/')`, which is false for
- * `D:\builds\skill` — so a Windows operator's absolute path was joined onto the
- * working directory and reported back as `Source not found: <cwd>/D:/builds/skill`.
  * {@link isAbsoluteAnyPlatform} answers for POSIX roots, drive letters and UNC
- * paths on EVERY host, so the behaviour is the same wherever it runs and a
- * POSIX-only CI can see the drive-letter case at all.
+ * paths on EVERY host, so `D:\builds\skill` is absolute even on POSIX CI.
  */
 export function resolveSourceArgument(source: string): string {
 	return isAbsoluteAnyPlatform(source)
@@ -717,37 +624,22 @@ const MAX_INSPECTED_DOCUMENT_BYTES = 1024 * 1024;
  * it carries, and the markdown members the portability checks read.
  *
  * 🔑 **The API expands a ZIP and applies the ceiling to the UNCOMPRESSED total,
- * not to the archive.** Measured against the live API by an adopter: a
- * 10,707,463-byte archive of a 47.85 MiB tree — comfortably inside the request
- * ceiling as bytes on the wire — came back
- * `400: Zip file uncompressed size exceeds 30MB`. So the body check every other
- * shape passes through is structurally blind here: compression is exactly the
- * thing that makes the measured quantity stop predicting the enforced one. A
- * ZIP is therefore the one input that could pass every local gate and still be
- * refused remotely, which is the same defect class as the ZIP path once
- * skipping the size check altogether.
+ * not to the archive**, so the body check every other shape passes through is
+ * structurally blind here.
  *
- * ⚠️ **The boundary itself is UNMEASURED on this lane.** One refusal at 47.85
- * MiB is all the evidence there is; nobody has bracketed where the uncompressed
- * rule actually cuts, or confirmed it is the same constant as the request lane.
- * So this refuses only on `>` — strictly the looser choice — and a bundle near
- * the line is still sent for the API to judge. Do not tighten this to `>=`, or
- * quote it as a measured ceiling, without bracketing it the way
+ * ⚠️ **The boundary itself is UNMEASURED on this lane**, so this refuses only on
+ * `>` — strictly the looser choice. Do not tighten this to `>=`, or quote it as a
+ * measured ceiling, without bracketing it the way
  * {@link API_SKILL_MAX_UPLOAD_BYTES} was bracketed.
  *
  * ⛔ Sizes come from entry HEADERS, which an archive can lie about. That is
  * fine: a lie can only change whether VAT refuses early, never whether the API
  * does.
  *
- * ⚠️ **Reading an entry is not free, and the docstring here used to claim it
- * was** — "no zip-slip or zip-bomb surface is opened — the entries are read, not
- * written" was true of the enumeration half and FALSE of the one read of an
- * entry, which inflates up to its declared size into memory. Worse, it ran BEFORE the
- * caller's uncompressed-total gate, so the ceiling this function exists to
- * enforce could not protect the inflation this function performed. Nothing is
- * written to disk — that part stands — but the decompression is now ordered
- * after the total is known and bounded by {@link MAX_INSPECTED_DOCUMENT_BYTES},
- * so an archive declaring a 4 GiB SKILL.md is enumerated and never inflated.
+ * ⚠️ **Reading an entry inflates it into memory**, so decompression is ordered
+ * after the declared total is known and bounded by
+ * {@link MAX_INSPECTED_DOCUMENT_BYTES}: an archive declaring a 4 GiB SKILL.md is
+ * enumerated and never inflated.
  *
  * 🔑 **The archive is read through the ONE archive primitive, and held to its ONE
  * entry policy.** An archive holding an entry VAT would refuse to extract — a
@@ -835,14 +727,9 @@ function isUnparseableArchive(error: unknown): error is ArchiveRefusedError {
 /**
  * Every markdown member of the archive, as an upload part.
  *
- * 🔑 This exists so the ZIP lane can run the portability family through the ONE
- * function the directory lane runs it through. Until it did, `install <zip>`
- * performed none of the checks `install --help` promises of "every markdown
- * document in the bundle": the archive went to `sendSkillUpload` as one opaque
- * part, and an operator following the documented contract got silence where they
- * were promised warnings. Routing the parts back through
- * {@link warnUnportableReferences} keeps ONE implementation of the checks — a
- * second copy of the three collector calls is how the two lanes start disagreeing.
+ * 🔑 The ZIP lane runs the portability family through the ONE function the
+ * directory lane uses ({@link warnUnportableReferences}): a second copy of the
+ * collector calls is how the two lanes start disagreeing.
  *
  * An entry that will not inflate is SKIPPED here and named: the checks it feeds
  * only ever warn. The upload is what refuses it — VAT sends its own ZIP of what
@@ -904,12 +791,8 @@ function skillMdOf(files: readonly ArchiveEntry[], root: string): ArchiveEntry |
  * The frontmatter `name` inside the ELECTED entry — or `undefined`, including
  * when that entry declares none.
  *
- * 🪤 It used to be `declaredSkillNameIn(…) ?? declaredName`, which KEPT the
- * previous (deeper) candidate's name when a newly-elected shallower SKILL.md had
- * no `name`. The elected file and the reported name then came from two different
- * documents, and the divergence warning named a name no operator could find at
- * the root of their archive. The election decides; whatever it holds is the
- * answer, absence included.
+ * 🪤 The election decides; whatever the elected file holds is the answer,
+ * absence included — never a deeper candidate's name.
  *
  * An elected SKILL.md that will not inflate costs only the name (the size total
  * is already computed from headers) — see {@link inflateOrRecord}, which records
@@ -1035,14 +918,8 @@ async function declaredTestInputPaths(skillDir: string): Promise<ReadonlySet<str
  * throwing, naming the path, when the link cannot be followed at all.
  *
  * `Dirent.isDirectory()` is lstat-based, so it answers `false` for a link to a
- * directory. That entry therefore used to fall into the FILE branch below and
- * `readFileSync` threw a raw `EISDIR`: the upload died on a Node error that
- * named no path and said nothing about what to do. A dangling link produced the
- * same shape of failure with `ENOENT`.
- *
- * `requireFollowedStatSync` follows the link (its chain read first), which is the same thing the build-time size walk
- * does to classify one — so both lanes reach the same verdict about the same
- * entry.
+ * directory. `requireFollowedStatSync` follows the link (its chain read first),
+ * the same way the build-time size walk classifies one.
  */
 function resolvesToDirectory(entry: Dirent, fullPath: string, relativePath: string, within: string): boolean {
 	if (!entry.isSymbolicLink()) return false;
@@ -1066,21 +943,10 @@ function resolvesToDirectory(entry: Dirent, fullPath: string, relativePath: stri
  * out.
  *
  * 🚨 **A symlink is REFUSED, whatever it resolves to.** A multipart body has no
- * way to express a link, so there are only three things this could do with one
- * and two of them are wrong. Skipping it changes what gets published without the
- * skill breaking until someone opens it — and the one thing this collector
- * guarantees is that every withholding is reported. FOLLOWING it is data egress:
- * an earlier version refused only a link resolving to a DIRECTORY, so
- * `notes.md -> /etc/passwd` fell through both branches, `readFileSync` returned
- * the target's bytes, and they were posted under the in-bundle name `notes.md`
- * into a workspace every org member can read. Nothing in the run said a link had
- * been followed: the "every withholding is reported" guarantee covers
- * EXCLUSIONS, not DEREFERENCES. Any file the operator can read left the machine.
- *
- * The vector is not a registry tarball — node-tar 7 de-roots an absolute
- * linkpath and refuses an escaping relative one, measured — but a directory
- * extracted with system `tar`, which does recreate `-> /etc/passwd`, or cloned
- * from an untrusted repo and handed to `install <dir>`.
+ * way to express a link: skipping it silently changes what is published, and
+ * FOLLOWING it is data egress (`notes.md -> /etc/passwd` would post the target's
+ * bytes into a workspace every org member can read). The vector is a directory
+ * extracted with system `tar`, or cloned from an untrusted repo.
  *
  * Refusing and naming the path is the only answer that is both complete and
  * honest, and it keeps this lane on the same payload as the build-time size
@@ -1115,8 +981,7 @@ function collectFiles(
 		if (entry.isDirectory()) {
 			collectFiles(fullPath, base, testInput, collected);
 		} else if (entry.isSymbolicLink()) {
-			// Whatever it points at. A link to a FILE used to fall through to the
-			// branch below and be read through — see this function's doc comment.
+			// Whatever it points at — see this function's doc comment.
 			throw new CommandRefusalError(
 				'INPUT_UNREADABLE',
 				`Cannot upload ${relativePath}: it is a symbolic link${linkedDirectory ? ' to a directory' : ''}, `
@@ -1202,11 +1067,8 @@ async function prepareSkillUpload(
 		});
 	}
 
-	// Reported on the collected files, so the exclusions listed below are already
-	// accounted for — this is the bundle actually being sent. It is FILE BYTES and
-	// says so: the ceiling is enforced on the multipart body, which adds ~156 bytes
-	// plus the filename per part, and a reader who mistook this line for the
-	// measured quantity would not understand a refusal that names a larger number.
+	// FILE BYTES of the bundle actually sent, and says so: the ceiling is enforced
+	// on the multipart body, which is larger.
 	const contentBytes = files.reduce((sum, f) => sum + f.content.length, 0);
 
 	logger.info(
@@ -1216,12 +1078,8 @@ async function prepareSkillUpload(
 	for (const excluded of collected.excluded) {
 		logger.info(`   Excluded from upload: ${excluded} (never published with a skill)`);
 	}
-	// The SAME merge `declaredTestInputPaths` read to find the eval suite — both
-	// resolutions are served from `loadConfigCached` and the per-root discovery
-	// cache, so asking twice costs one map lookup rather than a second walk-up.
-	// Resolved HERE rather than plumbed out of `collectSkillUploadFiles`, which is
-	// exported and deliberately resolves its own so no caller can hand it a config
-	// with the exclusion skipped.
+	// The SAME cached merge `declaredTestInputPaths` read, so asking twice costs
+	// one map lookup.
 	const packaging = await resolveSkillPackagingConfig(skillMdPath, 'refuse');
 	warnUnportableReferences(files, dirName, packaging?.validation, logger);
 
@@ -1231,16 +1089,9 @@ async function prepareSkillUpload(
 /**
  * Warn about references in the bundle that cannot resolve once it is published.
  *
- * 🚨 **Until this existed, `install` validated NOTHING.** It weighed the request
- * and sent it; every check VAT owns — the non-portable reference family, the
- * unqualified MCP tool names, the non-portable command family — ran in
- * `vat audit` and `vat skills build` and never on the one path where content
- * leaves the machine. An adopter found the consequence directly: of 54 built
- * skills, 10 referenced paths outside their own directory, one of them exec'ing
- * a script under a SIBLING skill. Under the Skills API each skill is its own
- * top-level tree with no siblings, so those uploaded with a green tick and could
- * not possibly run. "It uploaded" is not "it works", and the publish command was
- * the only lane in a position to say so before the bytes left.
+ * 🚨 **This is the one lane in a position to check content before it leaves the
+ * machine.** Under the Skills API each skill is its own top-level tree with no
+ * siblings, so a reference outside it uploads green and cannot run.
  *
  * ⚠️ **Warns, never refuses.** These are `warning`-severity codes and the
  * operator may have reasons VAT cannot see; turning a publish into an exit 2 on
@@ -1250,14 +1101,9 @@ async function prepareSkillUpload(
  * Costs nothing extra: it reads the buffers already collected for the upload, so
  * no file is opened twice and nothing is walked again.
  *
- * 🚨 **The three collectors are RAW issue producers, and raw issues are not what
- * an adopter agreed to see.** Everywhere else in VAT they pass through
- * {@link runValidationFramework}, which applies `validation.allow` waivers and
- * `validation.severity` overrides. Printed unfiltered, this lane contradicted
- * VAT's own documented remedy: `MCP_TOOL_NAME_UNQUALIFIED` tells authors to
- * "waive that one identifier with a `validation.allow` entry", and an author who
- * did exactly that got a green `vat skills build` and then the same warning on
- * every publish with nothing left to silence it with.
+ * 🚨 **The three collectors are RAW issue producers**, so they pass through
+ * {@link runValidationFramework} here as everywhere else: an author who waived a
+ * finding with `validation.allow` must not see it again on every publish.
  *
  * ⚠️ The `location` is the BUNDLE-relative path, not the API-keyed
  * `<declared-name>/<path>` spelling. An allow glob matches `ValidationIssue.location`,
@@ -1333,13 +1179,9 @@ async function uploadSkillDir(
  * measured. So the root is REPORTED rather than checked here, and the log line
  * below is what lets an operator see which root their files landed under.
  *
- * ⛔ It is NOT true that a changed name "silently re-roots" the version — this
- * comment and the command's help both said so, and the measurement says
- * otherwise: the SERVER enforces SKILL.md name consistency per `skill_id`, so
- * publishing from a renamed tree earns a loud 400. That is a better outcome than
- * the one the warning described, and it is the one refusal this endpoint can
- * earn, so it gets a remedy ({@link VERSION_NAME_MISMATCH_REFUSAL}) rather than
- * the bare vendor sentence it used to get.
+ * ⛔ A changed name does NOT silently re-root the version: the SERVER enforces
+ * SKILL.md name consistency per `skill_id`, so a renamed tree earns a loud 400,
+ * which gets a remedy ({@link VERSION_NAME_MISMATCH_REFUSAL}).
  */
 async function uploadSkillVersionDir(
 	client: OrgApiClient,
@@ -1357,12 +1199,7 @@ async function uploadSkillVersionDir(
 	// Its absence also changes the body's length, which is why the ceiling is
 	// weighed on the body this endpoint sends rather than on the one `install` builds.
 	const multipart = buildUploadBodyOrRefuse({}, files, dirName);
-	// The duplicate-title 400 is unreachable here — `versions add` sends no
-	// `display_title` — but the NAME refusal is not: the server enforces SKILL.md
-	// name consistency per skill_id, so publishing from a tree whose frontmatter
-	// `name` has changed is a 400, and it is the one refusal this endpoint can
-	// earn. It got no remedy at all until the reviewer who read the log line above
-	// pointed out that the line describes silent behaviour the server forbids.
+	// The duplicate-title 400 is unreachable here; the NAME refusal is not.
 	return readSkillVersionResponse(await sendUpload(
 		() => client.uploadSkillVersion<unknown>(skillId, multipart),
 		multipart.body.length,
@@ -1374,16 +1211,13 @@ async function uploadSkillVersionDir(
  * List candidate package directories in node_modules (scoped + unscoped).
  *
  * Exported for testing: this and {@link findSkillsDir} decide WHICH tree
- * `--from-npm` publishes to an org, and the whole `--from-npm` path was
- * untested — `packages/cli/src/commands/**` is coverage-excluded, so nothing in
- * any report said so.
+ * `--from-npm` publishes to an org.
  */
 export function listNodeModulePackages(nodeModulesDir: string, within: string): string[] {
 	if (!pathPresent(nodeModulesDir, { follow: within }, everywhere('source'), 'probe')) return [];
 
 	const results: string[] = [];
-	// Followed: a workspace package under node_modules IS a symlink, and a walk
-	// that tested `isDirectory()` on the link skipped every one of them.
+	// Followed: a workspace package under node_modules IS a symlink.
 	for (const entry of readdirSync(nodeModulesDir, { withFileTypes: true })) {
 		if (direntKindFollowingSync(nodeModulesDir, entry, within) !== 'directory') continue;
 		if (entry.name.startsWith('@')) {
@@ -1452,18 +1286,9 @@ export interface NpmInstallSummary {
 /**
  * The batch's report, tagged as a failure when ANY skill did not publish.
  *
- * 🔑 Partial success is a failure. The old code returned this document plainly,
- * so `executeOrgCommand` stamped `status: success` on it and exited 0 — a run in
- * which all three skills were rejected printed `skillsUploaded: 0 /
- * skillsFailed: 3` under `status: success`, and a CI wrapper written as
- * `vat claude org skills install --from-npm … || fail` published nothing and
- * reported green.
- *
- * Some-succeeded is tagged the same way as none-succeeded, deliberately: the
- * workspace is now in a MIXED state that nobody asked for, which is exactly the
- * case a human has to look at. Calling it green because two of three landed is
- * the same lie, only smaller. What did land stays in the document, so the reader
- * can see how far the run got.
+ * 🔑 Partial success is a failure: a mixed workspace state nobody asked for is
+ * exactly the case a human has to look at, so `… || fail` must not report green.
+ * What did land stays in the document, so the reader can see how far it got.
  */
 export function summarizeNpmInstall(
 	source: string,
@@ -1560,9 +1385,7 @@ export async function installFromLocal(
 	// The operator's own argument: its own `within`.
 	const stat = statNamedPath(sourcePath, sourcePath, `Source not found: ${sourcePath}`);
 
-	// Case-INSENSITIVE. `endsWith('.zip')` refused `MySkill.ZIP` as "not a directory
-	// or .zip file" — a file Windows and macOS both consider a zip archive, and one
-	// an operator has no way to read that refusal as being about capitalisation.
+	// Case-INSENSITIVE: `MySkill.ZIP` is a zip archive on Windows and macOS.
 	if (!stat.isDirectory() && sourcePath.toLowerCase().endsWith('.zip')) {
 		return await installZipArchive(sourcePath, titleOverride, client, logger);
 	}
@@ -1571,26 +1394,14 @@ export async function installFromLocal(
 		throw new CommandRefusalError('USAGE_INVALID', `Source must be a directory or .zip file: ${sourcePath}`);
 	}
 
-	// "Packaging", not "Uploading". Everything that follows this line — reading the
-	// config, collecting the file set, weighing the request — happens locally and
-	// can refuse locally, and an operator who read "Uploading skill directory: X"
-	// above a local size refusal was told about an upload that never started. The
-	// line stays HERE rather than moving after the point of no return, because
-	// naming the source before the work is what makes a failure attributable at
-	// all — `--from-npm` packages several skills in a loop, and a packaging error
-	// with no path above it names nothing.
+	// "Packaging", not "Uploading": what follows happens locally and can refuse
+	// locally. Naming the source before the work makes a failure attributable.
 	logger.info(`Packaging skill directory: ${sourcePath}`);
 	return await uploadSkillDir(client, sourcePath, titleOverride, logger);
 }
 
 /**
  * Publish a ZIP archive as a NEW skill.
- *
- * Split out of {@link installFromLocal} because the archive lane now has three
- * decisions of its own — an answer-key refusal, an expanded-size refusal, and a
- * title/name divergence warning — and inlining them made the dispatcher a
- * cognitively complex function whose real job (directory or archive?) was two
- * lines of it.
  */
 async function installZipArchive(
 	sourcePath: string,
@@ -1604,23 +1415,11 @@ async function installZipArchive(
 	// The ONE read of the file: everything below is decided on, and sent from, what this read.
 	const inspected = await inspectZipArchive(sourcePath);
 	const fileBytes = 'archiveUnreadable' in inspected ? inspected.bytes.length : inspected.fileBytes;
-	// A ZIP is by construction a single large binary, so this is the shape most
-	// likely to be over the ceiling — and the one that reached the wire unmeasured
-	// while the check lived only in the directory-packaging path. It is gated in
-	// `sendSkillUpload` below, on the same measure (the multipart body) as every
-	// other shape; this line reports the file's own bytes, which are smaller.
-	//
-	// "Preparing", not "Uploading": nothing has been sent at this point, and the
-	// very next step can refuse locally. A line that claims an upload started is
-	// the log telling the operator about work that never happened.
+	// Reports the file's own bytes; the ceiling is gated in `sendSkillUpload` on
+	// the multipart body. "Preparing", not "Uploading": nothing has been sent yet.
 	logger.info(`Preparing ZIP: ${sourcePath} (${formatBytes(fileBytes)} of file content)`);
-	// Where the title came FROM, not just what it is. A ZIP's title is the
-	// filename — `wiki-lint-v2.zip` publishes a skill called `wiki-lint-v2`,
-	// which is a DIFFERENT skill from `wiki-lint` and is not refused, because
-	// display_title uniqueness is enforced only when the field is sent. A
-	// directory takes its title from SKILL.md instead, so the same tree zipped
-	// and unzipped can publish under two names — the inspection reads the name
-	// the archive's SKILL.md declares, and the divergence is reported below.
+	// Where the title came FROM: a ZIP's title is its filename, while a directory
+	// takes SKILL.md's name, so the inspection reports any divergence below.
 	logger.info(`Display title: "${displayTitle}" (${titleOverride === undefined
 		? 'from the ZIP filename — NOT from the SKILL.md inside it; pass --title to set it'
 		: 'from --title'})`);
@@ -1657,20 +1456,9 @@ function refuseOrWarnOnArchive(
 	wireBytes: number,
 	logger: UploadLogger,
 ): void {
-	// 🚨 REFUSED, not warned. The directory lane refuses an answer key
-	// unconditionally (`NEVER_UPLOADED_DIR_NAMES`, plus whatever the config
-	// declares), and until this existed the ZIP lane bypassed `collectFiles`
-	// entirely and posted the archive as one opaque part — so
-	// `zip -r my-skill.zip my-skill/` over a tree holding
-	// `my-skill/evals/evals.json` published the answer key org-wide with a
-	// green tick, while `install my-skill/` on the very same tree refused.
-	// Two lanes of one command must not disagree about whether a skill's
-	// answer key may be published, and a warning is a disagreement.
-	//
-	// This lane can only see the CONVENTIONAL names: there is no skill
-	// directory to walk up from, so a config-declared suite location is
-	// unreadable here. That is a narrower check than the directory lane's,
-	// not a looser verdict on what it does see.
+	// 🚨 REFUSED, not warned: two lanes of one command must not disagree about
+	// whether a skill's answer key may be published. This lane sees only the
+	// CONVENTIONAL names — no skill directory to walk up from to a config.
 	if (inspected.neverUploaded.length > 0) {
 		throw new CommandRefusalError(
 			'USAGE_INVALID',
@@ -1693,12 +1481,8 @@ function refuseOrWarnOnArchive(
 			+ `Remove files from the bundle; compressing harder cannot help.`,
 		);
 	}
-	// The title/name divergence this branch discloses above, now stated as a
-	// FACT rather than as a caveat, because the archive can be read after
-	// all. A ZIP whose inner SKILL.md declares a different name publishes a
-	// skill whose title and versions disagree — and that divergence is what
-	// makes a title-keyed lookup unsafe, so it is worth naming at the moment
-	// it is minted rather than diagnosing later.
+	// The title/name divergence, stated as a FACT: it makes a title-keyed lookup
+	// unsafe, so it is named at the moment it is minted.
 	if (inspected.declaredName !== undefined && inspected.declaredName !== displayTitle) {
 		logger.warn(
 			`Title/name divergence: this uploads with display title "${displayTitle}", but the `
@@ -1706,22 +1490,11 @@ function refuseOrWarnOnArchive(
 			+ `the declared name. Pass --title "${inspected.declaredName}" to make them agree.`,
 		);
 	}
-	// 🚨 The SAME function the directory lane calls, over the archive's own
-	// markdown. Until this line existed, `install <zip>` ran NONE of the
-	// portability checks its `--help` promises of "every markdown document in
-	// the bundle" — the archive went straight to `sendSkillUpload`, so the
-	// adopter finding that produced the family (10 of 54 skills referencing a
-	// path outside their own tree, published green and unable to run) was
-	// invisible on the lane most likely to carry a hand-built bundle.
+	// 🚨 The SAME function the directory lane calls, over the archive's markdown.
 	//
-	// ⚠️ NO validation config, and that is a real narrowing, stated in the
-	// help text. `validation.allow` / `validation.severity` are resolved by
-	// walking up from a skill's SKILL.md to its governing project — and an
-	// archive member has no path on disk to walk up from, the same reason a
-	// config-declared eval-suite location is unreadable here. So a waiver that
-	// silences `vat skills build` does NOT silence this lane. The checks only
-	// warn, so the cost of the narrowing is noise, never a blocked publish;
-	// the cost of skipping them was silence on a documented promise.
+	// ⚠️ NO validation config (stated in the help text): an archive member has no
+	// path on disk to walk up from to its governing project, so a waiver that
+	// silences `vat skills build` does NOT silence this lane. The checks only warn.
 	warnUnportableReferences(inspected.documents, inspected.bundleRoot, undefined, logger);
 	if (inspected.unreadable.length > 0) {
 		const named = inspected.unreadable.map(({ entry, reason }) => `${entry} (${reason})`).join(', ');
@@ -1749,13 +1522,8 @@ export interface VersionSweep {
 /**
  * Delete every version handed in, and keep going when one refuses.
  *
- * 🚨 **One refusal is a fact about ONE version.** This loop used to return on the
- * first one, so every version after it was never ATTEMPTED — not failed, not
- * reported, unexamined. Deleting a workspace skill requires deleting every
- * version first, so the operator was left with a skill that could not be deleted,
- * a report that named one problem out of an unknown number, and no way to tell
- * from the output which versions were still there. A transient refusal on version
- * 2 of 30 hid the state of the other 28.
+ * 🚨 **One refusal is a fact about ONE version.** Deleting a skill requires
+ * deleting every version first, so the operator needs every version's state.
  *
  * The sweep therefore ATTEMPTS all of them and reports both lists. The caller
  * decides what the outcome means: some deleted plus some failed is a `partial`
@@ -1814,16 +1582,10 @@ export interface HalfDeletedReport {
  * The document a `--all` run publishes when it destroyed something and then did
  * not finish.
  *
- * 🔑 The deleted list is a RECORD, not a progress counter. Version deletion is
- * irreversible, so a failure part-way through leaves a workspace nobody can
- * reconstruct — and throwing here would publish only the refusal and DISCARD
- * the document. It happened, and it destroyed things the operator now has no
- * other list of. So the lists travel with the failure as a `partial` outcome:
- * the payload is published, and the adapter ends the run on 2.
- *
- * `failedVersions` is the other half, and the half a re-run needs: what is still
- * there. Without it the operator knows what they lost and not what they still
- * have to deal with.
+ * 🔑 The deleted list is a RECORD, not a progress counter: deletion is
+ * irreversible, and throwing here would DISCARD the document. So the lists
+ * travel with the failure as a `partial` outcome, ending on 2; `failedVersions`
+ * is what a re-run still has to deal with.
  */
 export function reportHalfDeleted(report: HalfDeletedReport): OrgCommandFailure {
 	const { skillId, deletedVersions, failedVersions } = report;
@@ -1884,22 +1646,15 @@ Example:
 		.option('--debug', DEBUG_OPT_DESC)
 		.action(async (source: string | undefined, options: { fromNpm?: string; skill?: string; title?: string; debug?: boolean }) => {
 			await executeOrgCommand('claude org skills install', options.debug, ({ client, logger }) => {
-				// INSIDE the action, like `versions add`'s own guards. Thrown from the
-				// Commander handler instead, these were a floating rejection that
-				// reached no catch: Node printed a raw stack trace with absolute $HOME
-				// paths, wrote nothing to the stdout this command's help promises, and
-				// exited 1 — which the documented contract reads as "at least one
-				// error-severity finding" for a run in which nothing executed.
+				// INSIDE the action: thrown from the Commander handler they are a floating
+				// rejection that reaches no catch and exits 1 with a raw stack trace.
 				if (!source && !options.fromNpm) {
 					throw new CommandRefusalError('USAGE_INVALID', 'Provide a <source> path or use --from-npm <package>');
 				}
 				if (source && options.fromNpm) {
 					throw new CommandRefusalError('USAGE_INVALID', 'Provide either <source> or --from-npm, not both');
 				}
-				// The other two illegal combinations, refused rather than dropped. Both
-				// flags used to be accepted and silently ignored on the lane that cannot
-				// honour them, which is how an operator gets a skill published under the
-				// wrong title — or every skill in a package published when they named one.
+				// The other two illegal combinations, refused rather than silently ignored.
 				if (options.title !== undefined && options.fromNpm) {
 					throw new CommandRefusalError(
 						'USAGE_INVALID',
@@ -2018,15 +1773,7 @@ Examples:
 		.option('--debug', DEBUG_OPT_DESC)
 		.action(async (skillId: string, options: { all?: boolean; debug?: boolean }) => {
 			await executeOrgCommand('claude org skills delete', options.debug, async ({ client, logger }) => {
-				// Every version this run actually destroyed, accumulated as it goes.
-				//
-				// 🔑 It is a RECORD, not a progress counter. Version deletion is
-				// irreversible and `--all` does it in a loop, so a failure part-way
-				// through leaves a workspace nobody can reconstruct — and the old code
-				// threw at that point, which publishes only the refusal and DISCARDS
-				// the document. It happened, and it destroyed things the operator now
-				// has no list of. So the list travels with the failure as a `partial`
-				// outcome: published, and ending on 2.
+				// Every version this run actually destroyed: a RECORD — see `reportHalfDeleted`.
 				const deletedVersions: string[] = [];
 				const halfDeleted = (error: unknown, failedVersions: readonly string[]): OrgCommandFailure =>
 					reportHalfDeleted({
@@ -2042,17 +1789,13 @@ Examples:
 					// "Found …", not "Deleting …": nothing has been deleted at this point
 					// and the very next call can be refused. Cf. `installFromLocal`.
 					logger.info(`Found ${String(versionData.length)} version(s) of ${skillId} to delete first`);
-					// ATTEMPTS every version, whatever any one of them answers. See
-					// `deleteEveryVersion`: returning on the first refusal left the rest
-					// unexamined, and the skill undeletable with no record of what remained.
+					// ATTEMPTS every version, whatever any one of them answers (`deleteEveryVersion`).
 					const sweep = await deleteEveryVersion(client, skillId, versionData.map(v => v.version), logger);
 					deletedVersions.push(...sweep.deleted);
 					if (sweep.failures.length > 0) {
 						const detail = describeVersionSweepFailures(sweep.failures);
-						// Nothing was destroyed, so there is no record worth publishing and
-						// the refusal (EXTERNAL_API_FAILED, exit 2, via the throw) is the honest ending —
-						// the same rule as before, now decided on the WHOLE sweep rather than
-						// on its first refusal.
+						// Nothing was destroyed, so the refusal (EXTERNAL_API_FAILED, exit 2) is the
+						// honest ending.
 						if (deletedVersions.length === 0) {
 							throw new CommandRefusalError(
 								'EXTERNAL_API_FAILED',
@@ -2188,32 +1931,23 @@ Example:
 	versionsAddCmd
 		.description('Publish a new version of an existing skill')
 		.argument(SKILL_ID_ARG, SKILL_ID_DESC)
-		// NOT "or ZIP file", which is what this said when it was copied from
-		// `install`: the guard below refuses anything that is not a directory, so the
-		// help promised an input the command rejects. Narrowing the promise rather
-		// than widening the code is the honest fix — a ZIP posted to
-		// POST /v1/skills/{id}/versions has never been tried against the live API, and
-		// this is not the place to find out by guessing.
+		// NOT "or ZIP file": a ZIP posted to POST /v1/skills/{id}/versions has never
+		// been tried against the live API, and the guard below refuses one.
 		.argument('<source>', 'Path to a built skill directory')
 		.option('--debug', DEBUG_OPT_DESC)
 		.action(async (skillId: string, source: string, options: { debug?: boolean }) => {
 			await executeOrgCommand('claude org skills versions add', options.debug, ({ client, logger }) => {
 				const resolved = resolveSourceArgument(source);
 				if (!statNamedPath(resolved, resolved, `Source not found: ${resolved}`).isDirectory()) {
-					// Name the asymmetry IN the refusal, not only in --help. `install`
-					// accepts a ZIP and this verb does not, so the operator most likely to
-					// hit this is the one who just read that `install` takes one — and a
-					// refusal that says only "must be a directory" reads as a bug in their
-					// path, not as a difference between two verbs.
+					// Name the asymmetry IN the refusal: `install` accepts a ZIP and this verb
+					// does not.
 					const zipHint = resolved.toLowerCase().endsWith('.zip')
 						? ' A ZIP is accepted by `vat claude org skills install`, not here:'
 							+ ' publish a new version from the built skill directory instead.'
 						: '';
 					throw new CommandRefusalError('USAGE_INVALID', `Source must be a skill directory: ${resolved}.${zipHint}`);
 				}
-				// "Packaging", not "Publishing" — see `installFromLocal`. Measured: this
-				// line printed, then `Failed to load config: …`, and nothing had been
-				// sent. The announcement now describes the step it actually precedes.
+				// "Packaging", not "Publishing" — see `installFromLocal`.
 				logger.info(`Packaging new version of ${skillId} from: ${resolved}`);
 				return uploadSkillVersionDir(client, skillId, resolved, logger);
 			});

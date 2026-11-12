@@ -1,5 +1,5 @@
 /**
- * What the flat-skill install verbs — `vat claude plugin install` (its skill lanes), `vat agent install` and
+ * What the flat-skill install verbs — `vat claude plugin install` (its skill lanes) and
  * `vat skills install` — share about planning an install onto the tree-change primitive: the
  * one change a skill copy is, the one link policy of a tree an install copies from, the one
  * refusal an occupied destination is, and the one way an archive's `$TMPDIR` staging is disposed of.

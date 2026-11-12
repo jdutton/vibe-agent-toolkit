@@ -45,10 +45,8 @@ import { isTypeScriptProject, readWorkspaceGraph, type WorkspacePackage } from '
 
 const CLAUDE_MD = 'CLAUDE.md';
 /**
- * The byte budget for the root `CLAUDE.md`. It is loaded into every agent
- * session, and its history is a sawtooth — two hand compactions, each followed
- * by regrowth at ~90 lines a month — because a number nobody enforces is a
- * number nobody holds. 20 KiB is the post-compaction size with headroom.
+ * The byte budget for the root `CLAUDE.md`, which is loaded into every agent
+ * session: a number nobody enforces is a number nobody holds.
  */
 export const CLAUDE_MD_BYTE_BUDGET = 20_480;
 
@@ -220,9 +218,8 @@ function hasUnitTests(repoRoot: string, pkg: WorkspacePackage): boolean {
  * way, and nothing the root already owns.
  *
  * `build` may add steps around the compile (`validate-help-files && …`, `… &&
- * bun run generate:schemas`) but must invoke the one compile script — `utils`
- * used to be the single package on `rimraf dist && tsc`, the delete-then-emit
- * that script exists to prevent, on the one package everything else reads.
+ * bun run generate:schemas`) but must invoke the one compile script, never a
+ * delete-then-emit `rimraf dist && tsc`.
  * `test:*` scripts are required exactly where the matching test tier exists
  * and forbidden where it does not, so a script cannot be an orphan.
  */

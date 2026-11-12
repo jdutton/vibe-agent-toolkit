@@ -48,10 +48,8 @@ export const PATH_REFUSALS: Readonly<Record<string, { readonly missing: RefusalC
   'skills build': { missing: 'USAGE_INVALID', unreadable: 'INPUT_UNREADABLE' },
   'skills package': { missing: 'USAGE_INVALID', unreadable: 'INPUT_UNREADABLE' },
   'claude marketplace validate': { missing: 'USAGE_INVALID', unreadable: 'INPUT_UNREADABLE' },
-  'agent validate': { missing: 'USAGE_INVALID', unreadable: 'INPUT_UNREADABLE' },
   'skills list': { missing: 'USAGE_INVALID', unreadable: 'INPUT_UNREADABLE' },
   'skills install': { missing: 'USAGE_INVALID', unreadable: 'INPUT_UNREADABLE' },
-  'agent import': { missing: 'USAGE_INVALID', unreadable: 'INPUT_UNREADABLE' },
   'rag index': { missing: 'USAGE_INVALID', unreadable: 'INPUT_UNREADABLE' },
   inventory: { missing: 'USAGE_INVALID', unreadable: 'INPUT_UNREADABLE' },
 };
@@ -81,12 +79,9 @@ export const PATH_VERBS: ReadonlyArray<{ readonly verb: string; readonly args: (
   { verb: 'skills package', args: (path) => ['skills', 'package', path, '-o', safePath.join(matrixTempDir(), 'package-path-out')] },
   { verb: 'skill review', args: (path) => ['skill', 'review', path, '--yaml'] },
   { verb: 'claude marketplace validate', args: (path) => ['claude', 'marketplace', 'validate', path] },
-  { verb: 'agent validate', args: (path) => ['agent', 'validate', path] },
   { verb: 'skills list', args: (path) => ['skills', 'list', path] },
   // The source to install: a directory the OS will not list cannot be looked into for a SKILL.md.
   { verb: 'skills install', args: (path) => ['skills', 'install', path, ...SKILLS_INSTALL_FLAGS] },
-  // The SKILL.md to convert: a directory, listable or not, cannot be read as one.
-  { verb: 'agent import', args: (path) => ['agent', 'import', path] },
   // The root to crawl; `--db` so the database path is never what refuses.
   { verb: 'rag index', args: (path) => ['rag', 'index', path, '--db', ragDb('path-verb')] },
   // The subject to inventory: a plugin, marketplace or install directory, or a SKILL.md.

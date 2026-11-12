@@ -74,7 +74,7 @@ export function validateSkill(options: ValidateOptions): Promise<ValidationResul
  * @returns Validation result with all validation issues
  */
 async function validateSkillOn(options: ValidateOptions, dispatcher: ParseDispatcher): Promise<ValidationResult> {
-  const { skillPath, isVATGenerated = false } = options;
+  const { skillPath } = options;
 
   // Root every emitted location is relative to. A batching caller supplies its
   // scan root; otherwise fall back to the same chain
@@ -102,7 +102,7 @@ async function validateSkillOn(options: ValidateOptions, dispatcher: ParseDispat
       message: 'File does not exist',
       location: skillLocation,
     });
-    return buildResult(skillPath, isVATGenerated, issues, policy);
+    return buildResult(skillPath, issues, policy);
   }
 
   // Read file
@@ -124,7 +124,7 @@ async function validateSkillOn(options: ValidateOptions, dispatcher: ParseDispat
       fix: 'Add YAML frontmatter with name and description fields',
     });
 
-    return buildResult(skillPath, isVATGenerated, issues, policy, { lineCount });
+    return buildResult(skillPath, issues, policy, { lineCount });
   }
 
   const { frontmatter } = parseResult;
@@ -147,7 +147,7 @@ async function validateSkillOn(options: ValidateOptions, dispatcher: ParseDispat
   // and the gray-zone second-person-opener heuristic from the plugin-dev
   // cross-walk (info severity).
   issues.push(
-    ...validateFrontmatterSchema(frontmatter, isVATGenerated, skillLocation),
+    ...validateFrontmatterSchema(frontmatter, skillLocation),
     ...validateFrontmatterRules(frontmatter, skillLocation),
     ...detectUndeclaredCrossSkillAuth(frontmatter, parseResult.body, skillLocation),
     ...detectNonImperativeBody(parseResult.body, skillLocation),
@@ -202,7 +202,7 @@ async function validateSkillOn(options: ValidateOptions, dispatcher: ParseDispat
   // Build metadata
   const metadata = buildMetadata(frontmatter, lineCount);
 
-  const result = buildResult(skillPath, isVATGenerated, issues, policy, metadata);
+  const result = buildResult(skillPath, issues, policy, metadata);
 
   if (linkedFiles.length > 0) {
     // Derived from the RESOLVED issues, so an ignored finding cannot resurface here.
@@ -773,7 +773,6 @@ interface ResultPolicy {
  */
 function buildResult(
   skillPath: string,
-  isVATGenerated: boolean,
   rawIssues: readonly ValidationIssue[],
   policy: ResultPolicy,
   metadata?: ValidationResult['metadata']
@@ -782,7 +781,7 @@ function buildResult(
   const issues = [...runSingleUnitValidation(rest, policy.validation).emitted, ...notAdmitted];
   const result: ValidationResult = {
     path: skillPath,
-    type: isVATGenerated ? 'vat-agent' : 'agent-skill',
+    type: 'agent-skill',
     ...describeIssues(issues, 'agent-skill'),
     issues,
   };

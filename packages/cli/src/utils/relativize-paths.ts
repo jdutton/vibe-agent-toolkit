@@ -16,10 +16,7 @@
  * The caller names the nested carriers it owns instead.
  */
 
-import { isAbsoluteOnAnyHost } from '@vibe-agent-toolkit/schema';
 import { issueLocation } from '@vibe-agent-toolkit/utils';
-
-import { CommandRefusalError } from './command-refusal.js';
 
 /** The minimum shape this module re-bases: anything carrying a `path`. */
 export interface PathEntry {
@@ -87,23 +84,4 @@ export function relativizePathEntries<T extends PathEntry>(
   nestedKeys: readonly string[] = [],
 ): T[] {
   return entries.map((entry) => relativizeEntry(entry, root, nestedKeys));
-}
-
-/**
- * A relativized PATH (a report's data field, never a finding's `location`: it may climb), or the
- * invocation's refusal when it has no relative spelling at all.
- *
- * @param relative - What `issueLocation` / `safePath.relative` returned
- * @param root - What it is relative to, for the message
- * @param verb - The command, for the message (`vat agent validate`)
- * @returns The path, unchanged, when it is relative
- * @throws {CommandRefusalError} `USAGE_INVALID` when it is absolute (another drive)
- */
-export function relativeLocationOrRefuse(relative: string, root: string, verb: string): string {
-  // The location contract's own definition of absolute, so a report's path and a finding's location agree.
-  if (!isAbsoluteOnAnyHost(relative)) return relative;
-  throw new CommandRefusalError(
-    'USAGE_INVALID',
-    `${verb} reports locations relative to ${root}, and ${relative} has no path relative to it (it is on another drive). Run from that drive.`,
-  );
 }

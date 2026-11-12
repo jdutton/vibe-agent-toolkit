@@ -418,7 +418,7 @@ function convertPluginMapToArray(pluginMap: Map<string, SkillEntry[]>): PluginGr
 function isMisplacedStandaloneSkill(result: ValidationResult, pluginsPath: string, pluginDirs: ReadonlySet<string>): boolean {
   // Only a SKILL can be misplaced this way; a plugin directory under
   // `plugins/` is exactly where it belongs.
-  if (result.type !== 'agent-skill' && result.type !== 'vat-agent') return false;
+  if (result.type !== 'agent-skill') return false;
   const { marketplace, plugin, isCached } = parsePathStructure(result.path);
   // Only standalone skills (no marketplace, no plugin structure).
   if (marketplace !== undefined || plugin !== undefined || isCached) return false;

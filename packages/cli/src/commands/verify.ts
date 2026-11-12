@@ -325,15 +325,8 @@ function addCheckCandidate(
  * own phases must not race them with a second, worse diagnosis.
  *
  * The pool arm enumerates the skills the run DISCOVERED, unioned with the keys of
- * `skills.config`. It used to be the config keys alone, which made both in-process
- * phases blind to the common case: a per-skill `config:` block is optional, so a
- * skill discovered only by `skills.include` had no key and its bundle was never
- * looked at. Measured on a two-skill fixture with an identical `CLAUDE.md` planted
- * in each built bundle, `packaged-content` reported ONE finding and exit 0 — the
- * phase was structurally blind to the population its own doc comment cites as the
- * motivating incident. The same line made `files-config-dests` a total no-op for a
- * project whose `files:` entries live only under `skills.defaults`, while the
- * startup banner still announced that the phase ran.
+ * `skills.config`: a per-skill `config:` block is optional, so the config keys
+ * alone would miss every skill discovered only by `skills.include`.
  *
  * The config keys stay in the union rather than being replaced by discovery: a key
  * naming a skill discovery does not reach (a renamed glob, a stale entry) still
@@ -366,9 +359,7 @@ function collectBuiltSkillOutputs(
   // No `try`, deliberately. The config was already loaded by the command (see
   // `loadConfigTolerant`) and the in-process phases run only when it loaded, so
   // `loadConfig` here answers from cache. The `catch { return outputs }` that
-  // used to wrap this whole body could only ever absorb a DEFECT — and it
-  // absorbed it into an empty candidate list, which every phase below then
-  // verified against: zero bundles, zero findings, exit 0.
+  // A `catch` here could only ever absorb a DEFECT into an empty candidate list.
   const config = loadConfig(cwd, 'source');
   if (!config) return outputs;
 
@@ -607,18 +598,11 @@ const VERIFY_VOCABULARY: PhaseVocabulary = {
 /**
  * Decide which verification phases to run.
  *
- * Config-gated, exactly as `vat validate` is. It used to push `resources` and
- * `skills` unconditionally, so `vat verify --only skills` in a project with no
- * `skills:` block exited 0 while `vat validate --only skills` on the same
- * project exited 1 — same question, opposite verdicts, and a CI gate pinned to
- * the verify form stayed green forever the moment the config key was renamed.
+ * Config-gated, exactly as `vat validate` is, so the two give the same verdict.
  *
- * `--only` is gone from this command entirely. Measured on a 90-skill project a
- * full `vat verify` is ~32s, of which the two slowest phases are ~28s — the
- * filter bought at most ~18s and repeatedly bought a wrong answer with it. Every
- * run is now a whole run, and `only` is passed to {@link decidePhaseSelection}
- * as `undefined` (that helper still routes `--only` for `vat validate` and
- * `vat build`).
+ * `--only` is gone from this command entirely: every run is a whole run, and
+ * `only` is passed to {@link decidePhaseSelection} as `undefined` (that helper
+ * still routes `--only` for `vat validate` and `vat build`).
  *
  * @param configError - The config-load failure, when the config could not be
  *   read. Every delegated phase still runs so THE PHASE reports the real config
@@ -882,8 +866,7 @@ export function runFilesConfigDestsPhase(
 
 /**
  * The in-process consistency check phase, its findings published into the
- * report, not merely logged: they used to go to stderr only, so the archived
- * YAML — the artifact of record — said nothing happened.
+ * report, not merely logged: the archived YAML is the artifact of record.
  *
  * Discovery is handed in rather than performed here: it crawls the whole project,
  * and the packaged-content and files-config-dests phases need the same list. One
@@ -949,8 +932,7 @@ async function runInProcessPhases(run: {
 }): Promise<void> {
   const { phases, config, projectRoot, logger, verbose, results } = run;
   // ONE discovery for the whole in-process half of the run: every phase below
-  // asks "which skills does this project have", and each used to answer it
-  // differently. `'refuse'`: a verify over a population it could not see is the
+  // asks "which skills does this project have". `'refuse'`
   // green-without-checking shape this command exists to refuse (a SKILL.md whose
   // parse was refused has no name to check by, so it refuses too) — the throw is
   // the run's refusal, published with the phases that already finished.
@@ -981,9 +963,7 @@ async function verifyTopLevelCommand(
   const { logger } = createPhaseContext(options.debug);
 
   const report = await orchestrate(async (results) => {
-    // First, and before requireProjectRoot: `vat verify dist/skills/demo` used to
-    // be accepted, have its path discarded, run wide over the whole project and
-    // report success.
+    // First, and before requireProjectRoot: a positional path is refused, never discarded.
     rejectPositionalArguments(
       command.args,
       COMMAND_NAME,

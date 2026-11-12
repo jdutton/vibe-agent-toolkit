@@ -24,7 +24,6 @@ describe('scanTestTree on the real tree (integration)', () => {
         { site: 'packages/resources/test/system/external-url-validation.system.test.ts', dir: 'cli', subpath: 'dist/bin/vat.js', open: false },
         { site: 'packages/resources/test/integration/git-crawl-io-cost.integration.test.ts', dir: 'lab', subpath: 'dist/facets/io/counter.cjs', open: false },
         { site: 'packages/vat-development-agents/test/system/packaged-output-drift.system.test.ts', dir: 'vat-development-agents', subpath: 'dist/skills', open: true },
-        { site: 'packages/vat-development-agents/test/system/packaged-output-drift.system.test.ts', dir: 'vat-example-cat-agents', subpath: 'dist/skills', open: true },
         { site: 'packages/cli/test/system/test-common.ts', dir: 'cli', subpath: 'dist/bin.js', open: false },
         { site: 'packages/cli/test/system/test-common.ts', dir: 'utils', subpath: 'dist/testing/fault-fs-preload.js', open: false },
       ]),

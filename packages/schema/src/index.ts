@@ -1,15 +1,14 @@
 /**
  * @vibe-agent-toolkit/schema
  *
- * JSON Schema definitions and TypeScript types for VAT agent manifest format.
+ * The shared contracts every VAT package speaks: validation codes, issues and
+ * reports, severities, the exit-code contract, the project validation config,
+ * and the package.json `vat` metadata — as Zod schemas, TypeScript types and
+ * generated JSON Schema.
  */
 
 // JSON Schema utilities
 export { presenceImplies, toJsonSchema, type JsonSchemaOptions } from './schema-utils.js';
-
-// Result types
-export * from './result-types.js';
-export * from './output-envelopes.js';
 
 // Canonical validation code registry
 export * from './validation-codes.js';
@@ -28,74 +27,13 @@ export * from './exit-code.js';
 // Which refusal a classified filesystem fault is (side × class)
 export * from './fs-fault-refusals.js';
 
-// Core schemas
+// package.json `vat` metadata
 export {
-  AgentMetadataSchema,
-  BuildMetadataSchema,
-  type AgentMetadata,
-  type BuildMetadata,
-} from './metadata.js';
-
-export {
-  LLMConfigSchema,
-  type LLMConfig,
-} from './llm.js';
-
-export {
-  AgentInterfaceSchema,
-  SchemaRefSchema,
-  type Agent,
-  type AgentInterface,
-  type SchemaRef,
-} from './interface.js';
-
-export {
-  ToolAlternativeSchema,
-  ToolSchema,
-  type Tool,
-  type ToolAlternative,
-} from './tool.js';
-
-export {
-  ResourceRegistrySchema,
-  ResourceSchema,
-  type Resource,
-  type ResourceRegistry,
-} from './resource-registry.js';
-
-export {
-  AgentManifestSchema,
-  AgentSpecSchema,
-  CompositionConfigSchema,
-  CredentialsConfigSchema,
-  MemoryConfigSchema,
-  PromptConfigSchema,
-  PromptsConfigSchema,
-  RAGConfigSchema,
-  TestConfigSchema,
-  type AgentManifest,
-  type AgentSpec,
-  type CompositionConfig,
-  type CredentialsConfig,
-  type MemoryConfig,
-  type PromptConfig,
-  type PromptsConfig,
-  type RAGConfig,
-  type TestConfig,
-} from './agent-manifest.js';
-
-export {
-  PackagingOptionsSchema,
   SKILL_NAME_REGEX,
   SKILL_NAME_REGEX_MESSAGE,
-  VatAgentMetadataSchema,
   VatPackageMetadataSchema,
-  VatPureFunctionMetadataSchema,
   VatSkillMetadataSchema,
-  type PackagingOptions,
-  type VatAgentMetadata,
   type VatPackageMetadata,
-  type VatPureFunctionMetadata,
   type VatSkillMetadata,
 } from './package-metadata.js';
 

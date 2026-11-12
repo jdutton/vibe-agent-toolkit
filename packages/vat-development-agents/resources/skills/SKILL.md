@@ -1,11 +1,11 @@
 ---
 name: vibe-agent-toolkit
-description: Use when starting VAT work or deciding which VAT sub-skill applies. Router that points at sub-skills for adoption, skill/agent authoring, audit, distribution, RAG, knowledge resources, skill review, and enterprise org admin.
+description: Use when starting VAT work or deciding which VAT sub-skill applies. Router that points at sub-skills for adoption, skill authoring, audit, distribution, RAG, knowledge resources, skill review, and enterprise org admin.
 ---
 
 # Vibe Agent Toolkit
 
-**Vibe Agent Toolkit (VAT)** is a modular toolkit for building, packaging, and distributing portable AI agents and skills that work across multiple Claude surfaces and adjacent frameworks. Write skill or agent content once; VAT handles validation, packaging, plugin/marketplace layout, and npm publishing.
+**Vibe Agent Toolkit (VAT)** is a toolkit for skills, plugins, marketplaces and knowledge resources: it audits them, builds and distributes them across Claude surfaces, and indexes and queries markdown for RAG and the resource projection. Write skill content once; VAT handles validation, packaging, plugin/marketplace layout, and npm publishing. VAT is not an agent runtime.
 
 This is a router skill. Load the sibling sub-skill that matches the work you're doing — each sub-skill owns one slice of VAT's surface and is designed to be pulled in on demand.
 
@@ -14,10 +14,9 @@ This is a router skill. Load the sibling sub-skill that matches the work you're 
 Good fits:
 
 - Publishing a Claude skill or plugin to npm with a proper marketplace layout
-- Multi-runtime agent projects (Vercel AI SDK, LangChain, OpenAI, Claude Agent SDK)
 - Validating plugins / skills / marketplaces with `vat audit` before shipping
 - Enforcing frontmatter schemas across large markdown corpora
-- Wiring RAG indexing into an agent project
+- Wiring RAG indexing over a markdown corpus
 
 Poor fits:
 
@@ -31,7 +30,6 @@ Poor fits:
 |---|---|
 | New project setup, `vibe-agent-toolkit.config.yaml` orientation, repo structure, vibe-validate integration, npm postinstall | `vibe-agent-toolkit:vat-adoption-and-configuration` |
 | Writing or revising a SKILL.md — frontmatter, body, references, packagingOptions, validation overrides | `vibe-agent-toolkit:vat-skill-authoring` |
-| TypeScript agent archetypes, `agent.yaml`, result envelopes, orchestration, runtime adapters | `vibe-agent-toolkit:vat-agent-authoring` |
 | `vat audit` on plugins, marketplaces, skills, or settings — including `--compat`, `--exclude`, `--user`, CI use | `vibe-agent-toolkit:vat-audit` |
 | Markdown collections, `resources:` config, frontmatter schema validation, `vat resources validate` | `vibe-agent-toolkit:vat-knowledge-resources` |
 | Asking the resource projection SQL questions (`vat resources query`) or declaring standing SQL assertions that gate CI (`vat resources check`, `--budget`) | `vibe-agent-toolkit:vat-knowledge-resources` |

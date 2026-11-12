@@ -5,8 +5,7 @@
   filter matching the old `[ERROR]` prefix must match `: error: ` instead. A finding with a fix
   prints it on the next line, indented two more spaces, as `Fix: …`. This covers the lanes that
   printed a finding their own way: `vat ard emit`'s text-mode stderr (the bare message before),
-  `vat claude org skills install`'s portability warnings (`location: message`), `vat agent validate`'s
-  findings (`- [severity] message [CODE]`), `vat verify`'s consistency phase (`ERROR [CODE]: message`,
+  `vat claude org skills install`'s portability warnings (`location: message`), `vat verify`'s consistency phase (`ERROR [CODE]: message`,
   `WARN …`, `INFO …`, each with a `Fix:` line) and its files-config-dests phase (one
   `FILES_CONFIG_DEST_MISSING` line per missing destination, in place of a `Skill '<name>': missing
   dest file(s)` heading over a bulleted list), `vat rag index`'s
@@ -74,7 +73,7 @@
 - **`vat verify` prints the `packaged-content` banner before that phase's zero-bundle refusal**, which
   printed under the previous phase's banner.
 - **A refusal prints its message first, then the findings of the work that finished**, which printed
-  before it. `vat cache clear`, `vat rag clear`, `vat agent uninstall` and `vat claude plugin uninstall`,
+  before it. `vat cache clear`, `vat rag clear` and `vat claude plugin uninstall`,
   refusing because the OS would not delete what they had moved aside, now say what was left once — as
   the refusal — where they said it twice; the document still carries it as a `TREE_CLEANUP_INCOMPLETE`
   warning.
@@ -84,8 +83,8 @@
 - **`vat claude org skills install --from-npm` prints its `TREE_CLEANUP_INCOMPLETE` warning on
   stderr** when the OS would not remove the downloaded package's temp directory. It was only in the
   document's `warnings`.
-- **`vat skills build`, `vat claude plugin build`, `vat skills package`, `vat agent build` and
-  `vat agent install` print a `TREE_CLEANUP_INCOMPLETE` warning on stderr** when they succeed but the OS
+- **`vat skills build`, `vat claude plugin build` and `vat skills package` print a
+  `TREE_CLEANUP_INCOMPLETE` warning on stderr** when they succeed but the OS
   would not remove the previous output they replaced. It was only in the document.
 - **`vat build`'s `claude` phase prints only the errors of its shipped-links check without
   `--verbose`**, as every other lane does; it printed every warning and info finding. `-v` prints them.

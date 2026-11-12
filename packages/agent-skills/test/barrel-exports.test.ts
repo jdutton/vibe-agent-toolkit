@@ -12,7 +12,6 @@ import { findBarrelDrift } from '../../dev-tools/src/pin-barrel-exports.js';
 
 const BARREL_EXPORTS = [
   'AGENT_INSTRUCTION_FILE_PATTERNS',
-  'AGENT_PACKAGE_ROOT_MISSING_CODE',
   'API_SKILL_MAX_UPLOAD_BYTES',
   'AgentSkillFrontmatterJsonSchema',
   'AgentSkillFrontmatterSchema',
@@ -100,7 +99,6 @@ const BARREL_EXPORTS = [
   'assertPatternRegistered',
   'assertSafeHarnessRoot',
   'assertSafeWorkdir',
-  'buildAgentSkill',
   'buildDryRunSummary',
   'buildEvalsTemplate',
   'buildEvidence',
@@ -155,7 +153,6 @@ const BARREL_EXPORTS = [
   'getResourceSubdirForFile',
   'getTargetSubdir',
   'hostAddedToSkillZip',
-  'importSkillToAgent',
   'indexPluginLocalSkills',
   'interpolateEnvValue',
   'isAcknowledged',

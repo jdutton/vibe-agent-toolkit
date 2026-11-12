@@ -157,16 +157,6 @@ const config: KnipConfig = {
       project: [SRC_TS],
     },
 
-    'packages/agent-runtime': {
-      entry: sourceEntriesFromExports('agent-runtime'),
-      project: [SRC_TS],
-    },
-
-    // Runtime adapters: some deps provide types or are used in tests/examples
-    'packages/runtime-vercel-ai-sdk': {
-      ignoreDependencies: ['@ai-sdk/provider', '@ai-sdk/provider-utils'],
-    },
-
     // utils: the `./eslint` subpath is hand-written CommonJS outside src/. Its
     // entry point and rules are `.cjs` and are only ever loaded by ESLint itself,
     // so they need naming explicitly or knip never walks them.
@@ -179,33 +169,6 @@ const config: KnipConfig = {
       entry: [...sourceEntriesFromExports('utils'), 'eslint/index.cjs', 'eslint/rules/*.cjs'],
       project: [SRC_TS, 'eslint/*.cjs', 'eslint/rules/*.cjs'],
       ignoreDependencies: ['eslint'],
-    },
-
-    // vat-development-agents has standalone agent files + TS compiler plugin
-    'packages/vat-development-agents': {
-      entry: ['src/agents/*.ts'],
-      ignoreDependencies: [
-        '@vibe-agent-toolkit/schema',
-        // Invoked as `tspc` via `--compiler=tspc` passed to tsc-clean-build.ts — knip's
-        // script-token scanner only matches a bin name as its own token, not inside a flag value.
-        'ts-patch',
-      ],
-      // tsconfig includes resources/**/*.md which knip can't resolve as imports
-      ignoreUnresolved: ['.*'],
-    },
-
-    // Example package: devDeps used in examples/ directory (outside knip src/ project scope)
-    'packages/vat-example-cat-agents': {
-      entry: sourceEntriesFromExports('vat-example-cat-agents'),
-      project: [SRC_TS],
-      ignoreDependencies: [
-        '@ai-sdk/openai',
-        '@anthropic-ai/sdk',
-        '@langchain/openai',
-        '@vibe-agent-toolkit/runtime-.*',
-        'ai',
-        'openai',
-      ],
     },
 
     // Umbrella package: re-exports CLI for global install

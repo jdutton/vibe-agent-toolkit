@@ -49,7 +49,7 @@ const context: VersionContext | null = process.env['VAT_CONTEXT']
 
 program
   .name('vat')
-  .description('Agent-friendly toolkit for building, testing, and deploying portable AI agents')
+  .description('Agent-friendly toolkit for building, validating and distributing skills, plugins, marketplaces and knowledge resources')
   // `import.meta.filename`, NOT process.argv[1] and NOT anything cwd-derived:
   // this is the file Node actually loaded (symlinks already resolved), so it
   // identifies the running build even when the wrapper's cwd-derived context
@@ -92,7 +92,7 @@ program
     `
 Example:
   $ vat resources validate docs/       # Validate markdown links (run before commit)
-  $ vat --cwd packages/my-agents build # Build from a subdirectory
+  $ vat --cwd packages/my-skills build # Build from a subdirectory
 
 Environment:
   VAT_DEBUG=1                          # Show context detection details
@@ -140,7 +140,7 @@ if (rootArgv.wantsRootVerboseHelp(argv)) {
 /**
  * The command groups whose `--verbose` help page is a hand-written document.
  *
- * A table rather than three near-identical blocks: they diverged once already
+ * A table rather than near-identical blocks: they diverged once already
  * (see `wantsGroupVerboseHelp`), and the loader stays inside the arrow so the
  * group's module is imported only when that group is the one being asked about.
  */
@@ -152,10 +152,6 @@ const VERBOSE_HELP_GROUPS: readonly { readonly group: string; readonly show: () 
   {
     group: 'rag',
     show: async () => (await import('./commands/rag/index.js')).showRagVerboseHelp(),
-  },
-  {
-    group: 'agent',
-    show: async () => (await import('./commands/agent/index.js')).showAgentVerboseHelp(),
   },
 ];
 

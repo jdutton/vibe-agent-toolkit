@@ -20,11 +20,10 @@ Every top-level script under `src/`, by basename (generated from the directory; 
 `import-marketplace`, `index`, `jscpd-check-new`, `jscpd-update-baseline`, `known-defects-gate`,
 `link-all`, `link-workspace-packages`, `markdown-it-parser`, `parser-bakeoff`, `pin-barrel-exports`,
 `pin-emitted-schemas`, `pre-publish-check`, `prepare-bin`, `print-failed-step-output`,
-`process-test-images`, `publish-with-rollback`, `resolve-workspace-deps`, `runtime-test-helpers`,
-`structure-finding`, `test-tier-budget-allowlist`, `test-tier-budget-reporter`,
-`test-tier-budget-seed`, `tsc-clean-build`, `unlink-all`, `unused-exports-allowlist`,
-`unused-exports`, `validate-repo-structure`, `validate-version`, `workspace-graph`,
-`zod-advisory-scope`
+`publish-with-rollback`, `resolve-workspace-deps`, `structure-finding`,
+`test-tier-budget-allowlist`, `test-tier-budget-reporter`, `test-tier-budget-seed`,
+`tsc-clean-build`, `unlink-all`, `unused-exports-allowlist`, `unused-exports`,
+`validate-repo-structure`, `validate-version`, `workspace-graph`, `zod-advisory-scope`
 <!-- /gen:dev-tools-scripts -->
 
 ## Where the rules they enforce are stated

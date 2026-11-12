@@ -350,7 +350,7 @@ Requirements:
   See docs/concepts/roots-and-config.md for terminology.
 
 Example:
-  $ vat skill review packages/my-agents/src/skills/ado/SKILL.md
+  $ vat skill review packages/my-skills/src/skills/ado/SKILL.md
 `,
     );
 

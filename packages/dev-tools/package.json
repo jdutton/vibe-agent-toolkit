@@ -22,7 +22,6 @@
     "generate:tsconfig-refs": "tsx src/generate-tsconfig-refs.ts",
     "generate:claude-md": "tsx src/generate-claude-md.ts",
     "generate:workflow": "tsx src/generate-workflow.ts",
-    "process-images": "tsx src/process-test-images.ts",
     "compat-empirical": "tsx src/compat-empirical/index.ts",
     "test:watch": "vitest"
   },
@@ -45,8 +44,7 @@
   },
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",
-    "@types/which": "^3.0.4",
-    "sharp": "^0.35.4"
+    "@types/which": "^3.0.4"
   },
   "repository": {
     "type": "git",

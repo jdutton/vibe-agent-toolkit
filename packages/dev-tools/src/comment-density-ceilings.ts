@@ -15,8 +15,6 @@
  * elsewhere in the package or to lower nothing and add code.
  */
 export const COMMENT_DENSITY_CEILINGS: Readonly<Record<string, number>> = {
-  'agent-config': 23.5,
-  'agent-runtime': 43.8,
   'agent-skills': 50.7,
   'claude-marketplace': 42.6,
   'cli': 43.2,
@@ -26,21 +24,12 @@ export const COMMENT_DENSITY_CEILINGS: Readonly<Record<string, number>> = {
   // 30.6 when the built-output path evaluator landed.
   'dev-tools': 30.6,
   'discovery': 42.1,
-  'gateway-mcp': 27.7,
   'lab': 51.1,
   'projection-sqlite': 63.6,
   'rag': 48.9,
   'rag-lancedb': 47.3,
   'resource-compiler': 38.6,
   'resources': 61.8,
-  'runtime-claude-agent-sdk': 42.3,
-  'runtime-langchain': 50.8,
-  'runtime-openai': 51.6,
-  'runtime-vercel-ai-sdk': 57.6,
   'schema': 42,
-  'test-agents': 34.9,
-  'transports': 34.9,
   'utils': 54.3,
-  'vat-development-agents': 14.8,
-  'vat-example-cat-agents': 20.2,
 };

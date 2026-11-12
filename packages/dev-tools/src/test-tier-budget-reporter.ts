@@ -107,8 +107,7 @@ function judgeOne(
     if (sample.state === 'passed' && sample.durationMs < staleBelowMs) {
       return { kind: 'stale-entry', file: sample.file, tier, durationMs: sample.durationMs, budgetMs, staleBelowMs };
     }
-    // An entry buys headroom over its own measurement, never exemption: a
-    // listed file used to have no ceiling at all.
+    // An entry buys headroom over its own measurement, never exemption.
     const ceilingMs = Math.max(budgetMs, entry.measuredMs * LISTED_HEADROOM_FACTOR);
     if (sample.durationMs > ceilingMs) {
       return { kind: 'listed-over-headroom', file: sample.file, tier, durationMs: sample.durationMs, budgetMs: ceilingMs, staleBelowMs };

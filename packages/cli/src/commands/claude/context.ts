@@ -2,10 +2,8 @@
  * `vat claude context [path]` — what loads into an agent's context here, and
  * what it costs.
  *
- * The first ANALYSIS verb under `vat claude`, which until now held only
- * management verbs (plugins, marketplaces, org administration). It answers a
- * question, changes nothing, and never gates: there is no threshold anywhere in
- * this file. A number that fails a build teaches people to stop reading it.
+ * An ANALYSIS verb: it answers a question, changes nothing, and never gates —
+ * there is no threshold anywhere in this file.
  *
  * ⛔ **The one other non-zero exit is not a threshold: it is an ANSWER VAT could
  * not give.** A file the walk reached whose facts this run refused (a parse
@@ -52,22 +50,15 @@
  *
  * ⛔ They belong to the ENVELOPE, never to an answer or a region, and every
  * rendering obeys that identically — see {@link ContextEnvelope} for why.
- * Attaching them per answer was not a formatting preference: on the whole-tree
- * sweep `--all` used to be (6,224 answers on this repository) `--format json`
- * measured 76,877,016 bytes and measures 6,581,468 with the block hoisted — 70.3
- * MB of ONE byte-identical paragraph, repeated. That is the JSON spelling of the
- * very burial {@link renderEnvelopeText} refuses to do in text, and it is why
- * {@link ContextCostMapEnvelope} hoists the same block rather than growing one
- * per region.
+ * Attached per answer they would repeat one byte-identical paragraph per
+ * path — the JSON spelling of the burial {@link renderEnvelopeText} refuses in
+ * text — which is why {@link ContextCostMapEnvelope} hoists the same block.
  *
  * ## `--all` is a MAP, not a sweep
  *
- * ⛔ `--all` emits no per-path documents in any format. It used to answer for
- * every realized path — 10,438 documents and 205,918 lines on a large adopter
- * monorepo, ~491 s — which is not a report anyone reads. It now emits the
- * whole-tree cost map {@link buildContextCostMap} builds, which answers the
- * question the flag exists for: where in this tree is it expensive to work.
- * Naming paths is the drill-down, and is the only way to get a per-path answer.
+ * ⛔ `--all` emits no per-path documents in any format: it emits the whole-tree
+ * cost map {@link buildContextCostMap} builds, answering where in this tree it
+ * is expensive to work. Naming paths is the per-path drill-down.
  *
  * ⛔ Nothing here may read as "complete". Many of the stated limits are signed
  * `over-report`/`under-report` and apply whether or not `unknownTokenRows`,
@@ -231,16 +222,10 @@ export interface ContextEnvelope {
  * The envelope `--all` emits: the whole-tree cost map, not a pile of answers.
  *
  * ⛔ **A DIFFERENT document from {@link ContextEnvelope}, deliberately, and
- * `kind` is what tells them apart.** `--all` used to answer for every realized
- * path — 10,438 documents on a large adopter monorepo — which answered the
- * question "what loads at each of ten thousand paths" nobody asked, in place of
- * "where is it expensive to work here", which is what the flag is for. Naming
- * paths explicitly is still the per-path answer, and is now the only way to get
- * one.
+ * `kind` is what tells them apart.**
  *
  * ⛔ The three limit fields ride HERE, exactly as they ride on
- * {@link ContextEnvelope}, and for the same measured reason: attached per row
- * they were 70.3 MB of one byte-identical paragraph on a single sweep. They bound
+ * {@link ContextEnvelope}, and for the same reason. They bound
  * the MEASUREMENT METHOD, so a region carrying its own copy would also read as
  * though that region had caveats of its own.
  *
@@ -431,11 +416,8 @@ Example:
 /**
  * Action handler for `vat claude context [path]`.
  *
- * ⛔ The two branches produce DIFFERENT documents and there is no third mode: a
- * `--per-path` escape hatch back to the old sweep is exactly the backward
- * compatibility shim this project forbids pre-1.0, and naming paths explicitly
- * already gives the per-path answer — now from a population the caller pays for
- * once instead of ten thousand times.
+ * ⛔ The two branches produce DIFFERENT documents and there is no third mode:
+ * naming paths explicitly already gives the per-path answer.
  *
  * @param pathArgs - The paths to answer for; empty means the current directory
  * @param options - The command's flags
@@ -823,9 +805,6 @@ function regionDetail(region: RegionCost): string[] {
  * ⛔ Deliberately NOT applied to {@link estimateLines}. A single-path answer has
  * no roll-up to fall back on, so its counters are the only statement that the
  * rows were counted at all and must keep printing whatever their values.
- *
- * The measured motivation: nine regions on this repository printed 27 lines of
- * pure zeros, burying the launch bills the section exists to show.
  *
  * @param region - The region whose counters to print
  * @returns The three lines, or none when all three are zero

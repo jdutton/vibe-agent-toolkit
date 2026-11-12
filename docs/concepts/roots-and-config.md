@@ -111,13 +111,6 @@ per-command CLI reference doc under `packages/cli/docs/` or `docs/cli/`.
 | `vat rag index [path]` | tolerate null | required fields (`rag.*`) | Cannot index without store config. |
 | `vat rag query <text>` | tolerate null | required file with `rag.*` | Locates configured store. |
 | `vat rag stats` / `vat rag clear` | tolerate null | required file with `rag.*` | Same. |
-| `vat agent list` | N/A | not used | User-level. |
-| `vat agent installed` | N/A | not used | User-level. |
-| `vat agent build <pathOrName>` | required | required file with `agents.*` | Explicit adoption. |
-| `vat agent run <pathOrName> <input>` | tolerate null | accept defaults | Path-explicit. |
-| `vat agent validate <pathOrName>` | required | accept defaults | Source-mode validation. |
-| `vat agent import` / `install` / `uninstall` | N/A | not used | User-level. |
-| `vat mcp list-collections` / `serve` | N/A | not used | Server operations. |
 | `vat skills build` | required | required file with `skills.*` | Canonical explicit-adoption command. |
 | `vat skills validate` | required | accept defaults | Source validation. |
 | `vat skills list` | tolerate null (`--user` skips it entirely) | accept defaults | Project vs. user-level. |

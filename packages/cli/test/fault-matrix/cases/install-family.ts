@@ -1,7 +1,6 @@
 /**
  * The install / uninstall verb family, as fault-matrix cases: `vat claude plugin install`
- * (every lane), `vat claude plugin uninstall`, `vat skills install`, `vat agent install`
- * and `vat agent uninstall`.
+ * (every lane), `vat claude plugin uninstall` and `vat skills install`.
  *
  * Each case builds its own inputs and prior state under the case root, names the atomic
  * units the verb replaces (each must end byte-equal to BEFORE or to GOLDEN), and, where the
@@ -17,11 +16,10 @@ import { copyFileSync, existsSync, readdirSync, readFileSync, writeFileSync } fr
 
 import { VAT_MARKETPLACE_MARKER } from '@vibe-agent-toolkit/claude-marketplace';
 import { isPathAbsentError, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
-import { createSymlink, type StatRewrite, symlinkCapability, tarFixture, tmpdirFoldsCase } from '@vibe-agent-toolkit/utils/testing';
+import { type StatRewrite, tarFixture, tmpdirFoldsCase } from '@vibe-agent-toolkit/utils/testing';
 import type { Command } from 'commander';
 import { vi } from 'vitest';
 
-import { createAgentCommand } from '../../../src/commands/agent/index.js';
 import { createPluginCommand } from '../../../src/commands/claude/plugin/index.js';
 import { packNpmPackage } from '../../../src/commands/claude/plugin/npm-pack.js';
 import { createSkillsCommand } from '../../../src/commands/skills/index.js';
@@ -44,7 +42,6 @@ const OLD_PLUGIN = 'fx-old-plugin';
 const LEGACY_SKILL = 'fx-legacy-skill';
 /** A case-only respelling of {@link PLUGIN}: one directory on APFS / NTFS, two elsewhere. */
 const ALIASED_PLUGIN = 'FX-PLUGIN';
-const AGENT = 'fx-agent';
 
 /** A plugin's own files, as its built tree and its installed copies hold them. */
 function pluginFiles(name: string, body: string): TreeFile[] {
@@ -360,63 +357,6 @@ export function skillsInstallCase(lane: 'dir' | 'zip', variant: 'fresh' | 'force
   return flatSkillCase(`skills/install/${lane}/${variant}`, () => createSkillsCommand(), argv, lane, variant);
 }
 
-// --- `vat agent install` / `vat agent uninstall` ------------------------------------------
-
-/** An agent package: its manifest where discovery finds it, and its built bundle. */
-function writeAgentPackage(r: CaseRoot): void {
-  writeTree(packageDir(r), [
-    ['package.json', JSON.stringify({ name: '@fx/fx-agents', version: VERSION })],
-    [`agents/${AGENT}/agent.yaml`, `metadata:\n  name: ${AGENT}\n  version: ${VERSION}\nspec:\n  llm:\n    provider: anthropic\n    model: claude-sonnet-5\n`],
-    [`dist/vat-bundles/skill/${AGENT}/SKILL.md`, skillMd(AGENT, VERSION)],
-    [`dist/vat-bundles/skill/${AGENT}/references/notes.md`, 'notes\n'],
-  ]);
-}
-
-const builtBundle = (r: CaseRoot): string => safePath.join(packageDir(r), 'dist', 'vat-bundles', 'skill', AGENT);
-
-/** A previous install: a copy, or (`dev`) a link to the built bundle. */
-function writePriorAgent(r: CaseRoot, dev: boolean): void {
-  const installPath = safePath.join(claudeDir(r), 'skills', AGENT);
-  if (!dev) {
-    writeTree(installPath, [['SKILL.md', skillMd(AGENT, PRIOR_VERSION)]]);
-    return;
-  }
-  const capability = symlinkCapability();
-  if (capability === null) throw new Error('the --dev agent cases need symlinks; gate them on a host that can make them');
-  mkdirSyncReal(safePath.join(installPath, '..'), { recursive: true });
-  createSymlink(capability, builtBundle(r), installPath, 'dir');
-}
-
-/** A `vat agent` case: the agent package is the working directory, its install under ~/.claude/skills the one unit. */
-function agentCase(id: string, argv: readonly string[], prior: (r: CaseRoot) => void): VerbCase {
-  return {
-    id,
-    group: (): Command => createAgentCommand(),
-    argv: () => argv,
-    fixture: (r) => {
-      writeAgentPackage(r);
-      prior(r);
-    },
-    watched: (r) => [claudeDir(r)],
-    units: () => [flatSkillKey(AGENT)],
-    sources: (r) => [inputDir(r)],
-    cwd: packageDir,
-  };
-}
-
-/** `vat agent install fx-agent` (copy or `--dev`), fresh or `--force` over a prior copy. */
-function agentInstallCase(mode: 'copy' | 'dev', variant: 'fresh' | 'force'): VerbCase {
-  const argv = ['install', AGENT, ...(mode === 'dev' ? ['--dev'] : []), ...(variant === 'force' ? ['--force'] : [])];
-  return agentCase(`agent/install/${mode}/${variant}`, argv, (r) => {
-    if (variant === 'force') writePriorAgent(r, false);
-  });
-}
-
-/** `vat agent uninstall fx-agent` of a copied install, or of a `--dev` link. */
-function agentUninstallCase(mode: 'copy' | 'dev'): VerbCase {
-  return agentCase(`agent/uninstall/${mode}`, ['uninstall', AGENT], (r) => writePriorAgent(r, mode === 'dev'));
-}
-
 // --- the shard table -----------------------------------------------------------------------
 
 /**
@@ -452,10 +392,4 @@ export const INSTALL_FAMILY_SHARDS = {
   'skills/install/dir/force': { make: () => skillsInstallCase('dir', 'force'), files: 7 },
   'skills/install/zip/fresh': { make: () => skillsInstallCase('zip', 'fresh'), files: 10 },
   'skills/install/zip/force': { make: () => skillsInstallCase('zip', 'force'), files: 10 },
-  'agent/install/copy/fresh': { make: () => agentInstallCase('copy', 'fresh'), files: 8 },
-  'agent/install/copy/force': { make: () => agentInstallCase('copy', 'force'), files: 8 },
-  'agent/install/dev/fresh': { make: () => agentInstallCase('dev', 'fresh'), files: 3, posixOnly: true },
-  'agent/install/dev/force': { make: () => agentInstallCase('dev', 'force'), files: 4, posixOnly: true },
-  'agent/uninstall/copy': { make: () => agentUninstallCase('copy'), files: 2 },
-  'agent/uninstall/dev': { make: () => agentUninstallCase('dev'), files: 2, posixOnly: true },
 } as const satisfies Readonly<Record<string, MatrixShard>>;

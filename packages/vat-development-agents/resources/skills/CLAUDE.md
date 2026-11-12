@@ -13,8 +13,7 @@ reds the plugin output either way).
 |---|---|---|---|
 | `vibe-agent-toolkit` (router, `SKILL.md`) | What VAT is, when to use it, routing to sub-skills | Any deep content (see "Router skill" rules below) | — |
 | `vat-adoption-and-configuration` | Project setup, `vibe-agent-toolkit.config.yaml` orientation, repo structure, vibe-validate integration, npm postinstall | Per-section config depth (see below) | — |
-| `vat-skill-authoring` | `SKILL.md` files: frontmatter, body structure, references, packagingOptions, validation overrides | TypeScript agent functions, plugin packaging, RAG | — |
-| `vat-agent-authoring` | TypeScript portable agents: archetypes, `agent.yaml`, result envelopes, runtime adapters | SKILL.md authoring, plugin/marketplace config | — |
+| `vat-skill-authoring` | `SKILL.md` files: frontmatter, body structure, references, packagingOptions, validation overrides | Plugin packaging, RAG | — |
 | `vat-audit` | `vat audit` on plugins/marketplaces/skills/settings: `--compat`, `--exclude`, `--user`, CI usage | What to fix (defer elsewhere) | `vat audit` |
 | `vat-knowledge-resources` | Markdown collections, `resources:` config section, frontmatter schemas, validation modes | RAG indexing (separate skill) | `vat resources validate` |
 | `vat-skill-distribution` | `vat validate`, `vat build`, `vat verify`, plugin/marketplace config, npm publishing, `vat.skills` field | Authoring the SKILL.md itself | `vat validate`, `vat build`, `vat verify` |
@@ -69,7 +68,7 @@ Verify: `vat skill review packages/vat-development-agents/resources/skills` shou
 
 ## Single-responsibility — when to split
 
-Split a skill when its description must list two unrelated subjects to trigger correctly — e.g. `vat-authoring` (SKILL.md files + TypeScript agents) split into `vat-skill-authoring` and `vat-agent-authoring`.
+Split a skill when its description must list two unrelated subjects to trigger correctly.
 
 ## Contributor vs user content
 

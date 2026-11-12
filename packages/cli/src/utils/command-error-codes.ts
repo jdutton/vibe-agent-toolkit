@@ -6,8 +6,5 @@
  * string.
  */
 
-/** The code an `AgentNameEscapesScopeError` carries — the invocation's mistake (`USAGE_INVALID`). */
-export const AGENT_NAME_ESCAPES_SCOPE_CODE = 'AGENT_NAME_ESCAPES_SCOPE';
-
 /** The code a `PluginSymlinkRefusedError` carries — the input's link (`INPUT_UNREADABLE`). */
 export const PLUGIN_SYMLINK_REFUSED_CODE = 'PLUGIN_SYMLINK_REFUSED';

@@ -171,8 +171,8 @@ finding.
 past its static part has a further requirement: one with a non-static tail, or a directory read
 whole. For each task whose outputs lie under that part, one task covering them must also be
 ordered. Declared outputs are what the rule trusts. A task that does not produce a path its glob
-claims must exclude it: cat-agents' `build` declares `!dist/skills/**`, because `build:skills`
-writes those files.
+claims must exclude it, as a `!dist/skills/**` entry does for a package whose `build:skills`, not
+its `build`, writes those files.
 
 **Wiring the edge.** Use a `workspace:*` devDependency when the reader may depend on the producer's
 package, the producer is that package's `build`, and the dependency makes no cycle. `^build` then

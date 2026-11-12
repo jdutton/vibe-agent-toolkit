@@ -162,25 +162,6 @@ const MARKETPLACE_FILES: Readonly<Record<string, string>> = {
   'README.md': '# Matrix\n',
   'CHANGELOG.md': '# Changelog\n',
 };
-/** An agent manifest the schema accepts, referencing nothing that must exist. */
-const AGENT_MANIFEST = 'metadata:\n  name: matrix-agent\n  version: 0.1.0\n  description: Matrix agent\n'
-  + 'spec:\n  llm:\n    provider: anthropic\n    model: claude-sonnet-5\n';
-
-/** An agent `vat agent build` can build: a manifest naming a system prompt that is there, inside a package for the default output. */
-export const BUILDABLE_AGENT_FILES: Readonly<Record<string, string>> = {
-  'package.json': JSON.stringify({ name: 'matrix-agents' }),
-  'agent/agent.yaml': `${AGENT_MANIFEST}  prompts:\n    system:\n      $ref: ./prompts/system.md\n`,
-  'agent/prompts/system.md': 'You review widgets.\n',
-};
-/** An agent `vat agent install matrix-agent` can install: discoverable under `agents/`, its bundle already built. */
-const INSTALLABLE_AGENT_FILES: Readonly<Record<string, string>> = {
-  'package.json': JSON.stringify({ name: 'matrix-agents' }),
-  'agents/matrix-agent/agent.yaml': AGENT_MANIFEST,
-  'dist/vat-bundles/skill/matrix-agent/SKILL.md': '---\nname: matrix-agent\ndescription: Matrix agent\n---\n',
-};
-/** A SKILL.md whose frontmatter is not YAML: it cannot be read as a skill. */
-const UNIMPORTABLE_SKILL = '---\nname: [unclosed\n---\n\n# unimportable\n';
-
 /** A plugin tree `vat build` would leave, declaring one skill whose `dist/skills/` build is missing. */
 const UNBUILT_PLUGIN_FILES: Readonly<Record<string, string>> = {
   'package.json': JSON.stringify({ name: '@matrix/plugin-pkg', version: '1.0.0' }),
@@ -627,81 +608,6 @@ export const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> =
     },
     { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['claude', 'marketplace', 'validate', 'never-created'], cwd: project('marketplace-error', '{}\n') }) },
   ],
-  'agent validate': [
-    { status: 'ok', run: () => ({ args: ['agent', 'validate', './agent'], cwd: project('agent-ok', '{}\n', { 'agent/agent.yaml': AGENT_MANIFEST }) }) },
-    // A manifest the schema rejects is a finding about the manifest, exit 1.
-    {
-      status: 'findings',
-      run: () => ({ args: ['agent', 'validate', './agent'], cwd: project('agent-findings', '{}\n', { 'agent/agent.yaml': 'metadata:\n  name: x\nspec:\n  llm: 5\n' }) }),
-    },
-    { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['agent', 'validate', './never-created'], cwd: project('agent-error', '{}\n') }) },
-  ],
-  'agent build': [
-    { status: 'ok', run: () => ({ args: ['agent', 'build', './agent'], cwd: project('agent-build-ok', '{}\n', BUILDABLE_AGENT_FILES) }) },
-    // A `--target` VAT does not build is the invocation's mistake, refused before anything is read.
-    {
-      status: 'error',
-      code: 'USAGE_INVALID',
-      run: () => ({ args: ['agent', 'build', './agent', '--target', 'nope'], cwd: project('agent-build-error', '{}\n', BUILDABLE_AGENT_FILES) }),
-    },
-  ],
-  'agent import': [
-    { status: 'ok', run: () => ({ args: ['agent', 'import', './skill/SKILL.md'], cwd: project('agent-import-ok', '{}\n', { 'skill/SKILL.md': CLEAN_SKILL }) }) },
-    // A SKILL.md whose frontmatter no schema accepts cannot be read as a skill: the input's refusal.
-    {
-      status: 'error',
-      code: 'INPUT_UNREADABLE',
-      run: () => ({ args: ['agent', 'import', './skill/SKILL.md'], cwd: project('agent-import-error', '{}\n', { 'skill/SKILL.md': UNIMPORTABLE_SKILL }) }),
-    },
-  ],
-  'agent installed': [
-    // A fresh HOME has no skills directory: the scope is scanned, and empty is the answer.
-    { status: 'ok', run: () => ({ args: ['agent', 'installed', '--scope', 'user'], cwd: tempDir }) },
-    // A user skills directory the OS will not list: the listing is a floor, said as a warning finding (exit 0).
-    {
-      status: 'findings',
-      skipReason: () => (CANNOT_DENY_READS ? 'this platform cannot deny a directory listing' : undefined),
-      run: (home: string): ScenarioRun => {
-        const skills = safePath.join(home, '.claude', 'skills');
-        mkdirSyncReal(skills, { recursive: true });
-        chmodSync(skills, UNREADABLE);
-        lockedByScenarios.push(skills);
-        return { args: ['agent', 'installed', '--scope', 'user'], cwd: tempDir };
-      },
-    },
-    { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['agent', 'installed', '--runtime', 'bogus'], cwd: tempDir }) },
-  ],
-  'agent list': [
-    { status: 'ok', run: () => ({ args: ['agent', 'list'], cwd: project('agent-list-ok', '{}\n', { 'agents/matrix-agent/agent.yaml': AGENT_MANIFEST }) }) },
-    // A search path the OS will not list: the listing is a floor, said as a warning finding (exit 0).
-    {
-      status: 'findings',
-      skipReason: () => (CANNOT_DENY_READS ? 'this platform cannot deny a directory listing' : undefined),
-      run: (): ScenarioRun => {
-        const cwd = project('agent-list-findings', '{}\n', { 'agents/matrix-agent/agent.yaml': AGENT_MANIFEST });
-        const agents = safePath.join(cwd, 'agents');
-        chmodSync(agents, UNREADABLE);
-        lockedByScenarios.push(agents);
-        return { args: ['agent', 'list'], cwd };
-      },
-    },
-  ],
-  'agent install': [
-    // Into this scenario's fake HOME: `~/.claude/skills/matrix-agent`.
-    { status: 'ok', run: () => ({ args: ['agent', 'install', 'matrix-agent'], cwd: project('agent-install-ok', '{}\n', INSTALLABLE_AGENT_FILES) }) },
-    { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['agent', 'install', 'matrix-agent', '--scope', 'galaxy'], cwd: project('agent-install-error', '{}\n', INSTALLABLE_AGENT_FILES) }) },
-  ],
-  'agent uninstall': [
-    {
-      status: 'ok',
-      run: (home: string): ScenarioRun => {
-        writeFileTree(safePath.join(home, '.claude', 'skills', 'matrix-agent'), { 'SKILL.md': '# matrix-agent\n' });
-        return { args: ['agent', 'uninstall', 'matrix-agent'], cwd: tempDir };
-      },
-    },
-    // Nothing is installed under a fresh HOME: naming an agent that is not there is the invocation's mistake.
-    { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['agent', 'uninstall', 'matrix-agent'], cwd: tempDir }) },
-  ],
   'skills list': [
     { status: 'ok', run: () => ({ args: ['skills', 'list', '.'], cwd: project('skills-list-ok', '{}\n', { 'skills/clean/SKILL.md': CLEAN_SKILL }) }) },
     // A directory the scan could not list: the listing is a floor, said as a warning finding (exit 0).
@@ -908,9 +814,6 @@ export const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> =
     { status: 'ok', run: (home) => ({ args: ['rag', 'clear', '--db', emptyRagDb('clear-ok', home)], cwd: noProject('rag-clear-ok') }) },
     { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['rag', 'clear', '--db', ragDb('clear-never-created')], cwd: noProject('rag-clear-error') }) },
   ],
-  'mcp list-collections': [
-    { status: 'ok', run: () => ({ args: ['mcp', 'list-collections'], cwd: tempDir }) },
-  ],
   'corpus scan': [
     { status: 'ok', run: () => corpusScan('corpus-ok', { 'plugin/skills/clean/SKILL.md': CLEAN_SKILL }, 'plugin') },
     // An entry whose source is not there could not be audited: the scan finished, and says which entry it could not do.
@@ -947,21 +850,6 @@ export const UNREACHABLE_STATUSES: Readonly<Record<string, Partial<Record<Report
   doctor: {
     error: 'Every check catches its own failure as a fail or undetermined outcome, and doctor takes no argument to mistake: a throw out of the run is a VAT defect (INTERNAL_ERROR) no scenario can provoke.',
   },
-  'agent build': {
-    findings: 'A completed build carries no finding: it built the one agent (ok), or it could not — the target, the manifest or its sources refuse the run, and a packager refusal is its SKILL_PACKAGING_FAILED finding on the error branch (RUN_INCOMPLETE).',
-  },
-  'agent import': {
-    findings: 'An import reports no finding: it wrote the one agent.yaml (ok), or the SKILL.md, the output or the write refused the run.',
-  },
-  'agent list': {
-    error: 'agent list takes no argument to mistake, and every path it cannot read is a SCAN_PATH_UNREADABLE finding: a throw out of the run is a VAT defect (INTERNAL_ERROR) no scenario can provoke.',
-  },
-  'agent install': {
-    findings: 'An install reports no finding: it installed the one agent (ok), or the invocation, the built bundle or the write refused the run.',
-  },
-  'agent uninstall': {
-    findings: 'An uninstall reports no finding: it removed the one install (ok), or the invocation, an agent that is not installed, or the removal refused the run.',
-  },
   'cache clear': {
     findings: 'A clear reports no finding: it removed everything (ok), stopped part-way (RUN_INCOMPLETE), or could not read the cache (INPUT_UNREADABLE).',
   },
@@ -973,10 +861,6 @@ export const UNREACHABLE_STATUSES: Readonly<Record<string, Partial<Record<Report
   },
   'rag clear': {
     findings: 'A clear reports no finding: it cleared the one database (ok) or could not open it (error).',
-  },
-  'mcp list-collections': {
-    findings: 'The listing reports no finding: it reads the built-in package list, which cannot be unreadable.',
-    error: 'list-collections takes no argument to mistake and reads only a built-in list: a throw out of the run is a VAT defect (INTERNAL_ERROR) no scenario can provoke.',
   },
 };
 
@@ -1016,7 +900,6 @@ export function expectErrorDocument(stdout: string, code: RefusalCode | undefine
  * the budget is split here — never listed on the budget allowlist.
  */
 export const MATRIX_SHARDS: Readonly<Record<string, readonly string[]>> = {
-  agent: ['agent build', 'agent import', 'agent install', 'agent installed', 'agent list', 'agent uninstall', 'agent validate'],
   audit: ['audit', 'audit settings', 'inventory', 'corpus scan', 'okf validate', 'ard emit'],
   'claude-org': Object.keys(ORG_STUB_OPTIONS),
   'claude-plugin': [
@@ -1027,7 +910,7 @@ export const MATRIX_SHARDS: Readonly<Record<string, readonly string[]>> = {
     'claude plugin list',
     'claude plugin uninstall',
   ],
-  machine: ['doctor', 'cache clear', 'mcp list-collections'],
+  machine: ['doctor', 'cache clear'],
   orchestrators: ['validate', 'verify', 'build'],
   rag: ['rag index', 'rag query', 'rag stats', 'rag clear'],
   resources: ['resources check', 'resources query', 'resources scan', 'resources validate'],
@@ -1142,8 +1025,6 @@ interface FindingsStderrExemption {
  * findings scenario: a verb that starts saying them must leave this table.
  */
 export const FINDINGS_NOT_ON_STDERR: Readonly<Record<string, FindingsStderrExemption>> = {
-  'agent installed': { how: 'an empty-listing line, never the finding', mode: 'default', provenOn: 'platforms that can deny a directory listing' },
-  'agent list': { how: 'an empty-listing line, never the finding', mode: 'default', provenOn: 'platforms that can deny a directory listing' },
   'corpus scan': { how: 'its own per-entry progress lines', mode: 'default', provenOn: 'every platform' },
   doctor: { how: 'its own check glyph lines', mode: 'default', provenOn: 'every platform' },
   inventory: { how: 'silence', mode: '--format json', provenOn: 'platforms that can deny a directory listing' },  'skill review': { how: 'silence: the human report, which says them, is not printed under --yaml', mode: '--yaml', provenOn: 'every platform' },

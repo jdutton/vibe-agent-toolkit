@@ -6,7 +6,6 @@ related_issues: [100]
 related_prs: [108, 132, 135]
 related_docs:
   - docs/research/2026-05-23-compat-empirical-harness-v2-design.md
-  - docs/architecture/compatibility.md
   - docs/skill-quality-and-compatibility.md
   - docs/validation-rule-design.md
 ---
@@ -34,7 +33,7 @@ VAT already does two of the three things a mature toolchain does about runtime
 compatibility:
 
 1. **Declare** intended compatibility — the `compatibility` frontmatter target(s) a skill
-   claims (see `docs/architecture/compatibility.md`, `docs/skill-quality-and-compatibility.md`).
+   claims (see `docs/skill-quality-and-compatibility.md`).
 2. **Assert statically** — analysis that flags when a skill *violates* what it claims (the
    "linter" layer; `docs/validation-rule-design.md`).
 
@@ -175,9 +174,7 @@ variant = (model, env, runner)
 ```
 
 Today's behavior becomes the `claude-code` adapter; each other runtime is a new adapter.
-This is the *execution-side* sibling of VAT's existing *build-side* runtime adapters
-(Vercel / OpenAI / LangChain / Claude Agent SDK), reuniting the test side with the toolkit's
-portable-agent roots. The v2 matrix's gating-vs-canary, `errored(...)` taxonomy, and
+The v2 matrix's gating-vs-canary, `errored(...)` taxonomy, and
 variant-in-cache-key all extend to the runner axis. The matrix shape needed to carry it is a
 **deferred reshape**, not a pre-built generic engine (§5.5).
 
@@ -453,7 +450,6 @@ justified by real consumers + dogfooding, not speculation.
 - Adopter eval runner: PR #132 (v1), PR #135 (v2 tiered/parallel/cacheable runner); code
   `packages/agent-skills/src/skill-test/`, `packages/cli/src/commands/skill/test/`,
   `packages/utils/src/skill-test/spawn-claude.ts`.
-- Compat stance: `docs/architecture/compatibility.md`,
-  `docs/skill-quality-and-compatibility.md`, `docs/validation-rule-design.md`.
+- Compat stance: `docs/skill-quality-and-compatibility.md`, `docs/validation-rule-design.md`.
 - Lazy-loaded provider precedent: PR #124. Cache model precedent: `vibe-validate` `vv run --force`.
 - Brainstorm origin: a gitignored working-directory spec that is not in the repository; this document is the committed record.

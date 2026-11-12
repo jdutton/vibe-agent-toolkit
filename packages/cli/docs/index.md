@@ -1,6 +1,6 @@
 # vat - Vibe Agent Toolkit CLI
 
-> Agent-friendly toolkit for building, testing, and deploying portable AI agents
+> Agent-friendly toolkit for building, validating and distributing skills, plugins, marketplaces and knowledge resources
 
 ## Usage
 
@@ -159,68 +159,6 @@ counts the subject and each marketplace, plugin and skill inventory nested under
 vat inventory my-plugin/                  # Inventory a plugin
 vat inventory my-plugin/ --shallow --format json
 vat inventory --user                      # The user-level Claude install
-```
-
----
-
-### `agent build`
-
-Build agent for deployment to target runtime
-
-**What it does:**
-
-1. Resolves agent dependencies
-2. Bundles agent code for target runtime
-3. Generates runtime-specific manifest
-4. Creates deployment artifacts
-
-**When to use:** Preparing agent for production deployment
-
-**Exit codes:**
-
-- `0` - Build succeeded
-- `1` - Build failed (see stderr for details)
-- `2` - Configuration error
-
-**Creates/modifies:**
-
-- `dist/vat-bundles/{target}/` - Bundled agent artifacts
-- Runtime-specific manifest files
-
-**Examples:**
-
-```bash
-vat agent build ./my-agent                # Build for default target
-vat agent build ./my-agent --target agent-skills
-vat agent build ./my-agent --output ./dist
-```
-
----
-
-### `agent run`
-
-Execute agent locally for testing
-
-**What it does:**
-
-1. Loads agent from path
-2. Executes agent with provided input
-3. Outputs agent results
-
-**When to use:** Testing agent behavior before deployment
-
-**Exit codes:**
-
-- `0` - Execution succeeded
-- `2` - Execution failed (the agent could not run, or threw)
-
-**Creates/modifies:** Depends on agent behavior
-
-**Examples:**
-
-```bash
-vat agent run ./my-agent --input "test query"
-vat agent run ./my-agent --debug
 ```
 
 ---
@@ -573,8 +511,8 @@ short version:
 - **`projectRoot` = the VAT authoring boundary.** Discovered as: nearest
   `vibe-agent-toolkit.config.yaml` → else nearest `.git/` → else `null`.
 - **Per-command policy varies.** Some commands require it (`vat skills build`,
-  `vat agent build`, `vat build`, `vat verify`). Some tolerate its absence
-  (`vat skills validate --user`, `vat agent list`, `vat rag *` with `--db`).
+  `vat build`, `vat verify`). Some tolerate its absence
+  (`vat skills validate --user`, `vat rag *` with `--db`).
   Some have a **loud-cwd fallback** that warns to stderr and continues
   (`vat resources scan`, `vat resources validate`).
 - **`vat audit` is special:** there is no single `projectRoot`; each scanned
@@ -629,12 +567,6 @@ file:line:col: severity: message
 **Before committing documentation:**
 ```bash
 vat resources validate docs/ && git commit -m "Update docs"
-```
-
-**Building and testing agent:**
-```bash
-vat agent build ./my-agent
-vat agent run ./my-agent --input "test"
 ```
 
 **Setting up semantic search:**

@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
 
 import { countBySeverity } from '@vibe-agent-toolkit/schema';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
@@ -120,7 +120,7 @@ describe('audit command (integration)', () => {
   let tempDir: string;
 
   beforeAll(() => {
-    tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-agent-audit-'));
+    tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-audit-'));
   });
 
   afterAll(() => {
@@ -340,41 +340,35 @@ This is a test skill.
       expect(results[0].summary).toMatchObject({ errors: 0, warnings: 0 });
     });
 
-    it('should validate VAT agent SKILL.md', async () => {
-      const agentDir = safePath.join(tempDir, 'vat-agent');
-      mkdirSyncReal(agentDir, { recursive: true });
+    it('audits a tree holding an agent.yaml cleanly: the file is not classified, and adds no finding', async () => {
+      const skillMd = '---\nname: reviewer\ndescription: A test skill\n---\n\n# Reviewer\n\nThis is a test skill.\n';
+      /** A tree holding one skill, and (`withAgentYaml`) an agent.yaml beside it and one at the tree root. */
+      const writeTree = (name: string, withAgentYaml: boolean): string => {
+        const treeDir = safePath.join(tempDir, name);
+        const skillDir = safePath.join(treeDir, 'skills', 'reviewer');
+        mkdirSyncReal(skillDir, { recursive: true });
+        fs.writeFileSync(safePath.join(skillDir, 'SKILL.md'), skillMd);
+        if (withAgentYaml) {
+          const manifest = 'metadata:\n  name: reviewer\n  version: 0.1.0\nspec:\n  llm:\n    provider: anthropic\n    model: claude-sonnet-5\n';
+          fs.writeFileSync(safePath.join(skillDir, 'agent.yaml'), manifest);
+          fs.writeFileSync(safePath.join(treeDir, 'agent.yaml'), manifest);
+        }
+        return treeDir;
+      };
+      /** What an audit of the tree says, path-free so two trees compare. */
+      const audited = async (treeDir: string) =>
+        (await runAudit(treeDir, { recursive: true })).map((r) => ({
+          type: r.type,
+          file: basename(r.path),
+          summary: r.summary,
+          codes: r.issues.map((issue) => issue.code),
+        }));
 
-      // Create agent.yaml
-      fs.writeFileSync(
-        safePath.join(agentDir, 'agent.yaml'),
-        `metadata:
-  name: test-agent
-  version: 0.1.0
-spec:
-  llm:
-    provider: anthropic
-    model: claude-sonnet-5
-`
-      );
+      const withAgentYaml = await audited(writeTree('skill-beside-agent-yaml', true));
+      const without = await audited(writeTree('skill-alone', false));
 
-      // Create SKILL.md
-      fs.writeFileSync(
-        safePath.join(agentDir, 'SKILL.md'),
-        `---
-name: test-agent
-description: A test agent skill
----
-
-# Test Agent
-
-This is a test agent.
-`
-      );
-
-      const results = await runAudit(agentDir);
-
-      expect(results).toHaveLength(1);
-      expect(results[0].summary).toMatchObject({ errors: 0, warnings: 0 });
+      expect(withAgentYaml).toEqual(without);
+      expect(withAgentYaml).toMatchObject([{ type: 'agent-skill', file: 'SKILL.md', summary: { errors: 0, warnings: 0 } }]);
     });
   });
 

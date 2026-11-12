@@ -16,11 +16,10 @@ This guide provides practical examples for using the VAT RAG system in real-worl
 
 1. [Quick Start](#quick-start)
 2. [Configuration Examples](#configuration-examples)
-3. [Agent Integration](#agent-integration)
-4. [Advanced Patterns](#advanced-patterns)
-5. [Content Transform](#content-transform)
-6. [Document Storage](#document-storage)
-7. [Example Projects](#example-projects)
+3. [Advanced Patterns](#advanced-patterns)
+4. [Content Transform](#content-transform)
+5. [Document Storage](#document-storage)
+6. [Example Projects](#example-projects)
 
 ---
 
@@ -216,13 +215,9 @@ vat rag query "authentication endpoint" --db ./dist/api-rag
 vat rag query "authentication example" --db ./dist/examples-rag
 ```
 
-### Example 4: Agent Development Project
+### Example 4: Multi-Collection Project
 
-**Use Case**: Agent toolkit with multiple agents and a shared knowledge base
-
-Agents are discovered by their `agent.yaml` files on disk — there is no `agents:` key in
-`vibe-agent-toolkit.config.yaml`, and adding one makes the config unloadable. Run `vat agent list`
-to see what was discovered.
+**Use Case**: One project with several knowledge collections, each indexed into its own database
 
 **Config**:
 
@@ -238,7 +233,7 @@ resources:
       include:
         - docs/**/*.md
         - README.md
-    agent-guides:
+    guides:
       include:
         - guides/**/*.md
     api-reference:
@@ -249,7 +244,7 @@ resources:
 **Usage**:
 
 ```bash
-vat rag index --db ./dist/agent-knowledge-rag docs/
+vat rag index --db ./dist/docs-rag docs/
 vat rag index --db ./dist/guide-rag guides/
 vat rag index --db ./dist/api-rag api/
 ```
@@ -280,124 +275,6 @@ dependency, so install it in your project before using this path.
 
 A database is bound to the embedding model that built it. Changing the provider means re-indexing
 into a fresh path (or `vat rag clear` first).
-
----
-
-## Agent Integration
-
-> ⚠️ **There is no `rag` tool type in an agent manifest.** `ToolSchema` is `.strict()` and its `type`
-> is `z.enum(['mcp', 'library', 'builtin'])` with no `config` key
-> (`packages/schema/src/tool.ts`), so a tool entry written as `type: rag` fails manifest validation.
-> `AgentManifestSchema` is also `.strict()` and accepts only `metadata`, `spec` and `tests` — an
-> `apiVersion:` or `kind:` line is refused, not ignored. The manifest carries an optional `spec.rag`
-> block that *validates* (`RAGConfigSchema`, marked "details TBD in Phase 2"), but no runtime reads
-> it. Until it does, RAG wiring for an agent is TypeScript you write, shown below.
-
-### Example: Code Review Agent with RAG
-
-**Agent Manifest** (`agent.yaml`) — the manifest declares the agent; it does not declare the RAG
-database:
-
-```yaml
-metadata:
-  name: code-review-agent
-  version: 1.0.0
-  description: Reviews code against best practices documentation
-
-spec:
-  llm:
-    provider: anthropic
-    model: claude-sonnet-5
-
-  prompts:
-    system:
-      $ref: ./prompts/system.md
-```
-
-**System Prompt** (`prompts/system.md`):
-
-```markdown
-You are a code review assistant. When reviewing code:
-
-1. Use the search_best_practices tool to find relevant documentation
-2. Compare code against documented best practices
-3. Provide specific, actionable feedback
-
-Example tool usage:
-- Query: "error handling best practices"
-- Query: "async await patterns"
-- Query: "security guidelines"
-```
-
-**TypeScript Integration**:
-
-```typescript
-import { loadAgentManifest } from '@vibe-agent-toolkit/agent-config';
-import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
-
-const manifest = await loadAgentManifest('./code-review-agent');
-
-// The database path is the caller's to choose — the manifest has no field for it.
-const ragProvider = await LanceDBRAGProvider.create({
-  dbPath: './dist/best-practices-rag',
-  readonly: true,
-});
-
-// Agent uses RAG during review
-async function reviewCode(code: string) {
-  // Search for relevant best practices
-  const practices = await ragProvider.query({
-    text: `best practices for: ${extractTopics(code)}`,
-    limit: 5,
-  });
-
-  // Use practices as context for LLM review
-  const review = await callLLM({
-    prompt: `Review this code using these best practices:\n\n${formatPractices(practices)}\n\nCode:\n${code}`,
-  });
-
-  return review;
-}
-```
-
-### Example: Documentation Assistant
-
-**Use Case**: Agent that answers questions about project documentation
-
-**Agent Setup** — again in TypeScript, not in `agent.yaml`, for the reason given at the top of this
-section:
-
-```typescript
-import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
-
-const ragProvider = await LanceDBRAGProvider.create({
-  dbPath: './dist/docs-rag',
-  readonly: true,
-});
-```
-
-**Usage**:
-
-```typescript
-// User asks question
-const userQuestion = "How do I configure authentication?";
-
-// Agent searches docs
-const relevantDocs = await ragProvider.query({
-  text: userQuestion,
-  limit: 10,
-});
-
-// Agent synthesizes answer from chunks
-const context = relevantDocs.chunks
-  .map(chunk => `${chunk.filePath}:\n${chunk.content}`)
-  .join('\n\n');
-
-const answer = await llm.complete({
-  system: "Answer based on documentation provided.",
-  user: `Question: ${userQuestion}\n\nDocumentation:\n${context}`,
-});
-```
 
 ---
 
@@ -730,8 +607,6 @@ team-docs/
 ├── onboarding/
 ├── processes/
 ├── technical/
-├── agents/
-│   └── doc-assistant/
 ├── vibe-agent-toolkit.config.yaml
 └── dist/
     └── docs-rag/
@@ -747,23 +622,18 @@ resources:
     - technical/**/*.md
 ```
 
-The agent under `agents/doc-assistant/` needs no config entry — it is discovered by its own
-`agent.yaml`. The database path is given on the command line below, and the embedding model is the
+The database path is given on the command line below, and the embedding model is the
 CLI default; an OpenAI model would mean driving `LanceDBRAGProvider.create` yourself, per
 [Selecting an embedding provider](#selecting-an-embedding-provider).
 
-**Deploy**:
+**Build and query**:
 
 ```bash
 # Build RAG database at the path shown in the tree above
 bun run vat rag index --db ./dist/docs-rag
 
-# Deploy doc-assistant agent
-bun run vat agent build doc-assistant
-bun run vat agent install doc-assistant
-
-# Team members query via agent
-vat agent run doc-assistant "What's our code review process?"
+# Team members query it
+vat rag query "What's our code review process?" --db ./dist/docs-rag
 ```
 
 ---

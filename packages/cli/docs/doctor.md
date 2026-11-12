@@ -2,7 +2,7 @@
 
 ## Overview
 
-The `vat doctor` command diagnoses common issues with your agent project setup and environment,
+The `vat doctor` command diagnoses common issues with your VAT project setup and environment,
 providing actionable suggestions for any problems found.
 
 ## Command

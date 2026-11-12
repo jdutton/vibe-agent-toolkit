@@ -396,8 +396,7 @@ Two things follow, and neither is comfortable:
   *enforceability*, not milliseconds, and any framing that calls it the big win is wrong.
 
 The largest boundaries in the tree are the ones this document does not otherwise discuss:
-`rag-lancedb` → LanceDB + apache-arrow; four runtime adapters → whole vendor SDKs; `gateway-mcp` →
-the MCP SDK + `ajv`; and `projection-sqlite`, below.
+`rag-lancedb` → LanceDB + apache-arrow, and `projection-sqlite`, below.
 
 ### Why this is a rule and not a preference
 
@@ -494,7 +493,7 @@ boundary; it is a delay.
 | projection store / `node:sqlite` | ✅ yes — `await import`, env-gated | ❌ no needle |
 | **HTML parser (parse5)** | ❌ **no — loads eagerly with the barrel** | ❌ absence documented, not asserted |
 | **rag *package* / `onnxruntime-web`** | ⚠️ package-level load unverified | ❌ no needle |
-| `rag-lancedb`, runtime adapters, `gateway-mcp` | ✅ behind `optional-backend.ts` | ❌ no needle, and no declared boundary to pin |
+| `rag-lancedb` | ✅ behind `optional-backend.ts` | ❌ no needle, and no declared boundary to pin |
 
 ⚠️ The rag row is two rows, and conflating them hides the gap. The **command module**
 (`cli/dist/commands/rag/index.js`) is pinned in both directions today. What is unpinned is the **rag

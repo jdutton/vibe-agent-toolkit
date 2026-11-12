@@ -40,8 +40,7 @@ packages/cli/
 │   ├── commands/
 │   │   ├── resources/          # Resources command group
 │   │   ├── rag/                # Future: RAG commands
-│   │   ├── skills/             # Future: Skills commands
-│   │   └── agents/             # Future: Agent commands
+│   │   └── skills/             # Future: Skills commands
 │   ├── utils/
 │   │   ├── logger.ts           # stderr logging
 │   │   ├── project-root.ts     # Root detection
@@ -79,50 +78,15 @@ is the rationale and worked example behind it.
 
 | Logic Type | Wrong Place | Right Place | Why |
 |------------|-------------|-------------|-----|
-| Find agent's package root | CLI | agent-skills or utils | Other runtimes (langchain, etc.) will need this |
-| Determine default output path | CLI | agent-skills | Each runtime knows where its bundles should go |
-| Validate agent manifest | CLI | agent-config | Validation used by all consumers |
-| Parse YAML | CLI | utils or agent-config | Common across many packages |
+| Find a skill's package root | CLI | agent-skills or utils | Every caller of the packager needs it, not only the CLI |
+| Determine default output path | CLI | agent-skills | The packager knows where its bundles go |
+| Validate skill frontmatter | CLI | agent-skills | Validation used by all consumers |
+| Parse YAML | CLI | utils | Common across many packages |
 | Format user messages | CLI | ✅ CLI is fine | This is CLI-specific UX |
-
-### Example: Agent Build Command
-
-**Before (WRONG)** - Logic in CLI:
-```typescript
-// packages/cli/src/commands/agent/build.ts
-function findAgentPackageRoot(agentPath: string): string {
-  // 50 lines of path-walking logic...
-  // ❌ This belongs elsewhere!
-}
-
-function determineOutputPath(target: string, agentPath: string): string {
-  const packageRoot = findAgentPackageRoot(agentPath);
-  return path.join(packageRoot, 'dist', 'vat-bundles', target);
-}
-```
-
-**After (CORRECT)** - Logic in runtime package:
-```typescript
-// packages/cli/src/commands/agent/build.ts
-const buildOptions = options.output
-  ? { agentPath, target, outputPath: options.output }
-  : { agentPath, target };
-// ✅ CLI just passes options, runtime figures out the rest
-result = await buildAgentSkill(buildOptions);
-```
-
-```typescript
-// packages/agent-skills/src/builder.ts
-function getDefaultOutputPath(manifestPath: string, target: string): string {
-  const agentPackageRoot = findAgentPackageRoot(manifestPath);
-  return path.join(agentPackageRoot, 'dist', 'vat-bundles', target);
-}
-// ✅ Logic lives where it can be reused by other runtimes
-```
 
 ### Self-Hosting Consideration
 
-Remember: **Other agent repos won't have packages/cli/**. If an agent package needs to build itself, it can depend on `@vibe-agent-toolkit/agent-skills` directly. The CLI is just one convenient way to invoke the build - not the only way.
+Remember: **Other repos won't have packages/cli/**. A package that needs to build its skills itself can depend on `@vibe-agent-toolkit/agent-skills` directly. The CLI is just one convenient way to invoke the build - not the only way.
 
 ## Context Detection
 
@@ -182,7 +146,6 @@ vat resources scan [path]       # Resource discovery
 vat resources validate [path]   # Resource validation
 vat rag ...                     # Future: RAG commands
 vat skills ...                  # Future: Skill commands
-vat agents ...                  # Future: Agent commands
 vat validate                    # Run all configured source validators (resources, their checks, skills)
 ```
 
@@ -192,7 +155,6 @@ Each package gets its own command group:
 - `resources` - Markdown/HTML parsing and validation
 - `rag` - Document chunking, embedding, retrieval
 - `skills` - Claude skill packaging and testing
-- `agents` - Agent validation and management
 
 ### Project Root Detection
 
@@ -230,20 +192,19 @@ contract" below.
 
 ## Configuration
 
-### Two-Level Hierarchy
+### One Project Config
 
 #### Project-Level Config
 
 **File:** `vibe-agent-toolkit.config.yaml` (at project root)
 
-**Purpose:** Defaults for entire project (collection of agents)
+**Purpose:** Defaults for the entire project (its skills, resources and RAG stores)
 
 **Example:**
 ```yaml
 resources:
   include:
     - "docs/**/*.md"
-    - "agents/**/README.md"
   exclude:
     - "node_modules/**"
     - "**/test/fixtures/**"
@@ -253,14 +214,6 @@ resources:
       EXTERNAL_URL_DEAD: ignore
       FRONTMATTER_SCHEMA_ERROR: error
 ```
-
-#### Agent-Level Config
-
-**File:** TBD (likely `agent.yaml`)
-
-**Purpose:** Override project defaults for specific agent
-
-**Pattern:** Agent config inherits from project config, overriding specific values (DRY)
 
 ## Output Strategy
 
@@ -289,7 +242,7 @@ stderr. Both spell a finding with the one formatter, `formatFindingLine` in
 `reportFindings`, which puts every error first and adds warnings and info only under `--verbose`
 (`vat resources validate`, `vat resources check -v`, the orchestrators' delegated phases, and
 `vat verify`'s built-in phases). A lane with no `--verbose` passes `verbose: true` and always prints
-every finding: `vat agent validate`, `vat ard emit`, `vat rag index`, `vat okf validate`,
+every finding: `vat ard emit`, `vat rag index`, `vat okf validate`,
 `vat audit settings`, `vat claude plugin uninstall` and `vat skills build --skill`'s refusal.
 
 A leftover (`TREE_CLEANUP_INCOMPLETE`: something a run made and could not remove) is said by the

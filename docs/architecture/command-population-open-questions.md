@@ -222,8 +222,8 @@ it.
 
 ### Should a single-named-path verb ever enumerate the whole project?
 
-`vat skill review` names one skill and crawls the project twice; `vat skill test run` and
-`vat agent run` enumerate to resolve a bare name. Nothing says whether that is intended cost or
+`vat skill review` names one skill and crawls the project twice; `vat skill test run` enumerates
+to resolve a bare name. Nothing says whether that is intended cost or
 accidental reach.
 
 ## Related

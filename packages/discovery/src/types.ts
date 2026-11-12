@@ -5,7 +5,6 @@ import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
  */
 export type DetectedFormat =
   | 'agent-skill'     // SKILL.md
-  | 'vat-agent'       // agent.yaml
   | 'markdown'        // *.md (resource file)
   | 'unknown';        // Other files
 

@@ -87,26 +87,12 @@ export const CODE_REGISTRY = {
     'link_targets_directory',
   ),
   // The prose-link sibling of LINK_TARGETS_DIRECTORY, and deliberately NOT that
-  // code. The walker classifies a link resolving to a directory as
-  // `directory-target`, and until now that classification reached no code at all:
-  // the verdict engine returned `null` for a non-typed-slot directory and the
-  // issue lane filtered it out, so an author whose link pointed at a directory
-  // got the directory dropped from the bundle and no finding of any kind.
-  //
-  // Reusing LINK_TARGETS_DIRECTORY was not available: its own `fix` says in as
+  // code: its own `fix` says in as
   // many words that navigational prose links to a directory do not trigger it,
   // so emitting it here would hand a reader a finding that denies its own
   // applicability — and its `error` default would fail exactly the builds the
   // directory-link decision (a navigational directory link is a valid target)
   // allows.
-  //
-  // `warning`, which is the severity this family already uses for "the target is
-  // legitimate at source, but it did not travel, so the packaged link points at
-  // nothing" — LINK_TO_NAVIGATION_FILE and LINK_FROM_NON_ROUTABLE_FILE are the
-  // same shape and both warn. `error` is reserved here for edges that cannot be
-  // right at source (outside the project, a leak, a missing target); a directory
-  // link resolves perfectly well for a reader browsing the repo, which is why
-  // the report is about packaging, not about the link being malformed.
   LINK_TO_UNBUNDLED_DIRECTORY: entry(
     'finding',
     'warning',
@@ -127,24 +113,9 @@ export const CODE_REGISTRY = {
   LINK_TO_AGENT_INSTRUCTION_FILE: entry(
     'finding',
     'error',
-    // "excluded from the bundle" used to be asserted unconditionally, and it was
-    // FALSE in the one configuration the fix string recommended: with an explicit
-    // files: entry naming the file, the file shipped. The description now states
-    // the precondition that makes it true, and names the consequence the old
-    // wording left silent — the link is stripped, so the packaged prose points at
-    // nothing.
     'Markdown link targets a repo-internal agent-instruction file (CLAUDE.md, AGENTS.md, GEMINI.md) that no explicit files: entry declares; it is not bundled and the link is stripped from the packaged content.',
-    // Three real remedies, then the declaration route. The absolute-URL route is
-    // listed because it is the cheapest correct fix for the dominant population —
-    // links that point UPWARD out of the skill dir at a file whose canonical home
-    // is a repository the reader can open.
-    //
-    // The declaration route is stated as EXPLICIT (non-glob) deliberately: it used
-    // to read "declare it under skills.config.<name>.files" and doing exactly that
-    // changed nothing, because the walker refused the link whatever the config
-    // said. The remedy told you to do the thing you had already done. It is now
-    // honoured, and the qualifier is load-bearing — a glob is a net, not a
-    // declaration, and never packages one of these files.
+    // The declaration route is EXPLICIT (non-glob) deliberately: a glob is a net,
+    // not a declaration, and never packages one of these files.
     "Link the specific content the file describes; point the link at the file's canonical home as an absolute URL; or extract the shared part into a document intended for distribution. To ship the file deliberately, name it in an explicit (non-glob) skills.config.<name>.files entry — the file is then bundled and this link is rewritten to the declared dest.",
     'link_to_agent_instruction_file',
   ),
@@ -200,20 +171,8 @@ export const CODE_REGISTRY = {
     'Raise linkFollowDepth, bundle the file via files config, declare the drop intentional with validation.allow, or exclude via excludeReferencesFromBundle.rules.',
     'link_dropped_by_depth',
   ),
-  // The receipt for an exclusion the author asked for. Its sibling
-  // LINK_DROPPED_BY_DEPTH reports a drop the author configured a NUMBER for and
-  // may not have meant; this one reports a drop they wrote a PATTERN for and
-  // almost certainly did. That is the whole severity argument.
-  //
-  // `info`, not `warning`: warning-level noise on a working configuration is how
-  // a report gets ignored, and every `excludeReferencesFromBundle` rule fires on
-  // every build by design. But silence was worse — the lane emitted nothing at
-  // all, so an author asking "why did this file not ship?" got no answer from
-  // the tool that knew. `info` is the posture this registry already uses for
-  // "true, and only interesting when you are looking" (LINK_DEFERRED_ARTIFACT,
-  // FILES_GLOB_MATCHED_NOTHING).
-  //
-  // The per-issue message names the patterns that matched, supplied by the
+  // The receipt for an exclusion the author asked for (a PATTERN, unlike
+  // LINK_DROPPED_BY_DEPTH's NUMBER), hence `info`. The per-issue message names the patterns that matched, supplied by the
   // emitting lane from the walker's own `matchedRule` record — with several
   // rules configured, knowing that one of them fired is not an answer.
   LINK_EXCLUDED_BY_PATTERN: entry(
@@ -234,24 +193,8 @@ export const CODE_REGISTRY = {
   // shipped file mentioned?", this one asks "is every mentioned path shipped?".
   // Same substrate, opposite direction — and only this direction catches a
   // BUILD DROP, where the file is correct in the source repo and absent from
-  // dist. No human review of the source can see that, which is why it is worth
-  // a code despite the narrower precision.
-  //
-  // Warning, not error, on measured evidence from TWO corpora: 2 misfires in 52
-  // built adopter skills (3.8%) and 10.4% on a 632-skill installed corpus — the
-  // same shipped rule pair, a 2.7x spread. Neither corpus is privileged; quote
-  // both or name the one you mean. The residual class is irreducible: a skill
-  // whose SUBJECT is skill authoring cites example paths it does not ship. VAT's
-  // own vat-skill-authoring is in that class.
-  //
-  // ⚠️ Those are the rates that SHIP. Two filters run in production: literal
-  // paths only, and the first segment must be a bundled subdirectory (a
-  // candidate also resolves against its content-type-ROUTED spelling, because
-  // packaging relocates a file by extension and leaves code-fence tokens
-  // unrewritten). The validator's table records a 1.9%/8.9% row for a deleted third rule
-  // that widens resolution to the whole plugin — it never had a production
-  // caller, and the whole subsystem behind it has been DELETED, so the documented
-  // rate and the shipped rate cannot drift apart again.
+  // dist. Severity rationale and the shipped misfire rates live in
+  // docs/validation-codes.md.
   PACKAGED_REFERENCED_PATH_MISSING: entry(
     'finding',
     'warning',
@@ -262,17 +205,8 @@ export const CODE_REGISTRY = {
   // The only BYTE measurement in the validators. Everything else that sounds like
   // a size check counts lines (SKILL_TOTAL_SIZE_LARGE, ≤2000) or files
   // (SKILL_TOO_MANY_FILES, ≤6), which makes all of them structurally blind to the
-  // shape that actually blocks a publish: one large binary. The measured instance
-  // is a 35.7 MB `.wasm` bundled by three skills in one adopter marketplace — over
-  // the ceiling on its own, before any markdown counts, and invisible to a line
-  // counter because it has no lines.
-  //
-  // Unlike its line-counting neighbours this threshold is NOT a VAT opinion. It is
-  // the Skills API's own refusal — measured, not just read: an over-ceiling bundle
-  // returns `413 Request exceeds the maximum size`. So the finding names a real,
-  // external gate rather than a maintainability preference, and it is worth catching
-  // at build, where the author can still act, instead of at the end of an upload.
-  // The exact ceiling (30 MiB, not the decimal reading of the vendor's "30 MB") and
+  // shape that actually blocks a publish: one large binary. The threshold is the
+  // Skills API's own refusal (`413`), not a VAT opinion. The exact ceiling (30 MiB, not the decimal reading of the vendor's "30 MB") and
   // the uploads that bracket it are documented at API_SKILL_MAX_UPLOAD_BYTES.
   //
   // `warning` rather than `error` because the ceiling is target-specific: a bundle
@@ -289,40 +223,19 @@ export const CODE_REGISTRY = {
     'finding',
     'warning',
     'A repo-internal agent-instruction file (CLAUDE.md, AGENTS.md, GEMINI.md) is present in the scanned tree — a built skill bundle, an installed plugin, or a plugin source directory.',
-    // Two lanes hand this detector different trees, and one remediation has to be
-    // true for both. In a DIST tree the file demonstrably shipped, so removing it
-    // is the fix. In a repo SOURCE tree the build already excludes it from the
-    // plugin tree-copy and from files: globs, so it does not ship unless an
-    // explicit files: entry names it — prescribing deletion there told adopters to
-    // delete a useful repo-internal doc to silence a warning about a file that no
-    // longer travels.
-    //
-    // The last clause is for the third lane: `vat audit <path>` resolves a subject
-    // by PATH, and a built bundle's path is not its source skill's declared path,
-    // so that lane cannot reach the `files:` block that may have sanctioned the
-    // file. `vat build` and `vat verify` CAN, and they honour it by not reporting
-    // at all — so a reader who sees this from audit alone must not conclude the
-    // declaration failed.
+    // One remediation must be true for a DIST tree (the file shipped: remove it)
+    // and a SOURCE tree (it ships only if an explicit files: entry names it). The
+    // last clause is for `vat audit <path>`, which resolves by PATH and so cannot
+    // reach the `files:` block that may have sanctioned the file.
     'In a distributed tree (a built bundle or an installed plugin) remove the file, or move it outside the directory that is packaged. In a repo source tree, confirm first whether it ships: the build excludes agent-instruction files from the plugin tree-copy and from files: globs, so only an explicit files: entry naming it puts it in the output. If it must ship, set severity.PACKAGED_AGENT_INSTRUCTION_FILE to ignore so the exception is recorded in config. If an explicit files: entry already names this dest, vat build and vat verify honour it and stay silent; vat audit reports it anyway because a path-addressed scan cannot see the config that declared it.',
     'packaged_agent_instruction_file',
   ),
   // The companion PACKAGED_AGENT_INSTRUCTION_FILE needs in order to be allowed to
   // stay silent. Its audit lane only reports files in a DISTRIBUTED tree, and the
-  // distributed/source question is answered from git — so anything that stops git
-  // answering (no binary on PATH, a corrupt or unreadable `.git`) used to collapse
-  // to "not ignored", i.e. source, i.e. silence, with `status: success` and no
-  // trace anywhere that the detector had been switched off.
-  //
-  // A missing answer is therefore reported as a missing answer. Deliberately NOT
-  // resolved by assuming `distributed`: that manufactures a substantive claim
-  // about the artifact ("this file shipped to consumers") that nothing observed,
-  // and its remediation — remove the file — is wrong advice for the ordinary
-  // source tree in a container with no git.
-  //
-  // `warning`, matching the code it stands in for, so a CI gate counting warnings
-  // cannot be quietly zeroed by breaking git. Emitted only when the tree actually
-  // holds agent-instruction files: with none there, nothing was left unclassified
-  // and healthy git would have said nothing either.
+  // distributed/source question is answered from git, so a git that cannot answer
+  // is reported as a missing answer — never assumed `distributed` (a claim nothing
+  // observed) nor `source` (silence). `warning`, matching the code it stands in
+  // for. Emitted only when the tree actually holds agent-instruction files.
   TREE_PROVENANCE_INDETERMINATE: entry(
     'finding',
     'warning',
@@ -335,17 +248,9 @@ export const CODE_REGISTRY = {
   //
   // `vat audit` is a bulk linter over trees it does not own — an adopter's
   // monorepo, `~/.claude/plugins`, a vendored bundle — so an entry it cannot read
-  // is an ordinary condition, not an exceptional one. One root-owned or
-  // quarantined directory used to abort the ENTIRE run with `status: error`, exit
-  // 2, and zero findings, discarding every finding already collected from readable
-  // siblings. Degrading beats destroying: the scan continues and
-  // names what it could not reach.
-  //
-  // Silence was the other tempting option and is not acceptable: a scan that
-  // reports success while having skipped a subtree is the same failure shape as a
-  // detector that silently disables itself. `warning`, not `error`, because the
-  // findings that DID come back are trustworthy and an unreadable path is usually
-  // an environment fact rather than a defect in the audited tree.
+  // is an ordinary condition: the scan continues and names what it could not
+  // reach. `warning`, not `error`, because the findings that DID come back are
+  // trustworthy and an unreadable path is usually an environment fact.
   SCAN_PATH_UNREADABLE: entry(
     'finding',
     'warning',
@@ -374,8 +279,7 @@ export const CODE_REGISTRY = {
   // partial result rather than a failed one — the same grading logic as
   // FILES_GLOB_DROPPED_NEVER_PACKAGED. Louder than `info` because, unlike a
   // never-packaged drop, nothing about a glob's design makes catching a device node
-  // the expected outcome. It replaces a raw `ENOTSUP` that killed the build naming
-  // neither the entry nor the path.
+  // the expected outcome.
   FILES_GLOB_SKIPPED_NON_REGULAR_FILE: entry(
     'finding',
     'warning',
@@ -388,18 +292,8 @@ export const CODE_REGISTRY = {
   // matched, and the never-package list refused EVERY match, so the entry ships
   // nothing and `copyGlobEntry` raises its own distinct error.
   //
-  // A separate code rather than a widened FILES_GLOB_MATCHED_NOTHING because the
-  // two have different causes and therefore different remedies: "produce the
-  // artifact first" is useless advice for a glob that netted only files VAT never
-  // packages, and "name the file explicitly" is useless for one whose directory
-  // is empty. One code would have to carry both, and a reader would have to work
-  // out which half applied to them.
-  //
-  // `warning`, not `error`: a pre-build tree can be a PARTIAL artifact just as it
-  // can be an absent one — a stale `dist/` holding only a README.md is the same
-  // phenomenon that makes the zero-match `info` — so blocking CI here can be
-  // wrong. Louder than `info` because, unlike an empty directory, a directory
-  // containing only never-packaged files is not the ordinary pre-build state.
+  // A separate code from FILES_GLOB_MATCHED_NOTHING because the two have
+  // different causes and therefore different remedies.
   FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED: entry(
     'finding',
     'warning',
@@ -418,10 +312,7 @@ export const CODE_REGISTRY = {
   //
   // `info`, not `warning`: a pre-build gate runs before the artifact exists, so a
   // glob over an unbuilt `dist/` matching nothing is the expected state and must
-  // not fail anyone's CI. But "expected state" and "the build will die on this"
-  // are both true at once, and the gate used to report NEITHER — reporting the
-  // drop that is harmless by design while staying silent about the zero-match
-  // that is fatal.
+  // not fail anyone's CI.
   FILES_GLOB_MATCHED_NOTHING: entry(
     'finding',
     'info',
@@ -442,13 +333,7 @@ export const CODE_REGISTRY = {
     // The CAUSE deliberately lives in `fix`, not here. This code has two
     // populations — a link-rewriter bug, and a target the never-package filter
     // dropped on purpose — and only the emitting lane knows which one it is
-    // holding, so only the per-issue `fix` can name it. When the cause was
-    // asserted in the description ("likely a link-rewriter bug"), the
-    // policy-drop branch shipped one issue whose message blamed VAT and whose
-    // `fix` said "Nothing to report — VAT dropped this file on purpose": the two
-    // halves of a single finding contradicting each other. The description now
-    // states only what every emission observed — the link does not resolve in
-    // the output — and each lane supplies its own remediation.
+    // holding, so only the per-issue `fix` can name it.
     'Link in the packaged output resolves to a file that is not present in the output.',
     'Report the issue — this indicates a VAT bug. As a temporary workaround, set severity.PACKAGED_BROKEN_LINK to ignore while the underlying bug is fixed.',
     'packaged_broken_link',
@@ -664,25 +549,12 @@ export const CODE_REGISTRY = {
     'Use a portable equivalent: `grep -E` for PCRE, `sed -i.bak`/an explicit suffix, a temp file instead of bare `-i`, a portable resolve instead of `readlink -f`, and `date -v`/`-j -f` instead of `date -d`. Gate or avoid `timeout` (absent on macOS by default). See the vibe-agent-toolkit:vat-skill-review skill.',
     'non_portable_command',
   ),
-  // Promoted from a `vat skill review` checklist line, which had carried the
-  // vendor's rule with the note "Not enforced by any validation code; a shift-left
-  // candidate awaiting corpus evidence per docs/validation-rule-design.md, since a
-  // bare identifier in prose is only a defect when the skill actually drives MCP."
-  //
-  // That reservation is what the detector is built around rather than argued with:
-  // it reports a bare tool name only when the SAME document also spells that tool
+  // A bare identifier in prose is a defect only when the skill drives MCP, so
+  // the detector reports a bare tool name only when the SAME document also spells that tool
   // fully-qualified IN ITS PROSE — an `allowed-tools:` frontmatter list is a
   // manifest and is stripped before the vocabulary is read — so a document that
   // does not drive MCP has an empty vocabulary and cannot produce a finding.
-  //
-  // Re-measured with the current detector, after the hyphen,
-  // per-match and frontmatter fixes: 883 documents over two corpora — 7 firing,
-  // 11 occurrences, 0 false positives, and the authoring project fires 0. The
-  // full table, the two false-vocabulary sources the population check caught,
-  // and why the earlier adopter rows were dropped rather than restated are in
-  // `agent-skills/src/validators/mcp-tool-qualification.ts`. Do not resurrect the
-  // 994- or 966-document figures: they were taken with regexes this build no
-  // longer runs.
+  // Corpus measurements: `agent-skills/src/validators/mcp-tool-qualification.ts`.
   //
   // `warning`, not `error`: with a single MCP server mounted the bare name usually
   // still resolves, so the skill is degraded rather than broken. Anthropic's own
@@ -864,9 +736,7 @@ export const CODE_REGISTRY = {
     'registry_shape_drift',
   ),
   // Resources path — link / frontmatter / external-URL codes
-  // Promotions of existing resources-package validator behavior (formerly free-form
-  // lowercase `type` strings). Severities are locked by the design spec and reflect
-  // existing behavior. LINK_TO_GITIGNORED here is intentionally distinct from the
+  // LINK_TO_GITIGNORED here is intentionally distinct from the
   // skills-packaging code LINK_TO_GITIGNORED_FILE — both coexist.
   LINK_BROKEN_FILE: entry(
     'finding',
@@ -1027,11 +897,9 @@ export const CODE_REGISTRY = {
     "Configure a `token` source (env var or argv command); log in to the underlying CLI (e.g. `gh auth login`, `az login`); or set severity.LINK_AUTH_UNVERIFIED to ignore if running without auth is intentional.",
     'link_auth_unverified',
   ),
-  // `error`, and its own code rather than LINK_AUTH_UNVERIFIED, because the two
-  // used to be one and the merge was a defect: UNVERIFIED's remedy tells a
-  // token-less lane to set it to `ignore`, and with that override in place a
-  // provider that could not build a request produced a green run over links
-  // nothing had fetched. A provider that fails is a config defect on the
+  // `error`, and its own code rather than LINK_AUTH_UNVERIFIED (whose remedy
+  // is `ignore`, which would green a run over links nothing had fetched). A
+  // provider that fails is a config defect on the
   // adopter's side of the line, which is what `error` is for. The statically
   // knowable defects (an uncompilable regex, an unknown transform, a template
   // naming an undeclared capture) never reach this code — `vat resources
@@ -1146,20 +1014,9 @@ export const CODE_REGISTRY = {
     'Re-run with --debug for the stack and report it as a VAT bug.',
     'internal_error',
   ),
-  // 🔑 A DECLARED CHECK COULD NOT RUN — a run-integrity report, and the reason it
-  // is a REFUSAL rather than a finding is a defect that this kind makes
-  // unrepresentable.
-  //
-  // A `vat resources check` finding carries the code `CUSTOM:<name>`, and so did
-  // this one: the same code for "the check found a violation" and for "the check
-  // is broken". That collision was harmless only while `CUSTOM:` keys were
-  // (wrongly) unconfigurable. The moment they parse, `severity: { 'CUSTOM:foo':
-  // 'ignore' }` — a documented, ordinary thing to write about a check you
-  // inherited and disagree with — ALSO silences "foo could not run", and
-  // `'warning'` demotes it below the exit threshold. A renamed projection column
-  // would then yield exit 0 from a command whose entire purpose is to be a gate.
-  //
-  // So the report gets its own code, and that code is NOT overridable at all:
+  // 🔑 A DECLARED CHECK COULD NOT RUN — a run-integrity report. Its own code,
+  // never `CUSTOM:<name>`, so `severity: { 'CUSTOM:foo': 'ignore' }` cannot also
+  // silence "foo could not run". That code is NOT overridable at all:
   // `ValidationConfigSchema` refuses every refusal-kind code as a `severity` or
   // `allow` key, because a run whose assertions did not execute has no
   // legitimate `ignore`. Downgrade the CHECK all you like; you cannot downgrade
@@ -1346,9 +1203,4 @@ export type NonOverridableCode =
   | 'SETTINGS_MARKETPLACE_TOKEN_MISSING'
   // `vat audit --compat` / `--settings`
   | 'SETTINGS_POLICY_CONFLICT'
-  | 'COMPAT_NOT_CHECKED'
-  // `vat agent validate`
-  | 'AGENT_MANIFEST_INVALID'
-  | 'AGENT_REFERENCE_MISSING'
-  | 'AGENT_REFERENCE_UNREADABLE'
-  | 'AGENT_RAG_NO_SOURCES';
+  | 'COMPAT_NOT_CHECKED';

@@ -121,8 +121,6 @@ function namedOnDisk(pattern: RegExp): string[] {
  * this list says which kind it is.
  */
 const SKIPPABLE_SCENARIOS: Readonly<Record<string, 'platform' | 'network' | 'never-on-ci'>> = {
-  'agent installed → findings': 'platform',
-  'agent list → findings': 'platform',
   'cache clear → error': 'platform',
   'claude plugin install → findings': 'platform',
   'doctor → ok': 'network',

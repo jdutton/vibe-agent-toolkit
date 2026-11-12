@@ -3,7 +3,7 @@
  *
  * Every other check in `bun run validate` reasons about SOURCE. Nothing compared
  * BUILT OUTPUT against a baseline, so a packager or rewriter change could silently
- * rewrite every shipped file and all 14 steps stayed green. That is not
+ * rewrite every shipped file and every step stayed green. That is not
  * hypothetical — two defects shipped through a fully-green validate:
  *
  *  1. An unanchored inline-link regex let a stray unpaired `[` in prose start a
@@ -45,15 +45,14 @@
  *    `skipIf(UPDATING)`, and it skips the comparisons in the one mode where they
  *    would compare a copy against its own source.
  *
- * ## Why two packages, and why both goldens live here
+ * ## What it compares
  *
- * `vat-development-agents` ships 13 skills that are each a lone `SKILL.md`;
- * `vat-example-cat-agents` is the repo's ONLY multi-file bundle (a `SKILL.md` plus
- * three bundled `resources/*.md`), so it is the only place in the tree where the
- * rewriter rewrites a link in a non-`SKILL.md` packaged file. A gate on the
- * rewriter that cannot see that bundle is a gate on nothing. Its golden lives here,
- * under this test's own fixture directory, because the gate — not the example
- * package — is what owns the baseline.
+ * `vat-development-agents`' own dogfood plugin, whose golden lives under this
+ * test's fixture directory because the gate, not the package, owns the baseline.
+ * Every skill in it is a lone `SKILL.md`, so no bundled non-`SKILL.md` file is
+ * under this gate: a rewriter change that only alters links inside a bundled
+ * `resources/*.md` is invisible here until a multi-file bundle is added to
+ * `BUNDLES`.
  *
  * ## Line endings: compared byte-exact, on purpose
  *
@@ -67,8 +66,7 @@
  * detected and reported as such.
  *
  * Freshness: `bun run validate` runs `bun run build` (which is `turbo run build &&
- * turbo run build:skills`, covering both packages) before any test phase, so both
- * `dist/skills` trees are current when this runs there. Run standalone against a
+ * turbo run build:skills`) before any test phase, so `dist/skills` is current when this runs there. Run standalone against a
  * stale `dist/` and you are comparing the golden against whatever was built last —
  * the test fails closed if a `dist/` is missing entirely, but it cannot detect
  * staleness, so build first if you are running it on its own.
@@ -104,18 +102,14 @@ interface GoldenBundle {
 const BUNDLES: readonly GoldenBundle[] = [
   {
     pkg: 'vat-development-agents',
-    covers: '13 single-file skills (the dogfood plugin)',
-  },
-  {
-    pkg: 'vat-example-cat-agents',
-    covers: "the repo's only MULTI-FILE bundle — the only packaged non-SKILL.md files the rewriter touches",
+    covers: 'the single-file skills of the dogfood plugin',
   },
 ];
 
 const BUILD_HINT =
   'Build first:\n' +
   '    bun run build\n' +
-  '(that is `turbo run build && turbo run build:skills`, which covers both packages;\n' +
+  '(that is `turbo run build && turbo run build:skills`;\n' +
   ' `bun run validate` does it for you before the test phases.)';
 
 const UPDATE_HINT =

@@ -96,8 +96,7 @@ async function partitionRegularFiles(
   absoluteBase: string,
 ): Promise<{ regular: string[]; nonRegular: string[] }> {
   // Bounded concurrency, not a serial loop and not an unbounded `Promise.all`.
-  // This adds one or two stats per match where the build previously did none, on
-  // the critical path of a command that already stats every match once inside
+  // This adds one or two stats per match, on the critical path of a command that already stats every match once inside
   // `glob` — serially that is a latency floor proportional to the match count, and
   // a monorepo glob can match thousands. Unbounded would trade it for EMFILE.
   //
@@ -264,13 +263,9 @@ export interface AppliedFilesConfig {
  * the drop and the issue describing it must not be able to disagree.
  *
  * Anchored at the SOURCE file, in ONE coordinate system for both the location
- * and the message. The finding used to name the would-be `dest` in both, which
- * meant the only path it gave you was an output path nothing was ever written to
- * — so the issue list mixed output coordinates (this code) with source
- * coordinates (every other pre-build code) and an adopter could not open the
- * thing that went missing. The glob pattern stays in the message because it
- * answers the second question ("which entry caught this?"), but it is no longer
- * the only identifiable thing in the finding.
+ * and the message, like every other pre-build code. The glob pattern stays in
+ * the message because it answers "which entry caught this?", but it is not the
+ * only identifiable thing in the finding.
  *
  * @param locationRoot The ONE base this run anchors locations at. Required, not
  *   defaulted to the project root: a defaulted anchor is how a multi-project run

@@ -106,15 +106,14 @@
 # ---------------------------------------------------------------------------
 
 # --- zod 3 (GHSA-mrhx-c7xc-m3w5) ---------------------------------------------
-# Scope: zod@3.25.76 ONLY. The five nested zod 4 copies (claude-agent-sdk, knip,
-# @langchain/core, @langchain/openai, @modelcontextprotocol/sdk) were re-resolved
-# to 4.6.7 under rule 1 — their declared ranges admit it. OSV-Scanner cannot
+# Scope: zod@3.25.76 ONLY. Nested zod 4 copies (knip's, for one) resolve to a
+# patched 4.x under rule 1 — their declared ranges admit it. OSV-Scanner cannot
 # scope an IgnoredVulns entry to one package version (a PackageOverrides entry
 # would ignore EVERY advisory against 3.25.76, which is wider), so the scope is
 # ENFORCED by `bun run check:zod-advisory-scope` (packages/dev-tools/src/
 # zod-advisory-scope.ts, full tier): red when any other zod < 4.6.6 resolves, and
 # red once 3.25.76 is gone (delete this entry) or this entry is (delete the check).
-# Why it cannot be fixed now: 18 of VAT's 25 workspaces declare zod `^3.25` and the
+# Why it cannot be fixed now: VAT's workspaces declare zod `^3.25` and the
 # only fixed version is zod 4.6.6, a Breaking migration of every schema VAT
 # publishes — scheduled as its own PR after the next feature PR.
 # Exposure: VAT is a CLI that validates the operator's OWN config and files with
@@ -123,4 +122,4 @@
 [[IgnoredVulns]]
 id = "GHSA-mrhx-c7xc-m3w5"
 ignoreUntil = 2026-12-31
-reason = "Only zod@3.25.76 remains affected (nested zod 4 copies re-resolved to 4.6.7). 18 of VAT's 25 workspaces declare zod ^3.25; the only fix is zod 4.6.6, a Breaking migration scheduled as its own PR after the next feature PR. Exposure: a CLI validating the operator's own config and files, no remote input."
+reason = "Only zod@3.25.76 remains affected (nested zod 4 copies resolve to a patched 4.x). VAT's workspaces declare zod ^3.25; the only fix is zod 4.6.6, a Breaking migration scheduled as its own PR after the next feature PR. Exposure: a CLI validating the operator's own config and files, no remote input."

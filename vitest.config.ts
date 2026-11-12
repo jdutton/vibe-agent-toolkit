@@ -74,7 +74,6 @@ export default defineConfig({
         'packages/cli/src/pipeline-oracles/symlink-divergence.ts', // Needs real symlinks
         'packages/cli/src/pipeline-oracles/enumeration-snapshot.ts', // Crawls a tree
         'packages/cli/src/pipeline-oracles/lanes.ts', // Spawns the CLI per lane
-        'packages/cli/src/pipeline-oracles/path-facts.ts', // stat/realpath over a real tree
         'packages/cli/src/qa-snapshot/capture.ts', // Spawns commands, writes artifacts
         // The real-filesystem test infrastructure under `utils/src/testing`: it ships in `src/`
         // because every package's integration tests import it, and it can only be exercised
@@ -105,8 +104,6 @@ export default defineConfig({
         'packages/resource-compiler/src/cli/**', // CLI commands (integration test only)
         'packages/resource-compiler/src/language-service/**', // VSCode integration (not unit testable)
         'packages/resource-compiler/src/compiler/markdown-compiler.ts', // Orchestrator with comprehensive integration tests
-        'packages/vat-development-agents/src/**', // Agent packages (integration test only)
-        'packages/vat-example-cat-agents/src/**', // Agent packages (integration test only)
       ],
       // ⛔ A RATCHET: these only go up, and ONE measurement seeds them — the
       // coverage job in `coverage.yml` (Linux, the exact Node floor). A run on

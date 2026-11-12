@@ -1,20 +1,17 @@
 # @vibe-agent-toolkit/agent-skills
 
-Build, validate, and import Agent Skills for Claude Desktop, Claude Code, and VAT agents.
+Build, validate, and package Agent Skills for Claude Desktop and Claude Code.
 
 ## Overview
 
 This package provides runtime support for Agent Skills including:
 - **Validation** - Audit Agent Skills for quality and compatibility
-- **Import/Export** - Convert between SKILL.md and agent.yaml formats
-- **Building** - Package VAT agents as Agent Skills
+- **Packaging** - Bundle a SKILL.md with every file it links to
 - **Frontmatter Parsing** - Extract and validate Agent Skills frontmatter
 
 ## Features
 
 - **Skill Validation** - Comprehensive validation against Agent Skills specification
-- **Format Conversion** - Import SKILL.md to agent.yaml (and vice versa)
-- **Build Pipeline** - Generate SKILL.md from agent manifests
 - **Schema Validation** - Zod-based frontmatter validation with TypeScript types
 - **Link Integrity** - Validate all markdown links and references
 - **Console Compatibility** - Detect tool usage incompatible with console mode
@@ -44,35 +41,6 @@ if (result.summary.errors > 0) {
 }
 ```
 
-### Import SKILL.md to agent.yaml
-
-```typescript
-import { importSkillToAgent } from '@vibe-agent-toolkit/agent-skills';
-
-const result = await importSkillToAgent({
-  skillPath: './my-skill/SKILL.md',
-  outputPath: './my-agent/agent.yaml', // Optional
-  force: false, // Optional
-});
-
-if (result.success) {
-  console.log(`Imported to: ${result.agentPath}`);
-} else {
-  console.error(`Import failed: ${result.error}`);
-}
-```
-
-### Build Agent Skill from VAT Agent
-
-```typescript
-import { buildAgentSkill } from '@vibe-agent-toolkit/agent-skills';
-
-await buildAgentSkill({
-  agentPath: './my-agent',
-  outputPath: './dist/skills/my-agent',
-});
-```
-
 ## API Reference
 
 ### validateSkill(options): Promise<ValidationResult>
@@ -84,7 +52,6 @@ Validate an Agent Skill (SKILL.md) for quality and compatibility.
 interface ValidateOptions {
   skillPath: string;         // Path to SKILL.md
   rootDir?: string;          // Root directory for resolving links
-  isVATGenerated?: boolean;  // Treat as VAT-generated (stricter validation)
 }
 ```
 
@@ -92,7 +59,7 @@ interface ValidateOptions {
 ```typescript
 interface ValidationResult {
   path: string;                       // Path to skill file
-  type: 'agent-skill' | 'vat-agent'; // Detected type
+  type: 'agent-skill';                // Detected type
   status: 'ok' | 'findings';          // Literal: `findings` iff any issue is published (info counts)
   description: string;                // Human-readable one-liner
   issues: ValidationIssue[];          // All validation issues
@@ -179,111 +146,6 @@ The validator checks for:
 
 See [Best Practices Guide](../../docs/guides/agent-skills-best-practices.md) for detailed guidance.
 
-### importSkillToAgent(options): Promise<ImportResult>
-
-Convert an Agent Skill (SKILL.md) to VAT agent format (agent.yaml).
-
-**Options:**
-```typescript
-interface ImportOptions {
-  skillPath: string;      // Path to SKILL.md
-  outputPath?: string;    // Custom output path (default: same dir as SKILL.md)
-  force?: boolean;        // Replace what is at the output (default: false)
-}
-```
-
-The agent.yaml is written by one tree-change plan: something already at the output
-without `force` is refused before anything is written (a thrown `TREE_DEST_OCCUPIED`
-`VatError`), and the directory it goes in is made when absent.
-
-**Returns:**
-```typescript
-type ImportResult =
-  | { success: true; agentPath: string }
-  | { success: false; error: string; refusal: RefusalCode };
-```
-
-**Example:**
-```typescript
-// Basic import
-const result = await importSkillToAgent({
-  skillPath: './my-skill/SKILL.md',
-});
-
-// Custom output path
-const result = await importSkillToAgent({
-  skillPath: './my-skill/SKILL.md',
-  outputPath: './agents/my-agent/agent.yaml',
-});
-
-// Force overwrite
-const result = await importSkillToAgent({
-  skillPath: './my-skill/SKILL.md',
-  force: true,
-});
-
-if (!result.success) {
-  console.error(`Import failed: ${result.error}`);
-  process.exit(1);
-}
-```
-
-**What Gets Converted:**
-
-| SKILL.md Field | agent.yaml Field | Notes |
-|----------------|------------------|-------|
-| `name` | `metadata.name` | Required |
-| `description` | `metadata.description` | Required |
-| `metadata.version` | `metadata.version` | Defaults to "0.1.0" |
-| `metadata.tags` | `metadata.tags` | Optional |
-| `license` | `metadata.license` | Optional |
-| `compatibility` | `spec.compatibility` | Optional |
-
-The generated agent.yaml will have:
-```yaml
-metadata:
-  name: skill-name
-  description: Skill description
-  version: 1.0.0
-spec:
-  runtime: agent-skills
-```
-
-### buildAgentSkill(options): Promise<BuildResult>
-
-Build an Agent Skill from a VAT agent manifest.
-
-**Options:**
-```typescript
-interface BuildOptions {
-  agentPath: string;    // Path to agent directory or manifest
-  outputPath: string;   // Where to write skill bundle
-}
-```
-
-**Returns:**
-```typescript
-interface BuildResult {
-  outputPath: string;   // Path to generated SKILL.md
-  metadata: {
-    name: string;
-    description: string;
-    version: string;
-  };
-}
-```
-
-**Example:**
-```typescript
-const result = await buildAgentSkill({
-  agentPath: './my-agent',
-  outputPath: './dist/skills/my-agent',
-});
-
-console.log(`Built skill: ${result.outputPath}`);
-console.log(`Version: ${result.metadata.version}`);
-```
-
 ### Frontmatter Schemas
 
 #### AgentSkillFrontmatterSchema
@@ -319,7 +181,7 @@ if (result.success) {
 
 #### VATAgentSkillFrontmatterSchema
 
-Extended schema for VAT-generated skills:
+Extended schema for VAT skills that carry a version:
 
 ```typescript
 import { VATAgentSkillFrontmatterSchema } from '@vibe-agent-toolkit/agent-skills';
@@ -360,34 +222,6 @@ if (result.success) {
 ```
 
 ## Usage Examples
-
-### Validate Before Import
-
-```typescript
-import {
-  validateSkill,
-  importSkillToAgent
-} from '@vibe-agent-toolkit/agent-skills';
-
-// Validate first
-const validation = await validateSkill({
-  skillPath: './my-skill/SKILL.md',
-});
-
-if (validation.summary.errors > 0) {
-  console.error('Validation failed, cannot import');
-  process.exit(1);
-}
-
-// Import if validation passes
-const importResult = await importSkillToAgent({
-  skillPath: './my-skill/SKILL.md',
-});
-
-if (importResult.success) {
-  console.log(`Imported to: ${importResult.agentPath}`);
-}
-```
 
 ### Batch Validation
 
@@ -457,8 +291,8 @@ if (hasLinkErrors) {
 ### CLI Integration
 
 This package powers these CLI commands:
-- `vat agent audit` - Validates skills using `validateSkill()`
-- `vat agent import` - Imports skills using `importSkillToAgent()`
+- `vat audit` - Validates skills using `validateSkill()`
+- `vat skills build` / `vat skills package` - Package skills using `packageSkill()`
 
 See the [audit command reference](../cli/docs/audit.md) for command usage.
 
@@ -511,10 +345,6 @@ import type {
   ValidationResult,
   AgentSkillFrontmatter,
   VATAgentSkillFrontmatter,
-  ImportOptions,
-  ImportResult,
-  BuildOptions,
-  BuildResult,
 } from '@vibe-agent-toolkit/agent-skills';
 
 // The issue shape and the code/severity vocabularies live in the schema package:
@@ -592,7 +422,6 @@ Tested on:
 ## Related Documentation
 
 - [Audit Command](../cli/docs/audit.md) - CLI validation command
-- [Import Command](../../docs/cli/import.md) - CLI import command
 - [Agent Skills Best Practices](../../docs/guides/agent-skills-best-practices.md) - Comprehensive guide
 - [Agent Skills Specification](https://agentskills.io/specification) - Official spec
 

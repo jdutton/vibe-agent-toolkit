@@ -17,7 +17,6 @@ import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 
 import { executeCli } from './test-helpers/cli-runner.js';
 import {
-  BUILDABLE_AGENT_FILES,
   CLEAN_EVALS,
   CLEAN_SKILL,
   documentOf,
@@ -130,17 +129,6 @@ describe('an output a skill-packaging lane cannot write ends RUN_INCOMPLETE (sys
     expect(refusalOf(document), output).toStrictEqual({ status: 'error', code: 'USAGE_INVALID' });
     expect(status).toBe(2);
     expect(existsSync(safePath.join(cwd, 'z'))).toBe(false);
-  });
-
-  it.skipIf(CANNOT_DENY_READS)('vat agent build: an unwritable --output parent', () => {
-    const cwd = project('agent-ro', '{}\n', BUILDABLE_AGENT_FILES);
-    mkdirSyncReal(safePath.join(cwd, 'ro'));
-    lock(safePath.join(cwd, 'ro'), UNWRITABLE);
-
-    const { status, document, output } = run(cwd, ['agent', 'build', './agent', '--output', 'ro/out']);
-
-    expect(refusalOf(document), output).toStrictEqual({ status: 'error', code: 'RUN_INCOMPLETE' });
-    expect(status).toBe(2);
   });
 
   it.skipIf(CANNOT_DENY_READS)('vat claude plugin build: an unwritable marketplaces directory', () => {

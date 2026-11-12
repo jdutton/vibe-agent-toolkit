@@ -5,7 +5,7 @@ description: Use when authoring or revising a SKILL.md file — frontmatter, bod
 
 # VAT Skill Authoring: SKILL.md Structure and Packaging
 
-This skill covers authoring SKILL.md files for portable Claude skills: frontmatter shape, body structure, reference links, the packaging options that control how the skill is bundled for distribution, and how to build the Node scripts a skill ships so they still run on the machine that installs it. For the TypeScript agent side (archetypes, result envelopes, orchestration, runtime adapters) use `vibe-agent-toolkit:vat-agent-authoring`.
+This skill covers authoring SKILL.md files for portable Claude skills: frontmatter shape, body structure, reference links, the packaging options that control how the skill is bundled for distribution, and how to build the Node scripts a skill ships so they still run on the machine that installs it.
 
 ## SKILL.md Structure
 

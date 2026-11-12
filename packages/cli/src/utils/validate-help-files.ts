@@ -25,7 +25,6 @@ const REQUIRED_HELP_FILES = [
   'index.md',      // Root-level verbose help (vat --help --verbose)
   'resources.md',  // Resources command verbose help (vat resources --help --verbose)
   'rag.md',        // RAG command verbose help (vat rag --help --verbose)
-  'agent.md',      // Agent command verbose help (vat agent --help --verbose)
 ] as const;
 
 /**
@@ -42,7 +41,6 @@ const REQUIRED_HELP_FILES = [
 const PROSE_ONLY_HELP_FILES = new Set([
   'audit.md',
   'doctor.md',
-  'mcp.md',
   'skills.md',
   'skill-test.md',
 ]);

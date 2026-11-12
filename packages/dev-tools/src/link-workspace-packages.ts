@@ -36,10 +36,6 @@ const NODE_MODULES_DIR = join(REPO_ROOT, 'node_modules');
 /**
  * Every workspace package, read from the directory rather than typed in.
  *
- * The hand list this replaced said "All workspace packages" and was four short
- * (`claude-marketplace`, `lab`, `projection-sqlite`, `test-agents` were added
- * to `packages/` over seven months and never here), which only worked because
- * Bun happens to place per-dependent links under `packages/<x>/node_modules/`.
  * A directory with a `package.json` is a workspace; nothing else is.
  *
  * Dependency-free on purpose: this runs at postinstall, before any package is

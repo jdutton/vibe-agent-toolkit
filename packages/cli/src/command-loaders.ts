@@ -48,8 +48,6 @@ export const COMMAND_LOADERS: Record<string, () => Promise<Command>> = {
   inventory: async () => (await import('./commands/inventory.js')).createInventoryCommand(),
   resources: async () => (await import('./commands/resources/index.js')).createResourcesCommand(),
   rag: async () => (await import('./commands/rag/index.js')).createRagCommand(),
-  agent: async () => (await import('./commands/agent/index.js')).createAgentCommand(),
-  mcp: async () => (await import('./commands/mcp/index.js')).createMCPCommand(),
   skills: async () => (await import('./commands/skills/index.js')).createSkillsCommand(),
   skill: async () => (await import('./commands/skill/index.js')).createSkillCommand(),
   claude: async () => (await import('./commands/claude/index.js')).createClaudeCommand(),
