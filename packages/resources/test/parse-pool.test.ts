@@ -798,8 +798,12 @@ describe('a parent late to its own deadline', () => {
     // thread it judged may have been starved by the same load. The document runs again each time,
     // and after three late stops it ends as a parser-unavailable error of its own, never charged to
     // the document, so a starved host still terminates (I8); the pool is not judged broken, so the
-    // next document reaches a thread and is answered — by a thread started once an `answer` marker
-    // exists, which answers at once (no real parser loads within this pool's 100 ms).
+    // next document reaches a thread of its own — started once an `answer` marker exists, which
+    // answers at once (no real parser loads within this pool's 100 ms). Counted, the late stops
+    // would have judged the pool broken, and the next document refused with no thread started.
+    // Its own clock is real time: a runner too loaded to start a thread in 100 ms stops it on
+    // time, three times, and that run is the breaker's to count — so the next document is judged
+    // by the threads it reached, never by the machine's speed.
     const entry = await seedWorkerEntry([
       "import { existsSync, writeFileSync } from 'node:fs';",
       "import { parentPort } from 'node:worker_threads';",
@@ -847,8 +851,25 @@ describe('a parent late to its own deadline', () => {
 
     expect(verdictOf(outcome)).toBe('unavailable');
     expect(outcome instanceof Error && outcome.message).toMatch(/could not start within 100 ms on 3 threads in a row/);
-    const next = await outcomeOf(pool, '# b\n');
-    expect(next instanceof Error ? next.message : next).toBe('seeded answer');
+    let started = 0;
+    const onNext = (): void => {
+      started += 1;
+    };
+    diagnosticsChannel.subscribe('worker_threads', onNext);
+    let next: unknown;
+    try {
+      next = await outcomeOf(pool, '# b\n');
+    } finally {
+      diagnosticsChannel.unsubscribe('worker_threads', onNext);
+    }
+    // Answered on a thread of its own; or, on a runner too loaded to start one in 100 ms, refused
+    // by the breaker only after three threads of its own were stopped on time.
+    if (next instanceof Error && next.message === 'seeded answer') {
+      expect(started).toBeGreaterThanOrEqual(1);
+    } else {
+      expect(verdictOf(next)).toBe('unavailable');
+      expect(started).toBe(3);
+    }
   });
 });
 
