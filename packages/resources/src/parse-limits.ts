@@ -277,7 +277,7 @@ export function resolveParseLimits(named: Partial<ParseLimits> | undefined): Par
   }
   if (resolved.heapMb < MIN_HEAP_MB) {
     throw new Error(
-      `Parse limit heapMb may not be below ${String(MIN_HEAP_MB)} MiB: under it a thread can reach V8's own ceiling, whose out-of-memory aborts the process (a process-wide heap flag can still lower the bound applied); got ${String(resolved.heapMb)}.`,
+      `Parse limit heapMb may not be below ${String(MIN_HEAP_MB)} MiB, the least bound shown to stop a breach before V8's own out-of-memory, which aborts the process (a process-wide heap flag can still lower the bound applied); got ${String(resolved.heapMb)}.`,
     );
   }
   if (resolved.outputDepth > STORE_JSON_DEPTH) {
@@ -1136,12 +1136,13 @@ function unvouchedStopMb(appliedMb: number, ceilingMb: number, heapMb: number): 
 export const FRESH_THREAD_HEAP_MB = 24;
 
 /**
- * The least `heapMb` a caller may configure, in MiB: 64, so V8's own ceiling (twice it) is at
- * least 128. Under a smaller bound a thread can reach that ceiling before the pool's heap sampler
- * acts, and V8's out-of-memory there is FATAL: it aborts the whole process, the caller's included.
- * Measured on Node 26: no-flag breaches at 64 MiB are stopped by the pool three times in a row,
- * each in a child process that exits cleanly (`parse-pool-limits.integration.test.ts`, "a heap
- * breach with no process-wide flag"). It promises nothing more about a document past the bound,
+ * The least `heapMb` a caller may configure, in MiB: 64, the bound seeded clean. A thread that
+ * reaches V8's own ceiling dies with a FATAL out-of-memory that aborts the whole process, the
+ * caller's included ({@link HEAP_CEILING_FACTOR}); at 64 MiB, no-flag breaches are stopped by the
+ * pool three times in a row, each in a child process that exits 0
+ * (`parse-pool-limits.integration.test.ts`, "a heap breach with no process-wide flag"). A smaller
+ * bound was not shown safe on Windows CI, so it is refused. It promises nothing more about a
+ * document past the bound,
  * and it holds the CONFIGURED value only: a process-wide heap flag can still lower the bound the
  * pool APPLIES below it (see {@link heapBounds}).
  * Held: `resolveParseLimits` refuses 63 and accepts 64, and a pool at this minimum loads and runs

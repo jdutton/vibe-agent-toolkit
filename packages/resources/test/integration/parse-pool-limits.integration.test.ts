@@ -118,7 +118,7 @@ describe('a parse job stopped at its limit', () => {
     // breach is the document's alone; a second thread is started only once the breached one has
     // exited; and the same pool answers on it.
     const limits = JSON.stringify({ ...TIGHT_LIMITS, heapMb: MIN_HEAP_MB, timeMs: 60_000, outputRows: 10_000_000, outputBytes: 1024 * 1024 * 1024 });
-    const { stdout, status } = runInChild('', [
+    const stdout = runInChild('', [
       "const { subscribe } = await import('node:diagnostics_channel');",
       'const exited = [];',
       // At each thread's start: had every thread before it already exited?
@@ -133,7 +133,6 @@ describe('a parse job stopped at its limit', () => {
       'await pool.shutdown();',
     ]);
 
-    expect(status).toBe(0);
     expect(JSON.parse(stdout)).toStrictEqual({ limit: 'heapMb', links: 1, startedAfterExits: [true, true] });
   });
 
@@ -302,7 +301,7 @@ const MANY_LINKS_EXPRESSION = String.raw`Array.from({ length: 200000 }, (_, i) =
  * @param stall - How long the child's own thread blocks at a time, back to
  *   back, while the job runs (0: never) — so the heap sampler, which runs on
  *   that thread, reads late; or {@link UNTIL_THE_WORKER_IS_GONE}
- * @returns The limit's name, its bound, how long the rejection took, and the child's exit status
+ * @returns The limit's name, its bound, and how long the rejection took (the child exited 0)
  */
 function heapBreachUnder(nodeOptions: string, heapMb: number, stall: number | typeof UNTIL_THE_WORKER_IS_GONE): ChildOutcome {
   return parseInChild(
@@ -319,7 +318,6 @@ interface ChildOutcome {
   limit: string;
   bound: string;
   ms: number;
-  status: number | null;
 }
 
 /**
@@ -330,7 +328,7 @@ interface ChildOutcome {
  * @param documentExpression - A JavaScript expression the child evaluates to the document
  * @param limitsLiteral - The pool's limits, as a JavaScript object literal
  * @param stall - See {@link heapBreachUnder}
- * @returns The limit's name (`none` when admitted), its bound, how long the parse took, and the child's exit status
+ * @returns The limit's name (`none` when admitted), its bound, and how long the parse took (the child exited 0)
  */
 function parseInChild(
   nodeOptions: string,
@@ -350,19 +348,21 @@ function parseInChild(
     'console.log(JSON.stringify({ ...outcome, ms: performance.now() - startedAt }));',
     'await pool.shutdown();',
   ];
-  const { stdout, status } = runInChild(nodeOptions, script);
-  return { ...(JSON.parse(stdout) as { limit: string; bound: string; ms: number }), status };
+  return JSON.parse(runInChild(nodeOptions, script)) as ChildOutcome;
 }
 
 /**
  * Run `script` as an ES module in a child process under `nodeOptions`, so whatever a real pool's
  * thread does to its process — a fatal V8 abort included — is that child's, never the runner's.
  *
+ * Every caller gets the same verdict on the child itself: it spawned, it was not killed, it did not
+ * abort, and it exited 0. No caller expects anything else; one that does must say so here.
+ *
  * @param nodeOptions - The child's `NODE_OPTIONS`
  * @param script - The module's lines
- * @returns What it printed, and its exit status (asserted with nothing on stderr)
+ * @returns What it printed
  */
-function runInChild(nodeOptions: string, script: readonly string[]): { stdout: string; status: number | null } {
+function runInChild(nodeOptions: string, script: readonly string[]): string {
   // `spawnSync` blocks the loop the test's own timeout runs on, so a hung child is bounded here.
   // A script FILE, not `--eval`: a worker inherits its parent's execArgv,
   // and `--input-type` is refused by a worker started from a file.
@@ -377,11 +377,14 @@ function runInChild(nodeOptions: string, script: readonly string[]): { stdout: s
   });
   rmSync(directory, { recursive: true, force: true });
 
+  // A spawn that failed, or output past `maxBuffer`, is named here rather than read as a status.
+  expect(child.error, `the child could not run: ${String(child.error)}`).toBeUndefined();
   expect(child.signal, 'the child was killed, hung past the tier timeout').toBeNull();
   // A benign process warning (`VAT_PARSE_NO_COLLECTOR` on a runtime with no collector) may be
-  // there; an abort may not. Each caller asserts the exit status.
+  // there; an abort may not.
   expect(child.stderr).not.toMatch(/FATAL|out of memory/i);
-  return { stdout: child.stdout, status: child.status };
+  expect(child.status, child.stderr).toBe(0);
+  return child.stdout;
 }
 
 describe('a process-wide heap flag', () => {
@@ -418,7 +421,6 @@ describe('a process-wide heap flag', () => {
 
     const outcome = parseInChild('--max-old-space-size=128', ordinary, '{}', 0);
 
-    expect(outcome.status).toBe(0);
     expect(outcome.limit, outcome.bound).toBe('none');
   });
 
@@ -428,7 +430,6 @@ describe('a process-wide heap flag', () => {
     for (let attempt = 0; attempt < 3; attempt++) {
       const outcome = heapBreachUnder('--max-old-space-size=128', 1024, 0);
 
-      expect(outcome.status).toBe(0);
       expect(outcome.bound).toBe('96 MiB heap, lowered from 1024 MiB by a process-wide V8 heap flag (--max-old-space-size, --max-heap-size or --max-semi-space-size)');
     }
   });
@@ -452,7 +453,6 @@ describe('a process-wide semi-space flag', () => {
     for (let attempt = 0; attempt < 3; attempt++) {
       const outcome = heapBreachUnder(nodeOptions, 1024, 0);
 
-      expect(outcome.status).toBe(0);
       expect(outcome.limit).toBe('heapMb');
       expect(outcome.bound).toBe(`${bound}, lowered from 1024 MiB by a process-wide V8 heap flag (--max-old-space-size, --max-heap-size or --max-semi-space-size)`);
     }
@@ -483,7 +483,6 @@ describe('a heap breach while the parent thread stalls', () => {
     // flag overrides it); never the 256 nobody stopped it at.
     const outcome = heapBreachUnder('--max-old-space-size=512', 1024, UNTIL_THE_WORKER_IS_GONE);
 
-    expect(outcome.status).toBe(0);
     expect(outcome.limit).toBe('heapMb');
     expect(outcome.bound).toMatch(/^V8's own heap ceiling, reached before the pool's heap sampler read it: .*, unless a process-wide V8 heap flag \(--max-old-space-size, --max-heap-size or --max-semi-space-size\) set it instead$/);
     expect(outcome.bound).not.toContain('256 MiB');
@@ -523,7 +522,7 @@ describe('the least heapMb a caller may configure', () => {
 
   it('is a bound a pool loads and runs both parsers under, and its process exits cleanly', () => {
     // In a child process: see the file's header.
-    const { stdout, status } = runInChild('', [
+    const stdout = runInChild('', [
       `const { createParsePool } = await import(${JSON.stringify(BUILT_POOL)});`,
       `const pool = createParsePool({ size: 1, limits: { heapMb: ${String(MIN_HEAP_MB)} } });`,
       "const answered = (outcome) => outcome.then((result) => result.sizeBytes, (error) => String(error));",
@@ -533,22 +532,21 @@ describe('the least heapMb a caller may configure', () => {
       'await pool.shutdown();',
     ]);
 
-    expect(status).toBe(0);
     expect(JSON.parse(stdout)).toStrictEqual({ markdown: 10, html: 14 });
   });
 });
 
 describe('a heap breach with no process-wide flag', () => {
   it('never takes the process down', () => {
-    // Measured on Node 26: a worker that reaches V8's OWN ceiling under fast
-    // allocation dies with a FATAL out-of-memory that kills the whole process
-    // (3 runs in 4 at a V8 ceiling of 64 MiB, heapMb 32), so the pool must stop
-    // the job before V8 does. Three breaches in a row at the least bound a caller
-    // may name, so a pool that leaves the race to V8 loses it.
+    // Measured on Node 26: when V8's ceiling was `heapMb` itself (64 MiB), a worker
+    // under fast allocation reached it before the sampler could stop it, and the
+    // FATAL out-of-memory took the whole process down in 3 runs of 4; the ceiling
+    // is now twice `heapMb`, so the pool must stop the job before V8 does. Three
+    // breaches in a row at the least bound a caller may name, each in a child that
+    // must exit 0, so a pool that leaves the race to V8 loses it.
     for (let attempt = 0; attempt < 3; attempt++) {
       const outcome = heapBreachUnder('', MIN_HEAP_MB, 0);
 
-      expect(outcome.status).toBe(0);
       expect(outcome.limit).toBe('heapMb');
       expect(outcome.bound).toBe(`${String(MIN_HEAP_MB)} MiB heap`);
     }
