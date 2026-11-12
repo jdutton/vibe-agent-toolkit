@@ -38,9 +38,22 @@ import type { ParseResult } from './link-parser.js';
 
 /** The limits one parse job runs under. */
 export interface ParseLimits {
-  /** Wall-clock milliseconds a job may take, from dispatch to answer. */
+  /**
+   * Wall-clock milliseconds a job may take, on two clocks (see `JobClock`): a load clock of
+   * `timeMs` for its thread to load the job's parser, then `timeMs` from the moment the parser has
+   * loaded. A job stopped on its load clock runs again on another thread; its third load stop ends
+   * it as a broken install. On a reused thread the load clock, armed at dispatch, covers its
+   * heap check too, and a stop during the check is not counted toward the three. When that thread
+   * has already loaded the job's parser, the parse clock starts once the check keeps it; when it
+   * has not, the same clock runs on through the check and then the parser's load, and a stop after
+   * the check counts toward the three — and toward the parser's run of stops — like any load stop.
+   */
   readonly timeMs: number;
-  /** A worker's heap limit, in MiB, enforced by the pool's heap sampler (V8's own ceiling sits past it: `workerHeapCeilingMb`). */
+  /**
+   * A worker's heap limit, in MiB, enforced by the pool's heap sampler (V8's own ceiling sits past
+   * it: `workerHeapCeilingMb`). At least {@link MIN_HEAP_MB}: a smaller one is refused as a
+   * configuration error ({@link resolveParseLimits}).
+   */
   readonly heapMb: number;
   /** A worker's stack, in MiB (`resourceLimits.stackSizeMb`) — what bounds parser recursion. */
   readonly stackMb: number;
@@ -183,7 +196,7 @@ export class ParseLimitError extends VatError {
         'heapMb',
         workerHeapCeilingMb(configuredMb),
         undefined,
-        `V8's own heap ceiling, reached before the pool's heap sampler read it: ${LIMIT_UNITS.heapMb(workerHeapCeilingMb(configuredMb))}, unless a process-wide --max-old-space-size set it instead`,
+        `V8's own heap ceiling, reached before the pool's heap sampler read it: ${LIMIT_UNITS.heapMb(workerHeapCeilingMb(configuredMb))}, unless a process-wide V8 heap flag (--max-old-space-size, --max-heap-size or --max-semi-space-size) set it instead`,
       );
     }
     return new ParseLimitError(
@@ -252,7 +265,8 @@ export function isParseLimitError(error: unknown): error is ParseLimitError {
  *
  * @param named - Limits a caller (a test, a measurement arm) chose
  * @returns Every limit, each a positive finite number
- * @throws If a named limit is not a positive finite number
+ * @throws If a named limit is not a positive finite number, `heapMb` is below
+ *   {@link MIN_HEAP_MB}, or `outputDepth` is past what the store reads
  */
 export function resolveParseLimits(named: Partial<ParseLimits> | undefined): ParseLimits {
   const resolved: ParseLimits = { ...DEFAULT_PARSE_LIMITS, ...named };
@@ -260,6 +274,11 @@ export function resolveParseLimits(named: Partial<ParseLimits> | undefined): Par
     if (!Number.isFinite(value) || value <= 0) {
       throw new Error(`Parse limit ${name} must be a positive finite number; got ${String(value)}.`);
     }
+  }
+  if (resolved.heapMb < MIN_HEAP_MB) {
+    throw new Error(
+      `Parse limit heapMb may not be below ${String(MIN_HEAP_MB)} MiB, the least a worker was measured to load its parsers within; got ${String(resolved.heapMb)}.`,
+    );
   }
   if (resolved.outputDepth > STORE_JSON_DEPTH) {
     throw new Error(
@@ -909,7 +928,17 @@ export interface HeapBounds {
  * alone, which a process-wide `--max-semi-space-size` overrides unseen), and never above a
  * flagged `--max-old-space-size`, or a flagged `--max-heap-size` less the young generation. A
  * read that is not positive is 0: the bound and the stop are 0, so every job is refused at its
- * heap limit, never run toward a ceiling nobody could read.
+ * heap limit, never run toward a ceiling nobody could read; the refusal names the applied bound.
+ *
+ * A configured `heapMb` is at least {@link MIN_HEAP_MB}, but the APPLIED bound may still fall below
+ * it under a process-wide flag that lowers V8's ceiling. Nothing more is done then: a breach the
+ * sampler reads on a job's load clock is a load stop, as at any bound, so a flag too small to load
+ * a parser under ends its jobs as a broken install (`ParserUnavailableError`).
+ *
+ * Known limitation: the parent cannot tell when a sample was read relative to the worker's
+ * `parserLoaded`. A sample read after the parser loaded but handled before its `parserLoaded`
+ * reaches the parent is judged on the load clock — a load stop, and the job runs again on another
+ * thread — not as the document's refusal.
  *
  * @param stats - `Worker.getHeapStatistics()`
  * @param geometry - The thread's young generation and the process's heap flags ({@link workerHeapGeometry})
@@ -1105,6 +1134,17 @@ function unvouchedStopMb(appliedMb: number, ceilingMb: number, heapMb: number): 
  * job ({@link reusedThreadHeapMb}), and half of what a parked thread may hold.
  */
 export const FRESH_THREAD_HEAP_MB = 24;
+
+/**
+ * The least `heapMb` a caller may configure, in MiB: 32. It exists so a worker can load its
+ * parsers: measured resting heap after loading them was 19.6 MiB (markdown alone, Node 22.16) to
+ * 24.1 MiB (both, Node 26), under 32. It promises nothing more — not that every load stays under
+ * the bound (a load-clock breach is a load stop and the job runs again), nor that a document past a
+ * 32 MiB bound is always refused cleanly before V8's own ceiling. Held: `resolveParseLimits`
+ * refuses 31 and accepts 32, and `parse-pool-limits.integration.test.ts` runs a pool at this
+ * minimum to answers for both parsers.
+ */
+export const MIN_HEAP_MB = 32;
 
 /**
  * What a reused thread may hold past a fresh one's {@link FRESH_THREAD_HEAP_MB}, as a share of the

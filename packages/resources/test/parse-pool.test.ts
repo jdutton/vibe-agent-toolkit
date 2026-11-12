@@ -33,7 +33,7 @@ import { Worker } from 'node:worker_threads';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { computeContentKey, type KeyedContent } from '../src/content-key.js';
 import { parseHtmlContent } from '../src/html-link-parser.js';
@@ -453,6 +453,7 @@ const DIES_PARSING = 'parentPort.postMessage({ id: request.id, parserLoaded: req
 
 /** The built worker, which a seeded entry can import to answer real parses. */
 const BUILT_WORKER = pathToFileURL(safePath.resolve(import.meta.dirname, '..', 'dist', 'parse-worker.js')).href;
+const BUILT_LIMITS = pathToFileURL(safePath.resolve(import.meta.dirname, '..', 'dist', 'parse-limits.js')).href;
 
 /**
  * @param body - The seeded entry's source
@@ -462,7 +463,16 @@ async function seedWorkerEntry(body: string): Promise<string> {
   const directory = await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'vat-pool-seed-'));
   cacheRoots.push(directory);
   const entry = safePath.join(directory, 'seeded-worker.mjs');
-  await fs.writeFile(entry, body, 'utf-8');
+  // Under {@link withoutHeapFlags}, cleared before anything below loads the real worker, which
+  // reads them as its module loads.
+  const hide = threadsWithoutHeapFlags
+    ? [
+      `const { v8HeapFlags: readHeapFlags } = await import(${JSON.stringify(BUILT_LIMITS)});`,
+      `process.execArgv = (${String(withoutHeapFlagArgs)})(process.execArgv, readHeapFlags);`,
+      "delete process.env['NODE_OPTIONS'];",
+    ]
+    : [];
+  await fs.writeFile(entry, [...hide, body].join('\n'), 'utf-8');
   __setParseWorkerEntryForTest(entry);
   return entry;
 }
@@ -1031,12 +1041,74 @@ async function heapRefusalUnder(
   }
 }
 
+/**
+ * `args` without a V8 heap flag, in either form: `--flag=<n>`, or `--flag <n>` (its value the next
+ * token). Self-contained, taking its reader as a parameter: its source runs in a seeded thread
+ * too ({@link withoutHeapFlags}).
+ *
+ * @param args - Command-line arguments
+ * @param read - {@link v8HeapFlags}
+ * @returns The arguments no heap flag reader takes a flag from
+ */
+function withoutHeapFlagArgs(args: readonly string[], read: typeof v8HeapFlags): string[] {
+  const kept: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? '';
+    const next = args[index + 1] ?? '';
+    const flags = (pair: readonly string[]): boolean => Object.values(read(undefined, pair)).some((value) => value !== undefined);
+    if (!flags([arg, next]) || flags([next])) {
+      kept.push(arg);
+      continue;
+    }
+    if (!arg.includes('=')) index += 1;
+  }
+  return kept;
+}
+
+/** Whether a seeded thread starts with the process's heap flags hidden: see {@link withoutHeapFlags}. */
+let threadsWithoutHeapFlags = false;
+
+/**
+ * Hide the process's V8 heap flags, for each test of the calling `describe`, from the reads a test
+ * scripts — the pool's flag read (`#heapFlags`, read as it is built), the scripted sampler, and
+ * every seeded thread ({@link seedWorkerEntry}), whose entry clears them before the real worker
+ * loads: a `Worker` copies the process's ORIGINAL `execArgv`, never the parent's rewritten array.
+ * Nothing else: a real `heap_size_limit` the parent reads unscripted still reflects the flag. So
+ * a test seeded with an unflagged thread's ceiling is judged against that ceiling alone. The Windows
+ * unit tier forks under `--max-old-space-size=512` (its `execArgv`), which the fail-closed ceiling
+ * would otherwise take: there the stop sits 128 MiB above the bound and the reused-thread bound is
+ * 56 MiB, not 152.
+ */
+function withoutHeapFlags(): void {
+  beforeEach(() => {
+    const execArgv = process.execArgv;
+    vi.stubEnv('NODE_OPTIONS', '');
+    process.execArgv = withoutHeapFlagArgs(execArgv, v8HeapFlags);
+    threadsWithoutHeapFlags = true;
+    onTestFinished(() => {
+      process.execArgv = execArgv;
+      threadsWithoutHeapFlags = false;
+      vi.unstubAllEnvs();
+    });
+  });
+}
+
+describe('the heap flags a test hides', () => {
+  it('are dropped in either form, a flag\'s separate value with it, and nothing else', () => {
+    expect(withoutHeapFlagArgs(
+      ['--max-old-space-size=512', '--expose-gc', '--max-semi-space-size', '16', '--max_heap_size', '--conditions=x'],
+      v8HeapFlags,
+    )).toStrictEqual(['--expose-gc', '--max_heap_size', '--conditions=x']);
+  });
+});
+
 describe('a heap past its bound', () => {
+  withoutHeapFlags();
+
   it('is not stopped while it rises, only once a fall too deep for a scavenge shows what it still holds', async () => {
-    // V8's ceiling is fixed at what an unflagged thread reads, not the real one:
-    // under the Windows unit tier's 512 MiB flag the stop sits 128 MiB above the
-    // bound, and Node 24's 192 MiB young generation leaves no rise below the stop
-    // that a fall deeper than a scavenge can come back from.
+    // V8's ceiling is fixed at what an unflagged thread reads, the process's heap flags hidden
+    // ({@link withoutHeapFlags}): under a 512 MiB flag Node 24's 192 MiB young generation would
+    // leave no rise below the stop that a fall deeper than a scavenge can come back from.
     const { bound, served, bounds } = await heapRefusalUnder(({ appliedMb, stopMb }, youngMb) => {
       // The rise must stay below the stop, or the stop decides instead.
       expect(appliedMb + youngMb + 4).toBeLessThan(stopMb);
@@ -1175,6 +1247,8 @@ describe('a heap past its bound', () => {
 });
 
 describe('a reused thread\'s check before its job', () => {
+  withoutHeapFlags();
+
   it('is charged to no document\'s time limit: the parse clock starts once the check keeps the thread', async () => {
     // The check is held for 60% of `timeMs` from dispatch — the time a slow forced collection takes
     // — and the answer for 60% more: past `timeMs` from dispatch, within it from the check.
@@ -1286,8 +1360,10 @@ const REUSED_BOUND_MB = reusedThreadHeapMb(resolveParseLimits(undefined).heapMb)
  * - `die-loading=<n>` — handed the job as a fresh thread, the thread exits before it loads a
  *   parser, on the first `n` fresh threads the job reaches (counted in a file beside the entry).
  *
- * Its own `heap_size_limit` always reads as an unflagged thread's, so the bound it settles to is
- * {@link REUSED_BOUND_MB} under any process heap flag (the Windows unit tier runs under 512 MiB).
+ * Its own `heap_size_limit` always reads as an unflagged thread's; seeded under
+ * {@link withoutHeapFlags}, whose entry clears the process's heap flags in the thread itself before
+ * the real worker reads them, the bound it settles to is {@link REUSED_BOUND_MB}. Seeded without
+ * it, under a process heap flag, the fail-closed ceiling takes the flag, and the bound is lower.
  *
  * @param preamble - Statements run before the real worker loads, after the imports above
  * @returns The `release` marker's path (absent on return); `release-answer` sits beside it
@@ -1528,6 +1604,41 @@ describe('the pool\'s bookkeeping is never a verdict', () => {
     expect(widest).toBe(2);
     expect(workerThreadCount()).toBe(before);
   });
+
+  it('settles its shutdown only once a thread stopped at a limit has exited', async () => {
+    // The stopped thread's job is already settled and the pool holds no thread of its own, so the
+    // stopped thread's exit, held here, is all its shutdown still has to wait for.
+    vi.useFakeTimers(TEST_CLOCK);
+    const entry = await seedWorkerEntry(intercepting(contentStartsWith('# SLOW'), [
+      'parentPort.postMessage({ id: request.id, parserLoaded: request.kind });',
+      "process.getBuiltinModule('node:fs').writeFileSync(new URL('./slow', import.meta.url), '');",
+      'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);',
+    ]));
+    const exits = holdTerminations();
+    const pool = createParsePool({ size: 1, limits: { timeMs: 300 } });
+    openPools.push(pool);
+
+    let outcome: unknown;
+    try {
+      const pending = outcomeOf(pool, '# SLOW\n');
+      await announcedParserLoaded(safePath.join(safePath.resolve(entry, '..'), 'slow'));
+      vi.advanceTimersByTime(300);
+      outcome = await pending;
+    } finally {
+      vi.useRealTimers();
+    }
+    const shutdown = settledLater(pool.shutdown().then(() => 'shut down'));
+    try {
+      await until(() => exits.held() === 1);
+      for (let turn = 0; turn < 10; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+      expect(shutdown.settled()).toBeUndefined();
+    } finally {
+      exits.release();
+    }
+
+    expect(isParseLimitError(outcome) ? outcome.limit : outcome).toBe('timeMs');
+    expect(await shutdown.outcome).toBe('shut down');
+  });
 });
 
 /**
@@ -1723,6 +1834,9 @@ describe('the clocks and the breaker', () => {
 
     expect(answers).toStrictEqual(['answered', 'answered', 'answered']);
     expect(verdictOf(html)).toBe('unavailable');
+    // The breaker's own verdict, never the job's three load clocks: the run was counted through
+    // the markdown answers between the stops.
+    expect(html instanceof Error && html.message).toMatch(/3 parse threads in a row were stopped or died before the html parser loaded/);
   });
 
   it('ends a run of load stops on a parserLoaded, even one a thread posts after it was stopped, and arms no clock with it', async () => {

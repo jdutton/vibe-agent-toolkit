@@ -30,7 +30,7 @@ import { parseFrontmatter } from './parsers/frontmatter-parser.js';
  * "declares no name", and none has established that — a caller falling back to
  * the directory leaf would otherwise rename the skill on the operator's behalf.
  *
- * `route` is required (`{}` for a one-off read), as on every parse lane: a caller
+ * `route` is required (`{ dispatcher: undefined }` for a one-off read), as on every parse lane: a caller
  * that holds the run's dispatcher states it, never drops it by omission.
  */
 export async function readDeclaredSkillName(skillMdPath: string, route: ParseRoute): Promise<string | undefined> {

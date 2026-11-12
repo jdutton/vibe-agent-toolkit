@@ -240,8 +240,8 @@ const DEATHS_BEFORE_UNAVAILABLE = 3;
  * How late past its scheduled time a deadline may fire and still have its stop
  * count toward {@link DEATHS_BEFORE_UNAVAILABLE}: one heap-sample interval.
  *
- * A thread stopped at its load clock (see `JobClock`) is counted as a death
- * on the inference that the parser had the whole of `timeMs` to load and did
+ * A thread stopped at its load clock (see `JobClock`) is counted toward its
+ * parser kind's load-stop run on the inference that the parser had the whole of `timeMs` to load and did
  * not. A parent whose own timer fires late was itself blocked or starved for
  * that long — synchronous work, or a host too loaded to schedule it — and the
  * same load may have starved the thread it is judging, so the inference fails.
@@ -456,8 +456,9 @@ export interface ParseWorkerReady {
   ready: true;
   /**
    * Whether the thread has a full collection to settle its heap with before a reused job
-   * (`parse-collector.ts`). A runtime that refuses it is told once per process: a reused thread past
-   * its bound is retired rather than collected, a thread start where a collection would do.
+   * (`parse-collector.ts`, whose Residual section says why a thread can be left without one). A
+   * thread without one is warned once per loaded copy of VAT: a reused thread past its bound is
+   * retired rather than collected, a thread start where a collection would do.
    */
   collector: boolean;
 }
@@ -907,7 +908,7 @@ interface PoolWorker {
   ready: boolean;
   /**
    * The parser kinds that have loaded on this thread ({@link ParseWorkerParserLoaded}):
-   * a time breach on a job whose kind is not here is counted as a death.
+   * a time breach on a job whose kind is not here is counted toward its parser kind's load-stop run.
    */
   parsersLoaded: Set<ParserModuleKind>;
   /**
@@ -1298,7 +1299,8 @@ class WorkerParsePool implements ParsePool {
    * A job's thread passed its heap bound. On the job's parse clock that is the document's refusal;
    * on its load clock no parser has run over the document's bytes yet (the sampler runs from
    * dispatch), so it is the thread's, charged as a load stop ({@link #chargeLoadStop}) and counted
-   * toward its parser kind's run unless the thread was in its heap check.
+   * toward its parser kind's run. Never one in a reused thread's heap check: its job is sampled only
+   * once the check has kept the thread (`#afterReuseCheck`).
    *
    * @param poolWorker - The thread
    * @param job - Its job
@@ -1310,9 +1312,8 @@ class WorkerParsePool implements ParsePool {
       this.#terminate(poolWorker, refusal);
       return;
     }
-    const heapCheck = this.#inHeapCheck(poolWorker, job);
     const stop = new Error(`a parse thread's heap passed its bound before the ${moduleKindOf(job.request)} parser loaded`, { cause: refusal });
-    this.#chargeLoadStop(poolWorker, job, stop, `before its heap passed ${String(appliedMb)} MiB`, !heapCheck);
+    this.#chargeLoadStop(poolWorker, job, stop, `before its heap passed ${String(appliedMb)} MiB`, true);
   }
 
   /**
@@ -1680,11 +1681,11 @@ class WorkerParsePool implements ParsePool {
       }
       return;
     }
-    // A thread the pool is done with — stopped at a limit, counted dead, or closing — holds no job
-    // of this pool, and nothing else it says is bookkeeping any more: an answer it posted is for a
-    // job already settled or queued again, which the id check below would drop too.
-    if (poolWorker.retired) return;
     if ('ready' in response) {
+      // A thread the pool is done with — stopped at a limit, counted dead, or closing — is past
+      // being ready. Its answers need no such guard: every retirement leaves it holding no job, so
+      // the id check below drops them.
+      if (poolWorker.retired) return;
       poolWorker.ready = true;
       if (!response.collector) warnNoCollector();
       return;
@@ -1723,11 +1724,10 @@ class WorkerParsePool implements ParsePool {
     // sound, so a run of stops waiting for that parser is over. That is load evidence only: a
     // retired thread is never credited with an answer.
     this.#loadStopRuns.delete(loaded.parserLoaded);
-    // A thread the pool is done with holds no job of this pool: nothing it says arms a clock.
-    if (poolWorker.retired) return;
     poolWorker.parsersLoaded.add(loaded.parserLoaded);
     const held = poolWorker.job;
-    // The document's own clock starts now, for the job the parser loaded for: see JobClock.
+    // The document's own clock starts now, for the job the parser loaded for: see JobClock. A
+    // thread the pool is done with holds no job, so nothing it says arms a clock.
     if (held?.request.id === loaded.id && held.clock === 'load' && moduleKindOf(held.request) === loaded.parserLoaded) {
       this.#armClock(poolWorker, held, 'parse');
     }
@@ -1814,19 +1814,20 @@ class WorkerParsePool implements ParsePool {
   }
 }
 
-/** Set once this process has been told its parse threads have no full collection. */
+/** Set once this copy of VAT has told its process its parse threads have no full collection. */
 let warnedNoCollector = false;
 
 /**
- * Tell the process, once, that this runtime refused its parse threads a full collection
- * ({@link ParseWorkerReady.collector}): a reused thread past its bound is then replaced rather than
+ * Tell the process, once per loaded copy of VAT, that its parse threads got no full collection
+ * ({@link ParseWorkerReady.collector}) — why a thread can be left without one is the Residual
+ * section of `parse-collector.ts`: a reused thread past its bound is then replaced rather than
  * collected.
  */
 function warnNoCollector(): void {
   if (warnedNoCollector) return;
   warnedNoCollector = true;
   process.emitWarning(
-    'parse threads have no full collection on this runtime (it refused V8\'s --expose-gc): a reused thread past its bound is replaced instead of collected',
+    'parse threads have no full collection (V8\'s --expose-gc was refused or cleared while a thread set it up): a reused thread past its bound is replaced instead of collected',
     { code: 'VAT_PARSE_NO_COLLECTOR' },
   );
 }

@@ -18,6 +18,7 @@
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { Worker } from 'node:worker_threads';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, vi } from 'vitest';
@@ -25,9 +26,10 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   type ParseLimitName,
   isParseLimitError,
+  MIN_HEAP_MB,
   resolveParseLimits,
 } from '../../src/parse-limits.js';
-import type { ParsePool } from '../../src/parse-pool.js';
+import { __closeParkedParseWorkersForTest, createParsePool, type ParsePool } from '../../src/parse-pool.js';
 import {
   deeplyNestedList,
   deeplyNestedQuote,
@@ -444,8 +446,51 @@ describe('a heap breach while the parent thread stalls', () => {
 
     expect(outcome.status).toBe(0);
     expect(outcome.limit).toBe('heapMb');
-    expect(outcome.bound).toMatch(/^V8's own heap ceiling, reached before the pool's heap sampler read it: .*, unless a process-wide --max-old-space-size set it instead$/);
+    expect(outcome.bound).toMatch(/^V8's own heap ceiling, reached before the pool's heap sampler read it: .*, unless a process-wide V8 heap flag \(--max-old-space-size, --max-heap-size or --max-semi-space-size\) set it instead$/);
     expect(outcome.bound).not.toContain('256 MiB');
+  });
+});
+
+describe('the least heapMb a caller may configure', () => {
+  it('is more than a fresh thread really holds once it has loaded both parsers', async () => {
+    // MIN_HEAP_MB is a measurement's margin: on a runtime whose thread loads its parsers in more,
+    // the least bound a caller may name could not load one. Measured on the thread that parsed,
+    // through the pool, after a markdown and an HTML parse.
+    await __closeParkedParseWorkersForTest();
+    const threads = new Set<Worker>();
+    const post = Worker.prototype.postMessage;
+    const spy = vi.spyOn(Worker.prototype, 'postMessage').mockImplementation(function (this: Worker, ...args: Parameters<Worker['postMessage']>) {
+      threads.add(this);
+      post.apply(this, args);
+    });
+    const pool = createParsePool({ size: 1 });
+
+    try {
+      await pool.parse('markdown', '# loaded\n', 9);
+      await pool.parse('html', '<p>loaded</p>', 13);
+      expect(threads.size).toBe(1);
+      const [thread] = threads;
+      const heap = await thread?.getHeapStatistics();
+
+      const usedMb = (heap?.used_heap_size ?? 0) / (1024 * 1024);
+
+      expect(usedMb).toBeGreaterThan(0);
+      expect(usedMb).toBeLessThan(MIN_HEAP_MB);
+    } finally {
+      spy.mockRestore();
+      await pool.shutdown();
+    }
+  });
+
+  it('is a bound a pool loads and runs both parsers under', async () => {
+    const pool = createParsePool({ size: 1, limits: { heapMb: MIN_HEAP_MB } });
+
+    try {
+      await expect(pool.parse('markdown', '# minimum\n', 10)).resolves.toMatchObject({ sizeBytes: 10 });
+      await expect(pool.parse('html', '<p>minimum</p>', 14)).resolves.toMatchObject({ sizeBytes: 14 });
+    } finally {
+      await pool.shutdown();
+    }
   });
 });
 

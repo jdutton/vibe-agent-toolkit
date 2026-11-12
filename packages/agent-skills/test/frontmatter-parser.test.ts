@@ -1,4 +1,4 @@
-import { inMemoryContent, isParseLimitError, parseContentCached } from '@vibe-agent-toolkit/resources';
+import { inMemoryContent, isParseLimitError, parseContentCached, withParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { describe, it, expect } from 'vitest';
 
 import { parseFrontmatter } from '../src/parsers/frontmatter-parser.js';
@@ -204,6 +204,19 @@ describe('content past the parse input cap', () => {
     ['parseContentCached', async (): Promise<unknown> => parseContentCached(OVERSIZE, 'markdown', { dispatcher: undefined })],
   ])('is refused whole by %s, never parsed in part', async (_name, run) => {
     const refusal = await run().then(() => undefined, (error: unknown) => error);
+
+    expect(isParseLimitError(refusal) && refusal.limit).toBe('inputBytes');
+  });
+
+  it('is measured in its UTF-8 bytes, not its characters: text under the cap in length and past it in bytes is refused', async () => {
+    // Two UTF-8 bytes a character: half the cap in characters, past the default cap in bytes.
+    const cap = await withParseDispatcher((dispatcher) => Promise.resolve(dispatcher.inputBytes));
+    const head = createFrontmatter({ name: 'wide', description: 'Past the cap in bytes' });
+    const body = '\u00E9'.repeat(Math.floor((cap - Buffer.byteLength(head, 'utf8')) / 2) + 1);
+    const wide = `${head}${body}`;
+    expect(wide.length).toBeLessThan(cap);
+
+    const refusal = await declaredSkillNameIn(inMemoryContent(wide), { dispatcher: undefined }).then(() => undefined, (error: unknown) => error);
 
     expect(isParseLimitError(refusal) && refusal.limit).toBe('inputBytes');
   });

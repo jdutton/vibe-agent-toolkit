@@ -85,8 +85,13 @@
       "outputs": [],
       "cache": true
     },
+    // `docs/validation-codes.md` is read by unit suites in more than one package
+    // (schema's emitted-codes check, agent-skills' doc suite, cli's fs-fault
+    // refusals): an edit to it must not replay any package's cached pass. Every
+    // per-package `test:unit` override below keeps these inputs as a superset.
     "test:unit": {
       "dependsOn": ["^build", "build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/docs/validation-codes.md"],
       "outputs": [],
       "cache": true
     },
@@ -153,9 +158,20 @@
     // edit cold for every task. The scan of every package's test tree for reads of
     // built output runs in the integration tier and in validate-structure, not here,
     // so no package's test tree is an input of this task.
+    // schema: `emitted-codes-documented.test.ts` collects every `code:` literal
+    // under every package's `src/` and requires each in `docs/validation-codes.md`,
+    // and the registry ↔ doc suites read that doc too. Without these inputs a new
+    // emitted code in another package replayed schema's cached pass locally and
+    // was caught only by CI's cold run.
+    "@vibe-agent-toolkit/schema#test:unit": {
+      "dependsOn": ["^build", "build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/*/src/**", "$TURBO_ROOT$/docs/validation-codes.md"],
+      "outputs": [],
+      "cache": true
+    },
     "@vibe-agent-toolkit/dev-tools#test:unit": {
       "dependsOn": ["^build", "build"],
-      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/*/vitest.integration.config.ts", "$TURBO_ROOT$/packages/*/vitest.system.config.ts", "$TURBO_ROOT$/packages/*/package.json"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/docs/validation-codes.md", "$TURBO_ROOT$/packages/*/vitest.integration.config.ts", "$TURBO_ROOT$/packages/*/vitest.system.config.ts", "$TURBO_ROOT$/packages/*/package.json"],
       "outputs": [],
       "cache": true
     },
@@ -182,6 +198,7 @@
     },
     "@vibe-agent-toolkit/lab#test:unit": {
       "dependsOn": ["^build", "build", "@vibe-agent-toolkit/cli#build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/docs/validation-codes.md"],
       "outputs": [],
       "cache": true
     },

@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, inject, it } from 'vitest';
 
 const BUILT_POOL = pathToFileURL(safePath.resolve(import.meta.dirname, '..', '..', 'dist', 'parse-pool.js')).href;
 const BUILT_COLLECTOR = pathToFileURL(safePath.resolve(import.meta.dirname, '..', '..', 'dist', 'parse-collector.js')).href;
@@ -27,9 +27,11 @@ function runChild(script: string): Record<string, unknown> {
   writeFileSync(entry, script, 'utf-8');
   const env = { ...process.env };
   delete env['NODE_OPTIONS'];
-  const child = spawnSync(process.execPath, [entry], { env, encoding: 'utf-8' });
+  // `spawnSync` blocks the loop the test's own timeout runs on, so a hung child is bounded here.
+  const child = spawnSync(process.execPath, [entry], { env, encoding: 'utf-8', timeout: inject('tierTestTimeout') });
   rmSync(directory, { recursive: true, force: true });
 
+  expect(child.signal, 'the child was killed, hung past the tier timeout').toBeNull();
   expect(child.stderr).toBe('');
   expect(child.status).toBe(0);
   return JSON.parse(child.stdout) as Record<string, unknown>;
