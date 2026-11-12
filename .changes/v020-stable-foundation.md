@@ -1173,7 +1173,11 @@
   a symlink, for every source kind (path, npm, vendored, workspace, url). An absent or unreadable
   source tree is a classified `FsFaultError`.
 - `openForReading` (`@vibe-agent-toolkit/utils/fs`): open a file for reading without ever blocking on
-  it — a named pipe, socket or device is refused (`EFTYPE`).
+  it — a named pipe, socket or device is refused (`EFTYPE`, which `fsFaultOf` classifies).
+- `readDecodableBytes(path, refuseBySize)`, `readTextContent` and `readTextContentSync`
+  (`@vibe-agent-toolkit/utils/fs`) read through it. `refuseBySize` is required: it is called with the
+  file's `fstat` size before a byte is read — throw from it to refuse the file, `() => undefined` for
+  no bound beyond the decodable one.
 
 - **`locateSkillSource(source, repoRoot)` (`@vibe-agent-toolkit/agent-skills`)** finds a `{ path }`
   or `{ npm }` skill source on disk without staging it. It throws `ASSET_REFERENCE_UNRESOLVED` when
@@ -1712,12 +1716,8 @@
 - **A named pipe, socket or device linked from a SKILL.md** no longer hangs `vat skills package` or
   `vat skills build`, and is no longer dropped from the package silently (status `ok`, a dangling
   link). The validator refuses it unread as a `LINK_TARGET_UNREADABLE` error (exit 1), with a remedy
-  that names the file type rather than permissions. Underneath, `readDecodableBytes(path,
-  refuseBySize)` — its required size check called with the file's `fstat` size before a byte is read
-  (throw from it to refuse the file; `() => undefined` for no bound beyond the decodable one) — and
-  `readTextContent` / `readTextContentSync` (`@vibe-agent-toolkit/utils/fs`) open without blocking and
-  refuse a non-regular file with the errno `EFTYPE`, which `fsFaultOf` now classifies —
-  so every lane that parses a file codes it as that lane's unreadable input instead of waiting forever.
+  that names the file type rather than permissions. Every lane that parses a file codes such a file
+  as that lane's unreadable input instead of waiting forever.
 - **`vat skill test run --with name=path:<dir>` with a symlink in the companion** is
   `INPUT_UNREADABLE` (`Reason: preflight`), naming the link. It was `INTERNAL_ERROR` with a stack.
 - **A `path:` skill source that does not exist** is refused saying it does not exist and to check

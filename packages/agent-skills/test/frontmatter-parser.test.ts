@@ -1,4 +1,4 @@
-import { isParseLimitError, parseContentCached } from '@vibe-agent-toolkit/resources';
+import { inMemoryContent, isParseLimitError, parseContentCached } from '@vibe-agent-toolkit/resources';
 import { describe, it, expect } from 'vitest';
 
 import { parseFrontmatter } from '../src/parsers/frontmatter-parser.js';
@@ -17,7 +17,7 @@ describe('parseFrontmatter', () => {
       '# Content here',
     );
 
-    const result = await parseFrontmatter(content, ROUTE);
+    const result = await parseFrontmatter(inMemoryContent(content), ROUTE);
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -30,7 +30,7 @@ describe('parseFrontmatter', () => {
   it('should handle frontmatter with no trailing content', async () => {
     const content = createFrontmatter({ name: 'my-skill', description: 'Test' });
 
-    const result = await parseFrontmatter(content, ROUTE);
+    const result = await parseFrontmatter(inMemoryContent(content), ROUTE);
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -48,7 +48,7 @@ describe('parseFrontmatter', () => {
       },
     });
 
-    const result = await parseFrontmatter(content, ROUTE);
+    const result = await parseFrontmatter(inMemoryContent(content), ROUTE);
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -62,7 +62,7 @@ describe('parseFrontmatter', () => {
   it('should return error if no frontmatter delimiters', async () => {
     const content = `# Just content, no frontmatter`;
 
-    const result = await parseFrontmatter(content, ROUTE);
+    const result = await parseFrontmatter(inMemoryContent(content), ROUTE);
 
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -78,7 +78,7 @@ name: my-skill
 description: Test
 ---`;
 
-    const result = await parseFrontmatter(content, ROUTE);
+    const result = await parseFrontmatter(inMemoryContent(content), ROUTE);
 
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -91,7 +91,7 @@ description: Test
 name: my-skill
 description: Test`;
 
-    const result = await parseFrontmatter(content, ROUTE);
+    const result = await parseFrontmatter(inMemoryContent(content), ROUTE);
 
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -105,7 +105,7 @@ name: my-skill
 description: [unclosed array
 ---`;
 
-    const result = await parseFrontmatter(content, ROUTE);
+    const result = await parseFrontmatter(inMemoryContent(content), ROUTE);
 
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -116,7 +116,7 @@ description: [unclosed array
   it('should handle Windows line endings', async () => {
     const content = `---\r\nname: my-skill\r\ndescription: Test\r\n---\r\nBody`;
 
-    const result = await parseFrontmatter(content, ROUTE);
+    const result = await parseFrontmatter(inMemoryContent(content), ROUTE);
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -140,7 +140,7 @@ description: [unclosed array
  */
 /** The refusal of `block`, fenced as a document's frontmatter; fails the test if it was admitted. */
 async function refusalOf(block: string): Promise<{ error: string; cause: unknown }> {
-  const result = await parseFrontmatter(`---\n${block}\n---\n# body\n`, ROUTE);
+  const result = await parseFrontmatter(inMemoryContent(`---\n${block}\n---\n# body\n`), ROUTE);
   if (result.success) throw new Error(`expected a refusal, got ${JSON.stringify(result.frontmatter)}`);
   return result;
 }
@@ -183,7 +183,7 @@ describe('parseFrontmatter — a block that is not a YAML mapping', () => {
 
   // The control: a mapping with zero interesting keys is still a mapping.
   it('still accepts a mapping', async () => {
-    const result = await parseFrontmatter('---\nname: x\n---\n', ROUTE);
+    const result = await parseFrontmatter(inMemoryContent('---\nname: x\n---\n'), ROUTE);
     expect(result.success).toBe(true);
   });
 });
@@ -195,13 +195,13 @@ describe('content past the parse input cap', () => {
 
   it.each([
     ['parseFrontmatter', async (): Promise<unknown> => {
-      const result = await parseFrontmatter(OVERSIZE, {});
+      const result = await parseFrontmatter(inMemoryContent(OVERSIZE), { dispatcher: undefined });
       if (result.success) return 'parsed';
       throw result.cause;
     }],
-    ['detectorFrontmatter', async (): Promise<unknown> => detectorFrontmatter(OVERSIZE, {})],
-    ['declaredSkillNameIn', async (): Promise<unknown> => declaredSkillNameIn(OVERSIZE, {})],
-    ['parseContentCached', async (): Promise<unknown> => parseContentCached(OVERSIZE, 'markdown', {})],
+    ['detectorFrontmatter', async (): Promise<unknown> => detectorFrontmatter(inMemoryContent(OVERSIZE), { dispatcher: undefined })],
+    ['declaredSkillNameIn', async (): Promise<unknown> => declaredSkillNameIn(inMemoryContent(OVERSIZE), { dispatcher: undefined })],
+    ['parseContentCached', async (): Promise<unknown> => parseContentCached(OVERSIZE, 'markdown', { dispatcher: undefined })],
   ])('is refused whole by %s, never parsed in part', async (_name, run) => {
     const refusal = await run().then(() => undefined, (error: unknown) => error);
 

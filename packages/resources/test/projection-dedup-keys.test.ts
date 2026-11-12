@@ -135,7 +135,7 @@ function fixture<Name extends ProjectionTableName>(
     alt: asRecord(alt),
     probeColumns: [],
     rowsAfterPair(overrides: RowRecord): number {
-      const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache({ inputBytes: null }) });
+      const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() });
       add(builder, base);
       add(builder, { ...base, ...overrides } as ProjectionRow<Name>);
       return builder.build()[name].length;

@@ -126,6 +126,8 @@ import {
   writeTimingDump,
 } from '@vibe-agent-toolkit/utils';
 
+import type { ReuseCheck } from './parse-limits.js';
+
 /**
  * The passes the instrumented parsers are bracketed at, as array indices.
  *
@@ -781,15 +783,9 @@ function chargeTierPass(pass: TierPassSlot, elapsedMs: number): void {
  * parent as the report arrives, so a thread terminated later — one this check retired, above all
  * — is still counted, where its own counters would never reach a dump.
  *
- * @param check - The thread's report: the used heap it settled to, in bytes, its collection's and
- *   its whole check's time, in ms, and whether it retires
+ * @param check - The thread's report ({@link ReuseCheck})
  */
-export function recordReuseCheck(check: {
-  readonly usedBytes: number;
-  readonly collectMs: number | null;
-  readonly checkMs: number;
-  readonly retire: boolean;
-}): void {
+export function recordReuseCheck(check: ReuseCheck): void {
   if (!timingEnabled) return;
   chargeTierPass(TierPass.ReuseCheck, check.checkMs);
   if (check.collectMs !== null) chargeTierPass(TierPass.ReuseCollect, check.collectMs);

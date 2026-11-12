@@ -351,7 +351,7 @@ async function addBlobReferences(
  * restate `merge.ts`'s `mergeContribution` without changing any answer here.
  */
 async function populatedBase(root: string): Promise<ProjectionBase> {
-  const builder = new ProjectionBuilder({ root, contentCache: new RunContentCache({ inputBytes: null }) });
+  const builder = new ProjectionBuilder({ root, contentCache: new RunContentCache() });
   builder.addRoot({ id: builder.identities.rootId, path: safePath.resolve(root) });
 
   const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(builder.base(), null);

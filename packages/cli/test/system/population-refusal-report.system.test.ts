@@ -431,7 +431,7 @@ describe('a link anchor into a refused file (system test)', () => {
     const unverified = report.findings.filter((finding) => finding.code === 'LINK_TARGET_UNREADABLE');
 
     expect(unverified, stderr).toStrictEqual([expect.objectContaining({ severity: 'error', location: 'docs/a.md' })]);
-    expect(unverified[0]?.message).toContain('its parse was refused (its parse was stopped at its outputDepth limit');
+    expect(unverified[0]?.message).toMatch(/its parse was stopped at its outputDepth limit \([^)]*\), so its anchors are unverified/);
     expect(unverified[0]?.message).toContain('its anchors are unverified');
     expect(status).toBe(1);
   });

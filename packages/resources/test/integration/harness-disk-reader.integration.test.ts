@@ -38,27 +38,30 @@ describe('diskHarnessContentReader', () => {
     for (const directory of made.splice(0)) rmSync(directory, { recursive: true, force: true });
   });
 
-  it('reads the bytes while they still key to the blob', async () => {
+  it('reads the bytes while they still key to the blob, measured in them', async () => {
     const { entry } = entryFor(WIDGETS);
-    await expect(diskHarnessContentReader(new RunContentCache({ inputBytes: null }))(entry)).resolves.toBe(WIDGETS);
+    await expect(diskHarnessContentReader(new RunContentCache())(entry)).resolves.toMatchObject({
+      content: WIDGETS,
+      byteLength: Buffer.byteLength(WIDGETS, 'utf8'),
+    });
   });
 
   it('answers null when the bytes no longer key to the blob', async () => {
     const { absolutePath, entry } = entryFor(WIDGETS);
     writeFileSync(absolutePath, '# rewritten\n', 'utf-8');
-    await expect(diskHarnessContentReader(new RunContentCache({ inputBytes: null }))(entry)).resolves.toBeNull();
+    await expect(diskHarnessContentReader(new RunContentCache())(entry)).resolves.toBeNull();
   });
 
   it('answers null when the file is gone', async () => {
     const { absolutePath, entry } = entryFor(WIDGETS);
     rmSync(absolutePath);
-    await expect(diskHarnessContentReader(new RunContentCache({ inputBytes: null }))(entry)).resolves.toBeNull();
+    await expect(diskHarnessContentReader(new RunContentCache())(entry)).resolves.toBeNull();
   });
 
   it('rethrows a failure that is not an absence', async () => {
     const { absolutePath, entry } = entryFor(WIDGETS);
     rmSync(absolutePath);
     mkdirSyncReal(absolutePath);
-    await expect(diskHarnessContentReader(new RunContentCache({ inputBytes: null }))(entry)).rejects.toThrow();
+    await expect(diskHarnessContentReader(new RunContentCache())(entry)).rejects.toThrow();
   });
 });

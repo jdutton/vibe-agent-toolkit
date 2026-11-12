@@ -11,7 +11,7 @@
  * a path, so every lane answers the question the same way.
  */
 
-import { isPerRunParseRefusal, type ParseRoute, readContentForParse } from '@vibe-agent-toolkit/resources';
+import { isPerRunParseRefusal, type MeasuredContent, type ParseRoute, readContentForParse } from '@vibe-agent-toolkit/resources';
 import { isPathAbsentError } from '@vibe-agent-toolkit/utils';
 
 import { parseFrontmatter } from './parsers/frontmatter-parser.js';
@@ -34,14 +34,14 @@ import { parseFrontmatter } from './parsers/frontmatter-parser.js';
  * that holds the run's dispatcher states it, never drops it by omission.
  */
 export async function readDeclaredSkillName(skillMdPath: string, route: ParseRoute): Promise<string | undefined> {
-  let content: string;
+  let read: MeasuredContent;
   try {
-    ({ content } = await readContentForParse(skillMdPath, 'markdown', route));
+    read = await readContentForParse(skillMdPath, 'markdown', route);
   } catch (error) {
     if (isPathAbsentError(error)) return undefined;
     throw error;
   }
-  return declaredSkillNameIn(content, route);
+  return declaredSkillNameIn(read, route);
 }
 
 /**
@@ -53,8 +53,8 @@ export async function readDeclaredSkillName(skillMdPath: string, route: ParseRou
  * second parse beside it: two spellings of "what name does this declare" is
  * exactly how one lane starts answering differently from another.
  */
-export async function declaredSkillNameIn(content: string, route: ParseRoute): Promise<string | undefined> {
-  const parsed = await parseFrontmatter(content, route);
+export async function declaredSkillNameIn(input: MeasuredContent, route: ParseRoute): Promise<string | undefined> {
+  const parsed = await parseFrontmatter(input, route);
   if (!parsed.success) {
     // Refused for this run is not "declares no name": thrown, never a fallback.
     if (isPerRunParseRefusal(parsed.cause)) throw parsed.cause;

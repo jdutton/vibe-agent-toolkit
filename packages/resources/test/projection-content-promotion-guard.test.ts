@@ -121,7 +121,7 @@ async function plantIgnoredTree(): Promise<GitTracker> {
  * @returns A builder holding the filesystem extent's realizations
  */
 async function baseStratum(tracker: GitTracker): Promise<ProjectionBuilder> {
-  const builder = new ProjectionBuilder({ root: suite.tempDir, gitTracker: tracker, contentCache: new RunContentCache({ inputBytes: null }) });
+  const builder = new ProjectionBuilder({ root: suite.tempDir, gitTracker: tracker, contentCache: new RunContentCache() });
   const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(builder.base(), null);
   for (const row of contribution.realizations) {
     builder.addRealization(row);

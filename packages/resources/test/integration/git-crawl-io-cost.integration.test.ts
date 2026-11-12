@@ -254,7 +254,7 @@ function driverSource(mode: DriverMode): string {
     "} else if (mode === 'extent') {",
     '  const tracker = new GitTracker(root);',
     '  await tracker.initialize({ includeUntracked: true });',
-    '  const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache({ inputBytes: null }) });',
+    '  const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache() });',
     "  const contributor = new FilesystemExtentContributor((r) => new GitCrawlSource(r, []), DEFAULT_CONTENT_DEMAND);",
     '  paths = (await contributor.contribute(builder.base(), null)).realizations.length;',
     '}',

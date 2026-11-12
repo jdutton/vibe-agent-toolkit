@@ -339,12 +339,14 @@ const result = VATAgentSkillFrontmatterSchema.safeParse(frontmatter);
 **Additional Requirements:**
 - `metadata.version` - Semantic version (required for VAT)
 
-### parseFrontmatter(content, route): Promise&lt;FrontmatterResult&gt;
+### parseFrontmatter(input, route): Promise&lt;FrontmatterResult&gt;
 
 Parse YAML frontmatter from SKILL.md content, in the bounded parse worker. `route` is required:
-`{ dispatcher }` inside a run that holds one (`withParseDispatcher`), `{}` for a single read.
-Content past the route's parse input cap is refused whole (`cause` is a `ParseLimitError`); read
-a file with `readContentForParse`, which refuses one past the cap by its size before reading it.
+`{ dispatcher }` inside a run that holds one (`withParseDispatcher`), `{ dispatcher: undefined }` for a single read.
+`input` is the content with the size of the bytes it came from: a file read with
+`readContentForParse` (which refuses one past the route's parse input cap by its size before
+reading it), or `inMemoryContent(text)` for text you hold. Content past the cap is refused whole
+(`cause` is a `ParseLimitError`).
 
 **Example:**
 ```typescript
@@ -352,8 +354,8 @@ import { parseFrontmatter } from '@vibe-agent-toolkit/agent-skills';
 import { readContentForParse } from '@vibe-agent-toolkit/resources';
 
 const route = {};
-const { content } = await readContentForParse('/abs/path/to/SKILL.md', 'markdown', route);
-const result = await parseFrontmatter(content, route);
+const read = await readContentForParse('/abs/path/to/SKILL.md', 'markdown', route);
+const result = await parseFrontmatter(read, route);
 
 if (result.success) {
   console.log('Frontmatter:', result.frontmatter);

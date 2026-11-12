@@ -31,8 +31,9 @@
   is "not a YAML mapping" (`SKILL_MISSING_FRONTMATTER`), where it used to pass as an empty mapping;
   an empty block is refused as empty.
 - **`parseMarkdown` and `parseHtml` are deleted from `@vibe-agent-toolkit/resources`; every parse
-  is asynchronous and runs in a bounded worker.** Use `parseFileCached(path, kind, route?)`, or
-  `parseContentCached(content, kind, route?)` for text you hold: each reads the parse cache and, on
+  is asynchronous and runs in a bounded worker.** Use `parseFileCached(path, kind, route)`, or
+  `parseContentCached(content, kind, route)` for text you hold, the route required —
+  `{ dispatcher: undefined }` for the default route: each reads the parse cache and, on
   a miss, parses in a worker under the default limits — through the `ParseDispatcher` you pass as
   `route.dispatcher` (open one with `withParseDispatcher(work)`, which shuts it down) when you
   parse many documents, or a one-thread pool started and shut down for that call. A document over a
@@ -46,25 +47,32 @@
   `frontmatterNotAMapping: true` instead, and a `ParseResult` assembled without the flag is read as
   a block that declares nothing.
 - **`@vibe-agent-toolkit/agent-skills` frontmatter readers are asynchronous and take a route,
-  required.** `parseFrontmatter(content, route)` and `readDeclaredSkillName(path, route)` return
-  promises; pass `{ dispatcher }` inside a run, `{}` for one read;
+  required.** `parseFrontmatter(input, route)` and `readDeclaredSkillName(path, route)` return
+  promises; pass `{ dispatcher }` inside a run, `{ dispatcher: undefined }` for one read. `parseFrontmatter` takes the
+  content with the size of the bytes it came from: pass `readContentForParse`'s result for a file,
+  `inMemoryContent(text)` for text you hold.
   `parseFrontmatter` takes its value from the worker's decode, so a cyclic anchor or a block nested
   past `outputDepth` is refused there exactly as the crawl refuses it, and its "not a YAML mapping"
   message no longer names the decoded type. `readDeclaredSkillName` throws the refusal for a
   `SKILL.md` whose parse was refused, or one past the input cap, rather than answering "declares no
   name". `FrontmatterError.cause` is required.
   `runCompatDetectors(content, filePath, locationRoot, frontmatter)` takes the frontmatter the
-  caller parsed once (from the new `detectorFrontmatter(content, route)`) and stays synchronous.
+  caller parsed once (from the new `detectorFrontmatter(input, route)`) and stays synchronous.
 - **Every skill validation lane takes the project's `resources.validation` from its caller, as a
   required field** (`{}` where no project config governs the run): `validateSkillForPackaging(
   skillPath, resourcesValidation, packagingConfig?, context?, shared?)` takes it as its new second
   argument, and `ValidateOptions.resourcesValidation` (`validateSkill`) is required. The packager
   takes no such field: it refuses a refused file whatever the config.
+- **`@vibe-agent-toolkit/agent-skills` skill validation takes the run's parse dispatcher, as a
+  required field.** Set `dispatcher` on `ValidateOptions` (`validateSkill`) and on
+  `SkillValidationSharedContext`: the run's `ParseDispatcher`, or `undefined` for the validation to
+  open one of its own.
 - **`@vibe-agent-toolkit/claude-marketplace` compatibility checks take the run's parse
   dispatcher, required.** `analyzeCompatibility(pluginDir, locationRoot, dispatcher, options?)` and
   `checkSettingsCompatibility(pluginDir, effectiveSettings, dispatcher)` no longer open a worker
   pool per plugin: open one with `withParseDispatcher` around the run and pass it to each call. A
-  plugin manifest with no `name` is a `SyntaxError`.
+  plugin manifest with no `name` is a `SyntaxError`. A markdown file past the parse input cap is
+  listed under `unchecked` (in `vat audit --compat` too), naming the limit.
 - **`@vibe-agent-toolkit/rag-lancedb` `indexResources` parses nothing.** It trusts each resource's
   facts as the registry derived them and reads only its text, so a resource's `checksum` must be
   `calculateChecksumFromContent` of that text (a mismatch is the resource's error and nothing is
@@ -111,7 +119,11 @@
     `SKILL.md` for its frontmatter (`readContentForParse`, under the run's dispatcher's cap). The
     refusal names the cap and no size. Content handed over already in memory is refused whole by its
     UTF-8 byte length at the same cap — a frontmatter read included, never cut down to a block that
-    fits. On the projection lane it is a realization with `contentState: 'oversize'` and no blob, and
+    fits — and a ZIP entry's `SKILL.md` (`vat claude org skills install`) by its own bytes: its
+    declared size, before it is inflated. Re-reads that hand nothing to a parser are not held to the
+    cap: the skill validator's compat-detector re-read of a linked file it already parsed and its
+    implicit-reference scan, the packager's link read-back of packaged markdown, and the
+    compatibility analyzer's Python import scan. On the projection lane it is a realization with `contentState: 'oversize'` and no blob, and
     every verb reports it as `RESOURCE_PARSE_LIMIT_EXCEEDED`.
   - **Time.** `timeMs` counts only a document's own parse; a slow thread start or parser load never
     refuses the document. A document ends within about four `timeMs`.
@@ -130,7 +142,7 @@
     process-wide `--max-old-space-size`, `--max-semi-space-size` or `--max-heap-size` that lowers
     V8's ceiling lowers the bound with it (96 MiB under a 128 MiB old space on Node 26), and the
     refusal names the bound that applied. A runtime that refuses V8's `--expose-gc` is warned once
-    (`VAT_PARSE_NO_COLLECTOR`); its reused threads are replaced only at their heap stop.
+    (`VAT_PARSE_NO_COLLECTOR`); a reused thread past its bound is then replaced, not collected.
   - **Frontmatter** counts against `outputRows`, `outputBytes` and `outputDepth` as what the store
     writes for it. `outputDepth` (default 1,000, and never above it) refuses frontmatter nested
     deeper than the projection can query, and a cyclic anchor.
@@ -170,9 +182,11 @@
   anything is written, so the run writes one document.
 - **API.** `@vibe-agent-toolkit/resources`: `ParseLimitError`, `ParseWorkerDiedError`,
   `isParseLimitError`, `isParseWorkerDiedError`, `ParseLimits`, `ParserUnavailableError`,
-  `parseFileCached`, `parseContentCached`, `readContentForParse`, `parseInputBytesOf`,
+  `parseFileCached`, `parseContentCached` (each taking a required route), `readContentForParse`,
+  `parseInputRefusal`, `MeasuredContent` / `inMemoryContent`,
   `ParseDispatcher` (its `inputBytes` the cap it runs under), `withParseDispatcher`,
-  `readContentWithKey`, `readKeyedContent`, `RunContentCache`, `calculateChecksumFromContent`, `ResourceRegistry.getParseRefusedResources()`
+  `readContentWithKey`, `readKeyedContent`, `RunContentCache` (taking no options: its reads are held to the population's
+  own input cap), `calculateChecksumFromContent`, `ResourceRegistry.getParseRefusedResources()`
   (`ParseRefusedResource`, carrying `code` and `reason`) and the not-admitted contract
   (`ResourceRegistry.getNotAdmitted()`, `notAdmittedIssues`, `notAdmittedFindings`,
   `notAdmittedInScope`, `notAdmittedCount`, `notAdmittedRealizations`, `resolveNotAdmittedAmong`,
@@ -181,9 +195,7 @@
   `isPlainMapping`), and the `./parse-conformance` subpath for testing a parser implementation.
   `@vibe-agent-toolkit/schema`: `resolveFindings`, the one finding resolver.
   `@vibe-agent-toolkit/agent-skills`: `declaredSkillNameIn`, `detectorFrontmatter`,
-  `parseRefusalIssue`, `refusedAmong`, `SKILL_REACHED_REFUSAL_CONSEQUENCE`, and a required
-  `dispatcher` on `ValidateOptions` and `SkillValidationSharedContext` (`undefined` for one of the
-  validation's own).
+  `parseRefusalIssue`, `refusedAmong`, `SKILL_REACHED_REFUSAL_CONSEQUENCE`.
   `@vibe-agent-toolkit/claude-marketplace`: `classifyCompatibilityFailure`, and a required
   `dispatcher` on `ClaudeSkillInventoryOptions` (`undefined` for one of its own); an inventory `ParseError` for a refused file carries its reason in
   `message` and its code in `parseRefused`.

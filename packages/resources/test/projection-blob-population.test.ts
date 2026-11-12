@@ -547,7 +547,7 @@ describe('populateBlobs', () => {
   // pair, that behaviour change could be reverted or re-broken silently.
   it('derives from the bytes the base read when a run cache holds them, not from a mid-run rewrite', async () => {
     await writeCorpus([{ path: DOC_A, content: '# A\n' }]);
-    const builder = await baseBuilderFor(IN_CRAWL_ORDER, new RunContentCache({ inputBytes: null }));
+    const builder = await baseBuilderFor(IN_CRAWL_ORDER, new RunContentCache());
     const enumerated = builder.build().resourceRealizations
       .find((row) => row.path === DOC_A)?.contentKey;
     await rewriteCorpusFile(DOC_A, '# A, rewritten between enumeration and derivation\n');
@@ -565,7 +565,7 @@ describe('populateBlobs', () => {
 
   it('derives from the bytes the base read when a run cache holds them, even after the file is deleted', async () => {
     await writeCorpus([{ path: DOC_A, content: '# A\n' }]);
-    const builder = await baseBuilderFor(IN_CRAWL_ORDER, new RunContentCache({ inputBytes: null }));
+    const builder = await baseBuilderFor(IN_CRAWL_ORDER, new RunContentCache());
     await rewriteCorpusFile(DOC_A, null);
 
     const counts = await populateBlobs(builder, { parseCache: NO_CACHE });
@@ -642,7 +642,7 @@ describe('populateBlobs, over deferred realizations', () => {
   });
 
   it('derives no blob for a deferred realization and counts it apart from every skip', async () => {
-    const cache = new RunContentCache({ inputBytes: null });
+    const cache = new RunContentCache();
     const builder = await builderWithDeferredPath(DOC_A, DEMAND_CORPUS, cache);
 
     const counts = await populateBlobs(builder, { parseCache: NO_CACHE });
@@ -662,7 +662,7 @@ describe('populateBlobs, over deferred realizations', () => {
   });
 
   it('derives the promoted blob, and its references, on a second run', async () => {
-    const cache = new RunContentCache({ inputBytes: null });
+    const cache = new RunContentCache();
     const builder = await builderWithDeferredPath(DOC_A, DEMAND_CORPUS, cache);
     await populateBlobs(builder, { parseCache: NO_CACHE });
 
@@ -689,7 +689,7 @@ describe('afterClosurePromotion', () => {
   });
 
   it('derives the blob a promotion keyed, and only that one', async () => {
-    const cache = new RunContentCache({ inputBytes: null });
+    const cache = new RunContentCache();
     const builder = await builderWithDeferredPath(DOC_A, DEMAND_CORPUS, cache);
     await populateBlobs(builder, { parseCache: NO_CACHE });
     expect(builder.build().blobs).toHaveLength(1);
@@ -703,7 +703,7 @@ describe('afterClosurePromotion', () => {
   });
 
   it('records a promotion whose every read FAILED on the realization, with no blob', async () => {
-    const cache = new RunContentCache({ inputBytes: null });
+    const cache = new RunContentCache();
     const builder = await builderWithDeferredPath(DOC_A, DEMAND_CORPUS, cache);
     await populateBlobs(builder, { parseCache: NO_CACHE });
     const before = builder.contentPromotionAttempts;

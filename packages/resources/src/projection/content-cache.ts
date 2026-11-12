@@ -104,21 +104,9 @@ export interface ContentCacheStats {
  */
 export class RunContentCache {
   readonly #entries = new Map<string, KeyedContent>();
-  readonly #inputBytes: number | null;
   #hits = 0;
   #misses = 0;
   #bytesHeld = 0;
-
-  /**
-   * @param options - The run's reads
-   * @param options.inputBytes - The run's parse input cap — the one its parse dispatcher enforces —
-   *   which every read of a kind a parser reads is held to by its size before it is read
-   *   (`readContentWithKey`), or `null` for a run that parses nothing it reads. Required, so a
-   *   population cannot read past the cap on one lane and refuse at it on the next.
-   */
-  constructor(options: { readonly inputBytes: number | null }) {
-    this.#inputBytes = options.inputBytes;
-  }
 
   /**
    * Read and key a path, or return what this run already read there.
@@ -171,7 +159,10 @@ export class RunContentCache {
     }
 
     this.#misses += 1;
-    const keyed = await readContentWithKey(absolutePath, parserKind, this.#inputBytes);
+    // The population's own cap, never a caller's: the dispatcher, the store key and the refusal
+    // sentence read the same {@link POPULATION_PARSE_LIMITS}, so no run reads past the cap on one
+    // lane and refuses at it on the next.
+    const keyed = await readContentWithKey(absolutePath, parserKind, POPULATION_PARSE_LIMITS.inputBytes);
     this.#entries.set(key, keyed);
     this.#bytesHeld += keyed.byteLength;
     return keyed;

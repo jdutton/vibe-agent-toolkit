@@ -187,7 +187,7 @@ describe('PROJECTION_TABLES', () => {
     // Table order is part of the export's byte identity: a document whose keys
     // moved is a different document even with every row unchanged. Deriving the
     // export from the registry makes that order the registry's to state.
-    const tables = exportProjection(new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache({ inputBytes: null }) }).build()).tables;
+    const tables = exportProjection(new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() }).build()).tables;
 
     expect(Object.keys(tables)).toStrictEqual(Object.keys(PROJECTION_TABLES));
   });
@@ -238,7 +238,7 @@ describe('PROJECTION_TABLES primary keys', () => {
     // `code` third, and these two rows differ only in `code`. Inserted
     // high-then-low, they must come back low-then-high — which they only do if
     // `code` really is the third component of the key the export reads.
-    const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache({ inputBytes: null }) });
+    const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() });
     for (const code of ['ZZZ_LATER', 'AAA_EARLIER']) {
       builder.addCondition({
         extentId: 'ctx',
@@ -268,7 +268,7 @@ describe('PROJECTION_TABLES primary keys', () => {
     // back a2, a10, b2, b10; keyed ordinal-first they would come back a2, b2,
     // a10, b10. A fixture on a single blob cannot tell those apart, which is
     // exactly the shape of fixture that proves nothing.
-    const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache({ inputBytes: null }) });
+    const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() });
     for (const blob of [`markdown.${'b'.repeat(64)}`, `markdown.${'a'.repeat(64)}`]) {
       for (const ordinal of [10, 2]) {
         builder.addBlobSection({

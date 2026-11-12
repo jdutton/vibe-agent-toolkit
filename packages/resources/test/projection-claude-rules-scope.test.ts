@@ -127,7 +127,7 @@ function buildBase(files: readonly FixtureFile[], extraExtents: readonly string[
   base: ProjectionBase;
   idOf: (path: string) => string;
 } {
-  const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache({ inputBytes: null }) });
+  const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() });
   const ids = new Map<string, string>();
   for (const file of files) {
     ids.set(file.path, builder.identities.idFor(safePath.join(ROOT, file.path)));

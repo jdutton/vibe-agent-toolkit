@@ -7,7 +7,7 @@
  * a lane that read it and parsed only the block would see a valid skill and pass.
  */
 
-import { truncateSync } from 'node:fs';
+import { truncateSync, writeFileSync } from 'node:fs';
 
 import { isParseLimitError, ParseLimitError, parseRefusal } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
@@ -47,7 +47,7 @@ describe('a SKILL.md one byte past the parse input cap', () => {
   });
 
   it('is the parse limit, thrown, when its declared name is read', async () => {
-    const error: unknown = await readDeclaredSkillName(oversizeSkill(), {}).then(
+    const error: unknown = await readDeclaredSkillName(oversizeSkill(), { dispatcher: undefined }).then(
       () => undefined,
       (thrown: unknown) => thrown,
     );
@@ -68,6 +68,17 @@ describe('a SKILL.md one byte past the parse input cap', () => {
     const skillPath = oversizeSkill();
     truncateSync(skillPath, CAP);
 
-    expect(await readDeclaredSkillName(skillPath, {})).toBe('oversize');
+    expect(await readDeclaredSkillName(skillPath, { dispatcher: undefined })).toBe('oversize');
+  });
+
+  it('is measured in its own bytes: a UTF-16 SKILL.md under the cap is read, though its text is past it as UTF-8', async () => {
+    // Two bytes per CJK character here, three in UTF-8.
+    const skillPath = oversizeSkill();
+    const text = `${createSkillContent({ name: 'wide', description: 'A UTF-16 skill.' }, '\n')}${'字'.repeat(2_900_000)}\n`;
+    const bytes = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]);
+    expect([bytes.length <= CAP, Buffer.byteLength(text, 'utf8') > CAP]).toStrictEqual([true, true]);
+    writeFileSync(skillPath, bytes);
+
+    expect(await readDeclaredSkillName(skillPath, { dispatcher: undefined })).toBe('wide');
   });
 });

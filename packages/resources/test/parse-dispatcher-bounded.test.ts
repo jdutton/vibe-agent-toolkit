@@ -183,6 +183,43 @@ describe('the input cap a dispatcher hands its reads', () => {
     expect(lookups).toBe(0);
   });
 
+  it('holds a cache hit to its own output caps, so an entry filed under looser ones is not its answer', async () => {
+    // An entry a run under the default limits filed: two headings, past a one-row cap. Served as
+    // filed, the hit would admit what this dispatcher's worker refuses.
+    const filed: ParseResult = { ...PARSED, headings: [{ level: 1, text: 'a' }, { level: 1, text: 'b' }] as never };
+    const cache = {
+      enabled: true,
+      directory: '/nowhere/cache',
+      stats: { hits: 0, misses: 0 },
+      get: (): Promise<ParseResult> => Promise.resolve(filed),
+    } as unknown as ParseCache;
+    const dispatcher = new ParseDispatcher(cache, { limits: { outputRows: 1 } });
+
+    await expect(dispatcher.parse(DOCUMENT)).rejects.toMatchObject({ code: 'PARSE_LIMIT_EXCEEDED', limit: 'outputRows' });
+    await dispatcher.shutdown();
+  });
+
+  it('holds a memory-file read to its cap in the bytes it was decoded from, never its text as UTF-8', async () => {
+    // Three UTF-8 bytes per character, decoded from two each: the read's own count decides.
+    const content = '字'.repeat(10);
+    const asked: number[] = [];
+    const pool = recordingPool(() => Promise.resolve(PARSED));
+    const dispatcher = new ParseDispatcher(missingCache().cache, {
+      createPool: (options) => ({
+        ...pool.createPool(options),
+        harnessFacts: (_harness, _content, byteLength) => {
+          asked.push(byteLength);
+          return Promise.resolve({ imports: [], rulePaths: [] } as never);
+        },
+      }),
+    });
+
+    await dispatcher.harnessFacts('claude-code', { content, byteLength: 20 });
+    await dispatcher.shutdown();
+
+    expect(asked).toStrictEqual([20]);
+  });
+
   it('refuses a named cap that is not a positive number at construction, not at the first read', () => {
     expect(() => new ParseDispatcher(missingCache().cache, { limits: { inputBytes: 0 } })).toThrow(/inputBytes must be a positive finite number/);
   });

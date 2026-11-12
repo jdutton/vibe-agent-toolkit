@@ -440,10 +440,12 @@ export { classifyLink, isLocalFileLink } from './link-classify.js';
 // for a caller holding a path-routed blob to reach the parse path.
 export {
   computeContentKey,
+  inMemoryContent,
   isParsableContent,
   parserKindForPath,
   readContentWithKey,
   type KeyedContent,
+  type MeasuredContent,
   type ParsableContent,
   type ParserKind,
 } from './content-key.js';
@@ -485,7 +487,7 @@ export {
   ParseDispatcher,
   parseContentCached,
   parseFileCached,
-  parseInputBytesOf,
+  parseInputRefusal,
   readContentForParse,
   withParseDispatcher,
   type ParsePoolPolicy,

@@ -124,7 +124,7 @@ import { readDecodableBytes } from '@vibe-agent-toolkit/utils/fs';
 import { decodeTextContent, type TextProvenance } from '@vibe-agent-toolkit/utils/text';
 
 import { type DocumentParserKind, mimeTypeForPath, parserKindForMimeType } from './mime-type.js';
-import { ParseLimitError } from './parse-limits.js';
+import { inputBytesBreach } from './parse-limits.js';
 
 /**
  * The kind that means "no document parser runs on this".
@@ -305,6 +305,25 @@ export interface KeyedContent<K extends ParserKind = ParserKind> {
 }
 
 /**
+ * Content and the size of the bytes it came from — what a lane holds content to the parse input
+ * cap by. A read's {@link KeyedContent} is one, measured in its raw bytes; content that was never
+ * read is one through {@link inMemoryContent}. Required wherever content is held to the cap, so a
+ * lane holding a read cannot re-measure its text in another unit.
+ */
+export type MeasuredContent = Pick<KeyedContent, 'content' | 'byteLength'>;
+
+/**
+ * Content that was never read from bytes (a string built or handed over in memory), measured as
+ * its UTF-8 bytes, the unit a key over it is computed in.
+ *
+ * @param content - The text
+ * @returns The text, measured
+ */
+export function inMemoryContent(content: string): MeasuredContent {
+  return { content, byteLength: Buffer.byteLength(content, 'utf8') };
+}
+
+/**
  * Content that routes to a real document parser — i.e. not `none`.
  *
  * The type a parse dispatcher takes, so "hand these bytes to a parser" is unreachable
@@ -353,15 +372,14 @@ export function isParsableContent(keyed: KeyedContent): keyed is ParsableContent
  *
  * ## Why `inputBytes` is REQUIRED too
  *
- * Every lane that reads a file a parser will read holds it to the run's parse input cap here, by
- * its `fstat` size, before a byte is read — the registry lane, the projection lane, and every lane
- * that reads a `SKILL.md` for its frontmatter, through `readContentForParse` (skill identity,
- * import, the skill validator, the compat detectors, the settings checker, the skill inventory) —
- * so a file past the cap is the same `ParseLimitError` (`inputBytes`, naming the cap alone) on
- * every one. `null` says the read is for the bytes themselves (a content key no parse
+ * Every read made for a parse holds the file to the run's parse input cap here, by its `fstat`
+ * size, before a byte is read (a lane parsing for a route reads through
+ * `readContentForParse`), and the comparison is `inputBytesBreach`'s, so a file past the cap is the
+ * same `ParseLimitError` (`inputBytes`, naming the cap alone) on every one. `null` says the read is for the bytes themselves (a content key no parse
  * follows), and each caller says which it is: an optional cap was omitted by every caller that
  * never thought about it. The cap applies only to a kind a parser reads; a `none` read is never
- * parsed, so it is never capped.
+ * parsed, so it is never capped. Accepted: re-reads that hand nothing to a parser read the file
+ * directly and are not held to the cap — the compat detectors' re-read of a linked file the skill validator already parsed under the cap, its implicit-reference scan, the packager's read-back of a packaged markdown file for its links, and the compatibility analyzer's Python import scan.
  *
  * @param filePath - Absolute path to read
  * @param parserKind - The parser this content will actually be handed to.
@@ -388,7 +406,8 @@ export async function readContentWithKey<K extends ParserKind>(
   // byte is read, rather than read whole (up to 2 GiB) only for the parse or the decode to refuse it.
   const cap = inputBytes !== null && parserKind !== NO_PARSER_KIND ? inputBytes : null;
   const bytes = await readDecodableBytes(filePath, (size) => {
-    if (cap !== null && size > cap) throw new ParseLimitError('inputBytes', cap);
+    const breach = cap === null ? undefined : inputBytesBreach(size, cap);
+    if (breach !== undefined) throw breach;
   });
   // `decodeTextContent` is the ONE decoder — see `utils`' text-content.ts. The
   // bytes handed to `computeContentKey` are the same ones, undecoded, on purpose:

@@ -18,7 +18,7 @@ const RES_ONE = 'res-one';
 const CONTRIBUTOR_ID = 'builtin:git';
 
 function newBuilder(): ProjectionBuilder {
-  return new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache({ inputBytes: null }) });
+  return new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() });
 }
 
 function realization(resourceId: string, path: string): ResourceRealizationRow {

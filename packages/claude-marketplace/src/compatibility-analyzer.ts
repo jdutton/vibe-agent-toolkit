@@ -149,8 +149,9 @@ async function scanMarkdownFile(
   locationRoot: string,
   dispatcher: ParseDispatcher,
 ): Promise<EvidenceRecord[]> {
-  const { content } = await readContentForParse(fullPath, 'markdown', { dispatcher });
-  const frontmatter = await detectorFrontmatter(content, { dispatcher });
+  const read = await readContentForParse(fullPath, 'markdown', { dispatcher });
+  const { content } = read;
+  const frontmatter = await detectorFrontmatter(read, { dispatcher });
   return [...scanCodeBlocks(content, fullPath, locationRoot, frontmatter), ...scanFrontmatter(content, fullPath, locationRoot, frontmatter)];
 }
 

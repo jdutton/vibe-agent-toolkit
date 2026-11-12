@@ -52,7 +52,7 @@ function pathsOf(contribution: ExtentContribution): string[] {
 
 /** Run the contributor against a fresh base over the fixture root. */
 async function contribute(): Promise<ExtentContribution> {
-  const base = new ProjectionBuilder({ root, contentCache: new RunContentCache({ inputBytes: null }) }).base();
+  const base = new ProjectionBuilder({ root, contentCache: new RunContentCache() }).base();
   return new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(base, null);
 }
 
@@ -78,7 +78,7 @@ async function baseInRepo(): Promise<ProjectionBase> {
   runGitOrThrow(['init'], { cwd: root });
   const tracker = new GitTracker(root);
   await tracker.initialize();
-  return new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache({ inputBytes: null }) }).base();
+  return new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache() }).base();
 }
 
 /**
@@ -227,7 +227,7 @@ describe('FilesystemExtentContributor declining the ignored half', () => {
     // Deliberately no `git init`: with no ignore oracle nothing is ignorable, so
     // the decline has nothing to act on and must not guess from `.gitignore`'s
     // mere presence.
-    const base = new ProjectionBuilder({ root, contentCache: new RunContentCache({ inputBytes: null }) }).base();
+    const base = new ProjectionBuilder({ root, contentCache: new RunContentCache() }).base();
     const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(base, DECLINE_IGNORED);
 
     expect(pathsOf(contribution)).toContain(BUILD_OUTPUT);
@@ -332,7 +332,7 @@ describe('FilesystemExtentContributor rows', () => {
     // The id, not just the column: `resolution_contexts` is keyed on
     // `contextId` alone, so a federated projection over two roots keeps these
     // extents apart only if the root is inside the id.
-    const builder = new ProjectionBuilder({ root, contentCache: new RunContentCache({ inputBytes: null }) });
+    const builder = new ProjectionBuilder({ root, contentCache: new RunContentCache() });
     const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(builder.base(), null);
 
     expect(contribution.contexts[0]?.rootId).toBe(builder.identities.rootId);

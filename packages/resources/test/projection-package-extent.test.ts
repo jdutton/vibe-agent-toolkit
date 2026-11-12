@@ -72,7 +72,7 @@ function forPackage(contribution: ExtentContribution, packageName: string) {
 
 /** Run the contributor against the fixture root. */
 async function contribute(parameters: Record<string, unknown> = {}): Promise<ExtentContribution> {
-  const base = new ProjectionBuilder({ root, contentCache: new RunContentCache({ inputBytes: null }) }).base();
+  const base = new ProjectionBuilder({ root, contentCache: new RunContentCache() }).base();
   return new PackageExtentContributor().contribute(base, parameters as never);
 }
 

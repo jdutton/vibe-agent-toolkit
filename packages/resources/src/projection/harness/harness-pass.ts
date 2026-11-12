@@ -27,6 +27,7 @@
 
 import { forEachInOrder, isPathAbsentError } from '@vibe-agent-toolkit/utils';
 
+import type { MeasuredContent } from '../../content-key.js';
 import type { ParseDispatcher } from '../../parse-dispatcher.js';
 import { isPerRunParseRefusal } from '../../parse-limits.js';
 import { harnessRowsFor } from '../blob-facts.js';
@@ -42,13 +43,13 @@ import { harnessFrontier, type HarnessFrontierEntry, type HarnessReachView } fro
  * Reads one frontier blob's content, or answers null when its bytes cannot be
  * read or no longer key to it.
  */
-export type HarnessContentReader = (entry: HarnessFrontierEntry) => Promise<string | null>;
+export type HarnessContentReader = (entry: HarnessFrontierEntry) => Promise<MeasuredContent | null>;
 
 /**
  * Runs one harness's memory-file read over one file's decoded bytes — in a
  * population, the run's dispatcher ({@link dispatcherHarnessFacts}).
  */
-export type HarnessFactsDeriver = (harness: HarnessId, content: string) => Promise<HarnessContentFacts>;
+export type HarnessFactsDeriver = (harness: HarnessId, input: MeasuredContent) => Promise<HarnessContentFacts>;
 
 /**
  * The deriver every population uses: the run's dispatcher, so the read runs
@@ -58,7 +59,7 @@ export type HarnessFactsDeriver = (harness: HarnessId, content: string) => Promi
  * @returns The deriver
  */
 export function dispatcherHarnessFacts(dispatcher: ParseDispatcher): HarnessFactsDeriver {
-  return (harness, content) => dispatcher.harnessFacts(harness, content);
+  return (harness, input) => dispatcher.harnessFacts(harness, input);
 }
 
 /** What one {@link runHarnessPass} call did. */
@@ -209,7 +210,7 @@ export function diskHarnessContentReader(cache: RunContentCache): HarnessContent
     const parserKind = parserKindOf(entry.contentKey);
     try {
       const keyed = await readKeyedContent(entry.absolutePath, parserKind, cache);
-      return keyed.key === entry.contentKey ? keyed.content : null;
+      return keyed.key === entry.contentKey ? keyed : null;
     } catch (error) {
       // Deleted since the base keyed it: counted as unreadable by the pass.
       if (isPathAbsentError(error)) return null;

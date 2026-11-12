@@ -789,7 +789,7 @@ export async function buildExtentContribution(
 ): Promise<{ contribution: ExtentContribution; rootId: string }> {
   const tracker = new GitTracker(root);
   await tracker.initialize({ includeUntracked: true });
-  const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache({ inputBytes: null }) });
+  const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache() });
 
   return {
     contribution: await contributor.contribute(builder.base(), null),

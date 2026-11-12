@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import { isPerRunParseRefusal } from '@vibe-agent-toolkit/resources';
+import { inMemoryContent, isPerRunParseRefusal } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { refuseAsyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -95,7 +95,7 @@ describe('readDeclaredSkillName', () => {
     const path = writeSkillMdRaw(tempDir, 'parse-refused', DEEP_SKILL);
     const thrown: unknown = await readDeclaredSkillName(path, ROUTE).then(() => undefined, (error: unknown) => error);
     expect(isPerRunParseRefusal(thrown)).toBe(true);
-    const fromBytes: unknown = await declaredSkillNameIn(DEEP_SKILL, ROUTE).then(() => undefined, (error: unknown) => error);
+    const fromBytes: unknown = await declaredSkillNameIn(inMemoryContent(DEEP_SKILL), ROUTE).then(() => undefined, (error: unknown) => error);
     expect(isPerRunParseRefusal(fromBytes)).toBe(true);
   });
 });

@@ -230,7 +230,7 @@ describe('GitExtentContributor without a git oracle on the base', () => {
     // spawned its own `git ls-files` would pay a second subprocess and could
     // answer index-casing questions differently from the ResourceIdentityMap
     // that minted the ids in its own rows.
-    const builder = new ProjectionBuilder({ root, contentCache: new RunContentCache({ inputBytes: null }) });
+    const builder = new ProjectionBuilder({ root, contentCache: new RunContentCache() });
 
     await expect(new GitExtentContributor().contribute(builder.base(), null))
       .rejects.toThrow(/no git oracle/iu);
@@ -244,7 +244,7 @@ describe('GitExtentContributor outside a repository', () => {
     // be a confident wrong answer.
     const bare = toForwardSlash(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-git-extent-nogit-')));
     try {
-      const builder = new ProjectionBuilder({ root: bare, gitTracker: new GitTracker(bare), contentCache: new RunContentCache({ inputBytes: null }) });
+      const builder = new ProjectionBuilder({ root: bare, gitTracker: new GitTracker(bare), contentCache: new RunContentCache() });
 
       await expect(new GitExtentContributor().contribute(builder.base(), null))
         .rejects.toMatchObject({ code: GIT_NO_ANSWER_CODE, message: expect.stringMatching(/not a git repository/u) });
@@ -258,7 +258,7 @@ describe('GitExtentContributor outside a repository', () => {
     const savedPath = process.env['PATH'];
     try {
       process.env['PATH'] = '';
-      const builder = new ProjectionBuilder({ root: bare, gitTracker: new GitTracker(bare), contentCache: new RunContentCache({ inputBytes: null }) });
+      const builder = new ProjectionBuilder({ root: bare, gitTracker: new GitTracker(bare), contentCache: new RunContentCache() });
 
       await expect(new GitExtentContributor().contribute(builder.base(), null))
         .rejects.toMatchObject({ code: GIT_NOT_FOUND_CODE, message: expect.stringMatching(/git was not found on PATH/u) });

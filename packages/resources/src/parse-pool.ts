@@ -117,6 +117,7 @@ import {
   heapBounds,
   heapBreached,
   type HeapBounds,
+  inputBytesBreach,
   memoryBoundedPool,
   parkedThreadRoom,
   type ParseLimitName,
@@ -455,8 +456,8 @@ export interface ParseWorkerReady {
   ready: true;
   /**
    * Whether the thread has a full collection to settle its heap with before a reused job
-   * (`parse-collector.ts`). A runtime that refuses it is told once per process: its threads are
-   * retired at their stop rather than collected, a thread start where a collection would do.
+   * (`parse-collector.ts`). A runtime that refuses it is told once per process: a reused thread past
+   * its bound is retired rather than collected, a thread start where a collection would do.
    */
   collector: boolean;
 }
@@ -1050,11 +1051,8 @@ class WorkerParsePool implements ParsePool {
     if (this.#unavailable !== undefined) return Promise.reject(this.#unavailable);
     // Refused before any thread sees it: the input cap is the one limit that is
     // a property of the request alone, so it costs no worker to enforce.
-    if (job.byteLength > this.#limits.inputBytes) {
-      // The cap alone, with no size: the sentence every file lane gives, which refuses by `fstat` and
-      // a projection's oversize realization, which has no size to name.
-      return Promise.reject(new ParseLimitError('inputBytes', this.#limits.inputBytes));
-    }
+    const tooLarge = inputBytesBreach(job.byteLength, this.#limits.inputBytes);
+    if (tooLarge !== undefined) return Promise.reject(tooLarge);
 
     this.#nextId += 1;
     const request: ParseWorkerJobRequest = { ...job, id: this.#nextId };
@@ -1266,6 +1264,9 @@ class WorkerParsePool implements ParsePool {
     const index = this.#workers.indexOf(poolWorker);
     if (index !== -1) this.#workers.splice(index, 1);
     if (!poolWorker.exited) this.#terminating.add(poolWorker);
+    // Referenced again, as `closeWorker` and `#park` do: an idle thread is unref'd, and its `exit`
+    // — which frees the slot and pumps — must keep the process alive until it is delivered.
+    poolWorker.worker.ref();
     poolWorker.worker.terminate().catch(() => undefined);
   }
 
@@ -1287,10 +1288,31 @@ class WorkerParsePool implements ParsePool {
         const previousUsedBytes = job.lastHeapUsed;
         job.lastHeapUsed = heap.used_heap_size;
         if (!heapBreached(heap, previousUsedBytes, bounds, geometry.youngMb)) return;
-        this.#terminate(poolWorker, ParseLimitError.heap(bounds.appliedMb, this.#limits.heapMb));
+        this.#heapBreach(poolWorker, job, bounds.appliedMb);
       },
       () => undefined,
     );
+  }
+
+  /**
+   * A job's thread passed its heap bound. On the job's parse clock that is the document's refusal;
+   * on its load clock no parser has run over the document's bytes yet (the sampler runs from
+   * dispatch), so it is the thread's, charged as a load stop ({@link #chargeLoadStop}) and counted
+   * toward its parser kind's run unless the thread was in its heap check.
+   *
+   * @param poolWorker - The thread
+   * @param job - Its job
+   * @param appliedMb - The bound it passed
+   */
+  #heapBreach(poolWorker: PoolWorker, job: PendingJob, appliedMb: number): void {
+    const refusal = ParseLimitError.heap(appliedMb, this.#limits.heapMb);
+    if (job.clock !== 'load') {
+      this.#terminate(poolWorker, refusal);
+      return;
+    }
+    const heapCheck = this.#inHeapCheck(poolWorker, job);
+    const stop = new Error(`a parse thread's heap passed its bound before the ${moduleKindOf(job.request)} parser loaded`, { cause: refusal });
+    this.#chargeLoadStop(poolWorker, job, stop, `before its heap passed ${String(appliedMb)} MiB`, !heapCheck);
   }
 
   /**
@@ -1342,9 +1364,11 @@ class WorkerParsePool implements ParsePool {
 
   /**
    * Charge a thread lost on a job's load clock — stopped there, or dead there — to the thread,
-   * never the document: no parser has run over the document's bytes yet. The job runs again, on a
-   * fresh thread when the loss came in a reused thread's heap check, until it has been lost so
-   * {@link DEATHS_BEFORE_UNAVAILABLE} times, when it ends as a `ParserUnavailableError`.
+   * never the document: no parser has run over the document's bytes yet. The job runs again until
+   * it has been lost so {@link DEATHS_BEFORE_UNAVAILABLE} times, when it ends as a
+   * `ParserUnavailableError`. A loss in a reused thread's heap check is not one of those: it says
+   * nothing of the job's parser, and it sends the job to a fresh thread, which has no check, so a
+   * job is lost in at most one check per reused thread it reached and still ends.
    *
    * @param poolWorker - The thread lost
    * @param job - Its job, on its load clock
@@ -1353,9 +1377,9 @@ class WorkerParsePool implements ParsePool {
    * @param counts - Whether the loss counts toward its parser kind's {@link LoadStopRun}
    */
   #chargeLoadStop(poolWorker: PoolWorker, job: PendingJob, stop: Error, how: string, counts: boolean): void {
-    job.loadStops += 1;
     const kind = moduleKindOf(job.request);
-    const heapCheck = poolWorker.heapCheckPending;
+    const heapCheck = this.#inHeapCheck(poolWorker, job);
+    if (!heapCheck) job.loadStops += 1;
     if (counts) this.#countLoadStop(poolWorker, job, kind, stop);
     if (this.#unavailable === undefined && job.loadStops < DEATHS_BEFORE_UNAVAILABLE) {
       this.#requeue(poolWorker, heapCheck ? 'fresh' : 'any');
@@ -1599,7 +1623,8 @@ class WorkerParsePool implements ParsePool {
     // `exit`, so a thread that threw is reported by what it threw.
     const onError = (error: Error): void => {
       if (poolWorker.retired) return;
-      if ((error as { code?: unknown }).code === 'ERR_WORKER_OUT_OF_MEMORY') {
+      // A thread that never posted `ready` could not start, whatever stopped it (`#died`).
+      if (poolWorker.ready && (error as { code?: unknown }).code === 'ERR_WORKER_OUT_OF_MEMORY') {
         // Before the job's parser loaded, what V8 stopped was not the document's (`#diedLoading`).
         if (this.#diedLoading(poolWorker, error)) return;
         // V8 stopped it, not the sampler: the refusal names V8's ceiling.
@@ -1693,9 +1718,10 @@ class WorkerParsePool implements ParsePool {
    * @param loaded - What it posted
    */
   #parserLoaded(poolWorker: PoolWorker, loaded: ParseWorkerParserLoaded): void {
-    // That parser loads on this install, whichever thread says so — one stopped at its load clock
-    // too, whose `parserLoaded` was still queued: it was slow, and the install is sound. A run of
-    // stops waiting for that parser is over.
+    // That parser loads on this install, whichever thread says so — a retired one too (one stopped
+    // at its load clock, whose `parserLoaded` was still queued): it was slow, and the install is
+    // sound, so a run of stops waiting for that parser is over. That is load evidence only: a
+    // retired thread is never credited with an answer.
     this.#loadStopRuns.delete(loaded.parserLoaded);
     // A thread the pool is done with holds no job of this pool: nothing it says arms a clock.
     if (poolWorker.retired) return;
@@ -1793,14 +1819,14 @@ let warnedNoCollector = false;
 
 /**
  * Tell the process, once, that this runtime refused its parse threads a full collection
- * ({@link ParseWorkerReady.collector}): a reused thread then holds what earlier jobs left until its
- * stop, and is replaced there.
+ * ({@link ParseWorkerReady.collector}): a reused thread past its bound is then replaced rather than
+ * collected.
  */
 function warnNoCollector(): void {
   if (warnedNoCollector) return;
   warnedNoCollector = true;
   process.emitWarning(
-    'parse threads have no full collection on this runtime (it refused V8\'s --expose-gc): a reused thread is replaced at its heap stop instead of collected',
+    'parse threads have no full collection on this runtime (it refused V8\'s --expose-gc): a reused thread past its bound is replaced instead of collected',
     { code: 'VAT_PARSE_NO_COLLECTOR' },
   );
 }
@@ -2084,7 +2110,10 @@ function adoptParkedWorker(key: string): ParkedWorker | undefined {
     if (candidate?.key !== key) continue;
     parkedWorkers.splice(index, 1);
     candidate.release();
-    // A thread already gone, whose `exit` has not been delivered yet, is dropped, never adopted.
+    // `threadId` stays ≥ 0 until the `exit` event is delivered, so a thread that has exited
+    // natively but whose `exit` is still queued CAN be adopted here; its `exit` then reaches the
+    // adopting pool, which treats it as any thread's death. Only one whose `exit` was delivered
+    // (threadId -1) is dropped.
     if (candidate.worker.threadId < 0) continue;
     return candidate;
   }

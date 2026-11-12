@@ -402,7 +402,7 @@ async function runArm(root: string, useGitSource: boolean): Promise<Arm> {
 
   const tracker = new GitTracker(root);
   await tracker.initialize({ includeUntracked: true });
-  const cache = new RunContentCache({ inputBytes: null });
+  const cache = new RunContentCache();
   const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: cache });
   const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(builder.base(), null);
   for (const row of contribution.contexts) builder.addContext(row);
@@ -1018,7 +1018,7 @@ describe.skipIf(!HOST_GATES.symlinks.met)(gatedTitle('committed symlinks', HOST_
     resetProjectRootCaches();
     const tracker = new GitTracker(fixture.repo);
     await tracker.initialize({ includeUntracked: true });
-    const builder = new ProjectionBuilder({ root: fixture.repo, gitTracker: tracker, contentCache: new RunContentCache({ inputBytes: null }) });
+    const builder = new ProjectionBuilder({ root: fixture.repo, gitTracker: tracker, contentCache: new RunContentCache() });
     gitExtentRows = (await new GitExtentContributor().contribute(builder.base(), null)).realizations;
   });
 

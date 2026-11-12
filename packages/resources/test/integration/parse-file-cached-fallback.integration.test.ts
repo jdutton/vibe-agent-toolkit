@@ -41,7 +41,7 @@ function parseInChild(content: string, name: string): Outcome {
   writeFileSync(file, content, 'utf-8');
   const script = [
     `const { parseFileCached } = await import(${JSON.stringify(BUILT_INDEX)});`,
-    `const outcome = await parseFileCached(${JSON.stringify(file)}, 'markdown').then(`,
+    `const outcome = await parseFileCached(${JSON.stringify(file)}, 'markdown', { dispatcher: undefined }).then(`,
     "  (result) => ({ ok: true, blockquotes: result.content.split('>').length - 1 }),",
     '  (error) => ({ ok: false, name: error.name, limit: error.limit ?? null }),',
     ');',

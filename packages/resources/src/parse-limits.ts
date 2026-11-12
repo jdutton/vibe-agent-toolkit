@@ -102,6 +102,19 @@ const LIMIT_UNITS: Readonly<Record<ParseLimitName, (value: number) => string>> =
   inputBytes: (value) => `${value} input bytes`,
 };
 
+/**
+ * The one clause a limit refusal is said in — the error's message and every lane's reported
+ * reason. Content past the input cap is refused before any parse starts, so nothing was stopped.
+ *
+ * @param limit - The limit crossed
+ * @param bound - The bound as spelled
+ * @returns e.g. `its parse was stopped at its timeMs limit (10 ms wall clock)`
+ */
+export function limitRefusalClause(limit: ParseLimitName, bound: string): string {
+  const verb = limit === 'inputBytes' ? 'it was refused' : 'its parse was stopped';
+  return `${verb} at its ${limit} limit (${bound})`;
+}
+
 /** The `code` every {@link ParseLimitError} carries, and the one thing a classifier reads. */
 const PARSE_LIMIT_EXCEEDED = 'PARSE_LIMIT_EXCEEDED';
 
@@ -125,7 +138,8 @@ export class ParseLimitError extends VatError {
    * @param bound - The bound as spelled, overriding the default spelling
    */
   constructor(limit: ParseLimitName, value: number, found?: number, bound: string = describeBound(limit, value, found)) {
-    super(PARSE_LIMIT_EXCEEDED, `The parse was stopped at its ${limit} limit (${bound}).`);
+    const clause = limitRefusalClause(limit, bound);
+    super(PARSE_LIMIT_EXCEEDED, `${clause.charAt(0).toUpperCase()}${clause.slice(1)}.`);
     this.limit = limit;
     this.bound = bound;
   }
@@ -146,7 +160,7 @@ export class ParseLimitError extends VatError {
       appliedMb,
       undefined,
       appliedMb < configuredMb
-        ? `${bound}, lowered from ${String(configuredMb)} MiB by a process-wide --max-old-space-size`
+        ? `${bound}, lowered from ${String(configuredMb)} MiB by a process-wide V8 heap flag (--max-old-space-size, --max-heap-size or --max-semi-space-size)`
         : bound,
     );
   }
@@ -179,6 +193,21 @@ export class ParseLimitError extends VatError {
       `V8's own heap ceiling, ${LIMIT_UNITS.heapMb(bounds.ceilingMb)} — above the ${String(bounds.appliedMb)} MiB the pool's heap sampler enforces, reached before the sampler read the heap past it`,
     );
   }
+}
+
+/**
+ * The one input-size refusal: content of `byteLength` bytes — the bytes it was read or decoded
+ * from, never its text re-measured — against the cap in force. Every lane holds content to the
+ * cap through this (a file by its `fstat` size, before a byte is read; content in memory by its
+ * UTF-8 length, `inMemoryContent`; a ZIP entry by its declared size), so the comparison and the
+ * refusal it gives are one, naming the cap alone.
+ *
+ * @param byteLength - The content's size, in bytes
+ * @param inputBytes - The cap in force
+ * @returns The refusal, or `undefined` for content within the cap
+ */
+export function inputBytesBreach(byteLength: number, inputBytes: number): ParseLimitError | undefined {
+  return byteLength > inputBytes ? new ParseLimitError('inputBytes', inputBytes) : undefined;
 }
 
 /**
@@ -582,7 +611,8 @@ export function factsOutputBreach(
  * @returns True when a bounded parse of the same bytes would not be refused for its size
  */
 export function storableUnderDefaultLimits(byteLength: number, result: ParseResult): boolean {
-  return byteLength <= DEFAULT_PARSE_LIMITS.inputBytes && outputBreach(result, DEFAULT_PARSE_LIMITS) === undefined;
+  return inputBytesBreach(byteLength, DEFAULT_PARSE_LIMITS.inputBytes) === undefined
+    && outputBreach(result, DEFAULT_PARSE_LIMITS) === undefined;
 }
 
 /**
@@ -790,7 +820,7 @@ const BYTES_PER_MIB = 1_048_576;
  * own space statistics are out of the parent's reach (`Worker` has
  * `getHeapStatistics` and no `getHeapSpaceStatistics` on Node 26), so the old
  * generation alone cannot be read; subtracting the young generation at its
- * size instead (192 MiB on Node 26.7) understates it by up to that much, which measured on
+ * size instead (on Node 26.7, 192 or 96 MiB by host) understates it by up to that much, which measured on
  * Node 26 let a worker reach V8's own ceiling unseen and kill the process. The
  * whole heap never understates the old generation, so a job is stopped no
  * later than its old generation passes the limit.
@@ -857,7 +887,7 @@ export interface HeapBounds {
  * The heap limit the pool enforces on a worker, and V8's own ceiling above it, in MiB.
  *
  * `heap_size_limit` is V8's old-generation ceiling plus the young
- * generation's (measured on Node 26.7: 2,048 + 192 = 2,240 for `heapMb` 1,024). A
+ * generation's (measured on Node 26.7 for `heapMb` 1,024: 2,048 + 192 or 96, by host). A
  * process-wide `--max-old-space-size` overrides `resourceLimits` in BOTH
  * directions: higher, and the ceiling only moves further away; lower, and the
  * pool cannot raise it, so it enforces {@link HEAP_CEILING_FACTOR} below
@@ -900,8 +930,10 @@ export function heapBounds(
 
 /**
  * V8's old-generation ceiling for a thread, in MiB, read so it is never above the real one: the
- * least of `heap_size_limit` less the young generation, a flagged `--max-old-space-size`, and a
- * flagged `--max-heap-size` less the young generation; 0 when that is not positive.
+ * least of `heap_size_limit` less the young generation, a flagged `--max-old-space-size` — or, with
+ * none visible, the old generation the pool set the thread — and a flagged `--max-heap-size` less
+ * the young generation; 0 when that is not positive. The claim holds for the flags visible in
+ * `NODE_OPTIONS` and `execArgv` ({@link v8HeapFlags}); a flag set any other way is not seen.
  *
  * @param stats - `Worker.getHeapStatistics()`
  * @param geometry - See {@link workerHeapGeometry}
@@ -910,7 +942,7 @@ export function heapBounds(
 function v8OldGenerationCeilingMb(stats: { readonly heap_size_limit: number }, geometry: HeapGeometry): number {
   const { youngMb, flags } = geometry;
   const readMb = Math.floor(stats.heap_size_limit / BYTES_PER_MIB) - youngMb;
-  const flagged = [flags.oldSpaceMb, flags.heapSizeMb === undefined ? undefined : flags.heapSizeMb - youngMb]
+  const flagged = [flags.oldSpaceMb ?? geometry.setOldMb, flags.heapSizeMb === undefined ? undefined : flags.heapSizeMb - youngMb]
     .filter((value): value is number => value !== undefined);
   return Math.max(0, Math.min(readMb, ...flagged));
 }
@@ -937,18 +969,58 @@ const V8_HEAP_FLAG_NAMES = {
 } as const satisfies Record<string, keyof V8HeapFlags>;
 
 /**
+ * Split `NODE_OPTIONS` into arguments as Node does: on spaces, outside double quotes, which group
+ * and are dropped, with a backslash inside them escaping the next character. Single quotes are
+ * literal, as they are to Node.
+ *
+ * @param nodeOptions - `process.env.NODE_OPTIONS`
+ * @returns The arguments, or `undefined` for a value Node refuses (an unterminated quote, or a
+ *   backslash ending one)
+ */
+function nodeOptionsArgs(nodeOptions: string): string[] | undefined {
+  const args: string[] = [];
+  let arg: string | undefined;
+  let quoted = false;
+  for (let index = 0; index < nodeOptions.length; index += 1) {
+    let char = nodeOptions.charAt(index);
+    if (quoted && char === '\\') {
+      index += 1;
+      if (index === nodeOptions.length) return undefined;
+      char = nodeOptions.charAt(index);
+    } else if (char === '"') {
+      quoted = !quoted;
+      arg ??= '';
+      continue;
+    } else if (char === ' ' && !quoted) {
+      if (arg !== undefined) args.push(arg);
+      arg = undefined;
+      continue;
+    }
+    arg = (arg ?? '') + char;
+  }
+  if (quoted) return undefined;
+  if (arg !== undefined) args.push(arg);
+  return args;
+}
+
+/**
  * Read the V8 heap flags from `NODE_OPTIONS` and a process's `execArgv`, fail-closed: of a flag
  * given more than once, the value that leaves V8 the least old-generation room — the smallest old
  * or whole heap, the largest semi-space — so a mis-ordered read can only lower the ceiling. A
- * value that is not a positive number is no reading. A flag a host sets later through
- * `v8.setFlagsFromString` is not seen; `heap_size_limit` still reflects its old or whole size.
+ * value that is not a positive number is no reading. `NODE_OPTIONS` is split as Node splits it
+ * ({@link nodeOptionsArgs}); one Node would refuse is read both ways — every space-separated
+ * word, its double quotes dropped — so whatever it was meant to say can only lower the ceiling. A
+ * flag a host sets later through `v8.setFlagsFromString` is not seen; `heap_size_limit` still
+ * reflects its old or whole size.
  *
  * @param nodeOptions - `process.env.NODE_OPTIONS`
  * @param execArgv - `process.execArgv`
  * @returns The flags — see {@link V8HeapFlags}
  */
 export function v8HeapFlags(nodeOptions: string | undefined, execArgv: readonly string[]): V8HeapFlags {
-  const args = [...(nodeOptions ?? '').split(/\s+/).filter((arg) => arg !== ''), ...execArgv];
+  const options = nodeOptions ?? '';
+  const fromOptions = nodeOptionsArgs(options) ?? options.replaceAll(/["\\]/g, '').split(' ').filter((arg) => arg !== '');
+  const args = [...fromOptions, ...execArgv];
   const read: { -readonly [K in keyof V8HeapFlags]: number | undefined } = { oldSpaceMb: undefined, semiSpaceMb: undefined, heapSizeMb: undefined };
   for (const [index, arg] of args.entries()) {
     const [rawName = '', inline] = arg.split('=', 2);
@@ -970,25 +1042,34 @@ export interface HeapGeometry {
   readonly youngMb: number;
   /** The process-wide heap flags: see {@link v8HeapFlags}. */
   readonly flags: V8HeapFlags;
+  /**
+   * The old generation the pool set the thread (`resourceLimits.maxOldGenerationSizeMb`), in MiB,
+   * when known: the ceiling under no visible old-space flag ({@link v8OldGenerationCeilingMb}).
+   */
+  readonly setOldMb: number | undefined;
 }
 
 /**
  * The young generation a thread really has, and the heap flags it runs under. Under a process-wide
- * `--max-semi-space-size` the young generation is three of them (measured on Node 22.16, 24.21 and
- * 26.7: `heap_size_limit` grows by exactly that), while `resourceLimits` still reports the size it
- * was given; with no such flag it is `resourceLimits.maxYoungGenerationSizeMb` (192 MiB on Node 24
- * and 26, 48 on 22), or 0 if a runtime ever gives none.
+ * `--max-semi-space-size` the young generation is three semi-spaces, each the flag rounded UP to a
+ * power of two (Node 26.7: flags of 3, 40 and 100 grew `heap_size_limit` by 12, 192 and 384; on
+ * Node 22.16, 24.21 and 26.7 a power of two grows it by exactly three of it), while
+ * `resourceLimits` still reports the size it was given. With no such flag it is
+ * `resourceLimits.maxYoungGenerationSizeMb`, which varies by runtime and host (measured 192 and 96
+ * MiB on Node 26.7, 48 on 22), or 0 if a runtime ever gives none.
  *
  * @param limits - A worker's `resourceLimits`, as the parent or the thread itself sees them
  * @param flags - The process's heap flags ({@link v8HeapFlags})
  * @returns The geometry `heapBounds` and `heapBreached` read the thread's heap against
  */
 export function workerHeapGeometry(
-  limits: { readonly maxYoungGenerationSizeMb?: number | undefined } | undefined,
+  limits: { readonly maxYoungGenerationSizeMb?: number | undefined; readonly maxOldGenerationSizeMb?: number | undefined } | undefined,
   flags: V8HeapFlags,
 ): HeapGeometry {
-  const youngMb = flags.semiSpaceMb === undefined ? (limits?.maxYoungGenerationSizeMb ?? 0) : 3 * flags.semiSpaceMb;
-  return { youngMb, flags };
+  const youngMb = flags.semiSpaceMb === undefined
+    ? (limits?.maxYoungGenerationSizeMb ?? 0)
+    : 3 * 2 ** Math.ceil(Math.log2(flags.semiSpaceMb));
+  return { youngMb, flags, setOldMb: limits?.maxOldGenerationSizeMb };
 }
 
 /**

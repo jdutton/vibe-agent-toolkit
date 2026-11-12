@@ -104,7 +104,7 @@ async function validatorCode(root: string): Promise<string | null> {
 async function extentRow(root: string): Promise<{ code: string; targetFaultClass: string | null } | undefined> {
   const tracker = new GitTracker(root);
   await tracker.initialize({ includeUntracked: true });
-  const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache({ inputBytes: null }) });
+  const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache() });
   const contribution = await new FilesystemExtentContributor((at) => new FilesystemCrawlSource(at, []), DEFAULT_CONTENT_DEMAND).contribute(builder.base(), null);
   return contribution.conditions.find((row) => row.path === 'docs/alias');
 }

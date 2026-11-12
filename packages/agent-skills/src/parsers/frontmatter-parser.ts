@@ -1,8 +1,8 @@
 import {
   isPerRunParseRefusal,
+  type MeasuredContent,
   parseContentCached,
-  parseInputBytesOf,
-  ParseLimitError,
+  parseInputRefusal,
   parseRefusal,
   type ParseRoute,
 } from '@vibe-agent-toolkit/resources';
@@ -97,19 +97,22 @@ function asParserReads(source: string): string {
  * first line must be a fence; the block ends at the next fence line
  * ({@link FENCE}); no closing fence, no frontmatter.
  *
- * @param content - Full SKILL.md content
+ * @param input - Full SKILL.md content, measured in the bytes it came from: a file lane's own read
+ *   (`readContentForParse`), so the cap is in the unit that read was held to; content never read,
+ *   through `inMemoryContent`
  * @param route - Where the parse runs: the run's dispatcher when a run decodes many
- *   blocks, or `{}` for one read, whose cache miss builds a one-thread pool for this
+ *   blocks, or `{ dispatcher: undefined }` for one read, whose cache miss builds a one-thread pool for this
  *   call. Required, so a caller holding a run's dispatcher cannot forget to pass it
  * @returns Parsed frontmatter and body, or the refusal
  * @throws `ParserUnavailableError` for a broken install, and anything else the
  *   bounded route throws that is not a per-run refusal of this block
  */
-export function parseFrontmatter(content: string, route: ParseRoute): Promise<FrontmatterResult> {
+export function parseFrontmatter(input: MeasuredContent, route: ParseRoute): Promise<FrontmatterResult> {
   // The whole content is held to the route's input cap, as a file read for a parse is
   // (`readContentForParse`): content past it is refused, never cut down to a block that fits.
-  const inputBytes = parseInputBytesOf(route);
-  if (Buffer.byteLength(content, 'utf-8') > inputBytes) return Promise.resolve(refused(new ParseLimitError('inputBytes', inputBytes)));
+  const tooLarge = parseInputRefusal(input.byteLength, route);
+  if (tooLarge !== undefined) return Promise.resolve(refused(tooLarge));
+  const { content } = input;
   const normalized = (content.startsWith(BOM) ? content.slice(1) : content).replaceAll(/\r\n?/g, '\n');
   const lines = normalized.split('\n');
 

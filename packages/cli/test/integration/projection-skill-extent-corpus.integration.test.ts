@@ -883,7 +883,7 @@ function baseFrom(
   projection: Projection,
   extentIds: ReadonlySet<string>,
 ): ProjectionBase {
-  const builder = new ProjectionBuilder({ root, contentCache: new RunContentCache({ inputBytes: null }) });
+  const builder = new ProjectionBuilder({ root, contentCache: new RunContentCache() });
   builder.addRoot({ id: builder.identities.rootId, path: safePath.resolve(root) });
 
   for (const row of projection.resources) builder.addResource(row);

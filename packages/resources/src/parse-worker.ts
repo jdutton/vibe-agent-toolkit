@@ -118,12 +118,11 @@ const heapGeometry = workerHeapGeometry(resourceLimits, v8HeapFlags(process.env[
  * @returns Whether the thread is retired: it then runs nothing, and the parent stops it
  */
 function settledForJob(id: number): boolean {
-  const { appliedMb, stopMb } = heapBounds(v8.getHeapStatistics(), heapGeometry, workerLimits().heapMb);
+  const { appliedMb } = heapBounds(v8.getHeapStatistics(), heapGeometry, workerLimits().heapMb);
   const read = (): number => v8.getHeapStatistics().used_heap_size;
-  // With no collection to settle it, a reused thread's garbage is held to its stop instead, so a
-  // runtime that refused the collector replaces a thread there rather than after almost every job.
-  const bound = collectGarbage === null ? stopMb : reusedThreadHeapMb(appliedMb);
-  const check = settleReusedHeap(bound, read, collectGarbage, () => performance.now());
+  // With no collector, a thread past the bound is retired rather than collected: a thread start,
+  // never a verdict decided by what earlier jobs left.
+  const check = settleReusedHeap(reusedThreadHeapMb(appliedMb), read, collectGarbage, () => performance.now());
   port.postMessage({ id, reuseCheck: check });
   return check.retire;
 }

@@ -95,7 +95,7 @@ async function enumerated(source: CrawlSource): Promise<string[]> {
 async function contribute(sourceFor: (root: string) => CrawlSource): Promise<ExtentContribution> {
   const tracker = new GitTracker(root);
   await tracker.initialize();
-  const base = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache({ inputBytes: null }) }).base();
+  const base = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache() }).base();
   return new FilesystemExtentContributor(sourceFor, DEFAULT_CONTENT_DEMAND).contribute(base, null);
 }
 

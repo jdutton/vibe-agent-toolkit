@@ -56,7 +56,7 @@ describe('registerBundledAssets on a broken install', () => {
     const skillPath = safePath.join(dir, 'SKILL.md');
     const frontmatter = createFrontmatter({ name: 'broken-install', description: 'Uses its pages ' + nonce });
     writeFileSync(skillPath, `${frontmatter}\n\n# Pages\n\n${links}\n`, 'utf-8');
-    await parseFileCached(skillPath, 'markdown');
+    await parseFileCached(skillPath, 'markdown', { dispatcher: undefined });
 
     const entry = safePath.join(dir, 'dying-worker.mjs');
     writeFileSync(

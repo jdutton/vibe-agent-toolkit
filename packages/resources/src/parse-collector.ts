@@ -25,9 +25,11 @@
  *
  * **Residual:** two copies of this library in one process (two installed versions) hold two locks,
  * and can still race; so can a host that sets or clears the flag itself. The cost is a thread with
- * no collector, which is retired at its stop instead of collected (`settledForJob` in
- * `parse-worker.ts`) — a thread start, never a verdict. And a context another thread creates in the
- * moment the flag is held gets a `gc` too.
+ * no collector, which is retired past its reused-thread bound instead of collected (`settledForJob`
+ * in `parse-worker.ts`) — a thread start, never a verdict. A context another thread creates in the
+ * moment the flag is held gets a `gc` too. And a holder terminated between setting the flag and
+ * clearing it leaves `--expose-gc` set, process-wide, until the next thread acquires (and clears
+ * it), which may be never.
  *
  * Node's documentation warns that changing V8 flags after the VM has started "may result in
  * unpredictable behavior". This flag configures no heap size, collector or compiler, and changes
@@ -108,7 +110,7 @@ function collectorUnderFlag(): (() => void) | null {
     } finally {
       v8.setFlagsFromString('--no-expose-gc');
     }
-    // eslint-disable-next-line local/no-blind-catch -- whatever refused the flag or the context, the answer is the same one: no collector, so a reused thread is retired at its stop (a thread start, never a verdict), and no surface reads why
+    // eslint-disable-next-line local/no-blind-catch -- whatever refused the flag or the context, the answer is the same one: no collector, so a reused thread past its bound is retired (a thread start, never a verdict), and no surface reads why
   } catch {
     return null;
   }

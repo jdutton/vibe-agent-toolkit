@@ -1,4 +1,5 @@
 import { detectorFrontmatter, type EvidenceRecord } from '@vibe-agent-toolkit/agent-skills';
+import { inMemoryContent } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
 import { scanFrontmatter } from '../../src/scanners/frontmatter-scanner.js';
@@ -6,7 +7,7 @@ import { TEST_LOCATION_ROOT } from '../test-helpers.js';
 
 /** Scan `content`, parsing its frontmatter once as the compatibility analyzer does. */
 async function scan(content: string, filePath: string): Promise<EvidenceRecord[]> {
-  return scanFrontmatter(content, filePath, TEST_LOCATION_ROOT, await detectorFrontmatter(content, {}));
+  return scanFrontmatter(content, filePath, TEST_LOCATION_ROOT, await detectorFrontmatter(inMemoryContent(content), { dispatcher: undefined }));
 }
 
 describe('scanFrontmatter', () => {

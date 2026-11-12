@@ -20,12 +20,12 @@ a value here and in the code together, and only from a new lab record.
 
 | Limit | Value | Observed maximum | How it was set |
 |---|---|---|---|
-| `inputBytes` | 8 MiB | 666,449 bytes (one adopter document); 352,261 in VAT's own tree | Rule 1: 6.7 MB, up to 8 MiB. A lane that reads the file measures its raw bytes on disk (`fstat`, before a byte is read); content handed over already in memory is measured as its UTF-8 encoding. The two agree for UTF-8 on disk and differ for a UTF-16 file (decoded to fewer UTF-8 bytes for ASCII text) or one with a byte-order mark, so the same text can sit on either side of the cap by lane. |
+| `inputBytes` | 8 MiB | 666,449 bytes (one adopter document); 352,261 in VAT's own tree | Rule 1: 6.7 MB, up to 8 MiB. Measured in one unit on every lane, the bytes the content came from: a file's raw bytes on disk (`fstat`, before a byte is read), carried with what the read decoded so no lane re-measures the text; a ZIP entry's declared size; content never read, its UTF-8 bytes (`inputBytesBreach`, `MeasuredContent`). |
 | `outputRows` | 16,384 | 896 rows in one document, top-level arrays only; p99 203, p50 9 | **Rule 2.** The limit counts every array in a document's facts, nested ones included (a heading's `children` count like any other row, so one `#` over 20,000 `##` is 20,001 rows), and the frontmatter as the JSON the store writes for it — every array element and every mapping entry a row, each YAML alias at its target's full size, a `!!binary` one row per byte, and every `!!set` member and `!!omap` entry a row (the codec carries them, though `JSON.stringify` writes `{}`). The lab's maximum was counted over top-level arrays only, so rule 1 cannot be applied to it: 16,384 is rule 1 over that count (8,960, up to 16,384). Re-counted as the limit counts it, with the shipped `outputBreach`, over the 2,626 git-tracked markdown documents of the adopter the lab's `adopter-default` arm scans: maximum 1,287 rows (p99 280, p50 24), 12.7× under the limit — and one document's frontmatter alone is 770 rows, so a frontmatter mapping is NOT "a handful of rows", as this record said. That re-count is a one-off probe over the shipped functions, not a lab facet; the per-document count is a lab gap (below). |
 | `outputBytes` | 4 MiB | 297,447 bytes in one document, counted as the limit counts it; p99 58,097, p50 3,810 | Rule 1: 2.97 MB, up to 4 MiB (14.1× the maximum). Counted as the worker checks it — the facts' JSON plus the frontmatter expanded (every alias at its target's full size, every `!!set` member and `!!omap` entry, a `!!binary` as its `Buffer` JSON) — with the shipped pool's own `outputBreach`, over the same 2,626 git-tracked markdown documents as the `outputRows` re-count (the probe also reproduces that row's 1,287 / 280 / 24 rows exactly). The largest is a 251,888-byte document. The value it replaces was measured on stored parse-cache entries (233,802 bytes; p99 57,556, p50 3,358), which is not what the worker checks: an entry holds the frontmatter's source text beside its encoding, and the encoding writes a shared anchor once. That re-count is a one-off probe over the shipped functions, not a lab facet; the per-document count is a lab gap (below). |
 | `outputDepth` | 1,000 levels | Not observable per document. | Not a headroom value: the store's own ceiling. SQLite's JSON functions read at most 1,000 nested containers (`JSON_MAX_DEPTH`); measured on Node 26's `node:sqlite`, 1,000 read and 1,001 throw "malformed JSON" for the whole statement, so one deeper stored row breaks every `json_extract` over `blobs.frontmatter`. `resolveParseLimits` refuses a looser value. A cyclic anchor nests without end and breaches it. |
 | `timeMs` | 30,000 ms | Not observable per document: the `parse` facet reports per-pass sums. Mean 10.3 ms per document over 2,680 documents at a clean load (the adopter arm of [the `vat-lab parse run` arms](#the-vat-lab-parse-run-arms)); 12.1 ms in the cold `resources check` run. | Rule 2: the slowest realistic shape found, a 1,000-level nested list, takes 9.3 s in a worker (the nested-list arm below, a one-document corpus, so its per-pass sum is that document's time); a cold worker's first parser load (about 0.7 s), and a reused thread's heap check before the job, are not charged to it: they run on their own `timeMs` clock, whose stop is the thread's and runs the document again, at most three times, so one document ends within about four `timeMs` (two minutes at the default), plus a check on each reused thread it was moved off, plus any time it waited in the queue (hazard register, the slow-start row). 30 s is that 9.3 s with headroom of three times for a loaded machine. A mean is no basis: one document can be a thousand times the mean, and the per-document maximum over a real corpus is still not observable (see the gaps below). |
-| `heapMb` | 1,024 MiB | Not observable per worker: the `memory` facet reports process peak RSS. The whole process, every worker included, peaked at 1.17 GiB on the adopter's cold run. | Rule 2: no single job can need more than the whole process held, less the main thread's share. Under a process-wide `--max-old-space-size` lower than twice this, the pool applies `max(⌊ceiling / 2⌋, min(youngGen, ceiling − 32))` MiB, never above `heapMb` — half of V8's ceiling, floored at the worker's young generation while the ceiling leaves 32 MiB above it; 96 MiB under a 128 MiB flag on Node 26.7, whose young generation is 192 MiB (see [the heap under a small flag](#the-heap-under-a-small-flag)). A used heap past the bound is a breach only once an old-generation collection shows it held, or past a stop halfway to V8's ceiling (1,536 MiB at the defaults) with none (see [garbage is not a breach](#garbage-is-not-a-breach)). |
+| `heapMb` | 1,024 MiB | Not observable per worker: the `memory` facet reports process peak RSS. The whole process, every worker included, peaked at 1.17 GiB on the adopter's cold run. | Rule 2: no single job can need more than the whole process held, less the main thread's share. Under a process-wide `--max-old-space-size` lower than twice this, the pool applies `max(⌊ceiling / 2⌋, min(youngGen, ceiling − 32))` MiB, never above `heapMb` — half of V8's ceiling, floored at the worker's young generation while the ceiling leaves 32 MiB above it; 96 MiB under a 128 MiB flag on Node 26.7, whose young generation (192 or 96 MiB, by host) is at least the 96 the ceiling leaves (see [the heap under a small flag](#the-heap-under-a-small-flag)). A used heap past the bound is a breach only once an old-generation collection shows it held, or past a stop halfway to V8's ceiling (1,536 MiB at the defaults) with none (see [garbage is not a breach](#garbage-is-not-a-breach)). |
 | `stackMb` | 4 MiB | Not observable. | Rule 2: before this limit existed every corpus parsed on the main thread under Node's default stack of about 1 MiB, so 4 MiB is four times a stack every recorded corpus fit in. |
 
 The output and input values come from the stored parse-cache entries of a cold `vat-lab parse run`
@@ -151,20 +151,24 @@ parse holds in garbage alone.
   generation at 8 MiB still peaks at 37 to 43 MiB, so most of the excess is young-generation
   garbage. Under `--max-old-space-size=128` the pool applied 64 MiB (half the ceiling) and refused
   that document at `heapMb` in 2 runs of 20; with the bound floored at 96 MiB it is admitted in 30
-  of 30. The floor is the young generation's size (192 MiB on Node 26.7) held to 32 MiB under V8's
+  of 30. The floor is the young generation's size (192 or 96 MiB on Node 26.7, by host) held to 32 MiB under V8's
   ceiling, so under this flag it is 96 MiB. It holds only while V8's ceiling leaves 32 MiB above
   it (twice what a job allocates in one 50 ms sample interval at ~300 MiB/s), so under a 64 MiB
   flag the pool still applies 32 MiB and an ordinary document can be refused: such a flag is too
   small to parse with. A 200,000-link breach under the 128 MiB flag is stopped at 96 MiB with the
   child exiting cleanly, 15 of 15 (seeded three in a row in `parse-pool-limits.integration.test.ts`).
 - **A semi-space or heap-size flag.** V8's ceiling for a worker is the old generation it can reach:
-  the least of `heap_size_limit` less the young generation, `--max-old-space-size`, and
-  `--max-heap-size` less the young generation. Measured on Node 26.7 (`heap_size_limit`, MiB): no
-  flags 2,240 (2,048 + 192); old 512 with semi-space 128, 896; old 128 with semi-space 16, 176;
+  the least of `heap_size_limit` less the young generation, `--max-old-space-size` (with none
+  visible, the old generation the pool set the thread, `maxOldGenerationSizeMb`), and
+  `--max-heap-size` less the young generation. The reading holds for flags visible in
+  `NODE_OPTIONS` and `execArgv`; a flag set another way is not seen. Measured on Node 26.7 (`heap_size_limit`, MiB): no
+  flags 2,240 (2,048 + 192) on one host and 2,144 (2,048 + 96) on another; old 512 with semi-space 128, 896; old 128 with semi-space 16, 176;
   semi-space 16 alone 2,096, 128 alone 2,432; `--max-heap-size=512`, 512; old 1,024 with heap size
-  512, 1,027. The young generation is three times the semi-space flag on Node 22, 24 and 26, while a
-  worker's `resourceLimits` still reports the default (192, and 48 on Node 22), so the pool reads a
-  flagged semi-space from the flag. Under old 512 with semi-space 128 the applied bound is 384 MiB,
+  512, 1,027. The young generation is three times the semi-space flag rounded up to a power of two
+  (flags of 3, 40 and 100 grew `heap_size_limit` by 12, 192 and 384) on Node 22, 24 and 26, while a
+  worker's `resourceLimits` still reports the default (on Node 26.7 192 or 96 by host, and 48 on
+  Node 22), so the pool reads a flagged semi-space from the flag. Nothing depends on which default
+  a host has: every bound is computed from the one it reads. Under old 512 with semi-space 128 the applied bound is 384 MiB,
   and under old 128 with semi-space 16, 64 MiB; read from `resourceLimits` they were 256 and 48.
 - **A 10,000-level nested blockquote** (10,015 bytes, the pathological arm above) needs its heap
   for real: in a raw worker with V8's full collection before it gives up, it runs out of memory
@@ -188,7 +192,7 @@ and 1 of 4, `skills package` 1 of 3).
 
 So a used heap past the bound is a breach only once an old-generation collection has run
 (`heapBreached`): a sample that fell from the same job's previous one by more than the young
-generation holds (192 MiB on Node 26.7, read from the worker's `resourceLimits`; a scavenge frees
+generation holds (on Node 26.7, 192 or 96 MiB by host, read from the worker's `resourceLimits`; a scavenge frees
 no more), so what it still reads is held. A heap that
 rises with no such fall is stopped at `stopMb`, halfway from the bound to V8's ceiling (1,536 MiB at
 the defaults, 384 under a 512 MiB flag), never within the sampler's 32 MiB headroom of the ceiling,
@@ -217,8 +221,8 @@ before the job (`settleReusedHeap` in `parse-limits.ts`):
   an eighth of the room, at every bound.
 - **Over the bound**, the thread forces a full collection of its own heap (V8's `gc`, taken once as
   the worker loads, under a lock, with `--expose-gc` cleared again — `parse-collector.ts` says why)
-  and reads again. A thread with no collector (a runtime that refuses the flag) is held to its
-  stop instead, and the process is warned once.
+  and reads again. A thread with no collector (a runtime that refuses the flag) is retired
+  instead, its job on a fresh thread, and the process is warned once.
 - **Still over**, the thread is retired before it runs anything: the job runs on a fresh thread,
   never on another reused one, and the jobs behind it may use an idle thread meanwhile.
 

@@ -29,13 +29,14 @@ import {
   NO_PARSER_KIND,
   type ParsableContent,
   keyContent,
+  type MeasuredContent,
   type ParserKind,
   readContentWithKey,
 } from './content-key.js';
 import type { ParseResult } from './link-parser.js';
 import type { DocumentParserKind } from './mime-type.js';
 import { defaultParseCache, type ParseCache } from './parse-cache.js';
-import { ParseLimitError, type ParseLimits, resolveParseLimits } from './parse-limits.js';
+import { inputBytesBreach, outputBreach, ParseLimitError, type ParseLimits, resolveParseLimits } from './parse-limits.js';
 import {
   createParsePool,
   defaultParsePoolSize,
@@ -393,6 +394,8 @@ export class ParseDispatcher {
   readonly #limits: Partial<ParseLimits> | undefined;
   /** The input cap, resolved from {@link #limits} once, at construction: see {@link inputBytes}. */
   readonly #inputBytes: number;
+  /** Every limit, resolved once: a cache hit is held to the output caps the worker would apply. */
+  readonly #resolvedLimits: ParseLimits;
   readonly #transport: ParseTransport;
   readonly #missThreshold: number;
   readonly #baselineHits: number;
@@ -428,7 +431,8 @@ export class ParseDispatcher {
   constructor(cache: ParseCache, policy: ParsePoolPolicy) {
     this.#cache = cache;
     this.#limits = policy.limits;
-    this.#inputBytes = resolveParseLimits(policy.limits).inputBytes;
+    this.#resolvedLimits = resolveParseLimits(policy.limits);
+    this.#inputBytes = this.#resolvedLimits.inputBytes;
     // Read per construction, not at module load. `'cache'` exactly,
     // so the shipped behaviour is the wire protocol unless someone names the
     // other one — this switch exists to be A/B'd, not to be guessed at.
@@ -523,12 +527,13 @@ export class ParseDispatcher {
    * @throws A `ParseLimitError` (`inputBytes`) for content past the cap
    */
   parse(keyed: ParsableContent): Promise<ParseResult> {
-    if (keyed.byteLength > this.#inputBytes) return Promise.reject(new ParseLimitError('inputBytes', this.#inputBytes));
+    const breach = inputBytesBreach(keyed.byteLength, this.#inputBytes);
+    if (breach !== undefined) return Promise.reject(breach);
     const seen = this.#observed[keyed.parserKind];
     seen.documents += 1;
     seen.bytes += keyed.byteLength;
 
-    return parseKeyedInPool(keyed, this.#cache, () => this.#poolForMiss(), this.#transport);
+    return parseKeyedInPool(keyed, { cache: this.#cache, limits: this.#resolvedLimits }, () => this.#poolForMiss(), this.#transport);
   }
 
   /**
@@ -538,13 +543,13 @@ export class ParseDispatcher {
    * the store could not answer. It builds the pool if no miss has yet.
    *
    * @param harness - The harness whose reader runs
-   * @param content - The decoded file
+   * @param input - The decoded file, measured in the bytes it was read from
    * @returns What the harness does with those bytes
    * @throws A `ParseLimitError` / `ParseWorkerDiedError` when the worker
    *   refuses the file, and a parser-unavailable error for a broken install
    */
-  async harnessFacts(harness: HarnessId, content: string): Promise<HarnessContentFacts> {
-    const facts = await this.#poolForMiss().harnessFacts(harness, content, Buffer.byteLength(content, 'utf8'));
+  async harnessFacts(harness: HarnessId, input: MeasuredContent): Promise<HarnessContentFacts> {
+    const facts = await this.#poolForMiss().harnessFacts(harness, input.content, input.byteLength);
     return facts;
   }
 
@@ -734,11 +739,12 @@ export async function withParseDispatcher<T>(
 /** Where a single parse runs: a run's dispatcher, or a one-thread pool of its own. */
 export interface ParseRoute {
   /**
-   * The run's dispatcher, when the caller parses many documents. Omitted, the
-   * call builds a pool of ONE thread — only on a cache miss — and shuts it down
-   * before it returns.
+   * The run's dispatcher, when the caller parses many documents. Required, so a
+   * caller inside a run cannot drop it by omission: `undefined` says "no run" —
+   * the call builds a pool of ONE thread, only on a cache miss, and shuts it
+   * down before it returns.
    */
-  dispatcher?: ParseDispatcher;
+  dispatcher: ParseDispatcher | undefined;
   /**
    * The store a call without a `dispatcher` consults, defaulting to the
    * process-wide one. A `dispatcher` brings its own.
@@ -795,7 +801,7 @@ function parseOnRoute(keyed: ParsableContent, route: ParseRoute): Promise<ParseR
 export async function parseFileCached(
   filePath: string,
   parserKind: DocumentParserKind,
-  options: ParseRoute & { side?: FsSide } = {},
+  options: ParseRoute & { side?: FsSide },
 ): Promise<ParseResult> {
   const side = options.side ?? 'source';
   const keyed = await withFsFault({ side, origin: 'content', action: `read ${filePath}`, path: filePath }, () =>
@@ -813,7 +819,7 @@ export async function parseFileCached(
  *
  * @param filePath - Absolute path to the document
  * @param parserKind - The parser its content will be handed to
- * @param route - The {@link ParseRoute} the parse will take; `{}` for the default one
+ * @param route - The {@link ParseRoute} the parse will take; `{ dispatcher: undefined }` for the default one
  * @returns The content, its key, and the parser it routes to
  * @throws A `ParseLimitError` (`inputBytes`) for a file past the cap, and whatever
  *   `readContentWithKey` throws otherwise
@@ -827,16 +833,26 @@ export function readContentForParse<K extends DocumentParserKind>(
 }
 
 /**
- * The parse input cap a route runs under: its dispatcher's, or the default one. What a lane that
- * holds content in memory checks the WHOLE content against before it cuts out the part it parses
- * — as {@link readContentForParse} holds a file to it — so content past the cap is one refusal on
- * every lane, never parsed in part.
- *
- * @param route - The {@link ParseRoute}; `{}` for the default one
- * @returns The cap, in bytes
+ * @param route - The {@link ParseRoute}; `{ dispatcher: undefined }` for the default one
+ * @returns The parse input cap it runs under: its dispatcher's, or the default one
  */
-export function parseInputBytesOf(route: ParseRoute): number {
+function parseInputBytesOf(route: ParseRoute): number {
   return route.dispatcher?.inputBytes ?? resolveParseLimits(undefined).inputBytes;
+}
+
+/**
+ * The input-size refusal a route gives content of `byteLength` bytes ({@link inputBytesBreach}),
+ * under the cap it runs under. What a lane holding content checks the WHOLE content against
+ * before it cuts out the part it parses — as {@link readContentForParse} holds a file to it — so
+ * content past the cap is one refusal on every lane, never parsed in part.
+ *
+ * @param byteLength - The content's size: a read's raw bytes ({@link MeasuredContent}), or a
+ *   ZIP entry's declared size
+ * @param route - The {@link ParseRoute}; `{ dispatcher: undefined }` for the default one
+ * @returns The refusal, or `undefined` for content within the cap
+ */
+export function parseInputRefusal(byteLength: number, route: ParseRoute): ParseLimitError | undefined {
+  return inputBytesBreach(byteLength, parseInputBytesOf(route));
 }
 
 /**
@@ -857,7 +873,7 @@ export function parseInputBytesOf(route: ParseRoute): number {
 export function parseContentCached(
   content: string,
   parserKind: DocumentParserKind,
-  route: ParseRoute = {},
+  route: ParseRoute,
 ): Promise<ParseResult> {
   return parseOnRoute(keyContent(content, parserKind), route);
 }
@@ -884,13 +900,17 @@ export function parseContentCached(
  */
 async function parseKeyedInPool(
   keyed: ParsableContent,
-  cache: ParseCache,
+  { cache, limits }: { cache: ParseCache; limits: ParseLimits },
   poolForMiss: () => ParsePool,
   transport: ParseTransport,
 ): Promise<ParseResult> {
   const hit = await cache.get(keyed);
   if (hit !== null) {
     recordParseCacheHit();
+    // Held to this dispatcher's output caps, as its worker would hold a parse: an entry a run
+    // under looser caps filed is never this run's answer for bytes it would refuse.
+    const breach = outputBreach(hit, limits);
+    if (breach !== undefined) throw new ParseLimitError(breach.limit, limits[breach.limit], breach.found);
     return hit;
   }
   recordParseCacheMiss();

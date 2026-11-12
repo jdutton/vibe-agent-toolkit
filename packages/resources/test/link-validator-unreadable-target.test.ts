@@ -183,7 +183,7 @@ describe('a link into a file the population could not read', () => {
     const issue = await judge(root, ANCHOR_HREF, { unreadableTargets });
 
     expect(issue?.code).toBe('LINK_TARGET_UNREADABLE');
-    expect(issue?.message).toContain('its parse was refused (its parse was stopped at its outputDepth limit (512))');
+    expect(issue?.message).toContain('its parse was stopped at its outputDepth limit (512), so its anchors are unverified');
     expect(issue?.message).toContain('RESOURCE_PARSE_LIMIT_EXCEEDED');
     expect(issue?.message).toContain('unverified');
     expect(issue?.message).not.toContain('could not be read');

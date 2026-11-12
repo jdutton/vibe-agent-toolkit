@@ -310,7 +310,7 @@ async function realizationsFrom(
 ): Promise<readonly ResourceRealizationRow[]> {
   const tracker = new GitTracker(root);
   await tracker.initialize({ includeUntracked: true });
-  const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache({ inputBytes: null }) });
+  const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache() });
 
   const contributor = new FilesystemExtentContributor((r) =>
     source === 'git' ? new GitCrawlSource(r, []) : new FilesystemCrawlSource(r, []),

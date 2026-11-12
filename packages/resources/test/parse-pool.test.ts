@@ -908,7 +908,7 @@ const UNDECIDED_AFTER_SAMPLES = 20;
  * V8's ceiling a scripted heap reports: what the thread really reads, or a
  * fixed one. A process-wide `--max-old-space-size` (the Windows unit tier sets
  * 512) lowers the real one, and a young generation the Node version sizes
- * (96 MiB on Node 26, 192 on Node 24) decides whether a scripted shape fits
+ * (on Node 26.7, 192 or 96 MiB by host; 192 on Node 24) decides whether a scripted shape fits
  * under it at all.
  */
 type ScriptedCeiling = 'as-read' | { readonly ceilingMb: number };
@@ -926,6 +926,10 @@ interface ScriptedHeap {
 /**
  * Serve every heap sample with a scripted used heap, under V8's bounds as
  * {@link ScriptedCeiling} names them.
+ *
+ * The script starts once the pool has taken the job's `parserLoaded` from a thread spawned under
+ * it (until then each sample reads an empty heap): a breach on the job's load clock is the
+ * thread's, never the document's, so a script served then would test the wrong clock.
  *
  * ⛔ Nothing here may throw into the pool: it treats a failed sample as a
  * thread already gone and ignores it, so an assertion thrown in a sample is
@@ -946,11 +950,13 @@ function scriptedHeap(script: (bounds: HeapBounds, youngMb: number) => number[],
   let read: HeapBounds | undefined;
   let undecided: string | undefined;
   let usedMb: number[] = [];
+  const loading = parserLoadedWatch();
   vi.spyOn(Worker.prototype, 'getHeapStatistics').mockImplementation(function (this: Worker) {
     return sample.call(this).then((stats) => {
       const geometry = workerHeapGeometry(this.resourceLimits, v8HeapFlags(process.env['NODE_OPTIONS'], process.execArgv));
       const youngMb = geometry.youngMb;
       const limitBytes = ceiling === 'as-read' ? stats.heap_size_limit : (ceiling.ceilingMb + youngMb) * BYTES_PER_MIB;
+      if (loading(this)) return { ...stats, heap_size_limit: limitBytes, used_heap_size: 0 };
       if (read === undefined) {
         read = heapBounds({ heap_size_limit: limitBytes }, geometry, resolveParseLimits(undefined).heapMb);
         try {
@@ -971,6 +977,29 @@ function scriptedHeap(script: (bounds: HeapBounds, youngMb: number) => number[],
 }
 
 /**
+ * Watch each thread spawned from here on for a `parserLoaded`, seen only once the pool's own
+ * listener (registered first, so called first) has taken it.
+ *
+ * @returns Whether a thread is still loading its job's parser: false for one spawned before the watch
+ */
+function parserLoadedWatch(): (worker: Worker) => boolean {
+  const watched = new WeakSet<Worker>();
+  const loaded = new WeakSet<Worker>();
+  const on = Worker.prototype.on;
+  vi.spyOn(Worker.prototype, 'on').mockImplementation(function (this: Worker, event: string | symbol, listener: (...args: any[]) => void) {
+    on.call(this, event, listener);
+    if (event === 'message' && !watched.has(this)) {
+      watched.add(this);
+      on.call(this, 'message', (message: { parserLoaded?: unknown }) => {
+        if (message.parserLoaded !== undefined) loaded.add(this);
+      });
+    }
+    return this;
+  });
+  return (worker) => watched.has(worker) && !loaded.has(worker);
+}
+
+/**
  * One job on a thread that never answers, under a scripted heap ({@link scriptedHeap}).
  *
  * @param script - See {@link scriptedHeap}
@@ -985,7 +1014,7 @@ async function heapRefusalUnder(
   await seedWorkerEntry([
     "import { parentPort } from 'node:worker_threads';",
     READY_LINE,
-    "parentPort.on('message', () => undefined);",
+    "parentPort.on('message', (request) => { parentPort.postMessage({ id: request.id, parserLoaded: request.kind }); });",
   ].join('\n'));
   const heap = scriptedHeap(script, ceiling);
   try {
@@ -1169,10 +1198,11 @@ describe('a reused thread\'s check before its job', () => {
     expect(await outcome).toBe('answered');
   }, 60_000);
 
-  it('keeps a thread with no collector until it holds past its stop, and warns once, on a runtime that refuses the flag a collector needs', async () => {
+  it('retires a thread with no collector past the reused-thread bound, and warns once, on a runtime that refuses the flag a collector needs', async () => {
     // `v8.setFlagsFromString` throws, as a runtime that forbids it would: the thread loads with no
-    // collector. Retired at the reused-thread bound, such a thread would be replaced after almost
-    // every job; it is retired only past its stop, and the run is told once. A process run with
+    // collector. Held to its stop instead, a reused thread could carry up to the stop of earlier
+    // jobs' garbage into a verdict; it is retired at the reused-thread bound, its job on a fresh
+    // thread — a thread start, never a verdict — and the run is told once. A process run with
     // `--expose-gc` would leave `gc` on the thread's global, which is used: cleared (writable,
     // never configurable, so assigned rather than deleted).
     await seedScriptedHeapEntry([
@@ -1187,8 +1217,8 @@ describe('a reused thread\'s check before its job', () => {
       expect(await outcomeOf(pool, '# garbage=200\n')).toBe('answered');
     });
 
-    expect(started).toHaveLength(0);
-    expect(reuse.rows).toStrictEqual({ check: 1, collect: 0, retire: 0 });
+    expect(started).toHaveLength(1);
+    expect(reuse.rows).toStrictEqual({ check: 1, collect: 0, retire: 1 });
     expect(warnings.mock.calls.filter(([message]) => String(message).includes('no full collection'))).toHaveLength(1);
   }, 60_000);
 
@@ -1201,6 +1231,18 @@ describe('a reused thread\'s check before its job', () => {
     });
 
     expect(started).toHaveLength(1);
+  }, 60_000);
+
+  it('never counts a thread lost in its heap check among the job\'s load stops, so two later losses still leave it a third thread', async () => {
+    // Lost in its reused thread's check, then on two fresh threads before the parser loads: a
+    // check loss counted would make three, and end the job as a broken install.
+    const { pool } = await reusedHeapTestPool();
+
+    const started = await startedThreads(async () => {
+      expect(await outcomeOf(pool, '# die-before-check=exit die-loading=2\n')).toBe('answered');
+    });
+
+    expect(started).toHaveLength(3);
   }, 60_000);
 });
 
@@ -1241,6 +1283,8 @@ const REUSED_BOUND_MB = reusedThreadHeapMb(resolveParseLimits(undefined).heapMb)
  *   marker exists too.
  * - `die-before-check=exit|oom` — handed the job as a reused thread, the thread dies before it
  *   checks its heap: it exits, or throws V8's out-of-memory error.
+ * - `die-loading=<n>` — handed the job as a fresh thread, the thread exits before it loads a
+ *   parser, on the first `n` fresh threads the job reaches (counted in a file beside the entry).
  *
  * Its own `heap_size_limit` always reads as an unflagged thread's, so the bound it settles to is
  * {@link REUSED_BOUND_MB} under any process heap flag (the Windows unit tier runs under 512 MiB).
@@ -1250,12 +1294,13 @@ const REUSED_BOUND_MB = reusedThreadHeapMb(resolveParseLimits(undefined).heapMb)
  */
 async function seedScriptedHeapEntry(preamble: readonly string[] = []): Promise<string> {
   const entry = await seedWorkerEntry([
-    "import { existsSync } from 'node:fs';",
+    "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
     "import v8 from 'node:v8';",
     "import { parentPort, resourceLimits } from 'node:worker_threads';",
     ...preamble,
     "const release = new URL('./release', import.meta.url);",
     "const releaseAnswer = new URL('./release-answer', import.meta.url);",
+    "const loadingDeaths = new URL('./loading-deaths', import.meta.url);",
     'const read = v8.getHeapStatistics;',
     `const ceilingBytes = (${String(UNFLAGGED.ceilingMb)} + (resourceLimits.maxYoungGenerationSizeMb ?? 0)) * ${String(BYTES_PER_MIB)};`,
     'let usedBytes;',
@@ -1281,6 +1326,14 @@ async function seedScriptedHeapEntry(preamble: readonly string[] = []): Promise<
     "    const error = new Error('out of memory');",
     "    error.code = 'ERR_WORKER_OUT_OF_MEMORY';",
     '    throw error;',
+    '  }',
+    String.raw`  const diesLoading = /die-loading=(\d+)/.exec(request.content);`,
+    '  if (diesLoading !== null && !request.settleHeap) {',
+    "    const died = existsSync(loadingDeaths) ? Number(readFileSync(loadingDeaths, 'utf8')) : 0;",
+    '    if (died < Number(diesLoading[1])) {',
+    '      writeFileSync(loadingDeaths, String(died + 1));',
+    '      process.exit(3);',
+    '    }',
     '  }',
     String.raw`  const scripted = /heap=(\d+)/.exec(request.content);`,
     '  usedBytes = scripted === null ? undefined : Number(scripted[1]);',
@@ -1498,6 +1551,41 @@ function diesWhileLoading(how: 'exit' | 'oom', dying: number): string {
   ]);
 }
 
+describe('a thread lost to its heap before the job\'s parser loaded', () => {
+  it('charges a breach on the load clock to the thread, never the document it holds', async () => {
+    // The thread posts `ready` and never loads the job's parser, and every sample reads its heap
+    // at V8's ceiling, past any stop: the sampler stops it on the job's load clock, before any
+    // parser has run over the document's bytes. That is the thread's, never a refusal of the
+    // document: three threads lost so end the job as a broken install.
+    await seedWorkerEntry(["import { parentPort } from 'node:worker_threads';", READY_LINE, "parentPort.on('message', () => undefined);"].join('\n'));
+    const sample = Worker.prototype.getHeapStatistics;
+    const spy = vi.spyOn(Worker.prototype, 'getHeapStatistics').mockImplementation(function (this: Worker) {
+      return sample.call(this).then((stats) => ({ ...stats, used_heap_size: stats.heap_size_limit }));
+    });
+    const pool = heapTestPool();
+
+    try {
+      const outcome = await outcomeOf(pool, '# never loads\n');
+
+      expect(verdictOf(outcome)).toBe('unavailable');
+      expect(outcome instanceof Error && outcome.message).toMatch(/the last: a parse thread's heap passed its bound before the markdown parser loaded/);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('treats V8\'s out-of-memory before the thread is ready as a thread that could not start, never a heap refusal', async () => {
+    await seedWorkerEntry("{ const error = new Error('out of memory'); error.code = 'ERR_WORKER_OUT_OF_MEMORY'; throw error; }");
+    const pool = createParsePool({ size: 1 });
+    openPools.push(pool);
+
+    const outcome = await outcomeOf(pool, '# never starts\n');
+
+    expect(isParseLimitError(outcome)).toBe(false);
+    expect(verdictOf(outcome)).toBe('unavailable');
+  });
+});
+
 describe('a thread that dies while it loads the job\'s parser', () => {
   it.each(['exit', 'oom'] as const)('runs the job again on another thread, charged to no document (%s)', async (how) => {
     await seedWorkerEntry(diesWhileLoading(how, 1));
@@ -1607,10 +1695,12 @@ describe('the clocks and the breaker', () => {
   it('counts a hung parser load per parser kind, so answers of another kind never reset it', async () => {
     // The HTML parser never loads; markdown parses. One HTML document is stopped at its load clock
     // three times, a markdown document answered between each stop. Any answer ending the run would
-    // leave the HTML document a per-run death and the install judged sound.
+    // leave the HTML document a per-run death and the install judged sound. A reused thread passes
+    // its heap check first: the load hangs, never the check, whose loss is no load stop.
     const deadline = settleDeadline();
     vi.useFakeTimers(TEST_CLOCK);
     const entry = await seedWorkerEntry(intercepting("request?.kind === 'html'", [
+      'if (request.settleHeap) parentPort.postMessage({ id: request.id, reuseCheck: { usedBytes: 0, collectMs: null, checkMs: 0, retire: false } });',
       "process.getBuiltinModule('node:fs').writeFileSync(new URL('./html', import.meta.url), '');",
     ]));
     const htmlMarker = safePath.join(safePath.resolve(entry, '..'), 'html');

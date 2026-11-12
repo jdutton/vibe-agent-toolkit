@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 
 import type { ParseResult } from '../src/link-parser.js';
+import { parseRefusal } from '../src/not-admitted.js';
 import {
   heapBounds,
   heapBreached,
@@ -313,6 +314,22 @@ describe('isStackOverflow', () => {
   });
 });
 
+describe('a limit refusal\'s sentence', () => {
+  it('says content past the input cap was refused, not stopped, in the error and the reported clause alike', () => {
+    const refused = new ParseLimitError('inputBytes', 8);
+
+    expect(refused.message).toBe('It was refused at its inputBytes limit (8 input bytes).');
+    expect(parseRefusal(refused).reason).toBe('it was refused at its inputBytes limit (8 input bytes)');
+  });
+
+  it('says a parse stopped at a limit was stopped, in the error and the reported clause alike', () => {
+    const stopped = new ParseLimitError('timeMs', 10);
+
+    expect(stopped.message).toBe('Its parse was stopped at its timeMs limit (10 ms wall clock).');
+    expect(parseRefusal(stopped).reason).toBe('its parse was stopped at its timeMs limit (10 ms wall clock)');
+  });
+});
+
 describe('ParseWorkerDiedError', () => {
   it('is coded, names the exit, and is a per-run refusal beside a limit breach', () => {
     const died = new ParseWorkerDiedError({ exitCode: 1 });
@@ -408,6 +425,15 @@ describe('V8\'s ceiling under a process-wide semi-space flag', () => {
       .toStrictEqual({ appliedMb: 64, ceilingMb: 128, stopMb: 96 });
   });
 
+  it('is never above the old generation the pool set the thread when no old-space flag is visible, and is the flag\'s when one is', () => {
+    // A heap_size_limit past what the pool set: lifted by something the parent cannot see.
+    const set = (flags: Partial<V8HeapFlags> = {}): HeapGeometry =>
+      workerHeapGeometry({ maxYoungGenerationSizeMb: 192, maxOldGenerationSizeMb: 1536 }, { ...NO_FLAGS, ...flags });
+
+    expect(heapBounds({ heap_size_limit: (4096 + 192) * MIB }, set(), 1024).ceilingMb).toBe(1536);
+    expect(heapBounds({ heap_size_limit: (4096 + 192) * MIB }, set({ oldSpaceMb: 2048 }), 1024).ceilingMb).toBe(2048);
+  });
+
   it('is never above a flagged old-space size, or a flagged whole-heap size less the young generation', () => {
     // Measured on Node 26.7 under --max-old-space-size=1024 --max-heap-size=512: heap_size_limit 1,027.
     expect(heapBounds({ heap_size_limit: 1027 * MIB }, geometry(192, { oldSpaceMb: 1024, heapSizeMb: 512 }), 1024).ceilingMb).toBe(320);
@@ -429,6 +455,16 @@ describe('the V8 heap flags a process runs under', () => {
   it('reads none from arguments that set none, or set one to no positive number', () => {
     expect(v8HeapFlags(undefined, ['--inspect', 'x.js'])).toStrictEqual(NO_FLAGS);
     expect(v8HeapFlags('--max-old-space-size=abc --max-semi-space-size=0', [])).toStrictEqual(NO_FLAGS);
+  });
+
+  it.each([
+    ['a quoted flag', '"--max-old-space-size=512" --max-semi-space-size="16"', { oldSpaceMb: 512, semiSpaceMb: 16, heapSizeMb: undefined }],
+    ['a flag inside a quoted argument, which is not one', '--require "./a --max-old-space-size=64.js" --max-old-space-size=512', { oldSpaceMb: 512, semiSpaceMb: undefined, heapSizeMb: undefined }],
+    ['a backslash escape inside quotes', String.raw`"--max-old-space-size=\5\12"`, { oldSpaceMb: 512, semiSpaceMb: undefined, heapSizeMb: undefined }],
+    ['an unterminated quote, read every way it could mean', '--max-old-space-size=1024 "--max-old-space-size=256', { oldSpaceMb: 256, semiSpaceMb: undefined, heapSizeMb: undefined }],
+    ['a backslash ending a quote, read every way it could mean', '--max-old-space-size=1024 "--max-heap-size=300\\', { oldSpaceMb: 1024, semiSpaceMb: undefined, heapSizeMb: 300 }],
+  ])('splits NODE_OPTIONS as Node does: %s', (_label, nodeOptions, flags) => {
+    expect(v8HeapFlags(nodeOptions, [])).toStrictEqual(flags);
   });
 
   it('takes, of a flag given twice, the value that leaves V8 the least old-generation room', () => {
@@ -553,6 +589,27 @@ describe('a thread\'s young generation', () => {
     // Measured on Node 22.16, 24.21 and 26.7: heap_size_limit grows by exactly 3 × the flagged semi-space.
     expect(workerHeapGeometry({ maxYoungGenerationSizeMb: 192 }, { ...NO_FLAGS, semiSpaceMb: 128 }).youngMb).toBe(384);
     expect(workerHeapGeometry({ maxYoungGenerationSizeMb: 192 }, { ...NO_FLAGS, semiSpaceMb: 16 }).youngMb).toBe(48);
+  });
+
+  it.each([
+    // V8 rounds the flag up to a power of two (Node 26.7: `heap_size_limit` grew by 12, 192 and 384).
+    [3, 12],
+    [40, 192],
+    [100, 384],
+  ])('rounds a flagged semi-space of %i MiB up to a power of two, as V8 does: %i MiB', (semiSpaceMb, youngMb) => {
+    expect(workerHeapGeometry({ maxYoungGenerationSizeMb: 192 }, { ...NO_FLAGS, semiSpaceMb }).youngMb).toBe(youngMb);
+  });
+
+  it.each([40, 100])('leaves the sampler its headroom under V8\'s real ceiling with --max-heap-size=600 and a %i MiB semi-space', (semiSpaceMb) => {
+    const young = 3 * 2 ** Math.ceil(Math.log2(semiSpaceMb));
+    const bounds = heapBounds(
+      { heap_size_limit: 600 * MIB },
+      workerHeapGeometry({ maxYoungGenerationSizeMb: 192 }, { ...NO_FLAGS, heapSizeMb: 600, semiSpaceMb }),
+      1024,
+    );
+
+    expect(bounds.ceilingMb).toBe(600 - young);
+    expect(bounds.stopMb + 32).toBeLessThanOrEqual(600 - young);
   });
 
   it('is what its resource limits say with no such flag, and 0 when a runtime gives none', () => {

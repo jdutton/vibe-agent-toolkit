@@ -182,7 +182,7 @@ interface RederivedBlobs {
  * @returns The stage's counters and the content keys it derived
  */
 async function rederiveBlobs(projection: Projection): Promise<RederivedBlobs> {
-  const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache({ inputBytes: null }) });
+  const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() });
   for (const row of projection.resolutionContexts) builder.addContext(row);
   for (const row of projection.resources) builder.addResource(row);
   for (const row of projection.resourceRealizations) builder.addRealization(row);

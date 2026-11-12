@@ -60,7 +60,7 @@ export async function baseBuilderForRoot(
   order: RealizationOrder = IN_CRAWL_ORDER,
   contentCache?: RunContentCache,
 ): Promise<ProjectionBuilder> {
-  const freshBuilder = (): ProjectionBuilder => new ProjectionBuilder({ root: rootDir, contentCache: new RunContentCache({ inputBytes: null }) });
+  const freshBuilder = (): ProjectionBuilder => new ProjectionBuilder({ root: rootDir, contentCache: new RunContentCache() });
   const enumerator = contentCache === undefined ? freshBuilder() : new ProjectionBuilder({ root: rootDir, contentCache });
   const builder = contentCache === undefined ? freshBuilder() : enumerator;
   const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(enumerator.base(), null);

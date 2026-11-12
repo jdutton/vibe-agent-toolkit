@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, truncateSync, writeFileSync } from 'node:fs';
 
 import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { MAX_DECODABLE_BYTES } from '@vibe-agent-toolkit/utils/fs';
@@ -24,7 +24,7 @@ beforeEach(() => {
 
 describe('RunContentCache', () => {
   it('reads a path once however many times it is asked for', async () => {
-    const cache = new RunContentCache({ inputBytes: null });
+    const cache = new RunContentCache();
 
     const first = await cache.read(docPath(), 'markdown');
     const second = await cache.read(docPath(), 'markdown');
@@ -41,7 +41,7 @@ describe('RunContentCache', () => {
   });
 
   it('serves the first read after the file changes, so one run sees one instant', async () => {
-    const cache = new RunContentCache({ inputBytes: null });
+    const cache = new RunContentCache();
     const first = await cache.read(docPath(), 'markdown');
     writeFileSync(docPath(), '# rewritten mid-run\n');
 
@@ -55,7 +55,7 @@ describe('RunContentCache', () => {
   });
 
   it('does not serve one parser kind the other one’s entry', async () => {
-    const cache = new RunContentCache({ inputBytes: null });
+    const cache = new RunContentCache();
 
     const asMarkdown = await cache.read(docPath(), 'markdown');
     const asHtml = await cache.read(docPath(), 'html');
@@ -70,7 +70,7 @@ describe('RunContentCache', () => {
   });
 
   it('does not cache a failed read', async () => {
-    const cache = new RunContentCache({ inputBytes: null });
+    const cache = new RunContentCache();
     const missing = safePath.join(root, 'absent.md');
 
     await expect(cache.read(missing, 'markdown')).rejects.toThrow();
@@ -95,7 +95,7 @@ describe('readKeyedContent', () => {
   });
 
   it('reads through the cache when one is supplied', async () => {
-    const cache = new RunContentCache({ inputBytes: null });
+    const cache = new RunContentCache();
 
     await readKeyedContent(docPath(), 'markdown', cache);
     await readKeyedContent(docPath(), 'markdown', cache);
@@ -109,5 +109,19 @@ describe('POPULATION_PARSE_LIMITS', () => {
     // An `oversize` realization of a parsed kind is reported as refused at the input cap
     // (`blob-refusals.ts`), which is true only while every file too large to decode is also past it.
     expect(POPULATION_PARSE_LIMITS.inputBytes).toBeLessThanOrEqual(MAX_DECODABLE_BYTES);
+  });
+
+  it('is the one cap a run\'s reads are held to: a parsed kind one byte past it is refused, never read', async () => {
+    // Sparse, so the read the cap prevents would cost nothing if it happened.
+    const past = safePath.join(root, 'past.md');
+    writeFileSync(past, '');
+    truncateSync(past, POPULATION_PARSE_LIMITS.inputBytes + 1);
+    const at = safePath.join(root, 'at.md');
+    writeFileSync(at, '');
+    truncateSync(at, POPULATION_PARSE_LIMITS.inputBytes);
+    const cache = new RunContentCache();
+
+    await expect(cache.read(past, 'markdown')).rejects.toMatchObject({ limit: 'inputBytes' });
+    await expect(cache.read(at, 'markdown')).resolves.toMatchObject({ byteLength: POPULATION_PARSE_LIMITS.inputBytes });
   });
 });

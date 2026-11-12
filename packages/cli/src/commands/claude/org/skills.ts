@@ -29,10 +29,10 @@ import type {
   MultipartResult,
   OrgApiClient,
 } from '@vibe-agent-toolkit/claude-marketplace';
-import { ParseLimitError, withParseDispatcher } from '@vibe-agent-toolkit/resources';
+import { parseInputRefusal, withParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { createAllowUsageLedger, runValidationFramework } from '@vibe-agent-toolkit/schema';
 import type { RefusalCode, ValidationConfig, ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { ARCHIVE_REFUSED_CODE, archiveEntryPlace, direntKindFollowingSync, everywhere, forEachInOrder, isAbsoluteAnyPlatform, isArchiveEntryReadRefusal, isVatError, pathPresent, requireFollowedStatSync, safePath, toForwardSlash, toForwardSlashAnyPlatform, withTempDir } from '@vibe-agent-toolkit/utils';
+import { ARCHIVE_REFUSED_CODE, archiveEntryPlace, decodeTextContent, direntKindFollowingSync, everywhere, forEachInOrder, isAbsoluteAnyPlatform, isArchiveEntryReadRefusal, isVatError, pathPresent, requireFollowedStatSync, safePath, toForwardSlash, toForwardSlashAnyPlatform, withTempDir } from '@vibe-agent-toolkit/utils';
 // Type-only: the runtime import stays lazy inside `inspectZipArchive`, so the
 // archive readers are loaded on the one path that parses an archive.
 import type { ArchiveEntry, ArchiveRefusedError, OpenedArchive } from '@vibe-agent-toolkit/utils/archive';
@@ -932,9 +932,14 @@ function declaredNameOf(archive: OpenedArchive, entry: ArchiveEntry | undefined,
 	const skillMdPath = toForwardSlashAnyPlatform(entry.name);
 	return withParseDispatcher((dispatcher) => {
 		const read = (): Promise<string | undefined> => {
-			if (entry.size > dispatcher.inputBytes) return Promise.reject(new ParseLimitError('inputBytes', dispatcher.inputBytes));
-			const content = inflateOrRecord(archive, entry, unreadable);
-			return content === undefined ? Promise.resolve(undefined) : declaredSkillNameIn(content.toString('utf8'), { dispatcher });
+			const tooLarge = parseInputRefusal(entry.size, { dispatcher });
+			if (tooLarge !== undefined) return Promise.reject(tooLarge);
+			const bytes = inflateOrRecord(archive, entry, unreadable);
+			// Decoded as the disk lane decodes (a BOM, UTF-16 included), and measured in the entry's
+			// own bytes, the unit its declared size was held to.
+			return bytes === undefined
+				? Promise.resolve(undefined)
+				: declaredSkillNameIn({ content: decodeTextContent(bytes).text, byteLength: bytes.length }, { dispatcher });
 		};
 		// A parse refused for this run is the run's refusal, never "declares no name".
 		return declaredNameOrRefuse(skillMdPath, read(), '');
@@ -960,7 +965,7 @@ async function sendSkillUpload(
  * title and the top-level directory the API keys it by.
  */
 async function requireDeclaredName(skillMdPath: string): Promise<string> {
-	const declared = await declaredNameOrRefuse(skillMdPath, readDeclaredSkillName(skillMdPath, {}), safePath.join(skillMdPath, '..', '..'));
+	const declared = await declaredNameOrRefuse(skillMdPath, readDeclaredSkillName(skillMdPath, { dispatcher: undefined }), safePath.join(skillMdPath, '..', '..'));
 	if (declared === undefined) {
 		throw new CommandRefusalError(
 			'USAGE_INVALID',

@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 
-import { isPerRunParseRefusal, parseRefusal, readContentForParse } from '@vibe-agent-toolkit/resources';
+import { isPerRunParseRefusal, type MeasuredContent, parseRefusal, readContentForParse } from '@vibe-agent-toolkit/resources';
 import type { RefusalCode } from '@vibe-agent-toolkit/schema';
 import { applyTreePlan, followedKindSync, isPathAbsentError, planTreeChanges, safePath, withFsFaultSync } from '@vibe-agent-toolkit/utils';
 import { stringify as stringifyYaml } from 'yaml';
@@ -72,9 +72,9 @@ export async function importSkillToAgent(options: ImportOptions): Promise<Import
   // Read SKILL.md — only an ABSENCE is "does not exist"; anything else the OS
   // says (a directory, EACCES) is an input that is there and cannot be read, and
   // one past the parse input cap is refused by its size before it is read.
-  let content: string;
+  let read: MeasuredContent;
   try {
-    ({ content } = await readContentForParse(skillPath, 'markdown', {}));
+    read = await readContentForParse(skillPath, 'markdown', { dispatcher: undefined });
   } catch (error) {
     if (isPathAbsentError(error)) {
       return { success: false, error: `SKILL.md does not exist: ${skillPath}`, refusal: 'USAGE_INVALID' };
@@ -87,7 +87,7 @@ export async function importSkillToAgent(options: ImportOptions): Promise<Import
   }
 
   // Parse frontmatter
-  const parseResult = await parseFrontmatter(content, {});
+  const parseResult = await parseFrontmatter(read, { dispatcher: undefined });
 
   if (!parseResult.success) {
     return {

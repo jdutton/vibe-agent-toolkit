@@ -1573,7 +1573,9 @@ function unreadableFault(entry: UnreadableResource, ctx: FsFaultContext): unknow
  */
 async function parseSkillOrRefuse(skillPath: string, side: 'source' | 'destination'): Promise<Awaited<ReturnType<typeof parseFileCached>>> {
   try {
-    return await parseFileCached(skillPath, 'markdown', { side });
+    // The packager holds no run dispatcher: its one SKILL.md parse is a one-thread pool, under the
+    // default limits, said here rather than left to a default.
+    return await parseFileCached(skillPath, 'markdown', { dispatcher: undefined, side });
   } catch (error) {
     const refused = parseRefusedEntryFor(skillPath, error);
     if (refused === undefined) throw error;

@@ -247,7 +247,7 @@ function contribute(builder: ProjectionBuilder, side: Side): void {
  * host-dependent.
  */
 function buildFixture(order: 'forward' | 'reverse'): Projection {
-  const builder = new ProjectionBuilder({ root: TMP_ROOT_A, contentCache: new RunContentCache({ inputBytes: null }) });
+  const builder = new ProjectionBuilder({ root: TMP_ROOT_A, contentCache: new RunContentCache() });
   const sides = order === 'forward' ? [SIDE_A, SIDE_B] : [SIDE_B, SIDE_A];
   for (const side of sides) {
     contribute(builder, side);
@@ -266,7 +266,7 @@ describe('exportProjection', () => {
   it('carries every table as keys even when every one is empty', () => {
     // A missing key and an empty array are different claims. A consumer must not
     // have to guess which one an absent table meant.
-    const tables = exportProjection(new ProjectionBuilder({ root: TMP_ROOT_A, contentCache: new RunContentCache({ inputBytes: null }) }).build()).tables;
+    const tables = exportProjection(new ProjectionBuilder({ root: TMP_ROOT_A, contentCache: new RunContentCache() }).build()).tables;
 
     expect(Object.keys(tables)).toHaveLength(EXPECTED_TABLES.length);
     for (const name of EXPECTED_TABLES) {
@@ -377,7 +377,7 @@ describe('the key order of an exported row', () => {
     // survived as a `Date` serializes to ISO-8601; one turned into a plain
     // object by a "canonicalizing" deep copy would serialize to `{}`.
     const mtime = new Date('2024-03-04T05:06:07.000Z');
-    const builder = new ProjectionBuilder({ root: TMP_ROOT_A, contentCache: new RunContentCache({ inputBytes: null }) });
+    const builder = new ProjectionBuilder({ root: TMP_ROOT_A, contentCache: new RunContentCache() });
     contribute(builder, SIDE_A);
     builder.addRealization({
       resourceId: RES_B,
@@ -407,7 +407,7 @@ describe('the key order of an exported row', () => {
     // producer added and the registry has not been taught about, and report the
     // export clean. Silent data loss is the one failure mode an export cannot
     // have, so an undeclared column is loud.
-    const builder = new ProjectionBuilder({ root: TMP_ROOT_A, contentCache: new RunContentCache({ inputBytes: null }) });
+    const builder = new ProjectionBuilder({ root: TMP_ROOT_A, contentCache: new RunContentCache() });
     builder.addRoot({ id: ROOT_ID_A, path: TMP_ROOT_A, surplus: 'undeclared' } as RootRow);
 
     expect(() => exportProjection(builder.build())).toThrow(UnregisteredProjectionColumnError);

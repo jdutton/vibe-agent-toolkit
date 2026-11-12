@@ -290,7 +290,7 @@ describe('the shape of the table', () => {
  */
 describe.skipIf(SYMLINK_CAP === null)('identity collapse — one identity, two loading classes', () => {
   it('reduces the classes with strongest-wins, not with the first realization seen', async () => {
-    const builder = new ProjectionBuilder({ root, contentCache: new RunContentCache({ inputBytes: null }) });
+    const builder = new ProjectionBuilder({ root, contentCache: new RunContentCache() });
     const base = builder.base();
     const absolute = (relativePath: string): string => safePath.join(root, relativePath);
 

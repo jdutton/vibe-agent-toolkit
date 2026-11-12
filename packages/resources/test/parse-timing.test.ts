@@ -154,7 +154,7 @@ function groupOf(thread: ParseThreadTiming, kind: string): ParseTimingKind {
  * which counts the hit or miss on THIS thread; the parse itself runs in a worker.
  */
 function parseKeyed(keyed: ParsableContent, cache: ParseCache): Promise<unknown> {
-  return parseContentCached(keyed.content, keyed.parserKind, { cache });
+  return parseContentCached(keyed.content, keyed.parserKind, { dispatcher: undefined, cache });
 }
 
 /** Every pass row's `calls` for one kind, in dump order. Excludes the total. */
