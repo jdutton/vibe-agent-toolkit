@@ -774,17 +774,15 @@ change's call to make.
 - Always flush stdout before writing to stderr
 - Test format errors must include file:line:column
 
-Every verb ends its failures through the writer (`endWithRefusal`, next section); a protocol leaf
-(`agent run`, `mcp serve`), whose stdout is not a document, writes its failure to stderr and ends on
-`ERROR`. Build-time scripts that are not `vat` verbs (`validate-help-files.ts`) throw, and the build
-runner exits on the uncaught throw.
+Every verb ends its failures through the writer (`endWithRefusal`, next section). Build-time scripts that are not `vat`
+verbs (`validate-help-files.ts`) throw, and the build runner exits on the uncaught throw.
 
 ## The report contract
 
 - **One writer.** Under `packages/cli/src/commands/`, stdout is written by
   `utils/document-writer.ts` and nothing else — `local/no-stdout-outside-writer` refuses
   `process.stdout.write`, the stdout `console` methods and the stdout helpers (called or handed on),
-  with one `allowFiles` entry, `commands/agent/run.ts` (the agent's reply is its stdout). A
+  in every command file — the rule takes no exemption list. A
   supervised child's document is read with `readForwardedDocument` (parsed and validated; one that
   is not the verb's document is the child's death, not a forward) and ends through
   `endWithForwardedDocument`, on the code that document derives.

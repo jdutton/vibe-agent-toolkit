@@ -41,13 +41,11 @@ const REPO_ROOT = resolveFromImportMeta(import.meta.url, '..', '..', '..', '..')
  * reason in the diff; delete it at zero.
  */
 const CEILINGS: Readonly<Record<string, number>> = {
-  '@typescript-eslint/await-thenable': 1,
   '@typescript-eslint/explicit-module-boundary-types': 6,
-  '@typescript-eslint/no-explicit-any': 24,
+  '@typescript-eslint/no-explicit-any': 9,
   '@typescript-eslint/no-require-imports': 1,
   '@typescript-eslint/prefer-nullish-coalescing': 2,
   'import/order': 1,
-  'local/no-bare-dynamic-import-path': 1,
   'local/no-bare-symlink-in-tests': 1,
   // `failure-reason.ts`: a property read that throws IS "declared nothing";
   // reason inline at the directive.
@@ -79,20 +77,17 @@ const CEILINGS: Readonly<Record<string, number>> = {
   'no-void': 1,
   'security/detect-child-process': 1,
   // `generate-tsconfig-refs.ts`: assembled from a module constant, never input.
-  'security/detect-non-literal-regexp': 20,
+  'security/detect-non-literal-regexp': 19,
   'security/detect-possible-timing-attacks': 1,
-  'security/detect-unsafe-regex': 10,
+  'security/detect-unsafe-regex': 8,
   'sonarjs/cognitive-complexity': 2,
-  'sonarjs/deprecation': 3,
   'sonarjs/different-types-comparison': 1,
   'sonarjs/disabled-auto-escaping': 1,
-  'sonarjs/function-return-type': 3,
+  'sonarjs/function-return-type': 2,
   'sonarjs/no-alphabetical-sort': 1,
   'sonarjs/no-nested-functions': 1,
   'sonarjs/no-os-command-from-path': 1,
-  'sonarjs/pseudo-random': 4,
-  'sonarjs/regex-complexity': 2,
-  'sonarjs/unused-import': 4,
+  'sonarjs/regex-complexity': 1,
   'sonarjs/void-use': 1,
   'unicorn/prefer-structured-clone': 4,
 };

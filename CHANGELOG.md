@@ -3471,6 +3471,6 @@ Pre-1.0 breaking. Callers must:
 - New package: `@vibe-agent-toolkit/runtime-claude-skills` - Claude Skills builder, installer, validator, and import/export
 - New package: `@vibe-agent-toolkit/discovery` - format detection and file scanning utilities
 - New documentation: [Agent Skills Best Practices Guide](./docs/guides/agent-skills-best-practices.md)
-- New documentation: [Audit Command Reference](./docs/cli/audit.md)
-- New documentation: [Import Command Reference](./docs/cli/import.md)
+- New documentation: [Audit Command Reference](https://github.com/jdutton/vibe-agent-toolkit/blob/v0.1.42/docs/cli/audit.md)
+- New documentation: [Import Command Reference](https://github.com/jdutton/vibe-agent-toolkit/blob/v0.1.42/docs/cli/import.md)
 - **Resources System**: Markdown resource scanning and validation of link integrity

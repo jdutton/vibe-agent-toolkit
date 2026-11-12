@@ -45,3 +45,6 @@
   - Validation and refusal codes: `AGENT_MANIFEST_INVALID`, `AGENT_REFERENCE_MISSING`,
     `AGENT_REFERENCE_UNREADABLE`, `AGENT_RAG_NO_SOURCES`, `AGENT_MANIFEST_NOT_FOUND`,
     `AGENT_MANIFEST_UNREADABLE`, `AGENT_PACKAGE_ROOT_MISSING`, `AGENT_NAME_ESCAPES_SCOPE`.
+  - `@vibe-agent-toolkit/utils/eslint`: `no-stdout-outside-writer` drops its `allowFiles` option
+    (and the `staleAllow` message), and `no-literal-process-exit` drops its `allow` option; each
+    rule's schema now refuses the key.

@@ -298,11 +298,10 @@ export const LINK_FOLLOWING_FS_CALLS = {
   'packages/dev-tools/src/link-workspace-packages.ts': 5,
   [PRE_PUBLISH_CHECK_FILE]: 6,
   'packages/dev-tools/src/prepare-bin.ts': 2,
-  'packages/dev-tools/src/process-test-images.ts': 1,
   'packages/dev-tools/src/publish-with-rollback.ts': 2,
   'packages/dev-tools/src/resolve-workspace-deps.ts': 1,
   'packages/dev-tools/src/test-tier-budget-seed.ts': 2,
-  'packages/dev-tools/src/validate-repo-structure.ts': 3,
+  'packages/dev-tools/src/validate-repo-structure.ts': 2,
   'packages/dev-tools/src/validate-version.ts': 2,
   'packages/dev-tools/src/workspace-graph.ts': 1,
   // The quality lab (private): its instrument, harness and captures act on the operator's own
@@ -543,8 +542,7 @@ const localRulesConfig = {
   // beside it — one outcome shipped with different codes in different verbs
   // because each call site mapped it by hand. `ExitCode.FINDINGS` may not be
   // named under `packages/cli/src/`, and an exit takes OK, ERROR or a
-  // derivation. No file is exempt: the migration ratchet reached zero and the
-  // option went with it.
+  // derivation. No file is exempt, and the rule takes no exemption list.
   'local/no-literal-process-exit': ['error', {
     derived: {
       paths: ['packages/cli/src/'],
@@ -555,11 +553,9 @@ const localRulesConfig = {
   // through `utils/document-writer.ts` (validated against its registered schema,
   // exit derived from what was written) and nowhere else — `process.stdout.write`,
   // the stdout `console` methods and the stdout helpers (called or handed
-  // on) are errors. No file is exempt: an `allowFiles` entry is asserted both
-  // ways (`staleAllow`), so never add one.
+  // on) are errors. No file is exempt, and the rule takes no exemption list.
   'local/no-stdout-outside-writer': ['error', {
     paths: ['packages/cli/src/commands/'],
-    allowFiles: [],
   }],
   // The containment trio, from the sweep that watched a delete, a copy and an
   // uninstall walk out of their root. No backlog and no ratchet: every site
