@@ -158,6 +158,7 @@ async function preVerifySkill(skillDir: string, boundary: FsBoundary, side: FsSi
   // The tree is on the side its lane declared (ResolvedSource.side): the validator's own walk faults there.
   const result = await boundary.run(`validate the skill at ${skillDir}`, side, () => validateSkill({
     skillPath: skillMdPath,
+    dispatcher: undefined,
     validation: {},
     resourcesValidation: {},
     side,

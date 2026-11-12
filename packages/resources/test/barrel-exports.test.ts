@@ -277,6 +277,7 @@ const BARREL_EXPORTS = [
   'parseConfigFile',
   'parseContentCached',
   'parseFileCached',
+  'parseInputBytesOf',
   'parseRefusal',
   'parseRefusedEntry',
   'parseRefusedEntryFor',

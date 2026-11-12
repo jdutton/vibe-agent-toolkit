@@ -130,7 +130,7 @@ export interface ValidateOptions {
    * the run pays one worker start. Omitted, the validation holds its own for
    * the one skill and shuts it down.
    */
-  dispatcher?: ParseDispatcher;
+  dispatcher: ParseDispatcher | undefined;
 }
 
 /**

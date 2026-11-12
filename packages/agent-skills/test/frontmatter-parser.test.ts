@@ -1,6 +1,9 @@
+import { isParseLimitError, parseContentCached } from '@vibe-agent-toolkit/resources';
 import { describe, it, expect } from 'vitest';
 
 import { parseFrontmatter } from '../src/parsers/frontmatter-parser.js';
+import { declaredSkillNameIn } from '../src/skill-identity.js';
+import { detectorFrontmatter } from '../src/validators/compat-detectors.js';
 
 import { createFrontmatter, createSkillContent, setupParseRoute } from './test-helpers.js';
 
@@ -182,5 +185,26 @@ describe('parseFrontmatter — a block that is not a YAML mapping', () => {
   it('still accepts a mapping', async () => {
     const result = await parseFrontmatter('---\nname: x\n---\n', ROUTE);
     expect(result.success).toBe(true);
+  });
+});
+
+describe('content past the parse input cap', () => {
+  // 20 MiB, past the default 8 MiB cap: a small block up front, so a lane that cut the block out
+  // before holding the content to the cap would parse it and answer a name.
+  const OVERSIZE = `${createFrontmatter({ name: 'oversize', description: 'Past the cap' })}\n${'a'.repeat(20 * 1024 * 1024)}`;
+
+  it.each([
+    ['parseFrontmatter', async (): Promise<unknown> => {
+      const result = await parseFrontmatter(OVERSIZE, {});
+      if (result.success) return 'parsed';
+      throw result.cause;
+    }],
+    ['detectorFrontmatter', async (): Promise<unknown> => detectorFrontmatter(OVERSIZE, {})],
+    ['declaredSkillNameIn', async (): Promise<unknown> => declaredSkillNameIn(OVERSIZE, {})],
+    ['parseContentCached', async (): Promise<unknown> => parseContentCached(OVERSIZE, 'markdown', {})],
+  ])('is refused whole by %s, never parsed in part', async (_name, run) => {
+    const refusal = await run().then(() => undefined, (error: unknown) => error);
+
+    expect(isParseLimitError(refusal) && refusal.limit).toBe('inputBytes');
   });
 });

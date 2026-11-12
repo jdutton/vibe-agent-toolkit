@@ -695,7 +695,9 @@ hand it the run's cap, and every lane that reads a `SKILL.md` for its frontmatte
 (`skill-identity.ts`), import (`import.ts`), the skill validator, the compat detectors, the
 settings checker and the skill inventory — reads it through `readContentForParse`, which hands it
 the cap of the run's dispatcher, or the default one; content handed over already in memory is
-refused by the pool, at the same cap, by its UTF-8 byte length).
+refused at the same cap, by its UTF-8 byte length, before the cache is consulted — by
+`ParseDispatcher.parse`, and by `parseFrontmatter` for the whole content before it cuts out the
+block, so no in-memory lane parses part of an oversize document).
 Time and heap breaches kill and replace the worker; stack and output breaches are reported by it.
 Either way the job rejects with `ParseLimitError`. A projection realization refused at the input cap
 is `contentState: 'oversize'` with no blob, reported as `RESOURCE_PARSE_LIMIT_EXCEEDED` like the

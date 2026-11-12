@@ -343,14 +343,17 @@ const result = VATAgentSkillFrontmatterSchema.safeParse(frontmatter);
 
 Parse YAML frontmatter from SKILL.md content, in the bounded parse worker. `route` is required:
 `{ dispatcher }` inside a run that holds one (`withParseDispatcher`), `{}` for a single read.
+Content past the route's parse input cap is refused whole (`cause` is a `ParseLimitError`); read
+a file with `readContentForParse`, which refuses one past the cap by its size before reading it.
 
 **Example:**
 ```typescript
 import { parseFrontmatter } from '@vibe-agent-toolkit/agent-skills';
-import * as fs from 'node:fs';
+import { readContentForParse } from '@vibe-agent-toolkit/resources';
 
-const content = fs.readFileSync('./SKILL.md', 'utf-8');
-const result = await parseFrontmatter(content, {});
+const route = {};
+const { content } = await readContentForParse('/abs/path/to/SKILL.md', 'markdown', route);
+const result = await parseFrontmatter(content, route);
 
 if (result.success) {
   console.log('Frontmatter:', result.frontmatter);

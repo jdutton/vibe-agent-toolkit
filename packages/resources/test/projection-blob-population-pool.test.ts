@@ -461,7 +461,9 @@ async function dyingEntry(dies: string): Promise<string> {
     [
       "import { parentPort } from 'node:worker_threads';",
       `await import(${JSON.stringify(realWorker)});`,
-      `parentPort.on('message', (request) => { if (request?.type === 'parse' && (${dies})) throw Object.assign(new Error('died'), { code: '${CODE}' }); });`,
+      // The parser has loaded for the job (said so, as the real worker does before it parses) when the
+      // thread dies: the document's death. One that dies before saying so never is.
+      `parentPort.on('message', (request) => { if (request?.type === 'parse' && (${dies})) { parentPort.postMessage({ id: request.id, parserLoaded: request.kind }); throw Object.assign(new Error('died'), { code: '${CODE}' }); } });`,
     ].join('\n'),
     'utf-8',
   );

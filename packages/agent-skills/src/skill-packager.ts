@@ -1536,7 +1536,7 @@ function runPostBuildValidation(
     'built',
     // The built skill IS this run's output, inside the project the check crawls — and so is
     // everything else the run writes (`outputs`, the previous output beside a staged one).
-    { allowLedger, unreadable: 'refuse', outputs },
+    { allowLedger, unreadable: 'refuse', outputs, dispatcher: undefined },
   );
 }
 

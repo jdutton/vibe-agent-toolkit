@@ -69,7 +69,7 @@ function memoizeSharedRegistry(
  * then a choice at the call site rather than an omission three functions away.
  */
 export interface ClaudePluginInventoryOptions
-	extends Omit<ClaudeSkillInventoryOptions, 'sharedPopulation'> {
+	extends Omit<ClaudeSkillInventoryOptions, 'sharedPopulation' | 'dispatcher'> {
 	/**
 	 * Optional projection-backed membership lane — see {@link SharedPopulationSource}.
 	 *

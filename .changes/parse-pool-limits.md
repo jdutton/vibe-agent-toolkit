@@ -46,9 +46,8 @@
   `frontmatterNotAMapping: true` instead, and a `ParseResult` assembled without the flag is read as
   a block that declares nothing.
 - **`@vibe-agent-toolkit/agent-skills` frontmatter readers are asynchronous and take a route,
-  required.** `parseFrontmatter(content, route)`, `readDeclaredSkillName(path, route)` and
-  `declaredSkillNameIn(content, route)` return promises; pass `{ dispatcher }` inside a run, `{}` for
-  one read;
+  required.** `parseFrontmatter(content, route)` and `readDeclaredSkillName(path, route)` return
+  promises; pass `{ dispatcher }` inside a run, `{}` for one read;
   `parseFrontmatter` takes its value from the worker's decode, so a cyclic anchor or a block nested
   past `outputDepth` is refused there exactly as the crawl refuses it, and its "not a YAML mapping"
   message no longer names the decoded type. `readDeclaredSkillName` throws the refusal for a
@@ -66,9 +65,6 @@
   `checkSettingsCompatibility(pluginDir, effectiveSettings, dispatcher)` no longer open a worker
   pool per plugin: open one with `withParseDispatcher` around the run and pass it to each call. A
   plugin manifest with no `name` is a `SyntaxError`.
-- **`readDecodableBytes(path, refuseBySize)` (`@vibe-agent-toolkit/utils/fs`) takes a required size
-  refusal**, called with the file's `fstat` size before a byte is read; throw from it to refuse the
-  file. Pass `() => undefined` for no bound beyond the decodable one.
 - **`@vibe-agent-toolkit/rag-lancedb` `indexResources` parses nothing.** It trusts each resource's
   facts as the registry derived them and reads only its text, so a resource's `checksum` must be
   `calculateChecksumFromContent` of that text (a mismatch is the resource's error and nothing is
@@ -83,6 +79,8 @@
   run starts a worker for each parse pool it holds open at once (two for a cold `vat build`; an
   idle worker is handed from one pool to the next rather than closed), which costs a cold small
   corpus a measured fraction of a second (numbers in `docs/architecture/fact-extractors-limits.md`).
+  `VAT_PARSE_POOL_SIZE` caps the live parse threads, `VAT_PARSE_POOL_MIN_MISSES` sets how many cache
+  misses start more than one, and `VAT_PARSE_LOOK_AHEAD` how far reading runs ahead of parsing.
 - **`vat rag index` no longer parses a document of its own.** It reads each resource's text and
   chunks it by the facts the registry derived; an HTML resource is chunked as before, so the chunks
   it writes are unchanged, and a document deep enough to overflow a parse on the indexing thread
@@ -106,34 +104,33 @@
   depends on what ran before. `vat resources validate` reports a breach as
   `RESOURCE_PARSE_LIMIT_EXCEEDED`, a worker that died holding the job as
   `RESOURCE_PARSE_WORKER_DIED`; the projection as `BLOB_PARSE_LIMIT_EXCEEDED` / `BLOB_PARSE_WORKER_DIED`
-  ("over a parse limit" / "parse worker died" in the refusal summary). The pool never runs more live
-  parse threads than `VAT_PARSE_POOL_SIZE`, a thread being killed for a breach included;
-  `VAT_PARSE_POOL_MIN_MISSES` sets when it starts more than one.
+  ("over a parse limit" / "parse worker died" in the refusal summary).
   - **Input size.** A file a parser reads — markdown, HTML, or `text/plain` prose, which routes to
     the markdown parser — over `inputBytes` is refused by its size before it is read, on every lane
     that reads one to parse it: every crawl, `parseFileCached`, and every lane that reads a
     `SKILL.md` for its frontmatter (`readContentForParse`, under the run's dispatcher's cap). The
-    refusal names the cap and no size. Content handed over already in memory is refused by its
-    UTF-8 byte length at the same cap. On the projection lane it is a realization with
-    `contentState: 'oversize'` and no blob — stored, under a key naming the cap — and every verb
-    reports it as `RESOURCE_PARSE_LIMIT_EXCEEDED`.
-  - **Time.** `timeMs` counts only a document's own parse: a thread's start, its parser's load
-    and its pre-job heap check run on a separate `timeMs` clock that never refuses the document. A
-    document ends within about four `timeMs` (three thread or parser starts and one parse), plus a
-    heap check on each reused thread it was moved off, plus its time in the queue.
+    refusal names the cap and no size. Content handed over already in memory is refused whole by its
+    UTF-8 byte length at the same cap — a frontmatter read included, never cut down to a block that
+    fits. On the projection lane it is a realization with `contentState: 'oversize'` and no blob, and
+    every verb reports it as `RESOURCE_PARSE_LIMIT_EXCEEDED`.
+  - **Time.** `timeMs` counts only a document's own parse; a slow thread start or parser load never
+    refuses the document. A document ends within about four `timeMs`.
   - **A broken install fails the run.** Three load-clock stops in a row for one parser kind, with
     that parser loaded nowhere between them, fail the run as parser-unavailable
     (`ParserUnavailableError`, naming the worker entry); a document stopped at its load clock on
     three threads ends as parser-unavailable itself. So do a worker that dies before it is ready and
-    three in a row that die without answering. Every per-file parse catch classifies what it caught
+    three in a row that die without answering. A thread that dies before the document's parser has
+    loaded is never that document's death: the document runs again on another thread, and ends as
+    parser-unavailable if that happens on three. Every per-file parse catch classifies what it caught
     through one allowlist (`classifyParseFailure`), so a broken install or any other VAT defect
     fails the run rather than filing a finding about the file.
   - **Heap.** `heapMb` bounds a worker's whole used heap; a document past it is refused, before
     V8's own ceiling (twice `heapMb`) is reached. A thread reused for another document starts it
-    holding at most what a fresh thread does plus an eighth of the bound, or is replaced. Under a
-    process-wide `--max-old-space-size` lower than twice `heapMb`, the bound is
-    `max(⌊flag / 2⌋, min(youngGen, flag − 32))` MiB (96 MiB under a 128 MiB flag on Node 26), and
-    the refusal names the bound that applied.
+    holding at most what a fresh thread does plus an eighth of the bound, or is replaced. A
+    process-wide `--max-old-space-size`, `--max-semi-space-size` or `--max-heap-size` that lowers
+    V8's ceiling lowers the bound with it (96 MiB under a 128 MiB old space on Node 26), and the
+    refusal names the bound that applied. A runtime that refuses V8's `--expose-gc` is warned once
+    (`VAT_PARSE_NO_COLLECTOR`); its reused threads are replaced only at their heap stop.
   - **Frontmatter** counts against `outputRows`, `outputBytes` and `outputDepth` as what the store
     writes for it. `outputDepth` (default 1,000, and never above it) refuses frontmatter nested
     deeper than the projection can query, and a cyclic anchor.
@@ -173,8 +170,9 @@
   anything is written, so the run writes one document.
 - **API.** `@vibe-agent-toolkit/resources`: `ParseLimitError`, `ParseWorkerDiedError`,
   `isParseLimitError`, `isParseWorkerDiedError`, `ParseLimits`, `ParserUnavailableError`,
-  `parseFileCached`, `parseContentCached`, `readContentForParse`, `ParseDispatcher`,
-  `withParseDispatcher`, `calculateChecksumFromContent`, `ResourceRegistry.getParseRefusedResources()`
+  `parseFileCached`, `parseContentCached`, `readContentForParse`, `parseInputBytesOf`,
+  `ParseDispatcher` (its `inputBytes` the cap it runs under), `withParseDispatcher`,
+  `readContentWithKey`, `readKeyedContent`, `RunContentCache`, `calculateChecksumFromContent`, `ResourceRegistry.getParseRefusedResources()`
   (`ParseRefusedResource`, carrying `code` and `reason`) and the not-admitted contract
   (`ResourceRegistry.getNotAdmitted()`, `notAdmittedIssues`, `notAdmittedFindings`,
   `notAdmittedInScope`, `notAdmittedCount`, `notAdmittedRealizations`, `resolveNotAdmittedAmong`,
@@ -183,8 +181,9 @@
   `isPlainMapping`), and the `./parse-conformance` subpath for testing a parser implementation.
   `@vibe-agent-toolkit/schema`: `resolveFindings`, the one finding resolver.
   `@vibe-agent-toolkit/agent-skills`: `declaredSkillNameIn`, `detectorFrontmatter`,
-  `parseRefusalIssue`, `refusedAmong`, `SKILL_REACHED_REFUSAL_CONSEQUENCE`, and an optional
-  `dispatcher` on `ValidateOptions` and `SkillValidationSharedContext`.
-  `@vibe-agent-toolkit/claude-marketplace`: `classifyCompatibilityFailure`, and a `dispatcher` on
-  `ClaudeSkillInventoryOptions`; an inventory `ParseError` for a refused file carries its reason in
+  `parseRefusalIssue`, `refusedAmong`, `SKILL_REACHED_REFUSAL_CONSEQUENCE`, and a required
+  `dispatcher` on `ValidateOptions` and `SkillValidationSharedContext` (`undefined` for one of the
+  validation's own).
+  `@vibe-agent-toolkit/claude-marketplace`: `classifyCompatibilityFailure`, and a required
+  `dispatcher` on `ClaudeSkillInventoryOptions` (`undefined` for one of its own); an inventory `ParseError` for a refused file carries its reason in
   `message` and its code in `parseRefused`.

@@ -210,6 +210,7 @@ async function validateForPackage(
     { side: 'source', origin: 'content', action: `validate the skill at ${skillPath}` },
     () => validateSkill({
       skillPath,
+      dispatcher: undefined,
       rootDir: basePath,
       locationRoot,
       validation: {},

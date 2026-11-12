@@ -1712,7 +1712,9 @@
 - **A named pipe, socket or device linked from a SKILL.md** no longer hangs `vat skills package` or
   `vat skills build`, and is no longer dropped from the package silently (status `ok`, a dangling
   link). The validator refuses it unread as a `LINK_TARGET_UNREADABLE` error (exit 1), with a remedy
-  that names the file type rather than permissions. Underneath, `readDecodableBytes` /
+  that names the file type rather than permissions. Underneath, `readDecodableBytes(path,
+  refuseBySize)` — its required size check called with the file's `fstat` size before a byte is read
+  (throw from it to refuse the file; `() => undefined` for no bound beyond the decodable one) — and
   `readTextContent` / `readTextContentSync` (`@vibe-agent-toolkit/utils/fs`) open without blocking and
   refuse a non-regular file with the errno `EFTYPE`, which `fsFaultOf` now classifies —
   so every lane that parses a file codes it as that lane's unreadable input instead of waiting forever.

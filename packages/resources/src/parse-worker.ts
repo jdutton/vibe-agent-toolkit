@@ -47,11 +47,11 @@
  */
 
 import v8 from 'node:v8';
-import vm from 'node:vm';
 import { parentPort, resourceLimits, workerData } from 'node:worker_threads';
 
 import type { ParseResult } from './link-parser.js';
 import { ParseCache, type ParserModuleKind } from './parse-cache.js';
+import { acquireCollector } from './parse-collector.js';
 import {
   factsOutputBreach,
   heapBounds,
@@ -60,7 +60,8 @@ import {
   type ParseLimits,
   reusedThreadHeapMb,
   settleReusedHeap,
-  youngGenerationMb,
+  v8HeapFlags,
+  workerHeapGeometry,
 } from './parse-limits.js';
 import {
   describeParseFailure,
@@ -90,64 +91,23 @@ if (parentPort === null) {
 const port = parentPort;
 
 /**
- * Force a full collection of this thread's heap, or `null` when this runtime would not give one:
- * what a reused thread runs before its next job when it holds too much (`settleReusedHeap`).
- *
- * ## How it is had, and why that is safe
- *
- * V8 installs a `gc` global only in a context created while its `--expose-gc` flag is set. The flag
- * is set, and one new context is created to take its `gc` — here, once, as this module loads,
- * before any job runs. The function collects the heap of the isolate it belongs to, which is this
- * thread's.
- *
- * Node's documentation warns that changing V8 flags after the VM has started "may result in
- * unpredictable behavior". This flag configures no heap size, collector or compiler, and changes
- * nothing a program computes. **It is set and never cleared.** The flag is process-wide, so
- * clearing it again raced: one worker cleared it while another was between setting it and creating
- * its context, and that worker got no collector (Node 24.21: 6% of 4 workers started at once,
- * 9–13.5% of 8). Left set, every worker gets one: 0 of 800 without at 8 started at once, 0 of 1,600
- * at 16, in 50 fresh processes each — a worker started after the first one loaded has `gc` on its
- * own global.
- *
- * **Accepted costs, process-wide, from the moment the first parse worker loads:**
- *
- * - Every context created after it — on any thread, a `vm` context on the main thread included —
- *   has a `gc` global. Calling it forces a full collection of the caller's own isolate: on the main
- *   thread, the main heap. Nothing calls it unless the host's own code does.
- * - `v8.cachedDataVersionTag()` changes, because V8 folds its flags into it. Code cache a process
- *   writes after that is rejected by a process that never set the flag, and the reverse (measured on
- *   Node 24.21 and 26.7 with `vm.Script` `cachedData`, across processes; within one process, cache
- *   made before the flag was still accepted). A rejected cache is recompiled, never misread, so the
- *   cost is compile time: for a host that embeds this library and keeps a compile cache across
- *   processes (`NODE_COMPILE_CACHE`, `module.enableCompileCache()`, or a tool of its own). VAT uses
- *   none.
- *
- * Measured on Node 22.16, 24.21 and 26.7, with and without a process `--max-old-space-size=512`,
- * run five times each: the function collected 55, 185 and 405 MiB of garbage to 6.7 MiB in 2–17
- * ms. A process already run with `--expose-gc` has one on this thread's global, which is used.
- *
- * A runtime that refuses the flag, or a context that comes without a `gc`, leaves `null`, and a
- * reused thread holding too much is then retired rather than collected (`settleReusedHeap`) — a
- * thread start, never a verdict that depends on garbage, and never a thread that fails to load.
+ * How long one thread may hold the pool's collector lock before another takes it from it, in ms:
+ * the hold is one context creation (milliseconds), so a holder past this died holding it.
  */
-const collectGarbage = acquireCollector();
+const COLLECTOR_LOCK_STALE_MS = 2000;
 
 /**
- * @returns This thread's full collection — see {@link collectGarbage}
+ * Force a full collection of this thread's heap, or `null` when this runtime would not give one:
+ * what a reused thread runs before its next job when it holds too much (`settleReusedHeap`). Taken
+ * once, as this module loads, under the pool's lock — see `parse-collector.ts`.
  */
-function acquireCollector(): (() => void) | null {
-  const exposed: unknown = (globalThis as { gc?: unknown }).gc;
-  if (typeof exposed === 'function') return () => (exposed as () => void)();
-  try {
-    v8.setFlagsFromString('--expose-gc');
-    // `typeof`, so a context created without the flag answers `undefined` rather than throwing.
-    const gc: unknown = vm.runInNewContext("typeof gc === 'function' ? gc : undefined");
-    return typeof gc === 'function' ? () => (gc as () => void)() : null;
-    // eslint-disable-next-line local/no-blind-catch -- whatever refused the flag or the context, the answer is the same one: no collector, so a reused thread past the bound is retired (a thread start, never a verdict), and no surface reads why
-  } catch {
-    return null;
-  }
-}
+const collectGarbage = acquireCollector(new Int32Array((workerData as ParseWorkerData).collectorLock), COLLECTOR_LOCK_STALE_MS);
+
+/**
+ * This thread's young generation and the process's heap flags, read once — the same reading the
+ * pool's sampler makes of this thread (`workerHeapGeometry`).
+ */
+const heapGeometry = workerHeapGeometry(resourceLimits, v8HeapFlags(process.env['NODE_OPTIONS'], process.execArgv));
 
 /**
  * Settle this reused thread's heap before a job — see `settleReusedHeap` — against its bound
@@ -158,9 +118,12 @@ function acquireCollector(): (() => void) | null {
  * @returns Whether the thread is retired: it then runs nothing, and the parent stops it
  */
 function settledForJob(id: number): boolean {
-  const { appliedMb } = heapBounds(v8.getHeapStatistics(), youngGenerationMb(resourceLimits), workerLimits().heapMb);
+  const { appliedMb, stopMb } = heapBounds(v8.getHeapStatistics(), heapGeometry, workerLimits().heapMb);
   const read = (): number => v8.getHeapStatistics().used_heap_size;
-  const check = settleReusedHeap(reusedThreadHeapMb(appliedMb), read, collectGarbage, () => performance.now());
+  // With no collection to settle it, a reused thread's garbage is held to its stop instead, so a
+  // runtime that refused the collector replaces a thread there rather than after almost every job.
+  const bound = collectGarbage === null ? stopMb : reusedThreadHeapMb(appliedMb);
+  const check = settleReusedHeap(bound, read, collectGarbage, () => performance.now());
   port.postMessage({ id, reuseCheck: check });
   return check.retire;
 }
@@ -205,10 +168,10 @@ const announcedKinds = new Set<ParserModuleKind>();
  *
  * @param kind - The parser kind that has just loaded
  */
-function announceLoaded(kind: ParserModuleKind): void {
+function announceLoaded(kind: ParserModuleKind, id: number): void {
   if (announcedKinds.has(kind)) return;
   announcedKinds.add(kind);
-  const loaded: ParseWorkerParserLoaded = { parserLoaded: kind };
+  const loaded: ParseWorkerParserLoaded = { id, parserLoaded: kind };
   port.postMessage(loaded);
 }
 
@@ -261,7 +224,7 @@ async function respond(request: JobRequest): Promise<void> {
  */
 async function answerParse(request: Extract<JobRequest, { type: 'parse' }>): Promise<ParseWorkerResponse> {
   const parser = await loadParser(request.kind);
-  announceLoaded(request.kind);
+  announceLoaded(request.kind, request.id);
   // `byteLength` is the parent's RAW byte count, passed through untouched —
   // never a length derived from `content`, since decoding is lossy.
   const result = fromTheBytes(() => parser.parseContent(request.content, request.byteLength));
@@ -278,7 +241,7 @@ async function answerParse(request: Extract<JobRequest, { type: 'parse' }>): Pro
  */
 async function answerHarness(request: Extract<JobRequest, { type: 'harness' }>): Promise<ParseWorkerResponse> {
   const reader = await loadHarnessReader(request.harness);
-  announceLoaded(request.harness);
+  announceLoaded(request.harness, request.id);
   const facts = fromTheBytes(() => reader(request.content));
   const breach = factsOutputBreach(facts, workerLimits());
   if (breach !== undefined) return { id: request.id, breach: breach.limit, found: breach.found };
@@ -390,5 +353,5 @@ port.on('message', (request: ParseWorkerRequest) => {
 // Last, once every import above has evaluated: a thread that dies before this
 // could not load its own module graph, so the pool calls the install broken
 // rather than blaming whatever document it was holding (`ParseWorkerReady`).
-const ready: ParseWorkerReady = { ready: true };
+const ready: ParseWorkerReady = { ready: true, collector: collectGarbage !== null };
 port.postMessage(ready);

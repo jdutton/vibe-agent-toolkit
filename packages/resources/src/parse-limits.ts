@@ -874,22 +874,121 @@ export interface HeapBounds {
  * low for floor plus headroom keeps the half share: such a flag is too small
  * to parse with, and refusing is right.
  *
+ * **V8's ceiling is read fail-closed** (`v8OldGenerationCeilingMb`): `heap_size_limit` less the
+ * young generation the thread really has ({@link workerHeapGeometry}, never `resourceLimits`
+ * alone, which a process-wide `--max-semi-space-size` overrides unseen), and never above a
+ * flagged `--max-old-space-size`, or a flagged `--max-heap-size` less the young generation. A
+ * read that is not positive is 0: the bound and the stop are 0, so every job is refused at its
+ * heap limit, never run toward a ceiling nobody could read.
+ *
  * @param stats - `Worker.getHeapStatistics()`
- * @param youngGenerationMb - The worker's `resourceLimits.maxYoungGenerationSizeMb`
+ * @param geometry - The thread's young generation and the process's heap flags ({@link workerHeapGeometry})
  * @param heapMb - The configured limit
  * @returns The enforced limit (never above `heapMb`) and V8's ceiling as read
  */
 export function heapBounds(
   stats: { readonly heap_size_limit: number },
-  youngGenerationMb: number,
+  geometry: HeapGeometry,
   heapMb: number,
 ): HeapBounds {
-  const readMb = Math.floor(stats.heap_size_limit / BYTES_PER_MIB) - youngGenerationMb;
-  const ceilingMb = readMb > 0 ? readMb : workerHeapCeilingMb(heapMb);
+  const ceilingMb = v8OldGenerationCeilingMb(stats, geometry);
   const share = Math.floor(ceilingMb / HEAP_CEILING_FACTOR);
-  const floor = Math.min(youngGenerationMb, ceilingMb - SAMPLER_HEADROOM_MB);
-  const appliedMb = readMb > 0 ? Math.min(heapMb, Math.max(share, floor)) : heapMb;
+  const floor = Math.min(geometry.youngMb, ceilingMb - SAMPLER_HEADROOM_MB);
+  const appliedMb = Math.min(heapMb, Math.max(share, floor, 0));
   return { appliedMb, ceilingMb, stopMb: unvouchedStopMb(appliedMb, ceilingMb, heapMb) };
+}
+
+/**
+ * V8's old-generation ceiling for a thread, in MiB, read so it is never above the real one: the
+ * least of `heap_size_limit` less the young generation, a flagged `--max-old-space-size`, and a
+ * flagged `--max-heap-size` less the young generation; 0 when that is not positive.
+ *
+ * @param stats - `Worker.getHeapStatistics()`
+ * @param geometry - See {@link workerHeapGeometry}
+ * @returns The ceiling, in MiB
+ */
+function v8OldGenerationCeilingMb(stats: { readonly heap_size_limit: number }, geometry: HeapGeometry): number {
+  const { youngMb, flags } = geometry;
+  const readMb = Math.floor(stats.heap_size_limit / BYTES_PER_MIB) - youngMb;
+  const flagged = [flags.oldSpaceMb, flags.heapSizeMb === undefined ? undefined : flags.heapSizeMb - youngMb]
+    .filter((value): value is number => value !== undefined);
+  return Math.max(0, Math.min(readMb, ...flagged));
+}
+
+/**
+ * The process-wide V8 heap flags a parse thread runs under, each in MiB, or `undefined` when not
+ * given. A worker inherits its process's `execArgv` and environment, and V8 applies these flags to
+ * every isolate in the process, over a worker's `resourceLimits`.
+ */
+export interface V8HeapFlags {
+  /** `--max-old-space-size`: caps the old generation's ceiling. */
+  readonly oldSpaceMb: number | undefined;
+  /** `--max-semi-space-size`: sizes the young generation at three of these, whatever `resourceLimits` says. */
+  readonly semiSpaceMb: number | undefined;
+  /** `--max-heap-size`: caps the old and young generations together. */
+  readonly heapSizeMb: number | undefined;
+}
+
+/** Each heap flag V8 reads, by its name with dashes; V8 reads underscores the same. */
+const V8_HEAP_FLAG_NAMES = {
+  'max-old-space-size': 'oldSpaceMb',
+  'max-semi-space-size': 'semiSpaceMb',
+  'max-heap-size': 'heapSizeMb',
+} as const satisfies Record<string, keyof V8HeapFlags>;
+
+/**
+ * Read the V8 heap flags from `NODE_OPTIONS` and a process's `execArgv`, fail-closed: of a flag
+ * given more than once, the value that leaves V8 the least old-generation room — the smallest old
+ * or whole heap, the largest semi-space — so a mis-ordered read can only lower the ceiling. A
+ * value that is not a positive number is no reading. A flag a host sets later through
+ * `v8.setFlagsFromString` is not seen; `heap_size_limit` still reflects its old or whole size.
+ *
+ * @param nodeOptions - `process.env.NODE_OPTIONS`
+ * @param execArgv - `process.execArgv`
+ * @returns The flags — see {@link V8HeapFlags}
+ */
+export function v8HeapFlags(nodeOptions: string | undefined, execArgv: readonly string[]): V8HeapFlags {
+  const args = [...(nodeOptions ?? '').split(/\s+/).filter((arg) => arg !== ''), ...execArgv];
+  const read: { -readonly [K in keyof V8HeapFlags]: number | undefined } = { oldSpaceMb: undefined, semiSpaceMb: undefined, heapSizeMb: undefined };
+  for (const [index, arg] of args.entries()) {
+    const [rawName = '', inline] = arg.split('=', 2);
+    const field = V8_HEAP_FLAG_NAMES[rawName.replace(/^--/, '').replaceAll('_', '-') as keyof typeof V8_HEAP_FLAG_NAMES] as keyof V8HeapFlags | undefined;
+    if (field === undefined) continue;
+    const value = Number(inline ?? args[index + 1]);
+    if (!Number.isFinite(value) || value <= 0) continue;
+    const held = read[field];
+    // Fail-closed: the largest young generation, the smallest old generation and heap.
+    const fold = field === 'semiSpaceMb' ? Math.max : Math.min;
+    read[field] = held === undefined ? value : fold(held, value);
+  }
+  return read;
+}
+
+/** What V8's ceiling for a thread is read against: its real young generation, and the process's heap flags. */
+export interface HeapGeometry {
+  /** The thread's young generation, in MiB: see {@link workerHeapGeometry}. */
+  readonly youngMb: number;
+  /** The process-wide heap flags: see {@link v8HeapFlags}. */
+  readonly flags: V8HeapFlags;
+}
+
+/**
+ * The young generation a thread really has, and the heap flags it runs under. Under a process-wide
+ * `--max-semi-space-size` the young generation is three of them (measured on Node 22.16, 24.21 and
+ * 26.7: `heap_size_limit` grows by exactly that), while `resourceLimits` still reports the size it
+ * was given; with no such flag it is `resourceLimits.maxYoungGenerationSizeMb` (192 MiB on Node 24
+ * and 26, 48 on 22), or 0 if a runtime ever gives none.
+ *
+ * @param limits - A worker's `resourceLimits`, as the parent or the thread itself sees them
+ * @param flags - The process's heap flags ({@link v8HeapFlags})
+ * @returns The geometry `heapBounds` and `heapBreached` read the thread's heap against
+ */
+export function workerHeapGeometry(
+  limits: { readonly maxYoungGenerationSizeMb?: number | undefined } | undefined,
+  flags: V8HeapFlags,
+): HeapGeometry {
+  const youngMb = flags.semiSpaceMb === undefined ? (limits?.maxYoungGenerationSizeMb ?? 0) : 3 * flags.semiSpaceMb;
+  return { youngMb, flags };
 }
 
 /**
@@ -952,18 +1051,6 @@ const REUSED_THREAD_SLACK_SHARE = 8;
  */
 export function reusedThreadHeapMb(appliedMb: number): number {
   return FRESH_THREAD_HEAP_MB + Math.floor(appliedMb / REUSED_THREAD_SLACK_SHARE);
-}
-
-/**
- * The young generation a worker was given, in MiB — what separates V8's old-generation ceiling
- * from the `heap_size_limit` a worker reports. Node fills it in on every started worker (192 MiB
- * measured on Node 26.7); 0 if a runtime ever does not, which only makes the ceiling read higher.
- *
- * @param limits - A worker's `resourceLimits`, as the parent or the thread itself sees them
- * @returns `maxYoungGenerationSizeMb`, or 0
- */
-export function youngGenerationMb(limits: { readonly maxYoungGenerationSizeMb?: number | undefined } | undefined): number {
-  return limits?.maxYoungGenerationSizeMb ?? 0;
 }
 
 /** A reused thread's heap as it was settled before its next job ({@link settleReusedHeap}). */
@@ -1034,7 +1121,7 @@ export function settleReusedHeap(
  * @param stats - This sample, from `Worker.getHeapStatistics()`
  * @param previousUsedBytes - The same job's previous sample, if one landed
  * @param bounds - {@link heapBounds}
- * @param youngGenerationMb - The worker's `resourceLimits.maxYoungGenerationSizeMb`
+ * @param youngGenerationMb - The thread's young generation, from {@link workerHeapGeometry}
  * @returns True when the job is to be stopped at its heap limit
  */
 export function heapBreached(

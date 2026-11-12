@@ -241,6 +241,7 @@ describe('a built skill validated against a shared registry that predates the bu
     write(root, 'out/demo/reference.md', '# Reference\n');
 
     const result = await validateSkillForPackaging(builtSkillPath, {}, undefined, 'built', {
+      dispatcher: undefined,
       registry,
       unreadable: 'refuse',
       outputs: [safePath.join(root, 'out', 'demo')],
@@ -269,7 +270,7 @@ describe('the packaging validator\'s own project root, against a source bound to
     const store = recordingStore();
     const { source, offeredRoots } = projectionSource(root, store);
 
-    await validateSkillForPackaging(builtSkillPath, {}, undefined, 'built', { unreadable: 'refuse', outputs: [safePath.join(root, 'dist', 'skills', 'demo')], populationSource: source });
+    await validateSkillForPackaging(builtSkillPath, {}, undefined, 'built', { dispatcher: undefined, unreadable: 'refuse', outputs: [safePath.join(root, 'dist', 'skills', 'demo')], populationSource: source });
 
     // The POSITIVE CONTROL for the next test: same helper, same store shape, and
     // here the lane really does run and really does key an extent. Without it,
@@ -289,6 +290,7 @@ describe('the packaging validator\'s own project root, against a source bound to
     const { source, offeredRoots } = projectionSource(root, store);
 
     const result = await validateSkillForPackaging(builtSkillPath, {}, undefined, 'built', {
+      dispatcher: undefined,
       unreadable: 'refuse',
       outputs: [outputRoot],
       populationSource: source,

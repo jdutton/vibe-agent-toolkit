@@ -538,9 +538,6 @@ with a regression test.
   `vat cache clear` removes VAT's on-disk caches; `--no-cache` on the root command, or
   `VAT_CACHE=0` (`false`, `no`, `off`), disables them for one run.
 
-- **Markdown parsing runs on worker threads during projection population.**
-  `VAT_PARSE_POOL_SIZE`, `VAT_PARSE_POOL_MIN_MISSES` and `VAT_PARSE_LOOK_AHEAD` tune it.
-
 - **A collection can declare the MIME type of the files it matches.**
   `resources.collections.<name>.mimeType` overrides the built-in extension tables. Two collections
   declaring different types for one file fails `vat resources validate` with `COLLECTION_MIME_CONFLICT`
@@ -552,9 +549,9 @@ with a regression test.
   `run` overrides a committed `test.baseline: true` (which doubles spend — `--max-budget-usd` is
   per spawn); `results/` is kept after a default run as `resultsPath`.
 
-- **Four new `@vibe-agent-toolkit/resources` subpaths: `./parse-conformance`, `./link-parser`,
-  `./remark-parser` and `./markdown-processor`.** All four reach the markdown parser, so they are
-  deliberately absent from the `.` barrel — import them directly.
+- **A new `@vibe-agent-toolkit/resources` subpath, `./parse-conformance`**, for testing a parser
+  implementation. It reaches the markdown parser, so it is deliberately absent from the `.` barrel
+  — import it directly.
 
 - **`externalSource` on a marketplace plugin entry** — reference a plugin published elsewhere
   rather than vendoring it.

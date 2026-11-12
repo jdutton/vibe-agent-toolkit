@@ -127,8 +127,10 @@ import {
   ParseWorkerDiedError,
   resolveParseLimits,
   type ReuseCheck,
+  v8HeapFlags,
+  type V8HeapFlags,
   workerHeapCeilingMb,
-  youngGenerationMb,
+  workerHeapGeometry,
 } from './parse-limits.js';
 import {
   type ParseThreadTiming,
@@ -451,6 +453,12 @@ export type ParseWorkerResponse =
  */
 export interface ParseWorkerReady {
   ready: true;
+  /**
+   * Whether the thread has a full collection to settle its heap with before a reused job
+   * (`parse-collector.ts`). A runtime that refuses it is told once per process: its threads are
+   * retired at their stop rather than collected, a thread start where a collection would do.
+   */
+  collector: boolean;
 }
 
 /**
@@ -462,6 +470,8 @@ export interface ParseWorkerReady {
  * document, which never does.
  */
 export interface ParseWorkerParserLoaded {
+  /** The job the parser loaded for: only that job's clock moves. */
+  id: number;
   parserLoaded: ParserModuleKind;
 }
 
@@ -645,7 +655,18 @@ export interface ParseWorkerData {
   cacheDir?: string;
   /** The limits the worker checks its own output against. Heap, stack and time are enforced from outside it. */
   limits: ParseLimits;
+  /** The lock every thread takes its collector under: {@link COLLECTOR_LOCK}. */
+  collectorLock: SharedArrayBuffer;
 }
+
+/**
+ * The one lock, per copy of this module, under which a parse thread sets V8's `--expose-gc`, takes
+ * its collector and clears the flag (`parse-collector.ts`): handed to every thread every pool
+ * starts, so no two threads of this copy clear the flag from under one another. One `Int32`: 0
+ * free, else the holder's `threadId`. Shared memory, so `workerKey` serialises it as `{}`: it never
+ * tells two threads apart.
+ */
+const COLLECTOR_LOCK = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
 
 /**
  * Overrides the worker entry for a test, or restores the real resolution.
@@ -910,14 +931,13 @@ interface PoolWorker {
    */
   key: string;
   /**
-   * Set when a reused thread — one adopted from the parked set included — is handed a job, until it
-   * first posts anything for it. Its first post is its heap check, made before it runs any parser,
-   * so a thread that dies, or that V8 stops at its ceiling, before then has run nothing of the
-   * job's: it died of what earlier jobs left, or while it was parked, its `exit` not yet delivered
-   * when it was adopted. Its job is queued again for a fresh thread, and the death is charged to no
-   * document and counted toward nothing.
+   * Set when a reused thread — one adopted from the parked set included — is handed a job, until its
+   * heap check for that job (`ParseWorkerReuseCheck` with the job's id) reaches the pool; nothing
+   * else clears it. A thread stopped, dead, or stopped by V8 at its ceiling while it is set ran
+   * nothing of the job's: what it held was earlier jobs' (or was left while it was parked), so the
+   * job runs again on a fresh thread, and the stop counts toward no broken-install run.
    */
-  postedNothingYet: boolean;
+  heapCheckPending: boolean;
   /**
    * Set once the thread has answered a job, or when it was adopted from the parked set: it may
    * carry what earlier jobs left on its heap, so it settles that before each job it is handed
@@ -960,6 +980,11 @@ class WorkerParsePool implements ParsePool {
 
   /** How many threads may stay parked once this pool shuts down: see {@link parkedThreadRoom}. */
   readonly #parkCap: number;
+  /**
+   * The process-wide V8 heap flags every thread of this pool runs under, read once: its threads
+   * inherit this process's `execArgv` and environment. See `workerHeapGeometry`.
+   */
+  readonly #heapFlags: V8HeapFlags = v8HeapFlags(process.env['NODE_OPTIONS'], process.execArgv);
 
   constructor(size: number, workerData: ParseWorkerData, parkCap: number) {
     this.size = size;
@@ -1144,7 +1169,7 @@ class WorkerParsePool implements ParsePool {
     target.job = job;
     target.worker.ref();
     const settleHeap = target.reused;
-    target.postedNothingYet = settleHeap;
+    target.heapCheckPending = settleHeap;
     const dispatch: ParseWorkerDispatch = { ...job.request, settleHeap };
     // The one parent-thread cost this design has always named and never
     // measured: `postMessage` serializes the whole content string HERE, on
@@ -1256,12 +1281,12 @@ class WorkerParsePool implements ParsePool {
         if (poolWorker.job !== job) return;
         // Each sample carries V8's ceiling, so the limit is known from the
         // first one, never left to a read that may land after the job starts.
-        const youngMb = youngGenerationMb(poolWorker.worker.resourceLimits);
-        const bounds = heapBounds(heap, youngMb, this.#limits.heapMb);
+        const geometry = workerHeapGeometry(poolWorker.worker.resourceLimits, this.#heapFlags);
+        const bounds = heapBounds(heap, geometry, this.#limits.heapMb);
         poolWorker.heapBounds = bounds;
         const previousUsedBytes = job.lastHeapUsed;
         job.lastHeapUsed = heap.used_heap_size;
-        if (!heapBreached(heap, previousUsedBytes, bounds, youngMb)) return;
+        if (!heapBreached(heap, previousUsedBytes, bounds, geometry.youngMb)) return;
         this.#terminate(poolWorker, ParseLimitError.heap(bounds.appliedMb, this.#limits.heapMb));
       },
       () => undefined,
@@ -1291,19 +1316,80 @@ class WorkerParsePool implements ParsePool {
    * @param lateMs - How long after it came due the deadline's timer fired
    */
   #stopAtLoadDeadline(poolWorker: PoolWorker, job: PendingJob, lateMs: number): void {
+    const kind = moduleKindOf(job.request);
+    const within = `within ${String(this.#limits.timeMs)} ms`;
+    if (this.#inHeapCheck(poolWorker, job)) {
+      // A reused thread still settling what earlier jobs left: slow at that, never at loading a parser.
+      this.#chargeLoadStop(poolWorker, job, new Error(`a reused parse thread did not finish its heap check ${within}`), within, false);
+      return;
+    }
+    const stop = new Error(`a parse thread did not load the ${kind} parser ${within}`);
+    this.#chargeLoadStop(poolWorker, job, stop, within, lateMs <= LATE_DEADLINE_MS);
+  }
+
+  /**
+   * Whether a job on its load clock is still waiting on its reused thread's heap check: the check
+   * has not reached the pool, or the job's parser is already loaded there, so nothing else holds
+   * its load clock.
+   *
+   * @param poolWorker - The thread holding the job
+   * @param job - The job, on its load clock
+   * @returns True when the thread has not yet kept itself for the job
+   */
+  #inHeapCheck(poolWorker: PoolWorker, job: PendingJob): boolean {
+    return poolWorker.heapCheckPending || poolWorker.parsersLoaded.has(moduleKindOf(job.request));
+  }
+
+  /**
+   * Charge a thread lost on a job's load clock — stopped there, or dead there — to the thread,
+   * never the document: no parser has run over the document's bytes yet. The job runs again, on a
+   * fresh thread when the loss came in a reused thread's heap check, until it has been lost so
+   * {@link DEATHS_BEFORE_UNAVAILABLE} times, when it ends as a `ParserUnavailableError`.
+   *
+   * @param poolWorker - The thread lost
+   * @param job - Its job, on its load clock
+   * @param stop - What the loss was
+   * @param how - How the parser could not start, for the job's final error: `within <timeMs> ms`, or `before its thread died`
+   * @param counts - Whether the loss counts toward its parser kind's {@link LoadStopRun}
+   */
+  #chargeLoadStop(poolWorker: PoolWorker, job: PendingJob, stop: Error, how: string, counts: boolean): void {
     job.loadStops += 1;
     const kind = moduleKindOf(job.request);
-    const stop = new Error(`a parse thread did not load the ${kind} parser within ${String(this.#limits.timeMs)} ms`);
-    if (lateMs <= LATE_DEADLINE_MS) this.#countLoadStop(poolWorker, job, kind, stop);
+    const heapCheck = poolWorker.heapCheckPending;
+    if (counts) this.#countLoadStop(poolWorker, job, kind, stop);
     if (this.#unavailable === undefined && job.loadStops < DEATHS_BEFORE_UNAVAILABLE) {
-      this.#requeue(poolWorker, 'any');
+      this.#requeue(poolWorker, heapCheck ? 'fresh' : 'any');
       this.#terminate(poolWorker, stop);
       return;
     }
     this.#terminate(poolWorker, this.#unavailable ?? unavailableFor(job, poolWorker.entry, new Error(
-      `the ${kind} parser could not start within ${String(this.#limits.timeMs)} ms on ${String(job.loadStops)} threads in a row`,
+      `the ${kind} parser could not start ${how} on ${String(job.loadStops)} threads in a row`,
       { cause: stop },
     )));
+  }
+
+  /**
+   * A thread that had posted `ready` died — exited, or was stopped by V8 at its ceiling — holding a
+   * job still on its load clock: the job's parser had not loaded for it, so nothing of the
+   * document's ran. Charged as a load stop ({@link #chargeLoadStop}), counted toward its parser
+   * kind's run unless the thread was in its heap check, and never as a death of the document.
+   *
+   * Node delivers every message a thread posted before its `error` and `exit`, so a thread that
+   * posted `parserLoaded` and then died is on its parse clock here, and its death is the document's.
+   *
+   * @param poolWorker - The thread
+   * @param error - What it died of
+   * @returns True when the death was charged so; false when it is not a load-clock death
+   */
+  #diedLoading(poolWorker: PoolWorker, error: Error): boolean {
+    const job = poolWorker.job;
+    if (job?.clock !== 'load' || !poolWorker.ready) return false;
+    const heapCheck = this.#inHeapCheck(poolWorker, job);
+    this.#chargeLoadStop(poolWorker, job, new Error(
+      heapCheck ? 'a reused parse thread died in its heap check' : `a parse thread died before the ${moduleKindOf(job.request)} parser loaded`,
+      { cause: error },
+    ), 'before its thread died', !heapCheck);
+    return true;
   }
 
   /**
@@ -1340,11 +1426,10 @@ class WorkerParsePool implements ParsePool {
     // Only a thread that held a job, or never loaded, says anything about the
     // install. One that died idle took no document with it and is simply
     // replaced; counting it would let three idle deaths refuse a document
-    // nothing was wrong with. Nor does a reused thread that posted nothing for its job: it ran no
-    // parser for it (`postedNothingYet`), so the job runs again on a fresh thread, which is charged
-    // if it dies too.
-    if (poolWorker.postedNothingYet) this.#requeue(poolWorker, 'fresh');
-    else if (poolWorker.job !== null || !poolWorker.ready) this.#countDeath(poolWorker, error, !poolWorker.ready);
+    // nothing was wrong with. Nor is a death before the job's parser loaded the document's
+    // (`#diedLoading`).
+    if (this.#diedLoading(poolWorker, error)) return;
+    if (poolWorker.job !== null || !poolWorker.ready) this.#countDeath(poolWorker, error, !poolWorker.ready);
     this.#abandon(poolWorker, this.#unavailable ?? error);
     if (this.#unavailable !== undefined) this.#failAll(this.#unavailable);
   }
@@ -1363,6 +1448,7 @@ class WorkerParsePool implements ParsePool {
     const job = poolWorker.job;
     if (job === null) return;
     poolWorker.job = null;
+    poolWorker.heapCheckPending = false;
     disarm(job);
     delete job.lastHeapUsed;
     job.thread = thread;
@@ -1373,7 +1459,7 @@ class WorkerParsePool implements ParsePool {
    * Count one death toward {@link DEATHS_BEFORE_UNAVAILABLE}, and judge the
    * install broken when it is one too many, or when the thread could not start at all.
    *
-   * @param poolWorker - The thread that died, or ran out of time before its job's parser loaded
+   * @param poolWorker - The thread that died: before posting `ready`, or holding a job whose parser had loaded
    * @param error - What it died of
    * @param couldNotStart - The thread itself died before posting `ready`: its own module graph
    *   would not load, which no document and no load on the host can cause. Never a thread the pool
@@ -1391,7 +1477,7 @@ class WorkerParsePool implements ParsePool {
   }
 
   /**
-   * Count one load-clock stop toward its parser kind's {@link LoadStopRun}, and judge the install
+   * Count one load-clock stop, or death on the load clock, toward its parser kind's {@link LoadStopRun}, and judge the install
    * broken when the run reaches {@link DEATHS_BEFORE_UNAVAILABLE}.
    *
    * A stop counts only when its job's load clock started at or after the run's last counted stop.
@@ -1412,7 +1498,7 @@ class WorkerParsePool implements ParsePool {
     this.#loadStopRuns.set(kind, { count, lastCountedAt: performance.now() });
     if (count < DEATHS_BEFORE_UNAVAILABLE) return;
     this.#unavailable ??= this.#brokenInstall(poolWorker, new Error(
-      `${String(count)} parse threads in a row ran out of time before the ${kind} parser loaded, with it loaded nowhere between them; the last: ${stop.message}`,
+      `${String(count)} parse threads in a row were stopped or died before the ${kind} parser loaded, with it loaded nowhere between them; the last: ${stop.message}`,
     ));
   }
 
@@ -1499,7 +1585,7 @@ class WorkerParsePool implements ParsePool {
       entry,
       heapBounds: undefined,
       key,
-      postedNothingYet: false,
+      heapCheckPending: false,
       // A parked thread ran jobs in the pool it came from, and carries what they left.
       reused: loaded !== undefined,
       detach: () => undefined,
@@ -1514,13 +1600,8 @@ class WorkerParsePool implements ParsePool {
     const onError = (error: Error): void => {
       if (poolWorker.retired) return;
       if ((error as { code?: unknown }).code === 'ERR_WORKER_OUT_OF_MEMORY') {
-        // Before its heap check, what V8 stopped was earlier jobs' heap: the job runs again on a
-        // fresh thread, charged to no document (`postedNothingYet`).
-        if (poolWorker.postedNothingYet) {
-          this.#requeue(poolWorker, 'fresh');
-          this.#terminate(poolWorker, error);
-          return;
-        }
+        // Before the job's parser loaded, what V8 stopped was not the document's (`#diedLoading`).
+        if (this.#diedLoading(poolWorker, error)) return;
         // V8 stopped it, not the sampler: the refusal names V8's ceiling.
         this.#terminate(poolWorker, ParseLimitError.heapCeiling(poolWorker.heapBounds, this.#limits.heapMb));
         return;
@@ -1553,8 +1634,6 @@ class WorkerParsePool implements ParsePool {
 
   /** Hand one worker's answer to the job that asked for it. */
   #settle(poolWorker: PoolWorker, response: ParseWorkerResponse): void {
-    // Any message proves the thread was alive and handed the job: from here a death is its own.
-    poolWorker.postedNothingYet = false;
     if ('timing' in response) {
       // Answers the SHUTDOWN request, not a parse. Handled before anything
       // touches `poolWorker.job`, because this thread may well still be holding
@@ -1563,23 +1642,17 @@ class WorkerParsePool implements ParsePool {
       return;
     }
     if ('parserLoaded' in response) {
-      // That parser loads on this install, whichever thread says so — one stopped at its load clock
-      // too, whose `parserLoaded` was still queued: it was slow, and the install is sound. A run of
-      // stops waiting for that parser is over.
-      this.#loadStopRuns.delete(response.parserLoaded);
-      // A thread the pool is done with holds no job of this pool: nothing it says arms a clock.
-      if (poolWorker.retired) return;
-      poolWorker.parsersLoaded.add(response.parserLoaded);
-      const held = poolWorker.job;
-      // The document's own clock starts now: see JobClock.
-      if (held?.clock === 'load' && moduleKindOf(held.request) === response.parserLoaded) this.#armClock(poolWorker, held, 'parse');
+      this.#parserLoaded(poolWorker, response);
       return;
     }
     if ('reuseCheck' in response) {
       // Counted for every check a thread reports, from a thread the pool has stopped since too.
       recordReuseCheck(response.reuseCheck);
       const held = poolWorker.job;
-      if (!poolWorker.retired && held?.request.id === response.id) this.#afterReuseCheck(poolWorker, held, response.reuseCheck.retire);
+      if (!poolWorker.retired && held?.request.id === response.id) {
+        poolWorker.heapCheckPending = false;
+        this.#afterReuseCheck(poolWorker, held, response.reuseCheck.retire);
+      }
       return;
     }
     // A thread the pool is done with — stopped at a limit, counted dead, or closing — holds no job
@@ -1588,6 +1661,7 @@ class WorkerParsePool implements ParsePool {
     if (poolWorker.retired) return;
     if ('ready' in response) {
       poolWorker.ready = true;
+      if (!response.collector) warnNoCollector();
       return;
     }
 
@@ -1610,6 +1684,27 @@ class WorkerParsePool implements ParsePool {
 
     this.#pump();
     this.#notifyDrained();
+  }
+
+  /**
+   * A thread says a parser loaded on it: see {@link ParseWorkerParserLoaded}.
+   *
+   * @param poolWorker - The thread
+   * @param loaded - What it posted
+   */
+  #parserLoaded(poolWorker: PoolWorker, loaded: ParseWorkerParserLoaded): void {
+    // That parser loads on this install, whichever thread says so — one stopped at its load clock
+    // too, whose `parserLoaded` was still queued: it was slow, and the install is sound. A run of
+    // stops waiting for that parser is over.
+    this.#loadStopRuns.delete(loaded.parserLoaded);
+    // A thread the pool is done with holds no job of this pool: nothing it says arms a clock.
+    if (poolWorker.retired) return;
+    poolWorker.parsersLoaded.add(loaded.parserLoaded);
+    const held = poolWorker.job;
+    // The document's own clock starts now, for the job the parser loaded for: see JobClock.
+    if (held?.request.id === loaded.id && held.clock === 'load' && moduleKindOf(held.request) === loaded.parserLoaded) {
+      this.#armClock(poolWorker, held, 'parse');
+    }
   }
 
   /**
@@ -1691,6 +1786,23 @@ class WorkerParsePool implements ParsePool {
       this.#drainWaiters.push(resolve);
     });
   }
+}
+
+/** Set once this process has been told its parse threads have no full collection. */
+let warnedNoCollector = false;
+
+/**
+ * Tell the process, once, that this runtime refused its parse threads a full collection
+ * ({@link ParseWorkerReady.collector}): a reused thread then holds what earlier jobs left until its
+ * stop, and is replaced there.
+ */
+function warnNoCollector(): void {
+  if (warnedNoCollector) return;
+  warnedNoCollector = true;
+  process.emitWarning(
+    'parse threads have no full collection on this runtime (it refused V8\'s --expose-gc): a reused thread is replaced at its heap stop instead of collected',
+    { code: 'VAT_PARSE_NO_COLLECTOR' },
+  );
 }
 
 /**
@@ -2051,5 +2163,6 @@ export function createParsePool(options?: ParsePoolOptions): ParsePool {
   // Conditional spread, never `{ cacheDir: undefined }`: `workerData` is
   // structured-cloned, and an own property valued `undefined` is not the same as
   // an absent one to the `in` check on the other side.
-  return new WorkerParsePool(bounded.size, cacheDir === undefined ? { limits } : { cacheDir, limits }, parkCap);
+  const collectorLock = COLLECTOR_LOCK;
+  return new WorkerParsePool(bounded.size, cacheDir === undefined ? { limits, collectorLock } : { cacheDir, limits, collectorLock }, parkCap);
 }

@@ -1,6 +1,8 @@
 import {
   isPerRunParseRefusal,
   parseContentCached,
+  parseInputBytesOf,
+  ParseLimitError,
   parseRefusal,
   type ParseRoute,
 } from '@vibe-agent-toolkit/resources';
@@ -104,6 +106,10 @@ function asParserReads(source: string): string {
  *   bounded route throws that is not a per-run refusal of this block
  */
 export function parseFrontmatter(content: string, route: ParseRoute): Promise<FrontmatterResult> {
+  // The whole content is held to the route's input cap, as a file read for a parse is
+  // (`readContentForParse`): content past it is refused, never cut down to a block that fits.
+  const inputBytes = parseInputBytesOf(route);
+  if (Buffer.byteLength(content, 'utf-8') > inputBytes) return Promise.resolve(refused(new ParseLimitError('inputBytes', inputBytes)));
   const normalized = (content.startsWith(BOM) ? content.slice(1) : content).replaceAll(/\r\n?/g, '\n');
   const lines = normalized.split('\n');
 
@@ -134,6 +140,14 @@ export function parseFrontmatter(content: string, route: ParseRoute): Promise<Fr
 }
 
 /**
+ * @param error - A per-run refusal of the content or its block (`isPerRunParseRefusal`)
+ * @returns This parser's result for it
+ */
+function refused(error: Parameters<typeof parseRefusal>[0]): FrontmatterError {
+  return { success: false, error: `Frontmatter was not decoded: ${parseRefusal(error).reason}`, cause: error };
+}
+
+/**
  * The worker's decode of one block's YAML source, as this parser's result.
  *
  * @param source - The block's YAML, delimiters excluded
@@ -147,7 +161,7 @@ async function decodeBlock(source: string, body: string, route: ParseRoute): Pro
     parsed = await parseContentCached(`---\n${source}\n---\n`, 'markdown', route);
   } catch (error) {
     if (!isPerRunParseRefusal(error)) throw error;
-    return { success: false, error: `Frontmatter was not decoded: ${parseRefusal(error).reason}`, cause: error };
+    return refused(error);
   }
 
   // The block handed over is fenced by construction, so the worker reads back

@@ -393,6 +393,26 @@ describe('a process-wide heap flag', () => {
   });
 });
 
+describe('a process-wide semi-space flag', () => {
+  // `--max-semi-space-size` sizes every isolate's young generation at three of it, over a worker's
+  // `resourceLimits`, which still report the size they were given (Node 26.7: 192). Read from
+  // `resourceLimits`, V8's ceiling under 512 and 128 read 704 for a real 512, and the stop sat at 528,
+  // past it; under 128 and 16 the read was not positive and the pool fell back to its own 2,048.
+  // Either way V8 reached its ceiling first, which under fast allocation kills the whole process.
+  it.each([
+    ['--max-old-space-size=512 --max-semi-space-size=128', '384 MiB heap'],
+    ['--max-old-space-size=128 --max-semi-space-size=16', '64 MiB heap'],
+  ])('under %s, stops a breach at the bound read from the real ceiling, three times in a row, and the process survives', (nodeOptions, bound) => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const outcome = heapBreachUnder(nodeOptions, 1024, 0);
+
+      expect(outcome.status).toBe(0);
+      expect(outcome.limit).toBe('heapMb');
+      expect(outcome.bound).toBe(`${bound}, lowered from 1024 MiB by a process-wide --max-old-space-size`);
+    }
+  });
+});
+
 describe('a heap breach while the parent thread stalls', () => {
   it('is still stopped at the applied limit when every stall is shorter than the window', () => {
     // The sampler runs on the parent's event loop, so a parent blocked

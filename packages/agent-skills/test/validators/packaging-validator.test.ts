@@ -1418,7 +1418,7 @@ describe('validateSkillForPackaging - gitignored files: source (validate path)',
 			skillPath,
 			{}, { files: [{ source: gitIgnoredSrc, dest: 'config/secret.env' }] },
 			'source',
-			{ unreadable: 'refuse', outputs: [], gitTracker: tracker as Parameters<typeof validateSkillForPackaging>[4] extends { gitTracker?: infer T } ? T : never },
+			{ dispatcher: undefined, unreadable: 'refuse', outputs: [], gitTracker: tracker as Parameters<typeof validateSkillForPackaging>[4] extends { gitTracker?: infer T } ? T : never },
 		);
 
 		// No warning for a gitignored source — the files: entry is the declaration of intent.

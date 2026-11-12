@@ -171,10 +171,10 @@ export interface ClaudeSkillInventoryOptions {
 	sharedPopulation?: InventoryPopulation | undefined;
 	/**
 	 * The run's parse dispatcher, for the frontmatter decode (in the bounded
-	 * worker), so a plugin's skills share one worker start. Omitted, a cache
+	 * worker), so a plugin's skills share one worker start. `undefined`, a cache
 	 * miss builds a one-thread pool for the call.
 	 */
-	dispatcher?: ParseDispatcher | undefined;
+	dispatcher: ParseDispatcher | undefined;
 }
 
 /**

@@ -157,6 +157,15 @@ parse holds in garbage alone.
   flag the pool still applies 32 MiB and an ordinary document can be refused: such a flag is too
   small to parse with. A 200,000-link breach under the 128 MiB flag is stopped at 96 MiB with the
   child exiting cleanly, 15 of 15 (seeded three in a row in `parse-pool-limits.integration.test.ts`).
+- **A semi-space or heap-size flag.** V8's ceiling for a worker is the old generation it can reach:
+  the least of `heap_size_limit` less the young generation, `--max-old-space-size`, and
+  `--max-heap-size` less the young generation. Measured on Node 26.7 (`heap_size_limit`, MiB): no
+  flags 2,240 (2,048 + 192); old 512 with semi-space 128, 896; old 128 with semi-space 16, 176;
+  semi-space 16 alone 2,096, 128 alone 2,432; `--max-heap-size=512`, 512; old 1,024 with heap size
+  512, 1,027. The young generation is three times the semi-space flag on Node 22, 24 and 26, while a
+  worker's `resourceLimits` still reports the default (192, and 48 on Node 22), so the pool reads a
+  flagged semi-space from the flag. Under old 512 with semi-space 128 the applied bound is 384 MiB,
+  and under old 128 with semi-space 16, 64 MiB; read from `resourceLimits` they were 256 and 48.
 - **A 10,000-level nested blockquote** (10,015 bytes, the pathological arm above) needs its heap
   for real: in a raw worker with V8's full collection before it gives up, it runs out of memory
   under an old-generation ceiling of 420 MiB and completes under 460 MiB (peak used 414 MiB). The
@@ -201,13 +210,15 @@ before the job (`settleReusedHeap` in `parse-limits.ts`):
 
 - **The bound** is `reusedThreadHeapMb(appliedMb)` = `FRESH_THREAD_HEAP_MB` + B, with
   **B = ⌊appliedMb / 8⌋**, the thread's own applied bound read as the pool reads it. A fresh thread
-  holds 20.7 to 24.1 MiB of used heap once both parsers have loaded (Node 26.7.0), so
+  holds 23.3 to 24.1 MiB of used heap once both parsers have loaded (Node 26.7.0), so
   `FRESH_THREAD_HEAP_MB` is 24, and the bound is 152 MiB at the default applied 1,024 MiB, 88 under
   a 1,024 MiB process flag (applied 512), 72 under 768 (applied 384) and 56 under 512 (applied
   256). The worst-case difference between a job's verdict on a fresh and on a reused thread is B:
   an eighth of the room, at every bound.
 - **Over the bound**, the thread forces a full collection of its own heap (V8's `gc`, taken once as
-  the worker loads — `acquireCollector` in `parse-worker.ts` says why that is safe) and reads again.
+  the worker loads, under a lock, with `--expose-gc` cleared again — `parse-collector.ts` says why)
+  and reads again. A thread with no collector (a runtime that refuses the flag) is held to its
+  stop instead, and the process is warned once.
 - **Still over**, the thread is retired before it runs anything: the job runs on a fresh thread,
   never on another reused one, and the jobs behind it may use an idle thread meanwhile.
 

@@ -823,7 +823,20 @@ export function readContentForParse<K extends DocumentParserKind>(
   parserKind: K,
   route: ParseRoute,
 ): Promise<KeyedContent<K>> {
-  return readContentWithKey(filePath, parserKind, route.dispatcher?.inputBytes ?? resolveParseLimits(undefined).inputBytes);
+  return readContentWithKey(filePath, parserKind, parseInputBytesOf(route));
+}
+
+/**
+ * The parse input cap a route runs under: its dispatcher's, or the default one. What a lane that
+ * holds content in memory checks the WHOLE content against before it cuts out the part it parses
+ * — as {@link readContentForParse} holds a file to it — so content past the cap is one refusal on
+ * every lane, never parsed in part.
+ *
+ * @param route - The {@link ParseRoute}; `{}` for the default one
+ * @returns The cap, in bytes
+ */
+export function parseInputBytesOf(route: ParseRoute): number {
+  return route.dispatcher?.inputBytes ?? resolveParseLimits(undefined).inputBytes;
 }
 
 /**

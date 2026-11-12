@@ -49,7 +49,9 @@ import {
   ParseLimitError,
   resolveParseLimits,
   reusedThreadHeapMb,
+  v8HeapFlags,
   workerHeapCeilingMb,
+  workerHeapGeometry,
 } from '../src/parse-limits.js';
 import {
   __closeParkedParseWorkersForTest,
@@ -422,7 +424,7 @@ describe('ParsePool.parse', () => {
     const entry = safePath.join(directory, 'suicidal-worker.mjs');
     await fs.writeFile(
       entry,
-      `import { parentPort } from 'node:worker_threads';\n${READY_LINE}\nparentPort.on('message', () => { process.exit(3); });\n`,
+      `import { parentPort } from 'node:worker_threads';\n${READY_LINE}\nparentPort.on('message', (request) => { ${DIES_PARSING} });\n`,
       'utf-8',
     );
     __setParseWorkerEntryForTest(entry);
@@ -440,7 +442,14 @@ describe('ParsePool.parse', () => {
 });
 
 /** What a seeded worker entry posts once its module has loaded, as the real worker does. */
-const READY_LINE = 'parentPort.postMessage({ ready: true });';
+const READY_LINE = 'parentPort.postMessage({ ready: true, collector: true });';
+
+/**
+ * A seeded thread killed by the document it holds: its parser has loaded for `request` (said so,
+ * as the real worker does before it parses), and the thread exits. One that exits before saying so
+ * died before any parser ran over the document, which is never the document's death.
+ */
+const DIES_PARSING = 'parentPort.postMessage({ id: request.id, parserLoaded: request.kind }); process.exit(3);';
 
 /** The built worker, which a seeded entry can import to answer real parses. */
 const BUILT_WORKER = pathToFileURL(safePath.resolve(import.meta.dirname, '..', 'dist', 'parse-worker.js')).href;
@@ -535,7 +544,7 @@ describe('a broken install is loud', () => {
   });
 
   it('calls three consecutive deaths with no answer between them a broken install', async () => {
-    await seedWorkerEntry(`import { parentPort } from 'node:worker_threads';\n${READY_LINE}\nparentPort.on('message', () => { process.exit(3); });\n`);
+    await seedWorkerEntry(`import { parentPort } from 'node:worker_threads';\n${READY_LINE}\nparentPort.on('message', (request) => { ${DIES_PARSING} });\n`);
     const pool = trackedPool(1);
 
     const first = await outcomeOf(pool, '# a\n');
@@ -551,7 +560,7 @@ describe('a broken install is loud', () => {
     await seedWorkerEntry([
       "import { parentPort } from 'node:worker_threads';",
       `await import(${JSON.stringify(BUILT_WORKER)});`,
-      "parentPort.on('message', (request) => { if (request?.content?.startsWith?.('# DIE')) process.exit(1); });",
+      `parentPort.on('message', (request) => { if (request?.content?.startsWith?.('# DIE')) { ${DIES_PARSING} } });`,
     ].join('\n'));
     const pool = trackedPool(1);
 
@@ -652,7 +661,7 @@ describe('a broken install is loud', () => {
       'const on = parentPort.on.bind(parentPort);',
       "parentPort.on = (event, listener) => on(event, event === 'message' ? (request) => {",
       "  if (!request?.content?.startsWith?.('# SLOW')) return listener(request);",
-      '  parentPort.postMessage({ parserLoaded: request.kind });',
+      '  parentPort.postMessage({ id: request.id, parserLoaded: request.kind });',
       "  writeFileSync(new URL(`./${request.content.trim().replace('# ', '').replace(' ', '-')}`, import.meta.url), '');",
       '  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);',
       '} : listener);',
@@ -847,21 +856,21 @@ describe('a thread V8 stops at its own heap ceiling', () => {
       "import { parentPort } from 'node:worker_threads';",
       READY_LINE,
       "const die = new URL('./die', import.meta.url);",
-      "parentPort.on('message', () => { const poll = setInterval(() => { if (!existsSync(die)) return; clearInterval(poll); const error = new Error('out of memory'); error.code = 'ERR_WORKER_OUT_OF_MEMORY'; throw error; }, 5); });",
+      "parentPort.on('message', (request) => { parentPort.postMessage({ id: request.id, parserLoaded: request.kind }); const poll = setInterval(() => { if (!existsSync(die)) return; clearInterval(poll); const error = new Error('out of memory'); error.code = 'ERR_WORKER_OUT_OF_MEMORY'; throw error; }, 5); });",
     ].join('\n'));
     let landed: HeapBounds | undefined;
     const sample = Worker.prototype.getHeapStatistics;
     const spy = vi.spyOn(Worker.prototype, 'getHeapStatistics').mockImplementation(function (this: Worker) {
       // The young generation is read while the thread lives: once it has exited `resourceLimits`
       // is empty, and a sample landing after the death (one the pool ignores) would read 0.
-      const youngMb = this.resourceLimits?.maxYoungGenerationSizeMb ?? 0;
+      const geometry = workerHeapGeometry(this.resourceLimits, v8HeapFlags(process.env['NODE_OPTIONS'], process.execArgv));
       // Recorded a turn later, so the pool's own `then`, chained after this one, has run. Only
       // the first sample counts: every in-job sample carries the same bounds (the young
       // generation is fixed at spawn and nothing raises `heap_size_limit`), and a later one may
       // land after the thread is gone.
       return sample.call(this).then((stats) => {
         setImmediate(() => {
-          landed ??= heapBounds(stats, youngMb, resolveParseLimits(undefined).heapMb);
+          landed ??= heapBounds(stats, geometry, resolveParseLimits(undefined).heapMb);
         });
         return stats;
       });
@@ -939,10 +948,11 @@ function scriptedHeap(script: (bounds: HeapBounds, youngMb: number) => number[],
   let usedMb: number[] = [];
   vi.spyOn(Worker.prototype, 'getHeapStatistics').mockImplementation(function (this: Worker) {
     return sample.call(this).then((stats) => {
-      const youngMb = this.resourceLimits?.maxYoungGenerationSizeMb ?? 0;
+      const geometry = workerHeapGeometry(this.resourceLimits, v8HeapFlags(process.env['NODE_OPTIONS'], process.execArgv));
+      const youngMb = geometry.youngMb;
       const limitBytes = ceiling === 'as-read' ? stats.heap_size_limit : (ceiling.ceilingMb + youngMb) * BYTES_PER_MIB;
       if (read === undefined) {
-        read = heapBounds({ heap_size_limit: limitBytes }, youngMb, resolveParseLimits(undefined).heapMb);
+        read = heapBounds({ heap_size_limit: limitBytes }, geometry, resolveParseLimits(undefined).heapMb);
         try {
           usedMb = script(read, youngMb);
         } catch (error) {
@@ -1159,16 +1169,17 @@ describe('a reused thread\'s check before its job', () => {
     expect(await outcome).toBe('answered');
   }, 60_000);
 
-  it('retires a thread past the bound, rather than failing to load, on a runtime that refuses the flag a collector needs', async () => {
+  it('keeps a thread with no collector until it holds past its stop, and warns once, on a runtime that refuses the flag a collector needs', async () => {
     // `v8.setFlagsFromString` throws, as a runtime that forbids it would: the thread loads with no
-    // collector, and a reused one holding garbage past the bound is retired, its job on a fresh one.
-    // The flag is process-wide and never cleared, so a worker an earlier test started left `gc` on
-    // this thread's global: cleared (writable, never configurable, so assigned rather than deleted),
-    // or this test's verdict depends on which tests ran before it.
+    // collector. Retired at the reused-thread bound, such a thread would be replaced after almost
+    // every job; it is retired only past its stop, and the run is told once. A process run with
+    // `--expose-gc` would leave `gc` on the thread's global, which is used: cleared (writable,
+    // never configurable, so assigned rather than deleted).
     await seedScriptedHeapEntry([
       'globalThis.gc = undefined;',
       "v8.setFlagsFromString = () => { throw new Error('flags are not settable here'); };",
     ]);
+    const warnings = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
     const pool = heapTestPool();
     expect(await outcomeOf(pool, '# earlier\n')).toBe('answered');
 
@@ -1176,8 +1187,9 @@ describe('a reused thread\'s check before its job', () => {
       expect(await outcomeOf(pool, '# garbage=200\n')).toBe('answered');
     });
 
-    expect(started).toHaveLength(1);
-    expect(reuse.rows).toStrictEqual({ check: 1, collect: 0, retire: 1 });
+    expect(started).toHaveLength(0);
+    expect(reuse.rows).toStrictEqual({ check: 1, collect: 0, retire: 0 });
+    expect(warnings.mock.calls.filter(([message]) => String(message).includes('no full collection'))).toHaveLength(1);
   }, 60_000);
 
   it.each(['exit', 'oom'])('runs a job whose reused thread died before its check (%s) on a fresh thread, charged to no document', async (how) => {
@@ -1431,6 +1443,7 @@ describe('the pool\'s bookkeeping is never a verdict', () => {
       READY_LINE,
       "parentPort.on('message', (request) => {",
       "  if (request?.type === 'shutdown') { parentPort.close(); return; }",
+      '  parentPort.postMessage({ id: request.id, parserLoaded: request.kind });',
       '  parentPort.postMessage({ id: request.id + 1000, facts: { links: [], headings: [], estimatedTokenCount: 0 } });',
       '  setTimeout(() => process.exit(3), 20);',
       '});',
@@ -1461,6 +1474,62 @@ describe('the pool\'s bookkeeping is never a verdict', () => {
 
     expect(widest).toBe(2);
     expect(workerThreadCount()).toBe(before);
+  });
+});
+
+/**
+ * A seeded worker whose thread dies, the first `dying` times, on being handed a parse — after it
+ * posted `ready`, before the job's parser loads: it exits, or throws V8's out-of-memory error.
+ *
+ * @param how - `exit` or `oom`
+ * @param dying - How many threads die so; every later one runs the real worker
+ * @returns The entry's source
+ */
+function diesWhileLoading(how: 'exit' | 'oom', dying: number): string {
+  return intercepting("request?.type === 'parse'", [
+    "const fs = process.getBuiltinModule('node:fs');",
+    "const tally = new URL('./deaths', import.meta.url);",
+    "const deaths = fs.existsSync(tally) ? fs.readFileSync(tally, 'utf-8').length : 0;",
+    `if (deaths >= ${String(dying)}) return listener(request);`,
+    "fs.appendFileSync(tally, 'x');",
+    how === 'exit'
+      ? 'process.exit(3);'
+      : "{ const error = new Error('out of memory'); error.code = 'ERR_WORKER_OUT_OF_MEMORY'; throw error; }",
+  ]);
+}
+
+describe('a thread that dies while it loads the job\'s parser', () => {
+  it.each(['exit', 'oom'] as const)('runs the job again on another thread, charged to no document (%s)', async (how) => {
+    await seedWorkerEntry(diesWhileLoading(how, 1));
+    const pool = createParsePool({ size: 1 });
+    openPools.push(pool);
+
+    expect(verdictOf(await outcomeOf(pool, '# loads\n'))).toBe('answered');
+  });
+
+  it('ends the job as a broken install, never the document\'s death, once it dies so on three threads in a row', async () => {
+    await seedWorkerEntry(diesWhileLoading('exit', 99));
+    const pool = createParsePool({ size: 1 });
+    openPools.push(pool);
+
+    const outcome = await outcomeOf(pool, '# never loads\n');
+
+    expect(verdictOf(outcome)).toBe('unavailable');
+    expect(outcome instanceof Error && outcome.message).toMatch(/died before the markdown parser loaded/);
+  });
+
+  it('is still the document\'s death once the parser has loaded and the parse begun', async () => {
+    // The thread dies as it would answer: its `parserLoaded` reached the pool first.
+    await seedWorkerEntry([
+      "import { parentPort } from 'node:worker_threads';",
+      'const post = parentPort.postMessage.bind(parentPort);',
+      "parentPort.postMessage = (message) => { if (typeof message?.id === 'number' && !('reuseCheck' in message) && !message.parserLoaded) process.exit(3); post(message); };",
+      `await import(${JSON.stringify(BUILT_WORKER)});`,
+    ].join('\n'));
+    const pool = createParsePool({ size: 1 });
+    openPools.push(pool);
+
+    expect(verdictOf(await outcomeOf(pool, '# dies parsing\n'))).toBe('died');
   });
 });
 
@@ -1620,6 +1689,9 @@ describe('the clocks and the breaker', () => {
     const deadline = settleDeadline();
     vi.useFakeTimers(TEST_CLOCK);
     const entry = await seedWorkerEntry(intercepting("request?.kind === 'html'", [
+      // The thread that answered the failure is reused for the next document: it checks its heap and
+      // keeps itself first, as the real worker does, so its stop is a parser load that hangs.
+      "if (request.settleHeap) parentPort.postMessage({ id: request.id, reuseCheck: { usedBytes: 0, collectMs: null, checkMs: 0, retire: false } });",
       "const fs = process.getBuiltinModule('node:fs');",
       "const fail = new URL('./fail', import.meta.url);",
       "if (fs.existsSync(fail)) { fs.rmSync(fail); parentPort.postMessage({ id: request.id, failure: { name: 'Error', message: 'seeded parser load failure' } }); return; }",
@@ -1761,7 +1833,7 @@ describe('a thread that dies uncontrolled', () => {
     // thread has always loaded before it throws, however slowly its module loaded.
     await seedWorkerEntry([
       "process.on('exit', () => { const until = Date.now() + 400; while (Date.now() < until); });",
-      intercepting(contentStartsWith('# DIE'), ["throw new Error('seeded death');"]),
+      intercepting(contentStartsWith('# DIE'), ['parentPort.postMessage({ id: request.id, parserLoaded: request.kind });', "throw new Error('seeded death');"]),
     ].join('\n'));
     const pool = trackedPool(1);
 
@@ -2053,7 +2125,7 @@ describe('a parked thread', () => {
   it('is never a thread stopped at a limit', async () => {
     stubParkingMachine();
     await seedWorkerEntry(intercepting(contentStartsWith('# SLOW'), [
-      'parentPort.postMessage({ parserLoaded: request.kind });',
+      'parentPort.postMessage({ id: request.id, parserLoaded: request.kind });',
       'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);',
     ]));
     // Long enough for a fresh thread on a loaded runner to load before its deadline.
@@ -2097,7 +2169,7 @@ describe('a parked thread', () => {
     // `DIE` loads a parser the parked thread never had, says so, then kills the thread: the
     // document's doing, on a thread proven alive after adoption, so nothing runs it again.
     await seedWorkerEntry(intercepting(contentStartsWith('<p>DIE'), [
-      "parentPort.postMessage({ parserLoaded: 'html' });",
+      "parentPort.postMessage({ id: request.id, parserLoaded: 'html' });",
       'setTimeout(() => process.exit(3), 200);',
     ]));
     await parkOne({ size: 1 });
@@ -2229,7 +2301,7 @@ describe('a parked thread', () => {
     // stop there is the document's. `<p>DIE` kills a fresh thread mid-job: a death everywhere.
     // Deadline long enough for a loaded runner.
     await seedWorkerEntry(intercepting(`${contentStartsWith('# SLOW')} || ${contentStartsWith('<p>DIE')}`, [
-      "if (request.content.startsWith('<p>DIE')) { setTimeout(() => process.exit(3), 100); return; }",
+      "if (request.content.startsWith('<p>DIE')) { parentPort.postMessage({ id: request.id, parserLoaded: request.kind }); setTimeout(() => process.exit(3), 100); return; }",
       'const post = parentPort.postMessage.bind(parentPort);',
       'parentPort.postMessage = (message) => {',
       '  post(message);',

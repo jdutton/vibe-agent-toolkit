@@ -61,7 +61,7 @@ describe('registerBundledAssets on a broken install', () => {
     const entry = safePath.join(dir, 'dying-worker.mjs');
     writeFileSync(
       entry,
-      "import { parentPort } from 'node:worker_threads';\nparentPort.postMessage({ ready: true });\nparentPort.on('message', () => { process.exit(3); });\n",
+      "import { parentPort } from 'node:worker_threads';\nparentPort.postMessage({ ready: true, collector: true });\nparentPort.on('message', () => { process.exit(3); });\n",
       'utf-8',
     );
     seam = (await import(BUILT_POOL)) as PoolTestSeam;
