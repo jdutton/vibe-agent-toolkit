@@ -46,11 +46,11 @@ function geometry(youngMb: number, flags: Partial<V8HeapFlags> = {}): HeapGeomet
 }
 
 describe('the heap limit a caller may name', () => {
-  it('is refused below the minimum a parser loads within, naming it, and accepted at it', () => {
-    // A bound no thread can load a parser within is a configuration error, refused up front:
-    // under it the run ends as a refusal, a broken install or a fatal V8 abort, by timing.
-    expect(() => resolveParseLimits({ heapMb: 31 })).toThrow(/heapMb may not be below 32 MiB/);
-    expect(resolveParseLimits({ heapMb: 32 }).heapMb).toBe(32);
+  it('is refused below the minimum, naming it, and accepted at it', () => {
+    // Below it a thread can reach V8's own ceiling, whose out-of-memory aborts the process: a
+    // configuration error, refused up front.
+    expect(() => resolveParseLimits({ heapMb: 63 })).toThrow(/heapMb may not be below 64 MiB/);
+    expect(resolveParseLimits({ heapMb: 64 }).heapMb).toBe(64);
   });
 });
 

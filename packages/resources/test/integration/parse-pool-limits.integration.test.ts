@@ -9,7 +9,10 @@
  * the pool.
  *
  * Time and heap breaches kill and replace the worker; stack and output breaches
- * are reported by it; input size is refused before dispatch. A kill is proved by
+ * are reported by it; input size is refused before dispatch. A real pool at a
+ * small heap bound runs only in a child process that must exit 0: a thread that
+ * reaches V8's own ceiling can abort its whole process, which in this one would
+ * take the test runner's fork down and every test in it unreported. A kill is proved by
  * Node's own thread table returning to its baseline BEFORE the pool is asked
  * again — the pool spawns lazily, so the old thread is gone, not merely
  * abandoned while it keeps parsing.
@@ -109,15 +112,25 @@ describe('a parse job stopped at its limit', () => {
     await expectPoolStillParses(pool);
   });
 
-  it('kills a job whose allocation outgrows its heap, and replaces the worker', async () => {
-    const baseline = workerThreadCount();
-    const pool = limitedPool({ timeMs: 60_000, outputRows: 10_000_000, outputBytes: 1024 * 1024 * 1024 });
+  it('kills a job whose allocation outgrows its heap, and replaces the worker', () => {
+    // In a child process: see the file's header. The breach is the document's alone, the
+    // thread it ran on is replaced (a second start), and the same pool answers next.
+    const limits = JSON.stringify({ ...TIGHT_LIMITS, timeMs: 60_000, outputRows: 10_000_000, outputBytes: 1024 * 1024 * 1024 });
+    const { stdout, status } = runInChild('', [
+      "const { subscribe } = await import('node:diagnostics_channel');",
+      'let started = 0;',
+      "subscribe('worker_threads', () => { started += 1; });",
+      `const { createParsePool } = await import(${JSON.stringify(BUILT_POOL)});`,
+      `const pool = createParsePool({ size: 1, limits: ${limits} });`,
+      `const doc = ${MANY_LINKS_EXPRESSION};`,
+      "const limit = await pool.parse('markdown', doc, doc.length).then(() => 'none', (error) => error.limit ?? String(error));",
+      String.raw`const links = await pool.parse('markdown', '# ok\n\n[a](./b.md)\n', 21).then((result) => result.links.length, (error) => String(error));`,
+      'console.log(JSON.stringify({ limit, links, started }));',
+      'await pool.shutdown();',
+    ]);
 
-    const { limit } = await breach(pool, manyLinks(200_000));
-
-    expect(limit).toBe('heapMb');
-    await expectWorkerKilled(baseline);
-    await expectPoolStillParses(pool);
+    expect(status).toBe(0);
+    expect(JSON.parse(stdout)).toStrictEqual({ limit: 'heapMb', links: 1, started: 2 });
   });
 
   it('refuses an oversize document without handing it to a worker', async () => {
@@ -273,6 +286,9 @@ const BLOCK_UNTIL_THE_WORKER_IS_GONE = [
   '}, 0);',
 ].join('\n');
 
+/** A document that outgrows any small heap, as a JavaScript expression a child evaluates. */
+const MANY_LINKS_EXPRESSION = String.raw`Array.from({ length: 200000 }, (_, i) => '[link ' + i + '](./t-' + i + '.md)\n').join('\n')`;
+
 /**
  * Run the built pool in a child process under `nodeOptions`, parsing a document
  * that outgrows its heap, and report the limit it was stopped at.
@@ -287,7 +303,7 @@ const BLOCK_UNTIL_THE_WORKER_IS_GONE = [
 function heapBreachUnder(nodeOptions: string, heapMb: number, stall: number | typeof UNTIL_THE_WORKER_IS_GONE): ChildOutcome {
   return parseInChild(
     nodeOptions,
-    String.raw`Array.from({ length: 200000 }, (_, i) => '[link ' + i + '](./t-' + i + '.md)\n').join('\n')`,
+    MANY_LINKS_EXPRESSION,
     `{ heapMb: ${String(heapMb)}, timeMs: 60000, outputRows: 1e9, outputBytes: 1e10, inputBytes: 1e9 }`,
     stall,
   );
@@ -329,12 +345,25 @@ function parseInChild(
     'if (stall !== undefined) clearInterval(stall);',
     'console.log(JSON.stringify({ ...outcome, ms: performance.now() - startedAt }));',
     'await pool.shutdown();',
-  ].join('\n');
+  ];
+  const { stdout, status } = runInChild(nodeOptions, script);
+  return { ...(JSON.parse(stdout) as { limit: string; bound: string; ms: number }), status };
+}
+
+/**
+ * Run `script` as an ES module in a child process under `nodeOptions`, so whatever a real pool's
+ * thread does to its process — a fatal V8 abort included — is that child's, never the runner's.
+ *
+ * @param nodeOptions - The child's `NODE_OPTIONS`
+ * @param script - The module's lines
+ * @returns What it printed, and its exit status (asserted with nothing on stderr)
+ */
+function runInChild(nodeOptions: string, script: readonly string[]): { stdout: string; status: number | null } {
   // A script FILE, not `--eval`: a worker inherits its parent's execArgv,
   // and `--input-type` is refused by a worker started from a file.
   const directory = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-heap-flag-'));
   const entry = safePath.join(directory, 'heap-flag.mjs');
-  writeFileSync(entry, script, 'utf-8');
+  writeFileSync(entry, script.join('\n'), 'utf-8');
   const child = spawnSync(process.execPath, [entry], {
     env: { ...process.env, NODE_OPTIONS: nodeOptions },
     encoding: 'utf-8',
@@ -342,7 +371,7 @@ function parseInChild(
   rmSync(directory, { recursive: true, force: true });
 
   expect(child.stderr).toBe('');
-  return { ...(JSON.parse(child.stdout) as { limit: string; bound: string; ms: number }), status: child.status };
+  return { stdout: child.stdout, status: child.status };
 }
 
 describe('a process-wide heap flag', () => {
@@ -352,10 +381,10 @@ describe('a process-wide heap flag', () => {
     // 4096 a worker given 48 MiB reports a 4,192 MiB heap limit and a runaway
     // allocation runs until the wall clock stops it. The job must still be
     // stopped at its HEAP limit, well before its wall-clock one.
-    const outcome = heapBreachUnder('--max-old-space-size=4096', 48, 0);
+    const outcome = heapBreachUnder('--max-old-space-size=4096', MIN_HEAP_MB, 0);
 
     expect(outcome.limit).toBe('heapMb');
-    expect(outcome.bound).toBe('48 MiB heap');
+    expect(outcome.bound).toBe(`${String(MIN_HEAP_MB)} MiB heap`);
     expect(outcome.ms).toBeLessThan(30_000);
   });
 
@@ -482,15 +511,20 @@ describe('the least heapMb a caller may configure', () => {
     }
   });
 
-  it('is a bound a pool loads and runs both parsers under', async () => {
-    const pool = createParsePool({ size: 1, limits: { heapMb: MIN_HEAP_MB } });
+  it('is a bound a pool loads and runs both parsers under, and its process exits cleanly', () => {
+    // In a child process: see the file's header.
+    const { stdout, status } = runInChild('', [
+      `const { createParsePool } = await import(${JSON.stringify(BUILT_POOL)});`,
+      `const pool = createParsePool({ size: 1, limits: { heapMb: ${String(MIN_HEAP_MB)} } });`,
+      "const answered = (outcome) => outcome.then((result) => result.sizeBytes, (error) => String(error));",
+      String.raw`const markdown = await answered(pool.parse('markdown', '# minimum\n', 10));`,
+      "const html = await answered(pool.parse('html', '<p>minimum</p>', 14));",
+      'console.log(JSON.stringify({ markdown, html }));',
+      'await pool.shutdown();',
+    ]);
 
-    try {
-      await expect(pool.parse('markdown', '# minimum\n', 10)).resolves.toMatchObject({ sizeBytes: 10 });
-      await expect(pool.parse('html', '<p>minimum</p>', 14)).resolves.toMatchObject({ sizeBytes: 14 });
-    } finally {
-      await pool.shutdown();
-    }
+    expect(status).toBe(0);
+    expect(JSON.parse(stdout)).toStrictEqual({ markdown: 10, html: 14 });
   });
 });
 

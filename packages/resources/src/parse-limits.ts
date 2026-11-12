@@ -277,7 +277,7 @@ export function resolveParseLimits(named: Partial<ParseLimits> | undefined): Par
   }
   if (resolved.heapMb < MIN_HEAP_MB) {
     throw new Error(
-      `Parse limit heapMb may not be below ${String(MIN_HEAP_MB)} MiB, the least a worker was measured to load its parsers within; got ${String(resolved.heapMb)}.`,
+      `Parse limit heapMb may not be below ${String(MIN_HEAP_MB)} MiB: under it a thread can reach V8's own ceiling, whose out-of-memory aborts the process; got ${String(resolved.heapMb)}.`,
     );
   }
   if (resolved.outputDepth > STORE_JSON_DEPTH) {
@@ -1136,15 +1136,16 @@ function unvouchedStopMb(appliedMb: number, ceilingMb: number, heapMb: number): 
 export const FRESH_THREAD_HEAP_MB = 24;
 
 /**
- * The least `heapMb` a caller may configure, in MiB: 32. It exists so a worker can load its
- * parsers: measured resting heap after loading them was 19.6 MiB (markdown alone, Node 22.16) to
- * 24.1 MiB (both, Node 26), under 32. It promises nothing more — not that every load stays under
- * the bound (a load-clock breach is a load stop and the job runs again), nor that a document past a
- * 32 MiB bound is always refused cleanly before V8's own ceiling. Held: `resolveParseLimits`
- * refuses 31 and accepts 32, and `parse-pool-limits.integration.test.ts` runs a pool at this
- * minimum to answers for both parsers.
+ * The least `heapMb` a caller may configure, in MiB: 64, so V8's own ceiling (twice it) is at
+ * least 128. Under a smaller bound a thread can reach that ceiling before the pool's heap sampler
+ * acts, and V8's out-of-memory there is FATAL: it aborts the whole process, the caller's included.
+ * Measured on Node 26: no-flag breaches at 64 MiB are stopped by the pool three times in a row,
+ * each in a child process that exits cleanly (`parse-pool-limits.integration.test.ts`, "a heap
+ * breach with no process-wide flag"). It promises nothing more about a document past the bound.
+ * Held: `resolveParseLimits` refuses 63 and accepts 64, and a pool at this minimum loads and runs
+ * both parsers in a child process that exits cleanly.
  */
-export const MIN_HEAP_MB = 32;
+export const MIN_HEAP_MB = 64;
 
 /**
  * What a reused thread may hold past a fresh one's {@link FRESH_THREAD_HEAP_MB}, as a share of the

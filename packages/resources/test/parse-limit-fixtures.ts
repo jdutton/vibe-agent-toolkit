@@ -9,7 +9,7 @@
 
 import { afterEach } from 'vitest';
 
-import { isParseLimitError, type ParseLimitName, type ParseLimits } from '../src/parse-limits.js';
+import { isParseLimitError, MIN_HEAP_MB, type ParseLimitName, type ParseLimits } from '../src/parse-limits.js';
 import { createParsePool, type ParsePool, type ParsePoolOptions } from '../src/parse-pool.js';
 
 /**
@@ -54,7 +54,7 @@ export function manyLinks(count: number): string {
  */
 export const TIGHT_LIMITS: ParseLimits = {
   timeMs: 2000,
-  heapMb: 48,
+  heapMb: MIN_HEAP_MB,
   stackMb: 1,
   outputRows: 1000,
   outputBytes: 256 * 1024,
