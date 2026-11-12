@@ -27,6 +27,7 @@
  *   `finally` is the only thing that can hold it.
  */
 
+import diagnosticsChannel from 'node:diagnostics_channel';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
@@ -308,8 +309,17 @@ describe('parse-pool activation', () => {
     // OUTSIDE the corpus root: a cache written beneath `tempDir` would be
     // enumerated as corpus on the second run and change what is being derived.
     const cache = new ParseCache({ cacheDir: safePath.join(suite.suiteDir, 'parse-cache') });
-    const before = workerThreadCount();
-    const observed = { peak: before, pools: 0 };
+    // Threads STARTED, never threads alive at some moment: a live count also counts a thread an
+    // earlier test's pool parked, and that one closes on its own idle timer whenever the run is
+    // slow enough — so a cold run's thread and a parked thread's exit cancel out in the count.
+    const observed = { spawns: 0, pools: 0 };
+    const onSpawn = (): void => {
+      observed.spawns += 1;
+    };
+    diagnosticsChannel.subscribe('worker_threads', onSpawn);
+    onTestFinished(() => {
+      diagnosticsChannel.unsubscribe('worker_threads', onSpawn);
+    });
 
     const createPool = (options?: { size?: number }): ParsePool => {
       observed.pools += 1;
@@ -323,12 +333,7 @@ describe('parse-pool activation', () => {
         parseIntoCache: async (kind, content, byteLength, cacheKey) =>
           real.parseIntoCache(kind, content, byteLength, cacheKey),
         harnessFacts: async (harness, content, byteLength) => real.harnessFacts(harness, content, byteLength),
-        shutdown: async (): Promise<void> => {
-          // Sampled BEFORE the close: this is the only moment at which a thread
-          // the run started is guaranteed still to be in the thread table.
-          observed.peak = Math.max(observed.peak, workerThreadCount());
-          await real.shutdown();
-        },
+        shutdown: async (): Promise<void> => real.shutdown(),
       };
     };
     const options = { parseCache: cache, parsePool: { missThreshold: 1, size: 1, createPool } };
@@ -336,11 +341,11 @@ describe('parse-pool activation', () => {
     await populateBlobs(await baseBuilderForRoot(suite.tempDir), options);
 
     expect(observed.pools).toBe(1);
-    expect(observed.peak).toBeGreaterThan(before);
+    expect(observed.spawns).toBeGreaterThanOrEqual(1);
 
     const cold = { ...observed };
     observed.pools = 0;
-    observed.peak = workerThreadCount();
+    observed.spawns = 0;
 
     await populateBlobs(await baseBuilderForRoot(suite.tempDir), options);
 
@@ -349,7 +354,7 @@ describe('parse-pool activation', () => {
     // as a warm dispatcher builds no pool.
     expect(cold.pools).toBe(1);
     expect(observed.pools).toBe(0);
-    expect(observed.peak).toBe(workerThreadCount());
+    expect(observed.spawns).toBe(0);
   });
 
   it('leaves no worker thread behind after a real pooled run but the ones it parked', async () => {
