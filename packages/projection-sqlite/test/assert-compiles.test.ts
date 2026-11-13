@@ -16,7 +16,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { openProjectionCompileProbe, type ProjectionCompileProbe } from '../src/store.js';
+import { openProjectionCompileProbe, type ProjectionCompileProbe } from '../src/run-database.js';
 
 /**
  * A statement that COMPILES instantly and never finishes stepping.

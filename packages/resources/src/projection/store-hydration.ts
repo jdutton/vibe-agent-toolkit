@@ -1,5 +1,5 @@
 /**
- * Turning what a {@link ProjectionStore} holds back into a {@link Projection} —
+ * Turning what a {@link FactStore} holds back into a {@link Projection} —
  * and, first, deciding whether it holds enough.
  *
  * `store.ts` states the storage contract; this module states the **reuse rule**,
@@ -31,7 +31,7 @@
  *
  * A hit does **not** hand back everything stored under the key. Another command
  * may have written its own closure extents there — that is the entire point of
- * {@link ProjectionStore.writeExtent} being additive — and a caller that
+ * {@link FactStore.writeExtent} being additive — and a caller that
  * enumerated them would see paths no contributor of its own realized.
  * `buildResourcePopulation` is precisely such a caller: it walks
  * `resourceRealizations` with no extent filter at all, so a superset hydration
@@ -112,7 +112,7 @@ const IDENTITY_COLUMN = 'resourceId';
  * answer: a run that registers no contributors at all asks for no contexts, and
  * a stored extent trivially satisfies it.
  *
- * @param extent - What {@link ProjectionStore.readExtent} returned
+ * @param extent - What {@link FactStore.readExtent} returned
  * @param requested - Every contributor this run registered, with its parameters
  * @returns The context ids the run's own contributors declared, or `undefined`
  *   when some registered contributor has no matching provenance row
@@ -147,7 +147,7 @@ export function selectRequestedContexts(
 /**
  * Narrow a stored extent to the contexts one run is owed.
  *
- * @param extent - What {@link ProjectionStore.readExtent} returned
+ * @param extent - What {@link FactStore.readExtent} returned
  * @param options - Which contexts, and whose root
  * @param options.contexts - Context ids from {@link selectRequestedContexts}
  * @param options.rootId - This run's corpus root id, which `populate()` records
@@ -197,7 +197,7 @@ export function selectRequestedRows(
  * of the former whenever it declined to parse — and a binary file makes that the
  * common case rather than an exotic one.
  *
- * @param blobs - What {@link ProjectionStore.readBlobFacts} returned for
+ * @param blobs - What {@link FactStore.readBlobFacts} returned for
  *   {@link keyedContentKeys} of the same realizations
  * @param contentKeys - The keys those realizations name
  * @returns The keys accounted for by neither table, in `contentKeys` order —

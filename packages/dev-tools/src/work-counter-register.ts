@@ -16,7 +16,7 @@ export const COUNTED_STATUS_PREFIX = 'accepted, counted';
 /** Register line number to the counters that count that row. */
 export const COUNTED_COST_ROWS: Readonly<Record<number, readonly [WorkCounter, ...WorkCounter[]]>> = {
   56: ['extent.derived', 'extent.served'],
-  57: ['store.rows.decoded.persistent', 'store.rows.decoded.ephemeral'],
+  57: ['store.rows.decoded.persistent', 'hydration.rows.written'],
   61: ['parse.cache.hit', 'parse.dispatched', 'parse.redispatched'],
   69: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
 };
@@ -33,11 +33,9 @@ const UNBUILT_REHASH_BASELINE = 'the baseline for the unbuilt stat memo and racy
  */
 export const COUNTERS_WITHOUT_A_COUNTED_ROW: Readonly<Partial<Record<WorkCounter, string>>> = {
   'store.reads.persistent': 'I10 store reads',
-  'store.reads.ephemeral': 'I10 store reads',
   'store.writes.persistent': I10_STORE_WRITES,
-  'store.writes.ephemeral': I10_STORE_WRITES,
   'store.rows.written.persistent': I10_STORE_WRITES,
-  'store.rows.written.ephemeral': I10_STORE_WRITES,
+  'hydration.writes': "the run database's load; row 57 is counted by its rows, not its writes.",
   'store.miss.refusedPairs': 'the store-miss row, an enforced row, not a counted cost',
   'parse.refused.load': 'load-dependent, bounded by I8; reported only',
   'content.hashed': UNBUILT_REHASH_BASELINE,

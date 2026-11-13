@@ -22,7 +22,7 @@ import { type PopulateResult } from '../../src/projection/merge.js';
 import type { Projection } from '../../src/projection/projection.js';
 import { buildResourceProjection } from '../../src/projection/resource-population.js';
 import type { ClaudeRulePatternRow } from '../../src/schemas/projection-claude-rules.js';
-import { FakeProjectionStore } from '../fake-projection-store.js';
+import { FakeFactStore } from '../fake-fact-store.js';
 import { plantTree, razeTree } from '../helpers/temp-corpus.js';
 
 /** The rules file whose `paths:` list every assertion below is about. */
@@ -71,7 +71,7 @@ function root(): string {
  * @param store - A store to cache through, or omitted to re-derive
  * @returns The projection the lane produced, and whether the store served it
  */
-async function populateTree(store?: FakeProjectionStore): Promise<PopulateResult> {
+async function populateTree(store?: FakeFactStore): Promise<PopulateResult> {
   return buildResourceProjection({
     root: root(),
     ...(store === undefined ? {} : { cache: { store, treeUnchanged: () => true, treeHash: TREE_HASH } }),
@@ -119,7 +119,7 @@ describe('claude_rule_patterns through the resources lane', () => {
   });
 
   it('keeps every row across a store round trip, on a hit that ran no contributor', async () => {
-    const store = new FakeProjectionStore();
+    const store = new FakeFactStore();
     const { projection: populated } = await populateTree(store);
     const { projection: hydrated, outcome } = await populateTree(store);
 

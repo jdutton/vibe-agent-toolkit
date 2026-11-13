@@ -28,7 +28,7 @@ import {
   EXTENT_DIRECTORY_UNLISTABLE,
 } from '../../src/projection/contributors/filesystem-extent.js';
 import type { Projection } from '../../src/projection/projection.js';
-import { FakeProjectionStore, populateExtentThrough } from '../fake-projection-store.js';
+import { FakeFactStore, populateExtentThrough } from '../fake-fact-store.js';
 import { createCommittedRepo, writeFileIn } from '../test-helpers.js';
 
 /** `chmod 000` denies nothing to uid 0 and binds nothing on Windows. */
@@ -43,7 +43,7 @@ let root: string;
 let locked: string;
 
 /** One population of `root` through `store`, reporting whether it derived rather than being served. */
-async function populateThrough(store: FakeProjectionStore): Promise<{ projection: Projection; derived: boolean }> {
+async function populateThrough(store: FakeFactStore): Promise<{ projection: Projection; derived: boolean }> {
   return populateExtentThrough(root, store, TREE_HASH);
 }
 
@@ -69,7 +69,7 @@ describe.skipIf(CANNOT_DENY_READS)('a cached EXTENT_DIRECTORY_UNLISTABLE row is 
   });
 
   it('writes the row on the first run and replays it while the directory is still locked (control)', async () => {
-    const store = new FakeProjectionStore();
+    const store = new FakeFactStore();
 
     const first = await populateThrough(store);
     const second = await populateThrough(store);
@@ -83,7 +83,7 @@ describe.skipIf(CANNOT_DENY_READS)('a cached EXTENT_DIRECTORY_UNLISTABLE row is 
   });
 
   it('re-enumerates instead of replaying the row once the directory can be listed again', async () => {
-    const store = new FakeProjectionStore();
+    const store = new FakeFactStore();
     await populateThrough(store);
 
     chmodSync(locked, 0o755);
@@ -98,7 +98,7 @@ describe.skipIf(CANNOT_DENY_READS)('a cached EXTENT_DIRECTORY_UNLISTABLE row is 
   });
 
   it('re-enumerates when the directory is gone, not only when it is readable', async () => {
-    const store = new FakeProjectionStore();
+    const store = new FakeFactStore();
     await populateThrough(store);
 
     chmodSync(locked, 0o755);

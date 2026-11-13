@@ -27,7 +27,7 @@
  * retention policy itself is pinned in `test/store.test.ts`.
  */
 
-import { openSqliteProjectionStore } from '@vibe-agent-toolkit/projection-sqlite';
+import { openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import { forEachInOrder } from '@vibe-agent-toolkit/utils';
 
 const [directory, writerId, mode, iterationsRaw, retentionRaw] = process.argv.slice(2);
@@ -92,7 +92,7 @@ function extentBundle(rootId, count) {
   };
 }
 
-const store = openSqliteProjectionStore(
+const store = openSqliteFactStore(
   retentionRaw === undefined ? { directory } : { directory, retainedExtentsPerRoot: Number(retentionRaw) },
 );
 try {

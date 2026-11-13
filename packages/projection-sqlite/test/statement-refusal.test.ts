@@ -13,7 +13,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { describe, expect, it } from 'vitest';
 
-import { isStatementRefusal, runGated } from '../src/store.js';
+import { isStatementRefusal, runGated } from '../src/sql-gate.js';
 
 /** A `node:sqlite`-shaped error carrying one extended result code. */
 function sqliteError(errcode: number): Error {

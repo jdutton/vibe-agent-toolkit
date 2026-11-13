@@ -32,7 +32,7 @@ import {
 import type { ExtentKey, ExtentScopedRows } from '../src/projection/store.js';
 import type { RealizationConditionRow } from '../src/schemas/projection-resources.js';
 
-import { FakeProjectionStore } from './fake-projection-store.js';
+import { FakeFactStore } from './fake-fact-store.js';
 import { setupSubdirTestSuite } from './test-helpers.js';
 
 const DOC = 'a.md';
@@ -51,7 +51,7 @@ async function write(relativePath: string, content: string | Buffer): Promise<vo
   await writeFile(absolute, content);
 }
 
-function freshCache(store = new FakeProjectionStore()): PopulationCache {
+function freshCache(store = new FakeFactStore()): PopulationCache {
   return { store, treeUnchanged: () => true, treeHash: 'fixture-tree' };
 }
 
@@ -116,7 +116,7 @@ describe('the resources lane on a store hit', () => {
 });
 
 /** Serves every stored extent with a gitignored copy and an absent copy of its first file row. */
-class UnreachableRowsStore extends FakeProjectionStore {
+class UnreachableRowsStore extends FakeFactStore {
   override async readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
     const held = await super.readExtent(key);
     const file = held?.resourceRealizations.find((row) => !row.isDirectory);

@@ -43,8 +43,8 @@ describe('optional backend packaging (install-cost guard)', () => {
    * protobufjs, every one of them reached through the RAG chain.
    *
    * Making it optional would also break something load-bearing: it is what
-   * `vat resources query` builds its **ephemeral in-memory store** from when no
-   * store is on disk. Behind an optional peer, "works without a cache" silently
+   * `vat resources query` builds its **in-memory run database** from, store on
+   * disk or not. Behind an optional peer, "works without a cache" silently
    * becomes "works only where someone installed a backend", which is exactly the
    * capability gate the projection design refuses.
    */
@@ -100,7 +100,7 @@ describe('optional backend packaging (install-cost guard)', () => {
     expect(
       cliPkg.dependencies?.[BUNDLED_BACKEND],
       `${BUNDLED_BACKEND} must be an ordinary dependency: it costs 152 KB and pulls nothing`
-      + ' transitively, and `vat resources query` builds its ephemeral in-memory store from it —'
+      + ' transitively, and `vat resources query` builds its in-memory run database from it —'
       + ' behind an optional peer, a query would answer only where a backend happened to be installed',
     ).toBeDefined();
     expect(

@@ -22,7 +22,7 @@ import { resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { openSqliteProjectionStore, type SqliteStoreOptions } from '../../src/store.js';
+import { openSqliteFactStore, type SqliteStoreOptions } from '../../src/store.js';
 
 /** The writer script, beside this file. */
 const WRITER = resolveFromImportMeta(import.meta.url, 'store-writer-child.mjs');
@@ -87,7 +87,7 @@ function runWriter(
 
 /** Open a store on the shared directory. */
 function open(options: Omit<SqliteStoreOptions, 'directory'> = {}) {
-  return openSqliteProjectionStore({ ...options, directory });
+  return openSqliteFactStore({ ...options, directory });
 }
 
 describe('connection configuration', () => {

@@ -27,7 +27,7 @@ import {
   isDeclinedSymlinkCode,
 } from '../../src/projection/contributors/filesystem-extent.js';
 import type { Projection } from '../../src/projection/projection.js';
-import { FakeProjectionStore, populateExtentThrough } from '../fake-projection-store.js';
+import { FakeFactStore, populateExtentThrough } from '../fake-fact-store.js';
 import { plantSymlinkFixture, removeSymlinkFixture } from '../helpers/symlink-fixture.js';
 import { createCommittedRepo } from '../test-helpers.js';
 
@@ -40,7 +40,7 @@ const CAPABILITY = symlinkCapability();
 let root: string;
 
 /** One population of `root` through `store`, reporting whether it derived rather than being served. */
-async function populateThrough(store: FakeProjectionStore): Promise<{ projection: Projection; derived: boolean }> {
+async function populateThrough(store: FakeFactStore): Promise<{ projection: Projection; derived: boolean }> {
   return populateExtentThrough(root, store, TREE_HASH);
 }
 
@@ -62,7 +62,7 @@ describe.skipIf(CAPABILITY === null)('a cached declined-link row is re-resolved 
   });
 
   it('replays the row while the link still resolves the same way (control)', async () => {
-    const store = new FakeProjectionStore();
+    const store = new FakeFactStore();
 
     const first = await populateThrough(store);
     const second = await populateThrough(store);
@@ -74,7 +74,7 @@ describe.skipIf(CAPABILITY === null)('a cached declined-link row is re-resolved 
   });
 
   it('re-enumerates once a gitignored target appears under the same tree hash', async () => {
-    const store = new FakeProjectionStore();
+    const store = new FakeFactStore();
     await populateThrough(store);
 
     mkdirSyncReal(safePath.join(root, 'build'), { recursive: true });
@@ -89,7 +89,7 @@ describe.skipIf(CAPABILITY === null)('a cached declined-link row is re-resolved 
   it('re-enumerates once the target disappears again', async () => {
     mkdirSyncReal(safePath.join(root, 'build'), { recursive: true });
     writeFileSync(safePath.join(root, IGNORED_TARGET), '# generated\n');
-    const store = new FakeProjectionStore();
+    const store = new FakeFactStore();
     const first = await populateThrough(store);
     expect(linkCode(first.projection)).toBe(EXTENT_SYMLINK_NOT_REALIZED);
 
@@ -145,7 +145,7 @@ describe.skipIf(CAPABILITY === null)('a cached declined-link row whose MESSAGE c
   });
 
   it('replays the row while nothing it names changed (control)', async () => {
-    const store = new FakeProjectionStore();
+    const store = new FakeFactStore();
 
     const first = await populateThrough(store);
     const second = await populateThrough(store);
@@ -156,7 +156,7 @@ describe.skipIf(CAPABILITY === null)('a cached declined-link row whose MESSAGE c
   });
 
   it('re-enumerates when the in-root spelling the message names moved', async () => {
-    const store = new FakeProjectionStore();
+    const store = new FakeFactStore();
     const first = await populateThrough(store);
     expect(hoppedRow(first.projection)?.code).toBe(EXTENT_SYMLINK_NOT_REALIZED);
 
@@ -169,7 +169,7 @@ describe.skipIf(CAPABILITY === null)('a cached declined-link row whose MESSAGE c
   });
 
   it('re-enumerates when an in-root target moves outside the root, and names nothing outside', async () => {
-    const store = new FakeProjectionStore();
+    const store = new FakeFactStore();
     const first = await populateThrough(store);
     expect(hoppedRow(first.projection)?.code).toBe(EXTENT_SYMLINK_NOT_REALIZED);
 

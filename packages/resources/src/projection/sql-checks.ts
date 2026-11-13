@@ -329,7 +329,7 @@ const POSITION_ALLOWED = 'a positive integer';
  * @param name - The check's key in `resources.checks`
  * @param check - Its declaration
  * @param rows - Exactly what the statement returned — undecoded, as SQLite holds
- *   it. See `SqlQueryableStore.query`: arbitrary SQL has no table spec, so a
+ *   it. See `RunDatabase.query` in `projection-sqlite`: arbitrary SQL has no table spec, so a
  *   boolean arrives as `0`/`1` and a date as text. The message renders what is
  *   there rather than pretending otherwise
  * @returns One finding per row, in the order SQLite produced them, each naming

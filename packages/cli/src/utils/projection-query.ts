@@ -4,8 +4,8 @@
  *
  * `vat resources query` runs one statement a person typed; `vat resources check`
  * runs the statements a project wrote down. They differ in what they do with
- * rows and in nothing else: same population, same store selection, same
- * ephemeral fallback, same cache tell. This module is that "and in nothing
+ * rows and in nothing else: same population, same store selection, same run
+ * database, same cache tell. This module is that "and in nothing
  * else", stated once so the two cannot drift into answering about different
  * corpora.
  *
@@ -16,7 +16,7 @@
  * release, shared by every root on the machine** (`defaultStoreDirectory()` is
  * `tmpdir/.vat-cache/<version>/projection-<shapeDigest>`), it retains three tree
  * hashes per root, and its blob tier is never evicted and carries no tree key at
- * all. `ProjectionStore.readExtent` narrows by `(rootId, treeHash)`; **arbitrary
+ * all. `FactStore.readExtent` narrows by `(rootId, treeHash)`; **arbitrary
  * SQL does not**, and cannot be made to — a `WHERE` clause the caller wrote is
  * not a key predicate.
  *
@@ -29,9 +29,10 @@
  * `store.ts` cites as the reason it chmods the cache `0o700`.
  *
  * ⇒ The store's job is to make the POPULATION cheap, and that is all. Whatever
- * `populate()` returns — served from the store or derived — is written into a
- * fresh in-memory database that holds this tree and nothing else, and the SQL
- * runs there. The saving is untouched (it was always in the population: on this
+ * `populate()` returns — served from the store or derived — opens a fresh
+ * in-memory run database that holds this tree and nothing else, and the SQL
+ * runs there. The fact store's factory returns a port with no SQL surface, so
+ * this is a property of the types as well as of this module. The saving is untouched (it was always in the population: on this
  * repository {@link ProjectionProvenance.populationMs} reads 1.16-1.18 s derived
  * against 0.29-0.31 s served), and "one tree, one answer" stops being a claim
  * about how callers behave and becomes a property of the shape.
@@ -52,7 +53,6 @@ import {
   allDerivedSpecs,
   buildResourceProjection,
   PROJECTION_TABLES,
-  splitProjectionByScope,
   storeMissOf,
   type LensRefusalCode,
   type PopulationOutcome,
@@ -75,18 +75,7 @@ import {
   type LensEvaluation,
   type LensRefusal,
 } from './projection-lenses.js';
-import { openCompileProbe, openEphemeralQueryStore, withPopulationCache } from './projection-store.js';
-
-/**
- * The tree hash an in-memory store's one population is filed under.
- *
- * ⚠️ Deliberately NOT a tree hash. Nothing else ever opens this database, no
- * read-back compares the key against another run's, and the store is gone at the
- * end of the call — so the key only has to be internally consistent. A real
- * `git write-tree` here would cost a spawn to produce a value nobody reads, and
- * would invite the reader to believe the ephemeral store is shareable.
- */
-const EPHEMERAL_TREE_HASH = 'ephemeral';
+import { openCompileProbe, openRunDatabase, withPopulationCache } from './projection-store.js';
 
 /** What SQLite says when a statement names something the schema does not have: wording only, never a code. */
 const NAME_NOT_FOUND: readonly string[] = ['no such table:', 'no such column:'];
@@ -132,9 +121,8 @@ export interface ProjectionProvenance {
    * {@link withQueriedProjection} does before it hands control to the caller's
    * work — opening the population cache (which, when a store is selected, is a
    * `git write-tree` spawn plus the backend's dynamic import and
-   * `openSqliteProjectionStore()`), the git tracker, `buildResourceProjection`,
-   * opening the ephemeral database, and writing the blob tier and the extent
-   * into it.
+   * `openSqliteFactStore()`), the git tracker, `buildResourceProjection`, and
+   * opening the run database over the projection.
    *
    * ⚠️ The population cache's CLOSE is outside it, necessarily: that runs in
    * `withPopulationCache`'s `finally`, after the caller's work returns, and a
@@ -440,7 +428,7 @@ export async function withQueriedProjection<T>(
     // 🔑 The in-memory rows, beside `ask` rather than instead of it: a built-in
     // check is a TypeScript predicate over the row model (no built-in may be
     // SQL) and needs the rows, not a database. Free to hand over — the
-    // ephemeral database was loaded FROM them.
+    // run database was loaded FROM them.
     //
     // ⚠️ Not a second way to ask the same question. Nothing here re-derives,
     // re-filters or re-scopes; a caller wanting a relational answer uses `ask`.
@@ -461,7 +449,7 @@ export async function withQueriedProjection<T>(
 
   // 🚨 OUTSIDE `withPopulationCache`, and it must stay outside. That helper
   // awaits `openPopulationCache` — a `git write-tree` spawn plus the backend's
-  // dynamic import and `openSqliteProjectionStore()` — BEFORE it invokes the
+  // dynamic import and `openSqliteFactStore()` — BEFORE it invokes the
   // callback below, and it pays that cost ONLY when a store is selected. A clock
   // started inside the callback therefore drops the store's own setup out of the
   // measurement on precisely the arm the number is used to praise. See
@@ -487,24 +475,8 @@ export async function withQueriedProjection<T>(
     );
 
     // ONE tree, in a database nothing else can reach, built fresh for this call.
-    const store = await openEphemeralQueryStore();
+    const store = await openRunDatabase(projection);
     try {
-      // The key is read OFF the projection rather than re-derived from the root.
-      // The driver mints `roots.id` with `rootIdFor` and every
-      // `resolution_contexts.rootId` is a foreign key into it, so taking it from
-      // the rows means the key provably describes them — a second derivation
-      // could drift from the first and file rows under an id they do not carry.
-      const rootId = projection.roots[0]?.id;
-      if (rootId === undefined) {
-        throw new Error(
-          'The population produced no root row, so there is no id to file its extent under.'
-          + ' This is a driver invariant rather than a user error — `populate()` adds exactly'
-          + ' one, and a projection without it cannot be stored or queried.',
-        );
-      }
-      const { blobs, extent } = splitProjectionByScope(projection);
-      await store.writeBlobFacts(blobs);
-      await store.writeExtent({ rootId, treeHash: EPHEMERAL_TREE_HASH }, extent);
       // 🚨 The population clock STOPS HERE, before the lens runs, so
       // `populationSecs` never contains `lensSecs`: the two are published side by
       // side to compare a served population against a derived one, and must not

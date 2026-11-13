@@ -1,7 +1,8 @@
 /**
- * Asking the store a question it was not written to answer.
+ * The run database: one run's projection, in memory, asked a question the fact
+ * store was not written to answer.
  *
- * Everything else this store does is keyed: `readExtent` hands back one tree's
+ * Everything the fact store does is keyed: `readExtent` hands back one tree's
  * rows, `readBlobFacts` one blob's. Stage 5's whole point is the unkeyed
  * question — *which resources are in this directory*, *which references have no
  * extension*, *how many sections does the deepest file have* — and none of them
@@ -25,35 +26,115 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-import { PROJECTION_STATEMENT_REFUSED_CODE, type ExtentKey } from '@vibe-agent-toolkit/resources';
+import {
+  PROJECTION_STATEMENT_REFUSED_CODE,
+  PROJECTION_TABLES,
+  projectionColumnTypes,
+  quoteIdentifier,
+  splitProjectionByScope,
+} from '@vibe-agent-toolkit/resources';
 import { isVatError, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import {
-  openEphemeralProjectionStore,
-  openSqliteProjectionStore,
-  type SqlQueryableStore,
-} from '../src/store.js';
+import { openRunDatabase, type RunDatabase } from '../src/run-database.js';
+import { openSqliteFactStore } from '../src/store.js';
 
-import { FIRST_BLOB, SECOND_BLOB, sampleBlobRows, sampleExtentRows } from './fixtures.js';
-
-const KEY: ExtentKey = { rootId: 'root-1', treeHash: 'tree-aaa' };
+import { FIRST_BLOB, SECOND_BLOB, sampleProjection } from './fixtures.js';
 
 /** Asked after every refusal, to prove the refusal was real and not just a message. */
 const COUNT_BLOBS = 'SELECT COUNT(*) AS n FROM "blobs"';
 
-let store: SqlQueryableStore;
+/**
+ * A bound generous enough that only the WAL stall can trip it.
+ *
+ * The stall is 50 × 20 ms of blocking `Atomics.wait` — about a second — against
+ * single-digit milliseconds for an honest open. Two orders of magnitude of
+ * headroom, so this measures the defect and not the machine.
+ */
+const OPEN_BUDGET_MS = 300;
 
-beforeEach(async () => {
-  store = openEphemeralProjectionStore();
-  await store.writeBlobFacts(sampleBlobRows());
-  await store.writeBlobFacts(sampleBlobRows(SECOND_BLOB));
-  await store.writeExtent(KEY, sampleExtentRows(FIRST_BLOB));
+/** Every projection table, as the registry declares it. */
+const TABLES = Object.values(PROJECTION_TABLES);
+
+/**
+ * One table's declared columns, every row, in a stable order — the extent key
+ * columns left out, since a run database files its one extent under a key
+ * nothing else reads.
+ *
+ * @param run - Runs one statement on whichever database is being read
+ * @param spec - The table
+ * @returns Its rows, each serialized, sorted
+ */
+function rowsOf(
+  run: (sql: string) => readonly Record<string, unknown>[],
+  spec: (typeof TABLES)[number],
+): string[] {
+  const columns = projectionColumnTypes(spec).map(([column]) => quoteIdentifier(column)).join(', ');
+  return run(`SELECT ${columns} FROM ${quoteIdentifier(spec.name)}`)
+    .map((row) => JSON.stringify(row))
+    .sort((a, b) => a.localeCompare(b));
+}
+
+let store: RunDatabase;
+
+beforeEach(() => {
+  store = openRunDatabase(sampleProjection([FIRST_BLOB, SECOND_BLOB]));
 });
 
 afterEach(async () => {
   await store.close();
+});
+
+/**
+ * 🪤 **The file-backed configuration cannot simply be pointed at `:memory:`.**
+ * Measured on Node 24.13.1: `PRAGMA journal_mode = WAL` on an in-memory
+ * database is *accepted without throwing* and leaves the mode at `memory`. So
+ * `enableWal`'s `catch` never fires, its `journalMode()` check never returns
+ * `'wal'`, all 50 attempts burn a blocking `Atomics.wait`, and it ends at the
+ * final `throw` — after about a second — with the wrong diagnosis: it names a
+ * rollback journal, and this is a memory journal. So opening is asserted on,
+ * not only reading back: routing the run database through the file-backed
+ * `configure()` is the regression.
+ */
+describe('openRunDatabase', () => {
+  it('opens without throwing, and without the file-backed WAL stall', async () => {
+    const before = performance.now();
+    const opened = openRunDatabase(sampleProjection());
+    const elapsed = performance.now() - before;
+    await opened.close();
+
+    expect(
+      elapsed,
+      'opening took long enough to be the WAL retry loop — the run database must bypass enableWal, '
+      + 'which cannot succeed on an in-memory database and burns ~1s before throwing',
+    ).toBeLessThan(OPEN_BUDGET_MS);
+  });
+
+  it('holds every row of the projection it was opened over', () => {
+    const projection = sampleProjection([FIRST_BLOB, SECOND_BLOB]);
+
+    expect(TABLES.filter((spec) => projection[spec.key].length > 0).length, 'the fixture fills no table')
+      .toBeGreaterThan(0);
+    for (const spec of TABLES) {
+      const counted = store.query(`SELECT COUNT(*) AS n FROM ${quoteIdentifier(spec.name)}`)[0]?.['n'];
+      expect(counted, spec.name).toBe(projection[spec.key].length);
+    }
+  });
+
+  it('refuses a projection with no root row, since there is no id to file it under', () => {
+    expect(() => openRunDatabase({ ...sampleProjection(), roots: [] })).toThrow(/no root row/u);
+  });
+
+  it('holds nothing across instances — each is its own projection', async () => {
+    const other = openRunDatabase(sampleProjection([]));
+    try {
+      expect(other.query(COUNT_BLOBS)[0]?.['n']).toBe(0);
+      expect(store.query(COUNT_BLOBS)[0]?.['n']).toBe(2);
+    } finally {
+      await other.close();
+    }
+  });
 });
 
 describe('a refused statement carries a code, not only a message', () => {
@@ -194,7 +275,7 @@ describe('query', () => {
   });
 
   it('rejects a closed store rather than answering from a dead connection', async () => {
-    const doomed = openEphemeralProjectionStore();
+    const doomed = openRunDatabase(sampleProjection());
     await doomed.close();
 
     expect(() => doomed.query('SELECT 1 AS n')).toThrow();
@@ -446,29 +527,57 @@ describe('every placeholder must be bound', () => {
   );
 });
 
-describe('query answers identically on the file-backed store', () => {
+/**
+ * The fact store has no SQL surface, and the same SQL must still get the same
+ * answer whether or not one was on disk: its file is read with a raw
+ * connection, and the run database through `query`.
+ */
+describe('the file-backed fact store answers no SQL, and holds what the run database holds', () => {
   let directory: string;
-  let onDisk: SqlQueryableStore;
 
-  beforeEach(async () => {
+  beforeEach(() => {
     directory = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-projection-query-'));
-    onDisk = openSqliteProjectionStore({ directory });
-    await onDisk.writeBlobFacts(sampleBlobRows());
-    await onDisk.writeBlobFacts(sampleBlobRows(SECOND_BLOB));
-    await onDisk.writeExtent(KEY, sampleExtentRows(FIRST_BLOB));
   });
 
-  afterEach(async () => {
-    await onDisk.close();
+  afterEach(() => {
     rmSync(directory, { recursive: true, force: true });
   });
 
-  it('gives the same rows for the same SQL', () => {
-    const sql = 'SELECT "contentKey", "encoding", "wordCount" FROM "blobs" ORDER BY "contentKey"';
+  it('has no query, columns or writeDerived at runtime, only the port', async () => {
+    // The type says so (the factory returns `FactStore`); this pins that no
+    // method hides behind the narrowed type either. A statement there would
+    // answer from every repository on the machine.
+    const onDisk = openSqliteFactStore({ directory });
+    try {
+      // @ts-expect-error -- the port has no SQL surface
+      expect(onDisk.query).toBeUndefined();
+      // @ts-expect-error -- the port has no SQL surface
+      expect(onDisk.columns).toBeUndefined();
+      // @ts-expect-error -- a lens's rows never reach the fact store
+      expect(onDisk.writeDerived).toBeUndefined();
+    } finally {
+      await onDisk.close();
+    }
+  });
 
-    const fromDisk = onDisk.query(sql);
+  it('returns the same rows from every table as the run database, for the same projection', async () => {
+    const writer = openSqliteFactStore({ directory });
+    const { blobs, extent } = splitProjectionByScope(sampleProjection([FIRST_BLOB, SECOND_BLOB]));
+    await writer.writeBlobFacts(blobs);
+    await writer.writeExtent({ rootId: 'root-1', treeHash: 'tree-aaa' }, extent);
+    await writer.close();
 
-    expect(fromDisk.length, 'the control returned nothing — the comparison is vacuous').toBeGreaterThan(0);
-    expect(store.query(sql)).toEqual(fromDisk);
+    const onDisk = new DatabaseSync(safePath.join(directory, 'projection.db'), { readOnly: true });
+    try {
+      const fromDisk = (sql: string): readonly Record<string, unknown>[] =>
+        onDisk.prepare(sql).all() as readonly Record<string, unknown>[];
+      for (const spec of TABLES) {
+        expect(rowsOf((sql) => store.query(sql), spec), spec.name).toEqual(rowsOf(fromDisk, spec));
+      }
+      expect(rowsOf(fromDisk, PROJECTION_TABLES.blobs), 'the control is empty — the comparison is vacuous')
+        .toHaveLength(2);
+    } finally {
+      onDisk.close();
+    }
   });
 });

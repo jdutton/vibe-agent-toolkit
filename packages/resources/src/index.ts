@@ -364,7 +364,7 @@ export {
   type ExtentKey,
   type ExtentScopedRows,
   type ExtentScopedTableName,
-  type ProjectionStore,
+  type FactStore,
   type ProjectionTableNamesOfScope,
   projectionShapeDigest,
   splitProjectionByScope,

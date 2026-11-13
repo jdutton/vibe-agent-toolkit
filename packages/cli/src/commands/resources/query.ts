@@ -49,7 +49,7 @@
  *
  * It does not decode. Rows come back exactly as SQLite holds them — a boolean as
  * `0`/`1`, a date and a JSON column as text — because decoding needs a table
- * spec and arbitrary SQL has none. `SqlQueryableStore.query`'s docstring is the
+ * spec and arbitrary SQL has none. `RunDatabase.query`'s docstring is the
  * authority on why.
  */
 

@@ -42,19 +42,17 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * Every work counter, in dump order. Closed: a new counter is a new entry here,
  * and the lab's schema follows from this tuple.
  *
- * The `.persistent` / `.ephemeral` split is the projection store's lane: the
- * file-backed store a warm run reads, against the per-run in-memory store a
- * query writes its answer database into, which I10 does not bound.
+ * `store.*` counts the file-backed fact store a warm run reads and writes;
+ * `hydration.*` counts loading the per-run run database a query's SQL runs on,
+ * which I10 does not bound.
  */
 export const WORK_COUNTER_NAMES = [
   'store.rows.decoded.persistent',
-  'store.rows.decoded.ephemeral',
   'store.reads.persistent',
-  'store.reads.ephemeral',
   'store.writes.persistent',
-  'store.writes.ephemeral',
   'store.rows.written.persistent',
-  'store.rows.written.ephemeral',
+  'hydration.writes',
+  'hydration.rows.written',
   'extent.derived',
   'extent.served',
   'store.miss.refusedPairs',

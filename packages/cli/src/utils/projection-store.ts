@@ -4,7 +4,7 @@
  *
  * ## Why the CLI owns this and `resources` does not
  *
- * `@vibe-agent-toolkit/resources` states the {@link ProjectionStore} contract
+ * `@vibe-agent-toolkit/resources` states the {@link FactStore} contract
  * and never picks a backend, for the same reason it states the parse contract
  * and never picks a parser: it is the toolkit's most widely installed package,
  * and a storage engine is a *choice*. The choice is made here, at the edge that
@@ -13,7 +13,8 @@
  *
  * So `populate()` takes a {@link PopulationCache} it is handed, and this module
  * is the only place in the toolkit that knows `@vibe-agent-toolkit/projection-
- * sqlite` exists.
+ * sqlite` exists (`local/projection-sqlite-import-boundary`). It also opens the
+ * run database a query runs on, which that package declares and no port does.
  *
  * ## The key, and why it is a whole-repository tree hash
  *
@@ -48,7 +49,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 import type * as ProjectionSqlite from '@vibe-agent-toolkit/projection-sqlite';
-import type { PopulationCache, ProjectionStore } from '@vibe-agent-toolkit/resources';
+import type { FactStore, PopulationCache, Projection } from '@vibe-agent-toolkit/resources';
 import { parseEnvBoolean } from '@vibe-agent-toolkit/utils';
 import { freshGitTreeSnapshot, gitSnapshotFailureOf, gitTreeSnapshot, type GitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 
@@ -303,46 +304,45 @@ export async function openPopulationCache(options: {
  * for "upgrade Node", and diagnosing a version floor as a missing dependency
  * sends a user round a loop that cannot terminate.
  *
- * @returns The opened store, typed as the engine-free contract — the SQLite
- *   backend really does return a `SqlQueryableStore`, and this narrows it away
- *   on purpose so the population path cannot grow a query
+ * @returns The opened store: the engine-free port, which is all the backend's
+ *   factory returns, so the population path has no query to grow
  */
-async function loadStore(): Promise<ProjectionStore> {
+async function loadStore(): Promise<FactStore> {
   const directory = process.env[PROJECTION_STORE_DIR_ENV];
   // Spread rather than passed, because the backend defaults the field when it is
   // ABSENT and an explicit `undefined` is a different argument under
   // `exactOptionalPropertyTypes`. Empty string is treated as unset: an unset
   // variable and one exported as `''` are the same intent, and `''` would
   // otherwise resolve to the process cwd.
-  return (await loadBackend()).openSqliteProjectionStore(
+  return (await loadBackend()).openSqliteFactStore(
     directory === undefined || directory === '' ? {} : { directory },
   );
 }
 
 /**
- * Open a store that lives only in this process's memory.
+ * Open the run database over one run's projection: the one handle SQL runs on.
  *
  * 🔑 **This is what keeps the query surface an ANSWER rather than a privilege.**
  * A caller with no store selected — CI's first run, or a developer who never set
- * the selector — still gets the same SQL over the same schema; the on-disk store
+ * the selector — still gets the same SQL over the same schema; the fact store
  * only makes the second run cheap. Without it, "what does this tree contain"
  * would be answerable only where a cache happened to exist, and two callers
  * would hold differently-shaped views of one tree.
  *
- * It is a cache that cannot hit: nothing survives the close, so a caller must
- * write the projection into it before asking anything.
+ * Nothing survives the close, and nothing but this run's projection is in it.
  *
- * @returns An open, empty store; close it when done
+ * @param projection - One run's populated projection
+ * @returns The open run database, holding that projection; close it when done
  */
-export async function openEphemeralQueryStore(): Promise<ProjectionSqlite.SqlQueryableStore> {
-  return (await loadBackend()).openEphemeralProjectionStore();
+export async function openRunDatabase(projection: Projection): Promise<ProjectionSqlite.RunDatabase> {
+  return (await loadBackend()).openRunDatabase(projection);
 }
 
 /**
  * Open a compile-only probe over the full queryable schema, derived relations
  * included — for checking statements BEFORE any population or lens has run.
  *
- * ⚠️ Not {@link openEphemeralQueryStore}: that store has no table for a derived
+ * ⚠️ Not {@link openRunDatabase}: that database has no table for a derived
  * relation until a lens fills it, which is how an unevaluated one is refused.
  *
  * @returns An open probe; close it when done
@@ -399,9 +399,9 @@ async function loadBackend(): Promise<typeof ProjectionSqlite> {
  * names neither the version floor nor the fix.
  *
  * ⚠️ It is reachable on an ordinary run and is not a corner: the query lane has
- * always fallen back to {@link openEphemeralQueryStore} when no store is
- * selected, which is the default, so `node:sqlite` is required on a default
- * `vat resources query` whichever way the lane resolves its store.
+ * always run its SQL on {@link openRunDatabase}, store selected or not, so
+ * `node:sqlite` is required on a default `vat resources query` whichever way
+ * the lane resolves its store.
  *
  * 🪤 `check` reaches a store only when the project declares checks for it to
  * evaluate, so a repo with none never loads the backend; `query` alone

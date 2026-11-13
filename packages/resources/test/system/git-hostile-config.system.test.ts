@@ -104,7 +104,7 @@ import {
 import { ProjectionBuilder, type Projection } from '../../src/projection/projection.js';
 import { buildResourcePopulation, buildResourceProjection } from '../../src/projection/resource-population.js';
 import type { ResourceRealizationRow } from '../../src/schemas/projection-resources.js';
-import { FakeProjectionStore } from '../fake-projection-store.js';
+import { FakeFactStore } from '../fake-fact-store.js';
 
 /**
  * A content-addressed parse cache would serve a previous run's facts from a
@@ -946,14 +946,14 @@ describe.skipIf(!HOST_GATES.filter.met)(gatedTitle('a clean/smudge filter on one
     const gitTracker = new GitTracker(fixture.repo);
     await gitTracker.initialize();
     const ownKeyB = computeContentKey(planted.onDiskB, 'markdown');
-    const optionsOver = (store: FakeProjectionStore) => ({
+    const optionsOver = (store: FakeFactStore) => ({
       root: fixture.repo,
       gitTracker,
       cache: { store, treeUnchanged: () => true, treeHash: 'hostile-filter' },
     });
 
     // Membership miss writes; the query lane is served what it wrote.
-    const viaMembership = optionsOver(new FakeProjectionStore());
+    const viaMembership = optionsOver(new FakeFactStore());
     const members = await buildResourcePopulation({ ...viaMembership, outputs: [] });
     const served = await buildResourceProjection(viaMembership);
     expect(members.outcome).toEqual({ population: 'derived', stored: 'written' });
@@ -963,7 +963,7 @@ describe.skipIf(!HOST_GATES.filter.met)(gatedTitle('a clean/smudge filter on one
     expect(keyOf(served.projection, PATH_B)).toBe(ownKeyB);
 
     // Query miss derives and writes on its own.
-    const derived = await buildResourceProjection(optionsOver(new FakeProjectionStore()));
+    const derived = await buildResourceProjection(optionsOver(new FakeFactStore()));
     expect(derived.outcome).toEqual({ population: 'derived', stored: 'written' });
     expect(keyOf(derived.projection, PATH_B)).toBe(ownKeyB);
   });

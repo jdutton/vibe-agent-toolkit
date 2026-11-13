@@ -14,24 +14,20 @@ import {
   allDerivedSpecs,
   CHECK_FINDING_COLUMNS,
   issuesFromCheckRows,
-  type ExtentKey,
 } from '@vibe-agent-toolkit/resources';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { openEphemeralProjectionStore, type SqlQueryableStore } from '../src/store.js';
+import { openRunDatabase, type RunDatabase } from '../src/run-database.js';
 
-import { sampleBlobRows, sampleExtentRows } from './fixtures.js';
+import { sampleProjection } from './fixtures.js';
 
-const KEY: ExtentKey = { rootId: 'root-1', treeHash: 'tree-aaa' };
 /** Declared `error`, so a finding at any other severity took it from the row. */
 const CHECK = { description: 'pin', sql: 'unused', severity: 'error' } as const;
 
-let store: SqlQueryableStore;
+let store: RunDatabase;
 
-beforeEach(async () => {
-  store = openEphemeralProjectionStore();
-  await store.writeBlobFacts(sampleBlobRows());
-  await store.writeExtent(KEY, sampleExtentRows());
+beforeEach(() => {
+  store = openRunDatabase(sampleProjection());
 });
 
 afterEach(async () => {
