@@ -151,7 +151,8 @@ describe('vat resources query --budget', () => {
   });
 
   // ⛔ A red runaway case must not leave its child spinning in SQLite: kill the pid the preload
-  // recorded, whatever the case concluded.
+  // recorded while its file is still there. A case that saw the supervisor's kill take effect
+  // deletes the file first, so a green case never signals a pid the OS may have reused.
   let sqlPidFile: string | undefined;
   afterEach(() => {
     const recorded = sqlPidFile !== undefined && fs.existsSync(sqlPidFile) ? Number(fs.readFileSync(sqlPidFile, 'utf-8')) : Number.NaN;
@@ -175,6 +176,8 @@ describe('vat resources query --budget', () => {
     expect(run.status, run.stderr).toBe(2);
     expect(errorOf(run)?.code).toBe('RUN_INCOMPLETE');
     expect(errorOf(run)?.message).toContain(killSentence(budgetSeconds, 'while the statement was running'));
+    // The supervisor killed the child that ran the statement: nothing is left for afterEach.
+    fs.rmSync(sqlPidFile);
     expect(errorOf(run)?.message).not.toContain('DIED');
     expect(run.elapsedMs).toBeGreaterThanOrEqual(budgetSeconds * 1000);
     expect(run.elapsedMs).toBeLessThan(boundMs);

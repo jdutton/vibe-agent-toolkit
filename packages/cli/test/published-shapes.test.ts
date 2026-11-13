@@ -119,8 +119,29 @@ function hasNoData(entry: (typeof reportEntries)[number]): boolean {
   return ok?.shape.data instanceof z.ZodNull;
 }
 
+/**
+ * The source text of the exported function `name` in `commands/`: from its declaration to the
+ * first line that closes a top-level block. Undefined when no command file exports it.
+ */
+function exportedFunctionText(name: string): string | undefined {
+  const declarations = [`export function ${name}`, `export async function ${name}`].flatMap((head) => [`${head}(`, `${head}<`]);
+  for (const source of commandSources()) {
+    const start = Math.min(...declarations.map((head) => source.indexOf(head)).filter((at) => at !== -1));
+    if (start === Infinity) continue;
+    const end = source.indexOf('\n}\n', start);
+    return source.slice(start, end === -1 ? source.length : end);
+  }
+  return undefined;
+}
+
 describe('writer calls ↔ registry', () => {
   const calls = writerCalls();
+
+  it.each(Object.entries(WRITER_ALIASES))('the alias %s calls the writer it stands for, %s', (alias, writer) => {
+    const text = exportedFunctionText(alias);
+    expect(text, `no command file exports ${alias}`).toBeDefined();
+    expect(text).toContain(`${writer}(`);
+  });
 
   it('every writer call names a registered verb, and every registered stdout verb has a writer call', () => {
     // The scan must see something, or an emptied scan would pass both ways.
