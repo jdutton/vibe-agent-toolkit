@@ -133,6 +133,7 @@ function errorOf(run: QueryRun): { code: string; message: string } | undefined {
 describe('vat resources query --budget', () => {
   let project: string;
   let noProject: string;
+  let empty: string;
   let measured: MeasuredBudget;
 
   beforeAll(() => {
@@ -141,6 +142,8 @@ describe('vat resources query --budget', () => {
     spawnSync(gitExecutable(), ['init', '--quiet'], { cwd: project });
     noProject = createTestTempDir('vat-query-budget-bare-');
     writeFileTree(noProject, { 'b.md': '# Bravo\n' });
+    // Nothing at all: no git, no config, no file — the run examines nothing and says so.
+    empty = createTestTempDir('vat-query-budget-empty-');
     // One complete in-process run sizes the bound: spawn, population and one cheap statement.
     measured = measureBudget(() => query(project, [MD_ROWS, '--budget', '0']).elapsedMs);
   });
@@ -148,6 +151,7 @@ describe('vat resources query --budget', () => {
   afterAll(() => {
     cleanupTestTempDir(project);
     cleanupTestTempDir(noProject);
+    cleanupTestTempDir(empty);
   });
 
   // ⛔ A red runaway case must not leave its child spinning in SQLite: kill the pid the preload
@@ -175,6 +179,7 @@ describe('vat resources query --budget', () => {
     expect(fs.existsSync(sqlPidFile), run.stderr).toBe(true);
     expect(run.status, run.stderr).toBe(2);
     expect(errorOf(run)?.code).toBe('RUN_INCOMPLETE');
+    expect(run.document['findings']).toStrictEqual([]);
     expect(errorOf(run)?.message).toContain(killSentence(budgetSeconds, 'while the statement was running'));
     // The supervisor killed the child that ran the statement: nothing is left for afterEach.
     fs.rmSync(sqlPidFile);
@@ -201,6 +206,7 @@ describe('vat resources query --budget', () => {
     expect(fs.existsSync(marker), run.stderr).toBe(true);
     expect(run.status, run.stderr).toBe(2);
     expect(errorOf(run)?.code).toBe('RUN_INCOMPLETE');
+    expect(run.document['findings']).toStrictEqual([]);
     expect(errorOf(run)?.message).toContain(killSentence(budgetSeconds, 'before the child process had finished starting'));
     expect(run.elapsedMs).toBeGreaterThanOrEqual(budgetSeconds * 1000);
     expect(progressDirsLeft()).toStrictEqual([]);
@@ -240,6 +246,7 @@ describe('vat resources query --budget', () => {
     ['a clean statement', () => project, MD_ROWS, false],
     ['a refused statement', () => project, UNKNOWN_COLUMN, true],
     ['a directory with no project ancestor', () => noProject, MD_ROWS, true],
+    ['an empty directory, where nothing is examined', () => empty, MD_ROWS, true],
   ])('says the same on stderr under --budget as in process: %s', (_case, cwd, sql, saysSomething) => {
     const inProcess = query(cwd(), [sql]);
     const supervised = query(cwd(), [sql, '--budget', ROOMY_BUDGET]);
