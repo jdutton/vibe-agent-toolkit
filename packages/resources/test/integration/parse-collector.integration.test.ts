@@ -10,6 +10,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import ts from 'typescript';
 import { describe, expect, inject, it } from 'vitest';
 
 const BUILT_POOL = pathToFileURL(safePath.resolve(import.meta.dirname, '..', '..', 'dist', 'parse-pool.js')).href;
@@ -24,18 +25,26 @@ const BUILT_COLLECTOR = pathToFileURL(safePath.resolve(import.meta.dirname, '..'
  * read from that file so a new one is checked without anyone listing it. That is what is checked:
  * a dynamic `import()` written anywhere else in the worker's graph is not followed.
  *
- * Read both ways: every `import(` in the file's code must be one this reads, a relative string
- * literal, or the test fails — a specifier in a form this cannot read never passes unchecked.
+ * Read from the syntax tree, not the text: every `import()` call in the file must name a relative
+ * string literal, or the test fails — a specifier this cannot read never passes unchecked, and a
+ * comment never hides or invents one.
  */
 function parseThreadModules(): Record<string, string> {
-  const source = readFileSync(safePath.resolve(import.meta.dirname, '..', '..', 'src', 'parser-loader.ts'), 'utf-8');
-  // Comments name `import()` in prose; only code counts.
-  const code = source
-    .split('\n')
-    .filter((line) => !/^\s*(?:\/\/|\/\*|\*)/.test(line))
-    .join('\n');
-  const loaded = [...code.matchAll(/\bimport\(\s*(['"`])\.\/([^'"`$]+)\1\s*\)/g)].map((match) => match[2] ?? '');
-  expect(loaded.length, 'an import() in parser-loader.ts that is not a relative string literal').toBe(code.match(/\bimport\s*\(/g)?.length ?? 0);
+  const path = safePath.resolve(import.meta.dirname, '..', '..', 'src', 'parser-loader.ts');
+  const tree = ts.createSourceFile(path, readFileSync(path, 'utf-8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const loaded: string[] = [];
+  const unreadable: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      const [specifier] = node.arguments;
+      const relative = specifier !== undefined && ts.isStringLiteralLike(specifier) && specifier.text.startsWith('./');
+      if (relative) loaded.push(specifier.text.slice(2));
+      else unreadable.push(node.getText(tree));
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(tree);
+  expect(unreadable, 'an import() in parser-loader.ts that is not a relative string literal').toStrictEqual([]);
   expect(loaded.length).toBeGreaterThan(0);
   return Object.fromEntries(
     ['parse-worker.js', ...loaded].map((file) => [file, safePath.resolve(import.meta.dirname, '..', '..', 'dist', file)]),
@@ -84,8 +93,8 @@ describe('a parse thread\'s collector', () => {
     // Static imports, never a top-level `await`: Node 22 aborts the whole process (V8
     // `Check failed: (location_) != nullptr` in `ExecuteAsyncModule`) when a worker is terminated
     // while an async module is still settling, about one run in six with no collector involved. The
-    // parse thread's modules have no top-level `await` (pinned by the last case here), so this is
-    // the test's shape, never the product's.
+    // worker's static graph and parser-loader's `import()`s have no top-level `await` (pinned by the
+    // last case here), so this is the test's shape, never the product's.
     const workerBody = [
       `import { acquireCollector } from ${JSON.stringify(BUILT_COLLECTOR)};`,
       "import { parentPort, workerData } from 'node:worker_threads';",
@@ -123,7 +132,7 @@ describe('a parse thread\'s collector', () => {
     expect(outcome).toStrictEqual({ collector: 'function', lock: 0, contextGc: 'undefined' });
   });
 
-  it('evaluates no parse-thread module asynchronously: a top-level await would let a terminate abort Node 22', () => {
+  it('evaluates the worker\'s static graph and every parser-loader import() synchronously: a top-level await would let a terminate abort Node 22', () => {
     // `require()` of an ES module refuses one with a top-level `await` (`ERR_REQUIRE_ASYNC_MODULE`)
     // and evaluates any other synchronously. The pool terminates threads mid-load (a load-clock
     // stop, a shutdown), and on Node 22 terminating a thread while an async module settles aborts
