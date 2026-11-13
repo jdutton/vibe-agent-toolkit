@@ -167,9 +167,11 @@ const PIPE_BUFFER_BYTES = 65_536;
 const LARGE_PAYLOAD_BYTES = 300_000;
 
 /**
- * How long the reader stops reading after its first chunk. Long enough that a
- * child which is NOT blocking has exited by the time reading resumes, on any
- * runner; short enough to stay a unit test.
+ * How long the reader stops reading after its first chunk when the child is
+ * BLOCKING. Such a child cannot exit while the reader is stalled, so it needs a
+ * timer to end the stall; the timing cannot change its outcome, because it waits
+ * for the reader whatever the delay. A child that is NOT blocking is never resumed
+ * on a timer: see {@link writeThroughStallingPipe}.
  */
 const READER_STALL_MS = 300;
 
@@ -218,12 +220,18 @@ function writeThroughPipe(bytes: number, blocking: boolean): string {
  * suite that had already been re-pinned once, from a byte count to the missing
  * trailing newline. Neither is invariant, because the drain race is not.
  *
- * Refusing to read for {@link READER_STALL_MS} removes the race instead of
- * re-pinning to whichever side of it a runner lands on: the OS pipe holds at most
- * ~64 KB, so an unfixed child provably hits EAGAIN and exits, discarding the rest,
- * while a blocking child provably waits and delivers all of it. Same harness,
- * opposite `blocking` flag, opposite outcome — which is what makes this pair able
- * to tell a working fix from a no-op one.
+ * Refusing to read removes the race instead of re-pinning to whichever side of it
+ * a runner lands on: the OS pipe holds at most ~64 KB, so an unfixed child
+ * provably hits EAGAIN and exits, discarding the rest, while a blocking child
+ * provably waits and delivers all of it. Same harness, opposite `blocking` flag,
+ * opposite outcome — which is what makes this pair able to tell a working fix from
+ * a no-op one.
+ *
+ * For the unfixed child the stall ends only when the child has EXITED, never on a
+ * timer. A timer was a second race: on a loaded runner the child had not reached
+ * its exit when the timer fired, the reader drained the pipe, and the child's
+ * queued writes completed, so all 300,001 bytes arrived. A blocking child cannot
+ * exit while stalled, so it resumes after {@link READER_STALL_MS}.
  *
  * @param bytes - Payload size to emit.
  * @param blocking - Whether the child applies the fix before writing.
@@ -240,12 +248,17 @@ async function writeThroughStallingPipe(
 
   let received = '';
   let stalled = false;
+  const exited = once(child, 'exit');
   child.stdout.on('data', (chunk: string) => {
     received += chunk;
     if (!stalled) {
       stalled = true;
       child.stdout.pause();
-      setTimeout(() => child.stdout.resume(), READER_STALL_MS);
+      if (blocking) setTimeout(() => child.stdout.resume(), READER_STALL_MS);
+      else exited.then(
+        () => child.stdout.resume(),
+        () => child.stdout.resume(),
+      );
     }
   });
 
