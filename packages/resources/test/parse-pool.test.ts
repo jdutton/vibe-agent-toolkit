@@ -1730,6 +1730,37 @@ function diesWhileLoading(how: 'exit' | 'oom', dying: number): string {
   ]);
 }
 
+/**
+ * Hold every thread's `ready` back from the pool until the thread exits, and emit it where Node
+ * drains the thread's messages on exit: after any `error`, before `exit`.
+ *
+ * Node carries a thread's uncaught `error` on its internal port and what the thread posted on its
+ * public one, and orders the two only at `exit`, which drains the public port and then drops every
+ * `message` listener. So a thread that posted `ready` and then threw may reach the pool `error`
+ * first: measured at about one in three on an idle host. This forces that order, which is legal,
+ * on every thread.
+ */
+function holdReadyUntilExit(): void {
+  const emit = Worker.prototype.emit;
+  const removeAll = Worker.prototype.removeAllListeners;
+  const held = new WeakMap<Worker, unknown[]>();
+  vi.spyOn(Worker.prototype, 'emit').mockImplementation(function (this: Worker, event: string | symbol, ...args: unknown[]) {
+    const [payload] = args;
+    if (event !== 'message' || typeof payload !== 'object' || payload === null || !('ready' in payload)) {
+      return emit.call(this, event, ...args);
+    }
+    held.set(this, [...(held.get(this) ?? []), payload]);
+    return true;
+  });
+  vi.spyOn(Worker.prototype, 'removeAllListeners').mockImplementation(function (this: Worker, event?: string | symbol) {
+    if (event === 'message') {
+      for (const message of held.get(this) ?? []) emit.call(this, 'message', message);
+      held.delete(this);
+    }
+    return removeAll.call(this, event);
+  });
+}
+
 describe('a thread lost to its heap before the job\'s parser loaded', () => {
   it('charges a breach on the load clock to the thread, never the document it holds', async () => {
     // The thread posts `ready` and never loads the job's parser, and every sample reads its heap
@@ -1767,6 +1798,9 @@ describe('a thread lost to its heap before the job\'s parser loaded', () => {
 
 describe('a thread that dies while it loads the job\'s parser', () => {
   it.each(['exit', 'oom'] as const)('runs the job again on another thread, charged to no document (%s)', async (how) => {
+    // Node may emit a thread's `error` before a `ready` it posted earlier: held here so it always
+    // does, the order a loaded host produced.
+    holdReadyUntilExit();
     await seedWorkerEntry(diesWhileLoading(how, 1));
     const pool = createParsePool({ size: 1 });
     openPools.push(pool);
