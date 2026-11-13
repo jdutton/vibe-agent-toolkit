@@ -33,7 +33,7 @@
     "path-to-regexp": "8.4.0",
     "qs": "6.16.1",
     "tar": "7.5.22",
-    "basic-ftp": "6.2.1",
+    "basic-ftp": "6.2.4",
     "js-yaml": "4.3.2",
     "ip-address": "10.7.4",
     "express-rate-limit": "8.2.2",

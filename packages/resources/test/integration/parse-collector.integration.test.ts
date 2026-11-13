@@ -31,7 +31,7 @@ function runChild(script: string): Record<string, unknown> {
   const child = spawnSync(process.execPath, [entry], { env, encoding: 'utf-8', timeout: inject('tierTestTimeout') });
   rmSync(directory, { recursive: true, force: true });
 
-  expect(child.signal, 'the child was killed, hung past the tier timeout').toBeNull();
+  expect(child.signal, `the child was killed: a hang past the tier timeout, or a V8 fatal error\n${child.stderr}`).toBeNull();
   expect(child.stderr).toBe('');
   expect(child.status).toBe(0);
   return JSON.parse(child.stdout) as Record<string, unknown>;
@@ -54,9 +54,13 @@ describe('a parse thread\'s collector', () => {
   });
 
   it('is had by every one of 16 threads started at once, over five rounds, under the shared lock', () => {
+    // Static imports, never a top-level `await`: Node 22 aborts the whole process (V8
+    // `Check failed: (location_) != nullptr` in `ExecuteAsyncModule`) when a worker is terminated
+    // while an async module is still settling, about one run in six with no collector involved. The
+    // parse worker has no top-level `await`, so this is the test's shape, never the product's.
     const workerBody = [
-      `const { acquireCollector } = await import(${JSON.stringify(BUILT_COLLECTOR)});`,
-      "const { parentPort, workerData } = await import('node:worker_threads');",
+      `import { acquireCollector } from ${JSON.stringify(BUILT_COLLECTOR)};`,
+      "import { parentPort, workerData } from 'node:worker_threads';",
       "parentPort.postMessage(acquireCollector(new Int32Array(workerData.lock), 2000) === null ? 'none' : 'collector');",
     ].join('\n');
     const outcome = runChild([

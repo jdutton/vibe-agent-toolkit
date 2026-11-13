@@ -33,7 +33,7 @@ import { pathToFileURL } from 'node:url';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, inject, it } from 'vitest';
 
-import { MIN_HEAP_MB, type ParseLimits, resolveParseLimits } from '../../src/parse-limits.js';
+import { MIN_HEAP_MB, type ParseLimits, resolveParseLimits, workerHeapCeilingMb } from '../../src/parse-limits.js';
 import { deeplyNestedList, deeplyNestedQuote, manyLinks, TIGHT_LIMITS } from '../parse-limit-fixtures.js';
 import { countFilesUnder } from '../test-helpers.js';
 
@@ -438,12 +438,12 @@ describe('a process-wide heap flag', () => {
     expect(outcome.bound).toContain('--max-old-space-size');
   });
 
-  it('still admits an ordinary document when it is small: 128 MiB, which the pool applies as 96, not half', () => {
+  it('still admits an ordinary document when it is small: 128 MiB, which the pool applies at its young-generation floor', () => {
     // The sampler counts the whole used heap, young-generation garbage
     // included, and a cold worker parsing this 34 KB document peaks at 54 to
     // 68 MiB used (Node 26, see the limits record). At half of a 128 MiB flag
     // (64) about one parse in ten was refused; the bound is floored at the
-    // young generation's 96 MiB while the ceiling leaves the sampler 32 above it.
+    // young generation (96 on Node 26) while the ceiling leaves the sampler 32 above it.
     const ordinary = String.raw`Array.from({ length: 400 }, (_, i) => '## Section ' + i + '\n\nProse with a [link](./doc-' + i + '.md), \x60code\x60 and *emphasis*.\n\n- item ' + i + '\n').join('\n')`;
 
     const outcome = parseInChild(onCommandLine('--max-old-space-size=128'), ordinary, '{}', 0);
@@ -454,10 +454,23 @@ describe('a process-wide heap flag', () => {
   it('stops a breach at that floored bound before V8 does, three times in a row, and the process survives', () => {
     // The floor leaves 32 MiB between the bound and V8's ceiling, where half a
     // 128 MiB flag left 64: the sampler must still win the race V8 makes fatal.
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const outcome = heapBreachUnder(onCommandLine('--max-old-space-size=128'), 1024, 0);
+    //
+    // The floor is the young generation a thread really gets, which the runtime decides: 48 MiB on
+    // Node 22 (so half the flag, 64, stands), 192 on Node 24 and 96 on Node 26 (so 96, the flag less
+    // the headroom). It is measured here, in a child under the same flag, never assumed.
+    const flag = onCommandLine('--max-old-space-size=128');
+    const youngMb = Number(runInChild(flag, [
+      "import { Worker } from 'node:worker_threads';",
+      `const worker = new Worker('', { eval: true, resourceLimits: { maxOldGenerationSizeMb: ${String(workerHeapCeilingMb(1024))} } });`,
+      "worker.once('online', () => { console.log(worker.resourceLimits.maxYoungGenerationSizeMb); void worker.terminate(); });",
+    ]).trim());
+    expect(youngMb).toBeGreaterThan(0);
+    const appliedMb = Math.max(128 / 2, Math.min(youngMb, 128 - 32));
 
-      expect(outcome.bound).toBe('96 MiB heap, lowered from 1024 MiB by a process-wide V8 heap flag (--max-old-space-size, --max-heap-size or --max-semi-space-size)');
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const outcome = heapBreachUnder(flag, 1024, 0);
+
+      expect(outcome.bound).toBe(`${String(appliedMb)} MiB heap, lowered from 1024 MiB by a process-wide V8 heap flag (--max-old-space-size, --max-heap-size or --max-semi-space-size)`);
     }
   });
 });
