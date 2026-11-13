@@ -167,6 +167,23 @@ const PIPE_BUFFER_BYTES = 65_536;
 const LARGE_PAYLOAD_BYTES = 300_000;
 
 /**
+ * The payload for the STALLING pair, sized against everything that can hold
+ * bytes while the reader is stalled — not against a pipe buffer.
+ *
+ * A child's `'pipe'` stdio on POSIX is a libuv socketpair, not a pipe(2). Its
+ * kernel capacity is the AF_UNIX send buffer: about 8 KB on macOS, but
+ * `net.core.wmem_default` (212,992) on Linux, and a stream send may overshoot
+ * that by one skb of up to half the buffer — so a Linux runner can hold roughly
+ * 320 KB with nobody reading. A paused parent stream also keeps reading until its
+ * buffer reaches `highWaterMark`: measured at most 16 KiB on Node 22 and 128 KiB
+ * on Node 24 (its 64 KiB mark plus the in-flight read). 300,000 bytes
+ * fit inside that sum, which is how an unfixed child delivered all 300,001 to a
+ * reader that was stalled until its exit. 8 MiB exceeds the sum by more than an
+ * order of magnitude on any default kernel.
+ */
+const STALLED_PAYLOAD_BYTES = 8 * 1024 * 1024;
+
+/**
  * How long the reader stops reading after its first chunk when the child is
  * BLOCKING. Such a child cannot exit while the reader is stalled, so it needs a
  * timer to end the stall; the timing cannot change its outcome, because it waits
@@ -221,9 +238,10 @@ function writeThroughPipe(bytes: number, blocking: boolean): string {
  * trailing newline. Neither is invariant, because the drain race is not.
  *
  * Refusing to read removes the race instead of re-pinning to whichever side of it
- * a runner lands on: the OS pipe holds at most ~64 KB, so an unfixed child
- * provably hits EAGAIN and exits, discarding the rest, while a blocking child
- * provably waits and delivers all of it. Same harness, opposite `blocking` flag,
+ * a runner lands on: a stalled reader and the kernel together hold a bounded
+ * amount (see {@link STALLED_PAYLOAD_BYTES}), so an unfixed child writing more
+ * than that provably hits EAGAIN and exits, discarding the rest, while a blocking
+ * child provably waits and delivers all of it. Same harness, opposite `blocking` flag,
  * opposite outcome — which is what makes this pair able to tell a working fix from
  * a no-op one.
  *
@@ -231,7 +249,11 @@ function writeThroughPipe(bytes: number, blocking: boolean): string {
  * timer. A timer was a second race: on a loaded runner the child had not reached
  * its exit when the timer fired, the reader drained the pipe, and the child's
  * queued writes completed, so all 300,001 bytes arrived. A blocking child cannot
- * exit while stalled, so it resumes after {@link READER_STALL_MS}.
+ * exit while stalled, so it resumes after {@link READER_STALL_MS} — it must not
+ * wait for the exit as well, or the two deadlock. Nor can the reader skip reading
+ * altogether until the exit: `child_process` resumes a stdio stream nobody
+ * listens to when the child exits, discarding its data, and a `net.Socket` reads
+ * ahead to `highWaterMark` whether or not anyone consumes it.
  *
  * @param bytes - Payload size to emit.
  * @param blocking - Whether the child applies the fix before writing.
@@ -272,12 +294,12 @@ describe('stdout truncation through a real pipe', () => {
   // Windows pipes do not present the POSIX handle shape, so the LOSS is not
   // reproducible there; the two spawnSync cases below still assert on every OS.
   it.skipIf(process.platform === 'win32')(
-    'loses everything past one pipe buffer without the fix',
+    'loses the tail of a payload larger than a stalled reader can hold, without the fix',
     async () => {
-      const { received, status } = await writeThroughStallingPipe(LARGE_PAYLOAD_BYTES, false);
+      const { received, status } = await writeThroughStallingPipe(STALLED_PAYLOAD_BYTES, false);
 
       expect(status).toBe(0);
-      expect(received.length).toBeLessThan(LARGE_PAYLOAD_BYTES);
+      expect(received.length).toBeLessThan(STALLED_PAYLOAD_BYTES);
       // Cut mid-token, so the terminating newline `console.log` appends never
       // arrives — the signature of the defect, on top of the byte count.
       expect(received.endsWith('\n')).toBe(false);
@@ -287,10 +309,12 @@ describe('stdout truncation through a real pipe', () => {
   it.skipIf(process.platform === 'win32')(
     'delivers that same payload intact WITH the fix, against the same stalling reader',
     async () => {
-      const { received, status } = await writeThroughStallingPipe(LARGE_PAYLOAD_BYTES, true);
+      const { received, status } = await writeThroughStallingPipe(STALLED_PAYLOAD_BYTES, true);
 
       expect(status).toBe(0);
-      expect(received).toBe(`${'x'.repeat(LARGE_PAYLOAD_BYTES)}\n`);
+      // Length first, so a short delivery reports a byte count before any diff.
+      expect(received).toHaveLength(STALLED_PAYLOAD_BYTES + 1);
+      expect(received).toBe(`${'x'.repeat(STALLED_PAYLOAD_BYTES)}\n`);
     },
   );
 
