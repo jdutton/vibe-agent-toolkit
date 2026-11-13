@@ -18,13 +18,11 @@ import {
   type ProjectionStore,
   type ProjectionTableName,
 } from '@vibe-agent-toolkit/resources';
-import { readWorkCounters, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
-import { __resetWorkCountersForTest } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { EXTENTS_TABLE } from '../src/schema-sql.js';
-import { openEphemeralProjectionStore, openSqliteProjectionStore } from '../src/store.js';
+import { openSqliteProjectionStore } from '../src/store.js';
 
 import {
   FIRST_BLOB,
@@ -522,101 +520,6 @@ describe('lifetime', () => {
   it('closes twice without complaint', async () => {
     await store.close();
     await expect(store.close()).resolves.toBeUndefined();
-  });
-});
-
-/**
- * The last table of one scope, in declaration order: the one a read reaches last.
- *
- * @param scope - Which scope
- * @returns Its name
- */
-function lastTableOfScope(scope: 'blob' | 'extent'): string {
-  const name = Object.values(PROJECTION_TABLES).findLast((spec) => spec.scope === scope)?.name;
-  if (name === undefined) throw new Error(`no ${scope}-scoped table`);
-  return name;
-}
-
-/**
- * Drop one table from the store under `directory` behind the open store's back.
- *
- * @param directory - The store's directory
- * @param table - The table to drop
- */
-function dropTable(directory: string, table: string): void {
-  const writer = new DatabaseSync(safePath.join(directory, 'projection.db'));
-  try {
-    writer.exec(`DROP TABLE "${table}"`);
-  } finally {
-    writer.close();
-  }
-}
-
-describe('decoded rows are counted against the store they came from', () => {
-  /** Rows one {@link sampleBlobRows} bundle holds across every blob-scoped table. */
-  const bundleRowCount = Object.values(sampleBlobRows() as unknown as Record<string, readonly unknown[]>)
-    .reduce((total, rows) => total + rows.length, 0);
-
-  let ephemeral: ProjectionStore;
-
-  beforeEach(async () => {
-    ephemeral = openEphemeralProjectionStore();
-    await store.writeBlobFacts(sampleBlobRows());
-    await ephemeral.writeBlobFacts(sampleBlobRows());
-    __resetWorkCountersForTest();
-  });
-
-  afterEach(async () => {
-    await ephemeral.close();
-    __resetWorkCountersForTest();
-  });
-
-  it('a persistent read moves only the persistent counter, by every row it decoded', async () => {
-    await store.readBlobFacts([FIRST_BLOB]);
-    expect(readWorkCounters()['store.rows.decoded.persistent']).toBe(bundleRowCount);
-    expect(readWorkCounters()['store.rows.decoded.ephemeral']).toBe(0);
-  });
-
-  it('an ephemeral read moves only the ephemeral counter, by every row it decoded', async () => {
-    await ephemeral.readBlobFacts([FIRST_BLOB]);
-    expect(readWorkCounters()['store.rows.decoded.ephemeral']).toBe(bundleRowCount);
-    expect(readWorkCounters()['store.rows.decoded.persistent']).toBe(0);
-  });
-
-  it('a read of no content keys counts no read', async () => {
-    await store.readBlobFacts([]);
-    expect(readWorkCounters()['store.reads.persistent']).toBe(0);
-  });
-
-  it('a read that fails counts no read', async () => {
-    dropTable(directory, lastTableOfScope('blob'));
-    await expect(store.readBlobFacts([FIRST_BLOB])).rejects.toThrow(/no such table/);
-    expect(readWorkCounters()['store.reads.persistent']).toBe(0);
-  });
-
-  it('a read that fails after decoding earlier tables counts no decoded row', async () => {
-    // The LAST blob table: every table read before it decodes its rows first.
-    dropTable(directory, lastTableOfScope('blob'));
-    await expect(store.readBlobFacts([FIRST_BLOB])).rejects.toThrow(/no such table/);
-    expect(readWorkCounters()['store.rows.decoded.persistent']).toBe(0);
-  });
-
-  it('an extent write that rolls back counts no write and no row written', async () => {
-    // The manifest is written after every table's rows, so its absence fails
-    // the write after the rows went in, and the transaction rolls them back.
-    dropTable(directory, EXTENTS_TABLE);
-    await expect(store.writeExtent(KEY, sampleExtentRows(KEY.rootId))).rejects.toThrow(/no such table/);
-    expect(readWorkCounters()['store.writes.persistent']).toBe(0);
-    expect(readWorkCounters()['store.rows.written.persistent']).toBe(0);
-  });
-
-  it('an extent read that fails counts no read and no decoded row', async () => {
-    await store.writeExtent(KEY, sampleExtentRows(KEY.rootId));
-    __resetWorkCountersForTest();
-    dropTable(directory, lastTableOfScope('extent'));
-    await expect(store.readExtent(KEY)).rejects.toThrow(/no such table/);
-    expect(readWorkCounters()['store.reads.persistent']).toBe(0);
-    expect(readWorkCounters()['store.rows.decoded.persistent']).toBe(0);
   });
 });
 

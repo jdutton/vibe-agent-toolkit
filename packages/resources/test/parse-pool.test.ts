@@ -32,11 +32,7 @@ import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import {
-  __resetWorkCountersForTest,
-  __throwOnForbiddenWorkCountForTest,
-  removeScratchDir,
-} from '@vibe-agent-toolkit/utils/testing';
+import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { computeContentKey, type KeyedContent } from '../src/content-key.js';
@@ -509,49 +505,6 @@ function failingWith(failure: string): string {
     '});',
   ].join('\n');
 }
-
-/** A worker that answers every job with the forbidden-count policy it was started with. */
-const ECHOES_COUNT_POLICY = [
-  "import { parentPort, workerData } from 'node:worker_threads';",
-  READY_LINE,
-  "parentPort.on('message', (request) => {",
-  "  if (request?.type === 'shutdown') { parentPort.close(); return; }",
-  '  parentPort.postMessage({ id: request.id, failure: { message: String(workerData.forbiddenCount) } });',
-  '});',
-].join('\n');
-
-describe('a parse thread counts no work', () => {
-  it('starts each thread with the policy the parent holds at that start', async () => {
-    await seedWorkerEntry(ECHOES_COUNT_POLICY);
-    __throwOnForbiddenWorkCountForTest();
-    onTestFinished(() => {
-      __resetWorkCountersForTest();
-    });
-
-    const policyOf = async (): Promise<string> => String((await outcomeOf(trackedPool(1), '# a\n') as Error).message);
-    expect(await policyOf()).toBe('throw');
-
-    __resetWorkCountersForTest();
-    expect(await policyOf()).toBe('report');
-  });
-
-  it('parses through a real thread told to throw on a count, so a count there fails the parse', async () => {
-    // The parent counts every job a thread runs; a count on the thread itself
-    // would reach no dump. The thread is told the parent's policy at start, so
-    // with the throw on here, any count it makes fails this parse.
-    __throwOnForbiddenWorkCountForTest();
-    onTestFinished(() => {
-      __resetWorkCountersForTest();
-    });
-    const pool = trackedPool(1);
-    const [fixture] = FIXTURES;
-    if (fixture === undefined) throw new Error('no fixture');
-
-    const actual = await pool.parse(fixture.kind, fixture.content, fixture.byteLength);
-
-    expect(actual).toStrictEqual(parseInProcess(fixture));
-  });
-});
 
 describe('who threw a failure', () => {
   it('revives a throw the worker branded as the parser\'s, its code kept', async () => {

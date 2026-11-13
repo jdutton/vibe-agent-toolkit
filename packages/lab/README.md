@@ -33,9 +33,7 @@ those documents goes, per contributor, stratum and fixpoint pass), **`population
 files a command enumerated), **`memory`** (peak RSS per repeat — the largest VAT-owned process's
 peak, `VmHWM` on Linux and `process.resourceUsage().maxRSS` on macOS and Windows, worker threads
 included, never summed across processes, with how many vat processes reported counted beside it;
-see [Facets](docs/facets.md)), **`work`** (vat's own deterministic work counters, such as store
-rows decoded, extents derived and parses dispatched, summed across processes and compared exactly;
-see [The work facet](docs/facets.md#the-work-facet)) and **`verdict`** (what a build *decides* — exit codes, findings and
+see [Facets](docs/facets.md)) and **`verdict`** (what a build *decides* — exit codes, findings and
 normalized documents — across a subject set, checked both ways against committed deltas).
 `verdict` is shaped differently: `run` takes a required `--subjects <file>` instead of a
 `<subject>`, and `compare` takes two capture directories plus `--deltas` and `--control` — see

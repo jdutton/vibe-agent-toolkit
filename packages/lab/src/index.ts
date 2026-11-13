@@ -363,37 +363,6 @@ export {
   type VerdictVerbName,
   type VerdictVerbSpec,
 } from './facets/verdict/verbs.js';
-export { captureWork, type CaptureWorkOptions, workRowFromRepeats } from './facets/work/capture.js';
-export {
-  type CompareWorkOptions,
-  compareWork,
-  type WorkCommandVerdict,
-  type WorkComparison,
-  type WorkComparisonResult,
-  type WorkCounterMovement,
-  type WorkMovement,
-} from './facets/work/compare.js';
-export {
-  countOf,
-  type MergedWorkDumps,
-  mergeWorkDumps,
-  readWorkDumps,
-  variedCounters,
-  type WorkDump,
-  type WorkDumpsRead,
-  WorkDumpSchema,
-} from './facets/work/dump.js';
-export { renderWorkComparison, renderWorkReport } from './facets/work/render.js';
-export {
-  comparedExactly,
-  WORK_FACET,
-  WORK_MIN_RUNS,
-  type WorkBody,
-  WorkBodySchema,
-  type WorkCommandStats,
-  WorkCounterNameSchema,
-  type WorkCounterReading,
-} from './facets/work/types.js';
 
 export {
   type AbArmSummary,
@@ -463,7 +432,6 @@ export {
   failureCaveat,
   type OneSidedVerdict,
   openComparison,
-  stabilityCaveat,
   unmeasurableReasonFor,
 } from './harness/facet-compare.js';
 export { type Estimate, estimate, type EstimatorKind, quantile } from './harness/estimator.js';

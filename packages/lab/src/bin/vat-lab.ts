@@ -21,7 +21,6 @@ import { renderCrawlComparison, renderCrawlReport } from '../facets/crawl/render
 import { captureIo } from '../facets/io/capture.js';
 import { compareIo } from '../facets/io/compare.js';
 import { renderIoComparison, renderIoReport } from '../facets/io/render.js';
-import type { IoCommandStats } from '../facets/io/types.js';
 import { captureMemory } from '../facets/memory/capture.js';
 import { compareMemory } from '../facets/memory/compare.js';
 import { renderMemoryComparison, renderMemoryReport } from '../facets/memory/render.js';
@@ -69,11 +68,6 @@ import {
   type UnionRequest,
 } from '../facets/verdict/union.js';
 import type { Validated } from '../facets/verdict/yaml-file.js';
-import { captureWork } from '../facets/work/capture.js';
-import { compareWork, workStabilityCaveat } from '../facets/work/compare.js';
-import { countOf } from '../facets/work/dump.js';
-import { renderWorkComparison, renderWorkReport } from '../facets/work/render.js';
-import { WORK_MIN_RUNS, type WorkCommandStats } from '../facets/work/types.js';
 import {
   abExitCondition,
   CHANGED_VERDICT,
@@ -108,7 +102,6 @@ import {
   type MeasuredSequenceSpec,
   POPULATION_MEASURED_COMMANDS,
 } from '../harness/commands.js';
-import { stabilityCaveat } from '../harness/facet-compare.js';
 import { pinOf, type PreparedInstrument, prepareInstrument, resolveInstrument } from '../harness/instrument.js';
 import { npmInstall, type NpxInstallSite, npxInstallSite } from '../harness/npx-install.js';
 import { instrumentLabel, instrumentTrustNotes } from '../harness/render.js';
@@ -492,13 +485,6 @@ interface FacetWiring<TBody, TComparison extends ComparisonLike>
    */
   readonly defaultRuns: number;
   /**
-   * The fewest repeats `--runs` accepts, refused at the flag before anything runs.
-   *
-   * Required, so a facet that needs a floor cannot be registered without saying
-   * so: `work` discards a warm-up and needs two compared repeats after it.
-   */
-  readonly minRuns: number;
-  /**
    * Cache mode a bare `run` uses.
    *
    * Per facet because the facets need opposite things, and getting it wrong is
@@ -611,7 +597,7 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
       nonNegativeNumber('--noise-floor'),
     )
     .option('--pairs <n>', 'A-then-B cycles to run', wholeNumberAtLeast('--pairs', 1), 6)
-    .option('--runs <n>', 'Repeats per capture', wholeNumberAtLeast('--runs', wiring.minRuns), wiring.defaultRuns)
+    .option('--runs <n>', 'Repeats per capture', wholeNumberAtLeast('--runs', 1), wiring.defaultRuns)
     .option(
       '--cache <mode>',
       "'warm' or 'cold' (cold deletes the arm's own store and temp directory before every repeat; warm primes them once)",
@@ -876,21 +862,6 @@ function applyAbExitCode(result: Parameters<typeof abExitCondition>[0]): void {
 }
 
 /**
- * Refuse a facet whose default repeat count is below its own floor: a bare
- * `run` would be refused at its own flag.
- *
- * @param wiring - The facet's name and repeat counts
- * @throws {RangeError} when `defaultRuns` is below `minRuns`
- */
-export function assertRunsFloor(wiring: Pick<FacetWiring<unknown, ComparisonLike>, 'name' | 'defaultRuns' | 'minRuns'>): void {
-  if (wiring.defaultRuns < wiring.minRuns) {
-    throw new RangeError(
-      `facet ${wiring.name}: defaultRuns ${String(wiring.defaultRuns)} is below its minRuns ${String(wiring.minRuns)}`,
-    );
-  }
-}
-
-/**
  * Build one facet's `run`, `compare` and `ab` subcommands.
  *
  * @param wiring - See {@link FacetWiring}
@@ -899,7 +870,6 @@ export function assertRunsFloor(wiring: Pick<FacetWiring<unknown, ComparisonLike
 function createFacetCommand<TBody, TComparison extends ComparisonLike>(
   wiring: FacetWiring<TBody, TComparison>,
 ): Command {
-  assertRunsFloor(wiring);
   const group = new Command(wiring.name).description(wiring.summary);
 
   group
@@ -913,7 +883,7 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
     .option(
       '--runs <n>',
       'Repeats per command',
-      wholeNumberAtLeast('--runs', wiring.minRuns),
+      wholeNumberAtLeast('--runs', 1),
       wiring.defaultRuns,
     )
     .option(
@@ -1034,23 +1004,16 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
  * Turn a facet's command rows into the estimates `ab` aggregates.
  *
  * Shared by every wiring because the *rule* is shared and is the part worth
- * getting right: a row with no usable measurement is LOST — kept, valueless,
- * with its reason — never a value and never dropped. A value would feed `ab`
- * the zero a failed row carries, the best number this tool can print; a
+ * getting right: a failed row has no usable measurement, so it is LOST — kept,
+ * valueless, with its reason — never a value and never dropped. A value would feed
+ * `ab` the zero a failed row carries, the best number this tool can print; a
  * dropped row would leave the arm a statistic of the pairs that happened to
  * succeed, which understates the regression that failed the others.
- *
- * A row has no usable measurement when it failed, or when it ran and the facet
- * finds no warrant for its value: an exact-count facet whose repeats disagreed
- * or were never tested says so through `unwarrantedOf`, with the reason its
- * `compare` gives.
  *
  * @param rows - The facet's command rows, which all share `name`, `failed` and `failure`
  * @param unit - What the extracted value is, for rendering only
  * @param valueOf - Which of the row's numbers to publish
  * @param lostReasonOf - How a failed row's loss is named ({@link FAILURE_IS_THE_REASON} unless the facet has a better name)
- * @param unwarrantedOf - Why a row that ran has no usable value, or `null` when
- *   it has one ({@link NO_WARRANT_NEEDED} for a facet whose every run counts)
  * @returns One estimate per row: a value, or the reason there is none
  */
 export function rowEstimates<TRow extends FailableRow>(
@@ -1058,12 +1021,12 @@ export function rowEstimates<TRow extends FailableRow>(
   unit: string,
   valueOf: (row: TRow) => number,
   lostReasonOf: (row: TRow) => string,
-  unwarrantedOf: (row: TRow) => string | null,
 ): readonly FacetEstimate[] {
-  return rows.map((row): FacetEstimate => {
-    const lost = row.failed ? lostReasonOf(row) : unwarrantedOf(row);
-    return lost === null ? { name: row.name, value: valueOf(row), unit, lost: null } : { name: row.name, value: 0, unit, lost };
-  });
+  return rows.map((row): FacetEstimate =>
+    row.failed
+      ? { name: row.name, value: 0, unit, lost: lostReasonOf(row) }
+      : { name: row.name, value: valueOf(row), unit, lost: null },
+  );
 }
 
 /** What every facet's command row carries for {@link rowEstimates}. */
@@ -1075,48 +1038,6 @@ interface FailableRow {
 
 /** A failed row's loss, named by its own `failure`. */
 export const FAILURE_IS_THE_REASON = (row: FailableRow): string => row.failure ?? 'failed, with no reason recorded';
-
-/**
- * Every row that ran has a usable value: the timing and population facets,
- * whose `ab` takes a statistic across pairs rather than reading one exact count.
- *
- * @returns `null`
- */
-export const NO_WARRANT_NEEDED = (): null => null;
-
-/** The counter `work ab` compares: the I10 hydration count. */
-const WORK_AB_COUNTER = 'store.rows.decoded.persistent';
-
-/**
- * What `io ab` compares: each row's user calls, lost when the row's own repeats
- * disagreed or were never tested — the same warrant `io compare` asks of it.
- *
- * @param rows - An `io` report's rows
- * @returns One estimate per row
- */
-export function ioEstimates(rows: readonly IoCommandStats[]): readonly FacetEstimate[] {
-  return rowEstimates(rows, 'calls', (row) => row.userCalls, FAILURE_IS_THE_REASON, (row) => stabilityCaveat(row, 'measured'));
-}
-
-/**
- * What `work ab` compares: each row's persistent-store rows decoded, lost when
- * the row's repeats give no warrant (the reason `work compare` gives) or when
- * the measured vat does not emit the counter — never read as zero.
- *
- * @param rows - A `work` report's rows
- * @returns One estimate per row
- */
-export function workEstimates(rows: readonly WorkCommandStats[]): readonly FacetEstimate[] {
-  return rowEstimates(
-    rows,
-    'persistent-store rows decoded',
-    (row) => countOf(row, WORK_AB_COUNTER) ?? 0,
-    FAILURE_IS_THE_REASON,
-    (row) =>
-      workStabilityCaveat(row, 'measured') ??
-      (countOf(row, WORK_AB_COUNTER) === undefined ? `the measured vat does not emit ${WORK_AB_COUNTER}` : null),
-  );
-}
 
 /**
  * The fastest repeat a row measured — the reduction `FacetEstimate` requires.
@@ -1887,7 +1808,6 @@ export function createProgram(): Command {
         runSummary: 'Capture a perf report for one project against one vat build',
         compareSummary: 'Diff two perf reports along a single axis',
         defaultRuns: 5,
-        minRuns: 1,
         defaultCache: 'warm',
         capture: capturePerf,
         compare: comparePerf,
@@ -1897,7 +1817,7 @@ export function createProgram(): Command {
         // and it is the right number to hand `ab` for the same reason `ab` then
         // takes a minimum of it — see `harness/estimator.ts`.
         estimator: 'min',
-        estimate: (report) => rowEstimates(report.body.commands, 'ms', (row) => row.minMs, FAILURE_IS_THE_REASON, NO_WARRANT_NEEDED),
+        estimate: (report) => rowEstimates(report.body.commands, 'ms', (row) => row.minMs, FAILURE_IS_THE_REASON),
       })
         .addCommand(createPerfArmsCommand())
         .addCommand(createPerfBarsCommand()),
@@ -1912,18 +1832,17 @@ export function createProgram(): Command {
         // test determinism at all, and io counts are deterministic enough that
         // more repeats buy confidence rather than resolution.
         defaultRuns: 3,
-        minRuns: 1,
         defaultCache: 'warm',
         capture: captureIo,
         compare: compareIo,
         renderReport: renderIoReport,
         renderComparison: renderIoComparison,
         // Call counts do not move with machine load, so a min across pairs is
-        // normally every pair's value. A row whose own repeats disagreed or were
-        // never tested is lost rather than published: an exact count with no
-        // warrant is the number `io compare` refuses to read.
+        // normally every pair's value. That is a feature: an arm whose min and
+        // p25 differ is an arm whose counts were NOT deterministic, and the A/B
+        // shows it without needing its own stability rule.
         estimator: 'min',
-        estimate: (report) => ioEstimates(report.body.commands),
+        estimate: (report) => rowEstimates(report.body.commands, 'calls', (row) => row.userCalls, FAILURE_IS_THE_REASON),
       }),
     )
     .addCommand(
@@ -1935,7 +1854,6 @@ export function createProgram(): Command {
         // Three repeats, so the middle one can be reported and the other two can
         // disagree with it. No warm-up is discarded — see `parse/capture.ts`.
         defaultRuns: 3,
-        minRuns: 1,
         // The one facet that must not default to warm — see `FacetWiring.defaultCache`.
         defaultCache: 'cold',
         capture: captureParse,
@@ -1966,7 +1884,7 @@ export function createProgram(): Command {
         // the compare output, where the passes are qualified by kind.
         estimator: 'min',
         estimate: (report) =>
-          rowEstimates(report.body.commands, 'ms parse (all kinds)', fastestRepeat, FAILURE_IS_THE_REASON, NO_WARRANT_NEEDED),
+          rowEstimates(report.body.commands, 'ms parse (all kinds)', fastestRepeat, FAILURE_IS_THE_REASON),
       }),
     )
     .addCommand(
@@ -1979,7 +1897,6 @@ export function createProgram(): Command {
         // Three repeats, so the middle one can be reported and the other two can
         // disagree with it. No warm-up is discarded — see `crawl/capture.ts`.
         defaultRuns: 3,
-        minRuns: 1,
         // Warm, unlike `parse`. There is no cache in front of a crawl, so the
         // work happens on every repeat and the steady state is the honest one.
         defaultCache: 'warm',
@@ -1993,29 +1910,7 @@ export function createProgram(): Command {
         // rule twice is how they drifted apart the first time.
         estimator: 'min',
         estimate: (report) =>
-          rowEstimates(report.body.commands, 'ms crawl (all strata)', fastestRepeat, FAILURE_IS_THE_REASON, NO_WARRANT_NEEDED),
-      }),
-    )
-    .addCommand(
-      createFacetCommand({
-        name: 'work',
-        summary: "Count the work vat's own counters record: store rows decoded, extents derived, parses dispatched",
-        runSummary: 'Capture a work-counter report for one project against one vat build',
-        compareSummary: 'Diff two work-counter reports along a single axis',
-        // One warm-up plus two compared repeats, refused below that: the
-        // smallest run that can test determinism at all — see `work/capture.ts`.
-        defaultRuns: WORK_MIN_RUNS,
-        minRuns: WORK_MIN_RUNS,
-        defaultCache: 'warm',
-        capture: captureWork,
-        compare: compareWork,
-        renderReport: renderWorkReport,
-        renderComparison: renderWorkComparison,
-        // Rows decoded from the persistent store, the I10 hydration count.
-        // Counts are deterministic, so the min across pairs is every pair's
-        // value; an arm whose min and p25 differ did not count deterministically.
-        estimator: 'min',
-        estimate: (report) => workEstimates(report.body.commands),
+          rowEstimates(report.body.commands, 'ms crawl (all strata)', fastestRepeat, FAILURE_IS_THE_REASON),
       }),
     )
     .addCommand(
@@ -2029,7 +1924,6 @@ export function createProgram(): Command {
         // confidence in that rather than resolution in a statistic — and each
         // repeat is a whole corpus enumeration, which is not cheap.
         defaultRuns: 2,
-        minRuns: 1,
         // Warm. There is no cache in front of the enumeration, and a set does
         // not move with one.
         defaultCache: 'warm',
@@ -2046,7 +1940,7 @@ export function createProgram(): Command {
         // populations of equal size and different membership read as unchanged
         // through `ab` and as CHANGED through `compare`. Use `compare`.
         estimator: 'min',
-        estimate: (report) => rowEstimates(report.body.commands, 'files', (row) => row.count, FAILURE_IS_THE_REASON, NO_WARRANT_NEEDED),
+        estimate: (report) => rowEstimates(report.body.commands, 'files', (row) => row.count, FAILURE_IS_THE_REASON),
       }),
     )
     .addCommand(
@@ -2058,7 +1952,6 @@ export function createProgram(): Command {
         // Three, not perf's five: a peak barely moves between repeats, and a
         // memory-heavy command is usually a slow one.
         defaultRuns: 3,
-        minRuns: 1,
         defaultCache: 'warm',
         capture: captureMemory,
         compare: compareMemory,
@@ -2067,7 +1960,7 @@ export function createProgram(): Command {
         // A peak moves both ways with when a collection lands, so the median repeat, and its median
         // across captures: a min would pick the luckiest collection (see `EstimatorKind`).
         estimator: 'median',
-        estimate: (report) => rowEstimates(report.body.commands, 'KiB peak RSS', (row) => row.medianKb, (row) => (row.outOfHeap ? 'ran out of heap' : FAILURE_IS_THE_REASON(row)), NO_WARRANT_NEEDED),
+        estimate: (report) => rowEstimates(report.body.commands, 'KiB peak RSS', (row) => row.medianKb, (row) => (row.outOfHeap ? 'ran out of heap' : FAILURE_IS_THE_REASON(row))),
       }),
     )
     .addCommand(createVerdictCommand());

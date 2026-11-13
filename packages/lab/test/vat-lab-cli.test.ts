@@ -24,7 +24,6 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
   armNameOption,
-  assertRunsFloor,
   collectArmsBuild,
   collectArmsSelection,
   collectBar,
@@ -37,7 +36,6 @@ import {
   collectUnset,
   createProgram,
   FAILURE_IS_THE_REASON,
-  NO_WARRANT_NEEDED,
   fastestRepeat,
   nonNegativeNumber,
   parseCacheMode,
@@ -340,26 +338,15 @@ describe('rowEstimates — what a capture hands ab', () => {
     ({ name, failed: failure !== null, failure, value: 7 });
 
   it('keeps a failed row as LOST, naming its failure — never drops it so the arm silently has fewer pairs', () => {
-    expect(rowEstimates([row('ok', null), row('bad', 'no RSS dumps')], 'ms', (r) => r.value, FAILURE_IS_THE_REASON, NO_WARRANT_NEEDED)).toEqual([
+    expect(rowEstimates([row('ok', null), row('bad', 'no RSS dumps')], 'ms', (r) => r.value, FAILURE_IS_THE_REASON)).toEqual([
       { name: 'ok', value: 7, unit: 'ms', lost: null },
       { name: 'bad', value: 0, unit: 'ms', lost: 'no RSS dumps' },
     ]);
   });
 
   it("lets a facet name a failed row's reason its own way", () => {
-    expect(rowEstimates([row('oom', 'exit 134')], 'KiB', (r) => r.value, () => 'ran out of heap', NO_WARRANT_NEEDED)).toEqual([
+    expect(rowEstimates([row('oom', 'exit 134')], 'KiB', (r) => r.value, () => 'ran out of heap')).toEqual([
       { name: 'oom', value: 0, unit: 'KiB', lost: 'ran out of heap' },
-    ]);
-  });
-
-  it('loses a row that ran when the facet finds no warrant for its value, and never asks it of a failed row', () => {
-    const unwarranted = (r: { name: string }): string | null => (r.name === 'shaky' ? 'repeats disagreed' : null);
-    expect(
-      rowEstimates([row('ok', null), row('shaky', null), row('bad', 'exit 1')], 'calls', (r) => r.value, FAILURE_IS_THE_REASON, unwarranted),
-    ).toEqual([
-      { name: 'ok', value: 7, unit: 'calls', lost: null },
-      { name: 'shaky', value: 0, unit: 'calls', lost: 'repeats disagreed' },
-      { name: 'bad', value: 0, unit: 'calls', lost: 'exit 1' },
     ]);
   });
 });
@@ -920,15 +907,5 @@ describe('vat-lab verdict run --prepared', () => {
 
     expect(option).toBeDefined();
     expect(option?.parseArg).toBe(collectPreparedSubject);
-  });
-});
-
-describe('a facet’s repeat floor', () => {
-  it('refuses a facet whose default repeats fall below its floor, naming it', () => {
-    expect(() => assertRunsFloor({ name: 'work', defaultRuns: 2, minRuns: 3 })).toThrow('facet work: defaultRuns 2 is below its minRuns 3');
-  });
-
-  it('accepts a default at the floor', () => {
-    expect(() => assertRunsFloor({ name: 'work', defaultRuns: 3, minRuns: 3 })).not.toThrow();
   });
 });

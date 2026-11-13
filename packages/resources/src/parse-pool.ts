@@ -105,7 +105,7 @@ import { availableParallelism, totalmem } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 
-import { countWork, followedKindSync, forbiddenWorkCountPolicy, type ForbiddenWorkCountPolicy } from '@vibe-agent-toolkit/utils';
+import { followedKindSync } from '@vibe-agent-toolkit/utils';
 
 import { decodeFrontmatterValue, encodeFrontmatterValue } from './frontmatter-codec.js';
 import type { ParseResult } from './link-parser.js';
@@ -659,16 +659,7 @@ export interface ParseWorkerData {
   limits: ParseLimits;
   /** The lock every thread takes its collector under: {@link COLLECTOR_LOCK}. */
   collectorLock: SharedArrayBuffer;
-  /**
-   * What a work count on the thread does: the starting thread's
-   * `forbiddenWorkCountPolicy()`, read when the thread starts, so a test's throw
-   * reaches the thread it guards.
-   */
-  forbiddenCount: ForbiddenWorkCountPolicy;
 }
-
-/** What a pool holds for every thread it starts; the count policy is read per start. */
-type PoolWorkerData = Omit<ParseWorkerData, 'forbiddenCount'>;
 
 /**
  * The one lock, per copy of this module, under which a parse thread sets V8's `--expose-gc`, takes
@@ -967,7 +958,7 @@ interface PoolWorker {
 class WorkerParsePool implements ParsePool {
   readonly size: number;
 
-  readonly #workerData: PoolWorkerData;
+  readonly #workerData: ParseWorkerData;
   readonly #limits: ParseLimits;
   readonly #workers: PoolWorker[] = [];
   /**
@@ -997,7 +988,7 @@ class WorkerParsePool implements ParsePool {
    */
   readonly #heapFlags: V8HeapFlags = v8HeapFlags(process.env['NODE_OPTIONS'], process.execArgv);
 
-  constructor(size: number, workerData: PoolWorkerData, parkCap: number) {
+  constructor(size: number, workerData: ParseWorkerData, parkCap: number) {
     this.size = size;
     this.#workerData = workerData;
     this.#limits = workerData.limits;
@@ -1235,7 +1226,7 @@ class WorkerParsePool implements ParsePool {
       setImmediate(() => {
         if (poolWorker.job !== job || job.clock !== clock) return;
         if (clock === 'load') this.#stopAtLoadDeadline(poolWorker, job, lateMs);
-        else this.#refuseUnderLoad(poolWorker, new ParseLimitError('timeMs', this.#limits.timeMs));
+        else this.#terminate(poolWorker, new ParseLimitError('timeMs', this.#limits.timeMs));
       });
     }, this.#limits.timeMs);
   }
@@ -1318,7 +1309,7 @@ class WorkerParsePool implements ParsePool {
   #heapBreach(poolWorker: PoolWorker, job: PendingJob, appliedMb: number): void {
     const refusal = ParseLimitError.heap(appliedMb, this.#limits.heapMb);
     if (job.clock !== 'load') {
-      this.#refuseUnderLoad(poolWorker, refusal);
+      this.#terminate(poolWorker, refusal);
       return;
     }
     const stop = new Error(`a parse thread's heap passed its bound before the ${moduleKindOf(job.request)} parser loaded`, { cause: refusal });
@@ -1424,22 +1415,6 @@ class WorkerParsePool implements ParsePool {
       { cause: error },
     ), 'before its thread died', !heapCheck);
     return true;
-  }
-
-  /**
-   * Stop a thread at a load-dependent limit — its parse clock, its heap bound,
-   * V8's heap ceiling — counting the refusal, then {@link #terminate} it.
-   *
-   * Counted as `parse.refused.load`, never beside the key-determined breaches:
-   * whether a document hits one of these depends on the machine and what else
-   * it is doing, so the count is reported and never compared exactly.
-   *
-   * @param poolWorker - The thread
-   * @param refusal - The document's refusal
-   */
-  #refuseUnderLoad(poolWorker: PoolWorker, refusal: ParseLimitError): void {
-    countWork('parse.refused.load', 1);
-    this.#terminate(poolWorker, refusal);
   }
 
   /**
@@ -1586,10 +1561,7 @@ class WorkerParsePool implements ParsePool {
     let key: string;
     try {
       entry = resolveWorkerEntry();
-      // Read per start, not per pool: a test turns the throw on after the shared
-      // pool exists. It is in the key, so a parked thread told otherwise is not adopted.
-      const workerData: ParseWorkerData = { ...this.#workerData, forbiddenCount: forbiddenWorkCountPolicy() };
-      key = workerKey(entry, workerData);
+      key = workerKey(entry, this.#workerData);
       const parked = source === 'may-adopt' ? adoptParkedWorker(key) : undefined;
       if (parked !== undefined) return this.#track(parked.worker, entry, key, parked.parsersLoaded);
       // The stack is enforced by V8 itself, per thread: a breach throws a
@@ -1598,7 +1570,7 @@ class WorkerParsePool implements ParsePool {
       // V8's ceiling can kill the whole process, so the sampler enforces
       // `heapMb` and V8's ceiling is headroom past it (`workerHeapCeilingMb`).
       worker = new Worker(entry, {
-        workerData,
+        workerData: this.#workerData,
         resourceLimits: {
           maxOldGenerationSizeMb: workerHeapCeilingMb(this.#limits.heapMb),
           stackSizeMb: this.#limits.stackMb,
@@ -1657,7 +1629,7 @@ class WorkerParsePool implements ParsePool {
         // Before the job's parser loaded, what V8 stopped was not the document's (`#diedLoading`).
         if (this.#diedLoading(poolWorker, error)) return;
         // V8 stopped it, not the sampler: the refusal names V8's ceiling.
-        this.#refuseUnderLoad(poolWorker, ParseLimitError.heapCeiling(poolWorker.heapBounds, this.#limits.heapMb));
+        this.#terminate(poolWorker, ParseLimitError.heapCeiling(poolWorker.heapBounds, this.#limits.heapMb));
         return;
       }
       this.#died(poolWorker, poolWorker.ready ? new ParseWorkerDiedError({ cause: error }) : error);
@@ -1895,8 +1867,6 @@ function settleJob(
   limits: ParseLimits,
 ): void {
   if ('breach' in response) {
-    // An output cap is a function of the bytes: the same file breaches it every run.
-    countWork('parse.refused.keyDetermined', 1);
     job.reject(new ParseLimitError(response.breach, limits[response.breach], response.found));
     return;
   }

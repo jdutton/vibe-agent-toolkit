@@ -117,7 +117,7 @@ import {
   quoteIdentifier,
   vatCacheNamespaceRoot,
 } from '@vibe-agent-toolkit/resources';
-import { countWork, promised, safePath, VatError, type WorkCounter } from '@vibe-agent-toolkit/utils';
+import { promised, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 
 import {
@@ -697,7 +697,6 @@ export function openSqliteProjectionStore(options: SqliteStoreOptions = {}): Sql
   adoptLegacyBlobKeys(database);
   return new SqliteProjectionStore(
     database,
-    'persistent',
     Math.max(1, Math.trunc(options.retainedExtentsPerRoot ?? DEFAULT_RETAINED_EXTENTS_PER_ROOT)),
     {
       retainedBlobKeys: Math.max(1, Math.trunc(options.retainedBlobKeys ?? DEFAULT_RETAINED_BLOB_KEYS)),
@@ -958,42 +957,8 @@ export function openEphemeralProjectionStore(): SqlQueryableStore {
   // by every root on the machine, so a persisted lens answer would be read back
   // under a different lens's question in a different repository. This `true` is
   // the only one in the package: no other store may create the relations.
-  return new SqliteProjectionStore(database, 'ephemeral', DEFAULT_RETAINED_EXTENTS_PER_ROOT, { mayWriteDerived: true });
+  return new SqliteProjectionStore(database, DEFAULT_RETAINED_EXTENTS_PER_ROOT, { mayWriteDerived: true });
 }
-
-/**
- * Which store a piece of work was done against, as the work counters split it.
- *
- * `persistent` is the file-backed store from {@link openSqliteProjectionStore},
- * the one a warm run reads and ADR I10 bounds. `ephemeral` is the per-run
- * in-memory store from {@link openEphemeralProjectionStore}: a query fills it
- * with the run's answer database, and that work does not count against I10.
- */
-type StoreLane = 'persistent' | 'ephemeral';
-
-/** One lane's work counters. */
-interface LaneCounters {
-  readonly decoded: WorkCounter;
-  readonly reads: WorkCounter;
-  readonly writes: WorkCounter;
-  readonly rowsWritten: WorkCounter;
-}
-
-/** Each lane's counters, so a site names the work and the lane picks the counter. */
-const LANE_COUNTERS: Readonly<Record<StoreLane, LaneCounters>> = {
-  persistent: {
-    decoded: 'store.rows.decoded.persistent',
-    reads: 'store.reads.persistent',
-    writes: 'store.writes.persistent',
-    rowsWritten: 'store.rows.written.persistent',
-  },
-  ephemeral: {
-    decoded: 'store.rows.decoded.ephemeral',
-    reads: 'store.reads.ephemeral',
-    writes: 'store.writes.ephemeral',
-    rowsWritten: 'store.rows.written.ephemeral',
-  },
-};
 
 /**
  * Open a {@link ProjectionCompileProbe}: the full queryable schema, derived
@@ -1446,14 +1411,10 @@ class SqliteProjectionStore implements SqlQueryableStore {
    * to move here.
    */
   readonly #mayWriteDerived: boolean;
-  /** Which store this is, for the work counters — see {@link StoreLane}. */
-  readonly #lane: StoreLane;
   #closed = false;
 
   /**
    * @param database - An open, configured connection whose schema exists
-   * @param lane - Which store this is, for the work counters. Required, so a
-   *   new factory cannot count its work against the wrong lane by omission
    * @param retainedExtentsPerRoot - How many of a root's newest trees survive a
    *   write. Already clamped to at least one by {@link openSqliteProjectionStore}
    * @param tiers - The other two dials, grouped so a caller cannot transpose
@@ -1465,12 +1426,10 @@ class SqliteProjectionStore implements SqlQueryableStore {
    */
   constructor(
     database: DatabaseSync,
-    lane: StoreLane,
     retainedExtentsPerRoot: number,
     tiers: { retainedBlobKeys?: number; retainedRoots?: number; mayWriteDerived?: boolean } = {},
   ) {
     this.#database = database;
-    this.#lane = lane;
     this.#retainedExtentsPerRoot = retainedExtentsPerRoot;
     this.#retainedRoots = tiers.retainedRoots ?? DEFAULT_RETAINED_ROOTS;
     this.#retainedBlobKeys = tiers.retainedBlobKeys ?? DEFAULT_RETAINED_BLOB_KEYS;
@@ -1555,10 +1514,9 @@ class SqliteProjectionStore implements SqlQueryableStore {
       if (contentKeys.length === 0) return;
 
       let evicted = 0;
-      let written = 0;
       this.#transaction(() => {
         this.#clearSpaceForBlobs(bundle, contentKeys);
-        written = this.#insertBundle(bundle, 'blob', []);
+        this.#insertBundle(bundle, 'blob', []);
         // AFTER the rows, and BEFORE the eviction, for the reason `writeExtent`
         // records its manifest row before evicting: a key not yet in the ordering
         // is a key the window cannot see, so a small retention would drop the very
@@ -1567,7 +1525,6 @@ class SqliteProjectionStore implements SqlQueryableStore {
         for (const key of contentKeys) this.#recordBlobKey.run(key, writtenAt);
         evicted = this.#evictBlobKeysPastRetention(contentKeys.length);
       });
-      this.#countWrite(written);
       // Outside the transaction, because SQLite refuses `incremental_vacuum`
       // inside one — the same arrangement, and the same reason, as `writeExtent`.
       if (evicted > 0) this.#database.exec('PRAGMA incremental_vacuum');
@@ -1645,25 +1602,19 @@ class SqliteProjectionStore implements SqlQueryableStore {
   readBlobFacts(contentKeys: readonly string[]): Promise<BlobScopedRows> {
     return promised(() => {
       this.#assertOpen();
-      const keys = [...new Set(contentKeys)];
-      let decoded = 0;
-      const rows = this.#readTransaction(() => {
+      return this.#readTransaction(() => {
         const result: Record<string, unknown[]> = {};
         for (const { spec } of this.#plansOfScope('blob')) {
           result[spec.key] = [];
         }
-        for (const batch of batched(keys)) {
+        for (const batch of batched([...new Set(contentKeys)])) {
           for (const plan of this.#plansOfScope('blob')) {
             const raw = this.#blobStatement('select', plan.spec, batch.length).all(...batch);
-            decoded += raw.length;
             result[plan.spec.key]?.push(...decodeRows(plan, raw));
           }
         }
         return result as unknown as BlobScopedRows;
       });
-      // Asking for no keys reads nothing.
-      if (keys.length > 0) this.#countRead(decoded);
-      return rows;
     });
   }
 
@@ -1675,12 +1626,11 @@ class SqliteProjectionStore implements SqlQueryableStore {
       const keyValues = [key.rootId, key.treeHash];
       const contexts = contextsNamedBy(bundle, this.#plansOfScope('extent'));
       let evicted = 0;
-      let written = 0;
       this.#transaction(() => {
         for (const plan of this.#plansOfScope('extent')) {
           this.#clearSpaceFor(plan, bundle, keyValues, contexts);
         }
-        written = this.#insertBundle(bundle, 'extent', keyValues);
+        this.#insertBundle(bundle, 'extent', keyValues);
         // Recorded on every write, including one that names no context at all:
         // the manifest row is the only thing separating "written and empty" from
         // "never written", and an additive write is still a write.
@@ -1690,7 +1640,6 @@ class SqliteProjectionStore implements SqlQueryableStore {
         // would evict the newest tree the store had — the one it is replacing.
         evicted = this.#evictPastRetention(key.rootId) + this.#evictRootsPastRetention();
       });
-      this.#countWrite(written);
       // Outside the transaction, because SQLite refuses `incremental_vacuum`
       // inside one, and only when something was actually freed — an ordinary
       // steady-state write evicts nothing and must pay nothing.
@@ -1731,7 +1680,7 @@ class SqliteProjectionStore implements SqlQueryableStore {
       const bundle = rows as Record<string, readonly Record<string, unknown>[] | undefined>;
       const knownBefore = new Set(this.#derivedPlans.keys());
       try {
-        this.#countWrite(this.#writeDerivedRows(bundle));
+        this.#writeDerivedRows(bundle);
       } catch (error) {
         // The rollback removed every table this write created; forget their plans
         // too, or the next write would skip the `CREATE` and fail `no such table`.
@@ -1747,10 +1696,8 @@ class SqliteProjectionStore implements SqlQueryableStore {
    * `writeDerived`'s transaction: create, clear and fill each supplied relation.
    *
    * @param bundle - The rows, by registry key
-   * @returns How many rows it inserted
    */
-  #writeDerivedRows(bundle: Readonly<Record<string, readonly Record<string, unknown>[] | undefined>>): number {
-    let written = 0;
+  #writeDerivedRows(bundle: Readonly<Record<string, readonly Record<string, unknown>[] | undefined>>): void {
     this.#transaction(() => {
       for (const spec of allDerivedSpecs()) {
         const supplied = bundle[spec.key];
@@ -1765,38 +1712,8 @@ class SqliteProjectionStore implements SqlQueryableStore {
         for (const row of supplied) {
           plan.insert.run(...plan.columns.map(([column, { kind }]) => encodeValue(kind, row[column])));
         }
-        written += supplied.length;
       }
     });
-    return written;
-  }
-
-  /**
-   * Count one committed write and the rows it inserted, against this store's lane.
-   *
-   * After the transaction, so a write that rolled back is not counted as work
-   * the store holds.
-   *
-   * @param rows - How many rows the write inserted
-   */
-  #countWrite(rows: number): void {
-    countWork(LANE_COUNTERS[this.#lane].writes, 1);
-    countWork(LANE_COUNTERS[this.#lane].rowsWritten, rows);
-  }
-
-  /**
-   * Count one completed read and every row it decoded, against this store's lane.
-   *
-   * After the transaction, so a read that failed counts nothing, not even the
-   * rows it decoded from the tables it reached first. Hydration is a counted
-   * cost (ADR I10), and a row decoded outside the answer is exactly what the
-   * decoded counter exposes.
-   *
-   * @param decoded - How many stored rows the read decoded
-   */
-  #countRead(decoded: number): void {
-    countWork(LANE_COUNTERS[this.#lane].reads, 1);
-    countWork(LANE_COUNTERS[this.#lane].decoded, decoded);
   }
 
   /**
@@ -1828,8 +1745,7 @@ class SqliteProjectionStore implements SqlQueryableStore {
   readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
     return promised(() => {
       this.#assertOpen();
-      let decoded = 0;
-      const extent = this.#readTransaction(() => {
+      return this.#readTransaction(() => {
         // An extent that was written but holds nothing is a hit with empty tables;
         // one that was never written is a miss. The manifest row is what tells
         // them apart, since both produce zero rows from every table — and it is
@@ -1840,14 +1756,10 @@ class SqliteProjectionStore implements SqlQueryableStore {
         const result: Record<string, unknown[]> = {};
         for (const plan of this.#plansOfScope('extent')) {
           const raw = plan.selectExtent?.all(key.rootId, key.treeHash) ?? [];
-          decoded += raw.length;
           result[plan.spec.key] = [...decodeRows(plan, raw)];
         }
         return result as unknown as ExtentScopedRows;
       });
-      // A miss included: the manifest was read.
-      this.#countRead(decoded);
-      return extent;
     });
   }
 
@@ -1894,9 +1806,6 @@ class SqliteProjectionStore implements SqlQueryableStore {
     // method on this store uses: leaving it read-only would turn the next
     // `writeExtent` into "attempt to write a readonly database" somewhere with
     // no query in sight.
-    //
-    // Counts no store read: this is the answer database a query was loaded
-    // into, and the reads that loaded it were counted where they happened.
     return runGated(
       this.#database,
       sql,
@@ -2085,21 +1994,17 @@ class SqliteProjectionStore implements SqlQueryableStore {
    * @param scope - Which tables to expect in the bundle
    * @param leadingValues - Values bound before the row's own columns — the
    *   extent key, or nothing
-   * @returns How many rows it inserted
    */
   #insertBundle(
     bundle: Record<string, readonly Record<string, unknown>[]>,
     scope: 'blob' | 'extent',
     leadingValues: readonly string[],
-  ): number {
-    let inserted = 0;
+  ): void {
     for (const plan of this.#plansOfScope(scope)) {
       for (const row of bundle[plan.spec.key] ?? []) {
         plan.insert.run(...leadingValues, ...plan.columns.map(([column, { kind }]) => encodeValue(kind, row[column])));
-        inserted += 1;
       }
     }
-    return inserted;
   }
 
   /**
@@ -2219,8 +2124,7 @@ function keyColumnTypes(spec: StoredTableSpec): readonly (readonly [string, Proj
 }
 
 /**
- * Turn stored rows back into projection rows. The read that called it counts
- * them, once it completes.
+ * Turn stored rows back into projection rows.
  *
  * @param plan - The table the rows came from, with its column kinds
  * @param raw - What SQLite returned

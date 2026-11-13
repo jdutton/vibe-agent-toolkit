@@ -346,10 +346,8 @@ two pairs in a prior session actively contradicted each other. Disagreement prin
 consensus no pair reported.
 
 **A capture with no usable measurement is LOST, and a lost capture voids the effect.** A failed row
-(named by its failure, or `memory`'s `ran out of heap`), a row of an exact-count facet (`io`,
-`work`) whose own repeats disagreed or were never tested (named by the reason its `compare` gives),
-and a capture that published no estimate for the command (`published no estimate`) are all lost:
-the arm prints `<reason> in N of M pairs` and
+(named by its failure, or `memory`'s `ran out of heap`) and a capture that published no estimate for
+the command (`published no estimate`) are both lost: the arm prints `<reason> in N of M pairs` and
 the effect is `NONE`, never a statistic of the pairs that happened to succeed, which would understate
 whatever failed the others. Nor is there an effect unless at least one pair's comparison judged the
 command `changed` or `unchanged`, in every facet: when every pair refused, the line is

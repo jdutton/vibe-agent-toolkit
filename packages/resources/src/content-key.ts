@@ -120,7 +120,6 @@
 
 import { createHash } from 'node:crypto';
 
-import { countWork } from '@vibe-agent-toolkit/utils';
 import { readDecodableBytes } from '@vibe-agent-toolkit/utils/fs';
 import { decodeTextContent, type TextProvenance } from '@vibe-agent-toolkit/utils/text';
 
@@ -246,8 +245,6 @@ export function parserKindForPath(filePath: string): ParserKind {
  * ```
  */
 export function computeContentKey(bytes: Uint8Array, parserKind: ParserKind): string {
-  countWork('content.hashed', 1);
-  countWork('content.hashedBytes', bytes.byteLength);
   const digest = createHash('sha256')
     .update(`${KEY_DOMAIN}\0${parserKind}\0`, 'utf-8')
     .update(bytes)
@@ -410,12 +407,7 @@ export async function readContentWithKey<K extends ParserKind>(
   const cap = inputBytes !== null && parserKind !== NO_PARSER_KIND ? inputBytes : null;
   const bytes = await readDecodableBytes(filePath, (size) => {
     const breach = cap === null ? undefined : inputBytesBreach(size, cap);
-    if (breach !== undefined) {
-      // The projection lane's read, and `readContentForParse`'s: a refused read
-      // never reaches `ParseDispatcher.parse`, so this is never counted twice.
-      countWork('parse.refused.inputCap.read', 1);
-      throw breach;
-    }
+    if (breach !== undefined) throw breach;
   });
   // `decodeTextContent` is the ONE decoder — see `utils`' text-content.ts. The
   // bytes handed to `computeContentKey` are the same ones, undecoded, on purpose:
