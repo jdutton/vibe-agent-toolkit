@@ -543,7 +543,11 @@ export async function withQueriedProjection<T>(
         for (const relation of lensRelationNames(lens)) absent.delete(relation);
         await store.writeDerived(evaluation.rows);
       });
-      const lensMs = performance.now() - lensStart;
+      // Exactly 0 when no lens was named, as `ProjectionProvenance.lensMs`
+      // promises. Timing the empty loop instead published whatever a GC pause or
+      // a descheduled thread put inside the span (2.97 ms on a loaded runner) as
+      // lens cost.
+      const lensMs = lenses.length === 0 ? 0 : performance.now() - lensStart;
       // The shared setup is done. Everything after this line is the caller's.
 
       /** Run one statement against the store, unless it names a relation a lens refused. */

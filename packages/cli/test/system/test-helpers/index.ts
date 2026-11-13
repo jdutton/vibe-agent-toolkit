@@ -48,3 +48,5 @@ export {
 } from './frontmatter-setup.js';
 
 export { createMarkdownGitFixture } from './projection-fixture.js';
+
+export { expectSecsWithinRun } from './duration-bound.js';

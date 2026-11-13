@@ -63,7 +63,7 @@ import {
 // the same name that returns a promise, and awaiting nothing yields a result
 // whose `stdout` is undefined — which surfaces as a YAML parse error, not as a
 // missing await.
-import { executeCli } from './test-helpers/index.js';
+import { executeCli, expectSecsWithinRun } from './test-helpers/index.js';
 
 const binPath = getBinPath(import.meta.url);
 
@@ -463,11 +463,12 @@ describe('vat resources query', () => {
     // reports a warm population on a two-file corpus as 0, and `> 0` is exactly
     // the assertion a `Date.now()` regression fails. The upper bound catches the
     // other direction — a field wired to the wrong term cannot be a subset of
-    // the run that contains it.
+    // the run that contains it. `expectSecsWithinRun` carries why that bound is
+    // rounded the way the field is: a population inside its run cannot exceed
+    // the run's rounded total, up to `Date.now()`'s 1 ms quantization.
     for (const run of [first, second]) {
-      expect(typeof run.data['populationSecs']).toBe('number');
       expect(run.data['populationSecs']).toBeGreaterThan(0);
-      expect(run.data['populationSecs']).toBeLessThanOrEqual(durationSecsOf(run.doc));
+      expectSecsWithinRun(run.data['populationSecs'], run.doc['durationMs']);
     }
   });
 
