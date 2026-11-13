@@ -484,7 +484,7 @@ Place `vibe-agent-toolkit.config.yaml` at project root:
 resources:
   include:
     - "docs/**/*.md"
-    - "agents/**/README.md"
+    - "skills/**/README.md"
   exclude:
     - "node_modules/**"
     - "**/test/fixtures/**"

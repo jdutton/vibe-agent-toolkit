@@ -1,8 +1,8 @@
 /**
  * The build / package / clear verb family, as fault-matrix cases: `vat skills build`,
- * `vat skills package`, `vat agent build`, `vat claude plugin build`, `vat build`,
- * `vat rag clear`, `vat cache clear`, `vat claude marketplace publish` (its publish-tree
- * lane), `vat skill test configure` and `vat agent import`.
+ * `vat skills package`, `vat claude plugin build`, `vat build`, `vat rag clear`,
+ * `vat cache clear`, `vat claude marketplace publish` (its publish-tree lane) and
+ * `vat skill test configure`.
  *
  * Each case builds one project under the case root (`r.project`), with any previous output
  * the verb replaces, and names the atomic units the verb writes: each must end byte-equal to
@@ -19,7 +19,6 @@ import type { SnapshotRewrite } from '@vibe-agent-toolkit/utils/testing';
 import type { Command } from 'commander';
 import * as YAML from 'yaml';
 
-import { createAgentCommand } from '../../../src/commands/agent/index.js';
 import { createBuildTopLevelCommand } from '../../../src/commands/build.js';
 import { createCacheCommand } from '../../../src/commands/cache/index.js';
 import { createMarketplaceCommand } from '../../../src/commands/claude/marketplace/index.js';
@@ -36,7 +35,6 @@ import { zipWithoutEntryTimes } from './zip-times.js';
 const MP = 'fx-mp';
 const PLUGIN = 'fx-plugin';
 const SKILL = 'fx-skill';
-const AGENT = 'fx-agent';
 const VERSION = '1.0.0';
 const PRIOR = '0.9.0';
 const CONFIG_FILE = 'vibe-agent-toolkit.config.yaml';
@@ -239,42 +237,6 @@ function skillsPackageCase(variant: PackageVariant): VerbCase {
   });
 }
 
-// --- `vat agent build` / `vat agent import` ------------------------------------------------
-
-const AGENT_MANIFEST = `metadata:\n  name: ${AGENT}\n  version: ${VERSION}\n  description: Reviews fixtures\n`
-  + 'spec:\n  llm:\n    provider: anthropic\n    model: claude-sonnet-5\n  prompts:\n    system:\n      $ref: ./prompts/system.md\n';
-
-/** The agent's output: `--output out` builds into `out/<agent>`. */
-const AGENT_OUT = `out/${AGENT}`;
-
-/** `vat agent build <agent> --output out`: fresh, or `--force` over a previous build. */
-function agentBuildCase(variant: 'output' | 'force'): VerbCase {
-  return projectCase({
-    id: `agent/build/${variant}`,
-    ...PACKAGES_SKILLS,
-    group: () => createAgentCommand(),
-    argv: (r) => ['build', safePath.join(r.project, 'agent'), '--output', safePath.join(r.project, 'out'), ...(variant === 'force' ? ['--force'] : [])],
-    prior: (r) => {
-      writeTree(safePath.join(r.project, 'agent'), [['agent.yaml', AGENT_MANIFEST], ['prompts/system.md', 'You review fixtures.\n']]);
-      if (variant === 'force') writeTree(safePath.join(r.project, AGENT_OUT), [['SKILL.md', skillMd(AGENT, PRIOR)], ['scripts/old.js', '// prior\n']]);
-    },
-    units: [AGENT_OUT],
-    sources: (r) => [...projectSources(r), safePath.join(r.project, 'agent')],
-  });
-}
-
-/** `vat agent import <SKILL.md>`: writes `agent.yaml` beside the skill. */
-function agentImportCase(): VerbCase {
-  return projectCase({
-    id: 'agent/import',
-    group: () => createAgentCommand(),
-    argv: (r) => ['import', safePath.join(r.project, 'skills', SKILL, 'SKILL.md')],
-    units: [`skills/${SKILL}/agent.yaml`],
-    // The skill's own files, not its directory: agent.yaml is written into it.
-    sources: (r) => projectSources(r, [...PROJECT_SOURCES.filter((name) => name !== 'skills'), ...SKILL_FILES.map(([path]) => `skills/${SKILL}/${path}`)]),
-  });
-}
-
 // --- `vat skill test configure` ------------------------------------------------------------
 
 /** `vat skill test configure fx-skill --max-turns 5`: rewrites the project config in place. */
@@ -372,8 +334,6 @@ export const BUILD_FAMILY_SHARDS = {
   'skills/package/o-fresh': { make: () => skillsPackageCase('o-fresh'), files: 15 },
   'skills/package/o-force': { make: () => skillsPackageCase('o-force'), files: 19 },
   'skills/package/o-occupied': { make: () => skillsPackageCase('o-occupied'), files: 16 },
-  'agent/build/output': { make: () => agentBuildCase('output'), files: 13 },
-  'agent/build/force': { make: () => agentBuildCase('force'), files: 15 },
   'plugin/build': { make: pluginBuildCase, files: 24 },
   'top-level-build': { make: topLevelBuildCase, files: 61 },
   'rag/clear/default': { make: () => ragClearCase('default'), files: 4 },
@@ -381,5 +341,4 @@ export const BUILD_FAMILY_SHARDS = {
   'cache/clear': { make: cacheClearCase, files: 3 },
   'marketplace/publish-tree': { make: marketplacePublishTreeCase, files: 8 },
   'skill/test/configure': { make: skillTestConfigureCase, files: 3 },
-  'agent/import': { make: agentImportCase, files: 2 },
 } as const satisfies Readonly<Record<string, MatrixShard>>;

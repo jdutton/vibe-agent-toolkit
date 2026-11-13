@@ -4,12 +4,12 @@ Which of VAT's commands read the filesystem to build a resource population, and 
 entry point. This exists to replace the standing claim *"~70 commands, 5 examined"* with a bounded
 list, so any change to enumeration knows exactly whose behaviour it must preserve.
 
-**Population: 71 commands** — 70 leaves plus `vat audit`, the only command group that is also
+**Population: 61 commands** — 60 leaves plus `vat audit`, the only command group that is also
 runnable in its own right (`vat audit [git-url-or-path]` alongside its `settings` subcommand).
 The population is re-derived from the built CLI by the method at the end of this page; do not
 correct the count by hand — re-run the recursion and replace the list.
 
-**24 enumerate. 47 do not.**
+**23 enumerate. 38 do not.**
 
 ## The enumeration entry points
 
@@ -98,7 +98,6 @@ share work between it and the phases beside it.
 | `vat build` | *runs* `skills build`, `claude plugin build` | `build.ts` → `runPhase` |
 | `vat validate` | *runs* `resources validate`, `resources check` (as a supervised child process), `skills validate` | `validate.ts` → `runPhase` |
 | `vat verify` | `crawl`, *plus runs* `resources validate`, `skills validate` | `verify.ts` → `runPhase` |
-| `vat agent build` | `crawl` + `registry-md` + `registry-md-html` | `agent/build.ts` |
 | `vat claude plugin build` | `crawl` + `registry-md` + `registry-md-html` | `claude/plugin/build.ts` |
 | `vat skills build` | `crawl` + `registry-md` + `registry-md-html` | `skills/build.ts` |
 | `vat skills package` | `crawl` + `registry-md` + `registry-md-html` | `skills/package.ts` |
@@ -143,11 +142,10 @@ reach and the projection is the extra one.
 
 ## Commands that do not enumerate
 
-The 47 remaining. The bulk are Admin-API calls over HTTPS — `claude org *` is 27 commands, of which
+The 38 remaining. The bulk are Admin-API calls over HTTPS — `claude org *` is 27 commands, of which
 25 appear here once `skills install` and `skills versions add` above are excluded — plus
 process-level commands that read JSON layers or a manifest rather than crawling.
 
-`agent`: `import`, `install`, `installed`, `list`, `run`, `uninstall`, `validate` ·
 `ard emit` ·
 `audit settings` ·
 `cache clear` ·
@@ -160,7 +158,6 @@ process-level commands that read JSON layers or a manifest rather than crawling.
 `workspaces members update` ·
 `claude plugin`: `install`, `list`, `uninstall` ·
 `doctor` ·
-`mcp`: `list-collections`, `serve` ·
 `rag`: `clear`, `query`, `stats` ·
 `skill test configure` · `skills install`
 
@@ -171,7 +168,7 @@ Three of these are on the list on a technicality worth stating — "does not enu
   `packages/cli/src/commands/cache/clear.ts › listedOrVanished()`, driven from `› clearCacheDirectory()`
   (it measures the tree its remove plan then takes).
 - `vat claude plugin install` `readdirSync`s the source tree it copies (four sites in
-  `claude/plugin/install.ts`) and `vat agent installed` `readdir`s the install directory.
+  `claude/plugin/install.ts`).
 - `vat ard emit` reads `vibe-agent-toolkit.config.yaml` plus the skill manifests that config already
   names, and never walks a tree to discover a population.
 - The `claude org skills list` / `delete` / `versions list` / `versions delete` verbs are pure
@@ -186,8 +183,8 @@ Three of these are on the list on a technicality worth stating — "does not enu
 `new Command(` cannot define this population: it sees construction sites, not the reachable tree.
 Two parsing details, because the recursion is re-run by hand and must land on the same number twice:
 a `Commands:` block ends at the first blank line — read past it and the `addHelpText('after', …)`
-prose on `audit`, `rag`, `agent` and `cache` parses as phantom subcommands — and Commander's
-built-in `help`, which only `mcp` prints, is not a leaf.
+prose on `audit`, `rag` and `cache` parses as phantom subcommands — and Commander's
+built-in `help`, wherever a group prints it, is not a leaf.
 
 ```bash
 walk() { local out; out=$(node packages/cli/dist/bin.js $1 --help 2>/dev/null)
@@ -210,7 +207,7 @@ corrected since that derivation cite the code site that decided them.
    importing one helper from `utils` or `agent-skills` marks every sink in that package reachable.
    The graph was right; the question was wrong.
 2. **Joining a leaf to its registrar file.** Wherever a group `index.ts` registers several leaves,
-   each leaf inherits the union of its siblings' lanes — `vat agent list` read as crawling, and the
+   each leaf inherits the union of its siblings' lanes — the
    four HTTPS-only `claude org skills` verbs read as `crawl`, while a runtime probe shows them
    reaching no sink.
 

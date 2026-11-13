@@ -13,13 +13,8 @@ import type { DetectedFormat, ScanOptions, ScanResult, ScanSummary } from '../ty
  * Directories that should ALWAYS be excluded from scanning to prevent catastrophic performance.
  * These contain tens of thousands of files and are never useful for discovery.
  *
- * Taken from `NEVER_CRAWL_GLOBS` rather than restated: this list and the crawler's
- * disagreed for as long as both existed (this one had both worktree paths, the
- * crawler's had neither), which meant "which directories does VAT refuse to walk"
- * had two answers depending on the entry point.
- *
  * `dist/` is NOT in it, and that omission is load-bearing: this scanner's whole
- * job is to find agents and skills and CLASSIFY each as source or build output
+ * job is to find skills and CLASSIFY each as source or build output
  * (`ScanResult.buildOutputs`), so a scanner that cannot walk `dist/` reports zero
  * build outputs and calls it a clean scan. It lives in `BUILD_OUTPUT_GLOBS`, which
  * the crawler's default excludes and this lane deliberately does not spread.
@@ -46,7 +41,7 @@ function statScanRoot(absolutePath: string): fs.Stats {
 }
 
 /**
- * Scan local filesystem for VAT agents and Agent Skills
+ * Scan local filesystem for Agent Skills and markdown resources
  *
  * @param options - Scan options
  * @returns Scan summary with all discovered files

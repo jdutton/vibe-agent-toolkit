@@ -14,11 +14,8 @@
  * result — is accepted; the rule is a syntactic floor and does not chase what
  * a variable holds.
  *
- * Option `allow: string[]` — repo-relative paths of the files permitted to
- * exit with a literal (the one `bin.ts` last-resort fallback that runs when
- * the enum module itself failed to load). Entries are matched at a path
- * segment boundary via `exempt-path-matcher.cjs`; give the full repo-relative
- * path, not a bare basename.
+ * No file is exempt from the literal floor, and the schema refuses an
+ * exemption list.
  *
  * ## Option `derived` — the code is DERIVED from the document, not chosen
  *
@@ -35,8 +32,7 @@
  *   `ExitCode.ERROR`, or a call to one of `derived.calls` (the derivations:
  *   `exitCodeForReport`, `exitCodeOfChild`, …). A ternary, a variable or a
  *   forwarded field is a code decided somewhere this rule cannot see.
- * - No file under `derived.paths` is exempt: the migration ratchet that once
- *   listed the undelivered verbs reached zero and went, and the option with it.
+ * - No file under `derived.paths` is exempt.
  *
  * ⚠️ What this cannot see: a document verb ending on a bare `ExitCode.OK` over a
  * document that says `error`. That is a runtime fact, pinned by the exit-code
@@ -55,7 +51,7 @@
 
 'use strict';
 
-const { createExemptDirectoryMatcher, createExemptPathMatcher, isTestFile } = require('./exempt-path-matcher.cjs');
+const { createExemptDirectoryMatcher, isTestFile } = require('./exempt-path-matcher.cjs');
 
 /** The members a call site may name outright: neither is a claim about a document. */
 const UNDERIVED_MEMBERS = new Set(['OK', 'ERROR']);
@@ -134,7 +130,6 @@ module.exports = {
       {
         type: 'object',
         properties: {
-          allow: { type: 'array', items: { type: 'string' }, uniqueItems: true },
           derived: {
             type: 'object',
             properties: {
@@ -166,12 +161,8 @@ module.exports = {
   },
 
   create(context) {
-    const allow = context.options?.[0]?.allow ?? [];
     const derived = context.options?.[0]?.derived;
     const filename = context.filename ?? context.getFilename();
-    if (createExemptPathMatcher(allow)(filename)) {
-      return {};
-    }
 
     const inDerived = derived !== undefined
       && !isTestFile(filename)

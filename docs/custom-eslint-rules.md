@@ -196,10 +196,9 @@ listed file with the exemption lifted and requires the entries to be sorted sour
 own path, each with its reason — never a ratchet of offenders, and asserted both ways all the same.
 A file-level exemption cannot see a new call in a file already listed, so this list pins the EXACT
 number of calls the rule flags in each file, and the ratchet test fails on one more or one fewer.
-When it reaches zero, delete the mechanism, not just the entries: `no-literal-process-exit` lost
-its `derived.legacy` option (its schema now refuses one) when the last verb derived its exit code,
-and `no-stdout-outside-writer`'s `allowFiles` keeps only `commands/agent/run.ts`, a protocol leaf
-whose stdout is not a document.
+When it reaches zero, delete the mechanism, not just the entries: the rule's schema then refuses
+the option, as `no-literal-process-exit` (`allow`, `derived.legacy`) and `no-stdout-outside-writer`
+(`allowFiles`) do.
 
 ## Why This Matters for Agentic Development
 

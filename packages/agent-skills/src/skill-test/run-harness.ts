@@ -1189,10 +1189,8 @@ export interface DryRunSummaryInput {
   /**
    * Absolute path where a REAL run would write provenance.json.
    *
-   * Not written by a dry run, and the summary line says so. It used to be written —
-   * from the same block that wiped the previous run's grading/friction/baseline
-   * artifacts — which made "preview the cost" a destructive operation against the
-   * results the operator was about to read.
+   * Not written by a dry run, and the summary line says so: previewing the cost
+   * must never be destructive against the previous run's results.
    */
   provenancePath: string;
   /** Content fingerprint from the staged manifest. */
@@ -1494,16 +1492,9 @@ function resolveGraderOutDir(dirToken: string): string {
  * workspace `<workspacesRoot>/<arm>/<id>`, ALWAYS — empty when the eval declares
  * no input `files` (see {@link stageEvalWorkspaces}).
  *
- * This used to return undefined for a file-less eval, which made the executor
- * fall back to running inside the staged subject dir. That fallback was the
- * quiet half of the `--baseline` control defect: the skill-absent arm's cwd
- * was the skill.
- *
- * The per-arm segment closes the OTHER half, found a round later: without it both
- * arms of one eval shared a single writable directory AND ran concurrently, so
- * the control arm could read the treatment arm's output files and answer from
- * them. Keyed on the eval id alone this is a pure function of the eval; the arm
- * is what makes the two runs independent.
+ * Never undefined: a fallback to the staged subject dir would make the
+ * skill-absent arm's cwd the skill. The per-arm segment keeps the two arms, which
+ * run concurrently, from sharing one writable directory.
  *
  * The segment is an OPAQUE per-run token, never the arm's name — this path is
  * quoted verbatim to the executor as its working directory, so `…/without/e1`
@@ -1720,8 +1711,7 @@ function resolveExecutorEnvForEval(
  * The arms are meant to differ in the skill and nothing else, so any var withheld
  * from one side is a confound. A control arm silently spawned without `PATH` or
  * without its declared fixtures still runs — it just does worse, which reports as
- * skill lift. That failure is invisible unless the withholding is announced, and
- * `dropped` was previously computed and thrown away.
+ * skill lift. That failure is invisible unless the withholding is announced.
  */
 function scrubAndReportControlArmEnv(
   env: NodeJS.ProcessEnv,
@@ -1848,20 +1838,10 @@ async function gradeOneArm(item: EvalWorkItem, ctx: EvalRunContext): Promise<Eva
  * TREATMENT arm: rethrow. `grading.json` is the treatment arm, the verdict is
  * computed from it, and a run that cannot produce one has produced nothing — there
  * is no partial result worth writing, so the throw propagates through `runPipeline`
- * to `skillTestFailureReason` exactly as before (`ERROR`, reason `internal`).
+ * to `skillTestFailureReason` (`ERROR`, reason `internal`).
  *
- * CONTROL arm: record and continue. Every failure mode of this arm — executor spawn
- * error, stall, wall-timeout, grader non-zero exit, grader wrote no fragment,
- * fragment unparseable twice, nonce mismatch, and a grader that returned a
- * different number of expectations than the eval declares — used to propagate out of
- * `runPipeline` and annihilate the treatment work already completed and billed. A
- * two-eval probe was measured doing precisely that: both treatment executors ran,
- * both treatment graders ran, the control arm's executor timed out, the run threw,
- * and `results/` was left holding `provenance.json` and nothing else. The operator
- * paid for the whole run and got no grading.json, no baseline.json, and an error
- * that did not even say which arm had died.
- *
- * Recording it instead costs the DELTA, which is the only thing the control arm
+ * CONTROL arm: record and continue, so a control failure never annihilates the
+ * treatment work already completed and billed. Recording it costs the DELTA, which is the only thing the control arm
  * feeds, and the delta already has a truthful way to be absent (`null`). The
  * treatment artifacts are written, the failure is named on stderr as it happens and
  * again in `baselineIntegrity.controlArmFailures`, and `armExpectationSkew` sees an
@@ -1927,12 +1907,8 @@ function unparseableGradingFragment(
  * The control arm ran out of rate-limit retries — record it and let the run live.
  *
  * The retryable case is handled correctly by {@link runEvalWorker} and must stay that
- * way; this is the EXHAUSTED case, which used to be indistinguishable from it. A
- * control executor rate-limited on every attempt threw after five retries, taking
- * down a run in which both treatment executors and both treatment graders had already
- * completed and been billed, leaving `results/` holding `provenance.json` and nothing
- * else — the exact failure {@link runEvalWorker} exists to prevent, reached by the one
- * error class it had to let through.
+ * way; this is the EXHAUSTED case, which must not take down a run whose treatment
+ * work is already billed.
  *
  * The treatment arm still hard-fails: there is no treatment result to salvage, which
  * is the same asymmetry {@link EvalWorkOutcome} documents.
@@ -2001,10 +1977,7 @@ function withoutGraderContamination(fragment: EvalFragment): EvalFragment {
  * How each arm is named in every message that can only be about one of them.
  *
  * Spelled out rather than `'with'`/`'without'`: the internal names are a preposition
- * apart and the operator-facing question is "which half of my experiment died", so
- * `Executor timed out for eval "e1"` — the actual text a destroyed run used to print
- * — named neither the arm nor the fact that the OTHER arm had already succeeded and
- * been thrown away.
+ * apart and the operator-facing question is "which half of my experiment died".
  */
 const ARM_LABEL: Readonly<Record<EvalArm, string>> = {
   with: 'treatment arm (skill available)',
@@ -2114,16 +2087,9 @@ function resolveSkillContentNeedles(
  * staged is skipped; one that is there but cannot be read propagates.
  *
  * A declared `files[]` entry is legitimately a DIRECTORY — staging does `existsSync`
- * then a recursive `cpSync` — so this walks one. It used to call `readFileSync` on
- * the declared path, get `EISDIR`, and skip it: the directory's whole contents were
- * in the arm's cwd and absent from the exclusion set, and two runs differing ONLY in
- * whether the same bytes were declared as a file or as their parent directory
- * reported `contaminated: false` and `contaminated: true` (with a `skill-content`
- * hit, and a summary telling the operator to uninstall an ambient plugin copy that
- * does not exist).
+ * then a recursive `cpSync` — so this walks one.
  *
- * The `catch`'s old claim that skipping "errs the safe way: noisier, never blinder"
- * is BACKWARDS for this signal. Over-reporting is the harm here, because a false
+ * Over-reporting is the harm here, because a false
  * `contaminated: true` is actioned by discarding a run that was fine. So only an
  * ABSENT fixture is skipped (staging does `existsSync` then `cpSync`, so a declared
  * file missing at the source is simply not in the workspace); a fixture that is
@@ -2486,10 +2452,8 @@ function writeResultJson(path: string, value: unknown): void {
 /**
  * Where a results artifact goes when it fails the fail-closed gate.
  *
- * The gate throws and `results/` is deliberately RETAINED, so the file that failed
- * used to sit there under its authoritative name — the one artifact whose schema
- * violation is BY DEFINITION a harness bug, indistinguishable in a CI archive from a
- * good one until the next run's wipe. Renamed rather than deleted: the bytes are what
+ * The gate throws and `results/` is deliberately RETAINED, so the failed file must
+ * not keep its authoritative name. Renamed rather than deleted: the bytes are what
  * a maintainer needs in order to see which refine tripped, and a name ending in
  * `.rejected` cannot be mistaken for the artifact a reader came for.
  */
@@ -2587,21 +2551,15 @@ function deltaTruncationFor(skipped: SkippedEvalsSummary | undefined): DeltaTrun
  * number followed by the caveat that explains it — the banner is the only line that
  * says the number means nothing, so it must never be the one scrolled away.
  *
- * ⚠️ IT IS NOT LITERALLY LAST ON THE SCREEN, and this docblock used to say it was.
- * The CLI prints `Harness:`, `Results:`, `Workspaces:` and `Summary:` AFTER the
+ * ⚠️ IT IS NOT LITERALLY LAST ON THE SCREEN. The CLI prints `Harness:`, `Results:`, `Workspaces:` and `Summary:` AFTER the
  * harness returns, so 2–4 lines always follow the banner. What this ordering buys is
  * that the banner is not separated from its delta by up to ~1250 rows of friction —
  * a bounded, short tail after it, not none. Moving those CLI lines above the harness
  * report is the CLI's call, not this module's.
  *
- * THREE conditions have to hold before the caveat is dropped, not two. A DEGRADED
- * scan is neither contaminated nor incomparable, so a two-clause gate printed
- * `Baseline delta: +0 (with skill: 2/2, without skill: 2/2).` and exited 0 while
- * `baseline.json` carried `degraded: [...]` and an `integrity.summary` ending in a
- * `⚠️ DEGRADED SCAN: …` sentence that was composed, written to the artifact, and
- * never emitted anywhere. Everything this module says about telling "checked and clean"
- * apart from "checked with the blunt instrument" was true of the artifact and false
- * of the terminal — and the terminal is the only surface an operator reads.
+ * THREE conditions have to hold before the caveat is dropped, not two: a DEGRADED
+ * scan is neither contaminated nor incomparable, and the terminal is the only
+ * surface an operator reads.
  *
  * A CONTAMINATED run still reports its number, deliberately. Contamination does not
  * make the subtraction illegal — both arms were graded to the same depth, so the
@@ -2970,10 +2928,7 @@ async function assertVatWroteArtifacts(paths: ArtifactPaths, baselineRun: boolea
  * Resolve WHERE this run lives, and whether the harness owns that location.
  *
  * `--out` names the harness root exactly; `--workdir` names the BASE the root is
- * derived under. They are mutually exclusive: passing both used to silently
- * discard `--workdir` — the run went entirely to `--out` and the `--workdir` path
- * was never even created — so an operator using the pair to separate the
- * executor's cwd from the staged trees got no separation and no warning.
+ * derived under. They are mutually exclusive.
  *
  * `harnessCreated` is true only for the derived-under-OS-tmp case; an explicit
  * `--out` or `--workdir` is a location the user owns and is never auto-removed.
@@ -3010,10 +2965,8 @@ function resolveHarnessLocation(
   }
 
   return {
-    // `--out` is RESOLVED to an absolute path, not taken verbatim. A relative
-    // `--out ./h` used to be stored as `./h` and then used as a contamination
-    // needle — a two-character string that matches almost any transcript, so every
-    // eval reported contaminated and the operator was told to discard a clean run.
+    // `--out` is RESOLVED to an absolute path, not taken verbatim: it is a
+    // contamination needle, and `./h` would match almost any transcript.
     harnessRoot: opts.out === undefined
       ? resolveHarnessRoot([opts.subject], opts.workdir)
       : safePath.resolve(opts.out),
@@ -3485,7 +3438,7 @@ async function runHarnessCollecting(opts: RunHarnessOptions, leftovers: unknown[
 
     // Friction FIRST, then the baseline report — the ORDER is the point. Friction is
     // capped at 50 lines of 2000 characters, so emitting it after the ⚠️ contaminated
-    // banner (which is what the `finally` used to do) could put ~1250 terminal rows
+    // banner could put ~1250 terminal rows
     // between the operator and the only line saying the delta above is meaningless.
     // Emitting it here leaves nothing of vat's own between the delta and its caveat;
     // `emitFrictionOnce` keeps the `finally` call a no-op so a normal run reports it
@@ -3548,10 +3501,7 @@ async function runHarnessCollecting(opts: RunHarnessOptions, leftovers: unknown[
  * The test-facing seam — every helper the unit tests reach that is NOT part of
  * this module's API.
  *
- * These used to be forty-four separate `export`s, indistinguishable at the export
- * keyword from the seven names the skill-test barrel actually publishes, so
- * "is this API?" was a question for a JSDoc rather than a grep. Now it is a
- * grep: a name here is reachable by a test and by nothing else. Nothing under
+ * A name here is reachable by a test and by nothing else. Nothing under
  * `src/` imports `__internal` and no barrel re-exports it — a dev-tools test
  * holds both lines. Types stay exported on their own: an object cannot carry
  * them, and a type is not a call site.

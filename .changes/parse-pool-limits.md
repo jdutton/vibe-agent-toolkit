@@ -24,8 +24,8 @@
   `validation` does not move them, and an `allow` entry there naming the file clears the finding.
   `allow` governs reporting only: the packager refuses every refused file a skill reaches,
   `SKILL.md` included, before anything is written, so `vat skills validate` can exit 0 under an
-  `allow` entry while `vat skills build` (and `vat claude plugin build`, `vat agent build`, `vat
-  skill test`, `vat skills package`) refuses the skill. `vat skills package` and `vat skills
+  `allow` entry while `vat skills build` (and `vat claude plugin build`, `vat skill test`, `vat
+  skills package`) refuses the skill. `vat skills package` and `vat skills
   install` read no project config.
 - **A `!!set`, `!!omap`, `!!timestamp` or `!!binary` frontmatter root fails skill validation.** It
   is "not a YAML mapping" (`SKILL_MISSING_FRONTMATTER`), where it used to pass as an empty mapping;

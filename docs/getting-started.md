@@ -1,6 +1,6 @@
 # Getting Started with Vibe Agent Toolkit
 
-This guide will help you set up and start developing portable AI agents with the toolkit.
+This guide will help you set up the toolkit and start working with skills, plugins and knowledge resources.
 
 ## Prerequisites
 
@@ -305,41 +305,6 @@ The audit command checks for:
 - Console compatibility (tool availability)
 
 See the [audit command reference](../packages/cli/docs/audit.md) and [validation codes](./validation-codes.md) for complete validation rules.
-
-### Importing Skills
-
-Convert Agent Skills to VAT agent format:
-
-```bash
-# Import skill to agent.yaml
-vat agent import my-skill/SKILL.md
-
-# Import with custom output path
-vat agent import my-skill/SKILL.md --output my-agent/agent.yaml
-
-# Force overwrite existing agent.yaml
-vat agent import my-skill/SKILL.md --force
-```
-
-Typical workflow:
-
-```bash
-# 1. Create or edit SKILL.md
-vim my-skill/SKILL.md
-
-# 2. Validate before import
-vat audit my-skill/SKILL.md
-
-# 3. Import to VAT format
-vat agent import my-skill/SKILL.md
-
-# 4. Use VAT tooling
-cd my-skill
-vat test
-vat package
-```
-
-See [Import Command Documentation](./cli/import.md) for more details.
 
 ## Next Steps
 

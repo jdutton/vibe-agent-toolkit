@@ -319,23 +319,11 @@ vat rag index --config docs-rag   # Uses named store
 vat rag query "error handling"     # Uses default store
 ```
 
-**Use When**: Building production agents, complex projects with multiple RAG stores.
+**Use When**: Production projects, or projects with multiple RAG stores.
 
-### Pattern 3: Agent Knowledge Base
+### Pattern 3: Querying a Store from Code
 
-Agent manifest references RAG store:
-
-```yaml
-# agent.yaml
-spec:
-  tools:
-    - name: knowledge_base
-      type: rag
-      config:
-        store: docs-rag  # References config
-```
-
-Agent queries at runtime:
+Your own code queries a built store read-only:
 
 ```typescript
 const ragProvider = await createRAGProvider({
@@ -351,7 +339,7 @@ const result = await ragProvider.query({
 // Use result.chunks for context
 ```
 
-**Use When**: Building agents that need to reference documentation.
+**Use When**: Your own application needs to retrieve from indexed documentation.
 
 ### Pattern 4: Multi-Store Project
 

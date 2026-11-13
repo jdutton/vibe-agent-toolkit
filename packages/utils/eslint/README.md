@@ -201,8 +201,8 @@ privilege produces a visible `skip()` rather than a failure or a silently-swallo
 code** there is deliberately no wrapper to route through: `createSymlink()` lives on the `/testing`
 subpath, and pointing production code at a test helper would be worse advice than the bare call.
 There the guidance is a junction for a directory link on win32 (no elevation required), or catching
-the failure and naming the missing privilege. Declaring a platform out of scope is legitimate —
-say so in an `eslint-disable` justification, which is what `vat agent install --dev` does.
+the failure and naming the missing privilege. Declaring a platform out of scope, or taking the
+junction form deliberately, is legitimate — say so in an `eslint-disable` justification.
 
 `exemptFiles` matters here: the implementation file holding the sanctioned `symlinkSync` is not a
 test file, so it needs an explicit exemption once the rule covers shipped code.

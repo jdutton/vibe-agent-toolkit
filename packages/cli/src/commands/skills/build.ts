@@ -91,13 +91,8 @@ export interface SkillsBuildCommandOptions {
 }
 
 /**
- * What a mis-scoped `vat skills build` used to do.
- *
- * The twin of the `vat skills validate` hole, and strictly the worse of the two:
- * a mistyped path printed "No skills configuration found — nothing to build" and
- * exited **0**, so a release pipeline whose build step named the wrong directory
- * published having built nothing, with a green tick. Measured on a project whose
- * bare `vat skills build` finds a skill: `vat skills build nope` exited 0.
+ * The scope subject for a mis-scoped `vat skills build`: a mistyped path must
+ * not exit 0 having built nothing.
  */
 const SCOPE_SUBJECT: SkillsScopeSubject = {
   command: 'vat skills build',
@@ -226,10 +221,7 @@ Example:
  * Render every emitted pre-build finding, each labelled with its own severity.
  *
  * `allErrors` is the full emitted set INCLUDING info (its name lies — see the
- * doc comment on `PackagingValidationResult`). Walking only the errors plus the
- * `ALLOW_EXPIRED` subset of the warnings, which is what this used to do,
- * dropped every other warning and every info finding from a report that had
- * already decided to abort the build.
+ * doc comment on `PackagingValidationResult`), never only the errors.
  *
  * `verbose` picks how much of that set is spelled out, never how much of it is
  * COUNTED: the heading is built from `allErrors` either way, so the severity
@@ -385,11 +377,8 @@ interface ValidateSkillInput {
  * Run the PRE-build source validation for one skill and REPORT the verdict —
  * never act on it.
  *
- * This used to `process.exit(1)` from inside the per-skill loop, so a run named
- * the first bad skill and nothing else. Measured on a 90-skill adopter: 3 of the
- * 28 errors and 1 of the 6 broken skills, which is six full build cycles to
- * discover the work. Returning the failure lets {@link runSkillBuild} collect
- * every one of them and fail once, at the end, with the whole list.
+ * Returning the failure (never exiting from the loop) lets {@link runSkillBuild}
+ * collect every failing skill and fail once, at the end, with the whole list.
  *
  * The returned issues are `allErrors` — the full EMITTED set including
  * warnings and info (its name lies; see `PackagingValidationResult`) — so the
@@ -590,8 +579,8 @@ function issuesBySkill(input: SkillsBuildWorkInput): Map<string, ValidationIssue
  *
  * Every finding is on the envelope — pre-build, packaging, post-build and the
  * run's own (`ALLOW_UNUSED`) — at every verbosity: `--verbose` changes stderr
- * only. A row carries its status, never a second list. The four failure
- * populations the old document split into four lists are one list here, told
+ * only. A row carries its status, never a second list. Failure populations
+ * are one list here, told
  * apart by code: a pre-build rejection (`skillsFailedValidation`), a packaging
  * throw (`skillsFailed`, `SKILL_PACKAGING_FAILED`), and a bundle that failed its
  * post-build gate (counted in `skillsBuilt`, its findings on the envelope).
@@ -1179,8 +1168,8 @@ function judgeOutcomes(
 
 /**
  * Leave the run on the first packager throw that is not the packager refusing
- * the skill's own content — the contract `vat skills package`, `vat agent
- * build`, `vat claude plugin build` and `vat skill test run` implement, through
+ * the skill's own content — the contract `vat skills package`, `vat claude
+ * plugin build` and `vat skill test run` implement, through
  * the same predicate. Such a throw is not the adopter's to fix, so it is never a
  * `SKILL_PACKAGING_FAILED` finding telling them to: it is rethrown as itself and
  * published by its own code (`INTERNAL_ERROR` when it has none). The plan it is

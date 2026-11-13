@@ -5,7 +5,6 @@
  * - XML tags in name field
  * - Empty/whitespace description
  * - Type guard edge cases (non-string name/description)
- * - Schema validation for VAT-generated skills
  */
 
 import vm from 'node:vm';
@@ -29,16 +28,12 @@ import {
  * they point INTO lives in `location`. Both entry points now take that file, so
  * these thin wrappers supply one fixture location for every case below.
  */
-const FIELD_FRONTMATTER = 'frontmatter';
 const FIELD_FRONTMATTER_NAME = 'frontmatter.name';
 const FIELD_FRONTMATTER_DESC = 'frontmatter.description';
 const SKILL_LOCATION = 'skills/demo/SKILL.md';
 
-function validateFrontmatterSchema(
-	frontmatter: Record<string, unknown>,
-	isVATGenerated: boolean,
-): ValidationIssue[] {
-	return validateFrontmatterSchemaIn(frontmatter, isVATGenerated, SKILL_LOCATION);
+function validateFrontmatterSchema(frontmatter: Record<string, unknown>): ValidationIssue[] {
+	return validateFrontmatterSchemaIn(frontmatter, SKILL_LOCATION);
 }
 
 function validateFrontmatterRules(frontmatter: Record<string, unknown>): ValidationIssue[] {
@@ -157,86 +152,58 @@ function runPatternUnderDeadline(
 describe('validateFrontmatterSchema', () => {
 	describe('valid frontmatter', () => {
 		it('should return no issues for valid frontmatter', () => {
-			const issues = validateFrontmatterSchema(validFrontmatter(), false);
-			expect(issues).toHaveLength(0);
-		});
-
-		it('should return no issues for valid VAT-generated frontmatter', () => {
-			const issues = validateFrontmatterSchema(
-				validFrontmatter({ metadata: { version: '1.0.0' } }),
-				true,
-			);
+			const issues = validateFrontmatterSchema(validFrontmatter());
 			expect(issues).toHaveLength(0);
 		});
 	});
 
 	describe('optional name and description in base schema', () => {
 		it('should not report issues when name is absent (optional)', () => {
-			const issues = validateFrontmatterSchema({ description: 'Valid description' }, false);
+			const issues = validateFrontmatterSchema({ description: 'Valid description' });
 
 			const issue = findIssueByCode(issues, 'SKILL_MISSING_NAME');
 			expect(issue).toBeUndefined();
 		});
 
 		it('should report SKILL_MISSING_NAME when name is empty string', () => {
-			const issues = validateFrontmatterSchema({ name: '', description: 'Valid' }, false);
+			const issues = validateFrontmatterSchema({ name: '', description: 'Valid' });
 
 			const issue = findIssueByCode(issues, 'SKILL_MISSING_NAME');
 			expect(issue).toBeDefined();
 		});
 
 		it('should not report issues when description is absent (optional)', () => {
-			const issues = validateFrontmatterSchema({ name: 'my-skill' }, false);
+			const issues = validateFrontmatterSchema({ name: 'my-skill' });
 
 			const issue = findIssueByCode(issues, 'SKILL_MISSING_DESCRIPTION');
 			expect(issue).toBeUndefined();
 		});
 
 		it('should report SKILL_MISSING_DESCRIPTION when description is empty string', () => {
-			const issues = validateFrontmatterSchema({ name: 'my-skill', description: '' }, false);
+			const issues = validateFrontmatterSchema({ name: 'my-skill', description: '' });
 
 			const issue = findIssueByCode(issues, 'SKILL_MISSING_DESCRIPTION');
 			expect(issue).toBeDefined();
 		});
 	});
 
-	describe('required name and description in VAT schema', () => {
-		it('should report SKILL_MISSING_NAME when name is absent in VAT mode', () => {
-			const issues = validateFrontmatterSchema(
-				{ description: 'Valid', metadata: { version: '1.0.0' } },
-				true,
-			);
-
-			expectIssueAt(issues, 'SKILL_MISSING_NAME', 'error', FIELD_FRONTMATTER);
-		});
-
-		it('should report SKILL_MISSING_DESCRIPTION when description is absent in VAT mode', () => {
-			const issues = validateFrontmatterSchema(
-				{ name: 'my-skill', metadata: { version: '1.0.0' } },
-				true,
-			);
-
-			expectIssueAt(issues, 'SKILL_MISSING_DESCRIPTION', 'error', FIELD_FRONTMATTER);
-		});
-	});
-
 	describe('invalid name format', () => {
 		it('should report SKILL_NAME_INVALID for uppercase name', () => {
-			const issues = validateFrontmatterSchema(validFrontmatter({ name: 'MySkill' }), false);
+			const issues = validateFrontmatterSchema(validFrontmatter({ name: 'MySkill' }));
 
 			const issue = expectIssueAt(issues, 'SKILL_NAME_INVALID', 'error', FIELD_FRONTMATTER_NAME);
 			expect(issue?.fix).toContain('lowercase');
 		});
 
 		it('should report SKILL_NAME_INVALID for name with spaces', () => {
-			const issues = validateFrontmatterSchema(validFrontmatter({ name: 'my skill' }), false);
+			const issues = validateFrontmatterSchema(validFrontmatter({ name: 'my skill' }));
 
 			const issue = findIssueByCode(issues, 'SKILL_NAME_INVALID');
 			expect(issue).toBeDefined();
 		});
 
 		it('should report SKILL_NAME_INVALID for name starting with hyphen', () => {
-			const issues = validateFrontmatterSchema(validFrontmatter({ name: '-my-skill' }), false);
+			const issues = validateFrontmatterSchema(validFrontmatter({ name: '-my-skill' }));
 
 			const issue = findIssueByCode(issues, 'SKILL_NAME_INVALID');
 			expect(issue).toBeDefined();
@@ -246,31 +213,10 @@ describe('validateFrontmatterSchema', () => {
 	describe('description too long', () => {
 		it('should report SKILL_DESCRIPTION_TOO_LONG when over 1024 chars', () => {
 			const issues = validateFrontmatterSchema(
-				validFrontmatter({ description: 'x'.repeat(1025) }),
-				false,
-			);
+				validFrontmatter({ description: 'x'.repeat(1025) }));
 
 			const issue = expectIssueAt(issues, 'SKILL_DESCRIPTION_TOO_LONG', 'error', FIELD_FRONTMATTER_DESC);
 			expect(issue?.message).toContain('1025');
-		});
-	});
-
-	describe('VAT-generated schema', () => {
-		it('should return no mapped issues when VAT schema fails on unmapped fields', () => {
-			// VAT schema requires metadata.version, but the mapper only handles
-			// name/description fields, so unmapped errors produce no issues
-			const issues = validateFrontmatterSchema(validFrontmatter(), true);
-			expect(issues).toHaveLength(0);
-		});
-
-		it('should still detect name errors under VAT schema', () => {
-			const issues = validateFrontmatterSchema(
-				{ name: 'Invalid Name!', description: 'Valid', metadata: { version: '1.0.0' } },
-				true,
-			);
-
-			const issue = findIssueByCode(issues, 'SKILL_NAME_INVALID');
-			expect(issue).toBeDefined();
 		});
 	});
 });
@@ -313,7 +259,7 @@ describe('validateFrontmatterRules', () => {
 		it('reports SKILL_NAME_INVALID alone for a name containing <', () => {
 			const frontmatter = validFrontmatter({ name: '<b>x</b>' });
 			const issues = [
-				...validateFrontmatterSchema(frontmatter, false),
+				...validateFrontmatterSchema(frontmatter),
 				...validateFrontmatterRules(frontmatter),
 			];
 

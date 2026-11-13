@@ -11,8 +11,6 @@ import { RULE_TESTER_CASES, type RuleCases, expectRulePasses, loadLocalRule, rul
 
 const RULE = 'no-literal-process-exit';
 const LINTED = '/repo/packages/cli/src/commands/build.ts';
-const BIN_FALLBACK = 'packages/cli/src/bin.ts';
-const ALLOW_BIN = [{ allow: [BIN_FALLBACK] }];
 
 /** A file under the derived scope, and one outside it. */
 const DERIVED_FILE = '/repo/packages/cli/src/commands/okf/validate.ts';
@@ -38,9 +36,6 @@ const CASES: RuleCases = {
     { code: 'server.exit(1);', filename: LINTED },
     { code: 'exit(1);', filename: LINTED },
     { code: 'const o = { exitCode: 1 };', filename: LINTED },
-    // The declared last-resort fallback file, named by repo-relative path.
-    { code: 'process.exit(1);', filename: `/repo/${BIN_FALLBACK}`, options: ALLOW_BIN },
-    { code: 'process.exitCode = 2;', filename: String.raw`C:\repo\packages\cli\src\bin.ts`, options: ALLOW_BIN },
 
     // `derived`: the two members that are not claims about a document, and the derivations.
     { code: 'process.exit(ExitCode.OK);', filename: DERIVED_FILE, options: DERIVED },
@@ -67,10 +62,8 @@ const CASES: RuleCases = {
     { code: 'process.exitCode = failed ? 2 : 0;', filename: LINTED, errors: [{ messageId: 'literalExitCode' }] },
     // Nested in a function: still the same call.
     { code: 'function main() { if (bad) { process.exit(1); } }', filename: LINTED, errors: [{ messageId: 'literalExit' }] },
-    // The allow list names ONE file; a sibling with the same basename elsewhere is not it.
-    { code: 'process.exit(1);', filename: '/repo/packages/lab/src/bin.ts', options: ALLOW_BIN, errors: [{ messageId: 'literalExit' }] },
-    // No options at all: nothing is allowed.
-    { code: 'process.exit(1);', filename: `/repo/${BIN_FALLBACK}`, errors: [{ messageId: 'literalExit' }] },
+    // No file is exempt, `bin.ts` included.
+    { code: 'process.exit(1);', filename: '/repo/packages/cli/src/bin.ts', errors: [{ messageId: 'literalExit' }] },
 
     // `derived`: FINDINGS may not be NAMED, even outside an exit call.
     { code: 'process.exit(ExitCode.FINDINGS);', filename: DERIVED_FILE, options: DERIVED, errors: [{ messageId: 'findingsNotDerived' }] },
@@ -96,6 +89,15 @@ describe(RULE, () => {
     expect(() => {
       ruleTester.run(RULE, loadLocalRule(`${RULE}.cjs`), {
         valid: [{ code: 'process.exit(ExitCode.OK);', filename: DERIVED_FILE, options: [{ derived: { ...DERIVED_OPTION, legacy: [] } }] }],
+        invalid: [],
+      });
+    }).toThrow(/additional properties/i);
+  });
+
+  it('refuses an `allow` exemption list — no file may exit with a literal', () => {
+    expect(() => {
+      ruleTester.run(RULE, loadLocalRule(`${RULE}.cjs`), {
+        valid: [{ code: 'process.exit(ExitCode.OK);', filename: LINTED, options: [{ allow: [] }] }],
         invalid: [],
       });
     }).toThrow(/additional properties/i);

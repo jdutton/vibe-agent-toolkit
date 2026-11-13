@@ -54,20 +54,12 @@ export type ConventionalSuiteProbe = (skillDir: string) => boolean;
  *
  * Deduplicated because {@link resolveTestInputDirs} asks the question once for the
  * subject and once per entry in `projectSkills` — and a package that keeps its
- * skills in ONE directory (VAT's own `vat-development-agents` keeps thirteen there)
- * makes every one of those the same question about the same path.
+ * skills in ONE directory makes every one of those the same question.
  *
  * SCOPE: one RUN, not one call. Every lane here loops over the project's skills and
  * hands each of them the same project-wide `projectSkills`, so a probe scoped to the
  * CALL re-asks S questions per skill and S² per run about the same S paths — and the
- * memo hides that inside one call while doing nothing across the loop. Measured with
- * the lab on a 103-skill adopter, `vat resources validate`: 10,815 probes over 103
- * distinct paths, ~105 repeats each, and exactly 50% of that command's 21,648 user
- * filesystem calls. Run-scoped it is ~103, and the command's total ~10,900.
- *
- * It survived because VAT's own tree cannot show it: measured on `vat audit .`, 14
- * probes over 2 DISTINCT paths — 2² = 4 is invisible next to the constant factor, and
- * "14 probes" reads like a rounding error rather than a complexity class. Only a tree
+ * memo hides that inside one call while doing nothing across the loop. Only a tree
  * with a large S separates O(S) from O(S²) here.
  *
  * The memo is created per run and dies with it. It deliberately is NOT module-level,
@@ -110,10 +102,8 @@ function isInside(candidate: string, dir: string): boolean {
  *
  * With no `test:` block, the CONVENTION applies: the harness has always defaulted to
  * `<skill-root>/evals/evals.json`, reading, stripping and grading that suite whether
- * or not a `test:` block exists. This lane used to return `[]` there, so the two
- * disagreed about the same skill — and in the dangerous direction: the harness
- * protected the signal while the packager PUBLISHED the answer key. The default is
- * now a declaration in both lanes.
+ * or not a `test:` block exists, so the packager must agree or it PUBLISHES the
+ * answer key.
  *
  * The inference stays deliberately narrow. It is keyed on the suite FILE existing,
  * never on a directory's name, and it names exactly `<skill-root>/evals` — a

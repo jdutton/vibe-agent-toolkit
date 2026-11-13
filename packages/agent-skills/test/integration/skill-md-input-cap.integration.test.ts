@@ -10,10 +10,8 @@
 import { truncateSync, writeFileSync } from 'node:fs';
 
 import { isParseLimitError, ParseLimitError, parseRefusal } from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { importSkillToAgent } from '../../src/import.js';
 import { readDeclaredSkillName } from '../../src/skill-identity.js';
 import { createSkillContent, createTransitiveSkillStructure, setupTempDir, validateSkillWithTransitiveChecking } from '../test-helpers.js';
 
@@ -53,15 +51,6 @@ describe('a SKILL.md one byte past the parse input cap', () => {
     );
 
     expect(isParseLimitError(error) ? error.limit : error).toBe('inputBytes');
-  });
-
-  it('is refused by import, naming the cap', async () => {
-    const skillPath = oversizeSkill();
-
-    const result = await importSkillToAgent({ skillPath, outputPath: safePath.join(getTempDir(), 'agent.yaml') });
-
-    expect(result).toMatchObject({ success: false, refusal: 'INPUT_UNREADABLE' });
-    expect(result.success ? '' : result.error).toContain(parseRefusal(new ParseLimitError('inputBytes', CAP)).reason);
   });
 
   it('is read whole at exactly the cap, as a skill like any other', async () => {

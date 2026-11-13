@@ -45,7 +45,7 @@ describe('isSkillPackagingInputError', () => {
 });
 
 /**
- * A lane that reads sources of its own (`vat agent build`, `vat skill test run`) tells a source fault
+ * A lane that reads sources of its own (`vat skill test run`) tells a source fault
  * raised INSIDE the packager from its own by marking it at the packager call: the packager's content
  * refusal, with the classified fault kept as its cause so the refusal table still sees it.
  */

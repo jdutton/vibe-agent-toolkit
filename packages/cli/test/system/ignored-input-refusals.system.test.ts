@@ -2,10 +2,9 @@
  * Input a verb used to IGNORE is refused instead (system test).
  *
  * Each row here once exited 0 with the operator's argument silently dropped:
- * `resources validate --format bogus` wrote YAML, `mcp serve <bogus>
- * --print-config` printed a paste-ready block for a package that does not load,
- * and `audit --settings` without `--compat`, under `--user`, or naming a file
- * that is not there audited without the settings check it asked for.
+ * `resources validate --format bogus` wrote YAML, and `audit --settings` without
+ * `--compat`, under `--user`, or naming a file that is not there audited without
+ * the settings check it asked for.
  */
 
 import * as fs from 'node:fs';
@@ -77,13 +76,6 @@ describe('input a verb used to ignore is refused (system test)', () => {
     it('refuses an unknown --validation-mode', () => {
       expectChoicesRefusal(run(['resources', 'validate', 'docs', '--validation-mode', 'bogus']), 'strict, permissive');
     });
-  });
-
-  it('mcp serve --print-config refuses a package that does not load, printing no config', () => {
-    const result = run(['mcp', 'serve', 'vat-no-such-package-anywhere', '--print-config']);
-    expect(result.status, result.stderr).toBe(USAGE_EXIT);
-    expect(result.stdout).not.toContain('mcpServers');
-    expect(result.stderr).toContain('vat mcp serve failed');
   });
 
   describe('audit --settings', () => {

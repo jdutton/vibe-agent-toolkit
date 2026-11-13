@@ -4,7 +4,7 @@ Welcome to the Vibe Agent Toolkit documentation.
 
 ## Getting Started
 
-- **[Getting Started Guide](./getting-started.md)** - Set up your development environment and start building agents
+- **[Getting Started Guide](./getting-started.md)** - Set up your development environment and start working with skills, plugins and knowledge resources
 - **[Main README](../README.md)** - Overview of the toolkit and quick reference
 
 ## Development
@@ -14,8 +14,6 @@ Welcome to the Vibe Agent Toolkit documentation.
 - **[Build System](./build-system.md)** - `tsc --build`, composite projects, workspace protocol
 - **[Best Practices](./best-practices.md)** - Engineering standards, approved libraries, error handling
 - **[Custom ESLint Rules](./custom-eslint-rules.md)** - The `local/` rule pack and how to add a rule
-- **[Adding Runtime Adapters](./adding-runtime-adapters.md)** - Best practices for creating new runtime adapters
-- **[Demo Guidelines](./demo-guidelines.md)** - Every demo runs through a runtime adapter
 - **[Publishing Guide](./publishing.md)** - Version bumps, tagging, npm publishing, licensing conventions
 
 ## Contributing to VAT itself
@@ -29,7 +27,7 @@ Material for people working on VAT, not for people using it — [`contributing/`
 - **[Traps](./contributing/traps.md)** - Failures that look like something else: the tell and the remedy, one entry each
 - **[Extending the Monorepo](./contributing/extending-the-monorepo.md)** - Adding a package, a utility, a schema, a CLI command, a dev tool
 - **[No Version Constants](./contributing/no-version-constants.md)** - Why a hand-bumped integer never decides data validity, and what replaces it
-- **[Command → Enumeration Lane](./contributing/command-lane-table.md)** - Which of the 72 commands walk the filesystem, through which entry point
+- **[Command → Enumeration Lane](./contributing/command-lane-table.md)** - Which commands walk the filesystem, through which entry point
 - **[Debugging VAT](./contributing/vat-debugging.md)** - Reproducing bugs, `VAT_ROOT_DIR` adopter testing, failing-test-first fixes
 - **[Install Architecture](./contributing/vat-install-architecture.md)** - Design landscape for install/uninstall surfaces
 - **[linkAuth Engine](./contributing/vat-linkauth-contributing.md)** - Working on authenticated external-link resolution
@@ -91,8 +89,6 @@ design survives the worktree it was written in.
   record for the fact store and the extractor contract, with its living
   [hazard register](./architecture/fact-extractors-hazard-register.md) and the measured
   [parse limits](./architecture/fact-extractors-limits.md).
-- **[Result Envelope Design](./result-envelope-design.md)** — the complete specification for VAT
-  agent result envelopes: error constants, observability fields, and retry semantics.
 - **[Skill-Test Eval Runner (2026-06-24)](./research/2026-06-24-skill-test-eval-runner-design.md)**
   — the approved tiered/parallel/cacheable eval-runner design, still to be executed; it carries
   forward into [multi-runtime skill testing](./research/2026-06-25-multi-runtime-skill-testing-direction.md).
@@ -100,8 +96,6 @@ design survives the worktree it was written in.
   — measured behaviour of the plugin loader.
 - **[Compat Empirical Harness v2 (2026-05-23)](./research/2026-05-23-compat-empirical-harness-v2-design.md)**
   — design for the empirical compatibility harness.
-- **[State Persistence Patterns](./research/state-persistence-patterns.md)** — approaches to
-  session and conversation state.
 
 ## External Resources
 

@@ -21,7 +21,7 @@ export function createSkillCommand(): Command {
       'after',
       `
 Example:
-  $ vat skill review packages/my-agents/src/skills/ado/SKILL.md
+  $ vat skill review packages/my-skills/src/skills/ado/SKILL.md
 
 For detailed command help:
   $ vat skill <command> --help

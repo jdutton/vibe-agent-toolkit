@@ -111,13 +111,12 @@ const PROBE_FILES: Readonly<Record<string, string>> = {
   // asks `pathPresent`, so it is NOT on the list.
   'no-existssync': 'packages/claude-marketplace/src/inventory/extract-plugin.ts',
   'no-link-following-fs': 'packages/agent-skills/src/walk-link-graph.ts',
-  // The exit-code contract, declared repo-wide with no ratchet of product code
-  // (its `allow` names three example scripts that are not vat verbs).
+  // The exit-code contract, declared repo-wide with no exemption list.
   'no-literal-process-exit': REPO_WIDE_PROBE,
   // Scoped to `packages/*/src/**`: tests build schemas as fixtures.
   'explicit-zod-strictness': REPO_WIDE_PROBE,
   // Scoped by its own `paths` option to the CLI's command modules; the probe
-  // publishes through the document writer, so it is NOT on the `allowFiles` ratchet.
+  // publishes through the document writer.
   'no-stdout-outside-writer': 'packages/cli/src/commands/okf/validate.ts',
   // Scoped to product `src/`; the probe installs its handler through the helper, so
   // it is NOT the rule's one `allow` entry.

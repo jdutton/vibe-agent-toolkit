@@ -181,9 +181,6 @@ const DIRECT_PARSE_NOT_REPORTED_HERE: Readonly<Record<string, string>> = {
   'packages/agent-skills/src/validators/compat-detectors.ts':
     '`detectorFrontmatter` rethrows a refused parse for the one caller with no parse of its own — the compatibility analyzer, which names '
     + 'the file under `unchecked`. Every skill lane hands the detectors the frontmatter its own parse returned.',
-  'packages/agent-skills/src/import.ts':
-    '`vat agent import` converts the one SKILL.md the user named: a refused parse refuses the run (`INPUT_UNREADABLE`) with the parser\'s sentence. '
-    + 'There is no project allow list to consult.',
 };
 
 /** What a comment line starts with, once indentation is trimmed. */

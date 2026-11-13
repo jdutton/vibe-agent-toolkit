@@ -10,7 +10,6 @@
 
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
 import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { beforeAll, describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
@@ -18,7 +17,7 @@ import * as yaml from 'yaml';
 import { SKILLS_LIST_REPORT_SCHEMA, type SkillsListData } from '../../src/commands/skills/list-schema.js';
 import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 
-import { getBinPath, getMonorepoRoot } from './test-common.js';
+import { getBinPath, getFixturePath } from './test-common.js';
 
 // ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
 // child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
@@ -75,7 +74,7 @@ describe('skills list command (system test)', () => {
     expect(defaultParsed).toHaveProperty('context', 'project');
     expect(Array.isArray(defaultParsed.skills)).toBe(true);
 
-    // Should find at least the cat-agents skill
+    // Should find at least one of this repo's skills
     expect(defaultParsed.skills.length).toBeGreaterThan(0);
 
     // Verify result structure
@@ -113,8 +112,8 @@ describe('skills list command (system test)', () => {
   it('should list skills at specific path', () => {
     // Resolved relative to this test file (not process.cwd()) so it works whether
     // vitest is invoked from the monorepo root or from packages/cli directly.
-    const catAgentsPath = safePath.join(getMonorepoRoot(import.meta.url), 'packages/vat-example-cat-agents');
-    const result = spawnSync(NODE_EXECUTABLE, [binPath, 'skills', 'list', catAgentsPath], {
+    const fixturePath = getFixturePath(import.meta.url, 'skills-minimal');
+    const result = spawnSync(NODE_EXECUTABLE, [binPath, 'skills', 'list', fixturePath], {
       encoding: 'utf-8',
       cwd: process.cwd(),
     });
@@ -126,10 +125,9 @@ describe('skills list command (system test)', () => {
     // Should find the skills
     expect(parsed.skills.length).toBeGreaterThan(0);
     // The skill is authored at `resources/skills/SKILL.md` — a directory leaf of
-    // "skills" — but declares itself `vat-example-cat-agents`, which is also the
-    // output directory `vat skills build` gives it. List reports the declared
+    // "skills" — but declares itself `test-skill-1`. List reports the declared
     // name so it agrees with the build and with what install would install.
-    expect(parsed.skills.some(s => s.name === 'vat-example-cat-agents')).toBe(true);
+    expect(parsed.skills.some(s => s.name === 'test-skill-1')).toBe(true);
     expect(parsed.skills.some(s => s.name === 'skills')).toBe(false);
   });
 

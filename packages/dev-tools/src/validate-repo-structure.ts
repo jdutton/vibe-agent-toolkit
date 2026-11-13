@@ -23,7 +23,6 @@
  *   (ratcheted: the nonconforming list may only shrink)
  *
  * ORIGINAL RULES:
- * - No /examples directories in runtime packages
  * - No /scripts directories (except the packages `validateScriptsLocation` names)
  * - No shell scripts (.sh, .ps1, .bat, .cmd) - use TypeScript
  * - No /staging directories in test/fixtures
@@ -248,34 +247,6 @@ function forEachPackageFixturesDir(
 }
 
 /**
- * Rule 1: No /examples directories in runtime-* packages
- * Demos should be in vat-example-cat-agents/examples/
- */
-async function validateNoRuntimeExamples(): Promise<void> {
-  const packagesDir = safePath.join(REPO_ROOT, 'packages');
-  const entries = await readdir(packagesDir, { withFileTypes: true });
-
-  for (const entry of entries) {
-    if (direntKindFollowingSync(packagesDir, entry, packagesDir) !== 'directory') {
-      continue;
-    }
-
-    // Check runtime-* packages for /examples
-    if (entry.name.startsWith('runtime-')) {
-      const examplesDir = safePath.join(packagesDir, entry.name, 'examples');
-      if (existsSync(examplesDir)) {
-        errors.push({
-          type: ERROR_TYPES.FORBIDDEN_DIRECTORY,
-          path: `packages/${entry.name}/examples/`,
-          message: `Runtime packages should not have /examples directories. Move demos to vat-example-cat-agents/examples/`,
-          severity: 'error',
-        });
-      }
-    }
-  }
-}
-
-/**
  * Rule 2: Only specific packages can have /scripts
  * Prevents utility sprawl across packages
  * Allowed: dev-tools (repo utilities), schema, agent-skills (schema generation)
@@ -289,8 +260,6 @@ async function validateScriptsLocation(): Promise<void> {
     'schema',
     'agent-skills',
     'cli', // Generates the report JSON Schemas from the PUBLISHED_SHAPES registry
-    'vat-example-cat-agents', // Uses resource-compiler post-build script
-    'vat-development-agents', // Uses resource-compiler post-build script
   ]);
 
   for (const entry of entries) {
@@ -486,12 +455,11 @@ function validateSourceFileLocations(): void {
       const isInPackageSrc = /^packages\/[^/]+\/src\//.test(normalizedPath);
       const isInPackageTest = /^packages\/[^/]+\/test\//.test(normalizedPath);
       const isInPackageExamples = /^packages\/[^/]+\/examples\//.test(normalizedPath);
-      const isInPackageAgents = /^packages\/[^/]+\/agents\//.test(normalizedPath); // For vat-development-agents
       const isInPackageGenerated = /^packages\/[^/]+\/generated\//.test(normalizedPath); // Build artifacts
       const isInPackageScripts = /^packages\/[^/]+\/scripts\//.test(normalizedPath); // Build scripts
       const isInDocs = normalizedPath.startsWith('docs/');
 
-      if (!isInPackageSrc && !isInPackageTest && !isInPackageExamples && !isInPackageAgents && !isInPackageGenerated && !isInPackageScripts && !isInDocs) {
+      if (!isInPackageSrc && !isInPackageTest && !isInPackageExamples && !isInPackageGenerated && !isInPackageScripts && !isInDocs) {
         errors.push({
           type: ERROR_TYPES.STRUCTURAL_VIOLATION,
           path: relPath,
@@ -933,10 +901,8 @@ const SEVERITY_COUNTS_SCAN_ROOTS = [
 /**
  * The verdict vocabulary, as ONE alternation shared by every recogniser below.
  *
- * Written once on purpose. It used to live inline in the status-value regex alone,
- * and it omitted `ok` — which is exactly the success value `corpus/report.ts`'s
- * `ReviewStatus` uses. A vocabulary that exists in one place cannot drift out of
- * step with a second copy that a later recogniser would have needed.
+ * Written once on purpose: a vocabulary that exists in one place cannot drift
+ * out of step with a second copy that a later recogniser would have needed.
  */
 const STATUS_VOCABULARY = 'success|error|warning|failed|ok';
 
@@ -1081,14 +1047,9 @@ const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   // sets per check — so the distribution is exactly what a reader cannot
   // reconstruct from a status here.
   'packages/cli/src/commands/resources/check.ts',
-  // Migrated onto the shared issues→status/counts derivation (now
-  // `summarizeIssues`), which ended five separate collapses and three different answers for
-  // an info-only issue set.
+  // Derives status and counts through `summarizeIssues`.
   'packages/cli/src/commands/audit.ts',
   'packages/cli/src/commands/claude/marketplace/validate.ts',
-  // Its manifest checks became coded findings in the report envelope, whose
-  // `summary` is the distribution; it used to collapse `valid` into a status.
-  'packages/cli/src/commands/agent/validate.ts',
   'packages/cli/src/commands/corpus/runner.ts',
   'packages/agent-skills/src/validators/types.ts',
   'packages/agent-skills/src/validators/skill-validator.ts',
@@ -1101,12 +1062,7 @@ const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   'packages/agent-skills/src/validators/packaging-validator.ts',
   'packages/cli/src/commands/verify.ts',
   'packages/cli/src/commands/build.ts',
-  // Newly ENTERED the lane population by migrating onto the shared collapse: its
-  // `status` used to be the two-valued packaging gate verdict, which structurally
-  // could not say `warning` while the command exited 1 for one.
   'packages/cli/src/commands/skill/review.ts',
-  // File counts and finding counts are now named apart (`summary.filesWith*` vs
-  // `issueCounts`), so the two denominators can no longer be read as one.
   'packages/cli/src/commands/audit/hierarchical-output.ts',
   'packages/cli/src/commands/skills/validate.ts',
   'packages/cli/src/commands/skills/build.ts',
@@ -1138,9 +1094,7 @@ const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   // exit from its refused-file findings (stderr, at their resolved severities),
   // and the summary it returns carries the full per-severity distribution.
   'packages/cli/src/commands/claude/context.ts',
-  // Was INVISIBLE to this gate, not merely unclassified: it declares `status:
-  // AuditStatus` / `status: ReviewStatus`, and the old status recogniser demanded a
-  // string literal on the `status:` line. Conforms on the audit side — the row's
+  // Conforms on the audit side — the row's
   // `summary` is declared `SeverityCounts` and is the audit report's own `summary`,
   // with the file count beside it as `files_scanned`. `ReviewOutcome` deliberately carries no severity counts: its status is
   // a lane-EXECUTION outcome (`'ok'` iff every `vat skill review` subprocess ran), and
@@ -1174,20 +1128,11 @@ const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   // for an empty denominator — and `summary` is what says so beside `status`.
   'packages/cli/src/commands/resources/scan.ts',
   'packages/cli/src/commands/resources/query.ts',
-  // Wave 4 report-contract migration: each verb publishes the shared `Report<T>`
-  // envelope through `endWithReport`/`endWithRefusal`, whose `summary` is the
-  // per-severity distribution derived from the verb's findings by `buildReport`.
-  'packages/cli/src/commands/agent/build.ts',
-  'packages/cli/src/commands/agent/import.ts',
-  'packages/cli/src/commands/agent/install.ts',
-  'packages/cli/src/commands/agent/installed.ts',
-  'packages/cli/src/commands/agent/list.ts',
-  'packages/cli/src/commands/agent/uninstall.ts',
+  // Report-envelope verbs: `summary` is derived from their findings by `buildReport`.
   'packages/cli/src/commands/cache/clear.ts',
   'packages/cli/src/commands/corpus/scan.ts',
   'packages/cli/src/commands/doctor.ts',
   'packages/cli/src/commands/inventory.ts',
-  'packages/cli/src/commands/mcp/list-collections.ts',
   'packages/cli/src/commands/rag/clear-command.ts',
   'packages/cli/src/commands/rag/query-command.ts',
   'packages/cli/src/commands/rag/stats-command.ts',
@@ -1200,9 +1145,6 @@ const SEVERITY_COUNTS_CONFORMING = new Set<string>([
 /**
  * Lanes that publish a status WITHOUT per-severity counts. Remove an entry in the
  * same change that fixes it — a fixed lane left on this list fails the build.
- *
- * Started at 19. The survivor is deliberate rather than pending: it collapses a
- * boolean.
  */
 const SEVERITY_COUNTS_RATCHET = new Map<string, string>([
 ]);
@@ -1487,10 +1429,7 @@ function printResults(): void {
   const errorCount = errors.filter((e) => e.severity === 'error').length;
   const warningCount = errors.filter((e) => e.severity === 'warning').length;
 
-  // Three outcomes, three headlines. This used to print "failed" whenever any
-  // entry existed, while `validate()` exits 0 unless one is error-severity — so a
-  // warnings-only run announced failure and then succeeded. Anything reading the
-  // headline and anything reading the exit code reached opposite conclusions.
+  // Three outcomes, three headlines, agreeing with the exit code.
   if (errorCount === 0) {
     console.log(`\n⚠️  Repository structure validation passed with warnings:`);
   } else {
@@ -1534,13 +1473,8 @@ export interface PackageManifestSummary {
  * A manifest (or the directory that should have held one) the gate could not
  * read at all — as distinct from one that is absent.
  *
- * 🪤 The distinction is the whole point. `readManifest` used to return
- * `undefined` on ANY failure and the caller `continue`d, so an unparseable
- * `package.json` and a directory with no `package.json` produced the same
- * answer: silence. Measured on a scratch tree at a 28-error baseline — deleting
- * `engines` from a published package took it to 29 (the rule fires), and making
- * that same manifest invalid JSON took it back to 28, with no rule reporting
- * anything at all. The file that could break the rule was the one file exempt
+ * 🪤 The distinction is the whole point: if an unparseable `package.json` read
+ * as absent, the file that could break a rule would be the one file exempt
  * from it.
  */
 export interface ManifestReadFailure {
@@ -1759,9 +1693,7 @@ async function validateEngineFloorAgreement(): Promise<void> {
  *
  * The exit-code contract ends every VAT process on 0/1/2, and Node's default
  * for an uncaught throw is 1 — FINDINGS. `installLastResortExit()` from
- * `@vibe-agent-toolkit/schema` is what turns a crash into ERROR; it was landed
- * in `vat` alone and `vat-lab` / `vat-compile-resources` kept crashing to 1.
- * The source behind each `bin` entry (`./dist/x.js` → `src/x.ts`; a hand-
+ * `@vibe-agent-toolkit/schema` is what turns a crash into ERROR. The source behind each `bin` entry (`./dist/x.js` → `src/x.ts`; a hand-
  * written `./bin/name` as is) must call it by name.
  */
 const LAST_RESORT_CALL = 'installLastResortExit(';
@@ -1848,7 +1780,6 @@ async function validate(): Promise<void> {
   validateTestFileNaming();
 
   // Original Rules
-  await validateNoRuntimeExamples();
   await validateScriptsLocation();
   validateNoShellScripts();
   validateNoStagingDirectories();

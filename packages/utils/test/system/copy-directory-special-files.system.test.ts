@@ -1,7 +1,7 @@
 /**
  * `copyTree` and `proveTreeReadable` over a tree holding a named pipe. `copyFile`
  * of a pipe opens it for reading, which blocks until a writer appears — so a FIFO
- * in a built agent bundle hung `vat agent install` forever. A pipe (or a link to
+ * in a copied tree hangs the copy forever. A pipe (or a link to
  * one) has no bytes to copy: it is refused as a `source` fault of class
  * `wrong-type` (`EFTYPE`), naming it, without being opened.
  *

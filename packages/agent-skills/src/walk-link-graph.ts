@@ -1,9 +1,8 @@
 /**
  * Pure link graph walker that operates on ResourceRegistry data.
  *
- * Replaces the I/O-heavy `collectLinks()` with a pure function that walks
- * the link graph using pre-parsed data from a ResourceRegistry. This eliminates
- * per-file parses and `existsSync()` checks for markdown files.
+ * Uses pre-parsed data from a ResourceRegistry, so markdown files need no
+ * per-file parse or `existsSync()` check.
  *
  * Non-markdown assets (images, JSON, etc.) won't be in the registry and still
  * require `existsSync()` checks — this is acceptable since the goal is eliminating
@@ -18,15 +17,9 @@
  * ({@link isRoutable}); HTML is "a leaf we can read, not a door we walk
  * through".
  *
- * These used to be the same thing, by accident: any link target that
- * `getResourceById` found was queued, so a registry's include globs silently
- * WERE the routability policy. The two production registries disagreed as a
- * result. `crawlAndResolveRegistry` includes HTML, so `vat audit` and
- * post-build validation walked THROUGH a bundled page and counted its targets
- * as bundled; the packager's `createProjectRegistry` is markdown-only, so at
- * walk time the same page was an opaque asset and its targets were dropped.
- * Same tree, two answers to "is HTML a door" — and audit's answer described a
- * bundle the build never produced.
+ * A registry's include globs are NOT the routability policy: the production
+ * registries differ (`crawlAndResolveRegistry` includes HTML, the packager's is
+ * markdown-only), and both must give one answer to "is HTML a door".
  *
  * Links out of a non-routable member are not silently dropped: each one whose
  * target the walk never bundled by some other route is reported as a
@@ -237,15 +230,9 @@ export interface WalkLinkGraphOptions {
  *
  * Delegates to `resolveLocalHref` — the ONE resolver for "what file does this
  * href name", already used by the resources lane — rather than restating the
- * rule. This used to be `resolve(dirname(sourceFilePath), href)`, which is
- * correct only for relative references: `path.resolve` DISCARDS its base when
- * the second argument is absolute, so an RFC 3986 §4.2 absolute-path reference
- * (`/docs/guide.md`, which means project-root-relative) came back as the
- * FILESYSTEM-root path `/docs/guide.md` and was then classified outside every
- * project root but `/`. The two lanes gave two answers for one link: the
- * resources lane resolved it and found the file, this lane reported
- * `LINK_OUTSIDE_PROJECT` at error severity against a target that exists and is
- * in the registry.
+ * rule. `path.resolve` DISCARDS its base when the second argument is absolute,
+ * so it would turn an RFC 3986 §4.2 absolute-path reference (`/docs/guide.md`,
+ * project-root-relative) into a filesystem-root path.
  *
  * A root-absolute href that genuinely escapes the project root is still
  * resolved against the project root here, so the boundary decision stays in the
@@ -339,14 +326,8 @@ interface WalkState {
    * post-build question from a pre-build snapshot — exactly the staleness
    * {@link FsLookupCache}'s own docs warn about.
    *
-   * That scoping costs most of the collapse on the packager lane, and the
-   * trade is worth stating rather than rediscovering. Measured on VAT's own
-   * tree: `vat audit .` asks 42 questions over 9 distinct targets
-   * (4.7×, because one walk revisits the same shared docs), while
-   * `vat skills build` asks 26 over 24 — 13 skills, one probe each, and
-   * targets almost never repeat inside a single skill's walk. Sharing one
-   * probe across skills would collapse that too, and would be wrong.
-   * Correctness wins; the lane simply does not have the redundancy.
+   * That scoping costs most of the collapse on the packager lane, where
+   * targets rarely repeat inside one skill's walk. Correctness wins.
    */
   pathProbe: FsLookupCache;
   /**
@@ -440,9 +421,7 @@ function fillPathFacts(targetPath: string, options: WalkLinkGraphOptions, state:
  * mutation.
  *
  * Splitting the verdict from the recording is what lets the cascade be a pure
- * function of {@link PathFacts}: every branch used to push into
- * `excludedReferences` or `deferredAssetSet` on its way out, which made the
- * classifier untestable without a filesystem and a walk state.
+ * function of {@link PathFacts}, testable without a filesystem or walk state.
  */
 type ExclusionVerdict =
   /** A `files:`-covered build artifact — recorded in the deferred set, not as an exclusion. */
@@ -572,32 +551,11 @@ function classifyGitignoredTarget(
  * rather than one per reference. The memo cannot change the answer: both
  * oracles are pure functions of the tree, and the memo's lifetime is one walk.
  *
- * ⛔ **Measured on VAT's own tree, and the result is a NEGATIVE —
- * do not sell this as a performance win.** Counting asks vs. memo misses in the
- * built lane: `vat audit .` = 3 asks / 2 distinct, `vat skills build` = 0 / 0,
- * `vat inventory .` = 0 / 0. **One** oracle call avoided across all three.
- *
- * The reason is structural, not incidental: this branch is LAST in the cascade,
- * so a target only reaches it after surviving all seven earlier discriminators
- * *and* existing on disk. Nearly every link target is classified before then —
- * bundled markdown, a directory, a navigation file, a pattern match. The memo's
- * real justification is therefore **shape, not speed**: it is what lets the
- * oracle read sit outside {@link classifyExclusion} so that function can be a
- * pure predicate over the row. Any future claim of a spawn-count win needs its
- * own measurement on a corpus where this branch is actually hot.
- *
- * Two further bounds, so nobody reads more into it than it does:
- *
- * - **The collapse is within-ONE-walk fan-in only.** `collectLinkedFiles` calls
- *   {@link walkLinkGraph} once per skill, so a target shared across skills is
- *   still asked about once per skill. That per-walk lifetime is exactly what
- *   makes the memo safe against `packageSkill` writing `dist/` between skills,
- *   so it is a deliberate ceiling, not a missed optimization.
- * - **Not every repeat was a subprocess.** {@link isGitIgnored} settles "is
- *   there a repository here?" from the filesystem and returns early when there
- *   is none, so on a tree with no `.git` ancestor the repeats were ancestor
- *   walks rather than `git check-ignore` spawns. Inside a real repository they
- *   were spawns.
+ * ⛔ **Shape, not speed — do not sell this as a performance win.** This branch is
+ * LAST in the cascade, so it is rarely reached; the memo is what lets the oracle
+ * read sit outside {@link classifyExclusion} so that function can be a pure
+ * predicate over the row. Its per-walk lifetime keeps it safe against
+ * `packageSkill` writing `dist/` between skills.
  *
  * @returns whether the target is gitignored
  */
@@ -628,16 +586,8 @@ function readGitignored(targetPath: string, options: WalkLinkGraphOptions, state
  * calls). The classifier can say nothing about WHAT the target is — but it can
  * say that the target is there and could not be read, and that is the report.
  *
- * ✅ **This used to skip silently, and that was D6 in the spec's deferred-fixes
- * ledger — now fixed.** `{ kind: 'skipped' }` recorded nothing at all, so an
- * unreadable link target vanished from the report entirely: no exclusion, no
- * bundling, no issue. It survived the pass-1′ refactor only because that
- * refactor was held to byte-identical output (it is what the pre-refactor
- * `catch { return true }` did). Meanwhile the resources lane turned the
- * IDENTICAL class of read failure into a `RESOURCE_UNREADABLE` finding, so one
- * unreadable file got two answers depending on which lane found it. It is now
- * an `unreadable-target` exclusion, which the verdict engine reports as
- * `LINK_TARGET_UNREADABLE` — the resources code's skill-packaging sibling.
+ * It is an `unreadable-target` exclusion, which the verdict engine reports as
+ * `LINK_TARGET_UNREADABLE` — the skill-packaging sibling of `RESOURCE_UNREADABLE`.
  *
  * @returns a verdict when the path's kind decides the outcome, else `undefined`
  */
@@ -782,8 +732,7 @@ function applyExclusionVerdict(
  * (deferred build artifact, directory, outside project, navigation file, or
  * pattern match).
  *
- * Pass 1′ fills the row, pass 4 judges it, and the recording is a third step —
- * the three used to be one interleaved function that stat'ed paths mid-cascade.
+ * Pass 1′ fills the row, pass 4 judges it, and the recording is a third step.
  *
  * @returns true if the link was excluded or deferred (caller should skip to next link)
  */
@@ -842,9 +791,7 @@ function processLink(
     processRegistryResource(targetResource, targetPath, currentResource.filePath, link, currentDepth, options, state);
     // Straight to the probe, not through `fillPathFacts`: this site wants one
     // column, and building a whole row to read it would compute an
-    // `insideProject` the caller immediately discards. The probe memo is what
-    // makes it free — this used to be a second `existsSync` of the identical
-    // path in the same tick.
+    // `insideProject` the caller immediately discards. The probe memo makes it free.
   } else if (state.pathProbe.probe(targetPath).exists) {
     // Not in registry — non-markdown asset that exists on disk.
     //
@@ -1084,10 +1031,8 @@ function walkLinkGraphBody(
   // about the TARGET, and `LINK_DROPPED_BY_DEPTH` claims the latter — "this link
   // was not bundled". On any diamond the two diverge: the same reference cited
   // from SKILL.md and again from a page one hop deeper ships via the shallow
-  // route and is refused on the deep one, and the finding used to fire anyway.
-  // Measured on `packages/vat-example-cat-agents`, whose
-  // `cat-breed-selection.md` is in the built bundle at depth 1 and was reported
-  // dropped for its depth-2 occurrence via `workflow-orchestration.md`. The
+  // route and is refused on the deep one, so a file in the built bundle at depth 1
+  // must not be reported dropped for a depth-2 occurrence of it. The
   // remedy the message implies — raise `linkFollowDepth` — is a no-op for a link
   // that already works.
   //

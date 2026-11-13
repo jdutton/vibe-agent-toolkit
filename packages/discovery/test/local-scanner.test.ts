@@ -78,7 +78,7 @@ describe('scan', () => {
 
     expect(result.totalScanned).toBe(2);
     expect(result.byFormat['agent-skill']).toBe(1);
-    expect(result.byFormat['vat-agent']).toBe(1);
+    expect(result.byFormat['unknown']).toBe(1);
   });
 
   it('should respect include patterns', async () => {

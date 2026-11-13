@@ -41,10 +41,9 @@
 - **A `publish.remote` such as `--upload-pack=<command>` made `vat claude marketplace publish` run
   that command**: the remote reached `git ls-remote`, `fetch` and `push` as an option. Every one of
   them now ends option parsing (`--`) before the remote, and such a remote is refused (below).
-- **Dependencies bumped past new advisories:** `@modelcontextprotocol/sdk` 1.32.0 (shipped, by
-  `@vibe-agent-toolkit/gateway-mcp`, which now requires it), and in this repo's lockfile `vite` 7.3.7, `vitest` 4.1.12, `undici`
-  7.30.1, `hono` 4.13.11, `@hono/node-server` 2.1.5, `body-parser` 2.4.0, `qs` 6.16.1, `fast-uri` 3.1.9, `ip-address` 10.7.4, `markdown-it`
-  14.3.3, and the `zod` 4 copies other packages carry 4.6.7. VAT's own `zod` stays on 3.25.76:
+- **Dependencies bumped past new advisories:** in this repo's lockfile `vite` 7.3.7,
+  `vitest` 4.1.12, `undici` 7.30.1, `fast-uri` 3.1.9, `ip-address` 10.7.4, `markdown-it` 14.3.3,
+  and the `zod` 4 copies other packages carry 4.6.7. VAT's own `zod` stays on 3.25.76:
   GHSA-mrhx-c7xc-m3w5 is fixed only in zod 4.6.6, and moving to zod 4 is its own breaking release.
 
 ### Breaking

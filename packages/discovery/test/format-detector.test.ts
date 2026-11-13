@@ -11,13 +11,10 @@ describe('detectFormat', () => {
     expect(detectFormat('./my-skill/SKILL.md')).toBe(AGENT_SKILL_FORMAT);
   });
 
-  it('should detect agent.yaml as vat-agent', () => {
-    expect(detectFormat('agent.yaml')).toBe('vat-agent');
-    expect(detectFormat('/path/to/agent.yaml')).toBe('vat-agent');
-  });
-
-  it('should detect agent.yml as vat-agent', () => {
-    expect(detectFormat('agent.yml')).toBe('vat-agent');
+  it('should leave agent.yaml / agent.yml unclassified', () => {
+    expect(detectFormat('agent.yaml')).toBe('unknown');
+    expect(detectFormat('/path/to/agent.yaml')).toBe('unknown');
+    expect(detectFormat('agent.yml')).toBe('unknown');
   });
 
   it('should detect .md files as markdown', () => {

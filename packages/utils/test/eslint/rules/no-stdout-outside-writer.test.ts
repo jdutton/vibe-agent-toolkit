@@ -5,15 +5,15 @@
  * blind to every command writing through `writeStdoutSync`.
  */
 
-import { describe, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-import { RULE_TESTER_CASES, type RuleCases, expectRulePasses } from '../rule-tester.js';
+import { RULE_TESTER_CASES, type RuleCases, expectRulePasses, loadLocalRule, ruleTester } from '../rule-tester.js';
 
 const RULE = 'no-stdout-outside-writer';
 const COMMAND_FILE = '/repo/packages/cli/src/commands/a.ts';
 const WRITER_FILE = '/repo/packages/cli/src/utils/document-writer.ts';
-const ALLOWED_FILE = '/repo/packages/cli/src/commands/legacy.ts';
-const OPTIONS = [{ paths: ['packages/cli/src/commands/'], allowFiles: ['packages/cli/src/commands/legacy.ts'] }];
+const PATHS = ['packages/cli/src/commands/'];
+const OPTIONS = [{ paths: PATHS }];
 
 const CASES: RuleCases = {
   valid: [
@@ -31,8 +31,6 @@ const CASES: RuleCases = {
     { code: 'logger.log(1);', filename: COMMAND_FILE, options: OPTIONS },
     // A test file is not a command.
     { code: 'console.log(1);', filename: '/repo/packages/cli/src/commands/a.test.ts', options: OPTIONS },
-    // An allow-listed file that still has a violation is exactly what its entry says.
-    { code: 'writeStdoutSync(t);', filename: ALLOWED_FILE, options: OPTIONS },
   ],
   invalid: [
     { code: "process.stdout.write('x');", filename: COMMAND_FILE, options: OPTIONS, errors: [{ messageId: 'stdoutOutsideWriter' }] },
@@ -49,13 +47,20 @@ const CASES: RuleCases = {
       options: OPTIONS,
       errors: [{ messageId: 'stdoutOutsideWriter' }],
     },
-    // The ratchet's other direction: an allow-listed file with nothing left to migrate.
-    { code: "endWithReport('okf validate', report, format);", filename: ALLOWED_FILE, options: OPTIONS, errors: [{ messageId: 'staleAllow' }] },
   ],
 };
 
 describe(RULE, () => {
   it(RULE_TESTER_CASES, () => {
     expectRulePasses(RULE, CASES);
+  });
+
+  it('refuses an `allowFiles` exemption list — no command writes its own stdout', () => {
+    expect(() => {
+      ruleTester.run(RULE, loadLocalRule(`${RULE}.cjs`), {
+        valid: [{ code: "endWithReport('okf validate', report, format);", filename: COMMAND_FILE, options: [{ paths: PATHS, allowFiles: [] }] }],
+        invalid: [],
+      });
+    }).toThrow(/additional properties/i);
   });
 });

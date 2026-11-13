@@ -286,8 +286,7 @@ export type ColumnsOfStatement = (sql: string, ...parameters: readonly string[])
  * 🔑 The code is what tells the caller WHICH failure this is: the store's
  * `PROJECTION_STATEMENT_REFUSED_CODE` means the statement is wrong (the
  * author's to fix, a `USAGE_INVALID` refusal for `vat resources query`);
- * anything uncoded is a defect. Rewording into a bare `Error` used to drop it,
- * so every refused statement read as VAT's own failure.
+ * anything uncoded is a defect. A bare `Error` would drop the code.
  *
  * A relation a lens REFUSED never reaches here: {@link refusedStatement} refuses its statement
  * before it runs, so no code is ever read out of the engine's text.
@@ -506,15 +505,10 @@ export async function withQueriedProjection<T>(
       const { blobs, extent } = splitProjectionByScope(projection);
       await store.writeBlobFacts(blobs);
       await store.writeExtent({ rootId, treeHash: EPHEMERAL_TREE_HASH }, extent);
-      // 🚨 The population clock STOPS HERE, before the lens runs. It used to
-      // stop after, which made `populationSecs` silently CONTAIN `lensSecs`
-      // while this comment and both payloads said it did not. The two numbers
-      // are published side by side precisely so a reader can compare a served
-      // population against a derived one — and folding the lens into the
-      // population put its cost on the arm the store's value is argued from,
-      // which is the "store got worse" reading the separation exists to
-      // prevent. Overlapping spans also made `populationSecs + lensSecs`
-      // over-count wall time for anyone who added them.
+      // 🚨 The population clock STOPS HERE, before the lens runs, so
+      // `populationSecs` never contains `lensSecs`: the two are published side by
+      // side to compare a served population against a derived one, and must not
+      // overlap.
       const populationMs = performance.now() - populationStart;
 
       // 🔑 The lenses this run's statements NAME, and no others — zones.md §2

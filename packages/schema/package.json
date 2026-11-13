@@ -1,7 +1,7 @@
 {
   "name": "@vibe-agent-toolkit/schema",
   "version": "0.2.0-rc.15",
-  "description": "JSON Schema definitions and TypeScript types for VAT agent manifest format",
+  "description": "Shared VAT contracts: validation codes, issues, reports, exit codes, project config and package.json vat metadata as Zod schemas, types and JSON Schema",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -27,7 +27,6 @@
   },
   "keywords": [
     "vat",
-    "agent",
     "schema",
     "json-schema",
     "validation"

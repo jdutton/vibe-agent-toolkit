@@ -3,8 +3,7 @@
  * a subpath module's re-exports stop flapping by platform (traps.md, "A
  * subpath module's re-exports flap by platform under knip"). The derivation
  * must read every condition shape this monorepo publishes — `{import, types}`
- * (utils, agent-runtime) AND `{default, types}` (resources, resource-compiler,
- * vat-example-cat-agents) — or a workspace silently gets no entries and the
+ * (utils) AND `{default, types}` (resources, resource-compiler) — or a workspace silently gets no entries and the
  * flap stays open there. `bun run unused-exports` over the real manifests is the gate.
  */
 

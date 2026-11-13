@@ -345,7 +345,7 @@ function packagingResultToValidationResult(
 
 /**
  * Validate a single SKILL.md file, using config-aware validation if available.
- * Used for direct SKILL.md and vat-agent paths passed to `vat audit`.
+ * Used for direct SKILL.md paths passed to `vat audit`.
  *
  * @param crawlTree Whether this call owns the presence-side crawl of the skill's
  *   directory (see {@link appendDistributedTreeFindings} below). REQUIRED
@@ -358,42 +358,20 @@ function packagingResultToValidationResult(
  * Resolve a skill's nearest-ancestor `vibe-agent-toolkit.config.yaml`, treating
  * one that cannot be LOADED as absent rather than as fatal.
  *
- * 🔑 Both audit lanes call this, and that is the point. They used to carry
- * separate copies of the fork, and the copies disagreed: the single-target lane
- * caught `ConfigLoadError` and fell back, the directory-scan lane let it throw.
- * One unrecognized key in one nested config therefore aborted a whole-tree scan
- * with exit 2 and zero skills audited, while auditing a single SKILL.md under
- * that same config exited 0 — a verdict that depended on whether the argument
- * was a file or its parent directory. Keeping the tolerance in ONE function is
- * what stops the two answers drifting apart again.
+ * 🔑 Both audit lanes call this, and that is the point: keeping the tolerance in
+ * ONE function stops the single-target and directory-scan lanes disagreeing.
  *
- * Degrading beats destroying, and silence is not the alternative — the policy
- * `SCAN_PATH_UNREADABLE` states in its own registry docstring. So this warns
- * rather than logging at debug, AND files a finding on the config path, because
- * the warning goes to stderr while the report goes to stdout: a run that
- * downgraded N skills to the much weaker config-free `validateSkill` and exited 0
- * said nothing about it in the machine-readable artifact anyone actually diffs.
- * That is the "detector silently disables itself" shape this code cites and was
- * still doing.
+ * Degrading beats destroying, and silence is not the alternative: this warns AND
+ * files a finding on the config path, because the warning goes to stderr while
+ * the report goes to stdout.
  *
- * ⚠️ The filesystem question IS asked, and the answer changes what the operator
- * is told. `config-loader.ts` preserves `cause` specifically so callers can ask
- * `fsFaultOf` and "decide whether to degrade or abort"; catching
- * `ConfigLoadError` unconditionally never asked at all, so a `chmod 000` config
- * and a typo produced the same sentence — and a permissions problem is not a
- * broken config.
+ * ⚠️ The filesystem question IS asked (`fsFaultOf`), and the answer changes what
+ * the operator is told: a permissions problem is not a broken config.
  *
- * 🔑 Asking it and still DEGRADING is deliberate, and was measured. Re-throwing
- * so the per-entry guard anchors the finding is the obvious alternative and is
- * worse: on a fixture with one unreadable config and one perfectly readable
- * skill, the re-throw produced `filesScanned: 1, filesPassed: 0` with the finding
- * anchored on `skills/demo/SKILL.md` and the skill never validated at all. On a
- * real `--user` run that is hundreds of readable skills losing every check
- * because one config is `chmod 000` — the exact "destroying" this lane exists to
- * prevent, and a violation of the neighbouring promise that "a skill beside the
- * unreadable path is validated exactly as if it were not there". The finding is
- * filed on the CONFIG, which is the path that was actually refused, and the skill
- * goes on to config-free validation.
+ * 🔑 Asking it and still DEGRADING is deliberate: re-throwing so the per-entry
+ * guard anchors the finding would lose every check on the readable skills beside
+ * the refused config. The finding is filed on the CONFIG, and the skill goes on
+ * to config-free validation.
  *
  * @returns the skill's display-safe packaging config, or `null` when there is
  *   no governing config OR when the one found could not be loaded.
@@ -436,24 +414,12 @@ async function resolveGoverningConfig(
  * holding the synthetic result that carries its finding into the report.
  *
  * 🚨 MODULE-scoped, and cleared by {@link resetAuditCaches}, exactly like
- * `config-loader.ts`'s `warnedConfigPaths`. It used to be a `Set` threaded as a
- * parameter, and the threading had a hole: `handleFileEntry` passed the scan's
- * real log, but `validateSingleSkill` constructed a fresh `new Set()` on EVERY
- * call — and `validatePluginSkillsViaInventory` calls it in a loop over every
- * skill in a plugin. A 40-skill plugin under one unloadable config printed 40
- * identical warnings. The integration fixture was a bare directory, which routes
- * through `handleFileEntry`, so the "warns once, not once per skill" test passed
- * while the lane that actually repeated was never exercised. A run-scoped ledger
- * cannot be re-created per call by mistake; a parameter can.
+ * `config-loader.ts`'s `warnedConfigPaths`: a run-scoped ledger cannot be
+ * re-created per call by mistake; a parameter can.
  *
  * ⚠️ Keyed on the refused PATH (derived from `ConfigLoadError.projectRoot` or
- * `DirectoryListingRefusedError.refusal.directory`), NOT on `err.message`. The
- * old key was the message with a comment claiming it "names the offending config
- * path" — true only for a Zod failure, which is what the fixture happened to be.
- * A YAML SYNTAX error is thrown out of `yaml.parse` and wrapped as `Failed to
- * load config: ${message}`, and `YAMLParseError.message` carries no filename at
- * all, so two nested projects with the same copy-pasted broken config collapsed
- * to ONE warning naming NEITHER.
+ * `DirectoryListingRefusedError.refusal.directory`), NOT on `err.message`: a
+ * `YAMLParseError.message` carries no filename at all.
  */
 const unloadableConfigResults: Map<string, ValidationResult> = new Map();
 
@@ -463,9 +429,7 @@ const unloadableConfigResults: Map<string, ValidationResult> = new Map();
  *
  * Resolving one skill's test input asks that question of the SUBJECT and of
  * every entry in `projectSkills`, so a probe minted per skill costs S questions
- * per skill and S² per run over the same S paths. Measured with the lab on a
- * 103-skill adopter: 10,815 probes over 103 distinct paths, half of the
- * command's entire filesystem traffic.
+ * per skill and S² per run over the same S paths.
  *
  * 🚨 MODULE-scoped and cleared by {@link resetAuditCaches}, for the same reason
  * `unloadableConfigResults` above is: this command has TWO lanes that build a
@@ -674,7 +638,6 @@ async function validateSingleSkill(
   logger: ReturnType<typeof createLogger>,
   locationRoot: string,
   crawlTree: boolean,
-  isVATGenerated?: boolean
 ): Promise<ValidationResult> {
   // Config-aware validation: walk UP to the skill's nearest-ancestor
   // vibe-agent-toolkit.config.yaml and apply the skill's packaging block. A
@@ -734,9 +697,6 @@ async function validateSingleSkill(
   if (options.warnUnreferencedFiles) {
     validateOptions.checkUnreferencedFiles = true;
   }
-  if (isVATGenerated === true) {
-    validateOptions.isVATGenerated = true;
-  }
   const result = await validateSkill(validateOptions);
   await appendDistributedTreeFindings(result, skillPath, locationRoot, crawlTree);
   return result;
@@ -754,13 +714,9 @@ async function validateSingleSkill(
  * its drafts and fixtures, so "not declared" swept up two populations of
  * ordinary repo source.
  *
- * Called from BOTH lanes — config-aware and wild — deliberately. It used to be
- * reachable only from the wild one, which left the abandoned discriminator alive
- * at the caller in its purest suppressing form: adding a `vibe-agent-toolkit.config.yaml`
- * to a dotfiles repo removed findings from skills installed under `~/.claude`,
- * because a config-aware match returned before the classifier was ever asked.
- * Whether the project also declares a skill says nothing about where that skill
- * lives, so it must not decide whether the question gets asked.
+ * Called from BOTH lanes — config-aware and wild — deliberately: whether the
+ * project also declares a skill says nothing about where that skill lives, so
+ * it must not decide whether the question gets asked.
  *
  * @param crawlTree `false` when a plugin lane already crawled this subtree — see
  *   {@link validateSingleSkill}.
@@ -806,11 +762,7 @@ export function createAuditCommand(): Command {
     .option('--exclude <glob>', 'Exclude paths matching glob pattern (repeatable)', collect, [])
     .option('--include-artifacts', 'Include gitignored paths (build artifacts, dependencies) that are excluded by default')
     .option('--user', 'Audit user-level Claude resources (default: $CLAUDE_CONFIG_DIR or ~/.claude — scans plugins/, skills/, marketplaces/)')
-    // `-v` short form: `vat audit -v` used to print the version (the root
-    // `-v, --version` shadowed every subcommand), and after that alias was
-    // removed it exited 1 as an unknown option — while five sibling verbs
-    // accepted it. Advertising only the long form is what made the CHANGELOG's
-    // "`-v` means `--verbose` on every verb" claim untrue.
+    // `-v` means `--verbose` on every verb.
     .option('-v, --verbose', 'Show all scanned resources, including those without issues')
     .option('--warn-unreferenced-files', 'Warn about files not referenced in skill markdown')
     .option('--compat', 'Run compatibility analysis for each plugin (shows claude-code, claude-cowork, claude-chat support)')
@@ -837,7 +789,6 @@ Description:
   - Marketplace directories (.claude-plugin/marketplace.json)
   - Registry files (installed_plugins.json, known_marketplaces.json)
   - Agent Skills (SKILL.md files)
-  - VAT agents (agent.yaml + SKILL.md)
 
   Path or URL to audit: resource directory, registry file, SKILL.md file,
   scan directory, or a git URL (HTTPS, SSH, GitHub shorthand, GitHub web URL).
@@ -1091,7 +1042,7 @@ async function auditUserDirectories(
 }
 
 /** Skill resource types that can have per-skill validation config. */
-const SKILL_RESULT_TYPES: ReadonlySet<ValidationResult['type']> = new Set([RESOURCE_TYPE_AGENT_SKILL, 'vat-agent']);
+const SKILL_RESULT_TYPES: ReadonlySet<ValidationResult['type']> = new Set([RESOURCE_TYPE_AGENT_SKILL]);
 
 /**
  * The invocation scan root: the ONE base every `path` and `location` in a
@@ -1126,18 +1077,8 @@ export function deriveScanRoot(targetPath: string): string {
  * `resolveSkillPackagingConfig` uses per skill, so the two cannot disagree about
  * which project governs a path.
  *
- * It used to guess by SHAPE instead: a directory argument resolved to ITSELF and
- * a `SKILL.md` argument to exactly two levels up. Neither reaches a project root
- * from a built bundle — `vat audit dist/skills/demo` looked for the config inside
- * the bundle, found none, and `applySeverityFilter` early-returned. The effect was
- * that `severity.PACKAGED_AGENT_INSTRUCTION_FILE: ignore` — the opt-out this very
- * command's `fix` text tells the reader to write — did nothing whenever audit was
- * pointed at the bundle rather than at the project. Measured: `warnings: 1` with
- * the override and without it, from the same tree, while `vat audit .` on that
- * same project honoured it.
- *
- * `null` (no config and no git anywhere above) falls back to the target itself,
- * which is what the shape-based version returned for every path.
+ * Never guessed by SHAPE: a built bundle's own directory is not its project
+ * root. `null` (no config and no git anywhere above) falls back to the target.
  */
 function deriveConfigRoot(targetPath: string | undefined): string {
   const start = targetPath === undefined ? process.cwd() : deriveScanRoot(targetPath);
@@ -1153,9 +1094,7 @@ function buildFilteredResult(
 ): ValidationResult {
   return {
     ...result,
-    // Spreading `result` carried the PRE-filter counts forward, so a
-    // `severity: ignore` config left the counts describing findings the report
-    // no longer contained. The counts are re-derived, never inherited.
+    // Counts are re-derived from the filtered issues, never inherited.
     ...describeIssues(filteredIssues, result.type),
     issues: filteredIssues,
   };
@@ -1167,13 +1106,8 @@ function buildFilteredResult(
  * Audit shows everything: it applies `validation.severity` to decide what to
  * show and at what severity, but deliberately ignores `validation.allow`.
  *
- * **Both directions, via the one shared resolver.** This used to compute the
- * merged override map correctly and then consult it for a single value —
- * `issues.filter(i => effective[i.code] !== 'ignore')` — so `ignore` worked
- * while `error`, `warning` and `info` fell through untouched. Measured end to
- * end on a real adopter tree: `severity: error` at BOTH scopes left
- * `severity: warning`, `errors: 0`, `status: warning`, while `vat verify` on the
- * same config promoted correctly. Two lanes, one config key, opposite answers.
+ * **Both directions, via the one shared resolver**: `error`, `warning` and
+ * `info` promote or demote exactly as `ignore` drops.
  *
  * Status and counts are re-derived from the resolved severities by
  * {@link buildFilteredResult}, so a promotion moves the reported STATUS — which
@@ -1185,20 +1119,11 @@ function buildFilteredResult(
  *
  * THREE scopes, least specific first:
  *  - `resources.validation.severity` — the PROJECT-WIDE map `vat resources
- *    validate` already honours. Audit read only the two `skills.*` scopes below,
- *    so one dial in one config file produced opposite answers from the two
- *    commands: measured on a two-code fixture, `LINK_MISSING_TARGET: ignore` and
- *    `LINK_TO_NAVIGATION_FILE: error` written here moved neither finding in
- *    audit. It is applied FIRST — a `skills` scope naming the same code is the
- *    more specific statement and wins.
+ *    validate` already honours, applied FIRST — a `skills` scope naming the
+ *    same code is the more specific statement and wins.
  *  - `skills.defaults.validation.severity` — the PROJECT-WIDE map, applied to
  *    every result this run produced, including `claude-plugin` and `marketplace`
- *    ones. It used to be applied only to skill-typed results, which left the
- *    opt-out inert for the population that motivated it: the false positive
- *    `PACKAGED_AGENT_INSTRUCTION_FILE` was kept at `warning` for — an official
- *    plugin's intentional scaffold template — is a finding on a PLUGIN tree, and
- *    no per-skill key can name it. Measured before the fix: a plugin result kept
- *    its warning with `severity: ignore` set at `skills.defaults`.
+ *    ones (a plugin-tree finding has no per-skill key that could name it).
  *  - `skills.config.<name>.validation.severity` — layered on top, and only for a
  *    result that names a skill, since that key is keyed by skill name.
  *
@@ -1305,11 +1230,8 @@ function isEmptiedUnreadablePathResult(result: ValidationResult): boolean {
 /**
  * Refuse a `--settings` the run would otherwise ignore, before any scan or clone.
  *
- * Every arm used to be a stderr line and exit 0: without `--compat` a warning
- * and no settings check; under `--user` nothing at all; and a named file that
- * is absent read as "no settings", so `--compat --settings /typo.json` printed
- * `findings: []` for a check that never compared anything. The sibling verb
- * `audit settings --file <missing>` refuses the same path.
+ * Every arm refuses rather than warning and exiting 0, matching the sibling verb
+ * `audit settings --file <missing>`.
  *
  * @throws {CommandRefusalError} `USAGE_INVALID` for a flag the run cannot honour
  *   or a named file that is absent; `INPUT_UNREADABLE` for one the OS refuses
@@ -1332,8 +1254,7 @@ function refuseUnusableSettingsFlag(options: AuditCommandOptions): void {
  * refused every combination the run cannot honour.
  *
  * @throws {CommandRefusalError} `INPUT_UNREADABLE` when a settings file (named
- *   or auto-discovered) the OS refuses, does not parse, or fails its schema — the check cannot run, and a warning beside
- *   an unchecked report was how it used to pass silently
+ *   or auto-discovered) the OS refuses, does not parse, or fails its schema — the check cannot run
  */
 async function resolveEffectiveSettings(
   options: AuditCommandOptions,
@@ -1588,12 +1509,8 @@ export async function auditCommand(
  * typo in a CI step read as "the tree failed its gate", and the denominator
  * counted a file that was never there.
  *
- * 🚨 **And a root DIRECTORY the OS refuses to list.** It used to be left to
- * the scan, which degraded it to `SCAN_PATH_UNREADABLE` and ended on the
- * zero-files refusal at exit 1 — while `vat resources validate`, `check`,
- * `query` and `scan` all end the same argument at exit 2. One outcome, two
- * codes. Nothing under an unlistable root can be examined, so the audit could
- * not do its job: an `INPUT_UNREADABLE` refusal, exit 2 like a missing path.
+ * 🚨 **And a root DIRECTORY the OS refuses to list**: nothing under it can be
+ * examined, so it is an `INPUT_UNREADABLE` refusal, exit 2 like a missing path.
  *
  * ONLY the root. A sub-path inside a readable tree is never the invocation's
  * fault and stays a finding. Pinned by the `audit → error` rows of
@@ -1958,13 +1875,6 @@ async function validateAuditSubject(
 		return [await validateSingleSkill(scanPath, options, logger, locationRoot, true)];
 	}
 
-	// Special handling for VAT agent: validate its SKILL.md
-	if (format === 'vat-agent') {
-		const skillPath = safePath.join(scanPath, 'SKILL.md');
-		logger.debug('Detected VAT agent, validating SKILL.md');
-		return [await validateSingleSkill(skillPath, options, logger, locationRoot, true, true)];
-	}
-
 	// Enumerate all manifest surfaces at the directory root. If multiple are
 	// present (e.g., skill-claude-plugin: SKILL.md + .claude-plugin/plugin.json),
 	// validate each independently. This intentionally bypasses
@@ -2052,11 +1962,8 @@ async function validateAuditSubject(
  * files it as `SCAN_PATH_UNREADABLE`, so the audit still degrades (the run
  * completes, the refusal a finding) rather than refusing the run.
  *
- * 🪤 The stat used to share ONE `try` with `scanDirectory` itself, and the
- * catch was bare. Every throw from the scan — a crawl refusal, a `TypeError`
- * two frames down — was absorbed into "let validate() handle it", and
- * `validate()` then reported the directory as an unknown resource format. A
- * scan that examined nothing was reported as a directory that was nothing.
+ * 🪤 Keep this stat's `try` separate from `scanDirectory`'s: a shared catch would
+ * absorb scan throws into "unknown resource format".
  */
 async function isScannableDirectory(scanPath: string, locationRoot: string): Promise<boolean> {
 	try {
@@ -2169,13 +2076,6 @@ type SettingsCheck = Awaited<ReturnType<typeof checkSettingsCompatibility>>;
  * NOT this: the analyzer names it under its own `CompatibilityResult.unchecked`
  * and analyzes every other file, so its verdicts are over fewer files than the
  * plugin ships and the document says which.
- *
- * 🚨 The analyzer throwing used to be `logger.debug` and NO block of either
- * kind for that plugin, exit 0 — and it threw on the first file it could not
- * read, so ONE unreadable SKILL.md (or one unlistable directory) was enough.
- * Under `--settings` the settings check, which does not depend on the
- * analyzer at all, never ran either. A plugin the run could not analyze was
- * indistinguishable from one the operator never asked about.
  */
 interface CompatibilityUnavailable {
   analyzed: false;
@@ -2308,11 +2208,6 @@ async function analyzeOrExplain(
  * never saw — and, when the checker itself fails for a reason that is the
  * plugin's, the plugin as the one thing unchecked, rather than no `settings:`
  * block at all. A VAT defect is rethrown by `classifyCompatibilityFailure`.
- *
- * The checker failing used to be `logger.debug` and a result with no settings
- * block, so a plugin the check could not run on was indistinguishable from one
- * the operator never asked about. A run that asked for `--settings` and got no
- * answer for a plugin is told so on stderr and in the document.
  */
 async function settingsVerdict(
   pluginDir: string,
@@ -2894,8 +2789,7 @@ async function handleFileEntry(
     // cannot abort this whole scan while that lane shrugs it off. The warn-once
     // ledger lives in `unloadableConfigResults` (module scope, cleared by
     // `resetAuditCaches`) rather than being threaded here, so BOTH lanes dedupe
-    // against the same state — this one used to, the other minted a fresh set
-    // per skill.
+    // against the same state.
     const skillConfig = await resolveGoverningConfig(fullPath, logger, locationRoot);
     if (skillConfig !== null) {
       logger.debug(`  Using config-aware validation for: ${fullPath}`);
@@ -2995,13 +2889,11 @@ interface ScanContext {
    * and the run's `issueCounts` — the number a CI gate reads — counts it that
    * many times.
    *
-   * TWO kinds of owner reach this field, and it used to hold only the first:
+   * TWO kinds of owner reach this field:
    *
    * - a **plugin** directory, crawled by `validatePlugin`;
    * - a **skill** directory whose own crawl {@link crawlOwnsSubtree} confirms
-   *   will run. A skill nested under another skill had no guard at all, so a
-   *   chain of 20 nested skills holding one `CLAUDE.md` each produced 210
-   *   warnings for 20 files — quadratic in nesting depth.
+   *   will run (otherwise nested skills are quadratic in nesting depth).
    *
    * A path, not a boolean, so the owner can be named in the containment test
    * and so the two owner kinds stay one concept. Carried on the context rather
@@ -3015,13 +2907,9 @@ interface ScanContext {
 /**
  * Cache of (projectRoot → registry for the *inventory* link walk).
  *
- * Deliberately separate from the validator's own registry memo (which now lives
- * beside `crawlAndResolveRegistry`, so this lane no longer keeps a second copy of
- * that cache): the validator's registry crawls markdown AND HTML, while the
- * inventory walk has always been markdown-only. Sharing one registry between them
- * would quietly widen the link graph `files.linked` is computed from, which is a
- * behaviour change and not this fix's business. Two crawls per project root is
- * still two, not two per skill.
+ * Deliberately separate from the validator's own registry memo: the validator's
+ * registry crawls markdown AND HTML, while the inventory walk is markdown-only,
+ * and sharing one would widen the link graph `files.linked` is computed from.
  */
 const inventoryRegistryCache: Map<string, Promise<Awaited<ReturnType<typeof crawlSkillLinkRegistry>>>> = new Map();
 
@@ -3062,8 +2950,7 @@ function getOrCreateInventoryRegistry(
  * The third argument is unconditional where the second is not: a
  * {@link gitTrackerForProjectRoot} is asked per skill, about that skill's own root, and
  * answers `undefined` for a root it cannot serve — so there is no "no root, no source"
- * case to encode here. This is the call site that carried all 786 measured
- * `git check-ignore` spawns.
+ * case to encode here.
  */
 function pluginInventoryAt(dir: string): Promise<Awaited<ReturnType<typeof extractClaudePluginInventory>>> {
   const projectRoot = findProjectRoot(dir);
@@ -3137,7 +3024,7 @@ async function resolveScanContext(
  *
  * The OS message is carried through verbatim (it names the errno and the syscall,
  * which is what distinguishes a permissions problem from a vanished mount), but it
- * is no longer the ONLY thing the run says — the code, the location and the fix
+ * is not the ONLY thing the run says — the code, the location and the fix
  * come from the registry.
  *
  * This result is a `data.files[]` row but NOT a file read: `countFilesByStatus`
@@ -3181,12 +3068,8 @@ function unreadablePathResult(
  * Validate ONE subject the population found, degrading to a finding if the
  * filesystem refuses it.
  *
- * Guarded per SUBJECT, not just per listing: an unreadable FILE (a root-owned
- * `SKILL.md`, a quarantined bundle) used to throw out of `validateSkill` and
- * abort the whole run with `status: error` and zero findings. Under
- * `~/.claude/plugins` — the flagship `vat audit --user` target, populated by sudo
- * installs and macOS quarantine — a root-owned FILE is at least as likely as a
- * root-owned directory.
+ * Guarded per SUBJECT, not just per listing: under `~/.claude/plugins` a
+ * root-owned FILE is at least as likely as a root-owned directory.
  *
  * Ownership is decided here and only here, in population order: a plugin
  * directory claims its subtree unconditionally; a skill claims its own only
@@ -3243,10 +3126,8 @@ function scanRefusalRemedy(): string {
  * validation per subject, subtree ownership across subjects (see
  * {@link validateScanSubject}), the nested-config breadcrumb, and the refusal
  * findings. A refused directory is a finding, not a thrown error: `vat audit`
- * is a bulk linter over trees it does not own, and one root-owned directory
- * under `~/.claude/plugins` used to abort the flagship `vat audit --user` run
- * outright, losing every finding already collected. The scope of the loss is
- * the subtree that refused; every readable sibling is still validated.
+ * is a bulk linter over trees it does not own, so the loss is scoped to the
+ * subtree that refused.
  */
 async function scanDirectory(
   dirPath: string,
@@ -3339,11 +3220,8 @@ function isUnreadablePathResult(result: ValidationResult): boolean {
 /**
  * Count files by their worst actionable severity, and the files read.
  *
- * A refused path is NOT a scanned file. It used to be counted as one, which
- * made the zero-files refusal unreachable for exactly the tree it exists for:
- * `chmod 000` on the whole root gave one file scanned, none passed, a warning
- * status and exit 0 — nothing read, gate green. Kept out of every status count
- * too, or `filesWithWarnings` would exceed the files read.
+ * A refused path is NOT a scanned file, or `chmod 000` on the whole root would
+ * pass the zero-files refusal. Kept out of every status count too.
  */
 function countFilesByStatus(results: readonly ValidationResult[]): { examined: number; counts: FileStatusCounts } {
   const scanned = results.filter((r) => !isUnreadablePathResult(r));

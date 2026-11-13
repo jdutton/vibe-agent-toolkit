@@ -130,19 +130,6 @@ Skill content here...
 - Length limits (warning at 5000+ lines)
 - Console-incompatible tool usage (warning)
 
-### 5. VAT Agents
-
-VAT agent directories contain an `agent.yaml` manifest and `SKILL.md`:
-
-```
-my-agent/
-├── agent.yaml
-└── SKILL.md
-```
-
-**Validation checks**:
-- Validates the `SKILL.md` file with VAT-specific context
-
 ## User-Level Audit
 
 The `--user` flag audits your installed Claude plugins:
@@ -396,7 +383,7 @@ data:
                                    #   outside every count above: files.length === examined + pathsUnreadable
   files:
     - path: plugins/my-plugin      # relative to `root`
-      type: agent-skill | vat-agent | claude-plugin | marketplace | registry | unknown
+      type: agent-skill | claude-plugin | marketplace | registry | unknown
       status: ok | findings        # literal: findings iff this file carries any finding
       summary: { errors, warnings, info }  # this file's findings by severity
   hierarchical: null               # `--user` only: the marketplace → plugin → skill view
@@ -816,7 +803,6 @@ for VAT's audit stance.
 ## See Also
 
 - [CLI Reference](./index.md) - Complete CLI documentation
-- [Agent Command](./agent.md) - Agent build and import commands
 - [Resources Command](./resources.md) - Markdown resource validation
 - [Doctor Command](./doctor.md) - Environment diagnostics
 

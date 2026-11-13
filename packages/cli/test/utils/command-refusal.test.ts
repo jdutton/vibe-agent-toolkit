@@ -3,8 +3,6 @@
  * defect in VAT is never relabelled as the user's mistake.
  */
 
-import { AGENT_MANIFEST_INVALID_CODE, AGENT_MANIFEST_NOT_FOUND_CODE, AGENT_MANIFEST_UNREADABLE_CODE } from '@vibe-agent-toolkit/agent-config';
-import { AGENT_PACKAGE_ROOT_MISSING_CODE } from '@vibe-agent-toolkit/agent-skills';
 import { ApiRequestError, ApiTransportError, OrgApiClient } from '@vibe-agent-toolkit/claude-marketplace';
 import { LinkAuthConfigError, OKF_UNKNOWN_BUNDLE_CODE, okfBundleRuns, PROJECTION_STATEMENT_REFUSED_CODE } from '@vibe-agent-toolkit/resources';
 import { ExitCode, type ErrorReport } from '@vibe-agent-toolkit/schema';
@@ -22,7 +20,6 @@ import {
 import { updateYamlIn } from '@vibe-agent-toolkit/utils/yaml';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { AgentNameEscapesScopeError } from '../../src/commands/agent/install-path.js';
 import { PluginSymlinkRefusedError } from '../../src/commands/claude/plugin/tree-copy.js';
 import { parseBudgetSeconds, requireSupervisableFlags } from '../../src/commands/resources/check-supervisor.js';
 import { requireKnownCheck } from '../../src/commands/resources/check.js';
@@ -114,25 +111,6 @@ describe('refusalCodeOf', () => {
 
   it('reads a resources.linkAuth provider that does not compile as CONFIG_INVALID', () => {
     expect(refusalCodeOf(new LinkAuthConfigError('providers[0]', 'rewrite[0].when', new Error('bad regex')))).toBe('CONFIG_INVALID');
-  });
-
-  it('reads an agent path naming no manifest as USAGE_INVALID, and one that cannot be read as INPUT_UNREADABLE', () => {
-    expect(refusalCodeOf(new VatError(AGENT_MANIFEST_NOT_FOUND_CODE, 'No agent manifest found'))).toBe('USAGE_INVALID');
-    expect(refusalCodeOf(new VatError(AGENT_MANIFEST_UNREADABLE_CODE, 'EACCES'))).toBe('INPUT_UNREADABLE');
-  });
-
-  it('reads an agent manifest the schema rejects, thrown by the loader, as CONFIG_INVALID', () => {
-    // `agent run`/`build`/`install` load through `loadAgentManifest`: a user's
-    // invalid manifest is their config's mistake, never a defect in VAT.
-    expect(refusalCodeOf(new VatError(AGENT_MANIFEST_INVALID_CODE, 'Agent manifest validation failed'))).toBe('CONFIG_INVALID');
-  });
-
-  it('reads an agent build with nowhere to put its default output as USAGE_INVALID', () => {
-    expect(refusalCodeOf(new VatError(AGENT_PACKAGE_ROOT_MISSING_CODE, 'Could not find package.json'))).toBe('USAGE_INVALID');
-  });
-
-  it('reads an agent name that is not one entry under the scope root as USAGE_INVALID', () => {
-    expect(refusalCodeOf(new AgentNameEscapesScopeError('../victim', '/skills'))).toBe('USAGE_INVALID');
   });
 
   // A copied tree whose link escapes it, or leads a following walk back into itself: the input, not VAT.

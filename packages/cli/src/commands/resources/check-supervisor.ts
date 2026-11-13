@@ -32,18 +32,9 @@
  * - **The kill is `SIGKILL` because SIGKILL cannot be REGRESSED.** No code the
  *   child runs, now or after any future edit, can handle, ignore or block it.
  *
- *   ⚠️ This header used to claim, as measured fact, that "SIGTERM does not kill
- *   the child either, for the same reason". **That is false and was measured to
- *   be false**: `kill -TERM` on a child blocked inside synchronous `node:sqlite`
- *   `.all()` killed it instantly. The measurement above is about a process that
- *   HAS a JS handler installed — a handler is a JS callback and the blocked
- *   event loop is what would schedule it — and with no handler installed
- *   SIGTERM's default disposition is kernel-delivered termination that needs no
- *   cooperation at all. So SIGTERM works today only because nothing here
- *   installs a handler, which is a property one future edit could silently
- *   remove; SIGKILL is not a property anything can remove. The design did not
- *   change, only the reason for it — recorded because a false claim is at its
- *   worst in a section that tells the next reader not to re-derive it.
+ *   ⚠️ SIGTERM DOES kill a child blocked in synchronous `node:sqlite` today, but
+ *   only because nothing here installs a JS handler — a property one future
+ *   edit could silently remove. SIGKILL is not a property anything can remove.
  * - **The database cannot be handed over.** `DatabaseSync` has no `serialize()`
  *   and `:memory:` is per-CONNECTION, so whoever runs the SQL populates its own
  *   projection. That is why the child is a whole `vat resources check` run and
@@ -141,16 +132,10 @@ import { resolveVatBinPath } from '../../utils/vat-bin-path.js';
 /**
  * The bound applied when `--budget` is not passed, in seconds.
  *
- * Not a round number chosen for looks, and no longer sized against this
- * repository alone. Population is ~1.2 s warm here and 33-35 s with a cold parse
- * cache; on a real adopter tree of 9,992 tracked files it is ~5 s warm and
- * **16.5 s cold**, which is the first time the default was checked outside VAT.
- * So 300 s is ~18× the worst thing anyone has actually measured — deliberately
- * loose, because a FALSE kill is far worse than a slow honest failure: it
- * teaches the operator to pass `--budget 0` and lose the bound entirely. Five
- * minutes still turns an infinite hang into a clean bounded failure, which is
- * the whole objective. A tree ten times that adopter's lands near 165 s, still
- * inside the default but no longer comfortably.
+ * Deliberately loose, because a FALSE kill is far worse than a slow honest
+ * failure: it teaches the operator to pass `--budget 0` and lose the bound
+ * entirely. Five minutes still turns an infinite hang into a clean bounded
+ * failure, which is the whole objective.
  */
 export const DEFAULT_BUDGET_SECONDS = 300;
 
@@ -411,16 +396,13 @@ export function runsInThisProcess(
  * Read `--supervised-by` into the child it describes, refusing it unless this process really is
  * the child of the supervisor it names — and refuse a `--budget` it would silently ignore.
  *
- * 🚨 **Not an operator's flag, and passing it by hand is refused, not tolerated.** It used to be
- * harmless-looking: the process ran the checks unbounded, printed none of the notices its
- * supervisor would have, and appended to a log nobody watched. A flag that silently removes the
- * bound is the shape an operator never discovers until the hang it was meant to prevent. So the
+ * 🚨 **Not an operator's flag, and passing it by hand is refused, not tolerated**: a flag that
+ * silently removes the bound is the shape an operator never discovers until the hang. So the
  * value names its supervisor's pid, and a process whose parent is not that pid is refused
  * `USAGE_INVALID` in plain words.
  *
- * 🔑 **One value, so an invalid combination cannot be written.** The invoker and the progress log
- * used to be two hidden flags that had to arrive together, refused when one came alone. Now they
- * are fields of one value, and the only thing left to refuse is a value that does not parse.
+ * 🔑 **One value, so an invalid combination cannot be written**: the invoker and the progress
+ * log are fields of one value, and the only thing left to refuse is one that does not parse.
  *
  * 🚨 **`--budget` beside it is refused.** The flag wins the fork in {@link runsInThisProcess}
  * unconditionally, so `--budget 60` with it would run UNBOUNDED and say nothing. The RAW
@@ -511,11 +493,8 @@ export type AbnormalDeath =
    * later (uninterruptible I/O).
    *
    * 🚨 Distinct from `spawn-failed` and that distinction is the whole point.
-   * Both arrive on `child.on('error')` and the handler used to read every one of
-   * them as a spawn failure, which reported the exact opposite of what happened:
-   * "could not be started at all", "nothing ran at all", "the watchdog never
-   * fired". It started, it ran past its budget, the watchdog fired, and it would
-   * not die.
+   * Both arrive on `child.on('error')`; this one started, ran past its budget,
+   * and would not die.
    *
    * `pid` is carried because it is the only handle the operator has left on a
    * process this command could not stop.
@@ -581,21 +560,11 @@ export type RunResolution =
  * ## 🚨 The defect this closes: a signal death READ AS SUCCESS
  *
  * `exit` fires with `(code, signal)`, and a process that dies from a signal has
- * `code === null` with `signal` set. This handler used to read only the code and
- * coerce it — `resolve(exitCode ?? 0)` — so every signal death became a
- * COMPLETED run with exit code 0. The parent then forwarded an empty stdout and
- * exited 0, and a CI gate reads that as a clean pass.
- *
- * It needed no external actor. A check whose statement materialises an unbounded
- * result set — `SELECT i FROM <infinite recursive CTE>`, the row-returning twin
- * of the aggregate this whole module exists for — makes `.all()` fill the heap
- * until V8 gives up and Node ABORTS. Measured: `PARENT_EXIT=0`, zero bytes of
- * stdout, on precisely the input the bound exists to catch. Through the
- * unsupervised lane the identical input exits 134.
- *
- * Every memory death arrives here: Node's own heap abort, a kernel OOM killer on
- * a memory-capped runner (which picks the large CHILD, never the idle parent),
- * and a container limit. `?? 0` turned all of them into a pass.
+ * `code === null` with `signal` set, and a signal death must never be coerced
+ * to a COMPLETED run with exit code 0 (which a CI gate reads as a clean pass).
+ * Every memory death arrives here: Node's own heap abort (an unbounded result
+ * set filling `.all()`), a kernel OOM killer on a memory-capped runner (which
+ * picks the large CHILD, never the idle parent), and a container limit.
  *
  * ## 🪤 A kill only counts if it LANDED
  *
@@ -609,13 +578,9 @@ export type RunResolution =
  *
  * ## 🚨 The ORDER of the tests below is load-bearing
  *
- * `spawnError` used to be tested FIRST, so `killed` was never consulted on that
- * branch — and `child.on('error')` is not only a spawn-failure listener. Node
- * emits `error` on the ChildProcess when `subprocess.kill()` itself fails, so a
- * refused SIGKILL landed on the spawn-failure branch and the report said the
- * child "could not be started at all", that "nothing ran at all, so this is an
- * installation or PATH problem", and that "the watchdog never fired". Three
- * statements, all false, about a runaway that was still executing.
+ * Node emits `error` on the ChildProcess when `subprocess.kill()` itself fails,
+ * so testing `spawnError` first would report a refused SIGKILL as a child that
+ * "could not be started at all".
  *
  * So: a real ending first, then what the SUPERVISOR did (a refused kill, then a
  * kill), and only then a failure to start. A run whose kill was refused must
@@ -1091,8 +1056,8 @@ function pollIntervalMs(budgetMs: number): number {
  *
  * ONLY a missing file. The log lives in a directory this process minted, so a
  * refusal to stat it is not a state the watchdog has a reading for — and the
- * reading it used to take, 0 forever, is "the child has gone quiet", which
- * kills a child that may be doing fine and reports it as a runaway. So it throws,
+ * reading "0 forever" would mean "the child has gone quiet" and kill a healthy
+ * child as a runaway. So it throws,
  * and {@link superviseCheck} ends the supervision on the throw: the child killed,
  * the run reported as one that did not finish.
  *

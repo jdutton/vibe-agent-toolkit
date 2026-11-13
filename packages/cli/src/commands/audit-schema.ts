@@ -90,7 +90,7 @@ const SettingsBlockSchema = z.object({
 const AuditFileSchema = z.object({
   /** Relative to `data.root` — or to the clone, for a URL audit. */
   path: z.string(),
-  type: z.enum(['agent-skill', 'vat-agent', 'claude-plugin', 'marketplace', 'registry', 'unknown']),
+  type: z.enum(['agent-skill', 'claude-plugin', 'marketplace', 'registry', 'unknown']),
   /** Literal: `findings` iff this file carries any finding. */
   status: z.enum(['ok', 'findings']),
   /** This file's findings by severity. */

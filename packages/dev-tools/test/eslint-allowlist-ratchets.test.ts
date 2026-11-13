@@ -41,7 +41,7 @@ interface Ratchet {
   /** The rule whose option carries the list. */
   readonly rule: string;
   /** The option key holding the repo-relative file list. */
-  readonly option: 'allowFiles' | 'allow';
+  readonly option: 'allowFiles';
   /** A file the rule is configured for, so `calculateConfigForFile` resolves its options. */
   readonly probeFile: string;
   /** The constant in `eslint.config.js` a stale entry is deleted from. */
@@ -73,18 +73,6 @@ const RATCHETS: readonly Ratchet[] = [
     probeFile: 'packages/utils/test/fs-utils.test.ts',
     constant: 'UNIT_TIER_IO_RATCHET',
   },
-  {
-    rule: 'local/no-literal-process-exit',
-    option: 'allow',
-    probeFile: 'packages/cli/src/bin.ts',
-    constant: "the `allow` list on 'local/no-literal-process-exit'",
-  },
-  {
-    rule: 'local/no-stdout-outside-writer',
-    option: 'allowFiles',
-    probeFile: 'packages/cli/src/commands/okf/validate.ts',
-    constant: 'STDOUT_OUTSIDE_WRITER_ALLOW',
-  },
 ];
 
 /** The options object the repo's own config hands the rule, or `{}`. */
@@ -110,8 +98,8 @@ async function liftedLinter(ratchet: Ratchet): Promise<ESLint> {
       files: ['**/*.ts', '**/*.cts'],
       languageOptions: { parser: tsparser, parserOptions: { ecmaVersion: 2024, sourceType: 'module' } },
       plugins: { local: localRules },
-      // The repo's own options with ONLY the list lifted: a rule whose other
-      // options are required (`no-stdout-outside-writer`'s `paths`) keeps them.
+      // The repo's own options with ONLY the list lifted: a rule's other
+      // options, required ones included, are kept.
       rules: { [ratchet.rule]: ['error', { ...(await configuredOptions(ratchet)), [ratchet.option]: [] }] },
     }],
   });

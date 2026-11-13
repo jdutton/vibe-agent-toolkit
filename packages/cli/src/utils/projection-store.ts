@@ -160,9 +160,7 @@ const PROJECTION_STORE_BACKEND: OptionalBackend = {
 /**
  * Whether this process should read and write a projection store.
  *
- * **On unless turned off.** It used to be the opposite; the measurement that
- * paid for the flip, and the blob-tier bound that had to land first, are in
- * `docs/architecture/resource-scanning-and-caching.md` §3.7.
+ * **On unless turned off** (rationale: `docs/architecture/resource-scanning-and-caching.md` §3.7).
  *
  * Read from the environment at each call rather than memoized at module load:
  * `vitest.setup.js` deletes every `VAT_*` variable before any test module
@@ -180,10 +178,8 @@ const PROJECTION_STORE_BACKEND: OptionalBackend = {
  *
  * 🪤 Read through `parseEnvBoolean`, never for truthiness — `VAT_CACHE=1` is
  * the value an operator writes to turn caching ON, and a truthiness test would
- * read it as a reason to decline. It was previously a comparison against the
- * literal `'0'`, which is the same shape `ParseCache` carried and the same
- * defect: `VAT_CACHE=false` disabled nothing. The two now share one parser
- * (`@vibe-agent-toolkit/utils`) so the variable cannot be read two ways again.
+ * read it as a reason to decline. It shares one parser with `ParseCache`
+ * (`@vibe-agent-toolkit/utils`) so the variable cannot be read two ways.
  *
  * Only an explicit `false` vetoes. `parseEnvBoolean` returns `undefined` for a
  * value it cannot read, and an unreadable value is not something the operator
@@ -210,12 +206,10 @@ export function projectionStoreSelected(): boolean {
  * ⚠️ **Deliberately NOT typed for SQL, and do not re-widen it.** This handle
  * reaches the database at {@link PROJECTION_STORE_DIR_ENV}'s directory, which
  * defaults to one file per VAT release shared by every root on the machine —
- * holding other repositories' link text, heading text and frontmatter. A field
- * typed `SqlQueryableStore` used to live here "for a caller that needs to ASK
- * the store something", and that caller was removed precisely because arbitrary
- * SQL over this store answers from trees the asker never named. `populate()`
- * needs the engine-free {@link PopulationCache} and nothing more; a query lane
- * builds its own store (see `projection-query.ts`).
+ * holding other repositories' link text, heading text and frontmatter, so
+ * arbitrary SQL over it would answer from trees the asker never named.
+ * `populate()` needs the engine-free {@link PopulationCache} and nothing more; a
+ * query lane builds its own store (see `projection-query.ts`).
  */
 export interface OpenedPopulationCache {
   /** Hand this to `populate()`. */
@@ -409,27 +403,12 @@ async function loadBackend(): Promise<typeof ProjectionSqlite> {
  * selected, which is the default, so `node:sqlite` is required on a default
  * `vat resources query` whichever way the lane resolves its store.
  *
- * 🪤 This used to say "EVERY `vat resources query`/`check` run", and that was
- * too strong for `check`. Measured against the built CLI on Node v24.13.1 by
- * counting the `ExperimentalWarning` `node:sqlite` emits at load — the only
- * externally visible tell that the module was reached at all:
+ * 🪤 `check` reaches a store only when the project declares checks for it to
+ * evaluate, so a repo with none never loads the backend; `query` alone
+ * establishes the floor.
  *
- * | Command | Warnings | Backend loaded? |
- * |---|---|---|
- * | `vat resources query "SELECT …"` | 1 | yes |
- * | `vat resources check`, no checks declared | 0 | **no** |
- *
- * `check` reaches a store only when the project declares checks for it to
- * evaluate, so a repo with none never loads the backend and never needed the
- * floor for that command. The floor argument is unaffected — `query` alone
- * establishes it — but "every default run of those two commands" was a claim
- * nothing had counted.
- *
- * ✅ **VAT's declared floor is now `>=22.16.0` (raised past 22.13.0 for
- * `StatementSync.columns()`), so this no longer fires on a SUPPORTED Node.** It used to: the manifests said `>=22.0.0` while these two
- * commands could not run below 22.13.0, which meant thirteen Node patch
- * releases were advertised as supported and hard-failed here. The floor was
- * raised to stop advertising what VAT cannot do. The branch stays load-bearing
+ * ✅ **VAT's declared floor is `>=22.16.0` (raised past 22.13.0 for
+ * `StatementSync.columns()`), so this does not fire on a SUPPORTED Node.** The branch stays load-bearing
  * for the Node that is merely *installed* rather than supported — `engines` is
  * a warning in npm and nothing at all under most runners, so a user on 22.4
  * still reaches this and still deserves to be told which number is wrong.

@@ -600,7 +600,7 @@ vat skills list
 vat skills list --user
 
 # List skills at specific path
-vat skills list packages/my-agent
+vat skills list packages/my-skills
 
 # Show detailed information
 vat skills list --verbose

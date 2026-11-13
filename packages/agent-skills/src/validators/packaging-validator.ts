@@ -1129,7 +1129,7 @@ async function validateSkillForPackagingOn(
   // Validate frontmatter schema (name format, required fields, etc.)
   if (parseResult.frontmatter) {
     rawIssues.push(
-      ...validateFrontmatterSchema(parseResult.frontmatter, false, skillLocation),
+      ...validateFrontmatterSchema(parseResult.frontmatter, skillLocation),
       ...validateFrontmatterRules(parseResult.frontmatter, skillLocation),
     );
   } else {
@@ -1980,8 +1980,7 @@ export function getResolvedMarkdownLinks(
   // consequences, both fixed here rather than downstream:
   //   - the caller derives `directFileCount` from this list, so occurrences made
   //     it report more direct files than the whole bundle holds;
-  //   - the existence probe below ran once per occurrence. On this repo's own
-  //     cat-agents skill that was 42 probes over 9 distinct paths.
+  //   - the existence probe below ran once per occurrence, not once per path.
   // A Set preserves insertion order, so the surviving order is unchanged.
   const candidates = new Set<string>();
   for (const link of links) {

@@ -50,7 +50,6 @@
       "Bash(tsx tools:*)",
       "Bash(vat --help:*)",
       "Bash(vat --version:*)",
-      "Bash(vat agent:*)",
       "Bash(vat audit:*)",
       "Bash(vat doctor:*)",
       "Bash(vat rag:*)",

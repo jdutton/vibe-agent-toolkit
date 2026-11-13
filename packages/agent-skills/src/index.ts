@@ -3,8 +3,6 @@
  * Build, validate, and package agent skills in the Agent Skills format
  */
 
-export { AGENT_PACKAGE_ROOT_MISSING_CODE, buildAgentSkill, type BuildOptions, type BuildResult } from './builder.js';
-
 export {
   createProjectRegistry,
   extractH1Title,
@@ -172,12 +170,6 @@ export type {
   ResourceFormat,
   Surface,
 } from './validators/types.js';
-
-export {
-  importSkillToAgent,
-  type ImportOptions,
-  type ImportResult,
-} from './import.js';
 
 // Packaging refusals of a skill's own content, told apart from defects by code
 export { asPackagerRefusal, isSkillPackagingInputError, SKILL_PACKAGE_CHECKS_FAILED_CODE, SKILL_PACKAGING_INPUT_INVALID_CODE, SkillPackageChecksFailedError } from './packaging-errors.js';

@@ -54,9 +54,6 @@ const inputEntries = ofKind('input');
 const reportVerbs = new Set(reportEntries.flatMap((entry) => entry.verbs));
 const legacyVerbs = new Set(legacyEntries.flatMap((entry) => entry.verbs));
 
-/** Leaves whose stdout is a protocol stream, not a document. Asserted both ways. */
-const PROTOCOL_LEAVES = ['agent run', 'mcp serve'];
-
 /** Every `.ts` under `packages/cli/src/commands`, as text. */
 function commandSources(): string[] {
   return readdirSync(COMMANDS_DIR, { recursive: true, encoding: 'utf-8' })
@@ -202,16 +199,9 @@ describe('Commander leaves ↔ registry', () => {
     expect(leaves.length).toBeGreaterThan(0);
 
     const miscovered = leaves
-      .filter((leaf) => !PROTOCOL_LEAVES.includes(leaf))
       .map((leaf) => ({ leaf, entries: coverageOf(leaf) }))
       .filter(({ entries }) => entries !== 1);
     expect(miscovered).toEqual([]);
-
-    // The exception list, both ways: each is live, and none publishes a document.
-    expect(PROTOCOL_LEAVES.filter((leaf) => !leaves.includes(leaf))).toEqual([]);
-    const documented = PROTOCOL_LEAVES.filter((leaf) =>
-      reportVerbs.has(leaf) || legacyVerbs.has(leaf) || externalEntries.some((entry) => entry.verbs.includes(leaf)));
-    expect(documented).toEqual([]);
   });
 
   it('no legacy entry names a verb that publishes through a report entry', () => {

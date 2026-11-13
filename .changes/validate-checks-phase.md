@@ -9,8 +9,8 @@
   — including a phase killed or dead during a check — is exit 1; exit 2 (`RUN_INCOMPLETE`) only when
   the phase stops before its population completes. It is killed after 300 s without progress (the
   whole population is one unit); `vat validate` cannot raise that bound.
-- **`vat mcp serve` and `vat-compile-resources watch` now die of SIGINT** (status 130 on POSIX)
-  instead of exiting 0; SIGTERM still kills them, as before. Every signal-handling command also
+- **`vat-compile-resources watch` now dies of SIGINT** (status 130 on POSIX)
+  instead of exiting 0; SIGTERM still kills it, as before. Every signal-handling command also
   handles SIGBREAK on Windows. Interrupting a supervised checks run: `vat resources check --help`.
 - **`vat` (every command) now waits for the CLI it starts and ends as it did:** on POSIX,
   `kill`/`timeout` on the `vat` pid stops the CLI too (it used to run on; on Windows an outside kill

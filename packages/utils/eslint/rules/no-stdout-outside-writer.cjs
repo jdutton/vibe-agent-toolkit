@@ -20,10 +20,7 @@
  *   same. A rule that saw only the primitives was blind to every command that
  *   writes through a helper.
  *
- * Option `allowFiles: string[]` — repo-relative files whose stdout is not a
- * document (a protocol leaf). Asserted both ways: a listed file with no
- * violation left is itself an error (`staleAllow`), so the list never holds a
- * dead entry.
+ * No file under `paths` is exempt, and the schema refuses an exemption list.
  *
  * @example
  * // BAD — a shape nothing validates, beside a code decided here
@@ -36,7 +33,7 @@
 
 'use strict';
 
-const { createExemptDirectoryMatcher, createExemptPathMatcher, isTestFile } = require('./exempt-path-matcher.cjs');
+const { createExemptDirectoryMatcher, isTestFile } = require('./exempt-path-matcher.cjs');
 
 /** The `console` methods that write stdout. */
 const STDOUT_CONSOLE_METHODS = new Set(['log', 'info', 'debug', 'dir', 'table']);
@@ -93,9 +90,8 @@ module.exports = {
         type: 'object',
         properties: {
           paths: { type: 'array', items: { type: 'string' }, uniqueItems: true },
-          allowFiles: { type: 'array', items: { type: 'string' }, uniqueItems: true },
         },
-        required: ['paths', 'allowFiles'],
+        required: ['paths'],
         additionalProperties: false,
       },
     ],
@@ -104,31 +100,21 @@ module.exports = {
         'stdout is written by the document writer only (endWithReport / endWithRefusal / ' +
         'writeExternalDocument / writeArtifact). A command that writes its own bytes publishes a ' +
         'shape nothing validates, beside an exit code it decided.',
-      staleAllow:
-        'This file is listed in no-stdout-outside-writer allowFiles but writes stdout by no ' +
-        'reported route any more. Remove it from the list — the ratchet only shrinks.',
     },
   },
 
   create(context) {
-    const options = context.options?.[0] ?? { paths: [], allowFiles: [] };
+    const options = context.options?.[0] ?? { paths: [] };
     const filename = context.filename ?? context.getFilename();
     if (isTestFile(filename) || !createExemptDirectoryMatcher(options.paths)(filename)) {
       return {};
     }
-    const allowed = createExemptPathMatcher(options.allowFiles)(filename);
-    let violations = 0;
 
     return {
       CallExpression(node) {
         const handedOn = node.arguments.filter((arg) => arg.type === 'Identifier' && STDOUT_HELPERS.has(arg.name));
         const sites = writesStdout(node.callee) ? [node, ...handedOn] : handedOn;
-        violations += sites.length;
-        if (allowed) return;
         for (const site of sites) context.report({ node: site, messageId: 'stdoutOutsideWriter' });
-      },
-      'Program:exit'(node) {
-        if (allowed && violations === 0) context.report({ node, messageId: 'staleAllow' });
       },
     };
   },

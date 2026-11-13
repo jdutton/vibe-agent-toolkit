@@ -1,14 +1,14 @@
 # @vibe-agent-toolkit/discovery
 
-Intelligent file discovery for VAT agents, skills, and resources.
+File discovery for Agent Skills and markdown resources.
 
 ## Overview
 
-The discovery package provides tools for finding and identifying agent-related files in local directories. It detects file formats, respects gitignore rules, and enables pattern-based filtering for intelligent file discovery.
+The discovery package provides tools for finding and identifying skill and resource files in local directories. It detects file formats, respects gitignore rules, and enables pattern-based filtering for intelligent file discovery.
 
 ## Features
 
-- **Format Detection** - Automatically identify Agent Skills, VAT agents, and markdown resources
+- **Format Detection** - Automatically identify Agent Skills and markdown resources
 - **Gitignore Awareness** - Skip build outputs and ignored files by default
 - **Pattern Filtering** - Include/exclude files using glob patterns
 - **Recursive Scanning** - Deep directory traversal with symlink control
@@ -28,7 +28,7 @@ npm install @vibe-agent-toolkit/discovery
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
 
 const format = detectFormat('/path/to/SKILL.md');
-// Returns: 'agent-skill' | 'vat-agent' | 'markdown' | 'unknown'
+// Returns: 'agent-skill' | 'markdown' | 'unknown'
 ```
 
 ### Scan Directory
@@ -37,13 +37,13 @@ const format = detectFormat('/path/to/SKILL.md');
 import { scan } from '@vibe-agent-toolkit/discovery';
 
 const summary = await scan({
-  path: './agents',
+  path: './skills',
   recursive: true,
 });
 
 console.log(`Found ${summary.totalScanned} files`);
 console.log(`Agent Skills: ${summary.byFormat['agent-skill']}`);
-console.log(`VAT Agents: ${summary.byFormat['vat-agent']}`);
+console.log(`Markdown: ${summary.byFormat['markdown']}`);
 ```
 
 ### Filter by Pattern
@@ -77,21 +77,19 @@ Detect the format of a file based on its name and location.
 
 **Returns:**
 - `'agent-skill'` - SKILL.md file
-- `'vat-agent'` - Directory containing agent.yaml
 - `'markdown'` - .md file (resource)
 - `'unknown'` - Other file types
 
 **Example:**
 ```typescript
 detectFormat('/path/to/SKILL.md')        // 'agent-skill'
-detectFormat('/path/to/agent.yaml')      // 'vat-agent'
 detectFormat('/path/to/guide.md')        // 'markdown'
 detectFormat('/path/to/script.js')       // 'unknown'
 ```
 
 ### scan(options: ScanOptions): Promise<ScanSummary>
 
-Scan a directory for agent-related files.
+Scan a directory for skill and resource files.
 
 **Options:**
 ```typescript
@@ -125,7 +123,7 @@ interface ScanResult {
 **Example:**
 ```typescript
 const summary = await scan({
-  path: './agents',
+  path: './skills',
   recursive: true,
   include: ['**/*.md'],
   exclude: ['**/node_modules/**'],
@@ -237,7 +235,7 @@ import { scan, createPatternFilter } from '@vibe-agent-toolkit/discovery';
 
 // Scan everything
 const summary = await scan({
-  path: './agents',
+  path: './skills',
   recursive: true,
 });
 
@@ -276,7 +274,7 @@ The discovery package is organized into three main components:
 ### Scanners
 
 **Local Scanner** (`scanners/local-scanner.ts`)
-- Scans local file system for agent-related files
+- Scans local file system for skill and resource files
 - Respects gitignore rules automatically
 - Supports recursive traversal and symlink handling
 - Returns structured scan summaries
@@ -298,7 +296,6 @@ The scanner automatically detects gitignored files using the `isGitIgnored` util
 
 Format detection is based on conventions:
 - **Agent Skills** - Files named SKILL.md
-- **VAT Agents** - Directories containing agent.yaml
 - **Markdown** - Files with .md extension
 - **Unknown** - Everything else
 
@@ -323,16 +320,9 @@ Each component is independent and testable.
 
 The discovery package powers these CLI commands:
 
-- `vat agent audit` - Finds SKILL.md files to validate
+- `vat audit` - Finds SKILL.md files to validate
 - `vat resources scan` - Discovers markdown resources
 - `vat resources validate` - Finds files to check for broken links
-
-### Used by Runtime Packages
-
-Runtime packages use discovery for:
-- Finding skill dependencies
-- Locating reference files
-- Building resource inventories
 
 ## Error Handling
 

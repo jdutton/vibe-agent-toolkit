@@ -41,7 +41,6 @@ updates:
         exclude-patterns:
           # Pre-1.0 — see `zerover-sdks`.
           - "@lancedb/lancedb"
-          - "@anthropic-ai/*"
           # Version-locked pair — see `vitest`.
           - "vitest"
           - "@vitest/*"
@@ -50,11 +49,9 @@ updates:
           - "patch"
 
       # 🚨 Pre-1.0 packages, where `update-types: [minor]` does NOT mean what it
-      # says. Under semver, 0.x minor bumps are allowed to break, and these
-      # three do: one grouped "minor/patch" PR carried @lancedb/lancedb
-      # 0.22.3 → 0.37.1 (whose own release notes head a "🛠 Breaking Changes"
-      # section), @anthropic-ai/sdk 0.36.3 → 0.120.0 and
-      # @anthropic-ai/claude-agent-sdk 0.1.77 → 0.3.241. The major filter above
+      # says. Under semver, 0.x minor bumps are allowed to break: a grouped
+      # "minor/patch" PR carried @lancedb/lancedb 0.22.3 → 0.37.1, whose own release
+      # notes head a "🛠 Breaking Changes" section. The major filter above
       # cannot catch them, because Dependabot classifies 0.22 → 0.37 as a minor.
       #
       # They get their own PR so the breaking ones are visible as breaking,
@@ -62,7 +59,6 @@ updates:
       zerover-sdks:
         patterns:
           - "@lancedb/lancedb"
-          - "@anthropic-ai/*"
         update-types:
           - "minor"
           - "patch"

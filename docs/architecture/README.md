@@ -108,30 +108,6 @@ vibe-agent embed docs/ --output db.json  # Generate embeddings
 
 ---
 
-### Phase 3: Future Packages (Build When Needed)
-
-#### `@vibe-agent-toolkit/agents` (Future)
-**Purpose**: Agent runtime and execution framework
-- Agent lifecycle management
-- Tool/function calling abstractions
-- State management and persistence
-- Execution tracing and debugging
-
-#### `@vibe-agent-toolkit/llm-providers` (Future)
-**Purpose**: Multi-LLM abstraction layer
-- Unified interface across Claude, OpenAI, Gemini, etc.
-- Provider-specific optimizations
-- Retry logic and error handling
-- Cost tracking and monitoring
-
-#### `@vibe-agent-toolkit/deploy` (Future)
-**Purpose**: Deployment tooling for agents
-- Package agents for various targets (Claude Desktop, API, serverless, etc.)
-- Environment configuration management
-- Pre-deployment validation
-
----
-
 ## Schema Strategy
 
 ### Schemas as First-Class Citizens
@@ -171,150 +147,6 @@ packages/resources/
 
 ---
 
-## Result Envelopes & Railway-Oriented Programming
-
-### Overview
-
-All VAT agents return standardized result envelopes following Railway-Oriented Programming (ROP) principles. This provides consistent error handling, type-safe result processing, and clear orchestration patterns.
-
-### Core Concepts
-
-**Result Types** (`@vibe-agent-toolkit/schema`):
-- `AgentResult<T, E>` - Success/error discriminated union for single-execution agents
-- `StatefulAgentResult<T, E, M>` - Adds "in-progress" state for multi-turn conversational agents
-- `LLMError` - Standard error types for LLM-related failures
-- `ExternalEventError` - Standard error types for external system integration
-
-**Output Envelopes**:
-- `OneShotAgentOutput<TData, TError>` - For pure functions and one-shot LLM analyzers
-- `ConversationalAgentOutput<TData, TError, TState>` - For multi-turn conversational agents
-
-**Result Helpers** (`@vibe-agent-toolkit/agent-runtime`):
-- `mapResult()` - Transform success data
-- `andThen()` - Chain operations (only if success)
-- `match()` - Pattern match on result status
-- `unwrap()` - Extract data (throws on error)
-
-### Benefits
-
-1. **Type Safety**: TypeScript discriminated unions ensure compile-time correctness
-2. **Consistent Error Handling**: Standard error types across all agents
-3. **Composability**: Result helpers enable clean agent chaining
-4. **Observability**: Machine-readable status enables monitoring and debugging
-5. **Testability**: Test helpers simplify assertion patterns
-
-### Example
-
-```typescript
-// Agent returns envelope
-const result = await haikuValidator.execute({ text, syllables, kigo, kireji });
-
-// Type-safe pattern matching
-const message = match(result, {
-  success: (data) => `Valid haiku: ${data.valid}`,
-  error: (err) => `Validation failed: ${err}`,
-});
-
-// Or extract directly (throws on error)
-const data = unwrap(result);
-```
-
-### Optional Observability Fields
-
-Result envelopes support optional fields for production observability and intelligent orchestration:
-
-#### Confidence (0-1 scale)
-
-Indicates certainty in the result, enabling intelligent orchestration decisions:
-
-```typescript
-{
-  status: 'success',
-  data: { breed: 'Maine Coon' },
-  confidence: 0.65  // 65% confident → maybe verify with another agent
-}
-```
-
-**Use cases:**
-- Orchestration decisions (retry if confidence < threshold)
-- Chain validation (verify uncertain results)
-- User transparency (show uncertainty to user)
-- Stopping criteria (iterate until confidence > 0.9)
-
-#### Warnings (non-fatal issues)
-
-Success with caveats - graceful degradation:
-
-```typescript
-{
-  status: 'success',
-  data: { breed: 'Persian' },
-  warnings: [
-    'Image quality was poor, confidence may be lower',
-    'Breed database last updated 6 months ago'
-  ]
-}
-```
-
-#### Execution Metadata (observability)
-
-Performance and cost tracking for production systems:
-
-```typescript
-interface ExecutionMetadata {
-  durationMs?: number;      // Performance monitoring
-  tokensUsed?: number;      // LLM cost tracking
-  cost?: number;            // Estimated cost in USD
-  model?: string;           // Which model (for A/B testing)
-  provider?: string;        // 'openai' | 'anthropic' | etc
-  retryCount?: number;      // Set by orchestrator's retry wrapper
-}
-```
-
-**Example:**
-```typescript
-{
-  status: 'success',
-  data: { characteristics: {...} },
-  execution: {
-    durationMs: 1234,
-    tokensUsed: 450,
-    cost: 0.0045,
-    model: 'gpt-4o-mini',
-    provider: 'openai',
-    retryCount: 0  // No retries needed
-  }
-}
-```
-
-**Use cases:**
-- Performance optimization (identify slow agents)
-- Cost attribution (multi-tenant systems)
-- Usage analytics (tokens per request)
-- Debugging (view retry behavior)
-
-### Error Classification & Retryability
-
-Error types implicitly convey retryability - orchestrators encode retry policy based on error type:
-
-**Retryable errors** (transient failures):
-- `llm-rate-limit` - Exponential backoff
-- `llm-timeout` - Quick retry
-- `llm-unavailable` - Long wait
-
-**Non-retryable errors** (permanent failures):
-- `llm-refusal` - Model refused to comply
-- `llm-invalid-output` - Output parsing failed
-- `invalid-input` - Bad user input
-
-**Separation of concerns:** Agents classify errors, orchestrators decide retry policy.
-
-### Learn More
-
-See [Orchestration Guide](../orchestration.md) for detailed patterns and examples.
-
----
-
 ## Architectural Principles
 
 ### 1. Clear Package Boundaries
@@ -333,7 +165,6 @@ resources (→ utils)
 
 ### 3. Start Minimal, Evolve As Needed
 - Don't build Phase 2 until Phase 1 proves its worth
-- Don't build Phase 3 until real use cases emerge
 - Prefer extracting packages from working code over speculative design
 
 ### 4. Schemas Co-located, Utilities Shared
@@ -361,7 +192,6 @@ resources (→ utils)
   - Marketplace directories: `.claude-plugin/marketplace.json`
   - Registry files: `installed_plugins.json`, `known_marketplaces.json`
   - Skills: `SKILL.md` files
-  - VAT agents: `agent.yaml` + `SKILL.md`
 - **Validators**: Reuses validators from `agent-skills` and `claude-marketplace` packages
   - Plugin validator (`claude-marketplace`): Schema validation for plugin manifests
   - Marketplace validator: Schema validation for marketplace manifests
@@ -391,7 +221,7 @@ resources (→ utils)
   - Checksum-based staleness detection
   - Plugin relationship tracking
 - Uses `detectFormat()` from `@vibe-agent-toolkit/discovery`
-  - Detects VAT agents and Agent Skills
+  - Detects Agent Skills
 - Outputs YAML via `utils/output.ts`
 
 **Exit Codes:**
@@ -408,7 +238,7 @@ When using `--user` flag:
 
 **Design Principles:**
 - **CLI is "dumb"**: All validation logic lives in `agent-skills`
-- **Reusable validators**: Same validators used by build, import, and audit
+- **Reusable validators**: Same validators used by build and audit
 - **Structured output**: YAML to stdout, errors to stderr
 - **CI/CD friendly**: Clear exit codes and parseable output
 
@@ -478,10 +308,4 @@ that nothing in `src/**` or any vitest entry file reaches, so an export a spec i
 - [Fact Extractors — Hazard Register](./fact-extractors-hazard-register.md) — the living register of hazards the fact store enforces or accepts, each with its status and its enforcer kind or bound; a change that builds part of the design adds or updates its rows.
 - [Fact Extractors — Parse Limits](./fact-extractors-limits.md) — the lab record behind every parse-pool limit, the headroom rule, the bounded-pool cost on a small corpus, and how long a cold whole-tree check takes.
 - [Zones](./zones.md) — the proposed lens model the projection is read through: storage vs. viewer zones, visibility as extent, per-zone reference resolution, resource identity and realizations, and the contributor seam that lets higher packages contribute facts `resources` must not interpret.
-- [Agent Specification Compatibility](./compatibility.md) — how VAT's agent specification lines up
-  against other industry agent formats, what interoperates, and which opinionated features
-  (resources, RAG, composition) have no counterpart elsewhere.
-- [Conversational Agents (Archetype 3)](./conversational-agents.md) — the multi-turn archetype:
-  session state, context accumulation across turns, and where the conversational shape diverges
-  from the single-shot archetypes.
 - [Parsers and Load Boundaries](./parsers-and-load-boundaries.md) — half shipped, half intended, and the document says which per section. ✅ Built: the three parse capabilities (spans-and-kinds, structure, faithful edit) as interfaces, the `ParseFacts` conformance suite the parse cache's own seam made possible, and `markdown-it` run through it as a test-only second implementation — which places five spans covering three of the seven span-bearing constructs in the probe, all of them block ones, and none of the four inline ones. 🔷 Intended: the rule that no parser, store or runtime may sit in a barrel's static module graph — with the measured cold cost of every barrel that currently violates it, which of the two load instruments answers which question, the current per-surface state, and the parse5 blocker. ⛔ The capability split buys swappability, never speed.

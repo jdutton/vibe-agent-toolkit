@@ -48,5 +48,3 @@ export {
 } from './frontmatter-setup.js';
 
 export { createMarkdownGitFixture } from './projection-fixture.js';
-
-export { MCPTestClient } from './mcp-client.js';

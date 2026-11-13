@@ -41,11 +41,10 @@
  * before the verb has initialised it. So each verb's `<VERB>_REPORT_SCHEMA`
  * lives beside it in a module that imports nothing from the writer.
  *
- * ## The one lint exception
+ * ## The writer is the only stdout
  *
  * `local/no-stdout-outside-writer` makes the writer the only stdout under
- * `commands/`. Its `allowFiles` is exactly `commands/agent/run.ts` — whose
- * stdout is the agent's reply, not a document.
+ * `commands/`.
  */
 
 import { FrictionReportSchema } from '@vibe-agent-toolkit/agent-skills';
@@ -61,13 +60,6 @@ import {
 import { ExitCode, type ExitCodeValue, type Report, type ReportZodSchema } from '@vibe-agent-toolkit/schema';
 import type { ZodTypeAny } from 'zod';
 
-import { AGENT_BUILD_EXAMINED, AGENT_BUILD_REPORT_SCHEMA } from './commands/agent/build-schema.js';
-import { AGENT_IMPORT_EXAMINED, AGENT_IMPORT_REPORT_SCHEMA } from './commands/agent/import-schema.js';
-import { AGENT_INSTALL_EXAMINED, AGENT_INSTALL_REPORT_SCHEMA } from './commands/agent/install-schema.js';
-import { AGENT_INSTALLED_EXAMINED, AGENT_INSTALLED_REPORT_SCHEMA } from './commands/agent/installed-schema.js';
-import { AGENT_LIST_EXAMINED, AGENT_LIST_REPORT_SCHEMA } from './commands/agent/list-schema.js';
-import { AGENT_UNINSTALL_EXAMINED, AGENT_UNINSTALL_REPORT_SCHEMA } from './commands/agent/uninstall-schema.js';
-import { AGENT_VALIDATE_EXAMINED, AGENT_VALIDATE_REPORT_SCHEMA } from './commands/agent/validate-schema.js';
 import { ARD_EMIT_REPORT_SCHEMA } from './commands/ard/emit-schema.js';
 import { AUDIT_EXAMINED, AUDIT_REPORT_SCHEMA } from './commands/audit-schema.js';
 import { AUDIT_SETTINGS_EXAMINED, AUDIT_SETTINGS_REPORT_SCHEMA } from './commands/audit-settings-schema.js';
@@ -83,7 +75,6 @@ import { CORPUS_SCAN_EXAMINED, CORPUS_SCAN_REPORT_SCHEMA } from './commands/corp
 import { renderDoctorText } from './commands/doctor-render.js';
 import { DOCTOR_EXAMINED, DOCTOR_REPORT_SCHEMA } from './commands/doctor-schema.js';
 import { INVENTORY_EXAMINED, INVENTORY_REPORT_SCHEMA } from './commands/inventory-schema.js';
-import { MCP_LIST_COLLECTIONS_EXAMINED, MCP_LIST_COLLECTIONS_REPORT_SCHEMA } from './commands/mcp/list-collections-schema.js';
 import { OKF_VALIDATE_REPORT_SCHEMA } from './commands/okf/validate-schema.js';
 import { ORCHESTRATOR_EXAMINED, ORCHESTRATOR_REPORT_SCHEMA } from './commands/orchestrator-schema.js';
 import { RAG_CLEAR_REPORT_SCHEMA, RAG_DATABASE_EXAMINED, RAG_STATS_REPORT_SCHEMA } from './commands/rag/admin-schema.js';
@@ -400,14 +391,6 @@ const REPORTS = [
   {
     kind: 'report',
     channel: 'stdout',
-    verbs: ['mcp list-collections'],
-    name: 'mcp-list-collections',
-    schema: MCP_LIST_COLLECTIONS_REPORT_SCHEMA,
-    examined: MCP_LIST_COLLECTIONS_EXAMINED,
-  },
-  {
-    kind: 'report',
-    channel: 'stdout',
     verbs: [CORPUS_SCAN],
     name: 'corpus-scan',
     schema: CORPUS_SCAN_REPORT_SCHEMA,
@@ -420,62 +403,6 @@ const REPORTS = [
     name: 'claude-marketplace-validate',
     schema: MARKETPLACE_VALIDATE_REPORT_SCHEMA,
     examined: MARKETPLACE_VALIDATE_EXAMINED,
-  },
-  {
-    kind: 'report',
-    channel: 'stdout',
-    verbs: ['agent validate'],
-    name: 'agent-validate',
-    schema: AGENT_VALIDATE_REPORT_SCHEMA,
-    examined: AGENT_VALIDATE_EXAMINED,
-  },
-  {
-    kind: 'report',
-    channel: 'stdout',
-    verbs: ['agent build'],
-    name: 'agent-build',
-    schema: AGENT_BUILD_REPORT_SCHEMA,
-    examined: AGENT_BUILD_EXAMINED,
-  },
-  {
-    kind: 'report',
-    channel: 'stdout',
-    verbs: ['agent import'],
-    name: 'agent-import',
-    schema: AGENT_IMPORT_REPORT_SCHEMA,
-    examined: AGENT_IMPORT_EXAMINED,
-  },
-  {
-    kind: 'report',
-    channel: 'stdout',
-    verbs: ['agent installed'],
-    name: 'agent-installed',
-    schema: AGENT_INSTALLED_REPORT_SCHEMA,
-    examined: AGENT_INSTALLED_EXAMINED,
-  },
-  {
-    kind: 'report',
-    channel: 'stdout',
-    verbs: ['agent list'],
-    name: 'agent-list',
-    schema: AGENT_LIST_REPORT_SCHEMA,
-    examined: AGENT_LIST_EXAMINED,
-  },
-  {
-    kind: 'report',
-    channel: 'stdout',
-    verbs: ['agent install'],
-    name: 'agent-install',
-    schema: AGENT_INSTALL_REPORT_SCHEMA,
-    examined: AGENT_INSTALL_EXAMINED,
-  },
-  {
-    kind: 'report',
-    channel: 'stdout',
-    verbs: ['agent uninstall'],
-    name: 'agent-uninstall',
-    schema: AGENT_UNINSTALL_REPORT_SCHEMA,
-    examined: AGENT_UNINSTALL_EXAMINED,
   },
   {
     kind: 'report',
@@ -614,16 +541,6 @@ const ARTIFACTS: readonly PublishedArtifactShape[] = [
   {
     kind: 'artifact',
     channel: 'stdout',
-    name: 'claude-desktop-config',
-    publishers: ['mcp serve'],
-    schema: null,
-    schemaFile: null,
-    writer: DOCUMENT_WRITER,
-    reason: '`mcp serve --print-config`: the Claude Desktop config snippet an operator pastes; its shape is the MCP client config.',
-  },
-  {
-    kind: 'artifact',
-    channel: 'stdout',
     name: 'skill-test-config',
     publishers: ['skill test configure'],
     schema: null,
@@ -675,10 +592,8 @@ const SCHEMA_PACKAGE = 'schema';
 const LIBRARY_RESULT = 'A result type the package barrel exports; its shape is the library API contract.';
 
 const EXPORTS: readonly ExportedTypeShape[] = [
-  ...exported('agent-config', ['ValidationResult'], LIBRARY_RESULT),
-  ...exported('agent-runtime', ['AgentResult', 'StatefulAgentResult'], 'The agent result envelope every runtime adapter returns.'),
   ...exported(AGENT_SKILLS, [
-    'BuildResult', 'FrontmatterResult', 'GitCloneResult', 'ImportResult', 'LinkGraphResult',
+    'FrontmatterResult', 'GitCloneResult', 'LinkGraphResult',
     'PackageSkillResult', 'PackagingValidationResult', 'ValidationResult',
     'PreflightResult', 'RunHarnessResult', 'StageHarnessResult',
   ], LIBRARY_RESULT),
@@ -688,24 +603,16 @@ const EXPORTS: readonly ExportedTypeShape[] = [
     'SettingsPathCandidatesResult', 'SettingsPathsResult', 'SettingsValidateResult', 'UninstallPluginResult',
   ], LIBRARY_RESULT),
   ...exported('discovery', ['ScanResult'], LIBRARY_RESULT),
-  ...exported('gateway-mcp', ['MCPToolResult'], 'The MCP tool result the gateway returns to a client.'),
   ...exported('rag', ['ChunkingResult', 'DocumentResult', 'IndexResult', 'RAGResult'], LIBRARY_RESULT),
   ...exported('resource-compiler', ['CompileResult', 'ParseResult'], LIBRARY_RESULT),
   ...exported('resources', [
     'BlobPopulationResult', 'ContentFetchResult', 'OkfBundleReport',
     'ParseResult', 'PopulateResult', 'ProjectionDocument', 'ResolveLocalHrefResult', 'ValidationResult',
   ], LIBRARY_RESULT),
-  ...exported('runtime-claude-agent-sdk', ['AgentConversionResult', 'BatchConversionResult'], LIBRARY_RESULT),
-  ...exported('runtime-langchain', ['ConversationalResult'], LIBRARY_RESULT),
-  ...exported('runtime-vercel-ai-sdk', ['ConversionResult'], LIBRARY_RESULT),
   ...exported('utils', ['ApplyResult'], 'What `applyTreePlan` returns: the warnings of a tree change that is done.'),
   ...exported(SCHEMA_PACKAGE, ['Report', 'OkReport', 'FindingsReport', 'ErrorReport'], 'The union report envelope every report verb publishes; its JSON Schemas are the `report` entries above.'),
   ...exported(SCHEMA_PACKAGE, ['ExitDeterminingDocument'], 'The envelope fields an exit code derives from.'),
-  ...exported(SCHEMA_PACKAGE, ['AgentResult', 'StatefulAgentResult', 'FrameworkResult'], 'The agent result envelope every runtime adapter returns.'),
-  ...exported(SCHEMA_PACKAGE, ['AllowFilterResult'], LIBRARY_RESULT),
-  ...exported('vat-example-cat-agents', [
-    'ApprovalResult', 'ChoiceResult', 'CustomApprovalResult', 'HaikuValidationResult', 'NameValidationResult',
-  ], 'An example agent\'s result type, published as part of the example package.'),
+  ...exported(SCHEMA_PACKAGE, ['AllowFilterResult', 'FrameworkResult'], LIBRARY_RESULT),
 ];
 
 /** An adopter-written shape's committed JSON Schema. */
@@ -717,7 +624,6 @@ const INPUTS: readonly InputShape[] = [
   ...inputs('agent-skills', ['skill-frontmatter', 'vat-skill-frontmatter', 'marketplace-manifest'], 'The SKILL.md frontmatter or marketplace.json an author writes.'),
   ...inputs('resources', ['project-config'], 'vibe-agent-toolkit.config.yaml, the adopter\'s project config.'),
   ...inputs('resources', ['okf-concept-frontmatter'], 'The OKF concept-document frontmatter a bundle author writes.'),
-  ...inputs('schema', ['agent-manifest', 'agent-metadata', 'agent-interface', 'llm-config', 'tool', 'resource-registry'], 'A part of the agent.yaml manifest an agent author writes.'),
   ...inputs('schema', ['vat-package-metadata'], 'The `vat` block an adopter writes in package.json.'),
   ...inputs('schema', ['validation-config'], 'The `validation` block (`severity` / `allow`) an adopter writes.'),
 ];

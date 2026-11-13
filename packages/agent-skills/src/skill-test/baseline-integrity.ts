@@ -63,14 +63,12 @@ import { sanitizeGraderText } from './grader-text.js';
  *     needle and excerpt come from that same string.
  *   - **Case.** Folded UNCONDITIONALLY, not just on win32. Windows is the obvious
  *     case-insensitive filesystem, but macOS ships case-insensitive APFS/HFS+ by
- *     default, so `cat /PRIVATE/VAR/…/VAT-SKILL-TEST/…/SKILL.md` succeeds there and
- *     read as clean while the win32-gated fold was in force. Case-folding both
+ *     default. Case-folding both
  *     sides cannot create a false positive that the path-boundary match would not
  *     already have rejected, so there is no cost to paying it everywhere.
  *
- * 8.3 short names (`VAT-SK~1`) are NOT handled — neither here nor, contrary to what
- * this comment used to claim, by {@link harnessNeedles}, whose segments are all
- * longer than 8 characters and are therefore exactly what Windows shortens.
+ * 8.3 short names (`VAT-SK~1`) are NOT handled — neither here nor by
+ * {@link harnessNeedles}, whose segments are all longer than 8 characters.
  */
 function normalizeForMatch(value: string): string {
   return toForwardSlashAnyPlatform(value).replaceAll(/\/{2,}/g, '/').toLowerCase();
@@ -266,28 +264,10 @@ const PATH_SEGMENT_CONTINUATION = /[\w-]/;
  * its own line, and a NEWLINE is not in {@link PATH_SEGMENT_CONTINUATION}, so the
  * trailing boundary happily accepts it.
  *
- * ⚠️ SCOPE, since this rule used to be the ONLY thing standing between a listing
- * and a contaminated verdict: it now applies to the DEGRADED flat fallback only
- * (see {@link flatPathHits}). The structured scan never matches a needle against
- * tool OUTPUT at all, so a listing cannot reach a needle in the first place.
- *
- * ⛔ NOT because "every path the structured scan DOES match is resolved absolute",
- * which this used to claim and which is false in two ways: a `~`- or `$VAR`-rooted
- * token is returned AS WRITTEN by {@link resolvePathToken} precisely so it reads as
- * an escape, and after an unevaluable `cd` there is no cwd to resolve against at
- * all. The rule is harmless there anyway — `~/vat-skill-test/x` still carries the
- * slash the bare-name needle wants — but the reason it is harmless is the SHAPE of
- * what survives resolution, not a guarantee of absoluteness that does not hold.
- *
- * ⛔ AND THIS RULE IS WHY THE FLAT SCAN HAD TO GO. A leading `/` was claimed to
- * cost no real detection, on the grounds that every genuine reach carries one —
- * including `cd ../../vat-skill-test`, "which keeps its preceding slash". That is
- * true of a ONE-SHOT `cd` and false of the two-step chain an agent actually types:
- * the Bash tool KEEPS CWD ACROSS CALLS, so `cd ../../..` then `cd vat-skill-test`
- * then `cat staged/…/SKILL.md` never writes a slash before the name, and a control
- * arm that ran the skill's own bundled script read CLEAN with all four signals
- * reported "armed". A leading-slash rule cannot be patched into correctness,
- * because the missing slash is a consequence of a cwd the flat matcher cannot see.
+ * ⚠️ SCOPE: applies to the DEGRADED flat fallback only (see {@link flatPathHits}).
+ * The structured scan never matches a needle against tool OUTPUT. It cannot be
+ * patched into correctness there: the Bash tool KEEPS CWD ACROSS CALLS, so
+ * `cd ../../..` then `cd vat-skill-test` never writes a slash before the name.
  *
  * Needles 1 and 2 already contain a separator, so this returns false for them and
  * their existing behavior is unchanged.
@@ -599,12 +579,9 @@ export type BaselineArmSkew = z.infer<typeof BaselineArmSkewSchema>;
  * grader exited non-zero / wrote no fragment / wrote something unparseable / echoed
  * the wrong nonce / graded a different number of expectations than the eval declares.
  *
- * Every one of those used to propagate out of `runPipeline` and fail the WHOLE run
- * (exit 1) — discarding fully-billed treatment work that was perfectly good, and
- * writing no `grading.json` at all. The treatment arm still hard-fails that way,
- * because without a treatment result there is nothing to salvage; the control arm
- * does not, because the thing it feeds (the delta) has a way to say "I cannot be
- * computed" and the thing the operator paid for (the treatment grading) does not.
+ * The treatment arm still hard-fails the run, because without a treatment result
+ * there is nothing to salvage; the control arm does not, because the delta it
+ * feeds has a way to say "I cannot be computed".
  *
  * `detail` is the arm-named error message verbatim — it already carries the eval id
  * and the failing stage, and it is the text an operator would otherwise have seen on
@@ -651,13 +628,10 @@ export interface ArmEvalGrade {
  * side is reported as 0 rather than dropped, since a silently absent eval skews
  * the run total exactly as a short-graded one does.
  *
- * THE ONE-ARM CASE IS NOW THE LOAD-BEARING ONE, and it is why this function did not
- * become redundant when the declared-count check landed. Both arms are pinned to the
- * eval's DECLARED expectation count at the grader boundary
+ * THE ONE-ARM CASE IS THE LOAD-BEARING ONE. Both arms are pinned to the eval's
+ * DECLARED expectation count at the grader boundary
  * (`assertExpectationCountDeclared` in eval-grader.ts), so two arms that both
- * produced a fragment can no longer disagree about `total` — which reads like this
- * check has nothing left to find. It has two live inputs it always had and only now
- * carries alone:
+ * produced a fragment cannot disagree about `total`. Its live inputs:
  *
  * - an eval the CONTROL arm never graded at all, because its executor or grader
  *   broke (see {@link BaselineControlArmFailureSchema}). That is not a hypothetical:
@@ -669,13 +643,6 @@ export interface ArmEvalGrade {
  * It is also the SINGLE AUTHORITY `computeBaselineDelta` consults before withholding
  * (see baseline-delta.ts). Deleting it would leave the delta with no way to say
  * "these two totals cannot be subtracted", which is the whole reason `null` exists.
- *
- * The declared-count check is the STRONGER cousin this docblock used to say was "NOT
- * here … it needs the suite threaded into the merge". That premise was wrong: the
- * declared list is already in hand at the grader boundary, one call before the
- * fragment is returned, so no threading was needed and the check now lives there.
- * It catches what parity structurally cannot — both graders drifting the SAME way,
- * which keeps parity satisfied while every reported number is wrong.
  */
 export function armExpectationSkew(
   withArm: readonly ArmEvalGrade[],
@@ -705,16 +672,13 @@ export function armExpectationSkew(
  * dropped lines, and a cwd it can follow from the arm's own workspace through every
  * `cd`.
  *
- * ⚠️ THE TWO FAILURES ARE NOT THE SAME SHAPE, and treating them alike was a defect
- * in its own right. An UNPARSEABLE transcript leaves nothing to walk, so the scan
- * falls back to the flat text match this module used to be — which both over-reports
+ * ⚠️ THE TWO FAILURES ARE NOT THE SAME SHAPE. An UNPARSEABLE transcript leaves
+ * nothing to walk, so the scan falls back to the flat text match — which both over-reports
  * (a `find` that PRINTS a path reads as a reach) and under-reports (a relative reach
  * after a `cd` loses the leading slash a bare-name needle requires). An unevaluable
  * `cd`, or a dropped line, leaves a HOLE instead: everything resolved before it is
  * still validly resolved and is kept, and only what came after and needed a cwd is
- * lost. Falling back for that case discarded good evidence AND reintroduced the flat
- * scanner's over-reporting — one leading `cd $HOME` was enough to turn a pure
- * directory listing into the "reached the answer key" verdict.
+ * lost.
  *
  * A fallback that is not announced is the failure mode this whole module exists
  * to prevent: `contaminated: false` from a degraded scan is written with exactly
@@ -877,17 +841,11 @@ const EXCERPT_RADIUS = 60;
 /**
  * Longest matched token an excerpt will quote in full.
  *
- * ⛔ THIS IS A BOUND, NOT A TUNING KNOB, AND IT USED TO BE ABSENT. `excerptAround`'s
- * window is `±EXCERPT_RADIUS` around a token whose LENGTH the caller supplies, so the
- * bound this function advertises is only real if that length is bounded too. It was
- * not: {@link structuredToolReaches} computed `length` as `text.indexOf(leaf) === -1 ?
- * text.length : leaf.length`, and `text` is `JSON.stringify(input)` — in which any leaf
- * carrying a newline, a `"` or a `\` is present only in ESCAPED form and so is never
- * found. One `Write` with an 8 KB `content` therefore produced an 8,097-character
- * excerpt carrying a planted `AWS_SECRET_ACCESS_KEY=…` straight into `baseline.json`,
- * which is a file adopters attach to bug reports. The `indexOf` is fixed at that call
- * site; this clamp is the second line, so no future caller can reopen it by passing a
- * length it did not measure.
+ * ⛔ THIS IS A BOUND, NOT A TUNING KNOB. `excerptAround`'s window is
+ * `±EXCERPT_RADIUS` around a token whose LENGTH the caller supplies, so the bound is
+ * only real if that length is bounded too: an unbounded excerpt can carry a secret
+ * from a `Write` `content` into `baseline.json`, a file adopters attach to bug
+ * reports. This clamp stops any caller passing a length it did not measure.
  */
 const MAX_EXCERPT_TOKEN = 200;
 
@@ -1023,9 +981,8 @@ export interface DetectBaselineContaminationInput {
    * `deriveDeclaredExecutableNames`.
    *
    * ⚠️ PATHS, NOT NAMES, and the difference is the whole signal — see
-   * {@link reachIsDeclaredExecutable}. This field used to carry the
-   * extension-stripped basename, which convicted a clean control arm for reading
-   * its own `/tmp/summary.txt`.
+   * {@link reachIsDeclaredExecutable}: a basename convicts a clean control arm for
+   * reading its own `/tmp/summary.txt`.
    */
   executablePaths?: readonly string[];
   /**
@@ -1033,14 +990,9 @@ export interface DetectBaselineContaminationInput {
    * carried extension-stripped basenames; it is gone, and `never` is here so that a
    * caller still passing it FAILS TO COMPILE.
    *
-   * Declared because the renaming alone was silent. The harness builds this object
-   * with conditional SPREADS (`...(x === undefined ? {} : { executableNames: … })`),
-   * and a spread is not a fresh object literal, so TypeScript applies no
-   * excess-property check: dropping the old name simply left the property unread and
-   * the `declared-executable` signal unarmed on every run — reported as
-   * `contaminated: false` by a detector that was no longer looking. That is precisely
-   * the "silently clean" failure this module exists to prevent, so the rename gets a
-   * compile error rather than a comment.
+   * Declared because the harness builds this object with conditional SPREADS, and
+   * a spread gets no excess-property check: a stale name would silently leave the
+   * `declared-executable` signal unarmed.
    */
   executableNames?: never;
   /**
@@ -1357,12 +1309,9 @@ function reachIsDeclaredExecutable(resolved: string, declaredPath: string): bool
  * the one warning that matters, so a false positive here is NOT the safe
  * direction — it is a different way to lose the measurement.
  *
- * This used to accept a second form, `name` followed by an extension anywhere
- * (`summary.py`, `report.md`), and that form was the defect: a review found 8/8
- * realistic CLEAN pairs firing, and 5 of them were exactly it — `python3
- * analyze.py`, `Wrote report.md`, `saved to summary.txt`, `built index.json`,
- * `created run.sh`. A control arm denied the skill writes its own script and gives
- * it the obvious name; a filename with no directory in front of it says nothing
+ * A bare filename (`summary.py`) is not accepted either: a control arm denied the
+ * skill writes its own script and gives it the obvious name; a filename with no
+ * directory in front of it says nothing
  * about WHOSE file it is, so it can never be evidence. Only the path can be, and
  * a path is what {@link reachEscapesOwnWorkspace} then judges.
  *
@@ -1370,12 +1319,6 @@ function reachIsDeclaredExecutable(resolved: string, declaredPath: string): bool
  * invoked bare on PATH (`csvsum data.csv`), or invoked by basename after a `cd`
  * into an ambient copy. The `cd` itself carries the path, which is what the other
  * detectors read.
- *
- * 📌 MEASURED, so nobody re-derives it: restoring the extension branch leaves the
- * whole suite green, because {@link reachEscapesOwnWorkspace} rejects a token with
- * no path root anyway. The branch is DEAD given that predicate, not merely
- * redundant — which is why it is deleted rather than kept as belt-and-braces.
- * Re-adding either form needs a reach that only it catches.
  *
  * ⚠️ DEGRADED-MODE ONLY. This regex, {@link pathTokenEndingAt} and
  * {@link reachEscapesOwnWorkspace} are now reached solely by {@link flatPathHits}.
@@ -1448,16 +1391,9 @@ function pathTokenEndingAt(haystack: string, index: number, length: number): str
  *   `$tmpdir/…/analyze`, `c:/…/analyze`→ true, variable- and drive-rooted
  *   `../../repo/dist/…/analyze`        → true, climbs out
  *
- * ⛔ THE "RESIDUAL, ACCEPTED" NOTE THAT USED TO END THIS BLOCK WAS THE DEFECT.
- * It said an arm that `cd`s elsewhere and then uses relative paths reads as clean
- * here, and that this was fine because "the `cd` carries the absolute path, and
- * that is the other detectors' job". It does not: `cd vat-skill-test` after
- * `cd ../../..` carries no absolute path and no leading slash, so no detector saw
- * it and the arm ran the skill's own script on a `contaminated: false` verdict.
- * A blind spot handed to a neighbour who is also blind is not a residual.
- * The structured scan resolves the cwd instead; this predicate is now reached
- * only from the degraded flat fallback, where the same hole is still open and is
- * declared as degradation rather than assumed away.
+ * ⛔ An arm that `cd`s elsewhere and then uses relative paths reads as clean here.
+ * The structured scan resolves the cwd instead; this predicate is reached only
+ * from the degraded flat fallback, where that hole is declared as degradation.
  */
 /**
  * The FIRST invocation of `name` whose path escapes the arm's own workspace, as
@@ -1506,32 +1442,13 @@ function reachEscapesOwnWorkspace(token: string, armWorkspaceDir: string): boole
 
 /* ══════════════════════════ the structured scan ══════════════════════════════
  *
- * WHAT REPLACED THE FLAT SCAN, AND WHY NO PATCH TO IT COULD WORK.
+ * WHY THE SCAN IS STRUCTURED: a name-based needle in flat text cannot tell
+ * "saw a name in a listing" from "reached in and read" — `find` PRINTING a path
+ * and `cat` CONSUMING one are identical bytes to a string matcher — and a cwd
+ * carried across Bash calls (`cd ../../..` → `cd vat-skill-test`) never writes the
+ * slash a bare-name needle needs.
  *
- * This module used to flatten the whole stream-json transcript into one string
- * and hunt needles in it. That single rule was wrong in BOTH directions, and both
- * were demonstrated by running a control arm:
- *
- *   (a) It CLEARED a real reach. The Bash tool KEEPS CWD ACROSS CALLS, so
- *       `cd ../../..` → `cd vat-skill-test` → `cd <key>` → `cat staged/…/SKILL.md`
- *       → `python3 staged/…/scripts/csvsum.py` never writes a `/` before the
- *       harness directory NAME, and {@link needsLeadingBoundary} requires one. The
- *       arm ran the skill's own bundled script and the verdict was
- *       `contaminated: false` with all four signals reported "armed".
- *
- *   (b) It CONVICTED ordinary orientation. Anything that PRINTS a path supplies
- *       the slash, so `find ../../.. -maxdepth 1 -type d` produced two
- *       `vat-private-dir` hits — the verdict reserved for "reached the held answer
- *       key" — and `find /private/var/folders -name data.csv`, the arm hunting the
- *       fixture it was TOLD to work on, stamped `sibling-arm`. Nothing was opened
- *       in any of them.
- *
- * The root cause is not a tunable: a name-based needle in flat text cannot tell
- * "saw a name in a listing" from "reached in and read". `find` PRINTING a path and
- * `cat` CONSUMING one are identical bytes to a string matcher. The structure that
- * answers it was in the transcript the whole time and was being thrown away.
- *
- * So the scan now:
+ * So the scan:
  *   1. parses the stream-json into TOOL CALLS (name + full input), PARTITIONED BY
  *      `parentToolUseId` so a Task subagent's `cd` governs only its own calls;
  *   2. tracks a virtual CWD from the arm's own workspace, interpreting `cd`
@@ -1545,8 +1462,7 @@ function reachEscapesOwnWorkspace(token: string, armWorkspaceDir: string): boole
  *   4. matches PATH needles against the resolved paths a tool call names AS
  *      OPERANDS, never against tool OUTPUT and never against PROSE.
  *
- *      ⛔ "INPUT versus OUTPUT" IS NOT THE DISTINCTION, and stating it as "the whole
- *      of (b)" is how the redesign shipped over-reporting again. `echo "checked
+ *      ⛔ "INPUT versus OUTPUT" IS NOT THE DISTINCTION. `echo "checked
  *      /tmp/vat-skill-test, empty" >> notes.md`, `grep -rn "/tmp/vat-skill-test" .`,
  *      a trailing `# comment`, a `sed` substitution script, a `TodoWrite` item and a
  *      `Task` prompt are all tool INPUT and none of them reaches anything. The line
@@ -1568,16 +1484,10 @@ function reachEscapesOwnWorkspace(token: string, armWorkspaceDir: string): boole
 /**
  * What a tool call DOES with the paths in its input.
  *
- * `write` is the one that is not about reading at all, and it exists because its
- * absence was a false-positive engine. {@link segmentReaches} used to stamp every
- * path word in a segment with the segment's single intent, so the DESTINATION of a
- * redirect or a copy inherited `retrieval` from the command that produced the
- * bytes — and declared executable names are basenames minus extension, i.e.
- * `summary`, `report`, `index`, `run`. `sort data.csv > /tmp/summary.txt`,
- * `cp notes.md /tmp/summary.md` and `cat parts/*.json > /tmp/index.json` each
- * reported `declared-executable`: the arm was accused of RUNNING the skill's tool
- * on the strength of having written a file with an ordinary name. A write target
- * is not evidence that anything ran.
+ * `write` is the one that is not about reading at all: the DESTINATION of a
+ * redirect or a copy (`sort data.csv > /tmp/summary.txt`) must not inherit
+ * `retrieval` from the command that produced the bytes. A write target is not
+ * evidence that anything ran.
  */
 export type ToolIntent = 'retrieval' | 'enumeration' | 'write' | 'other';
 
@@ -1665,9 +1575,7 @@ function firstContentHit(
  *
  * Decoded matters twice over. Against the raw stream-json, a needle carrying a
  * `"` or a `\` could never match its own text (the transcript holds the ESCAPED
- * form), which is why {@link isNeedleCandidate} used to drop such lines on the
- * floor. Against the decoded values there is no escaping to defeat, so those
- * lines are usable needles again.
+ * form). Against the decoded values there is no escaping to defeat.
  *
  * Deliberately WIDER than "tool output and assistant text": an arm that writes a
  * sentence of the skill into a file (`echo "<skill prose>" > notes.md`) has
@@ -1726,20 +1634,15 @@ function transcriptDecoded(parsed: ParsedTranscript): boolean {
 /**
  * What a KNOWN tool does, and which of its fields name a path.
  *
- * ⛔ A PER-TOOL FIELD LIST IS THE POINT, and the docblock that used to sit on
- * {@link structuredToolReaches} argued the opposite: "every string leaf … rather
- * than a per-tool list of the field that holds the path", on the grounds that a
- * detector which only knows `Read.file_path` goes blind the day a tool renames it.
- * That reasoning is sound and its conclusion was still wrong, because walking every
- * leaf convicts PROSE: a `Write` whose `content` says "I searched
+ * ⛔ A PER-TOOL FIELD LIST IS THE POINT: walking every string leaf convicts
+ * PROSE — a `Write` whose `content` says "I searched
  * /tmp/vat-skill-test and found nothing", a `TodoWrite` item mentioning a path, a
  * `Task` prompt quoting one, and a `Grep` whose `pattern` IS the path all stamped
  * the run contaminated. The same field name means opposite things in two tools —
  * `Glob.pattern` is a path and `Grep.pattern` is a regex — which is precisely what
  * a per-tool map can express and a leaf walk cannot.
  *
- * The forward-compatibility argument is kept, not discarded, and this is the
- * balance: `paths` is an ALLOWLIST that bypasses every heuristic, `prose` is a
+ * Forward compatibility is kept: `paths` is an ALLOWLIST that bypasses every heuristic, `prose` is a
  * DENYLIST that nothing overrides, and any field on neither list — including every
  * field of a tool not in this map at all — still reaches
  * {@link heuristicPathField}. So a renamed `Read.file_path` and an unknown vendor
@@ -1806,24 +1709,11 @@ interface InputLeaf {
  * Walk the transcript's tool calls in order, resolving every path they name
  * against the cwd in force at that point.
  *
- * TWO THINGS THIS GETS RIGHT THAT THE PREVIOUS VERSION DID NOT, both of which were
- * silent:
+ * **A Task subagent has its own working directory**, keyed by `parentToolUseId`:
+ * each parent id gets its own cwd and its own degradation.
  *
- * **A Task subagent has its own working directory.** `parsed.toolUses` carries
- * `parentToolUseId` — the parser has always populated it and nothing read it — so a
- * subagent's `cd /elsewhere` re-anchored every later relative path of the MAIN
- * agent, and a subagent's `cd $VAR` degraded the main scan. Each parent id gets its
- * own cwd and its own degradation.
- *
- * **Degradation runs FORWARD, not backward.** The old docblock claimed "`untracked`
- * is set the moment a `cd` cannot be evaluated", and that was a description of the
- * flag, not of the coverage: the caller then threw away EVERY structured reach,
- * including the ones resolved BEFORE the bad `cd`, and reran the flat scanner over
- * the whole transcript. One leading `cd $HOME` therefore made the canonical
- * four-step reach chain read `hits: []`, and one leading `cd $HOME` plus a `find`
- * that merely LISTED the temp dir produced `vat-private-dir` — the "reached the
- * answer key" verdict — because that is what the flat scanner does with a listing.
- * Reaches resolved before the uncertainty are still validly resolved. After it, the
+ * **Degradation runs FORWARD, not backward.** Reaches resolved before the
+ * uncertainty are still validly resolved. After it, the
  * cwd becomes `undefined` and only tokens that do not need one (absolute,
  * drive-rooted, `~`- or `$VAR`-rooted, `file://`) are still resolved.
  */
@@ -1864,11 +1754,8 @@ function structuredToolReaches(name: string, input: unknown, cwd: string | undef
     if (!isToolPathOperand(spec, key, value)) continue;
     const resolved = resolvePathToken(value, cwd);
     if (resolved === undefined) continue;
-    // ⛔ `length` IS THE EXCERPT BOUND. It used to be `indexOf(leaf) === -1 ?
-    // text.length : leaf.length`, and `text` is `JSON.stringify(input)` — in which a
-    // leaf carrying a newline, a `"` or a `\` appears only escaped and so is never
-    // found. That turned one `Write` into an 8,097-character excerpt carrying a
-    // planted secret. The token's own length is the only bound that is always right.
+    // ⛔ `length` IS THE EXCERPT BOUND: an `indexOf` into `JSON.stringify(input)`
+    // misses escaped leaves. The token's own length is the only bound always right.
     const index = text.indexOf(value);
     reaches.push({
       resolved,
@@ -1908,16 +1795,10 @@ function stringLeaves(value: unknown, key: string): InputLeaf[] {
 /**
  * Shell control operators, LONGEST FIRST.
  *
- * ⚠️ ONE PAIR OF THIS ORDERING IS LOAD-BEARING AND THE REST IS READABILITY, which is
- * worth writing down because the old comment ("the first six end a command") was
- * self-contradicting — `>>` does not end a command and `\n` does, and neither was in
- * the six. `||` MUST precede `|`: {@link walkBashCommand} degrades a `cd` on the
- * right of a `||` and does not degrade one after a pipe, so reading `||` as two `|`
- * silently reopens the `cd one || cd two` false positive. Reordering `&&` before
- * `&`, or `>>` before `>`, was MEASURED to change no verdict — both spellings split
- * the same segments and mark the same redirect target — so do not add a test that
- * pretends otherwise; keep the order because a `&`-then-`&` token stream is a lie
- * about what the arm typed.
+ * ⚠️ ONE PAIR OF THIS ORDERING IS LOAD-BEARING AND THE REST IS READABILITY.
+ * `||` MUST precede `|`: {@link walkBashCommand} degrades a `cd` on the
+ * right of a `||` and does not degrade one after a pipe. `&&`-before-`&` and
+ * `>>`-before-`>` change no verdict; they keep the token stream honest.
  *
  * `<`, `>` and `>>` end a WORD only: their operand belongs to the command that owns
  * them (`sort < ../../skill/notes.md` reaches through a redirect, not through a new
@@ -2189,8 +2070,7 @@ function tokenizeShell(rawCommand: string): ShellToken[] {
  * One command in a `&&`/`||`/`;`/`|`-joined line, plus the operator that INTRODUCED
  * it.
  *
- * The separator is carried because the walker's answers depend on it and it used to
- * be thrown away: `(` and `)` decide whether a `cd` survives the group, and `||`
+ * The separator is carried because the walker's answers depend on it: `(` and `)` decide whether a `cd` survives the group, and `||`
  * decides whether it can be believed at all.
  */
 interface CommandSegment {
@@ -2398,23 +2278,13 @@ const PATTERN_FLAGS = new Set([
 /**
  * Pattern flags that belong to ONE COMMAND FAMILY and mean something else elsewhere.
  *
- * ⛔ `-e` USED TO BE UNCONDITIONAL, and that blinded every interpreter
- * one-liner: `python3 -c "print(open('<harness>/staged/s/SKILL.md').read())"`
- * produced `hits: []` — and `python`/`node`/`perl`/`ruby` are not in
- * a nested shell, so NO degradation was recorded either and the verdict read
- * as a full-strength clean scan. The same command with `-Q` in place of `-c` fired
- * `harness-path`, which is how narrow the hole was. An interpreter's `-c`/`-e`
- * carries a SCRIPT, and a script contains real operands; only on the pattern family
- * is the token after it a thing to search FOR.
+ * ⛔ NOT UNCONDITIONAL: an interpreter's `-c`/`-e` carries a SCRIPT, and a script
+ * contains real operands; only on the pattern family is the token after it a
+ * thing to search FOR.
  *
- * ⛔ `-c` IS NOT A MEMBER — see {@link SCRIPT_CARRYING_FLAGS}, which says the same
- * thing from the other side. Scoping it to the family did not make it safe: on the
- * family `-c` means COUNT and takes NO VALUE, so marking the token after it as a
- * pattern swallowed the pattern AND left the first-operand rule to claim the next
- * unclaimed operand — THE FILE. `grep -c foo <harness>/staged/s/SKILL.md`,
- * `rg -c` and `jq -c` all produced `hits: []` with no degradation, which is the
- * same bytes as a clean scan; `grep -n` on the identical path fired. Left off both
- * lists, `grep -c pat file` reads as pattern-then-file, which is what it is.
+ * ⛔ `-c` IS NOT A MEMBER — see {@link SCRIPT_CARRYING_FLAGS}. On the pattern family
+ * `-c` means COUNT and takes NO VALUE, so treating the next token as a pattern
+ * would let the FILE operand escape (`grep -c foo <file>`).
  */
 const FAMILY_PATTERN_FLAGS = new Set(['-e', '--expression', '--regexp']);
 
@@ -2483,9 +2353,8 @@ const DESTINATION_ALL_OPERANDS = new Set(['tee']);
  * The tokens in this segment that are WRITE DESTINATIONS.
  *
  * A redirect target (`> /tmp/summary.txt`) and a copy destination
- * (`cp notes.md /tmp/summary.md`) both used to inherit the segment's single intent,
- * so `sort`/`cat`/`wc` lent them `retrieval` and the arm was reported as having RUN
- * a declared executable for writing a file called `summary`. They remain REACHES —
+ * (`cp notes.md /tmp/summary.md`) must not inherit the segment's `retrieval`
+ * intent. They remain REACHES —
  * writing into vat's staged tree is worth a `harness-path` hit — but they cannot
  * support the executable signal, which asks only whether something ran.
  */
@@ -2513,21 +2382,10 @@ function writeTargets(head: string, words: readonly ShellToken[], args: readonly
  * where ~10 tracked files carry the literal — resolves `vat-skill-test` against
  * the cwd and stamps the run contaminated.
  *
- * ⛔ THE COST IS NOT "a reach into the arm's OWN cwd by bare filename", which is
- * what this used to claim and which would indeed be harmless. `cd vat-skill-test`
- * after `cd ../../..` is a bare word too, and it is the single most important step
- * in the whole reach chain — which is why {@link cdDestination} resolves a `cd`
- * operand unconditionally and never asks this question. The real cost is a bare
- * name passed to some OTHER command after the arm has already `cd`ed into vat's
- * tree, and that reach is covered by the `cd` that put it there.
- *
- * 📌 THREE CLAUSES WERE MEASURED OUT: `~`-prefixed, `$VAR`-prefixed and a bare
- * drive (`C:`). Each was reachable only by a token with NO separator in it —
- * `~/x`, `$TMPDIR/x` and `C:/x` all qualify through the separator test — so the
- * clauses could only ever admit `~`, `$HOME` and `C:` standing alone, none of which
- * resolves to anything a needle can match. The `--flag` guard went with them: once
- * candidacy is "contains a separator", a flag without one is already rejected and a
- * flag with one (`--out=/tmp/x`) is a path the guard deliberately let through.
+ * `cd vat-skill-test` is a bare word too, which is why {@link cdDestination}
+ * resolves a `cd` operand unconditionally and never asks this question. The real
+ * cost is a bare name passed to some OTHER command after the arm has already
+ * `cd`ed into vat's tree, and that reach is covered by the `cd` that put it there.
  */
 function isPathCandidate(word: string): boolean {
   return word.includes('/') || word.includes('\\');
@@ -2562,12 +2420,7 @@ function normalizeDotSegments(normalized: string): string {
   const out: string[] = [];
   for (const segment of normalized.split('/')) {
     if (segment === '' || segment === '.') continue;
-    // 📌 BOTH GUARDS THIS `pop` USED TO CARRY ARE PROVABLY REDUNDANT, verified over
-    // 39,060 generated paths. `out.length > 0` guarded a `pop` on an empty array,
-    // which is already a no-op; `out.at(-1) !== '..'` guarded against popping a
-    // `'..'`, which is never pushed — this branch is the only place `'..'` is seen
-    // and it never pushes. The root clamp the docblock above promises is what
-    // `[].pop()` does for free.
+    // `'..'` is never pushed, and the root clamp is what `[].pop()` does for free.
     if (segment === '..') {
       if (!(unexpandableRoot && out.length <= 1)) out.pop();
     } else out.push(segment);
@@ -2677,17 +2530,10 @@ function cdDestination(args: readonly ShellToken[]): CdDestination {
  * Commands that move the working directory WITHOUT being `cd`, and that the walk
  * has no way to follow.
  *
- * ⛔ THESE WERE STRICTLY WORSE THAN THE FORMS THAT DEGRADE: they left a stale cwd
- * in force with no degradation recorded at all, so every later relative path was
- * resolved against a directory the arm had already left, and the verdict said the
- * scan ran at full strength. `pushd`/`popd` persist across Bash tool calls exactly
- * as `cd` does.
+ * Untracked, they would leave a stale cwd in force with no degradation recorded.
+ * `pushd`/`popd` persist across Bash tool calls exactly as `cd` does.
  *
- * ⛔ `dirs` IS NOT ONE OF THEM and used to be listed here. It PRINTS the directory
- * stack and changes nothing whatsoever, so one `dirs` anywhere in a transcript
- * unanchored every relative path after it: the canonical `cd ../../..` → `cd
- * vat-skill-test` → `cat <key>/staged/s/SKILL.md` chain reported `hits: []` behind
- * it, where the identical chain without it fires `harness-path`.
+ * ⛔ `dirs` IS NOT ONE OF THEM: it PRINTS the directory stack and changes nothing.
  */
 const DIRECTORY_STACK_COMMANDS = new Set(['pushd', 'popd']);
 /**
@@ -2740,22 +2586,15 @@ function scopedCwdChange(words: readonly ShellToken[]): string | undefined {
  * forward across them.
  *
  * Carrying cwd ACROSS calls (the caller's job) and across `&&` within one call
- * (this function's) is the entire fix for defect (a). The Bash tool keeps its
- * working directory between invocations, so a `cd` in call 3 governs call 9.
+ * (this function's): the Bash tool keeps its working directory between
+ * invocations, so a `cd` in call 3 governs call 9.
  *
- * THREE CONTROL-FLOW FACTS THE WALK USED TO IGNORE, all of them silently:
+ * THREE CONTROL-FLOW FACTS:
  *
- * - **`( … )` does not leak its cwd; `{ …; }` does.** Probed on the shipped code:
- *   neither was tracked — `(` became the segment HEAD, so the `cd` inside it was a
- *   mere argument. The subshell answer was therefore accidentally right and the
- *   brace-group answer was wrong, and no test could tell. The cwd is now stacked on
- *   `(` and restored on `)`, while `{`/`}` are ordinary keywords the head skips, so
- *   a brace group's `cd` persists exactly as the shell says it does.
- * - **`||` runs ONE of its two sides.** `cd one || cd two` was walked as though both
- *   ran, resolving to `<cwd>/one/two`. `cd .. || cd ..` then made `ls
- *   <sibling-token>/notes.md` report `sibling-arm` — the strongest verdict this tool
- *   issues — on a run whose real cwd never moved twice. A `cd` to the RIGHT of a
- *   `||` is now unevaluable. A `cd` to its LEFT still applies (`cd x || exit 1` is
+ * - **`( … )` does not leak its cwd; `{ …; }` does.** The cwd is stacked on
+ *   `(` and restored on `)`, while `{`/`}` are ordinary keywords the head skips.
+ * - **`||` runs ONE of its two sides.** A `cd` to the RIGHT of a
+ *   `||` is unevaluable. A `cd` to its LEFT still applies (`cd x || exit 1` is
  *   the idiom), and `&&` is unaffected: its right side runs only when the left
  *   succeeded, which is the case the walk is already modelling.
  * - **A stale cwd needs saying.** See {@link scopedCwdChange}.
@@ -2780,14 +2619,9 @@ function walkBashCommand(
     // operands are unanchored and the walk's cwd is not — see
     // {@link scopedCwdChange}.
     //
-    // ⛔ THE SEGMENT IS STILL WALKED. It used to `continue` past
-    // {@link segmentReaches} entirely, which dropped its ABSOLUTE operands too —
-    // and an absolute operand is anchored whatever `-C` does, which is what
-    // {@link scopedCwdChange}'s own docblock says. Measured: `env -C /tmp cat
-    // <harness>/staged/s/SKILL.md`, and the `git -C`/`tar -C` spellings of it, all
-    // reported `hits: []`, while the bare `cat` of the same path fired. Walking it
-    // with NO cwd is exactly the stated rule: {@link resolvePathToken} drops a
-    // relative token without one and keeps an absolute one.
+    // ⛔ THE SEGMENT IS STILL WALKED, with NO cwd: an absolute operand is anchored
+    // whatever `-C` does, and {@link resolvePathToken} drops a relative token
+    // without one and keeps an absolute one.
     let segmentCwd = state.cwd;
     if (change?.kind === 'scoped') {
       holes.scoped ??= untrackedScope(change.spelled);
@@ -2859,13 +2693,8 @@ interface WalkContext {
 /**
  * Separators that END the AND-OR list a `||` made conditional.
  *
- * ⛔ `state.conditional` USED TO BE A LATCH: `||` set it and nothing ever cleared
- * it, so every later segment of the same Bash call was treated as an unevaluable
- * branch — `mkdir -p out || true ; cd out` reported `cwd-untracked` and unanchored
- * every relative path in the rest of the transcript. Agents write `|| true`
- * constantly, which made this the likeliest of the blinding paths to fire in
- * practice. `;`, a newline, a background `&` and either parenthesis start a fresh
- * list; `&&` and `|` continue the one the `||` is part of, so a `cd` after them is
+ * ⛔ `state.conditional` IS NOT A LATCH (agents write `|| true` constantly). `;`,
+ * a newline, a background `&` and either parenthesis start a fresh list; `&&` and `|` continue the one the `||` is part of, so a `cd` after them is
  * still on a branch that may not have run.
  */
 const LIST_TERMINATORS = new Set([';', '\n', '&', SUBSHELL_OPEN, SUBSHELL_CLOSE]);
@@ -2880,10 +2709,8 @@ function applySeparator(separator: string, enclosing: Array<string | undefined>,
 /**
  * How this segment affects the walk's working directory.
  *
- * `scoped` is the third answer the walk used to lack: a `-C`/`-execdir` moves the
- * cwd for ONE command, so it costs that command's own operands and nothing after it.
- * Collapsing it into `bad` — cwd `undefined`, forever — is what made a single
- * `git -C ../repo status` blind the rest of the transcript.
+ * `scoped`: a `-C`/`-execdir` moves the cwd for ONE command, so it costs that
+ * command's own operands and nothing after it — never `bad`, cwd `undefined` forever.
  */
 type SegmentCwdEffect = CdDestination | { kind: 'scoped'; spelled: string };
 
@@ -2975,14 +2802,9 @@ function untrackedScope(spelled: string): BaselineScanDegradation {
 /**
  * The cwd holes one walk found, kept APART by how wide they are.
  *
- * ⛔ ONE `??=` SLOT USED TO HOLD BOTH, so the FIRST hole seen won and a harmless
- * one-command `git -C ../repo status` masked a genuinely unevaluable `cd $D` that
- * came after it. That is not merely a lost degradation: {@link untrackedScope}'s
- * sentence says in so many words that later paths ARE anchored, so the operator was
- * handed a written reassurance about the scan's own coverage on a run where the cwd
- * was lost for the whole remainder. Confirmed: `cd $D` alone reported "every later
- * relative path is unanchored"; the same `cd $D` behind a `git -C` reported "the
- * paths in that ONE command are unanchored, later ones are not".
+ * ⛔ NEVER ONE SLOT: a harmless one-command `git -C` must not mask a later
+ * unevaluable `cd $D`, or {@link untrackedScope} would reassure the operator that
+ * later paths are anchored when they are not.
  */
 interface CwdHoles {
   /** A `cd` the walk could not follow — every later relative path is unanchored. */
@@ -3068,16 +2890,10 @@ function segmentReaches(
 /**
  * Does this resolved path lie OUTSIDE the arm's own workspace?
  *
- * ⚠️ NOT "a prefix test and nothing else", which is what this used to claim: the
- * `/` BOUNDARY is the test. A bare `startsWith` reports the arm's own tree as
+ * ⚠️ The `/` BOUNDARY is the test. A bare `startsWith` reports the arm's own tree as
  * containing `<workspace>-other/scripts/summary.mjs`, a sibling directory that
  * merely shares its name as a prefix — the same over-match
  * {@link containsPathAtBoundary} exists for one level up.
- *
- * 📌 An `armWorkspaceDir === ''` guard returning `true` was MEASURED OUT as dead:
- * {@link scanDegradation} reports `cwd-unknown` and the structured path never runs
- * when the workspace is empty, so nothing can reach it. Forcing this predicate to a
- * constant `true` still kills four tests, so the predicate itself is live.
  */
 function pathEscapesWorkspace(resolved: string, armWorkspaceDir: string): boolean {
   return resolved !== armWorkspaceDir && !resolved.startsWith(`${armWorkspaceDir}/`);
@@ -3108,9 +2924,7 @@ function structuredExecutableHits(
     // A reach already reported as a harness / sibling / private-dir hit is ONE
     // reach; reporting it again as an executable would double-count it. Deduping
     // on the RESOLVED PATH rather than on excerpt text is what makes this
-    // case-proof — the old excerpt-substring test compared a raw declared name
-    // against an unconditionally lowercased excerpt, so any name with a capital
-    // (`Summarize`) escaped the dedupe and was reported twice.
+    // case-proof.
     if (reach === undefined) continue;
     claimed.add(reach.resolved);
     hits.push({
@@ -3128,13 +2942,8 @@ function structuredExecutableHits(
  * `~` is deliberately absent — {@link resolvePathToken} keeps a `~`-rooted token as
  * written on purpose, and that is a KNOWN root, not an unknown segment.
  *
- * ⛔ `{`/`}` USED TO BE ABSENT TOO, and brace expansion is a shell expansion exactly
- * like `*`. Measured: `cat ../../../{vat-skill-test,zz}/k/staged/s/SKILL.md` and
- * `cat ../../../vat-skill-{test,x}/k/staged/s/SKILL.md` both reported `hits: []`
- * with no degradation — the same bytes as a clean scan — while
- * `cat ../../../vat-*&#47;k/staged/s/SKILL.md`, the identical reach, degraded. A brace
- * around a directory name defeats all three literal needles for the same reason a
- * `*` does.
+ * `{`/`}` are members: brace expansion defeats the literal needles exactly as `*`
+ * does.
  */
 const GLOB_METACHARACTERS = /[*?[{}]/;
 
@@ -3285,9 +3094,7 @@ function globDegradation(
  *
  * ⛔ ONE LIST, EVERY READER. {@link structuredPathHits}, {@link flatPathHits} and
  * {@link globDegradation} all read this object, so the needles one of them reports
- * on are literally the needles the others searched for. The two scans used to build
- * their own from the same three functions, which is a second list that has to agree
- * with the first — the failure this module keeps having. See
+ * on are literally the needles the others searched for. See
  * {@link needleSegmentSet} for the same rule stated one level down.
  */
 interface DirectoryNeedles {
@@ -3352,7 +3159,7 @@ function structuredPathHits(
 }
 
 /**
- * The DEGRADED scan: the flat text match this module used to be.
+ * The DEGRADED scan: a flat text match.
  *
  * Kept verbatim in behaviour, not because it is right — the module docblock above
  * lists both directions in which it is wrong — but because "no scan at all" is
@@ -3447,11 +3254,7 @@ function scanDegradation(
   input: DetectBaselineContaminationInput,
   parsed: ParsedTranscript,
 ): BaselineScanDegradation | undefined {
-  // ⛔ THE `trim() !== ''` GUARD THAT USED TO ARM THIS WAS THE HOLE. An EMPTY control
-  // transcript skipped the branch and fell through to a walk over zero tool uses:
-  // `hits: []`, `degraded: undefined` — and it then COUNTS as an observed eval, so
-  // the run summary says "no skill-absent eval was observed reaching the skill" about
-  // an eval where nothing was observed at all. Nothing to scan is the most degraded a
+  // ⛔ An EMPTY transcript arms this too: nothing to scan is the most degraded a
   // scan can be, not the least.
   if (!transcriptDecoded(parsed)) {
     const empty = input.transcript.trim() === '';
@@ -3482,20 +3285,11 @@ function scanDegradation(
 /**
  * How many transcript lines failed to parse.
  *
- * The parser exposes `malformedLineCount` precisely so a consumer can see the holes
- * it used to fill silently: a bare `continue` on a `JSON.parse` failure meant one
- * corrupted line could delete a contamination hit while the scan still reported full
- * strength, because `transcriptDecoded` is an any-of test that the terminal `result`
- * line alone satisfies.
+ * One corrupted line can delete a contamination hit, and `transcriptDecoded` is an
+ * any-of test the terminal `result` line alone satisfies, so the count is read.
  *
- * There is deliberately no local fallback count. A second implementation here could
- * disagree with the parser about what "malformed" means, and the whole point of the
- * field is that ONE place decides. (A build-order bridge lived here while the parser
- * change and this consumer landed together — `@vibe-agent-toolkit/utils` resolves to
- * its built `dist` under vitest, so the field was absent at test runtime until the
- * next build, and an absent count reads as zero. It has been rebuilt; the bridge is
- * gone. If this ever reads `undefined` again, that is a BUILD problem, not a reason
- * to re-add a local counter.)
+ * There is deliberately no local fallback count: ONE place decides what
+ * "malformed" means. If this reads `undefined`, that is a stale BUILD of utils.
  */
 function malformedTranscriptLines(parsed: ParsedTranscript): number {
   return parsed.malformedLineCount;
@@ -3543,17 +3337,9 @@ export function detectBaselineContamination(
   const walked = blind === undefined ? walkToolReaches(parsed, startCwd, ctx) : undefined;
 
   // ⛔ THE FLAT FALLBACK IS FOR A TRANSCRIPT WE CANNOT WALK, NOT FOR A `cd` WE
-  // CANNOT EVALUATE. It used to be for both, and that cost more than it saved in
-  // both directions: one leading `cd $HOME` made the canonical four-step reach chain
-  // read `hits: []`, and one leading `cd $HOME` plus a `find` that merely LISTED the
-  // temp dir produced `harness-path` AND `vat-private-dir` — the flat scanner's
-  // over-reporting reproduced verbatim, on the verdict reserved for "reached the
-  // answer key". Reaches resolved BEFORE the bad `cd` are still validly resolved,
+  // CANNOT EVALUATE. Reaches resolved BEFORE the bad `cd` are still validly resolved,
   // and {@link walkToolReaches} degrades forward from the point of uncertainty.
-  // A dropped transcript line is a HOLE in the scan and nothing said so: the parser
-  // skipped it in silence, and `transcriptDecoded` — an any-of test the terminal
-  // `result` line satisfies on its own — still reported the transcript as decoded,
-  // so one corrupted tool call DELETED a contamination hit under a confident verdict.
+  // A dropped transcript line is a HOLE in the scan and is reported as one.
   const malformed = malformedTranscriptLines(parsed);
 
   const needles = directoryNeedles(input);

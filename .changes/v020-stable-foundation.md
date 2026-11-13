@@ -69,8 +69,7 @@
   plugin-local skill's content is `RUN_INCOMPLETE`, exit 2, with a `SKILL_PACKAGING_FAILED` error
   finding at the skill's `SKILL.md`** — a skill `files:` source that does not exist, a bundled
   nested `SKILL.md`, a name that is not one path segment. It was an uncoded exit 2 whose reason
-  was on stderr only. Same refusal `vat agent build` and `vat skill test run` publish for the
-  same cause; the build still stops at that skill.
+  was on stderr only. Same refusal `vat skill test run` publishes for the same cause; the build still stops at that skill.
   <!-- verdict-delta:plugin-build-packaging-refusal -->
 - **`vat claude marketplace publish` over build output that holds no
   `.claude-plugin/marketplace.json`, or one that is not a JSON manifest, is `INPUT_UNREADABLE`, exit 2**
@@ -154,63 +153,6 @@
   as before). A typed `[path]` that is absent or not a directory -> exit 2 `USAGE_INVALID` (was
   1); one the OS will not list -> exit 2 `INPUT_UNREADABLE`. The `vat verify` phase over an
   unbuilt directory is unchanged (finding, exit 1).
-- **`vat agent validate` publishes the report contract.** `status` -> `ok|findings|error`;
-  `duration` -> `durationMs`; `examined: 1`, `gate` and `data.root` are added.
-  `manifest { name, version: 'unknown'?, path }` -> `data.manifest { name|null, version|null,
-  path }` (`path` relative to `data.root`). `validation.errors[]` / `validation.warnings[]`
-  (strings) -> `findings[]` with codes `AGENT_MANIFEST_INVALID` (one per schema violation, with
-  `field`), `AGENT_REFERENCE_MISSING`, `AGENT_REFERENCE_UNREADABLE`, `AGENT_RAG_NO_SOURCES`
-  (warning). Manifest not found 1 -> 2 `USAGE_INVALID`; manifest unreadable or not YAML 1 -> 2
-  `INPUT_UNREADABLE`; a schema-invalid manifest stays exit 1.
-- **`vat agent build` publishes the report contract** (schema `packages/cli/schemas/agent-build.json`).
-  `status: success` -> `ok`; `duration` -> `durationMs`; `agent`, `target`, `output`, `files` move
-  under `data`; `examined: 1` and `gate` are added. A failure's `error: <string>` -> `error: { code,
-  message }` (exit 2 as before): `--target` other than `skill`, or no `package.json` for the
-  default output -> `USAGE_INVALID`; a manifest with no `spec.prompts.system.$ref`, or whose `$ref`
-  names no file -> `CONFIG_INVALID` (all three were uncoded, so they now stop reading as VAT
-  defects). A system prompt, `scripts/`, `LICENSE.txt` or `package.json` the OS will not read or
-  stat -> `INPUT_UNREADABLE` (a refused `scripts/`/`LICENSE.txt` was skipped silently, a refused
-  `package.json` walked past, an unreadable prompt was an uncoded failure). A packager refusal of the
-  bundle's content -> `RUN_INCOMPLETE` with one `SKILL_PACKAGING_FAILED` finding at the agent (was
-  an uncoded failure).
-- **`vat agent import` publishes the report contract** (schema `packages/cli/schemas/agent-import.json`).
-  `status: success` -> `ok` with `data: { agentPath }`; `duration` -> `durationMs`; `examined: 1`.
-  `status: error` + `error: <string>` -> `error: { code, message }`, exit 2 as before: no SKILL.md at
-  the path, or agent.yaml present without `--force` -> `USAGE_INVALID`; a SKILL.md that cannot be
-  read, whose frontmatter is not YAML or that no schema accepts -> `INPUT_UNREADABLE`; a failed
-  write -> `RUN_INCOMPLETE` (an `--output` whose directory does not exist yet is made). A directory or EACCES SKILL.md is now refused (was an uncoded throw).
-- **`vat agent installed` publishes the report contract** (schema
-  `packages/cli/schemas/agent-installed.json`). `status: success` -> `ok`; `duration` (a number) ->
-  `durationMs`; `skills` and `scanned` move under `data`; `examined` is the scopes scanned.
-  `skills[].type: installed` -> `directory`. A scope directory the OS will not list is a
-  `SCAN_PATH_UNREADABLE` warning finding (`status: findings`, exit 0; was `status: error`, exit 2),
-  `field` naming the scope and `location` `.claude/skills` under that scope's base; a
-  failure's `error: <string>` -> `error: { code, message }`: an unknown `--runtime` ->
-  `USAGE_INVALID`, and an unknown `--scope` -> `USAGE_INVALID` (was scanned as nothing, exit 0).
-- **`vat agent list` publishes the report contract** (schema `packages/cli/schemas/agent-list.json`).
-  `status: success` -> `ok`; `duration` (`"<n>ms"`) -> `durationMs`; `root` and `agents` move under
-  `data`; `count` is removed (`data.agents.length`); `examined` is the search paths scanned (3). A
-  search path, agent directory or manifest the OS will not read is a `SCAN_PATH_UNREADABLE` warning
-  finding relative to `root` (`status: findings`, exit 0; was an uncoded failure document, exit 2).
-- **`vat agent install` and `vat agent uninstall` publish a document** (schemas
-  `packages/cli/schemas/agent-install.json`, `agent-uninstall.json`; they published nothing).
-  `examined: 1`; `data: { agent, installPath, symlink }` / `{ agent, installPath, wasSymlink }`.
-  Every failure publishes `error: { code, message }`, exit 2 as before (install "already installed"
-  and uninstall "not installed" were exit 2 with nothing on stdout): an unknown `--scope`/`--runtime`,
-  a name that is not one path segment, already installed without `--force`, not installed, or no
-  `package.json` around the agent -> `USAGE_INVALID`; `--dev` on Windows -> `NOT_IMPLEMENTED`; a manifest that does not
-  validate -> `CONFIG_INVALID`; an unbuilt bundle or a path the OS will not read -> `INPUT_UNREADABLE`; a failed write under the
-  scope directory -> `RUN_INCOMPLETE`. `uninstall` now removes a dangling `--dev` link (was "not
-  installed", exit 2). Agent discovery (every verb that takes an agent name) refuses an unreadable
-  search path or manifest as `INPUT_UNREADABLE` (was an uncoded errno).
-- **`@vibe-agent-toolkit/agent-skills` `ImportError` carries `refusal: RefusalCode`** (library-only),
-  and `importSkillToAgent` no longer throws on a SKILL.md it cannot read: it returns
-  `INPUT_UNREADABLE`. `buildAgentSkill` throws coded `VatError`s: `AGENT_MANIFEST_INVALID` (from
-  agent-config) for a missing system prompt `$ref`, and the new `AGENT_PACKAGE_ROOT_MISSING_CODE`
-  when no output path is given and no `package.json` encloses the agent. A system prompt,
-  `scripts/` file or `LICENSE.txt` that is a named pipe, socket or device, or that the OS will not
-  read or stat, is a classified `FsFaultError` (`scripts/`/`LICENSE.txt`/`package.json` were
-  probed with `existsSync`).
 - **`vat resources validate` publishes the report contract.** `status` -> `ok|findings|error`
   (info- or warning-only runs are `findings`, exit 0); `filesScanned` -> `examined`;
   `issueCounts` -> `summary`; `errorsFound` -> `summary.errors`; `durationSecs` -> `durationMs`;
@@ -279,12 +221,6 @@
 - **Library observations, verdicts and compatibility counts rename `summary`** (library-only).
   agent-skills `Observation.summary` and claude-marketplace `Verdict.summary` (sentences) ->
   `description`; `CompatibilityResult.summary` (counts) -> `fileCounts`.
-- **`@vibe-agent-toolkit/agent-config` `validateAgent` and its loader change** (library-only).
-  `ValidationResult` `{ valid, errors, warnings, manifest }` -> `{ status, summary, issues,
-  manifest }`; `validateAgent(path)` -> `validateAgent(path, { locationRoot })` (required option);
-  a load failure now throws a coded `VatError` (`AGENT_MANIFEST_NOT_FOUND`,
-  `AGENT_MANIFEST_UNREADABLE`, `AGENT_MANIFEST_INVALID`) instead of returning `valid: false`, and
-  `findManifestPath` / `loadAgentManifest` throw the same coded errors (messages unchanged).
 - **`@vibe-agent-toolkit/projection-sqlite` statement refusals are coded** (library-only). A
   refused statement from `query()` or the compile probe throws a `VatError` with code
   `PROJECTION_STATEMENT_REFUSED`, messages unchanged; only SQLite result codes 1, 8, 25 and 257
@@ -571,10 +507,6 @@
   `packages/cli/schemas/rag-stats.json`, `rag-clear.json`). `status: success` -> `ok`; `duration`
   -> `durationMs`; stats' five fields move under `data` (`lastIndexed` ISO 8601); clear's
   `message: Database cleared` -> `data: { cleared: true }`. `examined` is 1, the database opened.
-- **`vat mcp list-collections` publishes the report contract** (schema
-  `packages/cli/schemas/mcp-list-collections.json`). `status: success` -> `ok`; `duration` ->
-  `durationMs`; `packages` moves under `data`; `count` is removed (`data.packages.length`).
-  `examined` is 1, the built-in package list.
 - **An uninstalled optional backend is the `BACKEND_UNAVAILABLE` refusal.** Every `vat rag` leaf
   without `@vibe-agent-toolkit/rag-lancedb` publishes its own report's error branch
   (`error.code: BACKEND_UNAVAILABLE`, exit 2 as before; was `{ status: error, error, fix }`), the
@@ -604,9 +536,6 @@
   `BACKEND_UNAVAILABLE`; a reached memory file with no derived harness facts -> `INTERNAL_ERROR`
   with its stack on stderr (the stderr label `claude context (HARNESS_FACTS_ABSENT) failed` is
   gone). The answer document is unchanged — it stays the one legacy shape for now.
-- **`vat mcp serve` failures no longer print a document on stdout** (stdout is the MCP protocol):
-  the message goes to stderr (the stack under `--debug`) and the exit stays 2. `--print-config`
-  writes only the JSON config on stdout, through the writer.
 - **`vat inventory` publishes the report contract** (schema `packages/cli/schemas/inventory.json`).
   The inventory document that was the whole of stdout moves to `data.inventory` unchanged (`kind`,
   `vendor`, `declared`/`discovered`/`references`/`unexpected`, `parseErrors[]`); under `--shallow`
@@ -637,8 +566,6 @@
   `derived.paths` derives its exit code. `no-stdout-outside-writer` no longer names
   `writeYamlOutput` / `writeJsonOutput` / `writeStructuredOutput` (they no longer exist); it still
   flags `writeStdoutSync` and `writeAllSync`.
-- **`vat agent run` failures no longer print a document on stdout** (stdout is the agent's reply):
-  the message goes to stderr (the stack under `--debug`) and the exit stays 2.
 - **`vat okf validate` over nothing is refused by the writer**: the `RESOURCE_CHECK_BROKEN`
   message is the registry's (`Nothing was examined: 0 bundle documents. …`); `data.notice` still
   names the empty bundles.
@@ -760,14 +687,6 @@
   `errors` entry per resource carrying LanceDB's raw message. A caller that read `result.errors` for
   this case must now catch the rejection.
 
-- **`vat agent build --output <dir>` refuses a `<dir>/<agent-name>/` that already holds anything**
-  (`USAGE_INVALID`, exit 2, naming the path) and leaves it exactly as it was. It used to write over a
-  user's own `SKILL.md` and `scripts/` there and exit 0. The new `--force` says it is a previous build:
-  that directory is replaced. An empty directory is used as-is; an output that is, or
-  holds, the agent's own source is refused even with `--force`. The default location
-  (`dist/vat-bundles/skill/<agent>/`) is VAT's and is replaced whole. Library: the same
-  rule in `buildAgentSkill`, lifted by the new `replaceExistingOutput: true` — the check is the one
-  `vat skills package -o` applies (`TREE_DEST_NOT_OWNED`).
 - **`vat skills package --dry-run` is the real run's own packaging pass, stopped before its first
   write** (`packageSkill(…, { dryRun: true })`, new): the project crawl, the link walk and the
   `--output` check all run. A directory in the project the OS will not list is now
@@ -797,8 +716,6 @@
   on every side, a read included — the machine's fault, never the input's; something already at a
   destination the user named is `USAGE_INVALID` (`TREE_DEST_OCCUPIED` / `TREE_DEST_NOT_OWNED`),
   decided before anything is written, never inferred from an `EEXIST`.
-- **`importSkillToAgent` throws a refused `agent.yaml` write** (an `FsFaultError`) instead of
-  returning it.
 - **`@vibe-agent-toolkit/utils/eslint`: the `no-fs-promises-cp` rule is removed.** It was in
   `configs.recommended` at `error`, so a config or an `eslint-disable` that names it now reports an
   unknown rule: delete the reference. `no-destructive-fs` subsumes it inside VAT and is not in
@@ -905,38 +822,23 @@
   Every lane that publishes `SKILL_PACKAGING_FAILED` reads it as that finding
   (`isSkillPackagingInputError`): `vat skill test run`'s pool build now fails naming the findings
   instead of testing a previous dist it reported as rebuilt, and a `workspace:` skill source refuses
-  coded instead of failing on a bundle that was never written. `vat agent build` keeps landing such a
-  package (registered in known-defects.md: its own `scripts/` / `LICENSE.txt` trip
-  `PACKAGED_UNREFERENCED_FILE`).
-- **An occupied `vat skills package -o` / `vat agent build --output` is refused as
+  coded instead of failing on a bundle that was never written.
+- **An occupied `vat skills package -o` is refused as
   `TREE_DEST_NOT_OWNED`** (`USAGE_INVALID`), and an output that is or holds the source with
   `--force` as `TREE_DEST_HOLDS_SOURCE`. `--force` never
   replaces a directory standing where an archive goes: that is refused `USAGE_INVALID` before
   anything is written (it used to end `RUN_INCOMPLETE` after the directory was written). An empty
   directory at the output is replaced as-is.
-- **`vat agent build` writes its build as one transaction**, staged beside `<output>/<agent>` and
-  swapped in: `--force` no longer removes the previous build first, and a failure partway leaves it
-  byte-equal. The default location (no `--output`) is replaced whole, where it used to be built into
-  in place (stale files of an earlier build no longer survive). A previous build the swap replaced
-  that the OS will not remove is a `TREE_CLEANUP_INCOMPLETE` warning naming it (exit 0).
 - **`vat claude plugin build` replaces each marketplace as one transaction.** The marketplace is
   built whole beside `dist/.claude/plugins/marketplaces/<name>` and swapped in once every plugin
   passed the gate: a failed or gated build leaves the previous marketplace byte-equal, where it used
   to be removed before the build started.
-- **`vat agent import` writes `agent.yaml` through the tree-change plan.** Something already at the
-  output without `--force` is refused before anything is written as `TREE_DEST_OCCUPIED`
-  (`USAGE_INVALID`, "… Use --force to overwrite."); a destination the OS will not examine is now
-  `RUN_INCOMPLETE` (it was `INPUT_UNREADABLE`); a `--output` whose directory does not exist yet is
-  made (it used to end `RUN_INCOMPLETE`). The file is written beside its destination and renamed
-  into place, so a link there is replaced, not written through.
 - **A crawl believes a subdirectory "vanished" only when its parent agrees.** An `ENOENT` /
   `ENOTDIR` listing (or canonicalising) a subdirectory the parent just listed was skipped as a race;
   it is now confirmed by re-reading the parent (`requireConfirmedAbsent`): an entry the parent still
   names is a refused listing under the caller's `unreadable` policy (refused or reported as a gap),
   never a silently shorter population. `vat claude plugin build` no longer ships a plugin without a
   directory whose listing failed that way (exit 0). A genuinely vanished entry is still skipped.
-- **`vat agent import -o <existing empty directory>` is refused** (`TREE_DEST_OCCUPIED`), never
-  replaced by a file: under `must-be-free` an empty directory is free for a tree, not for a file.
 - **`vat claude plugin build` / `vat build` refuse a path they cannot examine instead of building
   without it.** A project `LICENSE`, `README.md` or `CHANGELOG.md` (or a `publish.readme` /
   `publish.changelog` target), a plugin's source directory (`plugins/<name>`) or `dist/skills` whose
@@ -968,20 +870,10 @@
   and never through a link); `onCrawlOutput` on the `./crawl`
   subpath.
 
-- **`vat agent install` changes the install as one transaction, `--dev` included.** The copy, or the
-  `--dev` link, is staged beside `~/.claude/skills/<agent>` and swapped in whole: `--force --dev` no
-  longer removes the previous install before linking, so a link that cannot be made leaves the
-  previous install as it was. A refused install no longer leaves the `~/.claude/skills` directory it
-  made. A previous install the swap replaced and the OS would not let VAT remove is now a
-  `TREE_CLEANUP_INCOMPLETE` warning in the report (it was only logged). Without `--force`, anything
-  but an empty directory at the install path is refused `USAGE_INVALID` by the plan's preflight
-  ("Something already exists where the install goes: … Use --force to overwrite."), where an empty
-  directory used to be refused too; an install path the OS will not examine is `RUN_INCOMPLETE`
-  (the help said `INPUT_UNREADABLE`).
-- **`vat agent uninstall`, `vat rag clear` and `vat cache clear` move what they remove off its path
-  whole, then delete it.** A deletion the OS stops never leaves part of an install, a database or a
+- **`vat rag clear` and `vat cache clear` move what they remove off its path
+  whole, then delete it.** A deletion the OS stops never leaves part of a database or a
   cache at the path the user knows. It is still `RUN_INCOMPLETE`, but the removal is done: the
-  report carries the verb's `data` (the uninstall, `cleared: true`, the cache's counts) and a
+  report carries the verb's `data` (`cleared: true`, the cache's counts) and a
   `TREE_CLEANUP_INCOMPLETE` warning whose `link` is the moved-aside `.<name>.vat-staged-*.previous`
   entry. A read-only directory the user owns no longer stops the removal (it is made owner-writable
   on the way down). `vat claude plugin uninstall`'s leftover now carries the same warning.
@@ -1074,9 +966,6 @@
   is. It used to install any ZIP — a lone `readme.txt`, or a zipped folder whose `SKILL.md` is one
   level down — as a "skill" named after the file, which Claude Code never loads. Zip the folder's
   contents, not the folder.
-- **`vat agent import --output <directory>` is refused with or without `--force`** (`USAGE_INVALID`):
-  `--output` names the `agent.yaml` file. Under `--force` a directory there used to be deleted with
-  everything in it and replaced by the file, exit 0.
 - **A registry file of the wrong shape refuses `vat claude plugin install`, `uninstall` and `list`**
   as `INPUT_UNREADABLE` naming the file (an `installed_plugins.json` with no `plugins` object, a
   `known_marketplaces.json` entry with no `source`, a `settings.json` that is not an object). The
@@ -1132,8 +1021,7 @@
   | `ARD_DERIVATION_FAILED` | A declared `ard:` surface could not be derived into a conformant entry. Published as an error-severity finding. | 1 |
 - **New finding codes**, each documented in `docs/validation-codes.md`:
   `SETTINGS_FILE_INVALID`, `SETTINGS_TYPE_AMBIGUOUS`, `SETTINGS_PATH_DEPRECATED`,
-  `SETTINGS_RULE_SHADOWED`, `SETTINGS_MARKETPLACE_TOKEN_MISSING`, `AGENT_MANIFEST_INVALID`,
-  `AGENT_REFERENCE_MISSING`, `AGENT_REFERENCE_UNREADABLE`, `AGENT_RAG_NO_SOURCES`,
+  `SETTINGS_RULE_SHADOWED`, `SETTINGS_MARKETPLACE_TOKEN_MISSING`,
   `PLUGIN_UNINSTALL_INCOMPLETE`, `SKILL_TEST_EVAL_FAILED`, `DOCTOR_CHECK_FAILED`,
   `DOCTOR_CHECK_WARNED`, `CORPUS_ENTRY_INCOMPLETE`,
   `SKILL_PACKAGING_FAILED`, `SKILL_BUILD_TARGET_NOT_BUILDABLE`, `SKILL_PACKAGE_TOO_LARGE`,
@@ -1148,9 +1036,7 @@
   `SKILL_TEST_REFUSAL_BY_ERROR_CODE`.
   `@vibe-agent-toolkit/utils/yaml`: `YAML_EDIT_INPUT_REFUSED_CODE`. `@vibe-agent-toolkit/resources`: `PROJECTION_STATEMENT_REFUSED_CODE`,
   `LINK_AUTH_CONFIG_CODE`, `matchesCollection`, `ExternalPluginSourceSchema`,
-  `readConfigText`, `readConfigTextSync`. `@vibe-agent-toolkit/agent-config`:
-  `AGENT_MANIFEST_NOT_FOUND_CODE`, `AGENT_MANIFEST_UNREADABLE_CODE`, `AGENT_MANIFEST_INVALID_CODE`,
-  `ValidateAgentOptions`. `@vibe-agent-toolkit/projection-sqlite`:
+  `readConfigText`, `readConfigTextSync`. `@vibe-agent-toolkit/projection-sqlite`:
   `SqlQueryableStore.columns(sql, ...params)`.
 
 - **`@vibe-agent-toolkit/utils` exports ordered and bounded-parallel async iteration:**
@@ -1276,13 +1162,12 @@
     naming it. A copy into a tree that already holds copied content names that tree's root.
   - Errno-only codes are gone, each replaced by the one classified fault (`FS_FAULT`):
     `SKILL_PACKAGING_OUTPUT_FAILED_CODE`, `HarnessOutputError` (`HARNESS_OUTPUT_UNWRITABLE`),
-    `AGENT_SOURCE_UNREADABLE_CODE`, `COPY_SOURCE_NOT_REGULAR_CODE`, `CLAUDE_USER_STATE_WRITE_FAILED_CODE`,
+    `COPY_SOURCE_NOT_REGULAR_CODE`, `CLAUDE_USER_STATE_WRITE_FAILED_CODE`,
     `PLUGIN_SOURCE_UNREADABLE_CODE`, `DIRECTORY_LISTING_REFUSED_CODE` (a `DirectoryListingRefusedError`
     is coded `FS_FAULT` and carries its fault as `cause`), `RAG_DATABASE_NOT_REMOVABLE_CODE` and
     `PLUGIN_INSTALL_CLEANUP_INCOMPLETE` (now the `TREE_CLEANUP_INCOMPLETE` warning). What remains means
     content only: `SKILL_SOURCE_UNREADABLE` a refused symlink, `CLAUDE_USER_STATE_UNREADABLE` a registry
-    or settings file that is not JSON (or the wrong shape), `AGENT_MANIFEST_UNREADABLE` a manifest that is
-    not YAML.
+    or settings file that is not JSON (or the wrong shape).
   - `SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE`, `checkPackageOutput`, `PackageOutputCheck` and
     `PackageSkillOptions.sourceGeneratedInOutput` are gone: an occupied output is `TREE_DEST_NOT_OWNED`.
   - `@vibe-agent-toolkit/utils`:
@@ -1311,7 +1196,7 @@
     shape); `removeRagDatabase` is async and returns `RagDatabaseRemoval` (`{ leftover? }`).
 - **Help `Exit Codes:` blocks now state what the code does.** `vat claude context` no longer
   promises exit 1 for an unknown option or unsupported `--format` (Commander rejects those at 2,
-  with no document); `vat agent run` documents 0 or 2 (it never exits 1); `vat corpus scan` no
+  with no document); `vat corpus scan` no
   longer advertises exit 130 (VAT installs no SIGINT handler there).
 
 - **`version:` in `vibe-agent-toolkit.config.yaml` is now an unrecognized key, like any other.**
@@ -1322,9 +1207,9 @@
 - **A skill build whose output cannot be written ends `RUN_INCOMPLETE`, exit 2** — a full disk, a
   read-only or unwritable output directory, a file in the way of the output path, a previous output
   it cannot move aside — in `vat skills build`, `vat skills package`, `vat build`,
-  `vat claude plugin build`, `vat agent build` and `vat skill test run`. It is never a
+  `vat claude plugin build` and `vat skill test run`. It is never a
   `SKILL_PACKAGING_FAILED` finding (that is reserved for the skill's own content) and never
-  `INTERNAL_ERROR`: `vat agent build`'s own writes, `vat claude plugin build`'s marketplace-tree
+  `INTERNAL_ERROR`: `vat claude plugin build`'s marketplace-tree
   writes and removal, and `vat skills package`'s output removal were uncoded, and a file in the way
   of `vat skills package --output` was published as a `SKILL_PACKAGING_FAILED` finding at the skill,
   exit 1. Every copy `vat claude plugin build` makes into the marketplace tree — the marketplace
@@ -1425,15 +1310,14 @@
   the `SKILL_PACKAGING_FAILED` finding; a refused, vanished or full output stays `RUN_INCOMPLETE`.**
   A source the machine could not read for want of disk or file descriptors is now `RUN_INCOMPLETE`,
   never that finding.
-- **`vat agent build` and `vat skill test run` publish a source fault inside the packager as the
+- **`vat skill test run` publishes a source fault inside the packager as the
   `SKILL_PACKAGING_FAILED` finding**, as the other packaging lanes do; the finding's message now
   ends with the remedy for the fault.
 
 - **Every CLI filesystem refusal is decided by the one table** (`docs/validation-codes.md`, "Filesystem
   faults: which refusal"). Visible differences: a disk or descriptor shortage while reading an input
   is `RUN_INCOMPLETE`; a refused write into an archive's staging directory, a refused stat of a
-  `vat skills build` previous `dist/skills`, a refused probe of the install `vat agent uninstall`
-  removes, and a `vat rag index` / `vat rag clear` database the OS will not examine or list are
+  `vat skills build` previous `dist/skills`, and a `vat rag index` / `vat rag clear` database the OS will not examine or list are
   `RUN_INCOMPLETE` (they were `INPUT_UNREADABLE`); so are a `vat cache clear` cache the OS will not
   list or measure (the cache is VAT's own scratch) and a `vat skills install` target whose existence the
   OS will not let VAT check (it is what the install writes); a directory a listing could not open is
@@ -1477,21 +1361,19 @@
   the plugin's own directory down, through real directories only, each file created exclusively.
 
 - **Advisories cleared from the dependency tree via root `overrides`:** `smol-toml` 1.8.0 → 1.9.0,
-  `sharp` 0.35.4 → 0.35.5, and new pins `proxy-addr` 2.0.8, `source-map-js` 1.2.2 and
-  `@modelcontextprotocol/sdk` 1.31.0. No action needed.
+  `sharp` 0.35.4 → 0.35.5, and new pin `source-map-js` 1.2.2. No action needed.
 
 ### Fixed
 
-- **A copied tree can no longer write outside its destination.** Installing a skill, an agent or a
-  plugin whose source holds two entries that are one name on the destination filesystem (`NOTES`
+- **A copied tree can no longer write outside its destination.** Installing a skill or a plugin
+  whose source holds two entries that are one name on the destination filesystem (`NOTES`
   and `notes` from a case-sensitive volume onto macOS or Windows), the first a link, wrote the
   second THROUGH the link — overwriting a file outside the install, exit 0. Such a source is now
   refused (`INPUT_UNREADABLE`, naming both entries) with nothing installed.
 - **A source reached through a link is recognised as inside (or holding) its destination.** With
   `~/.claude/skills` a link into the skill's own source, `vat skills install` copied into itself
   until the path was too long; it is now `USAGE_INVALID` before anything is written.
-- **`--force` over a `--dev` link works.** `vat skills install … --force` and `vat agent install
-  <name> --force` refused when the installed entry was a link to the very build being installed
+- **`--force` over a `--dev` link works.** `vat skills install … --force` refused when the installed entry was a link to the very build being installed
   ("replacing it would delete it" — it would only replace the link).
 - **A destination that changes while VAT stages is left alone.** A file that appeared where an output
   was to be created, or in the empty directory an output was to replace, used to be overwritten or
@@ -1528,12 +1410,6 @@
   used to vanish without a word.
 - **`vat claude marketplace validate` names the errno of a `SKILL.md` it could not examine**
   (`read refused with EACCES`); the warning could read `FS_FAULT`.
-- **`vat agent install`, `uninstall` and `installed` resolve their scopes when they run, through the
-  same Claude-user-paths resolver every other verb uses.** The `user` scope now honours
-  `CLAUDE_CONFIG_DIR` (it read `~/.claude/skills` regardless), and the `project` scope honours
-  `--cwd` (it was fixed to the launch directory, so `vat --cwd ../proj agent uninstall x --scope
-  project` removed from the wrong tree). A skill installed to the user scope is now visible to
-  `vat skills list --user`.
 - **`vat audit settings` reads the user settings layer from `$CLAUDE_CONFIG_DIR/settings.json`**
   when the variable is set, the same file `--show-paths` names. It read `~/.claude/settings.json`
   regardless, so a relocated config was audited as the wrong file or as nothing readable.
@@ -1541,9 +1417,6 @@
 - **`vat resources validate --format` and `--validation-mode` refuse a value they do not offer**
   (exit 2, naming the accepted values). `--format bogus` used to write YAML and
   `--validation-mode bogus` ran strict, both at exit 0.
-- **`vat mcp serve <package> --print-config` resolves the package first.** A package that does not
-  load now fails as it does without the flag (exit 2, nothing on stdout); it used to print a
-  paste-ready config for a server that could not start, at exit 0.
 
 - **`vat corpus scan` no longer swallows a VAT defect into an `unloadable` row.** An uncoded
   throw inside an entry's audit (a validator `TypeError`) used to become a
@@ -1578,9 +1451,6 @@
   syntax". A manifest under a directory that refuses access is no longer reported as missing.
 - **`@vibe-agent-toolkit/discovery` `scan()` reports a root it may not examine as "Path cannot be
   read (EACCES)"**, carrying the OS error as `cause`, instead of "Path does not exist".
-- **`vat agent validate` no longer puts absolute paths in finding messages**: a missing RAG
-  database is shown as `.rag-db`, and `AGENT_REFERENCE_UNREADABLE` names the errno instead of the
-  OS message (which spelled the absolute path).
 
 - **`vat rag index` refuses a database directory that holds anything but a RAG database**, as
   `stats`, `query` and `clear` already did. It used to hand any writable directory to LanceDB, so
@@ -1604,15 +1474,13 @@
 - **A skill's `SKILL.md` that cannot be written into the bundle is named as the entry file**, not
   as a "linked file": an unwritable `--output` read "linked file skills/clean/SKILL.md, but it could
   not be written into the bundle", sending the author to look for a link that does not exist.
-- **Packaging and `vat agent build` prove a source readable by opening it**, no longer by
+- **Packaging proves a source readable by opening it**, no longer by
   `access(R_OK)`, which Node documents ignores ACLs on Windows. An ACL-denied source is now the
-  skill's or agent's unreadable input (`SKILL_PACKAGING_FAILED` / `INPUT_UNREADABLE`); it
-  used to pass the check and fail inside the copy, as an unfinished run with a write remedy in the
-  packager and as `INTERNAL_ERROR` in the agent builder.
+  skill's unreadable input (`SKILL_PACKAGING_FAILED`); it
+  used to pass the check and fail inside the copy, as an unfinished run with a write remedy.
 
 - **A path with no relative spelling (on Windows, another drive than its root) no longer kills the
-  document.** `vat agent validate` with a manifest on another drive than the working directory
-  refuses `USAGE_INVALID` (it died on its own document, printing nothing); a `vat okf validate`
+  document.** A `vat okf validate`
   finding in a bundle on another drive than the project, and a `vat skills build` packaging
   finding for a skill on another drive than the working directory, omit `location` (the OKF one
   names the document in its message).
@@ -1660,12 +1528,6 @@
   `skills/x` points at nothing) is refused as the subpath, `USAGE_INVALID`: "escapes the cloned
   repository" when the link aims outside the clone, "not found" when it aims inside. It was a raw
   `ENOENT … scandir` coded `INPUT_UNREADABLE`.
-- **`vat agent install|uninstall|installed --runtime constructor`** (or any other
-  `Object.prototype` key) is `USAGE_INVALID`, as every other unknown runtime is. It was
-  `INTERNAL_ERROR` on install and uninstall, and a "defect in VAT" exit 1 on `installed`.
-- **`vat agent build` no longer hangs on a named pipe under `scripts/`.** A pipe, socket or device
-  (or a link to one) under `scripts/` is refused unopened as an unreadable agent source,
-  `INPUT_UNREADABLE`, naming it; opening a pipe for reading blocked forever waiting for a writer.
 
 - **`--help` and the reference docs now name every exit-2 cause these verbs have.**
   - `vat audit --help` lists the `--settings` refusals. `--settings` without `--compat`, with
@@ -1707,12 +1569,6 @@
   that path plus the `RESOURCE_CHECK_BROKEN` finding naming it (error, exit 1), like an unreadable
   `plugin.json`.
 
-- **`vat agent build` no longer hangs on a named pipe as the system prompt or `LICENSE.txt`.** Both
-  are refused unopened, `INPUT_UNREADABLE` naming the path, as a pipe under `scripts/` already was.
-- **`vat agent build` reads every source before writing anything.** A refused `scripts/`,
-  `LICENSE.txt` or system prompt used to leave `SKILL.md` and the manifest guide written without the
-  rest — or a previous build's `SKILL.md` overwritten beside its stale `scripts/`. The output is now
-  untouched.
 - **A named pipe, socket or device linked from a SKILL.md** no longer hangs `vat skills package` or
   `vat skills build`, and is no longer dropped from the package silently (status `ok`, a dangling
   link). The validator refuses it unread as a `LINK_TARGET_UNREADABLE` error (exit 1), with a remedy
@@ -1768,12 +1624,6 @@
   path, with nothing changed; a corrupt or clashing archive is still `INPUT_UNREADABLE`. A full
   `$TMPDIR` while `npm pack` itself downloads is still `EXTERNAL_API_FAILED`.
 
-- **`vat agent install --force` removed the previous install, then hung forever on a named pipe in
-  the built bundle**, leaving a half-copied skill and no previous one. The copy now refuses a named
-  pipe, socket or device (or a link to one) unopened, as the bundle's `INPUT_UNREADABLE`, and an
-  install is copied beside the old one and swapped in only once it is whole — so any refused or
-  failed copy keeps the previous install. `vat agent installed` no longer lists the staged copy an
-  interrupted install leaves behind.
 - **The packaged-output link checks named whichever unreadable document finished first.** When two
   documents could not be read, `vat skills package` / `vat build` reported a different one from run
   to run; they now report the first by position, as before they read in parallel.
@@ -1817,16 +1667,6 @@
   are now always owner-writable; previously they kept the source's mode and nothing could remove
   them. One installed read-only by an earlier build is made owner-writable on the way down.
 
-- **`vat agent install` of a read-only bundle can now be removed.** The install root used to
-  copy the bundle root's mode exactly. A `0555` bundle, from a read-only checkout or a packaging
-  step's `chmod`, became an install that `vat agent uninstall` refused with `RUN_INCOMPLETE`. The
-  install root now keeps the owner's read, write and search bits.
-- **`vat agent install` reports a bundle it cannot read as `INPUT_UNREADABLE`, as its help says.**
-  An unreadable file, an unlistable directory or a dangling link in the bundle used to be
-  `RUN_INCOMPLETE`. The previous install is still kept.
-- **`vat agent install` and `vat agent build` can no longer hang on a file that becomes a named
-  pipe after the tree is listed.** Each file is opened without blocking, checked with `fstat` on
-  that handle, and copied from the handle. The file mode is kept, as before.
 - **A `vat skill test run` npm source is found on disk, not through Node's resolution of
   `./package.json`.** A package whose `exports` map hides `./package.json` used to be refused as
   naming no skill source. A subpath that names a directory (`npm:@scope/pkg@1.0.0/skills/x`) could
@@ -1849,17 +1689,15 @@
   project that vanishes under a packaging verb now refuses `RUN_INCOMPLETE`.
 
 - **`vat claude plugin install` (every lane), `vat claude plugin build`, `vat claude marketplace
-  publish`, `vat rag clear` and `vat agent install --dev` no longer end `INTERNAL_ERROR` on a file
+  publish` and `vat rag clear` no longer end `INTERNAL_ERROR` on a file
   the OS refuses** while listing the package, copying into `~/.claude`, staging the publish tree,
-  listing `dist/skills`, examining the database to clear, or linking the agent.
+  listing `dist/skills`, or examining the database to clear.
 
 - **A temporary directory the OS refuses to resolve is refused `RUN_INCOMPLETE`, not `INTERNAL_ERROR`.**
   `normalizedTmpdir()` (`@vibe-agent-toolkit/utils`) raises the refusal as an `FsFaultError` on side
   `environment`; every verb that keeps scratch, staging or a cache under `$TMPDIR` reported it as a defect.
-- **`vat agent build` refuses a `scripts/` link that points outside `scripts/` before writing any
-  output**, rather than after writing part of it. `vat claude plugin install` and the skill test
-  harness refuse a named pipe, socket or device in a plugin, skill or `.claude-plugin/` tree as
-  `INPUT_UNREADABLE` instead of passing it to a copy that could block on it.
+- **`vat claude plugin install` and the skill test harness refuse a named pipe, socket or device
+  in a plugin, skill or `.claude-plugin/` tree as `INPUT_UNREADABLE`** instead of passing it to a copy that could block on it.
 
 - **A plugin install, its registry and its `vat.replaces` are one transaction.** The marketplace copy (with
   VAT's `.vat-marketplace` marker written in the copy itself), each plugin's cache, the removal of each
@@ -1926,7 +1764,7 @@
   `INPUT_UNREADABLE`.** The project crawl also walks `dist/`; a directory there the OS will not list that
   holds or lies in what the run writes (`dist/skills`, its staging, the marketplaces) is `RUN_INCOMPLETE`.
 - **Packaging no longer blames a source file the OS will not resolve on the output** (`vat skills
-  package`, `vat skills build`, `vat agent build`): the check whether the output holds the source refuses
+  package`, `vat skills build`): the check whether the output holds the source refuses
   that read as the source's, `INPUT_UNREADABLE`, naming the file.
 
 - **`vat skills build` no longer ends in `INTERNAL_ERROR` when the OS refuses a read of the bundle it
@@ -1945,7 +1783,7 @@
 - A `vat skills package` whose SKILL.md the project crawl could not read is refused naming it
   (`SKILL_PACKAGING_FAILED`), instead of packaging the SKILL.md alone with every link dropped
   (exit 0).
-- A refused listing of a previous package or agent build beside the run's staged tree, or of the
+- A refused listing of a previous package build beside the run's staged tree, or of the
   marketplaces a `vat build` writes, is `RUN_INCOMPLETE` (the run's output), not `INPUT_UNREADABLE`.
 - `vat claude plugin build` classifies a plugin source the OS will not list or examine during its
   symlink sweep, and a refused close of a plugin file, as the input's (`INPUT_UNREADABLE`), not an

@@ -1,7 +1,7 @@
 {
   "name": "vibe-agent-toolkit",
   "version": "0.2.0-rc.15",
-  "description": "Modular toolkit for building, testing, and deploying portable AI agents",
+  "description": "Toolkit for skills, plugins, marketplaces and knowledge resources: audit, build, distribute, RAG and projection",
   "type": "module",
   "bin": {
     "vat": "./bin/vat"
@@ -12,12 +12,15 @@
   ],
   "keywords": [
     "ai",
-    "agents",
+    "skills",
+    "claude",
+    "plugins",
+    "marketplace",
     "cli",
     "toolkit",
     "markdown",
     "validation",
-    "llm"
+    "rag"
   ],
   "author": "Jeff Dutton",
   "license": "MIT",

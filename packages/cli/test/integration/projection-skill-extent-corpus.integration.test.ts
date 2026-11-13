@@ -124,15 +124,15 @@
  * ## The first answer is that the production corpus cannot tell them apart
  *
  * Measured, and asserted below rather than remembered: under the shipped
- * configs, **every one of the fourteen declared skills bundles exactly its own
- * `SKILL.md` and nothing else**. Twelve declare `linkFollowDepth: 0`; the other
- * two carry only `https:` links and `../../../../docs/**` links that leave the
- * project root. So both implementations return a singleton for every skill, and
+ * configs, **every declared skill bundles exactly its own `SKILL.md` and
+ * nothing else**. Some declare `linkFollowDepth: 0`; the rest carry only links
+ * that do not resolve to an in-project document — `https:` links and
+ * `../../../../docs/**`-style pointers that leave the project root. So both implementations return a singleton for every skill, and
  * they agree — which is a true statement that establishes nothing. A corpus that
  * cannot make the two answers differ makes an equality assertion over it
  * vacuous.
  *
- * That is why {@link CORPORA} has a third entry. `repo-root` walks the *same
+ * That is why {@link CORPORA} has a second entry. `repo-root` walks the *same
  * real files under the same real configs* against this repository's root
  * instead of each package's own, which is the one ambient input that turns those
  * `../../../../docs/**` pointers into in-project edges. Nothing is invented: the
@@ -258,9 +258,8 @@ import { mergeSkillPackagingConfig } from '../../src/utils/skill-packaging-confi
 /** The repository root, four levels up from this file. */
 const REPO_ROOT = safePath.resolve(__dirname, '..', '..', '..', '..');
 
-/** The two VAT projects in this repository that declare a `skills:` section. */
+/** The one VAT project in this repository that declares a `skills:` section. */
 const DEV_AGENTS = 'packages/vat-development-agents';
-const CAT_AGENTS = 'packages/vat-example-cat-agents';
 
 /** One corpus: a set of declared skills, resolved against one project root. */
 interface CorpusSpec {
@@ -277,10 +276,10 @@ interface CorpusSpec {
 /**
  * The corpora, in increasing order of what they can distinguish.
  *
- * The first two are the production configuration: the project root each skill's
- * `findProjectRoot(dirname(skillPath))` actually resolves to. The third is the
+ * The first is the production configuration: the project root each skill's
+ * `findProjectRoot(dirname(skillPath))` actually resolves to. The second is the
  * same files and the same configs against the repository root — the only corpus
- * of the three in which either implementation follows an edge at all.
+ * of the two in which either implementation follows an edge at all.
  */
 const CORPORA: readonly CorpusSpec[] = [
   {
@@ -290,14 +289,8 @@ const CORPORA: readonly CorpusSpec[] = [
     note: 'the root findProjectRoot resolves for these skills',
   },
   {
-    label: 'production/cat-agents',
-    configRoots: [CAT_AGENTS],
-    projectRoot: CAT_AGENTS,
-    note: 'the root findProjectRoot resolves for this skill',
-  },
-  {
     label: 'repo-root',
-    configRoots: [DEV_AGENTS, CAT_AGENTS],
+    configRoots: [DEV_AGENTS],
     projectRoot: '.',
     note: 'same files, same configs, wider root — the corpus that CAN distinguish',
   },
@@ -326,8 +319,9 @@ const CORPUS_HAS_GIT_TRACKER = true;
 /**
  * Depths the sweep re-runs both arms at, over the `repo-root` corpus.
  *
- * The shipped configs pin twelve of the fourteen skills at `0`, so without this
- * sweep the corpus's own declarations would keep the walk from ever starting.
+ * The shipped configs pin the skills that link into `docs/` at `0`, so without
+ * this sweep the corpus's own declarations would keep the walk from ever
+ * starting on exactly the links that can reach an in-project edge.
  * Every value here is one `SkillPackagingConfigSchema` accepts.
  */
 const SWEPT_DEPTHS: readonly (number | 'full')[] = [0, 1, 2, 'full'];
@@ -336,34 +330,51 @@ const SWEPT_DEPTHS: readonly (number | 'full')[] = [0, 1, 2, 'full'];
 const TIMING_REPEATS = 9;
 
 /**
- * Skills the two configs declare, as of this writing.
+ * Skills the one config declares, as of this writing.
  *
  * Pinned so a discovery that silently found *fewer* skills cannot pass as
  * agreement: every assertion here is over the skills the run enumerated, and a
  * run that enumerated none would satisfy all of them.
  */
-const TOTAL_DECLARED_SKILLS = 14;
+const TOTAL_DECLARED_SKILLS = 12;
 
 /** The transitive divergence cause — see {@link DivergenceCause}. */
 const PRUNED = 'pruned-behind-exclusion';
 
 /**
- * The one directory a shipped `excludeReferencesFromBundle` rule rejects on this
- * corpus: `vat-example-cat-agents` declares `**\/agents/**`, and its SKILL.md
- * links nine documents under it. Every other declared rule (`docs/**`,
- * `packages/**\/README.md`) sits on a skill pinned at `linkFollowDepth: 0`, where
- * no rule ever gets a candidate to judge.
+ * The directory, stated against the repo-root corpus, that the exercised
+ * `excludeReferencesFromBundle` rule rejects: the repository's top-level `docs/`.
+ *
+ * Every shipped exclude rule (`docs/**`, `packages/**\/README.md`) sits on a skill
+ * pinned at `linkFollowDepth: 0`, where no rule ever gets a candidate to judge,
+ * and under the skills' own project root the `../../../../docs/**` links they
+ * carry leave the root before any rule sees them. The repo-root corpus with a
+ * swept depth is where `docs/**` first gets candidates.
  */
-const EXCLUDED_DIRECTORY = 'vat-example-cat-agents/resources/agents';
+const EXCLUDED_DIRECTORY = 'docs';
 
 /**
- * The skill that declares the rule above.
+ * The skill whose declared rule is exercised: it declares `docs/**` and links
+ * into {@link EXCLUDED_DIRECTORY} directly from its SKILL.md.
  *
  * The check is scoped to it because an exclude rule is per-skill: another skill
- * reaching the same directory at `linkFollowDepth: 'full'` has declared no rule
+ * reaching the same directory at a swept depth may have declared no rule
  * against it and is right to bundle it.
  */
-const EXCLUDING_SKILL = 'vat-example-cat-agents';
+const EXCLUDING_SKILL = 'vat-skill-authoring';
+
+/**
+ * Whether a root-relative path lies under {@link EXCLUDED_DIRECTORY}.
+ *
+ * A prefix test, not a substring one: `docs/**` is anchored at the root, so a
+ * nested `packages/<name>/docs/` is not what the rule rejects.
+ *
+ * @param path - A path stated against the corpus root
+ * @returns True when the path is inside the excluded directory
+ */
+function inExcludedDirectory(path: string): boolean {
+  return toForwardSlash(path).startsWith(`${EXCLUDED_DIRECTORY}/`);
+}
 
 /**
  * A glob that matches NOTHING on this corpus, declared FIRST in the synthesized
@@ -380,7 +391,7 @@ const DECOY_PATTERN = '**/no-such-directory-on-this-corpus/**';
 const MATCHING_TEMPLATE = 'see https://example.test/{{path}}';
 
 /**
- * The glob the shipped `vat-example-cat-agents` config declares against
+ * The glob the shipped {@link EXCLUDING_SKILL} config declares against
  * {@link EXCLUDED_DIRECTORY}, re-declared here as the SECOND rule of the
  * synthesized two-rule config.
  *
@@ -388,7 +399,7 @@ const MATCHING_TEMPLATE = 'see https://example.test/{{path}}';
  * report as the matched pattern, and two spellings would let the expectation
  * drift away from the rule it stands for.
  */
-const EXCLUDED_DIRECTORY_GLOB = '**/agents/**';
+const EXCLUDED_DIRECTORY_GLOB = 'docs/**';
 
 /**
  * Every cause the depth sweep produced **before** the refusal vocabulary landed,
@@ -404,9 +415,8 @@ const EXCLUDED_DIRECTORY_GLOB = '**/agents/**';
  * "Zero divergence" is satisfiable by a closure that returned nothing at all, so
  * the sweep is run a second time with the vocabulary stripped
  * ({@link NARROWING_LABELS}, {@link NARROWING_FIELDS}) and must reproduce
- * precisely these four — 253 attributed paths, of which 239 are the transitive
- * bucket, 9 `navigation-file`, 3 `directory-target` and 2
- * `agent-instruction-file`. An
+ * precisely these four, with the transitive bucket the largest (the run prints
+ * the per-cause counts as `[control causes]`). An
  * equality rather than a subset check on both arms: a NEW cause appearing is the
  * finding this file exists to surface, and a `toContain`-shaped assertion would
  * let one through.
@@ -1215,11 +1225,9 @@ function fieldMultiset(rows: readonly RefusalProvenance[], field: ProvenanceFiel
  * `processLink` calls `checkExclusions` **before** the depth check
  * (`processRegistryResource` owns that), so a link out of a member sitting AT
  * `maxDepth` was still classified and still recorded — while the closure's
- * `canDescend` stopped the enumeration at that member and said nothing. Measured
- * at `linkFollowDepth: 1`, the walker emitted 34 rows for
- * `…/agents/breed-advisor.md` (14 from the SKILL.md, 20 from the depth-1
- * `cat-breed-selection.md`) where the closure emitted the 14, and 21 rows across
- * the whole sweep went counted-but-uncompared.
+ * `canDescend` stopped the enumeration at that member and said nothing, so a
+ * target reached from both a root and a frontier member carried more walker rows
+ * than closure rows.
  *
  * The gap is closed in the CODE now, not here: the closure bounds admission
  * rather than enumeration, so it emits a row for every reference out of a
@@ -1529,7 +1537,7 @@ async function sweepDepths(corpus: Corpus, narrowing: Narrowing = 'on'): Promise
       // about — see EXCLUDED_DIRECTORY for why this is the only skill that can
       // exercise it on this corpus.
       const escaped = skill.name === EXCLUDING_SKILL
-        ? [...walker, ...closure].filter((path) => path.includes(`${EXCLUDED_DIRECTORY}/`))
+        ? [...walker, ...closure].filter((path) => inExcludedDirectory(path))
         : [];
       result.excludeEscapes.push(...escaped.map((path) => `${skill.name}@${String(depth)}: ${path}`));
     }
@@ -1610,8 +1618,8 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     }
     console.table(rows);
 
-    // Each declared skill appears once per corpus it belongs to: the fourteen
-    // under their own project roots, and the same fourteen under the repo root.
+    // Each declared skill appears once per corpus it belongs to: once under its
+    // own project root, and once more under the repo root.
     expect(rows).toHaveLength(TOTAL_DECLARED_SKILLS * 2);
     if (divergences.length > 0) console.log('[divergences]', JSON.stringify(divergences, null, 2));
 
@@ -1628,26 +1636,19 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
   }, atLeastTierTimeout(inject('tierTestTimeout'), 1_800_000));
 
   it('records how far the PRODUCTION configuration can distinguish the two', () => {
-    // This used to assert that EVERY production bundle was a singleton, and it
-    // went red the moment `vat-example-cat-agents` split its SKILL.md into
-    // progressive-disclosure references and raised `linkFollowDepth` to 1. That
-    // is the tripwire firing as designed, not a regression: the comment it
-    // carried promised that "if a skill ever gains a followed in-project link,
-    // this test fails and the reader learns the corpus grew teeth."
-    //
-    // So the fact is re-pinned rather than relaxed. Thirteen of the fourteen
-    // declared skills still bundle exactly their own SKILL.md, and for those the
-    // agreement asserted above remains an equality between two singletons that
-    // proves nothing about the primitive. The fourteenth is the one bundle with
-    // real teeth — SKILL.md plus its three followed references — and it is the
-    // only production skill for which the shadow test above is a claim about
-    // link-following at all.
+    // A tripwire, pinned as the production bundle sizes. Today every declared
+    // skill bundles exactly its own SKILL.md, so the agreement asserted above is
+    // an equality between two singletons that proves nothing about the
+    // primitive under the production root — which is why the repo-root corpus
+    // and its depth sweep exist. If a skill ever gains a followed in-project
+    // link, this test fails and the reader learns the production corpus grew
+    // teeth; re-pin the size rather than relaxing the assertion.
     //
     // Asserted as a sorted equality over the RENDERED `name: size` pairs, so a
     // change in either direction names the skill AND its new size, instead of
     // reporting `expected false to be true` and leaving the reader to go find
-    // out which of fourteen moved. Sorted because the fact is the distribution,
-    // not the order discovery happened to enumerate it in.
+    // out which skill moved. Sorted because the fact is the distribution, not
+    // the order discovery happened to enumerate it in.
     const bundles: string[] = [];
     for (const corpus of corpora) {
       if (corpus.spec.projectRoot === '.') continue;
@@ -1659,12 +1660,8 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
       'coherence-audit: 1',
       'markdown-rewriting: 1',
       'vat-adoption-and-configuration: 1',
-      'vat-agent-authoring: 1',
       'vat-audit: 1',
       'vat-enterprise-org: 1',
-      // SKILL.md + cat-breed-selection.md + orchestration-patterns.md
-      // + workflow-orchestration.md, at `linkFollowDepth: 1`.
-      'vat-example-cat-agents: 4',
       'vat-knowledge-resources: 1',
       'vat-rag: 1',
       'vat-skill-authoring: 1',
@@ -1717,7 +1714,7 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     // link an author should fix.
     //
     // The PRODUCTION corpora are where this bites, which is why the loop is over
-    // all three rather than over the repo-root sweep: under
+    // every corpus rather than over the repo-root sweep: under
     // `packages/vat-development-agents` a skill's `../../../../docs/*.md` link
     // leaves the project root, and under the repository root the same link is an
     // ordinary in-project edge. The corpus that makes the two answers differ is
@@ -1848,7 +1845,7 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     if (excluding === undefined) throw new Error(`corpus lost ${EXCLUDING_SKILL}`);
     const unruled = await compareSkill(corpus, excluding, { linkFollowDepth: 1 });
     const inDirectory = (paths: readonly string[]): number =>
-      paths.filter((path) => path.includes(`${EXCLUDED_DIRECTORY}/`)).length;
+      paths.filter((path) => inExcludedDirectory(path)).length;
     expect(inDirectory(unruled.walker)).toBeGreaterThan(0);
     expect(inDirectory(unruled.closure)).toBe(inDirectory(unruled.walker));
 
@@ -1894,7 +1891,7 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     // The other two survivors are the LATER additions — a cross-skill `SKILL.md`
     // and `gitignored ∧ exists` — and they are deliberately NOT in
     // {@link NARROWING_LABELS}. That list is the Stage 3 vocabulary, and rewriting
-    // it to mean "everything added since" would silently redefine what the 253
+    // it to mean "everything added since" would silently redefine what the
     // control paths below are a control FOR. Leaving them in costs nothing
     // measurable, and the reason it costs nothing is itself asserted: both refuse
     // zero paths on this corpus (see {@link REASONS_THIS_CORPUS_CANNOT_REACH}), so
@@ -1916,7 +1913,7 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     // The transitive bucket must DOMINATE, because that is the structural claim
     // the whole narrowing rests on: a refusal at a hub removes the subtree behind
     // it, not just the hub. A control in which pruning were a handful of paths
-    // would mean the 239 measured in Stage 2 came from somewhere else. Bounded
+    // would mean the pruned subtree measured in Stage 2 came from somewhere else. Bounded
     // below rather than pinned exactly — the count moves whenever a doc gains a
     // link, and a brittle equality would fail for reasons this file is not about.
     expect(causeCounts.get(PRUNED) ?? 0).toBeGreaterThan(50);
@@ -1980,7 +1977,7 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
 
   it('omitting the packager-only walk inputs changes no membership on this corpus', () => {
     // The boundary the module note declares, measured rather than assumed.
-    // `test.evals` is declared for ten of these skills; if any skill ever linked
+    // `test.evals` is declared for most of these skills; if any skill ever linked
     // into an eval suite, the packager's extra exclude rules would move the
     // walker's answer and the closure declaration would have no way to follow.
     const moved: string[] = [];

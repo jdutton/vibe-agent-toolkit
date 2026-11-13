@@ -13,8 +13,8 @@ import {
   extractH1Title,
   findCommonAncestor,
   generateTargetPath,
-  packageGeneratedSkillInto,
   packageSkill,
+  packageSkillInto,
   packageSkills,
   synthesizeAssetId,
   type PackageSkillOptions,
@@ -920,9 +920,8 @@ describe('packageSkill - unreadable/unwritable linked file attribution', () => {
     'attributes an unwritable output subdirectory instead of a bare EACCES (copyAndRewriteFile write)',
     async () => {
       const dir = getTempDir();
-      // Source generated INSIDE the output (the agent-builder flow): the package is
-      // written in place into the directory it is given, so our locked resources/
-      // dir is the one the guarded write meets.
+      // Packaged in place into the directory it is given (`packageSkillInto`), so our
+      // locked resources/ dir is the one the guarded write meets.
       const outputPath = safePath.join(dir, 'out');
       await mkdir(outputPath, { recursive: true });
       await writeFile(safePath.join(outputPath, 'guide.md'), '# Guide\n\nContent.');
@@ -937,7 +936,7 @@ describe('packageSkill - unreadable/unwritable linked file attribution', () => {
 
       try {
         // A refused write says nothing about the bundle's layout: the output's, never the skill's.
-        await expect(packageGeneratedSkillInto(sp, outputPath, {}, [])).rejects.toMatchObject({
+        await expect(packageSkillInto(sp, outputPath, {}, [])).rejects.toMatchObject({
           ...OUTPUT_FAULT,
           faultClass: 'refused',
           message: expect.stringMatching(/write linked file[\s\S]*guide\.md into the bundle/) as unknown,
@@ -1112,27 +1111,6 @@ describe('packageSkill - excluded resource filtering', () => {
 // ============================================================================
 
 describe('packageSkill - source-in-output check', () => {
-  it('should not delete output dir when the caller generated SKILL.md inside it (agent builder)', async () => {
-    const tmp = getTempDir();
-    const outDir = safePath.join(tmp, 'output');
-    await mkdir(outDir, { recursive: true });
-
-    // Place SKILL.md inside the output directory itself
-    const sp = safePath.join(outDir, 'SKILL.md');
-    await writeFile(sp, `${createFrontmatter({ name: UNIT_SKILL_NAME })}\n\n# Skill in output`);
-
-    // Place a pre-existing file that should survive (not be cleaned)
-    const markerPath = safePath.join(outDir, 'marker.txt');
-    await writeFile(markerPath, 'should survive');
-
-    const { result } = await packageGeneratedSkillInto(sp, outDir, {}, []);
-
-    // The SKILL.md should be in the output
-    expect(existsSync(safePath.join(result.outputPath, 'SKILL.md'))).toBe(true);
-    // The marker file should survive because the source was generated there (no cleanup)
-    expect(existsSync(markerPath)).toBe(true);
-  });
-
   it('should replace an owned output dir when SKILL.md is outside it', async () => {
     const tmp = getTempDir();
     const outDir = safePath.join(tmp, 'out');

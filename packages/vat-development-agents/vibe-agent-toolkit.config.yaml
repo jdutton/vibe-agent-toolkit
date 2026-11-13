@@ -16,6 +16,9 @@ resources:
     # dist/ artifacts whose links are already rewritten for the packaged layout, so
     # they must not be link-validated as authored docs. Mirrors the repo-root config.
     - "**/test/golden/**"
+    # Synthetic input for the packaged-output drift gate, not this package's docs.
+    # Mirrors the repo-root config.
+    - "**/test/fixtures/**"
 
 skills:
   # `coherence-audit` and `markdown-rewriting` are named individually because the
@@ -89,16 +92,6 @@ skills:
       excludeReferencesFromBundle:
         rules:
           - patterns: ["docs/**"]
-    vat-agent-authoring:
-      # vat-skill-review is now a sibling standalone skill, so no transclusion needed.
-      # External monorepo docs are intentionally left as text pointers.
-      linkFollowDepth: 0
-      excludeReferencesFromBundle:
-        rules:
-          - patterns: ["docs/**"]
-      test:
-        evals: evals/vat-agent-authoring/evals.json
-        model: claude-sonnet-5
     vat-skill-authoring:
       # External monorepo docs are intentionally left as text pointers.
       linkFollowDepth: 0
@@ -170,5 +163,5 @@ claude:
         license: mit
       plugins:
         - name: vibe-agent-toolkit
-          description: Development agents and skills for building with vibe-agent-toolkit
+          description: Skills for building with vibe-agent-toolkit
           skills: "*"

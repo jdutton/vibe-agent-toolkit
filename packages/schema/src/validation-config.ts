@@ -53,15 +53,9 @@ export interface ValidationConfig {
  *
  * ## Why this is not the enum, and not a bare `z.string()` either
  *
- * The enum alone was a shipped defect of the worst kind — following our own
- * documentation bricked every command. `vat resources check --help`, the
- * `resources.checks` schema description and `sql-checks.ts` all told adopters
- * that `resources.validation.severity` could downgrade or ignore an inherited
- * check. Zod parses record KEYS through the key schema, so `CUSTOM:my-check` was
- * an `invalid_enum_value`; that failed `ProjectConfigSchema`, which failed
- * `loadConfig`, which every config-reading command calls. The user's reward for doing what
- * three docs told them was `exit 2` and a dump of the ~150-entry registry enum,
- * on `vat resources scan` as readily as on `check`.
+ * The enum alone refuses `CUSTOM:my-check`: Zod parses record KEYS through the
+ * key schema, so an adopter downgrading an inherited check would fail
+ * `loadConfig`, which every config-reading command calls.
  *
  * `z.string()` would fix that and give back a worse thing: enumerating the
  * registry codes is why a misspelled one (`LNIK_OUTSIDE_PROJECT`) is refused
@@ -71,15 +65,10 @@ export interface ValidationConfig {
  *
  * ## Why one PATTERN and not a `z.union([enum, custom])`
  *
- * 🪤 **A union key emits nothing.** This was a union for one release, and
- * `zod-to-json-schema`'s record parser has cases for a `ZodEnum` key and for a
- * `ZodString` key carrying checks — and none for a `ZodUnion`. So the shipped
- * `schemas/validation-config.json` lost its `severity` key constraint entirely
- * while `allow`, in the same file, kept its full enum: an adopter's editor
- * accepted `LNIK_OUTSIDE_PROJECT: ignore`, offered no completion, and
- * `loadConfig` then refused it. The runtime was never wrong, which is exactly
- * why nothing caught it — see `test/emitted-json-schemas.test.ts`, which now
- * asserts on the generated artifact.
+ * 🪤 **A union key emits nothing.** `zod-to-json-schema`'s record parser has
+ * cases for a `ZodEnum` key and for a `ZodString` key carrying checks — and
+ * none for a `ZodUnion`, so the emitted JSON Schema would lose its `severity`
+ * key constraint. `test/emitted-json-schemas.test.ts` asserts on the artifact.
  *
  * One `z.string().regex(...)` over an alternation of the registry codes and the
  * `CUSTOM:` namespace is a shape that parser CAN emit, so both contracts say the
@@ -88,9 +77,7 @@ export interface ValidationConfig {
  * stays out of it with none either.
  *
  * The cost, stated plainly: `propertyNames` is now a `pattern` rather than an
- * `enum`, so an editor can flag a bad key but cannot complete a good one. That
- * is strictly better than today's nothing, and completion comes back the moment
- * the emitter learns union keys.
+ * `enum`, so an editor can flag a bad key but cannot complete a good one.
  *
  * ⚠️ `ValidationConfigSchema` is mounted at `resources.validation` **and** at
  * `skills.config.<name>.validation`, so a `CUSTOM:` key parses under the skills

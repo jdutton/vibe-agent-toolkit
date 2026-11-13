@@ -20,7 +20,6 @@ export { spawnSync } from 'node:child_process';
 export * as fs from 'node:fs';
 export { dirname } from 'node:path';
 export const join = safePath.join.bind(safePath);
-export const resolve = safePath.resolve.bind(safePath);
 export { fileURLToPath } from 'node:url';
 export { describe, expect } from 'vitest';
 export { safePath } from '@vibe-agent-toolkit/utils';

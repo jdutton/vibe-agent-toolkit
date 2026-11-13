@@ -195,11 +195,8 @@ interface CheckOutcome extends ProjectionProvenance, PopulationExtent {
    * One record per check that actually ran — the denominator every count below
    * is read against, and what each of them cost.
    *
-   * 🔑 A LIST rather than a count beside a list. `checksRun` used to be carried
-   * separately and is now derived from `costs.length`, because two numbers that
-   * must agree are a drift bug with no gate on it: nothing fails when a new
-   * `continue` skips the record but not the counter, and the document then
-   * reports a denominator no published entry accounts for.
+   * 🔑 A LIST rather than a count beside a list: `checksRun` is derived from
+   * `costs.length`, because two numbers that must agree are a drift bug.
    */
   costs: readonly CheckCost[];
 }
@@ -460,12 +457,9 @@ type Timed<T> =
  *
  * ## 🚨 Why this is a helper and not a stopwatch inline in the loop
  *
- * The loop used to read the clock into a `startedAt`, call `ask`, and subtract
- * two lines later — and the claim below that "the span is `ask(check.sql)` and
- * nothing else" had NO guard behind it. A reviewer moved the subtraction below
- * the row-to-finding mapping, widening the measured span to cover work that is
- * not the statement, and **the entire unit suite stayed green (36/36)**. That is
- * measured, not assumed.
+ * An inline `startedAt` / subtract pair has no guard: moving the subtraction
+ * below the row-to-finding mapping widens the span and keeps every unit test
+ * green.
  *
  * No cleverer fake clock closes it. The injected clock advances per READING, so
  * every mutation that keeps two readings per check yields the same number; a
@@ -504,13 +498,9 @@ function timed<T>(now: () => number, run: () => T): Timed<T> {
  * whose SQL broke would otherwise fail nothing while asserting nothing. That
  * much was always true of the DECLARATION.
  *
- * 🪤 It was never true of an adopter OVERRIDE, and this finding used to carry
- * `customCheckCode(name)` — the same code as a violation of that very check. So
- * `severity: { 'CUSTOM:foo': 'ignore' }`, the documented way to stand down a
- * check you inherited, also silenced "foo could not run", and `'warning'`
- * demoted it below the exit threshold. A renamed projection column then produced
- * exit 0 from a gate. `RESOURCE_CHECK_BROKEN` is a non-overridable code
- * precisely so that config line cannot reach here.
+ * 🪤 It was never true of an adopter OVERRIDE: `RESOURCE_CHECK_BROKEN` is a
+ * non-overridable code so `severity: { 'CUSTOM:foo': 'ignore' }` cannot also
+ * silence "foo could not run".
  *
  * 🪤 Only `ask` reaches this. Turning the selected rows INTO findings is not a
  * statement failure, and reporting it as one told the operator a working rule
@@ -1222,8 +1212,7 @@ function killFailedRemedy(death: Extract<AbnormalDeath, { kind: 'kill-failed' }>
  * SIGXCPU read the same way.
  *
  * ⚠️ **SIGTERM is not exotic; it is how CI kills things** — `timeout(1)`, a
- * cancelled job, a container stopping. The old claim that "SIGABRT and SIGKILL
- * are the two that actually happen" was wrong about the commonest one.
+ * cancelled job, a container stopping.
  *
  * @param signal - The signal `close` reported
  * @returns The remedy sentence
@@ -1271,11 +1260,8 @@ function signalRemedy(signal: string): string {
  * reported exactly **134**, the same as Unix: the number comes from Node's own
  * abort path, not from the platform's signal table.
  *
- * 🪤 An earlier version of this file DID derive it from `os.constants.signals`,
- * and its unit test derived the same way — so the test agreed with the code, the
- * round-trip passed on every machine, and the pair was wrong together on the one
- * platform the branch exists for. The value is therefore pinned as a measured
- * fact, and a test asserts the number itself rather than re-deriving it.
+ * 🪤 Pinned as a measured fact, and a test asserts the number itself: a test
+ * that re-derived it from `os.constants.signals` would agree with wrong code.
  *
  * ⛔ Not a version constant: it decides nothing about whether stored data is
  * still valid. It is an external protocol value, like an API header.
@@ -1324,9 +1310,7 @@ function noOutputRemedy(code: number): string {
  * half its readers to the wrong place.
  *
  * ⛔ **The last line is for `no-status` and nothing else.** It is the only
- * ending about which this command genuinely knows nothing, and it used to be
- * the fall-through for every unpartitioned signal — which produced messages
- * that named a signal and then denied having any information about it.
+ * ending about which this command genuinely knows nothing.
  *
  * @param death - The ending the supervisor resolved
  * @returns The remedy sentence
@@ -1385,9 +1369,7 @@ const WATCHDOG_UNINVOLVED
  * nothing.
  */
 function incompleteNotice(checksCompleted: number): string {
-  // 🚨 Only when something completed. It used to be appended unconditionally,
-  // so a run killed before its first statement told the operator that the
-  // checks under an EMPTY `checks` list "DID complete".
+  // 🚨 Only when something completed: an EMPTY `checks` list "DID complete" nothing.
   if (checksCompleted === 0) {
     return ' No check completed before the run stopped, so `checks` is empty and no result'
       + ' of this run is missing from `issues` — there were none.';
@@ -1453,15 +1435,9 @@ function deathMessage(death: AbnormalDeath, where: string): string {
 /**
  * What a WATCHDOG kill means, which depends entirely on what was in flight.
  *
- * 🚨 **The defect this closes: the `reporting` state got the statement-hang
- * body.** Creating that state adapted only the *where* clause, so a run whose
- * ten checks had ALL completed and whose 1,000,000-issue document blew the
- * budget was told "the checks after it never executed" and "a statement that
- * will not finish cannot be stopped from inside the process — the query is
- * synchronous and holds the event loop". Measured on that run: `checksRun: 10`,
- * all ten costs present, no statement running, nothing holding the loop for any
- * SQL reason. The operator was sent to hunt a hanging rule that does not exist,
- * and the message never mentioned the thing that actually killed the run.
+ * 🚨 **The `reporting` state must not get the statement-hang body**: a run
+ * whose checks ALL completed and whose document blew the budget has no hanging
+ * rule to hunt.
  *
  * ⚠️ It is easy to reach on a real gate, not a curiosity: serialising 2,000,000
  * issues takes ~17 s after `checks-complete` is filed, which is one budget
@@ -1605,10 +1581,9 @@ function stoppedMidCheck(
  * that check is broken: `status: findings`, `RESOURCE_CHECK_BROKEN`, exit 1. A
  * run stopped during STARTUP or POPULATION examined nothing: it is a command
  * that could not do its job — `status: error`, exit 2 — decided by
- * {@link buildCheckOutputData} from `populated: null`, never by the caller. It
- * used to THROW there, which lost the document; now the document is published,
- * with the population's fields `null` rather than invented, and the reason in
- * `error`.
+ * {@link buildCheckOutputData} from `populated: null`, never by the caller. The
+ * document is published, with the population's fields `null` rather than
+ * invented, and the reason in `error`.
  *
  * @param options - The wreckage
  * @param options.entries - What `parseProgressLog` recovered
@@ -1889,10 +1864,7 @@ async function superviseCheckRun(options: {
         entries: parseProgressLog(run.log),
         root,
         // 🚨 The abnormal ending reaches the SAME fail-closed document the
-        // watchdog's kill does. It used to reach `{ outcome: 'completed', code:
-        // 0 }` instead, because the close handler never read `close`'s signal
-        // argument — so a child that aborted on its heap limit printed nothing
-        // and exited 0, on precisely the runaway shape the bound exists for.
+        // watchdog's kill does, never `{ outcome: 'completed', code: 0 }`.
         ending: run.outcome === 'killed'
           ? { kind: 'budget', budgetSecs: options.budgetSecs, invocation: request.invocation }
           : { kind: 'abnormal', death: run.death },
@@ -2265,11 +2237,8 @@ function runOutcome(options: {
       membersEnumerated: extent.membersEnumerated,
       notAdmitted,
     });
-    // 🪤 `checks-complete` is NOT emitted here. It used to be, and that put
-    // `resolveFindings` — which runs inside `runProjectChecks` — on the
-    // wrong side of the line, still charged to the last check's budget window
-    // while three separate docs said otherwise. It is emitted by
-    // `runProjectChecks` itself now, the instant the last statement is done.
+    // 🪤 `checks-complete` is NOT emitted here: `runProjectChecks` emits it the
+    // instant the last statement is done, before `resolveFindings` runs.
     //
     // 🔑 The DEFAULT SET enters HERE, from a module constant bound to the
     // projection — never from `config`, which this line does not read. That is

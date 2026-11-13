@@ -24,7 +24,7 @@
   empty) location. Every verb that publishes findings can emit one: `vat okf validate` (a bundle
   declared at `../shared-docs`), `vat skills validate`, `vat skills build`, `vat skills package`,
   `vat audit` (a user-scope `settings.json` included), `vat resources validate`, `vat claude marketplace validate`, `vat claude plugin
-  build`, `vat agent build`, `vat agent validate`, `vat skill test run`, `vat build`, `vat verify`
+  build`, `vat skill test run`, `vat build`, `vat verify`
   and `vat validate`. A consumer that requires `location` on every finding must accept its absence.
   `createRegistryIssue` and `toFindings` (`@vibe-agent-toolkit/schema`) apply the rule, through the
   new `projectLocationOf` and `anchoredAt`.

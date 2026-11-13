@@ -18,12 +18,7 @@
  * published-shape registry to do it.
  */
 
-import { AGENT_MANIFEST_INVALID_CODE, AGENT_MANIFEST_NOT_FOUND_CODE, AGENT_MANIFEST_UNREADABLE_CODE } from '@vibe-agent-toolkit/agent-config';
-import {
-  AGENT_PACKAGE_ROOT_MISSING_CODE,
-  GIT_SUBPATH_INVALID_CODE,
-  SKILL_TEST_REFUSAL_BY_ERROR_CODE,
-} from '@vibe-agent-toolkit/agent-skills';
+import { GIT_SUBPATH_INVALID_CODE, SKILL_TEST_REFUSAL_BY_ERROR_CODE } from '@vibe-agent-toolkit/agent-skills';
 import {
   API_REQUEST_CODE,
   API_TRANSPORT_CODE,
@@ -67,7 +62,7 @@ import {
 } from '@vibe-agent-toolkit/utils/git';
 import { YAML_EDIT_INPUT_REFUSED_CODE } from '@vibe-agent-toolkit/utils/yaml';
 
-import { AGENT_NAME_ESCAPES_SCOPE_CODE, PLUGIN_SYMLINK_REFUSED_CODE } from './command-error-codes.js';
+import { PLUGIN_SYMLINK_REFUSED_CODE } from './command-error-codes.js';
 
 const COMMAND_REFUSAL = 'COMMAND_REFUSAL';
 
@@ -103,16 +98,6 @@ const REFUSAL_BY_ERROR_CODE: Readonly<Record<string, RefusalCode>> = {
   [GIT_SUBPATH_INVALID_CODE]: 'USAGE_INVALID',
   // A `resources.linkAuth` provider that does not compile (`LinkAuthConfigError`): the config's mistake.
   [LINK_AUTH_CONFIG_CODE]: 'CONFIG_INVALID',
-  // An agent path or name that names no manifest — the argument is the mistake.
-  [AGENT_MANIFEST_NOT_FOUND_CODE]: 'USAGE_INVALID',
-  // An agent manifest the OS refuses, or whose content is not YAML.
-  [AGENT_MANIFEST_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
-  // An agent manifest `loadAgentManifest` read and the schema rejects: the adopter's config.
-  [AGENT_MANIFEST_INVALID_CODE]: 'CONFIG_INVALID',
-  // `vat agent install|uninstall` with a name that is not one entry under the scope root.
-  [AGENT_NAME_ESCAPES_SCOPE_CODE]: 'USAGE_INVALID',
-  // `vat agent build` with no --output and no package.json around the agent to put the default in.
-  [AGENT_PACKAGE_ROOT_MISSING_CODE]: 'USAGE_INVALID',
   // A SQL statement the projection store refused — the statement the operator passed is wrong.
   [PROJECTION_STATEMENT_REFUSED_CODE]: 'USAGE_INVALID',
   // A Claude Code registry or settings file whose content VAT cannot use: not JSON, the wrong shape.

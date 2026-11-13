@@ -210,8 +210,8 @@ describe('planFromFacts — ownership', () => {
   });
 
   it('refuses must-be-free for a FILE over an empty directory: a folder the user made is not free for a file', () => {
-    const facts = world({ '/p/agent.yaml': { kind: 'directory', empty: true } });
-    const file = { op: 'replace-file', dest: '/p/agent.yaml', ownership: FREE, contents: 'x', label: 'agent.yaml' } as const;
+    const facts = world({ '/p/config.yaml': { kind: 'directory', empty: true } });
+    const file = { op: 'replace-file', dest: '/p/config.yaml', ownership: FREE, contents: 'x', label: 'config.yaml' } as const;
     expect(codeThrownBy(() => planFromFacts([file], facts))).toBe(TREE_DEST_OCCUPIED_CODE);
   });
 
@@ -224,7 +224,7 @@ describe('planFromFacts — ownership', () => {
     ['vat-made, recognised', { kind: 'vat-made', recognise: () => ({ owned: true }) }],
   ] as const)('refuses a replace-file over a DIRECTORY under %s ownership, saying it is a directory', (_kind, ownership) => {
     const facts = world({ '/p/out': { kind: 'directory' } });
-    const file = { op: 'replace-file', dest: '/p/out', ownership, contents: 'x', label: 'agent.yaml' } as const;
+    const file = { op: 'replace-file', dest: '/p/out', ownership, contents: 'x', label: 'config.yaml' } as const;
     let thrown: unknown;
     try {
       planFromFacts([file], facts);
@@ -237,7 +237,7 @@ describe('planFromFacts — ownership', () => {
 
   it('refuses a replace-file over a LINK to a directory under force, and takes a link to a file', () => {
     const facts = world({ '/p/out': { kind: 'link', toDirectory: true }, '/p/alias.yaml': { kind: 'link' } });
-    const file = (dest: string) => ({ op: 'replace-file', dest, ownership: FORCE, contents: 'x', label: 'agent.yaml' }) as const;
+    const file = (dest: string) => ({ op: 'replace-file', dest, ownership: FORCE, contents: 'x', label: 'config.yaml' }) as const;
     expect(codeThrownBy(() => planFromFacts([file('/p/out')], facts))).toBe(TREE_DEST_OCCUPIED_CODE);
     expect(planFromFacts([file('/p/alias.yaml')], facts).changes.map((c) => c.action)).toEqual(['replace']);
   });

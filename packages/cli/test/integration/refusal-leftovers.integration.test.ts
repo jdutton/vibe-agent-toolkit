@@ -6,6 +6,7 @@
  * chain, so it can never become the run's classification.
  */
 
+import { GIT_SUBPATH_INVALID_CODE } from '@vibe-agent-toolkit/agent-skills';
 import { disposeTempDir, normalizedTmpdir, recordSuppressedFault, suppressedFaultsOf, TREE_ROLLBACK_INCOMPLETE_CODE, VatError, withTempDir } from '@vibe-agent-toolkit/utils';
 import { createTempDir, installFaultFs, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -49,14 +50,14 @@ async function failWithLeftover(failure: Error): Promise<{ error: unknown; dir: 
 describe('refusalReport — a leftover beside the failure', () => {
   it('publishes the failure\'s own refusal, and the leftover as a TREE_CLEANUP_INCOMPLETE warning naming it', async () => {
     vi.spyOn(process.stderr, 'write').mockReturnValue(true);
-    const { error, dir } = await failWithLeftover(new VatError('AGENT_MANIFEST_NOT_FOUND', 'no manifest at ./agent'));
+    const { error, dir } = await failWithLeftover(new VatError(GIT_SUBPATH_INVALID_CODE, 'no subpath skills/missing in the clone'));
     expect(suppressedFaultsOf(error)).toHaveLength(1);
 
     const code = refusalCodeOf(error);
     const report = refusalReport(code, error, { strict: false }, NOTHING_FINISHED);
 
     expect(code).toBe('USAGE_INVALID');
-    expect(report).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID', message: 'no manifest at ./agent' } });
+    expect(report).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID', message: 'no subpath skills/missing in the clone' } });
     expect(report.findings).toEqual([
       expect.objectContaining({ code: 'TREE_CLEANUP_INCOMPLETE', severity: 'warning', link: dir, message: expect.stringContaining(dir) as string }),
     ]);
@@ -78,7 +79,7 @@ describe('refusalReport — a leftover beside the failure', () => {
 
   it('publishes no extra finding for a failure with nothing left behind', () => {
     vi.spyOn(process.stderr, 'write').mockReturnValue(true);
-    const report = refusalReport('USAGE_INVALID', new VatError('AGENT_MANIFEST_NOT_FOUND', 'x'), { strict: false }, NOTHING_FINISHED);
+    const report = refusalReport('USAGE_INVALID', new VatError(GIT_SUBPATH_INVALID_CODE, 'x'), { strict: false }, NOTHING_FINISHED);
     expect(report.findings).toEqual([]);
   });
 });
@@ -87,7 +88,7 @@ describe('refusalReport — a leftover beside the failure', () => {
 function refuseWithLeftover(): string {
   const written: string[] = [];
   vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => { written.push(String(chunk)); return true; });
-  const error = new VatError('AGENT_MANIFEST_NOT_FOUND', 'no manifest');
+  const error = new VatError(GIT_SUBPATH_INVALID_CODE, 'no manifest');
   recordSuppressedFault(error, new Error('could not remove the staged tree'));
   refusalReport('USAGE_INVALID', error, { strict: false }, NOTHING_FINISHED);
   return written.join('');

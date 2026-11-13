@@ -55,7 +55,7 @@ export interface VerbCase {
   registered?: (r: CaseRoot) => readonly string[];
   /** Seams to set up before the run, e.g. `vi.mocked(downloadNpmPackage)` for the npm lane. */
   mocks?: (r: CaseRoot) => void;
-  /** The working directory the verb runs in (a postinstall's package, an agent's package); restored after. */
+  /** The working directory the verb runs in (a postinstall's package); restored after. */
   cwd?: (r: CaseRoot) => string;
   /**
    * The verb is an orchestrator whose refusal is a fold over its phases' reports: provenance and I8

@@ -9,8 +9,7 @@ import { SKILL_SOURCE_UNREADABLE_CODE } from '../skill-source/stage.js';
 /**
  * WHY a `vat skill test run` ended on `ExitCode.ERROR`.
  *
- * This used to be three exit codes — 1 internal, 2 preflight, 3 bootstrap —
- * beside 4 for "an eval failed". Under the one exit-code contract every verb
+ * Under the one exit-code contract every verb
  * shares (`ExitCode` in `@vibe-agent-toolkit/schema`) a failed eval is
  * `FINDINGS` (1) like every other gate that ran and did not pass, and every way
  * the harness could NOT run is `ERROR` (2). The distinction a CI author still
@@ -134,20 +133,15 @@ export const SKILL_TEST_REFUSAL_BY_ERROR_CODE = {
  * describes what a real run *would* scaffold and where, while surfacing the same
  * "bootstrap needed" signal.
  *
- * That scope is exact, and it used to read "a dry run must never touch the
- * filesystem", which is not true of this command. A dry run is not a read-only
- * mode: it takes the harness lock, creates the harness root, stages BOTH arms'
+ * A dry run is not a read-only mode: it takes the harness lock, creates the harness root, stages BOTH arms'
  * per-eval workspaces, and — once `--i-understand-this-runs-skill-code` is passed —
  * runs the repo's `test.build` hook and builds the subject. What it never does is
  * SPAWN: no executor session, no grader session, no tokens.
  *
  * It also never touches `results/`: it neither creates the directory, nor writes
- * `provenance.json`, nor wipes the previous run's artifacts. That last one is the
- * reason the ordering matters — the wipe used to sit AHEAD of the dry-run
- * short-circuit, so a free `--dry-run` (or any failure after it) destroyed the
- * `grading.json` / `baseline.json` / `friction.json` / `tool-eval.json` of the
- * expensive real run an operator was about to read. The summary now names the
- * provenance path it WOULD write rather than writing it.
+ * `provenance.json`, nor wipes the previous run's artifacts — the wipe sits
+ * AFTER the dry-run short-circuit, so a free `--dry-run` never destroys the
+ * expensive real run an operator is about to read.
  *
  * The scaffold is the other filesystem effect a dry run deliberately withholds,
  * and for a different reason: that write lands in the AUTHOR's source

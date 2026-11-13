@@ -3,7 +3,7 @@
  * to it.
  *
  * `vat audit` already answers "relative to what?" once, at the document
- * boundary, via `relativizePathEntries`. Four other commands answered it
+ * boundary, via `relativizePathEntries`. Other commands answered it
  * differently — by not answering at all — and shipped `$HOME`-absolute paths in
  * machine-readable output. That is not cosmetic: an absolute path leaks the
  * operator's home directory into anything the payload is pasted into, makes two
@@ -29,7 +29,6 @@ import { fileURLToPath } from 'node:url';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { buildAgentListData } from '../../src/commands/agent/list.js';
 import type { MarketplaceValidateReport } from '../../src/commands/claude/marketplace/validate-schema.js';
 import {
   buildMarketplaceValidateReport,
@@ -56,11 +55,9 @@ import { silentLogger } from '../test-doubles.js';
 const ROOT = safePath.resolve('/payload-root');
 const README = safePath.resolve('/payload-root/docs/README.md');
 const SKILL = safePath.resolve('/payload-root/skills/alpha/SKILL.md');
-const AGENT_DIR = safePath.resolve('/payload-root/agents/alpha');
 
 const README_REL = 'docs/README.md';
 const SKILL_REL = 'skills/alpha/SKILL.md';
-const AGENT_REL = 'agents/alpha';
 
 /** Nothing in a payload may name the machine it ran on. */
 function expectNoAbsolutePaths(payload: unknown): void {
@@ -172,19 +169,6 @@ describe('skills list payload', () => {
     expect(JSON.stringify(report)).not.toContain(locked);
     // The skills that WERE listed are still published.
     expect(report.data?.skills.map((skill) => skill.path)).toStrictEqual([SKILL_REL]);
-  });
-});
-
-describe('agent list payload', () => {
-  const agents = [
-    { name: 'alpha', version: '0.1.0', path: AGENT_DIR, manifestPath: `${AGENT_DIR}/agent.yaml` },
-  ];
-
-  it('publishes each agent path relative to the stated root', () => {
-    const data = buildAgentListData(agents, ROOT);
-
-    expect(data).toStrictEqual({ root: ROOT, agents: [{ name: 'alpha', version: '0.1.0', path: AGENT_REL }] });
-    expectNoAbsolutePaths(data.agents);
   });
 });
 

@@ -58,8 +58,6 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   - a classified filesystem fault (`FsFaultError`) names the absolute path the OS named
     ("Could not <action> (<errno>): /…"), and every packaging lane publishes a packager's
     source fault with that message as the `SKILL_PACKAGING_FAILED` finding (traced);
-  - `agent build` refusing a pipe, socket or device under `scripts/` names it by its absolute
-    path in `error.message` ("Agent source cannot be read (not a regular file…): /…/scripts/pipe");
   - a skill source the OS will not read is a fault saying "Could not read the skill source at
     <path>" with the path `resolveAssetReference` resolved, so absolute
     (`skill test run --with name=path:<dir>`).
@@ -68,7 +66,6 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   [`configure.ts`](../../packages/cli/src/commands/skill/test/configure.ts);
   `recognisePackageOutput` in [`skill-packager.ts`](../../packages/agent-skills/src/skill-packager.ts);
   [`fs-fault.ts`](../../packages/utils/src/errors/fs-fault.ts) (`FsFaultError`'s message);
-  [`builder.ts`](../../packages/agent-skills/src/builder.ts) (the agent-source refusal);
   [`content-hash.ts`](../../packages/agent-skills/src/skill-source/content-hash.ts).
 - **Fix:** relativize to a stated root, or document each exception in the schema docstrings.
 
@@ -504,21 +501,6 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Where:** [`packaging-validator.ts`](../../packages/agent-skills/src/validators/packaging-validator.ts)
   and the crawl it delegates to
 - **Fix:** root-cause first: find which population or exclusion rule the absent config changes.
-
-### `vat agent build` lands a package its own post-build checks fail, and drops those findings
-
-- **Severity:** Minor · **Effort:** M · **User-visible:** yes
-- **Mechanism:** `packageSkill` refuses to write a package whose post-build checks emit an error
-  (`SkillPackageChecksFailedError`); the agent builder does not apply the same rule. It adds
-  `scripts/` and `LICENSE.txt`, which the generated SKILL.md never links, so the packager's
-  `PACKAGED_UNREFERENCED_FILE` (an error) fires on every agent that has either — refusing on it
-  would refuse those builds outright. `BuildResult` has no findings channel, so the error findings
-  of a generated package are dropped and the build exits 0.
-- **Reproduce:** an agent whose system prompt links a file that does not exist; `vat agent build`
-  exits 0 with a packaged SKILL.md carrying the broken link.
-- **Where:** `writeAgentBuild` in [`builder.ts`](../../packages/agent-skills/src/builder.ts)
-- **Fix:** declare the builder's own additions to the packager (explicit `files:` dests are exempt
-  from the unreferenced-file check), then apply `refuseFailedChecks` as `packageSkill` does.
 
 ### `vat claude plugin build` says on stderr only that something did not ship
 

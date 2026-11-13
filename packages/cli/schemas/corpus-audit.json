@@ -188,7 +188,6 @@
                         "type": "string",
                         "enum": [
                           "agent-skill",
-                          "vat-agent",
                           "claude-plugin",
                           "marketplace",
                           "registry",
