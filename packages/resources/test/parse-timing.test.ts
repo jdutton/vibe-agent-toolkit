@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
+import { countWork, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { __resetWorkCountersForTest, removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { computeContentKey, type ParsableContent } from '../src/content-key.js';
@@ -200,8 +200,8 @@ function markdownCalls(count: number): number[] {
 /**
  * Parse one document twice through `cache`, and snapshot only the SECOND parse.
  *
- * The accumulators are zeroed between the two calls, so what comes back
- * describes a warm hit and nothing else. Without that reset the cold parse's
+ * The accumulators and the work counters are zeroed between the two calls, so
+ * what comes back describes a warm hit and nothing else. Without that reset the cold parse's
  * passes and its cache write are still in the counters, and a test asserting
  * "a hit charges no parse" would be asserting against the cold run's numbers.
  *
@@ -216,6 +216,7 @@ async function snapshotOfWarmParse(
   const keyed = keyFor(SAMPLE_DOC);
   await parseKeyed(keyed, cache);
   __setParseTimingForTest(directory);
+  __resetWorkCountersForTest();
   await parseKeyed(keyed, cache);
   return __readParseTimingSnapshot();
 }
@@ -251,6 +252,8 @@ describe('parse timing seam', () => {
   let tempDir: string;
 
   beforeEach(async () => {
+    // The cache block reads the work counters, so each test starts them at zero.
+    __resetWorkCountersForTest();
     tempDir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'vat-parse-timing-'));
   });
 
@@ -403,6 +406,21 @@ describe('parse timing seam', () => {
       expect(groupOf(writerThreadOf(await readDump(first ?? '')), 'markdown').documents.count).toBe(1);
       expect(groupOf(writerThreadOf(await readDump(second ?? '')), 'markdown').documents.count).toBe(2);
     });
+  });
+
+  it('reads the cache block from zero again after the work counters are reset', () => {
+    countWork('parse.cache.hit', 5);
+    countWork('parse.dispatched', 3);
+    __setParseTimingForTest(tempDir);
+    __resetWorkCountersForTest();
+    expect(__readParseTimingSnapshot().cache).toEqual({ hits: 0, misses: 0 });
+  });
+
+  it('reads the cache block from the work counters as they stand, with no baseline of its own', () => {
+    countWork('parse.cache.hit', 5);
+    countWork('parse.dispatched', 3);
+    __setParseTimingForTest(tempDir);
+    expect(__readParseTimingSnapshot().cache).toEqual({ hits: 5, misses: 3 });
   });
 
   describe('cache attribution', () => {

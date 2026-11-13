@@ -7,7 +7,9 @@
  * a limit is filed nowhere (I6).
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { readWorkCounters } from '@vibe-agent-toolkit/utils';
+import { __resetWorkCountersForTest } from '@vibe-agent-toolkit/utils/testing';
+import { afterEach, describe, expect, it, onTestFinished } from 'vitest';
 
 import type { ParsableContent } from '../src/content-key.js';
 import type { ParseResult } from '../src/link-parser.js';
@@ -16,6 +18,7 @@ import { ParseDispatcher, type ParsePoolPolicy } from '../src/parse-dispatcher.j
 import type { ParseLimits } from '../src/parse-limits.js';
 import { ParseLimitError } from '../src/parse-limits.js';
 import type { ParsePool, ParsePoolOptions } from '../src/parse-pool.js';
+import { __readParseTimingSnapshot } from '../src/parse-timing.js';
 
 import { TIGHT_LIMITS } from './parse-limit-fixtures.js';
 
@@ -222,5 +225,39 @@ describe('the input cap a dispatcher hands its reads', () => {
 
   it('refuses a named cap that is not a positive number at construction, not at the first read', () => {
     expect(() => new ParseDispatcher(missingCache().cache, { limits: { inputBytes: 0 } })).toThrow(/inputBytes must be a positive finite number/);
+  });
+});
+
+describe('cache transport whose read-back misses', () => {
+  it('counts the document once as dispatched and its second parse as a re-dispatch', async () => {
+    const { cache } = missingCache();
+    // The worker reports the entry stored; the read-back finds nothing.
+    Object.assign(cache, { read: (): Promise<null> => Promise.resolve(null) });
+    const pool = recordingPool(() => Promise.resolve(PARSED));
+    const createPool = (options?: ParsePoolOptions): ParsePool => ({
+      ...pool.createPool(options),
+      parseIntoCache: () => Promise.resolve(null),
+    });
+    const dispatcher = new ParseDispatcher(cache, { transport: 'cache', createPool });
+    const before = readWorkCounters();
+
+    await dispatcher.parse(DOCUMENT);
+    await dispatcher.shutdown();
+
+    // One document missed once: the parse-timing cache block reads
+    // `parse.dispatched` as its misses, so hits plus misses stay documents.
+    expect(pool.parses()).toBe(1);
+    expect(readWorkCounters()['parse.dispatched'] - before['parse.dispatched']).toBe(1);
+    expect(readWorkCounters()['parse.redispatched'] - before['parse.redispatched']).toBe(1);
+    // The timing block reads the counters as they stand: zero them, then the
+    // one document is one miss however many times it was dispatched.
+    __resetWorkCountersForTest();
+    onTestFinished(() => {
+      __resetWorkCountersForTest();
+    });
+    const fresh = new ParseDispatcher(cache, { transport: 'cache', createPool });
+    await fresh.parse(DOCUMENT);
+    await fresh.shutdown();
+    expect(__readParseTimingSnapshot().cache).toEqual({ hits: 0, misses: 1 });
   });
 });

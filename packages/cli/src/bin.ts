@@ -7,7 +7,7 @@
 
 
 import { ExitCode, installLastResortExit } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { installWorkCounterDump, safePath } from '@vibe-agent-toolkit/utils';
 import { describeStdioBlocking, makeStdioBlocking } from '@vibe-agent-toolkit/utils/process';
 import { Command, CommanderError } from 'commander';
 
@@ -27,6 +27,10 @@ const stdioBlocking = makeStdioBlocking();
 
 // A throw nothing below caught ends on ExitCode.ERROR, never Node's default 1 — see `installLastResortExit`.
 installLastResortExit();
+
+// The CLI is where the work happens, so its dump is the one the lab's `work`
+// facet requires; written at exit only while `VAT_WORK_COUNTERS` names a directory.
+installWorkCounterDump('cli');
 
 // Reported by hand rather than through the parsed `--debug` option because this
 // has to run before Commander parses anything — the same reason the verbose-help

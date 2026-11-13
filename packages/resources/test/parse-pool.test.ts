@@ -32,7 +32,11 @@ import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
+import {
+  __resetWorkCountersForTest,
+  __throwOnForbiddenWorkCountForTest,
+  removeScratchDir,
+} from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { computeContentKey, type KeyedContent } from '../src/content-key.js';
@@ -505,6 +509,49 @@ function failingWith(failure: string): string {
     '});',
   ].join('\n');
 }
+
+/** A worker that answers every job with the forbidden-count policy it was started with. */
+const ECHOES_COUNT_POLICY = [
+  "import { parentPort, workerData } from 'node:worker_threads';",
+  READY_LINE,
+  "parentPort.on('message', (request) => {",
+  "  if (request?.type === 'shutdown') { parentPort.close(); return; }",
+  '  parentPort.postMessage({ id: request.id, failure: { message: String(workerData.forbiddenCount) } });',
+  '});',
+].join('\n');
+
+describe('a parse thread counts no work', () => {
+  it('starts each thread with the policy the parent holds at that start', async () => {
+    await seedWorkerEntry(ECHOES_COUNT_POLICY);
+    __throwOnForbiddenWorkCountForTest();
+    onTestFinished(() => {
+      __resetWorkCountersForTest();
+    });
+
+    const policyOf = async (): Promise<string> => String((await outcomeOf(trackedPool(1), '# a\n') as Error).message);
+    expect(await policyOf()).toBe('throw');
+
+    __resetWorkCountersForTest();
+    expect(await policyOf()).toBe('report');
+  });
+
+  it('parses through a real thread told to throw on a count, so a count there fails the parse', async () => {
+    // The parent counts every job a thread runs; a count on the thread itself
+    // would reach no dump. The thread is told the parent's policy at start, so
+    // with the throw on here, any count it makes fails this parse.
+    __throwOnForbiddenWorkCountForTest();
+    onTestFinished(() => {
+      __resetWorkCountersForTest();
+    });
+    const pool = trackedPool(1);
+    const [fixture] = FIXTURES;
+    if (fixture === undefined) throw new Error('no fixture');
+
+    const actual = await pool.parse(fixture.kind, fixture.content, fixture.byteLength);
+
+    expect(actual).toStrictEqual(parseInProcess(fixture));
+  });
+});
 
 describe('who threw a failure', () => {
   it('revives a throw the worker branded as the parser\'s, its code kept', async () => {
@@ -1683,6 +1730,37 @@ function diesWhileLoading(how: 'exit' | 'oom', dying: number): string {
   ]);
 }
 
+/**
+ * Hold every thread's `ready` back from the pool until the thread exits, and emit it where Node
+ * drains the thread's messages on exit: after any `error`, before `exit`.
+ *
+ * Node carries a thread's uncaught `error` on its internal port and what the thread posted on its
+ * public one, and orders the two only at `exit`, which drains the public port and then drops every
+ * `message` listener. So a thread that posted `ready` and then threw may reach the pool `error`
+ * first: measured at about one in three on an idle host. This forces that order, which is legal,
+ * on every thread.
+ */
+function holdReadyUntilExit(): void {
+  const emit = Worker.prototype.emit;
+  const removeAll = Worker.prototype.removeAllListeners;
+  const held = new WeakMap<Worker, unknown[]>();
+  vi.spyOn(Worker.prototype, 'emit').mockImplementation(function (this: Worker, event: string | symbol, ...args: unknown[]) {
+    const [payload] = args;
+    if (event !== 'message' || typeof payload !== 'object' || payload === null || !('ready' in payload)) {
+      return emit.call(this, event, ...args);
+    }
+    held.set(this, [...(held.get(this) ?? []), payload]);
+    return true;
+  });
+  vi.spyOn(Worker.prototype, 'removeAllListeners').mockImplementation(function (this: Worker, event?: string | symbol) {
+    if (event === 'message') {
+      for (const message of held.get(this) ?? []) emit.call(this, 'message', message);
+      held.delete(this);
+    }
+    return removeAll.call(this, event);
+  });
+}
+
 describe('a thread lost to its heap before the job\'s parser loaded', () => {
   it('charges a breach on the load clock to the thread, never the document it holds', async () => {
     // The thread posts `ready` and never loads the job's parser, and every sample reads its heap
@@ -1720,6 +1798,9 @@ describe('a thread lost to its heap before the job\'s parser loaded', () => {
 
 describe('a thread that dies while it loads the job\'s parser', () => {
   it.each(['exit', 'oom'] as const)('runs the job again on another thread, charged to no document (%s)', async (how) => {
+    // Node may emit a thread's `error` before a `ready` it posted earlier: held here so it always
+    // does, the order a loaded host produced.
+    holdReadyUntilExit();
     await seedWorkerEntry(diesWhileLoading(how, 1));
     const pool = createParsePool({ size: 1 });
     openPools.push(pool);
