@@ -122,6 +122,7 @@ import {
   ensureTimingDirectory,
   normalizeTimingDirectory,
   readTimingProcess,
+  readWorkCounters,
   type TimingProcess,
   writeTimingDump,
 } from '@vibe-agent-toolkit/utils';
@@ -569,8 +570,15 @@ const tierCalls = new Float64Array(TIER_PASS_NAMES.length);
 const documentCounts = new Float64Array(PARSE_KIND_SHAPES.length);
 const documentBytes = new Float64Array(PARSE_KIND_SHAPES.length);
 
-let cacheHits = 0;
-let cacheMisses = 0;
+/**
+ * The work counters' parse-cache counts when the accumulators were last reset.
+ *
+ * The `cache` block reads `parse.cache.hit` and `parse.dispatched` rather than
+ * counting them a second time — one counting site per number — and reports them
+ * relative to this baseline, so a reset still starts the block at zero without
+ * zeroing counters the work-counter dump also reads.
+ */
+const cacheBaseline = { hits: 0, misses: 0 };
 const reuseHeap: ParseReuseHeap = { settledMibTotal: 0, settledMibMax: 0 };
 
 /**
@@ -597,6 +605,22 @@ let dumpDirectory: string | null = normalizeTimingDirectory(process.env['VAT_PAR
  * every instrumented call site costs one predictable branch on a memory load.
  */
 let timingEnabled = dumpDirectory !== null;
+
+/**
+ * The parse-cache outcomes since the last reset, read from the work counters.
+ *
+ * A hit is a document the parser did NOT have to run over; a miss is one
+ * dispatched to a parser.
+ *
+ * @returns Hits and misses on this thread since {@link resetAccumulators}
+ */
+function cacheSinceReset(): { hits: number; misses: number } {
+  const counted = readWorkCounters();
+  return {
+    hits: counted['parse.cache.hit'] - cacheBaseline.hits,
+    misses: counted['parse.dispatched'] - cacheBaseline.misses,
+  };
+}
 
 /**
  * One pass row, read out of the flat accumulators.
@@ -641,7 +665,7 @@ function kindGroup(shape: ParseKindShape, index: number): ParseTimingKind {
 function buildThreadTiming(): ParseThreadTiming {
   return {
     threadId,
-    cache: { hits: cacheHits, misses: cacheMisses },
+    cache: cacheSinceReset(),
     kinds: PARSE_KIND_SHAPES.map((shape, index) => kindGroup(shape, index)),
     tier: TIER_PASS_NAMES.map((name, slot) => ({
       pass: name,
@@ -694,8 +718,9 @@ function resetAccumulators(): void {
   tierCalls.fill(0);
   documentCounts.fill(0);
   documentBytes.fill(0);
-  cacheHits = 0;
-  cacheMisses = 0;
+  const counted = readWorkCounters();
+  cacheBaseline.hits = counted['parse.cache.hit'];
+  cacheBaseline.misses = counted['parse.dispatched'];
   reuseHeap.settledMibTotal = 0;
   reuseHeap.settledMibMax = 0;
   reportedThreads.length = 0;
@@ -835,18 +860,6 @@ export function readThreadTiming(): ParseThreadTiming | null {
 export function recordThreadTiming(thread: ParseThreadTiming): void {
   if (!timingEnabled) return;
   reportedThreads.push(thread);
-}
-
-/** Count one parse-cache hit — a document the parser did NOT have to run over. */
-export function recordParseCacheHit(): void {
-  if (!timingEnabled) return;
-  cacheHits += 1;
-}
-
-/** Count one parse-cache miss — a document that reached a parser. */
-export function recordParseCacheMiss(): void {
-  if (!timingEnabled) return;
-  cacheMisses += 1;
 }
 
 /**

@@ -18,11 +18,12 @@ import {
   type ProjectionStore,
   type ProjectionTableName,
 } from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { readWorkCounters, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
+import { __resetWorkCountersForTest } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { openSqliteProjectionStore } from '../src/store.js';
+import { openEphemeralProjectionStore, openSqliteProjectionStore } from '../src/store.js';
 
 import {
   FIRST_BLOB,
@@ -520,6 +521,38 @@ describe('lifetime', () => {
   it('closes twice without complaint', async () => {
     await store.close();
     await expect(store.close()).resolves.toBeUndefined();
+  });
+});
+
+describe('decoded rows are counted against the store they came from', () => {
+  /** Rows one {@link sampleBlobRows} bundle holds across every blob-scoped table. */
+  const bundleRowCount = Object.values(sampleBlobRows() as unknown as Record<string, readonly unknown[]>)
+    .reduce((total, rows) => total + rows.length, 0);
+
+  let ephemeral: ProjectionStore;
+
+  beforeEach(async () => {
+    ephemeral = openEphemeralProjectionStore();
+    await store.writeBlobFacts(sampleBlobRows());
+    await ephemeral.writeBlobFacts(sampleBlobRows());
+    __resetWorkCountersForTest();
+  });
+
+  afterEach(async () => {
+    await ephemeral.close();
+    __resetWorkCountersForTest();
+  });
+
+  it('a persistent read moves only the persistent counter, by every row it decoded', async () => {
+    await store.readBlobFacts([FIRST_BLOB]);
+    expect(readWorkCounters()['store.rows.decoded.persistent']).toBe(bundleRowCount);
+    expect(readWorkCounters()['store.rows.decoded.ephemeral']).toBe(0);
+  });
+
+  it('an ephemeral read moves only the ephemeral counter, by every row it decoded', async () => {
+    await ephemeral.readBlobFacts([FIRST_BLOB]);
+    expect(readWorkCounters()['store.rows.decoded.ephemeral']).toBe(bundleRowCount);
+    expect(readWorkCounters()['store.rows.decoded.persistent']).toBe(0);
   });
 });
 

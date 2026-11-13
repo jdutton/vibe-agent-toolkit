@@ -68,6 +68,11 @@ import {
   type UnionRequest,
 } from '../facets/verdict/union.js';
 import type { Validated } from '../facets/verdict/yaml-file.js';
+import { captureWork } from '../facets/work/capture.js';
+import { compareWork } from '../facets/work/compare.js';
+import { countOf } from '../facets/work/dump.js';
+import { renderWorkComparison, renderWorkReport } from '../facets/work/render.js';
+import { WORK_MIN_RUNS, type WorkCommandStats } from '../facets/work/types.js';
 import {
   abExitCondition,
   CHANGED_VERDICT,
@@ -485,6 +490,13 @@ interface FacetWiring<TBody, TComparison extends ComparisonLike>
    */
   readonly defaultRuns: number;
   /**
+   * The fewest repeats `--runs` accepts, refused at the flag before anything runs.
+   *
+   * Required, so a facet that needs a floor cannot be registered without saying
+   * so: `work` discards a warm-up and needs two compared repeats after it.
+   */
+  readonly minRuns: number;
+  /**
    * Cache mode a bare `run` uses.
    *
    * Per facet because the facets need opposite things, and getting it wrong is
@@ -597,7 +609,7 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
       nonNegativeNumber('--noise-floor'),
     )
     .option('--pairs <n>', 'A-then-B cycles to run', wholeNumberAtLeast('--pairs', 1), 6)
-    .option('--runs <n>', 'Repeats per capture', wholeNumberAtLeast('--runs', 1), wiring.defaultRuns)
+    .option('--runs <n>', 'Repeats per capture', wholeNumberAtLeast('--runs', wiring.minRuns), wiring.defaultRuns)
     .option(
       '--cache <mode>',
       "'warm' or 'cold' (cold deletes the arm's own store and temp directory before every repeat; warm primes them once)",
@@ -883,7 +895,7 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
     .option(
       '--runs <n>',
       'Repeats per command',
-      wholeNumberAtLeast('--runs', 1),
+      wholeNumberAtLeast('--runs', wiring.minRuns),
       wiring.defaultRuns,
     )
     .option(
@@ -1038,6 +1050,20 @@ interface FailableRow {
 
 /** A failed row's loss, named by its own `failure`. */
 export const FAILURE_IS_THE_REASON = (row: FailableRow): string => row.failure ?? 'failed, with no reason recorded';
+
+/**
+ * A `work` row's persistent-store rows decoded — the number `work ab` compares.
+ *
+ * Zero when the measured vat does not emit the counter: an older build that
+ * predates it decoded nothing this lab can count, and `compare` names the
+ * counter as added or removed.
+ *
+ * @param row - A measured `work` row
+ * @returns The count
+ */
+function persistentRowsDecoded(row: WorkCommandStats): number {
+  return countOf(row, 'store.rows.decoded.persistent') ?? 0;
+}
 
 /**
  * The fastest repeat a row measured — the reduction `FacetEstimate` requires.
@@ -1808,6 +1834,7 @@ export function createProgram(): Command {
         runSummary: 'Capture a perf report for one project against one vat build',
         compareSummary: 'Diff two perf reports along a single axis',
         defaultRuns: 5,
+        minRuns: 1,
         defaultCache: 'warm',
         capture: capturePerf,
         compare: comparePerf,
@@ -1832,6 +1859,7 @@ export function createProgram(): Command {
         // test determinism at all, and io counts are deterministic enough that
         // more repeats buy confidence rather than resolution.
         defaultRuns: 3,
+        minRuns: 1,
         defaultCache: 'warm',
         capture: captureIo,
         compare: compareIo,
@@ -1854,6 +1882,7 @@ export function createProgram(): Command {
         // Three repeats, so the middle one can be reported and the other two can
         // disagree with it. No warm-up is discarded — see `parse/capture.ts`.
         defaultRuns: 3,
+        minRuns: 1,
         // The one facet that must not default to warm — see `FacetWiring.defaultCache`.
         defaultCache: 'cold',
         capture: captureParse,
@@ -1897,6 +1926,7 @@ export function createProgram(): Command {
         // Three repeats, so the middle one can be reported and the other two can
         // disagree with it. No warm-up is discarded — see `crawl/capture.ts`.
         defaultRuns: 3,
+        minRuns: 1,
         // Warm, unlike `parse`. There is no cache in front of a crawl, so the
         // work happens on every repeat and the steady state is the honest one.
         defaultCache: 'warm',
@@ -1915,6 +1945,29 @@ export function createProgram(): Command {
     )
     .addCommand(
       createFacetCommand({
+        name: 'work',
+        summary: "Count the work vat's own counters record: store rows decoded, extents derived, parses dispatched",
+        runSummary: 'Capture a work-counter report for one project against one vat build',
+        compareSummary: 'Diff two work-counter reports along a single axis',
+        // One warm-up plus two compared repeats, refused below that: the
+        // smallest run that can test determinism at all — see `work/capture.ts`.
+        defaultRuns: WORK_MIN_RUNS,
+        minRuns: WORK_MIN_RUNS,
+        defaultCache: 'warm',
+        capture: captureWork,
+        compare: compareWork,
+        renderReport: renderWorkReport,
+        renderComparison: renderWorkComparison,
+        // Rows decoded from the persistent store, the I10 hydration count.
+        // Counts are deterministic, so the min across pairs is every pair's
+        // value; an arm whose min and p25 differ did not count deterministically.
+        estimator: 'min',
+        estimate: (report) =>
+          rowEstimates(report.body.commands, 'persistent-store rows decoded', persistentRowsDecoded, FAILURE_IS_THE_REASON),
+      }),
+    )
+    .addCommand(
+      createFacetCommand({
         name: 'population',
         summary: 'Record WHICH files a vat command enumerated, and diff two populations as sets',
         runSummary: 'Capture a population report for one project against one vat build',
@@ -1924,6 +1977,7 @@ export function createProgram(): Command {
         // confidence in that rather than resolution in a statistic — and each
         // repeat is a whole corpus enumeration, which is not cheap.
         defaultRuns: 2,
+        minRuns: 1,
         // Warm. There is no cache in front of the enumeration, and a set does
         // not move with one.
         defaultCache: 'warm',
@@ -1952,6 +2006,7 @@ export function createProgram(): Command {
         // Three, not perf's five: a peak barely moves between repeats, and a
         // memory-heavy command is usually a slow one.
         defaultRuns: 3,
+        minRuns: 1,
         defaultCache: 'warm',
         capture: captureMemory,
         compare: compareMemory,
