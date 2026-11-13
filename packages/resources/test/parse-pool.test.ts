@@ -2169,22 +2169,54 @@ describe('a thread that dies uncontrolled', () => {
 
   it('parks no thread between its `error` and its `exit`, even when a heap read still answers', async () => {
     const { pool, window } = await poolWithIdleThreadDying();
-    const heapRead = { ...getHeapStatistics(), used_heap_size: BYTES_PER_MIB };
-    vi.spyOn(Worker.prototype, 'getHeapStatistics').mockResolvedValue(heapRead);
-    const closeAsked = vi.spyOn(Worker.prototype, 'postMessage');
-    const asked = (): boolean => closeAsked.mock.calls.some(([message]) => (message as { type?: unknown } | undefined)?.type === 'shutdown');
+    vi.spyOn(Worker.prototype, 'getHeapStatistics').mockResolvedValue(PARKABLE_HEAP_READ);
 
-    const shutdown = settledLater(pool.shutdown().then(() => 'shut down'));
-    // Either the pool parked the dead thread and finished shutting down, or it asked the thread to
-    // close and waits for its (held) `exit`.
-    await until(() => shutdown.settled() !== undefined || asked());
-    const parked = __parkedParseWorkerCountForTest();
-    window.release();
+    const { parked, outcome } = await shutDownWithExitsHeld(pool, window);
 
     expect(parked).toBe(0);
-    expect(await shutdown.outcome).toBe('shut down');
+    expect(outcome).toBe('shut down');
+  });
+
+  it('parks no thread that starts dying while its heap is read for parking', async () => {
+    const window = holdExitsAfterError();
+    stubParkingMachine({ usedBytes: BYTES_PER_MIB });
+    await seedWorkerEntry(intercepting("request?.type === 'die'", ["throw new Error('seeded death during the heap read');"]));
+    const pool = trackedPool(1);
+    expect(await outcomeOf(pool, '# alive\n')).toBe('answered');
+    // The thread is alive when shutdown asks for its heap, and throws before the read answers.
+    vi.spyOn(Worker.prototype, 'getHeapStatistics').mockImplementation(async function (this: Worker) {
+      this.postMessage({ type: 'die' });
+      await until(() => window.errored() === 1);
+      return PARKABLE_HEAP_READ;
+    });
+
+    const { parked, outcome } = await shutDownWithExitsHeld(pool, window);
+
+    expect(parked).toBe(0);
+    expect(outcome).toBe('shut down');
   });
 });
+
+/** A heap read small enough that the thread it is taken from may be parked. */
+const PARKABLE_HEAP_READ = { ...getHeapStatistics(), used_heap_size: BYTES_PER_MIB };
+
+/**
+ * Shut a pool down while a dead thread's `exit` is held, and count what it parked by the time it
+ * either finished (it parked the thread) or asked the thread to close (it waits for the held `exit`).
+ *
+ * @param pool - The pool, holding one idle thread that has died or will die during the heap read
+ * @param window - The held exits, released once the count is taken
+ * @returns How many threads were parked then, and what the shutdown settled to
+ */
+async function shutDownWithExitsHeld(pool: ParsePool, window: ReturnType<typeof holdExitsAfterError>): Promise<{ parked: number; outcome: unknown }> {
+  const closeAsked = vi.spyOn(Worker.prototype, 'postMessage');
+  const asked = (): boolean => closeAsked.mock.calls.some(([message]) => (message as { type?: unknown } | undefined)?.type === 'shutdown');
+  const shutdown = settledLater(pool.shutdown().then(() => 'shut down'));
+  await until(() => shutdown.settled() !== undefined || asked());
+  const parked = __parkedParseWorkerCountForTest();
+  window.release();
+  return { parked, outcome: await shutdown.outcome };
+}
 
 /**
  * Hold the `exit` of every thread that has emitted `error`, and the listener sweep Node runs right
