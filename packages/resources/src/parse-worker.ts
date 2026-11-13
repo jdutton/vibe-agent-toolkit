@@ -49,6 +49,8 @@
 import v8 from 'node:v8';
 import { parentPort, resourceLimits, workerData } from 'node:worker_threads';
 
+import { forbidWorkCounting } from '@vibe-agent-toolkit/utils';
+
 import type { ParseResult } from './link-parser.js';
 import { ParseCache, type ParserModuleKind } from './parse-cache.js';
 import { acquireCollector } from './parse-collector.js';
@@ -89,6 +91,11 @@ if (parentPort === null) {
 
 /** Narrowed once, so every use below is free of the `null` case. */
 const port = parentPort;
+
+// Every job this thread runs is counted on the parent, where it is dispatched
+// and settled; a count here would reach no dump and could double one there. The
+// parent said what a count here does: reported once, or thrown under a test.
+forbidWorkCounting((workerData as ParseWorkerData).forbiddenCount);
 
 /**
  * How long one thread may hold the pool's collector lock before another takes it from it, in ms:

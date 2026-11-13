@@ -7,7 +7,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 // `dirname` only — `join`/`resolve`/`relative` are ESLint-banned in favour of `safePath`.
 import { dirname } from 'node:path';
 
-import { compareCodeUnits, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, readWorkCounters, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { CONDITION_WITHOUT_REFERENCE } from '../src/index.js';
@@ -160,6 +160,21 @@ describe('readStoredMembership', () => {
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);
   beforeEach(suite.beforeEach);
+
+  it('counts a warm read as one extent served and none derived', async () => {
+    await write(DOC, '# A\n');
+    const registry = new ContributorRegistry();
+    registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
+    const options = { root: suite.tempDir, registry, cache: freshCache() };
+    await populate(options);
+    const before = readWorkCounters();
+
+    const stored = await readStoredMembership(options, requestedContributors(options));
+
+    expect(stored).toBeDefined();
+    expect(readWorkCounters()['extent.served'] - before['extent.served']).toBe(1);
+    expect(readWorkCounters()['extent.derived'] - before['extent.derived']).toBe(0);
+  });
 
   it('serves every requested contributor\'s conditions, a classifier\'s included', async () => {
     await write(DOC, '# A\n');

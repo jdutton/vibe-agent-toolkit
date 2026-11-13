@@ -37,6 +37,13 @@ export {
   __setCrawlTimingForTest,
   __writeCrawlTimingDumpForTest,
 } from './crawl-timing.js';
+// The work counters' test seams: zero every counter (and lift a forbid), read
+// the dump body the exit write would file, and make a forbidden count throw.
+export {
+  __readWorkCounterDumpForTest,
+  __resetWorkCountersForTest,
+  __throwOnForbiddenWorkCountForTest,
+} from './work-counters.js';
 // The three fixture modules the sinks' suites share: the ONE temp-dir family,
 // the host gates, and the hostile tree every sink is tested against.
 // The absence-cause signature, shared by the CLI's I0 census and every test that plants a cause.

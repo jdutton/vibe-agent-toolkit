@@ -60,6 +60,7 @@
  */
 
 import {
+  countWork,
   CRAWL_BLOB_POPULATE_ID,
   CRAWL_STORE_READ_ID,
   CRAWL_STORE_WRITE_ID,
@@ -479,6 +480,9 @@ function storeMissFor(missed: readonly string[], projection: Projection): StoreM
     projection.blobConditions.filter((row) => PARSE_REFUSAL_BLOB_CODES.has(row.code)).map((row) => row.blob),
   );
   const refusedPairs = missed.filter((key) => refused.has(key)).length;
+  // The number `describeStoreMiss` reports, counted where it is built so that
+  // function stays pure.
+  countWork('store.miss.refusedPairs', refusedPairs);
   return refusedPairs === 0 ? undefined : { refusedPairs };
 }
 
@@ -626,6 +630,7 @@ export async function populate(options: PopulateOptions): Promise<PopulateResult
   const rootId = rootIdFor(root);
   const cached = await readCachedProjection(options, rootId, parseContent, routing);
   if ('hit' in cached) {
+    countWork('extent.served', 1);
     return { projection: cached.hit, outcome: populationOutcome('hit') };
   }
 
@@ -669,6 +674,9 @@ interface DerivationRun {
  * @returns The frozen projection
  */
 async function deriveProjection(options: PopulateOptions, run: DerivationRun): Promise<Projection> {
+  // Full derivation, every time it runs, until the incremental extent lands (ADR
+  // register: full extent derivation is a counted cost).
+  countWork('extent.derived', 1);
   const { root, registry, parameters, maxIterations = DEFAULT_MAX_ITERATIONS } = options;
   const { parseContent, routing, dispatcher } = run;
   // Constructed here and nowhere else, so its lifetime is exactly this run's.
@@ -1123,6 +1131,7 @@ export async function readStoredMembership(
   const routing = createCollectionMimeResolver(options.collections);
   const extent = await readStoredExtent(options, rootIdFor(options.root), routing, requested);
   if (extent === undefined) return undefined;
+  countWork('extent.served', 1);
   return {
     resourceRealizations: extent.resourceRealizations,
     realizationConditions: extent.realizationConditions,
