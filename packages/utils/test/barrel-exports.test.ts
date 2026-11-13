@@ -120,6 +120,7 @@ const BARREL_EXPORTS = [
   'followedStatSync',
   'forEachInOrder',
   'forbidWorkCounting',
+  'forbiddenWorkCountPolicy',
   'fsBoundary',
   'fsFaultOf',
   'getRelativePath',

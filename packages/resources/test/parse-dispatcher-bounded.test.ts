@@ -227,7 +227,7 @@ describe('the input cap a dispatcher hands its reads', () => {
 });
 
 describe('cache transport whose read-back misses', () => {
-  it('counts the second parse it dispatches', async () => {
+  it('counts the document once as dispatched and its second parse as a re-dispatch', async () => {
     const { cache } = missingCache();
     // The worker reports the entry stored; the read-back finds nothing.
     Object.assign(cache, { read: (): Promise<null> => Promise.resolve(null) });
@@ -237,12 +237,15 @@ describe('cache transport whose read-back misses', () => {
       parseIntoCache: () => Promise.resolve(null),
     });
     const dispatcher = new ParseDispatcher(cache, { transport: 'cache', createPool });
-    const before = readWorkCounters()['parse.dispatched'];
+    const before = readWorkCounters();
 
     await dispatcher.parse(DOCUMENT);
     await dispatcher.shutdown();
 
+    // One document missed once: the parse-timing cache block reads
+    // `parse.dispatched` as its misses, so hits plus misses stay documents.
     expect(pool.parses()).toBe(1);
-    expect(readWorkCounters()['parse.dispatched'] - before).toBe(2);
+    expect(readWorkCounters()['parse.dispatched'] - before['parse.dispatched']).toBe(1);
+    expect(readWorkCounters()['parse.redispatched'] - before['parse.redispatched']).toBe(1);
   });
 });

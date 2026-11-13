@@ -40,12 +40,12 @@ describe('comparedExactly', () => {
   const reportedOnly = (cache: 'warm' | 'cold'): WorkCounter[] =>
     WORK_COUNTER_NAMES.filter((name) => !comparedExactly(name, cache));
 
-  it('warm: every counter but the load-dependent one is compared exactly', () => {
-    expect(reportedOnly('warm')).toEqual(['parse.refused.load']);
+  it('warm: every counter but the load-dependent and the re-dispatch one is compared exactly', () => {
+    expect(reportedOnly('warm')).toEqual(['parse.redispatched', 'parse.refused.load']);
   });
 
-  it('cold: the parse cache counters are reported only, beside the load counter', () => {
-    expect(reportedOnly('cold')).toEqual(['parse.cache.hit', 'parse.dispatched', 'parse.refused.load']);
+  it('cold: the parse cache counters are reported only, beside the load and re-dispatch counters', () => {
+    expect(reportedOnly('cold')).toEqual(['parse.cache.hit', 'parse.dispatched', 'parse.redispatched', 'parse.refused.load']);
   });
 });
 

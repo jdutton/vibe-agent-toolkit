@@ -43,7 +43,7 @@ describe('renderWorkReport', () => {
 
   it('names load refusals as why a row has no warrant', () => {
     const text = renderWorkReport(report([row({ stable: null, loadRefusedRepeats: 2 })]));
-    expect(text).toMatch(/LOAD REFUSALS.*2 of 2 compared repeats/);
+    expect(text).toMatch(/LOAD REFUSALS.*2 of 3 repeats/);
   });
 
   it('prints a failed row as a failure, never as zeros', () => {

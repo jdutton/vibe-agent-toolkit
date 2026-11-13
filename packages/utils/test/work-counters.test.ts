@@ -11,11 +11,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __readWorkCounterDumpForTest,
   __resetWorkCountersForTest,
-  throwOnForbiddenWorkCountForTest,
+  __throwOnForbiddenWorkCountForTest,
 } from '../src/testing.js';
 import {
   countWork,
   forbidWorkCounting,
+  forbiddenWorkCountPolicy,
   installWorkCounterDump,
   readWorkCounters,
   WORK_COUNTER_NAMES,
@@ -71,10 +72,22 @@ describe('work counters', () => {
   });
 
   it('throws on a forbidden count once a test turns the throw on', () => {
-    throwOnForbiddenWorkCountForTest();
-    forbidWorkCounting();
+    __throwOnForbiddenWorkCountForTest();
+    forbidWorkCounting(forbiddenWorkCountPolicy());
     expect(() => countWork('parse.dispatched', 1)).toThrow(/forbids work counting/);
     expect(readWorkCounters()['parse.dispatched']).toBe(0);
+  });
+
+  it('tells a thread it starts to report a forbidden count, or to throw once a test turns the throw on', () => {
+    expect(forbiddenWorkCountPolicy()).toBe('report');
+    __throwOnForbiddenWorkCountForTest();
+    expect(forbiddenWorkCountPolicy()).toBe('throw');
+  });
+
+  it('throws on a forbidden count on a thread told to throw, with no seam of its own turned on', () => {
+    // What a parse worker does with the policy its parent handed it.
+    forbidWorkCounting('throw');
+    expect(() => countWork('git.calls', 1)).toThrow(/forbids work counting/);
   });
 
   it('reports a forbidden count once on stderr and does not count it, under vitest too', () => {
@@ -82,7 +95,7 @@ describe('work counters', () => {
     // here, where VITEST is set.
     expect(process.env['VITEST']).toBeTruthy();
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    forbidWorkCounting();
+    forbidWorkCounting('report');
 
     countWork('parse.dispatched', 1);
     countWork('git.calls', 4);

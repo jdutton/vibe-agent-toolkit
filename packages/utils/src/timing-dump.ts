@@ -150,19 +150,23 @@ export function reportTimingDumpFailure(noun: string, target: string, error: unk
  *
  * Done once when the seam turns on rather than at exit, so a bad path is
  * reported while there is still a run to abandon — and so the exit handler does
- * the minimum possible work.
+ * the minimum possible work. A seam takes the answer as its directory: on a
+ * failure it is `null`, so the seam is off and no later write reports the same
+ * failure again.
  *
  * @param noun - What the seam is called, for the failure line
- * @param directory - Directory dumps will be written to
- * @returns False when it could not be made, and the failure has been reported
+ * @param directory - Directory dumps will be written to, or `null` for a seam that is off
+ * @returns The directory, or `null` when the seam is off or the directory could
+ *   not be made (and the failure has been reported, once)
  */
-export function ensureTimingDirectory(noun: string, directory: string): boolean {
+export function ensureTimingDirectory(noun: string, directory: string | null): string | null {
+  if (directory === null) return null;
   try {
     mkdirSyncReal(directory, { recursive: true });
-    return true;
+    return directory;
   } catch (error) {
     reportTimingDumpFailure(noun, directory, error);
-    return false;
+    return null;
   }
 }
 

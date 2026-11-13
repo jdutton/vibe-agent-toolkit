@@ -21,6 +21,7 @@ import { renderCrawlComparison, renderCrawlReport } from '../facets/crawl/render
 import { captureIo } from '../facets/io/capture.js';
 import { compareIo } from '../facets/io/compare.js';
 import { renderIoComparison, renderIoReport } from '../facets/io/render.js';
+import type { IoCommandStats } from '../facets/io/types.js';
 import { captureMemory } from '../facets/memory/capture.js';
 import { compareMemory } from '../facets/memory/compare.js';
 import { renderMemoryComparison, renderMemoryReport } from '../facets/memory/render.js';
@@ -69,10 +70,10 @@ import {
 } from '../facets/verdict/union.js';
 import type { Validated } from '../facets/verdict/yaml-file.js';
 import { captureWork } from '../facets/work/capture.js';
-import { compareWork } from '../facets/work/compare.js';
-import { workEstimates } from '../facets/work/estimate.js';
+import { compareWork, workStabilityCaveat } from '../facets/work/compare.js';
+import { countOf } from '../facets/work/dump.js';
 import { renderWorkComparison, renderWorkReport } from '../facets/work/render.js';
-import { WORK_MIN_RUNS } from '../facets/work/types.js';
+import { WORK_MIN_RUNS, type WorkCommandStats } from '../facets/work/types.js';
 import {
   abExitCondition,
   CHANGED_VERDICT,
@@ -107,6 +108,7 @@ import {
   type MeasuredSequenceSpec,
   POPULATION_MEASURED_COMMANDS,
 } from '../harness/commands.js';
+import { stabilityCaveat } from '../harness/facet-compare.js';
 import { pinOf, type PreparedInstrument, prepareInstrument, resolveInstrument } from '../harness/instrument.js';
 import { npmInstall, type NpxInstallSite, npxInstallSite } from '../harness/npx-install.js';
 import { instrumentLabel, instrumentTrustNotes } from '../harness/render.js';
@@ -1032,16 +1034,23 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
  * Turn a facet's command rows into the estimates `ab` aggregates.
  *
  * Shared by every wiring because the *rule* is shared and is the part worth
- * getting right: a failed row has no usable measurement, so it is LOST — kept,
- * valueless, with its reason — never a value and never dropped. A value would feed
- * `ab` the zero a failed row carries, the best number this tool can print; a
+ * getting right: a row with no usable measurement is LOST — kept, valueless,
+ * with its reason — never a value and never dropped. A value would feed `ab`
+ * the zero a failed row carries, the best number this tool can print; a
  * dropped row would leave the arm a statistic of the pairs that happened to
  * succeed, which understates the regression that failed the others.
+ *
+ * A row has no usable measurement when it failed, or when it ran and the facet
+ * finds no warrant for its value: an exact-count facet whose repeats disagreed
+ * or were never tested says so through `unwarrantedOf`, with the reason its
+ * `compare` gives.
  *
  * @param rows - The facet's command rows, which all share `name`, `failed` and `failure`
  * @param unit - What the extracted value is, for rendering only
  * @param valueOf - Which of the row's numbers to publish
  * @param lostReasonOf - How a failed row's loss is named ({@link FAILURE_IS_THE_REASON} unless the facet has a better name)
+ * @param unwarrantedOf - Why a row that ran has no usable value, or `null` when
+ *   it has one ({@link NO_WARRANT_NEEDED} for a facet whose every run counts)
  * @returns One estimate per row: a value, or the reason there is none
  */
 export function rowEstimates<TRow extends FailableRow>(
@@ -1049,12 +1058,12 @@ export function rowEstimates<TRow extends FailableRow>(
   unit: string,
   valueOf: (row: TRow) => number,
   lostReasonOf: (row: TRow) => string,
+  unwarrantedOf: (row: TRow) => string | null,
 ): readonly FacetEstimate[] {
-  return rows.map((row): FacetEstimate =>
-    row.failed
-      ? { name: row.name, value: 0, unit, lost: lostReasonOf(row) }
-      : { name: row.name, value: valueOf(row), unit, lost: null },
-  );
+  return rows.map((row): FacetEstimate => {
+    const lost = row.failed ? lostReasonOf(row) : unwarrantedOf(row);
+    return lost === null ? { name: row.name, value: valueOf(row), unit, lost: null } : { name: row.name, value: 0, unit, lost };
+  });
 }
 
 /** What every facet's command row carries for {@link rowEstimates}. */
@@ -1066,6 +1075,48 @@ interface FailableRow {
 
 /** A failed row's loss, named by its own `failure`. */
 export const FAILURE_IS_THE_REASON = (row: FailableRow): string => row.failure ?? 'failed, with no reason recorded';
+
+/**
+ * Every row that ran has a usable value: the timing and population facets,
+ * whose `ab` takes a statistic across pairs rather than reading one exact count.
+ *
+ * @returns `null`
+ */
+export const NO_WARRANT_NEEDED = (): null => null;
+
+/** The counter `work ab` compares: the I10 hydration count. */
+const WORK_AB_COUNTER = 'store.rows.decoded.persistent';
+
+/**
+ * What `io ab` compares: each row's user calls, lost when the row's own repeats
+ * disagreed or were never tested — the same warrant `io compare` asks of it.
+ *
+ * @param rows - An `io` report's rows
+ * @returns One estimate per row
+ */
+export function ioEstimates(rows: readonly IoCommandStats[]): readonly FacetEstimate[] {
+  return rowEstimates(rows, 'calls', (row) => row.userCalls, FAILURE_IS_THE_REASON, (row) => stabilityCaveat(row, 'measured'));
+}
+
+/**
+ * What `work ab` compares: each row's persistent-store rows decoded, lost when
+ * the row's repeats give no warrant (the reason `work compare` gives) or when
+ * the measured vat does not emit the counter — never read as zero.
+ *
+ * @param rows - A `work` report's rows
+ * @returns One estimate per row
+ */
+export function workEstimates(rows: readonly WorkCommandStats[]): readonly FacetEstimate[] {
+  return rowEstimates(
+    rows,
+    'persistent-store rows decoded',
+    (row) => countOf(row, WORK_AB_COUNTER) ?? 0,
+    FAILURE_IS_THE_REASON,
+    (row) =>
+      workStabilityCaveat(row, 'measured') ??
+      (countOf(row, WORK_AB_COUNTER) === undefined ? `the measured vat does not emit ${WORK_AB_COUNTER}` : null),
+  );
+}
 
 /**
  * The fastest repeat a row measured — the reduction `FacetEstimate` requires.
@@ -1846,7 +1897,7 @@ export function createProgram(): Command {
         // and it is the right number to hand `ab` for the same reason `ab` then
         // takes a minimum of it — see `harness/estimator.ts`.
         estimator: 'min',
-        estimate: (report) => rowEstimates(report.body.commands, 'ms', (row) => row.minMs, FAILURE_IS_THE_REASON),
+        estimate: (report) => rowEstimates(report.body.commands, 'ms', (row) => row.minMs, FAILURE_IS_THE_REASON, NO_WARRANT_NEEDED),
       })
         .addCommand(createPerfArmsCommand())
         .addCommand(createPerfBarsCommand()),
@@ -1868,11 +1919,11 @@ export function createProgram(): Command {
         renderReport: renderIoReport,
         renderComparison: renderIoComparison,
         // Call counts do not move with machine load, so a min across pairs is
-        // normally every pair's value. That is a feature: an arm whose min and
-        // p25 differ is an arm whose counts were NOT deterministic, and the A/B
-        // shows it without needing its own stability rule.
+        // normally every pair's value. A row whose own repeats disagreed or were
+        // never tested is lost rather than published: an exact count with no
+        // warrant is the number `io compare` refuses to read.
         estimator: 'min',
-        estimate: (report) => rowEstimates(report.body.commands, 'calls', (row) => row.userCalls, FAILURE_IS_THE_REASON),
+        estimate: (report) => ioEstimates(report.body.commands),
       }),
     )
     .addCommand(
@@ -1915,7 +1966,7 @@ export function createProgram(): Command {
         // the compare output, where the passes are qualified by kind.
         estimator: 'min',
         estimate: (report) =>
-          rowEstimates(report.body.commands, 'ms parse (all kinds)', fastestRepeat, FAILURE_IS_THE_REASON),
+          rowEstimates(report.body.commands, 'ms parse (all kinds)', fastestRepeat, FAILURE_IS_THE_REASON, NO_WARRANT_NEEDED),
       }),
     )
     .addCommand(
@@ -1942,7 +1993,7 @@ export function createProgram(): Command {
         // rule twice is how they drifted apart the first time.
         estimator: 'min',
         estimate: (report) =>
-          rowEstimates(report.body.commands, 'ms crawl (all strata)', fastestRepeat, FAILURE_IS_THE_REASON),
+          rowEstimates(report.body.commands, 'ms crawl (all strata)', fastestRepeat, FAILURE_IS_THE_REASON, NO_WARRANT_NEEDED),
       }),
     )
     .addCommand(
@@ -1995,7 +2046,7 @@ export function createProgram(): Command {
         // populations of equal size and different membership read as unchanged
         // through `ab` and as CHANGED through `compare`. Use `compare`.
         estimator: 'min',
-        estimate: (report) => rowEstimates(report.body.commands, 'files', (row) => row.count, FAILURE_IS_THE_REASON),
+        estimate: (report) => rowEstimates(report.body.commands, 'files', (row) => row.count, FAILURE_IS_THE_REASON, NO_WARRANT_NEEDED),
       }),
     )
     .addCommand(
@@ -2016,7 +2067,7 @@ export function createProgram(): Command {
         // A peak moves both ways with when a collection lands, so the median repeat, and its median
         // across captures: a min would pick the luckiest collection (see `EstimatorKind`).
         estimator: 'median',
-        estimate: (report) => rowEstimates(report.body.commands, 'KiB peak RSS', (row) => row.medianKb, (row) => (row.outOfHeap ? 'ran out of heap' : FAILURE_IS_THE_REASON(row))),
+        estimate: (report) => rowEstimates(report.body.commands, 'KiB peak RSS', (row) => row.medianKb, (row) => (row.outOfHeap ? 'ran out of heap' : FAILURE_IS_THE_REASON(row)), NO_WARRANT_NEEDED),
       }),
     )
     .addCommand(createVerdictCommand());

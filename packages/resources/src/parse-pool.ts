@@ -105,7 +105,7 @@ import { availableParallelism, totalmem } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 
-import { countWork, followedKindSync } from '@vibe-agent-toolkit/utils';
+import { countWork, followedKindSync, forbiddenWorkCountPolicy, type ForbiddenWorkCountPolicy } from '@vibe-agent-toolkit/utils';
 
 import { decodeFrontmatterValue, encodeFrontmatterValue } from './frontmatter-codec.js';
 import type { ParseResult } from './link-parser.js';
@@ -659,7 +659,16 @@ export interface ParseWorkerData {
   limits: ParseLimits;
   /** The lock every thread takes its collector under: {@link COLLECTOR_LOCK}. */
   collectorLock: SharedArrayBuffer;
+  /**
+   * What a work count on the thread does: the starting thread's
+   * `forbiddenWorkCountPolicy()`, read when the thread starts, so a test's throw
+   * reaches the thread it guards.
+   */
+  forbiddenCount: ForbiddenWorkCountPolicy;
 }
+
+/** What a pool holds for every thread it starts; the count policy is read per start. */
+type PoolWorkerData = Omit<ParseWorkerData, 'forbiddenCount'>;
 
 /**
  * The one lock, per copy of this module, under which a parse thread sets V8's `--expose-gc`, takes
@@ -958,7 +967,7 @@ interface PoolWorker {
 class WorkerParsePool implements ParsePool {
   readonly size: number;
 
-  readonly #workerData: ParseWorkerData;
+  readonly #workerData: PoolWorkerData;
   readonly #limits: ParseLimits;
   readonly #workers: PoolWorker[] = [];
   /**
@@ -988,7 +997,7 @@ class WorkerParsePool implements ParsePool {
    */
   readonly #heapFlags: V8HeapFlags = v8HeapFlags(process.env['NODE_OPTIONS'], process.execArgv);
 
-  constructor(size: number, workerData: ParseWorkerData, parkCap: number) {
+  constructor(size: number, workerData: PoolWorkerData, parkCap: number) {
     this.size = size;
     this.#workerData = workerData;
     this.#limits = workerData.limits;
@@ -1577,7 +1586,10 @@ class WorkerParsePool implements ParsePool {
     let key: string;
     try {
       entry = resolveWorkerEntry();
-      key = workerKey(entry, this.#workerData);
+      // Read per start, not per pool: a test turns the throw on after the shared
+      // pool exists. It is in the key, so a parked thread told otherwise is not adopted.
+      const workerData: ParseWorkerData = { ...this.#workerData, forbiddenCount: forbiddenWorkCountPolicy() };
+      key = workerKey(entry, workerData);
       const parked = source === 'may-adopt' ? adoptParkedWorker(key) : undefined;
       if (parked !== undefined) return this.#track(parked.worker, entry, key, parked.parsersLoaded);
       // The stack is enforced by V8 itself, per thread: a breach throws a
@@ -1586,7 +1598,7 @@ class WorkerParsePool implements ParsePool {
       // V8's ceiling can kill the whole process, so the sampler enforces
       // `heapMb` and V8's ceiling is headroom past it (`workerHeapCeilingMb`).
       worker = new Worker(entry, {
-        workerData: this.#workerData,
+        workerData,
         resourceLimits: {
           maxOldGenerationSizeMb: workerHeapCeilingMb(this.#limits.heapMb),
           stackSizeMb: this.#limits.stackMb,

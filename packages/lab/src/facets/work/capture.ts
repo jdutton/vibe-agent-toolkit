@@ -22,7 +22,7 @@ import { captureCommandRows } from '../../harness/dump-capture.js';
 import { judgeLoad, readLoad } from '../../harness/load-guard.js';
 import type { SpecMeasurement } from '../../harness/repeat.js';
 import { buildReportEnvelope } from '../../harness/report.js';
-import type { CaptureRequest } from '../../harness/types.js';
+import type { CacheMode, CaptureRequest } from '../../harness/types.js';
 
 import { countOf, type MergedWorkDumps, readWorkDumps, variedCounters, type WorkDumpsRead } from './dump.js';
 import {
@@ -83,6 +83,38 @@ function variedAcross(merges: readonly MergedWorkDumps[]): WorkCounter[] {
 }
 
 /**
+ * @param merged - One repeat's merged dumps
+ * @returns Whether that repeat refused a parse under machine load
+ */
+function refusedUnderLoad(merged: MergedWorkDumps): boolean {
+  return (countOf(merged, 'parse.refused.load') ?? 0) > 0;
+}
+
+/**
+ * Whether a warm-mode warm-up refused a parse under machine load: it filled the
+ * cache the compared repeats read, so a document it left unparsed is a miss in
+ * the first compared repeat and a hit after, and an exact counter moves by
+ * load. Read for that alone; a warm-up whose dumps cannot be read changes
+ * nothing, as before. In cold mode no compared repeat reads what it cached, so
+ * it is not read at all.
+ *
+ * @param cache - The capture's cache mode
+ * @param directories - Every repeat's dump directory, warm-up first
+ * @param read - Reads one repeat's directory
+ * @returns 1 when it did, else 0
+ */
+async function warmUpRefusedUnderLoad(
+  cache: CacheMode,
+  directories: readonly string[],
+  read: (directory: string) => Promise<WorkDumpsRead>,
+): Promise<number> {
+  const [warmUp] = directories;
+  if (cache !== 'warm' || warmUp === undefined) return 0;
+  const reading = await read(warmUp);
+  return reading.ok && refusedUnderLoad(reading.merged) ? 1 : 0;
+}
+
+/**
  * Fold one command's repeats into its row.
  *
  * Takes the repeat reader as an argument so the fold can be exercised without
@@ -102,7 +134,8 @@ export async function workRowFromRepeats(
   const base: RowBase = { name: measurement.spec.name, args: measurement.args, cache };
   if (failure !== null) return failedRow(base, results.length, failure);
 
-  // Repeat 0 is the warm-up: never read, never compared, never reported.
+  // Repeat 0 is the warm-up: never compared, never reported.
+  const warmUpLoadRefusals = await warmUpRefusedUnderLoad(cache, directories, read);
   const reads = await Promise.all(directories.slice(1).map((directory) => read(directory)));
   const merges: MergedWorkDumps[] = [];
   for (const each of reads) {
@@ -113,7 +146,8 @@ export async function workRowFromRepeats(
   if (reported === undefined) return failedRow(base, results.length, 'no compared repeat ran');
 
   const varied = variedAcross(merges);
-  const loadRefusedRepeats = merges.filter((merge) => (countOf(merge, 'parse.refused.load') ?? 0) > 0).length;
+  const loadRefusedRepeats =
+    merges.filter((merge) => refusedUnderLoad(merge)).length + warmUpLoadRefusals;
   return {
     ...base,
     runs: results.length,

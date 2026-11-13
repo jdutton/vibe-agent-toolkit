@@ -42,7 +42,7 @@ export {
 export {
   __readWorkCounterDumpForTest,
   __resetWorkCountersForTest,
-  throwOnForbiddenWorkCountForTest,
+  __throwOnForbiddenWorkCountForTest,
 } from './work-counters.js';
 // The three fixture modules the sinks' suites share: the ONE temp-dir family,
 // the host gates, and the hostile tree every sink is tested against.

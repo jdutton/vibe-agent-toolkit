@@ -93,8 +93,9 @@ if (parentPort === null) {
 const port = parentPort;
 
 // Every job this thread runs is counted on the parent, where it is dispatched
-// and settled; a count here would reach no dump and could double one there.
-forbidWorkCounting();
+// and settled; a count here would reach no dump and could double one there. The
+// parent said what a count here does: reported once, or thrown under a test.
+forbidWorkCounting((workerData as ParseWorkerData).forbiddenCount);
 
 /**
  * How long one thread may hold the pool's collector lock before another takes it from it, in ms:

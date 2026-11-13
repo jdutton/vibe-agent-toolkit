@@ -894,7 +894,9 @@ export function parseContentCached(
  * The two work counts are not bookkeeping: `parse.cache.hit` and
  * `parse.dispatched` are what ADR I10 reads as pairs extracted and re-attempts,
  * and `parse-timing`'s cache block reads the same two counts rather than keeping
- * its own — one counting site per number.
+ * its own — one counting site per number. Each counts a DOCUMENT once, so hits
+ * plus dispatches is the documents asked for; a second dispatch of the same
+ * document is `parse.redispatched` ({@link parseThroughCache}).
  *
  * @param keyed - The confirmed read, of a kind that has a parser
  * @param cache - The store to consult and file into
@@ -978,9 +980,10 @@ async function parseThroughCache(
   // reaching here means the entry was written and then removed, or written in a
   // form this read refuses — a concurrent `vat cache clear`, the OS purging its
   // temp directory mid-run, or a torn write. Rare, real, and recoverable — in
-  // the pool again, under its limits, never on this thread. A second dispatch,
-  // so a second count.
-  countWork('parse.dispatched', 1);
+  // the pool again, under its limits, never on this thread. A second dispatch of
+  // a document already counted once: its own counter, so `parse.dispatched`
+  // stays one per document and this work is still seen.
+  countWork('parse.redispatched', 1);
   const result = await pool.parse(keyed.parserKind, keyed.content, keyed.byteLength);
   await cache.set(keyed, result);
   return result;

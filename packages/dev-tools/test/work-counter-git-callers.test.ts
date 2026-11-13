@@ -45,8 +45,8 @@ const GIT_COUNT = "countWork('git.calls', 1)";
 
 const REPO_ROOT = resolveFromImportMeta(import.meta.url, '..', '..', '..');
 
-/** The package as a quoted module specifier, in either quote. */
-const SPECIFIERS = [`'${GIT_PACKAGE}'`, `"${GIT_PACKAGE}"`];
+/** The quotes a module specifier may sit in. */
+const QUOTES = ["'", '"'];
 
 /**
  * The names one import or export clause takes from the package, by their
@@ -71,38 +71,66 @@ function namesOfClause(clause: string): string[] {
 }
 
 /**
- * The clause of one statement that imports or re-exports from the package, or
- * `null` when it does not.
+ * Whether `text` ends with the keyword `word`, standing alone after one of `boundaries`.
  *
- * @param statement - Source text up to (not including) a `;`, whitespace collapsed
- * @returns The text between the keyword (and any `type`) and `from`
+ * @param text - Collapsed source
+ * @param word - The keyword
+ * @param boundaries - What may stand just before it
+ * @returns Whether it does
  */
-function staticClause(statement: string): string | null {
-  const from = SPECIFIERS.map((specifier) => ` from ${specifier}`).find((tail) => statement.endsWith(tail));
-  if (from === undefined) return null;
-  const head = statement.slice(0, -from.length);
-  const keyword = Math.max(head.lastIndexOf('import '), head.lastIndexOf('export '));
-  if (keyword === -1) return null;
-  return head.slice(keyword + 'import '.length).trim();
+function endsWithKeyword(text: string, word: string, boundaries: readonly string[]): boolean {
+  return text === word || boundaries.some((boundary) => text.endsWith(`${boundary}${word}`));
 }
 
 /**
- * Every name a source takes from the package, sorted, or `null` when it does
- * not import it.
+ * What the code just before one quoted specifier of the package takes from it.
+ *
+ * @param head - The collapsed source up to the specifier's opening quote
+ * @returns The names, or `null` when the specifier is not an import (a string in code)
+ */
+function namesBefore(head: string): string[] | null {
+  const text = head.trimEnd();
+  // A dynamic import or require, or a side-effect import: the whole module.
+  if (text.endsWith('import(') || text.endsWith('require(') || endsWithKeyword(text, 'import', [' ', ';', '}'])) {
+    return [WHOLE_MODULE];
+  }
+  if (!endsWithKeyword(text, 'from', [' ', '}', '*'])) return null;
+  const clauseEnd = text.length - 'from'.length;
+  const keyword = Math.max(text.lastIndexOf('import ', clauseEnd), text.lastIndexOf('export ', clauseEnd));
+  if (keyword === -1) return null;
+  return namesOfClause(text.slice(keyword + 'import '.length, clauseEnd).trim());
+}
+
+/**
+ * Where each quoted specifier of the package, or of a subpath of it, opens.
+ *
+ * @param text - Collapsed source
+ * @returns The index of each opening quote
+ */
+function specifierStarts(text: string): number[] {
+  const starts: number[] = [];
+  for (const quote of QUOTES) {
+    const opening = `${quote}${GIT_PACKAGE}`;
+    for (let at = text.indexOf(opening); at !== -1; at = text.indexOf(opening, at + 1)) {
+      const after = text.charAt(at + opening.length);
+      if (after === quote || after === '/') starts.push(at);
+    }
+  }
+  return starts;
+}
+
+/**
+ * Every name a source takes from the package (or a subpath of it), sorted, or
+ * `null` when it does not import it.
  *
  * @param source - One module's text
  * @returns The names, or `null`
  */
 function gitPackageImports(source: string): string[] | null {
+  const text = source.replaceAll(/\s+/gu, ' ').replaceAll('{ ', '{');
   const names = new Set<string>();
-  for (const raw of source.split(';')) {
-    const statement = raw.replaceAll(/\s+/gu, ' ').replaceAll('{ ', '{').trim();
-    const clause = staticClause(statement);
-    if (clause !== null) for (const name of namesOfClause(clause)) names.add(name);
-    const dynamic = SPECIFIERS.some((specifier) =>
-      ['import(', 'require('].some((call) => statement.includes(`${call}${specifier})`)),
-    );
-    if (dynamic) names.add(WHOLE_MODULE);
+  for (const at of specifierStarts(text)) {
+    for (const name of namesBefore(text.slice(0, at)) ?? []) names.add(name);
   }
   return names.size === 0 ? null : [...names].sort((a, b) => a.localeCompare(b));
 }
@@ -140,6 +168,10 @@ describe('what a module takes from the git package', () => {
     ["const git = await import('@vibe-validate/git');", ['*']],
     ["import type { GitRunOptions } from '@vibe-validate/git';", ['GitRunOptions']],
     ["import { executeGitCommand } from '@vibe-validate/git-other';", null],
+    ["import { executeGitCommand } from '@vibe-validate/git/dist/run.js';", ['executeGitCommand']],
+    ["import { getGitTreeSnapshot } from '@vibe-validate/git' // the snapshot\nconst x = 1;", ['getGitTreeSnapshot']],
+    ["import { getGitTreeSnapshot } from '@vibe-validate/git'; // the snapshot", ['getGitTreeSnapshot']],
+    ["import '@vibe-validate/git';", ['*']],
   ] as const)('%s', (source, expected) => {
     expect(gitPackageImports(source)).toEqual(expected);
   });
@@ -164,10 +196,16 @@ describe('git calls in shipped packages', () => {
     expect(sources.get(file)).toContain(GIT_COUNT);
   });
 
-  it('holds each non-spawning module to exactly its listed names, none that starts git', () => {
-    for (const [file, names] of Object.entries(NON_SPAWNING_IMPORTERS)) {
-      expect(importers.get(file), file).toEqual([...names].sort((a, b) => a.localeCompare(b)));
-      expect(maySpawn(names), file).toBe(false);
-    }
+  it('lists exactly the importers that may start git as spawn sites, both ways', () => {
+    const spawning = [...importers].filter(([, names]) => maySpawn(names)).map(([file]) => file);
+    expect(spawning.toSorted((a, b) => a.localeCompare(b))).toEqual(GIT_SPAWN_SITES.toSorted((a, b) => a.localeCompare(b)));
+  });
+
+  it('lists exactly the importers that cannot start git, each with exactly its names, both ways', () => {
+    const found = Object.fromEntries([...importers].filter(([, names]) => !maySpawn(names)));
+    const listed = Object.fromEntries(
+      Object.entries(NON_SPAWNING_IMPORTERS).map(([file, names]) => [file, [...names].sort((a, b) => a.localeCompare(b))]),
+    );
+    expect(found).toEqual(listed);
   });
 });
