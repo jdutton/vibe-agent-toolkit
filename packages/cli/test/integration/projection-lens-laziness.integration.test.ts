@@ -111,11 +111,10 @@ describe('lens evaluation is driven by what the run declares', () => {
     const outcome = await runDeclaring(root, NAMES_NOTHING);
 
     expect(outcome.lensesEvaluated).toStrictEqual([]);
-    // 🪤 NOT `toBe(0)`. The span brackets an empty loop, so `performance.now()`
-    // still returns a few hundred NANOseconds of its own — pinning zero makes
-    // the case flaky on the clock rather than sensitive to the behaviour. The
-    // empty `lensesEvaluated` above is the real tell; this bounds the cost.
-    expect(outcome.lensMs).toBeLessThan(1);
+    // Exactly zero, not a wall-clock bound: a run that names no lens reports no
+    // lens cost by construction. A bound such as `< 1` ms failed at 2.97 on a
+    // loaded runner, because it timed an empty loop that a GC pause can stretch.
+    expect(outcome.lensMs).toBe(0);
     // The positive control on the two assertions above — the run still
     // answered. `toEqual`, not `toStrictEqual`: the backend returns
     // null-prototype row objects.

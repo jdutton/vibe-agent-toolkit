@@ -51,6 +51,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
 
 import { RESOURCES_QUERY_REPORT_SCHEMA } from '../../src/commands/resources/query-schema.js';
+import { formatDurationSecs } from '../../src/utils/duration.js';
 
 import {
   cleanupTestTempDir,
@@ -464,10 +465,18 @@ describe('vat resources query', () => {
     // the assertion a `Date.now()` regression fails. The upper bound catches the
     // other direction — a field wired to the wrong term cannot be a subset of
     // the run that contains it.
+    //
+    // 🪤 The bound is the run's duration put through the SAME rounding the field
+    // gets. `populationSecs` is rounded to three significant figures and
+    // `durationMs` is not, so a population of 10.05 s or more inside a 10.093 s
+    // run publishes 10.1 and exceeds the raw total. Rounding is monotonic, so a
+    // population inside its run can never round above the run's rounded total.
     for (const run of [first, second]) {
       expect(typeof run.data['populationSecs']).toBe('number');
       expect(run.data['populationSecs']).toBeGreaterThan(0);
-      expect(run.data['populationSecs']).toBeLessThanOrEqual(durationSecsOf(run.doc));
+      expect(run.data['populationSecs']).toBeLessThanOrEqual(
+        formatDurationSecs(run.doc['durationMs'] as number),
+      );
     }
   });
 
