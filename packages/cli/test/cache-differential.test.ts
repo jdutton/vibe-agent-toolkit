@@ -11,6 +11,7 @@ import { groupOf, UNGROUPED } from './helpers/absence-causes.js';
 import {
   DECLARED_EMPTY,
   DUMPED_RELATIONS,
+  expectNoDivergenceAndNoRefusal,
   expectSeed,
   HOLE_MOVED_COLUMNS,
   normalizeDocument,
@@ -159,6 +160,7 @@ function holeResult(measuredBlob: string): DifferentialResult {
 describe('a documented hole', () => {
   const seed: I0Seed = {
     name: 'hole',
+    needs: null,
     arms: ['storeOff', 'warmSameHistory'],
     verbs: ['query'],
     expect: { documentsHole: { arm: 'warmSameHistory', closedBy: 'the stat memo' } },
@@ -171,5 +173,53 @@ describe('a documented hole', () => {
 
   it('reds when the warm run serves blob facts its prime never derived', () => {
     expect(() => expectSeed(seed, holeResult('neither-blob'))).toThrow();
+  });
+});
+
+/** A store-off-only result: the reference arm's dump, and one validate report. */
+function storeOffResult(dump: Record<string, unknown>, report: Record<string, unknown>): DifferentialResult {
+  const run = (verb: 'query' | 'validate', document: Record<string, unknown>) =>
+    ({ label: 'storeOff:measured', verb, status: 0, stdout: '', stderr: '', document, charged: [] }) as const;
+  const measured = { query: run('query', dump), validate: run('validate', report) };
+  return {
+    arms: ['storeOff'],
+    verbs: ['validate', 'query'],
+    measured: { storeOff: measured, cold: {}, warmSameHistory: {} },
+    runs: { 'storeOff:measured': measured },
+    rows: VERBS,
+  };
+}
+
+describe('a refusal seed', () => {
+  const seed: I0Seed = {
+    name: 'limit',
+    needs: null,
+    arms: ['storeOff'],
+    verbs: ['validate', 'query'],
+    expect: { refuses: { cause: BLOB_PARSE_LIMIT_EXCEEDED, perVerb: { validate: 1, query: 1 } } },
+    consumed: { runs: [], check: () => undefined },
+  };
+  const dump = dumpOf([['blob_conditions', { code: BLOB_PARSE_LIMIT_EXCEEDED }]]);
+
+  it('holds when every verb refuses under a code its cause surfaces', () => {
+    expect(() => expectSeed(seed, storeOffResult(dump, { status: 'success', findings: [{ code: 'RESOURCE_PARSE_LIMIT_EXCEEDED' }] }))).not.toThrow();
+  });
+
+  it('reds when a verb refuses under a code of the same group that its cause does not surface', () => {
+    const relabelled = { status: 'success', findings: [{ code: 'RESOURCE_UNREADABLE' }] };
+    expect(() => expectSeed(seed, storeOffResult(dump, relabelled))).toThrow(/does not surface/);
+  });
+});
+
+describe('the unseeded gate', () => {
+  const clean = { status: 'success', findings: [] };
+
+  it('holds over a dump with no absence', () => {
+    expect(() => expectNoDivergenceAndNoRefusal(storeOffResult(dumpOf([]), clean))).not.toThrow();
+  });
+
+  it('reds on a blob its sniffer called not text, though that code is exempt from the census', () => {
+    const sniffed = dumpOf([['blob_conditions', { code: BLOB_NOT_TEXT }]]);
+    expect(() => expectNoDivergenceAndNoRefusal(storeOffResult(sniffed, clean))).toThrow(/BLOB_NOT_TEXT/);
   });
 });

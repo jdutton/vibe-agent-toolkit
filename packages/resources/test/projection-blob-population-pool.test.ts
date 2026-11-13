@@ -494,19 +494,20 @@ describe('a real parse-pool rejection', () => {
   it('is a per-run worker death carrying its cause, and is named by the population warning', async () => {
     await writeFile(safePath.join(suite.tempDir, 'dies.md'), '# DIE\n', 'utf-8');
     __setParseWorkerEntryForTest(await dyingEntry("request.content.startsWith('# DIE')"));
+    let projection: Projection;
     try {
-      const projection = (await populateOnOneThread()) as Projection;
-
-      expect(conditionsWithCode(projection, BLOB_PARSE_FAILED)).toHaveLength(0);
-      const died = conditionsWithCode(projection, BLOB_PARSE_WORKER_DIED);
-      expect(died).toHaveLength(1);
-      // The absence-cause member this test seeds (the CLI's absence-seeds.ts names it).
-      expect(expectAbsenceCause(projection, { code: BLOB_PARSE_WORKER_DIED })).toHaveLength(1);
-      expect(died[0]?.message).toContain(CODE);
-      expect(describeBlobRefusals(projection)).toContain('parse worker died');
+      projection = (await populateOnOneThread()) as Projection;
     } finally {
       __setParseWorkerEntryForTest(null);
     }
+
+    expect(conditionsWithCode(projection, BLOB_PARSE_FAILED)).toHaveLength(0);
+    const died = conditionsWithCode(projection, BLOB_PARSE_WORKER_DIED);
+    expect(died).toHaveLength(1);
+    // The absence-cause member this test seeds (the CLI's absence-seeds.ts names it).
+    expect(expectAbsenceCause(projection, { code: BLOB_PARSE_WORKER_DIED })).toHaveLength(1);
+    expect(died[0]?.message).toContain(CODE);
+    expect(describeBlobRefusals(projection)).toContain('parse worker died');
   });
 
   it('is a broken install, thrown and never a row, when every thread dies on every document', async () => {

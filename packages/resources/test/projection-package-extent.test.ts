@@ -251,8 +251,7 @@ describe('PackageExtentContributor — a package it could not locate', () => {
     // The package-level row names the package it could not locate; the subpath-level one names none.
     expect(found.conditions[0]?.resourceId).toBe(found.resources[0]?.resourceId);
     // The absence-cause member this test seeds (the CLI's absence-seeds.ts names it).
-    const seeded = expectAbsenceCause(absenceRowsOf(contribution), { code: PACKAGE_SUBPATH_NOT_EXPORTED, extentKind: 'package', unlocatedPackage: true });
-    expect(seeded).toHaveLength(1);
+    expect(expectAbsenceCause(absenceRowsOf(contribution), { code: PACKAGE_SUBPATH_NOT_EXPORTED, extentKind: 'package', resourceIdPresent: true })).toHaveLength(1);
   });
 
   it('records a dependency whose resolution failed for a reason that is neither absence nor an exclusion', async () => {
@@ -265,8 +264,7 @@ describe('PackageExtentContributor — a package it could not locate', () => {
     expect(found.realizations).toEqual([]);
     expect(found.conditions.map((row) => row.code)).toEqual([PACKAGE_RESOLUTION_FAILED]);
     // The absence-cause member this test seeds (the CLI's absence-seeds.ts names it).
-    const seeded = expectAbsenceCause(absenceRowsOf(contribution), { code: PACKAGE_RESOLUTION_FAILED, extentKind: 'package' });
-    expect(seeded).toHaveLength(1);
+    expect(expectAbsenceCause(absenceRowsOf(contribution), { code: PACKAGE_RESOLUTION_FAILED, extentKind: 'package' })).toHaveLength(1);
   });
 });
 

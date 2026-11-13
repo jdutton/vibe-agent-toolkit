@@ -8,8 +8,12 @@
  *   naming anything else reds (test files are not typechecked, so the member
  *   type on a seed is documentation, and this is the check that fires).
  * - Each system seed file is exactly its template, so a seed cannot be deleted
- *   or skipped in the file; each lower-tier seed's named test exists, runs, and
- *   calls `expectAbsenceCause` on rows it did not write by hand.
+ *   or skipped in the file; a seed is skipped only on a host that lacks its
+ *   declared need.
+ * - Each lower-tier seed's named test exists, runs, and calls
+ *   `expectAbsenceCause` on rows it did not write by hand, with the member's
+ *   own signature; and every `expectAbsenceCause` call outside `utils` and the
+ *   harness is one of those seeds.
  */
 
 import { readFileSync } from 'node:fs';
@@ -18,8 +22,8 @@ import { fileURLToPath } from 'node:url';
 import * as agentSkills from '@vibe-agent-toolkit/agent-skills';
 import * as claudeMarketplace from '@vibe-agent-toolkit/claude-marketplace';
 import * as resources from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
-import ts from 'typescript';
+import { safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -28,11 +32,21 @@ import {
   CONTENT_STATE_KEYS,
   groupOf,
   memberEntry,
+  memberRowCounts,
   siblingsOf,
   surfacedCodesOf,
-  type AbsenceMember,
 } from './helpers/absence-causes.js';
-import { causeOf, LOWER_TIER_SEEDS, seedFilePath, seedFileText, SYSTEM_SEEDS, type SeedFileKey } from './helpers/absence-seeds.js';
+import {
+  causeOf,
+  LOWER_TIER_SEEDS,
+  namesPath,
+  seedFilePath,
+  seedFileText,
+  SYSTEM_SEEDS,
+  unplantableHere,
+  type SeedFileKey,
+} from './helpers/absence-seeds.js';
+import { judgeLowerTierTest, lowerTierCallSites } from './helpers/lower-tier-finder.js';
 
 const REPO_ROOT = safePath.resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 
@@ -83,12 +97,34 @@ describe('the enumeration covers the static domain', () => {
   });
 });
 
+describe('a declared refusal label is classified by provenance, never by value', () => {
+  const FILESYSTEM = 'ctx-filesystem';
+  const rows = {
+    blobConditions: [],
+    resourceRealizations: [],
+    realizationConditions: [{ code: agentSkills.SKILL_REFUSED_GITIGNORED, extentId: FILESYSTEM, resourceId: null }],
+    resolutionContexts: [{ contextId: FILESYSTEM, kind: 'filesystem' }],
+  };
+
+  it('throws on a refusal-label code its own extent did not declare', () => {
+    expect(() => memberRowCounts(rows, new Map())).toThrow(/declared refusal label/);
+  });
+
+  it('exempts it when its own extent declared the label', () => {
+    expect(memberRowCounts(rows, new Map([[FILESYSTEM, new Set([agentSkills.SKILL_REFUSED_GITIGNORED])]]))).toEqual({});
+  });
+});
+
 describe('surfaced codes, siblings and groups, asked of production', () => {
   it('surfaces a blob member through the not-admitted contract, and a condition member under its own code', () => {
     expect(surfacedCodesOf(resources.BLOB_PARSE_LIMIT_EXCEEDED)).toEqual(['RESOURCE_PARSE_LIMIT_EXCEEDED']);
     expect(surfacedCodesOf(resources.BLOB_UNREADABLE)).toEqual(['RESOURCE_UNREADABLE']);
     expect(surfacedCodesOf('contentState:oversize')).toEqual(['RESOURCE_PARSE_LIMIT_EXCEEDED', 'RESOURCE_UNREADABLE']);
     expect(surfacedCodesOf(resources.EXTENT_DIRECTORY_UNLISTABLE)).toEqual([resources.EXTENT_DIRECTORY_UNLISTABLE]);
+  });
+
+  it('surfaces a condition member under every code a built-in check reports for it too', () => {
+    expect(surfacedCodesOf(resources.EXTENT_SYMLINK_NOT_REALIZED)).toEqual(['CLAUDE_RULE_LINK_UNCHECKED', resources.EXTENT_SYMLINK_NOT_REALIZED]);
   });
 
   it('derives the siblings a seed must show none of from overlapping surfaced codes', () => {
@@ -106,7 +142,8 @@ describe('surfaced codes, siblings and groups, asked of production', () => {
 });
 
 describe('members and seeds, both ways', () => {
-  const systemCauses = Object.values(SYSTEM_SEEDS).flat().map((seed) => causeOf(seed));
+  const systemSeeds = Object.values(SYSTEM_SEEDS).flat();
+  const systemCauses = systemSeeds.map((seed) => causeOf(seed));
 
   it('seeds every system-tier member with a system seed, and nothing else', () => {
     expect(systemCauses.filter((cause) => cause === undefined)).toEqual([]);
@@ -123,118 +160,94 @@ describe('members and seeds, both ways', () => {
   it.each(Object.keys(SYSTEM_SEEDS) as SeedFileKey[])('holds the %s seed file to its template', (key) => {
     expect(readFileSync(safePath.join(REPO_ROOT, seedFilePath(key)), 'utf-8')).toBe(seedFileText(key));
   });
-});
 
-// ── Finding a lower-tier seed's test ────────────────────────────────────────
-
-/** The `it`/`test` call forms a manifest row may name. */
-const TEST_FUNCTIONS = new Set(['it', 'test']);
-const TEST_MODIFIERS = new Set(['each', 'skipIf', 'runIf']);
-const SKIPPING_DESCRIBES = new Set(['skip', 'skipIf']);
-
-/** Whether `callee` is `it`/`test`, or a modifier form called first (`it.each(...)`). */
-function isTestCallee(callee: ts.Expression): boolean {
-  if (ts.isIdentifier(callee)) return TEST_FUNCTIONS.has(callee.text);
-  if (!ts.isCallExpression(callee) || !ts.isPropertyAccessExpression(callee.expression)) return false;
-  const { expression, name } = callee.expression;
-  return ts.isIdentifier(expression) && TEST_FUNCTIONS.has(expression.text) && TEST_MODIFIERS.has(name.text);
-}
-
-/** Whether a call is `describe.skip(...)` or `describe.skipIf(...)(...)`. */
-function isSkippingDescribe(call: ts.CallExpression): boolean {
-  const access = ts.isCallExpression(call.expression) ? call.expression.expression : call.expression;
-  return ts.isPropertyAccessExpression(access)
-    && ts.isIdentifier(access.expression)
-    && access.expression.text === 'describe'
-    && SKIPPING_DESCRIBES.has(access.name.text);
-}
-
-/** Whether any call enclosing a node is a skipping `describe`. */
-function isUnderSkippingDescribe(node: ts.Node): boolean {
-  for (let parent: ts.Node = node.parent; !ts.isSourceFile(parent); parent = parent.parent) {
-    if (ts.isCallExpression(parent) && isSkippingDescribe(parent)) return true;
-  }
-  return false;
-}
-
-/** Every call in a subtree. */
-function callsIn(node: ts.Node): ts.CallExpression[] {
-  const found: ts.CallExpression[] = [];
-  const visit = (child: ts.Node): void => {
-    if (ts.isCallExpression(child)) found.push(child);
-    ts.forEachChild(child, visit);
-  };
-  visit(node);
-  return found;
-}
-
-/** What a lower-tier seed's named test was found to hold. */
-interface FoundTest {
-  readonly found: number;
-  /** The text of each `expectAbsenceCause` call's arguments whose first argument is not a literal. */
-  readonly calls: readonly string[];
-  /** Whether a call's first argument is a literal (rows written by hand). */
-  readonly literalRows: boolean;
-  readonly skippedByDescribe: boolean;
-}
-
-/** A literal the rows argument must never be: rows a test wrote are no evidence. */
-function isLiteral(node: ts.Expression): boolean {
-  return ts.isObjectLiteralExpression(node) || ts.isArrayLiteralExpression(node) || ts.isLiteralExpression(node)
-    || node.kind === ts.SyntaxKind.NullKeyword || node.kind === ts.SyntaxKind.TrueKeyword || node.kind === ts.SyntaxKind.FalseKeyword;
-}
-
-/**
- * Find the test a manifest row names, and what its body calls.
- *
- * @param file - Repository-relative test file
- * @param testName - The title as written
- * @returns What was found
- */
-function findTest(file: string, testName: string): FoundTest {
-  const source = ts.createSourceFile(file, readFileSync(safePath.join(REPO_ROOT, file), 'utf-8'), ts.ScriptTarget.Latest, true);
-  const tests = callsIn(source).filter((call) => {
-    const [title] = call.arguments;
-    return isTestCallee(call.expression) && title !== undefined && ts.isStringLiteralLike(title) && title.text === testName;
+  it('declares every system seed\'s host need, and skips exactly the seeds whose need this host lacks', () => {
+    expect(systemSeeds.filter((seed) => !Object.hasOwn(seed, 'needs')).map((seed) => seed.name)).toEqual([]);
+    const lacked = new Set<string>([
+      ...(CANNOT_DENY_READS ? ['denyReads'] : []),
+      ...(symlinkCapability() === null ? ['symlinks'] : []),
+    ]);
+    const skipped = systemSeeds.filter((seed) => unplantableHere(seed)).map((seed) => seed.name);
+    expect(skipped).toEqual(systemSeeds.filter((seed) => seed.needs !== null && lacked.has(seed.needs)).map((seed) => seed.name));
+    if (process.env['CI'] !== undefined && process.platform === 'linux') {
+      expect(skipped, 'no seed may be skipped on Linux CI').toEqual([]);
+    }
   });
-  const [test] = tests;
-  if (test === undefined) return { found: 0, calls: [], literalRows: false, skippedByDescribe: false };
-  const absenceCalls = callsIn(test).filter((call) => ts.isIdentifier(call.expression) && call.expression.text === 'expectAbsenceCause');
-  return {
-    found: tests.length,
-    calls: absenceCalls.filter((call) => call.arguments[0] !== undefined && !isLiteral(call.arguments[0])).map((call) => call.arguments.map((argument) => argument.getText(source)).join(', ')),
-    literalRows: absenceCalls.some((call) => call.arguments[0] === undefined || isLiteral(call.arguments[0])),
-    skippedByDescribe: isUnderSkippingDescribe(test),
-  };
-}
 
-/** The text a call's signature argument must name: the member's code constant, or its state. */
-function signatureToken(member: AbsenceMember): string {
-  const { signature } = memberEntry(member);
-  return 'contentState' in signature ? `'${signature.contentState}'` : signature.code;
-}
+  it('judges a seed\'s runs by its path as a whole quoted value, never a substring', () => {
+    expect(namesPath('{"path":"locked","code":"X"}', 'locked')).toBe(true);
+    expect(namesPath('location: "docs/linked.md"', 'docs/linked.md')).toBe(true);
+    expect(namesPath(String.raw`{"row":"{\"path\":\"locked\"}"}`, 'locked')).toBe(true);
+    expect(namesPath(String.raw`{"row":"{\"path\":\"locked/hidden.md\"}"}`, 'locked')).toBe(false);
+    expect(namesPath('{"path":"locked/hidden.md"}', 'locked')).toBe(false);
+    expect(namesPath('{"path":"unlocked"}', 'locked')).toBe(false);
+    expect(namesPath('the locked directory', 'locked')).toBe(false);
+  });
+});
 
 describe('each lower-tier seed names a test that plants its member', () => {
   it.each(LOWER_TIER_SEEDS.map((seed) => [seed.member, seed] as const))('%s', (member, seed) => {
-    const found = findTest(seed.file, seed.testName);
-    expect(found.found, `exactly one test titled '${seed.testName}' in ${seed.file}`).toBe(1);
-    expect(found.skippedByDescribe, 'inside describe.skip or describe.skipIf').toBe(false);
-    expect(found.literalRows, 'expectAbsenceCause over rows the test wrote by hand').toBe(false);
-    expect(found.calls.some((call) => call.includes(signatureToken(member))), `an expectAbsenceCause call naming ${signatureToken(member)}: ${found.calls.join(' / ')}`).toBe(true);
+    const source = readFileSync(safePath.join(REPO_ROOT, seed.file), 'utf-8');
+    expect(judgeLowerTierTest(source, seed.file, seed.testName, member)).toEqual([]);
   });
 
-  it('finds a modifier form, and reds a describe.skip around it (the finder\'s own positive controls)', () => {
-    const fixture = [
-      "describe.skip('off', () => { it.each([1])('inside', () => { expectAbsenceCause(rows, { code: X }); }); });",
-      "it.skipIf(cond)('outside', () => { expectAbsenceCause({ blobConditions: [] }, { code: X }); });",
-    ].join('\n');
-    const source = ts.createSourceFile('fixture.ts', fixture, ts.ScriptTarget.Latest, true);
-    const titled = callsIn(source).filter((call) => isTestCallee(call.expression)).map((call) => (call.arguments[0] as ts.StringLiteral).text);
-    expect(titled).toEqual(['inside', 'outside']);
-    const inside = callsIn(source).find((call) => isTestCallee(call.expression));
-    expect(inside).toBeDefined();
-    expect(isUnderSkippingDescribe(inside as ts.Node)).toBe(true);
-    const outside = callsIn(source).filter((call) => ts.isIdentifier(call.expression) && call.expression.text === 'expectAbsenceCause');
-    expect(outside.map((call) => isLiteral(call.arguments[0] as ts.Expression))).toEqual([false, true]);
+  it('maps every expectAbsenceCause call outside utils and the harness to exactly one lower-tier seed', () => {
+    const named = LOWER_TIER_SEEDS.map((seed) => `${seed.file} :: ${seed.testName}`);
+    const sites = lowerTierCallSites(REPO_ROOT).map((site) => `${site.file} :: ${site.test ?? '(no enclosing test)'}`);
+    expect(sorted(sites)).toEqual(sorted(named));
+    expect(sites.filter((site, index) => sites.indexOf(site) !== index), 'a seed\'s test with more than one call').toEqual([]);
+  });
+});
+
+describe('the lower-tier finder\'s own controls', () => {
+  const UNREADABLE = resources.BLOB_UNREADABLE;
+  const SIGNATURE = '{ code: BLOB_UNREADABLE }';
+  /** One fixture file holding one test titled `t`. */
+  const judge = (body: string, member: (typeof ABSENCE_MEMBER_KEYS)[number] = UNREADABLE): string[] =>
+    judgeLowerTierTest(body, 'fixture.ts', 't', member);
+
+  it.each([
+    ['a plain statement', `it('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); });`],
+    ['the direct argument of expect', `it('t', async () => { expect(expectAbsenceCause(projection, ${SIGNATURE})).toHaveLength(1); });`],
+    ['an it.each title', `it.each([1])('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); });`],
+    ['a host-gated skipIf', `it.skipIf(CANNOT_DENY_READS)('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); });`],
+    ['a host-gated runIf', `test.runIf(PERMISSIONS_ENFORCED)('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); });`],
+    ['rows from a helper call', `it('t', () => { const rows = rowsOf(contribution); expectAbsenceCause(rows, ${SIGNATURE}); });`],
+  ])('accepts %s', (_label, body) => {
+    expect(judge(body)).toEqual([]);
+  });
+
+  it.each([
+    ['no test of that title', `it('other', () => { expectAbsenceCause(projection, ${SIGNATURE}); });`, /exactly one test/],
+    ['two tests of that title', `it('t', () => {}); it('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); });`, /exactly one test/],
+    ['a call inside try', `it('t', () => { try { expectAbsenceCause(projection, ${SIGNATURE}); } finally {} });`, /no counted/],
+    ['a call inside catch', `it('t', () => { try { run(); } catch { expectAbsenceCause(projection, ${SIGNATURE}); } });`, /no counted/],
+    ['a call expected to throw', `it('t', () => { expect(() => expectAbsenceCause(projection, ${SIGNATURE})).toThrow(); });`, /no counted/],
+    ['a call in a nested function', `it('t', () => { const check = () => expectAbsenceCause(projection, ${SIGNATURE}); check(); });`, /no counted/],
+    ['rows written inline', `it('t', () => { expectAbsenceCause({ blobConditions: [] }, ${SIGNATURE}); });`, /by hand/],
+    ['rows bound to an object literal', `it('t', () => { const rows = { blobConditions: [] } as AbsenceRows; expectAbsenceCause(rows, ${SIGNATURE}); });`, /by hand/],
+    ['a signature that is no literal', 'it(\'t\', () => { expectAbsenceCause(projection, signature); });', /signature/],
+    ['another member\'s code', 'it(\'t\', () => { expectAbsenceCause(projection, { code: BLOB_CONTENT_CHANGED }); });', /signature/],
+    ['a local constant spoofing the code', `const BLOB_UNREADABLE = 'BLOB_PARSE_FAILED'; it('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); });`, /signature/],
+    ['it.skip', `it.skip('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); });`, /skipped/],
+    ['it.todo', `it.todo('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); });`, /skipped/],
+    ['skipIf on no host constant', `it.skipIf(flaky)('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); });`, /skipped/],
+    ['runIf on no host constant', `it.runIf(false)('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); });`, /skipped/],
+    ['describe.skip', `describe.skip('d', () => { it('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); }); });`, /skipped/],
+    ['describe.skipIf', `describe.skipIf(CANNOT_DENY_READS)('d', () => { it('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); }); });`, /skipped/],
+    ['describe.runIf', `describe.runIf(PERMISSIONS_ENFORCED)('d', () => { it('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); }); });`, /skipped/],
+    ['describe.todo', `describe.todo('d', () => { it('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); }); });`, /skipped/],
+    ['a skip deep in a describe chain', `describe.concurrent.skip('d', () => { it('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); }); });`, /skipped/],
+  ])('reds %s', (_label, body, problem) => {
+    expect(judge(body).join('\n')).toMatch(problem);
+  });
+
+  it('reds a signature missing a field of the member\'s, or stating one with another value', () => {
+    const member = resources.PACKAGE_SUBPATH_NOT_EXPORTED;
+    const call = (signature: string): string => `it('t', () => { expectAbsenceCause(rowsOf(c), ${signature}); });`;
+    expect(judge(call("{ code: PACKAGE_SUBPATH_NOT_EXPORTED, extentKind: 'package', resourceIdPresent: true }"), member)).toEqual([]);
+    expect(judge(call("{ code: PACKAGE_SUBPATH_NOT_EXPORTED, extentKind: 'package' }"), member).join('\n')).toMatch(/signature/);
+    expect(judge(call("{ code: PACKAGE_SUBPATH_NOT_EXPORTED, extentKind: 'package', resourceIdPresent: false }"), member).join('\n')).toMatch(/signature/);
+    expect(judge(call("{ code: PACKAGE_SUBPATH_NOT_EXPORTED, extentKind: 'filesystem', resourceIdPresent: true }"), member).join('\n')).toMatch(/signature/);
   });
 });

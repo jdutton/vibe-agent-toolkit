@@ -50,6 +50,7 @@ import {
   BLOB_PARSE_WORKER_DIED,
   BLOB_REFUSAL_CONDITION_CODES,
   BLOB_UNREADABLE,
+  BUILTIN_CHECKS,
   CLOSURE_DEPTH_EXCEEDED,
   CLOSURE_REFERENCE_OUTSIDE_ROOT,
   CLOSURE_REFERENCE_UNRESOLVED,
@@ -165,7 +166,8 @@ export const ABSENCE_MEMBERS = {
     scope: 'A package or subpath whose resolution failed for a reason that is neither absence nor an exports exclusion.',
   },
   [PACKAGE_SUBPATH_NOT_EXPORTED]: {
-    signature: { code: PACKAGE_SUBPATH_NOT_EXPORTED, extentKind: PACKAGE_KIND, unlocatedPackage: true },
+    // The package-level row names the package it could not locate; the subpath-level one names none.
+    signature: { code: PACKAGE_SUBPATH_NOT_EXPORTED, extentKind: PACKAGE_KIND, resourceIdPresent: true },
     tier: 'lower',
     scope: 'The package-level row only: an exports map that hides the package\'s own manifest, so the package was not located.',
     exemptRemainder: 'The subpath-level row is a declared exclusion: the located package\'s exports map hides that one subpath.',
@@ -259,6 +261,27 @@ function probeRealization(fields: Pick<ResourceRealizationRow, 'contentKey' | 'c
   return { path: 'probe', ...fields } as ResourceRealizationRow;
 }
 
+/**
+ * Paths a realization-condition probe is placed at: one under no rules
+ * directory, and each shape a built-in check reads a rules path as.
+ */
+const CONDITION_PROBE_PATHS: readonly string[] = ['docs/probe.md', '.claude', '.claude/rules', '.claude/rules/probe.md'];
+
+/**
+ * The codes a realization condition surfaces under: its own (the registry
+ * reports every population condition under the row's own code, and the
+ * member's system seed proves it), and every code a built-in check reports when
+ * the condition sits at a probe path.
+ */
+function conditionFindingCodesOf(code: string): string[] {
+  const codes = [code];
+  for (const path of CONDITION_PROBE_PATHS) {
+    const input = { claudeRulePatterns: [], resourceRealizations: [], resourceTags: [], blobs: [], realizationConditions: [{ code, path }] };
+    for (const check of BUILTIN_CHECKS) codes.push(...check.run(input).map((issue) => issue.code));
+  }
+  return codes;
+}
+
 /** The finding codes the not-admitted contract reports for one projection's worth of probe rows. */
 function findingCodesOf(rows: Parameters<typeof notAdmittedRealizations>[0]): string[] {
   const log = notAdmittedRealizations(rows, PROBE_ROOT);
@@ -268,9 +291,9 @@ function findingCodesOf(rows: Parameters<typeof notAdmittedRealizations>[0]): st
 /**
  * The finding codes a member surfaces under, asked of production: a blob code
  * through `notAdmittedRealizations` over a keyed realization of a blob carrying
- * it, a state through a realization in that state under each probe mime. A
- * `realization_conditions` member surfaces under its own code, and its seed
- * proves that.
+ * it, a state through a realization in that state under each probe mime, and a
+ * `realization_conditions` member under its own code and every built-in
+ * check's code for it.
  *
  * @param member - The member
  * @returns Its surfaced codes, sorted and unique
@@ -289,7 +312,7 @@ export function surfacedCodesOf(member: AbsenceMember): readonly string[] {
       resourceRealizations: [probeRealization({ contentKey: PROBE_CONTENT_KEY, contentState: 'keyed', mime: null })],
     });
   } else {
-    codes = [signature.code];
+    codes = conditionFindingCodesOf(signature.code);
   }
   return [...new Set(codes)].sort((left, right) => left.localeCompare(right));
 }
@@ -423,6 +446,10 @@ function classifyAbsence(observation: AbsenceObservation, labels: DeclaredLabels
   }
   const key = domainKeyOf(observation);
   const exempt = ABSENCE_EXEMPTIONS[key] ?? REMAINDER_OF.get(key);
+  if (exempt === REFUSAL_LABEL && observation.table === 'realization_conditions') {
+    // By provenance, never by value: a label code its own extent did not declare is no declared refusal.
+    throw new Error(`realization_conditions '${key}' is a declared refusal label, but extent '${observation.extentId}' declares no such label`);
+  }
   if (exempt !== undefined) return { exempt };
   throw new Error(`${observation.table} '${key}' is neither an absence-cause member nor exempt: classify it in absence-causes.ts`);
 }

@@ -60,6 +60,11 @@ async function realize(
   });
 }
 
+/** One realization this file produced, as the tables an absence cause is observed in. */
+function realizedRows(row: ResourceRealizationRow): AbsenceRows {
+  return { blobConditions: [], resourceRealizations: [row], realizationConditions: [], resolutionContexts: [] };
+}
+
 /** The realization of the nested fixture file, which most cases ask about. */
 async function nestedRow(): Promise<ResourceRealizationRow> {
   return realize(NESTED_RELATIVE);
@@ -218,8 +223,7 @@ describe('collectRealization', () => {
     expect(row.contentKey).toBeNull();
     expect(row.contentState).toBe('unreadable');
     // The absence-cause member this test seeds (the CLI's absence-seeds.ts names it).
-    const realized: AbsenceRows = { blobConditions: [], resourceRealizations: [row], realizationConditions: [], resolutionContexts: [] };
-    expect(expectAbsenceCause(realized, { contentState: 'unreadable' })).toHaveLength(1);
+    expect(expectAbsenceCause(realizedRows(row), { contentState: 'unreadable' })).toHaveLength(1);
   });
 
   it('propagates a read that threw WITHOUT an errno — a bug is not an unreadable file', async () => {

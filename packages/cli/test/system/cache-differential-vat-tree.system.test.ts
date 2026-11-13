@@ -91,6 +91,7 @@ const MAX_BUFFER = 16 * 1024 * 1024;
 
 /** No plant: two arms over a fixed tree, the one query, diverging nowhere. */
 const VAT_TREE: I0Seed = {
+  needs: null,
   name: 'vatTree',
   arms: ['storeOff', 'cold'],
   verbs: ['query'],

@@ -37,15 +37,15 @@ function rows(): AbsenceRows {
 }
 
 describe('absenceObservations', () => {
-  it('reads one observation per row, each condition carrying its extent kind and whether it is an unlocated package', () => {
+  it('reads one observation per row, each condition carrying its extent kind and whether it names a resource', () => {
     expect(absenceObservations(rows())).toEqual([
       { table: 'blob_conditions', code: 'BLOB_UNREADABLE' },
       { table: 'resource_realizations', contentState: 'keyed' },
       { table: 'resource_realizations', contentState: 'oversize' },
-      { table: 'realization_conditions', code: NOT_EXPORTED, extentId: PACKAGE_EXTENT, extentKind: 'package', unlocatedPackage: true },
-      { table: 'realization_conditions', code: NOT_EXPORTED, extentId: PACKAGE_EXTENT, extentKind: 'package', unlocatedPackage: false },
-      { table: 'realization_conditions', code: 'EXTENT_DIRECTORY_UNLISTABLE', extentId: FILESYSTEM_EXTENT, extentKind: 'filesystem', unlocatedPackage: false },
-      { table: 'realization_conditions', code: 'ORPHAN', extentId: 'ctx-nowhere', extentKind: null, unlocatedPackage: false },
+      { table: 'realization_conditions', code: NOT_EXPORTED, extentId: PACKAGE_EXTENT, extentKind: 'package', resourceIdPresent: true },
+      { table: 'realization_conditions', code: NOT_EXPORTED, extentId: PACKAGE_EXTENT, extentKind: 'package', resourceIdPresent: false },
+      { table: 'realization_conditions', code: 'EXTENT_DIRECTORY_UNLISTABLE', extentId: FILESYSTEM_EXTENT, extentKind: 'filesystem', resourceIdPresent: true },
+      { table: 'realization_conditions', code: 'ORPHAN', extentId: 'ctx-nowhere', extentKind: null, resourceIdPresent: false },
     ]);
   });
 });
@@ -81,8 +81,14 @@ describe('matchesAbsenceCause', () => {
     expect(matchesAbsenceCause(blob, { code: 'BLOB_UNREADABLE', extentKind: 'filesystem' })).toBe(false);
   });
 
+  it('reads resourceIdPresent as the row\'s shape alone, whatever the extent kind', () => {
+    expect(matchesAbsenceCause(unlistable, { code: 'EXTENT_DIRECTORY_UNLISTABLE', resourceIdPresent: true })).toBe(true);
+    expect(matchesAbsenceCause(orphan, { code: 'ORPHAN', resourceIdPresent: false })).toBe(true);
+    expect(matchesAbsenceCause(orphan, { code: 'ORPHAN', resourceIdPresent: true })).toBe(false);
+  });
+
   it('tells a package-level row from a subpath-level one by shape', () => {
-    const packageLevelSignature = { code: NOT_EXPORTED, extentKind: 'package', unlocatedPackage: true };
+    const packageLevelSignature = { code: NOT_EXPORTED, extentKind: 'package', resourceIdPresent: true };
     expect(matchesAbsenceCause(packageLevel, packageLevelSignature)).toBe(true);
     expect(matchesAbsenceCause(subpathLevel, packageLevelSignature)).toBe(false);
   });
@@ -90,8 +96,8 @@ describe('matchesAbsenceCause', () => {
 
 describe('expectAbsenceCause', () => {
   it('returns the rows carrying the cause, so the caller can assert on them too', () => {
-    expect(expectAbsenceCause(rows(), { code: NOT_EXPORTED, extentKind: 'package', unlocatedPackage: true })).toEqual([
-      { table: 'realization_conditions', code: NOT_EXPORTED, extentId: PACKAGE_EXTENT, extentKind: 'package', unlocatedPackage: true },
+    expect(expectAbsenceCause(rows(), { code: NOT_EXPORTED, extentKind: 'package', resourceIdPresent: true })).toEqual([
+      { table: 'realization_conditions', code: NOT_EXPORTED, extentId: PACKAGE_EXTENT, extentKind: 'package', resourceIdPresent: true },
     ]);
   });
 

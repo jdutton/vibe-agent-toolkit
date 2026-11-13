@@ -33,12 +33,12 @@
  * when it refuses and no member surfaces it.
  */
 
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { devNull } from 'node:os';
 import { pathToFileURL } from 'node:url';
 
-import { allDerivedSpecs, PROJECTION_TABLES, quoteIdentifier } from '@vibe-agent-toolkit/resources';
+import { allDerivedSpecs, BLOB_NOT_TEXT, PROJECTION_TABLES, quoteIdentifier } from '@vibe-agent-toolkit/resources';
 import { FindingSchema, reportSchema } from '@vibe-agent-toolkit/schema';
 import {
   CRAWL_STORE_READ_ID,
@@ -67,6 +67,7 @@ import {
   memberEntry,
   memberRowCounts,
   siblingsOf,
+  surfacedCodesOf,
   type AbsenceMember,
 } from './absence-causes.js';
 import { contributorsCharged, rowsStoredUnder, storeFilesUnder } from './projection-store-probe.js';
@@ -181,14 +182,22 @@ interface AbsenceCensus {
 /** Counts findings into a census by their bucket. */
 class FindingTally {
   private readonly counts: Record<string, number> = {};
+  private readonly refusing: string[] = [];
 
   add(code: string): void {
     const bucket = findingBucket(code);
-    if (bucket !== undefined) this.counts[bucket] = (this.counts[bucket] ?? 0) + 1;
+    if (bucket === undefined) return;
+    this.counts[bucket] = (this.counts[bucket] ?? 0) + 1;
+    this.refusing.push(code);
   }
 
   get findings(): Readonly<Record<string, number>> {
     return { ...this.counts };
+  }
+
+  /** Every refusing code counted, one per finding. */
+  get codes(): readonly string[] {
+    return [...this.refusing];
   }
 }
 
@@ -215,29 +224,34 @@ function absenceRowsOf(document: Record<string, unknown>): ReturnType<typeof abs
   return absenceRowsOfDump((relation) => grouped.get(relation) ?? []);
 }
 
-function reportCensus(document: Record<string, unknown>): AbsenceCensus {
+/** A report envelope's refusals. */
+function reportTally(document: Record<string, unknown>): FindingTally {
   const tally = new FindingTally();
   tallyEnvelope(document, tally);
-  return { rows: {}, findings: tally.findings };
+  return tally;
 }
 
-function queryCensus(document: Record<string, unknown>): AbsenceCensus {
+/** `claude context`'s refusals: every answer's `refused[]`, or the envelope's when it failed. */
+function contextTally(document: Record<string, unknown>): FindingTally {
+  if (document['kind'] !== 'context-answers') return reportTally(document);
   const tally = new FindingTally();
-  tallyEnvelope(document, tally);
-  const { rows, labels } = absenceRowsOf(document);
-  return { rows: memberRowCounts(rows, labels), findings: tally.findings };
-}
-
-function contextCensus(document: Record<string, unknown>): AbsenceCensus {
-  const tally = new FindingTally();
-  if (document['kind'] !== 'context-answers') {
-    tallyEnvelope(document, tally);
-    return { rows: {}, findings: tally.findings };
-  }
   for (const answer of document['answers'] as readonly { refused?: readonly { code: string }[] }[]) {
     for (const refused of answer.refused ?? []) tally.add(refused.code);
   }
-  return { rows: {}, findings: tally.findings };
+  return tally;
+}
+
+function reportCensus(document: Record<string, unknown>): AbsenceCensus {
+  return { rows: {}, findings: reportTally(document).findings };
+}
+
+function queryCensus(document: Record<string, unknown>): AbsenceCensus {
+  const { rows, labels } = absenceRowsOf(document);
+  return { rows: memberRowCounts(rows, labels), findings: reportTally(document).findings };
+}
+
+function contextCensus(document: Record<string, unknown>): AbsenceCensus {
+  return { rows: {}, findings: contextTally(document).findings };
 }
 
 // ── Normalization ───────────────────────────────────────────────────────────
@@ -324,6 +338,8 @@ interface VerbRow {
   readonly schema: z.ZodTypeAny;
   readonly normalize: (document: Record<string, unknown>) => Record<string, unknown>;
   readonly censusOf: (document: Record<string, unknown>) => AbsenceCensus;
+  /** Every refusing code the run reported, one per finding: what a seed holds to its cause's own codes. */
+  readonly refusingCodesOf: (document: Record<string, unknown>) => readonly string[];
 }
 
 /**
@@ -339,6 +355,7 @@ export function queryVerb(sql: string): VerbRow {
     schema: reportShapeFor('resources query').schema,
     normalize: (document) => normalizeDocument('query', document),
     censusOf: queryCensus,
+    refusingCodesOf: (document) => reportTally(document).codes,
   };
 }
 
@@ -350,6 +367,7 @@ export const VERBS: { readonly [Name in VerbName]: VerbRow } = {
     schema: reportShapeFor('resources validate').schema,
     normalize: (document) => normalizeDocument('validate', document),
     censusOf: reportCensus,
+    refusingCodesOf: (document) => reportTally(document).codes,
   },
   check: {
     name: 'check',
@@ -357,6 +375,7 @@ export const VERBS: { readonly [Name in VerbName]: VerbRow } = {
     schema: reportShapeFor('resources check').schema,
     normalize: (document) => normalizeDocument('check', document),
     censusOf: reportCensus,
+    refusingCodesOf: (document) => reportTally(document).codes,
   },
   query: queryVerb(DUMP_SQL),
   context: {
@@ -365,6 +384,7 @@ export const VERBS: { readonly [Name in VerbName]: VerbRow } = {
     schema: CONTEXT_DOCUMENT_SCHEMA,
     normalize: (document) => normalizeDocument('context', document),
     censusOf: contextCensus,
+    refusingCodesOf: (document) => contextTally(document).codes,
   },
 };
 
@@ -579,9 +599,14 @@ type SeedExpectation =
 /** The recorded runs, by label and verb. */
 export type RecordedRuns = Readonly<Partial<Record<RunLabel, Readonly<Partial<Record<VerbName, RunRecord>>>>>>;
 
+/** What a host must be able to do for a seed's plant: deny a read by mode, or create a symbolic link. */
+export type HostNeed = 'denyReads' | 'symlinks';
+
 /** A planted condition and what it must produce. */
 export interface I0Seed {
   readonly name: string;
+  /** What the host must be able to do to plant it; null for a plant every host can make. */
+  readonly needs: HostNeed | null;
   readonly verbs?: readonly VerbName[];
   readonly arms?: readonly ArmName[];
   /** Applied after the fixture is written. */
@@ -591,8 +616,6 @@ export interface I0Seed {
    * corpus can be removed: runs in a `finally` wrapping state A through the measured run.
    */
   readonly restore?: (corpus: string) => void;
-  /** Why this host cannot make the plant, when it cannot; the seed's test is skipped there. */
-  readonly unplantableHere?: string;
   /** After `arm.prepare`, before the measured run. */
   readonly toB?: (arm: ArmName, dirs: ArmDirs, corpus: string, git: Git) => Promise<void>;
   /** A plant outside the corpus (a forged cache entry), after `toB`. */
@@ -918,6 +941,13 @@ export function censusOf(result: DifferentialResult): Record<ArmName, Partial<Re
  * @param result - The recorded runs
  */
 export function expectNoDivergenceAndNoRefusal(result: DifferentialResult): void {
+  // BLOB_NOT_TEXT is exempt from the census (a binary at an untyped path is no absence), but the
+  // gate fixture is all text: a row here is the sniffer calling a text file binary.
+  for (const arm of result.arms) {
+    const dump = result.measured[arm].query;
+    const notText = dump === undefined ? [] : absenceRowsOf(dump.document).rows.blobConditions.filter((row) => row.code === BLOB_NOT_TEXT);
+    expect(notText, `${arm}: a BLOB_NOT_TEXT row over the all-text gate fixture`).toEqual([]);
+  }
   expect(divergences(result)).toEqual([]);
   const zero = Object.fromEntries(result.verbs.map((verb) => [verb, { rows: {}, findings: {} }]));
   const census = censusOf(result);
@@ -965,9 +995,11 @@ function expectDiverges(result: DifferentialResult, expected: { relations: reado
  * 1. the reference arm's dump holds a row of the cause's own signature, before any census;
  * 2. every sibling (a member whose surfaced codes overlap the cause's, derived, never listed) has
  *    zero rows in every arm;
- * 3. the census, exactly: the dump counts the cause's rows and nothing else, and every other verb
+ * 3. every refusing finding of every other verb carries a code the cause itself surfaces under
+ *    (its group alone would admit a sibling's code);
+ * 4. the census, exactly: the dump counts the cause's rows and nothing else, and every other verb
  *    counts only the cause's group, every other group and every ungrouped refusal at zero;
- * 4. no arm diverges from the reference.
+ * 5. no arm diverges from the reference.
  *
  * @param result - The recorded runs
  * @param expected - The cause and each verb's count
@@ -980,6 +1012,14 @@ function expectRefuses(result: DifferentialResult, expected: { cause: AbsenceMem
   for (const arm of result.arms) {
     for (const sibling of siblingsOf(expected.cause)) {
       expect(census[arm].query?.rows[sibling] ?? 0, `${arm}: rows of ${expected.cause}'s sibling ${sibling}`).toBe(0);
+    }
+  }
+  const surfaced = new Set(surfacedCodesOf(expected.cause));
+  for (const arm of result.arms) {
+    for (const verb of result.verbs.filter((name) => name !== 'query')) {
+      const run = result.measured[arm][verb];
+      const foreign = run === undefined ? [] : result.rows[verb].refusingCodesOf(run.document).filter((code) => !surfaced.has(code));
+      expect(foreign, `${arm} ${verb}: refusing findings ${expected.cause} does not surface under`).toEqual([]);
     }
   }
   const wanted = Object.fromEntries(result.verbs.map((verb) => {
@@ -1190,6 +1230,24 @@ export function seedTitle(seed: I0Seed): string {
   return `${seed.name}: ${Object.keys(expectation)[0] ?? ''}`;
 }
 
+/**
+ * Give the owner full access to every directory under `directory` that a plant
+ * left closed (a mode-000 directory), so the tree can be removed whatever
+ * happened to the seed's own restore.
+ *
+ * @param directory - A tree root; absent is nothing to do
+ */
+export function restoreDirectoryModes(directory: string): void {
+  if (!existsSync(directory)) return;
+  const { mode } = lstatSync(directory);
+  if ((mode & 0o700) !== 0o700) chmodSync(directory, mode | 0o700);
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    // A link is not followed: its target is not this tree's to open.
+    if (entry.isSymbolicLink()) continue;
+    if (entry.isDirectory()) restoreDirectoryModes(safePath.join(directory, entry.name));
+  }
+}
+
 /** A seed file's suite: its hooks, and one seed run over a fresh gate fixture and judged. */
 interface SeedSuite {
   readonly setup: () => void;
@@ -1206,14 +1264,18 @@ interface SeedSuite {
  */
 export function seedSuite(testFileUrl: string): SeedSuite {
   const context = createSuiteContext('vat-i0-seed-', testFileUrl);
+  const tempDirs: string[] = [];
   return {
     setup: context.setup,
     cleanup: () => {
+      for (const tempDir of tempDirs) restoreDirectoryModes(tempDir);
       removeCells();
       context.cleanup();
     },
     run: async (seed) => {
-      const subject = gateSubject(safePath.join(context.createTempDir(), 'corpus'));
+      const tempDir = context.createTempDir();
+      tempDirs.push(tempDir);
+      const subject = gateSubject(safePath.join(tempDir, 'corpus'));
       const result = await runDifferential({ binPath: context.binPath, subject }, seed);
       expectSeed(seed, result);
       return result.arms;

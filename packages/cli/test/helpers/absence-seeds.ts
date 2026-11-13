@@ -39,15 +39,29 @@ import { afterAll, beforeAll, expect } from 'vitest';
 import { writeFileTree } from '../system/test-common.js';
 
 import type { AbsenceMember } from './absence-causes.js';
-import { GATE_FIXTURE, seedSuite, seedTitle, type I0Seed, type RecordedRuns } from './cache-differential.js';
+import { GATE_FIXTURE, seedSuite, seedTitle, type HostNeed, type I0Seed, type RecordedRuns } from './cache-differential.js';
 
 // ── System seeds ────────────────────────────────────────────────────────────
 
-/** Every recorded run of every label a seed consumes contains `text` in its stdout. */
-function everyRunNames(text: string): (runs: RecordedRuns) => void {
+/**
+ * Whether a run's output names a path as a whole quoted value (`"locked"`, or
+ * `\"locked\"` inside a dump row that is itself JSON text), never as a
+ * substring of another path (`"locked/hidden.md"`) or of prose.
+ *
+ * @param stdout - The run's output
+ * @param path - The root-relative path
+ * @returns True when the quoted path appears
+ */
+export function namesPath(stdout: string, path: string): boolean {
+  const quoted = JSON.stringify(path);
+  return stdout.includes(quoted) || stdout.includes(JSON.stringify(quoted).slice(1, -1));
+}
+
+/** Every recorded run of every label a seed consumes names `path`. */
+function everyRunNames(path: string): (runs: RecordedRuns) => void {
   return (runs) => {
     for (const [label, byVerb] of Object.entries(runs)) {
-      for (const run of Object.values(byVerb ?? {})) expect(run.stdout, `${label} ${run.verb}`).toContain(text);
+      for (const run of Object.values(byVerb ?? {})) expect(namesPath(run.stdout, path), `${label} ${run.verb} names ${JSON.stringify(path)}`).toBe(true);
     }
   };
 }
@@ -63,6 +77,7 @@ const HUGE_TEXT = overOutputRowsMarkdown('one.md');
  */
 const limitBreach: I0Seed = {
   name: 'limitBreach',
+  needs: null,
   arms: ['storeOff', 'cold'],
   stateA: (corpus, git) => {
     writeFileTree(corpus, { [HUGE_PATH]: HUGE_TEXT, 'CLAUDE.md': `${GATE_FIXTURE['CLAUDE.md'] ?? ''}\n@${HUGE_PATH}\n` });
@@ -89,6 +104,7 @@ const OVER_INPUT_CAP_BYTES = 8 * 1024 * 1024 + 1;
  */
 const oversizeMarkdown: I0Seed = {
   name: 'oversizeMarkdown',
+  needs: null,
   arms: ['storeOff', 'cold'],
   verbs: ['query'],
   stateA: (corpus, git) => {
@@ -114,7 +130,7 @@ const unlistableDirectory: I0Seed = {
   name: 'unlistableDirectory',
   arms: ['storeOff', 'cold'],
   verbs: ['validate', 'query'],
-  ...(CANNOT_DENY_READS ? { unplantableHere: 'a mode bit denies nothing on Windows or to root' } : {}),
+  needs: 'denyReads',
   stateA: (corpus, git) => {
     writeFileTree(corpus, { '.gitignore': `${LOCKED_DIR}/\n`, [`${LOCKED_DIR}/hidden.md`]: '# Hidden\n' });
     git(['add', '--', '.gitignore']);
@@ -130,8 +146,6 @@ const unlistableDirectory: I0Seed = {
   consumed: { runs: ['storeOff:measured', 'cold:measured'], check: everyRunNames(LOCKED_DIR) },
 };
 
-/** Null on a host that cannot create symbolic links. */
-const SYMLINKS = symlinkCapability();
 const LINK_PATH = 'docs/linked.md';
 
 /**
@@ -142,10 +156,11 @@ const declinedSymlink: I0Seed = {
   name: 'declinedSymlink',
   arms: ['storeOff', 'cold'],
   verbs: ['validate', 'query'],
-  ...(SYMLINKS === null ? { unplantableHere: 'this host cannot create a symbolic link' } : {}),
+  needs: 'symlinks',
   stateA: (corpus, git) => {
-    if (SYMLINKS === null) throw new Error('declinedSymlink planted on a host that cannot create a symbolic link');
-    createSymlink(SYMLINKS, 'two.md', safePath.join(corpus, LINK_PATH));
+    const capability = symlinkCapability();
+    if (capability === null) throw new Error('declinedSymlink planted on a host that cannot create a symbolic link');
+    createSymlink(capability, 'two.md', safePath.join(corpus, LINK_PATH));
     git(['add', '--', LINK_PATH]);
     git(['commit', '-q', '-m', 'a link to an in-root file']);
     return Promise.resolve();
@@ -203,10 +218,32 @@ export function seedFileText(key: SeedFileKey): string {
   ].join('\n');
 }
 
+/**
+ * Whether this host lacks a need: a mode bit denies nothing on Windows or to
+ * root, and some hosts cannot create a symbolic link. Asked when a seed file
+ * runs, never when this module loads.
+ *
+ * @param need - The need
+ * @returns True when the host cannot meet it
+ */
+function hostLacks(need: HostNeed): boolean {
+  return need === 'denyReads' ? CANNOT_DENY_READS : symlinkCapability() === null;
+}
+
+/**
+ * Whether a seed cannot be planted here: the only reason a seed is skipped.
+ *
+ * @param seed - A seed
+ * @returns True when the host lacks the seed's need
+ */
+export function unplantableHere(seed: I0Seed): boolean {
+  return seed.needs !== null && hostLacks(seed.needs);
+}
+
 /** One system seed as its file declares it: `it.skipIf(unplantable)(title, run)`. */
 interface SeedCase {
   readonly title: string;
-  /** The host cannot make this seed's plant. */
+  /** The host lacks this seed's need. */
   readonly unplantable: boolean;
   readonly run: () => Promise<void>;
 }
@@ -225,7 +262,7 @@ export function seedFile(key: SeedFileKey, testFileUrl: string): SeedCase[] {
   afterAll(suite.cleanup);
   return SYSTEM_SEEDS[key].map((seed) => ({
     title: seedTitle(seed),
-    unplantable: seed.unplantableHere !== undefined,
+    unplantable: unplantableHere(seed),
     run: async () => {
       expect(await suite.run(seed)).toEqual(seed.arms);
     },

@@ -17,15 +17,14 @@
  *
  * - A code signature matches a `blob_conditions` or `realization_conditions`
  *   row of that code. `extentKind`, when given, holds a realization condition
- *   to its own extent's `resolution_contexts.kind`; `unlocatedPackage`, when
- *   given, to whether it is the package-level row of a package extent (a
- *   non-null `resourceId`: the package itself was not located) rather than a
- *   subpath-level one.
+ *   to its own extent's `resolution_contexts.kind`; `resourceIdPresent`, when
+ *   given, to whether the row names a resource (a non-null `resourceId`). Both
+ *   are row shapes: what a shape means for one extent is the caller's to say.
  * - A state signature matches a `resource_realizations` row in that
  *   `contentState`.
  */
 export type AbsenceSignature =
-  | { readonly code: string; readonly extentKind?: string; readonly unlocatedPackage?: boolean }
+  | { readonly code: string; readonly extentKind?: string; readonly resourceIdPresent?: boolean }
   | { readonly contentState: string };
 
 /**
@@ -51,11 +50,9 @@ export type AbsenceObservation =
     readonly extentId: string;
     /** The extent's `resolution_contexts.kind`, or null when the rows carry no such context. */
     readonly extentKind: string | null;
-    readonly unlocatedPackage: boolean;
+    /** Whether the row's `resourceId` is non-null. */
+    readonly resourceIdPresent: boolean;
   };
-
-/** The `resolution_contexts.kind` of a package extent (the resources package's package contributor). */
-const PACKAGE_EXTENT_KIND = 'package';
 
 /**
  * Every row an absence cause can be observed in, one observation each, in table order.
@@ -68,16 +65,13 @@ export function absenceObservations(rows: AbsenceRows): AbsenceObservation[] {
   return [
     ...rows.blobConditions.map((row): AbsenceObservation => ({ table: 'blob_conditions', code: row.code })),
     ...rows.resourceRealizations.map((row): AbsenceObservation => ({ table: 'resource_realizations', contentState: row.contentState })),
-    ...rows.realizationConditions.map((row): AbsenceObservation => {
-      const extentKind = kinds.get(row.extentId) ?? null;
-      return {
-        table: 'realization_conditions',
-        code: row.code,
-        extentId: row.extentId,
-        extentKind,
-        unlocatedPackage: extentKind === PACKAGE_EXTENT_KIND && row.resourceId !== null,
-      };
-    }),
+    ...rows.realizationConditions.map((row): AbsenceObservation => ({
+      table: 'realization_conditions',
+      code: row.code,
+      extentId: row.extentId,
+      extentKind: kinds.get(row.extentId) ?? null,
+      resourceIdPresent: row.resourceId !== null,
+    })),
   ];
 }
 
@@ -93,10 +87,10 @@ export function matchesAbsenceCause(observation: AbsenceObservation, signature: 
     return observation.table === 'resource_realizations' && observation.contentState === signature.contentState;
   }
   if (observation.table === 'resource_realizations' || observation.code !== signature.code) return false;
-  if (signature.extentKind === undefined && signature.unlocatedPackage === undefined) return true;
+  if (signature.extentKind === undefined && signature.resourceIdPresent === undefined) return true;
   if (observation.table !== 'realization_conditions') return false;
   if (signature.extentKind !== undefined && observation.extentKind !== signature.extentKind) return false;
-  return signature.unlocatedPackage === undefined || observation.unlocatedPackage === signature.unlocatedPackage;
+  return signature.resourceIdPresent === undefined || observation.resourceIdPresent === signature.resourceIdPresent;
 }
 
 /**
