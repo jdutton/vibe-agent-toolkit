@@ -8,12 +8,13 @@
 
 import { readFileSync } from 'node:fs';
 
-import { resolveFromImportMeta, WORK_COUNTER_NAMES } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, resolveFromImportMeta, WORK_COUNTER_NAMES } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import {
   COUNTED_COST_ROWS,
   countedRegisterRows,
+  COUNTERS_WITHOUT_A_COUNTED_ROW,
   HAZARD_REGISTER_PATH,
   UNCOUNTED_COST_ROWS,
 } from '../src/work-counter-register.js';
@@ -47,6 +48,11 @@ describe('the hazard register and the work counters', () => {
     const named = Object.values(COUNTED_COST_ROWS).flat();
     expect(named.filter((counter) => !(WORK_COUNTER_NAMES as readonly string[]).includes(counter))).toEqual([]);
     expect(new Set(named).size).toBe(named.length);
+  });
+
+  it('accounts for every counter exactly once: against a row, or declared rowless', () => {
+    const accounted = [...Object.values(COUNTED_COST_ROWS).flat(), ...Object.keys(COUNTERS_WITHOUT_A_COUNTED_ROW)];
+    expect([...accounted].sort(compareCodeUnits)).toEqual([...WORK_COUNTER_NAMES].sort(compareCodeUnits));
   });
 
   it('reads the status column, not a word elsewhere on the row', () => {

@@ -22,6 +22,29 @@ export const COUNTED_COST_ROWS: Readonly<Record<number, readonly [WorkCounter, .
   70: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
 };
 
+/** I10's own term for the store's write side, which no counted row restates. */
+const I10_STORE_WRITES = 'I10 "store writes included"';
+
+/** What the content-hashing counters baseline: two rows whose mechanisms are unbuilt. */
+const UNBUILT_REHASH_BASELINE = 'the baseline for the unbuilt stat memo and racy re-hash rows';
+
+/**
+ * Each counter no counted row names, with what it answers to instead. With
+ * {@link COUNTED_COST_ROWS}, every counter is accounted for exactly once.
+ */
+export const COUNTERS_WITHOUT_A_COUNTED_ROW: Readonly<Partial<Record<WorkCounter, string>>> = {
+  'store.reads.persistent': 'I10 store reads',
+  'store.reads.ephemeral': 'I10 store reads',
+  'store.writes.persistent': I10_STORE_WRITES,
+  'store.writes.ephemeral': I10_STORE_WRITES,
+  'store.rows.written.persistent': I10_STORE_WRITES,
+  'store.rows.written.ephemeral': I10_STORE_WRITES,
+  'store.miss.refusedPairs': 'the store-miss row, an enforced row, not a counted cost',
+  'parse.refused.load': 'load-dependent, bounded by I8; reported only',
+  'content.hashed': UNBUILT_REHASH_BASELINE,
+  'content.hashedBytes': UNBUILT_REHASH_BASELINE,
+};
+
 /** A counted cost row whose counter waits on its mechanism. */
 export interface UncountedCostRow {
   /** The mechanism the cost comes from. */

@@ -2,9 +2,10 @@
 
 import { describe, it } from 'vitest';
 
-import { PARSE_SEEDS, runSeed, seedCases, seedScope } from './work-counter-seeds.js';
+import { PARSE_SEEDS, PARSE_SITE_SEEDS, runSeed, seedCases, seedScope } from './work-counter-seeds.js';
 
 describe('work counter seeds: parse and content', () => {
   const scope = seedScope();
   it.each(seedCases(PARSE_SEEDS))('%s', (counter, seed) => runSeed(scope, counter, seed));
+  it.each(PARSE_SITE_SEEDS)('%s', (_label, counter, seed) => runSeed(scope, counter, seed));
 });

@@ -23,6 +23,7 @@ import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { __resetWorkCountersForTest } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { EXTENTS_TABLE } from '../src/schema-sql.js';
 import { openEphemeralProjectionStore, openSqliteProjectionStore } from '../src/store.js';
 
 import {
@@ -598,6 +599,15 @@ describe('decoded rows are counted against the store they came from', () => {
     dropTable(directory, lastTableOfScope('blob'));
     await expect(store.readBlobFacts([FIRST_BLOB])).rejects.toThrow(/no such table/);
     expect(readWorkCounters()['store.rows.decoded.persistent']).toBe(0);
+  });
+
+  it('an extent write that rolls back counts no write and no row written', async () => {
+    // The manifest is written after every table's rows, so its absence fails
+    // the write after the rows went in, and the transaction rolls them back.
+    dropTable(directory, EXTENTS_TABLE);
+    await expect(store.writeExtent(KEY, sampleExtentRows(KEY.rootId))).rejects.toThrow(/no such table/);
+    expect(readWorkCounters()['store.writes.persistent']).toBe(0);
+    expect(readWorkCounters()['store.rows.written.persistent']).toBe(0);
   });
 
   it('an extent read that fails counts no read and no decoded row', async () => {

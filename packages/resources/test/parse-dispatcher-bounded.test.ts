@@ -8,7 +8,8 @@
  */
 
 import { readWorkCounters } from '@vibe-agent-toolkit/utils';
-import { afterEach, describe, expect, it } from 'vitest';
+import { __resetWorkCountersForTest } from '@vibe-agent-toolkit/utils/testing';
+import { afterEach, describe, expect, it, onTestFinished } from 'vitest';
 
 import type { ParsableContent } from '../src/content-key.js';
 import type { ParseResult } from '../src/link-parser.js';
@@ -17,6 +18,7 @@ import { ParseDispatcher, type ParsePoolPolicy } from '../src/parse-dispatcher.j
 import type { ParseLimits } from '../src/parse-limits.js';
 import { ParseLimitError } from '../src/parse-limits.js';
 import type { ParsePool, ParsePoolOptions } from '../src/parse-pool.js';
+import { __readParseTimingSnapshot } from '../src/parse-timing.js';
 
 import { TIGHT_LIMITS } from './parse-limit-fixtures.js';
 
@@ -247,5 +249,15 @@ describe('cache transport whose read-back misses', () => {
     expect(pool.parses()).toBe(1);
     expect(readWorkCounters()['parse.dispatched'] - before['parse.dispatched']).toBe(1);
     expect(readWorkCounters()['parse.redispatched'] - before['parse.redispatched']).toBe(1);
+    // The timing block reads the counters as they stand: zero them, then the
+    // one document is one miss however many times it was dispatched.
+    __resetWorkCountersForTest();
+    onTestFinished(() => {
+      __resetWorkCountersForTest();
+    });
+    const fresh = new ParseDispatcher(cache, { transport: 'cache', createPool });
+    await fresh.parse(DOCUMENT);
+    await fresh.shutdown();
+    expect(__readParseTimingSnapshot().cache).toEqual({ hits: 0, misses: 1 });
   });
 });

@@ -29,4 +29,12 @@ describe('resetting the work counters under test', () => {
     __resetWorkCountersForTest();
     expect(process.listenerCount('exit')).toBe(listeners);
   });
+
+  it('refuses a second install in one process: two exit writes would file the same counts twice', () => {
+    vi.stubEnv(WORK_COUNTERS_ENV, scratch.create());
+    installWorkCounterDump('cli');
+    expect(() => {
+      installWorkCounterDump('cli');
+    }).toThrow(/called twice/);
+  });
 });
