@@ -1,0 +1,1113 @@
+/**
+ * The I0 differential: **a cache changes what a run costs, never what it answers.**
+ *
+ * One harness, run by every `cache-differential-*.system.test.ts` file. Each arm
+ * runs the same verbs over the same tree at the same path, and every arm's
+ * document must equal the store-off arm's, the reference. Two tables are the
+ * only extension points: {@link ARMS} (how a run reaches the store) and a seed
+ * ({@link I0Seed}, a planted condition and what it must produce). A later step
+ * that adds an arm adds a row to the first; one that adds a hazard adds a seed.
+ *
+ * ## An equivalence that never diverged proves nothing
+ *
+ * So every arm carries a POSITIVE tell, asserted on every measured run before
+ * any document is compared: store-off touched no store, cold derived and wrote
+ * one, warm was served by one. And the divergence seed plants a wrong cache
+ * entry the comparison must catch, by relation, exactly.
+ *
+ * ## One cell per (arm, verb)
+ *
+ * Every verb runs in a cell of its own: fresh arm directories, the fixture
+ * rewritten at the one corpus path, the seed's state A, the arm's `prepare`
+ * (a warm arm primes here, under A), the seed's `toB`, then the one measured
+ * run. A cold arm that ran four verbs in one directory would be cold for the
+ * first only, and no cell inherits another's state.
+ *
+ * ## The census reads only code-owned sets
+ *
+ * A refusal is a registry code of kind `refusal`, a not-admitted code, a
+ * `blob_conditions` code of the refusal kind not exempted below with a reason,
+ * an entry of `claude context`'s `refused[]`, or an error envelope. `limit` is
+ * the parse-refusal subset, counted apart.
+ */
+
+import { readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { devNull } from 'node:os';
+import { pathToFileURL } from 'node:url';
+
+import {
+  allDerivedSpecs,
+  BLOB_FINDING_CONDITION_CODES,
+  BLOB_NOT_TEXT,
+  BLOB_REFUSAL_CONDITION_CODES,
+  NOT_ADMITTED_CODE_LIST,
+  NOT_ADMITTED_PARSE_REFUSAL_CODES,
+  PARSE_REFUSAL_BLOB_CODES,
+  PROJECTION_TABLES,
+  quoteIdentifier,
+} from '@vibe-agent-toolkit/resources';
+import { FindingSchema, REFUSAL_CODES, reportSchema } from '@vibe-agent-toolkit/schema';
+import {
+  CRAWL_STORE_READ_ID,
+  CRAWL_STORE_WRITE_ID,
+  isUnderRoot,
+  mkdirSyncReal,
+  safePath,
+  toForwardSlash,
+} from '@vibe-agent-toolkit/utils';
+import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import { removeTempDir } from '@vibe-agent-toolkit/utils/testing';
+import { expect } from 'vitest';
+import { z } from 'zod';
+
+import { StatedLimitSchema } from '../../src/commands/resources/check-schema.js';
+import { reportShapeFor } from '../../src/report-schemas.js';
+import { PROJECTION_STORE_DIR_ENV, PROJECTION_STORE_ENV, PROJECTION_STORE_OFF, PROJECTION_STORE_SQLITE } from '../../src/utils/projection-store.js';
+import { RESOURCES_CRAWL_ENV, RESOURCES_CRAWL_PROJECTION } from '../../src/utils/resource-loader.js';
+import { createIsolatedScratch, createSuiteContext, executeCli, isolatedScratchEnv, writeFileTree } from '../system/test-common.js';
+
+import { contributorsCharged, rowsStoredUnder, storeFilesUnder } from './projection-store-probe.js';
+
+// ── Names ───────────────────────────────────────────────────────────────────
+
+/** How a run reaches the projection store. Store-off is the reference arm. */
+export type ArmName = 'storeOff' | 'cold' | 'warmSameHistory';
+
+/** The four verbs the harness runs; `query` is the dump. */
+export type VerbName = 'validate' | 'check' | 'query' | 'context';
+
+/** A recorded run: the warm arm's prime, or any arm's measured run. */
+export type RunLabel = `${ArmName}:${'prime' | 'measured'}`;
+
+/** Every arm, the reference first. */
+const ARM_NAMES: readonly ArmName[] = ['storeOff', 'cold', 'warmSameHistory'];
+
+/** Every verb, in the order a cell sequence runs them. */
+export const VERB_NAMES: readonly VerbName[] = ['validate', 'check', 'query', 'context'];
+
+// ── The dump ────────────────────────────────────────────────────────────────
+
+/** A relation `vat resources query` exposes, and its columns in declaration order. */
+interface DumpedRelation {
+  readonly name: string;
+  readonly columns: readonly string[];
+  /** Whether a row is a pure function of a blob's bytes (`PROJECTION_TABLES` scope `blob`). */
+  readonly blobScoped: boolean;
+}
+
+/** Every materialised and derived relation, from the two registries. */
+export const DUMPED_RELATIONS: readonly DumpedRelation[] = [
+  ...Object.values(PROJECTION_TABLES).map((spec) => ({ name: spec.name, columns: spec.columns, blobScoped: spec.scope === 'blob' })),
+  ...allDerivedSpecs().map((spec) => ({ name: spec.name, columns: spec.columns, blobScoped: false })),
+];
+
+/** Every relation name, for checking a name an expectation or a map spells. */
+export const RELATION_NAMES: ReadonlySet<string> = new Set(DUMPED_RELATIONS.map((relation) => relation.name));
+
+/**
+ * One relation's rows as JSON text: `json_object('<column>', "<column>", ...)`.
+ *
+ * @param relation - The relation
+ * @returns The SQL expression, its column names quoted identifiers
+ */
+export function rowObjectSql(relation: DumpedRelation): string {
+  const pairs = relation.columns.map((column) => `'${column}', ${quoteIdentifier(column)}`).join(', ');
+  return `json_object(${pairs})`;
+}
+
+/**
+ * The dump: every row of every relation, as `(relation, row)` pairs ordered by both.
+ *
+ * Run with `--base HEAD` so `changed_files` is evaluated. `json_object` takes
+ * two arguments per column; the dump test holds each relation under the SQLite
+ * argument limit the Node floor's build is not verified to raise.
+ */
+const DUMP_SQL = DUMPED_RELATIONS.map(
+  (relation) => `SELECT '${relation.name}' AS relation, ${rowObjectSql(relation)} AS row FROM ${quoteIdentifier(relation.name)}`,
+).join(' UNION ALL ') + ' ORDER BY relation, row';
+
+/** One `(relation, row)` pair of a dump, the row still JSON text. */
+interface DumpRow {
+  readonly relation: string;
+  readonly row: string;
+}
+
+/**
+ * A query document's rows grouped by relation, in their printed order.
+ *
+ * @param document - A `vat resources query` document over a `(relation, row)` statement
+ * @returns Relation name to its rows' JSON text
+ */
+function rowsByRelation(document: Record<string, unknown>): Map<string, string[]> {
+  const grouped = new Map<string, string[]>();
+  for (const { relation, row } of dumpRows(document)) {
+    const rows = grouped.get(relation) ?? [];
+    rows.push(row);
+    grouped.set(relation, rows);
+  }
+  return grouped;
+}
+
+function dumpRows(document: Record<string, unknown>): readonly DumpRow[] {
+  const data = document['data'] as { rows?: readonly DumpRow[] } | null | undefined;
+  return data?.rows ?? [];
+}
+
+/**
+ * Relations with no row in a store-off dump of the gate fixture, each with why.
+ * Held both ways: a listed relation that gains rows reds as surely as an unlisted
+ * one with none.
+ */
+export const DECLARED_EMPTY: Readonly<Record<string, string>> = {
+  realization_conditions:
+    'The populations these verbs run record a realization condition only for an unlistable directory or a'
+    + ' declined symbolic link. Neither plants portably (a chmod is no barrier to root or on Windows; a symbolic'
+    + ' link needs a privilege on Windows), so the fixture holds neither.',
+};
+
+// ── The census ──────────────────────────────────────────────────────────────
+
+/** Refusals one run reported, the parse-limit subset apart from the rest. */
+interface RefusalCensus {
+  readonly limit: number;
+  readonly other: number;
+}
+
+/** Every code a `blob_conditions` row can carry. */
+const BLOB_CONDITION_CODES: ReadonlySet<string> = new Set([...BLOB_REFUSAL_CONDITION_CODES, ...BLOB_FINDING_CONDITION_CODES]);
+
+/** `blob_conditions` codes that are not a refusal of this run, each with why. */
+export const BLOB_CONDITION_EXEMPT: Readonly<Record<string, string>> = {
+  ...Object.fromEntries(BLOB_FINDING_CONDITION_CODES.map((code) => [code, 'a finding about a blob that was derived'])),
+  [BLOB_NOT_TEXT]: 'the expected state of every image or archive; a blob is not refused for having no text parser',
+};
+
+/** Finding codes that refuse: the registry's refusal kind and the not-admitted contract. */
+const REFUSING_FINDING_CODES: ReadonlySet<string> = new Set<string>([...REFUSAL_CODES, ...NOT_ADMITTED_CODE_LIST]);
+
+/** The parse-refusal subset, in either vocabulary. */
+const LIMIT_CODES: ReadonlySet<string> = new Set<string>([...NOT_ADMITTED_PARSE_REFUSAL_CODES, ...PARSE_REFUSAL_BLOB_CODES]);
+
+/** Counts codes into a census. */
+class CensusTally {
+  private limit = 0;
+  private other = 0;
+
+  add(code: string): void {
+    if (LIMIT_CODES.has(code)) this.limit += 1;
+    else this.other += 1;
+  }
+
+  get census(): RefusalCensus {
+    return { limit: this.limit, other: this.other };
+  }
+}
+
+/**
+ * The refusals a report envelope carries: an error envelope, and every finding of a refusing code.
+ *
+ * @param document - A report envelope
+ * @param tally - Where they are counted
+ */
+function tallyEnvelope(document: Record<string, unknown>, tally: CensusTally): void {
+  if (document['status'] === 'error') tally.add((document['error'] as { code: string }).code);
+  for (const finding of (document['findings'] as readonly { code: string }[] | undefined) ?? []) {
+    if (REFUSING_FINDING_CODES.has(finding.code)) tally.add(finding.code);
+  }
+}
+
+/**
+ * A blob condition's code, if it is a refusal. A code outside both kinds is a
+ * harness defect, never a silent zero.
+ *
+ * @param row - One `blob_conditions` row's JSON text
+ * @returns The code when it refuses, else undefined
+ */
+export function refusingBlobCondition(row: string): string | undefined {
+  const { code } = JSON.parse(row) as { code: string };
+  if (!BLOB_CONDITION_CODES.has(code)) throw new Error(`blob_conditions code '${code}' is of no known kind: classify it`);
+  return Object.hasOwn(BLOB_CONDITION_EXEMPT, code) ? undefined : code;
+}
+
+function reportRefusals(document: Record<string, unknown>): RefusalCensus {
+  const tally = new CensusTally();
+  tallyEnvelope(document, tally);
+  return tally.census;
+}
+
+function queryRefusals(document: Record<string, unknown>): RefusalCensus {
+  const tally = new CensusTally();
+  tallyEnvelope(document, tally);
+  for (const row of rowsByRelation(document).get('blob_conditions') ?? []) {
+    const code = refusingBlobCondition(row);
+    if (code !== undefined) tally.add(code);
+  }
+  return tally.census;
+}
+
+function contextRefusals(document: Record<string, unknown>): RefusalCensus {
+  const tally = new CensusTally();
+  if (document['kind'] !== 'context-answers') {
+    tallyEnvelope(document, tally);
+    return tally.census;
+  }
+  for (const answer of document['answers'] as readonly { refused?: readonly { code: string }[] }[]) {
+    for (const refused of answer.refused ?? []) tally.add(refused.code);
+  }
+  return tally.census;
+}
+
+// ── Normalization ───────────────────────────────────────────────────────────
+
+/**
+ * The per-run fields of each verb's document: what a run took and where its
+ * answer came from. `checks[]` names a field of every element of `checks`.
+ * Everything else is compared exactly.
+ */
+export const PER_RUN_FIELDS: Readonly<Record<VerbName, readonly string[]>> = {
+  validate: ['durationMs', 'data.population'],
+  check: ['durationMs', 'data.population', 'data.populationSecs', 'data.lensSecs', 'data.lensPopulation', 'data.checks[].durationSecs'],
+  query: ['durationMs', 'data.population', 'data.populationSecs', 'data.lensSecs', 'data.lensPopulation'],
+  context: [],
+};
+
+/**
+ * A copy of a record without one key.
+ *
+ * @param record - The record
+ * @param key - The key dropped
+ * @returns The copy
+ */
+function withoutKey(record: Record<string, unknown>, key: string): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(record).filter(([name]) => name !== key));
+}
+
+/**
+ * A copy of `value` without one dotted path (`a.b`, `a.list[].c`).
+ *
+ * @param value - A parsed document, or a part of one
+ * @param segments - The path, split on `.`
+ * @returns The copy
+ */
+function withoutPath(value: unknown, segments: readonly string[]): unknown {
+  const [head, ...rest] = segments;
+  if (head === undefined || typeof value !== 'object' || value === null || Array.isArray(value)) return value;
+  const record = value as Record<string, unknown>;
+  const isList = head.endsWith('[]');
+  const key = isList ? head.slice(0, -2) : head;
+  if (!Object.hasOwn(record, key)) return value;
+  if (rest.length === 0 && !isList) return withoutKey(record, key);
+  const child = record[key];
+  const next = isList && Array.isArray(child) ? child.map((element) => withoutPath(element, rest)) : withoutPath(child, rest);
+  return { ...record, [key]: next };
+}
+
+/**
+ * A document without its verb's per-run fields.
+ *
+ * @param verb - The verb whose fields are dropped
+ * @param document - The parsed document
+ * @returns The comparable rest
+ */
+export function normalizeDocument(verb: VerbName, document: Record<string, unknown>): Record<string, unknown> {
+  return PER_RUN_FIELDS[verb].reduce<Record<string, unknown>>(
+    (current, path) => withoutPath(current, path.split('.')) as Record<string, unknown>,
+    document,
+  );
+}
+
+// ── Verb rows ───────────────────────────────────────────────────────────────
+
+/** What `vat claude context` prints. It publishes no schema yet (a legacy document), so this is the harness's. */
+const CONTEXT_DOCUMENT_SCHEMA = z.union([
+  z.object({
+    kind: z.literal('context-answers'),
+    root: z.string(),
+    answers: z.array(z.object({
+      kind: z.enum(['answer', 'unknown']),
+      refused: z.array(z.object({ path: z.string(), code: z.string(), reason: z.string() }).strict()).optional(),
+    }).passthrough()),
+    boundsStatement: z.string(),
+    limits: z.array(StatedLimitSchema),
+    modelledBehaviours: z.array(z.unknown()),
+  }).strict(),
+  reportSchema(z.unknown(), FindingSchema),
+]);
+
+/** One verb the harness runs, and everything it is judged by. */
+interface VerbRow {
+  readonly name: VerbName;
+  readonly args: readonly string[];
+  readonly schema: z.ZodTypeAny;
+  readonly normalize: (document: Record<string, unknown>) => Record<string, unknown>;
+  readonly refusalsOf: (document: Record<string, unknown>) => RefusalCensus;
+}
+
+/**
+ * The query row, over any `(relation, row)` statement.
+ *
+ * @param sql - The statement; {@link DUMP_SQL} unless a subject needs its own
+ * @returns The row
+ */
+export function queryVerb(sql: string): VerbRow {
+  return {
+    name: 'query',
+    args: ['resources', 'query', '--base', 'HEAD', '--format', 'json', sql],
+    schema: reportShapeFor('resources query').schema,
+    normalize: (document) => normalizeDocument('query', document),
+    refusalsOf: queryRefusals,
+  };
+}
+
+/** The four verbs, query as the dump. */
+export const VERBS: { readonly [Name in VerbName]: VerbRow } = {
+  validate: {
+    name: 'validate',
+    args: ['resources', 'validate', '--format', 'json'],
+    schema: reportShapeFor('resources validate').schema,
+    normalize: (document) => normalizeDocument('validate', document),
+    refusalsOf: reportRefusals,
+  },
+  check: {
+    name: 'check',
+    args: ['resources', 'check', '--format', 'json'],
+    schema: reportShapeFor('resources check').schema,
+    normalize: (document) => normalizeDocument('check', document),
+    refusalsOf: reportRefusals,
+  },
+  query: queryVerb(DUMP_SQL),
+  context: {
+    name: 'context',
+    args: ['claude', 'context', '.', '--format', 'json'],
+    schema: CONTEXT_DOCUMENT_SCHEMA,
+    normalize: (document) => normalizeDocument('context', document),
+    refusalsOf: contextRefusals,
+  },
+};
+
+// ── Arms ────────────────────────────────────────────────────────────────────
+
+/** One cell's private directories: `createIsolatedScratch`'s home and tmp, plus the store and timing dumps. */
+export interface ArmDirs {
+  readonly root: string;
+  readonly tmp: string;
+  readonly home: string;
+  readonly store: string;
+  readonly timing: string;
+  /** Where this build keeps its parse cache under `tmp`, asked of the build. */
+  readonly parse: string;
+}
+
+/** Runs git in the corpus under the cell's environment, with a fixed identity. */
+export type Git = (args: readonly string[]) => string;
+
+/** One recorded run. */
+export interface RunRecord {
+  readonly label: RunLabel;
+  readonly verb: VerbName;
+  readonly status: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly document: Record<string, unknown>;
+  /** Every contributor the run charged, from its own timing directory. */
+  readonly charged: readonly string[];
+}
+
+/** What an arm's `prepare` may do besides touching the corpus: run a verb, recorded as this cell's prime. */
+type Prime = (verb: VerbRow) => Promise<RunRecord>;
+
+/** One way a run reaches the store. */
+interface Arm {
+  readonly env: (dirs: ArmDirs) => Record<string, string>;
+  /** After the fixture and state A; returns the prime it ran, if any. */
+  readonly prepare: (dirs: ArmDirs, corpus: string, git: Git, prime: Prime) => Promise<RunRecord | undefined>;
+  /** The positive tell, asserted on every measured run the seed does not claim. */
+  readonly tell: (run: RunRecord, dirs: ArmDirs) => void;
+}
+
+/** The prefix of every charge the store itself files (`CRAWL_STORE_READ_ID`, `CRAWL_STORE_WRITE_ID`). */
+const STORE_CHARGE_PREFIX = CRAWL_STORE_READ_ID.slice(0, CRAWL_STORE_READ_ID.indexOf(':') + 1);
+
+/** The store's own charges, in charge order. */
+function storeCharges(run: RunRecord): string[] {
+  return run.charged.filter((id) => id.startsWith(STORE_CHARGE_PREFIX));
+}
+
+/** `data.population`, for a verb whose document carries one. */
+function populationOf(run: RunRecord): unknown {
+  const data = run.document['data'] as Record<string, unknown> | null | undefined;
+  return data !== null && data !== undefined && Object.hasOwn(data, 'population') ? data['population'] : undefined;
+}
+
+/**
+ * Every file (not directory) under a directory, relative and forward-slashed.
+ *
+ * @param root - The directory
+ * @returns The files, sorted
+ */
+function filesUnder(root: string): string[] {
+  return pathsUnder(root).filter((path) => !statSync(safePath.join(root, path)).isDirectory());
+}
+
+/**
+ * Every path under a directory, relative and forward-slashed, directories included.
+ *
+ * @param root - The directory
+ * @returns The paths, sorted
+ */
+function pathsUnder(root: string): string[] {
+  const found: string[] = [];
+  const visit = (relative: string): void => {
+    for (const entry of readdirSync(safePath.join(root, relative), { withFileTypes: true })) {
+      const child = relative === '' ? entry.name : `${relative}/${entry.name}`;
+      found.push(child);
+      // A link is listed, never followed: a cell holds none, and one a run made is listed as itself.
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) visit(child);
+    }
+  };
+  visit('');
+  return found.toSorted((left, right) => left.localeCompare(right));
+}
+
+/** A path segment naming a projection artifact, in a forward-slashed relative path. */
+const PROJECTION_SEGMENT = /(?:^|\/)projection/;
+
+/** Whether any path under `root` names a projection artifact. */
+function projectionArtifactsUnder(root: string): string[] {
+  return pathsUnder(root).filter((path) => PROJECTION_SEGMENT.test(path));
+}
+
+/** The environment every arm shares; the store selection is the arm's own. */
+function baseEnv(dirs: ArmDirs): Record<string, string> {
+  return {
+    ...isolatedScratchEnv(dirs.root),
+    GIT_CONFIG_GLOBAL: safePath.join(dirs.home, '.gitconfig'),
+    XDG_CONFIG_HOME: safePath.join(dirs.home, '.config'),
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_SYSTEM: devNull,
+    NODE_OPTIONS: '',
+    [RESOURCES_CRAWL_ENV]: RESOURCES_CRAWL_PROJECTION,
+    [PROJECTION_STORE_DIR_ENV]: dirs.store,
+  };
+}
+
+const storeOnEnv = (dirs: ArmDirs): Record<string, string> => ({ ...baseEnv(dirs), [PROJECTION_STORE_ENV]: PROJECTION_STORE_SQLITE });
+
+/** A cold run wrote what it derived: charged a miss and a write, left rows and a parse shard. */
+function coldTell(run: RunRecord, dirs: ArmDirs): void {
+  expect(storeCharges(run), `${run.label} ${run.verb}`).toEqual(expect.arrayContaining([CRAWL_STORE_READ_ID, CRAWL_STORE_WRITE_ID]));
+  expect(rowsStoredUnder(dirs.store)).toBeGreaterThan(0);
+  expect(filesUnder(dirs.parse).filter((path) => path.endsWith('.json')).length, 'a parse shard').toBeGreaterThan(0);
+  const population = populationOf(run);
+  if (population !== undefined) expect(population).toBe('derived');
+}
+
+/**
+ * The arms. Exhaustive over {@link ArmName}: an arm with no tell does not typecheck.
+ */
+const ARMS: { readonly [Name in ArmName]: Arm } = {
+  storeOff: {
+    env: (dirs) => ({ ...baseEnv(dirs), [PROJECTION_STORE_ENV]: PROJECTION_STORE_OFF }),
+    prepare: () => Promise.resolve(undefined),
+    tell: (run, dirs) => {
+      expect(storeFilesUnder(dirs.store), `${run.verb}: a store-off run opened a store`).toEqual([]);
+      expect(projectionArtifactsUnder(dirs.tmp)).toEqual([]);
+      expect(storeCharges(run)).toEqual([]);
+      const population = populationOf(run);
+      if (population !== undefined) expect(population).toBe('derived');
+    },
+  },
+  cold: {
+    env: storeOnEnv,
+    prepare: (dirs) => {
+      // Asserted BEFORE the run: a leaked store or parse entry would make this a warm run wearing a cold label.
+      for (const directory of [dirs.tmp, dirs.store, dirs.home]) expect(filesUnder(directory), directory).toEqual([]);
+      return Promise.resolve(undefined);
+    },
+    tell: coldTell,
+  },
+  warmSameHistory: {
+    env: storeOnEnv,
+    prepare: async (dirs, _corpus, _git, prime) => {
+      const primed = await prime(VERBS.query);
+      coldTell(primed, dirs);
+      return primed;
+    },
+    tell: (run) => {
+      // A read with no write. The read is charged for a miss too (it files from a `finally`), so only the
+      // absent write proves a hit: a hit returns before anything is derived, and only a derivation is
+      // written. Every verb hits after one query prime because every population a verb makes asks the
+      // filesystem extent the same question (the ignored half declined), so one stored extent serves all.
+      expect(storeCharges(run), `${run.verb}: the warm run was not served`).toEqual([CRAWL_STORE_READ_ID]);
+      const population = populationOf(run);
+      if (population !== undefined) expect(population).toBe('store');
+    },
+  },
+};
+
+// ── Seeds ───────────────────────────────────────────────────────────────────
+
+/** What a seed must produce. */
+export type SeedExpectation =
+  | { readonly diverges: { readonly relations: readonly string[]; readonly verbs: readonly VerbName[] } }
+  | { readonly refuses: { readonly perVerb: Readonly<Partial<Record<VerbName, number>>>; readonly bucket: keyof RefusalCensus } }
+  | { readonly agreesAndMisses: { readonly arm: ArmName } }
+  | { readonly documentsHole: { readonly arm: ArmName; readonly closedBy: string } };
+
+/** The recorded runs, by label and verb. */
+export type RecordedRuns = Readonly<Partial<Record<RunLabel, Readonly<Partial<Record<VerbName, RunRecord>>>>>>;
+
+/** A planted condition and what it must produce. */
+export interface I0Seed {
+  readonly name: string;
+  readonly verbs?: readonly VerbName[];
+  readonly arms?: readonly ArmName[];
+  /** Applied after the fixture is written. */
+  readonly stateA?: (corpus: string, git: Git, dirs: ArmDirs) => Promise<void>;
+  /** After `arm.prepare`, before the measured run. */
+  readonly toB?: (arm: ArmName, dirs: ArmDirs, corpus: string, git: Git) => Promise<void>;
+  /** A plant outside the corpus (a forged cache entry), after `toB`. */
+  readonly beforeRun?: (arm: ArmName, dirs: ArmDirs, corpus: string) => Promise<void>;
+  readonly env?: (arm: ArmName, dirs: ArmDirs) => Record<string, string>;
+  readonly expect: SeedExpectation;
+  /** The recorded runs the seed reads, and what it asserts of them. */
+  readonly consumed: { readonly runs: readonly RunLabel[]; readonly check: (runs: RecordedRuns) => void };
+}
+
+/** A tree the harness runs over: a fixture rewritten per cell, or a fixed tree. */
+interface Subject {
+  /** The corpus path every arm measures at. */
+  readonly corpus: string;
+  /** Rewrites the corpus from nothing, or `undefined` for a fixed tree no arm mutates. */
+  readonly write: ((git: Git) => void) | undefined;
+}
+
+/** The outcome of one seed (or the unseeded gate) across its arms. */
+export interface DifferentialResult {
+  readonly arms: readonly ArmName[];
+  readonly verbs: readonly VerbName[];
+  /** Measured runs by arm and verb. */
+  readonly measured: Readonly<Record<ArmName, Partial<Record<VerbName, RunRecord>>>>;
+  readonly runs: RecordedRuns;
+}
+
+/** A difference between one arm's run and the reference's. */
+interface Divergence {
+  readonly arm: ArmName;
+  readonly verb: VerbName;
+  readonly exit: boolean;
+  /** For the dump, the relations whose rows differ; empty otherwise. */
+  readonly relations: readonly string[];
+}
+
+// ── Running ─────────────────────────────────────────────────────────────────
+
+/** Which resources module the build at `binPath` loads, so its parse directory is asked of the build. */
+function buildResourcesEntry(binPath: string): string {
+  return createRequire(binPath).resolve('@vibe-agent-toolkit/resources');
+}
+
+/** Imports the build's resources entry (argv[1]) and prints its parse directory. */
+const PRINT_PARSE_DIRECTORY = 'const m = await import(process.argv[1]); process.stdout.write(m.parseCacheDirectory());';
+
+/**
+ * Where the build at `binPath` keeps its parse cache in a cell: its own
+ * `parseCacheDirectory()`, under the cell's environment, accepted only under the cell's tmp.
+ *
+ * @param binPath - The CLI build
+ * @param env - The cell's environment
+ * @param tmp - The cell's tmp
+ * @returns The directory
+ */
+async function parseDirectoryOf(binPath: string, env: Record<string, string>, tmp: string): Promise<string> {
+  // `node --input-type=module -e <script> <entry>`: the entry is the script's argv[1].
+  const entry = pathToFileURL(buildResourcesEntry(binPath)).href;
+  const result = await executeCli(entry, [], { cwd: tmp, env, nodeArgs: ['--input-type=module', '-e', PRINT_PARSE_DIRECTORY] });
+  expect(result.status, result.stderr).toBe(0);
+  const dir = toForwardSlash(result.stdout);
+  expect(isUnderRoot(tmp, dir), `the build's parse directory ${dir} is not under the cell's tmp ${tmp}`).not.toBe('outside');
+  return dir;
+}
+
+/** Every cell directory made since the last {@link removeCells}. */
+const cellRoots: string[] = [];
+
+/** Remove every cell directory this process made; a suite's `afterAll`. */
+export function removeCells(): void {
+  for (const root of cellRoots.splice(0)) removeTempDir(root);
+}
+
+/**
+ * A fresh cell: `createIsolatedScratch`'s directories plus a store and a timing root.
+ *
+ * @param binPath - The CLI build, asked where its parse cache lives
+ * @returns The directories
+ */
+async function freshCell(binPath: string): Promise<ArmDirs> {
+  const root = createIsolatedScratch('vat-i0-cell-');
+  cellRoots.push(root);
+  const dirs = {
+    root,
+    tmp: safePath.join(root, 'tmp'),
+    home: safePath.join(root, 'home'),
+    store: safePath.join(root, 'store'),
+    timing: safePath.join(root, 'timing'),
+  };
+  mkdirSyncReal(dirs.store, { recursive: true });
+  mkdirSyncReal(dirs.timing, { recursive: true });
+  const parse = await parseDirectoryOf(binPath, baseEnv({ ...dirs, parse: '' }), dirs.tmp);
+  return { ...dirs, parse };
+}
+
+/**
+ * Every new path under the cell after a run must be one of its declared caches:
+ * the store, the parse tree (and the directories above it), or the timing root.
+ */
+function assertOnlyDeclaredCaches(dirs: ArmDirs, before: ReadonlySet<string>, label: string): void {
+  const relative = (path: string): string => toForwardSlash(safePath.relative(dirs.root, path));
+  const caches = [dirs.store, dirs.timing, dirs.parse].map(relative);
+  // Both sides are relative and forward-slashed already; one is the other, or holds it.
+  const holds = (outer: string, inner: string): boolean => toForwardSlash(inner).startsWith(`${outer}/`);
+  const undeclared = pathsUnder(dirs.root).filter(
+    (path) => !before.has(path) && !caches.some((cache) => path === cache || holds(cache, path) || holds(path, cache)),
+  );
+  expect(undeclared, `${label}: a run wrote outside its declared caches`).toEqual([]);
+}
+
+/** The cell-scoped runner: spawns one verb, parses and schema-checks its document, records its charges. */
+interface CellRunner {
+  readonly run: (verb: VerbRow, label: RunLabel) => Promise<RunRecord>;
+}
+
+function cellRunner(options: { binPath: string; corpus: string; dirs: ArmDirs; env: Record<string, string>; maxBuffer: number | undefined }): CellRunner {
+  let ordinal = 0;
+  return {
+    run: async (verb, label) => {
+      ordinal += 1;
+      const timing = safePath.join(options.dirs.timing, String(ordinal));
+      mkdirSyncReal(timing, { recursive: true });
+      const before = new Set(pathsUnder(options.dirs.root));
+      const result = await executeCli(options.binPath, [...verb.args], {
+        cwd: options.corpus,
+        env: { ...options.env, VAT_CRAWL_TIMING: timing },
+        ...(options.maxBuffer === undefined ? {} : { maxBuffer: options.maxBuffer }),
+      });
+      // The published schema first: a document no consumer can read is not an answer to compare.
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(result.stdout);
+      } catch {
+        throw new Error(`${label} ${verb.name}: stdout is not JSON (exit ${String(result.status)}): ${result.stderr}`);
+      }
+      const checked = verb.schema.safeParse(parsed);
+      expect(checked.success, `${label} ${verb.name}: ${checked.success ? '' : checked.error.message}`).toBe(true);
+      assertOnlyDeclaredCaches(options.dirs, before, `${label} ${verb.name}`);
+      return {
+        label,
+        verb: verb.name,
+        status: result.status,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        document: parsed as Record<string, unknown>,
+        charged: contributorsCharged(timing),
+      };
+    },
+  };
+}
+
+/** What a differential run needs to know. */
+interface DifferentialOptions {
+  readonly binPath: string;
+  readonly subject: Subject;
+  /** The verb rows to run, when a subject needs its own (the VAT tree's query). */
+  readonly verbRows?: Partial<Record<VerbName, VerbRow>>;
+  /** Stated only where a document is measured larger than the collector's default. */
+  readonly maxBuffer?: number;
+}
+
+/**
+ * The cell's git: the corpus, the cell's environment, a fixed identity.
+ *
+ * @param corpus - The corpus
+ * @param env - The cell's environment
+ * @returns The handle
+ */
+function cellGit(corpus: string, env: Record<string, string>): Git {
+  return (args) => runGitOrThrow(['-c', 'user.name=i0', '-c', 'user.email=i0@example.invalid', ...args], { cwd: corpus, env });
+}
+
+/** Whether the seed claims an arm's measured runs, so its own expectation replaces the arm's tell. */
+function seedClaims(seed: I0Seed | undefined, arm: ArmName): boolean {
+  if (seed === undefined) return false;
+  const expectation = seed.expect;
+  if ('agreesAndMisses' in expectation) return expectation.agreesAndMisses.arm === arm;
+  if ('documentsHole' in expectation) return expectation.documentsHole.arm === arm;
+  return false;
+}
+
+/**
+ * Run one cell: fresh directories, the fixture, state A, prepare, B, the plant, one measured run.
+ */
+async function runCell(
+  options: DifferentialOptions,
+  seed: I0Seed | undefined,
+  arm: ArmName,
+  verb: VerbRow,
+): Promise<{ prime: RunRecord | undefined; measured: RunRecord }> {
+  const { corpus } = options.subject;
+  const dirs = await freshCell(options.binPath);
+  const env = { ...ARMS[arm].env(dirs), ...seed?.env?.(arm, dirs) };
+  const git = cellGit(corpus, env);
+  if (options.subject.write !== undefined) {
+    rmSync(corpus, { recursive: true, force: true });
+    mkdirSyncReal(corpus, { recursive: true });
+    options.subject.write(git);
+  }
+  await seed?.stateA?.(corpus, git, dirs);
+  const runner = cellRunner({ binPath: options.binPath, corpus, dirs, env, maxBuffer: options.maxBuffer });
+  const prime = await ARMS[arm].prepare(dirs, corpus, git, (primed) => runner.run(primed, `${arm}:prime`));
+  await seed?.toB?.(arm, dirs, corpus, git);
+  await seed?.beforeRun?.(arm, dirs, corpus);
+  const measured = await runner.run(verb, `${arm}:measured`);
+  if (!seedClaims(seed, arm)) ARMS[arm].tell(measured, dirs);
+  return { prime, measured };
+}
+
+/**
+ * Run every cell of a seed (or the unseeded gate) and record what each produced.
+ *
+ * @param options - The build, the subject, any subject-specific verb rows
+ * @param seed - The seed, or undefined for the unseeded gate
+ * @returns Every run, by arm and verb, and by label
+ */
+export async function runDifferential(options: DifferentialOptions, seed?: I0Seed): Promise<DifferentialResult> {
+  const arms = seed?.arms ?? ARM_NAMES;
+  const verbs = seed?.verbs ?? VERB_NAMES;
+  expect(arms[0], 'store-off is the reference arm and runs first').toBe('storeOff');
+  const measured = Object.fromEntries(ARM_NAMES.map((arm) => [arm, {}])) as Record<ArmName, Partial<Record<VerbName, RunRecord>>>;
+  const runs: Partial<Record<RunLabel, Partial<Record<VerbName, RunRecord>>>> = {};
+  for (const arm of arms) {
+    for (const verb of verbs) {
+      const row = options.verbRows?.[verb] ?? VERBS[verb];
+      // eslint-disable-next-line no-await-in-loop -- one cell at a time: every cell rewrites the one corpus path
+      const cell = await runCell(options, seed, arm, row);
+      measured[arm][verb] = cell.measured;
+      runs[`${arm}:measured`] = { ...runs[`${arm}:measured`], [verb]: cell.measured };
+      if (cell.prime !== undefined) runs[`${arm}:prime`] = { ...runs[`${arm}:prime`], [verb]: cell.prime };
+    }
+  }
+  return { arms, verbs, measured, runs };
+}
+
+// ── Comparing ───────────────────────────────────────────────────────────────
+
+function sameRows(left: readonly string[] | undefined, right: readonly string[] | undefined): boolean {
+  return JSON.stringify(left ?? []) === JSON.stringify(right ?? []);
+}
+
+/**
+ * The relations whose rows differ between two dumps.
+ *
+ * @param reference - The store-off dump
+ * @param other - Another arm's dump
+ * @returns The relation names, sorted
+ */
+function divergingRelations(reference: Record<string, unknown>, other: Record<string, unknown>): string[] {
+  const left = rowsByRelation(reference);
+  const right = rowsByRelation(other);
+  const names = new Set([...left.keys(), ...right.keys()]);
+  return [...names].filter((name) => !sameRows(left.get(name), right.get(name))).sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Every arm's divergence from the store-off reference, per verb.
+ *
+ * @param result - The recorded runs
+ * @param rows - The verb rows that were run
+ * @returns One entry per (arm, verb) that differs in exit code or normalized document
+ */
+function divergences(result: DifferentialResult, rows: Readonly<Record<VerbName, VerbRow>> = VERBS): Divergence[] {
+  const found: Divergence[] = [];
+  for (const verb of result.verbs) {
+    const reference = result.measured.storeOff[verb];
+    if (reference === undefined) throw new Error(`no store-off run of ${verb}`);
+    for (const arm of result.arms.filter((name) => name !== 'storeOff')) {
+      const other = result.measured[arm][verb];
+      if (other === undefined) throw new Error(`no ${arm} run of ${verb}`);
+      const exit = other.status !== reference.status;
+      const sameDocument = JSON.stringify(rows[verb].normalize(other.document)) === JSON.stringify(rows[verb].normalize(reference.document));
+      if (!exit && sameDocument) continue;
+      const relations = verb === 'query' ? divergingRelations(reference.document, other.document) : [];
+      found.push({ arm, verb, exit, relations });
+    }
+  }
+  return found;
+}
+
+/**
+ * The census of every measured run.
+ *
+ * @param result - The recorded runs
+ * @param rows - The verb rows that were run
+ * @returns Arm to verb to census
+ */
+export function censusOf(result: DifferentialResult, rows: Readonly<Record<VerbName, VerbRow>> = VERBS): Record<ArmName, Partial<Record<VerbName, RefusalCensus>>> {
+  const census = Object.fromEntries(ARM_NAMES.map((arm) => [arm, {}])) as Record<ArmName, Partial<Record<VerbName, RefusalCensus>>>;
+  for (const arm of result.arms) {
+    for (const verb of result.verbs) {
+      const run = result.measured[arm][verb];
+      if (run !== undefined) census[arm][verb] = rows[verb].refusalsOf(run.document);
+    }
+  }
+  return census;
+}
+
+/**
+ * The unseeded gate's assertion: no divergence, and a zero census in every arm.
+ *
+ * @param result - The recorded runs
+ * @param rows - The verb rows that were run
+ */
+export function expectNoDivergenceAndNoRefusal(result: DifferentialResult, rows: Readonly<Record<VerbName, VerbRow>> = VERBS): void {
+  expect(divergences(result, rows)).toEqual([]);
+  const zero = Object.fromEntries(result.verbs.map((verb) => [verb, { limit: 0, other: 0 }]));
+  const census = censusOf(result, rows);
+  for (const arm of result.arms) expect(census[arm], `${arm}'s refusal census`).toEqual(zero);
+}
+
+/**
+ * The path-scoped columns a hole moves, by relation: the realization's key for the
+ * bytes, and the extent digest, which is total over the realizations and so moves
+ * with that key. Everything else in these relations must hold.
+ */
+export const HOLE_MOVED_COLUMNS: Readonly<Record<string, string>> = {
+  resource_realizations: 'contentKey',
+  zone_provenance: 'extentDigest',
+};
+
+/**
+ * A dump's rows of one relation with one column dropped, so two dumps can be held
+ * equal in everything else.
+ *
+ * @param document - A dump
+ * @param relation - The relation
+ * @param column - The column dropped
+ * @returns The rows, parsed, without the column
+ */
+function rowsWithoutColumn(document: Record<string, unknown>, relation: string, column: string): unknown[] {
+  return (rowsByRelation(document).get(relation) ?? []).map((row) => withoutKey(JSON.parse(row) as Record<string, unknown>, column));
+}
+
+function expectDiverges(result: DifferentialResult, expected: { relations: readonly string[]; verbs: readonly VerbName[] }): void {
+  for (const name of expected.relations) expect(RELATION_NAMES.has(name), `${name} is no relation`).toBe(true);
+  const found = divergences(result);
+  expect({
+    verbs: [...new Set(found.map((divergence) => divergence.verb))].sort((a, b) => a.localeCompare(b)),
+    relations: [...new Set(found.flatMap((divergence) => divergence.relations))].sort((a, b) => a.localeCompare(b)),
+  }).toEqual({
+    verbs: [...expected.verbs].sort((a, b) => a.localeCompare(b)),
+    relations: [...expected.relations].sort((a, b) => a.localeCompare(b)),
+  });
+}
+
+function expectRefuses(result: DifferentialResult, expected: { perVerb: Readonly<Partial<Record<VerbName, number>>>; bucket: keyof RefusalCensus }): void {
+  const census = censusOf(result);
+  const other: keyof RefusalCensus = expected.bucket === 'limit' ? 'other' : 'limit';
+  const wanted = Object.fromEntries(result.verbs.map((verb) => [verb, { [expected.bucket]: expected.perVerb[verb] ?? 0, [other]: 0 }]));
+  for (const arm of result.arms) expect(census[arm], `${arm}'s refusal census`).toEqual(wanted);
+  // Both arms refused the same; anything else they answered must agree too.
+  expect(divergences(result)).toEqual([]);
+}
+
+function expectAgreesAndMisses(result: DifferentialResult, arm: ArmName): void {
+  for (const verb of result.verbs) {
+    const run = result.measured[arm][verb];
+    if (run === undefined) throw new Error(`no ${arm} run of ${verb}`);
+    expect(storeCharges(run), `${arm} ${verb} must miss and write`).toContain(CRAWL_STORE_WRITE_ID);
+    const population = populationOf(run);
+    if (population !== undefined) expect(population).toBe('derived');
+  }
+  expect(divergences(result)).toEqual([]);
+}
+
+function expectDocumentsHole(result: DifferentialResult, arm: ArmName): void {
+  const blobScoped = new Set(DUMPED_RELATIONS.filter((relation) => relation.blobScoped).map((relation) => relation.name));
+  for (const verb of result.verbs) {
+    const run = result.measured[arm][verb];
+    if (run === undefined) throw new Error(`no ${arm} run of ${verb}`);
+    expect(storeCharges(run), `${arm} ${verb} must be served`).toEqual([CRAWL_STORE_READ_ID]);
+    const population = populationOf(run);
+    if (population !== undefined) expect(population).toBe('store');
+  }
+  const found = divergences(result).filter((divergence) => divergence.arm === arm);
+  expect(found.length, 'the hole shows: the warm run serves the previous bytes\' facts').toBeGreaterThan(0);
+  for (const divergence of found) {
+    expect(divergence.verb).toBe('query');
+    expect(divergence.relations.filter((name) => !Object.hasOwn(HOLE_MOVED_COLUMNS, name) && !blobScoped.has(name))).toEqual([]);
+  }
+  const reference = result.measured.storeOff.query;
+  const warm = result.measured[arm].query;
+  if (reference === undefined || warm === undefined) throw new Error('documentsHole needs the dump in both arms');
+  for (const [relation, column] of Object.entries(HOLE_MOVED_COLUMNS)) {
+    expect(rowsWithoutColumn(warm.document, relation, column), `${relation} beyond ${column}`)
+      .toEqual(rowsWithoutColumn(reference.document, relation, column));
+  }
+}
+
+/**
+ * A seed's expectation, then its consumed runs.
+ *
+ * @param seed - The seed
+ * @param result - Its recorded runs
+ */
+export function expectSeed(seed: I0Seed, result: DifferentialResult): void {
+  const expectation = seed.expect;
+  if ('diverges' in expectation) expectDiverges(result, expectation.diverges);
+  else if ('refuses' in expectation) expectRefuses(result, expectation.refuses);
+  else if ('agreesAndMisses' in expectation) expectAgreesAndMisses(result, expectation.agreesAndMisses.arm);
+  else expectDocumentsHole(result, expectation.documentsHole.arm);
+  const consumed: Partial<Record<RunLabel, Partial<Record<VerbName, RunRecord>>>> = {};
+  for (const label of seed.consumed.runs) {
+    const runs = result.runs[label];
+    if (runs === undefined) throw new Error(`${seed.name} consumes ${label}, which no cell recorded`);
+    consumed[label] = runs;
+  }
+  seed.consumed.check(consumed);
+}
+
+/**
+ * The relations with no row in a dump, checked against {@link DECLARED_EMPTY} both ways.
+ *
+ * @param dump - A store-off dump of the gate fixture
+ */
+export function expectCoverage(dump: Record<string, unknown>): void {
+  const grouped = rowsByRelation(dump);
+  const empty = DUMPED_RELATIONS.map((relation) => relation.name).filter((name) => (grouped.get(name) ?? []).length === 0);
+  expect(empty.toSorted((a, b) => a.localeCompare(b))).toEqual(Object.keys(DECLARED_EMPTY).toSorted((a, b) => a.localeCompare(b)));
+}
+
+// ── The gate fixture ────────────────────────────────────────────────────────
+
+/** The heading the forged parse entry carries, which no real byte in the fixture holds. */
+export const FORGED_SENTINEL = 'Forged Sentinel Heading';
+
+/** The fixture's committed files. */
+export const GATE_FIXTURE: Readonly<Record<string, string>> = {
+  'docs/one.md': '---\ntitle: One\ntags: [alpha]\n---\n# One\n\nSee [two](./two.md#two) and [the page](./page.html).\n\n## Detail\n\nBack to [the guide](guide.md#guide).\n',
+  'docs/two.md': '# Two\n\nA page with no links.\n',
+  // A reference-style link with no definition: a `blob_conditions` row (a finding, not a refusal).
+  'docs/guide.md': '# Guide\n\nRead [one](./one.md#detail) and [the spec][spec-ref].\n',
+  'docs/page.html': '<!DOCTYPE html>\n<html><head><title>Page</title></head><body><a href="one.md">one</a></body></html>\n',
+  'CLAUDE.md': '# Corpus\n\nProject notes.\n\n@docs/guide.md\n',
+  '.claude/rules/docs.md': '---\npaths: ["docs/**"]\n---\n# Docs rule\n\nKeep [the guide](../../docs/guide.md) current.\n',
+  'vibe-agent-toolkit.config.yaml': [
+    'resources:',
+    '  checks:',
+    '    doc-titles:',
+    '      description: Every top-level heading, as a row',
+    "      sql: \"SELECT r.path AS path, s.title AS title FROM blob_sections s JOIN resource_realizations r ON r.contentKey = s.blob WHERE s.depth = 1 ORDER BY r.path\"",
+    '      severity: warning',
+    '    link-targets:',
+    '      description: Every authored link and where it resolves',
+    "      sql: \"SELECT e.src AS src, x.dstKey AS dstKey, x.dstAnchor AS dstAnchor FROM edges e JOIN edge_resolutions x ON x.src = e.src AND x.refOrdinal = e.refOrdinal AND x.contextId = e.contextId ORDER BY e.src, x.dstKey\"",
+    '      severity: warning',
+    '',
+  ].join('\n'),
+};
+
+/** Written after the commit, so `changed_files` has a row under `--base HEAD`. */
+const GATE_UNTRACKED: Readonly<Record<string, string>> = {
+  'docs/notes.md': '# Notes\n\nNot committed yet.\n',
+};
+
+/**
+ * The gate subject: the fixture, committed, plus one untracked file.
+ *
+ * @param corpus - The corpus path every arm measures at
+ * @returns The subject
+ */
+export function gateSubject(corpus: string): Subject {
+  return {
+    corpus,
+    write: (git) => {
+      writeFileTree(corpus, GATE_FIXTURE);
+      git(['init', '-q', '-b', 'main']);
+      git(['add', '-A']);
+      git(['commit', '-q', '-m', 'fixture']);
+      writeFileTree(corpus, GATE_UNTRACKED);
+    },
+  };
+}
+
+/**
+ * A dump's `resource_realizations` row for one path, parsed.
+ *
+ * @param run - A dump run
+ * @param path - The root-relative path
+ * @returns The rows realizing it
+ */
+export function realizationsOf(run: RunRecord | undefined, path: string): Array<Record<string, unknown>> {
+  if (run === undefined) throw new Error('no such run recorded');
+  return (rowsByRelation(run.document).get('resource_realizations') ?? [])
+    .map((row) => JSON.parse(row) as Record<string, unknown>)
+    .filter((row) => row['path'] === path);
+}
+
+/**
+ * Read a file in the corpus as bytes, for a seed that keys or inspects it.
+ *
+ * @param corpus - The corpus
+ * @param path - The root-relative path
+ * @returns The bytes
+ */
+export function corpusBytes(corpus: string, path: string): Buffer {
+  return readFileSync(safePath.join(corpus, path));
+}
+
+// ── Seed suites ─────────────────────────────────────────────────────────────
+
+/**
+ * How a seed's test reads. A hole seed says what closes it, so the day it goes
+ * red the reader knows which step's fix rewrites it to `agreesAndMisses`.
+ *
+ * @param seed - The seed
+ * @returns The test title
+ */
+export function seedTitle(seed: I0Seed): string {
+  const expectation = seed.expect;
+  if ('documentsHole' in expectation) return `${seed.name} documents the hole: closed by ${expectation.documentsHole.closedBy}`;
+  return `${seed.name}: ${Object.keys(expectation)[0] ?? ''}`;
+}
+
+/** A seed file's suite: its hooks, and one seed run over a fresh gate fixture and judged. */
+interface SeedSuite {
+  readonly setup: () => void;
+  readonly cleanup: () => void;
+  /** Runs and judges the seed; resolves to the arms it ran, which must be the seed's own. */
+  readonly run: (seed: I0Seed) => Promise<readonly ArmName[]>;
+}
+
+/**
+ * The suite a seed file runs its seeds in.
+ *
+ * @param testFileUrl - The calling file's `import.meta.url`, which locates the CLI build
+ * @returns The suite
+ */
+export function seedSuite(testFileUrl: string): SeedSuite {
+  const context = createSuiteContext('vat-i0-seed-', testFileUrl);
+  return {
+    setup: context.setup,
+    cleanup: () => {
+      removeCells();
+      context.cleanup();
+    },
+    run: async (seed) => {
+      const subject = gateSubject(safePath.join(context.createTempDir(), 'corpus'));
+      const result = await runDifferential({ binPath: context.binPath, subject }, seed);
+      expectSeed(seed, result);
+      return result.arms;
+    },
+  };
+}

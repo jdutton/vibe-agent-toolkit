@@ -218,6 +218,19 @@ const NOT_A_MAPPING =
   'the frontmatter block is valid YAML but not a YAML mapping — it decodes to a sequence, a'
   + ' scalar or a typed value (!!set, !!omap, !!timestamp, !!binary), so it declares no keys at all';
 
+/** A parser's own diagnostic over HTML it read, e.g. `missing-end-tag`. */
+const BLOB_HTML_PARSE_ERROR = 'HTML_PARSE_ERROR';
+
+/** A reference-style link whose label no definition in the document resolves. */
+const BLOB_UNRESOLVED_REFERENCE = 'UNRESOLVED_REFERENCE';
+
+/**
+ * The `blob_conditions` codes of the FINDING kind: something said about a blob
+ * that WAS derived. The other kind, a blob declined, is
+ * `BLOB_REFUSAL_CONDITION_CODES`; together they are every code a row carries.
+ */
+export const BLOB_FINDING_CONDITION_CODES: readonly string[] = [BLOB_HTML_PARSE_ERROR, BLOB_UNRESOLVED_REFERENCE];
+
 /**
  * Build the `blob_conditions` rows for one parse.
  *
@@ -239,7 +252,7 @@ export function blobConditionsFor(contentKey: string, parsed: ParseResult): Blob
   for (const error of parsed.parseErrors ?? []) {
     rows.push({
       blob: contentKey,
-      code: 'HTML_PARSE_ERROR',
+      code: BLOB_HTML_PARSE_ERROR,
       severity: 'warning',
       // Already a parse5 error code, e.g. "missing-end-tag" — not prose.
       message: error.message,
@@ -251,7 +264,7 @@ export function blobConditionsFor(contentKey: string, parsed: ParseResult): Blob
   for (const reference of parsed.unresolvedReferences ?? []) {
     rows.push({
       blob: contentKey,
-      code: 'UNRESOLVED_REFERENCE',
+      code: BLOB_UNRESOLVED_REFERENCE,
       severity: 'warning',
       // The label as authored — the code already carries the meaning.
       message: reference.label,

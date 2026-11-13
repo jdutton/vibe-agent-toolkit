@@ -60,6 +60,8 @@ export {
 // The one contract for a file a crawl enumerated and did not admit: its log
 // entry, its findings, and its place in `examined` — see `not-admitted.ts`.
 export {
+  NOT_ADMITTED_CODE_LIST,
+  NOT_ADMITTED_PARSE_REFUSAL_CODES,
   notAdmittedCount,
   notAdmittedFindings,
   notAdmittedInScope,
@@ -969,10 +971,15 @@ export {
 // hit reports exactly what the derive that wrote it would have — nobody queries
 // a projection they were never told to look at.
 export {
+  BLOB_REFUSAL_CONDITION_CODES,
   describeBlobRefusals,
   notAdmittedRealizations,
   type BlobRefusalRows,
 } from './projection/blob-refusals.js';
+// The other kind of `blob_conditions` code: a finding about a blob that was
+// derived. With `BLOB_REFUSAL_CONDITION_CODES` it is every code a row carries,
+// so a census of refusals classifies each row from these two lists alone.
+export { BLOB_FINDING_CONDITION_CODES } from './projection/blob-facts.js';
 
 // The declarative closure primitive (zones §7.3): a closure-defined extent is a
 // GENERIC contributor handed an `ExtentDeclaration`, never new privileged code —
@@ -1020,6 +1027,7 @@ export {
   BLOB_PARSE_LIMIT_EXCEEDED,
   BLOB_PARSE_WORKER_DIED,
   BLOB_UNREADABLE,
+  PARSE_REFUSAL_BLOB_CODES,
   populateBlobs,
   type BlobPopulationOptions,
   type BlobPopulationResult,

@@ -369,7 +369,7 @@ cache, not a replacement for either layer.
 
 🎯 **Target, per [fact-extractors.md](./fact-extractors.md) (I2, I2a): the extent key covers every
 input its derivation observed,** including the code that derived it, the effective routing, git's
-repo-local file inputs, binary and passed-through keys, and `VAT_GIT_SAFE_DIRECTORY`. Every hit is
+repo-local file inputs and binary. Every hit is
 checked against the stat tuple under the racy rule, and every byte consumed is re-hashed at use.
 Extent derivation stays full until the incremental extent lands, its design blind-reviewed.
 

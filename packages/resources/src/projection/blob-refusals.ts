@@ -108,7 +108,15 @@ const REFUSAL_CODES: ReadonlyArray<readonly [code: string, label: string]> = [
   [BLOB_PARSE_WORKER_DIED, 'parse worker died'],
 ];
 
-const REFUSAL_CODE_SET: ReadonlySet<string> = new Set(REFUSAL_CODES.map(([code]) => code));
+/**
+ * The `blob_conditions` codes of the REFUSAL kind: a blob this run declined to
+ * derive. Every other code a row can carry (`BLOB_FINDING_CONDITION_CODES`)
+ * describes a blob that was derived. Exported so a census of refusals reads the
+ * one list rather than restating it.
+ */
+export const BLOB_REFUSAL_CONDITION_CODES: readonly string[] = REFUSAL_CODES.map(([code]) => code);
+
+const REFUSAL_CODE_SET: ReadonlySet<string> = new Set(BLOB_REFUSAL_CONDITION_CODES);
 
 /**
  * The realization states that are refusals, named apart because the remedies
