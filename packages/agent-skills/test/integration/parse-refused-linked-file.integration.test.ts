@@ -7,7 +7,7 @@
  * then finds it on disk, not in the registry, and treats it as a non-markdown
  * asset: bundled verbatim, its own links never walked, nothing in it checked.
  *
- * The seed is real and cheap: 20,000 links, over the DEFAULT `outputRows` limit
+ * The seed is real and cheap: 20,000 frontmatter rows, over the DEFAULT `outputRows` limit
  * (16,384 rows). Neither lane offers a seam for tighter limits, so the default is
  * what a real adopter would hit.
  */
@@ -131,8 +131,9 @@ describe('a refused linked document is reported under resources.validation, and 
     writeFileSync(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), '{}\n');
     skillPath = safePath.join(skillDir, 'SKILL.md');
     writeFileSync(skillPath, SKILL_MD);
-    // Over `outputRows` in external links only: no relative link a walk could have missed.
-    writeFileSync(safePath.join(skillDir, 'reference.md'), `<!-- ${randomUUID()} -->\n${'[x](https://example.com/)\n'.repeat(20_000)}`);
+    // Over `outputRows` with no link at all: no relative link a walk could have missed. The rows
+    // are frontmatter, not body links, which cost a 300-400 MiB parse tree and seconds per parse.
+    writeFileSync(safePath.join(skillDir, 'reference.md'), overOutputRowsMarkdown(null));
   });
 
   afterEach(() => {
@@ -177,7 +178,7 @@ describe('a refused linked document is reported under resources.validation, and 
     }],
     ['a refused markdown document carrying relative links', (): string => {
       writeFileSync(safePath.join(skillDir, 'notes.md'), '# Notes\n');
-      writeFileSync(safePath.join(skillDir, 'reference.md'), `<!-- ${randomUUID()} -->\n${'[x](./notes.md)\n'.repeat(20_000)}`);
+      writeFileSync(safePath.join(skillDir, 'reference.md'), overOutputRowsMarkdown('notes.md'));
       return RESOURCES_ALLOW_REFERENCE_PATH;
     }],
   ])('packageSkill refuses %s the skill reaches, writing nothing', async (_name, seed) => {

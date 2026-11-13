@@ -81,9 +81,28 @@ function calleeName(callee: ts.Expression): string | undefined {
   return undefined;
 }
 
+/** Every AST built so far, by its source text: both arms read the same tree. */
+const parsed = new Map<string, ts.SourceFile>();
+
 /** `body` as a TypeScript AST, parents set so a node can print its own text. */
 function sourceOf(body: string): ts.SourceFile {
-  return ts.createSourceFile('module.ts', body, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  let source = parsed.get(body);
+  if (source === undefined) {
+    source = ts.createSourceFile('module.ts', body, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    parsed.set(body, source);
+  }
+  return source;
+}
+
+/**
+ * Whether `body` can hold an identifier named any of `names`. An identifier's
+ * text is in its source verbatim unless it is spelled with a unicode escape, so
+ * a source with neither a name nor a `\u` cannot, and need not be parsed.
+ */
+function mayName(body: string, names: Iterable<string>): boolean {
+  if (body.includes(String.raw`\u`)) return true;
+  for (const name of names) if (body.includes(name)) return true;
+  return false;
 }
 
 /** Whether any node under `root` satisfies `test`. */
@@ -122,6 +141,7 @@ function isParseEntryCall(node: ts.Node): boolean {
  * @returns True for any call whose callee is named the predicate
  */
 function callsPredicate(body: string): boolean {
+  if (!mayName(body, [PREDICATE])) return false;
   return some(sourceOf(body), (node) => ts.isCallExpression(node) && calleeName(node.expression) === PREDICATE);
 }
 
@@ -133,6 +153,7 @@ function callsPredicate(body: string): boolean {
  * @returns The swallowing catches' `try` lines
  */
 function swallowingCatches(body: string): number[] {
+  if (!mayName(body, ['catch']) || !mayName(body, PARSE_ENTRIES)) return [];
   const source = sourceOf(body);
   const lines: number[] = [];
   const visit = (node: ts.Node): void => {

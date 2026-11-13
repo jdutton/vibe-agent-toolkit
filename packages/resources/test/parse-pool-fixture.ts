@@ -76,12 +76,14 @@ const COMPLETION_STEP_MS = 4;
 /**
  * How far the reversed ladder counts down from.
  *
- * Larger than the fixtures that care about completion order, so the first
- * document dispatched is the last to answer. Floored at zero below, so a fixture
- * with hundreds of documents — which cannot care about the ladder anyway —
- * simply runs it out rather than asking for a negative delay.
+ * Larger than the fixtures that care about completion order (the widest
+ * dispatches eleven), so the first document dispatched is the last to answer.
+ * Floored at zero below, so a fixture with hundreds of documents — which cannot
+ * care about the ladder anyway — simply runs it out rather than asking for a
+ * negative delay. No higher than it needs to be: every reversed fixture's first
+ * document waits the whole ladder, on every test that uses one.
  */
-const LADDER_TOP = 32;
+const LADDER_TOP = 16;
 
 /**
  * Pause, so a fake pool can answer out of dispatch order.

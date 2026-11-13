@@ -17,8 +17,9 @@ import { ORCHESTRATOR_REPORT_SCHEMA } from '../../src/commands/orchestrator-sche
 import { CHECK_REPORT_SCHEMA } from '../../src/commands/resources/check-schema.js';
 import { RESOURCES_VALIDATE_REPORT_SCHEMA } from '../../src/commands/resources/validate-schema.js';
 import { PROJECTION_STORE_DIR_ENV } from '../../src/utils/projection-store.js';
-import { createSuiteContext, executeCli, join, writeTestFile } from '../system/test-common.js';
 import { commitTestFixture } from '../test-helpers.js';
+
+import { createSuiteContext, executeCli, join, writeTestFile } from './test-common.js';
 
 const context = createSuiteContext('vat-validate-findings-stderr-', import.meta.url);
 

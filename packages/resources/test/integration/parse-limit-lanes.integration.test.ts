@@ -14,6 +14,7 @@ import { pathToFileURL } from 'node:url';
 
 import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { overOutputRowsMarkdown } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { ParseCache } from '../../src/parse-cache.js';
@@ -280,8 +281,11 @@ describe('a frontmatter list of 200,000 items, decoded on the parent thread', ()
   });
 });
 
-/** More links than the default `outputRows` (16,384) admits. */
-const OVER_DEFAULT_ROWS_LINKS = 17_000;
+/**
+ * More rows than the default `outputRows` (16,384) admits: frontmatter items, which parse in
+ * milliseconds, where as many body links build a parse tree of hundreds of MiB and take seconds.
+ */
+const overDefaultRows = (): string => overOutputRowsMarkdown(null);
 
 describe('a parse with no dispatcher of a document the bounded route refuses', () => {
   beforeAll(suite.beforeAll);
@@ -289,9 +293,8 @@ describe('a parse with no dispatcher of a document the bounded route refuses', (
   beforeEach(suite.beforeEach);
 
   it('is refused under the same limit and files nothing, so a later crawl over the same cache still refuses it', async () => {
-    const links = Array.from({ length: OVER_DEFAULT_ROWS_LINKS }, (_, index) => `[l${String(index)}](./t.md)`);
-    const file = safePath.join(suite.tempDir, 'many-links.md');
-    await writeFile(file, `# Many\n\n${links.join('\n')}\n`, 'utf-8');
+    const file = safePath.join(suite.tempDir, 'many-rows.md');
+    await writeFile(file, overDefaultRows(), 'utf-8');
     const cacheDir = safePath.join(suite.suiteDir, `cache-no-dispatcher-${String(Date.now())}`);
 
     // No dispatcher passed: the call still parses in a bounded worker (there is
@@ -322,9 +325,8 @@ describe('a bounded run under limits looser than the defaults', () => {
   // does. Either way an entry past the DEFAULT caps would be served to a later
   // default run as an admission that run would have refused.
   it.each(['wire', 'cache'] as const)('admits the file over %s but files nothing a default run would serve', async (transport) => {
-    const links = Array.from({ length: OVER_DEFAULT_ROWS_LINKS }, (_, index) => `[l${String(index)}](./t.md)`);
     const file = safePath.join(suite.tempDir, `loose-${transport}.md`);
-    await writeFile(file, `# Many\n\n${links.join('\n')}\n`, 'utf-8');
+    await writeFile(file, overDefaultRows(), 'utf-8');
     const cacheDir = safePath.join(suite.suiteDir, `cache-loose-${transport}-${String(Date.now())}`);
 
     const loose = new ResourceRegistry({
