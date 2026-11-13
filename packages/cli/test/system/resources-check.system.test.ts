@@ -33,7 +33,7 @@ import {
 } from './test-common.js';
 // The SYNCHRONOUS `executeCli` — `test-common.ts` exports an async one of the
 // same name whose result has no `stdout` until awaited.
-import { createMarkdownGitFixture, executeCli } from './test-helpers/index.js';
+import { createMarkdownGitFixture, executeCli, expectSecsWithinRun } from './test-helpers/index.js';
 
 // ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
 // child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
@@ -326,7 +326,7 @@ describe('vat resources check', () => {
       // and eventually flake on nothing but arithmetic.
       expect(cost.durationSecs).toBeLessThan(data(doc)['populationSecs'] as number);
     }
-    expect((data(doc)['populationSecs'] as number) * 1000).toBeLessThanOrEqual(doc['durationMs'] as number);
+    expectSecsWithinRun(data(doc)['populationSecs'], doc['durationMs']);
   });
 
   it('accepts the documented CUSTOM: severity override instead of refusing the config', () => {

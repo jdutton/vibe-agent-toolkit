@@ -600,7 +600,7 @@ data:
     - n: 16
   population: derived
   populationSecs: 0.221
-  lensSecs: 3.75e-7
+  lensSecs: 0
   lensesEvaluated: []
   lensPopulation: none
 ```
@@ -624,7 +624,7 @@ data:
   root: /work/project
   population: store
   populationSecs: 0.0819
-  lensSecs: 3.75e-7
+  lensSecs: 0
   lensesEvaluated: []
   lensPopulation: none
   checksRun: 3

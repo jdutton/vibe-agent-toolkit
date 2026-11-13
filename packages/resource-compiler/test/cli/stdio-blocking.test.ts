@@ -160,7 +160,7 @@ describe('vat-compile-resources entry point', () => {
   });
 });
 
-/** Node's pipe buffer on Linux/macOS. A payload must exceed it to be a real test. */
+/** One 64 KiB read. A payload past it is one the reader cannot take in a single read. */
 const PIPE_BUFFER_BYTES = 65_536;
 
 /** Comfortably several pipe buffers, so the loss is unmistakable. */
@@ -201,12 +201,19 @@ const APPLY_FIX =
  * immediate `process.exit(0)` — `printOperationSummary` followed by
  * `exitWithResults`.
  *
+ * Just before exiting, the child reports on stderr how many bytes stdout had not
+ * finished writing (`writableLength`, which counts a partly written chunk
+ * whole), written with `writeSync` so the report cannot itself be lost the same
+ * way. That is the loss measured where it happens,
+ * whatever the kernel and the reader managed to absorb.
+ *
  * @param bytes - Payload size to emit.
  * @param blocking - Whether the child applies the fix before writing.
  * @returns Source for a `node -e` child.
  */
 function childSource(bytes: number, blocking: boolean): string {
-  return `${blocking ? APPLY_FIX : ''}console.log('x'.repeat(${bytes}));process.exit(0);`;
+  return `${blocking ? APPLY_FIX : ''}console.log('x'.repeat(${bytes}));`
+    + `require('node:fs').writeSync(2, String(process.stdout.writableLength));process.exit(0);`;
 }
 
 /**
@@ -257,16 +264,21 @@ function writeThroughPipe(bytes: number, blocking: boolean): string {
  *
  * @param bytes - Payload size to emit.
  * @param blocking - Whether the child applies the fix before writing.
- * @returns The child's stdout and exit code.
+ * @returns The child's stdout, the bytes it still had queued at exit, and its exit code.
  */
 async function writeThroughStallingPipe(
   bytes: number,
   blocking: boolean,
-): Promise<{ received: string; status: number | null }> {
+): Promise<{ received: string; queuedAtExit: number; status: number | null }> {
   const child = spawn(process.execPath, ['-e', childSource(bytes, blocking)], {
-    stdio: ['ignore', 'pipe', 'ignore'],
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  let report = '';
+  child.stderr.on('data', (chunk: string) => {
+    report += chunk;
+  });
 
   let received = '';
   let stalled = false;
@@ -287,7 +299,9 @@ async function writeThroughStallingPipe(
   // `close`, not `exit`: it waits for the stdio streams to drain and end, which
   // is precisely the window the unfixed child abandons.
   const [status] = (await once(child, 'close')) as [number | null];
-  return { received, status };
+  // `Number('')` is 0, which would read as "nothing queued": a missing report is a failure.
+  expect(report).toMatch(/^\d+$/);
+  return { received, queuedAtExit: Number(report), status };
 }
 
 describe('stdout truncation through a real pipe', () => {
@@ -296,9 +310,13 @@ describe('stdout truncation through a real pipe', () => {
   it.skipIf(process.platform === 'win32')(
     'loses the tail of a payload larger than a stalled reader can hold, without the fix',
     async () => {
-      const { received, status } = await writeThroughStallingPipe(STALLED_PAYLOAD_BYTES, false);
+      const { received, queuedAtExit, status } = await writeThroughStallingPipe(STALLED_PAYLOAD_BYTES, false);
 
       expect(status).toBe(0);
+      // 🔑 The loss at its source: bytes still queued in the child when it
+      // exited, which no kernel buffer size can make up. The two assertions
+      // after it are what that loss looks like from the reader's side.
+      expect(queuedAtExit).toBeGreaterThan(0);
       expect(received.length).toBeLessThan(STALLED_PAYLOAD_BYTES);
       // Cut mid-token, so the terminating newline `console.log` appends never
       // arrives — the signature of the defect, on top of the byte count.
@@ -309,9 +327,11 @@ describe('stdout truncation through a real pipe', () => {
   it.skipIf(process.platform === 'win32')(
     'delivers that same payload intact WITH the fix, against the same stalling reader',
     async () => {
-      const { received, status } = await writeThroughStallingPipe(STALLED_PAYLOAD_BYTES, true);
+      const { received, queuedAtExit, status } = await writeThroughStallingPipe(STALLED_PAYLOAD_BYTES, true);
 
       expect(status).toBe(0);
+      // A blocking write returns only once every byte is in the kernel.
+      expect(queuedAtExit).toBe(0);
       // Length first, so a short delivery reports a byte count before any diff.
       expect(received).toHaveLength(STALLED_PAYLOAD_BYTES + 1);
       expect(received).toBe(`${'x'.repeat(STALLED_PAYLOAD_BYTES)}\n`);
