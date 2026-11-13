@@ -28,7 +28,7 @@ import {
   type Report,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { isFsFaultError, suppressedFaultsOf, TREE_CLEANUP_INCOMPLETE_CODE, type TreeChangeWarning } from '@vibe-agent-toolkit/utils';
+import { isBrokenPipeError, isFsFaultError, suppressedFaultsOf, TREE_CLEANUP_INCOMPLETE_CODE, type TreeChangeWarning } from '@vibe-agent-toolkit/utils';
 import { parse as parseYaml } from 'yaml';
 
 import {
@@ -408,7 +408,13 @@ export function readForwardedDocument(verb: ReportVerb, text: string, format: Ex
 export function endWithForwardedDocument(document: ForwardedDocument): never {
   announceErrorOf(document.report);
   if (!supervisorSaysFindings) reportLeftovers(document.report.findings, writeStderrLine);
-  writeStdoutSync(document.text);
+  try {
+    writeStdoutSync(document.text);
+  } catch (error) {
+    // 🔑 The reader is gone (`... | head -1`): end silently on the document's code, as a document
+    // written through the stream does, never as a refusal of a run that finished.
+    if (!isBrokenPipeError(error)) throw error;
+  }
   process.exit(exitCodeForReport(document.report));
 }
 

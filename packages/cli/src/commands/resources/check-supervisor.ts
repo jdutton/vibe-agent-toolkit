@@ -132,7 +132,15 @@ import {
 import { handleTerminatingSignals, killProcessTree, type KillProcessTreeOptions } from '@vibe-agent-toolkit/utils/process';
 
 import { CommandRefusalError, errorMessageOf } from '../../utils/command-refusal.js';
-import { leftoverIssueOf, readForwardedDocument, type ForwardedDocument } from '../../utils/document-writer.js';
+import {
+  announceErrorOf,
+  endWithForwardedDocument,
+  endWithReport,
+  leftoverIssueOf,
+  readForwardedDocument,
+  type ForwardedDocument,
+} from '../../utils/document-writer.js';
+import { reportFindings } from '../../utils/issue-rendering.js';
 import { isSupervisedChild } from '../../utils/operator-notices.js';
 import { resolveVatBinPath } from '../../utils/vat-bin-path.js';
 
@@ -282,7 +290,7 @@ export function pollWatchdog(
  * more important half.** `Number('')`, `Number(' ')` and `Number('\n')` are all
  * `0` — finite, non-negative, and therefore accepted by the range guard below —
  * and `0` is this flag's documented escape hatch meaning *no bound at all*. So
- * `--budget "$CHECK_BUDGET"` with the variable unset did not shorten the bound
+ * `--budget "$BUDGET"` with the variable unset did not shorten the bound
  * and did not complain: it silently REMOVED it, on the one flag whose entire
  * purpose is to stop an unattended job hanging forever. An unset shell variable
  * is a far more common CI accident than the typo the guard was written for.
@@ -318,7 +326,7 @@ export function parseBudgetSeconds(raw: string | undefined): number {
     throw new CommandRefusalError(
       'USAGE_INVALID',
       '--budget was given an empty value. That is almost always an unset shell'
-      + ' variable (`--budget "$CHECK_BUDGET"`), and it is refused rather than read'
+      + ' variable (`--budget "$BUDGET"`), and it is refused rather than read'
       + ' as `--budget 0` — which would remove the bound entirely and let the run'
       + ' hang forever. Pass a number of seconds, or `--budget 0` explicitly if that'
       + ' is really what you mean.',
@@ -1245,6 +1253,49 @@ export function withLeftover<T>(
   // The child's document was validated against its verb's schema when it was read.
   const report = 'forward' in ending ? (ending.forward.report as Report<T>) : ending.payload;
   return { payload: withAddedFindings(report, added) };
+}
+
+/**
+ * Publish what a supervised verb's run came to, and end on the code its document derives — the one
+ * publication both `vat resources check` and `vat resources query --budget` end through.
+ *
+ * The human half first, on stderr, once, by the process the operator ran: the error document's
+ * message (the writer then skips it), then the findings. A supervised child says neither — its
+ * supervisor reports them all — so it passes `speaks: false`.
+ *
+ * Then the document: a child's, verbatim (unless {@link withLeftover} had to add a finding to it),
+ * since the supervisor already checked it is this verb's document and re-serializing it would be a
+ * second place for its shape to live; or the one this process built. ⚠️ A forwarded document's
+ * `durationSecs` is the CHILD's wall time, without this process's own startup and spawn (~0.15 s
+ * measured): the field is a breakdown the population and per-statement costs reconcile against,
+ * and a supervisor overhead none of them can account for would read as theirs.
+ *
+ * @param verb - The supervised verb, which the document is registered under
+ * @param options - What to publish
+ * @param options.ending - The child's document, or the one this process built
+ * @param options.format - The operator's `--format`, for a document built here
+ * @param options.speaks - Whether this process says the human half (false in a supervised child)
+ * @param options.verbose - Whether every finding is said, rather than the collapsed hint
+ * @param options.write - Where the findings are said
+ * @returns Never: the process ends on the published document's code
+ */
+export function publishSupervisedEnding<R extends Report<unknown>>(verb: SupervisedVerb, options: {
+  ending: SupervisedEnding<R>;
+  format: 'yaml' | 'json';
+  speaks: boolean;
+  verbose: boolean;
+  write: (line: string) => void;
+}): never {
+  const { ending } = options;
+  if (options.speaks) {
+    const report = 'forward' in ending ? ending.forward.report : ending.payload;
+    announceErrorOf(report);
+    reportFindings(report.findings, { verbose: options.verbose, write: options.write });
+  }
+  // 🪤 `return` both, though their type is `never`: under a test's returning exit spy a bare call
+  // would fall through to the next.
+  if ('forward' in ending) return endWithForwardedDocument(ending.forward);
+  return endWithReport(verb, ending.payload, options.format);
 }
 
 /**

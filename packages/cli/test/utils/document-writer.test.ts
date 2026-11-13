@@ -5,11 +5,13 @@
  * code the written document derives.
  */
 
-import { buildErrorReport, buildReport, ExitCode, type ErrorReport, type Finding, type Report } from '@vibe-agent-toolkit/schema';
+import { buildErrorReport, buildReport, ExitCode, exitCodeForReport, type ErrorReport, type Finding, type Report } from '@vibe-agent-toolkit/schema';
 import { recordSuppressedFault } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import yaml from 'yaml';
 
+import { publishSupervisedEnding } from '../../src/commands/resources/check-supervisor.js';
+import { buildCheckOutputData } from '../../src/commands/resources/check.js';
 import { PUBLISHED_SHAPES } from '../../src/report-schemas.js';
 import { CommandRefusalError } from '../../src/utils/command-refusal.js';
 import { setDebugDiagnostics } from '../../src/utils/debug-diagnostics.js';
@@ -404,6 +406,31 @@ describe('the other writer entry points', () => {
     expect(readForwardedDocument(VERB, asYaml, 'yaml').report.status).toBe('ok');
   });
 
+  it('a forwarded document whose reader is gone (EPIPE) ends silently on the code IT derives', () => {
+    // 🚨 `vat resources query --budget 30 '<big>' | head -1`: the reader closes after one line and
+    // the synchronous write throws EPIPE. The in-process run ends on its document's code and says
+    // nothing; the forwarded run must too, not die as INTERNAL_ERROR with "EPIPE" on stderr.
+    stdout.mockImplementation(() => {
+      throw Object.assign(new Error('EPIPE: broken pipe, write'), { code: 'EPIPE' });
+    });
+    const asJson = `${JSON.stringify(reportWith(1, [FINDING]), null, 2)}\n`;
+    vi.mocked(process.stderr.write).mockClear();
+
+    endWithForwardedDocument(readForwardedDocument(VERB, asJson, 'json'));
+
+    expect(exit.mock.calls).toEqual([[ExitCode.FINDINGS]]);
+    expect(stderrText()).not.toContain('EPIPE');
+  });
+
+  it('a forwarded write that fails any other way still throws', () => {
+    stdout.mockImplementation(() => {
+      throw Object.assign(new Error('EIO: i/o error, write'), { code: 'EIO' });
+    });
+
+    expect(() => endWithForwardedDocument(readForwardedDocument(VERB, JSON.stringify(reportWith(1, [])), 'json'))).toThrow(/EIO/);
+    expect(exit).not.toHaveBeenCalled();
+  });
+
   it('readForwardedDocument refuses a truncated or foreign document', () => {
     const full = JSON.stringify(reportWith(1, []));
     expect(() => readForwardedDocument(VERB, full.slice(0, full.length / 2), 'json')).toThrow();
@@ -425,5 +452,72 @@ describe('the other writer entry points', () => {
   it('NOTHING_FINISHED is the explicit empty FinishedWork', () => {
     const nothing: FinishedWork = NOTHING_FINISHED;
     expect(nothing).toEqual({ examined: 0, findings: [], data: null });
+  });
+});
+
+/**
+ * `publishSupervisedEnding`: the one place a supervised verb (`vat resources check`,
+ * `vat resources query --budget`) publishes what its run came to, through this writer.
+ */
+const SUPERVISED_WARNED = { code: 'CUSTOM:warn-a', severity: 'warning' as const, message: 'a.md is flagged', location: 'docs/a.md' };
+
+/** A whole check report carrying one warning. */
+const SUPERVISED_REPORT = buildCheckOutputData({
+  root: '/corpus',
+  durationMs: 200,
+  populated: { population: 'store', lensPopulation: 'none', populationMs: 100, lensMs: 0, lensesEvaluated: [], membersEnumerated: 1 },
+  issues: [SUPERVISED_WARNED],
+  costs: [],
+});
+
+const lines: string[] = [];
+const said = (): string => [...lines, stderrText()].join('\n');
+
+describe('publishSupervisedEnding — the one publication of a supervised verb', () => {
+  beforeEach(() => {
+    lines.length = 0;
+  });
+
+  it('forwards the child\'s document byte for byte, says its finding once, and ends on the code it derives', () => {
+    const text = JSON.stringify(SUPERVISED_REPORT);
+
+    publishSupervisedEnding('resources check', {
+      ending: { forward: readForwardedDocument('resources check', text, 'json') },
+      format: 'json',
+      speaks: true,
+      verbose: true,
+      write: (line) => lines.push(line),
+    });
+
+    expect(stdout.mock.calls.map((call) => String(call[0])).join('')).toBe(text);
+    expect(said().split('a.md is flagged')).toHaveLength(2);
+    expect(exit.mock.calls).toStrictEqual([[exitCodeForReport(SUPERVISED_REPORT)]]);
+  });
+
+  it('says nothing in a supervised child: its supervisor speaks for it', () => {
+    publishSupervisedEnding('resources check', {
+      ending: { payload: SUPERVISED_REPORT },
+      format: 'yaml',
+      speaks: false,
+      verbose: true,
+      write: (line) => lines.push(line),
+    });
+
+    expect(said()).not.toContain('a.md is flagged');
+    expect(yaml.parse(stdout.mock.calls.map((call) => String(call[0])).join(''))).toMatchObject({ status: SUPERVISED_REPORT.status });
+    expect(exit.mock.calls).toStrictEqual([[exitCodeForReport(SUPERVISED_REPORT)]]);
+  });
+
+  it('builds a document it was handed, on the code that document derives', () => {
+    publishSupervisedEnding('resources check', {
+      ending: { payload: SUPERVISED_REPORT },
+      format: 'json',
+      speaks: true,
+      verbose: false,
+      write: (line) => lines.push(line),
+    });
+
+    expect(JSON.parse(stdout.mock.calls.map((call) => String(call[0])).join('')) as unknown).toMatchObject({ status: SUPERVISED_REPORT.status });
+    expect(exit.mock.calls).toStrictEqual([[exitCodeForReport(SUPERVISED_REPORT)]]);
   });
 });

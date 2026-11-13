@@ -68,14 +68,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
 import { loadConfigCached } from '../../utils/config-loader.js';
-import {
-  announceErrorOf,
-  endWithForwardedDocument,
-  endWithRefusal,
-  endWithReport,
-  leaveFindingsToSupervisor,
-  NOTHING_FINISHED,
-} from '../../utils/document-writer.js';
+import { endWithRefusal, leaveFindingsToSupervisor, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { formatDurationSecs } from '../../utils/duration.js';
 import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
@@ -108,6 +101,7 @@ import {
   DEFAULT_BUDGET_SECONDS,
   interruptionMessage,
   parseBudgetSeconds,
+  publishSupervisedEnding,
   requireSupervisableFlags,
   runsInThisProcess,
   SUPERVISED_BY_FLAG,
@@ -1593,35 +1587,17 @@ export async function checkCommand(
     const ending: SupervisedEnding<CheckReport> = runsInThisProcess({ supervisedBy: options.supervisedBy, budgetSecs })
       ? { payload: await withNoticeAudience(noticeAudienceOf(child), () => runChecksHere(pathArg, options, child, logger, startTime)) }
       : await superviseStandalone(root, options, format, budgetSecs);
-    // The human half, on stderr, by the process the operator ran — as every verb does. A
-    // supervised child prints no finding, here or in its writer: its supervisor reports them all.
-    if (child === undefined) {
-      const report = 'forward' in ending ? ending.forward.report : ending.payload;
-      // An error document's message first, as every refusal says it; the writer then skips it.
-      announceErrorOf(report);
-      reportFindings(report.findings, { verbose: options.verbose === true, write: logger.error });
-    }
-    if ('forward' in ending) {
-      // Verbatim (unless `withLeftover` had to add a finding to it) — the supervisor already checked it is
-      // this verb's document — and on the code that document derives. The child already built what the operator's `--format` asked for, and
-      // re-serializing it here would be a second place for that shape to live.
-      //
-      // ⚠️ `durationSecs` in it is therefore the CHILD's wall time and does
-      // not include this process's own startup and spawn (~0.15 s measured).
-      // Deliberate: the field is a breakdown that `populationSecs` and the
-      // per-rule costs have to reconcile against, and folding in a supervisor
-      // overhead none of them can account for would leave a remainder a
-      // reader would attribute to whichever rule they were looking at — the
-      // exact defect `CheckCost` documents.
-      //
-      // 🪤 `return` it, though its type is `never`: under a test's returning
-      // exit spy a bare call would fall through to the second ending below.
-      return endWithForwardedDocument(ending.forward);
-    }
     // A killed child is never OK and never decided here: its document carries
     // a RUN_INTEGRITY finding (exit 1) or the error branch (exit 2), and the
-    // writer derives the code from it, as everywhere else.
-    endWithReport(CHECK_VERB, ending.payload, format);
+    // writer derives the code from it, as everywhere else. A supervised child
+    // says no finding: its supervisor reports them all.
+    return publishSupervisedEnding(CHECK_VERB, {
+      ending,
+      format,
+      speaks: child === undefined,
+      verbose: options.verbose === true,
+      write: logger.error,
+    });
   } catch (error) {
     // `vat resources check` offers no `--strict`: warnings never fail it.
     endWithRefusal(CHECK_VERB, refusalCodeOf(error), error, format, { strict: false }, NOTHING_FINISHED);

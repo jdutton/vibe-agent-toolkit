@@ -36,21 +36,13 @@
 import { toFindings } from '@vibe-agent-toolkit/schema';
 
 import { CommandRefusalError } from '../../utils/command-refusal.js';
-import {
-  announceErrorOf,
-  endWithForwardedDocument,
-  endWithRefusal,
-  endWithReport,
-  leftoverIssueOf,
-  NOTHING_FINISHED,
-  type FinishedWork,
-} from '../../utils/document-writer.js';
-import { reportFindings } from '../../utils/issue-rendering.js';
+import { endWithRefusal, leftoverIssueOf, NOTHING_FINISHED, type FinishedWork } from '../../utils/document-writer.js';
 import type { Logger } from '../../utils/logger.js';
 
 import { parseProgressLog, unitInFlight } from './check-progress.js';
 import {
   interruptionMessage,
+  publishSupervisedEnding,
   SUPERVISED_BY_FLAG,
   superviseRun,
   supervisedByValue,
@@ -98,6 +90,7 @@ export function queryChildArgs(request: QueryRequest, logPath: string): string[]
     ...(request.base === undefined ? [] : [`--base=${request.base}`]),
     ...request.parameters.map((value) => `--param=${value}`),
     SUPERVISED_BY_FLAG,
+    // Always `standalone` for a query: only `vat resources check` runs as `vat validate`'s phase.
     supervisedByValue({ invoker: 'standalone', progressLog: logPath }),
     '--',
     request.sql,
@@ -155,11 +148,12 @@ export async function superviseQuery(request: QueryRequest & { logger: Logger })
       : { examined: 0, findings: toFindings([leftoverIssueOf(leftover)]), data: null };
     return endWithRefusal(QUERY_VERB, 'RUN_INCOMPLETE', ending.refusal, request.format, { strict: false }, finished);
   }
-  const published = withLeftover(ending, leftover);
-  const report = 'forward' in published ? published.forward.report : published.payload;
   // The human half, once, by this process: the child left its error line and findings to it.
-  announceErrorOf(report);
-  reportFindings(report.findings, { verbose: false, write: request.logger.error });
-  if ('forward' in published) return endWithForwardedDocument(published.forward);
-  return endWithReport(QUERY_VERB, published.payload, request.format);
+  return publishSupervisedEnding(QUERY_VERB, {
+    ending: withLeftover(ending, leftover),
+    format: request.format,
+    speaks: true,
+    verbose: false,
+    write: request.logger.error,
+  });
 }

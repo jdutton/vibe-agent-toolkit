@@ -8,6 +8,12 @@
   `vat resources check` refuses (blank, negative, not a number, a zero not written `0`) is refused
   here too.
 
+### Fixed
+
+- **`vat resources check` (and `vat resources query --budget`) piped into a reader that closes
+  early (`| head -1`) failed as `INTERNAL_ERROR`, exit 2, with `EPIPE` on stderr.** It now ends
+  silently on its document's exit code, as an unsupervised run does. No action needed.
+
 ### Breaking
 
 - None for `query`. `check` and `vat validate`'s checks phase: a synchronous spawn failure is now

@@ -521,7 +521,7 @@ describe('buildInterruptedCheckInput', () => {
 
 describe('parseBudgetSeconds — the EMPTY value', () => {
   // 🚨 The defect: `Number('')` is 0, and 0 is this flag's documented escape
-  // hatch — "no bound, may hang forever". So `--budget "$CHECK_BUDGET"` with the
+  // hatch — "no bound, may hang forever". So `--budget "$BUDGET"` with the
   // variable unset did not shorten the bound and did not refuse; it silently
   // REMOVED the bound, on the one flag whose whole job is to stop an unattended
   // job hanging. An unset shell variable is a far more common CI accident than
@@ -533,6 +533,11 @@ describe('parseBudgetSeconds — the EMPTY value', () => {
     ['a tab', '\t'],
   ])('refuses %s rather than reading it as --budget 0', (_label, raw) => {
     expect(() => parseBudgetSeconds(raw)).toThrow(/--budget/);
+  });
+
+  it('names a neutral variable in that refusal, since `query` refuses it too', () => {
+    expect(() => parseBudgetSeconds('')).toThrow(/--budget "\$BUDGET"/);
+    expect(() => parseBudgetSeconds('')).not.toThrow(/CHECK_/);
   });
 
   it('still accepts hex, deliberately', () => {

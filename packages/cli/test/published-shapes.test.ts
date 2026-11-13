@@ -65,8 +65,16 @@ function commandSources(): string[] {
  * A writer call whose first argument is a literal or an UPPER_CASE constant. `executeOrgCommand`
  * counts as `writeExternalDocument`: it is the org lane's one route to it, and each
  * external verb names itself there — the writer call inside it takes a variable.
+ * `publishSupervisedEnding` counts as `endWithReport`: it is a supervised verb's one route to
+ * it, and each supervised verb names itself there.
  */
-const WRITER_CALL = /\b(endWithReport|writeDocument|endWithRefusal|endWithLeftoverRefusal|readForwardedDocument|writeExternalDocument|executeOrgCommand|writeArtifact|writeArtifactFile|writeLegacyDocument)\(\s*(?:'([^']+)'|([A-Z][A-Z0-9_]*)\b)/g;
+const WRITER_CALL = /\b(endWithReport|publishSupervisedEnding|writeDocument|endWithRefusal|endWithLeftoverRefusal|readForwardedDocument|writeExternalDocument|executeOrgCommand|writeArtifact|writeArtifactFile|writeLegacyDocument)\(\s*(?:'([^']+)'|([A-Z][A-Z0-9_]*)\b)/g;
+
+/** The writer a wrapper call stands for (see {@link WRITER_CALL}). */
+const WRITER_ALIASES: Readonly<Record<string, string>> = {
+  executeOrgCommand: 'writeExternalDocument',
+  publishSupervisedEnding: 'endWithReport',
+};
 
 /** A file-local `const NAME = '…'`. */
 const STRING_CONSTANT = /\bconst ([A-Z][A-Z0-9_]*) = '([^']+)'/g;
@@ -80,7 +88,7 @@ function writerCalls(): Array<readonly [string, string]> {
   return commandSources().flatMap((source) => {
     const constants = new Map([...source.matchAll(STRING_CONSTANT)].map((found) => [found[1], found[2]]));
     return [...source.matchAll(WRITER_CALL)].map((match) => {
-      const fn = match[1] === 'executeOrgCommand' ? 'writeExternalDocument' : match[1] ?? '';
+      const fn = WRITER_ALIASES[match[1] ?? ''] ?? match[1] ?? '';
       const constant = match[3];
       const name = constant === undefined ? match[2] : constants.get(constant);
       return [fn, name ?? constant ?? ''] as const;

@@ -125,6 +125,7 @@ const BARREL_EXPORTS = [
   'isAbsolutePath',
   'isAlreadyExistsError',
   'isArchiveEntryReadRefusal',
+  'isBrokenPipeError',
   'isCapacityFault',
   'isFileInTheWayError',
   'isFinalPathUnanswerableError',
