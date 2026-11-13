@@ -1082,6 +1082,16 @@ function parseKeyedThrough(keyed: KeyedContent, cache: ParseCache): Promise<Pars
 
 describe('the dispatcher\'s cache front (parseContentCached)', () => {
   const suite = setupParseCacheTestSuite('describe');
+  // These tests are about the wire transport, the shipped default: pinned so a
+  // developer's `VAT_PARSE_TRANSPORT=cache` cannot move them onto the other
+  // path. Pinned once for the describe, not per test, so every one-shot pool
+  // keys on the same environment and adopts the thread the last one parked.
+  beforeAll(() => {
+    vi.stubEnv('VAT_PARSE_TRANSPORT', 'wire');
+  });
+  afterAll(() => {
+    vi.unstubAllEnvs();
+  });
 
   it('parses on a cold cache and records the miss', async () => {
     const keyed = keyedFromText(SIMPLE_DOC);

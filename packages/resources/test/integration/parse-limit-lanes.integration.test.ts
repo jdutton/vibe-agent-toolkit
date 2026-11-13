@@ -316,6 +316,47 @@ describe('a parse with no dispatcher of a document the bounded route refuses', (
   });
 });
 
+/** Body links past {@link FEW_ROWS}: a link-only document, so the rows that breach are link rows. */
+const OVER_FEW_ROWS_LINKS = 20;
+
+/** An `outputRows` cap a handful of links can pass, so a link-row breach costs milliseconds. */
+const FEW_ROWS: NonNullable<ParsePoolOptions['limits']> = { outputRows: 10 };
+
+describe('body links counted as output rows', () => {
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(suite.beforeEach);
+
+  it('refuses a document whose links pass the cap and files nothing; a default run admits and files it', async () => {
+    const links = Array.from({ length: OVER_FEW_ROWS_LINKS }, (_, index) => `[l${String(index)}](./t.md)`);
+    const file = safePath.join(suite.tempDir, 'links.md');
+    await writeFile(file, `${links.join('\n')}\n`, 'utf-8');
+    const cacheDir = safePath.join(suite.suiteDir, `cache-link-rows-${String(Date.now())}`);
+
+    const capped = new ResourceRegistry({
+      baseDir: suite.tempDir,
+      parseCache: new ParseCache({ cacheDir, enabled: true }),
+      parsePool: recordingPolicy({ firstLines: [] }, FEW_ROWS),
+    });
+    expect(await capped.addResources([file])).toHaveLength(0);
+    expect(capped.getParseRefusedResources().map((entry) => entry.reason)).toStrictEqual([
+      expect.stringContaining('outputRows'),
+    ]);
+    expect(await countFilesUnder(cacheDir)).toBe(0);
+
+    // The same links are well under the DEFAULT cap, so a default run admits
+    // every link and files the entry: the refusal above was the cap, not the file.
+    const defaults = new ResourceRegistry({
+      baseDir: suite.tempDir,
+      parseCache: new ParseCache({ cacheDir, enabled: true }),
+      parsePool: recordingPolicy({ firstLines: [] }, {}),
+    });
+    const [admitted] = await defaults.addResources([file]);
+    expect(admitted?.links).toHaveLength(OVER_FEW_ROWS_LINKS);
+    expect(await countFilesUnder(cacheDir)).toBe(1);
+  });
+});
+
 describe('a bounded run under limits looser than the defaults', () => {
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);

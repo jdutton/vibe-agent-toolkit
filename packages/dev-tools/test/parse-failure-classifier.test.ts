@@ -81,6 +81,9 @@ function calleeName(callee: ts.Expression): string | undefined {
   return undefined;
 }
 
+/** A src file with a classified catch around the parse route: the non-vacuity witness. */
+const AUDIT_COMMAND = 'packages/cli/src/commands/audit.ts';
+
 /** Every AST built so far, by its source text: both arms read the same tree. */
 const parsed = new Map<string, ts.SourceFile>();
 
@@ -173,6 +176,8 @@ describe('the parse-failure classifier', () => {
     expect(callsPredicate('try { f(); } catch (e) { if (isParserUnavailable(e)) throw e; }')).toBe(true);
     expect(callsPredicate('try { f(); } catch (e) { if (r.isParserUnavailable(e)) throw e; }')).toBe(true);
     expect(callsPredicate('// `isParserUnavailable(error)` once guarded here\nclassifyParseFailure(e);')).toBe(false);
+    // The same call spelled with a unicode escape: the text prefilter cannot see the name.
+    expect(callsPredicate(String.raw`i\u0073ParserUnavailable(e)`)).toBe(true);
   });
 
   it('is the only guard a src catch uses: no file but the definition calls isParserUnavailable', () => {
@@ -206,6 +211,16 @@ describe('a catch around the parse route', () => {
   it('judges real catches — the scan is not vacuous', () => {
     const judged = [...packageSources()].filter(([, body]) => body.includes('classifyCompatibilityFailure(')).map(([file]) => file);
 
-    expect(judged).toContain('packages/cli/src/commands/audit.ts');
+    expect(judged).toContain(AUDIT_COMMAND);
+  });
+
+  it('parses a real catch around the parse route — the prefilter does not skip it', () => {
+    const body = packageSources().get(AUDIT_COMMAND) ?? '';
+    expect(body).toContain('classifyCompatibilityFailure(');
+
+    parsed.delete(body);
+    swallowingCatches(body);
+
+    expect(parsed.has(body)).toBe(true);
   });
 });

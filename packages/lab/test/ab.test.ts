@@ -37,17 +37,18 @@ import {
   renderAb,
   runAb,
 } from '../src/harness/ab.js';
-import { type ArmEnvironment, EMPTY_ARM_ENVIRONMENT } from '../src/harness/arm-env.js';
+import { type ArmEnvironment, buildArmEnv, EMPTY_ARM_ENVIRONMENT } from '../src/harness/arm-env.js';
 import { MEASURABLE_COMMANDS } from '../src/harness/commands.js';
 import type { EstimatorKind } from '../src/harness/estimator.js';
 import { buildReportEnvelope } from '../src/harness/report.js';
 import type { CaptureRequest, ResolvedInstrument, ResolvedSubject } from '../src/harness/types.js';
 
 /**
- * The host every fake capture stamps, read once per arm environment. A real
- * read starts a Node child for V8's heap limit, which is the bulk of a fake
- * capture's cost and nothing this file asserts on; what it reads for one
- * environment does not change between captures.
+ * The host every fake capture stamps, read once per effective `NODE_OPTIONS`.
+ * A real read starts a Node child for V8's heap limit, which is the bulk of a
+ * fake capture's cost and nothing this file asserts on. The host varies only
+ * with the `NODE_OPTIONS` the arm's environment resolves to, so two arms that
+ * resolve to the same value share one read.
  */
 vi.mock('../src/envelope/envelope.js', async (importOriginal) => {
   const original = await importOriginal<{ currentHost: typeof currentHost }>();
@@ -55,7 +56,7 @@ vi.mock('../src/envelope/envelope.js', async (importOriginal) => {
   return {
     ...original,
     currentHost: (env: ArmEnvironment): ReportHost => {
-      const key = JSON.stringify(env);
+      const key = buildArmEnv(process.env, env)['NODE_OPTIONS'] ?? '';
       let host = hosts.get(key);
       if (host === undefined) {
         host = original.currentHost(env);
