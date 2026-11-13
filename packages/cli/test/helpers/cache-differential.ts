@@ -1141,29 +1141,36 @@ export function gateSubject(corpus: string): Subject {
 }
 
 /**
- * A fixed subject: a `git clone --local --shared` of `source`'s HEAD at `corpus`,
+ * A fixed subject: a `git clone --local --shared --no-checkout` of `source`'s HEAD at `corpus`,
  * taken under a git config confined to a scratch directory (the source alone
  * trusted as a `safe.directory`), with
  * `core.autocrlf=false` (and `core.longpaths=true` on Windows) written into the
  * clone's own config, so the checkout and every arm's run read the bytes alike
- * whatever the host's git config says.
+ * whatever the host's git config says. The clone is taken without a checkout and
+ * only `keep` is checked out and committed (the rest leaves the index, never
+ * touching disk), so the subject is a clean repository whose HEAD holds exactly
+ * the kept paths; a kept path HEAD lacks fails the checkout.
  *
  * @param source - The repository cloned
  * @param corpus - Where the clone goes, the path every arm measures at
- * @returns The subject
+ * @param keep - The root-relative paths (files or directories) the subject keeps
+ * @returns The subject and how many files it tracks
  */
-export function clonedSubject(source: string, corpus: string): Subject {
+export function clonedSubject(source: string, corpus: string, keep: readonly string[]): { subject: Subject; tracked: number } {
   const scratch = createIsolatedScratch('vat-i0-clone-');
   cellRoots.push(scratch);
+  const env = isolatedGitEnv(scratch);
   const config = ['core.autocrlf=false', ...(process.platform === 'win32' ? ['core.longpaths=true'] : [])];
   const configArgs = config.flatMap((entry) => ['--config', entry]);
   // The confined global config drops any safe.directory the operator or CI set, so the source is
   // trusted for this one command: git reads safe.directory from protected config only, which takes in
   // `-c` (git 2.39 and later) and never a repository's own config.
-  runGitOrThrow(['-c', `safe.directory=${toForwardSlash(source)}`, 'clone', '-q', '--local', '--shared', ...configArgs, source, corpus], {
-    env: isolatedGitEnv(scratch),
-  });
-  return { corpus, write: undefined };
+  runGitOrThrow(['-c', `safe.directory=${toForwardSlash(source)}`, 'clone', '-q', '--no-checkout', '--local', '--shared', ...configArgs, source, corpus], { env });
+  const git = cellGit(corpus, env);
+  git(['checkout', 'HEAD', '--', ...keep]);
+  git(['commit', '-q', '--no-verify', '-m', 'subset']);
+  const tracked = git(['ls-files', '-z']).split('\0').filter((path) => path !== '').length;
+  return { subject: { corpus, write: undefined }, tracked };
 }
 
 /**
