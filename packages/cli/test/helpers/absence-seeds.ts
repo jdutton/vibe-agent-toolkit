@@ -230,22 +230,33 @@ function hostLacks(need: HostNeed): boolean {
   return need === 'denyReads' ? CANNOT_DENY_READS : symlinkCapability() === null;
 }
 
-/**
- * Whether a seed cannot be planted here: the only reason a seed is skipped.
- *
- * @param seed - A seed
- * @returns True when the host lacks the seed's need
- */
-export function unplantableHere(seed: I0Seed): boolean {
-  return seed.needs !== null && hostLacks(seed.needs);
+/** One system seed as its file declares it, before it is given a run. */
+interface SeedCasePlan {
+  readonly seed: I0Seed;
+  readonly title: string;
+  /** The host lacks this seed's need: the only reason a seed is skipped. */
+  readonly unplantable: boolean;
 }
 
 /** One system seed as its file declares it: `it.skipIf(unplantable)(title, run)`. */
-interface SeedCase {
-  readonly title: string;
-  /** The host lacks this seed's need. */
-  readonly unplantable: boolean;
+interface SeedCase extends SeedCasePlan {
   readonly run: () => Promise<void>;
+}
+
+/**
+ * One system file's cases, without hooks or runs: the one source both
+ * {@link seedFile} and the host-need assertions read, so what a seed file
+ * skips is what the assertions see.
+ *
+ * @param key - The file's key
+ * @returns The cases, in `SYSTEM_SEEDS[key]` order
+ */
+export function seedCases(key: SeedFileKey): SeedCasePlan[] {
+  return SYSTEM_SEEDS[key].map((seed) => ({
+    seed,
+    title: seedTitle(seed),
+    unplantable: seed.needs !== null && hostLacks(seed.needs),
+  }));
 }
 
 /**
@@ -260,11 +271,10 @@ export function seedFile(key: SeedFileKey, testFileUrl: string): SeedCase[] {
   const suite = seedSuite(testFileUrl);
   beforeAll(suite.setup);
   afterAll(suite.cleanup);
-  return SYSTEM_SEEDS[key].map((seed) => ({
-    title: seedTitle(seed),
-    unplantable: unplantableHere(seed),
+  return seedCases(key).map((plan) => ({
+    ...plan,
     run: async () => {
-      expect(await suite.run(seed)).toEqual(seed.arms);
+      expect(await suite.run(plan.seed)).toEqual(plan.seed.arms);
     },
   }));
 }

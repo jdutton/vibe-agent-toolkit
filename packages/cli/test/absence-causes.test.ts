@@ -31,7 +31,7 @@ import {
   siblingsOf,
   surfacedCodesOf,
 } from './helpers/absence-causes.js';
-import { causeOf, LOWER_TIER_SEEDS, namesPath, SYSTEM_SEEDS, unplantableHere } from './helpers/absence-seeds.js';
+import { causeOf, LOWER_TIER_SEEDS, namesPath, seedCases, SYSTEM_SEEDS, type SeedFileKey } from './helpers/absence-seeds.js';
 
 /** Sorted, so a set compares as a list with a readable diff. */
 function sorted(values: Iterable<string>): string[] {
@@ -93,6 +93,10 @@ describe('a declared refusal label is classified by provenance, never by value',
     expect(() => memberRowCounts(rows, new Map())).toThrow(/declared refusal label/);
   });
 
+  it('throws when only another extent declared the label', () => {
+    expect(() => memberRowCounts(rows, new Map([['ctx-skill', new Set([agentSkills.SKILL_REFUSED_GITIGNORED])]]))).toThrow(/declared refusal label/);
+  });
+
   it('exempts it when its own extent declared the label', () => {
     expect(memberRowCounts(rows, new Map([[FILESYSTEM, new Set([agentSkills.SKILL_REFUSED_GITIGNORED])]]))).toEqual({});
   });
@@ -146,7 +150,10 @@ describe('members and seeds, both ways', () => {
       ...(CANNOT_DENY_READS ? ['denyReads'] : []),
       ...(symlinkCapability() === null ? ['symlinks'] : []),
     ]);
-    const skipped = systemSeeds.filter((seed) => unplantableHere(seed)).map((seed) => seed.name);
+    // What the seed files themselves skip: seedFile spreads these very cases.
+    const cases = (Object.keys(SYSTEM_SEEDS) as SeedFileKey[]).flatMap((key) => seedCases(key));
+    expect(cases.map((seedCase) => seedCase.seed)).toEqual(systemSeeds);
+    const skipped = cases.filter((seedCase) => seedCase.unplantable).map((seedCase) => seedCase.seed.name);
     expect(skipped).toEqual(systemSeeds.filter((seed) => seed.needs !== null && lacked.has(seed.needs)).map((seed) => seed.name));
     if (process.env['CI'] !== undefined && process.platform === 'linux') {
       expect(skipped, 'no seed may be skipped on Linux CI').toEqual([]);

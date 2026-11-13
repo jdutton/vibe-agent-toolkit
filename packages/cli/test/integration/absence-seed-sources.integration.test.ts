@@ -83,6 +83,18 @@ describe('the call-site scan\'s own controls', () => {
     expect(sorted(sites.map((site) => site.test ?? ''))).toEqual(['a', 'n']);
     expect(strays.join('\n')).toMatch(/stray\.ts/);
   });
+
+  it('reports a reach by element access on no namespace as a stray', () => {
+    const text = "it('d', async () => { (await import('@vibe-agent-toolkit/utils/testing'))['expectAbsenceCause'](rows, sig); });";
+    const { sites, strays } = lowerTierCallSites(repoWith({ 'dynamic.ts': text }));
+    expect(sites).toEqual([]);
+    expect(strays.join('\n')).toMatch(/dynamic\.ts:1: .*\['expectAbsenceCause'\]/);
+  });
+
+  it('keeps one site per call, so a test with two calls shows two', () => {
+    const { sites } = lowerTierCallSites(repoWith({ 'twice.ts': `${IMPORT}it('t', () => { expectAbsenceCause(rows, sig); expectAbsenceCause(rows, sig); });` }));
+    expect(sites).toEqual([{ file: 'packages/pkg/test/twice.ts', test: 't' }, { file: 'packages/pkg/test/twice.ts', test: 't' }]);
+  });
 });
 
 describe('the lower-tier finder\'s own controls', () => {
@@ -158,6 +170,8 @@ describe('the lower-tier finder\'s own controls', () => {
     ['an options object that skips', `it('t', { skip: true }, () => { expectAbsenceCause(projection, ${SIGNATURE}); });`, /skipped/],
     ['an options object that is todo', `it('t', { todo: true }, () => { expectAbsenceCause(projection, ${SIGNATURE}); });`, /skipped/],
     ['an options object that fails', `it('t', { fails: true }, () => { expectAbsenceCause(projection, ${SIGNATURE}); });`, /skipped/],
+    ['an options key that skips on a name', `it('t', { skip: flaky }, () => { expectAbsenceCause(projection, ${SIGNATURE}); });`, /skipped/],
+    ['an options key in shorthand', `const skip = flaky; it('t', { skip }, () => { expectAbsenceCause(projection, ${SIGNATURE}); });`, /skipped/],
     ['an options object bound to a name', `const options = { skip: true }; it('t', options, () => { expectAbsenceCause(projection, ${SIGNATURE}); });`, /skipped/],
     ['an options object with a spread', `it('t', { ...options }, () => { expectAbsenceCause(projection, ${SIGNATURE}); });`, /skipped/],
     ['an options object the test cannot read', `it('t', optionsFor('t'), () => { expectAbsenceCause(projection, ${SIGNATURE}); });`, /skipped/],
