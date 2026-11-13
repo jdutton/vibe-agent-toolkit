@@ -289,7 +289,16 @@ function keyedFor(fixture: Fixture): KeyedContent {
   };
 }
 
+/**
+ * The release of every exit hold the running test made, run by the suite's `afterEach` before it
+ * shuts any pool down ({@link holdExitsAfterError}).
+ */
+const heldExitReleases: Array<() => void> = [];
+
 afterEach(async () => {
+  // First: a pool's shutdown waits for every thread's exit, and a test that failed before its own
+  // release would leave one held.
+  for (const release of heldExitReleases.splice(0, heldExitReleases.length)) release();
   // A test that timed out mid-wait leaves the pool's clocks on fake timers, where they never fire,
   // and the drain-first shutdown below would wait for them for ever: every armed clock is run now,
   // and the clock goes back to the real one, on which whatever those re-arm runs.
@@ -448,6 +457,12 @@ describe('ParsePool.parse', () => {
 
 /** What a seeded worker entry posts once its module has loaded, as the real worker does. */
 const READY_LINE = 'parentPort.postMessage({ ready: true, collector: true });';
+
+/**
+ * A seeded worker's statement that keeps the thread busy for 400 ms once it is exiting, so an
+ * uncaught `error` it threw reaches the pool well before Node runs the parent side of its exit.
+ */
+const SLOW_EXIT_LINE = "process.on('exit', () => { const until = Date.now() + 400; while (Date.now() < until); });";
 
 /**
  * A seeded thread killed by the document it holds: its parser has loaded for `request` (said so,
@@ -2139,7 +2154,7 @@ describe('a thread that dies uncontrolled', () => {
     // broken. The real worker registers its listener in the same turn as it posts `ready`, so this
     // thread has always loaded before it throws, however slowly its module loaded.
     await seedWorkerEntry([
-      "process.on('exit', () => { const until = Date.now() + 400; while (Date.now() < until); });",
+      SLOW_EXIT_LINE,
       intercepting(contentStartsWith('# DIE'), ['parentPort.postMessage({ id: request.id, parserLoaded: request.kind });', "throw new Error('seeded death');"]),
     ].join('\n'));
     const pool = trackedPool(1);
@@ -2202,7 +2217,10 @@ describe('a thread that dies uncontrolled', () => {
   it('parks no thread that starts dying while its heap is read for parking', async () => {
     const window = holdExitsAfterError();
     stubParkingMachine({ usedBytes: BYTES_PER_MIB });
-    await seedWorkerEntry(intercepting("request?.type === 'die'", ["throw new Error('seeded death during the heap read');"]));
+    await seedWorkerEntry([
+      SLOW_EXIT_LINE,
+      intercepting("request?.type === 'die'", ["throw new Error('seeded death during the heap read');"]),
+    ].join('\n'));
     const pool = trackedPool(1);
     expect(await outcomeOf(pool, '# alive\n')).toBe('answered');
     // The thread is alive when shutdown asks for its heap, and throws before the read answers.
@@ -2266,12 +2284,15 @@ function exitHandleOf(worker: Worker): WorkerExitHandle {
 /**
  * Hold Node's whole exit handling of every thread that has emitted `error` until released: its
  * handle's `onexit`, which drains the thread's ports, disposes the handle, sets `threadId` to -1
- * and emits `exit`. Node delivers an uncaught throw's `error` before it runs `onexit`, and while
- * `onexit` is held the pool sees exactly what it sees in that window in production — `threadId`
- * still set, the handle live, no `exit` — only for as long as the test says.
+ * and emits `exit`. While `onexit` is held the pool sees what it sees in production's window
+ * between `error` and `exit` — `threadId` still set, the handle live, no `exit` — for as long as
+ * the test says.
  *
- * A Node whose handle cannot be found, or whose held thread already reads as exited, fails the
- * test at the next {@link errored} or release: the seam never falls back to a weaker hold.
+ * The hold needs the `error` first. Node usually delivers it so, but `onexit` drains the thread's
+ * internal port, and an `error` still queued there is then emitted inside `onexit`, with `exit`
+ * right after it: nothing is held. A worker that exits slowly ({@link SLOW_EXIT_LINE}) makes
+ * error-first the order; and an `exit` an errored thread emits without a release fails the test
+ * at release, as does a handle that cannot be found. The seam never passes on a weaker hold.
  *
  * @returns Whether a thread has emitted `error`, how many have, and the release that runs every held exit
  */
@@ -2280,20 +2301,24 @@ function holdExitsAfterError(): { hasErrored: (worker: Worker) => boolean; error
   const errored = new Set<Worker>();
   const held: Array<() => void> = [];
   let released = false;
+  let runningHeld = false;
   let seamBroken: unknown;
   const hold = (worker: Worker): void => {
     const handle = exitHandleOf(worker);
     const onexit = handle.onexit;
     handle.onexit = (...exitArgs: unknown[]): void => {
-      const run = (): void => {
-        onexit.apply(handle, exitArgs);
-      };
       if (released) {
-        run();
+        onexit.apply(handle, exitArgs);
         return;
       }
-      if (worker.threadId < 0) seamBroken ??= new Error('holdExitsAfterError: a held thread already reads as exited (threadId < 0)');
-      held.push(run);
+      held.push(() => {
+        runningHeld = true;
+        try {
+          onexit.apply(handle, exitArgs);
+        } finally {
+          runningHeld = false;
+        }
+      });
     };
   };
   vi.spyOn(Worker.prototype, 'emit').mockImplementation(function (this: Worker, event: string | symbol, ...args: unknown[]) {
@@ -2305,18 +2330,25 @@ function holdExitsAfterError(): { hasErrored: (worker: Worker) => boolean; error
         seamBroken ??= error;
       }
     }
+    if (event === 'exit' && errored.has(this) && !released && !runningHeld) {
+      seamBroken ??= new Error('holdExitsAfterError: an errored thread exited unheld, so the test ran without its window (Node emitted its `error` inside its exit handling)');
+    }
     return emit.call(this, event, ...args);
   });
   const check = (): void => {
     if (seamBroken !== undefined) throw seamBroken;
   };
-  const release = (): void => {
+  const runHeld = (): void => {
     released = true;
     for (const run of held.splice(0, held.length)) run();
+  };
+  const release = (): void => {
+    runHeld();
     check();
   };
-  // A failed assertion must not leave a thread's exit held, or the suite's shutdown waits on it.
-  onTestFinished(release);
+  // Not `onTestFinished`, which runs after `afterEach`: a test that fails before its release would
+  // leave the exit held through the suite's shutdown, which waits on it until the hook times out.
+  heldExitReleases.push(runHeld);
   return {
     hasErrored: (worker) => errored.has(worker),
     errored: () => {
@@ -2339,6 +2371,7 @@ async function poolWithIdleThreadDying(window: ReturnType<typeof holdExitsAfterE
   stubParkingMachine({ usedBytes: BYTES_PER_MIB });
   await seedWorkerEntry([
     "import { parentPort } from 'node:worker_threads';",
+    SLOW_EXIT_LINE,
     'const dieAfter = new Set();',
     'const post = parentPort.postMessage.bind(parentPort);',
     'parentPort.postMessage = (message) => {',
