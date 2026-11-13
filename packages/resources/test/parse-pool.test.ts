@@ -29,6 +29,7 @@ import diagnosticsChannel from 'node:diagnostics_channel';
 import { existsSync, promises as fs, rmSync } from 'node:fs';
 import { availableParallelism, totalmem } from 'node:os';
 import { pathToFileURL } from 'node:url';
+import { getHeapStatistics } from 'node:v8';
 import { Worker } from 'node:worker_threads';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
@@ -288,7 +289,16 @@ function keyedFor(fixture: Fixture): KeyedContent {
   };
 }
 
+/**
+ * The release of every exit hold the running test made, run by the suite's `afterEach` before it
+ * shuts any pool down ({@link holdThreadExits}).
+ */
+const heldExitReleases: Array<() => void> = [];
+
 afterEach(async () => {
+  // First: a pool's shutdown waits for every thread's exit, and a test that failed before its own
+  // release would leave one held.
+  for (const release of heldExitReleases.splice(0, heldExitReleases.length)) release();
   // A test that timed out mid-wait leaves the pool's clocks on fake timers, where they never fire,
   // and the drain-first shutdown below would wait for them for ever: every armed clock is run now,
   // and the clock goes back to the real one, on which whatever those re-arm runs.
@@ -2151,7 +2161,235 @@ describe('a thread that dies uncontrolled', () => {
     expect(outcomes[1]).toBe('answered');
     expect(widest).toBe(1);
   });
+
+  it('hands no job to a thread between its `error` and its `exit`, so the job runs on its replacement', async () => {
+    const window = holdThreadExits();
+    const pool = await poolWithIdleThreadDying(window);
+    const posted = vi.spyOn(Worker.prototype, 'postMessage');
+
+    // The thread is dead but still listed, idle: the job must wait for its slot, not take it. Handed
+    // to the dead thread, it would be lost there and run again — answered, but dispatched twice.
+    const next = outcomeOf(pool, '# next\n');
+    window.release();
+
+    expect(verdictOf(await next)).toBe('answered');
+    const dispatches = posted.mock.calls.filter(([message]) => typeof (message as { id?: unknown } | undefined)?.id === 'number');
+    expect(dispatches).toHaveLength(1);
+  });
+
+  it('references a thread once it has thrown, so its `exit` keeps the process alive for the job waiting on its slot', async () => {
+    // An idle thread is unref'd. Skipped while dying, it is never handed the queued job, so
+    // nothing but its own `error` listener can re-ref it before its `exit` frees the slot.
+    const window = holdThreadExits();
+    const ref = Worker.prototype.ref;
+    const refsAfterError: Worker[] = [];
+    vi.spyOn(Worker.prototype, 'ref').mockImplementation(function (this: Worker) {
+      if (window.hasErrored(this)) refsAfterError.push(this);
+      ref.call(this);
+    });
+    const pool = await poolWithIdleThreadDying(window);
+
+    const next = outcomeOf(pool, '# next\n');
+    const refsBeforeExit = refsAfterError.length;
+    window.release();
+
+    expect(refsBeforeExit).toBeGreaterThan(0);
+    expect(verdictOf(await next)).toBe('answered');
+  });
+
+  it('parks no thread between its `error` and its `exit`, even when a heap read still answers', async () => {
+    const window = holdThreadExits();
+    const pool = await poolWithIdleThreadDying(window);
+    vi.spyOn(Worker.prototype, 'getHeapStatistics').mockResolvedValue(PARKABLE_HEAP_READ);
+
+    const { parked, outcome } = await shutDownWithExitsHeld(pool, window);
+
+    expect(parked).toBe(0);
+    expect(outcome).toBe('shut down');
+  });
+
+  it('parks no thread that starts dying while its heap is read for parking', async () => {
+    const window = holdThreadExits();
+    stubParkingMachine({ usedBytes: BYTES_PER_MIB });
+    await seedWorkerEntry(intercepting("request?.type === 'die'", ["throw new Error('seeded death during the heap read');"]));
+    const pool = trackedPool(1);
+    expect(await outcomeOf(pool, '# alive\n')).toBe('answered');
+    // The thread is alive when shutdown asks for its heap, and throws before the read answers.
+    vi.spyOn(Worker.prototype, 'getHeapStatistics').mockImplementation(async function (this: Worker) {
+      this.postMessage({ type: 'die' });
+      await until(() => window.errored() === 1);
+      return PARKABLE_HEAP_READ;
+    });
+
+    const { parked, outcome } = await shutDownWithExitsHeld(pool, window);
+
+    expect(parked).toBe(0);
+    expect(outcome).toBe('shut down');
+  });
 });
+
+/** A heap read small enough that the thread it is taken from may be parked. */
+const PARKABLE_HEAP_READ = { ...getHeapStatistics(), used_heap_size: BYTES_PER_MIB };
+
+/**
+ * Shut a pool down while a dead thread's `exit` is held, and count what it parked by the time it
+ * either finished (it parked the thread) or asked the thread to close (it waits for the held `exit`).
+ *
+ * @param pool - The pool, holding one idle thread that has died or will die during the heap read
+ * @param window - The held exits, released once the count is taken
+ * @returns How many threads were parked then, and what the shutdown settled to
+ */
+async function shutDownWithExitsHeld(pool: ParsePool, window: ReturnType<typeof holdThreadExits>): Promise<{ parked: number; outcome: unknown }> {
+  const closeAsked = vi.spyOn(Worker.prototype, 'postMessage');
+  const asked = (): boolean => closeAsked.mock.calls.some(([message]) => (message as { type?: unknown } | undefined)?.type === 'shutdown');
+  const shutdown = settledLater(pool.shutdown().then(() => 'shut down'));
+  await until(() => shutdown.settled() !== undefined || asked());
+  const parked = __parkedParseWorkerCountForTest();
+  window.release();
+  return { parked, outcome: await shutdown.outcome };
+}
+
+/** The part of Node's internal worker handle the exit hold wraps. */
+interface WorkerExitHandle {
+  onexit: (...args: unknown[]) => void;
+}
+
+/**
+ * The handle Node keeps for a running worker thread: the own symbol-keyed property whose value
+ * carries `onexit`, the callback Node runs once the thread has stopped. It is a Node internal
+ * (`kHandle`), found so on Node 22.16, 24 and 26; a Node that keeps it otherwise fails the test here.
+ *
+ * @param worker - A thread that has not yet exited
+ * @returns Its handle
+ */
+function exitHandleOf(worker: Worker): WorkerExitHandle {
+  for (const key of Object.getOwnPropertySymbols(worker)) {
+    const value: unknown = (worker as unknown as Record<symbol, unknown>)[key];
+    if (typeof value === 'object' && value !== null && typeof (value as Partial<WorkerExitHandle>).onexit === 'function') {
+      return value as WorkerExitHandle;
+    }
+  }
+  throw new Error(`holdThreadExits: no own symbol property of this Worker carries \`onexit\` on Node ${process.version}; the seam must be updated for this Node`);
+}
+
+/**
+ * Hold Node's whole exit handling of every thread started from now on until released: its handle's
+ * `onexit`, which drains the thread's ports, disposes the handle, sets `threadId` to -1 and emits
+ * `exit`. A thread that throws and stops is then dead with its `error` delivered — through the
+ * thread's internal port, which stays live while `onexit` waits — and the pool sees what it sees in
+ * production's window between `error` and `exit`: `threadId` still set, the handle live, no `exit`.
+ *
+ * `onexit` is wrapped as the thread is constructed (the `worker_threads` diagnostics channel), never
+ * when its `error` arrives: Node may run `onexit` before it delivers the `error` (a parent busy
+ * while the thread throws and stops sees both at once; measured so on Node 22.16, 24 and 26 with
+ * the parent blocked), and `onexit` then emits the `error` from its drain with `exit` right after.
+ * Wrapped at construction, the exit is held whichever comes first.
+ *
+ * A handle that cannot be found, or an `exit` emitted before the release by a thread started under
+ * the hold, fails the test at the next {@link errored} or release: the seam never passes on a
+ * weaker hold.
+ *
+ * @returns Whether a thread has emitted `error`, how many have, and the release that runs every held exit
+ */
+function holdThreadExits(): { hasErrored: (worker: Worker) => boolean; errored: () => number; release: () => void } {
+  const emit = Worker.prototype.emit;
+  const started = new Set<Worker>();
+  const errored = new Set<Worker>();
+  const held: Array<() => void> = [];
+  let released = false;
+  let runningHeld = false;
+  let seamBroken: unknown;
+  const hold = (worker: Worker): void => {
+    const handle = exitHandleOf(worker);
+    const onexit = handle.onexit;
+    handle.onexit = (...exitArgs: unknown[]): void => {
+      if (released) {
+        onexit.apply(handle, exitArgs);
+        return;
+      }
+      held.push(() => {
+        runningHeld = true;
+        try {
+          onexit.apply(handle, exitArgs);
+        } finally {
+          runningHeld = false;
+        }
+      });
+    };
+  };
+  const onStarted = (message: unknown): void => {
+    const { worker } = message as { worker: Worker };
+    started.add(worker);
+    try {
+      hold(worker);
+    } catch (error) {
+      seamBroken ??= error;
+    }
+  };
+  diagnosticsChannel.subscribe('worker_threads', onStarted);
+  vi.spyOn(Worker.prototype, 'emit').mockImplementation(function (this: Worker, event: string | symbol, ...args: unknown[]) {
+    if (event === 'error') errored.add(this);
+    if (event === 'exit' && started.has(this) && !released && !runningHeld) {
+      seamBroken ??= new Error('holdThreadExits: a thread started under the hold exited unheld, so the test ran without its window');
+    }
+    return emit.call(this, event, ...args);
+  });
+  const check = (): void => {
+    if (seamBroken !== undefined) throw seamBroken;
+  };
+  const runHeld = (): void => {
+    released = true;
+    diagnosticsChannel.unsubscribe('worker_threads', onStarted);
+    for (const run of held.splice(0, held.length)) run();
+  };
+  const release = (): void => {
+    runHeld();
+    check();
+  };
+  // Not `onTestFinished`, which runs after `afterEach`: a test that fails before its release would
+  // leave the exit held through the suite's shutdown, which waits on it until the hook times out.
+  heldExitReleases.push(runHeld);
+  return {
+    hasErrored: (worker) => errored.has(worker),
+    errored: () => {
+      check();
+      return errored.size;
+    },
+    release,
+  };
+}
+
+/**
+ * A one-thread pool whose thread answered one job and then threw while idle, with its exit held
+ * ({@link holdThreadExits}): on return the thread is dead, its `error` delivered, and it is still
+ * listed as the pool's idle thread.
+ *
+ * @param window - The hold, made by the caller so it can watch the thread from its `error` on
+ * @returns The pool
+ */
+async function poolWithIdleThreadDying(window: ReturnType<typeof holdThreadExits>): Promise<ParsePool> {
+  stubParkingMachine({ usedBytes: BYTES_PER_MIB });
+  await seedWorkerEntry([
+    "import { parentPort } from 'node:worker_threads';",
+    'const dieAfter = new Set();',
+    'const post = parentPort.postMessage.bind(parentPort);',
+    'parentPort.postMessage = (message) => {',
+    '  post(message);',
+    "  if (!dieAfter.has(message?.id) || 'parserLoaded' in message || 'reuseCheck' in message) return;",
+    "  setImmediate(() => { throw new Error('seeded idle death'); });",
+    '};',
+    'const on = parentPort.on.bind(parentPort);',
+    "parentPort.on = (event, listener) => on(event, event === 'message' ? (request) => {",
+    `  if (${contentStartsWith('# DIE IDLE')}) dieAfter.add(request.id);`,
+    '  listener(request);',
+    '} : listener);',
+    `await import(${JSON.stringify(BUILT_WORKER)});`,
+  ].join('\n'));
+  const pool = trackedPool(1);
+  expect(await outcomeOf(pool, '# DIE IDLE\n')).toBe('answered');
+  await until(() => window.errored() === 1);
+  return pool;
+}
 
 describe('ParsePool.parseIntoCache', () => {
   it.each(FIXTURES.map((fixture) => [fixture.name, fixture] as const))(
