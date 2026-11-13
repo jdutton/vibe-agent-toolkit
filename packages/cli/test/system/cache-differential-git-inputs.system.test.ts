@@ -62,6 +62,7 @@ function seededKeysDiffer(runs: RecordedRuns): void {
 function holeSeed(name: string, stateA: NonNullable<I0Seed['stateA']>, toB: NonNullable<I0Seed['toB']>): I0Seed {
   return {
     name,
+    needs: null,
     arms: ['storeOff', 'warmSameHistory'],
     verbs: ['query'],
     stateA,
@@ -72,6 +73,7 @@ function holeSeed(name: string, stateA: NonNullable<I0Seed['stateA']>, toB: NonN
 }
 
 const globalExcludes: I0Seed = {
+  needs: null,
   name: 'globalExcludes',
   arms: ['storeOff', 'warmSameHistory'],
   verbs: ['query'],

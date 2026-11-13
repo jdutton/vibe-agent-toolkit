@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
+import { CANNOT_DENY_READS, expectAbsenceCause, type AbsenceRows } from '@vibe-agent-toolkit/utils/testing';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { RunContentCache } from '../src/projection/content-cache.js';
@@ -9,6 +9,7 @@ import type { ExtentContribution } from '../src/projection/contributor.js';
 import { extentContextId } from '../src/projection/contributors/context-id.js';
 import {
   PACKAGE_NOT_INSTALLED,
+  PACKAGE_RESOLUTION_FAILED,
   PACKAGE_SUBPATH_NOT_EXPORTED,
   PackageExtentContributor,
 } from '../src/projection/contributors/package-extent.js';
@@ -211,6 +212,59 @@ describe('PackageExtentContributor exports map', () => {
     const paths = found.realizations.map((row) => row.path);
     expect(paths).not.toContain(safePath.join(INSTALLED_DIR, PRIVATE_SUBPATH));
     expect(found.conditions.map((row) => row.code)).toEqual([PACKAGE_SUBPATH_NOT_EXPORTED]);
+  });
+});
+
+/**
+ * Declare one more dependency of the root, installed under `node_modules` with the given manifest text.
+ *
+ * @param packageName - The dependency
+ * @param manifest - Its `package.json`, verbatim
+ */
+function installDependency(packageName: string, manifest: string): void {
+  const directory = safePath.join(root, 'node_modules', packageName);
+  mkdirSyncReal(directory, { recursive: true });
+  writeFileSync(safePath.join(directory, MANIFEST), manifest);
+  writeJson(MANIFEST, { name: ROOT_PKG, version: '0.0.0', dependencies: { [packageName]: '^1.0.0' } });
+}
+
+/** A contribution's rows as the tables an absence cause is observed in. */
+function absenceRowsOf(contribution: ExtentContribution): AbsenceRows {
+  return {
+    blobConditions: [],
+    resourceRealizations: contribution.realizations,
+    realizationConditions: contribution.conditions,
+    resolutionContexts: contribution.contexts,
+  };
+}
+
+describe('PackageExtentContributor — a package it could not locate', () => {
+  it('records a dependency whose exports map hides its own manifest at the package level', async () => {
+    const hidden = '@fixture/hidden';
+    installDependency(hidden, JSON.stringify({ name: hidden, version: '1.0.0', exports: { './public.json': './public.json' } }));
+
+    const contribution = await contribute();
+    const found = forPackage(contribution, hidden);
+
+    expect(found.realizations).toEqual([]);
+    expect(found.conditions.map((row) => row.code)).toEqual([PACKAGE_SUBPATH_NOT_EXPORTED]);
+    // The package-level row names the package it could not locate; the subpath-level one names none.
+    expect(found.conditions[0]?.resourceId).toBe(found.resources[0]?.resourceId);
+    // The absence-cause member this test seeds (the CLI's absence-seeds.ts names it).
+    expect(expectAbsenceCause(absenceRowsOf(contribution), { code: PACKAGE_SUBPATH_NOT_EXPORTED, extentKind: 'package', resourceIdPresent: true })).toHaveLength(1);
+  });
+
+  it('records a dependency whose resolution failed for a reason that is neither absence nor an exclusion', async () => {
+    const broken = '@fixture/broken';
+    installDependency(broken, '{ not json');
+
+    const contribution = await contribute();
+    const found = forPackage(contribution, broken);
+
+    expect(found.realizations).toEqual([]);
+    expect(found.conditions.map((row) => row.code)).toEqual([PACKAGE_RESOLUTION_FAILED]);
+    // The absence-cause member this test seeds (the CLI's absence-seeds.ts names it).
+    expect(expectAbsenceCause(absenceRowsOf(contribution), { code: PACKAGE_RESOLUTION_FAILED, extentKind: 'package' })).toHaveLength(1);
   });
 });
 

@@ -5,8 +5,8 @@
  * committed, taken once (`clonedSubject`): the docs tree, the
  * shipped skills, a package's docs and READMEs, and the root config and schemas
  * that bind them, so real-world markdown, frontmatter, links and skill layout are
- * the subject without the whole tree's cost. The query returns every `blob_conditions` and
- * `realization_conditions` row, and per relation its row count and its rows'
+ * the subject without the whole tree's cost. The query returns every row of the relations the
+ * absence-cause census classifies (`CLASSIFIED_RELATIONS`), and per relation its row count and its rows'
  * ordered concatenation (as a `#<relation>` row), so one document carries the
  * whole projection. Each arm's document is digested with sha256 (SQLite has no
  * hash function, so the digest is taken here) and the digests must agree, as
@@ -30,6 +30,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { CLASSIFIED_RELATIONS } from '../helpers/absence-causes.js';
 import {
   censusOf,
   clonedSubject,
@@ -64,8 +65,8 @@ const SUBJECT_PATHS: readonly string[] = [
 /** The most files the subject may track: about one and a half times the 144 it held when pinned. */
 const MAX_SUBJECT_FILES = 210;
 
-/** Relations dumped row by row: the ones a refusal or a realization failure lands in. */
-const LISTED: ReadonlySet<string> = new Set(['blob_conditions', 'realization_conditions']);
+/** Relations dumped row by row: the ones the census classifies, so every absence cause the subject holds is classified. */
+const LISTED: ReadonlySet<string> = new Set(CLASSIFIED_RELATIONS);
 
 /**
  * Every listed relation's rows, then one `#<relation>` row per relation: its count and ordered rows.
@@ -90,6 +91,7 @@ const MAX_BUFFER = 16 * 1024 * 1024;
 
 /** No plant: two arms over a fixed tree, the one query, diverging nowhere. */
 const VAT_TREE: I0Seed = {
+  needs: null,
   name: 'vatTree',
   arms: ['storeOff', 'cold'],
   verbs: ['query'],

@@ -26,6 +26,7 @@ function forgedText(): string {
 }
 
 const forgedParseEntry: I0Seed = {
+  needs: null,
   name: 'forgedParseEntry',
   arms: ['storeOff', 'cold'],
   verbs: ['validate', 'check', 'query'],

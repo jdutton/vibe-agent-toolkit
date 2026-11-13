@@ -65,6 +65,7 @@
  */
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { expectAbsenceCause } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ParseCache, ParserUnavailableError } from '../src/parse-cache.js';
@@ -244,8 +245,11 @@ describe('an ordinary parser failure during blob derivation', () => {
     const counts = await populateBlobs(builder, { parseCache: NO_CACHE, parsePool: failingPolicy() });
 
     expect(counts.blobsParseFailed).toBe(CORPUS.length);
-    const conditions = conditionsWithCode(builder.build(), BLOB_PARSE_FAILED);
+    const projection = builder.build();
+    const conditions = conditionsWithCode(projection, BLOB_PARSE_FAILED);
     expect(conditions).toHaveLength(CORPUS.length);
+    // The absence-cause member this test seeds (the CLI's absence-seeds.ts names it).
+    expect(expectAbsenceCause(projection, { code: BLOB_PARSE_FAILED })).toHaveLength(CORPUS.length);
     expect(conditions[0]?.message).toContain('parser threw on these bytes');
     // Content-addressed and shared across repositories: no path belongs in it.
     expect(conditions[0]?.message).not.toMatch(/ at "/);

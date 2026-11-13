@@ -3,28 +3,21 @@
  * without seeing (`./helpers/cache-differential.ts`).
  */
 
-import {
-  BLOB_FINDING_CONDITION_CODES,
-  BLOB_NOT_TEXT,
-  BLOB_PARSE_LIMIT_EXCEEDED,
-  BLOB_PARSE_WORKER_DIED,
-  BLOB_REFUSAL_CONDITION_CODES,
-  type ParseRefusedResource,
-} from '@vibe-agent-toolkit/resources';
+import { BLOB_NOT_TEXT, BLOB_PARSE_LIMIT_EXCEEDED, BLOB_PARSE_WORKER_DIED, EXTENT_DIRECTORY_UNLISTABLE } from '@vibe-agent-toolkit/resources';
 import { CRAWL_STORE_READ_ID } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
+import { groupOf, UNGROUPED } from './helpers/absence-causes.js';
 import {
   DECLARED_EMPTY,
   DUMPED_RELATIONS,
+  expectNoDivergenceAndNoRefusal,
   expectSeed,
   HOLE_MOVED_COLUMNS,
   normalizeDocument,
-  PARSE_REFUSAL_BLOB_CODES,
-  PARSE_REFUSAL_CODES,
   PER_RUN_FIELDS,
-  refusingBlobCondition,
   RELATION_NAMES,
+  runEveryStep,
   VERB_NAMES,
   VERBS,
   type DifferentialResult,
@@ -84,54 +77,55 @@ describe('the dump', () => {
   });
 });
 
+/** A query document whose dump holds the given rows. */
+function dumpOf(rows: ReadonlyArray<readonly [relation: string, row: Record<string, unknown>]>): Record<string, unknown> {
+  return { status: 'success', data: { rows: rows.map(([relation, row]) => ({ relation, row: JSON.stringify(row) })) } };
+}
+
 describe('the census', () => {
-  it('pairs each parse refusal blob code with the finding code production reports it under', () => {
-    // Written out here, against the codes `resources` exports, so a pairing production changes reds this
-    // test rather than silently moving the harness's limit set with it. The record's type keeps it
-    // exhaustive over the finding codes a parse refusal can carry.
-    const expected: Record<ParseRefusedResource['code'], string> = {
-      RESOURCE_PARSE_LIMIT_EXCEEDED: BLOB_PARSE_LIMIT_EXCEEDED,
-      RESOURCE_PARSE_WORKER_DIED: BLOB_PARSE_WORKER_DIED,
-    };
-    expect(PARSE_REFUSAL_BLOB_CODES).toEqual(new Map(Object.entries(expected).map(([finding, blob]) => [blob, finding])));
-    expect(PARSE_REFUSAL_CODES).toHaveLength(Object.keys(expected).length);
-    expect(new Set(PARSE_REFUSAL_CODES)).toEqual(new Set(Object.keys(expected)));
+  it('counts a dump\'s member rows by member, and an exempt row as nothing', () => {
+    const dump = dumpOf([
+      ['blob_conditions', { code: BLOB_PARSE_LIMIT_EXCEEDED }],
+      ['blob_conditions', { code: BLOB_NOT_TEXT }],
+      ['resource_realizations', { contentState: 'oversize' }],
+      ['resource_realizations', { contentState: 'keyed' }],
+    ]);
+    expect(VERBS.query.censusOf(dump)).toEqual({ rows: { [BLOB_PARSE_LIMIT_EXCEEDED]: 1, 'contentState:oversize': 1 }, findings: {} });
   });
 
-  it('counts a blob condition as a limit exactly when production logs it as a parse refusal', () => {
-    for (const code of BLOB_REFUSAL_CONDITION_CODES) {
-      const dump = { status: 'success', data: { rows: [{ relation: 'blob_conditions', row: JSON.stringify({ code }) }] } };
-      const limit = code === BLOB_PARSE_LIMIT_EXCEEDED || code === BLOB_PARSE_WORKER_DIED;
-      expect(VERBS.query.refusalsOf(dump), code).toEqual(limit ? { limit: 1, other: 0 } : { limit: 0, other: 1 });
-    }
+  it('holds a realization condition to its own extent\'s kind', () => {
+    const condition = { code: EXTENT_DIRECTORY_UNLISTABLE, extentId: 'ctx-fs', resourceId: 'res-dir' };
+    const counted = dumpOf([['realization_conditions', condition], ['resolution_contexts', { contextId: 'ctx-fs', kind: 'filesystem' }]]);
+    expect(VERBS.query.censusOf(counted).rows).toEqual({ [EXTENT_DIRECTORY_UNLISTABLE]: 1 });
+    const otherKind = dumpOf([['realization_conditions', condition], ['resolution_contexts', { contextId: 'ctx-fs', kind: 'git' }]]);
+    expect(() => VERBS.query.censusOf(otherKind)).toThrow(/neither an absence-cause member nor exempt/);
   });
 
-  it('classifies a blob condition by code, and refuses to guess an unknown one', () => {
-    const [refusal] = PARSE_REFUSAL_BLOB_CODES.keys();
-    const [finding] = BLOB_FINDING_CONDITION_CODES;
-    expect(refusingBlobCondition(JSON.stringify({ code: refusal }))).toBe(refusal);
-    expect(refusingBlobCondition(JSON.stringify({ code: finding }))).toBeUndefined();
-    expect(() => refusingBlobCondition(JSON.stringify({ code: 'NO_SUCH_CODE' }))).toThrow(/no known kind/);
+  it('refuses to guess: an unknown code, and a condition whose extent the dump does not list, both throw', () => {
+    expect(() => VERBS.query.censusOf(dumpOf([['blob_conditions', { code: 'NO_SUCH_CODE' }]]))).toThrow(/NO_SUCH_CODE/);
+    const orphan = dumpOf([['realization_conditions', { code: EXTENT_DIRECTORY_UNLISTABLE, extentId: 'ctx-gone', resourceId: null }]]);
+    expect(() => VERBS.query.censusOf(orphan)).toThrow(/no resolution_contexts row/);
   });
 
-  it('counts a blob not sniffed as text as a refusal: the gate fixture holds only text', () => {
-    expect(refusingBlobCondition(JSON.stringify({ code: BLOB_NOT_TEXT }))).toBe(BLOB_NOT_TEXT);
+  it('exempts a declared refusal label by its extent\'s provenance, never by its value', () => {
+    const declaration = { kind: 'skill', closureFrom: 'SKILL.md', refusals: [{ label: 'MY_LABEL' }] };
+    const condition = { code: 'MY_LABEL', extentId: 'ctx-skill', resourceId: null };
+    const contexts: Array<readonly [string, Record<string, unknown>]> = [['resolution_contexts', { contextId: 'ctx-skill', kind: 'skill' }]];
+    const declared = dumpOf([...contexts, ['realization_conditions', condition], ['zone_provenance', { contextId: 'ctx-skill', parameterSet: JSON.stringify(declaration) }]]);
+    expect(VERBS.query.censusOf(declared).rows).toEqual({});
+    const undeclared = dumpOf([...contexts, ['realization_conditions', condition], ['zone_provenance', { contextId: 'ctx-other', parameterSet: JSON.stringify(declaration) }]]);
+    expect(() => VERBS.query.censusOf(undeclared)).toThrow(/MY_LABEL/);
   });
 
-  it('counts every not-admitted code as a refusal, the parse refusals as limits', () => {
-    const findings = [...PARSE_REFUSAL_CODES, 'RESOURCE_UNREADABLE'].map((code) => ({ code }));
-    expect(VERBS.validate.refusalsOf({ status: 'success', findings })).toEqual({ limit: PARSE_REFUSAL_CODES.length, other: 1 });
-  });
-
-  it('counts a parse refusal as a limit and any other refusal apart, in every document shape', () => {
-    const [limitCode] = PARSE_REFUSAL_CODES;
-    const report = { status: 'success', findings: [{ code: limitCode }, { code: 'NOT_A_REFUSAL' }] };
-    expect(VERBS.validate.refusalsOf(report)).toEqual({ limit: 1, other: 0 });
-    expect(VERBS.check.refusalsOf({ status: 'error', error: { code: 'SOME_ERROR' } })).toEqual({ limit: 0, other: 1 });
-    const dump = { status: 'success', data: { rows: [{ relation: 'blob_conditions', row: JSON.stringify({ code: [...PARSE_REFUSAL_BLOB_CODES.keys()][0] }) }] } };
-    expect(VERBS.query.refusalsOf(dump)).toEqual({ limit: 1, other: 0 });
-    const answers = { kind: 'context-answers', answers: [{ refused: [{ code: limitCode }, { code: 'OTHER' }] }, {}] };
-    expect(VERBS.context.refusalsOf(answers)).toEqual({ limit: 1, other: 1 });
+  it('counts a finding by the group of members that surface it, and a refusal no member surfaces as ungrouped', () => {
+    const report = { status: 'success', findings: [{ code: 'RESOURCE_PARSE_LIMIT_EXCEEDED' }, { code: 'RESOURCE_PARSE_WORKER_DIED' }, { code: 'NOT_A_REFUSAL' }] };
+    expect(VERBS.validate.censusOf(report)).toEqual({
+      rows: {},
+      findings: { [groupOf(BLOB_PARSE_LIMIT_EXCEEDED)]: 1, [groupOf(BLOB_PARSE_WORKER_DIED)]: 1 },
+    });
+    expect(VERBS.check.censusOf({ status: 'error', error: { code: 'USAGE_INVALID' } })).toEqual({ rows: {}, findings: { [UNGROUPED]: 1 } });
+    const answers = { kind: 'context-answers', answers: [{ refused: [{ code: 'RESOURCE_PARSE_LIMIT_EXCEEDED' }, { code: 'RESOURCE_UNREADABLE' }] }, {}] };
+    expect(VERBS.context.censusOf(answers)).toEqual({ rows: {}, findings: { [groupOf(BLOB_PARSE_LIMIT_EXCEEDED)]: 2 } });
   });
 });
 
@@ -167,6 +161,7 @@ function holeResult(measuredBlob: string): DifferentialResult {
 describe('a documented hole', () => {
   const seed: I0Seed = {
     name: 'hole',
+    needs: null,
     arms: ['storeOff', 'warmSameHistory'],
     verbs: ['query'],
     expect: { documentsHole: { arm: 'warmSameHistory', closedBy: 'the stat memo' } },
@@ -179,5 +174,74 @@ describe('a documented hole', () => {
 
   it('reds when the warm run serves blob facts its prime never derived', () => {
     expect(() => expectSeed(seed, holeResult('neither-blob'))).toThrow();
+  });
+});
+
+/** A store-off-only result: the reference arm's dump, and one validate report. */
+function storeOffResult(dump: Record<string, unknown>, report: Record<string, unknown>): DifferentialResult {
+  const run = (verb: 'query' | 'validate', document: Record<string, unknown>) =>
+    ({ label: 'storeOff:measured', verb, status: 0, stdout: '', stderr: '', document, charged: [] }) as const;
+  const measured = { query: run('query', dump), validate: run('validate', report) };
+  return {
+    arms: ['storeOff'],
+    verbs: ['validate', 'query'],
+    measured: { storeOff: measured, cold: {}, warmSameHistory: {} },
+    runs: { 'storeOff:measured': measured },
+    rows: VERBS,
+  };
+}
+
+describe('a refusal seed', () => {
+  const seed: I0Seed = {
+    name: 'limit',
+    needs: null,
+    arms: ['storeOff'],
+    verbs: ['validate', 'query'],
+    expect: { refuses: { cause: BLOB_PARSE_LIMIT_EXCEEDED, perVerb: { validate: 1, query: 1 } } },
+    consumed: { runs: [], check: () => undefined },
+  };
+  const dump = dumpOf([['blob_conditions', { code: BLOB_PARSE_LIMIT_EXCEEDED }]]);
+
+  it('holds when every verb refuses under a code its cause surfaces', () => {
+    expect(() => expectSeed(seed, storeOffResult(dump, { status: 'success', findings: [{ code: 'RESOURCE_PARSE_LIMIT_EXCEEDED' }] }))).not.toThrow();
+  });
+
+  it('reds when a verb refuses under a code of the same group that its cause does not surface', () => {
+    const relabelled = { status: 'success', findings: [{ code: 'RESOURCE_UNREADABLE' }] };
+    expect(() => expectSeed(seed, storeOffResult(dump, relabelled))).toThrow(/does not surface/);
+  });
+});
+
+describe('the unseeded gate', () => {
+  const clean = { status: 'success', findings: [] };
+
+  it('holds over a dump with no absence', () => {
+    expect(() => expectNoDivergenceAndNoRefusal(storeOffResult(dumpOf([]), clean))).not.toThrow();
+  });
+
+  it('reds on a blob its sniffer called not text, though that code is exempt from the census', () => {
+    const sniffed = dumpOf([['blob_conditions', { code: BLOB_NOT_TEXT }]]);
+    expect(() => expectNoDivergenceAndNoRefusal(storeOffResult(sniffed, clean))).toThrow(/BLOB_NOT_TEXT/);
+  });
+});
+
+describe('the seed suite\'s cleanup', () => {
+  /** A step that records its name, then throws when told to. */
+  const step = (ran: string[], name: string, throws = false) => (): void => {
+    ran.push(name);
+    if (throws) throw new Error(name);
+  };
+
+  it('runs every step though an earlier one throws, then rethrows the first error', () => {
+    const ran: string[] = [];
+    const steps = [step(ran, 'restore a', true), step(ran, 'restore b', true), step(ran, 'remove cells'), step(ran, 'context cleanup')];
+    expect(() => runEveryStep(steps)).toThrow('restore a');
+    expect(ran).toEqual(['restore a', 'restore b', 'remove cells', 'context cleanup']);
+  });
+
+  it('returns quietly when every step succeeds', () => {
+    const ran: string[] = [];
+    runEveryStep([step(ran, 'a'), step(ran, 'b')]);
+    expect(ran).toEqual(['a', 'b']);
   });
 });
