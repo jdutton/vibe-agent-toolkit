@@ -168,7 +168,6 @@ const BARREL_EXPORTS = [
   'normalizePath',
   'normalizeTimingDirectory',
   'normalizedTmpdir',
-  'onWorkCountersReset',
   'openForReading',
   'parseEnvBoolean',
   'parseWholeNumberAtLeast',

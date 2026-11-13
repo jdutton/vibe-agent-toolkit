@@ -275,9 +275,8 @@ These replace `await` inside a loop, which the repo's ESLint config refuses (`no
 - `countWork(counter, n)` - add `n` to one counter of the closed set `WORK_COUNTER_NAMES` (type `WorkCounter`); `n` is required, and a negative or non-integer `n`, or a name outside the set, throws `RangeError`. Always on
 - `readWorkCounters()` - this thread's counts, every counter present, zeros included
 - `forbidWorkCounting()` - declare a thread whose work its parent counts (the parse worker); a later count is reported once per thread on stderr and dropped
-- `onWorkCountersReset(listener)` - re-take a baseline a module holds against the counters when a test zeroes them
 - `installWorkCounterDump(role)` - at a process entry point (one of `WORK_COUNTER_ROLES`: `'wrapper'` or `'cli'`), register the exit write of one `{ pid, role, counters }` dump (`WorkCounterDump`) into the directory `WORK_COUNTERS_ENV` (`VAT_WORK_COUNTERS`) names; a no-op while it is unset, and a directory it cannot make is reported once and nothing is written
-- On `./testing`: `__resetWorkCountersForTest()` (zero every counter, lift a forbid and the test throw, notify reset listeners), `__readWorkCounterDumpForTest(role)` (the body the exit write would file) and `throwOnForbiddenWorkCountForTest()` (make a forbidden count throw)
+- On `./testing`: `__resetWorkCountersForTest()` (zero every counter, lift a forbid and the test throw), `__readWorkCounterDumpForTest(role)` (the body the exit write would file) and `throwOnForbiddenWorkCountForTest()` (make a forbidden count throw)
 
 ### Errors — `@vibe-agent-toolkit/utils` (barrel only)
 

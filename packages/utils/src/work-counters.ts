@@ -112,9 +112,6 @@ let throwOnForbidden = false;
 /** Whether {@link installWorkCounterDump} has been called with the dump on. */
 let dumpInstalled = false;
 
-/** Called after {@link __resetWorkCountersForTest}: modules holding a baseline against the counters. */
-const resetListeners: Array<() => void> = [];
-
 /**
  * Count `n` units of work against one counter.
  *
@@ -163,17 +160,6 @@ export function forbidWorkCounting(): void {
 }
 
 /**
- * Run `listener` whenever the counters are zeroed under test, so a module that
- * reads them against a baseline of its own (`resources`' parse timing) re-takes
- * it rather than reporting a negative count. Production never zeroes them.
- *
- * @param listener - Re-takes the caller's baseline
- */
-export function onWorkCountersReset(listener: () => void): void {
-  resetListeners.push(listener);
-}
-
-/**
  * Build this process's dump body.
  *
  * @param role - Which process is writing it
@@ -207,8 +193,7 @@ export function installWorkCounterDump(role: WorkCounterRole): void {
 
 /**
  * TEST ONLY. Zero every counter, lift a {@link forbidWorkCounting} and the
- * test throw, forget an installed dump, and tell every
- * {@link onWorkCountersReset} listener.
+ * test throw, and forget an installed dump.
  */
 export function __resetWorkCountersForTest(): void {
   counts.fill(0);
@@ -216,7 +201,6 @@ export function __resetWorkCountersForTest(): void {
   reportedForbidden = false;
   throwOnForbidden = false;
   dumpInstalled = false;
-  for (const listener of resetListeners) listener();
 }
 
 /**
