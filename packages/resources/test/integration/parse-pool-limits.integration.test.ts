@@ -458,6 +458,8 @@ describe('a process-wide heap flag', () => {
     // The floor is the young generation a thread really gets, which the runtime decides: 48 MiB on
     // Node 22 (so half the flag, 64, stands), 192 on Node 24 and 96 on Node 26 (so 96, the flag less
     // the headroom). It is measured here, in a child under the same flag, never assumed.
+    // On Node 22 the floor branch is therefore inert (48 < 64) and this proves only the half share;
+    // the floor itself is proven on the matrix Node, where it decides the bound.
     const flag = onCommandLine('--max-old-space-size=128');
     const youngMb = Number(runInChild(flag, [
       "import { Worker } from 'node:worker_threads';",

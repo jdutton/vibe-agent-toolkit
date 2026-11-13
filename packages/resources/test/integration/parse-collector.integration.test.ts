@@ -6,14 +6,41 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, inject, it } from 'vitest';
 
 const BUILT_POOL = pathToFileURL(safePath.resolve(import.meta.dirname, '..', '..', 'dist', 'parse-pool.js')).href;
+/** What `parse-worker.ts` throws when it is evaluated on a main thread, as every `require()` of it is. */
+const WORKER_MAIN_THREAD_GUARD =
+  "VAT's parse worker is a worker-thread entry point and cannot run on the main thread. Use createParsePool() from parse-pool.js instead.";
 const BUILT_COLLECTOR = pathToFileURL(safePath.resolve(import.meta.dirname, '..', '..', 'dist', 'parse-collector.js')).href;
+
+/**
+ * The modules a parse thread's `import()`s load, keyed by their path under `dist/`: the worker's
+ * entry, whose static graph `require()` walks whole, and each `import()` in `parser-loader.ts`,
+ * read from that file so a new one is checked without anyone listing it. That is what is checked:
+ * a dynamic `import()` written anywhere else in the worker's graph is not followed.
+ *
+ * Read both ways: every `import(` in the file's code must be one this reads, a relative string
+ * literal, or the test fails — a specifier in a form this cannot read never passes unchecked.
+ */
+function parseThreadModules(): Record<string, string> {
+  const source = readFileSync(safePath.resolve(import.meta.dirname, '..', '..', 'src', 'parser-loader.ts'), 'utf-8');
+  // Comments name `import()` in prose; only code counts.
+  const code = source
+    .split('\n')
+    .filter((line) => !/^\s*(?:\/\/|\/\*|\*)/.test(line))
+    .join('\n');
+  const loaded = [...code.matchAll(/\bimport\(\s*(['"`])\.\/([^'"`$]+)\1\s*\)/g)].map((match) => match[2] ?? '');
+  expect(loaded.length, 'an import() in parser-loader.ts that is not a relative string literal').toBe(code.match(/\bimport\s*\(/g)?.length ?? 0);
+  expect(loaded.length).toBeGreaterThan(0);
+  return Object.fromEntries(
+    ['parse-worker.js', ...loaded].map((file) => [file, safePath.resolve(import.meta.dirname, '..', '..', 'dist', file)]),
+  );
+}
 
 /**
  * Run `script` as an ES module in a child process with no `NODE_OPTIONS`, and read the JSON line it prints.
@@ -57,7 +84,8 @@ describe('a parse thread\'s collector', () => {
     // Static imports, never a top-level `await`: Node 22 aborts the whole process (V8
     // `Check failed: (location_) != nullptr` in `ExecuteAsyncModule`) when a worker is terminated
     // while an async module is still settling, about one run in six with no collector involved. The
-    // parse worker has no top-level `await`, so this is the test's shape, never the product's.
+    // parse thread's modules have no top-level `await` (pinned by the last case here), so this is
+    // the test's shape, never the product's.
     const workerBody = [
       `import { acquireCollector } from ${JSON.stringify(BUILT_COLLECTOR)};`,
       "import { parentPort, workerData } from 'node:worker_threads';",
@@ -93,5 +121,39 @@ describe('a parse thread\'s collector', () => {
     ].join('\n'));
 
     expect(outcome).toStrictEqual({ collector: 'function', lock: 0, contextGc: 'undefined' });
+  });
+
+  it('evaluates no parse-thread module asynchronously: a top-level await would let a terminate abort Node 22', () => {
+    // `require()` of an ES module refuses one with a top-level `await` (`ERR_REQUIRE_ASYNC_MODULE`)
+    // and evaluates any other synchronously. The pool terminates threads mid-load (a load-clock
+    // stop, a shutdown), and on Node 22 terminating a thread while an async module settles aborts
+    // the whole process.
+    //
+    // Every loaded module must answer `ok`, and the parse worker exactly its own main-thread guard,
+    // so any other failure (a moved module's `MODULE_NOT_FOUND`, a link error) is red. The positive control has the worker's shape: an entry that throws while it evaluates,
+    // over a dependency with a top-level `await`, so the check is shown to fire before evaluation.
+    const modules = parseThreadModules();
+    const outcome = runChild([
+      "import { createRequire } from 'node:module';",
+      "import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';",
+      "import { tmpdir } from 'node:os';",
+      "import { join } from 'node:path';",
+      'const require = createRequire(import.meta.url);',
+      "const planted = mkdtempSync(join(tmpdir(), 'vat-tla-'));",
+      String.raw`writeFileSync(join(planted, 'dep.mjs'), 'await Promise.resolve();\nexport const x = 1;\n');`,
+      String.raw`writeFileSync(join(planted, 'entry.mjs'), "import './dep.mjs';\nthrow new Error('the entry throws, as the parse worker does');\n");`,
+      "const codeOf = (file) => { try { require(file); return 'ok'; } catch (error) { return error.code ?? error.message; } };",
+      `const modules = ${JSON.stringify(modules)};`,
+      "const verdict = { planted: codeOf(join(planted, 'entry.mjs')), codes: Object.fromEntries(Object.entries(modules).map(([name, file]) => [name, codeOf(file)])) };",
+      'rmSync(planted, { recursive: true, force: true });',
+      'console.log(JSON.stringify(verdict));',
+    ].join('\n'));
+
+    expect(outcome).toStrictEqual({
+      planted: 'ERR_REQUIRE_ASYNC_MODULE',
+      codes: Object.fromEntries(
+        Object.keys(modules).map((name) => [name, name === 'parse-worker.js' ? WORKER_MAIN_THREAD_GUARD : 'ok']),
+      ),
+    });
   });
 });
