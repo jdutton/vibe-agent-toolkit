@@ -437,6 +437,30 @@ function deltaOf(
     number
   >;
 }
+/**
+ * A counter's second counting site: `PARSE_SEEDS` files one seed per counter,
+ * so a counter counted in two places gets its other place here.
+ */
+export const PARSE_SITE_SEEDS: ReadonlyArray<readonly [label: string, counter: ParseCounter, seed: Seed]> = [
+  [
+    'parse.refused.keyDetermined on a cache hit',
+    'parse.refused.keyDetermined',
+    {
+      // A run under no output cap files the entry; a run under a one-row cap
+      // then hits it and refuses it, with no dispatch.
+      prepare: async (scope: SeedScope) => {
+        const cacheDir = scope.dir();
+        const filer = new ParseDispatcher(new ParseCache({ cacheDir, enabled: true }), {});
+        scope.defer(() => filer.shutdown());
+        await parseOnce(THREE_LINKS, filer);
+        const capped = new ParseDispatcher(new ParseCache({ cacheDir, enabled: true }), { limits: { outputRows: 1 } });
+        scope.defer(() => capped.shutdown());
+        return () => parseOnce(THREE_LINKS, capped);
+      },
+      delta: { ...keyed(THREE_LINKS), 'parse.cache.hit': 1, 'parse.refused.keyDetermined': 1 },
+    },
+  ],
+];
 
 /** Every counter at zero, overlaid with a seed's named movements. */
 function expectedDelta(moves: Partial<Record<WorkCounter, number>>): Record<WorkCounter, number> {
