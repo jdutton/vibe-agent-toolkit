@@ -39,7 +39,7 @@ const LOAD_PHRASING: LoadPhrasing = {
 /** Said when either side of a comparison ran on a busy machine. */
 const CONTAMINATION_NOTE =
   '⚠ At least one side was captured on a contaminated machine. Exact counters do not move with ' +
-  'load, so their deltas stand; parse.refused.load does, and is reported only.';
+  'load unless a parse was refused under it, and a row with such a refusal withholds its verdict.';
 
 /**
  * The stability sentence for a measured row.
@@ -54,6 +54,12 @@ function stabilityLine(row: WorkCommandStats): string {
   if (row.stable === false) {
     const exact = row.varied.filter((name) => comparedExactly(name, row.cache));
     return `      ⚠ UNSTABLE — the compared repeats disagreed on ${exact.join(', ')}, so a delta against another report has no warrant.`;
+  }
+  if (row.loadRefusedRepeats > 0) {
+    return (
+      `      ⚠ LOAD REFUSALS — a parse was refused under machine load in ${tally(row.loadRefusedRepeats)} of ` +
+      `${tally(row.comparedRuns)} compared repeats, which moves the counters downstream of it, so a delta has no warrant.`
+    );
   }
   return `      ⚠ DETERMINISM UNTESTED — only ${tally(row.comparedRuns)} compared repeats, so nothing could have disagreed.`;
 }

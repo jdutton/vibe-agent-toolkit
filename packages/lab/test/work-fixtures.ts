@@ -18,6 +18,7 @@ export function workRow(over: Partial<WorkCommandStats> = {}): WorkCommandStats 
     runs: 3,
     comparedRuns: 2,
     stable: true,
+    loadRefusedRepeats: 0,
     processes: 1,
     counters: workCounters({ 'store.rows.decoded.persistent': 120, 'git.calls': 2 }),
     varied: [],

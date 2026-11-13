@@ -9,15 +9,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  __readWorkCounterDumpForTest,
+  __resetWorkCountersForTest,
+  throwOnForbiddenWorkCountForTest,
+} from '../src/testing.js';
+import {
   countWork,
   forbidWorkCounting,
   installWorkCounterDump,
   readWorkCounters,
   WORK_COUNTER_NAMES,
+  WORK_COUNTER_ROLES,
   WORK_COUNTERS_ENV,
   type WorkCounter,
 } from '../src/work-counters.js';
-import { __readWorkCounterDumpForTest, __resetWorkCountersForTest } from '../src/work-counters.js';
 
 /** Every counter at zero: what a reset leaves, and what a fresh process starts with. */
 function allZero(): Record<WorkCounter, number> {
@@ -65,15 +70,17 @@ describe('work counters', () => {
     expect(before['extent.served']).toBe(0);
   });
 
-  it('throws on a count after forbidWorkCounting, under test', () => {
+  it('throws on a forbidden count once a test turns the throw on', () => {
+    throwOnForbiddenWorkCountForTest();
     forbidWorkCounting();
     expect(() => countWork('parse.dispatched', 1)).toThrow(/forbids work counting/);
     expect(readWorkCounters()['parse.dispatched']).toBe(0);
   });
 
-  it('outside a test, reports a forbidden count once on stderr and does not count it', () => {
-    vi.stubEnv('VITEST', '');
-    vi.stubEnv('NODE_ENV', 'production');
+  it('reports a forbidden count once on stderr and does not count it, under vitest too', () => {
+    // No environment decides this: production behaviour is the default even
+    // here, where VITEST is set.
+    expect(process.env['VITEST']).toBeTruthy();
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     forbidWorkCounting();
 
@@ -99,5 +106,22 @@ describe('work counters', () => {
     const listeners = process.listenerCount('exit');
     installWorkCounterDump('cli');
     expect(process.listenerCount('exit')).toBe(listeners);
+  });
+
+  it('reports a directory it cannot make once, and registers no exit write to report it again', () => {
+    // A NUL byte: no platform makes this directory, and nothing touches the disk.
+    vi.stubEnv(WORK_COUNTERS_ENV, 'work-counters\0dump');
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const listeners = process.listenerCount('exit');
+
+    installWorkCounterDump('cli');
+
+    expect(stderr).toHaveBeenCalledTimes(1);
+    expect(String(stderr.mock.calls[0]?.[0])).toMatch(/^vat: work-counter dump failed for /);
+    expect(process.listenerCount('exit')).toBe(listeners);
+  });
+
+  it('the roles tuple names every role a dump may carry', () => {
+    expect(WORK_COUNTER_ROLES).toEqual(['wrapper', 'cli']);
   });
 });

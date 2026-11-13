@@ -24,6 +24,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
   armNameOption,
+  assertRunsFloor,
   collectArmsBuild,
   collectArmsSelection,
   collectBar,
@@ -907,5 +908,15 @@ describe('vat-lab verdict run --prepared', () => {
 
     expect(option).toBeDefined();
     expect(option?.parseArg).toBe(collectPreparedSubject);
+  });
+});
+
+describe('a facet’s repeat floor', () => {
+  it('refuses a facet whose default repeats fall below its floor, naming it', () => {
+    expect(() => assertRunsFloor({ name: 'work', defaultRuns: 2, minRuns: 3 })).toThrow('facet work: defaultRuns 2 is below its minRuns 3');
+  });
+
+  it('accepts a default at the floor', () => {
+    expect(() => assertRunsFloor({ name: 'work', defaultRuns: 3, minRuns: 3 })).not.toThrow();
   });
 });

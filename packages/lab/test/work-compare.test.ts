@@ -102,6 +102,7 @@ describe('compareWork', () => {
   it.each([
     ['unstable', { stable: false }, /repeats disagreed/],
     ['untested', { stable: null, comparedRuns: 1 }, /never tested/],
+    ['load-refused', { stable: null, loadRefusedRepeats: 1 }, /refused a parse under machine load/],
   ] as const)('withholds the verdict when a side is %s', (_label, over, reason) => {
     const verdict = verdictOf(row(), row({ ...over, counters: counters({ 'git.calls': 9 }) }));
     expect(verdict.kind).toBe('unwarranted');

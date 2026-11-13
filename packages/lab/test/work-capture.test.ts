@@ -109,15 +109,25 @@ describe('workRowFromRepeats', () => {
     expect(countOf(row, 'git.calls')).toBe(5);
   });
 
-  it('keeps a row stable when only the load-dependent counter moved', async () => {
+  it('withholds stability when any compared repeat refused a parse under load', async () => {
+    // A load refusal moves the counters downstream of the parse, so agreeing
+    // repeats are no warrant: stable is null, and the repeats are counted.
     const fake = reader({
       r0: reading(),
-      r1: reading({ 'parse.refused.load': 1 }),
-      r2: reading({ 'parse.refused.load': 3 }),
+      r1: reading(),
+      r2: reading({ 'parse.refused.load': 1 }),
     });
     const row = await workRowFromRepeats(measurement([repeat(), repeat(), repeat()]), DIRS, fake.read);
-    expect(row.stable).toBe(true);
+    expect(row.stable).toBeNull();
+    expect(row.loadRefusedRepeats).toBe(1);
     expect(row.varied).toEqual(['parse.refused.load']);
+  });
+
+  it('ignores a load refusal in the discarded warm-up', async () => {
+    const fake = reader({ r0: reading({ 'parse.refused.load': 5 }), r1: reading(), r2: reading() });
+    const row = await workRowFromRepeats(measurement([repeat(), repeat(), repeat()]), DIRS, fake.read);
+    expect(row.stable).toBe(true);
+    expect(row.loadRefusedRepeats).toBe(0);
   });
 
   it.each([

@@ -154,12 +154,15 @@ export function reportTimingDumpFailure(noun: string, target: string, error: unk
  *
  * @param noun - What the seam is called, for the failure line
  * @param directory - Directory dumps will be written to
+ * @returns False when it could not be made, and the failure has been reported
  */
-export function ensureTimingDirectory(noun: string, directory: string): void {
+export function ensureTimingDirectory(noun: string, directory: string): boolean {
   try {
     mkdirSyncReal(directory, { recursive: true });
+    return true;
   } catch (error) {
     reportTimingDumpFailure(noun, directory, error);
+    return false;
   }
 }
 
