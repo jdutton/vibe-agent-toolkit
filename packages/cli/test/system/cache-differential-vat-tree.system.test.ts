@@ -2,17 +2,23 @@
  * I0 over VAT's own tree: store-off and cold answer one query identically.
  *
  * The subject is a `git clone --local --shared` of this checkout's HEAD, taken
- * once. The query returns every `blob_conditions` and `realization_conditions`
- * row, and per relation its row count and its rows' ordered concatenation (as a
- * `#<relation>` row), so one document carries the whole projection. Each arm's
- * document is digested with sha256 (SQLite has none) and the digests must agree,
- * as must the two arms' refusal censuses.
+ * once (`clonedSubject`). The query returns every `blob_conditions` and
+ * `realization_conditions` row, and per relation its row count and its rows'
+ * ordered concatenation (as a `#<relation>` row), so one document carries the
+ * whole projection. Each arm's document is digested with sha256 (SQLite has no
+ * hash function, so the digest is taken here) and the digests must agree, as
+ * must the two arms' refusal censuses.
+ *
+ * The run's cost is the two cold derivations of the whole tree, which the claim
+ * needs; the concatenation costs about a third of a second per arm over a
+ * statement that only counts (measured on this tree, Node 22.16).
  *
  * The document is larger than the collector's default buffer, so this file
  * states the measured size it allows (`MAX_BUFFER`).
  */
 
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 import { quoteIdentifier } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
@@ -21,13 +27,14 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
   censusOf,
+  clonedSubject,
   DUMPED_RELATIONS,
   expectSeed,
   queryVerb,
+  relationRowsSql,
   removeCells,
   rowObjectSql,
   runDifferential,
-  VERBS,
   type DifferentialResult,
   type I0Seed,
 } from '../helpers/cache-differential.js';
@@ -42,9 +49,7 @@ const LISTED: ReadonlySet<string> = new Set(['blob_conditions', 'realization_con
  * Ordered by both columns, so the document is one text per tree.
  */
 const VAT_TREE_SQL = [
-  ...DUMPED_RELATIONS.filter((relation) => LISTED.has(relation.name)).map(
-    (relation) => `SELECT '${relation.name}' AS relation, ${rowObjectSql(relation)} AS row FROM ${quoteIdentifier(relation.name)}`,
-  ),
+  ...DUMPED_RELATIONS.filter((relation) => LISTED.has(relation.name)).map((relation) => relationRowsSql(relation)),
   ...DUMPED_RELATIONS.map((relation) => {
     const table = quoteIdentifier(relation.name);
     const rows = `(SELECT group_concat(r, char(10) ORDER BY r) FROM (SELECT ${rowObjectSql(relation)} AS r FROM ${table}))`;
@@ -55,8 +60,8 @@ const VAT_TREE_SQL = [
 const QUERY = queryVerb(VAT_TREE_SQL);
 
 /**
- * The stdout the collector allows each run. Measured at 29.7 MB (each arm's
- * query 9 to 10 s) on this tree; twice that leaves room for the tree to grow.
+ * The stdout the collector allows each run. Measured at 29.7 MB on this tree;
+ * twice that leaves room for the tree to grow.
  */
 const MAX_BUFFER = 64 * 1024 * 1024;
 
@@ -80,15 +85,10 @@ function digestOf(text: string): string {
 describe("the projection store answers VAT's own tree as store-off does", () => {
   beforeAll(async () => {
     context.setup();
-    const source = runGitOrThrow(['rev-parse', '--show-toplevel'], { cwd: safePath.resolve(context.binPath, '..') }).trim();
-    const corpus = safePath.join(context.createTempDir(), 'corpus');
-    runGitOrThrow(['clone', '-q', '--local', '--shared', source, corpus]);
-    result = await runDifferential({
-      binPath: context.binPath,
-      subject: { corpus, write: undefined },
-      verbRows: { query: QUERY },
-      maxBuffer: MAX_BUFFER,
-    }, VAT_TREE);
+    const here = safePath.resolve(fileURLToPath(new URL('.', import.meta.url)));
+    const source = runGitOrThrow(['rev-parse', '--show-toplevel'], { cwd: here }).trim();
+    const subject = clonedSubject(source, safePath.join(context.createTempDir(), 'corpus'));
+    result = await runDifferential({ binPath: context.binPath, subject, verbRows: { query: QUERY }, maxBuffer: MAX_BUFFER }, VAT_TREE);
   });
 
   afterAll(() => {
@@ -104,7 +104,7 @@ describe("the projection store answers VAT's own tree as store-off does", () => 
     const normalized = (document: Record<string, unknown>): string => JSON.stringify(QUERY.normalize(document));
     expect(digestOf(normalized(cold.document))).toBe(digestOf(normalized(storeOff.document)));
     expectSeed(VAT_TREE, result);
-    const census = censusOf(result, { ...VERBS, query: QUERY });
+    const census = censusOf(result);
     expect(census.cold.query).toEqual(census.storeOff.query);
   });
 });

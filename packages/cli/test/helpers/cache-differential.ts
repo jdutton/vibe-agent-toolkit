@@ -25,13 +25,14 @@
  *
  * ## The census reads only code-owned sets
  *
- * A refusal is a registry code of kind `refusal`, a not-admitted code, a
- * `blob_conditions` code of the refusal kind not exempted below with a reason,
- * an entry of `claude context`'s `refused[]`, or an error envelope. `limit` is
- * the parse-refusal subset, counted apart.
+ * A refusal is a registry code of kind `refusal`, a code the not-admitted
+ * contract reports, a `blob_conditions` code of the refusal kind, an entry of
+ * `claude context`'s `refused[]`, or an error envelope. `limit` is the
+ * parse-refusal subset, counted apart. `BLOB_NOT_TEXT` counts like any other
+ * refusal: the gate fixture holds only text, so one there is a mis-sniff.
  */
 
-import { readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { devNull } from 'node:os';
 import { pathToFileURL } from 'node:url';
@@ -39,13 +40,13 @@ import { pathToFileURL } from 'node:url';
 import {
   allDerivedSpecs,
   BLOB_FINDING_CONDITION_CODES,
-  BLOB_NOT_TEXT,
+  BLOB_PARSE_LIMIT_EXCEEDED,
+  BLOB_PARSE_WORKER_DIED,
   BLOB_REFUSAL_CONDITION_CODES,
-  NOT_ADMITTED_CODE_LIST,
-  NOT_ADMITTED_PARSE_REFUSAL_CODES,
-  PARSE_REFUSAL_BLOB_CODES,
+  notAdmittedIssues,
   PROJECTION_TABLES,
   quoteIdentifier,
+  type ParseRefusedResource,
 } from '@vibe-agent-toolkit/resources';
 import { FindingSchema, REFUSAL_CODES, reportSchema } from '@vibe-agent-toolkit/schema';
 import {
@@ -53,6 +54,7 @@ import {
   CRAWL_STORE_WRITE_ID,
   isUnderRoot,
   mkdirSyncReal,
+  relativeEscapesRoot,
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
@@ -72,19 +74,13 @@ import { contributorsCharged, rowsStoredUnder, storeFilesUnder } from './project
 // ── Names ───────────────────────────────────────────────────────────────────
 
 /** How a run reaches the projection store. Store-off is the reference arm. */
-export type ArmName = 'storeOff' | 'cold' | 'warmSameHistory';
+type ArmName = 'storeOff' | 'cold' | 'warmSameHistory';
 
 /** The four verbs the harness runs; `query` is the dump. */
-export type VerbName = 'validate' | 'check' | 'query' | 'context';
+type VerbName = 'validate' | 'check' | 'query' | 'context';
 
 /** A recorded run: the warm arm's prime, or any arm's measured run. */
-export type RunLabel = `${ArmName}:${'prime' | 'measured'}`;
-
-/** Every arm, the reference first. */
-const ARM_NAMES: readonly ArmName[] = ['storeOff', 'cold', 'warmSameHistory'];
-
-/** Every verb, in the order a cell sequence runs them. */
-export const VERB_NAMES: readonly VerbName[] = ['validate', 'check', 'query', 'context'];
+type RunLabel = `${ArmName}:${'prime' | 'measured'}`;
 
 // ── The dump ────────────────────────────────────────────────────────────────
 
@@ -117,15 +113,23 @@ export function rowObjectSql(relation: DumpedRelation): string {
 }
 
 /**
+ * Every row of one relation as `(relation, row)` pairs, the row as JSON text.
+ *
+ * @param relation - The relation
+ * @returns The SELECT, unordered
+ */
+export function relationRowsSql(relation: DumpedRelation): string {
+  return `SELECT '${relation.name}' AS relation, ${rowObjectSql(relation)} AS row FROM ${quoteIdentifier(relation.name)}`;
+}
+
+/**
  * The dump: every row of every relation, as `(relation, row)` pairs ordered by both.
  *
  * Run with `--base HEAD` so `changed_files` is evaluated. `json_object` takes
  * two arguments per column; the dump test holds each relation under the SQLite
  * argument limit the Node floor's build is not verified to raise.
  */
-const DUMP_SQL = DUMPED_RELATIONS.map(
-  (relation) => `SELECT '${relation.name}' AS relation, ${rowObjectSql(relation)} AS row FROM ${quoteIdentifier(relation.name)}`,
-).join(' UNION ALL ') + ' ORDER BY relation, row';
+const DUMP_SQL = DUMPED_RELATIONS.map((relation) => relationRowsSql(relation)).join(' UNION ALL ') + ' ORDER BY relation, row';
 
 /** One `(relation, row)` pair of a dump, the row still JSON text. */
 interface DumpRow {
@@ -174,20 +178,41 @@ interface RefusalCensus {
   readonly other: number;
 }
 
-/** Every code a `blob_conditions` row can carry. */
-const BLOB_CONDITION_CODES: ReadonlySet<string> = new Set([...BLOB_REFUSAL_CONDITION_CODES, ...BLOB_FINDING_CONDITION_CODES]);
+/** The `blob_conditions` codes of each kind, as `resources` declares them. */
+const BLOB_REFUSAL_CODES: ReadonlySet<string> = new Set(BLOB_REFUSAL_CONDITION_CODES);
+const BLOB_FINDING_CODES: ReadonlySet<string> = new Set(BLOB_FINDING_CONDITION_CODES);
 
-/** `blob_conditions` codes that are not a refusal of this run, each with why. */
-export const BLOB_CONDITION_EXEMPT: Readonly<Record<string, string>> = {
-  ...Object.fromEntries(BLOB_FINDING_CONDITION_CODES.map((code) => [code, 'a finding about a blob that was derived'])),
-  [BLOB_NOT_TEXT]: 'the expected state of every image or archive; a blob is not refused for having no text parser',
+/**
+ * Each parse-refusal finding code with the `blob_conditions` code a projection
+ * files the same refusal under. Its keys are exhaustive over
+ * `ParseRefusedResource['code']` both ways, by its type.
+ */
+export const PARSE_REFUSAL_BLOB_CODE: Readonly<Record<ParseRefusedResource['code'], string>> = {
+  RESOURCE_PARSE_LIMIT_EXCEEDED: BLOB_PARSE_LIMIT_EXCEEDED,
+  RESOURCE_PARSE_WORKER_DIED: BLOB_PARSE_WORKER_DIED,
 };
 
+/** The parse-refusal finding codes, the keys of {@link PARSE_REFUSAL_BLOB_CODE}. */
+export const PARSE_REFUSAL_CODES = Object.keys(PARSE_REFUSAL_BLOB_CODE) as readonly ParseRefusedResource['code'][];
+
+/**
+ * Every code the not-admitted contract reports, asked of the contract itself:
+ * one entry of each kind its log holds, every parse-refusal code among them.
+ * A third kind of log entry is a required field this literal would lack.
+ */
+const NOT_ADMITTED_CODES: readonly string[] = notAdmittedIssues(
+  {
+    unreadable: [{ filePath: safePath.join(process.cwd(), 'unreadable'), reason: 'probe' }],
+    parseRefused: PARSE_REFUSAL_CODES.map((code) => ({ filePath: safePath.join(process.cwd(), 'refused'), code, reason: 'probe' })),
+  },
+  { locationRoot: process.cwd(), consequence: 'probe' },
+).map((issue) => issue.code);
+
 /** Finding codes that refuse: the registry's refusal kind and the not-admitted contract. */
-const REFUSING_FINDING_CODES: ReadonlySet<string> = new Set<string>([...REFUSAL_CODES, ...NOT_ADMITTED_CODE_LIST]);
+const REFUSING_FINDING_CODES: ReadonlySet<string> = new Set<string>([...REFUSAL_CODES, ...NOT_ADMITTED_CODES]);
 
 /** The parse-refusal subset, in either vocabulary. */
-const LIMIT_CODES: ReadonlySet<string> = new Set<string>([...NOT_ADMITTED_PARSE_REFUSAL_CODES, ...PARSE_REFUSAL_BLOB_CODES]);
+const LIMIT_CODES: ReadonlySet<string> = new Set<string>([...PARSE_REFUSAL_CODES, ...Object.values(PARSE_REFUSAL_BLOB_CODE)]);
 
 /** Counts codes into a census. */
 class CensusTally {
@@ -226,8 +251,9 @@ function tallyEnvelope(document: Record<string, unknown>, tally: CensusTally): v
  */
 export function refusingBlobCondition(row: string): string | undefined {
   const { code } = JSON.parse(row) as { code: string };
-  if (!BLOB_CONDITION_CODES.has(code)) throw new Error(`blob_conditions code '${code}' is of no known kind: classify it`);
-  return Object.hasOwn(BLOB_CONDITION_EXEMPT, code) ? undefined : code;
+  if (BLOB_REFUSAL_CODES.has(code)) return code;
+  if (BLOB_FINDING_CODES.has(code)) return undefined;
+  throw new Error(`blob_conditions code '${code}' is of no known kind: classify it`);
 }
 
 function reportRefusals(document: Record<string, unknown>): RefusalCensus {
@@ -386,6 +412,12 @@ export const VERBS: { readonly [Name in VerbName]: VerbRow } = {
   },
 };
 
+/** Every verb, in the order a cell sequence runs them: the keys of {@link VERBS}, so none is skipped. */
+export const VERB_NAMES = Object.keys(VERBS) as readonly VerbName[];
+
+/** The verb rows a subject runs: the four, with any the subject states over them. */
+type VerbRows = Readonly<Record<VerbName, VerbRow>>;
+
 // ── Arms ────────────────────────────────────────────────────────────────────
 
 /** One cell's private directories: `createIsolatedScratch`'s home and tmp, plus the store and timing dumps. */
@@ -403,7 +435,7 @@ export interface ArmDirs {
 export type Git = (args: readonly string[]) => string;
 
 /** One recorded run. */
-export interface RunRecord {
+interface RunRecord {
   readonly label: RunLabel;
   readonly verb: VerbName;
   readonly status: number | null;
@@ -414,8 +446,8 @@ export interface RunRecord {
   readonly charged: readonly string[];
 }
 
-/** What an arm's `prepare` may do besides touching the corpus: run a verb, recorded as this cell's prime. */
-type Prime = (verb: VerbRow) => Promise<RunRecord>;
+/** What an arm's `prepare` may do besides touching the corpus: run the subject's query, recorded as this cell's prime. */
+type Prime = () => Promise<RunRecord>;
 
 /** One way a run reaches the store. */
 interface Arm {
@@ -434,10 +466,26 @@ function storeCharges(run: RunRecord): string[] {
   return run.charged.filter((id) => id.startsWith(STORE_CHARGE_PREFIX));
 }
 
-/** `data.population`, for a verb whose document carries one. */
-function populationOf(run: RunRecord): unknown {
+/** One field of `data`, for a verb whose document carries it. */
+function dataField(run: RunRecord, field: string): unknown {
   const data = run.document['data'] as Record<string, unknown> | null | undefined;
-  return data !== null && data !== undefined && Object.hasOwn(data, 'population') ? data['population'] : undefined;
+  return data !== null && data !== undefined && Object.hasOwn(data, field) ? data[field] : undefined;
+}
+
+/**
+ * Where a run says its answer came from: `data.population`, and `data.lensPopulation`
+ * for a verb that reports its lenses' own populations. A lens population of `'none'`
+ * (no lens the statement reached populates a lane of its own) carries no origin to
+ * judge; whether the arm still answered alike is the compared document's to say.
+ *
+ * @param run - The run
+ * @param origin - Where this arm's answer must have come from
+ */
+function expectOrigin(run: RunRecord, origin: 'derived' | 'store'): void {
+  const population = dataField(run, 'population');
+  if (population !== undefined) expect(population, `${run.label} ${run.verb} population`).toBe(origin);
+  const lens = dataField(run, 'lensPopulation');
+  if (lens !== undefined && lens !== 'none') expect(lens, `${run.label} ${run.verb} lensPopulation`).toBe(origin);
 }
 
 /**
@@ -480,13 +528,27 @@ function projectionArtifactsUnder(root: string): string[] {
 }
 
 /** The environment every arm shares; the store selection is the arm's own. */
-function baseEnv(dirs: ArmDirs): Record<string, string> {
+/**
+ * A scratch directory's environment with git's config confined to it: no system
+ * config, and a global config and XDG directory under its home.
+ *
+ * @param root - A {@link createIsolatedScratch} directory
+ * @returns The environment entries
+ */
+function isolatedGitEnv(root: string): Record<string, string> {
+  const home = safePath.join(root, 'home');
   return {
-    ...isolatedScratchEnv(dirs.root),
-    GIT_CONFIG_GLOBAL: safePath.join(dirs.home, '.gitconfig'),
-    XDG_CONFIG_HOME: safePath.join(dirs.home, '.config'),
+    ...isolatedScratchEnv(root),
+    GIT_CONFIG_GLOBAL: safePath.join(home, '.gitconfig'),
+    XDG_CONFIG_HOME: safePath.join(home, '.config'),
     GIT_CONFIG_NOSYSTEM: '1',
     GIT_CONFIG_SYSTEM: devNull,
+  };
+}
+
+function baseEnv(dirs: ArmDirs): Record<string, string> {
+  return {
+    ...isolatedGitEnv(dirs.root),
     NODE_OPTIONS: '',
     [RESOURCES_CRAWL_ENV]: RESOURCES_CRAWL_PROJECTION,
     [PROJECTION_STORE_DIR_ENV]: dirs.store,
@@ -500,12 +562,12 @@ function coldTell(run: RunRecord, dirs: ArmDirs): void {
   expect(storeCharges(run), `${run.label} ${run.verb}`).toEqual(expect.arrayContaining([CRAWL_STORE_READ_ID, CRAWL_STORE_WRITE_ID]));
   expect(rowsStoredUnder(dirs.store)).toBeGreaterThan(0);
   expect(filesUnder(dirs.parse).filter((path) => path.endsWith('.json')).length, 'a parse shard').toBeGreaterThan(0);
-  const population = populationOf(run);
-  if (population !== undefined) expect(population).toBe('derived');
+  expectOrigin(run, 'derived');
 }
 
 /**
- * The arms. Exhaustive over {@link ArmName}: an arm with no tell does not typecheck.
+ * The arms, the reference first. Exhaustive over {@link ArmName}: an arm with no
+ * tell does not typecheck, and {@link ARM_NAMES} is read off this table.
  */
 const ARMS: { readonly [Name in ArmName]: Arm } = {
   storeOff: {
@@ -515,8 +577,7 @@ const ARMS: { readonly [Name in ArmName]: Arm } = {
       expect(storeFilesUnder(dirs.store), `${run.verb}: a store-off run opened a store`).toEqual([]);
       expect(projectionArtifactsUnder(dirs.tmp)).toEqual([]);
       expect(storeCharges(run)).toEqual([]);
-      const population = populationOf(run);
-      if (population !== undefined) expect(population).toBe('derived');
+      expectOrigin(run, 'derived');
     },
   },
   cold: {
@@ -531,7 +592,7 @@ const ARMS: { readonly [Name in ArmName]: Arm } = {
   warmSameHistory: {
     env: storeOnEnv,
     prepare: async (dirs, _corpus, _git, prime) => {
-      const primed = await prime(VERBS.query);
+      const primed = await prime();
       coldTell(primed, dirs);
       return primed;
     },
@@ -541,16 +602,19 @@ const ARMS: { readonly [Name in ArmName]: Arm } = {
       // written. Every verb hits after one query prime because every population a verb makes asks the
       // filesystem extent the same question (the ignored half declined), so one stored extent serves all.
       expect(storeCharges(run), `${run.verb}: the warm run was not served`).toEqual([CRAWL_STORE_READ_ID]);
-      const population = populationOf(run);
-      if (population !== undefined) expect(population).toBe('store');
+      expectOrigin(run, 'store');
     },
   },
 };
 
+/** Every arm, read off {@link ARMS} so none is skipped. */
+const ARM_NAMES = Object.keys(ARMS) as readonly ArmName[];
+if (ARM_NAMES[0] !== 'storeOff') throw new Error('ARMS must list store-off, the reference, first');
+
 // ── Seeds ───────────────────────────────────────────────────────────────────
 
 /** What a seed must produce. */
-export type SeedExpectation =
+type SeedExpectation =
   | { readonly diverges: { readonly relations: readonly string[]; readonly verbs: readonly VerbName[] } }
   | { readonly refuses: { readonly perVerb: Readonly<Partial<Record<VerbName, number>>>; readonly bucket: keyof RefusalCensus } }
   | { readonly agreesAndMisses: { readonly arm: ArmName } }
@@ -591,6 +655,8 @@ export interface DifferentialResult {
   /** Measured runs by arm and verb. */
   readonly measured: Readonly<Record<ArmName, Partial<Record<VerbName, RunRecord>>>>;
   readonly runs: RecordedRuns;
+  /** The verb rows the cells ran, which every comparison and census reads. */
+  readonly rows: VerbRows;
 }
 
 /** A difference between one arm's run and the reference's. */
@@ -612,9 +678,15 @@ function buildResourcesEntry(binPath: string): string {
 /** Imports the build's resources entry (argv[1]) and prints its parse directory. */
 const PRINT_PARSE_DIRECTORY = 'const m = await import(process.argv[1]); process.stdout.write(m.parseCacheDirectory());';
 
+/** Each build's parse directory, relative to the tmp it was asked under: asked once per build. */
+const parseDirectoryUnderTmp = new Map<string, string>();
+
 /**
  * Where the build at `binPath` keeps its parse cache in a cell: its own
- * `parseCacheDirectory()`, under the cell's environment, accepted only under the cell's tmp.
+ * `parseCacheDirectory()`, asked under the first cell's environment and accepted
+ * only under that cell's tmp. The build roots it at the tmp directory under a
+ * name of its own, so a later cell's is that name under its own tmp, with no
+ * spawn per cell.
  *
  * @param binPath - The CLI build
  * @param env - The cell's environment
@@ -622,13 +694,20 @@ const PRINT_PARSE_DIRECTORY = 'const m = await import(process.argv[1]); process.
  * @returns The directory
  */
 async function parseDirectoryOf(binPath: string, env: Record<string, string>, tmp: string): Promise<string> {
-  // `node --input-type=module -e <script> <entry>`: the entry is the script's argv[1].
-  const entry = pathToFileURL(buildResourcesEntry(binPath)).href;
-  const result = await executeCli(entry, [], { cwd: tmp, env, nodeArgs: ['--input-type=module', '-e', PRINT_PARSE_DIRECTORY] });
-  expect(result.status, result.stderr).toBe(0);
-  const dir = toForwardSlash(result.stdout);
-  expect(isUnderRoot(tmp, dir), `the build's parse directory ${dir} is not under the cell's tmp ${tmp}`).not.toBe('outside');
-  return dir;
+  let relative = parseDirectoryUnderTmp.get(binPath);
+  if (relative === undefined) {
+    // `node --input-type=module -e <script> <entry>`: the entry is the script's argv[1].
+    const entry = pathToFileURL(buildResourcesEntry(binPath)).href;
+    const result = await executeCli(entry, [], { cwd: tmp, env, nodeArgs: ['--input-type=module', '-e', PRINT_PARSE_DIRECTORY] });
+    expect(result.status, result.stderr).toBe(0);
+    const dir = toForwardSlash(result.stdout);
+    expect(isUnderRoot(tmp, dir), `the build's parse directory ${dir} is not under the cell's tmp ${tmp}`).not.toBe('outside');
+    relative = safePath.relative(tmp, dir);
+    // Lexically too, since later cells join this to their own tmp.
+    expect(relativeEscapesRoot(relative), `the build's parse directory ${dir} is not spelled under the cell's tmp ${tmp}`).toBe(false);
+    parseDirectoryUnderTmp.set(binPath, relative);
+  }
+  return safePath.join(tmp, relative);
 }
 
 /** Every cell directory made since the last {@link removeCells}. */
@@ -755,19 +834,21 @@ async function runCell(
   seed: I0Seed | undefined,
   arm: ArmName,
   verb: VerbRow,
+  rows: VerbRows,
 ): Promise<{ prime: RunRecord | undefined; measured: RunRecord }> {
   const { corpus } = options.subject;
   const dirs = await freshCell(options.binPath);
   const env = { ...ARMS[arm].env(dirs), ...seed?.env?.(arm, dirs) };
   const git = cellGit(corpus, env);
   if (options.subject.write !== undefined) {
-    rmSync(corpus, { recursive: true, force: true });
+    removeTempDir(corpus);
     mkdirSyncReal(corpus, { recursive: true });
     options.subject.write(git);
   }
   await seed?.stateA?.(corpus, git, dirs);
   const runner = cellRunner({ binPath: options.binPath, corpus, dirs, env, maxBuffer: options.maxBuffer });
-  const prime = await ARMS[arm].prepare(dirs, corpus, git, (primed) => runner.run(primed, `${arm}:prime`));
+  // A warm arm primes with the subject's own query, so its prime and a measured dump are one statement.
+  const prime = await ARMS[arm].prepare(dirs, corpus, git, () => runner.run(rows.query, `${arm}:prime`));
   await seed?.toB?.(arm, dirs, corpus, git);
   await seed?.beforeRun?.(arm, dirs, corpus);
   const measured = await runner.run(verb, `${arm}:measured`);
@@ -788,17 +869,17 @@ export async function runDifferential(options: DifferentialOptions, seed?: I0See
   expect(arms[0], 'store-off is the reference arm and runs first').toBe('storeOff');
   const measured = Object.fromEntries(ARM_NAMES.map((arm) => [arm, {}])) as Record<ArmName, Partial<Record<VerbName, RunRecord>>>;
   const runs: Partial<Record<RunLabel, Partial<Record<VerbName, RunRecord>>>> = {};
+  const rows: VerbRows = { ...VERBS, ...options.verbRows };
   for (const arm of arms) {
     for (const verb of verbs) {
-      const row = options.verbRows?.[verb] ?? VERBS[verb];
       // eslint-disable-next-line no-await-in-loop -- one cell at a time: every cell rewrites the one corpus path
-      const cell = await runCell(options, seed, arm, row);
+      const cell = await runCell(options, seed, arm, rows[verb], rows);
       measured[arm][verb] = cell.measured;
       runs[`${arm}:measured`] = { ...runs[`${arm}:measured`], [verb]: cell.measured };
       if (cell.prime !== undefined) runs[`${arm}:prime`] = { ...runs[`${arm}:prime`], [verb]: cell.prime };
     }
   }
-  return { arms, verbs, measured, runs };
+  return { arms, verbs, measured, runs, rows };
 }
 
 // ── Comparing ───────────────────────────────────────────────────────────────
@@ -825,10 +906,10 @@ function divergingRelations(reference: Record<string, unknown>, other: Record<st
  * Every arm's divergence from the store-off reference, per verb.
  *
  * @param result - The recorded runs
- * @param rows - The verb rows that were run
  * @returns One entry per (arm, verb) that differs in exit code or normalized document
  */
-function divergences(result: DifferentialResult, rows: Readonly<Record<VerbName, VerbRow>> = VERBS): Divergence[] {
+function divergences(result: DifferentialResult): Divergence[] {
+  const { rows } = result;
   const found: Divergence[] = [];
   for (const verb of result.verbs) {
     const reference = result.measured.storeOff[verb];
@@ -850,10 +931,10 @@ function divergences(result: DifferentialResult, rows: Readonly<Record<VerbName,
  * The census of every measured run.
  *
  * @param result - The recorded runs
- * @param rows - The verb rows that were run
  * @returns Arm to verb to census
  */
-export function censusOf(result: DifferentialResult, rows: Readonly<Record<VerbName, VerbRow>> = VERBS): Record<ArmName, Partial<Record<VerbName, RefusalCensus>>> {
+export function censusOf(result: DifferentialResult): Record<ArmName, Partial<Record<VerbName, RefusalCensus>>> {
+  const { rows } = result;
   const census = Object.fromEntries(ARM_NAMES.map((arm) => [arm, {}])) as Record<ArmName, Partial<Record<VerbName, RefusalCensus>>>;
   for (const arm of result.arms) {
     for (const verb of result.verbs) {
@@ -868,12 +949,11 @@ export function censusOf(result: DifferentialResult, rows: Readonly<Record<VerbN
  * The unseeded gate's assertion: no divergence, and a zero census in every arm.
  *
  * @param result - The recorded runs
- * @param rows - The verb rows that were run
  */
-export function expectNoDivergenceAndNoRefusal(result: DifferentialResult, rows: Readonly<Record<VerbName, VerbRow>> = VERBS): void {
-  expect(divergences(result, rows)).toEqual([]);
+export function expectNoDivergenceAndNoRefusal(result: DifferentialResult): void {
+  expect(divergences(result)).toEqual([]);
   const zero = Object.fromEntries(result.verbs.map((verb) => [verb, { limit: 0, other: 0 }]));
-  const census = censusOf(result, rows);
+  const census = censusOf(result);
   for (const arm of result.arms) expect(census[arm], `${arm}'s refusal census`).toEqual(zero);
 }
 
@@ -926,8 +1006,7 @@ function expectAgreesAndMisses(result: DifferentialResult, arm: ArmName): void {
     const run = result.measured[arm][verb];
     if (run === undefined) throw new Error(`no ${arm} run of ${verb}`);
     expect(storeCharges(run), `${arm} ${verb} must miss and write`).toContain(CRAWL_STORE_WRITE_ID);
-    const population = populationOf(run);
-    if (population !== undefined) expect(population).toBe('derived');
+    expectOrigin(run, 'derived');
   }
   expect(divergences(result)).toEqual([]);
 }
@@ -938,8 +1017,7 @@ function expectDocumentsHole(result: DifferentialResult, arm: ArmName): void {
     const run = result.measured[arm][verb];
     if (run === undefined) throw new Error(`no ${arm} run of ${verb}`);
     expect(storeCharges(run), `${arm} ${verb} must be served`).toEqual([CRAWL_STORE_READ_ID]);
-    const population = populationOf(run);
-    if (population !== undefined) expect(population).toBe('store');
+    expectOrigin(run, 'store');
   }
   const found = divergences(result).filter((divergence) => divergence.arm === arm);
   expect(found.length, 'the hole shows: the warm run serves the previous bytes\' facts').toBeGreaterThan(0);
@@ -949,7 +1027,14 @@ function expectDocumentsHole(result: DifferentialResult, arm: ArmName): void {
   }
   const reference = result.measured.storeOff.query;
   const warm = result.measured[arm].query;
-  if (reference === undefined || warm === undefined) throw new Error('documentsHole needs the dump in both arms');
+  const primed = result.runs[`${arm}:prime`]?.query;
+  if (reference === undefined || warm === undefined || primed === undefined) {
+    throw new Error('documentsHole needs the dump in both arms and the warm arm\'s prime');
+  }
+  // What the hole is: the tree hash did not move, so the warm run is served exactly what its prime
+  // derived, byte for byte. Any other difference in a blob-scoped relation is not this hole.
+  const normalized = (run: RunRecord): string => JSON.stringify(result.rows.query.normalize(run.document));
+  expect(normalized(warm), `${arm} serves exactly its prime's dump`).toBe(normalized(primed));
   for (const [relation, column] of Object.entries(HOLE_MOVED_COLUMNS)) {
     expect(rowsWithoutColumn(warm.document, relation, column), `${relation} beyond ${column}`)
       .toEqual(rowsWithoutColumn(reference.document, relation, column));
@@ -1042,6 +1127,26 @@ export function gateSubject(corpus: string): Subject {
 }
 
 /**
+ * A fixed subject: a `git clone --local --shared` of `source`'s HEAD at `corpus`,
+ * taken under a git config confined to a scratch directory, with
+ * `core.autocrlf=false` (and `core.longpaths=true` on Windows) written into the
+ * clone's own config, so the checkout and every arm's run read the bytes alike
+ * whatever the host's git config says.
+ *
+ * @param source - The repository cloned
+ * @param corpus - Where the clone goes, the path every arm measures at
+ * @returns The subject
+ */
+export function clonedSubject(source: string, corpus: string): Subject {
+  const scratch = createIsolatedScratch('vat-i0-clone-');
+  cellRoots.push(scratch);
+  const config = ['core.autocrlf=false', ...(process.platform === 'win32' ? ['core.longpaths=true'] : [])];
+  const configArgs = config.flatMap((entry) => ['--config', entry]);
+  runGitOrThrow(['clone', '-q', '--local', '--shared', ...configArgs, source, corpus], { env: isolatedGitEnv(scratch) });
+  return { corpus, write: undefined };
+}
+
+/**
  * A dump's `resource_realizations` row for one path, parsed.
  *
  * @param run - A dump run
@@ -1070,7 +1175,7 @@ export function corpusBytes(corpus: string, path: string): Buffer {
 
 /**
  * How a seed's test reads. A hole seed says what closes it, so the day it goes
- * red the reader knows which step's fix rewrites it to `agreesAndMisses`.
+ * red the reader knows which change rewrites it to `agreesAndMisses`.
  *
  * @param seed - The seed
  * @returns The test title

@@ -3,25 +3,25 @@
  * without seeing (`./helpers/cache-differential.ts`).
  */
 
-import {
-  BLOB_FINDING_CONDITION_CODES,
-  BLOB_REFUSAL_CONDITION_CODES,
-  NOT_ADMITTED_PARSE_REFUSAL_CODES,
-  PARSE_REFUSAL_BLOB_CODES,
-} from '@vibe-agent-toolkit/resources';
+import { BLOB_FINDING_CONDITION_CODES, BLOB_NOT_TEXT } from '@vibe-agent-toolkit/resources';
+import { CRAWL_STORE_READ_ID } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import {
-  BLOB_CONDITION_EXEMPT,
   DECLARED_EMPTY,
   DUMPED_RELATIONS,
+  expectSeed,
   HOLE_MOVED_COLUMNS,
   normalizeDocument,
+  PARSE_REFUSAL_BLOB_CODE,
+  PARSE_REFUSAL_CODES,
   PER_RUN_FIELDS,
   refusingBlobCondition,
   RELATION_NAMES,
   VERB_NAMES,
   VERBS,
+  type DifferentialResult,
+  type I0Seed,
 } from './helpers/cache-differential.js';
 
 /** SQLite's default argument limit, which `json_object` (two per column) must stay under. */
@@ -78,27 +78,78 @@ describe('the dump', () => {
 });
 
 describe('the census', () => {
-  it('exempts only codes a blob condition can carry', () => {
-    const known = new Set([...BLOB_REFUSAL_CONDITION_CODES, ...BLOB_FINDING_CONDITION_CODES]);
-    for (const code of Object.keys(BLOB_CONDITION_EXEMPT)) expect(known.has(code), code).toBe(true);
-  });
-
   it('classifies a blob condition by code, and refuses to guess an unknown one', () => {
-    const [refusal] = [...PARSE_REFUSAL_BLOB_CODES];
+    const [refusal] = Object.values(PARSE_REFUSAL_BLOB_CODE);
     const [finding] = BLOB_FINDING_CONDITION_CODES;
     expect(refusingBlobCondition(JSON.stringify({ code: refusal }))).toBe(refusal);
     expect(refusingBlobCondition(JSON.stringify({ code: finding }))).toBeUndefined();
     expect(() => refusingBlobCondition(JSON.stringify({ code: 'NO_SUCH_CODE' }))).toThrow(/no known kind/);
   });
 
+  it('counts a blob not sniffed as text as a refusal: the gate fixture holds only text', () => {
+    expect(refusingBlobCondition(JSON.stringify({ code: BLOB_NOT_TEXT }))).toBe(BLOB_NOT_TEXT);
+  });
+
+  it('counts every not-admitted code as a refusal, the parse refusals as limits', () => {
+    const findings = [...PARSE_REFUSAL_CODES, 'RESOURCE_UNREADABLE'].map((code) => ({ code }));
+    expect(VERBS.validate.refusalsOf({ status: 'success', findings })).toEqual({ limit: PARSE_REFUSAL_CODES.length, other: 1 });
+  });
+
   it('counts a parse refusal as a limit and any other refusal apart, in every document shape', () => {
-    const [limitCode] = NOT_ADMITTED_PARSE_REFUSAL_CODES;
+    const [limitCode] = PARSE_REFUSAL_CODES;
     const report = { status: 'success', findings: [{ code: limitCode }, { code: 'NOT_A_REFUSAL' }] };
     expect(VERBS.validate.refusalsOf(report)).toEqual({ limit: 1, other: 0 });
     expect(VERBS.check.refusalsOf({ status: 'error', error: { code: 'SOME_ERROR' } })).toEqual({ limit: 0, other: 1 });
-    const dump = { status: 'success', data: { rows: [{ relation: 'blob_conditions', row: JSON.stringify({ code: [...PARSE_REFUSAL_BLOB_CODES][0] }) }] } };
+    const dump = { status: 'success', data: { rows: [{ relation: 'blob_conditions', row: JSON.stringify({ code: Object.values(PARSE_REFUSAL_BLOB_CODE)[0] }) }] } };
     expect(VERBS.query.refusalsOf(dump)).toEqual({ limit: 1, other: 0 });
     const answers = { kind: 'context-answers', answers: [{ refused: [{ code: limitCode }, { code: 'OTHER' }] }, {}] };
     expect(VERBS.context.refusalsOf(answers)).toEqual({ limit: 1, other: 1 });
+  });
+});
+
+/** A dump: one row in a blob-scoped relation, and one in each relation a hole moves a column of. */
+function holeDump(blob: string, contentKey: string): Record<string, unknown> {
+  const rows = [
+    { relation: 'blobs', row: JSON.stringify({ contentKey: blob }) },
+    { relation: 'resource_realizations', row: JSON.stringify({ path: 'docs/two.md', contentKey }) },
+    { relation: 'zone_provenance', row: JSON.stringify({ zone: 'repo', extentDigest: `digest-of-${contentKey}` }) },
+  ];
+  return { status: 'success', data: { population: 'store', rows } };
+}
+
+/** A query run the store served. */
+function servedQuery(label: string, document: Record<string, unknown>) {
+  return { label, verb: 'query', status: 0, stdout: '', stderr: '', document, charged: [CRAWL_STORE_READ_ID] } as const;
+}
+
+/** The reference reads the new bytes; the warm arm was primed on the old ones, then measured. */
+function holeResult(measuredBlob: string): DifferentialResult {
+  const prime = servedQuery('warmSameHistory:prime', holeDump('old-blob', 'old-key'));
+  const measured = servedQuery('warmSameHistory:measured', holeDump(measuredBlob, 'old-key'));
+  const reference = servedQuery('storeOff:measured', holeDump('new-blob', 'new-key'));
+  return {
+    arms: ['storeOff', 'warmSameHistory'],
+    verbs: ['query'],
+    measured: { storeOff: { query: reference }, cold: {}, warmSameHistory: { query: measured } },
+    runs: { 'storeOff:measured': { query: reference }, 'warmSameHistory:prime': { query: prime }, 'warmSameHistory:measured': { query: measured } },
+    rows: VERBS,
+  };
+}
+
+describe('a documented hole', () => {
+  const seed: I0Seed = {
+    name: 'hole',
+    arms: ['storeOff', 'warmSameHistory'],
+    verbs: ['query'],
+    expect: { documentsHole: { arm: 'warmSameHistory', closedBy: 'the stat memo' } },
+    consumed: { runs: [], check: () => undefined },
+  };
+
+  it('holds when the warm run serves exactly what its prime derived', () => {
+    expect(() => expectSeed(seed, holeResult('old-blob'))).not.toThrow();
+  });
+
+  it('reds when the warm run serves blob facts its prime never derived', () => {
+    expect(() => expectSeed(seed, holeResult('neither-blob'))).toThrow();
   });
 });

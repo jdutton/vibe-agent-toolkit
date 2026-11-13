@@ -10,8 +10,8 @@
  *   under changes and the warm run must miss.
  * - The three hole seeds change the bytes on disk beneath an unchanged tree
  *   hash: the warm run is served the previous bytes' facts. Each passes while
- *   the hole is open, titled with the step that closes it; the day it closes
- *   it goes red, and that step's fix rewrites it to `agreesAndMisses`.
+ *   the hole is open, titled with the mechanism that closes it; the day it closes
+ *   it goes red, and the change that lands it rewrites it to `agreesAndMisses`.
  */
 
 import { rmSync, writeFileSync } from 'node:fs';
@@ -33,7 +33,7 @@ import {
 /** The file every hole seed rewrites. It has no links, so `edges` cannot move. */
 const SEEDED = 'docs/two.md';
 
-const HOLE_CLOSED_BY = "the stat-memo step (S5, or S6's CRLF/LF keys)";
+const HOLE_CLOSED_BY = 'the stat memo';
 
 /** Delete the file and check it out again, so git rewrites it under the current config. */
 function recheckout(corpus: string, git: Git): void {

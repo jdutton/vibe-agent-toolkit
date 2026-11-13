@@ -60,8 +60,6 @@ export {
 // The one contract for a file a crawl enumerated and did not admit: its log
 // entry, its findings, and its place in `examined` — see `not-admitted.ts`.
 export {
-  NOT_ADMITTED_CODE_LIST,
-  NOT_ADMITTED_PARSE_REFUSAL_CODES,
   notAdmittedCount,
   notAdmittedFindings,
   notAdmittedInScope,
@@ -1027,7 +1025,6 @@ export {
   BLOB_PARSE_LIMIT_EXCEEDED,
   BLOB_PARSE_WORKER_DIED,
   BLOB_UNREADABLE,
-  PARSE_REFUSAL_BLOB_CODES,
   populateBlobs,
   type BlobPopulationOptions,
   type BlobPopulationResult,

@@ -161,16 +161,6 @@ export const NOT_ADMITTED_CODE_LIST: readonly ValidationIssueCode[] = [
   'RESOURCE_PARSE_WORKER_DIED',
 ];
 
-/**
- * The PARSE-refusal subset of {@link NOT_ADMITTED_CODE_LIST}: a per-run limit or
- * a dead worker stopped the parse ({@link parseRefusal}). The rest of the list
- * is a read the OS refused.
- */
-export const NOT_ADMITTED_PARSE_REFUSAL_CODES: readonly ParseRefusedResource['code'][] = [
-  'RESOURCE_PARSE_LIMIT_EXCEEDED',
-  'RESOURCE_PARSE_WORKER_DIED',
-];
-
 const NOT_ADMITTED_CODES: ReadonlySet<string> = new Set<string>(NOT_ADMITTED_CODE_LIST);
 
 /** Where a report's locations are relative to, and where the project's allow `paths` are. */

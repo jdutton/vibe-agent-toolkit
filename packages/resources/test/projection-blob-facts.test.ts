@@ -2,7 +2,7 @@ import type { TextProvenance } from '@vibe-agent-toolkit/utils/text';
 import { describe, expect, it } from 'vitest';
 
 import { type ParseResult, parseMarkdownContent } from '../src/link-parser.js';
-import { blobConditionsFor, blobRowFor, harnessRowsFor } from '../src/projection/blob-facts.js';
+import { BLOB_FINDING_CONDITION_CODES, blobConditionsFor, blobRowFor, harnessRowsFor } from '../src/projection/blob-facts.js';
 import { claudeMemoryFactsOf } from '../src/projection/claude-memory.js';
 import { CLAUDE_CODE } from '../src/projection/harness/claude-code.js';
 import { BlobRowSchema } from '../src/schemas/projection-blobs.js';
@@ -212,6 +212,16 @@ describe('blobConditionsFor', () => {
     expect(rows.map((row) => row.severity)).toEqual(['warning', 'warning']);
     expect(rows[1]?.message).toBe('nope');
     expect(rows[1]?.line).toBe(7);
+  });
+
+  it('emits exactly the finding codes BLOB_FINDING_CONDITION_CODES lists, each once per diagnostic', () => {
+    // Every diagnostic source a parse carries, one each: a code emitted but unlisted, or listed but
+    // never emitted, reds here.
+    const rows = blobConditionsFor(CONTENT_KEY, parseResult({
+      parseErrors: [{ message: MISSING_END_TAG, line: 3 }],
+      unresolvedReferences: [{ label: 'nope', line: 7 }],
+    }));
+    expect(rows.map((row) => row.code)).toEqual([...BLOB_FINDING_CONDITION_CODES]);
   });
 });
 
