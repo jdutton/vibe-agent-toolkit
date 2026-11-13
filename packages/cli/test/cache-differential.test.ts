@@ -146,7 +146,7 @@ function holeDump(blob: string, contentKey: string): Record<string, unknown> {
 }
 
 /** A query run the store served. */
-function servedQuery(label: string, document: Record<string, unknown>) {
+function servedQuery(label: keyof DifferentialResult['runs'], document: Record<string, unknown>) {
   return { label, verb: 'query', status: 0, stdout: '', stderr: '', document, charged: [CRAWL_STORE_READ_ID] } as const;
 }
 
