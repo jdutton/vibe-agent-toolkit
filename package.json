@@ -26,14 +26,14 @@
     "packages/*"
   ],
   "overrides": {
-    "hono": "4.13.11",
-    "@hono/node-server": "2.1.5",
+    "hono": "4.13.18",
+    "@hono/node-server": "2.1.8",
     "undici": "7.30.1",
     "fast-uri": "3.1.9",
     "path-to-regexp": "8.4.0",
     "qs": "6.16.1",
     "tar": "7.5.22",
-    "basic-ftp": "6.2.1",
+    "basic-ftp": "6.2.4",
     "js-yaml": "4.3.2",
     "ip-address": "10.7.4",
     "express-rate-limit": "8.2.2",
