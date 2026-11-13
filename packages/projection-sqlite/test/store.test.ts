@@ -554,6 +554,23 @@ describe('decoded rows are counted against the store they came from', () => {
     expect(readWorkCounters()['store.rows.decoded.ephemeral']).toBe(bundleRowCount);
     expect(readWorkCounters()['store.rows.decoded.persistent']).toBe(0);
   });
+
+  it('a read of no content keys counts no read', async () => {
+    await store.readBlobFacts([]);
+    expect(readWorkCounters()['store.reads.persistent']).toBe(0);
+  });
+
+  it('a read that fails counts no read', async () => {
+    const blobTable = Object.values(PROJECTION_TABLES).find((spec) => spec.scope === 'blob')?.name ?? '';
+    const writer = new DatabaseSync(safePath.join(directory, 'projection.db'));
+    try {
+      writer.exec(`DROP TABLE "${blobTable}"`);
+    } finally {
+      writer.close();
+    }
+    await expect(store.readBlobFacts([FIRST_BLOB])).rejects.toThrow(/no such table/);
+    expect(readWorkCounters()['store.reads.persistent']).toBe(0);
+  });
 });
 
 /**

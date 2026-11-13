@@ -228,7 +228,9 @@ nothing; it sets that variable per repeat, as `crawl` sets its own.
   repeat that exited on a signal fails the row through the shared repeat rule, before any dump is
   read.
 - It takes at least three repeats (`--runs` refuses fewer), discards repeat 0, compares repeats
-  1..n-1 and reports the last, with `stable` as in `io`: `null` below two compared repeats.
+  1..n-1 and reports the last, with `stable` as in `io`: `null` below two compared repeats, and also
+  `null` when any compared repeat refused a parse under load (`loadRefusedRepeats`), because such a
+  refusal moves the counters downstream of the parse. Either way the exact verdict is withheld.
 - The dump schema is strict and has no version field. Its counter names come from the utils tuple,
   so a dump from a NEWER vat carrying a counter this lab does not know is refused; an OLDER vat's
   missing counter is absent from the row, and `compare` reports it as added or removed. Run the lab
@@ -240,7 +242,8 @@ nothing; it sets that variable per repeat, as `crawl` sets its own.
   reported-only counter is printed and listed when it moves, never makes `stable` false and never
   makes a command `changed`.
 - It reports. There is no ceiling, threshold or gate in the facet. `ab` compares
-  `store.rows.decoded.persistent`.
+  `store.rows.decoded.persistent`; a row without that counter, or whose repeats give no warrant, is
+  lost, never zero.
 
 ## The verdict facet
 

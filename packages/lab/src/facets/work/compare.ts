@@ -107,6 +107,24 @@ function movedAtAll(movement: WorkMovement): boolean {
 }
 
 /**
+ * Why a row's own repeats give no warrant for an exact delta, or `null` when
+ * they do. A load refusal comes first: it is why such a row's `stable` is null.
+ *
+ * @param row - One side's row
+ * @param side - How to name it in the reason
+ * @returns A clause for the reason, or `null`
+ */
+export function workStabilityCaveat(row: WorkCommandStats, side: string): string | null {
+  if (row.loadRefusedRepeats > 0) {
+    return (
+      `the ${side} row refused a parse under machine load in ${String(row.loadRefusedRepeats)} of ` +
+      `${String(row.comparedRuns)} compared repeats, which moves the counters downstream of the parse`
+    );
+  }
+  return stabilityCaveat(row, side);
+}
+
+/**
  * The verdict for one command present on both sides.
  *
  * @param before - The baseline row
@@ -122,7 +140,7 @@ function verdictFor(before: WorkCommandStats, after: WorkCommandStats): WorkComm
       .map((pair) => counterMovement(pair, before.cache))
       .filter((moved): moved is WorkCounterMovement => moved !== null),
   };
-  const unwarranted = bothSides(before, after, stabilityCaveat);
+  const unwarranted = bothSides(before, after, workStabilityCaveat);
   if (unwarranted !== null) return { kind: 'unwarranted', reason: unwarranted, movement };
   return movedAtAll(movement) ? { kind: 'changed', movement } : { kind: 'unchanged', movement };
 }

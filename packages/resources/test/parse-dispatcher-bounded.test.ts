@@ -7,6 +7,7 @@
  * a limit is filed nowhere (I6).
  */
 
+import { readWorkCounters } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { ParsableContent } from '../src/content-key.js';
@@ -222,5 +223,26 @@ describe('the input cap a dispatcher hands its reads', () => {
 
   it('refuses a named cap that is not a positive number at construction, not at the first read', () => {
     expect(() => new ParseDispatcher(missingCache().cache, { limits: { inputBytes: 0 } })).toThrow(/inputBytes must be a positive finite number/);
+  });
+});
+
+describe('cache transport whose read-back misses', () => {
+  it('counts the second parse it dispatches', async () => {
+    const { cache } = missingCache();
+    // The worker reports the entry stored; the read-back finds nothing.
+    Object.assign(cache, { read: (): Promise<null> => Promise.resolve(null) });
+    const pool = recordingPool(() => Promise.resolve(PARSED));
+    const createPool = (options?: ParsePoolOptions): ParsePool => ({
+      ...pool.createPool(options),
+      parseIntoCache: () => Promise.resolve(null),
+    });
+    const dispatcher = new ParseDispatcher(cache, { transport: 'cache', createPool });
+    const before = readWorkCounters()['parse.dispatched'];
+
+    await dispatcher.parse(DOCUMENT);
+    await dispatcher.shutdown();
+
+    expect(pool.parses()).toBe(1);
+    expect(readWorkCounters()['parse.dispatched'] - before).toBe(2);
   });
 });

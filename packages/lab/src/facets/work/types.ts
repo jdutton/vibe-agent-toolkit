@@ -41,7 +41,12 @@ export const WorkCounterNameSchema = z.enum(WORK_COUNTER_NAMES);
  * both `stable` and the comparator:
  *
  * - `parse.refused.load` is load-dependent in every mode: a time or heap limit
- *   breached under a busy machine is not a property of the code.
+ *   breached under a busy machine is not a property of the code. Reporting it
+ *   only is not enough on its own: a refused parse also moves
+ *   `parse.dispatched`, `extent.derived`, the store's row counts,
+ *   `store.miss.refusedPairs` and `parse.refused.keyDetermined`. So a row with
+ *   a load refusal in any compared repeat has `stable: null` and withholds the
+ *   exact verdict for every counter ({@link WorkCommandStats.loadRefusedRepeats}).
  * - In `cold` mode `parse.dispatched` and `parse.cache.hit` depend on timing:
  *   the dispatcher's look-ahead window can have two files with one content key
  *   in flight at once, and both miss.
@@ -83,11 +88,14 @@ export interface WorkCommandStats {
   readonly comparedRuns: number;
   /**
    * Whether the compared repeats agreed on every exactly-compared counter, or
-   * `null` below two compared repeats, where nothing could disagree.
+   * `null` when agreement is no warrant: below two compared repeats, where
+   * nothing could disagree, or when a compared repeat refused a parse under load.
    *
    * A reported-only counter ({@link comparedExactly}) never makes this false.
    */
   readonly stable: boolean | null;
+  /** How many compared repeats refused a parse under machine load (`parse.refused.load > 0`). */
+  readonly loadRefusedRepeats: number;
   /** How many process dumps the reported repeat held. */
   readonly processes: number;
   /**
@@ -125,6 +133,7 @@ export const WorkBodySchema = z
           ...measuredCommandShape,
           comparedRuns: z.number().int().nonnegative(),
           stable: z.boolean().nullable(),
+          loadRefusedRepeats: z.number().int().nonnegative(),
           processes: z.number().int().nonnegative(),
           counters: z.array(
             z.object({ name: WorkCounterNameSchema, count: z.number().int().nonnegative() }).strict(),

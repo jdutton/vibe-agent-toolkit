@@ -70,9 +70,9 @@ import {
 import type { Validated } from '../facets/verdict/yaml-file.js';
 import { captureWork } from '../facets/work/capture.js';
 import { compareWork } from '../facets/work/compare.js';
-import { countOf } from '../facets/work/dump.js';
+import { workEstimates } from '../facets/work/estimate.js';
 import { renderWorkComparison, renderWorkReport } from '../facets/work/render.js';
-import { WORK_MIN_RUNS, type WorkCommandStats } from '../facets/work/types.js';
+import { WORK_MIN_RUNS } from '../facets/work/types.js';
 import {
   abExitCondition,
   CHANGED_VERDICT,
@@ -874,6 +874,21 @@ function applyAbExitCode(result: Parameters<typeof abExitCondition>[0]): void {
 }
 
 /**
+ * Refuse a facet whose default repeat count is below its own floor: a bare
+ * `run` would be refused at its own flag.
+ *
+ * @param wiring - The facet's name and repeat counts
+ * @throws {RangeError} when `defaultRuns` is below `minRuns`
+ */
+export function assertRunsFloor(wiring: Pick<FacetWiring<unknown, ComparisonLike>, 'name' | 'defaultRuns' | 'minRuns'>): void {
+  if (wiring.defaultRuns < wiring.minRuns) {
+    throw new RangeError(
+      `facet ${wiring.name}: defaultRuns ${String(wiring.defaultRuns)} is below its minRuns ${String(wiring.minRuns)}`,
+    );
+  }
+}
+
+/**
  * Build one facet's `run`, `compare` and `ab` subcommands.
  *
  * @param wiring - See {@link FacetWiring}
@@ -882,6 +897,7 @@ function applyAbExitCode(result: Parameters<typeof abExitCondition>[0]): void {
 function createFacetCommand<TBody, TComparison extends ComparisonLike>(
   wiring: FacetWiring<TBody, TComparison>,
 ): Command {
+  assertRunsFloor(wiring);
   const group = new Command(wiring.name).description(wiring.summary);
 
   group
@@ -1050,20 +1066,6 @@ interface FailableRow {
 
 /** A failed row's loss, named by its own `failure`. */
 export const FAILURE_IS_THE_REASON = (row: FailableRow): string => row.failure ?? 'failed, with no reason recorded';
-
-/**
- * A `work` row's persistent-store rows decoded — the number `work ab` compares.
- *
- * Zero when the measured vat does not emit the counter: an older build that
- * predates it decoded nothing this lab can count, and `compare` names the
- * counter as added or removed.
- *
- * @param row - A measured `work` row
- * @returns The count
- */
-function persistentRowsDecoded(row: WorkCommandStats): number {
-  return countOf(row, 'store.rows.decoded.persistent') ?? 0;
-}
 
 /**
  * The fastest repeat a row measured — the reduction `FacetEstimate` requires.
@@ -1962,8 +1964,7 @@ export function createProgram(): Command {
         // Counts are deterministic, so the min across pairs is every pair's
         // value; an arm whose min and p25 differ did not count deterministically.
         estimator: 'min',
-        estimate: (report) =>
-          rowEstimates(report.body.commands, 'persistent-store rows decoded', persistentRowsDecoded, FAILURE_IS_THE_REASON),
+        estimate: (report) => workEstimates(report.body.commands),
       }),
     )
     .addCommand(

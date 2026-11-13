@@ -41,6 +41,11 @@ describe('renderWorkReport', () => {
     expect(text).toMatch(/UNSTABLE.*git\.calls/);
   });
 
+  it('names load refusals as why a row has no warrant', () => {
+    const text = renderWorkReport(report([row({ stable: null, loadRefusedRepeats: 2 })]));
+    expect(text).toMatch(/LOAD REFUSALS.*2 of 2 compared repeats/);
+  });
+
   it('prints a failed row as a failure, never as zeros', () => {
     const text = renderWorkReport(report([row({ failed: true, failure: 'REFUSED: no cli dump', counters: [] })]));
     expect(text).toContain("resources-scan: FAILED — REFUSED: no cli dump");

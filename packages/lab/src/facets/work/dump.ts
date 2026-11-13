@@ -10,6 +10,7 @@
 
 import {
   WORK_COUNTER_NAMES,
+  WORK_COUNTER_ROLES,
   WORK_COUNTERS_ENV,
   type WorkCounter,
   type WorkCounterRole,
@@ -31,7 +32,7 @@ const CLI_ROLE: WorkCounterRole = 'cli';
 export const WorkDumpSchema = z
   .object({
     pid: z.number().int().nonnegative(),
-    role: z.enum(['wrapper', 'cli']) satisfies z.ZodType<WorkCounterRole>,
+    role: z.enum(WORK_COUNTER_ROLES),
     counters: z.record(WorkCounterNameSchema, z.number().int().nonnegative()),
   })
   .strict();

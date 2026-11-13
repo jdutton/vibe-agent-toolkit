@@ -1645,13 +1645,13 @@ class SqliteProjectionStore implements SqlQueryableStore {
   readBlobFacts(contentKeys: readonly string[]): Promise<BlobScopedRows> {
     return promised(() => {
       this.#assertOpen();
-      countWork(LANE_COUNTERS[this.#lane].reads, 1);
-      return this.#readTransaction(() => {
+      const keys = [...new Set(contentKeys)];
+      const rows = this.#readTransaction(() => {
         const result: Record<string, unknown[]> = {};
         for (const { spec } of this.#plansOfScope('blob')) {
           result[spec.key] = [];
         }
-        for (const batch of batched([...new Set(contentKeys)])) {
+        for (const batch of batched(keys)) {
           for (const plan of this.#plansOfScope('blob')) {
             const raw = this.#blobStatement('select', plan.spec, batch.length).all(...batch);
             result[plan.spec.key]?.push(...decodeRows(plan, raw, this.#lane));
@@ -1659,6 +1659,9 @@ class SqliteProjectionStore implements SqlQueryableStore {
         }
         return result as unknown as BlobScopedRows;
       });
+      // Counted once it succeeded; asking for no keys reads nothing.
+      if (keys.length > 0) countWork(LANE_COUNTERS[this.#lane].reads, 1);
+      return rows;
     });
   }
 
@@ -1808,8 +1811,7 @@ class SqliteProjectionStore implements SqlQueryableStore {
   readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
     return promised(() => {
       this.#assertOpen();
-      countWork(LANE_COUNTERS[this.#lane].reads, 1);
-      return this.#readTransaction(() => {
+      const extent = this.#readTransaction(() => {
         // An extent that was written but holds nothing is a hit with empty tables;
         // one that was never written is a miss. The manifest row is what tells
         // them apart, since both produce zero rows from every table — and it is
@@ -1824,6 +1826,9 @@ class SqliteProjectionStore implements SqlQueryableStore {
         }
         return result as unknown as ExtentScopedRows;
       });
+      // Counted once it succeeded, a miss included: the manifest was read.
+      countWork(LANE_COUNTERS[this.#lane].reads, 1);
+      return extent;
     });
   }
 
@@ -1870,6 +1875,9 @@ class SqliteProjectionStore implements SqlQueryableStore {
     // method on this store uses: leaving it read-only would turn the next
     // `writeExtent` into "attempt to write a readonly database" somewhere with
     // no query in sight.
+    //
+    // Counts no store read: this is the answer database a query was loaded
+    // into, and the reads that loaded it were counted where they happened.
     return runGated(
       this.#database,
       sql,

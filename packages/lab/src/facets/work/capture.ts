@@ -24,7 +24,7 @@ import type { SpecMeasurement } from '../../harness/repeat.js';
 import { buildReportEnvelope } from '../../harness/report.js';
 import type { CaptureRequest } from '../../harness/types.js';
 
-import { type MergedWorkDumps, readWorkDumps, variedCounters, type WorkDumpsRead } from './dump.js';
+import { countOf, type MergedWorkDumps, readWorkDumps, variedCounters, type WorkDumpsRead } from './dump.js';
 import {
   comparedExactly,
   WORK_FACET,
@@ -57,6 +57,7 @@ function failedRow(base: RowBase, runs: number, failure: string): WorkCommandSta
     runs,
     comparedRuns: 0,
     stable: null,
+    loadRefusedRepeats: 0,
     processes: 0,
     counters: [],
     varied: [],
@@ -112,12 +113,16 @@ export async function workRowFromRepeats(
   if (reported === undefined) return failedRow(base, results.length, 'no compared repeat ran');
 
   const varied = variedAcross(merges);
+  const loadRefusedRepeats = merges.filter((merge) => (countOf(merge, 'parse.refused.load') ?? 0) > 0).length;
   return {
     ...base,
     runs: results.length,
     comparedRuns: merges.length,
-    // A reported-only counter moving is not a disagreement about the code.
-    stable: merges.length < 2 ? null : varied.every((name) => !comparedExactly(name, cache)),
+    // A reported-only counter moving is not a disagreement about the code, but
+    // a load refusal moves exact counters downstream of it: no warrant either way.
+    stable:
+      merges.length < 2 || loadRefusedRepeats > 0 ? null : varied.every((name) => !comparedExactly(name, cache)),
+    loadRefusedRepeats,
     processes: reported.processes,
     counters: reported.counters,
     varied,

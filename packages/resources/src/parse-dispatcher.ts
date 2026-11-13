@@ -978,7 +978,9 @@ async function parseThroughCache(
   // reaching here means the entry was written and then removed, or written in a
   // form this read refuses — a concurrent `vat cache clear`, the OS purging its
   // temp directory mid-run, or a torn write. Rare, real, and recoverable — in
-  // the pool again, under its limits, never on this thread.
+  // the pool again, under its limits, never on this thread. A second dispatch,
+  // so a second count.
+  countWork('parse.dispatched', 1);
   const result = await pool.parse(keyed.parserKind, keyed.content, keyed.byteLength);
   await cache.set(keyed, result);
   return result;

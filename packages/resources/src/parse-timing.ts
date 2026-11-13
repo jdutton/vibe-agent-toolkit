@@ -121,6 +121,7 @@ import { isMainThread, threadId } from 'node:worker_threads';
 import {
   ensureTimingDirectory,
   normalizeTimingDirectory,
+  onWorkCountersReset,
   readTimingProcess,
   readWorkCounters,
   type TimingProcess,
@@ -579,6 +580,11 @@ const documentBytes = new Float64Array(PARSE_KIND_SHAPES.length);
  * zeroing counters the work-counter dump also reads.
  */
 const cacheBaseline = { hits: 0, misses: 0 };
+// A test that zeroes the counters zeroes this baseline with them.
+onWorkCountersReset(() => {
+  cacheBaseline.hits = 0;
+  cacheBaseline.misses = 0;
+});
 const reuseHeap: ParseReuseHeap = { settledMibTotal: 0, settledMibMax: 0 };
 
 /**
