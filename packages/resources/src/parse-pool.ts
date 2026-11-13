@@ -1131,13 +1131,14 @@ class WorkerParsePool implements ParsePool {
    * @returns Whether it was parked; `false` leaves it to be closed
    */
   async #park(poolWorker: PoolWorker): Promise<boolean> {
-    if (poolWorker.exited || poolWorker.dying || !poolWorker.ready || poolWorker.job !== null) return false;
+    if (poolWorker.exited || !poolWorker.ready || poolWorker.job !== null) return false;
     // Re-`ref` it for the read, as `closeWorker` does for the close: an idle thread is unref'd, and
     // a heap read from an unref'd thread holds nothing open — a command whose last work is this
     // shutdown would exit, mid-shutdown and at code 0, before the read answered. `parkWorker`
     // unrefs it again once it is parked; a thread declined here is closed, which refs it anyway.
     poolWorker.worker.ref();
-    // The read rejects only for a thread that has gone, which is closed, never parked.
+    // The read rejects only for a thread that has gone, which is closed, never parked. A thread
+    // that threw before the read or while it ran is dying, whatever the read answered.
     const heap = await poolWorker.worker.getHeapStatistics().catch(() => undefined);
     if (heap === undefined || poolWorker.exited || poolWorker.dying) return false;
     if (exceedsHeapLimit(heap, PARKED_HEAP_MB)) return false;
@@ -1667,6 +1668,11 @@ class WorkerParsePool implements ParsePool {
     const onError = (error: Error): void => {
       thrown ??= error;
       poolWorker.dying = true;
+      // Referenced again, as `#close` does: an idle thread is unref'd, and a job queued behind this
+      // one waits for its `exit` — which frees the slot and pumps — so that `exit` must keep the
+      // process alive until it is delivered. Skipped while dying, the thread is never handed the
+      // job, whose dispatch would otherwise have re-ref'd it.
+      poolWorker.worker.ref();
     };
     const onExit = (exitCode: number): void => {
       poolWorker.exited = true;
