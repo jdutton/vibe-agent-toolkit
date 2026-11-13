@@ -37,14 +37,14 @@
  */
 
 
-import { spawnSync } from 'node:child_process';
 import { mkdtempSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, it, expect } from 'vitest';
+
+import { loadedScripts as loadedScriptsOf } from '../helpers/loaded-scripts.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const binPath = safePath.resolve(__dirname, '../../dist/bin.js');
@@ -120,7 +120,7 @@ const COMMAND_NEEDLES = {
 } as const;
 
 /**
- * Run the CLI and report every script URL Node loaded.
+ * Run the CLI and report every script URL Node loaded, across every process it started.
  *
  * @param args - Arguments to pass to the CLI
  * @param extraEnv - Environment overrides for the spawned process
@@ -131,28 +131,9 @@ function loadedScripts(
   args: readonly string[],
   extraEnv: Readonly<Record<string, string>>,
   cwd: string,
-): { urls: string[]; status: number | null } {
-  // mkdtempSync, never a `/tmp/...` literal — that has no drive letter and is
-  // not absolute on Windows, where this suite also runs. normalizedTmpdir()
-  // rather than os.tmpdir() for the same reason: 8.3 short names (RUNNER~1).
-  const covDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-modload-'));
-  try {
-    const result = spawnSync(NODE_EXECUTABLE, [binPath, ...args], {
-      encoding: 'utf-8',
-      cwd,
-      env: { ...process.env, ...extraEnv, NODE_V8_COVERAGE: covDir },
-    });
-
-    const urls: string[] = [];
-    for (const file of readdirSync(covDir)) {
-      const parsed: unknown = JSON.parse(readFileSync(safePath.join(covDir, file), 'utf-8'));
-      const { result: scripts } = parsed as { result?: { url?: string }[] };
-      for (const script of scripts ?? []) if (script.url) urls.push(script.url);
-    }
-    return { urls, status: result.status };
-  } finally {
-    rmSync(covDir, { recursive: true, force: true });
-  }
+): { urls: readonly string[]; status: number | null } {
+  const { urls, status } = loadedScriptsOf(binPath, args, extraEnv, cwd);
+  return { urls, status };
 }
 
 /**

@@ -63,7 +63,6 @@ import {
   toFindings,
   type ValidationConfig,
   type ValidationIssue,
-  withAddedFindings,
 } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
@@ -75,9 +74,7 @@ import {
   endWithRefusal,
   endWithReport,
   leaveFindingsToSupervisor,
-  leftoverIssueOf,
   NOTHING_FINISHED,
-  type ForwardedDocument,
 } from '../../utils/document-writer.js';
 import { formatDurationSecs } from '../../utils/duration.js';
 import { reportFindings } from '../../utils/issue-rendering.js';
@@ -101,6 +98,7 @@ import {
   endWhenSupervisorGone,
   letSupervisorLossSurface,
   parseProgressLog,
+  populationEntry,
   unitInFlight,
   type ProgressEntry,
   type UnitInFlight,
@@ -108,17 +106,24 @@ import {
 import type { CheckData, CheckReport } from './check-schema.js';
 import {
   DEFAULT_BUDGET_SECONDS,
+  interruptionMessage,
   parseBudgetSeconds,
   requireSupervisableFlags,
   runsInThisProcess,
   SUPERVISED_BY_FLAG,
-  superviseCheck,
+  superviseRun,
   supervisedByValue,
+  withLeftover,
   withProgressLog,
-  type AbnormalDeath,
   type CheckInvocation,
+  type RunEnding,
   type SupervisedChild,
+  type SupervisedEnding,
+  type SupervisedVerb,
 } from './check-supervisor.js';
+
+/** The verb this module runs, as the supervisor keys it. */
+const CHECK_VERB = 'resources check' satisfies SupervisedVerb;
 
 /**
  * Where a supervised run announces what it is doing, one unit at a time.
@@ -382,23 +387,28 @@ export function buildCheckOutputData(input: CheckPayloadInput): CheckReport {
 /**
  * The error branch of the envelope, for a run that never had a population.
  *
- * `status: error`, nothing in `findings`, zero `summary`, and the reason in
- * `error` under the registered refusal `RUN_INCOMPLETE` — the run started and
- * stopped before its population completed — and `data` is KEPT: it names the
- * root and says, with `null`, that there was no projection, which is more than
- * `data: null` could. No `durationMs`: no refusal document carries one.
+ * `status: error`, and the reason in `error` under the registered refusal `RUN_INCOMPLETE` — the
+ * run started and stopped before its population completed — and `data` is KEPT: it names the root
+ * and says, with `null`, that there was no projection, which is more than `data: null` could. No
+ * `durationMs`: no refusal document carries one.
+ *
+ * 🔑 Only the run-integrity sentences become the message. Any other finding — a file the population
+ * did not admit, recorded on its own line just before the population's — stays a finding: it is a
+ * fact about the tree that finished before the run stopped, and folding it into the refusal's prose
+ * would lose its code and its location.
  *
  * @param report - The document as the findings would have built it
  * @returns The same document on the error branch
  */
 function couldNotRun(report: CheckReport): CheckReport {
+  const isIntegrity = (finding: CheckReport['findings'][number]): boolean => finding.code === RUN_INTEGRITY_CODE;
   // The one construction of the error branch — the same `buildErrorReport`
   // every refusal the writer publishes goes through.
   return buildErrorReport({
-    error: { code: 'RUN_INCOMPLETE', message: report.findings.map((finding) => finding.message).join('\n') },
+    error: { code: 'RUN_INCOMPLETE', message: report.findings.filter(isIntegrity).map((finding) => finding.message).join('\n') },
     gate: report.gate,
     examined: report.examined,
-    findings: [],
+    findings: report.findings.filter((finding) => !isIntegrity(finding)),
     data: report.data,
   });
 }
@@ -1047,313 +1057,8 @@ function emptyCorpusFinding(
   )];
 }
 
-/**
- * How a supervised run stopped short of publishing its own document.
- *
- * Two endings, and telling them apart is the whole reason this is a type rather
- * than a number. A watchdog kill means *no progress within the budget*, and the
- * remedy may genuinely be a larger bound. An abnormal death means *the run
- * died* — most often out of memory — and there the budget was never involved,
- * so advice to raise it is a false diagnosis that makes the situation worse.
- */
-export type CheckRunEnding =
-  | { readonly kind: 'budget'; readonly budgetSecs: number; readonly invocation: CheckInvocation }
-  | { readonly kind: 'abnormal'; readonly death: AbnormalDeath };
-
-/**
- * How to give the run more time, as one sentence — by who ran the checks.
- *
- * 🔑 A kill remedy names a flag only the verb that accepts it can be given. `--budget` is
- * `vat resources check`'s alone, and in this release `vat validate` has NO way to give its checks
- * phase more time: the phase always runs under {@link DEFAULT_BUDGET_SECONDS}. So the phase's
- * sentence says exactly that — what the bound measures, its value, and that running the checks
- * standalone with a larger `--budget` lets THEM pass but does not make `vat validate` pass. A
- * remedy promising otherwise sends the operator round a loop that cannot end.
- *
- * @param invocation - Who ran the checks
- * @returns The sentence, with a leading space
- */
-function raiseBoundSentence(invocation: CheckInvocation): string {
-  return invocation === 'standalone'
-    ? ' Raise it with `--budget <seconds>`.'
-    : ' `vat validate` cannot give it more time: its checks phase always runs under the default'
-      + ` bound of ${DEFAULT_BUDGET_SECONDS}s WITHOUT PROGRESS (a total bound on the population,`
-      + ' which reports progress only when it finishes), and this release has no way to change'
-      + ' it. Running the same checks on their own with `vat resources check --budget <seconds>`'
-      + ' can let them pass there, but `vat validate` will still fail on this tree.';
-}
-
-/**
- * Where the run was when it stopped, as a phrase.
- *
- * @param inFlight - What the log's last state says
- * @returns A clause naming the unit
- */
-function inFlightPhrase(inFlight: UnitInFlight): string {
-  if (inFlight.kind === 'startup') return 'before the child process had finished starting';
-  if (inFlight.kind === 'population') return 'before its population completed';
-  if (inFlight.kind === 'check') return `while the check "${inFlight.name}" was running`;
-  if (inFlight.kind === 'examining') {
-    return `after the check "${inFlight.name}" had finished its violations statement (${String(inFlight.rows)} rows),`
-      + ' while its examined statement was running';
-  }
-  if (inFlight.kind === 'converting') {
-    return `after the check "${inFlight.name}" had finished its statement (${String(inFlight.rows)} rows),`
-      + ' while its rows were being converted';
-  }
-  if (inFlight.kind === 'reporting') {
-    return 'after the last check had finished, while its document was being assembled';
-  }
-  // 🔑 Conversion has its own `converting` state, so `idle` is only the gap
-  // before the first statement or after the last cost and before `checks-complete`.
-  return 'while no check was running — either between the population and the first'
-    + ' statement, or after the last one had filed its cost';
-}
-
-/** The supervisor's kind for a child whose exit contradicts its own complete document. */
-const EXIT_DISAGREES = 'exit-disagrees' satisfies AbnormalDeath['kind'];
-
-/**
- * What ended the child, as a phrase.
- *
- * @param death - The ending the supervisor resolved
- * @returns A clause naming the mechanism
- */
-function deathPhrase(death: AbnormalDeath): string {
-  if (death.kind === 'signal') return `the child process was terminated by ${death.signal}`;
-  if (death.kind === 'spawn-failed') {
-    return `the child process could not be started at all (${death.binary}: ${death.detail})`;
-  }
-  if (death.kind === 'kill-failed') {
-    return death.refused
-      ? `the budget was blown and the SIGKILL that should have ended the run was REFUSED (${death.detail})`
-      : `the budget was blown and the SIGKILL that should have ended the run DID NOT END IT (${death.detail})`;
-  }
-  if (death.kind === 'no-output') {
-    return `the child process exited ${death.code} and published no report at all`;
-  }
-  if (death.kind === 'unparseable-output') {
-    return `the child process exited ${death.code} and published a report that is not this`
-      + ` command's document, most likely cut off mid-write (${death.detail})`;
-  }
-  if (death.kind === EXIT_DISAGREES) {
-    return `the child process published a complete report whose own verdict is exit ${death.documentExit},`
-      + ` and then exited ${death.code}`;
-  }
-  return 'the child process ended with neither an exit code nor a signal';
-}
-
-/**
- * What to do about a child that never started.
- *
- * 🚨 **"Check your PATH" is the wrong thing to tell a saturated runner.**
- * `spawn` fails with `EAGAIN` when the machine has no free process slot and
- * `ENOMEM` when it has no free memory — which is precisely the memory-pressured
- * environment this whole feature exists for, and precisely where an operator
- * least deserves to be sent hunting an installation problem that is not there.
- *
- * @param detail - What `spawn` reported
- * @returns The remedy sentence
- */
-function spawnFailedRemedy(detail: string): string {
-  if (/\b(?:EAGAIN|ENOMEM)\b/.test(detail)) {
-    return ' The child could not be started because the RUNNER had nothing left to start it'
-      + ' with — EAGAIN is "no free process slot" and ENOMEM is "no free memory" — so this is'
-      + ' about how loaded the machine is, not about the installation and not about the SQL.'
-      + ' Give the job a less contended runner, or reduce what else is running beside it.';
-  }
-  return ' Nothing ran at all, so this is an installation or PATH problem rather than'
-    + ' anything about the SQL.';
-}
-
-/**
- * What to do about a kill that did not end the child — refused, or accepted and ineffective.
- *
- * ⛔ This must never be composed from the spawn-failure sentence, however
- * similar the plumbing is. The two are opposites: one child never existed, and
- * this one is, as far as this process can tell, STILL RUNNING.
- *
- * @param death - The kill that failed, and the pid it left behind
- * @returns The remedy sentence
- */
-function killFailedRemedy(death: Extract<AbnormalDeath, { kind: 'kill-failed' }>): string {
-  const handle = death.pid === undefined
-    ? ' The child\'s pid is not known to this process.'
-    : ` The child was process ${death.pid}.`;
-  const how = death.refused
-    ? ` SIGKILL and the kernel would not deliver it (${death.detail}), which normally means EPERM.`
-    : ` SIGKILL, the kernel accepted it, and the process still did not end (${death.detail}) —`
-      + ' which normally means it is stuck in uninterruptible I/O (a hung network mount, a wedged disk).';
-  return ' The run started, ran past its budget, and then REFUSED TO DIE: the watchdog sent'
-    + how
-    + handle
-    + ' It may still be running and still holding whatever the statement was holding, so'
-    + ' check for it and end it by hand before starting another run. Nothing about the SQL'
-    + ' or the installation is implicated by the refusal itself — but the bound could not be'
-    + ' enforced, so treat this run as unsupervised.'
-    // 🚨 Its OWN budget-role sentence, because the generic one below is false
-    // here: this is the single abnormal death the watchdog causes. Saying "the
-    // watchdog never fired" would repeat, in the report, the exact confusion
-    // that produced the defect.
-    + ' The watchdog DID fire — the budget is what decided this run should stop — but the'
-    + ' kill was refused, so raising the budget only moves when the refusal happens. It does'
-    + ' not make the run stoppable.';
-}
-
-/**
- * What to do about a particular signal.
- *
- * 🚨 **The defect this closes: the fallback contradicted the sentence beside
- * it.** Only `SIGABRT` and `SIGKILL` were partitioned on and everything else
- * fell through to a sentence written for `no-status` — so a real `kill -TERM`
- * produced "terminated by SIGTERM … The cause is outside anything this command
- * can observe; the child left no exit code to report". It names the signal, and
- * then says it can see nothing and was told nothing. SIGSEGV, SIGBUS, SIGHUP and
- * SIGXCPU read the same way.
- *
- * ⚠️ **SIGTERM is not exotic; it is how CI kills things** — `timeout(1)`, a
- * cancelled job, a container stopping.
- *
- * @param signal - The signal `close` reported
- * @returns The remedy sentence
- */
-function signalRemedy(signal: string): string {
-  if (signal === 'SIGABRT') {
-    return ' SIGABRT here is Node aborting on its own heap limit: the run exhausted memory'
-      + ' MATERIALISING a result set, which is what an unbounded statement does as soon as it'
-      + ' selects rows rather than an aggregate. The remedy is a narrower statement or a'
-      + ' `LIMIT`, not a bigger machine.';
-  }
-  if (signal === 'SIGKILL') {
-    return ' Nothing inside this run sends SIGKILL except the budget watchdog, and the watchdog'
-      + ' did not fire — so something OUTSIDE killed the child: a kernel OOM killer on a'
-      + ' memory-capped runner (it picks the largest process, which is this child and never the'
-      + ' idle parent), a container memory limit, or an operator. Give the job more memory, or'
-      + ' narrow the statement so it needs less.';
-  }
-  if (signal === 'SIGTERM' || signal === 'SIGINT' || signal === 'SIGHUP') {
-    return ` Nothing inside this run sends ${signal}: something OUTSIDE asked the child to stop.`
-      + ' On CI that is almost always a step or job timeout (`timeout(1)`, a workflow'
-      + ' `timeout-minutes`), a cancelled pipeline, or a container being shut down. Look at the'
-      + ' job\'s own time limit and at whether the run was cancelled — not at the SQL, which was'
-      + ' still working when it was interrupted.';
-  }
-  if (signal === 'SIGSEGV' || signal === 'SIGBUS') {
-    return ` ${signal} is a CRASH inside native code, not anything an adopter's SQL can express:`
-      + ' the process was killed by the kernel for touching memory it should not have. That'
-      + ' points at a native module (`node:sqlite` is one) or at the platform, and it is worth'
-      + ' reporting with the Node version, the platform and the statement that was running.';
-  }
-  return ` ${signal} was not sent by anything inside this run, and this command has no specific`
-    + ' remedy for it: look at what else on this machine signals its child processes — a'
-    + ' supervisor, a resource limit, or an operator.';
-}
-
-/**
- * The exit code Node uses for its own fatal abort, on EVERY platform.
- *
- * 🚨 **This is measured, and it is NOT the local platform's signal number.** On
- * macOS and Linux 134 is the shell encoding `128 + SIGABRT`, where `SIGABRT` is
- * 6. On Windows `os.constants.signals.SIGABRT` is **22** — MSVC numbers it
- * differently — so deriving the code from that table gives 150 and matches
- * nothing Node ever emits. A `windows-latest` run of the heap-abort case
- * reported exactly **134**, the same as Unix: the number comes from Node's own
- * abort path, not from the platform's signal table.
- *
- * 🪤 Pinned as a measured fact, and a test asserts the number itself: a test
- * that re-derived it from `os.constants.signals` would agree with wrong code.
- *
- * ⛔ Not a version constant: it decides nothing about whether stored data is
- * still valid. It is an external protocol value, like an API header.
- */
-export const NODE_FATAL_ABORT_EXIT_CODE = 134;
-
-/**
- * What to do about a child that exited with a code and said nothing.
- *
- * 🚨 **This is the SAME event as a signal death, seen on a platform without
- * signals.** Windows has none, so Node reports its own fatal abort — the heap
- * limit among them — as an exit code with `signal === null`, where macOS and
- * Linux report `SIGABRT` with no code at all. An operator hitting the heap limit
- * on Windows CI deserves the identical remedy as one hitting it on Linux, so the
- * abort is recognised by its code and {@link signalRemedy} answers both.
- *
- * ⚠️ Every OTHER code gets a deliberately non-committal sentence. This command
- * cannot tell an external termination it has no name for from a bug of its own,
- * and claiming either would send half its readers to the wrong place — the exact
- * defect {@link signalRemedy}'s fall-through was written to fix.
- *
- * @param code - The exit code the child reported
- * @returns The remedy sentence
- */
-function noOutputRemedy(code: number): string {
-  if (code === NODE_FATAL_ABORT_EXIT_CODE) {
-    return ` Exit ${code} is Node's own fatal abort. A platform with no signal to report — Windows`
-      + ' — surfaces as an exit code what macOS and Linux report as SIGABRT itself, and it is the'
-      + ' same event.' + signalRemedy('SIGABRT');
-  }
-  return ` Exit ${code} is not Node's abort code, and the child published no usable copy of the document`
-    + ' every path through this command ends by writing — so this is either a termination from'
-    + ' outside that left an exit code instead of a signal, or a defect in vat. The child\'s stderr'
-    + ' was inherited, so whatever it managed to say is above this report; if there is nothing'
-    + ' there either, report this exit code with the platform and the statement that was running.';
-}
-
-/**
- * What to DO about it — and the reason the death is carried this far as a union
- * rather than as a string.
- *
- * 🔑 Every kind wants a DIFFERENT file looked at: SIGABRT is the statement,
- * SIGKILL is the runner's memory, SIGTERM is the job's own timeout, a failed
- * spawn is either the installation or the runner's load, and a refused kill is a
- * process still running. A message that conflated any two of them would send
- * half its readers to the wrong place.
- *
- * ⛔ **The last line is for `no-status` and nothing else.** It is the only
- * ending about which this command genuinely knows nothing.
- *
- * @param death - The ending the supervisor resolved
- * @returns The remedy sentence
- */
-function deathRemedy(death: AbnormalDeath): string {
-  if (death.kind === 'kill-failed') return killFailedRemedy(death);
-  if (death.kind === 'spawn-failed') return spawnFailedRemedy(death.detail) + WATCHDOG_UNINVOLVED;
-  if (death.kind === 'signal') return signalRemedy(death.signal) + WATCHDOG_UNINVOLVED;
-  if (death.kind === 'no-output' || death.kind === 'unparseable-output') {
-    return noOutputRemedy(death.code) + WATCHDOG_UNINVOLVED;
-  }
-  if (death.kind === EXIT_DISAGREES) return EXIT_DISAGREES_REMEDY + WATCHDOG_UNINVOLVED;
-  return ' The cause is outside anything this command can observe; the child left no exit code'
-    + ' to report.' + WATCHDOG_UNINVOLVED;
-}
-
-/**
- * Why a child whose exit disagrees with its own document is not forwarded, and where to look.
- *
- * ⚠️ It does not guess which of the two is true. Every path through this command ends on the code
- * its document derives, so the disagreement is either something ending the child after it wrote
- * (a crash in teardown, an external termination that left a code) or a defect in vat — and the
- * report cannot tell them apart.
- */
-const EXIT_DISAGREES_REMEDY
-  = ' Every path through this command ends on the exit code its own document derives, so the two'
-  + ' should never disagree: either something ended the child AFTER it wrote its report — a crash'
-  + ' during shutdown, or a termination from outside that left an exit code — or vat has a defect.'
-  + ' Which one cannot be told from here, so the report is withheld rather than forwarded as the'
-  + ' verdict. The child\'s stderr was inherited, so whatever it said is above this report; re-run'
-  + ' it, and if the disagreement repeats, report the exit code with the platform.';
-
-/**
- * The sentence that keeps an abnormal death from being blamed on the bound.
- *
- * ⛔ Appended by every arm of {@link deathRemedy} EXCEPT the refused kill, which
- * writes its own — because there the watchdog is exactly what fired, and this
- * sentence would repeat in the report the confusion that produced the defect:
- * an `error` event read as a spawn failure, so `killed` was never consulted.
- */
-const WATCHDOG_UNINVOLVED
-  = ' The budget was not what ended this run — the watchdog never fired — so raising it'
-  + ' would not help.';
+/** How a supervised checks run stopped short of publishing its own document — see `RunEnding`. */
+export type CheckRunEnding = RunEnding<CheckInvocation>;
 
 /**
  * The sentence that says what this document does NOT contain.
@@ -1403,128 +1108,7 @@ function interruptedRunFinding(
   ending: CheckRunEnding,
   checksCompleted: number,
 ): ValidationIssue {
-  const where = inFlightPhrase(inFlight);
-  const message = ending.kind === 'budget'
-    ? budgetKillMessage(inFlight, ending, where)
-    : deathMessage(ending.death, where);
-
-  return runIntegrityFinding(message + incompleteNotice(checksCompleted));
-}
-
-/**
- * What an abnormal death means.
- *
- * 🪤 A child whose exit disagrees with its document did NOT die mid-run — it finished every check
- * and wrote a whole report — so it gets its own sentence rather than "DIED before it finished …
- * the checks after it never executed", which would be false about it.
- *
- * @param death - The ending the supervisor resolved
- * @param where - The clause naming the unit, from {@link inFlightPhrase}
- * @returns The message body
- */
-function deathMessage(death: AbnormalDeath, where: string): string {
-  if (death.kind === EXIT_DISAGREES) {
-    return `This run's exit contradicts its own report: ${deathPhrase(death)}, so neither can be`
-      + ' trusted as the verdict and this document replaces the report.' + deathRemedy(death);
-  }
-  return `This run DIED before it finished: ${deathPhrase(death)} ${where}, so the checks`
-    + ' after it never executed and this document is not a verdict.'
-    + deathRemedy(death);
-}
-
-/**
- * What a WATCHDOG kill means, which depends entirely on what was in flight.
- *
- * 🚨 **The `reporting` state must not get the statement-hang body**: a run
- * whose checks ALL completed and whose document blew the budget has no hanging
- * rule to hunt.
- *
- * ⚠️ It is easy to reach on a real gate, not a curiosity: serialising 2,000,000
- * issues takes ~17 s after `checks-complete` is filed, which is one budget
- * window on its own.
- *
- * 🔑 Every remedy names the bound through {@link raiseBoundSentence}, so a phase is never told to
- * pass a flag its own verb (`vat validate`) rejects, nor promised a way to raise its bound.
- *
- * @param inFlight - What the log's last state says
- * @param ending - The kill: the bound that was blown, and who ran the checks
- * @param where - The clause naming the unit, from {@link inFlightPhrase}
- * @returns The message body
- */
-function budgetKillMessage(
-  inFlight: UnitInFlight,
-  ending: Extract<CheckRunEnding, { kind: 'budget' }>,
-  where: string,
-): string {
-  const { budgetSecs, invocation } = ending;
-  const raise = raiseBoundSentence(invocation);
-  if (inFlight.kind === 'startup' || inFlight.kind === 'population') {
-    return `This run made no progress for ${budgetSecs}s and was killed ${where}, so no`
-      + ' check ran and this document is not a verdict. There is no projection, so the'
-      + ' population fields in `data` are null and `examined` is 0.'
-      + (inFlight.kind === 'startup' ? startupRemedy(raise) : populationRemedy(raise));
-  }
-  if (inFlight.kind === 'converting') {
-    return `This run made no progress for ${budgetSecs}s and was killed ${where}.`
-      + ' That statement had FINISHED, so this is not a rule that would not return: turning'
-      + ' its rows into findings — the conversion runs in this process — outlasted the bound,'
-      + ' and the checks after it never executed. A check that selects a very large number of'
-      + ` rows is what makes that step long.${raise}`;
-  }
-  if (inFlight.kind === 'reporting') {
-    return `This run made no progress for ${budgetSecs}s and was killed ${where}.`
-      + ' Every declared check had already finished and filed its cost, so no statement was'
-      + ' running and there was nothing left to execute: the cause is the SIZE of the document'
-      + ' being assembled, not a rule that would not return. Serialising a large result is'
-      + ' linear in how much there is — 2,000,000 issues take about 17 seconds — so look at'
-      + ' the rules under `checks` that produced the most rows and narrow them (a `LIMIT`, or'
-      + ' one row per violation rather than one per member), or give the document more time to'
-      + ` be written.${raise}`;
-  }
-  return `This run made no progress for ${budgetSecs}s and was killed ${where}, so the`
-    + ' checks after it never executed and this document is not a verdict.'
-    + ' A statement that will not finish cannot be stopped from inside the process —'
-    + ' the query is synchronous and holds the event loop — so the bound is enforced by'
-    + ' killing the run. If the work is legitimately slow, it needs more time.'
-    + raise
-    + (invocation === 'standalone'
-      ? ' `--budget 0` removes it (the run can then hang forever).'
-      : '');
-}
-
-/**
- * What to do about a kill that landed before the child had BOOTED.
- *
- * Nothing had touched the tree yet — Node and the CLI were still loading — so
- * sizing the budget against the population would be advice about a unit that
- * never began. A boot that outlasts the budget is a saturated machine or a bound
- * too small to be one.
- *
- * @param raise - How to raise the bound, from {@link raiseBoundSentence}
- * @returns The remedy sentence
- */
-function startupRemedy(raise: string): string {
-  return ' Node and vat were still loading, so neither your tree nor your SQL is implicated: a'
-    + ' boot that outlasts the bound means a heavily loaded machine or a bound far smaller than'
-    + ` any run can meet.${raise}`;
-}
-
-/**
- * What to do about a kill that landed during the population.
- *
- * 🔑 The measured numbers are labelled as someone else's trees. An operator
- * given one number reads it as a promise about theirs.
- *
- * @param raise - How to raise the bound, from {@link raiseBoundSentence}
- * @returns The remedy sentence
- */
-function populationRemedy(raise: string): string {
-  return ' Population is legitimately slow on a large tree, and it reports progress only when it'
-    + ' FINISHES, so the budget is a total bound for that one unit — a crawl that outlasts it is'
-    + ` not necessarily stuck.${raise}`
-    + ' For scale, two MEASURED trees, neither of them yours: VAT\'s own repository is ~1.2s'
-    + ' warm and 33-35s with a cold parse cache; a 10,000-file adopter tree is ~5s warm and'
-    + ' 16.5s cold. Your tree is a third number.';
+  return runIntegrityFinding(interruptionMessage(inFlight, ending) + incompleteNotice(checksCompleted));
 }
 
 /**
@@ -1600,6 +1184,7 @@ export function buildInterruptedCheckInput(options: {
 }): CheckPayloadInput {
   const { entries, root, ending, durationMs } = options;
   const population = entries.find((entry) => entry.kind === 'population');
+  const notAdmitted = entries.find((entry) => entry.kind === 'not-admitted')?.findings ?? [];
   // 🪤 Rebuilt field by field rather than passed through. The log's check
   // entry carries a `kind` discriminator that `CheckCost` does not, and the
   // conditional spreads keep `rows`/`broken` ABSENT rather than `undefined` —
@@ -1647,7 +1232,7 @@ export function buildInterruptedCheckInput(options: {
     // NOT resolved again: the child resolved them through `resources.validation`,
     // and a second pass with no config would put a configured severity back to its default.
     issues: [
-      ...(population?.notAdmitted ?? []),
+      ...notAdmitted,
       ...resolveFindings([
         interruptedRunFinding(inFlight, ending, completed.length),
         ...refused,
@@ -1728,7 +1313,7 @@ export function runProjectChecks(options: {
     options.onProgress,
     options.warn,
   );
-  // 🚨 HERE, and this line moved to get here. `checks-complete` buys the phase
+  // 🚨 HERE, and this line moved to get here. `statements-complete` buys the phase
   // after the last statement a fresh watchdog window, and three places
   // documented that phase as "resolving severities and serialising". It was
   // emitted a level up, by `runOutcome`, AFTER this function returned — so
@@ -1737,7 +1322,7 @@ export function runProjectChecks(options: {
   // issue count. Emitting it before that call is what makes the claim true,
   // which is the useful direction: the alternative was to weaken three docs.
   //
-  options.onProgress?.({ kind: 'checks-complete' });
+  options.onProgress?.({ kind: 'statements-complete' });
   // The run-integrity report leads. An aggregate check selects a row whatever
   // the corpus is, so its findings can outnumber this one — and every one of
   // them is noise until the operator knows the gate ran over nothing.
@@ -1784,6 +1369,10 @@ export function runProjectChecks(options: {
  * restates what the child would have found — it is passed so the phase cannot
  * depend on that coincidence.)
  *
+ * 🔑 Every value travels as `--name=value` and the operand comes last, after `--`: a value or a
+ * root that begins with `-` is then never read as an option. (`--supervised-by` keeps two tokens:
+ * its value always begins with the invoker's name.)
+ *
  * @param root - The project root the parent resolved
  * @param request - What the child is asked to run, and in which format
  * @param logPath - The progress log both sides watch
@@ -1793,14 +1382,14 @@ function childArgs(root: string, request: ChildRequest, logPath: string): string
   return [
     'resources',
     'check',
-    root,
-    ...(request.check === undefined ? [] : ['--check', request.check]),
-    '--format',
-    request.format,
+    ...(request.check === undefined ? [] : [`--check=${request.check}`]),
+    `--format=${request.format}`,
     ...(request.debug ? ['--debug'] : []),
-    ...(request.base === undefined ? [] : ['--base', request.base]),
+    ...(request.base === undefined ? [] : [`--base=${request.base}`]),
     SUPERVISED_BY_FLAG,
     supervisedByValue({ invoker: request.invocation, progressLog: logPath }),
+    '--',
+    root,
   ];
 }
 
@@ -1823,11 +1412,6 @@ interface ChildRequest {
   readonly invocation: CheckInvocation;
 }
 
-/** What a supervised run decided to publish. */
-type SupervisedEnding =
-  | { readonly forward: ForwardedDocument }
-  | { readonly payload: CheckReport };
-
 /**
  * Run the checks in a child bounded by `budgetSecs`, and report either what it
  * said or what killing it revealed.
@@ -1848,10 +1432,11 @@ async function superviseCheckRun(options: {
   root: string;
   request: ChildRequest;
   budgetSecs: number;
-}): Promise<SupervisedEnding> {
+}): Promise<SupervisedEnding<CheckReport>> {
   const { root, request } = options;
-  const { value: ending, leftover } = await withProgressLog(async (log): Promise<SupervisedEnding> => {
-    const run = await superviseCheck({
+  const { value: ending, leftover } = await withProgressLog(CHECK_VERB, async (log): Promise<SupervisedEnding<CheckReport>> => {
+    const run = await superviseRun({
+      verb: CHECK_VERB,
       args: childArgs(root, request, log.path),
       log,
       budgetMs: options.budgetSecs * 1000,
@@ -1867,25 +1452,12 @@ async function superviseCheckRun(options: {
         // watchdog's kill does, never `{ outcome: 'completed', code: 0 }`.
         ending: run.outcome === 'killed'
           ? { kind: 'budget', budgetSecs: options.budgetSecs, invocation: request.invocation }
-          : { kind: 'abnormal', death: run.death },
+          : { kind: 'abnormal', death: run.death, invocation: request.invocation },
         durationMs: run.elapsedMs,
       })),
     };
   });
   return withLeftover(ending, leftover);
-}
-
-/**
- * `ending` with the progress log's directory, when the OS would not remove it, as one
- * `TREE_CLEANUP_INCOMPLETE` warning beside the checks that ran. A forwarded document is then
- * published re-built rather than byte for byte: it gained a finding the child never knew of.
- */
-function withLeftover(ending: SupervisedEnding, leftover: unknown): SupervisedEnding {
-  if (leftover === undefined) return ending;
-  const added = toFindings([leftoverIssueOf(leftover)]);
-  // The child's document was validated against this verb's schema when it was read.
-  const report = 'forward' in ending ? (ending.forward.report as CheckReport) : ending.payload;
-  return { payload: withAddedFindings(report, added) };
 }
 
 /**
@@ -1951,13 +1523,16 @@ function warnWhenNoOwnChecks(checks: Readonly<Record<string, ResourceCheck>> | u
 /**
  * Run the project's declared checks against its projection.
  *
- * ## 🚨 Why this verb spawns a child and `vat resources query` does not
+ * ## 🚨 Why this verb spawns a child by default and `vat resources query` only under `--budget`
  *
  * Both verbs run SQL an adopter wrote, over the same projection, through the
  * same `withQueriedProjection` — which does NOT diverge here, and must not. The
- * fork is this function and nothing below it.
+ * fork is this function and nothing below it (and `queryCommand`'s, for `query`).
  *
- * `query`'s author is at the keyboard, and Ctrl-C already works for them. It
+ * `query`'s author is at the keyboard, and Ctrl-C already works for them, so a
+ * query pays for a second process only when its operator asks for a bound with
+ * `--budget` — then it runs under this verb's supervisor, through
+ * `query-supervision.ts`, which a query without it never loads. Ctrl-C
  * works for one reason worth stating, because it is fragile: NO signal handler
  * is installed in a process that runs the SQL. A process blocked in synchronous
  * `node:sqlite` dies instantly on SIGINT while that remains true, and SURVIVES
@@ -2015,7 +1590,7 @@ export async function checkCommand(
     // The presence of `--supervised-by` says "you ARE the child". `--budget 0` says
     // the operator declined the bound; both run the work here, and the second
     // can therefore hang forever, which its help text says.
-    const ending: SupervisedEnding = runsInThisProcess({ supervisedBy: options.supervisedBy, budgetSecs })
+    const ending: SupervisedEnding<CheckReport> = runsInThisProcess({ supervisedBy: options.supervisedBy, budgetSecs })
       ? { payload: await withNoticeAudience(noticeAudienceOf(child), () => runChecksHere(pathArg, options, child, logger, startTime)) }
       : await superviseStandalone(root, options, format, budgetSecs);
     // The human half, on stderr, by the process the operator ran — as every verb does. A
@@ -2046,10 +1621,10 @@ export async function checkCommand(
     // A killed child is never OK and never decided here: its document carries
     // a RUN_INTEGRITY finding (exit 1) or the error branch (exit 2), and the
     // writer derives the code from it, as everywhere else.
-    endWithReport('resources check', ending.payload, format);
+    endWithReport(CHECK_VERB, ending.payload, format);
   } catch (error) {
     // `vat resources check` offers no `--strict`: warnings never fail it.
-    endWithRefusal('resources check', refusalCodeOf(error), error, format, { strict: false }, NOTHING_FINISHED);
+    endWithRefusal(CHECK_VERB, refusalCodeOf(error), error, format, { strict: false }, NOTHING_FINISHED);
   }
 }
 
@@ -2088,7 +1663,7 @@ function superviseStandalone(
   options: CheckOptions,
   format: 'yaml' | 'json',
   budgetSecs: number,
-): Promise<SupervisedEnding> {
+): Promise<SupervisedEnding<CheckReport>> {
   return superviseCheckRun({
     root,
     request: { check: options.check, format, debug: options.debug === true, base: options.base, invocation: 'standalone' },
@@ -2135,7 +1710,7 @@ async function runChecksHere(
   // unit the budget is already a total bound for. See `StartedEntrySchema`.
   // And before that line: the child that outlives its supervisor ends itself — see
   // `endWhenSupervisorGone` for when that can and cannot be noticed.
-  if (child !== undefined) endWhenSupervisorGone(child.supervisorPid, process.stdin);
+  if (child !== undefined) endWhenSupervisorGone(CHECK_VERB, child.supervisorPid, process.stdin);
   const onProgress = child === undefined
     ? undefined
     : createProgressWriter(child);
@@ -2223,21 +1798,13 @@ function runOutcome(options: {
     // watchdog, so the population is bounded by the budget without being charged
     // the first check's share of it.
     //
-    // The files it did not admit are findings BEFORE any check runs, and ride on
-    // the same line, so a run killed mid-check still fails on them
-    // (`buildInterruptedCheckInput`).
+    // The files it did not admit are findings BEFORE any check runs, written on
+    // their own line immediately before the population's, so a run killed
+    // mid-check still fails on them (`buildInterruptedCheckInput`).
     const notAdmitted = notAdmittedPopulationFindings(projection, root, validation);
-    onProgress?.({
-      kind: 'population',
-      population: provenance.population,
-      lensPopulation: provenance.lensPopulation,
-      populationMs: provenance.populationMs,
-      lensMs: provenance.lensMs,
-      lensesEvaluated: [...provenance.lensesEvaluated],
-      membersEnumerated: extent.membersEnumerated,
-      notAdmitted,
-    });
-    // 🪤 `checks-complete` is NOT emitted here: `runProjectChecks` emits it the
+    onProgress?.({ kind: 'not-admitted', findings: notAdmitted });
+    onProgress?.(populationEntry(provenance, extent));
+    // 🪤 `statements-complete` is NOT emitted here: `runProjectChecks` emits it the
     // instant the last statement is done, before `resolveFindings` runs.
     //
     // 🔑 The DEFAULT SET enters HERE, from a module constant bound to the

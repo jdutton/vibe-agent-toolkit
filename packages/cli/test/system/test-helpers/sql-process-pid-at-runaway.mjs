@@ -1,6 +1,6 @@
 /**
  * Test-only preload (`NODE_OPTIONS=--import "<file: URL>"`): the process that RUNS the checks' SQL —
- * a supervised child (its argv carries `--supervised-by`), or `vat resources check --budget 0` —
+ * a supervised child (its argv carries `--supervised-by`), or `vat resources check|query --budget 0` —
  * writes its pid to `TEST_SQL_PID_FILE` the moment it starts executing a `WITH RECURSIVE`
  * statement, and then executes it for real. The statement never returns, so from that moment the
  * process is blocked inside synchronous `node:sqlite`: the state in which a signal handler would

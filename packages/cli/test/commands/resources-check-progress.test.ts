@@ -45,8 +45,15 @@ const POPULATION: ProgressEntry = {
   lensMs: 12.5,
   lensesEvaluated: ['authored-link'],
   membersEnumerated: 12,
-  // A finding, not an empty list: the strict schema would drop a line carrying a field it does not declare.
-  notAdmitted: [{
+};
+
+/**
+ * The line written immediately before the population's: the files the population did not admit.
+ * A finding, not an empty list, so a parser that dropped the line would be seen to.
+ */
+const NOT_ADMITTED: ProgressEntry = {
+  kind: 'not-admitted',
+  findings: [{
     code: 'RESOURCE_PARSE_LIMIT_EXCEEDED',
     severity: 'warning',
     message: "'docs/deep.md' was enumerated but its parse was stopped at its stackMb limit (1 MiB), so no check saw its rows.",
@@ -69,9 +76,19 @@ function logOf(...entries: readonly ProgressEntry[]): string {
 
 describe('parseProgressLog', () => {
   it('reads the entries a completed unit wrote, in order', () => {
-    const entries = parseProgressLog(logOf(POPULATION, FIRST_START, FIRST_COST));
+    const entries = parseProgressLog(logOf(NOT_ADMITTED, POPULATION, FIRST_START, FIRST_COST));
 
-    expect(entries).toStrictEqual([POPULATION, FIRST_START, FIRST_COST]);
+    expect(entries).toStrictEqual([NOT_ADMITTED, POPULATION, FIRST_START, FIRST_COST]);
+  });
+
+  it('drops a population line still carrying the not-admitted findings it used to hold', () => {
+    // The findings moved to their own line, which `query` shares. A writer that kept them on the
+    // population line must not half-parse: the strict schema drops the line, and the control
+    // proves the same line parses without the stray field.
+    const stale = { ...POPULATION, notAdmitted: [] };
+
+    expect(parseProgressLog(`${JSON.stringify(stale)}\n`)).toStrictEqual([]);
+    expect(parseProgressLog(logOf(POPULATION))).toStrictEqual([POPULATION]);
   });
 
   it('drops a TRUNCATED final line instead of throwing', () => {
@@ -187,7 +204,7 @@ function listen(): { stdin: PassThrough; exit: MockInstance; stderr: MockInstanc
   const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
   const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
   const stdin = new PassThrough();
-  endWhenSupervisorGone(SUPERVISOR_PID, stdin);
+  endWhenSupervisorGone('resources check', SUPERVISOR_PID, stdin);
   return { stdin, exit, stderr };
 }
 
@@ -227,9 +244,25 @@ describe('endWhenSupervisorGone', () => {
     vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     const stdin = Object.assign(new PassThrough(), { unref: vi.fn() });
 
-    endWhenSupervisorGone(SUPERVISOR_PID, stdin);
+    endWhenSupervisorGone('resources check', SUPERVISOR_PID, stdin);
 
     expect(stdin.unref).toHaveBeenCalledOnce();
+  });
+
+  it('names the query, never a check, when the supervised run is `vat resources query --budget`', async () => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const stdin = new PassThrough();
+    endWhenSupervisorGone('resources query', SUPERVISOR_PID, stdin);
+
+    stdin.end();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(exit.mock.calls).toStrictEqual([[2]]);
+    const line = String(stderr.mock.calls[0]?.[0]);
+    expect(line).toMatch(/^vat resources query: /);
+    expect(line).toContain(`pid ${String(SUPERVISOR_PID)}`);
+    expect(line).not.toMatch(/\bchecks?\b/i);
   });
 });
 

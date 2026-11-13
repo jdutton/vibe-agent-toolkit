@@ -488,6 +488,14 @@ data:
   exactly as SQLite holds them; `data.population` / `populationSecs` are the cache tell, `data.lensPopulation` the lenses' one
 - A statement the store refuses (not a query, a second statement, an unbound `?`, a name the schema
   lacks) is `USAGE_INVALID` by its code, `PROJECTION_STATEMENT_REFUSED`, never by its message
+- `--budget <seconds>` is opt-in, with no default: without it (or with `--budget 0`) the statement
+  runs in the operator's process exactly as before, with no second process and
+  `query-supervision.ts` never loaded. With it, the run goes to `vat resources check`'s supervisor
+  (`superviseRun`, keyed by verb): a child running the same verb under `--supervised-by`, killed
+  after that long without progress. A run killed or dead before it finished has no answer, so it is
+  refused as `RUN_INCOMPLETE`, exit 2, never published as a partial result. The child writes
+  `started`, the population line and `statements-complete`, so the refusal says where it stopped;
+  one statement is one unit, so a healthy statement slower than the budget is killed too
 
 ### `vat resources check [path]`
 
@@ -684,6 +692,11 @@ unterminated `WITH RECURSIVE` runs forever, and NOTHING in-process can interrupt
 synchronous, it holds the event loop, and `node:sqlite` exposes no interrupt. The supervisor's only
 lever is an external `SIGKILL`, which publishes nothing of the killed process's memory. So the name
 of the rule that hangs has to be on disk BEFORE it is entered, or it is not recoverable at all.
+
+`vat resources query` spawns only under `--budget`, and `check` always does, because their
+operators differ: a check runs unattended in CI, where nobody is there to press Ctrl-C, so its bound
+is on by default; a query is typed at a keyboard, where Ctrl-C works (no process running the SQL
+installs a signal handler), so its bound is the operator's to ask for.
 
 #### What this does not do
 

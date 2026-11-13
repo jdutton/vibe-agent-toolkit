@@ -41,6 +41,7 @@ import { CHECK_REPORT_SCHEMA } from '../../src/commands/resources/check-schema.j
 import {
   type AbnormalDeath,
   type CheckInvocation,
+  NODE_FATAL_ABORT_EXIT_CODE,
   parseBudgetSeconds,
   pollWatchdog,
   readCompletedDocument,
@@ -54,7 +55,6 @@ import {
   buildCheckOutputData,
   buildInterruptedCheckInput,
   type CheckPayloadInput,
-  NODE_FATAL_ABORT_EXIT_CODE,
   runProjectChecks,
 } from '../../src/commands/resources/check.js';
 import { NO_COLUMNS } from '../helpers/no-columns.js';
@@ -71,7 +71,6 @@ const POPULATION: ProgressEntry = {
   lensMs: 340,
   lensesEvaluated: ['claude-context'],
   membersEnumerated: 8123,
-  notAdmitted: [],
 };
 const FIRST_COST: ProgressEntry = { kind: 'check', name: 'no-markdown', durationMs: 4.25, rows: 3 };
 const HUNG_START: ProgressEntry = { kind: 'start', name: 'runaway' };
@@ -95,7 +94,7 @@ const EXAMINING: ProgressEntry = { kind: 'examining', name: 'counted', durationM
 const STARTED: ProgressEntry = { kind: 'started' };
 
 /** The line that says every statement is done and the document is being built. */
-const CHECKS_DONE: ProgressEntry = { kind: 'checks-complete' };
+const CHECKS_DONE: ProgressEntry = { kind: 'statements-complete' };
 
 /** A watchdog that has seen nothing yet, at time zero. */
 const FRESH: WatchdogState = { bytesSeen: 0, quietSince: 0 };
@@ -296,7 +295,7 @@ function diedOf(
   return buildInterruptedCheckInput({
     entries,
     root: '/corpus',
-    ending: { kind: 'abnormal', death },
+    ending: { kind: 'abnormal', death, invocation: 'standalone' },
     durationMs: 3400,
   });
 }
@@ -314,15 +313,32 @@ describe('buildInterruptedCheckInput', () => {
 
   it('still reports the files the population did not admit, as resolved before the checks ran', () => {
     // The population's not-admitted findings are computed before any check runs
-    // and carried on its line, so a run killed mid-check still fails on them —
+    // and carried on their own line, so a run killed mid-check still fails on them —
     // at the severity `resources.validation` resolved them to, never re-defaulted.
     const notAdmitted = [
       { code: 'RESOURCE_UNREADABLE', severity: 'warning', message: "'docs/locked.md' was enumerated but could not be read, so no check saw its rows.", location: 'docs/locked.md' },
     ] as const;
-    const input = killed([{ ...POPULATION, notAdmitted: [...notAdmitted] }, FIRST_COST, HUNG_START]);
+    const input = killed([{ kind: 'not-admitted', findings: [...notAdmitted] }, POPULATION, FIRST_COST, HUNG_START]);
 
     expect(input.issues.filter((issue) => issue.code === 'RESOURCE_UNREADABLE')).toStrictEqual([...notAdmitted]);
     expect(input.issues[0]?.code).toBe('RESOURCE_UNREADABLE');
+  });
+
+  it('keeps them as findings when the run stopped before its population line: RUN_INCOMPLETE, the finding beside it', () => {
+    // The not-admitted line is written immediately BEFORE the population's, so a kill between the
+    // two leaves a run with no population and a finding. The refusal's message is the run-integrity
+    // sentence alone; the unadmitted file stays a finding, with its code and its location.
+    const unreadable = {
+      code: 'RESOURCE_UNREADABLE', severity: 'warning', message: "'docs/locked.md' could not be read.", location: 'docs/locked.md',
+    } as const;
+    const report = buildCheckOutputData(killed([STARTED, { kind: 'not-admitted', findings: [unreadable] }]));
+
+    expect(report.status).toBe('error');
+    expect(report.error?.code).toBe('RUN_INCOMPLETE');
+    expect(report.error?.message).toContain('before its population completed');
+    expect(report.error?.message).not.toContain('docs/locked.md');
+    expect(report.findings.map((finding) => finding.code)).toStrictEqual(['RESOURCE_UNREADABLE']);
+    expect(report.findings[0]?.location).toBe('docs/locked.md');
   });
 
   it('keeps the checks that COMPLETED, with the rows each selected', () => {
@@ -426,8 +442,8 @@ describe('buildInterruptedCheckInput', () => {
 
   it('HEDGES that window, because a run that finished every rule also lands in it', () => {
     // 🚨 The hedge ("or after the last one") was deleted on the strength of
-    // `checks-complete` — but the last check's cost is filed BEFORE its rows are
-    // turned into issues, and `checks-complete` is written after that. A kill in
+    // `statements-complete` — but the last check's cost is filed BEFORE its rows are
+    // turned into issues, and `statements-complete` is written after that. A kill in
     // between leaves a log of nothing but completed checks, which reads as
     // `idle` — and the unhedged sentence then tells an operator whose run
     // completed forty rules that it died "between the population and the first
@@ -714,13 +730,13 @@ describe('readCompletedDocument — a completion whose document does not survive
   // silent completion's sibling, not a VAT defect: it publishes the interrupted
   // document from the progress log, exit 1 — never INTERNAL_ERROR, exit 2.
   it('reads a truncated document as an abnormal death carrying the code', () => {
-    const read = readCompletedDocument(A_DOCUMENT, 1, 'yaml');
+    const read = readCompletedDocument('resources check', A_DOCUMENT, 1, 'yaml');
 
     expect(read).toMatchObject({ death: { kind: 'unparseable-output', code: 1 } });
   });
 
   it('publishes the interrupted document for it — findings, exit 1, not a refusal', () => {
-    const read = readCompletedDocument(`{"status": "ok", "exam`, 0, 'json');
+    const read = readCompletedDocument('resources check', `{"status": "ok", "exam`, 0, 'json');
     if (!('death' in read)) throw new Error('a truncated document was accepted');
     const report = buildCheckOutputData(diedOf(read.death));
 
@@ -733,7 +749,7 @@ describe('readCompletedDocument — a completion whose document does not survive
   it('accepts a whole document whose exit the child agreed with', () => {
     // ⛔ The negative control: without it "always a death" passes the two above.
     const whole = buildCheckOutputData(diedOf({ kind: 'no-status' }));
-    const read = readCompletedDocument(JSON.stringify(whole), exitCodeForReport(whole), 'json');
+    const read = readCompletedDocument('resources check', JSON.stringify(whole), exitCodeForReport(whole), 'json');
 
     expect(read).toMatchObject({ document: { report: { status: whole.status } } });
   });
@@ -759,13 +775,13 @@ describe('readCompletedDocument — a child whose exit DISAGREES with its own do
   // 🚨 The defect: the parent forwards the DOCUMENT's code, never the process's, so a complete `ok`
   // report followed by a non-zero exit was published as a clean pass.
   it('refuses to forward a clean report the child then exited 3 on', () => {
-    const read = readCompletedDocument(clean(), 3, 'json');
+    const read = readCompletedDocument('resources check', clean(), 3, 'json');
 
     expect(read).toStrictEqual({ death: { kind: 'exit-disagrees', code: 3, documentExit: ExitCode.OK } });
   });
 
   it('publishes RESOURCE_CHECK_BROKEN, exit 1, naming both codes and saying the run did finish', () => {
-    const read = readCompletedDocument(clean(), 3, 'json');
+    const read = readCompletedDocument('resources check', clean(), 3, 'json');
     if (!('death' in read)) throw new Error('a disagreeing exit was forwarded');
     const report = buildCheckOutputData(diedOf(read.death, [POPULATION, FIRST_COST, CHECKS_DONE]));
     const message = report.findings[0]?.message ?? '';
@@ -783,7 +799,7 @@ describe('readCompletedDocument — a child whose exit DISAGREES with its own do
     const findings = buildCheckOutputData(diedOf({ kind: 'no-status' }));
 
     expect(exitCodeForReport(findings)).toBe(ExitCode.FINDINGS);
-    expect(readCompletedDocument(JSON.stringify(findings), ExitCode.FINDINGS, 'json')).toHaveProperty('document');
+    expect(readCompletedDocument('resources check', JSON.stringify(findings), ExitCode.FINDINGS, 'json')).toHaveProperty('document');
   });
 });
 
@@ -929,6 +945,7 @@ describe('the document a run that DIED publishes', () => {
       ending: {
         kind: 'abnormal',
         death: NOT_INSTALLED,
+        invocation: 'standalone',
       },
       durationMs: 12,
     });
@@ -1200,7 +1217,7 @@ describe('a budget kill during the REPORTING phase', () => {
   // "a statement that will not finish cannot be stopped from inside the process
   // — the query is synchronous and holds the event loop". There were no checks
   // after it and no statement was running. Measured: 2,000,000 issues take
-  // ~17 s to serialise after `checks-complete`, so this is easy to reach.
+  // ~17 s to serialise after `statements-complete`, so this is easy to reach.
   it('blames the DOCUMENT, not a statement that would not finish', () => {
     const [finding] = reporting().issues;
 

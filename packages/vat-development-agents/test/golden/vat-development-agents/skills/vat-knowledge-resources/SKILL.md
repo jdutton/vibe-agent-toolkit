@@ -493,6 +493,17 @@ A killed or crashed run is still evidence: checks that completed keep their per-
 the report names the rule that was in flight. It **never exits 0** — not on a watchdog kill, not on
 a child that died of its own memory.
 
+`vat resources query` takes the same flag, opt-in: it has **no** default bound, because a query
+is typed at a keyboard where Ctrl-C works. Ask for one when the statement might run away:
+
+```bash
+vat resources query --budget 30 'SELECT ...'   # child process, killed after 30s without progress
+```
+
+A query killed or dead before it finished has no answer, so it is refused as `RUN_INCOMPLETE`
+(exit 2), never published as a partial result. One statement is one unit: a healthy statement
+slower than the budget is killed too. Without `--budget`, nothing changes: one process, as before.
+
 ⛔ `check` deliberately does **not** preflight-compile its SQL the way `query` does. A check that
 cannot run must surface as a `RESOURCE_CHECK_BROKEN` finding inside a document that also reports the
 corpus size, not as a bare throw.

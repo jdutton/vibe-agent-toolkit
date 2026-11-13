@@ -1347,7 +1347,7 @@ describe('runProjectChecks — progress emitted for an outside observer', () => 
       // The window it buys was documented as covering "resolving severities and
       // serialising"; emitted a level up it covered only the serialising, and
       // severity resolution stayed charged to the LAST CHECK's window.
-      { kind: 'checks-complete' },
+      { kind: 'statements-complete' },
     ]);
   });
 
@@ -1364,7 +1364,7 @@ describe('runProjectChecks — progress emitted for an outside observer', () => 
       { kind: 'check', name: 'broken', durationMs: 1, broken: true, refusal: { message: expect.stringContaining('"broken" could not run') } },
       // Filed even when every rule broke: "no statement is running any more" is
       // true however the statements ended, and the phase after it still costs.
-      { kind: 'checks-complete' },
+      { kind: 'statements-complete' },
     ]);
   });
 
@@ -1608,7 +1608,7 @@ describe('the built-in check set runs without any config', () => {
       { kind: 'check', name: FRONTMATTER_CHECK_NAME, durationMs: 1, rows: 0, builtin: true },
       { kind: 'start', name: LINK_CHECK_NAME },
       { kind: 'check', name: LINK_CHECK_NAME, durationMs: 1, rows: 0, builtin: true },
-      { kind: 'checks-complete' },
+      { kind: 'statements-complete' },
     ]);
   });
 });

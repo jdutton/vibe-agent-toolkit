@@ -1,11 +1,12 @@
 /**
  * The arguments `vat validate`'s `checks` phase hands its supervised `vat resources check` child.
  *
- * Observed at the supervisor's door: `superviseCheck` is replaced by a recorder, so the argv the
+ * Observed at the supervisor's door: `superviseRun` is replaced by a recorder, so the argv the
  * phase composes is read exactly as the spawn would receive it, with no process started — and
  * `withProgressLog` by one that hands over a path (and a guard that guards nothing) without minting a directory, so this unit test
- * touches no filesystem. The contract: the operand is the root the orchestrator resolved,
- * `--format json` (the phase reads the child's document as JSON), `--debug` iff the orchestrator
+ * touches no filesystem. The contract: the operand is the root the orchestrator resolved, LAST and
+ * after `--` (so no root can read as an option), every value as `--name=value`,
+ * `--format=json` (the phase reads the child's document as JSON), `--debug` iff the orchestrator
  * was given it, `--supervised-by phase:<this pid>:<log>` (the recursion guard; `phase` because the
  * child owes no notice its orchestrator already printed) — and never `--check` (a phase runs every check) or
  * `--verbose` (the phase reports the child's findings on stderr itself, at the orchestrator's verbosity).
@@ -34,13 +35,13 @@ const forwarded: { report?: Report<unknown> } = {};
 
 vi.mock('../../src/commands/resources/check-supervisor.js', async (importOriginal) => ({
   ...(await importOriginal<typeof SupervisorModule>()),
-  superviseCheck: vi.fn((options: { args: readonly string[] }): Promise<SupervisorModule.SupervisedRun> => {
+  superviseRun: vi.fn((options: { args: readonly string[] }): Promise<SupervisorModule.SupervisedRun> => {
     recorded.push(options.args);
     const report = forwarded.report;
     if (report === undefined) throw new Error('the forwarded report was not built yet');
     return Promise.resolve({ outcome: 'completed', document: { text: JSON.stringify(report), report } });
   }),
-  withProgressLog: vi.fn(async <T>(work: (log: SupervisorModule.ProgressLog) => Promise<T>) => ({
+  withProgressLog: vi.fn(async <T>(_verb: SupervisorModule.SupervisedVerb, work: (log: SupervisorModule.ProgressLog) => Promise<T>) => ({
     value: await work({ path: PROGRESS_LOG, guard: { watch: () => undefined } }),
     leftover: undefined,
   })),
@@ -76,18 +77,18 @@ describe('runResourcesCheckPhase — the child\'s argv', () => {
     recorded.length = 0;
   });
 
-  it.each([false, true])('is `resources check <root> --format json [--debug] --supervised-by phase:<pid>:<log>` (debug=%s)', async (debug) => {
+  it.each([false, true])('is `resources check --format=json [--debug] --supervised-by phase:<pid>:<log> -- <root>` (debug=%s)', async (debug) => {
     const args = await phaseArgs(debug);
 
     expect(args).toStrictEqual([
       'resources',
       'check',
-      ROOT,
-      '--format',
-      'json',
+      '--format=json',
       ...(debug ? ['--debug'] : []),
       '--supervised-by',
       `phase:${String(process.pid)}:${PROGRESS_LOG}`,
+      '--',
+      ROOT,
     ]);
   });
 
@@ -97,24 +98,24 @@ describe('runResourcesCheckPhase — the child\'s argv', () => {
     expect(args).toStrictEqual([
       'resources',
       'check',
-      ROOT,
-      '--format',
-      'json',
-      '--base',
-      'origin/main',
+      '--format=json',
+      '--base=origin/main',
       '--supervised-by',
       `phase:${String(process.pid)}:${PROGRESS_LOG}`,
+      '--',
+      ROOT,
     ]);
   });
 
   it('never narrows the run to one check, and never passes a flag the child does not take', async () => {
     const args = await phaseArgs(true);
 
-    expect(args).not.toContain('--check');
-    expect(args).not.toContain('--verbose');
-    expect(args).not.toContain('-v');
-    expect(args).not.toContain('--budget');
-    expect(args).not.toContain('--base');
+    const flags = args.map((arg) => arg.split('=')[0]);
+    expect(flags).not.toContain('--check');
+    expect(flags).not.toContain('--verbose');
+    expect(flags).not.toContain('-v');
+    expect(flags).not.toContain('--budget');
+    expect(flags).not.toContain('--base');
   });
 });
 
