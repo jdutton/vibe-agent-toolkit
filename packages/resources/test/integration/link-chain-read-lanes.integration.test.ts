@@ -90,12 +90,12 @@ describe.skipIf(CAPABILITY === null)('read lanes never resolve a link chain thro
   it('a realization row calls the link unresolved and never has the kernel stat it', async () => {
     const root = corpus();
 
-    const row = await collectRealization(safePath.join(root, 'smb.md'), 'res-smb', { root, extentId: 'ext' });
+    const row = await collectRealization(safePath.join(root, 'smb.md'), 'res-smb', { root, extentId: 'ext', contentCache: null });
 
     expect(row).toMatchObject({ exists: true, isSymlink: true, symlinkResolves: false });
     expect(kernelStatted('smb.md')).toEqual([]);
     // Positive control: a local link is followed by the kernel's stat, and resolves.
-    expect(await collectRealization(safePath.join(root, 'alias.md'), 'res-alias', { root, extentId: 'ext' })).toMatchObject({ isSymlink: true, symlinkResolves: true });
+    expect(await collectRealization(safePath.join(root, 'alias.md'), 'res-alias', { root, extentId: 'ext', contentCache: null })).toMatchObject({ isSymlink: true, symlinkResolves: true });
     expect(kernelStatted('alias.md').length).toBeGreaterThan(0);
   });
 

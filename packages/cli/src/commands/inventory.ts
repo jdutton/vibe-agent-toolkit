@@ -202,7 +202,7 @@ function routeInventoryNow(
 		// spawn for every distinct target this skill's link graph reaches. It is also not
 		// optional to hand over: the extractor requires a source, so a lane that wanted
 		// none would have to say `NO_GIT_TRACKER` out loud.
-		return extractClaudeSkillInventory(absolute, { gitTrackerSource: gitTrackerForProjectRoot });
+		return extractClaudeSkillInventory(absolute, { gitTrackerSource: gitTrackerForProjectRoot, dispatcher: undefined });
 	}
 	// Anything else must be a directory the process can read: an absent path, a
 	// file, or one the OS refuses is refused here rather than inventoried as a

@@ -278,6 +278,30 @@ describe('renderParseReport — the parse tier', () => {
     expect(text).not.toContain('wire-dispatch');
   });
 
+  it('prints the heap reused threads settled to, as a mean over the checks and the largest', () => {
+    const tier = [
+      ...POOLED_TIER,
+      { pass: 'reuse-check', calls: 4, elapsedMs: 8, mainCalls: 4, mainElapsedMs: 8 },
+      { pass: 'reuse-retire', calls: 1, elapsedMs: 2, mainCalls: 1, mainElapsedMs: 2 },
+    ];
+    const text = render({ tier, reuseHeap: { settledMibTotal: 42, settledMibMax: 13.5 }, processes: 1, mainThreads: 1, workerThreads: 8 });
+
+    expect(text).toContain('reused-thread heap as its job started: 10.5 MiB mean, 13.5 MiB max, over 4 checks');
+  });
+
+  it('says the reused-thread heap was not measured when the instrument reported none', () => {
+    const tier = [...POOLED_TIER, { pass: 'reuse-check', calls: 4, elapsedMs: 8, mainCalls: 4, mainElapsedMs: 8 }];
+
+    expect(render({ tier, reuseHeap: null, processes: 1, mainThreads: 1, workerThreads: 8 }))
+      .toContain('reused-thread heap as its job started: not measured (this instrument does not report it)');
+    expect(render({ tier: POOLED_TIER, reuseHeap: null, processes: 1, mainThreads: 1, workerThreads: 8 }))
+      .toContain('reused-thread heap as its job started: not measured');
+  });
+
+  it('prints no reused-thread heap when no reused thread was checked', () => {
+    expect(render({ tier: POOLED_TIER, processes: 1, mainThreads: 1, workerThreads: 8 })).not.toContain('reused-thread heap');
+  });
+
   it('prints no tier block at all when the build charged nothing', () => {
     // A vat with no tier seam, or a run that never reached one. The section has
     // to vanish rather than appear as a table of zeroes — an absent instrument

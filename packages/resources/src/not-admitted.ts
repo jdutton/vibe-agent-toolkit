@@ -38,7 +38,7 @@ import {
 import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import { matchesCollection } from './collection-matcher.js';
-import { isParseLimitError, isPerRunParseRefusal, type PerRunParseRefusal } from './parse-limits.js';
+import { isParseLimitError, isPerRunParseRefusal, limitRefusalClause, type PerRunParseRefusal } from './parse-limits.js';
 import type { ParseRefusedResource, UnreadableResource } from './resource-registry.js';
 import type { CollectionConfig } from './schemas/project-config.js';
 
@@ -65,9 +65,8 @@ export interface NotAdmittedWording {
  * @returns The finding code, and the clause naming the limit and its bound or the cause of death
  */
 export function parseRefusal(error: PerRunParseRefusal): Pick<ParseRefusedResource, 'code' | 'reason'> {
-  return isParseLimitError(error)
-    ? { code: 'RESOURCE_PARSE_LIMIT_EXCEEDED', reason: `its parse was stopped at its ${error.limit} limit (${error.bound})` }
-    : { code: 'RESOURCE_PARSE_WORKER_DIED', reason: `the parse worker holding it died (${error.message})` };
+  if (!isParseLimitError(error)) return { code: 'RESOURCE_PARSE_WORKER_DIED', reason: `the parse worker holding it died (${error.message})` };
+  return { code: 'RESOURCE_PARSE_LIMIT_EXCEEDED', reason: limitRefusalClause(error.limit, error.bound) };
 }
 
 /**

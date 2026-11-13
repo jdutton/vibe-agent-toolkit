@@ -11,6 +11,8 @@
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
+import { parseRefusal } from '../src/not-admitted.js';
+import { ParseLimitError } from '../src/parse-limits.js';
 import {
   BLOB_CONTENT_CHANGED,
   BLOB_NOT_TEXT,
@@ -19,6 +21,7 @@ import {
   BLOB_UNREADABLE,
 } from '../src/projection/blob-population.js';
 import { describeBlobRefusals, notAdmittedRealizations, type BlobRefusalRows } from '../src/projection/blob-refusals.js';
+import { POPULATION_PARSE_LIMITS } from '../src/projection/content-cache.js';
 import { parseFailedMessage, parseFailureOf } from '../src/projection/parse-failure.js';
 import type { BlobConditionRow, BlobRow } from '../src/schemas/projection-blobs.js';
 import type { ContentState, ResourceRealizationRow } from '../src/schemas/projection-resources.js';
@@ -152,7 +155,7 @@ describe('describeBlobRefusals', () => {
     expect(line).not.toContain('\n');
   });
 
-  it('reports realizations that could not be keyed, unreadable and too large apart', () => {
+  it('reports realizations that could not be keyed, unreadable and refused by size apart', () => {
     const line = describeBlobRefusals(rowsOf({
       resourceRealizations: [
         realization('locked.md', 'unreadable'),
@@ -161,7 +164,7 @@ describe('describeBlobRefusals', () => {
       ],
     }));
 
-    expect(line).toContain('could not key 3 realization(s) (2 unreadable, 1 too large to decode)');
+    expect(line).toContain('could not key 3 realization(s) (2 unreadable, 1 refused by size)');
     // Nothing was declined, so the pointer names the table that holds THESE rows.
     expect(line).toContain('resource_realizations');
     expect(line).not.toContain('blob_conditions');
@@ -172,7 +175,7 @@ describe('describeBlobRefusals', () => {
       resourceRealizations: [realization('huge.md', 'oversize'), realization('huge.md', 'oversize')],
     }));
 
-    expect(line).toContain('could not key 1 realization(s) (1 too large to decode)');
+    expect(line).toContain('could not key 1 realization(s) (1 refused by size)');
     expect(line).not.toContain('unreadable');
   });
 
@@ -311,7 +314,7 @@ describe('notAdmittedRealizations', () => {
     }, ROOT)).toStrictEqual({ unreadable: [], parseRefused: [] });
   });
 
-  it('logs an unreadable or oversize realization as unreadable, the oversize one under the registry\'s TEXT_TOO_LARGE', () => {
+  it('logs an unreadable realization, and an oversize one of a kind nothing parses, as unreadable, the oversize one under the registry\'s TEXT_TOO_LARGE', () => {
     expect(unreadableLog({
       blobConditions: [],
       resourceRealizations: [realization('locked.md', 'unreadable'), realization('huge.md', 'oversize')],
@@ -319,6 +322,20 @@ describe('notAdmittedRealizations', () => {
       { filePath: `${ROOT}/locked.md`, code: undefined },
       { filePath: `${ROOT}/huge.md`, code: 'TEXT_TOO_LARGE' },
     ] });
+  });
+
+  it('logs an oversize realization of a kind a parser reads as the parse-limit refusal the registry lane reports', () => {
+    const huge = { ...realization('huge.md', 'oversize'), mime: 'text/markdown' } as ResourceRealizationRow;
+
+    expect(notAdmittedRealizations({ blobConditions: [], resourceRealizations: [huge] }, ROOT)).toStrictEqual({
+      unreadable: [],
+      parseRefused: [{
+        filePath: `${ROOT}/huge.md`,
+        code: 'RESOURCE_PARSE_LIMIT_EXCEEDED',
+        // The registry lane's own clause for the cap (`parseRefusal`), so the two lanes cannot drift.
+        reason: parseRefusal(new ParseLimitError('inputBytes', POPULATION_PARSE_LIMITS.inputBytes)).reason,
+      }],
+    });
   });
 
   it('logs every realization of a blob it could not read, saw change, or failed to parse, each at its own path', () => {

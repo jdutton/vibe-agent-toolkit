@@ -366,7 +366,7 @@ export function unreadableTargetsFrom(log: NotAdmittedLog): UnreadableTargets {
   }
   for (const { filePath, code, reason } of log.parseRefused) {
     targets.set(toNfc(filePath), {
-      why: `its parse was refused (${reason}), so its anchors are unverified (it is the file reported as ${code})`,
+      why: `${reason}, so its anchors are unverified (it is the file reported as ${code})`,
       remedy: 'Simplify or exclude that file, then validate again.',
     });
   }

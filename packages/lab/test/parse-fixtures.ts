@@ -213,6 +213,7 @@ export function parseCommand(over: Partial<ParseCommandStats> = {}): ParseComman
     // all charges none — so the default fixture must not assert one, or every
     // test that does not care would be pinning numbers it never reasoned about.
     tier: [],
+    reuseHeap: { settledMibTotal: 0, settledMibMax: 0 },
     ...totals,
     cacheHits: 0,
     cacheMisses: totals.documents,

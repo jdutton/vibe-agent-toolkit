@@ -36,6 +36,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { classifyPath, pluginRootsFrom } from '../../src/projection/agentic-tags.js';
+import { RunContentCache } from '../../src/projection/content-cache.js';
 import { ContributorRegistry } from '../../src/projection/contributor.js';
 import { AgenticConventionContributor } from '../../src/projection/contributors/agentic-convention.js';
 import { FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
@@ -259,7 +260,7 @@ describe('the shape of the table', () => {
  * ## ⚠️ Why this drives `contribute` at its seam instead of through `populate`
  *
  * The identity collapse is real **in this fixture** and is measured below with
- * the shipped `ResourceIdentityMap`: `new ProjectionBuilder({ root })` is handed no
+ * the shipped `ResourceIdentityMap`: `new ProjectionBuilder({ root, contentCache })` is handed no
  * `GitTracker`, so `canonicalPathFor` never takes its git branch, falls through
  * to `realPathOrSelf`, and a symlink and its target really do mint one id. That
  * is the NON-GIT branch, not the general rule — see *"🪤 A symlink and its target
@@ -289,7 +290,7 @@ describe('the shape of the table', () => {
  */
 describe.skipIf(SYMLINK_CAP === null)('identity collapse — one identity, two loading classes', () => {
   it('reduces the classes with strongest-wins, not with the first realization seen', async () => {
-    const builder = new ProjectionBuilder({ root });
+    const builder = new ProjectionBuilder({ root, contentCache: new RunContentCache() });
     const base = builder.base();
     const absolute = (relativePath: string): string => safePath.join(root, relativePath);
 
@@ -306,8 +307,8 @@ describe.skipIf(SYMLINK_CAP === null)('identity collapse — one identity, two l
     // rather than inherited from a crawl, so it cannot silently stop doing so.
     const extentId = 'extent-identity-collapse-fixture';
     const realizations = [
-      await collectRealization(absolute(ALIAS_SUBAGENT), aliasId, { root, extentId }),
-      await collectRealization(absolute(ALIAS_TARGET), targetId, { root, extentId }),
+      await collectRealization(absolute(ALIAS_SUBAGENT), aliasId, { root, extentId, contentCache: null }),
+      await collectRealization(absolute(ALIAS_TARGET), targetId, { root, extentId, contentCache: null }),
     ];
     expect(realizations.map((row) => row.path)).toEqual([ALIAS_SUBAGENT, ALIAS_TARGET]);
 

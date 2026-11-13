@@ -43,12 +43,13 @@
 import { forEachInOrder, safePath } from '@vibe-agent-toolkit/utils';
 import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 
-import { computeContentKey } from '../../src/content-key.js';
+import { computeContentKey, inMemoryContent } from '../../src/content-key.js';
 import { parseMarkdownContent } from '../../src/link-parser.js';
 import { mimeTypeForPath } from '../../src/mime-type.js';
 import { blobRowFor, harnessRowsFor } from '../../src/projection/blob-facts.js';
 import { blobReferencesFor } from '../../src/projection/blob-references.js';
 import { claudeMemoryFactsOf } from '../../src/projection/claude-memory.js';
+import { RunContentCache } from '../../src/projection/content-cache.js';
 import type { ExtentContribution } from '../../src/projection/contributor.js';
 import { AgenticConventionContributor } from '../../src/projection/contributors/agentic-convention.js';
 import {
@@ -406,7 +407,7 @@ function addDirectory(builder: ProjectionBuilder, dirPath: string, root: string)
  * in-process — a fixture has no pool, and its files are never pathological.
  * Production derives through the run's dispatcher (`dispatcherHarnessFacts`).
  */
-export const IN_PROCESS_HARNESS_FACTS: HarnessFactsDeriver = (_harness, content) => Promise.resolve(claudeMemoryFactsOf(content));
+export const IN_PROCESS_HARNESS_FACTS: HarnessFactsDeriver = (_harness, input) => Promise.resolve(claudeMemoryFactsOf(input.content));
 
 /** The tables `closureProvenance` reads — see {@link closureFixtureFrom}. */
 export interface ClosureFixture {
@@ -448,7 +449,7 @@ export interface ClosureFixture {
  * @returns Just the tables `closureProvenance` reads
  */
 export function closureFixtureFrom(root: string, files: Record<string, string>): ClosureFixture {
-  const builder = new ProjectionBuilder({ root });
+  const builder = new ProjectionBuilder({ root, contentCache: new RunContentCache() });
   for (const [path, markdown] of Object.entries(files)) {
     addFileWithFacts(builder, { path, refs: [], markdown }, root);
   }
@@ -557,7 +558,7 @@ export async function claudeContextFixture(
   options: ClaudeContextFixtureOptions = {},
 ): Promise<Projection> {
   const root = CLAUDE_CONTEXT_FIXTURE_ROOT;
-  const builder = new ProjectionBuilder({ root });
+  const builder = new ProjectionBuilder({ root, contentCache: new RunContentCache() });
   builder.addRoot({ id: builder.identities.rootId, path: root });
 
   const deferred = new Set(options.deferred ?? []);
@@ -572,7 +573,10 @@ export async function claudeContextFixture(
   // row a contributor below adds becomes visible to the NEXT contributor
   // through this same reference — see `ProjectionBuilder.base()`.
   const base: ProjectionBase = builder.base();
-  const readContent: HarnessContentReader = (entry) => Promise.resolve(files[entry.path] ?? null);
+  const readContent: HarnessContentReader = (entry) => {
+    const content = files[entry.path];
+    return Promise.resolve(content === undefined ? null : inMemoryContent(content));
+  };
 
   applyContribution(builder, await new AgenticConventionContributor().contribute(base, {}));
 

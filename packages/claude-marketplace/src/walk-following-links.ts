@@ -21,6 +21,7 @@
 import type { Dirent } from 'node:fs';
 import * as fs from 'node:fs/promises';
 
+import { isPerRunParseRefusal, parseRefusal } from '@vibe-agent-toolkit/resources';
 import { forEachInOrder, isPathAbsentError, realpathNative, requireFollowedStat, safePath } from '@vibe-agent-toolkit/utils';
 
 /** A path the walk could not list, and the OS message for it. Absolute. */
@@ -43,6 +44,8 @@ export interface WalkOptions {
 
 /** The OS or parser message for a refusal, as a report carries it. */
 export function reasonOf(error: unknown): string {
+  // A refusal for this run is named in the one sentence every lane gives it.
+  if (isPerRunParseRefusal(error)) return parseRefusal(error).reason;
   return error instanceof Error ? error.message : String(error);
 }
 

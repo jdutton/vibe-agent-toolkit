@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import { isPerRunParseRefusal } from '@vibe-agent-toolkit/resources';
+import { inMemoryContent, isPerRunParseRefusal } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
+import { refuseAsyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { declaredSkillNameIn, readDeclaredSkillName } from '../src/skill-identity.js';
@@ -81,9 +81,13 @@ describe('readDeclaredSkillName', () => {
     // established that, and a caller falling back to the directory leaf would
     // then rename the skill on the operator's behalf.
     const path = writeSkillMd(tempDir, 'refused', 'name: pdf-processor\ndescription: Reads PDFs.');
-    await withSyncFsRefused('readFileSync', path, 'EACCES', async () => {
+    // The read opens the file first, to refuse one past the input cap by its size.
+    const restore = refuseAsyncFs('open', path, 'EACCES');
+    try {
       await expect(readDeclaredSkillName(path, ROUTE)).rejects.toThrow(/EACCES/);
-    });
+    } finally {
+      restore();
+    }
   });
   it('rethrows a parse the worker refused instead of reporting the skill as nameless', async () => {
     // A refusal declares nothing THIS run could read; `undefined` would send a
@@ -91,7 +95,7 @@ describe('readDeclaredSkillName', () => {
     const path = writeSkillMdRaw(tempDir, 'parse-refused', DEEP_SKILL);
     const thrown: unknown = await readDeclaredSkillName(path, ROUTE).then(() => undefined, (error: unknown) => error);
     expect(isPerRunParseRefusal(thrown)).toBe(true);
-    const fromBytes: unknown = await declaredSkillNameIn(DEEP_SKILL, ROUTE).then(() => undefined, (error: unknown) => error);
+    const fromBytes: unknown = await declaredSkillNameIn(inMemoryContent(DEEP_SKILL), ROUTE).then(() => undefined, (error: unknown) => error);
     expect(isPerRunParseRefusal(fromBytes)).toBe(true);
   });
 });

@@ -406,6 +406,7 @@ async function validateSkillBeforeBuild(
     {
       allowLedger,
       projectSkills,
+      dispatcher: undefined,
       // A build must not ship a shorter bundle: a directory the validator's own
       // registry crawl cannot list refuses the run by name.
       unreadable: 'refuse',

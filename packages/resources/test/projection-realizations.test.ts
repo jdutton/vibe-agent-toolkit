@@ -54,6 +54,7 @@ async function realize(
   return collectRealization(safePath.join(root, relativePath), RESOURCE_ID, {
     root,
     extentId: EXTENT_ID,
+    contentCache: null,
     ...options,
   });
 }

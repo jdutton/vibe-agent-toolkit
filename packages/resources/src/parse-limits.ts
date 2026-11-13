@@ -38,9 +38,22 @@ import type { ParseResult } from './link-parser.js';
 
 /** The limits one parse job runs under. */
 export interface ParseLimits {
-  /** Wall-clock milliseconds a job may take, from dispatch to answer. */
+  /**
+   * Wall-clock milliseconds a job may take, on two clocks (see `JobClock`): a load clock of
+   * `timeMs` for its thread to load the job's parser, then `timeMs` from the moment the parser has
+   * loaded. A job stopped on its load clock runs again on another thread; its third load stop ends
+   * it as a broken install. On a reused thread the load clock, armed at dispatch, covers its
+   * heap check too, and a stop during the check is not counted toward the three. When that thread
+   * has already loaded the job's parser, the parse clock starts once the check keeps it; when it
+   * has not, the same clock runs on through the check and then the parser's load, and a stop after
+   * the check counts toward the three — and toward the parser's run of stops — like any load stop.
+   */
   readonly timeMs: number;
-  /** A worker's heap limit, in MiB, enforced by the pool's heap sampler (V8's own ceiling sits past it: `workerHeapCeilingMb`). */
+  /**
+   * A worker's heap limit, in MiB, enforced by the pool's heap sampler (V8's own ceiling sits past
+   * it: `workerHeapCeilingMb`). At least {@link MIN_HEAP_MB}: a smaller one is refused as a
+   * configuration error ({@link resolveParseLimits}).
+   */
   readonly heapMb: number;
   /** A worker's stack, in MiB (`resourceLimits.stackSizeMb`) — what bounds parser recursion. */
   readonly stackMb: number;
@@ -69,8 +82,8 @@ export type ParseLimitName = keyof ParseLimits;
  * times ten, rounded up to a power of two in its unit. A limit the lab cannot
  * yet observe per job (`timeMs`, `heapMb`) keeps a bound the record justifies
  * another way — `timeMs` covers the slowest realistic shape found (a
- * 1,000-level nested list, 9.3 s) plus a cold worker's parser load, with
- * headroom for a loaded machine. Named for what they bound, never a version.
+ * 1,000-level nested list, 9.3 s), with headroom for a loaded machine; a cold
+ * worker's parser load runs on a clock of its own (`JobClock` in `parse-pool.ts`). Named for what they bound, never a version.
  */
 const DEFAULT_PARSE_LIMITS: ParseLimits = {
   timeMs: 30_000,
@@ -102,6 +115,19 @@ const LIMIT_UNITS: Readonly<Record<ParseLimitName, (value: number) => string>> =
   inputBytes: (value) => `${value} input bytes`,
 };
 
+/**
+ * The one clause a limit refusal is said in — the error's message and every lane's reported
+ * reason. Content past the input cap is refused before any parse starts, so nothing was stopped.
+ *
+ * @param limit - The limit crossed
+ * @param bound - The bound as spelled
+ * @returns e.g. `its parse was stopped at its timeMs limit (10 ms wall clock)`
+ */
+export function limitRefusalClause(limit: ParseLimitName, bound: string): string {
+  const verb = limit === 'inputBytes' ? 'it was refused' : 'its parse was stopped';
+  return `${verb} at its ${limit} limit (${bound})`;
+}
+
 /** The `code` every {@link ParseLimitError} carries, and the one thing a classifier reads. */
 const PARSE_LIMIT_EXCEEDED = 'PARSE_LIMIT_EXCEEDED';
 
@@ -125,7 +151,8 @@ export class ParseLimitError extends VatError {
    * @param bound - The bound as spelled, overriding the default spelling
    */
   constructor(limit: ParseLimitName, value: number, found?: number, bound: string = describeBound(limit, value, found)) {
-    super(PARSE_LIMIT_EXCEEDED, `The parse was stopped at its ${limit} limit (${bound}).`);
+    const clause = limitRefusalClause(limit, bound);
+    super(PARSE_LIMIT_EXCEEDED, `${clause.charAt(0).toUpperCase()}${clause.slice(1)}.`);
     this.limit = limit;
     this.bound = bound;
   }
@@ -146,7 +173,7 @@ export class ParseLimitError extends VatError {
       appliedMb,
       undefined,
       appliedMb < configuredMb
-        ? `${bound}, lowered from ${String(configuredMb)} MiB by a process-wide --max-old-space-size`
+        ? `${bound}, lowered from ${String(configuredMb)} MiB by a process-wide V8 heap flag (--max-old-space-size, --max-heap-size or --max-semi-space-size)`
         : bound,
     );
   }
@@ -169,7 +196,7 @@ export class ParseLimitError extends VatError {
         'heapMb',
         workerHeapCeilingMb(configuredMb),
         undefined,
-        `V8's own heap ceiling, reached before the pool's heap sampler read it: ${LIMIT_UNITS.heapMb(workerHeapCeilingMb(configuredMb))}, unless a process-wide --max-old-space-size set it instead`,
+        `V8's own heap ceiling, reached before the pool's heap sampler read it: ${LIMIT_UNITS.heapMb(workerHeapCeilingMb(configuredMb))}, unless a process-wide V8 heap flag (--max-old-space-size, --max-heap-size or --max-semi-space-size) set it instead`,
       );
     }
     return new ParseLimitError(
@@ -179,6 +206,21 @@ export class ParseLimitError extends VatError {
       `V8's own heap ceiling, ${LIMIT_UNITS.heapMb(bounds.ceilingMb)} — above the ${String(bounds.appliedMb)} MiB the pool's heap sampler enforces, reached before the sampler read the heap past it`,
     );
   }
+}
+
+/**
+ * The one input-size refusal: content of `byteLength` bytes — the bytes it was read or decoded
+ * from, never its text re-measured — against the cap in force. Every lane holds content to the
+ * cap through this (a file by its `fstat` size, before a byte is read; content in memory by its
+ * UTF-8 length, `inMemoryContent`; a ZIP entry by its declared size), so the comparison and the
+ * refusal it gives are one, naming the cap alone.
+ *
+ * @param byteLength - The content's size, in bytes
+ * @param inputBytes - The cap in force
+ * @returns The refusal, or `undefined` for content within the cap
+ */
+export function inputBytesBreach(byteLength: number, inputBytes: number): ParseLimitError | undefined {
+  return byteLength > inputBytes ? new ParseLimitError('inputBytes', inputBytes) : undefined;
 }
 
 /**
@@ -223,7 +265,8 @@ export function isParseLimitError(error: unknown): error is ParseLimitError {
  *
  * @param named - Limits a caller (a test, a measurement arm) chose
  * @returns Every limit, each a positive finite number
- * @throws If a named limit is not a positive finite number
+ * @throws If a named limit is not a positive finite number, `heapMb` is below
+ *   {@link MIN_HEAP_MB}, or `outputDepth` is past what the store reads
  */
 export function resolveParseLimits(named: Partial<ParseLimits> | undefined): ParseLimits {
   const resolved: ParseLimits = { ...DEFAULT_PARSE_LIMITS, ...named };
@@ -231,6 +274,11 @@ export function resolveParseLimits(named: Partial<ParseLimits> | undefined): Par
     if (!Number.isFinite(value) || value <= 0) {
       throw new Error(`Parse limit ${name} must be a positive finite number; got ${String(value)}.`);
     }
+  }
+  if (resolved.heapMb < MIN_HEAP_MB) {
+    throw new Error(
+      `Parse limit heapMb may not be below ${String(MIN_HEAP_MB)} MiB, the least bound seeded to run cleanly (a process-wide heap flag can still lower the bound applied); got ${String(resolved.heapMb)}.`,
+    );
   }
   if (resolved.outputDepth > STORE_JSON_DEPTH) {
     throw new Error(
@@ -582,7 +630,8 @@ export function factsOutputBreach(
  * @returns True when a bounded parse of the same bytes would not be refused for its size
  */
 export function storableUnderDefaultLimits(byteLength: number, result: ParseResult): boolean {
-  return byteLength <= DEFAULT_PARSE_LIMITS.inputBytes && outputBreach(result, DEFAULT_PARSE_LIMITS) === undefined;
+  return inputBytesBreach(byteLength, DEFAULT_PARSE_LIMITS.inputBytes) === undefined
+    && outputBreach(result, DEFAULT_PARSE_LIMITS) === undefined;
 }
 
 /**
@@ -790,7 +839,7 @@ const BYTES_PER_MIB = 1_048_576;
  * own space statistics are out of the parent's reach (`Worker` has
  * `getHeapStatistics` and no `getHeapSpaceStatistics` on Node 26), so the old
  * generation alone cannot be read; subtracting the young generation at its
- * 96 MiB ceiling instead understates it by up to that much, which measured on
+ * size instead (on Node 26.7, 192 or 96 MiB by host) understates it by up to that much, which measured on
  * Node 26 let a worker reach V8's own ceiling unseen and kill the process. The
  * whole heap never understates the old generation, so a job is stopped no
  * later than its old generation passes the limit.
@@ -845,8 +894,10 @@ export interface HeapBounds {
   /** V8's own old-generation ceiling for the worker, past which V8 stops it. */
   readonly ceilingMb: number;
   /**
-   * The used heap past which the sampler stops a job without waiting for a
-   * collection to say what of it is held — see {@link heapBreached}.
+   * The used heap past which the sampler stops a job no collection has vouched for: see
+   * {@link heapBreached}. The same for every job on every thread, fresh or reused — a reused thread
+   * starts a job holding no more than {@link reusedThreadHeapMb} ({@link settleReusedHeap}) —
+   * so a document's verdict and the room above the stop do not depend on which thread ran it.
    */
   readonly stopMb: number;
 }
@@ -855,7 +906,7 @@ export interface HeapBounds {
  * The heap limit the pool enforces on a worker, and V8's own ceiling above it, in MiB.
  *
  * `heap_size_limit` is V8's old-generation ceiling plus the young
- * generation's (measured on Node 26: 2,048 + 96 = 2,144 for `heapMb` 1,024). A
+ * generation's (measured on Node 26.7 for `heapMb` 1,024: 2,048 + 192 or 96, by host). A
  * process-wide `--max-old-space-size` overrides `resourceLimits` in BOTH
  * directions: higher, and the ceiling only moves further away; lower, and the
  * pool cannot raise it, so it enforces {@link HEAP_CEILING_FACTOR} below
@@ -872,35 +923,197 @@ export interface HeapBounds {
  * low for floor plus headroom keeps the half share: such a flag is too small
  * to parse with, and refusing is right.
  *
+ * **V8's ceiling is read fail-closed** (`v8OldGenerationCeilingMb`): `heap_size_limit` less the
+ * young generation the thread really has ({@link workerHeapGeometry}, never `resourceLimits`
+ * alone, which a process-wide `--max-semi-space-size` overrides unseen), and never above a
+ * flagged `--max-old-space-size`, or a flagged `--max-heap-size` less the young generation. A
+ * read that is not positive is 0: the bound and the stop are 0, so every job is refused at its
+ * heap limit, never run toward a ceiling nobody could read; the refusal names the applied bound.
+ *
+ * A configured `heapMb` is at least {@link MIN_HEAP_MB}, but the APPLIED bound may still fall below
+ * it under a process-wide flag that lowers V8's ceiling. Nothing more is done then: a breach the
+ * sampler reads on a job's load clock is a load stop, as at any bound, so a flag too small to load
+ * a parser under ends its jobs as a broken install (`ParserUnavailableError`).
+ *
+ * Known limitation: the parent cannot tell when a sample was read relative to the worker's
+ * `parserLoaded`. A sample read after the parser loaded but handled before its `parserLoaded`
+ * reaches the parent is judged on the load clock — a load stop, and the job runs again on another
+ * thread — not as the document's refusal.
+ *
  * @param stats - `Worker.getHeapStatistics()`
- * @param youngGenerationMb - The worker's `resourceLimits.maxYoungGenerationSizeMb`
+ * @param geometry - The thread's young generation and the process's heap flags ({@link workerHeapGeometry})
  * @param heapMb - The configured limit
  * @returns The enforced limit (never above `heapMb`) and V8's ceiling as read
  */
 export function heapBounds(
   stats: { readonly heap_size_limit: number },
-  youngGenerationMb: number,
+  geometry: HeapGeometry,
   heapMb: number,
 ): HeapBounds {
-  const readMb = Math.floor(stats.heap_size_limit / BYTES_PER_MIB) - youngGenerationMb;
-  const ceilingMb = readMb > 0 ? readMb : workerHeapCeilingMb(heapMb);
+  const ceilingMb = v8OldGenerationCeilingMb(stats, geometry);
   const share = Math.floor(ceilingMb / HEAP_CEILING_FACTOR);
-  const floor = Math.min(youngGenerationMb, ceilingMb - SAMPLER_HEADROOM_MB);
-  const appliedMb = readMb > 0 ? Math.min(heapMb, Math.max(share, floor)) : heapMb;
+  const floor = Math.min(geometry.youngMb, ceilingMb - SAMPLER_HEADROOM_MB);
+  const appliedMb = Math.min(heapMb, Math.max(share, floor, 0));
   return { appliedMb, ceilingMb, stopMb: unvouchedStopMb(appliedMb, ceilingMb, heapMb) };
 }
 
 /**
- * Where the sampler stops a job no collection has vouched for: halfway from
- * the applied bound to V8's ceiling, the ceiling taken as never above
- * {@link workerHeapCeilingMb} (a process-wide flag that lifts V8's ceiling
- * does not lift the stop), never within {@link SAMPLER_HEADROOM_MB} of the
- * ceiling, and never below the bound itself.
+ * V8's old-generation ceiling for a thread, in MiB, read so it is never above the real one: the
+ * least of `heap_size_limit` less the young generation, a flagged `--max-old-space-size` — or, with
+ * none visible, the old generation the pool set the thread — and a flagged `--max-heap-size` less
+ * the young generation; 0 when that is not positive. The claim holds for the flags visible in
+ * `NODE_OPTIONS` and `execArgv` ({@link v8HeapFlags}); a flag set any other way is not seen.
+ *
+ * @param stats - `Worker.getHeapStatistics()`
+ * @param geometry - See {@link workerHeapGeometry}
+ * @returns The ceiling, in MiB
+ */
+function v8OldGenerationCeilingMb(stats: { readonly heap_size_limit: number }, geometry: HeapGeometry): number {
+  const { youngMb, flags } = geometry;
+  const readMb = Math.floor(stats.heap_size_limit / BYTES_PER_MIB) - youngMb;
+  const flagged = [flags.oldSpaceMb ?? geometry.setOldMb, flags.heapSizeMb === undefined ? undefined : flags.heapSizeMb - youngMb]
+    .filter((value): value is number => value !== undefined);
+  return Math.max(0, Math.min(readMb, ...flagged));
+}
+
+/**
+ * The process-wide V8 heap flags a parse thread runs under, each in MiB, or `undefined` when not
+ * given. A worker inherits its process's `execArgv` and environment, and V8 applies these flags to
+ * every isolate in the process, over a worker's `resourceLimits`.
+ */
+export interface V8HeapFlags {
+  /** `--max-old-space-size`: caps the old generation's ceiling. */
+  readonly oldSpaceMb: number | undefined;
+  /** `--max-semi-space-size`: sizes the young generation at three of these, whatever `resourceLimits` says. */
+  readonly semiSpaceMb: number | undefined;
+  /** `--max-heap-size`: caps the old and young generations together. */
+  readonly heapSizeMb: number | undefined;
+}
+
+/** Each heap flag V8 reads, by its name with dashes; V8 reads underscores the same. */
+const V8_HEAP_FLAG_NAMES = {
+  'max-old-space-size': 'oldSpaceMb',
+  'max-semi-space-size': 'semiSpaceMb',
+  'max-heap-size': 'heapSizeMb',
+} as const satisfies Record<string, keyof V8HeapFlags>;
+
+/**
+ * Split `NODE_OPTIONS` into arguments as Node does: on spaces, outside double quotes, which group
+ * and are dropped, with a backslash inside them escaping the next character. Single quotes are
+ * literal, as they are to Node.
+ *
+ * @param nodeOptions - `process.env.NODE_OPTIONS`
+ * @returns The arguments, or `undefined` for a value Node refuses (an unterminated quote, or a
+ *   backslash ending one)
+ */
+function nodeOptionsArgs(nodeOptions: string): string[] | undefined {
+  const args: string[] = [];
+  let arg: string | undefined;
+  let quoted = false;
+  for (let index = 0; index < nodeOptions.length; index += 1) {
+    let char = nodeOptions.charAt(index);
+    if (quoted && char === '\\') {
+      index += 1;
+      if (index === nodeOptions.length) return undefined;
+      char = nodeOptions.charAt(index);
+    } else if (char === '"') {
+      quoted = !quoted;
+      arg ??= '';
+      continue;
+    } else if (char === ' ' && !quoted) {
+      if (arg !== undefined) args.push(arg);
+      arg = undefined;
+      continue;
+    }
+    arg = (arg ?? '') + char;
+  }
+  if (quoted) return undefined;
+  if (arg !== undefined) args.push(arg);
+  return args;
+}
+
+/**
+ * Read the V8 heap flags from `NODE_OPTIONS` and a process's `execArgv`, fail-closed: of a flag
+ * given more than once, the value that leaves V8 the least old-generation room — the smallest old
+ * or whole heap, the largest semi-space — so a mis-ordered read can only lower the ceiling. A
+ * value that is not a positive number is no reading. `NODE_OPTIONS` is split as Node splits it
+ * ({@link nodeOptionsArgs}); one Node would refuse is read both ways — every space-separated
+ * word, its double quotes dropped — so whatever it was meant to say can only lower the ceiling. A
+ * flag a host sets later through `v8.setFlagsFromString` is not seen; `heap_size_limit` still
+ * reflects its old or whole size.
+ *
+ * @param nodeOptions - `process.env.NODE_OPTIONS`
+ * @param execArgv - `process.execArgv`
+ * @returns The flags — see {@link V8HeapFlags}
+ */
+export function v8HeapFlags(nodeOptions: string | undefined, execArgv: readonly string[]): V8HeapFlags {
+  const options = nodeOptions ?? '';
+  const fromOptions = nodeOptionsArgs(options) ?? options.replaceAll(/["\\]/g, '').split(' ').filter((arg) => arg !== '');
+  const args = [...fromOptions, ...execArgv];
+  const read: { -readonly [K in keyof V8HeapFlags]: number | undefined } = { oldSpaceMb: undefined, semiSpaceMb: undefined, heapSizeMb: undefined };
+  for (const [index, arg] of args.entries()) {
+    const [rawName = '', inline] = arg.split('=', 2);
+    const field = V8_HEAP_FLAG_NAMES[rawName.replace(/^--/, '').replaceAll('_', '-') as keyof typeof V8_HEAP_FLAG_NAMES] as keyof V8HeapFlags | undefined;
+    if (field === undefined) continue;
+    const value = Number(inline ?? args[index + 1]);
+    if (!Number.isFinite(value) || value <= 0) continue;
+    const held = read[field];
+    // Fail-closed: the largest young generation, the smallest old generation and heap.
+    const fold = field === 'semiSpaceMb' ? Math.max : Math.min;
+    read[field] = held === undefined ? value : fold(held, value);
+  }
+  return read;
+}
+
+/** What V8's ceiling for a thread is read against: its real young generation, and the process's heap flags. */
+export interface HeapGeometry {
+  /** The thread's young generation, in MiB: see {@link workerHeapGeometry}. */
+  readonly youngMb: number;
+  /** The process-wide heap flags: see {@link v8HeapFlags}. */
+  readonly flags: V8HeapFlags;
+  /**
+   * The old generation the pool set the thread (`resourceLimits.maxOldGenerationSizeMb`), in MiB,
+   * when known: the ceiling under no visible old-space flag ({@link v8OldGenerationCeilingMb}).
+   */
+  readonly setOldMb: number | undefined;
+}
+
+/**
+ * The young generation a thread really has, and the heap flags it runs under. Under a process-wide
+ * `--max-semi-space-size` the young generation is three semi-spaces, each the flag rounded UP to a
+ * power of two (Node 26.7: flags of 3, 40 and 100 grew `heap_size_limit` by 12, 192 and 384; on
+ * Node 22.16, 24.21 and 26.7 a power of two grows it by exactly three of it), while
+ * `resourceLimits` still reports the size it was given. With no such flag it is
+ * `resourceLimits.maxYoungGenerationSizeMb`, which varies by runtime and host (measured 192 and 96
+ * MiB on Node 26.7, 48 on 22), or 0 if a runtime ever gives none.
+ *
+ * @param limits - A worker's `resourceLimits`, as the parent or the thread itself sees them
+ * @param flags - The process's heap flags ({@link v8HeapFlags})
+ * @returns The geometry `heapBounds` and `heapBreached` read the thread's heap against
+ */
+export function workerHeapGeometry(
+  limits: { readonly maxYoungGenerationSizeMb?: number | undefined; readonly maxOldGenerationSizeMb?: number | undefined } | undefined,
+  flags: V8HeapFlags,
+): HeapGeometry {
+  const youngMb = flags.semiSpaceMb === undefined
+    ? (limits?.maxYoungGenerationSizeMb ?? 0)
+    : 3 * 2 ** Math.ceil(Math.log2(flags.semiSpaceMb));
+  return { youngMb, flags, setOldMb: limits?.maxOldGenerationSizeMb };
+}
+
+/**
+ * The used heap at which the sampler stops a job no collection has vouched for
+ * ({@link HeapBounds.stopMb}): halfway from the applied bound to V8's ceiling,
+ * the ceiling taken as never above {@link workerHeapCeilingMb} (a process-wide
+ * flag that lifts V8's ceiling does not lift the stop), never within
+ * {@link SAMPLER_HEADROOM_MB} of the ceiling, and never below the bound itself.
  *
  * Half the room is the trade between the two ways a used heap past the bound
  * can be misread: garbage V8 has not yet collected (the room below the stop),
  * and a parent stalled while a true breach allocates toward V8's ceiling (the
- * room above it) — see {@link heapBreached}.
+ * room above it) — see {@link heapBreached}. Every job on every thread is
+ * stopped there: a reused thread is settled before its job instead
+ * ({@link settleReusedHeap}).
  *
  * @param appliedMb - The applied bound
  * @param ceilingMb - V8's ceiling as read
@@ -911,6 +1124,109 @@ function unvouchedStopMb(appliedMb: number, ceilingMb: number, heapMb: number): 
   const roomTopMb = Math.min(ceilingMb, workerHeapCeilingMb(heapMb));
   const halfwayMb = appliedMb + Math.floor((roomTopMb - appliedMb) / 2);
   return Math.max(appliedMb, Math.min(halfwayMb, ceilingMb - SAMPLER_HEADROOM_MB));
+}
+
+/**
+ * The used heap a fresh parse thread holds once its parsers have loaded, in MiB: 24.
+ *
+ * Measured on Node 26 (`used_heap_size`, three runs): 20.7–21.5 MiB after loading the markdown
+ * parser, 23.3–24.1 MiB after the HTML one too. What a reused thread is held near before its next
+ * job ({@link reusedThreadHeapMb}), and half of what a parked thread may hold.
+ */
+export const FRESH_THREAD_HEAP_MB = 24;
+
+/**
+ * The least `heapMb` a caller may configure, in MiB: 64, the bound seeded clean. A thread that
+ * reaches V8's own ceiling dies with a FATAL out-of-memory that aborts the whole process, the
+ * caller's included ({@link HEAP_CEILING_FACTOR}); at 64 MiB, no-flag breaches are stopped by the
+ * pool three times in a row, each in a child process that exits 0
+ * (`parse-pool-limits.integration.test.ts`, "a heap breach with no process-wide flag"). 32 MiB is
+ * not shown UNSAFE: on Windows CI the vitest fork running a pool at 32 exited unexpectedly on two
+ * runs in a row, with no exit reason captured, while a breach stopped at an applied 32 MiB bound
+ * under a 64 MiB flag runs cleanly in a child. So the minimum is the least bound seeded clean, not
+ * a measured safety threshold. It promises nothing more about a document past the bound, and it
+ * holds the CONFIGURED value only: a process-wide heap flag can still lower the bound the pool
+ * APPLIES below it (see {@link heapBounds}).
+ * Held: `resolveParseLimits` refuses 63 and accepts 64, and a pool at this minimum loads and runs
+ * both parsers in a child process that exits cleanly.
+ */
+export const MIN_HEAP_MB = 64;
+
+/**
+ * What a reused thread may hold past a fresh one's {@link FRESH_THREAD_HEAP_MB}, as a share of the
+ * applied bound: an eighth. See {@link reusedThreadHeapMb}.
+ */
+const REUSED_THREAD_SLACK_SHARE = 8;
+
+/**
+ * The most a reused parse thread may hold as it starts a job, in MiB: what a fresh thread holds
+ * once its parsers have loaded ({@link FRESH_THREAD_HEAP_MB}) plus an eighth of the job's applied
+ * bound — 152 MiB at the default 1,024, 88 under a 1,024 MiB process flag (applied 512), 56 under
+ * 512 (applied 256). See {@link settleReusedHeap}.
+ *
+ * It is what keeps every job on one stop and one bound: a document on a reused thread starts with
+ * at most this much used heap, where on a fresh one it starts with the parsers' load, so the room
+ * the two leave a job differs by at most an eighth of the bound, never by an earlier job's whole
+ * leftover. The slack scales with the bound, and is no smaller, because what a job leaves is set by
+ * the document, so how often a check collects follows the slack's absolute size: a fixed 8 MiB
+ * collected before a quarter of reused-thread jobs (7.7–10% of worker time), a sixteenth before 12%
+ * under a 512 MiB flag (4.75%), an eighth before at most 1.1% (under 0.7% at every flag measured;
+ * `fact-extractors-limits.md`, "A reused thread").
+ *
+ * @param appliedMb - The thread's applied heap bound (`heapBounds`)
+ * @returns The bound, in MiB
+ */
+export function reusedThreadHeapMb(appliedMb: number): number {
+  return FRESH_THREAD_HEAP_MB + Math.floor(appliedMb / REUSED_THREAD_SLACK_SHARE);
+}
+
+/** A reused thread's heap as it was settled before its next job ({@link settleReusedHeap}). */
+export interface ReuseCheck {
+  /** The used heap the job starts on, after the collection when one ran, in bytes. */
+  readonly usedBytes: number;
+  /** How long the forced collection took, in ms; `null` when none ran. */
+  readonly collectMs: number | null;
+  /** How long the whole check took, in ms: the reads and any collection. */
+  readonly checkMs: number;
+  /** Whether the thread holds too much to run the job: it is retired, and the job runs on a fresh one. */
+  readonly retire: boolean;
+}
+
+/**
+ * Settle a reused thread's heap before its next job, on that thread: past `boundMb`
+ * ({@link reusedThreadHeapMb}), force a full collection and read again; still past it, the thread
+ * is to be retired.
+ *
+ * Collected rather than credited: what earlier jobs left is mostly garbage V8 has not collected,
+ * and a job judged on top of it would be stopped sooner, or (credited for it) later, than on a
+ * fresh thread. After a full collection what is left is held, and it is at most a few MiB past a
+ * fresh thread's within the bound's slack, so every job is judged on the same absolute stop and bound. With no collector
+ * (a runtime where none could be had) nothing past the bound is collected, so such a thread is
+ * retired: a thread start, never a verdict that depends on garbage.
+ *
+ * @param boundMb - The most the thread may hold as the job starts ({@link reusedThreadHeapMb})
+ * @param readUsedBytes - Reads the thread's used heap, in bytes
+ * @param collect - Forces a full collection on the thread, or `null` when none is available
+ * @param now - A millisecond clock
+ * @returns The check — see {@link ReuseCheck}
+ */
+export function settleReusedHeap(
+  boundMb: number,
+  readUsedBytes: () => number,
+  collect: (() => void) | null,
+  now: () => number,
+): ReuseCheck {
+  const boundBytes = boundMb * BYTES_PER_MIB;
+  const startedAt = now();
+  let usedBytes = readUsedBytes();
+  let collectMs: number | null = null;
+  if (usedBytes > boundBytes && collect !== null) {
+    const collectFrom = now();
+    collect();
+    collectMs = now() - collectFrom;
+    usedBytes = readUsedBytes();
+  }
+  return { usedBytes, collectMs, checkMs: now() - startedAt, retire: usedBytes > boundBytes };
 }
 
 /**
@@ -932,7 +1248,7 @@ function unvouchedStopMb(appliedMb: number, ceilingMb: number, heapMb: number): 
  * @param stats - This sample, from `Worker.getHeapStatistics()`
  * @param previousUsedBytes - The same job's previous sample, if one landed
  * @param bounds - {@link heapBounds}
- * @param youngGenerationMb - The worker's `resourceLimits.maxYoungGenerationSizeMb`
+ * @param youngGenerationMb - The thread's young generation, from {@link workerHeapGeometry}
  * @returns True when the job is to be stopped at its heap limit
  */
 export function heapBreached(
@@ -961,10 +1277,10 @@ const MAIN_THREAD_RESERVE_MB = 1024;
 
 /**
  * The least enforced heap a memory-bounded worker is given. A judgement, not a
- * measurement: it is the young generation's own ceiling (see
- * {@link exceedsHeapLimit}), so a worker on a machine too small for one default
- * worker can still hold an ordinary document, and a larger one is refused as a
- * per-run heap breach rather than taking the process down.
+ * measurement: above what an ordinary document peaks at on a cold worker (54 to
+ * 68 MiB used, see {@link heapBounds}), so a worker on a machine too small for one
+ * default worker can still hold an ordinary document, and a larger one is refused
+ * as a per-run heap breach rather than taking the process down.
  */
 const MIN_BOUNDED_HEAP_MB = 96;
 

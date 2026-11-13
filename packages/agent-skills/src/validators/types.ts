@@ -124,10 +124,10 @@ export interface ValidateOptions {
   /**
    * The run's parse dispatcher, when the caller validates many skills: every
    * parse this validation makes (the frontmatter, the link walk) runs on it, so
-   * the run pays one worker start. Omitted, the validation holds its own for
-   * the one skill and shuts it down.
+   * the run pays one worker start. `undefined` when the caller holds none: the
+   * validation holds its own for the one skill and shuts it down.
    */
-  dispatcher?: ParseDispatcher;
+  dispatcher: ParseDispatcher | undefined;
 }
 
 /**

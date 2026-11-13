@@ -27,6 +27,7 @@ import { describe, expect, it } from 'vitest';
 
 import { NO_DECLARED_MIME_TYPES } from '../src/index.js';
 import { buildClaudeContextPopulation } from '../src/projection/claude-context-population.js';
+import { POPULATION_PARSE_LIMITS } from '../src/projection/content-cache.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
@@ -193,6 +194,27 @@ describe('the projection store key and collection-declared parse routing', () =>
     };
 
     expect(await storeKeyFor(undeclared)).toBe(await storeKeyFor(undefined));
+  });
+});
+
+describe('the projection store key and the input cap', () => {
+  it('DIFFERS between two runs under different input caps', async () => {
+    // A realization past the cap is stored `oversize`, so rows derived under one cap answer no run
+    // under another. The cap is held for the run by the population's own limits, set here and put
+    // back, so the two arms differ in the cap alone.
+    const limits = POPULATION_PARSE_LIMITS as { inputBytes: number };
+    const configured = limits.inputBytes;
+    const underCap = async (inputBytes: number): Promise<string> => {
+      limits.inputBytes = inputBytes;
+      try {
+        return await storeKeyFor(undefined);
+      } finally {
+        limits.inputBytes = configured;
+      }
+    };
+
+    expect(await underCap(configured)).toBe(await underCap(configured));
+    expect(await underCap(configured)).not.toBe(await underCap(configured + 1));
   });
 });
 

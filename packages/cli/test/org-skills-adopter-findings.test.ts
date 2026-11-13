@@ -19,14 +19,37 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 
 import { API_SKILL_MAX_UPLOAD_BYTES } from '@vibe-agent-toolkit/agent-skills';
+import { ParseLimitError, withParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import type * as ArchiveModule from '@vibe-agent-toolkit/utils/archive';
 import { installFaultFs } from '@vibe-agent-toolkit/utils/testing';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { inspectZipArchive, warnUnportableReferences } from '../src/commands/claude/org/skills.js';
 
 import type { ZipFixtureEntry } from './helpers/zip-fixtures.js';
 import { skillMdBytes, writeZipFixture } from './helpers/zip-fixtures.js';
+
+/** Every entry an archive this suite opened has inflated, by name: the one decompression seam. */
+const inflated = vi.hoisted(() => [] as string[]);
+
+vi.mock('@vibe-agent-toolkit/utils/archive', async (importOriginal) => {
+  const actual = await importOriginal<typeof ArchiveModule>();
+  return {
+    ...actual,
+    openArchive: async (...args: Parameters<typeof actual.openArchive>) => {
+      const opened = await actual.openArchive(...args);
+      return {
+        label: opened.label,
+        entries: opened.entries,
+        read: (entry: Parameters<typeof opened.read>[0]) => {
+          inflated.push(entry.name);
+          return opened.read(entry);
+        },
+      };
+    },
+  };
+});
 
 let tempDir: string;
 
@@ -214,16 +237,36 @@ describe('inspectZipArchive', () => {
   });
 
   /**
-   * `getData()` allocates whatever `header.size` claims, and a header can claim
-   * anything. Bounding it is the only thing standing between an archive and an
-   * allocation VAT performs on its say-so.
+   * The elected SKILL.md is held to the parse input cap, as every lane that reads
+   * a SKILL.md off disk holds it: a large one still declares its name, and one
+   * past the cap is the same refusal, never a skill that "declares no name".
    */
-  it('does not inflate a SKILL.md far larger than any real one', async () => {
-    const zipPath = writeZip('huge-skill-md.zip', [
+  it('reads the name a SKILL.md larger than the portability checks read declares', async () => {
+    const zipPath = writeZip('large-skill-md.zip', [
       [SKILL_MD, skillMdBytes('demo', 'x'.repeat(2 * 1024 * 1024))],
     ]);
+    inflated.length = 0;
 
-    await expect(inspectZipArchive(zipPath)).resolves.toMatchObject({ declaredName: undefined });
+    await expect(inspectZipArchive(zipPath)).resolves.toMatchObject({ declaredName: 'demo' });
+    // The inflation spy is live: the over-cap case below is judged by it.
+    expect(inflated).toContain(SKILL_MD);
+  });
+
+  it('refuses a SKILL.md past the parse input cap with the cap the path lanes refuse it at, before inflating it', async () => {
+    const cap = await withParseDispatcher((dispatcher) => Promise.resolve(dispatcher.inputBytes));
+    const head = skillMdBytes('demo', '');
+    const zipPath = writeZip('over-cap-skill-md.zip', [
+      [SKILL_MD, Buffer.concat([head, Buffer.alloc(cap + 1 - head.length, 0x78)])],
+    ]);
+
+    inflated.length = 0;
+
+    await expect(inspectZipArchive(zipPath)).rejects.toMatchObject({
+      refusal: 'INPUT_UNREADABLE',
+      message: expect.stringContaining(new ParseLimitError('inputBytes', cap).bound),
+    });
+    // Refused on its declared size: the parse reads only what inflated, and would refuse it too.
+    expect(inflated).toStrictEqual([]);
   });
 
   /**

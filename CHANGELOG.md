@@ -538,11 +538,6 @@ with a regression test.
   `vat cache clear` removes VAT's on-disk caches; `--no-cache` on the root command, or
   `VAT_CACHE=0` (`false`, `no`, `off`), disables them for one run.
 
-- **Markdown parsing runs on worker threads during projection population.** Set `VAT_PARSE_POOL=0`
-  to keep it on one thread — worth doing on a host already running as many jobs as it has cores,
-  because each worker loads its own parser. Output is byte-identical either way.
-  `VAT_PARSE_POOL_SIZE`, `VAT_PARSE_POOL_MIN_MISSES` and `VAT_PARSE_LOOK_AHEAD` tune it.
-
 - **A collection can declare the MIME type of the files it matches.**
   `resources.collections.<name>.mimeType` overrides the built-in extension tables. Two collections
   declaring different types for one file fails `vat resources validate` with `COLLECTION_MIME_CONFLICT`
@@ -554,9 +549,9 @@ with a regression test.
   `run` overrides a committed `test.baseline: true` (which doubles spend — `--max-budget-usd` is
   per spawn); `results/` is kept after a default run as `resultsPath`.
 
-- **Four new `@vibe-agent-toolkit/resources` subpaths: `./parse-conformance`, `./link-parser`,
-  `./remark-parser` and `./markdown-processor`.** All four reach the markdown parser, so they are
-  deliberately absent from the `.` barrel — import them directly.
+- **A new `@vibe-agent-toolkit/resources` subpath, `./parse-conformance`**, for testing a parser
+  implementation. It reaches the markdown parser, so it is deliberately absent from the `.` barrel
+  — import it directly.
 
 - **`externalSource` on a marketplace plugin entry** — reference a plugin published elsewhere
   rather than vendoring it.
@@ -808,9 +803,9 @@ with a regression test.
 - **A store miss caused by a parse refusal is named**: `store miss: N refused pair(s)` on stderr.
   While a refusal persists, the whole population re-derives every run.
 
-- **A file too large to decode as text (over ~512 MiB) no longer crashes a whole run.** It is
-  refused by size without being read: `vat resources` reports it as `RESOURCE_UNREADABLE
-  (TEXT_TOO_LARGE)`, and a projection records it as `contentState: 'oversize'`. No action needed.
+- **A file no parser reads that is too large to decode as text (over ~512 MiB) no longer crashes a
+  whole run.** It is refused by size without being read and reported as `RESOURCE_UNREADABLE
+  (TEXT_TOO_LARGE)`. No action needed.
 - **`vat verify` now reads a plugin-local skill's `skills.config` entry exactly as the plugin build
   does** (declared name, then directory path, then its last segment) when checking its plugin-tree
   copy — including a skill no `skills.include` glob reaches. A skill whose directory is not named

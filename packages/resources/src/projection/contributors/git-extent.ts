@@ -169,7 +169,7 @@ export class GitExtentContributor implements ExtentContributor {
           gitTracker: tracker,
           // Shared with every other contributor: a tracked file is realized here
           // and in the filesystem extent, and only one of those may read it.
-          ...(base.contentCache !== undefined && { contentCache: base.contentCache }),
+          contentCache: base.contentCache,
           // Shared for the same reason and one more: the resolver accumulates
           // conflicts, so this extent and the filesystem extent realizing the
           // same mistyped file must report it ONCE between them.

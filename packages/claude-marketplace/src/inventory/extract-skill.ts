@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import {
@@ -14,6 +13,7 @@ import {
 	type ParseDispatcher,
 	type ParseRefusedResource,
 	parseRefusedEntryFor,
+	readContentForParse,
 	ResourceRegistry,
 } from '@vibe-agent-toolkit/resources';
 import {
@@ -171,10 +171,10 @@ export interface ClaudeSkillInventoryOptions {
 	sharedPopulation?: InventoryPopulation | undefined;
 	/**
 	 * The run's parse dispatcher, for the frontmatter decode (in the bounded
-	 * worker), so a plugin's skills share one worker start. Omitted, a cache
-	 * miss builds a one-thread pool for the call.
+	 * worker), so a plugin's skills share one worker start. `undefined` when the
+	 * caller holds none: a cache miss builds a one-thread pool for the call.
 	 */
-	dispatcher?: ParseDispatcher | undefined;
+	dispatcher: ParseDispatcher | undefined;
 }
 
 /**
@@ -210,8 +210,9 @@ async function parseFrontmatterFields(
 	let name = '';
 	let description: string | undefined;
 	try {
-		const raw = await readFile(absolute, 'utf-8');
-		const parsed = await parseFrontmatter(raw, dispatcher === undefined ? {} : { dispatcher });
+		const route = { dispatcher };
+		const read = await readContentForParse(absolute, 'markdown', route);
+		const parsed = await parseFrontmatter(read, route);
 		if (parsed.success) {
 			const fm = parsed.frontmatter;
 			if (typeof fm['name'] === 'string') name = fm['name'];
@@ -222,8 +223,14 @@ async function parseFrontmatterFields(
 			pushRow(parseErrors, refused === undefined ? { path: absolute, message: parsed.error } : parseRefusedRow(refused));
 		}
 	} catch (e) {
-		classifyParseFailure(e);
-		parseErrors.push(recordedFailure(absolute, (e as Error).message, e));
+		// A SKILL.md past the input cap is refused by its read: the inventory's one refusal row.
+		const refused = parseRefusedEntryFor(absolute, e);
+		if (refused === undefined) {
+			classifyParseFailure(e);
+			parseErrors.push(recordedFailure(absolute, (e as Error).message, e));
+		} else {
+			pushRow(parseErrors, parseRefusedRow(refused));
+		}
 	}
 	return { name, description };
 }

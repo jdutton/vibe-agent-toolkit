@@ -42,7 +42,12 @@ import { decodeTextContent, TextTooLargeError, type DecodedText } from './text-c
  * ```
  */
 export async function readTextContent(filePath: string): Promise<DecodedText> {
-  return decodeTextContent(await readDecodableBytes(filePath));
+  return decodeTextContent(await readDecodableBytes(filePath, admitAnyDecodableSize));
+}
+
+/** The size refusal of a caller with no bound of its own: only the decodable bound applies. */
+function admitAnyDecodableSize(): void {
+  // Nothing to refuse beyond what `readDecodableBytes` refuses itself.
 }
 
 /**
@@ -126,7 +131,8 @@ export async function openForReading(filePath: string): Promise<FileHandle> {
 
 /**
  * Read a file's raw bytes for decoding — refusing, by `stat` and before reading
- * a byte, one too large to decode at all.
+ * a byte, one past the caller's own bound (`refuseBySize`) and one too large to
+ * decode at all.
  *
  * The one read path for "bytes that are about to go through
  * {@link decodeTextContent}": {@link readTextContent} uses it, and so does
@@ -140,15 +146,23 @@ export async function openForReading(filePath: string): Promise<FileHandle> {
  * another file. A file that GROWS past the limit after the `fstat` still reaches
  * the decoder, which raises the same {@link TextTooLargeError}.
  *
+ * `refuseBySize` is required, so a caller with a bound — the parse input cap — states it here and
+ * is held to it on this one read, never on a copy of it.
+ *
  * @param filePath - Path to read
+ * @param refuseBySize - Called with the handle's `fstat` size before a byte is read; throws to
+ *   refuse the file, and returns for one the caller admits. Runs before the decodable bound.
  * @returns The file's bytes
- * @throws {@link TextTooLargeError} when the file is past {@link MAX_DECODABLE_BYTES},
- *   an `EFTYPE` errno when it is not a regular file, and whatever `open`/`readFile` throw otherwise
+ * @throws what `refuseBySize` throws, {@link TextTooLargeError} when the file is past
+ *   {@link MAX_DECODABLE_BYTES}, an `EFTYPE` errno when it is not a regular file, and whatever
+ *   `open`/`readFile` throw otherwise
  */
-export async function readDecodableBytes(filePath: string): Promise<Buffer> {
+export async function readDecodableBytes(filePath: string, refuseBySize: (byteLength: number) => void): Promise<Buffer> {
   const handle = await openForReading(filePath);
   try {
-    refuseUndecodableSize((await handle.stat()).size);
+    const { size } = await handle.stat();
+    refuseBySize(size);
+    refuseUndecodableSize(size);
     return await handle.readFile();
   } finally {
     await handle.close();

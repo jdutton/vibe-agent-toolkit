@@ -942,9 +942,10 @@ export interface SkillValidationSharedContext {
   /**
    * The run's parse dispatcher, for the parse this validator makes itself (the
    * SKILL.md, whose frontmatter the detectors then read), so a batch pays one worker
-   * start. Omitted, each skill's validation holds its own and shuts it down.
+   * start. `undefined` when the caller holds none: each skill's validation holds its own and
+   * shuts it down.
    */
-  dispatcher?: ParseDispatcher;
+  dispatcher: ParseDispatcher | undefined;
   /**
    * Root every emitted `ValidationIssue.location` is expressed relative to.
    *

@@ -56,9 +56,31 @@
  * `docs/contributing/known-defects.md`, not a property to rely on.
  */
 
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { isVatError, safePath, TextTooLargeError, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { type KeyedContent, type ParserKind, readContentWithKey } from '../content-key.js';
+import { isParseLimitError, type ParseLimits, resolveParseLimits } from '../parse-limits.js';
+
+/**
+ * The limits every population parses under. A population takes no limits of its own: its
+ * dispatcher, its reads' input cap ({@link RunContentCache}) and the store key that says which
+ * cap its rows were derived under all read this one value, so the three cannot disagree. Its
+ * `inputBytes` is never above `MAX_DECODABLE_BYTES` (pinned by `projection-content-cache.test.ts`),
+ * so a file too large to decode is always one past the cap.
+ */
+export const POPULATION_PARSE_LIMITS: ParseLimits = resolveParseLimits(undefined);
+
+/**
+ * Whether a read was refused by the file's size alone, before a byte was read: too large to
+ * decode (`TextTooLargeError`), or a kind a parser reads past the run's input cap. The one test
+ * for a realization's `oversize` state, so the eager and the demand-promoted read agree on it.
+ *
+ * @param error - What a read threw
+ * @returns True for a refusal by size
+ */
+export function isSizeRefusal(error: unknown): boolean {
+  return isVatError(error, TextTooLargeError.code) || (isParseLimitError(error) && error.limit === 'inputBytes');
+}
 
 /** What one run's cache did, for anyone measuring it. */
 export interface ContentCacheStats {
@@ -104,25 +126,29 @@ export class RunContentCache {
    * already read* — which, inside `populate()`, is every path a blob is derived
    * from. (`BLOB_CONTENT_CHANGED` has fired in practice: an editor saving during
    * a 33-second whole-corpus run, recorded in `docs/architecture/zones.md`.)
-   * Both guards deliberately stay: `populateBlobs` is also reachable from a
-   * builder assembled without a cache, where a target's bytes genuinely were not
-   * read by this run, and a fresh read there can still disagree with the key the
-   * row carries. Filing *those* bytes under *this* key would be the well-formed-
+   * Both guards deliberately stay: `populateBlobs` also derives from rows that
+   * reached a builder without a read through its cache (rows assembled by hand),
+   * where a target's bytes genuinely were not read by this run, and a fresh read
+   * there can still disagree with the key the row carries. Filing *those* bytes under *this* key would be the well-formed-
    * entry-wrong-contents failure, cache or no cache.
    *
    * Pinned by `projection-blob-population.test.ts` — "serves the bytes the base
-   * read" (with a cache) alongside "refuses to derive a blob from bytes that no
-   * longer key to it" (without one). The pair is what stops either semantics
+   * read" (rows keyed through the cache) alongside "refuses to derive a blob from
+   * bytes that no longer key to it" (rows that were not). The pair is what stops either semantics
    * drifting silently.
    *
    * A read failure is **not** cached: it is not a value, and a caller that
    * treats an unreadable file as a fact about the corpus (`collectRealization`
    * records a null key) has already handled it.
    *
+   * A file of a parsed kind past the run's input cap is refused by its size and never read, as
+   * the parse would refuse it ({@link isSizeRefusal}); like any failed read, nothing is held.
+   *
    * @param absolutePath - Absolute path to read
    * @param parserKind - The parser these bytes will actually be handed to
    * @returns The content, its key, and the parser it routes to
-   * @throws Whatever `readFile` throws — callers decide whether that is fatal
+   * @throws Whatever `readFile` throws — callers decide whether that is fatal — and a
+   *   `ParseLimitError` (`inputBytes`) for a parsed kind past the run's input cap
    */
   async read(absolutePath: string, parserKind: ParserKind): Promise<KeyedContent> {
     const key = cacheKey(absolutePath, parserKind);
@@ -133,7 +159,10 @@ export class RunContentCache {
     }
 
     this.#misses += 1;
-    const keyed = await readContentWithKey(absolutePath, parserKind);
+    // The population's own cap, never a caller's: the dispatcher, the store key and the refusal
+    // sentence read the same {@link POPULATION_PARSE_LIMITS}, so no run reads past the cap on one
+    // lane and refuses at it on the next.
+    const keyed = await readContentWithKey(absolutePath, parserKind, POPULATION_PARSE_LIMITS.inputBytes);
     this.#entries.set(key, keyed);
     this.#bytesHeld += keyed.byteLength;
     return keyed;
@@ -151,8 +180,8 @@ export class RunContentCache {
 }
 
 /**
- * Read through a run's cache when there is one, and straight from disk when
- * there is not.
+ * Read through a run's cache, or, for a caller outside a population that wants
+ * the bytes themselves, straight from disk with no cap.
  *
  * One function rather than the same three-line conditional at every call site:
  * `collectRealization` and the blob-derivation stage must read *identically* or
@@ -160,16 +189,18 @@ export class RunContentCache {
  *
  * @param absolutePath - Absolute path to read
  * @param parserKind - The parser these bytes will actually be handed to
- * @param cache - The run's cache, or absent for a caller outside a population
+ * @param cache - The run's cache, or `null` for a caller outside a population that parses nothing it reads
  * @returns The content, its key, and the parser it routes to
  */
 export function readKeyedContent(
   absolutePath: string,
   parserKind: ParserKind,
-  cache?: RunContentCache | undefined,
+  cache: RunContentCache | null,
 ): Promise<KeyedContent> {
-  return cache === undefined
-    ? readContentWithKey(absolutePath, parserKind)
+  // `null` is a caller outside a population whose read no parse of this run follows (the CLI's
+  // enumeration oracle): it is for the bytes themselves, so it has no cap.
+  return cache === null
+    ? readContentWithKey(absolutePath, parserKind, null)
     : cache.read(absolutePath, parserKind);
 }
 

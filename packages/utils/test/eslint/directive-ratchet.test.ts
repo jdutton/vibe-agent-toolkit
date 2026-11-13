@@ -48,8 +48,9 @@ const CEILINGS: Readonly<Record<string, number>> = {
   'import/order': 1,
   'local/no-bare-symlink-in-tests': 1,
   // `failure-reason.ts`: a property read that throws IS "declared nothing";
-  // reason inline at the directive.
-  'local/no-blind-catch': 2,
+  // `parse-worker.ts` `acquireCollector`: any refusal means "no collector", whose
+  // fallback is the same for every cause. Reasons inline at the directives.
+  'local/no-blind-catch': 3,
   // The two lexical helpers the rule points every caller at, plus the one
   // import-specifier classifier that is not a containment check at all.
   'local/no-dotdot-containment': 3,

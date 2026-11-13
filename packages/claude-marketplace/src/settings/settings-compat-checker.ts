@@ -6,7 +6,7 @@ import * as fs from 'node:fs/promises';
 import { basename } from 'node:path';
 
 import { allowedToolsOf, parseFrontmatter } from '@vibe-agent-toolkit/agent-skills';
-import type { ParseDispatcher } from '@vibe-agent-toolkit/resources';
+import { type MeasuredContent, type ParseDispatcher, parseRefusedEntryFor, readContentForParse } from '@vibe-agent-toolkit/resources';
 import { isPathAbsentError, mapWithConcurrency, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { SettingsConflict } from '../types.js';
@@ -80,15 +80,15 @@ async function parseSkillFrontmatter(
   skillPath: string,
   dispatcher: ParseDispatcher,
 ): Promise<{ frontmatter: SkillFrontmatter } | { reason: string }> {
-  let content: string;
+  let read: MeasuredContent;
   try {
-    content = await fs.readFile(skillPath, 'utf-8');
+    read = await readContentForParse(skillPath, 'markdown', { dispatcher });
   } catch (error) {
     return { reason: reasonOf(error) };
   }
 
-  const parsed = await parseFrontmatter(content, { dispatcher });
-  if (!parsed.success) return { reason: parsed.error };
+  const parsed = await parseFrontmatter(read, { dispatcher });
+  if (!parsed.success) return { reason: parseRefusedEntryFor(skillPath, parsed.cause)?.reason ?? parsed.error };
   const fields = parsed.frontmatter;
 
   const frontmatter: SkillFrontmatter = {};

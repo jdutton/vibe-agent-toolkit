@@ -59,7 +59,7 @@ function depthOf(value: unknown): number {
 async function keyedDocument(name: string, content: string): Promise<ParsableContent> {
   const path = safePath.join(suite.tempDir, name);
   await writeFile(path, content, 'utf-8');
-  const keyed = await readContentWithKey(path, 'markdown');
+  const keyed = await readContentWithKey(path, 'markdown', null);
   if (!isParsableContent(keyed)) throw new Error('a markdown document routed to no parser');
   return keyed;
 }

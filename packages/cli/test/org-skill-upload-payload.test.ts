@@ -703,6 +703,17 @@ describe('what installFromLocal actually reads out of a REAL archive', () => {
     expect(log).toContain('--title "wiki-lint"');
   });
 
+  it('reads the name a UTF-16 SKILL.md declares, decoding it as the disk lane does', async () => {
+    const utf8 = skillMdBytes('wide-skill');
+    const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(utf8.toString('utf8'), 'utf16le')]);
+    const zipPath = writeZipFixture(tempDir, 'wide-skill-v2.zip', [['wide-skill/SKILL.md', utf16]]);
+    const logger = recordingLogger();
+
+    await installFromLocal(zipPath, undefined, clientReturningSkill(), logger);
+
+    expect(logger.lines.join('\n')).toContain('--title "wide-skill"');
+  });
+
   it('says nothing about divergence when the filename and the declared name agree', async () => {
     const zipPath = writeZipFixture(tempDir, 'agreeing.zip', [['agreeing/SKILL.md', skillMdBytes('agreeing')]]);
     const logger = recordingLogger();

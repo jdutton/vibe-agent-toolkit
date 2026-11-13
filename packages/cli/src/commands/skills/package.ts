@@ -210,6 +210,7 @@ async function validateForPackage(
     { side: 'source', origin: 'content', action: `validate the skill at ${skillPath}` },
     () => validateSkill({
       skillPath,
+      dispatcher: undefined,
       rootDir: basePath,
       locationRoot,
       validation: {},
@@ -502,7 +503,7 @@ async function packageAndReport(
     const message = errorMessageOf(error);
     logger.error(`Package failed: ${message}`);
     // A SKILL.md the parse worker refuses (the refusal itself, usually) reports as unnamed.
-    const read = await skillDocumentOrRefused(skillPath);
+    const read = await skillDocumentOrRefused(skillPath, { dispatcher: undefined });
     return buildSkillsPackageReport({
       validation,
       // The package is one plan: a refused one — a too-large ZIP included — landed nothing.

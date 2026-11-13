@@ -672,6 +672,8 @@ async function validateSingleSkill(
       // The RUN's probe, not this call's — see {@link runSuiteProbe}. This lane
       // is called in a loop over every skill in a plugin.
       suiteProbe: suiteProbeForRun(),
+      // Each skill holds its own: this lane is called once per skill, with no run dispatcher.
+      dispatcher: undefined,
     };
     if (gitTracker !== null) {
       sharedCtx.gitTracker = gitTracker;
@@ -691,7 +693,7 @@ async function validateSingleSkill(
 
   // Fallback: basic validation. Severity is applied by `applySeverityFilter`.
   // The audited skill is the verb's input.
-  const validateOptions: ValidateOptions = { skillPath, locationRoot, validation: {}, resourcesValidation: {}, side: 'source' };
+  const validateOptions: ValidateOptions = { skillPath, locationRoot, validation: {}, resourcesValidation: {}, side: 'source', dispatcher: undefined };
   if (options.warnUnreferencedFiles) {
     validateOptions.checkUnreferencedFiles = true;
   }
@@ -2811,8 +2813,8 @@ async function handleFileEntry(
       const skillDir = safePath.resolve(fullPath, '..');
       const unreadable = degradingRegistry(findProjectRoot(skillDir) ?? skillDir, logger, locationRoot);
       const sharedCtx: SkillValidationSharedContext = scanCtx.gitTracker === null
-        ? { locationRoot, projectSkills, suiteProbe, unreadable, outputs: [] }
-        : { gitTracker: scanCtx.gitTracker, locationRoot, projectSkills, suiteProbe, unreadable, outputs: [] };
+        ? { locationRoot, projectSkills, suiteProbe, unreadable, outputs: [], dispatcher: undefined }
+        : { gitTracker: scanCtx.gitTracker, locationRoot, projectSkills, suiteProbe, unreadable, outputs: [], dispatcher: undefined };
       // `{}`: resolved at audit's own boundary, as in the lane above.
       const packagingResult = await validateSkillForPackaging(fullPath, {}, skillConfig, 'source', sharedCtx);
       const configAware = packagingResultToValidationResult(
@@ -2827,7 +2829,7 @@ async function handleFileEntry(
 
     // Wild mode: basic validation. Severity is applied by `applySeverityFilter`.
     // The audited skill is the verb's input.
-    const validateOptions: ValidateOptions = { skillPath: fullPath, locationRoot, validation: {}, resourcesValidation: {}, side: 'source' };
+    const validateOptions: ValidateOptions = { skillPath: fullPath, locationRoot, validation: {}, resourcesValidation: {}, side: 'source', dispatcher: undefined };
     if (options.warnUnreferencedFiles) {
       validateOptions.checkUnreferencedFiles = true;
     }

@@ -77,7 +77,7 @@ describe('a broken parser install during skill extraction', () => {
     armed.frontmatter = undefined;
   });
 
-  const extract = () => extractClaudeSkillInventory(skillPath, { gitTrackerSource: NO_GIT_TRACKER });
+  const extract = () => extractClaudeSkillInventory(skillPath, { dispatcher: undefined, gitTrackerSource: NO_GIT_TRACKER });
 
   it('rejects when the link walk meets it, instead of filing a `link walk failed` row', async () => {
     const thrown = brokenInstall();

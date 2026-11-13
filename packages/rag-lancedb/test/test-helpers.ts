@@ -48,7 +48,7 @@ export async function createTestResource(
   filePath: string,
   resourceId = 'test-1'
 ): Promise<ResourceMetadata> {
-  const parseResult = await parseFileCached(filePath, 'markdown');
+  const parseResult = await parseFileCached(filePath, 'markdown', { dispatcher: undefined });
   return {
     id: resourceId,
     filePath,

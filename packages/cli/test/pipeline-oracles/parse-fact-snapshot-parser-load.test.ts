@@ -80,7 +80,11 @@ vi.mock('@vibe-agent-toolkit/resources', async (importOriginal) => {
     actual.withParseDispatcher(
       (dispatcher) =>
         work(
-          Object.assign(Object.create(dispatcher) as ResourcesModule.ParseDispatcher, {
+          // `inputBytes` is a getter over a private field, which a prototype-chained copy cannot
+          // read, so the copy is handed the real dispatcher's value.
+          Object.assign(Object.defineProperties(Object.create(dispatcher) as ResourcesModule.ParseDispatcher, {
+            inputBytes: { value: dispatcher.inputBytes },
+          }), {
             parse: (keyed: ResourcesModule.ParsableContent) => {
               const error = armed(keyed);
               return error === undefined ? dispatcher.parse(keyed) : Promise.reject(error);

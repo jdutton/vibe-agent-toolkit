@@ -240,6 +240,7 @@ import {
   type Projection,
   type ProjectionBase,
   type RealizationConditionRow,
+  RunContentCache,
 } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
@@ -892,7 +893,7 @@ function baseFrom(
   projection: Projection,
   extentIds: ReadonlySet<string>,
 ): ProjectionBase {
-  const builder = new ProjectionBuilder({ root });
+  const builder = new ProjectionBuilder({ root, contentCache: new RunContentCache() });
   builder.addRoot({ id: builder.identities.rootId, path: safePath.resolve(root) });
 
   for (const row of projection.resources) builder.addResource(row);

@@ -181,8 +181,6 @@ const DIRECT_PARSE_NOT_REPORTED_HERE: Readonly<Record<string, string>> = {
   'packages/agent-skills/src/validators/compat-detectors.ts':
     '`detectorFrontmatter` rethrows a refused parse for the one caller with no parse of its own — the compatibility analyzer, which names '
     + 'the file under `unchecked`. Every skill lane hands the detectors the frontmatter its own parse returned.',
-  'packages/claude-marketplace/src/settings/settings-compat-checker.ts':
-    'A refused parse names the SKILL.md under `unchecked` with the parser\'s sentence; a settings conflict check has no allow list.',
 };
 
 /** What a comment line starts with, once indentation is trimmed. */

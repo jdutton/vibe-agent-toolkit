@@ -38,13 +38,13 @@
 
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
-import { describe, it, expect } from 'vitest';
+import { afterAll, beforeAll, describe, it, expect } from 'vitest';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const binPath = safePath.resolve(__dirname, '../../dist/bin.js');
@@ -78,13 +78,31 @@ const PARSER_NEEDLES = ['remark-parse', 'resources/dist/link-parser.js'] as cons
  * quietly green.
  */
 /**
- * The corpus every parsing case here scans.
+ * The scan every parsing case here runs, from {@link scanCorpus} as its cwd.
  *
  * One constant because three cases must scan the SAME tree: the cold/warm pair
  * below is only evidence if both runs did identical work, and the `VAT_CACHE=0`
  * control is only a control for them if it parses the same documents.
+ *
+ * The corpus is two linked documents in a private temp dir, never a directory of
+ * this repo. What loads is the property here, and two documents load the parser
+ * exactly as two hundred do. A repo directory cost a whole-repo crawl and parse per
+ * run: 77 s for one cold scan on a loaded CI runner, past the 60 s test timeout.
  */
-const SCAN_ARGS = ['resources', 'scan', 'docs/contributing'] as const;
+const SCAN_ARGS = ['resources', 'scan', '.'] as const;
+
+/** The private corpus {@link SCAN_ARGS} scans; created once for the file. */
+let scanCorpus = '';
+
+beforeAll(() => {
+  scanCorpus = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-modload-corpus-'));
+  writeFileSync(safePath.join(scanCorpus, 'one.md'), '# One\n\nSee [two](two.md).\n');
+  writeFileSync(safePath.join(scanCorpus, 'two.md'), '# Two\n\nBack to [one](one.md).\n');
+});
+
+afterAll(() => {
+  rmSync(scanCorpus, { recursive: true, force: true });
+});
 
 /**
  * The resources barrel — the module the parser hides BEHIND.
@@ -106,11 +124,13 @@ const COMMAND_NEEDLES = {
  *
  * @param args - Arguments to pass to the CLI
  * @param extraEnv - Environment overrides for the spawned process
+ * @param cwd - Where the CLI runs: the repo, or {@link scanCorpus} for {@link SCAN_ARGS}
  * @returns The loaded script URLs, and the process result
  */
 function loadedScripts(
   args: readonly string[],
-  extraEnv: Readonly<Record<string, string>> = {},
+  extraEnv: Readonly<Record<string, string>>,
+  cwd: string,
 ): { urls: string[]; status: number | null } {
   // mkdtempSync, never a `/tmp/...` literal — that has no drive letter and is
   // not absolute on Windows, where this suite also runs. normalizedTmpdir()
@@ -119,7 +139,7 @@ function loadedScripts(
   try {
     const result = spawnSync(NODE_EXECUTABLE, [binPath, ...args], {
       encoding: 'utf-8',
-      cwd: repoRoot,
+      cwd,
       env: { ...process.env, ...extraEnv, NODE_V8_COVERAGE: covDir },
     });
 
@@ -203,7 +223,7 @@ function sourceFilesCalling(needle: string): string[] {
 
 describe('module load budget (integration)', () => {
   it('`--version` loads neither the resources package nor the markdown parser', () => {
-    const { urls, status } = loadedScripts(['--version']);
+    const { urls, status } = loadedScripts(['--version'], {}, repoRoot);
 
     // Positive control FIRST. An unwritten or unparsed coverage file yields an
     // empty list, and every "is absent" assertion below would then pass by
@@ -224,7 +244,7 @@ describe('module load budget (integration)', () => {
     // hit, nothing is parsed, and the parser is legitimately never imported —
     // which is the whole point of the deferral, and would make this control
     // pass for the wrong reason on a cold machine and fail on a warm one.
-    const { urls } = loadedScripts(SCAN_ARGS, { VAT_CACHE: '0' });
+    const { urls } = loadedScripts(SCAN_ARGS, { VAT_CACHE: '0' }, scanCorpus);
 
     expect(urls.length).toBeGreaterThan(0);
     for (const needle of PARSER_NEEDLES) {
@@ -239,7 +259,7 @@ describe('module load budget (integration)', () => {
     // imported" — was stated in the prose of the case below and tested nowhere.
     // Two hoists of `loadParser` above the parse cache's hit-path return have
     // since made a fully warm scan load the parser again with every existing
-    // test still green. Measured at the time of writing: 1,235 scripts cold
+    // test still green. Measured when this case was written: 1,235 scripts cold
     // against 1,049 warm, and ~1.0s of wall clock on a 184-document corpus.
     //
     // A PRIVATE temp dir, so the cache state under test belongs to this test.
@@ -251,7 +271,7 @@ describe('module load budget (integration)', () => {
     const cacheHome = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-warmscan-'));
     const privateTmp = { TMPDIR: cacheHome, TEMP: cacheHome, TMP: cacheHome };
     try {
-      const cold = loadedScripts(SCAN_ARGS, privateTmp);
+      const cold = loadedScripts(SCAN_ARGS, privateTmp, scanCorpus);
 
       // Positive control, and it is doing two jobs: the run has to have
       // succeeded AND to have actually parsed, or "warm" below means nothing —
@@ -263,7 +283,7 @@ describe('module load budget (integration)', () => {
         expect(cold.urls.some(url => url.includes(needle))).toBe(true);
       }
 
-      const warm = loadedScripts(SCAN_ARGS, privateTmp);
+      const warm = loadedScripts(SCAN_ARGS, privateTmp, scanCorpus);
 
       // The second positive control: the warm run did the same work — same
       // command, same corpus, exit 0, the resources barrel loaded — so the
@@ -290,7 +310,7 @@ describe('module load budget (integration)', () => {
     // subcommand list and parses no document, so unlike the case above no
     // `VAT_CACHE` setting is needed — there is no cache state that could decide
     // whether the parser loads.
-    const { urls, status } = loadedScripts(['resources', '--help']);
+    const { urls, status } = loadedScripts(['resources', '--help'], {}, repoRoot);
 
     // Positive control FIRST, and here it carries the whole case: assert the
     // barrel WAS loaded before asserting the parser behind it was not.
@@ -311,7 +331,7 @@ describe('module load budget (integration)', () => {
     // `inventory` is the subject because it is an ordinary table entry — not the
     // `doctor` special case — and `--help` exercises the dispatch without
     // running a scan.
-    const { urls, status } = loadedScripts(['inventory', '--help']);
+    const { urls, status } = loadedScripts(['inventory', '--help'], {}, repoRoot);
 
     expect(urls.length).toBeGreaterThan(0);
     expect(urls.some(url => url.includes(COMMAND_NEEDLES.inventory))).toBe(true);
@@ -330,7 +350,7 @@ describe('module load budget (integration)', () => {
     // renamed module, a command moved into a directory of its own — this case
     // goes red, rather than the absence assertions above passing because nothing
     // could ever have matched them.
-    const { urls, status } = loadedScripts(['--help']);
+    const { urls, status } = loadedScripts(['--help'], {}, repoRoot);
 
     expect(urls.length).toBeGreaterThan(0);
     expect(status).toBe(0);
@@ -378,7 +398,7 @@ describe('module load budget (integration)', () => {
     // `registerCacheControl` runs on EVERY invocation before parsing. It lived
     // in `commands/cache/index.ts`, which imports `./clear.js` and the
     // resources package behind it — ~1.2s paid even by `--version`.
-    const { urls } = loadedScripts(['--version']);
+    const { urls } = loadedScripts(['--version'], {}, repoRoot);
 
     expect(urls.some(url => url.includes('cache/cache-control.js'))).toBe(true);
     expect(urls.filter(url => url.includes('cache/clear.js'))).toEqual([]);

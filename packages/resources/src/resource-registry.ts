@@ -1159,7 +1159,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     //
     // See {@link parserKindFor} for why the routing goes through the run's
     // resolver rather than `parserKindForPath`.
-    const keyed = await readContentWithKey(absolutePath, this.parserKindFor(absolutePath));
+    // Held to the run's parse input cap by its size, before it is read (a kind
+    // nothing parses is never capped: see `readContentWithKey`).
+    const keyed = await readContentWithKey(absolutePath, this.parserKindFor(absolutePath), dispatcher.inputBytes);
 
     // Parse from the bytes already in hand — or from a cache entry filed under
     // the key those bytes just produced. See `ParseDispatcher.parse`.

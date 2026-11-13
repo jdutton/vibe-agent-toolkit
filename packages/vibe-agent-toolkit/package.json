@@ -1,6 +1,6 @@
 {
   "name": "vibe-agent-toolkit",
-  "version": "0.2.0-rc.14",
+  "version": "0.2.0-rc.15",
   "description": "Toolkit for skills, plugins, marketplaces and knowledge resources: audit, build, distribute, RAG and projection",
   "type": "module",
   "bin": {

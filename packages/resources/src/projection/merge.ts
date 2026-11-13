@@ -79,7 +79,7 @@ import type { RealizationConditionRow, ResourceRealizationRow } from '../schemas
 import type { JsonValue } from '../schemas/projection-shared.js';
 
 import { PARSE_REFUSAL_BLOB_CODES, populateBlobs, storableBlobFacts } from './blob-population.js';
-import { RunContentCache } from './content-cache.js';
+import { POPULATION_PARSE_LIMITS, RunContentCache } from './content-cache.js';
 import type { ContributorRegistry, ExtentContribution, ExtentContributor } from './contributor.js';
 import {
   declinedSymlinkRowsStillHold,
@@ -635,6 +635,7 @@ export async function populate(options: PopulateOptions): Promise<PopulateResult
   // nothing starts no worker.
   const projection = await withParseDispatcher(
     (dispatcher) => deriveProjection(options, { parseContent, routing, dispatcher }),
+    { policy: { limits: POPULATION_PARSE_LIMITS } },
   );
   const stored = await writeCachedProjection(options, rootId, parseContent, projection, routing);
   return { projection, outcome: populationOutcome(stored, storeMissFor(cached.missed, projection)) };
@@ -677,6 +678,8 @@ async function deriveProjection(options: PopulateOptions, run: DerivationRun): P
   const builder = new ProjectionBuilder({
     root,
     gitTracker: options.gitTracker,
+    // Held to POPULATION_PARSE_LIMITS, the cap the dispatcher runs under, so a file a parser would
+    // refuse by size is refused before it is read.
     contentCache: new RunContentCache(),
     mimeResolver: routing,
   });
@@ -878,6 +881,10 @@ function storeKeyFor(
     gitTracker: options.gitTracker !== undefined,
     extentSource: crawlSourceSelector() ?? null,
     parseRouting: routing.fingerprint,
+    // A constant within one release, so this guards invalidation ACROSS releases: a realization
+    // past the input cap is stored `oversize`, and rows a release derived under its cap answer no
+    // run of a release with another.
+    inputBytes: POPULATION_PARSE_LIMITS.inputBytes,
     registrations: registrationQuestions(options),
   });
   return { rootId, treeHash: `${cache.treeHash} ${ambient}` };
