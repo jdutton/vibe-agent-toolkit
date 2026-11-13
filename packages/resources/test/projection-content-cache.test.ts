@@ -1,10 +1,11 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, truncateSync, writeFileSync } from 'node:fs';
 
 import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { MAX_DECODABLE_BYTES } from '@vibe-agent-toolkit/utils/fs';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { readContentWithKey } from '../src/content-key.js';
-import { RunContentCache, readKeyedContent } from '../src/projection/content-cache.js';
+import { POPULATION_PARSE_LIMITS, RunContentCache, readKeyedContent } from '../src/projection/content-cache.js';
 
 const DOC = 'doc.md';
 const ORIGINAL = '# original\n';
@@ -50,7 +51,7 @@ describe('RunContentCache', () => {
     expect(later.key).toBe(first.key);
     // And the rewrite really did land — otherwise this test would pass against a
     // cache that does nothing.
-    expect((await readContentWithKey(docPath(), 'markdown')).key).not.toBe(first.key);
+    expect((await readContentWithKey(docPath(), 'markdown', null)).key).not.toBe(first.key);
   });
 
   it('does not serve one parser kind the other one’s entry', async () => {
@@ -82,11 +83,11 @@ describe('RunContentCache', () => {
 });
 
 describe('readKeyedContent', () => {
-  it('reads straight from disk when no cache is supplied', async () => {
-    const direct = await readKeyedContent(docPath(), 'markdown');
+  it('reads straight from disk when the cache is null', async () => {
+    const direct = await readKeyedContent(docPath(), 'markdown', null);
     writeFileSync(docPath(), '# rewritten\n');
 
-    const again = await readKeyedContent(docPath(), 'markdown');
+    const again = await readKeyedContent(docPath(), 'markdown', null);
 
     // The uncached path must stay a real read: it is what the blob stage's
     // content-changed and unreadable branches are still reachable through.
@@ -100,5 +101,27 @@ describe('readKeyedContent', () => {
     await readKeyedContent(docPath(), 'markdown', cache);
 
     expect(cache.stats.hits).toBe(1);
+  });
+});
+
+describe('POPULATION_PARSE_LIMITS', () => {
+  it('caps a population\'s input at no more than a string can hold, so the cap, not a decode, refuses an oversize file', () => {
+    // An `oversize` realization of a parsed kind is reported as refused at the input cap
+    // (`blob-refusals.ts`), which is true only while every file too large to decode is also past it.
+    expect(POPULATION_PARSE_LIMITS.inputBytes).toBeLessThanOrEqual(MAX_DECODABLE_BYTES);
+  });
+
+  it('is the one cap a run\'s reads are held to: a parsed kind one byte past it is refused, never read', async () => {
+    // Sparse, so the read the cap prevents would cost nothing if it happened.
+    const past = safePath.join(root, 'past.md');
+    writeFileSync(past, '');
+    truncateSync(past, POPULATION_PARSE_LIMITS.inputBytes + 1);
+    const at = safePath.join(root, 'at.md');
+    writeFileSync(at, '');
+    truncateSync(at, POPULATION_PARSE_LIMITS.inputBytes);
+    const cache = new RunContentCache();
+
+    await expect(cache.read(past, 'markdown')).rejects.toMatchObject({ limit: 'inputBytes' });
+    await expect(cache.read(at, 'markdown')).resolves.toMatchObject({ byteLength: POPULATION_PARSE_LIMITS.inputBytes });
   });
 });

@@ -93,6 +93,7 @@ function failedRow(base: RowBase, runs: number, failure: string): ParseCommandSt
     workerThreads: 0,
     kinds: [],
     tier: [],
+    reuseHeap: null,
     documents: 0,
     bytes: 0,
     cacheHits: 0,
@@ -207,6 +208,7 @@ async function rowFromDumps(
     mainThreads: reported.mainThreads,
     workerThreads: reported.workerThreads,
     tier: reported.tier,
+    reuseHeap: reported.reuseHeap,
     kinds: reported.kinds.map((kind) => ({
       kind: kind.kind,
       documents: kind.documents,

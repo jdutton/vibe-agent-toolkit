@@ -21,7 +21,7 @@ import { isVatError } from '../../src/errors/vat-error.js';
 import { normalizedTmpdir } from '../../src/path-utils.js';
 import { safePath } from '../../src/path.js';
 import { TextTooLargeError } from '../../src/text-content.js';
-import { MAX_DECODABLE_BYTES, readTextContent, readTextContentSync } from '../../src/text-file.js';
+import { MAX_DECODABLE_BYTES, readDecodableBytes, readTextContent, readTextContentSync } from '../../src/text-file.js';
 
 /** Past `readFile`'s own 2 GiB ceiling — see the module docstring. */
 const PAST_READFILE_LIMIT = 2 ** 31 + 1;
@@ -57,6 +57,22 @@ async function thrownBy(run: () => unknown): Promise<unknown> {
   }
   return undefined;
 }
+
+describe('readDecodableBytes holds a file to its caller\'s size refusal before reading it', () => {
+  it('hands the caller the size it stat-ed, and throws what the caller throws, before the decodable bound', async () => {
+    const file = await sparse('capped.md', MAX_DECODABLE_BYTES + 1);
+    const seen: number[] = [];
+    const refusal = new Error('past the caller\'s cap');
+
+    const error = await thrownBy(() => readDecodableBytes(file, (byteLength) => {
+      seen.push(byteLength);
+      throw refusal;
+    }));
+
+    expect(error).toBe(refusal);
+    expect(seen).toStrictEqual([MAX_DECODABLE_BYTES + 1]);
+  });
+});
 
 describe('readTextContent refuses an undecodable size without reading it', () => {
   it('refuses one byte past the limit, asynchronously', async () => {

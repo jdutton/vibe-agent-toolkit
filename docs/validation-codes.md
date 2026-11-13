@@ -1723,6 +1723,15 @@ an adopter's tree, and surface only when a maintainer runs the oracle harness.
 | `RESTATEMENT_DRIFT` | The crawl restated in `pipeline-oracles/lanes.ts` disagrees with the builder it claims to describe |
 | `KEY_DISAGREEMENT` | Paths sharing one content key produced parses that disagree — a content-addressed cache over this pipeline would be unsound |
 
+### Process warnings
+
+Node process warnings (`process.emitWarning`) that VAT raises at most once per loaded copy of VAT. They are not
+findings: no report carries them, nothing overrides them, and they never change an exit code.
+
+| Code | What |
+|---|---|
+| `VAT_PARSE_NO_COLLECTOR` | VAT's parse threads got no full garbage collection: V8's `--expose-gc` was refused, or was cleared while a thread set it up (by the host, another copy of VAT, or a contending thread on a starved host — the Residual section of `packages/resources/src/parse-collector.ts` lists every way). A reused parse thread whose heap has grown past its bound is replaced by a fresh one instead of collected. Parses stay correct; a large scan may run slightly slower |
+
 ## Migration from `ignoreValidationErrors`
 
 | Old | New |

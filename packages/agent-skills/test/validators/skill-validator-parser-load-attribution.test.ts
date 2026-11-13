@@ -72,11 +72,11 @@ type ParseArm = { pathContains: string; error: Error } | undefined;
 // is the shipped one.
 vi.mock('@vibe-agent-toolkit/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof ResourcesModule>();
-  const parseFileCached = async (filePath: string, kind: ResourcesModule.ParserKind) => {
+  const parseFileCached = async (filePath: string, kind: ResourcesModule.DocumentParserKind, route: ResourcesModule.ParseRoute) => {
     if (failures.load) return Promise.reject(failures.load);
     return failures.parseFor && filePath.includes(failures.parseFor.pathContains)
       ? Promise.reject(failures.parseFor.error)
-      : actual.parseFileCached(filePath, kind);
+      : actual.parseFileCached(filePath, kind, route);
   };
   return { ...actual, parseFileCached };
 });

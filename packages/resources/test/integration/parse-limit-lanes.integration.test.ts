@@ -160,9 +160,11 @@ describe('a parse stopped at a limit, on the registry lane', () => {
 
 /**
  * The built worker, behind a seed that kills its thread with `process.exit(1)`
- * on any document starting `# DIE`. The real worker's listener is attached
- * first; its parse awaits the parser load, so the seed's exit lands before any
- * answer.
+ * on any document starting `# DIE`, once it has said the job's parser loaded (as
+ * the real worker does before it parses): the document's death. A thread that
+ * dies before saying so is never the document's. The real worker's listener is
+ * attached first; its parse awaits the parser load, so the seed's exit lands
+ * before any answer.
  */
 async function dyingWorkerEntry(): Promise<string> {
   const realWorker = pathToFileURL(safePath.resolve(import.meta.dirname, '..', '..', 'dist', 'parse-worker.js')).href;
@@ -172,7 +174,7 @@ async function dyingWorkerEntry(): Promise<string> {
     [
       "import { parentPort } from 'node:worker_threads';",
       `await import(${JSON.stringify(realWorker)});`,
-      "parentPort.on('message', (request) => { if (request?.content?.startsWith?.('# DIE')) process.exit(1); });",
+      "parentPort.on('message', (request) => { if (request?.content?.startsWith?.('# DIE')) { parentPort.postMessage({ id: request.id, parserLoaded: request.kind }); process.exit(1); } });",
     ].join('\n'),
     'utf-8',
   );

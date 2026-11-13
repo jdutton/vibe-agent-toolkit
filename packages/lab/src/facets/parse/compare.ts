@@ -239,7 +239,7 @@ function passRows(row: ParseCommandStats): readonly LabelledRow[] {
  * one list.
  *
  * Rows that never ran on either side are dropped. A tier the measured build does
- * not have would otherwise contribute eight `0 -> 0` rows to every comparison.
+ * not have would otherwise contribute a `0 -> 0` row per tier pass to every comparison.
  *
  * @param row - The command's statistics
  * @returns Two labelled rows per charged tier pass

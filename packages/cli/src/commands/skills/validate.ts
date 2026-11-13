@@ -538,7 +538,7 @@ export async function buildSharedValidationContext(
   // lane must model a bundle that excludes EVERY declared suite, not just the
   // subject's. Present even for an empty batch, so no early return can drop it.
   if (skills.length === 0) {
-    return { allowLedger, projectSkills, suiteProbe, unreadable: 'refuse', outputs: [] };
+    return { allowLedger, projectSkills, suiteProbe, unreadable: 'refuse', outputs: [], dispatcher: undefined };
   }
 
   const projectRoots = new Set<string>();
@@ -559,7 +559,7 @@ export async function buildSharedValidationContext(
   }
 
   // Validation only reads the project.
-  const context: SkillValidationSharedContext = { allowLedger, projectSkills, suiteProbe, unreadable: 'refuse', outputs: [] };
+  const context: SkillValidationSharedContext = { allowLedger, projectSkills, suiteProbe, unreadable: 'refuse', outputs: [], dispatcher: undefined };
 
   // One tracker per repo; when the batch spans repos, skip rather than spawn
   // multiple `git ls-files`.

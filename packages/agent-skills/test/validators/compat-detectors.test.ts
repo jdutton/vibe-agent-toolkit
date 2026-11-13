@@ -1,4 +1,4 @@
-import { isPerRunParseRefusal } from '@vibe-agent-toolkit/resources';
+import { inMemoryContent, isPerRunParseRefusal } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
@@ -17,7 +17,7 @@ const LOCATION_ROOT = safePath.resolve('/project');
 
 /** The detectors over `content`, its frontmatter parsed once as a caller with no parse of its own does. */
 async function detect(content: string, filePath: string, locationRoot: string): Promise<DetectorOutput> {
-  return runCompatDetectors(content, filePath, locationRoot, await detectorFrontmatter(content, ROUTE));
+  return runCompatDetectors(content, filePath, locationRoot, await detectorFrontmatter(inMemoryContent(content), ROUTE));
 }
 
 /** Frontmatter line that declares a local-shell tool. */
@@ -236,7 +236,7 @@ const ALLOWED_TOOLS_SPELLINGS: ReadonlyArray<{
 describe('allowed-tools frontmatter spellings', () => {
   it.each(ALLOWED_TOOLS_SPELLINGS)('reads $label as its declarations', async ({ frontmatter, declarations }) => {
     const content = skill({ extraFrontmatter: frontmatter, body: 'Body.' });
-    expect(allowedToolsDeclarations(content, await detectorFrontmatter(content, ROUTE))).toEqual({ tools: declarations, line: 4 });
+    expect(allowedToolsDeclarations(content, await detectorFrontmatter(inMemoryContent(content), ROUTE))).toEqual({ tools: declarations, line: 4 });
   });
 
   it.each(ALLOWED_TOOLS_SPELLINGS)('gives $label the same local-shell verdict as the flow form', async ({ frontmatter, shell }) => {
@@ -251,7 +251,7 @@ describe('allowed-tools frontmatter spellings', () => {
     // The skill validator names this file SKILL_MISSING_FRONTMATTER on the same
     // run; the detector must not read a bogus declaration out of it.
     const content = skill({ extraFrontmatter: 'allowed-tools: [Read, Bash', body: bashBlock('ls') });
-    expect(allowedToolsDeclarations(content, await detectorFrontmatter(content, ROUTE))).toEqual({ tools: [], line: 0 });
+    expect(allowedToolsDeclarations(content, await detectorFrontmatter(inMemoryContent(content), ROUTE))).toEqual({ tools: [], line: 0 });
     const { evidence } = await detect(content, 'SKILL.md', LOCATION_ROOT);
     expect(evidence.map(e => e.patternId)).toEqual(['FENCED_SHELL_BLOCK']);
   });
@@ -259,12 +259,12 @@ describe('allowed-tools frontmatter spellings', () => {
   it('rethrows a parse the worker refused: an unread block is not "no allowed-tools"', async () => {
     const depth = 50_000;
     const content = skill({ extraFrontmatter: `allowed-tools: [Bash]\nnested: ${'['.repeat(depth)}${']'.repeat(depth)}`, body: 'Body.' });
-    const thrown: unknown = await detectorFrontmatter(content, ROUTE).then(() => undefined, (error: unknown) => error);
+    const thrown: unknown = await detectorFrontmatter(inMemoryContent(content), ROUTE).then(() => undefined, (error: unknown) => error);
     expect(isPerRunParseRefusal(thrown)).toBe(true);
   });
 
   it('declares nothing when the key is absent', async () => {
-    expect(allowedToolsDeclarations(skill({ body: 'Body.' }), await detectorFrontmatter(skill({ body: 'Body.' }), ROUTE))).toEqual({ tools: [], line: 0 });
+    expect(allowedToolsDeclarations(skill({ body: 'Body.' }), await detectorFrontmatter(inMemoryContent(skill({ body: 'Body.' })), ROUTE))).toEqual({ tools: [], line: 0 });
   });
 });
 

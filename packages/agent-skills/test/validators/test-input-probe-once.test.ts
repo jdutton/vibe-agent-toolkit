@@ -85,7 +85,7 @@ describe('validateSkillForPackaging - declared test-input resolution', () => {
       config: {},
     }));
 
-    await validateSkillForPackaging(skillPath, {}, {}, 'source', { unreadable: 'refuse', outputs: [], projectSkills });
+    await validateSkillForPackaging(skillPath, {}, {}, 'source', { dispatcher: undefined, unreadable: 'refuse', outputs: [], projectSkills });
 
     const expected = [tempDir, ...SIBLING_DIRS.map((n) => safePath.join(tempDir, n))].map(suitePathFor);
     // Every skill root IS reached — without this the count assertion below passes vacuously.
@@ -143,6 +143,7 @@ describe('a run-scoped conventional-suite probe', () => {
 
     for (const skillDir of skillDirs) {
       await validateSkillForPackaging(safePath.join(skillDir, 'SKILL.md'), {}, {}, 'source', {
+        dispatcher: undefined,
         unreadable: 'refuse',
         outputs: [],
         projectSkills,

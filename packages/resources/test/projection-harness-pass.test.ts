@@ -8,10 +8,11 @@
 import { compareCodeUnits, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, vi } from 'vitest';
 
-import { computeContentKey } from '../src/content-key.js';
+import { computeContentKey, inMemoryContent } from '../src/content-key.js';
 import { ParseLimitError, ParseWorkerDiedError } from '../src/parse-limits.js';
 import { BLOB_PARSE_LIMIT_EXCEEDED, BLOB_PARSE_WORKER_DIED } from '../src/projection/blob-population.js';
 import { describeBlobRefusals, notAdmittedRealizations } from '../src/projection/blob-refusals.js';
+import { RunContentCache } from '../src/projection/content-cache.js';
 import { extentContextId } from '../src/projection/contributors/context-id.js';
 import { CLAUDE_CODE, CLAUDE_OVERSIZE_BYTES } from '../src/projection/harness/claude-code.js';
 import { runHarnessPass, type HarnessContentReader, type HarnessFactsDeriver } from '../src/projection/harness/harness-pass.js';
@@ -36,18 +37,21 @@ function spiedDeriver(): HarnessFactsDeriver & ReturnType<typeof vi.fn> {
 
 /** A spied deriver that refuses `refused` with `error`, and reads every other file in-process. */
 function refusing(refused: string, error: Error): HarnessFactsDeriver & ReturnType<typeof vi.fn> {
-  return vi.fn((harness: Parameters<HarnessFactsDeriver>[0], content: string) =>
-    content === refused ? Promise.reject(error) : IN_PROCESS_HARNESS_FACTS(harness, content)) as HarnessFactsDeriver & ReturnType<typeof vi.fn>;
+  return vi.fn((harness: Parameters<HarnessFactsDeriver>[0], input: Parameters<HarnessFactsDeriver>[1]) =>
+    input.content === refused ? Promise.reject(error) : IN_PROCESS_HARNESS_FACTS(harness, input)) as HarnessFactsDeriver & ReturnType<typeof vi.fn>;
 }
 
 /** A reader over the fixture's own file map — never the disk. */
 function readerOver(files: Readonly<Record<string, string>>): HarnessContentReader {
-  return (entry) => Promise.resolve(files[entry.path] ?? null);
+  return (entry) => {
+    const content = files[entry.path];
+    return Promise.resolve(content === undefined ? null : inMemoryContent(content));
+  };
 }
 
 /** A builder holding the files — realizations, blobs, NO harness facts. */
 function builderFor(files: Readonly<Record<string, string>>, deferred: readonly string[] = []): ProjectionBuilder {
-  const builder = new ProjectionBuilder({ root: ROOT });
+  const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() });
   builder.addRoot({ id: builder.identities.rootId, path: ROOT });
   for (const [path, markdown] of Object.entries(files)) {
     addFile(builder, { path, refs: [], markdown, deferred: deferred.includes(path) }, ROOT);
@@ -220,7 +224,7 @@ describe('runHarnessPass', () => {
     };
     const realBlob = builderFor(files).base().blobs.find((row) => row.contentKey === keyOf(files['big.md']));
     if (realBlob === undefined) throw new Error('fixture: big.md has no blob row');
-    const builder = new ProjectionBuilder({ root: ROOT });
+    const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() });
     builder.addRoot({ id: builder.identities.rootId, path: ROOT });
     // Planted FIRST so `addFile`'s own blob row for these bytes is the duplicate:
     // the cliff is about `blobs.bytes`, and 4 MiB of real text would cost the
@@ -340,7 +344,7 @@ describe('runHarnessPass', () => {
   });
 
   it('refuses a projection with realizations and no root', () => {
-    const builder = new ProjectionBuilder({ root: ROOT });
+    const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() });
     addFile(builder, { path: 'CLAUDE.md', refs: [], markdown: '# acme\n' }, ROOT);
 
     expect(() => harnessFrontier(builder.base(), CLAUDE_CODE)).toThrow(/no root/);
@@ -367,8 +371,8 @@ describe('runHarnessPass', () => {
       'docs/b.md': '# b\n',
     };
     const builder = builderFor(files);
-    const reader: HarnessContentReader = (entry) =>
-      Promise.resolve(entry.path === 'docs/a.md' ? null : files[entry.path as keyof typeof files] ?? null);
+    const read = readerOver(files);
+    const reader: HarnessContentReader = (entry) => (entry.path === 'docs/a.md' ? Promise.resolve(null) : read(entry));
 
     const result = await runHarnessPass(builder, [CLAUDE_CODE], reader, IN_PROCESS_HARNESS_FACTS);
 
@@ -382,7 +386,7 @@ describe('runHarnessPass', () => {
     const builder = builderFor(files);
     // A pass that files neither a facts row nor a condition row for what it
     // derived — the shape that re-demanded the same key forever (ADR I8).
-    vi.spyOn(builder, 'addHarnessBlobFacts').mockImplementation(() => undefined);
+    vi.spyOn(builder, 'addHarnessBlobFacts').mockImplementation(() => false);
     const derive = spiedDeriver();
 
     await expect(runHarnessPass(builder, [CLAUDE_CODE], readerOver(files), derive))

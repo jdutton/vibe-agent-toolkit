@@ -63,8 +63,9 @@
 
 import { safePath, TextTooLargeError } from '@vibe-agent-toolkit/utils';
 
-import { isTextMimeType } from '../mime-type.js';
-import type { NotAdmittedLog } from '../not-admitted.js';
+import { isTextMimeType, parserKindForMimeType } from '../mime-type.js';
+import { type NotAdmittedLog, parseRefusal } from '../not-admitted.js';
+import { ParseLimitError } from '../parse-limits.js';
 import type { ParseRefusedResource, UnreadableResource } from '../resource-registry.js';
 
 import {
@@ -75,6 +76,7 @@ import {
   BLOB_PARSE_WORKER_DIED,
   BLOB_UNREADABLE,
 } from './blob-population.js';
+import { POPULATION_PARSE_LIMITS } from './content-cache.js';
 import { formatParseFailures, parseFailureOf } from './parse-failure.js';
 import type { Projection } from './projection.js';
 
@@ -116,7 +118,7 @@ const REFUSAL_CODE_SET: ReadonlySet<string> = new Set(REFUSAL_CODES.map(([code])
  */
 const UNKEYED_STATES = [
   ['unreadable', 'unreadable'],
-  ['oversize', 'too large to decode'],
+  ['oversize', 'refused by size'],
 ] as const;
 
 /**
@@ -336,16 +338,25 @@ function blobConditionEntry(row: Projection['blobConditions'][number]): NotAdmit
  * The entry for a realization with no content key: `unreadable` and `oversize`
  * are the two states in which the bytes are there and the run holds none of them.
  *
- * @param contentState - The realization's state
+ * An `oversize` file of a kind a parser reads was refused by its size at the population's parse
+ * input cap ({@link POPULATION_PARSE_LIMITS}, which is never above what a string can hold), so it
+ * is the parse-limit refusal the registry lane reports for the same file
+ * (`RESOURCE_PARSE_LIMIT_EXCEEDED`), in that lane's own sentence (`parseRefusal`), which names
+ * the cap and no size; one nothing parses was too large to decode, the registry lane's
+ * `TextTooLargeError`.
+ *
+ * @param row - The realization
  * @returns Its entry, or `undefined` when the state is not a refusal (`none`, `deferred`)
  */
-function unkeyedEntry(contentState: Projection['resourceRealizations'][number]['contentState']): NotAdmittedEntry | undefined {
-  if (contentState === 'unreadable') {
+function unkeyedEntry(row: Projection['resourceRealizations'][number]): NotAdmittedEntry | undefined {
+  if (row.contentState === 'unreadable') {
     return { log: 'unreadable', entry: { reason: 'its bytes could not be read when the realization was keyed' } };
   }
-  // The registry lane's code for the same file (`TextTooLargeError`), so both lanes name it alike.
-  if (contentState === 'oversize') return { log: 'unreadable', entry: { reason: 'too large to decode', code: TextTooLargeError.code } };
-  return undefined;
+  if (row.contentState !== 'oversize') return undefined;
+  if (parserKindForMimeType(row.mime) !== null) {
+    return { log: 'parseRefused', entry: parseRefusal(new ParseLimitError('inputBytes', POPULATION_PARSE_LIMITS.inputBytes)) };
+  }
+  return { log: 'unreadable', entry: { reason: 'too large to decode', code: TextTooLargeError.code } };
 }
 
 /**
@@ -356,11 +367,12 @@ function unkeyedEntry(contentState: Projection['resourceRealizations'][number]['
  * registry lane, never as though it were absent or admitted:
  *
  * - `unreadable`: a realization whose bytes could not be read or were too large
- *   to decode (`contentState` `unreadable` / `oversize`), and every realization
+ *   to decode (`contentState` `unreadable`, or `oversize` of a kind nothing parses), and every realization
  *   of a blob that could not be read, changed under the run, or whose parser
  *   threw (`BLOB_UNREADABLE`, `BLOB_CONTENT_CHANGED`, `BLOB_PARSE_FAILED`);
  * - `parseRefused`: every realization of a blob whose parse this run refused
- *   (`BLOB_PARSE_LIMIT_EXCEEDED`, `BLOB_PARSE_WORKER_DIED`).
+ *   (`BLOB_PARSE_LIMIT_EXCEEDED`, `BLOB_PARSE_WORKER_DIED`), and every `oversize`
+ *   realization of a kind a parser reads, refused at the input cap before it was read.
  *
  * Per REALIZATION, each path once: a condition row is per blob and carries only
  * the reason, so two files holding the same bytes each come back under their own
@@ -383,7 +395,7 @@ export function notAdmittedRealizations(
   const seen = new Set<string>();
   const log: { unreadable: UnreadableResource[]; parseRefused: ParseRefusedResource[] } = { unreadable: [], parseRefused: [] };
   for (const row of rows.resourceRealizations) {
-    const found = row.contentKey === null ? unkeyedEntry(row.contentState) : byBlob.get(row.contentKey);
+    const found = row.contentKey === null ? unkeyedEntry(row) : byBlob.get(row.contentKey);
     if (found === undefined || seen.has(row.path)) continue;
     seen.add(row.path);
     const filePath = safePath.resolve(root, row.path);

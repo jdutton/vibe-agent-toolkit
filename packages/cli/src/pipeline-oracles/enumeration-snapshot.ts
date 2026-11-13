@@ -83,6 +83,8 @@ export async function captureEnumerationSnapshot(
     const realization = await collectRealization(absolutePath, ORACLE_RESOURCE_ID, {
       root: corpusRoot,
       extentId: ORACLE_EXTENT_ID,
+      // The oracle keys each file for the bytes themselves and parses none: no run, no cap.
+      contentCache: null,
       ...(gitTracker !== undefined && { gitTracker }),
     });
     return toEnumerationRow(realization, absolutePath, corpusRoot);

@@ -120,7 +120,7 @@ every hazard the store enforces or accepts, with its status and its enforcer kin
 - **One diagnostic vocabulary:** one registered code family, dispatched on. Rejected: per-step code tables.
 - **The `row_set_key` preimage** is content, extractor identity, the contract module's code identity, options, declared inputs, schema digest and runtime; routing enters only as I4 says. Rejected: path, root, commit, tree hash and limits.
 - **A stored failure is keyed by the `row_set_key` preimage plus its limit, served only under it or a tighter one.** Rejected: keying failures like successes.
-- **No opt-in turns a refused pair into an answer;** `accept` admits `defective` only. Rejected: `accept: [refused]` (P1).
+- **No opt-in turns a refused pair into an answer;** `accept` admits `defective` only. Rejected: `accept: [refused]` (P1). `resources.validation` `allow` and `severity` govern only how a refused file is REPORTED: they may clear its finding, so a run exits 0 without it, but its pair never becomes facts, and packaging refuses every refused file it reaches, allowed or not.
 - **One file feeds several extractors, and each pair fails alone.** Rejected: one parser per kind.
 - **The manifest is static, checked before code loads, compatible by a digest of the contract's shape plus the contract module's source closure, no runtime tuple.** The contract module's runtime imports stay inside the contract package. Rejected: a version field, a peer range or a deprecation shim.
 - **Cross-file facts come from SQL; resolve is the escape hatch; relations needing git are core producers.** Rejected: everything as resolve.

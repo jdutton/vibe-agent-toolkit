@@ -17,7 +17,7 @@ describe.skipIf(process.platform === 'win32')('text-file readers — a named pip
   const suite = setupFifoSuite('vat-text-fifo-', 'pipe.md');
 
   it.for([
-    ['readDecodableBytes', (path: string) => readDecodableBytes(path)],
+    ['readDecodableBytes', (path: string) => readDecodableBytes(path, () => undefined)],
     ['readTextContent', (path: string) => readTextContent(path)],
   ] as const)('%s refuses it unopened-for-content, as an environmental EFTYPE', async ([, read]) => {
     const outcome = await outcomeOrHang(read(suite.fifo()));

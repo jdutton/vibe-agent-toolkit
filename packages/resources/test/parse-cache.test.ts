@@ -1061,7 +1061,7 @@ describe('ParseCache stats', () => {
 /** One bounded parse of `keyed` through `cache` — the dispatcher's cache front. */
 function parseKeyedThrough(keyed: KeyedContent, cache: ParseCache): Promise<ParseResult> {
   if (keyed.parserKind === 'none') throw new Error('test fixture: no parser routes a `none` document');
-  return parseContentCached(keyed.content, keyed.parserKind, { cache });
+  return parseContentCached(keyed.content, keyed.parserKind, { dispatcher: undefined, cache });
 }
 
 describe('the dispatcher\'s cache front (parseContentCached)', () => {

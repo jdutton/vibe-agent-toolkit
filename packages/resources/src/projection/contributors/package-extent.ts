@@ -266,7 +266,7 @@ function realization(
     extentId,
     // A package's files are also filesystem- and git-extent members, so this
     // contributor should never be the one paying for the read.
-    ...(base.contentCache !== undefined && { contentCache: base.contentCache }),
+    contentCache: base.contentCache,
     // Same reasoning, and the same run-wide instance: a file this extent shares
     // with the filesystem extent must be TYPED the same way in both, or one
     // realization's `mime` disagrees with the other's for the same path.

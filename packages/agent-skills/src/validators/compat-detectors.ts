@@ -12,7 +12,7 @@
  * is called against every emitted record).
  */
 
-import { isPerRunParseRefusal, type ParseRoute } from '@vibe-agent-toolkit/resources';
+import { isPerRunParseRefusal, type MeasuredContent, type ParseRoute } from '@vibe-agent-toolkit/resources';
 import { CODE_REGISTRY, type IssueCode, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
@@ -84,8 +84,8 @@ function* iterCodeBlocks(
  * parse worker refused for this run throws that refusal — refused is not
  * "declares nothing", and the caller names the file unchecked.
  */
-export async function detectorFrontmatter(content: string, route: ParseRoute): Promise<Record<string, unknown> | undefined> {
-  const parsed = await parseFrontmatter(content, route);
+export async function detectorFrontmatter(input: MeasuredContent, route: ParseRoute): Promise<Record<string, unknown> | undefined> {
+  const parsed = await parseFrontmatter(input, route);
   if (parsed.success) return parsed.frontmatter;
   if (isPerRunParseRefusal(parsed.cause)) throw parsed.cause;
   return undefined;

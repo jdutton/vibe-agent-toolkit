@@ -8,8 +8,10 @@ import {
   partitionNotAdmitted,
   parseFileCached,
   type ParseDispatcher,
+  readContentForParse,
   resolveLocalHref,
   type LinkType,
+  type MeasuredContent,
   withParseDispatcher,
 } from '@vibe-agent-toolkit/resources';
 import {
@@ -105,12 +107,22 @@ async function validateSkillOn(options: ValidateOptions, dispatcher: ParseDispat
     return buildResult(skillPath, isVATGenerated, issues, policy);
   }
 
-  // Read file
-  const content = fs.readFileSync(skillPath, 'utf-8');
+  // Read file — held to the parse input cap by its size before it is read, as every lane that
+  // parses it is: past the cap, the limit, never a frontmatter parse of the block at its top.
+  let read: MeasuredContent;
+  try {
+    read = await readContentForParse(skillPath, 'markdown', { dispatcher });
+  } catch (error) {
+    const refused = parseRefusalIssue(error, skillPath, locationRoot);
+    if (refused === undefined) throw error;
+    issues.push(refused);
+    return buildResult(skillPath, isVATGenerated, issues, policy);
+  }
+  const { content } = read;
   const lineCount = content.split('\n').length;
 
   // Parse frontmatter
-  const parseResult = await parseFrontmatter(content, { dispatcher });
+  const parseResult = await parseFrontmatter(read, { dispatcher });
 
   if (!parseResult.success) {
     // Frontmatter the worker refused (a limit, a dead worker) is there, and is

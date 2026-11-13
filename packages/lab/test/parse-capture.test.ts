@@ -144,6 +144,7 @@ const SEAM_SOURCE = [
   '    threadId,',
   '    cache: { hits, misses: docs },',
   '    tier: [],',
+  '    reuseHeap: { settledMibTotal: 0, settledMibMax: 0 },',
   '    kinds: [',
   '      {',
   `        kind: ${JSON.stringify(MARKDOWN)},`,

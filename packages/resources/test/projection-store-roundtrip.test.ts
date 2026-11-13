@@ -57,6 +57,9 @@ import type { JsonValue } from '../src/schemas/projection-shared.js';
 import { FakeProjectionStore } from './fake-projection-store.js';
 import { setupSubdirTestSuite, useCorpusSuite } from './test-helpers.js';
 
+/** A self-referencing YAML anchor: it nests without end, so `outputDepth` refuses it at once. */
+const CYCLIC_FRONTMATTER_DOC = '---\ncyc: &anchor\n  self: *anchor\n---\n\n# Cyclic\n';
+
 // ---------------------------------------------------------------------------
 // Fixture
 // ---------------------------------------------------------------------------
@@ -433,11 +436,13 @@ describe('populate through a projection store', () => {
       // and every run re-derives the whole population while it persists. That
       // cost is allowed only counted and named: never a silent miss.
       //
-      // Refused at its input size, which the pool decides before any thread
-      // parses it: which limit refuses is not under test, and a row-cap breach
-      // parses 16,385 links on every run (~0.8 s each here, past the 15 s test
-      // timeout on a loaded CI box).
-      await writeFile(safePath.join(suite.tempDir, 'huge.md'), 'x'.repeat(resolveParseLimits(undefined).inputBytes + 1), 'utf-8');
+      // Refused at its nesting depth: a self-referencing YAML anchor nests
+      // without end, so `outputDepth` stops it at once. Which limit refuses is
+      // not under test, and a row-cap breach parses 16,385 links on every run
+      // (~0.8 s each here, past the 15 s test timeout on a loaded CI box). Not
+      // the input cap: a file past it is refused by its size before it is read,
+      // an `oversize` row the store holds (the test below).
+      await writeFile(safePath.join(suite.tempDir, 'deep.md'), CYCLIC_FRONTMATTER_DOC, 'utf-8');
       const store = new FakeProjectionStore();
 
       const cold = await run({ registry: filesystemAndClosure(), store });
@@ -450,6 +455,21 @@ describe('populate through a projection store', () => {
         'store miss: 1 refused pair is held by no store, so the whole population was re-derived; it is re-derived on every run while the refusal persists',
       );
       expect(describeStoreMiss(storeMissOf(cold.outcome))).toBeUndefined();
+    });
+
+    it('holds a file past the input cap as a row, so it costs no store miss', async () => {
+      // Refused by its size before a byte is read, as the parse would refuse it:
+      // an `oversize` realization with no key, not a refused pair. The cap is in
+      // the store key, so the verdict is a fact the store may hold.
+      await writeFile(safePath.join(suite.tempDir, 'huge.md'), 'x'.repeat(resolveParseLimits(undefined).inputBytes + 1), 'utf-8');
+      const store = new FakeProjectionStore();
+
+      const cold = await run({ registry: filesystemAndClosure(), store });
+      const warm = await run({ registry: filesystemAndClosure(), store });
+
+      expect(cold.outcome).toEqual({ population: 'derived', stored: 'written' });
+      expect(warm.outcome).toEqual({ population: 'store', stored: 'hit' });
+      expect(warm.document).toBe(cold.document);
     });
   });
 

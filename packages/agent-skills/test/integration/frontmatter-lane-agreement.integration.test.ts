@@ -26,7 +26,7 @@
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import { isPerRunParseRefusal, parseFileCached } from '@vibe-agent-toolkit/resources';
+import { inMemoryContent, isPerRunParseRefusal, parseFileCached } from '@vibe-agent-toolkit/resources';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -70,7 +70,7 @@ async function crawlVerdict(file: string): Promise<Verdict> {
 
 /** The skill lane's verdict on the same bytes. */
 async function skillVerdict(content: string): Promise<Verdict> {
-  const skill = await parseFrontmatter(content, ROUTE);
+  const skill = await parseFrontmatter(inMemoryContent(content), ROUTE);
   if (skill.success) return { notAMapping: false, keys: Object.keys(skill.frontmatter) };
   if (skill.cause !== undefined) return { refused: refusalCode(skill.cause) };
   return { notAMapping: skill.error.includes('not a YAML mapping'), keys: null };

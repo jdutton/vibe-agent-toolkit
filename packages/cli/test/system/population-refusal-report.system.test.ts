@@ -21,9 +21,11 @@
  * derives.
  */
 
-import { chmodSync, rmSync } from 'node:fs';
+import { chmodSync, rmSync, truncateSync } from 'node:fs';
 
+import { ParseLimitError, parseRefusal } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { MAX_DECODABLE_BYTES } from '@vibe-agent-toolkit/utils/fs';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
@@ -429,7 +431,7 @@ describe('a link anchor into a refused file (system test)', () => {
     const unverified = report.findings.filter((finding) => finding.code === 'LINK_TARGET_UNREADABLE');
 
     expect(unverified, stderr).toStrictEqual([expect.objectContaining({ severity: 'error', location: 'docs/a.md' })]);
-    expect(unverified[0]?.message).toContain('its parse was refused (its parse was stopped at its outputDepth limit');
+    expect(unverified[0]?.message).toMatch(/its parse was stopped at its outputDepth limit \([^)]*\), so its anchors are unverified/);
     expect(unverified[0]?.message).toContain('its anchors are unverified');
     expect(status).toBe(1);
   });
@@ -520,5 +522,43 @@ describe.skipIf(CANNOT_DENY_READS)('an unreadable file, in every verb that crawl
     // The registry's crawl names the errno; the population records the state
     // `unreadable` and no errno, so `check` says the same clause without it.
     expect([...reasons].sort((a, b) => a.localeCompare(b))).toStrictEqual(['could not be read', 'could not be read (EACCES)']);
+  });
+});
+
+// A document past the parse input cap is refused by its size, before it is read, on every lane:
+// `validate` meets it in the registry's read, `check` as a realization of the population. Sparse,
+// and past what any string can hold, so a lane that read it first could not refuse it as the cap.
+// No repository, so no snapshot reads it either.
+describe('a document past the parse input cap, in every verb that crawls (system test)', () => {
+  let oversize: string;
+
+  beforeAll(() => {
+    scratch = createIsolatedScratch('vat-not-admitted-oversize-');
+    oversize = writeCorpus(safePath.join(scratch, 'oversize'), {
+      'vibe-agent-toolkit.config.yaml': 'resources:\n  include: ["docs/**/*.md"]\n',
+      'docs/a.md': '# A\n',
+      'docs/huge.md': '',
+    });
+    truncateSync(safePath.join(oversize, 'docs/huge.md'), MAX_DECODABLE_BYTES + 1);
+  });
+
+  afterAll(() => {
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
+  it('fails validate and check alike, with RESOURCE_PARSE_LIMIT_EXCEEDED at its path, in one identical sentence', async () => {
+    // The default cap, in the sentence every lane gives a parse refused at a limit, naming the cap
+    // alone: a realization records no size, so no lane says one.
+    const reason = parseRefusal(new ParseLimitError('inputBytes', 8 * 1024 * 1024)).reason;
+    for (const args of [['resources', 'validate'], ['resources', 'check']]) {
+      const { status, report, stderr } = await published(oversize, args);
+      const verb = `${args.join(' ')}: ${stderr}`;
+      const found = report.findings.filter((finding) => finding.location === 'docs/huge.md');
+
+      expect(found, verb).toStrictEqual([expect.objectContaining({ code: REFUSED_CODE, severity: 'error' })]);
+      // The whole reason clause, bounded on both sides, so a lane that spells the cap its own way fails.
+      expect(found[0]?.message, verb).toContain(`'docs/huge.md' was enumerated but ${reason}, so `);
+      expect(status, verb).toBe(1);
+    }
   });
 });

@@ -425,7 +425,7 @@ describe('settings compatibility checker — the allowed-tools value', () => {
     await writeSkill(getFixture(), MALFORMED_ALLOWED_TOOLS);
 
     const { conflicts, unchecked } = await checkSettingsCompatibility(getFixture().pluginDir, settingsDenying('*'), parseDispatcher());
-    const verdict = await validateSkill({ resourcesValidation: {}, side: 'source', skillPath: getFixture().skillFile, validation: {} });
+    const verdict = await validateSkill({ dispatcher: undefined, resourcesValidation: {}, side: 'source', skillPath: getFixture().skillFile, validation: {} });
 
     expect(conflicts).toEqual([]);
     const tell = verdict.issues.find((issue) => issue.code === 'SKILL_MISSING_FRONTMATTER');

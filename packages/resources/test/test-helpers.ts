@@ -31,6 +31,7 @@ import type { FragmentIndex, ValidateLinkOptions as LinkValidatorOptions } from 
 import { validateLink } from '../src/link-validator.js';
 import { mimeTypeForPath } from '../src/mime-type.js';
 import { resolveParseLimits, workerHeapCeilingMb } from '../src/parse-limits.js';
+import { RunContentCache } from '../src/projection/content-cache.js';
 import { ContributorRegistry, type ExtentContribution, type ExtentContributor } from '../src/projection/contributor.js';
 import { ClosureExtentContributor } from '../src/projection/contributors/closure-extent.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
@@ -536,7 +537,7 @@ async function parseFileInProcess(
   filePath: string,
   parse: (content: string, sizeBytes: number) => ParseResult,
 ): Promise<ParseResult> {
-  const bytes = await readDecodableBytes(filePath);
+  const bytes = await readDecodableBytes(filePath, () => undefined);
   return parse(decodeTextContent(bytes).text, bytes.byteLength);
 }
 
@@ -788,7 +789,7 @@ export async function buildExtentContribution(
 ): Promise<{ contribution: ExtentContribution; rootId: string }> {
   const tracker = new GitTracker(root);
   await tracker.initialize({ includeUntracked: true });
-  const builder = new ProjectionBuilder({ root, gitTracker: tracker });
+  const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache() });
 
   return {
     contribution: await contributor.contribute(builder.base(), null),

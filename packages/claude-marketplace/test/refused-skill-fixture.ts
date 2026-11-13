@@ -16,6 +16,17 @@ import * as fs from 'node:fs/promises';
 import { createSymlinkAsync, forEachInOrder, normalizedTmpdir, safePath, type SymlinkCapability } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll } from 'vitest';
 
+import type { EffectiveSettings } from '../src/settings/settings-merger.js';
+
+/** Settings a managed policy uses to deny `Bash` — the rule {@link BASH_SKILL} conflicts with. */
+export const DENY_BASH: EffectiveSettings = {
+  permissions: {
+    allow: [],
+    ask: [],
+    deny: [{ rule: 'Bash', provenance: { level: 'managed', file: 'managed-settings.json' } }],
+  },
+};
+
 export const BASH_SKILL = (name: string): string =>
   `---\nname: ${name}\ndescription: declares Bash\nallowed-tools: Bash\n---\n# ${name}\n`;
 

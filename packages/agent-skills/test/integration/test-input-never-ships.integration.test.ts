@@ -364,7 +364,7 @@ describe('a skill\'s bundle never carries another skill\'s eval suite (integrati
       skillPath,
       {}, { test: { evals: SUBJECT_EVALS } },
       'source',
-      { unreadable: 'refuse', outputs: [], projectSkills: projectSkills() },
+      { dispatcher: undefined, unreadable: 'refuse', outputs: [], projectSkills: projectSkills() },
     );
 
     expect(activeWarningsOf(validated).map((i) => String(i.code))).toContain('PACKAGED_TEST_INPUT');

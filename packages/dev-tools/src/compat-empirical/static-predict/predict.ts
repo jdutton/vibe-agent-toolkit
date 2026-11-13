@@ -92,7 +92,7 @@ export async function predictForSkill(options: PredictOptions): Promise<StaticPr
 
   try {
     // A corpus skill has no governing VAT config: default severities.
-    const result = await validateSkill({ skillPath, validation: {}, resourcesValidation: {}, side: 'source' });
+    const result = await validateSkill({ skillPath, validation: {}, resourcesValidation: {}, side: 'source', dispatcher: undefined });
 
     // validateSkill does not throw on malformed SKILL.md — it returns
     // error-severity issues (`summary.errors > 0`) and leaves evidence undefined. Surface

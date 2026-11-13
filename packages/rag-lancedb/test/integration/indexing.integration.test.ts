@@ -51,7 +51,7 @@ async function indexTestChunksWithMetadata<TMetadata extends Record<string, unkn
 
   const resource = await createTestResource(doc, 'test-doc');
   const parseResult = await import('@vibe-agent-toolkit/resources').then((m) =>
-    m.parseFileCached(doc, 'markdown')
+    m.parseFileCached(doc, 'markdown', { dispatcher: undefined })
   );
   const chunks = chunkResource(
     { ...resource, content: parseResult.content, frontmatter: {} },
@@ -486,7 +486,7 @@ Content for section 4 with even more text.`
       // Index security document
       const securityResource = await createTestResource(securityDoc, 'security-doc');
       const securityParseResult = await import('@vibe-agent-toolkit/resources').then((m) =>
-        m.parseFileCached(securityDoc, 'markdown')
+        m.parseFileCached(securityDoc, 'markdown', { dispatcher: undefined })
       );
       const securityChunks = chunkResource(
         { ...securityResource, content: securityParseResult.content, frontmatter: {} },
@@ -520,7 +520,7 @@ Content for section 4 with even more text.`
       // Index API document
       const apiResource = await createTestResource(apiDoc, 'api-doc');
       const apiParseResult = await import('@vibe-agent-toolkit/resources').then((m) =>
-        m.parseFileCached(apiDoc, 'markdown')
+        m.parseFileCached(apiDoc, 'markdown', { dispatcher: undefined })
       );
       const apiChunks = chunkResource(
         { ...apiResource, content: apiParseResult.content, frontmatter: {} },
@@ -981,7 +981,7 @@ This document covers authentication and authorization.`
 
       // Manually parse to get frontmatter (simulating what ResourceRegistry does)
       await import('@vibe-agent-toolkit/resources').then((m) =>
-        m.parseFileCached(fileWithFrontmatter, 'markdown')
+        m.parseFileCached(fileWithFrontmatter, 'markdown', { dispatcher: undefined })
       );
 
       // Verify frontmatter is actually in the resource before indexing

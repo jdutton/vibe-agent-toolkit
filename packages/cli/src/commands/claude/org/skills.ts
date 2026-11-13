@@ -29,9 +29,10 @@ import type {
   MultipartResult,
   OrgApiClient,
 } from '@vibe-agent-toolkit/claude-marketplace';
+import { parseInputRefusal, withParseDispatcher } from '@vibe-agent-toolkit/resources';
 import { createAllowUsageLedger, runValidationFramework } from '@vibe-agent-toolkit/schema';
 import type { RefusalCode, ValidationConfig, ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { ARCHIVE_REFUSED_CODE, archiveEntryPlace, direntKindFollowingSync, everywhere, forEachInOrder, isAbsoluteAnyPlatform, isArchiveEntryReadRefusal, isVatError, pathPresent, requireFollowedStatSync, safePath, toForwardSlash, toForwardSlashAnyPlatform, withTempDir } from '@vibe-agent-toolkit/utils';
+import { ARCHIVE_REFUSED_CODE, archiveEntryPlace, decodeTextContent, direntKindFollowingSync, everywhere, forEachInOrder, isAbsoluteAnyPlatform, isArchiveEntryReadRefusal, isVatError, pathPresent, requireFollowedStatSync, safePath, toForwardSlash, toForwardSlashAnyPlatform, withTempDir } from '@vibe-agent-toolkit/utils';
 // Type-only: the runtime import stays lazy inside `inspectZipArchive`, so the
 // archive readers are loaded on the one path that parses an archive.
 import type { ArchiveEntry, ArchiveRefusedError, OpenedArchive } from '@vibe-agent-toolkit/utils/archive';
@@ -697,10 +698,12 @@ export interface ZipUnreadable {
 }
 
 /**
- * The largest single markdown member this will decompress to read.
+ * The largest single markdown member this will decompress for the portability
+ * checks ({@link ZipInspection.documents}). Never the elected SKILL.md's bound:
+ * its name is read under the parse input cap, as on every lane ({@link declaredNameOf}).
  *
  * Not a limit on what may be PUBLISHED — the API's own ceiling decides that, and
- * a bigger document simply goes unread rather than refused. It bounds the
+ * a bigger document simply goes unchecked rather than refused. It bounds the
  * allocations this module performs on attacker-supplied metadata: reading an
  * entry inflates up to the size its header claims, and a header can claim
  * anything. A megabyte is two orders of magnitude above any real skill document.
@@ -746,8 +749,9 @@ const MAX_INSPECTED_DOCUMENT_BYTES = 1024 * 1024;
  * caller's uncompressed-total gate, so the ceiling this function exists to
  * enforce could not protect the inflation this function performed. Nothing is
  * written to disk — that part stands — but the decompression is now ordered
- * after the total is known and bounded by {@link MAX_INSPECTED_DOCUMENT_BYTES},
- * so an archive declaring a 4 GiB SKILL.md is enumerated and never inflated.
+ * after the total is known, and each entry is bounded — a document by
+ * {@link MAX_INSPECTED_DOCUMENT_BYTES}, the elected SKILL.md by the parse input
+ * cap — so an archive declaring a 4 GiB SKILL.md is enumerated and never inflated.
  *
  * 🔑 **The archive is read through the ONE archive primitive, and held to its ONE
  * entry policy.** An archive holding an entry VAT would refuse to extract — a
@@ -914,13 +918,32 @@ function skillMdOf(files: readonly ArchiveEntry[], root: string): ArchiveEntry |
  * An elected SKILL.md that will not inflate costs only the name (the size total
  * is already computed from headers) — see {@link inflateOrRecord}, which records
  * the refusal so the operator learns why no name was read.
+ *
+ * It is held to the parse input cap by its declared size BEFORE it is inflated —
+ * the refusal `readContentForParse` makes of a SKILL.md on disk, so the same
+ * document is the same `ParseLimitError` on either lane, never "declares no
+ * name" here and refused there. The inflation this permits is bounded twice: by
+ * the cap, and by the archive's declared total, gated against
+ * {@link API_SKILL_MAX_UPLOAD_BYTES} before anything is inflated. A header that
+ * lies about the size is refused by the read, which checks what it inflated.
  */
 function declaredNameOf(archive: OpenedArchive, entry: ArchiveEntry | undefined, unreadable: ZipEntryFailure[]): Promise<string | undefined> {
-	if (entry === undefined || entry.size > MAX_INSPECTED_DOCUMENT_BYTES) return Promise.resolve(undefined);
-	const content = inflateOrRecord(archive, entry, unreadable);
-	if (content === undefined) return Promise.resolve(undefined);
-	// A parse the worker refused is the run's refusal, never "declares no name".
-	return declaredNameOrRefuse(toForwardSlashAnyPlatform(entry.name), declaredSkillNameIn(content.toString('utf8')), '');
+	if (entry === undefined) return Promise.resolve(undefined);
+	const skillMdPath = toForwardSlashAnyPlatform(entry.name);
+	return withParseDispatcher((dispatcher) => {
+		const read = (): Promise<string | undefined> => {
+			const tooLarge = parseInputRefusal(entry.size, { dispatcher });
+			if (tooLarge !== undefined) return Promise.reject(tooLarge);
+			const bytes = inflateOrRecord(archive, entry, unreadable);
+			// Decoded as the disk lane decodes (a BOM, UTF-16 included), and measured in the entry's
+			// own bytes, the unit its declared size was held to.
+			return bytes === undefined
+				? Promise.resolve(undefined)
+				: declaredSkillNameIn({ content: decodeTextContent(bytes).text, byteLength: bytes.length }, { dispatcher });
+		};
+		// A parse refused for this run is the run's refusal, never "declares no name".
+		return declaredNameOrRefuse(skillMdPath, read(), '');
+	});
 }
 
 async function sendSkillUpload(
@@ -942,7 +965,7 @@ async function sendSkillUpload(
  * title and the top-level directory the API keys it by.
  */
 async function requireDeclaredName(skillMdPath: string): Promise<string> {
-	const declared = await declaredNameOrRefuse(skillMdPath, readDeclaredSkillName(skillMdPath), safePath.join(skillMdPath, '..', '..'));
+	const declared = await declaredNameOrRefuse(skillMdPath, readDeclaredSkillName(skillMdPath, { dispatcher: undefined }), safePath.join(skillMdPath, '..', '..'));
 	if (declared === undefined) {
 		throw new CommandRefusalError(
 			'USAGE_INVALID',

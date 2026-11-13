@@ -56,12 +56,12 @@ describe('registerBundledAssets on a broken install', () => {
     const skillPath = safePath.join(dir, 'SKILL.md');
     const frontmatter = createFrontmatter({ name: 'broken-install', description: 'Uses its pages ' + nonce });
     writeFileSync(skillPath, `${frontmatter}\n\n# Pages\n\n${links}\n`, 'utf-8');
-    await parseFileCached(skillPath, 'markdown');
+    await parseFileCached(skillPath, 'markdown', { dispatcher: undefined });
 
     const entry = safePath.join(dir, 'dying-worker.mjs');
     writeFileSync(
       entry,
-      "import { parentPort } from 'node:worker_threads';\nparentPort.postMessage({ ready: true });\nparentPort.on('message', () => { process.exit(3); });\n",
+      "import { parentPort } from 'node:worker_threads';\nparentPort.postMessage({ ready: true, collector: true });\nparentPort.on('message', () => { process.exit(3); });\n",
       'utf-8',
     );
     seam = (await import(BUILT_POOL)) as PoolTestSeam;

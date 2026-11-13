@@ -74,8 +74,8 @@ import { z } from 'zod';
 
 import { type DumpKind, type DumpsRefusal, readDumpFiles } from '../../harness/dumps.js';
 
-import type { ParseAttribution, ParsePassStats } from './types.js';
-import { parsePassShape } from './types.js';
+import type { ParseAttribution, ParsePassStats, ParseReuseHeapStats } from './types.js';
+import { parsePassShape, parseReuseHeapSchema } from './types.js';
 
 /**
  * The variable that switches the seam on, and whose VALUE is the directory the
@@ -150,6 +150,13 @@ export interface ParseThreadDump {
    * crossings — never a parser pass and never inside a kind group.
    */
   readonly tier: readonly ParseDumpPass[];
+  /**
+   * The heap the pool's reused-thread checks settled to. Nonzero only on a main thread, which
+   * records the checks every worker reports. See {@link ParseReuseHeapStats}. Absent from a build
+   * that predates the check (0.2.0-rc.14 and earlier), whose dumps stay readable: read as `null`,
+   * and the run's reused-thread heap is then not measured, never zero.
+   */
+  readonly reuseHeap: ParseReuseHeapStats | null;
 }
 
 /**
@@ -282,6 +289,7 @@ const threadDumpSchema = z
     // absolute cost that stands alone, and a build whose tier does nothing has
     // nothing to say rather than something to hide.
     tier: z.array(passRowSchema),
+    reuseHeap: parseReuseHeapSchema.nullable().default(null),
   })
   .strict()
   .refine(totalsNameTheirKind, { message: MISLABELLED_TOTAL_MESSAGE })
@@ -386,6 +394,11 @@ export interface MergedParseDumps {
    * denominator they do not belong to. See {@link TierPassStats}.
    */
   readonly tier: readonly TierPassStats[];
+  /**
+   * Every thread's {@link ParseThreadDump.reuseHeap}: totals summed, the max the largest; `null`
+   * when no thread reported one, as no build before the check does.
+   */
+  readonly reuseHeap: ParseReuseHeapStats | null;
   /** Documents parsed across every kind. */
   readonly documents: number;
   readonly bytes: number;
@@ -477,6 +490,8 @@ interface KindBucket {
 interface DumpTotals {
   cacheHits: number;
   cacheMisses: number;
+  /** `null` until a thread reports a reused-thread heap: see {@link ParseThreadDump.reuseHeap}. */
+  reuseHeap: { settledMibTotal: number; settledMibMax: number } | null;
 }
 
 /** One process's lifetime, as the dumps that share its pid report it. */
@@ -589,6 +604,10 @@ function addTierRows(into: Map<string, TierBucket>, thread: ParseThreadDump): vo
 function addThreadTotals(totals: DumpTotals, thread: ParseThreadDump): void {
   totals.cacheHits += thread.cache.hits;
   totals.cacheMisses += thread.cache.misses;
+  if (thread.reuseHeap === null) return;
+  totals.reuseHeap ??= { settledMibTotal: 0, settledMibMax: 0 };
+  totals.reuseHeap.settledMibTotal += thread.reuseHeap.settledMibTotal;
+  totals.reuseHeap.settledMibMax = Math.max(totals.reuseHeap.settledMibMax, thread.reuseHeap.settledMibMax);
 }
 
 /**
@@ -669,7 +688,7 @@ export function mergeParseDumps(dumps: readonly ParseDump[]): MergedParseDumps {
   const lifetime: LifetimeBucket = { wallMs: 0, cpuUserMs: 0, cpuSystemMs: 0 };
   const byKind = new Map<string, KindBucket>();
   const byTierPass = new Map<string, TierBucket>();
-  const totals: DumpTotals = { cacheHits: 0, cacheMisses: 0 };
+  const totals: DumpTotals = { cacheHits: 0, cacheMisses: 0, reuseHeap: null };
   let mainThreads = 0;
   let workerThreads = 0;
 
@@ -693,6 +712,7 @@ export function mergeParseDumps(dumps: readonly ParseDump[]): MergedParseDumps {
     workerThreads,
     kinds,
     tier: [...byTierPass.values()].map((bucket) => ({ ...bucket })),
+    reuseHeap: totals.reuseHeap === null ? null : { ...totals.reuseHeap },
     documents,
     bytes: acrossKinds(kinds, (kind) => kind.bytes),
     cacheHits: totals.cacheHits,

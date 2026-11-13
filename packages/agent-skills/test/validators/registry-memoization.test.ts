@@ -283,6 +283,7 @@ describe('validateSkillForPackaging — routes its private crawl through the sha
     const { source, calls } = countingSource(root, ['SKILL.md', 'b.md']);
 
     const result = await validateSkillForPackaging(skillPath, {}, undefined, 'source', {
+      dispatcher: undefined,
       unreadable: 'refuse',
       outputs: [],
       populationSource: source,
@@ -298,7 +299,7 @@ describe('validateSkillForPackaging — routes its private crawl through the sha
   it('does not memoize the crawl of a skill that sits in no project', async () => {
     const { root, skillPath } = chainRoot();
     const { source, calls } = countingSource(root, ['SKILL.md', 'a.md', 'b.md']);
-    const shared = { unreadable: 'refuse', outputs: [], populationSource: source } as const;
+    const shared = { unreadable: 'refuse', outputs: [], populationSource: source, dispatcher: undefined } as const;
 
     await validateSkillForPackaging(skillPath, {}, undefined, 'source', shared);
     await validateSkillForPackaging(skillPath, {}, undefined, 'source', shared);
@@ -560,7 +561,7 @@ describe('validateSkillForPackaging — the calling verb declares the side of th
     resetPackagingRegistryCache();
     const { root, skillPath } = chainRoot();
 
-    await expect(withReaddirSyncRefused(root, 'ENOENT', () => validateSkillForPackaging(skillPath, {}, undefined, 'source', { unreadable: 'refuse', outputs: [safePath.join(root, 'dist')] })))
+    await expect(withReaddirSyncRefused(root, 'ENOENT', () => validateSkillForPackaging(skillPath, {}, undefined, 'source', { dispatcher: undefined, unreadable: 'refuse', outputs: [safePath.join(root, 'dist')] })))
       .rejects.toMatchObject({ code: FS_FAULT_CODE, side: 'destination', faultClass: 'absent' });
   });
 });

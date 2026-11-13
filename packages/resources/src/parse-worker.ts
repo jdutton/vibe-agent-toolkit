@@ -46,11 +46,23 @@
  * which is what lets the queued reply — the timing message included — leave.
  */
 
-import { parentPort, workerData } from 'node:worker_threads';
+import v8 from 'node:v8';
+import { parentPort, resourceLimits, workerData } from 'node:worker_threads';
 
 import type { ParseResult } from './link-parser.js';
 import { ParseCache, type ParserModuleKind } from './parse-cache.js';
-import { factsOutputBreach, isStackOverflow, outputBreach, type ParseLimits } from './parse-limits.js';
+import { acquireCollector } from './parse-collector.js';
+import {
+  factsOutputBreach,
+  heapBounds,
+  isStackOverflow,
+  outputBreach,
+  type ParseLimits,
+  reusedThreadHeapMb,
+  settleReusedHeap,
+  v8HeapFlags,
+  workerHeapGeometry,
+} from './parse-limits.js';
 import {
   describeParseFailure,
   type ParseWorkerData,
@@ -77,6 +89,43 @@ if (parentPort === null) {
 
 /** Narrowed once, so every use below is free of the `null` case. */
 const port = parentPort;
+
+/**
+ * How long one thread may hold the pool's collector lock before another takes it from it, in ms:
+ * the hold is one context creation (milliseconds), so a holder past this died holding it.
+ */
+const COLLECTOR_LOCK_STALE_MS = 2000;
+
+/**
+ * Force a full collection of this thread's heap, or `null` when this runtime would not give one:
+ * what a reused thread runs before its next job when it holds too much (`settleReusedHeap`). Taken
+ * once, as this module loads, under the pool's lock — see `parse-collector.ts`.
+ */
+const collectGarbage = acquireCollector(new Int32Array((workerData as ParseWorkerData).collectorLock), COLLECTOR_LOCK_STALE_MS);
+
+/**
+ * This thread's young generation and the process's heap flags, read once — the same reading the
+ * pool's sampler makes of this thread (`workerHeapGeometry`).
+ */
+const heapGeometry = workerHeapGeometry(resourceLimits, v8HeapFlags(process.env['NODE_OPTIONS'], process.execArgv));
+
+/**
+ * Settle this reused thread's heap before a job — see `settleReusedHeap` — against its bound
+ * (`reusedThreadHeapMb` of the bound the pool applies to this thread, read as the pool reads it),
+ * and tell the parent what it holds (`ParseWorkerReuseCheck`).
+ *
+ * @param id - The job's id
+ * @returns Whether the thread is retired: it then runs nothing, and the parent stops it
+ */
+function settledForJob(id: number): boolean {
+  const { appliedMb } = heapBounds(v8.getHeapStatistics(), heapGeometry, workerLimits().heapMb);
+  const read = (): number => v8.getHeapStatistics().used_heap_size;
+  // With no collector, a thread past the bound is retired rather than collected: a thread start,
+  // never a verdict decided by what earlier jobs left.
+  const check = settleReusedHeap(reusedThreadHeapMb(appliedMb), read, collectGarbage, () => performance.now());
+  port.postMessage({ id, reuseCheck: check });
+  return check.retire;
+}
 
 /**
  * What the PARSER threw over a document's bytes, held apart from every other
@@ -118,10 +167,10 @@ const announcedKinds = new Set<ParserModuleKind>();
  *
  * @param kind - The parser kind that has just loaded
  */
-function announceLoaded(kind: ParserModuleKind): void {
+function announceLoaded(kind: ParserModuleKind, id: number): void {
   if (announcedKinds.has(kind)) return;
   announcedKinds.add(kind);
-  const loaded: ParseWorkerParserLoaded = { parserLoaded: kind };
+  const loaded: ParseWorkerParserLoaded = { id, parserLoaded: kind };
   port.postMessage(loaded);
 }
 
@@ -174,7 +223,7 @@ async function respond(request: JobRequest): Promise<void> {
  */
 async function answerParse(request: Extract<JobRequest, { type: 'parse' }>): Promise<ParseWorkerResponse> {
   const parser = await loadParser(request.kind);
-  announceLoaded(request.kind);
+  announceLoaded(request.kind, request.id);
   // `byteLength` is the parent's RAW byte count, passed through untouched —
   // never a length derived from `content`, since decoding is lossy.
   const result = fromTheBytes(() => parser.parseContent(request.content, request.byteLength));
@@ -191,7 +240,7 @@ async function answerParse(request: Extract<JobRequest, { type: 'parse' }>): Pro
  */
 async function answerHarness(request: Extract<JobRequest, { type: 'harness' }>): Promise<ParseWorkerResponse> {
   const reader = await loadHarnessReader(request.harness);
-  announceLoaded(request.harness);
+  announceLoaded(request.harness, request.id);
   const facts = fromTheBytes(() => reader(request.content));
   const breach = factsOutputBreach(facts, workerLimits());
   if (breach !== undefined) return { id: request.id, breach: breach.limit, found: breach.found };
@@ -288,6 +337,7 @@ port.on('message', (request: ParseWorkerRequest) => {
     port.close();
     return;
   }
+  if (request.settleHeap && settledForJob(request.id)) return;
   respond(request).catch((error: unknown) => {
     // `respond` already catches everything the PARSER can throw, so reaching
     // here means the RESPONSE itself could not be posted — a value structured
@@ -302,5 +352,5 @@ port.on('message', (request: ParseWorkerRequest) => {
 // Last, once every import above has evaluated: a thread that dies before this
 // could not load its own module graph, so the pool calls the install broken
 // rather than blaming whatever document it was holding (`ParseWorkerReady`).
-const ready: ParseWorkerReady = { ready: true };
+const ready: ParseWorkerReady = { ready: true, collector: collectGarbage !== null };
 port.postMessage(ready);

@@ -1,6 +1,7 @@
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
+import { RunContentCache } from '../src/projection/content-cache.js';
 import type { ExtentContribution } from '../src/projection/contributor.js';
 import {
   CLAUDE_IMPORT_KIND,
@@ -117,7 +118,7 @@ function addDirectory(builder: ProjectionBuilder, path: string): void {
  * tree. {@link addFile} keys by content, exactly as production does.
  */
 function buildBase(files: readonly FixtureFile[]): ProjectionBase {
-  const builder = new ProjectionBuilder({ root: ROOT });
+  const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() });
   for (const file of files) {
     if (file.kind === 'directory') {
       addDirectory(builder, file.path);

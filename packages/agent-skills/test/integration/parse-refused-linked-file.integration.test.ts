@@ -156,10 +156,10 @@ describe('a refused linked document is reported under resources.validation, and 
   });
 
   it('validateSkill drops it when resources.validation allows it, and keeps it when only the skill ignores it', async () => {
-    const allowed = await validateSkill({ resourcesValidation: RESOURCES_ALLOW_REFERENCE, skillPath, validation: {}, side: 'source' });
+    const allowed = await validateSkill({ dispatcher: undefined, resourcesValidation: RESOURCES_ALLOW_REFERENCE, skillPath, validation: {}, side: 'source' });
     expect(limitFindings(allowed.issues)).toEqual([]);
 
-    const ignored = await validateSkill({ resourcesValidation: {}, skillPath, validation: SKILL_IGNORES_LIMIT, side: 'source' });
+    const ignored = await validateSkill({ dispatcher: undefined, resourcesValidation: {}, skillPath, validation: SKILL_IGNORES_LIMIT, side: 'source' });
     expect(limitFindings(ignored.issues)).toHaveLength(1);
   });
 

@@ -220,6 +220,7 @@ async function validateOneSkill(
     const severity = validation?.severity === undefined ? {} : { severity: validation.severity };
     const skillResult = await validateSkill({
       skillPath: skillMdPath,
+      dispatcher: undefined,
       rootDir: skillDir,
       locationRoot: marketplacePath,
       validation: severity,

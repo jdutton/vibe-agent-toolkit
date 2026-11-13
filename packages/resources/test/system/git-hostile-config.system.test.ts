@@ -796,7 +796,7 @@ describe.skipIf(!HOST_GATES.utf16.met)(gatedTitle('working-tree-encoding=UTF-16'
    * in existence is filed under a stale name.
    */
   it('decodes the document at the READ, and still keys the raw bytes', async () => {
-    const keyed = await readContentWithKey(safePath.join(fixture.repo, DOC_PATH), 'markdown');
+    const keyed = await readContentWithKey(safePath.join(fixture.repo, DOC_PATH), 'markdown', null);
 
     // The document, as authored. Not a BOM, not a NUL, not a replacement
     // character — the three symptoms the old decode produced, each named so a

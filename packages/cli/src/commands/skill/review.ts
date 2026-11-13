@@ -269,6 +269,7 @@ export async function reviewCommand(
     // Project-wide test input: a review of skill A must not count skill B's eval
     // suite as content A ships. Memoized per config root; `[]` in wild mode.
     const result = await validateSkillForPackaging(skillPath, resolveProjectResourcesValidation(skillPath), packagingConfig, 'source', {
+      dispatcher: undefined,
       projectSkills: await resolveProjectDeclaredEvalSuites(skillPath, 'refuse'),
       // Same ruling as the discovery above: a review is acted on whole, so a
       // directory the registry crawl cannot list refuses it by name.

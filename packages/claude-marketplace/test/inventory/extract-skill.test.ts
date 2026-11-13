@@ -85,6 +85,7 @@ async function extractWith(
 	source: GitTrackerSource,
 ): Promise<{ linked: string[]; parseErrors: Array<{ path: string; message: string }> }> {
 	const inv = await extractClaudeSkillInventory(skillMdPath, {
+		dispatcher: undefined,
 		sharedRegistry: registry,
 		gitTrackerSource: source,
 	});
@@ -96,7 +97,7 @@ describe('extractClaudeSkillInventory', () => {
 		// `NO_GIT_TRACKER`, not an omitted argument: these two cases are about
 		// frontmatter and parseErrors, and the tracker-less walk they run in is a
 		// choice they are making, not a default they fell into.
-		const inv = await extractClaudeSkillInventory(SKILL_MD, { gitTrackerSource: NO_GIT_TRACKER });
+		const inv = await extractClaudeSkillInventory(SKILL_MD, { dispatcher: undefined, gitTrackerSource: NO_GIT_TRACKER });
 
 		expect(inv.kind).toBe('skill');
 		expect(inv.vendor).toBe('claude-code');
@@ -111,7 +112,7 @@ describe('extractClaudeSkillInventory', () => {
 
 	it('returns a ClaudeSkillInventory with parseErrors when SKILL.md does not exist', async () => {
 		const nonExistent = safePath.resolve(FIXTURE_DIR, 'does-not-exist/SKILL.md');
-		const inv = await extractClaudeSkillInventory(nonExistent, { gitTrackerSource: NO_GIT_TRACKER });
+		const inv = await extractClaudeSkillInventory(nonExistent, { dispatcher: undefined, gitTrackerSource: NO_GIT_TRACKER });
 
 		expect(inv.kind).toBe('skill');
 		expect(inv.vendor).toBe('claude-code');
@@ -367,7 +368,7 @@ describe('crawlSkillLinkRegistry on a directory it cannot list', () => {
 
 	it('surfaces on the skill as a link-walk parse error, not as a shorter inventory', async () => {
 		const inv = await withReaddirSyncRefused(locked, 'EACCES', () =>
-			extractClaudeSkillInventory(safePath.join(root, SKILL_FILENAME), { gitTrackerSource: NO_GIT_TRACKER }),
+			extractClaudeSkillInventory(safePath.join(root, SKILL_FILENAME), { dispatcher: undefined, gitTrackerSource: NO_GIT_TRACKER }),
 		);
 		expect(inv.parseErrors.map(e => e.message)).toEqual([
 			expect.stringMatching(/^link walk failed: Listing the directory 'locked' was refused \(EACCES\)/),
