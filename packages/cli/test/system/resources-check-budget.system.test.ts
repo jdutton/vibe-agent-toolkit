@@ -390,7 +390,7 @@ describe('vat resources check --budget', () => {
     const populationLine = lines.find((line) => line.kind === 'population');
     expect(populationLine?.lensPopulation).not.toBe('none');
     expect(populationLine?.lensPopulation).toBe(data(doc)['lensPopulation']);
-    // 🔑 `checks-complete` is the LAST line and it is not decoration: after the
+    // 🔑 `statements-complete` is the LAST line and it is not decoration: after the
     // final cost the child still resolves severities and serialises the
     // document, and it used to emit nothing at all during that phase — so a
     // budget that expired there SIGKILLed a run which already had its answer.
@@ -406,10 +406,11 @@ describe('vat resources check --budget', () => {
     // cost to be killed for.
     expect(kinds).toStrictEqual([
       'started',
+      'not-admitted',
       'population',
       ...BUILTIN_CHECK_NAMES.flatMap(() => ['start', 'check']),
       ...['quick', 'lensed'].flatMap(() => ['start', 'converting', 'check']),
-      'checks-complete',
+      'statements-complete',
     ]);
   });
 

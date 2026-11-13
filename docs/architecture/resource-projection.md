@@ -12,7 +12,8 @@ it. Where a 🎯 note and the shipped description differ, the shipped descriptio
 and the 🎯 note is what the change building it makes true; that change rewrites the section and drops
 the note. Two things do not change: a key covers every input its cached value depends on — the target
 generalises that rule from the content key to every stored artifact — and `check`'s whole-run
-supervision.
+supervision, which `query` shares under `--budget` (opt-in there; without it a query runs in one
+process, unbounded, and Ctrl-C ends it).
 
 ## 1. Overview
 

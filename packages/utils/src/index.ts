@@ -97,6 +97,7 @@ export {
   FS_FAULT_ERRNOS_BY_CLASS,
   fsFaultOf,
   isAlreadyExistsError,
+  isBrokenPipeError,
   isFileInTheWayError,
   isFinalPathUnanswerableError,
   isInvalidArgumentError,

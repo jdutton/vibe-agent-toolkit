@@ -342,6 +342,11 @@ export function isOutputOverrunError(error: unknown): boolean {
   return hasAnyErrno(error, ['ENOBUFS']);
 }
 
+/** `EPIPE`: the reader of a pipe this process writes has gone (`... | head -1`). */
+export function isBrokenPipeError(error: unknown): boolean {
+  return hasAnyErrno(error, ['EPIPE']);
+}
+
 /** `EAGAIN`: a non-blocking descriptor (stdout on a full pipe) would block. */
 export function isWouldBlockError(error: unknown): boolean {
   return hasAnyErrno(error, ['EAGAIN']);

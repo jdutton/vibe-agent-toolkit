@@ -128,7 +128,7 @@ describe('a check that declares what it examined', () => {
   it('announces the examined statement BEFORE it runs, between the violations statement and the conversion', () => {
     const { progress } = runOne({ examined: EXAMINED_SQL }, { [VIOLATIONS_SQL]: 2, [EXAMINED_SQL]: count(17) });
 
-    expect(progress.map((entry) => entry.kind)).toStrictEqual(['start', 'examining', 'converting', 'check', 'checks-complete']);
+    expect(progress.map((entry) => entry.kind)).toStrictEqual(['start', 'examining', 'converting', 'check', 'statements-complete']);
     expect(progress[1]).toStrictEqual({ kind: 'examining', name: NAME, durationMs: 5, rows: 2 });
     expect(progress[3]).toMatchObject({ kind: 'check', name: NAME, rows: 2, examined: 17 });
   });

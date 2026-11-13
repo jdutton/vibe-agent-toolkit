@@ -1,7 +1,8 @@
 /**
- * 🔑 What interrupting a supervised checks run does is ONE text, and both commands that supervise a
- * checks child render it whole — so `vat validate --help` and `vat resources check --help` cannot
- * describe it differently. They used to carry two hand-written paragraphs that had drifted apart.
+ * 🔑 What interrupting a supervised run does is ONE text, and every command that supervises a child
+ * renders it whole — so `vat validate --help`, `vat resources check --help` and
+ * `vat resources query --help` cannot describe it differently. Two of them used to carry
+ * hand-written paragraphs that had drifted apart.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -11,24 +12,25 @@ import { createResourcesCommand } from '../../src/commands/resources/index.js';
 import { createValidateTopLevelCommand } from '../../src/commands/validate.js';
 import { renderCommandHelp } from '../help-text-helpers.js';
 
-/** `vat resources check`'s own command, out of its group. */
-function resourcesCheckCommand(): Parameters<typeof renderCommandHelp>[0] {
-  const check = createResourcesCommand().commands.find((command) => command.name() === 'check');
-  if (check === undefined) throw new Error('no `check` subcommand under `vat resources`');
-  return check;
+/** A `vat resources` subcommand, out of its group. */
+function resourcesCommand(name: string): Parameters<typeof renderCommandHelp>[0] {
+  const found = createResourcesCommand().commands.find((command) => command.name() === name);
+  if (found === undefined) throw new Error(`no \`${name}\` subcommand under \`vat resources\``);
+  return found;
 }
 
 describe('the supervision signal contract', () => {
   it.each([
     ['vat validate', () => renderCommandHelp(createValidateTopLevelCommand())],
-    ['vat resources check', () => renderCommandHelp(resourcesCheckCommand())],
+    ['vat resources check', () => renderCommandHelp(resourcesCommand('check'))],
+    ['vat resources query', () => renderCommandHelp(resourcesCommand('query'))],
   ])('%s --help renders it whole, once', (_command, help) => {
     const text = help();
     expect(text.split(SUPERVISION_SIGNAL_CONTRACT)).toHaveLength(2);
   });
 
   it('states both platforms and both orphan endings', () => {
-    for (const claim of ['POSIX:', 'Windows:', 'end-of-file', 'last check returns', 'kills the wrapper alone']) {
+    for (const claim of ['POSIX:', 'Windows:', 'end-of-file', 'last check returns', 'once its statement returns', 'kills the wrapper alone']) {
       expect(SUPERVISION_SIGNAL_CONTRACT).toContain(claim);
     }
   });

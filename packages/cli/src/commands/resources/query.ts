@@ -37,6 +37,14 @@
  * against. `utils/projection-query.ts` states exactly which work the span covers
  * and why its start line is load-bearing.
  *
+ * ## 🔑 Supervision is opt-in, and without it nothing changes
+ *
+ * `--budget <seconds>` runs the statement under `vat resources check`'s supervisor: a child
+ * process the parent kills when it goes that long without progress, refused as `RUN_INCOMPLETE`.
+ * Without it — or with `--budget 0` — this process runs the statement, exactly as it always has:
+ * no second process, and `query-supervision.ts` is never loaded. The operator is at the keyboard
+ * and Ctrl-C works (`checkCommand`'s header says why), so the bound is theirs to ask for.
+ *
  * ## What this verb does NOT do
  *
  * It does not decode. Rows come back exactly as SQLite holds them — a boolean as
@@ -46,19 +54,39 @@
  */
 
 import { buildReport } from '@vibe-agent-toolkit/schema';
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { refusalCodeOf } from '../../utils/command-refusal.js';
-import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
+import { endWithRefusal, endWithReport, leaveFindingsToSupervisor, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { formatDurationSecs } from '../../utils/duration.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
-import { assertDirectoryArgument, projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
+import { assertDirectoryArgument, projectRootOrLoudCwd, projectRootOrNull } from '../../utils/project-root-policy.js';
 import {
   withQueriedProjection,
   type ProjectionProvenance,
 } from '../../utils/projection-query.js';
 import { relationBoundsFor } from '../../utils/relation-limits.js';
 
+// Both already loaded by every `vat resources` run: `check` imports them. The supervision this
+// verb adds lives in `query-supervision.ts`, imported only under a positive `--budget`.
+import {
+  createProgressWriter,
+  endWhenSupervisorGone,
+  letSupervisorLossSurface,
+  populationEntry,
+  type ProgressEntry,
+} from './check-progress.js';
+import {
+  parseBudgetSeconds,
+  requireSupervisableFlags,
+  runsInThisProcess,
+  type SupervisedChild,
+  type SupervisedVerb,
+} from './check-supervisor.js';
 import type { ResourcesQueryReport } from './query-schema.js';
+
+/** The verb this module runs, as the supervisor keys it. */
+const QUERY_VERB = 'resources query' satisfies SupervisedVerb;
 
 interface QueryOptions {
   debug?: boolean;
@@ -68,6 +96,10 @@ interface QueryOptions {
   format?: string;
   /** `--base <ref>`: what `changed_files` compares this tree with. */
   base?: string;
+  /** `--budget <seconds>`: run under the supervisor; absent or `0` runs here. */
+  budget?: string;
+  /** The hidden flag a supervisor hands the child it spawned. */
+  supervisedBy?: string;
 }
 
 /** What one query run produced, and what produced it. */
@@ -150,6 +182,8 @@ export function buildProjectionQueryReport(input: ProjectionQueryPayloadInput): 
  * @param options.parameters - Bound in order, for every `?`
  * @param options.logger - Where blob-stage refusals are reported
  * @param options.base - The ref `changed_files` compares with, or undefined when none was given
+ * @param options.onProgress - The supervised child's progress writer, or undefined when nothing is
+ *   watching (every run without `--budget`)
  * @returns The rows and the provenance of the population behind them
  */
 function runProjectionQuery(options: {
@@ -158,8 +192,9 @@ function runProjectionQuery(options: {
   parameters: readonly string[];
   logger: Logger;
   base: string | undefined;
+  onProgress: ((entry: ProgressEntry) => void) | undefined;
 }): Promise<QueryOutcome> {
-  const { root, sql, parameters, logger, base } = options;
+  const { root, sql, parameters, logger, base, onProgress } = options;
   // The statement is compiled against the empty schema first, so a typo'd
   // column — or a `?` with no `--param` behind it — costs milliseconds instead
   // of a full population.
@@ -169,13 +204,56 @@ function runProjectionQuery(options: {
     // derived relations get evaluated at all. One statement, two questions asked
     // of it.
     { root, logger, preflight: [{ sql, parameters }], statements: [sql], base },
-    (ask, provenance, extent, _projection, columnsOf) => ({
-      columns: columnsOf(sql, ...parameters),
-      rows: ask(sql, ...parameters),
-      membersEnumerated: extent.membersEnumerated,
-      ...provenance,
-    }),
+    (ask, provenance, extent, _projection, columnsOf) => {
+      // A supervised child's units: the population, then the statement (the log reads it as
+      // `idle`), then the answer being written. Unsupervised, the optional calls are no-ops.
+      onProgress?.(populationEntry(provenance, extent));
+      const columns = columnsOf(sql, ...parameters);
+      const rows = ask(sql, ...parameters);
+      onProgress?.({ kind: 'statements-complete' });
+      return { columns, rows, membersEnumerated: extent.membersEnumerated, ...provenance };
+    },
   );
+}
+
+/**
+ * Read `--budget` and the hidden `--supervised-by`: the bound, and the supervised child this
+ * process is, if it is one.
+ *
+ * 🔑 **No default bound.** `check` defaults to 300 s; a query has none unless its operator asks,
+ * and `--budget 0` equals omitting the flag. A value is refused exactly as `check` refuses it —
+ * blank, a number that means zero without saying so, negative, not a number — and `--budget`
+ * beside `--supervised-by`, or a `--supervised-by` this process's parent did not hand it, is
+ * refused too: the same functions decide both verbs.
+ *
+ * @param options - Parsed command-line options
+ * @param options.budget - What the operator typed for `--budget`, or undefined
+ * @param options.supervisedBy - The hidden `--supervised-by` value, or undefined
+ * @returns The bound in seconds (0: none) and the supervised child, or undefined when not one
+ * @throws `USAGE_INVALID` for a value either flag refuses
+ */
+export function querySupervisionOf(options: {
+  budget?: string | undefined;
+  supervisedBy?: string | undefined;
+}): { budgetSecs: number; child: SupervisedChild | undefined } {
+  const budgetSecs = options.budget === undefined ? 0 : parseBudgetSeconds(options.budget);
+  const child = requireSupervisableFlags({ supervisedBy: options.supervisedBy, budgetRaw: options.budget, budgetSecs });
+  return { budgetSecs, child };
+}
+
+/**
+ * Set up THIS process as a supervised query child: its findings and error line are the
+ * supervisor's to print, it ends itself when the supervisor is gone, and it says it has booted.
+ *
+ * @param child - The supervised child this process is
+ * @returns The progress writer the run's units are announced through
+ */
+function superviseHere(child: SupervisedChild): (entry: ProgressEntry) => void {
+  leaveFindingsToSupervisor();
+  endWhenSupervisorGone(QUERY_VERB, child.supervisorPid, process.stdin);
+  const progress = createProgressWriter(child);
+  progress({ kind: 'started' });
+  return progress;
 }
 
 /**
@@ -214,9 +292,29 @@ export async function queryCommand(
 
   try {
     if (pathArg !== undefined) assertDirectoryArgument(pathArg);
+    const { budgetSecs, child } = querySupervisionOf(options);
+    if (!runsInThisProcess({ supervisedBy: options.supervisedBy, budgetSecs })) {
+      // Loud, as the in-process run resolves it; the child is handed this root and is silent.
+      const root = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
+      const { superviseQuery } = await import('./query-supervision.js');
+      return await superviseQuery({
+        sql,
+        root,
+        parameters: options.param ?? [],
+        base: options.base,
+        debug: options.debug === true,
+        format,
+        budgetSecs,
+        logger,
+      });
+    }
+    const onProgress = child === undefined ? undefined : superviseHere(child);
     // Resolved at the CLI boundary, like every other command — the loud-cwd
-    // policy is where root discovery belongs.
-    const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
+    // policy is where root discovery belongs. A supervised child was handed the
+    // root its supervisor already resolved (and announced), so it says nothing.
+    const projectRoot = child === undefined
+      ? projectRootOrLoudCwd(pathArg ?? process.cwd(), logger)
+      : projectRootOrNull(pathArg ?? process.cwd()) ?? safePath.resolve(pathArg ?? process.cwd());
 
     const outcome = await runProjectionQuery({
       root: projectRoot,
@@ -224,15 +322,18 @@ export async function queryCommand(
       parameters: options.param ?? [],
       logger,
       base: options.base,
+      onProgress,
     });
+    // The statement ran synchronously: a supervisor lost meanwhile ends this child HERE, unpublished.
+    if (child !== undefined) await letSupervisorLossSurface();
 
-    endWithReport('resources query', buildProjectionQueryReport({
+    endWithReport(QUERY_VERB, buildProjectionQueryReport({
       ...outcome,
       root: projectRoot,
       durationMs: Date.now() - startTime,
     }), format);
   } catch (error) {
     // A refused statement is USAGE_INVALID by its code; see `describedFailure`.
-    endWithRefusal('resources query', refusalCodeOf(error), error, format, { strict: false }, NOTHING_FINISHED);
+    endWithRefusal(QUERY_VERB, refusalCodeOf(error), error, format, { strict: false }, NOTHING_FINISHED);
   }
 }

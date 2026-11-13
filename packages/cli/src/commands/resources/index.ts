@@ -88,6 +88,19 @@ function formatOption(...choices: [string, ...string[]]): Option {
     .default(choices[0]);
 }
 
+/**
+ * The hidden `--supervised-by` option `query` and `check` share.
+ *
+ * Hidden because it is not an operator's flag: it is how a supervising parent tells the child it
+ * spawned to do the work rather than spawn one of its own — who started it, the parent's pid, and
+ * where to append its progress, in ONE value. Passed by hand it is refused (the pid is not the
+ * process's parent). Documenting it would invite adopters to depend on a file whose only contract
+ * is the `.strict()` schema the same build reads it with.
+ */
+function supervisedByOption(): Option {
+  return new Option('--supervised-by <spec>', 'Internal: <standalone|phase>:<supervisor pid>:<progress log>').hideHelp();
+}
+
 /** The `--format` option `scan`, `query` and `check` share. */
 function yamlOrJsonFormat(): Option {
   return formatOption(OUTPUT_YAML, OUTPUT_JSON);
@@ -188,6 +201,12 @@ Examples:
       collectRepeated,
     )
     .addOption(baseOption())
+    .option(
+      '--budget <seconds>',
+      'Run the statement in a child process killed after this many seconds without progress'
+      + ' (none by default; 0 equals omitting it)',
+    )
+    .addOption(supervisedByOption())
     .addOption(yamlOrJsonFormat())
     .action(queryCommand)
     .addHelpText(
@@ -235,6 +254,35 @@ One query, and read-only:
   One statement only -- SQLite compiles the first and discards the rest WITHOUT
   error, so trailing text would be silently ignored. A comment after the
   terminating semicolon is fine ('SELECT 1;  -- see ADR-14').
+
+Bounding the run (--budget):
+  Without --budget the statement runs in this process, as it always has: no
+  second process, nothing more loaded, and Ctrl-C ends it, because no process
+  running the SQL installs a signal handler. A statement that never returns
+  runs until you stop it.
+
+  --budget <seconds> runs it in a child process instead, killed once it goes
+  that long WITHOUT PROGRESS. The clock resets when the child has booted, when
+  its population completes, and when the statement returns. A run killed, or
+  dead of anything else, before it finished has no answer: status: error,
+  RUN_INCOMPLETE, exit 2, and the message says where it stopped. A healthy
+  statement slower than the budget is killed too: one statement is one unit.
+
+  --budget 0 equals omitting it. A value that is blank, negative, not a
+  number, or that parses to zero without being written 0 (1e-400, -0) is
+  refused (USAGE_INVALID, exit 2).
+
+  Under --budget the statement and every --param travel on the child's
+  command line, which every platform bounds; a statement too long for it is
+  RUN_INCOMPLETE, and its message names --budget 0. This process holds the
+  child's whole answer before writing it, so a result large enough can
+  exhaust this process's memory where the unbounded run would have written
+  it.
+
+  The contract below applies only under --budget; without it, Ctrl-C ends
+  the one process, as it always has.
+
+${SUPERVISION_SIGNAL_CONTRACT}
 
 Output Fields (the shared report envelope; schema: packages/cli/schemas/resources-query.json):
   status:     ok | findings | error. A statement that selects NO row over a
@@ -287,7 +335,8 @@ Exit Codes:
       placeholder with no --param behind it, a name the projection lacks
       (USAGE_INVALID) -- a derived relation it reads could not be evaluated
       (that relation's own code), or [path] names no directory, or the
-      crawl failed
+      crawl failed, or a --budget run was killed or died before it finished
+      (RUN_INCOMPLETE)
   The code is derived from the document's status and summary, never chosen
   beside it.
 
@@ -297,6 +346,7 @@ Requirements:
 
 Examples:
   $ vat resources query 'SELECT path FROM resource_realizations LIMIT 5'
+  $ vat resources query --budget 30 'SELECT COUNT(*) AS n FROM blob_references'
   $ vat resources query 'SELECT COUNT(*) AS n FROM blobs'
   $ vat resources query 'SELECT * FROM blob_conditions'      # what was refused
   $ vat resources query 'SELECT rawRef FROM blob_references WHERE syntacticForm = ?' --param markdown-link
@@ -320,16 +370,7 @@ Examples:
       'Kill the run if it goes this long without completing a unit of work'
       + ' (default: 300; 0 removes the bound and can then hang forever)',
     )
-    .addOption(
-      // Hidden because it is not an operator's flag: it is how a supervising
-      // parent tells the child it spawned to do the work rather than spawn one
-      // of its own — who started it, the parent's pid, and where to append its
-      // progress, in ONE value. Passed by hand it is refused (the pid is not the
-      // process's parent). Documenting it would invite adopters to depend on a
-      // file whose only contract is the `.strict()` schema the same build reads
-      // it with.
-      new Option('--supervised-by <spec>', 'Internal: <standalone|phase>:<supervisor pid>:<progress log>').hideHelp(),
-    )
+    .addOption(supervisedByOption())
     .addOption(yamlOrJsonFormat())
     .action(checkCommand)
     .addHelpText(

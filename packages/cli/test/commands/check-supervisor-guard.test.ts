@@ -19,7 +19,8 @@ import { dirname } from 'node:path';
 import type * as Utils from '@vibe-agent-toolkit/utils';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { __internal, type ProgressLog, superviseCheck, withProgressLog } from '../../src/commands/resources/check-supervisor.js';
+import { __internal, type ProgressLog, superviseRun, withProgressLog } from '../../src/commands/resources/check-supervisor.js';
+import { interruptedQueryRefusal } from '../../src/commands/resources/query-supervision.js';
 
 const { spawnMock, spawnSyncMock, statMock } = vi.hoisted(() => ({ spawnMock: vi.fn(), spawnSyncMock: vi.fn(), statMock: vi.fn() }));
 // `spawnSync` is the Windows tree kill (`taskkill /T /F` in `killProcessTree`): stubbed so a stand-in
@@ -115,7 +116,7 @@ function signalTheGuard(
   return { child, exit };
 }
 
-/** A progress log for `superviseCheck`, under a guard that watches nothing until it is spawned. */
+/** A progress log for `superviseRun`, under a guard that watches nothing until it is spawned. */
 function progressLog(): ProgressLog {
   return { path: 'progress.jsonl', guard: __internal.guardSupervision() };
 }
@@ -208,7 +209,7 @@ describe('the guard spans the progress log\'s whole life (withProgressLog)', () 
     let during: Record<string, number> | undefined;
     let dirExistedAfterExit = true;
 
-    await withProgressLog(async (log) => {
+    await withProgressLog('resources check', async (log) => {
       during = listenerCounts();
       const dir = dirname(log.path);
       writeFileSync(log.path, '', 'utf-8');
@@ -236,7 +237,7 @@ describe('the watchdog poll that throws', () => {
     });
 
     const log = progressLog();
-    const run = superviseCheck({ args: [], log, budgetMs: 500, format: 'json' });
+    const run = superviseRun({ verb: 'resources check', args: [], log, budgetMs: 500, format: 'json' });
 
     await expect(run).rejects.toThrow('EACCES');
     expect(child.kill).toHaveBeenCalledWith('SIGKILL');
@@ -259,7 +260,7 @@ describe('a SIGKILL the kernel ACCEPTS that does not end the child', () => {
     // The watchdog's own clock and timer, driven by hand: 20 polls on a real clock would be seconds.
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] });
     try {
-      const run = superviseCheck({ args: [], log, budgetMs: 100, format: 'json' });
+      const run = superviseRun({ verb: 'resources check', args: [], log, budgetMs: 100, format: 'json' });
       await vi.advanceTimersByTimeAsync(5000);
 
       await expect(run).resolves.toMatchObject({
@@ -294,7 +295,7 @@ describe('a SIGKILL the kernel REFUSES, every time', () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] });
     try {
       let settled = false;
-      const run = superviseCheck({ args: [], log, budgetMs: 100, format: 'json' });
+      const run = superviseRun({ verb: 'resources check', args: [], log, budgetMs: 100, format: 'json' });
       const markSettled = (): void => {
         settled = true;
       };
@@ -331,7 +332,7 @@ describe('the child\'s death is its exit, not its close', () => {
     const log = progressLog();
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'performance'] });
     try {
-      const run = superviseCheck({ args: [], log, budgetMs: 60_000, format: 'json' });
+      const run = superviseRun({ verb: 'resources check', args: [], log, budgetMs: 60_000, format: 'json' });
       log.guard.release();
       child.exitCode = 3;
       child.emit('exit', 3, null);
@@ -348,6 +349,32 @@ describe('the child\'s death is its exit, not its close', () => {
   });
 });
 
+describe('a spawn that THROWS synchronously', () => {
+  // 🚨 Node throws from `spawn` itself — not through the `error` event — for an argv the OS will not
+  // take (E2BIG, ENAMETOOLONG). A supervised query carries its statement on the child's command
+  // line, so the throw is reachable from the operator's own input; it escaped the supervisor and
+  // became whatever refusal the escaped error mapped to. It is the `spawn-failed` ending now.
+  it('settles as spawn-failed naming the binary, and the query refusal names `--budget 0`', async () => {
+    spawnMock.mockImplementationOnce(() => {
+      throw Object.assign(new Error('spawn E2BIG'), { code: 'E2BIG' });
+    });
+    statMock.mockImplementation(() => ({ size: 0 }));
+    const baseline = listenerCounts();
+    const log = progressLog();
+
+    const run = await superviseRun({ verb: 'resources query', args: [], log, budgetMs: 100, format: 'json' });
+    log.guard.release();
+
+    expect(run).toMatchObject({ outcome: 'abnormal', death: { kind: 'spawn-failed', binary: 'vat-bin.js', detail: 'spawn E2BIG' } });
+    expect(listenerCounts()).toStrictEqual(baseline);
+    if (run.outcome === 'completed') throw new Error('unreachable: asserted abnormal above');
+    const refusal = interruptedQueryRefusal(run, 1);
+    expect(refusal.refusal).toBe('RUN_INCOMPLETE');
+    expect(refusal.message).toContain('`--budget 0`');
+    expect(refusal.message).not.toMatch(/\bchecks?\b/i);
+  });
+});
+
 describe('the child\'s process tree', () => {
   // 🚨 A process-group leader (`detached`) is outside the terminal's job control: Ctrl-Z does not
   // stop it, and under `stty tostop` its stderr write stops it with SIGTTOU, so the watchdog
@@ -357,7 +384,7 @@ describe('the child\'s process tree', () => {
     statMock.mockImplementation(() => ({ size: 0 }));
     const log = progressLog();
 
-    await superviseCheck({ args: [], log, budgetMs: 100, format: 'json' });
+    await superviseRun({ verb: 'resources check', args: [], log, budgetMs: 100, format: 'json' });
     log.guard.release();
 
     const options = spawnMock.mock.lastCall?.[2] as { detached?: boolean } | undefined;
