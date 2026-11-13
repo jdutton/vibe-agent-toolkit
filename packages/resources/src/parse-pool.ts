@@ -913,6 +913,12 @@ interface PoolWorker {
   exited: boolean;
   /** Resolves when the thread has exited, however it went. */
   gone: Promise<void>;
+  /**
+   * Set from the `error` listener: the thread threw and is going, but Node delivers its `exit`
+   * later, and until then it is still listed. No job is handed to it ({@link WorkerParsePool}'s
+   * `#idleWorker`) and it is never parked; its death is judged at `exit` all the same.
+   */
+  dying: boolean;
   /** Set once the thread posted {@link ParseWorkerReady}: its module graph loaded. */
   ready: boolean;
   /**
@@ -1125,7 +1131,7 @@ class WorkerParsePool implements ParsePool {
    * @returns Whether it was parked; `false` leaves it to be closed
    */
   async #park(poolWorker: PoolWorker): Promise<boolean> {
-    if (poolWorker.exited || !poolWorker.ready || poolWorker.job !== null) return false;
+    if (poolWorker.exited || poolWorker.dying || !poolWorker.ready || poolWorker.job !== null) return false;
     // Re-`ref` it for the read, as `closeWorker` does for the close: an idle thread is unref'd, and
     // a heap read from an unref'd thread holds nothing open — a command whose last work is this
     // shutdown would exit, mid-shutdown and at code 0, before the read answered. `parkWorker`
@@ -1133,7 +1139,7 @@ class WorkerParsePool implements ParsePool {
     poolWorker.worker.ref();
     // The read rejects only for a thread that has gone, which is closed, never parked.
     const heap = await poolWorker.worker.getHeapStatistics().catch(() => undefined);
-    if (heap === undefined || poolWorker.exited) return false;
+    if (heap === undefined || poolWorker.exited || poolWorker.dying) return false;
     if (exceedsHeapLimit(heap, PARKED_HEAP_MB)) return false;
     poolWorker.detach();
     await parkWorker(poolWorker.worker, poolWorker.key, poolWorker.parsersLoaded, this.#parkCap);
@@ -1560,7 +1566,7 @@ class WorkerParsePool implements ParsePool {
   }
 
   #idleWorker(): PoolWorker | undefined {
-    return this.#workers.find((candidate) => candidate.job === null);
+    return this.#workers.find((candidate) => candidate.job === null && !candidate.dying);
   }
 
   /**
@@ -1630,6 +1636,7 @@ class WorkerParsePool implements ParsePool {
       job: null,
       exited: false,
       gone,
+      dying: false,
       ready: loaded !== undefined,
       parsersLoaded: new Set(loaded),
       retired: false,
@@ -1653,10 +1660,13 @@ class WorkerParsePool implements ParsePool {
     // two only at `exit`, which drains the public port first: a thread that
     // posted `ready` and then threw can reach the pool `error` first (about one
     // in three on an idle host), and judged then it would read as a thread that
-    // could not start, a broken install.
+    // could not start, a broken install. Between the two the thread is dead but
+    // still listed, so it is marked dying: a job handed to it then would be lost
+    // with it, through no fault of its own.
     let thrown: Error | undefined;
     const onError = (error: Error): void => {
       thrown ??= error;
+      poolWorker.dying = true;
     };
     const onExit = (exitCode: number): void => {
       poolWorker.exited = true;
