@@ -224,12 +224,15 @@ function mergeEnvWithOverrides(overrides: Record<string, string>): NodeJS.Proces
   return merged;
 }
 
+/** What a spawned command may print on either stream before it is killed, unless the caller states more. */
+const DEFAULT_COLLECT_MAX_BUFFER = 10 * 1024 * 1024;
+
 function spawnAndCollect(
   command: string,
   args: string[],
   options: SpawnOptionsWithoutStdio,
+  maxBuffer = DEFAULT_COLLECT_MAX_BUFFER,
 ): Promise<SpawnSyncReturns<string>> {
-  const maxBuffer = 10 * 1024 * 1024;
 
   return new Promise((resolvePromise) => {
     const child = nodeSpawn(command, args, options);
@@ -290,16 +293,18 @@ function spawnAndCollect(
  * Handles ESLint suppressions for test execution
  *
  * `nodeArgs` go to node itself, before the binary: `['--import', preload]` runs a module first.
+ * `maxBuffer` is the bytes either stream may carry before the run is killed (10 MiB unless stated):
+ * a caller whose document is measured larger states the measured size.
  */
 export function executeCli(
   binPath: string,
   args: string[],
-  options?: { cwd?: string; env?: Record<string, string>; nodeArgs?: readonly string[] }
+  options?: { cwd?: string; env?: Record<string, string>; nodeArgs?: readonly string[]; maxBuffer?: number }
 ): Promise<SpawnSyncReturns<string>> {
   return spawnAndCollect('node', [...(options?.nodeArgs ?? []), binPath, ...args], {
     cwd: options?.cwd,
     env: options?.env ? mergeEnvWithOverrides(options.env) : undefined,
-  });
+  }, options?.maxBuffer);
 }
 
 /**
