@@ -37,6 +37,7 @@ import { ExitCode, installLastResortExit } from '@vibe-agent-toolkit/schema';
 import {
   findNodeWorkspaceRoot,
   followedKindSync,
+  installWorkCounterDump,
   isPathAbsentError,
   safePath,
 } from '@vibe-agent-toolkit/utils';
@@ -68,6 +69,10 @@ function reportStdioBlocking(debug: boolean): void {
 
 // A throw nothing below caught ends on ExitCode.ERROR, never Node's default 1.
 installLastResortExit();
+
+// This process only resolves and spawns the CLI, which files its own dump; the
+// wrapper's says what the wrapper itself did, so a reader can sum both.
+installWorkCounterDump('wrapper');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 

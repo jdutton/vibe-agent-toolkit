@@ -360,6 +360,26 @@ export {
 } from './crawl-timing.js';
 // The three `__*ForTest` seams of the same module are on `./testing`, not here.
 
+// Deterministic work counters (ADR I10): counted at the code sites that do the
+// work, always on, dumped per process when `VAT_WORK_COUNTERS` names a
+// directory. Here, at the bottom of the graph, because `git-run.ts` and
+// `git-snapshot.ts` count, and every package above counts through the same
+// slots. The three `__*ForTest` seams are on `./testing`.
+export {
+  countWork,
+  forbiddenWorkCountPolicy,
+  forbidWorkCounting,
+  installWorkCounterDump,
+  readWorkCounters,
+  WORK_COUNTER_NAMES,
+  WORK_COUNTER_ROLES,
+  WORK_COUNTERS_ENV,
+  type ForbiddenWorkCountPolicy,
+  type WorkCounter,
+  type WorkCounterDump,
+  type WorkCounterRole,
+} from './work-counters.js';
+
 // The on-disk plumbing both timing seams share. Exported because
 // `resources`' `parse-timing.ts` is the other consumer and now sits a package
 // away; nothing else should reach for it.

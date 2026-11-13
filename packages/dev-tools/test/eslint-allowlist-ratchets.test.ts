@@ -25,8 +25,9 @@
 import tsparser from '@typescript-eslint/parser';
 import { compareCodeUnits, resolveFromImportMeta } from '@vibe-agent-toolkit/utils';
 import localRules from '@vibe-agent-toolkit/utils/eslint';
+import { atLeastTierTimeout } from '@vibe-agent-toolkit/utils/testing';
 import type { ESLint } from 'eslint';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, inject, it } from 'vitest';
 
 import { LINK_FOLLOWING_FS_CALLS } from '../../../eslint.config.js';
 
@@ -134,7 +135,10 @@ describe.each(RATCHETS)('$rule — its allowlist only names files that still nee
       `These files no longer trip ${ratchet.rule}. Delete their entries from ${ratchet.constant} `
         + 'in eslint.config.js — the list may only shrink, and a stale entry hides the next offender.',
     ).toEqual([]);
-  });
+    // Lints every listed file: about 0.5 s on a quiet machine on Node 22 and 24,
+    // but past 15 s on a loaded Node-floor runner, where every ESLint-loading
+    // test in the package slowed alike (one unit file took 21 s there).
+  }, atLeastTierTimeout(inject('tierTestTimeout'), 60_000));
 });
 
 /**
