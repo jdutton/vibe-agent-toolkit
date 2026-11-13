@@ -1960,8 +1960,8 @@ async function validateAuditSubject(
  * files it as `SCAN_PATH_UNREADABLE`, so the audit still degrades (the run
  * completes, the refusal a finding) rather than refusing the run.
  *
- * 🪤 Keep this stat's `try` separate from `scanDirectory`'s: a shared one turns
- * every scan throw into "unknown resource format".
+ * 🪤 Keep this stat's `try` separate from `scanDirectory`'s: a shared catch would
+ * absorb scan throws into "unknown resource format".
  */
 async function isScannableDirectory(scanPath: string, locationRoot: string): Promise<boolean> {
 	try {

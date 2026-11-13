@@ -72,7 +72,8 @@
  * turbo run build:skills`) before any test phase, so `dist/skills` is current when this runs there. Run standalone against a
  * stale `dist/` and you are comparing the golden against whatever was built last —
  * the test fails closed if a `dist/` is missing entirely, but it cannot detect
- * staleness, so build first if you are running it on its own.
+ * staleness, so build first if you are running it on its own. Fixture bundles
+ * are built by `cli/dist`, so a stale cli build is the same hazard for them.
  */
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
