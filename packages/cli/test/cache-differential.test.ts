@@ -17,6 +17,7 @@ import {
   normalizeDocument,
   PER_RUN_FIELDS,
   RELATION_NAMES,
+  runEveryStep,
   VERB_NAMES,
   VERBS,
   type DifferentialResult,
@@ -221,5 +222,26 @@ describe('the unseeded gate', () => {
   it('reds on a blob its sniffer called not text, though that code is exempt from the census', () => {
     const sniffed = dumpOf([['blob_conditions', { code: BLOB_NOT_TEXT }]]);
     expect(() => expectNoDivergenceAndNoRefusal(storeOffResult(sniffed, clean))).toThrow(/BLOB_NOT_TEXT/);
+  });
+});
+
+describe('the seed suite\'s cleanup', () => {
+  /** A step that records its name, then throws when told to. */
+  const step = (ran: string[], name: string, throws = false) => (): void => {
+    ran.push(name);
+    if (throws) throw new Error(name);
+  };
+
+  it('runs every step though an earlier one throws, then rethrows the first error', () => {
+    const ran: string[] = [];
+    const steps = [step(ran, 'restore a', true), step(ran, 'restore b', true), step(ran, 'remove cells'), step(ran, 'context cleanup')];
+    expect(() => runEveryStep(steps)).toThrow('restore a');
+    expect(ran).toEqual(['restore a', 'restore b', 'remove cells', 'context cleanup']);
+  });
+
+  it('returns quietly when every step succeeds', () => {
+    const ran: string[] = [];
+    runEveryStep([step(ran, 'a'), step(ran, 'b')]);
+    expect(ran).toEqual(['a', 'b']);
   });
 });

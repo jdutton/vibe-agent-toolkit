@@ -7,22 +7,17 @@
  * - The seeded causes are the members: a member with no seed reds, and a seed
  *   naming anything else reds (test files are not typechecked, so the member
  *   type on a seed is documentation, and this is the check that fires).
- * - Each system seed file is exactly its template, so a seed cannot be deleted
- *   or skipped in the file; a seed is skipped only on a host that lacks its
- *   declared need.
- * - Each lower-tier seed's named test exists, runs, and calls
- *   `expectAbsenceCause` on rows it did not write by hand, with the member's
- *   own signature; and every `expectAbsenceCause` call outside `utils` and the
- *   harness is one of those seeds.
+ * - A system seed is skipped only on a host that lacks its declared need.
+ *
+ * What reads the seeds' source files (the seed-file templates, the lower-tier
+ * finder and the call-site scan) runs in the integration tier:
+ * `integration/absence-seed-sources.integration.test.ts`.
  */
-
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 
 import * as agentSkills from '@vibe-agent-toolkit/agent-skills';
 import * as claudeMarketplace from '@vibe-agent-toolkit/claude-marketplace';
 import * as resources from '@vibe-agent-toolkit/resources';
-import { safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
@@ -36,19 +31,7 @@ import {
   siblingsOf,
   surfacedCodesOf,
 } from './helpers/absence-causes.js';
-import {
-  causeOf,
-  LOWER_TIER_SEEDS,
-  namesPath,
-  seedFilePath,
-  seedFileText,
-  SYSTEM_SEEDS,
-  unplantableHere,
-  type SeedFileKey,
-} from './helpers/absence-seeds.js';
-import { judgeLowerTierTest, lowerTierCallSites } from './helpers/lower-tier-finder.js';
-
-const REPO_ROOT = safePath.resolve(fileURLToPath(new URL('../../..', import.meta.url)));
+import { causeOf, LOWER_TIER_SEEDS, namesPath, SYSTEM_SEEDS, unplantableHere } from './helpers/absence-seeds.js';
 
 /** Sorted, so a set compares as a list with a readable diff. */
 function sorted(values: Iterable<string>): string[] {
@@ -157,10 +140,6 @@ describe('members and seeds, both ways', () => {
     expect(lower).toHaveLength(new Set(lower).size);
   });
 
-  it.each(Object.keys(SYSTEM_SEEDS) as SeedFileKey[])('holds the %s seed file to its template', (key) => {
-    expect(readFileSync(safePath.join(REPO_ROOT, seedFilePath(key)), 'utf-8')).toBe(seedFileText(key));
-  });
-
   it('declares every system seed\'s host need, and skips exactly the seeds whose need this host lacks', () => {
     expect(systemSeeds.filter((seed) => !Object.hasOwn(seed, 'needs')).map((seed) => seed.name)).toEqual([]);
     const lacked = new Set<string>([
@@ -182,72 +161,5 @@ describe('members and seeds, both ways', () => {
     expect(namesPath('{"path":"locked/hidden.md"}', 'locked')).toBe(false);
     expect(namesPath('{"path":"unlocked"}', 'locked')).toBe(false);
     expect(namesPath('the locked directory', 'locked')).toBe(false);
-  });
-});
-
-describe('each lower-tier seed names a test that plants its member', () => {
-  it.each(LOWER_TIER_SEEDS.map((seed) => [seed.member, seed] as const))('%s', (member, seed) => {
-    const source = readFileSync(safePath.join(REPO_ROOT, seed.file), 'utf-8');
-    expect(judgeLowerTierTest(source, seed.file, seed.testName, member)).toEqual([]);
-  });
-
-  it('maps every expectAbsenceCause call outside utils and the harness to exactly one lower-tier seed', () => {
-    const named = LOWER_TIER_SEEDS.map((seed) => `${seed.file} :: ${seed.testName}`);
-    const sites = lowerTierCallSites(REPO_ROOT).map((site) => `${site.file} :: ${site.test ?? '(no enclosing test)'}`);
-    expect(sorted(sites)).toEqual(sorted(named));
-    expect(sites.filter((site, index) => sites.indexOf(site) !== index), 'a seed\'s test with more than one call').toEqual([]);
-  });
-});
-
-describe('the lower-tier finder\'s own controls', () => {
-  const UNREADABLE = resources.BLOB_UNREADABLE;
-  const SIGNATURE = '{ code: BLOB_UNREADABLE }';
-  /** One fixture file holding one test titled `t`. */
-  const judge = (body: string, member: (typeof ABSENCE_MEMBER_KEYS)[number] = UNREADABLE): string[] =>
-    judgeLowerTierTest(body, 'fixture.ts', 't', member);
-
-  it.each([
-    ['a plain statement', `it('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); });`],
-    ['the direct argument of expect', `it('t', async () => { expect(expectAbsenceCause(projection, ${SIGNATURE})).toHaveLength(1); });`],
-    ['an it.each title', `it.each([1])('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); });`],
-    ['a host-gated skipIf', `it.skipIf(CANNOT_DENY_READS)('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); });`],
-    ['a host-gated runIf', `test.runIf(PERMISSIONS_ENFORCED)('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); });`],
-    ['rows from a helper call', `it('t', () => { const rows = rowsOf(contribution); expectAbsenceCause(rows, ${SIGNATURE}); });`],
-  ])('accepts %s', (_label, body) => {
-    expect(judge(body)).toEqual([]);
-  });
-
-  it.each([
-    ['no test of that title', `it('other', () => { expectAbsenceCause(projection, ${SIGNATURE}); });`, /exactly one test/],
-    ['two tests of that title', `it('t', () => {}); it('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); });`, /exactly one test/],
-    ['a call inside try', `it('t', () => { try { expectAbsenceCause(projection, ${SIGNATURE}); } finally {} });`, /no counted/],
-    ['a call inside catch', `it('t', () => { try { run(); } catch { expectAbsenceCause(projection, ${SIGNATURE}); } });`, /no counted/],
-    ['a call expected to throw', `it('t', () => { expect(() => expectAbsenceCause(projection, ${SIGNATURE})).toThrow(); });`, /no counted/],
-    ['a call in a nested function', `it('t', () => { const check = () => expectAbsenceCause(projection, ${SIGNATURE}); check(); });`, /no counted/],
-    ['rows written inline', `it('t', () => { expectAbsenceCause({ blobConditions: [] }, ${SIGNATURE}); });`, /by hand/],
-    ['rows bound to an object literal', `it('t', () => { const rows = { blobConditions: [] } as AbsenceRows; expectAbsenceCause(rows, ${SIGNATURE}); });`, /by hand/],
-    ['a signature that is no literal', 'it(\'t\', () => { expectAbsenceCause(projection, signature); });', /signature/],
-    ['another member\'s code', 'it(\'t\', () => { expectAbsenceCause(projection, { code: BLOB_CONTENT_CHANGED }); });', /signature/],
-    ['a local constant spoofing the code', `const BLOB_UNREADABLE = 'BLOB_PARSE_FAILED'; it('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); });`, /signature/],
-    ['it.skip', `it.skip('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); });`, /skipped/],
-    ['it.todo', `it.todo('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); });`, /skipped/],
-    ['skipIf on no host constant', `it.skipIf(flaky)('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); });`, /skipped/],
-    ['runIf on no host constant', `it.runIf(false)('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); });`, /skipped/],
-    ['describe.skip', `describe.skip('d', () => { it('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); }); });`, /skipped/],
-    ['describe.skipIf', `describe.skipIf(CANNOT_DENY_READS)('d', () => { it('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); }); });`, /skipped/],
-    ['describe.runIf', `describe.runIf(PERMISSIONS_ENFORCED)('d', () => { it('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); }); });`, /skipped/],
-    ['describe.todo', `describe.todo('d', () => { it('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); }); });`, /skipped/],
-    ['a skip deep in a describe chain', `describe.concurrent.skip('d', () => { it('t', () => { expectAbsenceCause(projection, ${SIGNATURE}); }); });`, /skipped/],
-  ])('reds %s', (_label, body, problem) => {
-    expect(judge(body).join('\n')).toMatch(problem);
-  });
-
-  it('reds a signature missing a field of the member\'s, or stating one with another value', () => {
-    const member = resources.PACKAGE_SUBPATH_NOT_EXPORTED;
-    const call = (signature: string): string => `it('t', () => { expectAbsenceCause(rowsOf(c), ${signature}); });`;
-    expect(judge(call("{ code: PACKAGE_SUBPATH_NOT_EXPORTED, extentKind: 'package', resourceIdPresent: true }"), member)).toEqual([]);
-    expect(judge(call("{ code: PACKAGE_SUBPATH_NOT_EXPORTED, extentKind: 'package' }"), member).join('\n')).toMatch(/signature/);
-    expect(judge(call("{ code: PACKAGE_SUBPATH_NOT_EXPORTED, extentKind: 'package', resourceIdPresent: false }"), member).join('\n')).toMatch(/signature/);
-    expect(judge(call("{ code: PACKAGE_SUBPATH_NOT_EXPORTED, extentKind: 'filesystem', resourceIdPresent: true }"), member).join('\n')).toMatch(/signature/);
   });
 });

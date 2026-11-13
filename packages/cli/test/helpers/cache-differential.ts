@@ -1248,6 +1248,25 @@ export function restoreDirectoryModes(directory: string): void {
   }
 }
 
+/**
+ * Run every step though an earlier one throws, then rethrow the first error, so
+ * one failed restore cannot leave the cells and the suite's own temp tree behind.
+ *
+ * @param steps - The cleanup steps, in order
+ */
+export function runEveryStep(steps: ReadonlyArray<() => void>): void {
+  const errors: unknown[] = [];
+  for (const step of steps) {
+    try {
+      step();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  const [first] = errors;
+  if (errors.length > 0) throw first instanceof Error ? first : new Error(String(first));
+}
+
 /** A seed file's suite: its hooks, and one seed run over a fresh gate fixture and judged. */
 interface SeedSuite {
   readonly setup: () => void;
@@ -1268,9 +1287,7 @@ export function seedSuite(testFileUrl: string): SeedSuite {
   return {
     setup: context.setup,
     cleanup: () => {
-      for (const tempDir of tempDirs) restoreDirectoryModes(tempDir);
-      removeCells();
-      context.cleanup();
+      runEveryStep([...tempDirs.map((tempDir) => () => restoreDirectoryModes(tempDir)), removeCells, () => context.cleanup()]);
     },
     run: async (seed) => {
       const tempDir = context.createTempDir();
