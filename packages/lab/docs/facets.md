@@ -165,7 +165,7 @@ distribution differences for numbers.
 
 A facet owns:
 
-- **A stable `facet` name** — `perf`, `io`, `parse`, `crawl`, `population`, `verdict`, `memory`. It goes in the envelope header and
+- **A stable `facet` name** — `perf`, `io`, `parse`, `crawl`, `population`, `verdict`, `memory`, `work`. It goes in the envelope header and
   two reports with different names are refused against each other.
 - **A body schema** — strict, and validated by the facet after it has confirmed the header names it.
   The envelope reader deliberately does not validate bodies; it does not know their shapes.
@@ -213,6 +213,34 @@ VAT's own caches — a `warm` arm is primed by an unmeasured run before it, and 
 and parse cache are reset before every repeat — but it is still the capture's first touch of the
 subject's files. Verifying stability then needs two more, which makes three the smallest honest
 number of repeats.
+
+## The work facet
+
+`work` reads vat's own work counters (`countWork` in `@vibe-agent-toolkit/utils`): store rows
+decoded, reads and writes per store lane, extents derived and served, store-miss pairs, parse cache
+hits, dispatches and refusals, content hashed, git calls. They need vat's internals, so vat counts
+them at the code sites that do the work, and each vat process (the `vat` wrapper and the CLI) dumps
+every counter, zeros included, at exit when `VAT_WORK_COUNTERS` names a directory. The lab injects
+nothing; it sets that variable per repeat, as `crawl` sets its own.
+
+- A repeat's reading is the SUM over every dump in its directory. A repeat with no `cli` dump is
+  refused: the wrapper alone does almost nothing and would read as a command that did no work. A
+  repeat that exited on a signal fails the row through the shared repeat rule, before any dump is
+  read.
+- It takes at least three repeats (`--runs` refuses fewer), discards repeat 0, compares repeats
+  1..n-1 and reports the last, with `stable` as in `io`: `null` below two compared repeats.
+- The dump schema is strict and has no version field. Its counter names come from the utils tuple,
+  so a dump from a NEWER vat carrying a counter this lab does not know is refused; an OLDER vat's
+  missing counter is absent from the row, and `compare` reports it as added or removed. Run the lab
+  from the newer side, as with `io`.
+- Counters compare exactly, with one declared exception table (`comparedExactly` in
+  `work/types.ts`): `parse.refused.load` depends on machine load and is reported in every mode; in
+  `cold` mode `parse.dispatched` and `parse.cache.hit` are reported too, because the dispatcher's
+  look-ahead window can have two files with one content key in flight and both miss. A
+  reported-only counter is printed and listed when it moves, never makes `stable` false and never
+  makes a command `changed`.
+- It reports. There is no ceiling, threshold or gate in the facet. `ab` compares
+  `store.rows.decoded.persistent`.
 
 ## The verdict facet
 

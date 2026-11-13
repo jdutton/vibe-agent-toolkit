@@ -63,6 +63,7 @@ import { executeGitCommand } from '@vibe-validate/git';
 
 import { isNoSuchEntryError } from './errors/errno-table.js';
 import { decodeTextContent } from './text-content.js';
+import { countWork } from './work-counters.js';
 
 /**
  * 64 MiB. Chosen against `git ls-files -s -z`, the widest-output command here:
@@ -275,6 +276,7 @@ function execute(args: readonly string[], options: GitRunOptions, encoding: 'utf
   // reading the result could not tell "git is not installed" from "exit 1 is the
   // answer" from "your listing was truncated" — which is why this wrapper could
   // not have been written against the previous release.
+  countWork('git.calls', 1);
   const result = executeGitCommand([...args], {
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     ...(options.env === undefined ? {} : { env: options.env }),

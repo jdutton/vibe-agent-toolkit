@@ -1,0 +1,157 @@
+/**
+ * Capturing a `work` report: run each command at least {@link WORK_MIN_RUNS}
+ * times with vat's work-counter dump switched on, discard repeat 0, and report
+ * the last repeat — plus whether the repeats after the warm-up agreed.
+ *
+ * The seam is compiled into vat and switched on by `VAT_WORK_COUNTERS`, as
+ * `crawl`'s is by its own variable; the lab injects nothing. The warm-up and
+ * the nullable `stable` follow `io` (see `io/capture.ts`): repeat 0 is the
+ * capture's first touch of the subject, and below two compared repeats nothing
+ * can disagree.
+ *
+ * Whether a repeat is usable at all — a non-zero or disagreeing exit, a signal,
+ * a failed priming run — is {@link measureSpec}'s decision, shared with every
+ * facet. A repeat killed by a signal has no exit code and is a violation there,
+ * so it arrives here as the measurement's `failure` and no dump is read.
+ */
+
+import { WORK_COUNTERS_ENV, type WorkCounter } from '@vibe-agent-toolkit/utils';
+
+import type { ReportEnvelope } from '../../envelope/envelope.js';
+import { captureCommandRows } from '../../harness/dump-capture.js';
+import { judgeLoad, readLoad } from '../../harness/load-guard.js';
+import type { SpecMeasurement } from '../../harness/repeat.js';
+import { buildReportEnvelope } from '../../harness/report.js';
+import type { CaptureRequest } from '../../harness/types.js';
+
+import { type MergedWorkDumps, readWorkDumps, variedCounters, type WorkDumpsRead } from './dump.js';
+import {
+  comparedExactly,
+  WORK_FACET,
+  WORK_MIN_RUNS,
+  type WorkBody,
+  type WorkCommandStats,
+} from './types.js';
+
+/** Prefix for a repeat's dump directory, so a stray one names its owner. */
+const DUMP_DIR_PREFIX = 'vat-lab-work-';
+
+/** Everything a capture needs: exactly the shared request. */
+export type CaptureWorkOptions = CaptureRequest;
+
+/** The row a command produces before any measurement is folded into it. */
+type RowBase = Pick<WorkCommandStats, 'name' | 'args' | 'cache'>;
+
+/**
+ * A row that measured nothing. Empty counters, never zeros: `failed` and
+ * `failure` carry the meaning, and a zero would read as no work.
+ *
+ * @param base - Name, arguments and cache mode
+ * @param runs - How many repeats ran
+ * @param failure - Why there is no measurement
+ * @returns The failed row
+ */
+function failedRow(base: RowBase, runs: number, failure: string): WorkCommandStats {
+  return {
+    ...base,
+    runs,
+    comparedRuns: 0,
+    stable: null,
+    processes: 0,
+    counters: [],
+    varied: [],
+    failed: true,
+    failure,
+  };
+}
+
+/**
+ * Every counter that differed between adjacent compared repeats, in tuple order.
+ *
+ * @param merges - The compared repeats' readings, in repeat order
+ * @returns The differing counters
+ */
+function variedAcross(merges: readonly MergedWorkDumps[]): WorkCounter[] {
+  const varied = new Set<WorkCounter>();
+  for (const [index, merge] of merges.entries()) {
+    const previous = merges[index - 1];
+    if (previous === undefined) continue;
+    for (const name of variedCounters(previous, merge)) varied.add(name);
+  }
+  return [...varied];
+}
+
+/**
+ * Fold one command's repeats into its row.
+ *
+ * Takes the repeat reader as an argument so the fold can be exercised without
+ * a disk; {@link captureWork} passes {@link readWorkDumps}.
+ *
+ * @param measurement - What ran, and whether the repeats are usable
+ * @param directories - The repeats' dump directories, in repeat order
+ * @param read - Reads one repeat's directory
+ * @returns The row, marked failed when no usable measurement exists
+ */
+export async function workRowFromRepeats(
+  measurement: SpecMeasurement,
+  directories: readonly string[],
+  read: (directory: string) => Promise<WorkDumpsRead>,
+): Promise<WorkCommandStats> {
+  const { results, failure, cache } = measurement;
+  const base: RowBase = { name: measurement.spec.name, args: measurement.args, cache };
+  if (failure !== null) return failedRow(base, results.length, failure);
+
+  // Repeat 0 is the warm-up: never read, never compared, never reported.
+  const reads = await Promise.all(directories.slice(1).map((directory) => read(directory)));
+  const merges: MergedWorkDumps[] = [];
+  for (const each of reads) {
+    if (!each.ok) return failedRow(base, results.length, each.refusal);
+    merges.push(each.merged);
+  }
+  const reported = merges.at(-1);
+  if (reported === undefined) return failedRow(base, results.length, 'no compared repeat ran');
+
+  const varied = variedAcross(merges);
+  return {
+    ...base,
+    runs: results.length,
+    comparedRuns: merges.length,
+    // A reported-only counter moving is not a disagreement about the code.
+    stable: merges.length < 2 ? null : varied.every((name) => !comparedExactly(name, cache)),
+    processes: reported.processes,
+    counters: reported.counters,
+    varied,
+    failed: false,
+    failure: null,
+  };
+}
+
+/**
+ * Capture a `work` report. Commands run one after another, never concurrently.
+ *
+ * @param options - See {@link CaptureWorkOptions}
+ * @returns A complete report envelope, ready to store
+ * @throws {RangeError} when fewer than {@link WORK_MIN_RUNS} repeats are asked
+ *   for, before anything runs
+ */
+export async function captureWork(options: CaptureWorkOptions): Promise<ReportEnvelope<WorkBody>> {
+  if (options.runs < WORK_MIN_RUNS) {
+    throw new RangeError(
+      `the work facet needs at least ${String(WORK_MIN_RUNS)} repeats (got ${String(options.runs)}): ` +
+        'repeat 0 is a warm-up, and stability needs two compared repeats after it',
+    );
+  }
+  const loadBefore = readLoad();
+  const { rows: commands, measured } = await captureCommandRows(
+    options,
+    DUMP_DIR_PREFIX,
+    (directory) => ({ [WORK_COUNTERS_ENV]: directory }),
+    (measurement, directories) => workRowFromRepeats(measurement, directories, readWorkDumps),
+  );
+  const loadAfter = readLoad();
+
+  return buildReportEnvelope(WORK_FACET, options, {
+    commands,
+    load: judgeLoad(loadBefore.loadAvg1, loadAfter.loadAvg1, loadAfter.cpus),
+  }, measured);
+}
