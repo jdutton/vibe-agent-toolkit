@@ -32,6 +32,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
 import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
+import { expectAbsenceCause } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { isParserUnavailable, ParseCache } from '../src/parse-cache.js';
@@ -499,6 +500,8 @@ describe('a real parse-pool rejection', () => {
       expect(conditionsWithCode(projection, BLOB_PARSE_FAILED)).toHaveLength(0);
       const died = conditionsWithCode(projection, BLOB_PARSE_WORKER_DIED);
       expect(died).toHaveLength(1);
+      // The absence-cause member this test seeds (the CLI's absence-seeds.ts names it).
+      expect(expectAbsenceCause(projection, { code: BLOB_PARSE_WORKER_DIED })).toHaveLength(1);
       expect(died[0]?.message).toContain(CODE);
       expect(describeBlobRefusals(projection)).toContain('parse worker died');
     } finally {

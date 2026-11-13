@@ -9,6 +9,7 @@ import {
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import { expectAbsenceCause, type AbsenceRows } from '@vibe-agent-toolkit/utils/testing';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { RunContentCache } from '../src/projection/content-cache.js';
@@ -216,6 +217,9 @@ describe('collectRealization', () => {
     expect(row.isDirectory).toBe(false);
     expect(row.contentKey).toBeNull();
     expect(row.contentState).toBe('unreadable');
+    // The absence-cause member this test seeds (the CLI's absence-seeds.ts names it).
+    const realized: AbsenceRows = { blobConditions: [], resourceRealizations: [row], realizationConditions: [], resolutionContexts: [] };
+    expect(expectAbsenceCause(realized, { contentState: 'unreadable' })).toHaveLength(1);
   });
 
   it('propagates a read that threw WITHOUT an errno — a bug is not an unreadable file', async () => {

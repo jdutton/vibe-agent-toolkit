@@ -686,8 +686,18 @@ export {
 // AND directories, excluding NEVER_CRAWL_GLOBS but deliberately NOT build
 // output — this is the extent that sees what the git extent cannot.
 // Its demand is a required constructor argument; every resources lane passes
-// DEFAULT_CONTENT_DEMAND so they share one store key.
-export { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from './projection/contributors/filesystem-extent.js';
+// DEFAULT_CONTENT_DEMAND so they share one store key. Its five condition codes
+// are exported so a census of absence causes reads the extent where new causes
+// are likeliest to appear.
+export {
+  DEFAULT_CONTENT_DEMAND,
+  EXTENT_DIRECTORY_UNLISTABLE,
+  EXTENT_SYMLINK_NOT_REALIZED,
+  EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT,
+  EXTENT_SYMLINK_TARGET_UNREADABLE,
+  EXTENT_SYMLINK_TARGET_UNRESOLVED,
+  FilesystemExtentContributor,
+} from './projection/contributors/filesystem-extent.js';
 
 // The agentic-convention classifier and its producer — the first contributor
 // that answers "what IS this file" rather than "does it exist".

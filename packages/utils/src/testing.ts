@@ -39,6 +39,8 @@ export {
 } from './crawl-timing.js';
 // The three fixture modules the sinks' suites share: the ONE temp-dir family,
 // the host gates, and the hostile tree every sink is tested against.
+// The absence-cause signature, shared by the CLI's I0 census and every test that plants a cause.
+export * from './testing/absence-cause.js';
 export * from './testing/archive-fixtures.js';
 export * from './testing/executables.js';
 export * from './testing/fault-fs.js';

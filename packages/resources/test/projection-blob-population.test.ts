@@ -1,6 +1,7 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { expectAbsenceCause } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { ParseCache } from '../src/parse-cache.js';
@@ -465,6 +466,8 @@ describe('populateBlobs', () => {
     expect(counts.blobsDerived).toBe(1);
     const conditions = projection.blobConditions.filter((row) => row.code === BLOB_UNREADABLE);
     expect(conditions).toHaveLength(1);
+    // The absence-cause member this test seeds (the CLI's absence-seeds.ts names it).
+    expect(expectAbsenceCause(projection, { code: BLOB_UNREADABLE })).toHaveLength(1);
     expect(conditions[0]?.message).toContain(DOC_A);
     // Evidence, never `$HOME`: every other path column in the projection is
     // root-relative, and an fs error's own message embeds the absolute path.
@@ -536,6 +539,8 @@ describe('populateBlobs', () => {
     expect(counts.blobsDerived).toBe(0);
     expect(projection.blobs).toHaveLength(0);
     expect(projection.blobConditions.map((row) => row.code)).toEqual([BLOB_CONTENT_CHANGED]);
+    // The absence-cause member this test seeds (the CLI's absence-seeds.ts names it).
+    expect(expectAbsenceCause(projection, { code: BLOB_CONTENT_CHANGED })).toHaveLength(1);
   });
 
   // The two tests below pin the semantics the per-run content cache chose, and

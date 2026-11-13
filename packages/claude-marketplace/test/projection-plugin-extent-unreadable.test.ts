@@ -19,7 +19,7 @@ import {
   type Projection,
 } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
-import { setupSyncTempDirSuite , refuseSyncFs } from '@vibe-agent-toolkit/utils/testing';
+import { expectAbsenceCause, refuseSyncFs, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { MANIFEST_UNREADABLE, PluginExtentContributor } from '../src/projection/plugin-extent.js';
@@ -72,13 +72,16 @@ describe('the MANIFEST_UNREADABLE condition names its reason', () => {
     const manifestPath = plantPlugin(root, JSON.stringify({ name: 'plug', version: '1.0.0' }));
 
     const restore = refuseSyncFs('readFileSync', manifestPath, 'EACCES');
-    let messages: string[];
+    let projection: Projection;
     try {
-      messages = unreadableMessages(await project(root));
+      projection = await project(root);
     } finally {
       restore();
     }
+    const messages = unreadableMessages(projection);
     expect(messages).toHaveLength(1);
+    // The absence-cause member this test seeds (the CLI's absence-seeds.ts names it).
+    expect(expectAbsenceCause(projection, { code: MANIFEST_UNREADABLE })).toHaveLength(1);
     expect(messages[0]).toMatch(/could not be read as a .* manifest \(EACCES/);
     expect(messages[0]).not.toContain('JSON');
   });
