@@ -40,13 +40,13 @@ import { pathToFileURL } from 'node:url';
 import {
   allDerivedSpecs,
   BLOB_FINDING_CONDITION_CODES,
-  BLOB_PARSE_LIMIT_EXCEEDED,
-  BLOB_PARSE_WORKER_DIED,
   BLOB_REFUSAL_CONDITION_CODES,
   notAdmittedIssues,
+  notAdmittedRealizations,
   PROJECTION_TABLES,
   quoteIdentifier,
   type ParseRefusedResource,
+  type ResourceRealizationRow,
 } from '@vibe-agent-toolkit/resources';
 import { FindingSchema, REFUSAL_CODES, reportSchema } from '@vibe-agent-toolkit/schema';
 import {
@@ -182,18 +182,32 @@ interface RefusalCensus {
 const BLOB_REFUSAL_CODES: ReadonlySet<string> = new Set(BLOB_REFUSAL_CONDITION_CODES);
 const BLOB_FINDING_CODES: ReadonlySet<string> = new Set(BLOB_FINDING_CONDITION_CODES);
 
-/**
- * Each parse-refusal finding code with the `blob_conditions` code a projection
- * files the same refusal under. Its keys are exhaustive over
- * `ParseRefusedResource['code']` both ways, by its type.
- */
-export const PARSE_REFUSAL_BLOB_CODE: Readonly<Record<ParseRefusedResource['code'], string>> = {
-  RESOURCE_PARSE_LIMIT_EXCEEDED: BLOB_PARSE_LIMIT_EXCEEDED,
-  RESOURCE_PARSE_WORKER_DIED: BLOB_PARSE_WORKER_DIED,
-};
+/** A content key for a probe row: well-formed, and naming no blob. */
+const PROBE_CONTENT_KEY = `markdown.${'0'.repeat(64)}`;
 
-/** The parse-refusal finding codes, the keys of {@link PARSE_REFUSAL_BLOB_CODE}. */
-export const PARSE_REFUSAL_CODES = Object.keys(PARSE_REFUSAL_BLOB_CODE) as readonly ParseRefusedResource['code'][];
+/**
+ * Each `blob_conditions` code a projection files a parse refusal under, with the
+ * finding code a run reports it as, asked of `notAdmittedRealizations` itself:
+ * one keyed realization per refusal-kind code, kept where the contract logs it
+ * `parseRefused`. Never restated here, so the harness cannot hold a pairing
+ * production does not.
+ */
+export const PARSE_REFUSAL_BLOB_CODES: ReadonlyMap<string, ParseRefusedResource['code']> = new Map(
+  BLOB_REFUSAL_CONDITION_CODES.flatMap((code) => {
+    const [refused] = notAdmittedRealizations(
+      {
+        blobConditions: [{ blob: PROBE_CONTENT_KEY, code, severity: 'error', message: 'probe', line: null }],
+        resourceRealizations: [{ path: 'probe', contentKey: PROBE_CONTENT_KEY, contentState: 'keyed', mime: null } as ResourceRealizationRow],
+      },
+      process.cwd(),
+    ).parseRefused;
+    return refused === undefined ? [] : [[code, refused.code] as const];
+  }),
+);
+if (PARSE_REFUSAL_BLOB_CODES.size === 0) throw new Error('notAdmittedRealizations logs no blob condition as a parse refusal: the probe is broken');
+
+/** The parse-refusal finding codes, the values of {@link PARSE_REFUSAL_BLOB_CODES}. */
+export const PARSE_REFUSAL_CODES: readonly ParseRefusedResource['code'][] = [...new Set(PARSE_REFUSAL_BLOB_CODES.values())];
 
 /**
  * Every code the not-admitted contract reports, asked of the contract itself:
@@ -212,7 +226,7 @@ const NOT_ADMITTED_CODES: readonly string[] = notAdmittedIssues(
 const REFUSING_FINDING_CODES: ReadonlySet<string> = new Set<string>([...REFUSAL_CODES, ...NOT_ADMITTED_CODES]);
 
 /** The parse-refusal subset, in either vocabulary. */
-const LIMIT_CODES: ReadonlySet<string> = new Set<string>([...PARSE_REFUSAL_CODES, ...Object.values(PARSE_REFUSAL_BLOB_CODE)]);
+const LIMIT_CODES: ReadonlySet<string> = new Set<string>([...PARSE_REFUSAL_CODES, ...PARSE_REFUSAL_BLOB_CODES.keys()]);
 
 /** Counts codes into a census. */
 class CensusTally {
@@ -527,7 +541,6 @@ function projectionArtifactsUnder(root: string): string[] {
   return pathsUnder(root).filter((path) => PROJECTION_SEGMENT.test(path));
 }
 
-/** The environment every arm shares; the store selection is the arm's own. */
 /**
  * A scratch directory's environment with git's config confined to it: no system
  * config, and a global config and XDG directory under its home.
@@ -546,6 +559,7 @@ function isolatedGitEnv(root: string): Record<string, string> {
   };
 }
 
+/** The environment every arm shares; the store selection is the arm's own. */
 function baseEnv(dirs: ArmDirs): Record<string, string> {
   return {
     ...isolatedGitEnv(dirs.root),
@@ -1128,7 +1142,8 @@ export function gateSubject(corpus: string): Subject {
 
 /**
  * A fixed subject: a `git clone --local --shared` of `source`'s HEAD at `corpus`,
- * taken under a git config confined to a scratch directory, with
+ * taken under a git config confined to a scratch directory (the source alone
+ * trusted as a `safe.directory`), with
  * `core.autocrlf=false` (and `core.longpaths=true` on Windows) written into the
  * clone's own config, so the checkout and every arm's run read the bytes alike
  * whatever the host's git config says.
@@ -1142,7 +1157,12 @@ export function clonedSubject(source: string, corpus: string): Subject {
   cellRoots.push(scratch);
   const config = ['core.autocrlf=false', ...(process.platform === 'win32' ? ['core.longpaths=true'] : [])];
   const configArgs = config.flatMap((entry) => ['--config', entry]);
-  runGitOrThrow(['clone', '-q', '--local', '--shared', ...configArgs, source, corpus], { env: isolatedGitEnv(scratch) });
+  // The confined global config drops any safe.directory the operator or CI set, so the source is
+  // trusted for this one command: git reads safe.directory from protected config only, which takes in
+  // `-c` (git 2.39 and later) and never a repository's own config.
+  runGitOrThrow(['-c', `safe.directory=${toForwardSlash(source)}`, 'clone', '-q', '--local', '--shared', ...configArgs, source, corpus], {
+    env: isolatedGitEnv(scratch),
+  });
   return { corpus, write: undefined };
 }
 

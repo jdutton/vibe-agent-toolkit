@@ -3,7 +3,14 @@
  * without seeing (`./helpers/cache-differential.ts`).
  */
 
-import { BLOB_FINDING_CONDITION_CODES, BLOB_NOT_TEXT } from '@vibe-agent-toolkit/resources';
+import {
+  BLOB_FINDING_CONDITION_CODES,
+  BLOB_NOT_TEXT,
+  BLOB_PARSE_LIMIT_EXCEEDED,
+  BLOB_PARSE_WORKER_DIED,
+  BLOB_REFUSAL_CONDITION_CODES,
+  type ParseRefusedResource,
+} from '@vibe-agent-toolkit/resources';
 import { CRAWL_STORE_READ_ID } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
@@ -13,7 +20,7 @@ import {
   expectSeed,
   HOLE_MOVED_COLUMNS,
   normalizeDocument,
-  PARSE_REFUSAL_BLOB_CODE,
+  PARSE_REFUSAL_BLOB_CODES,
   PARSE_REFUSAL_CODES,
   PER_RUN_FIELDS,
   refusingBlobCondition,
@@ -78,8 +85,29 @@ describe('the dump', () => {
 });
 
 describe('the census', () => {
+  it('pairs each parse refusal blob code with the finding code production reports it under', () => {
+    // Written out here, against the codes `resources` exports, so a pairing production changes reds this
+    // test rather than silently moving the harness's limit set with it. The record's type keeps it
+    // exhaustive over the finding codes a parse refusal can carry.
+    const expected: Record<ParseRefusedResource['code'], string> = {
+      RESOURCE_PARSE_LIMIT_EXCEEDED: BLOB_PARSE_LIMIT_EXCEEDED,
+      RESOURCE_PARSE_WORKER_DIED: BLOB_PARSE_WORKER_DIED,
+    };
+    expect(PARSE_REFUSAL_BLOB_CODES).toEqual(new Map(Object.entries(expected).map(([finding, blob]) => [blob, finding])));
+    expect(PARSE_REFUSAL_CODES).toHaveLength(Object.keys(expected).length);
+    expect(new Set(PARSE_REFUSAL_CODES)).toEqual(new Set(Object.keys(expected)));
+  });
+
+  it('counts a blob condition as a limit exactly when production logs it as a parse refusal', () => {
+    for (const code of BLOB_REFUSAL_CONDITION_CODES) {
+      const dump = { status: 'success', data: { rows: [{ relation: 'blob_conditions', row: JSON.stringify({ code }) }] } };
+      const limit = code === BLOB_PARSE_LIMIT_EXCEEDED || code === BLOB_PARSE_WORKER_DIED;
+      expect(VERBS.query.refusalsOf(dump), code).toEqual(limit ? { limit: 1, other: 0 } : { limit: 0, other: 1 });
+    }
+  });
+
   it('classifies a blob condition by code, and refuses to guess an unknown one', () => {
-    const [refusal] = Object.values(PARSE_REFUSAL_BLOB_CODE);
+    const [refusal] = PARSE_REFUSAL_BLOB_CODES.keys();
     const [finding] = BLOB_FINDING_CONDITION_CODES;
     expect(refusingBlobCondition(JSON.stringify({ code: refusal }))).toBe(refusal);
     expect(refusingBlobCondition(JSON.stringify({ code: finding }))).toBeUndefined();
@@ -100,7 +128,7 @@ describe('the census', () => {
     const report = { status: 'success', findings: [{ code: limitCode }, { code: 'NOT_A_REFUSAL' }] };
     expect(VERBS.validate.refusalsOf(report)).toEqual({ limit: 1, other: 0 });
     expect(VERBS.check.refusalsOf({ status: 'error', error: { code: 'SOME_ERROR' } })).toEqual({ limit: 0, other: 1 });
-    const dump = { status: 'success', data: { rows: [{ relation: 'blob_conditions', row: JSON.stringify({ code: Object.values(PARSE_REFUSAL_BLOB_CODE)[0] }) }] } };
+    const dump = { status: 'success', data: { rows: [{ relation: 'blob_conditions', row: JSON.stringify({ code: [...PARSE_REFUSAL_BLOB_CODES.keys()][0] }) }] } };
     expect(VERBS.query.refusalsOf(dump)).toEqual({ limit: 1, other: 0 });
     const answers = { kind: 'context-answers', answers: [{ refused: [{ code: limitCode }, { code: 'OTHER' }] }, {}] };
     expect(VERBS.context.refusalsOf(answers)).toEqual({ limit: 1, other: 1 });

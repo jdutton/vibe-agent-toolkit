@@ -10,15 +10,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { runGit, runGitOrThrow } from '../../src/git-run.js';
 import { normalizedTmpdir, safePath } from '../../src/path-utils.js';
+import { detachGitEnv } from '../../src/test-helpers.js';
 
 /** The tracked file; the pattern below differs from it only in case. */
 const TRACKED = 'Docs/Guide.md';
 
 describe('runGit reads a pathspec as git does with no pathspec variable set', () => {
   let dir: string;
+  let restoreGitEnv: () => void;
 
   beforeEach(() => {
-    dir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-git-pathspec-'));
+    // The ambient probe inherits the parent environment whole: a hook's GIT_DIR or GIT_INDEX_FILE
+    // would point it at another repository than `dir`.
+    restoreGitEnv = detachGitEnv();
+    dir =mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-git-pathspec-'));
     runGitOrThrow(['init', '-q'], { cwd: dir });
     // Index only: no file on disk, so a case-insensitive filesystem cannot answer for git.
     const oid = runGitOrThrow(['hash-object', '-w', '--stdin'], { cwd: dir, input: 'guide\n' }).trim();
@@ -28,6 +33,7 @@ describe('runGit reads a pathspec as git does with no pathspec variable set', ()
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    restoreGitEnv();
     rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
   });
 

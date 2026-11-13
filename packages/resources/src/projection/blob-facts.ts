@@ -241,7 +241,8 @@ const FINDING_CONDITIONS: Readonly<Record<string, (parsed: ParseResult) => reado
   // `missing-end-tag`, not prose. `HtmlParseError.line` is optional; the column is `number | null`.
   HTML_PARSE_ERROR: (parsed) => (parsed.parseErrors ?? []).map((error) => ({ message: error.message, line: error.line ?? null })),
   // A reference-style link whose label no definition in the document resolves: the label as authored.
-  UNRESOLVED_REFERENCE: (parsed) => (parsed.unresolvedReferences ?? []).map((reference) => ({ message: reference.label, line: reference.line })),};
+  UNRESOLVED_REFERENCE: (parsed) => (parsed.unresolvedReferences ?? []).map((reference) => ({ message: reference.label, line: reference.line })),
+};
 
 /** The `blob_conditions` codes of the FINDING kind: the keys of the one table {@link blobConditionsFor} emits through. */
 export const BLOB_FINDING_CONDITION_CODES: readonly string[] = Object.keys(FINDING_CONDITIONS);

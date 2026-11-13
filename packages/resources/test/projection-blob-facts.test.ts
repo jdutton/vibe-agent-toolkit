@@ -215,8 +215,9 @@ describe('blobConditionsFor', () => {
   });
 
   it('emits exactly the finding codes BLOB_FINDING_CONDITION_CODES lists, each once per diagnostic', () => {
-    // Every diagnostic source a parse carries, one each: a code emitted but unlisted, or listed but
-    // never emitted, reds here.
+    // Every diagnostic source a parse carries, one each: a listed code this parse does not emit reds
+    // here. The other direction cannot fail: the list is the keys of the table blobConditionsFor
+    // emits through, so no emitted code can be missing from it.
     const rows = blobConditionsFor(CONTENT_KEY, parseResult({
       parseErrors: [{ message: MISSING_END_TAG, line: 3 }],
       unresolvedReferences: [{ label: 'nope', line: 7 }],
