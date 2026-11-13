@@ -6,8 +6,11 @@
  * is held here is the body it is handed, read without touching the disk.
  */
 
+import { fileURLToPath } from 'node:url';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { safePath } from '../src/path-core.js';
 import {
   __readWorkCounterDumpForTest,
   __resetWorkCountersForTest,
@@ -122,8 +125,9 @@ describe('work counters', () => {
   });
 
   it('reports a directory it cannot make once, and registers no exit write to report it again', () => {
-    // A NUL byte: no platform makes this directory, and nothing touches the disk.
-    vi.stubEnv(WORK_COUNTERS_ENV, 'work-counters\0dump');
+    // Under this test file, an existing regular file: no platform makes it.
+    // Never a NUL byte, which an environment variable truncates at.
+    vi.stubEnv(WORK_COUNTERS_ENV, safePath.join(fileURLToPath(import.meta.url), 'dump'));
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const listeners = process.listenerCount('exit');
 

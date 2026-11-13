@@ -3,16 +3,22 @@
  * turns itself off rather than registering an exit write, or keeping a test
  * write, that would only report the same failure again.
  *
- * The directory carries a NUL byte, so no platform makes it and nothing here
- * touches the disk.
+ * The directory sits under this test file, an existing regular FILE, so making
+ * it fails on every platform (ENOTDIR on POSIX; on Windows the parent cannot be
+ * made a directory either) and nothing is ever created. Never a NUL byte: an
+ * environment variable truncates at one, and in a forked worker (the Windows
+ * unit pool) `process.env` is the real environment, so the value read back
+ * names a directory that IS made.
  */
 
+import { fileURLToPath } from 'node:url';
 import type * as WorkerThreads from 'node:worker_threads';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-/** A directory no platform makes. */
-const UNMAKEABLE = 'parse-timing\0dump';
+/** A directory no platform makes: its parent is this file. */
+const UNMAKEABLE = safePath.join(fileURLToPath(import.meta.url), 'dump');
 
 describe('a parse-timing dump directory that cannot be made', () => {
   afterEach(async () => {
