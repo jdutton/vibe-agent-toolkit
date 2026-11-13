@@ -248,6 +248,22 @@ export const PARSE_SEEDS: Readonly<Record<ParseCounter, Seed>> = {
       delta: { ...keyed(content), 'parse.cache.hit': 1 },
     };
   })(),
+  'parse.redispatched': (() => {
+    // The worker files the entry and says so; the read-back then finds it gone,
+    // as after a concurrent cache clear, so the document is parsed again: one
+    // document dispatched once, and one re-dispatch.
+    const content = uniqueDocument('redispatched');
+    return {
+      prepare: (scope: SeedScope) => {
+        const cache = new ParseCache({ cacheDir: scope.dir(), enabled: true });
+        Object.assign(cache, { read: (): Promise<null> => Promise.resolve(null) });
+        const dispatcher = new ParseDispatcher(cache, { transport: 'cache' });
+        scope.defer(() => dispatcher.shutdown());
+        return () => parseOnce(content, dispatcher);
+      },
+      delta: { ...keyed(content), 'parse.dispatched': 1, 'parse.redispatched': 1 },
+    };
+  })(),
   'parse.refused.keyDetermined': {
     prepare: (scope) => {
       const dispatcher = dispatcherOf(scope, { limits: { outputRows: 1 } });

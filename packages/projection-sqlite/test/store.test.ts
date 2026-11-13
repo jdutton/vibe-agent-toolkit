@@ -524,6 +524,33 @@ describe('lifetime', () => {
   });
 });
 
+/**
+ * The last table of one scope, in declaration order: the one a read reaches last.
+ *
+ * @param scope - Which scope
+ * @returns Its name
+ */
+function lastTableOfScope(scope: 'blob' | 'extent'): string {
+  const name = Object.values(PROJECTION_TABLES).findLast((spec) => spec.scope === scope)?.name;
+  if (name === undefined) throw new Error(`no ${scope}-scoped table`);
+  return name;
+}
+
+/**
+ * Drop one table from the store under `directory` behind the open store's back.
+ *
+ * @param directory - The store's directory
+ * @param table - The table to drop
+ */
+function dropTable(directory: string, table: string): void {
+  const writer = new DatabaseSync(safePath.join(directory, 'projection.db'));
+  try {
+    writer.exec(`DROP TABLE "${table}"`);
+  } finally {
+    writer.close();
+  }
+}
+
 describe('decoded rows are counted against the store they came from', () => {
   /** Rows one {@link sampleBlobRows} bundle holds across every blob-scoped table. */
   const bundleRowCount = Object.values(sampleBlobRows() as unknown as Record<string, readonly unknown[]>)
@@ -561,15 +588,25 @@ describe('decoded rows are counted against the store they came from', () => {
   });
 
   it('a read that fails counts no read', async () => {
-    const blobTable = Object.values(PROJECTION_TABLES).find((spec) => spec.scope === 'blob')?.name ?? '';
-    const writer = new DatabaseSync(safePath.join(directory, 'projection.db'));
-    try {
-      writer.exec(`DROP TABLE "${blobTable}"`);
-    } finally {
-      writer.close();
-    }
+    dropTable(directory, lastTableOfScope('blob'));
     await expect(store.readBlobFacts([FIRST_BLOB])).rejects.toThrow(/no such table/);
     expect(readWorkCounters()['store.reads.persistent']).toBe(0);
+  });
+
+  it('a read that fails after decoding earlier tables counts no decoded row', async () => {
+    // The LAST blob table: every table read before it decodes its rows first.
+    dropTable(directory, lastTableOfScope('blob'));
+    await expect(store.readBlobFacts([FIRST_BLOB])).rejects.toThrow(/no such table/);
+    expect(readWorkCounters()['store.rows.decoded.persistent']).toBe(0);
+  });
+
+  it('an extent read that fails counts no read and no decoded row', async () => {
+    await store.writeExtent(KEY, sampleExtentRows(KEY.rootId));
+    __resetWorkCountersForTest();
+    dropTable(directory, lastTableOfScope('extent'));
+    await expect(store.readExtent(KEY)).rejects.toThrow(/no such table/);
+    expect(readWorkCounters()['store.reads.persistent']).toBe(0);
+    expect(readWorkCounters()['store.rows.decoded.persistent']).toBe(0);
   });
 });
 

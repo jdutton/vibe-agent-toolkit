@@ -47,6 +47,9 @@ export const WorkCounterNameSchema = z.enum(WORK_COUNTER_NAMES);
  *   `store.miss.refusedPairs` and `parse.refused.keyDetermined`. So a row with
  *   a load refusal in any compared repeat has `stable: null` and withholds the
  *   exact verdict for every counter ({@link WorkCommandStats.loadRefusedRepeats}).
+ * - `parse.redispatched` is reported in every mode: a second dispatch happens
+ *   only when a cache entry the worker filed is gone at the read-back (a
+ *   concurrent cache clear, a purged temp directory), which is not the code.
  * - In `cold` mode `parse.dispatched` and `parse.cache.hit` depend on timing:
  *   the dispatcher's look-ahead window can have two files with one content key
  *   in flight at once, and both miss.
@@ -54,8 +57,8 @@ export const WorkCounterNameSchema = z.enum(WORK_COUNTER_NAMES);
  * Every other counter is compared exactly in both modes.
  */
 const REPORTED_ONLY: Readonly<Record<CacheMode, readonly WorkCounter[]>> = {
-  warm: ['parse.refused.load'],
-  cold: ['parse.refused.load', 'parse.dispatched', 'parse.cache.hit'],
+  warm: ['parse.refused.load', 'parse.redispatched'],
+  cold: ['parse.refused.load', 'parse.redispatched', 'parse.dispatched', 'parse.cache.hit'],
 };
 
 /**
@@ -94,7 +97,11 @@ export interface WorkCommandStats {
    * A reported-only counter ({@link comparedExactly}) never makes this false.
    */
   readonly stable: boolean | null;
-  /** How many compared repeats refused a parse under machine load (`parse.refused.load > 0`). */
+  /**
+   * How many repeats refused a parse under machine load (`parse.refused.load > 0`):
+   * the compared repeats, plus a warm-mode warm-up, whose refusal moves the
+   * compared repeats' counts through the cache it filled.
+   */
   readonly loadRefusedRepeats: number;
   /** How many process dumps the reported repeat held. */
   readonly processes: number;

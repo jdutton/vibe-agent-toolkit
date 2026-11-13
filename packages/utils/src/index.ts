@@ -363,15 +363,17 @@ export {
 // work, always on, dumped per process when `VAT_WORK_COUNTERS` names a
 // directory. Here, at the bottom of the graph, because `git-run.ts` and
 // `git-snapshot.ts` count, and every package above counts through the same
-// slots. The two `__*ForTest` seams are on `./testing`.
+// slots. The three `__*ForTest` seams are on `./testing`.
 export {
   countWork,
+  forbiddenWorkCountPolicy,
   forbidWorkCounting,
   installWorkCounterDump,
   readWorkCounters,
   WORK_COUNTER_NAMES,
   WORK_COUNTER_ROLES,
   WORK_COUNTERS_ENV,
+  type ForbiddenWorkCountPolicy,
   type WorkCounter,
   type WorkCounterDump,
   type WorkCounterRole,

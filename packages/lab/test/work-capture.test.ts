@@ -91,7 +91,8 @@ describe('workRowFromRepeats', () => {
       r2: reading({ 'git.calls': 4 }),
     });
     const row = await workRowFromRepeats(measurement([repeat(), repeat(), repeat()]), DIRS, fake.read);
-    expect(fake.asked).toEqual(['r1', 'r2']);
+    // Warm mode reads the warm-up for its load refusals only: its counts are never reported.
+    expect(fake.asked).toEqual(['r0', 'r1', 'r2']);
     expect(row.failed).toBe(false);
     expect(row.runs).toBe(3);
     expect(row.comparedRuns).toBe(2);
@@ -109,25 +110,40 @@ describe('workRowFromRepeats', () => {
     expect(countOf(row, 'git.calls')).toBe(5);
   });
 
-  it('withholds stability when any compared repeat refused a parse under load', async () => {
-    // A load refusal moves the counters downstream of the parse, so agreeing
-    // repeats are no warrant: stable is null, and the repeats are counted.
-    const fake = reader({
-      r0: reading(),
-      r1: reading(),
-      r2: reading({ 'parse.refused.load': 1 }),
-    });
+  // A load refusal moves the counters downstream of the parse, so agreeing
+  // repeats are no warrant: stable is null, and the refusing repeat is counted.
+  // A warm-mode warm-up counts too: the document it left unparsed was never
+  // cached, so the first compared repeat dispatches it and the second hits it,
+  // and an exact counter moves by load rather than by the code.
+  it.each([
+    ['a compared repeat', { r0: reading(), r1: reading(), r2: reading({ 'parse.refused.load': 1 }) }, ['parse.refused.load']],
+    [
+      'the warm-mode warm-up',
+      { r0: reading({ 'parse.refused.load': 1 }), r1: reading({ 'parse.dispatched': 1 }), r2: reading() },
+      ['parse.dispatched'],
+    ],
+  ] as const)('withholds stability when %s refused a parse under load', async (_label, readings, varied) => {
+    const fake = reader(readings);
     const row = await workRowFromRepeats(measurement([repeat(), repeat(), repeat()]), DIRS, fake.read);
     expect(row.stable).toBeNull();
     expect(row.loadRefusedRepeats).toBe(1);
-    expect(row.varied).toEqual(['parse.refused.load']);
+    expect(row.varied).toEqual(varied);
   });
 
-  it('ignores a load refusal in the discarded warm-up', async () => {
+  it('in cold mode, ignores the warm-up and never reads it: no compared repeat reads what it cached', async () => {
     const fake = reader({ r0: reading({ 'parse.refused.load': 5 }), r1: reading(), r2: reading() });
-    const row = await workRowFromRepeats(measurement([repeat(), repeat(), repeat()]), DIRS, fake.read);
+    const row = await workRowFromRepeats(measurement([repeat(), repeat(), repeat()], 'cold'), DIRS, fake.read);
+    expect(fake.asked).toEqual(['r1', 'r2']);
     expect(row.stable).toBe(true);
     expect(row.loadRefusedRepeats).toBe(0);
+  });
+
+  it('in warm mode, does not fail the row over a warm-up whose dumps cannot be read', async () => {
+    const wrapperOnly = mergeWorkDumps([{ pid: 1, role: 'wrapper', counters: {} }]);
+    const fake = reader({ r0: wrapperOnly, r1: reading(), r2: reading() });
+    const row = await workRowFromRepeats(measurement([repeat(), repeat(), repeat()]), DIRS, fake.read);
+    expect(row.failed).toBe(false);
+    expect(row.stable).toBe(true);
   });
 
   it.each([

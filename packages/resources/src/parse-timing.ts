@@ -589,7 +589,9 @@ const reportedThreads: ParseThreadTiming[] = [];
  * Read ONCE, here, from `process.env`. See the module docstring for why this
  * deliberately differs from `parse-cache.ts`'s per-construction rule.
  */
-let dumpDirectory: string | null = normalizeTimingDirectory(process.env['VAT_PARSE_TIMING']);
+let dumpDirectory: string | null = isMainThread
+  ? ensureTimingDirectory(DUMP_NOUN, normalizeTimingDirectory(process.env['VAT_PARSE_TIMING']))
+  : normalizeTimingDirectory(process.env['VAT_PARSE_TIMING']);
 
 /**
  * The hot path's gate. A plain boolean rather than `dumpDirectory !== null` so
@@ -601,7 +603,9 @@ let timingEnabled = dumpDirectory !== null;
  * The parse-cache outcomes on this thread, read from the work counters.
  *
  * A hit is a document the parser did NOT have to run over; a miss is one
- * dispatched to a parser. The block reads `parse.cache.hit` and
+ * dispatched to a parser, counted once however many times it was dispatched
+ * (`parse.redispatched` holds the rest), so hits plus misses is the documents
+ * the cache was asked for. The block reads `parse.cache.hit` and
  * `parse.dispatched` as they stand rather than counting them a second time or
  * against a baseline of its own: one counting site and one reset per number. A
  * test that wants the block at zero zeroes the work counters.
@@ -715,18 +719,16 @@ function resetAccumulators(): void {
   reportedThreads.length = 0;
 }
 
-if (dumpDirectory !== null) {
-  ensureTimingDirectory(DUMP_NOUN, dumpDirectory);
-  // Registered ONLY when enabled, and ONLY on the main thread: this process
-  // writes exactly one dump, carrying every thread. A worker registering this
-  // listener would file a second, partial file reporting the same whole-process
-  // lifetime — see `ParseTimingDump`. Its counters travel over the pool's
-  // channel instead.
-  if (isMainThread) {
-    process.on('exit', () => {
-      writeDump();
-    });
-  }
+// Registered ONLY when enabled, and ONLY on the main thread: this process
+// writes exactly one dump, carrying every thread. A worker registering this
+// listener would file a second, partial file reporting the same whole-process
+// lifetime — see `ParseTimingDump`. Its counters travel over the pool's channel
+// instead, which is also why only the main thread makes the directory above: a
+// directory that could not be made is reported once, there, and the seam is off.
+if (dumpDirectory !== null && isMainThread) {
+  process.on('exit', () => {
+    writeDump();
+  });
 }
 
 /**
@@ -864,10 +866,9 @@ export function recordThreadTiming(thread: ParseThreadTiming): void {
  * @param directory - Where {@link __writeParseTimingDumpForTest} writes, or `null` to disable
  */
 export function __setParseTimingForTest(directory: string | null): void {
-  dumpDirectory = normalizeTimingDirectory(directory ?? undefined);
+  dumpDirectory = ensureTimingDirectory(DUMP_NOUN, normalizeTimingDirectory(directory ?? undefined));
   timingEnabled = dumpDirectory !== null;
   resetAccumulators();
-  if (dumpDirectory !== null) ensureTimingDirectory(DUMP_NOUN, dumpDirectory);
 }
 
 /**

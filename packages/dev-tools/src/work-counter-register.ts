@@ -18,7 +18,7 @@ export const COUNTED_COST_ROWS: Readonly<Record<number, readonly [WorkCounter, .
   25: ['git.calls'],
   57: ['extent.derived', 'extent.served'],
   58: ['store.rows.decoded.persistent', 'store.rows.decoded.ephemeral'],
-  62: ['parse.cache.hit', 'parse.dispatched'],
+  62: ['parse.cache.hit', 'parse.dispatched', 'parse.redispatched'],
   70: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
 };
 

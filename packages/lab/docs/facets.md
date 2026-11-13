@@ -229,14 +229,17 @@ nothing; it sets that variable per repeat, as `crawl` sets its own.
   read.
 - It takes at least three repeats (`--runs` refuses fewer), discards repeat 0, compares repeats
   1..n-1 and reports the last, with `stable` as in `io`: `null` below two compared repeats, and also
-  `null` when any compared repeat refused a parse under load (`loadRefusedRepeats`), because such a
-  refusal moves the counters downstream of the parse. Either way the exact verdict is withheld.
+  `null` when a repeat refused a parse under load (`loadRefusedRepeats`), because such a refusal
+  moves the counters downstream of the parse. That counts the compared repeats and, in `warm` mode,
+  the warm-up, which fills the cache they read; a cold warm-up is never read. Either way the exact
+  verdict is withheld.
 - The dump schema is strict and has no version field. Its counter names come from the utils tuple,
   so a dump from a NEWER vat carrying a counter this lab does not know is refused; an OLDER vat's
   missing counter is absent from the row, and `compare` reports it as added or removed. Run the lab
   from the newer side, as with `io`.
 - Counters compare exactly, with one declared exception table (`comparedExactly` in
-  `work/types.ts`): `parse.refused.load` depends on machine load and is reported in every mode; in
+  `work/types.ts`): `parse.refused.load` depends on machine load and `parse.redispatched` on a cache
+  entry vanishing mid-run, so both are reported in every mode; in
   `cold` mode `parse.dispatched` and `parse.cache.hit` are reported too, because the dispatcher's
   look-ahead window can have two files with one content key in flight and both miss. A
   reported-only counter is printed and listed when it moves, never makes `stable` false and never

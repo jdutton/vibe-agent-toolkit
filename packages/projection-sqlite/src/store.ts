@@ -1646,6 +1646,7 @@ class SqliteProjectionStore implements SqlQueryableStore {
     return promised(() => {
       this.#assertOpen();
       const keys = [...new Set(contentKeys)];
+      let decoded = 0;
       const rows = this.#readTransaction(() => {
         const result: Record<string, unknown[]> = {};
         for (const { spec } of this.#plansOfScope('blob')) {
@@ -1654,13 +1655,14 @@ class SqliteProjectionStore implements SqlQueryableStore {
         for (const batch of batched(keys)) {
           for (const plan of this.#plansOfScope('blob')) {
             const raw = this.#blobStatement('select', plan.spec, batch.length).all(...batch);
-            result[plan.spec.key]?.push(...decodeRows(plan, raw, this.#lane));
+            decoded += raw.length;
+            result[plan.spec.key]?.push(...decodeRows(plan, raw));
           }
         }
         return result as unknown as BlobScopedRows;
       });
-      // Counted once it succeeded; asking for no keys reads nothing.
-      if (keys.length > 0) countWork(LANE_COUNTERS[this.#lane].reads, 1);
+      // Asking for no keys reads nothing.
+      if (keys.length > 0) this.#countRead(decoded);
       return rows;
     });
   }
@@ -1783,6 +1785,21 @@ class SqliteProjectionStore implements SqlQueryableStore {
   }
 
   /**
+   * Count one completed read and every row it decoded, against this store's lane.
+   *
+   * After the transaction, so a read that failed counts nothing, not even the
+   * rows it decoded from the tables it reached first. Hydration is a counted
+   * cost (ADR I10), and a row decoded outside the answer is exactly what the
+   * decoded counter exposes.
+   *
+   * @param decoded - How many stored rows the read decoded
+   */
+  #countRead(decoded: number): void {
+    countWork(LANE_COUNTERS[this.#lane].reads, 1);
+    countWork(LANE_COUNTERS[this.#lane].decoded, decoded);
+  }
+
+  /**
    * One derived relation's statements — creating its table on first use.
    *
    * Called inside `writeDerived`'s transaction, so a write that fails rolls the
@@ -1811,6 +1828,7 @@ class SqliteProjectionStore implements SqlQueryableStore {
   readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
     return promised(() => {
       this.#assertOpen();
+      let decoded = 0;
       const extent = this.#readTransaction(() => {
         // An extent that was written but holds nothing is a hit with empty tables;
         // one that was never written is a miss. The manifest row is what tells
@@ -1822,12 +1840,13 @@ class SqliteProjectionStore implements SqlQueryableStore {
         const result: Record<string, unknown[]> = {};
         for (const plan of this.#plansOfScope('extent')) {
           const raw = plan.selectExtent?.all(key.rootId, key.treeHash) ?? [];
-          result[plan.spec.key] = [...decodeRows(plan, raw, this.#lane)];
+          decoded += raw.length;
+          result[plan.spec.key] = [...decodeRows(plan, raw)];
         }
         return result as unknown as ExtentScopedRows;
       });
-      // Counted once it succeeded, a miss included: the manifest was read.
-      countWork(LANE_COUNTERS[this.#lane].reads, 1);
+      // A miss included: the manifest was read.
+      this.#countRead(decoded);
       return extent;
     });
   }
@@ -2200,17 +2219,14 @@ function keyColumnTypes(spec: StoredTableSpec): readonly (readonly [string, Proj
 }
 
 /**
- * Turn stored rows back into projection rows.
+ * Turn stored rows back into projection rows. The read that called it counts
+ * them, once it completes.
  *
  * @param plan - The table the rows came from, with its column kinds
  * @param raw - What SQLite returned
- * @param lane - Which store the rows came from, for the work counters
  * @returns The decoded rows
  */
-function decodeRows(plan: TablePlan, raw: readonly unknown[], lane: StoreLane): readonly Record<string, unknown>[] {
-  // Every row decoded, once per call: hydration is a counted cost (ADR I10), and
-  // a row decoded outside the answer is exactly what that counter exposes.
-  countWork(LANE_COUNTERS[lane].decoded, raw.length);
+function decodeRows(plan: TablePlan, raw: readonly unknown[]): readonly Record<string, unknown>[] {
   return raw.map((stored) => {
     const source = stored as Record<string, SqliteResultValue>;
     const row: Record<string, unknown> = {};

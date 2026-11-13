@@ -58,7 +58,7 @@ function stabilityLine(row: WorkCommandStats): string {
   if (row.loadRefusedRepeats > 0) {
     return (
       `      ⚠ LOAD REFUSALS — a parse was refused under machine load in ${tally(row.loadRefusedRepeats)} of ` +
-      `${tally(row.comparedRuns)} compared repeats, which moves the counters downstream of it, so a delta has no warrant.`
+      `${tally(row.runs)} repeats, which moves the counters downstream of it, so a delta has no warrant.`
     );
   }
   return `      ⚠ DETERMINISM UNTESTED — only ${tally(row.comparedRuns)} compared repeats, so nothing could have disagreed.`;

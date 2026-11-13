@@ -29,8 +29,11 @@
  * parent counts every job it dispatches and settles. A count after that is a
  * site counting on the wrong side of the boundary: it is reported once on
  * stderr and dropped, never thrown into an adopter's run. No environment
- * variable changes that; a test that wants the throw turns it on through
- * `throwOnForbiddenWorkCountForTest` on `./testing`.
+ * variable changes that. A test that wants the throw turns it on through
+ * `__throwOnForbiddenWorkCountForTest` on `./testing`, and because that flag is
+ * per thread, the thread that starts a worker hands it over: it reads
+ * {@link forbiddenWorkCountPolicy} and the worker passes what it was given to
+ * {@link forbidWorkCounting}.
  */
 
 import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from './timing-dump.js';
@@ -57,6 +60,7 @@ export const WORK_COUNTER_NAMES = [
   'store.miss.refusedPairs',
   'parse.cache.hit',
   'parse.dispatched',
+  'parse.redispatched',
   'parse.refused.keyDetermined',
   'parse.refused.inputCap.read',
   'parse.refused.inputCap.dispatch',
@@ -65,6 +69,12 @@ export const WORK_COUNTER_NAMES = [
   'content.hashedBytes',
   'git.calls',
 ] as const;
+
+/**
+ * What a thread that forbids counting does with a count: report it once and
+ * drop it (production), or throw (a test that turned the throw on).
+ */
+export type ForbiddenWorkCountPolicy = 'report' | 'throw';
 
 /** One work counter's name. */
 export type WorkCounter = (typeof WORK_COUNTER_NAMES)[number];
@@ -103,14 +113,20 @@ const counts = new Float64Array(WORK_COUNTER_NAMES.length);
 /** Set by {@link forbidWorkCounting}: this thread's work is counted by another. */
 let forbidden = false;
 
+/** What {@link forbidWorkCounting} said to do with a count here. */
+let forbiddenPolicy: ForbiddenWorkCountPolicy = 'report';
+
 /** Whether this thread has already reported a forbidden count. Once per thread. */
 let reportedForbidden = false;
 
-/** Set only by {@link throwOnForbiddenWorkCountForTest}: a forbidden count throws instead. */
+/** Set only by {@link __throwOnForbiddenWorkCountForTest}: threads this one starts throw on a count. */
 let throwOnForbidden = false;
 
 /** Whether {@link installWorkCounterDump} has been called with the dump on. */
 let dumpInstalled = false;
+
+/** The exit write {@link installWorkCounterDump} registered, so a test reset can take it back. */
+let dumpListener: (() => void) | null = null;
 
 /**
  * Count `n` units of work against one counter.
@@ -118,8 +134,8 @@ let dumpInstalled = false;
  * @param counter - Which counter
  * @param n - How many: a non-negative integer, never defaulted
  * @throws RangeError for a name outside {@link WORK_COUNTER_NAMES} or an `n`
- *   that is not a count; Error for a count on a thread that forbids counting,
- *   only once a test has called `throwOnForbiddenWorkCountForTest`
+ *   that is not a count; Error for a count on a thread that forbids counting
+ *   with the `throw` policy
  */
 export function countWork(counter: WorkCounter, n: number): void {
   const slot = SLOT.get(counter);
@@ -129,7 +145,7 @@ export function countWork(counter: WorkCounter, n: number): void {
   }
   if (forbidden) {
     const finding = `work counter '${counter}' counted on a thread that forbids work counting (its parent counts this work)`;
-    if (throwOnForbidden) throw new Error(finding);
+    if (forbiddenPolicy === 'throw') throw new Error(finding);
     if (!reportedForbidden) {
       reportedForbidden = true;
       process.stderr.write(`vat: ${finding}; not counted\n`);
@@ -154,9 +170,24 @@ export function readWorkCounters(): Readonly<Record<WorkCounter, number>> {
 /**
  * Declare that this thread's work is counted by another thread — see the
  * module header. Called once at a worker's startup.
+ *
+ * @param policy - What a count here does: what the starting thread's
+ *   {@link forbiddenWorkCountPolicy} said, handed over at the worker's start
  */
-export function forbidWorkCounting(): void {
+export function forbidWorkCounting(policy: ForbiddenWorkCountPolicy): void {
   forbidden = true;
+  forbiddenPolicy = policy;
+}
+
+/**
+ * What a thread this one starts should do with a count, once it forbids
+ * counting: `throw` only after a test called `__throwOnForbiddenWorkCountForTest`
+ * here, so the throw reaches across the thread boundary it guards.
+ *
+ * @returns The policy to hand the new thread
+ */
+export function forbiddenWorkCountPolicy(): ForbiddenWorkCountPolicy {
+  return throwOnForbidden ? 'throw' : 'report';
 }
 
 /**
@@ -185,30 +216,36 @@ export function installWorkCounterDump(role: WorkCounterRole): void {
   dumpInstalled = true;
   // A directory that could not be made is reported here, once; an exit write
   // into it would only report the same failure again.
-  if (!ensureTimingDirectory(DUMP_NOUN, directory)) return;
-  process.on('exit', () => {
-    writeTimingDump(DUMP_NOUN, directory, DUMP_BASENAME, () => buildDump(role));
-  });
+  const made = ensureTimingDirectory(DUMP_NOUN, directory);
+  if (made === null) return;
+  dumpListener = (): void => {
+    writeTimingDump(DUMP_NOUN, made, DUMP_BASENAME, () => buildDump(role));
+  };
+  process.on('exit', dumpListener);
 }
 
 /**
  * TEST ONLY. Zero every counter, lift a {@link forbidWorkCounting} and the
- * test throw, and forget an installed dump.
+ * test throw, and take back an installed dump's exit write.
  */
 export function __resetWorkCountersForTest(): void {
   counts.fill(0);
   forbidden = false;
+  forbiddenPolicy = 'report';
   reportedForbidden = false;
   throwOnForbidden = false;
   dumpInstalled = false;
+  if (dumpListener !== null) process.off('exit', dumpListener);
+  dumpListener = null;
 }
 
 /**
- * TEST ONLY. Make a count on a thread that forbids counting throw, so a test
+ * TEST ONLY. Make every thread this one starts from now on throw on a count
+ * once it forbids counting ({@link forbiddenWorkCountPolicy}), so a test
  * catches a site counting on the wrong side of a thread boundary. Lifted by
  * {@link __resetWorkCountersForTest}.
  */
-export function throwOnForbiddenWorkCountForTest(): void {
+export function __throwOnForbiddenWorkCountForTest(): void {
   throwOnForbidden = true;
 }
 

@@ -117,8 +117,8 @@ function movedAtAll(movement: WorkMovement): boolean {
 export function workStabilityCaveat(row: WorkCommandStats, side: string): string | null {
   if (row.loadRefusedRepeats > 0) {
     return (
-      `the ${side} row refused a parse under machine load in ${String(row.loadRefusedRepeats)} of ` +
-      `${String(row.comparedRuns)} compared repeats, which moves the counters downstream of the parse`
+      `the ${side} row refused a parse under machine load in ${String(row.loadRefusedRepeats)} of its ` +
+      `${String(row.runs)} repeats, which moves the counters downstream of the parse`
     );
   }
   return stabilityCaveat(row, side);
