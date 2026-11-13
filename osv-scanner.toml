@@ -104,9 +104,14 @@
 #     RE-CHECK TRIGGER (rule 4): the first eslint-plugin-import release whose range
 #     admits minimatch 11 — then the hazard above is gone and this paragraph goes.
 #
-# Reconciled 2026-11-12 (2 new advisories against basic-ftp 6.2.1, both patched in
-# 6.x: GHSA-r4jh-29pc-gfqr in 6.2.3, GHSA-5pm8-86m8-9m6r in 6.2.4): fixed under rule 1,
-# none listed — the `overrides` pin moved 6.2.1 -> 6.2.4.
+# Reconciled 2026-11-12 (9 new advisories, each with a patched version): fixed
+# under rule 1, none listed — the `overrides` pins moved basic-ftp 6.2.1 -> 6.2.4
+# (GHSA-r4jh-29pc-gfqr, GHSA-5pm8-86m8-9m6r), hono 4.13.11 -> 4.13.18 (GHSA-3gg2-335m-rxc6,
+# GHSA-46wx-v44x-9hh2, GHSA-4h7h-rv7c-7m2v, GHSA-4m76-xfj5-7975, GHSA-h7mg-cq63-vhpq;
+# fixed in 4.13.16) and @hono/node-server 2.1.5 -> 2.1.8 (GHSA-jpvv-r467-5p4w,
+# GHSA-qv5m-9pm6-hqp3; fixed in 2.1.6).
+# Both inside @modelcontextprotocol/sdk 1.32.0's declared `^4.11.4` and
+# `^1.19.9 || ^2.0.5`.
 # ---------------------------------------------------------------------------
 
 # --- zod 3 (GHSA-mrhx-c7xc-m3w5) ---------------------------------------------

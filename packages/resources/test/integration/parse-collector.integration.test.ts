@@ -18,9 +18,11 @@ const BUILT_POOL = pathToFileURL(safePath.resolve(import.meta.dirname, '..', '..
 const WORKER_MAIN_THREAD_GUARD =
   "VAT's parse worker is a worker-thread entry point and cannot run on the main thread. Use createParsePool() from parse-pool.js instead.";
 const BUILT_COLLECTOR = pathToFileURL(safePath.resolve(import.meta.dirname, '..', '..', 'dist', 'parse-collector.js')).href;
+/** This package's build; a child joins each parse-thread module's name onto it. */
+const BUILT_DIST = safePath.resolve(import.meta.dirname, '..', '..', 'dist');
 
 /**
- * The modules a parse thread's `import()`s load, keyed by their path under `dist/`: the worker's
+ * The modules a parse thread's `import()`s load, as paths under `dist/`: the worker's
  * entry, whose static graph `require()` walks whole, and each `import()` in `parser-loader.ts`,
  * read from that file so a new one is checked without anyone listing it. That is what is checked:
  * a dynamic `import()` written anywhere else in the worker's graph is not followed.
@@ -29,7 +31,7 @@ const BUILT_COLLECTOR = pathToFileURL(safePath.resolve(import.meta.dirname, '..'
  * string literal, or the test fails — a specifier this cannot read never passes unchecked, and a
  * comment never hides or invents one.
  */
-function parseThreadModules(): Record<string, string> {
+function parseThreadModules(): string[] {
   const path = safePath.resolve(import.meta.dirname, '..', '..', 'src', 'parser-loader.ts');
   const tree = ts.createSourceFile(path, readFileSync(path, 'utf-8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const loaded: string[] = [];
@@ -46,9 +48,7 @@ function parseThreadModules(): Record<string, string> {
   visit(tree);
   expect(unreadable, 'an import() in parser-loader.ts that is not a relative string literal').toStrictEqual([]);
   expect(loaded.length).toBeGreaterThan(0);
-  return Object.fromEntries(
-    ['parse-worker.js', ...loaded].map((file) => [file, safePath.resolve(import.meta.dirname, '..', '..', 'dist', file)]),
-  );
+  return ['parse-worker.js', ...loaded];
 }
 
 /**
@@ -139,8 +139,9 @@ describe('a parse thread\'s collector', () => {
     // the whole process.
     //
     // Every loaded module must answer `ok`, and the parse worker exactly its own main-thread guard,
-    // so any other failure (a moved module's `MODULE_NOT_FOUND`, a link error) is red. The positive control has the worker's shape: an entry that throws while it evaluates,
-    // over a dependency with a top-level `await`, so the check is shown to fire before evaluation.
+    // so any other failure (a moved module's `MODULE_NOT_FOUND`, a link error) is red. The
+    // positive control has the worker's shape: an entry that throws while it evaluates, over a
+    // dependency with a top-level `await`, so the check is shown to fire before evaluation.
     const modules = parseThreadModules();
     const outcome = runChild([
       "import { createRequire } from 'node:module';",
@@ -152,8 +153,9 @@ describe('a parse thread\'s collector', () => {
       String.raw`writeFileSync(join(planted, 'dep.mjs'), 'await Promise.resolve();\nexport const x = 1;\n');`,
       String.raw`writeFileSync(join(planted, 'entry.mjs'), "import './dep.mjs';\nthrow new Error('the entry throws, as the parse worker does');\n");`,
       "const codeOf = (file) => { try { require(file); return 'ok'; } catch (error) { return error.code ?? error.message; } };",
+      `const dist = ${JSON.stringify(BUILT_DIST)};`,
       `const modules = ${JSON.stringify(modules)};`,
-      "const verdict = { planted: codeOf(join(planted, 'entry.mjs')), codes: Object.fromEntries(Object.entries(modules).map(([name, file]) => [name, codeOf(file)])) };",
+      "const verdict = { planted: codeOf(join(planted, 'entry.mjs')), codes: Object.fromEntries(modules.map((name) => [name, codeOf(join(dist, name))])) };",
       'rmSync(planted, { recursive: true, force: true });',
       'console.log(JSON.stringify(verdict));',
     ].join('\n'));
@@ -161,7 +163,7 @@ describe('a parse thread\'s collector', () => {
     expect(outcome).toStrictEqual({
       planted: 'ERR_REQUIRE_ASYNC_MODULE',
       codes: Object.fromEntries(
-        Object.keys(modules).map((name) => [name, name === 'parse-worker.js' ? WORKER_MAIN_THREAD_GUARD : 'ok']),
+        modules.map((name) => [name, name === 'parse-worker.js' ? WORKER_MAIN_THREAD_GUARD : 'ok']),
       ),
     });
   });
