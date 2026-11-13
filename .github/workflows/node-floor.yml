@@ -12,8 +12,9 @@
 #
 # Kept out of the generated validation matrix on purpose. Adding a second
 # nodeVersions entry there would multiply the matrix by the Windows leg, whose
-# full validate has been measured at over an hour, to re-run checks that are not
-# Node-version-sensitive. What is version-sensitive is small and lives here.
+# full validate has been measured at over an hour. Instead this job runs the full
+# gate on ubuntu at the floor (its last step), because publish.yml gates every
+# release on exactly that run: a test it would fail fails here first, on the PR.
 #
 # The floor itself is derived inside `.github/actions/setup` from root
 # `package.json` `engines.node` — this file asks for no version, so it gets the
@@ -32,6 +33,8 @@ jobs:
   floor:
     name: Run the declared Node floor
     runs-on: ubuntu-latest
+    # The full gate below: measured 2026-11-01 at 40-41 min on ubuntu; about 1.6x that.
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@v7
         with:
@@ -79,3 +82,18 @@ jobs:
       # store, so it would pass without exercising anything.
       - name: vat resources query runs at the floor
         run: node packages/cli/dist/bin.js resources query "SELECT count(*) AS n FROM resources"
+
+      # The full gate, at the floor, exactly as publish.yml runs it: `pre-publish`
+      # there runs `bun run validate` on this same Node, with no NET_AVAILABLE and
+      # no contraband list. Without this step the tag push was the first place the
+      # floor met the integration and system tiers. rc.15's publish failed on two
+      # tests that hard-coded Node 24 behaviour (a worker's young generation, and
+      # terminating a worker mid top-level await), both green on every PR.
+      # Ubuntu only: it runs beside the Windows leg, which is the longer one, so a
+      # PR's wall clock does not move.
+      - name: The full gate at the floor, as publish runs it
+        run: bun run validate
+
+      - name: Print failed step output
+        if: failure()
+        run: bun run print-failed-step-output

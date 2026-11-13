@@ -103,6 +103,10 @@
 #     fails to load at all.
 #     RE-CHECK TRIGGER (rule 4): the first eslint-plugin-import release whose range
 #     admits minimatch 11 — then the hazard above is gone and this paragraph goes.
+#
+# Reconciled 2026-11-12 (2 new advisories, each with a patched version): fixed
+# under rule 1, none listed — the `overrides` pin moved basic-ftp 6.2.1 -> 6.2.4
+# (GHSA-r4jh-29pc-gfqr, GHSA-5pm8-86m8-9m6r).
 # ---------------------------------------------------------------------------
 
 # --- zod 3 (GHSA-mrhx-c7xc-m3w5) ---------------------------------------------
