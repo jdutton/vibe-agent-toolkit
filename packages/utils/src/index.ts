@@ -368,7 +368,6 @@ export {
   countWork,
   forbidWorkCounting,
   installWorkCounterDump,
-  onWorkCountersReset,
   readWorkCounters,
   WORK_COUNTER_NAMES,
   WORK_COUNTER_ROLES,

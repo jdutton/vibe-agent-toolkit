@@ -7,5 +7,4 @@
   `parse.refused.load` (machine load) and, on a cold cache, `parse.dispatched` and
   `parse.cache.hit`. Nothing is gated on them yet.
 - **`@vibe-agent-toolkit/utils`: `countWork`, `readWorkCounters`, `forbidWorkCounting`,
-  `onWorkCountersReset`, `installWorkCounterDump`, `WORK_COUNTER_NAMES`, `WORK_COUNTER_ROLES`,
-  `WORK_COUNTERS_ENV`** and their types, for code that counts or reads the same counters.
+  `installWorkCounterDump`, `WORK_COUNTER_NAMES`, `WORK_COUNTER_ROLES`, `WORK_COUNTERS_ENV`** and their types, for code that counts or reads the same counters.

@@ -121,7 +121,6 @@ import { isMainThread, threadId } from 'node:worker_threads';
 import {
   ensureTimingDirectory,
   normalizeTimingDirectory,
-  onWorkCountersReset,
   readTimingProcess,
   readWorkCounters,
   type TimingProcess,
@@ -571,20 +570,6 @@ const tierCalls = new Float64Array(TIER_PASS_NAMES.length);
 const documentCounts = new Float64Array(PARSE_KIND_SHAPES.length);
 const documentBytes = new Float64Array(PARSE_KIND_SHAPES.length);
 
-/**
- * The work counters' parse-cache counts when the accumulators were last reset.
- *
- * The `cache` block reads `parse.cache.hit` and `parse.dispatched` rather than
- * counting them a second time — one counting site per number — and reports them
- * relative to this baseline, so a reset still starts the block at zero without
- * zeroing counters the work-counter dump also reads.
- */
-const cacheBaseline = { hits: 0, misses: 0 };
-// A test that zeroes the counters zeroes this baseline with them.
-onWorkCountersReset(() => {
-  cacheBaseline.hits = 0;
-  cacheBaseline.misses = 0;
-});
 const reuseHeap: ParseReuseHeap = { settledMibTotal: 0, settledMibMax: 0 };
 
 /**
@@ -613,19 +598,19 @@ let dumpDirectory: string | null = normalizeTimingDirectory(process.env['VAT_PAR
 let timingEnabled = dumpDirectory !== null;
 
 /**
- * The parse-cache outcomes since the last reset, read from the work counters.
+ * The parse-cache outcomes on this thread, read from the work counters.
  *
  * A hit is a document the parser did NOT have to run over; a miss is one
- * dispatched to a parser.
+ * dispatched to a parser. The block reads `parse.cache.hit` and
+ * `parse.dispatched` as they stand rather than counting them a second time or
+ * against a baseline of its own: one counting site and one reset per number. A
+ * test that wants the block at zero zeroes the work counters.
  *
- * @returns Hits and misses on this thread since {@link resetAccumulators}
+ * @returns Hits and misses on this thread
  */
-function cacheSinceReset(): { hits: number; misses: number } {
+function cacheOutcomes(): { hits: number; misses: number } {
   const counted = readWorkCounters();
-  return {
-    hits: counted['parse.cache.hit'] - cacheBaseline.hits,
-    misses: counted['parse.dispatched'] - cacheBaseline.misses,
-  };
+  return { hits: counted['parse.cache.hit'], misses: counted['parse.dispatched'] };
 }
 
 /**
@@ -671,7 +656,7 @@ function kindGroup(shape: ParseKindShape, index: number): ParseTimingKind {
 function buildThreadTiming(): ParseThreadTiming {
   return {
     threadId,
-    cache: cacheSinceReset(),
+    cache: cacheOutcomes(),
     kinds: PARSE_KIND_SHAPES.map((shape, index) => kindGroup(shape, index)),
     tier: TIER_PASS_NAMES.map((name, slot) => ({
       pass: name,
@@ -715,7 +700,8 @@ function writeDump(): string | null {
  * Zero every accumulator.
  *
  * The process wall/CPU readings are NOT here: they are lifetime figures taken
- * fresh at dump time, so there is nothing of theirs to zero.
+ * fresh at dump time, so there is nothing of theirs to zero. Nor is the `cache`
+ * block: it is the work counters, which only their own reset zeroes.
  */
 function resetAccumulators(): void {
   passElapsedMs.fill(0);
@@ -724,9 +710,6 @@ function resetAccumulators(): void {
   tierCalls.fill(0);
   documentCounts.fill(0);
   documentBytes.fill(0);
-  const counted = readWorkCounters();
-  cacheBaseline.hits = counted['parse.cache.hit'];
-  cacheBaseline.misses = counted['parse.dispatched'];
   reuseHeap.settledMibTotal = 0;
   reuseHeap.settledMibMax = 0;
   reportedThreads.length = 0;
