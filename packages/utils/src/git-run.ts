@@ -48,6 +48,14 @@
  *   8,500-file tree reaches 84% of Node's default and a larger one truncates.
  * - **A spawn-level failure is a failure regardless of exit status**, which
  *   `executeGitCommand` now enforces itself; `ok` simply forwards its `success`.
+ * - **The four pathspec-magic variables are `'0'` unless `ambient: true`**
+ *   ({@link PATHSPEC_ENV}). An operator's `GIT_LITERAL_PATHSPECS=1` or
+ *   `GIT_ICASE_PATHSPECS=1` re-scopes every pathspec VAT hands git, and the scrub
+ *   keeps them because they redirect nothing. They are set in the env object this
+ *   module hands the spawn, never by spreading `process.env`, so the override is
+ *   exactly these four keys over whatever the scrubbed environment holds.
+ *   Not covered: an ambient call, and the spawns vibe-validate's own tree snapshot
+ *   makes, which take no env from here.
  *
  * ⚠️ **One property was given up in the consolidation:** this used to resolve the
  * binary with `which.sync('git')` and spawn an absolute path. `executeGitCommand`
@@ -90,6 +98,29 @@ const HEX_MAX_BUFFER = Math.floor(constants.MAX_STRING_LENGTH / 2) - 1024 * 1024
 
 /** Wall-clock ceiling on one invocation, so a hung remote cannot wedge a build. */
 const DEFAULT_TIMEOUT_MS = 60_000;
+
+/**
+ * Pathspec magic off, for every call VAT makes about a root it was handed: each
+ * pathspec is read as git reads one with no variable set. See the module header.
+ */
+const PATHSPEC_ENV: Readonly<Record<string, string>> = {
+  GIT_GLOB_PATHSPECS: '0',
+  GIT_ICASE_PATHSPECS: '0',
+  GIT_LITERAL_PATHSPECS: '0',
+  GIT_NOGLOB_PATHSPECS: '0',
+};
+
+/**
+ * The env object a call hands the spawn, layered over the inherited (scrubbed) one.
+ *
+ * @param options - The call's options
+ * @returns The caller's variables with {@link PATHSPEC_ENV} over them, or, for an
+ *   ambient call, the caller's variables alone (`undefined` when it gave none)
+ */
+function spawnEnv(options: GitRunOptions): Record<string, string> | undefined {
+  if (options.ambient === true) return options.env;
+  return { ...options.env, ...PATHSPEC_ENV };
+}
 
 /** How to run one git command. */
 export interface GitRunOptions {
@@ -277,9 +308,10 @@ function execute(args: readonly string[], options: GitRunOptions, encoding: 'utf
   // answer" from "your listing was truncated" — which is why this wrapper could
   // not have been written against the previous release.
   countWork('git.calls', 1);
+  const env = spawnEnv(options);
   const result = executeGitCommand([...args], {
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-    ...(options.env === undefined ? {} : { env: options.env }),
+    ...(env === undefined ? {} : { env }),
     ...(options.input === undefined ? {} : { stdin: options.input }),
     encoding,
     scrubGitEnv: options.ambient !== true,

@@ -218,48 +218,49 @@ const NOT_A_MAPPING =
   'the frontmatter block is valid YAML but not a YAML mapping — it decodes to a sequence, a'
   + ' scalar or a typed value (!!set, !!omap, !!timestamp, !!binary), so it declares no keys at all';
 
+/** One finding a parse carries, before it is keyed to a blob. */
+interface ConditionFinding {
+  readonly message: string;
+  readonly line: number | null;
+}
+
 /**
- * Build the `blob_conditions` rows for one parse.
+ * The `blob_conditions` codes of the FINDING kind, each with the diagnostics of
+ * a parse it reads: something said about a blob that WAS derived. The other
+ * kind, a blob declined, is `BLOB_REFUSAL_CONDITION_CODES`; together they are
+ * every code a row carries. {@link blobConditionsFor} emits only through this
+ * table, so its keys are the complete list by construction.
  *
  * Both sources are optional on `ParseResult` — HTML leaves
  * `unresolvedReferences` undefined, markdown leaves `parseErrors` undefined —
- * and absent collapses to empty here deliberately: at the condition layer
- * "nothing to say" and "nothing found" are the same row set.
+ * and absent collapses to empty deliberately: at the condition layer "nothing
+ * to say" and "nothing found" are the same row set.
+ */
+const FINDING_CONDITIONS: Readonly<Record<string, (parsed: ParseResult) => readonly ConditionFinding[]>> = {
+  // A parser's own diagnostic over HTML it read: already a parse5 error code, e.g.
+  // `missing-end-tag`, not prose. `HtmlParseError.line` is optional; the column is `number | null`.
+  HTML_PARSE_ERROR: (parsed) => (parsed.parseErrors ?? []).map((error) => ({ message: error.message, line: error.line ?? null })),
+  // A reference-style link whose label no definition in the document resolves: the label as authored.
+  UNRESOLVED_REFERENCE: (parsed) => (parsed.unresolvedReferences ?? []).map((reference) => ({ message: reference.label, line: reference.line })),
+};
+
+/** The `blob_conditions` codes of the FINDING kind: the keys of the one table {@link blobConditionsFor} emits through. */
+export const BLOB_FINDING_CONDITION_CODES: readonly string[] = Object.keys(FINDING_CONDITIONS);
+
+/**
+ * Build the `blob_conditions` rows for one parse.
  *
  * `code` is an open vocabulary (resource-projection.md §2), so classifying a
- * new diagnostic adds rows, never columns.
+ * new diagnostic adds a row to the table above, never a column.
  *
  * @param contentKey - The blob's key, written into every row's `blob` column
  * @param parsed - The parse whose diagnostics become rows
  * @returns Zero or more condition rows, HTML parse errors first
  */
 export function blobConditionsFor(contentKey: string, parsed: ParseResult): BlobConditionRow[] {
-  const rows: BlobConditionRow[] = [];
-
-  for (const error of parsed.parseErrors ?? []) {
-    rows.push({
-      blob: contentKey,
-      code: 'HTML_PARSE_ERROR',
-      severity: 'warning',
-      // Already a parse5 error code, e.g. "missing-end-tag" — not prose.
-      message: error.message,
-      // `HtmlParseError.line` is optional; the row's column is `number | null`.
-      line: error.line ?? null,
-    });
-  }
-
-  for (const reference of parsed.unresolvedReferences ?? []) {
-    rows.push({
-      blob: contentKey,
-      code: 'UNRESOLVED_REFERENCE',
-      severity: 'warning',
-      // The label as authored — the code already carries the meaning.
-      message: reference.label,
-      line: reference.line,
-    });
-  }
-
-  return rows;
+  return Object.entries(FINDING_CONDITIONS).flatMap(([code, findingsOf]) =>
+    findingsOf(parsed).map(({ message, line }) => ({ blob: contentKey, code, severity: 'warning' as const, message, line })),
+  );
 }
 
 /**

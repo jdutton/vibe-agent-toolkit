@@ -15,11 +15,10 @@ export const COUNTED_STATUS_PREFIX = 'accepted, counted';
 
 /** Register line number to the counters that count that row. */
 export const COUNTED_COST_ROWS: Readonly<Record<number, readonly [WorkCounter, ...WorkCounter[]]>> = {
-  25: ['git.calls'],
-  57: ['extent.derived', 'extent.served'],
-  58: ['store.rows.decoded.persistent', 'store.rows.decoded.ephemeral'],
-  62: ['parse.cache.hit', 'parse.dispatched', 'parse.redispatched'],
-  70: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
+  56: ['extent.derived', 'extent.served'],
+  57: ['store.rows.decoded.persistent', 'store.rows.decoded.ephemeral'],
+  61: ['parse.cache.hit', 'parse.dispatched', 'parse.redispatched'],
+  69: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
 };
 
 /** I10's own term for the store's write side, which no counted row restates. */
@@ -43,6 +42,7 @@ export const COUNTERS_WITHOUT_A_COUNTED_ROW: Readonly<Partial<Record<WorkCounter
   'parse.refused.load': 'load-dependent, bounded by I8; reported only',
   'content.hashed': UNBUILT_REHASH_BASELINE,
   'content.hashedBytes': UNBUILT_REHASH_BASELINE,
+  'git.calls': 'I10 git calls; git is no longer pinned, so no cost row restates them',
 };
 
 /** A counted cost row whose counter waits on its mechanism. */
@@ -55,14 +55,14 @@ export interface UncountedCostRow {
 
 /** Register line number to the unbuilt mechanism whose cost that row accepts. */
 export const UNCOUNTED_COST_ROWS: Readonly<Record<number, UncountedCostRow>> = {
-  32: { mechanism: 'start-time probe', status: 'unbuilt' },
-  37: { mechanism: 'code identity', status: 'unbuilt' },
-  45: { mechanism: 'lease claim', status: 'unbuilt' },
-  55: { mechanism: 'leases and pinned bytes', status: 'unbuilt' },
-  56: { mechanism: 'stat memo', status: 'unbuilt' },
-  59: { mechanism: 'lens', status: 'unbuilt' },
-  60: { mechanism: 'racy re-hash', status: 'unbuilt' },
-  78: {
+  31: { mechanism: 'start-time probe', status: 'unbuilt' },
+  36: { mechanism: 'code identity', status: 'unbuilt' },
+  44: { mechanism: 'lease claim', status: 'unbuilt' },
+  54: { mechanism: 'leases and pinned bytes', status: 'unbuilt' },
+  55: { mechanism: 'stat memo', status: 'unbuilt' },
+  58: { mechanism: 'lens', status: 'unbuilt' },
+  59: { mechanism: 'racy re-hash', status: 'unbuilt' },
+  77: {
     mechanism: "worker round trip (measured by the lab's parse-facet tier row, not a work counter)",
     status: 'unbuilt',
   },

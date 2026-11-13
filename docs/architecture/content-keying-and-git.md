@@ -250,9 +250,9 @@ Two things make it achievable rather than aspirational:
   (`packages/resources/src/schemas/projection-resources.ts:119`) already has the vocabulary for
   "there are bytes here and nobody asked for them": `deferred` — *"This is not a failure, and it is
   the only member that a later pass can legitimately turn into `keyed`."*
-- **A warm store hit is already a proof that nothing changed.** A hit means the tree hash matched, and
-  the tree hash is a function of every file's content. So every stored `contentKey` behind a hit is
-  provably current, *whichever key produced it*. Re-deriving it re-proves what the cache key already
+- **A warm store hit proves git's cleaned view is unchanged.** Under `text`/`eol` normalization or a
+  filter, the bytes on disk can change beneath it; that hole is open until the stat memo lands. Outside
+  it, every stored `contentKey` behind a hit is current, *whichever key produced it*. Re-deriving it re-proves what the cache key already
   proved.
 
 That second point is what makes the warm lane's cost redundant rather than parallelizable. Measured

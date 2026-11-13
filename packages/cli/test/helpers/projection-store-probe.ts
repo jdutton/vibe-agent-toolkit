@@ -6,8 +6,9 @@
  *
  * - `projection-store-cache-control.system.test.ts` — that the cache
  *   controls reach it across the spawn.
- * - `projection-store-equivalence.system.test.ts` — that the ANSWER is the
- *   same whether or not it is engaged.
+ * - the I0 differential (`cache-differential.ts`, run by every
+ *   `cache-differential-*.system.test.ts`) — that the ANSWER is the same
+ *   whether or not it is engaged.
  *
  * ## 🪤 Rows, never file size
  *
