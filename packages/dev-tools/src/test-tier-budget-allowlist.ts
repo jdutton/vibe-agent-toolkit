@@ -164,6 +164,23 @@ export const TEST_TIER_BUDGET_ALLOWLIST: readonly TestTierBudgetEntry[] = [
   { file: 'packages/projection-sqlite/test/store.test.ts', measuredMs: 1025, mechanisms: [MECHANISM.tempTree, MECHANISM.git] },
   { file: 'packages/cli/test/commands/resources-check-payload.test.ts', measuredMs: 1024, mechanisms: [MECHANISM.unclassified], note: 'import of the resources command module dominates; the 56 cases touch no disk' },
   { file: 'packages/lab/test/population-capture.test.ts', measuredMs: 1021, mechanisms: [MECHANISM.unclassified], note: 'captures a real projection population; local serial run; 836 ms on the floor' },
+  // Added from the coverage job's serial run on the floor at 774940506 (job 132332867301).
+  { file: 'packages/dev-tools/test/parse-failure-classifier.test.ts', measuredMs: 4161, mechanisms: [MECHANISM.unclassified], note: 'reads every packages/*/src file from the git index and builds a TypeScript AST of each that may call the parse route; measured before its prefilter stopped admitting every JSON.parse caller' },
+  { file: 'packages/agent-skills/test/validators/in-process-parse-overflow.test.ts', measuredMs: 2652, mechanisms: [MECHANISM.tempTree], note: 'drives real parse overflows (frontmatter, linked and packaged documents) through the validator over a temp skill tree' },
+  { file: 'packages/agent-skills/test/skill-source/workspace-source.test.ts', measuredMs: 2412, mechanisms: [MECHANISM.tempTree], note: 'builds a workspace skill through the real build graph and stages it under the OS temp dir, per case' },
+  { file: 'packages/resources/test/frontmatter-codec.test.ts', measuredMs: 2202, mechanisms: [MECHANISM.unclassified], note: 'round-trips 200,000- and 2,000,000-element collections and a 50,000-deep nesting: the volume is the assertion that no spread, argument-count or stack limit sits on the decode path' },
+  { file: 'packages/resources/test/parse-timing.test.ts', measuredMs: 1922, mechanisms: [MECHANISM.tempTree], note: 'runs the real markdown and HTML parsers and writes timing dumps to a temp dir' },
+  { file: 'packages/resources/test/parse-limits.test.ts', measuredMs: 1765, mechanisms: [MECHANISM.unclassified], note: 'builds and decodes multi-megabyte limit probes (a 3.9 MB !!binary that stores as 11.8 MB of JSON)' },
+  { file: 'packages/cli/test/commands/skills/build-run-ledger.test.ts', measuredMs: 1522, mechanisms: [MECHANISM.tempTree] },
+  { file: 'packages/resources/test/projection-resource-population.test.ts', measuredMs: 1426, mechanisms: [MECHANISM.git, MECHANISM.projection] },
+  { file: 'packages/cli/test/skill-test-run.test.ts', measuredMs: 1356, mechanisms: [MECHANISM.tempTree, MECHANISM.refusal] },
+  { file: 'packages/cli/test/commands/skills/build-staging.test.ts', measuredMs: 1263, mechanisms: [MECHANISM.tempTree] },
+  { file: 'packages/cli/test/commands/skills/build-report.test.ts', measuredMs: 1259, mechanisms: [MECHANISM.tempTree] },
+  { file: 'packages/resources/test/resource-registry-pool.test.ts', measuredMs: 1257, mechanisms: [MECHANISM.workerPool] },
+  { file: 'packages/cli/test/commands/inventory-shared-registry.test.ts', measuredMs: 1135, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.refusal] },
+  { file: 'packages/claude-marketplace/test/compatibility-analyzer-unchecked.test.ts', measuredMs: 1099, mechanisms: [MECHANISM.refusal] },
+  { file: 'packages/resources/test/projection-store-roundtrip.test.ts', measuredMs: 1016, mechanisms: [MECHANISM.git, MECHANISM.projection] },
+  { file: 'packages/claude-marketplace/test/inventory/extract-skill.test.ts', measuredMs: 1016, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.refusal] },
   // Integration: seeded from the coverage job's first serial run on the floor.
   { file: 'packages/cli/test/integration/cli-basics.integration.test.ts', measuredMs: 11713, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn] },
   { file: 'packages/dev-tools/test/integration/no-unsafe-backlog-ratchet.integration.test.ts', measuredMs: 10688, mechanisms: [MECHANISM.eslint] },
@@ -177,7 +194,18 @@ export const TEST_TIER_BUDGET_ALLOWLIST: readonly TestTierBudgetEntry[] = [
   // floor run that read 15–20 % slower than the one before it, so the next such run crosses.
   { file: 'packages/resource-compiler/test/integration/transformer.integration.test.ts', measuredMs: 4953, mechanisms: [MECHANISM.tempTree], note: 'a real TypeScript program per case; 4008 and 4953 ms on the floor' },
   { file: 'packages/cli/test/integration/audit-git-url.integration.test.ts', measuredMs: 4906, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.spawn], note: 'a real bare repo cloned by the audit pipeline; 4226 and 4906 ms on the floor' },
+  // Added from the coverage job's serial run on the floor at 774940506 (job 132332867301).
+  { file: 'packages/resources/test/integration/parse-pool-limits.integration.test.ts', measuredMs: 56457, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn, MECHANISM.workerPool], note: 'each case spawns a child process whose worker threads breach a real wall-clock, stack or heap limit' },
+  { file: 'packages/cli/test/integration/skills-validate-refused-skill.integration.test.ts', measuredMs: 16406, mechanisms: [MECHANISM.tempTree], note: 'parses SKILL.md files nested 50,000 levels deep, past the parse worker\'s stack, through the real audit and validate lanes' },
+  { file: 'packages/resources/test/integration/parse-limit-lanes.integration.test.ts', measuredMs: 11353, mechanisms: [MECHANISM.workerPool, MECHANISM.projection], note: 'drives each limit breach through every parse lane on a real worker pool' },
+  { file: 'packages/cli/test/integration/archive-hostile-lanes-zip.integration.test.ts', measuredMs: 7674, mechanisms: [MECHANISM.unclassified], note: 'builds every hostile ZIP fixture and runs it through three install verbs in process' },
+  { file: 'packages/cli/test/integration/claude-context-one-document.integration.test.ts', measuredMs: 7003, mechanisms: [MECHANISM.tempTree] },
+  { file: 'packages/cli/test/integration/archive-hostile-lanes-npm.integration.test.ts', measuredMs: 6022, mechanisms: [MECHANISM.unclassified], note: 'builds every hostile tarball fixture, including the over-the-entry-limit one, and runs it through the npm install lanes' },
+  { file: 'packages/agent-skills/test/integration/parse-refused-linked-file.integration.test.ts', measuredMs: 5100, mechanisms: [MECHANISM.tempTree] },
   // System: seeded from the coverage job's first serial run on the floor.
   { file: 'packages/rag-lancedb/test/system/large-scale-filtering.system.test.ts', measuredMs: 60112, mechanisms: [MECHANISM.nativeModel], note: '43119 ms local serial' },
   { file: 'packages/cli/test/system/claude-context.system.test.ts', measuredMs: 36487, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn], note: '26 spawned `vat claude context` runs; 15188 ms local serial' },
+  // Added from the coverage job's serial run on the floor at 774940506 (job 132332867301).
+  { file: 'packages/cli/test/system/population-refusal-report.system.test.ts', measuredMs: 52993, mechanisms: [MECHANISM.refusal, MECHANISM.spawn] },
+  { file: 'packages/cli/test/system/resources-query-budget.system.test.ts', measuredMs: 30148, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn], note: 'spawns real vat resources query runs, including ones the --budget supervisor must SIGKILL at the limit' },
 ];
