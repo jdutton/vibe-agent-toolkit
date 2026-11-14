@@ -6,8 +6,8 @@
  * `ProjectionStore.readExtent`, a README that imports a factory no longer
  * exported — and nothing that compiles reads prose. So the whole repository is
  * searched, by whole word, for each retired name: the changelog and its
- * fragments may record them, and this file and the import probe must name
- * them; nothing else may.
+ * fragments may record them, and this file must name them; the type probe may
+ * spell the two old type names it proves no longer import, and nothing else.
  *
  * Integration tier: it spawns `git grep` over the working tree.
  */
@@ -32,19 +32,14 @@ const RETIRED_NAMES = [
   'openEphemeralQueryStore',
 ];
 
-/**
- * The type probe that proves the retired names no longer import: it has to
- * spell them to import them.
- */
+/** The type probe that proves the old type names no longer import: it has to spell them to import them. */
 const IMPORT_PROBE = 'packages/cli/test/integration/fact-store-port.integration.test.ts';
 
-/** Where a retired name may still appear: the record of the change, and the two tests that name it. */
-const EXCLUDED_PATHSPECS = [
-  ':(exclude).changes',
-  ':(exclude,glob)**/CHANGELOG.md',
-  `:(exclude)${SELF}`,
-  `:(exclude)${IMPORT_PROBE}`,
-];
+/** The retired names the import probe spells, and only those: any other in that file is a hit. */
+const SPELLED_BY_PROBE: ReadonlySet<string> = new Set(['ProjectionStore', 'SqlQueryableStore']);
+
+/** Where every retired name may still appear: the record of the change, and this file. */
+const EXCLUDED_PATHSPECS = [':(exclude).changes', ':(exclude,glob)**/CHANGELOG.md', `:(exclude)${SELF}`];
 
 /**
  * Every `path:line:text` hit for a whole-word name, tracked and untracked files
@@ -55,9 +50,10 @@ const EXCLUDED_PATHSPECS = [
  * @throws When `git grep` fails rather than finding nothing
  */
 function hitsFor(name: string): string[] {
+  const excluded = SPELLED_BY_PROBE.has(name) ? [...EXCLUDED_PATHSPECS, `:(exclude)${IMPORT_PROBE}`] : EXCLUDED_PATHSPECS;
   const result = spawnSync(
     gitExecutable(),
-    ['grep', '--untracked', '-n', '-w', '-F', '-e', name, '--', '.', ...EXCLUDED_PATHSPECS],
+    ['grep', '--untracked', '-n', '-w', '-F', '-e', name, '--', '.', ...excluded],
     { cwd: REPO_ROOT, encoding: 'utf8' },
   );
   // 1 is "no match"; anything else but 0 is git failing, which must not read as clean.
@@ -71,7 +67,7 @@ describe('the storage port change left no retired name behind', () => {
     expect(hitsFor('FactStore').length).toBeGreaterThan(0);
   });
 
-  it.each(RETIRED_NAMES)('`%s` appears only in the change record and the tests that name it', (name) => {
+  it.each(RETIRED_NAMES)('`%s` appears only in the change record', (name) => {
     expect(hitsFor(name)).toEqual([]);
   });
 });

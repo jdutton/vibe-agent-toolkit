@@ -171,7 +171,7 @@ export function buildProjectionQueryReport(input: ProjectionQueryPayloadInput): 
  * Populate the tree and run the caller's one statement against it.
  *
  * Thin by design: everything that is not "one statement, all its rows" —
- * population, store selection, the ephemeral fallback, the cache tell and the
+ * population, fact-store selection, the run database, the cache tell and the
  * legible-failure wrapper — is shared with `vat resources check` in
  * {@link withQueriedProjection}, so the two verbs cannot drift into answering
  * about different corpora.

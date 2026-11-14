@@ -2,7 +2,9 @@
  * ESLint rule: projection-sqlite-import-boundary
  *
  * Flags every import of `@vibe-agent-toolkit/projection-sqlite`, or of any of
- * its subpaths, in whatever file the rule is enabled for.
+ * its subpaths, in whatever file the rule is enabled for — by its package name,
+ * or by a relative path that resolves, against the file being linted, to
+ * anything under `packages/projection-sqlite/`.
  *
  * The storage backend is a choice made at one edge: `resources` declares the
  * storage port and never names a backend, and the CLI picks one and injects it.
@@ -16,8 +18,15 @@
  * how a module comes to be written against a handle it was never meant to hold,
  * so every shape is covered: a static `import` (`import type` included), an
  * `export … from`, `export * from`, a dynamic `import()`, a type position
- * `import('…').T`, `import x = require('…')` and `require('…')`, each with a
- * literal or a plain template-literal specifier.
+ * `import('…').T`, `import x = require('…')`, `require('…')`, a
+ * `createRequire(…)('…')` call or a call through a name bound to
+ * `createRequire(…)`, and an ambient `declare module '…'`, each with a literal
+ * or a plain template-literal specifier.
+ *
+ * Known limits, all needing data flow the rule does not do: a computed
+ * specifier (`import(name)`), a `createRequire` result passed through anything
+ * but a direct binding, and a path that reaches the backend through a symlink
+ * or a `paths` alias in a tsconfig.
  *
  * Why a rule and not `no-restricted-imports`: flat config replaces a rule's
  * options per matching block, so a block that exempts one file from this ban
@@ -33,11 +42,44 @@
 
 'use strict';
 
+const { normalizeForMatch } = require('./exempt-path-matcher.cjs');
+
 const BACKEND = '@vibe-agent-toolkit/projection-sqlite';
 
-/** Whether `source` names the backend or one of its subpaths. */
-function isBackend(source) {
-  return source === BACKEND || source.startsWith(`${BACKEND}/`);
+/** The backend's directory, as a path segment pair a resolved import lands under. */
+const BACKEND_DIRECTORY = '/packages/projection-sqlite/';
+
+/**
+ * `specifier` resolved against the directory of `filename`, forward-slashed.
+ * Lexical only: `.` and `..` segments are folded, nothing is read from disk.
+ */
+function resolveRelative(filename, specifier) {
+  // Segments by match rather than by splitting: a rule module requires nothing
+  // outside the rule pack, `node:path` included.
+  const normalized = normalizeForMatch(filename);
+  const segments = normalized.match(/[^/]+/g) ?? [];
+  segments.pop();
+  for (const segment of specifier.match(/[^/]+/g) ?? []) {
+    if (segment === '..') segments.pop();
+    else if (segment !== '.') segments.push(segment);
+  }
+  return `${normalized.startsWith('/') ? '/' : ''}${segments.join('/')}`;
+}
+
+/** Whether `source`, imported from `filename`, names the backend or anything inside it. */
+function isBackend(source, filename) {
+  if (source === BACKEND || source.startsWith(`${BACKEND}/`)) return true;
+  if (!source.startsWith('./') && !source.startsWith('../')) return false;
+  return resolveRelative(filename, source).includes(BACKEND_DIRECTORY);
+}
+
+/** Whether `node` is a call of `createRequire`, bare or as `module.createRequire`. */
+function isCreateRequireCall(node) {
+  if (node?.type !== 'CallExpression') return false;
+  const { callee } = node;
+  if (callee.type === 'Identifier') return callee.name === 'createRequire';
+  return callee.type === 'MemberExpression' && callee.property.type === 'Identifier'
+    && callee.property.name === 'createRequire';
 }
 
 /** The text of a literal or expression-free template specifier, or null. */
@@ -68,9 +110,13 @@ module.exports = {
   },
 
   create(context) {
+    const filename = context.filename ?? context.getFilename();
+    /** Names bound directly to a `createRequire(…)` result: each is a `require`. */
+    const requireNames = new Set(['require']);
+
     function check(node, specifier) {
       const source = specifierText(specifier);
-      if (source !== null && isBackend(source)) {
+      if (source !== null && isBackend(source, filename)) {
         context.report({ node, messageId: 'backendImport', data: { source } });
       }
     }
@@ -84,8 +130,16 @@ module.exports = {
       ImportExpression: (node) => check(node, node.source),
       TSImportType: (node) => check(node, node.source ?? node.argument),
       TSExternalModuleReference: (node) => check(node, node.expression),
+      TSModuleDeclaration: (node) => {
+        if (node.id.type === 'Literal') check(node, node.id);
+      },
+      VariableDeclarator: (node) => {
+        if (node.id.type === 'Identifier' && isCreateRequireCall(node.init)) requireNames.add(node.id.name);
+      },
       CallExpression: (node) => {
-        if (node.callee.type === 'Identifier' && node.callee.name === 'require') check(node, node.arguments[0]);
+        const { callee } = node;
+        const isRequire = (callee.type === 'Identifier' && requireNames.has(callee.name)) || isCreateRequireCall(callee);
+        if (isRequire) check(node, node.arguments[0]);
       },
     };
   },

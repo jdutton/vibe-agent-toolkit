@@ -1084,7 +1084,10 @@ export const FAILURE_IS_THE_REASON = (row: FailableRow): string => row.failure ?
  */
 export const NO_WARRANT_NEEDED = (): null => null;
 
-/** The counter `work ab` compares: the I10 hydration count. */
+/**
+ * The counter `work ab` compares: rows decoded from the persistent fact store, which is
+ * what I10 counts. Not the `hydration.*` counters, which count loading a run database.
+ */
 const WORK_AB_COUNTER = 'store.rows.decoded.persistent';
 
 /**
@@ -2011,7 +2014,8 @@ export function createProgram(): Command {
         compare: compareWork,
         renderReport: renderWorkReport,
         renderComparison: renderWorkComparison,
-        // Rows decoded from the persistent store, the I10 hydration count.
+        // Rows decoded from the persistent fact store, what I10 counts (not the
+        // `hydration.*` counters, which count loading a run database).
         // Counts are deterministic, so the min across pairs is every pair's
         // value; an arm whose min and p25 differ did not count deterministically.
         estimator: 'min',

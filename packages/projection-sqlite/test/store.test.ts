@@ -8,7 +8,7 @@
  * fixture built the same wrong way.
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
 import {
@@ -16,12 +16,13 @@ import {
   type ExtentKey,
   type ExtentScopedRows,
   type FactStore,
+  type Projection,
   type ProjectionTableName,
 } from '@vibe-agent-toolkit/resources';
 import { readWorkCounters, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { __resetWorkCountersForTest } from '@vibe-agent-toolkit/utils/testing';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { openRunDatabase } from '../src/run-database.js';
 import { EXTENTS_TABLE } from '../src/schema-sql.js';
@@ -1091,3 +1092,54 @@ function filePages(): { pageCount: number; freelist: number; autoVacuum: number 
     database.close();
   }
 }
+
+describe('a lens write is not hydration', () => {
+  afterEach(() => {
+    __resetWorkCountersForTest();
+  });
+
+  it('writeDerived moves neither hydration counter', async () => {
+    const database = openRunDatabase(sampleProjection());
+    try {
+      __resetWorkCountersForTest();
+      await database.writeDerived({
+        edges: [{ src: 'res-1', refOrdinal: 0, contextId: 'lens-a', kind: 'local_file', origin: 'authored' }],
+      });
+      expect(database.query('SELECT COUNT(*) AS n FROM edges'), 'the write landed nothing').toEqual([{ n: 1 }]);
+      expect(readWorkCounters()['hydration.writes']).toBe(0);
+      expect(readWorkCounters()['hydration.rows.written']).toBe(0);
+    } finally {
+      await database.close();
+    }
+  });
+});
+
+describe('an open that fails after the connection opened releases it', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('closes the run database when loading the projection throws', () => {
+    const closes = vi.spyOn(DatabaseSync.prototype, 'close');
+    const [blob] = sampleProjection().blobs;
+    // A string in an integer column: the load throws after the database opened.
+    const unloadable = { ...sampleProjection(), blobs: [{ ...blob, bytes: 'not a number' }] } as unknown as Projection;
+
+    expect(() => openRunDatabase(unloadable)).toThrow();
+    expect(closes).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes the fact store when setting up its file throws', () => {
+    const corrupt = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-projection-corrupt-'));
+    try {
+      // Not a database: opening succeeds, and the first pragma fails.
+      writeFileSync(safePath.join(corrupt, 'projection.db'), Buffer.alloc(4096, 0x5a));
+      const closes = vi.spyOn(DatabaseSync.prototype, 'close');
+
+      expect(() => openSqliteFactStore({ directory: corrupt })).toThrow(/not a database/u);
+      expect(closes).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(corrupt, { recursive: true, force: true });
+    }
+  });
+});

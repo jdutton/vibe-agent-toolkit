@@ -373,8 +373,8 @@ export function refusedStatement(sql: string, refusals: ReadonlyMap<string, Lens
  */
 export async function assertQueriesCompile(statements: readonly PreflightStatement[]): Promise<void> {
   if (statements.length === 0) return;
-  // 🔑 A compile PROBE, not the query store: this runs before any lens is
-  // evaluated, and the query store has no table for an unevaluated relation.
+  // 🔑 A compile PROBE, not the run database: this runs before any lens is
+  // evaluated, and the run database has no table for an unevaluated relation.
   // The probe carries every derived relation and cannot answer a query, so its
   // empty tables can never be read as a result.
   const probe = await openCompileProbe();
@@ -409,7 +409,7 @@ export async function assertQueriesCompile(statements: readonly PreflightStateme
  * @param options.base - The `--base` ref for the changed-files lens, or undefined when the run was
  *   given none. REQUIRED, so no caller can drop the person's `--base` and still compile
  * @param work - Given the asker, where its rows came from, how much of the tree
- *   they cover, and the ROWS THEMSELVES. The store is open for exactly this call
+ *   they cover, and the ROWS THEMSELVES. The run database is open for exactly this call
  *   and closed however it ends
  * @returns Whatever `work` returned
  */
@@ -475,7 +475,7 @@ export async function withQueriedProjection<T>(
     );
 
     // ONE tree, in a database nothing else can reach, built fresh for this call.
-    const store = await openRunDatabase(projection);
+    const runDatabase = await openRunDatabase(projection);
     try {
       // 🚨 The population clock STOPS HERE, before the lens runs, so
       // `populationSecs` never contains `lensSecs`: the two are published side by
@@ -489,7 +489,7 @@ export async function withQueriedProjection<T>(
       // against. What decides is the statement, which cannot be forgotten.
       //
       // ⛔ The narrowing is safe ONLY because an unevaluated relation does not
-      // EXIST in `store`: the backend creates a derived table on the write that
+      // EXIST in `runDatabase`: the backend creates a derived table on the write that
       // fills it, so a statement naming one no lens filled fails `no such table`
       // in SQLite itself — whatever spelling slipped past the selector's scan.
       // Create the relations up front and this becomes a silent wrong answer: an
@@ -497,7 +497,7 @@ export async function withQueriedProjection<T>(
       const lenses = lensesNamedBy(options.statements);
       const lensStart = performance.now();
       // Sequential, not `Promise.all`: a lens may populate, and two
-      // populations racing for one projection store is the concurrency this
+      // populations racing for one projection is the concurrency this
       // lane has no reason to invite.
       const lensPopulations: LensEvaluation['population'][] = [];
       const evaluated: string[] = [];
@@ -513,7 +513,7 @@ export async function withQueriedProjection<T>(
         evaluated.push(lens.name);
         lensPopulations.push(evaluation.population);
         for (const relation of lensRelationNames(lens)) absent.delete(relation);
-        await store.writeDerived(evaluation.rows);
+        await runDatabase.writeDerived(evaluation.rows);
       });
       // Exactly 0 when no lens was named, as `ProjectionProvenance.lensMs`
       // promises. Timing the empty loop instead published whatever a GC pause or
@@ -522,7 +522,7 @@ export async function withQueriedProjection<T>(
       const lensMs = lenses.length === 0 ? 0 : performance.now() - lensStart;
       // The shared setup is done. Everything after this line is the caller's.
 
-      /** Run one statement against the store, unless it names a relation a lens refused. */
+      /** Run one statement against the run database, unless it names a relation a lens refused. */
       const guarded = <R>(sql: string, run: () => R): R => {
         const refused = refusedStatement(sql, refusals);
         if (refused !== undefined) throw refused;
@@ -532,8 +532,8 @@ export async function withQueriedProjection<T>(
           throw describedFailure(sql, error, absent);
         }
       };
-      const ask: AskProjection = (sql, ...parameters) => guarded(sql, () => store.query(sql, ...parameters));
-      const columnsOf: ColumnsOfStatement = (sql, ...parameters) => guarded(sql, () => store.columns(sql, ...parameters));
+      const ask: AskProjection = (sql, ...parameters) => guarded(sql, () => runDatabase.query(sql, ...parameters));
+      const columnsOf: ColumnsOfStatement = (sql, ...parameters) => guarded(sql, () => runDatabase.columns(sql, ...parameters));
 
       return await work(
         ask,
@@ -545,7 +545,7 @@ export async function withQueriedProjection<T>(
           // Only the lenses that ANSWERED: a refused one produced no relation.
           lensesEvaluated: evaluated,
         },
-        // Read off the PROJECTION rather than counted back out of the store with
+        // Read off the PROJECTION rather than counted back out of the run database with
         // a `SELECT COUNT(*)`: a count that travelled through the same `ask` the
         // caller's statements do would be broken by the very schema drift it
         // exists to survive, and it is the population's size either way.
@@ -557,7 +557,7 @@ export async function withQueriedProjection<T>(
       // Closed however the work ends. An in-memory database is reclaimed with the
       // process either way, but a command that runs several of these in one
       // process would otherwise hold every one of them open.
-      await store.close();
+      await runDatabase.close();
     }
   });
 }

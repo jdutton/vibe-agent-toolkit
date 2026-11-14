@@ -77,16 +77,16 @@ generated JSON Schema — `packages/resources/src/schemas/projection-blobs.ts` a
 row schemas' shape instead (the parse cache's `parseFactsShapeSource()` is the pattern).
 
 **Population is ✅ real for the fifteen shipped tables.** `populate()` derives rows from `ParseFacts`
-and `ResourceRegistry` at runtime, and `vat resources query` writes them into a per-run in-memory
-store. What remains 🔷 proposed is the REMAINDER described below: columns the parser does not yet
+and `ResourceRegistry` at runtime, and `vat resources query` loads them into the run's run
+database, opened in memory from the whole projection. What remains 🔷 proposed is the REMAINDER described below: columns the parser does not yet
 carry, and the zone modeling several tables depend on.
 
 🎯 **Target, per [fact-extractors.md](./fact-extractors.md): querying and provenance.** Each run
 hydrates a fresh database with only the relations its statements need, rows restricted to the bound
 tree's extent, and the store is never attached while a statement runs. A relation the run did not
 hydrate does not exist there, so a statement reaching it refuses instead of reading it empty (I1).
-That replaces copying the whole projection per run — today `vat resources query` populates a per-run
-in-memory store, as the paragraph above describes.
+That replaces copying the whole projection per run — today `vat resources query` loads all of it
+into the run database, as the paragraph above describes.
 Every report says what it was bound to (I1).
 
 ⚠️ `edges` was listed among the tables with a partial source and does **not** belong: it has **zero

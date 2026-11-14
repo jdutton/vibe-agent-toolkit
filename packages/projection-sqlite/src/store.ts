@@ -357,16 +357,24 @@ export function openSqliteFactStore(options: SqliteStoreOptions = {}): FactStore
   // eliminating it.
   mkdirSyncReal(directory, { recursive: true, mode: 0o700 });
   const database = new DatabaseSync(safePath.join(directory, DATABASE_FILENAME));
-  configure(database, options.busyTimeoutMs ?? BUSY_TIMEOUT_MS);
-  createSchema(database);
-  // File-backed only, and only here: it is the only store that can have been
-  // written by an earlier build. See {@link adoptLegacyBlobKeys}.
-  adoptLegacyBlobKeys(database);
-  return new SqliteFactStore(prepareStoreTables(database, {
-    extentsPerRoot: Math.max(1, Math.trunc(options.retainedExtentsPerRoot ?? DEFAULT_RETAINED_EXTENTS_PER_ROOT)),
-    roots: Math.max(1, Math.trunc(options.retainedRoots ?? DEFAULT_RETAINED_ROOTS)),
-    blobKeys: Math.max(1, Math.trunc(options.retainedBlobKeys ?? DEFAULT_RETAINED_BLOB_KEYS)),
-  }));
+  // A file that is not a database opens without complaint and fails at the
+  // first statement, so everything after the open releases the connection on
+  // the way out; an unclosed handle keeps the file locked on Windows.
+  try {
+    configure(database, options.busyTimeoutMs ?? BUSY_TIMEOUT_MS);
+    createSchema(database);
+    // File-backed only, and only here: it is the only store that can have been
+    // written by an earlier build. See {@link adoptLegacyBlobKeys}.
+    adoptLegacyBlobKeys(database);
+    return new SqliteFactStore(prepareStoreTables(database, {
+      extentsPerRoot: Math.max(1, Math.trunc(options.retainedExtentsPerRoot ?? DEFAULT_RETAINED_EXTENTS_PER_ROOT)),
+      roots: Math.max(1, Math.trunc(options.retainedRoots ?? DEFAULT_RETAINED_ROOTS)),
+      blobKeys: Math.max(1, Math.trunc(options.retainedBlobKeys ?? DEFAULT_RETAINED_BLOB_KEYS)),
+    }));
+  } catch (error) {
+    database.close();
+    throw error;
+  }
 }
 
 /**

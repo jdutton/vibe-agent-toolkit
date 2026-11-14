@@ -31,9 +31,9 @@ import type { Logger } from './logger.js';
 /**
  * The rows one lens evaluation produced, keyed by `DERIVED_TABLES`' own keys.
  *
- * Structurally `projection-sqlite`'s `DerivedRows`, spelled here so every lens
- * states its output in terms of the RELATION REGISTRY rather than of a storage
- * backend. `writeDerived` accepts it unchanged.
+ * Structurally what `RunDatabase.writeDerived` takes, spelled here so every
+ * lens states its output in terms of the RELATION REGISTRY rather than of a
+ * storage backend. `writeDerived` accepts it unchanged.
  */
 export type LensRows = {
   readonly [Name in DerivedTableName]?: readonly Record<string, unknown>[];

@@ -213,7 +213,7 @@ describe('the failure message', () => {
     ['a schema-qualified spelling', 'SELECT COUNT(*) FROM main.edges', 'no such table: main.edges'],
     ['another case', 'SELECT COUNT(*) FROM EDGES', 'no such table: EDGES'],
   ])('explains a DERIVED relation missing as "not evaluated for this run": %s', (_what, sql, engine) => {
-    // 🚨 The query store has no table for a relation no lens filled, so this
+    // 🚨 The run database has no table for a relation no lens filled, so this
     // engine message is the refusal of an unevaluated relation — not a typo. A
     // listing of "what you could have named" would include the very relation
     // SQLite just said is missing, and read as a contradiction.

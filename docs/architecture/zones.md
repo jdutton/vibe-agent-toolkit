@@ -100,7 +100,7 @@ of cost, because it POPULATES (below), so the selection became mandatory rather 
 for the reason this section already gives: a lens is invented on demand to answer a question nobody
 anticipated, so a population cannot produce one — inventing it is the asking side's job.
 
-🚨 **An unevaluated relation does not exist, so SQLite refuses it.** The per-run in-memory store
+🚨 **An unevaluated relation does not exist, so SQLite refuses it.** The run database
 creates a derived relation's table only when `writeDerived` is given rows for it (an empty array
 included — "evaluated, no rows" is a real answer). A statement naming a relation no lens filled
 therefore fails `no such table`, and the query lane's `describeQueryFailure` says why (for

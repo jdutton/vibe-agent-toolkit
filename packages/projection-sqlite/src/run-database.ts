@@ -234,7 +234,7 @@ export interface ProjectionCompileProbe {
  * to prevent. ⇒ **A caller should pass every relation it evaluated, every time.**
  * `EvaluatedLenses` makes all three fields required for precisely this reason.
  */
-export type DerivedRows = {
+type DerivedRows = {
   readonly [Name in DerivedTableName]?: readonly Record<string, unknown>[];
 };
 

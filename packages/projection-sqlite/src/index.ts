@@ -89,7 +89,6 @@ export {
 // filled it, which is why it can compile and cannot answer. See `run-database.ts`
 // on why the run database is no second storage contract.
 export {
-  type DerivedRows,
   type ProjectionCompileProbe,
   type RunDatabase,
   openProjectionCompileProbe,

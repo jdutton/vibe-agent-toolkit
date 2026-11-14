@@ -12,12 +12,16 @@
  * mapping is also why the probe can be an ordinary file in a temp directory.
  *
  * Every probe line but the two old-name imports compiles clean. Each one is written so that the
- * edit it guards against produces one diagnostic on that line and nowhere else:
+ * edit it guards against produces a diagnostic on that line (TS2344, a constraint not met):
  *
- * - SQL seeded onto the port reds the port line, and SQL seeded onto the factory's return reds
- *   the factory line (TS2339: a member read on `never`);
- * - the port's operations seeded onto the run database red the assignability line (TS2344);
- * - a relation-set parameter seeded onto the opener reds the opener line (TS2344).
+ * - the port's members are an exact list, held both ways, and so are the file-backed factory's.
+ *   A member of any kind added to either, SQL or not, reds its line; one added to the port reds
+ *   the factory's line too, since the factory returns the port. Adding an operation to the port,
+ *   or changing what the factory returns, therefore means editing this list on purpose;
+ * - the run database and the port are not assignable to each other, either way;
+ * - the opener takes a whole projection and nothing else;
+ * - no other export produces a run database: not a function returning one, possibly
+ *   `undefined` or behind a promise, and not a class constructing one.
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
@@ -41,32 +45,33 @@ const PROBE_LINES = [
   "import { openRunDatabase, openSqliteFactStore, type RunDatabase } from '@vibe-agent-toolkit/projection-sqlite';",
   'type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;',
   'type Expect<T extends true> = T;',
-  "type SqlMember = 'query' | 'columns' | 'writeDerived' | 'exec';",
-  '/** `T` when it carries no SQL member, `never` when it carries one. */',
-  'type WithoutSql<T> = [Extract<keyof T, SqlMember>] extends [never] ? T : never;',
+  '/** The port, member by member. Adding an operation to it means adding it here, deliberately. */',
+  "type PortMembers = 'writeBlobFacts' | 'readBlobFacts' | 'writeExtent' | 'readExtent' | 'close';",
   "type Backend = typeof import('@vibe-agent-toolkit/projection-sqlite');",
-  '/** Every export of the backend that hands back a run database. */',
-  'type RunDatabaseOpeners = { [Name in keyof Backend]: Backend[Name] extends (...args: never[]) => infer R ? (Awaited<R> extends RunDatabase ? Name : never) : never }[keyof Backend];',
-  'declare const port: WithoutSql<FactStore>;',
-  'declare const factoryExtras: WithoutSql<Omit<ReturnType<typeof openSqliteFactStore>, keyof FactStore> & { readonly close: FactStore["close"] }>;',
-  // 13: the port has no SQL member.
-  'export const portCloses = port.close;',
-  // 14: the file-backed factory adds no SQL member to the port.
-  'export const factoryCloses = factoryExtras.close;',
-  // 15, 16: the run database and the port are not interchangeable, either way.
+  '/** What an export produces: a constructor\'s instance, or a function\'s awaited result. */',
+  'type Produces<T> = T extends abstract new (...args: never[]) => infer I ? I : T extends (...args: never[]) => infer R ? Awaited<R> : never;',
+  '/** Every export of the backend that produces a run database, in any member of what it produces. */',
+  'type RunDatabaseOpeners = { [Name in keyof Backend]: [Extract<Produces<Backend[Name]>, RunDatabase>] extends [never] ? never : Name }[keyof Backend];',
+  // 12, 13: the port is exactly its member list, both ways.
+  'export type PortAddsNoMember = Expect<Equal<Exclude<keyof FactStore, PortMembers>, never>>;',
+  'export type PortLacksNoMember = Expect<Equal<Exclude<PortMembers, keyof FactStore>, never>>;',
+  // 14, 15: and so is what the file-backed factory returns.
+  'export type FactoryAddsNoMember = Expect<Equal<Exclude<keyof ReturnType<typeof openSqliteFactStore>, PortMembers>, never>>;',
+  'export type FactoryLacksNoMember = Expect<Equal<Exclude<PortMembers, keyof ReturnType<typeof openSqliteFactStore>>, never>>;',
+  // 16, 17: the run database and the port are not interchangeable, either way.
   'export type RunDatabaseIsNotAPort = Expect<Equal<RunDatabase extends FactStore ? true : false, false>>;',
   'export type PortIsNotARunDatabase = Expect<Equal<FactStore extends RunDatabase ? true : false, false>>;',
-  // 17: the opener takes a whole projection and nothing else — no relation set.
+  // 18: the opener takes a whole projection and nothing else — no relation set.
   'export type OpenerTakesAProjection = Expect<Equal<Parameters<typeof openRunDatabase>, [projection: Projection]>>;',
-  // 18: and it is the only export that opens a run database.
+  // 19: and it is the only export that produces a run database.
   "export type OnlyOneOpener = Expect<Equal<RunDatabaseOpeners, 'openRunDatabase'>>;",
-  // 19, 20: the old names are gone.
+  // 20, 21: the old names are gone.
   "import type { ProjectionStore } from '@vibe-agent-toolkit/resources';",
   "import type { SqlQueryableStore } from '@vibe-agent-toolkit/projection-sqlite';",
 ];
 
 /** The lines expected to carry a diagnostic, and the codes each may carry. */
-const EXPECTED: Readonly<Record<number, readonly number[]>> = { 19: NO_EXPORTED_MEMBER, 20: NO_EXPORTED_MEMBER };
+const EXPECTED: Readonly<Record<number, readonly number[]>> = { 20: NO_EXPORTED_MEMBER, 21: NO_EXPORTED_MEMBER };
 
 /** Semantic diagnostics of the probe, keyed by its 1-based line. */
 function probeDiagnostics(): Map<number, number[]> {

@@ -648,7 +648,7 @@ optional thing.**
 #### 🔑 Adopter SQL runs unsandboxed on purpose — and contributed SQL is not adopter SQL
 
 What a statement may BE is gated hard, and documented where it is enforced: `assertIsQuery` and
-`detachForeignSchemas` in `packages/projection-sqlite/src/store.ts` refuse `ATTACH` and `PRAGMA`,
+`detachForeignSchemas` in `packages/projection-sqlite/src/sql-gate.ts` refuse `ATTACH` and `PRAGMA`,
 with the measured cross-repository leak that motivated both, and `CHANGELOG.md`'s `--budget` entry
 carries why nothing inside this process can interrupt a runaway statement.
 

@@ -7,7 +7,9 @@
  * `resources` could use. And the exemption list is held both ways against the tree: every file
  * that imports the backend is exempt, and every exempt glob matches a file that imports it, so
  * a stale exemption fails here instead of standing open. Imports are found by parsing each file
- * (a comment or a string naming the package is not an import), never by matching text.
+ * (a comment or a string naming the package is not an import), never by matching text, and a
+ * relative specifier counts when it resolves, against the importing file, into the backend's
+ * package directory.
  *
  * Integration tier: it loads the repo's whole ESLint config and parses the tree.
  */
@@ -25,6 +27,8 @@ import { syntaxRuleLinter } from '../eslint-clean-files.js';
 
 const REPO_ROOT = resolveFromImportMeta(import.meta.url, '..', '..', '..', '..');
 const BACKEND = '@vibe-agent-toolkit/projection-sqlite';
+/** The backend's package directory, repo-relative, as a resolved relative import lands in it. */
+const BACKEND_DIRECTORY = 'packages/projection-sqlite/';
 const RULE = 'local/projection-sqlite-import-boundary';
 
 /** The extensions the rule is enabled for in `eslint.config.js`. */
@@ -39,16 +43,21 @@ const SHAPES: ReadonlyArray<readonly [shape: string, code: string]> = [
   ['an import()', `export const load = (): Promise<unknown> => import('${BACKEND}');\n`],
   ['a type-position import', `export type Handle = import('${BACKEND}').RunDatabase;\n`],
   ['an export-from', `export { openRunDatabase } from '${BACKEND}';\n`],
+  ['a relative import of its source', "import { openRunDatabase } from '../../../projection-sqlite/src/run-database.js';\nexport const open = openRunDatabase;\n"],
+  ['a relative import type of its barrel', "import type { RunDatabase } from '../../../projection-sqlite/src/index.js';\nexport type Handle = RunDatabase;\n"],
 ];
 
-/** The module specifier of every import, re-export, `import()` and `import('…').T` in `text`. */
+/** The module specifier of every import, re-export, `import()`, `import('…').T` and `require('…')` in `text`. */
 function specifiersOf(file: string, text: string): string[] {
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false);
   const found: string[] = [];
   const visit = (node: ts.Node): void => {
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier !== undefined && ts.isStringLiteral(node.moduleSpecifier)) {
       found.push(node.moduleSpecifier.text);
-    } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+    } else if (
+      ts.isCallExpression(node)
+      && (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))
+    ) {
       const [argument] = node.arguments;
       if (argument !== undefined && ts.isStringLiteralLike(argument)) found.push(argument.text);
     } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal)) {
@@ -58,6 +67,17 @@ function specifiersOf(file: string, text: string): string[] {
   };
   visit(source);
   return found;
+}
+
+/**
+ * Whether `specifier`, imported from the repo-relative `file`, names the backend: by its package
+ * name, or by a relative path that resolves into the backend's package directory.
+ */
+function namesBackend(file: string, specifier: string): boolean {
+  if (specifier === BACKEND || specifier.startsWith(`${BACKEND}/`)) return true;
+  if (!specifier.startsWith('./') && !specifier.startsWith('../')) return false;
+  const resolved = safePath.relative(REPO_ROOT, safePath.resolve(REPO_ROOT, file, '..', specifier));
+  return toForwardSlash(resolved).startsWith(BACKEND_DIRECTORY);
 }
 
 /** Every script under a package's `src` or `test` that imports the backend, repo-relative. */
@@ -74,8 +94,9 @@ function backendImporters(): string[] {
     .map((file) => toForwardSlash(file))
     .filter((file) => {
       const text = readFileSync(safePath.join(REPO_ROOT, file), 'utf-8');
-      // A file that never spells the name cannot import it; the parse decides for the rest.
-      return text.includes(BACKEND) && specifiersOf(file, text).some((specifier) => specifier === BACKEND || specifier.startsWith(`${BACKEND}/`));
+      // A file that never spells the package's name, scoped or as a directory, cannot import it;
+      // the parse decides for the rest.
+      return text.includes('projection-sqlite') && specifiersOf(file, text).some((specifier) => namesBackend(file, specifier));
     });
 }
 
@@ -111,5 +132,12 @@ describe('the projection-sqlite import boundary', () => {
       `export type B = import('${BACKEND}').RunDatabase;`,
     ].join('\n');
     expect(specifiersOf('probe.ts', text)).toEqual([BACKEND, BACKEND, BACKEND]);
+  });
+
+  it('counts a relative path into the backend, and nothing beside it', () => {
+    const file = 'packages/resources/src/projection/merge.ts';
+    expect(namesBackend(file, '../../../projection-sqlite/src/run-database.js')).toBe(true);
+    expect(namesBackend(file, '../../../projection-sqlite-extras/src/index.js')).toBe(false);
+    expect(namesBackend(file, './projection-sqlite.js')).toBe(false);
   });
 });
