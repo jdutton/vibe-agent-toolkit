@@ -5,8 +5,10 @@
 
 import { overOutputRowsMarkdown } from '@vibe-agent-toolkit/utils/testing';
 
+import { ParseCache } from '../../src/parse-cache.js';
 import type { ParsePoolPolicy } from '../../src/parse-dispatcher.js';
 import { createParsePool, type ParsePool, type ParsePoolOptions } from '../../src/parse-pool.js';
+import { ResourceRegistry } from '../../src/resource-registry.js';
 
 /** Documents the pools the policy builds were handed, by first line. */
 export interface Dispatched {
@@ -37,6 +39,18 @@ export function recordingPolicy(dispatched: Dispatched, limits: NonNullable<Pars
       };
     },
   };
+}
+
+/**
+ * A registry over an enabled parse cache in `cacheDir`, parsing through `parsePool`.
+ *
+ * @param baseDir - The registry's base directory
+ * @param cacheDir - The parse cache's directory
+ * @param parsePool - The pool policy the registry parses through
+ * @returns The registry
+ */
+export function registryOverCache(baseDir: string, cacheDir: string, parsePool: ParsePoolPolicy): ResourceRegistry {
+  return new ResourceRegistry({ baseDir, parseCache: new ParseCache({ cacheDir, enabled: true }), parsePool });
 }
 
 /**

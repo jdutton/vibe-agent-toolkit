@@ -33,7 +33,7 @@ import { baseBuilderForRoot, conditionsWithCode } from '../blob-fixture-populati
 import { deeplyNestedQuote } from '../parse-limit-fixtures.js';
 import { countFilesUnder, setupSubdirTestSuite } from '../test-helpers.js';
 
-import { type Dispatched, overDefaultRows, recordingPolicy } from './recording-parse-policy.js';
+import { type Dispatched, overDefaultRows, recordingPolicy, registryOverCache } from './recording-parse-policy.js';
 
 const suite = setupSubdirTestSuite('vat-parse-limit-lanes-');
 
@@ -232,11 +232,7 @@ describe('a parse with no dispatcher of a document the bounded route refuses', (
     ).rejects.toMatchObject({ code: 'PARSE_LIMIT_EXCEEDED' });
     expect(await countFilesUnder(cacheDir)).toBe(0);
 
-    const registry = new ResourceRegistry({
-      baseDir: suite.tempDir,
-      parseCache: new ParseCache({ cacheDir, enabled: true }),
-      parsePool: recordingPolicy({ firstLines: [] }, {}),
-    });
+    const registry = registryOverCache(suite.tempDir, cacheDir, recordingPolicy({ firstLines: [] }, {}));
     expect(await registry.addResources([file])).toHaveLength(0);
     expect(registry.getParseRefusedResources().map((entry) => entry.reason)).toStrictEqual([
       expect.stringContaining('outputRows'),
