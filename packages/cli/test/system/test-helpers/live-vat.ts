@@ -22,8 +22,9 @@ import { BIN_PATH } from './checks-phase.js';
  * adopted it, and until then `kill(pid, 0)` still succeeds — so a case run where the adopter does
  * not reap (a container whose PID 1 is not an init) would wait out its whole bound on a process
  * that finished at once. Where `/proc` exists (Linux, where such containers run) the state is read
- * there, and `Z` reads as gone. Elsewhere — macOS, whose launchd reaps at once, and Windows, which
- * has no zombies — `kill(pid, 0)` is the answer, and the cases rely on a reaping PID 1.
+ * there ({@link procSaysGone}): `Z` reads as gone, and so does a process that vanished between the
+ * signal and the read. Elsewhere — macOS, whose launchd reaps at once, and Windows, which has no
+ * zombies — `kill(pid, 0)` is the answer, and the cases rely on a reaping PID 1.
  */
 export function alive(pid: number): boolean {
   try {
@@ -32,21 +33,43 @@ export function alive(pid: number): boolean {
     if (isProcessGoneError(error)) return false;
     throw error;
   }
-  return !isZombie(pid);
+  return !procSaysGone(pid, HOST_PROC);
 }
 
+/** How {@link procSaysGone} reads `/proc`: whether this host mounts it, and one pid's `stat`. */
+export interface ProcReader {
+  /** Whether `/proc` exists here at all, judged by `/proc/self`, not by platform name. */
+  readonly mounted: boolean;
+  /** `/proc/<pid>/stat`'s text; throws as `readFileSync` does. */
+  readonly readStat: (pid: number) => string;
+}
+
+/** This host's `/proc`. */
+const HOST_PROC: ProcReader = {
+  mounted: fs.existsSync('/proc/self'),
+  readStat: (pid) => fs.readFileSync(`/proc/${String(pid)}/stat`, 'utf-8'),
+};
+
 /**
- * Whether `/proc` says this pid is a zombie; false where there is no `/proc` entry to read.
+ * Whether `/proc` says a pid `kill(pid, 0)` just reached is gone after all.
  *
- * @param pid - A process `kill(pid, 0)` still reaches
- * @returns True for state `Z`
+ * Gone is state `Z`, or a `stat` that can no longer be read because the process ended between the
+ * signal and the read: Linux answers that read `ESRCH` (or `ENOENT`, once the entry is unlinked);
+ * the one process-gone predicate, `isProcessGoneError`, is what reads it.
+ * Where `/proc` is not mounted (macOS, Windows) there is nothing to read, so it says nothing: false,
+ * and `kill` stands. Any other read failure is rethrown.
+ *
+ * @param pid - A process `kill(pid, 0)` still reached
+ * @param proc - The `/proc` to read
+ * @returns True for a zombie or a process that vanished before its `stat` was read
  */
-function isZombie(pid: number): boolean {
+export function procSaysGone(pid: number, proc: ProcReader): boolean {
+  if (!proc.mounted) return false;
   let stat: string;
   try {
-    stat = fs.readFileSync(`/proc/${String(pid)}/stat`, 'utf-8');
+    stat = proc.readStat(pid);
   } catch (error) {
-    if (isPathAbsentError(error)) return false;
+    if (isProcessGoneError(error) || isPathAbsentError(error)) return true;
     throw error;
   }
   // `<pid> (<comm>) <state> …` — the command may hold spaces and parentheses, so read past the LAST `)`.
