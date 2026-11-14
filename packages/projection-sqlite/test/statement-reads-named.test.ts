@@ -36,6 +36,9 @@ const UNNAMED_READS: readonly (readonly [string, string])[] = [
   ['a single-quoted table name', "SELECT COUNT(*) AS n FROM 'blobs'"],
   ['a single-quoted table beside a named one', `SELECT s."title" FROM "blob_sections" s JOIN 'blobs' b ON b."contentKey" = s."blob"`],
   ['a single-quoted table in a subquery', `SELECT "title" FROM "blob_sections" WHERE "blob" IN (SELECT "contentKey" FROM 'blobs')`],
+  ['a single-quoted table the statement also names as a qualifier', "SELECT blobs.\"contentKey\" AS k FROM 'blobs'"],
+  ['a single-quoted table followed by an unclosed comment naming it', "SELECT COUNT(*) AS n FROM 'blobs' /* blobs"],
+  ['a single-quoted table beside an alias spelled as it, with no space after AS', `SELECT COUNT(*) AS n FROM "blob_sections" AS"blobs" JOIN 'blobs' ON 1`],
 ];
 
 /** Every identifier spelling of the relation reads it. */
@@ -45,6 +48,7 @@ const NAMED_READS: readonly string[] = [
   'SELECT COUNT(*) AS n FROM [blobs]',
   'SELECT COUNT(*) AS n FROM `blobs`',
   'SELECT COUNT(*) AS n FROM main.blobs',
+  "SELECT COUNT(*) AS n FROM blobs WHERE 'blobs' = 'blobs'",
 ];
 
 let database: RunDatabase;

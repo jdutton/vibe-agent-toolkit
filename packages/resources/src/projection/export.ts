@@ -345,7 +345,9 @@ function compareValues(kind: ProjectionColumnKind, left: unknown, right: unknown
 
 /**
  * Compare two integer values exactly: as `bigint` when both read as integers, so `'9007199254740993'`
- * and `'9007199254740992'` — one double — stay two values; otherwise as numbers.
+ * and `'9007199254740992'` — one double — stay two values; otherwise as numbers. Every integral
+ * number converts to `bigint` exactly, so a number past 2^53, a `bigint` and an integer string
+ * compare as the integers they are, and the order stays transitive across the three forms.
  *
  * @param left - First value
  * @param right - Second value
@@ -372,7 +374,7 @@ const INTEGER_TEXT = /^-?\d+$/;
  */
 function integerOf(value: unknown): bigint | undefined {
   if (typeof value === 'bigint') return value;
-  if (typeof value === 'number') return Number.isSafeInteger(value) ? BigInt(value) : undefined;
+  if (typeof value === 'number') return Number.isInteger(value) ? BigInt(value) : undefined;
   return typeof value === 'string' && INTEGER_TEXT.test(value) ? BigInt(value) : undefined;
 }
 

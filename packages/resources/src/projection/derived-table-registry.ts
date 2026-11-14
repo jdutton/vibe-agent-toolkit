@@ -192,6 +192,18 @@ export function queryableRelationSpecs(): readonly QueryableRelationSpec[] {
 }
 
 /**
+ * Whether a queryable relation is a projection table — copied into a run by hydration — rather than
+ * a derived relation a lens fills. The one test of it: a projection table carries a `scope`, and a
+ * derived relation has none.
+ *
+ * @param spec - A queryable relation
+ * @returns True for a projection table
+ */
+export function isProjectionTable(spec: QueryableRelationSpec): spec is (typeof PROJECTION_TABLES)[keyof typeof PROJECTION_TABLES] {
+  return 'scope' in spec;
+}
+
+/**
  * Every relation a statement can name, by SQL name, in {@link queryableRelationSpecs} order.
  *
  * @returns The names

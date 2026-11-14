@@ -104,6 +104,27 @@ describe('compareRows is total over values a column kind does not expect', () =>
     expect(compare(row({ count: '12' }), row({ count: 12 }))).toBe(0);
   });
 
+  it('stays transitive across bigint, unsafe-number and integer-text forms of nearby integers', () => {
+    // 2^60 as a number is exact; as a double it cannot tell 2^60 + 1 from 2^60.
+    const values: readonly unknown[] = [2n ** 60n + 1n, 2 ** 60, 2n ** 60n, '1152921504606846977', '1152921504606846975', 2 ** 60 - 256];
+    const sign = (left: unknown, right: unknown): number => Math.sign(compare(row({ count: left }), row({ count: right })));
+    const broken: string[] = [];
+    for (const a of values) {
+      for (const b of values) {
+        for (const c of values) {
+          if (sign(a, b) <= 0 && sign(b, c) <= 0 && sign(a, c) > 0) broken.push(`${String(a)} <= ${String(b)} <= ${String(c)} but ${String(a)} > ${String(c)}`);
+        }
+        if (sign(a, b) !== -sign(b, a)) broken.push(`${String(a)} and ${String(b)} disagree by direction`);
+      }
+    }
+    expect(broken).toStrictEqual([]);
+    expect(sign(2 ** 60, 2n ** 60n)).toBe(0);
+    // A value that is no integer at all sorts after every integer, by its text.
+    expect(sign(5, 'not-an-integer')).toBe(-1);
+    expect(sign(2.5, 3n)).toBe(-1);
+    expect(sign(2n ** 60n + 1n, 2 ** 60)).toBe(1);
+  });
+
   it('reads the text false as false, never as a non-empty string', () => {
     expect(compare(row({ flag: 'false' }), row({ flag: false }))).toBe(0);
     expect(compare(row({ flag: 'false' }), row({ flag: true }))).toBeLessThan(0);

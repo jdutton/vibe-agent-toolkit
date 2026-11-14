@@ -116,18 +116,21 @@ relation, because it runs before any lens and cannot answer a query.
 
 🚨 **A lens that cannot answer REFUSES, and a refusal is absence, never `[]`.** The changed-files
 lens needs a base commit; without one it returns a `LensRefusal` instead of rows, writes nothing,
-and the same engine refusal fires — `describeQueryFailure` then names the lens's reason (pass
-`--base <ref>`) instead of "declare this statement", because the statement WAS declared. For
-`vat resources check` that is a `RESOURCE_CHECK_BROKEN` finding on exactly the checks that read
-the relation; the rest of the run is unaffected. A refused lens is not listed in `lensesEvaluated`.
+and a statement naming its relation is refused before it runs (`refusedStatement`): "This statement
+reads changed_files, a derived relation that could not be evaluated for this run", then the lens's
+reason (pass `--base <ref>`), not the spellings a statement names a relation by, because the
+statement DID name it. For `vat resources check` that is a `RESOURCE_CHECK_BROKEN` finding on
+exactly the checks that read the relation; the rest of the run is unaffected. A refused lens is not listed in `lensesEvaluated`.
 Its rows are never cached; any cache added later must key on the commit the base RESOLVED to, not
 the ref typed (`main` moves).
 
 The selector still over-selects on purpose, because a false negative now fails a run that had an
-answer: the scan strips comments and string literals and then matches whole identifiers (an alias
-sharing a relation's name still selects it, harmlessly; a CTE named after a lens that can refuse —
-`changed_files` — is refused as a reserved relation name, "rename the CTE", since it would either
-shadow the relation or trip its refusal). The same scan decides which projection tables a run
+answer: the scan reads the statement's tokens as SQLite does, skipping comments and string
+literals, and matches whole identifiers (an alias after `AS` is a name the statement gives and
+selects nothing, so `COUNT(*) AS changed_files` does not select `changed_files`; an alias given
+without `AS` still selects a relation of its name, harmlessly; a CTE named after a lens that can
+refuse — `changed_files` — is refused as a reserved relation name, "rename the CTE", since it would
+either shadow the relation or trip its refusal). The same scan decides which projection tables a run
 hydrates, and the SQL gate holds each statement to the relations it names itself, so a statement
 never answers from a relation another statement's name brought in. A run that declares NO
 statements hydrates nothing and evaluates no lens: `statements` is required, and there is nothing

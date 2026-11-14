@@ -28,7 +28,7 @@ import { closeGatedHandles, openGatedHandles, sampleProjection } from './fixture
 
 /**
  * Whether this runtime's SQLite has a table-valued function. `jsonb_each` and `jsonb_tree` arrived in
- * SQLite 3.45, which the declared Node floor does not ship.
+ * SQLite 3.51.0: Node 22.16.0 (SQLite 3.49.1) lacks them, Node 22.23.3 (SQLite 3.51.3) has them.
  *
  * @param name - The function
  * @returns True when it compiles
@@ -154,6 +154,16 @@ describe('the introspection gate refuses, with the statement code, on every gate
 
   it.each(REFUSED)('compile probe: %s', (_label, sql) => {
     expect(isVatError(thrownBy(() => probe.assertCompiles(sql, [])), PROJECTION_STATEMENT_REFUSED_CODE), sql).toBe(true);
+  });
+});
+
+describe('a write is refused by the gate itself, before it runs, on every gated surface', () => {
+  // The coded refusal above does not tell the gate from `PRAGMA query_only`, which also refuses a
+  // write once `query` steps it. Only the gate says this.
+  it.each(WRITE_STATEMENTS)('%s', (_label, sql) => {
+    for (const surface of [() => database.query(sql), () => database.columns(sql), () => probe.assertCompiles(sql, [])]) {
+      expect(String(thrownBy(surface))).toContain('This statement writes');
+    }
   });
 });
 

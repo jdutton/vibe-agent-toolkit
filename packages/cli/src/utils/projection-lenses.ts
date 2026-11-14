@@ -15,8 +15,9 @@
 
 import {
   DERIVED_TABLES,
-  PROJECTION_TABLES,
+  isProjectionTable,
   queryableRelationNames,
+  queryableRelationSpecs,
   relationsNamedBy,
   rootlessPathRelations,
   type DerivedTableName,
@@ -158,7 +159,7 @@ export function lensRelationNames(lens: ProjectionLens): readonly string[] {
 }
 
 /** Every projection table, by SQL name, in registry order: what hydration can copy. */
-const BASE_RELATIONS: readonly string[] = Object.values(PROJECTION_TABLES).map((spec) => spec.name);
+const BASE_RELATIONS: readonly string[] = queryableRelationSpecs().filter((spec) => isProjectionTable(spec)).map((spec) => spec.name);
 
 /** Why a relation is withheld in a run holding more than one root. */
 const ROOTLESS_REASON = 'it has a root-relative path column and no `root` column, and this run holds more than one root,'

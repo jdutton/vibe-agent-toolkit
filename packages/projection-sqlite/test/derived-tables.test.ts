@@ -14,7 +14,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { DERIVED_TABLES, PROJECTION_TABLES, allDerivedSpecs } from '@vibe-agent-toolkit/resources';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { EXTENT_KEY_COLUMNS, createDerivedTableSql, insertDerivedSql } from '../src/schema-sql.js';
 import { openSqliteFactStore } from '../src/store.js';
@@ -184,7 +184,25 @@ describe('an UNEVALUATED derived relation does not exist, so SQLite refuses it',
       await store.close();
     }
   });
+
+  it('reports the failed write, not a failure re-reading the schema after it', async () => {
+    const store = hydrateEveryTable(sampleProjection());
+    const prepare = vi.spyOn(DatabaseSync.prototype, 'prepare').mockImplementation(function (this: DatabaseSync, sql: string) {
+      if (sql.includes('sqlite_schema')) throw new Error('the schema re-read failed');
+      return PREPARE.call(this, sql);
+    });
+    try {
+      await expect(store.writeDerived({ edges: [{ ...edgeRow('res-1', 0, 'lens-a'), refOrdinal: 'x' }] }))
+        .rejects.toThrow(/numeric column/u);
+    } finally {
+      prepare.mockRestore();
+      await store.close();
+    }
+  });
 });
+
+/** The driver's own `prepare`, for a spy to fall through to. */
+const PREPARE = DatabaseSync.prototype.prepare;
 
 describe('the shared on-disk fact store cannot take a lens evaluation', () => {
   // 🚨 The whole safety property. That database is ONE per VAT release, shared

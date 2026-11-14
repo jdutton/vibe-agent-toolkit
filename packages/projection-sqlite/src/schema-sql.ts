@@ -41,6 +41,7 @@
  */
 
 import {
+  isProjectionTable,
   PROJECTION_TABLES,
   queryableRelationSpecs,
   type DerivedTableSpec,
@@ -574,13 +575,13 @@ export interface QueryableRelation {
  * 🔑 Read off `queryableRelationSpecs()` — the one list the planner and the SQL gate read too —
  * and the ONE source the compile probe and hydration create tables from, so the probe holds exactly
  * what hydration can create, and a statement naming anything else (`SELECT * FROM extents`)
- * refuses at preflight rather than after a population. A projection table carries a `scope`; a
- * derived relation has none.
+ * refuses at preflight rather than after a population. `isProjectionTable` is the one test of
+ * which relations are tables, as the planner reads it too.
  *
  * @returns The relations, tables first, each registry in declaration order
  */
 export function queryableSpecs(): readonly QueryableRelation[] {
-  return queryableRelationSpecs().map((spec) => ('scope' in spec
+  return queryableRelationSpecs().map((spec) => (isProjectionTable(spec)
     ? { spec, createSql: createTableSql(spec), insertSql: insertSql(spec), extentKeyed: spec.scope === 'extent' }
     : { spec, createSql: createDerivedTableSql(spec), insertSql: insertDerivedSql(spec), extentKeyed: false }));
 }

@@ -23,7 +23,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runProjectChecks } from '../../src/commands/resources/check.js';
 import { createLogger } from '../../src/utils/logger.js';
 import { planHydration } from '../../src/utils/projection-lenses.js';
-import { askPopulatedProjection } from '../../src/utils/projection-query.js';
+import { askPopulatedProjection, withQueriedProjection } from '../../src/utils/projection-query.js';
 import { hydrateRunDatabase } from '../../src/utils/projection-store.js';
 
 const NAMES_BLOBS = 'SELECT COUNT(*) AS n FROM blobs';
@@ -139,7 +139,7 @@ describe('a check reads only the relations it names itself', () => {
   it('refuses A beside B, which names the relation A reads', async () => {
     const issues = await issuesOf({ a: CHECK_A, b: CHECK_B });
     expect(issues).toHaveLength(1);
-    expect(issues[0]?.message).toMatch(/reads blobs without naming it/u);
+    expect(issues[0]?.message).toMatch(/reads the table blobs through the single-quoted name 'blobs'/u);
     expect(issues[0]?.message).toMatch(STRING_NOT_A_NAME);
   });
 
@@ -152,5 +152,22 @@ describe('a check reads only the relations it names itself', () => {
 
   it('passes B, which names it', async () => {
     expect(await issuesOf({ b: CHECK_B })).toStrictEqual([]);
+  });
+});
+
+describe('vat resources query\'s path: one statement reaching blobs only through a single-quoted name', () => {
+  // The query verb compiles its one statement first, on a probe holding every relation, so the
+  // refusal comes from the preflight and must make sense for a run of exactly one statement.
+  it('is refused at preflight, naming the string and the identifier spellings, and nothing about other statements', async () => {
+    const sql = "SELECT COUNT(*) AS n FROM 'blobs'";
+    const refused = await withQueriedProjection(
+      { root, logger: createLogger(), preflight: [{ sql, parameters: [] }], statements: [sql], base: undefined },
+      (ask) => ask(sql),
+    ).then(() => undefined, (error: unknown) => error);
+    expect(isVatError(refused, PROJECTION_STATEMENT_REFUSED_CODE), String(refused)).toBe(true);
+    const message = String((refused as Error).message);
+    expect(message).toMatch(/reads the table blobs through the single-quoted name 'blobs'/u);
+    expect(message).toContain('blobs, "blobs", [blobs], `blobs`');
+    expect(message).not.toMatch(/other statements/u);
   });
 });

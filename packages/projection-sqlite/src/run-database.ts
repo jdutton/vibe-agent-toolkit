@@ -39,7 +39,7 @@ import {
 import { countWork, promised } from '@vibe-agent-toolkit/utils';
 
 import { createDerivedTableSql, insertDerivedSql, type QueryableRelation, queryableSpecs } from './schema-sql.js';
-import { type GateConnection, openGate, refreshRelationPages, runGated } from './sql-gate.js';
+import { type GateConnection, openGate, refreshRelationPagesAfter, runGated } from './sql-gate.js';
 import { inTransaction } from './store.js';
 import { encodeValue, type SqliteValue } from './values.js';
 
@@ -437,15 +437,14 @@ class SqliteRunDatabase implements RunDatabase {
   query(sql: string, ...parameters: readonly SqliteValue[]): readonly Record<string, unknown>[] {
     this.#assertOpen();
 
-    // 🪤 Read-only-ness is `PRAGMA query_only` and NOT an inspection of the
-    // statement, because there is nothing useful to inspect: `StatementSync`
-    // exposes no read-only flag (verified on Node 24.13.1 — `readOnly` is simply
-    // absent), so the alternative would be pattern-matching the caller's SQL,
-    // which is a denylist and loses to the first `WITH c AS (…) DELETE FROM …`
-    // nobody thought of — real SQLite grammar, and measured reaching the engine.
-    // The pragma is the engine refusing, which no phrasing talks out of it.
-    // The kind gate in `sql-gate.ts` reads one token; it composes with this
-    // rather than replacing it.
+    // 🪤 A write is refused by the gate before it runs, from the compiled
+    // program and never from the text: `StatementSync` exposes no read-only flag
+    // (verified on Node 24.13.1 — `readOnly` is simply absent), and
+    // pattern-matching the caller's SQL is a denylist that loses to the first
+    // `WITH c AS (…) DELETE FROM …` nobody thought of. The gate's `EXPLAIN`
+    // shows the write transaction such a program opens, whatever its spelling.
+    // `PRAGMA query_only` stays armed while the statement steps, as a second
+    // guard: the engine refusing, which no phrasing talks out of it.
     //
     // ⚠️ **The blast radius, as shipped.** Two axes, and the pragma only covers
     // the first.
@@ -511,9 +510,11 @@ class SqliteRunDatabase implements RunDatabase {
       this.#assertOpen();
       const bundle = rows as Record<string, readonly Record<string, unknown>[] | undefined>;
       const knownBefore = new Set(this.#derivedPlans.keys());
+      let failed = false;
       try {
         this.#writeDerivedRows(bundle);
       } catch (error) {
+        failed = true;
         // The rollback removed every table this write created; forget their plans
         // too, or the next write would skip the `CREATE` and fail `no such table`.
         for (const key of this.#derivedPlans.keys()) {
@@ -522,8 +523,8 @@ class SqliteRunDatabase implements RunDatabase {
         throw error;
       } finally {
         // A created relation has root pages the gate must map, or a statement naming it
-        // reads a page no relation holds.
-        refreshRelationPages(this.#gate);
+        // reads a page no relation holds. After a failed write the original failure wins.
+        refreshRelationPagesAfter(this.#gate, failed);
       }
     });
   }

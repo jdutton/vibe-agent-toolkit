@@ -248,8 +248,9 @@ One query, and read-only:
   it is side-effect free, because admitting a prefix keyword would mean
   deciding safety by looking PAST the first token.
 
-  Read-only-ness stays the engine's job: the connection is put into PRAGMA
-  query_only, so a write is refused by SQLite rather than by pattern-matching.
+  A write is refused before it runs, read off the statement's compiled
+  program rather than by pattern-matching its text, so WITH ... DELETE is
+  refused too. The connection also stays in PRAGMA query_only as a second guard.
 
   One statement only -- SQLite compiles the first and discards the rest WITHOUT
   error, so trailing text would be silently ignored. A comment after the
