@@ -53,13 +53,20 @@ jobs:
       # commit — fail here and print it, so a threshold never sits a point below
       # what the floor measures.
       - name: Refuse a threshold the floor now clears by a whole point
+        if: ${{ !cancelled() }}
         run: |
           if ! git diff --exit-code -- vitest.config.ts; then
             echo "::error::coverage rose a whole point above a threshold — commit the vitest.config.ts diff above to raise the ratchet"
             exit 1
           fi
 
+      # Uploads whenever the run wrote a report. The unit tier's per-file
+      # duration ratchet reports from inside the coverage step, and the threshold
+      # check above can fail too; either red used to skip this step, which left
+      # Codecov without a report for every main commit while a budget was over.
+      # A red test is validate.yml's verdict; here it only marks this job failed.
       - name: Upload coverage to Codecov
+        if: ${{ !cancelled() && hashFiles('coverage/lcov.info') != '' }}
         uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -69,8 +76,8 @@ jobs:
 
       # The integration and system tiers, serially, for the duration ratchet
       # alone (their verdicts as tests are validate.yml's, on Node 24 and on
-      # Windows). After the upload so a ratchet red never costs the coverage
-      # report. NET_AVAILABLE as in validate.yml: the network suites run here
+      # Windows). After the upload, which runs whatever the unit tier's ratchet
+      # said. NET_AVAILABLE as in validate.yml: the network suites run here
       # too, so their durations are measured where they are judged. Both run
       # whatever an earlier step did: a Codecov outage or an earlier red must
       # not hide a ratchet red behind it.
