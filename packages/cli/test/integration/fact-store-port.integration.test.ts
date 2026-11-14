@@ -20,8 +20,10 @@
  *   or changing what the factory returns, therefore means editing this list on purpose;
  * - the run database and the port are not assignable to each other, either way;
  * - the opener takes a whole projection and nothing else;
- * - no other export produces a run database: not a function returning one, possibly
- *   `undefined` or behind a promise, and not a class constructing one.
+ * - no other export produces a run database: not a function returning one, as a union member
+ *   (`RunDatabase | undefined`) or behind a promise, and not a class constructing one. Known
+ *   limits: a run database wrapped in what an export returns (`{ db }` or a tuple), a `const`
+ *   export holding one, and any overload but the last, which is the only one `infer` reads.
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
@@ -50,7 +52,7 @@ const PROBE_LINES = [
   "type Backend = typeof import('@vibe-agent-toolkit/projection-sqlite');",
   '/** What an export produces: a constructor\'s instance, or a function\'s awaited result. */',
   'type Produces<T> = T extends abstract new (...args: never[]) => infer I ? I : T extends (...args: never[]) => infer R ? Awaited<R> : never;',
-  '/** Every export of the backend that produces a run database, in any member of what it produces. */',
+  '/** Every export of the backend that produces a run database as a union member of what it produces. Not seen: one wrapped in what an export returns (`{ db }`, a tuple), a const export holding one, and an overload past the last signature. */',
   'type RunDatabaseOpeners = { [Name in keyof Backend]: [Extract<Produces<Backend[Name]>, RunDatabase>] extends [never] ? never : Name }[keyof Backend];',
   // 12, 13: the port is exactly its member list, both ways.
   'export type PortAddsNoMember = Expect<Equal<Exclude<keyof FactStore, PortMembers>, never>>;',

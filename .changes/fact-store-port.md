@@ -11,7 +11,8 @@
   renamed `hydration.writes` and `hydration.rows.written`, and they count less.** They count only
   loading a run's projection into its run database. Writing a lens's derived relations
   (`writeDerived`) no longer counts, so for a statement that names a lens relation
-  `hydration.rows.written` reads lower than the old counter did.
+  `hydration.rows.written` reads lower than the old counter did, and `hydration.writes` reads one
+  lower for each lens write.
 - **`vat-lab work`: no lab build reads dumps from both sides of this change.** This lab refuses a
   counter dump from a vat build before it, which carries counters it does not know, and an earlier
   lab refuses one from a build after it for the same reason, so a work comparison across the change

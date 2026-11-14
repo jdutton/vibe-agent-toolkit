@@ -77,9 +77,9 @@ generated JSON Schema — `packages/resources/src/schemas/projection-blobs.ts` a
 row schemas' shape instead (the parse cache's `parseFactsShapeSource()` is the pattern).
 
 **Population is ✅ real for the fifteen shipped tables.** `populate()` derives rows from `ParseFacts`
-and `ResourceRegistry` at runtime, and `vat resources query` loads them into the run's run
-database, opened in memory from the whole projection. What remains 🔷 proposed is the REMAINDER described below: columns the parser does not yet
-carry, and the zone modeling several tables depend on.
+and `ResourceRegistry` at runtime, and `vat resources query` loads them into a run database opened
+in memory for that run. What remains 🔷 proposed is the REMAINDER described below: columns the
+parser does not yet carry, and the zone modeling several tables depend on.
 
 🎯 **Target, per [fact-extractors.md](./fact-extractors.md): querying and provenance.** Each run
 hydrates a fresh database with only the relations its statements need, rows restricted to the bound

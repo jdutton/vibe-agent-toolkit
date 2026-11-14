@@ -20,8 +20,10 @@ const CASES: RuleCases = {
     { code: "import { x } from './projection-sqlite.js';", filename: FILE },
     // Resolves to a sibling of the package, not into it.
     { code: "import { x } from '../../../projection-sqlite-extras/src/index.js';", filename: FILE },
-    // A file that resolves to itself inside the backend is the config's business, not the rule's.
+    // Resolves inside resources, to a file merely named after the backend.
     { code: "import { x } from '../../projection/projection-sqlite.js';", filename: FILE },
+    // The sibling's directory itself, bare: a prefix of the name is not the package.
+    { code: "export const b: unknown = require('../../../projection-sqlite-extras');", filename: FILE },
     { code: "export const name = '@vibe-agent-toolkit/projection-sqlite';", filename: FILE },
     { code: "declare function load(name: string): unknown;\nexport const x = load('@vibe-agent-toolkit/projection-sqlite');", filename: FILE },
   ],
@@ -77,6 +79,51 @@ const CASES: RuleCases = {
       errors: ERROR,
     },
     { code: `declare module '${BACKEND}' {\n  export const x: number;\n}`, filename: FILE, errors: ERROR },
+    // The package directory itself, bare or with a trailing slash, is the package.
+    {
+      code: "export const b: unknown = require('../../projection-sqlite');",
+      filename: '/repo/packages/resources/src/merge.ts',
+      errors: [{ messageId: 'backendImport', data: { source: '../../projection-sqlite' } }],
+    },
+    {
+      code: "import backend from '../../../projection-sqlite/';\nexport const b = backend;",
+      filename: FILE,
+      errors: [{ messageId: 'backendImport', data: { source: '../../../projection-sqlite/' } }],
+    },
+    {
+      code: "import { createRequire } from 'node:module';\nexport const b: unknown = createRequire(import.meta.url)('../../../projection-sqlite');",
+      filename: FILE,
+      errors: [{ messageId: 'backendImport', data: { source: '../../../projection-sqlite' } }],
+    },
+    // A call written above the binding it goes through.
+    {
+      code: `import { createRequire } from 'node:module';\nexport function b(): unknown {\n  return load('${BACKEND}');\n}\nconst load = createRequire(import.meta.url);`,
+      filename: FILE,
+      errors: ERROR,
+    },
+    // createRequire imported under another name, called directly and through a binding.
+    {
+      code: `import { createRequire as cr } from 'node:module';\nexport const b: unknown = cr(import.meta.url)('${BACKEND}');`,
+      filename: FILE,
+      errors: ERROR,
+    },
+    {
+      code: `import { createRequire as cr } from 'node:module';\nconst load = cr(import.meta.url);\nexport const b: unknown = load('${BACKEND}');`,
+      filename: FILE,
+      errors: ERROR,
+    },
+    // A `..` past the root stays at the root, as real resolution does: the drive letter is kept,
+    // so this resolves to C:/packages/projection-sqlite on Windows as it does on POSIX.
+    {
+      code: "import { x } from '../../packages/projection-sqlite/src/index.js';",
+      filename: String.raw`C:\repo\merge.ts`,
+      errors: [{ messageId: 'backendImport', data: { source: '../../packages/projection-sqlite/src/index.js' } }],
+    },
+    {
+      code: "import { x } from '../../packages/projection-sqlite/src/index.js';",
+      filename: '/repo/merge.ts',
+      errors: [{ messageId: 'backendImport', data: { source: '../../packages/projection-sqlite/src/index.js' } }],
+    },
   ],
 };
 

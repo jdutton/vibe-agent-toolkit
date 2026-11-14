@@ -21,12 +21,19 @@
  * `import('…').T`, `import x = require('…')`, `require('…')`, a
  * `createRequire(…)('…')` call or a call through a name bound to
  * `createRequire(…)`, and an ambient `declare module '…'`, each with a literal
- * or a plain template-literal specifier.
+ * or a plain template-literal specifier. `createRequire` is recognised bare, as
+ * any name an `import { createRequire as … }` binds, and as a member
+ * (`module.createRequire`); the names bound to its result are collected from
+ * the whole file before any call is checked, so a call written above its
+ * binding is reported too.
  *
  * Known limits, all needing data flow the rule does not do: a computed
- * specifier (`import(name)`), a `createRequire` result passed through anything
- * but a direct binding, and a path that reaches the backend through a symlink
- * or a `paths` alias in a tsconfig.
+ * specifier (`import(name)`); a `createRequire` or a `createRequire(…)` result
+ * reached through anything but a direct `const`/`let`/`var` binding or an
+ * import specifier (a destructure of `require('node:module')`, an assignment,
+ * an argument); names matched by spelling, so a shadowing binding of the same
+ * name is reported as well; and a path that reaches the backend through a
+ * symlink or a `paths` alias in a tsconfig.
  *
  * Why a rule and not `no-restricted-imports`: flat config replaces a rule's
  * options per matching block, so a block that exempts one file from this ban
@@ -46,22 +53,35 @@ const { normalizeForMatch } = require('./exempt-path-matcher.cjs');
 
 const BACKEND = '@vibe-agent-toolkit/projection-sqlite';
 
-/** The backend's directory, as a path segment pair a resolved import lands under. */
-const BACKEND_DIRECTORY = '/packages/projection-sqlite/';
+/**
+ * A resolved path that IS the backend's package directory or lies inside it: the
+ * directory, then the end of the path or a separator. A sibling whose name
+ * merely starts the same (`projection-sqlite-extras`) is neither.
+ */
+const LANDS_IN_BACKEND = /\/packages\/projection-sqlite(?:\/|$)/u;
+
+/** A Windows drive segment (`C:`), which a `..` cannot climb above. */
+const DRIVE = /^[A-Za-z]:$/u;
 
 /**
  * `specifier` resolved against the directory of `filename`, forward-slashed.
- * Lexical only: `.` and `..` segments are folded, nothing is read from disk.
+ * Lexical only: `.` and `..` segments are folded, nothing is read from disk. A
+ * `..` at the root stays there, as real resolution does, so a drive letter is
+ * never popped and one path gives one answer on Windows and on POSIX.
  */
 function resolveRelative(filename, specifier) {
   // Segments by match rather than by splitting: a rule module requires nothing
   // outside the rule pack, `node:path` included.
   const normalized = normalizeForMatch(filename);
-  const segments = normalized.match(/[^/]+/g) ?? [];
+  const segments = normalized.match(/[^/]+/gu) ?? [];
+  const floor = DRIVE.test(segments[0] ?? '') ? 1 : 0;
   segments.pop();
-  for (const segment of specifier.match(/[^/]+/g) ?? []) {
-    if (segment === '..') segments.pop();
-    else if (segment !== '.') segments.push(segment);
+  for (const segment of specifier.match(/[^/]+/gu) ?? []) {
+    if (segment === '..') {
+      if (segments.length > floor) segments.pop();
+    } else if (segment !== '.') {
+      segments.push(segment);
+    }
   }
   return `${normalized.startsWith('/') ? '/' : ''}${segments.join('/')}`;
 }
@@ -70,16 +90,52 @@ function resolveRelative(filename, specifier) {
 function isBackend(source, filename) {
   if (source === BACKEND || source.startsWith(`${BACKEND}/`)) return true;
   if (!source.startsWith('./') && !source.startsWith('../')) return false;
-  return resolveRelative(filename, source).includes(BACKEND_DIRECTORY);
+  // ESLint's filenames are absolute, so the resolved path keeps its root (`/` or
+  // a drive) and the directory always follows a separator.
+  return LANDS_IN_BACKEND.test(resolveRelative(filename, source));
 }
 
-/** Whether `node` is a call of `createRequire`, bare or as `module.createRequire`. */
-function isCreateRequireCall(node) {
+/** The modules `createRequire` is imported from. */
+const MODULE_MODULES = new Set(['module', 'node:module']);
+
+/**
+ * Whether `node` is a call of `createRequire`: by one of `names`, or as a
+ * member (`module.createRequire`).
+ */
+function isCreateRequireCall(node, names) {
   if (node?.type !== 'CallExpression') return false;
   const { callee } = node;
-  if (callee.type === 'Identifier') return callee.name === 'createRequire';
+  if (callee.type === 'Identifier') return names.has(callee.name);
   return callee.type === 'MemberExpression' && callee.property.type === 'Identifier'
     && callee.property.name === 'createRequire';
+}
+
+/** Every local name an `import { createRequire as … }` of `node:module` binds, and the bare name. */
+function createRequireNames(program) {
+  const names = new Set(['createRequire']);
+  for (const statement of program.body) {
+    if (statement.type !== 'ImportDeclaration' || !MODULE_MODULES.has(statement.source.value)) continue;
+    for (const specifier of statement.specifiers) {
+      const imported = specifier.type === 'ImportSpecifier' ? specifier.imported : null;
+      const importedName = imported?.type === 'Identifier' ? imported.name : imported?.value;
+      if (importedName === 'createRequire') names.add(specifier.local.name);
+    }
+  }
+  return names;
+}
+
+/** Every name a variable declarator anywhere in the file binds to a `createRequire(…)` result. */
+function boundRequireNames(sourceCode, creators) {
+  const names = new Set(['require']);
+  for (const scope of sourceCode.scopeManager.scopes) {
+    for (const variable of scope.variables) {
+      const declarator = variable.defs.find((def) => def.node.type === 'VariableDeclarator')?.node;
+      if (declarator?.id.type === 'Identifier' && isCreateRequireCall(declarator.init, creators)) {
+        names.add(declarator.id.name);
+      }
+    }
+  }
+  return names;
 }
 
 /** The text of a literal or expression-free template specifier, or null. */
@@ -111,8 +167,11 @@ module.exports = {
 
   create(context) {
     const filename = context.filename ?? context.getFilename();
+    const sourceCode = context.sourceCode ?? context.getSourceCode();
+    /** The names `createRequire` goes by in this file. */
+    let creators = new Set(['createRequire']);
     /** Names bound directly to a `createRequire(…)` result: each is a `require`. */
-    const requireNames = new Set(['require']);
+    let requireNames = new Set(['require']);
 
     function check(node, specifier) {
       const source = specifierText(specifier);
@@ -122,6 +181,12 @@ module.exports = {
     }
 
     return {
+      // Both sets come from the whole file before any call is visited, so the
+      // order a binding and its use are written in does not decide the verdict.
+      Program: (node) => {
+        creators = createRequireNames(node);
+        requireNames = boundRequireNames(sourceCode, creators);
+      },
       ImportDeclaration: (node) => check(node, node.source),
       ExportNamedDeclaration: (node) => {
         if (node.source) check(node, node.source);
@@ -133,12 +198,10 @@ module.exports = {
       TSModuleDeclaration: (node) => {
         if (node.id.type === 'Literal') check(node, node.id);
       },
-      VariableDeclarator: (node) => {
-        if (node.id.type === 'Identifier' && isCreateRequireCall(node.init)) requireNames.add(node.id.name);
-      },
       CallExpression: (node) => {
         const { callee } = node;
-        const isRequire = (callee.type === 'Identifier' && requireNames.has(callee.name)) || isCreateRequireCall(callee);
+        const isRequire = (callee.type === 'Identifier' && requireNames.has(callee.name))
+          || isCreateRequireCall(callee, creators);
         if (isRequire) check(node, node.arguments[0]);
       },
     };
