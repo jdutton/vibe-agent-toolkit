@@ -540,7 +540,9 @@ In dependency order, each item independently landable:
 3. **Pin the remaining surfaces**: the projection store, and the rag package barrel. Prefer
    `subpath-purity`-style graph assertions where the question is *which import*; use a load-budget
    needle only where the question is *which invocation*. A boundary with no test is a boundary one
-   careless import undoes.
+   careless import undoes. What the store holds and what a run's SQL may read from it are decided
+   in [fact-extractors.md](./fact-extractors.md) and its
+   [hazard register](./fact-extractors-hazard-register.md), not here.
 4. ✅ **Name the three capabilities in code** — `parse-capabilities.ts`. `spans-and-kinds` yields
    `links`, `anchors`, `frontmatterSource` and a flat `SourceSpan[]`; `structure` yields flat,
    unslugged headings; `faithful-edit` yields **nothing** and is a claim about the offsets, checked

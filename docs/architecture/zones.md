@@ -100,11 +100,13 @@ of cost, because it POPULATES (below), so the selection became mandatory rather 
 for the reason this section already gives: a lens is invented on demand to answer a question nobody
 anticipated, so a population cannot produce one — inventing it is the asking side's job.
 
-🚨 **An unevaluated relation does not exist, so SQLite refuses it.** The run database
-creates a derived relation's table only when `writeDerived` is given rows for it (an empty array
-included — "evaluated, no rows" is a real answer). A statement naming a relation no lens filled
-therefore fails `no such table`, and the query lane's `describeQueryFailure` says why (for
-`vat resources check`, a `RESOURCE_CHECK_BROKEN` finding). That refusal is what makes this an
+🚨 **An unhydrated relation does not exist, so SQLite refuses it.** The run database creates a
+projection table only when the run's statements name it, and a derived relation's table only when
+`writeDerived` is given rows for it (an empty array included — "evaluated, no rows" is a real
+answer). A statement reaching any relation the run did not hydrate or no lens filled therefore fails
+`no such table`, every such relation alike, and the query lane's `describeQueryFailure` says why
+without listing its columns (for `vat resources check`, a `RESOURCE_CHECK_BROKEN` finding). The
+introspection gate keeps a statement from asking which relations exist instead. That refusal is what makes this an
 optimisation instead of a silent narrowing — an empty table would answer `0` at exit 0, the "a check
 that cannot fail" drift class. ⚠️ It is deliberately the ENGINE's refusal, not a scan of the
 statement: an earlier guard re-ran the selector's own scanner, so it could never fire for a statement

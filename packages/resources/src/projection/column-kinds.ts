@@ -58,6 +58,32 @@ export interface ProjectionColumnType {
 }
 
 /**
+ * What a `text` column holds, for a reader asking whether its value means the same thing in a run
+ * holding more than one root.
+ *
+ * - `rootRelativePath` — a path (or a path prefix) stated against the root the row was observed
+ *   under. Two roots can each hold `docs/a.md`, so in a run holding both, a relation carrying one of
+ *   these and no `root` column cannot say which root a row's path is under.
+ * - `other` — anything else: an id, a hash, an enum member, authored text, or an ABSOLUTE path
+ *   (`roots.path`), which names its root by itself.
+ */
+export type TextColumnRole = 'rootRelativePath' | 'other';
+
+/** {@link TextColumnRole}'s path member, named once for the registries. */
+export const ROOT_RELATIVE_PATH: TextColumnRole = 'rootRelativePath';
+
+/** {@link TextColumnRole}'s other member, named once for the registries. */
+export const OTHER: TextColumnRole = 'other';
+
+/**
+ * Every `text` column of one relation, classified. Declared, because nothing in a Zod string says
+ * what the string is relative to; held both ways against the `text` columns
+ * {@link projectionColumnTypes} reads off the schema, so an unclassified column and a stale entry
+ * are both test failures.
+ */
+export type TextColumnRoles<Column extends string = string> = Readonly<Partial<Record<Column, TextColumnRole>>>;
+
+/**
  * The two facts a backend needs to walk a table column-wise.
  *
  * Structural on purpose: every entry of `PROJECTION_TABLES` satisfies it, so a

@@ -3,10 +3,10 @@
  * the derived relations affordable.
  *
  * 🚨 **The selector over-selects on purpose: a FALSE NEGATIVE fails a run that
- * had an answer.** A lens skipped when its relation is named leaves that
- * relation ABSENT from the run's database, so the statement is refused with
- * `no such table` — loud rather than wrong, because the refusal is SQLite's and
- * does not depend on this scan. The cost that forced the selection, the rules
+ * had an answer.** A relation the scan misses — a projection table not hydrated,
+ * or a lens skipped — is ABSENT from the run's database, so the statement is
+ * refused with `no such table` — loud rather than wrong, because the refusal is
+ * SQLite's and does not depend on this scan. The cost that forced the selection, the rules
  * that keep it fail-safe, and why the registry lives in the CLI rather than in a
  * population are in
  * `docs/architecture/zones.md` §2, "A lens is evaluated only when a statement
@@ -15,6 +15,8 @@
 
 import {
   DERIVED_TABLES,
+  PROJECTION_TABLES,
+  rootlessPathRelations,
   type DerivedTableName,
   type PopulationCache,
   type PopulationOutcome,
@@ -153,18 +155,73 @@ export function lensRelationNames(lens: ProjectionLens): readonly string[] {
   return lens.relations.map((name) => DERIVED_TABLES[name].name);
 }
 
+/** Every projection table, by SQL name, in registry order: what hydration can copy. */
+const BASE_RELATIONS: readonly string[] = Object.values(PROJECTION_TABLES).map((spec) => spec.name);
+
+/** Every relation a statement can name: the tables, then the derived relations. */
+const QUERYABLE_RELATIONS: readonly string[] = [...BASE_RELATIONS, ...Object.values(DERIVED_TABLES).map((spec) => spec.name)];
+
+/** Why a relation is withheld in a run holding more than one root. */
+const ROOTLESS_REASON = 'it has a root-relative path column and no `root` column, and this run holds more than one root,'
+  + ' so a row could not say which root its path is under';
+
 /**
- * The lenses a run has to evaluate, given the statements it declared.
- *
- * @param statements - Every statement the run may ask, or `undefined` when the
- *   caller cannot enumerate them. ⛔ `undefined` selects EVERY lens — see the
- *   header on why the fail-safe direction is not negotiable
- * @returns The lenses to evaluate, in {@link PROJECTION_LENSES} order
+ * What one run hydrates and evaluates, decided from the statements it declared — and what it
+ * withholds.
  */
-export function lensesNamedBy(statements: readonly string[] | undefined): readonly ProjectionLens[] {
-  if (statements === undefined) return PROJECTION_LENSES;
-  return PROJECTION_LENSES.filter((lens) =>
-    statements.some((sql) => relationsNamedBy(sql, lensRelationNames(lens)).length > 0));
+export interface HydrationPlan {
+  /** The projection tables to hydrate, by SQL name, in registry order. Lens relations add none. */
+  readonly relations: readonly string[];
+  /** The lenses to evaluate, in {@link PROJECTION_LENSES} order. */
+  readonly lenses: readonly ProjectionLens[];
+  /** The relations the statements name that this run will not hold, by SQL name, each with why. */
+  readonly withheld: ReadonlyMap<string, string>;
+}
+
+/**
+ * Plan one run's run database from the statements it declared.
+ *
+ * - **Relations**: the projection tables some statement names, by the same scan the lens selector
+ *   runs ({@link relationsNamedBy}). A lens relation adds none: no lens reads the run database —
+ *   each reads the in-memory projection, its own lane or git — and a statement joining a lens
+ *   relation to a table names both.
+ * - **Lenses**: those owning a relation some statement names.
+ * - **Withheld**, in a run holding more than one root: every named relation with a root-relative
+ *   path column and no `root` column (`rootlessPathRelations`), and every relation of a lens that
+ *   owns one, since that lens is not evaluated. ⚠️ Transitional, until relations carry `root`.
+ *
+ * The scan over-selects on purpose (see the header); a relation it misses is ABSENT from the run
+ * database, so the statement is refused by SQLite rather than answered from an empty table.
+ *
+ * @param input - The run
+ * @param input.statements - Every statement the run may ask
+ * @param input.roots - The run's root rows
+ * @returns The plan
+ */
+export function planHydration(input: { readonly statements: readonly string[]; readonly roots: readonly unknown[] }): HydrationPlan {
+  const named = new Set(input.statements.flatMap((sql) => relationsNamedBy(sql, QUERYABLE_RELATIONS)));
+  const rootless: ReadonlySet<string> = input.roots.length > 1 ? new Set(rootlessPathRelations()) : new Set();
+  const withheld = new Map<string, string>();
+  for (const name of named) {
+    if (rootless.has(name)) withheld.set(name, ROOTLESS_REASON);
+  }
+  const lenses = PROJECTION_LENSES.filter((lens) => {
+    const owned = lensRelationNames(lens);
+    if (!owned.some((name) => named.has(name))) return false;
+    const blocking = owned.find((name) => rootless.has(name));
+    if (blocking === undefined) return true;
+    for (const name of owned) {
+      if (named.has(name) && !withheld.has(name)) {
+        withheld.set(name, `its lens is not evaluated, because it also produces ${blocking}, which is withheld: ${ROOTLESS_REASON}`);
+      }
+    }
+    return false;
+  });
+  return {
+    relations: BASE_RELATIONS.filter((name) => named.has(name) && !withheld.has(name)),
+    lenses,
+    withheld,
+  };
 }
 
 /**
@@ -298,6 +355,17 @@ function withoutCommentsAndLiterals(sql: string): string {
 
 /** The characters that open a quoted identifier, and the one that closes each. */
 const QUOTED_IDENTIFIER_CLOSERS: ReadonlyMap<string, string> = new Map([['"', '"'], ['[', ']'], ['`', '`']]);
+
+/**
+ * Every spelling of a relation name the scan reads as naming it: plain, then each quoted
+ * identifier form. A single-quoted name is not among them — the planner reads it as a string.
+ *
+ * @param relation - A SQL relation name
+ * @returns Its spellings, plain first
+ */
+export function identifierSpellings(relation: string): readonly string[] {
+  return [relation, ...[...QUOTED_IDENTIFIER_CLOSERS].map(([open, close]) => `${open}${relation}${close}`)];
+}
 
 /** Every quoted span's opener and closer: the identifiers, plus `'` for a literal. */
 const QUOTE_CLOSERS: ReadonlyMap<string, string> = new Map([...QUOTED_IDENTIFIER_CLOSERS, ["'", "'"]]);

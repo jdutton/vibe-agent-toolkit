@@ -17,7 +17,7 @@
 
 import { writeFileSync } from 'node:fs';
 
-import { openRunDatabase, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
+import { hydrateRunDatabase, openSqliteFactStore, type RunDatabase } from '@vibe-agent-toolkit/projection-sqlite';
 import {
   type BlobScopedRows,
   computeContentKey,
@@ -178,8 +178,7 @@ export const STORE_SEEDS: Readonly<Record<StoreLaneCounter, Seed>> = {
 };
 
 /**
- * A projection of one `blobs` row and one root row, every other table empty:
- * two rows, in one blob-scoped write and one extent write.
+ * A projection of one `blobs` row and one root row, every other table empty.
  */
 function oneBlobProjection(): Projection {
   const empty = Object.fromEntries(Object.keys(PROJECTION_TABLES).map((table) => [table, []]));
@@ -190,15 +189,58 @@ function oneBlobProjection(): Projection {
   };
 }
 
-/** Opening a run database over {@link oneBlobProjection}: its load is hydration. */
+/** What every `EXPLAIN` the gate prepares adds: four per handle opened, one per gated call. */
+function explained(work: { readonly handles: number; readonly gatedCalls: number }): number {
+  return (4 * work.handles) + work.gatedCalls;
+}
+
+/**
+ * Hydrating a run database with {@link oneBlobProjection}'s two non-empty relations: one
+ * hydration transaction, its two rows, and the handle's four reference reads.
+ *
+ * @param scope - The seed's scope
+ * @returns The open run database, closed after the seed
+ */
+function hydratedOneBlob(scope: SeedScope): RunDatabase {
+  const projection = oneBlobProjection();
+  const database = hydrateRunDatabase({
+    rootId: EXTENT_KEY.rootId,
+    relations: new Map<string, readonly Readonly<Record<string, unknown>>[]>([
+      ['blobs', projection.blobs],
+      ['roots', projection.roots],
+    ]),
+  });
+  scope.defer(() => database.close());
+  return database;
+}
+
+/** Hydrating a run database over {@link oneBlobProjection}: one hydration, two rows. */
 function hydrationSeed(): Seed {
   return {
     prepare: (scope) => () => {
-      const database = openRunDatabase(oneBlobProjection());
-      scope.defer(() => database.close());
+      hydratedOneBlob(scope);
       return undefined;
     },
-    delta: { 'hydration.writes': 2, 'hydration.rows.written': 2 },
+    delta: {
+      'hydration.writes': 1,
+      'hydration.rows.written': 2,
+      'statement.explained': explained({ handles: 1, gatedCalls: 0 }),
+    },
+  };
+}
+
+/** A run database over {@link oneBlobProjection}, asked one statement. */
+function explainedSeed(): Seed {
+  return {
+    prepare: (scope) => () => {
+      hydratedOneBlob(scope).query('SELECT COUNT(*) AS n FROM blobs');
+      return undefined;
+    },
+    delta: {
+      'hydration.writes': 1,
+      'hydration.rows.written': 2,
+      'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
+    },
   };
 }
 
@@ -373,16 +415,15 @@ const PLAIN_TREE = { 'a.md': '# A\n\nPlain.\n' };
 
 export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
   // A cold population: the one document parsed and keyed, the extent derived
-  // and written to the store, loaded into the run database, and git asked for
-  // the tree.
+  // and written to the store, and git asked for the tree. The statement names
+  // no relation, so the run database is hydrated with none.
   'extent.derived': {
     prepare: (scope) => queriedTree(scope, PLAIN_TREE),
     delta: {
       'store.reads.persistent': 1,
       'store.writes.persistent': 2,
-      'hydration.writes': 2,
       'store.rows.written.persistent': 12,
-      'hydration.rows.written': 12,
+      'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
       'extent.derived': 1,
       'parse.dispatched': 1,
       'content.hashed': 1,
@@ -401,8 +442,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
     delta: {
       'store.rows.decoded.persistent': 12,
       'store.reads.persistent': 2,
-      'hydration.writes': 2,
-      'hydration.rows.written': 12,
+      'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
       'extent.served': 1,
       'git.calls': 1,
     },
@@ -419,9 +459,8 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'store.rows.decoded.persistent': 15,
       'store.reads.persistent': 2,
       'store.writes.persistent': 2,
-      'hydration.writes': 2,
       'store.rows.written.persistent': 15,
-      'hydration.rows.written': 16,
+      'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
       'extent.derived': 1,
       'store.miss.refusedPairs': 1,
       'parse.dispatched': 2,
@@ -434,6 +473,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
   },
   'hydration.writes': hydrationSeed(),
   'hydration.rows.written': hydrationSeed(),
+  'statement.explained': explainedSeed(),
   'git.calls': {
     prepare: () => () => {
       checkGitInstalled();

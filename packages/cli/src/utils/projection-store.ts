@@ -49,12 +49,13 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 import type * as ProjectionSqlite from '@vibe-agent-toolkit/projection-sqlite';
-import type { FactStore, PopulationCache, Projection } from '@vibe-agent-toolkit/resources';
+import { PROJECTION_TABLES, type FactStore, type PopulationCache, type Projection, type ProjectionTableName } from '@vibe-agent-toolkit/resources';
 import { parseEnvBoolean } from '@vibe-agent-toolkit/utils';
 import { freshGitTreeSnapshot, gitSnapshotFailureOf, gitTreeSnapshot, type GitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 
 import { noticeToOperator, withNoticeLedger } from './operator-notices.js';
 import { isModuleMissing, missingBackendError, type OptionalBackend } from './optional-backend.js';
+import type { HydrationPlan } from './projection-lenses.js';
 import { installSqliteWarningFilter } from './sqlite-experimental-warning.js';
 
 /**
@@ -320,7 +321,8 @@ async function loadStore(): Promise<FactStore> {
 }
 
 /**
- * Open the run database over one run's projection: the one handle SQL runs on.
+ * Hydrate the run database from one run's projection: the one handle SQL runs on,
+ * holding exactly the projection tables the plan names, each with this run's rows.
  *
  * 🔑 **This is what keeps the query surface an ANSWER rather than a privilege.**
  * A caller with no store selected — CI's first run, or a developer who never set
@@ -329,21 +331,50 @@ async function loadStore(): Promise<FactStore> {
  * would be answerable only where a cache happened to exist, and two callers
  * would hold differently-shaped views of one tree.
  *
- * Nothing survives the close, and nothing but this run's projection is in it.
+ * 🚨 The rows come from `projection` — the run's own population — never from the
+ * store: the shared store holds every other repository's rows too. A relation the
+ * plan does not name is absent, so a statement reaching it is refused.
+ *
+ * Nothing survives the close.
  *
  * @param projection - One run's populated projection
- * @returns The open run database, holding that projection; close it when done
+ * @param plan - The relations to hydrate, by SQL name
+ * @returns The open run database; close it when done
+ * @throws Error When the projection has no root row: a driver invariant, since
+ *   `populate()` adds exactly one, and without it there is no id to file the
+ *   extent-scoped rows under
  */
-export async function openRunDatabase(projection: Projection): Promise<ProjectionSqlite.RunDatabase> {
-  return (await loadBackend()).openRunDatabase(projection);
+export async function hydrateRunDatabase(
+  projection: Projection,
+  plan: Pick<HydrationPlan, 'relations'>,
+): Promise<ProjectionSqlite.RunDatabase> {
+  // The key is read OFF the projection rather than re-derived from the root.
+  // The driver mints `roots.id` with `rootIdFor` and every
+  // `resolution_contexts.rootId` is a foreign key into it, so taking it from
+  // the rows means the key provably describes them.
+  const rootId = projection.roots[0]?.id;
+  if (rootId === undefined) {
+    throw new Error(
+      'The population produced no root row, so there is no id to file its extent under.'
+      + ' This is a driver invariant rather than a user error — `populate()` adds exactly'
+      + ' one, and a projection without it cannot be stored or queried.',
+    );
+  }
+  const keyOf = new Map(Object.entries(PROJECTION_TABLES).map(([key, spec]) => [spec.name, key as ProjectionTableName]));
+  const relations = new Map(plan.relations.map((name) => {
+    const key = keyOf.get(name);
+    if (key === undefined) throw new Error(`"${name}" is not a projection table, so hydration has no rows for it.`);
+    return [name, projection[key]] as const;
+  }));
+  return (await loadBackend()).hydrateRunDatabase({ rootId, relations });
 }
 
 /**
  * Open a compile-only probe over the full queryable schema, derived relations
  * included — for checking statements BEFORE any population or lens has run.
  *
- * ⚠️ Not {@link openRunDatabase}: that database has no table for a derived
- * relation until a lens fills it, which is how an unevaluated one is refused.
+ * ⚠️ Not {@link hydrateRunDatabase}: that database has no table for a relation
+ * the run did not hydrate or a lens did not fill, which is how one is refused.
  *
  * @returns An open probe; close it when done
  */
@@ -399,7 +430,7 @@ async function loadBackend(): Promise<typeof ProjectionSqlite> {
  * names neither the version floor nor the fix.
  *
  * ⚠️ It is reachable on an ordinary run and is not a corner: the query lane has
- * always run its SQL on {@link openRunDatabase}, store selected or not, so
+ * always run its SQL on {@link hydrateRunDatabase}, store selected or not, so
  * `node:sqlite` is required on a default `vat resources query` whichever way
  * the lane resolves its store.
  *

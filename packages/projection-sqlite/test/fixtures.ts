@@ -7,7 +7,9 @@
  * would pass against a broken codec.
  */
 
-import type { BlobScopedRows, ExtentScopedRows, Projection } from '@vibe-agent-toolkit/resources';
+import { PROJECTION_TABLES, type BlobScopedRows, type ExtentScopedRows, type Projection } from '@vibe-agent-toolkit/resources';
+
+import { hydrateRunDatabase, type RunDatabase } from '../src/run-database.js';
 
 /** A content key of the shape `ContentKeySchema` requires: `<parserKind>.<sha256>`. */
 export function contentKey(seed: string): string {
@@ -258,4 +260,20 @@ export function sampleProjection(blobKeys: readonly string[] = [FIRST_BLOB]): Pr
     tables.map((table) => [table, bundles.flatMap((bundle) => bundle[table] as readonly unknown[])]),
   ) as unknown as BlobScopedRows;
   return { ...blobs, ...sampleExtentRows() };
+}
+
+/**
+ * A run database hydrated with EVERY projection table of `projection` — a test's
+ * shorthand for "a run whose statements name every table". The CLI never asks
+ * for this: it hydrates only what a run's statements name.
+ *
+ * @param projection - The rows to hydrate
+ * @returns The open run database; close it when done
+ */
+export function hydrateEveryTable(projection: Projection): RunDatabase {
+  const rootId = projection.roots[0]?.id ?? 'root-1';
+  const relations = new Map(
+    Object.entries(PROJECTION_TABLES).map(([key, spec]) => [spec.name, projection[key as keyof Projection]] as const),
+  );
+  return hydrateRunDatabase({ rootId, relations });
 }

@@ -11,12 +11,14 @@
  *
  * ## 🔑 One tree, one answer — and that is now a property, not a promise
  *
- * The SQL always runs against a per-run in-memory database holding this tree's
- * projection and nothing else. A selected projection store makes the POPULATION
- * cheap and is never queried, because it is one database per VAT release shared
- * by every root on the machine — querying it answered from other repositories,
- * with a two-file corpus reporting 5,779 rows instead of 3.
- * `utils/projection-query.ts`'s header carries the measurement and the reasoning.
+ * The SQL always runs against a per-run in-memory database hydrated with the
+ * projection tables the statement names, from this tree's own rows and nothing
+ * else. A selected projection store makes the POPULATION cheap and is never
+ * queried, because it is one database per VAT release shared by every root on
+ * the machine — querying it answered from other repositories, with a two-file
+ * corpus reporting 5,779 rows instead of 3. `utils/projection-query.ts`'s header
+ * carries the measurement and the reasoning, and
+ * `projection-containment.integration.test.ts` holds it.
  *
  * ## 🔑 The document says where its rows came from, and that is the cache tell
  *

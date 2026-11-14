@@ -7,7 +7,7 @@
  * exported — and nothing that compiles reads prose. So the whole repository is
  * searched, by whole word, for each retired name: the changelog and its
  * fragments may record them, and this file must name them; the type probe may
- * spell the two old type names it proves no longer import, and nothing else.
+ * spell the old names it proves no longer import, and nothing else.
  *
  * Integration tier: it spawns `git grep` over the working tree.
  */
@@ -30,13 +30,18 @@ const RETIRED_NAMES = [
   'openSqliteProjectionStore',
   'openEphemeralProjectionStore',
   'openEphemeralQueryStore',
+  // The run database's opener over a whole projection, and the hydration writes it counted.
+  'openRunDatabase',
+  'lensesNamedBy',
+  'HYDRATION_WRITES',
+  'WriteCounters',
 ];
 
-/** The type probe that proves the old type names no longer import: it has to spell them to import them. */
+/** The type probe that proves the old names no longer import: it has to spell them to import them. */
 const IMPORT_PROBE = 'packages/cli/test/integration/fact-store-port.integration.test.ts';
 
 /** The retired names the import probe spells, and only those: any other in that file is a hit. */
-const SPELLED_BY_PROBE: ReadonlySet<string> = new Set(['ProjectionStore', 'SqlQueryableStore']);
+const SPELLED_BY_PROBE: ReadonlySet<string> = new Set(['ProjectionStore', 'SqlQueryableStore', 'openRunDatabase']);
 
 /** Where every retired name may still appear: the record of the change, and this file. */
 const EXCLUDED_PATHSPECS = [':(exclude).changes', ':(exclude,glob)**/CHANGELOG.md', `:(exclude)${SELF}`];

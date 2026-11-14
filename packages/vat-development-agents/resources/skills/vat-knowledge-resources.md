@@ -80,7 +80,11 @@ named — VAT ships no schema version, so that listing is how you find what a na
 statement is also **compiled before the projection is populated**, so a typo costs milliseconds
 instead of a full crawl (measured on an adopter: 8.3 s → 0.5 s). Writes are refused by the engine
 (`PRAGMA query_only`), `ATTACH` is refused, and a statement carrying a second statement is refused
-outright, because SQLite compiles only the first and **discards the rest without error**.
+outright, because SQLite compiles only the first and **discards the rest without error**. A run
+holds only the tables its statement names as an identifier (`FROM 'blobs'`, single-quoted, names
+none and is refused), so asking which tables exist is refused too: `sqlite_schema`, `pragma_*`,
+`dbstat`, `changes()`; placeholders are `?` only. Without `ORDER BY`, rows come in primary-key
+order, the same warm or cold.
 
 ### 🚨 The corpus is the TRACKED TREE, not your configured resource set
 

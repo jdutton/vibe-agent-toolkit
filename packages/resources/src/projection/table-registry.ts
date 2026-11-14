@@ -61,7 +61,7 @@ import {
 } from '../schemas/projection-resources.js';
 import { ResolutionContextRowSchema, ZoneProvenanceRowSchema } from '../schemas/projection-zones.js';
 
-import { projectionRowShape } from './column-kinds.js';
+import { OTHER, projectionRowShape, ROOT_RELATIVE_PATH, type TextColumnRoles } from './column-kinds.js';
 import type { Projection } from './projection.js';
 
 /** The field of {@link Projection} a table's rows are carried under. */
@@ -124,6 +124,11 @@ export interface ProjectionTableSpec<
   /** Every column, in the order the row schema declares it. */
   readonly columns: readonly ColumnOf<Row>[];
   /**
+   * Every `text` column, classified: a path relative to the root it was observed under, or
+   * anything else. See {@link TextColumnRoles}.
+   */
+  readonly textColumns: TextColumnRoles<ColumnOf<Row>>;
+  /**
    * The column naming the resolution context a row belongs to, when it has one.
    *
    * This is what makes a stored extent **divisible**. A store keys extent-scoped
@@ -177,11 +182,30 @@ export interface ProjectionTableSpec<
  * not be byte-identical to its predecessor even with every row unchanged.
  */
 export const PROJECTION_TABLES = {
-  roots: table('roots', 'extent', RootRowSchema, ['id']),
-  resources: table('resources', 'extent', ResourceRowSchema, ['resourceId']),
-  resourceRealizations: table('resourceRealizations', 'extent', ResourceRealizationRowSchema, ['extentId', 'path'], 'extentId'),
-  resourceExtents: table('resourceExtents', 'extent', ResourceExtentRowSchema, ['resourceId', 'extentId'], 'extentId'),
-  resourceTags: table('resourceTags', 'extent', ResourceTagRowSchema, ['resourceId', 'tag', 'value', 'source']),
+  // `roots.path` is ABSOLUTE, which is why it is `other`: it names the root, not a place in one.
+  roots: table('roots', 'extent', RootRowSchema, ['id'], { id: OTHER, path: OTHER }),
+  resources: table('resources', 'extent', ResourceRowSchema, ['resourceId'], {
+    resourceId: OTHER, kind: OTHER, origin: OTHER, vatId: OTHER,
+  }),
+  resourceRealizations: table('resourceRealizations', 'extent', ResourceRealizationRowSchema, ['extentId', 'path'], {
+    resourceId: OTHER,
+    extentId: OTHER,
+    path: ROOT_RELATIVE_PATH,
+    pathLower: ROOT_RELATIVE_PATH,
+    // One segment, which says nothing about where under which root it sits.
+    basenameLower: OTHER,
+    dir: ROOT_RELATIVE_PATH,
+    ext: OTHER,
+    mime: OTHER,
+    contentKey: OTHER,
+    contentState: OTHER,
+  }, 'extentId'),
+  resourceExtents: table('resourceExtents', 'extent', ResourceExtentRowSchema, ['resourceId', 'extentId'], {
+    resourceId: OTHER, extentId: OTHER,
+  }, 'extentId'),
+  resourceTags: table('resourceTags', 'extent', ResourceTagRowSchema, ['resourceId', 'tag', 'value', 'source'], {
+    resourceId: OTHER, tag: OTHER, value: OTHER, source: OTHER,
+  }),
   // `sourcePath`/`sourceLine`/`sourceRef` are in the key so two distinguishable
   // references provoking the same code at the same path — from two referrers,
   // or at two positions in one (`CLOSURE_REFERENCE_UNRESOLVED` anchors `path`
@@ -195,23 +219,59 @@ export const PROJECTION_TABLES = {
     'sourcePath',
     'sourceLine',
     'sourceRef',
-  ], 'extentId'),
+  ], {
+    extentId: OTHER,
+    // "../"-prefixed for the one class about a path outside the root: still relative to it.
+    path: ROOT_RELATIVE_PATH,
+    code: OTHER,
+    severity: OTHER,
+    message: OTHER,
+    resourceId: OTHER,
+    sourcePath: ROOT_RELATIVE_PATH,
+    sourceRef: OTHER,
+    matchedPattern: OTHER,
+    targetFaultClass: OTHER,
+  }, 'extentId'),
   // No context column, for the same reason `resources` and `resource_tags` have
   // none: a `paths:` glob is a fact about the rules file's IDENTITY, not about
   // one extent's view of it, and a rules file is re-realized under every import
   // closure that reaches it. Merged by primary key, never partitioned.
-  claudeRulePatterns: table('claudeRulePatterns', 'extent', ClaudeRulePatternRowSchema, ['resourceId', 'ordinal']),
-  resolutionContexts: table('resolutionContexts', 'extent', ResolutionContextRowSchema, ['contextId'], 'contextId'),
-  zoneProvenance: table('zoneProvenance', 'extent', ZoneProvenanceRowSchema, ['contextId', 'contributorId'], 'contextId'),
-  blobs: table('blobs', 'blob', BlobRowSchema, ['contentKey']),
-  blobReferences: table('blobReferences', 'blob', BlobReferenceRowSchema, ['blob', 'ordinal']),
-  blobSections: table('blobSections', 'blob', BlobSectionRowSchema, ['blob', 'ordinal']),
-  blobConditions: table('blobConditions', 'blob', BlobConditionRowSchema, ['blob', 'code', 'line', 'message']),
+  claudeRulePatterns: table('claudeRulePatterns', 'extent', ClaudeRulePatternRowSchema, ['resourceId', 'ordinal'], {
+    resourceId: OTHER,
+    // The glob as authored is `other`; its glob-free leading segments are a root-relative prefix.
+    pattern: OTHER,
+    literalPrefix: ROOT_RELATIVE_PATH,
+    witnessPath: ROOT_RELATIVE_PATH,
+    status: OTHER,
+  }),
+  resolutionContexts: table('resolutionContexts', 'extent', ResolutionContextRowSchema, ['contextId'], {
+    contextId: OTHER, species: OTHER, kind: OTHER, rootId: OTHER, extentContextId: OTHER, role: OTHER,
+  }, 'contextId'),
+  zoneProvenance: table('zoneProvenance', 'extent', ZoneProvenanceRowSchema, ['contextId', 'contributorId'], {
+    contextId: OTHER, contributorId: OTHER, extentDigest: OTHER,
+  }, 'contextId'),
+  blobs: table('blobs', 'blob', BlobRowSchema, ['contentKey'], {
+    contentKey: OTHER, encoding: OTHER, encodingSource: OTHER, frontmatterError: OTHER,
+  }),
+  // `rawRef` and `text` are what an author wrote, never resolved against a root.
+  blobReferences: table('blobReferences', 'blob', BlobReferenceRowSchema, ['blob', 'ordinal'], {
+    blob: OTHER, rawRef: OTHER, text: OTHER, syntacticForm: OTHER, variableExpansion: OTHER,
+  }),
+  blobSections: table('blobSections', 'blob', BlobSectionRowSchema, ['blob', 'ordinal'], {
+    blob: OTHER, title: OTHER, slug: OTHER,
+  }),
+  blobConditions: table('blobConditions', 'blob', BlobConditionRowSchema, ['blob', 'code', 'line', 'message'], {
+    blob: OTHER, code: OTHER, severity: OTHER, message: OTHER,
+  }),
   // ⛔ `blob` FIRST in both keys: a store keys every blob-tier select, delete
   // and eviction on a blob-scoped table's first primary-key column.
   // Partitioned by `harness`: derived lazily, per `(blob, harness)` a run reaches.
-  harnessBlobFacts: table('harnessBlobFacts', 'blob', HarnessBlobFactsRowSchema, ['blob', 'harness'], undefined, 'harness'),
-  harnessBlobImports: table('harnessBlobImports', 'blob', HarnessBlobImportRowSchema, ['blob', 'harness', 'ordinal'], undefined, 'harness'),
+  harnessBlobFacts: table('harnessBlobFacts', 'blob', HarnessBlobFactsRowSchema, ['blob', 'harness'], {
+    blob: OTHER, harness: OTHER,
+  }, undefined, 'harness'),
+  harnessBlobImports: table('harnessBlobImports', 'blob', HarnessBlobImportRowSchema, ['blob', 'harness', 'ordinal'], {
+    blob: OTHER, harness: OTHER, rawRef: OTHER, target: OTHER,
+  }, undefined, 'harness'),
 } as const satisfies { readonly [Name in ProjectionTableName]: ProjectionTableSpec<Name, ProjectionRow<Name>> };
 
 /**
@@ -228,6 +288,7 @@ export const PROJECTION_TABLES = {
  * @param scope - What these rows are a fact about
  * @param schema - The row schema, which supplies the column order
  * @param primaryKey - The columns that identify a row, in comparison order
+ * @param textColumns - Every `text` column, classified — see {@link TextColumnRoles}
  * @param contextColumn - The column naming the row's resolution context, for a
  *   table whose rows belong to one; omitted for the four that describe the tree
  *   or an identity rather than one extent's view of it
@@ -241,6 +302,7 @@ function table<Name extends ProjectionTableName, Scope extends ProjectionTableSc
   scope: Scope,
   schema: RowSchema<ProjectionRow<Name>>,
   primaryKey: readonly ColumnOf<ProjectionRow<Name>>[],
+  textColumns: TextColumnRoles<ColumnOf<ProjectionRow<Name>>>,
   contextColumn?: ColumnOf<ProjectionRow<Name>>,
   partitionColumn?: ColumnOf<ProjectionRow<Name>>,
 ): ProjectionTableSpec<Name, ProjectionRow<Name>, Scope> {
@@ -250,6 +312,7 @@ function table<Name extends ProjectionTableName, Scope extends ProjectionTableSc
     scope,
     schema,
     primaryKey,
+    textColumns,
     // Conditional spread rather than `contextColumn: contextColumn`:
     // `exactOptionalPropertyTypes` makes an absent key and one holding
     // `undefined` different values, and "this table has no context column" is

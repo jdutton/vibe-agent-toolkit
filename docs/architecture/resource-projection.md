@@ -77,17 +77,21 @@ generated JSON Schema — `packages/resources/src/schemas/projection-blobs.ts` a
 row schemas' shape instead (the parse cache's `parseFactsShapeSource()` is the pattern).
 
 **Population is ✅ real for the fifteen shipped tables.** `populate()` derives rows from `ParseFacts`
-and `ResourceRegistry` at runtime, and `vat resources query` loads them into a run database opened
-in memory for that run. What remains 🔷 proposed is the REMAINDER described below: columns the
-parser does not yet carry, and the zone modeling several tables depend on.
+and `ResourceRegistry` at runtime. What remains 🔷 proposed is the REMAINDER described below:
+columns the parser does not yet carry, and the zone modeling several tables depend on.
 
-🎯 **Target, per [fact-extractors.md](./fact-extractors.md): querying and provenance.** Each run
-hydrates a fresh database with only the relations its statements need, rows restricted to the bound
-tree's extent, and the store is never attached while a statement runs. A relation the run did not
-hydrate does not exist there, so a statement reaching it refuses instead of reading it empty (I1).
-That replaces copying the whole projection per run — today `vat resources query` loads all of it
-into the run database, as the paragraph above describes.
-Every report says what it was bound to (I1).
+✅ **Querying, shipped.** Each run hydrates a fresh in-memory database with only the projection
+tables its statements name, copied from the run's own populated rows in canonical order
+(`compareRows`), so a statement without `ORDER BY` answers alike warm and cold. Nothing is read
+from the shared store by SQL, and nothing is attached while a statement runs. A relation the run
+did not hydrate does not exist there, so a statement reaching it refuses instead of reading it empty
+(I1), and `EXPLAIN` at prepare refuses schema introspection, so a statement cannot observe which
+relations a run holds. In a run holding more than one root, a relation with a root-relative path
+column and no `root` column is withheld until relations carry `root`.
+
+🎯 **Target, per [fact-extractors.md](./fact-extractors.md): provenance.** Rows restricted to the
+bound tree's extent and hydrated from the store itself, attached read-only and detached before any
+statement runs; every report says what it was bound to (I1).
 
 ⚠️ `edges` was listed among the tables with a partial source and does **not** belong: it has **zero
 producers as a MATERIALISED TABLE**, and `edge_resolutions` alongside it. ⚠️ **They are not
@@ -627,6 +631,10 @@ which a bare commit key cannot express.
   never only in `message`; a query about declined
   links asks for all four
   ([validation-codes.md](../validation-codes.md#extent_symlink_not_realized)).
+- ✅ **Shipped: per-run hydration.** A run database holds only the projection tables the run's
+  statements name, with the run's own rows in canonical order; schema introspection, the
+  connection-state functions and `#` parameters refuse, and the containment the query lane's header
+  describes is a test (`projection-containment.integration.test.ts`).
 - ✅ **Shipped: the store is on by default.** The extent- and blob-scoped tables now cross
   invocations without an opt-in (`VAT_PROJECTION_STORE=off`, or `VAT_CACHE=0` for every cache, is
   the way back), and the blob tier is bounded by a `blob_keys` manifest rather than growing without

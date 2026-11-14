@@ -11,7 +11,7 @@
  * *"any caller that turns this backend on by default has to filter that one
  * warning by name at its own boundary."*
  *
- * The CLI is that caller. `openRunDatabase()` is where the query lane's SQL
+ * The CLI is that caller. `hydrateRunDatabase()` is where the query lane's SQL
  * runs, with or without a store selected, so a user running
  * `vat resources query` gets the warning on a perfectly ordinary run with no
  * way to silence it short of silencing everything.

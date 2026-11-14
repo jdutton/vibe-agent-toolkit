@@ -84,13 +84,15 @@ export {
   openSqliteFactStore,
 } from './store.js';
 
-// The one handle SQL runs on, opened from one run's projection, and the compile
-// probe: the one place every derived relation exists without a lens having
-// filled it, which is why it can compile and cannot answer. See `run-database.ts`
-// on why the run database is no second storage contract.
+// The one handle SQL runs on, opened only by hydrating the relations a run's
+// statements name, and the compile probe: the one place every queryable
+// relation exists without a run having filled it, which is why it can compile
+// and cannot answer. See `run-database.ts` on why the run database is no second
+// storage contract.
 export {
   type ProjectionCompileProbe,
   type RunDatabase,
+  type RunDatabaseHydration,
+  hydrateRunDatabase,
   openProjectionCompileProbe,
-  openRunDatabase,
 } from './run-database.js';

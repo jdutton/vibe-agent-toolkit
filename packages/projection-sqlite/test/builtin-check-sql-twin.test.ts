@@ -21,9 +21,9 @@ import {
 } from '@vibe-agent-toolkit/resources';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { openRunDatabase, type RunDatabase } from '../src/run-database.js';
+import type { RunDatabase } from '../src/run-database.js';
 
-import { contentKey, realizationRow, sampleBlobRows, sampleExtentRows, sampleProjection } from './fixtures.js';
+import { contentKey, hydrateEveryTable, realizationRow, sampleBlobRows, sampleExtentRows, sampleProjection } from './fixtures.js';
 
 /** The one root these trees belong to. */
 const ROOT_ID = 'root-1';
@@ -195,7 +195,7 @@ describe('built-in SQL twins', () => {
   it('claude-rule-glob-inert: one row per finding, anchored where the finding is', async () => {
     const rows = fannedOutRows();
     // No blob rows: these twins read the extent alone.
-    store = openRunDatabase({ ...sampleProjection([]), ...rows });
+    store = hydrateEveryTable({ ...sampleProjection([]), ...rows });
 
     const fromSql = store.query(CLAUDE_RULE_GLOB_INERT_CHECK.sqlTwin)
       .map((row) => `${typeof row['path'] === 'string' ? row['path'] : ''} ${String(row['pattern'])}`)
@@ -244,7 +244,7 @@ describe('built-in SQL twins', () => {
     };
     const brokenBlob = { ...sampleBlobRows(broken).blobs[0], contentKey: broken, frontmatter: null, frontmatterError: 'bad yaml' };
     const healthyBlob = { ...sampleBlobRows(healthy).blobs[0], contentKey: healthy };
-    store = openRunDatabase({ ...sampleProjection([]), blobs: [brokenBlob, healthyBlob], ...rows });
+    store = hydrateEveryTable({ ...sampleProjection([]), blobs: [brokenBlob, healthyBlob], ...rows });
 
     const fromSql = store.query(CLAUDE_RULE_FRONTMATTER_INVALID_CHECK.sqlTwin)
       .map((row) => String(row['path']))
@@ -261,7 +261,7 @@ describe('built-in SQL twins', () => {
   it('claude-rule-link-unchecked: the same rules links, and no case variant of one', async () => {
     const rows = linkConditionRows();
     // No blob rows: these twins read the extent alone.
-    store = openRunDatabase({ ...sampleProjection([]), ...rows });
+    store = hydrateEveryTable({ ...sampleProjection([]), ...rows });
 
     const fromSql = store.query(CLAUDE_RULE_LINK_UNCHECKED_CHECK.sqlTwin)
       .map((row) => String(row['path']))

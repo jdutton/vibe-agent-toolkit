@@ -258,6 +258,16 @@ behind RFC-3986-compliant leading-`/` resolution.
 - `--format <format>` - `yaml` (default) or `json`
 - `--debug` - Enable debug logging
 
+**What the statement can read.** The run's own projection, never another repository's: each run
+holds only the projection tables its statement names, as an identifier — plain, `"blobs"`,
+`[blobs]` or `` `blobs` ``; a single-quoted `'blobs'` is a string, so `FROM 'blobs'` is refused.
+A statement reaching a relation the run does not hold is refused, as is one that asks which
+relations exist or what the connection did: the schema table (`sqlite_schema`, `sqlite_master`),
+`pragma_*` functions, `dbstat`, `changes()`, `total_changes()` and `last_insert_rowid()`.
+`json_each`, `json_tree`, `jsonb_each` and `jsonb_tree` over a column are answered. Placeholders
+are `?` only; a named one (`:p`, `@p`, `$p`, `#p`) is refused. Rows of a statement without
+`ORDER BY` come in primary-key order, the same warm or cold.
+
 **Derived relations** — computed for the run, and only when the statement names one:
 
 | Relation | Columns | Needs |

@@ -3,7 +3,8 @@
  *
  * `resources` declares one storage port, `FactStore`, with no SQL on it; `projection-sqlite`
  * implements it and declares, beside it, the run database: the one handle SQL runs on, which
- * holds no storage operation and is opened only from a whole `Projection`. Every claim here is
+ * holds no storage operation and is opened only by hydrating a `Map` of the relations a run
+ * names — never from a whole `Projection`. Every claim here is
  * about types, and a `@ts-expect-error` in a test file asserts nothing (`tsc` never reads
  * `test/`), so the compiler is run on a probe module and its diagnostics are the oracle.
  *
@@ -11,15 +12,18 @@
  * the source as it stands: a seeded edit to either package reds this test with no rebuild. That
  * mapping is also why the probe can be an ordinary file in a temp directory.
  *
- * Every probe line but the two old-name imports compiles clean. Each one is written so that the
- * edit it guards against produces a diagnostic on that line (TS2344, a constraint not met):
+ * Every probe line but the old-name imports and the seeded projection compiles clean. Each one is
+ * written so that the edit it guards against produces a diagnostic on that line (TS2344, a
+ * constraint not met):
  *
  * - the port's members are an exact list, held both ways, and so are the file-backed factory's.
  *   A member of any kind added to either, SQL or not, reds its line; one added to the port reds
  *   the factory's line too, since the factory returns the port. Adding an operation to the port,
  *   or changing what the factory returns, therefore means editing this list on purpose;
  * - the run database and the port are not assignable to each other, either way;
- * - the opener takes a whole projection and nothing else;
+ * - the opener takes a hydration and nothing else, and its relations are a `Map` of rows, so a
+ *   whole `Projection` handed as the relations does not compile (the one expected diagnostic
+ *   that is not an old name);
  * - no other export produces a run database: not a function returning one, as a union member
  *   (`RunDatabase | undefined`) or behind a promise, and not a class constructing one. Known
  *   limits: a run database wrapped in what an export returns (`{ db }` or a tuple), a `const`
@@ -44,7 +48,7 @@ const NO_EXPORTED_MEMBER = [2305, 2724];
 /** The probe, one statement per line; line 1 is the first entry. */
 const PROBE_LINES = [
   "import type { FactStore, Projection } from '@vibe-agent-toolkit/resources';",
-  "import { openRunDatabase, openSqliteFactStore, type RunDatabase } from '@vibe-agent-toolkit/projection-sqlite';",
+  "import { hydrateRunDatabase, openSqliteFactStore, type RunDatabase, type RunDatabaseHydration } from '@vibe-agent-toolkit/projection-sqlite';",
   'type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;',
   'type Expect<T extends true> = T;',
   '/** The port, member by member. Adding an operation to it means adding it here, deliberately. */',
@@ -63,17 +67,31 @@ const PROBE_LINES = [
   // 16, 17: the run database and the port are not interchangeable, either way.
   'export type RunDatabaseIsNotAPort = Expect<Equal<RunDatabase extends FactStore ? true : false, false>>;',
   'export type PortIsNotARunDatabase = Expect<Equal<FactStore extends RunDatabase ? true : false, false>>;',
-  // 18: the opener takes a whole projection and nothing else — no relation set.
-  'export type OpenerTakesAProjection = Expect<Equal<Parameters<typeof openRunDatabase>, [projection: Projection]>>;',
-  // 19: and it is the only export that produces a run database.
-  "export type OnlyOneOpener = Expect<Equal<RunDatabaseOpeners, 'openRunDatabase'>>;",
-  // 20, 21: the old names are gone.
+  // 18: the opener takes a hydration and nothing else.
+  'export type OpenerTakesAHydration = Expect<Equal<Parameters<typeof hydrateRunDatabase>, [hydration: RunDatabaseHydration]>>;',
+  // 19: whose relations are a Map of rows by name — the needed set, not a projection.
+  "export type RelationsAreAMap = Expect<Equal<RunDatabaseHydration['relations'], ReadonlyMap<string, readonly Readonly<Record<string, unknown>>[]>>>;",
+  // 20: and it is the only export that produces a run database.
+  "export type OnlyOneOpener = Expect<Equal<RunDatabaseOpeners, 'hydrateRunDatabase'>>;",
+  // 21, 22: a whole projection handed as the relations does not compile.
+  'declare const projection: Projection;',
+  "export const seeded: RunDatabaseHydration = { rootId: 'root-1', relations: projection };",
+  // 23, 24, 25: the old names are gone.
   "import type { ProjectionStore } from '@vibe-agent-toolkit/resources';",
   "import type { SqlQueryableStore } from '@vibe-agent-toolkit/projection-sqlite';",
+  "import { openRunDatabase } from '@vibe-agent-toolkit/projection-sqlite';",
 ];
 
+/** "is not assignable" (TS2322), or "is missing the following properties" (TS2739, TS2740). */
+const NOT_ASSIGNABLE = [2322, 2739, 2740];
+
 /** The lines expected to carry a diagnostic, and the codes each may carry. */
-const EXPECTED: Readonly<Record<number, readonly number[]>> = { 20: NO_EXPORTED_MEMBER, 21: NO_EXPORTED_MEMBER };
+const EXPECTED: Readonly<Record<number, readonly number[]>> = {
+  22: NOT_ASSIGNABLE,
+  23: NO_EXPORTED_MEMBER,
+  24: NO_EXPORTED_MEMBER,
+  25: NO_EXPORTED_MEMBER,
+};
 
 /** Semantic diagnostics of the probe, keyed by its 1-based line. */
 function probeDiagnostics(): Map<number, number[]> {
@@ -111,7 +129,7 @@ function probeDiagnostics(): Map<number, number[]> {
 }
 
 describe('the storage port and the run database', () => {
-  it('keeps SQL off the port, keeps the two apart, and opens the run database only from a projection', () => {
+  it('keeps SQL off the port, keeps the two apart, and opens the run database only by hydrating named relations', () => {
     const diagnostics = probeDiagnostics();
 
     // Every diagnostic, and the line it sits on: one per expected line, none elsewhere.

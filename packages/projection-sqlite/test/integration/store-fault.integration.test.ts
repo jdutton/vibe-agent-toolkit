@@ -22,10 +22,10 @@ import { PROJECTION_STATEMENT_REFUSED_CODE } from '@vibe-agent-toolkit/resources
 import { isVatError, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { openRunDatabase, type RunDatabase } from '../../src/run-database.js';
-import { runGated } from '../../src/sql-gate.js';
+import type { RunDatabase } from '../../src/run-database.js';
+import { openGate, runGated } from '../../src/sql-gate.js';
 import { openSqliteFactStore } from '../../src/store.js';
-import { sampleProjection } from '../fixtures.js';
+import { hydrateEveryTable, sampleProjection } from '../fixtures.js';
 
 /** What a call threw, or `undefined` when it did not throw. */
 function thrownBy(run: () => unknown): unknown {
@@ -58,7 +58,7 @@ describe('a store fault propagates uncoded (integration)', () => {
     // The fact store lays the schema down and puts the file in WAL mode.
     await openSqliteFactStore({ directory }).close();
     held = new DatabaseSync(safePath.join(directory, DATABASE_FILE));
-    const openDatabase = held;
+    const openDatabase = openGate(held);
     runGated(openDatabase, 'SELECT COUNT(*) AS n FROM "blobs"', [], (statement) => statement.all());
     // A second connection commits, so the held connection's next read
     // transaction sees the WAL index move and must re-read pages rather than
@@ -96,7 +96,7 @@ describe('a store fault propagates uncoded (integration)', () => {
   });
 
   it('still codes a name the schema lacks as a refused statement', () => {
-    database = openRunDatabase(sampleProjection());
+    database = hydrateEveryTable(sampleProjection());
     const openDatabase = database;
 
     const refusal = thrownBy(() => openDatabase.query('SELECT "no_such_column" FROM "blobs"'));

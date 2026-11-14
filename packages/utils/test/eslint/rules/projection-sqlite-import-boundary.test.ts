@@ -40,7 +40,7 @@ const CASES: RuleCases = {
     { code: `import '${BACKEND}';`, filename: FILE, errors: ERROR },
     { code: `export const load = () => import('${BACKEND}');`, filename: FILE, errors: ERROR },
     { code: `export type Handle = import('${BACKEND}').RunDatabase;`, filename: FILE, errors: ERROR },
-    { code: `export { openRunDatabase } from '${BACKEND}';`, filename: FILE, errors: ERROR },
+    { code: `export { hydrateRunDatabase } from '${BACKEND}';`, filename: FILE, errors: ERROR },
     { code: `export type { RunDatabase } from '${BACKEND}';`, filename: FILE, errors: ERROR },
     { code: `export * from '${BACKEND}';`, filename: FILE, errors: ERROR },
     { code: `export const backend: unknown = require('${BACKEND}');`, filename: FILE, errors: ERROR },
@@ -53,12 +53,12 @@ const CASES: RuleCases = {
     { code: 'export const load = () => import(`@vibe-agent-toolkit/projection-sqlite`);', filename: FILE, errors: ERROR },
     // A relative path into the backend's source is the backend, whatever it is called.
     {
-      code: "import { openRunDatabase } from '../../../projection-sqlite/src/run-database.js';",
+      code: "import { hydrateRunDatabase } from '../../../projection-sqlite/src/run-database.js';",
       filename: FILE,
       errors: [{ messageId: 'backendImport', data: { source: '../../../projection-sqlite/src/run-database.js' } }],
     },
     {
-      code: "import { openRunDatabase } from '../../projection-sqlite/src/run-database.js';",
+      code: "import { hydrateRunDatabase } from '../../projection-sqlite/src/run-database.js';",
       filename: '/repo/packages/resources/src/merge.ts',
       errors: [{ messageId: 'backendImport', data: { source: '../../projection-sqlite/src/run-database.js' } }],
     },

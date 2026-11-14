@@ -37,10 +37,10 @@ import { isVatError, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { openRunDatabase, type RunDatabase } from '../src/run-database.js';
+import { hydrateRunDatabase, type RunDatabase } from '../src/run-database.js';
 import { openSqliteFactStore } from '../src/store.js';
 
-import { FIRST_BLOB, SECOND_BLOB, sampleProjection } from './fixtures.js';
+import { FIRST_BLOB, hydrateEveryTable, sampleProjection, SECOND_BLOB } from './fixtures.js';
 
 /** Asked after every refusal, to prove the refusal was real and not just a message. */
 const COUNT_BLOBS = 'SELECT COUNT(*) AS n FROM "blobs"';
@@ -79,7 +79,7 @@ function rowsOf(
 let store: RunDatabase;
 
 beforeEach(() => {
-  store = openRunDatabase(sampleProjection([FIRST_BLOB, SECOND_BLOB]));
+  store = hydrateEveryTable(sampleProjection([FIRST_BLOB, SECOND_BLOB]));
 });
 
 afterEach(async () => {
@@ -97,10 +97,10 @@ afterEach(async () => {
  * not only reading back: routing the run database through the file-backed
  * `configure()` is the regression.
  */
-describe('openRunDatabase', () => {
+describe('hydrateRunDatabase', () => {
   it('opens without throwing, and without the file-backed WAL stall', async () => {
     const before = performance.now();
-    const opened = openRunDatabase(sampleProjection());
+    const opened = hydrateEveryTable(sampleProjection());
     const elapsed = performance.now() - before;
     await opened.close();
 
@@ -122,12 +122,26 @@ describe('openRunDatabase', () => {
     }
   });
 
-  it('refuses a projection with no root row, since there is no id to file it under', () => {
-    expect(() => openRunDatabase({ ...sampleProjection(), roots: [] })).toThrow(/no root row/u);
+  it('holds exactly the mapped relations: no other table, no extents, no blob_keys', async () => {
+    const projection = sampleProjection();
+    const only = hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['blobs', projection.blobs]]) });
+    try {
+      expect(only.query(COUNT_BLOBS)[0]?.['n']).toBe(projection.blobs.length);
+      for (const name of ['resource_realizations', 'extents', 'blob_keys', 'edges']) {
+        expect(() => only.query(`SELECT 1 FROM ${quoteIdentifier(name)}`), name).toThrow(/no such table/u);
+      }
+    } finally {
+      await only.close();
+    }
+  });
+
+  it('refuses a name that is not a queryable relation, rather than creating it', () => {
+    expect(() => hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['extents', []]]) }))
+      .toThrow(/not a queryable relation/u);
   });
 
   it('holds nothing across instances — each is its own projection', async () => {
-    const other = openRunDatabase(sampleProjection([]));
+    const other = hydrateEveryTable(sampleProjection([]));
     try {
       expect(other.query(COUNT_BLOBS)[0]?.['n']).toBe(0);
       expect(store.query(COUNT_BLOBS)[0]?.['n']).toBe(2);
@@ -275,7 +289,7 @@ describe('query', () => {
   });
 
   it('rejects a closed store rather than answering from a dead connection', async () => {
-    const doomed = openRunDatabase(sampleProjection());
+    const doomed = hydrateEveryTable(sampleProjection());
     await doomed.close();
 
     expect(() => doomed.query('SELECT 1 AS n')).toThrow();
@@ -355,10 +369,9 @@ describe('query cannot reach a database it was not opened on', () => {
     attachIfTheGateLetsIt(secretPath);
 
     expect(() => store.query('SELECT "v" FROM "smuggled"."secrets"')).toThrow(/no such table/i);
-    expect(
-      store.query('SELECT "name" FROM pragma_database_list').map((row) => row['name']),
-      'a foreign schema survived the call that attached it',
-    ).toEqual(['main']);
+    // The gate refuses to prepare while any schema but main and temp is attached, so a call
+    // that answers proves none survived.
+    expect(store.query('SELECT 1 AS n')[0]?.['n'], 'a foreign schema survived the call that attached it').toBe(1);
   });
 });
 

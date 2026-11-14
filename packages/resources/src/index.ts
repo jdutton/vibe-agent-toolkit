@@ -338,6 +338,7 @@ export {
 export {
   allDerivedSpecs,
   DERIVED_TABLES,
+  rootlessPathRelations,
   type DerivedTableName,
   type DerivedTableSpec,
 } from './projection/derived-table-registry.js';
@@ -350,6 +351,8 @@ export {
   type ProjectionColumnSource,
   type ProjectionColumnType,
   type ProjectionColumnTypeSource,
+  type TextColumnRole,
+  type TextColumnRoles,
   projectionColumnType,
   projectionColumnTypes,
   projectionRowShape,
@@ -1053,9 +1056,12 @@ export {
 export {
   ROOT_PATH_PLACEHOLDER,
   UnregisteredProjectionColumnError,
+  compareRows,
   exportProjection,
   serializeProjection,
   type ProjectionDocument,
+  type RowComparator,
+  type RowOrderSource,
 } from './projection/export.js';
 
 

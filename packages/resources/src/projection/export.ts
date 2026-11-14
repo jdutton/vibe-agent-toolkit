@@ -25,10 +25,11 @@
  *    export carrying insertion order would make any golden host-dependent, which
  *    is the specific failure a golden exists to rule out.
  *
- * The sort is by primary key rather than by whole-row canonical form so the
- * ordering a reader sees is the ordering the schema documents. Numeric key
- * columns (`blob_references.ordinal`, `blob_sections.ordinal`) compare
- * numerically — string order would place 10 before 2.
+ * The sort is by primary key first, so the ordering a reader sees is the
+ * ordering the schema documents, then by the remaining columns, so it is total
+ * ({@link compareRows}). Numeric key columns (`blob_references.ordinal`,
+ * `blob_sections.ordinal`) compare numerically — string order would place 10
+ * before 2.
  *
  * ## Why key order is a property of the export and not of the producer
  *
@@ -51,6 +52,8 @@
 
 import { compareCodeUnits, VatError } from '@vibe-agent-toolkit/utils';
 
+import { type ProjectionColumnKind, type ProjectionColumnTypeSource, projectionColumnTypes } from './column-kinds.js';
+import { canonicalJson } from './digest.js';
 import type { Projection } from './projection.js';
 import {
   PROJECTION_TABLES,
@@ -90,9 +93,6 @@ export interface ProjectionDocument {
   /** Every table, each sorted by its primary key. */
   readonly tables: Projection;
 }
-
-/** A single component of a primary key. */
-type KeyPart = string | number | boolean | null;
 
 /**
  * A row carried a column {@link PROJECTION_TABLES} does not declare.
@@ -228,8 +228,9 @@ function emitTable<Name extends ProjectionTableName>(
   // Built once per table rather than once per row: the membership test below
   // runs over every key of every row, and a table can carry millions.
   const declared = new Set<string>(spec.columns);
+  const compare = compareRows(spec);
   return [...rows]
-    .sort((left, right) => compareKeys(keyOf(left, spec.primaryKey), keyOf(right, spec.primaryKey)))
+    .sort((left, right) => compare(left as Readonly<Record<string, unknown>>, right as Readonly<Record<string, unknown>>))
     .map((row) => inColumnOrder(row, spec, declared));
 }
 
@@ -272,62 +273,102 @@ function inColumnOrder<Name extends ProjectionTableName>(
   return ordered as ProjectionRow<Name>;
 }
 
-/**
- * Read a row's primary key out of it, in column order.
- *
- * @param row - The row
- * @param primaryKey - The key columns, in comparison order
- * @returns The key components
- */
-function keyOf<Row>(row: Row, primaryKey: readonly (keyof Row & string)[]): readonly KeyPart[] {
-  return primaryKey.map((column) => row[column] as KeyPart);
+/** What {@link compareRows} reads off a spec: a table's or a derived relation's. */
+export interface RowOrderSource extends ProjectionColumnTypeSource {
+  /** The columns that identify a row, in comparison order. */
+  readonly primaryKey: readonly string[];
 }
 
+/** A total order over one relation's rows, per the `Array.prototype.sort` contract. */
+export type RowComparator = (left: Readonly<Record<string, unknown>>, right: Readonly<Record<string, unknown>>) => number;
+
 /**
- * Compare two primary keys component by component.
+ * The one canonical row order of a relation: primary key first, then every remaining column in
+ * registry order, so the order is TOTAL — no two distinct rows tie.
  *
- * Both keys come from the same extractor, so they always have the same arity;
- * `?? null` covers the index type rather than a reachable case.
+ * 🔑 The order the export emits, the run database's hydration inserts and a lens's write inserts.
+ * One comparator, so a statement without `ORDER BY` answers alike whichever route filled the
+ * database: SQLite returns a plain scan of a rowid table in insertion order, and insertion order is
+ * this.
  *
- * @param left - First key
- * @param right - Second key
- * @returns Negative, zero or positive per the `Array.prototype.sort` contract
+ * Per column kind: `null` (and an absent value) before any value, so `null` and `''` differ; text
+ * by UTF-16 code units, never a locale; integer, real and timestamp by value; boolean `false`
+ * first; json by its {@link canonicalJson} text, never `[object Object]`.
+ *
+ * @param spec - A `PROJECTION_TABLES` entry or a derived relation's spec
+ * @returns The comparator, its column kinds read once
+ * @throws TypeError When a column has no storage representation
  */
-function compareKeys(left: readonly KeyPart[], right: readonly KeyPart[]): number {
-  for (const [index, part] of left.entries()) {
-    const order = comparePart(part, right[index] ?? null);
-    if (order !== 0) {
-      return order;
+export function compareRows(spec: RowOrderSource): RowComparator {
+  const kinds = new Map(projectionColumnTypes(spec).map(([column, { kind }]) => [column, kind]));
+  const order = [...spec.primaryKey, ...spec.columns.filter((column) => !spec.primaryKey.includes(column))]
+    .map((column) => [column, kinds.get(column) ?? 'text'] as const);
+  return (left, right) => {
+    for (const [column, kind] of order) {
+      const compared = compareValues(kind, left[column], right[column]);
+      if (compared !== 0) return compared;
     }
-  }
-  return 0;
+    return 0;
+  };
 }
 
 /**
- * Compare one key component, numerically when the column is numeric.
+ * Compare one column's values by what the column holds.
  *
- * A key column has one type across a table, so the numeric branch is taken for
- * every row of `blob_references.ordinal` or for none.
- *
- * @param left - First component
- * @param right - Second component
+ * @param kind - The column's kind
+ * @param left - First value
+ * @param right - Second value
  * @returns Negative, zero or positive per the `Array.prototype.sort` contract
  */
-function comparePart(left: KeyPart, right: KeyPart): number {
-  if (typeof left === 'number' && typeof right === 'number') {
-    return left - right;
+function compareValues(kind: ProjectionColumnKind, left: unknown, right: unknown): number {
+  const leftAbsent = left === null || left === undefined;
+  const rightAbsent = right === null || right === undefined;
+  if (leftAbsent || rightAbsent) return Number(rightAbsent) - Number(leftAbsent);
+  switch (kind) {
+    case 'integer':
+    case 'real':
+      return compareNumbers(Number(left), Number(right));
+    case 'timestamp':
+      return compareNumbers(instantOf(left), instantOf(right));
+    case 'boolean':
+      return Number(Boolean(left)) - Number(Boolean(right));
+    case 'json':
+      return compareCodeUnits(canonicalJson(left), canonicalJson(right));
+    case 'text':
+      return compareCodeUnits(textOf(left), textOf(right));
   }
-  return compareCodeUnits(stringifyPart(left), stringifyPart(right));
 }
 
 /**
- * Render a key component for code-unit comparison. A null column sorts first,
- * which is the same convention `blob_references.column` documents for a null
- * column position.
+ * Compare two numbers without subtracting, so neither overflow nor `NaN` leaks a non-sign.
  *
- * @param part - The key component
- * @returns Its comparable string form
+ * @param left - First number
+ * @param right - Second number
+ * @returns -1, 0 or 1
  */
-function stringifyPart(part: KeyPart): string {
-  return part === null ? '' : String(part);
+function compareNumbers(left: number, right: number): number {
+  if (left < right) return -1;
+  return left > right ? 1 : 0;
+}
+
+/**
+ * A text column's value as text: the string it holds, or the canonical JSON of anything else, so a
+ * value of the wrong type still sorts at one stable place.
+ *
+ * @param value - A text column's value
+ * @returns The text compared
+ */
+function textOf(value: unknown): string {
+  return typeof value === 'string' ? value : canonicalJson(value);
+}
+
+/**
+ * The instant a timestamp value names: a `Date` as a projection holds it, or the ISO-8601 text a
+ * store holds.
+ *
+ * @param value - A timestamp column's value
+ * @returns Milliseconds since the epoch
+ */
+function instantOf(value: unknown): number {
+  return value instanceof Date ? value.getTime() : Date.parse(String(value));
 }

@@ -44,7 +44,10 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  *
  * `store.*` counts the file-backed fact store a warm run reads and writes;
  * `hydration.*` counts loading the per-run run database a query's SQL runs on,
- * which I10 does not bound.
+ * which I10 does not bound: one write per hydration that wrote a relation, and
+ * the rows of the relations the run's statements name. `statement.explained`
+ * counts every `EXPLAIN` the SQL gate prepares — one per gated statement, and
+ * the four virtual-table reference reads each handle makes when it is opened.
  */
 export const WORK_COUNTER_NAMES = [
   'store.rows.decoded.persistent',
@@ -53,6 +56,7 @@ export const WORK_COUNTER_NAMES = [
   'store.rows.written.persistent',
   'hydration.writes',
   'hydration.rows.written',
+  'statement.explained',
   'extent.derived',
   'extent.served',
   'store.miss.refusedPairs',

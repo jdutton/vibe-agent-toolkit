@@ -11,9 +11,10 @@
 
 import { DatabaseSync } from 'node:sqlite';
 
+import { isVatError } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { isStatementRefusal, runGated } from '../src/sql-gate.js';
+import { isStatementRefusal, openGate, runGated } from '../src/sql-gate.js';
 
 /** A `node:sqlite`-shaped error carrying one extended result code. */
 function sqliteError(errcode: number): Error {
@@ -53,16 +54,42 @@ describe('isStatementRefusal — exact extended codes only', () => {
   });
 });
 
-describe('runGated — no foreign schema outlives a statement', () => {
-  it('detaches every schema the connection was not opened on, a name needing quotes included', () => {
+describe('runGated — nothing attached reaches a statement', () => {
+  it('refuses to prepare while a schema other than main and temp is attached, uncoded', () => {
     const database = new DatabaseSync(':memory:');
     try {
-      // Attached directly, past the kind gate that refuses an ATTACH statement: the sweep
-      // is the second line, and has to hold on its own.
-      database.exec(`ATTACH DATABASE ':memory:' AS plain`);
-      database.exec(`ATTACH DATABASE ':memory:' AS "we""ird"`);
+      const gate = openGate(database);
+      // Attached directly, past the kind gate that refuses an ATTACH statement: this check is
+      // what stands when something else attached one.
+      database.exec(`ATTACH DATABASE ':memory:' AS x`);
+      let caught: unknown;
+      try {
+        runGated(gate, 'SELECT 1 AS n', [], (statement) => statement.all());
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught, 'a statement compiled beside an attached schema').toBeInstanceOf(Error);
+      expect(String(caught)).toMatch(/"x" is attached/u);
+      // A driver invariant, not the caller's statement: no statement code.
+      expect(isVatError(caught), 'the refusal blames the statement').toBe(false);
+    } finally {
+      database.close();
+    }
+  });
 
-      expect(runGated(database, 'SELECT 1 AS x', [], (statement) => statement.all())).toEqual([{ x: 1 }]);
+  it('detaches every schema a step attached, a name needing quotes included', () => {
+    const database = new DatabaseSync(':memory:');
+    try {
+      const gate = openGate(database);
+      const rows = runGated(gate, 'SELECT 1 AS x', [], (statement) => {
+        const answer = statement.all();
+        // The step runs after the gate; a schema attached here is the sweep's to unwind.
+        database.exec('PRAGMA query_only = 0');
+        database.exec(`ATTACH DATABASE ':memory:' AS plain`);
+        database.exec(`ATTACH DATABASE ':memory:' AS "we""ird"`);
+        return answer;
+      });
+      expect(rows).toEqual([{ x: 1 }]);
 
       const schemas = (database.prepare('PRAGMA database_list').all() as { name: string }[]).map(({ name }) => name);
       expect(schemas).toEqual(['main']);
@@ -75,10 +102,11 @@ describe('runGated — no foreign schema outlives a statement', () => {
 describe('runGated — the original failure always wins', () => {
   it('rethrows the step\'s error even when restoring the connection then fails', () => {
     const database = new DatabaseSync(':memory:');
+    const gate = openGate(database);
     // The step faults AND leaves the connection unusable, so the `finally`'s
     // `PRAGMA query_only = 0` throws too — the case where a restore failure
     // would replace the error that actually happened.
-    const run = (): unknown => runGated(database, 'SELECT 1 AS x', [], () => {
+    const run = (): unknown => runGated(gate, 'SELECT 1 AS x', [], () => {
       database.close();
       throw new Error('the original fault');
     });
