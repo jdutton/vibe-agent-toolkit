@@ -89,9 +89,13 @@
       "dependsOn": ["^build", "build"],
       "outputs": [],
       "cache": true,
-      // `CI` is hashed HERE and nowhere else: two network-dependent integration
-      // suites gate on `process.env.CI`, so a CI run and a local run of this
-      // task execute different populations and must not share a cache entry.
+      // `CI` is hashed HERE and nowhere else, because a CI run and a local run of
+      // this task test different things and must not share a cache entry. utils'
+      // `realpath-native-folder-mount.integration.test.ts` fails under CI, and
+      // skips locally, when the host cannot mount a VHD. dev-tools'
+      // `pre-publish-known-defects.integration.test.ts` spawns `pre-publish-check`,
+      // which skips its git checks when `CI` is set. The network suites are not
+      // the reason: they are system tests gated on `NET_AVAILABLE` (`globalEnv`).
       // Every other task sees `CI` through `globalPassThroughEnv` without it
       // entering the hash — see that key below.
       "env": ["CI"]
@@ -307,7 +311,10 @@
     "packages/dev-tools/src/test-tier-budget-allowlist.ts"
   ],
   // `CI` reaches every task (turbo's strict env mode would otherwise strip it)
-  // but is hashed only where it changes what runs: `test:integration` above.
+  // but is hashed only in `test:integration` above. One unit suite also reads
+  // it: cli's `absence-causes.test.ts` adds a stricter assertion on Linux under
+  // `CI`. CI restores no turbo cache, so that branch always runs there; only a
+  // local Linux run can replay one mode's pass for the other.
   // Hashing it globally split every cache entry in two between the pre-commit
   // hook (CI unset) and `bun run validate` (CI=1), so each re-ran the other's
   // build, typecheck and unit tests.
