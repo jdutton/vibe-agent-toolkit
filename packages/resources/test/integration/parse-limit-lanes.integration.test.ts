@@ -14,13 +14,11 @@ import { pathToFileURL } from 'node:url';
 
 import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { overOutputRowsMarkdown } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { ParseCache } from '../../src/parse-cache.js';
 import { parseFileCached } from '../../src/parse-dispatcher.js';
-import type { ParsePoolPolicy } from '../../src/parse-dispatcher.js';
-import { __setParseWorkerEntryForTest, createParsePool, type ParsePool, type ParsePoolOptions } from '../../src/parse-pool.js';
+import { __setParseWorkerEntryForTest, type ParsePoolOptions } from '../../src/parse-pool.js';
 import {
   BLOB_PARSE_FAILED,
   BLOB_PARSE_LIMIT_EXCEEDED,
@@ -35,35 +33,23 @@ import { baseBuilderForRoot, conditionsWithCode } from '../blob-fixture-populati
 import { deeplyNestedQuote } from '../parse-limit-fixtures.js';
 import { countFilesUnder, setupSubdirTestSuite } from '../test-helpers.js';
 
+import { type Dispatched, overDefaultRows, recordingPolicy, registryOverCache } from './recording-parse-policy.js';
+
 const suite = setupSubdirTestSuite('vat-parse-limit-lanes-');
 
 /** A stack small enough for the fixture to overflow, a heap large enough that the stack is what it meets. */
 const LIMITS: NonNullable<ParsePoolOptions['limits']> = { stackMb: 1, heapMb: 512 };
 
-/** Documents the pools the policy builds were handed, by first line. */
-interface Dispatched {
-  firstLines: string[];
-}
-
-/** A policy whose real, limited pool records what it is asked to parse. */
-function recordingPolicy(dispatched: Dispatched, limits: NonNullable<ParsePoolOptions['limits']> = LIMITS): ParsePoolPolicy {
-  return {
-    limits,
-    createPool: (options?: ParsePoolOptions): ParsePool => {
-      const real = createParsePool(options);
-      return {
-        size: real.size,
-        parse: async (kind, content, byteLength) => {
-          dispatched.firstLines.push(content.split('\n')[0] ?? '');
-          return real.parse(kind, content, byteLength);
-        },
-        parseIntoCache: async (kind, content, byteLength, cacheKey) =>
-          real.parseIntoCache(kind, content, byteLength, cacheKey),
-        harnessFacts: async (harness, content, byteLength) => real.harnessFacts(harness, content, byteLength),
-        shutdown: async () => real.shutdown(),
-      };
-    },
-  };
+/**
+ * The next populate of the same tree over the same cache, on a fresh recording pool.
+ *
+ * @param cache - The cache the first run used
+ * @returns What its pool was handed, and what it counted
+ */
+async function populateAgain(cache: ParseCache): Promise<{ second: Dispatched; again: Awaited<ReturnType<typeof populateBlobs>> }> {
+  const second: Dispatched = { firstLines: [] };
+  const again = await populateBlobs(await baseBuilderForRoot(suite.tempDir), { parseCache: cache, parsePool: recordingPolicy(second, LIMITS) });
+  return { second, again };
 }
 
 async function writeCorpus(): Promise<void> {
@@ -84,7 +70,7 @@ async function registryRefusalsOfB(code: string): Promise<ValidationIssue[]> {
   const registry = new ResourceRegistry({
     baseDir: suite.tempDir,
     parseCache: new ParseCache({ enabled: false }),
-    parsePool: recordingPolicy({ firstLines: [] }),
+    parsePool: recordingPolicy({ firstLines: [] }, LIMITS),
   });
   const files = ['a.md', 'b.md', 'c.md'].map((name) => safePath.join(suite.tempDir, name));
 
@@ -111,7 +97,7 @@ describe('a parse stopped at a limit, on the projection lane', () => {
     const first: Dispatched = { firstLines: [] };
 
     const builder = await baseBuilderForRoot(suite.tempDir);
-    const counts = await populateBlobs(builder, { parseCache: cache, parsePool: recordingPolicy(first) });
+    const counts = await populateBlobs(builder, { parseCache: cache, parsePool: recordingPolicy(first, LIMITS) });
     const projection = builder.build();
 
     // Refused, naming the file and the limit.
@@ -135,11 +121,7 @@ describe('a parse stopped at a limit, on the projection lane', () => {
     expect(await countFilesUnder(cacheDir)).toBe(2);
 
     // The next run hits the cache for the two and parses the breached one again.
-    const second: Dispatched = { firstLines: [] };
-    const again = await populateBlobs(await baseBuilderForRoot(suite.tempDir), {
-      parseCache: cache,
-      parsePool: recordingPolicy(second),
-    });
+    const { second, again } = await populateAgain(cache);
     expect(second.firstLines).toHaveLength(1);
     expect(second.firstLines[0]?.startsWith('>>>')).toBe(true);
     expect(again.blobsParseLimited).toBe(1);
@@ -205,7 +187,7 @@ describe('a parse worker that dies holding a job', () => {
     const cache = new ParseCache({ cacheDir, enabled: true });
 
     const builder = await baseBuilderForRoot(suite.tempDir);
-    const counts = await populateBlobs(builder, { parseCache: cache, parsePool: recordingPolicy({ firstLines: [] }) });
+    const counts = await populateBlobs(builder, { parseCache: cache, parsePool: recordingPolicy({ firstLines: [] }, LIMITS) });
     const projection = builder.build();
 
     const died = conditionsWithCode(projection, BLOB_PARSE_WORKER_DIED);
@@ -221,11 +203,7 @@ describe('a parse worker that dies holding a job', () => {
     expect(conditionsWithCode({ ...projection, ...storableBlobFacts(blobs) }, BLOB_PARSE_WORKER_DIED)).toHaveLength(0);
     expect(await countFilesUnder(cacheDir)).toBe(2);
 
-    const second: Dispatched = { firstLines: [] };
-    const again = await populateBlobs(await baseBuilderForRoot(suite.tempDir), {
-      parseCache: cache,
-      parsePool: recordingPolicy(second),
-    });
+    const { second, again } = await populateAgain(cache);
     expect(second.firstLines).toStrictEqual(['# DIE']);
     expect(again.blobsParseWorkerDied).toBe(1);
   });
@@ -236,56 +214,6 @@ describe('a parse worker that dies holding a job', () => {
     expect(findings[0]?.message).toContain('exited unexpectedly with code 1');
   });
 });
-
-/** Items in the long frontmatter list: past the ~130,000 arguments a spread fits on Node's default stack. */
-const LONG_LIST_ITEMS = 200_000;
-
-/** Limits loose enough for the long list's own rows, which count against `outputRows`. */
-const LONG_LIST_LIMITS: NonNullable<ParsePoolOptions['limits']> = { outputRows: 1_000_000, outputBytes: 64 * 1024 * 1024 };
-
-describe('a frontmatter list of 200,000 items, decoded on the parent thread', () => {
-  beforeAll(suite.beforeAll);
-  afterAll(suite.afterAll);
-  beforeEach(suite.beforeEach);
-
-  // Past the DEFAULT `outputRows`, so no run files it (`ParseCache.setByKey`): each
-  // run parses it again under the looser limits, and the parent rebuilds the
-  // whole list from the worker's encoding every time. A hit's decode at this size
-  // is the codec's own round-trip test.
-  it('is admitted with every item on every run, and never filed past the default caps', async () => {
-    const items = Array.from({ length: LONG_LIST_ITEMS }, (_, index) => String(index % 10));
-    const file = safePath.join(suite.tempDir, 'long.md');
-    await writeFile(file, `---\nitems: [${items.join(', ')}]\n---\n\n# Long\n`, 'utf-8');
-    const cacheDir = safePath.join(suite.suiteDir, `cache-long-${String(Date.now())}`);
-
-    const runOnce = async (dispatched: Dispatched): Promise<{ admitted: number; listed: unknown; refused: number }> => {
-      const registry = new ResourceRegistry({
-        baseDir: suite.tempDir,
-        parseCache: new ParseCache({ cacheDir, enabled: true }),
-        parsePool: recordingPolicy(dispatched, LONG_LIST_LIMITS),
-      });
-      const admitted = await registry.addResources([file]);
-      const refused = (await registry.validate()).issues.filter((issue) => issue.code.startsWith('RESOURCE_PARSE_')).length;
-      const listed = admitted[0]?.frontmatter?.['items'];
-      return { admitted: admitted.length, listed: Array.isArray(listed) ? listed.length : listed, refused };
-    };
-
-    const first: Dispatched = { firstLines: [] };
-    expect(await runOnce(first)).toStrictEqual({ admitted: 1, listed: LONG_LIST_ITEMS, refused: 0 });
-    expect(first.firstLines).toHaveLength(1);
-    expect(await countFilesUnder(cacheDir)).toBe(0);
-
-    const second: Dispatched = { firstLines: [] };
-    expect(await runOnce(second)).toStrictEqual({ admitted: 1, listed: LONG_LIST_ITEMS, refused: 0 });
-    expect(second.firstLines).toHaveLength(1);
-  });
-});
-
-/**
- * More rows than the default `outputRows` (16,384) admits: frontmatter items, which parse in
- * milliseconds, where as many body links build a parse tree of hundreds of MiB and take seconds.
- */
-const overDefaultRows = (): string => overOutputRowsMarkdown(null);
 
 describe('a parse with no dispatcher of a document the bounded route refuses', () => {
   beforeAll(suite.beforeAll);
@@ -304,87 +232,9 @@ describe('a parse with no dispatcher of a document the bounded route refuses', (
     ).rejects.toMatchObject({ code: 'PARSE_LIMIT_EXCEEDED' });
     expect(await countFilesUnder(cacheDir)).toBe(0);
 
-    const registry = new ResourceRegistry({
-      baseDir: suite.tempDir,
-      parseCache: new ParseCache({ cacheDir, enabled: true }),
-      parsePool: recordingPolicy({ firstLines: [] }, {}),
-    });
+    const registry = registryOverCache(suite.tempDir, cacheDir, recordingPolicy({ firstLines: [] }, {}));
     expect(await registry.addResources([file])).toHaveLength(0);
     expect(registry.getParseRefusedResources().map((entry) => entry.reason)).toStrictEqual([
-      expect.stringContaining('outputRows'),
-    ]);
-  });
-});
-
-/** Body links past {@link FEW_ROWS}: a link-only document, so the rows that breach are link rows. */
-const OVER_FEW_ROWS_LINKS = 20;
-
-/** An `outputRows` cap a handful of links can pass, so a link-row breach costs milliseconds. */
-const FEW_ROWS: NonNullable<ParsePoolOptions['limits']> = { outputRows: 10 };
-
-describe('body links counted as output rows', () => {
-  beforeAll(suite.beforeAll);
-  afterAll(suite.afterAll);
-  beforeEach(suite.beforeEach);
-
-  it('refuses a document whose links pass the cap and files nothing; a default run admits and files it', async () => {
-    const links = Array.from({ length: OVER_FEW_ROWS_LINKS }, (_, index) => `[l${String(index)}](./t.md)`);
-    const file = safePath.join(suite.tempDir, 'links.md');
-    await writeFile(file, `${links.join('\n')}\n`, 'utf-8');
-    const cacheDir = safePath.join(suite.suiteDir, `cache-link-rows-${String(Date.now())}`);
-
-    const capped = new ResourceRegistry({
-      baseDir: suite.tempDir,
-      parseCache: new ParseCache({ cacheDir, enabled: true }),
-      parsePool: recordingPolicy({ firstLines: [] }, FEW_ROWS),
-    });
-    expect(await capped.addResources([file])).toHaveLength(0);
-    expect(capped.getParseRefusedResources().map((entry) => entry.reason)).toStrictEqual([
-      expect.stringContaining('outputRows'),
-    ]);
-    expect(await countFilesUnder(cacheDir)).toBe(0);
-
-    // The same links are well under the DEFAULT cap, so a default run admits
-    // every link and files the entry: the refusal above was the cap, not the file.
-    const defaults = new ResourceRegistry({
-      baseDir: suite.tempDir,
-      parseCache: new ParseCache({ cacheDir, enabled: true }),
-      parsePool: recordingPolicy({ firstLines: [] }, {}),
-    });
-    const [admitted] = await defaults.addResources([file]);
-    expect(admitted?.links).toHaveLength(OVER_FEW_ROWS_LINKS);
-    expect(await countFilesUnder(cacheDir)).toBe(1);
-  });
-});
-
-describe('a bounded run under limits looser than the defaults', () => {
-  beforeAll(suite.beforeAll);
-  afterAll(suite.afterAll);
-  beforeEach(suite.beforeEach);
-
-  // Both transports: on `wire` the parent files the entry, on `cache` the worker
-  // does. Either way an entry past the DEFAULT caps would be served to a later
-  // default run as an admission that run would have refused.
-  it.each(['wire', 'cache'] as const)('admits the file over %s but files nothing a default run would serve', async (transport) => {
-    const file = safePath.join(suite.tempDir, `loose-${transport}.md`);
-    await writeFile(file, overDefaultRows(), 'utf-8');
-    const cacheDir = safePath.join(suite.suiteDir, `cache-loose-${transport}-${String(Date.now())}`);
-
-    const loose = new ResourceRegistry({
-      baseDir: suite.tempDir,
-      parseCache: new ParseCache({ cacheDir, enabled: true }),
-      parsePool: { ...recordingPolicy({ firstLines: [] }, { outputRows: 1_000_000 }), transport },
-    });
-    expect(await loose.addResources([file])).toHaveLength(1);
-    expect(await countFilesUnder(cacheDir)).toBe(0);
-
-    const strict = new ResourceRegistry({
-      baseDir: suite.tempDir,
-      parseCache: new ParseCache({ cacheDir, enabled: true }),
-      parsePool: recordingPolicy({ firstLines: [] }, {}),
-    });
-    expect(await strict.addResources([file])).toHaveLength(0);
-    expect(strict.getParseRefusedResources().map((entry) => entry.reason)).toStrictEqual([
       expect.stringContaining('outputRows'),
     ]);
   });

@@ -53,7 +53,7 @@ export function manyLinks(count: number): string {
  * parse, so it keeps room for a slow CI box to load the parser. The heap is NOT
  * tight: these pools run in the test runner's own process, where a thread that
  * reaches V8's ceiling can abort it. A test of the heap names a small bound
- * itself, in a child process (`parse-pool-limits.integration.test.ts`).
+ * itself, in a child process (`test/system/parse-pool-child.ts`).
  */
 export const TIGHT_LIMITS: ParseLimits = {
   timeMs: 2000,
