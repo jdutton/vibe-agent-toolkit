@@ -116,9 +116,9 @@ jobs:
           fi
         env:
           CONTRABAND_TOKENS: \${{ secrets.CONTRABAND_TOKENS }}
-      # NET_AVAILABLE: the four network suites (external-link-validator,
-      # external-url-validation, audit-git-url, corpus-scan) skip unless it is
-      # set; a hosted runner has the network, so this is the tier that runs them.
+      # NET_AVAILABLE: the two network suites (audit-git-url, corpus-scan, which
+      # clone from GitHub) skip unless it is set; a hosted runner has the
+      # network, so this is the tier that runs them.
       # Locally they stay opt-in (\`NET_AVAILABLE=1 bun run validate\`).
       - name: Run validation
         run: bun run validate
