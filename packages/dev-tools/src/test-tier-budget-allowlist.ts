@@ -195,9 +195,7 @@ export const TEST_TIER_BUDGET_ALLOWLIST: readonly TestTierBudgetEntry[] = [
   { file: 'packages/resource-compiler/test/integration/transformer.integration.test.ts', measuredMs: 4953, mechanisms: [MECHANISM.tempTree], note: 'a real TypeScript program per case; 4008 and 4953 ms on the floor' },
   { file: 'packages/cli/test/integration/audit-git-url.integration.test.ts', measuredMs: 4906, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.spawn], note: 'a real bare repo cloned by the audit pipeline; 4226 and 4906 ms on the floor' },
   // Added from the coverage job's serial run on the floor at 774940506 (job 132332867301).
-  { file: 'packages/resources/test/integration/parse-pool-limits.integration.test.ts', measuredMs: 56457, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn, MECHANISM.workerPool], note: 'each case spawns a child process whose worker threads breach a real wall-clock, stack or heap limit' },
   { file: 'packages/cli/test/integration/skills-validate-refused-skill.integration.test.ts', measuredMs: 16406, mechanisms: [MECHANISM.tempTree], note: 'parses SKILL.md files nested 50,000 levels deep, past the parse worker\'s stack, through the real audit and validate lanes' },
-  { file: 'packages/resources/test/integration/parse-limit-lanes.integration.test.ts', measuredMs: 11353, mechanisms: [MECHANISM.workerPool, MECHANISM.projection], note: 'drives each limit breach through every parse lane on a real worker pool' },
   { file: 'packages/cli/test/integration/archive-hostile-lanes-zip.integration.test.ts', measuredMs: 7674, mechanisms: [MECHANISM.unclassified], note: 'builds every hostile ZIP fixture and runs it through three install verbs in process' },
   { file: 'packages/cli/test/integration/claude-context-one-document.integration.test.ts', measuredMs: 7003, mechanisms: [MECHANISM.tempTree] },
   { file: 'packages/cli/test/integration/archive-hostile-lanes-npm.integration.test.ts', measuredMs: 6022, mechanisms: [MECHANISM.unclassified], note: 'builds every hostile tarball fixture, including the over-the-entry-limit one, and runs it through the npm install lanes' },
@@ -206,6 +204,5 @@ export const TEST_TIER_BUDGET_ALLOWLIST: readonly TestTierBudgetEntry[] = [
   { file: 'packages/rag-lancedb/test/system/large-scale-filtering.system.test.ts', measuredMs: 60112, mechanisms: [MECHANISM.nativeModel], note: '43119 ms local serial' },
   { file: 'packages/cli/test/system/claude-context.system.test.ts', measuredMs: 36487, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn], note: '26 spawned `vat claude context` runs; 15188 ms local serial' },
   // Added from the coverage job's serial run on the floor at 774940506 (job 132332867301).
-  { file: 'packages/cli/test/system/population-refusal-report.system.test.ts', measuredMs: 52993, mechanisms: [MECHANISM.refusal, MECHANISM.spawn] },
   { file: 'packages/cli/test/system/resources-query-budget.system.test.ts', measuredMs: 30148, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn], note: 'spawns real vat resources query runs, including ones the --budget supervisor must SIGKILL at the limit' },
 ];

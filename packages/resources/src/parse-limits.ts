@@ -1140,7 +1140,7 @@ export const FRESH_THREAD_HEAP_MB = 24;
  * reaches V8's own ceiling dies with a FATAL out-of-memory that aborts the whole process, the
  * caller's included ({@link HEAP_CEILING_FACTOR}); at 64 MiB, no-flag breaches are stopped by the
  * pool three times in a row, each in a child process that exits 0
- * (`parse-pool-limits.integration.test.ts`, "a heap breach with no process-wide flag"). 32 MiB is
+ * (`parse-pool-limits.system.test.ts`, "a heap breach with no process-wide flag"). 32 MiB is
  * not shown UNSAFE: on Windows CI the vitest fork running a pool at 32 exited unexpectedly on two
  * runs in a row, with no exit reason captured, while a breach stopped at an applied 32 MiB bound
  * under a 64 MiB flag runs cleanly in a child. So the minimum is the least bound seeded clean, not

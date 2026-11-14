@@ -710,9 +710,10 @@ describe('a broken install is loud', () => {
     // `setTimeout` armed at dispatch, so with timers faked it fires only when the
     // test advances them — and the test advances them only once the thread has
     // posted `parserLoaded` and the pool has read it. Each thread also takes
-    // 350 ms (a real timer, in the worker) to load, past the 300 ms limit: on a
+    // 35 ms (a real timer, in the worker) to load, past the 30 ms limit: on a
     // real clock a slow load under CI load was charged as a load that never
-    // finished, and three of them called the install broken.
+    // finished, and three of them called the install broken. The limit is the
+    // test's clock's, so how short it is decides nothing but the real wait.
     //
     // Three breaches IN A ROW, no answer between them: an answer resets the
     // count, so a run broken up by answers cannot tell counted from uncounted.
@@ -721,7 +722,7 @@ describe('a broken install is loud', () => {
       "import { writeFileSync } from 'node:fs';",
       "import { parentPort } from 'node:worker_threads';",
       // A job posted meanwhile waits in the port: no listener is attached yet.
-      'await new Promise((resolve) => setTimeout(resolve, 350));',
+      'await new Promise((resolve) => setTimeout(resolve, 35));',
       // The real worker's own listener, wrapped: a SLOW document is announced as a
       // loaded parser, as the real worker does before parsing, then blocks the thread
       // unanswered. The marker is written AFTER the post, so seeing it means the post is queued.
@@ -734,7 +735,7 @@ describe('a broken install is loud', () => {
       '} : listener);',
       `await import(${JSON.stringify(BUILT_WORKER)});`,
     ].join('\n'));
-    const pool = createParsePool({ size: 1, limits: { timeMs: 300 } });
+    const pool = createParsePool({ size: 1, limits: { timeMs: 30 } });
     openPools.push(pool);
 
     const outcomes: unknown[] = [];
@@ -743,7 +744,7 @@ describe('a broken install is loud', () => {
         const outcome = outcomeOf(pool, content);
         if (content.startsWith('# SLOW')) {
           await announcedParserLoaded(safePath.join(safePath.resolve(entry, '..'), content.trim().replace('# ', '').replace(' ', '-')));
-          vi.advanceTimersByTime(300);
+          vi.advanceTimersByTime(30);
         }
         outcomes.push(await outcome);
       }
@@ -894,7 +895,9 @@ describe('a parent late to its own deadline', () => {
         const startedAt = performance.now();
         // Ready first, so the stop is the late parent's alone. The marker is removed before the
         // loop turns, while the stop has not happened yet, so the next marker is the next thread's.
-        blockUntil(() => existsSync(readyMarker(entry)) && performance.now() > startedAt + 600);
+        // The deadline was armed at dispatch, before `startedAt`, so the stop fires at least 200 ms
+        // past it: four times the lateness (`HEAP_SAMPLE_INTERVAL_MS`) a stop may have and count.
+        blockUntil(() => existsSync(readyMarker(entry)) && performance.now() > startedAt + 300);
         // Still blocked: the marker goes, and this thread's exit is taken, before the loop turns.
         rmSync(readyMarker(entry));
         const exited = exits.at(-1);
@@ -2668,15 +2671,31 @@ describe('a parked thread', () => {
 
   it('is never a thread stopped at a limit', async () => {
     stubParkingMachine();
-    await seedWorkerEntry(intercepting(contentStartsWith('# SLOW'), [
-      'parentPort.postMessage({ id: request.id, parserLoaded: request.kind });',
-      'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);',
-    ]));
-    // Long enough for a fresh thread on a loaded runner to load before its deadline.
+    // The marker is written after the post, so seeing it means `parserLoaded` is in the port.
+    const entry = await seedWorkerEntry([
+      "import { writeFileSync } from 'node:fs';",
+      intercepting(contentStartsWith('# SLOW'), [
+        'parentPort.postMessage({ id: request.id, parserLoaded: request.kind });',
+        "writeFileSync(new URL('./slow', import.meta.url), '');",
+        'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);',
+      ]),
+    ].join('\n'));
+    // 🔑 The deadline is the test's clock, advanced only once the parser has loaded (see
+    // `does not count a time breach on a thread whose parser loaded`): the stop is on the parse
+    // clock however slowly a loaded runner starts the thread, and no real deadline is waited out.
+    vi.useFakeTimers(TEST_CLOCK);
     const pool = createParsePool({ size: 1, limits: { timeMs: 3000 } });
     openPools.push(pool);
 
-    const outcome = await outcomeOf(pool, '# SLOW\n');
+    let outcome: unknown;
+    try {
+      const pending = outcomeOf(pool, '# SLOW\n');
+      await announcedParserLoaded(safePath.join(safePath.resolve(entry, '..'), 'slow'));
+      vi.advanceTimersByTime(3000);
+      outcome = await pending;
+    } finally {
+      vi.useRealTimers();
+    }
     await pool.shutdown();
 
     expect(isParseLimitError(outcome) ? outcome.limit : outcome).toBe('timeMs');
@@ -2843,16 +2862,21 @@ describe('a parked thread', () => {
     // `# SLOW` blocks once the real worker has checked its heap and kept itself, before it parses:
     // on the adopted thread the parser loaded a pool ago, so the job is on its parse clock, and a
     // stop there is the document's. `<p>DIE` kills a fresh thread mid-job: a death everywhere.
-    // Deadline long enough for a loaded runner.
-    await seedWorkerEntry(intercepting(`${contentStartsWith('# SLOW')} || ${contentStartsWith('<p>DIE')}`, [
-      "if (request.content.startsWith('<p>DIE')) { parentPort.postMessage({ id: request.id, parserLoaded: request.kind }); setTimeout(() => process.exit(3), 100); return; }",
-      'const post = parentPort.postMessage.bind(parentPort);',
-      'parentPort.postMessage = (message) => {',
-      '  post(message);',
-      "  if (message?.id === request.id && 'reuseCheck' in message) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);",
-      '};',
-      'listener(request);',
-    ]));
+    // The SLOW stop is on the test's clock, advanced once the thread has reported its check (a
+    // marker written after that post); the deaths run on a real deadline long enough for a loaded
+    // runner, which they never wait out.
+    const entry = await seedWorkerEntry([
+      "import { writeFileSync } from 'node:fs';",
+      intercepting(`${contentStartsWith('# SLOW')} || ${contentStartsWith('<p>DIE')}`, [
+        "if (request.content.startsWith('<p>DIE')) { parentPort.postMessage({ id: request.id, parserLoaded: request.kind }); setTimeout(() => process.exit(3), 100); return; }",
+        'const post = parentPort.postMessage.bind(parentPort);',
+        'parentPort.postMessage = (message) => {',
+        '  post(message);',
+        "  if (message?.id === request.id && 'reuseCheck' in message) { writeFileSync(new URL('./checked', import.meta.url), ''); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0); }",
+        '};',
+        'listener(request);',
+      ]),
+    ].join('\n'));
     const limits = { timeMs: 4000 };
     await parkOne({ size: 1, limits });
     const pool = createParsePool({ size: 1, limits });
@@ -2862,7 +2886,15 @@ describe('a parked thread', () => {
     const started = await startedThreads(async () => {
       // The adopted thread stopped, then two deaths on fresh threads: two in a row, one short of
       // the broken-install verdict — which charging the adopted thread's stop would reach.
-      outcomes.push(await outcomeOf(pool, '# SLOW\n'));
+      vi.useFakeTimers(TEST_CLOCK);
+      try {
+        const slow = outcomeOf(pool, '# SLOW\n');
+        await announcedParserLoaded(safePath.join(safePath.resolve(entry, '..'), 'checked'));
+        vi.advanceTimersByTime(limits.timeMs);
+        outcomes.push(await slow);
+      } finally {
+        vi.useRealTimers();
+      }
       for (const content of ['<p>DIE one</p>', '<p>DIE two</p>']) {
         outcomes.push(await pool.parse('html', content, content.length).catch((error: unknown) => error));
       }

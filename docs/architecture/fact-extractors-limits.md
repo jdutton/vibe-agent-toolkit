@@ -156,7 +156,7 @@ parse holds in garbage alone.
   it (twice what a job allocates in one 50 ms sample interval at ~300 MiB/s), so under a 64 MiB
   flag the pool still applies 32 MiB and an ordinary document can be refused: such a flag is too
   small to parse with. A 200,000-link breach under the 128 MiB flag is stopped at 96 MiB with the
-  child exiting cleanly, 15 of 15 (seeded three in a row in `parse-pool-limits.integration.test.ts`).
+  child exiting cleanly, 15 of 15 (seeded three in a row in `parse-pool-heap-flags.system.test.ts`).
 - **A semi-space or heap-size flag.** V8's ceiling for a worker is the old generation it can reach:
   the least of `heap_size_limit` less the young generation, `--max-old-space-size` (with none
   visible, the old generation the pool set the thread, `maxOldGenerationSizeMb`), and
