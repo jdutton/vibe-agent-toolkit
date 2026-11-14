@@ -23,10 +23,12 @@ const OVER_OUTPUT_ROWS = 20_000;
  * in-process parse of identical content elsewhere stores unbounded facts under
  * the same content key, and a later crawl serves that entry as an admission.
  *
- * @param target - The file the body's one link points at
+ * @param target - The file the body's one relative link points at, or `null`
+ *   for a body with no link at all (nothing a link walk could follow or miss)
  * @returns The document
  */
-export function overOutputRowsMarkdown(target: string): string {
+export function overOutputRowsMarkdown(target: string | null): string {
   const items = Array.from({ length: OVER_OUTPUT_ROWS }, (_, index) => String(index)).join(', ');
-  return `---\nnonce: ${randomUUID()}\nitems: [${items}]\n---\n\n# Reference\n\n[l](./${target})\n`;
+  const link = target === null ? '' : `\n[l](./${target})\n`;
+  return `---\nnonce: ${randomUUID()}\nitems: [${items}]\n---\n\n# Reference\n${link}`;
 }

@@ -11,4 +11,13 @@ describe('overOutputRowsMarkdown', () => {
     expect(document).toContain('[l](./SKILL.md)');
     expect(overOutputRowsMarkdown('SKILL.md')).not.toBe(document);
   });
+
+  it('carries the same rows and no link at all when it has no target', () => {
+    const document = overOutputRowsMarkdown(null);
+    const items = /^items: \[(.*)\]$/m.exec(document)?.[1]?.split(', ') ?? [];
+
+    expect(items).toHaveLength(20_000);
+    expect(document).not.toMatch(/\]\(/);
+    expect(document.endsWith('# Reference\n')).toBe(true);
+  });
 });

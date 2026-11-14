@@ -19,6 +19,50 @@ function roundTrip(value: Record<string, unknown>): Record<string, unknown> {
   return decodeFrontmatterValue(structuredClone(encodeFrontmatterValue(value)));
 }
 
+/**
+ * `toStrictEqual`'s verdict on a flat collection of primitives — the same
+ * prototype and size, no hole and no extra own key, every member `Object.is`
+ * the expected one (a set's and a map's by membership, as `toStrictEqual`
+ * judges them) — without its per-member diff machinery, which over hundreds of
+ * thousands of members costs more than the decode it checks.
+ */
+function expectSameFlatCollection(actual: unknown, expected: unknown): void {
+  expect(Object.getPrototypeOf(actual)).toBe(Object.getPrototypeOf(expected));
+  if (expected instanceof Set) {
+    const set = actual as Set<unknown>;
+    expect(set.size).toBe(expected.size);
+    expect([...expected].filter((member) => !set.has(member))).toStrictEqual([]);
+    return;
+  }
+  if (expected instanceof Map) {
+    const map = actual as Map<unknown, unknown>;
+    expect(map.size).toBe(expected.size);
+    expect([...expected].filter(([key, value]) => !map.has(key) || !Object.is(map.get(key), value))).toStrictEqual([]);
+    return;
+  }
+  if (Array.isArray(expected)) {
+    const array = actual as unknown[];
+    expect(array).toHaveLength(expected.length);
+    expect(Object.keys(array)).toHaveLength(expected.length);
+    const firstDifference = expected.findIndex((value, index) => !Object.hasOwn(array, index) || !Object.is(array[index], value));
+    expect(firstDifference, `first element that differs: ${String(firstDifference)}`).toBe(-1);
+    return;
+  }
+  const object = actual as Record<string, unknown>;
+  const reference = expected as Record<string, unknown>;
+  const keys = Object.keys(reference);
+  expect(Object.keys(object)).toHaveLength(keys.length);
+  const firstDifference = keys.find((key) => !Object.hasOwn(object, key) || !Object.is(object[key], reference[key]));
+  expect(firstDifference, `first member that differs: ${String(firstDifference)}`).toBeUndefined();
+}
+
+/** {@link expectSameFlatCollection} under `{ a: … }`, the shape every scale case round-trips. */
+function expectSameWrapped(actual: Record<string, unknown>, expected: { a: unknown }): void {
+  expect(Object.getPrototypeOf(actual)).toBe(Object.prototype);
+  expect(Object.keys(actual)).toStrictEqual(['a']);
+  expectSameFlatCollection(actual['a'], expected.a);
+}
+
 describe('the decoded-frontmatter codec', () => {
   it.each([
     ['plain keys', 'title: Hello\ntags: [a, b]\nnested: {x: 1, y: [true, null]}'],
@@ -85,7 +129,7 @@ describe('the decoded-frontmatter codec', () => {
     const items = Array.from({ length: 200_000 }, (_, index) => index);
     const value = { a: build(items) };
 
-    expect(roundTrip(value)).toStrictEqual(value);
+    expectSameWrapped(roundTrip(value), value);
   });
 
   it('decodes an array of 2,000,000 elements, past the argument limit of any thread stack', () => {
@@ -95,9 +139,9 @@ describe('the decoded-frontmatter codec', () => {
     // or vitest starts, so a spread anywhere on the decode path is red here.
     const items = Array.from({ length: 2_000_000 }, (_, index) => index % 7);
 
-    const rebuilt = roundTrip({ a: items });
+    const value = { a: items };
 
-    expect(rebuilt['a']).toStrictEqual(items);
+    expectSameWrapped(roundTrip(value), value);
   });
 
   it('refuses a malformed encoding rather than inventing a value', () => {

@@ -81,9 +81,31 @@ function calleeName(callee: ts.Expression): string | undefined {
   return undefined;
 }
 
+/** A src file with a classified catch around the parse route: the non-vacuity witness. */
+const AUDIT_COMMAND = 'packages/cli/src/commands/audit.ts';
+
+/** Every AST built so far, by its source text: both arms read the same tree. */
+const parsed = new Map<string, ts.SourceFile>();
+
 /** `body` as a TypeScript AST, parents set so a node can print its own text. */
 function sourceOf(body: string): ts.SourceFile {
-  return ts.createSourceFile('module.ts', body, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  let source = parsed.get(body);
+  if (source === undefined) {
+    source = ts.createSourceFile('module.ts', body, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    parsed.set(body, source);
+  }
+  return source;
+}
+
+/**
+ * Whether `body` can hold an identifier named any of `names`. An identifier's
+ * text is in its source verbatim unless it is spelled with a unicode escape, so
+ * a source with neither a name nor a `\u` cannot, and need not be parsed.
+ */
+function mayName(body: string, names: Iterable<string>): boolean {
+  if (body.includes(String.raw`\u`)) return true;
+  for (const name of names) if (body.includes(name)) return true;
+  return false;
 }
 
 /** Whether any node under `root` satisfies `test`. */
@@ -122,6 +144,7 @@ function isParseEntryCall(node: ts.Node): boolean {
  * @returns True for any call whose callee is named the predicate
  */
 function callsPredicate(body: string): boolean {
+  if (!mayName(body, [PREDICATE])) return false;
   return some(sourceOf(body), (node) => ts.isCallExpression(node) && calleeName(node.expression) === PREDICATE);
 }
 
@@ -133,6 +156,7 @@ function callsPredicate(body: string): boolean {
  * @returns The swallowing catches' `try` lines
  */
 function swallowingCatches(body: string): number[] {
+  if (!mayName(body, ['catch']) || !mayName(body, PARSE_ENTRIES)) return [];
   const source = sourceOf(body);
   const lines: number[] = [];
   const visit = (node: ts.Node): void => {
@@ -152,6 +176,8 @@ describe('the parse-failure classifier', () => {
     expect(callsPredicate('try { f(); } catch (e) { if (isParserUnavailable(e)) throw e; }')).toBe(true);
     expect(callsPredicate('try { f(); } catch (e) { if (r.isParserUnavailable(e)) throw e; }')).toBe(true);
     expect(callsPredicate('// `isParserUnavailable(error)` once guarded here\nclassifyParseFailure(e);')).toBe(false);
+    // The same call spelled with a unicode escape: the text prefilter cannot see the name.
+    expect(callsPredicate(String.raw`i\u0073ParserUnavailable(e)`)).toBe(true);
   });
 
   it('is the only guard a src catch uses: no file but the definition calls isParserUnavailable', () => {
@@ -185,6 +211,16 @@ describe('a catch around the parse route', () => {
   it('judges real catches — the scan is not vacuous', () => {
     const judged = [...packageSources()].filter(([, body]) => body.includes('classifyCompatibilityFailure(')).map(([file]) => file);
 
-    expect(judged).toContain('packages/cli/src/commands/audit.ts');
+    expect(judged).toContain(AUDIT_COMMAND);
+  });
+
+  it('parses a real catch around the parse route — the prefilter does not skip it', () => {
+    const body = packageSources().get(AUDIT_COMMAND) ?? '';
+    expect(body).toContain('classifyCompatibilityFailure(');
+
+    parsed.delete(body);
+    swallowingCatches(body);
+
+    expect(parsed.has(body)).toBe(true);
   });
 });

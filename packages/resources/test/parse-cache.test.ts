@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import { isPathAbsentError, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { computeContentKey, type KeyedContent, type ParserKind } from '../src/content-key.js';
 import { parseHtmlContent } from '../src/html-link-parser.js';
@@ -192,7 +192,7 @@ function extractFrontmatter(doc: string): string {
 }
 
 interface ParseCacheTestSuite {
-  /** The per-test temp directory (a fresh `mkdtemp` for every test). */
+  /** The temp directory: a fresh `mkdtemp` for every test, or one per describe emptied before each test. */
   readonly dir: () => string;
   /** A cache rooted at the temp dir, with an EMPTY env (so no ambient toggle). */
   readonly makeCache: (options?: ParseCacheOptions) => ParseCache;
@@ -202,19 +202,35 @@ interface ParseCacheTestSuite {
   readonly roundTrip: (keyed: KeyedContent) => Promise<ParseResult | null>;
 }
 
-function setupParseCacheTestSuite(): ParseCacheTestSuite {
+/**
+ * @param scope - `test`: a fresh directory per test. `describe`: one directory for the
+ *   describe, emptied before each test — so every test's one-shot pool has the same
+ *   `cacheDir`, and adopts the thread the last one parked instead of starting its own
+ *   (a parse thread serves only the cache directory it was started for).
+ */
+function setupParseCacheTestSuite(scope: 'test' | 'describe' = 'test'): ParseCacheTestSuite {
   let tempDir = '';
-
-  beforeEach(async () => {
+  const makeDir = async (): Promise<void> => {
     tempDir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'vat-parse-cache-'));
-  });
-
-  afterEach(async () => {
+  };
+  const removeDir = async (): Promise<void> => {
     // Restore write permission first: a test that dropped it would otherwise
     // leave a directory `rm` cannot descend into.
     await fs.chmod(tempDir, MODE_RW_OWNER).catch(() => undefined);
     await removeScratchDir(tempDir);
-  });
+  };
+
+  if (scope === 'test') {
+    beforeEach(makeDir);
+    afterEach(removeDir);
+  } else {
+    beforeAll(makeDir);
+    beforeEach(async () => {
+      const entries = await fs.readdir(tempDir);
+      await Promise.all(entries.map((entry) => fs.rm(safePath.join(tempDir, entry), { recursive: true, force: true })));
+    });
+    afterAll(removeDir);
+  }
 
   const makeCache = (options: ParseCacheOptions = {}): ParseCache =>
     new ParseCache({ cacheDir: tempDir, env: {}, ...options });
@@ -1065,7 +1081,17 @@ function parseKeyedThrough(keyed: KeyedContent, cache: ParseCache): Promise<Pars
 }
 
 describe('the dispatcher\'s cache front (parseContentCached)', () => {
-  const suite = setupParseCacheTestSuite();
+  const suite = setupParseCacheTestSuite('describe');
+  // These tests are about the wire transport, the shipped default: pinned so a
+  // developer's `VAT_PARSE_TRANSPORT=cache` cannot move them onto the other
+  // path. Pinned once for the describe, not per test, so every one-shot pool
+  // keys on the same environment and adopts the thread the last one parked.
+  beforeAll(() => {
+    vi.stubEnv('VAT_PARSE_TRANSPORT', 'wire');
+  });
+  afterAll(() => {
+    vi.unstubAllEnvs();
+  });
 
   it('parses on a cold cache and records the miss', async () => {
     const keyed = keyedFromText(SIMPLE_DOC);

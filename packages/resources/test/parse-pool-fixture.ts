@@ -76,12 +76,15 @@ const COMPLETION_STEP_MS = 4;
 /**
  * How far the reversed ladder counts down from.
  *
- * Larger than the fixtures that care about completion order, so the first
- * document dispatched is the last to answer. Floored at zero below, so a fixture
- * with hundreds of documents — which cannot care about the ladder anyway —
- * simply runs it out rather than asking for a negative delay.
+ * Larger than the fixtures that care about completion order (the widest
+ * dispatches eleven), so the first document dispatched is the last to answer.
+ * A reversed fixture that dispatches this many documents throws: from here the
+ * delays stop falling, so its later documents would answer in dispatch order
+ * and an order assertion over them would pass for the wrong reason. No higher
+ * than it needs to be: every reversed fixture's first document waits the whole
+ * ladder, on every test that uses one.
  */
-const LADDER_TOP = 32;
+const LADDER_TOP = 16;
 
 /**
  * Pause, so a fake pool can answer out of dispatch order.
@@ -120,6 +123,11 @@ export function fakePool(
     ): Promise<ParseResult> => {
       record.calls += 1;
       const dispatchIndex = record.calls;
+      if (behaviour.reverseCompletion === true && dispatchIndex >= LADDER_TOP) {
+        throw new Error(
+          `fakePool: reverseCompletion dispatched document ${String(dispatchIndex)}, past the ladder (${String(LADDER_TOP)}); its order is no longer reversed. Raise LADDER_TOP.`,
+        );
+      }
       record.inFlight += 1;
       record.maxInFlight = Math.max(record.maxInFlight, record.inFlight);
       try {
@@ -128,7 +136,7 @@ export function fakePool(
         // wide the fan-out was, and every order assertion would be vacuous.
         await delay(
           behaviour.reverseCompletion === true
-            ? Math.max(0, LADDER_TOP - dispatchIndex) * COMPLETION_STEP_MS
+            ? (LADDER_TOP - dispatchIndex) * COMPLETION_STEP_MS
             : 1,
         );
         const failure = behaviour.failWith?.(content);
