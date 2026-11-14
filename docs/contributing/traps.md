@@ -587,8 +587,26 @@ side-effect-aware unused-import rule (`sideEffects` is absent by default and ign
 ESLint keys each file on its own metadata and the config, so changing a function in one file to
 `async` leaves an unchanged caller's cached clean result in place: no `no-floating-promises`.
 **Tell:** a lint red that appears only in CI, or only after deleting the cache file.
-**Remedy:** never pass `--cache`; cache at turbo's task hash, whose inputs (the package, its
-dependencies' `^build`, the config, the rule sources) cover everything the lint reads.
+**Remedy:** never pass `--cache`; cache at turbo's task hash, whose inputs (the package, every
+package's emitted `dist/**/*.d.ts`, the config, the rule sources) cover everything the lint reads.
+
+### `dependsOn: ["^build"]` re-runs a dependent on an edit its types never saw
+
+A task's hash folds in the hash of every task it depends on, and a build's hash changes with any
+source edit. A lint behind `^build` therefore re-linted all 14 packages after a comment in `utils`.
+**Tell:** `turbo run <task> --dry=json` shows a dependent's hash changing while its own `inputs` did not.
+**Remedy:** when a task reads only another package's declarations, key it on them
+(`$TURBO_ROOT$/packages/*/dist/**/*.d.ts` as an input), order the build outside the task graph, and
+refuse to run unbuilt rather than type against `any`.
+
+### A workspace package in the root manifest is in every task's hash
+
+A root `package.json` dependency on a `workspace:*` package puts that package's files into turbo's
+global `hashOfInternalDependencies`, so any edit to it misses every task in the repo, including
+packages that do not depend on it.
+**Tell:** the `--dry=json` diff after an edit shows `GLOBAL input differs: hashOfInternalDependencies`.
+**Remedy:** the root never depends on a workspace package; import its file by relative path instead
+(`eslint.config.js` loads `./packages/utils/eslint/index.cjs`).
 
 ### `TIMING=all` blames the type checker on the first typed rule
 

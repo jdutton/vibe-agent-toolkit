@@ -157,8 +157,10 @@ the coverage job in CI — never in a turbo lane; not on Windows).
   package's `lint` through turbo, each on its own program (`tsconfig.eslint.json`), so no process
   builds the whole monorepo's. Never add `--cache`: ESLint keys a file on its own mtime and size,
   so an unchanged caller replays clean after a type-aware change elsewhere (an `async` signature);
-  turbo re-lints a package on any change to it or, through `^build`, to a dependency.
-  (enforced by: `validate-structure`, which pins every package's `lint` script exactly)
+  turbo re-lints a package on any change to it or to any package's emitted `dist/**/*.d.ts`.
+  The root never depends on a workspace package: that puts the package in every task's hash.
+  (enforced by: `validate-structure`, which pins every package's `lint` script exactly; the root
+  dependency is not enforced)
 - **A green commit is NOT a green PR.** Run `bun run validate` before pushing; CI runs the full
   tier on ubuntu and Windows.
 

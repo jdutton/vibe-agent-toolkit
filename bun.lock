@@ -14,7 +14,6 @@
         "@types/semver": "^7.7.1",
         "@typescript-eslint/eslint-plugin": "^8.65.0",
         "@typescript-eslint/parser": "^8.65.0",
-        "@vibe-agent-toolkit/utils": "workspace:*",
         "@vibe-validate/cli": "0.20.1",
         "@vitest/coverage-v8": "^4.1.12",
         "adm-zip": "^0.6.1",

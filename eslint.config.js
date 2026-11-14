@@ -4,12 +4,13 @@ import eslint from '@eslint/js';
 import eslintComments from '@eslint-community/eslint-plugin-eslint-comments';
 import tseslint from '@typescript-eslint/eslint-plugin';
 import tsparser from '@typescript-eslint/parser';
-import localRules from '@vibe-agent-toolkit/utils/eslint';
 import importPlugin from 'eslint-plugin-import';
 import pluginNode from 'eslint-plugin-n';
 import security from 'eslint-plugin-security';
 import sonarjs from 'eslint-plugin-sonarjs';
 import unicorn from 'eslint-plugin-unicorn';
+
+import localRules from './packages/utils/eslint/index.cjs';
 
 /**
  * Simple, strict ESLint configuration
@@ -450,7 +451,30 @@ function unusedLibraryRulesOff() {
   );
 }
 
+/**
+ * Under turbo, refuse to lint before every workspace package's declared types exist.
+ *
+ * Turbo keys a package's `lint` on the `dist/**\/*.d.ts` of every package instead of on the upstream
+ * `build` task's hash, so `lint` declares no `dependsOn` and the root `lint` script runs `turbo run
+ * build` first. A `turbo run lint` with no build would type-check against missing declarations,
+ * where an unresolved import is `any` and a type-aware rule passes, and turbo would cache that pass.
+ * Its key differs from a built tree's, so it could only replay on a tree with no `dist/`, but the
+ * verdict is still wrong, so it is refused instead. `TURBO_HASH` is set only inside a turbo task, so
+ * an editor's or a direct `eslint` run is not affected.
+ */
+function assertWorkspaceTypesBuilt() {
+  if (!process.env.TURBO_HASH) return;
+  const missing = workspacePackages().flatMap(({ dir }) => {
+    const { types } = JSON.parse(readFileSync(new URL(`packages/${dir}/package.json`, import.meta.url), 'utf8'));
+    return typeof types === 'string' && !existsSync(new URL(`packages/${dir}/${types}`, import.meta.url)) ? [`packages/${dir}/${types.replace(/^\.\//, '')}`] : [];
+  });
+  if (missing.length > 0) {
+    throw new Error(`Lint reads workspace types from dist/, and these are not built: ${missing.join(', ')}. Run \`bun run lint\`, which builds first, or \`turbo run build\` before \`turbo run lint\`.`);
+  }
+}
+
 function typedProgramConfigs() {
+  assertWorkspaceTypesBuilt();
   return workspacePackages().map(({ dir }) => ({
     files: [`packages/${dir}/**/*.ts`, `packages/${dir}/**/*.cts`],
     languageOptions: {

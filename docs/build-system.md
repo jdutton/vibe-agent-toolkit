@@ -114,13 +114,23 @@ When creating a new package:
 
 `bun run lint` is `turbo run lint lint:root`: one ESLint process per package, each with its own
 type-checked program from that package's `tsconfig.eslint.json`, plus `lint:root` for the root's own
-scripts. Types of another workspace package come from its `dist/` (as for `tsc`), so `lint` depends on
-`^build` and on the package's own `build` — a test importing its own package by name reads `dist/` too.
+scripts. Types of another workspace package come from its `dist/` (as for `tsc`), and so do a
+package's own types for a test that imports it by name. The root `lint` script therefore runs
+`turbo run build` first.
 
-Turbo is the only lint cache. A package re-lints when any of its files, a dependency's build, the
-root config (`eslint.config.js`, `tsconfig.*.json` — `globalDependencies`) or the rule sources under
-`packages/utils/eslint/` change. ESLint's own `--cache` is never used: it would replay an unchanged
-caller's clean verdict after a type-aware change elsewhere (see
+Turbo is the only lint cache. A package re-lints when any of its files, any package's emitted
+declarations (`dist/**/*.d.ts`), any `package.json`, the root config (`eslint.config.js`,
+`tsconfig.*.json`, from `globalDependencies`) or the rule sources under `packages/utils/eslint/`
+change. Keying on the declarations rather than on `dependsOn: ["^build"]` is what keeps an edit cheap:
+the upstream build's hash changes with every source edit, while an edit to a function body, a comment
+or a private helper leaves every declaration byte-identical and re-lints only its own package. An edit
+that does change a declaration re-lints every package, because the glob is not narrowed to each
+package's dependencies, which errs toward a spare re-lint. A type-aware rule in a dependent sees only
+those declarations, so it cannot need a re-lint the declarations do not trigger. Because nothing orders
+`lint` after `build` inside turbo, `eslint.config.js` refuses to load under turbo (`TURBO_HASH` set)
+while any package's declared `types` file is missing. Without that refusal, an unresolved import would
+type as `any` and turbo would cache the resulting pass. ESLint's own `--cache` is never used: it would
+replay an unchanged caller's clean verdict after a type-aware change elsewhere (see
 [traps](contributing/traps.md#eslints---cache-replays-a-clean-verdict-a-type-aware-rule-would-now-red)).
 `--concurrency=2` bounds the memory of one lint run to two programs at a time.
 

@@ -50,14 +50,20 @@
     // TURBO is the lint cache, never ESLint's `--cache`: ESLint keys a file on
     // its own mtime and size, so an unchanged caller replays a clean verdict
     // after a type-aware change elsewhere. Here any change to the package re-lints
-    // all of it, and a dependency's change reaches it through `^build`'s hash —
-    // which is also why both builds come first: types of a workspace import,
-    // and of a test importing its own package by name, are read from `dist/`.
-    // The rule implementations are an input of every package's lint, including
-    // a package that does not depend on utils.
+    // all of it. What a package sees of another (and of itself, for a test that
+    // imports its own package by name) is its emitted declarations, so those are
+    // the input: every package's `dist/**/*.d.ts` (`.d.ts.map` is not, since its
+    // line positions move with any edit). A change that leaves every declaration
+    // byte-identical (a body, a comment, a private helper) re-lints only its own
+    // package; one that changes a declaration re-lints every package. No
+    // `dependsOn`: `^build` would fold the upstream build's hash in, which changes
+    // with every source edit. The root `lint` script runs `turbo run build`
+    // first, and `eslint.config.js` refuses to lint under turbo while any
+    // package's declared `types` is missing. The rule implementations are an
+    // input of every package's lint, including one that does not depend on utils.
     "lint": {
-      "dependsOn": ["^build", "build"],
-      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/utils/eslint/**"],
+      "dependsOn": [],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/utils/eslint/**", "$TURBO_ROOT$/packages/*/dist/**/*.d.ts", "$TURBO_ROOT$/packages/*/dist/**/*.d.cts", "$TURBO_ROOT$/packages/*/package.json"],
       "outputs": [],
       "cache": true
     },
