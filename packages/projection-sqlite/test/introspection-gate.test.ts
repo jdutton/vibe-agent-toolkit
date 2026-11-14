@@ -22,8 +22,29 @@ import {
   type ProjectionCompileProbe,
   type RunDatabase,
 } from '../src/run-database.js';
+import { isStatementRefusal } from '../src/sql-gate.js';
 
-import { sampleProjection } from './fixtures.js';
+import { closeGatedHandles, openGatedHandles, sampleProjection } from './fixtures.js';
+
+/**
+ * Whether this runtime's SQLite has a table-valued function. `jsonb_each` and `jsonb_tree` arrived in
+ * SQLite 3.45, which the declared Node floor does not ship.
+ *
+ * @param name - The function
+ * @returns True when it compiles
+ */
+function runtimeHas(name: string): boolean {
+  const database = new DatabaseSync(':memory:');
+  try {
+    database.prepare(`SELECT * FROM ${name}('[]')`);
+    return true;
+  } catch (error) {
+    if (isStatementRefusal(error) && error.message.includes(`no such table: ${name}`)) return false;
+    throw error;
+  } finally {
+    database.close();
+  }
+}
 
 /** A FROM item that describes the database, exposing a `name` column, and the alias it reads as. */
 interface IntrospectionSource {
@@ -38,6 +59,7 @@ const INTROSPECTION_SOURCES: readonly IntrospectionSource[] = [
   { label: 'dbstat', item: 'dbstat AS x', alias: 'x' },
   { label: 'pragma_table_info', item: "pragma_table_info('blobs') AS x", alias: 'x' },
   { label: 'sqlite_schema', item: 'sqlite_schema AS x', alias: 'x' },
+  { label: 'sqlite_temp_schema', item: 'sqlite_temp_schema AS x', alias: 'x' },
   { label: 'dbstat under a json_each alias', item: 'dbstat AS json_each', alias: 'json_each' },
   { label: 'pragma_table_info under a json_tree alias', item: "pragma_table_info('blobs') AS json_tree", alias: 'json_tree' },
 ];
@@ -55,17 +77,35 @@ const CONNECTION_STATE_STATEMENTS: readonly (readonly [string, string])[] = ['ch
   [`${name}(), beside blobs`, `SELECT "contentKey", ${name}() AS n FROM "blobs"`],
 ]);
 
-/** The `#` named-parameter forms: one binds NULL, the other drops its tail. */
-const HASH_PARAMETER_STATEMENTS: readonly (readonly [string, string])[] = [
+/**
+ * Named-parameter forms positional values never reach: each binds NULL or drops a tail. `$` is a
+ * name character after every sigil, as in SQLite's tokenizer, so `#$`, `@$`, `:$` and `$$` are
+ * parameters too.
+ */
+const NAMED_PARAMETER_STATEMENTS: readonly (readonly [string, string])[] = [
   ['a # parameter, which binds NULL', 'SELECT "path" FROM "resource_realizations" WHERE "path" = #p'],
   ['a # parameter whose suffix hides a second statement', `SELECT "path" FROM "resource_realizations" WHERE "path" <> #p(') ; SELECT 'x`],
+  ...['#$', '@$', ':$', '$$'].map((name) => [`the parameter ${name}`, `SELECT "path" FROM "resource_realizations" WHERE "path" = ${name}`] as const),
+  ['a #$ parameter whose suffix hides a second statement', `SELECT "path" FROM "resource_realizations" WHERE "path" <> #$(') ; SELECT 'x`],
+];
+
+/** A NUL ends the statement for SQLite, which drops everything after it. */
+const NUL_STATEMENTS: readonly (readonly [string, string])[] = [
+  ['a NUL before a WHERE that would select nothing', 'SELECT 1 AS x\u0000 WHERE 0'],
+];
+
+/** A write passes the kind gate on its first keyword and compiles; it must never be admitted. */
+const WRITE_STATEMENTS: readonly (readonly [string, string])[] = [
+  ['a DELETE with RETURNING under a WITH', 'WITH c AS (VALUES (1)) DELETE FROM "blobs" RETURNING "contentKey"'],
 ];
 
 /** The refusals every gated surface must make. */
 const REFUSED: readonly (readonly [string, string])[] = [
   ...INTROSPECTING_STATEMENTS,
   ...CONNECTION_STATE_STATEMENTS,
-  ...HASH_PARAMETER_STATEMENTS,
+  ...NAMED_PARAMETER_STATEMENTS,
+  ...NUL_STATEMENTS,
+  ...WRITE_STATEMENTS,
 ];
 
 /** What one call threw, or undefined. */
@@ -82,20 +122,11 @@ let database: RunDatabase;
 let probe: ProjectionCompileProbe;
 
 beforeAll(() => {
-  const projection = sampleProjection();
-  database = hydrateRunDatabase({
-    rootId: 'root-1',
-    relations: new Map<string, readonly Readonly<Record<string, unknown>>[]>([
-      ['blobs', projection.blobs],
-      ['resource_realizations', projection.resourceRealizations],
-    ]),
-  });
-  probe = openProjectionCompileProbe();
+  ({ database, probe } = openGatedHandles(['blobs', 'resourceRealizations']));
 });
 
 afterAll(async () => {
-  await database.close();
-  await probe.close();
+  await closeGatedHandles({ database, probe });
 });
 
 describe('the precondition: the introspection sources exist on this SQLite', () => {
@@ -127,7 +158,12 @@ describe('the introspection gate refuses, with the statement code, on every gate
 });
 
 describe('a relation the run did not hydrate', () => {
-  const sql = 'SELECT "name" FROM "blob_headings"';
+  // A real relation, which the compile probe holds: only its absence here can refuse it.
+  const sql = 'SELECT "title" FROM "blob_sections"';
+
+  it('is one the compile probe compiles, so the refusal below is the absence', () => {
+    expect(() => probe.assertCompiles(sql, [])).not.toThrow();
+  });
 
   it('refuses through query and columns with the statement code', () => {
     expect(isVatError(thrownBy(() => database.query(sql)), PROJECTION_STATEMENT_REFUSED_CODE)).toBe(true);
@@ -140,16 +176,26 @@ describe('the controls answer', () => {
     expect(database.query('SELECT COUNT(*) AS n FROM "blobs"')[0]?.['n']).toBe(sampleProjection().blobs.length);
   });
 
-  it.each(['json_each', 'json_tree', 'jsonb_each', 'jsonb_tree'])('%s over a column', (name) => {
+  it.each(['json_each', 'json_tree'])('%s, which every supported runtime has', (name) => {
+    expect(runtimeHas(name)).toBe(true);
+  });
+
+  it.each(['json_each', 'json_tree', 'jsonb_each', 'jsonb_tree'])('%s over a column, or a statement refusal where this runtime lacks it', (name) => {
     const sql = `SELECT j.key FROM "blobs" b, ${name}(b."frontmatter") j`;
-    expect(() => database.query(sql)).not.toThrow();
-    expect(() => database.columns(sql)).not.toThrow();
-    expect(() => probe.assertCompiles(sql, [])).not.toThrow();
+    if (runtimeHas(name)) {
+      expect(() => database.query(sql)).not.toThrow();
+      expect(() => database.columns(sql)).not.toThrow();
+      expect(() => probe.assertCompiles(sql, [])).not.toThrow();
+      return;
+    }
+    expect(isVatError(thrownBy(() => database.query(sql)), PROJECTION_STATEMENT_REFUSED_CODE)).toBe(true);
+    expect(isVatError(thrownBy(() => database.columns(sql)), PROJECTION_STATEMENT_REFUSED_CODE)).toBe(true);
+    expect(isVatError(thrownBy(() => probe.assertCompiles(sql, [])), PROJECTION_STATEMENT_REFUSED_CODE)).toBe(true);
   });
 });
 
 describe('statement.explained', () => {
-  /** `EXPLAIN`s a handle runs when constructed: one per reference virtual table and the self-check. */
+  /** `EXPLAIN`s a handle runs when constructed: one per reference virtual table, present on this runtime or not. */
   const PER_HANDLE = 4;
   const explained = (): number => readWorkCounters()['statement.explained'];
 

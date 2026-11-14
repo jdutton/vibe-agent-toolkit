@@ -11,6 +11,7 @@
 
 import { DatabaseSync } from 'node:sqlite';
 
+import { PROJECTION_STATEMENT_REFUSED_CODE } from '@vibe-agent-toolkit/resources';
 import { isVatError } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
@@ -93,6 +94,95 @@ describe('runGated — nothing attached reaches a statement', () => {
 
       const schemas = (database.prepare('PRAGMA database_list').all() as { name: string }[]).map(({ name }) => name);
       expect(schemas).toEqual(['main']);
+    } finally {
+      database.close();
+    }
+  });
+});
+
+/** What one call threw, or undefined. */
+function thrownBy(run: () => unknown): unknown {
+  try {
+    run();
+  } catch (error) {
+    return error;
+  }
+  return undefined;
+}
+
+/** An engine-shaped `no such table`, as SQLite reports a table-valued function this build lacks. */
+function noSuchTable(name: string): Error {
+  return Object.assign(new Error(`no such table: ${name}`), { code: 'ERR_SQLITE_ERROR', errcode: 1 });
+}
+
+/**
+ * A connection whose SQLite has no `jsonb_each` or `jsonb_tree`, as on the declared Node floor: every
+ * `prepare` naming one fails as that build's does.
+ *
+ * @param database - The real connection
+ * @returns The connection, as the gate sees it
+ */
+function withoutJsonb(database: DatabaseSync): DatabaseSync {
+  return new Proxy(database, {
+    get(target, key) {
+      if (key === 'prepare') {
+        return (sql: string) => {
+          const absent = /jsonb_(?:each|tree)/u.exec(sql)?.[0];
+          if (absent !== undefined) throw noSuchTable(absent);
+          return target.prepare(sql);
+        };
+      }
+      const value: unknown = Reflect.get(target, key);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+describe('openGate — the reference functions this runtime has', () => {
+  it('admits the members present and refuses a statement naming an absent one with the statement code', () => {
+    const database = new DatabaseSync(':memory:');
+    try {
+      const gate = openGate(withoutJsonb(database));
+      expect(gate.referenceVirtualTables.size).toBe(2);
+      expect(runGated(gate, "SELECT j.value AS v FROM json_each('[1]') j", [], (statement) => statement.all()).map((row) => ({ ...row }))).toStrictEqual([{ v: 1 }]);
+      const refused = thrownBy(() => runGated(gate, "SELECT j.value AS v FROM jsonb_each('[1]') j", [], (statement) => statement.all()));
+      expect(isVatError(refused, PROJECTION_STATEMENT_REFUSED_CODE), String(refused)).toBe(true);
+      expect(String(refused)).toContain('no such table: jsonb_each');
+    } finally {
+      database.close();
+    }
+  });
+
+  it('propagates a probe failure that is not an absent function', () => {
+    const database = new DatabaseSync(':memory:');
+    try {
+      const failing = new Proxy(database, {
+        get(target, key) {
+          if (key === 'prepare') return () => { throw Object.assign(new Error('database disk image is malformed'), { code: 'ERR_SQLITE_ERROR', errcode: 11 }); };
+          const value: unknown = Reflect.get(target, key);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+      expect(() => openGate(failing)).toThrow(/malformed/u);
+    } finally {
+      database.close();
+    }
+  });
+});
+
+describe('runGated — query_only stands behind every step', () => {
+  it('refuses a write the step itself makes, with the engine\'s own words', () => {
+    // The program gate refuses a write STATEMENT before it compiles; this is the
+    // layer behind it. A step writing on the gated connection meets `query_only`.
+    const database = new DatabaseSync(':memory:');
+    try {
+      database.exec('CREATE TABLE t (x INTEGER)');
+      const gate = openGate(database);
+      const run = (): unknown => runGated(gate, 'SELECT 1 AS x', [], () => database.exec('DELETE FROM t'));
+      expect(run).toThrow(/attempt to write a readonly database/);
+      // Restored after: the handle's own writes still land.
+      database.exec('INSERT INTO t VALUES (1)');
+      expect(database.prepare('SELECT COUNT(*) AS n FROM t').get()?.['n']).toBe(1);
     } finally {
       database.close();
     }

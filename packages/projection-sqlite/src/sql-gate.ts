@@ -1,9 +1,9 @@
 /**
- * The gate every caller statement passes before it reaches SQLite: one
+ * The gate every caller statement passes before it reaches SQLite: no NUL, one
  * statement, a query by its first keyword, exactly one value per placeholder,
- * nothing attached, no schema introspection or connection state in its
- * compiled program, compiled on a read-only connection with every foreign
- * schema detached after.
+ * nothing attached, and a compiled program that reads no schema, no connection
+ * state and no relation the statement does not name, and writes nothing —
+ * compiled on a read-only connection with every foreign schema detached after.
  *
  * Every piece of state is the owning handle's ({@link GateConnection}); this
  * module holds none, so nothing one connection learned can answer for another.
@@ -16,7 +16,12 @@
 
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 
-import { PROJECTION_STATEMENT_REFUSED_CODE } from '@vibe-agent-toolkit/resources';
+import {
+  identifierSpellings,
+  PROJECTION_STATEMENT_REFUSED_CODE,
+  queryableRelationNames,
+  relationsNamedBy,
+} from '@vibe-agent-toolkit/resources';
 import { countWork, VatError } from '@vibe-agent-toolkit/utils';
 
 import type { SqliteValue } from './values.js';
@@ -194,8 +199,16 @@ function indexOfStatementSeparator(sql: string): number {
   return -1;
 }
 
-/** The characters SQLite's tokenizer admits in a parameter name after a sigil. */
-const PARAMETER_NAME_CHAR = /[\w\u0080-\uFFFF]/;
+/**
+ * The characters SQLite's tokenizer admits in a parameter name after a sigil \u2014 its `IdChar`:
+ * letters, digits, `_`, `$` and every character at or above U+0080. \uD83E\uDEA4 `$` is one: `#$`, `@$`,
+ * `:$` and `$$` are parameters, and a class without it let them through to bind NULL. Held to the
+ * engine by `parameter-scan.test.ts`, which asks SQLite about every sigil and printable character.
+ */
+const PARAMETER_NAME_CHAR = /[\w$\u0080-\uFFFF]/;
+
+/** What may open a bare identifier or number token: a name character that is not `$`. */
+const TOKEN_START_CHAR = /[\w\u0080-\uFFFF]/;
 
 /**
  * The sigils that open a NAMED parameter, which positional values never reach.
@@ -233,10 +246,15 @@ const DIGIT = /\d/;
  * works on one supported runtime and throws an unrelated error on another is
  * refused on all of them, with a message that names the form.
  *
+ * A bare identifier or number is stepped past whole, as SQLite's tokenizer reads it: `$` is a
+ * name character, so `a$b` is one identifier and never the parameter `$b`.
+ *
+ * Exported for its unit test only; not on the package barrel.
+ *
  * @param sql - The statement text
  * @returns The slot count, and the first unreachable placeholder if there is one
  */
-function countBoundParameters(sql: string): { readonly slots: number; readonly unreachable: string | undefined } {
+export function countBoundParameters(sql: string): { readonly slots: number; readonly unreachable: string | undefined } {
   let slots = 0;
   let unreachable: string | undefined;
   let index = 0;
@@ -244,6 +262,10 @@ function countBoundParameters(sql: string): { readonly slots: number; readonly u
     const skipped = skipLiteralOrComment(sql, index);
     if (skipped > index) {
       index = skipped;
+      continue;
+    }
+    if (TOKEN_START_CHAR.test(sql[index] ?? '')) {
+      index = indexPastRun(sql, index, PARAMETER_NAME_CHAR);
       continue;
     }
     const placeholder = placeholderAt(sql, index);
@@ -337,6 +359,24 @@ function assertParametersBound(sql: string, parameters: readonly SqliteValue[]):
   throw new VatError(
     PROJECTION_STATEMENT_REFUSED_CODE,
     `This statement has ${placeholders} and ${values}; ${consequence}. Bind exactly one value per placeholder.`,
+  );
+}
+
+/**
+ * Refuse a statement carrying a NUL character.
+ *
+ * 🪤 SQLite reads a statement only up to its first NUL and drops the rest without error, so
+ * `SELECT 1 AS x\u0000 WHERE 0` answers a row its author wrote a `WHERE` to exclude. No scanner
+ * here stops at a NUL, so each would judge text the engine never compiles.
+ *
+ * @param sql - The caller's statement text
+ * @throws If the text holds a NUL
+ */
+function assertNoNul(sql: string): void {
+  if (!sql.includes('\u0000')) return;
+  throw new VatError(
+    PROJECTION_STATEMENT_REFUSED_CODE,
+    'This statement holds a NUL character. SQLite compiles only the text before it and discards the rest without error, so the statement would not run as written.',
   );
 }
 
@@ -488,35 +528,97 @@ export interface GateConnection {
   readonly database: DatabaseSync;
   /** The four admitted virtual-table pointers, as `EXPLAIN` prints them on this connection. */
   readonly referenceVirtualTables: ReadonlySet<string>;
+  /**
+   * Which relation each root page of `main` holds — a table's own page and each of its indexes'
+   * pages — so an `OpenRead` names the relation it reads. Filled by {@link openGate} and refilled
+   * by {@link refreshRelationPages} after the handle creates a relation.
+   */
+  readonly relationOfRootPage: Map<number, string>;
 }
 
-/** One row of an `EXPLAIN` program: the fields the introspection gate reads. */
+/** One row of an `EXPLAIN` program: the fields the gate reads. */
 interface ExplainedOp {
   readonly opcode?: unknown;
   readonly p2?: unknown;
+  readonly p3?: unknown;
   readonly p4?: unknown;
 }
 
+/** The opcodes that open a cursor on a stored table or index for reading. */
+const READ_OPEN_OPCODES: ReadonlySet<string> = new Set(['OpenRead', 'ReopenIdx']);
+
 /**
- * Open the gate state for one handle's connection, reading the four reference pointers off it.
+ * Open the gate state for one handle's connection, reading the reference pointers off it.
  *
- * Each read is an `EXPLAIN`, counted as `statement.explained`: four per handle.
+ * Each read is an `EXPLAIN`, counted as `statement.explained`: four per handle, one per
+ * {@link REFERENCE_VIRTUAL_TABLES} member, whether or not this runtime has it.
+ *
+ * 🪤 Whichever members THIS runtime's SQLite has: `jsonb_each` and `jsonb_tree` arrived in SQLite
+ * 3.45, and the declared Node floor ships without them. An absent member is not admitted and has no
+ * pointer to read; a statement naming it fails `no such table` in the gate's own `EXPLAIN`, which is
+ * a statement refusal like any other.
  *
  * @param database - The handle's connection
  * @returns The gate state the handle holds for its whole life
- * @throws Error When `EXPLAIN` shows no virtual-table open for a reference function — a driver
- *   invariant: the SQLite build has no JSON functions, and nothing could be admitted
+ * @throws Error When `EXPLAIN` shows no virtual-table open for a member this runtime has — a
+ *   driver invariant, since nothing could then be told apart from it
  */
 export function openGate(database: DatabaseSync): GateConnection {
-  const pointers = REFERENCE_VIRTUAL_TABLES.map((name) => {
-    const opened = explain(database, `SELECT * FROM ${name}('[]')`).find((op) => op.opcode === 'VOpen');
-    const pointer = opened?.p4;
+  const pointers = REFERENCE_VIRTUAL_TABLES.flatMap((name) => {
+    const program = explainReference(database, name);
+    if (program === undefined) return [];
+    const pointer = program.find((op) => op.opcode === 'VOpen')?.p4;
     if (typeof pointer !== 'string' || !VIRTUAL_TABLE_POINTER.test(pointer)) {
       throw new Error(`EXPLAIN shows no virtual-table pointer for ${name} on this connection, so no statement could be gated.`);
     }
-    return pointer;
+    return [pointer];
   });
-  return { database, referenceVirtualTables: new Set(pointers) };
+  const gate: GateConnection = { database, referenceVirtualTables: new Set(pointers), relationOfRootPage: new Map() };
+  refreshRelationPages(gate);
+  return gate;
+}
+
+/** SQLite's plain `SQLITE_ERROR`, with no extended code: a statement the schema cannot compile. */
+const SQLITE_ERROR = 1;
+
+/**
+ * The `EXPLAIN` of one reference function over an empty array, or undefined when this runtime's
+ * SQLite has no such function.
+ *
+ * Read off the extended result code, never the message: the statement is fixed and well-formed, so
+ * plain `SQLITE_ERROR` (1) compiling it can only be the name it calls being absent (SQLite says
+ * `no such table: <name>`). Every other code — a busy, corrupt or closed connection — propagates.
+ *
+ * @param database - The handle's connection
+ * @param name - A {@link REFERENCE_VIRTUAL_TABLES} member
+ * @returns Its program, or undefined when absent
+ * @throws Any other failure, as thrown
+ */
+function explainReference(database: DatabaseSync, name: string): readonly ExplainedOp[] | undefined {
+  try {
+    return explain(database, `SELECT * FROM ${name}('[]')`);
+  } catch (error) {
+    if (isStatementRefusal(error) && (error as Error & { errcode?: unknown }).errcode === SQLITE_ERROR) return undefined;
+    throw error;
+  }
+}
+
+/**
+ * Re-read which relation each root page of `main` holds, after the handle created a relation.
+ *
+ * Read from `sqlite_schema` by the handle itself, never by a caller statement: tables and indexes,
+ * each under the table it belongs to. Not an `EXPLAIN`, so `statement.explained` does not move.
+ *
+ * @param gate - The handle's gate state
+ */
+export function refreshRelationPages(gate: GateConnection): void {
+  const pages = gate.database
+    .prepare("SELECT tbl_name, rootpage FROM main.sqlite_schema WHERE type IN ('table', 'index') AND rootpage > 0")
+    .all() as readonly { tbl_name?: unknown; rootpage?: unknown }[];
+  gate.relationOfRootPage.clear();
+  for (const { tbl_name: relation, rootpage } of pages) {
+    if (typeof relation === 'string' && typeof rootpage === 'number') gate.relationOfRootPage.set(rootpage, relation);
+  }
 }
 
 /**
@@ -544,25 +646,80 @@ function explain(database: DatabaseSync, sql: string): readonly ExplainedOp[] {
  *   or does not read as a pointer at all — `dbstat` and every `pragma_*` function;
  * - a call of a {@link CONNECTION_STATE_FUNCTIONS} member.
  *
+ * And, from the same program, a statement whose answer would not be its own:
+ *
+ * - an `OpenRead` of a relation the statement does not NAME ({@link relationsNamedBy}) — a run
+ *   holds every relation some declared statement names, and SQLite reads `FROM 'blobs'` as the
+ *   table when one exists, so without this a statement answered only while another named its
+ *   relation;
+ * - a write transaction (`Transaction` with a non-zero `p2`) — `WITH … DELETE … RETURNING` passes
+ *   the kind gate and compiles, and `columns` and the compile probe never step, so only the
+ *   program can refuse it there. `PRAGMA query_only` still refuses any write a step reaches.
+ *
  * An `EXPLAIN` that fails — a relation the run did not hydrate — throws SQLite's own error, inside
  * the caller's coded-refusal span.
  *
  * @param gate - The handle's gate state
  * @param sql - The caller's statement
- * @throws VatError `PROJECTION_STATEMENT_REFUSED` naming what the statement would observe
+ * @throws VatError `PROJECTION_STATEMENT_REFUSED` naming what the statement would observe or read
+ * @throws Error When an `OpenRead` names a root page no relation holds — a driver invariant
  */
-function assertNoIntrospection(gate: GateConnection, sql: string): void {
-  for (const { opcode, p2, p4 } of explain(gate.database, sql)) {
-    if (opcode === 'OpenRead' && p2 === 1) {
-      throw introspectionRefusal('reads the schema table, which lists the relations this run holds');
-    }
-    if (opcode === 'VOpen' && !(typeof p4 === 'string' && gate.referenceVirtualTables.has(p4))) {
-      throw introspectionRefusal(`opens a virtual table other than ${REFERENCE_VIRTUAL_TABLES.join(', ')}, which describes the database rather than its rows`);
-    }
-    if ((opcode === 'Function' || opcode === 'PureFunc') && CONNECTION_STATE_FUNCTIONS.has(functionNameOf(p4))) {
-      throw introspectionRefusal(`calls ${functionNameOf(p4)}(), which answers about the connection rather than the rows`);
-    }
+function assertProgramAdmitted(gate: GateConnection, sql: string): void {
+  const named = new Set(relationsNamedBy(sql, queryableRelationNames()).map((name) => name.toLowerCase()));
+  for (const op of explain(gate.database, sql)) {
+    assertOpAdmitted(gate, op, named);
   }
+}
+
+/**
+ * Refuse one opcode of a caller's program; see {@link assertProgramAdmitted}.
+ *
+ * @param gate - The handle's gate state
+ * @param op - The opcode
+ * @param named - The relations the statement names, lower-cased
+ */
+function assertOpAdmitted(gate: GateConnection, { opcode, p2, p3, p4 }: ExplainedOp, named: ReadonlySet<string>): void {
+  if (typeof opcode === 'string' && READ_OPEN_OPCODES.has(opcode)) {
+    if (p2 === 1) throw introspectionRefusal('reads the schema table, which lists the relations this run holds');
+    assertReadsNamed(gate, p2, p3, named);
+  }
+  if (opcode === 'VOpen' && !(typeof p4 === 'string' && gate.referenceVirtualTables.has(p4))) {
+    throw introspectionRefusal(`opens a virtual table other than ${REFERENCE_VIRTUAL_TABLES.join(', ')}, which describes the database rather than its rows`);
+  }
+  if ((opcode === 'Function' || opcode === 'PureFunc') && CONNECTION_STATE_FUNCTIONS.has(functionNameOf(p4))) {
+    throw introspectionRefusal(`calls ${functionNameOf(p4)}(), which answers about the connection rather than the rows`);
+  }
+  if (opcode === 'Transaction' && p2 !== 0) {
+    throw new VatError(
+      PROJECTION_STATEMENT_REFUSED_CODE,
+      'This statement writes: its compiled program opens a write transaction. A projection query only reads.',
+    );
+  }
+}
+
+/**
+ * Refuse a read of a relation the statement does not name.
+ *
+ * @param gate - The handle's gate state
+ * @param rootPage - The `OpenRead`'s root page
+ * @param schema - The `OpenRead`'s schema index: 0 is `main`
+ * @param named - The relations the statement names, lower-cased
+ * @throws VatError `PROJECTION_STATEMENT_REFUSED` naming the relation and how to name it
+ * @throws Error When no relation of `main` holds the page — a driver invariant
+ */
+function assertReadsNamed(gate: GateConnection, rootPage: unknown, schema: unknown, named: ReadonlySet<string>): void {
+  const relation = schema === 0 && typeof rootPage === 'number' ? gate.relationOfRootPage.get(rootPage) : undefined;
+  if (relation === undefined) {
+    throw new Error(`The statement's program reads root page ${String(rootPage)} of schema ${String(schema)}, which no relation of this run holds.`);
+  }
+  if (named.has(relation.toLowerCase())) return;
+  throw new VatError(
+    PROJECTION_STATEMENT_REFUSED_CODE,
+    `This statement reads ${relation} without naming it: a statement reads a relation only when it names it`
+    + ` itself as an identifier — ${identifierSpellings(relation).join(', ')}. A single-quoted '${relation}' is a`
+    + ' string, though SQLite reads it as the table when one exists, so its answer would depend on which other'
+    + ' statements this run holds. Name it as an identifier.',
+  );
 }
 
 /**
@@ -623,16 +780,16 @@ function assertNoAttachedSchema(database: DatabaseSync): void {
  * whose failure discloses every repository on the machine. See
  * {@link detachForeignSchemas}.
  *
- * The introspection gate ({@link assertNoIntrospection}) runs inside the same read-only,
- * coded-refusal span as the real prepare, so its `EXPLAIN` failing on an unhydrated relation
- * carries the statement code.
+ * The program gate ({@link assertProgramAdmitted}) runs inside the same read-only, coded-refusal
+ * span as the real prepare, so its `EXPLAIN` failing on an unhydrated relation carries the
+ * statement code.
  *
  * @param gate - The owning handle's private gate state
  * @param sql - The caller's statement
  * @param parameters - What the caller binds (or will bind)
  * @param step - What to do with the compiled statement
  * @returns Whatever `step` returns
- * @throws The kind, single-statement, placeholder-count and introspection refusals, or
+ * @throws The NUL, kind, single-statement, placeholder-count and program refusals, or
  *   SQLite's own for a name the schema lacks; an uncoded Error when a schema is attached
  *
  * Not on the package barrel: the run database and the compile probe call it, and
@@ -645,6 +802,7 @@ export function runGated<T>(
   step: (statement: StatementSync) => T,
 ): T {
   const { database } = gate;
+  assertNoNul(sql);
   assertSingleStatement(sql);
   assertIsQuery(sql);
   assertParametersBound(sql, parameters);
@@ -652,7 +810,7 @@ export function runGated<T>(
   database.exec('PRAGMA query_only = 1');
   let failed = false;
   try {
-    assertNoIntrospection(gate, sql);
+    assertProgramAdmitted(gate, sql);
     const statement = database.prepare(sql);
     assertResultColumns(statement);
     return step(statement);

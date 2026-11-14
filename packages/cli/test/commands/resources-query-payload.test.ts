@@ -205,6 +205,30 @@ describe('the failure message', () => {
     expect(message).not.toContain(PROJECTION_TABLES.blobSections.name);
   });
 
+  it('diagnoses a missing column from the relations the statement names, never from words in a literal', () => {
+    // The run holds resource_realizations and not resources; 'packages/resources/%' is a string.
+    const held: UnhydratedRelations = {
+      absent: new Set(['resources', ...allDerivedSpecs().map((spec) => spec.name)]),
+      withheld: new Map(),
+    };
+    const message = describeQueryFailure(
+      "SELECT pth FROM resource_realizations WHERE path LIKE 'packages/resources/%'",
+      'no such column: pth',
+      held,
+    );
+
+    expect(message).toContain('no such column: pth');
+    expect(message).toContain(`resource_realizations(${PROJECTION_TABLES.resourceRealizations.columns.join(', ')})`);
+    expect(message).not.toContain('did not hydrate');
+  });
+
+  it('names no relation from a comment either', () => {
+    const message = describeQueryFailure('SELECT pth FROM blobs -- see edges', 'no such column: pth', NONE_EVALUATED);
+
+    expect(message).not.toContain('did not hydrate');
+    expect(message).toContain('blobs(');
+  });
+
   it('lists every table when the statement named none of them', () => {
     const message = describeQueryFailure('SELECT * FROM nope', 'no such table: nope', NONE_EVALUATED);
 
@@ -227,7 +251,7 @@ describe('the failure message', () => {
 
     expect(message).toContain(engine);
     expect(message).toMatch(/edges, which this run did not hydrate/su);
-    expect(message).toContain('Declare a statement naming it');
+    expect(message).toContain('Name it as an identifier in this statement');
   });
 
   it('names EVERY derived relation from the registry, not a hand-kept list', () => {
@@ -251,7 +275,7 @@ describe('the failure message', () => {
     const message = describeQueryFailure("SELECT COUNT(*) FROM 'blobs'", 'no such table: blobs', absent);
 
     expect(message).toContain('blobs, "blobs", [blobs], `blobs`');
-    expect(message).toContain("A single-quoted 'blobs' is a string to the planner");
+    expect(message).toContain("A single-quoted 'blobs' is a string, not a name");
   });
 
   it('names why a WITHHELD relation is absent, and lists none of its columns', () => {
@@ -275,7 +299,7 @@ describe('the failure message', () => {
 
     expect(refusalCodeOf(error)).toBe('INPUT_UNREADABLE');
     expect(error?.message).toContain('could not be evaluated for this run: Pass --base <ref>.');
-    expect(error?.message).not.toContain('Declare a statement naming it');
+    expect(error?.message).not.toContain('Name it as an identifier');
   });
 
   it('refuses nothing a statement does not name: a comment or a literal mentioning the relation is not a read', () => {

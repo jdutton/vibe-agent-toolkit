@@ -261,12 +261,16 @@ behind RFC-3986-compliant leading-`/` resolution.
 **What the statement can read.** The run's own projection, never another repository's: each run
 holds only the projection tables its statement names, as an identifier — plain, `"blobs"`,
 `[blobs]` or `` `blobs` ``; a single-quoted `'blobs'` is a string, so `FROM 'blobs'` is refused.
-A statement reaching a relation the run does not hold is refused, as is one that asks which
-relations exist or what the connection did: the schema table (`sqlite_schema`, `sqlite_master`),
-`pragma_*` functions, `dbstat`, `changes()`, `total_changes()` and `last_insert_rowid()`.
-`json_each`, `json_tree`, `jsonb_each` and `jsonb_tree` over a column are answered. Placeholders
-are `?` only; a named one (`:p`, `@p`, `$p`, `#p`) is refused. Rows of a statement without
-`ORDER BY` come in primary-key order, the same warm or cold.
+A statement reads only a relation it names itself: one held because ANOTHER declared statement
+names it is refused, so a check's verdict never depends on which other checks are declared. A
+statement reaching a relation the run does not hold is refused, as is one that asks which
+relations exist or what the connection did: the schema table (`sqlite_schema`, `sqlite_master`,
+`sqlite_temp_schema`), `pragma_*` functions, `dbstat`, `changes()`, `total_changes()` and
+`last_insert_rowid()`. `json_each` and `json_tree` over a column are answered, and so are
+`jsonb_each` and `jsonb_tree` where the runtime's SQLite has them (Node 22 does not). A write is refused, `WITH … DELETE … RETURNING` included, and so is a statement holding
+a NUL character, since SQLite drops everything after it. Placeholders are `?` only; a named one
+(`:p`, `@p`, `$p`, `#p`, `$$`, `#$`) is refused. Rows of a statement without `ORDER BY` come in the same order warm or cold: primary-key
+order for a plain scan of one relation; a join, `GROUP BY` or `DISTINCT` follows the plan.
 
 **Derived relations** — computed for the run, and only when the statement names one:
 

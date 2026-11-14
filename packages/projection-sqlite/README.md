@@ -66,8 +66,10 @@ own rows, inserted in canonical order (`compareRows`) — and gone when closed:
 ```typescript
 import { hydrateRunDatabase } from '@vibe-agent-toolkit/projection-sqlite';
 
+const [root] = projection.roots;
+if (root === undefined) throw new Error('A projection with no root row has no id to file rows under.');
 const database = hydrateRunDatabase({
-  rootId: projection.roots[0].id,
+  rootId: root.id,
   relations: new Map([['blobs', projection.blobs]]),
 });
 const rows = database.query('SELECT COUNT(*) AS n FROM blobs');

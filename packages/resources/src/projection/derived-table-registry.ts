@@ -66,7 +66,7 @@ import {
   projectionRowShape,
   ROOT_RELATIVE_PATH,
   type ProjectionColumnTypeSource,
-  type TextColumnRoles,
+  type ColumnRoles,
 } from './column-kinds.js';
 import { PROJECTION_TABLES } from './table-registry.js';
 
@@ -83,8 +83,8 @@ export interface DerivedTableSpec extends ProjectionColumnTypeSource {
   readonly name: string;
   /** The columns that identify a row, in comparison order. */
   readonly primaryKey: readonly string[];
-  /** Every `text` column, classified — see `TextColumnRoles`. */
-  readonly textColumns: TextColumnRoles;
+  /** Every `text` and `json` column, classified — see `ColumnRoles`. */
+  readonly columnRoles: ColumnRoles;
 }
 
 /**
@@ -174,6 +174,32 @@ export function allDerivedSpecs(): readonly DerivedTableSpec[] {
   return Object.values(DERIVED_TABLES);
 }
 
+/** One relation a statement can name: a projection table's registry entry, or a derived relation's. */
+export type QueryableRelationSpec = (typeof PROJECTION_TABLES)[keyof typeof PROJECTION_TABLES] | DerivedTableSpec;
+
+/**
+ * Every relation a statement can name — every projection table, then every derived relation, each
+ * registry in declaration order — and nothing else.
+ *
+ * 🔑 The ONE list. Hydration, the compile probe, the SQL gate, the planner, the failure listing and
+ * {@link rootlessPathRelations} all derive from it, so no reader holds a second copy that a new
+ * relation could be missing from.
+ *
+ * @returns The relations' specifications
+ */
+export function queryableRelationSpecs(): readonly QueryableRelationSpec[] {
+  return [...Object.values(PROJECTION_TABLES), ...allDerivedSpecs()];
+}
+
+/**
+ * Every relation a statement can name, by SQL name, in {@link queryableRelationSpecs} order.
+ *
+ * @returns The names
+ */
+export function queryableRelationNames(): readonly string[] {
+  return queryableRelationSpecs().map((spec) => spec.name);
+}
+
 /** The column a relation will carry to say which root a row is under; no relation carries it yet. */
 const ROOT_COLUMN = 'root';
 
@@ -181,16 +207,16 @@ const ROOT_COLUMN = 'root';
  * The queryable relations — every table and every derived relation — whose rows cannot say which
  * root they are under: a {@link ROOT_RELATIVE_PATH} column, and no {@link ROOT_COLUMN}.
  *
- * Derived from each spec's `textColumns`, never listed: in a run holding more than one root, two
+ * Derived from each spec's `columnRoles`, never listed: in a run holding more than one root, two
  * roots can each hold `docs/a.md`, and a statement over one of these would answer for both under
  * one path. ⚠️ Transitional: the set empties as relations gain a `root` column.
  *
  * @returns Their SQL names, tables first, each registry in declaration order
  */
 export function rootlessPathRelations(): readonly string[] {
-  return [...Object.values(PROJECTION_TABLES), ...allDerivedSpecs()]
+  return queryableRelationSpecs()
     .filter((spec) => !(spec.columns as readonly string[]).includes(ROOT_COLUMN))
-    .filter((spec) => Object.values<string | undefined>(spec.textColumns).includes(ROOT_RELATIVE_PATH))
+    .filter((spec) => Object.values<string | undefined>(spec.columnRoles).includes(ROOT_RELATIVE_PATH))
     .map((spec) => spec.name);
 }
 
@@ -209,7 +235,7 @@ export function rootlessPathRelations(): readonly string[] {
  * @param name - The relation's snake_case SQL name
  * @param schema - The row schema, which supplies the column order and types
  * @param primaryKey - The columns that identify a row, in comparison order
- * @param textColumns - Every `text` column, classified — see `TextColumnRoles`
+ * @param columnRoles - Every `text` and `json` column, classified — see `ColumnRoles`
  * @returns The relation's specification
  */
 function derived(
@@ -217,14 +243,14 @@ function derived(
   name: string,
   schema: ProjectionColumnTypeSource['schema'],
   primaryKey: readonly string[],
-  textColumns: TextColumnRoles,
+  columnRoles: ColumnRoles,
 ): DerivedTableSpec {
   return {
     key,
     name,
     schema,
     primaryKey,
-    textColumns,
+    columnRoles,
     columns: Object.keys(projectionRowShape(schema)),
   };
 }

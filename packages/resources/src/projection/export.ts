@@ -292,8 +292,11 @@ export type RowComparator = (left: Readonly<Record<string, unknown>>, right: Rea
  * this.
  *
  * Per column kind: `null` (and an absent value) before any value, so `null` and `''` differ; text
- * by UTF-16 code units, never a locale; integer, real and timestamp by value; boolean `false`
- * first; json by its {@link canonicalJson} text, never `[object Object]`.
+ * by UTF-16 code units, never a locale; json by its {@link canonicalJson} text, key order ignored;
+ * integer by exact value (an integer string or `bigint` included, so two integers past 2^53 never
+ * tie); real by value; timestamp by instant; boolean `false` first, the text `'false'` and `'0'`
+ * read as false. A value its kind cannot read — a `NaN`, an unparseable timestamp — sorts after
+ * every value it can, by its raw text, so it never ties a different value.
  *
  * @param spec - A `PROJECTION_TABLES` entry or a derived relation's spec
  * @returns The comparator, its column kinds read once
@@ -326,17 +329,82 @@ function compareValues(kind: ProjectionColumnKind, left: unknown, right: unknown
   if (leftAbsent || rightAbsent) return Number(rightAbsent) - Number(leftAbsent);
   switch (kind) {
     case 'integer':
+      return compareIntegers(left, right);
     case 'real':
-      return compareNumbers(Number(left), Number(right));
+      return compareReadable(Number(left), Number(right), left, right);
     case 'timestamp':
-      return compareNumbers(instantOf(left), instantOf(right));
+      return compareReadable(instantOf(left), instantOf(right), left, right);
     case 'boolean':
-      return Number(Boolean(left)) - Number(Boolean(right));
+      return Number(booleanOf(left)) - Number(booleanOf(right));
     case 'json':
       return compareCodeUnits(canonicalJson(left), canonicalJson(right));
     case 'text':
       return compareCodeUnits(textOf(left), textOf(right));
   }
+}
+
+/**
+ * Compare two integer values exactly: as `bigint` when both read as integers, so `'9007199254740993'`
+ * and `'9007199254740992'` — one double — stay two values; otherwise as numbers.
+ *
+ * @param left - First value
+ * @param right - Second value
+ * @returns -1, 0 or 1
+ */
+function compareIntegers(left: unknown, right: unknown): number {
+  const leftInteger = integerOf(left);
+  const rightInteger = integerOf(right);
+  if (leftInteger === undefined || rightInteger === undefined) {
+    return compareReadable(Number(left), Number(right), left, right);
+  }
+  if (leftInteger < rightInteger) return -1;
+  return leftInteger > rightInteger ? 1 : 0;
+}
+
+/** An optional sign and decimal digits: the integer text `BigInt` reads exactly. */
+const INTEGER_TEXT = /^-?\d+$/;
+
+/**
+ * An integer value as a `bigint`, or undefined when it is not one.
+ *
+ * @param value - An integer column's value
+ * @returns The integer, exactly
+ */
+function integerOf(value: unknown): bigint | undefined {
+  if (typeof value === 'bigint') return value;
+  if (typeof value === 'number') return Number.isSafeInteger(value) ? BigInt(value) : undefined;
+  return typeof value === 'string' && INTEGER_TEXT.test(value) ? BigInt(value) : undefined;
+}
+
+/**
+ * Compare two values by what their kind reads them as, or by raw text when it cannot: every readable
+ * value first, then the unreadable ones (`NaN`, an unparseable timestamp) by their {@link textOf}, so
+ * two different unreadable values never tie and the order stays total.
+ *
+ * @param leftRead - The first value as its kind reads it
+ * @param rightRead - The second value as its kind reads it
+ * @param left - The first value as held
+ * @param right - The second value as held
+ * @returns Negative, zero or positive
+ */
+function compareReadable(leftRead: number, rightRead: number, left: unknown, right: unknown): number {
+  const leftUnread = Number.isNaN(leftRead);
+  const rightUnread = Number.isNaN(rightRead);
+  if (leftUnread && rightUnread) return compareCodeUnits(textOf(left), textOf(right));
+  if (leftUnread || rightUnread) return Number(leftUnread) - Number(rightUnread);
+  return compareNumbers(leftRead, rightRead);
+}
+
+/**
+ * A boolean column's value as a boolean: SQLite holds one as `0`/`1`, and text may spell it, so the
+ * text `'false'` and `'0'` are false rather than a non-empty string.
+ *
+ * @param value - A boolean column's value
+ * @returns Whether it is true
+ */
+function booleanOf(value: unknown): boolean {
+  if (typeof value === 'string') return value !== '' && value !== 'false' && value !== '0';
+  return Boolean(value);
 }
 
 /**

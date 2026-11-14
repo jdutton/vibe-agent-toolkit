@@ -9,7 +9,8 @@
  *
  * Two repositories with distinct file names share one store directory. B is queried first, so the
  * store holds B's rows; then A cold, then A warm (served from the store). Every relation A hydrates
- * must equal A's no-store run row for row, in the same order, and no row may name a B file.
+ * must equal A's no-store run row for row, in the same order, and no row may name a B file. The four
+ * runs happen once, in order, before any assertion; each `it` reads their answers and stands alone.
  *
  * In-process through `withQueriedProjection`; the only process spawned is git, to commit the
  * fixtures and snapshot their trees.
@@ -50,9 +51,12 @@ interface RunAnswer {
 
 const scratch = scratchTmpdirEnv('vat-containment-tmp-');
 let base: string;
-let repoA: string;
-let repoB: string;
 let storeDir: string;
+
+/** A with no store, then A cold beside B's rows, then A warm from the store. */
+let off: RunAnswer;
+let cold: RunAnswer;
+let warm: RunAnswer;
 
 /** A committed repository holding the given files. */
 function repository(name: string, files: Readonly<Record<string, string>>): string {
@@ -86,17 +90,22 @@ async function askEveryTable(root: string, store: boolean): Promise<RunAnswer> {
   }
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   scratch.enter();
   base = createTempDir('vat-containment-');
   storeDir = safePath.join(base, 'store');
   mkdirSyncReal(storeDir);
-  repoA = repository('a', { 'a-one.md': '# A one\n\nSee [two](./a-two.md).\n', 'a-two.md': '# A two\n' });
-  repoB = repository('b', {
+  const repoA = repository('a', { 'a-one.md': '# A one\n\nSee [two](./a-two.md).\n', 'a-two.md': '# A two\n' });
+  const repoB = repository('b', {
     [`${B_ONLY}.md`]: '# B\n\nSee [other](./b-other.md).\n',
     'b-other.md': '# B other\n',
     'b-third.md': '# B third\n',
   });
+  // In this order: B fills the store before A's cold run, and A's cold run fills it for the warm one.
+  off = await askEveryTable(repoA, false);
+  await askEveryTable(repoB, true);
+  cold = await askEveryTable(repoA, true);
+  warm = await askEveryTable(repoA, true);
 });
 
 afterAll(() => {
@@ -105,16 +114,12 @@ afterAll(() => {
 });
 
 describe('a run database holds the run\'s own rows, however its population was served', () => {
-  it('answers A alike with no store, cold beside B\'s rows, and warm from the store — and never with B', async () => {
-    const off = await askEveryTable(repoA, false);
-    await askEveryTable(repoB, true);
-    const cold = await askEveryTable(repoA, true);
-    const warm = await askEveryTable(repoA, true);
-
-    // Not vacuous: the warm run was served, and the store holds B's paths beside A's.
+  it('derived A twice and served it once, so the comparison below is not vacuous', () => {
     expect([off.population, cold.population, warm.population]).toStrictEqual(['derived', 'derived', 'store']);
     expect(off.tables['resource_realizations']?.length, 'A realized nothing').toBeGreaterThan(0);
+  });
 
+  it('answers A alike with no store, cold beside B\'s rows, and warm from the store — and never with B', () => {
     for (const name of Object.keys(STATEMENTS)) {
       expect(cold.tables[name], `${name}: cold differs from no store`).toStrictEqual(off.tables[name]);
       expect(warm.tables[name], `${name}: warm differs from no store`).toStrictEqual(off.tables[name]);

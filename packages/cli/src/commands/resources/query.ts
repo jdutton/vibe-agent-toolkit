@@ -203,8 +203,8 @@ function runProjectionQuery(options: {
   return withQueriedProjection(
     // `statements` as well as `preflight`, and the two are not redundant: the
     // preflight COMPILES this statement early, while `statements` decides which
-    // derived relations get evaluated at all. One statement, two questions asked
-    // of it.
+    // projection tables are hydrated and which lenses are evaluated at all. One
+    // statement, two questions asked of it.
     { root, logger, preflight: [{ sql, parameters }], statements: [sql], base },
     (ask, provenance, extent, _projection, columnsOf) => {
       // A supervised child's units: the population, then the statement (the log reads it as

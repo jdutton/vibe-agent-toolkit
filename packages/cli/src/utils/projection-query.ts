@@ -53,9 +53,12 @@
 import { performance } from 'node:perf_hooks';
 
 import {
-  allDerivedSpecs,
   buildResourceProjection,
-  PROJECTION_TABLES,
+  definesCteNamed,
+  identifierSpellings,
+  queryableRelationNames,
+  queryableRelationSpecs,
+  relationsNamedBy,
   storeMissOf,
   type LensRefusalCode,
   type PopulationCache,
@@ -70,20 +73,20 @@ import type { Logger } from './logger.js';
 import { populateAndReport } from './population-wiring.js';
 import {
   CHANGED_FILES_LENS,
-  definesCteNamed,
   evaluateLens,
-  identifierSpellings,
   lensRelationNames,
   lensPopulationOf,
   planHydration,
-  relationsNamedBy,
   type LensEvaluation,
   type LensRefusal,
 } from './projection-lenses.js';
 import { hydrateRunDatabase, openCompileProbe, withPopulationCache } from './projection-store.js';
 
+/** What SQLite says when a statement names a table the schema does not have, before the name. */
+const NO_SUCH_TABLE = 'no such table: ';
+
 /** What SQLite says when a statement names something the schema does not have: wording only, never a code. */
-const NAME_NOT_FOUND: readonly string[] = ['no such table:', 'no such column:'];
+const NAME_NOT_FOUND: readonly string[] = [NO_SUCH_TABLE, 'no such column:'];
 
 /**
  * What a run's rows are, and where they came from.
@@ -570,7 +573,7 @@ export async function askPopulatedProjection<T>(
     const evaluated: string[] = [];
     // 🚨 A REFUSED lens writes nothing; a statement naming its relation is refused before it runs.
     const refusals = new Map<string, LensRefusal>();
-    const absent = new Set(QUERYABLE_RELATIONS.filter((name) => !plan.relations.includes(name)));
+    const absent = new Set(queryableRelationNames().filter((name) => !plan.relations.includes(name)));
     await forEachInOrder(lenses, async (lens) => {
       const evaluation = await evaluateLens(lens, { projection, root, base: run.base, cache, logger });
       if ('refused' in evaluation) {
@@ -628,9 +631,6 @@ export async function askPopulatedProjection<T>(
   }
 }
 
-/** Every relation a statement can name, by SQL name: the projection tables, then the derived relations. */
-const QUERYABLE_RELATIONS: readonly string[] = [...Object.values(PROJECTION_TABLES), ...allDerivedSpecs()].map((spec) => spec.name);
-
 /**
  * Turn a rejected statement into a message that names the surface it missed.
  *
@@ -675,9 +675,10 @@ export function describeQueryFailure(sql: string, message: string, unhydrated: U
   // and SQLite refuses it rather than answering `0` from an empty table
   // (indistinguishable from an empty tree, and for `vat resources check` a rule
   // that could no longer fail). Every unhydrated relation is treated alike, and
-  // none of its columns is listed. Which relation is read off the statement,
-  // never out of the engine's text. The compile probe holds them all.
-  const unheld = unhydratedRelationOf(sql, unhydrated);
+  // none of its columns is listed. Which relation is the one the ENGINE named
+  // in `no such table` — never a word found elsewhere in the statement, which
+  // may sit in a literal or a comment. The compile probe holds them all.
+  const unheld = unhydratedRelationOf(message, unhydrated);
   if (unheld !== undefined) return `${message}\n\n${unheld}`;
 
   // 🪤 The derived relations belong in this listing even though they are not
@@ -686,9 +687,13 @@ export function describeQueryFailure(sql: string, message: string, unhydrated: U
   // omitted the very relation they were reaching for would read as proof it
   // does not exist. What the listing answers is "what can I name here", which
   // is the queryable surface, not the registry.
-  const askable = [...Object.values(PROJECTION_TABLES), ...allDerivedSpecs()];
-  const lowered = sql.toLowerCase();
-  const named = askable.filter((spec) => !unhydrated.absent.has(spec.name) && lowered.includes(spec.name.toLowerCase()));
+  //
+  // Which relations the statement names is read by the scan the planner and the gate share, so a
+  // relation spelled only inside a literal or a comment is not listed as one the statement reads.
+  const askable = queryableRelationSpecs();
+  const held = askable.filter((spec) => !unhydrated.absent.has(spec.name));
+  const namedNames = new Set(relationsNamedBy(sql, held.map((spec) => spec.name)));
+  const named = held.filter((spec) => namedNames.has(spec.name));
   const surface = named.length > 0
     ? named.map((spec) => `  ${spec.name}(${spec.columns.join(', ')})`).join('\n')
     : askable.map((spec) => `  ${spec.name}`).join('\n');
@@ -699,30 +704,40 @@ export function describeQueryFailure(sql: string, message: string, unhydrated: U
   return `${message}\n\n${heading}\n${surface}`;
 }
 
-/** Runs of identifier characters, for finding a relation name anywhere in a statement, literals included. */
-const WORDS_ANYWHERE = /[a-z0-9_]+/g;
+/** The first whitespace-free run of a message: the name SQLite put after `no such table: `. */
+const LEADING_TOKEN = /^\S+/u;
 
 /**
- * Why a statement reached a relation this run database does not hold, or undefined when it names
- * none. A withheld relation names its reason. Any other unhydrated relation the statement spells —
- * in a literal, say, which the planner never reads as a name — gets the spellings that ARE read.
+ * The queryable relation SQLite named in a `no such table` message, by SQL name, or undefined.
+ * Schema-qualified (`main.edges`) and any case are read as the relation they spell.
  *
- * @param sql - The statement
+ * @param message - What the engine said
+ * @returns The relation
+ */
+function missingRelationOf(message: string): string | undefined {
+  const at = message.indexOf(NO_SUCH_TABLE);
+  if (at < 0) return undefined;
+  const spelled = LEADING_TOKEN.exec(message.slice(at + NO_SUCH_TABLE.length))?.[0] ?? '';
+  const bare = spelled.slice(spelled.lastIndexOf('.') + 1).toLowerCase();
+  return queryableRelationNames().find((name) => name.toLowerCase() === bare);
+}
+
+/**
+ * Why the engine found no table for a relation this run database does not hold, or undefined when
+ * the table it named is no queryable relation. Read ONLY from the engine's `no such table`: a
+ * withheld relation names its reason; any other names the spellings a statement reads it by.
+ *
+ * @param message - What the engine said
  * @param unhydrated - What the run database does not hold
  * @returns The explanation, or undefined
  */
-function unhydratedRelationOf(sql: string, unhydrated: UnhydratedRelations): string | undefined {
-  const [withheld] = relationsNamedBy(sql, unhydrated.withheld.keys());
-  const reason = withheld === undefined ? undefined : unhydrated.withheld.get(withheld);
-  if (withheld !== undefined && reason !== undefined) {
-    return `This statement reads ${withheld}, which this run withheld: ${reason}.`;
-  }
-  const words = new Set(sql.toLowerCase().match(WORDS_ANYWHERE));
-  const missing = [...unhydrated.absent].find((name) => words.has(name.toLowerCase()));
+function unhydratedRelationOf(message: string, unhydrated: UnhydratedRelations): string | undefined {
+  const missing = missingRelationOf(message);
   if (missing === undefined) return undefined;
-  return `This statement reads ${missing}, which this run did not hydrate: a run holds a relation only when a`
-    + ` statement it declared names it as an identifier the planner reads — ${identifierSpellings(missing).join(', ')}.`
-    + ` A single-quoted '${missing}' is a string to the planner. Declare a statement naming it`
-    + ' (`vat resources query` passes the one it was given; `vat resources check` passes every statement in'
-    + ' `resources.checks`).';
+  const reason = unhydrated.withheld.get(missing);
+  if (reason !== undefined) return `This statement reads ${missing}, which this run withheld: ${reason}.`;
+  if (!unhydrated.absent.has(missing)) return undefined;
+  return `This statement reads ${missing}, which this run did not hydrate: a statement reads a relation only when`
+    + ` it names it itself as an identifier — ${identifierSpellings(missing).join(', ')}.`
+    + ` A single-quoted '${missing}' is a string, not a name. Name it as an identifier in this statement.`;
 }

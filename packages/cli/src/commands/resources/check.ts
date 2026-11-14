@@ -1759,10 +1759,11 @@ function runOutcome(options: {
   // gate quietly. The population is the price of an honest report, and it is
   // charged once for every check rather than per broken one.
   // 🔑 `statements` IS passed, and it is a different question from `preflight`:
-  // it only decides which derived relations are evaluated. Every declared
-  // statement goes in, including one `--check` narrows away — the lens is per
-  // RUN, and narrowing it would make `--check foo` and a full run disagree about
-  // which relations exist.
+  // it decides which projection tables the run hydrates and which lenses it
+  // evaluates. Every declared statement goes in, including one `--check` narrows
+  // away — hydration is per RUN, and narrowing it would make `--check foo` and a
+  // full run disagree about which relations exist. A statement still reads only
+  // the relations it names itself; the SQL gate refuses any other.
   // 🪤 `examined` statements included, or a relation only they name is absent, so the statement
   // fails with "no such table".
   const statements = Object.values(checks).flatMap((check) => checkStatements(check));

@@ -61,7 +61,7 @@ import {
 } from '../schemas/projection-resources.js';
 import { ResolutionContextRowSchema, ZoneProvenanceRowSchema } from '../schemas/projection-zones.js';
 
-import { OTHER, projectionRowShape, ROOT_RELATIVE_PATH, type TextColumnRoles } from './column-kinds.js';
+import { OTHER, projectionRowShape, ROOT_RELATIVE_PATH, type ColumnRoles } from './column-kinds.js';
 import type { Projection } from './projection.js';
 
 /** The field of {@link Projection} a table's rows are carried under. */
@@ -124,10 +124,10 @@ export interface ProjectionTableSpec<
   /** Every column, in the order the row schema declares it. */
   readonly columns: readonly ColumnOf<Row>[];
   /**
-   * Every `text` column, classified: a path relative to the root it was observed under, or
-   * anything else. See {@link TextColumnRoles}.
+   * Every `text` and `json` column, classified: a path relative to the root it was observed under
+   * (or a value carrying one), or anything else. See {@link ColumnRoles}.
    */
-  readonly textColumns: TextColumnRoles<ColumnOf<Row>>;
+  readonly columnRoles: ColumnRoles<ColumnOf<Row>>;
   /**
    * The column naming the resolution context a row belongs to, when it has one.
    *
@@ -231,6 +231,8 @@ export const PROJECTION_TABLES = {
     sourceRef: OTHER,
     matchedPattern: OTHER,
     targetFaultClass: OTHER,
+    // Opaque caller data, copied verbatim and never interpreted.
+    matchedPayload: OTHER,
   }, 'extentId'),
   // No context column, for the same reason `resources` and `resource_tags` have
   // none: a `paths:` glob is a fact about the rules file's IDENTITY, not about
@@ -249,9 +251,11 @@ export const PROJECTION_TABLES = {
   }, 'contextId'),
   zoneProvenance: table('zoneProvenance', 'extent', ZoneProvenanceRowSchema, ['contextId', 'contributorId'], {
     contextId: OTHER, contributorId: OTHER, extentDigest: OTHER,
+    // The contributor's parameters verbatim: a closure's `closureFrom` and `traverseGlobs` are root-relative.
+    parameterSet: ROOT_RELATIVE_PATH,
   }, 'contextId'),
   blobs: table('blobs', 'blob', BlobRowSchema, ['contentKey'], {
-    contentKey: OTHER, encoding: OTHER, encodingSource: OTHER, frontmatterError: OTHER,
+    contentKey: OTHER, encoding: OTHER, encodingSource: OTHER, frontmatterError: OTHER, frontmatter: OTHER,
   }),
   // `rawRef` and `text` are what an author wrote, never resolved against a root.
   blobReferences: table('blobReferences', 'blob', BlobReferenceRowSchema, ['blob', 'ordinal'], {
@@ -266,8 +270,9 @@ export const PROJECTION_TABLES = {
   // ⛔ `blob` FIRST in both keys: a store keys every blob-tier select, delete
   // and eviction on a blob-scoped table's first primary-key column.
   // Partitioned by `harness`: derived lazily, per `(blob, harness)` a run reaches.
+  // `paths` are the globs as authored, like `claude_rule_patterns.pattern`.
   harnessBlobFacts: table('harnessBlobFacts', 'blob', HarnessBlobFactsRowSchema, ['blob', 'harness'], {
-    blob: OTHER, harness: OTHER,
+    blob: OTHER, harness: OTHER, paths: OTHER,
   }, undefined, 'harness'),
   harnessBlobImports: table('harnessBlobImports', 'blob', HarnessBlobImportRowSchema, ['blob', 'harness', 'ordinal'], {
     blob: OTHER, harness: OTHER, rawRef: OTHER, target: OTHER,
@@ -288,7 +293,7 @@ export const PROJECTION_TABLES = {
  * @param scope - What these rows are a fact about
  * @param schema - The row schema, which supplies the column order
  * @param primaryKey - The columns that identify a row, in comparison order
- * @param textColumns - Every `text` column, classified — see {@link TextColumnRoles}
+ * @param columnRoles - Every `text` and `json` column, classified — see {@link ColumnRoles}
  * @param contextColumn - The column naming the row's resolution context, for a
  *   table whose rows belong to one; omitted for the four that describe the tree
  *   or an identity rather than one extent's view of it
@@ -302,7 +307,7 @@ function table<Name extends ProjectionTableName, Scope extends ProjectionTableSc
   scope: Scope,
   schema: RowSchema<ProjectionRow<Name>>,
   primaryKey: readonly ColumnOf<ProjectionRow<Name>>[],
-  textColumns: TextColumnRoles<ColumnOf<ProjectionRow<Name>>>,
+  columnRoles: ColumnRoles<ColumnOf<ProjectionRow<Name>>>,
   contextColumn?: ColumnOf<ProjectionRow<Name>>,
   partitionColumn?: ColumnOf<ProjectionRow<Name>>,
 ): ProjectionTableSpec<Name, ProjectionRow<Name>, Scope> {
@@ -312,7 +317,7 @@ function table<Name extends ProjectionTableName, Scope extends ProjectionTableSc
     scope,
     schema,
     primaryKey,
-    textColumns,
+    columnRoles,
     // Conditional spread rather than `contextColumn: contextColumn`:
     // `exactOptionalPropertyTypes` makes an absent key and one holding
     // `undefined` different values, and "this table has no context column" is

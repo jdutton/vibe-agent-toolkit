@@ -338,10 +338,16 @@ export {
 export {
   allDerivedSpecs,
   DERIVED_TABLES,
+  queryableRelationNames,
+  queryableRelationSpecs,
   rootlessPathRelations,
   type DerivedTableName,
   type DerivedTableSpec,
+  type QueryableRelationSpec,
 } from './projection/derived-table-registry.js';
+
+// Which relations a statement names: the one scan the hydration planner and the SQL gate share.
+export { definesCteNamed, identifierSpellings, relationsNamedBy } from './projection/statement-relations.js';
 
 // What each column holds, read out of the row schema. Every storage backend
 // needs it — Arrow needs a type per vector, SQL needs one per column — so the
@@ -351,8 +357,8 @@ export {
   type ProjectionColumnSource,
   type ProjectionColumnType,
   type ProjectionColumnTypeSource,
-  type TextColumnRole,
-  type TextColumnRoles,
+  type ColumnRole,
+  type ColumnRoles,
   projectionColumnType,
   projectionColumnTypes,
   projectionRowShape,

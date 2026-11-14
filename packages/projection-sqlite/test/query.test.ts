@@ -401,15 +401,16 @@ describe('query requires a statement that is a query', () => {
     expect(store.query(sql)[0]?.[column]).toBe(1);
   });
 
-  it('leaves query_only carrying the writes a leading token cannot see', () => {
+  it('refuses, from the compiled program, the writes a leading token cannot see', () => {
     // `WITH … DELETE` is real SQLite grammar and its first token is `WITH`, so
-    // the kind gate passes it and the ENGINE is what refuses (measured on Node
-    // 24.13.1). This is the case that makes the two guards layered rather than
-    // one of them decoration — do not delete it to "cover" the token gate.
-    // `RETURNING` gives the write a result column, so the result-shape check
-    // passes it too and only `query_only` is left to refuse it — and the
-    // assertion names the ENGINE's words, which no gate of ours emits.
-    expect(() => store.query('WITH c(a) AS (VALUES (1)) DELETE FROM "blobs" RETURNING "contentKey"')).toThrow(/readonly database/);
+    // the kind gate passes it, and `RETURNING` gives it a result column, so the
+    // result-shape check passes it too. Its program opens a WRITE transaction,
+    // and that is what refuses it — on `columns` and the compile probe, which
+    // never step, as much as here. `query_only` still stands behind a step:
+    // `statement-refusal.test.ts` proves it armed with no program gate in front.
+    const write = 'WITH c(a) AS (VALUES (1)) DELETE FROM "blobs" RETURNING "contentKey"';
+    expect(() => store.query(write)).toThrow(/This statement writes/);
+    expect(() => store.columns(write)).toThrow(/This statement writes/);
     expect(store.query(COUNT_BLOBS)[0]?.['n']).toBe(2);
   });
 });

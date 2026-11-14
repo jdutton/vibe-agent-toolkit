@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 
 import { compareRows, DERIVED_TABLES, PROJECTION_TABLES } from '../src/index.js';
 
@@ -61,5 +62,56 @@ describe('compareRows', () => {
   it('compares text by code units, never by locale', () => {
     const compare = compareRows(PROJECTION_TABLES.blobs);
     expect(compare({ contentKey: 'Z' }, { contentKey: 'a' })).toBeLessThan(0);
+  });
+});
+
+/** A relation with one column of each kind compared by value, keyed by `id`, for the totality edges. */
+const EDGES = {
+  columns: ['id', 'count', 'ratio', 'at', 'flag'],
+  primaryKey: ['id'],
+  schema: z.object({
+    id: z.string(),
+    count: z.number().int(),
+    ratio: z.number(),
+    at: z.date(),
+    flag: z.boolean(),
+  }),
+};
+
+describe('compareRows is total over values a column kind does not expect', () => {
+  const compare = compareRows(EDGES);
+  const row = (fields: Record<string, unknown>): Record<string, unknown> => ({ id: 'k', ...fields });
+
+  it('never ties a NaN real with a different raw value, and puts every number before it', () => {
+    expect(compare(row({ ratio: 'not-a-number' }), row({ ratio: 'also-not' }))).not.toBe(0);
+    expect(compare(row({ ratio: Number.NaN }), row({ ratio: 'x' }))).not.toBe(0);
+    expect(compare(row({ ratio: 2.5 }), row({ ratio: 'x' }))).toBeLessThan(0);
+    expect(compare(row({ ratio: 'x' }), row({ ratio: 2.5 }))).toBeGreaterThan(0);
+  });
+
+  it('never ties two unparseable timestamps with different text, and puts every instant before them', () => {
+    expect(compare(row({ at: 'not a date' }), row({ at: 'also not' }))).not.toBe(0);
+    expect(compare(row({ at: new Date(5) }), row({ at: 'not a date' }))).toBeLessThan(0);
+    expect(compare(row({ at: 'not a date' }), row({ at: new Date(5) }))).toBeGreaterThan(0);
+  });
+
+  it('compares integers above 2^53 exactly when they arrive as integer strings', () => {
+    // 2^53 + 1 and 2^53 are one double; as text they are two values.
+    expect(compare(row({ count: '9007199254740993' }), row({ count: '9007199254740992' }))).toBeGreaterThan(0);
+    expect(compare(row({ count: '9007199254740992' }), row({ count: '9007199254740993' }))).toBeLessThan(0);
+    expect(compare(row({ count: 10n ** 20n }), row({ count: '100000000000000000001' }))).toBeLessThan(0);
+    // An integer string and the number it spells are one value.
+    expect(compare(row({ count: '12' }), row({ count: 12 }))).toBe(0);
+  });
+
+  it('reads the text false as false, never as a non-empty string', () => {
+    expect(compare(row({ flag: 'false' }), row({ flag: false }))).toBe(0);
+    expect(compare(row({ flag: 'false' }), row({ flag: true }))).toBeLessThan(0);
+    expect(compare(row({ flag: 0 }), row({ flag: 'true' }))).toBeLessThan(0);
+  });
+
+  it('stays one order whichever end a mixed column is sorted from', () => {
+    const rows = [row({ ratio: 'b' }), row({ ratio: 3 }), row({ ratio: 'a' }), row({ ratio: -1 })];
+    expect(sortedBothWays(compare, rows).map((sorted) => (sorted as Record<string, unknown>)['ratio'])).toStrictEqual([-1, 3, 'a', 'b']);
   });
 });

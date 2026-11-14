@@ -39,7 +39,7 @@ import {
 import { countWork, promised } from '@vibe-agent-toolkit/utils';
 
 import { createDerivedTableSql, insertDerivedSql, type QueryableRelation, queryableSpecs } from './schema-sql.js';
-import { type GateConnection, openGate, runGated } from './sql-gate.js';
+import { type GateConnection, openGate, refreshRelationPages, runGated } from './sql-gate.js';
 import { inTransaction } from './store.js';
 import { encodeValue, type SqliteValue } from './values.js';
 
@@ -520,6 +520,10 @@ class SqliteRunDatabase implements RunDatabase {
           if (!knownBefore.has(key)) this.#derivedPlans.delete(key);
         }
         throw error;
+      } finally {
+        // A created relation has root pages the gate must map, or a statement naming it
+        // reads a page no relation holds.
+        refreshRelationPages(this.#gate);
       }
     });
   }

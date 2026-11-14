@@ -4,15 +4,15 @@
 - **`@vibe-agent-toolkit/projection-sqlite`: `SqlQueryableStore` is removed.**
   `openSqliteProjectionStore()` is renamed `openSqliteFactStore()` and returns `FactStore`, without
   `query`, `columns` or `writeDerived`. `openEphemeralProjectionStore()` is replaced by
-  `openRunDatabase(projection)`, returning a `RunDatabase`.
+  `hydrateRunDatabase({ rootId, relations })`, returning a `RunDatabase` that holds only the
+  relations given.
 - **`@vibe-agent-toolkit/utils`: `WorkCounter` drops `store.reads.ephemeral` and
   `store.rows.decoded.ephemeral`.**
 - **`@vibe-agent-toolkit/utils`: `store.writes.ephemeral` and `store.rows.written.ephemeral` are
-  renamed `hydration.writes` and `hydration.rows.written`, and they count less.** They count only
-  loading a run's projection into its run database. Writing a lens's derived relations
-  (`writeDerived`) no longer counts, so for a statement that names a lens relation
-  `hydration.rows.written` reads lower than the old counter did, and `hydration.writes` reads one
-  lower for each lens write.
+  renamed `hydration.writes` and `hydration.rows.written`, and they count less.** `hydration.writes`
+  counts one per hydration of a run database (zero for a run whose statements name no projection
+  table), and `hydration.rows.written` the rows it inserted: only the relations the run's statements
+  name. Writing a lens's derived relations (`writeDerived`) does not count.
 - **`vat-lab work`: no lab build reads dumps from both sides of this change.** This lab refuses a
   counter dump from a vat build before it, which carries counters it does not know, and an earlier
   lab refuses one from a build after it for the same reason, so a work comparison across the change

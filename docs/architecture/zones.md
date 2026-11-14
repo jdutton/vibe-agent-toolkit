@@ -127,9 +127,11 @@ The selector still over-selects on purpose, because a false negative now fails a
 answer: the scan strips comments and string literals and then matches whole identifiers (an alias
 sharing a relation's name still selects it, harmlessly; a CTE named after a lens that can refuse —
 `changed_files` — is refused as a reserved relation name, "rename the CTE", since it would either
-shadow the relation or trip its refusal), and a caller that declares NO
-statements gets every lens, because "I cannot say what I will ask" must mean correct rows rather
-than cheap ones.
+shadow the relation or trip its refusal). The same scan decides which projection tables a run
+hydrates, and the SQL gate holds each statement to the relations it names itself, so a statement
+never answers from a relation another statement's name brought in. A run that declares NO
+statements hydrates nothing and evaluates no lens: `statements` is required, and there is nothing
+a run could ask that it did not declare.
 
 ⛔ Two lenses must never claim one relation: it would make "was it evaluated" unanswerable, and the
 second `writeDerived` would CLEAR the first's rows, since `writeDerived` replaces a relation's

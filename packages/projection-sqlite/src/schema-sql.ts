@@ -41,8 +41,8 @@
  */
 
 import {
-  allDerivedSpecs,
   PROJECTION_TABLES,
+  queryableRelationSpecs,
   type DerivedTableSpec,
   type ProjectionColumnKind,
   type ProjectionColumnTypeSource,
@@ -571,24 +571,16 @@ export interface QueryableRelation {
  * Every relation a statement can name — every projection table, then every derived relation — and
  * nothing else: no `extents` and no `blob_keys`, which are the fact store's bookkeeping.
  *
- * 🔑 The ONE source the compile probe and hydration create tables from, so the probe holds exactly
+ * 🔑 Read off `queryableRelationSpecs()` — the one list the planner and the SQL gate read too —
+ * and the ONE source the compile probe and hydration create tables from, so the probe holds exactly
  * what hydration can create, and a statement naming anything else (`SELECT * FROM extents`)
- * refuses at preflight rather than after a population.
+ * refuses at preflight rather than after a population. A projection table carries a `scope`; a
+ * derived relation has none.
  *
  * @returns The relations, tables first, each registry in declaration order
  */
 export function queryableSpecs(): readonly QueryableRelation[] {
-  const tables = allSpecs().map((spec) => ({
-    spec,
-    createSql: createTableSql(spec),
-    insertSql: insertSql(spec),
-    extentKeyed: spec.scope === 'extent',
-  }));
-  const derived = allDerivedSpecs().map((spec) => ({
-    spec,
-    createSql: createDerivedTableSql(spec),
-    insertSql: insertDerivedSql(spec),
-    extentKeyed: false,
-  }));
-  return [...tables, ...derived];
+  return queryableRelationSpecs().map((spec) => ('scope' in spec
+    ? { spec, createSql: createTableSql(spec), insertSql: insertSql(spec), extentKeyed: spec.scope === 'extent' }
+    : { spec, createSql: createDerivedTableSql(spec), insertSql: insertDerivedSql(spec), extentKeyed: false }));
 }

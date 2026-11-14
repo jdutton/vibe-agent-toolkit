@@ -2,7 +2,9 @@
  * Test-only preload (`NODE_OPTIONS=--import "<file: URL>"`): the process that RUNS the checks' SQL —
  * a supervised child (its argv carries `--supervised-by`), or `vat resources check|query --budget 0` —
  * writes its pid to `TEST_SQL_PID_FILE` the moment it starts executing a `WITH RECURSIVE`
- * statement, and then executes it for real. The statement never returns, so from that moment the
+ * statement, and then executes it for real. The SQL gate's own `EXPLAIN` of that statement — run at
+ * preflight, before the population, and again before the statement — is not executing it, and
+ * writes nothing: a signal sent then would land before the population completed. The statement never returns, so from that moment the
  * process is blocked inside synchronous `node:sqlite`: the state in which a signal handler would
  * take the operator's Ctrl-C away.
  *
@@ -20,7 +22,8 @@ if (pidFile !== undefined && (argv.includes('--supervised-by') || budgetZero)) {
   for (const method of ['all', 'get', 'iterate', 'run']) {
     const original = StatementSync.prototype[method];
     StatementSync.prototype[method] = function patched(...args) {
-      if (this.sourceSQL.includes('WITH RECURSIVE')) fs.writeFileSync(pidFile, String(process.pid), 'utf-8');
+      const sql = this.sourceSQL;
+      if (sql.includes('WITH RECURSIVE') && !/^\s*EXPLAIN\b/i.test(sql)) fs.writeFileSync(pidFile, String(process.pid), 'utf-8');
       return original.apply(this, args);
     };
   }
