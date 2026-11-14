@@ -108,6 +108,21 @@ function mayName(body: string, names: Iterable<string>): boolean {
   return false;
 }
 
+/** The named parse entries: every one but the receiver-qualified `parse`. */
+const NAMED_ENTRIES = [...PARSE_ENTRIES].filter((name) => name !== 'parse');
+
+/**
+ * Whether `body` can call the parse route. The bare `parse` entry counts only
+ * on a receiver {@link PARSE_RECEIVER} matches, and that match is made on the
+ * receiver's own source text, so a source that names `parse` but nothing the
+ * receiver pattern matches cannot call it. Without this, every source with a
+ * `JSON.parse` and a `catch` was parsed to an AST for nothing.
+ */
+function mayCallParseEntry(body: string): boolean {
+  if (mayName(body, NAMED_ENTRIES)) return true;
+  return mayName(body, ['parse']) && PARSE_RECEIVER.test(body);
+}
+
 /** Whether any node under `root` satisfies `test`. */
 function some(root: ts.Node, test: (node: ts.Node) => boolean): boolean {
   let found = false;
@@ -156,7 +171,7 @@ function callsPredicate(body: string): boolean {
  * @returns The swallowing catches' `try` lines
  */
 function swallowingCatches(body: string): number[] {
-  if (!mayName(body, ['catch']) || !mayName(body, PARSE_ENTRIES)) return [];
+  if (!mayName(body, ['catch']) || !mayCallParseEntry(body)) return [];
   const source = sourceOf(body);
   const lines: number[] = [];
   const visit = (node: ts.Node): void => {
