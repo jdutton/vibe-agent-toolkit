@@ -582,6 +582,36 @@ unused import; `--fix` never applies suggestions, so a converged `--fix` leaves 
 **Remedy:** a rule that created an orphan removes it itself; do not build a general
 side-effect-aware unused-import rule (`sideEffects` is absent by default and ignores `node:`).
 
+### ESLint's `--cache` replays a clean verdict a type-aware rule would now red
+
+ESLint keys each file on its own metadata and the config, so changing a function in one file to
+`async` leaves an unchanged caller's cached clean result in place: no `no-floating-promises`.
+**Tell:** a lint red that appears only in CI, or only after deleting the cache file.
+**Remedy:** never pass `--cache`; cache at turbo's task hash, whose inputs (the package, its
+dependencies' `^build`, the config, the rule sources) cover everything the lint reads.
+
+### `TIMING=all` blames the type checker on the first typed rule
+
+Type-aware rules share one lazily built program and checker; whichever typed rule asks first is
+charged for building it (`sonarjs/deprecation` leads this repo's table for that reason).
+**Tell:** a typed rule at the top of the table whose own logic is trivial.
+**Remedy:** read a typed rule's share as an upper bound; disable it and re-time before believing it.
+
+### A local cache with no eviction grows without bound
+
+Turbo's local cache, shared by every worktree of the checkout, kept every entry ever written.
+**Tell:** a cache directory measured in gigabytes, mostly entries older than a month.
+**Remedy:** every local cache carries an age limit and a size cap sized above the window's real
+volume (`cacheMaxAge`, `cacheMaxSize` in `turbo.json`).
+
+### A rule for a library you do not use still runs on every file
+
+A rule aimed at AWS CDK, React or DOMPurify cannot fire here but still visits every node, and a
+type-aware one forces the checker on files nothing else needed.
+**Tell:** a library-named rule with nonzero time under `TIMING=all`.
+**Remedy:** derive the off-list from the plugin's own rule names and descriptions, checked against
+the manifests' real dependencies (`unusedLibraryRulesOff()` in `eslint.config.js`); never a hand-kept list of rule names.
+
 ### A scripted edit can print `ok` and write nothing
 
 A heredoc that appended tests printed its own `ok`, left the file untouched, and the suite reported

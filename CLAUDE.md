@@ -153,10 +153,12 @@ the coverage job in CI — never in a turbo lane; not on Windows).
   and system tests. It sets
   `CI=1` (vibe-validate's only `runScope` switch) and `--force` (the tree-hash cache records a
   skipped step as passed, so it cannot tell the tiers apart).
-- **Local lint is cached; CI lint is cold.** A type-aware rule reads other files, and ESLint's cache
-  keys only the file's own metadata (mtime and size), so a local lint can replay a clean verdict after a change
-  elsewhere (an `async` signature reds an unchanged caller). CI's fresh checkout has no cache.
-  Delete `.eslintcache` to reproduce a CI-only lint red. (not enforced)
+- **Lint is one ESLint per package, cached by turbo, never by ESLint.** `bun run lint` runs each
+  package's `lint` through turbo, each on its own program (`tsconfig.eslint.json`), so no process
+  builds the whole monorepo's. Never add `--cache`: ESLint keys a file on its own mtime and size,
+  so an unchanged caller replays clean after a type-aware change elsewhere (an `async` signature);
+  turbo re-lints a package on any change to it or, through `^build`, to a dependency.
+  (enforced by: `validate-structure`, which pins every package's `lint` script exactly)
 - **A green commit is NOT a green PR.** Run `bun run validate` before pushing; CI runs the full
   tier on ubuntu and Windows.
 

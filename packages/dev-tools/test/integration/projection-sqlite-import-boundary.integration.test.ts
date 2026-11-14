@@ -17,11 +17,12 @@ import { readFileSync } from 'node:fs';
 
 import { resolveFromImportMeta, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { crawlDirectorySync } from '@vibe-agent-toolkit/utils/crawl';
+import { ESLint } from 'eslint';
 import picomatch from 'picomatch';
 import { describe, expect, it } from 'vitest';
 
 import { PROJECTION_SQLITE_IMPORTERS } from '../../../../eslint.config.js';
-import { repoEslint, syntaxRuleLinter } from '../eslint-clean-files.js';
+import { syntaxRuleLinter } from '../eslint-clean-files.js';
 
 const REPO_ROOT = resolveFromImportMeta(import.meta.url, '..', '..', '..', '..');
 const BACKEND = '@vibe-agent-toolkit/projection-sqlite';
@@ -50,7 +51,7 @@ const SHAPES: ReadonlyArray<readonly [shape: string, code: string]> = [
  * the rule reports when it is enabled everywhere, exemptions included.
  */
 async function backendImporters(): Promise<string[]> {
-  const eslint = repoEslint({
+  const eslint = new ESLint({
     cwd: REPO_ROOT,
     ruleFilter: ({ ruleId }) => ruleId === RULE,
     overrideConfig: [

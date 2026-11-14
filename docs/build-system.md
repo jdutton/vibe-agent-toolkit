@@ -106,6 +106,23 @@ When creating a new package:
 2. Add `references` for packages it depends on
 3. Add the package to root tsconfig.json `references` array
 4. Run `bun install` to update workspace links
+5. Give it a `lint` script, exactly `eslint . --max-warnings=0`, and a `tsconfig.eslint.json` that
+   includes every `.ts`/`.cts` file of the package (copy a sibling's) — `validate-structure` fails
+   without the script, and ESLint fails on any file no program includes
+
+## Lint
+
+`bun run lint` is `turbo run lint lint:root`: one ESLint process per package, each with its own
+type-checked program from that package's `tsconfig.eslint.json`, plus `lint:root` for the root's own
+scripts. Types of another workspace package come from its `dist/` (as for `tsc`), so `lint` depends on
+`^build` and on the package's own `build` — a test importing its own package by name reads `dist/` too.
+
+Turbo is the only lint cache. A package re-lints when any of its files, a dependency's build, the
+root config (`eslint.config.js`, `tsconfig.*.json` — `globalDependencies`) or the rule sources under
+`packages/utils/eslint/` change. ESLint's own `--cache` is never used: it would replay an unchanged
+caller's clean verdict after a type-aware change elsewhere (see
+[traps](contributing/traps.md#eslints---cache-replays-a-clean-verdict-a-type-aware-rule-would-now-red)).
+`--concurrency=2` bounds the memory of one lint run to two programs at a time.
 
 ## Troubleshooting
 

@@ -69,7 +69,7 @@ describe('classifyMechanisms', () => {
   it('recognises native models, network and an in-process ESLint', () => {
     expect(classifyMechanisms("import { connect } from '@lancedb/lancedb';")).toEqual(['nativeModel']);
     expect(classifyMechanisms("await fetch('https://example.com');")).toEqual(['network']);
-    expect(classifyMechanisms('const eslint = repoEslint({ cwd: REPO_ROOT });')).toEqual(['eslint']);
+    expect(classifyMechanisms('const eslint = new ESLint({ cwd: REPO_ROOT });')).toEqual(['eslint']);
     expect(classifyMechanisms('const banFindings = banLinter(REPO_ROOT);')).toEqual(['eslint']);
   });
 

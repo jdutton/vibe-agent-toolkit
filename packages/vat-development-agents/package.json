@@ -47,7 +47,8 @@
     "build:skills": "node ../cli/dist/bin/vat.js skills build",
     "postinstall": "vat claude plugin install --npm-postinstall || exit 0",
     "test:system": "vitest run --config vitest.system.config.ts",
-    "clean": "rimraf --glob dist"
+    "clean": "rimraf --glob dist",
+    "lint": "eslint . --max-warnings=0"
   },
   "dependencies": {
     "@vibe-agent-toolkit/cli": "workspace:*"

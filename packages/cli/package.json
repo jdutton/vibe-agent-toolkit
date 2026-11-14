@@ -31,6 +31,7 @@
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:system": "vitest run --config vitest.system.config.ts",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings=0",
     "clean": "rimraf --glob dist \"*.tsbuildinfo\" .tsc-staging"
   },
   "keywords": [

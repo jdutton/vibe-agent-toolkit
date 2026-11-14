@@ -1,5 +1,13 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  // The local cache (`.turbo/cache` of the main checkout, shared by every linked
+  // worktree) had no eviction and reached 9.7 GB. Entries go after 30 days; the
+  // size cap sits above what 30 days of entries measured (2.8 GB on 2026-11-14),
+  // so it only bites if the rate of new entries roughly doubles — a cap below
+  // that would silently shorten the 30-day window. No `cacheDir`: the default is
+  // what shares the cache across worktrees.
+  "cacheMaxAge": "30d",
+  "cacheMaxSize": "5GB",
   "tasks": {
     // `*.tsbuildinfo` is a build output and must be cached with `dist/**`, not left
     // behind. Restoring `dist/` without it puts the package in a state TypeScript
@@ -37,8 +45,27 @@
       "outputs": [],
       "cache": true
     },
+    // One ESLint process per package, each type-checking only its own program
+    // (`tsconfig.eslint.json`): a whole-monorepo program peaked at about 2.5 GB.
+    // TURBO is the lint cache, never ESLint's `--cache`: ESLint keys a file on
+    // its own mtime and size, so an unchanged caller replays a clean verdict
+    // after a type-aware change elsewhere. Here any change to the package re-lints
+    // all of it, and a dependency's change reaches it through `^build`'s hash —
+    // which is also why both builds come first: types of a workspace import,
+    // and of a test importing its own package by name, are read from `dist/`.
+    // The rule implementations are an input of every package's lint, including
+    // a package that does not depend on utils.
     "lint": {
-      "dependsOn": [],
+      "dependsOn": ["^build", "build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/utils/eslint/**"],
+      "outputs": [],
+      "cache": true
+    },
+    // The root's own scripts (`eslint.config.js`, the vitest setup files): no
+    // package lints them. Not `//#lint`, which would run the root `lint` script —
+    // `turbo run lint` itself. Its inputs are exactly what it lints plus the rules.
+    "//#lint:root": {
+      "inputs": ["*.js", "*.cjs", "*.mjs", "*.ts", "*.cts", "*.mts", "packages/utils/eslint/**"],
       "outputs": [],
       "cache": true
     },
