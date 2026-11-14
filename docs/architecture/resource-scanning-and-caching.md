@@ -191,7 +191,7 @@ Three constraints this table encodes, each of which has already been got wrong o
   divergence between them shows up only as a wrong answer somewhere downstream.
 
 **None of this depends on a columnar store.** Sourcing (this section) and persistence (a
-`ProjectionStore` substrate) are separable: the git lane already yields a content key per path and an exact whole-tree
+`FactStore` substrate) are separable: the git lane already yields a content key per path and an exact whole-tree
 invalidation key, which is the entire input a persisted table would need. Doing the sourcing work
 first is what makes the persistence work worth doing — and it banks most of the win on its own.
 

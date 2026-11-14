@@ -49,7 +49,7 @@
  *
  * It does not decode. Rows come back exactly as SQLite holds them — a boolean as
  * `0`/`1`, a date and a JSON column as text — because decoding needs a table
- * spec and arbitrary SQL has none. `SqlQueryableStore.query`'s docstring is the
+ * spec and arbitrary SQL has none. `RunDatabase.query`'s docstring is the
  * authority on why.
  */
 
@@ -171,7 +171,7 @@ export function buildProjectionQueryReport(input: ProjectionQueryPayloadInput): 
  * Populate the tree and run the caller's one statement against it.
  *
  * Thin by design: everything that is not "one statement, all its rows" —
- * population, store selection, the ephemeral fallback, the cache tell and the
+ * population, fact-store selection, the run database, the cache tell and the
  * legible-failure wrapper — is shared with `vat resources check` in
  * {@link withQueriedProjection}, so the two verbs cannot drift into answering
  * about different corpora.

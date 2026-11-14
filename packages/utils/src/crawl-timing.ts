@@ -409,7 +409,7 @@ export const CRAWL_BLOB_POPULATE_ID = 'blob-population:derive';
 
 /**
  * Synthetic contributor id for the merge driver's attempt to answer a population
- * from a {@link ProjectionStore} instead of deriving it.
+ * from a `FactStore` instead of deriving it.
  *
  * **A row here is the only way a dump can tell a cache HIT from a subject that
  * exercised nothing.** Both look identical from the totals — a hit files no
@@ -425,7 +425,7 @@ export const CRAWL_STORE_READ_ID = 'projection-store:read';
 
 /**
  * Synthetic contributor id for writing a freshly derived population back to a
- * {@link ProjectionStore}.
+ * `FactStore`.
  *
  * Filed only on a miss, which is what makes the pair readable: a run with a read
  * row and no write row is a hit, a run with both is a miss that paid to populate

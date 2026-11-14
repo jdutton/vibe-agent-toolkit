@@ -34,7 +34,7 @@
 
 import { writeFileSync } from 'node:fs';
 
-import { openSqliteProjectionStore } from '@vibe-agent-toolkit/projection-sqlite';
+import { openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import {
   ClosureExtentContributor,
   ContributorRegistry,
@@ -111,7 +111,7 @@ function registryFor(question) {
 
 const [corpusRoot, storeDirectory, treeHash, question, outputPath] = process.argv.slice(2);
 
-const store = openSqliteProjectionStore({ directory: storeDirectory });
+const store = openSqliteFactStore({ directory: storeDirectory });
 
 /**
  * Every contributor invocation this process performed, as `id@pass`.

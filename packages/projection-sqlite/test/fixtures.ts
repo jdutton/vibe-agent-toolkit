@@ -7,7 +7,7 @@
  * would pass against a broken codec.
  */
 
-import type { BlobScopedRows, ExtentScopedRows } from '@vibe-agent-toolkit/resources';
+import type { BlobScopedRows, ExtentScopedRows, Projection } from '@vibe-agent-toolkit/resources';
 
 /** A content key of the shape `ContentKeySchema` requires: `<parserKind>.<sha256>`. */
 export function contentKey(seed: string): string {
@@ -217,7 +217,7 @@ export function sampleExtentRows(rootId = 'root-1'): ExtentScopedRows {
  * sniffs a NUL byte, records `BLOB_NOT_TEXT` and returns before any `blobs` row
  * is emitted — and the same shape `BLOB_UNREADABLE` and `BLOB_CONTENT_CHANGED`
  * produce, neither of which *could* carry a `blobs` row, because there are no
- * trustworthy bytes to measure. `ProjectionStore.readBlobFacts` states the rule
+ * trustworthy bytes to measure. `FactStore.readBlobFacts` states the rule
  * this fixture stands for: a key is held when it has a `blobs` row **or** a
  * `blobConditions` row.
  *
@@ -240,4 +240,22 @@ export function declinedBlobRows(key: string = FIRST_BLOB): BlobScopedRows {
       line: null,
     }],
   };
+}
+
+/**
+ * One run's whole projection: {@link sampleBlobRows} and {@link sampleExtentRows}
+ * as the single value a run database is opened over.
+ *
+ * @param blobKeys - Which blobs it holds, each with {@link sampleBlobRows}'s rows
+ * @returns Every projection table, the blob-scoped and extent-scoped rows together
+ */
+export function sampleProjection(blobKeys: readonly string[] = [FIRST_BLOB]): Projection {
+  const bundles = blobKeys.map((key) => sampleBlobRows(key));
+  const tables = Object.keys(sampleBlobRows()) as (keyof BlobScopedRows)[];
+  // Each blob-scoped table is the concatenation of every blob's rows for it; an
+  // empty `blobKeys` gives every one of them empty.
+  const blobs = Object.fromEntries(
+    tables.map((table) => [table, bundles.flatMap((bundle) => bundle[table] as readonly unknown[])]),
+  ) as unknown as BlobScopedRows;
+  return { ...blobs, ...sampleExtentRows() };
 }

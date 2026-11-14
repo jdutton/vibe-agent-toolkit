@@ -1,6 +1,8 @@
 /**
- * The seam a projection **store** implements — the named interface that lets a
- * storage backend be swapped without changing anything above it.
+ * The storage port, {@link FactStore}: the one seam a projection **store**
+ * implements — the named interface that lets a storage backend be swapped
+ * without changing anything above it. A backend is chosen and injected by the
+ * CLI; nothing in this package names one.
  *
  * A store is a cache, not an export. Nothing here promises durability, a stable
  * on-disk format, or a migration path: recovery is always "populate it again".
@@ -23,9 +25,9 @@
  *
  * | | `projection-sqlite` | a file-per-table backend |
  * |---|---|---|
- * | {@link ProjectionStore.writeBlobFacts} | `INSERT … ON CONFLICT DO NOTHING`, one transaction | a staged file per table, renamed into a content-addressed directory |
- * | {@link ProjectionStore.writeExtent} | delete-then-insert under the key, one transaction | a file per table under `root=…/tree=…/`, published through a manifest |
- * | {@link ProjectionStore.readExtent} | `SELECT … WHERE rootId = ? AND treeHash = ?` | read the manifest, then scan exactly the files it lists |
+ * | {@link FactStore.writeBlobFacts} | `INSERT … ON CONFLICT DO NOTHING`, one transaction | a staged file per table, renamed into a content-addressed directory |
+ * | {@link FactStore.writeExtent} | delete-then-insert under the key, one transaction | a file per table under `root=…/tree=…/`, published through a manifest |
+ * | {@link FactStore.readExtent} | `SELECT … WHERE rootId = ? AND treeHash = ?` | read the manifest, then scan exactly the files it lists |
  *
  * Neither column is awkward, which is what the seam had to demonstrate. Only the
  * first column ships: a columnar backend was built and then **removed**, because
@@ -62,6 +64,7 @@
  *   pull. Beyond that, the cache lives under `vatCacheNamespaceRoot()` and
  *   inherits that tenant's policy: the namespace moves on every release, and OS
  *   tmpdir purge is what reclaims a directory this build no longer opens.
+ *   (Provisional: this section is rewritten when eviction moves behind the port.)
  * - **No version or format discriminator in the data.** What separates one
  *   build's rows from another's is {@link projectionShapeDigest}, in the path —
  *   derived from the schemas, never declared.
@@ -145,14 +148,17 @@ export interface ExtentKey {
 }
 
 /**
- * A storage backend for the resource projection.
+ * The storage port: what a backend for the resource projection implements,
+ * and all that a caller holding one may do — read and write blob facts, read an
+ * extent, write one additively, and close. It carries no SQL: see "No query"
+ * in this module's header.
  *
  * Every method is asynchronous because a backend may be — one running its engine
  * out of process, or over a network, has no synchronous option. A synchronous
  * backend — `projection-sqlite` is entirely synchronous — simply returns
  * already-resolved promises, which costs it nothing and keeps one interface.
  */
-export interface ProjectionStore {
+export interface FactStore {
   /**
    * Record facts about blobs, keyed by content.
    *

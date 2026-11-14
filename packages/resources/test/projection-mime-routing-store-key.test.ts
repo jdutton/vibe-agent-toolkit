@@ -37,7 +37,7 @@ import type {
   BlobScopedRows,
   ExtentKey,
   ExtentScopedRows,
-  ProjectionStore,
+  FactStore,
 } from '../src/projection/store.js';
 import type { CollectionConfig } from '../src/schemas/project-config.js';
 
@@ -86,7 +86,7 @@ const fixture = setupTempCorpus('vat-mime-store-key-', CORPUS);
  * Answering no read keeps each arm a full population, so what is compared is the
  * question each run posed rather than which of them happened to be served.
  */
-class KeyRecordingStore implements ProjectionStore {
+class KeyRecordingStore implements FactStore {
   /** Every key handed to `readExtent`, in call order. */
   readonly readKeys: ExtentKey[] = [];
 

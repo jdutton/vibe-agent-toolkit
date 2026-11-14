@@ -43,7 +43,7 @@ import { ClaudeRulesScopeContributor } from '../../src/projection/contributors/c
 import { type PopulationCache } from '../../src/projection/merge.js';
 import type { Projection } from '../../src/projection/projection.js';
 import type { ExtentKey, ExtentScopedRows } from '../../src/projection/store.js';
-import { FakeProjectionStore } from '../fake-projection-store.js';
+import { FakeFactStore } from '../fake-fact-store.js';
 import { plantTree, razeTree } from '../helpers/temp-corpus.js';
 
 /** Opaque to the store, and held CONSTANT across the emptying — see the header. */
@@ -71,7 +71,7 @@ afterEach(async () => {
  * @param store - The store double both runs share
  * @returns The projection the lane produced, and where its roots and rows came from
  */
-async function populateThrough(store: FakeProjectionStore): Promise<ClaudeContextPopulation> {
+async function populateThrough(store: FakeFactStore): Promise<ClaudeContextPopulation> {
   const cache: PopulationCache = { store, treeHash: TREE_HASH, treeUnchanged: () => true };
   return buildClaudeContextPopulation({
     root: root ?? '',
@@ -80,7 +80,7 @@ async function populateThrough(store: FakeProjectionStore): Promise<ClaudeContex
 }
 
 /** A store whose next extent read misses once, as a read taken before a concurrent write. */
-class LateStore extends FakeProjectionStore {
+class LateStore extends FakeFactStore {
   missNext = false;
   missed = 0;
 
@@ -109,7 +109,7 @@ async function emptyTree(): Promise<void> {
 describe('buildClaudeContextPopulation root discovery', () => {
   it('crawls for the roots when the store holds nothing (positive control)', async () => {
     root = await plantTree('vat-claude-store-roots-', TREE);
-    const store = new FakeProjectionStore();
+    const store = new FakeFactStore();
 
     const first = await populateThrough(store);
 
@@ -123,7 +123,7 @@ describe('buildClaudeContextPopulation root discovery', () => {
 
   it('takes the roots from the store rather than crawling for them', async () => {
     root = await plantTree('vat-claude-store-roots-', TREE);
-    const store = new FakeProjectionStore();
+    const store = new FakeFactStore();
     const first = await populateThrough(store);
 
     await emptyTree();
@@ -176,7 +176,7 @@ describe('buildClaudeContextPopulation root discovery', () => {
 
   it('crawls again once the store cannot answer for this tree', async () => {
     root = await plantTree('vat-claude-store-roots-', TREE);
-    const store = new FakeProjectionStore();
+    const store = new FakeFactStore();
     await populateThrough(store);
 
     await emptyTree();
@@ -184,7 +184,7 @@ describe('buildClaudeContextPopulation root discovery', () => {
     // stored rows. Without an answer to read, the lane crawls, finds nothing,
     // and says so. This is what keeps the assertion above from passing because
     // the lane stopped looking at the tree altogether.
-    const cold = await populateThrough(new FakeProjectionStore());
+    const cold = await populateThrough(new FakeFactStore());
 
     expect(importContexts(cold.projection)).toEqual([]);
     expect(cold.population).toBe('derived');

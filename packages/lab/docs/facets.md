@@ -236,7 +236,10 @@ nothing; it sets that variable per repeat, as `crawl` sets its own.
 - The dump schema is strict and has no version field. Its counter names come from the utils tuple,
   so a dump from a NEWER vat carrying a counter this lab does not know is refused; an OLDER vat's
   missing counter is absent from the row, and `compare` reports it as added or removed. Run the lab
-  from the newer side, as with `io`.
+  from the newer side, as with `io`. That stops working across a change that renames or drops a
+  counter: the older vat's dump then carries a name the newer lab does not know, so no lab build
+  reads dumps from both sides of it. The rename of the `store.*.ephemeral` counters to
+  `hydration.*` is one such change.
 - Counters compare exactly, with one declared exception table (`comparedExactly` in
   `work/types.ts`): `parse.refused.load` depends on machine load and `parse.redispatched` on a cache
   entry vanishing mid-run, so both are reported in every mode; in

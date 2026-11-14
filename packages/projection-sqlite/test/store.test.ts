@@ -8,23 +8,25 @@
  * fixture built the same wrong way.
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
 import {
   PROJECTION_TABLES,
   type ExtentKey,
   type ExtentScopedRows,
-  type ProjectionStore,
+  type FactStore,
+  type Projection,
   type ProjectionTableName,
 } from '@vibe-agent-toolkit/resources';
 import { readWorkCounters, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { __resetWorkCountersForTest } from '@vibe-agent-toolkit/utils/testing';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { openRunDatabase } from '../src/run-database.js';
 import { EXTENTS_TABLE } from '../src/schema-sql.js';
-import { openEphemeralProjectionStore, openSqliteProjectionStore } from '../src/store.js';
+import { openSqliteFactStore } from '../src/store.js';
 
 import {
   FIRST_BLOB,
@@ -34,16 +36,17 @@ import {
   realizationRow,
   sampleBlobRows,
   sampleExtentRows,
+  sampleProjection,
 } from './fixtures.js';
 
 const KEY: ExtentKey = { rootId: 'root-1', treeHash: 'tree-aaa' };
 
 let directory: string;
-let store: ProjectionStore;
+let store: FactStore;
 
 beforeEach(() => {
   directory = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-projection-sqlite-'));
-  store = openSqliteProjectionStore({ directory });
+  store = openSqliteFactStore({ directory });
 });
 
 afterEach(async () => {
@@ -509,7 +512,7 @@ describe('lifetime', () => {
     await store.writeExtent(KEY, sampleExtentRows(KEY.rootId));
     await store.close();
 
-    store = openSqliteProjectionStore({ directory });
+    store = openSqliteFactStore({ directory });
     expect((await store.readExtent(KEY))?.resources).toHaveLength(1);
   });
 
@@ -557,30 +560,67 @@ describe('decoded rows are counted against the store they came from', () => {
   const bundleRowCount = Object.values(sampleBlobRows() as unknown as Record<string, readonly unknown[]>)
     .reduce((total, rows) => total + rows.length, 0);
 
-  let ephemeral: ProjectionStore;
-
   beforeEach(async () => {
-    ephemeral = openEphemeralProjectionStore();
     await store.writeBlobFacts(sampleBlobRows());
-    await ephemeral.writeBlobFacts(sampleBlobRows());
     __resetWorkCountersForTest();
   });
 
-  afterEach(async () => {
-    await ephemeral.close();
+  afterEach(() => {
     __resetWorkCountersForTest();
   });
 
-  it('a persistent read moves only the persistent counter, by every row it decoded', async () => {
+  it('a persistent read moves the persistent counter by every row it decoded', async () => {
     await store.readBlobFacts([FIRST_BLOB]);
     expect(readWorkCounters()['store.rows.decoded.persistent']).toBe(bundleRowCount);
-    expect(readWorkCounters()['store.rows.decoded.ephemeral']).toBe(0);
+    expect(readWorkCounters()['hydration.rows.written']).toBe(0);
   });
 
-  it('an ephemeral read moves only the ephemeral counter, by every row it decoded', async () => {
-    await ephemeral.readBlobFacts([FIRST_BLOB]);
-    expect(readWorkCounters()['store.rows.decoded.ephemeral']).toBe(bundleRowCount);
-    expect(readWorkCounters()['store.rows.decoded.persistent']).toBe(0);
+  it('loading a run database counts hydration, and no fact-store work', async () => {
+    const projection = sampleProjection();
+    const projectionRowCount = Object.values(projection as unknown as Record<string, readonly unknown[]>)
+      .reduce((total, rows) => total + rows.length, 0);
+    const database = openRunDatabase(projection);
+    try {
+      // One write for the blob facts and one for the extent, every row of both.
+      expect(readWorkCounters()['hydration.writes']).toBe(2);
+      expect(readWorkCounters()['hydration.rows.written']).toBe(projectionRowCount);
+      expect(readWorkCounters()['store.writes.persistent']).toBe(0);
+      expect(readWorkCounters()['store.rows.written.persistent']).toBe(0);
+    } finally {
+      await database.close();
+    }
+  });
+
+  it('a persistent read counts one read, of blobs and of an extent alike', async () => {
+    await store.readBlobFacts([FIRST_BLOB]);
+    expect(readWorkCounters()['store.reads.persistent']).toBe(1);
+    await store.writeExtent(KEY, sampleExtentRows(KEY.rootId));
+    await store.readExtent(KEY);
+    expect(readWorkCounters()['store.reads.persistent']).toBe(2);
+  });
+
+  it('a fact-store write counts one persistent write and every row it wrote, and no hydration', async () => {
+    await store.writeBlobFacts(sampleBlobRows(SECOND_BLOB));
+    expect(readWorkCounters()['store.writes.persistent']).toBe(1);
+    expect(readWorkCounters()['store.rows.written.persistent']).toBe(bundleRowCount);
+
+    const extentRows = sampleExtentRows(KEY.rootId);
+    const extentRowCount = Object.values(extentRows as unknown as Record<string, readonly unknown[]>)
+      .reduce((total, rows) => total + rows.length, 0);
+    await store.writeExtent(KEY, extentRows);
+    expect(readWorkCounters()['store.writes.persistent']).toBe(2);
+    expect(readWorkCounters()['store.rows.written.persistent']).toBe(bundleRowCount + extentRowCount);
+    expect(readWorkCounters()['hydration.writes']).toBe(0);
+    expect(readWorkCounters()['hydration.rows.written']).toBe(0);
+  });
+
+  it('a blob write naming no content key writes nothing and counts nothing', async () => {
+    const empty = sampleBlobRows();
+    await store.writeBlobFacts({
+      ...empty, blobs: [], blobReferences: [], blobSections: [], blobConditions: [], harnessBlobFacts: [], harnessBlobImports: [],
+    });
+    expect(readWorkCounters()['store.writes.persistent']).toBe(0);
+    expect(readWorkCounters()['store.rows.written.persistent']).toBe(0);
   });
 
   it('a read of no content keys counts no read', async () => {
@@ -625,7 +665,7 @@ describe('decoded rows are counted against the store they came from', () => {
  * rather than through the store.
  *
  * 🪤 Row counts, never file size. An eviction that deleted only the `extents`
- * manifest row would make {@link ProjectionStore.readExtent} answer `undefined`
+ * manifest row would make {@link FactStore.readExtent} answer `undefined`
  * — a perfect-looking miss — while all eight tables kept their rows forever, and
  * the store would go on growing exactly as before. Only a count taken outside
  * the store can tell a reclaimed extent from a hidden one. File size cannot:
@@ -677,8 +717,8 @@ function countExtentRows(database: DatabaseSync, table: string, key: ExtentKey):
  * the default number of extents to observe it would be slower and no more
  * convincing.
  */
-function openWithRetention(retainedExtentsPerRoot: number): ProjectionStore {
-  return openSqliteProjectionStore({ directory, retainedExtentsPerRoot });
+function openWithRetention(retainedExtentsPerRoot: number): FactStore {
+  return openSqliteFactStore({ directory, retainedExtentsPerRoot });
 }
 
 /** Total rows a tree occupies across every extent-scoped table. */
@@ -697,7 +737,7 @@ describe('eviction', () => {
     // job directory, a subdirectory a command ran from — kept its trees forever.
     // Six copies of one repository measured six roots and six stored trees, none
     // ever reclaimed, in a store that is on by default.
-    const evicting = openSqliteProjectionStore({ directory, retainedExtentsPerRoot: 3, retainedRoots: 2 });
+    const evicting = openSqliteFactStore({ directory, retainedExtentsPerRoot: 3, retainedRoots: 2 });
     const first = treeKey('tree-1', 'root-first');
     await evicting.writeExtent(first, extentBundle(BROAD));
     await evicting.writeExtent(treeKey('tree-1', 'root-second'), extentBundle(BROAD));
@@ -715,7 +755,7 @@ describe('eviction', () => {
   it('counts a root as recent when ANY of its trees was written recently', async () => {
     // A busy root rewriting its newest tree must not be aged out behind a quiet
     // one, which is the reason retention was per root in the first place.
-    const evicting = openSqliteProjectionStore({ directory, retainedExtentsPerRoot: 3, retainedRoots: 2 });
+    const evicting = openSqliteFactStore({ directory, retainedExtentsPerRoot: 3, retainedRoots: 2 });
     await evicting.writeExtent(treeKey('tree-1', 'root-busy'), extentBundle(BROAD));
     await evicting.writeExtent(treeKey('tree-1', 'root-quiet'), extentBundle(BROAD));
     await evicting.writeExtent(treeKey('tree-2', 'root-busy'), extentBundle(BROAD));
@@ -869,8 +909,8 @@ describe('eviction', () => {
  * The production window is 50,000 content keys, sized from a measured ~5.3 KB
  * per key; writing that many here would take minutes and prove the same thing.
  */
-function openWithBlobWindow(retainedBlobKeys: number): ProjectionStore {
-  return openSqliteProjectionStore({ directory, retainedBlobKeys });
+function openWithBlobWindow(retainedBlobKeys: number): FactStore {
+  return openSqliteFactStore({ directory, retainedBlobKeys });
 }
 
 /**
@@ -1051,7 +1091,7 @@ describe('the blob tier is bounded', () => {
     await evicting.writeBlobFacts(sampleBlobRows(contentKey('c')));
     await evicting.close();
     // Reassigned so the suite's own `afterEach` closes a live store.
-    store = openSqliteProjectionStore({ directory });
+    store = openSqliteFactStore({ directory });
 
     expect(blobRowTotal(contentKey('a'))).toBe(0);
     expect(blobRowTotal(contentKey('b'))).toBe(0);
@@ -1084,3 +1124,54 @@ function filePages(): { pageCount: number; freelist: number; autoVacuum: number 
     database.close();
   }
 }
+
+describe('a lens write is not hydration', () => {
+  afterEach(() => {
+    __resetWorkCountersForTest();
+  });
+
+  it('writeDerived moves neither hydration counter', async () => {
+    const database = openRunDatabase(sampleProjection());
+    try {
+      __resetWorkCountersForTest();
+      await database.writeDerived({
+        edges: [{ src: 'res-1', refOrdinal: 0, contextId: 'lens-a', kind: 'local_file', origin: 'authored' }],
+      });
+      expect(database.query('SELECT COUNT(*) AS n FROM edges'), 'the write landed nothing').toEqual([{ n: 1 }]);
+      expect(readWorkCounters()['hydration.writes']).toBe(0);
+      expect(readWorkCounters()['hydration.rows.written']).toBe(0);
+    } finally {
+      await database.close();
+    }
+  });
+});
+
+describe('an open that fails after the connection opened releases it', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('closes the run database when loading the projection throws', () => {
+    const closes = vi.spyOn(DatabaseSync.prototype, 'close');
+    const [blob] = sampleProjection().blobs;
+    // A string in an integer column: the load throws after the database opened.
+    const unloadable = { ...sampleProjection(), blobs: [{ ...blob, bytes: 'not a number' }] } as unknown as Projection;
+
+    expect(() => openRunDatabase(unloadable)).toThrow();
+    expect(closes).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes the fact store when setting up its file throws', () => {
+    const corrupt = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-projection-corrupt-'));
+    try {
+      // Not a database: opening succeeds, and the first pragma fails.
+      writeFileSync(safePath.join(corrupt, 'projection.db'), Buffer.alloc(4096, 0x5a));
+      const closes = vi.spyOn(DatabaseSync.prototype, 'close');
+
+      expect(() => openSqliteFactStore({ directory: corrupt })).toThrow(/not a database/u);
+      expect(closes).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(corrupt, { recursive: true, force: true });
+    }
+  });
+});

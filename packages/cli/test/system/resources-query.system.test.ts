@@ -82,7 +82,7 @@ const FOREIGN_PREFIX = 'pkgs';
 const FOREIGN_PATH = `${FOREIGN_PREFIX}/zzz.md`;
 
 /**
- * What `openSqliteProjectionStore` names its database.
+ * What `openSqliteFactStore` names its database.
  *
  * Spelled here rather than imported: it is a private constant of
  * `@vibe-agent-toolkit/projection-sqlite`, and this suite drives the built CLI
@@ -505,7 +505,7 @@ describe('vat resources query', () => {
     // started on the first line INSIDE `withPopulationCache`'s callback — but
     // that helper awaits `openPopulationCache` BEFORE calling the callback, and
     // that open is a `git write-tree` spawn plus the backend's dynamic import
-    // and `openSqliteProjectionStore()`. All of it happens ONLY when a store is
+    // and `openSqliteFactStore()`. All of it happens ONLY when a store is
     // selected, so the published number silently shed it on exactly the arm the
     // number is used to praise.
     //

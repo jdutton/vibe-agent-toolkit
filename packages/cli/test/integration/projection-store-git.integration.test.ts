@@ -147,7 +147,7 @@ describe('openPopulationCache', () => {
  * Open one store and hand back the OPTIONS the backend was constructed with.
  *
  * @param value - What `VAT_PROJECTION_STORE_DIR` holds; `undefined` unsets it
- * @returns The single argument `openSqliteProjectionStore` received
+ * @returns The single argument `openSqliteFactStore` received
  */
 async function openedWithStoreDir(value: string | undefined): Promise<unknown> {
   process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;

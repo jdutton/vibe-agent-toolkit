@@ -140,7 +140,6 @@ const UNIT_TIER_IO_RATCHET = { allowFiles: [
   'packages/lab/test/store.test.ts',
   'packages/lab/test/vat-lab-cli.test.ts',
   'packages/projection-sqlite/test/derived-tables.test.ts',
-  'packages/projection-sqlite/test/ephemeral-store.test.ts',
   'packages/projection-sqlite/test/query.test.ts',
   'packages/projection-sqlite/test/store.test.ts',
   'packages/rag/test/embedding-providers/onnx-model-download.test.ts',
@@ -269,6 +268,20 @@ const NO_EXISTSSYNC_RATCHET = { allowFiles: [
   'packages/utils/src/asset-reference.ts',
   'packages/utils/src/testing/platform-gates.ts',
 ] };
+
+/**
+ * The files that may import `@vibe-agent-toolkit/projection-sqlite`, the storage backend: its own
+ * package, the one CLI module that picks and injects it, and the CLI's tests. Everything else is
+ * written against the `FactStore` port in `resources`, so `local/projection-sqlite-import-boundary`
+ * is enabled everywhere these do not match. Asserted both ways against the tree by
+ * `dev-tools/test/integration/projection-sqlite-import-boundary.integration.test.ts`: every
+ * importer is listed, and every entry matches an importer.
+ */
+export const PROJECTION_SQLITE_IMPORTERS = [
+  'packages/projection-sqlite/**',
+  'packages/cli/src/utils/projection-store.ts',
+  'packages/cli/test/**',
+];
 
 /**
  * The allowlist of `local/no-link-following-fs`: the files of product source that may ask the
@@ -1311,6 +1324,19 @@ export default [
     },
     rules: {
       'local/no-unsafe-root-join': 'error',
+    },
+  },
+  // The storage backend is chosen and injected at one edge (see PROJECTION_SQLITE_IMPORTERS).
+  // Its own rule rather than `no-restricted-imports`: flat config replaces a rule's options per
+  // matching block, so an exemption block would drop every other ban that rule carries there.
+  {
+    files: ['**/*.{ts,cts,mts,js,cjs,mjs}'],
+    ignores: PROJECTION_SQLITE_IMPORTERS,
+    plugins: {
+      local: localRules,
+    },
+    rules: {
+      'local/projection-sqlite-import-boundary': 'error',
     },
   },
 ];

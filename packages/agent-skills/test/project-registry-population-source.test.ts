@@ -35,7 +35,7 @@ import {
   type BlobScopedRows,
   type ExtentKey,
   type ExtentScopedRows,
-  type ProjectionStore,
+  type FactStore,
   type ResourcePopulationSource,
 } from '@vibe-agent-toolkit/resources';
 import { createAllowUsageLedger } from '@vibe-agent-toolkit/schema';
@@ -77,7 +77,7 @@ const SKILL_MD = [
  * which is what makes "no key was ever written" a statement about the guard and
  * not about a lucky cache hit.
  */
-function recordingStore(): ProjectionStore & { touchedRootIds: string[] } {
+function recordingStore(): FactStore & { touchedRootIds: string[] } {
   const touchedRootIds: string[] = [];
   return {
     touchedRootIds,
@@ -105,7 +105,7 @@ function recordingStore(): ProjectionStore & { touchedRootIds: string[] } {
  */
 function projectionSource(
   boundRoot: string,
-  store: ProjectionStore,
+  store: FactStore,
 ): { source: ResourcePopulationSource; offeredRoots: string[] } {
   const offeredRoots: string[] = [];
   return {

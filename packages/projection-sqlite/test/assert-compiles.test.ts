@@ -10,13 +10,13 @@
  *
  * These tests pin the properties that make this worth having and not merely a
  * second copy of `query`: it REFUSES what `query` refuses, it does not STEP, and
- * it knows EVERY derived relation — which the query store deliberately does not
+ * it knows EVERY derived relation — which the run database deliberately does not
  * until a lens has been evaluated.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { openProjectionCompileProbe, type ProjectionCompileProbe } from '../src/store.js';
+import { openProjectionCompileProbe, type ProjectionCompileProbe } from '../src/run-database.js';
 
 /**
  * A statement that COMPILES instantly and never finishes stepping.
@@ -54,9 +54,9 @@ describe('assertCompiles', () => {
   });
 
   it('accepts a statement naming a DERIVED relation, which no lens has filled', () => {
-    // 🔑 The preflight runs before any lens is evaluated. The query store has no
+    // 🔑 The preflight runs before any lens is evaluated. The run database has no
     // table for an unevaluated relation — that absence is its refusal — so a
-    // probe with the query store's schema would reject every check over `edges`.
+    // probe with the run database's schema would reject every check over `edges`.
     expect(() => probe.assertCompiles('SELECT COUNT(*) FROM edges JOIN lens_contexts USING (contextId)', []))
       .not.toThrow();
     expect(() => probe.assertCompiles('SELECT * FROM claude_context_loads', [])).not.toThrow();

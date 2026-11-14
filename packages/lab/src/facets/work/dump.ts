@@ -28,6 +28,11 @@ const CLI_ROLE: WorkCounterRole = 'cli';
  * One process's dump. Strict, with no version field: a dump from a newer vat
  * carrying a counter this build does not know is refused; one from an older vat
  * missing a counter parses, and the counter is absent from the reading.
+ *
+ * ⚠️ So a counter REMOVED from vat makes the older lab the reader: a newer lab
+ * still reads the newer dump and refuses the older one's removed name. A counter
+ * RENAMED leaves no reader for a dump pair from both sides of the rename: each
+ * lab refuses the other side's name.
  */
 export const WorkDumpSchema = z
   .object({

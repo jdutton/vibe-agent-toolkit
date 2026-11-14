@@ -31,6 +31,10 @@ export const WORK_MIN_RUNS = 3;
  * A counter name this build reads — derived from the utils tuple, never a
  * hand-kept copy. A dump from a newer vat carrying a counter this build does
  * not know is therefore refused; run the lab from the newer side.
+ *
+ * ⚠️ Not when a counter was removed or renamed: a removed counter makes the
+ * older lab the reader of a mixed pair, and a renamed one leaves no lab build
+ * that reads dumps from both sides.
  */
 export const WorkCounterNameSchema = z.enum(WORK_COUNTER_NAMES);
 

@@ -28,7 +28,7 @@ import { crawlSourceFor } from '../../src/projection/crawl-source.js';
 import { populate } from '../../src/projection/merge.js';
 import type { ExtentKey, ExtentScopedRows } from '../../src/projection/store.js';
 import { CONDITION_WITHOUT_REFERENCE } from '../../src/schemas/projection-resources.js';
-import { FakeProjectionStore } from '../fake-projection-store.js';
+import { FakeFactStore } from '../fake-fact-store.js';
 import { setupSubdirTestSuite } from '../test-helpers.js';
 
 const suite = setupSubdirTestSuite('projection-store-unlistable-gate-');
@@ -40,11 +40,11 @@ const TREE_HASH = 'tree-0000000000000000000000000000000000000000';
 const ROW_DIR = 'build/locked';
 
 /**
- * A {@link FakeProjectionStore} whose reads carry one extra
+ * A {@link FakeFactStore} whose reads carry one extra
  * `EXTENT_DIRECTORY_UNLISTABLE` row for {@link ROW_DIR} when `inject` is set —
  * the stored shape a run over a locked, gitignored directory leaves behind.
  */
-class UnlistableRowStore extends FakeProjectionStore {
+class UnlistableRowStore extends FakeFactStore {
   inject = false;
 
   override async readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
@@ -75,7 +75,7 @@ class UnlistableRowStore extends FakeProjectionStore {
  *
  * @returns Whether the run derived rather than being served — `populate()`'s own outcome
  */
-async function derivedThrough(store: FakeProjectionStore): Promise<boolean> {
+async function derivedThrough(store: FakeFactStore): Promise<boolean> {
   const registry = new ContributorRegistry();
   registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
   const { outcome } = await populate({

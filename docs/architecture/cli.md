@@ -637,7 +637,7 @@ Apply it selectively, to genuinely relational checks — done by default, every 
 artifacts instead of one.
 
 ⛔ **As a runtime optimizer — rejected, on two INDEPENDENT grounds.** It would essentially never
-choose SQL: `buildResourceProjection` hands the rows back in memory before the ephemeral database
+choose SQL: `buildResourceProjection` hands the rows back in memory before the run database
 exists at all, so the TypeScript arm is a for-loop over data already in hand, and the SQL arm's whole
 measured share of a run is the 0.0008–0.004 s above. A scheduler would be choosing between two arms
 of the 0.1%. And it reintroduces the dependency through the back door: an optimizer that MAY choose
@@ -648,7 +648,7 @@ optional thing.**
 #### 🔑 Adopter SQL runs unsandboxed on purpose — and contributed SQL is not adopter SQL
 
 What a statement may BE is gated hard, and documented where it is enforced: `assertIsQuery` and
-`detachForeignSchemas` in `packages/projection-sqlite/src/store.ts` refuse `ATTACH` and `PRAGMA`,
+`detachForeignSchemas` in `packages/projection-sqlite/src/sql-gate.ts` refuse `ATTACH` and `PRAGMA`,
 with the measured cross-repository leak that motivated both, and `CHANGELOG.md`'s `--budget` entry
 carries why nothing inside this process can interrupt a runaway statement.
 
@@ -665,7 +665,7 @@ deliberately. One paragraph must not be stretched to cover both domains.
 #### 🚨 The population is charged to NOBODY, and the clock proves it
 
 A check's published `durationSecs` is the STATEMENT alone. The git tracker, the projection build and
-the load into the ephemeral database happen ONCE and serve every check in the run, so folding that
+the load into the run database happen ONCE and serve every check in the run, so folding that
 shared setup into each rule would make N cheap rules look expensive and make the per-rule numbers sum
 to N times a cost paid once. It is published separately instead — `populationSecs` beside
 `population` — so a reader reconciles the parts against `durationSecs` rather than inferring the

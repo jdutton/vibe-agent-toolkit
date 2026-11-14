@@ -17,16 +17,16 @@ import {
   CLAUDE_RULE_FRONTMATTER_INVALID_CHECK,
   CLAUDE_RULE_GLOB_INERT_CHECK,
   CLAUDE_RULE_LINK_UNCHECKED_CHECK,
-  type ExtentKey,
   type ExtentScopedRows,
 } from '@vibe-agent-toolkit/resources';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { openEphemeralProjectionStore, type SqlQueryableStore } from '../src/store.js';
+import { openRunDatabase, type RunDatabase } from '../src/run-database.js';
 
-import { contentKey, realizationRow, sampleBlobRows, sampleExtentRows } from './fixtures.js';
+import { contentKey, realizationRow, sampleBlobRows, sampleExtentRows, sampleProjection } from './fixtures.js';
 
-const KEY: ExtentKey = { rootId: 'root-1', treeHash: 'tree-aaa' };
+/** The one root these trees belong to. */
+const ROOT_ID = 'root-1';
 
 const RULES_ID = 'res-rules';
 const RULES_PATH = '.claude/rules/demo.md';
@@ -40,7 +40,7 @@ const UNREALIZED_ID = 'res-unrealized';
  * @returns The extent rows
  */
 function fannedOutRows(): ExtentScopedRows {
-  const base = sampleExtentRows(KEY.rootId);
+  const base = sampleExtentRows(ROOT_ID);
   const pattern = (
     resourceId: string,
     ordinal: number,
@@ -147,7 +147,7 @@ const LINK_PATHS = [
  *   a silently empty fixture would make the differential agree on nothing
  */
 function linkConditionRows(): ExtentScopedRows {
-  const base = sampleExtentRows(KEY.rootId);
+  const base = sampleExtentRows(ROOT_ID);
   const template = base.realizationConditions[0];
   if (template === undefined) throw new Error('sampleExtentRows carries no realizationConditions row');
   const condition = (
@@ -175,7 +175,7 @@ function linkConditionRows(): ExtentScopedRows {
   };
 }
 
-let store: SqlQueryableStore | undefined;
+let store: RunDatabase | undefined;
 
 afterEach(async () => {
   await store?.close();
@@ -194,8 +194,8 @@ describe('built-in SQL twins', () => {
 
   it('claude-rule-glob-inert: one row per finding, anchored where the finding is', async () => {
     const rows = fannedOutRows();
-    store = openEphemeralProjectionStore();
-    await store.writeExtent(KEY, rows);
+    // No blob rows: these twins read the extent alone.
+    store = openRunDatabase({ ...sampleProjection([]), ...rows });
 
     const fromSql = store.query(CLAUDE_RULE_GLOB_INERT_CHECK.sqlTwin)
       .map((row) => `${typeof row['path'] === 'string' ? row['path'] : ''} ${String(row['pattern'])}`)
@@ -224,7 +224,7 @@ describe('built-in SQL twins', () => {
     const broken = contentKey('c');
     const healthy = contentKey('d');
     const HEALTHY_RULES = '.claude/rules/fine.md';
-    const base = sampleExtentRows(KEY.rootId);
+    const base = sampleExtentRows(ROOT_ID);
     const rows: ExtentScopedRows = {
       ...base,
       resourceRealizations: [
@@ -244,9 +244,7 @@ describe('built-in SQL twins', () => {
     };
     const brokenBlob = { ...sampleBlobRows(broken).blobs[0], contentKey: broken, frontmatter: null, frontmatterError: 'bad yaml' };
     const healthyBlob = { ...sampleBlobRows(healthy).blobs[0], contentKey: healthy };
-    store = openEphemeralProjectionStore();
-    await store.writeBlobFacts({ blobs: [brokenBlob, healthyBlob], blobReferences: [], blobSections: [], blobConditions: [], harnessBlobFacts: [], harnessBlobImports: [] });
-    await store.writeExtent(KEY, rows);
+    store = openRunDatabase({ ...sampleProjection([]), blobs: [brokenBlob, healthyBlob], ...rows });
 
     const fromSql = store.query(CLAUDE_RULE_FRONTMATTER_INVALID_CHECK.sqlTwin)
       .map((row) => String(row['path']))
@@ -262,8 +260,8 @@ describe('built-in SQL twins', () => {
 
   it('claude-rule-link-unchecked: the same rules links, and no case variant of one', async () => {
     const rows = linkConditionRows();
-    store = openEphemeralProjectionStore();
-    await store.writeExtent(KEY, rows);
+    // No blob rows: these twins read the extent alone.
+    store = openRunDatabase({ ...sampleProjection([]), ...rows });
 
     const fromSql = store.query(CLAUDE_RULE_LINK_UNCHECKED_CHECK.sqlTwin)
       .map((row) => String(row['path']))

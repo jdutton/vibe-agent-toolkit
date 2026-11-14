@@ -22,7 +22,7 @@
  *   matches nothing — every one of them returns zero rows and reads as a pass.
  *
  * 🔑 That second bullet is load-bearing prose held up by a gate in ANOTHER
- * package: `assertIsQuery` in `packages/projection-sqlite/src/store.ts` refuses
+ * package: `assertIsQuery` in `packages/projection-sqlite/src/sql-gate.ts` refuses
  * any statement whose first significant token is not `SELECT`, `WITH` or
  * `VALUES`. Without it the sentence is false in the direction that matters — an
  * author cannot pass vacuously by *selecting* nothing, but they could pass
@@ -97,7 +97,7 @@ import { EXAMINED_ALLOWED, type ResourceCheck } from '../schemas/project-config.
 import { findingLocation } from './finding-location.js';
 
 /**
- * The code every statement a projection query store REFUSES to run carries:
+ * The code every statement the run database REFUSES to run carries:
  * not a query, a second statement, placeholders that do not pair with their
  * values, or SQLite's own refusal (a name the schema lacks, an unevaluated
  * derived relation). The backend (`@vibe-agent-toolkit/projection-sqlite`)
@@ -329,7 +329,7 @@ const POSITION_ALLOWED = 'a positive integer';
  * @param name - The check's key in `resources.checks`
  * @param check - Its declaration
  * @param rows - Exactly what the statement returned — undecoded, as SQLite holds
- *   it. See `SqlQueryableStore.query`: arbitrary SQL has no table spec, so a
+ *   it. See `RunDatabase.query` in `projection-sqlite`: arbitrary SQL has no table spec, so a
  *   boolean arrives as `0`/`1` and a date as text. The message renders what is
  *   there rather than pretending otherwise
  * @returns One finding per row, in the order SQLite produced them, each naming

@@ -32,9 +32,20 @@ export const BAN_RULES = ['no-restricted-imports', 'no-restricted-syntax'] as co
  * so no program is built and the file need not exist on disk.
  */
 export function banLinter(repoRoot: string): (relative: string, code: string) => Promise<string[]> {
+  return syntaxRuleLinter(repoRoot, BAN_RULES);
+}
+
+/**
+ * {@link banLinter} for any set of rules that read syntax alone: lints `code` as the file
+ * `relative` of `repoRoot`, running only `rules`, each finding as `rule: message`.
+ */
+export function syntaxRuleLinter(
+  repoRoot: string,
+  rules: readonly string[],
+): (relative: string, code: string) => Promise<string[]> {
   const eslint = repoEslint({
     cwd: repoRoot,
-    ruleFilter: ({ ruleId }) => (BAN_RULES as readonly string[]).includes(ruleId),
+    ruleFilter: ({ ruleId }) => rules.includes(ruleId),
     overrideConfig: [{ files: ['**/*.ts', '**/*.cts'], languageOptions: { parserOptions: { project: null, projectService: false } } }],
   });
   return async (relative, code) => {

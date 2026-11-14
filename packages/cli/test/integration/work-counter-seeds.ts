@@ -17,7 +17,7 @@
 
 import { writeFileSync } from 'node:fs';
 
-import { openEphemeralProjectionStore, openSqliteProjectionStore } from '@vibe-agent-toolkit/projection-sqlite';
+import { openRunDatabase, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import {
   type BlobScopedRows,
   computeContentKey,
@@ -26,6 +26,8 @@ import {
   ParseDispatcher,
   parseContentCached,
   type ParsePoolPolicy,
+  PROJECTION_TABLES,
+  type Projection,
   readContentWithKey,
 } from '@vibe-agent-toolkit/resources';
 import { readWorkCounters, safePath, WORK_COUNTER_NAMES, type WorkCounter } from '@vibe-agent-toolkit/utils';
@@ -38,7 +40,7 @@ import { withQueriedProjection } from '../../src/utils/projection-query.js';
 import { PROJECTION_STORE_DIR_ENV } from '../../src/utils/projection-store.js';
 import { commitTestFixture } from '../test-helpers.js';
 
-/** The store's lane counters. */
+/** The fact store's counters. */
 type StoreLaneCounter = Extract<WorkCounter, `store.${'rows' | 'reads' | 'writes'}.${string}`>;
 
 /** The parse route's and the content key's counters. */
@@ -111,76 +113,94 @@ const EMPTY_EXTENT = {} as ExtentScopedRows;
 /** The extent key the store seeds use. */
 const EXTENT_KEY = { rootId: 'seed-root', treeHash: 'seed-tree' };
 
-type Lane = 'persistent' | 'ephemeral';
-
 /**
- * A store of one lane, closed after the seed.
+ * A fact store, closed after the seed.
  *
- * @param lane - Which store
  * @param scope - The seed's scope
  * @returns The open store
  */
-function storeOf(lane: Lane, scope: SeedScope): ReturnType<typeof openSqliteProjectionStore> {
-  const store = lane === 'persistent' ? openSqliteProjectionStore({ directory: scope.dir() }) : openEphemeralProjectionStore();
+function storeOf(scope: SeedScope): ReturnType<typeof openSqliteFactStore> {
+  const store = openSqliteFactStore({ directory: scope.dir() });
   scope.defer(() => store.close());
   return store;
 }
 
 /** A read of a store holding one row: one read, one row decoded. */
-function decodeSeed(lane: Lane): Seed {
+function decodeSeed(): Seed {
   return {
     prepare: async (scope) => {
-      const store = storeOf(lane, scope);
+      const store = storeOf(scope);
       await store.writeBlobFacts(oneBlobRow());
       return async () => {
         await store.readBlobFacts([BLOB_KEY]);
         return undefined;
       };
     },
-    delta: { [`store.reads.${lane}`]: 1, [`store.rows.decoded.${lane}`]: 1 },
+    delta: { 'store.reads.persistent': 1, 'store.rows.decoded.persistent': 1 },
   };
 }
 
 /** A read of an extent never written: one read, nothing decoded. */
-function readMissSeed(lane: Lane): Seed {
+function readMissSeed(): Seed {
   return {
     prepare: (scope) => {
-      const store = storeOf(lane, scope);
+      const store = storeOf(scope);
       return async () => {
         await store.readExtent(EXTENT_KEY);
         return undefined;
       };
     },
-    delta: { [`store.reads.${lane}`]: 1 },
+    delta: { 'store.reads.persistent': 1 },
   };
 }
 
 /** One write: of one blob row, or of an extent with no rows. */
-function writeSeed(lane: Lane, rows: 'one blob row' | 'no rows'): Seed {
+function writeSeed(rows: 'one blob row' | 'no rows'): Seed {
   return {
     prepare: (scope) => {
-      const store = storeOf(lane, scope);
+      const store = storeOf(scope);
       return async () => {
         await (rows === 'one blob row' ? store.writeBlobFacts(oneBlobRow()) : store.writeExtent(EXTENT_KEY, EMPTY_EXTENT));
         return undefined;
       };
     },
     delta: rows === 'one blob row'
-      ? { [`store.writes.${lane}`]: 1, [`store.rows.written.${lane}`]: 1 }
-      : { [`store.writes.${lane}`]: 1 },
+      ? { 'store.writes.persistent': 1, 'store.rows.written.persistent': 1 }
+      : { 'store.writes.persistent': 1 },
   };
 }
 
 export const STORE_SEEDS: Readonly<Record<StoreLaneCounter, Seed>> = {
-  'store.rows.decoded.persistent': decodeSeed('persistent'),
-  'store.rows.decoded.ephemeral': decodeSeed('ephemeral'),
-  'store.reads.persistent': readMissSeed('persistent'),
-  'store.reads.ephemeral': readMissSeed('ephemeral'),
-  'store.writes.persistent': writeSeed('persistent', 'no rows'),
-  'store.writes.ephemeral': writeSeed('ephemeral', 'no rows'),
-  'store.rows.written.persistent': writeSeed('persistent', 'one blob row'),
-  'store.rows.written.ephemeral': writeSeed('ephemeral', 'one blob row'),
+  'store.rows.decoded.persistent': decodeSeed(),
+  'store.reads.persistent': readMissSeed(),
+  'store.writes.persistent': writeSeed('no rows'),
+  'store.rows.written.persistent': writeSeed('one blob row'),
 };
+
+/**
+ * A projection of one `blobs` row and one root row, every other table empty:
+ * two rows, in one blob-scoped write and one extent write.
+ */
+function oneBlobProjection(): Projection {
+  const empty = Object.fromEntries(Object.keys(PROJECTION_TABLES).map((table) => [table, []]));
+  return {
+    ...(empty as unknown as Projection),
+    ...oneBlobRow(),
+    roots: [{ id: EXTENT_KEY.rootId, path: '/seed' }],
+  };
+}
+
+/** Opening a run database over {@link oneBlobProjection}: its load is hydration. */
+function hydrationSeed(): Seed {
+  return {
+    prepare: (scope) => () => {
+      const database = openRunDatabase(oneBlobProjection());
+      scope.defer(() => database.close());
+      return undefined;
+    },
+    delta: { 'hydration.writes': 2, 'hydration.rows.written': 2 },
+  };
+}
 
 /** A document unique to one seed, so no parse cache can already hold it. */
 function uniqueDocument(label: string): string {
@@ -353,16 +373,16 @@ const PLAIN_TREE = { 'a.md': '# A\n\nPlain.\n' };
 
 export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
   // A cold population: the one document parsed and keyed, the extent derived
-  // and written to the store, loaded into the ephemeral one, and git asked for
+  // and written to the store, loaded into the run database, and git asked for
   // the tree.
   'extent.derived': {
     prepare: (scope) => queriedTree(scope, PLAIN_TREE),
     delta: {
       'store.reads.persistent': 1,
       'store.writes.persistent': 2,
-      'store.writes.ephemeral': 2,
+      'hydration.writes': 2,
       'store.rows.written.persistent': 12,
-      'store.rows.written.ephemeral': 12,
+      'hydration.rows.written': 12,
       'extent.derived': 1,
       'parse.dispatched': 1,
       'content.hashed': 1,
@@ -381,8 +401,8 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
     delta: {
       'store.rows.decoded.persistent': 12,
       'store.reads.persistent': 2,
-      'store.writes.ephemeral': 2,
-      'store.rows.written.ephemeral': 12,
+      'hydration.writes': 2,
+      'hydration.rows.written': 12,
       'extent.served': 1,
       'git.calls': 1,
     },
@@ -399,9 +419,9 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'store.rows.decoded.persistent': 15,
       'store.reads.persistent': 2,
       'store.writes.persistent': 2,
-      'store.writes.ephemeral': 2,
+      'hydration.writes': 2,
       'store.rows.written.persistent': 15,
-      'store.rows.written.ephemeral': 16,
+      'hydration.rows.written': 16,
       'extent.derived': 1,
       'store.miss.refusedPairs': 1,
       'parse.dispatched': 2,
@@ -412,6 +432,8 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
     },
     reported: (result) => Number(/store miss: (\d+) refused/u.exec(result ?? '')?.[1] ?? Number.NaN),
   },
+  'hydration.writes': hydrationSeed(),
+  'hydration.rows.written': hydrationSeed(),
   'git.calls': {
     prepare: () => () => {
       checkGitInstalled();

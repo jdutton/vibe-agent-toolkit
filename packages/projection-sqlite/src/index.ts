@@ -1,5 +1,6 @@
 /**
- * A SQLite-backed `ProjectionStore` for VAT's resource projection.
+ * A SQLite-backed `FactStore` for VAT's resource projection, and the run
+ * database a run's SQL runs on.
  *
  * This package is a **separate install**: a storage backend is a choice, and
  * `@vibe-agent-toolkit/resources` — VAT's most widely installed package —
@@ -14,7 +15,7 @@
  * without the user passing a flag. (Saying it "arrived in 22.13.0" is the
  * convenient shorthand and is wrong: on 22.5–22.12 it exists, flagged.) The
  * `engines` floor is one step higher, **`>=22.16.0`**, because
- * `SqliteProjectionStore.columns()` calls `StatementSync.columns()`, which Node
+ * `RunDatabase.columns()` calls `StatementSync.columns()`, which Node
  * added in 22.16.0 — absent on 22.15.1, present on 22.16.0, measured. Deriving
  * the names any other way was tried and refused: wrapping the statement as a
  * subquery under an always-false outer join renames a duplicate result column
@@ -24,7 +25,7 @@
  * used to read "while the rest of the toolkit stays at `>=22.0.0` — a backend
  * nobody has to install should not raise everyone else's floor." That argument
  * died when this package stopped being optional: the CLI depends on it
- * outright, and `vat resources query|check` build their ephemeral store from it
+ * outright, and `vat resources query|check` build their run database from it
  * on every run, so Node 22.0–22.12 could not run those commands while the
  * manifests still advertised support for them. The toolkit floor moved to
  * `>=22.13.0` to stop advertising what it cannot do, and later to `>=22.16.0`
@@ -75,18 +76,21 @@ export {
   encodeValue,
 } from './values.js';
 
-// The store. Opens WAL with the pragmas in the one order that survives
-// contention — see `store.ts`. The ephemeral variant answers the same schema
-// with no file at all, so a query does not depend on a cache being there; it
-// deliberately skips every one of those pragmas, which are all file properties.
-// The compile probe is the one place every derived relation exists without a
-// lens having filled it, which is why it can compile and cannot answer.
+// The fact store: the `FactStore` port over a file, and nothing else. Opens WAL
+// with the pragmas in the one order that survives contention — see `store.ts`.
 export {
-  type ProjectionCompileProbe,
-  type SqlQueryableStore,
   type SqliteStoreOptions,
   defaultStoreDirectory,
-  openEphemeralProjectionStore,
-  openProjectionCompileProbe,
-  openSqliteProjectionStore,
+  openSqliteFactStore,
 } from './store.js';
+
+// The one handle SQL runs on, opened from one run's projection, and the compile
+// probe: the one place every derived relation exists without a lens having
+// filled it, which is why it can compile and cannot answer. See `run-database.ts`
+// on why the run database is no second storage contract.
+export {
+  type ProjectionCompileProbe,
+  type RunDatabase,
+  openProjectionCompileProbe,
+  openRunDatabase,
+} from './run-database.js';

@@ -10,15 +10,17 @@
  */
 
 import { mkdtempSync, rmSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 
 import { DERIVED_TABLES, PROJECTION_TABLES, allDerivedSpecs } from '@vibe-agent-toolkit/resources';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-
-
+import { openRunDatabase } from '../src/run-database.js';
 import { EXTENT_KEY_COLUMNS, createDerivedTableSql, insertDerivedSql } from '../src/schema-sql.js';
-import { openEphemeralProjectionStore, openSqliteProjectionStore } from '../src/store.js';
+import { openSqliteFactStore } from '../src/store.js';
+
+import { sampleProjection } from './fixtures.js';
 
 /** A minimal lens row, since every field but `contextId` is fixed for these. */
 function lensRow(contextId: string): Record<string, unknown> {
@@ -76,9 +78,9 @@ describe('derived relations are shaped like tables without being tables', () => 
   });
 });
 
-describe('writeDerived fills the relations the ephemeral store creates', () => {
+describe('writeDerived fills the relations the run database creates', () => {
   it('round-trips rows through SQL', async () => {
-    const store = openEphemeralProjectionStore();
+    const store = openRunDatabase(sampleProjection());
     try {
       await store.writeDerived({
         lensContexts: [lensRow('lens-a')],
@@ -95,7 +97,7 @@ describe('writeDerived fills the relations the ephemeral store creates', () => {
     // The failure this guards: two evaluations in one process are two answers to
     // two questions. Appending would leave both in the table and silently double
     // every count a caller groups.
-    const store = openEphemeralProjectionStore();
+    const store = openRunDatabase(sampleProjection());
     try {
       await store.writeDerived({ edges: [edgeRow('res-1', 0, 'lens-a')] });
       await store.writeDerived({ edges: [edgeRow('res-9', 0, 'lens-b')] });
@@ -106,7 +108,7 @@ describe('writeDerived fills the relations the ephemeral store creates', () => {
   });
 
   it('leaves a relation the caller OMITTED alone, which is not the same as empty', async () => {
-    const store = openEphemeralProjectionStore();
+    const store = openRunDatabase(sampleProjection());
     try {
       await store.writeDerived({ lensContexts: [lensRow('lens-a')], edges: [edgeRow('res-1', 0, 'lens-a')] });
       // Names `edges` only: `lensContexts` is absent, so it must survive.
@@ -121,7 +123,7 @@ describe('writeDerived fills the relations the ephemeral store creates', () => {
   });
 
   it('accepts a null in a nullable key column, since an edge may carry no ordinal', async () => {
-    const store = openEphemeralProjectionStore();
+    const store = openRunDatabase(sampleProjection());
     try {
       await store.writeDerived({ edges: [edgeRow('res-1', 0, 'lens-a')] });
       await expect(
@@ -142,7 +144,7 @@ describe('an UNEVALUATED derived relation does not exist, so SQLite refuses it',
   // 0. With no table, the engine itself says `no such table`, whatever spelling
   // reached it.
   it('throws `no such table` for a relation nothing wrote', async () => {
-    const store = openEphemeralProjectionStore();
+    const store = openRunDatabase(sampleProjection());
     try {
       expect(() => store.query('SELECT * FROM edges')).toThrow(/no such table: edges/u);
     } finally {
@@ -151,7 +153,7 @@ describe('an UNEVALUATED derived relation does not exist, so SQLite refuses it',
   });
 
   it('creates the relation on an EMPTY write — "evaluated, no rows" is a real answer', async () => {
-    const store = openEphemeralProjectionStore();
+    const store = openRunDatabase(sampleProjection());
     try {
       await store.writeDerived({ edges: [] });
       expect(store.query('SELECT * FROM edges')).toEqual([]);
@@ -161,7 +163,7 @@ describe('an UNEVALUATED derived relation does not exist, so SQLite refuses it',
   });
 
   it('creates ONLY the relations the write names', async () => {
-    const store = openEphemeralProjectionStore();
+    const store = openRunDatabase(sampleProjection());
     try {
       await store.writeDerived({ edges: [edgeRow('res-1', 0, 'lens-a')] });
       expect(store.query('SELECT COUNT(*) AS n FROM edges')).toEqual([{ n: 1 }]);
@@ -172,7 +174,7 @@ describe('an UNEVALUATED derived relation does not exist, so SQLite refuses it',
   });
 
   it('rolls a failed first write back to ABSENT, and a later write still creates the relation', async () => {
-    const store = openEphemeralProjectionStore();
+    const store = openRunDatabase(sampleProjection());
     try {
       await expect(store.writeDerived({ edges: [{ ...edgeRow('res-1', 0, 'lens-a'), refOrdinal: 'x' }] }))
         .rejects.toThrow(/numeric column/u);
@@ -185,41 +187,40 @@ describe('an UNEVALUATED derived relation does not exist, so SQLite refuses it',
   });
 });
 
-describe('the shared on-disk store REFUSES a lens evaluation', () => {
-  // 🚨 This is the whole safety property, and it had NO test in either
-  // direction. It also is not what an earlier docstring claimed: the claim was
-  // that `openSqliteProjectionStore` returned a narrower type so `writeDerived`
-  // was unreachable on disk. It returns `SqlQueryableStore` — the method is
-  // right there on the handle — so the guarantee is a refusal, and a refusal
-  // nothing exercises is a refusal nobody notices going away.
-  //
-  // Why it matters: that database is ONE per VAT release, shared by every root
-  // on the machine. Derived rows carry no extent key, so eviction cannot reach
-  // them, and `writeDerived` clears each relation with no root predicate — one
-  // repository's evaluation would delete another repository's rows.
-  it('throws instead of writing, and names the actual mistake', async () => {
+describe('the shared on-disk fact store cannot take a lens evaluation', () => {
+  // 🚨 The whole safety property. That database is ONE per VAT release, shared
+  // by every root on the machine. Derived rows carry no extent key, so eviction
+  // cannot reach them, and `writeDerived` clears each relation with no root
+  // predicate — one repository's evaluation would delete another repository's
+  // rows. The factory returns the `FactStore` port, which has no such method.
+  it('has no writeDerived, in the type or on the handle', async () => {
     const directory = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-derived-refusal-'));
-    const onDisk = openSqliteProjectionStore({ directory });
+    const onDisk = openSqliteFactStore({ directory });
     try {
-      // The method IS present on the file-backed handle — that is the point.
-      expect(typeof onDisk.writeDerived).toBe('function');
-      await expect(onDisk.writeDerived({ edges: [edgeRow('res-1', 0, 'lens-a')] }))
-        .rejects.toThrow(/no derived relations/u);
+      // @ts-expect-error -- a lens's rows never reach the fact store
+      expect(onDisk.writeDerived).toBeUndefined();
+      expect('writeDerived' in onDisk).toBe(false);
     } finally {
       await onDisk.close();
       rmSync(directory, { recursive: true, force: true });
     }
   });
 
-  it('has no table for them even if the refusal were bypassed', async () => {
+  it('has no table for them either', async () => {
+    // The DDL split is the second line of defence, and it is what makes the
+    // "why are these two schemas different?" cleanup dangerous.
     const directory = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-derived-absent-'));
-    const onDisk = openSqliteProjectionStore({ directory });
+    const onDisk = openSqliteFactStore({ directory });
+    await onDisk.close();
+    const raw = new DatabaseSync(safePath.join(directory, 'projection.db'), { readOnly: true });
     try {
-      // The DDL split is the second line of defence, and it is what makes the
-      // "why are these two loops different?" cleanup dangerous.
-      expect(() => onDisk.query('SELECT 1 FROM edges')).toThrow(/no such table/u);
+      const names = raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row['name']);
+      expect(names, 'the control found no table at all — the check is vacuous').toContain('blobs');
+      for (const spec of allDerivedSpecs()) {
+        expect(names).not.toContain(spec.name);
+      }
     } finally {
-      await onDisk.close();
+      raw.close();
       rmSync(directory, { recursive: true, force: true });
     }
   });

@@ -1037,7 +1037,7 @@
   `@vibe-agent-toolkit/utils/yaml`: `YAML_EDIT_INPUT_REFUSED_CODE`. `@vibe-agent-toolkit/resources`: `PROJECTION_STATEMENT_REFUSED_CODE`,
   `LINK_AUTH_CONFIG_CODE`, `matchesCollection`, `ExternalPluginSourceSchema`,
   `readConfigText`, `readConfigTextSync`. `@vibe-agent-toolkit/projection-sqlite`:
-  `SqlQueryableStore.columns(sql, ...params)`.
+  `RunDatabase.columns(sql, ...params)`.
 
 - **`@vibe-agent-toolkit/utils` exports ordered and bounded-parallel async iteration:**
   `forEachInOrder`, `mapInOrder`, `everyInOrder` (one call at a time; the first rejection, or the

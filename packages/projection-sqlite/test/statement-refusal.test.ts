@@ -13,7 +13,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { describe, expect, it } from 'vitest';
 
-import { isStatementRefusal, runGated } from '../src/store.js';
+import { isStatementRefusal, runGated } from '../src/sql-gate.js';
 
 /** A `node:sqlite`-shaped error carrying one extended result code. */
 function sqliteError(errcode: number): Error {
@@ -50,6 +50,25 @@ describe('isStatementRefusal — exact extended codes only', () => {
 
   it('does not code an error that is not node:sqlite\'s', () => {
     expect(isStatementRefusal(Object.assign(new Error('x'), { errcode: 1 }))).toBe(false);
+  });
+});
+
+describe('runGated — no foreign schema outlives a statement', () => {
+  it('detaches every schema the connection was not opened on, a name needing quotes included', () => {
+    const database = new DatabaseSync(':memory:');
+    try {
+      // Attached directly, past the kind gate that refuses an ATTACH statement: the sweep
+      // is the second line, and has to hold on its own.
+      database.exec(`ATTACH DATABASE ':memory:' AS plain`);
+      database.exec(`ATTACH DATABASE ':memory:' AS "we""ird"`);
+
+      expect(runGated(database, 'SELECT 1 AS x', [], (statement) => statement.all())).toEqual([{ x: 1 }]);
+
+      const schemas = (database.prepare('PRAGMA database_list').all() as { name: string }[]).map(({ name }) => name);
+      expect(schemas).toEqual(['main']);
+    } finally {
+      database.close();
+    }
   });
 });
 

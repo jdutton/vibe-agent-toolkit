@@ -117,7 +117,7 @@ import {
   splitProjectionByScope,
   type ExtentKey,
   type ExtentScopedRows,
-  type ProjectionStore,
+  type FactStore,
 } from './store.js';
 
 /**
@@ -346,7 +346,7 @@ export function populationOracles(options: {
  */
 export interface PopulationCache {
   /** The backend. `resources` never selects one; a caller supplies it. */
-  readonly store: ProjectionStore;
+  readonly store: FactStore;
   /**
    * A hash naming this tree's exact contents — see {@link ExtentKey.treeHash}.
    *

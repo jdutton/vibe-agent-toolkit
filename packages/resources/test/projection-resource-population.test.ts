@@ -18,11 +18,11 @@ import type {
   BlobScopedRows,
   ExtentKey,
   ExtentScopedRows,
-  ProjectionStore,
+  FactStore,
 } from '../src/projection/store.js';
 import { ResourceRegistry, type RegistryCrawl } from '../src/resource-registry.js';
 
-import { extentKeyOf, FakeProjectionStore } from './fake-projection-store.js';
+import { extentKeyOf, FakeFactStore } from './fake-fact-store.js';
 import { setupSubdirTestSuite } from './test-helpers.js';
 
 /** The plain markdown member every fixture below starts from. */
@@ -124,7 +124,7 @@ async function populationOf(gitTracker?: GitTracker): Promise<string[]> {
  * carries no `ORDER BY` guarantee, so a hit must not depend on the order rows
  * were written in.
  */
-class ReorderingStore extends FakeProjectionStore {
+class ReorderingStore extends FakeFactStore {
   override async readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
     const held = await super.readExtent(key);
     if (held === undefined) return undefined;
@@ -180,7 +180,7 @@ describe('buildResourcePopulation', () => {
 
   it('carries the population\'s outcome out with its paths: derived without a store, then written, then a hit', async () => {
     await write(DOC_A, '# A\n');
-    const store = new FakeProjectionStore();
+    const store = new FakeFactStore();
     const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
 
     const uncached = await buildResourcePopulation({ outputs: [], root: suite.tempDir });
@@ -258,7 +258,7 @@ describe('buildResourcePopulation', () => {
  * enumeration, so the assertion is about work that happened rather than about a
  * cache hit.
  */
-class CapturingStore implements ProjectionStore {
+class CapturingStore implements FactStore {
   /** The extent-scoped rows of the most recent write, if there was one. */
   written: ExtentScopedRows | undefined;
 
@@ -334,7 +334,7 @@ describe('buildResourceProjection', () => {
 
   it('returns the populate outcome beside the projection', async () => {
     await write(DOC_A, '# A\n');
-    const store = new FakeProjectionStore();
+    const store = new FakeFactStore();
     const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
     const options = { root: suite.tempDir, cache };
 
@@ -425,7 +425,7 @@ describe('buildResourceProjection', () => {
 });
 
 /** A store double that also records the key of every extent read, in order. */
-class KeyRecordingStore extends FakeProjectionStore {
+class KeyRecordingStore extends FakeFactStore {
   readonly keysRead: string[] = [];
 
   override readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
@@ -480,7 +480,7 @@ describe('one question for every resources lane', () => {
     // is still stored, so membership — which reads no blob table — hits, and the
     // full lane's coverage gate fails, re-derives and re-writes.
     const gitTracker = await buildIgnoredFixture();
-    const store = new FakeProjectionStore();
+    const store = new FakeFactStore();
     const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
     const options = { root: suite.tempDir, gitTracker, cache };
     const { projection } = await buildResourceProjection(options);

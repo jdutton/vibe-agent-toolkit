@@ -123,6 +123,9 @@ const PROBE_FILES: Readonly<Record<string, string>> = {
   'no-raw-signal-listener': 'packages/cli/src/commands/audit/git-url-clone.ts',
   // Scoped to the integration and system tiers, whose timeouts the platform scales.
   'no-literal-test-timeout': 'packages/cli/test/system/test-common.ts',
+  // Enabled everywhere `PROJECTION_SQLITE_IMPORTERS` does not match; the port's own package is
+  // the file it most governs.
+  'projection-sqlite-import-boundary': 'packages/resources/src/projection/merge.ts',
   // Scoped to product `src/`; the probe reads the object store through `runGitBytes`.
   'no-text-git-object-read': 'packages/agent-skills/src/skill-source/git-clone.ts',
 };

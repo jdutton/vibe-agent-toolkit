@@ -85,7 +85,7 @@ export const backend = {
   openCalls,
   /** The module namespace a `vi.mock('@vibe-agent-toolkit/projection-sqlite', …)` factory returns. */
   moduleExports: (): Record<string, unknown> => ({
-    openSqliteProjectionStore: (options: unknown) => {
+    openSqliteFactStore: (options: unknown) => {
       openCalls.count += 1;
       openCalls.options.push(options);
       return makeStore();

@@ -1,5 +1,5 @@
 /**
- * The simplest thing that satisfies {@link ProjectionStore} — and counts what it
+ * The simplest thing that satisfies {@link FactStore} — and counts what it
  * was asked to do. Shared by every suite that drives `populate` through a
  * cache, so the double cannot drift between them.
  *
@@ -7,12 +7,12 @@
  *
  * `resources` must never import `@vibe-agent-toolkit/projection-sqlite`. That is
  * the architectural seam the whole storage design exists to preserve — the
- * driver is written against {@link ProjectionStore} and against nothing else, so
+ * driver is written against {@link FactStore} and against nothing else, so
  * a second backend cannot quietly change what a hit means. Importing the shipped
  * backend to test the driver would dissolve that seam in the one place it is
  * most load-bearing.
  *
- * So {@link FakeProjectionStore} is deliberately the dumbest store that can
+ * So {@link FakeFactStore} is deliberately the dumbest store that can
  * answer: one bundle per `(rootId, treeHash)`, one bundle per content key, and a
  * counter on every method. It does **not** implement `writeExtent`'s
  * additive-per-context semantics; that contract is a property of a *backend* and
@@ -33,7 +33,7 @@ import type {
   BlobScopedRows,
   ExtentKey,
   ExtentScopedRows,
-  ProjectionStore,
+  FactStore,
 } from '../src/projection/store.js';
 import { PROJECTION_TABLES } from '../src/projection/table-registry.js';
 
@@ -134,7 +134,7 @@ function emptyBlobBundle(): RowBundle {
 }
 
 /**
- * The simplest thing that satisfies {@link ProjectionStore} — and counts what it
+ * The simplest thing that satisfies {@link FactStore} — and counts what it
  * was asked to do.
  *
  * The counters are the point. "The store answered" is only observable from the
@@ -142,7 +142,7 @@ function emptyBlobBundle(): RowBundle {
  * nothing, and without a count of the write calls a hit and a miss that happened
  * to produce identical rows are the same observation.
  */
-export class FakeProjectionStore implements ProjectionStore {
+export class FakeFactStore implements FactStore {
   /** How many times {@link readExtent} was asked. */
   readExtentCalls = 0;
 
@@ -292,7 +292,7 @@ export function extentKeyOf(key: ExtentKey): string {
  */
 export async function populateExtentThrough(
   root: string,
-  store: FakeProjectionStore,
+  store: FakeFactStore,
   treeHash: string,
 ): Promise<{ projection: Projection; derived: boolean }> {
   const tracker = new GitTracker(root);

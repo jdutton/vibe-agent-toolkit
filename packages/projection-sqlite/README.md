@@ -1,7 +1,8 @@
 # @vibe-agent-toolkit/projection-sqlite
 
-A SQLite-backed `ProjectionStore` for VAT's resource projection, on Node's
-built-in `node:sqlite` in WAL mode.
+A SQLite-backed `FactStore` for VAT's resource projection, on Node's
+built-in `node:sqlite` in WAL mode, and the in-memory run database a run's SQL
+runs on.
 
 ## Install
 
@@ -19,10 +20,10 @@ why the VAT CLI now selects it **by default**, with `VAT_PROJECTION_STORE=off`
 **Requires Node >= 22.16.0** — `node:sqlite` was added in 22.5.0 behind
 `--experimental-sqlite`, and 22.13.0 is the first 22.x where it loads without that
 flag; 22.16.0 is the first 22.x with `StatementSync.columns()`, which
-`SqliteProjectionStore.columns()` needs to name a query's result columns even
+`RunDatabase.columns()` needs to name a query's result columns even
 when it selects no row (absent on 22.15.1, present on 22.16.0 — measured). That is now
 the whole toolkit's floor, and this package is the reason: the CLI depends on it
-outright and `vat resources query|check` build their ephemeral store from it on
+outright and `vat resources query|check` build their run database from it on
 every run, so Node 22.0–22.12 could not run those commands while the manifests
 still claimed to support them. This package keeps its own declaration because
 the requirement is intrinsic here — this is the code that imports `node:sqlite`
@@ -41,9 +42,9 @@ boundary, or every invocation prints it.
 
 ```typescript
 import { splitProjectionByScope } from '@vibe-agent-toolkit/resources';
-import { openSqliteProjectionStore } from '@vibe-agent-toolkit/projection-sqlite';
+import { openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 
-const store = openSqliteProjectionStore();
+const store = openSqliteFactStore();
 
 const { blobs, extent } = splitProjectionByScope(projection);
 await store.writeBlobFacts(blobs);
@@ -55,6 +56,18 @@ if (cached === undefined) {
 }
 
 await store.close();
+```
+
+SQL never runs on the fact store: it is one database shared by every root on
+the machine, and a statement carries no key predicate. It runs on a run
+database, opened over one run's projection and gone when closed:
+
+```typescript
+import { openRunDatabase } from '@vibe-agent-toolkit/projection-sqlite';
+
+const database = openRunDatabase(projection);
+const rows = database.query('SELECT COUNT(*) AS n FROM blobs');
+await database.close();
 ```
 
 ## What it stores, and where
