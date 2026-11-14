@@ -1,13 +1,12 @@
 // Test file - all file operations are in temp directories
+import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { ResourceRegistry } from '../../src/resource-registry.js';
-import { setupTempDirTestSuite } from '../test-helpers.js';
-
-const TEST_EXTERNAL_URL = 'https://example.com/page';
+import { setupTempDirTestSuite, startLinkTestServer, type LinkTestServer } from '../test-helpers.js';
 
 /**
  * Create a test file with external link and return registry
@@ -21,48 +20,67 @@ async function setupRegistryWithExternalLink(tempDir: string, url: string): Prom
   return registry;
 }
 
-// Network-gated — set `NET_AVAILABLE=1` to enable. Gated on `!CI` before, which
-// stopped meaning "locally" once the integration tier itself ran under `CI=1`.
-const NET_AVAILABLE = process.env['NET_AVAILABLE'] === '1';
+function deadLinkPath(): string {
+  return `/dead-${randomUUID()}`;
+}
 
-describe.skipIf(!NET_AVAILABLE)('ResourceRegistry external URL validation', () => {
+/**
+ * The links point at a local server rather than a public host, so the suite
+ * runs everywhere and fails only on our code. The registry's URL cache is the
+ * shared one under the system temp dir and outlives the run, so every link
+ * carries a fresh UUID: a port reused by a later run must never read this
+ * run's rows. The server answers 404 to any path, which is the dead link each
+ * case wants.
+ */
+describe('ResourceRegistry external URL validation', () => {
+  let server: LinkTestServer;
+  beforeAll(async () => {
+    server = await startLinkTestServer({});
+  });
+  afterAll(async () => {
+    await server.close();
+  });
+
   const suite = setupTempDirTestSuite('registry-external-urls-');
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);
 
-  it('should collect external URLs when checkExternalUrls is true', async () => {
-    const registry = await setupRegistryWithExternalLink(suite.tempDir, TEST_EXTERNAL_URL);
+  it('reports a dead external URL when checkExternalUrls is true', async () => {
+    const routePath = deadLinkPath();
+    const url = server.url(routePath);
+    const registry = await setupRegistryWithExternalLink(suite.tempDir, url);
 
-    // Validate with external URL checking enabled
     const result = await registry.validate({ checkExternalUrls: true });
 
-    // Should have attempted to validate external URLs
-    // Note: We cannot reliably test the validation result since it depends on network
-    // We just verify the option triggers the validation path
-    expect(result).toBeDefined();
     expect(result.totalResources).toBe(1);
     expect(result.totalLinks).toBe(1);
+    expect(result.passed).toBe(false);
+    expect(result.issues.map((issue) => [issue.code, issue.link])).toEqual([['EXTERNAL_URL_DEAD', url]]);
+    expect(server.requests(routePath).length).toBeGreaterThan(0);
   });
 
-  it('should skip external URLs when checkExternalUrls is false', async () => {
-    const registry = await setupRegistryWithExternalLink(suite.tempDir, TEST_EXTERNAL_URL);
+  it('never requests external URLs when checkExternalUrls is false', async () => {
+    const routePath = deadLinkPath();
+    const registry = await setupRegistryWithExternalLink(suite.tempDir, server.url(routePath));
 
-    // Validate without external URL checking
     const result = await registry.validate({ checkExternalUrls: false });
 
-    // Should pass - external URLs not checked
     expect(result.passed).toBe(true);
     expect(result.issues).toHaveLength(0);
+    expect(server.requests(routePath)).toHaveLength(0);
   });
 
-  it('should handle noCache option', async () => {
-    const registry = await setupRegistryWithExternalLink(suite.tempDir, TEST_EXTERNAL_URL);
+  it('answers a repeat from the cache, and refetches under noCache', async () => {
+    const routePath = deadLinkPath();
+    const registry = await setupRegistryWithExternalLink(suite.tempDir, server.url(routePath));
 
-    // Validate with noCache option
+    await registry.validate({ checkExternalUrls: true });
+    const afterFirst = server.requests(routePath).length;
+    await registry.validate({ checkExternalUrls: true });
+    expect(server.requests(routePath)).toHaveLength(afterFirst);
+
     const result = await registry.validate({ checkExternalUrls: true, noCache: true });
-
-    // Should complete without errors (actual result depends on network)
-    expect(result).toBeDefined();
-    expect(result.totalResources).toBe(1);
+    expect(server.requests(routePath).length).toBeGreaterThan(afterFirst);
+    expect(result.issues.map((issue) => issue.code)).toEqual(['EXTERNAL_URL_DEAD']);
   });
 });

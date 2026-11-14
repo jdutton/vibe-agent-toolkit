@@ -202,18 +202,16 @@ Misclassified tests are the #1 cause of flaky CI and slow unit test suites. If y
 
 **Unit tests must be deterministic, fast, and isolated.** Mock all I/O, network, and heavy dependencies. If you're unsure, ask: "Would this test fail on an airplane?" If yes, it's not a unit test.
 
-**Network-dependent integration tests** should use `describe.skipIf(!!process.env.CI)` if they hit external services that may be unreachable in CI:
+**HTTP behaviour is tested against a local server, never a public host.** A suite that fetches
+a live site fails on that site's uptime and bot policy, not on our code, and it cannot make the
+site send a 500, a 429 that clears on the third try, or no answer at all. Start a `node:http`
+server on `127.0.0.1`, port 0, once per file (`startLinkTestServer` in
+`packages/resources/test/test-helpers.ts` records every request it receives). For a name that
+must fail DNS, use the reserved `.invalid` TLD (RFC 2606), which no resolver answers.
 
-```typescript
-// Tests that make real HTTP requests — skip in CI where egress may be restricted
-describe.skipIf(!!process.env.CI)('ExternalLinkValidator (integration)', () => {
-  // ...
-});
-```
-
-Note that `bun run validate` (the full gate) runs with `CI=1` locally — see the two-tier gate in
-`vibe-validate.config.yaml` — so a suite gated this way runs only when its tier is invoked directly
-(`bun run test:integration`), never inside a gate.
+Only a suite whose subject IS a public service (cloning a GitHub repository) reaches the network,
+and it is gated on `NET_AVAILABLE=1`, which CI sets: `describe.skipIf(process.env.NET_AVAILABLE !== '1')`.
+Never gate on `CI`: `bun run validate` sets `CI=1` locally, so such a suite runs nowhere.
 
 **Platform skips need a reason at the site.** Every `it.skipIf(process.platform === 'win32')` /
 `describe.skipIf(...)` carries a one-line comment naming the mechanism that cannot run there (a
@@ -820,7 +818,7 @@ When writing tests:
 **Classification:**
 - [ ] Test is in the right tier (no network/ML/process spawning in unit tests)
 - [ ] The file runs inside its tier's per-file budget, or its allowlist entry names why it cannot
-- [ ] Network-dependent integration tests use `describe.skipIf(!!process.env.CI)` if needed
+- [ ] HTTP behaviour runs against a local server; only a suite whose subject is a public service gates on `NET_AVAILABLE=1`
 - [ ] Every platform skip has a one-line reason at the site
 
 **Cross-platform:**

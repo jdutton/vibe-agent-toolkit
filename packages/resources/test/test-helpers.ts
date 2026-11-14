@@ -6,6 +6,8 @@ import { spawnSync } from 'node:child_process';
 import diagnosticsChannel from 'node:diagnostics_channel';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
 
@@ -392,6 +394,66 @@ export function setupExternalLinkValidatorSuite(
   };
 
   return suite;
+}
+
+/**
+ * Answers one request to a {@link LinkTestServer} route.
+ *
+ * `seen` is how many earlier requests with the same method reached the same
+ * path, so a route can fail the first N attempts and then succeed.
+ */
+export type LinkTestRoute = (request: IncomingMessage, response: ServerResponse, seen: number) => void;
+
+/** A local HTTP server on 127.0.0.1 that records every request it receives. */
+export interface LinkTestServer {
+  /** `http://127.0.0.1:<port>`, no trailing slash. */
+  readonly origin: string;
+  /** Absolute URL for a route path such as `/ok`. */
+  url(routePath: string): string;
+  /** Methods of every request that reached `routePath`, in arrival order. */
+  requests(routePath: string): string[];
+  /** Destroys open sockets (a route may never answer) and stops listening. */
+  close(): Promise<void>;
+}
+
+/**
+ * Start a {@link LinkTestServer} on an ephemeral loopback port.
+ *
+ * External-link tests use this rather than a public host: a suite that checks
+ * a live site fails on that site's uptime and bot policy, not on our code. A
+ * path no route claims answers 404.
+ *
+ * @param routes - Handlers keyed by request path
+ */
+export async function startLinkTestServer(routes: Readonly<Record<string, LinkTestRoute>>): Promise<LinkTestServer> {
+  const log = new Map<string, string[]>();
+  const server = createServer((request, response) => {
+    const routePath = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+    const method = request.method ?? 'GET';
+    const methods = log.get(routePath) ?? [];
+    const seen = methods.filter((m) => m === method).length;
+    methods.push(method);
+    log.set(routePath, methods);
+    const route = routes[routePath];
+    if (route === undefined) {
+      response.writeHead(404).end();
+      return;
+    }
+    route(request, response, seen);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  const origin = `http://127.0.0.1:${String(port)}`;
+  return {
+    origin,
+    url: (routePath) => `${origin}${routePath}`,
+    requests: (routePath) => [...(log.get(routePath) ?? [])],
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.closeAllConnections();
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  };
 }
 
 // ============================================================================
