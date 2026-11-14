@@ -53,6 +53,25 @@ describe('isStatementRefusal — exact extended codes only', () => {
   });
 });
 
+describe('runGated — no foreign schema outlives a statement', () => {
+  it('detaches every schema the connection was not opened on, a name needing quotes included', () => {
+    const database = new DatabaseSync(':memory:');
+    try {
+      // Attached directly, past the kind gate that refuses an ATTACH statement: the sweep
+      // is the second line, and has to hold on its own.
+      database.exec(`ATTACH DATABASE ':memory:' AS plain`);
+      database.exec(`ATTACH DATABASE ':memory:' AS "we""ird"`);
+
+      expect(runGated(database, 'SELECT 1 AS x', [], (statement) => statement.all())).toEqual([{ x: 1 }]);
+
+      const schemas = (database.prepare('PRAGMA database_list').all() as { name: string }[]).map(({ name }) => name);
+      expect(schemas).toEqual(['main']);
+    } finally {
+      database.close();
+    }
+  });
+});
+
 describe('runGated — the original failure always wins', () => {
   it('rethrows the step\'s error even when restoring the connection then fails', () => {
     const database = new DatabaseSync(':memory:');

@@ -24,6 +24,11 @@ const CASES: RuleCases = {
     { code: "import { x } from '../../projection/projection-sqlite.js';", filename: FILE },
     // The sibling's directory itself, bare: a prefix of the name is not the package.
     { code: "export const b: unknown = require('../../../projection-sqlite-extras');", filename: FILE },
+    // A function another module calls `createRequire` is not node's.
+    {
+      code: `import { createRequire as cr } from './loader.js';\nexport const b: unknown = cr(import.meta.url)('${BACKEND}');`,
+      filename: FILE,
+    },
     { code: "export const name = '@vibe-agent-toolkit/projection-sqlite';", filename: FILE },
     { code: "declare function load(name: string): unknown;\nexport const x = load('@vibe-agent-toolkit/projection-sqlite');", filename: FILE },
   ],
@@ -109,6 +114,23 @@ const CASES: RuleCases = {
     },
     {
       code: `import { createRequire as cr } from 'node:module';\nconst load = cr(import.meta.url);\nexport const b: unknown = load('${BACKEND}');`,
+      filename: FILE,
+      errors: ERROR,
+    },
+    // A `.` segment is folded away, not counted as a directory a `..` climbs out of.
+    {
+      code: "export const b: unknown = require('./../../projection-sqlite');",
+      filename: '/repo/packages/resources/src/merge.ts',
+      errors: [{ messageId: 'backendImport', data: { source: './../../projection-sqlite' } }],
+    },
+    // `createRequire` by its own name with no import of it (a CommonJS destructure), and as a member.
+    {
+      code: `const { createRequire } = require('node:module');\nexport const b: unknown = createRequire(__filename)('${BACKEND}');`,
+      filename: FILE,
+      errors: ERROR,
+    },
+    {
+      code: `import nodeModule from 'node:module';\nexport const b: unknown = nodeModule.createRequire(import.meta.url)('${BACKEND}');`,
       filename: FILE,
       errors: ERROR,
     },

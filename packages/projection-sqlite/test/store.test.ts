@@ -591,6 +591,38 @@ describe('decoded rows are counted against the store they came from', () => {
     }
   });
 
+  it('a persistent read counts one read, of blobs and of an extent alike', async () => {
+    await store.readBlobFacts([FIRST_BLOB]);
+    expect(readWorkCounters()['store.reads.persistent']).toBe(1);
+    await store.writeExtent(KEY, sampleExtentRows(KEY.rootId));
+    await store.readExtent(KEY);
+    expect(readWorkCounters()['store.reads.persistent']).toBe(2);
+  });
+
+  it('a fact-store write counts one persistent write and every row it wrote, and no hydration', async () => {
+    await store.writeBlobFacts(sampleBlobRows(SECOND_BLOB));
+    expect(readWorkCounters()['store.writes.persistent']).toBe(1);
+    expect(readWorkCounters()['store.rows.written.persistent']).toBe(bundleRowCount);
+
+    const extentRows = sampleExtentRows(KEY.rootId);
+    const extentRowCount = Object.values(extentRows as unknown as Record<string, readonly unknown[]>)
+      .reduce((total, rows) => total + rows.length, 0);
+    await store.writeExtent(KEY, extentRows);
+    expect(readWorkCounters()['store.writes.persistent']).toBe(2);
+    expect(readWorkCounters()['store.rows.written.persistent']).toBe(bundleRowCount + extentRowCount);
+    expect(readWorkCounters()['hydration.writes']).toBe(0);
+    expect(readWorkCounters()['hydration.rows.written']).toBe(0);
+  });
+
+  it('a blob write naming no content key writes nothing and counts nothing', async () => {
+    const empty = sampleBlobRows();
+    await store.writeBlobFacts({
+      ...empty, blobs: [], blobReferences: [], blobSections: [], blobConditions: [], harnessBlobFacts: [], harnessBlobImports: [],
+    });
+    expect(readWorkCounters()['store.writes.persistent']).toBe(0);
+    expect(readWorkCounters()['store.rows.written.persistent']).toBe(0);
+  });
+
   it('a read of no content keys counts no read', async () => {
     await store.readBlobFacts([]);
     expect(readWorkCounters()['store.reads.persistent']).toBe(0);
